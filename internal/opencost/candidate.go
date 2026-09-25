@@ -35,7 +35,8 @@ func ProbeCandidate(ctx context.Context, config ManagerConfig) error {
 }
 
 // PrepareCandidate captures discovery and transport before releasing the cluster
-// configuration lock. The returned probe does no live-cluster lookup.
+// configuration lock. The returned probe uses only the captured client and
+// config, so a context switch cannot redirect it.
 func PrepareCandidate(config ManagerConfig) (func(context.Context) error, error) {
 	if config.Source == SourcePrometheus || config.Source == SourceAuto && !hasExplicitKubecostConfig(config) {
 		return nil, nil

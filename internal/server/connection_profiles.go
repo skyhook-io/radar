@@ -2,12 +2,11 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"log"
 	"net/http"
 	"os"
+	"syscall"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/argocd"
@@ -79,17 +78,20 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var request connections.Update
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256*1024))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&request); err != nil || decoder.Decode(new(any)) != io.EOF {
-		s.writeError(w, 400, "invalid saved connection request")
+	if err := decodeBoundedJSONBody(w, r, 256*1024, &request); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.writeError(w, http.StatusRequestEntityTooLarge, "saved connection request is too large")
+			return
+		}
+		s.writeError(w, http.StatusBadRequest, "invalid saved connection request")
 		return
 	}
 	metadata := request.Action == "forget"
 	response := localConnectionResponse{}
 	var pending connections.Pending
 	var probe func(context.Context) error
-	prepare := func(func() error) error {
+	prepare := func() error {
 		target, err := k8s.CurrentProfileTarget()
 		if err != nil && !metadata {
 			return err
@@ -111,7 +113,7 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 	}
 	var err error
 	if metadata {
-		err = prepare(nil)
+		err = prepare()
 	} else {
 		err = k8s.TryClusterConfiguration(prepare)
 	}
@@ -128,6 +130,7 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		err = probe(ctx)
 		cancel()
 		if err != nil {
+			log.Printf("[connections] %s candidate check failed: %s", request.Kind, sanitizeForLog(prom.RedactURLs(err.Error())))
 			message := "Argo CD connection check failed; check its URL, network access and TLS settings. The previous connection is unchanged"
 			if request.Kind == config.IntegrationCost {
 				message = kubecostConnectionGuidance(err, pending.Candidate.Settings.Kubecost.APIKey != "")
@@ -142,7 +145,7 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 	}
 	var selection connections.Selection
 	var probeClient *prometheuspkg.Client
-	commit := func(func() error) error {
+	commit := func() error {
 		target, targetErr := k8s.CurrentProfileTarget()
 		if !metadata && (targetErr != nil || !target.Same(pending.Target)) {
 			return config.ErrProfileConflict
@@ -160,7 +163,7 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		return nil
 	}
 	if metadata {
-		err = commit(nil)
+		err = commit()
 	} else {
 		err = k8s.TryClusterConfiguration(commit)
 	}
@@ -180,6 +183,7 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		_, _, err := probeClient.EnsureConnected(ctx)
 		response.Connected = err == nil
 		if err != nil {
+			log.Printf("[connections] Saved metrics connection check failed: %s", sanitizeForLog(prom.RedactURLs(err.Error())))
 			response.Error = "Saved, but the metrics backend could not be reached. Check its URL, authentication, network access and TLS configuration."
 		}
 		if prometheuspkg.GetClient() != probeClient || s.localRuntime.CheckCurrent(selection.View.Target, selection) != nil {
@@ -198,7 +202,9 @@ func (s *Server) connectionError(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	}
 	var pathError *os.PathError
-	if errors.As(err, &pathError) {
+	var linkError *os.LinkError
+	var errno syscall.Errno
+	if errors.As(err, &pathError) || errors.As(err, &linkError) || errors.As(err, &errno) {
 		status = http.StatusInternalServerError
 		log.Printf("[connections] Failed to access local settings: %v", prom.RedactURLs(err.Error()))
 	}

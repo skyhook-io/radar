@@ -196,7 +196,7 @@ export function LocalConnectionSettings({
       headers: getAuthHeaders()
     })
       .then(async (response) => {
-        const data = (await response.json()) as ConnectionResponse
+        const data = (await response.json().catch(() => ({}))) as ConnectionResponse
         if (!response.ok)
           throw new Error(data.error || 'Could not load saved connections.')
         if (!controller.signal.aborted && getApiBase() === base) {
@@ -322,7 +322,7 @@ export function LocalConnectionSettings({
             }
           : {})
       })
-      const data = (await response.json()) as ConnectionResponse
+      const data = (await response.json().catch(() => ({}))) as ConnectionResponse
       if (
         controller.signal.aborted ||
         getApiBase() !== base ||
@@ -434,8 +434,8 @@ export function LocalConnectionSettings({
       delete update.clusterId
     }
     const removing =
-      (hasSavedConfiguration &&
-        (draft.url?.trim() === '' || action === 'replace' || action === 'copy')) ||
+      (!!profile.url && draft.url?.trim() === '') ||
+      (hasSavedConfiguration && (action === 'replace' || action === 'copy')) ||
       (update.action === 'auto' && hasSavedConfiguration)
     if (removing) {
       confirm(update)
@@ -514,7 +514,7 @@ export function LocalConnectionSettings({
         setInsecureTls(source.insecureTls)
         if (kind === 'cost') {
           setMode('kubecost')
-          if (profile.state === 'target_changed') setClusterId('')
+          setClusterId(profile.state === 'target_changed' ? '' : profile.clusterId)
         }
         setDiscoveryDraft(false)
         setCredentialDirty(false)
@@ -740,7 +740,7 @@ export function LocalConnectionSettings({
                 <button
                   type="button"
                   disabled={!!profile.legacy.error}
-                  className="text-xs text-accent-text"
+                  className="text-xs text-accent-text disabled:opacity-50 disabled:cursor-not-allowed"
                   onClick={() => {
                     const legacy = profile.legacy!
                     setSelected(null)

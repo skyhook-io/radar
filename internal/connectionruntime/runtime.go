@@ -45,7 +45,7 @@ func (r *Runtime) Refresh(kind config.Integration) error {
 		changed = changed || r.changed(target, integration, selected[integration])
 	}
 	if changed {
-		err = k8s.TryClusterConfiguration(func(func() error) error {
+		err = k8s.TryClusterConfiguration(func() error {
 			current, err := k8s.CurrentProfileTarget()
 			if err != nil || !current.Same(target) {
 				return k8s.ErrContextConfigurationBusy
@@ -61,11 +61,14 @@ func (r *Runtime) Refresh(kind config.Integration) error {
 	if err != nil || !current.Same(target) {
 		return k8s.ErrContextConfigurationBusy
 	}
-	return selected[kind].Err
+	if s := selected[kind]; s.Err != nil {
+		return &connections.SettingsError{Kind: kind, Launch: s.View.State == "launch", Err: s.Err}
+	}
+	return nil
 }
 
-// Apply runs under the cluster configuration lock, including startup and switch
-// callbacks that already own it. It never probes a remote integration.
+// Callers hold the cluster configuration lock or run before the cluster is
+// initialized. Apply never probes a remote integration.
 func (r *Runtime) Apply(target k8s.ProfileTarget, details bool) map[config.Integration]connections.Selection {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -77,7 +80,8 @@ func (r *Runtime) Apply(target k8s.ProfileTarget, details bool) map[config.Integ
 }
 
 // ActivateSwitch runs after the switch has rebuilt clients, before it publishes
-// Connected. It records that activation without restarting those clients again.
+// Connected. It skips the traffic restart because the switch already
+// reinitialized traffic.
 func (r *Runtime) ActivateSwitch(target k8s.ProfileTarget) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

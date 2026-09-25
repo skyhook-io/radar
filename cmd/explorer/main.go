@@ -146,9 +146,10 @@ func main() {
 		return nil
 	})
 	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
-	// --prometheus-header Key=Value, repeatable. Defaults populated from
-	// config file; any --prometheus-header flag replaces the file value rather
-	// than merging — matches kubectl semantics (file is the default, CLI wins).
+	// --prometheus-header Key=Value, repeatable. Shared installations default to
+	// the config file; any --prometheus-header flag replaces the file value rather
+	// than merging (kubectl semantics: file is the default, CLI wins). Local
+	// installations use only this launch's flags.
 	promHeaders := newHeaderFlag(fileCfg.PrometheusHeaders)
 	flag.Var(promHeaders, "prometheus-header", "HTTP header to send with Prometheus requests, e.g. 'Authorization=Bearer <token>' (repeatable). Required for auth-protected backends.")
 	promHeadersFromEnv := newHeaderFromEnvFlag(fileCfg.PrometheusHeadersFromEnv)
@@ -630,7 +631,8 @@ func parseCSV(s string) []string {
 // headerFlag is a flag.Value that accumulates repeated --prometheus-header
 // Key=Value pairs into a map. The first Set call after construction wipes any
 // defaults populated from the config file (kubectl-style: file = default, CLI
-// wins outright instead of merging).
+// wins outright instead of merging). Local installations ignore the file
+// defaults; see preparePrometheusConfiguration.
 type headerFlag struct {
 	m         map[string]string
 	overrides bool

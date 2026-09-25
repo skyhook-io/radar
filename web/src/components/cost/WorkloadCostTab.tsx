@@ -99,6 +99,8 @@ export function WorkloadCostTab({ kind, namespace, name }: WorkloadCostTabProps)
     state === 'authentication_error' ||
     state === 'configuration_mismatch' ||
     state === 'deployment_configuration_error' ||
+    state === 'metrics_settings_error' ||
+    state === 'cost_settings_error' ||
     state === 'history_unsupported' ||
     state === 'load_error'
   ) {
@@ -307,7 +309,9 @@ export function getWorkloadCostState(
     reason === 'source_unavailable' ||
     reason === 'authentication_error' ||
     reason === 'configuration_mismatch' ||
-    reason === 'deployment_configuration_error'
+    reason === 'deployment_configuration_error' ||
+    reason === 'metrics_settings_error' ||
+    reason === 'cost_settings_error'
   )
     return reason
   if (queryError) return 'load_error'

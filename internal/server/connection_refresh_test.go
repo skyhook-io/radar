@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -262,5 +263,172 @@ func TestManageConnectionsWithoutActiveCluster(t *testing.T) {
 	s.handleUpdateLocalConnection(response, httptest.NewRequest(http.MethodPut, "/api/integrations/connections", strings.NewReader(string(data))))
 	if response.Code != 200 {
 		t.Fatalf("offline forget: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func getLocalConnections(t *testing.T, s *Server) localConnectionResponse {
+	t.Helper()
+	response := httptest.NewRecorder()
+	s.handleLocalConnections(response, httptest.NewRequest(http.MethodGet, "/api/integrations/connections", nil))
+	var body localConnectionResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || response.Code != http.StatusOK {
+		t.Fatalf("read connections: %d %s", response.Code, response.Body.String())
+	}
+	return body
+}
+
+func TestRejectedArgoCandidateLeavesSavedConnectionUnchanged(t *testing.T) {
+	s := setupLocalProfileTest(t)
+	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/version":
+			w.Write([]byte(`{"Version":"v3.0.0"}`))
+		case "/api/v1/session/userinfo":
+			if r.Header.Get("Authorization") != "Bearer saved-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.Write([]byte(`{"loggedIn":true}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer backend.Close()
+	target, _ := k8s.CurrentProfileTarget()
+	pending, err := s.localConnections.Prepare(target, connections.Update{Target: target, Revision: s.localConnections.Resolve(target, config.IntegrationArgoCD, false).View.Revision, Kind: config.IntegrationArgoCD, Action: "save", URL: &backend.URL, Secret: &connections.SecretEdit{Action: "set", Value: "saved-token"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.localConnections.Commit(context.Background(), pending); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(s.localConnections.Store.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := getLocalConnections(t, s).Profiles[config.IntegrationArgoCD]
+	data, _ := json.Marshal(connections.Update{Target: view.Target, Revision: view.Revision, Kind: config.IntegrationArgoCD, Action: "save", URL: &backend.URL, Secret: &connections.SecretEdit{Action: "set", Value: "rejected-token"}})
+	response := httptest.NewRecorder()
+	s.handleUpdateLocalConnection(response, httptest.NewRequest(http.MethodPut, "/api/integrations/connections", strings.NewReader(string(data))))
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "previous connection is unchanged") || strings.Contains(response.Body.String(), "rejected-token") {
+		t.Fatalf("rejected candidate: %d %s", response.Code, response.Body.String())
+	}
+	after, err := os.ReadFile(s.localConnections.Store.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("rejected candidate changed clusters.json")
+	}
+	if got := getLocalConnections(t, s).Profiles[config.IntegrationArgoCD]; got.Revision != view.Revision || !got.SecretSet {
+		t.Fatalf("saved connection changed after rejected candidate: %+v", got)
+	}
+	if err := argocd.Probe(context.Background()); err != nil {
+		t.Fatalf("previous Argo CD connection stopped working: %v", err)
+	}
+}
+
+func TestSavedConnectionRejectsOversizedRequest(t *testing.T) {
+	s := setupLocalProfileTest(t)
+	body := `{"kind":"metrics","action":"save","url":"http://` + strings.Repeat("a", 257*1024) + `"}`
+	response := httptest.NewRecorder()
+	s.handleUpdateLocalConnection(response, httptest.NewRequest(http.MethodPut, "/api/integrations/connections", strings.NewReader(body)))
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized request: %d %s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(s.localConnections.Store.Path); !os.IsNotExist(err) {
+		t.Fatal("oversized request wrote clusters.json")
+	}
+}
+
+func TestContextSwitchKeepsSavedCredentialsWithTheirContext(t *testing.T) {
+	s := setupLocalProfileTest(t)
+	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
+	originalCost := opencost.ConfigSnapshot()
+	t.Cleanup(func() { _ = opencost.Configure(originalCost) })
+	var credentialed atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		argoToken := r.Header.Get("Authorization") == "Bearer argo-token-a"
+		costKey := r.Header.Get("X-API-KEY") == "cost-key-a"
+		if argoToken || costKey {
+			credentialed.Add(1)
+		}
+		switch r.URL.Path {
+		case "/api/version":
+			w.Write([]byte(`{"Version":"v3.0.0"}`))
+		case "/api/v1/session/userinfo":
+			if !argoToken {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.Write([]byte(`{"loggedIn":true}`))
+		case "/allocation", "/model/allocation":
+			if !costKey {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.Write([]byte(`{"code":200,"data":[{"cluster-a":{"properties":{"cluster":"cluster-a"}}}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer backend.Close()
+	targetA, err := k8s.CurrentProfileTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clusterID := "cluster-a"
+	for _, req := range []connections.Update{
+		{Kind: config.IntegrationArgoCD, Secret: &connections.SecretEdit{Action: "set", Value: "argo-token-a"}},
+		{Kind: config.IntegrationCost, Secret: &connections.SecretEdit{Action: "set", Value: "cost-key-a"}, ClusterID: &clusterID},
+	} {
+		req.Target, req.Action, req.URL = targetA, "save", &backend.URL
+		req.Revision = s.localConnections.Resolve(targetA, req.Kind, false).View.Revision
+		pending, err := s.localConnections.Prepare(targetA, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.localConnections.Commit(context.Background(), pending); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.localRuntime.Apply(targetA, false)
+	use := func() (argoErr, costErr error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		argoErr = argocd.Probe(ctx)
+		_, costErr = opencost.Selected(ctx)
+		return argoErr, costErr
+	}
+	if argoErr, costErr := use(); argoErr != nil || costErr != nil || !argocd.IsConfigured() || credentialed.Load() == 0 {
+		t.Fatalf("context A did not use its saved connections: argo %v, cost %v", argoErr, costErr)
+	}
+
+	restore := k8s.SetTestProfileSource("/fixture/team", "other", "developer")
+	defer restore()
+	targetB, err := k8s.CurrentProfileTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.localRuntime.ActivateSwitch(targetB)
+	credentialed.Store(0)
+	use()
+	if argocd.IsConfigured() || opencost.ConfigSnapshot().APIKey != "" || credentialed.Load() != 0 {
+		t.Fatalf("context B inherited context A's credentials: argo configured %v, requests carrying A's secrets %d", argocd.IsConfigured(), credentialed.Load())
+	}
+	b := getLocalConnections(t, s).Profiles
+	if b[config.IntegrationArgoCD].SecretSet || b[config.IntegrationCost].SecretSet || b[config.IntegrationArgoCD].URL != "" {
+		t.Fatalf("context B shows context A's saved connections: %+v", b)
+	}
+
+	restore()
+	targetA, err = k8s.CurrentProfileTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.localRuntime.ActivateSwitch(targetA)
+	if argoErr, costErr := use(); argoErr != nil || costErr != nil || !argocd.IsConfigured() || credentialed.Load() == 0 {
+		t.Fatalf("returning to context A did not restore its connections: argo %v, cost %v", argoErr, costErr)
 	}
 }

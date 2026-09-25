@@ -93,9 +93,7 @@ describe('Local saved connections', () => {
     expect(html).toContain('Save changes')
     expect(html).toContain('Add header')
     expect(html).not.toContain('Copy from another cluster')
-    expect(html).not.toContain('Local storage details')
     expect(html).toContain('Cluster settings identity')
-    expect(html).not.toContain('Connection name')
     expect(html).not.toContain('Previously saved connection')
   })
   it('names common compatible backends without claiming an exhaustive list', () => {
@@ -137,7 +135,6 @@ describe('Local saved connections', () => {
       'Restart without its startup flags or environment configuration'
     )
     expect(html).not.toContain('Save changes')
-    expect(html).not.toContain('Use saved connection…')
   })
   it('requires review for changed cluster identity', () => {
     const html = render({
@@ -166,19 +163,11 @@ describe('Local saved connections', () => {
       const html = render({ ...savedProfile, secretSet: true }, kind)
       expect(html).toContain('Save changes')
       expect(html).not.toContain('Copy from another cluster')
-      expect(html).not.toContain('Edit shared connection')
-      expect(html).not.toContain('Customize for')
-      expect(html).not.toContain('Shared by')
-      expect(html).not.toContain('>Rename<')
       expect(html).not.toContain('Reload')
     }
   )
   it('keeps file details and saved-entry cleanup out of integration tabs', () => {
     const html = render(savedProfile)
-    expect(html).not.toContain('Local storage details')
     expect(html).not.toContain('clusters.json')
-    expect(html).not.toContain('Manage stored cluster settings')
-    expect(html).not.toContain('Manage saved connections')
-    expect(html).not.toContain('Connection name')
   })
 })

@@ -377,6 +377,26 @@ func TestConnectionFailureReasonDoesNotGuessAuthenticationFromText(t *testing.T)
 	}
 }
 
+func TestConnectionFailureReasonSendsSettingsErrorsToSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"metrics settings", &connections.SettingsError{Kind: config.IntegrationMetrics, Err: errors.New("x")}, pkgopencost.ReasonMetricsSettings},
+		{"cost settings", &connections.SettingsError{Kind: config.IntegrationCost, Err: errors.New("x")}, pkgopencost.ReasonCostSettings},
+		{"cost settings naming kubecost", &connections.SettingsError{Kind: config.IntegrationCost, Err: errors.New("invalid kubecost URL")}, pkgopencost.ReasonCostSettings},
+		{"launch override", &connections.SettingsError{Kind: config.IntegrationMetrics, Launch: true, Err: errors.New("x")}, pkgopencost.ReasonDeploymentConfig},
+		{"context switching", k8s.ErrContextConfigurationBusy, pkgopencost.ReasonNoPrometheus},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ConnectionFailureReason(tc.err); got != tc.want {
+				t.Fatalf("reason = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestConnectedResponsesIncludeCurrency(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

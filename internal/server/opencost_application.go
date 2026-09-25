@@ -71,7 +71,7 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 
 	client, connectionErr := prometheuspkg.ClientForOperation()
 	if connectionErr != nil {
-		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, pkgopencost.ReasonNoPrometheus)
+		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, internalopencost.ConnectionFailureReason(connectionErr))
 		resp.Currency = s.resolvedOpenCostCurrency()
 		resp.Source = "prometheus"
 		s.writeJSON(w, resp)

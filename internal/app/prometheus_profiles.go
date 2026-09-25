@@ -37,6 +37,9 @@ func preparePrometheusConfiguration(cfg AppConfig) (AppConfig, error) {
 		if !cfg.PrometheusURLFlag {
 			return cfg, errors.New("local Prometheus header flags require --prometheus-url in the same launch; saved credentials are not inherited")
 		}
+		if !cfg.PrometheusLiteralHeaderFlag && len(cfg.PrometheusHeaders) > 0 || !cfg.PrometheusEnvHeaderFlag && len(cfg.PrometheusHeadersFromEnv) > 0 {
+			log.Printf("[prometheus] Warning: headers saved in config.json are not sent with --prometheus-url; pass them with --prometheus-header for this launch")
+		}
 		c := prom.Connection{URL: cfg.PrometheusURL}
 		if cfg.PrometheusLiteralHeaderFlag {
 			c.Headers = cfg.PrometheusHeaders

@@ -59,8 +59,8 @@ export function PrometheusConnectionForm({
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const [apply, setApply] = useState<ApplyState>({ status: 'idle' })
   // null = not editing headers (preserve what's stored). A non-null array means
-  // the user opened the editor; on Apply we send it verbatim, replacing all
-  // stored headers (values are write-only, so the server never sends them back).
+  // the user opened the editor; see handleApply for how rows become a
+  // replacement (values are write-only, so the server never sends them back).
   const [headerRows, setHeaderRows] = useState<HeaderRow[] | null>(null)
   // Show the server's configured header keys, but let a successful apply override
   // optimistically (config isn't refetched). Derived from the prop — not a

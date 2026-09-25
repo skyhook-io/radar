@@ -131,6 +131,8 @@ export function ApplicationCostTab({
     state === 'authentication_error' ||
     state === 'configuration_mismatch' ||
     state === 'deployment_configuration_error' ||
+    state === 'metrics_settings_error' ||
+    state === 'cost_settings_error' ||
     state === 'history_unsupported' ||
     state === 'load_error'
   ) {
@@ -399,7 +401,9 @@ export function getApplicationCostState(
     reason === 'source_unavailable' ||
     reason === 'authentication_error' ||
     reason === 'configuration_mismatch' ||
-    reason === 'deployment_configuration_error'
+    reason === 'deployment_configuration_error' ||
+    reason === 'metrics_settings_error' ||
+    reason === 'cost_settings_error'
   )
     return reason
   if (queryError) return 'load_error'
@@ -513,6 +517,8 @@ function reasonLabel(reason?: CostUnavailableReason) {
   if (reason === 'not_found') return 'Workload not found'
   if (reason === 'configuration_mismatch') return 'Kubecost settings are not valid for this cluster'
   if (reason === 'deployment_configuration_error') return 'Radar cost deployment is misconfigured'
+  if (reason === 'metrics_settings_error') return 'Saved metrics settings need review'
+  if (reason === 'cost_settings_error') return 'Saved cost settings need review'
   return 'No workload cost metrics'
 }
 

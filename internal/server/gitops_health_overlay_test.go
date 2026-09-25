@@ -7,6 +7,8 @@ import (
 	"github.com/skyhook-io/radar/internal/argocd"
 	"testing"
 
+	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
@@ -237,5 +239,32 @@ func TestArgoAPIHealthFailure_SpeaksToTheUser(t *testing.T) {
 		if got := argoAPIHealthFailure(tc.err, tc.tokenSet); got != tc.want {
 			t.Errorf("argoAPIHealthFailure(%v, %v) = %q, want %q", tc.err, tc.tokenSet, got, tc.want)
 		}
+	}
+}
+
+func TestArgoAPIHealth_SavedSettingsFailureNamesSettings(t *testing.T) {
+	t.Cleanup(func() { connections.RegisterRefresh(nil) })
+	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
+	argocd.SetConfig("", "", false, true)
+	s := &Server{}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"saved settings need review", &connections.SettingsError{Kind: config.IntegrationArgoCD, Err: errors.New("cluster connection changed")}, "its saved connection for this cluster needs review in Settings"},
+		{"not configured", errors.New("cluster disconnected"), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			connections.RegisterRefresh(func(config.Integration) error { return tc.err })
+			health, err := s.argoAPIHealth(context.Background(), "argocd", "web")
+			got := ""
+			if err != nil {
+				got = err.Error()
+			}
+			if health != nil || got != tc.want {
+				t.Fatalf("health %v, error %q; want error %q", health, got, tc.want)
+			}
+		})
 	}
 }

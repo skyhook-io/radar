@@ -1236,9 +1236,10 @@ absent, it tries the current allocation and asset APIs of a Kubecost 3 Aggregato
 can also be pinned to `prometheus` or `kubecost` in Settings → Cost or Helm. Local CLI/Desktop
 save the choice per context in `clusters.json`; shared installations use operator configuration. When
 Auto positively finds neither source, Radar reports that state and retries discovery; it does not
-label an absent Prometheus source as active. Local Settings tests explicit Kubecost connections
-before saving. Selecting discovery or Prometheus mode is a source preference, not a backend
-reachability claim.
+label an absent Prometheus source as active. Local Settings tests Kubecost mode, and Auto with any
+Kubecost override (URL, API key or cluster ID), before saving; a failed test blocks the save. Auto
+with no Kubecost overrides, or Prometheus mode, is a source preference, not a backend reachability
+claim.
 
 For Kubecost, Radar auto-discovers only an active Aggregator StatefulSet and its matching Service.
 It tries the official named `tcp-api` port 9004 first. When that port rejects unauthenticated access
@@ -1251,12 +1252,15 @@ local Aggregator. A Service exposing only port 9008 is not auto-discovered; conf
 explicitly. Radar accepts either a root API URL or one ending in `/model`, can send an optional
 service-account key as `X-API-KEY`, and requires an exact cluster ID
 to filter a central Aggregator. It detects one literal `CLUSTER_ID` from an active FinOps Agent or
-Aggregator; indirect, missing, or conflicting values require an override. Radar binds a cluster-ID
-override saved in Settings to the active kubeconfig context. It also binds a saved API key when the
-URL is blank and Radar auto-discovers a local Aggregator. Switching contexts restores that context's
-own settings; changing its underlying cluster identity requires confirmation. An explicit central
-Aggregator URL and key can be copied through **Copy from another cluster…**. Later edits are independent,
-and cluster IDs are not copied. See [local integration connections](configuration.md#local-integration-connections).
+Aggregator; indirect, missing, or conflicting values require an override. Local CLI/Desktop stores
+Kubecost settings per kubeconfig context, and binds every saved URL, API key and cluster-ID override
+to that context's cluster identity. Switching contexts restores that context's own settings; changing
+its underlying cluster identity pauses them until you confirm. An explicit central Aggregator URL and
+key can be copied through **Copy from another cluster…**. Later edits are independent, and cluster IDs
+are not copied. See [local integration connections](configuration.md#local-integration-connections).
+Shared installations bind a cluster-ID override saved in `config.json` to the active kubeconfig
+context, and also bind a saved API key when the URL is blank and Radar auto-discovers a local
+Aggregator.
 
 OpenCost-compatible Prometheus data powers current cost and historical charts. Kubecost REST powers
 the current namespace summary, workload/application compute allocation, node costs, and the cluster

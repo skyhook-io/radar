@@ -264,8 +264,9 @@ func BuildTimelineStoreConfig(cfg AppConfig) (timeline.StoreConfig, error) {
 }
 
 // RegisterCallbacks registers Helm, timeline, traffic, and Prometheus reset/reinit
-// functions used for both initial cluster initialization and context switching.
-// Must be called before InitializeCluster.
+// functions used for both initial cluster initialization and context switching,
+// and prepares local per-context integration settings. Must be called before
+// InitializeCluster; callers pass the returned config to CreateServer.
 func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) AppConfig {
 	var err error
 	cfg, err = preparePrometheusConfiguration(cfg)
@@ -354,9 +355,10 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 		return traffic.ReinitializeWithConfig(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 	})
 
-	// Reinitialize carries the current manual URL + headers forward (including any
-	// applied live via /integrations/prometheus). Re-applying the captured startup
-	// cfg here would revert a live change on context switch, so we don't.
+	// Shared installations: Reinitialize carries the current manual URL + headers
+	// forward (including any applied live via /integrations/prometheus).
+	// Re-applying the captured startup cfg would revert a live change on context
+	// switch. Local installations resolve the new context's own settings instead.
 	resetPrometheus := prometheuspkg.Reset
 	if cfg.LocalConnections != nil {
 		resetPrometheus = func() { prometheuspkg.Retire(); traffic.SetMetricsConfig("", nil) }
@@ -386,18 +388,19 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 		connections.RegisterRefresh(cfg.LocalRuntime.Refresh)
 		if target, err := k8s.CurrentProfileTarget(); err == nil {
 			cfg.LocalRuntime.Apply(target, false)
+		} else {
+			log.Printf("[connections] Local integration settings not applied: %v", err)
 		}
 		runtime := cfg.LocalRuntime
-		k8s.OnContextSwitch(func(_ string) {
+		activate := func(_ string) {
 			if target, err := k8s.CurrentProfileTarget(); err == nil {
 				runtime.ActivateSwitch(target)
+			} else {
+				log.Printf("[connections] Local integration settings not applied: %v", err)
 			}
-		})
-		k8s.OnNamespaceRescope(func(_ string) {
-			if target, err := k8s.CurrentProfileTarget(); err == nil {
-				runtime.ActivateSwitch(target)
-			}
-		})
+		}
+		k8s.OnContextSwitch(activate)
+		k8s.OnNamespaceRescope(activate)
 	}
 	// Context-switch callbacks run before Connected is published. Discovery
 	// must wait until the new integration clients are activated and readable.

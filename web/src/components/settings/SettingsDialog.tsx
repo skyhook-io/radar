@@ -160,7 +160,9 @@ export function SettingsDialog({
   const metricsDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, metrics: dirty })), [])
   const argoDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, argocd: dirty })), [])
   const costDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, cost: dirty })), [])
+  const [connectionsChangedAt, setConnectionsChangedAt] = useState(0)
   const connectionsChanged = useCallback((profiles: IntegrationProfiles) => {
+    setConnectionsChangedAt(Date.now())
     setConfigData(value => value ? { ...value, integrationProfiles: profiles } : value)
     void queryClient.resetQueries({ queryKey: [previousIntegrationSettingsKey] })
     void queryClient.invalidateQueries({ predicate: query => typeof query.queryKey[0] === 'string' && /^(prometheus|opencost|gitops|argo)/.test(query.queryKey[0]) })
@@ -724,7 +726,7 @@ export function SettingsDialog({
               locked={!canEditConfig}
             >
               {configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.metrics.target)}`} kind="metrics" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={metricsDirtyChange} onBusyChange={metricsBusyChange}
-                status={showLocalStatus && section === 'prometheus' && !['error', 'target_changed'].includes(configData.integrationProfiles.metrics.state) ? <LocalIntegrationStatus kind="metrics" profile={configData.integrationProfiles.metrics} argo={argoStatusQuery} busy={integrationBusy} /> : undefined} /> : <PrometheusConfigField
+                status={showLocalStatus && section === 'prometheus' && !['error', 'target_changed'].includes(configData.integrationProfiles.metrics.state) ? <LocalIntegrationStatus kind="metrics" profile={configData.integrationProfiles.metrics} argo={argoStatusQuery} busy={integrationBusy} changedAt={connectionsChangedAt} /> : undefined} /> : <PrometheusConfigField
                 key={`${settingsApiBase}:${discardGeneration}`}
                 onBusyChange={metricsBusyChange}
                 onDirtyChange={setPrometheusCredentialDirty}
@@ -759,7 +761,7 @@ export function SettingsDialog({
             >
               <CostSection
                 integration={configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.cost.target)}`} kind="cost" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={costDirtyChange} onBusyChange={costBusyChange}
-                  status={showLocalStatus && section === 'cost' && !['error', 'target_changed'].includes(configData.integrationProfiles.cost.state) ? <LocalIntegrationStatus kind="cost" profile={configData.integrationProfiles.cost} argo={argoStatusQuery} busy={integrationBusy} /> : undefined} /> : undefined}
+                  status={showLocalStatus && section === 'cost' && !['error', 'target_changed'].includes(configData.integrationProfiles.cost.state) ? <LocalIntegrationStatus kind="cost" profile={configData.integrationProfiles.cost} argo={argoStatusQuery} busy={integrationBusy} changedAt={connectionsChangedAt} /> : undefined} /> : undefined}
                 currency={editedConfig.opencostCurrency ?? ''}
                 source={editedConfig.costSource ?? 'auto'}
                 url={editedConfig.kubecostUrl ?? ''}
@@ -805,7 +807,7 @@ export function SettingsDialog({
               locked={!canEditConfig}
             >
               {configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.argocd.target)}`} kind="argocd" profiles={configData.integrationProfiles} cliSession={configData.argoCdCliSession} onChange={connectionsChanged} onDirtyChange={argoDirtyChange} onBusyChange={argoBusyChange}
-                status={showLocalStatus && section === 'argocd' && !['error', 'target_changed'].includes(configData.integrationProfiles.argocd.state) ? <LocalIntegrationStatus kind="argocd" profile={configData.integrationProfiles.argocd} argo={argoStatusQuery} busy={integrationBusy} /> : undefined} /> : <ArgoCDConfigField
+                status={showLocalStatus && section === 'argocd' && !['error', 'target_changed'].includes(configData.integrationProfiles.argocd.state) ? <LocalIntegrationStatus kind="argocd" profile={configData.integrationProfiles.argocd} argo={argoStatusQuery} busy={integrationBusy} changedAt={connectionsChangedAt} /> : undefined} /> : <ArgoCDConfigField
                 url={editedConfig.argoCdUrl ?? ''}
                 insecureTls={editedConfig.argoCdInsecureTls ?? false}
                 tokenSet={configData?.argoCdTokenSet ?? false}

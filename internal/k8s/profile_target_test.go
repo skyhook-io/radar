@@ -46,6 +46,15 @@ func TestProfileTargetIdentity(t *testing.T) {
 			}
 		})
 	}
+	for _, host := range []string{"10.0.0.1:6443", "localhost:6443"} {
+		schemeless := rest.CopyConfig(cfg)
+		schemeless.Host = host
+		SetTestConfig(schemeless)
+		if _, err := CurrentProfileTarget(); err != nil {
+			t.Fatalf("scheme-less server %q: %v", host, err)
+		}
+	}
+	SetTestConfig(cfg)
 	path := filepath.Join(t.TempDir(), "ca")
 	if err := os.WriteFile(path, []byte("first"), 0600); err != nil {
 		t.Fatal(err)
@@ -71,18 +80,18 @@ func TestProfileTargetIdentity(t *testing.T) {
 
 func TestClusterConfigurationRejectsBusyOperation(t *testing.T) {
 	contextOpMu.Lock()
-	err := TryClusterConfiguration(func(func() error) error { t.Fatal("entered held context lock"); return nil })
+	err := TryClusterConfiguration(func() error { t.Fatal("entered held context lock"); return nil })
 	contextOpMu.Unlock()
 	if !errors.Is(err, ErrContextConfigurationBusy) {
 		t.Fatalf("held lock: %v", err)
 	}
 	activeContextOperations.Add(1)
-	err = TryClusterConfiguration(func(func() error) error { t.Fatal("leapfrogged queued switch"); return nil })
+	err = TryClusterConfiguration(func() error { t.Fatal("leapfrogged queued switch"); return nil })
 	activeContextOperations.Add(-1)
 	if !errors.Is(err, ErrContextConfigurationBusy) {
 		t.Fatalf("queued switch: %v", err)
 	}
-	if err := TryClusterConfiguration(func(func() error) error { return nil }); err != nil {
+	if err := TryClusterConfiguration(func() error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 }

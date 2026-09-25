@@ -86,7 +86,8 @@ Non-Helm shared OSS still reads `config.json` as startup defaults (including
 previously saved integration endpoints); flags override them. It does not adopt
 UI-saved audit policy or OCI sources from `settings.json`: move those into
 `RADAR_OPERATOR_SETTINGS_FILE` before upgrading. Radar logs a warning when it
-ignores those saved settings. Neither local file is rewritten by this transition.
+ignores those saved settings. Radar does not rewrite `config.json` or `settings.json`
+during this transition.
 
 ### Config File (`~/.radar/config.json`)
 
@@ -255,8 +256,8 @@ This prevents identical user or cluster names in different files from selecting
 the wrong credentials. Context names remain unchanged unless two files use the
 same name; later collisions receive a source suffix in the context switcher.
 Saved namespace selections are keyed by that visible context name. Integration
-credentials have separate binding rules; they are not general per-context profiles
-(see [integration settings](#integration-settings-when-switching-clusters)).
+settings are keyed by kubeconfig source file and in-file context name instead
+(see [cluster identity and recovery](#cluster-identity-and-recovery)).
 If adding an earlier source causes a collision suffix to appear,
 the renamed context does not inherit preferences stored under its former name;
 Radar reports the rename in startup logs and diagnostics so it can be reconfigured.
@@ -308,9 +309,8 @@ If an active context's credentials expire or are rejected, Radar disconnects clu
 
 In **Settings → Metrics / Argo CD / Cost**, configure the selected context and
 choose **Save changes**. **Discard** resets the form without changing saved settings.
-No connection name or assignment wizard is required. Switching A → B → A
-restores A's settings. A context with no saved settings uses discovery. Local CLI
-and Desktop share `~/.radar/clusters.json`.
+Switching A → B → A restores A's settings. A context with no saved settings uses
+discovery. Local CLI and Desktop share `~/.radar/clusters.json`.
 
 **Use auto-discovery**, below the backend URL (or Cost source), stages an empty
 connection. Choose **Save changes** and confirm removal of this context's saved
@@ -325,10 +325,10 @@ unsaved draft; adjust the endpoint or credentials before choosing **Save changes
 Choosing another source replaces the draft without saving it.
 **Discard** restores the previous settings. Replacing an existing connection
 requires confirmation when saving. This makes an independent copy, not a shared reference. Later edits
-affect only the selected cluster. No connection name, catalog or assignment
-wizard is needed, and new contexts never inherit defaults.
-The copy action appears only when another context has a saved connection for
-that integration.
+affect only the selected cluster.
+The copy action appears only when another context has a saved explicit endpoint
+(URL) for that integration. Discovery-only credentials cannot be copied; enter
+them again on each context.
 
 Only copy a backend that serves the destination cluster. A reachable endpoint
 does not prove it contains that cluster's data. Authentication and tenant headers
@@ -336,12 +336,12 @@ are copied server-side on Save; their values are never returned to the browser.
 You can replace or remove them in the draft. If the source changes before Save,
 Radar rejects the stale copy rather than silently using different credentials.
 Kubecost's source cluster mapping is never copied: keep or edit the destination ID, or
-allow discovery to detect it. Discovery-only credentials cannot be copied.
+allow discovery to detect it.
 Environment-backed headers retain references, not resolved secret values; both
 copies can still depend on the same environment variable.
 
-**Edit:** the regular form always edits this context only. Equal URLs are not
-merged. Each context stores its own endpoint and credentials.
+**Edit:** the regular form always edits this context only. Each context stores
+its own endpoint and credentials.
 
 **Credentials:** Settings displays header names and whether a token/key exists,
 never saved values. Type directly into a credential field to replace its value;
@@ -351,10 +351,11 @@ retained credential, including after copying. Plain HTTP is supported but
 does not encrypt credentials in transit; use HTTPS outside trusted local paths.
 
 **Connection checks:** Metrics saves first and then tests reachability; an
-unreachable backend remains saved with a warning. Argo CD and explicit Kubecost
-changes test an isolated candidate before saving; a failed test leaves the
-previous connection active. Selecting Auto-detect without an explicit Kubecost
-URL, or Prometheus-based cost mode, saves that preference without claiming a
+unreachable backend remains saved with a warning. Argo CD changes, Kubecost mode,
+and Auto-detect with any Kubecost override (URL, API key or cluster ID) test an
+isolated candidate before saving; a failed test blocks the save and leaves the
+previous connection active. Auto-detect with no Kubecost overrides, or
+Prometheus-based cost mode, saves that preference without claiming a
 successful backend test. Explicit Kubecost connections check this cluster's
 mapping and data readiness; cost queries require a narrow cluster filter. Central Argo connectivity does not add cross-cluster resource
 discovery.
@@ -377,9 +378,9 @@ context or merged with a concurrent file edit.
 
 Let Settings create context keys and accepted target fingerprints. Each entry
 stores its own configuration directly under `profiles[context-key].integrations`,
-keyed by `metrics`, `argocd` and `cost`. There are no shared records or connection
-IDs. For example, within an existing context's `integrations.metrics` settings
-(keep the actual `target` and `identity` generated by Radar):
+keyed by `metrics`, `argocd` and `cost`. For example, within an existing
+context's `integrations.metrics` settings (keep the actual `target` and
+`identity` generated by Radar):
 
 ```json
 {
@@ -409,7 +410,9 @@ including background consumers, not only when Settings opens. A content hash
 avoids reparsing unchanged data. Concurrent saves use a file lock and revision
 checks. Draft revisions cover the selected context and integration, including
 redacted credentials: saving Argo CD or another cluster does not invalidate an
-unfinished Metrics draft. A concurrent edit to the same settings requires reloading.
+unfinished Metrics draft. The exception: importing previous settings with an
+explicit endpoint on any context requires open drafts for that integration on
+other contexts to reload. A concurrent edit to the same settings requires reloading.
 Copy also checks the source revision, so an endpoint or secret cannot change
 unnoticed between selection and applying the copy.
 The final write also checks the entire file, so overlapping saves during a
@@ -424,8 +427,7 @@ The stored format is versioned independently of Radar releases. Future format
 changes must retain support for existing v1 files or provide an explicit
 migration. Older readers reject unfamiliar fields and versions rather than
 silently dropping data. A newer format produces upgrade guidance, not an
-instruction to repair or delete the file. Unreleased experimental layouts are
-not migrated.
+instruction to repair or delete the file.
 
 #### Cluster identity and recovery
 
@@ -458,7 +460,7 @@ saved headers; local header flags require the URL flag in the same launch.
 Argo CD and cost environment overrides similarly form complete, context-bound
 launch configurations, not layers over saved credentials. Switching away
 disables the override; returning to that target restores it. Restart without
-the override to edit its saved settings. No new flags are required.
+the override to edit its saved settings.
 
 Workload-metrics scope assertions remain process-local and clear on a context
 switch attempt, even an unsuccessful one. Saved connections never restore them.
@@ -489,7 +491,7 @@ These recovery hints are for local CLI/Desktop configuration, not operator-manag
 or embedded Cloud installations.
 
 In-cluster OSS settings remain Helm/operator-controlled and read-only in the UI.
-Cloud remains installation-scoped in this change; `clusters.json` is not a Hub
+Cloud remains installation-scoped; `clusters.json` is not a Hub
 configuration transport.
 
 The profile file and lock are created with Unix mode `0600`; a newly created

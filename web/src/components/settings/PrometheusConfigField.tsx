@@ -17,9 +17,9 @@ export function PrometheusConfigField({ onBusyChange, ...props }: Omit<Component
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ prometheusUrl: url, ...(headers !== undefined ? { headers } : {}) }),
       })
-      const data = await response.json() as PrometheusApplyResult
+      const data = await response.json().catch(() => ({})) as PrometheusApplyResult
       if (controller.signal.aborted || base !== getApiBase()) throw new Error('Cluster changed; reload Settings.')
-      if (!response.ok) throw new Error(data.error || response.statusText)
+      if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`)
       return data
     } finally {
       if (request.current === controller) request.current = null

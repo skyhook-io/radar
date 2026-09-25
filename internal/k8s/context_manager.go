@@ -275,22 +275,18 @@ func RegisterTrafficFuncs(reset TrafficResetFunc, reinit TrafficReinitFunc) {
 // (the metrics URL and headers) reaches them only this way. No-op while
 // disconnected: the next connect builds the manager from current config.
 func RestartTrafficSubsystem() error {
-	activeContextOperations.Add(1)
-	contextOpMu.Lock()
-	defer func() {
-		activeContextOperations.Add(-1)
-		contextOpMu.Unlock()
-	}()
-	return restartTrafficSubsystemLocked()
-}
-
-func restartTrafficSubsystemLocked() error {
 	contextSwitchMu.RLock()
 	resetFn, reinitFn := trafficResetFunc, trafficReinitFunc
 	contextSwitchMu.RUnlock()
 	if resetFn == nil || reinitFn == nil {
 		return nil
 	}
+	activeContextOperations.Add(1)
+	contextOpMu.Lock()
+	defer func() {
+		activeContextOperations.Add(-1)
+		contextOpMu.Unlock()
+	}()
 	if GetClient() == nil {
 		return nil
 	}

@@ -513,6 +513,8 @@ export function kubecostTrendUnavailableMessage(
       return 'Radar could not reach Kubecost. Check Settings → Cost.'
     case 'configuration_mismatch':
       return 'Kubecost returned data for a different cluster. Check the cluster ID in Settings → Cost.'
+    case 'cost_settings_error':
+      return 'This cluster’s saved cost settings need review. Check Settings → Cost.'
     default:
       return 'Kubecost history could not be loaded.'
   }

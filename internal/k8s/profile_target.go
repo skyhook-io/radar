@@ -69,6 +69,10 @@ func CurrentProfileTarget() (ProfileTarget, error) {
 	}
 	u, err := url.Parse(identity.Server)
 	if err != nil || u.Host == "" {
+		// client-go accepts a scheme-less server such as 10.0.0.1:6443.
+		u, err = url.Parse("https://" + identity.Server)
+	}
+	if err != nil || u.Host == "" {
 		return p, errors.New("Kubernetes target identity is unavailable")
 	}
 	u.Scheme = strings.ToLower(u.Scheme)
@@ -102,11 +106,11 @@ func RegisterCAPIProfileReference(binding, managementBinding, namespace, name st
 	capiProfileReferences[binding] = config.CAPIProfileReference{ManagementBinding: managementBinding, Namespace: namespace, Name: name}
 }
 
-var ErrContextConfigurationBusy = errors.New("cluster connection is changing; reload Settings and try again")
+var ErrContextConfigurationBusy = errors.New("cluster connection is changing; try again in a moment")
 
-// The callback may restart traffic through its already-locked helper, never
-// through RestartTrafficSubsystem, which acquires the same operation lock.
-func TryClusterConfiguration(fn func(restartTraffic func() error) error) error {
+// fn runs holding the context-operation lock, so it must not call
+// RestartTrafficSubsystem synchronously: that acquires the same lock.
+func TryClusterConfiguration(fn func() error) error {
 	if activeContextOperations.Load() != 0 || !contextOpMu.TryLock() {
 		return ErrContextConfigurationBusy
 	}
@@ -114,5 +118,5 @@ func TryClusterConfiguration(fn func(restartTraffic func() error) error) error {
 	if activeContextOperations.Load() != 0 {
 		return ErrContextConfigurationBusy
 	}
-	return fn(restartTrafficSubsystemLocked)
+	return fn()
 }

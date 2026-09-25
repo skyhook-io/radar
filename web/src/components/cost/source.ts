@@ -4,6 +4,7 @@ import { previousSettingsAction, type PreviousIntegrationSettings } from '../../
 export function isCostConfigurable(reason?: string): boolean {
   return reason === 'no_prometheus' || reason === 'no_cost_source' || reason === 'source_unavailable'
     || reason === 'authentication_error' || reason === 'configuration_mismatch'
+    || reason === 'metrics_settings_error' || reason === 'cost_settings_error'
 }
 
 export function costSourceLabel(source?: CostDataSource): string {
@@ -19,6 +20,8 @@ export function costConfigurationAction(reason?: CostUnavailableReason, offers?:
   label: string
   note?: string
 } {
+  if (reason === 'metrics_settings_error') return { section: 'prometheus', label: 'Review metrics settings' }
+  if (reason === 'cost_settings_error') return { section: 'cost', label: 'Review cost settings' }
   const previousKind = reason === 'no_prometheus'
     ? offers?.metrics ? 'metrics' : offers?.explicitCostBackend ? 'cost' : undefined
     : reason === 'no_cost_source'
@@ -97,6 +100,10 @@ export function costIntegrationUnavailableMessage(
       return settingsAvailable
         ? 'Kubecost Aggregator is unavailable. Check the URL, network path, and cluster ID in Settings → Cost.'
         : 'Kubecost Aggregator is unavailable. Update this cluster’s cost-source configuration in the host application or Radar deployment.'
+    case 'metrics_settings_error':
+      return 'This cluster’s saved metrics settings need review before cost data can load. Review them in Settings → Metrics.'
+    case 'cost_settings_error':
+      return 'This cluster’s saved cost settings need review before cost data can load. Review them in Settings → Cost.'
     case 'deployment_configuration_error':
       return 'Cost collection is misconfigured by this Radar deployment. Update its environment variables or Helm cost values, then restart Radar.'
     case 'authentication_error':

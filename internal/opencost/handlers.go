@@ -10,6 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	localconfig "github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
@@ -333,7 +335,7 @@ func ConnectionFailureReason(err error) string {
 	if errors.Is(err, ErrNoCostSource) {
 		return pkgopencost.ReasonNoCostSource
 	}
-	if errors.Is(err, prometheuspkg.ErrPrometheusNotFound) || errors.Is(err, prometheuspkg.ErrPrometheusUnavailable) {
+	if errors.Is(err, prometheuspkg.ErrPrometheusNotFound) || errors.Is(err, prometheuspkg.ErrPrometheusUnavailable) || errors.Is(err, k8s.ErrContextConfigurationBusy) {
 		return pkgopencost.ReasonNoPrometheus
 	}
 	if errors.Is(err, ErrKubecostNoData) {
@@ -353,6 +355,17 @@ func ConnectionFailureReason(err error) string {
 	}
 	if errors.Is(err, ErrCostSourceEnvConfig) {
 		return pkgopencost.ReasonDeploymentConfig
+	}
+	var settingsErr *connections.SettingsError
+	if errors.As(err, &settingsErr) {
+		switch {
+		case settingsErr.Launch:
+			return pkgopencost.ReasonDeploymentConfig
+		case settingsErr.Kind == localconfig.IntegrationMetrics:
+			return pkgopencost.ReasonMetricsSettings
+		default:
+			return pkgopencost.ReasonCostSettings
+		}
 	}
 	var httpErr *prom.HTTPError
 	if errors.As(err, &httpErr) && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden) {

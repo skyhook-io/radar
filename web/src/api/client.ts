@@ -957,6 +957,8 @@ export type CostUnavailableReason =
   | "authentication_error"
   | "configuration_mismatch"
   | "deployment_configuration_error"
+  | "metrics_settings_error"
+  | "cost_settings_error"
   | "history_unsupported"
   | "insufficient_history";
 

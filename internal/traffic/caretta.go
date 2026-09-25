@@ -147,11 +147,6 @@ func (c *CarettaSource) Name() string {
 
 // Detect checks if Caretta is available in the cluster
 func (c *CarettaSource) Detect(ctx context.Context) (*DetectionResult, error) {
-	if c.managedMetrics {
-		if err := connections.Refresh(config.IntegrationMetrics); err != nil {
-			return nil, err
-		}
-	}
 	result := &DetectionResult{
 		Available: false,
 	}

@@ -20,7 +20,7 @@ export function PreviousIntegrationSettingsNotice({ profiles, onNavigate }: {
   onNavigate: (section: SettingsSectionId) => void
 }) {
   const available = (['metrics', 'argocd', 'cost'] as const).filter(kind =>
-    profiles[kind].state === 'auto' && profiles[kind].legacy,
+    profiles[kind].state === 'auto' && profiles[kind].legacy && !profiles[kind].legacy.error,
   )
   if (available.length === 0) return null
   return (
@@ -124,7 +124,7 @@ export function SavedClusterConnections({
       headers: getAuthHeaders(),
     })
       .then(async (response) => {
-        const data = (await response.json()) as ConnectionResponse
+        const data = (await response.json().catch(() => ({}))) as ConnectionResponse
         if (!response.ok)
           throw new Error(data.error || 'Could not load saved connections.')
         if (controller.signal.aborted || getApiBase() !== base) return
@@ -170,7 +170,7 @@ export function SavedClusterConnections({
           confirmRemoval: true,
         }),
       })
-      const data = (await response.json()) as ConnectionResponse
+      const data = (await response.json().catch(() => ({}))) as ConnectionResponse
       if (controller.signal.aborted || getApiBase() !== base) return
       if (!response.ok)
         throw new Error(data.error || 'Could not remove the saved connection.')

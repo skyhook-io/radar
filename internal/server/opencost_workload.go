@@ -70,7 +70,7 @@ func (s *Server) handleOpenCostWorkload(w http.ResponseWriter, r *http.Request) 
 	client, connectionErr := prometheuspkg.ClientForOperation()
 	if connectionErr != nil {
 		resp.Available = false
-		resp.Reason = pkgopencost.ReasonNoPrometheus
+		resp.Reason = internalopencost.ConnectionFailureReason(connectionErr)
 		resp.Currency = s.resolvedOpenCostCurrency()
 		resp.Source = "prometheus"
 		s.writeJSON(w, resp)
@@ -130,7 +130,7 @@ func (s *Server) handleOpenCostWorkloadTrend(w http.ResponseWriter, r *http.Requ
 	client, connectionErr := prometheuspkg.ClientForOperation()
 	if connectionErr != nil {
 		resp.Available = false
-		resp.Reason = pkgopencost.ReasonNoPrometheus
+		resp.Reason = internalopencost.ConnectionFailureReason(connectionErr)
 		resp.Currency = s.resolvedOpenCostCurrency()
 		resp.Source = "prometheus"
 		s.writeJSON(w, resp)

@@ -103,7 +103,6 @@ const (
 )
 
 type Manager struct {
-	forwardOwner   portforward.Owner
 	mu             sync.RWMutex
 	selectMu       sync.Mutex
 	config         ManagerConfig
@@ -586,11 +585,7 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 	if err != nil {
 		return Connection{}, err
 	}
-	owner := m.forwardOwner
-	if owner == "" {
-		owner = portforward.OwnerCost
-	}
-	return connectDiscoveredKubecost(ctx, config, clusterID, aggregator, owner, captureKubecostTarget())
+	return connectDiscoveredKubecost(ctx, config, clusterID, aggregator, portforward.OwnerCost, captureKubecostTarget())
 }
 
 func connectDiscoveredKubecost(ctx context.Context, config ManagerConfig, clusterID string, aggregator *kubecostAggregator, owner portforward.Owner, target kubecostTarget) (Connection, error) {

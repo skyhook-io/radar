@@ -4,16 +4,20 @@ import type { IntegrationKind, IntegrationProfile } from './LocalConnectionSetti
 import { Badge, Collapse } from '@skyhook-io/k8s-ui'
 import { useRef } from 'react'
 
-export function LocalIntegrationStatus({ kind, profile, argo, busy }: {
+export function LocalIntegrationStatus({ kind, profile, argo, busy, changedAt }: {
   kind: IntegrationKind
   profile: IntegrationProfile
   argo: ReturnType<typeof useArgoStatus>
   busy: boolean
+  changedAt: number
 }) {
   const prom = usePrometheusStatus(kind === 'metrics')
   const cost = useOpenCostSummary(kind === 'cost')
   const query = kind === 'metrics' ? prom : kind === 'cost' ? cost : argo
-  const checking = busy || query.isFetching || query.isPlaceholderData
+  // Background polls keep the last status; only the first load, or a result
+  // older than the latest saved integration change, reads as "Checking…".
+  const checking = busy || query.isPlaceholderData || (query.isFetching && !query.data) ||
+    Math.max(query.dataUpdatedAt, query.errorUpdatedAt) < changedAt
   let status = 'Checking…'
   let detail: string | undefined
   if (!checking) {
