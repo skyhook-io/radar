@@ -469,7 +469,9 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     roles: graphRoles,
   }), [graphHealth, graphKinds, graphNamespaces, graphRoles, graphSync])
   const graphFacets = useMemo(() => buildTreeFacets(tree), [tree])
-  const remoteDestination = tree?.remoteDestination ?? insightsQ.data?.summary?.remoteDestination
+  // The tree and insights load separately; either one seeing a remote
+  // destination is enough to keep its resources from opening here.
+  const remoteDestination = !!(tree?.remoteDestination || insightsQ.data?.summary?.remoteDestination)
   const destination = useDestinationCluster(remoteDestination, kind, namespace, name)
 
   function openResourceFromTree(ref: GitOpsTreeRef | GitOpsInsightRef, node?: GitOpsTreeNode) {
