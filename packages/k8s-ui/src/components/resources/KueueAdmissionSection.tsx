@@ -66,7 +66,7 @@ function ConditionEvidence({ condition, generation, label }: { condition: Schedu
 
 function GateEvidence({ gate, link }: { gate: NonNullable<SchedulingObservation['gates']>[number]; link: Link }) {
   return <div className="space-y-1">
-    <p className="flex flex-wrap items-center gap-2">{link(gate.name, gate.ref)}<Badge severity={gate.nativeState === 'Ready' ? 'success' : gate.nativeState === 'Rejected' ? 'error' : 'warning'}>{gate.nativeState || gate.decision}</Badge></p>
+    <p className="flex flex-wrap items-center gap-2">{link(gate.name, gate.ref)}<Badge severity={gate.kind === 'preemption_gate' ? 'neutral' : gate.nativeState === 'Ready' ? 'success' : gate.nativeState === 'Rejected' ? 'error' : 'warning'}>{gate.nativeState || gate.decision}</Badge></p>
     {gate.message && <p className="whitespace-pre-wrap break-words">{gate.message}</p>}
     {(gate.retryCount != null || gate.requeueAfterSeconds != null) && <p className="text-xs text-theme-text-secondary">{gate.retryCount != null && `Retries: ${gate.retryCount}`}{gate.retryCount != null && gate.requeueAfterSeconds != null && ' · '}{gate.requeueAfterSeconds != null && `Requeue delay: ${gate.requeueAfterSeconds}s`}</p>}
   </div>
@@ -99,11 +99,11 @@ function AdmissionObservation({ observation, identity, generation, deleting, lin
     </div>
     {(observation.decision === 'held' || observation.decision === 'unknown' || kueue?.active === false) && <p className="text-xs text-theme-text-secondary">{[observation.decision === 'held' ? 'Admission held' : observation.decision === 'unknown' ? 'Admission unknown' : null, kueue?.active === false ? 'Workload inactive' : null].filter(Boolean).join(' · ')}</p>}
     {condition ? <ConditionEvidence condition={condition} generation={observation.subjectGeneration} /> : <p className="text-theme-text-secondary">No primary admission condition reported.</p>}
-    {(kueue?.phase === 'admitted' || kueue?.phase === 'quota_reserved') && <p className="text-xs text-theme-text-secondary">Admission status; execution is shown separately below.</p>}
+    {(kueue?.phase === 'admitted' || kueue?.phase === 'quota_reserved') && <p className="text-xs text-theme-text-secondary">Admission status; execution is shown separately.</p>}
     {visible.map((entry) => <ConditionEvidence key={entry.type} condition={entry} generation={observation.subjectGeneration} label={observation.disruptions?.some((item) => item.type === entry.type) ? 'Reported disruption' : 'Reported readiness'} />)}
     {pendingChecks.length > 0 && <div className="space-y-2"><p className="text-xs font-medium text-theme-text-secondary">Admission checks</p>{pendingChecks.map((gate, index) => <GateEvidence key={index} gate={gate} link={link} />)}</div>}
     {preemption.length > 0 && <div className="space-y-2"><p className="text-xs font-medium text-theme-text-secondary">Preemption gates</p><p className="text-xs text-theme-text-secondary">This gate family governs preemption; it alone does not establish an admission blocker.</p>{preemption.map((gate, index) => <GateEvidence key={index} gate={gate} link={link} />)}</div>}
-    {!!observation.queues?.length && <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">{observation.queues.map((queue, index) => <span key={index}><span className="capitalize">{queue.roles.join(' + ')} queue</span>: {link(queue.name, queue.ref)}</span>)}</div>}
+    {!!observation.queues?.length && <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">{observation.queues.map((queue, index) => <span key={index}><span>{queue.roles.join(' + ').replace(/^./, (letter) => letter.toUpperCase())} queue</span>: {link(queue.name, queue.ref)}</span>)}</div>}
     {kueue?.requeueState && <p className="text-xs text-theme-text-secondary">Requeues: {kueue.requeueState.count ?? 'Not reported'}{kueue.requeueState.requeueAt && ` · Eligible again: ${kueue.requeueState.requeueAt}`}</p>}
     {kueue?.concurrentAdmission && <p className="text-xs">Parent Workload: {link(kueue.concurrentAdmission.parentName, kueue.concurrentAdmission.parentRef)}</p>}
     <Disclosure summary={<span>Technical details{supporting.length > 0 && ` · ${supporting.length} additional condition${supporting.length === 1 ? '' : 's'}`}{readyChecks.length > 0 && ` · ${readyChecks.length} ready check${readyChecks.length === 1 ? '' : 's'}`}</span>} summaryClassName="text-xs text-theme-text-secondary">

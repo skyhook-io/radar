@@ -38,7 +38,7 @@ describe('Kueue admission investigation', () => {
     expect(html).toContain('Inadmissible')
     expect(html).toContain('ClusterQueue training is inactive')
     expect(html).toContain('Stale evidence')
-    expect(html).toContain('submission queue</span>: ready')
+    expect(html).toContain('Submission queue</span>: ready')
     expect(html).not.toContain('suspended because')
   })
 
@@ -47,7 +47,7 @@ describe('Kueue admission investigation', () => {
   ] as const)('preserves native phase %s', (phase, label) => {
     const html = render(response({ decision: 'satisfied', kueue: { phase } }))
     expect(html).toContain(label)
-    expect(html.includes('Admission status; execution is shown separately below.')).toBe(phase === 'admitted' || phase === 'quota_reserved')
+    expect(html.includes('Admission status; execution is shown separately.')).toBe(phase === 'admitted' || phase === 'quota_reserved')
   })
 
   it('keeps disruptions, inactive state, check retries and requeues distinct', () => {
@@ -166,4 +166,12 @@ it('uses an expanded Section in drawers and keeps the default fullscreen card', 
     await act(async () => root.render(<KueueAdmissionSection data={response()} loading={false} hinted externalExecution={false} />))
     expect(container.querySelector('section[aria-label="Kueue admission"]')).not.toBeNull()
   } finally { await act(async () => root.unmount()) }
+})
+
+
+it('does not color an open preemption gate as an admission warning', () => {
+  const html = render(response({ decision: 'satisfied', kueue: { phase: 'admitted' }, gates: [{ kind: 'preemption_gate', name: 'preemption-policy', nativeState: 'Open', decision: 'satisfied' }] }))
+  expect(html).toContain('Open')
+  expect(html).not.toContain('bg-amber')
+  expect(html).toContain('alone does not establish an admission blocker')
 })
