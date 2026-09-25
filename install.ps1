@@ -79,9 +79,7 @@ Move-Item -Path (Join-Path $TmpDir $BinaryName) -Destination $InstallDir -Force
 
 # Create radar.exe symlink/copy for convenience
 $RadarExe = Join-Path $InstallDir "radar.exe"
-if (-not (Test-Path $RadarExe)) {
-    Copy-Item -Path (Join-Path $InstallDir $BinaryName) -Destination $RadarExe
-}
+Copy-Item -Path (Join-Path $InstallDir $BinaryName) -Destination $RadarExe -Force
 
 # Cleanup
 Remove-Item -Path $TmpDir -Recurse -Force -ErrorAction SilentlyContinue
