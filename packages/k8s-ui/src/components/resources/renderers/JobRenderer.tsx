@@ -1,9 +1,11 @@
+import type { ReactNode } from 'react'
 import { Clock } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
 import { formatDuration } from '../resource-utils'
 
 interface JobRendererProps {
   data: any
+  admissionContent?: ReactNode
 }
 
 // Extract problems from Job status and conditions
@@ -42,7 +44,7 @@ function getJobProblems(data: any): string[] {
   return problems
 }
 
-export function JobRenderer({ data }: JobRendererProps) {
+export function JobRenderer({ data, admissionContent }: JobRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const conditions = status.conditions || []
@@ -81,6 +83,8 @@ export function JobRenderer({ data }: JobRendererProps) {
       {isComplete && !hasProblems && (
         <AlertBanner variant="success" title="Job Completed Successfully" />
       )}
+
+      {admissionContent}
 
       <Section title="Status" icon={Clock}>
         <PropertyList>

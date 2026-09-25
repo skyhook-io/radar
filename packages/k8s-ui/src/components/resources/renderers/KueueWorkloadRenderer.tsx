@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Cpu, Gauge, ListChecks } from 'lucide-react'
 import { formatRelativeAgeTime } from '../../../utils/format'
-import { Badge, type BadgeSeverity } from '../../ui/Badge'
+import { Badge } from '../../ui/Badge'
 import {
   AlertBanner,
   ConditionsSection,
@@ -12,7 +12,7 @@ import {
   type ConditionTone,
 } from '../../ui/drawer-components'
 import { formatResources } from '../resource-utils'
-import { getKueueWorkloadStatus, getKueueWorkloadPriority, getKueueWorkloadStatusCondition, isKueueWorkloadFailureReason, isKueueConditionStale } from '../resource-utils-kueue'
+import { admissionCheckSeverity, getKueueWorkloadStatus, getKueueWorkloadPriority, getKueueWorkloadStatusCondition, isKueueWorkloadFailureReason, isKueueConditionStale } from '../resource-utils-kueue'
 
 const KUEUE_GROUP = 'kueue.x-k8s.io'
 
@@ -20,19 +20,6 @@ interface KueueWorkloadRendererProps {
   data: any
   provisioning?: ReactNode
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
-}
-
-function admissionCheckSeverity(state: string): BadgeSeverity {
-  switch (state) {
-    case 'Ready':
-      return 'success'
-    case 'Rejected':
-      return 'error'
-    case 'Retry':
-      return 'warning'
-    default:
-      return 'neutral'
-  }
 }
 
 function resourceList(resources: any): string | null {

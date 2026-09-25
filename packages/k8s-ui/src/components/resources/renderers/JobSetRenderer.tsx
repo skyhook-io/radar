@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Activity, Boxes, Network as NetworkIcon, ShieldCheck } from 'lucide-react'
 import {
   ConditionsSection,
@@ -13,6 +14,7 @@ import { getJobSetStatus } from '../resource-utils-jobset-lws'
 
 interface JobSetRendererProps {
   data: any
+  admissionContent?: ReactNode
   mode?: 'detail' | 'overview' | 'configuration'
   shownMemberCounts?: ReadonlyMap<string, number>
   onSelectRole?: (role: string) => void
@@ -50,7 +52,7 @@ function sumCountArray(value: unknown): number | undefined {
   return value.reduce((total: number, count: unknown) => total + (typeof count === 'number' ? count : 0), 0)
 }
 
-export function JobSetRenderer({ data, mode = 'detail', shownMemberCounts, onSelectRole }: JobSetRendererProps) {
+export function JobSetRenderer({ data, admissionContent, mode = 'detail', shownMemberCounts, onSelectRole }: JobSetRendererProps) {
   const spec = data?.spec || {}
   const status = data?.status || {}
   const conditions: any[] = Array.isArray(status.conditions) ? status.conditions : []
@@ -85,6 +87,7 @@ export function JobSetRenderer({ data, mode = 'detail', shownMemberCounts, onSel
   return (
     <>
       {showSummary && <ProblemAlerts problems={problems} />}
+      {showSummary && admissionContent}
 
       {showSummary && externalController && (
         <div className="mb-3 rounded border border-theme-border bg-theme-elevated p-3 text-sm text-theme-text-secondary">

@@ -312,6 +312,8 @@ import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
  * When an override is not provided, the base (shared) renderer is used.
  */
 export interface RendererOverrides {
+  JobRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
+  JobSetRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   RayClusterRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   RayServiceRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   KueueWorkloadRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
@@ -748,6 +750,8 @@ export function ResourceRendererDispatch({
 
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
+  const JobComp = rendererOverrides?.JobRenderer ?? JobRenderer
+  const JobSetComp = rendererOverrides?.JobSetRenderer ?? JobSetRenderer
   const RayClusterComp = rendererOverrides?.RayClusterRenderer ?? RayClusterRenderer
   const RayServiceComp = rendererOverrides?.RayServiceRenderer ?? RayServiceRenderer
   const KueueWorkloadComp = rendererOverrides?.KueueWorkloadRenderer ?? KueueWorkloadRenderer
@@ -818,7 +822,7 @@ export function ResourceRendererDispatch({
         {kind === 'ingresses' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <IngressRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'configmaps' && <ConfigMapRenderer data={data} relationships={relationships} onNavigate={onNavigate} />}
         {kind === 'secrets' && <SecretRenderer data={data} relationships={relationships} onNavigate={onNavigate} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
-        {kind === 'jobs' && !nonCoreJobFallthrough && <JobRenderer data={data} />}
+        {kind === 'jobs' && !nonCoreJobFallthrough && <JobComp data={data} onNavigate={onNavigate} />}
         {kind === 'rayclusters' && data?.apiVersion === 'ray.io/v1' && <RayClusterComp data={data} onNavigate={onNavigate} />}
         {kind === 'rayservices' && data?.apiVersion === 'ray.io/v1' && <RayServiceComp data={data} onNavigate={onNavigate} />}
         {kind === 'workloads' && isApiGroup(data?.apiVersion, 'kueue.x-k8s.io') && <KueueWorkloadComp data={data} onNavigate={onNavigate} />}
@@ -826,7 +830,7 @@ export function ResourceRendererDispatch({
         {kind === 'provisioningrequests' && ['autoscaling.x-k8s.io/v1', 'autoscaling.x-k8s.io/v1beta1'].includes(data?.apiVersion) && <ProvisioningRequestRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'localqueues' && isKueueQueueResource(data) && <LocalQueueRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'clusterqueues' && isKueueQueueResource(data) && <ClusterQueueRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'jobsets' && isJobSetV1Alpha2(data) && <JobSetRenderer data={data} />}
+        {kind === 'jobsets' && isJobSetV1Alpha2(data) && <JobSetComp data={data} onNavigate={onNavigate} />}
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'cronworkflows' && <CronWorkflowRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPAComp data={data} onNavigate={onNavigate} hpaDiagnosis={hpaDiagnosis} />}
