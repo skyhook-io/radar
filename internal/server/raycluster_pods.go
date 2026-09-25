@@ -13,6 +13,7 @@ import (
 )
 
 func (s *Server) handleRayClusterPods(w http.ResponseWriter, r *http.Request) {
+	operation := k8s.OperationContext()
 	if !s.requireConnected(w) {
 		return
 	}
@@ -32,12 +33,17 @@ func (s *Server) handleRayClusterPods(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusForbidden, "Reading RayCluster Pods requires get rayclusters and list pods in this namespace")
 		return
 	}
+	cache := k8s.GetResourceCache()
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Cluster connection unavailable")
 		return
 	}
 	root, err := client.Resource(schema.GroupVersionResource{Group: "ray.io", Version: "v1", Resource: "rayclusters"}).Namespace(ns).Get(r.Context(), name, metav1.GetOptions{})
+	if cache == nil || operation.Err() != nil || cache != k8s.GetResourceCache() {
+		s.writeError(w, http.StatusServiceUnavailable, "Cluster connection changed; retry the Pod request")
+		return
+	}
 	if err != nil {
 		failure := workloadSelectorGetError(err)
 		if failure.statusCode == http.StatusInternalServerError {
@@ -54,7 +60,7 @@ func (s *Server) handleRayClusterPods(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusConflict, "RayCluster was recreated; refresh the resource to inspect its current Pods")
 		return
 	}
-	pods, err := k8s.DirectlyOwnedPods(k8s.GetResourceCache(), ns, name, "ray.io", "RayCluster", root.GetUID())
+	pods, err := k8s.DirectlyOwnedPods(cache, ns, name, "ray.io", "RayCluster", root.GetUID())
 	if err != nil {
 		failure := workloadSelectorGetError(err)
 		if errors.Is(err, k8s.ErrWorkloadCacheWarming) {

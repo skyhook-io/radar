@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func TestRayClusterGroupCannotIncludeHead(t *testing.T) {
@@ -99,6 +100,31 @@ func TestRayClusterPodsRequestContract(t *testing.T) {
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil || rec.Code != 200 || len(result.Pods) != 200 || result.Total != 205 || !result.Truncated {
 		t.Fatalf("bounded response: %d %s (%v)", rec.Code, rec.Body.String(), err)
+	}
+	client.PrependReactor("get", "rayclusters", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		k8s.CancelOngoingOperations()
+		return true, root.DeepCopy(), nil
+	})
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest("GET", "/api/workloads/rayclusters/default/cluster/pods?ownerUID=current", nil))
+	if rec.Code != 503 || !strings.Contains(rec.Body.String(), "connection changed") {
+		t.Fatalf("context changed during parent read: %d %s", rec.Code, rec.Body.String())
+	}
+	client.ReactionChain = client.ReactionChain[1:]
+	client.PrependReactor("get", "rayclusters", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		k8s.ResetResourceCache()
+		return true, root.DeepCopy(), nil
+	})
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest("GET", "/api/workloads/rayclusters/default/cluster/pods?ownerUID=current", nil))
+	if rec.Code != 503 || !strings.Contains(rec.Body.String(), "connection changed") {
+		t.Fatalf("cache replaced during parent read: %d %s", rec.Code, rec.Body.String())
+	}
+	client.ReactionChain = client.ReactionChain[1:]
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest("GET", "/api/workloads/rayclusters/default/cluster/pods?ownerUID=current", nil))
+	if rec.Code != 503 {
+		t.Fatalf("absent cache during switch: %d %s", rec.Code, rec.Body.String())
 	}
 	k8s.ResetResourceCache()
 	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(), map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "elsewhere"}}); err != nil {
