@@ -292,6 +292,36 @@ func (m *MemoryStore) Close() error {
 	return nil
 }
 
+// OwnedUIDs returns the distinct UIDs of resources whose rows name one of
+// ownerUIDs as their owner.
+func (m *MemoryStore) OwnedUIDs(ctx context.Context, clusterContext string, ownerUIDs []string, limit int) ([]string, error) {
+	if len(ownerUIDs) == 0 || limit <= 0 {
+		return nil, nil
+	}
+	owners := make(map[string]bool, len(ownerUIDs))
+	for _, uid := range ownerUIDs {
+		owners[uid] = true
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	seen := map[string]bool{}
+	var out []string
+	for i := 0; i < m.count && len(out) < limit; i++ {
+		event := &m.records[(m.head-1-i+m.maxSize)%m.maxSize]
+		if event.ID == "" || event.UID == "" || event.Owner == nil || !owners[event.Owner.UID] {
+			continue
+		}
+		if clusterContext != "" && event.ClusterContext != clusterContext {
+			continue
+		}
+		if !seen[event.UID] {
+			seen[event.UID] = true
+			out = append(out, event.UID)
+		}
+	}
+	return out, nil
+}
+
 // matchesFilters checks if an event matches the query filters
 func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf *CompiledFilter) bool {
 	// Apply compiled filter preset
@@ -365,6 +395,10 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 	}
 
 	if opts.ExcludeDeleted && event.EventType == EventTypeDelete {
+		return false
+	}
+
+	if !opts.Scope.Matches(event) {
 		return false
 	}
 
