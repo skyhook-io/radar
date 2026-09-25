@@ -19,6 +19,7 @@
       "./src/components/resources/*.ts",
       "./src/components/resources/*.tsx"
     ],
+    "./components/resources/KueueAdmissionSection": "./src/components/resources/KueueAdmissionSection.tsx",
     "./components/resources/renderers/*": [
       "./src/components/resources/renderers/*.tsx",
       "./src/components/resources/renderers/*.ts"
