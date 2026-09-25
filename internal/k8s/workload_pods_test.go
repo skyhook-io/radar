@@ -237,3 +237,42 @@ func TestWorkloadPodsDoNotCrossNamespaces(t *testing.T) {
 		t.Fatalf("pods = %v, want only the shop namespace's", got)
 	}
 }
+
+func TestDirectlyOwnedPodsRejectsSpoofedAndPreviousOwners(t *testing.T) {
+	yes, no := true, false
+	owner := metav1.OwnerReference{APIVersion: "ray.io/v1", Kind: "RayCluster", Name: "cluster", UID: "current", Controller: &yes}
+	objects := []runtime.Object{ownedPod("ml", "owned", &owner, nil), ownedPod("other", "other-ns", &owner, nil), ownedPod("ml", "spoof", nil, map[string]string{"ray.io/cluster": "cluster"})}
+	for _, test := range []struct {
+		name   string
+		mutate func(*metav1.OwnerReference)
+	}{
+		{"old", func(o *metav1.OwnerReference) { o.UID = "old" }},
+		{"name", func(o *metav1.OwnerReference) { o.Name = "different" }},
+		{"foreign", func(o *metav1.OwnerReference) { o.APIVersion = "foreign.io/v1" }},
+		{"job", func(o *metav1.OwnerReference) { o.Kind = "Job"; o.APIVersion = "batch/v1" }},
+		{"non-controller", func(o *metav1.OwnerReference) { o.Controller = &no }},
+	} {
+		changed := owner
+		test.mutate(&changed)
+		objects = append(objects, ownedPod("ml", test.name, &changed, nil))
+	}
+	cache := newOwnershipCache(t, map[string]bool{k8score.Pods: true}, objects...)
+	pods, err := DirectlyOwnedPods(cache, "ml", "cluster", "ray.io", "RayCluster", "current")
+	if err != nil || len(pods) != 1 || pods[0].Name != "owned" {
+		t.Fatalf("pods=%v err=%v", pods, err)
+	}
+	pods, err = DirectlyOwnedPods(cache, "ml", "cluster", "ray.io", "RayCluster", "")
+	if err != nil || len(pods) != 0 {
+		t.Fatalf("missing UID matched pods: %v %v", pods, err)
+	}
+	if _, err = DirectlyOwnedPods(nil, "ml", "cluster", "ray.io", "RayCluster", "current"); !errors.Is(err, ErrWorkloadAccessDenied) {
+		t.Fatalf("missing cache error: %v", err)
+	}
+}
+
+func TestDirectlyOwnedPodsRefusesUncoveredNamespace(t *testing.T) {
+	cache := newScopedOwnershipCache(t, map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "team-a"}})
+	if _, err := DirectlyOwnedPods(cache, "team-b", "cluster", "ray.io", "RayCluster", "uid"); !errors.Is(err, ErrWorkloadAccessDenied) {
+		t.Fatalf("error=%v", err)
+	}
+}

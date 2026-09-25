@@ -1550,10 +1550,18 @@ coverage, or support for other Kueue API versions.
 
 | Resource | Group | Status source |
 |----------|-------|---------------|
-| RayCluster | `ray.io/v1` | state + provisioning conditions |
+| RayCluster | `ray.io/v1` | head/worker readiness, suspension and native runtime detail |
 | RayJob | `ray.io/v1` | jobStatus + jobDeploymentStatus |
 | RayService | `ray.io/v1` | lifecycle conditions; native serving and revision detail |
 | RayCronJob | `ray.io/v1` | suspend |
+
+RayCluster detail separates head readiness from ready, running and desired worker
+Pod counts. Worker-group sizing and autoscaling are declared configuration; they
+do not imply per-group health. The OSS host provides a bounded Pod list filtered
+by the current RayCluster controller UID, with head/group selection and ordinary
+Pod/log navigation. Controller-reported counts use Ray labels and may differ from
+that owned-Pod list. Missing access, cache warming and recreated roots are explicit;
+no RayCluster-wide log stream or lifecycle actions are added.
 
 RayService detail separates proxy readiness, rollout and suspension from active/pending
 runtime revisions. It shows native Serve application/deployment states and messages,

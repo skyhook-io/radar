@@ -74,13 +74,15 @@ describe('GPU ecosystem API contracts', () => {
     expect(getRayClusterStatus({
       status: {
         conditions: [{ type: 'HeadPodReady', status: 'True' }],
+        readyWorkerReplicas: 1,
         availableWorkerReplicas: 1,
         desiredWorkerReplicas: 2,
       },
-    }).text).toBe('Workers 1/2')
+    }).text).toBe('Workers 1/2 ready')
     expect(getRayClusterStatus({
       status: {
         conditions: [{ type: 'HeadPodReady', status: 'True' }],
+        readyWorkerReplicas: 2,
         availableWorkerReplicas: 2,
         desiredWorkerReplicas: 2,
       },

@@ -8,6 +8,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // WorkloadPods returns the pods a workload controls right now, by controller
@@ -175,4 +177,36 @@ func requireSynced(cache *ResourceCache, key string) error {
 		return fmt.Errorf("%w: %s", ErrWorkloadCacheWarming, key)
 	}
 	return nil
+}
+
+// DirectlyOwnedPods excludes same-name previous incarnations and label-only matches.
+func DirectlyOwnedPods(cache *ResourceCache, namespace, name, group, kind string, uid types.UID) ([]*corev1.Pod, error) {
+	if cache == nil || cache.ResourceCache == nil || cache.Pods() == nil {
+		return nil, fmt.Errorf("%w: list pods", ErrWorkloadAccessDenied)
+	}
+	if err := requireCovers(cache, "pods", namespace); err != nil {
+		return nil, err
+	}
+	pods, err := cache.Pods().Pods(namespace).List(labels.Everything())
+	if err != nil {
+		return nil, err
+	}
+	result := []*corev1.Pod{}
+	if uid == "" {
+		return result, nil
+	}
+	for _, pod := range pods {
+		if pod == nil || pod.Namespace != namespace {
+			continue
+		}
+		owner := metav1.GetControllerOf(pod)
+		if owner == nil || owner.UID != uid || owner.Kind != kind || owner.Name != name {
+			continue
+		}
+		gv, err := schema.ParseGroupVersion(owner.APIVersion)
+		if err == nil && gv.Group == group {
+			result = append(result, pod)
+		}
+	}
+	return result, nil
 }

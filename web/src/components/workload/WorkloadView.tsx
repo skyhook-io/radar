@@ -1,3 +1,4 @@
+import { RayClusterRenderer } from '../resources/renderers/RayClusterRenderer'
 import { RayServiceRenderer } from '../resources/renderers/RayServiceRenderer'
 import { KueueWorkloadRenderer } from '../resources/renderers/KueueWorkloadRenderer'
 import { useMemo, useEffect, useCallback, useRef, useState } from 'react'
@@ -171,6 +172,7 @@ export function supportsBatchExecution(kind: string, apiKind: string, group?: st
 // Stable reference — web renderer wrappers inject platform hooks internally
 const rendererOverrides: RendererOverrides = {
   RayServiceRenderer,
+  RayClusterRenderer,
   KueueWorkloadRenderer,
   CAPIClusterRenderer,
   PodRenderer,
@@ -610,6 +612,7 @@ export function WorkloadView({
       }),
       queryClient.refetchQueries({
         queryKey: ['workload-pods', apiKind, namespace, name],
+        ...(apiKind === 'rayclusters' ? { type: 'active' as const } : {}),
       }),
     ])
   }, [apiKind, name, namespace, queryClient, refetchResource])

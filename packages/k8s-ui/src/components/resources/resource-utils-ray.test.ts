@@ -66,3 +66,28 @@ describe('RayService observed lifecycle', () => {
     expect(getRayServiceStatus({ status: { serviceStatus: 'Running' } }).text).toBe('Unknown')
   })
 })
+
+import { getRayClusterStatus, getRayClusterWorkers, rayClusterWorkerCounts } from './resource-utils-ray'
+
+describe('RayCluster readiness', () => {
+  const root = (status: any = {}, spec = {}) => ({ metadata: { generation: 2 }, spec, status: { observedGeneration: 2, conditions: [{ type: 'HeadPodReady', status: 'True' }], ...status } })
+  it('distinguishes running from ready and does not bless unready excess workers', () => {
+    expect(getRayClusterStatus(root({ readyWorkerReplicas: 1, availableWorkerReplicas: 2, desiredWorkerReplicas: 2 })).level).toBe('degraded')
+    expect(getRayClusterStatus(root({ readyWorkerReplicas: 1, availableWorkerReplicas: 2, desiredWorkerReplicas: 1 })).level).toBe('degraded')
+    expect(getRayClusterStatus(root({ readyWorkerReplicas: 2, availableWorkerReplicas: 2, desiredWorkerReplicas: 2 })).text).toBe('Ready')
+    expect(getRayClusterWorkers(root({ readyWorkerReplicas: 1, availableWorkerReplicas: 2, desiredWorkerReplicas: 2 }))).toBe('1/2')
+  })
+  it('decodes native omitted zeros only after a witnessed reconciliation', () => {
+    expect(rayClusterWorkerCounts(root())).toEqual({ ready: 0, running: 0, desired: 0 })
+    expect(getRayClusterStatus(root()).text).toBe('Ready')
+    expect(getRayClusterWorkers({})).toBe('?/?')
+    expect(getRayClusterStatus(root({ observedGeneration: undefined })).text).toBe('Head ready')
+  })
+  it('separates suspension intent and historical observations from health', () => {
+    expect(getRayClusterStatus(root({}, { suspend: true })).text).toBe('Suspension requested')
+    expect(getRayClusterStatus(root({ conditions: [{ type: 'RayClusterSuspended', status: 'True' }] })).text).toBe('Suspended')
+    expect(getRayClusterStatus(root({ observedGeneration: 1 })).level).toBe('unknown')
+    expect(getRayClusterStatus(root({ state: 'ready', conditions: [] })).level).toBe('unknown')
+    expect(getRayClusterStatus(root({ conditions: [{ type: 'RayClusterProvisioned', status: 'True' }] })).level).toBe('neutral')
+  })
+})

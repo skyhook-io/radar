@@ -7,60 +7,35 @@ import { healthColors, formatAge } from './resource-utils'
 // RAYCLUSTER UTILITIES
 // ============================================================================
 
+export function rayClusterWorkerCounts(resource: any): { ready?: number; running?: number; desired?: number } {
+  const status = resource.status ?? {}
+  // Native integer counters omit zero; observedGeneration witnesses their shared status write.
+  const count = (key: string) => status[key] ?? (status.observedGeneration > 0 ? 0 : undefined)
+  return { ready: count('readyWorkerReplicas'), running: count('availableWorkerReplicas'), desired: count('desiredWorkerReplicas') }
+}
+
 export function getRayClusterStatus(resource: any): StatusBadge {
-  const state = resource.status?.state
-  const conditions = resource.status?.conditions || []
-
-  const suspendingCond = conditions.find((c: any) => c.type === 'RayClusterSuspending')
-  if (suspendingCond?.status === 'True') {
-    return { text: 'Suspending', color: healthColors.degraded, level: 'degraded' }
+  const conditions = resource.status?.conditions ?? []
+  const condition = (type: string) => conditions.find((c: any) => c.type === type)
+  const badge = (text: string, level: StatusBadge['level']): StatusBadge => ({ text, level, color: healthColors[level!] })
+  if (isRayObservationStale(resource.metadata?.generation, resource.status?.observedGeneration)) return badge('Status stale', 'unknown')
+  if (condition('RayClusterSuspending')?.status === 'True') return badge('Suspending', 'degraded')
+  if (condition('RayClusterSuspended')?.status === 'True') return badge('Suspended', 'neutral')
+  if (resource.spec?.suspend === true) return badge('Suspension requested', 'neutral')
+  const failure = condition('RayClusterReplicaFailure')
+  if (failure?.status === 'True') return badge(failure.reason || 'Replica failure', 'unhealthy')
+  if (resource.status?.state === 'failed') return badge('Failed', 'unhealthy')
+  const head = condition('HeadPodReady')
+  if (head?.status === 'False') return badge(head.reason || 'Head not ready', 'degraded')
+  if (head?.status === 'True') {
+    const { ready, running, desired } = rayClusterWorkerCounts(resource)
+    if (ready == null || desired == null) return badge('Head ready', 'neutral')
+    if (ready >= desired && (running == null || ready >= running)) return badge('Ready', 'healthy')
+    if (ready >= desired && running != null && running > ready) return badge(`${running - ready} workers unready`, 'degraded')
+    return badge(`Workers ${ready}/${desired} ready`, 'degraded')
   }
-
-  const suspendedCond = conditions.find((c: any) => c.type === 'RayClusterSuspended')
-  if (suspendedCond?.status === 'True') {
-    return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
-  }
-
-  if (resource.spec?.suspend === true || state === 'suspended') {
-    return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
-  }
-
-  const replicaFailureCond = conditions.find((c: any) => c.type === 'RayClusterReplicaFailure')
-  if (replicaFailureCond?.status === 'True') {
-    return { text: replicaFailureCond.reason || 'ReplicaFailure', color: healthColors.unhealthy, level: 'unhealthy' }
-  }
-
-  if (state === 'failed') {
-    return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
-  }
-
-  const headReadyCond = conditions.find((c: any) => c.type === 'HeadPodReady')
-  if (headReadyCond?.status === 'False') {
-    return { text: headReadyCond.reason || 'HeadNotReady', color: healthColors.degraded, level: 'degraded' }
-  }
-  if (headReadyCond?.status === 'True') {
-    const availableWorkers = resource.status?.availableWorkerReplicas ?? 0
-    const desiredWorkers = resource.status?.desiredWorkerReplicas ?? 0
-    if (availableWorkers >= desiredWorkers) {
-      return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
-    }
-    return { text: `Workers ${availableWorkers}/${desiredWorkers}`, color: healthColors.degraded, level: 'degraded' }
-  }
-
-  if (conditions.length === 0 && state === 'ready') {
-    return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
-  }
-
-  const provisionedCond = conditions.find((c: any) => c.type === 'RayClusterProvisioned')
-  if (provisionedCond?.status === 'True') {
-    return { text: 'Provisioned', color: healthColors.neutral, level: 'neutral' }
-  }
-
-  if (resource.status) {
-    return { text: 'Provisioning', color: healthColors.degraded, level: 'degraded' }
-  }
-
-  return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+  if (condition('RayClusterProvisioned')?.status === 'True') return badge('Provisioned', 'neutral')
+  return badge('Unknown', 'unknown')
 }
 
 export function getRayClusterVersion(resource: any): string {
@@ -68,11 +43,8 @@ export function getRayClusterVersion(resource: any): string {
 }
 
 export function getRayClusterWorkers(resource: any): string {
-  const status = resource.status
-  if (!status) return '-'
-  const available = status.availableWorkerReplicas ?? 0
-  const desired = status.desiredWorkerReplicas ?? 0
-  return `${available}/${desired}`
+  const { ready, desired } = rayClusterWorkerCounts(resource)
+  return `${ready ?? '?'}/${desired ?? '?'}`
 }
 
 export function getRayClusterHeadService(resource: any): string {

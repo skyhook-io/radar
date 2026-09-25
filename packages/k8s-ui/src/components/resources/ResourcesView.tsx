@@ -980,7 +980,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'rayVersion', label: 'Ray Version', width: 'w-28' },
-    { key: 'workers', label: 'Workers', width: 'w-24', tooltip: 'Available/desired worker replicas' },
+    { key: 'workers', label: 'Workers', width: 'w-24', tooltip: 'Ready/desired worker Pods' },
     { key: 'headService', label: 'Head Service', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],

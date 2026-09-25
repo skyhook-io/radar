@@ -6838,17 +6838,24 @@ export function useWorkloadPods(
   kind: string,
   namespace: string,
   name: string,
-  options?: { limit?: number; refetchInterval?: number | false },
+  options?: { limit?: number; refetchInterval?: number | false; ownerUID?: string; nodeType?: string; workerGroup?: string },
 ) {
   const limit = options?.limit;
-  const queryString = limit ? `?limit=${limit}` : "";
+  const params = new URLSearchParams();
+  if (limit) params.set('limit', String(limit));
+  for (const key of ['ownerUID', 'nodeType', 'workerGroup'] as const) {
+    if (options?.[key]) params.set(key, options[key]);
+  }
+  const queryString = params.size ? `?${params}` : '';
+  const ownerKey = options?.ownerUID ? [options.ownerUID, options.nodeType ?? '', options.workerGroup ?? ''] : [];
   return useQuery<WorkloadPodsResponse>({
-    queryKey: ["workload-pods", kind, namespace, name, limit ?? 0],
+    queryKey: ["workload-pods", kind, namespace, name, limit ?? 0, ...ownerKey],
     queryFn: () =>
       fetchJSON(`/workloads/${kind}/${namespace}/${name}/pods${queryString}`),
     enabled: Boolean(kind && namespace && name),
     staleTime: 10000, // 10 seconds - pods can change
     refetchInterval: options?.refetchInterval ?? false,
+    retry: options?.ownerUID ? (count, error) => !(error instanceof ApiError && error.status === 409) && count < 2 : undefined,
   });
 }
 

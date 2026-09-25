@@ -1072,3 +1072,11 @@ describe('RayService native detail identity', () => {
     }
   })
 })
+
+it('uses native RayCluster detail only for ray.io/v1', () => {
+  for (const apiVersion of ['ray.io/v1', 'foreign.io/v1', 'ray.io/v9']) {
+    const html = renderKind('rayclusters', { apiVersion, kind: 'RayCluster', metadata: { name: 'cluster', namespace: 'ml' }, spec: { rayVersion: '2.55.0' } }, 'ml')
+    expect(html.includes('Runtime Health')).toBe(apiVersion === 'ray.io/v1')
+    if (apiVersion !== 'ray.io/v1') expect(html).toContain('2.55.0')
+  }
+})

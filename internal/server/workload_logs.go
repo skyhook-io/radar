@@ -169,6 +169,10 @@ var workloadReadTargets = map[string]workloadReadTarget{
 // handleWorkloadPods returns the list of pods for a workload
 func (s *Server) handleWorkloadPods(w http.ResponseWriter, r *http.Request) {
 	kind := strings.ToLower(chi.URLParam(r, "kind"))
+	if kind == "raycluster" || kind == "rayclusters" {
+		s.handleRayClusterPods(w, r)
+		return
+	}
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 	limit := 0
