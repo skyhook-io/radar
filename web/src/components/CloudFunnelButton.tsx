@@ -372,6 +372,7 @@ export function CloudFunnelButton() {
               // in-cluster, so the CTA would escape before classification.
               selfLoading={inCluster && self.isPending}
               onConnect={startConnect}
+              onSelfManaged={() => setSelfManaged(true)}
               onLater={() => setOpen(false)}
             />
           </>
@@ -429,6 +430,7 @@ function ModalFooter({
   discoverPending = false,
   clustersUrl,
   onConnect,
+  onSelfManaged,
   onLater,
 }: {
   lane: 'driver' | 'wizard'
@@ -461,6 +463,7 @@ function ModalFooter({
   // settings say it is connected but not where.
   clustersUrl?: string
   onConnect: () => void
+  onSelfManaged: () => void
   onLater: () => void
 }) {
   const gitops = self?.ownership === 'gitops'
@@ -587,7 +590,18 @@ function ModalFooter({
             {lane === 'driver' ? 'Continue in Radar Cloud' : self?.ownership === 'helm' || gitops ? 'Connect this cluster' : 'Try Cloud free'}
           </a>
         )}
-        <button onClick={onLater} className="ml-auto whitespace-nowrap text-[12px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
+        {/* The self-hosting door, again, where someone who has already ruled
+            out anything hosted looks last: next to the way out. */}
+        {!(lane === 'driver' && alreadyConnected) && (
+          <button
+            type="button"
+            onClick={onSelfManaged}
+            className="ml-auto whitespace-nowrap text-[12px] text-theme-text-secondary hover:text-theme-text-primary hover:underline underline-offset-2 transition-colors"
+          >
+            Self-host it instead →
+          </button>
+        )}
+        <button onClick={onLater} className={`${lane === 'driver' && alreadyConnected ? 'ml-auto ' : ''}whitespace-nowrap text-[12px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors`}>
           {lane === 'driver' && alreadyConnected ? 'Close' : 'Maybe later'}
         </button>
       </div>

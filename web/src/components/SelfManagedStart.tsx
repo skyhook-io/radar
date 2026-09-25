@@ -13,15 +13,15 @@ export function SelfManagedStart({ appUrl, onBack }: { appUrl: string; onBack: (
   const steps = [
     {
       title: 'Create your Radar Cloud account',
-      body: 'Your Self-Managed license is issued from it, so it comes first. An existing account works too.',
+      body: 'Your license is issued from it. An existing account works too.',
     },
     {
-      title: 'Unlock Enterprise and generate your install command',
-      body: 'Radar Cloud takes you straight to Self-hosting. Self-Managed is part of Enterprise; a new organization can start with a 14-day trial.',
+      title: 'Generate your install command',
+      body: 'Self-Managed is part of Enterprise, with a 14-day free trial.',
     },
     {
-      title: 'Install it and connect your clusters',
-      body: 'One Helm command in a cluster you choose, then connect clusters to your own control plane.',
+      title: 'Install the control plane, then connect each cluster',
+      body: 'One Helm command installs it. Then one command per cluster to connect it.',
     },
   ]
   return (
@@ -54,13 +54,20 @@ export function SelfManagedStart({ appUrl, onBack }: { appUrl: string; onBack: (
               </li>
             ))}
           </ol>
-          <p className="mt-5 text-[11.5px] leading-relaxed text-theme-text-tertiary">
-            You&apos;ll need a Kubernetes cluster on 1.27 or newer, a hostname you control, and Postgres; the bundled
-            one is fine for a trial.{' '}
-            <a href={SELF_HOSTED_DOCS_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap underline underline-offset-2 hover:text-theme-text-primary">
-              Read the Self-Managed guide
+          {/* What a platform engineer checks before starting: where it is
+              reached, what it stores in, and whether an IdP is needed on day
+              one (it isn't: the break-glass admin signs in first). */}
+          <div className="mt-5 text-[11.5px] leading-relaxed text-theme-text-tertiary">
+            <p className="font-medium text-theme-text-secondary">You'll need:</p>
+            <ul className="mt-1 space-y-0.5 list-disc pl-4">
+              <li>A hostname and an ingress for the control plane</li>
+              <li>Postgres 14+ for production. A bundled one runs by default, fine for a trial</li>
+              <li>Nothing for sign-in at first: a built-in admin works until you connect your IdP</li>
+            </ul>
+            <a href={SELF_HOSTED_DOCS_URL} target="_blank" rel="noopener noreferrer" className="mt-1.5 inline-block underline underline-offset-2 hover:text-theme-text-primary">
+              Read the Self-Managed guide →
             </a>
-          </p>
+          </div>
         </div>
       </div>
       <div className="shrink-0 px-8 py-4 bg-theme-base border-t border-theme-border flex flex-wrap items-center gap-x-3 gap-y-2.5">
