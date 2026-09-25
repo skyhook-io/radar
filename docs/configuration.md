@@ -452,8 +452,9 @@ events:
   installation timestamp when Radar can determine it. Radar caches the release
   result for one hour. Development builds are excluded.
   `RADAR_UPDATE_CHECK=off` stops it; Radar then never says an update is out.
-- **Usage data, only if you opt in**: once a day, to
-  `releases.skyhook.io/radar/usage`. See [Usage data](#usage-data).
+- **Usage data, only if you opt in**: once a day, to `usage.radarhq.io`. It
+  has a host of its own, so blocking `usage.radarhq.io` stops usage reports
+  and leaves update checks working. See [Usage data](#usage-data).
 - **Cloud dialog copy** — only when you *open* the Cloud dialog, to fetch the
   current terms shown in it. No identifiers are sent. `RADAR_CLOUD_FUNNEL=off`
   stops this request from ever happening.
@@ -500,9 +501,12 @@ If you opt in, Radar counts usage locally and sends one report a day:
 Never included: an install or cluster ID; names of resources, namespaces,
 clusters, contexts, images or hosts; manifests, logs, events, metric values,
 URLs, search text or anything else you type; API groups Radar does not
-recognize, because they may be your own. Sizes are always ranges. Like any web
-request, the report reaches Skyhook from your network's IP address; the
-receiving endpoint does not store it.
+recognize, because they may be your own. Sizes are always ranges.
+
+Like any web request, the report reaches Skyhook from your network's IP
+address. The receiver rejects any report that doesn't match this list, and
+stores the rest in Skyhook's product analytics (PostHog) under a new random ID
+for each report, without your IP address or its location.
 
 The pending report is kept in `~/.radar/usage-report.json` until it is sent,
 and Settings > Privacy shows it exactly as it will be sent. Turning usage data

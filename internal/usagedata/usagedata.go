@@ -28,9 +28,10 @@ import (
 )
 
 const (
-	// Endpoint receives usage reports. It is Skyhook's own relay, the same
-	// host as the update check, so no analytics vendor SDK ships in Radar.
-	Endpoint = "https://releases.skyhook.io/radar/usage"
+	// Endpoint receives usage reports: Skyhook's own receiver, so no analytics
+	// vendor SDK ships in Radar. It has a host of its own so an operator can
+	// block usage reports at the firewall and still get update checks.
+	Endpoint = "https://usage.radarhq.io/report"
 
 	reportInterval = 24 * time.Hour
 	// A cluster's shape is re-read at most this often; it barely moves

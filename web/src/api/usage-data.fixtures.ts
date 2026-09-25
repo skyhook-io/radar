@@ -23,7 +23,7 @@ export function exampleReport(patch: Partial<UsageReport> = {}): UsageReport {
 export function exampleStatus(patch: Partial<UsageDataStatus> = {}): UsageDataStatus {
   return {
     state: 'undecided', source: 'default', canChange: true,
-    endpoint: 'https://releases.skyhook.io/radar/usage', developmentBuild: false,
+    endpoint: 'https://usage.radarhq.io/report', developmentBuild: false,
     preview: exampleReport(),
     firstRunPrompt: false,
     ask: true,
