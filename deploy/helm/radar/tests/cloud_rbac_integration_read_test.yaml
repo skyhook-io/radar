@@ -6,7 +6,17 @@ set:
   cloud.token: dummy
   cloud.url: wss://cloud.example
   cloud.clusterName: test
+  # Tier behavior only; radar:system's own binding is covered below and in
+  # cloud_rbac_system_test.yaml.
+  cloud.systemRbac: false
 tests:
+  - it: keeps both add-ons for radar:system when the tiers are off
+    set:
+      cloud.systemRbac: true
+      cloud.defaultRbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 4
   - it: binds both scopes to all three default tiers
     asserts:
       - hasDocuments:

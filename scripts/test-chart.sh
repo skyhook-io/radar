@@ -261,12 +261,18 @@ assert_contains 'name: radar-cloud-member-cluster-read$'        "member binding 
 assert_contains 'name: radar-cloud-owner-cluster-read$'         "owner binding kept"
 echo
 
-render "all clusterScopedRead false: no role, no bindings" $CLOUD   --set cloud.defaultRbac.clusterScopedRead.viewer=false   --set cloud.defaultRbac.clusterScopedRead.member=false   --set cloud.defaultRbac.clusterScopedRead.owner=false
+render "all clusterScopedRead false: no role, no bindings" $CLOUD   --set cloud.systemRbac=false   --set cloud.defaultRbac.clusterScopedRead.viewer=false   --set cloud.defaultRbac.clusterScopedRead.member=false   --set cloud.defaultRbac.clusterScopedRead.owner=false
 assert_not_contains 'name: radar-cluster-read$'                 "cluster-read role suppressed"
 echo
 
-render "all tiers disabled: no orphan cluster-read role" $CLOUD   --set cloud.defaultRbac.viewer=false   --set cloud.defaultRbac.member=false   --set cloud.defaultRbac.owner=false
+render "all tiers disabled: no orphan cluster-read role" $CLOUD   --set cloud.systemRbac=false   --set cloud.defaultRbac.viewer=false   --set cloud.defaultRbac.member=false   --set cloud.defaultRbac.owner=false
 assert_not_contains 'name: radar-cluster-read$'                 "no unbound ClusterRole when every tier is off"
+echo
+
+render "role bindings off: cluster-read stays for radar:system only" $CLOUD   --set cloud.defaultRbac.create=false
+assert_contains 'name: radar-cluster-read$'                     "cluster-read role kept for radar:system"
+assert_contains 'name: radar-cloud-system-cluster-read$'        "radar:system bound to cluster-read"
+assert_not_contains 'name: radar-cloud-viewer-cluster-read$'    "no tier cluster-read bindings"
 echo
 
 render "custom viewerClusterRole does NOT drop viewer cluster-read (independent axes)" $CLOUD   --set cloud.defaultRbac.viewerClusterRole=my-restricted-view

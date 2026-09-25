@@ -25,12 +25,36 @@ interface Props {
    *  ServiceAccount can't read it at all (not installed / SA RBAC / feature off)
    *  — a user grant won't help, so show a different message and no snippet. */
   reason?: 'rbac_denied' | 'unavailable' | string
+  /** Kubernetes groups the caller carries that an admin can bind, e.g. the
+   *  `radar:idp:<id>` groups Radar Cloud forwards. The first becomes the
+   *  snippet's subject; the rest are listed as commented alternatives. */
+  subjects?: string[]
   /** Tightens spacing for inline/embedded use (topology overlay, etc.). */
   compact?: boolean
   className?: string
 }
 
-function buildRbacRequest(group: string, resource: string): string {
+// Only the first group is bound: a session's groups often include an org-wide
+// one ("Everyone"), and granting that by copy-paste would widen access for the
+// whole org. The admin picks from the commented alternatives.
+function subjectLines(subjects: string[]): string[] {
+  if (subjects.length === 0) {
+    return [
+      `  - kind: Group        # or User / ServiceAccount`,
+      `    name: <your-identity>`,
+      `    apiGroup: rbac.authorization.k8s.io`,
+    ]
+  }
+  const [first, ...rest] = subjects
+  return [
+    `  - kind: Group`,
+    `    name: "${first}"`,
+    `    apiGroup: rbac.authorization.k8s.io`,
+    ...rest.map((g) => `  # or: name: "${g}"`),
+  ]
+}
+
+export function buildRbacRequest(group: string, resource: string, subjects: string[]): string {
   // resource is the placeholder when we don't have a confident API plural
   // (e.g. a CRD deep-link before discovery resolves the kind) — use a generic
   // role name rather than radar-read-<Kind>.
@@ -54,13 +78,11 @@ function buildRbacRequest(group: string, resource: string): string {
     `  kind: ClusterRole`,
     `  name: ${roleName}`,
     `subjects:`,
-    `  - kind: Group        # or User / ServiceAccount`,
-    `    name: <your-identity>`,
-    `    apiGroup: rbac.authorization.k8s.io`,
+    ...subjectLines(subjects),
   ].join('\n')
 }
 
-export function RestrictedState({ kindLabel, group = '', resource, reason, compact, className }: Props) {
+export function RestrictedState({ kindLabel, group = '', resource, reason, subjects = [], compact, className }: Props) {
   const [expanded, setExpanded] = useState(false)
   const accessDisclosure = useDisclosure(expanded)
   const [copied, setCopied] = useState(false)
@@ -72,7 +94,7 @@ export function RestrictedState({ kindLabel, group = '', resource, reason, compa
   // produce a snippet that doesn't grant access. Only inline the resource when
   // it looks like a valid resource name; otherwise leave a clear placeholder.
   const validResource = resource && /^[a-z0-9.-]+$/.test(resource) ? resource : '<resource>'
-  const snippet = buildRbacRequest(group, validResource)
+  const snippet = buildRbacRequest(group, validResource, subjects)
 
   const copy = () => {
     navigator.clipboard.writeText(snippet).then(
@@ -125,8 +147,9 @@ export function RestrictedState({ kindLabel, group = '', resource, reason, compa
             <Collapse open={expanded} id={accessDisclosure.panelId}>
               <div className="mt-2 text-left">
                 <p className="text-xs text-theme-text-tertiary mb-2">
-                  Apply this, or send it to whoever administers your cluster, to grant your identity
-                  read access.
+                  {subjects.length > 0
+                    ? 'Apply this, or send it to whoever administers your cluster. It grants read access to one of your identity provider groups.'
+                    : 'Apply this, or send it to whoever administers your cluster, to grant your identity read access.'}
                 </p>
                 <div className="rounded-md border border-theme-border bg-theme-base overflow-hidden">
                   <div className="flex items-center justify-between px-3 py-1.5 border-b border-theme-border bg-theme-elevated">

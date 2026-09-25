@@ -2202,34 +2202,13 @@ export function useCloudRole() {
 }
 
 /**
- * useCanHelmAct combines the K8s capability gate (rbac.helm=true) and
- * the Cloud role gate (member+) into a single answer for any Helm
- * write or sensitive-read button. Returns { allowed, reason } so the
- * tooltip can explain which gate failed.
- *
- * Cloud role check runs FIRST so the message is actionable for Cloud
- * users — telling them "Helm write permissions required" is wrong if
- * the chart is fine and the actual gate is their viewer role.
+ * useCanHelmAct answers whether Helm write and sensitive-read buttons are
+ * usable. Only the chart's rbac.helm capability is checked here: the calls run
+ * as the impersonated user, so Kubernetes RBAC decides the rest. The Cloud role
+ * says nothing about cluster access when IdP groups grant it.
  */
 export function useCanHelmAct(): { allowed: boolean; reason?: string } {
   const helmWrite = useCanHelmWrite();
-  const { role, canAtLeast, isLoading } = useCloudRole();
-  // Fail-closed for action buttons during the auth/me round-trip:
-  // a Cloud viewer who clicks during loading would otherwise fire a
-  // real request that gets 403'd. For OSS / kubectl-plugin the
-  // round-trip is sub-ms so this is imperceptible; for Cloud it
-  // prevents the click-through window. Distinct from useCloudRole's
-  // canAtLeast (which is optimistic during loading) because passive
-  // content gates don't have a click-handler to misfire.
-  if (isLoading) {
-    return { allowed: false, reason: "Loading permissions…" };
-  }
-  if (!canAtLeast("member")) {
-    return {
-      allowed: false,
-      reason: `Your Radar Cloud role (${role ?? "unknown"}) cannot run Helm operations. Ask a member or owner.`,
-    };
-  }
   if (!helmWrite) {
     return {
       allowed: false,

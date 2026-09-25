@@ -23,7 +23,6 @@ import (
 	"github.com/skyhook-io/radar/internal/reachability"
 	"github.com/skyhook-io/radar/internal/trace"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
-	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/probe"
@@ -1120,13 +1119,6 @@ func handleNetworkTraceDiagnose(ctx context.Context, input diagnoseInput, kind s
 	}
 	var inClusterTests []reachability.InClusterTestResult
 	if input.InCluster {
-		// Creating transient probe pods is a mutating, product-gated action. Mirror
-		// the REST handler (reachability_run.go requireCloudRole) and the helm
-		// precedent (tools_helm.go) so a sub-Member Cloud Viewer can't bypass the
-		// RoleMember gate via MCP. probe=true / static paths stay viewer-accessible.
-		if role := pkgauth.CloudRoleFromContext(ctx); !role.AtLeast(pkgauth.RoleMember) {
-			return nil, nil, fmt.Errorf("Radar Cloud role %q cannot run an in-cluster reachability test (requires member or higher)", role.String())
-		}
 		var byTarget map[string][]probe.Result
 		inClusterTests, byTarget = reachability.RunInClusterTests(ctx, tr, input.Namespace)
 		// Fold the live results back in: an in-cluster pass upgrades the route to

@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit } from '../../api/client'
+import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit, useAuthMe } from '../../api/client'
 import { isBadgeWorthy } from '../../utils/auditBadges'
 import type { AuditBadgeMessage } from '@skyhook-io/k8s-ui'
 import { apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from '../../api/config'
@@ -125,6 +125,11 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
   // Lightweight resource counts for sidebar badges (~2KB instead of ~608MB)
   const namespacesParam = namespaces.join(',')
+  const { data: authMe } = useAuthMe()
+  const idpGroups = useMemo(
+    () => (authMe?.groups ?? []).filter((g) => g.startsWith('radar:idp:')),
+    [authMe?.groups],
+  )
   const { data: countsData, isError: countsIsError } = useQuery({
     queryKey: ['resource-counts', namespacesParam],
     queryFn: async () => {
@@ -433,6 +438,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       resourceCounts={countsData?.counts ?? EMPTY_RESOURCE_COUNTS}
       resourceForbidden={countsData?.forbidden}
       resourceReasons={countsData?.reasons}
+      rbacSubjects={idpGroups}
       resourceUnavailable={countsData?.unavailable}
       selectedKindQuery={selectedKindQueryResult}
       printerTable={selectedKindQueryBlocked ? null : selectedKindQuery.data?.printerTable ?? null}

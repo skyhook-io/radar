@@ -161,6 +161,18 @@ Radar binary (including Radar Cloud self-upgrade) does not update RBAC. Missing 
 on an older `--reuse-values` installation default to enabled; set explicit false
 before upgrading if the added visibility is unwanted.
 
+### Radar Cloud background identities (`radar:system`)
+
+The hub's alerts worker and timeline puller call Radar as the `radar:system`
+group, not as a user. `cloud.systemRbac` (default `true`) binds that group to a
+read-only set: `view`, the cluster-read and integration-read add-ons above, and
+`get/list/watch` on Secrets, which Helm release alerts need because Helm stores
+each release as a Secret. It is independent of `cloud.defaultRbac`, so turning
+the role bindings off (`cloud.defaultRbac.create=false`, for example when IdP
+groups decide cluster access) leaves alerts and the hub timeline working.
+Setting `cloud.systemRbac=false` stops both unless you bind `radar:system`
+yourself.
+
 ### Connecting to Argo CD (GitOps deep diff)
 
 Radar's GitOps pages show a Git-rendered desired-vs-live diff when connected to
