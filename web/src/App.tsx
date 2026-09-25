@@ -49,7 +49,7 @@ import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/Capabil
 import { UserMenu } from './components/UserMenu'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { UpdateNotification } from './components/ui/UpdateNotification'
-import { SHOW_WHATS_NEW_EVENT, WhatsNew } from './components/whats-new/WhatsNew'
+import { openWhatsNew, useWhatsNewStatus, WhatsNew } from './components/whats-new/WhatsNew'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
@@ -492,6 +492,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     navigate({ pathname: path, search: newParams.toString() })
   }, [location.search, navigate, takeover, goHost])
+
+  const whatsNewStatus = useWhatsNewStatus()
 
   const navigateToPath = useCallback((path: string) => {
     navigate(withCrossViewParams(path, location.search))
@@ -1738,6 +1740,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           showPinToggle={!railForcedSlim}
           onOpenSettings={() => openSettings()}
           accountSlot={<UserMenu variant="rail" pinned={navRailEffectivePinned} />}
+          whatsNew={whatsNewStatus.available ? { unread: whatsNewStatus.unread, onOpen: openWhatsNew } : undefined}
         />
       )}
       {/* `relative` makes this column the containing block for the absolute
@@ -1839,6 +1842,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             onSetNamespaces={(ns) => { setNamespaces(ns); setActiveNamespace.mutate({ namespaces: ns }) }}
             onToggleTheme={toggleTheme}
             onShowDiagnostics={() => setShowDiagnostics(true)}
+            onShowWhatsNew={whatsNewStatus.available ? openWhatsNew : undefined}
             onOpenResource={(hit) => navigateToResourceList(searchHitToSelectedResource(hit))}
           />
         </div>
@@ -2001,7 +2005,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             onNavigateToView={setMainView}
             onNavigateToHelmRelease={navCustomization.embedded ? undefined : navigateToHelmRelease}
             onNavigateToManagerPath={navCustomization.embedded || takeover.gitops ? undefined : navigateToPath}
-            onShowWhatsNew={navCustomization.embedded ? undefined : () => window.dispatchEvent(new Event(SHOW_WHATS_NEW_EVENT))}
+            onShowWhatsNew={navCustomization.embedded ? undefined : openWhatsNew}
             // Upgrade impact lives under /checks, which a Cloud host takes
             // over wholesale — its fleet pages have no upgrade sub-route, so
             // the version line stays plain text there.

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useId, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { clsx } from 'clsx'
 import { ArrowRight, Check, ExternalLink, Megaphone, X } from 'lucide-react'
@@ -73,6 +73,37 @@ function writeBrowserLastSeen(version: string) {
   try { localStorage.setItem(LAST_SEEN_KEY, version) } catch { /* ignore */ }
 }
 
+export interface WhatsNewStatus {
+  /** Notes exist for this version, so there is something to open. */
+  available: boolean
+  /** Those notes are newer than what the user has seen. */
+  unread: boolean
+}
+
+// The rail and the omnibar sit outside this component but need its status.
+const NO_STATUS: WhatsNewStatus = { available: false, unread: false }
+let status = NO_STATUS
+const statusListeners = new Set<() => void>()
+
+function publishStatus(next: WhatsNewStatus) {
+  if (next.available === status.available && next.unread === status.unread) return
+  status = next
+  statusListeners.forEach(listener => listener())
+}
+
+function subscribeStatus(listener: () => void) {
+  statusListeners.add(listener)
+  return () => { statusListeners.delete(listener) }
+}
+
+export function useWhatsNewStatus(): WhatsNewStatus {
+  return useSyncExternalStore(subscribeStatus, () => status)
+}
+
+export function openWhatsNew() {
+  window.dispatchEvent(new Event(SHOW_WHATS_NEW_EVENT))
+}
+
 interface WhatsNewProps {
   onNavigate: (path: string) => void
 }
@@ -91,6 +122,10 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
   const [notes, setNotes] = useState<ReleaseNotes | null>(null)
   const [open, setOpen] = useState(false)
   const [previousVersion, setPreviousVersion] = useState<string | null>(null)
+  // undefined until loaded, or when nothing can be recorded.
+  const [seen, setSeen] = useState<{ lastSeen: string | null } | undefined>()
+  const decidedRef = useRef(false)
+  const { pathname } = useLocation()
   const titleId = useId()
 
   const currentVersion = state?.currentVersion
@@ -105,6 +140,7 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
     if (lastSeen === undefined) return
     const next = nextSeenVersion(s.currentVersion, lastSeen)
     if (next === lastSeen) return
+    setSeen({ lastSeen: next })
     if (s.storage === 'browser') {
       writeBrowserLastSeen(next)
       return
@@ -122,22 +158,32 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
     setOpen(true)
   }, [previewParam, currentVersion])
 
+  const priorInstall = state?.storage === 'server' ? !!state.priorInstall : HAD_PRIOR_RADAR_STATE
+
   useEffect(() => {
-    if (!state || previewParam !== null) return
+    if (!state) return
     const lastSeen = readLastSeen(state)
-    if (lastSeen === undefined) return
-    const priorInstall = state.storage === 'server' ? !!state.priorInstall : HAD_PRIOR_RADAR_STATE
+    setSeen(lastSeen === undefined ? undefined : { lastSeen })
+    if (lastSeen === undefined || previewParam !== null || decidedRef.current) return
+    decidedRef.current = true
     const due = whatsNewToShow(state.currentVersion, lastSeen, priorInstall)
-    if (due) {
+    // Only on Home: someone arriving on a deep link came for that page, often
+    // mid-incident. Elsewhere the nav rail's unread dot carries the notes.
+    if (due && pathname === '/') {
       setPreviousVersion(lastSeen)
       setNotes(due)
       setOpen(true)
-    } else if (lastSeen === null) {
+    } else if (!due && lastSeen === null) {
       recordSeen(state)
     }
-  // Only the loaded state decides; the preview param is handled above.
+  // Decided once, when the state loads; the preview param is handled above.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state?.currentVersion, state?.storage])
+
+  const available = !!state && !isCloud && !!latestReleaseNotesFor(state.currentVersion)
+  const unread = available && !!seen && !!whatsNewToShow(state.currentVersion, seen.lastSeen, priorInstall)
+  useEffect(() => { publishStatus({ available, unread }) }, [available, unread])
+  useEffect(() => () => publishStatus(NO_STATUS), [])
 
   useEffect(() => {
     const handler = () => {

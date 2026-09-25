@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   Boxes,
   Server,
+  Megaphone,
 } from "lucide-react";
 import { useNamespaces, useContexts } from "../../api/client";
 import { CORE_RESOURCES, useAPIResources } from "../../api/apiResources";
@@ -124,6 +125,8 @@ export interface CommandItemCallbacks {
   onSetNamespaces: (ns: string[]) => void;
   onToggleTheme: () => void;
   onShowDiagnostics?: () => void;
+  // Present only when release notes exist for this version.
+  onShowWhatsNew?: () => void;
 }
 
 const VIEW_ENTRIES: {
@@ -262,6 +265,16 @@ export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
       shortcut: "t",
       action: () => cb.onToggleTheme(),
     });
+    if (cb.onShowWhatsNew) {
+      result.push({
+        id: "action-whats-new",
+        label: "What's new",
+        category: "Actions",
+        icon: Megaphone,
+        action: () => cb.onShowWhatsNew?.(),
+        searchTerms: ["release notes", "changelog", "updates", "new features"],
+      });
+    }
     if (cb.onShowDiagnostics) {
       result.push({
         id: "action-diagnostics",
@@ -285,5 +298,6 @@ export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
     cb.onSetNamespaces,
     cb.onToggleTheme,
     cb.onShowDiagnostics,
+    cb.onShowWhatsNew,
   ]);
 }
