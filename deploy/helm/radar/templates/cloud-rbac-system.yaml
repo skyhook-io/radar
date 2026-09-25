@@ -1,0 +1,64 @@
+{{- /*
+Read-only access for Radar Cloud's own background identities.
+
+The hub's alerts worker and timeline puller have no user or IdP groups; they
+assert the radar:system group. Without a binding of their own they would ride
+on radar:owner, which disappears when an org turns the role bindings off
+(cloud.defaultRbac.create=false) to let IdP groups decide cluster access —
+silently stopping alerts and the hub timeline.
+
+The grant is the viewer set (view here, plus the cluster-read and
+integration-read add-ons, which bind radar:system in their own templates) and
+Secret read. Secret read is what Helm release alerts need: Radar lists Helm
+releases as the caller, and Helm stores each release as a Secret. Kubernetes
+RBAC cannot narrow that to Helm's Secrets, so it is all Secrets, read-only.
+No writes.
+*/}}
+{{- if and (include "radar.cloudSystemRbac" . | eq "true") .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-system-view
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: Group
+    name: radar:system
+    apiGroup: rbac.authorization.k8s.io
+  - kind: Group
+    name: cloud:system
+    apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "radar.fullname" . }}-system-secrets-read
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-system-secrets-read
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "radar.fullname" . }}-system-secrets-read
+subjects:
+  - kind: Group
+    name: radar:system
+    apiGroup: rbac.authorization.k8s.io
+  - kind: Group
+    name: cloud:system
+    apiGroup: rbac.authorization.k8s.io
+{{- end -}}

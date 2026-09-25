@@ -199,14 +199,10 @@ func (h *Handlers) handleGetRelease(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, release)
 }
 
-// handleGetManifest returns the rendered manifest for a release.
-// Member+ only — manifests can inline literal Secret resources with
-// base64-encoded data, which K8s 'view' (the default radar:viewer
-// binding) excludes.
+// handleGetManifest returns the rendered manifest for a release. Read as
+// the caller: Helm stores releases as Secrets, so Kubernetes RBAC on Secrets
+// decides who can see it.
 func (h *Handlers) handleGetManifest(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "view Helm release manifests") {
-		return
-	}
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -236,12 +232,8 @@ func (h *Handlers) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(manifest))
 }
 
-// handleGetValues returns the values for a release. Member+ only —
-// values may contain credentials set via --set or values.yaml.
+// handleGetValues returns the values for a release, read as the caller.
 func (h *Handlers) handleGetValues(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "view Helm release values") {
-		return
-	}
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -272,11 +264,7 @@ func (h *Handlers) handleGetValues(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleGetValuesDiff returns a values diff between two release revisions.
-// Member+ only — values often contain credentials.
 func (h *Handlers) handleGetValuesDiff(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "diff Helm release values") {
-		return
-	}
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -300,12 +288,8 @@ func (h *Handlers) handleGetValuesDiff(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, diff)
 }
 
-// handleGetDiff returns the diff between two revisions. Member+ only
-// — same surface as GetManifest (renders both revisions).
+// handleGetDiff returns the diff between two revisions.
 func (h *Handlers) handleGetDiff(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "diff Helm release manifests") {
-		return
-	}
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -332,9 +316,6 @@ func (h *Handlers) handleGetDiff(w http.ResponseWriter, r *http.Request) {
 
 // handleGetNotesDiff returns a release notes diff between two revisions.
 func (h *Handlers) handleGetNotesDiff(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "diff Helm release notes") {
-		return
-	}
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -357,9 +338,6 @@ func (h *Handlers) handleGetNotesDiff(w http.ResponseWriter, r *http.Request) {
 
 // handleGetHooksDiff returns a release hook metadata diff between two revisions.
 func (h *Handlers) handleGetHooksDiff(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "diff Helm release hooks") {
-		return
-	}
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -382,9 +360,6 @@ func (h *Handlers) handleGetHooksDiff(w http.ResponseWriter, r *http.Request) {
 
 // handleGetResourceDiff returns added/removed rendered resources between revisions.
 func (h *Handlers) handleGetResourceDiff(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "diff Helm release resources") {
-		return
-	}
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -506,9 +481,6 @@ func (h *Handlers) handleBatchUpgradeCheck(w http.ResponseWriter, r *http.Reques
 
 // handleRollback rolls back a release to a previous revision
 func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "rollback Helm releases") {
-		return
-	}
 	if !requireHelmWrite(w, r) {
 		return
 	}
@@ -555,9 +527,6 @@ func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
 
 // handleRollbackStream rolls back a release with SSE progress streaming
 func (h *Handlers) handleRollbackStream(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "rollback Helm releases") {
-		return
-	}
 	if !requireHelmWrite(w, r) {
 		return
 	}
@@ -648,9 +617,6 @@ func (h *Handlers) handleRollbackStream(w http.ResponseWriter, r *http.Request) 
 
 // handleUninstall removes a release
 func (h *Handlers) handleUninstall(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "uninstall Helm releases") {
-		return
-	}
 	if !requireHelmWrite(w, r) {
 		return
 	}
@@ -685,9 +651,6 @@ func (h *Handlers) handleUninstall(w http.ResponseWriter, r *http.Request) {
 
 // handleUpgrade upgrades a release to a new version
 func (h *Handlers) handleUpgrade(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "upgrade Helm releases") {
-		return
-	}
 	if !requireHelmWrite(w, r) {
 		return
 	}
@@ -729,9 +692,6 @@ func (h *Handlers) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 
 // handleUpgradeStream upgrades a release with SSE progress streaming
 func (h *Handlers) handleUpgradeStream(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "upgrade Helm releases") {
-		return
-	}
 	if !requireHelmWrite(w, r) {
 		return
 	}
@@ -838,12 +798,7 @@ func (h *Handlers) handleUpgradeStream(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePreviewValues previews the effect of new values on a release.
-// Member+ — renders the chart with proposed values, same surface as
-// GetManifest.
 func (h *Handlers) handlePreviewValues(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "preview Helm release values") {
-		return
-	}
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -871,9 +826,6 @@ func (h *Handlers) handlePreviewValues(w http.ResponseWriter, r *http.Request) {
 
 // handleApplyValues applies new values to a release
 func (h *Handlers) handleApplyValues(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "apply Helm release values") {
-		return
-	}
 	if !requireHelmWrite(w, r) {
 		return
 	}
@@ -1085,9 +1037,6 @@ func (h *Handlers) handleGetChartDetailVersion(w http.ResponseWriter, r *http.Re
 
 // handleInstall installs a new Helm release (non-streaming version)
 func (h *Handlers) handleInstall(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "install Helm releases") {
-		return
-	}
 	if !requireHelmWrite(w, r) {
 		return
 	}
@@ -1141,9 +1090,6 @@ func (h *Handlers) handleInstall(w http.ResponseWriter, r *http.Request) {
 
 // handleInstallStream installs a Helm release with SSE progress streaming
 func (h *Handlers) handleInstallStream(w http.ResponseWriter, r *http.Request) {
-	if !requireCloudRole(w, r, auth.RoleMember, "install Helm releases") {
-		return
-	}
 	if !requireHelmWrite(w, r) {
 		return
 	}
@@ -1293,8 +1239,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 // writeErrorCode is writeError with a stable machine-readable error_code
 // in the response body so the frontend + MCP clients can branch on the error
-// type without parsing the human message. Used for role-gated 403s and
-// any other case where the consumer wants to react differently per code.
+// type without parsing the human message.
 func writeErrorCode(w http.ResponseWriter, status int, code, message string) {
 	if status >= 500 {
 		errorlog.Record("helm", "error", "%s", message)
@@ -1305,36 +1250,6 @@ func writeErrorCode(w http.ResponseWriter, status int, code, message string) {
 		"error":      message,
 		"error_code": code,
 	})
-}
-
-// requireCloudRole gates a handler on the caller's Cloud role tier.
-// Returns true if the request should proceed.
-//
-// When the caller has no Cloud role (OSS deploy, or running outside
-// Cloud's tunnel), CloudRole.AtLeast bypasses the gate — radar OSS
-// continues to use only K8s RBAC for authorization, no Cloud-specific
-// product gating. This is the same behavior as before; the gate is
-// strictly additive for Cloud-attributed callers.
-//
-// When the caller IS Cloud-attributed and their tier is below `min`,
-// returns 403 with error_code=cloud_role_insufficient so the frontend can
-// render a friendly "your role doesn't allow this" message instead of
-// a generic auth failure.
-func requireCloudRole(w http.ResponseWriter, r *http.Request, min auth.CloudRole, opName string) bool {
-	role := auth.CloudRoleFromContext(r.Context())
-	if role.AtLeast(min) {
-		return true
-	}
-	username := "unknown"
-	if u := auth.UserFromContext(r.Context()); u != nil {
-		username = u.Username
-	}
-	// All user-controlled values use %q so log-line injection via CR/LF
-	// in headers or path is escaped. opName is a compile-time literal.
-	log.Printf("[helm] Cloud role %q denied %s for user %q (need at least %q): %q", role, opName, username, min, r.URL.Path)
-	writeErrorCode(w, http.StatusForbidden, auth.ErrCodeCloudRoleInsufficient,
-		"Your Radar Cloud role ("+role.String()+") cannot "+opName+". Requires "+string(min)+" or higher.")
-	return false
 }
 
 // ============================================================================

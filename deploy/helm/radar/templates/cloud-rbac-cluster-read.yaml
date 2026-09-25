@@ -47,8 +47,9 @@ from being truthy.
 {{- $_ := set $csrOn $tier (ne (toString (index $csr $tier)) "false") }}
 {{- end }}
 {{- $rbacDefaults := .Values.cloud.defaultRbac }}
-{{- $anyTier := or (and $rbacDefaults.viewer (get $csrOn "viewer")) (and $rbacDefaults.member (get $csrOn "member")) (and $rbacDefaults.owner (get $csrOn "owner")) }}
-{{- if and .Values.cloud.enabled .Values.cloud.defaultRbac.create .Values.rbac.create $anyTier -}}
+{{- $anyTier := and $rbacDefaults.create (or (and $rbacDefaults.viewer (get $csrOn "viewer")) (and $rbacDefaults.member (get $csrOn "member")) (and $rbacDefaults.owner (get $csrOn "owner"))) }}
+{{- $systemOn := include "radar.cloudSystemRbac" . | eq "true" }}
+{{- if and .Values.cloud.enabled .Values.rbac.create (or $anyTier $systemOn) -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -151,7 +152,7 @@ rules:
 {{- $labels := include "radar.labels" . }}
 {{- $rbac := .Values.cloud.defaultRbac }}
 {{- range $tier := list "viewer" "member" "owner" }}
-{{- if and (index $rbac $tier) (get $csrOn $tier) }}
+{{- if and $rbac.create (index $rbac $tier) (get $csrOn $tier) }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -172,5 +173,25 @@ subjects:
     name: cloud:{{ $tier }}
     apiGroup: rbac.authorization.k8s.io
 {{- end }}
+{{- end }}
+{{- if $systemOn }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fullname }}-cloud-system-cluster-read
+  labels:
+    {{- $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fullname }}-cluster-read
+subjects:
+  - kind: Group
+    name: radar:system
+    apiGroup: rbac.authorization.k8s.io
+  - kind: Group
+    name: cloud:system
+    apiGroup: rbac.authorization.k8s.io
 {{- end }}
 {{- end -}}

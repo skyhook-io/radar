@@ -71,3 +71,17 @@ Create the name of the service account to use
 {{- end -}}
 {{- $settings | toPrettyJson -}}
 {{- end -}}
+
+{{/*
+Whether the always-on read-only binding for Radar Cloud's own background
+identities (radar:system) renders. An absent value means on: `--reuse-values`
+upgrades render with the previous release's tree, which predates the key, and
+the hub's alerts and timeline depend on the binding existing.
+*/}}
+{{- define "radar.cloudSystemRbac" -}}
+{{- if and .Values.cloud.enabled (ne (toString .Values.cloud.systemRbac) "false") -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}

@@ -1,0 +1,155 @@
+suite: Cloud radar:system RBAC
+templates:
+  - cloud-rbac-system.yaml
+  - cloud-rbac-cluster-read.yaml
+  - cloud-rbac-integration-read.yaml
+tests:
+  - it: keeps radar:system's view binding when the role bindings are off
+    set:
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+        defaultRbac:
+          create: false
+    template: cloud-rbac-system.yaml
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-radar-cloud-system-view
+    asserts:
+      - isKind:
+          of: ClusterRoleBinding
+
+  - it: keeps the cluster-read role for radar:system alone when the role bindings are off
+    set:
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+        defaultRbac:
+          create: false
+    template: cloud-rbac-cluster-read.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: ClusterRole
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-radar-cloud-system-cluster-read
+        documentIndex: 1
+      - equal:
+          path: subjects[0].name
+          value: radar:system
+        documentIndex: 1
+
+  - it: grants Secret read only, no writes
+    set:
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+    template: cloud-rbac-system.yaml
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-radar-system-secrets-read
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["secrets"]
+              verbs: ["get", "list", "watch"]
+
+  - it: names both radar:system and the legacy cloud:system group
+    set:
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+    template: cloud-rbac-system.yaml
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-radar-cloud-system-view
+    asserts:
+      - equal:
+          path: roleRef.name
+          value: view
+      - equal:
+          path: subjects
+          value:
+            - kind: Group
+              name: radar:system
+              apiGroup: rbac.authorization.k8s.io
+            - kind: Group
+              name: cloud:system
+              apiGroup: rbac.authorization.k8s.io
+
+  - it: stays on when systemRbac is absent from reused values
+    set:
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+        systemRbac: null
+    template: cloud-rbac-system.yaml
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: renders nothing when systemRbac is false
+    set:
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+        systemRbac: false
+    template: cloud-rbac-system.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing outside cloud mode
+    template: cloud-rbac-system.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when the operator owns all RBAC
+    set:
+      rbac:
+        create: false
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+    template: cloud-rbac-system.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: gives radar:system the integration-read add-on without the tiers
+    set:
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+        defaultRbac:
+          create: false
+    template: cloud-rbac-integration-read.yaml
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-radar-cloud-system-integration-read-namespaced
+    asserts:
+      - equal:
+          path: subjects[0].name
+          value: radar:system

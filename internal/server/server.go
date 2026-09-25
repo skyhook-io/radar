@@ -5144,6 +5144,14 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		if role := auth.CloudRoleFromGroups(user.Groups); role != auth.RoleNone {
 			resp["cloudRole"] = string(role)
 		}
+		// Lets the shell explain an empty cluster: every read is filtered to
+		// the user's namespaces, so a user bound to none sees empty lists that
+		// look like a cluster with nothing in it. Only once connected: before
+		// that, namespace discovery fails closed and would report "none" for
+		// everyone.
+		if k8s.IsConnected() && noNamespaceAccess(s.getUserNamespaces(r, nil)) {
+			resp["noNamespaceAccess"] = true
+		}
 	}
 	s.writeJSON(w, resp)
 }

@@ -18,8 +18,7 @@ import type { SelectedHelmRelease, HelmHook, ChartDependency, HelmOperation, Hel
 import { apiVersionToGroup, kindToPluralWithGroup, type NavigateToResource } from '../../utils/navigation'
 import { formatDate } from './helm-utils'
 import { getHelmStatusColor, getKindBadgeColor, getResourceStatusColor, SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
-import { useCanHelmAct, useCloudRole } from '../../api/client'
-import { RoleGatedPanel } from './RoleGatedPanel'
+import { useCanHelmAct } from '../../api/client'
 import { RevisionHistory } from './RevisionHistory'
 import { ManifestViewer } from './ManifestViewer'
 import { ValuesViewer } from './ValuesViewer'
@@ -130,12 +129,6 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const targetVersionRef = useRef('')
   const editedUpgradeYamlRef = useRef('')
   const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
-  // Cloud viewers can't view release manifests / values / diffs
-  // (backend gate at requireCloudRole('member')). Skip the queries
-  // when the role would 403 — saves a round-trip and avoids a
-  // transient error state under the role-gated panel.
-  const { canAtLeast } = useCloudRole()
-  const canViewSensitive = canAtLeast('member')
   const helmNamespace = release.storageNamespace || release.namespace
 
   const { data: releaseDetail, isLoading, error: releaseError, refetch: refetchRelease } = useHelmRelease(
@@ -149,7 +142,6 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     helmNamespace,
     release.name,
     selectedRevision,
-    canViewSensitive,
   )
 
   // Fetch values
@@ -157,7 +149,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     helmNamespace,
     release.name,
     showAllValues,
-    canViewSensitive,
+    true,
     selectedRevision,
   )
   const {
@@ -168,7 +160,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     helmNamespace,
     release.name,
     false,
-    canViewSensitive && showUpgradeConfirm && adjustValues,
+    showUpgradeConfirm && adjustValues,
   )
 
   // Lazy check for upgrade availability
@@ -714,7 +706,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
               releaseNamespace={releaseDetail.namespace}
               managedByFluxHelmRelease={releaseDetail.managedByFluxHelmRelease}
               hookDiagnostics={releaseDetail.hookDiagnostics}
-              canCompare={canViewSensitive}
+              canCompare
               onCompare={handleCompareRevisions}
               onNavigateToResource={onNavigateToResource}
             />
@@ -732,19 +724,16 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
               />
             )}
             {activeTab === 'manifest' && (
-              <RoleGatedPanel min="member" feature="release manifests">
-                <ManifestViewer
+              <ManifestViewer
                   manifest={manifest || ''}
                   isLoading={manifestLoading}
                   revision={selectedRevision}
                   onCopy={(text) => copyToClipboard(text, 'manifest')}
                   copied={copied === 'manifest'}
                 />
-              </RoleGatedPanel>
             )}
             {activeTab === 'values' && (
-              <RoleGatedPanel min="member" feature="release values">
-                <ValuesViewer
+              <ValuesViewer
                   values={values}
                   isLoading={valuesLoading}
                   showAllValues={showAllValues}
@@ -757,7 +746,6 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                   currentRevision={releaseDetail.revision}
                   onApplySuccess={() => refetch()}
                 />
-              </RoleGatedPanel>
             )}
             {activeTab === 'resources' && (
               <OwnedResources
@@ -899,7 +887,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
             )}
           </div>
         )}
-        {upgradeProgress.length === 0 && canHelmWrite && canViewSensitive && (
+        {upgradeProgress.length === 0 && canHelmWrite && (
           <div className="mt-3 border-t border-theme-border pt-3">
             <Tooltip content="Edit the user-supplied Helm values that Radar will pass to this upgrade.">
               <button

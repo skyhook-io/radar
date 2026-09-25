@@ -19,7 +19,6 @@ import {
 } from 'lucide-react'
 import { PaneLoader, DiffLine, hasDiffBodyChange } from '@skyhook-io/k8s-ui'
 import {
-  useCloudRole,
   useHelmHooksDiff,
   useHelmManifestDiff,
   useHelmNotesDiff,
@@ -30,7 +29,6 @@ import {
 import type { HelmHook, HelmRevision, HooksDiff, ResourceDiff } from '../../types'
 import { getHelmStatusColor, getKindBadgeColor, SEVERITY_BADGE } from '../../utils/badge-colors'
 import { formatDate } from './helm-utils'
-import { RoleGatedPanel } from './RoleGatedPanel'
 import { Tooltip } from '../ui/Tooltip'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
@@ -53,8 +51,6 @@ export function HelmCompareRoute() {
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
-  const { canAtLeast } = useCloudRole()
-  const canViewSensitive = canAtLeast('member')
 
   const releaseRef = parseReleaseParam(searchParams.get('release'))
   const storageNamespace = searchParams.get('releaseStorage') || undefined
@@ -74,7 +70,7 @@ export function HelmCompareRoute() {
   const revision1 = defaultLeftRevision
   const revision2 = defaultRightRevision
   const pairReady = Boolean(helmNamespace && releaseName && revision1 > 0 && revision2 > 0 && revision1 !== revision2)
-  const diffEnabled = canViewSensitive && pairReady
+  const diffEnabled = pairReady
 
   const left = revisions.find((r) => r.revision === revision1)
   const right = revisions.find((r) => r.revision === revision2)
@@ -214,7 +210,6 @@ export function HelmCompareRoute() {
         </div>
       </header>
 
-      <RoleGatedPanel min="member" feature="release revision comparison">
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className={clsx('grid w-full grid-cols-1 gap-4 px-4 py-4', pairReady && 'xl:grid-cols-[220px_minmax(0,1fr)]')}>
             {pairReady && (
@@ -327,7 +322,6 @@ export function HelmCompareRoute() {
             </main>
           </div>
         </div>
-      </RoleGatedPanel>
     </div>
   )
 }

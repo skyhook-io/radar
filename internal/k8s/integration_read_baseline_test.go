@@ -174,11 +174,16 @@ func TestIntegrationReadBindings(t *testing.T) {
 		name, overrides      string
 		namespaced, cluster  []string
 		removeMap, removeKey bool
+		// radar:system is bound whenever cloud mode renders RBAC at all,
+		// independent of the tier settings.
+		noSystem bool
 	}{
 		{name: "defaults", namespaced: all, cluster: all},
-		{name: "OSS", overrides: "cloud.enabled=false"},
+		{name: "OSS", overrides: "cloud.enabled=false", noSystem: true},
 		{name: "customer managed", overrides: "cloud.defaultRbac.create=false"},
-		{name: "RBAC disabled", overrides: "rbac.create=false"},
+		{name: "RBAC disabled", overrides: "rbac.create=false", noSystem: true},
+		{name: "system off", overrides: "cloud.systemRbac=false", namespaced: all, cluster: all, noSystem: true},
+		{name: "system and tiers off", overrides: "cloud.systemRbac=false,cloud.defaultRbac.create=false", noSystem: true},
 		{name: "viewer disabled", overrides: "cloud.defaultRbac.viewer=false", namespaced: all[1:], cluster: all[1:]},
 		{name: "member addon off", overrides: "cloud.defaultRbac.integrationRead.member=false", namespaced: []string{"viewer", "owner"}, cluster: []string{"viewer", "owner"}},
 		{name: "owner addon off", overrides: "cloud.defaultRbac.integrationRead.owner=false", namespaced: all[:2], cluster: all[:2]},
@@ -194,8 +199,13 @@ func TestIntegrationReadBindings(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, docs := renderIntegrationReadChart(t, tc.overrides, tc.removeMap, tc.removeKey)
+			namespaced, cluster := tc.namespaced, tc.cluster
+			if !tc.noSystem {
+				namespaced = append(append([]string{}, namespaced...), "system")
+				cluster = append(append([]string{}, cluster...), "system")
+			}
 			wantDocs := 0
-			for scope, tiers := range map[string][]string{"namespaced": tc.namespaced, "cluster": tc.cluster} {
+			for scope, tiers := range map[string][]string{"namespaced": namespaced, "cluster": cluster} {
 				if len(tiers) == 0 {
 					continue
 				}

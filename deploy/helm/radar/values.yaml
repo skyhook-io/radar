@@ -517,6 +517,14 @@ cloud:
     # while owner=false this renders nothing, but it stays latent — re-enabling
     # owner later activates it. See templates/cloud-rbac-node-ops.yaml.
     nodeOps: false
+  # Read-only binding for Radar Cloud's own background identities (the hub's
+  # alerts worker and timeline puller), which assert the radar:system group.
+  # Independent of defaultRbac: it stays on when the role bindings above are
+  # off, so alerts and the hub timeline keep working when IdP groups decide
+  # cluster access. Grants the viewer set (view + cluster-read +
+  # integration-read) plus Secret read, which Helm release alerts need (Helm
+  # stores releases as Secrets). No writes. See templates/cloud-rbac-system.yaml.
+  systemRbac: true
 
 # MCP (Model Context Protocol) server for AI tools
 mcp:

@@ -3376,6 +3376,8 @@ interface ResourcesViewProps {
   /** Per-kind reason a forbidden kind is hidden ("rbac_denied" | "unavailable"),
    *  keyed by the same count key as resourceForbidden. Drives RestrictedState copy. */
   resourceReasons?: Record<string, string>
+  /** Groups the caller can be granted access through (see RestrictedState). */
+  rbacSubjects?: string[]
   resourceUnavailable?: string[]
   // Single query for the currently selected kind's full data
   selectedKindQuery?: ResourceQueryResult
@@ -3632,6 +3634,7 @@ export function ResourcesView({
   resourceCounts: resourceCountsProp,
   resourceForbidden: resourceForbiddenProp,
   resourceReasons,
+  rbacSubjects,
   resourceUnavailable: resourceUnavailableProp,
   selectedKindQuery: selectedKindQueryProp,
   connectionState,
@@ -6372,6 +6375,7 @@ export function ResourcesView({
                   group={selectedKind.group}
                   resource={selectedKind.name}
                   reason={resourceReasons?.[selectedKindCountKey]}
+                  subjects={rbacSubjects}
                 />
               </div>
             </div>
