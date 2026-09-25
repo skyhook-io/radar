@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
 import { useQuery } from '@tanstack/react-query'
-import { ApiError, useKueueAdmission } from './client'
+import { ApiError, useKueueAdmission as admissionQuery } from './client'
 
 vi.mock('@tanstack/react-query', async (original) => ({ ...await original<typeof import('@tanstack/react-query')>(), useQuery: vi.fn(() => ({})) }))
 
 describe('Kueue admission polling', () => {
-  function options(settings?: Parameters<typeof useKueueAdmission>[3]) {
-    useKueueAdmission('ml', 'training', 'current', settings)
+  function options(settings?: Parameters<typeof admissionQuery>[3]) {
+    admissionQuery('ml', 'training', 'current', settings)
     return vi.mocked(useQuery).mock.calls.at(-1)![0]
   }
-  function interval(settings: Parameters<typeof useKueueAdmission>[3], state: any = {}) {
+  function interval(settings: Parameters<typeof admissionQuery>[3], state: any = {}) {
     const poll = options(settings).refetchInterval as (query: any) => number | false
     return poll({ state })
   }
