@@ -100,6 +100,48 @@ func TestProfileStoreAtomicCAS(t *testing.T) {
 	}
 }
 
+func TestProfileStoreNewerVersionIsNotReportedAsCorrupt(t *testing.T) {
+	for _, raw := range []string{`{"version":2,"profiles":{}}`, `{"version":2,"profiles":{},"newField":{"secret":"do-not-display"}}`} {
+		s := &ProfileStore{Path: filepath.Join(t.TempDir(), "clusters.json")}
+		if err := os.WriteFile(s.Path, []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := s.Read()
+		if err == nil || !strings.Contains(err.Error(), "upgrade Radar") || strings.Contains(err.Error(), "repair") || strings.Contains(err.Error(), "do-not-display") {
+			t.Fatalf("incorrect newer-format guidance: %v", err)
+		}
+		if _, err := s.Update(context.Background(), "", func(*ClusterProfiles) error { t.Fatal("newer file reached mutation"); return nil }); err == nil {
+			t.Fatal("newer file allowed mutation")
+		}
+		data, err := os.ReadFile(s.Path)
+		if err != nil || string(data) != raw {
+			t.Fatal("newer file was modified", err)
+		}
+	}
+}
+
+func TestProfileStoreDecodeErrorsDoNotExposeContents(t *testing.T) {
+	for _, tc := range []struct {
+		raw          string
+		wantLocation bool
+	}{
+		{`{"version":1,"profiles":{},"do-not-display":"secret"}`, false},
+		{`{"version":1,"profiles":{"a":{"context":"dev","integrations":{"metrics":{"prometheus":{"url":12345}}}}}}`, true},
+		{`{"version":1,"profiles":{} "do-not-display"}`, true},
+		{`{"version":"do-not-display","profiles":{}}`, true},
+		{`{"version":1,"profiles":{}} {"do-not-display":true}`, true},
+	} {
+		s := &ProfileStore{Path: filepath.Join(t.TempDir(), "clusters.json")}
+		if err := os.WriteFile(s.Path, []byte(tc.raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := s.Read()
+		if err == nil || strings.Contains(err.Error(), "near byte") != tc.wantLocation || strings.Contains(err.Error(), "do-not-display") || strings.Contains(err.Error(), "12345") {
+			t.Fatalf("unsafe or unhelpful decode error: %v", err)
+		}
+	}
+}
+
 func TestProfileStoreCancelledLock(t *testing.T) {
 	s := &ProfileStore{Path: filepath.Join(t.TempDir(), "clusters.json")}
 	lock := flock.New(s.Path + ".lock")

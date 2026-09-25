@@ -1,9 +1,10 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"maps"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -140,8 +141,19 @@ func (p ClusterProfiles) ValidateChanges(before ClusterProfiles) error {
 	for binding, profile := range p.Profiles {
 		for kind, settings := range profile.Integrations {
 			previous, exists := before.Profiles[binding].Integrations[kind]
-			if exists && reflect.DeepEqual(previous, settings) {
-				continue
+			if exists {
+				// JSON cloning normalizes empty maps to nil; compare persisted values.
+				previousJSON, err := json.Marshal(previous)
+				if err != nil {
+					return err
+				}
+				settingsJSON, err := json.Marshal(settings)
+				if err != nil {
+					return err
+				}
+				if bytes.Equal(previousJSON, settingsJSON) {
+					continue
+				}
 			}
 			if err := settings.Validate(kind); err != nil {
 				return err

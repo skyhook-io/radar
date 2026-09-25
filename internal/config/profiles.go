@@ -84,16 +84,41 @@ func (s *ProfileStore) ReadSince(previous string) (ClusterProfiles, string, bool
 	if previous == revision {
 		return result, revision, false, nil
 	}
+	var header struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return result, "", false, invalidProfileJSON(err)
+	}
+	if header.Version > 1 {
+		return result, "", false, fmt.Errorf("clusters.json uses a newer format (version %d); upgrade Radar to read it; the file was not changed", header.Version)
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	result = ClusterProfiles{}
-	if dec.Decode(&result) != nil || dec.Decode(new(any)) != io.EOF {
-		return result, "", false, errors.New("invalid clusters.json; repair the file before saving settings")
+	if err := dec.Decode(&result); err != nil {
+		return result, "", false, invalidProfileJSON(err)
 	}
 	if err := result.ValidateStructure(); err != nil {
 		return result, "", false, err
 	}
 	return result, revision, true, nil
+}
+
+func invalidProfileJSON(err error) error {
+	// Raw decoder errors can expose user-supplied keys or numeric values.
+	var offset int64
+	var syntax *json.SyntaxError
+	var valueType *json.UnmarshalTypeError
+	if errors.As(err, &syntax) {
+		offset = syntax.Offset
+	} else if errors.As(err, &valueType) {
+		offset = valueType.Offset
+	}
+	if offset > 0 {
+		return fmt.Errorf("invalid clusters.json near byte %d; check JSON syntax, field names and value types before saving settings", offset)
+	}
+	return errors.New("invalid clusters.json; check JSON syntax, field names and value types before saving settings")
 }
 
 func (s *ProfileStore) Update(ctx context.Context, revision string, mutate func(*ClusterProfiles) error) (string, error) {

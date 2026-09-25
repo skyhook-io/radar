@@ -397,8 +397,12 @@ IDs. For example, within an existing context's `integrations.metrics` settings
 Environment variables must exist in the Radar process;
 Desktop does not necessarily inherit your terminal environment. Missing variables
 pause only the affected connection. Environment-backed header references are
-file-edited, not editable in Settings. See the [JSON schema](schemas/clusters.schema.json);
-Radar also validates accepted cluster targets and integration-specific rules.
+file-edited, not editable in Settings. The [JSON schema](schemas/clusters.schema.json)
+describes the canonical v1 file format and helps editors check fields
+and types. Radar additionally validates accepted cluster targets, URLs, HTTP
+headers and integration-specific rules; passing schema validation alone does not
+prove that a connection is usable. Contract tests check v1 round-trips and the
+schema against representative files written by Radar.
 
 CLI and Desktop reread bounded file contents on the next integration operation,
 including background consumers, not only when Settings opens. A content hash
@@ -410,9 +414,18 @@ Copy also checks the source revision, so an endpoint or secret cannot change
 unnoticed between selection and applying the copy.
 The final write also checks the entire file, so overlapping saves during a
 connection test can still conflict rather than overwrite another process.
-Malformed JSON, unknown fields or an unsupported version block the file without
-overwriting it. A semantically invalid connection blocks its consumers, not
-unrelated valid connections; unrelated edits preserve that invalid entry.
+Malformed JSON, unrecognized fields or an unsupported version block the file
+without overwriting it. A recognized field used with the wrong integration, or
+another semantically invalid connection setting, blocks only that integration;
+unrelated edits preserve the invalid connection. Some empty JSON values accepted
+by the reader are normalized when written; the schema describes the written form.
+
+The stored format is versioned independently of Radar releases. Future format
+changes must retain support for existing v1 files or provide an explicit
+migration. Older readers reject unfamiliar fields and versions rather than
+silently dropping data. A newer format produces upgrade guidance, not an
+instruction to repair or delete the file. Unreleased experimental layouts are
+not migrated.
 
 #### Cluster identity and recovery
 

@@ -100,6 +100,40 @@ func TestRemovalOnlyDeletesSelectedSettings(t *testing.T) {
 	}
 }
 
+func TestUnchangedInvalidSettingsWithEmptyHeadersDoNotBlockSave(t *testing.T) {
+	for _, headers := range []string{"headers", "headersFromEnv"} {
+		t.Run(headers, func(t *testing.T) {
+			s := &ProfileStore{Path: filepath.Join(t.TempDir(), "clusters.json")}
+			raw := `{"version":1,"profiles":{"a":{"context":"a","integrations":{}},"b":{"context":"b","integrations":{"metrics":{"target":"b","prometheus":{"url":"ftp://metrics.example","` + headers + `":{}}}}}}}`
+			if err := os.WriteFile(s.Path, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, revision, err := s.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = s.Update(context.Background(), revision, func(file *ClusterProfiles) error {
+				file.Profiles["a"].Integrations[IntegrationArgoCD] = IntegrationSettings{Target: "a", ArgoCD: &argoapi.Connection{URL: "https://argo.example"}}
+				return nil
+			})
+			if err != nil {
+				t.Fatal("unrelated save blocked by unchanged invalid settings", err)
+			}
+			got, revision, err := s.Read()
+			if err != nil || got.Settings("b", IntegrationMetrics).Prometheus.URL != "ftp://metrics.example" {
+				t.Fatal("invalid connection lost", err)
+			}
+			_, err = s.Update(context.Background(), revision, func(file *ClusterProfiles) error {
+				file.Profiles["b"].Integrations[IntegrationMetrics].Prometheus.URL = "ftp://changed.example"
+				return nil
+			})
+			if !errors.Is(err, ErrProfileInvalid) {
+				t.Fatal("changed invalid settings accepted", err)
+			}
+		})
+	}
+}
+
 func TestStoreWritesInlineSettings(t *testing.T) {
 	s, _ := writeConnectionFixture(t, connectionFixture())
 	data, err := os.ReadFile(s.Path)
