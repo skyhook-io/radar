@@ -29,6 +29,7 @@ type (
 	// Store types
 	EventStore     = pkgtimeline.EventStore
 	QueryOptions   = pkgtimeline.QueryOptions
+	ResourceScope  = pkgtimeline.ResourceScope
 	StoreStats     = pkgtimeline.StoreStats
 	CompiledFilter = pkgtimeline.CompiledFilter
 

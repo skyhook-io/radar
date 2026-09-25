@@ -3,6 +3,7 @@ package timeline
 import (
 	"context"
 	"regexp"
+	"slices"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -26,6 +27,12 @@ type EventStore interface {
 
 	// Query retrieves events matching the given options
 	Query(ctx context.Context, opts QueryOptions) ([]TimelineEvent, error)
+
+	// OwnedUIDs returns the distinct UIDs of resources whose rows name one of
+	// ownerUIDs as their owner, in one cluster context, at most limit of them.
+	// K8s Event rows count: their uid is the subject's, and their owner is the
+	// subject's owner. Callers walk ownership one level per call.
+	OwnedUIDs(ctx context.Context, clusterContext string, ownerUIDs []string, limit int) ([]string, error)
 
 	// GetEvent retrieves a single event by ID
 	GetEvent(ctx context.Context, id string) (*TimelineEvent, error)
@@ -111,10 +118,51 @@ type QueryOptions struct {
 	Limit  int // Max results (default 200, max 1000)
 	Offset int // Skip first N results
 
+	// Scope restricts results to rows about a set of resources. Empty = no scope.
+	Scope ResourceScope
+
 	// Include/exclude options
 	IncludeManaged   bool // Include ReplicaSets, Pods, Events (default false)
 	ExcludeDeleted   bool // Exclude delete events
 	IncludeK8sEvents bool // Include K8s Event resources (default true)
+}
+
+// ResourceScope selects rows about a set of resources: a row is in scope when
+// its subject UID is in UIDs, or its owner's UID is in OwnerUIDs, or its
+// group/kind/namespace/name is one of Refs. A row that didn't record its
+// apiVersion matches a Ref on kind/namespace/name, the same way APIGroups
+// treats unknown versions.
+type ResourceScope struct {
+	UIDs      []string
+	OwnerUIDs []string
+	Refs      []resourceid.Ref
+}
+
+// IsZero reports whether the scope selects nothing in particular, i.e. is off.
+func (s ResourceScope) IsZero() bool {
+	return len(s.UIDs) == 0 && len(s.OwnerUIDs) == 0 && len(s.Refs) == 0
+}
+
+// Matches reports whether an event is in scope. An empty scope matches everything.
+func (s ResourceScope) Matches(e *TimelineEvent) bool {
+	if s.IsZero() {
+		return true
+	}
+	if e.UID != "" && slices.Contains(s.UIDs, e.UID) {
+		return true
+	}
+	if e.Owner != nil && e.Owner.UID != "" && slices.Contains(s.OwnerUIDs, e.Owner.UID) {
+		return true
+	}
+	for _, ref := range s.Refs {
+		if ref.Kind != e.Kind || ref.Namespace != e.Namespace || ref.Name != e.Name {
+			continue
+		}
+		if e.APIVersion == "" || resourceid.GroupFromAPIVersion(e.APIVersion) == ref.Group {
+			return true
+		}
+	}
+	return false
 }
 
 // DefaultQueryOptions returns sensible defaults

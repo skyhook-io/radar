@@ -742,6 +742,37 @@ func (s *PostgresStore) storageBytes(ctx context.Context) int64 {
 	return total.Int64
 }
 
+// OwnedUIDs returns the distinct UIDs of resources whose rows name one of
+// ownerUIDs as their owner.
+func (s *PostgresStore) OwnedUIDs(ctx context.Context, clusterContext string, ownerUIDs []string, limit int) ([]string, error) {
+	if len(ownerUIDs) == 0 || limit <= 0 {
+		return nil, nil
+	}
+	query := `SELECT DISTINCT uid FROM radar_timeline_events
+		WHERE COALESCE(uid, '') <> '' AND owner_uid = ANY($1::text[])`
+	args := []any{ownerUIDs}
+	if clusterContext != "" {
+		query += " AND cluster_context = $2"
+		args = append(args, clusterContext)
+	}
+	query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query owned uids: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
+			return nil, err
+		}
+		out = append(out, uid)
+	}
+	return out, rows.Err()
+}
+
 func (s *PostgresStore) buildQuery(opts QueryOptions) (string, []any, error) {
 	query := strings.Builder{}
 	query.WriteString(`SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
@@ -827,6 +858,26 @@ func (s *PostgresStore) buildQuery(opts QueryOptions) (string, []any, error) {
 	}
 	if opts.ClusterContext != "" {
 		addFilter(" AND cluster_context = $%d", opts.ClusterContext)
+	}
+	if !opts.Scope.IsZero() {
+		var parts []string
+		if len(opts.Scope.UIDs) > 0 {
+			parts = append(parts, fmt.Sprintf("uid = ANY($%d::text[])", argN))
+			args = append(args, opts.Scope.UIDs)
+			argN++
+		}
+		if len(opts.Scope.OwnerUIDs) > 0 {
+			parts = append(parts, fmt.Sprintf("owner_uid = ANY($%d::text[])", argN))
+			args = append(args, opts.Scope.OwnerUIDs)
+			argN++
+		}
+		for _, ref := range opts.Scope.Refs {
+			parts = append(parts, fmt.Sprintf("(kind = $%d AND namespace = $%d AND name = $%d AND (COALESCE(api_version, '') = '' OR "+
+				"CASE WHEN strpos(api_version, '/') > 0 THEN split_part(api_version, '/', 1) ELSE '' END = $%d))", argN, argN+1, argN+2, argN+3))
+			args = append(args, ref.Kind, ref.Namespace, ref.Name, ref.Group)
+			argN += 4
+		}
+		query.WriteString(" AND (" + strings.Join(parts, " OR ") + ")")
 	}
 
 	seqPaging := opts.SeqPaging || opts.SinceSeq > 0
