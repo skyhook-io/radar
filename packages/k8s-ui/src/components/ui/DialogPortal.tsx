@@ -36,9 +36,15 @@ const TABBABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',')
 
+// A CSS-hidden element (display:none, visibility:hidden) can't take focus, so
+// treating it as an edge would let Tab slip past the real last element.
+function isVisible(el: HTMLElement): boolean {
+  return typeof el.checkVisibility === 'function' ? el.checkVisibility({ visibilityProperty: true }) : true
+}
+
 function tabbableElements(panel: HTMLElement): HTMLElement[] {
   return Array.from(panel.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)).filter(
-    el => el.tabIndex >= 0 && !el.closest('[inert],[hidden]'),
+    el => el.tabIndex >= 0 && !el.closest('[inert],[hidden]') && isVisible(el),
   )
 }
 
@@ -118,12 +124,27 @@ export function DialogPortal({
     }
   }
 
+  // Focus drops to body when the focused control is disabled or removed (a
+  // confirm button entering its loading state); the next Tab would then land
+  // behind the modal. Focus elsewhere (a menu portaled out of the panel) is
+  // left alone.
+  const recoverStrayTab = (e: KeyboardEvent) => {
+    const panel = dialogRef.current
+    const active = document.activeElement
+    if (!panel || (active && active !== document.body)) return
+    e.preventDefault()
+    const items = tabbableElements(panel)
+    const target = (e.shiftKey ? items[items.length - 1] : items[0]) ?? panel
+    target.focus()
+  }
+
   // relatedTarget on the first focus into the panel is the opener. Reading
   // document.activeElement in an effect would miss it when a child `autoFocus`
-  // has already moved focus during commit.
+  // has already moved focus during commit — which also happens before
+  // dialogRef is attached, hence currentTarget.
   const handlePanelFocus = (e: ReactFocusEvent<HTMLDivElement>) => {
-    const panel = dialogRef.current
-    if (!open || openerRef.current || !panel || !panel.contains(e.target as Node)) return
+    const panel = e.currentTarget
+    if (!open || openerRef.current || !panel.contains(e.target as Node)) return
     const from = e.relatedTarget
     openerRef.current = { el: from instanceof HTMLElement && !panel.contains(from) ? from : null }
   }
@@ -132,10 +153,17 @@ export function DialogPortal({
     if (!open) return
 
     const handleDocumentKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
+      if (e.key !== 'Escape' && e.key !== 'Tab') return
+      // A dialog still animating out is inert and no longer the one on top.
       const modalDialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"][aria-modal="true"]'))
+        .filter(d => !d.closest('[inert]'))
       const topDialog = modalDialogs[modalDialogs.length - 1]
       if (topDialog !== dialogRef.current) return
+
+      if (e.key === 'Tab') {
+        recoverStrayTab(e)
+        return
+      }
 
       if (dialogRef.current?.contains(e.target as Node)) return
 

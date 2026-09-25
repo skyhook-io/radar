@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, StrictMode, useState, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DialogPortal } from './DialogPortal'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -31,6 +31,7 @@ function pressTab(shiftKey = false) {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   for (const root of roots) await act(async () => root.unmount())
   roots.clear()
   document.body.replaceChildren()
@@ -152,5 +153,97 @@ describe('DialogPortal accessibility', () => {
     textarea.focus()
     pressTab()
     expect(document.activeElement).toBe(textarea)
+  })
+
+  it('restores focus to the opener after an autoFocus child took it, however the dialog mounted', async () => {
+    const { render, opener } = await mount(<Dialog open={false} />)
+    await render(<Dialog open><input autoFocus aria-label="replicas" /></Dialog>)
+    expect(document.activeElement).toBe(document.querySelector('input'))
+    await render(<Dialog open={false}><input autoFocus aria-label="replicas" /></Dialog>)
+    expect(document.activeElement).toBe(opener)
+
+    function Host() {
+      const [show, setShow] = useState(true)
+      return show ? <Dialog open onClose={() => setShow(false)}><input autoFocus aria-label="name" /></Dialog> : null
+    }
+    await act(async () => { for (const root of roots) root.unmount() })
+    roots.clear()
+    const second = await mount(<Host />)
+    expect(document.activeElement).toBe(document.querySelector('input'))
+    await act(async () => {
+      document.querySelector('input')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    })
+    expect(dialog()).toBeNull()
+    expect(document.activeElement).toBe(second.opener)
+  })
+
+  it('does not treat a CSS-hidden control as the edge of the trap', async () => {
+    // jsdom has no layout; stand in for the browser's visibility check.
+    const proto = HTMLElement.prototype as HTMLElement & { checkVisibility?: () => boolean }
+    const original = proto.checkVisibility
+    proto.checkVisibility = function (this: HTMLElement) { return this.style.display !== 'none' }
+    try {
+      await mount(
+        <Dialog open>
+          <button style={{ display: 'none' }}>hidden first</button>
+          <button>first</button>
+          <button>last</button>
+          <button style={{ display: 'none' }}>hidden last</button>
+        </Dialog>,
+      )
+      const [, first, last] = Array.from(dialog()!.querySelectorAll('button'))
+      last.focus()
+      expect(pressTab().defaultPrevented).toBe(true)
+      expect(document.activeElement).toBe(first)
+      expect(pressTab(true).defaultPrevented).toBe(true)
+      expect(document.activeElement).toBe(last)
+    } finally {
+      if (original) proto.checkVisibility = original
+      else delete proto.checkVisibility
+    }
+  })
+
+  it('pulls a Tab back into the dialog after the focused control was disabled', async () => {
+    await mount(
+      <Dialog open>
+        <button>first</button>
+        <button>last</button>
+      </Dialog>,
+    )
+    const [first, last] = Array.from(dialog()!.querySelectorAll('button'))
+    ;(document.activeElement as HTMLElement).blur()
+    expect(document.activeElement).toBe(document.body)
+    expect(pressTab().defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(first)
+    ;(document.activeElement as HTMLElement).blur()
+    expect(pressTab(true).defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(last)
+  })
+
+  it('leaves Tab alone in a menu portaled out of the dialog', async () => {
+    await mount(<Dialog open><button>inside</button></Dialog>)
+    const menuItem = document.createElement('button')
+    document.body.appendChild(menuItem)
+    menuItem.focus()
+    expect(pressTab().defaultPrevented).toBe(false)
+    expect(document.activeElement).toBe(menuItem)
+  })
+
+  it('lets the dialog underneath recover Tab while the one above it animates out', async () => {
+    function Stack({ top }: { top: boolean }) {
+      return (
+        <>
+          <Dialog open><button>under</button></Dialog>
+          <DialogPortal open={top} onClose={() => {}} ariaLabel="top"><button>over</button></DialogPortal>
+        </>
+      )
+    }
+    const { render } = await mount(<Stack top />)
+    await render(<Stack top={false} />)
+    // The closing dialog is still mounted (inert) for its exit animation.
+    expect(document.querySelectorAll('[role="dialog"]').length).toBe(2)
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    expect(pressTab().defaultPrevented).toBe(true)
+    expect(document.activeElement?.textContent).toBe('under')
   })
 })
