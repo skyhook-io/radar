@@ -181,8 +181,14 @@ interface WorkloadViewProps {
   refetch?: () => void
 
   // ── Timeline data ────────────────────────────────────────────────────────
-  /** All timeline events for this resource's namespace */
+  /** Timeline events the history lanes are built from: this workload's own
+   *  history, or events for its namespace from a host that has no scoped query. */
   allEvents?: TimelineEvent[]
+  /** Older history exists beyond allEvents. */
+  historyTruncated?: boolean
+  /** Loads the next older page of history; omit when the host can't page. */
+  onLoadOlderHistory?: () => void
+  loadingOlderHistory?: boolean
   /** Persisted lifecycle events reconstructed for resources related to this workload. */
   relatedTimelineEvents?: TimelineEvent[]
   /** Whether timeline events are loading */
@@ -384,6 +390,9 @@ export function WorkloadView({
   refetch: refetchProp,
   // Timeline
   allEvents,
+  historyTruncated = false,
+  onLoadOlderHistory,
+  loadingOlderHistory = false,
   relatedTimelineEvents = [],
   eventsLoading = false,
   topology,
@@ -1145,6 +1154,9 @@ export function WorkloadView({
           <EventsTab
             events={resourceEvents}
             isLoading={eventsLoading}
+            truncated={historyTruncated}
+            onLoadOlder={onLoadOlderHistory}
+            loadingOlder={loadingOlderHistory}
             selectedEventId={selectedEventId}
             onSelectEvent={setSelectedEventId}
             topology={topology}
@@ -1399,6 +1411,9 @@ function OwnershipHeading({
 function EventsTab({
   events,
   isLoading,
+  truncated,
+  onLoadOlder,
+  loadingOlder,
   selectedEventId,
   onSelectEvent,
   topology,
@@ -1406,6 +1421,9 @@ function EventsTab({
 }: {
   events: TimelineEvent[]
   isLoading: boolean
+  truncated?: boolean
+  onLoadOlder?: () => void
+  loadingOlder?: boolean
   selectedEventId: string | null
   onSelectEvent: (id: string | null) => void
   topology?: Topology
@@ -1502,6 +1520,21 @@ function EventsTab({
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
+      {truncated && (
+        <div className="shrink-0 flex items-center gap-2 border-b border-theme-border bg-theme-base px-4 py-1.5 text-xs text-theme-text-secondary" role="note">
+          <span>Showing the most recent events. Older history exists.</span>
+          {onLoadOlder && (
+            <button
+              type="button"
+              onClick={onLoadOlder}
+              disabled={loadingOlder}
+              className="underline decoration-theme-border underline-offset-2 hover:text-theme-text-primary disabled:opacity-60"
+            >
+              {loadingOlder ? 'Loading…' : 'Load older'}
+            </button>
+          )}
+        </div>
+      )}
       {/* Swimlane — the shared TimelineSwimlanes widget (kind chips, top axis with
           ticks + Now line, event clustering), flat + compact for a single subject.
           Its drawer is suppressed (compact); the list below is the detail surface. */}

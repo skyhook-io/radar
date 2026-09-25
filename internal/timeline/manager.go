@@ -30,6 +30,7 @@ type (
 	EventStore     = pkgtimeline.EventStore
 	QueryOptions   = pkgtimeline.QueryOptions
 	ResourceScope  = pkgtimeline.ResourceScope
+	SequenceOrder  = pkgtimeline.SequenceOrder
 	StoreStats     = pkgtimeline.StoreStats
 	CompiledFilter = pkgtimeline.CompiledFilter
 
@@ -58,9 +59,11 @@ const (
 	OwnerUnidentified  = pkgtimeline.OwnerUnidentified
 
 	// EventSource constants
-	SourceInformer   = pkgtimeline.SourceInformer
-	SourceK8sEvent   = pkgtimeline.SourceK8sEvent
-	SourceHistorical = pkgtimeline.SourceHistorical
+	SourceInformer          = pkgtimeline.SourceInformer
+	SequenceOrderAscending  = pkgtimeline.SequenceOrderAscending
+	SequenceOrderDescending = pkgtimeline.SequenceOrderDescending
+	SourceK8sEvent          = pkgtimeline.SourceK8sEvent
+	SourceHistorical        = pkgtimeline.SourceHistorical
 
 	// EventType constants
 	EventTypeAdd     = pkgtimeline.EventTypeAdd
