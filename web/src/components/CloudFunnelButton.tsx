@@ -33,7 +33,7 @@ import {
 } from '../api/client'
 
 // OSS → Cloud funnel: a quiet globe button in the top bar that opens a modal
-// pitching Radar Cloud: Radar for the whole team, every cluster, around the
+// pitching Radar Cloud: Radar for you and your team, every cluster, around the
 // clock. Alerts and hosted investigations lead because they are the two things
 // the OSS binary cannot do at all. Two lanes (capabilities.cloudConnect): "driver" runs
 // the in-product connect flow against this server; "wizard" links to the Hub's
@@ -287,7 +287,7 @@ export function CloudFunnelButton() {
     <>
       {/* Tooltip is suppressed while the modal is open — it portals above the
           modal backdrop and would otherwise paint on top of the dialog. */}
-      <Tooltip content="Radar Cloud: your team, every cluster, around the clock" delay={100} position="bottom" disabled={open}>
+      <Tooltip content="Radar Cloud: for you and your team, every cluster, around the clock" delay={100} position="bottom" disabled={open}>
         <button
           onClick={openModal}
           aria-label="Radar Cloud"
@@ -670,7 +670,7 @@ function PitchBody({
     <div className="px-8 pt-7 pb-2">
       <Eyebrow />
       <h3 className="text-[22px] font-semibold leading-tight tracking-tight text-theme-text-primary mb-3">
-        Radar for your whole team, every cluster, around the clock.
+        Radar for you and your team, every cluster, around the clock.
       </h3>
       <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-5">
         Connect this cluster and Radar keeps watching after you close the laptop.
