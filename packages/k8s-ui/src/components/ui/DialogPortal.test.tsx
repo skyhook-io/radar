@@ -22,6 +22,7 @@ async function mount(node: ReactNode) {
 }
 
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]')
+const guards = () => Array.from(document.querySelectorAll<HTMLElement>('[data-focus-guard]'))
 
 function pressTab(shiftKey = false) {
   const target = document.activeElement ?? document.body
@@ -106,19 +107,17 @@ describe('DialogPortal accessibility', () => {
   })
 
   it('does not pull focus back when the close moved it elsewhere', async () => {
-    const elsewhere = document.createElement('input')
+    // The destination takes focus in the same commit as the close — as a
+    // navigated-to view's autoFocus does — so the restore microtask sees it.
     const { render, opener } = await mount(<Dialog open={false} />)
-    document.body.appendChild(elsewhere)
-    await render(<Dialog open />)
-    await render(<Dialog open={false} />)
-    // Restore runs in a microtask after the close commit; move focus first.
-    elsewhere.focus()
-    await act(async () => {})
-    expect(document.activeElement).toBe(elsewhere)
+    await render(<Dialog open><button>inside</button></Dialog>)
+    await render(<><Dialog open={false}><button>inside</button></Dialog><input autoFocus aria-label="destination" /></>)
+    const destination = document.querySelector('input[aria-label="destination"]')
+    expect(document.activeElement).toBe(destination)
     expect(document.activeElement).not.toBe(opener)
   })
 
-  it('wraps Tab and Shift+Tab within the panel', async () => {
+  it('wraps focus that leaves past either edge of the panel', async () => {
     await mount(
       <Dialog open>
         <button>first</button>
@@ -127,32 +126,39 @@ describe('DialogPortal accessibility', () => {
       </Dialog>,
     )
     const [first, , last] = Array.from(dialog()!.querySelectorAll('button'))
+    const [startGuard, endGuard] = guards()
     last.focus()
-    expect(pressTab().defaultPrevented).toBe(true)
+    endGuard.focus()
     expect(document.activeElement).toBe(first)
-    expect(pressTab(true).defaultPrevented).toBe(true)
+    startGuard.focus()
     expect(document.activeElement).toBe(last)
-    first.focus()
-    expect(pressTab().defaultPrevented).toBe(false)
+  })
+
+  it('enters at the near edge when focus arrives at a guard from outside', async () => {
+    await mount(<Dialog open><button>first</button><button>last</button></Dialog>)
+    const [first, last] = Array.from(dialog()!.querySelectorAll('button'))
+    const [startGuard, endGuard] = guards()
+    ;(document.activeElement as HTMLElement).blur()
+    startGuard.focus()
+    expect(document.activeElement).toBe(first)
+    ;(document.activeElement as HTMLElement).blur()
+    endGuard.focus()
+    expect(document.activeElement).toBe(last)
   })
 
   it('keeps focus on the panel when it has nothing tabbable', async () => {
     await mount(<Dialog open />)
-    expect(pressTab().defaultPrevented).toBe(true)
+    guards()[1].focus()
     expect(document.activeElement).toBe(dialog())
   })
 
-  it('leaves Tab alone when a child editor already handled it', async () => {
-    await mount(
-      <Dialog open>
-        <button>first</button>
-        <textarea aria-label="yaml" onKeyDown={e => { if (e.key === 'Tab') e.preventDefault() }} />
-      </Dialog>,
-    )
-    const textarea = document.querySelector('textarea')!
-    textarea.focus()
-    pressTab()
-    expect(document.activeElement).toBe(textarea)
+  it('never intercepts Tab inside the panel, leaving the order to the browser', async () => {
+    await mount(<Dialog open><button>first</button><button>last</button></Dialog>)
+    const [first, last] = Array.from(dialog()!.querySelectorAll('button'))
+    last.focus()
+    expect(pressTab().defaultPrevented).toBe(false)
+    first.focus()
+    expect(pressTab(true).defaultPrevented).toBe(false)
   })
 
   it('restores focus to the opener after an autoFocus child took it, however the dialog mounted', async () => {
@@ -177,7 +183,7 @@ describe('DialogPortal accessibility', () => {
     expect(document.activeElement).toBe(second.opener)
   })
 
-  it('does not treat a CSS-hidden control as the edge of the trap', async () => {
+  it('wraps to the visible edges, skipping CSS-hidden controls', async () => {
     // jsdom has no layout; stand in for the browser's visibility check.
     const proto = HTMLElement.prototype
     const original = Object.getOwnPropertyDescriptor(proto, 'checkVisibility')
@@ -192,10 +198,11 @@ describe('DialogPortal accessibility', () => {
         </Dialog>,
       )
       const [, first, last] = Array.from(dialog()!.querySelectorAll('button'))
+      const [startGuard, endGuard] = guards()
       last.focus()
-      expect(pressTab().defaultPrevented).toBe(true)
+      endGuard.focus()
       expect(document.activeElement).toBe(first)
-      expect(pressTab(true).defaultPrevented).toBe(true)
+      startGuard.focus()
       expect(document.activeElement).toBe(last)
     } finally {
       if (original) Object.defineProperty(proto, 'checkVisibility', original)

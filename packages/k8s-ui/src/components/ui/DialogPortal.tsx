@@ -24,6 +24,8 @@ interface DialogPortalProps {
   ariaLabel?: string
 }
 
+const FOCUS_GUARD = 'fixed top-0 left-0 w-px h-0 overflow-hidden outline-none'
+
 const TABBABLE_SELECTOR = [
   'a[href]',
   'area[href]',
@@ -54,7 +56,7 @@ function tabbableElements(panel: HTMLElement): HTMLElement[] {
  * correctly even inside CSS-transformed containers (drawers, slide panels).
  *
  * Focus moves into the panel on open (unless a child already took it, e.g. via
- * `autoFocus`), Tab cycles within the panel, and focus returns to the element
+ * `autoFocus`), Tab wraps at the panel's edges, and focus returns to the element
  * that opened the dialog at logical close.
  *
  * Usage:
@@ -84,10 +86,6 @@ export function DialogPortal({
 
   // Bubble phase lets nested editors and menus consume Escape before the dialog closes.
   const handleDialogKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Tab') {
-      trapTab(e)
-      return
-    }
     if (e.key !== 'Escape') return
 
     e.stopPropagation()
@@ -98,30 +96,23 @@ export function DialogPortal({
     }
   }
 
-  // Only the edges are intercepted, so the browser's own order applies inside,
-  // and editors that claim Tab (Monaco indents) mark it defaultPrevented first.
-  const trapTab = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+  // Guards on either side of the panel catch focus leaving it, so inside the
+  // panel the browser's own Tab order applies — scroll containers, radio
+  // groups, editors that claim Tab — and only the wrap is decided here.
+  const focusEdge = (toLast: boolean) => {
     const panel = dialogRef.current
-    // Keys from portaled descendants (menus rendered to body) bubble here through
-    // the React tree; their own focus handling owns them.
-    if (e.defaultPrevented || !panel || !panel.contains(e.target as Node)) return
-
+    if (!panel) return
     const items = tabbableElements(panel)
-    const active = document.activeElement
-    if (items.length === 0) {
-      e.preventDefault()
-      panel.focus()
-      return
-    }
-    const first = items[0]
-    const last = items[items.length - 1]
-    if (e.shiftKey && (active === first || active === panel)) {
-      e.preventDefault()
-      last.focus()
-    } else if (!e.shiftKey && active === last) {
-      e.preventDefault()
-      first.focus()
-    }
+    const target = (toLast ? items[items.length - 1] : items[0]) ?? panel
+    target.focus()
+  }
+
+  // Leaving past one edge wraps to the other; arriving from outside the panel
+  // enters at the near edge.
+  const handleGuardFocus = (edge: 'start' | 'end') => (e: ReactFocusEvent<HTMLSpanElement>) => {
+    const panel = dialogRef.current
+    const fromInside = e.relatedTarget instanceof Node && !!panel?.contains(e.relatedTarget)
+    focusEdge(edge === 'start' ? fromInside : !fromInside)
   }
 
   // Focus drops to body when the focused control is disabled or removed (a
@@ -133,9 +124,7 @@ export function DialogPortal({
     const active = document.activeElement
     if (!panel || (active && active !== document.body)) return
     e.preventDefault()
-    const items = tabbableElements(panel)
-    const target = (e.shiftKey ? items[items.length - 1] : items[0]) ?? panel
-    target.focus()
+    focusEdge(e.shiftKey)
   }
 
   // relatedTarget on the first focus into the panel is the opener. Reading
@@ -226,6 +215,7 @@ export function DialogPortal({
         style={overlayTransitionStyle(isOpen, 'dialog')}
         onClick={closable ? onClose : undefined}
       />
+      <span tabIndex={0} aria-hidden data-focus-guard onFocus={handleGuardFocus('start')} className={FOCUS_GUARD} />
       <div
         ref={dialogRef}
         role="dialog"
@@ -245,6 +235,7 @@ export function DialogPortal({
       >
         {children}
       </div>
+      <span tabIndex={0} aria-hidden data-focus-guard onFocus={handleGuardFocus('end')} className={FOCUS_GUARD} />
     </div>,
     document.body,
   )
