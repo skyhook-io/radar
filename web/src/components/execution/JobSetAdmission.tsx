@@ -1,7 +1,8 @@
 import { KueueAdmissionSection } from '@skyhook-io/k8s-ui/components/resources/KueueAdmissionSection'
 import { ApiError, useKueueAdmission } from '../../api/client'
 
-export function KueueAdmission({ resource, namespace, name, onNavigate }: {
+export function KueueAdmission({ resource, namespace, name, onNavigate, presentation }: {
+  presentation?: 'card' | 'drawer'
   resource: any
   namespace: string
   name: string
@@ -18,7 +19,7 @@ export function KueueAdmission({ resource, namespace, name, onNavigate }: {
   const error = query.error?.message ?? (query.data && !data ? 'Admission evidence belongs to a different workload instance; waiting for a fresh observation.' : undefined)
   if (isJob && !hinted && !data?.workloads.length) return null
   const hasOwner = (resource.metadata?.ownerReferences ?? []).some((owner: any) => owner.controller === true && !(owner.apiVersion === 'batch/v1' && owner.kind === 'CronJob'))
-  return <KueueAdmissionSection data={data} loading={query.isLoading} error={error} forbidden={query.error instanceof ApiError && query.error.status === 403} hinted={hinted} externalExecution={externalExecution} hasOwner={isJob && hasOwner} onRetry={() => { void query.refetch() }} onNavigate={onNavigate} />
+  return <KueueAdmissionSection presentation={presentation} data={data} loading={query.isLoading} error={error} forbidden={query.error instanceof ApiError && query.error.status === 403} hinted={hinted} externalExecution={externalExecution} hasOwner={isJob && hasOwner} onRetry={() => { void query.refetch() }} onNavigate={onNavigate} />
 }
 
 export { KueueAdmission as JobSetAdmission }

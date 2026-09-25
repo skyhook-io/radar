@@ -1,11 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { JobRenderer, JobSetRenderer } from './JobAdmissionRenderers'
-vi.mock('../../execution/JobSetAdmission', () => ({ KueueAdmission: () => <div>admission evidence</div> }))
+vi.mock('../../execution/JobSetAdmission', () => ({ KueueAdmission: ({ presentation }: { presentation?: string }) => <div data-presentation={presentation}>admission evidence</div> }))
 const job = { apiVersion: 'batch/v1', kind: 'Job', metadata: { name: 'training', namespace: 'ml' }, status: { conditions: [{ type: 'Failed', status: 'True', reason: 'BackoffLimitExceeded' }] } }
 describe('admission renderer composition', () => {
  it('keeps Job failure above admission evidence', () => {
   const html = renderToStaticMarkup(<JobRenderer data={job} />)
+  expect(html).toContain('data-presentation="drawer"')
   expect(html.indexOf('Job Issues')).toBeLessThan(html.indexOf('admission evidence'))
  })
  it('does not mount batch admission for a colliding Job kind', () => {

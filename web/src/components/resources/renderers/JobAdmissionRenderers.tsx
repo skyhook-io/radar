@@ -7,12 +7,12 @@ type Props = { data: any; onNavigate?: (ref: ResourceRef) => void }
 
 export function JobRenderer({ data, onNavigate }: Props) {
   return <BaseJobRenderer data={data} admissionContent={
-    data.apiVersion === 'batch/v1' && data.kind === 'Job' && <KueueAdmission resource={data} namespace={data.metadata.namespace} name={data.metadata.name} onNavigate={onNavigate} />
+    data.apiVersion === 'batch/v1' && data.kind === 'Job' && <KueueAdmission presentation="drawer" resource={data} namespace={data.metadata.namespace} name={data.metadata.name} onNavigate={onNavigate} />
   } />
 }
 
 export function JobSetRenderer({ data, onNavigate }: Props) {
   return <BaseJobSetRenderer data={data} admissionContent={
-    <KueueAdmission resource={data} namespace={data.metadata.namespace} name={data.metadata.name} onNavigate={onNavigate} />
+    <KueueAdmission presentation="drawer" resource={data} namespace={data.metadata.namespace} name={data.metadata.name} onNavigate={onNavigate} />
   } />
 }
