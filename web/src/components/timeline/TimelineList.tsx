@@ -24,6 +24,12 @@ export type { ActivityTypeFilter, ActivityFilterKey }
 const LIST_FETCH_LIMIT = 2000
 const APP_SCOPED_FETCH_LIMIT = 10000
 
+// The source drops managed rows (Pod, ReplicaSet, Event, or any owned row) before
+// the kind filter runs, so an explicit kind selection must keep them or it lists nothing.
+export function listIncludesManaged(appScoped: boolean, kinds: string[]): boolean {
+  return appScoped || kinds.length > 0
+}
+
 interface TimelineListProps {
   namespaces: string[]
   onViewChange?: (view: 'list' | 'swimlane') => void
@@ -76,7 +82,7 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
     kinds: queryParams.kinds,
     timeRange: queryParams.timeRange,
     includeK8sEvents: true,
-    includeManaged: appScoped,
+    includeManaged: listIncludesManaged(appScoped, queryParams.kinds),
     includeDeleted: showDeleted,
     limit: fetchLimit,
     fromMs: selectionWindow?.fromMs,
