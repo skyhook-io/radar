@@ -246,7 +246,6 @@ export function WhatsNewContent({ titleId, notes, previousVersion, onClose, onNa
   )
 }
 
-// The first highlight leads: full width, stronger tint, larger type.
 function HighlightCard({ item, lead = false, onNavigate }: {
   item: ReleaseHighlight
   lead?: boolean

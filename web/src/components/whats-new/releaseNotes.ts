@@ -18,8 +18,8 @@ export interface ReleaseNotes {
   releaseUrl: string
 }
 
-// One entry per released version, added in that release's PR. A version with
-// no entry shows neither the dialog nor the Home link.
+// One entry per released version. A version with no entry shows neither the
+// dialog nor the Home link.
 export const RELEASE_NOTES: ReleaseNotes[] = []
 
 export function releaseNotesFor(
