@@ -24,6 +24,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Require What's New notes for minor releases
+        run: bash scripts/check-whats-new.sh "$GITHUB_REF_NAME"
+
       - name: Get version
         id: version
         run: |

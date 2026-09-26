@@ -21,7 +21,9 @@ export interface ReleaseNotes {
 
 // One entry per release that has something to announce. A version without its
 // own entry shows the newest entry at or below it, so a patch upgrade (or one
-// that skips the release with notes) still gets them.
+// that skips the release with notes) still gets them. Every minor and major
+// release must have its own entry: scripts/check-whats-new.sh refuses to
+// release one without it.
 export const RELEASE_NOTES: ReleaseNotes[] = []
 
 export function releaseNotesFor(

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Megaphone } from 'lucide-react'
 import { nextSeenVersion, whatsNewToShow } from './WhatsNew'
-import { latestReleaseNotesFor, releaseNotesFor, type ReleaseNotes } from './releaseNotes'
+import { latestReleaseNotesFor, RELEASE_NOTES, releaseNotesFor, type ReleaseNotes } from './releaseNotes'
 import { compareVersions } from '../../utils/version'
 
 const entry = (version: string): ReleaseNotes => ({
@@ -82,5 +82,22 @@ describe('compareVersions', () => {
     expect(compareVersions('1.2.3', 'v1.2.3')).toBe(0)
     expect(compareVersions('v1.2.3-rc.1', 'v1.2.3')).toBeLessThan(0)
     expect(compareVersions('dev', 'v1.2.3')).toBeNull()
+  })
+})
+
+describe('the shipped catalog', () => {
+  it('has one well-formed entry per release', () => {
+    const versions = RELEASE_NOTES.map(n => n.version)
+    expect(new Set(versions).size).toBe(versions.length)
+    for (const notes of RELEASE_NOTES) {
+      expect(notes.version, notes.version).toMatch(/^v\d+\.\d+\.\d+$/)
+      expect(notes.highlights.length, `${notes.version} needs a lead highlight`).toBeGreaterThan(0)
+      expect(new Set(notes.highlights.map(h => h.id)).size, `${notes.version} highlight ids`).toBe(notes.highlights.length)
+      for (const h of notes.highlights) {
+        expect(!!h.path === !!h.cta, `${notes.version}/${h.id}: path and cta go together`).toBe(true)
+        if (h.path) expect(h.path, `${notes.version}/${h.id}`).toMatch(/^\//)
+      }
+      expect(notes.releaseUrl, notes.version).toMatch(/^https:\/\//)
+    }
   })
 })

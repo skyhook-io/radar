@@ -417,6 +417,10 @@ main() {
   choose_version
   choose_release_mode
   check_prerequisites
+  # The tag is cut from HEAD, so check the committed catalog, not the working tree.
+  if ! ./scripts/check-whats-new.sh "$VERSION" HEAD; then
+    error "Add What's New notes for $VERSION, commit them, and run the release again"
+  fi
 
   echo ""
   echo "=========================================="

@@ -211,6 +211,7 @@ make release-binaries-dry
 ### Release Checklist
 
 1. Ensure tests pass: `make test`
+1. For a minor or major release (`vX.Y.0`), add its What's New entry to `web/src/components/whats-new/releaseNotes.ts` and merge it first. Lead with the highlight most users will care about; give highlights that open a feature a `path` and `cta`. Preview with `?whats-new=vX.Y.0` on a local build. `scripts/check-whats-new.sh` enforces this: `make release` refuses to tag without the entry, and the release workflows fail before building. Patch releases need no entry.
 2. Tag the release: `git tag v0.X.Y && git push origin v0.X.Y`
 3. Run release: `make release`
 

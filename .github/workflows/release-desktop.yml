@@ -9,8 +9,16 @@ permissions:
   contents: write
 
 jobs:
+  whats-new:
+    name: Require What's New notes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: bash scripts/check-whats-new.sh "$GITHUB_REF_NAME"
+
   build-macos:
     name: macOS (universal)
+    needs: whats-new
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
@@ -134,6 +142,7 @@ jobs:
 
   build-windows:
     name: Windows (amd64)
+    needs: whats-new
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -221,6 +230,7 @@ jobs:
 
   build-linux:
     name: Linux (amd64)
+    needs: whats-new
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
