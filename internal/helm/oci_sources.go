@@ -67,11 +67,16 @@ func normalizeOCIPrefix(raw string) (string, error) {
 // hosted-mode hardening tracked separately. Does NOT defend against a DNS name
 // that resolves into these ranges.
 func rejectLinkLocalHost(ref string) error {
-	host := ref
-	if i := strings.IndexAny(host, "/"); i >= 0 {
-		host = host[:i]
+	authority := ref
+	if i := strings.IndexAny(authority, "/"); i >= 0 {
+		authority = authority[:i]
 	}
-	if h, _, err := net.SplitHostPort(host); err == nil {
+	host := authority
+	if strings.HasPrefix(authority, "[") {
+		if end := strings.Index(authority, "]"); end > 1 {
+			host = authority[1:end]
+		}
+	} else if h, _, err := net.SplitHostPort(authority); err == nil {
 		host = h
 	}
 	if ip := net.ParseIP(host); ip != nil && (ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()) {

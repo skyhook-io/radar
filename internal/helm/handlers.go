@@ -14,6 +14,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"helm.sh/helm/v3/pkg/storage/driver"
 )
 
 // IsForbiddenError checks if an error is a Kubernetes RBAC forbidden error
@@ -111,6 +112,7 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Get("/releases/{namespace}/{name}/resources/diff", h.handleGetResourceDiff)
 		r.Get("/releases/{namespace}/{name}/upgrade-info", h.handleCheckUpgrade)
 		r.Get("/releases/{namespace}/{name}/versions", h.handleAvailableVersions)
+		r.Get("/releases/{namespace}/{name}/source", h.handleSourceStatus)
 		r.Get("/upgrade-check", h.handleBatchUpgradeCheck)
 		// Actions (write operations)
 		r.Post("/releases/{namespace}/{name}/rollback", h.handleRollback)
@@ -119,10 +121,12 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Post("/releases/{namespace}/{name}/upgrade-stream", h.handleUpgradeStream)
 		r.Post("/releases/{namespace}/{name}/values/preview", h.handlePreviewValues)
 		r.Put("/releases/{namespace}/{name}/values", h.handleApplyValues)
+		r.Put("/releases/{namespace}/{name}/source", h.handleSetSource)
 		r.Delete("/releases/{namespace}/{name}", h.handleUninstall)
 
 		// Chart browser (local repositories)
 		r.Get("/repositories", h.handleListRepositories)
+		r.Post("/repositories", h.handleAddRepository)
 		r.Post("/repositories/{name}/update", h.handleUpdateRepository)
 
 		// Registered OCI chart sources (the OCI analog of `helm repo add`) — let
@@ -139,6 +143,57 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Get("/artifacthub/charts/{repo}/{chart}", h.handleArtifactHubChart)
 		r.Get("/artifacthub/charts/{repo}/{chart}/{version}", h.handleArtifactHubChartVersion)
 	})
+}
+
+func (h *Handlers) handleSourceStatus(w http.ResponseWriter, r *http.Request) {
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
+	var status *ChartSourceStatus
+	var err error
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		status, err = client.SourceStatusAsUser(namespace, name, user.Username, user.Groups)
+	} else {
+		status, err = client.SourceStatus(namespace, name)
+	}
+	if err != nil {
+		log.Printf("[helm] source-status %q/%q failed: %v", namespace, name, err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, status)
+}
+
+func (h *Handlers) handleSetSource(w http.ResponseWriter, r *http.Request) {
+	if !requireCloudRole(w, r, auth.RoleMember, "associate a Helm chart source") || !requireHelmWrite(w, r) {
+		return
+	}
+	var req SetChartSourceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
+	selected := ChartSourceCandidate{Type: req.Type, Reference: req.Reference, URL: req.URL}
+	var err error
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		err = client.SetSourceAsUser(namespace, name, selected, user.Username, user.Groups)
+	} else {
+		err = client.SetSource(namespace, name, selected)
+	}
+	if err != nil {
+		writeChartSourceOperationError(w, err, "associate-source", namespace, name)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "success"})
 }
 
 // handleListReleases returns all Helm releases
@@ -931,6 +986,73 @@ func (h *Handlers) handleListRepositories(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, repos)
+}
+
+func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
+	if !requireCloudRole(w, r, auth.RoleMember, "configure and associate a Helm chart source") || !requireHelmWrite(w, r) {
+		return
+	}
+	if h.ConfigWriteAllowed != nil && !h.ConfigWriteAllowed(w, r) {
+		return
+	}
+	var req AddRepositoryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if (req.Namespace == "") != (req.ReleaseName == "") {
+		writeError(w, http.StatusBadRequest, "namespace and releaseName must be supplied together")
+		return
+	}
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+	name, err := client.ensureClassicRepository(req.URL, req.Name)
+	if err != nil {
+		writeChartSourceOperationError(w, err, "add-repository", req.Namespace, req.ReleaseName)
+		return
+	}
+	canonicalURL, err := canonicalClassicRepositoryURL(req.URL)
+	if err != nil {
+		writeChartSourceOperationError(w, err, "add-repository", req.Namespace, req.ReleaseName)
+		return
+	}
+	if req.Namespace != "" {
+		selected := ChartSourceCandidate{Type: "repository", Reference: name, URL: canonicalURL}
+		if user := auth.UserFromContext(r.Context()); user != nil {
+			err = client.SetSourceAsUser(req.Namespace, req.ReleaseName, selected, user.Username, user.Groups)
+		} else {
+			err = client.SetSource(req.Namespace, req.ReleaseName, selected)
+		}
+		if err != nil {
+			writeChartSourceOperationError(w, err, "associate-repository", req.Namespace, req.ReleaseName)
+			return
+		}
+	}
+	writeJSON(w, map[string]string{"status": "success", "name": name})
+}
+
+func chartSourceErrorStatus(err error) int {
+	switch {
+	case errors.Is(err, driver.ErrReleaseNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, errRepositoryConflict):
+		return http.StatusConflict
+	case errors.Is(err, errInvalidChartSource), errors.Is(err, errInvalidRepositoryRequest):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+func writeChartSourceOperationError(w http.ResponseWriter, err error, action, namespace, releaseName string) {
+	status := chartSourceErrorStatus(err)
+	if status >= 500 {
+		log.Printf("[helm] %s %q/%q failed: %v", action, namespace, releaseName, err)
+	}
+	writeError(w, status, err.Error())
 }
 
 // handleUpdateRepository updates the index for a specific repository.

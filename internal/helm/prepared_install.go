@@ -120,6 +120,13 @@ func (c *Client) PrepareFreshInstall(ctx context.Context, req *InstallRequest, m
 		return nil, err
 	}
 	request.Version = exactVersion
+	request.resolvedSource, err = c.installChartSource(&request)
+	if err != nil {
+		return nil, fmt.Errorf("record chart source: %w", err)
+	}
+	if err := validateChartSourceCandidate(request.resolvedSource); err != nil {
+		return nil, err
+	}
 	dryRun, err := runServerDryRun(ctx, actionConfig, &request, loaded)
 	if err != nil {
 		return nil, fmt.Errorf("server dry-run: %w", err)
@@ -193,6 +200,7 @@ func (p *PreparedInstall) Install(ctx context.Context, values map[string]any) (*
 	install.CreateNamespace = request.CreateNamespace
 	install.Timeout = 120 * time.Second
 	install.Version = p.version
+	install.Labels = chartSourceLabels(request.resolvedSource)
 	// action.Install.RunWithContext returns on cancellation while Helm continues
 	// mutating the cluster in a background goroutine. That is unsafe here because
 	// the caller would interpret the return as failure and clean up its token

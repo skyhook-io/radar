@@ -3,6 +3,8 @@ package helm
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,8 +12,62 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/auth"
+	"helm.sh/helm/v3/pkg/storage/driver"
 )
+
+func TestChartSourceRoutesAndWriteAuthorization(t *testing.T) {
+	old := globalClient
+	globalClient = nil
+	defer func() { globalClient = old }()
+	router := chi.NewRouter()
+	NewHandlers(nil).RegisterRoutes(router)
+
+	get := httptest.NewRequest(http.MethodGet, "/helm/releases/default/example/source", nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, get)
+	if getRec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET source status = %d, want registered route status %d", getRec.Code, http.StatusServiceUnavailable)
+	}
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPut, "/helm/releases/default/example/source", `{"type":"repository","reference":"repo","url":"https://example.test"}`},
+		{http.MethodPost, "/helm/repositories", `{"name":"repo","url":"https://example.test"}`},
+	} {
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+		req = req.WithContext(auth.ContextWithUser(req.Context(), &auth.User{Username: "viewer", Groups: []string{"radar:viewer"}}))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s = %d, want role-gated 403", tc.method, tc.path, rec.Code)
+		}
+	}
+}
+
+func TestChartSourceErrorStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "invalid source", err: fmt.Errorf("%w: bad selection", errInvalidChartSource), want: http.StatusBadRequest},
+		{name: "invalid repository", err: fmt.Errorf("%w: bad URL", errInvalidRepositoryRequest), want: http.StatusBadRequest},
+		{name: "alias conflict", err: fmt.Errorf("%w: alias owned", errRepositoryConflict), want: http.StatusConflict},
+		{name: "missing release", err: fmt.Errorf("get release: %w", driver.ErrReleaseNotFound), want: http.StatusNotFound},
+		{name: "storage failure", err: errors.New("storage unavailable"), want: http.StatusInternalServerError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := chartSourceErrorStatus(tc.err); got != tc.want {
+				t.Fatalf("chartSourceErrorStatus(%v) = %d, want %d", tc.err, got, tc.want)
+			}
+		})
+	}
+}
 
 // TestRequireCloudRole exercises the role gate without standing up a
 // Helm client — the gate runs first, so we never hit the client. This

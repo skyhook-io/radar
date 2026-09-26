@@ -38,6 +38,10 @@ interface HelmReleaseDrawerProps {
   rightInset?: number
 }
 
+export function effectiveHelmStorageNamespace(release: SelectedHelmRelease): string {
+  return release.storageNamespace || release.namespace
+}
+
 type TabId = 'overview' | 'history' | 'manifest' | 'values' | 'resources' | 'hooks'
 
 interface UpgradePreviewRequest {
@@ -52,7 +56,7 @@ interface ParsedUpgradeValues {
 }
 
 type UpgradeSourceIssue = NonNullable<UpgradeInfo['sourceIssue']>
-type ActionableUpgradeSourceIssue = Exclude<UpgradeSourceIssue, 'ambiguous_repository'>
+type ActionableUpgradeSourceIssue = UpgradeSourceIssue
 
 function getUpgradeSourceIssue(upgradeInfo: UpgradeInfo): UpgradeSourceIssue | undefined {
   return upgradeInfo.sourceIssue
@@ -64,6 +68,10 @@ function getUpgradeSourceIssueLabel(issue: UpgradeSourceIssue) {
       return 'upgrade source blocked'
     case 'ambiguous_repository':
       return 'upgrade source ambiguous'
+    case 'ambiguous_source':
+      return 'upgrade source ambiguous'
+    case 'source_unavailable':
+      return 'recorded source unavailable'
     case 'untracked':
       return 'upgrade source not tracked'
   }
@@ -78,6 +86,10 @@ function getUpgradeSourceIssueTooltip(issue: UpgradeSourceIssue, error: string |
       return 'A configured Helm repo index failed. Fix or refresh that repo, or register an OCI prefix if this chart came from OCI.'
     case 'ambiguous_repository':
       return 'Multiple configured Helm repos match this chart. Fix the repo list or source metadata so Radar can identify one source.'
+    case 'ambiguous_source':
+      return 'Multiple configured sources match this chart. Select the original source explicitly.'
+    case 'source_unavailable':
+      return 'The recorded source is not configured or cannot verify the installed chart version on this Radar installation.'
     case 'untracked':
       return "Radar can't tell where this chart was installed from. Register an OCI chart source to track upgrades."
   }
@@ -97,7 +109,7 @@ function parseUpgradeValuesYaml(raw: string): ParsedUpgradeValues {
 }
 
 export function isUpgradeSourceIssueActionable(issue: UpgradeInfo['sourceIssue']): issue is ActionableUpgradeSourceIssue {
-  return Boolean(issue && issue !== 'ambiguous_repository')
+  return Boolean(issue)
 }
 
 const MIN_WIDTH = 500
@@ -136,7 +148,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   // transient error state under the role-gated panel.
   const { canAtLeast } = useCloudRole()
   const canViewSensitive = canAtLeast('member')
-  const helmNamespace = release.storageNamespace || release.namespace
+  const helmNamespace = effectiveHelmStorageNamespace(release)
 
   const { data: releaseDetail, isLoading, error: releaseError, refetch: refetchRelease } = useHelmRelease(
     helmNamespace,
@@ -999,6 +1011,8 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         open={showTrackSource}
         onClose={() => setShowTrackSource(false)}
         chartName={releaseDetail?.chart}
+        namespace={helmNamespace}
+        releaseName={release.name}
         sourceIssue={upgradeSourceIssue}
         sourceError={upgradeInfo?.error}
       />

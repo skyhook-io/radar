@@ -203,6 +203,11 @@ func runInstallOrUpgrade(actionConfig *action.Configuration, req *InstallRequest
 		upgrade.Timeout = 120 * time.Second
 		upgrade.MaxHistory = 10
 		upgrade.Version = req.Version
+		if previous, err := actionConfig.Releases.Last(req.ReleaseName); err == nil {
+			upgrade.Labels = chartSourceUpgradeLabels(previous.Labels, req.resolvedSource)
+		} else {
+			return nil, fmt.Errorf("load previous release labels: %w", err)
+		}
 		// action.Upgrade has no CreateNamespace; reaching this branch implies a
 		// prior release record exists, so the namespace was created earlier. If
 		// it has been deleted manually since, the user must recreate it.
@@ -215,6 +220,7 @@ func runInstallOrUpgrade(actionConfig *action.Configuration, req *InstallRequest
 	install.Timeout = 120 * time.Second
 	install.Version = req.Version
 	install.Replace = mode == installReplace
+	install.Labels = chartSourceLabels(req.resolvedSource)
 	return install.Run(ch, req.Values)
 }
 

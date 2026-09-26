@@ -23,6 +23,8 @@ func TestNormalizeOCIPrefix(t *testing.T) {
 		{name: "scheme only", in: "oci://", wantErr: true},
 		{name: "metadata IP blocked", in: "oci://169.254.169.254/charts", wantErr: true},
 		{name: "link-local with port blocked", in: "oci://169.254.0.1:5000/charts", wantErr: true},
+		{name: "IPv6 link-local blocked", in: "oci://[fe80::1]/charts", wantErr: true},
+		{name: "IPv6 link-local with port blocked", in: "oci://[fe80::1]:5000/charts", wantErr: true},
 		{name: "loopback allowed (local dev registry)", in: "oci://localhost:5000/charts", want: "oci://localhost:5000/charts"},
 		{name: "private IP allowed (local dev registry)", in: "oci://10.0.0.5:5000/charts", want: "oci://10.0.0.5:5000/charts"},
 	}

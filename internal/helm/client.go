@@ -1932,6 +1932,13 @@ func (c *Client) checkForUpgrade(namespace, name, username string, groups []stri
 	info := &UpgradeInfo{
 		CurrentVersion: currentVersion,
 	}
+	if recorded, ok := chartSourceFromRelease(rel); ok {
+		if c.applyRecordedUpgrade(info, *recorded, chartName, currentVersion, nil) {
+			return info, nil
+		}
+		markUpgradeSourceIssue(info, UpgradeSourceIssueUnavailable, "the recorded chart source is not configured or does not publish the installed version")
+		return info, nil
+	}
 
 	// Load repository file. A missing/empty/unreadable repo config is not fatal —
 	// the user may rely solely on registered OCI sources, so we fall through to the
@@ -2075,6 +2082,9 @@ func (c *Client) availableVersions(namespace, name, username string, groups []st
 		return nil, fmt.Errorf("failed to get release: %w", err)
 	}
 	chartName := rel.Chart.Metadata.Name
+	if recorded, ok := chartSourceFromRelease(rel); ok {
+		return capVersions(c.candidateVersions(*recorded, chartName, nil)), nil
+	}
 
 	// Resolve the classic repo the same way the upgrade check does, then return
 	// that repo's full version list — never a union across repos, which could mix
@@ -2776,7 +2786,13 @@ func (c *Client) loadTargetChart(actionConfig *action.Configuration, rel *releas
 	chartName := rel.Chart.Metadata.Name
 	sendProgress("resolving", fmt.Sprintf("Finding %s version %s in repositories...", chartName, targetVersion), "")
 
-	chartPath, resolvedRepo, err := c.resolveUpgradeChartPath(chartName, targetVersion, repositoryName, chartSourceHosts(rel.Chart.Metadata.Home, rel.Chart.Metadata.Sources))
+	var chartPath, resolvedRepo string
+	var err error
+	if recorded, ok := chartSourceFromRelease(rel); ok {
+		chartPath, resolvedRepo, err = c.resolveRecordedChartPath(actionConfig, *recorded, chartName, targetVersion)
+	} else {
+		chartPath, resolvedRepo, err = c.resolveUpgradeChartPath(chartName, targetVersion, repositoryName, chartSourceHosts(rel.Chart.Metadata.Home, rel.Chart.Metadata.Sources))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -3725,6 +3741,14 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 	if err != nil {
 		return nil, err
 	}
+	resolvedSource, err := c.installChartSource(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to record chart source: %w", err)
+	}
+	if err := validateChartSourceCandidate(resolvedSource); err != nil {
+		return nil, err
+	}
+	req.resolvedSource = resolvedSource
 
 	cp, err := c.locateChartPath(actionConfig, chartURL, resolvedVersion)
 	if err != nil {
@@ -3912,6 +3936,14 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 	if err != nil {
 		return nil, err
 	}
+	resolvedSource, err := c.installChartSource(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to record chart source: %w", err)
+	}
+	if err := validateChartSourceCandidate(resolvedSource); err != nil {
+		return nil, err
+	}
+	req.resolvedSource = resolvedSource
 
 	sendProgress("downloading", fmt.Sprintf("Downloading chart %s-%s...", req.ChartName, req.Version), chartURL)
 
