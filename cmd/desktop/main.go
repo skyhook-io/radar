@@ -261,9 +261,6 @@ func main() {
 
 	// Write port file so MCP clients can discover the running server
 	app.WriteMCPPortFile(srv.ActualAddr(), srv.BasePath())
-	if desktopPortRemembered {
-		recordDesktopPort(desktopPortPath(), srv.ActualPort())
-	}
 
 	// Initialize cluster in background (browser will see progress via SSE)
 	if k8sInitErr == nil {
@@ -276,6 +273,11 @@ func main() {
 	windowTitle := formatWindowTitle(k8s.GetContextName())
 
 	desktopApp := NewDesktopApp(srv, timelineStoreCfg)
+	if desktopPortRemembered {
+		desktopApp.onWindowReady = func() {
+			go rememberDesktopPort(desktopPortPath(), desktopPort, srv.ActualPort(), radarServingOn)
+		}
+	}
 	// macOS only. Wails maps this to `[NSApp hide:]`, which leaves the dock icon
 	// in place, so a dock click or Cmd+Tab brings the window back. The other
 	// platforms have no such affordance: GTK hides the window on delete-event and

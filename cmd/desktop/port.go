@@ -1,11 +1,16 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The webview's origin includes the server's port, and browser storage is
@@ -24,7 +29,6 @@ func desktopPortPath() string {
 	return filepath.Join(home, ".radar", desktopPortFile)
 }
 
-// lastDesktopPort returns the port recorded by the previous launch, or 0.
 func lastDesktopPort(path string) int {
 	if path == "" {
 		return 0
@@ -38,6 +42,35 @@ func lastDesktopPort(path string) int {
 		return 0
 	}
 	return port
+}
+
+// rememberDesktopPort runs once the window is up, so a launch that fails
+// before then records nothing. A launch that fell back because another Radar
+// holds the remembered port (a second Desktop window) keeps the remembered
+// one; a launch that fell back because something else holds it moves on, or
+// every later launch would fall back too.
+func rememberDesktopPort(path string, remembered, actual int, radarServing func(port int) bool) {
+	if remembered != 0 && actual != remembered && radarServing(remembered) {
+		return
+	}
+	recordDesktopPort(path, actual)
+}
+
+func radarServingOn(port int) bool {
+	client := http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/capabilities", port))
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	var caps struct {
+		Deployment *struct {
+			Mode string `json:"mode"`
+		} `json:"deployment"`
+	}
+	return resp.StatusCode == http.StatusOK &&
+		json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&caps) == nil &&
+		caps.Deployment != nil
 }
 
 func recordDesktopPort(path string, port int) {
