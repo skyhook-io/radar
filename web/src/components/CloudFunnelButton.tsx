@@ -60,7 +60,7 @@ const FALLBACK_APP_URL = 'https://app.radarhq.io'
 const DEFAULT_ASSURANCES = [
   'Secure outbound-only tunnel',
   'Disconnect and delete your data anytime',
-  'SOC 2 Type II · SSO, SCIM, audit logs',
+  'SOC 2 Type II · SSO & SCIM on Enterprise',
   '3 clusters free, no card required',
 ]
 // Other OSS surfaces (a GitOps app that deploys to another cluster, say)
