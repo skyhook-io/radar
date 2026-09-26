@@ -711,3 +711,15 @@ func TestRefusedReportIsDroppedNotRetried(t *testing.T) {
 		t.Fatalf("a network failure should keep the counts for retry: %v", st.Preview.Views)
 	}
 }
+
+func TestReleaseVersionReportedWithoutBuildMetadata(t *testing.T) {
+	prev := version.Current
+	t.Cleanup(func() { version.SetCurrent(prev) })
+	h := newHarness(t, nil, false)
+	for in, want := range map[string]string{"1.15.0": "1.15.0", "1.15.0-RC.1": "1.15.0-rc.1", "1.15.0-rc.1+build.7": "1.15.0-rc.1"} {
+		version.SetCurrent(in)
+		if got := h.c.buildReport(pending{}).Version; got != want {
+			t.Errorf("version %q reported as %q, want %q", in, got, want)
+		}
+	}
+}

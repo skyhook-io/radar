@@ -155,8 +155,9 @@ type Options struct {
 var ErrManaged = errors.New("usage data is managed by this installation's configuration")
 
 // errReportRefused means the receiver looked at the report and won't take
-// it. Sending the same counts again would be refused again, so they are
-// dropped rather than kept and retried every day.
+// it (400 or 413). Sending the same counts again would be refused again, so
+// they are dropped rather than kept and retried every day. Any other status,
+// such as a 404 from a host not serving the receiver yet, is retried.
 var errReportRefused = errors.New("usage report refused")
 
 func doNotTrack(env func(string) string) bool {
@@ -732,8 +733,7 @@ func postReport(ctx context.Context, r Report) error {
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return nil
-	case resp.StatusCode >= 400 && resp.StatusCode < 500 &&
-		resp.StatusCode != http.StatusRequestTimeout && resp.StatusCode != http.StatusTooManyRequests:
+	case resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge:
 		return fmt.Errorf("%w: usage endpoint returned %d", errReportRefused, resp.StatusCode)
 	default:
 		return fmt.Errorf("usage endpoint returned %d", resp.StatusCode)

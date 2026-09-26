@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/version"
@@ -199,9 +200,10 @@ func (c *Collector) buildReport(p pending) Report {
 	if start.IsZero() {
 		start = end
 	}
-	ver := version.Current
 	// A custom build's version string is whatever its builder chose and can
-	// name a company or pipeline, so only release versions are reported.
+	// name a company or pipeline, so only release versions are reported, and
+	// without build metadata ("+..."), which can carry the same.
+	ver, _, _ := strings.Cut(strings.ToLower(version.Current), "+")
 	if version.BuildChannelName() == "custom" {
 		ver = "custom"
 	}
