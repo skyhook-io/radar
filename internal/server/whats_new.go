@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -12,14 +13,14 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 
-	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/version"
 )
 
-// Which release notes the user has already seen. A local Radar keeps this in
-// ~/.radar because its browser origin is not stable — Desktop binds a random
-// port on every launch, so browser storage would read each upgrade as a fresh
-// install. An in-cluster Radar serves many people, so each browser keeps its own.
+// Which release notes the user has already seen. A personal install (the CLI or
+// Desktop, no auth) keeps this in ~/.radar because its browser origin is not
+// stable — Desktop binds a random port on every launch, so browser storage would
+// read each upgrade as a fresh install. A shared install (in-cluster, or any
+// install with auth on) serves many people, so each browser keeps its own.
 
 const whatsNewFile = "whats-new.json"
 
@@ -46,13 +47,14 @@ type whatsNewSeenRequest struct {
 	Version string `json:"version"`
 }
 
-var whatsNewUsesServerStorage = func() bool {
-	return deploymentMode() == k8s.DeploymentModeLocal
+// Same split as preference storage in handleGetSettings.
+var whatsNewUsesServerStorage = func(s *Server) bool {
+	return s.configManagement() == "local"
 }
 
 func (s *Server) handleGetWhatsNew(w http.ResponseWriter, r *http.Request) {
 	resp := whatsNewResponse{CurrentVersion: version.Current, Storage: "browser"}
-	if whatsNewUsesServerStorage() {
+	if whatsNewUsesServerStorage(s) {
 		resp.Storage = "server"
 		if state, ok := readWhatsNewState(); ok {
 			resp.SeenVersion = &state.SeenVersion
@@ -63,7 +65,7 @@ func (s *Server) handleGetWhatsNew(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMarkWhatsNewSeen(w http.ResponseWriter, r *http.Request) {
-	if !whatsNewUsesServerStorage() {
+	if !whatsNewUsesServerStorage(s) {
 		s.writeError(w, http.StatusConflict, "What's New state is kept in the browser on this install")
 		return
 	}
@@ -124,6 +126,9 @@ func radarDirHadState() bool {
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			log.Printf("[whats-new] Failed to read %s: %v", dir, err)
+		}
 		return false
 	}
 	for _, e := range entries {
@@ -141,12 +146,20 @@ func readWhatsNewState() (whatsNewState, bool) {
 	if err != nil {
 		return whatsNewState{}, false
 	}
-	data, err := os.ReadFile(filepath.Join(dir, whatsNewFile))
+	path := filepath.Join(dir, whatsNewFile)
+	data, err := os.ReadFile(path)
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			log.Printf("[whats-new] Failed to read %s: %v", path, err)
+		}
 		return whatsNewState{}, false
 	}
 	var state whatsNewState
-	if err := json.Unmarshal(data, &state); err != nil || state.SeenVersion == "" {
+	if err := json.Unmarshal(data, &state); err != nil {
+		log.Printf("[whats-new] Ignoring unreadable %s: %v", path, err)
+		return whatsNewState{}, false
+	}
+	if state.SeenVersion == "" {
 		return whatsNewState{}, false
 	}
 	return state, true
@@ -164,10 +177,21 @@ func writeWhatsNewState(state whatsNewState) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(dir, whatsNewFile)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	// A unique temp file: two Radars can share ~/.radar.
+	tmp, err := os.CreateTemp(dir, whatsNewFile+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), filepath.Join(dir, whatsNewFile))
 }

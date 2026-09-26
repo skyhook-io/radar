@@ -33,7 +33,6 @@ import { AlertTriangle, CheckCircle, Loader2, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { getVersionUpdateStatus } from '../../utils/version'
 import { RadarVersionLine } from './RadarVersionLine'
-import { latestReleaseNotesFor } from '../whats-new/releaseNotes'
 
 interface HomeViewProps {
   namespaces: string[]
@@ -53,7 +52,7 @@ interface HomeViewProps {
   onNavigateToUpgradeImpact?: () => void
   onNavigateToHelmRelease?: (namespace: string, release: string) => void
   onNavigateToManagerPath?: (path: string) => void
-  // Omitted when the host does not mount the What's New dialog.
+  // Present only when release notes exist for this version.
   onShowWhatsNew?: () => void
 }
 
@@ -78,7 +77,6 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
     && !!versionInfo?.updateAvailable
     && getVersionUpdateStatus(versionInfo.currentVersion, versionInfo.latestVersion).tier !== 'none'
   const { data: installationManager, isLoading: installationManagerLoading } = useCloudConnectSelf(showHomeUpgrade)
-  const hasWhatsNew = !!onShowWhatsNew && !!latestReleaseNotesFor(versionInfo?.currentVersion)
 
   // SSE is cluster-wide on small/medium clusters; the picker only narrows the
   // dashboard summary, so re-apply the filter here or the legend disagrees.
@@ -146,7 +144,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
             <RadarVersionLine
               version={versionInfo}
               showUpgrade={deploymentMode === 'in-cluster'}
-              onShowWhatsNew={hasWhatsNew ? onShowWhatsNew : undefined}
+              onShowWhatsNew={onShowWhatsNew}
               manager={installationManager}
               managerLoading={installationManagerLoading}
               onNavigateToHelmRelease={onNavigateToHelmRelease}

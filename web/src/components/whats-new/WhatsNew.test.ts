@@ -17,7 +17,7 @@ const show = (current: string, lastSeen: string | null, prior = true) =>
   whatsNewToShow(current, lastSeen, prior, catalog)?.version ?? null
 
 describe('whatsNewToShow', () => {
-  it('shows once after upgrading to a release with notes', () => {
+  it('shows when the notes are newer than the last version seen', () => {
     expect(show('v2.0.0', 'v1.15.0')).toBe('v2.0.0')
     expect(show('v2.0.0', 'v2.0.0')).toBeNull()
     expect(show('2.0.0', 'v2.0.0')).toBeNull()
@@ -38,6 +38,10 @@ describe('whatsNewToShow', () => {
     expect(show('v2.0.0', null, true)).toBe('v2.0.0')
   })
 
+  it('treats a record that is not a version as an install with nothing seen', () => {
+    expect(show('v2.0.0', 'vdev', false)).toBe('v2.0.0')
+  })
+
   it('stays closed when no notes exist at or below the running version', () => {
     expect(show('v1.14.9', 'v1.14.0')).toBeNull()
     expect(show('dev', 'v1.14.1')).toBeNull()
@@ -47,9 +51,15 @@ describe('whatsNewToShow', () => {
 describe('nextSeenVersion', () => {
   it('only moves forward', () => {
     expect(nextSeenVersion('v2.0.0', 'v1.15.0')).toBe('v2.0.0')
-    expect(nextSeenVersion('1.15.0', 'v2.0.0')).toBe('v2.0.0')
     expect(nextSeenVersion('2.0.1', null)).toBe('v2.0.1')
-    expect(nextSeenVersion('dev', 'v2.0.0')).toBe('v2.0.0')
+    expect(nextSeenVersion('1.15.0', 'v2.0.0')).toBeNull()
+    expect(nextSeenVersion('v2.0.0', 'v2.0.0')).toBeNull()
+  })
+
+  it('never records a development build, and replaces a record that is not a version', () => {
+    expect(nextSeenVersion('dev', null)).toBeNull()
+    expect(nextSeenVersion('dev', 'v2.0.0')).toBeNull()
+    expect(nextSeenVersion('v2.0.0', 'vdev')).toBe('v2.0.0')
   })
 })
 

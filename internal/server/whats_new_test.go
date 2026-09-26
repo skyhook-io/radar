@@ -13,7 +13,7 @@ import (
 func useWhatsNewStorage(t *testing.T, server bool) {
 	t.Helper()
 	orig := whatsNewUsesServerStorage
-	whatsNewUsesServerStorage = func() bool { return server }
+	whatsNewUsesServerStorage = func(*Server) bool { return server }
 	t.Cleanup(func() { whatsNewUsesServerStorage = orig })
 }
 
@@ -49,6 +49,9 @@ func TestWhatsNewRecordsSeenVersionUnderRadarDir(t *testing.T) {
 	if resp.SeenVersion != nil {
 		t.Fatalf("seenVersion = %q before anything was recorded, want absent", *resp.SeenVersion)
 	}
+	if resp.PriorInstall != whatsNewPriorInstall {
+		t.Fatalf("priorInstall = %v, want the startup snapshot %v", resp.PriorInstall, whatsNewPriorInstall)
+	}
 
 	if w := markWhatsNewSeen(`{"version":"v1.15.0"}`); w.Code != http.StatusNoContent {
 		t.Fatalf("POST status = %d, body %s", w.Code, w.Body.String())
@@ -77,6 +80,32 @@ func TestWhatsNewSeenVersionOnlyMovesForward(t *testing.T) {
 	}
 	if got := getWhatsNew(t).SeenVersion; got == nil || *got != "v1.16.0" {
 		t.Fatalf("seenVersion = %v, want v1.16.0", got)
+	}
+}
+
+func TestWhatsNewReplacesAnUnreadableRecord(t *testing.T) {
+	useWhatsNewStorage(t, true)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".radar")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, whatsNewFile), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := getWhatsNew(t).SeenVersion; got != nil {
+		t.Fatalf("seenVersion = %q from a corrupt file, want absent", *got)
+	}
+	if w := markWhatsNewSeen(`{"version":"v1.15.0"}`); w.Code != http.StatusNoContent {
+		t.Fatalf("POST status = %d", w.Code)
+	}
+	if got := getWhatsNew(t).SeenVersion; got == nil || *got != "v1.15.0" {
+		t.Fatalf("seenVersion = %v, want the corrupt record replaced", got)
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(dir, "*.tmp"))
+	if len(leftovers) != 0 {
+		t.Fatalf("temp files left behind: %v", leftovers)
 	}
 }
 

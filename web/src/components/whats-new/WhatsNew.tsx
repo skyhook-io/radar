@@ -27,16 +27,24 @@ export function whatsNewToShow(
 ): ReleaseNotes | null {
   const notes = latestReleaseNotesFor(currentVersion, catalog)
   if (!notes) return null
-  if (lastSeen === null) return priorInstall ? notes : null
-  const newer = compareVersions(notes.version, lastSeen)
-  return newer !== null && newer > 0 ? notes : null
+  // A record that isn't a version (a development build's) proves an install
+  // but says nothing about which notes were seen.
+  const newer = lastSeen === null ? null : compareVersions(notes.version, lastSeen)
+  if (newer === null) return lastSeen !== null || priorInstall ? notes : null
+  return newer > 0 ? notes : null
 }
 
-/** The seen record only moves forward, so a downgrade doesn't replay notes on the way back up. */
-export function nextSeenVersion(currentVersion: string, lastSeen: string | null): string {
-  if (lastSeen === null) return normalize(currentVersion)
-  const cmp = compareVersions(currentVersion, lastSeen)
-  return cmp !== null && cmp > 0 ? normalize(currentVersion) : lastSeen
+/**
+ * The version to record once the running version's notes are acknowledged, or
+ * null when nothing should change. It only moves forward, so a downgrade
+ * doesn't replay notes on the way back up, and a development build records
+ * nothing — a non-version record could never be compared again.
+ */
+export function nextSeenVersion(currentVersion: string, lastSeen: string | null): string | null {
+  if (compareVersions(currentVersion, currentVersion) === null) return null
+  const cmp = lastSeen === null ? null : compareVersions(currentVersion, lastSeen)
+  if (cmp !== null && cmp <= 0) return null
+  return normalize(currentVersion)
 }
 
 function normalize(version: string): string {
@@ -122,32 +130,42 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
   const [notes, setNotes] = useState<ReleaseNotes | null>(null)
   const [open, setOpen] = useState(false)
   const [previousVersion, setPreviousVersion] = useState<string | null>(null)
-  // undefined until loaded, or when nothing can be recorded.
-  const [seen, setSeen] = useState<{ lastSeen: string | null } | undefined>()
+  // In-cluster only; undefined when browser storage is unavailable.
+  const [browserLastSeen, setBrowserLastSeen] = useState(readBrowserLastSeen)
   const decidedRef = useRef(false)
   const { pathname } = useLocation()
   const titleId = useId()
 
   const currentVersion = state?.currentVersion
   const previewParam = searchParams.get(PREVIEW_PARAM)
+  // One authority per install: the server record for a personal install, this
+  // browser's storage for a shared one. undefined = nothing can be recorded.
+  const lastSeen = !state ? undefined : state.storage === 'server' ? state.seenVersion ?? null : browserLastSeen
+  const priorInstall = state?.storage === 'server' ? !!state.priorInstall : HAD_PRIOR_RADAR_STATE
 
-  const readLastSeen = useCallback((s: WhatsNewState): string | null | undefined => (
-    s.storage === 'server' ? s.seenVersion ?? null : readBrowserLastSeen()
-  ), [])
+  // Another tab acknowledging the notes clears this tab's dot too.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === LAST_SEEN_KEY || e.key === null) setBrowserLastSeen(readBrowserLastSeen())
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
 
-  const recordSeen = useCallback((s: WhatsNewState) => {
-    const lastSeen = readLastSeen(s)
-    if (lastSeen === undefined) return
-    const next = nextSeenVersion(s.currentVersion, lastSeen)
-    if (next === lastSeen) return
-    setSeen({ lastSeen: next })
+  const recordSeen = useCallback((s: WhatsNewState, seen: string | null) => {
+    const next = nextSeenVersion(s.currentVersion, seen)
+    if (next === null) return
     if (s.storage === 'browser') {
       writeBrowserLastSeen(next)
+      setBrowserLastSeen(readBrowserLastSeen())
       return
     }
-    queryClient.setQueryData<WhatsNewState>(['whats-new', getApiBase()], { ...s, seenVersion: next })
-    markWhatsNewSeen(next).catch(() => { /* retried on the next close or launch */ })
-  }, [queryClient, readLastSeen])
+    // Only a confirmed write clears the dot; a failed one is retried on the next close.
+    markWhatsNewSeen(next).then(
+      () => queryClient.setQueryData<WhatsNewState>(['whats-new', getApiBase()], prev => prev && { ...prev, seenVersion: next }),
+      err => console.warn('[whats-new] Failed to record seen version', next, err),
+    )
+  }, [queryClient])
 
   useEffect(() => {
     if (previewParam === null) return
@@ -158,30 +176,25 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
     setOpen(true)
   }, [previewParam, currentVersion])
 
-  const priorInstall = state?.storage === 'server' ? !!state.priorInstall : HAD_PRIOR_RADAR_STATE
-
   useEffect(() => {
-    if (!state) return
-    const lastSeen = readLastSeen(state)
-    setSeen(lastSeen === undefined ? undefined : { lastSeen })
-    if (lastSeen === undefined || previewParam !== null || decidedRef.current) return
+    if (!state || lastSeen === undefined || previewParam !== null || decidedRef.current) return
     decidedRef.current = true
     const due = whatsNewToShow(state.currentVersion, lastSeen, priorInstall)
     // Only on Home: someone arriving on a deep link came for that page, often
     // mid-incident. Elsewhere the nav rail's unread dot carries the notes.
-    if (due && pathname === '/') {
+    if (due && (pathname === '/' || pathname === '/home')) {
       setPreviousVersion(lastSeen)
       setNotes(due)
       setOpen(true)
     } else if (!due && lastSeen === null) {
-      recordSeen(state)
+      recordSeen(state, lastSeen)
     }
   // Decided once, when the state loads; the preview param is handled above.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state?.currentVersion, state?.storage])
 
   const available = !!state && !isCloud && !!latestReleaseNotesFor(state.currentVersion)
-  const unread = available && !!seen && !!whatsNewToShow(state.currentVersion, seen.lastSeen, priorInstall)
+  const unread = available && lastSeen !== undefined && !!whatsNewToShow(state.currentVersion, lastSeen, priorInstall)
   useEffect(() => { publishStatus({ available, unread }) }, [available, unread])
   useEffect(() => () => publishStatus(NO_STATUS), [])
 
@@ -200,13 +213,13 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
   const close = useCallback(() => {
     setOpen(false)
     // A preview of another release acknowledges nothing about this one.
-    if (state && notes && notes === latestReleaseNotesFor(state.currentVersion)) recordSeen(state)
+    if (state && lastSeen !== undefined && notes && notes === latestReleaseNotesFor(state.currentVersion)) recordSeen(state, lastSeen)
     if (searchParams.has(PREVIEW_PARAM)) {
       const next = new URLSearchParams(searchParams)
       next.delete(PREVIEW_PARAM)
       setSearchParams(next, { replace: true })
     }
-  }, [state, notes, recordSeen, searchParams, setSearchParams])
+  }, [state, lastSeen, notes, recordSeen, searchParams, setSearchParams])
 
   const go = useCallback((path: string) => {
     close()

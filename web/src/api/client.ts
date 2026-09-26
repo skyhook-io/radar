@@ -1618,7 +1618,8 @@ export function useWhatsNewState(enabled: boolean) {
     queryKey: ["whats-new", getApiBase()],
     queryFn: () => fetchJSON("/whats-new"),
     enabled,
-    staleTime: Infinity,
+    // Refetched on focus, so another tab's acknowledgment clears this tab's dot.
+    staleTime: 0,
     retry: false,
   });
 }
