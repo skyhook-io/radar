@@ -52,7 +52,7 @@ type Link = (name: string, ref?: SchedulingRef) => React.ReactNode
 
 
 const evidenceCard = 'min-w-0 overflow-hidden rounded-lg border border-theme-border bg-theme-surface'
-const cardHeader = 'border-b border-theme-border bg-theme-base px-3 py-2.5'
+const cardHeader = 'border-b border-theme-border bg-theme-elevated px-3 py-2.5'
 const groupHeading = 'text-xs font-medium uppercase tracking-wider text-theme-text-secondary'
 type Gate = NonNullable<SchedulingObservation['gates']>[number]
 
