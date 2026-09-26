@@ -203,7 +203,8 @@ it('preserves producer check order and keeps operational delays visible while ze
     expect(paragraph('Requeues: 0').closest('[inert]')).not.toBeNull()
     expect(paragraph('ReservedNativeReason').closest('[inert]')).not.toBeNull()
     expect(paragraph('Readiness message').textContent).toContain('Pods ready: Unknown')
-    expect(paragraph('Eviction message').textContent).toContain('Status since')
+    expect(paragraph('Eviction message').querySelector('span.block')?.textContent).toMatch(/^Evicted · Status since .+ ago$/)
+    expect(paragraph('Eviction message').lastChild?.textContent).toBe('Eviction message')
     expect([...container.querySelectorAll('h4')].map(e => e.textContent)).toEqual(['Admission checks · 3 not ready', 'Reported disruptions · 1', 'Pod readiness · 1'])
   } finally { await act(async () => root.unmount()) }
 })
@@ -220,4 +221,10 @@ it('shows requeue eligibility without inventing a count or a leading separator',
   const html = render(response({ kueue: { phase: 'pending', requeueState: { requeueAt: '2026-09-27T00:00:00Z' } } }))
   expect(html).toContain('>Eligible again: 2026-09-27T00:00:00Z</p>')
   expect(html).not.toContain('Requeues:')
+})
+
+
+it('shows primary-condition polarity next to its transition age', () => {
+  const html = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', message: 'Insufficient quota', lastTransitionTime: '2026-09-26T00:00:00Z' } }))
+  expect(html).toContain('QuotaReserved=False since')
 })

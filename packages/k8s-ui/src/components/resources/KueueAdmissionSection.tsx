@@ -69,8 +69,7 @@ function conditionLabel(condition: SchedulingCondition): string {
 function ConditionEvidence({ condition, generation, showAge }: { condition: SchedulingCondition; generation?: number; showAge?: boolean }) {
   return <div className="space-y-1 py-3 first:pt-0 last:pb-0">
     <p className="max-w-3xl whitespace-pre-wrap break-words text-theme-text-secondary">
-      <span className="block font-medium text-theme-text-primary">{conditionLabel(condition)}</span>
-      {showAge && condition.lastTransitionTime && <span className="text-xs text-theme-text-tertiary"> · Status since {formatRelativeAgeTime(condition.lastTransitionTime)}</span>}
+      <span className="block font-medium text-theme-text-primary">{conditionLabel(condition)}{showAge && condition.lastTransitionTime && <span className="font-normal text-xs text-theme-text-tertiary"> · Status since {formatRelativeAgeTime(condition.lastTransitionTime)}</span>}</span>
       {condition.message || condition.reason || `${condition.type}=${condition.status}`}
     </p>
     {isKueueConditionStale(condition, generation) && <p className="text-xs text-warning-text">Stale evidence: condition generation {condition.observedGeneration}; Workload generation {generation}.</p>}
@@ -79,10 +78,10 @@ function ConditionEvidence({ condition, generation, showAge }: { condition: Sche
 
 function GateEvidence({ gate, link }: { gate: Gate; link: Link }) {
   const retryMetadata = [gate.retryCount != null && gate.retryCount > 0 ? `Retries: ${gate.retryCount}` : null, gate.requeueAfterSeconds != null && gate.requeueAfterSeconds > 0 ? `Requeue delay: ${gate.requeueAfterSeconds}s` : null].filter(Boolean)
-  return <div className="space-y-2 p-3">
+  return <div className="space-y-2 py-3 first:pt-0 last:pb-0">
     <div className="grid grid-cols-[minmax(0,1fr)_6rem] items-start gap-2">
       <span className="min-w-0 break-words font-medium [&_button]:text-left">{link(gate.name, gate.ref)}</span>
-      <Badge className="justify-self-start" severity={gate.kind === 'preemption_gate' ? 'neutral' : admissionCheckSeverity(gate.nativeState)}>{gate.nativeState || 'Unknown'}</Badge>
+      <Badge className="justify-self-end" severity={gate.kind === 'preemption_gate' ? 'neutral' : admissionCheckSeverity(gate.nativeState)}>{gate.nativeState || 'Unknown'}</Badge>
     </div>
     {gate.message && <p className="max-w-3xl whitespace-pre-wrap break-words">{gate.message}</p>}
     {retryMetadata.length > 0 && <p className="text-xs text-theme-text-secondary">{retryMetadata.join(' · ')}</p>}
@@ -113,7 +112,7 @@ function AdmissionObservation({ observation, identity, generation, deleting, pre
       : observation.decision === 'satisfied' ? 'success' : 'warning'
   const qualifier = observation.decision === 'held' ? 'Admission held' : observation.decision === 'unknown' ? 'Admission unknown' : null
   return <div className="@container/admission space-y-4">
-    <div className={split ? 'grid max-w-[88rem] min-w-0 gap-5 @min-[1024px]/admission:grid-cols-[minmax(0,5fr)_minmax(0,3fr)]' : 'space-y-5'}>
+    <div className={split ? 'grid max-w-[88rem] min-w-0 gap-5 @min-[1024px]/admission:grid-cols-[minmax(0,5fr)_minmax(0,3fr)]' : 'max-w-4xl space-y-5'}>
     <div className="min-w-0 space-y-4">
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -124,25 +123,27 @@ function AdmissionObservation({ observation, identity, generation, deleting, pre
         {deleting && <Badge severity="alert">Deleting</Badge>}
         {kueue?.outcome && <span>Outcome: {kueue.outcome}</span>}
       </div>
-      <div className="space-y-2 border-l-2 border-theme-border-light bg-theme-base px-3 py-2.5">
+      <div className="space-y-2 border-l-2 border-accent bg-theme-base px-3 py-2.5">
         {stale && <p className="text-xs text-warning-text">Stale evidence: condition generation {condition!.observedGeneration}; Workload generation {observation.subjectGeneration}.</p>}
         {condition ? <p className="max-w-3xl whitespace-pre-wrap break-words">{condition.message || <><code>{condition.reason}</code>{condition.reason && ' · '}{condition.type}={condition.status}</>}</p> : <p className="text-theme-text-secondary">No primary admission condition reported.</p>}
-        {condition?.lastTransitionTime && <p className="text-xs text-theme-text-tertiary">{condition.type} status since {formatRelativeAgeTime(condition.lastTransitionTime)}</p>}
-      </div>
+        {condition?.lastTransitionTime && <p className="text-xs text-theme-text-tertiary">{condition.type}={condition.status} since {formatRelativeAgeTime(condition.lastTransitionTime)}</p>}
+      <div className="empty:hidden flex flex-wrap gap-x-5 gap-y-2 border-t border-theme-border pt-2 text-xs text-theme-text-secondary">
       {(!!observation.queues?.length || kueue?.concurrentAdmission) && <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-theme-text-secondary">
         {observation.queues?.map((queue, index) => <span key={index}>{queue.roles.join(' + ').replace(/^./, (letter) => letter.toUpperCase())} queue: {link(queue.name, queue.ref)}</span>)}
         {kueue?.concurrentAdmission && <span>Parent Workload: {link(kueue.concurrentAdmission.parentName, kueue.concurrentAdmission.parentRef)}</span>}
       </div>}
       {kueue?.requeueState && ((kueue.requeueState.count ?? 0) > 0 || kueue.requeueState.requeueAt) && <p className="text-xs text-theme-text-secondary">{kueue.requeueState.count != null && `Requeues: ${kueue.requeueState.count}`}{kueue.requeueState.requeueAt && `${kueue.requeueState.count != null ? ' · ' : ''}Eligible again: ${kueue.requeueState.requeueAt}`}</p>}
       {(kueue?.phase === 'admitted' || kueue?.phase === 'quota_reserved') && <p className="text-xs text-theme-text-tertiary">Admission status; execution is shown separately.</p>}
+      </div>
+      </div>
     </div>
     {pendingChecks.length > 0 && <section aria-label="Admission checks" className="overflow-hidden rounded-lg border border-theme-border bg-theme-base">
       <h4 className={`${groupHeading} border-b border-theme-border px-3 py-2.5`}>Admission checks · {pendingChecks.length} not ready</h4>
-      <div className="divide-y divide-theme-border">{pendingChecks.map((gate, index) => <GateEvidence key={index} gate={gate} link={link} />)}</div>
+      <div className="divide-y divide-theme-border [&>div]:p-3">{pendingChecks.map((gate, index) => <GateEvidence key={index} gate={gate} link={link} />)}</div>
     </section>}
     </div>
-    {(visible.length > 0 || preemption.length > 0) && <div className="min-w-0 space-y-5 border-t border-theme-border pt-4 @min-[1024px]/admission:border-t-0 @min-[1024px]/admission:pt-0">
-      {visible.length > 0 && <div className="space-y-4 rounded-lg bg-theme-base p-3">
+    {(visible.length > 0 || preemption.length > 0) && <div className="min-w-0 space-y-5">
+      {visible.length > 0 && <div className="space-y-4 rounded-lg border border-theme-border p-3">
         {disruptions.length > 0 && <section aria-label="Reported disruptions" className="space-y-3"><h4 className={groupHeading}>Reported disruptions · {disruptions.length}</h4><div className="divide-y divide-theme-border">{disruptions.map((entry) => <ConditionEvidence key={entry.type} condition={entry} generation={observation.subjectGeneration} showAge />)}</div></section>}
         {readiness.length > 0 && <section aria-label="Pod readiness" className={disruptions.length > 0 ? 'space-y-3 border-t border-theme-border pt-4' : 'space-y-3'}><h4 className={groupHeading}>Pod readiness · {readiness.length}</h4><div className="divide-y divide-theme-border">{readiness.map((entry) => <ConditionEvidence key={entry.type} condition={entry} generation={observation.subjectGeneration} />)}</div></section>}
       </div>}
