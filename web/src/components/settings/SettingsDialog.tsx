@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug,
   Plus, Terminal, Boxes, Activity, GitBranch, Sparkles, SlidersHorizontal, Zap,
-  LayoutDashboard, ChevronRight, ExternalLink, Download, AlertTriangle, Coins,
+  LayoutDashboard, ChevronRight, ExternalLink, Download, AlertTriangle, Coins, EyeOff,
   type LucideIcon,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -21,6 +21,8 @@ import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Coll
 import { Tooltip } from '../ui/Tooltip'
 import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
 import { MyPermissionsContent } from './MyPermissionsDialog'
+import { PrivacySection } from './PrivacySection'
+import { ConfigToggle, SubHeading } from './controls'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
 import { currencyOptionsForValue } from './currency-options'
 import { versionUpdateURL } from '../../utils/version'
@@ -449,6 +451,7 @@ export function SettingsDialog({
     { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costIntegrationDirty },
     { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: false },
     { id: 'ai', label: 'AI investigations', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
+    { id: 'privacy', label: 'Privacy', icon: EyeOff, ownerOnly: false, dirty: false },
     { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, dirty: advancedDirty },
   ]
 
@@ -510,6 +513,7 @@ export function SettingsDialog({
                 Radar{versionInfo?.currentVersion ? ` v${versionInfo.currentVersion}` : ''}
                 <span className="text-theme-text-disabled"> · by Skyhook</span>
               </span>
+
             </div>
           </div>
           <button
@@ -562,10 +566,10 @@ export function SettingsDialog({
               </div>
             )}
 
-            {!configData && !['overview', 'perms', 'ai'].includes(section) ? (
+            {!configData && !['overview', 'perms', 'ai', 'privacy'].includes(section) ? (
               <p className="text-sm text-theme-text-secondary">{loadError ? 'Configuration is unavailable. Close Settings and try again.' : 'Loading configuration…'}</p>
             ) : <>
-            {operatorManaged && section !== 'perms' && section !== 'ai' && <div className="mb-4"><OperatorManagedNotice /></div>}
+            {operatorManaged && section !== 'perms' && section !== 'ai' && section !== 'privacy' && <div className="mb-4"><OperatorManagedNotice /></div>}
             {/* Overview — status at a glance; the landing section */}
             <div className={clsx(section !== 'overview' && 'hidden')} role="tabpanel" inert={section !== 'overview' || undefined}>
               <div className="mb-1">
@@ -796,6 +800,13 @@ export function SettingsDialog({
               )}
             </div>
 
+            {/* Privacy: every outbound request Radar makes, and the usage-data choice.
+                Readable by everyone; the choice itself is only editable where the
+                person in the UI installed Radar. */}
+            <SectionPane id="privacy" active={section} title="Privacy" caption="Applies immediately." live>
+              <PrivacySection active={section === 'privacy'} />
+            </SectionPane>
+
             {/* Advanced — MCP + Timeline merged */}
             <SectionPane
               id="advanced"
@@ -952,16 +963,6 @@ interface NavItemDef {
   icon: LucideIcon
   ownerOnly: boolean
   dirty: boolean
-}
-
-// Light subheading separating the two field groups inside a merged pane
-// (Cluster/Server, MCP/Timeline).
-function SubHeading({ children }: { children: ReactNode }) {
-  return (
-    <h4 className="text-xs font-semibold uppercase tracking-wider text-theme-text-tertiary">
-      {children}
-    </h4>
-  )
 }
 
 function NavItem({
@@ -2795,45 +2796,6 @@ function ConfigNumberField({
       />
       <EffectiveHint current={value} effective={effectiveValue} />
     </div>
-  )
-}
-
-function ConfigToggle({
-  label,
-  description,
-  value,
-  onChange,
-}: {
-  label: string
-  description?: string
-  value: boolean
-  onChange: (value: boolean) => void
-}) {
-  return (
-    <label className="flex items-start justify-between gap-3 py-1 cursor-pointer">
-      <span className="min-w-0">
-        <span className="block text-sm text-theme-text-primary">{label}</span>
-        {description && (
-          <span className="mt-0.5 block text-xs text-theme-text-tertiary">{description}</span>
-        )}
-      </span>
-      <button
-        role="switch"
-        aria-checked={value}
-        onClick={() => onChange(!value)}
-        className={clsx(
-          'relative w-9 h-5 shrink-0 rounded-full transition-colors',
-          value ? 'bg-skyhook-600' : 'bg-theme-elevated border border-theme-border'
-        )}
-      >
-        <span
-          className={clsx(
-            'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm',
-            value && 'translate-x-4'
-          )}
-        />
-      </button>
-    </label>
   )
 }
 

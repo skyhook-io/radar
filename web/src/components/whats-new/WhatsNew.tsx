@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useId, useState } from 'react'
+import { useCallback, useEffect, useId, useState, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { ArrowRight, Check, ExternalLink, Megaphone, X } from 'lucide-react'
 import { DialogPortal } from '@skyhook-io/k8s-ui'
 import { useCapabilities, useVersionCheck } from '../../api/client'
 import { releaseNotesFor, RELEASE_NOTES, type ReleaseHighlight, type ReleaseNotes } from './releaseNotes'
+import type { UsageDataStatus } from '../../api/usage-data'
+import { UsageDataAsk } from '../usage-data/UsageDataAsk'
 
 const LAST_SEEN_KEY = 'radar-whats-new-seen'
 const PREVIEW_PARAM = 'whats-new'
@@ -61,13 +63,15 @@ function markSeen(version: string) {
 
 interface WhatsNewProps {
   onNavigate: (path: string) => void
+  // Omitted by hosts that don't run usage data; the dialog then never asks.
+  usageData?: UsageDataStatus
 }
 
 /**
  * Opens once after Radar is upgraded to a version that has release notes.
  * `?whats-new` (or `?whats-new=v1.15.0`) opens it on demand for previews.
  */
-export function WhatsNew({ onNavigate }: WhatsNewProps) {
+export function WhatsNew({ onNavigate, usageData }: WhatsNewProps) {
   const { data: versionInfo } = useVersionCheck()
   const { data: capabilities } = useCapabilities()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -133,6 +137,11 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
     onNavigate(path)
   }, [close, onNavigate])
 
+  const readAboutUsageData = useCallback(() => {
+    close()
+    window.dispatchEvent(new CustomEvent('radar:open-settings', { detail: { section: 'privacy' } }))
+  }, [close])
+
   if (isCloud) return null
 
   return (
@@ -144,6 +153,7 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
           previousVersion={previousVersion}
           onClose={close}
           onNavigate={go}
+          ask={<UsageDataAsk usageData={usageData} onReadMore={readAboutUsageData} />}
         />
       )}
     </DialogPortal>
@@ -156,9 +166,12 @@ interface WhatsNewContentProps {
   previousVersion?: string | null
   onClose: () => void
   onNavigate: (path: string) => void
+  // Rendered between the notes and the footer, outside the scroll area so it
+  // stays visible however long the notes run.
+  ask?: ReactNode
 }
 
-export function WhatsNewContent({ titleId, notes, previousVersion, onClose, onNavigate }: WhatsNewContentProps) {
+export function WhatsNewContent({ titleId, notes, previousVersion, onClose, onNavigate, ask }: WhatsNewContentProps) {
   const [lead, ...rest] = notes.highlights
   const from = previousVersion && normalize(previousVersion) !== notes.version ? normalize(previousVersion) : null
 
@@ -227,6 +240,8 @@ export function WhatsNewContent({ titleId, notes, previousVersion, onClose, onNa
           </div>
         )}
       </div>
+
+      {ask}
 
       <div className="flex items-center justify-between gap-3 px-6 py-3 border-t border-theme-border bg-theme-base/60">
         <a

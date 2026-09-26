@@ -340,6 +340,16 @@ spec:
             # of assuming `radar`. Read-only self-description, like the two above.
             - name: RADAR_HELM_RELEASE
               value: {{ .Release.Name | quote }}
+            {{- /* Radar Cloud runs its own usage program, so none of this applies there. */}}
+            {{- if not .Values.cloud.enabled }}
+            - name: RADAR_USAGE_CONFIGMAP
+              value: {{ printf "%s-usage-data" (include "radar.fullname" .) | quote }}
+            {{- $usage := dig "enabled" nil (.Values.usageReporting | default dict) }}
+            {{- if kindIs "bool" $usage }}
+            - name: RADAR_USAGE_REPORTING
+              value: {{ ternary "on" "off" $usage | quote }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

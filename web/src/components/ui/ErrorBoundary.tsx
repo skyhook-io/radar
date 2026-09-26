@@ -1,5 +1,6 @@
 import { Component, ReactNode } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { recordUsageEvent } from '../../api/usage-data'
 
 interface Props {
   children: ReactNode
@@ -34,6 +35,9 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error('[ErrorBoundary]', error, info.componentStack)
+    // Only the crashing component's name is counted, never the message.
+    const component = info.componentStack?.match(/at ([A-Z][A-Za-z0-9]*)/)?.[1]
+    if (component) recordUsageEvent({ type: 'ui', name: `ui_error:${component}` })
   }
 
   handleReset = () => this.setState({ hasError: false, error: null })

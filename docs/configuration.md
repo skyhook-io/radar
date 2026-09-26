@@ -443,13 +443,18 @@ kubeconfig before these commands can run.
 
 ### What Radar sends
 
-Until you connect a cluster to Cloud, Radar makes two kinds of outbound
-request, both to Skyhook, neither containing cluster data:
+Until you connect a cluster to Cloud, Radar makes three kinds of outbound
+request, all to Skyhook, none containing your resources, their names, logs or
+events:
 
 - **Update check** — to `releases.skyhook.io`, with the Radar version, OS/arch,
   install method, whether it is running locally or in-cluster, and the
   installation timestamp when Radar can determine it. Radar caches the release
   result for one hour. Development builds are excluded.
+  `RADAR_UPDATE_CHECK=off` stops it; Radar then never says an update is out.
+- **Usage data, only if you opt in**: once a day, to `usage.radarhq.io`. It
+  has a host of its own, so blocking `usage.radarhq.io` stops usage reports
+  and leaves update checks working. See [Usage data](#usage-data).
 - **Cloud dialog copy** — only when you *open* the Cloud dialog, to fetch the
   current terms shown in it. No identifiers are sent. `RADAR_CLOUD_FUNNEL=off`
   stops this request from ever happening.
@@ -460,8 +465,88 @@ Kubernetes API directly and keeps everything it reads on your machine.
 Connecting a cluster to Cloud is what changes that, and it is the point of
 connecting — the cluster's agent opens an outbound tunnel to the Hub so the
 team can reach the same views without each person holding kubeconfig access.
-Deciding whether to connect is a separate question from the two requests
-above, which happen either way.
+Deciding whether to connect is a separate question from the requests above,
+which happen either way.
+
+### Usage data
+
+Usage data is anonymous usage stats that help improve Radar, and it is off
+until you say yes. A local Radar asks in two places: once in a small card the
+first time Radar runs on a machine, and in the What's new dialog after an
+upgrade. "No thanks" is remembered and never asked again. If you close the
+question without answering, Radar waits three months before asking again. You
+can change your answer any time in Settings > Privacy.
+
+It exists to answer three questions: which features get used, how teams
+running Radar in-cluster use it compared with people running it locally, and
+which integrations matter most. It is not used for sales: a report carries no
+ID and nothing that names you, your company or your clusters.
+
+If you opt in, Radar counts usage locally and sends one report a day:
+
+| Included | Example |
+|----------|---------|
+| Radar version, OS, architecture, install method, and mode | `1.15.0`, `darwin`, `arm64`, `homebrew`, `local` |
+| Radar's own setup: auth mode, timeline storage, MCP on or off, Prometheus connected, cost source, browser family | `none`, `memory`, `true`, `connected`, `auto`, `["chrome"]` |
+| How many times each view was opened, including built-in resource lists | `"topology": 12, "resources:deployments": 5` |
+| How many times each action ran, named by Radar's own API route, never by what it acted on | `"POST /api/helm/releases/{namespace}/{name}/rollback": 1` |
+| How many times each MCP tool was called | `"list_resources": 40` |
+| Command palette opens, searches, and which screen crashed, by component name | `"command_palette": 9, "ui_error:TopologyView": 1` |
+| Failed changes, and requests Radar itself failed, by route and status class | `"GET /api/resources/{kind} 5xx": 2` |
+| Sessions and active time, as a range | `3`, `20-49` minutes |
+| How many kubeconfig contexts you have, as a range, and how many clusters you used | `5-9`, `2` |
+| For each cluster used: Kubernetes minor version, platform, node count as a range, and known integrations from a fixed list | `1.33`, `eks`, `10-19`, `["argo-cd"]` |
+| The dates the report covers | `2026-09-23` to `2026-09-24` |
+
+Never included: an install or cluster ID; names of resources, namespaces,
+clusters, contexts, images or hosts; manifests, logs, events, metric values,
+URLs, search text or anything else you type; API groups Radar does not
+recognize, because they may be your own. Sizes are always ranges.
+
+Like any web request, the report reaches Skyhook from your network's IP
+address. The receiver rejects any report that doesn't match this list, and
+stores the rest in Skyhook's product analytics (PostHog) under a new random ID
+for each report, without your IP address or its location.
+
+The pending report is kept in `~/.radar/usage-report.json` until it is sent,
+and Settings > Privacy shows it exactly as it will be sent. Turning usage data
+off deletes it. A day with no use sends nothing. Development builds write the
+report to Radar's log instead of sending it.
+
+Controls, strongest first:
+
+| Control | Effect |
+|---------|--------|
+| `DO_NOT_TRACK=1` | Usage data is off, whatever else is set |
+| `RADAR_USAGE_REPORTING=off` / `on` | Fixes the choice for this process; the Settings switch is read-only |
+| `RADAR_USAGE_REPORTING=log` | Records usage and writes each report to the log instead of sending it |
+| Settings > Privacy | Your saved answer, in `~/.radar/settings.json` |
+
+`DO_NOT_TRACK` covers usage data only. To stop the update check as well, set
+`RADAR_UPDATE_CHECK=off`.
+
+#### Shared Radar
+
+On a shared Radar (in-cluster, behind sign-in, or on a listener others can
+reach) the choice covers everyone who uses it, so not everyone gets to make
+it:
+
+- **In-cluster with sign-in**: people who can `patch` Deployments in Radar's
+  namespace are asked and can use the switch. Everyone else sees the current
+  state read-only. Settings > Privacy shows who changed it last.
+- **Anything else shared**: nobody is asked in Radar. Whoever runs it decides
+  with `usageReporting.enabled` in the chart, or `RADAR_USAGE_REPORTING`.
+
+`usageReporting.enabled=true` or `false` decides for the whole team and locks the
+switch. In-cluster, Radar keeps the choice in a small ConfigMap the chart
+creates, `<release>-usage-data`, so restarts don't forget it. The only write
+permission this adds is `update` and `patch` on that one ConfigMap, by name.
+With an older chart, or `rbac.create=false` and no matching Role, the choice
+lives in the pod and a restart resets it; Settings > Privacy says so.
+
+The counts themselves live in the pod. When an in-cluster Radar shuts down it
+sends what it has counted so far instead of waiting for the day to end, so a
+restart doesn't lose them.
 
 ## Related Documentation
 

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // PinnedKind is a resource kind the user has pinned to the sidebar.
@@ -58,6 +59,23 @@ type Settings struct {
 	// typed after `kubectl config use-context` runs where the shell says it
 	// will.
 	LastDesktopContext *LastContext `json:"lastDesktopContext,omitempty"`
+	// UsageData is the user's answer to the usage-data question. nil means
+	// they have not answered, which sends nothing, same as a "no".
+	UsageData *UsageDataChoice `json:"usageData,omitempty"`
+	// UsagePromptShownAt records when the usage-data question was last shown,
+	// answered or not: the first-install prompt never shows again, and What's
+	// New waits a while before asking again.
+	UsagePromptShownAt *time.Time `json:"usagePromptShownAt,omitempty"`
+}
+
+// UsageDataChoice records whether the user agreed to send usage
+// reports, and when they decided.
+type UsageDataChoice struct {
+	Enabled   bool      `json:"enabled"`
+	DecidedAt time.Time `json:"decidedAt"`
+	// DecidedBy is who answered on a shared install with sign-in, so the
+	// team can see it. It stays in settings.json and is never reported.
+	DecidedBy string `json:"decidedBy,omitempty"`
 }
 
 // LastContext identifies a context precisely enough to survive a restart.
