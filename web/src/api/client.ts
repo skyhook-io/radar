@@ -2815,6 +2815,37 @@ export function useChanges(options: UseChangesOptions = {}) {
   });
 }
 
+export interface WorkloadHistoryPage {
+  events: TimelineEvent[];
+  truncated: boolean;
+  nextBeforeSeq?: number;
+}
+
+function workloadHistoryPath(kind: string, namespace: string, name: string, group?: string, beforeSeq?: number): string {
+  const params = new URLSearchParams();
+  if (group) params.set("group", group);
+  if (beforeSeq) params.set("before_seq", String(beforeSeq));
+  const query = params.toString();
+  return `/workloads/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/history${query ? `?${query}` : ""}`;
+}
+
+// The newest page of one workload's history: the workload, what it owns, K8s
+// Events about those, and the resources attached to it. Keyed under
+// "changes" so the live-update invalidation refreshes it.
+export function useWorkloadHistory(kind: string, namespace: string, name: string, group?: string, enabled = true) {
+  return useQuery<WorkloadHistoryPage>({
+    queryKey: ["changes", "workload-history", kind, namespace, name, group ?? ""],
+    queryFn: ({ signal }) => fetchJSON(workloadHistoryPath(kind, namespace, name, group), signal),
+    staleTime: 5000,
+    refetchInterval: CHANGES_REFRESH_INTERVAL_MS,
+    enabled,
+  });
+}
+
+export function fetchWorkloadHistoryPage(kind: string, namespace: string, name: string, group: string | undefined, beforeSeq: number): Promise<WorkloadHistoryPage> {
+  return fetchJSON(workloadHistoryPath(kind, namespace, name, group, beforeSeq));
+}
+
 export interface ResourceEventsResult {
   k8sEvents: TimelineEvent[];
   updates: TimelineEvent[];

@@ -1039,6 +1039,40 @@ describe('group-qualified lane identity', () => {
     expect(lanes.map((lane) => lane.id)).toEqual(['Cluster.postgresql.cnpg.io/prod/main'])
   })
 
+  it("builds a workload's detail lanes from its scoped history without its Service's other backends", () => {
+    const events = [
+      changeEvent('Deployment', 'prod', 'web', { apiVersion: 'apps/v1' }),
+      changeEvent('ReplicaSet', 'prod', 'web-1', { apiVersion: 'apps/v1', owner: { kind: 'Deployment', name: 'web' } }),
+      changeEvent('Pod', 'prod', 'web-1-a', { apiVersion: 'v1', owner: { kind: 'ReplicaSet', name: 'web-1' } }),
+      changeEvent('Service', 'prod', 'web', { apiVersion: 'v1' }),
+    ]
+    // The Service also fronts a sibling Deployment; with scoped history the
+    // sibling has no events, so nothing of it may appear.
+    const topology = {
+      nodes: [
+        { id: 'service/prod/web', kind: 'Service', name: 'web', status: 'healthy', data: { namespace: 'prod', apiVersion: 'v1' } },
+        { id: 'deployment/prod/web', kind: 'Deployment', name: 'web', status: 'healthy', data: { namespace: 'prod', apiVersion: 'apps/v1' } },
+        { id: 'deployment/prod/api', kind: 'Deployment', name: 'api', status: 'healthy', data: { namespace: 'prod', apiVersion: 'apps/v1' } },
+      ],
+      edges: [
+        { id: 'e1', source: 'service/prod/web', target: 'deployment/prod/web', type: 'exposes' },
+        { id: 'e2', source: 'service/prod/web', target: 'deployment/prod/api', type: 'exposes' },
+      ],
+    } as unknown as Topology
+    const lanes = buildResourceHierarchy({
+      events,
+      topology,
+      rootResource: { kind: 'Deployment', group: 'apps', namespace: 'prod', name: 'web' },
+      groupByApp: true,
+    })
+    const ids = getAllEventsFromHierarchy(lanes).map((e) => e.id).sort()
+    expect(ids).toEqual(['Deployment/prod/web', 'Pod/prod/web-1-a', 'ReplicaSet/prod/web-1', 'Service/prod/web'])
+    const laneNames: string[] = []
+    const walk = (list: ResourceLane[]) => list.forEach((l) => { laneNames.push(l.name); walk(l.children ?? []) })
+    walk(lanes)
+    expect(laneNames).not.toContain('api')
+  })
+
   it('keeps core/built-in resource ids bare (byte-stable)', () => {
     const lanes = buildResourceHierarchy({
       events: [

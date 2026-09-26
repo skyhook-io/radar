@@ -44,7 +44,9 @@ import {
   type NavigateToResource,
 } from '../../utils/navigation'
 import {
-  useChanges,
+  useWorkloadHistory,
+  fetchWorkloadHistoryPage,
+  type WorkloadHistoryPage,
   useResourceWithRelationships,
   usePodLogs,
   useTopology,
@@ -781,15 +783,40 @@ export function WorkloadView({
     updatesError: resourceFocusedUpdatesError,
   } = useResourceEvents(apiKind, namespace, name, effectiveGroup)
 
-  // Fetch all events for this resource's namespace (only when expanded)
-  const { data: allEvents, isLoading: eventsLoading } = useChanges({
-    namespaces: [namespace],
-    timeRange: 'all',
-    includeK8sEvents: true,
-    includeManaged: true,
-    limit: 10000,
-    enabled: expanded,
-  })
+  // This workload's history (only when expanded): the workload, what it owns,
+  // K8s Events about those, and the resources attached to it. Older pages load
+  // on demand and stay until the viewed workload changes.
+  const historyQuery = useWorkloadHistory(apiKind, namespace, name, effectiveGroup, expanded)
+  const [olderHistory, setOlderHistory] = useState<WorkloadHistoryPage | null>(null)
+  const [loadingOlderHistory, setLoadingOlderHistory] = useState(false)
+  useEffect(() => {
+    setOlderHistory(null)
+  }, [apiKind, namespace, name, effectiveGroup])
+  const allEvents = useMemo(() => {
+    const newest = historyQuery.data?.events
+    if (!newest) return undefined
+    if (!olderHistory) return newest
+    const byId = new Map(newest.map((e) => [e.id, e]))
+    for (const e of olderHistory.events) if (!byId.has(e.id)) byId.set(e.id, e)
+    return [...byId.values()]
+  }, [historyQuery.data, olderHistory])
+  const historyTruncated = olderHistory ? olderHistory.truncated : Boolean(historyQuery.data?.truncated)
+  const loadOlderHistory = useCallback(async () => {
+    const cursor = olderHistory ? olderHistory.nextBeforeSeq : historyQuery.data?.nextBeforeSeq
+    if (!cursor) return
+    setLoadingOlderHistory(true)
+    try {
+      const page = await fetchWorkloadHistoryPage(apiKind, namespace, name, effectiveGroup, cursor)
+      setOlderHistory((prev) => ({
+        events: [...(prev?.events ?? []), ...page.events],
+        truncated: page.truncated,
+        nextBeforeSeq: page.nextBeforeSeq,
+      }))
+    } finally {
+      setLoadingOlderHistory(false)
+    }
+  }, [apiKind, namespace, name, effectiveGroup, olderHistory, historyQuery.data])
+  const eventsLoading = historyQuery.isLoading
 
   // RBAC
   const canUpdateSecrets = useCanUpdateSecrets()
@@ -1186,6 +1213,9 @@ export function WorkloadView({
         refetch={refetchResourceAndRuns}
         // Timeline
         allEvents={allEvents}
+        historyTruncated={historyTruncated}
+        onLoadOlderHistory={loadOlderHistory}
+        loadingOlderHistory={loadingOlderHistory}
         relatedTimelineEvents={relatedTimelineEvents}
         eventsLoading={eventsLoading || (batchExecution && batchKind !== 'JobSet' && batchRunsQuery.isLoading)}
         topology={topology}
