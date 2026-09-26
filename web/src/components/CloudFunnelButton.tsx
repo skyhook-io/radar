@@ -664,11 +664,11 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
     <div className="px-8 pt-7 pb-2">
       <Eyebrow />
       <h3 className="text-[22px] font-semibold leading-tight tracking-tight text-theme-text-primary mb-3 text-balance">
-        Radar for you and your team, every cluster, around the clock.
+        Close the laptop. Radar keeps watching.
       </h3>
       <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-5">
-        Radar Cloud is the hosted side of Radar: connect this cluster and it keeps watching after you close the
-        laptop.
+        Radar Cloud is the hosted side of Radar: Slack alerts, AI root cause and every cluster in one place, for
+        you and your team.
         <br />
         The Radar you're running{' '}
         <b className="text-theme-text-primary font-semibold">stays free and open source, always.</b>
