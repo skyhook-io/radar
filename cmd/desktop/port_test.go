@@ -44,22 +44,49 @@ func TestLastDesktopPortIgnoresGarbage(t *testing.T) {
 func TestRememberDesktopPort(t *testing.T) {
 	path := filepath.Join(t.TempDir(), desktopPortFile)
 	held := func(k portOwnerKind) func(int) portOwnerKind { return func(int) portOwnerKind { return k } }
+	bindable := func(ok bool) func(int) bool { return func(int) bool { return ok } }
+	remember := func(remembered, actual int, owner portOwnerKind, canBind bool) int {
+		rememberDesktopPort(path, remembered, actual, held(owner), bindable(canBind))
+		return lastDesktopPort(path)
+	}
 
-	rememberDesktopPort(path, 0, 51000, held(ownerOther))
-	if got := lastDesktopPort(path); got != 51000 {
+	if got := remember(0, 51000, ownerOther, false); got != 51000 {
 		t.Fatalf("first launch: recorded %d, want 51000", got)
 	}
-	rememberDesktopPort(path, 51000, 52000, held(ownerRadar))
-	if got := lastDesktopPort(path); got != 51000 {
-		t.Fatalf("a second window fell back: recorded %d, want the remembered 51000 kept", got)
+	cases := []struct {
+		name    string
+		owner   portOwnerKind
+		canBind bool
+		want    int
+	}{
+		{"a second window holds it", ownerRadar, false, 51000},
+		{"no answer in time", ownerUnknown, false, 51000},
+		{"nothing there, and it binds again", ownerSilent, true, 51000},
+		{"nothing there, and it still can't be bound", ownerSilent, false, 52000},
+		{"something else answers", ownerOther, false, 52000},
 	}
-	rememberDesktopPort(path, 51000, 52000, held(ownerUnknown))
-	if got := lastDesktopPort(path); got != 51000 {
-		t.Fatalf("no clear answer on the remembered port: recorded %d, want 51000 kept", got)
+	for _, c := range cases {
+		recordDesktopPort(path, 51000)
+		if got := remember(51000, 52000, c.owner, c.canBind); got != c.want {
+			t.Errorf("%s: recorded %d, want %d", c.name, got, c.want)
+		}
 	}
-	rememberDesktopPort(path, 51000, 53000, held(ownerOther))
-	if got := lastDesktopPort(path); got != 53000 {
-		t.Fatalf("remembered port held by something else: recorded %d, want 53000", got)
+}
+
+func TestLoopbackPortBindable(t *testing.T) {
+	held, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if loopbackPortBindable(held.Addr().(*net.TCPAddr).Port) {
+		t.Error("a held port reported bindable")
+	}
+	free, _ := net.Listen("tcp", "127.0.0.1:0")
+	port := free.Addr().(*net.TCPAddr).Port
+	free.Close()
+	if !loopbackPortBindable(port) {
+		t.Error("a free port reported unbindable")
 	}
 }
 
@@ -120,7 +147,7 @@ func TestPortOwner(t *testing.T) {
 	free, _ := net.Listen("tcp", "127.0.0.1:0")
 	freePort := port(free.Addr())
 	free.Close()
-	if got := portOwner(freePort); got != ownerUnknown {
-		t.Errorf("free port: got %v, want ownerUnknown", got)
+	if got := portOwner(freePort); got != ownerSilent {
+		t.Errorf("free port: got %v, want ownerSilent", got)
 	}
 }

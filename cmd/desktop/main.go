@@ -277,7 +277,7 @@ func main() {
 	desktopApp := NewDesktopApp(srv, timelineStoreCfg)
 	if desktopPortRemembered {
 		desktopApp.onWindowReady = func() {
-			go rememberDesktopPort(desktopPortPath(), desktopPort, srv.ActualPort(), portOwner)
+			go rememberDesktopPort(desktopPortPath(), desktopPort, srv.ActualPort(), portOwner, loopbackPortBindable)
 		}
 	}
 	// macOS only. Wails maps this to `[NSApp hide:]`, which leaves the dock icon
