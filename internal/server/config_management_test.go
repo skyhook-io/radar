@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
@@ -97,6 +98,99 @@ func TestOperatorWritesDeniedBeforeSideEffects(t *testing.T) {
 	s.handleSetActiveNamespace(w, httptest.NewRequest(http.MethodPost, "/api/cluster/namespace", strings.NewReader(`{"namespaces":["other"]}`)))
 	if w.Code != 403 {
 		t.Fatalf("cache rescope status %d", w.Code)
+	}
+}
+
+// seedLocalConfiguration writes both config.json and clusters.json and returns
+// a reader of their combined bytes, so a test can prove a request changed neither.
+func seedLocalConfiguration(t *testing.T, s *Server) func() string {
+	t.Helper()
+	if err := config.Save(config.Config{Port: 9280}); err != nil {
+		t.Fatal(err)
+	}
+	target, err := k8s.CurrentProfileTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	url := "http://saved.example"
+	pending, err := s.localConnections.Prepare(target, connections.Update{Target: target, Revision: s.localConnections.Resolve(target, config.IntegrationMetrics, false).View.Revision, Kind: config.IntegrationMetrics, Action: "save", URL: &url})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.localConnections.Commit(t.Context(), pending); err != nil {
+		t.Fatal(err)
+	}
+	return func() string {
+		t.Helper()
+		file, err := os.ReadFile(config.Path())
+		if err != nil {
+			t.Fatal(err)
+		}
+		profiles, err := os.ReadFile(s.localConnections.Store.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(file) + "\x00" + string(profiles)
+	}
+}
+
+func TestSavedConnectionRoutesRequireLocalInstallation(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		setup func(t *testing.T, s *Server)
+	}{
+		{"operator auth", func(t *testing.T, s *Server) { s.authConfig = auth.Config{Mode: "proxy"} }},
+		{"in-cluster pod", func(t *testing.T, s *Server) { t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1") }},
+		{"cloud", func(t *testing.T, s *Server) { t.Setenv("RADAR_CLOUD_MODE", "true") }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RADAR_CLOUD_MODE", "false")
+			t.Setenv("KUBERNETES_SERVICE_HOST", "")
+			s := setupLocalProfileTest(t)
+			files := seedLocalConfiguration(t, s)
+			before := files()
+			tt.setup(t, s)
+			read := httptest.NewRecorder()
+			s.handleLocalConnections(read, httptest.NewRequest(http.MethodGet, "/api/integrations/connections", nil))
+			target, _ := k8s.CurrentProfileTarget()
+			write := updateProfile(t, s, s.localConnections.Resolve(target, config.IntegrationMetrics, false).View, "apply", "http://replacement.example", nil)
+			if read.Code != http.StatusForbidden || write.Code != http.StatusForbidden {
+				t.Fatalf("read %d %s, write %d %s", read.Code, read.Body.String(), write.Code, write.Body.String())
+			}
+			if strings.Contains(read.Body.String(), "saved.example") {
+				t.Fatalf("denied read exposed saved connections: %s", read.Body.String())
+			}
+			if files() != before {
+				t.Fatal("denied request changed saved configuration")
+			}
+		})
+	}
+}
+
+func TestLocalLegacyIntegrationWritesDeferToSavedConnections(t *testing.T) {
+	t.Setenv("RADAR_CLOUD_MODE", "false")
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	s := setupLocalProfileTest(t)
+	files := seedLocalConfiguration(t, s)
+	before := files()
+	for name, tt := range map[string]struct {
+		handler http.HandlerFunc
+		body    string
+	}{
+		"prometheus": {s.handleApplyPrometheusURL, `{"prometheusUrl":"http://127.0.0.1:1"}`},
+		"argocd":     {s.handleApplyArgoCDConfig, `{"argoCdUrl":"http://127.0.0.1:1","argoCdToken":"legacy-token"}`},
+		"cost":       {s.handleApplyCostSource, `{"source":"kubecost","url":"http://127.0.0.1:1","apiKey":"legacy-key"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			tt.handler(w, httptest.NewRequest(http.MethodPut, "/api/integrations/"+name, strings.NewReader(tt.body)))
+			if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "saved connections endpoint") {
+				t.Fatalf("status %d: %s", w.Code, w.Body.String())
+			}
+			if files() != before {
+				t.Fatal("legacy route changed saved configuration")
+			}
+		})
 	}
 }
 

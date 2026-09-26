@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import yaml from 'yaml'
+import { hasHealthSettingsHint } from '@skyhook-io/k8s-ui/components/gitops/GitOpsHealthSourceNotice'
+import { previousSettingsAction, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings'
 import {
   GitOpsActivityInsightView,
   GitOpsChangesView,
@@ -412,6 +414,14 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const terminatingChipTooltip = terminatingDescriptions.chipTooltip
   const terminatingActionTooltip = terminatingDescriptions.actionDisabledTooltip
   const [appView, setAppView] = useState<GitOpsDetailTab>('topology')
+  const insight = insightsQ.data
+  const showDiffSettingsHint = appView === 'changes' && insight?.summary.tool === 'argocd' && insight.summary.kind === 'Application'
+    && !!insight.changes?.length && !insight.capabilities?.argoDiffAvailable
+  const previousSettings = usePreviousIntegrationSettings(!!onOpenSettings && (
+    hasHealthSettingsHint(insight?.summary, insight?.changes)
+    || showDiffSettingsHint
+  ))
+  const settingsAction = previousSettings.argocd ? previousSettingsAction('argocd') : undefined
   // When the user clicks an actionable issue alert ("OutOfSync — NodePool
   // default is out of sync · View →"), we navigate to Changes and focus
   // that resource. The ref is stringified to a stable key so GitOpsChangesView
@@ -670,6 +680,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       healthDocsUrl={GITOPS_HEALTH_DOCS_URL}
       remoteDestinationHint={<RemoteDestinationCloudHint />}
       onOpenSettings={onOpenSettings}
+      settingsAction={showDiffSettingsHint ? undefined : settingsAction}
       renderRevisionMeta={
         isArgoApp && insightsQ.data?.capabilities?.revisionMetadataAvailable
           ? (revision) => (
@@ -809,6 +820,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
                 <ArgoResourceDiffLoader appNamespace={namespace} appName={name} resourceRef={ref} />
               ) : undefined}
               onOpenSettings={onOpenSettings}
+              settingsAction={settingsAction}
             />
           )
         }

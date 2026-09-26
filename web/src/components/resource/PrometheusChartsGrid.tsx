@@ -35,6 +35,7 @@ import { Tooltip } from "../ui/Tooltip";
 import { WorkloadMetricsSection } from "./WorkloadMetricsSection";
 import { RightsizingStrip } from "./RightsizingStrip";
 import { useNavCustomization } from "../../context/NavCustomization";
+import { previousSettingsAction, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings';
 
 // Used when MetricsTabContent is in expanded (full-screen) mode. Drawer mode
 // uses the single-chart tabbed `PrometheusCharts` instead — drawer width
@@ -73,6 +74,8 @@ export function PrometheusChartsGrid({
   const showRestartLane = isSupported && kind !== "Node";
 
   const settingsAvailable = !useNavCustomization().embedded;
+  const offers = usePreviousIntegrationSettings(isSupported && !statusLoading && !!status && !isConnected && !status.discovering);
+  const previousAction = offers.metrics ? previousSettingsAction('metrics') : undefined;
   const [searchParams, setSearchParams] = useSearchParams();
   const timeRange = TIME_RANGES.find((range) => range.value === searchParams.get("metricsRange"))?.value ?? "1h";
 
@@ -140,8 +143,9 @@ export function PrometheusChartsGrid({
             type="button"
             className="text-sm text-accent hover:underline"
             onClick={() => window.dispatchEvent(new CustomEvent('radar:open-settings', { detail: { section: 'prometheus' } }))}
-          >Configure metrics</button>}
+          >{previousAction?.label ?? 'Configure metrics'}</button>}
           </div>
+          {previousAction && <p className="mt-3 text-xs text-theme-text-secondary">{previousAction.note}</p>}
           {!settingsAvailable && <p className="mt-3 text-xs text-theme-text-tertiary">Ask your operator to configure the metrics connection for this cluster.</p>}
           {isWorkload && <a className="mt-3 inline-block text-xs text-accent hover:underline" href="https://github.com/skyhook-io/radar/blob/main/docs/workload-metrics.md#what-each-chart-needs" target="_blank" rel="noopener noreferrer">What each chart needs</a>}
         </div>

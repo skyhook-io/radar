@@ -41,8 +41,8 @@ import { clusterCloudConsoleLink, nodeCloudConsoleLink } from './cloud-console'
 import { RightsizingScanView } from '../rightsizing/RightsizingScanView'
 import { CostViewTabs } from './CostViewTabs'
 import { useNavCustomization } from '../../context/NavCustomization'
+import { CostConnectionAction } from './CostConnectionAction'
 import {
-  costConfigurationAction,
   costFreshnessLabel,
   costIntegrationUnavailableMessage,
   costRateLabels,
@@ -57,13 +57,6 @@ interface CostViewProps {
 }
 
 const SYSTEM_COST_NAMESPACES = new Set(['kube-system', 'kube-public', 'kube-node-lease'])
-const CONFIGURABLE_COST_REASONS = new Set<CostUnavailableReason>([
-  'no_prometheus',
-  'no_cost_source',
-  'source_unavailable',
-  'authentication_error',
-  'configuration_mismatch',
-])
 
 export function CostView(props: CostViewProps) {
   const { pathname } = useLocation()
@@ -137,8 +130,6 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
       settingsAvailable,
       namespaceScoped: namespaceScopeCount > 0,
     })
-    const canConfigure = settingsAvailable && reason != null && CONFIGURABLE_COST_REASONS.has(reason)
-    const configureAction = costConfigurationAction(reason)
 
     return (
       <CostOverviewState>
@@ -146,18 +137,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
           <div className="flex flex-col items-center gap-3 text-theme-text-secondary">
             <Coins className="w-8 h-8 text-theme-text-tertiary/40" />
             <p className="text-sm">{message}</p>
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              {canConfigure && (
-                <button
-                  type="button"
-                  onClick={() => window.dispatchEvent(
-                    new CustomEvent('radar:open-settings', { detail: { section: configureAction.section } }),
-                  )}
-                  className="btn-brand px-3 py-1.5 text-xs font-medium"
-                >
-                  {configureAction.label}
-                </button>
-              )}
+            <CostConnectionAction reason={reason}>
             {(reason === 'no_prometheus' || reason === 'no_cost_source' || reason === 'source_unavailable') && (
               <button
                 onClick={() => {
@@ -170,7 +150,7 @@ function CostOverview({ onBack, onOpenResource }: CostViewProps) {
                 {isFetching ? 'Checking…' : 'Check again'}
               </button>
             )}
-            </div>
+            </CostConnectionAction>
             <button
               onClick={onBack}
               className="text-xs text-accent-text hover:text-theme-text-primary transition-colors"

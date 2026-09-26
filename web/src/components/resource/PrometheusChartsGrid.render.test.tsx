@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { NavCustomizationProvider } from '../../context/NavCustomization'
+vi.mock('../../hooks/usePreviousIntegrationSettings', () => ({ usePreviousIntegrationSettings: () => ({ metrics: false }) }))
 import type { WorkloadMetrics } from '../../api/workloadMetrics'
 
 let connected = false

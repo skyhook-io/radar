@@ -82,7 +82,8 @@ func newRightsizingScanManager() *RightsizingScanManager {
 	return &RightsizingScanManager{
 		jobs: map[string]*rightsizingScanJob{}, duration: rightsizingScanDuration, retention: rightsizingScanRetention,
 		prepare: func() (scanRunner, func() bool) {
-			client, cache := GetClient(), k8s.GetResourceCache()
+			client, connectionErr := ClientForOperation()
+			cache := k8s.GetResourceCache()
 			var generation, epoch uint64
 			if client != nil {
 				generation, epoch = client.DiscoveryGeneration(), client.backendEpoch()
@@ -92,6 +93,9 @@ func newRightsizingScanManager() *RightsizingScanManager {
 					(client == nil || client.DiscoveryGeneration() == generation && client.backendEpoch() == epoch)
 			}
 			return func(ctx context.Context, scope RightsizingScanScope, publish func(RightsizingScanResponse)) RightsizingScanResponse {
+				if connectionErr != nil {
+					return RightsizingScanResponse{State: RightsizingScanUnavailable, Reason: connectionErr.Error()}
+				}
 				return runRightsizingScan(ctx, scope, client, cache, publish)
 			}, valid
 		},

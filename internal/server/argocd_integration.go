@@ -12,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -22,7 +23,6 @@ import (
 // throttled background reconnect when disconnected, so opening Overview after a
 // restart helps the integration come back.
 func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
-	_, connected := argocd.Get()
 	resp := struct {
 		Configured bool `json:"configured"`
 		Connected  bool `json:"connected"`
@@ -33,9 +33,19 @@ func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 		Reason    string `json:"reason,omitempty"`
 	}{
 		Configured: argocd.IsConfigured(),
-		Connected:  connected,
 	}
-	if connected {
+	if err := connections.Refresh(config.IntegrationArgoCD); err != nil {
+		resp.Reason = prom.RedactURLs(err.Error())
+		if s.localConnections != nil {
+			view := s.readLocalConnectionViews()[config.IntegrationArgoCD]
+			resp.Configured = view.URL != "" || view.SecretSet || view.State == "launch"
+		}
+		s.writeJSON(w, resp)
+		return
+	}
+	_, resp.Connected = argocd.Get()
+	resp.Configured = argocd.IsConfigured()
+	if resp.Connected {
 		resp.Address = argocd.Address()
 		resp.Anonymous = argocd.AnonymousReadAllowed()
 	} else if argocd.TokenBindingUpgradeRequired() {
@@ -60,6 +70,10 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
+		return
+	}
+	if s.localConnections != nil && s.configManagement() == "local" {
+		s.writeError(w, http.StatusConflict, "Use the cluster-scoped saved connections endpoint to change this local integration")
 		return
 	}
 	// When the integration is provisioned from the environment, it is the

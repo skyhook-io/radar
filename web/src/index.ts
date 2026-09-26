@@ -4,6 +4,11 @@
 // bundler that transpiles TSX and resolves workspace-style peer deps. The
 // same source is consumed by Radar's binary via main.tsx.
 export { RadarApp, type RadarAppProps } from './RadarApp';
+export { PrometheusConnectionForm } from './components/settings/PrometheusConnectionForm';
+export type { PrometheusApplyResult } from './components/settings/PrometheusConnectionForm';
+export { ArgoCDConnectionForm, CostConnectionForm } from './components/settings/IntegrationConnectionForms';
+export type { ArgoConnectionDraft, CostConnectionDraft, SecretEdit } from './components/settings/IntegrationConnectionForms';
+export type { HeaderOperation } from './components/settings/ConnectionHeadersEditor';
 export type { ClusterLoadState } from './types/clusterLoadState';
 export {
   setApiBase,

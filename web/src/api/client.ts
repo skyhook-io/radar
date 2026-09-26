@@ -957,6 +957,8 @@ export type CostUnavailableReason =
   | "authentication_error"
   | "configuration_mismatch"
   | "deployment_configuration_error"
+  | "metrics_settings_error"
+  | "cost_settings_error"
   | "history_unsupported"
   | "insufficient_history";
 
@@ -1009,10 +1011,11 @@ function costRefetchInterval(
   };
 }
 
-export function useOpenCostSummary() {
+export function useOpenCostSummary(enabled = true) {
   const clusterInfo = useClusterInfo();
   return useQuery<OpenCostSummary>({
     queryKey: ["opencost-summary"],
+    enabled,
     queryFn: () => fetchJSON("/opencost/summary"),
     refetchInterval: costRefetchInterval(
       COST_REFRESH_INTERVAL_MS,
@@ -3423,9 +3426,10 @@ export function prometheusStatusRefetchInterval(
 }
 
 // Check Prometheus availability
-export function usePrometheusStatus() {
+export function usePrometheusStatus(enabled = true) {
   return useQuery<PrometheusStatus>({
     queryKey: ["prometheus-status"],
+    enabled,
     queryFn: () => fetchJSON("/prometheus/status"),
     staleTime: 30000,
     refetchInterval: (query) =>

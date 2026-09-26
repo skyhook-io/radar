@@ -1,0 +1,429 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Radar local per-cluster integration settings",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "profiles"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "profiles": {
+      "type": "object",
+      "propertyNames": {
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/profile"
+      }
+    },
+    "imported": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "metrics": {
+          "type": "boolean"
+        },
+        "argocd": {
+          "type": "boolean"
+        },
+        "cost": {
+          "type": "boolean"
+        }
+      }
+    },
+    "dismissed": {
+      "type": "object",
+      "propertyNames": {
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "metrics": {
+            "type": "boolean"
+          },
+          "argocd": {
+            "type": "boolean"
+          },
+          "cost": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "prometheus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "headers": {
+          "type": "object",
+          "propertyNames": {
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "headersFromEnv": {
+          "type": "object",
+          "propertyNames": {
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          }
+        }
+      }
+    },
+    "argocd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "insecureTls": {
+          "type": "boolean"
+        }
+      }
+    },
+    "kubecost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "apiKey": {
+          "type": "string"
+        }
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "server"
+      ],
+      "properties": {
+        "server": {
+          "type": "string"
+        },
+        "user": {
+          "type": "string"
+        },
+        "tlsName": {
+          "type": "string"
+        },
+        "insecureTls": {
+          "type": "boolean"
+        },
+        "trust": {
+          "type": "string"
+        },
+        "proxy": {
+          "type": "string"
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context",
+        "integrations"
+      ],
+      "properties": {
+        "context": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string"
+        },
+        "inFileName": {
+          "type": "string"
+        },
+        "capi": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "managementBinding",
+            "namespace",
+            "name"
+          ],
+          "properties": {
+            "managementBinding": {
+              "type": "string"
+            },
+            "namespace": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        "integrations": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "metrics": {
+              "$ref": "#/$defs/metricsSettings"
+            },
+            "argocd": {
+              "$ref": "#/$defs/argocdSettings"
+            },
+            "cost": {
+              "$ref": "#/$defs/costSettings"
+            }
+          }
+        }
+      }
+    },
+    "metricsSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "prometheus": {
+          "$ref": "#/$defs/prometheus"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": [
+                  "prometheus"
+                ],
+                "properties": {
+                  "prometheus": {
+                    "required": [
+                      "url"
+                    ],
+                    "properties": {
+                      "url": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "target"
+            ]
+          }
+        }
+      ]
+    },
+    "argocdSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "argocd": {
+          "$ref": "#/$defs/argocd"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": [
+                  "argocd"
+                ],
+                "properties": {
+                  "argocd": {
+                    "required": [
+                      "url"
+                    ],
+                    "properties": {
+                      "url": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "required": [
+                  "argocd"
+                ],
+                "properties": {
+                  "argocd": {
+                    "required": [
+                      "token"
+                    ],
+                    "properties": {
+                      "token": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "target"
+            ]
+          }
+        }
+      ]
+    },
+    "costSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "auto",
+            "prometheus",
+            "kubecost"
+          ]
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "kubecost": {
+          "$ref": "#/$defs/kubecost"
+        },
+        "clusterId": {
+          "type": "string",
+          "maxLength": 1024
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "prometheus"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "kubecost"
+                  ]
+                },
+                {
+                  "required": [
+                    "clusterId"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": [
+                  "kubecost"
+                ],
+                "properties": {
+                  "kubecost": {
+                    "required": [
+                      "url"
+                    ],
+                    "properties": {
+                      "url": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "required": [
+                  "kubecost"
+                ],
+                "properties": {
+                  "kubecost": {
+                    "required": [
+                      "apiKey"
+                    ],
+                    "properties": {
+                      "apiKey": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "required": [
+                  "clusterId"
+                ],
+                "properties": {
+                  "clusterId": {
+                    "minLength": 1
+                  }
+                }
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "target"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -25,6 +25,7 @@
     "tsc": "node ../node_modules/typescript-7/bin/tsc --noEmit",
     "tsc:ts6": "tsc --noEmit",
     "test": "vitest run src",
+    "test:e2e:settings": "playwright test --config playwright.settings.config.ts",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
     "lint": "eslint src && node scripts/check-no-native-title.mjs"
   },

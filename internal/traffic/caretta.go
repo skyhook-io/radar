@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"sort"
@@ -17,6 +18,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
@@ -87,6 +90,7 @@ type CarettaSource struct {
 	metricsPort         int    // port for port-forward
 	metricsURL          string // manual override URL from --prometheus-url flag
 	headers             map[string]string
+	managedMetrics      bool
 	isConnected         bool
 	currentContext      string // current K8s context name
 	detectedNamespace   string // namespace Caretta itself was detected in
@@ -112,10 +116,17 @@ type CarettaSource struct {
 // switch builds a fresh CarettaSource). Locking here would deadlock the
 // tryMetricsEndpointLocked path, which holds c.mu.Lock() and cannot
 // re-enter as a reader — sync.RWMutex isn't reentrant.
-func (c *CarettaSource) applyHeaders(req *http.Request) {
+func (c *CarettaSource) applyHeaders(req *http.Request) error {
+	if c.managedMetrics {
+		url, headers := metricsConfig()
+		if url != c.metricsURL || !maps.Equal(headers, c.headers) {
+			return fmt.Errorf("metrics connection changed; retry the request")
+		}
+	}
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
 	}
+	return nil
 }
 
 // NewCarettaSource creates a new Caretta traffic source
@@ -269,6 +280,11 @@ func (c *CarettaSource) resultFromPods(pods []corev1.Pod, result *DetectionResul
 
 // GetFlows retrieves flows from Caretta via Prometheus metrics
 func (c *CarettaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsResponse, error) {
+	if c.managedMetrics {
+		if err := connections.Refresh(config.IntegrationMetrics); err != nil {
+			return nil, err
+		}
+	}
 	c.mu.RLock()
 	connected := c.isConnected
 	promAddr := c.prometheusAddr
@@ -650,7 +666,9 @@ func (c *CarettaSource) hasSeriesLocked(ctx context.Context, addr, query string)
 	if err != nil {
 		return false
 	}
-	c.applyHeaders(req)
+	if err := c.applyHeaders(req); err != nil {
+		return false
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -774,7 +792,9 @@ func (c *CarettaSource) queryPrometheusForFlows(ctx context.Context, promAddr st
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
-	c.applyHeaders(req)
+	if err := c.applyHeaders(req); err != nil {
+		return nil, err
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -928,6 +948,11 @@ func (c *CarettaSource) Close() error {
 // Connect establishes connection to metrics service, starting port-forward if needed
 // contextName is the current K8s context name, used to validate port-forward belongs to right cluster
 func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portforward.ConnectionInfo, error) {
+	if c.managedMetrics {
+		if err := connections.Refresh(config.IntegrationMetrics); err != nil {
+			return nil, err
+		}
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1407,7 +1432,9 @@ func (c *CarettaSource) tryMetricsEndpointLocked(ctx context.Context, addr strin
 	if err != nil {
 		return false
 	}
-	c.applyHeaders(req)
+	if err := c.applyHeaders(req); err != nil {
+		return false
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -1432,6 +1459,11 @@ func (c *CarettaSource) GetMetricsServiceInfo() (namespace, service string, port
 // queryPrometheusRaw executes a PromQL query and returns the parsed response.
 // Used by IstioSource to share Prometheus discovery infrastructure.
 func (c *CarettaSource) queryPrometheusRaw(ctx context.Context, query string) (*prometheusResponse, error) {
+	if c.managedMetrics {
+		if err := connections.Refresh(config.IntegrationMetrics); err != nil {
+			return nil, err
+		}
+	}
 	c.mu.RLock()
 	promAddr := c.prometheusAddr
 	basePath := c.metricsBasePath
@@ -1453,7 +1485,9 @@ func (c *CarettaSource) queryPrometheusRaw(ctx context.Context, query string) (*
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
-	c.applyHeaders(req)
+	if err := c.applyHeaders(req); err != nil {
+		return nil, err
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

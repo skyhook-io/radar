@@ -126,9 +126,9 @@ func (s *IstioSource) Detect(ctx context.Context) (*DetectionResult, error) {
 
 // getPrometheusClient returns the shared prometheus client, or an error if unavailable
 func (s *IstioSource) getPrometheusClient() (*promclient.Client, error) {
-	client := promclient.GetClient()
-	if client == nil {
-		return nil, fmt.Errorf("prometheus client not initialized")
+	client, connectionErr := promclient.ClientForOperation()
+	if connectionErr != nil {
+		return nil, connectionErr
 	}
 	return client, nil
 }

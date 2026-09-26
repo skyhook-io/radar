@@ -46,7 +46,8 @@ func RedactURLs(message string) string {
 func SafeAddress(address string) string {
 	parsed, err := url.Parse(address)
 	if err != nil {
-		return address
+		// An unparseable address can still carry a credential verbatim.
+		return redactedURLPlaceholder
 	}
 	if parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" {
 		return address

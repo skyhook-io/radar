@@ -967,9 +967,9 @@ func changePercent(points int, start, end float64) *float64 {
 // PromForMCP, not Prom: the shared Prom() client carries a 10s socket backstop
 // sized for REST callers, which a 7d trend query on a large cluster outruns.
 func promCostClient(ctx context.Context) (*prom.Client, string) {
-	client := prometheuspkg.GetClient()
-	if client == nil {
-		return nil, pkgopencost.ReasonNoPrometheus
+	client, connectionErr := prometheuspkg.ClientForOperation()
+	if connectionErr != nil {
+		return nil, opencost.ConnectionFailureReason(connectionErr)
 	}
 	if _, _, err := client.EnsureConnected(ctx); err != nil {
 		log.Printf("[mcp] Prometheus EnsureConnected failed for cost query: %v", err)
@@ -1057,6 +1057,10 @@ func costRemediation(reason string) string {
 		return "The configured cost source does not match the connected cluster. Check Radar's cost settings against the current kubeconfig context."
 	case pkgopencost.ReasonDeploymentConfig:
 		return "The cost source is installed but misconfigured. Check the OpenCost/Kubecost deployment's own configuration."
+	case pkgopencost.ReasonMetricsSettings:
+		return "This kubeconfig context's saved metrics settings need review in Radar's Settings (for example after the cluster behind the context changed); Radar does not use them until the user reviews them."
+	case pkgopencost.ReasonCostSettings:
+		return "This kubeconfig context's saved cost settings need review in Radar's Settings (for example after the cluster behind the context changed); Radar does not use them until the user reviews them."
 	case pkgopencost.ReasonInsufficientHistory, pkgopencost.ReasonHistoryUnsupported:
 		return "The cost source has not retained enough history for this range. Try a shorter range, or wait for it to accumulate."
 	case pkgopencost.ReasonNotFound:

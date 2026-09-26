@@ -172,8 +172,8 @@ const (
 // Only Deployment / StatefulSet / DaemonSet supported — per-pod rightsizing
 // is wrong granularity (recs are per-container-template).
 func handleRightsizing(w http.ResponseWriter, r *http.Request) {
-	if GetClient() == nil {
-		writeError(w, http.StatusServiceUnavailable, "Prometheus client not initialized")
+	if _, connectionErr := ClientForOperation(); connectionErr != nil {
+		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
 	}
 
@@ -220,9 +220,9 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 // the get_rightsizing MCP tool. It performs no per-user RBAC check: callers own
 // that gate, because the cache is populated under Radar's ServiceAccount.
 func RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (RightsizingResponse, error) {
-	client := GetClient()
-	if client == nil {
-		return RightsizingResponse{}, ErrPrometheusUnavailable
+	client, connectionErr := ClientForOperation()
+	if connectionErr != nil {
+		return RightsizingResponse{}, fmt.Errorf("%w: %v", ErrPrometheusUnavailable, connectionErr)
 	}
 	if !IsRightsizingKind(kind) {
 		return RightsizingResponse{}, ErrRightsizingKindUnsupported
@@ -1018,9 +1018,9 @@ type PVCUsageResponse struct {
 // kubelet_volume_stats_{used,capacity}_bytes. Missing measurements do not
 // establish whether the driver reports volume stats or kubelet is scraped.
 func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
-	if client == nil {
-		writeError(w, http.StatusServiceUnavailable, "Prometheus client not initialized")
+	client, connectionErr := ClientForOperation()
+	if connectionErr != nil {
+		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
 	}
 

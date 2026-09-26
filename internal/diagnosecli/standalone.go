@@ -63,7 +63,7 @@ func bootEphemeral(kubeconfig string) (base string, shutdown func(), err error) 
 	if err != nil {
 		return "", nil, fmt.Errorf("timeline configuration: %w", err)
 	}
-	app.RegisterCallbacks(cfg, timelineStoreCfg)
+	cfg = app.RegisterCallbacks(cfg, timelineStoreCfg)
 	srv := app.CreateServer(cfg)
 
 	ready := make(chan struct{})

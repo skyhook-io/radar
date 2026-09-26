@@ -148,8 +148,10 @@ Setup (Settings → Argo CD, or `PUT /api/integrations/argocd`):
    auto-discovery (the `argocd-server` Service, port-forwarded automatically
    when Radar runs outside the cluster), or set it explicitly for external
    endpoints. Self-signed installs need the insecure-TLS toggle.
-   Alternatively "Use Argo CD CLI session" adopts your local
-   `~/.config/argocd` token — an explicit action, never silent.
+   Alternatively, once an explicit URL is set, "Connect using CLI token" adopts
+   the token your local `~/.config/argocd` CLI config holds for that server —
+   an explicit action, never silent. With an empty URL (auto-discovery), paste
+   the token instead.
 
 Behavior and guarantees:
 
@@ -160,14 +162,24 @@ Behavior and guarantees:
 - **Secret manifests are structurally redacted** — `data`/`stringData` values
   are masked with per-key changed/unchanged markers on both sides of the
   diff. There is no un-redact option.
-- The token lives in `~/.radar/config.json` (written `0600`) and is redacted
-  from `GET /api/config`; saving settings never erases it.
+- Local CLI/Desktop tokens live in `~/.radar/clusters.json` (written `0600`)
+  and are never returned by Settings APIs. Unchanged credentials are preserved;
+  explicit removal deletes only this context's saved settings and credentials.
 - A token is bound to the server it was issued for: changing the Argo CD URL
-  requires re-entering the token. In auto-discovery mode (empty URL), the token
-  is bound to its kubeconfig source entry, survives restarts and display-name
-  qualification changes, and fails closed after a source switch so it is never
-  sent to another cluster's argocd-server. Existing name-only token bindings
-  require a one-time re-entry in Settings after upgrading.
+  origin requires replacing or clearing the token.
+- On local CLI/Desktop, every saved token, with an explicit URL or for
+  auto-discovery, is stored for one kubeconfig context and bound to that
+  cluster's identity. If the identity changes, the connection pauses until you
+  review it in Settings, so the token is never sent to another cluster's
+  argocd-server (see [cluster identity and recovery](configuration.md#cluster-identity-and-recovery)).
+  Explicit endpoints can be reused across contexts through **Copy from another
+  cluster…**, creating independent settings whose later edits affect only that
+  context; discovery credentials cannot. Older global settings require explicit
+  import, not automatic reuse.
+- In shared installations, an auto-discovery token (empty URL) is bound to its
+  kubeconfig source entry, survives restarts and display-name qualification
+  changes, and fails closed after a source switch so it is never sent to
+  another cluster's argocd-server.
 - Argo CD *core* installs have no argocd-server — Radar degrades to the
   annotation-based drift view. Same when the server is unreachable or the
   token expires; the Changes tab keeps working, only the deep diff goes away.
@@ -177,20 +189,22 @@ The gitops-demo cluster mints a ready-to-use token into
 
 ### Provisioning the token per deployment shape
 
-The Settings paste above is right for a laptop, but not for a headless or hosted
-Radar — pasting in the UI stores the token under `/home/nonroot`, which is an
-`emptyDir` in the default chart and is lost on pod restart. Pick by how Radar runs:
+Settings edits are for local CLI/Desktop. Shared OSS installations are
+operator-controlled and read-only in Settings. Pick by how Radar runs:
 
 | Deployment | How to provision | Notes |
 |------------|------------------|-------|
-| **Local / desktop** | Settings → Argo CD (paste, or "Use Argo CD CLI session") | Interactive; persists to `~/.radar/config.json`. |
+| **Local / desktop** | Settings → Argo CD (paste, or set the URL and choose "Connect using CLI token") | Interactive; per-context settings persist to `~/.radar/clusters.json`. |
 | **In-cluster (self-hosted)** | Helm `argocd.existingSecret` (or `argocd.token`) → `RADAR_ARGOCD_TOKEN` | Declarative, survives restarts, read-only in the UI. |
 | **Radar Cloud** | The customer's in-cluster Radar carries the token (as above); the token never reaches the hub. | Same env path; the hub proxies to the binary, which holds the credential. |
 
 When a token is provided via the environment, the integration becomes
 **environment-managed**: the Settings card renders read-only and `PUT
 /api/integrations/argocd` returns `409` — the deployment is the source of truth.
-The env token is held in memory only and is never written to `~/.radar/config.json`.
+The env token is held in memory only, never written to any local Radar file.
+On local CLI/Desktop, environment overrides apply only to the launch context
+and target, not every context subsequently selected. See
+[local integration connections](configuration.md#local-integration-connections).
 
 Environment variables (read once at startup):
 

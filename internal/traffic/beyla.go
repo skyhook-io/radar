@@ -96,9 +96,9 @@ func (s *BeylaSource) setFlowMetric(metric string) {
 }
 
 func (s *BeylaSource) defaultQuery(ctx context.Context, query string) (*prom.QueryResult, error) {
-	client := promclient.GetClient()
-	if client == nil {
-		return nil, fmt.Errorf("prometheus client not initialized")
+	client, connectionErr := promclient.ClientForOperation()
+	if connectionErr != nil {
+		return nil, connectionErr
 	}
 	return client.Query(ctx, query)
 }
@@ -109,9 +109,9 @@ func (s *BeylaSource) query(ctx context.Context, query string) (*prom.QueryResul
 
 // Connect delegates to the shared Prometheus client's EnsureConnected.
 func (s *BeylaSource) Connect(ctx context.Context, contextName string) (*portforward.ConnectionInfo, error) {
-	client := promclient.GetClient()
-	if client == nil {
-		return &portforward.ConnectionInfo{Connected: false, Error: "Prometheus client not initialized"}, nil
+	client, connectionErr := promclient.ClientForOperation()
+	if connectionErr != nil {
+		return &portforward.ConnectionInfo{Connected: false, Error: connectionErr.Error()}, nil
 	}
 	_, _, err := client.EnsureConnected(ctx)
 	if err != nil {

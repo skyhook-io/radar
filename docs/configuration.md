@@ -73,7 +73,9 @@ there would leave a running process with no way to reach it.
 
 ## Persistent Configuration
 
-Local CLI and Desktop Radar store configuration in two files under `~/.radar/`.
+Local CLI and Desktop Radar store machine defaults (`config.json`), personal
+preferences (`settings.json`), and per-context integration connections
+(`clusters.json`) under `~/.radar/`.
 Shared OSS installations (in-cluster or authentication-enabled) expose these
 installation settings read-only; configure them through Helm values or startup
 configuration instead. See [installation settings](in-cluster.md#installation-settings)
@@ -84,11 +86,19 @@ Non-Helm shared OSS still reads `config.json` as startup defaults (including
 previously saved integration endpoints); flags override them. It does not adopt
 UI-saved audit policy or OCI sources from `settings.json`: move those into
 `RADAR_OPERATOR_SETTINGS_FILE` before upgrading. Radar logs a warning when it
-ignores those saved settings. Neither local file is rewritten by this transition.
+ignores those saved settings. Radar does not rewrite `config.json` or `settings.json`
+during this transition.
 
 ### Config File (`~/.radar/config.json`)
 
-Persistent defaults for CLI flags. CLI flags always override these values. Managed via the Settings dialog in the UI or `PUT /api/config`.
+Persistent defaults for CLI flags. CLI flags override these values. Managed via the Settings dialog in the UI or `PUT /api/config`.
+
+For local CLI/Desktop, `prometheus*`, `argoCd*`, `costSource`, and `kubecost*`
+fields below are **legacy import sources**, not active integration defaults.
+Configure these in [local integration connections](#local-integration-connections)
+instead. `opencostCurrency` remains a machine preference. Shared OSS and Cloud
+retain installation-scoped configuration; the integration-field descriptions
+below describe that installation-scoped behavior.
 
 ```json
 {
@@ -132,11 +142,11 @@ All fields are optional — omitted fields use built-in defaults.
 | `timelineMaxSize` | Max SQLite DB + WAL size before pruning oldest events (`0` disables; sqlite only) |
 | `historyLimit` | Max timeline events to retain (memory only) |
 | `prometheusUrl` | Manual PromQL-compatible query URL — works with Prometheus, VictoriaMetrics, Thanos, Mimir, and similar backends. Skips auto-discovery; useful when the backend is not in the same cluster or uses a non-standard service name. Leave it empty and Radar looks for a Prometheus-like Service on startup and after each context switch. While it looks, the Metrics status says "discovering". If it finds a backend it cannot reach, and it can see a NetworkPolicy that blocks the connection, the status names that policy. |
-| `opencostCurrency` | Optional ISO 4217 override for values produced by OpenCost or Kubecost. Empty reads `currencyCode` from the pricing ConfigMap referenced by an active OpenCost/Kubecost workload, or literal `DISPLAY_CURRENCY` from an active Kubecost Deployment or StatefulSet, when the selected cost source is tied to the connected cluster; otherwise it falls back to `USD`. In Settings this preference saves through the dialog footer, independently of source testing, so it can be changed while a source is unavailable. Radar labels values but does not convert them. Equivalent CLI: `--opencost-currency`; an explicit CLI value remains authoritative while Radar runs and after restart. |
-| `costSource` | `auto` (default), `prometheus`, or `kubecost`. Auto keeps working OpenCost metrics from a PromQL-compatible backend, then tries a Kubecost 3 Aggregator; if neither is present, selection remains unavailable and retries instead of reporting an absent source as active. Settings validates Auto and Kubecost before saving. An explicit `prometheus` value is a persisted preference and can be saved before its metrics are installed. |
+| `opencostCurrency` | Optional ISO 4217 override for values produced by OpenCost or Kubecost. Empty reads `currencyCode` from the pricing ConfigMap referenced by an active OpenCost/Kubecost workload, or literal `DISPLAY_CURRENCY` from an active Kubecost Deployment or StatefulSet, when the selected cost source is tied to the connected cluster; otherwise it falls back to `USD`. In local Settings → Cost, this preference saves automatically for all local clusters, independently of source testing, so it can be changed while a source is unavailable. Radar labels values but does not convert them. Equivalent CLI: `--opencost-currency`; an explicit CLI value remains authoritative while Radar runs and after restart. |
+| `costSource` | `auto` (default), `prometheus`, or `kubecost`. Auto keeps working OpenCost metrics from a PromQL-compatible backend, then tries a Kubecost 3 Aggregator; if neither is present, selection remains unavailable and retries instead of reporting an absent source as active. Local Settings saves this preference per context; connection-check behavior is described below. |
 | `kubecostUrl` | Optional Kubecost 3 Aggregator base URL. Empty discovers an active local Aggregator Service and tries its named `tcp-api` port (9004). When that port requires SAML/OIDC and no API key is configured, Radar can fall back to the same Service's exact `tcp-api-rbac` port (9008). Federated agent-only clusters need the central URL; root API URLs and URLs ending in `/model` are accepted. |
-| `kubecostClusterId` | Cluster ID used to filter a central Aggregator. Empty detects one distinct literal `CLUSTER_ID` from an active FinOps Agent or Aggregator; indirect or conflicting values require an override. An override saved in Settings is bound to the active kubeconfig context so switching clusters cannot silently reuse the wrong cluster's costs. A value added directly to the config file is bound and persisted on its first startup with an available kubeconfig context. |
-| `kubecostApiKey` | Optional Kubecost service-account key sent as `X-API-KEY`. Stored in the unencrypted `0600` config file and redacted from `GET /api/config`; changing the URL origin clears a stored key unless it is supplied again. With a blank URL, a key saved in Settings is bound to the active kubeconfig context because Radar will auto-discover that cluster's local Aggregator; a key added directly to the config file is bound and persisted on its first startup with an available kubeconfig context. An explicit key is never bypassed through an auto-discovered unauthenticated port: authentication failure remains visible. A key paired with an explicit central Aggregator URL can be reused across contexts. In the Helm deployment, Settings is read-only; provision a Kubernetes Secret with `cost.kubecost.existingSecret`. |
+| `kubecostClusterId` | Cluster ID used to filter a central Aggregator. Empty detects one distinct literal `CLUSTER_ID` from an active FinOps Agent or Aggregator; indirect or conflicting values require an override. Local Settings stores the override with this context's Cost settings; copying another cluster's backend never copies its cluster ID. |
+| `kubecostApiKey` | Optional Kubecost service-account key sent as `X-API-KEY`. Values are redacted from settings responses. An explicit key is never bypassed through an auto-discovered unauthenticated port: authentication failure remains visible. Local CLI/Desktop stores new keys in `clusters.json`, with explicit reuse and origin-change protection described below; this `config.json` field is only an import source locally. In Helm, provision a Kubernetes Secret with `cost.kubecost.existingSecret`; Settings is read-only. |
 | `prometheusHeaders` | HTTP headers sent with every Prometheus request. Required for auth-protected backends — e.g. `{"X-Scope-OrgID": "my-org"}`. Equivalent CLI: `--prometheus-header Key=Value` (repeatable). Stored in plain text in `config.json` — protect the file accordingly. **Requires `prometheusUrl`**: headers carry credentials, and auto-discovery probes every Service that looks like Prometheus, so with headers configured and no URL Radar refuses to discover (the Metrics status names the rule) rather than send them to endpoints you never named. Settings rejects saving that combination. |
 | `argoCdUrl` | Manual argocd-server URL for the Argo CD API integration — skips auto-discovery. |
 | `argoCdToken` | Argo CD API token (get-only account recommended). Stored in plain text — the file is written `0600`; the token is redacted from `GET /api/config`. |
@@ -246,8 +256,8 @@ This prevents identical user or cluster names in different files from selecting
 the wrong credentials. Context names remain unchanged unless two files use the
 same name; later collisions receive a source suffix in the context switcher.
 Saved namespace selections are keyed by that visible context name. Integration
-credentials have separate binding rules; they are not general per-context profiles
-(see [integration settings](#integration-settings-when-switching-clusters)).
+settings are keyed by kubeconfig source file and in-file context name instead
+(see [cluster identity and recovery](#cluster-identity-and-recovery)).
 If adding an earlier source causes a collision suffix to appear,
 the renamed context does not inherit preferences stored under its former name;
 Radar reports the rename in startup logs and diagnostics so it can be reconfigured.
@@ -283,42 +293,224 @@ If an active context's credentials expire or are rejected, Radar disconnects clu
 
 ### Integration settings when switching clusters
 
-Local Radar does not yet maintain a complete set of integration settings for each
-cluster. A context switch reconnects Kubernetes and invalidates cached discovery;
-it does not switch every saved endpoint, tool preference and credential.
-
-| Setting | Local context-switch behavior |
+| Setting | Local CLI / Desktop scope |
 |---|---|
-| Namespace selection | Remembered per visible kubeconfig context |
-| Prometheus URL and headers, including tenant/auth headers | Radar-wide; the manual URL and headers remain selected after switching contexts |
-| Prometheus auto-discovery | Runs for the selected cluster when no manual URL or headers are configured |
-| Workload-metrics identity evidence / scope assertion | Evidence is rechecked; a connection change discards the process-local assertion |
-| Argo CD auto-discovery token | Bound to its kubeconfig source identity; this protects reuse but is not a saved profile for every cluster |
-| Kubecost auto-discovery API key / cluster-ID override | Bound to the configured context; an explicit central URL's key can be reused across contexts |
+| Metrics URL, authentication and tenant headers | Stored directly for this kubeconfig context |
+| Argo CD URL, token and TLS verification | Stored directly for this context, including discovery credentials |
+| Cost source (Auto / Prometheus / Kubecost) | Context-specific |
+| Kubecost URL and API key | Stored directly for this context, including discovery credentials |
+| Kubecost cluster ID | Context-specific, **never** inherited from another cluster's settings |
+| Prometheus-based costs | Use this context's metrics connection |
+| Workload-metrics scope evidence / assertion | Rechecked; process-local assertions are not stored in a connection |
+| Namespace selection | Remembered per visible kubeconfig context in `settings.json` |
+| Currency, UI preferences, OCI sources | Existing machine/personal scope; not per-cluster connections |
 
-If different clusters use different Prometheus backends or tenants, update the URL
-and headers together in **Settings → Metrics**. Changing the server (scheme, host
-or port) requires explicitly replacing or clearing saved headers; a URL-only
-change cannot carry credentials to another server. If the configuration file
-contains `prometheusHeadersFromEnv`, update its URL and header references together
-and restart. If `--prometheus-url`, `--prometheus-header` or
-`--prometheus-header-from-env` is set, change the URL and header flags together and
-restart before switching servers or enabling auto-discovery. Headers supplied by
-flags or environment references cannot be replaced or cleared in Settings; change
-them at their source and restart. A URL-only flag still allows saved headers to be
-edited. Same-server path edits apply immediately, but a URL supplied at launch is
-restored on restart. Settings shows the running URL and header names, never header
-values. For editable headers, **Clear saved headers** followed by **Apply** removes
-them explicitly. Apply saves the configuration before checking connectivity, so
-an unreachable backend remains saved until you correct it.
+### Local integration connections
 
-At launch, overriding a saved server with `--prometheus-url` also requires
-explicitly replacing every inherited header source, or updating the saved URL
-and headers together. A header-only configuration file can still pair with a
-deployment's URL flag. Applying that connection in Settings saves its URL, so
-subsequent launches bind the saved headers to that server. Header names are
-case-insensitive; duplicate names, whitespace-padded keys and invalid HTTP header
-characters are rejected, including on startup.
+In **Settings → Metrics / Argo CD / Cost**, configure the selected context and
+choose **Save changes**. **Discard** resets the form without changing saved settings.
+Switching A → B → A restores A's settings. A context with no saved settings uses
+discovery. Local CLI and Desktop share `~/.radar/clusters.json`.
+
+**Use auto-discovery**, below the backend URL (or Cost source), stages an empty
+connection. Choose **Save changes** and confirm removal of this context's saved
+connection and credentials; for Cost this also clears the Kubecost cluster
+mapping. **Discard** restores the saved settings. Cancelling confirmation keeps
+the draft without saving it. The action is disabled when already using
+auto-discovery without overrides.
+
+**Copy:** on another context, choose **Copy from another cluster…** and select
+the source context from the searchable picker. The current form becomes an
+unsaved draft; adjust the endpoint or credentials before choosing **Save changes**.
+Choosing another source replaces the draft without saving it.
+**Discard** restores the previous settings. Replacing an existing connection
+requires confirmation when saving. This makes an independent copy, not a shared reference. Later edits
+affect only the selected cluster.
+The copy action appears only when another context has a saved explicit endpoint
+(URL) for that integration. Discovery-only credentials cannot be copied; enter
+them again on each context.
+
+Only copy a backend that serves the destination cluster. A reachable endpoint
+does not prove it contains that cluster's data. Authentication and tenant headers
+are copied server-side on Save; their values are never returned to the browser.
+You can replace or remove them in the draft. If the source changes before Save,
+Radar rejects the stale copy rather than silently using different credentials.
+Kubecost's source cluster mapping is never copied: keep or edit the destination ID, or
+allow discovery to detect it.
+Environment-backed headers retain references, not resolved secret values; both
+copies can still depend on the same environment variable.
+
+**Edit:** the regular form always edits this context only. Each context stores
+its own endpoint and credentials.
+
+**Credentials:** Settings displays header names and whether a token/key exists,
+never saved values. Type directly into a credential field to replace its value;
+leave it untouched to keep it, or choose **Remove** to clear it when saving.
+Changing URL origin (scheme, host or port) requires replacing or clearing every
+retained credential, including after copying. Plain HTTP is supported but
+does not encrypt credentials in transit; use HTTPS outside trusted local paths.
+
+**Connection checks:** Metrics saves first and then tests reachability; an
+unreachable backend remains saved with a warning. Argo CD changes, Kubecost mode,
+and Auto-detect with any Kubecost override (URL, API key or cluster ID) test an
+isolated candidate before saving; a failed test blocks the save and leaves the
+previous connection active. Auto-detect with no Kubecost overrides, or
+Prometheus-based cost mode, saves that preference without claiming a
+successful backend test. Explicit Kubecost connections check this cluster's
+mapping and data readiness; cost queries require a narrow cluster filter. Central Argo connectivity does not add cross-cluster resource
+discovery.
+
+**Cleanup:** switching to discovery or replacing saved settings explicitly removes
+this context's previous credentials.
+Other contexts are unchanged. Missing kubeconfigs never trigger automatic deletion.
+**Settings → Connection → Saved connections** lets you explicitly remove an
+integration for a kubeconfig entry no longer loaded, including discovery
+credentials and mappings. For the current context, use its integration tab.
+A context not loaded in this session may still be in use by another Radar process.
+
+Unsaved edits stay in the dialog when switching Settings tabs. Closing it asks
+before discarding them. If another client changes the active cluster while you
+are editing, Radar freezes the old draft; explicitly discard and reload to edit
+the new cluster. A stale save is rejected rather than applied to a different
+context or merged with a concurrent file edit.
+
+#### File editing and refresh
+
+Let Settings create context keys and accepted target fingerprints. Each entry
+stores its own configuration directly under `profiles[context-key].integrations`,
+keyed by `metrics`, `argocd` and `cost`. For example, within an existing
+context's `integrations.metrics` settings (keep the actual `target` and
+`identity` generated by Radar):
+
+```json
+{
+  "target": "<existing accepted target fingerprint>",
+  "prometheus": {
+    "url": "https://metrics.example.net/prometheus",
+    "headersFromEnv": {
+      "Authorization": "PROMETHEUS_TOKEN",
+      "X-Scope-OrgID": "PROMETHEUS_TENANT"
+    }
+  }
+}
+```
+
+Environment variables must exist in the Radar process;
+Desktop does not necessarily inherit your terminal environment. Missing variables
+pause only the affected connection. Environment-backed header references are
+file-edited, not editable in Settings. The [JSON schema](schemas/clusters.schema.json)
+describes the canonical v1 file format and helps editors check fields
+and types. Radar additionally validates accepted cluster targets, URLs, HTTP
+headers and integration-specific rules; passing schema validation alone does not
+prove that a connection is usable. Contract tests check v1 round-trips and the
+schema against representative files written by Radar.
+
+CLI and Desktop reread bounded file contents on the next integration operation,
+including background consumers, not only when Settings opens. A content hash
+avoids reparsing unchanged data. Concurrent saves use a file lock and revision
+checks. Draft revisions cover the selected context and integration, including
+redacted credentials: saving Argo CD or another cluster does not invalidate an
+unfinished Metrics draft. The exception: importing previous settings with an
+explicit endpoint on any context requires open drafts for that integration on
+other contexts to reload. A concurrent edit to the same settings requires reloading.
+Copy also checks the source revision, so an endpoint or secret cannot change
+unnoticed between selection and applying the copy.
+The final write also checks the entire file, so overlapping saves during a
+connection test can still conflict rather than overwrite another process.
+Malformed JSON, unrecognized fields or an unsupported version block the file
+without overwriting it. A recognized field used with the wrong integration, or
+another semantically invalid connection setting, blocks only that integration;
+unrelated edits preserve the invalid connection. Some empty JSON values accepted
+by the reader are normalized when written; the schema describes the written form.
+
+The stored format is versioned independently of Radar releases. Future format
+changes must retain support for existing v1 files or provide an explicit
+migration. Older readers reject unfamiliar fields and versions rather than
+silently dropping data. A newer format produces upgrade guidance, not an
+instruction to repair or delete the file.
+
+#### Cluster identity and recovery
+
+The context key includes the kubeconfig source path and in-file context name.
+Same-named contexts in different files do not share credentials. If a context is
+renamed or its file moved, copy its saved connection to the new context, then
+remove the old connection from **Settings → Connection → Saved connections**.
+That section groups saved integrations by kubeconfig entry; removal is offered
+for entries no longer loaded, with a confirmation for the selected integration.
+Overview's collapsed **Configuration files** section explains the three local files and
+credential storage; the info button beside the cluster name in each integration
+tab identifies its kubeconfig entry. In-cluster installations show operator
+configuration guidance instead of local-file information. Discovery-only credentials may require
+reentry. An unavailable kubeconfig is distinguished from a context confirmed
+removed from a readable file.
+
+CAPI profiles use management-source/namespace/name identity, not temporary
+kubeconfig paths. Changes to the Kubernetes server, CA trust, TLS settings, proxy
+or user reference pause each affected integration. **Review changes** lets you
+accept selected integrations together. Anonymous discovery without a saved
+mapping needs no confirmation. Token rotation alone does not prompt. Replacing
+a cluster behind identical endpoint, trust and user reference is not detectable
+by this fingerprint.
+
+#### Startup overrides and older settings
+
+An explicit local `--prometheus-url` is a complete, read-only **Set for this
+launch** override bound to the initial context and target. It never inherits
+saved headers; local header flags require the URL flag in the same launch.
+Argo CD and cost environment overrides similarly form complete, context-bound
+launch configurations, not layers over saved credentials. Switching away
+disables the override; returning to that target restores it. Restart without
+the override to edit its saved settings.
+
+Workload-metrics scope assertions remain process-local and clear on a context
+switch attempt, even an unsuccessful one. Saved connections never restore them.
+Repairing a connection that was unusable at startup resumes automatic matching,
+not its startup assertion.
+
+Older global `config.json` integration settings never activate automatically in
+local mode. Settings → Overview highlights previous integration settings and
+links to the relevant integration tabs. **Use previous settings** fills an
+editable draft; **Save changes** imports it for the current cluster, while
+**Discard** leaves its connection unchanged. Saved credentials remain hidden.
+An explicit endpoint is imported once per integration, then reused through
+**Copy from another cluster…**. Discovery-bound credentials respect their original
+context binding. **Dismiss for this cluster** hides that integration's offer
+for the current cluster without applying it.
+The old file stays as a recovery copy, never a fallback; removal does not
+resurrect it. Older Radar versions still read that global file, so rolling back
+does not preserve the new context-scoped behavior.
+
+Missing-connection hints in Metrics, Rightsizing, PVC usage, Cost (including
+workload and application tabs), and Argo CD diff/health views also offer
+**Review previous settings** when an applicable local configuration is available.
+This opens the relevant Settings tab; it does not import or save anything.
+Existing errors remain visible, and a previous connection is not a guarantee
+that its backend is reachable. Working views are unchanged: if auto-discovery
+finds a working backend, review previous settings from Settings → Overview.
+These recovery hints are for local CLI/Desktop configuration, not operator-managed
+or embedded Cloud installations.
+
+In-cluster OSS settings remain Helm/operator-controlled and read-only in the UI.
+Cloud remains installation-scoped; `clusters.json` is not a Hub
+configuration transport.
+
+The profile file and lock are created with Unix mode `0600`; a newly created
+directory uses `0700`. Existing directory permissions are not changed. Headers
+are plaintext, not encrypted: protect backups and your OS account. When creating
+or replacing the file manually on Unix, set `chmod 600 ~/.radar/clusters.json`;
+Radar does not change existing file permissions merely by reading it. Atomic
+replacement prevents partial writes but does not guarantee the latest save
+survives sudden power loss. On Windows,
+protect access with user-directory ACLs; Unix modes are not an ACL guarantee.
+Locking is intended for local filesystems, not validated for network homes.
+On Windows, an open reader or antivirus scanner may briefly prevent atomic
+replacement. A failed save leaves the previous file and running connection
+unchanged; reload and retry after that reader finishes.
+
+Shared OSS/Cloud configuration remains installation-scoped. A shared deployment's
+header-only configuration may still pair with its URL flag; changing a saved
+server requires replacing every inherited header source. These installations do
+not read local profiles.
 
 Cross-origin HTTP redirects are refused, including for custom auth
 and tenant headers. Headers require an explicit URL and are not sent during auto-discovery.
