@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"k8s.io/apimachinery/pkg/api/meta"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -83,7 +84,8 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 
 	key := resourceid.NewRef(group, kind, namespace, name)
 	clusterContext := k8s.ActiveClusterContext()
-	scope, err := workloadHistoryScope(r.Context(), store, clusterContext, key, s.workloadAttachments(r, key))
+	liveUID := liveWorkloadUID(r.Context(), chi.URLParam(r, "kind"), group, namespace, name)
+	scope, err := workloadHistoryScope(r.Context(), store, clusterContext, key, liveUID, s.workloadAttachments(r, key))
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -115,6 +117,29 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 		resp.Events = []timeline.TimelineEvent{}
 	}
 	s.writeJSON(w, resp)
+}
+
+// liveWorkloadUID is the UID of the workload as it exists now. The timeline
+// doesn't always hold a row under the workload's own key (a busy cluster may
+// only have recorded its ReplicaSets and Pods), so the ownership walk can't
+// rely on those rows alone to know the workload's UID.
+func liveWorkloadUID(ctx context.Context, resource, group, namespace, name string) string {
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return ""
+	}
+	if group == "" || k8s.TypedKindOwnsGroup(resource, group) {
+		if obj, err := k8s.FetchResource(cache, resource, namespace, name); err == nil {
+			if m, err := meta.Accessor(obj); err == nil {
+				return string(m.GetUID())
+			}
+			return ""
+		}
+	}
+	if u, err := cache.GetDynamicWithGroup(ctx, resource, namespace, name, group); err == nil && u != nil {
+		return string(u.GetUID())
+	}
+	return ""
 }
 
 // resolveWorkloadKind turns the route's plural resource name (or a Kind) and
@@ -186,9 +211,9 @@ func attachedRefs(rel *topology.Relationships, namespace string) []resourceid.Re
 }
 
 // workloadHistoryScope resolves the rows that belong to a workload's history:
-// the UIDs recorded under its key (every incarnation), everything owned
-// beneath them by owner UID, and the attached resources by key.
-func workloadHistoryScope(ctx context.Context, store timeline.EventStore, clusterContext string, key resourceid.Ref, attached []resourceid.Ref) (timeline.ResourceScope, error) {
+// its live UID and the UIDs recorded under its key (every incarnation),
+// everything owned beneath them by owner UID, and the attached resources by key.
+func workloadHistoryScope(ctx context.Context, store timeline.EventStore, clusterContext string, key resourceid.Ref, liveUID string, attached []resourceid.Ref) (timeline.ResourceScope, error) {
 	keyRows, err := store.Query(ctx, timeline.QueryOptions{
 		Namespaces:       []string{key.Namespace},
 		Scope:            timeline.ResourceScope{Refs: []resourceid.Ref{key}},
@@ -212,6 +237,9 @@ func workloadHistoryScope(ctx context.Context, store timeline.EventStore, cluste
 		return true
 	}
 	var frontier []string
+	if add(liveUID) {
+		frontier = append(frontier, liveUID)
+	}
 	for _, e := range keyRows {
 		if add(e.UID) {
 			frontier = append(frontier, e.UID)

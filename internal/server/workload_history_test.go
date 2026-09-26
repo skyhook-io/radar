@@ -150,3 +150,33 @@ func TestAttachedRefs_KeepsTheWorkloadsNamespaceAndFillsBuiltinGroups(t *testing
 		t.Errorf("attachedRefs = %v, want %v", got, want)
 	}
 }
+
+// A busy cluster may hold rows for a Deployment's ReplicaSets and Pods but
+// none under the Deployment's own key. Its live UID starts the ownership walk.
+func TestWorkloadHistoryScope_StartsFromTheLiveUIDWhenTheKeyHasNoRows(t *testing.T) {
+	store := withWorkloadHistoryStore(t)
+	base := time.Now().Add(-time.Hour)
+	for i, e := range []timeline.TimelineEvent{
+		{ID: "rs", Kind: "ReplicaSet", Name: "web-1", UID: "rs-1", APIVersion: "apps/v1", Owner: &timeline.OwnerInfo{Kind: "Deployment", Name: "web", UID: "dep-live"}},
+		{ID: "pod", Kind: "Pod", Name: "web-1-a", UID: "pod-1", APIVersion: "v1", Owner: &timeline.OwnerInfo{Kind: "ReplicaSet", Name: "web-1", UID: "rs-1"}},
+		{ID: "other", Kind: "ReplicaSet", Name: "api-1", UID: "rs-api", APIVersion: "apps/v1", Owner: &timeline.OwnerInfo{Kind: "Deployment", Name: "api", UID: "dep-api"}},
+	} {
+		e.Timestamp, e.Source, e.Namespace, e.EventType = base.Add(time.Duration(i)*time.Minute), timeline.SourceHistorical, "default", timeline.EventTypeAdd
+		e.ClusterContext = k8s.ActiveClusterContext()
+		if err := store.Append(t.Context(), e); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	key := resourceid.NewRef("apps", "Deployment", "default", "web")
+	scope, err := workloadHistoryScope(t.Context(), store, k8s.ActiveClusterContext(), key, "dep-live", nil)
+	if err != nil {
+		t.Fatalf("workloadHistoryScope: %v", err)
+	}
+	events, err := store.Query(t.Context(), timeline.QueryOptions{Scope: scope, Limit: 100, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if got := fmt.Sprint(historyIDs(events)); got != "[pod rs]" {
+		t.Errorf("history = %s, want [pod rs]", got)
+	}
+}
