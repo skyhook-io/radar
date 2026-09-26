@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDesktopPortRoundTrip(t *testing.T) {
@@ -41,46 +42,78 @@ func TestLastDesktopPortIgnoresGarbage(t *testing.T) {
 
 func TestRememberDesktopPort(t *testing.T) {
 	path := filepath.Join(t.TempDir(), desktopPortFile)
-	radar := func(int) bool { return true }
-	other := func(int) bool { return false }
+	held := func(k portOwnerKind) func(int) portOwnerKind { return func(int) portOwnerKind { return k } }
 
-	rememberDesktopPort(path, 0, 51000, other)
+	rememberDesktopPort(path, 0, 51000, held(ownerOther))
 	if got := lastDesktopPort(path); got != 51000 {
 		t.Fatalf("first launch: recorded %d, want 51000", got)
 	}
-	rememberDesktopPort(path, 51000, 52000, radar)
+	rememberDesktopPort(path, 51000, 52000, held(ownerRadar))
 	if got := lastDesktopPort(path); got != 51000 {
 		t.Fatalf("a second window fell back: recorded %d, want the remembered 51000 kept", got)
 	}
-	rememberDesktopPort(path, 51000, 53000, other)
+	rememberDesktopPort(path, 51000, 52000, held(ownerUnknown))
+	if got := lastDesktopPort(path); got != 51000 {
+		t.Fatalf("no clear answer on the remembered port: recorded %d, want 51000 kept", got)
+	}
+	rememberDesktopPort(path, 51000, 53000, held(ownerOther))
 	if got := lastDesktopPort(path); got != 53000 {
 		t.Fatalf("remembered port held by something else: recorded %d, want 53000", got)
 	}
 }
 
-func TestRadarServingOn(t *testing.T) {
+func TestPortOwner(t *testing.T) {
+	port := func(addr net.Addr) int { return addr.(*net.TCPAddr).Port }
+
 	radar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/capabilities" {
+		if r.URL.Path != "/api/connection" {
 			http.NotFound(w, r)
 			return
 		}
-		_, _ = w.Write([]byte(`{"deployment":{"mode":"local"}}`))
+		_, _ = w.Write([]byte(`{"state":"connected"}`))
 	}))
 	defer radar.Close()
+	if got := portOwner(port(radar.Listener.Addr())); got != ownerRadar {
+		t.Errorf("Radar: got %v, want ownerRadar", got)
+	}
+
 	other := httptest.NewServer(http.NotFoundHandler())
 	defer other.Close()
-	port := func(s *httptest.Server) int { return s.Listener.Addr().(*net.TCPAddr).Port }
+	if got := portOwner(port(other.Listener.Addr())); got != ownerOther {
+		t.Errorf("unrelated HTTP server: got %v, want ownerOther", got)
+	}
 
-	if !radarServingOn(port(radar)) {
-		t.Error("Radar's capabilities endpoint not recognized")
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if radarServingOn(port(other)) {
-		t.Error("an unrelated server was taken for Radar")
+	defer raw.Close()
+	go func() {
+		for {
+			c, err := raw.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = c.Write([]byte("SSH-2.0-not-http\r\n"))
+			c.Close()
+		}
+	}()
+	if got := portOwner(port(raw.Addr())); got != ownerOther {
+		t.Errorf("non-HTTP service: got %v, want ownerOther", got)
 	}
-	closed, _ := net.Listen("tcp", "127.0.0.1:0")
-	freePort := closed.Addr().(*net.TCPAddr).Port
-	closed.Close()
-	if radarServingOn(freePort) {
-		t.Error("a free port was taken for Radar")
+
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(3 * time.Second)
+	}))
+	defer slow.Close()
+	if got := portOwner(port(slow.Listener.Addr())); got != ownerUnknown {
+		t.Errorf("server too slow to answer: got %v, want ownerUnknown", got)
+	}
+
+	free, _ := net.Listen("tcp", "127.0.0.1:0")
+	freePort := port(free.Addr())
+	free.Close()
+	if got := portOwner(freePort); got != ownerUnknown {
+		t.Errorf("free port: got %v, want ownerUnknown", got)
 	}
 }

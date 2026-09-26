@@ -2,9 +2,10 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -45,32 +46,54 @@ func lastDesktopPort(path string) int {
 }
 
 // rememberDesktopPort runs once the window is up, so a launch that fails
-// before then records nothing. A launch that fell back because another Radar
-// holds the remembered port (a second Desktop window) keeps the remembered
-// one; a launch that fell back because something else holds it moves on, or
-// every later launch would fall back too.
-func rememberDesktopPort(path string, remembered, actual int, radarServing func(port int) bool) {
-	if remembered != 0 && actual != remembered && radarServing(remembered) {
+// before then records nothing. A launch that fell back moves to its new port
+// only when something other than Radar answers on the remembered one. Another
+// Radar (a second Desktop window) or no clear answer keeps the remembered port;
+// the next launch gets it back.
+func rememberDesktopPort(path string, remembered, actual int, owner func(port int) portOwnerKind) {
+	if remembered != 0 && actual != remembered && owner(remembered) != ownerOther {
 		return
 	}
 	recordDesktopPort(path, actual)
 }
 
-func radarServingOn(port int) bool {
-	client := http.Client{Timeout: 500 * time.Millisecond}
-	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/capabilities", port))
+type portOwnerKind int
+
+const (
+	ownerUnknown portOwnerKind = iota
+	ownerRadar
+	ownerOther
+)
+
+// portOwner asks who holds a loopback port. /api/connection answers from
+// memory, so a busy Radar still replies quickly; a refused connection or a
+// timeout proves nothing.
+func portOwner(port int) portOwnerKind {
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
 	if err != nil {
-		return false
+		return ownerUnknown
+	}
+	conn.Close()
+	client := http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + addr + "/api/connection")
+	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return ownerUnknown
+		}
+		return ownerOther
 	}
 	defer resp.Body.Close()
-	var caps struct {
-		Deployment *struct {
-			Mode string `json:"mode"`
-		} `json:"deployment"`
+	var status struct {
+		State *string `json:"state"`
 	}
-	return resp.StatusCode == http.StatusOK &&
-		json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&caps) == nil &&
-		caps.Deployment != nil
+	if resp.StatusCode == http.StatusOK &&
+		json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&status) == nil &&
+		status.State != nil {
+		return ownerRadar
+	}
+	return ownerOther
 }
 
 func recordDesktopPort(path string, port int) {

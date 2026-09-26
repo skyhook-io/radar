@@ -4,8 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	goruntime "runtime"
+	"strconv"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/app"
@@ -275,7 +277,7 @@ func main() {
 	desktopApp := NewDesktopApp(srv, timelineStoreCfg)
 	if desktopPortRemembered {
 		desktopApp.onWindowReady = func() {
-			go rememberDesktopPort(desktopPortPath(), desktopPort, srv.ActualPort(), radarServingOn)
+			go rememberDesktopPort(desktopPortPath(), desktopPort, srv.ActualPort(), portOwner)
 		}
 	}
 	// macOS only. Wails maps this to `[NSApp hide:]`, which leaves the dock icon
@@ -301,7 +303,9 @@ func main() {
 		HideWindowOnClose: hideOnClose,
 
 		AssetServer: &assetserver.Options{
-			Handler: NewRedirectHandler(srv.ActualAddr(), cfg.Namespace, cfg.Namespaces),
+			// The address actually bound, not "localhost", which may resolve to
+			// [::1] where another service can hold the same port.
+			Handler: NewRedirectHandler(net.JoinHostPort("127.0.0.1", strconv.Itoa(srv.ActualPort())), cfg.Namespace, cfg.Namespaces),
 		},
 
 		Menu: createMenu(desktopApp, version, goruntime.GOOS),
