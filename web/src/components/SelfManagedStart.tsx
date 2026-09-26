@@ -54,17 +54,20 @@ export function SelfManagedStart({ appUrl, onBack }: { appUrl: string; onBack: (
               </li>
             ))}
           </ol>
-          {/* What a platform engineer checks before starting: where it is
-              reached, what it stores in, and whether an IdP is needed on day
-              one (it isn't: the break-glass admin signs in first). */}
-          <div className="mt-5 text-[11.5px] leading-relaxed text-theme-text-tertiary">
-            <p className="font-medium text-theme-text-secondary">You'll need:</p>
-            <ul className="mt-1 space-y-0.5 list-disc pl-4">
-              <li>A hostname and an ingress for the control plane</li>
-              <li>Postgres 14+ for production. A bundled one runs by default, fine for a trial</li>
-              <li>Nothing for sign-in at first: a built-in admin works until you connect your IdP</li>
-            </ul>
-            <a href={SELF_HOSTED_DOCS_URL} target="_blank" rel="noopener noreferrer" className="mt-1.5 inline-block underline underline-offset-2 hover:text-theme-text-primary">
+          {/* What a platform engineer has to bring, split by stage: a trial
+              needs only an address clusters can reach (a cloud load balancer
+              is the install page's default; Postgres and a built-in admin come
+              bundled); production adds their own Postgres and IdP. */}
+          <div className="mt-5 space-y-1 text-[12px] leading-relaxed text-theme-text-tertiary">
+            <p>
+              <b className="font-medium text-theme-text-secondary">For a trial</b>, you just need a hostname your
+              clusters can reach the hub on.
+            </p>
+            <p>
+              <b className="font-medium text-theme-text-secondary">For production</b>, connect your own Postgres and
+              your IdP to manage users.
+            </p>
+            <a href={SELF_HOSTED_DOCS_URL} target="_blank" rel="noopener noreferrer" className="inline-block underline underline-offset-2 hover:text-theme-text-primary">
               Read the Self-Managed guide →
             </a>
           </div>
