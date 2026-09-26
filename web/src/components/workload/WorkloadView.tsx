@@ -35,7 +35,7 @@ import {
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
 import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
-import { addOlderPage, foldRefreshedPage } from './historyPaging'
+import { useHistoryPaging } from './historyPaging'
 import {
   kindToPlural,
   kindToPluralWithGroup,
@@ -48,7 +48,6 @@ import {
 import {
   useWorkloadHistory,
   fetchWorkloadHistoryPage,
-  type WorkloadHistoryPage,
   useResourceWithRelationships,
   usePodLogs,
   useTopology,
@@ -792,63 +791,17 @@ export function WorkloadView({
   // K8s Events about those, and the resources attached to it. Older pages load
   // on demand and stay until the viewed workload changes.
   const historyQuery = useWorkloadHistory(apiKind, namespace, name, effectiveGroup, expanded)
-  const [olderHistory, setOlderHistory] = useState<WorkloadHistoryPage | null>(null)
-  const [loadingOlderHistory, setLoadingOlderHistory] = useState(false)
-  const [olderHistoryError, setOlderHistoryError] = useState<Error | null>(null)
-  // Paging restarts on navigation and when a refresh leaves a hole; a request
-  // from before the restart must not land afterwards.
-  const historyIdentity = `${effectiveGroup ?? ''}/${apiKind}/${namespace}/${name}`
-  const pagingGeneration = useRef(0)
-  const latestHistoryPage = useRef(historyQuery.data)
-  latestHistoryPage.current = historyQuery.data
-  const loadedOlderHistory = useRef(olderHistory)
-  loadedOlderHistory.current = olderHistory
-  const restartPaging = useCallback(() => {
-    pagingGeneration.current++
-    setOlderHistory(null)
-    setOlderHistoryError(null)
-    setLoadingOlderHistory(false)
-  }, [])
-  useEffect(restartPaging, [historyIdentity, restartPaging])
-  // Once older pages are loaded, every refreshed newest page joins them, so
-  // rows the newest page slides past stay (see historyPaging).
-  useEffect(() => {
-    const page = historyQuery.data
-    const loaded = loadedOlderHistory.current
-    if (!page || !loaded) return
-    const step = foldRefreshedPage(loaded, page)
-    if (step.kind === 'restart') restartPaging()
-    else if (step.kind === 'set') setOlderHistory(step.history)
-  }, [historyQuery.data, restartPaging])
-  const allEvents = useMemo(() => {
-    const newest = historyQuery.data?.events
-    if (!newest) return undefined
-    if (!olderHistory) return newest
-    const byId = new Map(newest.map((e) => [e.id, e]))
-    for (const e of olderHistory.events) if (!byId.has(e.id)) byId.set(e.id, e)
-    return [...byId.values()]
-  }, [historyQuery.data, olderHistory])
-  const historyTruncated = olderHistory ? olderHistory.truncated : Boolean(historyQuery.data?.truncated)
-  const loadOlderHistory = useCallback(async () => {
-    const basePage = olderHistory ? null : historyQuery.data
-    const cursor = olderHistory ? olderHistory.nextBeforeSeq : basePage?.nextBeforeSeq
-    if (!cursor) return
-    const generation = pagingGeneration.current
-    setLoadingOlderHistory(true)
-    setOlderHistoryError(null)
-    try {
-      const page = await fetchWorkloadHistoryPage(apiKind, namespace, name, effectiveGroup, cursor)
-      if (pagingGeneration.current !== generation) return
-      const step = addOlderPage(loadedOlderHistory.current, page, basePage ?? undefined, latestHistoryPage.current)
-      if (step.kind === 'restart') restartPaging()
-      else if (step.kind === 'set') setOlderHistory(step.history)
-    } catch (err) {
-      if (pagingGeneration.current !== generation) return
-      setOlderHistoryError(err instanceof Error ? err : new Error(String(err)))
-    } finally {
-      if (pagingGeneration.current === generation) setLoadingOlderHistory(false)
-    }
-  }, [apiKind, namespace, name, effectiveGroup, olderHistory, historyQuery.data, restartPaging])
+  const {
+    events: allEvents,
+    truncated: historyTruncated,
+    loadOlder: loadOlderHistory,
+    loadingOlder: loadingOlderHistory,
+    olderError: olderHistoryError,
+  } = useHistoryPaging(
+    `${effectiveGroup ?? ''}/${apiKind}/${namespace}/${name}`,
+    historyQuery.data,
+    (beforeSeq) => fetchWorkloadHistoryPage(apiKind, namespace, name, effectiveGroup, beforeSeq),
+  )
   const eventsLoading = historyQuery.isLoading
 
   // RBAC
