@@ -45,12 +45,14 @@ export function KueueAdmissionSection({ presentation = 'card', data, loading, er
     </>
   return presentation === 'drawer'
     ? <Section title="Kueue admission">{content}</Section>
-    : <section className="rounded-lg border border-theme-border bg-theme-surface p-4" aria-label="Kueue admission"><h3 className="text-sm font-semibold text-theme-text-primary">Kueue admission</h3>{content}</section>
+    : <section className="space-y-3" aria-label="Kueue admission"><h3 className="text-sm font-semibold text-theme-text-primary">Kueue admission</h3>{content}</section>
 }
 
 type Link = (name: string, ref?: SchedulingRef) => React.ReactNode
 
 
+const evidenceCard = 'min-w-0 overflow-hidden rounded-lg border border-theme-border bg-theme-surface'
+const cardHeader = 'border-b border-theme-border bg-theme-base px-3 py-2.5'
 const groupHeading = 'text-xs font-medium uppercase tracking-wider text-theme-text-secondary'
 type Gate = NonNullable<SchedulingObservation['gates']>[number]
 
@@ -110,20 +112,23 @@ function AdmissionObservation({ observation, identity, generation, deleting, pre
   const severity = stale || observation.decision === 'unknown' ? 'neutral'
     : kueue?.phase === 'finished' ? kueue.outcome === 'failed' ? 'error' : kueue.outcome === 'succeeded' ? 'success' : 'neutral'
       : observation.decision === 'satisfied' ? 'success' : 'warning'
-  const qualifier = observation.decision === 'held' ? 'Admission held' : observation.decision === 'unknown' ? 'Admission unknown' : null
+  const qualifier = observation.decision === 'held' && kueue?.active !== false ? 'Admission held' : observation.decision === 'unknown' ? 'Admission unknown' : null
   return <div className="@container/admission space-y-4">
     <div className={split ? 'grid max-w-[88rem] min-w-0 gap-5 @min-[1024px]/admission:grid-cols-[minmax(0,5fr)_minmax(0,3fr)]' : 'max-w-4xl space-y-5'}>
     <div className="min-w-0 space-y-4">
-    <div className="space-y-3">
+    <section aria-label="Admission" className={evidenceCard}>
+      <div className={`${cardHeader} space-y-2`}>
+      <h4 className={groupHeading}>Admission</h4>
       <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium break-all">{identity}</span>
         <Badge severity={severity}>{kueue ? phases[kueue.phase] : 'Admission'}</Badge>
         {qualifier && <span className="text-xs text-theme-text-secondary">{qualifier}</span>}
         {kueue?.active === false && <Badge severity="neutral">Workload inactive</Badge>}
-        <span className="font-medium break-all">{identity}</span>
         {deleting && <Badge severity="alert">Deleting</Badge>}
         {kueue?.outcome && <span>Outcome: {kueue.outcome}</span>}
       </div>
-      <div className="space-y-2 border-l-2 border-accent bg-theme-base px-3 py-2.5">
+      </div>
+      <div className="space-y-2 p-3">
         {stale && <p className="text-xs text-warning-text">Stale evidence: condition generation {condition!.observedGeneration}; Workload generation {observation.subjectGeneration}.</p>}
         {condition ? <p className="max-w-3xl whitespace-pre-wrap break-words">{condition.message || <><code>{condition.reason}</code>{condition.reason && ' · '}{condition.type}={condition.status}</>}</p> : <p className="text-theme-text-secondary">No primary admission condition reported.</p>}
         {condition?.lastTransitionTime && <p className="text-xs text-theme-text-tertiary">{condition.type}={condition.status} since {formatRelativeAgeTime(condition.lastTransitionTime)}</p>}
@@ -136,19 +141,20 @@ function AdmissionObservation({ observation, identity, generation, deleting, pre
       {(kueue?.phase === 'admitted' || kueue?.phase === 'quota_reserved') && <p className="text-xs text-theme-text-tertiary">Admission status; execution is shown separately.</p>}
       </div>
       </div>
-    </div>
-    {pendingChecks.length > 0 && <section aria-label="Admission checks" className="overflow-hidden rounded-lg border border-theme-border bg-theme-base">
-      <h4 className={`${groupHeading} border-b border-theme-border px-3 py-2.5`}>Admission checks · {pendingChecks.length} not ready</h4>
+    </section>
+    {pendingChecks.length > 0 && <section aria-label="Admission checks" className={evidenceCard}>
+      <h4 className={`${groupHeading} ${cardHeader}`}>Admission checks · {pendingChecks.length} not ready</h4>
       <div className="divide-y divide-theme-border [&>div]:p-3">{pendingChecks.map((gate, index) => <GateEvidence key={index} gate={gate} link={link} />)}</div>
     </section>}
     </div>
-    {(visible.length > 0 || preemption.length > 0) && <div className="min-w-0 space-y-5">
-      {visible.length > 0 && <div className="space-y-4 rounded-lg border border-theme-border p-3">
-        {disruptions.length > 0 && <section aria-label="Reported disruptions" className="space-y-3"><h4 className={groupHeading}>Reported disruptions · {disruptions.length}</h4><div className="divide-y divide-theme-border">{disruptions.map((entry) => <ConditionEvidence key={entry.type} condition={entry} generation={observation.subjectGeneration} showAge />)}</div></section>}
-        {readiness.length > 0 && <section aria-label="Pod readiness" className={disruptions.length > 0 ? 'space-y-3 border-t border-theme-border pt-4' : 'space-y-3'}><h4 className={groupHeading}>Pod readiness · {readiness.length}</h4><div className="divide-y divide-theme-border">{readiness.map((entry) => <ConditionEvidence key={entry.type} condition={entry} generation={observation.subjectGeneration} />)}</div></section>}
-      </div>}
-      {preemption.length > 0 && <section aria-label="Preemption gates" className="space-y-2"><h4 className={groupHeading}>Preemption gates · {preemption.length}</h4><p className="text-xs text-theme-text-tertiary">Governs preemption; it alone does not establish an admission blocker.</p><div className="divide-y divide-theme-border">{preemption.map((gate, index) => <GateEvidence key={index} gate={gate} link={link} />)}</div></section>}
-    </div>}
+    {(visible.length > 0 || preemption.length > 0) && <section aria-label="Supporting evidence" className={`${evidenceCard} self-start`}>
+      <h4 className={`${groupHeading} ${cardHeader}`}>Supporting evidence</h4>
+      <div className="divide-y divide-theme-border px-3">
+        {disruptions.length > 0 && <section aria-label="Reported disruptions" className="space-y-3 py-3"><h5 className={groupHeading}>Reported disruptions · {disruptions.length}</h5><div className="divide-y divide-theme-border">{disruptions.map((entry) => <ConditionEvidence key={entry.type} condition={entry} generation={observation.subjectGeneration} showAge />)}</div></section>}
+        {readiness.length > 0 && <section aria-label="Pod readiness" className="space-y-3 py-3"><h5 className={groupHeading}>Pod readiness · {readiness.length}</h5><div className="divide-y divide-theme-border">{readiness.map((entry) => <ConditionEvidence key={entry.type} condition={entry} generation={observation.subjectGeneration} />)}</div></section>}
+        {preemption.length > 0 && <section aria-label="Preemption gates" className="space-y-2 py-3"><h5 className={groupHeading}>Preemption gates · {preemption.length}</h5><p className="text-xs text-theme-text-tertiary">Governs preemption; it alone does not establish an admission blocker.</p><div className="divide-y divide-theme-border">{preemption.map((gate, index) => <GateEvidence key={index} gate={gate} link={link} />)}</div></section>}
+      </div>
+    </section>}
     </div>
     <Disclosure summary={<span>Technical details{supporting.length > 0 && ` · ${supporting.length} additional condition${supporting.length === 1 ? '' : 's'}`}{readyChecks.length > 0 && ` · ${readyChecks.length} ready check${readyChecks.length === 1 ? '' : 's'}`}</span>} summaryClassName="text-xs text-theme-text-secondary">
       <div className="space-y-2 pt-2 text-xs text-theme-text-secondary">

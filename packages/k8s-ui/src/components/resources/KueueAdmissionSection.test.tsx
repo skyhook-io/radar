@@ -159,7 +159,7 @@ it('uses an expanded Section in drawers and keeps the default fullscreen card', 
     await act(async () => root.render(<KueueAdmissionSection presentation="drawer" data={response()} loading={false} hinted externalExecution={false} />))
     const toggle = [...container.querySelectorAll('button')].find((button) => button.textContent === 'Kueue admission')!
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    expect(container.querySelector('section')).toBeNull()
+    expect(container.querySelector('section[aria-label="Kueue admission"]')).toBeNull()
     await act(async () => toggle.click())
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(container.querySelector('article')!.closest('[inert]')).not.toBeNull()
@@ -205,7 +205,7 @@ it('preserves producer check order and keeps operational delays visible while ze
     expect(paragraph('Readiness message').textContent).toContain('Pods ready: Unknown')
     expect(paragraph('Eviction message').querySelector('span.block')?.textContent).toMatch(/^Evicted · Status since .+ ago$/)
     expect(paragraph('Eviction message').lastChild?.textContent).toBe('Eviction message')
-    expect([...container.querySelectorAll('h4')].map(e => e.textContent)).toEqual(['Admission checks · 3 not ready', 'Reported disruptions · 1', 'Pod readiness · 1'])
+    expect([...container.querySelectorAll('h4')].map(e => e.textContent)).toEqual(['Admission', 'Admission checks · 3 not ready', 'Supporting evidence'])
   } finally { await act(async () => root.unmount()) }
 })
 
@@ -227,4 +227,12 @@ it('shows requeue eligibility without inventing a count or a leading separator',
 it('shows primary-condition polarity next to its transition age', () => {
   const html = render(response({ primaryCondition: { type: 'QuotaReserved', status: 'False', message: 'Insufficient quota', lastTransitionTime: '2026-09-26T00:00:00Z' } }))
   expect(html).toContain('QuotaReserved=False since')
+})
+
+
+it.each([false, true, undefined])('suppresses the held qualifier only when inactive already explains it: %s', (active) => {
+  const html = render(response({ decision: 'held', kueue: { phase: 'quota_reserved', active } }))
+  expect(html.includes('Admission held')).toBe(active !== false)
+  expect(html.includes('Workload inactive')).toBe(active === false)
+  expect(html).toContain('Decision: held')
 })
