@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Megaphone } from 'lucide-react'
@@ -16,6 +16,8 @@ let client: QueryClient
 let serverState: WhatsNewState
 const seenPosts: string[] = []
 let failSeenPosts = 0
+let pendingRead: ((state: WhatsNewState) => void) | null = null
+let holdNextRead = false
 const status = { current: { available: false, unread: false } }
 
 function memoryStorage(): Storage {
@@ -44,21 +46,32 @@ beforeEach(() => {
   })
   seenPosts.length = 0
   failSeenPosts = 0
+  pendingRead = null
+  holdNextRead = false
   vi.stubGlobal('localStorage', memoryStorage())
-  client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  // Radar's own defaults: focus refetch is off unless a query opts in.
+  client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } })
   const element = document.createElement('div')
   document.body.appendChild(element)
   root = createRoot(element)
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const path = new URL(input, 'http://localhost').pathname
     if (path === '/api/capabilities') return Response.json({ deployment: { mode: serverState.storage === 'server' ? 'local' : 'in-cluster' } })
-    if (path === '/api/whats-new') return Response.json(serverState)
+    if (path === '/api/whats-new') {
+      const snapshot = { ...serverState }
+      if (holdNextRead) {
+        holdNextRead = false
+        return new Promise<Response>(resolve => { pendingRead = s => resolve(Response.json(s)) })
+      }
+      return Response.json(snapshot)
+    }
     if (path === '/api/whats-new/seen' && init?.method === 'POST') {
       seenPosts.push(JSON.parse(String(init.body)).version)
       if (failSeenPosts > 0) {
         failSeenPosts--
         return Response.json({ error: 'failed to record the seen version' }, { status: 500 })
       }
+      serverState = { ...serverState, seenVersion: seenPosts[seenPosts.length - 1] }
       return new Response(null, { status: 204 })
     }
     throw new Error(`Unexpected request: ${input}`)
@@ -172,6 +185,30 @@ describe('WhatsNew', () => {
     expect(status.current.unread).toBe(true)
     localStorage.setItem('radar-whats-new-seen', 'v1.15.2')
     await act(async () => { window.dispatchEvent(new StorageEvent('storage', { key: 'radar-whats-new-seen' })) })
+    expect(status.current.unread).toBe(false)
+  })
+
+  it('picks up another tab\'s acknowledgment when this window regains focus', async () => {
+    serverState = { currentVersion: 'v1.15.2', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
+    await render('/resources/pods')
+    expect(status.current.unread).toBe(true)
+    serverState = { ...serverState, seenVersion: 'v1.15.2' }
+    await act(async () => { focusManager.setFocused(false); focusManager.setFocused(true) })
+    await vi.waitFor(() => expect(status.current.unread).toBe(false))
+    focusManager.setFocused(undefined)
+  })
+
+  it('does not let a read that started before the acknowledgment undo it', async () => {
+    serverState = { currentVersion: 'v1.15.2', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
+    await render('/')
+    const staleSnapshot = { ...serverState }
+    holdNextRead = true
+    await act(async () => { void client.refetchQueries({ queryKey: ['whats-new'] }) })
+    await vi.waitFor(() => expect(pendingRead).not.toBeNull())
+    await clickGotIt()
+    await vi.waitFor(() => expect(status.current.unread).toBe(false))
+    await act(async () => { pendingRead!(staleSnapshot) })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)) })
     expect(status.current.unread).toBe(false)
   })
 

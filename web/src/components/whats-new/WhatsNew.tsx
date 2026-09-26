@@ -160,9 +160,14 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
       setBrowserLastSeen(readBrowserLastSeen())
       return
     }
-    // Only a confirmed write clears the dot; a failed one is retried on the next close.
+    // Only a confirmed write clears the dot; a failed one is retried on the
+    // next close. A read still in flight predates the write, so it's dropped.
+    const queryKey = ['whats-new', getApiBase()]
     markWhatsNewSeen(next).then(
-      () => queryClient.setQueryData<WhatsNewState>(['whats-new', getApiBase()], prev => prev && { ...prev, seenVersion: next }),
+      async () => {
+        await queryClient.cancelQueries({ queryKey })
+        queryClient.setQueryData<WhatsNewState>(queryKey, prev => prev && { ...prev, seenVersion: next })
+      },
       err => console.warn('[whats-new] Failed to record seen version', next, err),
     )
   }, [queryClient])
