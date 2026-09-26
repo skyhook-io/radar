@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 
 	"github.com/Masterminds/semver/v3"
 
@@ -27,6 +28,11 @@ const whatsNewFile = "whats-new.json"
 // Captured before main writes anything under ~/.radar (install-id, star.json),
 // which would otherwise make a first run look like an existing install.
 var whatsNewPriorInstall = radarDirHadState()
+
+// Serializes read-compare-write within this process (two tabs acknowledging at
+// once). Separate Radar processes sharing ~/.radar can still interleave; the
+// cost is showing notes once more, not worth a cross-platform file lock.
+var whatsNewWriteMu sync.Mutex
 
 var whatsNewVersionPattern = regexp.MustCompile(`^v?\d+\.\d+\.\d+[0-9A-Za-z.+-]*$`)
 
@@ -85,6 +91,8 @@ func (s *Server) handleMarkWhatsNewSeen(w http.ResponseWriter, r *http.Request) 
 	}
 	// Two Radars can share ~/.radar (an older CLI beside an updated Desktop);
 	// the record only moves forward, or the newer one would replay its notes.
+	whatsNewWriteMu.Lock()
+	defer whatsNewWriteMu.Unlock()
 	if prev, ok := readWhatsNewState(); ok && !versionAfter(req.Version, prev.SeenVersion) {
 		w.WriteHeader(http.StatusNoContent)
 		return

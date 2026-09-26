@@ -2,11 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -80,6 +82,23 @@ func TestWhatsNewSeenVersionOnlyMovesForward(t *testing.T) {
 	}
 	if got := getWhatsNew(t).SeenVersion; got == nil || *got != "v1.16.0" {
 		t.Fatalf("seenVersion = %v, want v1.16.0", got)
+	}
+}
+
+func TestWhatsNewConcurrentAcknowledgmentsKeepTheNewest(t *testing.T) {
+	useWhatsNewStorage(t, true)
+	t.Setenv("HOME", t.TempDir())
+	var wg sync.WaitGroup
+	for i := 0; i < 40; i++ {
+		wg.Add(1)
+		go func(minor int) {
+			defer wg.Done()
+			markWhatsNewSeen(fmt.Sprintf(`{"version":"v1.%d.0"}`, minor))
+		}(i % 20)
+	}
+	wg.Wait()
+	if got := getWhatsNew(t).SeenVersion; got == nil || *got != "v1.19.0" {
+		t.Fatalf("seenVersion = %v after concurrent writes, want v1.19.0", got)
 	}
 }
 
