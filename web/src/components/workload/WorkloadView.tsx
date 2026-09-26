@@ -1220,6 +1220,9 @@ export function WorkloadView({
         historyTruncated={historyTruncated}
         onLoadOlderHistory={loadOlderHistory}
         loadingOlderHistory={loadingOlderHistory}
+        historyScoped
+        historyError={historyQuery.error as Error | null}
+        onRetryHistory={() => void historyQuery.refetch()}
         relatedTimelineEvents={relatedTimelineEvents}
         eventsLoading={eventsLoading || (batchExecution && batchKind !== 'JobSet' && batchRunsQuery.isLoading)}
         topology={topology}

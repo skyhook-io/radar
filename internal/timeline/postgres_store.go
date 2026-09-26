@@ -963,6 +963,12 @@ func (s *PostgresStore) buildQuery(opts QueryOptions) (string, []any, error) {
 			query.WriteString(" AND (" + strings.Join(parts, " OR ") + ")")
 		}
 	}
+	if opts.NamePrefix != "" {
+		addFilter(" AND starts_with(name, $%d)", opts.NamePrefix)
+	}
+	if opts.OwnerUnknown {
+		query.WriteString(" AND COALESCE(owner_uid, '') = ''")
+	}
 
 	seqPaging := opts.SeqPaging || opts.SinceSeq > 0
 	if seqPaging {

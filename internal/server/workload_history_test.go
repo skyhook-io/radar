@@ -168,7 +168,7 @@ func TestWorkloadHistoryScope_StartsFromTheLiveUIDWhenTheKeyHasNoRows(t *testing
 		}
 	}
 	key := resourceid.NewRef("apps", "Deployment", "default", "web")
-	scope, err := workloadHistoryScope(t.Context(), store, k8s.ActiveClusterContext(), key, "dep-live", nil)
+	scope, err := workloadHistoryScope(t.Context(), store, k8s.ActiveClusterContext(), key, liveIdentity{UID: "dep-live"}, nil)
 	if err != nil {
 		t.Fatalf("workloadHistoryScope: %v", err)
 	}
@@ -178,5 +178,108 @@ func TestWorkloadHistoryScope_StartsFromTheLiveUIDWhenTheKeyHasNoRows(t *testing
 	}
 	if got := fmt.Sprint(historyIDs(events)); got != "[pod rs]" {
 		t.Errorf("history = %s, want [pod rs]", got)
+	}
+}
+
+func appendHistoryRows(t *testing.T, store timeline.EventStore, rows []timeline.TimelineEvent) {
+	t.Helper()
+	base := time.Now().Add(-time.Hour)
+	for i, e := range rows {
+		e.Timestamp, e.Namespace, e.EventType = base.Add(time.Duration(i)*time.Minute), "default", timeline.EventTypeUpdate
+		if e.Source == "" {
+			e.Source = timeline.SourceInformer
+		}
+		e.ClusterContext = k8s.ActiveClusterContext()
+		if err := store.Append(t.Context(), e); err != nil {
+			t.Fatalf("Append %s: %v", e.ID, err)
+		}
+	}
+}
+
+func scopedHistoryIDs(t *testing.T, store timeline.EventStore, key resourceid.Ref, live liveIdentity) string {
+	t.Helper()
+	scope, err := workloadHistoryScope(t.Context(), store, k8s.ActiveClusterContext(), key, live, nil)
+	if err != nil {
+		t.Fatalf("workloadHistoryScope: %v", err)
+	}
+	events, err := store.Query(t.Context(), timeline.QueryOptions{Scope: scope, Limit: 100, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	return fmt.Sprint(historyIDs(events))
+}
+
+// K8s Events about a CronJob's runs that were deleted before Radar started
+// record no owner. They come back by the names the CronJob gives its Jobs and
+// their Pods; a sibling CronJob's runs and rows owned by something else don't.
+func TestWorkloadHistoryScope_RecoversPastRunsWithNoRecordedOwner(t *testing.T) {
+	store := withWorkloadHistoryStore(t)
+	appendHistoryRows(t, store, []timeline.TimelineEvent{
+		{ID: "cron", APIVersion: "batch/v1", Kind: "CronJob", Name: "backup", UID: "cj-1"},
+		{ID: "past-job", APIVersion: "batch/v1", Kind: "Job", Name: "backup-29012345", UID: "job-old", Source: timeline.SourceK8sEvent},
+		{ID: "past-pod", APIVersion: "v1", Kind: "Pod", Name: "backup-29012345-bcdfg", UID: "pod-old", Source: timeline.SourceK8sEvent},
+		{ID: "sibling-job", APIVersion: "batch/v1", Kind: "Job", Name: "backup-nightly-29012345", UID: "job-sib", Source: timeline.SourceK8sEvent},
+		{ID: "owned-elsewhere", APIVersion: "batch/v1", Kind: "Job", Name: "backup-29012399", UID: "job-other", Owner: &timeline.OwnerInfo{Kind: "CronJob", Name: "other", UID: "cj-other"}},
+		{ID: "not-a-run", APIVersion: "v1", Kind: "ConfigMap", Name: "backup-29012345", UID: "cm-1"},
+	})
+	key := resourceid.NewRef("batch", "CronJob", "default", "backup")
+	if got := scopedHistoryIDs(t, store, key, liveIdentity{UID: "cj-1"}); got != "[cron past-job past-pod]" {
+		t.Errorf("history = %s, want [cron past-job past-pod]", got)
+	}
+}
+
+// A ReplicaSet's history includes its Deployment's own rows, but not the
+// Deployment's other ReplicaSets.
+func TestWorkloadHistoryScope_IncludesTheControllerButNotItsOtherChildren(t *testing.T) {
+	store := withWorkloadHistoryStore(t)
+	dep := &timeline.OwnerInfo{Kind: "Deployment", Name: "web", UID: "dep-1"}
+	appendHistoryRows(t, store, []timeline.TimelineEvent{
+		{ID: "dep", APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "dep-1"},
+		{ID: "rs", APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-bcdfg", UID: "rs-1", Owner: dep},
+		{ID: "other-rs", APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-hjklm", UID: "rs-2", Owner: dep},
+	})
+	key := resourceid.NewRef("apps", "ReplicaSet", "default", "web-bcdfg")
+	if got := scopedHistoryIDs(t, store, key, liveIdentity{UID: "rs-1"}); got != "[dep rs]" {
+		t.Errorf("history = %s, want [dep rs]", got)
+	}
+}
+
+func TestAttachedRefs_IncludesIngressesAndRoutesButNotGateways(t *testing.T) {
+	rel := &topology.Relationships{
+		Ingresses: []topology.ResourceRef{{Kind: "Ingress", Namespace: "default", Name: "web"}},
+		Routes:    []topology.ResourceRef{{Kind: "HTTPRoute", Namespace: "default", Name: "web", Group: "gateway.networking.k8s.io"}},
+		Gateways:  []topology.ResourceRef{{Kind: "Gateway", Namespace: "default", Name: "shared", Group: "gateway.networking.k8s.io"}},
+	}
+	want := []resourceid.Ref{
+		resourceid.NewRef("networking.k8s.io", "Ingress", "default", "web"),
+		resourceid.NewRef("gateway.networking.k8s.io", "HTTPRoute", "default", "web"),
+	}
+	if got := attachedRefs(rel, "default"); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("attachedRefs = %v, want %v", got, want)
+	}
+}
+
+func TestChildNamePatterns_MatchWhatTheControllerNamesAndNotSiblings(t *testing.T) {
+	for _, tc := range []struct {
+		kind, name, childKind, child string
+		want                         bool
+	}{
+		{"CronJob", "backup", "Job", "backup-29012345", true},
+		{"CronJob", "backup", "Job", "backup-nightly-29012345", false},
+		{"Deployment", "web", "ReplicaSet", "web-5698ccbb7c", true},
+		{"Deployment", "web", "Pod", "web-5698ccbb7c-rd558", true},
+		{"Deployment", "web", "Pod", "web-api-5698ccbb7c-rd558", false},
+		{"DaemonSet", "agent", "Pod", "agent-x5rjl", true},
+		{"DaemonSet", "agent", "Pod", "agent-extra-x5rjl", false},
+		{"StatefulSet", "db", "Pod", "db-2", true},
+		{"StatefulSet", "db", "Pod", "db-replica-2", false},
+		{"CronWorkflow", "report", "Workflow", "report-1790459400", true},
+		{"CronWorkflow", "report", "Pod", "report-1790459400-echo-2408686475", true},
+		{"CronWorkflow", "report", "Workflow", "report-weekly-1790459400", false},
+	} {
+		pattern := childNamePatterns(tc.kind, tc.name)[tc.childKind]
+		if got := pattern != nil && pattern.MatchString(tc.child); got != tc.want {
+			t.Errorf("%s %s: %s %s matched=%v, want %v", tc.kind, tc.name, tc.childKind, tc.child, got, tc.want)
+		}
 	}
 }

@@ -120,6 +120,11 @@ type QueryOptions struct {
 
 	// Scope restricts results to rows about a set of resources. Empty = no scope.
 	Scope ResourceScope
+	// NamePrefix keeps rows whose resource name starts with it.
+	NamePrefix string
+	// OwnerUnknown keeps rows that record no owner UID: K8s Events whose
+	// subject was already gone, and rows written before owner UIDs were kept.
+	OwnerUnknown bool
 
 	// Include/exclude options
 	IncludeManaged   bool // Include ReplicaSets, Pods, Events (default false)

@@ -3,6 +3,7 @@ package timeline
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -401,6 +402,14 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 	}
 
 	if !opts.Scope.Matches(event) {
+		return false
+	}
+
+	if opts.NamePrefix != "" && !strings.HasPrefix(event.Name, opts.NamePrefix) {
+		return false
+	}
+
+	if opts.OwnerUnknown && event.Owner != nil && event.Owner.UID != "" {
 		return false
 	}
 

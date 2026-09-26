@@ -667,6 +667,14 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 		query.WriteString(clause)
 		args = append(args, scopeArgs...)
 	}
+	if opts.NamePrefix != "" {
+		// substr compares exactly; LIKE would fold ASCII case and need escaping.
+		query.WriteString(" AND substr(name, 1, ?) = ?")
+		args = append(args, len(opts.NamePrefix), opts.NamePrefix)
+	}
+	if opts.OwnerUnknown {
+		query.WriteString(" AND COALESCE(owner_uid, '') = ''")
+	}
 
 	seqPaging := opts.SeqPaging || opts.SinceSeq > 0
 	if seqPaging {

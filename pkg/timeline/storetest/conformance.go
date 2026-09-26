@@ -735,6 +735,36 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		}
 	})
 
+	t.Run("name prefix and unknown owner narrow before the limit", func(t *testing.T) {
+		store := newStore(t)
+		add := func(id, name string, owner *timeline.OwnerInfo, offset time.Duration) {
+			t.Helper()
+			mustAppend(t, store, timeline.TimelineEvent{
+				ID: id, Timestamp: base.Add(offset), Source: timeline.SourceK8sEvent,
+				Kind: "Job", Namespace: "default", Name: name, Owner: owner, EventType: timeline.EventTypeWarning,
+			})
+		}
+		add("ownerless-run", "backup-29839652", nil, 0)
+		add("owned-run", "backup-29839654", &timeline.OwnerInfo{Kind: "CronJob", Name: "backup", UID: "uid-cron"}, time.Minute)
+		add("name-only-owner", "backup-29839656", &timeline.OwnerInfo{Kind: "CronJob", Name: "backup"}, 2*time.Minute)
+		add("other-prefix", "Backup-29839658", nil, 3*time.Minute)
+		for i := 0; i < 5; i++ {
+			add(fmt.Sprintf("noise-%d", i), fmt.Sprintf("web-%d", i), nil, 4*time.Minute+time.Duration(i)*time.Second)
+		}
+		got, err := store.Query(ctx, timeline.QueryOptions{
+			NamePrefix: "backup-", OwnerUnknown: true, Limit: 2,
+			IncludeManaged: true, IncludeK8sEvents: true,
+		})
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		ids := idsOfEvents(got)
+		sort.Strings(ids)
+		if fmt.Sprint(ids) != "[name-only-owner ownerless-run]" {
+			t.Errorf("got %v, want [name-only-owner ownerless-run]: exact-case prefix, no owner UID, before the limit", ids)
+		}
+	})
+
 	// Time-range narrowing is separate from arrival-order narrowing: Since/Until
 	// bound the event's own timestamp, which for a k8s Event is when the cluster
 	// says it happened, not when Radar saw it.

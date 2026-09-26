@@ -56,7 +56,7 @@ import { ResourceRendererDispatch, getResourceStatus, diagnoseHealthHint, type D
 import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
 import { DetailShell, type DetailShellTab } from '../shared/DetailShell'
 import { HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from '../shared/ManagedByChip'
-import { getKindColorOutline, displayKindName, OperationalIssuesShownContext, ResourceRefBadge } from '../ui/drawer-components'
+import { AlertBanner, getKindColorOutline, displayKindName, OperationalIssuesShownContext, ResourceRefBadge } from '../ui/drawer-components'
 import { Badge, type BadgeSeverity } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
 import { midTruncate } from '../../utils/format'
@@ -189,6 +189,11 @@ interface WorkloadViewProps {
   /** Loads the next older page of history; omit when the host can't page. */
   onLoadOlderHistory?: () => void
   loadingOlderHistory?: boolean
+  /** allEvents holds only this workload's own history (what it runs and the
+   *  resources attached to it), not its whole namespace. */
+  historyScoped?: boolean
+  historyError?: Error | null
+  onRetryHistory?: () => void
   /** Persisted lifecycle events reconstructed for resources related to this workload. */
   relatedTimelineEvents?: TimelineEvent[]
   /** Whether timeline events are loading */
@@ -393,6 +398,9 @@ export function WorkloadView({
   historyTruncated = false,
   onLoadOlderHistory,
   loadingOlderHistory = false,
+  historyScoped = false,
+  historyError = null,
+  onRetryHistory,
   relatedTimelineEvents = [],
   eventsLoading = false,
   topology,
@@ -1157,6 +1165,9 @@ export function WorkloadView({
             truncated={historyTruncated}
             onLoadOlder={onLoadOlderHistory}
             loadingOlder={loadingOlderHistory}
+            scoped={historyScoped}
+            error={historyError}
+            onRetry={onRetryHistory}
             selectedEventId={selectedEventId}
             onSelectEvent={setSelectedEventId}
             topology={topology}
@@ -1414,6 +1425,9 @@ function EventsTab({
   truncated,
   onLoadOlder,
   loadingOlder,
+  scoped,
+  error,
+  onRetry,
   selectedEventId,
   onSelectEvent,
   topology,
@@ -1424,6 +1438,9 @@ function EventsTab({
   truncated?: boolean
   onLoadOlder?: () => void
   loadingOlder?: boolean
+  scoped?: boolean
+  error?: Error | null
+  onRetry?: () => void
   selectedEventId: string | null
   onSelectEvent: (id: string | null) => void
   topology?: Topology
@@ -1518,12 +1535,35 @@ function EventsTab({
     )
   }
 
+  if (error && events.length === 0) {
+    return (
+      <div className="p-4">
+        <AlertBanner variant="error" title="Couldn't load this workload's history" message={error.message}>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="mt-2 rounded border border-theme-border bg-theme-surface px-2 py-1 text-xs text-theme-text-primary transition-colors hover:bg-theme-hover"
+            >
+              Try again
+            </button>
+          )}
+        </AlertBanner>
+      </div>
+    )
+  }
+
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {truncated && (
-        <div className="shrink-0 flex items-center gap-2 border-b border-theme-border bg-theme-base px-4 py-1.5 text-xs text-theme-text-secondary" role="note">
-          <span>Showing the most recent events. Older history exists.</span>
-          {onLoadOlder && (
+      {(scoped || truncated) && (
+        <div className="shrink-0 flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-theme-border bg-theme-base px-4 py-1.5 text-xs text-theme-text-secondary" role="note">
+          {scoped && (
+            <span className="text-theme-text-tertiary">
+              This workload, what it runs, and the Services, Ingresses, config and scalers attached to it.
+            </span>
+          )}
+          {truncated && <span>Showing the most recent events. Older history exists.</span>}
+          {truncated && onLoadOlder && (
             <button
               type="button"
               onClick={onLoadOlder}

@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"net/http"
+	"regexp"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -84,8 +86,8 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 
 	key := resourceid.NewRef(group, kind, namespace, name)
 	clusterContext := k8s.ActiveClusterContext()
-	liveUID := liveWorkloadUID(r.Context(), chi.URLParam(r, "kind"), group, namespace, name)
-	scope, err := workloadHistoryScope(r.Context(), store, clusterContext, key, liveUID, s.workloadAttachments(r, key))
+	live := liveWorkloadIdentity(r.Context(), chi.URLParam(r, "kind"), group, namespace, name)
+	scope, err := workloadHistoryScope(r.Context(), store, clusterContext, key, live, s.workloadAttachments(r, key))
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -119,27 +121,43 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, resp)
 }
 
-// liveWorkloadUID is the UID of the workload as it exists now. The timeline
+// liveIdentity is what the live object says about the workload: its UID and
+// its controller's UID.
+type liveIdentity struct {
+	UID      string
+	OwnerUID string
+}
+
+// liveWorkloadIdentity reads the workload as it exists now. The timeline
 // doesn't always hold a row under the workload's own key (a busy cluster may
 // only have recorded its ReplicaSets and Pods), so the ownership walk can't
 // rely on those rows alone to know the workload's UID.
-func liveWorkloadUID(ctx context.Context, resource, group, namespace, name string) string {
+func liveWorkloadIdentity(ctx context.Context, resource, group, namespace, name string) liveIdentity {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return ""
+		return liveIdentity{}
 	}
+	var obj metav1.Object
 	if group == "" || k8s.TypedKindOwnsGroup(resource, group) {
-		if obj, err := k8s.FetchResource(cache, resource, namespace, name); err == nil {
-			if m, err := meta.Accessor(obj); err == nil {
-				return string(m.GetUID())
+		if o, err := k8s.FetchResource(cache, resource, namespace, name); err == nil {
+			if m, err := meta.Accessor(o); err == nil {
+				obj = m
 			}
-			return ""
 		}
 	}
-	if u, err := cache.GetDynamicWithGroup(ctx, resource, namespace, name, group); err == nil && u != nil {
-		return string(u.GetUID())
+	if obj == nil {
+		if u, err := cache.GetDynamicWithGroup(ctx, resource, namespace, name, group); err == nil && u != nil {
+			obj = u
+		}
 	}
-	return ""
+	if obj == nil {
+		return liveIdentity{}
+	}
+	id := liveIdentity{UID: string(obj.GetUID())}
+	if ref := metav1.GetControllerOf(obj); ref != nil {
+		id.OwnerUID = string(ref.UID)
+	}
+	return id
 }
 
 // resolveWorkloadKind turns the route's plural resource name (or a Kind) and
@@ -180,8 +198,9 @@ func (s *Server) workloadAttachments(r *http.Request, key resourceid.Ref) []reso
 }
 
 // attachedRefs lists the resources whose own history belongs with a
-// workload's: the Services exposing it and the ConfigMaps, Secrets, scalers,
-// PDBs, NetworkPolicies and PVCs attached to it. Only the workload's
+// workload's: the Services exposing it, the Ingresses and routes in front of
+// those, and the ConfigMaps, Secrets, scalers, PDBs, NetworkPolicies and PVCs
+// attached to it. Only the workload's
 // namespace counts; a Service's other backends are never included.
 func attachedRefs(rel *topology.Relationships, namespace string) []resourceid.Ref {
 	if rel == nil {
@@ -189,8 +208,9 @@ func attachedRefs(rel *topology.Relationships, namespace string) []resourceid.Re
 	}
 	var out []resourceid.Ref
 	seen := map[resourceid.Ref]bool{}
+	// Gateways are left out: one usually fronts many unrelated Services.
 	for _, list := range [][]topology.ResourceRef{
-		rel.Services, rel.ConfigRefs, rel.Scalers, rel.PDBs, rel.NetworkPolicies, rel.StorageRefs,
+		rel.Services, rel.Ingresses, rel.Routes, rel.ConfigRefs, rel.Scalers, rel.PDBs, rel.NetworkPolicies, rel.StorageRefs,
 	} {
 		for _, ref := range list {
 			if ref.Namespace != namespace || ref.Kind == "" || ref.Name == "" {
@@ -212,8 +232,10 @@ func attachedRefs(rel *topology.Relationships, namespace string) []resourceid.Re
 
 // workloadHistoryScope resolves the rows that belong to a workload's history:
 // its live UID and the UIDs recorded under its key (every incarnation),
-// everything owned beneath them by owner UID, and the attached resources by key.
-func workloadHistoryScope(ctx context.Context, store timeline.EventStore, clusterContext string, key resourceid.Ref, liveUID string, attached []resourceid.Ref) (timeline.ResourceScope, error) {
+// everything owned beneath them by owner UID, its controller's own rows, the
+// attached resources by key, and past children whose owner the timeline
+// never learned, by the name their controller gives them.
+func workloadHistoryScope(ctx context.Context, store timeline.EventStore, clusterContext string, key resourceid.Ref, live liveIdentity, attached []resourceid.Ref) (timeline.ResourceScope, error) {
 	keyRows, err := store.Query(ctx, timeline.QueryOptions{
 		Namespaces:       []string{key.Namespace},
 		Scope:            timeline.ResourceScope{Refs: []resourceid.Ref{key}},
@@ -237,12 +259,19 @@ func workloadHistoryScope(ctx context.Context, store timeline.EventStore, cluste
 		return true
 	}
 	var frontier []string
-	if add(liveUID) {
-		frontier = append(frontier, liveUID)
+	if add(live.UID) {
+		frontier = append(frontier, live.UID)
+	}
+	parents := map[string]bool{}
+	if live.OwnerUID != "" {
+		parents[live.OwnerUID] = true
 	}
 	for _, e := range keyRows {
 		if add(e.UID) {
 			frontier = append(frontier, e.UID)
+		}
+		if e.Owner != nil && e.Owner.UID != "" {
+			parents[e.Owner.UID] = true
 		}
 	}
 	for depth := 0; depth < workloadHistoryMaxDepth && len(frontier) > 0 && len(uids) < workloadHistoryMaxUIDs; depth++ {
@@ -257,11 +286,99 @@ func workloadHistoryScope(ctx context.Context, store timeline.EventStore, cluste
 			}
 		}
 	}
+	named, err := unownedChildrenByName(ctx, store, clusterContext, key)
+	if err != nil {
+		return timeline.ResourceScope{}, err
+	}
+	scopeUIDs := append([]string{}, uids...)
+	for uid := range parents {
+		// The controller's own rows only. Its other children stay out: its
+		// UID is never walked or used as an owner.
+		if !seen[uid] {
+			scopeUIDs = append(scopeUIDs, uid)
+		}
+	}
 	return timeline.ResourceScope{
-		UIDs: uids,
+		UIDs: scopeUIDs,
 		// Rows owned by a collected UID that the expansion didn't reach
 		// before its UID cap.
 		OwnerUIDs: uids,
-		Refs:      append([]resourceid.Ref{key}, attached...),
+		Refs:      append(append([]resourceid.Ref{key}, attached...), named...),
 	}, nil
+}
+
+// safeSuffix is the alphabet Kubernetes uses for generated name suffixes
+// (pod-template hashes, pod names): consonants and digits, so a word like
+// "backend" in a sibling's name never passes for one.
+const safeSuffix = `[bcdfghjklmnpqrstvwxz2456789]`
+
+// childNamePatterns are the names a workload's controller gives what it
+// creates, by kind: a CronJob's Jobs are <name>-<scheduled minute>, a
+// Deployment's ReplicaSets <name>-<hash>, and each level's Pods add a
+// generated suffix. A bare Workflow has no such pattern: many are themselves
+// named <prefix>-<random>, so its siblings would match.
+func childNamePatterns(kind, name string) map[string]*regexp.Regexp {
+	n := regexp.QuoteMeta(name)
+	compile := func(expr string) *regexp.Regexp { return regexp.MustCompile("^" + n + expr + "$") }
+	switch kind {
+	case "CronJob":
+		return map[string]*regexp.Regexp{"Job": compile(`-[0-9]{8,10}`), "Pod": compile(`-[0-9]{8,10}-` + safeSuffix + `{5}`)}
+	case "Job", "ReplicaSet", "DaemonSet":
+		return map[string]*regexp.Regexp{"Pod": compile(`-` + safeSuffix + `{5}`)}
+	case "Deployment", "Rollout":
+		return map[string]*regexp.Regexp{"ReplicaSet": compile(`-` + safeSuffix + `{5,10}`), "Pod": compile(`-` + safeSuffix + `{5,10}-` + safeSuffix + `{5}`)}
+	case "StatefulSet":
+		return map[string]*regexp.Regexp{"Pod": compile(`-[0-9]+`)}
+	case "CronWorkflow":
+		// Workflows are <name>-<scheduled unix second>; their Pods add
+		// -<template>-<node hash>.
+		return map[string]*regexp.Regexp{"Workflow": compile(`-[0-9]{9,11}`), "Pod": compile(`-[0-9]{9,11}-[a-z0-9-]+-[0-9]+`)}
+	}
+	return nil
+}
+
+// unownedChildrenByName finds past children whose rows never learned their
+// owner — mostly K8s Events about Jobs and Pods deleted before Radar started —
+// by the names the workload's controller gives its children. Rows with a
+// known owner are never matched this way.
+func unownedChildrenByName(ctx context.Context, store timeline.EventStore, clusterContext string, key resourceid.Ref) ([]resourceid.Ref, error) {
+	patterns := childNamePatterns(key.Kind, key.Name)
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	kinds := make([]string, 0, len(patterns))
+	for kind := range patterns {
+		kinds = append(kinds, kind)
+	}
+	rows, err := store.Query(ctx, timeline.QueryOptions{
+		Namespaces:       []string{key.Namespace},
+		Kinds:            kinds,
+		NamePrefix:       key.Name + "-",
+		OwnerUnknown:     true,
+		ClusterContext:   clusterContext,
+		SequenceOrder:    timeline.SequenceOrderDescending,
+		Limit:            workloadHistoryKeyScan,
+		IncludeManaged:   true,
+		IncludeK8sEvents: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	seen := map[resourceid.Ref]bool{}
+	var out []resourceid.Ref
+	for _, e := range rows {
+		pattern := patterns[e.Kind]
+		if pattern == nil || !pattern.MatchString(e.Name) {
+			continue
+		}
+		ref := resourceid.NewRef(resourceid.GroupFromAPIVersion(e.APIVersion), e.Kind, e.Namespace, e.Name)
+		if e.APIVersion == "" {
+			ref.Group, _ = resourceid.BuiltinGroup(e.Kind)
+		}
+		if !seen[ref] && len(out) < workloadHistoryMaxUIDs {
+			seen[ref] = true
+			out = append(out, ref)
+		}
+	}
+	return out, nil
 }
