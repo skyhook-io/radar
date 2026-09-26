@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useId } from 'react'
 import {
   RefreshCw,
   Terminal,
@@ -1053,6 +1053,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
   isRollingBack?: boolean
   onRolloutPromoteFull?: (params: { namespace: string; name: string }) => void | Promise<unknown>
 }) {
+  const titleId = useId()
   const [confirmRevision, setConfirmRevision] = useState<number | null>(null)
   const [diffRevision, setDiffRevision] = useState<number | null>(null)
   const [promoteAfterRollback, setPromoteAfterRollback] = useState(false)
@@ -1144,6 +1145,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
 
   return (
     <DialogPortal
+      ariaLabelledBy={titleId}
       open={open}
       onClose={handleClose}
       closable={!busy}
@@ -1152,7 +1154,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
       <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
         <div className="flex items-center gap-2">
           <History className="w-5 h-5 text-amber-500" />
-          <h3 className="text-lg font-semibold text-theme-text-primary">Revision History</h3>
+          <h3 id={titleId} className="text-lg font-semibold text-theme-text-primary">Revision History</h3>
           {diffRevision && currentRevision && (
             <span className="badge ml-2 bg-blue-500/15 text-blue-400">
               <GitCompare className="w-3 h-3" />

@@ -1099,6 +1099,7 @@ function ToolResultDialog({
   text: string;
   truncated?: boolean;
 }) {
+  const titleId = useId();
   const { theme } = useTheme();
   const [fmt, setFmt] = useState<"yaml" | "json">("yaml");
   const parsed = useMemo<{ ok: boolean; value?: unknown }>(() => {
@@ -1136,10 +1137,10 @@ function ToolResultDialog({
     };
   }, [open, display, language, theme]);
   return (
-    <DialogPortal open={open} onClose={onClose} className="w-[min(90vw,820px)]">
+    <DialogPortal ariaLabelledBy={titleId} open={open} onClose={onClose} className="w-[min(90vw,820px)]">
       <div className="flex items-center justify-between gap-3 border-b border-theme-border p-3">
         <div className="min-w-0">
-          <div className="truncate font-mono text-sm text-theme-text-primary">
+          <div id={titleId} className="truncate font-mono text-sm text-theme-text-primary">
             {title}
           </div>
           {truncated && (

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useId } from "react";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -41,6 +41,7 @@ export function ApplyDialog({
   managedBy?: string; // GitOps/Helm owner of the resource, if any
   confidence?: number;
 }) {
+  const titleId = useId();
   const fixText = fix?.trim();
   const lowConfidence = confidence != null && confidence < 0.5;
   // A GitOps/Helm-managed resource needs an explicit acknowledgment before applying
@@ -56,6 +57,7 @@ export function ApplyDialog({
   const applyBlocked = !!managedBy && !acked;
   return (
     <DialogPortal
+      ariaLabelledBy={titleId}
       open={open}
       onClose={onClose}
       className="flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col overflow-hidden"
@@ -65,7 +67,7 @@ export function ApplyDialog({
           <AlertTriangle className="h-5 w-5 text-amber-500" />
         </div>
         <div className="min-w-0 flex-1">
-          <h3 className="text-lg font-semibold text-theme-text-primary">
+          <h3 id={titleId} className="text-lg font-semibold text-theme-text-primary">
             Apply this fix?
           </h3>
           <p className="mt-1 text-sm text-theme-text-secondary">

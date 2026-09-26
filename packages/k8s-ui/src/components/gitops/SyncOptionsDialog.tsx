@@ -1,4 +1,4 @@
-import { useState, useEffect, type ComponentType } from 'react'
+import { useState, useEffect, type ComponentType, useId } from 'react'
 import { AlertTriangle, CheckCircle2, CircleAlert, Loader2, RefreshCw, ShieldCheck, XCircle } from 'lucide-react'
 
 import { DialogPortal } from '../ui/DialogPortal'
@@ -58,6 +58,7 @@ export interface ResourceValidationResult {
 }
 
 export function SyncOptionsDialog({ open, appLabel, resource, pending, autoSyncEnabled, validationPending, operationInProgress, validationResult, validationError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
+  const titleId = useId()
   const [revision, setRevision] = useState('')
   const [prune, setPrune] = useState(true)
   const [dryRun, setDryRun] = useState(false)
@@ -97,9 +98,9 @@ export function SyncOptionsDialog({ open, appLabel, resource, pending, autoSyncE
   }
 
   return (
-    <DialogPortal open={open} onClose={busy ? () => {} : onCancel} className="w-[480px]" closable={!busy}>
+    <DialogPortal ariaLabelledBy={titleId} open={open} onClose={busy ? () => {} : onCancel} className="w-[480px]" closable={!busy}>
       <div className="border-b border-theme-border px-4 py-3">
-        <h2 className="text-sm font-semibold text-theme-text-primary">{resource ? 'Sync resource' : 'Sync application'}</h2>
+        <h2 id={titleId} className="text-sm font-semibold text-theme-text-primary">{resource ? 'Sync resource' : 'Sync application'}</h2>
         <p className="mt-0.5 break-all text-xs text-theme-text-tertiary">{appLabel}</p>
       </div>
       <div className="space-y-4 px-4 py-4 text-sm">

@@ -305,6 +305,7 @@ export function CloudFunnelButton() {
       <DialogPortal
         open={open}
         onClose={() => setOpen(false)}
+        ariaLabel="Radar Cloud"
         className="w-[580px] max-w-full max-h-[calc(100vh-2rem)] overflow-hidden flex flex-col"
       >
         <button

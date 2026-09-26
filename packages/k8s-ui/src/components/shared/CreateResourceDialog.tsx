@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent, useId } from 'react'
 import { AlertTriangle, Check, Loader2, Upload, X } from 'lucide-react'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
@@ -69,6 +69,7 @@ export function CreateResourceDialog({
   schemaLoader,
   onCreated,
 }: CreateResourceDialogProps) {
+  const titleId = useId()
   const [yaml, setYaml] = useState(initialYaml)
   const [mode, setMode] = useState<'apply' | 'create'>('apply')
   const [dryRun, setDryRun] = useState(false)
@@ -363,6 +364,7 @@ export function CreateResourceDialog({
 
   return (
     <DialogPortal
+      ariaLabelledBy={titleId}
       open={open}
       onClose={handleClose}
       closable={!pending}
@@ -393,11 +395,12 @@ export function CreateResourceDialog({
       ) : (
         <>
           <div className="flex shrink-0 items-center justify-between border-b border-theme-border px-5 py-3.5">
-            <h2 className="text-sm font-semibold text-theme-text-primary">{dialogTitle}</h2>
+            <h2 id={titleId} className="text-sm font-semibold text-theme-text-primary">{dialogTitle}</h2>
             <Tooltip content="Close">
               <button
                 type="button"
                 onClick={handleClose}
+                aria-label="Close"
                 className="rounded p-1 text-theme-text-secondary transition-colors hover:bg-theme-hover"
               >
                 <X className="h-4 w-4" />

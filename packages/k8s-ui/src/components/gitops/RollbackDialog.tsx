@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useId } from 'react'
 import { History, Loader2 } from 'lucide-react'
 
 import { DialogPortal } from '../ui/DialogPortal'
@@ -30,6 +30,7 @@ export interface RollbackDialogProps {
 }
 
 export function RollbackDialog({ open, appLabel, revision, historyId, pending, onCancel, onConfirm }: RollbackDialogProps) {
+  const titleId = useId()
   const [prune, setPrune] = useState(false)
   const [dryRun, setDryRun] = useState(false)
 
@@ -41,9 +42,9 @@ export function RollbackDialog({ open, appLabel, revision, historyId, pending, o
   }, [open])
 
   return (
-    <DialogPortal open={open} onClose={pending ? () => {} : onCancel} className="w-[440px]" closable={!pending}>
+    <DialogPortal ariaLabelledBy={titleId} open={open} onClose={pending ? () => {} : onCancel} className="w-[440px]" closable={!pending}>
       <div className="border-b border-theme-border px-4 py-3">
-        <h2 className="text-sm font-semibold text-theme-text-primary">Roll back application</h2>
+        <h2 id={titleId} className="text-sm font-semibold text-theme-text-primary">Roll back application</h2>
         <p className="mt-0.5 text-xs text-theme-text-tertiary">{appLabel}</p>
       </div>
       <div className="space-y-4 px-4 py-4 text-sm">

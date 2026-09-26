@@ -6243,6 +6243,7 @@ export function ResourcesView({
           {onCreateResource && (
             <Tooltip content={`Create ${selectedKind.kind || 'resource'}`}>
               <button
+                aria-label={`Create ${selectedKind.kind || 'resource'}`}
                 onClick={() => onCreateResource(selectedKind)}
                 className="p-2 hover:bg-theme-elevated rounded-lg text-theme-text-secondary hover:text-theme-text-primary transition-colors"
               >
@@ -6846,6 +6847,7 @@ export function ResourcesView({
         <div className="flex items-center justify-center gap-3">
           <button
             type="button"
+            aria-label="Decrease replicas"
             onClick={() => setBulkScaleReplicas(Math.max(0, bulkScaleReplicas - 1))}
             disabled={bulkScaleReplicas <= 0}
             className="p-2 rounded-lg bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -6857,12 +6859,14 @@ export function ResourcesView({
             min="0"
             max="10000"
             value={bulkScaleReplicas}
+            aria-label="Replicas"
             onChange={(e) => setBulkScaleReplicas(Math.min(10000, Math.max(0, Number.parseInt(e.target.value, 10) || 0)))}
             className="w-24 text-center text-2xl font-semibold bg-theme-elevated border border-theme-border rounded-lg py-2 text-theme-text-primary focus:outline-none focus:border-skyhook-500"
             autoFocus
           />
           <button
             type="button"
+            aria-label="Increase replicas"
             onClick={() => setBulkScaleReplicas(Math.min(10000, bulkScaleReplicas + 1))}
             disabled={bulkScaleReplicas >= 10000}
             className="p-2 rounded-lg bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useId } from 'react'
 import { clsx } from 'clsx'
 import { GitCompare, Search, X } from 'lucide-react'
 import { DialogPortal } from '../ui/DialogPortal'
@@ -33,6 +33,7 @@ export function CompareResourcePicker({
   error,
   onPick,
 }: CompareResourcePickerProps) {
+  const titleId = useId()
   const [query, setQuery] = useState('')
   const [highlightIdx, setHighlightIdx] = useState(0)
   const listRef = useRef<HTMLUListElement | null>(null)
@@ -90,11 +91,11 @@ export function CompareResourcePicker({
   const sourceChipBg = SIDE_TONES[sourceSide].chipBg
 
   return (
-    <DialogPortal open={open} onClose={onClose} className="max-w-xl w-full max-h-[70vh] flex flex-col">
+    <DialogPortal ariaLabelledBy={titleId} open={open} onClose={onClose} className="max-w-xl w-full max-h-[70vh] flex flex-col">
       <div className="flex items-center justify-between px-4 py-3 border-b border-theme-border shrink-0">
         <div className="flex items-center gap-2">
           <GitCompare className="w-5 h-5 text-skyhook-400" />
-          <h3 className="text-sm font-semibold text-theme-text-primary">
+          <h3 id={titleId} className="text-sm font-semibold text-theme-text-primary">
             {sourceSide === 'a'
               ? `Compare to another ${pluralToKind(source.kind)}`
               : `Replace side B with another ${pluralToKind(source.kind)}`}

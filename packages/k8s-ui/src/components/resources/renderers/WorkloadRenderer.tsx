@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useId } from 'react'
 import { Server, ExternalLink, Scale, Minus, Plus, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PolicySection } from './PolicySection'
@@ -131,6 +131,7 @@ function compactHPASummary(diagnosis: HPADiagnosis): string {
 }
 
 export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, isScalePending, scaleBlockedBy, scalerDiagnostics, workloadPods, onRequestRefresh, rbacData, rbacLoading, rbacError, policyData, policyLoading, policyError, namespaceLimitRangeNames }: WorkloadRendererProps) {
+  const titleId = useId()
   const status = data.status || {}
   const spec = data.spec || {}
   const metadata = data.metadata || {}
@@ -288,13 +289,14 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
       </Section>
 
       {/* Scale Dialog */}
-      <DialogPortal open={showScaleDialog} onClose={() => setShowScaleDialog(false)} className="w-80 p-4">
-        <h3 className="text-sm font-medium text-theme-text-primary mb-4">
+      <DialogPortal ariaLabelledBy={titleId} open={showScaleDialog} onClose={() => setShowScaleDialog(false)} className="w-80 p-4">
+        <h3 id={titleId} className="text-sm font-medium text-theme-text-primary mb-4">
           Scale {metadata.name}
         </h3>
 
         <div className="flex items-center justify-center gap-4 mb-4">
           <button
+            aria-label="Decrease replicas"
             onClick={() => setTargetReplicas(Math.max(0, targetReplicas - 1))}
             className="p-2 rounded-lg bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
             disabled={targetReplicas <= 0}
@@ -307,12 +309,14 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
             min="0"
             max="10000"
             value={targetReplicas}
+            aria-label="Replicas"
             onChange={(e) => setTargetReplicas(Math.min(10000, Math.max(0, parseInt(e.target.value) || 0)))}
             className="w-20 text-center text-2xl font-semibold bg-theme-elevated border border-theme-border rounded-lg py-2 text-theme-text-primary focus:outline-none focus:border-blue-500"
             autoFocus
           />
 
           <button
+            aria-label="Increase replicas"
             onClick={() => setTargetReplicas(Math.min(10000, targetReplicas + 1))}
             disabled={targetReplicas >= 10000}
             className="p-2 rounded-lg bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"

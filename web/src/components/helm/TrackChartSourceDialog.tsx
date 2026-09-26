@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useId } from 'react'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { X, Plus, Trash2, Link2, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -50,6 +50,7 @@ function getSourceIssueCopy(sourceIssue: UpgradeInfo['sourceIssue'], sourceError
 // GitOps) Radar can only track upgrades once the user declares where they live.
 // Registering a registry/org prefix lets Radar probe "<prefix>/<chartName>".
 export function TrackChartSourceDialog({ open, onClose, chartName, sourceIssue, sourceError }: TrackChartSourceDialogProps) {
+  const titleId = useId()
   const [value, setValue] = useState('')
   const { data: sources } = useHelmOCISources()
   const { data: clusterInfo } = useClusterInfo()
@@ -78,13 +79,13 @@ export function TrackChartSourceDialog({ open, onClose, chartName, sourceIssue, 
   }
 
   return (
-    <DialogPortal open={open} onClose={onClose} className="max-w-lg w-full">
+    <DialogPortal ariaLabelledBy={titleId} open={open} onClose={onClose} className="max-w-lg w-full">
       <div className="flex items-start gap-3 p-4 border-b border-theme-border">
         <div className="flex items-center justify-center w-10 h-10 rounded-full shrink-0 bg-theme-hover">
           <Link2 className="w-5 h-5 text-theme-text-secondary" />
         </div>
         <div className="flex-1 min-w-0">
-          <h3 className="text-lg font-semibold text-theme-text-primary">Track chart source</h3>
+          <h3 id={titleId} className="text-lg font-semibold text-theme-text-primary">Track chart source</h3>
           <p className="text-sm text-theme-text-secondary mt-1">
             Helm doesn&apos;t record where a chart was installed from. Radar checks registered OCI
             prefixes for newer versions of your charts.
@@ -92,6 +93,7 @@ export function TrackChartSourceDialog({ open, onClose, chartName, sourceIssue, 
         </div>
         <button
           onClick={onClose}
+          aria-label="Close"
           className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
         >
           <X className="w-5 h-5" />

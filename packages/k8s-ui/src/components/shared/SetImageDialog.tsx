@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useId } from 'react'
 import {
   AlertTriangle,
   ExternalLink,
@@ -146,6 +146,7 @@ export function SetImageDialog({
   onLoad,
   onConfirm,
 }: SetImageDialogProps) {
+  const titleId = useId()
   const [inventory, setInventory] = useState<WorkloadImageInventory | null>(
     null,
   )
@@ -289,6 +290,7 @@ export function SetImageDialog({
 
   return (
     <DialogPortal
+      ariaLabelledBy={titleId}
       open={open}
       onClose={busy ? () => {} : onClose}
       closable={!busy}
@@ -296,7 +298,7 @@ export function SetImageDialog({
     >
       <div className="flex items-start justify-between gap-4 border-b border-theme-border px-5 py-4">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-theme-text-primary">
+          <h2 id={titleId} className="text-sm font-semibold text-theme-text-primary">
             Update container images
           </h2>
           <p className="mt-0.5 truncate text-xs text-theme-text-tertiary">

@@ -83,6 +83,7 @@ export function ArgoResourceDiff({ diff, loading, error }: ArgoResourceDiffProps
       <DialogPortal
         open={maximized}
         onClose={() => setMaximized(false)}
+        ariaLabel="Resource diff"
         className="dialog flex h-[90vh] w-full max-w-6xl flex-col"
       >
         <ArgoResourceDiffContent diff={diff} onClose={() => setMaximized(false)} />
