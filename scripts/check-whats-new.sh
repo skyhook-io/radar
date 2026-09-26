@@ -38,10 +38,10 @@ fi
 # Only real entries count: comments are dropped (a // right after ':' is part
 # of a URL), a value on the line after its key is joined back, and only the
 # RELEASE_NOTES array is searched, for version as an object key.
-entries="$(perl -0pe 's{/\*.*?\*/}{}gs; s{(^|[^:])//[^\n]*}{$1}g; s{\bversion:\s*\n\s*}{version: }g' <<<"$content" |
+entries="$(perl -0pe 's{/\*.*?\*/}{}gs; s{(^|[^:])//[^\n]*}{$1}g; s{\bversion(["\x27]?)\s*:\s*\n\s*}{version$1: }g' <<<"$content" |
   awk '/export const RELEASE_NOTES/ { on = 1 } on { print } on && (/^\]/ || /= *\[\] *;? *$/) { exit }')"
 
-if grep -Eq "(^[[:space:]]*|[{,][[:space:]]*)version:[[:space:]]*['\"]${version//./\\.}['\"]" <<<"$entries"; then
+if grep -Eq "(^[[:space:]]*|[{,][[:space:]]*)['\"]?version['\"]?[[:space:]]*:[[:space:]]*['\"]${version//./\\.}['\"]" <<<"$entries"; then
   echo "What's New: found notes for $version."
   exit 0
 fi

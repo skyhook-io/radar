@@ -55,8 +55,11 @@ describe('check-whats-new.sh', () => {
     expect(check('v1.15.0', withEntry(entry))).toBe(1)
   })
 
-  it('accepts a value on the line after its key, and double quotes', () => {
+  it('accepts a value on the line after its key, quoted keys, and space before the colon', () => {
     expect(check('v1.15.0', withEntry(`  {\n    version:\n      'v1.15.0',\n  },`))).toBe(0)
     expect(check('v1.15.0', withEntry(`  { version: "v1.15.0" },`))).toBe(0)
+    expect(check('v1.15.0', withEntry(`  { "version": "v1.15.0" },`))).toBe(0)
+    expect(check('v1.15.0', withEntry(`  { version : 'v1.15.0' },`))).toBe(0)
+    expect(check('v1.15.0', withEntry(`  {\n    "version" :\n      "v1.15.0",\n  },`))).toBe(0)
   })
 })
