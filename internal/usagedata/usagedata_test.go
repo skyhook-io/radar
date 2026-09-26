@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -685,5 +686,28 @@ func TestLaterChoiceWinsWhenSavesOverlap(t *testing.T) {
 	<-optedOut
 	if h.saved.UsageData == nil || h.saved.UsageData.Enabled {
 		t.Fatalf("stored choice = %+v, want the later opt-out", h.saved.UsageData)
+	}
+}
+
+func TestRefusedReportIsDroppedNotRetried(t *testing.T) {
+	releaseBuild(t)
+	h := newHarness(t, nil, false)
+	if _, err := h.c.SetChoice(true, ""); err != nil {
+		t.Fatal(err)
+	}
+	RecordView("helm")
+	h.fail = fmt.Errorf("%w: usage endpoint returned 400", errReportRefused)
+	h.now = h.now.Add(reportInterval + time.Minute)
+	h.c.tick(context.Background())
+	if st := h.c.Status(); len(st.Preview.Views) != 0 {
+		t.Fatalf("a refused report was kept for retry: %v", st.Preview.Views)
+	}
+
+	RecordView("topology")
+	h.fail = errors.New("connection refused")
+	h.now = h.now.Add(reportInterval + time.Minute)
+	h.c.tick(context.Background())
+	if st := h.c.Status(); st.Preview.Views["topology"] != 1 {
+		t.Fatalf("a network failure should keep the counts for retry: %v", st.Preview.Views)
 	}
 }

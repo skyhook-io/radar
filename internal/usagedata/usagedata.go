@@ -154,6 +154,11 @@ type Options struct {
 // deployment, so the UI cannot change it.
 var ErrManaged = errors.New("usage data is managed by this installation's configuration")
 
+// errReportRefused means the receiver looked at the report and won't take
+// it. Sending the same counts again would be refused again, so they are
+// dropped rather than kept and retried every day.
+var errReportRefused = errors.New("usage report refused")
+
 func doNotTrack(env func(string) string) bool {
 	switch strings.ToLower(strings.TrimSpace(env("DO_NOT_TRACK"))) {
 	case "", "0", "false", "no":
@@ -672,6 +677,11 @@ func (c *Collector) maybeSend(ctx context.Context, early bool) {
 		default:
 			if err := c.send(sendCtx, report); err != nil {
 				c.mu.Lock()
+				if c.gen == gen && errors.Is(err, errReportRefused) {
+					log.Printf("[usage] Usage report dropped: %v", err)
+					c.mu.Unlock()
+					return
+				}
 				if c.gen == gen {
 					log.Printf("[usage] Usage report not sent, retrying in a day: %v", err)
 					c.nextAttempt = now.Add(retryDelay)
@@ -719,10 +729,15 @@ func postReport(ctx context.Context, r Report) error {
 		return err
 	}
 	resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		return nil
+	case resp.StatusCode >= 400 && resp.StatusCode < 500 &&
+		resp.StatusCode != http.StatusRequestTimeout && resp.StatusCode != http.StatusTooManyRequests:
+		return fmt.Errorf("%w: usage endpoint returned %d", errReportRefused, resp.StatusCode)
+	default:
 		return fmt.Errorf("usage endpoint returned %d", resp.StatusCode)
 	}
-	return nil
 }
 
 func (c *Collector) readPending() pending {
