@@ -205,7 +205,7 @@ it('preserves producer check order and keeps operational delays visible while ze
     expect(paragraph('Readiness message').textContent).toContain('Pods ready: Unknown')
     expect(paragraph('Eviction message').querySelector('span.block')?.textContent).toMatch(/^Evicted · Status since .+ ago$/)
     expect(paragraph('Eviction message').lastChild?.textContent).toBe('Eviction message')
-    expect([...container.querySelectorAll('h4')].map(e => e.textContent)).toEqual(['Admission', 'Admission checks · 3 not ready', 'Supporting evidence'])
+    expect([...container.querySelectorAll('h4, h5')].map(e => e.textContent)).toEqual(['Admission', 'Admission checks · 3 not ready', 'Supporting evidence', 'Reported disruptions · 1', 'Pod readiness · 1'])
   } finally { await act(async () => root.unmount()) }
 })
 

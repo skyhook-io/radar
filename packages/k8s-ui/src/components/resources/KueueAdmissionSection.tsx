@@ -141,21 +141,7 @@ function AdmissionObservation({ observation, identity, generation, deleting, pre
       {(kueue?.phase === 'admitted' || kueue?.phase === 'quota_reserved') && <p className="text-xs text-theme-text-tertiary">Admission status; execution is shown separately.</p>}
       </div>
       </div>
-    </section>
-    {pendingChecks.length > 0 && <section aria-label="Admission checks" className={evidenceCard}>
-      <h4 className={`${groupHeading} ${cardHeader}`}>Admission checks · {pendingChecks.length} not ready</h4>
-      <div className="divide-y divide-theme-border [&>div]:p-3">{pendingChecks.map((gate, index) => <GateEvidence key={index} gate={gate} link={link} />)}</div>
-    </section>}
-    </div>
-    {(visible.length > 0 || preemption.length > 0) && <section aria-label="Supporting evidence" className={`${evidenceCard} self-start`}>
-      <h4 className={`${groupHeading} ${cardHeader}`}>Supporting evidence</h4>
-      <div className="divide-y divide-theme-border px-3">
-        {disruptions.length > 0 && <section aria-label="Reported disruptions" className="space-y-3 py-3"><h5 className={groupHeading}>Reported disruptions · {disruptions.length}</h5><div className="divide-y divide-theme-border">{disruptions.map((entry) => <ConditionEvidence key={entry.type} condition={entry} generation={observation.subjectGeneration} showAge />)}</div></section>}
-        {readiness.length > 0 && <section aria-label="Pod readiness" className="space-y-3 py-3"><h5 className={groupHeading}>Pod readiness · {readiness.length}</h5><div className="divide-y divide-theme-border">{readiness.map((entry) => <ConditionEvidence key={entry.type} condition={entry} generation={observation.subjectGeneration} />)}</div></section>}
-        {preemption.length > 0 && <section aria-label="Preemption gates" className="space-y-2 py-3"><h5 className={groupHeading}>Preemption gates · {preemption.length}</h5><p className="text-xs text-theme-text-tertiary">Governs preemption; it alone does not establish an admission blocker.</p><div className="divide-y divide-theme-border">{preemption.map((gate, index) => <GateEvidence key={index} gate={gate} link={link} />)}</div></section>}
-      </div>
-    </section>}
-    </div>
+      <div className="border-t border-theme-border p-3">
     <Disclosure summary={<span>Technical details{supporting.length > 0 && ` · ${supporting.length} additional condition${supporting.length === 1 ? '' : 's'}`}{readyChecks.length > 0 && ` · ${readyChecks.length} ready check${readyChecks.length === 1 ? '' : 's'}`}</span>} summaryClassName="text-xs text-theme-text-secondary">
       <div className="space-y-2 pt-2 text-xs text-theme-text-secondary">
         <p>Decision: {observation.decision} · Generation {generation}</p>
@@ -168,5 +154,22 @@ function AdmissionObservation({ observation, identity, generation, deleting, pre
         {readyChecks.map((gate, index) => <GateEvidence key={index} gate={gate} link={link} />)}
       </div>
     </Disclosure>
+      </div>
+    </section>
+    {pendingChecks.length > 0 && <section aria-label="Admission checks" className={evidenceCard}>
+      <h4 className={`${groupHeading} ${cardHeader}`}>Admission checks · {pendingChecks.length} not ready</h4>
+      <div className="divide-y divide-theme-border [&>div]:p-3">{pendingChecks.map((gate, index) => <GateEvidence key={index} gate={gate} link={link} />)}</div>
+    </section>}
+    </div>
+    {(visible.length > 0 || preemption.length > 0) && <section aria-label="Supporting evidence" className={`${evidenceCard} self-start`}>
+      <h4 className={`${groupHeading} ${cardHeader}`}>Supporting evidence</h4>
+      <div className="divide-y divide-theme-border px-3">
+        {disruptions.length > 0 && <div className="space-y-3 py-3"><h5 className={groupHeading}>Reported disruptions · {disruptions.length}</h5><div className="divide-y divide-theme-border">{disruptions.map((entry) => <ConditionEvidence key={entry.type} condition={entry} generation={observation.subjectGeneration} showAge />)}</div></div>}
+        {readiness.length > 0 && <div className="space-y-3 py-3"><h5 className={groupHeading}>Pod readiness · {readiness.length}</h5><div className="divide-y divide-theme-border">{readiness.map((entry) => <ConditionEvidence key={entry.type} condition={entry} generation={observation.subjectGeneration} />)}</div></div>}
+        {preemption.length > 0 && <div className="space-y-2 py-3"><h5 className={groupHeading}>Preemption gates · {preemption.length}</h5><p className="text-xs text-theme-text-tertiary">Governs preemption; it alone does not establish an admission blocker.</p><div className="divide-y divide-theme-border">{preemption.map((gate, index) => <GateEvidence key={index} gate={gate} link={link} />)}</div></div>}
+      </div>
+    </section>}
+    </div>
+
   </div>
 }
