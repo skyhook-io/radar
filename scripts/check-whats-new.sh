@@ -9,12 +9,17 @@ set -euo pipefail
 
 version="${1:?usage: scripts/check-whats-new.sh <version> [git-ref]}"
 ref="${2:-}"
-catalog="web/src/components/whats-new/releaseNotes.ts"
+catalog="${WHATS_NEW_CATALOG:-web/src/components/whats-new/releaseNotes.ts}"
 version="v${version#v}"
 
 cd "$(git rev-parse --show-toplevel)"
 
-if [[ ! "$version" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+semver='^v([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+if [[ ! "$version" =~ $semver ]]; then
+  echo "What's New: $version is not a release version (expected vX.Y.Z)." >&2
+  exit 1
+fi
+if [[ -n "${BASH_REMATCH[4]}" ]]; then
   echo "What's New: $version is a prerelease; no entry required."
   exit 0
 fi
@@ -22,6 +27,7 @@ if [[ "${BASH_REMATCH[3]}" != "0" ]]; then
   echo "What's New: $version is a patch release; no entry required."
   exit 0
 fi
+version="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.0"
 
 if [[ -n "$ref" ]]; then
   content="$(git show "$ref:$catalog")"
@@ -29,7 +35,12 @@ else
   content="$(cat "$catalog")"
 fi
 
-if grep -Eq "version:[[:space:]]*['\"]${version//./\\.}['\"]" <<<"$content"; then
+# Only real entries count: comments are dropped (a // right after ':' is part
+# of a URL), and only the RELEASE_NOTES array is searched.
+entries="$(perl -0pe 's{/\*.*?\*/}{}gs; s{(^|[^:])//[^\n]*}{$1}g' <<<"$content" |
+  awk '/export const RELEASE_NOTES/ { on = 1 } on { print } on && (/^\]/ || /= *\[\] *$/) { exit }')"
+
+if grep -Eq "(^|[^A-Za-z0-9_])version:[[:space:]]*['\"]${version//./\\.}['\"]" <<<"$entries"; then
   echo "What's New: found notes for $version."
   exit 0
 fi
