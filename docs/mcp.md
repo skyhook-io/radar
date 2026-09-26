@@ -207,6 +207,20 @@ Add to `~/.gemini/settings.json`:
 }
 ```
 
+### Antigravity
+
+Add to `~/.gemini/config/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "radar": {
+      "serverUrl": "http://localhost:9280/mcp"
+    }
+  }
+}
+```
+
 ## MCP Registry / Docker
 
 Radar is listed on the [official MCP registry](https://registry.modelcontextprotocol.io) as `io.github.skyhook-io/radar`, packaged as the `ghcr.io/skyhook-io/radar` Docker image. The registry-suggested invocation is:
