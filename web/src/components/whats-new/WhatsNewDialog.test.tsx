@@ -184,7 +184,7 @@ describe('WhatsNew', () => {
     await render('/resources/pods')
     expect(status.current.unread).toBe(true)
     localStorage.setItem('radar-whats-new-seen', 'v1.15.2')
-    await act(async () => { window.dispatchEvent(new StorageEvent('storage', { key: 'radar-whats-new-seen' })) })
+    await act(async () => { window.dispatchEvent(new Event('storage')) })
     expect(status.current.unread).toBe(false)
   })
 

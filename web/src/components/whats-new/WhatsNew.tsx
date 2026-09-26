@@ -145,9 +145,7 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
 
   // Another tab acknowledging the notes clears this tab's dot too.
   useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === LAST_SEEN_KEY || e.key === null) setBrowserLastSeen(readBrowserLastSeen())
-    }
+    const onStorage = () => setBrowserLastSeen(readBrowserLastSeen())
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
   }, [])
