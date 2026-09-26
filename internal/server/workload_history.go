@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -91,8 +92,9 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 	key := resourceid.NewRef(group, kind, namespace, name)
 	clusterContext := k8s.ActiveClusterContext()
 	live := liveWorkloadIdentity(r.Context(), chi.URLParam(r, "kind"), group, namespace, name)
-	scope, incomplete, err := workloadHistoryScope(r.Context(), store, clusterContext, key, live, s.workloadAttachments(r, key))
+	scope, incomplete, err := workloadHistoryScope(r.Context(), store, clusterContext, key, live, s.workloadAttachments(r, key, live.Object))
 	if err != nil {
+		log.Printf("[workload-history] Failed to resolve the history scope of %s %s/%s: %v", kind, namespace, name, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -107,6 +109,7 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 		IncludeK8sEvents: true,
 	})
 	if err != nil {
+		log.Printf("[workload-history] Failed to query the history of %s %s/%s: %v", kind, namespace, name, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -125,9 +128,10 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, resp)
 }
 
-// liveIdentity is what the live object says about the workload: its UID and
-// its controller's UID.
+// liveIdentity is the workload as it exists now: the object, its UID and its
+// controller's UID.
 type liveIdentity struct {
+	Object   metav1.Object
 	UID      string
 	OwnerUID string
 }
@@ -157,7 +161,7 @@ func liveWorkloadIdentity(ctx context.Context, resource, group, namespace, name 
 	if obj == nil {
 		return liveIdentity{}
 	}
-	id := liveIdentity{UID: string(obj.GetUID())}
+	id := liveIdentity{Object: obj, UID: string(obj.GetUID())}
 	if ref := metav1.GetControllerOf(obj); ref != nil {
 		id.OwnerUID = string(ref.UID)
 	}
@@ -182,8 +186,10 @@ func resolveWorkloadKind(resource, group string) (kind, resolvedGroup string, ok
 }
 
 // workloadAttachments are the resources attached to the workload right now,
-// from the cached topology the detail view's relationships use.
-func (s *Server) workloadAttachments(r *http.Request, key resourceid.Ref) []resourceid.Ref {
+// from the cached topology the detail view's relationships use. The live
+// object, when there is one, keeps a CRD whose kind collides with another's
+// (a Volcano Job and a batch Job) on its own topology node.
+func (s *Server) workloadAttachments(r *http.Request, key resourceid.Ref, obj metav1.Object) []resourceid.Ref {
 	if s.broadcaster == nil {
 		return nil
 	}
@@ -195,7 +201,11 @@ func (s *Server) workloadAttachments(r *http.Request, key resourceid.Ref) []reso
 		cachedTopo = s.relationshipTopologyForUser(r, cachedTopo)
 		relIdx = nil
 	}
-	rel := topology.GetRelationshipsWithIndex(key.Kind, key.Namespace, key.Name, cachedTopo,
+	var object any
+	if obj != nil {
+		object = obj
+	}
+	rel := topology.GetRelationshipsWithObject(key.Kind, key.Namespace, key.Name, object, cachedTopo,
 		k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
 		k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
 	return attachedRefs(rel, key.Namespace)

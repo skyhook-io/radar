@@ -794,10 +794,16 @@ export function WorkloadView({
   const [olderHistory, setOlderHistory] = useState<WorkloadHistoryPage | null>(null)
   const [loadingOlderHistory, setLoadingOlderHistory] = useState(false)
   const [olderHistoryError, setOlderHistoryError] = useState<Error | null>(null)
+  // A page requested for one workload must not land in another's timeline
+  // after navigation.
+  const historyIdentity = `${effectiveGroup ?? ''}/${apiKind}/${namespace}/${name}`
+  const currentHistoryIdentity = useRef(historyIdentity)
+  currentHistoryIdentity.current = historyIdentity
   useEffect(() => {
     setOlderHistory(null)
     setOlderHistoryError(null)
-  }, [apiKind, namespace, name, effectiveGroup])
+    setLoadingOlderHistory(false)
+  }, [historyIdentity])
   const allEvents = useMemo(() => {
     const newest = historyQuery.data?.events
     if (!newest) return undefined
@@ -810,10 +816,12 @@ export function WorkloadView({
   const loadOlderHistory = useCallback(async () => {
     const cursor = olderHistory ? olderHistory.nextBeforeSeq : historyQuery.data?.nextBeforeSeq
     if (!cursor) return
+    const requestedFor = historyIdentity
     setLoadingOlderHistory(true)
     setOlderHistoryError(null)
     try {
       const page = await fetchWorkloadHistoryPage(apiKind, namespace, name, effectiveGroup, cursor)
+      if (currentHistoryIdentity.current !== requestedFor) return
       // The first older page also keeps the newest page it continues from:
       // the newest page keeps refreshing forward, and without it the rows
       // between its new tail and this page's head would fall out.
@@ -823,11 +831,12 @@ export function WorkloadView({
         nextBeforeSeq: page.nextBeforeSeq,
       }))
     } catch (err) {
+      if (currentHistoryIdentity.current !== requestedFor) return
       setOlderHistoryError(err instanceof Error ? err : new Error(String(err)))
     } finally {
-      setLoadingOlderHistory(false)
+      if (currentHistoryIdentity.current === requestedFor) setLoadingOlderHistory(false)
     }
-  }, [apiKind, namespace, name, effectiveGroup, olderHistory, historyQuery.data])
+  }, [apiKind, namespace, name, effectiveGroup, historyIdentity, olderHistory, historyQuery.data])
   const eventsLoading = historyQuery.isLoading
 
   // RBAC
