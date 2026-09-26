@@ -65,12 +65,17 @@ curl -fsSL https://get.radarhq.io | sh && kubectl radar
 curl -fsSL https://get.radarhq.io | sh
 ```
 
-**Homebrew:**
+**Homebrew project tap:**
 ```bash
 brew install skyhook-io/tap/radar
 ```
 
-Then run: `kubectl radar`. Quick install, PowerShell, Homebrew, and Scoop also set up the `radar` shorthand. Krew and direct downloads use `kubectl radar` unless you add your own `radar` symlink.
+**Homebrew official core tap:**
+```bash
+brew install kubectl-radar
+```
+
+Then run: `kubectl radar`. Quick install, PowerShell, Homebrew project tap, and Scoop also set up the `radar` shorthand. Krew and direct downloads use `kubectl radar` unless you add your own `radar` symlink.
 
 <details>
 <summary><b>More install options</b> — Desktop App (macOS/Linux/Windows), Krew, Scoop, In-Cluster Helm</summary>
@@ -149,7 +154,7 @@ See the [In-Cluster Deployment Guide](docs/in-cluster.md) for Gateway API and in
 # Opens browser automatically
 kubectl radar
 
-# Quick install, PowerShell, Homebrew, and Scoop also set up the bare command
+# Quick install, PowerShell, Homebrew project tap, and Scoop also set up the bare command
 radar
 ```
 
