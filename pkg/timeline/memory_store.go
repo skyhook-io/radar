@@ -300,7 +300,9 @@ func (m *MemoryStore) OwnedUIDs(ctx context.Context, clusterContext string, owne
 	}
 	owners := make(map[string]bool, len(ownerUIDs))
 	for _, uid := range ownerUIDs {
-		owners[uid] = true
+		if uid != "" {
+			owners[uid] = true
+		}
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
