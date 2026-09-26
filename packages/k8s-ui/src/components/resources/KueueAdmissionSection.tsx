@@ -114,7 +114,7 @@ function AdmissionObservation({ observation, identity, generation, deleting, pre
       : observation.decision === 'satisfied' ? 'success' : 'warning'
   const qualifier = observation.decision === 'held' && kueue?.active !== false ? 'Admission held' : observation.decision === 'unknown' ? 'Admission unknown' : null
   return <div className="@container/admission space-y-4">
-    <div className={split ? 'grid max-w-[88rem] min-w-0 gap-5 @min-[1024px]/admission:grid-cols-[minmax(0,5fr)_minmax(0,3fr)]' : 'max-w-4xl space-y-5'}>
+    <div className={split ? 'grid min-w-0 items-start gap-4 @min-[1024px]/admission:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]' : 'space-y-4'}>
     <div className="min-w-0 space-y-4">
     <section aria-label="Admission" className={evidenceCard}>
       <div className={`${cardHeader} space-y-2`}>
