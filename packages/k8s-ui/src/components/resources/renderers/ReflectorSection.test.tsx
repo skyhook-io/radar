@@ -225,13 +225,14 @@ describe("Reflector resource hierarchy", () => {
   it("keeps ConfigMap data ahead of detailed settings and source mirror list", () => {
     const html = renderToStaticMarkup(
       <ResourceRendererDispatch
-        kind="configmaps"
         data={{
           ...resource({ "reflection-allowed": "true" }),
           data: { setting: "value" },
         }}
         resource={{ kind: "configmaps", namespace: "app", name: "mirror" }}
         relationships={{ reflection: { mirrors: [mirror] } }}
+        onCopy={() => {}}
+        copied={null}
       />,
     );
     expect(html.indexOf("Data (1 keys)")).toBeLessThan(
@@ -242,7 +243,6 @@ describe("Reflector resource hierarchy", () => {
   it("puts TLS expiry and mirror provenance ahead of data, with details below", () => {
     const html = renderToStaticMarkup(
       <ResourceRendererDispatch
-        kind="secrets"
         data={{
           ...resource({ reflects: "source/settings" }),
           type: "kubernetes.io/tls",
@@ -268,6 +268,8 @@ describe("Reflector resource hierarchy", () => {
             ],
           } as any
         }
+        onCopy={() => {}}
+        copied={null}
       />,
     );
     expect(html.indexOf("Certificate has expired")).toBeLessThan(

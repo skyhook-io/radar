@@ -5,7 +5,7 @@ import { expect, it, vi } from 'vitest'
 import { ClusterQueueRenderer, LocalQueueRenderer } from './KueueQueueRenderers'
 
 it('navigates from a namespaced LocalQueue to exact cluster-scoped Kueue dependencies', async () => {
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   const container = document.createElement('div')
   const root = createRoot(container)
   const onNavigate = vi.fn()
@@ -64,6 +64,6 @@ it('navigates from a namespaced LocalQueue to exact cluster-scoped Kueue depende
     })
   } finally {
     await act(async () => root.unmount())
-    globalThis.IS_REACT_ACT_ENVIRONMENT = false
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: false })
   }
 })

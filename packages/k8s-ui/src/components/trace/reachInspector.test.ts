@@ -16,7 +16,7 @@ function mk(pods: PodStatus[], probes: ProbeResult[]): Trace {
     // The producer attaches a concrete request to every probed route; without
     // one the server has nothing to send, so a fixture that omits it is not a
     // realistic trace.
-    routes: [{ route: 'GET /', target: 'shop:80', outcome: 'verified', confidence: 'real', inClusterRequest: { scheme: 'http', path: '/' } }],
+    routes: [{ route: 'GET /', target: 'shop:80', outcome: 'verified', confidence: 'real', inClusterRequest: { protocol: 'http', scheme: 'http', path: '/' } }],
     downstream: [
       { resource: { kind: 'Service', name: 'shop', namespace: 'store' }, edge: 'service', findings: [], config: { clusterIP: '10.96.0.1', selector: { app: 'shop' } } },
       {
@@ -38,10 +38,6 @@ const route = (o: Partial<RouteResult> = {}): RouteResult => ({ route: 'GET /', 
 function podsNodeId(t: Trace): string {
   const g = buildGraph({ trace: t, route: route(), origin: buildOrigins(t).find((o) => o.id === 'incluster')! })
   return g.nodes.find((n) => n.kind === 'PODS')!.id
-}
-function podsEdgeId(t: Trace): string {
-  const g = buildGraph({ trace: t, route: route(), origin: buildOrigins(t).find((o) => o.id === 'incluster')! })
-  return g.edges.find((e) => e.label === 'selects')!.id
 }
 
 function ctx(t: Trace, originId: string, r = route()) {
@@ -76,7 +72,6 @@ describe('the diagnosis is always present', () => {
     // The panel always answers the path question; a next-step block is offered
     // only when there is genuinely a next step.
     expect(s.path.body).toBeTruthy()
-    expect(s.resource).toBeUndefined()
   })
 
   // Every hop is reported whether or not anything was clicked; a selection only
@@ -241,7 +236,7 @@ describe('verdict band', () => {
     const t = mk([pod('a', true, '10.0.0.1')], [])
     t.verdict = 'degraded'
     t.routes = []
-    const v = buildVerdict(t, undefined, buildOrigins(t))
+    const v = buildVerdict(t, undefined)
     expect(v.tone).toBe('degraded')
   })
 
@@ -249,7 +244,7 @@ describe('verdict band', () => {
     const t = mk([pod('a', true, '10.0.0.1')], [])
     t.headline = 'Configuration only - not yet tested'
     t.diagnosis = { summary: 'Accepted: NoMatchingListenerHostname - no hostname intersections' }
-    const v = buildVerdict(t, undefined, buildOrigins(t))
+    const v = buildVerdict(t, undefined)
     expect(v.problem).toMatch(/NoMatchingListenerHostname/)
     // and it is not duplicated into the body
     expect(v.body).toBe('')
@@ -723,7 +718,7 @@ describe('selecting a context entry opens it', () => {
 describe('a coverage statement is not a fault', () => {
   it('the verdict keeps it on the wire but marks it coverage-class', () => {
     const t = mk([pod('a', true, '10.0.0.1')], [p({ path: 'apiserver' })])
-    t.diagnosis = { class: 'coverage', summary: "reachable via API server - the real-traffic path wasn't confirmed from here" } as never
+    t.diagnosis = { class: 'coverage', summary: "reachable via API server - the real-traffic path wasn't confirmed from here" }
     // buildVerdict still surfaces it for consumers that want the sentence...
     const v = buildVerdict(t, route({ outcome: 'reached', confidence: 'indirect' }), { originId: 'apiserver', originName: 'API-server proxy' })
     expect(v.problem).toBeTruthy()

@@ -30,7 +30,7 @@ describe('radarHealthNote', () => {
 
   test('hasRadarFinding reads the rows the markers read', () => {
     const row = (health: string, healthSource?: string) =>
-      ({ ref: { kind: 'Deployment', namespace: 'p', name: 'w' }, category: 'Unknown', health, healthSource, hasDesired: false, hasLive: true }) as const
+      ({ ref: { kind: 'Deployment', namespace: 'p', name: 'w' }, category: 'Unknown', health, healthSource, hasDesired: false, hasLive: true, partial: false }) as const
     expect(hasRadarFinding(undefined)).toBe(false)
     expect(hasRadarFinding([row('Degraded', 'controller')])).toBe(false)
     expect(hasRadarFinding([row('Healthy', 'radar')])).toBe(false)

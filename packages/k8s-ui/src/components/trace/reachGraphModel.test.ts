@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import type { Mark } from './reachMarks'
 import { buildGraph, shortEvidence, noteHeadline, hopEvidenceFor, originEntryEvidence, originNoEvidenceLabel, POD_ROW_MAX, PILL_MAX_PX } from './reachGraphModel'
 import { buildOrigins } from './reachOrigins'
 import type { Trace, RouteResult, PodStatus, ProbeResult } from './types'

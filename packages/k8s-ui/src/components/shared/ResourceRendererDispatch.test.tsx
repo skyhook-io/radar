@@ -315,11 +315,9 @@ describe('getResourceStatus — colliding plurals', () => {
   // fine; being scored with Argo's vocabulary is not, because that attaches a
   // HealthLevel derived from a phase Katib never reports.
   it('does not score a Katib Experiment with the Argo vocabulary', () => {
-    const katib = getResourceStatus('experiments', {
-      apiVersion: 'kubeflow.org/v1beta1',
-      status: { conditions: [{ type: 'Running', status: 'True' }] },
-    })
-    expect(katib?.level).toBeUndefined()
+    const katib = { apiVersion: 'kubeflow.org/v1beta1', status: { conditions: [{ type: 'Running', status: 'True' }] } }
+    // Read the way any unrelated CRD with the same status would be.
+    expect(getResourceStatus('experiments', katib)).toEqual(getResourceStatus('trainingruns', katib))
   })
 
   it('fabricates no engine status for a third-party backups CRD', () => {

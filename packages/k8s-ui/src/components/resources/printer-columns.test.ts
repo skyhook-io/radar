@@ -113,7 +113,7 @@ describe('formatPrinterCell', () => {
 describe('printerCellSortValue', () => {
   // Sorting must use the value, not its rendered text, or 10 sorts before 9.
   it('sorts numbers numerically', () => {
-    expect([10, 9, 100].map(printerCellSortValue).sort((a, b) => (a as number) - (b as number)))
+    expect([10, 9, 100].map(v => printerCellSortValue(v)).sort((a, b) => (a as number) - (b as number)))
       .toEqual([9, 10, 100])
   })
   it('sorts booleans by truth and falls back to empty for anything else', () => {

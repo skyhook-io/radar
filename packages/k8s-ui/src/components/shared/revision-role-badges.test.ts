@@ -25,7 +25,7 @@ describe('offersPromoteAfterRollback', () => {
 })
 
 function revision(overrides: Partial<WorkloadRevision>): WorkloadRevision {
-  return { number: 1, image: 'web:v1', createdAt: '2026-08-07T00:00:00Z', ...overrides }
+  return { number: 1, image: 'web:v1', createdAt: '2026-08-07T00:00:00Z', isCurrent: false, replicas: 0, ...overrides }
 }
 
 describe('revisionRoleBadges', () => {

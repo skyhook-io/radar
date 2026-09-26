@@ -371,7 +371,7 @@ describe('rolloutActions promote reachability', () => {
 
   it('blocks promote, promote-full and skip-step alike on an aborted rollout', () => {
     const data = canaryRollout({ phase: 'Degraded', abort: true, currentStepIndex: 1 })
-    for (const action of ['promote', 'promote-full', 'skip-step']) {
+    for (const action of ['promote', 'promote-full', 'skip-step'] as const) {
       expect(blockedReason(data, action)).toBe('Retry the rollout first')
     }
   })
