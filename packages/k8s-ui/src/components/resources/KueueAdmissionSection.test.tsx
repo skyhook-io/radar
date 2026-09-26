@@ -99,7 +99,7 @@ describe('Kueue admission investigation', () => {
 
 
 it('keeps actionable evidence visible while nominal evidence is inert until expanded', async () => {
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   const container = document.createElement('div')
   const root = createRoot(container)
   const data = response({
@@ -133,7 +133,7 @@ it.each([
   { type: 'PodsReady', status: 'Unknown' },
   { type: 'WaitingForReplacementPods', status: 'True' },
 ])('does not hide stale or non-nominal supporting conditions: %j', async (condition) => {
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   const container = document.createElement('div')
   const root = createRoot(container)
   try {
@@ -152,7 +152,7 @@ it.each(['failed', undefined] as const)('never colors a finished %s outcome as s
 
 
 it('uses an expanded Section in drawers and keeps the default fullscreen card', async () => {
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   const container = document.createElement('div')
   const root = createRoot(container)
   try {
@@ -178,7 +178,7 @@ it('does not color an open preemption gate as an admission warning', () => {
 
 
 it('preserves producer check order and keeps operational delays visible while zero metadata collapses', async () => {
-  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   const container = document.createElement('div')
   const root = createRoot(container)
   const data = response({
