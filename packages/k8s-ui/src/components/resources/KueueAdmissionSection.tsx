@@ -78,7 +78,7 @@ function ConditionEvidence({ condition, generation, showAge }: { condition: Sche
 
 function GateEvidence({ gate, link }: { gate: Gate; link: Link }) {
   const retryMetadata = [gate.retryCount != null && gate.retryCount > 0 ? `Retries: ${gate.retryCount}` : null, gate.requeueAfterSeconds != null && gate.requeueAfterSeconds > 0 ? `Requeue delay: ${gate.requeueAfterSeconds}s` : null].filter(Boolean)
-  return <div className="space-y-2 py-3 first:pt-0 last:pb-0">
+  return <div className="space-y-2 py-3">
     <div className="grid grid-cols-[minmax(0,1fr)_6rem] items-start gap-2">
       <span className="min-w-0 break-words font-medium [&_button]:text-left">{link(gate.name, gate.ref)}</span>
       <Badge className="justify-self-end" severity={gate.kind === 'preemption_gate' ? 'neutral' : admissionCheckSeverity(gate.nativeState)}>{gate.nativeState || 'Unknown'}</Badge>
