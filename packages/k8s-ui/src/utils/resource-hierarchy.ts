@@ -91,6 +91,11 @@ export interface HierarchyOptions {
   topology?: Topology
   /** If provided, returns only the hierarchy rooted at this resource */
   rootResource?: { kind: string; group?: string; namespace: string; name: string }
+  /** The events were already selected as rootResource's history (the server's
+   *  scoped query). Every lane is kept: one the hierarchy can't place in the
+   *  root's tree — a past run whose parent left no events, a second Service —
+   *  nests under the returned lane instead of being dropped. */
+  eventsScopedToRoot?: boolean
   /** Legacy toggle. Kept for back-compat (WorkloadView): true→'app', false→'owner'
    *  when `grouping` is omitted. Prefer `grouping`. */
   groupByApp?: boolean
@@ -933,66 +938,96 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
 
   // If rootResource is specified, filter to only include lanes related to that resource
   if (rootResource) {
-    const rootGroup = canonicalResourceGroup(rootResource.kind, rootResource.group)
-    const rootLaneId = rootGroup !== undefined
-      ? laneId(rootResource.kind, rootGroup, rootResource.namespace, rootResource.name)
-      : resolveId(laneResourceKey(rootResource.kind, rootResource.namespace, rootResource.name))
-    const rootLane = topLevelLanes.find(l => l.id === rootLaneId)
-
-    if (rootLane) {
-      // Return the root lane with all its children
-      return [rootLane]
-    }
-
-    // If root resource is a child of another lane, find its parent and return that
-    for (const lane of topLevelLanes) {
-      if (lane.children?.some(c => c.id === rootLaneId)) {
-        return [lane]
+    const rootLane = pickRootLane(rootResource, topLevelLanes, laneMap, laneParent, findRoot, resolveId)
+    if (options.eventsScopedToRoot) {
+      const adopted = topLevelLanes.filter((l) => l !== rootLane && !laneContains(l, rootLane))
+      if (adopted.length > 0) {
+        rootLane.children = [...(rootLane.children ?? []), ...adopted]
+        rootLane.childEventCount = (rootLane.childEventCount ?? 0) + adopted.reduce((n, l) => n + l.events.length, 0)
+        sortLaneChildrenDeep(rootLane)
+        rootLane.allEventsSorted = subtreeEvents(rootLane)
       }
-      // Also check if root is the parent and we're looking at the hierarchy from the parent perspective
     }
-
-    // If not found, check if it's a child somewhere in the hierarchy and return its parent
-    const childLane = laneMap.get(rootLaneId)
-    if (childLane) {
-      const parentId = laneParent.get(rootLaneId)
-      if (parentId) {
-        const parentLane = topLevelLanes.find(l => l.id === parentId)
-        if (parentLane) {
-          return [parentLane]
-        }
-        // Walk up to find the top-level ancestor
-        const rootAncestorId = findRoot(rootLaneId)
-        const rootAncestor = topLevelLanes.find(l => l.id === rootAncestorId)
-        if (rootAncestor) {
-          return [rootAncestor]
-        }
-      }
-      // No parent found, return as a standalone lane. Full-subtree roll-up so a
-      // nested chain's grandchildren stay in the aggregate.
-      childLane.allEventsSorted = subtreeEvents(childLane)
-      return [childLane]
-    }
-
-    // Resource not found in hierarchy - create a placeholder lane
-    // This ensures the detail view always has something to show
-    const placeholderLane: ResourceLane = {
-      id: rootLaneId,
-      kind: rootResource.kind,
-      group: parseLaneId(rootLaneId)?.group || '',
-      identityResolved: rootGroup !== undefined,
-      namespace: rootResource.namespace,
-      name: rootResource.name,
-      events: [],
-      isWorkload: isWorkloadKind(rootResource.kind),
-      children: [],
-      childEventCount: 0,
-      allEventsSorted: [],
-    }
-    return [placeholderLane]
+    return [rootLane]
   }
 
   return topLevelLanes
+}
+
+
+function laneContains(lane: ResourceLane, target: ResourceLane, seen = new Set<ResourceLane>()): boolean {
+  if (seen.has(lane)) return false
+  seen.add(lane)
+  return (lane.children ?? []).some((c) => c === target || laneContains(c, target, seen))
+}
+
+/** The lane a rootResource view shows: the root's own lane, the top-level
+ *  ancestor it nests under, or a placeholder when it has no events. */
+function pickRootLane(
+  rootResource: { kind: string; group?: string; namespace: string; name: string },
+  topLevelLanes: ResourceLane[],
+  laneMap: Map<string, ResourceLane>,
+  laneParent: Map<string, string>,
+  findRoot: (id: string) => string,
+  resolveId: (resourceKey: string) => string,
+): ResourceLane {
+  const rootGroup = canonicalResourceGroup(rootResource.kind, rootResource.group)
+  const rootLaneId = rootGroup !== undefined
+    ? laneId(rootResource.kind, rootGroup, rootResource.namespace, rootResource.name)
+    : resolveId(laneResourceKey(rootResource.kind, rootResource.namespace, rootResource.name))
+  const rootLane = topLevelLanes.find(l => l.id === rootLaneId)
+
+  if (rootLane) {
+    // Return the root lane with all its children
+    return rootLane
+  }
+
+  // If root resource is a child of another lane, find its parent and return that
+  for (const lane of topLevelLanes) {
+    if (lane.children?.some(c => c.id === rootLaneId)) {
+      return lane
+    }
+    // Also check if root is the parent and we're looking at the hierarchy from the parent perspective
+  }
+
+  // If not found, check if it's a child somewhere in the hierarchy and return its parent
+  const childLane = laneMap.get(rootLaneId)
+  if (childLane) {
+    const parentId = laneParent.get(rootLaneId)
+    if (parentId) {
+      const parentLane = topLevelLanes.find(l => l.id === parentId)
+      if (parentLane) {
+        return parentLane
+      }
+      // Walk up to find the top-level ancestor
+      const rootAncestorId = findRoot(rootLaneId)
+      const rootAncestor = topLevelLanes.find(l => l.id === rootAncestorId)
+      if (rootAncestor) {
+        return rootAncestor
+      }
+    }
+    // No parent found, return as a standalone lane. Full-subtree roll-up so a
+    // nested chain's grandchildren stay in the aggregate.
+    childLane.allEventsSorted = subtreeEvents(childLane)
+    return childLane
+  }
+
+  // Resource not found in hierarchy - create a placeholder lane
+  // This ensures the detail view always has something to show
+  const placeholderLane: ResourceLane = {
+    id: rootLaneId,
+    kind: rootResource.kind,
+    group: parseLaneId(rootLaneId)?.group || '',
+    identityResolved: rootGroup !== undefined,
+    namespace: rootResource.namespace,
+    name: rootResource.name,
+    events: [],
+    isWorkload: isWorkloadKind(rootResource.kind),
+    children: [],
+    childEventCount: 0,
+    allEventsSorted: [],
+  }
+  return placeholderLane
 }
 
 // -----------------------------------------------------------------------------

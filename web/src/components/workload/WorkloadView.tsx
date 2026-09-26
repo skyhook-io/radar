@@ -804,6 +804,19 @@ export function WorkloadView({
     setOlderHistoryError(null)
     setLoadingOlderHistory(false)
   }, [historyIdentity])
+  // Once older pages are loaded, every refreshed newest page joins them: the
+  // newest page slides forward, and rows it slides past would otherwise fall
+  // between it and the older pages.
+  useEffect(() => {
+    const newest = historyQuery.data?.events
+    if (!newest) return
+    setOlderHistory((prev) => {
+      if (!prev) return prev
+      const known = new Set(prev.events.map((e) => e.id))
+      const added = newest.filter((e) => !known.has(e.id))
+      return added.length > 0 ? { ...prev, events: [...added, ...prev.events] } : prev
+    })
+  }, [historyQuery.data])
   const allEvents = useMemo(() => {
     const newest = historyQuery.data?.events
     if (!newest) return undefined
@@ -822,9 +835,7 @@ export function WorkloadView({
     try {
       const page = await fetchWorkloadHistoryPage(apiKind, namespace, name, effectiveGroup, cursor)
       if (currentHistoryIdentity.current !== requestedFor) return
-      // The first older page also keeps the newest page it continues from:
-      // the newest page keeps refreshing forward, and without it the rows
-      // between its new tail and this page's head would fall out.
+      // The first older page also keeps the newest page it continues from.
       setOlderHistory((prev) => ({
         events: [...(prev?.events ?? historyQuery.data?.events ?? []), ...page.events],
         truncated: page.truncated,

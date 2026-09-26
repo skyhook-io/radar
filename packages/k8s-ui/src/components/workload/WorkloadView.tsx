@@ -524,9 +524,10 @@ export function WorkloadView({
       events: allEvents,
       topology,
       rootResource: { kind, group, namespace, name },
+      eventsScopedToRoot: historyScoped,
       groupByApp: true,
     })
-  }, [allEvents, topology, kind, group, namespace, name])
+  }, [allEvents, topology, kind, group, namespace, name, historyScoped])
 
   // Topology tab — the seeded neighborhood around this one workload (its
   // ownership core + attached Services/config/policies), not the whole namespace.

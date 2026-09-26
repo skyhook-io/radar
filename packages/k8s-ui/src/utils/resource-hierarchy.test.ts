@@ -1073,6 +1073,41 @@ describe('group-qualified lane identity', () => {
     expect(laneNames).not.toContain('api')
   })
 
+  describe('history already scoped to the root', () => {
+    const laneNames = (lanes: ResourceLane[]) => {
+      const out: string[] = []
+      const walk = (list: ResourceLane[]) => list.forEach((l) => { out.push(`${l.kind}/${l.name}`); walk(l.children ?? []) })
+      walk(lanes)
+      return out.sort()
+    }
+    const build = (root: { kind: string; group: string; name: string }, events: TimelineEvent[], eventsScopedToRoot: boolean) =>
+      buildResourceHierarchy({ events, rootResource: { ...root, namespace: 'prod' }, eventsScopedToRoot, groupByApp: true })
+
+    it("keeps a StatefulSet's ownerless Pod", () => {
+      const events = [
+        changeEvent('StatefulSet', 'prod', 'db', { apiVersion: 'apps/v1' }),
+        changeEvent('Pod', 'prod', 'db-2', { apiVersion: 'v1' }),
+      ]
+      const root = { kind: 'StatefulSet', group: 'apps', name: 'db' }
+      expect(laneNames(build(root, events, false))).toEqual(['StatefulSet/db'])
+      const lanes = build(root, events, true)
+      expect(laneNames(lanes)).toEqual(['Pod/db-2', 'StatefulSet/db'])
+      expect(getAllEventsFromHierarchy(lanes).map((e) => e.id).sort()).toEqual(['Pod/prod/db-2', 'StatefulSet/prod/db'])
+    })
+
+    it("keeps a CronJob's past runs when the CronJob and a run's Job left no events", () => {
+      const events = [
+        changeEvent('Job', 'prod', 'backup-29012345', { apiVersion: 'batch/v1' }),
+        changeEvent('Pod', 'prod', 'backup-29012346-bcdfg', { apiVersion: 'v1' }),
+      ]
+      const lanes = build({ kind: 'CronJob', group: 'batch', name: 'backup' }, events, true)
+      expect(lanes).toHaveLength(1)
+      expect(lanes[0].name).toBe('backup')
+      expect(laneNames(lanes)).toEqual(['CronJob/backup', 'Job/backup-29012345', 'Pod/backup-29012346-bcdfg'])
+      expect(lanes[0].allEventsSorted).toHaveLength(2)
+    })
+  })
+
   it('keeps core/built-in resource ids bare (byte-stable)', () => {
     const lanes = buildResourceHierarchy({
       events: [
