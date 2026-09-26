@@ -45,4 +45,18 @@ describe('check-whats-new.sh', () => {
     const catalog = withEntry(`  // { version: 'v1.20.0' },\n  { notversion: 'v1.19.0' },`, decoys)
     for (const v of ['v1.16.0', 'v1.17.0', 'v1.18.0', 'v1.19.0', 'v1.20.0']) expect(check(v, catalog), v).toBe(1)
   })
+
+  it('ignores an object after an empty catalog, even with a semicolon', () => {
+    expect(check('v1.15.0', `export const RELEASE_NOTES: ReleaseNotes[] = [];\nconst draft = { version: 'v1.15.0' };\n`)).toBe(1)
+  })
+
+  it('does not count the words "version:" inside another entry\'s text', () => {
+    const entry = `  {\n    version: 'v1.14.0',\n    improvements: ["Set version: 'v1.15.0' in your configuration"],\n  },`
+    expect(check('v1.15.0', withEntry(entry))).toBe(1)
+  })
+
+  it('accepts a value on the line after its key, and double quotes', () => {
+    expect(check('v1.15.0', withEntry(`  {\n    version:\n      'v1.15.0',\n  },`))).toBe(0)
+    expect(check('v1.15.0', withEntry(`  { version: "v1.15.0" },`))).toBe(0)
+  })
 })
