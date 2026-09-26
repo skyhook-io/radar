@@ -166,13 +166,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// A configured port is honored as-is. Otherwise reuse the last launch's
+	// port, so the webview keeps its origin and storage.
+	desktopPort := fileCfg.PortOr(0)
+	desktopPortRemembered := desktopPort == 0
+	if desktopPortRemembered {
+		desktopPort = lastDesktopPort(desktopPortPath())
+	}
+
 	cfg := app.AppConfig{
 		Kubeconfig:                resolvedKubeconfig,
 		KubeconfigDirs:            resolvedKubeconfigDirs,
 		RestoreLastDesktopContext: fileCfg.RestoreLastDesktopContextOr(true),
 		Namespace:                 resolvedNamespace,
 		Namespaces:                resolvedNamespaces,
-		Port:                      fileCfg.PortOr(0), // Configured port, or random to avoid conflicts with CLI
+		Port:                      desktopPort,
+		PortFallback:              desktopPortRemembered,
 		ListenAddress:             "127.0.0.1",
 		DevMode:                   false,
 		HistoryLimit:              *historyLimit,
@@ -252,6 +261,9 @@ func main() {
 
 	// Write port file so MCP clients can discover the running server
 	app.WriteMCPPortFile(srv.ActualAddr(), srv.BasePath())
+	if desktopPortRemembered {
+		recordDesktopPort(desktopPortPath(), srv.ActualPort())
+	}
 
 	// Initialize cluster in background (browser will see progress via SSE)
 	if k8sInitErr == nil {
