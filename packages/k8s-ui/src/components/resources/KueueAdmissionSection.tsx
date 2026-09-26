@@ -53,7 +53,6 @@ type Link = (name: string, ref?: SchedulingRef) => React.ReactNode
 
 const groupHeading = 'text-xs font-medium uppercase tracking-wider text-theme-text-secondary'
 type Gate = NonNullable<SchedulingObservation['gates']>[number]
-const checkOrder: Record<string, number> = { Rejected: 0, Retry: 1, Pending: 2 }
 
 function conditionLabel(condition: SchedulingCondition): string {
   const { type, status } = condition
@@ -79,14 +78,14 @@ function ConditionEvidence({ condition, generation, showAge }: { condition: Sche
 }
 
 function GateEvidence({ gate, link }: { gate: Gate; link: Link }) {
+  const retryMetadata = [gate.retryCount != null && gate.retryCount > 0 ? `Retries: ${gate.retryCount}` : null, gate.requeueAfterSeconds != null && gate.requeueAfterSeconds > 0 ? `Requeue delay: ${gate.requeueAfterSeconds}s` : null].filter(Boolean)
   return <div className="space-y-1 py-2 first:pt-0 last:pb-0">
     <div className="grid max-w-md grid-cols-[minmax(0,1fr)_6rem] items-start gap-2">
       <span className="min-w-0 break-words font-medium [&_button]:text-left">{link(gate.name, gate.ref)}</span>
-      <Badge className="justify-self-start" severity={gate.kind === 'preemption_gate' ? 'neutral' : admissionCheckSeverity(gate.nativeState)}>{gate.nativeState || gate.decision}</Badge>
+      <Badge className="justify-self-start" severity={gate.kind === 'preemption_gate' ? 'neutral' : admissionCheckSeverity(gate.nativeState)}>{gate.nativeState || 'Unknown'}</Badge>
     </div>
     {gate.message && <p className="max-w-3xl whitespace-pre-wrap break-words">{gate.message}</p>}
-    {gate.retryCount != null && gate.retryCount > 0 && <p className="text-xs text-theme-text-secondary">Retries: {gate.retryCount}</p>}
-    {gate.requeueAfterSeconds != null && gate.requeueAfterSeconds > 0 && <p className="text-xs text-theme-text-secondary">Requeue delay: {gate.requeueAfterSeconds}s</p>}
+    {retryMetadata.length > 0 && <p className="text-xs text-theme-text-secondary">{retryMetadata.join(' · ')}</p>}
   </div>
 }
 
@@ -105,34 +104,35 @@ function AdmissionObservation({ observation, identity, generation, deleting, pre
   const disruptions = visible.filter(isDisruption)
   const readiness = visible.filter((entry) => !isDisruption(entry))
   const checks = (observation.gates ?? []).filter((gate) => gate.kind !== 'preemption_gate')
-  const pendingChecks = checks.filter((gate) => gate.nativeState !== 'Ready').sort((a, b) => (checkOrder[a.nativeState ?? ''] ?? 3) - (checkOrder[b.nativeState ?? ''] ?? 3))
+  const pendingChecks = checks.filter((gate) => gate.nativeState !== 'Ready')
   const readyChecks = checks.filter((gate) => gate.nativeState === 'Ready')
   const preemption = (observation.gates ?? []).filter((gate) => gate.kind === 'preemption_gate')
   const split = presentation === 'card' && (pendingChecks.length > 0 || preemption.length > 0) && visible.length > 0
   const severity = stale || observation.decision === 'unknown' ? 'neutral'
     : kueue?.phase === 'finished' ? kueue.outcome === 'failed' ? 'error' : kueue.outcome === 'succeeded' ? 'success' : 'neutral'
       : observation.decision === 'satisfied' ? 'success' : 'warning'
-  const qualifiers = [condition?.lastTransitionTime ? `Status since ${formatRelativeAgeTime(condition.lastTransitionTime)}` : null, observation.decision === 'held' ? 'Admission held' : observation.decision === 'unknown' ? 'Admission unknown' : null].filter(Boolean)
+  const qualifier = observation.decision === 'held' ? 'Admission held' : observation.decision === 'unknown' ? 'Admission unknown' : null
   return <div className="@container/admission space-y-4">
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
         <Badge severity={severity}>{kueue ? phases[kueue.phase] : 'Admission'}</Badge>
+        {qualifier && <span className="text-xs text-theme-text-secondary">{qualifier}</span>}
         {kueue?.active === false && <Badge severity="neutral">Workload inactive</Badge>}
         <span className="font-medium break-all">{identity}</span>
         {deleting && <Badge severity="alert">Deleting</Badge>}
         {kueue?.outcome && <span>Outcome: {kueue.outcome}</span>}
       </div>
-      {qualifiers.length > 0 && <p className="text-xs text-theme-text-secondary">{qualifiers.join(' · ')}</p>}
+      {condition?.lastTransitionTime && <p className="text-xs text-theme-text-secondary">{condition.type} status since {formatRelativeAgeTime(condition.lastTransitionTime)}</p>}
       {stale && <p className="text-xs text-warning-text">Stale evidence: condition generation {condition!.observedGeneration}; Workload generation {observation.subjectGeneration}.</p>}
       {condition ? <p className="max-w-3xl whitespace-pre-wrap break-words">{condition.message || <><code>{condition.reason}</code>{condition.reason && ' · '}{condition.type}={condition.status}</>}</p> : <p className="text-theme-text-secondary">No primary admission condition reported.</p>}
       {(!!observation.queues?.length || kueue?.concurrentAdmission) && <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-theme-text-secondary">
         {observation.queues?.map((queue, index) => <span key={index}>{queue.roles.join(' + ').replace(/^./, (letter) => letter.toUpperCase())} queue: {link(queue.name, queue.ref)}</span>)}
         {kueue?.concurrentAdmission && <span>Parent Workload: {link(kueue.concurrentAdmission.parentName, kueue.concurrentAdmission.parentRef)}</span>}
       </div>}
-      {kueue?.requeueState && ((kueue.requeueState.count ?? 0) > 0 || kueue.requeueState.requeueAt) && <p className="text-xs text-theme-text-secondary">{kueue.requeueState.count != null && `Requeues: ${kueue.requeueState.count}`}{kueue.requeueState.requeueAt && ` · Eligible again: ${kueue.requeueState.requeueAt}`}</p>}
+      {kueue?.requeueState && ((kueue.requeueState.count ?? 0) > 0 || kueue.requeueState.requeueAt) && <p className="text-xs text-theme-text-secondary">{kueue.requeueState.count != null && `Requeues: ${kueue.requeueState.count}`}{kueue.requeueState.requeueAt && `${kueue.requeueState.count != null ? ' · ' : ''}Eligible again: ${kueue.requeueState.requeueAt}`}</p>}
       {(kueue?.phase === 'admitted' || kueue?.phase === 'quota_reserved') && <p className="text-xs text-theme-text-tertiary">Admission status; execution is shown separately.</p>}
     </div>
-    {(pendingChecks.length > 0 || preemption.length > 0 || visible.length > 0) && <div className={split ? 'grid min-w-0 gap-5 @min-[1024px]/admission:grid-cols-2' : 'space-y-5'}>
+    {(pendingChecks.length > 0 || preemption.length > 0 || visible.length > 0) && <div className={split ? 'grid min-w-0 gap-5 @min-[1024px]/admission:grid-cols-[minmax(0,48rem)_minmax(0,48rem)]' : 'space-y-5'}>
       {(pendingChecks.length > 0 || preemption.length > 0) && <div className="min-w-0 space-y-5">
         {pendingChecks.length > 0 && <section aria-label="Admission checks" className="space-y-2"><h4 className={groupHeading}>Admission checks · {pendingChecks.length} not ready</h4><div className="divide-y divide-theme-border">{pendingChecks.map((gate, index) => <GateEvidence key={index} gate={gate} link={link} />)}</div></section>}
         {preemption.length > 0 && <section aria-label="Preemption gates" className="space-y-2"><h4 className={groupHeading}>Preemption gates · {preemption.length}</h4><p className="text-xs text-theme-text-tertiary">Governs preemption; it alone does not establish an admission blocker.</p><div className="divide-y divide-theme-border">{preemption.map((gate, index) => <GateEvidence key={index} gate={gate} link={link} />)}</div></section>}

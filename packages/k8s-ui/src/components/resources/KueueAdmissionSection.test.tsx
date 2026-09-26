@@ -177,16 +177,16 @@ it('does not color an open preemption gate as an admission warning', () => {
 })
 
 
-it('prioritizes rejected checks and keeps operational delays visible while zero metadata collapses', async () => {
+it('preserves producer check order and keeps operational delays visible while zero metadata collapses', async () => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   const container = document.createElement('div')
   const root = createRoot(container)
   const data = response({
     primaryCondition: { type: 'QuotaReserved', status: 'True', reason: 'ReservedNativeReason', message: 'Waiting for checks' },
     gates: [
-      { kind: 'admission_check', name: 'pending', nativeState: 'Pending', decision: 'unsatisfied', retryCount: 0 },
-      { kind: 'admission_check', name: 'retry', nativeState: 'Retry', decision: 'unsatisfied', retryCount: 3, requeueAfterSeconds: 60 },
       { kind: 'admission_check', name: 'rejected', nativeState: 'Rejected', decision: 'unsatisfied', message: 'Policy rejected' },
+      { kind: 'admission_check', name: 'retry', nativeState: 'Retry', decision: 'unsatisfied', retryCount: 3, requeueAfterSeconds: 60 },
+      { kind: 'admission_check', name: 'pending', nativeState: 'Pending', decision: 'unsatisfied', retryCount: 0 },
     ],
     disruptions: [{ type: 'Evicted', status: 'True', reason: 'NativeEviction', message: 'Eviction message', lastTransitionTime: '2026-09-26T00:00:00Z' }],
     kueue: { phase: 'quota_reserved', podsReady: { type: 'PodsReady', status: 'Unknown', message: 'Readiness message' }, requeueState: { count: 0 } },
@@ -206,4 +206,18 @@ it('prioritizes rejected checks and keeps operational delays visible while zero 
     expect(paragraph('Eviction message').textContent).toContain('Status since')
     expect([...container.querySelectorAll('h4')].map(e => e.textContent)).toEqual(['Admission checks · 3 not ready', 'Reported disruptions · 1', 'Pod readiness · 1'])
   } finally { await act(async () => root.unmount()) }
+})
+
+
+it('labels a missing native check state Unknown rather than displaying its decision as a state', () => {
+  const html = render(response({ gates: [{ kind: 'admission_check', name: 'unknown-check', decision: 'unsatisfied', message: 'Controller has not reported a state' }] }))
+  expect(html).toContain('>Unknown</span>')
+  expect(html).toContain('Controller has not reported a state')
+})
+
+
+it('shows requeue eligibility without inventing a count or a leading separator', () => {
+  const html = render(response({ kueue: { phase: 'pending', requeueState: { requeueAt: '2026-09-27T00:00:00Z' } } }))
+  expect(html).toContain('>Eligible again: 2026-09-27T00:00:00Z</p>')
+  expect(html).not.toContain('Requeues:')
 })
