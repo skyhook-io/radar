@@ -408,7 +408,7 @@ function Eyebrow() {
   return (
     <div className="flex items-center gap-3 mb-5">
       <RadarSweep />
-      <span className="font-mono text-[10.5px] tracking-[0.16em] uppercase text-emerald-600 dark:text-emerald-400">Radar Cloud</span>
+      <span className="font-mono text-[16px] tracking-[0.12em] uppercase text-emerald-600 dark:text-emerald-400">Radar Cloud</span>
     </div>
   )
 }
