@@ -66,8 +66,9 @@ const (
 )
 
 // portOwner asks who holds a loopback port. /api/connection answers from
-// memory, so a busy Radar still replies quickly; a refused connection or a
-// timeout proves nothing.
+// memory, so a busy Radar still replies quickly, and ?contexts=0 keeps the
+// reply small however many kubeconfig contexts there are. A refused
+// connection or a timeout proves nothing.
 func portOwner(port int) portOwnerKind {
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 	conn, err := net.DialTimeout("tcp", addr, time.Second)
@@ -76,7 +77,7 @@ func portOwner(port int) portOwnerKind {
 	}
 	conn.Close()
 	client := http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get("http://" + addr + "/api/connection")
+	resp, err := client.Get("http://" + addr + "/api/connection?contexts=0")
 	if err != nil {
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {

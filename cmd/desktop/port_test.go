@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -68,6 +69,12 @@ func TestPortOwner(t *testing.T) {
 	radar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/connection" {
 			http.NotFound(w, r)
+			return
+		}
+		// Radar lists every kubeconfig context unless asked not to; a large
+		// kubeconfig would otherwise push the reply past the probe's read limit.
+		if r.URL.Query().Get("contexts") != "0" {
+			_, _ = w.Write([]byte(`{"state":"connected","contexts":[` + strings.Repeat(`{"name":"ctx"},`, 10000) + `{"name":"last"}]}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"state":"connected"}`))
