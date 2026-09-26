@@ -314,3 +314,29 @@ func TestWorkloadHistoryScope_ReportsAWalkCutShort(t *testing.T) {
 		t.Error("a tree exactly as deep as the walk is complete")
 	}
 }
+
+// An Ingress in front of the workload brings the TLS chain it owns; a
+// Service's EndpointSlices stay out.
+func TestWorkloadHistoryScope_WalksWhatAnIngressOwns(t *testing.T) {
+	store := withWorkloadHistoryStore(t)
+	appendHistoryRows(t, store, []timeline.TimelineEvent{
+		{ID: "ing", APIVersion: "networking.k8s.io/v1", Kind: "Ingress", Name: "web", UID: "ing-1"},
+		{ID: "cert", APIVersion: "cert-manager.io/v1", Kind: "Certificate", Name: "web-tls", UID: "cert-1", Owner: &timeline.OwnerInfo{Kind: "Ingress", Name: "web", UID: "ing-1"}},
+		{ID: "cr", APIVersion: "cert-manager.io/v1", Kind: "CertificateRequest", Name: "web-tls-1", UID: "cr-1", Owner: &timeline.OwnerInfo{Kind: "Certificate", Name: "web-tls", UID: "cert-1"}},
+		{ID: "svc", APIVersion: "v1", Kind: "Service", Name: "web", UID: "svc-1"},
+		{ID: "slice", APIVersion: "discovery.k8s.io/v1", Kind: "EndpointSlice", Name: "web-abcde", UID: "es-1", Owner: &timeline.OwnerInfo{Kind: "Service", Name: "web", UID: "svc-1"}},
+	})
+	key := resourceid.NewRef("apps", "Deployment", "default", "web")
+	attached := []resourceid.Ref{resourceid.NewRef("", "Service", "default", "web"), resourceid.NewRef("networking.k8s.io", "Ingress", "default", "web")}
+	scope, _, err := workloadHistoryScope(t.Context(), store, k8s.ActiveClusterContext(), key, liveIdentity{UID: "dep-1"}, attached)
+	if err != nil {
+		t.Fatalf("workloadHistoryScope: %v", err)
+	}
+	events, err := store.Query(t.Context(), timeline.QueryOptions{Scope: scope, Limit: 100, IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if got := fmt.Sprint(historyIDs(events)); got != "[cert cr ing svc]" {
+		t.Errorf("history = %s, want [cert cr ing svc]", got)
+	}
+}

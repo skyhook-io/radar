@@ -290,6 +290,24 @@ func workloadHistoryScope(ctx context.Context, store timeline.EventStore, cluste
 			parents[id.OwnerUID] = true
 		}
 	}
+	// What the traffic in front of the workload owns belongs with it too:
+	// cert-manager's Certificate for an Ingress's TLS, and the requests and
+	// orders that renew it. A Service isn't walked: what it owns is
+	// EndpointSlices, whose churn would bury the workload's own history.
+	for _, ref := range attached {
+		if !walksAttachment(ref) {
+			continue
+		}
+		ids, err := store.Identities(ctx, timeline.IdentityQuery{ClusterContext: clusterContext, Namespace: ref.Namespace, Ref: &ref}, workloadHistoryMaxResources)
+		if err != nil {
+			return timeline.ResourceScope{}, false, err
+		}
+		for _, id := range ids {
+			if add(id.UID) {
+				frontier = append(frontier, id.UID)
+			}
+		}
+	}
 	for depth := 0; len(frontier) > 0; depth++ {
 		if depth == workloadHistoryMaxDepth {
 			deeper, err := store.OwnedUIDs(ctx, clusterContext, frontier, 1)
@@ -330,6 +348,14 @@ func workloadHistoryScope(ctx context.Context, store timeline.EventStore, cluste
 		Refs:          append([]resourceid.Ref{key}, attached...),
 		OwnerlessRefs: named,
 	}, incomplete || namedIncomplete, nil
+}
+
+func walksAttachment(ref resourceid.Ref) bool {
+	switch ref.Group + "/" + ref.Kind {
+	case "networking.k8s.io/Ingress", "gateway.networking.k8s.io/HTTPRoute", "gateway.networking.k8s.io/GRPCRoute":
+		return true
+	}
+	return false
 }
 
 // safeSuffix is the alphabet Kubernetes uses for generated name suffixes
