@@ -5,9 +5,9 @@ import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Coll
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { Tooltip } from './ui/Tooltip'
 import { CloudConnectFlow } from './CloudConnectFlow'
+import { SelfManagedStart } from './SelfManagedStart'
 import {
   type Handoff,
-  SELF_HOSTED_DOCS_URL,
   exitFor,
   handoffForBlocked,
   handoffForPrepareError,
@@ -33,7 +33,9 @@ import {
 } from '../api/client'
 
 // OSS → Cloud funnel: a quiet globe button in the top bar that opens a modal
-// pitching Radar Cloud. Two lanes (capabilities.cloudConnect): "driver" runs
+// pitching Radar Cloud: Radar for you and your team, every cluster, around the
+// clock. Alerts and hosted investigations lead because they are the two things
+// the OSS binary cannot do at all. Two lanes (capabilities.cloudConnect): "driver" runs
 // the in-product connect flow against this server; "wizard" links to the Hub's
 // connect wizard.
 //
@@ -71,6 +73,7 @@ export function openCloudFunnel() {
   window.dispatchEvent(new Event(OPEN_EVENT))
 }
 const ABOUT_URL = 'https://radarhq.io/about'
+const BENCHMARK_URL = 'https://radarhq.io/benchmark'
 const PRICING_URL = 'https://radarhq.io/pricing'
 const SEEN_KEY = 'radar.cloudFunnel.seen'
 
@@ -99,6 +102,7 @@ export function CloudFunnelButton() {
   const [open, setOpen] = useState(false)
   const [seen, setSeen] = useState(readSeen)
   const [inFlowView, setInFlowView] = useState(false)
+  const [selfManaged, setSelfManaged] = useState(false)
   const [blocked, setBlocked] = useState<CloudInstallBlocked | null>(null)
   // Set once an in-app attempt has ended without connecting, naming what
   // happened (a flow failure kind, a blocked plan, a canceled plan, or the
@@ -191,6 +195,7 @@ export function CloudFunnelButton() {
 
   const openModal = () => {
     setOpen(true)
+    setSelfManaged(false)
     setSeen(true)
     markSeen()
     // Re-open lands on a live flow if one is running.
@@ -282,7 +287,7 @@ export function CloudFunnelButton() {
     <>
       {/* Tooltip is suppressed while the modal is open — it portals above the
           modal backdrop and would otherwise paint on top of the dialog. */}
-      <Tooltip content="Radar Cloud: all your clusters, one URL" delay={100} position="bottom" disabled={open}>
+      <Tooltip content="Radar Cloud: for you and your team, every cluster, around the clock" delay={100} position="bottom" disabled={open}>
         <button
           onClick={openModal}
           aria-label="Radar Cloud"
@@ -333,10 +338,17 @@ export function CloudFunnelButton() {
               onExit={() => exitFlow(outcomeOf(flowForView))}
             />
           </div>
+        ) : selfManaged ? (
+          <>
+            <div className="shrink-0 px-8 pt-7">
+              <Eyebrow />
+            </div>
+            <SelfManagedStart appUrl={appUrl} onBack={() => setSelfManaged(false)} />
+          </>
         ) : (
           <>
             <div className="min-h-0 overflow-y-auto">
-              <PitchBody lane={pitchLane} freeTier={connectInfo.data?.freeTier} />
+              <PitchBody lane={pitchLane} freeTier={connectInfo.data?.freeTier} onSelfManaged={() => setSelfManaged(true)} />
             </div>
             <ModalFooter
               lane={lane}
@@ -361,6 +373,7 @@ export function CloudFunnelButton() {
               // in-cluster, so the CTA would escape before classification.
               selfLoading={inCluster && self.isPending}
               onConnect={startConnect}
+              onSelfManaged={() => setSelfManaged(true)}
               onLater={() => setOpen(false)}
             />
           </>
@@ -418,6 +431,7 @@ function ModalFooter({
   discoverPending = false,
   clustersUrl,
   onConnect,
+  onSelfManaged,
   onLater,
 }: {
   lane: 'driver' | 'wizard'
@@ -450,6 +464,7 @@ function ModalFooter({
   // settings say it is connected but not where.
   clustersUrl?: string
   onConnect: () => void
+  onSelfManaged: () => void
   onLater: () => void
 }) {
   const gitops = self?.ownership === 'gitops'
@@ -576,7 +591,18 @@ function ModalFooter({
             {lane === 'driver' ? 'Continue in Radar Cloud' : self?.ownership === 'helm' || gitops ? 'Connect this cluster' : 'Try Cloud free'}
           </a>
         )}
-        <button onClick={onLater} className="ml-auto whitespace-nowrap text-[12px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
+        {/* The self-hosting door, again, where someone who has already ruled
+            out anything hosted looks last: next to the way out. */}
+        {!(lane === 'driver' && alreadyConnected) && (
+          <button
+            type="button"
+            onClick={onSelfManaged}
+            className="ml-auto whitespace-nowrap text-[12px] text-theme-text-secondary hover:text-theme-text-primary hover:underline underline-offset-2 transition-colors"
+          >
+            Self-host it instead →
+          </button>
+        )}
+        <button onClick={onLater} className={`${lane === 'driver' && alreadyConnected ? 'ml-auto ' : ''}whitespace-nowrap text-[12px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors`}>
           {lane === 'driver' && alreadyConnected ? 'Close' : 'Maybe later'}
         </button>
       </div>
@@ -615,7 +641,15 @@ function ModalFooter({
 }
 
 // The detail sits behind a disclosure so the first screen stays short.
-function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: string }) {
+function PitchBody({
+  lane,
+  freeTier,
+  onSelfManaged,
+}: {
+  lane: 'driver' | 'wizard'
+  freeTier?: string
+  onSelfManaged: () => void
+}) {
   const [moreOpen, setMoreOpen] = useState(false)
   const moreId = useId()
   // Hub-served prose fragment; the compiled fallback carries the same
@@ -623,26 +657,29 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
   // unreachable or predates the field).
   const freeLine = freeTier || 'free for 3 clusters'
   // lead is the scannable anchor (medium, primary); rest stays secondary.
+  // Each bullet is one line at the dialog's width, so the first screen stays
+  // skimmable. Alerts and investigations lead: they are the two things the
+  // OSS binary cannot do at all. Team, fleet and history follow.
   const highlights = [
-    { icon: Globe, lead: 'Your whole fleet in one URL', rest: ': issues, checks and search across every cluster' },
-    { icon: Users, lead: 'Bring the team', rest: ": SSO, invites and roles. Your cluster's RBAC has the final say" },
-    { icon: Bell, lead: 'Alerts', rest: ' that reach you the moment something breaks' },
-    { icon: History, lead: 'Long-term retention', rest: ': history that survives restarts and keeps growing' },
-    { icon: Sparkles, lead: 'An AI agent', rest: ' that digs into issues and pinpoints the root cause' },
+    { icon: Bell, lead: 'Alerts', rest: ' in Slack when something breaks. Once, not for every crash-looping pod.' },
+    { icon: Sparkles, lead: 'AI investigations', rest: ': root cause with evidence, automatic on alerts or on demand' },
+    { icon: Users, lead: 'Your team', rest: ': share any view with just a link, scoped by your existing RBAC' },
+    { icon: Globe, lead: 'Every cluster', rest: ': the whole fleet in one view and one MCP endpoint' },
+    { icon: History, lead: 'History', rest: ': events and changes kept long after Kubernetes deletes them' },
   ]
   return (
     <div className="px-8 pt-7 pb-2">
       <Eyebrow />
       <h3 className="text-[22px] font-semibold leading-tight tracking-tight text-theme-text-primary mb-3">
-        Meet Radar Cloud
+        Radar for you and your team, every cluster, around the clock.
       </h3>
-      <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-6">
-        The hosted side of Radar: your clusters in one place, run by us.
+      <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-5">
+        Connect this cluster and Radar keeps watching after you close the laptop.
         <br />
         The Radar you're running{' '}
         <b className="text-theme-text-primary font-semibold">stays free and open source, always.</b>
       </p>
-      <ul className="space-y-2.5 mb-4">
+      <ul className="space-y-2 mb-3">
         {highlights.map(({ icon: Icon, lead, rest }) => (
           <li key={lead} className="flex items-start gap-2.5 text-[13px] leading-relaxed text-theme-text-secondary">
             <Icon className="w-4 h-4 shrink-0 mt-[3px] text-emerald-600 dark:text-emerald-400" />
@@ -653,6 +690,20 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
           </li>
         ))}
       </ul>
+      {/* Enterprise needs in one muted line, aimed at whoever the reader will
+          forward this to. It is also the door to Self-Managed: a paid,
+          Enterprise path, so a link here rather than a button beside the free
+          CTA. */}
+      <p className="pl-[26px] text-[12px] leading-relaxed text-theme-text-tertiary">
+        For your security team: SSO, SCIM, audit logs, or{' '}
+        <button
+          type="button"
+          onClick={onSelfManaged}
+          className="text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary transition-colors"
+        >
+          run it in your own infrastructure →
+        </button>
+      </p>
       {/* Underlined on purpose: at the bullet list's own color and size, and
           with a leading glyph, it otherwise reads as one more bullet. */}
       <button
@@ -671,16 +722,30 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
             {/* No heading: the disclosure's own label already names this one. */}
             <p className="text-[12px] leading-relaxed text-theme-text-secondary">
               {lane === 'driver'
-                ? 'Setup runs here in the app: Radar is installed in your cluster and connects outward to Radar Cloud. You review the plan and approve in your browser before anything is installed.'
-                : 'Radar runs in your cluster and connects outward to Radar Cloud. You approve the connection before anything is installed.'}
+                ? "Setup runs here in the app: Radar is installed in your cluster and tunnels outward to Radar Cloud, so there's no ingress to open."
+                : "Radar runs in your cluster and tunnels outward to Radar Cloud, so there's no ingress to open."}{' '}
+              Radar Cloud doesn't keep a copy of your cluster: data is fetched live when someone views it, within
+              their permissions. It does store event history and changes, so you can go back in time to debug, and
+              investigation results.
+            </p>
+          </section>
+          <section>
+            <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">Investigations</h4>
+            <p className="text-[12px] leading-relaxed text-theme-text-secondary">
+              Radar's agent finds the root cause 3× faster than the same model on plain kubectl, and 2× faster
+              than the other AI SRE tools we benchmarked. It's also far cheaper to run, so we charge a fraction of
+              what others do. Run it automatically on every alert, or on demand from any issue.{' '}
+              <a href={BENCHMARK_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
+                See the benchmarks →
+              </a>
             </p>
           </section>
           <section>
             <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">What it costs</h4>
             <p className="text-[12px] leading-relaxed text-theme-text-secondary">
-              Radar Cloud is {freeLine}. The paid plans beyond that are what keep the lights on. The
-              Radar you're running stays
-              Apache&nbsp;2.0 either way: every feature, forever.{' '}
+              Radar Cloud is {freeLine}, with 100 investigations a month included, then $1 per investigation.
+              Paid plans add more clusters, more included investigations, and enterprise features like SSO and
+              audit logs.{' '}
               <a href={PRICING_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
                 See pricing →
               </a>
@@ -696,13 +761,6 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
               </a>
             </p>
           </section>
-          <p className="text-[12px] leading-relaxed text-theme-text-secondary">
-            Prefer your own VPC? You can run the Radar Cloud control plane yourself.{' '}
-            <a href={SELF_HOSTED_DOCS_URL} target="_blank" rel="noopener noreferrer" className="text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
-              Read the docs
-            </a>
-            .
-          </p>
         </div>
       </Collapse>
       <div className="mb-5 border-l-2 border-emerald-500/40 pl-3.5">
