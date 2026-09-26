@@ -793,8 +793,10 @@ export function WorkloadView({
   const historyQuery = useWorkloadHistory(apiKind, namespace, name, effectiveGroup, expanded)
   const [olderHistory, setOlderHistory] = useState<WorkloadHistoryPage | null>(null)
   const [loadingOlderHistory, setLoadingOlderHistory] = useState(false)
+  const [olderHistoryError, setOlderHistoryError] = useState<Error | null>(null)
   useEffect(() => {
     setOlderHistory(null)
+    setOlderHistoryError(null)
   }, [apiKind, namespace, name, effectiveGroup])
   const allEvents = useMemo(() => {
     const newest = historyQuery.data?.events
@@ -809,13 +811,19 @@ export function WorkloadView({
     const cursor = olderHistory ? olderHistory.nextBeforeSeq : historyQuery.data?.nextBeforeSeq
     if (!cursor) return
     setLoadingOlderHistory(true)
+    setOlderHistoryError(null)
     try {
       const page = await fetchWorkloadHistoryPage(apiKind, namespace, name, effectiveGroup, cursor)
+      // The first older page also keeps the newest page it continues from:
+      // the newest page keeps refreshing forward, and without it the rows
+      // between its new tail and this page's head would fall out.
       setOlderHistory((prev) => ({
-        events: [...(prev?.events ?? []), ...page.events],
+        events: [...(prev?.events ?? historyQuery.data?.events ?? []), ...page.events],
         truncated: page.truncated,
         nextBeforeSeq: page.nextBeforeSeq,
       }))
+    } catch (err) {
+      setOlderHistoryError(err instanceof Error ? err : new Error(String(err)))
     } finally {
       setLoadingOlderHistory(false)
     }
@@ -1220,7 +1228,9 @@ export function WorkloadView({
         historyTruncated={historyTruncated}
         onLoadOlderHistory={loadOlderHistory}
         loadingOlderHistory={loadingOlderHistory}
+        olderHistoryError={olderHistoryError}
         historyScoped
+        historyIncomplete={Boolean(historyQuery.data?.incomplete)}
         historyError={historyQuery.error as Error | null}
         onRetryHistory={() => void historyQuery.refetch()}
         relatedTimelineEvents={relatedTimelineEvents}

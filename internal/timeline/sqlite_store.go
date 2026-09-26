@@ -16,6 +16,7 @@ import (
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	pkgtimeline "github.com/skyhook-io/radar/pkg/timeline"
 )
 
@@ -493,11 +494,21 @@ func sqliteScopeClause(scope ResourceScope) (string, []any) {
 	}
 	in("uid", scope.UIDs)
 	in("owner_uid", scope.OwnerUIDs)
-	for _, ref := range scope.Refs {
-		parts = append(parts, "(kind = ? AND namespace = ? AND name = ? AND (COALESCE(api_version, '') = '' OR "+
-			"CASE WHEN instr(api_version, '/') > 0 THEN substr(api_version, 1, instr(api_version, '/') - 1) ELSE '' END = ?))")
-		args = append(args, ref.Kind, ref.Namespace, ref.Name, ref.Group)
+	refs := func(list []resourceid.Ref, extra string) {
+		// One branch per kind, not per resource: SQLite caps expression
+		// depth, and a scope can name thousands of resources.
+		for _, g := range groupRefs(list) {
+			parts = append(parts, "(kind = ? AND namespace = ? AND name IN ("+strings.TrimSuffix(strings.Repeat("?,", len(g.names)), ",")+
+				") AND (COALESCE(api_version, '') = '' OR "+sqliteAPIGroupExpr+" = ?)"+extra+")")
+			args = append(args, g.kind, g.namespace)
+			for _, name := range g.names {
+				args = append(args, name)
+			}
+			args = append(args, g.group)
+		}
 	}
+	refs(scope.Refs, "")
+	refs(scope.OwnerlessRefs, " AND COALESCE(owner_uid, '') = ''")
 	if len(parts) == 0 {
 		return " AND 0", nil
 	}
@@ -514,6 +525,81 @@ func nonEmpty(values []string) []string {
 		}
 	}
 	return out
+}
+
+const sqliteAPIGroupExpr = "CASE WHEN instr(api_version, '/') > 0 THEN substr(api_version, 1, instr(api_version, '/') - 1) ELSE '' END"
+
+type refGroup struct {
+	group, kind, namespace string
+	names                  []string
+}
+
+// groupRefs gathers refs that share a group, kind and namespace, in first-seen order.
+func groupRefs(refs []resourceid.Ref) []*refGroup {
+	var out []*refGroup
+	index := map[[3]string]*refGroup{}
+	for _, ref := range refs {
+		k := [3]string{ref.Group, ref.Kind, ref.Namespace}
+		g := index[k]
+		if g == nil {
+			g = &refGroup{group: ref.Group, kind: ref.Kind, namespace: ref.Namespace}
+			index[k] = g
+			out = append(out, g)
+		}
+		g.names = append(g.names, ref.Name)
+	}
+	return out
+}
+
+// Identities returns the distinct resources the rows matching q were about.
+func (s *SQLiteStore) Identities(ctx context.Context, q IdentityQuery, limit int) ([]Identity, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	query := "SELECT DISTINCT COALESCE(api_version, ''), kind, name, COALESCE(uid, ''), COALESCE(owner_uid, '') FROM events WHERE 1=1"
+	var args []any
+	if q.ClusterContext != "" {
+		query += " AND cluster_context = ?"
+		args = append(args, q.ClusterContext)
+	}
+	if q.Namespace != "" {
+		query += " AND namespace = ?"
+		args = append(args, q.Namespace)
+	}
+	if q.Ref != nil {
+		query += " AND kind = ? AND namespace = ? AND name = ? AND (COALESCE(api_version, '') = '' OR " + sqliteAPIGroupExpr + " = ?)"
+		args = append(args, q.Ref.Kind, q.Ref.Namespace, q.Ref.Name, q.Ref.Group)
+	}
+	if len(q.Kinds) > 0 {
+		query += " AND kind IN (" + strings.TrimSuffix(strings.Repeat("?,", len(q.Kinds)), ",") + ")"
+		for _, k := range q.Kinds {
+			args = append(args, k)
+		}
+	}
+	if q.NamePrefix != "" {
+		// substr compares exactly; LIKE would fold ASCII case and need escaping.
+		query += " AND substr(name, 1, ?) = ?"
+		args = append(args, len(q.NamePrefix), q.NamePrefix)
+	}
+	if q.OwnerUnknown {
+		query += " AND COALESCE(owner_uid, '') = ''"
+	}
+	query += " LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query identities: %w", err)
+	}
+	defer rows.Close()
+	var out []Identity
+	for rows.Next() {
+		var id Identity
+		if err := rows.Scan(&id.APIVersion, &id.Kind, &id.Name, &id.UID, &id.OwnerUID); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // OwnedUIDs returns the distinct UIDs of resources whose rows name one of
@@ -666,14 +752,6 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 		clause, scopeArgs := sqliteScopeClause(opts.Scope)
 		query.WriteString(clause)
 		args = append(args, scopeArgs...)
-	}
-	if opts.NamePrefix != "" {
-		// substr compares exactly; LIKE would fold ASCII case and need escaping.
-		query.WriteString(" AND substr(name, 1, ?) = ?")
-		args = append(args, len(opts.NamePrefix), opts.NamePrefix)
-	}
-	if opts.OwnerUnknown {
-		query.WriteString(" AND COALESCE(owner_uid, '') = ''")
 	}
 
 	seqPaging := opts.SeqPaging || opts.SinceSeq > 0

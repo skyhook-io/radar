@@ -19,15 +19,16 @@ import (
 
 const (
 	workloadHistoryDefaultLimit = 2000
-	workloadHistoryMaxLimit     = 10000
+	// Below the stores' 10,000-row query cap, so the extra row that detects
+	// a further page is never clamped away.
+	workloadHistoryMaxLimit = 5000
 	// Ownership rarely nests deeper than CronJob → Job → Pod or
 	// Deployment → ReplicaSet → Pod; the bound only stops a cycle or a
 	// pathological tree from running away.
 	workloadHistoryMaxDepth = 4
-	workloadHistoryMaxUIDs  = 5000
-	// Rows under the workload's own key read to learn its UIDs (every
-	// incarnation Radar recorded).
-	workloadHistoryKeyScan = 2000
+	// Bounds each set the scope is built from: the workload's incarnations
+	// and everything they own, and past children found by name.
+	workloadHistoryMaxResources = 5000
 )
 
 type workloadHistoryResponse struct {
@@ -37,6 +38,9 @@ type workloadHistoryResponse struct {
 	// before_seq to read them.
 	Truncated     bool  `json:"truncated"`
 	NextBeforeSeq int64 `json:"nextBeforeSeq,omitempty"`
+	// Incomplete reports that the workload has more related resources than
+	// the history follows, so some of their events are missing.
+	Incomplete bool `json:"incomplete,omitempty"`
 }
 
 // handleWorkloadHistory returns the timeline of one workload: the workload
@@ -87,7 +91,7 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 	key := resourceid.NewRef(group, kind, namespace, name)
 	clusterContext := k8s.ActiveClusterContext()
 	live := liveWorkloadIdentity(r.Context(), chi.URLParam(r, "kind"), group, namespace, name)
-	scope, err := workloadHistoryScope(r.Context(), store, clusterContext, key, live, s.workloadAttachments(r, key))
+	scope, incomplete, err := workloadHistoryScope(r.Context(), store, clusterContext, key, live, s.workloadAttachments(r, key))
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -106,7 +110,7 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	resp := workloadHistoryResponse{Events: events}
+	resp := workloadHistoryResponse{Events: events, Incomplete: incomplete}
 	if len(events) > limit {
 		resp.Events = events[:limit]
 		resp.Truncated = true
@@ -233,25 +237,27 @@ func attachedRefs(rel *topology.Relationships, namespace string) []resourceid.Re
 // workloadHistoryScope resolves the rows that belong to a workload's history:
 // its live UID and the UIDs recorded under its key (every incarnation),
 // everything owned beneath them by owner UID, its controller's own rows, the
-// attached resources by key, and past children whose owner the timeline
-// never learned, by the name their controller gives them.
-func workloadHistoryScope(ctx context.Context, store timeline.EventStore, clusterContext string, key resourceid.Ref, live liveIdentity, attached []resourceid.Ref) (timeline.ResourceScope, error) {
-	keyRows, err := store.Query(ctx, timeline.QueryOptions{
-		Namespaces:       []string{key.Namespace},
-		Scope:            timeline.ResourceScope{Refs: []resourceid.Ref{key}},
-		ClusterContext:   clusterContext,
-		SequenceOrder:    timeline.SequenceOrderDescending,
-		Limit:            workloadHistoryKeyScan,
-		IncludeManaged:   true,
-		IncludeK8sEvents: true,
-	})
+// attached resources by key, and past children whose rows never learned an
+// owner, by the name their controller gives them. incomplete reports that a
+// bound stopped the walk short.
+func workloadHistoryScope(ctx context.Context, store timeline.EventStore, clusterContext string, key resourceid.Ref, live liveIdentity, attached []resourceid.Ref) (scope timeline.ResourceScope, incomplete bool, err error) {
+	incarnations, err := store.Identities(ctx, timeline.IdentityQuery{
+		ClusterContext: clusterContext,
+		Namespace:      key.Namespace,
+		Ref:            &key,
+	}, workloadHistoryMaxResources)
 	if err != nil {
-		return timeline.ResourceScope{}, err
+		return timeline.ResourceScope{}, false, err
 	}
+	incomplete = len(incarnations) >= workloadHistoryMaxResources
 	seen := map[string]bool{}
 	var uids []string
 	add := func(uid string) bool {
-		if uid == "" || seen[uid] || len(uids) >= workloadHistoryMaxUIDs {
+		if uid == "" || seen[uid] {
+			return false
+		}
+		if len(uids) >= workloadHistoryMaxResources {
+			incomplete = true
 			return false
 		}
 		seen[uid] = true
@@ -266,18 +272,26 @@ func workloadHistoryScope(ctx context.Context, store timeline.EventStore, cluste
 	if live.OwnerUID != "" {
 		parents[live.OwnerUID] = true
 	}
-	for _, e := range keyRows {
-		if add(e.UID) {
-			frontier = append(frontier, e.UID)
+	for _, id := range incarnations {
+		if add(id.UID) {
+			frontier = append(frontier, id.UID)
 		}
-		if e.Owner != nil && e.Owner.UID != "" {
-			parents[e.Owner.UID] = true
+		if id.OwnerUID != "" {
+			parents[id.OwnerUID] = true
 		}
 	}
-	for depth := 0; depth < workloadHistoryMaxDepth && len(frontier) > 0 && len(uids) < workloadHistoryMaxUIDs; depth++ {
-		children, err := store.OwnedUIDs(ctx, clusterContext, frontier, workloadHistoryMaxUIDs-len(uids))
+	for depth := 0; len(frontier) > 0; depth++ {
+		if depth == workloadHistoryMaxDepth {
+			deeper, err := store.OwnedUIDs(ctx, clusterContext, frontier, 1)
+			if err != nil {
+				return timeline.ResourceScope{}, false, err
+			}
+			incomplete = incomplete || len(deeper) > 0
+			break
+		}
+		children, err := store.OwnedUIDs(ctx, clusterContext, frontier, workloadHistoryMaxResources-len(uids)+1)
 		if err != nil {
-			return timeline.ResourceScope{}, err
+			return timeline.ResourceScope{}, false, err
 		}
 		frontier = frontier[:0]
 		for _, uid := range children {
@@ -286,9 +300,9 @@ func workloadHistoryScope(ctx context.Context, store timeline.EventStore, cluste
 			}
 		}
 	}
-	named, err := unownedChildrenByName(ctx, store, clusterContext, key)
+	named, namedIncomplete, err := unownedChildrenByName(ctx, store, clusterContext, key)
 	if err != nil {
-		return timeline.ResourceScope{}, err
+		return timeline.ResourceScope{}, false, err
 	}
 	scopeUIDs := append([]string{}, uids...)
 	for uid := range parents {
@@ -300,11 +314,12 @@ func workloadHistoryScope(ctx context.Context, store timeline.EventStore, cluste
 	}
 	return timeline.ResourceScope{
 		UIDs: scopeUIDs,
-		// Rows owned by a collected UID that the expansion didn't reach
-		// before its UID cap.
-		OwnerUIDs: uids,
-		Refs:      append(append([]resourceid.Ref{key}, attached...), named...),
-	}, nil
+		// Rows owned by a collected UID whose own rows the walk didn't reach
+		// (a K8s Event recorded before its subject's first informer row).
+		OwnerUIDs:     uids,
+		Refs:          append([]resourceid.Ref{key}, attached...),
+		OwnerlessRefs: named,
+	}, incomplete || namedIncomplete, nil
 }
 
 // safeSuffix is the alphabet Kubernetes uses for generated name suffixes
@@ -339,46 +354,44 @@ func childNamePatterns(kind, name string) map[string]*regexp.Regexp {
 
 // unownedChildrenByName finds past children whose rows never learned their
 // owner — mostly K8s Events about Jobs and Pods deleted before Radar started —
-// by the names the workload's controller gives its children. Rows with a
-// known owner are never matched this way.
-func unownedChildrenByName(ctx context.Context, store timeline.EventStore, clusterContext string, key resourceid.Ref) ([]resourceid.Ref, error) {
+// by the names the workload's controller gives its children. They join the
+// scope as OwnerlessRefs, so a row that does record an owner is never pulled
+// in by name.
+func unownedChildrenByName(ctx context.Context, store timeline.EventStore, clusterContext string, key resourceid.Ref) ([]resourceid.Ref, bool, error) {
 	patterns := childNamePatterns(key.Kind, key.Name)
 	if len(patterns) == 0 {
-		return nil, nil
+		return nil, false, nil
 	}
 	kinds := make([]string, 0, len(patterns))
 	for kind := range patterns {
 		kinds = append(kinds, kind)
 	}
-	rows, err := store.Query(ctx, timeline.QueryOptions{
-		Namespaces:       []string{key.Namespace},
-		Kinds:            kinds,
-		NamePrefix:       key.Name + "-",
-		OwnerUnknown:     true,
-		ClusterContext:   clusterContext,
-		SequenceOrder:    timeline.SequenceOrderDescending,
-		Limit:            workloadHistoryKeyScan,
-		IncludeManaged:   true,
-		IncludeK8sEvents: true,
-	})
+	ids, err := store.Identities(ctx, timeline.IdentityQuery{
+		ClusterContext: clusterContext,
+		Namespace:      key.Namespace,
+		Kinds:          kinds,
+		NamePrefix:     key.Name + "-",
+		OwnerUnknown:   true,
+	}, workloadHistoryMaxResources)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	seen := map[resourceid.Ref]bool{}
 	var out []resourceid.Ref
-	for _, e := range rows {
-		pattern := patterns[e.Kind]
-		if pattern == nil || !pattern.MatchString(e.Name) {
+	for _, id := range ids {
+		pattern := patterns[id.Kind]
+		if pattern == nil || !pattern.MatchString(id.Name) {
 			continue
 		}
-		ref := resourceid.NewRef(resourceid.GroupFromAPIVersion(e.APIVersion), e.Kind, e.Namespace, e.Name)
-		if e.APIVersion == "" {
-			ref.Group, _ = resourceid.BuiltinGroup(e.Kind)
+		group := resourceid.GroupFromAPIVersion(id.APIVersion)
+		if id.APIVersion == "" {
+			group, _ = resourceid.BuiltinGroup(id.Kind)
 		}
-		if !seen[ref] && len(out) < workloadHistoryMaxUIDs {
+		ref := resourceid.NewRef(group, id.Kind, key.Namespace, id.Name)
+		if !seen[ref] {
 			seen[ref] = true
 			out = append(out, ref)
 		}
 	}
-	return out, nil
+	return out, len(ids) >= workloadHistoryMaxResources, nil
 }

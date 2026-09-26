@@ -189,9 +189,13 @@ interface WorkloadViewProps {
   /** Loads the next older page of history; omit when the host can't page. */
   onLoadOlderHistory?: () => void
   loadingOlderHistory?: boolean
+  /** The last Load older attempt failed. */
+  olderHistoryError?: Error | null
   /** allEvents holds only this workload's own history (what it runs and the
    *  resources attached to it), not its whole namespace. */
   historyScoped?: boolean
+  /** Some related resources' history isn't included: there were more than the host follows. */
+  historyIncomplete?: boolean
   historyError?: Error | null
   onRetryHistory?: () => void
   /** Persisted lifecycle events reconstructed for resources related to this workload. */
@@ -398,7 +402,9 @@ export function WorkloadView({
   historyTruncated = false,
   onLoadOlderHistory,
   loadingOlderHistory = false,
+  olderHistoryError = null,
   historyScoped = false,
+  historyIncomplete = false,
   historyError = null,
   onRetryHistory,
   relatedTimelineEvents = [],
@@ -1165,7 +1171,9 @@ export function WorkloadView({
             truncated={historyTruncated}
             onLoadOlder={onLoadOlderHistory}
             loadingOlder={loadingOlderHistory}
+            olderError={olderHistoryError}
             scoped={historyScoped}
+            incomplete={historyIncomplete}
             error={historyError}
             onRetry={onRetryHistory}
             selectedEventId={selectedEventId}
@@ -1425,7 +1433,9 @@ function EventsTab({
   truncated,
   onLoadOlder,
   loadingOlder,
+  olderError,
   scoped,
+  incomplete,
   error,
   onRetry,
   selectedEventId,
@@ -1438,7 +1448,9 @@ function EventsTab({
   truncated?: boolean
   onLoadOlder?: () => void
   loadingOlder?: boolean
+  olderError?: Error | null
   scoped?: boolean
+  incomplete?: boolean
   error?: Error | null
   onRetry?: () => void
   selectedEventId: string | null
@@ -1555,14 +1567,18 @@ function EventsTab({
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {(scoped || truncated) && (
+      {(scoped || truncated || incomplete) && (
         <div className="shrink-0 flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-theme-border bg-theme-base px-4 py-1.5 text-xs text-theme-text-secondary" role="note">
           {scoped && (
             <span className="text-theme-text-tertiary">
               This workload, what it runs, and the Services, Ingresses, config and scalers attached to it.
             </span>
           )}
+          {incomplete && <span>This workload has more past runs and related resources than Radar follows, so some are left out.</span>}
           {truncated && <span>Showing the most recent events. Older history exists.</span>}
+          {truncated && olderError && (
+            <span className="text-[var(--color-error)]" title={olderError.message}>Couldn't load older events.</span>
+          )}
           {truncated && onLoadOlder && (
             <button
               type="button"
@@ -1570,7 +1586,7 @@ function EventsTab({
               disabled={loadingOlder}
               className="underline decoration-theme-border underline-offset-2 hover:text-theme-text-primary disabled:opacity-60"
             >
-              {loadingOlder ? 'Loading…' : 'Load older'}
+              {loadingOlder ? 'Loading…' : olderError ? 'Try again' : 'Load older'}
             </button>
           )}
         </div>

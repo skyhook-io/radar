@@ -2850,6 +2850,8 @@ export interface WorkloadHistoryPage {
   events: TimelineEvent[];
   truncated: boolean;
   nextBeforeSeq?: number;
+  /** The workload has more related resources than the history follows. */
+  incomplete?: boolean;
 }
 
 function workloadHistoryPath(kind: string, namespace: string, name: string, group?: string, beforeSeq?: number): string {

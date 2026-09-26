@@ -3,7 +3,6 @@ package timeline
 import (
 	"context"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -325,6 +324,32 @@ func (m *MemoryStore) OwnedUIDs(ctx context.Context, clusterContext string, owne
 	return out, nil
 }
 
+// Identities returns the distinct resources the rows matching q were about.
+func (m *MemoryStore) Identities(ctx context.Context, q IdentityQuery, limit int) ([]Identity, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	seen := map[Identity]bool{}
+	var out []Identity
+	for i := 0; i < m.count && len(out) < limit; i++ {
+		event := &m.records[(m.head-1-i+m.maxSize)%m.maxSize]
+		if event.ID == "" || !q.Matches(event) {
+			continue
+		}
+		id := Identity{APIVersion: event.APIVersion, Kind: event.Kind, Name: event.Name, UID: event.UID}
+		if event.Owner != nil {
+			id.OwnerUID = event.Owner.UID
+		}
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
 // matchesFilters checks if an event matches the query filters
 func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf *CompiledFilter) bool {
 	// Apply compiled filter preset
@@ -402,14 +427,6 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 	}
 
 	if !opts.Scope.Matches(event) {
-		return false
-	}
-
-	if opts.NamePrefix != "" && !strings.HasPrefix(event.Name, opts.NamePrefix) {
-		return false
-	}
-
-	if opts.OwnerUnknown && event.Owner != nil && event.Owner.UID != "" {
 		return false
 	}
 

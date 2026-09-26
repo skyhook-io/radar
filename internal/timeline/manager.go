@@ -30,6 +30,8 @@ type (
 	EventStore     = pkgtimeline.EventStore
 	QueryOptions   = pkgtimeline.QueryOptions
 	ResourceScope  = pkgtimeline.ResourceScope
+	IdentityQuery  = pkgtimeline.IdentityQuery
+	Identity       = pkgtimeline.Identity
 	SequenceOrder  = pkgtimeline.SequenceOrder
 	StoreStats     = pkgtimeline.StoreStats
 	CompiledFilter = pkgtimeline.CompiledFilter

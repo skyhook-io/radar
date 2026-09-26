@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	pkgtimeline "github.com/skyhook-io/radar/pkg/timeline"
 )
 
@@ -853,6 +854,57 @@ func (s *PostgresStore) OwnedUIDs(ctx context.Context, clusterContext string, ow
 	return out, rows.Err()
 }
 
+const postgresAPIGroupExpr = "CASE WHEN strpos(api_version, '/') > 0 THEN split_part(api_version, '/', 1) ELSE '' END"
+
+// Identities returns the distinct resources the rows matching q were about.
+func (s *PostgresStore) Identities(ctx context.Context, q IdentityQuery, limit int) ([]Identity, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	ctx, cancel := withPostgresOperationTimeout(ctx)
+	defer cancel()
+	query := "SELECT DISTINCT COALESCE(api_version, ''), kind, name, COALESCE(uid, ''), COALESCE(owner_uid, '') FROM radar_timeline_events WHERE true"
+	var args []any
+	arg := func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	}
+	if q.ClusterContext != "" {
+		query += " AND cluster_context = " + arg(q.ClusterContext)
+	}
+	if q.Namespace != "" {
+		query += " AND namespace = " + arg(q.Namespace)
+	}
+	if q.Ref != nil {
+		query += " AND kind = " + arg(q.Ref.Kind) + " AND namespace = " + arg(q.Ref.Namespace) + " AND name = " + arg(q.Ref.Name) +
+			" AND (COALESCE(api_version, '') = '' OR " + postgresAPIGroupExpr + " = " + arg(q.Ref.Group) + ")"
+	}
+	if len(q.Kinds) > 0 {
+		query += " AND kind = ANY(" + arg(q.Kinds) + "::text[])"
+	}
+	if q.NamePrefix != "" {
+		query += " AND starts_with(name, " + arg(q.NamePrefix) + ")"
+	}
+	if q.OwnerUnknown {
+		query += " AND COALESCE(owner_uid, '') = ''"
+	}
+	query += " LIMIT " + arg(limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query identities: %w", err)
+	}
+	defer rows.Close()
+	var out []Identity
+	for rows.Next() {
+		var id Identity
+		if err := rows.Scan(&id.APIVersion, &id.Kind, &id.Name, &id.UID, &id.OwnerUID); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 func (s *PostgresStore) buildQuery(opts QueryOptions) (string, []any, error) {
 	query := strings.Builder{}
 	query.WriteString(`SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
@@ -951,23 +1003,21 @@ func (s *PostgresStore) buildQuery(opts QueryOptions) (string, []any, error) {
 			args = append(args, owners)
 			argN++
 		}
-		for _, ref := range opts.Scope.Refs {
-			parts = append(parts, fmt.Sprintf("(kind = $%d AND namespace = $%d AND name = $%d AND (COALESCE(api_version, '') = '' OR "+
-				"CASE WHEN strpos(api_version, '/') > 0 THEN split_part(api_version, '/', 1) ELSE '' END = $%d))", argN, argN+1, argN+2, argN+3))
-			args = append(args, ref.Kind, ref.Namespace, ref.Name, ref.Group)
-			argN += 4
+		refs := func(list []resourceid.Ref, extra string) {
+			for _, g := range groupRefs(list) {
+				parts = append(parts, fmt.Sprintf("(kind = $%d AND namespace = $%d AND name = ANY($%d::text[]) AND (COALESCE(api_version, '') = '' OR "+
+					postgresAPIGroupExpr+" = $%d)"+extra+")", argN, argN+1, argN+2, argN+3))
+				args = append(args, g.kind, g.namespace, g.names, g.group)
+				argN += 4
+			}
 		}
+		refs(opts.Scope.Refs, "")
+		refs(opts.Scope.OwnerlessRefs, " AND COALESCE(owner_uid, '') = ''")
 		if len(parts) == 0 {
 			query.WriteString(" AND false")
 		} else {
 			query.WriteString(" AND (" + strings.Join(parts, " OR ") + ")")
 		}
-	}
-	if opts.NamePrefix != "" {
-		addFilter(" AND starts_with(name, $%d)", opts.NamePrefix)
-	}
-	if opts.OwnerUnknown {
-		query.WriteString(" AND COALESCE(owner_uid, '') = ''")
 	}
 
 	seqPaging := opts.SeqPaging || opts.SinceSeq > 0

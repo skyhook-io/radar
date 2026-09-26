@@ -735,33 +735,95 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		}
 	})
 
-	t.Run("name prefix and unknown owner narrow before the limit", func(t *testing.T) {
+	t.Run("identities are distinct resources under a key or a name prefix", func(t *testing.T) {
 		store := newStore(t)
-		add := func(id, name string, owner *timeline.OwnerInfo, offset time.Duration) {
+		add := func(id, apiVersion, name, uid, clusterContext string, owner *timeline.OwnerInfo) {
 			t.Helper()
 			mustAppend(t, store, timeline.TimelineEvent{
-				ID: id, Timestamp: base.Add(offset), Source: timeline.SourceK8sEvent,
-				Kind: "Job", Namespace: "default", Name: name, Owner: owner, EventType: timeline.EventTypeWarning,
+				ID: id, Timestamp: base, Source: timeline.SourceK8sEvent, ClusterContext: clusterContext,
+				APIVersion: apiVersion, Kind: "Job", Namespace: "default", Name: name, UID: uid, Owner: owner, EventType: timeline.EventTypeWarning,
 			})
 		}
-		add("ownerless-run", "backup-29839652", nil, 0)
-		add("owned-run", "backup-29839654", &timeline.OwnerInfo{Kind: "CronJob", Name: "backup", UID: "uid-cron"}, time.Minute)
-		add("name-only-owner", "backup-29839656", &timeline.OwnerInfo{Kind: "CronJob", Name: "backup"}, 2*time.Minute)
-		add("other-prefix", "Backup-29839658", nil, 3*time.Minute)
-		for i := 0; i < 5; i++ {
-			add(fmt.Sprintf("noise-%d", i), fmt.Sprintf("web-%d", i), nil, 4*time.Minute+time.Duration(i)*time.Second)
+		cron := &timeline.OwnerInfo{Kind: "CronJob", Name: "backup", UID: "uid-cron"}
+		add("run-a1", "batch/v1", "backup-1", "uid-a", "ctx-a", nil)
+		add("run-a2", "batch/v1", "backup-1", "uid-a", "ctx-a", nil)
+		add("run-b", "batch/v1", "backup-2", "uid-b", "ctx-a", cron)
+		add("run-c", "", "backup-3", "uid-c", "ctx-a", &timeline.OwnerInfo{Kind: "CronJob", Name: "backup"})
+		add("other-case", "batch/v1", "Backup-4", "uid-d", "ctx-a", nil)
+		add("other-cluster", "batch/v1", "backup-5", "uid-e", "ctx-b", nil)
+		add("volcano", "batch.volcano.sh/v1alpha1", "backup-1", "uid-v", "ctx-a", nil)
+		read := func(q timeline.IdentityQuery, limit int) []string {
+			t.Helper()
+			got, err := store.Identities(ctx, q, limit)
+			if err != nil {
+				t.Fatalf("Identities: %v", err)
+			}
+			var out []string
+			for _, id := range got {
+				out = append(out, fmt.Sprintf("%s|%s|%s|%s", id.APIVersion, id.Name, id.UID, id.OwnerUID))
+			}
+			sort.Strings(out)
+			return out
 		}
+		ownerless := read(timeline.IdentityQuery{ClusterContext: "ctx-a", Namespace: "default", Kinds: []string{"Job"}, NamePrefix: "backup-", OwnerUnknown: true}, 10)
+		if want := "[batch.volcano.sh/v1alpha1|backup-1|uid-v| batch/v1|backup-1|uid-a| |backup-3|uid-c|]"; fmt.Sprint(ownerless) != want {
+			t.Errorf("ownerless by prefix: got %v, want %v (one per resource, exact-case prefix, no owner UID, one cluster)", ownerless, want)
+		}
+		key := resourceid.NewRef("batch", "Job", "default", "backup-1")
+		if got := read(timeline.IdentityQuery{ClusterContext: "ctx-a", Ref: &key}, 10); fmt.Sprint(got) != "[batch/v1|backup-1|uid-a|]" {
+			t.Errorf("under a key: got %v, want the batch Job only", got)
+		}
+		if got := read(timeline.IdentityQuery{ClusterContext: "ctx-a", NamePrefix: "backup-"}, 2); len(got) != 2 {
+			t.Errorf("limit 2: got %d identities", len(got))
+		}
+	})
+
+	t.Run("ownerless refs admit only rows that record no owner", func(t *testing.T) {
+		store := newStore(t)
+		add := func(id string, owner *timeline.OwnerInfo) {
+			t.Helper()
+			mustAppend(t, store, timeline.TimelineEvent{
+				ID: id, Timestamp: base, Source: timeline.SourceK8sEvent, APIVersion: "batch/v1",
+				Kind: "Job", Namespace: "default", Name: "backup-1", UID: "uid-a", Owner: owner, EventType: timeline.EventTypeWarning,
+			})
+		}
+		add("ownerless", nil)
+		add("owner-name-only", &timeline.OwnerInfo{Kind: "CronJob", Name: "backup"})
+		add("owned-elsewhere", &timeline.OwnerInfo{Kind: "CronJob", Name: "other", UID: "uid-other"})
 		got, err := store.Query(ctx, timeline.QueryOptions{
-			NamePrefix: "backup-", OwnerUnknown: true, Limit: 2,
-			IncludeManaged: true, IncludeK8sEvents: true,
+			Scope: timeline.ResourceScope{OwnerlessRefs: []resourceid.Ref{resourceid.NewRef("batch", "Job", "default", "backup-1")}},
+			Limit: 10, IncludeManaged: true, IncludeK8sEvents: true,
 		})
 		if err != nil {
 			t.Fatalf("Query: %v", err)
 		}
 		ids := idsOfEvents(got)
 		sort.Strings(ids)
-		if fmt.Sprint(ids) != "[name-only-owner ownerless-run]" {
-			t.Errorf("got %v, want [name-only-owner ownerless-run]: exact-case prefix, no owner UID, before the limit", ids)
+		if fmt.Sprint(ids) != "[owner-name-only ownerless]" {
+			t.Errorf("got %v, want [owner-name-only ownerless]", ids)
+		}
+	})
+
+	t.Run("a scope naming thousands of resources", func(t *testing.T) {
+		store := newStore(t)
+		const n = 3000
+		refs := make([]resourceid.Ref, 0, n)
+		for i := 0; i < n; i++ {
+			refs = append(refs, resourceid.NewRef("", "Pod", "default", fmt.Sprintf("pod-%d", i)))
+		}
+		mustAppend(t, store, timeline.TimelineEvent{
+			ID: "last", Timestamp: base, Source: timeline.SourceInformer, APIVersion: "v1",
+			Kind: "Pod", Namespace: "default", Name: fmt.Sprintf("pod-%d", n-1), EventType: timeline.EventTypeUpdate,
+		})
+		got, err := store.Query(ctx, timeline.QueryOptions{
+			Scope: timeline.ResourceScope{Refs: refs, OwnerlessRefs: refs},
+			Limit: 10, IncludeManaged: true, IncludeK8sEvents: true,
+		})
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		if ids := idsOfEvents(got); fmt.Sprint(ids) != "[last]" {
+			t.Errorf("got %v, want [last]", ids)
 		}
 	})
 

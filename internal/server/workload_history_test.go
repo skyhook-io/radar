@@ -168,7 +168,7 @@ func TestWorkloadHistoryScope_StartsFromTheLiveUIDWhenTheKeyHasNoRows(t *testing
 		}
 	}
 	key := resourceid.NewRef("apps", "Deployment", "default", "web")
-	scope, err := workloadHistoryScope(t.Context(), store, k8s.ActiveClusterContext(), key, liveIdentity{UID: "dep-live"}, nil)
+	scope, _, err := workloadHistoryScope(t.Context(), store, k8s.ActiveClusterContext(), key, liveIdentity{UID: "dep-live"}, nil)
 	if err != nil {
 		t.Fatalf("workloadHistoryScope: %v", err)
 	}
@@ -198,7 +198,7 @@ func appendHistoryRows(t *testing.T, store timeline.EventStore, rows []timeline.
 
 func scopedHistoryIDs(t *testing.T, store timeline.EventStore, key resourceid.Ref, live liveIdentity) string {
 	t.Helper()
-	scope, err := workloadHistoryScope(t.Context(), store, k8s.ActiveClusterContext(), key, live, nil)
+	scope, _, err := workloadHistoryScope(t.Context(), store, k8s.ActiveClusterContext(), key, live, nil)
 	if err != nil {
 		t.Fatalf("workloadHistoryScope: %v", err)
 	}
@@ -220,6 +220,7 @@ func TestWorkloadHistoryScope_RecoversPastRunsWithNoRecordedOwner(t *testing.T) 
 		{ID: "past-pod", APIVersion: "v1", Kind: "Pod", Name: "backup-29012345-bcdfg", UID: "pod-old", Source: timeline.SourceK8sEvent},
 		{ID: "sibling-job", APIVersion: "batch/v1", Kind: "Job", Name: "backup-nightly-29012345", UID: "job-sib", Source: timeline.SourceK8sEvent},
 		{ID: "owned-elsewhere", APIVersion: "batch/v1", Kind: "Job", Name: "backup-29012399", UID: "job-other", Owner: &timeline.OwnerInfo{Kind: "CronJob", Name: "other", UID: "cj-other"}},
+		{ID: "same-name-owned-elsewhere", APIVersion: "batch/v1", Kind: "Job", Name: "backup-29012345", UID: "job-old", Owner: &timeline.OwnerInfo{Kind: "CronJob", Name: "other", UID: "cj-other"}},
 		{ID: "not-a-run", APIVersion: "v1", Kind: "ConfigMap", Name: "backup-29012345", UID: "cm-1"},
 	})
 	key := resourceid.NewRef("batch", "CronJob", "default", "backup")
@@ -281,5 +282,32 @@ func TestChildNamePatterns_MatchWhatTheControllerNamesAndNotSiblings(t *testing.
 		if got := pattern != nil && pattern.MatchString(tc.child); got != tc.want {
 			t.Errorf("%s %s: %s %s matched=%v, want %v", tc.kind, tc.name, tc.childKind, tc.child, got, tc.want)
 		}
+	}
+}
+
+// A tree deeper than the walk follows is reported, not silently cut.
+func TestWorkloadHistoryScope_ReportsAWalkCutShort(t *testing.T) {
+	store := withWorkloadHistoryStore(t)
+	var rows []timeline.TimelineEvent
+	owner := "root"
+	for level := 1; level <= workloadHistoryMaxDepth+1; level++ {
+		uid := fmt.Sprintf("level-%d", level)
+		rows = append(rows, timeline.TimelineEvent{ID: uid, APIVersion: "v1", Kind: "Pod", Name: uid, UID: uid, Owner: &timeline.OwnerInfo{Kind: "Thing", Name: owner, UID: owner}})
+		owner = uid
+	}
+	appendHistoryRows(t, store, rows)
+	key := resourceid.NewRef("example.com", "Thing", "default", "root")
+	_, incomplete, err := workloadHistoryScope(t.Context(), store, k8s.ActiveClusterContext(), key, liveIdentity{UID: "root"}, nil)
+	if err != nil {
+		t.Fatalf("workloadHistoryScope: %v", err)
+	}
+	if !incomplete {
+		t.Error("a tree deeper than the walk must be reported incomplete")
+	}
+	rows = rows[:workloadHistoryMaxDepth]
+	store = withWorkloadHistoryStore(t)
+	appendHistoryRows(t, store, rows)
+	if _, incomplete, _ := workloadHistoryScope(t.Context(), store, k8s.ActiveClusterContext(), key, liveIdentity{UID: "root"}, nil); incomplete {
+		t.Error("a tree exactly as deep as the walk is complete")
 	}
 }
