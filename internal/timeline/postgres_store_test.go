@@ -1258,3 +1258,30 @@ func embeddedPostgresMigrationCount(t *testing.T) int {
 	}
 	return len(entries)
 }
+
+func TestNewPostgresStoreBuildsUIDIndexesInTheBackground(t *testing.T) {
+	store, err := NewPostgresStore(testPostgresDSN(t))
+	if err != nil {
+		t.Fatalf("NewPostgresStore: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+	deadline := time.Now().Add(30 * time.Second)
+	for _, index := range postgresBackgroundIndexes {
+		for {
+			var valid bool
+			err := store.db.QueryRowContext(t.Context(),
+				"SELECT i.indisvalid FROM pg_index i WHERE i.indexrelid = to_regclass($1)", index.name).Scan(&valid)
+			if err == nil && valid {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("index %s not built and valid: %v", index.name, err)
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}

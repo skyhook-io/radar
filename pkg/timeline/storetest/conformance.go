@@ -670,6 +670,45 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		}
 	})
 
+	t.Run("an empty uid in a scope or owner list matches nothing", func(t *testing.T) {
+		store := newStore(t)
+		scopedFixture(t, store)
+		// Newer rows that recorded neither their own UID nor their owner's.
+		for i := 0; i < 5; i++ {
+			mustAppend(t, store, timeline.TimelineEvent{
+				ID: fmt.Sprintf("unrecorded-%d", i), Timestamp: base.Add(time.Hour + time.Duration(i)*time.Second),
+				Source: timeline.SourceK8sEvent, ClusterContext: "ctx-a", Kind: "Pod", Namespace: "default",
+				Name: fmt.Sprintf("x-%d", i), Owner: &timeline.OwnerInfo{Kind: "ReplicaSet", Name: "x"}, EventType: timeline.EventTypeWarning,
+			})
+		}
+		got, err := store.Query(ctx, timeline.QueryOptions{
+			Scope:          timeline.ResourceScope{UIDs: []string{"", "uid-dep"}, OwnerUIDs: []string{""}},
+			ClusterContext: "ctx-a", Limit: 3, IncludeManaged: true, IncludeK8sEvents: true,
+		})
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		if ids := idsOfEvents(got); fmt.Sprint(ids) != "[dep]" {
+			t.Errorf("got %v, want [dep]", ids)
+		}
+		got, err = store.Query(ctx, timeline.QueryOptions{
+			Scope: timeline.ResourceScope{UIDs: []string{""}}, ClusterContext: "ctx-a", Limit: 3, IncludeManaged: true, IncludeK8sEvents: true,
+		})
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("a scope of only empty uids: got %v, want nothing", idsOfEvents(got))
+		}
+		owned, err := store.OwnedUIDs(ctx, "ctx-a", []string{""}, 10)
+		if err != nil {
+			t.Fatalf("OwnedUIDs: %v", err)
+		}
+		if len(owned) != 0 {
+			t.Errorf("OwnedUIDs of an empty owner: got %v, want nothing", owned)
+		}
+	})
+
 	t.Run("owned uids walk one ownership level, distinct, within a cluster", func(t *testing.T) {
 		store := newStore(t)
 		scopedFixture(t, store)

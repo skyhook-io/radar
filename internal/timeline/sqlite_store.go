@@ -478,11 +478,11 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 	return tx.Commit()
 }
 
-// sqliteScopeClause renders a ResourceScope as " AND (... OR ...)".
 func sqliteScopeClause(scope ResourceScope) (string, []any) {
 	var parts []string
 	var args []any
 	in := func(column string, values []string) {
+		values = nonEmpty(values)
 		if len(values) == 0 {
 			return
 		}
@@ -498,12 +498,28 @@ func sqliteScopeClause(scope ResourceScope) (string, []any) {
 			"CASE WHEN instr(api_version, '/') > 0 THEN substr(api_version, 1, instr(api_version, '/') - 1) ELSE '' END = ?))")
 		args = append(args, ref.Kind, ref.Namespace, ref.Name, ref.Group)
 	}
+	if len(parts) == 0 {
+		return " AND 0", nil
+	}
 	return " AND (" + strings.Join(parts, " OR ") + ")", args
+}
+
+// nonEmpty drops empty UIDs: compared against a column, one would match every
+// row that recorded no UID at all.
+func nonEmpty(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // OwnedUIDs returns the distinct UIDs of resources whose rows name one of
 // ownerUIDs as their owner.
 func (s *SQLiteStore) OwnedUIDs(ctx context.Context, clusterContext string, ownerUIDs []string, limit int) ([]string, error) {
+	ownerUIDs = nonEmpty(ownerUIDs)
 	if len(ownerUIDs) == 0 || limit <= 0 {
 		return nil, nil
 	}
