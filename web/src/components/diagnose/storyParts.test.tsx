@@ -262,6 +262,34 @@ describe("ResultCard under the story contract", () => {
 });
 
 describe("assessmentCopyText", () => {
+  it("gives a teammate the whole report: story, every step and where it came from", () => {
+    const context = { target: "Deployment shop/api", agent: "Claude Code" };
+    const channel = assessmentCopyText(storyDiagnosis, { context });
+    const full = assessmentCopyText(storyDiagnosis, { context, full: true });
+    expect(channel).toContain("open the investigation in Radar");
+    expect(full).not.toContain("open the investigation in Radar");
+    expect(full).toContain("From a local Radar investigation run with Claude Code.");
+    expect(full.length).toBeGreaterThan(channel.length);
+    expect(full).toContain(
+      "1. **Recommended:** [Mitigate] Roll back to revision 7 (only if revision 7 still authenticates)",
+    );
+    expect(full).toContain("2. [Verify] Test the stored password");
+    expect(full).toContain("Why step 1: reversible");
+  });
+  it("marks no step in the full report when the agent pointed at none, or at a non-mitigating one", () => {
+    const none = assessmentCopyText(
+      { ...storyDiagnosis, recommendedIndex: 0 },
+      { full: true },
+    );
+    const verify = assessmentCopyText(
+      { ...storyDiagnosis, recommendedIndex: 2 },
+      { full: true },
+    );
+    for (const text of [none, verify]) {
+      expect(text).not.toContain("Recommended:");
+      expect(text).not.toContain("Why step");
+    }
+  });
   it("carries Radar's own qualifications so the pasted text is no more confident than the screen", () => {
     const text = assessmentCopyText(storyDiagnosis, {
       limits: ["Change history: incomplete"],

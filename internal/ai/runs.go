@@ -88,6 +88,10 @@ type Run struct {
 	Model     string           // immutable — optional model override ("" = agent default)
 	Effort    string           // immutable — optional reasoning effort (Codex; "" = default)
 	ManagedBy string           // immutable — GitOps/Helm owner of the target ("" = none), for the Apply warning
+	// IssueID is the issue the run was started from ("" = started from the
+	// resource itself). Radar never reads it; the UI uses it to offer an alert
+	// on that exact issue.
+	IssueID   string
 	Health    *ResourceHealthSignal
 	CreatedAt time.Time
 	// OwnerPID is the process that owns this run's lifecycle. Persisted so a
@@ -134,6 +138,7 @@ type RunSummary struct {
 	Model     string                `json:"model,omitempty"`
 	Effort    string                `json:"effort,omitempty"`
 	ManagedBy string                `json:"managedBy,omitempty"`
+	IssueID   string                `json:"issueId,omitempty"`
 	Health    *ResourceHealthSignal `json:"health,omitempty"`
 	Status    string                `json:"status"`
 	SessionID string                `json:"sessionId,omitempty"`
@@ -290,7 +295,7 @@ func (m *RunManager) loadPersisted() {
 		r := &Run{
 			ID: s.ID, Kind: s.Kind, Group: s.Group, Namespace: s.Namespace, Name: s.Name,
 			Context: s.Context, Agent: s.Agent, Profile: s.Profile,
-			Model: s.Model, Effort: s.Effort, ManagedBy: s.ManagedBy,
+			Model: s.Model, Effort: s.Effort, ManagedBy: s.ManagedBy, IssueID: s.IssueID,
 			Health: s.Health, CreatedAt: s.CreatedAt, OwnerPID: s.OwnerPID,
 			store:  m.store,
 			status: s.Status, sessionID: s.SessionID, preview: s.Preview,
@@ -499,7 +504,7 @@ func (m *RunManager) ctx() string {
 // Start creates and launches an investigation, or focuses an existing live run for
 // the same target+context instead of duplicating it. Returns ErrAtCapacity when
 // the concurrent-running cap is reached.
-func (m *RunManager) Start(kind, group, namespace, name, agent string, profile ExecutionProfile, model, effort, managedBy string, health *ResourceHealthSignal) (RunSummary, error) {
+func (m *RunManager) Start(kind, group, namespace, name, agent string, profile ExecutionProfile, model, effort, managedBy, issueID string, health *ResourceHealthSignal) (RunSummary, error) {
 	cur := m.ctx()
 	m.mu.Lock()
 	// Focus an existing live run for this exact target+mode rather than duplicate it.
@@ -519,7 +524,7 @@ func (m *RunManager) Start(kind, group, namespace, name, agent string, profile E
 	r := &Run{
 		ID: id, Kind: kind, Group: group, Namespace: namespace,
 		Name: name, Context: cur, Agent: agent, WorkDir: m.runWorkDir(id), Profile: profile,
-		Model: model, Effort: effort, ManagedBy: managedBy, Health: health, CreatedAt: nowUTC(),
+		Model: model, Effort: effort, ManagedBy: managedBy, IssueID: issueID, Health: health, CreatedAt: nowUTC(),
 		OwnerPID: os.Getpid(),
 		store:    m.store,
 		status:   "running", inFlight: true, updatedAt: nowUTC(),
@@ -1293,7 +1298,7 @@ func (r *Run) summaryLocked() RunSummary {
 	return RunSummary{
 		ID: r.ID, Kind: r.Kind, Group: r.Group, Namespace: r.Namespace, Name: r.Name,
 		Context: r.Context, Agent: r.Agent, Profile: r.Profile,
-		Model: r.Model, Effort: r.Effort, ManagedBy: r.ManagedBy,
+		Model: r.Model, Effort: r.Effort, ManagedBy: r.ManagedBy, IssueID: r.IssueID,
 		Health: r.Health,
 		Status: r.status, SessionID: r.sessionID, OwnerPID: r.OwnerPID,
 		Preview: r.preview, CreatedAt: r.CreatedAt, UpdatedAt: r.updatedAt,

@@ -29,6 +29,12 @@ export interface AssessmentCopyRadar {
     /** The agent's statement of what this result does not cover. */
     gap?: string;
   }[];
+  /**
+   * The whole report for a teammate rather than a channel: the full story and
+   * every step instead of the recommended one, and a closing line that says
+   * where it came from instead of pointing back into Radar.
+   */
+  full?: boolean;
 }
 
 /**
@@ -108,7 +114,8 @@ export function assessmentCopyText(
         ),
       ].join("\n"),
     );
-  } else if (!radar.context) {
+  }
+  if (radar.full || (receipts.length === 0 && !radar.context)) {
     const story = storyPlainText(diagnosis.report ?? "");
     if (story) parts.push(story);
   }
@@ -121,7 +128,7 @@ export function assessmentCopyText(
         (text, index) => `${index + 1}. ${text}`,
       );
   if (steps.length > 0) {
-    if (radar.context) {
+    if (radar.context && !radar.full) {
       // A channel gets the recommended step; the rest wait in Radar.
       const lead = diagnosis.recommendedIndex
         ? diagnosis.recommendedIndex - 1
@@ -141,9 +148,38 @@ export function assessmentCopyText(
           .filter(Boolean)
           .join("\n"),
       );
+    } else if (radar.full) {
+      // Every step, with the recommended one marked the way the card marks
+      // it: only a mitigating step the agent pointed at, never a default.
+      const index = diagnosis.recommendedIndex
+        ? diagnosis.recommendedIndex - 1
+        : -1;
+      const typed = diagnosis.steps?.[index];
+      const lead =
+        index >= 0 && (!diagnosis.steps?.length || typed?.kind === "mitigate")
+          ? index
+          : -1;
+      // The marker leads the step: a step can run on into a code block, and a
+      // trailing marker would land after it.
+      parts.push(
+        [
+          "Next steps:",
+          ...steps.map((step, index) =>
+            index === lead
+              ? step.replace(/^(\d+\. )/, "$1**Recommended:** ")
+              : step,
+          ),
+        ].join("\n"),
+      );
+      if (lead >= 0 && lead < steps.length && diagnosis.recommendedReason)
+        parts.push(`Why step ${lead + 1}: ${diagnosis.recommendedReason}`);
     } else parts.push(["Next steps:", ...steps].join("\n"));
   }
-  if (radar.context)
+  if (radar.full)
+    parts.push(
+      `From a local Radar investigation${radar.context?.agent ? ` run with ${radar.context.agent}` : ""}. Evidence excerpts are Radar's own reads of the cluster; the analysis is the agent's.`,
+    );
+  else if (radar.context)
     parts.push(
       "Full analysis and every captured result: open the investigation in Radar.",
     );
