@@ -75,6 +75,7 @@ type Server struct {
 	broadcaster             *SSEBroadcaster
 	vitalsMetrics           vitalsMetricsMemo
 	port                    int
+	portFallback            bool
 	listenAddress           string
 	basePath                string
 	startupLog              bool
@@ -177,6 +178,7 @@ type Server struct {
 // Config holds server configuration
 type Config struct {
 	Port                    int
+	PortFallback            bool // Port is a preference: when it's taken, bind an OS-assigned port instead of failing
 	ListenAddress           string
 	BasePath                string                      // Optional URL path prefix for self-hosted subpath deployments
 	StartupLog              bool                        // Emit the operator-facing startup block after a successful bind
@@ -216,6 +218,7 @@ func New(cfg Config) *Server {
 		router:                  chi.NewRouter(),
 		broadcaster:             NewSSEBroadcaster(),
 		port:                    cfg.Port,
+		portFallback:            cfg.PortFallback,
 		listenAddress:           cfg.ListenAddress,
 		basePath:                basePath,
 		startupLog:              cfg.StartupLog,
@@ -1114,8 +1117,7 @@ func (s *Server) StartWithReady(ready chan<- struct{}) error {
 		return fmt.Errorf("invalid listen address %q: %w", configuredListenAddress, err)
 	}
 	s.listenAddress = listenAddress
-	bindAddr := socketAddress(listenAddress, s.port)
-	ln, err := net.Listen("tcp", bindAddr)
+	ln, err := listenPreferringPort(listenAddress, s.port, s.portFallback)
 	if err != nil {
 		displayAddr := net.JoinHostPort(listenAddress, strconv.Itoa(s.port))
 		return fmt.Errorf("listen on %s: %w", displayAddr, err)
@@ -1141,6 +1143,18 @@ func (s *Server) StartWithReady(ready chan<- struct{}) error {
 	}
 
 	return http.Serve(ln, localTCPHandler(s.router))
+}
+
+// listenPreferringPort binds port, or with fallback set and port taken, an
+// OS-assigned port. Falling back inside the bind leaves no window for another
+// process to take the port between a check and the listen.
+func listenPreferringPort(listenAddress string, port int, fallback bool) (net.Listener, error) {
+	ln, err := net.Listen("tcp", socketAddress(listenAddress, port))
+	if err == nil || !fallback || port == 0 {
+		return ln, err
+	}
+	log.Printf("Port %d is unavailable (%v); using an OS-assigned port", port, err)
+	return net.Listen("tcp", socketAddress(listenAddress, 0))
 }
 
 func shouldWarnUnauthenticatedListener(listenAddress string, authEnabled bool) bool {

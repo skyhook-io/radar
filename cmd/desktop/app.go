@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/skyhook-io/radar/internal/app"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -28,6 +29,10 @@ type DesktopApp struct {
 	// setWindowTitle is the side-effecty title setter, injectable for tests.
 	// Defaults to wailsRuntime.WindowSetTitle bound to a.ctx.
 	setWindowTitle func(title string)
+
+	// onWindowReady runs once, the first time the webview's DOM is ready.
+	onWindowReady func()
+	windowReady   sync.Once
 }
 
 func NewDesktopApp(srv *server.Server, timelineStoreCfg timeline.StoreConfig) *DesktopApp {
@@ -216,6 +221,11 @@ func windowsSafeName(name string) string {
 // domReady is called when the webview DOM is ready.
 func (a *DesktopApp) domReady(ctx context.Context) {
 	a.updateWindowTitle(k8s.GetContextName())
+	a.windowReady.Do(func() {
+		if a.onWindowReady != nil {
+			a.onWindowReady()
+		}
+	})
 }
 
 // beforeClose is called before the app quits. Return true to prevent quitting.

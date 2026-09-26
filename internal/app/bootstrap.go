@@ -45,6 +45,7 @@ type AppConfig struct {
 	Namespace                 string
 	Namespaces                []string
 	Port                      int
+	PortFallback              bool // Port is a preference, not a requirement (Desktop's remembered port)
 	ListenAddress             string
 	ShowRemoteAccessHint      bool
 	BasePath                  string
@@ -425,6 +426,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 
 	serverCfg := server.Config{
 		Port:                  cfg.Port,
+		PortFallback:          cfg.PortFallback,
 		ListenAddress:         cfg.ListenAddress,
 		BasePath:              cfg.BasePath,
 		StartupLog:            true,

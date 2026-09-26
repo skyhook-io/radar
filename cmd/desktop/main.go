@@ -4,8 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	goruntime "runtime"
+	"strconv"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/app"
@@ -166,13 +168,22 @@ func main() {
 		os.Exit(1)
 	}
 
+	// A configured port is honored as-is. Otherwise reuse the last launch's
+	// port, so the webview keeps its origin and storage.
+	desktopPort := fileCfg.PortOr(0)
+	desktopPortRemembered := desktopPort == 0
+	if desktopPortRemembered {
+		desktopPort = lastDesktopPort(desktopPortPath())
+	}
+
 	cfg := app.AppConfig{
 		Kubeconfig:                resolvedKubeconfig,
 		KubeconfigDirs:            resolvedKubeconfigDirs,
 		RestoreLastDesktopContext: fileCfg.RestoreLastDesktopContextOr(true),
 		Namespace:                 resolvedNamespace,
 		Namespaces:                resolvedNamespaces,
-		Port:                      fileCfg.PortOr(0), // Configured port, or random to avoid conflicts with CLI
+		Port:                      desktopPort,
+		PortFallback:              desktopPortRemembered,
 		ListenAddress:             "127.0.0.1",
 		DevMode:                   false,
 		HistoryLimit:              *historyLimit,
@@ -264,6 +275,11 @@ func main() {
 	windowTitle := formatWindowTitle(k8s.GetContextName())
 
 	desktopApp := NewDesktopApp(srv, timelineStoreCfg)
+	if desktopPortRemembered {
+		desktopApp.onWindowReady = func() {
+			go rememberDesktopPort(desktopPortPath(), desktopPort, srv.ActualPort(), portOwner, loopbackPortBindable)
+		}
+	}
 	// macOS only. Wails maps this to `[NSApp hide:]`, which leaves the dock icon
 	// in place, so a dock click or Cmd+Tab brings the window back. The other
 	// platforms have no such affordance: GTK hides the window on delete-event and
@@ -287,7 +303,9 @@ func main() {
 		HideWindowOnClose: hideOnClose,
 
 		AssetServer: &assetserver.Options{
-			Handler: NewRedirectHandler(srv.ActualAddr(), cfg.Namespace, cfg.Namespaces),
+			// The address actually bound, not "localhost", which may resolve to
+			// [::1] where another service can hold the same port.
+			Handler: NewRedirectHandler(net.JoinHostPort("127.0.0.1", strconv.Itoa(srv.ActualPort())), cfg.Namespace, cfg.Namespaces),
 		},
 
 		Menu: createMenu(desktopApp, version, goruntime.GOOS),
