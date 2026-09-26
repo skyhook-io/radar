@@ -93,7 +93,7 @@ describe('Cloud dialog connection availability', () => {
     await act(async () => { button('How it works and what it costs')!.click() })
     expect(document.body.textContent).toContain('Radar runs in your cluster and tunnels outward to Radar Cloud')
     expect(document.body.textContent).not.toContain('Setup runs here in the app')
-    expect(document.body.textContent).not.toContain('Nothing installs until you approve')
+    expect(document.body.textContent).not.toContain('see what gets installed')
   })
 
   it('restores cluster discovery and Connect in the open dialog when the connection recovers', async () => {

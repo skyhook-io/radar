@@ -609,8 +609,9 @@ function ModalFooter({
           fulfills. Sits next to the button whose click it de-risks. */}
       {lane === 'driver' && clusterConnected && !alreadyConnected && (
         <p className="mt-2.5 text-[11px] leading-relaxed text-theme-text-tertiary">
-          Nothing installs until you approve a plan for{' '}
-          {clusterName ? <span className="text-theme-text-secondary">{clusterName}</span> : 'this cluster'}.{' '}
+          You&apos;ll see what gets installed in{' '}
+          {clusterName ? <span className="text-theme-text-secondary">{clusterName}</span> : 'this cluster'} and approve
+          it before anything changes.{' '}
           {/* Always offered: the browser wizard is a different workflow, not a
               recovery path. Install-averse operators need this door before
               anything fails, or they close the dialog instead. */}
