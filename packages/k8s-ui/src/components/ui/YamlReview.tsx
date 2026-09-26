@@ -34,6 +34,8 @@ export interface YamlReviewProps {
   onClose?: () => void
   onBack: () => void
   onApply: () => void
+  /** Set when the review replaces a dialog's own title, which names the dialog. */
+  titleId?: string
 }
 
 function splitYaml(content: string) {
@@ -82,6 +84,7 @@ export function YamlReview({
   onClose,
   onBack,
   onApply,
+  titleId,
 }: YamlReviewProps) {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const reviewRef = useRef<HTMLDivElement>(null)
@@ -177,7 +180,7 @@ export function YamlReview({
         </button>
         <div className="h-4 w-px bg-theme-border" />
         <div>
-          <div className="text-sm font-semibold text-theme-text-primary">
+          <div id={titleId} className="text-sm font-semibold text-theme-text-primary">
             Review cluster-admitted changes
           </div>
           <div className="text-xs text-theme-text-tertiary">

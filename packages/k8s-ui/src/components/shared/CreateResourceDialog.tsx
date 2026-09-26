@@ -376,6 +376,7 @@ export function CreateResourceDialog({
     >
       {preview ? (
         <YamlReview
+          titleId={titleId}
           submittedYaml={preview.yaml}
           documents={preview.documents}
           nonAtomic={preview.nonAtomic}
