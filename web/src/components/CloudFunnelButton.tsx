@@ -60,7 +60,7 @@ const FALLBACK_APP_URL = 'https://app.radarhq.io'
 const DEFAULT_ASSURANCES = [
   'Secure outbound-only tunnel',
   'Disconnect and delete your data anytime',
-  'SOC 2 Type II',
+  'SOC 2 Type II · SSO, SCIM, audit logs',
   '3 clusters free, no card required',
 ]
 // Other OSS surfaces (a GitOps app that deploys to another cluster, say)
@@ -684,11 +684,6 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
           </li>
         ))}
       </ul>
-      {/* Enterprise needs in one muted line, aimed at whoever the reader will
-          forward this to. Self-Managed has its own button in the footer. */}
-      <p className="pl-[26px] text-[12px] leading-relaxed text-theme-text-tertiary">
-        For your security team: SSO, SCIM and audit logs.
-      </p>
       {/* Underlined on purpose: at the bullet list's own color and size, and
           with a leading glyph, it otherwise reads as one more bullet. */}
       <button
@@ -729,8 +724,8 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
             <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">What it costs</h4>
             <p className="text-[12px] leading-relaxed text-theme-text-secondary">
               Radar Cloud is {freeLine}, with 100 investigations a month included, then $1 per investigation.
-              Paid plans add more clusters, more included investigations, and enterprise features like SSO and
-              audit logs.{' '}
+              Paid plans add more clusters, more included investigations, and enterprise features like SSO, SCIM
+              and audit logs.{' '}
               <a href={PRICING_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
                 See pricing →
               </a>
