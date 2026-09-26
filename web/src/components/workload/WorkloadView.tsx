@@ -806,15 +806,20 @@ export function WorkloadView({
   }, [historyIdentity])
   // Once older pages are loaded, every refreshed newest page joins them: the
   // newest page slides forward, and rows it slides past would otherwise fall
-  // between it and the older pages.
+  // between it and the older pages. A refreshed page that no longer reaches
+  // what's loaded (more arrived between refreshes than one page holds) would
+  // leave a hole, so the older pages are dropped and Load older starts again
+  // from the new page.
   useEffect(() => {
-    const newest = historyQuery.data?.events
-    if (!newest) return
+    const page = historyQuery.data
+    if (!page) return
     setOlderHistory((prev) => {
       if (!prev) return prev
       const known = new Set(prev.events.map((e) => e.id))
-      const added = newest.filter((e) => !known.has(e.id))
-      return added.length > 0 ? { ...prev, events: [...added, ...prev.events] } : prev
+      const added = page.events.filter((e) => !known.has(e.id))
+      if (added.length === 0) return prev
+      if (page.truncated && added.length === page.events.length) return null
+      return { ...prev, events: [...added, ...prev.events] }
     })
   }, [historyQuery.data])
   const allEvents = useMemo(() => {

@@ -337,27 +337,40 @@ func workloadHistoryScope(ctx context.Context, store timeline.EventStore, cluste
 // "backend" in a sibling's name never passes for one.
 const safeSuffix = `[bcdfghjklmnpqrstvwxz2456789]`
 
+// childPattern is the name a controller gives one kind of child, and the
+// API group that child is created in.
+type childPattern struct {
+	group string
+	name  *regexp.Regexp
+}
+
 // childNamePatterns are the names a workload's controller gives what it
-// creates, by kind: a CronJob's Jobs are <name>-<scheduled minute>, a
-// Deployment's ReplicaSets <name>-<hash>, and each level's Pods add a
-// generated suffix. A bare Workflow has no such pattern: many are themselves
-// named <prefix>-<random>, so its siblings would match.
-func childNamePatterns(kind, name string) map[string]*regexp.Regexp {
+// creates, keyed by child kind: a CronJob's Jobs are <name>-<scheduled
+// minute>, a Deployment's ReplicaSets <name>-<hash>, and each level's Pods
+// add a generated suffix. They're the built-in controllers' (and Argo's)
+// contracts, so they apply only to a parent in that controller's group — a
+// same-named kind from another group (Volcano's Job) names children its own
+// way. A bare Workflow has no such pattern: many are themselves named
+// <prefix>-<random>, so its siblings would match.
+func childNamePatterns(group, kind, name string) map[string]childPattern {
 	n := regexp.QuoteMeta(name)
-	compile := func(expr string) *regexp.Regexp { return regexp.MustCompile("^" + n + expr + "$") }
-	switch kind {
-	case "CronJob":
-		return map[string]*regexp.Regexp{"Job": compile(`-[0-9]{8,10}`), "Pod": compile(`-[0-9]{8,10}-` + safeSuffix + `{5}`)}
-	case "Job", "ReplicaSet", "DaemonSet":
-		return map[string]*regexp.Regexp{"Pod": compile(`-` + safeSuffix + `{5}`)}
-	case "Deployment", "Rollout":
-		return map[string]*regexp.Regexp{"ReplicaSet": compile(`-` + safeSuffix + `{5,10}`), "Pod": compile(`-` + safeSuffix + `{5,10}-` + safeSuffix + `{5}`)}
-	case "StatefulSet":
-		return map[string]*regexp.Regexp{"Pod": compile(`-[0-9]+`)}
-	case "CronWorkflow":
+	child := func(childGroup, expr string) childPattern {
+		return childPattern{group: childGroup, name: regexp.MustCompile("^" + n + expr + "$")}
+	}
+	pod := func(expr string) childPattern { return child("", expr) }
+	switch group + "/" + kind {
+	case "batch/CronJob":
+		return map[string]childPattern{"Job": child("batch", `-[0-9]{8,10}`), "Pod": pod(`-[0-9]{8,10}-` + safeSuffix + `{5}`)}
+	case "batch/Job", "apps/ReplicaSet", "apps/DaemonSet":
+		return map[string]childPattern{"Pod": pod(`-` + safeSuffix + `{5}`)}
+	case "apps/Deployment", "argoproj.io/Rollout":
+		return map[string]childPattern{"ReplicaSet": child("apps", `-`+safeSuffix+`{5,10}`), "Pod": pod(`-` + safeSuffix + `{5,10}-` + safeSuffix + `{5}`)}
+	case "apps/StatefulSet":
+		return map[string]childPattern{"Pod": pod(`-[0-9]+`)}
+	case "argoproj.io/CronWorkflow":
 		// Workflows are <name>-<scheduled unix second>; their Pods add
 		// -<template>-<node hash>.
-		return map[string]*regexp.Regexp{"Workflow": compile(`-[0-9]{9,11}`), "Pod": compile(`-[0-9]{9,11}-[a-z0-9-]+-[0-9]+`)}
+		return map[string]childPattern{"Workflow": child("argoproj.io", `-[0-9]{9,11}`), "Pod": pod(`-[0-9]{9,11}-[a-z0-9-]+-[0-9]+`)}
 	}
 	return nil
 }
@@ -368,7 +381,7 @@ func childNamePatterns(kind, name string) map[string]*regexp.Regexp {
 // scope as OwnerlessRefs, so a row that does record an owner is never pulled
 // in by name.
 func unownedChildrenByName(ctx context.Context, store timeline.EventStore, clusterContext string, key resourceid.Ref) ([]resourceid.Ref, bool, error) {
-	patterns := childNamePatterns(key.Kind, key.Name)
+	patterns := childNamePatterns(key.Group, key.Kind, key.Name)
 	if len(patterns) == 0 {
 		return nil, false, nil
 	}
@@ -389,15 +402,15 @@ func unownedChildrenByName(ctx context.Context, store timeline.EventStore, clust
 	seen := map[resourceid.Ref]bool{}
 	var out []resourceid.Ref
 	for _, id := range ids {
-		pattern := patterns[id.Kind]
-		if pattern == nil || !pattern.MatchString(id.Name) {
+		pattern, ok := patterns[id.Kind]
+		if !ok || !pattern.name.MatchString(id.Name) {
 			continue
 		}
-		group := resourceid.GroupFromAPIVersion(id.APIVersion)
-		if id.APIVersion == "" {
-			group, _ = resourceid.BuiltinGroup(id.Kind)
+		// A row that didn't record its apiVersion can't contradict the group.
+		if id.APIVersion != "" && resourceid.GroupFromAPIVersion(id.APIVersion) != pattern.group {
+			continue
 		}
-		ref := resourceid.NewRef(group, id.Kind, key.Namespace, id.Name)
+		ref := resourceid.NewRef(pattern.group, id.Kind, key.Namespace, id.Name)
 		if !seen[ref] {
 			seen[ref] = true
 			out = append(out, ref)

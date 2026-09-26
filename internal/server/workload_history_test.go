@@ -222,6 +222,7 @@ func TestWorkloadHistoryScope_RecoversPastRunsWithNoRecordedOwner(t *testing.T) 
 		{ID: "owned-elsewhere", APIVersion: "batch/v1", Kind: "Job", Name: "backup-29012399", UID: "job-other", Owner: &timeline.OwnerInfo{Kind: "CronJob", Name: "other", UID: "cj-other"}},
 		{ID: "same-name-owned-elsewhere", APIVersion: "batch/v1", Kind: "Job", Name: "backup-29012345", UID: "job-old", Owner: &timeline.OwnerInfo{Kind: "CronJob", Name: "other", UID: "cj-other"}},
 		{ID: "not-a-run", APIVersion: "v1", Kind: "ConfigMap", Name: "backup-29012345", UID: "cm-1"},
+		{ID: "volcano-job", APIVersion: "batch.volcano.sh/v1alpha1", Kind: "Job", Name: "backup-29012346", UID: "vj-1", Source: timeline.SourceK8sEvent},
 	})
 	key := resourceid.NewRef("batch", "CronJob", "default", "backup")
 	if got := scopedHistoryIDs(t, store, key, liveIdentity{UID: "cj-1"}); got != "[cron past-job past-pod]" {
@@ -262,25 +263,27 @@ func TestAttachedRefs_IncludesIngressesAndRoutesButNotGateways(t *testing.T) {
 
 func TestChildNamePatterns_MatchWhatTheControllerNamesAndNotSiblings(t *testing.T) {
 	for _, tc := range []struct {
-		kind, name, childKind, child string
-		want                         bool
+		group, kind, name, childKind, child string
+		want                                bool
 	}{
-		{"CronJob", "backup", "Job", "backup-29012345", true},
-		{"CronJob", "backup", "Job", "backup-nightly-29012345", false},
-		{"Deployment", "web", "ReplicaSet", "web-5698ccbb7c", true},
-		{"Deployment", "web", "Pod", "web-5698ccbb7c-rd558", true},
-		{"Deployment", "web", "Pod", "web-api-5698ccbb7c-rd558", false},
-		{"DaemonSet", "agent", "Pod", "agent-x5rjl", true},
-		{"DaemonSet", "agent", "Pod", "agent-extra-x5rjl", false},
-		{"StatefulSet", "db", "Pod", "db-2", true},
-		{"StatefulSet", "db", "Pod", "db-replica-2", false},
-		{"CronWorkflow", "report", "Workflow", "report-1790459400", true},
-		{"CronWorkflow", "report", "Pod", "report-1790459400-echo-2408686475", true},
-		{"CronWorkflow", "report", "Workflow", "report-weekly-1790459400", false},
+		{"batch", "CronJob", "backup", "Job", "backup-29012345", true},
+		{"batch", "CronJob", "backup", "Job", "backup-nightly-29012345", false},
+		{"apps", "Deployment", "web", "ReplicaSet", "web-5698ccbb7c", true},
+		{"apps", "Deployment", "web", "Pod", "web-5698ccbb7c-rd558", true},
+		{"apps", "Deployment", "web", "Pod", "web-api-5698ccbb7c-rd558", false},
+		{"apps", "DaemonSet", "agent", "Pod", "agent-x5rjl", true},
+		{"apps", "DaemonSet", "agent", "Pod", "agent-extra-x5rjl", false},
+		{"apps", "StatefulSet", "db", "Pod", "db-2", true},
+		{"apps", "StatefulSet", "db", "Pod", "db-replica-2", false},
+		{"argoproj.io", "CronWorkflow", "report", "Workflow", "report-1790459400", true},
+		{"argoproj.io", "CronWorkflow", "report", "Pod", "report-1790459400-echo-2408686475", true},
+		{"argoproj.io", "CronWorkflow", "report", "Workflow", "report-weekly-1790459400", false},
+		// Another group's same-named kind doesn't follow the built-in contract.
+		{"batch.volcano.sh", "Job", "train", "Pod", "train-x5rjl", false},
 	} {
-		pattern := childNamePatterns(tc.kind, tc.name)[tc.childKind]
-		if got := pattern != nil && pattern.MatchString(tc.child); got != tc.want {
-			t.Errorf("%s %s: %s %s matched=%v, want %v", tc.kind, tc.name, tc.childKind, tc.child, got, tc.want)
+		pattern, ok := childNamePatterns(tc.group, tc.kind, tc.name)[tc.childKind]
+		if got := ok && pattern.name.MatchString(tc.child); got != tc.want {
+			t.Errorf("%s/%s %s: %s %s matched=%v, want %v", tc.group, tc.kind, tc.name, tc.childKind, tc.child, got, tc.want)
 		}
 	}
 }
