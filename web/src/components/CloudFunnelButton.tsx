@@ -736,10 +736,9 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
             </p>
           </section>
           <section>
-            <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">Who's behind it</h4>
+            {/* No heading: "built by Skyhook" already answers who is behind it. */}
             <p className="text-[12px] leading-relaxed text-theme-text-secondary">
-              Radar is built in the open and run by Skyhook, a CNCF Silver member and a small team of
-              humans, the kind you can actually talk to.{' '}
+              Built in the open by Skyhook, a CNCF Silver member and a small team you can actually talk to.{' '}
               <a href={ABOUT_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
                 Meet us →
               </a>
