@@ -16,7 +16,7 @@ function sourceFiles(dir: string): string[] {
   })
 }
 
-// The opening tag ends at the first '>' outside a {…} expression.
+// The opening tag ends at the first '>' outside a {…} expression or a string.
 function openingTags(source: string, component: string): string[] {
   const tags: string[] = []
   let from = 0
@@ -27,7 +27,10 @@ function openingTags(source: string, component: string): string[] {
     let i = start + component.length + 1
     for (; i < source.length; i++) {
       const c = source[i]
-      if (c === '{') depth++
+      if (c === '"' || c === "'" || c === '`') {
+        i++
+        while (i < source.length && source[i] !== c) i += source[i] === '\\' ? 2 : 1
+      } else if (c === '{') depth++
       else if (c === '}') depth--
       else if (c === '>' && depth === 0) break
     }
@@ -36,14 +39,31 @@ function openingTags(source: string, component: string): string[] {
   }
 }
 
+function isNamed(tag: string): boolean {
+  const withoutStrings = tag.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/gs, '""')
+  return /\saria(Label|LabelledBy)\s*=/.test(withoutStrings)
+}
+
 describe('dialogs', () => {
   it('every DialogPortal has an accessible name', () => {
     const unnamed = roots.flatMap(sourceFiles).flatMap(file => {
       if (file.endsWith('DialogPortal.tsx')) return []
       return openingTags(readFileSync(file, 'utf8'), 'DialogPortal')
-        .filter(tag => /^<DialogPortal[\s>]/.test(tag) && !/\baria(Label|LabelledBy)=/.test(tag))
+        .filter(tag => /^<DialogPortal[\s>]/.test(tag) && !isNamed(tag))
         .map(() => relative(repoRoot, file))
     })
     expect(unnamed).toEqual([])
+  })
+
+  it('reads attributes, not text that looks like them', () => {
+    const [unnamed, spaced, braceInString] = openingTags(
+      `<DialogPortal onClose={() => log("ariaLabel=unused")}>` +
+      `<DialogPortal ariaLabel = "Named">` +
+      `<DialogPortal title={"}"} open>`,
+      'DialogPortal',
+    )
+    expect(isNamed(unnamed)).toBe(false)
+    expect(isNamed(spaced)).toBe(true)
+    expect(braceInString).toBe('<DialogPortal title={"}"} open>')
   })
 })
