@@ -666,7 +666,8 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
         Radar for you and your team, every cluster, around the clock.
       </h3>
       <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-5">
-        Connect this cluster and Radar keeps watching after you close the laptop.
+        Radar Cloud is the hosted side of Radar: connect this cluster and it keeps watching after you close the
+        laptop.
         <br />
         The Radar you're running{' '}
         <b className="text-theme-text-primary font-semibold">stays free and open source, always.</b>
