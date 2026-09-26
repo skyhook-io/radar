@@ -708,17 +708,17 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
               {lane === 'driver'
                 ? "Setup runs here in the app: Radar is installed in your cluster and tunnels outward to Radar Cloud, so there's no ingress to open."
                 : "Radar runs in your cluster and tunnels outward to Radar Cloud, so there's no ingress to open."}{' '}
-              Radar Cloud doesn't keep a copy of your cluster: data is fetched live when someone views it, within
-              their permissions. It does store event history and changes, so you can go back in time to debug, and
-              investigation results.
+              Live views are fetched from your cluster when someone opens them, within their permissions. Radar
+              Cloud stores only event history, changes and investigation results, so you can go back in time to
+              debug.
             </p>
           </section>
           <section>
             <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">Investigations</h4>
             <p className="text-[12px] leading-relaxed text-theme-text-secondary">
-              Radar's agent finds the root cause 3× faster than the same model on plain kubectl, and 2× faster
-              than the other AI SRE tools we benchmarked. It's also far cheaper to run, so we charge a fraction of
-              what others do. Run it automatically on every alert, or on demand from any issue.{' '}
+              In our public benchmark, Radar's agent found the root cause 3× faster than the same model on plain
+              kubectl, and 2× faster than the other AI SRE tools we tested. Run it automatically on every alert, or
+              on demand from any issue, with no CLI or API key.{' '}
               <a href={BENCHMARK_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
                 See the benchmarks →
               </a>
