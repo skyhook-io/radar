@@ -131,6 +131,7 @@ func InitializeWithConfig(client kubernetes.Interface, config *rest.Config, cont
 			caretta.metricsURL = metricsURL
 		}
 		caretta.headers = metricsHeaders
+		caretta.managedMetrics = true
 		manager.sources["caretta"] = caretta
 		manager.sources["istio"] = NewIstioSource(client)
 		manager.sources["beyla"] = NewBeylaSource(client)

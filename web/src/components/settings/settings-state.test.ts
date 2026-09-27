@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   costSourceApplyLabel,
   prometheusHeadersFromRows,
-  shouldOfferCostReview,
+  pendingIntegrationSections,
   shouldShowSettingsFooter,
 } from "./settings-state";
 
@@ -23,30 +23,28 @@ describe("Prometheus header edits", () => {
   });
 });
 
-describe("Cost settings state", () => {
-  it("keeps source drafts inline while the Cost section is open", () => {
-    expect(shouldOfferCostReview(true, "cost")).toBe(false);
+describe("Integration settings state", () => {
+  it.each(['prometheus', 'cost', 'argocd'] as const)("offers discard for a %s draft", (section) => {
+    expect(pendingIntegrationSections({ prometheus: false, cost: false, argocd: false, [section]: true })).toEqual([section]);
     expect(
       shouldShowSettingsFooter({
         canEditConfig: true,
         confirmingClose: false,
         configDirty: false,
-        costIntegrationDirty: true,
-        section: "cost",
+        integrationDirty: true,
         hasSaveMessage: false,
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("offers review from other sections and retains the close guard", () => {
-    expect(shouldOfferCostReview(true, "overview")).toBe(true);
+    expect(pendingIntegrationSections({ prometheus: true, cost: true, argocd: true })).toEqual(['prometheus', 'cost', 'argocd']);
     expect(
       shouldShowSettingsFooter({
         canEditConfig: true,
         confirmingClose: true,
         configDirty: false,
-        costIntegrationDirty: true,
-        section: "cost",
+        integrationDirty: true,
         hasSaveMessage: false,
       }),
     ).toBe(true);

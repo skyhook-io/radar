@@ -49,6 +49,7 @@ func TestSafeAddressKeepsTheHostAndDropsTheCredential(t *testing.T) {
 		{"https://admin:s3cret@prom.internal:9090", "https://prom.internal:9090"},
 		{"https://prom.internal:9090/prefix?token=hunter2", "https://prom.internal:9090/prefix"},
 		{"http://prom.internal:9090", "http://prom.internal:9090"},
+		{"https://admin:s3cr%zz@prom.internal", "<redacted>"},
 	} {
 		if got := SafeAddress(tc.in); got != tc.want {
 			t.Errorf("SafeAddress(%q) = %q, want %q", tc.in, got, tc.want)

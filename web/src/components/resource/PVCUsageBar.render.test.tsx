@@ -5,6 +5,7 @@ import { ApiError, type PrometheusPVCUsage } from '../../api/client'
 
 let canConfigure = true
 let roleLoading = false
+let previousMetrics = false
 let statusResult: { data?: { connected: boolean; discovering?: boolean }; error?: Error }
 let usageResult: { data?: PrometheusPVCUsage; error?: Error }
 vi.mock('../../api/client', async (importActual) => ({
@@ -15,13 +16,28 @@ vi.mock('../../api/client', async (importActual) => ({
   useCloudRole: () => ({ canAtLeast: () => canConfigure, isLoading: roleLoading }),
 }))
 const { PVCUsageBar } = await import('./PVCUsageBar')
+vi.mock('../../hooks/usePreviousIntegrationSettings', () => ({
+  usePreviousIntegrationSettings: (relevant: boolean) => ({ metrics: relevant && previousMetrics }),
+  previousSettingsAction: () => ({ label: 'Review previous settings', note: 'Previous metrics settings are available to review for this cluster.' }),
+}))
 const measured: PrometheusPVCUsage = { namespace: 'demo', name: 'disk', used: 0, capacity: 1024, ratio: 0, hasData: true, status: 'available' }
 const render = () => renderToString(<PVCUsageBar namespace="demo" name="disk" />)
 
 describe('PVC usage availability', () => {
+  it('offers previous settings only for a missing connection, not missing series or denied access', () => {
+    previousMetrics = true
+    statusResult = { data: { connected: false } }
+    expect(render()).toContain('Review previous settings')
+    statusResult = { data: { connected: true } }
+    usageResult = { data: { ...measured, hasData: false, status: 'no_series' } }
+    expect(render()).not.toContain('Review previous settings')
+    statusResult = { error: new ApiError('denied', 403) }
+    expect(render()).not.toContain('Review previous settings')
+  })
   beforeEach(() => {
     canConfigure = true
     roleLoading = false
+    previousMetrics = false
     statusResult = { data: { connected: true } }
     usageResult = {}
   })

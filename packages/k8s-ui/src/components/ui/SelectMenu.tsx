@@ -7,6 +7,7 @@ import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../ut
 export interface SelectMenuOption {
   value: string
   label: string
+  description?: string
 }
 
 export function SelectMenu({
@@ -17,6 +18,8 @@ export function SelectMenu({
   ariaDescribedBy,
   className,
   searchPlaceholder,
+  placeholder,
+  variant = 'default',
   disabled = false,
   id,
 }: {
@@ -27,6 +30,8 @@ export function SelectMenu({
   ariaDescribedBy?: string
   className?: string
   searchPlaceholder?: string
+  placeholder?: string
+  variant?: 'default' | 'text'
   disabled?: boolean
   id?: string
 }) {
@@ -40,11 +45,11 @@ export function SelectMenu({
   const searchInputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const pointerDownInsideRef = useRef(false)
-  const selected = options.find((option) => option.value === value) ?? options[0]
+  const selected = options.find((option) => option.value === value) ?? (placeholder ? undefined : options[0])
   const filteredOptions = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     if (!normalized) return options
-    return options.filter((option) => option.label.toLowerCase().includes(normalized))
+    return options.filter((option) => `${option.label} ${option.description ?? ''}`.toLowerCase().includes(normalized))
   }, [options, query])
   const selectedIsVisible = filteredOptions.some((option) => option.value === value)
 
@@ -141,17 +146,22 @@ export function SelectMenu({
           setOpen(!open)
         }}
         disabled={disabled}
-        className="flex h-8 w-full items-center justify-between gap-2 rounded-md border border-theme-border bg-theme-elevated px-2.5 text-xs text-theme-text-primary transition-colors hover:bg-theme-hover disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-theme-elevated"
+        className={clsx(
+          'flex items-center gap-1 text-xs disabled:cursor-not-allowed disabled:opacity-50',
+          variant === 'text'
+            ? 'text-accent-text hover:underline'
+            : 'h-8 w-full justify-between gap-2 rounded-md border border-theme-border bg-theme-elevated px-2.5 text-theme-text-primary transition-colors hover:bg-theme-hover disabled:hover:bg-theme-elevated',
+        )}
       >
-        <span className="truncate">{selected?.label}</span>
-        <ChevronDown className={clsx('h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform', open && 'rotate-180')} />
+        <span className="truncate">{selected?.label ?? placeholder}</span>
+        <ChevronDown className={clsx('h-3.5 w-3.5 shrink-0 transition-transform', variant !== 'text' && 'text-theme-text-tertiary', open && 'rotate-180')} />
       </button>
       {shouldRender && (
         <div
           inert={!open}
           className={clsx(
             'absolute top-full z-50 mt-1 min-w-full overflow-hidden rounded-md border border-theme-border bg-theme-surface shadow-theme-lg',
-            searchPlaceholder ? 'left-0 right-0 origin-top-left' : 'right-0 origin-top-right',
+            variant === 'text' ? 'left-0 w-72 max-w-[calc(100vw-4rem)] origin-top-left' : searchPlaceholder ? 'left-0 right-0 origin-top-left' : 'right-0 origin-top-right',
             TRANSITION_MENU,
             isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]',
             !open && 'pointer-events-none',
@@ -256,7 +266,10 @@ export function SelectMenu({
                   )}
                 >
                   <Check className={clsx('h-3.5 w-3.5 shrink-0 text-accent', !active && 'opacity-0')} />
-                  <span className={clsx(searchPlaceholder && 'truncate')}>{option.label}</span>
+                  <span className={clsx('min-w-0', searchPlaceholder && !option.description && 'truncate')}>
+                    <span className={clsx(option.description && 'block break-words font-medium')}>{option.label}</span>
+                    {option.description && <span className="block break-all text-theme-text-tertiary">{option.description}</span>}
+                  </span>
                 </button>
               )
             })}

@@ -9,26 +9,28 @@ export type SettingsSectionId =
   | 'advanced'
   | 'privacy'
 
-export function shouldOfferCostReview(
-  costIntegrationDirty: boolean,
-  section: SettingsSectionId,
-): boolean {
-  return costIntegrationDirty && section !== 'cost'
+export type IntegrationSectionId = 'prometheus' | 'cost' | 'argocd'
+
+export const integrationSectionLabels: Record<IntegrationSectionId, string> = {
+  prometheus: 'Metrics', cost: 'Cost', argocd: 'Argo CD',
+}
+
+export function pendingIntegrationSections(dirty: Record<IntegrationSectionId, boolean>): IntegrationSectionId[] {
+  return (['prometheus', 'cost', 'argocd'] as const).filter(section => dirty[section])
 }
 
 export function shouldShowSettingsFooter(input: {
   canEditConfig: boolean
   confirmingClose: boolean
   configDirty: boolean
-  costIntegrationDirty: boolean
-  section: SettingsSectionId
+  integrationDirty: boolean
   hasSaveMessage: boolean
 }): boolean {
   return (
     input.canEditConfig &&
     (input.confirmingClose ||
       input.configDirty ||
-      shouldOfferCostReview(input.costIntegrationDirty, input.section) ||
+      input.integrationDirty ||
       input.hasSaveMessage)
   )
 }

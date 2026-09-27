@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	localconfig "github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
@@ -133,26 +135,18 @@ func ValidateSource(value string) (Source, error) {
 	}
 }
 
-func ValidateKubecostURL(raw string) error {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
-		return fmt.Errorf("must be an absolute HTTP(S) URL")
-	}
-	if u.User != nil {
-		return fmt.Errorf("must not contain embedded credentials")
-	}
-	if u.Fragment != "" || u.RawQuery != "" {
-		return fmt.Errorf("must not contain a query or fragment")
-	}
-	return nil
-}
+func ValidateKubecostURL(raw string) error { return pkgopencost.ValidateKubecostURL(raw) }
 
 func Configure(config ManagerConfig) error {
 	return defaultManager.Configure(config)
+}
+
+func DisableLocal(reason string) {
+	_ = defaultManager.configure(ManagerConfig{Source: SourceAuto}, false, reason)
+}
+
+func EnvironmentConfiguration() (ManagerConfig, bool, error) {
+	return resolveEnvironmentConfig(ManagerConfig{Source: SourceAuto}, os.Getenv)
 }
 
 func (m *Manager) Configure(config ManagerConfig) error {
@@ -311,6 +305,11 @@ func (m *Manager) Reset() {
 func Selected(ctx context.Context) (Connection, error) { return defaultManager.Selected(ctx) }
 
 func (m *Manager) Selected(ctx context.Context) (Connection, error) {
+	if m == defaultManager {
+		if err := connections.Refresh(localconfig.IntegrationCost); err != nil {
+			return Connection{}, err
+		}
+	}
 	m.mu.RLock()
 	if m.envError != "" {
 		err := m.envError
@@ -534,9 +533,12 @@ func (m *Manager) autoRetryDueLocked(now time.Time) bool {
 }
 
 func detectPrometheusCostState(ctx context.Context) prometheusCostState {
-	client := prometheuspkg.GetClient()
-	if client == nil {
-		return prometheusCostAbsent
+	client, connectionErr := prometheuspkg.ClientForOperation()
+	if connectionErr != nil {
+		if errors.Is(connectionErr, prometheuspkg.ErrPrometheusUnavailable) {
+			return prometheusCostAbsent
+		}
+		return prometheusCostUnknown
 	}
 	if _, _, err := client.EnsureConnected(ctx); err != nil {
 		if errors.Is(err, prometheuspkg.ErrPrometheusNotFound) {
@@ -583,15 +585,15 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 	if err != nil {
 		return Connection{}, err
 	}
-	return connectDiscoveredKubecost(ctx, config, clusterID, aggregator)
+	return connectDiscoveredKubecost(ctx, config, clusterID, aggregator, portforward.OwnerCost, captureKubecostTarget())
 }
 
-func connectDiscoveredKubecost(ctx context.Context, config ManagerConfig, clusterID string, aggregator *kubecostAggregator) (Connection, error) {
+func connectDiscoveredKubecost(ctx context.Context, config ManagerConfig, clusterID string, aggregator *kubecostAggregator, owner portforward.Owner, target kubecostTarget) (Connection, error) {
 	usedAuthenticationBypass := false
 	connection, err := connectKubecostAggregatorEndpoints(config.APIKey, aggregator.endpoints, func(endpoint kubecostAggregatorEndpoint) (Connection, error) {
 		endpointCtx, cancel := context.WithTimeout(ctx, kubecostEndpointTimeout)
 		defer cancel()
-		connection, err := connectDiscoveredKubecostEndpoint(endpointCtx, config.APIKey, clusterID, aggregator.service, endpoint)
+		connection, err := connectDiscoveredKubecostEndpoint(endpointCtx, config.APIKey, clusterID, aggregator.service, endpoint, owner, target)
 		if err == nil {
 			usedAuthenticationBypass = endpoint.bypassesAuthentication
 		}
@@ -625,8 +627,8 @@ func connectKubecostAggregatorEndpoints(apiKey string, endpoints []kubecostAggre
 	return Connection{}, primaryErr
 }
 
-func connectDiscoveredKubecostEndpoint(ctx context.Context, apiKey, clusterID string, service *corev1.Service, endpoint kubecostAggregatorEndpoint) (Connection, error) {
-	if k8s.IsInCluster() {
+func connectDiscoveredKubecostEndpoint(ctx context.Context, apiKey, clusterID string, service *corev1.Service, endpoint kubecostAggregatorEndpoint, owner portforward.Owner, target kubecostTarget) (Connection, error) {
+	if target.inCluster {
 		directURL := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", service.Name, service.Namespace, endpoint.servicePort)
 		client, address, err := probeDiscoveredKubecostURL(ctx, directURL, apiKey, clusterID)
 		if err != nil {
@@ -634,22 +636,22 @@ func connectDiscoveredKubecostEndpoint(ctx context.Context, apiKey, clusterID st
 		}
 		return discoveredKubecostConnection(client, address, clusterID, service, endpoint.servicePort), nil
 	}
-	forward, err := portforward.Start(portforward.OwnerCost, ctx, service.Namespace, service.Name, endpoint.targetPort, k8s.GetContextName())
+	forward, err := portforward.StartWithClients(owner, ctx, service.Namespace, service.Name, endpoint.targetPort, target.contextName, target.client, target.config)
 	if err != nil {
 		return Connection{}, fmt.Errorf("%w: port-forward failed: %w", ErrKubecostUnavailable, err)
 	}
 	client, address, err := probeDiscoveredKubecostURL(ctx, forward.Address, apiKey, clusterID)
 	if err != nil {
-		portforward.Stop(portforward.OwnerCost)
+		portforward.Stop(owner)
 		return Connection{}, err
 	}
 	connection := discoveredKubecostConnection(client, address, clusterID, service, endpoint.servicePort)
 	connection.lease = &connectionLease{
 		alive: func() bool {
-			info := portforward.GetConnectionInfo(portforward.OwnerCost)
+			info := portforward.GetConnectionInfo(owner)
 			return info.Connected && info.Address == forward.Address
 		},
-		release: func() { portforward.StopIfAddress(portforward.OwnerCost, forward.Address) },
+		release: func() { portforward.StopIfAddress(owner, forward.Address) },
 	}
 	return connection, nil
 }

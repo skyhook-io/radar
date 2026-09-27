@@ -190,7 +190,11 @@ func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.Availab
 		out.Error = boundDiagnoseMetricsError(fmt.Sprintf("prometheus unreachable: %v", avail.Err))
 		return out
 	}
-	client := prometheus.GetClient()
+	client, connectionErr := prometheus.ClientForOperation()
+	if connectionErr != nil {
+		out.Error = boundDiagnoseMetricsError(connectionErr.Error())
+		return out
+	}
 	var p *prom.Client
 	if client != nil {
 		p = client.PromForMCP()

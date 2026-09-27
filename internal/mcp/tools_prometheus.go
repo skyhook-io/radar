@@ -635,9 +635,9 @@ func adjustStep(window time.Duration, stepStr string, maxPoints int) (time.Durat
 }
 
 func connectProm(ctx context.Context) (*prom.Client, error) {
-	client := prometheus.GetClient()
-	if client == nil {
-		return nil, errors.New("prometheus is not initialized — radar is not connected to a cluster yet")
+	client, connectionErr := prometheus.ClientForOperation()
+	if connectionErr != nil {
+		return nil, connectionErr
 	}
 	if _, _, err := client.EnsureConnected(ctx); err != nil {
 		return nil, promNotConnectedError(client, err)

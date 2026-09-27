@@ -19,6 +19,8 @@ const (
 	ReasonAuthentication      = "authentication_error"
 	ReasonConfigMismatch      = "configuration_mismatch"
 	ReasonDeploymentConfig    = "deployment_configuration_error"
+	ReasonMetricsSettings     = "metrics_settings_error" // this context's saved metrics settings need review
+	ReasonCostSettings        = "cost_settings_error"    // this context's saved cost settings need review
 	ReasonHistoryUnsupported  = "history_unsupported"
 	ReasonInsufficientHistory = "insufficient_history"
 )

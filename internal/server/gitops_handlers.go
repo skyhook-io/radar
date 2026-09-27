@@ -19,6 +19,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/argoapi"
@@ -195,6 +196,12 @@ func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string
 	health, err := argocd.ApplicationHealthCached(ctx, argoapi.ApplicationQuery{AppNamespace: appNamespace, AppName: appName})
 	if err == nil {
 		return health, nil
+	}
+	// A paused or unreadable saved connection leaves the manager unconfigured,
+	// but the user did configure it and needs to know why it isn't used.
+	var settingsErr *connections.SettingsError
+	if errors.As(err, &settingsErr) && !settingsErr.Launch {
+		return nil, errors.New("its saved connection for this cluster needs review in Settings")
 	}
 	if !argocd.IsConfigured() {
 		return nil, nil

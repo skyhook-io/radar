@@ -27,6 +27,7 @@ Not everything is in this file. The following files contain critical details tha
 | Adding or modifying **HTTP endpoints** | `internal/server/server.go` — all routes are defined here |
 | Adding or modifying **CLI flags** | `cmd/explorer/main.go` — flag definitions and defaults |
 | Adding a **new CRD integration** (renderer, topology, discovery) | [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md) — full checklist with collision gotchas |
+| Working on **local per-cluster integration settings** (Metrics, Argo CD, Cost in `~/.radar/clusters.json`) | [docs/configuration.md](docs/configuration.md#local-integration-connections) — store `internal/config/profiles.go`, resolve/update `internal/connections`, activation `internal/connectionruntime`, routes `GET/PUT /api/integrations/connections`. In local mode the older `PUT /api/integrations/{prometheus,argocd,cost}` return 409 |
 | Working on the **Capacity (Karpenter) views** | [docs/capacity.md](docs/capacity.md) — the four screens, the per-value certainty contract (`= ≥ ≤ ?`, unavailable ≠ zero, partial ≠ exact, declared ≠ actual), demand-evaluation semantics, and the real Karpenter failure model. Wire types in `pkg/capacityapi`, engine in `internal/capacity`, handlers in `internal/server/capacity*` |
 | Working on **resource renderers** | `packages/k8s-ui/src/components/resources/renderers/` — all existing renderers live here |
 | Understanding **cluster connection behavior** | [docs/configuration.md](docs/configuration.md) — kubeconfig precedence, multi-context, in-cluster |

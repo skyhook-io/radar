@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "profiles": {
+    "local-entry": {
+      "context": "development",
+      "source": "/test/kubeconfig",
+      "inFileName": "development",
+      "integrations": {
+        "metrics": {
+          "target": "accepted-target",
+          "identity": {
+            "server": "https://cluster.example",
+            "user": "developer",
+            "tlsName": "api.cluster.example",
+            "insecureTls": true,
+            "trust": "ca-digest",
+            "proxy": "http://proxy.example:8080"
+          },
+          "prometheus": {
+            "url": "https://metrics.example/prometheus",
+            "headers": { "X-Scope-OrgID": "test-tenant" },
+            "headersFromEnv": { "Authorization": "RADAR_TEST_METRICS_TOKEN" }
+          }
+        },
+        "argocd": {
+          "target": "accepted-target",
+          "argocd": {
+            "url": "https://argo.example",
+            "token": "synthetic-token",
+            "insecureTls": true
+          }
+        },
+        "cost": {
+          "mode": "kubecost",
+          "target": "accepted-target",
+          "kubecost": { "url": "https://cost.example", "apiKey": "synthetic-key" },
+          "clusterId": "development"
+        }
+      }
+    },
+    "capi-entry": {
+      "context": "workload-cluster",
+      "capi": { "managementBinding": "management-entry", "namespace": "clusters", "name": "workload-cluster" },
+      "integrations": {
+        "metrics": {},
+        "argocd": { "target": "capi-target", "argocd": { "url": "", "token": "discovery-token" } },
+        "cost": { "mode": "auto", "target": "capi-target", "kubecost": { "url": "", "apiKey": "discovery-key" }, "clusterId": "workload-cluster" }
+      }
+    },
+    "prometheus-cost-entry": {
+      "context": "staging",
+      "integrations": { "cost": { "mode": "prometheus" } }
+    }
+  },
+  "imported": { "metrics": true, "argocd": false, "cost": true },
+  "dismissed": { "local-entry": { "metrics": false, "argocd": true, "cost": false } }
+}

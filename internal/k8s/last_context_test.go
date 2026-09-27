@@ -96,6 +96,9 @@ func TestDoInitPrefersRequestedContext(t *testing.T) {
 	if got := GetContextNamespace(); got != "ns-beta" {
 		t.Errorf("GetContextNamespace() = %q, want %q", got, "ns-beta")
 	}
+	if got := ContextForSafetyBinding(sourceContextBinding(path, "alpha")); got.Empty() || got.Name != "alpha" {
+		t.Fatalf("inactive context in the same file was marked unavailable: %+v", got)
+	}
 	// The bookkeeping and the client must agree: a context name that says
 	// "beta" while the REST config still dials alpha is the failure mode
 	// this preference has to avoid.
