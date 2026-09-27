@@ -18,6 +18,40 @@ function render(data?: KueueAdmissionResponse, props: Partial<React.ComponentPro
 }
 
 describe('Kueue admission investigation', () => {
+  it('offers source navigation only when the Workload reference and navigation are available', async () => {
+    const data = response()
+    const navigated: unknown[] = []
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    await act(async () => root.render(<KueueAdmissionSection data={data} loading={false} hinted externalExecution={false} onNavigate={(target) => navigated.push(target)} />))
+    const button = Array.from(container.querySelectorAll('button')).find((node) => node.textContent === 'View Workload details')!
+    await act(async () => button.click())
+    expect(navigated).toEqual([{ ...ref, kind: 'workloads' }])
+    await act(async () => root.unmount())
+    expect(render(data, { onNavigate: undefined })).not.toContain('View Workload details')
+    delete data.workloads[0].ref
+    expect(render(data)).not.toContain('View Workload details')
+  })
+
+  it('shows supplied gate transition times without inventing missing timestamps', () => {
+    const lastTransitionTime = '2026-09-26T10:00:00Z'
+    const gate = { kind: 'admission_check', name: 'capacity', decision: 'unsatisfied' as const, nativeState: 'Pending' }
+    expect(render(response({ gates: [{ ...gate, lastTransitionTime }] }))).toContain(`dateTime="${lastTransitionTime}"`)
+    expect(render(response({ gates: [gate] }))).not.toContain('Status since')
+  })
+
+  it('shows record creation times only when distinguishing multiple Workloads', () => {
+    const data = response()
+    data.workloads[0].createdAt = '2026-09-26T09:00:00Z'
+    expect(render(data)).not.toContain('Created <time')
+    data.total = 2
+    data.truncated = true
+    expect(render(data)).toContain('Created <time')
+    expect(render(data)).toContain('order does not identify a current attempt')
+    data.workloads[0].createdAt = null
+    expect(render(data)).not.toContain('Created <time')
+  })
+
   it('hides confirmed empty unhinted roots but preserves unavailable and in-flight evidence', () => {
     const empty = { uid: 'root-uid', installed: true, total: 0, truncated: false, workloads: [] }
     expect(render(empty)).toBe('')

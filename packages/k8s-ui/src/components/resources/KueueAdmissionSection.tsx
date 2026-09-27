@@ -35,10 +35,11 @@ export function KueueAdmissionSection({ presentation = 'card', data, loading, er
               : data && <div className={`${spacing} space-y-3`}>
                 {data.total > 1 && <p className="text-xs text-theme-text-secondary">{data.truncated ? `${data.workloads.length} of ${data.total}` : data.total} Workloads shown, newest first. Each is a separate controller-owned record; order does not identify a current attempt.</p>}
                 {data.workloads.map((workload) => <article key={workload.uid} className="space-y-2 text-sm border-t border-theme-border pt-3 first:border-0 first:pt-0">
+                  {data.total > 1 && workload.createdAt && <p className="text-xs text-theme-text-tertiary">Created <time dateTime={workload.createdAt} title={workload.createdAt}>{formatRelativeAgeTime(workload.createdAt)}</time></p>}
                   {workload.projection !== 'available' && <div className="flex flex-wrap items-center gap-2">{link(workload.name, workload.ref)}{workload.deleting && <Badge severity="alert">Deleting</Badge>}</div>}
                   {workload.projection === 'unsupported' ? <p className="text-theme-text-secondary">Associated Workload found. Scheduling projection is unavailable for {workload.apiVersion}; inspect the resource for native evidence.</p>
                     : workload.projection === 'forbidden' ? <p className="text-theme-text-secondary">Associated Workload found, but permission to get this Workload is required for its scheduling detail.</p>
-                      : workload.scheduling?.observations?.map((observation, index) => <AdmissionObservation key={index} presentation={presentation} observation={observation} identity={link(workload.name, workload.ref)} generation={workload.generation} deleting={workload.deleting} link={link} />)}
+                      : workload.scheduling?.observations?.map((observation, index) => <AdmissionObservation key={index} presentation={presentation} observation={observation} identity={link(workload.name, workload.ref)} sourceLink={workload.ref && onNavigate ? link("View Workload details", workload.ref) : undefined} generation={workload.generation} deleting={workload.deleting} link={link} />)}
                   {workload.linksLimited && <p className="text-xs text-theme-text-tertiary">Some resource links are unavailable. Names already reported by the Workload remain visible.</p>}
                 </article>)}
               </div>}
@@ -85,12 +86,13 @@ function GateEvidence({ gate, link }: { gate: Gate; link: Link }) {
       <span className="min-w-0 break-words font-medium [&_button]:text-left">{link(gate.name, gate.ref)}</span>
       <Badge className="justify-self-end" severity={gate.kind === 'preemption_gate' ? 'neutral' : admissionCheckSeverity(gate.nativeState)}>{gate.nativeState || 'Unknown'}</Badge>
     </div>
+    {gate.lastTransitionTime && <p className="text-xs text-theme-text-tertiary">Status since <time dateTime={gate.lastTransitionTime} title={gate.lastTransitionTime}>{formatRelativeAgeTime(gate.lastTransitionTime)}</time></p>}
     {gate.message && <p className="max-w-3xl whitespace-pre-wrap break-words">{gate.message}</p>}
     {retryMetadata.length > 0 && <p className="text-xs text-theme-text-secondary">{retryMetadata.join(' · ')}</p>}
   </div>
 }
 
-function AdmissionObservation({ observation, identity, generation, deleting, presentation, link }: { observation: SchedulingObservation; identity: React.ReactNode; generation: number; deleting: boolean; presentation: 'card' | 'drawer'; link: Link }) {
+function AdmissionObservation({ observation, identity, sourceLink, generation, deleting, presentation, link }: { observation: SchedulingObservation; identity: React.ReactNode; sourceLink?: React.ReactNode; generation: number; deleting: boolean; presentation: 'card' | 'drawer'; link: Link }) {
   const kueue = observation.kueue
   const condition = observation.primaryCondition
   const stale = isKueueConditionStale(condition, observation.subjectGeneration)
@@ -117,8 +119,8 @@ function AdmissionObservation({ observation, identity, generation, deleting, pre
     <div className={split ? 'grid min-w-0 items-start gap-4 @min-[1024px]/admission:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]' : 'space-y-4'}>
     <div className="min-w-0 space-y-4">
     <section aria-label="Admission" className={evidenceCard}>
-      <div className={`${cardHeader} space-y-2`}>
-      <h4 className={groupHeading}>Admission</h4>
+      <h4 className={`${groupHeading} ${cardHeader}`}>Admission</h4>
+      <div className="space-y-2 p-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium break-all">{identity}</span>
         <Badge severity={severity}>{kueue ? phases[kueue.phase] : 'Admission'}</Badge>
@@ -127,12 +129,11 @@ function AdmissionObservation({ observation, identity, generation, deleting, pre
         {deleting && <Badge severity="alert">Deleting</Badge>}
         {kueue?.outcome && <span>Outcome: {kueue.outcome}</span>}
       </div>
-      </div>
-      <div className="space-y-2 p-3">
         {stale && <p className="text-xs text-warning-text">Stale evidence: condition generation {condition!.observedGeneration}; Workload generation {observation.subjectGeneration}.</p>}
         {condition ? <p className="max-w-3xl whitespace-pre-wrap break-words">{condition.message || <><code>{condition.reason}</code>{condition.reason && ' · '}{condition.type}={condition.status}</>}</p> : <p className="text-theme-text-secondary">No primary admission condition reported.</p>}
         {condition?.lastTransitionTime && <p className="text-xs text-theme-text-tertiary">{condition.type}={condition.status} since {formatRelativeAgeTime(condition.lastTransitionTime)}</p>}
       <div className="empty:hidden flex flex-wrap gap-x-5 gap-y-2 border-t border-theme-border pt-2 text-xs text-theme-text-secondary">
+      {sourceLink && <span>{sourceLink}</span>}
       {(!!observation.queues?.length || kueue?.concurrentAdmission) && <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-theme-text-secondary">
         {observation.queues?.map((queue, index) => <span key={index}>{queue.roles.join(' + ').replace(/^./, (letter) => letter.toUpperCase())} queue: {link(queue.name, queue.ref)}</span>)}
         {kueue?.concurrentAdmission && <span>Parent Workload: {link(kueue.concurrentAdmission.parentName, kueue.concurrentAdmission.parentRef)}</span>}
