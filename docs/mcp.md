@@ -217,13 +217,13 @@ Add via the Cline MCP settings UI. Set `type` to `streamableHttp`; without it, C
 
 ### Devin Desktop (formerly Windsurf)
 
-Add to `~/.config/devin/mcp_config.json` (macOS/Linux) or `%APPDATA%\devin\mcp_config.json` (Windows). Devin Desktop uses `serverUrl` for remote servers:
+Add to `~/.config/devin/mcp_config.json` (macOS/Linux) or `%APPDATA%\devin\mcp_config.json` (Windows). Both the default Devin Local agent and the legacy Cascade agent read `url` from this file:
 
 ```json
 {
   "mcpServers": {
     "radar": {
-      "serverUrl": "http://localhost:9280/mcp"
+      "url": "http://localhost:9280/mcp"
     }
   }
 }

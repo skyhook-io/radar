@@ -291,7 +291,7 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
               { icon: Code2, name: 'Kiro', path: '~/.kiro/settings/mcp.json', config: mcpServersUrlConfig('url') },
               { icon: Code2, name: 'JetBrains AI Assistant / Junie', path: 'AI Assistant settings or ~/.junie/mcp/mcp.json', config: mcpServersUrlConfig('url') },
               { icon: Code2, name: 'Cline', path: 'Cline MCP settings (via UI)', config: clineConfig },
-              { icon: Code2, name: 'Devin Desktop (formerly Windsurf)', path: '~/.config/devin/mcp_config.json', config: mcpServersUrlConfig('serverUrl') },
+              { icon: Code2, name: 'Devin Desktop (formerly Windsurf)', path: '~/.config/devin/mcp_config.json', config: mcpServersUrlConfig('url') },
               { icon: MessageSquare, name: 'Claude Desktop', path: '~/Library/Application Support/Claude/claude_desktop_config.json', config: claudeDesktopConfig },
               { icon: Code2, name: 'Zed', path: 'Zed settings.json', config: zedConfig },
               { icon: Terminal, name: 'Gemini CLI (Code Assist Standard/Enterprise)', path: '~/.gemini/settings.json', config: geminiConfig },
