@@ -287,7 +287,17 @@ export function CloudFunnelButton() {
     <>
       {/* Tooltip is suppressed while the modal is open — it portals above the
           modal backdrop and would otherwise paint on top of the dialog. */}
-      <Tooltip content="Radar Cloud: for you and your team, every cluster, around the clock" delay={100} position="bottom" disabled={open}>
+      <Tooltip
+        content={
+          <>
+            <span className="block font-semibold">Meet Radar Cloud</span>
+            See all your clusters in one place, share with your team, and get alerts and automatic AI investigations in Slack.
+          </>
+        }
+        delay={100}
+        position="bottom"
+        disabled={open}
+      >
         <button
           onClick={openModal}
           aria-label="Radar Cloud"
