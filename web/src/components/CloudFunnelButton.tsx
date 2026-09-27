@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Bell, Check, Globe, History, Sparkles, Users, X } from 'lucide-react'
+import { Bell, Check, Cloud, Globe, History, Sparkles, Users, X } from 'lucide-react'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { Tooltip } from './ui/Tooltip'
@@ -304,7 +304,7 @@ export function CloudFunnelButton() {
           aria-haspopup="dialog"
           className="relative p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
         >
-          <Globe className="w-4 h-4" />
+          <Cloud className="w-4 h-4" />
           {cloudInstallActive(flow?.state) ? (
             <span className="absolute top-0.5 right-0.5 w-[7px] h-[7px] rounded-full bg-emerald-500 animate-pulse motion-reduce:animate-none" />
           ) : (
