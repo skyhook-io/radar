@@ -1078,3 +1078,12 @@ it('uses native RayCluster detail only for ray.io/v1', () => {
     if (apiVersion !== 'ray.io/v1') expect(html).toContain('2.55.0')
   }
 })
+
+it('uses RayJob native detail only for the supported exact API', () => {
+  for (const apiVersion of ['ray.io/v1', 'foreign.io/v1', 'ray.io/v99', 'ray.io/v1alpha1']) {
+    const data = { apiVersion, kind: 'RayJob', metadata: { name: 'train', namespace: 'ml' }, spec: { customField: 'native-fallback' } }
+    const html = renderKind('rayjobs', data, 'ml')
+    expect(html.includes('RayJob execution')).toBe(apiVersion === 'ray.io/v1')
+    if (apiVersion !== 'ray.io/v1') { expect(html).toContain('native-fallback'); expect(getResourceStatus('rayjobs', data)).toBeNull() }
+  }
+})

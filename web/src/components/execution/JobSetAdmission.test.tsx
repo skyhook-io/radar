@@ -61,6 +61,7 @@ describe("Job admission host", () => {
     expect(render()).toBe("");
     expect(mock.calls[0][3]).toEqual({
       isJob: true,
+      isRayJob: false,
       hinted: false,
       terminal: false,
     });
@@ -97,6 +98,7 @@ describe("Job admission host", () => {
     });
     expect(mock.calls[0][3]).toEqual({
       isJob: true,
+      isRayJob: false,
       hinted: false,
       terminal: false,
     });
@@ -145,4 +147,19 @@ it("does not suggest parent admission for a CronJob-created Job", () => {
   });
   expect(html).toContain("No controller-owned Kueue Workload observed");
   expect(html).not.toContain("Admission may be tracked");
+});
+
+
+describe("RayJob admission", () => {
+  it("uses RayJob identity and controller terminal status without inventing a Kueue hint", () => {
+    mock.result = { data: empty };
+    expect(render({ ...job, apiVersion: "ray.io/v1", kind: "RayJob", spec: { managedBy: "ray.io/kuberay-operator" }, status: { jobDeploymentStatus: "Complete" } })).toBe("");
+    expect(mock.calls.at(-1)?.[3]).toEqual({ isJob: false, isRayJob: true, hinted: false, terminal: true });
+  });
+  it("keeps MultiKueue admission visible separately from remote execution", () => {
+    mock.result = { data: empty };
+    const html = render({ ...job, apiVersion: "ray.io/v1", kind: "RayJob", spec: { managedBy: "kueue.x-k8s.io/multikueue" } });
+    expect(html).toContain("No controller-owned Kueue Workload observed");
+    expect(mock.calls.at(-1)?.[3]).toEqual({ isJob: false, isRayJob: true, hinted: true, terminal: false });
+  });
 });

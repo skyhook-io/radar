@@ -51,8 +51,9 @@ func (s *Server) handleKueueAdmission(w http.ResponseWriter, r *http.Request) {
 	kind, namespace, name := chi.URLParam(r, "kind"), chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	group := r.URL.Query().Get("group")
 	isJob := kind == "jobs" && group == "batch"
-	if (!isJob && (kind != "jobsets" || group != "jobset.x-k8s.io")) || namespace == "" || name == "" {
-		s.writeError(w, http.StatusBadRequest, "Kueue admission lookup supports batch Jobs and jobset.x-k8s.io JobSets")
+	isRayJob := kind == "rayjobs" && group == "ray.io"
+	if (!isJob && !isRayJob && (kind != "jobsets" || group != "jobset.x-k8s.io")) || namespace == "" || name == "" {
+		s.writeError(w, http.StatusBadRequest, "Kueue admission lookup supports batch Jobs, jobset.x-k8s.io JobSets and ray.io RayJobs")
 		return
 	}
 	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) || !s.canRead(r, group, kind, namespace, "get") {
@@ -95,27 +96,31 @@ func (s *Server) handleKueueAdmission(w http.ResponseWriter, r *http.Request) {
 		root.SetAPIVersion("batch/v1")
 		root.SetKind("Job")
 	} else {
-		rootGVR, found := discovery.GetGVRWithGroup("JobSet", "jobset.x-k8s.io")
+		rootKind := "JobSet"
+		if isRayJob {
+			rootKind = "RayJob"
+		}
+		rootGVR, found := discovery.GetGVRWithGroup(rootKind, group)
 		if !found {
-			if discovery.GroupHadPartialDiscovery("jobset.x-k8s.io") {
-				s.writeError(w, http.StatusServiceUnavailable, "JobSet discovery is incomplete; retry shortly")
+			if discovery.GroupHadPartialDiscovery(group) {
+				s.writeError(w, http.StatusServiceUnavailable, rootKind+" discovery is incomplete; retry shortly")
 			} else {
-				s.writeError(w, http.StatusNotFound, "JobSets are not served by this cluster")
+				s.writeError(w, http.StatusNotFound, rootKind+" is not served by this cluster")
 			}
 			return
 		}
-		root, err = cache.GetDynamicWithGroup(r.Context(), "JobSet", namespace, name, "jobset.x-k8s.io")
+		root, err = cache.GetDynamicWithGroup(r.Context(), rootKind, namespace, name, group)
 		if err != nil {
-			if workloadParentGetError("JobSet", namespace, name, err).statusCode == http.StatusNotFound && dynamic.IsNamespaceSynced(rootGVR, namespace) {
-				s.writeError(w, http.StatusNotFound, "JobSet not found")
+			if workloadParentGetError(rootKind, namespace, name, err).statusCode == http.StatusNotFound && dynamic.IsNamespaceSynced(rootGVR, namespace) {
+				s.writeError(w, http.StatusNotFound, rootKind+" not found")
 			} else {
-				log.Printf("[kueue] Failed to read JobSet %s/%s: %v", namespace, name, err)
-				s.writeError(w, http.StatusServiceUnavailable, "Radar could not observe the JobSet; retry when its cache is available")
+				log.Printf("[kueue] Failed to read %s %s/%s: %v", rootKind, namespace, name, err)
+				s.writeError(w, http.StatusServiceUnavailable, "Radar could not observe the "+rootKind+"; retry when its cache is available")
 			}
 			return
 		}
-		if !isSupportedJobSet(root) {
-			s.writeError(w, http.StatusBadRequest, "Kueue admission lookup supports JobSet v1alpha2")
+		if (!isRayJob && !isSupportedJobSet(root)) || (isRayJob && (root.GetAPIVersion() != "ray.io/v1" || root.GetKind() != "RayJob")) {
+			s.writeError(w, http.StatusBadRequest, "Kueue admission lookup supports JobSet v1alpha2 and RayJob v1")
 			return
 		}
 	}
@@ -165,7 +170,7 @@ func admissionRootControls(root *unstructured.Unstructured, child metav1.Object)
 	if root == nil || child == nil || root.GetUID() == "" || root.GetNamespace() != child.GetNamespace() {
 		return false
 	}
-	if !isSupportedJobSet(root) && (root.GetAPIVersion() != "batch/v1" || root.GetKind() != "Job") {
+	if !isSupportedJobSet(root) && (root.GetAPIVersion() != "batch/v1" || root.GetKind() != "Job") && (root.GetAPIVersion() != "ray.io/v1" || root.GetKind() != "RayJob") {
 		return false
 	}
 	owner := metav1.GetControllerOf(child)

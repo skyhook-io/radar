@@ -459,3 +459,66 @@ func TestProxyAuth_JobAdmissionEndpoint(t *testing.T) {
 		})
 	}
 }
+
+func TestProxyAuth_RayJobAdmissionEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		rootAccess, listAccess bool
+		version                string
+		status                 int
+	}{
+		{"authorized", true, true, "v1", 200},
+		{"root denied", false, true, "v1", 403},
+		{"list denied", true, false, "v1", 403},
+		{"unsupported version", true, true, "v2", 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useTestResourceCache(t, fake.NewClientset())
+			root := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "ray.io/" + tc.version, "kind": "RayJob", "metadata": map[string]any{"name": "training", "namespace": "default", "uid": "ray-current"}}}
+			old := root.DeepCopy()
+			old.SetUID("ray-old")
+			foreign := root.DeepCopy()
+			foreign.SetAPIVersion("other.io/v1")
+			rayGVR := schema.GroupVersionResource{Group: "ray.io", Version: tc.version, Resource: "rayjobs"}
+			workloadGVR := schema.GroupVersionResource{Group: kueueGroup, Version: "v1beta2", Resource: "workloads"}
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{rayGVR: "RayJobList", workloadGVR: "WorkloadList"}, root, admissionWorkload(root, "owned"), admissionWorkload(old, "old"), admissionWorkload(foreign, "foreign"))
+			resources := []k8s.APIResource{
+				{Group: "ray.io", Version: tc.version, Name: "rayjobs", Kind: "RayJob", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}},
+				{Group: kueueGroup, Version: "v1beta2", Name: "workloads", Kind: "Workload", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}},
+			}
+			if err := k8s.InitTestDynamicResourceCache(dyn, resources); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestDynamicState)
+			cache := k8s.GetDynamicResourceCache()
+			discovered := make(chan struct{})
+			cache.OnCRDDiscoveryComplete(func() { close(discovered) })
+			cache.DiscoverAllCRDs()
+			select {
+			case <-discovered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("discovery did not complete")
+			}
+			env := newAuthTestServer(t)
+			permissions := &auth.UserPermissions{AllowedNamespaces: []string{"default"}}
+			permissions.SetCanI("get", "ray.io", "rayjobs", "default", tc.rootAccess)
+			permissions.SetCanI("list", kueueGroup, "workloads", "default", tc.listAccess)
+			permissions.SetCanI("get", kueueGroup, "workloads", "default", false)
+			env.srv.permCache.Set("alice", nil, permissions)
+			response := env.authGet(t, "/api/kueue/admission/rayjobs/default/training?group=ray.io", "alice", "")
+			defer response.Body.Close()
+			if response.StatusCode != tc.status {
+				t.Fatalf("got %d want %d", response.StatusCode, tc.status)
+			}
+			if tc.status == 200 {
+				var got KueueAdmissionResponse
+				if err := json.NewDecoder(response.Body).Decode(&got); err != nil {
+					t.Fatal(err)
+				}
+				if got.UID != "ray-current" || got.Total != 1 || got.Workloads[0].Name != "owned" || got.Workloads[0].Ref != nil {
+					t.Fatalf("bad attribution or permissions: %+v", got)
+				}
+			}
+		})
+	}
+}

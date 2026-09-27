@@ -1551,7 +1551,7 @@ coverage, or support for other Kueue API versions.
 | Resource | Group | Status source |
 |----------|-------|---------------|
 | RayCluster | `ray.io/v1` | head/worker readiness, suspension and native runtime detail |
-| RayJob | `ray.io/v1` | jobStatus + jobDeploymentStatus |
+| RayJob | `ray.io/v1` | application/controller lifecycle, submission and runtime detail, Kueue admission |
 | RayService | `ray.io/v1` | lifecycle conditions; native serving and revision detail |
 | RayCronJob | `ray.io/v1` | suspend |
 
@@ -1562,6 +1562,13 @@ by the current RayCluster controller UID, with head/group selection and ordinary
 Pod/log navigation. Controller-reported counts use Ray labels and may differ from
 that owned-Pod list. Missing access, cache warming and recreated roots are explicit;
 no RayCluster-wide log stream or lifecycle actions are added.
+
+RayJob detail separates the controller lifecycle from the last reported application
+state, with links to the runtime RayCluster and a UID-verified submitter Job for
+Pods and logs. Submission modes, retries, deadlines and declared cleanup policy
+remain distinct from observed execution. Externally managed jobs do not resolve
+reported runtime names against the local cluster. Kueue-managed RayJobs show
+admission separately; admission does not establish that the application is running.
 
 RayService detail separates proxy readiness, rollout and suspension from active/pending
 runtime revisions. It shows native Serve application/deployment states and messages,

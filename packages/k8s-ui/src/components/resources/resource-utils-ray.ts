@@ -63,6 +63,12 @@ export function getRayJobStatus(resource: any): StatusBadge {
     return { text: deploymentStatus, color: healthColors.unhealthy, level: 'unhealthy' }
   }
 
+  if (['Retrying', 'Suspending', 'Suspended'].includes(deploymentStatus)) {
+    return deploymentStatus === 'Suspended'
+      ? { text: deploymentStatus, color: healthColors.neutral, level: 'neutral' }
+      : { text: deploymentStatus, color: healthColors.degraded, level: 'degraded' }
+  }
+
   switch (jobStatus) {
     case 'SUCCEEDED':
       return { text: 'Succeeded', color: healthColors.neutral, level: 'neutral' }
@@ -77,15 +83,11 @@ export function getRayJobStatus(resource: any): StatusBadge {
   }
 
   switch (deploymentStatus) {
-    case 'Suspended':
-      return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
     case 'Complete':
       return { text: 'Complete', color: healthColors.neutral, level: 'neutral' }
     case 'Running':
       return { text: 'Running', color: healthColors.healthy, level: 'healthy' }
     case 'Initializing':
-    case 'Suspending':
-    case 'Retrying':
     case 'Waiting':
       return { text: deploymentStatus, color: healthColors.degraded, level: 'degraded' }
   }
@@ -183,4 +185,12 @@ export function getRayCronJobLastSchedule(resource: any): string {
   const lastSchedule = resource.status?.lastScheduleTime
   if (!lastSchedule) return '-'
   return formatAge(lastSchedule)
+}
+
+export function rayJobIsLocal(resource: any): boolean {
+  return !resource.spec?.managedBy || resource.spec.managedBy === 'ray.io/kuberay-operator'
+}
+
+export function rayJobSubmissionMode(resource: any): string {
+  return resource.spec?.submissionMode || 'K8sJobMode'
 }

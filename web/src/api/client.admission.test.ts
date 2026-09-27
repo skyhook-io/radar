@@ -15,6 +15,7 @@ describe('Kueue admission polling', () => {
   }
   it('separates Job and JobSet identities and recreated roots', () => {
     expect(options({ isJob: true }).queryKey).toEqual(['kueue-admission', 'batch', 'jobs', 'ml', 'training', 'current'])
+    expect(options({ isRayJob: true }).queryKey).toEqual(['kueue-admission', 'ray.io', 'rayjobs', 'ml', 'training', 'current'])
     expect(options().queryKey).toEqual(['kueue-admission', 'jobset.x-k8s.io', 'jobsets', 'ml', 'training', 'current'])
   })
   it('polls quiet and terminal Jobs slowly, active admission quickly', () => {

@@ -190,3 +190,5 @@ export { AdmissionCheckRenderer, ProvisioningRequestRenderer } from './KueueProv
 export { RayServiceRenderer } from './RayServiceRenderer'
 
 export { RayClusterRenderer } from './RayClusterRenderer'
+
+export { RayJobRenderer } from './RayJobRenderer'

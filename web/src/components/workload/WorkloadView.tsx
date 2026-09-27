@@ -1,3 +1,4 @@
+import { RayJobRenderer } from '../resources/renderers/RayJobRenderer'
 import { JobRenderer, JobSetRenderer } from '../resources/renderers/JobAdmissionRenderers'
 import { RayClusterRenderer } from '../resources/renderers/RayClusterRenderer'
 import { RayServiceRenderer } from '../resources/renderers/RayServiceRenderer'
@@ -172,6 +173,7 @@ export function supportsBatchExecution(kind: string, apiKind: string, group?: st
 
 // Stable reference — web renderer wrappers inject platform hooks internally
 const rendererOverrides: RendererOverrides = {
+  RayJobRenderer,
   JobRenderer,
   JobSetRenderer,
   RayServiceRenderer,
@@ -610,6 +612,10 @@ export function WorkloadView({
   const refetchResourceAndRuns = useCallback(async () => {
     await Promise.all([
       refetchResource(),
+      ...(apiKind === 'rayjobs' && effectiveGroup === 'ray.io' ? [
+        queryClient.refetchQueries({ queryKey: ['resource', 'jobs', namespace, name, 'batch'], type: 'active' }),
+        ...(resource?.spec?.clusterSelector?.['ray.io/cluster'] ? [queryClient.refetchQueries({ queryKey: ['resource', 'rayclusters', namespace, resource.spec.clusterSelector['ray.io/cluster'], 'ray.io'], type: 'active' })] : []),
+      ] : []),
       queryClient.refetchQueries({ queryKey: ['kueue-admission', effectiveGroup, apiKind, namespace, name], type: 'active' }),
       queryClient.refetchQueries({
         queryKey: ['workload-runs', apiKind, namespace, name],
@@ -619,7 +625,7 @@ export function WorkloadView({
         ...(apiKind === 'rayclusters' ? { type: 'active' as const } : {}),
       }),
     ])
-  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource])
+  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource, resource?.spec?.clusterSelector])
   const podWorkloadOwner = useMemo(
     () => podWorkloadOwnerFromRelationships(apiKind, namespace, relationships, resource),
     [apiKind, namespace, relationships, resource],

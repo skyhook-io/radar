@@ -118,6 +118,7 @@ import {
   KueueWorkloadRenderer,
   RayServiceRenderer,
   RayClusterRenderer,
+  RayJobRenderer,
   AdmissionCheckRenderer,
   ProvisioningRequestRenderer,
   LocalQueueRenderer,
@@ -314,6 +315,7 @@ import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
 export interface RendererOverrides {
   JobRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   JobSetRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
+  RayJobRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   RayClusterRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   RayServiceRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   KueueWorkloadRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
@@ -447,7 +449,7 @@ const KNOWN_KINDS = new Set([
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
   'jobsets',
-  'rayclusters', 'rayservices', 'workloads', 'localqueues', 'clusterqueues', 'admissionchecks', 'provisioningrequests',
+  'rayclusters', 'rayservices', 'rayjobs', 'workloads', 'localqueues', 'clusterqueues', 'admissionchecks', 'provisioningrequests',
   'hpas', 'horizontalpodautoscalers', 'nodes', 'persistentvolumeclaims',
   'rollouts', 'analysisruns', 'analysistemplates', 'clusteranalysistemplates', 'experiments', 'certificates', 'workflows', 'persistentvolumes',
   'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
@@ -702,7 +704,7 @@ export function ResourceRendererDispatch({
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
     || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs' || kind === 'jobsets'
     || kind === 'policies' || kind === 'rollouts' || kind === 'experiments'
-    || kind === 'rayclusters' || kind === 'rayservices' || kind === 'admissionchecks' || kind === 'provisioningrequests'
+    || kind === 'rayjobs' || kind === 'rayclusters' || kind === 'rayservices' || kind === 'admissionchecks' || kind === 'provisioningrequests'
     || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
@@ -723,6 +725,7 @@ export function ResourceRendererDispatch({
     || (kind === 'experiments' && isApiGroup(data?.apiVersion, 'argoproj.io'))
     || ((kind === 'machines' || kind === 'machinesets')
       && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io'))
+    || (kind === 'rayjobs' && data?.apiVersion === 'ray.io/v1')
     || (kind === 'rayclusters' && data?.apiVersion === 'ray.io/v1')
     || (kind === 'rayservices' && data?.apiVersion === 'ray.io/v1')
     || (kind === 'jobsets' && isJobSetV1Alpha2(data))
@@ -752,6 +755,7 @@ export function ResourceRendererDispatch({
 
   const JobComp = rendererOverrides?.JobRenderer ?? JobRenderer
   const JobSetComp = rendererOverrides?.JobSetRenderer ?? JobSetRenderer
+  const RayJobComp = rendererOverrides?.RayJobRenderer ?? RayJobRenderer
   const RayClusterComp = rendererOverrides?.RayClusterRenderer ?? RayClusterRenderer
   const RayServiceComp = rendererOverrides?.RayServiceRenderer ?? RayServiceRenderer
   const KueueWorkloadComp = rendererOverrides?.KueueWorkloadRenderer ?? KueueWorkloadRenderer
@@ -823,6 +827,7 @@ export function ResourceRendererDispatch({
         {kind === 'configmaps' && <ConfigMapRenderer data={data} relationships={relationships} onNavigate={onNavigate} />}
         {kind === 'secrets' && <SecretRenderer data={data} relationships={relationships} onNavigate={onNavigate} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
         {kind === 'jobs' && !nonCoreJobFallthrough && <JobComp data={data} onNavigate={onNavigate} />}
+        {kind === 'rayjobs' && data?.apiVersion === 'ray.io/v1' && <RayJobComp data={data} onNavigate={onNavigate} />}
         {kind === 'rayclusters' && data?.apiVersion === 'ray.io/v1' && <RayClusterComp data={data} onNavigate={onNavigate} />}
         {kind === 'rayservices' && data?.apiVersion === 'ray.io/v1' && <RayServiceComp data={data} onNavigate={onNavigate} />}
         {kind === 'workloads' && isApiGroup(data?.apiVersion, 'kueue.x-k8s.io') && <KueueWorkloadComp data={data} onNavigate={onNavigate} />}
@@ -1127,7 +1132,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'admissionchecks' && isKueueQueueResource(data)) return getAdmissionCheckStatus(data)
   if (k === 'provisioningrequests' && ['autoscaling.x-k8s.io/v1', 'autoscaling.x-k8s.io/v1beta1'].includes(data?.apiVersion)) return getProvisioningRequestStatus(data)
   if (k === 'rayclusters' && data?.apiVersion === 'ray.io/v1') return getRayClusterStatus(data)
-  if (k === 'rayjobs' && data?.apiVersion?.startsWith('ray.io/')) return getRayJobStatus(data)
+  if (k === 'rayjobs' && data?.apiVersion === 'ray.io/v1') return getRayJobStatus(data)
   if (k === 'rayservices' && data?.apiVersion === 'ray.io/v1') return getRayServiceStatus(data)
   if (k === 'raycronjobs' && data?.apiVersion?.startsWith('ray.io/')) return getRayCronJobStatus(data)
   if (k === 'leaderworkersets' && data?.apiVersion?.startsWith('leaderworkerset.x-k8s.io/')) return getLeaderWorkerSetStatus(data)
