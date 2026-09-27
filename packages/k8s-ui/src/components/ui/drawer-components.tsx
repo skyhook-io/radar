@@ -1036,6 +1036,7 @@ interface EventsSectionProps {
 
 export function EventsSection({ events, updates = [], isLoading, eventsError, updatesError, hint, fullscreen = false }: EventsSectionProps) {
   const [showUpdates, setShowUpdates] = useState(false)
+  const [showAllEvents, setShowAllEvents] = useState(false)
 
   if (isLoading) {
     return (
@@ -1125,10 +1126,10 @@ export function EventsSection({ events, updates = [], isLoading, eventsError, up
   return (
     <Section title={`Recent Events (${visible.length})`} defaultExpanded>
       <div tabIndex={fullscreen ? undefined : 0} className={clsx('space-y-2', !fullscreen && 'max-h-64 overflow-y-auto')}>
-        {(fullscreen ? visible.slice(0, 10) : visible).map(renderEvent)}
+        {(fullscreen ? visible.slice(0, 8) : visible).map(renderEvent)}
       </div>
-      {fullscreen && visible.length > 10 && <Disclosure summary={`Show ${visible.length - 10} more events`} className="mt-2" summaryClassName="text-xs text-accent-text">
-        <div className="mt-2 space-y-2">{visible.slice(10).map(renderEvent)}</div>
+      {fullscreen && visible.length > 8 && <Disclosure open={showAllEvents} onOpenChange={setShowAllEvents} summary={showAllEvents ? 'Show fewer events' : `Show ${visible.length - 8} more events`} className="mt-2" summaryClassName="text-xs text-accent-text">
+        <div className="mt-2 space-y-2">{visible.slice(8).map(renderEvent)}</div>
       </Disclosure>}
       {errors}
       {toggle && <div className="mt-2">{toggle}</div>}
