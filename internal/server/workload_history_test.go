@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,6 +23,8 @@ func withWorkloadHistoryStore(t *testing.T) timeline.EventStore {
 	prev := k8s.GetConnectionStatus()
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	historyScopes.reset()
+	t.Cleanup(historyScopes.reset)
 	timeline.ResetStore()
 	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 1000}); err != nil {
 		t.Fatalf("InitStore: %v", err)
@@ -338,5 +341,78 @@ func TestWorkloadHistoryScope_WalksWhatAnIngressOwns(t *testing.T) {
 	}
 	if got := fmt.Sprint(historyIDs(events)); got != "[cert cr ing svc]" {
 		t.Errorf("history = %s, want [cert cr ing svc]", got)
+	}
+}
+
+type countingStore struct {
+	timeline.EventStore
+	queries int
+}
+
+func (c *countingStore) Query(ctx context.Context, opts timeline.QueryOptions) ([]timeline.TimelineEvent, error) {
+	c.queries++
+	return c.EventStore.Query(ctx, opts)
+}
+
+func (c *countingStore) OwnedUIDs(ctx context.Context, clusterContext string, owners []string, limit int) ([]string, error) {
+	c.queries++
+	return c.EventStore.OwnedUIDs(ctx, clusterContext, owners, limit)
+}
+
+func (c *countingStore) Identities(ctx context.Context, q timeline.IdentityQuery, limit int) ([]timeline.Identity, error) {
+	c.queries++
+	return c.EventStore.Identities(ctx, q, limit)
+}
+
+// A refresh on a cached scope is one query; a rollout's new ReplicaSet and
+// its Pods, created after the scope was cached, still arrive on the next
+// refresh, and are remembered for the one after.
+func TestWorkloadHistory_CachedScopeLearnsARollout(t *testing.T) {
+	store := &countingStore{EventStore: withWorkloadHistoryStore(t)}
+	dep := &timeline.OwnerInfo{Kind: "Deployment", Name: "web", UID: "dep-1"}
+	appendHistoryRows(t, store, []timeline.TimelineEvent{
+		{ID: "dep", APIVersion: "apps/v1", Kind: "Deployment", Name: "web", UID: "dep-1"},
+		{ID: "rs-1", APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-bcdfg", UID: "rs-1", Owner: dep},
+		{ID: "api", APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "api-bcdfg", UID: "rs-api", Owner: &timeline.OwnerInfo{Kind: "Deployment", Name: "api", UID: "dep-api"}},
+	})
+	key := resourceid.NewRef("apps", "Deployment", "default", "web")
+	live := liveIdentity{UID: "dep-1"}
+	refresh := func() ([]string, int) {
+		t.Helper()
+		before := store.queries
+		events, _, err := readWorkloadHistory(t.Context(), store, k8s.ActiveClusterContext(), key, live, nil, 0, 100)
+		if err != nil {
+			t.Fatalf("readWorkloadHistory: %v", err)
+		}
+		return historyIDs(events), store.queries - before
+	}
+
+	if ids, _ := refresh(); fmt.Sprint(ids) != "[dep rs-1]" {
+		t.Fatalf("first page = %v", ids)
+	}
+	if ids, n := refresh(); n != 1 || fmt.Sprint(ids) != "[dep rs-1]" {
+		t.Errorf("cached refresh = %v in %d queries, want [dep rs-1] in 1", ids, n)
+	}
+	appendHistoryRows(t, store, []timeline.TimelineEvent{
+		{ID: "rs-2", APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-hjklm", UID: "rs-2", Owner: dep},
+		{ID: "pod-2", APIVersion: "v1", Kind: "Pod", Name: "web-hjklm-x5rjl", UID: "pod-2", Owner: &timeline.OwnerInfo{Kind: "ReplicaSet", Name: "web-hjklm", UID: "rs-2"}},
+	})
+	if ids, _ := refresh(); fmt.Sprint(ids) != "[dep pod-2 rs-1 rs-2]" {
+		t.Errorf("refresh during the rollout = %v, want the new ReplicaSet and its Pod", ids)
+	}
+	if ids, n := refresh(); n != 1 || fmt.Sprint(ids) != "[dep pod-2 rs-1 rs-2]" {
+		t.Errorf("refresh after the rollout = %v in %d queries, want the rollout remembered in 1 query", ids, n)
+	}
+}
+
+func TestMergeNewestFirst_KeepsTheNewestAcrossBothPages(t *testing.T) {
+	row := func(id string, seq int64) timeline.TimelineEvent { return timeline.TimelineEvent{ID: id, Seq: seq} }
+	got := mergeNewestFirst([]timeline.TimelineEvent{row("a", 9), row("b", 5)}, []timeline.TimelineEvent{row("c", 7), row("a", 9), row("d", 1)}, 3)
+	var ids []string
+	for _, e := range got {
+		ids = append(ids, e.ID)
+	}
+	if fmt.Sprint(ids) != "[a c b]" {
+		t.Errorf("merged = %v, want [a c b]", ids)
 	}
 }

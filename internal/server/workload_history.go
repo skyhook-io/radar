@@ -2,10 +2,15 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -92,22 +97,7 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 	key := resourceid.NewRef(group, kind, namespace, name)
 	clusterContext := k8s.ActiveClusterContext()
 	live := liveWorkloadIdentity(r.Context(), chi.URLParam(r, "kind"), group, namespace, name)
-	scope, incomplete, err := workloadHistoryScope(r.Context(), store, clusterContext, key, live, s.workloadAttachments(r, key, live.Object))
-	if err != nil {
-		log.Printf("[workload-history] Failed to resolve the history scope of %s %s/%s: %v", kind, namespace, name, err)
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	events, err := store.Query(r.Context(), timeline.QueryOptions{
-		Namespaces:       []string{namespace},
-		Scope:            scope,
-		ClusterContext:   clusterContext,
-		UntilSeq:         beforeSeq,
-		SequenceOrder:    timeline.SequenceOrderDescending,
-		Limit:            limit + 1,
-		IncludeManaged:   true,
-		IncludeK8sEvents: true,
-	})
+	events, incomplete, err := readWorkloadHistory(r.Context(), store, clusterContext, key, live, s.workloadAttachments(r, key, live.Object), beforeSeq, limit+1)
 	if err != nil {
 		log.Printf("[workload-history] Failed to query the history of %s %s/%s: %v", kind, namespace, name, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -126,6 +116,203 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 		resp.Events = []timeline.TimelineEvent{}
 	}
 	s.writeJSON(w, resp)
+}
+
+// readWorkloadHistory reads one page of a workload's history, newest arrival
+// first, from before beforeSeq (0 = the newest).
+func readWorkloadHistory(ctx context.Context, store timeline.EventStore, clusterContext string, key resourceid.Ref, live liveIdentity, attached []resourceid.Ref, beforeSeq int64, limit int) ([]timeline.TimelineEvent, bool, error) {
+	memoKey := historyScopeMemoKey(clusterContext, key, live.UID, attached)
+	scope, incomplete, cached := historyScopes.get(memoKey)
+	if !cached {
+		var err error
+		if scope, incomplete, err = workloadHistoryScope(ctx, store, clusterContext, key, live, attached); err != nil {
+			return nil, false, fmt.Errorf("resolve the history scope: %w", err)
+		}
+		historyScopes.put(memoKey, scope, incomplete)
+	}
+	// Attachments are read per request: the relationship view depends on
+	// the caller's RBAC.
+	scope.Refs = append([]resourceid.Ref{key}, attached...)
+	events, grown, err := queryHistoryPage(ctx, store, timeline.QueryOptions{
+		Namespaces:       []string{key.Namespace},
+		ClusterContext:   clusterContext,
+		UntilSeq:         beforeSeq,
+		SequenceOrder:    timeline.SequenceOrderDescending,
+		Limit:            limit,
+		IncludeManaged:   true,
+		IncludeK8sEvents: true,
+	}, scope)
+	if err != nil {
+		return nil, false, err
+	}
+	historyScopes.extend(memoKey, grown)
+	return events, incomplete, nil
+}
+
+// queryHistoryPage reads one page of the scope's rows. A cached scope doesn't
+// know resources created since it was built, but their rows name an owner the
+// scope does know (a rollout's new ReplicaSet names its Deployment), so the
+// page itself reveals them. Their own children are read in a further pass and
+// merged, level by level, and the new UIDs are returned so the cached scope
+// can learn them. A scope that knows everything costs one query.
+func queryHistoryPage(ctx context.Context, store timeline.EventStore, page timeline.QueryOptions, scope timeline.ResourceScope) ([]timeline.TimelineEvent, []string, error) {
+	page.Scope = scope
+	events, err := store.Query(ctx, page)
+	if err != nil {
+		return nil, nil, err
+	}
+	known := make(map[string]bool, len(scope.UIDs))
+	for _, uid := range scope.UIDs {
+		known[uid] = true
+	}
+	owners := make(map[string]bool, len(scope.OwnerUIDs))
+	for _, uid := range scope.OwnerUIDs {
+		owners[uid] = true
+	}
+	var grown []string
+	newIn := func(rows []timeline.TimelineEvent) []string {
+		var fresh []string
+		for _, e := range rows {
+			if e.UID == "" || known[e.UID] || e.Owner == nil || !owners[e.Owner.UID] {
+				continue
+			}
+			known[e.UID] = true
+			fresh = append(fresh, e.UID)
+		}
+		return fresh
+	}
+	fresh := newIn(events)
+	for depth := 0; len(fresh) > 0 && depth < workloadHistoryMaxDepth; depth++ {
+		grown = append(grown, fresh...)
+		for _, uid := range fresh {
+			owners[uid] = true
+		}
+		page.Scope = timeline.ResourceScope{UIDs: fresh, OwnerUIDs: fresh}
+		more, err := store.Query(ctx, page)
+		if err != nil {
+			return nil, nil, err
+		}
+		events = mergeNewestFirst(events, more, page.Limit)
+		fresh = newIn(more)
+	}
+	return events, grown, nil
+}
+
+// mergeNewestFirst unions two newest-arrival-first pages and keeps the newest
+// limit rows. Each input holds its own newest rows, so the union's newest are
+// among them.
+func mergeNewestFirst(a, b []timeline.TimelineEvent, limit int) []timeline.TimelineEvent {
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]timeline.TimelineEvent, 0, len(a)+len(b))
+	for _, list := range [][]timeline.TimelineEvent{a, b} {
+		for _, e := range list {
+			if !seen[e.ID] {
+				seen[e.ID] = true
+				out = append(out, e)
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Seq > out[j].Seq })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+// historyScopes remembers resolved scopes briefly. A workload's scope rarely
+// changes between the view's refreshes, and resolving it takes several store
+// queries; resources created since are learned from each page instead (see
+// queryHistoryPage). The TTL bounds what that can't learn: past runs found by
+// name, and what a newly attached Ingress owns. A recreated workload has a
+// new live UID and so a new key.
+var historyScopes = newHistoryScopeMemo(30*time.Second, 512)
+
+type historyScopeEntry struct {
+	scope      timeline.ResourceScope
+	incomplete bool
+	expires    time.Time
+}
+
+type historyScopeMemo struct {
+	mu      sync.Mutex
+	ttl     time.Duration
+	max     int
+	entries map[string]*historyScopeEntry
+	now     func() time.Time
+}
+
+func newHistoryScopeMemo(ttl time.Duration, max int) *historyScopeMemo {
+	return &historyScopeMemo{ttl: ttl, max: max, entries: map[string]*historyScopeEntry{}, now: time.Now}
+}
+
+func historyScopeMemoKey(clusterContext string, key resourceid.Ref, liveUID string, attached []resourceid.Ref) string {
+	parts := []string{clusterContext, key.Group, key.Kind, key.Namespace, key.Name, liveUID}
+	for _, ref := range attached {
+		if walksAttachment(ref) {
+			parts = append(parts, ref.Group+"/"+ref.Kind+"/"+ref.Name)
+		}
+	}
+	sort.Strings(parts[6:])
+	return strings.Join(parts, "\x00")
+}
+
+func (m *historyScopeMemo) get(key string) (timeline.ResourceScope, bool, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.entries[key]
+	if !ok || m.now().After(e.expires) {
+		return timeline.ResourceScope{}, false, false
+	}
+	// Callers set Refs on their copy; the slices below are only read.
+	return e.scope, e.incomplete, true
+}
+
+func (m *historyScopeMemo) put(key string, scope timeline.ResourceScope, incomplete bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := m.now()
+	if len(m.entries) >= m.max {
+		for k, e := range m.entries {
+			if now.After(e.expires) {
+				delete(m.entries, k)
+			}
+		}
+		if len(m.entries) >= m.max {
+			m.entries = map[string]*historyScopeEntry{}
+		}
+	}
+	scope.Refs = nil
+	m.entries[key] = &historyScopeEntry{scope: scope, incomplete: incomplete, expires: now.Add(m.ttl)}
+}
+
+// extend adds UIDs learned from a page to a cached scope, as new slices so a
+// reader holding the old ones is unaffected.
+func (m *historyScopeMemo) extend(key string, uids []string) {
+	if len(uids) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.entries[key]
+	if !ok {
+		return
+	}
+	room := workloadHistoryMaxResources - len(e.scope.OwnerUIDs)
+	if room <= 0 {
+		e.incomplete = true
+		return
+	}
+	if len(uids) > room {
+		uids, e.incomplete = uids[:room], true
+	}
+	e.scope.UIDs = append(append([]string{}, e.scope.UIDs...), uids...)
+	e.scope.OwnerUIDs = append(append([]string{}, e.scope.OwnerUIDs...), uids...)
+}
+
+func (m *historyScopeMemo) reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.entries = map[string]*historyScopeEntry{}
 }
 
 // liveIdentity is the workload as it exists now: the object, its UID and its
