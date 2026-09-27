@@ -41,9 +41,9 @@ export function RayClusterRenderer({ data, onNavigate, podEvidence, podsLoading,
   const scope = selection.workerGroup != null ? `Worker group: ${selection.workerGroup}` : selection.nodeType === 'head' ? 'Head' : 'All runtime Pods'
   const select = (value: RayClusterPodSelection) => { setExpanded(false); onSelectPods?.(value) }
   const row = (pod: WorkloadPodInfo) => <PodRow key={pod.name} name={pod.name} namespace={data.metadata.namespace} ready={pod.ready} healthLevel={pod.healthLevel} detail={workloadPodDetail(pod)} onNavigate={onNavigate} />
-  return <>
+  return <div className="space-y-4">
     {stale && <AlertBanner variant="info" title="Status describes an earlier generation" message={`Specification generation ${data.metadata.generation}; controller observed ${status.observedGeneration}. Counts and conditions below retain that observation.`} />}
-    <Section title="Runtime Health" icon={Activity} defaultExpanded>
+    <Section variant="card" title="Runtime Health" icon={Activity} defaultExpanded>
       <PropertyList>
         <Property label="Ray Version" value={spec.rayVersion || 'Not specified'} />
         <Property label="Head" value={<Badge severity={stale ? 'neutral' : head?.status === 'True' ? 'success' : head?.status === 'False' ? 'warning' : 'neutral'}>{head?.status === 'True' ? 'Ready' : head?.status === 'False' ? 'Not ready' : 'Not reported'}{stale ? ' (stale)' : ''}</Badge>} />
@@ -58,7 +58,7 @@ export function RayClusterRenderer({ data, onNavigate, podEvidence, podsLoading,
       {status.observedGeneration == null && <p className="mt-2 text-xs text-theme-text-tertiary">Observed generation is not reported.</p>}
       {conditions.some((c: any) => c.type === 'RayClusterProvisioned' && c.status === 'True') && <p className="mt-2 text-xs text-theme-text-tertiary">Provisioned records initial provisioning, not continuing runtime health.</p>}
     </Section>
-    {onSelectPods && <div ref={podsRef}><Section title="Runtime Pods" icon={Server} defaultExpanded>
+    {onSelectPods && <div ref={podsRef}><Section variant="card" title="Runtime Pods" icon={Server} defaultExpanded>
       <SelectMenu ariaLabel="Pod scope" className="mb-3" searchPlaceholder="Find a worker group…"
         value={selection.workerGroup != null ? `group:${selection.workerGroup}` : selection.nodeType === 'head' ? 'head' : 'all'}
         options={[{ value: 'all', label: 'All runtime Pods' }, { value: 'head', label: 'Head' }, ...groups.map((g: any) => ({ value: `group:${g.groupName}`, label: `Worker group: ${g.groupName}` }))]}
@@ -70,7 +70,7 @@ export function RayClusterRenderer({ data, onNavigate, podEvidence, podsLoading,
         <PodListFrame expanded={expanded} hasOverflow={podEvidence.pods.length > 20} overflow={podEvidence.pods.slice(20).map(row)} toggle={<PodListToggle expanded={expanded} hiddenCount={podEvidence.pods.length - 20} label="Pods" onToggle={() => setExpanded(!expanded)} />}>{podEvidence.pods.slice(0,20).map(row)}</PodListFrame>
       </> : <p className="text-sm text-theme-text-secondary">Pod evidence is not available.</p>}
     </Section></div>}
-    <Section title={`Worker Groups (${groups.length})`} icon={Boxes} defaultExpanded>
+    <Section variant="card" title={`Worker Groups (${groups.length})`} icon={Boxes} defaultExpanded>
       <p className="mb-3 text-xs text-theme-text-tertiary">Declared sizing, not observed group health. Replicas can span multiple hosts; controller-reported worker counts above are Pods. In-tree autoscaling: {spec.enableInTreeAutoscaling === true ? 'enabled' : 'disabled'}.</p>
       <div className="space-y-3">{groups.map((group: any) => <div className="card-inner min-w-0" key={group.groupName}>
         <div className="mb-2 flex items-start justify-between gap-3"><span className="break-all text-sm font-medium text-theme-text-primary">{group.groupName}</span>{onSelectPods && <button className="shrink-0 text-xs text-accent-text hover:underline" onClick={() => { select({ nodeType: 'worker', workerGroup: group.groupName }); podsRef.current?.scrollIntoView({ block: 'start' }) }}>View Pods</button>}</div>
@@ -83,11 +83,11 @@ export function RayClusterRenderer({ data, onNavigate, podEvidence, podsLoading,
       </div>)}</div>
       {groups.length === 0 && <p className="text-sm text-theme-text-secondary">No worker groups declared.</p>}
     </Section>
-    {(owners.length > 0 || status.head?.podName || status.head?.serviceName) && <Section title="References" defaultExpanded><PropertyList>
+    {(owners.length > 0 || status.head?.podName || status.head?.serviceName) && <Section variant="card" title="References" defaultExpanded><PropertyList>
       {owners.map((owner: any) => <Property key={owner.uid} label="Controller" value={<ResourceLink kind={owner.kind === 'RayService' ? 'rayservices' : 'rayjobs'} group="ray.io" namespace={data.metadata.namespace} name={owner.name} onNavigate={onNavigate} />} />)}
       {status.head?.podName && <Property label="Reported Head Pod" value={<ResourceLink kind="pods" namespace={data.metadata.namespace} name={status.head.podName} onNavigate={onNavigate} />} />}
       {status.head?.serviceName && <Property label="Reported Head Service" value={<ResourceLink kind="services" namespace={data.metadata.namespace} name={status.head.serviceName} onNavigate={onNavigate} />} />}
     </PropertyList></Section>}
-    <ConditionsSection conditions={conditions} getConditionTone={c => stale ? 'unknown' : rayClusterConditionTone(c)} defaultExpanded />
-  </>
+    <ConditionsSection variant="card" conditions={conditions} getConditionTone={c => stale ? 'unknown' : rayClusterConditionTone(c)} defaultExpanded />
+  </div>
 }

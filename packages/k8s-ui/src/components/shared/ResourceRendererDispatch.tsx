@@ -797,7 +797,7 @@ export function ResourceRendererDispatch({
   const sidebarContent = showCommonSections && (
     <>
       <RelatedResourcesSection relationships={sidebarRelationships} onNavigate={onNavigate} />
-      {kind !== 'events' && <EventsSection events={events || []} updates={updates || []} isLoading={eventsLoading ?? false} eventsError={eventsError ?? null} updatesError={updatesError ?? null} hint={eventsHint} />}
+      {kind !== 'events' && <EventsSection fullscreen={!!renderSidebar} events={events || []} updates={updates || []} isLoading={eventsLoading ?? false} eventsError={eventsError ?? null} updatesError={updatesError ?? null} hint={eventsHint} />}
       <LabelsSection data={data} />
       <AnnotationsSection data={data} />
       <MetadataSection data={data} />

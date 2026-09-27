@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection } from './drawer-components'
+import { EventsSection, ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection } from './drawer-components'
 
 const problems = [
   { color: 'red' as const, message: 'Application is Degraded' },
@@ -47,5 +47,18 @@ describe('RelatedResourcesSection', () => {
     expect(html).toContain('Node')
     expect(html).toContain('worker-1')
     expect(html).toContain('<button')
+  })
+})
+
+describe('Recent Events layout', () => {
+  const events = Array.from({ length: 24 }, (_, i) => ({ id: String(i), source: 'k8s_event', eventType: 'Normal', reason: `Reason${i}`, timestamp: '2026-09-27T00:00:00Z' })) as any
+  it('keeps drawer scrolling but lets fullscreen events expand in page flow', () => {
+    const drawer = renderToString(<EventsSection events={events} />)
+    const fullscreen = renderToString(<EventsSection events={events} fullscreen />)
+    expect(drawer).toContain('max-h-64')
+    expect(drawer).not.toContain('Show 14 more events')
+    expect(fullscreen).not.toContain('max-h-64')
+    expect(fullscreen).toContain('Show 14 more events')
+    expect(fullscreen).toContain('Reason23')
   })
 })

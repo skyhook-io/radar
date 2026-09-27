@@ -1,3 +1,4 @@
+import { Disclosure } from './Disclosure'
 import { createContext, useContext, useState } from 'react'
 import { Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -83,25 +84,26 @@ interface SectionProps {
   children: React.ReactNode
   defaultExpanded?: boolean
   contentClassName?: string
+  variant?: 'plain' | 'card'
 }
 
-export function Section({ title, icon: Icon, children, defaultExpanded = true, contentClassName }: SectionProps) {
+export function Section({ title, icon: Icon, children, defaultExpanded = true, contentClassName, variant = 'plain' }: SectionProps) {
   const [expanded, setExpanded] = useState(defaultExpanded)
   const { panelId, buttonProps } = useDisclosure(expanded)
 
   return (
-    <div className="border-b-subtle pb-4 last:border-0">
+    <div className={variant === 'card' ? 'min-w-0 overflow-hidden rounded-lg border border-theme-border bg-theme-surface' : 'border-b-subtle pb-4 last:border-0'}>
       <button
         {...buttonProps}
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 w-full text-left mb-2 hover:text-theme-text-primary transition-colors"
+        className={clsx('flex items-center gap-2 w-full text-left hover:text-theme-text-primary transition-colors', variant === 'card' ? clsx('border-theme-border bg-theme-elevated px-3 py-2.5', expanded && 'border-b') : 'mb-2')}
       >
         <CollapseChevron open={expanded} className="w-4 h-4" />
         {Icon && <Icon className="w-4 h-4 text-theme-text-secondary" />}
-        <span className="text-sm font-medium text-theme-text-secondary">{title}</span>
+        <span className={clsx("font-medium text-theme-text-secondary", variant === 'card' ? 'text-xs uppercase tracking-wider' : 'text-sm')}>{title}</span>
       </button>
       <Collapse open={expanded} id={panelId}>
-        <div className={contentClassName ?? 'pl-6'}>{children}</div>
+        <div className={contentClassName ?? (variant === 'card' ? 'p-3' : 'pl-6')}>{children}</div>
       </Collapse>
     </div>
   )
@@ -293,8 +295,10 @@ export function ConditionsSection({
   conditions,
   getConditionTone,
   defaultExpanded,
+  variant,
 }: {
   conditions?: any[]
+  variant?: 'plain' | 'card'
   defaultExpanded?: boolean
   getConditionTone?: (condition: any) => ConditionTone | undefined
 }) {
@@ -313,6 +317,7 @@ export function ConditionsSection({
 
   return (
     <Section
+      variant={variant}
       title={`Conditions (${conditions.length})${failCount > 0 ? ` · ${failCount} failing` : ''}`}
       defaultExpanded={defaultExpanded ?? conditions.length <= 6}
     >
@@ -889,7 +894,6 @@ const RELATIONSHIP_TRUNCATE_LIMIT = 10
 export function RelationshipGroup({ label, refs, onNavigate }: RelationshipGroupProps) {
   const [showAll, setShowAll] = useState(false)
   if (!refs || refs.length === 0) return null
-
   const truncated = !showAll && refs.length > RELATIONSHIP_TRUNCATE_LIMIT
   const visibleRefs = truncated ? refs.slice(0, RELATIONSHIP_TRUNCATE_LIMIT) : refs
 
@@ -1027,9 +1031,10 @@ interface EventsSectionProps {
   updatesError?: Error | null
   /** Optional hint shown below the event list (e.g. "See Timeline tab for related resources") */
   hint?: React.ReactNode
+  fullscreen?: boolean
 }
 
-export function EventsSection({ events, updates = [], isLoading, eventsError, updatesError, hint }: EventsSectionProps) {
+export function EventsSection({ events, updates = [], isLoading, eventsError, updatesError, hint, fullscreen = false }: EventsSectionProps) {
   const [showUpdates, setShowUpdates] = useState(false)
 
   if (isLoading) {
@@ -1085,42 +1090,46 @@ export function EventsSection({ events, updates = [], isLoading, eventsError, up
     )
   }
 
+  const renderEvent = (event: TimelineEvent, i: number) => (
+  <div
+    key={`${event.id}-${i}`}
+    className={clsx(
+      'p-2 rounded text-sm border-l-2',
+      event.eventType === 'Warning' || (isChangeEvent(event) && event.eventType === 'delete')
+        ? 'bg-red-500/10 border-red-500'
+        : isK8sEvent(event)
+        ? 'bg-blue-500/10 border-blue-500'
+        : 'bg-theme-elevated/30 border-theme-border'
+    )}
+  >
+    <div className="flex items-center justify-between gap-2">
+      <span className="font-medium text-theme-text-primary">
+        {isK8sEvent(event) ? event.reason : event.eventType}
+      </span>
+      <span className="text-xs text-theme-text-tertiary">
+        {formatEventTime(event.timestamp)}
+      </span>
+    </div>
+    {event.message && (
+      <div className="text-xs text-theme-text-secondary mt-1 line-clamp-2">
+        {event.message}
+      </div>
+    )}
+    {isChangeEvent(event) && event.diff?.summary && (
+      <div className="text-xs text-theme-text-secondary mt-1">
+        {event.diff.summary}
+      </div>
+    )}
+  </div>
+  )
   return (
     <Section title={`Recent Events (${visible.length})`} defaultExpanded>
-      <div className="space-y-2 max-h-64 overflow-y-auto">
-        {visible.map((event, i) => (
-          <div
-            key={`${event.id}-${i}`}
-            className={clsx(
-              'p-2 rounded text-sm border-l-2',
-              event.eventType === 'Warning' || (isChangeEvent(event) && event.eventType === 'delete')
-                ? 'bg-red-500/10 border-red-500'
-                : isK8sEvent(event)
-                ? 'bg-blue-500/10 border-blue-500'
-                : 'bg-theme-elevated/30 border-theme-border'
-            )}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-medium text-theme-text-primary">
-                {isK8sEvent(event) ? event.reason : event.eventType}
-              </span>
-              <span className="text-xs text-theme-text-tertiary">
-                {formatEventTime(event.timestamp)}
-              </span>
-            </div>
-            {event.message && (
-              <div className="text-xs text-theme-text-secondary mt-1 line-clamp-2">
-                {event.message}
-              </div>
-            )}
-            {isChangeEvent(event) && event.diff?.summary && (
-              <div className="text-xs text-theme-text-secondary mt-1">
-                {event.diff.summary}
-              </div>
-            )}
-          </div>
-        ))}
+      <div tabIndex={fullscreen ? undefined : 0} className={clsx('space-y-2', !fullscreen && 'max-h-64 overflow-y-auto')}>
+        {(fullscreen ? visible.slice(0, 10) : visible).map(renderEvent)}
       </div>
+      {fullscreen && visible.length > 10 && <Disclosure summary={`Show ${visible.length - 10} more events`} className="mt-2" summaryClassName="text-xs text-accent-text">
+        <div className="mt-2 space-y-2">{visible.slice(10).map(renderEvent)}</div>
+      </Disclosure>}
       {errors}
       {toggle && <div className="mt-2">{toggle}</div>}
       {hint && <div className="mt-2">{hint}</div>}

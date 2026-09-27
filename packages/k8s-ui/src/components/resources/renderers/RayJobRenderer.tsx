@@ -44,7 +44,7 @@ export function RayJobRenderer({ data, onNavigate, submitterEvidence, selectedCl
             <div><p className="mb-1 text-xs text-theme-text-secondary">Last reported application state</p><Badge severity={failed || transitioning ? 'neutral' : jobStatus === 'FAILED' ? 'error' : jobStatus === 'RUNNING' || jobStatus === 'SUCCEEDED' ? 'success' : 'neutral'}>{jobStatus || 'Not reported'}</Badge></div>
           </div>
           {status.reason && <p className="break-words font-medium">{status.reason}</p>}
-          {status.message && <p className="max-h-64 max-w-3xl overflow-auto whitespace-pre-wrap break-words">{status.message}</p>}
+          {status.message && <ControllerMessage message={status.message} />}
           {failed && jobStatus && !['FAILED', 'STOPPED'].includes(jobStatus) && <p className="text-xs text-theme-text-secondary">{jobStatus === 'SUCCEEDED' ? 'The application reported success, but the controller lifecycle failed. Review the controller message and submitter evidence.' : 'Controller failure does not establish that the application has stopped.'}</p>}
           {lifecycle === 'Retrying' && <p className="text-xs text-theme-text-secondary">Preparing to retry. The reported failure and submitter may belong to the attempt being cleaned up.</p>}
           <PropertyList>
@@ -117,5 +117,18 @@ export function RayJobRenderer({ data, onNavigate, submitterEvidence, selectedCl
         </div>
       </div>
     </section>
+  </div>
+}
+
+function ControllerMessage({ message }: { message: string }) {
+  const text = message.trim()
+  const lines = text.split('\n')
+  const isLong = text.length > 480 || lines.length > 4
+  if (!isLong) return <p className="max-w-3xl whitespace-pre-wrap break-words">{message}</p>
+  return <div className="min-w-0 space-y-2">
+    <p className="max-w-3xl whitespace-pre-wrap break-words">{lines.slice(0, 2).join('\n').slice(0, 240)}{'\n…\n'}{text.slice(-240).split('\n').slice(-1)[0]}</p>
+    <Disclosure summary="Full controller message" summaryClassName="text-xs text-accent-text">
+      <pre tabIndex={0} className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded border border-theme-border bg-theme-base p-3 font-mono text-xs">{message}</pre>
+    </Disclosure>
   </div>
 }

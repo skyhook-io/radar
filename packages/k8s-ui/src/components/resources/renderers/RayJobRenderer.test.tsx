@@ -56,3 +56,16 @@ describe('RayJob native evidence', () => {
     expect(render({ ...root, spec: { clusterSelector: { bad: 'selector' } } })).toContain('cleanup is not applied')
   })
 })
+
+describe('controller message disclosure', () => {
+  it('keeps short messages inline', () => {
+    expect(render({ ...root, status: { message: 'Submission failed.' } })).not.toContain('Full controller message')
+  })
+  it.each(['x'.repeat(20000), 'Failure\nline two\nline three\nline four\nTraceback: final cause'])('retains the entire long message behind a collapsed disclosure', message => {
+    const html = render({ ...root, status: { message } })
+    expect(html).toContain('Full controller message')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain(message)
+    expect(html.split('Full controller message')[0]).toContain(message.trim().split('\n').at(-1)!.slice(-240))
+  })
+})
