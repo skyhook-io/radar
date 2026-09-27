@@ -829,6 +829,8 @@ func (s *PostgresStore) OwnedUIDs(ctx context.Context, clusterContext string, ow
 	if len(ownerUIDs) == 0 || limit <= 0 {
 		return nil, nil
 	}
+	ctx, cancel := withPostgresOperationTimeout(ctx)
+	defer cancel()
 	query := `SELECT DISTINCT uid FROM radar_timeline_events
 		WHERE COALESCE(uid, '') <> '' AND owner_uid = ANY($1::text[])`
 	args := []any{ownerUIDs}

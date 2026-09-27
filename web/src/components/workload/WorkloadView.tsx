@@ -790,7 +790,11 @@ export function WorkloadView({
   // This workload's history (only when expanded): the workload, what it owns,
   // K8s Events about those, and the resources attached to it. Older pages load
   // on demand and stay until the viewed workload changes.
-  const historyQuery = useWorkloadHistory(apiKind, namespace, name, effectiveGroup, expanded)
+  // The group settles from the route, or from the fetched resource when the
+  // route has none; asking before then would key the history (and resolve a
+  // colliding kind) under the wrong group and refetch once it settles.
+  const historyGroupSettled = Boolean(rest.group) || resource !== undefined || resourceError != null
+  const historyQuery = useWorkloadHistory(apiKind, namespace, name, effectiveGroup, expanded && historyGroupSettled)
   const {
     events: allEvents,
     truncated: historyTruncated,
@@ -802,7 +806,7 @@ export function WorkloadView({
     historyQuery.data,
     (beforeSeq) => fetchWorkloadHistoryPage(apiKind, namespace, name, effectiveGroup, beforeSeq),
   )
-  const eventsLoading = historyQuery.isLoading
+  const eventsLoading = historyQuery.isLoading || (expanded && !historyGroupSettled)
 
   // RBAC
   const canUpdateSecrets = useCanUpdateSecrets()

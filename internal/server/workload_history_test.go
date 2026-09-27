@@ -416,3 +416,23 @@ func TestMergeNewestFirst_KeepsTheNewestAcrossBothPages(t *testing.T) {
 		t.Errorf("merged = %v, want [a c b]", ids)
 	}
 }
+
+// An Ingress whose own rows have left the timeline still brings the TLS
+// chain it owns, from its live UID.
+func TestWorkloadHistoryScope_WalksAnIngressWithNoRowsOfItsOwn(t *testing.T) {
+	store := withWorkloadHistoryStore(t)
+	appendHistoryRows(t, store, []timeline.TimelineEvent{
+		{ID: "cert", APIVersion: "cert-manager.io/v1", Kind: "Certificate", Name: "web-tls", UID: "cert-1", Owner: &timeline.OwnerInfo{Kind: "Ingress", Name: "web", UID: "ing-1"}},
+		{ID: "cr", APIVersion: "cert-manager.io/v1", Kind: "CertificateRequest", Name: "web-tls-1", UID: "cr-1", Owner: &timeline.OwnerInfo{Kind: "Certificate", Name: "web-tls", UID: "cert-1"}},
+	})
+	key := resourceid.NewRef("apps", "Deployment", "default", "web")
+	attached := []resourceid.Ref{resourceid.NewRef("networking.k8s.io", "Ingress", "default", "web")}
+	live := liveIdentity{UID: "dep-1", AttachedUIDs: []string{"ing-1"}}
+	events, _, err := readWorkloadHistory(t.Context(), store, k8s.ActiveClusterContext(), key, live, attached, 0, 100)
+	if err != nil {
+		t.Fatalf("readWorkloadHistory: %v", err)
+	}
+	if got := fmt.Sprint(historyIDs(events)); got != "[cert cr]" {
+		t.Errorf("history = %s, want [cert cr]", got)
+	}
+}

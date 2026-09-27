@@ -97,7 +97,9 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 	key := resourceid.NewRef(group, kind, namespace, name)
 	clusterContext := k8s.ActiveClusterContext()
 	live := liveWorkloadIdentity(r.Context(), chi.URLParam(r, "kind"), group, namespace, name)
-	events, incomplete, err := readWorkloadHistory(r.Context(), store, clusterContext, key, live, s.workloadAttachments(r, key, live.Object), beforeSeq, limit+1)
+	attached := s.workloadAttachments(r, key, live.Object)
+	live.AttachedUIDs = liveAttachmentUIDs(r.Context(), attached)
+	events, incomplete, err := readWorkloadHistory(r.Context(), store, clusterContext, key, live, attached, beforeSeq, limit+1)
 	if err != nil {
 		log.Printf("[workload-history] Failed to query the history of %s %s/%s: %v", kind, namespace, name, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -121,7 +123,7 @@ func (s *Server) handleWorkloadHistory(w http.ResponseWriter, r *http.Request) {
 // readWorkloadHistory reads one page of a workload's history, newest arrival
 // first, from before beforeSeq (0 = the newest).
 func readWorkloadHistory(ctx context.Context, store timeline.EventStore, clusterContext string, key resourceid.Ref, live liveIdentity, attached []resourceid.Ref, beforeSeq int64, limit int) ([]timeline.TimelineEvent, bool, error) {
-	memoKey := historyScopeMemoKey(clusterContext, key, live.UID, attached)
+	memoKey := historyScopeMemoKey(clusterContext, key, live, attached)
 	scope, incomplete, cached := historyScopes.get(memoKey)
 	if !cached {
 		var err error
@@ -245,13 +247,14 @@ func newHistoryScopeMemo(ttl time.Duration, max int) *historyScopeMemo {
 	return &historyScopeMemo{ttl: ttl, max: max, entries: map[string]*historyScopeEntry{}, now: time.Now}
 }
 
-func historyScopeMemoKey(clusterContext string, key resourceid.Ref, liveUID string, attached []resourceid.Ref) string {
-	parts := []string{clusterContext, key.Group, key.Kind, key.Namespace, key.Name, liveUID}
+func historyScopeMemoKey(clusterContext string, key resourceid.Ref, live liveIdentity, attached []resourceid.Ref) string {
+	parts := []string{clusterContext, key.Group, key.Kind, key.Namespace, key.Name, live.UID}
 	for _, ref := range attached {
 		if walksAttachment(ref) {
 			parts = append(parts, ref.Group+"/"+ref.Kind+"/"+ref.Name)
 		}
 	}
+	parts = append(parts, live.AttachedUIDs...)
 	sort.Strings(parts[6:])
 	return strings.Join(parts, "\x00")
 }
@@ -321,6 +324,24 @@ type liveIdentity struct {
 	Object   metav1.Object
 	UID      string
 	OwnerUID string
+	// AttachedUIDs are the live UIDs of the attachments whose owned
+	// resources are walked (Ingresses and routes). Like the workload's own
+	// UID, they reach what those own even when the timeline no longer holds
+	// a row for the attachment itself.
+	AttachedUIDs []string
+}
+
+func liveAttachmentUIDs(ctx context.Context, attached []resourceid.Ref) []string {
+	var uids []string
+	for _, ref := range attached {
+		if !walksAttachment(ref) {
+			continue
+		}
+		if id := liveWorkloadIdentity(ctx, ref.Kind, ref.Group, ref.Namespace, ref.Name); id.UID != "" {
+			uids = append(uids, id.UID)
+		}
+	}
+	return uids
 }
 
 // liveWorkloadIdentity reads the workload as it exists now. The timeline
@@ -481,6 +502,11 @@ func workloadHistoryScope(ctx context.Context, store timeline.EventStore, cluste
 	// cert-manager's Certificate for an Ingress's TLS, and the requests and
 	// orders that renew it. A Service isn't walked: what it owns is
 	// EndpointSlices, whose churn would bury the workload's own history.
+	for _, uid := range live.AttachedUIDs {
+		if add(uid) {
+			frontier = append(frontier, uid)
+		}
+	}
 	for _, ref := range attached {
 		if !walksAttachment(ref) {
 			continue

@@ -1568,6 +1568,22 @@ function EventsTab({
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
+      {error && (
+        <div className="shrink-0 flex flex-wrap items-center gap-x-2 border-b border-theme-border bg-theme-base px-4 py-1.5 text-xs" role="alert">
+          <span className="text-[var(--color-error)]" title={error.message}>
+            Couldn't load this workload's history. Showing only what loaded.
+          </span>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="underline decoration-theme-border underline-offset-2 text-theme-text-secondary hover:text-theme-text-primary"
+            >
+              Try again
+            </button>
+          )}
+        </div>
+      )}
       {(scoped || truncated || incomplete) && (
         <div className="shrink-0 flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-theme-border bg-theme-base px-4 py-1.5 text-xs text-theme-text-secondary" role="note">
           {scoped && (
