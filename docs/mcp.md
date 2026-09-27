@@ -56,34 +56,34 @@ The stdio mode is intended only for catalog introspection; normal Radar sessions
 
 ## Setup Instructions
 
-Connect your AI tool to Radar's MCP server. Radar must be running first (`radar` or `kubectl radar`).
+Connect your AI tool to Radar's MCP server. Radar must be running first (`radar` or `kubectl radar`). The examples use the default endpoint `http://localhost:9280/mcp`; if Radar runs on another port, use the endpoint shown in Radar's MCP dialog.
 
 ### Claude Code
 
 Run this command:
 
 ```bash
-claude mcp add radar --transport http http://localhost:9280/mcp
+claude mcp add --transport http radar http://localhost:9280/mcp
 ```
 
-### Claude Desktop
+### Codex
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+Run this command:
 
-```json
-{
-  "mcpServers": {
-    "radar": {
-      "type": "http",
-      "url": "http://localhost:9280/mcp"
-    }
-  }
-}
+```bash
+codex mcp add radar --url http://localhost:9280/mcp
+```
+
+Or add to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.radar]
+url = "http://localhost:9280/mcp"
 ```
 
 ### Cursor
 
-Add to `~/.cursor/mcp.json`:
+Add to `~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json` (one project):
 
 ```json
 {
@@ -95,21 +95,7 @@ Add to `~/.cursor/mcp.json`:
 }
 ```
 
-### Windsurf
-
-Add to `~/.codeium/windsurf/mcp_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "radar": {
-      "serverUrl": "http://localhost:9280/mcp"
-    }
-  }
-}
-```
-
-### VS Code Copilot
+### VS Code (GitHub Copilot)
 
 Add to `.vscode/mcp.json` in your workspace:
 
@@ -124,54 +110,33 @@ Add to `.vscode/mcp.json` in your workspace:
 }
 ```
 
-### Cline
+Or add it to your user profile from the command line:
 
-Add via the Cline MCP settings UI:
-
-```json
-{
-  "mcpServers": {
-    "radar": {
-      "url": "http://localhost:9280/mcp",
-      "type": "streamableHttp"
-    }
-  }
-}
+```bash
+code --add-mcp '{"name":"radar","type":"http","url":"http://localhost:9280/mcp"}'
 ```
 
-### JetBrains AI
+### GitHub Copilot CLI
 
-Add via **Settings > Tools > AI Assistant > MCP**:
+Run this command:
 
-```json
-{
-  "mcpServers": {
-    "radar": {
-      "url": "http://localhost:9280/mcp"
-    }
-  }
-}
+```bash
+copilot mcp add --transport http radar http://localhost:9280/mcp
 ```
 
-### OpenAI Codex
-
-Add to `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.radar]
-url = "http://localhost:9280/mcp"
-```
+This writes the server to `~/.copilot/mcp-config.json`.
 
 ### OpenCode
 
-Add to `~/.config/opencode/opencode.json`:
+Add to `~/.config/opencode/opencode.json` (all projects) or `opencode.json` in your project root:
 
 ```json
 {
   "mcp": {
     "radar": {
       "type": "remote",
-      "url": "http://localhost:9280/mcp"
+      "url": "http://localhost:9280/mcp",
+      "enabled": true
     }
   }
 }
@@ -193,9 +158,117 @@ normal setup, Radar cannot authenticate write results and reports the Apply
 outcome as uncertain until current-state verification. Terminal handoff and
 reasoning-effort controls are not available for OpenCode.
 
+### Google Antigravity
+
+Add to `~/.gemini/config/mcp_config.json` (all workspaces) or `.agents/mcp_config.json` (one workspace). Antigravity uses `serverUrl` for remote servers:
+
+```json
+{
+  "mcpServers": {
+    "radar": {
+      "serverUrl": "http://localhost:9280/mcp"
+    }
+  }
+}
+```
+
+### Kiro
+
+Add to `~/.kiro/settings/mcp.json` (all workspaces) or `.kiro/settings/mcp.json` (one workspace):
+
+```json
+{
+  "mcpServers": {
+    "radar": {
+      "url": "http://localhost:9280/mcp"
+    }
+  }
+}
+```
+
+### JetBrains AI Assistant / Junie
+
+AI Assistant: add via **Settings > Tools > AI Assistant > Model Context Protocol (MCP)**. Junie: add to `~/.junie/mcp/mcp.json` (all projects) or `.junie/mcp/mcp.json` (one project). Both use the same JSON:
+
+```json
+{
+  "mcpServers": {
+    "radar": {
+      "url": "http://localhost:9280/mcp"
+    }
+  }
+}
+```
+
+### Cline
+
+Add via the Cline MCP settings UI. Set `type` to `streamableHttp`; without it, Cline uses the legacy SSE transport:
+
+```json
+{
+  "mcpServers": {
+    "radar": {
+      "type": "streamableHttp",
+      "url": "http://localhost:9280/mcp"
+    }
+  }
+}
+```
+
+### Devin Desktop (formerly Windsurf)
+
+Add to `~/.config/devin/mcp_config.json` (macOS/Linux) or `%APPDATA%\devin\mcp_config.json` (Windows). Devin Desktop uses `serverUrl` for remote servers:
+
+```json
+{
+  "mcpServers": {
+    "radar": {
+      "serverUrl": "http://localhost:9280/mcp"
+    }
+  }
+}
+```
+
+### Claude Desktop
+
+Claude Desktop's custom connectors connect from Anthropic's cloud and cannot reach `localhost`. For a local Radar, use the [`mcp-remote`](https://github.com/geelen/mcp-remote) bridge (requires Node.js). Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "radar": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://localhost:9280/mcp"]
+    }
+  }
+}
+```
+
+`mcp-remote` accepts plain `http://` only for `localhost` and `127.0.0.1`. For any other `http://` host, add `"--allow-http"` after the URL.
+
+### Zed
+
+Add to your Zed `settings.json`:
+
+```json
+{
+  "context_servers": {
+    "radar": {
+      "url": "http://localhost:9280/mcp"
+    }
+  }
+}
+```
+
 ### Gemini CLI
 
-Add to `~/.gemini/settings.json`:
+For Gemini Code Assist Standard and Enterprise users. Run this command:
+
+```bash
+gemini mcp add --transport http radar http://localhost:9280/mcp
+```
+
+Or add to `~/.gemini/settings.json`:
 
 ```json
 {
@@ -207,19 +280,7 @@ Add to `~/.gemini/settings.json`:
 }
 ```
 
-### Antigravity
-
-Add to `~/.gemini/config/mcp_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "radar": {
-      "serverUrl": "http://localhost:9280/mcp"
-    }
-  }
-}
-```
+Any other MCP client that supports the Streamable HTTP transport can connect to the same endpoint.
 
 ## MCP Registry / Docker
 

@@ -116,27 +116,10 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
 
   const currentPort = Number(window.location.port) || 80
 
-  const claudeDesktopConfig = JSON.stringify({
+  const mcpServersUrlConfig = (key: 'url' | 'serverUrl') => JSON.stringify({
     mcpServers: {
       radar: {
-        type: "http",
-        url: mcpUrl,
-      }
-    }
-  }, null, 2)
-
-  const cursorConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        url: mcpUrl,
-      }
-    }
-  }, null, 2)
-
-  const windsurfConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        serverUrl: mcpUrl,
+        [key]: mcpUrl,
       }
     }
   }, null, 2)
@@ -150,37 +133,50 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
     }
   }, null, 2)
 
-  const geminiConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        httpUrl: mcpUrl,
-      }
-    }
-  }, null, 2)
-
-  const codexConfig = `[mcp_servers.radar]\nurl = "${mcpUrl}"`
-
-  const clineConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        url: mcpUrl,
-      }
-    }
-  }, null, 2)
-
-  const jetbrainsConfig = JSON.stringify({
-    mcpServers: {
-      radar: {
-        url: mcpUrl,
-      }
-    }
-  }, null, 2)
-
   const opencodeConfig = JSON.stringify({
     mcp: {
       radar: {
         type: "remote",
         url: mcpUrl,
+        enabled: true,
+      }
+    }
+  }, null, 2)
+
+  const clineConfig = JSON.stringify({
+    mcpServers: {
+      radar: {
+        type: "streamableHttp",
+        url: mcpUrl,
+      }
+    }
+  }, null, 2)
+
+  // mcp-remote rejects plain http:// unless the host is localhost/127.0.0.1 or --allow-http is passed.
+  const parsedMcpUrl = new URL(mcpUrl)
+  const mcpRemoteNeedsAllowHttp = parsedMcpUrl.protocol === 'http:' && parsedMcpUrl.hostname !== 'localhost' && parsedMcpUrl.hostname !== '127.0.0.1'
+  const mcpRemoteArgs = ['-y', 'mcp-remote', mcpUrl, ...(mcpRemoteNeedsAllowHttp ? ['--allow-http'] : [])]
+  const claudeDesktopConfig = JSON.stringify({
+    mcpServers: {
+      radar: {
+        command: "npx",
+        args: mcpRemoteArgs,
+      }
+    }
+  }, null, 2)
+
+  const zedConfig = JSON.stringify({
+    context_servers: {
+      radar: {
+        url: mcpUrl,
+      }
+    }
+  }, null, 2)
+
+  const geminiConfig = JSON.stringify({
+    mcpServers: {
+      radar: {
+        httpUrl: mcpUrl,
       }
     }
   }, null, 2)
@@ -285,16 +281,20 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
             <h4 className="text-sm font-semibold text-theme-text-primary">Connect your AI tool</h4>
 
             {[
-              { icon: Terminal, name: 'Claude Code', path: '', config: `claude mcp add radar --transport http ${mcpUrl}` },
-              { icon: MessageSquare, name: 'Claude Desktop', path: '~/Library/Application Support/Claude/claude_desktop_config.json', config: claudeDesktopConfig },
-              { icon: Code2, name: 'Cursor', path: '~/.cursor/mcp.json', config: cursorConfig },
-              { icon: Code2, name: 'Windsurf', path: '~/.codeium/windsurf/mcp_config.json', config: windsurfConfig },
-              { icon: Code2, name: 'VS Code Copilot', path: '.vscode/mcp.json', config: vsCodeConfig },
-              { icon: Code2, name: 'Cline', path: 'Cline MCP settings (via UI)', config: clineConfig },
-              { icon: Code2, name: 'JetBrains AI', path: 'Settings → Tools → AI Assistant → MCP', config: jetbrainsConfig },
+              { icon: Terminal, name: 'Claude Code', path: '', config: `claude mcp add --transport http radar ${mcpUrl}` },
+              { icon: Terminal, name: 'Codex', path: '', config: `codex mcp add radar --url ${mcpUrl}` },
+              { icon: Code2, name: 'Cursor', path: '~/.cursor/mcp.json', config: mcpServersUrlConfig('url') },
+              { icon: Code2, name: 'VS Code (GitHub Copilot)', path: '.vscode/mcp.json', config: vsCodeConfig },
+              { icon: Terminal, name: 'GitHub Copilot CLI', path: '', config: `copilot mcp add --transport http radar ${mcpUrl}` },
               { icon: Terminal, name: 'OpenCode', path: '~/.config/opencode/opencode.json', config: opencodeConfig },
-              { icon: Terminal, name: 'OpenAI Codex', path: '~/.codex/config.toml', config: codexConfig },
-              { icon: Terminal, name: 'Gemini CLI', path: '~/.gemini/settings.json', config: geminiConfig },
+              { icon: Code2, name: 'Google Antigravity', path: '~/.gemini/config/mcp_config.json', config: mcpServersUrlConfig('serverUrl') },
+              { icon: Code2, name: 'Kiro', path: '~/.kiro/settings/mcp.json', config: mcpServersUrlConfig('url') },
+              { icon: Code2, name: 'JetBrains AI Assistant / Junie', path: 'AI Assistant settings or ~/.junie/mcp/mcp.json', config: mcpServersUrlConfig('url') },
+              { icon: Code2, name: 'Cline', path: 'Cline MCP settings (via UI)', config: clineConfig },
+              { icon: Code2, name: 'Devin Desktop (formerly Windsurf)', path: '~/.config/devin/mcp_config.json', config: mcpServersUrlConfig('serverUrl') },
+              { icon: MessageSquare, name: 'Claude Desktop', path: '~/Library/Application Support/Claude/claude_desktop_config.json', config: claudeDesktopConfig },
+              { icon: Code2, name: 'Zed', path: 'Zed settings.json', config: zedConfig },
+              { icon: Terminal, name: 'Gemini CLI (Code Assist Standard/Enterprise)', path: '~/.gemini/settings.json', config: geminiConfig },
             ].map((agent) => (
               <Disclosure
                 key={agent.name}
