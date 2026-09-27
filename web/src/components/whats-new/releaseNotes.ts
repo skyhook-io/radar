@@ -1,4 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
+import { Bot, GitCompareArrows, Layers, Network, Scale, ShieldAlert } from 'lucide-react'
 import { compareVersions } from '../../utils/version'
 
 export interface ReleaseHighlight {
@@ -24,7 +25,70 @@ export interface ReleaseNotes {
 // that skips the release with notes) still gets them. Every minor and major
 // release must have its own entry: scripts/check-whats-new.sh refuses to
 // release one without it.
-export const RELEASE_NOTES: ReleaseNotes[] = []
+export const RELEASE_NOTES: ReleaseNotes[] = [
+  {
+    version: 'v1.15.0',
+    releaseUrl: 'https://github.com/skyhook-io/radar/releases/tag/v1.15.0',
+    highlights: [
+      {
+        id: 'ai-investigations',
+        icon: Bot,
+        title: 'AI investigations you can check',
+        // No link: the investigations workspace redirects home when this run
+        // mode can't host local agents.
+        description: 'A short verdict first, then the logs, events and resource state behind it, shown by Radar where the agent cites them, then next steps. Now also runs on your OpenCode setup, including AWS Bedrock.',
+      },
+      {
+        id: 'gitops-manifest-diff',
+        icon: GitCompareArrows,
+        title: 'Full manifest diffs for Argo CD resources',
+        description: 'Expand any drifted resource to compare the Git-rendered manifest with the live one, side by side or unified. Resources an app deploys to another cluster say which cluster they live on.',
+        path: '/gitops',
+        cta: 'Open GitOps',
+      },
+      {
+        id: 'tls-expiry-audit',
+        icon: ShieldAlert,
+        title: 'Expiring TLS certificates in Checks',
+        description: 'Certificates in TLS Secrets that expire within 30 days now land in the Checks queue, high severity under 7 days.',
+        path: '/checks',
+        cta: 'Open Checks',
+      },
+      {
+        id: 'rightsizing-risks-first',
+        icon: Scale,
+        title: 'Rightsizing puts risk before savings',
+        description: 'OOM signals, limit conflicts and throttling lead the list, partial evidence no longer hides the guidance that is known, and AI assistants can query it over MCP.',
+        path: '/cost/rightsizing',
+        cta: 'Open Rightsizing',
+      },
+      {
+        id: 'rollout-traffic-topology',
+        icon: Network,
+        title: 'Canary and blue-green Rollouts in Topology',
+        description: 'See which Pods are canary or stable (active or preview for blue-green), which Services route to each side, and the canary traffic weight.',
+        path: '/topology',
+        cta: 'Open Topology',
+      },
+      {
+        id: 'kueue-jobset',
+        icon: Layers,
+        title: 'See why a queued JobSet has no Pods',
+        description: 'Follow a JobSet to its Kueue Workload, queues and admission checks, and drill into each role and member Job. Ray clusters and services get their own detail pages too.',
+      },
+    ],
+    improvements: [
+      'Resource tables remember your sort for each resource kind',
+      'Install Helm charts from OCI registries',
+      'Issues show where a failing Pod differs from its owner template',
+      'Strimzi connector task failures and admission webhook call failures surface in Issues',
+      'PVC details say why usage data is unavailable',
+      'Bind the web UI to a specific IP with --listen-address',
+      'The install script honors a custom INSTALL_DIR',
+      'AWS Load Balancer Controller Ingress backends resolve through action annotations',
+    ],
+  },
+]
 
 export function releaseNotesFor(
   version: string | undefined,
