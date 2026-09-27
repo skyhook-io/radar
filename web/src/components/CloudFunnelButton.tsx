@@ -716,7 +716,7 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
                 ? "Setup runs here in the app: Radar is installed in your cluster and tunnels outward to Radar Cloud, so there's no ingress to open."
                 : "Radar runs in your cluster and tunnels outward to Radar Cloud, so there's no ingress to open."}{' '}
               Live views are fetched from your cluster when someone opens them, within their permissions. Radar
-              Cloud stores only event history, changes and investigation results, so you can go back in time to
+              Cloud stores event history, changes and investigation results, so you can go back in time to
               debug.
             </p>
           </section>
