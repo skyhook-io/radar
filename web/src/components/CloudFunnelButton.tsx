@@ -752,12 +752,6 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
           </section>
         </div>
       </Collapse>
-      <div className="mb-5 border-l-2 border-emerald-500/40 pl-3.5">
-        <p className="text-[12px] leading-relaxed text-theme-text-secondary">
-          Don't need Radar Cloud right now? That's fine. What you're running is already a full product,
-          not a demo. We're here if you ever do.
-        </p>
-      </div>
     </div>
   )
 }
