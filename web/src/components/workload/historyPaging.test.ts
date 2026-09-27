@@ -3,9 +3,9 @@ import type { WorkloadHistoryPage } from '../../api/client'
 import type { TimelineEvent } from '../../types'
 import { addOlderPage, foldRefreshedPage } from './historyPaging'
 
-// Rows newest first; ids double as their sequence number.
-const rows = (from: number, to: number) =>
-  Array.from({ length: from - to + 1 }, (_, i) => ({ id: String(from - i) }) as TimelineEvent)
+// Rows newest first, each id its own seq.
+const ev = (id: string, seq: number) => ({ id, seq }) as TimelineEvent
+const rows = (from: number, to: number) => Array.from({ length: from - to + 1 }, (_, i) => ev(String(from - i), from - i))
 const page = (from: number, to: number, truncated: boolean): WorkloadHistoryPage => ({
   events: rows(from, to),
   truncated,
@@ -47,5 +47,20 @@ describe('workload history paging', () => {
   it('restarts instead of landing a first older page behind a hole', () => {
     const base = page(40, 21, true)
     expect(addOlderPage(null, page(20, 1, false), base, page(90, 71, true)).kind).toBe('restart')
+  })
+
+  it('a repeated K8s Event must not hide a gap after Load older', () => {
+    // Loaded after Load older: events 120..1. "backoff" is a K8s Event already held, at seq 50.
+    const loaded: WorkloadHistoryPage = { events: [...rows(120, 51), ev('backoff', 50), ...rows(49, 1)], truncated: false }
+    // 200 arrive (121..320) and the page holds 20; "backoff" fired again: same id, seq 320.
+    const refreshed: WorkloadHistoryPage = { events: [ev('backoff', 320), ...rows(319, 301)], truncated: true, nextBeforeSeq: 301 }
+    expect(foldRefreshedPage(loaded, refreshed).kind).toBe('restart')
+  })
+
+  it("keeps a repeated K8s Event's newer copy", () => {
+    const loaded: WorkloadHistoryPage = { events: [...rows(30, 21), ev('backoff', 20), ...rows(19, 1)], truncated: false }
+    const step = foldRefreshedPage(loaded, { events: [ev('backoff', 31), ...rows(30, 22)], truncated: true, nextBeforeSeq: 22 })
+    if (step.kind !== 'set') throw new Error(step.kind)
+    expect(step.history.events.filter((e) => e.id === 'backoff').map((e) => e.seq)).toEqual([31])
   })
 })

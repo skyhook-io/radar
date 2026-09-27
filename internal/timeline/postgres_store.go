@@ -888,7 +888,7 @@ func (s *PostgresStore) Identities(ctx context.Context, q IdentityQuery, limit i
 		query += " AND starts_with(name, " + arg(q.NamePrefix) + ")"
 	}
 	if q.OwnerUnknown {
-		query += " AND COALESCE(owner_uid, '') = ''"
+		query += ownerUnknownSQL
 	}
 	query += " LIMIT " + arg(limit)
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -1014,7 +1014,7 @@ func (s *PostgresStore) buildQuery(opts QueryOptions) (string, []any, error) {
 			}
 		}
 		refs(opts.Scope.Refs, "")
-		refs(opts.Scope.OwnerlessRefs, " AND COALESCE(owner_uid, '') = ''")
+		refs(opts.Scope.OwnerlessRefs, ownerUnknownSQL)
 		if len(parts) == 0 {
 			query.WriteString(" AND false")
 		} else {

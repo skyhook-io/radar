@@ -278,6 +278,15 @@ func (s *SQLiteStore) initSchema() error {
 	if _, err := s.db.Exec("CREATE INDEX IF NOT EXISTS idx_events_owner_uid ON events(owner_uid)"); err != nil {
 		return err
 	}
+	// Without table statistics the planner reaches for idx_events_cluster_ts,
+	// which narrows nothing when every row shares one cluster, and scans the
+	// table instead of using the UID indexes. The mask analyzes every table
+	// that lacks statistics (the first open of a large database takes seconds,
+	// once; the statistics persist in the file) and is otherwise near free.
+	// Run here rather than in the background: the store has one connection.
+	if _, err := s.db.Exec("PRAGMA optimize=0x10002"); err != nil {
+		log.Printf("[timeline] Failed to gather query planner statistics for %s: %v", s.path, err)
+	}
 
 	return nil
 }
@@ -508,7 +517,7 @@ func sqliteScopeClause(scope ResourceScope) (string, []any) {
 		}
 	}
 	refs(scope.Refs, "")
-	refs(scope.OwnerlessRefs, " AND COALESCE(owner_uid, '') = ''")
+	refs(scope.OwnerlessRefs, ownerUnknownSQL)
 	if len(parts) == 0 {
 		return " AND 0", nil
 	}
@@ -526,6 +535,10 @@ func nonEmpty(values []string) []string {
 	}
 	return out
 }
+
+// ownerUnknownSQL is pkgtimeline.OwnerUnknown as a SQL condition, shared by
+// the SQLite and Postgres stores.
+const ownerUnknownSQL = " AND COALESCE(owner_uid, '') = '' AND COALESCE(owner_evidence, '') NOT IN ('observed', 'enriched', 'reconstructed')"
 
 const sqliteAPIGroupExpr = "CASE WHEN instr(api_version, '/') > 0 THEN substr(api_version, 1, instr(api_version, '/') - 1) ELSE '' END"
 
@@ -582,7 +595,7 @@ func (s *SQLiteStore) Identities(ctx context.Context, q IdentityQuery, limit int
 		args = append(args, len(q.NamePrefix), q.NamePrefix)
 	}
 	if q.OwnerUnknown {
-		query += " AND COALESCE(owner_uid, '') = ''"
+		query += ownerUnknownSQL
 	}
 	query += " LIMIT ?"
 	args = append(args, limit)
@@ -1158,6 +1171,11 @@ func (s *SQLiteStore) runCleanup(retention time.Duration, maxStorageBytes int64)
 	}
 	if n > 0 {
 		log.Printf("[timeline] cleanup: deleted %d events from %s", n, s.path)
+	}
+	// Keeps planner statistics current as the table turns over; re-analyzes
+	// only tables that changed enough to need it.
+	if _, err := s.db.ExecContext(ctx, "PRAGMA optimize"); err != nil {
+		log.Printf("[timeline] Failed to refresh query planner statistics for %s: %v", s.path, err)
 	}
 }
 

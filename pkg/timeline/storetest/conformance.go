@@ -752,6 +752,10 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		add("other-case", "batch/v1", "Backup-4", "uid-d", "ctx-a", nil)
 		add("other-cluster", "batch/v1", "backup-5", "uid-e", "ctx-b", nil)
 		add("volcano", "batch.volcano.sh/v1alpha1", "backup-1", "uid-v", "ctx-a", nil)
+		mustAppend(t, store, timeline.TimelineEvent{
+			ID: "standalone", Timestamp: base, Source: timeline.SourceInformer, ClusterContext: "ctx-a", APIVersion: "batch/v1",
+			Kind: "Job", Namespace: "default", Name: "backup-9", UID: "uid-s", OwnerEvidence: timeline.OwnerObserved, EventType: timeline.EventTypeAdd,
+		})
 		read := func(q timeline.IdentityQuery, limit int) []string {
 			t.Helper()
 			got, err := store.Identities(ctx, q, limit)
@@ -790,6 +794,17 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		add("ownerless", nil)
 		add("owner-name-only", &timeline.OwnerInfo{Kind: "CronJob", Name: "backup"})
 		add("owned-elsewhere", &timeline.OwnerInfo{Kind: "CronJob", Name: "other", UID: "uid-other"})
+		// Rows that saw their subject and recorded that it had no owner.
+		for _, evidence := range []timeline.OwnerEvidence{timeline.OwnerObserved, timeline.OwnerEnriched, timeline.OwnerReconstructed} {
+			mustAppend(t, store, timeline.TimelineEvent{
+				ID: "known-none-" + string(evidence), Timestamp: base, Source: timeline.SourceK8sEvent, APIVersion: "batch/v1",
+				Kind: "Job", Namespace: "default", Name: "backup-1", UID: "uid-a", OwnerEvidence: evidence, EventType: timeline.EventTypeWarning,
+			})
+		}
+		mustAppend(t, store, timeline.TimelineEvent{
+			ID: "missed", Timestamp: base, Source: timeline.SourceK8sEvent, APIVersion: "batch/v1",
+			Kind: "Job", Namespace: "default", Name: "backup-1", UID: "uid-a", OwnerEvidence: timeline.OwnerMissed, EventType: timeline.EventTypeWarning,
+		})
 		got, err := store.Query(ctx, timeline.QueryOptions{
 			Scope: timeline.ResourceScope{OwnerlessRefs: []resourceid.Ref{resourceid.NewRef("batch", "Job", "default", "backup-1")}},
 			Limit: 10, IncludeManaged: true, IncludeK8sEvents: true,
@@ -799,8 +814,8 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		}
 		ids := idsOfEvents(got)
 		sort.Strings(ids)
-		if fmt.Sprint(ids) != "[owner-name-only ownerless]" {
-			t.Errorf("got %v, want [owner-name-only ownerless]", ids)
+		if fmt.Sprint(ids) != "[missed owner-name-only ownerless]" {
+			t.Errorf("got %v, want [missed owner-name-only ownerless]: an unknown owner only", ids)
 		}
 	})
 

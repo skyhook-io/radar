@@ -7,7 +7,7 @@ import type { TimelineEvent } from '../../types'
 import { useHistoryPaging } from './historyPaging'
 
 const page = (prefix: string, from: number, to: number, truncated: boolean): WorkloadHistoryPage => ({
-  events: Array.from({ length: from - to + 1 }, (_, i) => ({ id: `${prefix}${from - i}` }) as TimelineEvent),
+  events: Array.from({ length: from - to + 1 }, (_, i) => ({ id: `${prefix}${from - i}`, seq: from - i }) as TimelineEvent),
   truncated,
   nextBeforeSeq: truncated ? to : undefined,
 })

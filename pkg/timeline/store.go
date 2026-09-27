@@ -144,8 +144,9 @@ type ResourceScope struct {
 	OwnerUIDs []string
 	Refs      []resourceid.Ref
 	// OwnerlessRefs are resources attributed without an owner record (for
-	// example by the name a controller gives its children). A row that
-	// records an owner UID never matches through them: that owner decides.
+	// example by the name a controller gives its children). Only a row whose
+	// owner is unknown (OwnerUnknown) matches through them: a recorded owner
+	// decides, and so does a recorded absence of one.
 	OwnerlessRefs []resourceid.Ref
 }
 
@@ -168,10 +169,25 @@ func (s ResourceScope) Matches(e *TimelineEvent) bool {
 	if slices.ContainsFunc(s.Refs, func(ref resourceid.Ref) bool { return rowIsAbout(e, ref) }) {
 		return true
 	}
-	if e.Owner == nil || e.Owner.UID == "" {
+	if OwnerUnknown(e) {
 		return slices.ContainsFunc(s.OwnerlessRefs, func(ref resourceid.Ref) bool { return rowIsAbout(e, ref) })
 	}
 	return false
+}
+
+// OwnerUnknown reports whether a row leaves its subject's owner unknown: it
+// records no owner UID, and nothing that saw the subject recorded that it had
+// none (observed, enriched and reconstructed rows did look). The SQL stores
+// encode the same rule.
+func OwnerUnknown(e *TimelineEvent) bool {
+	if e.Owner != nil && e.Owner.UID != "" {
+		return false
+	}
+	switch e.OwnerEvidence {
+	case OwnerObserved, OwnerEnriched, OwnerReconstructed:
+		return false
+	}
+	return true
 }
 
 func rowIsAbout(e *TimelineEvent, ref resourceid.Ref) bool {
@@ -191,8 +207,9 @@ type IdentityQuery struct {
 	Kinds []string
 	// NamePrefix keeps rows whose name starts with it, case-sensitively.
 	NamePrefix string
-	// OwnerUnknown keeps rows that record no owner UID: K8s Events whose
-	// subject was already gone, and rows written before owner UIDs were kept.
+	// OwnerUnknown keeps rows whose subject's owner is unknown (see the
+	// OwnerUnknown func): mostly K8s Events whose subject was already gone,
+	// and rows written before owners were recorded.
 	OwnerUnknown bool
 }
 
@@ -213,7 +230,7 @@ func (q IdentityQuery) Matches(e *TimelineEvent) bool {
 	if q.NamePrefix != "" && !strings.HasPrefix(e.Name, q.NamePrefix) {
 		return false
 	}
-	return !q.OwnerUnknown || e.Owner == nil || e.Owner.UID == ""
+	return !q.OwnerUnknown || OwnerUnknown(e)
 }
 
 // Identity is one resource as a row recorded it. OwnerUID is empty when the

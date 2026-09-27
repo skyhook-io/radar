@@ -6,16 +6,37 @@ import type { TimelineEvent } from '../../types'
 // its own, and older pages load on demand below it. These rules keep the two
 // contiguous. When they can't (more arrived between refreshes than one page
 // holds), paging restarts from the newest page instead of leaving a hole.
+//
+// Continuity is judged by seq, not by id: a K8s Event that fires again keeps
+// its id but moves to a new, higher seq, so a page can share an id with what's
+// loaded and still not reach it.
 
 export type PagingStep = { kind: 'keep' } | { kind: 'restart' } | { kind: 'set'; history: WorkloadHistoryPage }
 
+const seqOf = (e: TimelineEvent) => e.seq ?? 0
+
+/** Whether a newest page reaches down to rows already loaded, leaving no gap. */
+function reaches(page: WorkloadHistoryPage, loaded: TimelineEvent[]): boolean {
+  if (!page.truncated) return true
+  if (loaded.length === 0 || page.events.length === 0) return false
+  const newestLoaded = Math.max(...loaded.map(seqOf))
+  const oldestOnPage = Math.min(...page.events.map(seqOf))
+  return oldestOnPage <= newestLoaded
+}
+
+/** Newer rows first; a row both lists hold keeps the newer copy (a repeated
+ *  K8s Event's count and message move with it). */
+function mergeNewer(newer: TimelineEvent[], older: TimelineEvent[]): TimelineEvent[] {
+  const ids = new Set(newer.map((e) => e.id))
+  return [...newer, ...older.filter((e) => !ids.has(e.id))]
+}
+
 /** Folds a refreshed newest page into the loaded older pages. */
 export function foldRefreshedPage(loaded: WorkloadHistoryPage, page: WorkloadHistoryPage): PagingStep {
-  const known = new Set(loaded.events.map((e) => e.id))
-  const added = page.events.filter((e) => !known.has(e.id))
-  if (added.length === 0) return { kind: 'keep' }
-  if (page.truncated && added.length === page.events.length) return { kind: 'restart' }
-  return { kind: 'set', history: { ...loaded, events: [...added, ...loaded.events] } }
+  const seqById = new Map(loaded.events.map((e) => [e.id, seqOf(e)]))
+  if (page.events.every((e) => seqById.get(e.id) === seqOf(e))) return { kind: 'keep' }
+  if (!reaches(page, loaded.events)) return { kind: 'restart' }
+  return { kind: 'set', history: { ...loaded, events: mergeNewer(page.events, loaded.events) } }
 }
 
 /**
@@ -30,12 +51,13 @@ export function addOlderPage(
   latest: WorkloadHistoryPage | undefined,
 ): PagingStep {
   const more = { truncated: page.truncated, nextBeforeSeq: page.nextBeforeSeq }
-  if (loaded) return { kind: 'set', history: { events: [...loaded.events, ...page.events], ...more } }
-  const base = basePage?.events ?? []
-  const baseIds = new Set(base.map((e) => e.id))
-  const since = latest && latest !== basePage ? latest.events.filter((e) => !baseIds.has(e.id)) : []
-  if (latest?.truncated && since.length > 0 && since.length === latest.events.length) return { kind: 'restart' }
-  return { kind: 'set', history: { events: [...since, ...base, ...page.events], ...more } }
+  if (loaded) return { kind: 'set', history: { events: mergeNewer(loaded.events, page.events), ...more } }
+  let newest = basePage?.events ?? []
+  if (latest && latest !== basePage) {
+    if (!reaches(latest, newest)) return { kind: 'restart' }
+    newest = mergeNewer(latest.events, newest)
+  }
+  return { kind: 'set', history: { events: mergeNewer(newest, page.events), ...more } }
 }
 
 /**

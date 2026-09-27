@@ -436,3 +436,28 @@ func TestWorkloadHistoryScope_WalksAnIngressWithNoRowsOfItsOwn(t *testing.T) {
 		t.Errorf("history = %s, want [cert cr]", got)
 	}
 }
+
+// A Pod someone created by hand, named like one of the StatefulSet's, isn't
+// adopted by name: the informer saw it and recorded that it has no owner.
+func TestWorkloadHistory_StandalonePodNotAdoptedByName(t *testing.T) {
+	store := withWorkloadHistoryStore(t)
+	for i, e := range []timeline.TimelineEvent{
+		{ID: "sts", APIVersion: "apps/v1", Kind: "StatefulSet", Name: "web", UID: "sts-1"},
+		{ID: "lonely-pod", APIVersion: "v1", Kind: "Pod", Name: "web-0", UID: "pod-x", OwnerEvidence: timeline.OwnerObserved},
+		{ID: "missed-pod", APIVersion: "v1", Kind: "Pod", Name: "web-1", UID: "pod-y", OwnerEvidence: timeline.OwnerMissed, Source: timeline.SourceK8sEvent},
+	} {
+		e.Timestamp = time.Now().Add(time.Duration(i) * time.Second)
+		if e.Source == "" {
+			e.Source = timeline.SourceInformer
+		}
+		e.EventType, e.Namespace = timeline.EventTypeAdd, "default"
+		e.ClusterContext = k8s.ActiveClusterContext()
+		if err := store.Append(t.Context(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, resp := getWorkloadHistory(t, "/api/workloads/statefulsets/default/web/history")
+	if got := fmt.Sprint(historyIDs(resp.Events)); got != "[missed-pod sts]" {
+		t.Errorf("StatefulSet web history = %s, want [missed-pod sts]: the unknown-owner Pod by name, not the standalone one", got)
+	}
+}
