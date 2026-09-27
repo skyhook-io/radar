@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Bot, GitCompareArrows, Layers, Network, Scale, ShieldAlert } from 'lucide-react'
+import { Bot, GitCompareArrows, Layers, Network, Scale } from 'lucide-react'
 import { compareVersions } from '../../utils/version'
 
 export interface ReleaseHighlight {
@@ -10,7 +10,11 @@ export interface ReleaseHighlight {
   /** In-app route the highlight's call to action opens. */
   path?: string
   cta?: string
+  /** Icon tile color, so the cards read apart at a glance. The lead card always uses the accent. */
+  tone?: HighlightTone
 }
+
+export type HighlightTone = 'violet' | 'teal' | 'emerald' | 'indigo'
 
 export interface ReleaseNotes {
   version: string
@@ -36,57 +40,53 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
         title: 'AI investigations that show their work',
         // No link: the investigations workspace redirects home when this run
         // mode can't host local agents.
-        description: 'A clear verdict, then the story of what broke, with Radar\'s own evidence placed where the agent cites it: the metrics chart around the change, the log lines, the Helm revision or RBAC rule behind it. Now also runs on your OpenCode setup, including AWS Bedrock.',
+        description: 'A clear verdict and the story of what broke, with the charts, logs and config behind it placed where the agent cites them. Now also runs on OpenCode, including AWS Bedrock.',
       },
       {
         id: 'gitops-manifest-diff',
         icon: GitCompareArrows,
         title: 'Full manifest diffs for Argo CD resources',
-        description: 'Expand any drifted resource to compare the Git-rendered manifest with the live one, side by side or unified. Resources an app deploys to another cluster say which cluster they live on.',
+        description: 'Compare the Git-rendered and live manifest of a drifted Argo CD resource, side by side or unified.',
+        tone: 'violet',
         path: '/gitops',
         cta: 'Open GitOps',
-      },
-      {
-        id: 'tls-expiry-audit',
-        icon: ShieldAlert,
-        title: 'Expiring TLS certificates in Checks',
-        description: 'Certificates in TLS Secrets that expire within 30 days now land in the Checks queue, high severity under 7 days.',
-        path: '/checks',
-        cta: 'Open Checks',
       },
       {
         id: 'rightsizing-risks-first',
         icon: Scale,
         title: 'Rightsizing puts risk before savings',
-        description: 'OOM signals, limit conflicts and throttling lead the list, partial evidence no longer hides the guidance that is known, and AI assistants can query it over MCP.',
+        description: 'OOM, limit conflicts and throttling lead the list, and AI assistants can query cost and rightsizing over MCP.',
+        tone: 'emerald',
         path: '/cost/rightsizing',
         cta: 'Open Rightsizing',
       },
       {
+        id: 'batch-ai-workloads',
+        icon: Layers,
+        title: 'Deeper support for batch and AI/ML workloads',
+        description: 'Dedicated pages for Kueue, JobSet and Ray resources, and Job and JobSet details now show why a queued job has no Pods.',
+        tone: 'teal',
+      },
+      {
         id: 'rollout-traffic-topology',
         icon: Network,
-        title: 'Canary and blue-green Rollouts in Topology',
-        description: 'See which Pods are canary or stable (active or preview for blue-green), which Services route to each side, and the canary traffic weight.',
+        title: 'Canary and blue-green in Topology',
+        description: 'See canary and stable Pods, which Services route to each side, and the canary traffic weight.',
+        tone: 'indigo',
         path: '/topology',
         cta: 'Open Topology',
       },
-      {
-        id: 'kueue-jobset',
-        icon: Layers,
-        title: 'Expanded support for Kueue, JobSet and Ray',
-        description: 'Dedicated pages for Kueue Workloads and queues, JobSets, and Ray clusters and services: see why a queued job has no Pods, drill into each role and member Job, and check Ray head and worker health.',
-      },
     ],
     improvements: [
-      // The grid fills row by row: keep the two-line items in the same row.
+      // The grid fills row by row: pair lines of similar length.
       'Resource tables remember your sort for each kind',
       'Install Helm charts from OCI registries',
+      'Checks flag expired and expiring TLS certificates',
+      'Radar Desktop keeps your preferences across restarts',
       'Issues show where a failing Pod differs from its template',
       'PVC details say why usage data is unavailable',
-      'Strimzi connector task failures and admission webhook call failures surface in Issues',
-      'AWS Load Balancer Controller Ingress backends resolve through action annotations',
+      'Issues catch Strimzi connector and admission webhook failures',
       'Bind the web UI to a specific IP with --listen-address',
-      'The install script honors a custom INSTALL_DIR',
     ],
   },
 ]

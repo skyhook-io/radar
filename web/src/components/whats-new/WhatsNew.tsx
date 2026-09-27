@@ -7,7 +7,7 @@ import { DialogPortal } from '@skyhook-io/k8s-ui'
 import { getApiBase } from '../../api/config'
 import { markWhatsNewSeen, useCapabilities, useWhatsNewState, type WhatsNewState } from '../../api/client'
 import { compareVersions } from '../../utils/version'
-import { latestReleaseNotesFor, releaseLine, releaseNotesFor, RELEASE_NOTES, type ReleaseHighlight, type ReleaseNotes } from './releaseNotes'
+import { latestReleaseNotesFor, releaseLine, releaseNotesFor, RELEASE_NOTES, type HighlightTone, type ReleaseHighlight, type ReleaseNotes } from './releaseNotes'
 import type { UsageDataStatus } from '../../api/usage-data'
 import { UsageDataAsk } from '../usage-data/UsageDataAsk'
 
@@ -361,6 +361,14 @@ export function WhatsNewContent({ titleId, notes, previousVersion, currentVersio
   )
 }
 
+// Literal class strings so Tailwind keeps them.
+const TONE_TILE: Record<HighlightTone, string> = {
+  violet: 'bg-violet-500/10 text-violet-600 dark:text-violet-400',
+  teal: 'bg-teal-500/10 text-teal-600 dark:text-teal-400',
+  emerald: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+  indigo: 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400',
+}
+
 function HighlightCard({ item, lead = false, onNavigate }: {
   item: ReleaseHighlight
   lead?: boolean
@@ -378,7 +386,7 @@ function HighlightCard({ item, lead = false, onNavigate }: {
     <>
       <span className={clsx(
         'flex items-center justify-center shrink-0 rounded-lg',
-        lead ? 'w-10 h-10 bg-accent text-white' : 'w-8 h-8 bg-accent-muted text-accent',
+        lead ? 'w-10 h-10 bg-accent text-white' : clsx('w-8 h-8', item.tone ? TONE_TILE[item.tone] : 'bg-accent-muted text-accent'),
       )}>
         <Icon className={lead ? 'w-5 h-5' : 'w-4 h-4'} aria-hidden />
       </span>
