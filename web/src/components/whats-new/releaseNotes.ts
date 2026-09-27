@@ -78,14 +78,15 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       },
     ],
     improvements: [
-      'Resource tables remember your sort for each resource kind',
+      // The grid fills row by row: keep the two-line items in the same row.
+      'Resource tables remember your sort for each kind',
       'Install Helm charts from OCI registries',
-      'Issues show where a failing Pod differs from its owner template',
-      'Strimzi connector task failures and admission webhook call failures surface in Issues',
+      'Issues show where a failing Pod differs from its template',
       'PVC details say why usage data is unavailable',
+      'Strimzi connector task failures and admission webhook call failures surface in Issues',
+      'AWS Load Balancer Controller Ingress backends resolve through action annotations',
       'Bind the web UI to a specific IP with --listen-address',
       'The install script honors a custom INSTALL_DIR',
-      'AWS Load Balancer Controller Ingress backends resolve through action annotations',
     ],
   },
 ]
