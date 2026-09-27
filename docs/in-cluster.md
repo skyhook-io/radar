@@ -313,8 +313,9 @@ Separately from that: a Radar per cluster gives you a view per cluster. Each
 watches only its own cluster and carries its own upgrades, ingress and auth
 config, with no cross-cluster search or combined issue list across them. If you
 want several clusters in one view, that is what
-[Radar Cloud](https://radarhq.io) is for, and its agent dials out so there is no
-per-cluster ingress to wire up.
+[Radar Cloud](https://radarhq.io) is for. You still run Radar in each cluster,
+but it dials out to the control plane, so there is no per-cluster ingress to
+wire up.
 
 ### With ingress basic authentication
 

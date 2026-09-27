@@ -184,7 +184,7 @@ Radar — pasting in the UI stores the token under `/home/nonroot`, which is an
 | Deployment | How to provision | Notes |
 |------------|------------------|-------|
 | **Local / desktop** | Settings → Argo CD (paste, or "Use Argo CD CLI session") | Interactive; persists to `~/.radar/config.json`. |
-| **In-cluster (self-hosted)** | Helm `argocd.existingSecret` (or `argocd.token`) → `RADAR_ARGOCD_TOKEN` | Declarative, survives restarts, read-only in the UI. |
+| **In-cluster** | Helm `argocd.existingSecret` (or `argocd.token`) → `RADAR_ARGOCD_TOKEN` | Declarative, survives restarts, read-only in the UI. |
 | **Radar Cloud** | The customer's in-cluster Radar carries the token (as above); the token never reaches the hub. | Same env path; the hub proxies to the binary, which holds the credential. |
 
 When a token is provided via the environment, the integration becomes

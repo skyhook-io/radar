@@ -108,7 +108,7 @@ Flags (install):
                    During adoption, also enable Helm/Secrets/exec/forward/metrics RBAC
   --no-self-upgrade
                    Do not install Radar's in-app self-upgrade Role/RoleBinding
-  --hub-url URL    Radar Hub API (default `+defaultHubBase+`; set for self-hosted)
+  --hub-url URL    Radar Hub API (default `+defaultHubBase+`; set for Radar Cloud Self-Managed)
   --name NAME      Cluster name shown in Radar (default: selected Kubernetes context)
   --chart-version  Stable chart target (default: latest published, including adoption)
   --dry-run        Run the permission preflight + print the plan; install nothing

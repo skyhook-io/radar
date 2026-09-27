@@ -144,7 +144,7 @@ export interface AdminNoteContext {
 export const SELF_HOSTED_DOCS_URL = 'https://radarhq.io/docs/cloud/self-hosted/'
 const WHAT_IT_IS = [
   'What it is: Radar, the open-source Kubernetes tool, installed in the cluster as a Helm chart. It opens an outbound connection to a hosted control plane (nothing listens inbound); Radar Cloud users reach this Radar only through that connection, with the permissions of the ServiceAccount it runs as.',
-  `If a hosted service is not an option, the same control plane can be self-hosted in-house: ${SELF_HOSTED_DOCS_URL}`,
+  `If a hosted service is not an option, the same control plane can run in-house as Radar Cloud Self-Managed: ${SELF_HOSTED_DOCS_URL}`,
 ].join(' ')
 
 export function composeAdminNote(blocked: CloudInstallBlocked, exit: BlockedExit, where: AdminNoteContext = {}): string {

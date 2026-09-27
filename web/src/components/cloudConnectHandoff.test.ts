@@ -171,7 +171,7 @@ describe('composeAdminNote — an ask, then the link, then the evidence', () => 
     expect(note).toContain('Please confirm nothing is already installed before a fresh install.')
     // The object of the request and the answer to "no SaaS", before the evidence.
     expect(note.indexOf('What it is: Radar, the open-source Kubernetes tool')).toBeLessThan(note.indexOf('Details:'))
-    expect(note).toContain(`can be self-hosted in-house: ${SELF_HOSTED_DOCS_URL}`)
+    expect(note).toContain(`can run in-house as Radar Cloud Self-Managed: ${SELF_HOSTED_DOCS_URL}`)
     // Never the card's second person.
     expect(note).not.toMatch(/\byour\b/i)
   })

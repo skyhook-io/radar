@@ -555,7 +555,7 @@ func evaluateHubTunnelStatus(status *cloud.AgentStatusResponse, err error) hubTu
 		return hubTunnelResult{
 			summary: "not checked — the Hub status endpoint was not found",
 			detail:  "GET /api/agent/status returned HTTP 404",
-			next:    "if this is a self-hosted Hub, upgrade it to a version that supports live connection status.",
+			next:    "if this is a Radar Cloud Self-Managed control plane, upgrade it to a version that supports live connection status.",
 		}
 	}
 	if err != nil {

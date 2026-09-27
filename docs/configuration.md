@@ -430,11 +430,11 @@ optional, and nothing else depends on it.
 | Variable | Effect |
 |---|---|
 | `RADAR_CLOUD_FUNNEL=off` | Removes the Cloud button entirely. `on` forces it on. |
-| `RADAR_HUB_URL` | Point Cloud connection at a self-hosted Radar Hub instead of the hosted service. |
-| `RADAR_HUB_APP_URL` | Self-hosted Hub's web origin, when it differs from `RADAR_HUB_URL`. |
+| `RADAR_HUB_URL` | Connect to your own Radar Cloud Self-Managed control plane instead of the hosted service. |
+| `RADAR_HUB_APP_URL` | That control plane's web origin, when it differs from `RADAR_HUB_URL`. |
 
 To connect a cluster from the command line, use `radar cloud install`
-(`--hub-url` for a self-hosted Hub).
+(`--hub-url` for a Self-Managed control plane).
 `radar cloud install` and `radar cloud status` target one cluster, so they use
 the configured primary kubeconfig and report configured directories they
 ignore. With no configured source, they use the normal `KUBECONFIG` / default

@@ -182,7 +182,7 @@ type Config struct {
 	Port                    int
 	PortFallback            bool // Port is a preference: when it's taken, bind an OS-assigned port instead of failing
 	ListenAddress           string
-	BasePath                string                      // Optional URL path prefix for self-hosted subpath deployments
+	BasePath                string                      // Optional URL path prefix for in-cluster subpath deployments
 	StartupLog              bool                        // Emit the operator-facing startup block after a successful bind
 	RemoteAccessHint        bool                        // Explain the explicit shared-listener opt-in (native CLI only)
 	DevMode                 bool                        // Serve frontend from filesystem instead of embedded
