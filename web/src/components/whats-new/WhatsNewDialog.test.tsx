@@ -158,7 +158,7 @@ describe('WhatsNew', () => {
     RELEASE_NOTES.push({ ...RELEASE_NOTES[0], version: 'v1.14.0' })
     serverState.seenVersion = 'v1.14.1'
     await render('/resources/pods?whats-new=v1.14.0')
-    expect(dialog()?.textContent).toContain('v1.14.0')
+    expect(dialog()?.textContent).toContain("What's new in Radar v1.14")
     await clickGotIt()
     expect(seenPosts).toEqual([])
     expect(status.current.unread).toBe(true)

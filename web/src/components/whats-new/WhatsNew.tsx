@@ -7,7 +7,7 @@ import { DialogPortal } from '@skyhook-io/k8s-ui'
 import { getApiBase } from '../../api/config'
 import { markWhatsNewSeen, useCapabilities, useWhatsNewState, type WhatsNewState } from '../../api/client'
 import { compareVersions } from '../../utils/version'
-import { latestReleaseNotesFor, releaseNotesFor, RELEASE_NOTES, type ReleaseHighlight, type ReleaseNotes } from './releaseNotes'
+import { latestReleaseNotesFor, releaseLine, releaseNotesFor, RELEASE_NOTES, type ReleaseHighlight, type ReleaseNotes } from './releaseNotes'
 import type { UsageDataStatus } from '../../api/usage-data'
 import { UsageDataAsk } from '../usage-data/UsageDataAsk'
 
@@ -284,7 +284,7 @@ export function WhatsNewContent({ titleId, notes, previousVersion, currentVersio
           </div>
           <div className="min-w-0">
             <h2 id={titleId} className="text-lg font-semibold text-theme-text-primary leading-tight">
-              What's new in Radar <span className="font-mono">{notes.version}</span>
+              What's new in Radar <span className="font-mono">{releaseLine(notes.version)}</span>
             </h2>
             {from ? (
               <p className="flex flex-wrap items-center gap-1.5 mt-1.5 text-xs text-theme-text-tertiary">

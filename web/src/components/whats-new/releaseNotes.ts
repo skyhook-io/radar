@@ -100,6 +100,11 @@ export function releaseNotesFor(
   return catalog.find(notes => notes.version === normalized)
 }
 
+/** The release line a catalog entry covers, e.g. v1.15 for v1.15.0: its patches show the same notes. */
+export function releaseLine(version: string): string {
+  return version.replace(/^(v\d+\.\d+)\.\d+$/, '$1')
+}
+
 /** The newest notes for a release at or below `version` — what that version's user has access to. */
 export function latestReleaseNotesFor(
   version: string | undefined,

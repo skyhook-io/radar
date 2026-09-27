@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Megaphone } from 'lucide-react'
 import { nextSeenVersion, whatsNewToShow } from './WhatsNew'
-import { latestReleaseNotesFor, RELEASE_NOTES, releaseNotesFor, type ReleaseNotes } from './releaseNotes'
+import { latestReleaseNotesFor, releaseLine, RELEASE_NOTES, releaseNotesFor, type ReleaseNotes } from './releaseNotes'
 import { compareVersions } from '../../utils/version'
 
 const entry = (version: string): ReleaseNotes => ({
@@ -99,5 +99,12 @@ describe('the shipped catalog', () => {
       }
       expect(notes.releaseUrl, notes.version).toMatch(/^https:\/\//)
     }
+  })
+})
+
+describe('releaseLine', () => {
+  it('names the minor line, since its patches show the same notes', () => {
+    expect(releaseLine('v1.15.0')).toBe('v1.15')
+    expect(releaseLine('v2.0.0')).toBe('v2.0')
   })
 })
