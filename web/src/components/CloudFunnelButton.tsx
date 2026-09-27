@@ -619,7 +619,7 @@ function ModalFooter({
           fulfills. Sits next to the button whose click it de-risks. */}
       {lane === 'driver' && clusterConnected && !alreadyConnected && (
         <p className="mt-2.5 text-[11px] leading-relaxed text-theme-text-tertiary">
-          You&apos;ll see what gets installed in{' '}
+          Nothing installs on click. You&apos;ll see what gets installed in{' '}
           {clusterName ? <span className="text-theme-text-secondary">{clusterName}</span> : 'this cluster'} and approve
           it before anything changes.{' '}
           {/* Always offered: the browser wizard is a different workflow, not a
