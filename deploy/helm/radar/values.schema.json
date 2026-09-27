@@ -327,6 +327,13 @@
         "insecureSkipVerify": { "type": "boolean" }
       }
     },
+    "usageReporting": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": ["boolean", "null"] }
+      }
+    },
     "mcp": {
       "type": "object",
       "additionalProperties": true,

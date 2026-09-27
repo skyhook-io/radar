@@ -1,5 +1,6 @@
 import { Component, ReactNode } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { recordUsageEvent } from '../../api/usage-data'
 
 interface Props {
   children: ReactNode
@@ -12,6 +13,8 @@ interface Props {
    * while nothing is wrong.
    */
   resetKey: string | number
+  /** Fixed name of the screen inside, counted in usage stats when it crashes. */
+  usageLabel?: string
 }
 
 interface State {
@@ -34,6 +37,8 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error('[ErrorBoundary]', error, info.componentStack)
+    // Only which screen crashed is counted, never the message.
+    if (this.props.usageLabel) recordUsageEvent({ type: 'ui', name: `ui_error:${this.props.usageLabel}` })
   }
 
   handleReset = () => this.setState({ hasError: false, error: null })

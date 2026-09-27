@@ -36,7 +36,8 @@ When running Radar locally on your machine:
 
 - **Uses your kubeconfig**: Radar authenticates using your existing `~/.kube/config` credentials
 - **Your permissions apply**: All operations are subject to your Kubernetes RBAC permissions
-- **No cluster telemetry**: Radar does not upload manifests, logs, events, metrics, or resource data to Skyhook
+- **No cluster data upload**: Radar does not upload manifests, logs, events, metric values, or resource names to Skyhook
+- **Usage stats are opt-in**: nothing about how you use Radar is recorded or sent unless you agree. If you do, a daily anonymous report counts views, actions and MCP tools, and describes each cluster's minor version, platform, node-count range and known integrations. It carries no install ID, names or contents. On a shared Radar, only its configuration (the Helm value `usageReporting.enabled`) decides. See [What Radar sends](docs/configuration.md#what-radar-sends)
 - **No cloud dependency**: Local mode does not require an account, agent, or cloud backend
 - **No persistent storage**: By default, no data persists between sessions (optional SQLite timeline storage is local-only)
 

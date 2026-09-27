@@ -50,6 +50,8 @@ import { UserMenu } from './components/UserMenu'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { UpdateNotification } from './components/ui/UpdateNotification'
 import { openWhatsNew, useWhatsNewStatus, WhatsNew } from './components/whats-new/WhatsNew'
+import { useUsageData, useUsageRecording } from './api/usage-data'
+import { UsageDataPrompt } from './components/usage-data/UsageDataPrompt'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
@@ -143,6 +145,28 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'issues') return 'issues'
   if (path === 'investigations') return 'investigations'
   return 'home'
+}
+
+// The usage-data name for the current screen: a resource list names its
+// kind's plural ("resources:deployments"); the server keeps built-in kinds
+// only, so a custom resource's name never leaves.
+function usageView(pathname: string, view: ExtendedMainView, upgrade: boolean): string {
+  if (upgrade) return 'upgrade'
+  if (view === 'resources') {
+    const plural = pathname.match(/^\/resources\/([^/]+)/)?.[1]
+    if (plural) return `resources:${plural.toLowerCase()}`
+  }
+  return view
+}
+
+// The screen a crash is counted under. Fixed names, because release builds
+// shorten component names and the component stack can't say which screen.
+const CRASH_LABELS: Record<ExtendedMainView, string> = {
+  home: 'Home', topology: 'Topology', resources: 'Resources', timeline: 'Timeline',
+  issues: 'Issues', helm: 'Helm', helmCompare: 'HelmCompare', traffic: 'Traffic',
+  cost: 'Cost', capacity: 'Capacity', checks: 'Checks', gitops: 'GitOps',
+  applications: 'Applications', workload: 'Workload', compare: 'Compare',
+  investigations: 'Investigations',
 }
 
 // The namespace scope filter is meaningful only on namespaced surfaces. On
@@ -417,6 +441,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Get mainView from URL path
   const mainView = getViewFromPath(location.pathname)
   const upgradeReadinessRoute = location.pathname.startsWith('/checks/upgrade')
+
+  // Opt-in usage data. Embedded hosts own their own consent, so Radar never asks there.
+  const usageData = useUsageData(!navCustomization.embedded)
+  // A status cached by another screen must not start recording inside a host.
+  useUsageRecording(usageView(location.pathname, mainView, upgradeReadinessRoute), navCustomization.embedded ? undefined : usageData.data)
 
   // Initialize the kind→plural discovery map app-wide (not just on ResourcesView
   // mount) so the omnibar can open a CRD hit with an irregular plural from any
@@ -1987,7 +2016,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         {/* Search included, not just the path: selection inside a view rides in
             the query (?resource=, ?release=), so a path-only key would still
             strand a crash on the view that produced it. */}
-        <ErrorBoundary resetKey={location.pathname + location.search}>
+        <ErrorBoundary
+          resetKey={location.pathname + location.search}
+          usageLabel={upgradeReadinessRoute ? 'Upgrade' : CRASH_LABELS[mainView]}
+        >
         {/* Initial sync in progress: views that need the full cluster dataset
             show per-kind progress instead; resource views work as kinds sync. */}
         {viewsSyncGated && connection.syncStatus && (
@@ -2446,7 +2478,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
       {/* Update notification — hidden in embedded mode (OSS download nudge). */}
       {!navCustomization.embedded && <UpdateNotification />}
-      {!navCustomization.embedded && <WhatsNew onNavigate={navigateToPath} />}
+      {!navCustomization.embedded && <WhatsNew onNavigate={navigateToPath} usageData={usageData.data} />}
+      {!navCustomization.embedded && <UsageDataPrompt status={usageData.data} />}
 
       {/* Bottom Dock for Terminal/Logs */}
       <BottomDock />

@@ -94,6 +94,29 @@ func IsDesktop() bool {
 	return isDesktop
 }
 
+// InstallMethodName reports how this binary was installed, for usage reports.
+func InstallMethodName() string {
+	return string(detectInstallMethod())
+}
+
+// BuildChannelName reports the release channel of the running build.
+func BuildChannelName() string {
+	return string(buildChannel(Current))
+}
+
+// LocalInstalledAt returns when Radar first ran on this machine (the creation
+// time of ~/.radar) as Unix seconds, or 0 when the platform can't tell.
+func LocalInstalledAt() int64 {
+	return radarDirBirthtime()
+}
+
+// IsDevelopmentBuild reports whether this is an unreleased build (source,
+// git-describe, or "dev"). Such builds must never send usage reports: their
+// installs are Skyhook's own and would pollute the data.
+func IsDevelopmentBuild() bool {
+	return buildChannel(Current) == buildChannelDevelopment
+}
+
 // CheckForUpdate checks GitHub for the latest release
 func CheckForUpdate(_ context.Context) *UpdateInfo {
 	if buildChannel(Current) == buildChannelDevelopment {

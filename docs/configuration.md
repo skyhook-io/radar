@@ -443,13 +443,14 @@ kubeconfig before these commands can run.
 
 ### What Radar sends
 
-Until you connect a cluster to Cloud, Radar makes two kinds of outbound
-request, both to Skyhook, neither containing cluster data:
+Until you connect a cluster to Cloud, Radar makes three kinds of outbound
+request, all to Skyhook, none containing your resources, logs or events:
 
 - **Update check** — to `releases.skyhook.io`, with the Radar version, OS/arch,
   install method, whether it is running locally or in-cluster, and the
   installation timestamp when Radar can determine it. Radar caches the release
   result for one hour. Development builds are excluded.
+- **[Anonymous usage stats](usage-stats.md)**: once a day, strictly opt-in.
 - **Cloud dialog copy** — only when you *open* the Cloud dialog, to fetch the
   current terms shown in it. No identifiers are sent. `RADAR_CLOUD_FUNNEL=off`
   stops this request from ever happening.
@@ -460,8 +461,7 @@ Kubernetes API directly and keeps everything it reads on your machine.
 Connecting a cluster to Cloud is what changes that, and it is the point of
 connecting — the cluster's agent opens an outbound tunnel to the Hub so the
 team can reach the same views without each person holding kubeconfig access.
-Deciding whether to connect is a separate question from the two requests
-above, which happen either way.
+Deciding whether to connect is a separate question from the requests above.
 
 ## Related Documentation
 

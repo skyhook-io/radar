@@ -89,6 +89,15 @@ var crdGroupToChart = map[string]string{
 	"cilium.io": "cilium",
 }
 
+// IntegrationForCRDGroup names the integration a served API group belongs to,
+// using the same curated map as the package merge. Unknown groups return
+// false and must not be reported under their own name: an unknown group can
+// be a customer's internal API.
+func IntegrationForCRDGroup(group string) (string, bool) {
+	c, ok := crdGroupToChart[group]
+	return c, ok
+}
+
 // chartFromCRDGroup returns (chartName, true) if the group is in our
 // known mapping, else (group, false). Callers decide whether to render
 // the group as a standalone row or skip.

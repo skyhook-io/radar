@@ -10,6 +10,7 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/settings"
+	"github.com/skyhook-io/radar/internal/usagedata"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 )
 
@@ -177,6 +178,7 @@ func (s *Server) invalidatePostContextSwitchCaches() {
 		s.openCostCurrency.Invalidate()
 	}
 	k8s.InvalidateUserCapabilitiesCache()
+	usagedata.ContextSwitched()
 	clearPackagesCache()
 	clearApplicationsCache()
 	s.yamlSchemaMu.Lock()

@@ -518,6 +518,14 @@ cloud:
     # owner later activates it. See templates/cloud-rbac-node-ops.yaml.
     nodeOps: false
 
+# Anonymous usage report to Skyhook, daily and when the pod stops: views,
+# actions and MCP tools used, plus this cluster's minor version, platform,
+# node-count range and known integrations. No install ID, names or contents.
+# Off unless set to true. Radar never asks in a cluster; this value decides
+# for everyone using it. See docs/usage-stats.md.
+usageReporting:
+  enabled: null
+
 # MCP (Model Context Protocol) server for AI tools
 mcp:
   # Set to false to disable the MCP server (useful when deployed behind authentication)

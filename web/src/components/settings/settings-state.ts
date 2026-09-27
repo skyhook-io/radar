@@ -7,6 +7,7 @@ export type SettingsSectionId =
   | 'argocd'
   | 'ai'
   | 'advanced'
+  | 'privacy'
 
 export function shouldOfferCostReview(
   costIntegrationDirty: boolean,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { clsx } from 'clsx'
@@ -8,6 +8,8 @@ import { getApiBase } from '../../api/config'
 import { markWhatsNewSeen, useCapabilities, useWhatsNewState, type WhatsNewState } from '../../api/client'
 import { compareVersions } from '../../utils/version'
 import { latestReleaseNotesFor, releaseNotesFor, RELEASE_NOTES, type ReleaseHighlight, type ReleaseNotes } from './releaseNotes'
+import type { UsageDataStatus } from '../../api/usage-data'
+import { UsageDataAsk } from '../usage-data/UsageDataAsk'
 
 const LAST_SEEN_KEY = 'radar-whats-new-seen'
 const PREVIEW_PARAM = 'whats-new'
@@ -114,13 +116,15 @@ export function openWhatsNew() {
 
 interface WhatsNewProps {
   onNavigate: (path: string) => void
+  // Omitted by hosts that don't run usage data; the dialog then never asks.
+  usageData?: UsageDataStatus
 }
 
 /**
  * Opens once after Radar is upgraded to a version that has release notes.
  * `?whats-new` (or `?whats-new=v1.15.0`) opens it on demand for previews.
  */
-export function WhatsNew({ onNavigate }: WhatsNewProps) {
+export function WhatsNew({ onNavigate, usageData }: WhatsNewProps) {
   const { data: capabilities } = useCapabilities()
   // Radar Cloud ships its own release communication.
   const isCloud = capabilities?.deployment?.mode === 'cloud'
@@ -229,6 +233,11 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
     onNavigate(path)
   }, [close, onNavigate])
 
+  const readAboutUsageData = useCallback(() => {
+    close()
+    window.dispatchEvent(new CustomEvent('radar:open-settings', { detail: { section: 'privacy' } }))
+  }, [close])
+
   if (isCloud) return null
 
   return (
@@ -241,6 +250,7 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
           currentVersion={currentVersion}
           onClose={close}
           onNavigate={go}
+          ask={<UsageDataAsk usageData={usageData} onReadMore={readAboutUsageData} />}
         />
       )}
     </DialogPortal>
@@ -255,9 +265,12 @@ interface WhatsNewContentProps {
   currentVersion?: string
   onClose: () => void
   onNavigate: (path: string) => void
+  // Rendered between the notes and the footer, outside the scroll area so it
+  // stays visible however long the notes run.
+  ask?: ReactNode
 }
 
-export function WhatsNewContent({ titleId, notes, previousVersion, currentVersion, onClose, onNavigate }: WhatsNewContentProps) {
+export function WhatsNewContent({ titleId, notes, previousVersion, currentVersion, onClose, onNavigate, ask }: WhatsNewContentProps) {
   const [lead, ...rest] = notes.highlights
   const to = currentVersion ? normalize(currentVersion) : notes.version
   const from = previousVersion && normalize(previousVersion) !== to ? normalize(previousVersion) : null
@@ -327,6 +340,8 @@ export function WhatsNewContent({ titleId, notes, previousVersion, currentVersio
           </div>
         )}
       </div>
+
+      {ask}
 
       <div className="flex items-center justify-between gap-3 px-6 py-3 border-t border-theme-border bg-theme-base/60">
         <a
