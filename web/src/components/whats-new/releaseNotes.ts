@@ -54,8 +54,8 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       {
         id: 'rightsizing-risks-first',
         icon: Scale,
-        title: 'Rightsizing puts risk before savings',
-        description: 'OOM, limit conflicts and throttling lead the list, and AI assistants can query cost and rightsizing over MCP.',
+        title: 'Rightsizing and cost data in MCP',
+        description: 'Agents get new optimized tools. Risks (OOM, limit conflicts and throttling) lead before cost-saving, in the UI as well.',
         tone: 'emerald',
         path: '/cost/rightsizing',
         cta: 'Open Rightsizing',
@@ -63,7 +63,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       {
         id: 'batch-ai-workloads',
         icon: Layers,
-        title: 'Deeper support for batch and AI/ML workloads',
+        title: 'Deeper batch + AI/ML workloads support',
         description: 'Dedicated pages for Kueue, JobSet and Ray resources, and Job and JobSet details now show why a queued job has no Pods.',
         tone: 'teal',
       },
