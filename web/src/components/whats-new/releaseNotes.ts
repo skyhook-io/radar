@@ -73,8 +73,8 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       {
         id: 'kueue-jobset',
         icon: Layers,
-        title: 'See why a queued JobSet has no Pods',
-        description: 'Follow a JobSet to its Kueue Workload, queues and admission checks, and drill into each role and member Job. Ray clusters and services get their own detail pages too.',
+        title: 'Expanded support for Kueue, JobSet and Ray',
+        description: 'Dedicated pages for Kueue Workloads and queues, JobSets, and Ray clusters and services: see why a queued job has no Pods, drill into each role and member Job, and check Ray head and worker health.',
       },
     ],
     improvements: [
