@@ -160,7 +160,13 @@ reasoning-effort controls are not available for OpenCode.
 
 ### Google Antigravity
 
-Add to `~/.gemini/config/mcp_config.json` (all workspaces) or `.agents/mcp_config.json` (one workspace). Antigravity uses `serverUrl` for remote servers:
+Run this command:
+
+```bash
+agy mcp add radar http://localhost:9280/mcp
+```
+
+Or add to `~/.gemini/config/mcp_config.json` (all workspaces) or `.agents/mcp_config.json` (one workspace). Antigravity uses `serverUrl` for remote servers:
 
 ```json
 {
