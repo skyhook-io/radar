@@ -281,10 +281,12 @@ func (s *SQLiteStore) initSchema() error {
 	// Without table statistics the planner reaches for idx_events_cluster_ts,
 	// which narrows nothing when every row shares one cluster, and scans the
 	// table instead of using the UID indexes. The mask analyzes every table
-	// that lacks statistics (the first open of a large database takes seconds,
-	// once; the statistics persist in the file) and is otherwise near free.
-	// Run here rather than in the background: the store has one connection.
-	if _, err := s.db.Exec("PRAGMA optimize=0x10002"); err != nil {
+	// whose statistics are missing or stale. It is deliberately unbounded
+	// (no 0x10): sampled statistics leave the planner on the scan. The first
+	// open of a large database pays seconds once; the statistics persist in
+	// the file, so later opens are near free. Run here rather than in the
+	// background: the store has one connection.
+	if _, err := s.db.Exec(sqliteOptimize); err != nil {
 		log.Printf("[timeline] Failed to gather query planner statistics for %s: %v", s.path, err)
 	}
 
@@ -535,6 +537,12 @@ func nonEmpty(values []string) []string {
 	}
 	return out
 }
+
+// sqliteOptimize gathers planner statistics for tables whose statistics are
+// missing or stale, without SQLite's analysis bound (SQLite's default
+// optimize mask bounds it, which would replace full statistics with sampled
+// ones).
+const sqliteOptimize = "PRAGMA optimize=0x10002"
 
 // ownerUnknownSQL is pkgtimeline.OwnerUnknown as a SQL condition, shared by
 // the SQLite and Postgres stores.
@@ -1142,9 +1150,18 @@ func (s *SQLiteStore) runCleanup(retention time.Duration, maxStorageBytes int64)
 	var checkpointErr error
 	var pruneErr error
 	ctx := context.Background()
+	// Keeps planner statistics current as the table turns over; re-analyzes
+	// only tables that changed enough to need it. Before the checkpoint, so
+	// the statistics it writes don't land back in a just-truncated WAL.
+	refreshStats := func() {
+		if _, err := s.db.ExecContext(ctx, sqliteOptimize); err != nil {
+			log.Printf("[timeline] Failed to refresh query planner statistics for %s: %v", s.path, err)
+		}
+	}
 	if retention > 0 {
 		n, cleanupErr = s.Cleanup(ctx, retention)
 		if cleanupErr == nil {
+			refreshStats()
 			checkpointErr = s.checkpointWAL(ctx)
 		}
 	}
@@ -1152,6 +1169,9 @@ func (s *SQLiteStore) runCleanup(retention time.Duration, maxStorageBytes int64)
 		var pruned int64
 		pruned, pruneErr = s.PruneToMaxSize(ctx, maxStorageBytes)
 		n += pruned
+	}
+	if retention <= 0 {
+		refreshStats()
 	}
 	err := errors.Join(cleanupErr, checkpointErr, pruneErr)
 	now := time.Now()
@@ -1171,11 +1191,6 @@ func (s *SQLiteStore) runCleanup(retention time.Duration, maxStorageBytes int64)
 	}
 	if n > 0 {
 		log.Printf("[timeline] cleanup: deleted %d events from %s", n, s.path)
-	}
-	// Keeps planner statistics current as the table turns over; re-analyzes
-	// only tables that changed enough to need it.
-	if _, err := s.db.ExecContext(ctx, "PRAGMA optimize"); err != nil {
-		log.Printf("[timeline] Failed to refresh query planner statistics for %s: %v", s.path, err)
 	}
 }
 

@@ -57,6 +57,12 @@ describe('workload history paging', () => {
     expect(foldRefreshedPage(loaded, refreshed).kind).toBe('restart')
   })
 
+  it('handles a loaded history far larger than a page', () => {
+    const loaded: WorkloadHistoryPage = { events: rows(200_000, 1), truncated: false }
+    expect(foldRefreshedPage(loaded, page(200_020, 200_001, true)).kind).toBe('restart')
+    expect(foldRefreshedPage(loaded, page(200_010, 199_991, true)).kind).toBe('set')
+  })
+
   it("keeps a repeated K8s Event's newer copy", () => {
     const loaded: WorkloadHistoryPage = { events: [...rows(30, 21), ev('backoff', 20), ...rows(19, 1)], truncated: false }
     const step = foldRefreshedPage(loaded, { events: [ev('backoff', 31), ...rows(30, 22)], truncated: true, nextBeforeSeq: 22 })

@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 func createTestSQLiteStore(t *testing.T) (*SQLiteStore, func()) {
@@ -1742,7 +1745,10 @@ func TestSQLiteStore_OpenGathersPlannerStatistics(t *testing.T) {
 	} else if analyzed != 2 {
 		t.Errorf("statistics for %d of the 2 UID indexes, want both", analyzed)
 	}
-	clause, args := sqliteScopeClause(ResourceScope{UIDs: []string{"rs-5"}, OwnerUIDs: []string{"rs-5"}})
+	clause, args := sqliteScopeClause(ResourceScope{
+		UIDs: []string{"rs-5"}, OwnerUIDs: []string{"rs-5"},
+		Refs: []resourceid.Ref{resourceid.NewRef("apps", "Deployment", "ns-5", "web")},
+	})
 	rows, err := s.db.Query("EXPLAIN QUERY PLAN SELECT id FROM events WHERE cluster_context = 'ctx' AND namespace = 'ns-5'"+clause+" ORDER BY seq DESC LIMIT 100", args...)
 	if err != nil {
 		t.Fatal(err)
@@ -1757,7 +1763,21 @@ func TestSQLiteStore_OpenGathersPlannerStatistics(t *testing.T) {
 		}
 		plan = append(plan, detail)
 	}
-	if joined := strings.Join(plan, "; "); !strings.Contains(joined, "idx_events_uid") || !strings.Contains(joined, "idx_events_owner_uid") {
+	if joined := strings.Join(plan, "; "); !strings.Contains(joined, "MULTI-INDEX OR") || !strings.Contains(joined, "idx_events_uid") || !strings.Contains(joined, "idx_events_owner_uid") {
 		t.Errorf("scoped read plan = %q, want it to use both UID indexes", joined)
+	}
+}
+
+// Bounding the analysis looks like a safe way to cap its cost, but on a large
+// single-cluster store (1.5M rows) sampled statistics keep the planner on the
+// cluster-index scan: scoped reads stay at seconds instead of ~10ms. A small
+// test database can't show the difference, so the mask is pinned here.
+func TestSQLiteOptimizeIsUnbounded(t *testing.T) {
+	mask, err := strconv.ParseUint(strings.TrimPrefix(sqliteOptimize, "PRAGMA optimize=0x"), 16, 32)
+	if err != nil {
+		t.Fatalf("parse %q: %v", sqliteOptimize, err)
+	}
+	if mask&0x10 != 0 || mask&0x2 == 0 || mask&0x10000 == 0 {
+		t.Errorf("%s: want ANALYZE (0x2) over every table (0x10000) without the analysis bound (0x10)", sqliteOptimize)
 	}
 }

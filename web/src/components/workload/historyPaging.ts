@@ -19,8 +19,12 @@ const seqOf = (e: TimelineEvent) => e.seq ?? 0
 function reaches(page: WorkloadHistoryPage, loaded: TimelineEvent[]): boolean {
   if (!page.truncated) return true
   if (loaded.length === 0 || page.events.length === 0) return false
-  const newestLoaded = Math.max(...loaded.map(seqOf))
-  const oldestOnPage = Math.min(...page.events.map(seqOf))
+  // Loops, not Math.max(...rows): loaded history has no cap, and spreading it
+  // into arguments overflows the stack.
+  let newestLoaded = -Infinity
+  for (const e of loaded) newestLoaded = Math.max(newestLoaded, seqOf(e))
+  let oldestOnPage = Infinity
+  for (const e of page.events) oldestOnPage = Math.min(oldestOnPage, seqOf(e))
   return oldestOnPage <= newestLoaded
 }
 
