@@ -43,8 +43,8 @@ export function RayJobRenderer({ data, onNavigate, submitterEvidence, selectedCl
             <div><p className="mb-1 text-xs text-theme-text-secondary">Last reported application state</p><Badge severity={failed || transitioning ? 'neutral' : jobStatus === 'FAILED' ? 'error' : jobStatus === 'RUNNING' || jobStatus === 'SUCCEEDED' ? 'success' : 'neutral'}>{jobStatus || 'Not reported'}</Badge></div>
           </div>
           {status.reason && <p className="break-words font-medium">{status.reason}</p>}
-          {status.message && <p className="max-w-3xl whitespace-pre-wrap break-words">{status.message}</p>}
-          {failed && jobStatus && jobStatus !== 'FAILED' && <p className="text-xs text-theme-text-secondary">{jobStatus === 'SUCCEEDED' ? 'The application reported success, but the controller lifecycle failed. Review the controller message and submitter evidence.' : 'Controller failure does not establish that the application has stopped.'}</p>}
+          {status.message && <p className="max-h-64 max-w-3xl overflow-auto whitespace-pre-wrap break-words">{status.message}</p>}
+          {failed && jobStatus && !['FAILED', 'STOPPED'].includes(jobStatus) && <p className="text-xs text-theme-text-secondary">{jobStatus === 'SUCCEEDED' ? 'The application reported success, but the controller lifecycle failed. Review the controller message and submitter evidence.' : 'Controller failure does not establish that the application has stopped.'}</p>}
           {lifecycle === 'Retrying' && <p className="text-xs text-theme-text-secondary">Preparing to retry. The reported failure and submitter may belong to the attempt being cleaned up.</p>}
           <PropertyList>
             <Property label="Suspension requested" value={spec.suspend === true ? 'Yes' : 'No'} />
@@ -71,13 +71,14 @@ export function RayJobRenderer({ data, onNavigate, submitterEvidence, selectedCl
         <div className="space-y-3 p-3 text-sm">
           <p className="font-medium break-words">{mode}</p>
           <p className="text-theme-text-secondary">{mode === 'K8sJobMode' ? 'A Kubernetes Job submits the application to Ray.' : mode === 'HTTPMode' ? 'The controller submits directly through the Ray API; there is no submitter Job.' : mode === 'InteractiveMode' ? 'The controller waits for spec.jobId to identify a manually submitted Ray job.' : mode === 'SidecarMode' ? 'A container in the head Pod submits the application; there is no submitter Job.' : 'Submission behavior is defined by the reported mode.'}</p>
+          {selectsExisting && !selected && <p className="text-theme-text-secondary">Cluster selection has no ray.io/cluster name.</p>}
           {cluster ? <div className="space-y-1 border-t border-theme-border pt-3">
             <p className="text-xs text-theme-text-secondary">{selected ? 'Selected existing RayCluster' : 'Reported RayCluster'}</p>
             <p className="break-all font-medium">{local ? <ResourceLink kind="rayclusters" group="ray.io" namespace={data.metadata.namespace} name={cluster} onNavigate={onNavigate} /> : cluster}</p>
             {local && <p className="text-xs text-theme-text-secondary">Open the RayCluster for head/worker Pods and their logs.</p>}
             {selectedClusterEvidence}
             {selected && status.rayClusterName && selected !== status.rayClusterName && <div className="pt-2"><p className="text-xs text-theme-text-secondary">Last reported runtime differs from the selected cluster</p>{local ? <ResourceLink kind="rayclusters" group="ray.io" namespace={data.metadata.namespace} name={status.rayClusterName} onNavigate={onNavigate} /> : <p>{status.rayClusterName}</p>}</div>}
-          </div> : <p className="text-theme-text-secondary">{selectsExisting ? 'Cluster selection has no ray.io/cluster name.' : 'No runtime cluster reported.'}</p>}
+          </div> : <p className="text-theme-text-secondary">No runtime cluster reported.</p>}
           {local && mode === 'K8sJobMode' && <div className="space-y-2 border-t border-theme-border pt-3"><p className="text-xs font-medium text-theme-text-secondary">Observed submitter Job</p>{submitterEvidence ?? <p className="text-theme-text-secondary">Submitter evidence is not available.</p>}</div>}
         </div>
       </section>
@@ -101,7 +102,7 @@ export function RayJobRenderer({ data, onNavigate, submitterEvidence, selectedCl
             <p className="font-medium text-theme-text-primary">Runtime cleanup</p>
             {selectsExisting ? <p>Runtime cleanup is not applied to a selected existing cluster.</p> : <>
               {!spec.deletionStrategy && <p>{spec.shutdownAfterJobFinishes === true ? `Cluster shutdown requested after completion${spec.ttlSecondsAfterFinished != null ? ` (TTL ${spec.ttlSecondsAfterFinished}s)` : ''}.` : 'No completion shutdown requested.'}</p>}
-              {spec.deletionStrategy && <Disclosure summary={`Deletion policy${rules.length ? ` · ${rules.length} rules` : ''}`}>
+              {spec.deletionStrategy && <Disclosure summary={`Deletion policy${rules.length ? ` · ${rules.length} ${rules.length === 1 ? 'rule' : 'rules'}` : ''}`}>
                 <div className="space-y-2 pt-2">
                   <p>Requires the operator’s RayJobDeletionPolicy feature gate. These are declared rules, not proof that cleanup occurred.</p>
                   {rules.map((rule, index) => <p className="break-words" key={index}>{rule.policy} · {rule.condition?.jobStatus ? `Application ${rule.condition.jobStatus}` : `Controller ${rule.condition?.jobDeploymentStatus}`} · TTL {rule.condition?.ttlSeconds ?? 0}s</p>)}

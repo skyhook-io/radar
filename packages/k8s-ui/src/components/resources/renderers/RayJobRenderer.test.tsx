@@ -21,6 +21,7 @@ describe('RayJob native evidence', () => {
     expect(getRayJobStatus({ status: { jobStatus: 'STOPPED', jobDeploymentStatus: 'Complete' } }).text).toBe('Stopped')
     expect(render(root)).toContain('Not reported')
     expect(render(root)).not.toContain('Succeeded')
+    expect(render({ ...root, status: { jobDeploymentStatus: 'Failed', jobStatus: 'STOPPED' } })).not.toContain('does not establish')
   })
   it('keeps application and controller times separate and clears absent evidence', () => {
     const html = render({ ...root, status: { startTime: '2026-09-20T00:00:00Z', rayJobInfo: { startTime: '2026-09-20T00:01:00Z' }, message: 'capacity timeout', reason: 'DeadlineExceeded' } })
