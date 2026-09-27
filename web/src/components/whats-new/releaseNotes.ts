@@ -33,10 +33,10 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       {
         id: 'ai-investigations',
         icon: Bot,
-        title: 'AI investigations you can check',
+        title: 'AI investigations that show their work',
         // No link: the investigations workspace redirects home when this run
         // mode can't host local agents.
-        description: 'A short verdict first, then the logs, events and resource state behind it, shown by Radar where the agent cites them, then next steps. Now also runs on your OpenCode setup, including AWS Bedrock.',
+        description: 'A clear verdict, then the story of what broke, with Radar\'s own evidence placed where the agent cites it: the metrics chart around the change, the log lines, the Helm revision or RBAC rule behind it. Now also runs on your OpenCode setup, including AWS Bedrock.',
       },
       {
         id: 'gitops-manifest-diff',
