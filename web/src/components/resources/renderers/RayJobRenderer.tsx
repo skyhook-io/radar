@@ -1,3 +1,4 @@
+import { Tooltip } from '@skyhook-io/k8s-ui/components/ui/Tooltip'
 import { Badge } from '@skyhook-io/k8s-ui/components/ui/Badge'
 import type { ResourceRef } from '@skyhook-io/k8s-ui'
 import { RayJobRenderer as BaseRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/RayJobRenderer'
@@ -21,7 +22,7 @@ function Submitter({ root, onNavigate }: { root: any; onNavigate?: (ref: Resourc
   const status = getJobStatus(job)
   return <div className="space-y-2">
     <div className="flex flex-wrap items-center gap-2"><ResourceLink kind="jobs" group="batch" namespace={job.metadata.namespace} name={job.metadata.name} onNavigate={onNavigate} />{job.metadata.deletionTimestamp ? <Badge severity="alert">Deleting</Badge> : <span className={`badge ${status.color}`}>{status.text}</span>}</div>
-    {job.metadata.creationTimestamp && <p className="text-xs text-theme-text-secondary">Created <time dateTime={job.metadata.creationTimestamp} title={job.metadata.creationTimestamp}>{formatRelativeAgeTime(job.metadata.creationTimestamp)}</time></p>}
+    {job.metadata.creationTimestamp && <p className="text-xs text-theme-text-secondary">Created <Tooltip content={job.metadata.creationTimestamp}><time dateTime={job.metadata.creationTimestamp}>{formatRelativeAgeTime(job.metadata.creationTimestamp)}</time></Tooltip></p>}
     <p className="text-xs text-theme-text-secondary">Open this Job for submitter Pods and logs. Ownership identifies the RayJob, not a particular attempt.</p>
     {(job.metadata.deletionTimestamp || ['Retrying', 'Suspending'].includes(root.status?.jobDeploymentStatus)) && <p className="text-xs text-theme-text-secondary">The submitter may be part of the attempt being cleaned up.</p>}
   </div>

@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { Badge } from '../../ui/Badge'
 import { RayJobRenderer } from './RayJobRenderer'
 import { getRayJobStatus } from '../resource-utils-ray'
 import { RayJobCell } from './ray-cells'
@@ -16,6 +17,9 @@ describe('RayJob native evidence', () => {
     expect(renderToStaticMarkup(<RayJobCell resource={data} column="status" />)).toContain(jobDeploymentStatus)
     expect(render(data)).toContain('Last reported application state')
     expect(render(data)).toContain('RUNNING')
+  })
+  it('shows completed suspension with a neutral lifecycle badge', () => {
+    expect(render({ ...root, status: { jobDeploymentStatus: 'Suspended' } })).toContain(renderToStaticMarkup(<Badge severity="neutral">Suspended</Badge>))
   })
   it('does not call stopped completion success or missing status healthy', () => {
     expect(getRayJobStatus({ status: { jobStatus: 'STOPPED', jobDeploymentStatus: 'Complete' } }).text).toBe('Stopped')

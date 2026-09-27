@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import type { ResourceRef } from '../../../types'
 import { formatRelativeAgeTime } from '../../../utils/format'
+import { Tooltip } from '../../ui/Tooltip'
 import { Badge } from '../../ui/Badge'
 import { Disclosure } from '../../ui/Disclosure'
 import { AlertBanner, Property, PropertyList, ResourceLink } from '../../ui/drawer-components'
@@ -30,7 +31,7 @@ export function RayJobRenderer({ data, onNavigate, submitterEvidence, selectedCl
   const failed = lifecycle === 'Failed' || lifecycle === 'ValidationFailed'
   const transitioning = ['Retrying', 'Suspending', 'Suspended'].includes(lifecycle)
   const rules: any[] = spec.deletionStrategy?.deletionRules ?? []
-  const time = (value: string) => <time dateTime={value} title={value}>{formatRelativeAgeTime(value)}</time>
+  const time = (value: string) => <Tooltip content={value}><time dateTime={value}>{formatRelativeAgeTime(value)}</time></Tooltip>
   return <div className="@container/rayjob space-y-4">
     {!local && <AlertBanner variant="info" title="Externally managed RayJob" message={`Managed by ${spec.managedBy}. Reported runtime names may refer to another cluster; local absence does not establish execution state.`} />}
     {admissionContent}
@@ -39,7 +40,7 @@ export function RayJobRenderer({ data, onNavigate, submitterEvidence, selectedCl
         <h3 className={header}>Execution</h3>
         <div className="space-y-3 p-3 text-sm">
           <div className="flex flex-wrap gap-x-6 gap-y-3">
-            <div><p className="mb-1 text-xs text-theme-text-secondary">Controller lifecycle</p><Badge severity={failed ? 'error' : transitioning ? 'warning' : 'neutral'}>{lifecycle || 'Not reported'}</Badge></div>
+            <div><p className="mb-1 text-xs text-theme-text-secondary">Controller lifecycle</p><Badge severity={failed ? 'error' : transitioning && lifecycle !== 'Suspended' ? 'warning' : 'neutral'}>{lifecycle || 'Not reported'}</Badge></div>
             <div><p className="mb-1 text-xs text-theme-text-secondary">Last reported application state</p><Badge severity={failed || transitioning ? 'neutral' : jobStatus === 'FAILED' ? 'error' : jobStatus === 'RUNNING' || jobStatus === 'SUCCEEDED' ? 'success' : 'neutral'}>{jobStatus || 'Not reported'}</Badge></div>
           </div>
           {status.reason && <p className="break-words font-medium">{status.reason}</p>}
