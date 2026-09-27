@@ -488,7 +488,7 @@ function ModalFooter({
   // fast click would escape to signup before we could route this install.
   const selfPending = selfLoading === true
   return (
-    <div className="shrink-0 px-8 py-5 bg-theme-base border-t border-theme-border">
+    <div className="shrink-0 px-8 py-6 bg-theme-base border-t border-theme-border">
       {self && self.ownership !== 'unknown' && (
         <div className="mb-3.5 card-inner p-3 text-[12px] leading-relaxed text-theme-text-secondary">
           {ambiguous ? (
@@ -639,7 +639,7 @@ function ModalFooter({
           share a single row with the other three at this width, and flex
           wrapping strands it as a 3+1 orphan. Two balanced columns read as a
           designed layout at any chip length the Hub sends. */}
-      <div className="mt-4 grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11px] text-theme-text-tertiary">
+      <div className="mt-5 grid grid-cols-2 gap-x-3 gap-y-2 text-[11px] text-theme-text-tertiary">
         {assuranceItems(assurances).map((item) => (
           <span key={item} className="flex items-center gap-1">
             <Check className="w-3 h-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
@@ -671,19 +671,20 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
     { icon: History, lead: 'History', rest: ': events and changes kept long after Kubernetes deletes them' },
   ]
   return (
-    <div className="px-8 pt-7 pb-2">
+    <div className="px-8 pt-7 pb-5">
       <Eyebrow />
       <h3 className="text-[22px] font-semibold leading-tight tracking-tight text-theme-text-primary mb-3 text-balance">
         Close the laptop. Radar keeps watching.
       </h3>
-      <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-5">
+      <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-1.5">
         Radar Cloud is the hosted side of Radar: Slack alerts, AI root cause and every cluster in one place, for
         you and your team.
-        <br />
+      </p>
+      <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-6">
         The Radar you're running{' '}
         <b className="text-theme-text-primary font-semibold">stays free and open source, always.</b>
       </p>
-      <ul className="space-y-2 mb-3">
+      <ul className="space-y-2.5 mb-3">
         {highlights.map(({ icon: Icon, lead, rest }) => (
           <li key={lead} className="flex items-start gap-2.5 text-[13px] leading-relaxed text-theme-text-secondary">
             <Icon className="w-4 h-4 shrink-0 mt-[3px] text-emerald-600 dark:text-emerald-400" />
