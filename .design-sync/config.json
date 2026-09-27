@@ -1,0 +1,302 @@
+{
+  "projectId": "cd66db23-f991-4d87-8ac2-721650c81721",
+  "shape": "package",
+  "pkg": "@skyhook-io/k8s-ui",
+  "globalName": "K8sUI",
+  "buildCmd": "node .design-sync/build-pkg.mjs",
+  "srcDir": "../src",
+  "cssEntry": "styles.css",
+  "extraFonts": [
+    "../../../node_modules/@fontsource-variable/dm-sans/index.css",
+    "../../../node_modules/@fontsource/dm-mono/index.css"
+  ],
+  "componentSrcMap": {
+    "AWSMachineCell": null,
+    "AWSMachineTemplateCell": null,
+    "AWSManagedClusterCell": null,
+    "AWSManagedControlPlaneCell": null,
+    "AWSManagedMachinePoolCell": null,
+    "ApiServerSourceCell": null,
+    "ArgoAppProjectCell": null,
+    "ArgoApplicationCell": null,
+    "ArgoApplicationSetCell": null,
+    "AuthorizationPolicyCell": null,
+    "AzureMachineCell": null,
+    "AzureMachineTemplateCell": null,
+    "AzureManagedClusterCell": null,
+    "AzureManagedControlPlaneCell": null,
+    "AzureManagedMachinePoolCell": null,
+    "BackupCell": null,
+    "BackupRepositoryCell": null,
+    "BackupStorageLocationCell": null,
+    "BrokerCell": null,
+    "CAPIClusterCell": null,
+    "CAPIClusterClassCell": null,
+    "CAPIKubeadmControlPlaneCell": null,
+    "CAPIMachineCell": null,
+    "CAPIMachineDeploymentCell": null,
+    "CAPIMachineHealthCheckCell": null,
+    "CAPIMachinePoolCell": null,
+    "CAPIMachineSetCell": null,
+    "CNPGBackupCell": null,
+    "CNPGClusterCell": null,
+    "CNPGDeclarativeCell": null,
+    "CNPGImageCatalogCell": null,
+    "CNPGObjectStoreCell": null,
+    "CNPGPoolerCell": null,
+    "CNPGScheduledBackupCell": null,
+    "CalicoInfraCell": null,
+    "CalicoPolicyCell": null,
+    "CertificateCell": null,
+    "CertificateRequestCell": null,
+    "ChallengeCell": null,
+    "ChannelCell": null,
+    "ClusterComplianceReportCell": null,
+    "ClusterExternalSecretCell": null,
+    "ClusterIssuerCell": null,
+    "ClusterPolicyCell": null,
+    "ClusterPolicyReportCell": null,
+    "ClusterSecretStoreCell": null,
+    "ClusterTriggerAuthenticationCell": null,
+    "CompositeResourceCell": null,
+    "CompositionCell": null,
+    "ConfigAuditReportCell": null,
+    "ConfigurationCell": null,
+    "ContainerSourceCell": null,
+    "CrossplaneProviderCell": null,
+    "CrossplaneProviderConfigCell": null,
+    "DestinationRuleCell": null,
+    "DeviceClassCell": null,
+    "DomainMappingCell": null,
+    "EC2NodeClassCell": null,
+    "EventTypeCell": null,
+    "ExposedSecretReportCell": null,
+    "ExternalSecretCell": null,
+    "FluxAlertCell": null,
+    "FluxHelmReleaseCell": null,
+    "GCPMachineCell": null,
+    "GCPMachineTemplateCell": null,
+    "GCPManagedClusterCell": null,
+    "GCPManagedControlPlaneCell": null,
+    "GCPManagedMachinePoolCell": null,
+    "GitRepositoryCell": null,
+    "HTTPProxyCell": null,
+    "HelmRepositoryCell": null,
+    "InMemoryChannelCell": null,
+    "IngressRouteCell": null,
+    "IssuerCell": null,
+    "IstioGatewayCell": null,
+    "KnativeCertificateCell": null,
+    "KnativeIngressCell": null,
+    "KnativeServiceCell": null,
+    "KustomizationCell": null,
+    "KyvernoCleanupPolicyCell": null,
+    "KyvernoEphemeralReportCell": null,
+    "KyvernoModernPolicyCell": null,
+    "KyvernoPolicyCell": null,
+    "KyvernoPolicyExceptionCell": null,
+    "KyvernoUpdateRequestCell": null,
+    "ManagedResourceCell": null,
+    "MiddlewareCell": null,
+    "NodeClaimCell": null,
+    "NodePoolCell": null,
+    "NvidiaClusterPolicyCell": null,
+    "NvidiaDriverCell": null,
+    "OCIRepositoryCell": null,
+    "OrderCell": null,
+    "ParallelCell": null,
+    "PeerAuthenticationCell": null,
+    "PingSourceCell": null,
+    "PodMonitorCell": null,
+    "PolicyReportCell": null,
+    "PrometheusRuleCell": null,
+    "RbacAssessmentReportCell": null,
+    "ResourceClaimCell": null,
+    "ResourceClaimTemplateCell": null,
+    "ResourceSliceCell": null,
+    "RestoreCell": null,
+    "RevisionCell": null,
+    "RouteCell": null,
+    "SbomReportCell": null,
+    "ScaledJobCell": null,
+    "ScaledObjectCell": null,
+    "ScheduleCell": null,
+    "SecretStoreCell": null,
+    "SequenceCell": null,
+    "ServerlessServiceCell": null,
+    "ServersTransportCell": null,
+    "ServiceEntryCell": null,
+    "ServiceMonitorCell": null,
+    "SinkBindingCell": null,
+    "SubscriptionCell": null,
+    "TLSOptionCell": null,
+    "TraefikServiceCell": null,
+    "TriggerAuthenticationCell": null,
+    "TriggerCell": null,
+    "TrivySeverityCell": null,
+    "VirtualServiceCell": null,
+    "VolumeSnapshotLocationCell": null,
+    "VulnerabilityReportCell": null,
+    "XRDCell": null,
+    "AdmissionCheckRenderer": "../src/components/resources/renderers/KueueProvisioningRenderers.tsx",
+    "ApiServerSourceRenderer": "../src/components/resources/renderers/KnativeSourceRenderer.tsx",
+    "BrokerRenderer": "../src/components/resources/renderers/KnativeEventingRenderer.tsx",
+    "CNPGDatabaseRenderer": "../src/components/resources/renderers/CNPGDeclarativeRenderer.tsx",
+    "CNPGImageCatalogRenderer": "../src/components/resources/renderers/CNPGDeclarativeRenderer.tsx",
+    "CNPGPublicationRenderer": "../src/components/resources/renderers/CNPGDeclarativeRenderer.tsx",
+    "CNPGSubscriptionRenderer": "../src/components/resources/renderers/CNPGDeclarativeRenderer.tsx",
+    "ChannelRenderer": "../src/components/resources/renderers/KnativeEventingRenderer.tsx",
+    "ClusterQueueRenderer": "../src/components/resources/renderers/KueueQueueRenderers.tsx",
+    "CompositionRevisionRenderer": "../src/components/resources/renderers/CompositionRenderer.tsx",
+    "ContainerSourceRenderer": "../src/components/resources/renderers/KnativeSourceRenderer.tsx",
+    "DomainMappingRenderer": "../src/components/resources/renderers/KnativeNetworkingRenderer.tsx",
+    "EventTypeRenderer": "../src/components/resources/renderers/KnativeEventingRenderer.tsx",
+    "InMemoryChannelRenderer": "../src/components/resources/renderers/KnativeEventingRenderer.tsx",
+    "IssuerRenderer": "../src/components/resources/renderers/ClusterIssuerRenderer.tsx",
+    "KnativeCertificateRenderer": "../src/components/resources/renderers/KnativeNetworkingRenderer.tsx",
+    "KnativeIngressRenderer": "../src/components/resources/renderers/KnativeNetworkingRenderer.tsx",
+    "KyvernoCleanupPolicyRenderer": "../src/components/resources/renderers/KyvernoExceptionRenderers.tsx",
+    "KyvernoDeletingPolicyRenderer": "../src/components/resources/renderers/KyvernoCELPolicyRenderers.tsx",
+    "KyvernoEphemeralReportRenderer": "../src/components/resources/renderers/KyvernoQueueRenderers.tsx",
+    "KyvernoEvaluationSection": "../src/components/resources/renderers/KyvernoPolicyShared.tsx",
+    "KyvernoExpressionList": "../src/components/resources/renderers/KyvernoPolicyShared.tsx",
+    "KyvernoGeneratingPolicyRenderer": "../src/components/resources/renderers/KyvernoCELPolicyRenderers.tsx",
+    "KyvernoImageValidatingPolicyRenderer": "../src/components/resources/renderers/KyvernoCELPolicyRenderers.tsx",
+    "KyvernoMatchScopeSection": "../src/components/resources/renderers/KyvernoPolicyShared.tsx",
+    "KyvernoMutatingPolicyRenderer": "../src/components/resources/renderers/KyvernoCELPolicyRenderers.tsx",
+    "KyvernoPolicyExceptionRenderer": "../src/components/resources/renderers/KyvernoExceptionRenderers.tsx",
+    "KyvernoPolicyRenderer": "../src/components/resources/renderers/KyvernoPolicyReportRenderer.tsx",
+    "KyvernoPostureHeader": "../src/components/resources/renderers/KyvernoPolicyShared.tsx",
+    "KyvernoUpdateRequestRenderer": "../src/components/resources/renderers/KyvernoQueueRenderers.tsx",
+    "KyvernoValidatingPolicyRenderer": "../src/components/resources/renderers/KyvernoCELPolicyRenderers.tsx",
+    "KyvernoVariablesSection": "../src/components/resources/renderers/KyvernoPolicyShared.tsx",
+    "LocalQueueRenderer": "../src/components/resources/renderers/KueueQueueRenderers.tsx",
+    "NamespaceLimitRangeLink": "../src/components/resources/renderers/LimitRangeRenderer.tsx",
+    "NamespaceLimitRangesSection": "../src/components/resources/renderers/LimitRangeRenderer.tsx",
+    "ParallelRenderer": "../src/components/resources/renderers/KnativeFlowRenderer.tsx",
+    "PingSourceRenderer": "../src/components/resources/renderers/KnativeSourceRenderer.tsx",
+    "PolicyReportRenderer": "../src/components/resources/renderers/KyvernoPolicyReportRenderer.tsx",
+    "ProvisioningRequestRenderer": "../src/components/resources/renderers/KueueProvisioningRenderers.tsx",
+    "SequenceRenderer": "../src/components/resources/renderers/KnativeFlowRenderer.tsx",
+    "ServerlessServiceRenderer": "../src/components/resources/renderers/KnativeNetworkingRenderer.tsx",
+    "ServicePortCards": "../src/components/resources/renderers/ServiceRenderer.tsx",
+    "SinkBindingRenderer": "../src/components/resources/renderers/KnativeSourceRenderer.tsx",
+    "SubscriptionRenderer": "../src/components/resources/renderers/KnativeEventingRenderer.tsx",
+    "TriggerRenderer": "../src/components/resources/renderers/KnativeEventingRenderer.tsx",
+    "TrivyAlertBanner": "../src/components/resources/renderers/trivy-shared.tsx",
+    "VeleroPhaseValue": "../src/components/resources/renderers/velero-cells.tsx"
+  },
+  "overrides": {
+    "ConfirmDialog": {
+      "cardMode": "single",
+      "primaryStory": "UninstallDanger",
+      "viewport": "900x600"
+    },
+    "ReachabilityView": {
+      "cardMode": "single",
+      "viewport": "1280x760"
+    },
+    "YamlReview": {
+      "cardMode": "single",
+      "viewport": "1100x700"
+    },
+    "ReadyBar": {
+      "cardMode": "column"
+    },
+    "AreaChart": {
+      "cardMode": "column"
+    },
+    "MetricsSummary": {
+      "cardMode": "column"
+    },
+    "SeriesLegend": {
+      "cardMode": "column"
+    },
+    "AlertBanner": {
+      "cardMode": "column"
+    },
+    "CardBody": {
+      "cardMode": "column"
+    },
+    "CheckSeverityBar": {
+      "cardMode": "column"
+    },
+    "Collapse": {
+      "cardMode": "column"
+    },
+    "CollapseChevron": {
+      "cardMode": "column"
+    },
+    "ConditionsSection": {
+      "cardMode": "column"
+    },
+    "CronValue": {
+      "cardMode": "column"
+    },
+    "DiffBadge": {
+      "cardMode": "column"
+    },
+    "Disclosure": {
+      "cardMode": "column"
+    },
+    "EventDetailPanel": {
+      "cardMode": "single"
+    },
+    "HealthStatusBadge": {
+      "cardMode": "column"
+    },
+    "Input": {
+      "cardMode": "column"
+    },
+    "KeyValueBadge": {
+      "cardMode": "column"
+    },
+    "MetricsChart": {
+      "cardMode": "column"
+    },
+    "MiddleEllipsis": {
+      "cardMode": "column"
+    },
+    "ProblemAlerts": {
+      "cardMode": "column"
+    },
+    "SearchBox": {
+      "cardMode": "column"
+    },
+    "SearchPillInput": {
+      "cardMode": "column"
+    },
+    "SelectMenu": {
+      "cardMode": "column"
+    },
+    "TerminalBlock": {
+      "cardMode": "column"
+    },
+    "TimeValue": {
+      "cardMode": "column"
+    },
+    "Tooltip": {
+      "cardMode": "single",
+      "primaryStory": "DisabledReasonShown"
+    },
+    "VersionInfo": {
+      "cardMode": "column"
+    },
+    "ServicePortCards": {
+      "cardMode": "column"
+    },
+    "HPADiagnosisSummary": {
+      "cardMode": "column"
+    },
+    "DrainPlanDialog": {
+      "cardMode": "single"
+    },
+    "TimelineStrip": {
+      "cardMode": "column"
+    },
+    "TraceSummary": {
+      "cardMode": "column"
+    }
+  },
+  "readmeHeader": ".design-sync/conventions.md"
+}

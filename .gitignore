@@ -62,9 +62,7 @@ ds-bundle/
 .design-sync/.cache/
 .design-sync/learnings/
 .design-sync/node_modules
-# bundle scaffolding staged into the package (shiki stub + bundle tsconfig + compiled Tailwind CSS)
-packages/k8s-ui/.ds-sync-stubs/
-packages/k8s-ui/.ds-sync-tsconfig.json
-packages/k8s-ui/.ds-sync-styles-input.css
+# sync-only package built by .design-sync/build-pkg.mjs (minified dist, .d.ts, compiled Tailwind CSS)
+packages/k8s-ui/.ds-sync-pkg/
 packages/k8s-ui/.ds-sync-styles.css
 packages/k8s-ui/.ds-sync-additions.tsx
