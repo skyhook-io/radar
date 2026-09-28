@@ -147,6 +147,7 @@ import {
   CNPGSubscriptionRenderer,
 } from '../resources/renderers/CNPGDeclarativeRenderer'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
+import { renderCNPGSummary } from '../cnpg/CNPGSummaryHost'
 import { cleanYamlForDuplicate } from '../../utils/skeleton-yaml'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
@@ -1247,6 +1248,9 @@ export function WorkloadView({
             onSelectRun={handleSelectedRunChange}
           />
         )}
+        renderSummary={({ apiKind: ak, namespace: ns, name: n, resource: res, context, onNavigate }) =>
+          renderCNPGSummary({ apiKind: ak, namespace: ns, name: n, group: effectiveGroup, resource: res, context, onNavigate })
+        }
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&
           res ? (

@@ -38,6 +38,7 @@ import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
+import { CNPGView } from './components/cnpg/CNPGView'
 import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
@@ -123,7 +124,7 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 
 // Convert API resource name back to topology node ID prefix
 // Extended MainView type that includes traffic and cost
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
@@ -137,6 +138,7 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'traffic') return 'traffic'
   if (path === 'cost') return 'cost'
   if (path === 'capacity') return 'capacity'
+  if (path === 'cnpg') return 'cnpg'
   if (path === 'workload') return 'workload'
   if (path === 'checks' || path === 'audit') return 'checks'  // /audit = legacy → checks
   if (path === 'gitops') return 'gitops'
@@ -164,7 +166,7 @@ function usageView(pathname: string, view: ExtendedMainView, upgrade: boolean): 
 const CRASH_LABELS: Record<ExtendedMainView, string> = {
   home: 'Home', topology: 'Topology', resources: 'Resources', timeline: 'Timeline',
   issues: 'Issues', helm: 'Helm', helmCompare: 'HelmCompare', traffic: 'Traffic',
-  cost: 'Cost', capacity: 'Capacity', checks: 'Checks', gitops: 'GitOps',
+  cost: 'Cost', capacity: 'Capacity', cnpg: 'CloudNativePG', checks: 'Checks', gitops: 'GitOps',
   applications: 'Applications', workload: 'Workload', compare: 'Compare',
   investigations: 'Investigations',
 }
@@ -281,6 +283,7 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
     if (pathSegments[1] === 'activity') return 'Capacity Activity'
   }
 
+  if (view === 'cnpg') return 'CloudNativePG'
   if (view === 'home') return 'Overview'
   // Every other view's label is its id capitalized — getViewFromPath has already
   // normalized aliases (e.g. /audit → 'checks'), so no lookup table is needed.
@@ -874,7 +877,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     gitops: 'g o', checks: 'g u', cost: 'g c', capacity: 'g p',
     // Non-rail views (reachable via deep links / actions, not the rail) get no
     // dedicated mnemonic — listed for exhaustiveness so the type stays total.
-    workload: '', compare: '', helmCompare: '', investigations: '',
+    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '',
   }
   const views = Object.keys(VIEW_SHORTCUT_KEYS).filter(
     (v): v is ExtendedMainView => VIEW_SHORTCUT_KEYS[v as ExtendedMainView] !== '',
@@ -1063,6 +1066,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     secretsChanged: boolean
     timer: number | null
   }>({ changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
+  const cnpgInvalidationPendingRef = useRef(false)
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     timer: number | null
@@ -1093,6 +1097,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     const kind = kindToPluralWithGroup(event.kind, event.group ?? '')
     const structural = event.operation === 'add' || event.operation === 'delete'
     const applicationWorkload = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
+
+    if (event.group?.endsWith('.cnpg.io')) cnpgInvalidationPendingRef.current = true
 
     const fast = fastInvalidationRef.current
     fast.changedKinds.add(kind)
@@ -1137,6 +1143,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         // GitOps view is mounted (Phase 2 will make this relevance-aware).
         queryClient.invalidateQueries({ queryKey: ['gitops-tree'] })
         queryClient.invalidateQueries({ queryKey: ['gitops-insights'] })
+        if (cnpgInvalidationPendingRef.current) {
+          cnpgInvalidationPendingRef.current = false
+          queryClient.invalidateQueries({ queryKey: ['cnpg', 'workspace'] })
+        }
         fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
       }, 3000)
     }
@@ -1748,7 +1758,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     setVisibleKinds(new Set())
   }, [])
 
-  const navActiveView = mainView === 'helmCompare' ? 'helm' : mainView
+  const navActiveView = mainView === 'helmCompare' ? 'helm' : mainView === 'cnpg' ? 'resources' : mainView
 
   return (
     <PortForwardProvider>
@@ -2298,6 +2308,16 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
         {!viewsSyncGated && mainView === 'capacity' && (
           <CapacityView onOpenResource={navigateToResource} />
+        )}
+
+        {!viewsSyncGated && mainView === 'cnpg' && (
+          <CNPGView
+            namespaces={namespaces}
+            selectedResource={routeSelectedResource}
+            onOpenResource={navigateToResource}
+            onCloseResource={() => setSelectedResource(null)}
+            onClearNamespaces={clearAllNamespaces}
+          />
         )}
 
         {/* Takeover splash. When the host claims the current view via
