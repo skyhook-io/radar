@@ -41,7 +41,7 @@ scaling workloads still follow their existing permissions.
 | Cost data | `cost.source`, `cost.kubecost.url`, `cost.kubecost.clusterId`, `cost.kubecost.existingSecret`, `cost.currency` |
 | Audit policy | `audit.ignoredNamespaces`, `audit.disabledChecks` |
 | Helm OCI chart sources | `helm.ociSources` |
-| Timeline / MCP | `timeline`, `persistence`, `mcp.enabled` |
+| Timeline / MCP | `timeline`, `persistence`, `mcp.enabled`, `mcp.oauth.enabled` |
 
 For example, add this to your existing values file:
 
@@ -545,6 +545,8 @@ auth:
     redirectURL: https://radar.example.com/auth/callback
 ```
 
+To connect remote MCP clients through browser login, also set `mcp.oauth.enabled: true`. This requires standalone OIDC mode, an HTTPS callback URL, and `replicaCount: 1`. The chart uses `Recreate` rollouts because OAuth registrations and tokens are held in memory; clients must re-register and authorize after pod restarts. See [Remote MCP authentication](mcp.md#remote-authentication-with-oidc) for the full setup and discovery paths your ingress must expose.
+
 ## Security Considerations
 
 When deploying Radar in-cluster:
@@ -598,6 +600,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `service.port` | Service port | `9280` |
 | `basePath` | URL prefix Radar serves under, e.g. `/radar` for no-strip-prefix subpath ingress | `""` |
 | `mcp.enabled` | Enable MCP server for AI tools | `true` |
+| `mcp.oauth.enabled` | Enable MCP OAuth for single-replica standalone OIDC deployments | `false` |
 | `debug.image` | Image for ephemeral debug containers and node debug pods. In built-in restricted PodSecurity namespaces, pod debug containers may retry as the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. | `""` (busybox:latest) |
 | `listPageSize` | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) on very large clusters that fail to sync; `0` = off, try `2000`. Only used when the apiserver lacks WatchList streaming. | `0` |
 | `timeline.storage` | Event storage (memory/sqlite/postgres) | `memory` |
