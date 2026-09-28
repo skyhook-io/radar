@@ -48,7 +48,7 @@ mcp:
 auth:
   mode: oidc
   oidc:
-    issuerURL: https://accounts.google.com
+    issuerURL: https://identity.example.com
     scopes: [openid, profile, email]
     clientID: your-client-id
     existingSecret: radar-oidc-credentials
@@ -60,7 +60,7 @@ Configure the OIDC client and Kubernetes permissions as described in [Authentica
 
 Connect the client to `https://radar.example.com/mcp`, or `https://radar.example.com/mcp-readonly` for the read-only tool catalog. Use the client's native MCP sign-in flow. Radar shows a consent screen identifying the client and requested endpoint after browser login. Tokens are restricted to the exact endpoint authorized: a token for `/mcp-readonly` cannot access `/mcp`, and MCP tokens do not grant access to the web API. Both endpoints retain per-user Kubernetes RBAC enforcement.
 
-The client must support MCP OAuth discovery, dynamic registration of public clients, authorization code flow with S256 PKCE, and resource indicators. Client support varies by version; a client that only supports static headers cannot complete this browser flow. Browser-session authentication remains available for existing integrations.
+The client must support MCP OAuth discovery, dynamic registration of public clients, authorization code flow with S256 PKCE, and resource indicators. Request the advertised `mcp` scope in the client’s scope settings. Client support varies by version; a client that only supports static headers cannot complete this browser flow. Browser-session authentication remains available for existing integrations.
 
 ### Discovery and ingress
 
@@ -237,23 +237,6 @@ Add to `~/.kiro/settings/mcp.json` (all workspaces) or `.kiro/settings/mcp.json`
   }
 }
 ```
-
-For a remote OIDC deployment with [MCP OAuth enabled](#remote-authentication-with-oidc), use Kiro's [OAuth configuration](https://kiro.dev/docs/mcp/configuration/) and explicitly request Radar's `mcp` scope:
-
-```json
-{
-  "mcpServers": {
-    "radar": {
-      "url": "https://radar.example.com/mcp",
-      "oauth": {
-        "oauthScopes": ["mcp"]
-      }
-    }
-  }
-}
-```
-
-Use `/mcp-readonly` for the read-only tool catalog. Follow Kiro's native browser login and consent prompts; client support depends on the installed version. This client configuration requires OAuth to be enabled on the Radar server.
 
 ### JetBrains AI Assistant / Junie
 
