@@ -4,7 +4,7 @@ import { Database, FileCheck2, Settings2, ShieldCheck, Waypoints } from 'lucide-
 import { buildCNPGFleet, type CNPGFleet, type SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 import type { APIResource } from '../../types'
 import { useCNPGWorkspace } from '../../api/cnpg'
-import { CNPG_AVAILABLE_SCREENS, CNPG_SCREENS, type CNPGScreen } from './routes'
+import { CNPG_SCREENS, type CNPGScreen } from './routes'
 
 export const CNPG_SIDEBAR_CATEGORY = 'CloudNativePG'
 
@@ -64,7 +64,7 @@ export function useCNPGSidebarWorkspace({
 
   return useMemo(() => {
     if (!discovered) return undefined
-    const destinations = CNPG_SCREENS.filter((s) => CNPG_AVAILABLE_SCREENS.has(s.id)).map((s) => {
+    const destinations = CNPG_SCREENS.map((s) => {
       const { count, title } = destinationCount(s.id, fleet)
       return {
         id: s.id,

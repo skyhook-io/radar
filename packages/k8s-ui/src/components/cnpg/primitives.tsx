@@ -102,13 +102,16 @@ export function ProblemCallout({
   more,
   onNavigate,
   action,
+  subjectIsSelf,
 }: {
   problem: CNPGProblem
   more?: ReactNode
   onNavigate?: CNPGNavigate
   action?: ReactNode
+  /** The callout sits on the subject's own page, so linking to it would loop. */
+  subjectIsSelf?: boolean
 }) {
-  const aboutChild = problem.subject.kind !== 'Cluster'
+  const aboutChild = !subjectIsSelf && problem.subject.kind !== 'Cluster'
   return (
     <AlertBanner variant={PROBLEM_VARIANT[problem.severity]} title={problem.title} message={problem.detail}>
       <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-tertiary">

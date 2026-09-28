@@ -176,4 +176,58 @@ describe('buildCNPGFleet', () => {
     expect(d.failed).toBe(1)
     expect(d.summary.tone).toBe('degraded')
   })
+
+  it('treats declared managed roles without status as pending, not reconciled', () => {
+    const c = cluster('pg-a', 'db', { spec: { managed: { roles: [{ name: 'app' }, { name: 'audit' }] } } })
+    const d = buildCNPGFleet(resp({ clusters: [c] })).rows[0].declarations
+    expect(d.pending).toBe(2)
+    expect(d.summary.text).toBe('2 of 2 pending')
+  })
+
+  it('does not claim "no schedule" when ScheduledBackups are unreadable', () => {
+    const fleet = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { scheduledBackups: { state: 'denied' } } }))
+    expect(fleet.rows[0].protection.summary.text).not.toBe('No backup destination or schedule')
+  })
+
+  it('says recovery is only declared until the restored cluster has a ready instance', () => {
+    const src = cluster('pg-a', 'db')
+    const restoring = cluster('pg-a-restore', 'db', {
+      spec: { bootstrap: { recovery: { backup: { name: 'nightly-1' } } } },
+      status: { readyInstances: 0, currentPrimary: undefined },
+    })
+    const backups = [{ apiVersion: G, kind: 'Backup', metadata: { name: 'nightly-1', namespace: 'db' }, spec: { cluster: { name: 'pg-a' } }, status: { phase: 'completed' } }]
+    const a = buildCNPGFleet(resp({ clusters: [src, restoring], backups })).rows.find((r) => r.name === 'pg-a')!
+    expect(a.protection.restoreValidation.text).toBe('Recovery declared in pg-a-restore')
+    expect(a.protection.restoreValidation.tone).toBe('unknown')
+  })
+
+  it('does not attribute a restore by backup-name prefix alone', () => {
+    const src = cluster('pg', 'db')
+    const other = cluster('pg-orders-restore', 'db', { spec: { bootstrap: { recovery: { backup: { name: 'pg-orders-backup' } } } } })
+    const backups = [{ apiVersion: G, kind: 'Backup', metadata: { name: 'pg-orders-backup', namespace: 'db' }, spec: { cluster: { name: 'pg-orders' } }, status: { phase: 'completed' } }]
+    const row = buildCNPGFleet(resp({ clusters: [src, other], backups })).rows.find((r) => r.name === 'pg')!
+    expect(row.protection.restoreValidation.text).toBe('None recorded')
+  })
+
+  it('marks Poolers unknown when they are not readable', () => {
+    const fleet = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { poolers: { state: 'denied' } } }))
+    expect(fleet.rows[0].poolersKnown).toBe(false)
+  })
+
+  it('attributes instance Pod issues to their cluster', () => {
+    const fleet = buildCNPGFleet(
+      resp({ clusters: [cluster('pg-a', 'db')], pods: [pod('pg-a-2', 'db', 'pg-a', 'replica', false)] }, {
+        issues: [{ id: 'p1', severity: 'critical', kind: 'Pod', namespace: 'db', name: 'pg-a-2', reason: 'CrashLoopBackOff', message: 'Back-off restarting failed container' }],
+      }),
+    )
+    expect(fleet.rows[0].attention).toBe(true)
+    expect(fleet.rows[0].categories.has('availability')).toBe(true)
+  })
+
+  it('reads partial coverage by allowed namespaces and treats unnamed partial coverage as unknown', () => {
+    const named = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { backups: { state: 'partial', allowedNamespaces: ['db'] } } }))
+    expect(named.rows[0].protection.lastSuccessfulBackup.text).toBe('None observed')
+    const unnamed = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { backups: { state: 'partial' } } }))
+    expect(unnamed.rows[0].protection.lastSuccessfulBackup.text).toBe('No access to Backups')
+  })
 })

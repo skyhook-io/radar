@@ -6,6 +6,8 @@ describe('CNPG routes', () => {
     expect(parseCNPGRoute('/cnpg').screen).toBe('overview')
     expect(parseCNPGRoute('/cnpg/').screen).toBe('overview')
     expect(parseCNPGRoute('/cnpg/nope').screen).toBe('overview')
+    expect(parseCNPGRoute('/cnpg/protection').screen).toBe('protection')
+    expect(parseCNPGRoute('/cnpg/operator').screen).toBe('operator')
   })
 
   it('round-trips a drawer trail and keeps the API group', () => {

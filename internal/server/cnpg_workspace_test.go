@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -193,7 +195,7 @@ func cnpgPod(ns, name, clusterLabel string, owners ...metav1.OwnerReference) *co
 
 func TestCNPGWorkspace_AuthDisabledReturnsEverythingAndOnlyOwnedInstancePods(t *testing.T) {
 	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
-		cnpgObj("postgresql.cnpg.io/v1", "Cluster", "pgws", "pg-orders", map[string]any{"instances": int64(1)}, nil),
+		withUID(cnpgObj("postgresql.cnpg.io/v1", "Cluster", "pgws", "pg-orders", map[string]any{"instances": int64(1)}, nil), "c-uid"),
 		cnpgObj("postgresql.cnpg.io/v1", "Pooler", "pgws", "pg-orders-rw", map[string]any{"cluster": map[string]any{"name": "pg-orders"}}, nil),
 		cnpgObj("postgresql.cnpg.io/v1", "ClusterImageCatalog", "", "pg-fleet", nil, nil),
 		cnpgObj("barmancloud.cnpg.io/v1", "ObjectStore", "pgws", "store", nil, nil),
@@ -204,6 +206,8 @@ func TestCNPGWorkspace_AuthDisabledReturnsEverythingAndOnlyOwnedInstancePods(t *
 		cnpgPod("pgws", "impostor-1", "pg-orders"),
 		cnpgPod("pgws", "capi-owned-1", "pg-orders", metav1.OwnerReference{APIVersion: "cluster.x-k8s.io/v1beta1", Kind: "Cluster", Name: "pg-orders", UID: "x"}),
 		cnpgPod("pgws", "other-owner-1", "pg-orders", metav1.OwnerReference{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: "pg-billing", UID: "y"}),
+		cnpgPod("pgws", "stale-uid-1", "pg-orders", metav1.OwnerReference{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: "pg-orders", UID: "deleted-cluster-uid", Controller: boolPtr(true)}),
+		cnpgPod("pgws", "not-controller-1", "pg-orders", metav1.OwnerReference{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: "pg-orders", UID: "c-uid"}),
 	)
 
 	got := getWorkspaceNoAuth(t, "")
@@ -333,6 +337,9 @@ func TestCNPGWorkspace_PartialNamespaceCoverage(t *testing.T) {
 	if cov.State != cnpgCoveragePartial || len(cov.DeniedNamespaces) != 1 || cov.DeniedNamespaces[0] != "b" {
 		t.Errorf("clusters coverage = %+v, want partial denied [b]", cov)
 	}
+	if len(cov.AllowedNamespaces) != 1 || cov.AllowedNamespaces[0] != "a" {
+		t.Errorf("allowedNamespaces = %v, want [a]", cov.AllowedNamespaces)
+	}
 	names := objectNames(got.Objects["clusters"])
 	if len(names) != 1 || names[0] != "pg-a" {
 		t.Errorf("clusters = %v, want only pg-a", names)
@@ -451,14 +458,127 @@ func TestCNPGWorkspace_AuditNeedsScheduledBackupEvidence(t *testing.T) {
 	}
 }
 
+func withUID(u *unstructured.Unstructured, uid string) *unstructured.Unstructured {
+	u.SetUID(types.UID(uid))
+	return u
+}
+
 func TestIsCNPGInstancePod(t *testing.T) {
-	owned := cnpgPod("pg", "x-1", "x", metav1.OwnerReference{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: "x"})
-	if !isCNPGInstancePod(owned) {
-		t.Error("owned instance pod rejected")
+	uids := map[string]types.UID{"pg/x": "x-uid"}
+	ref := func(uid string, controller bool) metav1.OwnerReference {
+		return metav1.OwnerReference{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: "x", UID: types.UID(uid), Controller: boolPtr(controller)}
 	}
-	unlabeled := owned.DeepCopy()
-	unlabeled.Labels = nil
-	if isCNPGInstancePod(unlabeled) {
-		t.Error("pod without the cluster label accepted")
+	for _, c := range []struct {
+		name string
+		pod  *corev1.Pod
+		uids map[string]types.UID
+		want bool
+	}{
+		{"controller ref to the visible Cluster", cnpgPod("pg", "x-1", "x", ref("x-uid", true)), uids, true},
+		{"left behind by a deleted Cluster of the same name", cnpgPod("pg", "x-1", "x", ref("old-uid", true)), uids, false},
+		{"non-controller owner", cnpgPod("pg", "x-1", "x", ref("x-uid", false)), uids, false},
+		{"Cluster not visible", cnpgPod("pg", "x-1", "x", ref("x-uid", true)), map[string]types.UID{}, false},
+		{"Cluster of that name in another namespace", cnpgPod("other", "x-1", "x", ref("x-uid", true)), uids, false},
+		{"no cluster label", func() *corev1.Pod { p := cnpgPod("pg", "x-1", "x", ref("x-uid", true)); p.Labels = nil; return p }(), uids, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isCNPGInstancePod(c.pod, c.uids); got != c.want {
+				t.Errorf("isCNPGInstancePod = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// The grouped issue view folds instance-Pod evidence into the owning Cluster's
+// row. A caller who may list Clusters but not Pods must not receive that
+// evidence in any form; one who may list Pods receives it on the Pod itself.
+func TestCNPGWorkspace_PodEvidenceFollowsPodAccess(t *testing.T) {
+	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
+		withUID(cnpgObj("postgresql.cnpg.io/v1", "Cluster", "pgev", "pg-orders", map[string]any{"instances": int64(1)}, nil), "orders-uid"),
+	)
+	crashing := cnpgPod("pgev", "pg-orders-1", "pg-orders", metav1.OwnerReference{
+		APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: "pg-orders", UID: "orders-uid", Controller: boolPtr(true),
+	})
+	crashing.Status.ContainerStatuses[0] = corev1.ContainerStatus{
+		Name: "postgres", Ready: false, RestartCount: 9, Image: "pg:17",
+		State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff", Message: "back-off restarting failed container"}},
+	}
+	seedCNPGPods(t, crashing)
+
+	env := newAuthTestServer(t)
+	for _, u := range []struct {
+		name string
+		pods bool
+	}{{"with-pods", true}, {"clusters-only", false}} {
+		perms := &auth.UserPermissions{AllowedNamespaces: []string{"pgev"}}
+		allow(perms, cnpgGroup, "clusters", "", true)
+		allow(perms, "", "pods", "", u.pods)
+		allow(perms, "", "pods", "pgev", u.pods)
+		env.srv.permCache.Set(u.name, nil, perms)
+	}
+
+	control := decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace", "with-pods", ""))
+	var podIssue *CNPGWorkspaceIssue
+	for i, iss := range control.Issues {
+		if iss.Kind == "Pod" && iss.Name == "pg-orders-1" {
+			podIssue = &control.Issues[i]
+		}
+	}
+	if podIssue == nil {
+		t.Fatalf("with pod access: no Pod issue for the crashlooping instance, got %+v", control.Issues)
+	}
+	if podIssue.ID == "" {
+		t.Error("Pod issue carries no ID")
+	}
+
+	got := decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace", "clusters-only", ""))
+	if got.Coverage["pods"].State != cnpgCoverageDenied || len(got.Objects["pods"]) != 0 {
+		t.Errorf("pods coverage=%+v objects=%v, want denied and []", got.Coverage["pods"], objectNames(got.Objects["pods"]))
+	}
+	for _, iss := range got.Issues {
+		if iss.Kind == "Pod" || strings.Contains(iss.Message, "CrashLoopBackOff") || strings.Contains(iss.Message, "back-off") || iss.ID == podIssue.ID {
+			t.Errorf("Pod evidence reached a caller without Pod access: %+v", iss)
+		}
+	}
+}
+
+// Denied namespaces are named only when the caller supplied the candidate set.
+// For a caller whose scope is "all", the candidates are every namespace Radar
+// holds, and listing the denied ones would disclose them.
+func TestCNPGWorkspace_DeniedNamespacesNeverComeFromTheServerInventory(t *testing.T) {
+	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
+		cnpgObj("postgresql.cnpg.io/v1", "Cluster", "default", "pg-default", nil, nil),
+	)
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{}
+	allow(perms, cnpgGroup, "clusters", "", false)
+	for _, ns := range allNamespaceNames() {
+		allow(perms, cnpgGroup, "clusters", ns, ns == "default")
+	}
+	allow(perms, cnpgGroup, "clusters", "broken", false)
+	env.srv.permCache.Set("wide", nil, perms)
+
+	got := decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace", "wide", ""))
+	cov := got.Coverage["clusters"]
+	if cov.State != cnpgCoveragePartial {
+		t.Errorf("unfiltered: clusters coverage = %+v, want partial", cov)
+	}
+	if len(cov.DeniedNamespaces) != 0 {
+		t.Errorf("unfiltered: deniedNamespaces = %v, want omitted — they came from Radar's namespace inventory", cov.DeniedNamespaces)
+	}
+	if len(cov.AllowedNamespaces) != 1 || cov.AllowedNamespaces[0] != "default" {
+		t.Errorf("unfiltered: allowedNamespaces = %v, want [default] — without it the reader cannot tell which namespaces were read", cov.AllowedNamespaces)
+	}
+	if !containsName(got.Objects["clusters"], "pg-default") {
+		t.Errorf("unfiltered: clusters = %v, want pg-default", objectNames(got.Objects["clusters"]))
+	}
+
+	got = decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace?namespaces=default,broken", "wide", ""))
+	cov = got.Coverage["clusters"]
+	if cov.State != cnpgCoveragePartial || len(cov.DeniedNamespaces) != 1 || cov.DeniedNamespaces[0] != "broken" {
+		t.Errorf("filtered: clusters coverage = %+v, want partial naming broken", cov)
+	}
+	if len(cov.AllowedNamespaces) != 1 || cov.AllowedNamespaces[0] != "default" {
+		t.Errorf("filtered: allowedNamespaces = %v, want [default]", cov.AllowedNamespaces)
 	}
 }

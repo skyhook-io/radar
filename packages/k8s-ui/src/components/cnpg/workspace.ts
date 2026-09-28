@@ -32,7 +32,10 @@ export type CNPGCoverageState = 'full' | 'partial' | 'denied' | 'notInstalled' |
 
 export interface CNPGKindCoverage {
   state: CNPGCoverageState
+  /** Denied namespaces, named only when the caller supplied the candidate list. */
   deniedNamespaces?: string[]
+  /** For partial coverage: the namespaces that were read. */
+  allowedNamespaces?: string[]
 }
 
 export interface CNPGWorkspaceIssue {
@@ -158,12 +161,14 @@ export interface CNPGFleetRow {
   protection: CNPGProtectionFacts & { summary: CNPGFact }
   declarations: { summary: CNPGFact; total: number; failed: number; pending: number }
   poolers: string[]
+  /** False when Poolers are not readable in this cluster's namespace, so an empty list means unknown. */
+  poolersKnown: boolean
   problems: CNPGProblem[]
   /** Any issue at warning or worse. Posture findings alone do not need attention. */
   attention: boolean
   categories: Set<CNPGProblemCategory>
   /** GitOps owner recorded on the Cluster, when it carries the standard labels. */
-  gitops: { tool: 'argocd' | 'flux'; name: string; namespace?: string } | null
+  gitops: CNPGGitOpsSource | null
 }
 
 export interface CNPGFleet {
@@ -181,7 +186,7 @@ const PROTECTION_ISSUE_REASONS = new Set([
   'CNPGScheduledBackupMissed',
 ])
 
-function issueCategory(issue: CNPGWorkspaceIssue): CNPGProblemCategory {
+export function cnpgIssueCategory(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'reason'>): CNPGProblemCategory {
   if (PROTECTION_ISSUE_REASONS.has(issue.reason)) return 'protection'
   switch (issue.kind) {
     case 'Backup':
@@ -215,7 +220,12 @@ function coverageOf(resp: CNPGWorkspaceResponse, k: CNPGWorkspaceKey): CNPGKindC
 /** Coverage is usable in a namespace when that namespace's objects were read. */
 export function coverageReadable(cov: CNPGKindCoverage, namespace?: string): boolean {
   if (cov.state === 'full') return true
-  if (cov.state === 'partial') return !namespace || !(cov.deniedNamespaces ?? []).includes(namespace)
+  if (cov.state === 'partial') {
+    if (!namespace) return false
+    if (cov.allowedNamespaces) return cov.allowedNamespaces.includes(namespace)
+    if (cov.deniedNamespaces) return !cov.deniedNamespaces.includes(namespace)
+    return false
+  }
   return false
 }
 
@@ -256,9 +266,12 @@ function podReady(pod: any): boolean | null {
   return ready.status === 'True'
 }
 
-function clusterGitOps(cluster: any): CNPGFleetRow['gitops'] {
-  const labels = cluster?.metadata?.labels ?? {}
-  const annotations = cluster?.metadata?.annotations ?? {}
+export type CNPGGitOpsSource = { tool: 'argocd' | 'flux'; name: string; namespace?: string }
+
+/** The GitOps owner recorded on an object's standard Argo CD / Flux labels. */
+export function cnpgGitOpsSource(obj: any): CNPGGitOpsSource | null {
+  const labels = obj?.metadata?.labels ?? {}
+  const annotations = obj?.metadata?.annotations ?? {}
   const argo = labels['argocd.argoproj.io/instance']
   if (argo) return { tool: 'argocd', name: argo }
   const tracking = annotations['argocd.argoproj.io/tracking-id']
@@ -387,36 +400,50 @@ function walFact(cluster: any): CNPGFact {
 function restoreValidationFact(
   cluster: any,
   allClusters: any[],
+  backups: any[],
 ): CNPGProtectionFacts['restoreValidation'] {
   const plugin = getCNPGClusterBarmanPlugin(cluster)
   const server = plugin?.serverName || cluster.metadata?.name
   const store = plugin?.barmanObjectName
   const ns = cluster.metadata?.namespace
+  const name = cluster.metadata?.name
   const restored = allClusters.find((c) => {
     if (c === cluster || c.metadata?.namespace !== ns) return false
     const recovery = c.spec?.bootstrap?.recovery
     if (!recovery) return false
     const sourceName = recovery.source
-    const ext = (c.spec?.externalClusters ?? []).find((e: any) => e?.name === sourceName)
-    const params = ext?.plugin?.parameters
-    if (store && params?.barmanObjectName === store && (params?.serverName || sourceName) === server) return true
+    if (sourceName) {
+      const ext = (c.spec?.externalClusters ?? []).find((e: any) => e?.name === sourceName)
+      const params = ext?.plugin?.parameters
+      if (store && params?.barmanObjectName === store && (params?.serverName || sourceName) === server) return true
+    }
     const backupName = recovery.backup?.name
-    return !!backupName && typeof backupName === 'string' && backupName.startsWith(`${cluster.metadata?.name}-`)
+    if (!backupName) return false
+    const backup = backups.find((b) => b.metadata?.namespace === ns && b.metadata?.name === backupName)
+    return specClusterName(backup) === name
   })
-  if (restored) {
+  if (!restored) return { text: 'None recorded', tone: 'unknown', source: 'Kubernetes does not record restore tests' }
+  const rname = restored.metadata?.name
+  const ready = typeof restored.status?.readyInstances === 'number' && restored.status.readyInstances > 0
+  if (!ready) {
     return {
-      text: `Restored into ${restored.metadata?.name}`,
-      tone: 'neutral',
-      source: `Cluster ${restored.metadata?.name} bootstrapped from this cluster's backups · created ${restored.metadata?.creationTimestamp ?? 'unknown'}`,
-      restoredInto: { namespace: restored.metadata?.namespace, name: restored.metadata?.name },
+      text: `Recovery declared in ${rname}`,
+      tone: 'unknown',
+      source: `Cluster ${rname} bootstraps from this cluster's backups but has no ready instance yet`,
+      restoredInto: { namespace: restored.metadata?.namespace, name: rname },
     }
   }
-  return { text: 'None recorded', tone: 'unknown', source: 'Kubernetes does not record restore tests' }
+  return {
+    text: `Restored into ${rname}`,
+    tone: 'neutral',
+    source: `Cluster ${rname} bootstrapped from this cluster's backups and has ready instances · created ${restored.metadata?.creationTimestamp ?? 'unknown'}. This proves one recovery, not that today's backups restore.`,
+    restoredInto: { namespace: restored.metadata?.namespace, name: rname },
+  }
 }
 
 function protectionSummary(p: CNPGProtectionFacts): CNPGFact {
   if (p.walArchiving.tone === 'unhealthy') return { text: 'WAL archiving failing', tone: 'unhealthy' }
-  if (p.destination.method === 'none' && p.schedule.names.length === 0) {
+  if (p.destination.method === 'none' && p.schedule.names.length === 0 && p.schedule.tone !== 'unknown') {
     return { text: 'No backup destination or schedule', tone: 'neutral' }
   }
   if (p.schedule.tone === 'degraded') return { text: p.schedule.text, tone: 'degraded' }
@@ -469,9 +496,9 @@ function problemsFor(
     const owner = children.get(`${issue.kind}/${ns}/${issue.name}`)
     if (!isSelf && owner !== name) continue
     out.push({
-      id: issue.id,
+      id: `${issue.id}:${issue.kind}/${issue.name}`,
       severity: issue.severity,
-      category: issueCategory(issue),
+      category: cnpgIssueCategory(issue),
       title: issue.message || issue.reason,
       detail: issue.cause || undefined,
       subject: { kind: issue.kind, group: issue.group ?? '', namespace: ns, name: issue.name },
@@ -509,6 +536,10 @@ function childIndex(resp: CNPGWorkspaceResponse): Map<string, string> {
   add('Database', resp.objects.databases)
   add('Publication', resp.objects.publications)
   add('Subscription', resp.objects.subscriptions)
+  for (const p of resp.objects.pods ?? []) {
+    const c = p?.metadata?.labels?.['cnpg.io/cluster']
+    if (c) idx.set(`Pod/${p.metadata?.namespace}/${p.metadata?.name}`, c)
+  }
   return idx
 }
 
@@ -536,11 +567,16 @@ function declarationsFor(cluster: any, resp: CNPGWorkspaceResponse): CNPGFleetRo
       else if (o.status?.applied !== true) pending++
     }
   }
-  const roles = cluster?.status?.managedRolesStatus
-  const roleErrors = roles?.cannotReconcile ? Object.keys(roles.cannotReconcile).length : 0
-  const declaredRoles = Array.isArray(cluster?.spec?.managed?.roles) ? cluster.spec.managed.roles.length : 0
-  failed += roleErrors
-  total += declaredRoles
+  const roleStatus = cluster?.status?.managedRolesStatus
+  const reconciledRoles = new Set<string>(roleStatus?.byStatus?.reconciled ?? [])
+  const failedRoles = new Set<string>(Object.keys(roleStatus?.cannotReconcile ?? {}))
+  const declaredRoles: any[] = Array.isArray(cluster?.spec?.managed?.roles) ? cluster.spec.managed.roles : []
+  for (const r of declaredRoles) {
+    if (!r?.name) continue
+    total++
+    if (failedRoles.has(r.name)) failed++
+    else if (!reconciledRoles.has(r.name)) pending++
+  }
   let summary: CNPGFact
   if (total === 0) {
     summary = unreadable ? { text: 'No access to some declarations', tone: 'unknown' } : { text: 'None declared', tone: 'neutral' }
@@ -594,7 +630,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
             source: `ObjectStore ${window.store} status`,
           }
         : { text: 'Not reported', tone: 'unknown' },
-      restoreValidation: restoreValidationFact(cluster, clusters),
+      restoreValidation: restoreValidationFact(cluster, clusters, resp.objects.backups ?? []),
     }
     const problems = problemsFor(cluster, resp.issues ?? [], resp.audit ?? [], children)
     const categories = new Set<CNPGProblemCategory>(
@@ -620,10 +656,11 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
       poolers: poolers
         .filter((p) => p.metadata?.namespace === ns && specClusterName(p) === name)
         .map((p) => p.metadata?.name),
+      poolersKnown: coverageReadable(coverageOf(resp, 'poolers'), ns),
       problems,
       attention: problems.some((p) => p.severity !== 'posture'),
       categories,
-      gitops: clusterGitOps(cluster),
+      gitops: cnpgGitOpsSource(cluster),
     }
   })
 

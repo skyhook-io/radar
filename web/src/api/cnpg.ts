@@ -19,3 +19,51 @@ export function useCNPGWorkspace(namespaces: string[], options?: { enabled?: boo
     placeholderData: (prev) => prev,
   })
 }
+
+export interface CNPGOperatorCoverage {
+  state: 'full' | 'partial' | 'denied' | 'syncing' | 'error'
+  deniedNamespaces?: string[]
+}
+
+export interface CNPGOperatorComponent {
+  role: 'operator' | 'plugin'
+  pluginName?: string
+  namespace: string
+  deployment: string
+  image?: string
+  version?: string
+  readyReplicas: number | null
+  replicas: number | null
+}
+
+export interface CNPGOperatorConfig {
+  kind: 'ConfigMap' | 'Secret'
+  namespace: string
+  name: string
+  purpose: 'operator' | 'monitoring'
+  exists?: boolean | null
+  readable?: boolean
+  reason?: string
+  data?: Record<string, string>
+}
+
+export interface CNPGOperatorResponse {
+  coverage: { deployments: CNPGOperatorCoverage; services: CNPGOperatorCoverage }
+  components: CNPGOperatorComponent[]
+  config: CNPGOperatorConfig[]
+}
+
+// /api/cnpg/operator
+//
+// Operator and plugin workloads plus where the operator's configuration lives.
+// Deliberately not filtered by the namespace view filter: the operator runs in
+// its own namespace, which users rarely have selected.
+export function useCNPGOperator(options?: { enabled?: boolean }) {
+  return useQuery<CNPGOperatorResponse>({
+    queryKey: ['cnpg', 'operator'],
+    queryFn: ({ signal }) => fetchJSON<CNPGOperatorResponse>('/cnpg/operator', signal),
+    enabled: options?.enabled ?? true,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  })
+}

@@ -1,75 +1,24 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { UseQueryResult } from '@tanstack/react-query'
 import { clsx } from 'clsx'
-import { ArrowRight, Database, Search, X } from 'lucide-react'
+import { ArrowRight, Database, Search } from 'lucide-react'
 import {
-  CNPG_KIND_BY_KEY,
   CNPG_PROBLEM_CATEGORIES,
   FactValue,
-  PaneLoader,
   StatusDot,
   Tooltip,
   toneTextClass,
-  type CNPGFleet,
   type CNPGFleetRow,
   type CNPGProblemCategory,
-  type CNPGWorkspaceResponse,
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
-import { EmptyState, Notice, ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../capacity/shared'
+import { EmptyState, ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../capacity/shared'
+import { CNPGWorkspaceHeader, CoverageNotice, FilterChips, type CNPGScreenProps } from './shared'
 import { cnpgClusterFullPath } from './paths'
 import { sameResource } from './routes'
 
-const COVERAGE_LABEL: Record<string, string> = {
-  denied: 'no access',
-  partial: 'no access in some namespaces',
-  syncing: 'still loading',
-  error: 'could not be read',
-}
-
 type Filter = 'attention' | 'all'
-
-export function CNPGWorkspaceHeader({
-  title,
-  subtitle,
-  actions,
-}: {
-  title: string
-  subtitle?: React.ReactNode
-  actions?: React.ReactNode
-}) {
-  return (
-    <div className="px-5 pt-4 xl:px-7">
-      <div className="flex items-center gap-2 text-xs text-theme-text-tertiary">
-        <Database className="h-3.5 w-3.5" />
-        <span>CloudNativePG</span>
-      </div>
-      <div className="mt-1 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
-        <div className="min-w-0">
-          <h1 className="text-lg font-semibold text-theme-text-primary">{title}</h1>
-          {subtitle && <div className="mt-0.5 text-sm text-theme-text-secondary">{subtitle}</div>}
-        </div>
-        {actions}
-      </div>
-    </div>
-  )
-}
-
-export function CoverageNotice({ fleet, data }: { fleet: CNPGFleet; data: CNPGWorkspaceResponse }) {
-  if (fleet.incompleteKinds.length === 0) return null
-  const parts = fleet.incompleteKinds.map((k) => {
-    const cov = data.coverage[k]
-    const label = COVERAGE_LABEL[cov?.state ?? ''] ?? cov?.state
-    return `${CNPG_KIND_BY_KEY[k].kind} (${label})`
-  })
-  return (
-    <Notice>
-      Some CloudNativePG data is not readable: {parts.join(', ')}. Facts built on it read “No access” or “unknown” rather than none, and counts are lower bounds.
-    </Notice>
-  )
-}
 
 function InstancePills({ row }: { row: CNPGFleetRow }) {
   if (row.pods.length === 0) return null
@@ -106,7 +55,7 @@ function AttentionCell({ row }: { row: CNPGFleetRow }) {
 }
 
 export function CNPGOverview({
-  query,
+  data,
   fleet,
   namespaces,
   searchParams,
@@ -114,26 +63,15 @@ export function CNPGOverview({
   onInspect,
   inspected,
   onClearNamespaces,
-}: {
-  query: UseQueryResult<CNPGWorkspaceResponse>
-  fleet: CNPGFleet | null
-  namespaces: string[]
-  searchParams: URLSearchParams
-  onSetParams: (update: Record<string, string | null>) => void
-  onInspect: (resource: SelectedResource) => void
-  inspected: SelectedResource | null
-  onClearNamespaces: () => void
-}) {
+}: CNPGScreenProps) {
   const navigate = useNavigate()
   const { connection } = useConnection()
-  const data = query.data
   const q = searchParams.get('q') ?? ''
   const cat = (searchParams.get('cat') as CNPGProblemCategory | null) ?? null
   const rawFilter = searchParams.get('filter') as Filter | null
-  const filter: Filter = rawFilter ?? (fleet && fleet.attentionCount > 0 ? 'attention' : 'all')
+  const filter: Filter = rawFilter ?? (fleet.attentionCount > 0 ? 'attention' : 'all')
 
   const rows = useMemo(() => {
-    if (!fleet) return []
     let list = fleet.rows
     if (filter === 'attention') list = list.filter((r) => r.attention)
     if (cat) list = list.filter((r) => r.categories.has(cat))
@@ -144,45 +82,31 @@ export function CNPGOverview({
     return list
   }, [fleet, filter, cat, q])
 
-  if (!data && query.isLoading) return <PaneLoader label="Loading CloudNativePG…" className="flex-1" />
-  if (!data) {
-    return (
-      <EmptyState
-        icon={Database}
-        title="CloudNativePG workspace unavailable"
-        detail={query.error instanceof Error ? query.error.message : 'The workspace could not be loaded.'}
-      />
-    )
-  }
-  if (!data.installed || !fleet) {
-    return (
-      <EmptyState
-        icon={Database}
-        title="CloudNativePG is not installed"
-        detail={`No postgresql.cnpg.io resources are served in ${connection.context || 'this cluster'}.`}
-      />
-    )
-  }
-
   const clustersCov = data.coverage.clusters
   const total = fleet.rows.length
   const context = connection.context || data.context
 
   if (total === 0) {
-    const denied = clustersCov?.state === 'denied'
+    const state = clustersCov?.state ?? 'notInstalled'
+    const empty =
+      state === 'denied'
+        ? { title: 'No access to PostgreSQL clusters', detail: 'Your identity cannot list CloudNativePG Clusters. Other CloudNativePG kinds may still be browsable under Resource kinds.' }
+        : state === 'syncing'
+          ? { title: 'Loading PostgreSQL clusters', detail: 'Radar is still syncing CloudNativePG Clusters from the API server.' }
+          : state === 'error'
+            ? { title: 'PostgreSQL clusters could not be read', detail: 'Reading CloudNativePG Clusters failed; see the Radar server log.' }
+            : state === 'partial'
+              ? { title: 'No visible PostgreSQL clusters', detail: 'None in the namespaces you can read. Clusters in namespaces you cannot list are not shown.' }
+              : namespaces.length > 0
+                ? { title: `No PostgreSQL clusters in ${context}`, detail: `None in namespace ${namespaces.join(', ')}. Clear the namespace filter to see the whole cluster.` }
+                : { title: `No PostgreSQL clusters in ${context}`, detail: 'The CloudNativePG CRDs are installed. Clusters, backups and declarations appear here once they exist.' }
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         <CNPGWorkspaceHeader title="Overview" />
         <EmptyState
           icon={Database}
-          title={denied ? 'No access to PostgreSQL clusters' : `No PostgreSQL clusters in ${context}`}
-          detail={
-            denied
-              ? 'Your identity cannot list CloudNativePG Clusters. Other CloudNativePG kinds may still be browsable under Resource kinds.'
-              : namespaces.length > 0
-                ? `None in namespace ${namespaces.join(', ')}. Clear the namespace filter to see the whole cluster.`
-                : 'The CloudNativePG CRDs are installed. Clusters, backups and declarations appear here once they exist.'
-          }
+          title={empty.title}
+          detail={empty.detail}
           action={
             namespaces.length > 0 ? (
               <button type="button" onClick={onClearNamespaces} className="mt-3 text-sm font-medium text-accent-text hover:underline">
@@ -273,18 +197,7 @@ export function CNPGOverview({
             </div>
           </div>
 
-          {chips.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {chips.map((c) => (
-                <span key={c.label} className="inline-flex items-center gap-1 rounded-full bg-theme-elevated px-2.5 py-0.5 text-xs text-theme-text-secondary">
-                  {c.label}
-                  <button type="button" onClick={c.onClear} aria-label={`Remove ${c.label}`} className="rounded-full p-0.5 hover:bg-theme-hover">
-                    <X className="h-3 w-3" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
+          <FilterChips chips={chips} />
 
           <div className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
             <div className={TABLE_WRAP}>

@@ -6,6 +6,11 @@ import { useAPIResources } from '../../api/apiResources'
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useResourceCounts } from '../../hooks/useResourceCounts'
 import { CNPGOverview } from './CNPGOverview'
+import { CNPGProtection } from './CNPGProtection'
+import { CNPGDeclarations } from './CNPGDeclarations'
+import { CNPGPooling } from './CNPGPooling'
+import { CNPGOperator } from './CNPGOperator'
+import { CNPGScreenGate } from './shared'
 import { decodeDrawerTrail, encodeDrawerTrail, parseCNPGRoute, sameResource } from './routes'
 import { useCNPGFleet, useCNPGSidebarWorkspace } from './useCNPGSidebarWorkspace'
 
@@ -110,16 +115,32 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
         categoryWorkspaces={sidebarWorkspace}
       />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-theme-base">
-        <CNPGOverview
-          query={query}
-          fleet={fleet}
-          namespaces={namespaces}
-          searchParams={searchParams}
-          onSetParams={setParams}
-          onInspect={inspect}
-          inspected={drawerTarget}
-          onClearNamespaces={onClearNamespaces}
-        />
+        <CNPGScreenGate query={query} fleet={fleet}>
+          {(data, readyFleet) => {
+            const props = {
+              data,
+              fleet: readyFleet,
+              namespaces,
+              searchParams,
+              onSetParams: setParams,
+              onInspect: inspect,
+              inspected: drawerTarget,
+              onClearNamespaces,
+            }
+            switch (route.screen) {
+              case 'protection':
+                return <CNPGProtection {...props} />
+              case 'declarations':
+                return <CNPGDeclarations {...props} />
+              case 'pooling':
+                return <CNPGPooling {...props} />
+              case 'operator':
+                return <CNPGOperator {...props} />
+              default:
+                return <CNPGOverview {...props} />
+            }
+          }}
+        </CNPGScreenGate>
       </div>
     </div>
   )

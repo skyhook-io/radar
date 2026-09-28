@@ -10,9 +10,6 @@ export const CNPG_SCREENS: { id: CNPGScreen; label: string; path: string }[] = [
   { id: 'operator', label: 'Operator', path: '/cnpg/operator' },
 ]
 
-/** Screens that exist in this build. Destinations appear in the sidebar only once their screen does. */
-export const CNPG_AVAILABLE_SCREENS: ReadonlySet<CNPGScreen> = new Set<CNPGScreen>(['overview'])
-
 export interface CNPGRoute {
   screen: CNPGScreen
 }
@@ -22,7 +19,7 @@ export function parseCNPGRoute(pathname: string): CNPGRoute {
   if (seg[0] !== 'cnpg') return { screen: 'overview' }
   const s = seg[1] ?? ''
   const match = CNPG_SCREENS.find((x) => x.id === s)
-  if (match && CNPG_AVAILABLE_SCREENS.has(match.id)) return { screen: match.id }
+  if (match) return { screen: match.id }
   return { screen: 'overview' }
 }
 

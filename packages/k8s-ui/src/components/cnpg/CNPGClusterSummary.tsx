@@ -144,7 +144,9 @@ export function CNPGClusterSummary({
         </FactRow>
         <FactRow label="Poolers">
           {row.poolers.length === 0 ? (
-            <span className="text-theme-text-secondary">None</span>
+            <span className={row.poolersKnown ? 'text-theme-text-secondary' : 'text-theme-text-tertiary'}>
+              {row.poolersKnown ? 'None' : 'No access to Poolers'}
+            </span>
           ) : (
             <span className="flex flex-wrap gap-x-3">
               {row.poolers.map((name) => (
