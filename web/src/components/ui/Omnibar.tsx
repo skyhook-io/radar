@@ -543,7 +543,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     >
       <SearchPillInput
         className={hero
-          ? `min-h-14 px-5 rounded-2xl bg-theme-surface border border-theme-border shadow-theme-sm transition-[color,background-color,border-color,box-shadow] duration-[140ms] ${TW_EASE_UI} focus-within:border-[var(--color-brand-500)] focus-within:shadow-[0_0_0_4px_color-mix(in_srgb,var(--color-brand-500)_15%,transparent)]`
+          ? `min-h-14 px-5 rounded-2xl bg-theme-surface border border-theme-border shadow-theme-sm transition-[color,background-color,border-color,box-shadow] duration-[140ms] ${TW_EASE_UI} focus-within:border-[var(--color-brand-500,var(--accent))] focus-within:shadow-[0_0_0_4px_color-mix(in_srgb,var(--color-brand-500,var(--accent))_15%,transparent)]`
           : `min-h-8 px-2.5 rounded-md bg-theme-elevated border border-transparent focus-within:border-theme-border focus-within:bg-theme-surface transition-[color,background-color,border-color] duration-[140ms] ${TW_EASE_UI}`}
         inputClassName={hero ? 'text-lg py-4' : undefined}
         text={text}

@@ -52,7 +52,7 @@ const TONE_ACTIVE: Record<FilterPillTone, string> = {
   high:    'bg-orange-500/15 border-orange-500/40 text-orange-800 dark:text-orange-300',
   medium:  'bg-yellow-500/15 border-yellow-500/40 text-yellow-800 dark:text-yellow-300',
   ok:      'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-300',
-  brand:   'bg-[var(--color-brand-50)] border-[var(--color-radar-accent)] text-theme-text-primary dark:bg-[var(--color-brand-950)]',
+  brand:   'bg-[var(--color-brand-50,var(--accent-muted))] border-[var(--color-radar-accent,var(--accent))] text-theme-text-primary dark:bg-[var(--color-brand-950,var(--accent-muted))]',
 }
 
 const INACTIVE = 'border-theme-border-light text-theme-text-secondary hover:border-theme-border hover:text-theme-text-primary hover:bg-theme-hover/50'

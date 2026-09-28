@@ -78,7 +78,7 @@ export function ResourceBar({
 
   const bar =
     layout === 'inline' ? (
-      <div className="flex items-center gap-1.5 min-w-0">
+      <div className={clsx('flex items-center gap-1.5 min-w-0', tooltip && 'w-full')}>
         <span className="w-7 shrink-0 text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary">{label}</span>
         {track}
         <span className="w-8 shrink-0 text-right text-[10.5px] font-mono tabular-nums text-theme-text-secondary">
@@ -86,7 +86,7 @@ export function ResourceBar({
         </span>
       </div>
     ) : (
-      <div className="flex flex-col gap-0.5 min-w-0">
+      <div className={clsx('flex flex-col gap-0.5 min-w-0', tooltip && 'w-full')}>
         <div className="flex items-baseline justify-between gap-1">
           <span className="text-xs font-mono text-theme-text-secondary truncate">
             {used} / {total}
@@ -99,6 +99,8 @@ export function ResourceBar({
       </div>
     )
 
+  // Tooltip's wrapper is inline-flex, which sizes this row to its content —
+  // without w-full the track collapses to the width of the labels.
   if (tooltip) {
     return (
       <Tooltip content={tooltip} delay={200} position="top" wrapperClassName="w-full min-w-0">

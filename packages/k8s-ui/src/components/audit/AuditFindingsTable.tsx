@@ -515,7 +515,7 @@ function FlatFindingRow({ finding, onResourceClick, showCluster, onClusterClick 
         onClusterClick ? (
           <button
             onClick={() => onClusterClick(finding.cluster!.id)}
-            className="text-xs text-[var(--color-radar-accent)] hover:underline shrink-0 max-w-[160px] truncate text-left"
+            className="text-xs text-[var(--color-radar-accent,var(--accent))] hover:underline shrink-0 max-w-[160px] truncate text-left"
           >
             {finding.cluster.name}
           </button>
