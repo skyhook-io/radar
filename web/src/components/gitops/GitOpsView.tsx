@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import yaml from 'yaml'
 import { hasHealthSettingsHint } from '@skyhook-io/k8s-ui/components/gitops/GitOpsHealthSourceNotice'
-import { previousSettingsAction, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings'
+import { previousSettingsNote, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings'
 import {
   GitOpsActivityInsightView,
   GitOpsChangesView,
@@ -421,7 +421,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     hasHealthSettingsHint(insight?.summary, insight?.changes)
     || showDiffSettingsHint
   ))
-  const settingsAction = previousSettings.argocd ? previousSettingsAction('argocd', previousSettings.argocd) : undefined
+  const settingsNote = previousSettings.argocd ? previousSettingsNote('argocd', previousSettings.argocd) : undefined
   // When the user clicks an actionable issue alert ("OutOfSync — NodePool
   // default is out of sync · View →"), we navigate to Changes and focus
   // that resource. The ref is stringified to a stable key so GitOpsChangesView
@@ -680,7 +680,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       healthDocsUrl={GITOPS_HEALTH_DOCS_URL}
       remoteDestinationHint={<RemoteDestinationCloudHint />}
       onOpenSettings={onOpenSettings}
-      settingsAction={showDiffSettingsHint ? undefined : settingsAction}
+      settingsNote={showDiffSettingsHint ? undefined : settingsNote}
       renderRevisionMeta={
         isArgoApp && insightsQ.data?.capabilities?.revisionMetadataAvailable
           ? (revision) => (
@@ -820,7 +820,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
                 <ArgoResourceDiffLoader appNamespace={namespace} appName={name} resourceRef={ref} />
               ) : undefined}
               onOpenSettings={onOpenSettings}
-              settingsAction={settingsAction}
+              settingsNote={settingsNote}
             />
           )
         }

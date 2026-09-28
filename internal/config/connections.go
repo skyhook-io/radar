@@ -192,16 +192,6 @@ func (p ClusterProfiles) ValidateStructure() error {
 			return errors.New("unsupported integration in imported settings")
 		}
 	}
-	for binding, kinds := range p.Dismissed {
-		if binding == "" {
-			return errors.New("dismissed settings require a context binding")
-		}
-		for kind := range kinds {
-			if !slices.Contains(IntegrationKinds, kind) {
-				return errors.New("unsupported integration in dismissed settings")
-			}
-		}
-	}
 	for binding, profile := range p.Profiles {
 		if binding == "" || profile.Context == "" || profile.Integrations == nil {
 			return errors.New("cluster profile requires binding, context and integrations")

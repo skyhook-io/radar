@@ -88,7 +88,9 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		s.writeError(w, http.StatusBadRequest, "invalid saved connection request")
 		return
 	}
-	metadata := request.Action == "forget"
+	// Metadata actions touch no active connection, so they need neither the
+	// cluster configuration lock nor a connected context.
+	metadata := request.Action == "forget" || request.Action == "dismiss_previous_notice"
 	response := localConnectionResponse{}
 	var pending connections.Pending
 	var probe func(context.Context) error

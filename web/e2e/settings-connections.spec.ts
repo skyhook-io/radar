@@ -138,12 +138,11 @@ async function fixture(page: Page) {
         }
         return route.fulfill({ json: { profiles, connections, checked: false, connected: false } })
       }
-      const current = profiles[update.kind as IntegrationKind]
-      if (update.action === 'dismiss_legacy') {
-        delete current.legacy
-        current.revision = String(Number(current.revision) + 1)
+      if (update.action === 'dismiss_previous_notice') {
+        for (const profile of Object.values(profiles)) if (profile.legacy) profile.legacy.noticeDismissed = true
         return route.fulfill({ json: { profiles, connections, checked: false, connected: false } })
       }
+      const current = profiles[update.kind as IntegrationKind]
       if (update.action === 'adopt') {
         Object.assign(current, current.legacy)
         delete current.legacy
@@ -196,18 +195,23 @@ for (const integration of integrations) {
     Object.assign(current, discoverySettings, { state: 'auto', mode: 'auto', legacy: {
       url: 'https://previous.example', headerKeys: integration.kind === 'metrics' ? ['Authorization'] : [],
       envHeaderKeys: [], secretSet: integration.kind !== 'metrics', insecureTls: integration.kind === 'argocd',
-      clusterId: integration.kind === 'cost' ? 'development-cost' : '', mode: integration.kind === 'cost' ? 'kubecost' : 'connection', revision: 'previous-revision',
+      clusterId: integration.kind === 'cost' ? 'development-cost' : '', mode: integration.kind === 'cost' ? 'kubecost' : 'connection', revision: 'previous-revision', omitted: [], noticeDismissed: false,
     } })
     const dialog = await openSettings(page, 'Overview')
     const notice = dialog.getByRole('region', { name: 'Previous integration settings', exact: true })
     await expect(notice).toBeVisible()
-    await expect(notice.getByRole('button')).toHaveCount(1)
+    await expect(notice.getByRole('button')).toHaveCount(2)
     if (integration.kind === 'metrics') await page.screenshot({ path: testInfo.outputPath('previous-settings-overview.png') })
     await notice.getByRole('button', { name: `Review ${integration.tab}`, exact: true }).click()
     await expect(dialog.getByRole('tab', { name: integration.tab, exact: true })).toHaveAttribute('aria-selected', 'true')
-    await dialog.getByRole('button', { name: 'Use previous settings', exact: true }).click()
+    const usePrevious = async () => {
+      await dialog.getByRole('button', { name: 'Copy settings from…', exact: true }).click()
+      await dialog.getByRole('option', { name: /Previous global settings/ }).click()
+    }
+    await usePrevious()
     const field = dialog.getByRole('textbox', { name: integration.field, exact: true })
     await expect(field).toHaveValue('https://previous.example')
+    await expect(dialog.getByText(/Copied from previous global settings/)).toBeVisible()
     await expect(dialog.getByRole('button', { name: 'Save changes', exact: true })).toBeEnabled()
     expect(state.writes).toHaveLength(0)
     if (integration.kind === 'metrics') {
@@ -215,9 +219,9 @@ for (const integration of integrations) {
       await page.screenshot({ path: testInfo.outputPath('previous-settings-draft.png') })
     }
     await dialog.getByRole('button', { name: 'Discard', exact: true }).click()
-    await expect(dialog.getByRole('button', { name: 'Use previous settings', exact: true })).toBeVisible()
+    await expect(field).toHaveValue('')
     expect(state.writes).toHaveLength(0)
-    await dialog.getByRole('button', { name: 'Use previous settings', exact: true }).click()
+    await usePrevious()
     await field.fill('https://previous.example/edited')
     await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
     await expect.poll(() => state.writes.length).toBe(1)
@@ -227,21 +231,21 @@ for (const integration of integrations) {
     await expect(notice).toHaveCount(0)
   })
 
-  test(`${integration.tab}: dismissing previous settings removes the Overview offer without applying`, async ({ page }) => {
+  test(`${integration.tab}: silencing the previous-settings notice keeps them available to copy`, async ({ page }) => {
     const state = await fixture(page)
     Object.assign(state.profiles[integration.kind], discoverySettings, { state: 'auto', mode: 'auto', legacy: {
       url: 'https://previous.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
-      clusterId: '', mode: 'auto', revision: 'previous-revision',
+      clusterId: '', mode: 'auto', revision: 'previous-revision', omitted: [], noticeDismissed: false,
     } })
     const dialog = await openSettings(page, 'Overview')
-    await dialog.getByRole('button', { name: `Review ${integration.tab}`, exact: true }).click()
-    await dialog.getByRole('button', { name: 'Dismiss for this cluster', exact: true }).click()
-    await expect(dialog.getByRole('button', { name: 'Use previous settings', exact: true })).toHaveCount(0)
-    expect(state.writes).toHaveLength(1)
-    expect(state.writes[0].action).toBe('dismiss_legacy')
-    expect(state.profiles[integration.kind].url).toBe('')
-    await dialog.getByRole('tab', { name: 'Overview', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Don’t show again', exact: true }).click()
     await expect(dialog.getByRole('region', { name: 'Previous integration settings', exact: true })).toHaveCount(0)
+    expect(state.writes).toHaveLength(1)
+    expect(state.writes[0]).toEqual({ action: 'dismiss_previous_notice' })
+    expect(state.profiles[integration.kind].url).toBe('')
+    await dialog.getByRole('tab', { name: integration.tab, exact: true }).click()
+    await dialog.getByRole('button', { name: 'Copy settings from…', exact: true }).click()
+    await expect(dialog.getByRole('option', { name: /Previous global settings/ })).toBeEnabled()
   })
 
   test(`${integration.tab}: clearing a copied credentialed URL is guarded before confirmation`, async ({ page }) => {
@@ -250,7 +254,7 @@ for (const integration of integrations) {
     state.connections.push({ url: 'https://source.example', headerKeys: integration.kind === 'metrics' ? ['Authorization'] : [], envHeaderKeys: [], secretSet: integration.kind !== 'metrics', insecureTls: false,
       binding: 'source', integration: integration.kind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' })
     const dialog = await openSettings(page, integration.tab)
-    await dialog.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Copy settings from…', exact: true }).click()
     await dialog.getByRole('option', { name: /staging/ }).click()
     await dialog.getByRole('textbox', { name: integration.field, exact: true }).fill('')
     await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
@@ -264,7 +268,7 @@ for (const integration of integrations) {
     state.connections.push({ url: 'https://source.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
       binding: 'source', integration: integration.kind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' })
     const dialog = await openSettings(page, integration.tab)
-    await dialog.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Copy settings from…', exact: true }).click()
     state.failCatalog()
     await dialog.getByRole('option', { name: /staging/ }).click()
     const field = dialog.getByRole('textbox', { name: integration.field, exact: true })
@@ -365,7 +369,7 @@ for (const integration of integrations) {
     state.connections.push({ url: 'https://other.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
       binding: 'other', integration: otherKind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' })
     await openSettings(page, integration.tab)
-    await expect(page.getByRole('button', { name: 'Copy from another cluster…', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Copy settings from…', exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toBeDisabled()
   })
 
@@ -380,7 +384,7 @@ for (const integration of integrations) {
     await openSettings(page, integration.tab)
     const field = page.getByRole('textbox', { name: integration.field, exact: true })
     const fieldNode = await field.elementHandle()
-    await page.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
+    await page.getByRole('button', { name: 'Copy settings from…', exact: true }).click()
     await expect(field).toBeVisible()
     expect(await fieldNode!.evaluate(el => el.isConnected)).toBe(true)
     await page.getByRole('option', { name: /staging https:\/\/source.example/ }).click()
@@ -432,7 +436,7 @@ for (const integration of integrations) {
       binding: 'other', integration: integration.kind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' })
     const dialog = await openSettings(page, integration.tab)
     const field = dialog.getByRole('textbox', { name: integration.field, exact: true })
-    const copy = dialog.getByRole('button', { name: 'Copy from another cluster…', exact: true })
+    const copy = dialog.getByRole('button', { name: 'Copy settings from…', exact: true })
     const discovery = dialog.getByRole('button', { name: 'Use auto-discovery', exact: true })
     const fieldBox = (await field.boundingBox())!
     const copyBox = (await copy.boundingBox())!
@@ -452,7 +456,7 @@ for (const integration of integrations) {
     await dialog.getByRole('option', { name: /staging/ }).click()
     await expect(field).toHaveValue('https://other.example')
     await expect(field).toBeFocused()
-    await expect(copy).toHaveText('Copy from another cluster…')
+    await expect(copy).toHaveText('Copy settings from…')
     await expect(copy).toBeEnabled()
     await expect(dialog.getByRole('button', { name: 'Save changes', exact: true })).toBeEnabled()
     if (integration.kind === 'metrics') {
@@ -477,7 +481,7 @@ test('copy picker distinguishes duplicate context names and supports empty searc
   for (const source of ['one', 'two']) state.connections.push({ url: `https://${source}.example`, headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
     binding: source, integration: 'metrics', context: 'staging', source: `/test/${source}`, inFileName: 'staging', availability: 'available', revision: '1' })
   const dialog = await openSettings(page, 'Metrics')
-  await dialog.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Copy settings from…', exact: true }).click()
   const search = dialog.getByRole('combobox', { name: 'Search clusters or URLs' })
   await search.fill('no such cluster')
   await expect(dialog.getByText('No matches.', { exact: true }).last()).toBeVisible()
@@ -494,7 +498,7 @@ test('copy into an unconfigured cluster saves edited headers without an intermed
   state.connections.push({ url: 'https://source.example', headerKeys: ['Authorization', 'X-Scope-OrgID'], envHeaderKeys: [], secretSet: false, insecureTls: false,
     binding: 'source', integration: 'metrics', context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: 'source-revision' })
   const dialog = await openSettings(page, 'Metrics')
-  await dialog.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Copy settings from…', exact: true }).click()
   await dialog.getByRole('option', { name: /staging/ }).click()
   await dialog.getByRole('textbox', { name: 'X-Scope-OrgID value', exact: true }).fill('new-tenant')
   await dialog.getByRole('textbox', { name: 'Metrics backend URL', exact: true }).fill('https://source.example/query')
@@ -571,7 +575,7 @@ test('auto-discovery replaces a copied draft and Discard restores the saved conn
   state.connections.push({ url: 'https://source.example', headerKeys: ['X-Scope-OrgID'], envHeaderKeys: [], secretSet: false, insecureTls: false,
     binding: 'source', integration: 'metrics', context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' })
   const dialog = await openSettings(page, 'Metrics')
-  await dialog.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Copy settings from…', exact: true }).click()
   await dialog.getByRole('option', { name: /staging/ }).click()
   await dialog.getByRole('button', { name: 'Use auto-discovery', exact: true }).click()
   await expect(dialog.getByText(/Copied from/)).toHaveCount(0)
@@ -593,7 +597,7 @@ for (const integration of integrations) {
     const dialog = await openSettings(page, integration.tab)
     const field = dialog.getByRole('textbox', { name: integration.field, exact: true })
     const credential = dialog.getByRole('textbox', { name: integration.kind === 'metrics' ? 'Authorization value' : integration.kind === 'argocd' ? 'API token' : 'API key', exact: true })
-    const copy = dialog.getByRole('button', { name: 'Copy from another cluster…', exact: true })
+    const copy = dialog.getByRole('button', { name: 'Copy settings from…', exact: true })
     for (const context of ['staging', 'testing']) {
       await field.fill('https://unsaved.example')
       await credential.fill('unsaved-secret')
@@ -623,7 +627,7 @@ test('copy after a target change warns before replacement and reload clears stal
   })
   state.failNextCopy()
   await openSettings(page, 'Metrics')
-  await page.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
+  await page.getByRole('button', { name: 'Copy settings from…', exact: true }).click()
   await page.getByRole('option', { name: /staging https:\/\/source.example/ }).click()
   await expect(page.getByRole('textbox', { name: 'Metrics backend URL' })).toHaveValue('https://source.example')
   await page.getByRole('button', { name: 'Save changes', exact: true }).click()
@@ -631,7 +635,7 @@ test('copy after a target change warns before replacement and reload clears stal
   await expect(page.getByText(/Source settings changed/)).toBeVisible()
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await page.getByRole('button', { name: 'Discard draft & reload', exact: true }).click()
-  await page.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
+  await page.getByRole('button', { name: 'Copy settings from…', exact: true }).click()
   await expect(page.getByText(/Copied from staging/)).toHaveCount(0)
   await page.getByRole('option', { name: /staging https:\/\/source.example/ }).click()
   await page.getByRole('button', { name: 'Save changes', exact: true }).click()
@@ -947,17 +951,43 @@ test('a busy save that succeeds on retry clears the conflict alert', async ({ pa
   await expect(page.getByText('cluster settings are busy; try again')).toHaveCount(0)
 })
 
-test('dismissing previous settings waits for an unsaved draft', async ({ page }) => {
+test('invalid previous settings stay visible with their error but cannot be copied', async ({ page }) => {
   const state = await fixture(page)
-  Object.assign(state.profiles.metrics, discoverySettings, { state: 'auto', mode: 'auto', legacy: {
-    url: 'https://previous.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false, clusterId: '', mode: 'connection', revision: 'previous-revision',
+  Object.assign(state.profiles.cost, discoverySettings, { state: 'auto', mode: 'auto', legacy: {
+    url: '', headerKeys: [], envHeaderKeys: [], secretSet: true, insecureTls: false, clusterId: '', mode: 'auto', revision: 'previous-revision',
+    omitted: ['Kubecost cluster mapping'], noticeDismissed: false, error: 'Kubecost URL must be an HTTP(S) base URL.',
   } })
-  await openSettings(page, 'Metrics')
-  const dismiss = page.getByRole('button', { name: 'Dismiss for this cluster', exact: true })
-  await expect(dismiss).toBeEnabled()
-  await page.getByRole('textbox', { name: 'Metrics backend URL', exact: true }).fill('https://typed.example')
-  await expect(dismiss).toBeDisabled()
+  state.connections.push({ url: 'https://source.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
+    binding: 'source', integration: 'cost', context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' })
+  const dialog = await openSettings(page, 'Cost')
+  await dialog.getByRole('button', { name: 'Copy settings from…', exact: true }).click()
+  const option = dialog.getByRole('option', { name: /Previous global settings/ })
+  await expect(option).toContainText('Fix it in ~/.radar/config.json')
+  await expect(option).toHaveAttribute('aria-disabled', 'true')
+  await page.keyboard.press('Enter')
+  await expect(dialog.getByText(/Copied from/)).toHaveCount(0)
+  await page.keyboard.press('ArrowDown')
+  await expect(option).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(dialog.getByRole('option', { name: /staging/ })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(dialog.getByText(/Copied from staging/)).toBeVisible()
   expect(state.writes).toHaveLength(0)
+})
+
+test('previous settings describe URL-less sources and name what was left behind', async ({ page }) => {
+  const state = await fixture(page)
+  Object.assign(state.profiles.cost, discoverySettings, { state: 'auto', mode: 'auto', legacy: {
+    url: '', headerKeys: [], envHeaderKeys: [], secretSet: true, insecureTls: false, clusterId: '', mode: 'auto', revision: 'previous-revision',
+    omitted: ['Kubecost cluster mapping'], noticeDismissed: false,
+  } })
+  const dialog = await openSettings(page, 'Cost')
+  await dialog.getByRole('button', { name: 'Copy settings from…', exact: true }).click()
+  await dialog.getByRole('option', { name: /Auto-discovery with a saved API key/ }).click()
+  await expect(dialog.getByText('Not copied: Kubecost cluster mapping, which belonged to another cluster.')).toBeVisible()
+  await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
+  await expect.poll(() => state.writes.length).toBe(1)
+  expect(state.writes[0]).toMatchObject({ action: 'adopt', legacyRevision: 'previous-revision' })
 })
 
 for (const integration of integrations.filter(item => item.kind !== 'metrics')) {
@@ -1285,7 +1315,7 @@ async function contextualFixture(page: Page) {
     current.target.context = 'fake-test'
     Object.assign(current, discoverySettings, { state: 'auto', mode: 'auto', legacy: {
       url: `https://previous-${kind}.example`, headerKeys: [], envHeaderKeys: [],
-      secretSet: false, insecureTls: false, clusterId: '', mode: 'auto', revision: 'previous',
+      secretSet: false, insecureTls: false, clusterId: '', mode: 'auto', revision: 'previous', omitted: [], noticeDismissed: false,
     } })
   }
   state.failStatus()
@@ -1293,29 +1323,33 @@ async function contextualFixture(page: Page) {
   return state
 }
 
+const previousHint = /now saved per cluster/
+
 for (const operation of ['dismiss', 'import'] as const) {
   test(`contextual metrics: ${operation} removes the hint without reload; opening and drafting never writes`, async ({ page }) => {
     const state = await contextualFixture(page)
     await page.goto('/workload/deployments/default/nginx?tab=metrics')
-    await page.getByRole('button', { name: 'Review previous settings', exact: true }).click()
+    await expect(page.getByText(previousHint)).toBeVisible()
+    await page.getByRole('button', { name: 'Configure metrics', exact: true }).click()
     const dialog = page.getByRole('dialog', { name: 'Settings', exact: true })
     await expect(dialog.getByRole('tab', { name: 'Metrics', exact: true })).toHaveAttribute('aria-selected', 'true')
     await expect(dialog.getByRole('textbox', { name: 'Metrics backend URL', exact: true })).toHaveValue('')
     expect(state.writes).toHaveLength(0)
     if (operation === 'dismiss') {
-      await dialog.getByRole('button', { name: 'Dismiss for this cluster', exact: true }).click()
+      await dialog.getByRole('tab', { name: 'Overview', exact: true }).click()
+      await dialog.getByRole('button', { name: 'Don’t show again', exact: true }).click()
     } else {
-      await dialog.getByRole('button', { name: 'Use previous settings', exact: true }).click()
+      await dialog.getByRole('button', { name: 'Copy settings from…', exact: true }).click()
+      await dialog.getByRole('option', { name: /Previous global settings/ }).click()
       await expect(dialog.getByRole('textbox', { name: 'Metrics backend URL', exact: true })).toHaveValue('https://previous-metrics.example')
       expect(state.writes).toHaveLength(0)
       await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
       await expect(dialog.getByRole('button', { name: 'Save changes', exact: true })).toBeDisabled()
     }
     await expect.poll(() => state.writes.length).toBe(1)
-    await expect(dialog.getByRole('button', { name: 'Use previous settings', exact: true })).toHaveCount(0)
     await page.keyboard.press('Escape')
     await expect(dialog).toHaveCount(0)
-    await expect(page.getByRole('button', { name: 'Review previous settings', exact: true })).toHaveCount(0)
+    await expect(page.getByText(previousHint)).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Configure metrics', exact: true })).toBeVisible()
   })
 }
@@ -1326,7 +1360,7 @@ test('contextual metrics: failed offer GET retains ordinary setup and the origin
   await page.goto('/workload/deployments/default/nginx?tab=metrics')
   await expect(page.getByRole('button', { name: 'Configure metrics', exact: true })).toBeVisible()
   await expect(page.getByText('Backend unavailable', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Review previous settings', exact: true })).toHaveCount(0)
+  await expect(page.getByText(previousHint)).toHaveCount(0)
 })
 
 test('contextual metrics: no previous-context offer', async ({ page }) => {
@@ -1334,7 +1368,7 @@ test('contextual metrics: no previous-context offer', async ({ page }) => {
   state.profiles.metrics.target.context = 'other-cluster'
   await page.goto('/workload/deployments/default/nginx?tab=metrics')
   await expect(page.getByRole('button', { name: 'Configure metrics', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Review previous settings', exact: true })).toHaveCount(0)
+  await expect(page.getByText(previousHint)).toHaveCount(0)
 })
 
 for (const mode of ['healthy', 'operator', 'cloud'] as const) {
@@ -1354,7 +1388,7 @@ for (const mode of ['healthy', 'operator', 'cloud'] as const) {
     else await expect(page.getByRole('button', { name: 'Configure metrics', exact: true })).toBeVisible()
     // The app's pre-existing Desktop detection reads /config once at startup.
     expect(reads).toBe(1)
-    await expect(page.getByRole('button', { name: 'Review previous settings', exact: true })).toHaveCount(0)
+    await expect(page.getByText(previousHint)).toHaveCount(0)
   })
 }
 
@@ -1373,7 +1407,8 @@ for (const surface of ['overview', 'workload', 'application'] as const) {
       ? '/applications?app=default%2FDeployment%2Fnginx&view=cost'
       : '/workload/deployments/default/nginx?tab=cost')
     await expect(page.getByText(/Kubecost Aggregator is unavailable/)).toBeVisible()
-    await page.getByRole('button', { name: 'Review previous settings', exact: true }).click()
+    await expect(page.getByText(previousHint).first()).toBeVisible()
+    await page.getByRole('button', { name: 'Configure cost source', exact: true }).first().click()
     await expect(page.getByRole('dialog', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Cost', exact: true })).toHaveAttribute('aria-selected', 'true')
     expect(state.writes).toHaveLength(0)
   })
@@ -1382,7 +1417,8 @@ for (const surface of ['overview', 'workload', 'application'] as const) {
 test('contextual rightsizing opens Metrics settings', async ({ page }) => {
   await contextualFixture(page)
   await page.goto('/cost/rightsizing')
-  await page.getByRole('button', { name: 'Review previous settings', exact: true }).click()
+  await expect(page.getByText(previousHint)).toBeVisible()
+  await page.getByRole('button', { name: 'Configure metrics', exact: true }).click()
   await expect(page.getByRole('tab', { name: 'Metrics', exact: true })).toHaveAttribute('aria-selected', 'true')
 })
 
@@ -1398,11 +1434,12 @@ test('contextual Argo health and diff preserve benefits and open Argo settings',
     capabilities: { argoConfigured: false, argoDiffAvailable: false },
   } }))
   await page.goto('/gitops/detail/applications/argocd/storefront')
-  await expect(page.getByRole('note').getByRole('button', { name: 'Review previous settings', exact: true })).toBeVisible()
+  await expect(page.getByRole('note')).toContainText(previousHint)
+  await expect(page.getByRole('note').getByRole('button', { name: 'connect Radar to your Argo CD server', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Resources', exact: true }).last().click()
   await expect(page.getByText('for the full Git-rendered diff.')).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Review previous settings', exact: true })).toHaveCount(1)
-  await page.getByRole('button', { name: 'Review previous settings', exact: true }).last().click()
+  await expect(page.getByText(previousHint)).toHaveCount(1)
+  await page.getByRole('button', { name: 'Connect Argo CD', exact: true }).click()
   await expect(page.getByRole('dialog', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Argo CD', exact: true })).toHaveAttribute('aria-selected', 'true')
   expect(state.writes).toHaveLength(0)
 })

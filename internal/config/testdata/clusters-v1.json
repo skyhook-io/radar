@@ -53,5 +53,5 @@
     }
   },
   "imported": { "metrics": true, "argocd": false, "cost": true },
-  "dismissed": { "local-entry": { "metrics": false, "argocd": true, "cost": false } }
+  "previousNoticeDismissed": true
 }

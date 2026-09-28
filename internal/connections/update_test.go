@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -70,48 +71,98 @@ func TestDiscoveryStoresNoEmptyConnectionOrTarget(t *testing.T) {
 	}
 }
 
-func TestLegacyDismissalIsScopedToClusterAndIntegration(t *testing.T) {
-	for _, kind := range config.IntegrationKinds {
-		t.Run(string(kind), func(t *testing.T) {
-			r, target, other := setupResolver(t)
-			_, err := config.Update(func(c *config.Config) {
-				c.PrometheusURL = "https://metrics.example"
-				c.ArgoCDURL = "https://argo.example"
-				c.KubecostURL = "https://cost.example"
-			})
-			if err != nil {
-				t.Fatal(err)
+func TestPreviousNoticeDismissalKeepsOffersAndDrafts(t *testing.T) {
+	r, target, other := setupResolver(t)
+	_, err := config.Update(func(c *config.Config) {
+		c.PrometheusURL = "https://metrics.example"
+		c.ArgoCDURL = "https://argo.example"
+		c.KubecostURL = "https://cost.example"
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := r.Resolve(other, config.IntegrationMetrics, true).View
+	if before.Legacy == nil || before.Legacy.NoticeDismissed {
+		t.Fatal("missing undismissed offer")
+	}
+	pending, err := r.Prepare(target, Update{Action: "dismiss_previous_notice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Commit(context.Background(), pending); err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewResolver(r.Store, target, nil)
+	for _, binding := range []k8s.ProfileTarget{target, other} {
+		for _, kind := range config.IntegrationKinds {
+			offer := restarted.Resolve(binding, kind, true).View.Legacy
+			if offer == nil || !offer.NoticeDismissed {
+				t.Fatalf("%s offer on %s lost or still reminding: %+v", kind, binding.Binding, offer)
 			}
-			beforeOther := r.Resolve(other, kind, true).View
-			if beforeOther.Legacy == nil {
-				t.Fatal("missing other cluster offer")
-			}
-			apply(t, r, target, Update{Kind: kind, Action: "dismiss_legacy"})
-			restarted := NewResolver(r.Store, target, nil)
-			if restarted.Resolve(target, kind, true).View.Legacy != nil {
-				t.Fatal("dismissed offer returned after restart")
-			}
-			for _, sibling := range config.IntegrationKinds {
-				if sibling != kind && restarted.Resolve(target, sibling, true).View.Legacy == nil {
-					t.Fatal("dismissal hid another integration")
-				}
-			}
-			otherView := r.Resolve(other, kind, true).View
-			if otherView.Legacy == nil || otherView.Revision != beforeOther.Revision {
-				t.Fatal("dismissal changed another cluster's offer or draft revision")
-			}
-			file, _, err := r.Store.Read()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if file.Imported[kind] || !file.Dismissed[target.Binding][kind] {
-				t.Fatal("dismissal used a global marker")
-			}
-			got := apply(t, r, other, Update{Kind: kind, Action: "adopt", LegacyRevision: otherView.Legacy.Revision})
-			if got.Settings.URL() == "" {
-				t.Fatal("other cluster could not import")
-			}
-		})
+		}
+	}
+	after := r.Resolve(other, config.IntegrationMetrics, true).View
+	if after.Revision != before.Revision {
+		t.Fatal("dismissing the notice invalidated an open draft")
+	}
+	if got := apply(t, r, other, Update{Kind: config.IntegrationMetrics, Action: "adopt", LegacyRevision: after.Legacy.Revision}); got.Settings.URL() == "" {
+		t.Fatal("dismissed previous settings could not be imported")
+	}
+}
+
+func TestSoleContextImportsPreviousSettings(t *testing.T) {
+	r, target, other := setupResolver(t)
+	_, err := config.Update(func(c *config.Config) {
+		c.PrometheusURL = "https://metrics.example"
+		c.PrometheusHeaders = map[string]string{"Authorization": "previous-secret"}
+		c.ArgoCDToken = "other-context-token"
+		c.ArgoCDTokenBinding = other.Binding
+		c.CostSource = "prometheus"
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	imported, err := r.ImportLegacyForSoleContext(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(imported, []config.Integration{config.IntegrationMetrics, config.IntegrationCost}) {
+		t.Fatalf("imported %v", imported)
+	}
+	metrics := r.Resolve(target, config.IntegrationMetrics, false)
+	if metrics.Err != nil || metrics.Settings.Prometheus.URL != "https://metrics.example" || metrics.Settings.Prometheus.Headers["Authorization"] != "previous-secret" {
+		t.Fatalf("metrics not imported: %+v %v", metrics.Settings.Prometheus, metrics.Err)
+	}
+	if got := r.Resolve(target, config.IntegrationArgoCD, false); got.View.State != "auto" || got.Settings.ArgoCD.Token != "" {
+		t.Fatal("imported another context's discovery token")
+	}
+	if got := r.Resolve(target, config.IntegrationCost, false).Settings.EffectiveMode(config.IntegrationCost); got != "prometheus" {
+		t.Fatalf("cost source %q", got)
+	}
+	file, _, _ := r.Store.Read()
+	if !file.Imported[config.IntegrationMetrics] || file.Imported[config.IntegrationCost] {
+		t.Fatal("URL-less settings must stay importable elsewhere")
+	}
+	if _, err := r.Store.Update(context.Background(), r.Resolve(target, config.IntegrationCost, false).fileRevision, func(f *config.ClusterProfiles) error {
+		return f.RemoveSettings(target.Binding, config.IntegrationCost)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := r.ImportLegacyForSoleContext(context.Background(), target); err != nil || len(again) != 0 {
+		t.Fatalf("removed settings came back on restart: %v %v", again, err)
+	}
+}
+
+func TestSoleContextImportSkipsLaunchOverride(t *testing.T) {
+	_, target, _ := setupResolver(t)
+	r := NewResolver(&config.ProfileStore{Path: filepath.Join(t.TempDir(), "clusters.json")}, target, map[config.Integration]Bundle{
+		config.IntegrationMetrics: {Settings: config.IntegrationSettings{Prometheus: &prom.Connection{URL: "https://launch.example"}}},
+	})
+	if _, err := config.Update(func(c *config.Config) { c.PrometheusURL = "https://metrics.example" }); err != nil {
+		t.Fatal(err)
+	}
+	if imported, err := r.ImportLegacyForSoleContext(context.Background(), target); err != nil || len(imported) != 0 {
+		t.Fatalf("imported over a launch override: %v %v", imported, err)
 	}
 }
 
@@ -141,9 +192,6 @@ func TestCopyEditAndCredentialLifecycle(t *testing.T) {
 	file, _, _ := r.Store.Read()
 	if len(file.Profiles) != 1 {
 		t.Fatal("removal retained the destination's settings")
-	}
-	if !file.Dismissed[b.Binding][config.IntegrationMetrics] {
-		t.Fatal("removal resurrects legacy settings")
 	}
 }
 

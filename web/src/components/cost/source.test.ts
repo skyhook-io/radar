@@ -12,10 +12,12 @@ describe('cost source presentation', () => {
     expect(costConfigurationAction('authentication_error', { ...both, cost: undefined }).label).toBe('Configure cost source')
     expect(costConfigurationAction('configuration_mismatch', both).section).toBe('cost')
   })
-  it('labels a copy offer as copying from another cluster', () => {
+  it('keeps the neutral action and explains reuse in the note', () => {
     const copy = { metrics: 'copy', explicitCostBackend: false } as const
-    expect(costConfigurationAction('no_prometheus', copy)).toMatchObject({ section: 'prometheus', label: 'Copy from another cluster' })
-    expect(costConfigurationAction('no_prometheus', { ...copy, metrics: 'previous' }).label).toBe('Review previous settings')
+    expect(costConfigurationAction('no_prometheus', copy)).toMatchObject({ section: 'prometheus', label: 'Configure metrics' })
+    expect(costConfigurationAction('no_prometheus', copy).note).toContain('if that backend also serves this cluster')
+    expect(costConfigurationAction('no_prometheus', { ...copy, metrics: 'previous' })).toMatchObject({ label: 'Configure metrics' })
+    expect(costConfigurationAction('no_prometheus', { ...copy, metrics: 'previous' }).note).toContain('now saved per cluster')
   })
   it.each(['access_denied', 'not_found', 'history_unsupported', 'no_workload_data', 'no_metrics', 'query_error', 'load_error', undefined])('does not offer connection edits for %s', reason => {
     expect(isCostConfigurable(reason)).toBe(false)

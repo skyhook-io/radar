@@ -173,10 +173,11 @@ Behavior and guarantees:
   cluster's identity. If the identity changes, the connection pauses until you
   review it in Settings, so the token is never sent to another cluster's
   argocd-server (see [cluster identity and recovery](configuration.md#cluster-identity-and-recovery)).
-  Explicit endpoints can be reused across contexts through **Copy from another
-  cluster…**, creating independent settings whose later edits affect only that
-  context; discovery credentials cannot. Older global settings require explicit
-  import, not automatic reuse.
+  Explicit endpoints can be reused across contexts through **Copy settings
+  from…**, creating independent settings whose later edits affect only that
+  context; discovery credentials cannot. Older global settings are imported
+  automatically only when kubeconfig has a single context; otherwise choose
+  **Previous global settings** in the same picker.
 - In shared installations, an auto-discovery token (empty URL) is bound to its
   kubeconfig source entry, survives restarts and display-name qualification
   changes, and fails closed after a source switch so it is never sent to

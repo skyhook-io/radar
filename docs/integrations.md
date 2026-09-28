@@ -1256,7 +1256,7 @@ Aggregator; indirect, missing, or conflicting values require an override. Local 
 Kubecost settings per kubeconfig context, and binds every saved URL, API key and cluster-ID override
 to that context's cluster identity. Switching contexts restores that context's own settings; changing
 its underlying cluster identity pauses them until you confirm. An explicit central Aggregator URL and
-key can be copied through **Copy from another cluster…**. Later edits are independent, and cluster IDs
+key can be copied through **Copy settings from…**. Later edits are independent, and cluster IDs
 are not copied. See [local integration connections](configuration.md#local-integration-connections).
 Shared installations bind a cluster-ID override saved in `config.json` to the active kubeconfig
 context, and also bind a saved API key when the URL is blank and Radar auto-discovers a local

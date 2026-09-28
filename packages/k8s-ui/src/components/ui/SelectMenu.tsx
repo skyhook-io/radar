@@ -8,6 +8,7 @@ export interface SelectMenuOption {
   value: string
   label: string
   description?: string
+  disabled?: boolean
 }
 
 export function SelectMenu({
@@ -54,6 +55,7 @@ export function SelectMenu({
   const selectedIsVisible = filteredOptions.some((option) => option.value === value)
 
   const selectOption = (nextValue: string) => {
+    if (options.find((option) => option.value === nextValue)?.disabled) return
     onChange(nextValue)
     setOpen(false)
     triggerRef.current?.focus()
@@ -187,8 +189,7 @@ export function SelectMenu({
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && filteredOptions.length > 0) {
                     event.preventDefault()
-                    const nextIndex = Math.min(highlightedIndex, filteredOptions.length - 1)
-                    selectOption(filteredOptions[nextIndex].value)
+                    selectOption(filteredOptions[Math.min(highlightedIndex, filteredOptions.length - 1)].value)
                   } else if (event.key === 'ArrowDown') {
                     event.preventDefault()
                     const optionElements = listRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]')
@@ -254,13 +255,15 @@ export function SelectMenu({
                   type="button"
                   role="option"
                   aria-selected={active}
+                  aria-disabled={option.disabled || undefined}
                   tabIndex={
                     searchPlaceholder ? (index === highlightedIndex ? 0 : -1) : active || (!selectedIsVisible && index === 0) ? 0 : -1
                   }
                   onClick={() => selectOption(option.value)}
                   onFocus={() => setHighlightedIndex(index)}
                   className={clsx(
-                    'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary',
+                    'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-theme-text-secondary transition-colors',
+                    option.disabled ? 'cursor-not-allowed opacity-60' : 'hover:bg-theme-hover hover:text-theme-text-primary',
                     searchPlaceholder && index === highlightedIndex && 'bg-theme-hover text-theme-text-primary',
                     !searchPlaceholder && 'whitespace-nowrap'
                   )}

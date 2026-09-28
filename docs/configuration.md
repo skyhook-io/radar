@@ -318,16 +318,18 @@ credentials and, for Cost, the Kubecost cluster mapping. **Save changes** applie
 it; **Discard** restores the saved settings. The action is disabled when already
 using auto-discovery without overrides.
 
-**Copy:** on another context, choose **Copy from another cluster…** and select
-the source context from the searchable picker. The current form becomes an
+**Copy:** on another context, choose **Copy settings from…** and select the
+source from the searchable picker: another context, or **Previous global
+settings** (see below). The current form becomes an
 unsaved draft; adjust the endpoint or credentials before choosing **Save changes**.
 Choosing another source replaces the draft without saving it.
 **Discard** restores the previous settings. Replacing an existing connection
 requires confirmation when saving. This makes an independent copy, not a shared reference. Later edits
 affect only the selected cluster.
-The copy action appears only when another context has a saved explicit endpoint
-(URL) for that integration. Discovery-only credentials cannot be copied; enter
-them again on each context.
+Another context appears as a source only when it has a saved explicit endpoint
+(URL) for that integration; its discovery-only credentials cannot be copied, so
+enter them again on each context. Previous global settings are listed separately
+and can include URL-less sources.
 
 Only copy a backend that serves the destination cluster. A reachable endpoint
 does not prove it contains that cluster's data. Authentication and tenant headers
@@ -467,27 +469,38 @@ switch attempt, even an unsuccessful one. Saved connections never restore them.
 Repairing a connection that was unusable at startup resumes automatic matching,
 not its startup assertion.
 
-Older global `config.json` integration settings never activate automatically in
-local mode. Settings → Overview highlights previous integration settings and
-links to the relevant integration tabs. **Use previous settings** fills an
-editable draft; **Save changes** imports it for the current cluster, while
-**Discard** leaves its connection unchanged. Saved credentials remain hidden.
-An explicit endpoint is imported once per integration, then reused through
-**Copy from another cluster…**. Discovery-bound credentials respect their original
-context binding. **Dismiss for this cluster** hides that integration's offer
-for the current cluster without applying it.
+Older global `config.json` integration settings are not applied to every
+cluster in local mode. When the loaded kubeconfig has exactly one context, Radar
+assumes they were meant for it and imports them at startup. This happens once,
+when `clusters.json` is first created: the first such launch imports, settings
+removed later are not restored, and other single-context kubeconfig files launched
+afterwards use the picker below. Integrations set by startup flags or environment
+are left alone. With several
+contexts, **Copy settings from… → Previous global settings** in each integration
+tab fills an editable draft; **Save changes** imports it for the current cluster,
+while **Discard** leaves its connection unchanged. Picker entries describe
+URL-less sources (for example, auto-discovery with a saved API key), and invalid
+previous settings stay listed with their error. Saved credentials remain hidden.
+An explicit endpoint is imported once per integration, then reused by copying
+from that context; URL-less previous settings stay available to every context.
+Discovery-bound credentials and Kubecost mappings respect their original context
+binding, and the draft names anything left behind. Settings → Overview explains
+the change and links to the affected tabs until you choose **Don’t show again**,
+which silences these reminders everywhere without removing the picker entry.
 The old file stays as a recovery copy, never a fallback; removal does not
 resurrect it. Older Radar versions still read that global file, so rolling back
 does not preserve the new context-scoped behavior.
 
 Missing-connection hints in Metrics, Rightsizing, PVC usage, Cost (including
-workload and application tabs), and Argo CD diff/health views also offer
-**Review previous settings** when an applicable local configuration is available,
-or **Copy from another cluster** when another context has saved settings for that
-integration. Both open the relevant Settings tab; neither imports or saves anything.
+workload and application tabs), and Argo CD diff/health views keep their usual
+**Configure** action and add a note when previous global settings can be copied
+for this cluster. Metrics and Cost also note when another context's saved settings
+are available to copy if that backend serves this cluster; Argo CD does not, because
+the server that matters is the one owning the Applications in this cluster. The
+action opens the relevant Settings tab and never imports or saves anything.
 Existing errors remain visible, and a previous connection is not a guarantee
 that its backend is reachable. Working views are unchanged: if auto-discovery
-finds a working backend, review previous settings from Settings → Overview.
+finds a working backend, Settings → Overview still explains the change.
 These recovery hints are for local CLI/Desktop configuration, not operator-managed
 or embedded Cloud installations.
 

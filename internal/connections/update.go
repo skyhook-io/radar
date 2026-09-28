@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 
@@ -71,6 +72,11 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 	if err != nil {
 		return pending, err
 	}
+	if req.Action == "dismiss_previous_notice" {
+		next := file
+		next.PreviousNoticeDismissed = true
+		return Pending{file: next, revision: revision}, nil
+	}
 	if !slices.Contains(config.IntegrationKinds, req.Kind) {
 		return pending, errors.New("unknown integration type")
 	}
@@ -91,9 +97,6 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 	if next.Imported == nil {
 		next.Imported = map[config.Integration]bool{}
 	}
-	if next.Dismissed == nil {
-		next.Dismissed = map[string]map[config.Integration]bool{}
-	}
 	pending = Pending{Target: target, Kind: req.Kind, file: next, revision: revision}
 	metadata := req.Action == "forget"
 	if !metadata {
@@ -107,7 +110,7 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 	profile := next.Profiles[target.Binding]
 	a := next.Settings(target.Binding, req.Kind)
 	a = a.Clone()
-	if a.NeedsTarget() && a.Target != target.Fingerprint && !metadata && req.Action != "reconfirm" && req.Action != "replace" && req.Action != "copy" && req.Action != "auto" && req.Action != "dismiss_legacy" {
+	if a.NeedsTarget() && a.Target != target.Fingerprint && !metadata && req.Action != "reconfirm" && req.Action != "replace" && req.Action != "copy" && req.Action != "auto" {
 		return pending, errors.New("confirm that the saved settings still apply to this cluster before editing them")
 	}
 	switch req.Action {
@@ -119,9 +122,6 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 		if err := next.RemoveSettings(req.Binding, req.Kind); err != nil {
 			return pending, err
 		}
-		dismiss(&next, req.Binding, req.Kind)
-	case "dismiss_legacy":
-		dismiss(&next, target.Binding, req.Kind)
 	case "reconfirm":
 		if len(req.Kinds) == 0 {
 			return pending, errors.New("select the integrations to confirm")
@@ -168,7 +168,6 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 			a.Mode = mode
 		}
 		putSettings(&next, target, req.Kind, profile, a)
-		dismiss(&next, target.Binding, req.Kind)
 	case "copy", "adopt", "save", "replace":
 		removing := req.Action == "replace" && a.NeedsTarget() || req.Action == "save" && a.URL() != "" && req.URL != nil && strings.TrimSpace(*req.URL) == ""
 		if removing && !req.ConfirmRemoval {
@@ -210,8 +209,8 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 				if _, exists := profile.Integrations[req.Kind]; exists {
 					return pending, errors.New("this context already has settings; copy from another cluster or replace them explicitly")
 				}
-				if next.Imported[req.Kind] || next.Dismissed[target.Binding][req.Kind] {
-					return pending, errors.New("legacy settings have already been imported or dismissed")
+				if next.Imported[req.Kind] {
+					return pending, errors.New("previous settings have already been imported")
 				}
 				legacy, digest := Legacy(req.Kind)
 				pending.legacyRevision = digest
@@ -255,7 +254,6 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 		identity := target.Identity
 		a.Identity = &identity
 		putSettings(&next, target, req.Kind, profile, a)
-		dismiss(&next, target.Binding, req.Kind)
 		pending.Probe = true
 		pending.Candidate = Bundle{Settings: a.Clone()}
 	default:
@@ -271,7 +269,7 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 	return pending, nil
 }
 
-func putSettings(file *config.ClusterProfiles, target k8s.ProfileTarget, kind config.Integration, profile config.ClusterProfile, a config.IntegrationSettings) {
+func normalizeSettings(a config.IntegrationSettings) config.IntegrationSettings {
 	if a.Prometheus != nil && a.Prometheus.URL == "" && len(a.Prometheus.Headers) == 0 && len(a.Prometheus.HeadersFromEnv) == 0 {
 		a.Prometheus = nil
 	}
@@ -284,6 +282,11 @@ func putSettings(file *config.ClusterProfiles, target k8s.ProfileTarget, kind co
 	if !a.NeedsTarget() {
 		a.Target, a.Identity = "", nil
 	}
+	return a
+}
+
+func putSettings(file *config.ClusterProfiles, target k8s.ProfileTarget, kind config.Integration, profile config.ClusterProfile, a config.IntegrationSettings) {
+	a = normalizeSettings(a)
 	profile.Context = target.Context
 	profile.Source = target.Source
 	profile.InFileName = target.InFileName
@@ -292,13 +295,6 @@ func putSettings(file *config.ClusterProfiles, target k8s.ProfileTarget, kind co
 	}
 	profile.Integrations[kind] = a
 	file.Profiles[target.Binding] = profile
-}
-
-func dismiss(file *config.ClusterProfiles, binding string, kind config.Integration) {
-	if file.Dismissed[binding] == nil {
-		file.Dismissed[binding] = map[config.Integration]bool{}
-	}
-	file.Dismissed[binding][kind] = true
 }
 
 func editSettings(c *config.IntegrationSettings, req Update) error {
@@ -381,4 +377,81 @@ func editSettings(c *config.IntegrationSettings, req Update) error {
 		return c.Kubecost.Validate()
 	}
 	return nil
+}
+
+// ImportLegacyForSoleContext adopts the previous global settings when the
+// kubeconfig has only one context, assuming they were meant for it; asking
+// first would just break the upgrade. It runs only while clusters.json does not
+// exist yet, so the first such launch imports and settings removed later never
+// come back on restart. It saves without a connection check, as the global
+// settings were used before, and skips integrations set for this launch.
+func (p *Resolver) ImportLegacyForSoleContext(ctx context.Context, target k8s.ProfileTarget) ([]config.Integration, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, err := os.Stat(p.Store.Path); !os.IsNotExist(err) {
+		return nil, nil
+	}
+	file, revision, err := p.read()
+	if err != nil {
+		return nil, err
+	}
+	data, err := json.Marshal(file)
+	if err != nil {
+		return nil, err
+	}
+	var next config.ClusterProfiles
+	if err := json.Unmarshal(data, &next); err != nil {
+		return nil, err
+	}
+	if next.Imported == nil {
+		next.Imported = map[config.Integration]bool{}
+	}
+	var imported []config.Integration
+	for _, kind := range config.IntegrationKinds {
+		if _, saved := next.Profiles[target.Binding].Integrations[kind]; saved || next.Imported[kind] {
+			continue
+		}
+		if _, launched := p.launch[kind]; launched && target.Binding == p.launchTarget.Binding && target.Fingerprint == p.launchTarget.Fingerprint {
+			continue
+		}
+		legacy, _ := Legacy(kind)
+		if legacy.Err != nil || !hasLegacy(legacy) {
+			continue
+		}
+		a := legacySettingsForTarget(kind, target, legacy)
+		if !hasLegacy(Bundle{Settings: a}) {
+			continue
+		}
+		if kind == config.IntegrationCost && a.URL() != "" && a.EffectiveMode(kind) == "auto" {
+			a.Mode = "kubecost"
+		}
+		a.Target = target.Fingerprint
+		identity := target.Identity
+		a.Identity = &identity
+		if normalizeSettings(a).Validate(kind) != nil {
+			continue
+		}
+		putSettings(&next, target, kind, next.Profiles[target.Binding], a)
+		// URL-less settings stay available for other contexts to import.
+		if a.URL() != "" {
+			next.Imported[kind] = true
+		}
+		imported = append(imported, kind)
+	}
+	if len(imported) == 0 {
+		return nil, nil
+	}
+	if err := next.ValidateStructure(); err != nil {
+		return nil, err
+	}
+	if err := next.ValidateChanges(file); err != nil {
+		return nil, err
+	}
+	if _, err := p.Store.Update(ctx, revision, func(f *config.ClusterProfiles) error {
+		*f = next
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return imported, nil
 }

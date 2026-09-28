@@ -78,6 +78,8 @@ export interface IntegrationProfile {
     secretSet: boolean
     revision: string
     error?: string
+    omitted: string[]
+    noticeDismissed: boolean
   }
 }
 export type IntegrationProfiles = Record<IntegrationKind, IntegrationProfile>
@@ -104,6 +106,19 @@ interface Update {
   useCliToken?: boolean
 }
 type Task = 'main' | 'reconfirm' | 'replace'
+const previousSource = '__previous__'
+const savedCredential: Record<IntegrationKind, string> = {
+  metrics: 'saved headers',
+  argocd: 'a saved token',
+  cost: 'a saved API key'
+}
+function describeSource(kind: IntegrationKind, source: { url: string; secretSet: boolean; headerKeys: string[]; mode?: string; clusterId?: string }) {
+  if (source.url) return source.url
+  if (kind === 'cost' && source.mode === 'prometheus') return 'OpenCost via this cluster’s metrics connection'
+  if (source.secretSet || source.headerKeys.length > 0) return `Auto-discovery with ${savedCredential[kind]}`
+  if (source.clusterId) return 'Auto-discovery with a Kubecost cluster mapping'
+  return 'Auto-discovery'
+}
 const names: Record<IntegrationKind, string> = {
   metrics: 'Metrics',
   argocd: 'Argo CD',
@@ -503,45 +518,82 @@ export function LocalConnectionSettings({
         Use auto-discovery
       </button>
     ) : undefined
-  const copyAction = task === 'main' && profile.state !== 'launch' && catalogError ? (
-    <span role="status" className="text-xs text-theme-text-secondary">
-      Could not load other clusters.{' '}
-      <button type="button" className="text-accent-text hover:underline" onClick={() => setCatalogRetry(retry => retry + 1)}>
-        Retry
-      </button>
-    </span>
-  ) : task === 'main' && profile.state !== 'launch' && copySources.length > 0 ? (
-    <SelectMenu
-      variant="text"
-      value=""
-      placeholder="Copy from another cluster…"
-      ariaLabel="Copy from another cluster…"
-      searchPlaceholder="Search clusters or URLs"
-      disabled={!!pending}
-      options={copySources.map(connection => ({
-        value: connection.binding,
-        label: `${connection.context}${copySources.filter(other => other.context === connection.context).length > 1 ? ` · ${connection.source} · ${connection.inFileName}` : ''}`,
-        description: connection.url,
-      }))}
-      onChange={binding => {
-        const source = copySources.find(connection => connection.binding === binding)
-        if (!source) return
-        setSelected(source)
-        setLegacyDraft(undefined)
-        setUrl(source.url)
-        setInsecureTls(source.insecureTls)
-        if (kind === 'cost') {
-          setMode('kubecost')
-          setClusterId(profile.state === 'target_changed' ? '' : profile.clusterId)
-        }
-        setDiscoveryDraft(false)
-        setCredentialDirty(false)
-        setDraftGeneration(generation => generation + 1)
-        setMessage('')
-        setError('')
-        requestAnimationFrame(() => editorRegion.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus())
-      }}
-    />
+  const previous = task === 'main' && profile.state === 'auto' ? profile.legacy : undefined
+  const loadPrevious = (legacy: NonNullable<IntegrationProfile['legacy']>) => {
+    setSelected(null)
+    setLegacyDraft(legacy)
+    setUrl(legacy.url)
+    setInsecureTls(legacy.insecureTls)
+    setMode(legacy.mode as CostConnectionDraft['mode'])
+    setClusterId(legacy.clusterId)
+    setDiscoveryDraft(false)
+    setCredentialDirty(false)
+    setDraftGeneration(generation => generation + 1)
+    setMessage('')
+    setError('')
+    requestAnimationFrame(() => editorRegion.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus())
+  }
+  const copySource = (source: StoredConnection) => {
+    setSelected(source)
+    setLegacyDraft(undefined)
+    setUrl(source.url)
+    setInsecureTls(source.insecureTls)
+    if (kind === 'cost') {
+      setMode('kubecost')
+      setClusterId(profile.state === 'target_changed' ? '' : profile.clusterId)
+    }
+    setDiscoveryDraft(false)
+    setCredentialDirty(false)
+    setDraftGeneration(generation => generation + 1)
+    setMessage('')
+    setError('')
+    requestAnimationFrame(() => editorRegion.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus())
+  }
+  const reuseOptions = task === 'main' && profile.state !== 'launch' ? [
+    ...(previous ? [{
+      value: previousSource,
+      label: 'Previous global settings',
+      description: previous.error
+        ? `Can’t be used: ${previous.error.replace(/\.$/, '')}. Fix it in ~/.radar/config.json.`
+        : describeSource(kind, previous),
+      disabled: !!previous.error,
+    }] : []),
+    ...copySources.map(connection => ({
+      value: connection.binding,
+      label: `${connection.context}${copySources.filter(other => other.context === connection.context).length > 1 ? ` · ${connection.source} · ${connection.inFileName}` : ''}`,
+      description: connection.url,
+    })),
+  ] : []
+  const copyAction = task === 'main' && profile.state !== 'launch' && (reuseOptions.length > 0 || catalogError) ? (
+    <>
+      {reuseOptions.length > 0 && (
+        <SelectMenu
+          variant="text"
+          value=""
+          placeholder="Copy settings from…"
+          ariaLabel="Copy settings from…"
+          searchPlaceholder="Search clusters or URLs"
+          disabled={!!pending}
+          options={reuseOptions}
+          onChange={value => {
+            if (value === previousSource) {
+              if (previous && !previous.error) loadPrevious(previous)
+              return
+            }
+            const source = copySources.find(connection => connection.binding === value)
+            if (source) copySource(source)
+          }}
+        />
+      )}
+      {catalogError && (
+        <span role="status" className="text-xs text-theme-text-secondary">
+          Could not load other clusters.{' '}
+          <button type="button" className="text-accent-text hover:underline" onClick={() => setCatalogRetry(retry => retry + 1)}>
+            Retry
+          </button>
+        </span>
+      )}
+    </>
   ) : undefined
   const connectionActions = (autoDiscoveryAction || copyAction) && (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-2">
@@ -675,6 +727,12 @@ export function LocalConnectionSettings({
         <p>{selected.headerKeys.length > 0 || selected.secretSet ? 'Saved credentials will be copied when you save. ' : ''}Changes stay independent. Check that this backend serves this cluster.</p>
         {selected.envHeaderKeys.length > 0 && <p>Environment-backed headers keep their references; changing those variables affects both clusters.</p>}
       </div>}
+      {legacyDraft && <div className="text-xs text-theme-text-secondary space-y-1">
+        <p>Copied from <span className="font-medium">previous global settings</span> · Unsaved</p>
+        <p>{legacyDraft.headerKeys.length > 0 || legacyDraft.secretSet ? 'Saved credentials will be copied when you save. ' : ''}These settings applied to every cluster before; {legacyDraft.url ? 'check that this backend serves' : 'check that they belong to'} {profile.target.context}.</p>
+        {legacyDraft.omitted.length > 0 && <p>Not copied: {legacyDraft.omitted.join(' and ')}, which belonged to another cluster.</p>}
+        {legacyDraft.envHeaderKeys.length > 0 && <p>Environment-backed headers keep their references.</p>}
+      </div>}
       {task === 'main' && (
         <>
           {profile.state === 'launch' ? (
@@ -739,58 +797,6 @@ export function LocalConnectionSettings({
               )}
             </div>
           ) : null}
-          {profile.state === 'auto' && profile.legacy && !legacyDraft && (
-            <div className="card-inner-lg space-y-2">
-              <h4 className="text-sm font-medium">
-                Previously saved connection
-              </h4>
-              <p className="text-xs text-theme-text-secondary">
-                Use these older settings here only if this backend serves{' '}
-                {profile.target.context}.
-              </p>
-              <p className="text-xs break-all">
-                {profile.legacy.url || 'Cluster discovery'}
-              </p>
-              {profile.legacy.error && (
-                <p className="text-xs text-warning-text">
-                  {profile.legacy.error}
-                </p>
-              )}
-              <div className="flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  disabled={!!profile.legacy.error}
-                  className="text-xs text-accent-text disabled:opacity-50 disabled:cursor-not-allowed"
-                  onClick={() => {
-                    const legacy = profile.legacy!
-                    setSelected(null)
-                    setLegacyDraft(legacy)
-                    setUrl(legacy.url)
-                    setInsecureTls(legacy.insecureTls)
-                    setMode(legacy.mode as CostConnectionDraft['mode'])
-                    setClusterId(legacy.clusterId)
-                    setDiscoveryDraft(false)
-                    setCredentialDirty(false)
-                    setDraftGeneration(generation => generation + 1)
-                    setMessage('')
-                    setError('')
-                    requestAnimationFrame(() => editorRegion.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus())
-                  }}
-                >
-                  Use previous settings
-                </button>
-                <button
-                  type="button"
-                  disabled={dirty}
-                  title={dirty ? 'Save or discard your changes first' : undefined}
-                  className="text-xs text-theme-text-secondary disabled:opacity-50 disabled:cursor-not-allowed"
-                  onClick={() => void act({ action: 'dismiss_legacy' })}
-                >
-                  Dismiss for this cluster
-                </button>
-              </div>
-            </div>
-          )}
         </>
       )}
       <fieldset ref={editorRegion} className="min-w-0">

@@ -35,7 +35,10 @@ export function previousIntegrationOffers(
   const offer = (kind: IntegrationKind): SettingsOffer | undefined => {
     const profile = response.integrationProfiles?.[kind]
     if (profile?.target.context !== context || profile.state !== 'auto') return undefined
-    if (profile.legacy && !profile.legacy.error) return 'previous'
+    if (profile.legacy && !profile.legacy.error && !profile.legacy.noticeDismissed) return 'previous'
+    // Another cluster's Argo CD server manages that cluster's Applications, so
+    // copying it is rarely the fix for this one; Settings still offers it.
+    if (kind === 'argocd') return undefined
     return catalog?.some(entry => entry.integration === kind && !entry.error && entry.url && entry.binding !== profile.target.binding)
       ? 'copy' : undefined
   }
@@ -75,9 +78,12 @@ export function usePreviousIntegrationSettings(relevant: boolean): PreviousInteg
   return enabled && !query.isError ? query.data ?? noOffers : noOffers
 }
 
-export function previousSettingsAction(kind: IntegrationKind, offer: SettingsOffer): { label: string; note: string } {
-  const name = kind === 'argocd' ? 'Argo CD' : kind === 'metrics' ? 'metrics' : 'cost'
+const settingsTabs: Record<IntegrationKind, string> = { metrics: 'Metrics', argocd: 'Argo CD', cost: 'Cost' }
+
+// Only a note: call sites keep their neutral action, because another cluster's
+// backend connects fine while showing the wrong cluster's data.
+export function previousSettingsNote(kind: IntegrationKind, offer: SettingsOffer): string {
   return offer === 'copy'
-    ? { label: 'Copy from another cluster', note: `Another cluster has saved ${name} settings you can copy to this one.` }
-    : { label: 'Review previous settings', note: `Previous ${name} settings are available to review for this cluster.` }
+    ? 'Settings saved for another cluster are available to copy if that backend also serves this cluster.'
+    : `Connections are now saved per cluster. You can copy your previous settings in Settings → ${settingsTabs[kind]}.`
 }

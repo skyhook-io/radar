@@ -739,7 +739,7 @@ interface GitOpsChangesViewProps {
   // Opens the global Settings dialog. Backs the "Connect Argo CD" hint shown
   // when the root is an Argo Application without the diff integration.
   onOpenSettings?: () => void
-  settingsAction?: { label: string; note?: string }
+  settingsNote?: string
 }
 
 // Status facets for the Resources list. OutOfSync is a sync-status concern
@@ -750,7 +750,7 @@ const STATUS_FACETS: { key: ResourceStatusFacet; label: string; tone: FilterPill
   { key: 'missing', label: 'Missing', tone: 'danger' },
 ]
 
-export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResource, syncResourceDisabledReason, focusKey, tree, renderResourceDiff, onOpenSettings, settingsAction }: GitOpsChangesViewProps) {
+export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResource, syncResourceDisabledReason, focusKey, tree, renderResourceDiff, onOpenSettings, settingsNote }: GitOpsChangesViewProps) {
   // "All resources" toggle: when on, render generated descendants alongside
   // the controller's declared inventory. Argo's UI defaults to "all" — we
   // default to "declared" because the diagnostic data (drift, events) lives
@@ -1010,16 +1010,16 @@ export function GitOpsChangesView({ insight, error, onOpenResource, onSyncResour
             {insight.capabilities?.argoConfigured ? (
               <>
                 Argo CD's full Git-rendered diff isn't available for this app (connection down or token not authorized).{' '}
-                {settingsAction?.note && <>{settingsAction.note} </>}
+                {settingsNote && <>{settingsNote} </>}
                 <button type="button" onClick={onOpenSettings} className="font-medium text-accent-text hover:underline">
-                  {settingsAction?.label ?? 'Check Argo CD in Settings'}
+                  Check Argo CD in Settings
                 </button>.
               </>
             ) : (
               <>
-                {settingsAction?.note && <>{settingsAction.note} </>}
+                {settingsNote && <>{settingsNote} </>}
                 <button type="button" onClick={onOpenSettings} className="font-medium text-accent-text hover:underline">
-                  {settingsAction?.label ?? 'Connect Argo CD'}
+                  Connect Argo CD
                 </button>{' '}
                 for the full Git-rendered diff.
               </>

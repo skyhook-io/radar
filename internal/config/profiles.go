@@ -28,10 +28,12 @@ type ClusterProfile struct {
 }
 
 type ClusterProfiles struct {
-	Version   int                             `json:"version"`
-	Profiles  map[string]ClusterProfile       `json:"profiles"`
-	Imported  map[Integration]bool            `json:"imported,omitempty"`
-	Dismissed map[string]map[Integration]bool `json:"dismissed,omitempty"`
+	Version  int                       `json:"version"`
+	Profiles map[string]ClusterProfile `json:"profiles"`
+	Imported map[Integration]bool      `json:"imported,omitempty"`
+	// PreviousNoticeDismissed silences reminders about the previous global
+	// settings everywhere; they stay available to copy.
+	PreviousNoticeDismissed bool `json:"previousNoticeDismissed,omitempty"`
 }
 
 type ProfileStore struct{ Path string }
@@ -54,7 +56,7 @@ func (s *ProfileStore) Read() (ClusterProfiles, string, error) {
 }
 
 func (s *ProfileStore) ReadSince(previous string) (ClusterProfiles, string, bool, error) {
-	result := ClusterProfiles{Version: 1, Profiles: map[string]ClusterProfile{}, Imported: map[Integration]bool{}, Dismissed: map[string]map[Integration]bool{}}
+	result := ClusterProfiles{Version: 1, Profiles: map[string]ClusterProfile{}, Imported: map[Integration]bool{}}
 	if s.Path == "" {
 		return result, "", false, errors.New("cluster settings directory is unavailable")
 	}

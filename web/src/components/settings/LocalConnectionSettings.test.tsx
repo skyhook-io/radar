@@ -62,18 +62,22 @@ const savedProfile: Partial<IntegrationProfile> = {
 
 describe('Local saved connections', () => {
   it('only advertises previous settings for unconfigured integrations', () => {
-    const legacy = { url: 'https://previous', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false, mode: 'auto', clusterId: '', revision: 'previous' }
+    const legacy = { url: 'https://previous', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false, mode: 'auto', clusterId: '', revision: 'previous', omitted: [], noticeDismissed: false }
     const profiles: IntegrationProfiles = {
       metrics: { ...profile, legacy },
       argocd: { ...profile, state: 'saved', legacy },
       cost: { ...profile, state: 'launch', legacy },
     }
-    const html = renderToStaticMarkup(<PreviousIntegrationSettingsNotice profiles={profiles} onNavigate={vi.fn()} />)
+    const notice = () => renderToStaticMarkup(<PreviousIntegrationSettingsNotice profiles={profiles} onNavigate={vi.fn()} onDismissed={vi.fn()} />)
+    const html = notice()
+    expect(html).toContain('now saved per cluster')
     expect(html).toContain('Review Metrics')
     expect(html).not.toContain('Review Argo CD')
     expect(html).not.toContain('Review Cost')
+    profiles.metrics.legacy = { ...legacy, noticeDismissed: true }
+    expect(notice()).toBe('')
     delete profiles.metrics.legacy
-    expect(renderToStaticMarkup(<PreviousIntegrationSettingsNotice profiles={profiles} onNavigate={vi.fn()} />)).toBe('')
+    expect(notice()).toBe('')
   })
   it.each(['metrics', 'argocd', 'cost'] as const)(
     'does not show a routine reload action for %s',
@@ -92,9 +96,8 @@ describe('Local saved connections', () => {
     const html = render({})
     expect(html).toContain('Save changes')
     expect(html).toContain('Add header')
-    expect(html).not.toContain('Copy from another cluster')
+    expect(html).not.toContain('Copy settings from')
     expect(html).toContain('Cluster settings identity')
-    expect(html).not.toContain('Previously saved connection')
   })
   it('names common compatible backends without claiming an exhaustive list', () => {
     const html = render({ headerKeys: ['Authorization', 'X-Scope-OrgID'] })
@@ -108,7 +111,7 @@ describe('Local saved connections', () => {
     expect(html).not.toContain('Edit headers')
     expect(html).not.toContain('<select')
   })
-  it('offers explicit adoption and never activates legacy credentials by default', () => {
+  it('offers previous settings as a copy source and never activates them by default', () => {
     const html = render({
       legacy: {
         url: 'https://legacy',
@@ -118,11 +121,13 @@ describe('Local saved connections', () => {
         mode: 'connection',
         clusterId: '',
         secretSet: true,
-        revision: 'legacy'
+        revision: 'legacy',
+        omitted: [],
+        noticeDismissed: true
       }
     })
-    expect(html).toContain('Use previous settings')
-    expect(html).toContain('Dismiss for this cluster')
+    expect(html).toContain('Copy settings from…')
+    expect(html).not.toContain('https://legacy')
   })
   it('keeps launch overrides read-only with a way to change their source', () => {
     const html = render({
@@ -173,7 +178,7 @@ describe('Local saved connections', () => {
     (kind) => {
       const html = render({ ...savedProfile, secretSet: true }, kind)
       expect(html).toContain('Save changes')
-      expect(html).not.toContain('Copy from another cluster')
+      expect(html).not.toContain('Copy settings from')
       expect(html).not.toContain('Reload')
     }
   )

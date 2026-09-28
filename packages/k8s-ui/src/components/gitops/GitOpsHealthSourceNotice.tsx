@@ -66,18 +66,13 @@ export function hasHealthSettingsHint(summary: HealthSourceNoticeSummary | undef
     && (!!summary?.resourceHealthApiError || (!hasRadarFinding(changes) && summary?.health === 'Degraded'))
 }
 
-export interface GitOpsSettingsAction {
-  label: string
-  note?: string
-}
-
 export function GitOpsHealthSourceNotice({
   summary,
   changes,
   docsUrl,
   remoteDestinationHint,
   onOpenSettings,
-  settingsAction,
+  settingsNote,
 }: {
   summary: HealthSourceNoticeSummary | undefined
   // Decides between the two appTree sentences: with a Radar-sourced
@@ -95,7 +90,9 @@ export function GitOpsHealthSourceNotice({
   // the first way out, and "check Settings" when a configured connection
   // didn't deliver. Without it, only the Argo-side knob is named.
   onOpenSettings?: () => void
-  settingsAction?: GitOpsSettingsAction
+  // Host context shown before the settings link, such as settings that can
+  // be copied for this cluster.
+  settingsNote?: string
 }) {
   const kind = healthSourceNoticeKind(summary)
   if (!kind) return null
@@ -108,7 +105,7 @@ export function GitOpsHealthSourceNotice({
   const settingsLink = (label: string) =>
     onOpenSettings ? (
       <button type="button" onClick={onOpenSettings} className="underline decoration-theme-border underline-offset-2 hover:text-theme-text-primary">
-        {settingsAction?.label ?? label}
+        {label}
       </button>
     ) : null
   return (
@@ -129,7 +126,7 @@ export function GitOpsHealthSourceNotice({
             {apiError ? (
               <>
                 {APP_TREE_API_ERROR_NOTICE}: {apiError}.
-                {onOpenSettings && <> {settingsAction?.note} {settingsLink('Check Argo CD in Settings')}.</>}
+                {onOpenSettings && <> {settingsNote} {settingsLink('Check Argo CD in Settings')}.</>}
                 {' '}
                 {radarFinding ? APP_TREE_API_ERROR_FINDINGS : APP_TREE_API_ERROR_NO_FINDINGS}
               </>
@@ -139,11 +136,8 @@ export function GitOpsHealthSourceNotice({
                 {!radarFinding && (
                   <>
                     {' '}
-                    {settingsAction && onOpenSettings ? <>
-                      {settingsAction.note} {settingsLink(settingsAction.label)} to connect Argo's per-resource health. Alternatively,{' '}
-                    </> : <>
-                      To see Argo's per-resource health here, {onOpenSettings && <>{settingsLink('connect Radar to your Argo CD server')}, or </>}
-                    </>}
+                    {settingsNote && onOpenSettings && <>{settingsNote}{' '}</>}
+                    To see Argo's per-resource health here, {onOpenSettings && <>{settingsLink('connect Radar to your Argo CD server')}, or </>}
                     {APP_TREE_PERSIST_REMEDY}
                   </>
                 )}

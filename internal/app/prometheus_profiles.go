@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -80,6 +81,13 @@ func preparePrometheusConfiguration(cfg AppConfig) (AppConfig, error) {
 		launches = map[config.Integration]connections.Bundle{}
 	}
 	cfg.LocalConnections = connections.NewResolver(config.NewProfileStore(), target, launches)
+	if targetErr == nil && k8s.GetKubeconfigSummary().ContextCount == 1 {
+		if imported, err := cfg.LocalConnections.ImportLegacyForSoleContext(context.Background(), target); err != nil {
+			log.Printf("[connections] Previous integration settings were not imported: %v", err)
+		} else if len(imported) > 0 {
+			log.Printf("[connections] Imported previous %v settings for the only kubeconfig context %q", imported, k8s.SanitizeForLog(target.Context))
+		}
+	}
 	cfg.CostSource, cfg.KubecostURL, cfg.KubecostAPIKey, cfg.KubecostAPIKeyContext, cfg.KubecostClusterID, cfg.KubecostClusterIDContext = "auto", "", "", "", "", ""
 	cfg.PrometheusURL = ""
 	cfg.PrometheusHeaders = nil

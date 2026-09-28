@@ -399,6 +399,18 @@ func SetTestProfileSource(source, name, user string) func() {
 	}
 }
 
+func SetTestContextCount(count int) func() {
+	clientMu.Lock()
+	previous := totalContextCount
+	totalContextCount = count
+	clientMu.Unlock()
+	return func() {
+		clientMu.Lock()
+		totalContextCount = previous
+		clientMu.Unlock()
+	}
+}
+
 func SetTestPolicyReportIndex(idx *policyreports.Index) *policyreports.Index {
 	prev := policyReportIndex.Load()
 	policyReportIndex.Store(idx)

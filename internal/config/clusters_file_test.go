@@ -63,8 +63,6 @@ func TestClusterFileRejectedStructure(t *testing.T) {
 		"unknown setting":          `{"version":1,"profiles":{"a":{"context":"dev","integrations":{"metrics":{"connectionId":"old"}}}}}`,
 		"unknown connection field": `{"version":1,"profiles":{"a":{"context":"dev","integrations":{"metrics":{"prometheus":{"url":"","typo":true}}}}}}`,
 		"unknown imported kind":    `{"version":1,"profiles":{},"imported":{"typo":true}}`,
-		"unknown dismissed kind":   `{"version":1,"profiles":{},"dismissed":{"a":{"typo":true}}}`,
-		"empty dismissed binding":  `{"version":1,"profiles":{},"dismissed":{"":{"metrics":true}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := &ProfileStore{Path: filepath.Join(t.TempDir(), "clusters.json")}

@@ -14,26 +14,59 @@ import {
 } from './LocalConnectionSettings'
 import type { SettingsSectionId } from './settings-state'
 
-export function PreviousIntegrationSettingsNotice({ profiles, onNavigate }: {
+// Dismissal reports only that the global notice flag is set; replacing the
+// profiles from a late response could overwrite a newer context's settings.
+export function PreviousIntegrationSettingsNotice({ profiles, onNavigate, onDismissed }: {
   profiles: IntegrationProfiles
   onNavigate: (section: SettingsSectionId) => void
+  onDismissed: () => void
 }) {
-  const available = (['metrics', 'argocd', 'cost'] as const).filter(kind =>
-    profiles[kind].state === 'auto' && profiles[kind].legacy && !profiles[kind].legacy.error,
-  )
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const available = (['metrics', 'argocd', 'cost'] as const).filter(kind => {
+    const legacy = profiles[kind].legacy
+    return profiles[kind].state === 'auto' && legacy && !legacy.error && !legacy.noticeDismissed
+  })
   if (available.length === 0) return null
+  const dismiss = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      const response = await fetch(apiUrl('/integrations/connections'), {
+        method: 'PUT',
+        credentials: getCredentialsMode(),
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ action: 'dismiss_previous_notice' }),
+      })
+      const data = (await response.json().catch(() => ({}))) as ConnectionResponse
+      if (!response.ok) throw new Error(data.error || `Settings request failed (${response.status})`)
+      onDismissed()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
     <section aria-label="Previous integration settings" className="mt-3 rounded-lg border border-theme-border bg-accent-muted p-3">
-      <h4 className="text-sm font-medium text-theme-text-primary">Previous integration settings found</h4>
-      <p className="mt-1 text-xs text-theme-text-secondary">Choose what to use for this cluster. Nothing is applied until you save.</p>
-      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
+      <h4 className="text-sm font-medium text-theme-text-primary">Integration settings are now saved per cluster</h4>
+      <p className="mt-1 text-xs text-theme-text-secondary">
+        Your previous global settings no longer apply automatically. To use them for this cluster, choose{' '}
+        <span className="font-medium">Copy settings from… → Previous global settings</span> in its tab.
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
         {available.map(kind => (
           <button key={kind} type="button" className="text-xs text-accent-text hover:underline"
             onClick={() => onNavigate(kind === 'metrics' ? 'prometheus' : kind)}>
             Review {integrationNames[kind]}
           </button>
         ))}
+        <button type="button" disabled={busy} className="text-xs text-theme-text-secondary hover:underline disabled:opacity-50"
+          onClick={() => void dismiss()}>
+          Don’t show again
+        </button>
       </div>
+      {error && <p role="alert" className="mt-2 text-xs text-warning-text">{error}</p>}
     </section>
   )
 }
@@ -255,7 +288,7 @@ export function SavedClusterConnections({
                   <p className="text-theme-text-secondary">
                     This kubeconfig entry is gone, but its connections are still
                     saved. To reuse one, select the new context and choose “Copy
-                    from another cluster” in that integration’s settings.
+                    settings from…” in that integration’s settings.
                   </p>
                 )}
                 {(current ||

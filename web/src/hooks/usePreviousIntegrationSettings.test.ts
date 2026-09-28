@@ -35,6 +35,19 @@ describe('previous integration eligibility projection', () => {
     expect(previousIntegrationOffers(response(), 'development', [entry]).metrics).toBe('previous')
     expect(previousIntegrationOffers(response({ state: 'saved', legacy: undefined }), 'development', [entry]).metrics).toBeUndefined()
   })
+  it('stops reminding after the notice is dismissed, falling back to copy offers', () => {
+    const entry = { integration: 'metrics', binding: 'staging', url: 'https://mimir.example' } as ConnectionResponse['connections'][number]
+    const data = response({ target: { context: 'development', binding: 'development' } as IntegrationProfile['target'] })
+    for (const kind of ['metrics', 'argocd', 'cost'] as const)
+      data.integrationProfiles![kind] = { ...data.integrationProfiles![kind], legacy: { ...data.integrationProfiles![kind].legacy!, noticeDismissed: true } }
+    expect(previousIntegrationOffers(data, 'development').metrics).toBeUndefined()
+    expect(previousIntegrationOffers(data, 'development', [entry]).metrics).toBe('copy')
+  })
+  it('never nudges Argo CD toward another cluster\'s server', () => {
+    const entry = { integration: 'argocd', binding: 'staging', url: 'https://argo.example' } as ConnectionResponse['connections'][number]
+    const data = response({ legacy: undefined, target: { context: 'development', binding: 'development' } as IntegrationProfile['target'] })
+    expect(previousIntegrationOffers(data, 'development', [entry]).argocd).toBeUndefined()
+  })
   it.each([
     ['auto', 'https://cost.example', true],
     ['kubecost', 'https://cost.example', true],

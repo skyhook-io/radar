@@ -29,6 +29,10 @@ type LegacyOffer struct {
 	SecretSet     bool     `json:"secretSet"`
 	Revision      string   `json:"revision"`
 	Error         string   `json:"error,omitempty"`
+	// Omitted names what importing leaves behind because it belonged to
+	// another context.
+	Omitted         []string `json:"omitted"`
+	NoticeDismissed bool     `json:"noticeDismissed"`
 }
 
 type StoredSettingsView struct {
@@ -107,19 +111,15 @@ func (p *Resolver) Revision(digest string) string {
 // Redacted credentials participate in conflicts without being returned to the browser.
 func (p *Resolver) integrationRevision(file config.ClusterProfiles, kind config.Integration, binding string) string {
 	scope := config.ClusterProfiles{
-		Version:   file.Version,
-		Profiles:  map[string]config.ClusterProfile{},
-		Imported:  map[config.Integration]bool{kind: file.Imported[kind]},
-		Dismissed: map[string]map[config.Integration]bool{},
+		Version:  file.Version,
+		Profiles: map[string]config.ClusterProfile{},
+		Imported: map[config.Integration]bool{kind: file.Imported[kind]},
 	}
 	if profile, ok := file.Profiles[binding]; ok {
 		if settings, ok := profile.Integrations[kind]; ok {
 			profile.Integrations = map[config.Integration]config.IntegrationSettings{kind: settings}
 			scope.Profiles[binding] = profile
 		}
-	}
-	if file.Dismissed[binding][kind] {
-		scope.Dismissed[binding] = map[config.Integration]bool{kind: true}
 	}
 	data, _ := json.Marshal(scope)
 	return p.Revision(string(data))
@@ -242,12 +242,14 @@ func (p *Resolver) resolve(file config.ClusterProfiles, revision string, err err
 			s.View.PreviousIdentity = a.Identity
 			s.Err = errors.New("the cluster behind this context changed; confirm in Settings that its saved settings still apply")
 		}
-		if details && !file.Imported[kind] && !file.Dismissed[target.Binding][kind] && s.View.State == "auto" {
+		if details && !file.Imported[kind] && s.View.State == "auto" {
 			legacy, digest := Legacy(kind)
-			legacy.Settings = legacySettingsForTarget(kind, target, legacy)
+			kept := legacySettingsForTarget(kind, target, legacy)
+			omitted := omittedForTarget(kind, legacy, kept)
+			legacy.Settings = kept
 			if hasLegacy(legacy) {
 				v := settingsView(legacy.Settings)
-				s.View.Legacy = &LegacyOffer{URL: v.URL, HeaderKeys: v.HeaderKeys, EnvHeaderKeys: v.EnvHeaderKeys, SecretSet: v.SecretSet, InsecureTLS: v.InsecureTLS, Mode: legacy.Settings.EffectiveMode(kind), ClusterID: legacy.Settings.ClusterID, Revision: p.Revision(digest)}
+				s.View.Legacy = &LegacyOffer{URL: v.URL, HeaderKeys: v.HeaderKeys, EnvHeaderKeys: v.EnvHeaderKeys, SecretSet: v.SecretSet, InsecureTLS: v.InsecureTLS, Mode: legacy.Settings.EffectiveMode(kind), ClusterID: legacy.Settings.ClusterID, Revision: p.Revision(digest), Omitted: omitted, NoticeDismissed: file.PreviousNoticeDismissed}
 				if legacy.Err != nil {
 					s.View.Legacy.Error = legacy.Err.Error()
 				}
@@ -321,6 +323,10 @@ func Legacy(kind config.Integration) (Bundle, string) {
 	case config.IntegrationMetrics:
 		b.Settings.Prometheus = &prom.Connection{URL: c.PrometheusURL, Headers: c.PrometheusHeaders, HeadersFromEnv: c.PrometheusHeadersFromEnv}
 		b.Err = b.Settings.Prometheus.Validate()
+		// The shared message's flag and Helm advice doesn't fit a local import.
+		if errors.Is(b.Err, prom.ErrHeadersRequireURL) {
+			b.Err = errors.New("the previous Prometheus headers have no URL")
+		}
 	case config.IntegrationArgoCD:
 		b.Settings.ArgoCD = &argoapi.Connection{URL: c.ArgoCDURL, Token: c.ArgoCDToken, InsecureTLS: c.ArgoCDInsecureTLS}
 		b.Settings.Target = c.ArgoCDTokenBinding
@@ -353,6 +359,24 @@ func Legacy(kind config.Integration) (Bundle, string) {
 func hasLegacy(b Bundle) bool {
 	c := b.Settings
 	return c.URL() != "" || c.Prometheus != nil && len(c.Prometheus.Headers)+len(c.Prometheus.HeadersFromEnv) > 0 || c.ArgoCD != nil && (c.ArgoCD.Token != "" || c.ArgoCD.InsecureTLS) || c.Kubecost != nil && (c.Kubecost.APIKey != "" || b.Settings.ClusterID != "" || b.Settings.Mode != "auto")
+}
+
+func omittedForTarget(kind config.Integration, bundle Bundle, kept config.IntegrationSettings) []string {
+	omitted := []string{}
+	switch kind {
+	case config.IntegrationArgoCD:
+		if bundle.Settings.ArgoCD.Token != "" && kept.ArgoCD.Token == "" {
+			omitted = append(omitted, "Argo CD token")
+		}
+	case config.IntegrationCost:
+		if bundle.Settings.Kubecost.APIKey != "" && kept.Kubecost.APIKey == "" {
+			omitted = append(omitted, "Kubecost API key")
+		}
+		if bundle.Settings.ClusterID != "" && kept.ClusterID == "" {
+			omitted = append(omitted, "Kubecost cluster mapping")
+		}
+	}
+	return omitted
 }
 
 func legacySettingsForTarget(kind config.Integration, target k8s.ProfileTarget, bundle Bundle) config.IntegrationSettings {

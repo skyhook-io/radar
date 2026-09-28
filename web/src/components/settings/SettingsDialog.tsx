@@ -163,6 +163,17 @@ export function SettingsDialog({
   const argoDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, argocd: dirty })), [])
   const costDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, cost: dirty })), [])
   const [connectionsChangedAt, setConnectionsChangedAt] = useState(0)
+  const overviewHeading = useRef<HTMLHeadingElement>(null)
+  const previousNoticeDismissed = useCallback(() => {
+    // The notice unmounts with its focused button; keep focus in the dialog.
+    requestAnimationFrame(() => overviewHeading.current?.focus())
+    setConfigData(value => value?.integrationProfiles ? {
+      ...value,
+      integrationProfiles: Object.fromEntries(Object.entries(value.integrationProfiles).map(([kind, profile]) =>
+        [kind, profile.legacy ? { ...profile, legacy: { ...profile.legacy, noticeDismissed: true } } : profile])) as IntegrationProfiles,
+    } : value)
+    void queryClient.resetQueries({ queryKey: [previousIntegrationSettingsKey] })
+  }, [queryClient])
   const connectionsChanged = useCallback((profiles: IntegrationProfiles) => {
     setConnectionsChangedAt(Date.now())
     setConfigData(value => value ? { ...value, integrationProfiles: profiles } : value)
@@ -649,13 +660,13 @@ export function SettingsDialog({
             {/* Overview — status at a glance; the landing section */}
             <div className={clsx(section !== 'overview' && 'hidden')} role="tabpanel" inert={section !== 'overview' || undefined}>
               <div className="mb-1">
-                <h3 className="text-base font-semibold text-theme-text-primary">Overview</h3>
+                <h3 ref={overviewHeading} tabIndex={-1} className="text-base font-semibold text-theme-text-primary outline-none">Overview</h3>
                 <p className="mt-0.5 text-xs text-theme-text-tertiary">
                   What this Radar is connected to right now — select a row for details.
                 </p>
               </div>
               {configData?.management === 'local' && configData.integrationProfiles && canEditConfig && (
-                <PreviousIntegrationSettingsNotice profiles={configData.integrationProfiles} onNavigate={setSection} />
+                <PreviousIntegrationSettingsNotice profiles={configData.integrationProfiles} onNavigate={setSection} onDismissed={previousNoticeDismissed} />
               )}
               <div className="mt-3">
                 <OverviewPanel active={section === 'overview'} onNavigate={setSection} />

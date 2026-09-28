@@ -1,5 +1,5 @@
 import type { CostDataSource, CostUnavailableReason } from '../../api/client'
-import { previousSettingsAction, type PreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings'
+import { previousSettingsNote, type PreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings'
 
 export function isCostConfigurable(reason?: string): boolean {
   return reason === 'no_prometheus' || reason === 'no_cost_source' || reason === 'source_unavailable'
@@ -28,7 +28,9 @@ export function costConfigurationAction(reason?: CostUnavailableReason, offers?:
       ? offers?.explicitCostBackend ? 'cost' : offers?.metrics ? 'metrics' : undefined
       : isCostConfigurable(reason) && offers?.cost ? 'cost' : undefined
   const offer = previousKind && offers?.[previousKind]
-  if (previousKind && offer) return { section: previousKind === 'metrics' ? 'prometheus' : 'cost', ...previousSettingsAction(previousKind, offer) }
+  if (previousKind && offer) return previousKind === 'metrics'
+    ? { section: 'prometheus', label: 'Configure metrics', note: previousSettingsNote('metrics', offer) }
+    : { section: 'cost', label: 'Configure cost source', note: previousSettingsNote('cost', offer) }
   return reason === 'no_prometheus'
     ? { section: 'prometheus', label: 'Configure metrics' }
     : { section: 'cost', label: 'Configure cost source' }

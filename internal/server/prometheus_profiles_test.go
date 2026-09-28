@@ -135,11 +135,11 @@ func TestLocalProfileLegacyAdoptionAndCompletion(t *testing.T) {
 	if view.Legacy != nil || len(prometheuspkg.CurrentHeaders()) != 0 {
 		t.Fatal("second context repeated import offer or inherited credentials")
 	}
-	if res := updateProfile(t, s, view, "dismiss_legacy", "unfinished-url", nil); res.Code != 200 {
-		t.Fatalf("finish: %d %s", res.Code, res.Body.String())
+	if res := updateProfile(t, s, view, "dismiss_previous_notice", "unfinished-url", nil); res.Code != 200 {
+		t.Fatalf("dismiss notice: %d %s", res.Code, res.Body.String())
 	}
-	if s.localPrometheusView().Legacy != nil {
-		t.Fatal("dismissal did not stop offers for this cluster")
+	if file, _, err := config.NewProfileStore().Read(); err != nil || !file.PreviousNoticeDismissed {
+		t.Fatalf("notice dismissal not saved: %v", err)
 	}
 	if config.Load().PrometheusHeaders["Authorization"] != "legacy-secret" {
 		t.Fatal("legacy recovery copy changed")

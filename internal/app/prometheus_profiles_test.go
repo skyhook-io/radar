@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,6 +54,34 @@ func TestPrepareLocalPrometheusConfiguration(t *testing.T) {
 	}
 	if _, _, err := config.NewProfileStore().Read(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStartupImportsPreviousSettingsOnlyForSoleContext(t *testing.T) {
+	for _, tc := range []struct {
+		contexts int
+		wantURL  string
+	}{{1, "https://previous.example"}, {2, ""}} {
+		t.Run(fmt.Sprintf("%d contexts", tc.contexts), func(t *testing.T) {
+			useTempHome(t)
+			t.Cleanup(k8s.SetTestLocalMode())
+			t.Cleanup(k8s.SetTestProfileSource("/test/local", "dev", "developer"))
+			t.Cleanup(k8s.SetTestContextCount(tc.contexts))
+			old := k8s.SetTestConfig(&rest.Config{Host: "https://cluster"})
+			t.Cleanup(func() { k8s.SetTestConfig(old) })
+			t.Setenv(settings.OperatorFileEnv, "")
+			t.Cleanup(func() { settings.SetOperatorConfig(nil) })
+			if _, err := config.Update(func(c *config.Config) { c.PrometheusURL = "https://previous.example" }); err != nil {
+				t.Fatal(err)
+			}
+			got, err := preparePrometheusConfiguration(AppConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.PrometheusURL != tc.wantURL {
+				t.Fatalf("startup metrics URL %q, want %q", got.PrometheusURL, tc.wantURL)
+			}
+		})
 	}
 }
 

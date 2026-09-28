@@ -18,7 +18,7 @@ vi.mock('../../api/client', async (importActual) => ({
 const { PVCUsageBar } = await import('./PVCUsageBar')
 vi.mock('../../hooks/usePreviousIntegrationSettings', () => ({
   usePreviousIntegrationSettings: (relevant: boolean) => ({ metrics: relevant && previousMetrics }),
-  previousSettingsAction: () => ({ label: 'Review previous settings', note: 'Previous metrics settings are available to review for this cluster.' }),
+  previousSettingsNote: () => 'You can copy your previous settings in Settings → Metrics.',
 }))
 const measured: PrometheusPVCUsage = { namespace: 'demo', name: 'disk', used: 0, capacity: 1024, ratio: 0, hasData: true, status: 'available' }
 const render = () => renderToString(<PVCUsageBar namespace="demo" name="disk" />)
@@ -27,12 +27,12 @@ describe('PVC usage availability', () => {
   it('offers previous settings only for a missing connection, not missing series or denied access', () => {
     previousMetrics = true
     statusResult = { data: { connected: false } }
-    expect(render()).toContain('Review previous settings')
+    expect(render()).toContain('copy your previous settings')
     statusResult = { data: { connected: true } }
     usageResult = { data: { ...measured, hasData: false, status: 'no_series' } }
-    expect(render()).not.toContain('Review previous settings')
+    expect(render()).not.toContain('copy your previous settings')
     statusResult = { error: new ApiError('denied', 403) }
-    expect(render()).not.toContain('Review previous settings')
+    expect(render()).not.toContain('copy your previous settings')
   })
   beforeEach(() => {
     canConfigure = true

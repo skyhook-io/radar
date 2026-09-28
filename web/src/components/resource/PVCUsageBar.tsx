@@ -1,7 +1,7 @@
 import { formatMemoryBytes } from '@skyhook-io/k8s-ui/utils/format'
 import { isForbiddenError, useAutoPromConnect, useCloudRole, usePrometheusPVCUsage, usePrometheusStatus } from '../../api/client'
 import { useNavCustomization } from '../../context/NavCustomization'
-import { previousSettingsAction, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings'
+import { previousSettingsNote, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings'
 
 export function PVCUsageBar({ namespace, name }: { namespace: string; name: string }) {
   // PVC detail can be the first Prometheus-backed surface a user opens; without
@@ -42,7 +42,7 @@ export function PVCUsageBar({ namespace, name }: { namespace: string; name: stri
   const denied = isForbiddenError(error) || isForbiddenError(statusError)
   const waiting = !denied && !statusError && (!status || status.discovering || (isConnected && !usage && !error))
   const offers = usePreviousIntegrationSettings(canConfigure && !waiting && !denied && !statusError && !isConnected)
-  const previousAction = offers.metrics ? previousSettingsAction('metrics', offers.metrics) : undefined
+  const previousNote = offers.metrics ? previousSettingsNote('metrics', offers.metrics) : undefined
   const guidance = denied
     ? 'Ask your operator to review your metrics access.'
     : !canConfigure && !roleLoading
@@ -56,14 +56,14 @@ export function PVCUsageBar({ namespace, name }: { namespace: string; name: stri
       <section aria-label="PVC usage" className="rounded-lg border border-theme-border bg-theme-surface/30 p-3">
         <div className="text-xs font-medium text-theme-text-secondary uppercase tracking-wide mb-1">Usage</div>
         <p className="text-sm text-theme-text-tertiary">{unavailable}</p>
-        {previousAction && <p className="mt-2 text-xs text-theme-text-secondary">{previousAction.note}</p>}
+        {previousNote && <p className="mt-2 text-xs text-theme-text-secondary">{previousNote}</p>}
         {!waiting && (
           canConfigure && !denied ? (
             <button
               type="button"
               className="mt-2 text-xs text-accent hover:underline"
               onClick={() => window.dispatchEvent(new CustomEvent('radar:open-settings', { detail: { section: 'prometheus' } }))}
-            >{previousAction?.label ?? 'Configure metrics'}</button>
+            >Configure metrics</button>
           ) : guidance ? (
             <p className="mt-2 text-xs text-theme-text-tertiary">{guidance}</p>
           ) : null
