@@ -229,6 +229,9 @@ func TestMCPOAuthRefreshRotationAndRevocation(t *testing.T) {
 	if f.access(second["access_token"].(string), "/mcp").Code != 204 {
 		t.Fatal("rotated access rejected")
 	}
+	if f.access(first["access_token"].(string), "/mcp").Code != 401 {
+		t.Fatal("rotation retained the previous access token")
+	}
 	if w, _ := f.token(refresh); w.Code != 400 {
 		t.Fatal("refresh replay accepted")
 	}
@@ -238,6 +241,121 @@ func TestMCPOAuthRefreshRotationAndRevocation(t *testing.T) {
 	refresh.Set("refresh_token", second["refresh_token"].(string))
 	if w, _ := f.token(refresh); w.Code != 400 {
 		t.Fatal("revoked family refreshed")
+	}
+}
+
+func TestMCPOAuthRefreshStorageRemainsBoundedForFullGrantLifetime(t *testing.T) {
+	f := newMCPOAuthFixture(t)
+	now := time.Now()
+	f.s.now = func() time.Time { return now }
+	const families = 40
+	refreshTokens := make([]string, families)
+	for i := range refreshTokens {
+		w, token := f.token(f.exchangeForm(f.code("/mcp"), "/mcp"))
+		if w.Code != 200 {
+			t.Fatalf("initial grant %d: %d %v", i, w.Code, token)
+		}
+		refreshTokens[i] = token["refresh_token"].(string)
+	}
+	firstRefresh := refreshTokens[0]
+	for rotation := 1; rotation < 144; rotation++ {
+		now = now.Add(mcpAccessTTL)
+		for i, previous := range refreshTokens {
+			form := url.Values{"grant_type": {"refresh_token"}, "client_id": {f.client.ID}, "refresh_token": {previous}}
+			w, token := f.token(form)
+			if w.Code != 200 {
+				t.Fatalf("rotation %d grant %d: %d %v", rotation, i, w.Code, token)
+			}
+			refreshTokens[i] = token["refresh_token"].(string)
+		}
+		if len(f.s.refresh) != families || len(f.s.access) != families {
+			t.Fatalf("rotation %d retained history: refresh=%d access=%d", rotation, len(f.s.refresh), len(f.s.access))
+		}
+	}
+	form := url.Values{"grant_type": {"refresh_token"}, "client_id": {f.client.ID}, "refresh_token": {firstRefresh}}
+	if w, _ := f.token(form); w.Code != 400 {
+		t.Fatal("refresh replay after 23 hours 50 minutes was accepted")
+	}
+	form.Set("refresh_token", refreshTokens[0])
+	if w, _ := f.token(form); w.Code != 400 {
+		t.Fatal("old refresh replay did not revoke the current token")
+	}
+	now = now.Add(mcpAccessTTL)
+	form.Set("refresh_token", refreshTokens[1])
+	if w, _ := f.token(form); w.Code != 400 {
+		t.Fatal("refresh extended the 24-hour grant lifetime")
+	}
+	if len(f.s.refresh) != 0 || len(f.s.access) != 0 {
+		t.Fatal("expired grant storage was retained")
+	}
+}
+
+func TestMCPOAuthRefreshAtCapacityAndRetryUnconsumedCode(t *testing.T) {
+	f := newMCPOAuthFixture(t)
+	_, token := f.token(f.exchangeForm(f.code("/mcp"), "/mcp"))
+	code := f.code("/mcp")
+	var spare *mcpGrant
+	for range mcpStoreLimit - 1 {
+		spare = &mcpGrant{ClientID: f.client.ID, Resource: f.s.issuer + "/mcp", Expires: f.s.now().Add(mcpGrantTTL),
+			AccessHash: mcpRandom(), RefreshID: mcpRandom()}
+		f.s.access[spare.AccessHash] = &mcpToken{Grant: spare, Expires: f.s.now().Add(mcpAccessTTL)}
+		f.s.refresh[spare.RefreshID] = &mcpToken{Grant: spare, Expires: spare.Expires}
+	}
+	if w, _ := f.token(f.exchangeForm(code, "/mcp")); w.Code != 503 {
+		t.Fatalf("new grant at capacity: %d", w.Code)
+	}
+	form := url.Values{"grant_type": {"refresh_token"}, "client_id": {f.client.ID}, "refresh_token": {token["refresh_token"].(string)}}
+	w, renewed := f.token(form)
+	if w.Code != 200 || len(f.s.refresh) != mcpStoreLimit || len(f.s.access) != mcpStoreLimit {
+		t.Fatalf("existing refresh at capacity: %d refresh=%d access=%d", w.Code, len(f.s.refresh), len(f.s.access))
+	}
+	if f.access(renewed["access_token"].(string), "/mcp").Code != 204 {
+		t.Fatal("rotated access token at capacity was rejected")
+	}
+	spare.Revoked = true
+	if w, _ := f.token(f.exchangeForm(code, "/mcp")); w.Code != 200 {
+		t.Fatalf("capacity rejection consumed the authorization code: %d", w.Code)
+	}
+}
+
+func TestMCPOAuthMalformedRefreshCannotRevokeFamily(t *testing.T) {
+	f := newMCPOAuthFixture(t)
+	_, token := f.token(f.exchangeForm(f.code("/mcp"), "/mcp"))
+	refresh := token["refresh_token"].(string)
+	parts := strings.Split(refresh, ".")
+	for _, malformed := range []string{parts[0], parts[0] + "." + parts[1], parts[0] + "." + mcpRandom() + "." + parts[2], parts[0] + "." + parts[1] + "." + mcpRandom()} {
+		form := url.Values{"grant_type": {"refresh_token"}, "client_id": {f.client.ID}, "refresh_token": {malformed}}
+		if w, _ := f.token(form); w.Code != 400 {
+			t.Fatal("malformed refresh token was accepted")
+		}
+		form = url.Values{"client_id": {f.client.ID}, "token": {malformed}}
+		r := httptest.NewRequest("POST", "/auth/mcp/revoke", strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		f.s.HandleRevoke(w, r)
+		if w.Code != 200 || f.access(token["access_token"].(string), "/mcp").Code != 204 {
+			t.Fatal("malformed refresh token revoked the legitimate family")
+		}
+	}
+	otherClient := f.s.clients[f.client.ID]
+	otherClient.ID = "another-registered-client"
+	f.s.clients[otherClient.ID] = otherClient
+	form := url.Values{"grant_type": {"refresh_token"}, "client_id": {otherClient.ID}, "refresh_token": {refresh}}
+	if w, _ := f.token(form); w.Code != 400 || f.access(token["access_token"].(string), "/mcp").Code != 204 {
+		t.Fatal("wrong client revoked the legitimate family")
+	}
+	form.Set("client_id", f.client.ID)
+	w, renewed := f.token(form)
+	if w.Code != 200 {
+		t.Fatal("invalid refresh attempts consumed the legitimate token")
+	}
+	form = url.Values{"client_id": {f.client.ID}, "token": {refresh}}
+	r := httptest.NewRequest("POST", "/auth/mcp/revoke", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w = httptest.NewRecorder()
+	f.s.HandleRevoke(w, r)
+	if w.Code != 200 || f.access(renewed["access_token"].(string), "/mcp").Code != 401 {
+		t.Fatal("authentic previously rotated refresh token could not revoke its family")
 	}
 }
 

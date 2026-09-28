@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -24,7 +25,7 @@ const (
 	mcpPendingTTL    = 10 * time.Minute
 	mcpClientTTL     = 30 * 24 * time.Hour
 	mcpStoreLimit    = 4096
-	mcpConsentCookie = "radar_mcp_consent"
+	mcpConsentCookie = "radar_mcp_consent_"
 )
 
 type mcpClient struct {
@@ -45,6 +46,7 @@ type mcpAuthorization struct {
 
 type mcpGrant struct {
 	ClientID, Resource, SID string
+	AccessHash, RefreshID   string
 	User                    User
 	Expires                 time.Time
 	Revoked                 bool
@@ -57,9 +59,9 @@ type mcpCode struct {
 }
 
 type mcpToken struct {
-	Grant   *mcpGrant
-	Expires time.Time
-	Used    bool
+	Grant       *mcpGrant
+	Expires     time.Time
+	RefreshHash string
 }
 
 // MCPOAuthServer provides browser-authorized, audience-bound MCP credentials.
@@ -116,7 +118,6 @@ func (s *MCPOAuthServer) MetadataPath() string {
 	return "/.well-known/oauth-authorization-server" + s.basePath
 }
 
-// HandleMetadata serves OAuth authorization server metadata.
 func (s *MCPOAuthServer) HandleMetadata(w http.ResponseWriter, r *http.Request) {
 	mcpJSON(w, http.StatusOK, map[string]any{
 		"issuer": s.issuer, "authorization_endpoint": s.issuer + "/auth/mcp/authorize",
@@ -145,19 +146,6 @@ func (s *MCPOAuthServer) ProtectedResourceMetadata(path string) http.HandlerFunc
 func (s *MCPOAuthServer) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		mcpError(w, 405, "invalid_request")
-		return
-	}
-	s.mu.Lock()
-	if s.now().Sub(s.registrationWindow) >= time.Minute {
-		s.registrationWindow = s.now()
-		s.registrations = 0
-	}
-	s.registrations++
-	limited := s.registrations > 20
-	s.mu.Unlock()
-	if limited {
-		w.Header().Set("Retry-After", "60")
-		mcpError(w, http.StatusTooManyRequests, "temporarily_unavailable")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 8192)
@@ -197,6 +185,18 @@ func (s *MCPOAuthServer) HandleRegister(w http.ResponseWriter, r *http.Request) 
 		mcpError(w, 503, "temporarily_unavailable")
 		return
 	}
+	// Count accepted registrations so malformed traffic cannot starve clients
+	// sharing an ingress. Forwarded client addresses are not a trusted boundary.
+	if s.now().Sub(s.registrationWindow) >= time.Minute {
+		s.registrationWindow = s.now()
+		s.registrations = 0
+	}
+	if s.registrations >= 20 {
+		w.Header().Set("Retry-After", "60")
+		mcpError(w, http.StatusTooManyRequests, "temporarily_unavailable")
+		return
+	}
+	s.registrations++
 	client.ID = mcpRandom()
 	client.AuthMethod = "none"
 	client.GrantTypes = []string{"authorization_code", "refresh_token"}
@@ -282,7 +282,7 @@ func (s *MCPOAuthServer) HandleAuthorize(w http.ResponseWriter, r *http.Request)
 		data["Capability"] = "This endpoint exposes read-only tools."
 	}
 	s.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: mcpConsentCookie, Value: csrf, Path: s.basePath + "/auth/mcp/authorize", Secure: strings.HasPrefix(s.origin, "https://"), HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 600})
+	http.SetCookie(w, &http.Cookie{Name: mcpConsentCookie + mcpHash(id), Value: csrf, Path: s.basePath + "/auth/mcp/authorize", Secure: strings.HasPrefix(s.origin, "https://"), HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 600})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = mcpConsentTemplate.Execute(w, data)
 }
@@ -293,7 +293,8 @@ func (s *MCPOAuthServer) consent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	session := s.browserSession(r)
-	cookie, err := r.Cookie(mcpConsentCookie)
+	id := mcpHash(r.PostForm.Get("request"))
+	cookie, err := r.Cookie(mcpConsentCookie + id)
 	if session == nil || err != nil {
 		mcpError(w, 403, "access_denied")
 		return
@@ -301,7 +302,6 @@ func (s *MCPOAuthServer) consent(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.prune()
-	id := mcpHash(r.PostForm.Get("request"))
 	pending := s.pending[id]
 	if pending == nil || pending.SID != session.SID || pending.CSRF == "" || pending.CSRF != mcpHash(cookie.Value) || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(r.PostForm.Get("csrf"))) != 1 {
 		mcpError(w, 403, "access_denied")
@@ -321,7 +321,7 @@ func (s *MCPOAuthServer) consent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	delete(s.pending, id)
-	http.SetCookie(w, &http.Cookie{Name: mcpConsentCookie, Path: s.basePath + "/auth/mcp/authorize", MaxAge: -1, Secure: strings.HasPrefix(s.origin, "https://"), HttpOnly: true, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: mcpConsentCookie + id, Path: s.basePath + "/auth/mcp/authorize", MaxAge: -1, Secure: strings.HasPrefix(s.origin, "https://"), HttpOnly: true, SameSite: http.SameSiteLaxMode})
 	u, _ := url.Parse(pending.RedirectURI)
 	q := u.Query()
 	if pending.State != "" {
@@ -366,10 +366,6 @@ func (s *MCPOAuthServer) HandleToken(w http.ResponseWriter, r *http.Request) {
 		mcpError(w, 400, "invalid_client")
 		return
 	}
-	if len(s.access) >= mcpStoreLimit || len(s.refresh) >= mcpStoreLimit {
-		mcpError(w, 503, "temporarily_unavailable")
-		return
-	}
 	var grant *mcpGrant
 	switch r.PostForm.Get("grant_type") {
 	case "authorization_code":
@@ -384,20 +380,25 @@ func (s *MCPOAuthServer) HandleToken(w http.ResponseWriter, r *http.Request) {
 			mcpError(w, 400, "invalid_grant")
 			return
 		}
+		if len(s.refresh) >= mcpStoreLimit {
+			mcpError(w, 503, "temporarily_unavailable")
+			return
+		}
 		code.Used = true
 		grant = code.Grant
+		grant.RefreshID = mcpRandom()
 	case "refresh_token":
-		token := s.refresh[mcpHash(r.PostForm.Get("refresh_token"))]
+		raw := r.PostForm.Get("refresh_token")
+		token := s.refresh[s.refreshFamily(raw)]
 		if token == nil || token.Grant.ClientID != clientID || (r.PostForm.Get("resource") != "" && token.Grant.Resource != r.PostForm.Get("resource")) || (r.PostForm.Get("scope") != "" && r.PostForm.Get("scope") != "mcp") {
 			mcpError(w, 400, "invalid_grant")
 			return
 		}
-		if token.Used {
+		if token.RefreshHash != mcpHash(raw) {
 			token.Grant.Revoked = true
 			mcpError(w, 400, "invalid_grant")
 			return
 		}
-		token.Used = true
 		grant = token.Grant
 	default:
 		mcpError(w, 400, "unsupported_grant_type")
@@ -407,13 +408,17 @@ func (s *MCPOAuthServer) HandleToken(w http.ResponseWriter, r *http.Request) {
 		mcpError(w, 400, "invalid_grant")
 		return
 	}
-	access, refresh := mcpRandom(), mcpRandom()
+	access := mcpRandom()
+	refresh := grant.RefreshID + "." + mcpRandom()
+	refresh += "." + s.refreshSignature(refresh)
 	expires := s.now().Add(mcpAccessTTL)
 	if grant.Expires.Before(expires) {
 		expires = grant.Expires
 	}
-	s.access[mcpHash(access)] = &mcpToken{Grant: grant, Expires: expires}
-	s.refresh[mcpHash(refresh)] = &mcpToken{Grant: grant, Expires: grant.Expires}
+	delete(s.access, grant.AccessHash)
+	grant.AccessHash = mcpHash(access)
+	s.access[grant.AccessHash] = &mcpToken{Grant: grant, Expires: expires}
+	s.refresh[grant.RefreshID] = &mcpToken{Grant: grant, Expires: grant.Expires, RefreshHash: mcpHash(refresh)}
 	mcpJSON(w, 200, map[string]any{"access_token": access, "token_type": "Bearer", "expires_in": int(expires.Sub(s.now()).Seconds()), "refresh_token": refresh, "scope": "mcp"})
 }
 
@@ -426,14 +431,32 @@ func (s *MCPOAuthServer) HandleRevoke(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.prune()
-	key := mcpHash(r.PostForm.Get("token"))
-	for _, tokens := range []map[string]*mcpToken{s.access, s.refresh} {
-		if token := tokens[key]; token != nil && token.Grant.ClientID == r.PostForm.Get("client_id") {
+	raw := r.PostForm.Get("token")
+	for _, token := range []*mcpToken{s.access[mcpHash(raw)], s.refresh[s.refreshFamily(raw)]} {
+		if token != nil && token.Grant.ClientID == r.PostForm.Get("client_id") {
 			token.Grant.Revoked = true
 		}
 	}
 	mcpPrivateHeaders(w)
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *MCPOAuthServer) refreshSignature(value string) string {
+	mac := hmac.New(sha256.New, []byte(s.cfg.Secret))
+	mac.Write([]byte("radar-mcp-refresh\x00" + value))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func (s *MCPOAuthServer) refreshFamily(value string) string {
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 || len(parts[0]) != 43 || len(parts[1]) != 43 || len(parts[2]) != 43 {
+		return ""
+	}
+	if !hmac.Equal([]byte(parts[2]), []byte(s.refreshSignature(parts[0]+"."+parts[1]))) {
+		return ""
+	}
+	// Authentic older nonces identify a replay without retaining token history.
+	return parts[0]
 }
 
 // RevokeSession invalidates grants permanently, beyond the browser revoker's TTL.

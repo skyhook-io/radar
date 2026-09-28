@@ -77,8 +77,8 @@ Ensure your ingress routes the advertised `/.well-known/*` paths and `/auth/*` p
 ### Token lifecycle and deployment limits
 
 - MCP OAuth is opt-in and requires standalone `auth.mode: oidc` with MCP enabled. Proxy auth, unauthenticated mode and Radar Cloud do not support this option.
-- Access tokens expire after 10 minutes. Refresh tokens rotate on use and expire at an absolute 24-hour session limit; reusing an old refresh token revokes its token family. The client must authorize again when its grant expires or is revoked.
-- Dynamic registration accepts at most 20 attempts per minute per Radar process. Complete initial authorization within 10 minutes; approved client registrations last 30 days and are renewed on consent.
+- Access tokens expire after 10 minutes. Refreshing replaces both tokens and invalidates the previous access token. Refresh tokens expire at an absolute 24-hour session limit; reusing any old refresh token during that lifetime revokes its token family. Each grant occupies one access-token and one refresh-token slot, regardless of rotation count. The client must authorize again when its grant expires or is revoked.
+- Dynamic registration accepts at most 20 valid registrations per minute per Radar process; malformed requests do not consume this shared capacity limit. Complete initial authorization within 10 minutes; approved client registrations last 30 days and are renewed on consent.
 - Client registrations, authorization requests and tokens are bounded, in-memory state. Run exactly one replica. The chart uses `Recreate` rollouts to avoid routing requests across independent stores. Pod restarts invalidate this state even when browser session signing keys or timeline storage persist: reconnect the MCP client, re-register it and authorize again. If the client caches a stale client ID, remove and re-add its Radar server configuration.
 
 ## Catalog Introspection
