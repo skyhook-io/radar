@@ -6,6 +6,8 @@ This is Radar's Kubernetes UI library — the components behind Skyhook's cluste
 - **No app-wide provider.** Most components (Badge, StatusDot, HealthRing, DistributionBar, Property, Section, CardSection, PageHeader, EmptyState, Facet, charts, every `*Renderer` resource view…) render standalone.
 - **Theme is CSS, not a React provider.** Tokens live on `:root`; default is **light**. For dark mode add `class="dark"` to a root element (`document.documentElement.classList.toggle('dark', isDark)`).
 - Only these need their own provider, and only when used: `ToastProvider` (toasts), `DockProvider` (logs/terminal dock).
+- **App feature components** (from Radar's app, same global): Diagnose/AI investigation (`AnalysisStory`, `ResultCard`, `AllClearCard`, `InconclusiveCard`, `EvidenceCard`, `InvestigationEvidencePane`, `TurnView`, `ApplyDialog`), `ClusterSchedulingCard`, `CurrentAllocationUse`, `TrafficGraph`, `TrafficFilterSidebar`, `TopologyPreview`, Helm `RevisionHistory` / `ValuesDiffPreview` / `ManifestViewer`. They take data as props — see each `.prompt.md` for realistic shapes.
+- YAML editors (`YamlEditor`, `YamlDiffEditor`, `YamlReview`) render as read-only code / line-diff views in designs.
 - Icons: `lucide-react` (Radar's icon set) — e.g. `RefreshCw`, `Trash2`, `CirclePause`. `RowActionMenu` items take an `icon` component.
 
 ## Styling idiom — Tailwind v4 utilities over theme tokens

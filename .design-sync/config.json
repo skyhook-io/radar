@@ -184,7 +184,44 @@
     "SubscriptionRenderer": "../src/components/resources/renderers/KnativeEventingRenderer.tsx",
     "TriggerRenderer": "../src/components/resources/renderers/KnativeEventingRenderer.tsx",
     "TrivyAlertBanner": "../src/components/resources/renderers/trivy-shared.tsx",
-    "VeleroPhaseValue": "../src/components/resources/renderers/velero-cells.tsx"
+    "VeleroPhaseValue": "../src/components/resources/renderers/velero-cells.tsx",
+    "AnalysisStory": "../../../web/src/components/diagnose/AnalysisStory.tsx",
+    "StoryExcerpt": "../../../web/src/components/diagnose/StoryExcerpt.tsx",
+    "ResultCard": "../../../web/src/components/diagnose/AssessmentCard.tsx",
+    "AssessmentSources": "../../../web/src/components/diagnose/AssessmentCard.tsx",
+    "WorkingNotes": "../../../web/src/components/diagnose/AssessmentCard.tsx",
+    "AllClearCard": "../../../web/src/components/diagnose/AssessmentCard.tsx",
+    "InconclusiveCard": "../../../web/src/components/diagnose/AssessmentCard.tsx",
+    "EvidenceCard": "../../../web/src/components/diagnose/EvidenceCard.tsx",
+    "InvestigationEvidencePane": "../../../web/src/components/diagnose/InvestigationEvidencePane.tsx",
+    "RuledOutBlock": "../../../web/src/components/diagnose/InvestigationEvidenceSections.tsx",
+    "AssessmentEvidenceQualification": "../../../web/src/components/diagnose/InvestigationEvidenceSections.tsx",
+    "EmptyCollection": "../../../web/src/components/diagnose/InvestigationEvidenceSections.tsx",
+    "CollapsedEvidenceCollection": "../../../web/src/components/diagnose/InvestigationEvidenceSections.tsx",
+    "CoverageStrip": "../../../web/src/components/diagnose/InvestigationEvidenceSections.tsx",
+    "InvestigationResourceEvidence": "../../../web/src/components/diagnose/InvestigationResourceEvidence.tsx",
+    "AgentRoleChip": "../../../web/src/components/diagnose/AgentCase.tsx",
+    "AgentClaimNote": "../../../web/src/components/diagnose/AgentCase.tsx",
+    "Segmented": "../../../web/src/components/diagnose/AgentControls.tsx",
+    "AgentControls": "../../../web/src/components/diagnose/AgentControls.tsx",
+    "ConsentCard": "../../../web/src/components/diagnose/AgentControls.tsx",
+    "AgentSetupNotice": "../../../web/src/components/diagnose/AgentSetupNotice.tsx",
+    "TurnView": "../../../web/src/components/diagnose/ActivityTurn.tsx",
+    "FollowupAnswer": "../../../web/src/components/diagnose/ActivityTurn.tsx",
+    "ApplyDialog": "../../../web/src/components/diagnose/ApplyDialog.tsx",
+    "ApplyOutcomeCard": "../../../web/src/components/diagnose/ApplyDialog.tsx",
+    "AIMarkdown": "../../../web/src/components/diagnose/AIMarkdown.tsx",
+    "InvestigationHome": "../../../web/src/components/diagnose/Home.tsx",
+    "RecentList": "../../../web/src/components/diagnose/Home.tsx",
+    "ClusterSchedulingCard": "../../../web/src/components/capacity/ClusterSchedulingCard.tsx",
+    "CurrentAllocationUse": "../../../web/src/components/cost/CurrentAllocationUse.tsx",
+    "ManifestViewer": "../../../web/src/components/helm/ManifestViewer.tsx",
+    "RevisionHistory": "../../../web/src/components/helm/RevisionHistory.tsx",
+    "ValuesDiffPreview": "../../../web/src/components/helm/ValuesDiffPreview.tsx",
+    "TopologyPreview": "../../../web/src/components/home/TopologyPreview.tsx",
+    "LocalTimelineScrubber": "../../../web/src/components/timeline/LocalTimelineScrubber.tsx",
+    "TrafficGraph": "../../../web/src/components/traffic/TrafficGraph.tsx",
+    "TrafficFilterSidebar": "../../../web/src/components/traffic/TrafficFilterSidebar.tsx"
   },
   "overrides": {
     "ConfirmDialog": {
@@ -295,6 +332,79 @@
       "cardMode": "column"
     },
     "TraceSummary": {
+      "cardMode": "column"
+    },
+    "ValuesDiffPreview": {
+      "cardMode": "single",
+      "viewport": "1000x700"
+    },
+    "TrafficGraph": {
+      "cardMode": "single",
+      "viewport": "1280x760"
+    },
+    "TrafficFilterSidebar": {
+      "cardMode": "single",
+      "viewport": "420x1000"
+    },
+    "ApplyDialog": {
+      "cardMode": "single",
+      "viewport": "900x700"
+    },
+    "ClusterSchedulingCard": {
+      "cardMode": "column"
+    },
+    "CurrentAllocationUse": {
+      "cardMode": "column"
+    },
+    "AgentControls": {
+      "cardMode": "column"
+    },
+    "AllClearCard": {
+      "cardMode": "column"
+    },
+    "AnalysisStory": {
+      "cardMode": "column"
+    },
+    "ApplyOutcomeCard": {
+      "cardMode": "column"
+    },
+    "ConsentCard": {
+      "cardMode": "column"
+    },
+    "CoverageStrip": {
+      "cardMode": "column"
+    },
+    "EvidenceCard": {
+      "cardMode": "column"
+    },
+    "InconclusiveCard": {
+      "cardMode": "column"
+    },
+    "InvestigationEvidencePane": {
+      "cardMode": "column"
+    },
+    "InvestigationHome": {
+      "cardMode": "column"
+    },
+    "ResultCard": {
+      "cardMode": "column"
+    },
+    "RuledOutBlock": {
+      "cardMode": "column"
+    },
+    "TurnView": {
+      "cardMode": "column"
+    },
+    "ManifestViewer": {
+      "cardMode": "column"
+    },
+    "RevisionHistory": {
+      "cardMode": "column"
+    },
+    "TopologyPreview": {
+      "cardMode": "column"
+    },
+    "LocalTimelineScrubber": {
       "cardMode": "column"
     }
   },
