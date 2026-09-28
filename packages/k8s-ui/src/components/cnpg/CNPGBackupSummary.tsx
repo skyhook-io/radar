@@ -1,4 +1,4 @@
-import { cronToHuman, formatDuration } from '../resources/resource-utils'
+import { formatDuration } from '../resources/resource-utils'
 import {
   CNPG_BARMAN_OBJECTSTORE_GROUP,
   CNPG_GROUP,
@@ -13,6 +13,7 @@ import {
   backupDestination,
   backupsForScheduledBackup,
   clustersIn,
+  isBackupFromSchedule,
   refOf,
   relationUnavailable,
   scheduledBackupOf,
@@ -75,6 +76,10 @@ export function CNPGBackupSummary({ resource, workspace, onNavigate }: SummaryPr
   const pod = resource?.status?.instanceID?.podName
   const error = resource?.status?.error
   const trigger = scheduledBackupOf(resource)
+  const liveSchedule = trigger
+    ? workspaceList(workspace, 'scheduledBackups').find((s) => s?.metadata?.namespace === ns && s?.metadata?.name === trigger)
+    : undefined
+  const scheduleReplaced = !!liveSchedule && !isBackupFromSchedule(resource, liveSchedule)
   const dest = backupDestination(resource, clustersIn(workspace))
   const method = methodText(resource)
 
@@ -113,7 +118,14 @@ export function CNPGBackupSummary({ resource, workspace, onNavigate }: SummaryPr
           {trigger ? (
             <span>
               ScheduledBackup{' '}
-              <RefLink refTo={{ kind: 'ScheduledBackup', group: CNPG_GROUP, namespace: ns, name: trigger }} onNavigate={onNavigate} mono />
+              {scheduleReplaced ? (
+                <>
+                  <span className="font-mono">{trigger}</span>
+                  <span className="text-theme-text-tertiary"> · an earlier schedule of that name; the current one is a different object</span>
+                </>
+              ) : (
+                <RefLink refTo={{ kind: 'ScheduledBackup', group: CNPG_GROUP, namespace: ns, name: trigger }} onNavigate={onNavigate} mono />
+              )}
             </span>
           ) : (
             'On demand'
@@ -124,6 +136,7 @@ export function CNPGBackupSummary({ resource, workspace, onNavigate }: SummaryPr
             <span>
               ObjectStore{' '}
               <RefLink refTo={{ kind: 'ObjectStore', group: CNPG_BARMAN_OBJECTSTORE_GROUP, namespace: ns, name: dest.name }} onNavigate={onNavigate} mono />
+              {dest.inferred && <span className="text-theme-text-tertiary"> · from the Cluster's current configuration</span>}
             </span>
           ) : dest.type === 'path' ? (
             <span className="font-mono">{dest.path}</span>
@@ -142,7 +155,6 @@ export function CNPGBackupSummary({ resource, workspace, onNavigate }: SummaryPr
 export function CNPGScheduledBackupSummary({ resource, workspace, onNavigate }: SummaryProps) {
   const ns = resource?.metadata?.namespace ?? ''
   const cron = resource?.spec?.schedule
-  const human = cron ? cronToHuman(cron) : ''
   const next = getCNPGScheduledBackupNextSchedule(resource)
   const runsUnavailable = relationUnavailable(workspace, 'backups', ns, 'Backups')
   const runs = runsUnavailable ? [] : backupsForScheduledBackup(resource, workspaceList(workspace, 'backups'))
@@ -164,7 +176,7 @@ export function CNPGScheduledBackupSummary({ resource, workspace, onNavigate }: 
           {cron ? (
             <span>
               <span className="font-mono">{cron}</span>
-              {human && human !== cron && <span className="text-theme-text-secondary"> · {human}</span>}
+              <span className="text-theme-text-tertiary"> · six fields, seconds first</span>
             </span>
           ) : (
             <NotReported text="Not set" />

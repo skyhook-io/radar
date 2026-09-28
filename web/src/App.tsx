@@ -39,6 +39,8 @@ import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
 import { CNPGView } from './components/cnpg/CNPGView'
+import { CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, parseCNPGRoute } from './components/cnpg/routes'
+import { currentPageLabel } from './components/cnpg/paths'
 import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
@@ -283,7 +285,12 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
     if (pathSegments[1] === 'activity') return 'Capacity Activity'
   }
 
-  if (view === 'cnpg') return 'CloudNativePG'
+  if (view === 'cnpg') {
+    const route = parseCNPGRoute(pathname)
+    if (route.detail) return route.detail.name
+    const screen = CNPG_SCREENS.find((s) => s.id === route.screen)
+    return `CloudNativePG ${screen?.label ?? 'Overview'}`
+  }
   if (view === 'home') return 'Overview'
   // Every other view's label is its id capitalized — getViewFromPath has already
   // normalized aliases (e.g. /audit → 'checks'), so no lookup table is needed.
@@ -1232,6 +1239,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         const nextParams = new URLSearchParams()
         const diagnoseRun = new URLSearchParams(location.search).get('ai-run')
         if (diagnoseRun) nextParams.set('ai-run', diagnoseRun)
+        // A CNPG detail keeps the context it belongs to, so it can say it is
+        // not in the new one instead of loading a same-named object.
+        const pinnedCtx = new URLSearchParams(location.search).get('ctx')
+        if (pinnedCtx && location.pathname.startsWith('/cnpg/')) nextParams.set('ctx', pinnedCtx)
         navigate(
           { pathname: location.pathname, search: nextParams.toString() },
           { replace: true, state: location.state },
@@ -2387,7 +2398,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           onClose={closeDrawer}
           onNavigate={(res) => navigateToResource(res)}
           canCollapseToDrawer={!isMobile}
-          onExpand={(_res, opts) => {
+          onExpand={(res, opts) => {
+            const cnpgPlural = cnpgDetailKindFor(res.kind, res.group)
+            if (cnpgPlural) {
+              navigate(
+                cnpgDetailPath({ plural: cnpgPlural, namespace: res.namespace, name: res.name }, connection.context || undefined, opts?.yaml ? 'yaml' : undefined),
+                { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } },
+              )
+              return
+            }
             // Grow the peek into a fullscreen overlay (?full=1, pushed so Back
             // collapses) over whatever view is underneath — list, topology graph,
             // GitOps, Applications — which stays mounted. Carry the YAML tab when

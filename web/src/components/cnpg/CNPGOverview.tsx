@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { ArrowRight, Database, Search } from 'lucide-react'
+import { ArrowRight, Database, FileText, Search } from 'lucide-react'
 import {
   CNPG_PROBLEM_CATEGORIES,
   FactValue,
@@ -15,7 +15,7 @@ import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
 import { EmptyState, ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../capacity/shared'
 import { CNPGWorkspaceHeader, CoverageNotice, FilterChips, type CNPGScreenProps } from './shared'
-import { cnpgClusterFullPath } from './paths'
+import { cnpgClusterFullPath, currentPageLabel } from './paths'
 import { sameResource } from './routes'
 
 type Filter = 'attention' | 'all'
@@ -209,8 +209,8 @@ export function CNPGOverview({
                   <col className="w-[15%]" />
                   <col className="w-[12%]" />
                   <col className="w-[5%]" />
-                  <col className="w-[16%]" />
-                  <col className="w-[8%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[10%]" />
                 </colgroup>
                 <thead className={TABLE_HEAD}>
                   <tr>
@@ -252,16 +252,36 @@ export function CNPGOverview({
                         <td className={clsx(TD, 'font-mono')}>{row.pgVersion ?? '—'}</td>
                         <td className={TD}><AttentionCell row={row} /></td>
                         <td className={clsx(TD, 'text-right')}>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              navigate(cnpgClusterFullPath(row.namespace, row.name), { state: { returnLabel: 'CloudNativePG Overview' } })
-                            }}
-                            className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
-                          >
-                            Open <ArrowRight className="h-3 w-3" />
-                          </button>
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              title="Logs from every instance of this cluster"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                const podProblem = row.problems.find((p) => p.subject.kind === 'Pod')
+                                const path = cnpgClusterFullPath(row.namespace, row.name, connection.context || undefined, 'logs')
+                                navigate(podProblem ? `${path}&pod=${encodeURIComponent(podProblem.subject.name)}` : path, {
+                                  state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
+                                })
+                              }}
+                              className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                            >
+                              <FileText className="h-3 w-3" /> Logs
+                            </button>
+                            <button
+                              type="button"
+                              title="Open the cluster’s full detail"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                navigate(cnpgClusterFullPath(row.namespace, row.name, connection.context || undefined), {
+                                  state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
+                                })
+                              }}
+                              className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
+                            >
+                              Open <ArrowRight className="h-3 w-3" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     )

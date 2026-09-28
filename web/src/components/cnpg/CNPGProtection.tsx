@@ -2,7 +2,6 @@ import { useMemo } from 'react'
 import {
   Badge,
   FactValue,
-  cronToHuman,
   formatAge,
   formatDuration,
   getCNPGBackupStatus,
@@ -24,6 +23,7 @@ import {
   SectionTable,
   Sub,
   clusterResource,
+  coverageEmpty,
   cnpgResource,
   namespaceChip,
   type CNPGScreenProps,
@@ -78,8 +78,18 @@ function inferStoreHealth(store: any, users: CNPGFleetRow[]): StoreRow['health']
   return { text: 'Unknown', tone: 'unknown', evidence: 'Its clusters report no archiving result yet' }
 }
 
-export function CNPGProtection({ data, fleet, namespaces, searchParams, onSetParams, onInspect, inspected, onClearNamespaces }: CNPGScreenProps) {
-  const clusterFilter = searchParams.get('cluster')
+export function CNPGProtection({
+  data,
+  fleet,
+  namespaces,
+  searchParams,
+  onSetParams,
+  onInspect,
+  inspected,
+  onClearNamespaces,
+  scopeCluster,
+}: CNPGScreenProps & { scopeCluster?: { namespace: string; name: string } }) {
+  const clusterFilter = scopeCluster ? `${scopeCluster.namespace}/${scopeCluster.name}` : searchParams.get('cluster')
   const rows = useMemo(
     () => fleet.rows.filter((r) => !clusterFilter || `${r.namespace}/${r.name}` === clusterFilter),
     [fleet.rows, clusterFilter],
@@ -118,24 +128,26 @@ export function CNPGProtection({ data, fleet, namespaces, searchParams, onSetPar
     [data.objects.scheduledBackups, clusterFilter],
   )
 
-  const chips = [
+  const chips = scopeCluster ? [] : [
     ...(clusterFilter ? [{ label: `Cluster: ${clusterFilter}`, onClear: () => onSetParams({ cluster: null }) }] : []),
     ...namespaceChip(namespaces, onClearNamespaces),
   ]
-  const backupsReadable = data.coverage.backups?.state === 'full' || data.coverage.backups?.state === 'partial'
+  const backupsReadable = data.coverage.backups?.state === 'full'
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <CNPGWorkspaceHeader
-        title="Protection"
-        subtitle="Backup outcomes, schedules, destinations and recovery evidence for every cluster. Configured, backed up and restore-tested are separate facts."
-      />
+      {!scopeCluster && (
+        <CNPGWorkspaceHeader
+          title="Protection"
+          subtitle="Backup outcomes, schedules, destinations and recovery evidence for every cluster. Configured, backed up and restore-tested are separate facts."
+        />
+      )}
       <ScreenBody>
         <CoverageNotice fleet={fleet} data={data} />
         <FilterChips chips={chips} />
 
         <SectionTable
-          title="Recovery evidence by cluster"
+          title={scopeCluster ? 'Recovery evidence' : 'Recovery evidence by cluster'}
           columns={[
             {
               header: 'Cluster',
@@ -198,7 +210,7 @@ export function CNPGProtection({ data, fleet, namespaces, searchParams, onSetPar
           onInspect={onInspect}
           inspected={inspected}
           minWidth={1000}
-          empty="No PostgreSQL clusters in this scope."
+          empty={coverageEmpty(data.coverage.clusters, 'PostgreSQL clusters')}
           footer="Kubernetes records no restore tests, so restore validation is never shown as passed. Recovery windows come from ObjectStore status."
         />
 
@@ -220,7 +232,7 @@ export function CNPGProtection({ data, fleet, namespaces, searchParams, onSetPar
           rowResource={(b) => cnpgResource('backups', b.metadata?.namespace, b.metadata?.name)}
           onInspect={onInspect}
           inspected={inspected}
-          empty={backupsReadable ? 'No failed backups in the last 7 days.' : 'Backups are not readable with your access.'}
+          empty={backupsReadable && data.coverage.backups?.state === 'full' ? 'No failed backups in the last 7 days.' : coverageEmpty(data.coverage.backups, 'failed backups')}
         />
 
         <SectionTable
@@ -246,7 +258,7 @@ export function CNPGProtection({ data, fleet, namespaces, searchParams, onSetPar
           rowResource={(s) => cnpgResource('objectstores', s.namespace, s.name, 'barmancloud.cnpg.io')}
           onInspect={onInspect}
           inspected={inspected}
-          empty={data.coverage.objectStores?.state === 'notInstalled' ? 'The barman-cloud plugin’s ObjectStore kind is not installed.' : 'No ObjectStores in this scope.'}
+          empty={data.coverage.objectStores?.state === 'notInstalled' ? 'The barman-cloud plugin’s ObjectStore kind is not installed.' : coverageEmpty(data.coverage.objectStores, 'ObjectStores')}
           footer="ObjectStore has no health status of its own; upload health is inferred from its clusters’ WAL archiving and backup results."
         />
 
@@ -261,7 +273,7 @@ export function CNPGProtection({ data, fleet, namespaces, searchParams, onSetPar
               cell: (s) => (
                 <>
                   <Mono>{s.spec?.schedule ?? '—'}</Mono>
-                  {s.spec?.schedule && <Sub>{cronToHuman(s.spec.schedule)}</Sub>}
+                  <Sub>CNPG cron, seconds first</Sub>
                 </>
               ),
             },
@@ -290,7 +302,7 @@ export function CNPGProtection({ data, fleet, namespaces, searchParams, onSetPar
           rowResource={(s) => cnpgResource('scheduledbackups', s.metadata?.namespace, s.metadata?.name)}
           onInspect={onInspect}
           inspected={inspected}
-          empty={data.coverage.scheduledBackups?.state === 'full' ? 'No ScheduledBackups in this scope.' : 'ScheduledBackups are not fully readable with your access.'}
+          empty={coverageEmpty(data.coverage.scheduledBackups, 'ScheduledBackups')}
           footer={data.backupsOmitted > 0 ? `${data.backupsOmitted} settled backups older than 7 days are not listed.` : undefined}
         />
       </ScreenBody>

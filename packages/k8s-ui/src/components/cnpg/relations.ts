@@ -151,28 +151,44 @@ export function problemsForObject(issues: CNPGWorkspaceIssue[] | undefined, ref:
 // Backups and schedules
 // ---------------------------------------------------------------------------
 
+function scheduleOwnerRefs(backup: any): any[] {
+  const refs = backup?.metadata?.ownerReferences
+  if (!Array.isArray(refs)) return []
+  return refs.filter((r: any) => r?.kind === 'ScheduledBackup' && isApiGroup(r?.apiVersion, CNPG_GROUP))
+}
+
 /**
- * The ScheduledBackup that created a Backup. The owner reference is only set
- * when the schedule's `backupOwnerReference` is `self`; the operator labels
- * every Backup it creates from a schedule regardless, so the label is read too.
+ * The name of the ScheduledBackup that created a Backup. The owner reference
+ * is only set when the schedule's `backupOwnerReference` is `self`; the
+ * operator labels every Backup it creates from a schedule regardless, so the
+ * label is the fallback when no such owner reference exists.
  */
 export function scheduledBackupOf(backup: any): string | null {
-  const refs = backup?.metadata?.ownerReferences
-  if (Array.isArray(refs)) {
-    const owner = refs.find((r: any) => r?.kind === 'ScheduledBackup' && isApiGroup(r?.apiVersion, CNPG_GROUP))
-    if (owner?.name) return owner.name
-  }
+  const owner = scheduleOwnerRefs(backup)[0]
+  if (owner?.name) return owner.name
   const label = backup?.metadata?.labels?.[SCHEDULED_BACKUP_LABEL]
   return typeof label === 'string' && label ? label : null
 }
 
+/**
+ * Whether this schedule created the Backup. An owner reference must match by
+ * uid: a schedule deleted and recreated under the same name did not create the
+ * old one's Backups. The label, which carries only a name, is read only when
+ * no ScheduledBackup owner reference exists.
+ */
+export function isBackupFromSchedule(backup: any, schedule: any): boolean {
+  if (!isCNPGKind(backup, 'Backup') || nsOf(backup) !== nsOf(schedule)) return false
+  const owners = scheduleOwnerRefs(backup)
+  if (owners.length > 0) {
+    const uid = schedule?.metadata?.uid
+    return owners.some((r: any) => r?.name === nameOf(schedule) && !!uid && r?.uid === uid)
+  }
+  return backup?.metadata?.labels?.[SCHEDULED_BACKUP_LABEL] === nameOf(schedule)
+}
+
 /** Backups a ScheduledBackup created, newest first. */
 export function backupsForScheduledBackup(schedule: any, backups: any[]): any[] {
-  const ns = nsOf(schedule)
-  const name = nameOf(schedule)
-  return backups
-    .filter((b) => isCNPGKind(b, 'Backup') && nsOf(b) === ns && scheduledBackupOf(b) === name)
-    .sort((a, b) => backupTime(b) - backupTime(a))
+  return backups.filter((b) => isBackupFromSchedule(b, schedule)).sort((a, b) => backupTime(b) - backupTime(a))
 }
 
 export function backupTime(backup: any): number {
@@ -180,29 +196,32 @@ export function backupTime(backup: any): number {
 }
 
 /**
- * The ObjectStore a plugin Backup wrote to: its own plugin parameters first,
- * then the target Cluster's barman-cloud plugin. Null for non-plugin methods.
+ * The ObjectStore a barman-cloud plugin Backup wrote to. The Backup's own
+ * plugin parameters are a record of that run; the target Cluster's plugin
+ * configuration is only what it is configured with now, so a store taken from
+ * there is marked inferred.
  */
-export function objectStoreForBackup(backup: any, clusters: any[]): string | null {
+export function objectStoreForBackup(backup: any, clusters: any[]): { name: string; inferred: boolean } | null {
   const method = backup?.status?.method || backup?.spec?.method
   if (method !== 'plugin') return null
   const cfg = backup?.spec?.pluginConfiguration
+  if (cfg?.name !== CNPG_BARMAN_PLUGIN_NAME) return null
   const own = cfg?.parameters?.barmanObjectName
-  if (typeof own === 'string' && own) return own
-  if (cfg?.name && cfg.name !== CNPG_BARMAN_PLUGIN_NAME) return null
+  if (typeof own === 'string' && own) return { name: own, inferred: false }
   const cluster = targetCluster(backup, clusters)
-  return (cluster && getCNPGClusterBarmanPlugin(cluster)?.barmanObjectName) || null
+  const current = cluster ? getCNPGClusterBarmanPlugin(cluster)?.barmanObjectName : undefined
+  return current ? { name: current, inferred: true } : null
 }
 
 export type CNPGBackupDestination =
-  | { type: 'objectStore'; name: string }
+  | { type: 'objectStore'; name: string; inferred: boolean }
   | { type: 'path'; path: string }
   | { type: 'volumeSnapshot' }
   | { type: 'unknown' }
 
 export function backupDestination(backup: any, clusters: any[]): CNPGBackupDestination {
   const store = objectStoreForBackup(backup, clusters)
-  if (store) return { type: 'objectStore', name: store }
+  if (store) return { type: 'objectStore', ...store }
   const method = backup?.status?.method || backup?.spec?.method
   if (method === 'volumeSnapshot') return { type: 'volumeSnapshot' }
   const path = backup?.status?.destinationPath

@@ -4,6 +4,9 @@ import { useCNPGOperator, type CNPGOperatorComponent, type CNPGOperatorConfig } 
 import { Notice } from '../capacity/shared'
 import {
   CNPGWorkspaceHeader,
+  CoverageNotice,
+  coverageEmpty,
+  worstCoverage,
   Mono,
   ScreenBody,
   SectionTable,
@@ -67,6 +70,7 @@ export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenPr
         subtitle="Operator and plugin workloads, their versions, image catalogs and operator configuration."
       />
       <ScreenBody>
+        <CoverageNotice fleet={fleet} data={data} />
         {operator.isLoading && !op ? (
           <PaneLoader label="Loading operator…" className="h-32" />
         ) : !op ? (
@@ -159,7 +163,7 @@ export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenPr
           rowResource={(c) => cnpgResource(c.kind === 'ImageCatalog' ? 'imagecatalogs' : 'clusterimagecatalogs', c.namespace, c.name)}
           onInspect={onInspect}
           inspected={inspected}
-          empty="No image catalogs in this scope."
+          empty={coverageEmpty(worstCoverage(data.coverage.imageCatalogs, data.coverage.clusterImageCatalogs), 'image catalogs')}
           footer={
             <>
               Used-by lists only clusters you can see; the catalog detail asks the server for every user.

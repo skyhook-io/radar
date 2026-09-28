@@ -17,7 +17,10 @@ export function CNPGImageCatalogSummary({
   const ns = resource?.metadata?.namespace ?? ''
   const entries = getCNPGImageCatalogEntries(resource)
   const majors = new Set(entries.map((e) => e.major))
-  const unavailable = relationUnavailable(workspace, 'clusters', clusterScoped ? undefined : ns, 'Clusters')
+  // A ClusterImageCatalog's users can be in any namespace, so partial coverage
+  // lists what was read; an ImageCatalog's users are all in its own namespace.
+  const partial = clusterScoped && workspace?.coverage?.clusters?.state === 'partial'
+  const unavailable = partial ? null : relationUnavailable(workspace, 'clusters', clusterScoped ? undefined : ns, 'Clusters')
   const users = unavailable ? [] : clustersUsingCatalog(resource, clustersIn(workspace))
 
   return (
@@ -68,7 +71,8 @@ export function CNPGImageCatalogSummary({
           ))}
         </FactGrid>
       )}
-      {clusterScoped && !unavailable && (
+      {!unavailable && partial && <Note>Only clusters in namespaces you can read are listed.</Note>}
+      {!unavailable && !partial && clusterScoped && (
         <Note>Among clusters you can see; clusters in namespaces you cannot read are not listed</Note>
       )}
     </SummaryShell>

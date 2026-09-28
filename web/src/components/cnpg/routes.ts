@@ -10,17 +10,68 @@ export const CNPG_SCREENS: { id: CNPGScreen; label: string; path: string }[] = [
   { id: 'operator', label: 'Operator', path: '/cnpg/operator' },
 ]
 
+export interface CNPGDetailTarget {
+  plural: string
+  group: string
+  namespace: string
+  name: string
+}
+
 export interface CNPGRoute {
   screen: CNPGScreen
+  detail?: CNPGDetailTarget
+}
+
+// The CNPG kinds that have a CNPG-framed full detail, with the workspace
+// destination each one lives under.
+export const CNPG_DETAIL_KINDS: Record<string, { group: string; kind: string; home: CNPGScreen; clusterScoped?: boolean }> = {
+  clusters: { group: 'postgresql.cnpg.io', kind: 'Cluster', home: 'overview' },
+  backups: { group: 'postgresql.cnpg.io', kind: 'Backup', home: 'protection' },
+  scheduledbackups: { group: 'postgresql.cnpg.io', kind: 'ScheduledBackup', home: 'protection' },
+  objectstores: { group: 'barmancloud.cnpg.io', kind: 'ObjectStore', home: 'protection' },
+  databases: { group: 'postgresql.cnpg.io', kind: 'Database', home: 'declarations' },
+  publications: { group: 'postgresql.cnpg.io', kind: 'Publication', home: 'declarations' },
+  subscriptions: { group: 'postgresql.cnpg.io', kind: 'Subscription', home: 'declarations' },
+  poolers: { group: 'postgresql.cnpg.io', kind: 'Pooler', home: 'pooling' },
+  imagecatalogs: { group: 'postgresql.cnpg.io', kind: 'ImageCatalog', home: 'operator' },
+  clusterimagecatalogs: { group: 'postgresql.cnpg.io', kind: 'ClusterImageCatalog', home: 'operator', clusterScoped: true },
+}
+
+export function cnpgDetailKindFor(plural: string, group: string | undefined): string | null {
+  const p = plural.toLowerCase()
+  const spec = CNPG_DETAIL_KINDS[p]
+  return spec && spec.group === (group ?? '') ? p : null
 }
 
 export function parseCNPGRoute(pathname: string): CNPGRoute {
-  const seg = pathname.replace(/^\/+/, '').split('/')
+  const seg = pathname.replace(/^\/+/, '').split('/').map((s) => {
+    try {
+      return decodeURIComponent(s)
+    } catch {
+      return s
+    }
+  })
   if (seg[0] !== 'cnpg') return { screen: 'overview' }
   const s = seg[1] ?? ''
+  const detailSpec = CNPG_DETAIL_KINDS[s]
+  if (detailSpec && seg[2] && seg[3]) {
+    return {
+      screen: detailSpec.home,
+      detail: { plural: s, group: detailSpec.group, namespace: seg[2] === '_' ? '' : seg[2], name: seg[3] },
+    }
+  }
   const match = CNPG_SCREENS.find((x) => x.id === s)
   if (match) return { screen: match.id }
   return { screen: 'overview' }
+}
+
+/** Full detail path; `ctx` pins the Kubernetes context the object belongs to. */
+export function cnpgDetailPath(target: Omit<CNPGDetailTarget, 'group'>, ctx?: string, tab?: string): string {
+  const params = new URLSearchParams()
+  if (ctx) params.set('ctx', ctx)
+  if (tab) params.set('tab', tab)
+  const qs = params.toString()
+  return `/cnpg/${target.plural}/${encodeURIComponent(target.namespace || '_')}/${encodeURIComponent(target.name)}${qs ? `?${qs}` : ''}`
 }
 
 export function cnpgScreenPath(screen: CNPGScreen): string {

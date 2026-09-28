@@ -16,6 +16,7 @@ import {
   SectionTable,
   Sub,
   cnpgResource,
+  coverageEmpty,
   namespaceChip,
   type CNPGScreenProps,
 } from './shared'
@@ -42,7 +43,6 @@ export function CNPGPooling({ data, fleet, namespaces, searchParams, onSetParams
     ...(clusterFilter ? [{ label: `Cluster: ${clusterFilter}`, onClear: () => onSetParams({ cluster: null }) }] : []),
     ...namespaceChip(namespaces, onClearNamespaces),
   ]
-  const readable = data.coverage.poolers?.state === 'full' || data.coverage.poolers?.state === 'partial'
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -107,7 +107,7 @@ export function CNPGPooling({ data, fleet, namespaces, searchParams, onSetParams
           onInspect={onInspect}
           inspected={inspected}
           minWidth={880}
-          empty={readable ? 'No Poolers in this scope.' : 'Poolers are not readable with your access.'}
+          empty={coverageEmpty(data.coverage.poolers, 'Poolers')}
           footer="Instances are the Pooler’s own ready count. Client waits and server-pool saturation come from PgBouncer metrics, which Radar does not read yet."
         />
       </ScreenBody>

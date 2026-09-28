@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import type { CNPGWorkspaceResponse } from '@skyhook-io/k8s-ui'
+import type { CNPGWorkspaceResponse, TimelineEvent } from '@skyhook-io/k8s-ui'
 import { fetchJSON } from './client'
 
 // /api/cnpg/workspace
@@ -65,5 +65,31 @@ export function useCNPGOperator(options?: { enabled?: boolean }) {
     enabled: options?.enabled ?? true,
     staleTime: 30_000,
     refetchInterval: 60_000,
+  })
+}
+
+export interface CNPGClusterActivityResponse {
+  events: TimelineEvent[]
+  oldest: string | null
+  attributionSince: string | null
+  truncated: boolean
+}
+
+// /api/cnpg/clusters/{ns}/{name}/activity
+//
+// The Cluster's history together with its instance Pods and every CNPG object
+// attributed to it, including ones since deleted.
+export function useCNPGClusterActivity(namespace: string, name: string, sinceHours = 24) {
+  return useQuery<CNPGClusterActivityResponse>({
+    queryKey: ['cnpg', 'activity', namespace, name, sinceHours],
+    queryFn: ({ signal }) => {
+      const since = new Date(Date.now() - sinceHours * 3600_000).toISOString()
+      return fetchJSON<CNPGClusterActivityResponse>(
+        `/cnpg/clusters/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/activity?since=${encodeURIComponent(since)}&limit=500`,
+        signal,
+      )
+    },
+    staleTime: 10_000,
+    refetchInterval: 30_000,
   })
 }

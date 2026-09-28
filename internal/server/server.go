@@ -520,6 +520,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		// over a slow cluster link legitimately takes longer than that.
 		r.Post("/pods/{namespace}/{name}/files/save", s.handlePodFileSave)
 		r.Get("/workloads/{kind}/{namespace}/{name}/logs/stream", s.handleWorkloadLogsStream)
+		r.Get("/cnpg/clusters/{namespace}/{name}/logs/stream", s.handleCNPGClusterLogsStream)
 		// AI investigation event stream via SSE — long-lived; lives outside the
 		// 60s timeout group. The run keeps going server-side after disconnect.
 		r.Get("/diagnose/runs/{id}/stream", s.handleDiagnoseRunStream)
@@ -595,6 +596,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/cnpg/operator", s.handleCNPGOperator)
 			r.Get("/cnpg/imagecatalogs/{namespace}/{name}/clusters", s.handleCNPGCatalogUsers)
 			r.Get("/cnpg/clusterimagecatalogs/{name}/clusters", s.handleCNPGCatalogUsers)
+			r.Get("/cnpg/clusters/{namespace}/{name}/logs", s.handleCNPGClusterLogs)
+			r.Get("/cnpg/clusters/{namespace}/{name}/activity", s.handleCNPGClusterActivity)
 			r.Get("/velero/backupstoragelocations/{namespace}/{name}/backups", s.handleVeleroStoredBackups)
 			// POST: creates a DownloadRequest, which is the only supported way to
 			// read the messages behind a run's error and warning counts.

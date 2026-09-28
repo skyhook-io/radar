@@ -7,6 +7,7 @@ import {
   databaseForDeclaration,
   gitopsSourceOf,
   inferredObjectStoreHealth,
+  isBackupFromSchedule,
   issuesForObject,
   missingManagedRole,
   objectStoreForBackup,
@@ -46,11 +47,15 @@ function backup(name: string, extra: any = {}): any {
 }
 
 describe('scheduledBackupOf / backupsForScheduledBackup', () => {
-  const sched = { apiVersion: PG, kind: 'ScheduledBackup', metadata: { name: 'nightly', namespace: 'pg' } }
+  const sched = { apiVersion: PG, kind: 'ScheduledBackup', metadata: { name: 'nightly', namespace: 'pg', uid: 'uid-new' } }
+  const ownedBy = (name: string, uid: string, extra: any = {}) =>
+    backup(name, {
+      ...extra,
+      metadata: { ...(extra.metadata ?? {}), ownerReferences: [{ apiVersion: PG, kind: 'ScheduledBackup', name: 'nightly', uid }] },
+    })
 
-  it('reads the owner reference', () => {
-    const b = backup('b1', { metadata: { ownerReferences: [{ apiVersion: PG, kind: 'ScheduledBackup', name: 'nightly' }] } })
-    expect(scheduledBackupOf(b)).toBe('nightly')
+  it('reads the owner reference name', () => {
+    expect(scheduledBackupOf(ownedBy('b1', 'uid-new'))).toBe('nightly')
   })
 
   it('falls back to the operator label when the owner is the Cluster or unset', () => {
@@ -61,6 +66,7 @@ describe('scheduledBackupOf / backupsForScheduledBackup', () => {
       },
     })
     expect(scheduledBackupOf(b)).toBe('nightly')
+    expect(isBackupFromSchedule(b, sched)).toBe(true)
   })
 
   it('returns null for an on-demand backup', () => {
@@ -72,6 +78,12 @@ describe('scheduledBackupOf / backupsForScheduledBackup', () => {
     expect(scheduledBackupOf(b)).toBeNull()
   })
 
+  it('does not attribute a recreated schedule the old schedule\'s Backups', () => {
+    const old = ownedBy('old', 'uid-old', { metadata: { labels: { 'cnpg.io/scheduled-backup': 'nightly' } } })
+    expect(isBackupFromSchedule(old, sched)).toBe(false)
+    expect(isBackupFromSchedule(ownedBy('cur', 'uid-new'), sched)).toBe(true)
+  })
+
   it('lists owned backups newest first and never a Velero Backup', () => {
     const owned = (name: string, startedAt: string, apiVersion = PG) => ({
       ...backup(name, { metadata: { labels: { 'cnpg.io/scheduled-backup': 'nightly' } }, status: { startedAt } }),
@@ -81,6 +93,7 @@ describe('scheduledBackupOf / backupsForScheduledBackup', () => {
       owned('old', '2026-09-01T00:00:00Z'),
       owned('new', '2026-09-02T00:00:00Z'),
       owned('velero', '2026-09-03T00:00:00Z', VELERO),
+      ownedBy('stale', 'uid-old', { status: { startedAt: '2026-09-04T00:00:00Z' } }),
       backup('other'),
       { ...owned('elsewhere', '2026-09-03T00:00:00Z'), metadata: { name: 'elsewhere', namespace: 'x', labels: { 'cnpg.io/scheduled-backup': 'nightly' } } },
     ]
@@ -91,20 +104,22 @@ describe('scheduledBackupOf / backupsForScheduledBackup', () => {
 describe('objectStoreForBackup / backupDestination', () => {
   const clusters = [pluginCluster('main', 'store-a')]
 
-  it('prefers the backup plugin parameters', () => {
+  it('prefers the store the backup recorded', () => {
     const b = backup('b', { spec: { method: 'plugin', pluginConfiguration: { name: PLUGIN, parameters: { barmanObjectName: 'store-b' } } } })
-    expect(objectStoreForBackup(b, clusters)).toBe('store-b')
+    expect(objectStoreForBackup(b, clusters)).toEqual({ name: 'store-b', inferred: false })
   })
 
-  it('falls back to the target cluster plugin', () => {
+  it("marks a store taken from the Cluster's current plugin as inferred", () => {
     const b = backup('b', { spec: { method: 'plugin', pluginConfiguration: { name: PLUGIN } } })
-    expect(objectStoreForBackup(b, clusters)).toBe('store-a')
-    expect(backupDestination(b, clusters)).toEqual({ type: 'objectStore', name: 'store-a' })
+    expect(objectStoreForBackup(b, clusters)).toEqual({ name: 'store-a', inferred: true })
+    expect(backupDestination(b, clusters)).toEqual({ type: 'objectStore', name: 'store-a', inferred: true })
   })
 
-  it('does not attribute another plugin to the barman store', () => {
-    const b = backup('b', { spec: { method: 'plugin', pluginConfiguration: { name: 'other.example.com' } } })
-    expect(objectStoreForBackup(b, clusters)).toBeNull()
+  it('checks plugin identity before reading barmanObjectName', () => {
+    const other = backup('b', { spec: { method: 'plugin', pluginConfiguration: { name: 'other.example.com', parameters: { barmanObjectName: 'store-b' } } } })
+    expect(objectStoreForBackup(other, clusters)).toBeNull()
+    const unnamed = backup('b', { spec: { method: 'plugin', pluginConfiguration: { parameters: { barmanObjectName: 'store-b' } } } })
+    expect(objectStoreForBackup(unnamed, clusters)).toBeNull()
   })
 
   it('reports in-tree paths and volume snapshots', () => {

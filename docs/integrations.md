@@ -851,6 +851,8 @@ The source contract is Strimzi's [KafkaConnector status schema](https://strimzi.
 
 [CloudNativePG](https://cloudnative-pg.io/) (CNPG) is the Kubernetes operator for PostgreSQL, covering the full lifecycle from bootstrapping to monitoring, with high availability, automated failover, and backup management.
 
+Beyond the per-kind views below, the CloudNativePG **workspace** (`/cnpg`) composes them into fleet, protection, declaration, pooling and operator screens — see [cnpg.md](cnpg.md).
+
 ### What Radar Shows
 
 **Cluster Detail View:**

@@ -1,10 +1,8 @@
 import type { ReactNode } from 'react'
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import {
   CNPG_BARMAN_OBJECTSTORE_GROUP,
   CNPG_GROUP,
-  CNPG_KIND_BY_KEY,
   CNPGBackupSummary,
   CNPGClusterSummary,
   CNPGDatabaseSummary,
@@ -23,8 +21,8 @@ import {
   type NavigateToResource,
 } from '@skyhook-io/k8s-ui'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
-import { cnpgClusterFullPath } from './paths'
-import { decodeDrawerTrail, encodeDrawerTrail } from './routes'
+import { cnpgClusterFullPath, currentPageLabel } from './paths'
+import { useConnection } from '../../context/ConnectionContext'
 
 interface SummaryContext {
   apiKind: string
@@ -38,6 +36,7 @@ interface SummaryContext {
 
 function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryContext) {
   const navigate = useNavigate()
+  const { connection } = useConnection()
   // The workspace is read for the object's own namespace: an explicitly opened
   // Cluster shows its facts whatever the namespace filter is.
   const { query, fleet } = useCNPGFleet([namespace])
@@ -58,7 +57,34 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
     <CNPGClusterSummary
       row={row}
       onNavigate={go}
-      actions={context === 'drawer' ? [{ label: 'Open cluster', primary: true, onClick: () => navigate(cnpgClusterFullPath(namespace, name)) }] : undefined}
+      actions={
+        context === 'drawer'
+          ? [
+              {
+                label: 'Open cluster',
+                primary: true,
+                onClick: () =>
+                  navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined), {
+                    state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
+                  }),
+              },
+              {
+                label: 'Logs',
+                onClick: () =>
+                  navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined, 'logs'), {
+                    state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
+                  }),
+              },
+              {
+                label: 'Protection',
+                onClick: () =>
+                  navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined, 'protection'), {
+                    state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
+                  }),
+              },
+            ]
+          : undefined
+      }
     />
   )
 }
@@ -108,43 +134,10 @@ function renderSummaryFor(ctx: SummaryContext): ReactNode {
   return Summary ? <ObjectSummaryHost ctx={ctx} Summary={Summary} /> : null
 }
 
-const KIND_BY_PLURAL: Record<string, string> = Object.fromEntries(
-  Object.values(CNPG_KIND_BY_KEY).map((k) => [k.plural, k.kind]),
-)
-
-// On a workspace screen the drawer URL carries the chain of objects opened
-// from inside it; this renders the step back to the previous one.
-function DrawerTrailBack({ name, children }: { name: string; children: ReactNode }) {
-  const location = useLocation()
-  const [searchParams, setSearchParams] = useSearchParams()
-  const trail = decodeDrawerTrail(searchParams.get('drawer'))
-  const current = trail[trail.length - 1]
-  if (!location.pathname.startsWith('/cnpg') || trail.length < 2 || current?.name !== name) return <>{children}</>
-  const prev = trail[trail.length - 2]
-  const back = () => {
-    const params = new URLSearchParams(searchParams)
-    params.set('drawer', encodeDrawerTrail(trail.slice(0, -1)))
-    setSearchParams(params, { replace: true })
-  }
-  return (
-    <>
-      <div className="px-4 pt-3">
-        <button type="button" onClick={back} className="inline-flex items-center gap-1 text-xs font-medium text-accent-text hover:underline">
-          <ArrowLeft className="h-3.5 w-3.5" />
-          {KIND_BY_PLURAL[prev.kind] ?? prev.kind} {prev.name}
-        </button>
-      </div>
-      {children}
-    </>
-  )
-}
-
 /**
  * The composed Overview for CloudNativePG kinds. Returns null for kinds
  * without one, which keeps the default Overview.
  */
 export function renderCNPGSummary(ctx: SummaryContext): ReactNode {
-  const node = renderSummaryFor(ctx)
-  if (!node || ctx.context !== 'drawer') return node
-  return <DrawerTrailBack name={ctx.name}>{node}</DrawerTrailBack>
+  return renderSummaryFor(ctx)
 }

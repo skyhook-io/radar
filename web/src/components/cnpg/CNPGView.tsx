@@ -11,6 +11,7 @@ import { CNPGDeclarations } from './CNPGDeclarations'
 import { CNPGPooling } from './CNPGPooling'
 import { CNPGOperator } from './CNPGOperator'
 import { CNPGScreenGate } from './shared'
+import { CNPGDetailPage } from './CNPGDetailPage'
 import { decodeDrawerTrail, encodeDrawerTrail, parseCNPGRoute, sameResource } from './routes'
 import { useCNPGFleet, useCNPGSidebarWorkspace } from './useCNPGSidebarWorkspace'
 
@@ -38,7 +39,11 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
   const { data: apiResources } = useAPIResources()
   const { data: counts } = useResourceCounts(namespaces)
   const { pinned, togglePin, isPinned } = usePinnedKinds()
-  const sidebarWorkspace = useCNPGSidebarWorkspace({ apiResources, namespaces, active: { screen: route.screen } })
+  const sidebarWorkspace = useCNPGSidebarWorkspace({
+    apiResources,
+    namespaces,
+    active: { screen: route.screen, child: route.detail ? { label: route.detail.name, title: `${route.detail.plural} ${route.detail.namespace}/${route.detail.name}` } : undefined },
+  })
   const { query, fleet } = useCNPGFleet(namespaces)
 
   const drawerParam = searchParams.get('drawer')
@@ -68,7 +73,7 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
         const next = idx >= 0 ? trail.slice(0, idx + 1) : [...trail, selectedResource]
         params.set('drawer', encodeDrawerTrail(next))
       }
-      setSearchParams(params, { replace: true })
+      setSearchParams(params, { replace: true, state: location.state })
     }
   }, [targetKey, selectedKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -76,7 +81,7 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
     (resource: SelectedResource) => {
       const params = new URLSearchParams(searchParams)
       params.set('drawer', encodeDrawerTrail([resource]))
-      setSearchParams(params, { replace: true })
+      setSearchParams(params, { replace: true, state: location.state })
     },
     [searchParams, setSearchParams],
   )
@@ -88,7 +93,7 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
         if (v === null || v === '') params.delete(k)
         else params.set(k, v)
       }
-      setSearchParams(params, { replace: true })
+      setSearchParams(params, { replace: true, state: location.state })
     },
     [searchParams, setSearchParams],
   )
@@ -115,6 +120,9 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
         categoryWorkspaces={sidebarWorkspace}
       />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-theme-base">
+        {route.detail ? (
+          <CNPGDetailPage target={route.detail} namespaces={namespaces} onOpenResource={onOpenResource} />
+        ) : (
         <CNPGScreenGate query={query} fleet={fleet}>
           {(data, readyFleet) => {
             const props = {
@@ -141,6 +149,7 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
             }
           }}
         </CNPGScreenGate>
+        )}
       </div>
     </div>
   )

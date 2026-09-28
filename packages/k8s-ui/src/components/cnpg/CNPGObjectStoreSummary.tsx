@@ -111,21 +111,23 @@ export function CNPGObjectStoreSummary({
                   )
                 }
               >
-                <div>
-                  {w.firstRecoverabilityPoint || w.lastSuccessfulBackupTime ? (
-                    <span className={w.failingSinceLastSuccess ? toneTextClass('degraded') : undefined}>
-                      {utc(w.firstRecoverabilityPoint)} → {utc(w.lastSuccessfulBackupTime)}
-                    </span>
-                  ) : (
-                    <NotReported text="No recovery point" />
-                  )}
+                <div className="space-y-0.5">
+                  <div>
+                    <span className="text-theme-text-secondary">First recoverability point </span>
+                    {w.firstRecoverabilityPoint ? utc(w.firstRecoverabilityPoint) : <NotReported />}
+                  </div>
+                  <div>
+                    <span className="text-theme-text-secondary">Last successful backup </span>
+                    {w.lastSuccessfulBackupTime ? utc(w.lastSuccessfulBackupTime) : <NotReported text="None recorded" />}
+                  </div>
                   {w.lastFailedBackupTime && (
-                    <div className="text-xs text-theme-text-secondary">
-                      Last failed backup <TimeAgo at={w.lastFailedBackupTime} />
+                    <div>
+                      <span className="text-theme-text-secondary">Last failed backup </span>
+                      <span className={w.failingSinceLastSuccess ? toneTextClass('degraded') : undefined}>{utc(w.lastFailedBackupTime)}</span>
                     </div>
                   )}
                   {w.failingSinceLastSuccess && (
-                    <Note>The window is still restorable up to the last successful backup; it stops advancing while uploads fail.</Note>
+                    <Note>{w.lastSuccessfulBackupTime ? 'A backup failed after the last recorded success.' : 'No successful backup recorded.'}</Note>
                   )}
                 </div>
               </FactRow>

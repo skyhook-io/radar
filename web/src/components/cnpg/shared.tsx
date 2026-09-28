@@ -6,6 +6,7 @@ import {
   CNPG_KIND_BY_KEY,
   PaneLoader,
   type CNPGFleet,
+  type CNPGKindCoverage,
   type CNPGWorkspaceResponse,
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
@@ -246,6 +247,30 @@ export function SectionTable<T>({
       {footer && <div className="mt-1.5 text-xs text-theme-text-tertiary">{footer}</div>}
     </section>
   )
+}
+
+/** Empty-state text for a collection, derived from how much of it was readable. */
+export function coverageEmpty(cov: CNPGKindCoverage | undefined, noun: string): string {
+  switch (cov?.state) {
+    case 'full':
+      return `No ${noun} in this scope.`
+    case 'partial':
+      return `No ${noun} visible. Some namespaces are not readable with your access.`
+    case 'denied':
+      return `No access to ${noun}.`
+    case 'syncing':
+      return `${noun[0].toUpperCase()}${noun.slice(1)} are still loading.`
+    case 'error':
+      return `${noun[0].toUpperCase()}${noun.slice(1)} could not be read.`
+    default:
+      return `This kind is not installed.`
+  }
+}
+
+/** The less complete of two coverages, for collections built from several kinds. */
+export function worstCoverage(...covs: (CNPGKindCoverage | undefined)[]): CNPGKindCoverage | undefined {
+  const rank: Record<string, number> = { error: 0, denied: 1, syncing: 2, partial: 3, full: 4, notInstalled: 5 }
+  return covs.filter(Boolean).sort((a, b) => (rank[a!.state] ?? 9) - (rank[b!.state] ?? 9))[0]
 }
 
 export function Mono({ children, title }: { children: ReactNode; title?: string }) {

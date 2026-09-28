@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { AlertTriangle } from 'lucide-react'
-import { Badge, isApiGroup, toneTextClass, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
+import { Badge, cnpgGitOpsSource, isApiGroup, toneTextClass, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import {
   CNPGWorkspaceHeader,
@@ -12,6 +12,8 @@ import {
   Sub,
   clusterResource,
   cnpgResource,
+  coverageEmpty,
+  worstCoverage,
   namespaceChip,
   type CNPGScreenProps,
 } from './shared'
@@ -47,11 +49,9 @@ function stateOf(obj: any): State {
 }
 
 function gitopsSource(obj: any): string | undefined {
-  const labels = obj?.metadata?.labels ?? {}
-  if (labels['argocd.argoproj.io/instance']) return `Argo CD ${labels['argocd.argoproj.io/instance']}`
-  const flux = labels['kustomize.toolkit.fluxcd.io/name'] || labels['helm.toolkit.fluxcd.io/name']
-  if (flux) return `Flux ${flux}`
-  return undefined
+  const src = cnpgGitOpsSource(obj)
+  if (!src) return undefined
+  return `${src.tool === 'argocd' ? 'Argo CD' : 'Flux'} ${src.name}`
 }
 
 const STATE_BADGE: Record<State, { severity: 'success' | 'warning' | 'neutral'; text: string }> = {
@@ -71,7 +71,7 @@ function roleState(cluster: any, role: string): { state: State; error?: string }
 
 export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetParams, onInspect, inspected, onClearNamespaces }: CNPGScreenProps) {
   const clusterFilter = searchParams.get('cluster')
-  const onlyFailed = searchParams.get('show') === 'failed'
+  const show = (searchParams.get('show') as 'failed' | 'pending' | null) ?? null
 
   const groups = useMemo<DeclGroup[]>(() => {
     const byCluster = new Map<string, DeclGroup>()
@@ -172,23 +172,25 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
     }
     return [...byCluster.values()]
       .filter((g) => !clusterFilter || `${g.namespace}/${g.cluster}` === clusterFilter)
-      .map((g) => ({ ...g, items: onlyFailed ? g.items.filter((i) => i.state === 'failed') : g.items }))
+      .map((g) => ({ ...g, items: show ? g.items.filter((i) => i.state === show) : g.items }))
       .filter((g) => g.items.length > 0)
       .sort((a, b) => {
         const fa = a.items.some((i) => i.state === 'failed') ? 0 : 1
         const fb = b.items.some((i) => i.state === 'failed') ? 0 : 1
         return fa - fb || a.namespace.localeCompare(b.namespace) || a.cluster.localeCompare(b.cluster)
       })
-  }, [data.objects.databases, data.objects.publications, data.objects.subscriptions, fleet.rows, clusterFilter, onlyFailed])
+  }, [data.objects.databases, data.objects.publications, data.objects.subscriptions, fleet.rows, clusterFilter, show])
 
-  const failedTotal = useMemo(() => {
-    let n = 0
-    for (const k of ['databases', 'publications', 'subscriptions'] as const) {
-      n += (data.objects[k] ?? []).filter((o) => o?.status?.applied === false).length
+  const totals = useMemo(() => {
+    let failed = 0
+    let pending = 0
+    for (const r of fleet.rows) {
+      failed += r.declarations.failed
+      pending += r.declarations.pending
     }
-    for (const r of fleet.rows) n += Object.keys(r.cluster?.status?.managedRolesStatus?.cannotReconcile ?? {}).length
-    return n
-  }, [data.objects, fleet.rows])
+    return { failed, pending }
+  }, [fleet.rows])
+  const declCoverage = worstCoverage(data.coverage.databases, data.coverage.publications, data.coverage.subscriptions)
 
   const chips = [
     ...(clusterFilter ? [{ label: `Cluster: ${clusterFilter}`, onClear: () => onSetParams({ cluster: null }) }] : []),
@@ -206,11 +208,12 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         <div className="flex flex-wrap items-center gap-2">
           <Segments
             label="Declarations"
-            value={onlyFailed ? 'failed' : 'all'}
-            onChange={(id) => onSetParams({ show: id === 'failed' ? 'failed' : null })}
+            value={show ?? 'all'}
+            onChange={(id) => onSetParams({ show: id === 'all' ? null : id })}
             options={[
               { id: 'all', label: 'All declarations' },
-              { id: 'failed', label: 'Not reconciled', count: failedTotal },
+              { id: 'failed', label: 'Not applied', count: totals.failed },
+              { id: 'pending', label: 'Pending', count: totals.pending },
             ]}
           />
         </div>
@@ -218,7 +221,12 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
 
         {groups.length === 0 ? (
           <div className="rounded-xl border border-theme-border bg-theme-surface px-4 py-5 text-sm text-theme-text-tertiary">
-            {onlyFailed ? 'Every declaration in this scope is reconciled.' : 'No declarations in this scope.'}
+            {show === 'failed'
+              ? 'No declaration in this scope is reported as not applied.'
+              : show === 'pending'
+                ? 'No declaration in this scope is waiting for the operator.'
+                : coverageEmpty(declCoverage, 'declarations')}
+            {show && declCoverage?.state !== 'full' ? ' Some declarations are not readable with your access.' : ''}
           </div>
         ) : (
           groups.map((g) => {
@@ -296,7 +304,7 @@ function DeclarationRow({ item, active, onInspect }: { item: DeclItem; active: b
         {item.isField && <Sub>field of the Cluster</Sub>}
       </div>
       <div className="min-w-0 text-xs text-theme-text-secondary break-words">
-        {item.source ?? <span className="text-theme-text-tertiary">Applied directly (no GitOps owner label)</span>}
+        {item.source ?? <span className="text-theme-text-tertiary">GitOps source not recorded</span>}
       </div>
     </div>
   )

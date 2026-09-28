@@ -64,7 +64,7 @@ function Reconciled({ resource, extra }: { resource: any; extra?: ReactNode }) {
 
 function DeclaredIn({ resource }: { resource: any }) {
   const src = gitopsSourceOf(resource)
-  if (!src) return <span className="text-theme-text-secondary">Applied directly (no GitOps owner label)</span>
+  if (!src) return <NotReported text="GitOps source not recorded" />
   return (
     <span>
       {src.tool === 'argocd' ? 'Argo CD application' : 'Flux'} <span className="font-mono">{src.namespace ? `${src.namespace}/${src.name}` : src.name}</span>
