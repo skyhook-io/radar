@@ -28,11 +28,12 @@ export function CNPGClusterActivity({ namespace, name, onNavigate }: { namespace
           Kubernetes events and changes for the Cluster, its instances, Backups, Poolers and declarations.
         </span>
       </div>
-      {q.data?.attributionSince && (
-        <div className="text-xs text-theme-text-tertiary">
-          Child-object history is complete since {formatAge(q.data.attributionSince)} ago; earlier Backups and declarations may be missing.
-        </div>
-      )}
+      <div className="text-xs text-theme-text-tertiary">
+        {q.data?.attributionSince
+          ? `The earliest recorded event linking a Backup, Pooler or declaration to this cluster is ${formatAge(q.data.attributionSince)} old. Deleted child objects from before Radar recorded that link are not shown.`
+          : 'Radar has not recorded any Backup, Pooler or declaration events linked to this cluster yet, so deleted child objects may be missing.'}
+        {' '}Events for kinds you cannot list are omitted.
+      </div>
       {q.data?.truncated && <Notice>Showing the most recent events only; narrow the range to see all of them.</Notice>}
       {q.error && !q.data ? (
         <Notice>Activity could not be loaded: {q.error instanceof Error ? q.error.message : 'unknown error'}</Notice>

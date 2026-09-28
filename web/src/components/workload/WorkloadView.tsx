@@ -283,7 +283,13 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
 
   const cnpgPlural = cnpgDetailKindFor(kind, group)
   if (cnpgPlural) {
-    return <Navigate replace to={cnpgDetailPath({ plural: cnpgPlural, namespace, name }, undefined, searchParams.get('tab') ?? undefined)} state={location.state} />
+    const params = new URLSearchParams(searchParams)
+    params.delete('apiGroup')
+    const tab = params.get('tab')
+    if (cnpgPlural === 'clusters' && (tab === 'timeline' || tab === 'events')) params.set('tab', 'activity')
+    const base = cnpgDetailPath({ plural: cnpgPlural, namespace, name })
+    const qs = params.toString()
+    return <Navigate replace to={qs ? `${base}?${qs}` : base} state={location.state} />
   }
 
   return (

@@ -162,7 +162,17 @@ func (s *Server) handleCNPGClusterActivity(w http.ResponseWriter, r *http.Reques
 	}
 
 	allowed := map[string]bool{}
+	var eventsAllowed *bool
 	canList := func(e *timeline.TimelineEvent) bool {
+		if e.Source == timeline.SourceK8sEvent {
+			if eventsAllowed == nil {
+				ok := s.canRead(r, "", "events", namespace, "list")
+				eventsAllowed = &ok
+			}
+			if !*eventsAllowed {
+				return false
+			}
+		}
 		key := resourceid.GroupFromAPIVersion(e.APIVersion) + "/" + e.Kind
 		ok, seen := allowed[key]
 		if !seen {

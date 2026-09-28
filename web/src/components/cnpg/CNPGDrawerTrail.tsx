@@ -24,7 +24,7 @@ export function CNPGDrawerTrailBack({ resource }: { resource: SelectedResource }
   const back = () => {
     const params = new URLSearchParams(searchParams)
     params.set('drawer', encodeDrawerTrail(trail.slice(0, -1)))
-    setSearchParams(params, { replace: true })
+    setSearchParams(params, { replace: true, state: location.state })
   }
   return (
     <div className="shrink-0 border-b border-theme-border px-4 py-2">

@@ -363,9 +363,11 @@ func TestCNPGClusterActivity_DropsKindsTheCallerCannotList(t *testing.T) {
 		name          string
 		clusterGet    bool
 		backupsListed bool
-	}{{"reader", true, true}, {"no-backups", true, false}, {"no-clusters", false, true}} {
+		eventsListed  bool
+	}{{"reader", true, true, true}, {"no-backups", true, false, true}, {"no-clusters", false, true, true}, {"no-events", true, true, false}} {
 		perms := &auth.UserPermissions{AllowedNamespaces: []string{"pgactauth"}}
 		perms.SetCanI("get", cnpgGroup, "clusters", "pgactauth", u.clusterGet)
+		allow(perms, "", "events", "pgactauth", u.eventsListed)
 		allow(perms, cnpgGroup, "clusters", "pgactauth", true)
 		allow(perms, cnpgGroup, "backups", "pgactauth", u.backupsListed)
 		allow(perms, cnpgGroup, "poolers", "pgactauth", true)
@@ -386,6 +388,22 @@ func TestCNPGClusterActivity_DropsKindsTheCallerCannotList(t *testing.T) {
 	}
 	if len(got.Events) != 3 {
 		t.Errorf("events = %v, want the Cluster and Pod rows", activityIDs(got))
+	}
+
+	sawEvent := false
+	for _, e := range control.Events {
+		if e.Source == pkgtimeline.SourceK8sEvent {
+			sawEvent = true
+		}
+	}
+	if !sawEvent {
+		t.Fatalf("control: no Kubernetes Event rows: %v", activityIDs(control))
+	}
+	noEvents := decodeActivity(t, env.authGet(t, "/api/cnpg/clusters/pgactauth/pg-orders/activity", "no-events", ""))
+	for _, e := range noEvents.Events {
+		if e.Source == pkgtimeline.SourceK8sEvent {
+			t.Errorf("Kubernetes Event row reached a caller who cannot list events: %s", e.ID)
+		}
 	}
 
 	resp := env.authGet(t, "/api/cnpg/clusters/pgactauth/pg-orders/activity", "no-clusters", "")
