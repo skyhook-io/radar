@@ -24,7 +24,7 @@ func TestCandidateDoesNotReplaceActiveArgoConnection(t *testing.T) {
 	}
 	client, _ := defaultManager.Get()
 	for _, token := range []string{"wrong", "candidate"} {
-		err := ProbeCandidate(context.Background(), argoapi.Connection{URL: candidate.URL, Token: token})
+		err := PrepareCandidate(argoapi.Connection{URL: candidate.URL, Token: token})(context.Background())
 		if token == "wrong" && !errors.Is(err, ErrTokenInvalid) {
 			t.Fatalf("rejected candidate: %v", err)
 		}

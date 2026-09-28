@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gofrs/flock"
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -142,21 +143,21 @@ func TestProfileStoreDecodeErrorsDoNotExposeContents(t *testing.T) {
 	}
 }
 
-func TestProfileStoreCancelledLock(t *testing.T) {
+func TestProfileStoreBusyLock(t *testing.T) {
 	s := &ProfileStore{Path: filepath.Join(t.TempDir(), "clusters.json")}
 	lock := flock.New(s.Path + ".lock")
 	if err := lock.Lock(); err != nil {
 		t.Fatal(err)
 	}
 	defer lock.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, err := s.Update(ctx, "", func(*ClusterProfiles) error { t.Fatal("cancelled writer ran"); return nil })
-	if err == nil {
-		t.Fatal("cancelled lock succeeded")
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := s.Update(ctx, profileRevision(nil), func(*ClusterProfiles) error { t.Fatal("writer ran without the lock"); return nil })
+	if !errors.Is(err, ErrProfileBusy) {
+		t.Fatalf("contended lock: %v", err)
 	}
 	if _, err := os.Stat(s.Path); !os.IsNotExist(err) {
-		t.Fatalf("cancelled writer created profile: %v", err)
+		t.Fatalf("blocked writer created profile: %v", err)
 	}
 }
 

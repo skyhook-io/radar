@@ -15,15 +15,14 @@ import (
 )
 
 type ProfileTarget struct {
-	Binding             string                       `json:"binding"`
-	Context             string                       `json:"context"`
-	Source              string                       `json:"source,omitempty"`
-	InFileName          string                       `json:"inFileName,omitempty"`
-	CAPI                *config.CAPIProfileReference `json:"capi,omitempty"`
-	Identity            config.TargetIdentity        `json:"identity"`
-	Fingerprint         string                       `json:"fingerprint"`
-	ClientGeneration    uint64                       `json:"clientGeneration"`
-	OperationGeneration uint64                       `json:"operationGeneration"`
+	Binding             string                `json:"binding"`
+	Context             string                `json:"context"`
+	Source              string                `json:"source,omitempty"`
+	InFileName          string                `json:"inFileName,omitempty"`
+	Identity            config.TargetIdentity `json:"identity"`
+	Fingerprint         string                `json:"fingerprint"`
+	ClientGeneration    uint64                `json:"clientGeneration"`
+	OperationGeneration uint64                `json:"operationGeneration"`
 }
 
 func (p ProfileTarget) Same(other ProfileTarget) bool {
@@ -53,12 +52,9 @@ func CurrentProfileTarget() (ProfileTarget, error) {
 		identity.CA = append([]byte(nil), k8sConfig.CAData...)
 		caFile = k8sConfig.CAFile
 	}
-	for binding, path := range capiKubeconfigs {
+	for _, path := range capiKubeconfigs {
 		if path == p.Source {
 			p.Source = "CAPI"
-			if ref, exists := capiProfileReferences[binding]; exists {
-				p.CAPI = &ref
-			}
 			break
 		}
 	}
@@ -96,14 +92,6 @@ func CurrentProfileTarget() (ProfileTarget, error) {
 	trust := sha256.Sum256(identity.CA)
 	p.Identity = config.TargetIdentity{Server: prom.SafeAddress(identity.Server), TLSName: identity.TLSName, User: identity.User, Trust: hex.EncodeToString(trust[:]), Proxy: prom.SafeAddress(identity.Proxy), InsecureTLS: identity.Insecure}
 	return p, nil
-}
-
-var capiProfileReferences = map[string]config.CAPIProfileReference{}
-
-func RegisterCAPIProfileReference(binding, managementBinding, namespace, name string) {
-	clientMu.Lock()
-	defer clientMu.Unlock()
-	capiProfileReferences[binding] = config.CAPIProfileReference{ManagementBinding: managementBinding, Namespace: namespace, Name: name}
 }
 
 var ErrContextConfigurationBusy = errors.New("cluster connection is changing; try again in a moment")

@@ -47,8 +47,8 @@ func TestInlineSettingsRestartAndRedactedCatalog(t *testing.T) {
 		}
 	}
 	data, _ := json.Marshal(entries)
-	if strings.Contains(string(data), "private-") || strings.Contains(string(data), "connectionId") || strings.Contains(string(data), "\"uses\"") {
-		t.Fatal("catalog exposed secrets or shared-record fields")
+	if strings.Contains(string(data), "private-") {
+		t.Fatal("catalog exposed secrets")
 	}
 }
 

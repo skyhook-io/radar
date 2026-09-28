@@ -252,7 +252,8 @@ func TestArgoAPIHealth_SavedSettingsFailureNamesSettings(t *testing.T) {
 		err  error
 		want string
 	}{
-		{"saved settings need review", &connections.SettingsError{Kind: config.IntegrationArgoCD, Err: errors.New("cluster connection changed")}, "its saved connection for this cluster needs review in Settings"},
+		{"saved settings need review", &connections.SettingsError{Kind: config.IntegrationArgoCD, Err: errors.New("cluster connection changed")}, "this cluster's saved integration settings need review in Settings"},
+		{"launch configuration invalid", &connections.SettingsError{Kind: config.IntegrationArgoCD, Launch: true, Err: errors.New("Argo CD environment configuration requires a token")}, "its startup configuration for this launch is invalid; check Radar's logs"},
 		{"not configured", errors.New("cluster disconnected"), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

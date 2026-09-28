@@ -326,17 +326,21 @@ func Legacy(kind config.Integration) (Bundle, string) {
 		b.Settings.Target = c.ArgoCDTokenBinding
 		b.Err = b.Settings.ArgoCD.Validate()
 	case config.IntegrationCost:
-		b.Settings.Kubecost = &opencost.Connection{URL: c.KubecostURL, APIKey: c.KubecostAPIKey}
-		b.Settings.Mode = c.CostSource
+		// Normalized as the global startup path read these fields.
+		b.Settings.Kubecost = &opencost.Connection{URL: strings.TrimSpace(c.KubecostURL), APIKey: c.KubecostAPIKey}
+		b.Settings.Mode = strings.ToLower(strings.TrimSpace(c.CostSource))
 		if b.Settings.Mode == "" {
 			b.Settings.Mode = "auto"
 		}
-		b.Settings.ClusterID = c.KubecostClusterID
+		b.Settings.ClusterID = strings.TrimSpace(c.KubecostClusterID)
 		if b.Settings.Mode == "prometheus" {
 			b.Settings.Kubecost = &opencost.Connection{}
 			b.Settings.ClusterID = ""
 		}
 		b.Err = b.Settings.Kubecost.Validate()
+		if b.Err == nil && !slices.Contains([]string{"auto", "prometheus", "kubecost"}, b.Settings.Mode) {
+			b.Err = errors.New("cost source must be auto, prometheus, or kubecost")
+		}
 	}
 	data, _ := json.Marshal(struct {
 		Settings                                   config.IntegrationSettings

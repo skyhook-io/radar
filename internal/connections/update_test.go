@@ -1,6 +1,7 @@
 package connections
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -175,6 +176,24 @@ func TestTargetAcceptanceIsPerIntegrationAndDiscoveryNeedsNone(t *testing.T) {
 	if r.Resolve(a, config.IntegrationCost, false).Err != nil {
 		t.Fatal("anonymous discovery required target acceptance")
 	}
+	before, err := os.ReadFile(r.Store.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only reconfirm may re-stamp a changed target; an ordinary save that keeps
+	// the credential would silently send it to the new cluster.
+	for _, kind := range []config.Integration{config.IntegrationMetrics, config.IntegrationArgoCD} {
+		keep := Update{Target: a, Kind: kind, Action: "save", Revision: r.Resolve(a, kind, false).View.Revision}
+		if kind == config.IntegrationArgoCD {
+			keep.Secret = &SecretEdit{Action: "keep"}
+		}
+		if _, err := r.Prepare(a, keep); err == nil {
+			t.Fatalf("%s save re-activated paused settings", kind)
+		}
+	}
+	if after, _ := os.ReadFile(r.Store.Path); !bytes.Equal(before, after) {
+		t.Fatal("rejected save changed clusters.json")
+	}
 	apply(t, r, a, Update{Kind: config.IntegrationMetrics, Action: "reconfirm", Kinds: []config.Integration{config.IntegrationMetrics}})
 	if r.Resolve(a, config.IntegrationMetrics, false).Err != nil || r.Resolve(a, config.IntegrationArgoCD, false).Err == nil {
 		t.Fatal("confirmation affected another integration")
@@ -200,11 +219,12 @@ func TestCostReuseKeepsDestinationMappingAndOriginFence(t *testing.T) {
 }
 
 func TestLegacyCostAdoptionPreservesSource(t *testing.T) {
-	for _, mode := range []string{"prometheus", "kubecost"} {
-		t.Run(mode, func(t *testing.T) {
+	for _, stored := range []string{"prometheus", "kubecost", " Kubecost "} {
+		mode := strings.ToLower(strings.TrimSpace(stored))
+		t.Run(stored, func(t *testing.T) {
 			r, target, _ := setupResolver(t)
 			_, err := config.Update(func(c *config.Config) {
-				c.CostSource = mode
+				c.CostSource = stored
 				if mode == "prometheus" {
 					c.KubecostURL = "https://inactive-cost.example"
 					c.KubecostAPIKey = "inactive-credential"
@@ -521,11 +541,8 @@ func TestIndependentFileEntriesStayIsolated(t *testing.T) {
 	if r.Resolve(a, config.IntegrationMetrics, false).View.URL != "https://backend.example" {
 		t.Fatal("edit changed another context")
 	}
-	for _, action := range []string{"use", "fork", "update_shared", "rename", "delete"} {
-		_, err := r.Prepare(b, Update{Target: b, Kind: config.IntegrationMetrics, Action: action, Revision: updated.View.Revision})
-		if err == nil {
-			t.Fatalf("removed action %s accepted", action)
-		}
+	if _, err := r.Prepare(b, Update{Target: b, Kind: config.IntegrationMetrics, Action: "rename", Revision: updated.View.Revision}); err == nil {
+		t.Fatal("unknown action accepted")
 	}
 }
 

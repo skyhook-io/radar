@@ -42,12 +42,6 @@ func setupLocalProfileTest(t *testing.T) *Server {
 
 func updateProfile(t *testing.T, s *Server, view connections.ProfileView, action, url string, headers *map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-	if action == "apply" {
-		action = "save"
-	}
-	if action == "finish_migration" {
-		action = "dismiss_legacy"
-	}
 	body := connections.Update{Target: view.Target, Revision: view.Revision, Kind: config.IntegrationMetrics, Action: action, URL: &url, ConfirmRemoval: true}
 	if headers != nil {
 		for _, key := range view.HeaderKeys {
@@ -88,19 +82,19 @@ func TestLocalProfileSaveConflictAndCredentialProtection(t *testing.T) {
 	defer backend.Close()
 	view := s.localPrometheusView()
 	headers := map[string]string{"Authorization": "test-secret"}
-	res := updateProfile(t, s, view, "apply", backend.URL, &headers)
+	res := updateProfile(t, s, view, "save", backend.URL, &headers)
 	if res.Code != 200 || strings.Contains(res.Body.String(), "test-secret") {
 		t.Fatalf("save: %d %s", res.Code, res.Body.String())
 	}
-	if res := updateProfile(t, s, view, "apply", backend.URL, nil); res.Code != 409 {
+	if res := updateProfile(t, s, view, "save", backend.URL, nil); res.Code != 409 {
 		t.Fatalf("stale revision: %d %s", res.Code, res.Body.String())
 	}
 	view = s.localPrometheusView()
-	if res := updateProfile(t, s, view, "apply", "https://different.example", nil); res.Code != 400 {
+	if res := updateProfile(t, s, view, "save", "https://different.example", nil); res.Code != 400 {
 		t.Fatalf("cross-origin credentials: %d %s", res.Code, res.Body.String())
 	}
 	view.Target.OperationGeneration++
-	if res := updateProfile(t, s, view, "apply", backend.URL, nil); res.Code != 409 {
+	if res := updateProfile(t, s, view, "save", backend.URL, nil); res.Code != 409 {
 		t.Fatalf("stale cluster generation: %d %s", res.Code, res.Body.String())
 	}
 	if c := config.Load(); c.PrometheusURL != "" || len(c.PrometheusHeaders) > 0 {
@@ -141,11 +135,11 @@ func TestLocalProfileLegacyAdoptionAndCompletion(t *testing.T) {
 	if view.Legacy != nil || len(prometheuspkg.CurrentHeaders()) != 0 {
 		t.Fatal("second context repeated import offer or inherited credentials")
 	}
-	if res := updateProfile(t, s, view, "finish_migration", "unfinished-url", nil); res.Code != 200 {
+	if res := updateProfile(t, s, view, "dismiss_legacy", "unfinished-url", nil); res.Code != 200 {
 		t.Fatalf("finish: %d %s", res.Code, res.Body.String())
 	}
 	if s.localPrometheusView().Legacy != nil {
-		t.Fatal("global completion did not stop offers")
+		t.Fatal("dismissal did not stop offers for this cluster")
 	}
 	if config.Load().PrometheusHeaders["Authorization"] != "legacy-secret" {
 		t.Fatal("legacy recovery copy changed")
@@ -155,7 +149,7 @@ func TestLocalProfileLegacyAdoptionAndCompletion(t *testing.T) {
 func TestLocalProfileChangedTargetCanReplaceWithoutAdoption(t *testing.T) {
 	s := setupLocalProfileTest(t)
 	view := s.localPrometheusView()
-	if res := updateProfile(t, s, view, "apply", "http://127.0.0.1:1", nil); res.Code != 200 {
+	if res := updateProfile(t, s, view, "save", "http://127.0.0.1:1", nil); res.Code != 200 {
 		t.Fatalf("initial save: %d", res.Code)
 	}
 	old := k8s.SetTestConfig(&rest.Config{Host: "https://different-cluster"})
@@ -198,7 +192,7 @@ func TestLocalProfileEnvironmentOriginGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := updateProfile(t, s, s.localPrometheusView(), "apply", "https://different.example", nil)
+	res := updateProfile(t, s, s.localPrometheusView(), "save", "https://different.example", nil)
 	if res.Code != 400 || !strings.Contains(res.Body.String(), "environment references in clusters.json") || strings.Contains(res.Body.String(), "synthetic-secret") {
 		t.Fatalf("guidance: %d %s", res.Code, res.Body.String())
 	}
@@ -221,13 +215,13 @@ func TestLocalProfileSupersededProbeDoesNotReportConnected(t *testing.T) {
 	defer second.Close()
 	initial := s.localPrometheusView()
 	result := make(chan *httptest.ResponseRecorder, 1)
-	go func() { result <- updateProfile(t, s, initial, "apply", first.URL, nil) }()
+	go func() { result <- updateProfile(t, s, initial, "save", first.URL, nil) }()
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
 		t.Fatal("first probe did not start")
 	}
-	res := updateProfile(t, s, s.localPrometheusView(), "apply", second.URL, nil)
+	res := updateProfile(t, s, s.localPrometheusView(), "save", second.URL, nil)
 	if res.Code != 200 {
 		t.Fatalf("second save: %d %s", res.Code, res.Body.String())
 	}

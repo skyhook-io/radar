@@ -197,11 +197,14 @@ func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string
 	if err == nil {
 		return health, nil
 	}
-	// A paused or unreadable saved connection leaves the manager unconfigured,
-	// but the user did configure it and needs to know why it isn't used.
+	// A settings failure leaves the manager unconfigured, so without this the
+	// page would silently fall back to Radar's read instead of saying why.
 	var settingsErr *connections.SettingsError
-	if errors.As(err, &settingsErr) && !settingsErr.Launch {
-		return nil, errors.New("its saved connection for this cluster needs review in Settings")
+	if errors.As(err, &settingsErr) {
+		if settingsErr.Launch {
+			return nil, errors.New("its startup configuration for this launch is invalid; check Radar's logs")
+		}
+		return nil, errors.New("this cluster's saved integration settings need review in Settings")
 	}
 	if !argocd.IsConfigured() {
 		return nil, nil

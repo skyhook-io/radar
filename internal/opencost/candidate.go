@@ -20,18 +20,8 @@ type kubecostTarget struct {
 }
 
 func captureKubecostTarget() kubecostTarget {
-	return kubecostTarget{k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName(), k8s.IsInCluster()}
-}
-
-func ProbeCandidate(ctx context.Context, config ManagerConfig) error {
-	probe, err := PrepareCandidate(config)
-	if err != nil {
-		return err
-	}
-	if probe == nil {
-		return nil
-	}
-	return probe(ctx)
+	client, config, contextName, inCluster := k8s.GetClusterClientSnapshot()
+	return kubecostTarget{client, config, contextName, inCluster}
 }
 
 // PrepareCandidate captures discovery and transport before releasing the cluster

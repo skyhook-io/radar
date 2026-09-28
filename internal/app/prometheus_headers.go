@@ -8,9 +8,9 @@ import (
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
-// validateStartupPrometheusURL is the acceptance --prometheus-url has always
-// had: the transport honors userinfo and query parameters, so launch flags and
-// Helm values may carry them. Settings saves use the stricter prom.ValidateBaseURL.
+// validateStartupPrometheusURL deliberately accepts userinfo and query
+// parameters: the transport honors them, and launch flags and Helm values carry
+// them. Settings saves use the stricter prom.ValidateBaseURL.
 func validateStartupPrometheusURL(raw string) error {
 	if u, err := url.Parse(raw); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return errors.New("must be a valid HTTP(S) URL (e.g., http://prometheus-server.monitoring:9090)")

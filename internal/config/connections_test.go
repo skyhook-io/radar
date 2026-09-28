@@ -134,34 +134,6 @@ func TestUnchangedInvalidSettingsWithEmptyHeadersDoNotBlockSave(t *testing.T) {
 	}
 }
 
-func TestStoreWritesInlineSettings(t *testing.T) {
-	s, _ := writeConnectionFixture(t, connectionFixture())
-	data, err := os.ReadFile(s.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var stored map[string]any
-	if err := json.Unmarshal(data, &stored); err != nil {
-		t.Fatal(err)
-	}
-	if _, exists := stored["connections"]; exists {
-		t.Fatal("retained shared records")
-	}
-	profiles := stored["profiles"].(map[string]any)
-	for _, binding := range []string{"a", "b"} {
-		metrics := profiles[binding].(map[string]any)["integrations"].(map[string]any)["metrics"].(map[string]any)
-		if _, exists := metrics["mode"]; exists {
-			t.Fatal("retained redundant metrics mode")
-		}
-		if _, exists := metrics["connectionId"]; exists {
-			t.Fatal("retained connection reference")
-		}
-		if metrics["prometheus"].(map[string]any)["url"] != "https://metrics" {
-			t.Fatal("missing inline connection")
-		}
-	}
-}
-
 func TestProfileReadSinceDetectsSameSizeSameTimestamp(t *testing.T) {
 	s, rev := writeConnectionFixture(t, connectionFixture())
 	info, err := os.Stat(s.Path)

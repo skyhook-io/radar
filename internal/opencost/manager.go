@@ -559,7 +559,11 @@ func detectPrometheusCostState(ctx context.Context) prometheusCostState {
 func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Connection, error) {
 	ctx, cancel := context.WithTimeout(ctx, kubecostConnectTimeout)
 	defer cancel()
-	if err := validateKubecostConfigContext(config, k8s.GetContextName()); err != nil {
+	// Validate against the captured target, not the live context: a switch
+	// after validation would otherwise forward this context's API key to the
+	// next cluster's Kubecost.
+	target := captureKubecostTarget()
+	if err := validateKubecostConfigContext(config, target.contextName); err != nil {
 		return Connection{}, err
 	}
 	if config.URL != "" {
@@ -585,7 +589,7 @@ func (m *Manager) connectKubecost(ctx context.Context, config ManagerConfig) (Co
 	if err != nil {
 		return Connection{}, err
 	}
-	return connectDiscoveredKubecost(ctx, config, clusterID, aggregator, portforward.OwnerCost, captureKubecostTarget())
+	return connectDiscoveredKubecost(ctx, config, clusterID, aggregator, portforward.OwnerCost, target)
 }
 
 func connectDiscoveredKubecost(ctx context.Context, config ManagerConfig, clusterID string, aggregator *kubecostAggregator, owner portforward.Owner, target kubecostTarget) (Connection, error) {

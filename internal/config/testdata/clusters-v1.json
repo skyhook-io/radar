@@ -40,7 +40,7 @@
     },
     "capi-entry": {
       "context": "workload-cluster",
-      "capi": { "managementBinding": "management-entry", "namespace": "clusters", "name": "workload-cluster" },
+      "source": "CAPI",
       "integrations": {
         "metrics": {},
         "argocd": { "target": "capi-target", "argocd": { "url": "", "token": "discovery-token" } },

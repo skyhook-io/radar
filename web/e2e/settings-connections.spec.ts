@@ -349,7 +349,6 @@ for (const integration of integrations) {
     await expect.poll(() => state.writes.length).toBe(1)
     expect(await nav.boundingBox()).toEqual(navBefore)
     expect(await fieldLayout()).toEqual(fieldBefore)
-    await expect(page.getByText('Updating connection settings…', { exact: true })).toHaveCount(0)
     state.releaseApply()
     await expect(page.getByText('Saved · Connected', { exact: true })).toBeVisible()
     expect(await nav.boundingBox()).toEqual(navBefore)
@@ -403,7 +402,6 @@ for (const integration of integrations) {
     else expect(state.writes[0].secret).toEqual({ action: 'keep' })
     if (integration.kind === 'cost') expect(state.writes[0].clusterId).toBe('destination-cluster')
     await expect(page.getByRole('textbox', { name: integration.field, exact: true })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Edit shared connection' })).toHaveCount(0)
   })
 }
 
@@ -683,8 +681,6 @@ test('old context cleanup lives in Connection and clearly scopes credential remo
   state.connections.push({ url: 'https://old.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
     binding: 'old', integration: 'metrics', context: 'old-cluster', source: '/test/old', inFileName: 'old-cluster', availability: 'removed', revision: 'old-revision' })
   await openSettings(page, 'Metrics')
-  await expect(page.getByRole('button', { name: 'Manage stored cluster settings' })).toHaveCount(0)
-  await expect(page.getByText('Local storage details', { exact: true })).toHaveCount(0)
   await page.getByRole('tab', { name: 'Connection', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Saved connections', exact: true })).toBeVisible()
   await expect(page.getByText('Not in kubeconfig', { exact: true })).toBeVisible()
@@ -910,6 +906,74 @@ test('failed confirmation keeps keyboard focus and exposes stale-settings recove
   await expect(page.getByRole('alert')).toHaveCount(0)
   expect(state.writes).toHaveLength(0)
 })
+
+for (const integration of integrations) {
+  test(`${integration.tab}: a conflicting direct save offers reload and keeps the draft until then`, async ({ page }) => {
+    const state = await fixture(page)
+    await openSettings(page, integration.tab)
+    await page.route('**/api/integrations/connections', async route => {
+      if (route.request().method() !== 'PUT') return route.fallback()
+      state.writes.push(route.request().postDataJSON())
+      await route.fulfill({ status: 409, json: { error: 'Settings changed; reload latest settings.' } })
+    })
+    const field = page.getByRole('textbox', { name: integration.field, exact: true })
+    await field.fill(`https://${integration.kind}.example/v2`)
+    await page.getByRole('button', { name: 'Save changes', exact: true }).click()
+    const reload = page.getByRole('button', { name: 'Discard draft & reload', exact: true })
+    await expect(reload).toBeVisible()
+    await expect(field).toHaveValue(`https://${integration.kind}.example/v2`)
+    await reload.click()
+    await expect(reload).toHaveCount(0)
+    await expect(field).toHaveValue(`https://${integration.kind}.example`)
+    expect(state.writes).toHaveLength(1)
+  })
+}
+
+test('a busy save that succeeds on retry clears the conflict alert', async ({ page }) => {
+  const state = await fixture(page)
+  await openSettings(page, 'Metrics')
+  let busy = true
+  await page.route('**/api/integrations/connections', async route => {
+    if (route.request().method() !== 'PUT' || !busy) return route.fallback()
+    busy = false
+    await route.fulfill({ status: 409, json: { error: 'cluster settings are busy; try again' } })
+  })
+  await page.getByRole('textbox', { name: 'Metrics backend URL', exact: true }).fill('https://metrics.example/v2')
+  const save = page.getByRole('button', { name: 'Save changes', exact: true })
+  await save.click()
+  await expect(page.getByText('cluster settings are busy; try again')).toBeVisible()
+  await save.click()
+  await expect.poll(() => state.writes.length).toBe(1)
+  await expect(page.getByText('cluster settings are busy; try again')).toHaveCount(0)
+})
+
+test('dismissing previous settings waits for an unsaved draft', async ({ page }) => {
+  const state = await fixture(page)
+  Object.assign(state.profiles.metrics, discoverySettings, { state: 'auto', mode: 'auto', legacy: {
+    url: 'https://previous.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false, clusterId: '', mode: 'connection', revision: 'previous-revision',
+  } })
+  await openSettings(page, 'Metrics')
+  const dismiss = page.getByRole('button', { name: 'Dismiss for this cluster', exact: true })
+  await expect(dismiss).toBeEnabled()
+  await page.getByRole('textbox', { name: 'Metrics backend URL', exact: true }).fill('https://typed.example')
+  await expect(dismiss).toBeDisabled()
+  expect(state.writes).toHaveLength(0)
+})
+
+for (const integration of integrations.filter(item => item.kind !== 'metrics')) {
+  test(`${integration.tab}: paused discovery credentials can be removed without accepting them`, async ({ page }) => {
+    const state = await fixture(page)
+    Object.assign(state.profiles[integration.kind], discoverySettings, { state: 'target_changed', mode: 'auto', secretSet: true, error: 'The cluster behind this context changed' })
+    await openSettings(page, integration.tab)
+    await page.getByRole('button', { name: 'Use a different connection', exact: true }).click()
+    await page.getByRole('button', { name: 'Use auto-discovery', exact: true }).click()
+    await expect(page.getByText(/Saving switches this cluster to auto-discovery/)).toBeVisible()
+    await page.getByRole('button', { name: 'Save changes', exact: true }).click()
+    await expect.poll(() => state.writes.length).toBe(1)
+    expect(state.writes[0]).toMatchObject({ action: 'auto', confirmRemoval: true })
+    expect(state.writes[0]).not.toHaveProperty('secret')
+  })
+}
 
 for (const integration of integrations.filter(item => item.kind !== 'metrics')) {
   test(`${integration.tab}: replacement cancellation preserves the typed credential`, async ({ page }) => {
@@ -1151,7 +1215,6 @@ for (const integration of integrations) {
       await expect(warning).toContainText('endpoint')
       if (credentials) await expect(warning).toContainText(credential)
       else await expect(warning).not.toContainText(credential)
-      await expect(dialog.getByText(/Auto-discovery selected/)).toHaveCount(0)
       await dialog.getByRole('button', { name: 'Discard', exact: true }).click()
       await expect(warning).toBeHidden()
       expect(state.writes).toHaveLength(0)

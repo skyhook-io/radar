@@ -32,7 +32,10 @@ func TestKubecostCandidateRequiresClusterData(t *testing.T) {
 				w.Write([]byte(tc.body))
 			}))
 			defer server.Close()
-			err := ProbeCandidate(context.Background(), ManagerConfig{Source: SourceKubecost, URL: server.URL, APIKey: "candidate-key", ClusterID: "test"})
+			probe, err := PrepareCandidate(ManagerConfig{Source: SourceKubecost, URL: server.URL, APIKey: "candidate-key", ClusterID: "test"})
+			if err == nil {
+				err = probe(context.Background())
+			}
 			if (err != nil) != tc.wantError {
 				t.Fatalf("probe error = %v", err)
 			}

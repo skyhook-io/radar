@@ -32,9 +32,6 @@ func preparePrometheusConfiguration(cfg AppConfig) (AppConfig, error) {
 	target, targetErr := k8s.CurrentProfileTarget()
 	var launch *prom.Connection
 	if cfg.PrometheusURLFlag || cfg.PrometheusHeaderFlags {
-		if targetErr != nil {
-			return cfg, errors.New("local Prometheus flags require a selected kubeconfig context; select one before launching Radar")
-		}
 		if !cfg.PrometheusURLFlag {
 			return cfg, errors.New("local Prometheus header flags require --prometheus-url in the same launch; saved credentials are not inherited")
 		}
@@ -70,17 +67,17 @@ func preparePrometheusConfiguration(cfg AppConfig) (AppConfig, error) {
 	}
 	argo, argoManaged, err := argocd.EnvironmentConfiguration()
 	if argoManaged {
-		if targetErr != nil {
-			return cfg, errors.New("local Argo CD environment configuration requires a selected kubeconfig context")
-		}
 		launches[config.IntegrationArgoCD] = connections.Bundle{Settings: config.IntegrationSettings{ArgoCD: &argo}, Err: err}
 	}
 	cost, costManaged, err := opencost.EnvironmentConfiguration()
 	if costManaged {
-		if targetErr != nil {
-			return cfg, errors.New("local cost environment configuration requires a selected kubeconfig context")
-		}
 		launches[config.IntegrationCost] = connections.Bundle{Settings: config.IntegrationSettings{Kubecost: &pkgopencost.Connection{URL: cost.URL, APIKey: cost.APIKey}, Mode: string(cost.Source), ClusterID: cost.ClusterID}, Err: err}
+	}
+	// Overrides bind to the launch context. Without one they can never apply,
+	// but Radar still starts so the kubeconfig problem is visible in the UI.
+	if targetErr != nil && len(launches) > 0 {
+		log.Printf("[connections] Startup integration overrides are not applied because this launch has no usable kubeconfig context: %v", targetErr)
+		launches = map[config.Integration]connections.Bundle{}
 	}
 	cfg.LocalConnections = connections.NewResolver(config.NewProfileStore(), target, launches)
 	cfg.CostSource, cfg.KubecostURL, cfg.KubecostAPIKey, cfg.KubecostAPIKeyContext, cfg.KubecostClusterID, cfg.KubecostClusterIDContext = "auto", "", "", "", "", ""

@@ -5006,7 +5006,6 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	k8s.RegisterCAPIProfileReference(safetyBinding, managementBinding, ns, name)
 	if err := k8s.PerformContextSwitch(qualifiedName); err != nil {
 		discarded := k8s.DiscardFailedMergedContext(mergedPath, created)
 		if discarded {

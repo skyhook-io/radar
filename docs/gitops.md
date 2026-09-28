@@ -137,7 +137,8 @@ diff**: desired (rendered from Git, with Argo's own normalizations and every
 `ignoreDifferences` rule applied — including jq rules Radar can't evaluate)
 vs live, per managed resource, as a full YAML line diff.
 
-Setup (Settings → Argo CD, or `PUT /api/integrations/argocd`):
+Setup (Settings → Argo CD; the API is `PUT /api/integrations/connections` in
+local CLI and Desktop, and `PUT /api/integrations/argocd` in Radar Cloud):
 
 1. Create a get-only local account in `argocd-cm` (`accounts.radar: apiKey`)
    and grant it `p, role:radar, applications, get, */*, allow` in

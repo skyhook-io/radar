@@ -71,14 +71,14 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 	if err != nil {
 		return pending, err
 	}
+	if !slices.Contains(config.IntegrationKinds, req.Kind) {
+		return pending, errors.New("unknown integration type")
+	}
 	if req.Action != "forget" && req.Revision != p.integrationRevision(file, req.Kind, target.Binding) {
 		return pending, config.ErrProfileConflict
 	}
 	if (req.Action == "copy" || req.Action == "forget") && req.SourceRevision != p.integrationRevision(file, req.Kind, req.Binding) {
 		return pending, config.ErrProfileConflict
-	}
-	if !slices.Contains(config.IntegrationKinds, req.Kind) {
-		return pending, errors.New("unknown integration type")
 	}
 	data, err := json.Marshal(file)
 	if err != nil {
@@ -287,7 +287,6 @@ func putSettings(file *config.ClusterProfiles, target k8s.ProfileTarget, kind co
 	profile.Context = target.Context
 	profile.Source = target.Source
 	profile.InFileName = target.InFileName
-	profile.CAPI = target.CAPI
 	if profile.Integrations == nil {
 		profile.Integrations = map[config.Integration]config.IntegrationSettings{}
 	}

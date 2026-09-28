@@ -767,6 +767,19 @@ func GetConfigSnapshot() (*rest.Config, string) {
 	return rest.CopyConfig(k8sConfig), activeClusterContextLocked()
 }
 
+// GetClusterClientSnapshot reads the active client, config, context name and
+// in-cluster mode together, so a concurrent context switch cannot pair one
+// cluster's API endpoint with another cluster's credentials.
+func GetClusterClientSnapshot() (kubernetes.Interface, *rest.Config, string, bool) {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	var client kubernetes.Interface
+	if k8sClient != nil {
+		client = k8sClient
+	}
+	return client, k8sConfig, contextName, isInClusterLocked()
+}
+
 // GetDiscoveryClient returns the K8s discovery client for API resource discovery
 func GetDiscoveryClient() *discovery.DiscoveryClient {
 	clientMu.RLock()

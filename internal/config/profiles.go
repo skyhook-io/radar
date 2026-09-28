@@ -24,14 +24,7 @@ type ClusterProfile struct {
 	Context      string                              `json:"context"`
 	Source       string                              `json:"source,omitempty"`
 	InFileName   string                              `json:"inFileName,omitempty"`
-	CAPI         *CAPIProfileReference               `json:"capi,omitempty"`
 	Integrations map[Integration]IntegrationSettings `json:"integrations"`
-}
-
-type CAPIProfileReference struct {
-	ManagementBinding string `json:"managementBinding"`
-	Namespace         string `json:"namespace"`
-	Name              string `json:"name"`
 }
 
 type ClusterProfiles struct {
@@ -75,10 +68,10 @@ func (s *ProfileStore) ReadSince(previous string) (ClusterProfiles, string, bool
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, 4*1024*1024+1))
 	if err != nil {
-		return result, "", false, err
+		return result, "", false, fmt.Errorf("cannot read cluster settings: %w", err)
 	}
 	if len(data) > 4*1024*1024 {
-		return result, "", false, errors.New("cluster settings exceed 4 MiB")
+		return result, "", false, fmt.Errorf("%s exceeds 4 MiB. Rename the file to start over without saved integration settings", s.Path)
 	}
 	revision := profileRevision(data)
 	if previous == revision {
@@ -100,7 +93,7 @@ func (s *ProfileStore) ReadSince(previous string) (ClusterProfiles, string, bool
 		return result, "", false, invalidProfileJSON(s.Path, err)
 	}
 	if err := result.ValidateStructure(); err != nil {
-		return result, "", false, err
+		return result, "", false, fmt.Errorf("%s is invalid: %v. Fix it, or rename the file to start over without saved integration settings", s.Path, err)
 	}
 	return result, revision, true, nil
 }

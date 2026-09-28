@@ -1316,7 +1316,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     },
     {
       id: 'argocd', icon: GitBranch, label: 'Argo CD',
-      tone: argo?.connected ? 'ok' : argo?.configured ? 'warn' : 'off',
+      tone: argo?.connected ? 'ok' : argo?.configured || argo?.reason ? 'warn' : 'off',
       // Configured-but-not-connected is often a permanently rejected/expired
       // token, not a transient reconnect — "Not reachable" matches Prometheus and
       // doesn't imply it will recover on its own.

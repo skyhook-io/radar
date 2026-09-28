@@ -153,7 +153,7 @@ func TestSavedConnectionRoutesRequireLocalInstallation(t *testing.T) {
 			read := httptest.NewRecorder()
 			s.handleLocalConnections(read, httptest.NewRequest(http.MethodGet, "/api/integrations/connections", nil))
 			target, _ := k8s.CurrentProfileTarget()
-			write := updateProfile(t, s, s.localConnections.Resolve(target, config.IntegrationMetrics, false).View, "apply", "http://replacement.example", nil)
+			write := updateProfile(t, s, s.localConnections.Resolve(target, config.IntegrationMetrics, false).View, "save", "http://replacement.example", nil)
 			if read.Code != http.StatusForbidden || write.Code != http.StatusForbidden {
 				t.Fatalf("read %d %s, write %d %s", read.Code, read.Body.String(), write.Code, write.Body.String())
 			}

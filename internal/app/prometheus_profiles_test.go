@@ -56,6 +56,24 @@ func TestPrepareLocalPrometheusConfiguration(t *testing.T) {
 	}
 }
 
+func TestLaunchOverridesWithoutContextDoNotStopStartup(t *testing.T) {
+	useTempHome(t)
+	t.Cleanup(k8s.SetTestLocalMode())
+	old := k8s.SetTestConfig(nil)
+	t.Cleanup(func() { k8s.SetTestConfig(old) })
+	t.Setenv(settings.OperatorFileEnv, "")
+	t.Cleanup(func() { settings.SetOperatorConfig(nil) })
+	t.Setenv("RADAR_ARGOCD_TOKEN", "launch-token")
+	t.Setenv("RADAR_KUBECOST_API_KEY", "launch-key")
+	got, err := preparePrometheusConfiguration(AppConfig{PrometheusURL: "https://launch", PrometheusURLFlag: true})
+	if err != nil {
+		t.Fatalf("startup must continue so the kubeconfig error is visible: %v", err)
+	}
+	if got.LocalConnections == nil || got.PrometheusURL != "" {
+		t.Fatalf("unbound override applied: url=%q profiles=%v", got.PrometheusURL, got.LocalConnections != nil)
+	}
+}
+
 func TestUnusableProfileDoesNotPreventStartupWithScope(t *testing.T) {
 	if scenario := os.Getenv("RADAR_PROFILE_STARTUP_CASE"); scenario != "" {
 		useTempHome(t)

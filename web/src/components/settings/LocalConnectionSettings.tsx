@@ -9,6 +9,7 @@ import {
   getAuthHeaders,
   getCredentialsMode
 } from '../../api/config'
+import { ApiError } from '../../api/client'
 import { PrometheusConnectionForm } from './PrometheusConnectionForm'
 import {
   ArgoCDConnectionForm,
@@ -329,8 +330,9 @@ export function LocalConnectionSettings({
       )
         throw new Error('Cluster changed; reload settings.')
       if (!response.ok)
-        throw new Error(
-          data.error || `Settings request failed (${response.status})`
+        throw new ApiError(
+          data.error || `Settings request failed (${response.status})`,
+          response.status
         )
       return data
     } finally {
@@ -412,6 +414,17 @@ export function LocalConnectionSettings({
     setMessage('')
     onDirtyChange(false)
   }
+  // A conflict needs the reload control, which the form's inline error lacks.
+  const saveFromForm = async (update: Update) => {
+    setError('')
+    try {
+      return await save(update)
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 409) throw e
+      if (mounted.current) setError(e.message)
+      return null
+    }
+  }
   const apply = async (draft: Omit<Update, 'action'>) => {
     const action = selected ? 'copy' : legacyDraft ? 'adopt' : task === 'replace' || discoveryDraft ? 'replace' : 'save'
     const credentialSource = selected ?? legacyDraft ?? profile
@@ -437,7 +450,7 @@ export function LocalConnectionSettings({
     }
     // The staged discovery notice already said what Save removes.
     if (automaticDraft && update.action === 'auto')
-      return save(hasSavedConfiguration ? { ...update, confirmRemoval: true } : update)
+      return saveFromForm(hasSavedConfiguration ? { ...update, confirmRemoval: true } : update)
     const removing =
       (!!profile.url && draft.url?.trim() === '') ||
       (hasSavedConfiguration && (action === 'replace' || action === 'copy')) ||
@@ -446,7 +459,7 @@ export function LocalConnectionSettings({
       confirm(update)
       return null
     }
-    return save(update)
+    return saveFromForm(update)
   }
   const setSecretDirty = useCallback(
     (value: boolean) => setCredentialDirty(value),
@@ -474,7 +487,7 @@ export function LocalConnectionSettings({
     openTask('replace')
   }
   const autoDiscoveryAction =
-    task === 'main' && ['auto', 'saved'].includes(profile.state) ? (
+    (task === 'main' && ['auto', 'saved'].includes(profile.state)) || task === 'replace' ? (
       <button
         type="button"
         disabled={!!pending || automaticDraft || (!dirty && !hasSavedConfiguration && profile.mode === 'auto')}
@@ -566,7 +579,7 @@ export function LocalConnectionSettings({
         : removedByDiscovery[0]
       : 'settings'
   }. Other clusters are unchanged.`
-  const showFeedback = discoveryDraft ? hasSavedConfiguration : !!(
+  const showFeedback = discoveryDraft ? automaticDraft && hasSavedConfiguration : !!(
     message &&
     task === 'main' &&
     messageRevision === profile.revision &&
@@ -715,7 +728,7 @@ export function LocalConnectionSettings({
                   Reload latest settings
                 </button>
               )}
-              {profile.url && (
+              {hasSavedConfiguration && (
                 <button
                   type="button"
                   className="block text-xs text-accent-text"
@@ -768,7 +781,9 @@ export function LocalConnectionSettings({
                 </button>
                 <button
                   type="button"
-                  className="text-xs text-theme-text-secondary"
+                  disabled={dirty}
+                  title={dirty ? 'Save or discard your changes first' : undefined}
+                  className="text-xs text-theme-text-secondary disabled:opacity-50 disabled:cursor-not-allowed"
                   onClick={() => void act({ action: 'dismiss_legacy' })}
                 >
                   Dismiss for this cluster

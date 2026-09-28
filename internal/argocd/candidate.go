@@ -9,10 +9,6 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-func ProbeCandidate(ctx context.Context, connection argoapi.Connection) error {
-	return PrepareCandidate(connection)(ctx)
-}
-
 func PrepareCandidate(connection argoapi.Connection) func(context.Context) error {
 	m := NewManager()
 	client, cfg := k8s.GetClientInterface(), k8s.GetConfig()

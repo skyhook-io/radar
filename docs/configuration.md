@@ -350,10 +350,11 @@ retained credential, including after copying. Plain HTTP is supported but
 does not encrypt credentials in transit; use HTTPS outside trusted local paths.
 
 **Connection checks:** Metrics saves first and then tests reachability; an
-unreachable backend remains saved with a warning. Argo CD changes, Kubecost mode,
-and Auto-detect with any Kubecost override (URL, API key or cluster ID) test an
-isolated candidate before saving; a failed test blocks the save and leaves the
-previous connection active. Auto-detect with no Kubecost overrides, or
+unreachable backend remains saved with a warning. Saving an Argo CD endpoint or
+token, Kubecost mode, or Auto-detect with any Kubecost override (URL, API key or
+cluster ID) tests an isolated candidate first; a failed test blocks the save and
+leaves the previous connection active. Switching to auto-discovery and confirming
+a changed cluster save without a test. Auto-detect with no Kubecost overrides, or
 Prometheus-based cost mode, saves that preference without claiming a
 successful backend test. Explicit Kubecost connections check this cluster's
 mapping and data readiness; cost queries require a narrow cluster filter. Central Argo connectivity does not add cross-cluster resource

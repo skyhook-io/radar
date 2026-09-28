@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 
@@ -130,8 +131,22 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		err = probe(ctx)
 		cancel()
 		if err != nil {
-			log.Printf("[connections] %s candidate check failed: %s", request.Kind, sanitizeForLog(prom.RedactURLs(err.Error())))
+			// Backends and proxies can echo the rejected credential in their error body.
+			detail := prom.RedactURLs(err.Error())
+			secret := ""
+			if c := pending.Candidate.Settings.ArgoCD; c != nil {
+				secret = c.Token
+			} else if c := pending.Candidate.Settings.Kubecost; c != nil {
+				secret = c.APIKey
+			}
+			if secret != "" {
+				detail = strings.ReplaceAll(detail, secret, "<redacted>")
+			}
+			log.Printf("[connections] %s candidate check failed: %s", request.Kind, sanitizeForLog(detail))
 			message := "Argo CD connection check failed; check its URL, network access and TLS settings. The previous connection is unchanged"
+			if request.Kind == config.IntegrationArgoCD && pending.Candidate.Settings.ArgoCD.URL == "" {
+				message = "Argo CD connection check failed; Radar could not find or reach argocd-server in this cluster. Check that it is installed and that your kubeconfig user can port-forward to it, or enter its URL. The previous connection is unchanged"
+			}
 			if request.Kind == config.IntegrationCost {
 				message = kubecostConnectionGuidance(err, pending.Candidate.Settings.Kubecost.APIKey != "")
 			}

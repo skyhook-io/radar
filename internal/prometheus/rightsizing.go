@@ -222,7 +222,7 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 func RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (RightsizingResponse, error) {
 	client, connectionErr := ClientForOperation()
 	if connectionErr != nil {
-		return RightsizingResponse{}, fmt.Errorf("%w: %v", ErrPrometheusUnavailable, connectionErr)
+		return RightsizingResponse{}, connectionErr
 	}
 	if !IsRightsizingKind(kind) {
 		return RightsizingResponse{}, ErrRightsizingKindUnsupported

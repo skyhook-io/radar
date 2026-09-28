@@ -15,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/internal/opencost"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/traffic"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 type Runtime struct {
@@ -67,8 +68,9 @@ func (r *Runtime) Refresh(kind config.Integration) error {
 	return nil
 }
 
-// Callers hold the cluster configuration lock or run before the cluster is
-// initialized. Apply never probes a remote integration.
+// Apply never probes a remote integration. A caller without the cluster
+// configuration lock can race a switch; Refresh re-resolves the current target
+// before any integration is used, so a stale activation is not acted on.
 func (r *Runtime) Apply(target k8s.ProfileTarget, details bool) map[config.Integration]connections.Selection {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -103,6 +105,9 @@ func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integra
 		s := selected[kind]
 		if !r.changed(target, kind, s) {
 			continue
+		}
+		if s.Err != nil {
+			log.Printf("[connections] %s disabled for context %q: %s", kind, k8s.SanitizeForLog(target.Context), k8s.SanitizeForLog(prom.RedactURLs(s.Err.Error())))
 		}
 		switch kind {
 		case config.IntegrationMetrics:

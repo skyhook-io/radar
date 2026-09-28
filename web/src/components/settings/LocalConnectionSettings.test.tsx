@@ -145,6 +145,17 @@ describe('Local saved connections', () => {
     expect(html).toContain('Review changes')
     expect(html).not.toContain('Save changes')
   })
+  it.each(['argocd', 'cost'] as const)(
+    'lets paused discovery credentials be replaced without accepting them for %s',
+    (kind) => {
+      const html = render(
+        { state: 'target_changed', url: '', secretSet: true, error: 'The cluster behind this context changed' },
+        kind
+      )
+      expect(html).toContain('Review changes')
+      expect(html).toContain('Use a different connection')
+    }
+  )
   it.each(['metrics', 'argocd', 'cost'] as const)(
     'offers contextual recovery rather than overwriting a malformed file for %s',
     (kind) => {
