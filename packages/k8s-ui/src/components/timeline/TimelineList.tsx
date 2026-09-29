@@ -859,10 +859,17 @@ function describeFolded(others: TimelineEvent[]): string {
 // under its newest card, so a crash-looping pod doesn't fill the list.
 function FoldedProblems({ latest, others, selectedEventId, renderCard }: { latest: TimelineEvent; others: TimelineEvent[]; selectedEventId?: string | null; renderCard: (item: TimelineEvent) => ReactNode }) {
   // A selection made elsewhere (the swimlane) opens the fold so it can land on a
-  // folded row; a click always wins, and a new selection hands control back.
+  // folded row, and a click always wins. A new selection inside the fold hands
+  // control back; it is applied during render, not in an effect, so the fold is
+  // already open on the render that scrolls to the selected row.
+  const selectedInside = !!selectedEventId && others.some((e) => e.id === selectedEventId)
   const [userOpen, setOpen] = useState<boolean | null>(null)
-  useEffect(() => setOpen(null), [selectedEventId])
-  const open = userOpen ?? (!!selectedEventId && others.some((e) => e.id === selectedEventId))
+  const [seenSelection, setSeenSelection] = useState(selectedEventId)
+  if (seenSelection !== selectedEventId) {
+    setSeenSelection(selectedEventId)
+    if (selectedInside) setOpen(null)
+  }
+  const open = userOpen ?? selectedInside
   return (
     <div className="pl-3">
       <button
