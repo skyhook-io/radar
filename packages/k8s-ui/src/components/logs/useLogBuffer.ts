@@ -1,7 +1,9 @@
 import { useState, useRef, useCallback } from 'react'
 import { isLogfmt } from '../../utils/log-format'
+import { detectLevel, type LevelSource, type LogLevel } from '../../utils/log-level'
 
-export type LogLevel = 'error' | 'warn' | 'info' | 'debug' | 'unknown'
+export type { LevelSource, LogLevel }
+export { detectLogLevel } from '../../utils/log-level'
 
 export interface LogEntry {
   sourceLabel?: string
@@ -17,54 +19,19 @@ export interface LogEntry {
    */
   podColorIndex?: number
   level: LogLevel
+  levelSource: LevelSource
   isJson: boolean
   isLogfmt: boolean
 }
 
 const MAX_BUFFER_SIZE = 10_000
 
-/**
- * Detect log level from content using word-boundary matching.
- * For JSON logs, prefer the `level`, `severity`, or `lvl` field.
- */
-export function detectLogLevel(content: string): LogLevel {
-  // Fast path for JSON: check level/severity field
-  const trimmed = content.trimStart()
-  if (trimmed[0] === '{') {
-    try {
-      const obj = JSON.parse(trimmed)
-      const rawLevel = obj.level ?? obj.severity ?? obj.lvl ?? ''
-      // Numeric levels (pino/bunyan): 10=trace, 20=debug, 30=info, 40=warn, 50=error, 60=fatal
-      if (typeof rawLevel === 'number') {
-        if (rawLevel >= 50) return 'error'
-        if (rawLevel >= 40) return 'warn'
-        if (rawLevel >= 30) return 'info'
-        return 'debug'
-      }
-      const lvl = String(rawLevel).toLowerCase()
-      if (/^(error|err|fatal|panic|critical|crit)$/.test(lvl)) return 'error'
-      if (/^(warn|warning)$/.test(lvl)) return 'warn'
-      if (/^(info|information|notice)$/.test(lvl)) return 'info'
-      if (/^(debug|trace|verbose)$/.test(lvl)) return 'debug'
-    } catch {
-      // Not valid JSON, fall through to text matching
-    }
-  }
-
-  const lower = content.toLowerCase()
-  if (/\b(error|fatal|panic|critical|crit|exception)\b/.test(lower)) return 'error'
-  if (/\b(warn|warning)\b/.test(lower)) return 'warn'
-  if (/\b(debug|trace)\b/.test(lower)) return 'debug'
-  if (/\b(info)\b/.test(lower)) return 'info'
-  return 'unknown'
-}
-
 function isJsonContent(content: string): boolean {
   const trimmed = content.trimStart()
   return trimmed[0] === '{' && trimmed[trimmed.length - 1] === '}'
 }
 
-type RawLogEntry = Omit<LogEntry, 'id' | 'level' | 'isJson' | 'isLogfmt'>
+type RawLogEntry = Omit<LogEntry, 'id' | 'level' | 'levelSource' | 'isJson' | 'isLogfmt'>
 
 interface UseLogBufferReturn {
   entries: LogEntry[]
@@ -82,10 +49,12 @@ export function useLogBuffer(): UseLogBufferReturn {
 
   const enrichEntry = useCallback((raw: RawLogEntry): LogEntry => {
     const isJ = isJsonContent(raw.content)
+    const detected = detectLevel(raw.content)
     return {
       ...raw,
       id: idCounter.current++,
-      level: detectLogLevel(raw.content),
+      level: detected.level,
+      levelSource: detected.source,
       isJson: isJ,
       isLogfmt: !isJ && isLogfmt(raw.content),
     }
