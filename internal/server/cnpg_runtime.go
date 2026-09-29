@@ -308,6 +308,8 @@ type CNPGPoolerPool struct {
 	SvIdle         *float64 `json:"svIdle,omitempty"`
 	SvUsed         *float64 `json:"svUsed,omitempty"`
 	MaxwaitSeconds *float64 `json:"maxwaitSeconds,omitempty"`
+	// PoolMode is the mode PgBouncer reports it is using for this pool.
+	PoolMode string `json:"poolMode,omitempty"`
 }
 
 // authorizeCNPGRuntime gates like the logs endpoint — namespace, the owning
@@ -1418,6 +1420,9 @@ func withCNPGSlotRetention(facts *CNPGInstanceStatusFacts, retained []CNPGSlotBy
 	return &out
 }
 
+// The exporter encodes pool_mode as 1 session, 2 transaction, 3 statement.
+var cnpgPgBouncerPoolModes = map[int]string{1: "session", 2: "transaction", 3: "statement"}
+
 func cnpgPoolerFacts(samples map[string][]cnpgSample) (*CNPGPoolerPodFacts, string) {
 	type key struct{ db, user string }
 	pools := map[key]*CNPGPoolerPool{}
@@ -1454,6 +1459,11 @@ func cnpgPoolerFacts(samples map[string][]cnpgSample) (*CNPGPoolerPodFacts, stri
 		if p := pool(s.labels); p != nil && p.MaxwaitSeconds != nil {
 			secs := *p.MaxwaitSeconds + s.value/1e6
 			p.MaxwaitSeconds = &secs
+		}
+	}
+	for _, s := range samples["cnpg_pgbouncer_pools_pool_mode"] {
+		if p := pool(s.labels); p != nil {
+			p.PoolMode = cnpgPgBouncerPoolModes[int(s.value)]
 		}
 	}
 	out := make([]CNPGPoolerPool, 0, len(pools))

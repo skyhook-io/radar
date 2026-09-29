@@ -200,6 +200,39 @@ describe('CNPGPoolerSummary', () => {
     expect(t).toContain('Not measured')
     expect(t).toContain('main-rw')
   })
+
+  it('shows Deployment readiness, limits with PgBouncer defaults, observed pause and the Service path when live data is provided', () => {
+    const pooler = {
+      apiVersion: PG,
+      kind: 'Pooler',
+      metadata: { name: 'main-rw', namespace: 'pg' },
+      spec: { cluster: { name: 'main' }, type: 'rw', instances: 2, pgbouncer: { paused: true, parameters: { max_client_conn: '200' } } },
+      status: { instances: 2 },
+    }
+    const t = text(
+      renderToString(
+        <CNPGPoolerSummary
+          resource={pooler}
+          workspace={ws({})}
+          onNavigate={nav}
+          live={{
+            deployment: { name: 'main-rw', state: 'ok', replicas: 2, readyReplicas: 1 },
+            service: { name: 'main-rw', state: 'ok', type: 'ClusterIP', port: 5432 },
+            pressure: { state: 'ok', pods: [{ pod: 'a', state: 'ok', pools: [{ database: 'app', user: 'app', clActive: 4, clWaiting: 2 }] }] },
+            observed: { state: 'ok', pods: [{ pod: 'a', state: 'ok', paused: true }, { pod: 'b', state: 'ok', paused: false }] },
+          }}
+        />,
+      ),
+    )
+    expect(t).toContain('from Deployment main-rw')
+    expect(t).toContain('Requested: paused')
+    expect(t).toContain('Observed: Paused on 1 of 2 PgBouncers')
+    expect(t).toContain('PgBouncer uses 20')
+    expect(t).toContain('200')
+    expect(t).toContain('main-rw')
+    expect(t).toContain('app/app')
+    expect(t).not.toContain('Not measured')
+  })
 })
 
 describe('CNPGImageCatalogSummary', () => {

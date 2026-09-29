@@ -151,8 +151,8 @@ export interface CNPGClusterCapabilities {
   resourceVersion: string
   context: string
   facts: CNPGClusterFacts
-  actions: Record<CNPGClusterActionName, CNPGActionCapability>
-  instanceActions: Record<string, { restart: CNPGActionCapability; switchoverTarget: CNPGActionCapability; fence: CNPGActionCapability; unfence: CNPGActionCapability }>
+  actions: Record<CNPGClusterActionName, CNPGActionCapability> & { psql: CNPGActionCapability; destroyInstance: CNPGActionCapability }
+  instanceActions: Record<string, { restart: CNPGActionCapability; switchoverTarget: CNPGActionCapability; fence: CNPGActionCapability; unfence: CNPGActionCapability; psql: CNPGActionCapability; destroy: CNPGActionCapability }>
   restartPlan?: {
     primaryUpdateStrategy?: string
     primaryUpdateMethod?: string
@@ -195,7 +195,7 @@ export interface CNPGScheduleCapabilities {
   actions: Record<CNPGScheduleActionName, CNPGActionCapability>
 }
 
-function cnpgPath(kind: 'clusters' | 'scheduledbackups', namespace: string, name: string) {
+function cnpgPath(kind: 'clusters' | 'scheduledbackups' | 'poolers', namespace: string, name: string) {
   return `/cnpg/${kind}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`
 }
 
@@ -232,11 +232,13 @@ export interface CNPGActionResult {
   backup?: string
   resolvedAfterTimeout?: boolean
   catchUp?: boolean
+  /** What the action acted on, for following its outcome. */
+  target?: { pod?: string; podUID?: string; pid?: number; backendStart?: string; keepPVC?: boolean; pvcs?: { name: string; uid: string }[]; jobs?: string[]; paused?: boolean; generation?: number }
 }
 
 // Errors stay with the dialog (shown inline so the user can adjust and retry);
 // only success goes to the global toast.
-export function useCNPGAction(kind: 'clusters' | 'scheduledbackups', namespace: string, name: string) {
+export function useCNPGAction(kind: 'clusters' | 'scheduledbackups' | 'poolers', namespace: string, name: string) {
   const queryClient = useQueryClient()
   return useMutation<CNPGActionResult, Error, { action: string; request: CNPGActionRequest; successMessage: string }>({
     mutationFn: ({ action, request }) =>
@@ -349,7 +351,7 @@ export interface CNPGPoolerRuntimeResponse {
     error?: string
     reason?: string
     missing?: string[]
-    pools?: { database: string; user: string; clActive?: number; clWaiting?: number; svActive?: number; svIdle?: number; svUsed?: number; maxwaitSeconds?: number }[]
+    pools?: { database: string; user: string; clActive?: number; clWaiting?: number; svActive?: number; svIdle?: number; svUsed?: number; maxwaitSeconds?: number; poolMode?: string }[]
   }[]
 }
 

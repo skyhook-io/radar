@@ -6,9 +6,12 @@ import {
   getCNPGPoolerStatus,
   getCNPGPoolerType,
   isApiGroup,
+  isCNPGPoolerPaused,
+  poolerReadiness,
   type HealthLevel,
 } from '@skyhook-io/k8s-ui'
 import { useCNPGPoolerRuntime } from '../../api/cnpg'
+import { useCNPGPoolerCapabilities } from '../../api/cnpg-sessions'
 import {
   CNPGWorkspaceHeader,
   CoverageNotice,
@@ -76,21 +79,9 @@ export function CNPGPooling({ data, fleet, namespaces, searchParams, onSetParams
             { header: 'Type', width: '8%', cell: (p) => <Mono>{getCNPGPoolerType(p)}</Mono> },
             { header: 'Mode', width: '12%', cell: (p) => getCNPGPoolerMode(p) },
             {
-              header: 'Instances',
-              width: '10%',
-              cell: (p) => (
-                <span className="font-mono">
-                  {typeof p.status?.instances === 'number' ? p.status.instances : '–'}/{typeof p.spec?.instances === 'number' ? p.spec.instances : '–'}
-                </span>
-              ),
-            },
-            {
-              header: 'Status',
-              width: '14%',
-              cell: (p) => {
-                const st = getCNPGPoolerStatus(p)
-                return <Badge severity={SEVERITY[st.level]} size="sm">{st.text}</Badge>
-              },
+              header: 'Readiness',
+              width: '24%',
+              cell: (p) => <PoolerReadiness pooler={p} />,
             },
             {
               header: 'Connection pressure',
@@ -105,10 +96,36 @@ export function CNPGPooling({ data, fleet, namespaces, searchParams, onSetParams
           inspected={inspected}
           minWidth={880}
           empty={coverageEmpty(data.coverage.poolers, 'Poolers')}
-          footer="Instances are the Pooler’s own count. Pressure is read live from each PgBouncer's metrics through the Kubernetes API proxy."
+          footer="Readiness is the Pooler’s Deployment (the Pooler itself only counts scheduled Pods). Pressure is read live from each PgBouncer's metrics through the Kubernetes API proxy."
         />
       </ScreenBody>
     </div>
+  )
+}
+
+function PoolerReadiness({ pooler }: { pooler: any }) {
+  const namespace = pooler.metadata?.namespace
+  const name = pooler.metadata?.name
+  const caps = useCNPGPoolerCapabilities(namespace, name)
+  const paused = isCNPGPoolerPaused(pooler)
+  if (!caps.data) {
+    const st = getCNPGPoolerStatus(pooler)
+    return (
+      <>
+        <Badge severity={SEVERITY[st.level]} size="sm">{st.text}</Badge>
+        <Sub>{caps.isLoading ? 'reading Deployment…' : 'Pooler status only; its Deployment was not read'}</Sub>
+      </>
+    )
+  }
+  const r = poolerReadiness(caps.data.facts.deployment)
+  return (
+    <>
+      <span className="inline-flex flex-wrap items-center gap-1">
+        <Badge severity={SEVERITY[r.level]} size="sm">{r.text}</Badge>
+        {paused && <Badge severity="warning" size="sm">Paused (requested)</Badge>}
+      </span>
+      <Sub>{r.detail}</Sub>
+    </>
   )
 }
 

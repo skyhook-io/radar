@@ -7,6 +7,7 @@ import { Notice } from '../capacity/shared'
 import { Segments } from './shared'
 import { CNPGInstanceActions } from './actions/CNPGInstanceActions'
 import { CNPGStorage } from './CNPGStorage'
+import { CNPGBlockingSessions } from './CNPGBlockingSessions'
 
 type Section = 'replication' | 'sessions' | 'transactions' | 'storage' | 'slots' | 'trends'
 
@@ -153,7 +154,7 @@ export function CNPGClusterRuntime({ namespace, name, onOpenLogs }: { namespace:
       {section === 'replication' && (
         <ReplicationView namespace={namespace} cluster={name} primary={primary} replicas={replicas} onOpenLogs={onOpenLogs} />
       )}
-      {section === 'sessions' && <SessionsView primary={primary} />}
+      {section === 'sessions' && <SessionsView namespace={namespace} cluster={name} primary={primary} />}
       {section === 'transactions' && <TransactionsView primary={primary} samples={samples} />}
       {section === 'storage' && <StorageView namespace={namespace} name={name} instances={data.instances} />}
       {section === 'slots' && <SlotsView primary={primary} />}
@@ -260,7 +261,16 @@ function Unavailable({ inst, what }: { inst?: CNPGRuntimeInstance; what: string 
   return <SourceState label={what} state={inst.metrics.state} error={inst.metrics.error} />
 }
 
-function SessionsView({ primary }: { primary?: CNPGRuntimeInstance }) {
+function SessionsView({ namespace, cluster, primary }: { namespace: string; cluster: string; primary?: CNPGRuntimeInstance }) {
+  return (
+    <div className="space-y-4">
+      <SessionAggregates primary={primary} />
+      <CNPGBlockingSessions namespace={namespace} cluster={cluster} primary={primary?.pod} />
+    </div>
+  )
+}
+
+function SessionAggregates({ primary }: { primary?: CNPGRuntimeInstance }) {
   const m = primary?.metrics
   if (!m || m.state !== 'ok') return <Card title="Sessions"><Unavailable inst={primary} what="Sessions" /></Card>
   const rows = [...(m.sessions ?? [])].sort((a, b) => b.count - a.count)
@@ -268,7 +278,7 @@ function SessionsView({ primary }: { primary?: CNPGRuntimeInstance }) {
   return (
     <Card
       title={<>Sessions on {primary!.pod}</>}
-      footer="Counts by state, database, user and application from the metrics exporter (platform users excluded). Individual sessions and query text are not shown; query text appears in Logs when PostgreSQL logs it."
+      footer="Counts by state, database, user and application from the metrics exporter (platform users excluded). Individual blocking sessions, with their query text, are below when you can exec into the instance."
     >
       <div className="mb-3 flex flex-wrap gap-6 text-sm">
         <Metric label="Connections" value={m.sessionsTotal !== undefined ? `${m.sessionsTotal}${m.maxConnections ? ` / ${m.maxConnections}` : ''}` : '—'} tone={m.maxConnections && m.sessionsTotal && m.sessionsTotal / m.maxConnections > 0.85 ? 'degraded' : undefined} />
