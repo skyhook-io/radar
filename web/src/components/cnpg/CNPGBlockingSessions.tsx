@@ -223,7 +223,7 @@ function SessionRow({ node, depth, namespace, cluster, data }: { node: BlockingN
         <span className="ml-auto flex gap-3 text-xs">
           <Tooltip content="pg_cancel_backend: stops the statement it is running now. An idle-in-transaction session is running nothing, so it keeps its locks.">
             <button type="button" className="text-accent-text hover:underline" onClick={() => setSignal('cancelBackend')}>
-              Cancel query
+              Stop query
             </button>
           </Tooltip>
           <Tooltip content="pg_terminate_backend: ends the session and rolls back its open transaction.">
@@ -328,7 +328,7 @@ function SignalDialog({
         },
       ]}
       typedConfirmation={terminate ? String(session.pid) : undefined}
-      confirmLabel={terminate ? 'Terminate backend' : 'Cancel query'}
+      confirmLabel={terminate ? 'Terminate backend' : 'Stop query'}
       disruptive={terminate}
       disabledReason={!caps.data ? 'Reading the cluster…' : data.permission.exec === 'denied' ? `Needs ${data.permission.grant}` : undefined}
       isLoading={mutation.isPending}
