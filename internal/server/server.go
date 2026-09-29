@@ -100,6 +100,7 @@ type Server struct {
 	authConfig              auth.Config
 	permCache               *auth.PermissionCache
 	oidcHandler             *auth.OIDCHandler
+	mcpOAuth                *auth.MCPOAuthServer
 	saveFileFunc            func(defaultFilename string, data []byte) (string, error)
 	saveFileStreamFunc      func(defaultFilename string, r io.Reader) (string, error)
 	// newExecutor builds the exec client for pod file transfers. Nil in
@@ -199,7 +200,8 @@ type Config struct {
 	OpenCostCurrency        string      // ISO 4217 code labeling values returned by OpenCost endpoints
 	OpenCostManaged         bool        // true when an explicit CLI/Helm flag owns the running value
 	AuthConfig              auth.Config // Authentication configuration
-	AIHistoryDB             string      // AI run-history SQLite path ("" = memory-only runs)
+	MCPOAuthEnabled         bool
+	AIHistoryDB             string // AI run-history SQLite path ("" = memory-only runs)
 	CloudConnect            CloudConnectConfig
 }
 
@@ -366,6 +368,21 @@ func New(cfg Config) *Server {
 
 	}
 
+	if cfg.MCPOAuthEnabled {
+		if s.authConfig.Mode != "oidc" || cloudMode() || cfg.CloudConnect.CloudTunnelConfigured || s.mcpHandler == nil {
+			log.Fatal("[auth] MCP OAuth requires OIDC authentication and MCP enabled in a standalone deployment")
+		}
+		resources := []string{"/mcp"}
+		if s.mcpReadOnlyHandler != nil {
+			resources = append(resources, "/mcp-readonly")
+		}
+		s.mcpOAuth, err = auth.NewMCPOAuthServer(s.authConfig, basePath, resources)
+		if err != nil {
+			log.Fatalf("[auth] MCP OAuth initialization failed: %v", err)
+		}
+		s.oidcHandler.SetMCPOAuthServer(s.mcpOAuth)
+	}
+
 	// Set up static file system
 	if !cfg.DevMode && cfg.StaticRoot != "" {
 		subFS, err := fs.Sub(cfg.StaticFS, cfg.StaticRoot)
@@ -380,6 +397,9 @@ func New(cfg Config) *Server {
 
 func (s *Server) setupRoutes() {
 	if s.basePath != "" {
+		if s.mcpOAuth != nil {
+			s.mountMCPOAuthMetadata(s.router, s.basePath)
+		}
 		appRouter := chi.NewRouter()
 		s.setupAppRoutes(appRouter)
 		s.router.Get("/", func(w http.ResponseWriter, r *http.Request) {
@@ -467,10 +487,18 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 	// Auth middleware (when auth is enabled)
 	if s.authConfig.Enabled() {
-		r.Use(auth.Authenticate(s.authConfig))
+		r.Use(s.authenticate)
 	}
 
 	// Auth routes
+	if s.mcpOAuth != nil {
+		s.mountMCPOAuthMetadata(r, "")
+		r.Get("/auth/mcp/authorize", s.mcpOAuth.HandleAuthorize)
+		r.Post("/auth/mcp/authorize", s.mcpOAuth.HandleAuthorize)
+		r.Post("/auth/mcp/register", s.mcpOAuth.HandleRegister)
+		r.Post("/auth/mcp/token", s.mcpOAuth.HandleToken)
+		r.Post("/auth/mcp/revoke", s.mcpOAuth.HandleRevoke)
+	}
 	if s.oidcHandler != nil {
 		r.Get("/auth/login", s.oidcHandler.HandleLogin)
 		r.Get("/auth/callback", s.oidcHandler.HandleCallback)
@@ -916,8 +944,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	// claude-code parses as a broken OAuth flow and aborts MCP registration.
 	// Radar's MCP server is unauthenticated when run locally; signal that
 	// cleanly with a 404 so clients proceed without an auth handshake.
-	r.Get("/.well-known/oauth-protected-resource", http.NotFound)
-	r.Get("/.well-known/oauth-authorization-server", http.NotFound)
+	if s.mcpOAuth == nil {
+		r.Get("/.well-known/oauth-protected-resource", http.NotFound)
+		r.Get("/.well-known/oauth-authorization-server", http.NotFound)
+	}
 
 	// Static files (frontend) - index.html fallback for client-side routes.
 	if s.staticFS != nil {

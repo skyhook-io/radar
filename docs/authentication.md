@@ -223,6 +223,14 @@ auth:
 
 When using `caCert` in Kubernetes, mount the CA certificate into the pod via a ConfigMap or Secret volume.
 
+### MCP clients with OIDC
+
+Enable `--mcp-oauth` (Helm: `mcp.oauth.enabled: true`) to let compatible remote MCP clients authenticate through Radar's existing OIDC browser login. Radar acts as the MCP authorization server: it supports discovery, public client registration, authorization code flow with mandatory S256 PKCE, explicit browser consent, and access/refresh tokens bound to the requested MCP endpoint. The identity provider's tokens remain inside Radar; MCP clients receive separate Radar credentials and use the same per-user Kubernetes RBAC boundary.
+
+This option requires standalone OIDC mode, MCP enabled, exactly one replica, and an HTTPS `auth.oidc.redirectURL` whose path is `{basePath}/auth/callback`. It is unavailable in proxy, unauthenticated or Radar Cloud modes. Existing browser-session authentication continues to work.
+
+MCP access tokens last 10 minutes; refresh tokens rotate with an absolute 24-hour grant limit. OAuth state is held in memory, so pod restarts require client re-registration and authorization even when `auth.existingSecret` preserves browser sessions. The chart uses `Recreate` rollouts when this option is enabled. See [Remote MCP authentication](mcp.md#remote-authentication-with-oidc) for deployment, client setup, discovery checks and ingress requirements.
+
 ### Radar Cloud mode
 
 If you see `RADAR_CLOUD_MODE` or `cloud.*` values in the chart, they control a specialized deployment mode used by [Radar Cloud](https://radarhq.io) — a hosted SaaS that lets a single Cloud frontend manage many in-cluster Radar instances over an outbound tunnel. You don't need to use it to run Radar standalone; leave `cloud.enabled: false` (the default).

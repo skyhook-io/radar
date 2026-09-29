@@ -158,6 +158,7 @@ func main() {
 	noMCP := flag.Bool("no-mcp", !fileCfg.MCPEnabledOr(true), "Disable MCP (Model Context Protocol) server for AI tools")
 	mcpCatalogStdio := flag.Bool("mcp-catalog-stdio", false, "Start only the MCP catalog over stdio for registry/inspector introspection; skips Kubernetes initialization")
 	mcpCatalogOnly := flag.Bool("mcp-catalog-only", false, "Start only the MCP endpoint for registry/inspector catalog introspection; skips Kubernetes initialization")
+	mcpOAuth := flag.Bool("mcp-oauth", false, "Enable OAuth for remote MCP clients (OIDC mode, single replica only)")
 	// Auth flags
 	authMode := flag.String("auth-mode", "none", "Authentication mode: none, proxy, or oidc")
 	authSecret := flag.String("auth-secret", "", "HMAC secret key for session cookies (auto-generated if empty)")
@@ -349,6 +350,9 @@ func main() {
 		*kubeconfig, *kubeconfigDir, kubeconfigFlagSet, kubeconfigDirsFlagSet,
 	)
 	mcpEnabled := !*noMCP
+	if *mcpOAuth && (!mcpEnabled || *authMode != "oidc" || *cloudURL != "" || cloud.Mode() || *mcpCatalogOnly || *mcpCatalogStdio) {
+		log.Fatal("--mcp-oauth requires OIDC authentication and MCP enabled in a standalone deployment")
+	}
 	if *mcpCatalogOnly || *mcpCatalogStdio {
 		mcpEnabled = true
 	}
@@ -406,6 +410,7 @@ func main() {
 		BeylaJobSelector:         *beylaJobSelector,
 		WorkloadMetricsScope:     prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels},
 		MCPEnabled:               mcpEnabled,
+		MCPOAuthEnabled:          *mcpOAuth,
 		AIHistory:                *aiHistory,
 		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,
 		Version:                  version,

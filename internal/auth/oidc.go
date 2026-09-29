@@ -36,6 +36,7 @@ type OIDCHandler struct {
 	httpClient         *http.Client          // custom TLS client for OIDC provider calls; nil = default
 	revoker            *MemoryRevoker        // session revocation store; nil = backchannel logout disabled
 	pkceEnabled        bool                  // opt-in PKCE (S256) for the authorization-code flow
+	mcpOAuth           *MCPOAuthServer
 
 	// basePath is the URL prefix Radar serves under ("" at the root). Where Radar
 	// is mounted is the server's concern, not part of the shared auth config, but
@@ -445,6 +446,7 @@ func (h *OIDCHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	state := hex.EncodeToString(b)
 
 	http.SetCookie(w, h.newFlowCookie(oidcStateCookieName, state, r))
+	h.setMCPReturnCookie(w, r, state)
 
 	// If the user just logged out, force the IdP to show a login prompt instead
 	// of silently re-authenticating with an existing SSO session.
@@ -490,6 +492,8 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid state parameter", http.StatusBadRequest)
 		return
 	}
+	returnTo := h.mcpReturnTarget(r, stateCookie.Value)
+	http.SetCookie(w, h.clearFlowCookie(oidcMCPReturnCookieName, r))
 
 	// Read the PKCE verifier before clearing it. When PKCE is disabled this stays
 	// empty and the flow is byte-for-byte identical to the non-PKCE path.
@@ -647,10 +651,7 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[oidc] User %s authenticated (groups: %v)", username, groups)
 
-	// Redirect to the app root under its base path. A bare "/" would leave the
-	// user outside Radar on a subpath deployment, where the ingress routes only
-	// the prefix to this service.
-	http.Redirect(w, r, h.basePath+"/", http.StatusFound)
+	http.Redirect(w, r, returnTo, http.StatusFound)
 }
 
 // sessionIssued reports whether a CreateSessionCookie result actually
@@ -674,6 +675,9 @@ func (h *OIDCHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	var idToken string
 	if session := ParseSessionCookie(r, h.cfg.Secret); session != nil {
 		idToken = session.IDToken
+		if h.mcpOAuth != nil {
+			h.mcpOAuth.RevokeSession(session.SID)
+		}
 	}
 
 	for _, c := range ClearSessionCookie(r) {
@@ -725,6 +729,12 @@ func (h *OIDCHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 // Must be called before the handler is registered if backchannel logout is enabled.
 func (h *OIDCHandler) SetRevoker(r *MemoryRevoker) {
 	h.revoker = r
+}
+
+// SetMCPOAuthServer connects browser and provider logout to MCP grant revocation.
+// Call before serving requests.
+func (h *OIDCHandler) SetMCPOAuthServer(s *MCPOAuthServer) {
+	h.mcpOAuth = s
 }
 
 // backchannelLogoutEventURI is the OIDC event type that must appear in the
@@ -833,6 +843,9 @@ func (h *OIDCHandler) HandleBackchannelLogout(w http.ResponseWriter, r *http.Req
 	revocationExpiry := time.Now().Add(h.cfg.CookieTTL)
 	if sid != "" {
 		h.revoker.Revoke(sid, revocationExpiry)
+		if h.mcpOAuth != nil {
+			h.mcpOAuth.RevokeSession(sid)
+		}
 		log.Printf("[oidc] Backchannel logout: revoked sid=%s (sub=%s, jti=%s)", sid, sub, jti)
 	} else {
 		// sub-only: we can't do targeted revocation (our store is sid-keyed).

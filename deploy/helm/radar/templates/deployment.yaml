@@ -1,3 +1,17 @@
+{{- if .Values.mcp.oauth.enabled }}
+{{- if not .Values.mcp.enabled }}
+{{- fail "mcp.oauth.enabled requires mcp.enabled=true" }}
+{{- end }}
+{{- if .Values.cloud.enabled }}
+{{- fail "mcp.oauth.enabled is not supported with cloud.enabled=true" }}
+{{- end }}
+{{- if ne .Values.auth.mode "oidc" }}
+{{- fail "mcp.oauth.enabled requires auth.mode=oidc" }}
+{{- end }}
+{{- if ne (int .Values.replicaCount) 1 }}
+{{- fail "mcp.oauth.enabled requires replicaCount=1: OAuth clients and tokens are stored in memory and are not shared across pods" }}
+{{- end }}
+{{- end }}
 {{- if and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite") (gt (int .Values.replicaCount) 1) }}
 {{- fail "replicaCount must be 1 when persistence.enabled=true and timeline.storage=sqlite: a single PVC cannot be safely shared across pods (RWO volumes won't attach to a second pod, RWX volumes risk SQLite corruption)" }}
 {{- end }}
@@ -37,7 +51,7 @@ metadata:
     {{- include "radar.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
-  {{- if and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite") }}
+  {{- if or .Values.mcp.oauth.enabled (and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite")) }}
   strategy:
     type: Recreate
   {{- end }}
@@ -124,6 +138,9 @@ spec:
             {{- end }}
             {{- if not .Values.mcp.enabled }}
             - --no-mcp
+            {{- end }}
+            {{- if .Values.mcp.oauth.enabled }}
+            - --mcp-oauth
             {{- end }}
             {{- if .Values.debug.image }}
             - --debug-image={{ .Values.debug.image }}

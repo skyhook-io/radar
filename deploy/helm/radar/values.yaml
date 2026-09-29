@@ -528,8 +528,14 @@ usageReporting:
 
 # MCP (Model Context Protocol) server for AI tools
 mcp:
-  # Set to false to disable the MCP server (useful when deployed behind authentication)
+  # Set to false to disable the MCP server.
   enabled: true
+  oauth:
+    # Browser-based MCP authorization for standalone OIDC deployments.
+    # Requires auth.mode=oidc, an HTTPS auth.oidc.redirectURL, and replicaCount=1.
+    # Uses Recreate rollouts: client registrations and tokens are held in memory,
+    # so clients must re-register and authorize again after a pod restart.
+    enabled: false
 
 # OpenCost/Kubecost display configuration
 cost:

@@ -85,6 +85,7 @@ type AppConfig struct {
 	WorkloadMetricsScope      prom.WorkloadMetricsScope
 	Version                   string
 	MCPEnabled                bool
+	MCPOAuthEnabled           bool
 	AIHistory                 bool   // persist AI investigations across restarts
 	AIHistoryDBPath           string // "" = ~/.radar/ai-runs.db
 	AuthConfig                auth.Config
@@ -451,7 +452,8 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HasPrometheusURL:     cfg.PrometheusURL != "",
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
 		},
-		AuthConfig: cfg.AuthConfig,
+		AuthConfig:      cfg.AuthConfig,
+		MCPOAuthEnabled: cfg.MCPOAuthEnabled,
 		CloudConnect: server.CloudConnectConfig{
 			HubAPIURL:             cfg.HubAPIURL,
 			HubAppURL:             cfg.HubAppURL,

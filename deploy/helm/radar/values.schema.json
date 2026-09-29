@@ -24,7 +24,7 @@
     "replicaCount": {
       "type": "integer",
       "minimum": 1,
-      "description": "Number of Radar pod replicas. Note: backchannel logout requires single replica."
+      "description": "Number of Radar pod replicas. Note: backchannel logout and MCP OAuth require a single replica."
     },
     "image": {
       "type": "object",
@@ -338,7 +338,14 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "enabled": { "type": "boolean" }
+        "enabled": { "type": "boolean" },
+        "oauth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "description": "Enable MCP OAuth for a single-replica standalone OIDC deployment." }
+          }
+        }
       }
     },
     "cost": {
