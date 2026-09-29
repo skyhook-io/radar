@@ -149,6 +149,10 @@ type CNPGClusterActions struct {
 	Unfence         CNPGActionCapability `json:"unfence"`
 	Hibernate       CNPGActionCapability `json:"hibernate"`
 	Rehydrate       CNPGActionCapability `json:"rehydrate"`
+	// Psql is opening psql on the primary; DestroyInstance is the first
+	// instance that may be destroyed (per-instance verdicts are authoritative).
+	Psql            CNPGActionCapability `json:"psql"`
+	DestroyInstance CNPGActionCapability `json:"destroyInstance"`
 }
 
 // CNPGInstanceActions is the per-row verdict for actions that name one
@@ -159,6 +163,8 @@ type CNPGInstanceActions struct {
 	SwitchoverTarget CNPGActionCapability `json:"switchoverTarget"`
 	Fence            CNPGActionCapability `json:"fence"`
 	Unfence          CNPGActionCapability `json:"unfence"`
+	Psql             CNPGActionCapability `json:"psql"`
+	Destroy          CNPGActionCapability `json:"destroy"`
 }
 
 // CNPGRestartStep is one instance's fate in a cluster restart, in the order
@@ -285,6 +291,9 @@ type CNPGActionResult struct {
 	// re-reading the same name. Never a second create.
 	ResolvedAfterTimeout bool `json:"resolvedAfterTimeout,omitempty"`
 	CatchUp              bool `json:"catchUp,omitempty"`
+	// Target identifies what the action acted on, so a caller can follow the
+	// outcome (the backend signalled, the instance destroyed, the Pooler paused).
+	Target *CNPGActionTarget `json:"target,omitempty"`
 }
 
 // cnpgActionError is a refusal with a stable code; Current carries the facts
@@ -306,6 +315,8 @@ type cnpgActionClients struct {
 	dyn   dynamic.Interface
 	typed kubernetes.Interface
 	now   func() time.Time
+	// exec runs a command in a Pod as the caller; nil when unavailable.
+	exec cnpgExecFunc
 }
 
 func (c cnpgActionClients) clock() time.Time {
@@ -720,7 +731,7 @@ var (
 	cnpgGrantPatchSchedules   = cnpgGrant{"patch", cnpgGroup, "scheduledbackups", ""}
 	cnpgClusterActionGrants   = map[string]cnpgGrant{"backup": cnpgGrantCreateBackups, "switchover": cnpgGrantPatchStatus, "restart": cnpgGrantPatchClusters, "reload": cnpgGrantPatchClusters, "fence": cnpgGrantPatchClusters, "unfence": cnpgGrantPatchClusters, "hibernate": cnpgGrantPatchClusters, "rehydrate": cnpgGrantPatchClusters}
 	cnpgScheduleActionGrants  = map[string]cnpgGrant{"suspend": cnpgGrantPatchSchedules, "resume": cnpgGrantPatchSchedules, "run": cnpgGrantCreateBackups}
-	cnpgClusterActionsOrdered = []string{"backup", "switchover", "restart", "restartInstance", "reload", "fence", "unfence", "hibernate", "rehydrate"}
+	cnpgClusterActionsOrdered = []string{"backup", "switchover", "restart", "restartInstance", "reload", "fence", "unfence", "hibernate", "rehydrate", "cancelBackend", "terminateBackend", "destroyInstance"}
 )
 
 // cnpgPermission answers one grant for the caller. Subresource answers are
@@ -841,6 +852,8 @@ func (s *Server) cnpgClusterCapabilities(r *http.Request, c cnpgActionClients, c
 	// the first row's refusal when none is.
 	restartInstance := one(cnpgIfNoGuard(cnpgGuardCommon(facts), "The cluster has no instance"), cnpgGrantDeletePods)
 	restartAdopted := false
+	destroyInstance := one(cnpgIfNoGuard(cnpgGuardCommon(facts), "The cluster has no standby"), cnpgDestroyGrants(false)...)
+	destroyAdopted := false
 	for _, inst := range facts.Instances {
 		grant := cnpgGrantDeletePods
 		if inst.Pod == facts.CurrentPrimary {
@@ -868,12 +881,23 @@ func (s *Server) cnpgClusterCapabilities(r *http.Request, c cnpgActionClients, c
 				unfenceGuard = "It is not fenced"
 			}
 		}
+		destroy := one(cnpgGuardDestroyInstance(facts, inst), cnpgDestroyGrants(false)...)
+		if !destroyInstance.Allowed && (destroy.Allowed || !destroyAdopted) {
+			destroyInstance = destroy
+			destroyAdopted = true
+		}
 		instanceActions[inst.Pod] = CNPGInstanceActions{
 			Restart:          restart,
 			SwitchoverTarget: one(switchGuard, cnpgGrantPatchStatus, cnpgGrantGetPods),
 			Fence:            one(fenceGuard, cnpgGrantPatchClusters),
 			Unfence:          one(unfenceGuard, cnpgGrantPatchClusters),
+			Psql:             one(cnpgGuardPsql(facts, inst), cnpgGrantCreateExec),
+			Destroy:          destroy,
 		}
+	}
+	psql := one(cnpgIfNoGuard(cnpgGuardCommon(facts), "No primary is reported"), cnpgGrantCreateExec)
+	if primary, ok := facts.instance(facts.CurrentPrimary); ok {
+		psql = instanceActions[primary.Pod].Psql
 	}
 
 	resp := &CNPGClusterCapabilitiesResponse{
@@ -891,6 +915,8 @@ func (s *Server) cnpgClusterCapabilities(r *http.Request, c cnpgActionClients, c
 			Unfence:         one(cnpgGuardUnfence(facts), cnpgGrantPatchClusters),
 			Hibernate:       one(cnpgGuardHibernate(facts), cnpgGrantPatchClusters),
 			Rehydrate:       one(cnpgGuardRehydrate(facts), cnpgGrantPatchClusters),
+			Psql:            psql,
+			DestroyInstance: destroyInstance,
 		},
 		InstanceActions:  instanceActions,
 		RestartPlan:      cnpgRestartPlanOf(cluster, facts),
@@ -1190,7 +1216,7 @@ func (s *Server) handleCNPGClusterAction(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
-	res, err := runCNPGClusterAction(r.Context(), cnpgActionClients{dyn: dyn, typed: typed}, namespace, name, action, req)
+	res, err := runCNPGClusterAction(r.Context(), cnpgActionClients{dyn: dyn, typed: typed, exec: s.cnpgExecFor(r)}, namespace, name, action, req)
 	if err != nil {
 		s.writeCNPGActionError(w, err, action, namespace, name)
 		return
@@ -1241,15 +1267,18 @@ type cnpgClusterRunner struct {
 }
 
 var cnpgClusterActionRunners = map[string]cnpgClusterRunner{
-	"backup":          {binds: []string{"hibernation"}, run: cnpgRunBackup},
-	"switchover":      {binds: []string{"currentPrimary", "targetPrimary", "fencedInstances"}, needsPods: true, run: cnpgRunSwitchover},
-	"restart":         {binds: []string{"currentPrimary", "targetPrimary", "hibernation", "fencedInstances"}, run: cnpgRunRestart},
-	"restartInstance": {binds: []string{"currentPrimary", "targetPrimary", "fencedInstances"}, needsPods: true, run: cnpgRunRestartInstance},
-	"reload":          {binds: []string{"hibernation"}, run: cnpgRunReload},
-	"fence":           {binds: []string{"currentPrimary", "hibernation", "fencedInstances"}, run: cnpgRunFence},
-	"unfence":         {binds: []string{"currentPrimary", "fencedInstances"}, run: cnpgRunUnfence},
-	"hibernate":       {binds: []string{"hibernation"}, run: cnpgRunHibernation("on")},
-	"rehydrate":       {binds: []string{"hibernation"}, run: cnpgRunHibernation("off")},
+	"backup":           {binds: []string{"hibernation"}, run: cnpgRunBackup},
+	"switchover":       {binds: []string{"currentPrimary", "targetPrimary", "fencedInstances"}, needsPods: true, run: cnpgRunSwitchover},
+	"restart":          {binds: []string{"currentPrimary", "targetPrimary", "hibernation", "fencedInstances"}, run: cnpgRunRestart},
+	"restartInstance":  {binds: []string{"currentPrimary", "targetPrimary", "fencedInstances"}, needsPods: true, run: cnpgRunRestartInstance},
+	"reload":           {binds: []string{"hibernation"}, run: cnpgRunReload},
+	"fence":            {binds: []string{"currentPrimary", "hibernation", "fencedInstances"}, run: cnpgRunFence},
+	"unfence":          {binds: []string{"currentPrimary", "fencedInstances"}, run: cnpgRunUnfence},
+	"hibernate":        {binds: []string{"hibernation"}, run: cnpgRunHibernation("on")},
+	"rehydrate":        {binds: []string{"hibernation"}, run: cnpgRunHibernation("off")},
+	"cancelBackend":    {needsPods: true, run: cnpgRunSignalBackend(cnpgSignalCancel)},
+	"terminateBackend": {needsPods: true, run: cnpgRunSignalBackend(cnpgSignalTerminate)},
+	"destroyInstance":  {binds: []string{"currentPrimary", "targetPrimary"}, needsPods: true, run: cnpgRunDestroyInstance},
 }
 
 func decodeCNPGReviewedFacts(raw json.RawMessage) (cnpgReviewedFacts, error) {
@@ -2039,6 +2068,9 @@ func cnpgGrantFor(action string) (cnpgGrant, bool) {
 		return g, true
 	}
 	if g, ok := cnpgScheduleActionGrants[action]; ok {
+		return g, true
+	}
+	if g, ok := cnpgExtraActionGrants[action]; ok {
 		return g, true
 	}
 	return cnpgGrant{}, false
