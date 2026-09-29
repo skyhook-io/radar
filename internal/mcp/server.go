@@ -41,8 +41,11 @@ func RunStdio(ctx context.Context) error {
 	return newServer(true).Run(ctx, &mcpsdk.StdioTransport{})
 }
 
-// NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.
-func NewHandler() http.Handler { return handlerForServer(newServer(true)) }
+// NewHandler creates the full MCP HTTP handler (read + write tools) to mount on
+// chi.
+func NewHandler() http.Handler {
+	return handlerForServer(newServer(true))
+}
 
 // NewReadOnlyHandler creates the public MCP handler exposing only read tools.
 func NewReadOnlyHandler() http.Handler { return handlerForServer(newServer(false)) }
