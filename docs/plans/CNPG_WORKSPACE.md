@@ -166,3 +166,40 @@ Revision 2 responds to `uploads/PROTOTYPE-REVIEW.md`; the design project also no
 | **Kinds collapsed on workspace/detail**, open on Resources lists; user toggle wins. | `categoryLinks` prop gains `defaultKindsCollapsed`. |
 
 Still open from the design side: its notes say DESIGN.md / PLAN.md / the review "have not been attached", but they are now in `uploads/` — rev 2 may predate reading them, so a DESIGN.md conformance pass remains our job during implementation.
+
+## 8. Phase 2 — actions, runtime, GitOps write guard (2026-09-29)
+
+Inputs: user asked for action parity with Freelens (freelens-cnpg-extension v1.0.0, 9b4600d) and Headlamp (cnpg-headlamp-plugin v0.1.4, c98d54f), read from source; one reusable GitOps "may be reverted" mechanism; runtime data; fixtures. pods/proxy credential proof passed (NOTES.md): bearer tokens, client certs and Impersonate-* are not forwarded; only caller-set custom headers pass, and Radar never copies browser headers onto proxy requests.
+
+### 8.1 Actions (union of both tools)
+| Action | Where | Write (as `kubectl cnpg` / Freelens) | SAR | Typed confirm |
+|---|---|---|---|---|
+| Back up now | Cluster | create Backup `{cluster, method (explicit, from declared methods: plugin first, volumeSnapshot, in-tree last+deprecated), target}`, name `<cluster>-<yyyymmddhhmmss>`, label `cnpg.io/cluster`; name validated DNS-1123, not colliding with `<schedule>-<14 digits>`, not existing | create backups | no |
+| Switchover | Cluster + instance rows | status merge patch `{metadata.resourceVersion, status:{targetPrimary, targetPrimaryTimestamp, phase:"Switchover in progress", phaseReason}}`; picker lists standbys with eligibility reason + state/sync/replay lag from primary `/pg/status`; preselect sync standby then least lag; warn lag > 16 MiB | patch clusters/status | yes |
+| Restart cluster | Cluster | merge patch annotation `kubectl.kubernetes.io/restartedAt`; dialog shows restart plan from primaryUpdateStrategy/Method | patch clusters | yes |
+| Restart instance | instance row | standby: delete Pod (after verifying `cnpg.io/cluster` label + controller owner uid); primary: status patch phase "Primary instance is being restarted in-place" (only when healthy) | delete pods / patch clusters/status | primary: yes |
+| Reload configuration | Cluster | annotation `cnpg.io/reloadedAt` ("nothing reports completion") | patch clusters | no |
+| Fence / lift (instance, all) | Cluster + rows | `cnpg.io/fencedInstances` JSON array with resourceVersion | patch clusters | fence: yes |
+| Hibernate / resume | Cluster | `cnpg.io/hibernation: on|off`; dialog lists consequences (pods deleted, volumes kept, poolers lose backend, unsuspended schedules will fail, declarations stop reconciling) | patch clusters | hibernate: yes |
+| Suspend / resume schedule | ScheduledBackup | merge patch `spec.suspend`; resume warns one catch-up run | patch scheduledbackups | no |
+| Run schedule now | ScheduledBackup | create Backup `<schedule>-manual-<ts>` copying cluster/method/target | create backups | no |
+| Restore to new cluster | Cluster, Backup, ObjectStore | prefilled Cluster manifest → existing create dialog (preview + `mode=create` + `reviewedContext`) | apiserver | review step |
+
+Not taken: Headlamp's "Connect" (reads the app Secret; Radar's Secret view already covers it under Secret RBAC); full create forms (Radar's generic create with skeleton YAML covers creation); pooler pause (neither has it).
+
+### 8.2 Action framework
+- Server: `GET /api/cnpg/{clusters|scheduledbackups}/{ns}/{name}/capabilities` → per action `{allowed, reason}` (SAR per verb/subresource + state guards: hibernated, replica cluster, switchover in flight, terminating, no ready instance, no backup method). `POST .../actions/{action}` impersonated (`getDynamicClientForRequest`, nil ⇒ 503), `auth.AuditLog`, body carries `reviewedContext`, object `uid`, `resourceVersion`, params. Server re-validates guards; conflict ⇒ re-read, re-run guards, retry only if the rendered write is identical (max 3), else 409 "changed since you confirmed". Errors mapped to sentences (403 names the grant, webhook unreachable ⇒ "operator may be down").
+- Dialog (shared, k8s-ui `ActionConfirmDialog`): title "<Verb> <Kind> ns/name?"; kube context line; form; **"The write" / "The writes, in order"** listing literal API calls; notes; warnings; **GitOps write guard** block; typed name for disruptive actions; confirm disabled with reason when capability denied; success toast links to the resulting object / Activity.
+
+### 8.3 Reusable GitOps write guard (all of Radar, not CNPG-specific)
+- `useGitOpsWriteGuard({ resource, relationships, writes })` in k8s-ui (fetchers injected) — resolves owner (direct/inherited), fetches owner CR for sync policy (Argo `automated.selfHeal/prune`, Flux `interval/suspend`), and classifies each write by **field scope**: `status` writes are never reverted; metadata/spec writes revert only if Git declares the field — checked against `kubectl.kubernetes.io/last-applied-configuration` when present (declared ⇒ will/may revert per sync policy; not declared ⇒ "not declared in Git, won't be reverted"); without last-applied (SSA) ⇒ "may be reverted if Git declares it". Creates of child objects (Backup) ⇒ info only.
+- `<GitOpsWriteWarning guard onAckChange/>` with one copy set + "View owner" links + required acknowledgment when revert is likely. `canConfirmGitOpsWrite(guard, acked)`.
+- Adoption now: CNPG actions + SetImageDialog + ApplyDialog (replace their bespoke copies). Other write paths listed as follow-ups.
+
+### 8.4 Runtime (pods/proxy, no Prometheus required)
+- `GET /api/cnpg/clusters/{ns}/{name}/runtime`: per instance `/pg/status` (:8000, scheme per pod) + exporter `/metrics` (:9187) through the impersonated pods/proxy; parsed server-side into replication (state, sync, write/flush/replay lag, LSNs), slots, WAL archiving, sessions aggregated by state/app/db/user (platform users filtered), waiting backends, oldest tx, xid age, DB sizes, max_connections. Per-instance errors preserved; denied ≠ unreachable ≠ absent. Pooler: `:9127` for pooler pods (`cl_waiting`, `sv_active/idle`, `maxwait`).
+- Trends: Prometheus `QueryRange` when Radar has Prometheus (isolation by namespace + exact pod names); otherwise a client ring buffer "since opened" (Freelens model), labelled as such.
+- **Sessions: aggregated only.** Neither competitor shows per-pid rows; query text lives in the merged Logs. A future "Open psql" can use Radar's existing exec terminal under the user's own RBAC.
+
+### 8.5 Fixtures
+`cnpg-demo.sh runtime`: MinIO + ObjectStore, 3-instance `pg-runtime` with plugin archiving + completed backup, pooler, restored cluster, pgbench load + idle-in-transaction lock holder + blocked waiter, Prometheus scraping 9187/9127, `runtime-lag on|off`.
