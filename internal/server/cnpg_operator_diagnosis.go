@@ -318,8 +318,13 @@ func (s *Server) cnpgOperatorLeader(r *http.Request, typed kubernetes.Interface,
 			out.HolderIsCurrentPod = true
 		}
 	}
-	if spec.RenewTime != nil && spec.LeaseDurationSeconds != nil {
-		out.Stale = time.Since(spec.RenewTime.Time) > time.Duration(*spec.LeaseDurationSeconds)*time.Second
+	view := &leaseView{namespace: d.Namespace, name: cnpgOperatorLeaseName, holder: out.Holder, duration: spec.LeaseDurationSeconds}
+	if spec.RenewTime != nil {
+		t := spec.RenewTime.Time
+		view.renew = &t
+	}
+	if judged := cnpgHALeaseFrom(view, time.Now()); judged.Expired != nil {
+		out.Stale = *judged.Expired
 	}
 	if out.Holder == "" {
 		out.Stale = true

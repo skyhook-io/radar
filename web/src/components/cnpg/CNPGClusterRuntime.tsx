@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { Lock } from 'lucide-react'
-import { PaneLoader, Tooltip, formatAge, toneTextClass } from '@skyhook-io/k8s-ui'
-import { useCNPGRuntime, type CNPGRuntimeInstance, type CNPGRuntimeResponse } from '../../api/cnpg'
+import { PaneLoader, formatAge, toneTextClass } from '@skyhook-io/k8s-ui'
+import { useCNPGRuntime, type CNPGRuntimeInstance } from '../../api/cnpg'
 import { Notice } from '../capacity/shared'
 import { Segments } from './shared'
 import { CNPGStorage } from './CNPGStorage'
 import { CNPGBlockingSessions } from './CNPGBlockingSessions'
 import { CNPGReplicationView } from './CNPGReplicationView'
+import { CNPGTrends, useSampleBuffer, type CNPGIntervalTarget, type Sample } from './CNPGTrends'
 
 type Section = 'replication' | 'sessions' | 'transactions' | 'storage' | 'slots' | 'trends'
 
@@ -51,52 +52,18 @@ function SourceState({ label, state, error }: { label: string; state: string; er
   return <div className="text-xs text-theme-text-tertiary">{text}</div>
 }
 
-// A ring buffer of samples taken while this view is open: the Trends section
-// without Prometheus. It says so, and starts empty.
-interface Sample {
-  t: number
-  /** When the metrics were scraped; the server memoizes them across polls. */
-  metricsAt?: number
-  replayLag: Record<string, number | undefined>
-  sessions?: number
-  waiting?: number
-  commits?: number
-  rollbacks?: number
-  archived?: number
-  failed?: number
-}
-
-function useSampleBuffer(data: CNPGRuntimeResponse | undefined): Sample[] {
-  const [samples, setSamples] = useState<Sample[]>([])
-  const last = useRef<string | null>(null)
-  useEffect(() => {
-    if (!data || data.sampledAt === last.current) return
-    last.current = data.sampledAt
-    const primary = data.instances.find((i) => i.role === 'primary')
-    const replayLag: Record<string, number | undefined> = {}
-    for (const r of primary?.status.replication ?? []) replayLag[r.applicationName] = r.replayLag
-    const m = primary?.metrics
-    setSamples((prev) =>
-      [
-        ...prev,
-        {
-          t: Date.parse(data.sampledAt) || Date.now(),
-          metricsAt: m?.capturedAt ? Date.parse(m.capturedAt) || undefined : undefined,
-          replayLag,
-          sessions: m?.state === 'ok' ? m.sessionsTotal : undefined,
-          waiting: m?.state === 'ok' ? m.waitingBackends : undefined,
-          commits: m?.xactCommitTotal,
-          rollbacks: m?.xactRollbackTotal,
-          archived: m?.archiver?.archivedCount,
-          failed: m?.archiver?.failedCount,
-        },
-      ].slice(-720),
-    )
-  }, [data])
-  return samples
-}
-
-export function CNPGClusterRuntime({ namespace, name, onOpenLogs }: { namespace: string; name: string; onOpenLogs?: (pod: string) => void }) {
+export function CNPGClusterRuntime({
+  namespace,
+  name,
+  onOpenLogs,
+  onOpenInterval,
+}: {
+  namespace: string
+  name: string
+  onOpenLogs?: (pod: string) => void
+  /** Opens Logs or Activity bounded to an interval selected on a trend chart. */
+  onOpenInterval?: (target: CNPGIntervalTarget, since: string, until: string) => void
+}) {
   const q = useCNPGRuntime(namespace, name)
   const [section, setSection] = useState<Section>('replication')
   const samples = useSampleBuffer(q.data)
@@ -151,7 +118,7 @@ export function CNPGClusterRuntime({ namespace, name, onOpenLogs }: { namespace:
       {section === 'transactions' && <TransactionsView primary={primary} samples={samples} />}
       {section === 'storage' && <StorageView namespace={namespace} name={name} instances={data.instances} />}
       {section === 'slots' && <SlotsView primary={primary} />}
-      {section === 'trends' && <TrendsView samples={samples} />}
+      {section === 'trends' && <CNPGTrends namespace={namespace} name={name} samples={samples} onOpenInterval={onOpenInterval} />}
     </div>
   )
 }
@@ -301,65 +268,5 @@ function SlotsView({ primary }: { primary?: CNPGRuntimeInstance }) {
         </table>
       )}
     </Card>
-  )
-}
-
-function Spark({ values, format, threshold }: { values: (number | undefined)[]; format: (v: number) => string; threshold?: number }) {
-  const defined = values.filter((v): v is number => v !== undefined)
-  const max = Math.max(threshold ?? 0, ...defined, 1)
-  return (
-    <div>
-      <div className="relative flex h-14 items-end gap-px">
-        {threshold !== undefined && <div className="absolute inset-x-0 border-t border-dashed border-amber-500/60" style={{ bottom: `${(threshold / max) * 100}%` }} />}
-        {values.map((v, i) =>
-          v === undefined ? (
-            <Tooltip key={i} content="No sample" wrapperClassName="flex h-full flex-1 items-end">
-              <div className="h-full w-full bg-[repeating-linear-gradient(45deg,var(--border-light)_0_2px,transparent_2px_5px)] opacity-60" />
-            </Tooltip>
-          ) : (
-            <Tooltip key={i} content={format(v)} wrapperClassName="flex h-full flex-1 items-end">
-              <div className="w-full bg-accent/70" style={{ height: `${Math.max(2, (v / max) * 100)}%` }} />
-            </Tooltip>
-          ),
-        )}
-      </div>
-      <div className="mt-1 flex justify-between text-[11px] text-theme-text-tertiary">
-        <span>{format(0)}</span>
-        <span>max {format(max)}</span>
-      </div>
-    </div>
-  )
-}
-
-function TrendsView({ samples }: { samples: Sample[] }) {
-  const recent = samples.slice(-60)
-  const pods = useMemo(() => [...new Set(recent.flatMap((s) => Object.keys(s.replayLag)))], [recent])
-  if (recent.length < 2) {
-    return (
-      <Card title="Trends">
-        <div className="text-sm text-theme-text-tertiary">Collecting samples… Trends start when this page opens and cover up to the last hour it stays open.</div>
-      </Card>
-    )
-  }
-  const span = (recent[recent.length - 1].t - recent[0].t) / 1000
-  return (
-    <div className="space-y-2">
-      <div className="text-xs text-theme-text-tertiary">
-        Sampled every 5 s while this page is open · last {seconds(span)} · gaps are hatched, not zero.
-      </div>
-      <div className="grid gap-4 md:grid-cols-2">
-        {pods.map((p) => (
-          <Card key={p} title={<>Replay lag · <span className="font-mono">{p}</span></>}>
-            <Spark values={recent.map((s) => s.replayLag[p])} format={(v) => seconds(v)} threshold={5} />
-          </Card>
-        ))}
-        <Card title="Connections (primary)">
-          <Spark values={recent.map((s) => s.sessions)} format={(v) => `${Math.round(v)}`} />
-        </Card>
-        <Card title="Sessions waiting on locks">
-          <Spark values={recent.map((s) => s.waiting)} format={(v) => `${Math.round(v)}`} />
-        </Card>
-      </div>
-    </div>
   )
 }

@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { PaneLoader, TimelineList, formatAge, type NavigateToResource } from '@skyhook-io/k8s-ui'
 import { useCNPGClusterActivity } from '../../api/cnpg'
+import { useCNPGClusterActivityWindow } from '../../api/cnpg-history'
+import { CNPGIntervalBanner, useCNPGIntervalParams } from './CNPGTrends'
 import { Notice } from '../capacity/shared'
 import { Segments } from './shared'
 
@@ -18,16 +20,23 @@ const RANGES = [
  */
 export function CNPGClusterActivity({ namespace, name, onNavigate }: { namespace: string; name: string; onNavigate?: NavigateToResource }) {
   const [hours, setHours] = useState<string>('24')
-  const q = useCNPGClusterActivity(namespace, name, Number(hours))
+  const interval = useCNPGIntervalParams()
+  const ranged = useCNPGClusterActivity(namespace, name, Number(hours))
+  const windowed = useCNPGClusterActivityWindow(namespace, name, interval?.since ?? '', interval?.until ?? '', !!interval)
+  const q = interval ? windowed : ranged
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 p-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <Segments label="Range" value={hours} onChange={setHours} options={RANGES.map((r) => ({ id: r.id, label: r.label }))} />
-        <span className="text-xs text-theme-text-tertiary">
-          Kubernetes events and changes for the Cluster, its instances, Backups, Poolers and declarations.
-        </span>
-      </div>
+      {interval ? (
+        <CNPGIntervalBanner since={interval.since} until={interval.until} note="Selected on a Runtime trend: events and changes inside this interval only." onClear={interval.clear} />
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          <Segments label="Range" value={hours} onChange={setHours} options={RANGES.map((r) => ({ id: r.id, label: r.label }))} />
+          <span className="text-xs text-theme-text-tertiary">
+            Kubernetes events and changes for the Cluster, its instances, Backups, Poolers and declarations.
+          </span>
+        </div>
+      )}
       <div className="text-xs text-theme-text-tertiary">
         {q.data?.attributionSince
           ? `The earliest recorded event linking a Backup, Pooler or declaration to this cluster is ${formatAge(q.data.attributionSince)} old. Deleted child objects from before Radar recorded that link are not shown.`

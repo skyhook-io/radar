@@ -53,6 +53,7 @@ type cnpgLogQuery struct {
 	tailLines    int64
 	sinceSeconds *int64
 	sinceTime    time.Time
+	untilTime    time.Time
 	pod          string
 }
 
@@ -81,6 +82,24 @@ func parseCNPGLogQuery(r *http.Request, now time.Time) (cnpgLogQuery, error) {
 		secs := max(int64(math.Ceil(now.Sub(t).Seconds())), 1)
 		out.sinceSeconds = &secs
 	}
+	if raw := q.Get("untilTime"); raw != "" {
+		if out.sinceTime.IsZero() {
+			return out, errors.New("untilTime requires sinceTime")
+		}
+		t, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return out, fmt.Errorf("invalid untilTime %q (expected RFC3339)", raw)
+		}
+		if !t.After(out.sinceTime) {
+			return out, errors.New("untilTime must be after sinceTime")
+		}
+		out.untilTime = t
+		// An interval is read from its start: the pod log API has no upper
+		// bound, and a tail would return the lines nearest now instead.
+		if q.Get("tailLines") == "" {
+			out.tailLines = 0
+		}
+	}
 	return out, nil
 }
 
@@ -89,7 +108,10 @@ func (q cnpgLogQuery) keep(entry workloadLogEntry) bool {
 		return true
 	}
 	ts, err := time.Parse(time.RFC3339Nano, entry.Timestamp)
-	return err != nil || !ts.Before(q.sinceTime)
+	if err != nil {
+		return true
+	}
+	return !ts.Before(q.sinceTime) && (q.untilTime.IsZero() || !ts.After(q.untilTime))
 }
 
 // authorizeCNPGClusterLogs gates on reading the Cluster, listing its Pods and

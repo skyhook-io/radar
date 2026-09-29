@@ -115,6 +115,11 @@ export function CNPGDetailPage({
             namespace={target.namespace}
             name={target.name}
             onOpenLogs={(pod) => setSearchParams(new URLSearchParams({ ...Object.fromEntries(searchParams), tab: 'logs', pod }), { replace: true, state: location.state })}
+            onOpenInterval={(tab, since, until) => {
+              const params = new URLSearchParams({ ...Object.fromEntries(searchParams), tab, since, until })
+              params.delete('pod')
+              setSearchParams(params, { state: location.state })
+            }}
           />
         ),
       },
