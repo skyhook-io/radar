@@ -2023,7 +2023,7 @@ func (s *Server) writeCNPGActionError(w http.ResponseWriter, err error, action, 
 	case apierrors.IsInvalid(err):
 		status = http.StatusUnprocessableEntity
 	}
-	log.Printf("[cnpg] %q %s/%s -> %d: %v", action, sanitizeForLog(namespace), sanitizeForLog(name), status, err)
+	log.Printf("[cnpg] Failed to %s %s/%s (%d): %v", sanitizeForLog(action), sanitizeForLog(namespace), sanitizeForLog(name), status, err)
 	if code != "" {
 		body := map[string]any{"error": msg, "code": code}
 		w.Header().Set("Content-Type", "application/json")

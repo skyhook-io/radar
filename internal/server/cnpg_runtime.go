@@ -719,7 +719,7 @@ func cnpgRuntimeIdentity(r *http.Request) string {
 }
 
 func cnpgMemoized[T any](ctx context.Context, identity string, target cnpgProxyTarget, ttl time.Duration, fetch func(context.Context) T) T {
-	key := fmt.Sprintf("%s\x00%s/%s\x00%s\x00%d%s", identity, target.namespace, target.pod, target.podUID, target.port, target.path)
+	key := fmt.Sprintf("%s\x00%s/%s\x00%s\x00%s:%d%s", identity, target.namespace, target.pod, target.podUID, target.scheme, target.port, target.path)
 	now := time.Now()
 	cnpgRuntimeMemoMu.Lock()
 	if e, ok := cnpgRuntimeMemoEntries[key]; ok && now.Before(e.expires) {
@@ -921,17 +921,18 @@ type cnpgPgStatus struct {
 	LastFailedWALTime   string `json:"lastFailedWALTime"`
 	ReadyWalFiles       *int   `json:"readyWalFiles"`
 	ReplicationInfo     []struct {
-		ApplicationName string          `json:"applicationName"`
-		State           string          `json:"state"`
-		SentLsn         string          `json:"receivedLsn"`
-		WriteLsn        string          `json:"writeLsn"`
-		FlushLsn        string          `json:"flushLsn"`
-		ReplayLsn       string          `json:"replayLsn"`
-		WriteLag        string          `json:"writeLag"`
-		FlushLag        string          `json:"flushLag"`
-		ReplayLag       string          `json:"replayLag"`
-		SyncState       string          `json:"syncState"`
-		SyncPriority    json.RawMessage `json:"syncPriority"`
+		ApplicationName string `json:"applicationName"`
+		State           string `json:"state"`
+		// CNPG serializes pg_stat_replication.sent_lsn under "receivedLsn".
+		SentLsn      string          `json:"receivedLsn"`
+		WriteLsn     string          `json:"writeLsn"`
+		FlushLsn     string          `json:"flushLsn"`
+		ReplayLsn    string          `json:"replayLsn"`
+		WriteLag     string          `json:"writeLag"`
+		FlushLag     string          `json:"flushLag"`
+		ReplayLag    string          `json:"replayLag"`
+		SyncState    string          `json:"syncState"`
+		SyncPriority json.RawMessage `json:"syncPriority"`
 	} `json:"replicationInfo"`
 	ReplicationSlotsInfo []struct {
 		SlotName    string `json:"slotName"`

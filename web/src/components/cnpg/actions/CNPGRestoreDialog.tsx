@@ -42,7 +42,7 @@ export function CNPGRestoreDialog({ namespace, name, onClose }: { namespace: str
       onClose={onClose}
       onConfirm={() => {
         if (!cluster || !source) return
-        const m = buildRestoreManifest(cluster, source, newName, targetTime ? new Date(targetTime).toISOString() : undefined)
+        const m = buildRestoreManifest(cluster, source, newName, targetTime && source.kind !== 'backup' ? new Date(targetTime).toISOString() : undefined)
         setManifest(
           `# Restores ${name} into a new cluster. Review before creating:\n` +
             `# - the new cluster has no WAL archiving or backups until you add them;\n` +

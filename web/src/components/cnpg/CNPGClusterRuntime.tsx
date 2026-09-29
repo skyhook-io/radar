@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { Lock } from 'lucide-react'
-import { PaneLoader, StatusDot, Tooltip, formatAge, toneTextClass } from '@skyhook-io/k8s-ui'
+import { PaneLoader, StatusDot, Tooltip, formatAge, toneFillClass, toneTextClass } from '@skyhook-io/k8s-ui'
 import { useCNPGRuntime, type CNPGRuntimeInstance, type CNPGRuntimeResponse } from '../../api/cnpg'
 import { Notice } from '../capacity/shared'
 import { Segments } from './shared'
@@ -220,7 +220,7 @@ function ReplicationView({
                   <StatusDot tone={tone} />
                   <span className="font-mono text-sm font-semibold">{r.pod}</span>
                   <span className={clsx('text-xs', toneTextClass(tone))}>
-                    {rep ? [rep.state, rep.syncState].filter(Boolean).join(' · ') : primary?.status.state === 'ok' ? 'not streaming from the primary' : 'unknown'}
+                    {rep ? [rep.state, rep.syncState].filter(Boolean).join(' · ') : r.role === 'unknown' ? 'role unknown' : primary?.status.state === 'ok' ? 'not streaming from the primary' : 'unknown'}
                   </span>
                   <span className="ml-auto font-mono text-xs text-theme-text-secondary">
                     {rep ? `replay lag ${seconds(rep.replayLag)}` : 'lag unknown'}
@@ -228,7 +228,7 @@ function ReplicationView({
                 </div>
                 <div className="mt-2 flex items-center gap-2">
                   <div className="h-1 flex-1 overflow-hidden rounded bg-theme-elevated">
-                    <div className={clsx('h-full', tone === 'healthy' ? 'bg-emerald-500' : tone === 'degraded' ? 'bg-amber-500' : tone === 'unhealthy' ? 'bg-red-500' : 'bg-transparent')} style={{ width: `${pct}%` }} />
+                    <div className={clsx('h-full', tone === 'unknown' ? 'bg-transparent' : toneFillClass(tone))} style={{ width: `${pct}%` }} />
                   </div>
                   <span className="text-[11px] text-theme-text-tertiary">60 s scale</span>
                 </div>
