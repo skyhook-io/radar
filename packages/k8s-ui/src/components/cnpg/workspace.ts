@@ -357,7 +357,7 @@ function lastBackupFact(
   backups: any[],
   backupsCov: CNPGKindCoverage,
   window: ReturnType<typeof recoveryWindowFor>,
-  storesUnreadable: boolean,
+  storesUnreadable: CNPGKindCoverage | null,
 ): CNPGProtectionFacts['lastSuccessfulBackup'] {
   const ns = cluster.metadata?.namespace
   const name = cluster.metadata?.name
@@ -382,7 +382,7 @@ function lastBackupFact(
     if (!coverageReadable(backupsCov, ns)) {
       return { text: coverageUnavailableText(backupsCov, 'Backups'), tone: 'unknown' }
     }
-    if (storesUnreadable) return { text: 'No access to ObjectStores', tone: 'unknown' }
+    if (storesUnreadable) return { text: coverageUnavailableText(storesUnreadable, 'ObjectStores'), tone: 'unknown' }
     return { text: 'None observed', tone: 'unknown' }
   }
   const best = candidates.reduce((a, b) => (Date.parse(a.at) >= Date.parse(b.at) ? a : b))
@@ -627,7 +627,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
     const protection: CNPGProtectionFacts = {
       schedule: scheduleFact(cluster, resp.objects.scheduledBackups ?? [], coverageOf(resp, 'scheduledBackups')),
       destination: destinationFact(cluster),
-      lastSuccessfulBackup: lastBackupFact(cluster, resp.objects.backups ?? [], coverageOf(resp, 'backups'), window, storesUnreadable),
+      lastSuccessfulBackup: lastBackupFact(cluster, resp.objects.backups ?? [], coverageOf(resp, 'backups'), window, storesUnreadable ? storesCov : null),
       walArchiving: walFact(cluster),
       recoveryWindow: window?.from
         ? {

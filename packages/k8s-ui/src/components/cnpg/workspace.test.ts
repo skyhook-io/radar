@@ -254,4 +254,11 @@ describe('buildCNPGFleet', () => {
     const row = buildCNPGFleet(resp({ clusters: [src, other] })).rows.find((r) => r.name === 'pg-a')!
     expect(row.protection.restoreValidation.text).toBe('None recorded')
   })
+
+  it('words unreadable ObjectStores by coverage state', () => {
+    const c = cluster('pg-a', 'db', { spec: { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }] } })
+    const p = buildCNPGFleet(resp({ clusters: [c] }, { coverage: { objectStores: { state: 'syncing' } } })).rows[0].protection
+    expect(p.lastSuccessfulBackup.text).toBe('Loading…')
+    expect(p.recoveryWindow.text).toBe('Loading…')
+  })
 })
