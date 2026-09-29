@@ -422,7 +422,7 @@ export async function fetchRetainedDelta(
 // Mirrors the Go store's TimelineEvent.IsManaged (pkg/timeline/types.go):
 // a resource managed by another — owned, or one of the churn kinds. Keep the
 // two predicates in lockstep.
-function isManagedTimelineEvent(e: TimelineEvent): boolean {
+export function isManagedTimelineEvent(e: TimelineEvent): boolean {
   return e.owner != null || e.kind === 'ReplicaSet' || e.kind === 'Pod' || e.kind === 'Event'
 }
 

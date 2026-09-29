@@ -86,3 +86,100 @@ describe('TimelineSwimlanes controlled vs fallback', () => {
     expect(html).toContain('>View<')
   })
 })
+
+describe('TimelineList routine activity toggle', () => {
+  const at = (id: string, over: Partial<TimelineEvent>): TimelineEvent => ({
+    ...EVENTS[0], id, timestamp: new Date(NOW).toISOString(), ...over,
+  })
+  const ROUTINE: TimelineEvent[] = [
+    at('pod-started', { kind: 'Pod', name: 'web-1', source: 'k8s_event', eventType: 'Normal', reason: 'Started' }),
+    at('pod-pulled', { kind: 'Pod', name: 'web-2', source: 'k8s_event', eventType: 'Normal', reason: 'Pulled' }),
+    at('rs-scaled', { kind: 'ReplicaSet', name: 'web-5f86', eventType: 'update' }),
+  ]
+
+  it('shows the checkbox with the hidden count and the (i) explanation', () => {
+    const html = renderToString(
+      <TimelineList events={EVENTS} isLoading={false} routineEvents={ROUTINE} onShowRoutineChange={() => {}} />,
+    )
+    expect(html).toContain('Show routine activity')
+    expect(html).toContain('type="checkbox"')
+    expect(html).toContain('· <!-- -->3 hidden')
+    expect(html).toContain('aria-label="About routine activity"')
+  })
+
+  it('counts only hidden rows the active filters would show', () => {
+    const html = renderToString(
+      <TimelineList
+        events={EVENTS}
+        isLoading={false}
+        kindFilter={['Pod']}
+        onKindFilterChange={() => {}}
+        routineEvents={ROUTINE}
+        onShowRoutineChange={() => {}}
+      />,
+    )
+    expect(html).toContain('2 routine events<!-- --> <!-- -->match')
+  })
+
+  it('says none hidden when nothing matching is routine', () => {
+    const html = renderToString(
+      <TimelineList events={EVENTS} isLoading={false} search="web" onSearchChange={() => {}} routineEvents={[]} onShowRoutineChange={() => {}} />,
+    )
+    expect(html).toContain('· <!-- -->none hidden')
+  })
+
+  it('reads shown, with the count, once the user opts in', () => {
+    const html = renderToString(
+      <TimelineList events={[...EVENTS, ...ROUTINE]} isLoading={false} showRoutine routineEvents={ROUTINE} onShowRoutineChange={() => {}} />,
+    )
+    expect(html).toContain('checked=""')
+    expect(html).toContain('· <!-- -->3 shown')
+  })
+
+  it('explains an empty list whose matching rows are all routine', () => {
+    const html = renderToString(
+      <TimelineList events={[]} isLoading={false} routineEvents={ROUTINE} onShowRoutineChange={() => {}} />,
+    )
+    expect(html).toContain('All matching activity is routine')
+    expect(html).toContain('3 routine events<!-- --> <!-- -->match<!-- -->. Warnings and failures would show here.')
+    expect(html).toContain('Show routine activity')
+    expect(html).not.toContain('No activity found')
+  })
+
+  it('has no toggle when the host does not offer it', () => {
+    const html = renderToString(<TimelineList events={EVENTS} isLoading={false} />)
+    expect(html).not.toContain('routine activity')
+  })
+
+  it('folds a resource\'s rows under its newest card, describing the rest', () => {
+    const crash = (id: string, minutesAgo: number, over: Partial<TimelineEvent>) =>
+      at(id, { kind: 'Pod', name: 'api-1', timestamp: new Date(NOW - minutesAgo * 60_000).toISOString(), ...over })
+    const rows = [
+      crash('newest', 0, { eventType: 'update', healthState: 'unhealthy', owner: { kind: 'ReplicaSet', name: 'api-5f86' } }),
+      crash('b1', 1, { source: 'k8s_event', eventType: 'Warning', reason: 'BackOff' }),
+      crash('b2', 2, { source: 'k8s_event', eventType: 'Warning', reason: 'BackOff' }),
+      crash('u1', 3, { eventType: 'update', healthState: 'degraded' }),
+    ]
+    const folded = renderToString(<TimelineList events={rows} isLoading={false} foldPerResource={(e) => e.kind === 'Pod'} />)
+    expect(folded).toContain('3<!-- --> more on this <!-- -->Pod<!-- -->: <!-- -->BackOff ×2, 1 status change')
+    expect(folded).toContain('deploy<!-- -->/</span>api')
+    expect(folded).toContain('data-event-id="newest"')
+    const plain = renderToString(<TimelineList events={rows} isLoading={false} />)
+    expect(plain).not.toContain('more on this')
+  })
+
+  it('opens a fold that holds the selected row, and counts each event\'s occurrences', () => {
+    const crash = (id: string, minutesAgo: number, over: Partial<TimelineEvent>) =>
+      at(id, { kind: 'Pod', name: 'api-1', timestamp: new Date(NOW - minutesAgo * 60_000).toISOString(), ...over })
+    const rows = [
+      crash('newest', 0, { eventType: 'update', healthState: 'unhealthy' }),
+      crash('backoff', 1, { source: 'k8s_event', eventType: 'Warning', reason: 'BackOff', count: 43 }),
+    ]
+    const html = renderToString(
+      <TimelineList events={rows} isLoading={false} selectedEventId="backoff" foldPerResource={() => true} />,
+    )
+    expect(html).toContain('BackOff ×43')
+    expect(html).toContain('aria-expanded="true"')
+    expect(html).toContain('data-event-id="backoff"')
+  })
+})
