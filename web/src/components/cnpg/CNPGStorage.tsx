@@ -78,6 +78,7 @@ function UsageBar({ v }: { v: CNPGStorageVolume }) {
     )
   }
   const tone = cnpgDiskTone(u.ratio)
+  const sharedFilesystem = v.capacityBytes !== undefined && u.capacityBytes > v.capacityBytes * 1.5
   return (
     <div>
       <div className="h-1.5 overflow-hidden rounded bg-theme-elevated">
@@ -91,6 +92,11 @@ function UsageBar({ v }: { v: CNPGStorageVolume }) {
           <span className="text-theme-text-tertiary">kubelet</span>
         </Tooltip>
       </div>
+      {sharedFilesystem && (
+        <div className="mt-0.5 text-[11.5px] text-theme-text-tertiary">
+          kubelet measured a {formatBytes(u.capacityBytes)} filesystem for a {v.capacity} claim: the volume shares a filesystem, so this is that filesystem's use.
+        </div>
+      )}
     </div>
   )
 }
@@ -189,11 +195,11 @@ function WALHolders({ wal, primary }: { wal: CNPGStorageWAL; primary: boolean })
           detail={
             wal.archivingFailed
               ? `archiving failing${wal.lastFailedWal ? ` at ${wal.lastFailedWal}` : ''}${wal.lastFailedAt ? `, ${formatAge(wal.lastFailedAt)} ago` : ''}`
-              : wal.lastArchivedAt
-                ? `last archived ${formatAge(wal.lastArchivedAt)} ago`
-                : primary
-                  ? undefined
-                  : 'standbys do not archive'
+              : !primary
+                ? 'a standby; the primary archives'
+                : wal.lastArchivedAt
+                  ? `last archived ${formatAge(wal.lastArchivedAt)} ago${wal.readyToArchive === undefined ? ' · backlog not reported' : ''}`
+                  : undefined
           }
           source="Instance manager readyWalFiles"
           missing={wal.status.state !== 'ok' ? wal.status.error || wal.status.state : undefined}

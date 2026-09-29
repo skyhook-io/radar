@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -170,6 +171,20 @@ func TestCNPGScheduledRunNoBackup(t *testing.T) {
 				t.Errorf("category = %v, want backup_failed", iss.Category)
 			}
 		})
+	}
+}
+
+// Timestamps decode in Radar's local zone; the schedule is the operator's, in UTC.
+func TestCNPGScheduledRunFiresInUTC(t *testing.T) {
+	zone := time.FixedZone("IDT", 3*3600)
+	c := cnpgCluster(nil, nil)
+	sched := cnpgSchedObj("ScheduledBackup", "nightly", time.Date(2026, 9, 28, 20, 0, 0, 0, time.UTC),
+		map[string]any{"schedule": "0 0 2 * * *", "cluster": map[string]any{"name": "pg-main"}}, nil)
+	sched.SetCreationTimestamp(metav1.NewTime(time.Date(2026, 9, 28, 23, 0, 0, 0, zone)))
+	p := cnpgScheduleProvider([]*unstructured.Unstructured{c}, []*unstructured.Unstructured{sched}, nil, nil)
+	got := detectCNPGScheduledRunIssues(p, cnpgClusterGVR, []*unstructured.Unstructured{c}, cnpgScheduleNow)
+	if len(got) != 1 || !strings.Contains(got[0].Message, "first fired at 2026-09-29T02:00:00Z") {
+		t.Fatalf("issues = %+v", got)
 	}
 }
 

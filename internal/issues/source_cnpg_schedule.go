@@ -125,7 +125,9 @@ func cnpgScheduledRunIssue(gvr schema.GroupVersionResource, cluster *unstructure
 		if base.IsZero() {
 			continue
 		}
-		fired := sched.Next(base)
+		// The operator's container clock is UTC; Kubernetes timestamps decode in
+		// Radar's local zone, which would shift every fire time.
+		fired := sched.Next(base.UTC())
 		if fired.IsZero() || fired.After(now) {
 			continue
 		}

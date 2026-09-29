@@ -316,8 +316,10 @@ func cnpgOwnedClaims(candidates []*corev1.PersistentVolumeClaim, cluster *unstru
 			continue
 		}
 		switch {
+		case !cnpgOwnedBy(pvc, cluster) && cnpgHasClusterOwner(pvc):
+			excluded = append(excluded, CNPGStorageExcludedPV{Claim: pvc.Name, Reason: "owned by a different Cluster object (UID mismatch)"})
 		case !cnpgOwnedBy(pvc, cluster):
-			excluded = append(excluded, CNPGStorageExcludedPV{Claim: pvc.Name, Reason: "labelled for this cluster but not owned by it"})
+			excluded = append(excluded, CNPGStorageExcludedPV{Claim: pvc.Name, Reason: "carries this cluster's labels but no owner reference to it, as a claim kept after its instance was destroyed does"})
 		case pvc.Labels[cnpgInstanceNameLabel] == "":
 			excluded = append(excluded, CNPGStorageExcludedPV{Claim: pvc.Name, Reason: "names no instance (" + cnpgInstanceNameLabel + ")"})
 		default:
@@ -332,6 +334,15 @@ func cnpgOwnedClaims(candidates []*corev1.PersistentVolumeClaim, cluster *unstru
 func cnpgOwnedBy(pvc *corev1.PersistentVolumeClaim, cluster *unstructured.Unstructured) bool {
 	for _, ref := range pvc.OwnerReferences {
 		if ref.Kind == "Cluster" && ref.UID == cluster.GetUID() && strings.HasPrefix(ref.APIVersion, cnpgGroup+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func cnpgHasClusterOwner(pvc *corev1.PersistentVolumeClaim) bool {
+	for _, ref := range pvc.OwnerReferences {
+		if ref.Kind == "Cluster" && strings.HasPrefix(ref.APIVersion, cnpgGroup+"/") {
 			return true
 		}
 	}
