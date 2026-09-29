@@ -1,6 +1,10 @@
 package subject
 
-import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
+)
 
 // ControllerOwnerResolver adapts already-observed Kubernetes objects to the
 // controller-only owner contracts used by subject resolution.
@@ -26,13 +30,19 @@ func (r ControllerOwnerResolver) ParentOf(child Ref) (Ref, bool) {
 	if owner == nil || owner.APIVersion == "" || owner.Kind == "" || owner.Name == "" {
 		return Ref{}, false
 	}
-	group := groupFromAPIVersion(owner.APIVersion)
+	group := resourceid.GroupFromAPIVersion(owner.APIVersion)
+	namespaced, known := false, false
+	if r.IsNamespaced != nil {
+		namespaced, known = r.IsNamespaced(group, owner.Kind)
+	}
 	namespace := ""
-	if child.Namespace != "" {
-		if r.IsNamespaced == nil {
+	if child.Namespace == "" {
+		// A cluster-scoped dependent can only have cluster-scoped owners; the
+		// garbage collector rejects a namespaced one as unresolvable.
+		if known && namespaced {
 			return Ref{}, false
 		}
-		namespaced, known := r.IsNamespaced(group, owner.Kind)
+	} else {
 		if !known {
 			return Ref{}, false
 		}

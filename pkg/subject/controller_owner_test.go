@@ -314,3 +314,28 @@ func TestControllerOwnerResolverClusterScopedChildKeepsEmptyNamespace(t *testing
 		t.Fatalf("ParentOf = %+v, %v; want cluster-scoped %+v, true", got, ok, want)
 	}
 }
+
+func TestControllerOwnerResolverRejectsNamespacedOwnerOfClusterScopedChild(t *testing.T) {
+	child := Ref{Group: "example.io", Kind: "GlobalWorker", Name: "worker"}
+	resolver := ownerFixtureCatalog{
+		child: obj("", "worker", nil, nil, ctrlRef("Widget", "workers", "control.example.io/v1")),
+	}.resolver(ownerFixtureScopes{{group: "control.example.io", kind: "Widget"}: true})
+
+	if got, ok := resolver.ParentOf(child); ok {
+		t.Fatalf("ParentOf = %+v, true; want no parent for a namespaced owner of a cluster-scoped child", got)
+	}
+}
+
+func TestResolveSubjectCustomNodeKindIsNotNodeTerminal(t *testing.T) {
+	pod := Ref{Kind: "Pod", Namespace: "apps", Name: "worker"}
+	customNode := Ref{Group: "example.io", Kind: "Node", Name: "edge-1"}
+	resolver := ownerFixtureCatalog{
+		pod:        obj("apps", "worker", nil, nil, ctrlRef("Node", "edge-1", "example.io/v1")),
+		customNode: obj("", "edge-1", nil, nil),
+	}.resolver(ownerFixtureScopes{{group: "example.io", kind: "Node"}: false})
+
+	got := ResolveSubject(pod, resolver, nil)
+	if got.Anchor != AnchorOwnerCollapsed || got.Ref != customNode {
+		t.Fatalf("ResolveSubject = %+v; want owner-collapsed into %+v", got, customNode)
+	}
+}

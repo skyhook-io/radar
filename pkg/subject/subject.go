@@ -11,8 +11,8 @@
 //	Tier-1 Subject (owner-collapsed root controller, deterministic, label-free)
 //	Tier-2 AppOverlay (declared-key 8-tier precedence, provenance/confidence/conflicts)
 //
-// PLACEMENT NOTE: pkg/subject imports only the canonical-key helper from
-// pkg/resourceid (ResourceKey). It does NOT import internal/* or pkg/topology (the
+// PLACEMENT NOTE: pkg/subject imports only identity helpers from pkg/resourceid
+// (ResourceKey, GroupFromAPIVersion). It does NOT import internal/* or pkg/topology (the
 // plan's layering rule). The Tier-1 owner walk is parameterized over an
 // OwnerResolver interface. ControllerOwnerResolver adapts an injected exact-ref
 // object lookup; any topology adapter must likewise use CONTROLLER ownership,
@@ -179,7 +179,7 @@ func ResolveSubject(start Ref, owners OwnerResolver, ops OperatorRootHook) Subje
 			}
 			// owner=Node is a terminal bucket for static/mirror pods — never
 			// collapse "up into" the Node as if it owned a workload.
-			if parent.Kind == "Node" {
+			if parent.Group == "" && parent.Kind == "Node" {
 				anchor = AnchorNode
 				break
 			}
