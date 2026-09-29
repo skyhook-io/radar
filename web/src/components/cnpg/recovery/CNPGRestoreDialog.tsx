@@ -8,7 +8,7 @@ import { CreateResourceDialog } from '../../shared/CreateResourceDialog'
 import { useToast } from '../../ui/Toast'
 import { cnpgClusterFullPath } from '../paths'
 import { trackCNPGOperation } from '../operations/store'
-import './restoreOperation'
+import { CNPG_RESTORE_OPERATION } from './restoreOperation'
 import {
   buildRestoreManifest,
   describeSource,
@@ -135,7 +135,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
         onCreated={(created) => {
           onClose()
           trackCNPGOperation({
-            kind: 'restore',
+            kind: CNPG_RESTORE_OPERATION,
             label: `Restore into ${created.name}`,
             context: connection.context,
             namespace: created.namespace || namespace,
@@ -174,7 +174,8 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
         if (!source) return
         const target: RestoreTarget = effectiveKind === 'time' && targetIso ? { kind: 'time', iso: targetIso } : effectiveKind === 'backupEnd' ? { kind: 'backupEnd' } : { kind: 'latest' }
         const m = buildRestoreManifest({ sourceCluster, source, namespace, newName: name, target })
-        setManifest(restoreManifestHeader(describeSource(source), serverName, sourceName ?? null) + yaml.stringify(m))
+        // The apiserver reads YAML 1.1, where unquoted on/off/yes are booleans (postgresql parameters are strings).
+        setManifest(restoreManifestHeader(describeSource(source), serverName, sourceName ?? null) + yaml.stringify(m, { version: '1.1' }))
       }}
       title="Restore to a new cluster"
       subject={{ kind: entry.kind === 'cluster' ? 'Cluster' : entry.kind === 'backup' ? 'Backup' : 'ObjectStore', namespace, name: entry.name }}

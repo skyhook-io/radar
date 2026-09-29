@@ -347,8 +347,10 @@ function failingContainer(p: CNPGRecoveryPod) {
   )
 }
 
+// A running init container is a restartable sidecar (the plugin's), not the
+// step in progress; an init container still waiting is.
 function activeContainer(p: CNPGRecoveryPod) {
-  const init = p.initContainers.find((c) => c.state !== 'terminated' || (c.exitCode ?? 0) !== 0)
+  const init = p.initContainers.find((c) => c.state === 'waiting' || c.state === 'unknown' || (c.state === 'terminated' && (c.exitCode ?? 0) !== 0))
   return init ?? p.containers.find((c) => c.state === 'running') ?? p.containers[0]
 }
 

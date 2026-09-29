@@ -43,4 +43,11 @@ export function restoreOperationObserver(op: CNPGTrackedOperation, obs: CNPGObse
   }
 }
 
-registerCNPGOperationObserver('restore', restoreOperationObserver)
+function registerRestoreObserver(): 'restore' {
+  registerCNPGOperationObserver('restore', restoreOperationObserver)
+  return 'restore'
+}
+
+// Registered through a used export, not a bare side-effect import: the package
+// declares itself side-effect free, so a bare import would be dropped.
+export const CNPG_RESTORE_OPERATION = registerRestoreObserver()

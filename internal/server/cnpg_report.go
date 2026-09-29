@@ -665,13 +665,14 @@ func cnpgReportLogLine(line string, queryText bool) string {
 	return ts + aicontext.RedactSecrets(body)
 }
 
+// cnpgReportCleanObject drops managedFields and the last-applied copy. The
+// spec is kept verbatim: CloudNativePG kinds name Secrets through {name, key}
+// selectors and have no inline credential fields, and the generic inline
+// redaction would blank those names (secretAccessKey: {name: ...}).
 func cnpgReportCleanObject(obj *unstructured.Unstructured) *unstructured.Unstructured {
 	clean := obj.DeepCopy()
 	unstructured.RemoveNestedField(clean.Object, "metadata", "managedFields")
 	unstructured.RemoveNestedField(clean.Object, "metadata", "annotations", "kubectl.kubernetes.io/last-applied-configuration")
-	if spec, ok := clean.Object["spec"]; ok {
-		aicontext.RedactInlineSecrets(spec)
-	}
 	return clean
 }
 

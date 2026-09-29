@@ -425,8 +425,24 @@ func cnpgEndpointCounts(slices []discoveryv1.EndpointSlice) (int, int) {
 	return ready, notReady
 }
 
+// cnpgOperatorProcessStart is when the operator container last started: the
+// counters reset with every container restart, which the Pod's own start
+// time does not reflect.
+func cnpgOperatorProcessStart(p *corev1.Pod, container string) string {
+	for _, st := range p.Status.ContainerStatuses {
+		if st.Name == container && st.State.Running != nil && !st.State.Running.StartedAt.IsZero() {
+			return st.State.Running.StartedAt.UTC().Format(time.RFC3339)
+		}
+	}
+	return ""
+}
+
 func (s *Server) cnpgOperatorReconcile(r *http.Request, d *appsv1.Deployment, pods []corev1.Pod, port int, leaderPod string) []CNPGOperatorReconcilePod {
 	out := []CNPGOperatorReconcilePod{}
+	container := cnpgOperatorContainer
+	if c := cnpgOperatorContainerOf(d); c != nil {
+		container = c.Name
+	}
 	if len(pods) == 0 {
 		return out
 	}
@@ -442,9 +458,7 @@ func (s *Server) cnpgOperatorReconcile(r *http.Request, d *appsv1.Deployment, po
 		p := &pods[i]
 		res := &results[i]
 		res.Pod, res.Leader, res.Controllers = p.Name, p.Name == leaderPod, []CNPGOperatorControllerStats{}
-		if p.Status.StartTime != nil {
-			res.StartedAt = p.Status.StartTime.UTC().Format(time.RFC3339)
-		}
+		res.StartedAt = cnpgOperatorProcessStart(p, container)
 		switch {
 		case !allowed:
 			res.CNPGRuntimeSource = CNPGRuntimeSource{State: cnpgRuntimeStateDenied, Error: "reading the operator's metrics needs " + cnpgGrantGetPodsProxy.String(d.Namespace)}

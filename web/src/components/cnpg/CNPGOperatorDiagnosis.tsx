@@ -133,7 +133,7 @@ function Reconcile({ pods }: { pods: CNPGOperatorReconcilePod[] }) {
             <Mono>{p.pod}</Mono>
             {p.leader && <Badge severity="info" size="sm">leader</Badge>}
             <span className="text-xs text-theme-text-tertiary">
-              counters since the process started{p.startedAt ? ` ${formatAge(p.startedAt)} ago` : ''}
+              {p.startedAt ? `counters since the operator container started ${formatAge(p.startedAt)} ago` : 'counters since the operator container last started'}
               {!p.leader ? ' · only the leader reconciles' : ''}
             </span>
           </div>

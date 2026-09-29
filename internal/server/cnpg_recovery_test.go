@@ -238,7 +238,7 @@ func TestCNPGReportSecretNames(t *testing.T) {
 			t.Errorf("missing Secret %q in %v", want, got)
 		}
 	}
-	for _, not := range []string{"queries", "catalog"} {
+	for _, not := range []string{"queries", "catalog", "[REDACTED]"} {
 		if got[not] {
 			t.Errorf("%q is not a Secret", not)
 		}
