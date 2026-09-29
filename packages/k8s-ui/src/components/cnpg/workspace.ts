@@ -408,6 +408,39 @@ function walFact(cluster: any): CNPGFact {
   return { text: 'Unknown', tone: 'unknown', source: 'ContinuousArchiving condition' }
 }
 
+export const CNPG_RESTORE_VALIDATION_ANNOTATION = 'radar.skyhook.io/restore-validation'
+
+export interface CNPGRestoreValidationNote {
+  recordedAt: string
+  recordedBy?: string
+  checked: string
+  targetTime?: string
+  source?: { namespace: string; name: string; uid?: string; verified: boolean }
+  target?: { namespace: string; name: string; uid?: string; verified: boolean }
+}
+
+/** The validation note recorded on a restored Cluster, or null when absent or malformed. */
+export function getCNPGRestoreValidation(cluster: any): CNPGRestoreValidationNote | null {
+  const raw = cluster?.metadata?.annotations?.[CNPG_RESTORE_VALIDATION_ANNOTATION]
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  try {
+    const v = JSON.parse(raw)
+    if (typeof v?.recordedAt !== 'string' || typeof v?.checked !== 'string' || !v.checked) return null
+    return v as CNPGRestoreValidationNote
+  } catch {
+    return null
+  }
+}
+
+// A note counts for this source only when it names this Cluster: by UID when
+// the recorder could read it, otherwise by name.
+function noteIsAbout(note: CNPGRestoreValidationNote, cluster: any): boolean {
+  const src = note.source
+  if (!src) return false
+  if (src.uid) return src.uid === cluster.metadata?.uid
+  return src.namespace === cluster.metadata?.namespace && src.name === cluster.metadata?.name
+}
+
 function restoreValidationFact(
   cluster: any,
   allClusters: any[],
@@ -418,7 +451,7 @@ function restoreValidationFact(
   const store = plugin?.barmanObjectName
   const ns = cluster.metadata?.namespace
   const name = cluster.metadata?.name
-  const restored = allClusters.find((c) => {
+  const restoredFromThis = allClusters.filter((c) => {
     if (c === cluster || c.metadata?.namespace !== ns) return false
     const recovery = c.spec?.bootstrap?.recovery
     if (!recovery) return false
@@ -433,6 +466,22 @@ function restoreValidationFact(
     const backup = backups.find((b) => b.metadata?.namespace === ns && b.metadata?.name === backupName)
     return specClusterName(backup) === name
   })
+  const noted = restoredFromThis
+    .map((c) => ({ c, note: getCNPGRestoreValidation(c) }))
+    .filter((x): x is { c: any; note: CNPGRestoreValidationNote } => !!x.note && noteIsAbout(x.note, cluster))
+    .sort((a, b) => Date.parse(b.note.recordedAt) - Date.parse(a.note.recordedAt))[0]
+  if (noted) {
+    const rname = noted.c.metadata?.name
+    const by = noted.note.recordedBy ? `by ${noted.note.recordedBy}` : 'by a user Radar could not identify'
+    return {
+      text: 'Validation recorded',
+      tone: 'neutral',
+      at: noted.note.recordedAt,
+      source: `Recorded ${by} on ${rname}${noted.note.targetTime ? ` (target ${noted.note.targetTime})` : ''}: ${noted.note.checked.length > 140 ? `${noted.note.checked.slice(0, 140)}…` : noted.note.checked}. A person's note, not a check Radar ran.`,
+      restoredInto: { namespace: noted.c.metadata?.namespace, name: rname },
+    }
+  }
+  const restored = restoredFromThis[0]
   if (!restored) return { text: 'None recorded', tone: 'unknown', source: 'Kubernetes does not record restore tests' }
   const rname = restored.metadata?.name
   const ready = typeof restored.status?.readyInstances === 'number' && restored.status.readyInstances > 0
@@ -447,7 +496,7 @@ function restoreValidationFact(
   return {
     text: `Restored into ${rname}`,
     tone: 'neutral',
-    source: `Cluster ${rname} bootstrapped from this cluster's backups and has ready instances · created ${restored.metadata?.creationTimestamp ?? 'unknown'}. This proves one recovery, not that today's backups restore.`,
+    source: `Cluster ${rname} bootstrapped from this cluster's backups and has ready instances · created ${restored.metadata?.creationTimestamp ?? 'unknown'}. No validation note is recorded on it; this proves one recovery, not that today's backups restore.`,
     restoredInto: { namespace: restored.metadata?.namespace, name: rname },
   }
 }

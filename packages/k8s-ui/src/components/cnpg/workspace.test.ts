@@ -151,6 +151,30 @@ describe('buildCNPGFleet', () => {
     expect(r.protection.restoreValidation.tone).toBe('unknown')
   })
 
+  it('reads a recorded validation note on the restored cluster, still never healthy', () => {
+    const plugin = { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }] }
+    const src = cluster('pg-a', 'db', { metadata: { uid: 'uid-a' }, spec: plugin })
+    const restoredSpec = {
+      bootstrap: { recovery: { source: 'origin' } },
+      externalClusters: [{ name: 'origin', plugin: { name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store', serverName: 'pg-a' } } }],
+    }
+    const note = (uid: string) =>
+      JSON.stringify({ version: 1, recordedAt: '2026-09-29T10:00:00Z', recordedBy: 'alice', checked: 'row counts on orders', source: { namespace: 'db', name: 'pg-a', uid, verified: true } })
+    const noted = cluster('pg-a-restore', 'db', { metadata: { annotations: { 'radar.skyhook.io/restore-validation': note('uid-a') } }, spec: restoredSpec })
+    const fleet = buildCNPGFleet(resp({ clusters: [src, noted] }))
+    const fact = fleet.rows.find((r) => r.name === 'pg-a')!.protection.restoreValidation
+    expect(fact.text).toBe('Validation recorded')
+    expect(fact.tone).toBe('neutral')
+    expect(fact.at).toBe('2026-09-29T10:00:00Z')
+    expect(fact.source).toContain('by alice on pg-a-restore')
+
+    const otherUID = cluster('pg-a-restore', 'db', { metadata: { annotations: { 'radar.skyhook.io/restore-validation': note('uid-previous-incarnation') } }, spec: restoredSpec })
+    expect(buildCNPGFleet(resp({ clusters: [src, otherUID] })).rows.find((r) => r.name === 'pg-a')!.protection.restoreValidation.text).toBe('Restored into pg-a-restore')
+
+    const malformed = cluster('pg-a-restore', 'db', { metadata: { annotations: { 'radar.skyhook.io/restore-validation': '{not json' } }, spec: restoredSpec })
+    expect(buildCNPGFleet(resp({ clusters: [src, malformed] })).rows.find((r) => r.name === 'pg-a')!.protection.restoreValidation.text).toBe('Restored into pg-a-restore')
+  })
+
   it('reports WAL archiving from the condition and unknown when absent', () => {
     const failing = cluster('pg-a', 'db', { status: { conditions: [{ type: 'ContinuousArchiving', status: 'False', message: 'exit status 1' }] } })
     const silent = cluster('pg-b', 'db')

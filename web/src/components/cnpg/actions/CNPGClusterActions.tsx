@@ -16,11 +16,12 @@ import { useToast } from '../../ui/Toast'
 import { useCNPGClusterHA } from '../../../api/cnpg-ha'
 import { trackCNPGOperation, type TrackCNPGOperationInput } from '../operations/store'
 import { useCNPGWriteGuard, type CNPGWriteScope } from './useCNPGWriteGuard'
-import { CNPGRestoreDialog } from './CNPGRestoreDialog'
+import { CNPGRestoreDialog } from '../recovery/CNPGRestoreDialog'
+import { CNPGReportDialog } from './CNPGReportDialog'
 import { useOpenCNPGPsql } from './useOpenCNPGPsql'
 import { backupNameFor, describeBackupMethod, pickDefaultStandby, type StandbyChoice } from './actionModel'
 
-type DialogKind = CNPGClusterActionName | 'restore' | null
+type DialogKind = CNPGClusterActionName | 'restore' | 'report' | null
 
 const MENU_ITEM = 'flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover disabled:cursor-not-allowed disabled:text-theme-text-disabled'
 
@@ -149,13 +150,17 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
             <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => { setMenu(false); setOpen('restore') }}>
               Restore to a new cluster…
             </button>
+            <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => { setMenu(false); setOpen('report') }}>
+              Download report…
+            </button>
           </div>
         </>
       )}
-      {caps.data && open && open !== 'restore' && (
+      {caps.data && open && open !== 'restore' && open !== 'report' && (
         <ClusterActionDialog kind={open} caps={caps.data} namespace={namespace} name={name} onClose={() => setOpen(null)} />
       )}
-      {open === 'restore' && <CNPGRestoreDialog namespace={namespace} name={name} onClose={() => setOpen(null)} />}
+      {open === 'restore' && <CNPGRestoreDialog namespace={namespace} entry={{ kind: 'cluster', name }} onClose={() => setOpen(null)} />}
+      {open === 'report' && <CNPGReportDialog namespace={namespace} name={name} onClose={() => setOpen(null)} />}
     </div>
   )
 }

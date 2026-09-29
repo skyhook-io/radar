@@ -48,6 +48,8 @@ export interface ActionConfirmDialogProps {
    * repeating it could apply the action twice.
    */
   outcomeUnknown?: boolean
+  /** `wide` for dialogs that show evidence beside their form fields. */
+  size?: 'default' | 'wide'
 }
 
 export function ActionConfirmDialog({
@@ -71,6 +73,7 @@ export function ActionConfirmDialog({
   isLoading = false,
   error,
   outcomeUnknown = false,
+  size = 'default',
 }: ActionConfirmDialogProps) {
   const titleId = useId()
   const [typed, setTyped] = useState('')
@@ -89,7 +92,7 @@ export function ActionConfirmDialog({
   const where = [subject.namespace, subject.name].filter(Boolean).join('/')
 
   return (
-    <DialogPortal open={open} onClose={onClose} closable={!isLoading} className="w-full max-w-xl" ariaLabelledBy={titleId}>
+    <DialogPortal open={open} onClose={onClose} closable={!isLoading} className={size === 'wide' ? 'w-full max-w-4xl' : 'w-full max-w-xl'} ariaLabelledBy={titleId}>
       <div className="flex items-start gap-3 border-b border-theme-border p-4">
         <div className="min-w-0 flex-1">
           <h3 id={titleId} className="text-lg font-semibold text-theme-text-primary">{title}</h3>
