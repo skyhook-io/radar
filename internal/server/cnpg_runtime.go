@@ -237,6 +237,7 @@ type CNPGInstanceMetricFacts struct {
 	DatabaseSizes                 []CNPGDatabaseBytes   `json:"databaseSizes,omitempty"`
 	Archiver                      *CNPGArchiverCounters `json:"archiver,omitempty"`
 	WalBytes                      *float64              `json:"walBytes,omitempty"`
+	WalSegments                   *float64              `json:"walSegments,omitempty"`
 	ReplicationSlotsRetainedBytes []CNPGSlotBytes       `json:"replicationSlotsRetainedBytes,omitempty"`
 	XactCommitTotal               *float64              `json:"xactCommitTotal,omitempty"`
 	XactRollbackTotal             *float64              `json:"xactRollbackTotal,omitempty"`
@@ -1304,6 +1305,7 @@ func cnpgInstanceMetricFacts(samples map[string][]cnpgSample) (*CNPGInstanceMetr
 		MaxConnections:    cnpgSingle(samples, "cnpg_pg_settings_setting", map[string]string{"name": "max_connections"}),
 		WaitingBackends:   cnpgSingle(samples, "cnpg_backends_waiting_total", nil),
 		WalBytes:          cnpgSingle(samples, "cnpg_collector_pg_wal", map[string]string{"value": "size"}),
+		WalSegments:       cnpgSingle(samples, "cnpg_collector_pg_wal", map[string]string{"value": "count"}),
 		XactCommitTotal:   cnpgSum(samples, "cnpg_pg_stat_database_xact_commit"),
 		XactRollbackTotal: cnpgSum(samples, "cnpg_pg_stat_database_xact_rollback"),
 		BlksHit:           cnpgSum(samples, "cnpg_pg_stat_database_blks_hit"),

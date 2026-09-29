@@ -6,6 +6,7 @@ import { useCNPGClusterCapabilities, useCNPGRuntime, type CNPGRuntimeInstance, t
 import { Notice } from '../capacity/shared'
 import { Segments } from './shared'
 import { CNPGInstanceActions } from './actions/CNPGInstanceActions'
+import { CNPGStorage } from './CNPGStorage'
 
 type Section = 'replication' | 'sessions' | 'transactions' | 'storage' | 'slots' | 'trends'
 
@@ -128,7 +129,10 @@ export function CNPGClusterRuntime({ namespace, name, onOpenLogs }: { namespace:
             Nothing below is shown as zero; it is omitted.
           </p>
           <pre className="mt-2 rounded-md bg-theme-elevated px-3 py-2 font-mono text-xs text-theme-text-primary">{`requires: ${data.permission.grant ?? `get pods/proxy in ${namespace}`}`}</pre>
-          <p className="mt-2 text-sm text-theme-text-secondary">Still available: Overview, Protection, Activity, Logs, Spec & status and YAML.</p>
+          <p className="mt-2 text-sm text-theme-text-secondary">Still available: Overview, Protection, Activity, Logs, Spec & status and YAML, and the volumes below.</p>
+        </div>
+        <div className="mt-4">
+          <CNPGStorage namespace={namespace} name={name} />
         </div>
       </div>
     )
@@ -151,7 +155,7 @@ export function CNPGClusterRuntime({ namespace, name, onOpenLogs }: { namespace:
       )}
       {section === 'sessions' && <SessionsView primary={primary} />}
       {section === 'transactions' && <TransactionsView primary={primary} samples={samples} />}
-      {section === 'storage' && <StorageView instances={data.instances} />}
+      {section === 'storage' && <StorageView namespace={namespace} name={name} instances={data.instances} />}
       {section === 'slots' && <SlotsView primary={primary} />}
       {section === 'trends' && <TrendsView samples={samples} />}
     </div>
@@ -346,40 +350,8 @@ function TransactionsView({ primary, samples }: { primary?: CNPGRuntimeInstance;
   )
 }
 
-function StorageView({ instances }: { instances: CNPGRuntimeInstance[] }) {
-  const primary = instances.find((i) => i.role === 'primary')
-  const a = primary?.status.archiving
-  const arch = primary?.metrics.archiver
-  return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <Card title="Database sizes (primary)">
-        {primary?.metrics.state === 'ok' && primary.metrics.databaseSizes?.length ? (
-          primary.metrics.databaseSizes.map((d) => (
-            <div key={d.database} className="flex justify-between font-mono text-sm">
-              <span className="truncate">{d.database}</span>
-              <span>{bytes(d.bytes)}</span>
-            </div>
-          ))
-        ) : (
-          <Unavailable inst={primary} what="Database sizes" />
-        )}
-      </Card>
-      <Card title="WAL archiving" footer="From the primary's instance manager and exporter.">
-        {primary?.status.state === 'ok' ? (
-          <div className="space-y-1 text-sm">
-            <div>Last archived: <span className="font-mono">{a?.lastArchivedWal ?? '—'}</span>{a?.lastArchivedAt ? ` · ${formatAge(a.lastArchivedAt)} ago` : ''}</div>
-            <div className={a?.lastFailedAt && (!a.lastArchivedAt || Date.parse(a.lastFailedAt) > Date.parse(a.lastArchivedAt)) ? toneTextClass('unhealthy') : undefined}>
-              Last failed: <span className="font-mono">{a?.lastFailedWal ?? 'none'}</span>{a?.lastFailedAt ? ` · ${formatAge(a.lastFailedAt)} ago` : ''}
-            </div>
-            <div>Waiting to archive: <span className="font-mono">{a?.readyWalFiles ?? '—'}</span> WAL files</div>
-            {arch && <div className="text-xs text-theme-text-tertiary">Archived {arch.archivedCount ?? '—'} · failed {arch.failedCount ?? '—'} since the server started</div>}
-          </div>
-        ) : (
-          <SourceState label="Status" state={primary?.status.state ?? 'error'} error={primary?.status.error} />
-        )}
-      </Card>
-    </div>
-  )
+function StorageView({ namespace, name, instances }: { namespace: string; name: string; instances: CNPGRuntimeInstance[] }) {
+  return <CNPGStorage namespace={namespace} name={name} primary={instances.find((i) => i.role === 'primary')} />
 }
 
 function SlotsView({ primary }: { primary?: CNPGRuntimeInstance }) {

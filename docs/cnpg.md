@@ -47,6 +47,8 @@ Every value is something the cluster reports, labelled with where it came from. 
 | Pooler pressure | Each pooler Pod's PgBouncer exporter (`:9127/metrics`): clients waiting, server connections in use, max wait, and how many Pods reported | "Not measured" when no Pod could be read; partial when only some reported |
 | ScheduledBackup cron | Shown verbatim | CNPG's cron is six-field (seconds first) and is never translated |
 
+Backup schedules: besides "No backup has run since this schedule was due" (the operator's own `nextScheduleTime` passed), the Issues engine raises **"No successful backup since ScheduledBackup <name> fired at <time>"** on the Cluster when an active schedule fired (six-field cron, seconds first, parsed as the operator does) after the cluster's newest successful backup (Backup objects, the ObjectStore's `lastSuccessfulBackupTime`, in-tree `status.lastSuccessfulBackup`), allowing the last successful backup's duration plus 10 minutes, and no Backup started since is still running. Suspended schedules raise nothing. The workspace shows it only to callers who can list ScheduledBackups in the namespace.
+
 Problems come from Radar's Issues engine (the same detections as `/issues`) plus the audit's `cnpgNoDeclarativeBackup`, worded "No declarative backup schedule" because that is all it proves. A cluster **needs attention** when it has an issue of warning or worse on itself, an instance Pod, or an object that references it.
 
 ## Access
@@ -62,6 +64,28 @@ Cluster logs (`/api/cnpg/clusters/{ns}/{name}/logs`) need `get pods/log`; Activi
 `GET /api/cnpg/clusters/{ns}/{name}/runtime` and `GET /api/cnpg/poolers/{ns}/{name}/runtime` read live data **through the caller's `pods/proxy`**: each instance manager's `/pg/status` (`:8000`) and the Postgres exporter (`:9187`), or each PgBouncer exporter (`:9127`). The apiserver strips the caller's credentials and `Impersonate-*` headers before forwarding, so a Pod never sees who asked. Only fixed GET paths are requested (some instance-manager paths mutate on GET), redirects are refused, and TLS is never downgraded after a certificate error. Requests are bounded: 4 in flight, 5 s deadlines, 1 MiB per status and 4 MiB per metrics body, memoized per identity and Pod UID for 5 s (status) or 25 s (metrics).
 
 Each source reports its own state (`ok`, `partial`, `denied`, `unreachable`, `error`). **Denied is never shown as zero**: without `get pods/proxy` the Runtime tab names the missing grant, and the rest of the workspace falls back to the facts above. The Runtime tab shows replication (per-standby write, flush and replay lag), aggregated sessions and lock waits, transaction rates, storage and WAL, replication slots, and trends sampled while the tab is open, with gaps shown where a sample failed. No per-session query text is read.
+
+## Storage
+
+`GET /api/cnpg/clusters/{ns}/{name}/storage` backs the Runtime tab's **Storage & WAL** section. `GET /api/cnpg/disk` fills the fleet's **Disk** column and the Cluster overview's **Storage** fact with each cluster's fullest measured volume. Each value has its own source and its own "unknown":
+
+| Fact | Source | When it is not known |
+|---|---|---|
+| The instance's volumes | Claims labelled `cnpg.io/cluster` **and** owned by the Cluster's UID, naming an instance (`cnpg.io/instanceName`), by `cnpg.io/pvcRole` | "No access (needs list persistentvolumeclaims)". A labelled claim the Cluster does not own is listed as not counted |
+| Requested / capacity | The claim's `spec.resources.requests.storage` / `status.capacity` | `—` |
+| Resize in progress | Claim conditions (`Resizing`, `FileSystemResizePending`, resize errors), `status.allocatedResourceStatuses`, request larger than capacity, the Cluster's `status.resizingPVC` | — |
+| Healthy / dangling / unusable | The Cluster's `status.healthyPVC`, `danglingPVC`, `unusablePVC`, `initializingPVC` | Not shown |
+| Expansion allowed | The StorageClass's `allowVolumeExpansion` (unset = not allowed) | "expansion unknown" when the class cannot be read |
+| Used space | Prometheus `kubelet_volume_stats_used_bytes` / `_capacity_bytes` per claim, behind the same grant as the PVC chart | "Used space unknown" with the reason (no series, no Prometheus, no access). Never 0. When kubelet's filesystem is much larger than the claim (local volumes), the view says the figure is the shared filesystem's |
+| WAL on disk | Exporter `cnpg_collector_pg_wal{value="size"\|"count"}` | "unavailable" with the pods/proxy state |
+| Waiting to archive | Instance manager `readyWalFiles`, with the last archived/failed times | same |
+| Held by replication slots | Exporter `cnpg_pg_replication_slots_pg_wal_lsn_diff` | same |
+
+The three WAL measures overlap and are shown side by side, never added up. Disk findings (≥ 80 % warning, ≥ 90 % critical) come only from a measurement, are computed where they are read, and reach the fleet's Needs attention only for callers who received the measurement (`list persistentvolumeclaims` + the Prometheus PVC grant); they are not Issues-engine issues.
+
+**Expanding.** The view names the field each size is declared in — `spec.storage.size`, `spec.walStorage.size`, or `spec.tablespaces[name=<t>].storage.size` (or the `pvcTemplate` request when that is how it was declared) — and whether the class allows expansion. **Edit size…** shows the GitOps write guard for that field, then opens Radar's apply flow with a manifest carrying only the new size (tablespaces carry the whole list, which the CRD does not merge by key). The operator resizes the claims; CloudNativePG does not shrink volumes.
+
+Volumes and their usage do not depend on `pods/proxy`: without it the Runtime tab still shows them under its access notice.
 
 ## Actions
 

@@ -201,13 +201,14 @@ export function CNPGOverview({
 
           <div className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
             <div className={TABLE_WRAP}>
-              <table className="w-full min-w-[980px] table-fixed">
+              <table className="w-full min-w-[1060px] table-fixed">
                 <colgroup>
-                  <col className="w-[22%]" />
-                  <col className="w-[7%]" />
-                  <col className="w-[15%]" />
-                  <col className="w-[15%]" />
-                  <col className="w-[12%]" />
+                  <col className="w-[19%]" />
+                  <col className="w-[6%]" />
+                  <col className="w-[14%]" />
+                  <col className="w-[13%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[10%]" />
                   <col className="w-[5%]" />
                   <col className="w-[14%]" />
                   <col className="w-[10%]" />
@@ -218,6 +219,7 @@ export function CNPGOverview({
                     <th className={TH}>Ready</th>
                     <th className={TH}>Replication</th>
                     <th className={TH}>Protection</th>
+                    <th className={TH}>Disk</th>
                     <th className={TH}>Declarations</th>
                     <th className={TH}>PG</th>
                     <th className={TH}>Needs attention</th>
@@ -248,6 +250,7 @@ export function CNPGOverview({
                         </td>
                         <td className={TD}><FactValue fact={row.replication} /></td>
                         <td className={TD}><FactValue fact={row.protection.summary} /></td>
+                        <td className={TD}><FactValue fact={row.disk ?? { text: 'Reading…', tone: 'unknown' }} /></td>
                         <td className={TD}><FactValue fact={row.declarations.summary} /></td>
                         <td className={clsx(TD, 'font-mono')}>{row.pgVersion ?? '—'}</td>
                         <td className={TD}><AttentionCell row={row} /></td>

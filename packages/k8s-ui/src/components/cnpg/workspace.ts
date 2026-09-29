@@ -3,6 +3,7 @@
 // does not report something the value is "unknown", never zero or healthy.
 
 import type { HealthLevel } from '../resources/resource-utils'
+import { formatBytes } from '../../utils/format'
 import {
   CNPG_BARMAN_PLUGIN_NAME,
   getCNPGClusterBackupConfig,
@@ -123,7 +124,8 @@ export interface CNPGProblem {
   detail?: string
   /** The object the evidence is about (may be the Cluster or a child object). */
   subject: { kind: string; group: string; namespace: string; name: string }
-  source: 'issue' | 'audit'
+  /** measurement: derived here from a reading only callers holding its grants receive (disk use). */
+  source: 'issue' | 'audit' | 'measurement'
 }
 
 export interface CNPGInstance {
@@ -170,6 +172,8 @@ export interface CNPGFleetRow {
   categories: Set<CNPGProblemCategory>
   /** GitOps owner recorded on the Cluster, when it carries the standard labels. */
   gitops: CNPGGitOpsSource | null
+  /** Fullest measured volume, set by applyCNPGDisk; absent when no disk reading was requested. */
+  disk?: CNPGFact
 }
 
 export interface CNPGFleet {
@@ -185,6 +189,7 @@ const PROTECTION_ISSUE_REASONS = new Set([
   'CNPGLastBackupFailed',
   'CNPGBackupFailed',
   'CNPGScheduledBackupMissed',
+  'CNPGScheduledRunNoBackup',
 ])
 
 export function cnpgIssueCategory(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'reason'>): CNPGProblemCategory {
@@ -674,20 +679,124 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
     }
   })
 
-  rows.sort((a, b) => Number(b.attention) - Number(a.attention) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name))
-
-  const categoryCounts = { availability: 0, protection: 0, declarations: 0, pooling: 0 } as Record<CNPGProblemCategory, number>
-  for (const r of rows) for (const c of r.categories) categoryCounts[c]++
-
   const incompleteKinds = CNPG_WORKSPACE_KEYS.filter((k) => {
     const s = coverageOf(resp, k).state
     return s === 'partial' || s === 'denied' || s === 'syncing' || s === 'error'
   })
 
+  return finishFleet(rows, incompleteKinds)
+}
+
+function finishFleet(rows: CNPGFleetRow[], incompleteKinds: CNPGWorkspaceKey[]): CNPGFleet {
+  rows.sort((a, b) => Number(b.attention) - Number(a.attention) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name))
+  const categoryCounts = { availability: 0, protection: 0, declarations: 0, pooling: 0 } as Record<CNPGProblemCategory, number>
+  for (const r of rows) for (const c of r.categories) categoryCounts[c]++
   return {
     rows,
     attentionCount: rows.filter((r) => r.attention).length,
     categoryCounts,
     incompleteKinds,
   }
+}
+
+/** One cluster's answer from /api/cnpg/disk. */
+export interface CNPGDiskReading {
+  namespace: string
+  name: string
+  /** ok | partial | noSeries | noPrometheus | denied | unavailable | error | notRead */
+  state: string
+  grant?: string
+  reason?: string
+  claims: number
+  measured: number
+  max?: {
+    claim: string
+    instance: string
+    role: string
+    tablespace?: string
+    usedBytes: number
+    capacityBytes: number
+    ratio: number
+  }
+}
+
+export const CNPG_DISK_WARNING_RATIO = 0.8
+export const CNPG_DISK_CRITICAL_RATIO = 0.9
+
+export const CNPG_DISK_SOURCE = 'kubelet volume stats via Prometheus'
+
+export function cnpgVolumeRoleLabel(role: string, tablespace?: string): string {
+  switch (role) {
+    case 'PG_DATA':
+      return 'data volume'
+    case 'PG_WAL':
+      return 'WAL volume'
+    case 'PG_TABLESPACE':
+      return tablespace ? `tablespace ${tablespace} volume` : 'tablespace volume'
+    default:
+      return 'volume'
+  }
+}
+
+export function cnpgDiskTone(ratio: number): HealthLevel {
+  if (ratio >= CNPG_DISK_CRITICAL_RATIO) return 'unhealthy'
+  if (ratio >= CNPG_DISK_WARNING_RATIO) return 'degraded'
+  return 'healthy'
+}
+
+/** The fleet and summary "Storage" fact: the fullest measured volume, or why there is none. */
+export function cnpgDiskFact(r: CNPGDiskReading | undefined): CNPGFact {
+  if (!r) return { text: 'Not read', tone: 'unknown' }
+  if (r.max && (r.state === 'ok' || r.state === 'partial')) {
+    const partial = r.state === 'partial' ? ` · ${r.measured} of ${r.claims} volumes measured` : ''
+    return {
+      text: `${Math.round(r.max.ratio * 100)}% used`,
+      tone: cnpgDiskTone(r.max.ratio),
+      source: `Fullest: ${cnpgVolumeRoleLabel(r.max.role, r.max.tablespace)} of ${r.max.instance}, ${formatBytes(r.max.usedBytes)} of ${formatBytes(r.max.capacityBytes)} · ${CNPG_DISK_SOURCE}${partial}`,
+    }
+  }
+  switch (r.state) {
+    case 'denied':
+      return { text: 'No access', tone: 'unknown', source: r.grant ? `Needs ${r.grant}` : r.reason }
+    case 'noSeries':
+    case 'noPrometheus':
+    case 'ok':
+    case 'partial':
+      return { text: 'No usage metrics', tone: 'unknown', source: r.reason ?? 'Used space needs Prometheus with kubelet volume stats' }
+    case 'notRead':
+      return { text: 'Not measured', tone: 'unknown', source: r.reason }
+    default:
+      return { text: 'Unavailable', tone: 'unknown', source: r.reason }
+  }
+}
+
+const PROBLEM_RANK = { critical: 0, warning: 1, posture: 2 } as const
+
+/**
+ * Joins /api/cnpg/disk into the fleet: every row gets its disk fact, and a
+ * volume at or past the warning threshold becomes a problem, so the cluster
+ * needs attention. Only a measurement raises one, and the endpoint returns
+ * measurements only to callers holding the claim and metrics grants.
+ */
+export function applyCNPGDisk(fleet: CNPGFleet, readings: CNPGDiskReading[] | undefined): CNPGFleet {
+  if (!readings) return fleet
+  const byKey = new Map(readings.map((r) => [key(r.namespace, r.name), r]))
+  const rows = fleet.rows.map((row) => {
+    const reading = byKey.get(row.key)
+    const next: CNPGFleetRow = { ...row, disk: cnpgDiskFact(reading) }
+    const max = reading?.max
+    if (!max || max.ratio < CNPG_DISK_WARNING_RATIO || (reading.state !== 'ok' && reading.state !== 'partial')) return next
+    const problem: CNPGProblem = {
+      id: `disk:${row.key}`,
+      severity: max.ratio >= CNPG_DISK_CRITICAL_RATIO ? 'critical' : 'warning',
+      category: 'availability',
+      title: `The ${cnpgVolumeRoleLabel(max.role, max.tablespace)} of ${max.instance} is ${Math.round(max.ratio * 100)}% full`,
+      detail: `${formatBytes(max.usedBytes)} of ${formatBytes(max.capacityBytes)} used, from ${CNPG_DISK_SOURCE}.`,
+      subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
+      source: 'measurement',
+    }
+    const problems = [...row.problems, problem].sort((a, b) => PROBLEM_RANK[a.severity] - PROBLEM_RANK[b.severity] || a.title.localeCompare(b.title))
+    return { ...next, problems, attention: true, categories: new Set([...row.categories, problem.category]) }
+  })
+  return finishFleet(rows, fleet.incompleteKinds)
 }

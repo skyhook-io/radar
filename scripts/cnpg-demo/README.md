@@ -261,7 +261,7 @@ subdirectory, so `up`/`live` never apply them.
 | `pgrt/pg-runtime-pooler-rw` | PgBouncer, transaction mode, 2 pods |
 | `pgrt/pg-load` | pgbench through the Pooler, ~5 tps (`application_name=radar-pgbench`) |
 | `pgrt/pg-lock-holder` / `pg-lock-waiter` | `idle in transaction` holding a row lock on `radar_lock_demo`, and an `UPDATE` blocked on it |
-| `monitoring/prometheus-server` | Scrapes instances `:9187` (job `cnpg-instances`) and poolers `:9127` (job `cnpg-poolers`), 15s, keeping `namespace`, `pod`, `cluster` (+ `pooler`) |
+| `monitoring/prometheus-server` | Scrapes instances `:9187` (job `cnpg-instances`) and poolers `:9127` (job `cnpg-poolers`), 15s, keeping `namespace`, `pod`, `cluster` (+ `pooler`); and each kubelet through the apiserver node proxy (job `kubelet`, only `kubelet_volume_stats_*`) |
 
 **Why the operator must be live.** Every runtime state is produced by the
 controller: it injects the plugin sidecar at pod creation, runs the immediate
@@ -276,6 +276,24 @@ entry in `WellKnownLocations` (`pkg/prom/discovery.go`), so discovery is a
 targeted Service GET, not the scored dynamic scan; off-cluster Radar
 port-forwards to it. Its only port is 9090 so the "first port" rule is
 unambiguous. The frozen `pg` instances are scraped too.
+
+**Volume usage is honestly absent here.** The `kubelet` job reaches
+`/api/v1/nodes/<node>/proxy/metrics` with the Prometheus ServiceAccount (it
+needs `get nodes/proxy`, granted in `50-prometheus.yaml`), so no kubelet port or
+certificate is involved. But kind's default `standard` class (local-path)
+provisions **hostPath** volumes, and kubelet publishes no volume stats for
+those: every CNPG claim in this demo has no `kubelet_volume_stats_*` series, and
+the Storage & WAL view and the fleet's Disk column say "no usage metrics"
+rather than 0. That is the state to verify here. A claim annotated
+`volumeType: local` gets a `local` PV, which kubelet does measure — but as the
+node's whole filesystem (hundreds of GB), not the claim's size; the view says
+so when the two disagree. Measured-and-full states are covered by the unit
+tests (`internal/server/cnpg_storage_test.go`, `workspace-disk.test.ts`), not
+this fixture. To check the scrape itself:
+
+```bash
+kubectl --context kind-radar-cnpg-demo -n monitoring exec deploy/prometheus-server -- wget -qO- 'http://localhost:9090/api/v1/query?query=up{job="kubelet"}'
+```
 
 ### Constraints, all of which fail quietly
 

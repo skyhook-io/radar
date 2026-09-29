@@ -1064,16 +1064,21 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 
 	used := firstValue(usedRes)
 	capacity := firstValue(capRes)
-	if used == nil || capacity == nil || math.IsInf(*used, 0) || math.IsInf(*capacity, 0) ||
-		*used < 0 || *capacity < 1 || *used >= math.Exp2(63) || *capacity >= math.Exp2(63) {
+	if used == nil || capacity == nil {
+		resp.Status = "invalid_data"
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	usage, ok := pvcUsageOf(*used, *capacity)
+	if !ok {
 		resp.Status = "invalid_data"
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
-	resp.Used = int64(*used)
-	resp.Capacity = int64(*capacity)
-	resp.Ratio = *used / *capacity
+	resp.Used = usage.UsedBytes
+	resp.Capacity = usage.CapacityBytes
+	resp.Ratio = usage.Ratio
 	resp.HasData = true
 	resp.Status = "available"
 	writeJSON(w, http.StatusOK, resp)

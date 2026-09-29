@@ -342,7 +342,7 @@ export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRe
       {/* Storage */}
       <Section title="Storage" icon={HardDrive} defaultExpanded>
         <PropertyList>
-          <Property label="Data Size" value={getCNPGClusterStorage(data)} />
+          <Property label="Requested size" value={getCNPGClusterStorage(data)} />
           <Property label="Storage Class" value={getCNPGClusterStorageClass(data)} />
           {/* Requested size and class are spec-side intentions. These are what the
               operator reports about the volumes that actually exist. */}
@@ -363,7 +363,7 @@ export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRe
           <div className="mt-2 pt-2 border-t border-theme-border">
             <div className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-1">WAL Storage</div>
             <PropertyList>
-              {walStorage.size && <Property label="Size" value={walStorage.size} />}
+              {walStorage.size && <Property label="Requested size" value={walStorage.size} />}
               {walStorage.storageClass && <Property label="Storage Class" value={walStorage.storageClass} />}
             </PropertyList>
           </div>
