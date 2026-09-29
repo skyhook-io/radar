@@ -1,0 +1,153 @@
+# Workload that makes sessions, locks and blocking observable.
+#
+#   pg-load         pgbench: initialises once (directly against -rw, since
+#                   `pgbench -i` is DDL + COPY and a transaction-mode pooler adds
+#                   nothing), then light continuous load THROUGH the Pooler.
+#   pg-lock-holder  BEGIN; SELECT ... FOR UPDATE; then goes quiet — an
+#                   `idle in transaction` session holding a row lock.
+#   pg-lock-waiter  UPDATE on the same row, blocked by the holder (wait_event_type
+#                   = Lock). Loops, so it re-blocks if it ever gets through.
+#
+# All three use the cluster's generated app Secret (pg-runtime-app), and the
+# PostgreSQL image already on the node, which carries psql and pgbench.
+#
+# The holder and waiter connect to pg-runtime-rw directly, not the Pooler: the
+# point is a backend Radar can attribute to a named client (application_name),
+# and a pooled server connection would be shared.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pg-load
+  namespace: pgrt
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: pg-load }
+  template:
+    metadata:
+      labels: { app: pg-load }
+    spec:
+      initContainers:
+        - name: pgbench-init
+          image: ghcr.io/cloudnative-pg/postgresql:17.5
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -e
+              until pg_isready -h pg-runtime-rw -q; do sleep 2; done
+              if [ "$(psql -h pg-runtime-rw -tAc "SELECT to_regclass('public.pgbench_accounts') IS NOT NULL")" = "t" ]; then
+                echo "pgbench tables already present"
+              else
+                pgbench -h pg-runtime-rw -i -s 5
+              fi
+          env:
+            - name: PGUSER
+              valueFrom: { secretKeyRef: { name: pg-runtime-app, key: username } }
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: pg-runtime-app, key: password } }
+            - name: PGDATABASE
+              valueFrom: { secretKeyRef: { name: pg-runtime-app, key: dbname } }
+      containers:
+        - name: pgbench
+          image: ghcr.io/cloudnative-pg/postgresql:17.5
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              while true; do
+                pgbench -h pg-runtime-pooler-rw -n -c 2 -j 1 -R 5 -T 600 -P 60 || true
+                sleep 2
+              done
+          env:
+            - name: PGUSER
+              valueFrom: { secretKeyRef: { name: pg-runtime-app, key: username } }
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: pg-runtime-app, key: password } }
+            - name: PGDATABASE
+              valueFrom: { secretKeyRef: { name: pg-runtime-app, key: dbname } }
+            - { name: PGAPPNAME, value: radar-pgbench }
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pg-lock-holder
+  namespace: pgrt
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: pg-lock-holder }
+  template:
+    metadata:
+      labels: { app: pg-lock-holder }
+    spec:
+      containers:
+        - name: psql
+          image: ghcr.io/cloudnative-pg/postgresql:17.5
+          command: ["/bin/bash", "-c"]
+          # psql reads statements from the pipe and then blocks on stdin, which
+          # leaves the backend `idle in transaction` holding the row lock. The
+          # 5-minute `SELECT 1` heartbeat is there so a failover or restart is
+          # noticed: without it psql never writes again, never sees the dead
+          # socket, and the holder silently stops holding anything. The
+          # transaction (xact_start) is unaffected; only state_change resets.
+          args:
+            - |
+              until pg_isready -h pg-runtime-rw -q; do sleep 2; done
+              psql -h pg-runtime-rw -v ON_ERROR_STOP=1 -c "
+                CREATE TABLE IF NOT EXISTS radar_lock_demo (id int PRIMARY KEY, v int NOT NULL DEFAULT 0);
+                INSERT INTO radar_lock_demo VALUES (1, 0) ON CONFLICT DO NOTHING;"
+              while true; do
+                {
+                  echo "BEGIN;"
+                  echo "SELECT id FROM radar_lock_demo WHERE id = 1 FOR UPDATE;"
+                  while true; do sleep 300; echo "SELECT 1;"; done
+                } | psql -h pg-runtime-rw -v ON_ERROR_STOP=1 -q
+                echo "lock-holder session ended; reconnecting"
+                sleep 5
+              done
+          env:
+            - name: PGUSER
+              valueFrom: { secretKeyRef: { name: pg-runtime-app, key: username } }
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: pg-runtime-app, key: password } }
+            - name: PGDATABASE
+              valueFrom: { secretKeyRef: { name: pg-runtime-app, key: dbname } }
+            - { name: PGAPPNAME, value: radar-lock-holder }
+          resources:
+            requests: { cpu: 5m, memory: 16Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pg-lock-waiter
+  namespace: pgrt
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: pg-lock-waiter }
+  template:
+    metadata:
+      labels: { app: pg-lock-waiter }
+    spec:
+      containers:
+        - name: psql
+          image: ghcr.io/cloudnative-pg/postgresql:17.5
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              until [ "$(psql -h pg-runtime-rw -tAc "SELECT count(*) FROM radar_lock_demo WHERE id = 1" 2>/dev/null)" = "1" ]; do sleep 3; done
+              while true; do
+                psql -h pg-runtime-rw -c "UPDATE radar_lock_demo SET v = v + 1 WHERE id = 1" || true
+                sleep 5
+              done
+          env:
+            - name: PGUSER
+              valueFrom: { secretKeyRef: { name: pg-runtime-app, key: username } }
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: pg-runtime-app, key: password } }
+            - name: PGDATABASE
+              valueFrom: { secretKeyRef: { name: pg-runtime-app, key: dbname } }
+            - { name: PGAPPNAME, value: radar-lock-waiter }
+          resources:
+            requests: { cpu: 5m, memory: 16Mi }

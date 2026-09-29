@@ -14,6 +14,16 @@
 #             something reconciled them away).
 #   thaw      Remove frozen-only Backup fixtures and scale the operator back up.
 #   status    Inventory the cluster and show what each fixture is doing.
+#   runtime   On the EXISTING cluster, with the operator live (thawed if
+#             frozen): add namespace `pgrt` with MinIO, a 3-instance cluster
+#             archiving to it, a real completed Backup, a restored cluster, a
+#             Pooler, pgbench load + a blocked lock chain, and a Prometheus in
+#             `monitoring` that Radar auto-discovers.
+#   runtime-lag on|off
+#             Pause (on) / resume (off) WAL replay on a pg-runtime replica so
+#             replay lag grows under the pgbench load.
+#   runtime-down
+#             Remove the runtime namespaces (pgrt, monitoring) only.
 #   help      Show this message.
 #
 # Prerequisites:
@@ -32,7 +42,11 @@ CLUSTER_NAME="${CLUSTER_NAME:-radar-cnpg-demo}"
 KUBECTL_CTX="kind-${CLUSTER_NAME}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIXTURES_DIR="${SCRIPT_DIR}/cnpg-demo"
+# A subdirectory, so apply_fixtures' maxdepth-1 scan never picks these up.
+RUNTIME_DIR="${FIXTURES_DIR}/runtime"
 NS=pg
+RT_NS=pgrt
+MON_NS=monitoring
 
 # Pinned so the demo behaves consistently. The phase STRINGS Radar matches on
 # are version-sensitive — they are full English sentences from CNPG's
@@ -589,6 +603,293 @@ cmd_thaw() {
   warn "Terminal phases will be reconciled away within seconds. Run '$0 refreeze' to restore them."
 }
 
+# --- Runtime mode ----------------------------------------------------------
+#
+# Everything the frozen matrix cannot show because it needs a working
+# controller AND working object storage: a Backup the operator actually took,
+# ContinuousArchiving=True for a real reason, a cluster restored from that
+# backup, live sessions, a lock chain, replica lag and Prometheus metrics.
+#
+# It lives in its own namespace and never touches the `pg` fixtures' manifests —
+# but it does leave the operator RUNNING, which the frozen terminal phases in
+# `pg` do not survive. `refreeze` restores them, at the cost of pgrt's operator-
+# driven behaviour (scheduled backups, failover); archiving itself continues,
+# because the plugin sidecar talks to the instance manager, not the operator.
+
+# CNPG serves its own admission webhooks, so every CNPG write fails while the
+# operator pod restarts — and on a loaded kind node it does restart (lost
+# leader-election lease), usually right after a thaw. Retry rather than fail.
+rt_apply() {
+  local f="$1" out=""
+  for _ in $(seq 1 24); do
+    out=$(k apply -f "$f" 2>&1) && return 0
+    sleep 5
+  done
+  printf '%s\n' "$out" >&2
+  fail "could not apply $(basename "$f")"
+}
+
+rt_psql() {
+  # $1 pod, $2 SQL. Runs as postgres over the local socket in the app database.
+  k -n "${RT_NS}" exec "$1" -c postgres -- psql -q -U postgres -d app -tAc "$2"
+}
+
+rt_primary() {
+  k -n "${RT_NS}" get cluster.postgresql.cnpg.io pg-runtime -o jsonpath='{.status.currentPrimary}' 2>/dev/null || true
+}
+
+rt_condition() {
+  k -n "${RT_NS}" get cluster.postgresql.cnpg.io "$1" \
+    -o jsonpath="{range .status.conditions[?(@.type==\"$2\")]}{.status}{end}" 2>/dev/null || true
+}
+
+rt_wait_ready() {
+  local name="$1" want="$2" budget="$3" ready=""
+  local deadline=$((SECONDS + budget))
+  while [ $SECONDS -lt $deadline ]; do
+    ready=$(k -n "${RT_NS}" get cluster.postgresql.cnpg.io "$name" -o jsonpath='{.status.readyInstances}' 2>/dev/null || echo "")
+    [ "${ready:-0}" = "$want" ] && { ok "$name ${want}/${want} Ready"; return 0; }
+    sleep 5
+  done
+  note "phase: $(k -n "${RT_NS}" get cluster.postgresql.cnpg.io "$name" -o jsonpath='{.status.phase}' 2>/dev/null)"
+  fail "$name did not reach ${want}/${want} within $((budget / 60)) min — check 'kubectl --context ${KUBECTL_CTX} -n ${RT_NS} get pods'"
+}
+
+rt_ensure_operator_live() {
+  k -n cnpg-system get deployment/cnpg-controller-manager >/dev/null 2>&1 \
+    || fail "CNPG is not installed on '${CLUSTER_NAME}' — run '$0 up' or '$0 live' first"
+  local replicas
+  replicas=$(k -n cnpg-system get deployment/cnpg-controller-manager -o jsonpath='{.spec.replicas}')
+  if [ "$replicas" = "0" ]; then
+    # Same order as `live`: the frozen-only Backup fixtures must go BEFORE the
+    # controller starts, or it attempts them and contaminates pg-healthy.
+    note "operator is frozen — thawing it (runtime needs a live controller)"
+    delete_fixture_backups
+    thaw_operator
+    warn "The frozen terminal phases in '${NS}' will be reconciled away. '$0 refreeze' restores them."
+  else
+    ok "Operator already running"
+  fi
+}
+
+# The bucket is emptied whenever pg-runtime does not exist yet. A NEW cluster
+# checks that its WAL destination is empty before it archives anything, so one
+# created against a bucket still holding a previous pg-runtime's archive never
+# becomes Ready ("Expected empty archive"). MinIO's data is an emptyDir and the
+# image recreates the bucket at start (MINIO_DEFAULT_BUCKETS), so replacing the
+# pod IS the reset. An existing pg-runtime keeps its bucket.
+rt_minio() {
+  step "MinIO in '${RT_NS}'"
+  local existed=0
+  k -n "${RT_NS}" get deploy/minio >/dev/null 2>&1 && existed=1
+  k apply -f "${RUNTIME_DIR}/00-minio.yaml" >/dev/null
+  if [ "$existed" = 1 ] && ! k -n "${RT_NS}" get cluster.postgresql.cnpg.io pg-runtime >/dev/null 2>&1; then
+    note "pg-runtime is new — restarting MinIO so the bucket starts empty"
+    k -n "${RT_NS}" rollout restart deploy/minio >/dev/null
+  fi
+  k -n "${RT_NS}" rollout status deploy/minio --timeout=180s >/dev/null \
+    || fail "MinIO did not roll out — 'kubectl --context ${KUBECTL_CTX} -n ${RT_NS} describe pod -l app=minio'"
+  ok "MinIO running, bucket cnpg"
+}
+
+rt_wait_archiving() {
+  step "Waiting for ContinuousArchiving=True on pg-runtime (real WAL in MinIO)"
+  local deadline=$((SECONDS + 240)) st="" nudged=0
+  while [ $SECONDS -lt $deadline ]; do
+    st=$(rt_condition pg-runtime ContinuousArchiving)
+    [ "$st" = "True" ] && { ok "ContinuousArchiving=True"; return 0; }
+    # A quiet cluster may not close a segment for archive_timeout (5 min).
+    if [ "$nudged" = 0 ] && [ $SECONDS -gt $((deadline - 180)) ]; then
+      local p; p=$(rt_primary)
+      [ -n "$p" ] && rt_psql "$p" "SELECT pg_switch_wal();" >/dev/null 2>&1 || true
+      nudged=1
+    fi
+    sleep 5
+  done
+  fail "ContinuousArchiving is '${st:-unset}' — check the plugin-barman-cloud sidecar logs on $(rt_primary)"
+}
+
+rt_wait_backup() {
+  step "Waiting for the immediate ScheduledBackup run to complete"
+  local deadline=$((SECONDS + 300)) phases="" name=""
+  while [ $SECONDS -lt $deadline ]; do
+    phases=$(k -n "${RT_NS}" get backups.postgresql.cnpg.io \
+      -o jsonpath='{range .items[?(@.spec.cluster.name=="pg-runtime")]}{.metadata.name}={.status.phase}{"\n"}{end}' 2>/dev/null || true)
+    name=$(printf '%s\n' "$phases" | awk -F= '$2=="completed"{print $1; exit}')
+    [ -n "$name" ] && { ok "Backup ${name} completed"; return 0; }
+    if printf '%s\n' "$phases" | grep -q '=failed$'; then
+      note "$(printf '%s' "$phases" | tr '\n' ' ')"
+      fail "a pg-runtime Backup failed — 'kubectl --context ${KUBECTL_CTX} -n ${RT_NS} describe backups'"
+    fi
+    sleep 5
+  done
+  fail "no completed pg-runtime Backup after 5 min (saw: $(printf '%s' "$phases" | tr '\n' ' '))"
+}
+
+rt_wait_pooler() {
+  local deadline=$((SECONDS + 180)) scheduled=""
+  while [ $SECONDS -lt $deadline ]; do
+    scheduled=$(k -n "${RT_NS}" get pooler.postgresql.cnpg.io pg-runtime-pooler-rw -o jsonpath='{.status.instances}' 2>/dev/null || echo "")
+    [ -n "$scheduled" ] && break
+    sleep 5
+  done
+  [ -n "$scheduled" ] || fail "pg-runtime-pooler-rw never reported status.instances (Service name collision?)"
+  k -n "${RT_NS}" rollout status deploy/pg-runtime-pooler-rw --timeout=180s >/dev/null \
+    || fail "pooler Deployment did not roll out"
+  ok "pg-runtime-pooler-rw ${scheduled} pods"
+}
+
+rt_wait_lock_chain() {
+  step "Waiting for the lock chain (idle in transaction holder + blocked UPDATE)"
+  local deadline=$((SECONDS + 180)) out="" p
+  while [ $SECONDS -lt $deadline ]; do
+    p=$(rt_primary)
+    out=$(rt_psql "$p" "SELECT string_agg(application_name || ':' || state || ':' || coalesce(wait_event_type, '-'), ' ' ORDER BY application_name) FROM pg_stat_activity WHERE application_name IN ('radar-lock-holder', 'radar-lock-waiter');" 2>/dev/null || true)
+    if printf '%s' "$out" | grep -q 'radar-lock-holder:idle in transaction' \
+       && printf '%s' "$out" | grep -q 'radar-lock-waiter:active:Lock'; then
+      ok "$out"
+      return 0
+    fi
+    sleep 5
+  done
+  fail "lock chain not observed on the primary (saw: '${out}')"
+}
+
+cmd_runtime() {
+  require_cmd kubectl "https://kubernetes.io/docs/tasks/tools/"
+  cluster_exists || fail "Cluster '${CLUSTER_NAME}' does not exist. Run '$0 up' (or 'live') first."
+  k cluster-info >/dev/null || fail "kind context not reachable"
+
+  step "Ensuring the CNPG operator is live"
+  rt_ensure_operator_live
+  install_barman_plugin
+  k get crd objectstores.barmancloud.cnpg.io >/dev/null 2>&1 \
+    || fail "barman-cloud plugin is not installed (SKIP_BARMAN_PLUGIN=1?) — runtime mode needs it"
+
+  rt_minio
+
+  step "ObjectStore minio-store, Cluster pg-runtime (3 instances), Pooler"
+  rt_apply "${RUNTIME_DIR}/10-objectstore.yaml"
+  rt_apply "${RUNTIME_DIR}/20-cluster.yaml"
+  step "Waiting for pg-runtime (3 instances, ~3 min first run)"
+  rt_wait_ready pg-runtime 3 1200
+  rt_wait_pooler
+
+  step "Load generator + lock chain"
+  rt_apply "${RUNTIME_DIR}/40-load.yaml"
+  ok "pg-load, pg-lock-holder, pg-lock-waiter applied"
+
+  step "Prometheus in '${MON_NS}' (Radar discovers monitoring/prometheus-server:9090)"
+  rt_apply "${RUNTIME_DIR}/50-prometheus.yaml"
+  # The ConfigMap may have changed on a re-run; Prometheus does not watch it.
+  k -n "${MON_NS}" rollout restart deploy/prometheus-server >/dev/null 2>&1 || true
+
+  rt_wait_archiving
+  rt_apply "${RUNTIME_DIR}/25-scheduledbackup.yaml"
+  rt_wait_backup
+
+  if k -n "${RT_NS}" get cluster.postgresql.cnpg.io pg-runtime-restore >/dev/null 2>&1; then
+    step "pg-runtime-restore already exists — reusing"
+  else
+    step "Restoring pg-runtime-restore from minio-store"
+    rt_apply "${RUNTIME_DIR}/30-restore.yaml"
+  fi
+  rt_wait_ready pg-runtime-restore 1 900
+
+  step "Waiting for workloads"
+  k -n "${RT_NS}" rollout status deploy/pg-load --timeout=240s >/dev/null || fail "pg-load did not roll out"
+  k -n "${MON_NS}" rollout status deploy/prometheus-server --timeout=180s >/dev/null || fail "Prometheus did not roll out"
+  ok "pg-load and Prometheus running"
+  rt_wait_lock_chain
+
+  print_runtime_summary
+}
+
+cmd_runtime_lag() {
+  cluster_exists || fail "Cluster '${CLUSTER_NAME}' does not exist."
+  local mode="${1:-}" replicas r
+  replicas=$(k -n "${RT_NS}" get pods -l cnpg.io/cluster=pg-runtime,cnpg.io/instanceRole=replica \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | sort)
+  [ -n "$replicas" ] || fail "no pg-runtime replicas found — run '$0 runtime' first"
+  case "$mode" in
+    on)
+      # One replica only: the other keeps replaying, so the lag is visibly
+      # per-instance rather than cluster-wide.
+      r=$(printf '%s\n' "$replicas" | head -1)
+      rt_psql "$r" "SELECT pg_wal_replay_pause();" >/dev/null || fail "could not pause replay on $r"
+      ok "WAL replay paused on $r — replay lag grows with the pgbench load"
+      note "check: $0 status   (or: kubectl --context ${KUBECTL_CTX} -n ${RT_NS} exec $r -c postgres -- psql -U postgres -tAc 'SELECT now() - pg_last_xact_replay_timestamp()')"
+      ;;
+    off)
+      # Every replica, not just the one `on` picked: which one is first can
+      # change after a failover.
+      for r in $replicas; do
+        rt_psql "$r" "SELECT pg_wal_replay_resume();" >/dev/null 2>&1 || true
+      done
+      ok "WAL replay resumed on: $(printf '%s' "$replicas" | tr '\n' ' ')"
+      ;;
+    *) fail "usage: $0 runtime-lag on|off" ;;
+  esac
+}
+
+cmd_runtime_down() {
+  cluster_exists || fail "Cluster '${CLUSTER_NAME}' does not exist."
+  step "Removing runtime fixtures (${RT_NS}, ${MON_NS}); '${NS}' is untouched"
+  k delete namespace "${RT_NS}" "${MON_NS}" --ignore-not-found --timeout=300s >/dev/null \
+    || warn "namespace deletion still in progress — check 'kubectl --context ${KUBECTL_CTX} get ns'"
+  k delete clusterrolebinding cnpg-demo-prometheus --ignore-not-found >/dev/null
+  k delete clusterrole cnpg-demo-prometheus --ignore-not-found >/dev/null
+  ok "Runtime fixtures removed (operator left as it was)"
+}
+
+runtime_status() {
+  k get namespace "${RT_NS}" >/dev/null 2>&1 || { note "runtime fixtures not present ('$0 runtime' adds them)"; return 0; }
+  k -n "${RT_NS}" get clusters.postgresql.cnpg.io \
+    -o custom-columns='NAME:.metadata.name,READY:.status.readyInstances,DESIRED:.spec.instances,PHASE:.status.phase,PRIMARY:.status.currentPrimary' 2>/dev/null || true
+  local c
+  for c in pg-runtime pg-runtime-restore; do
+    note "$c: ContinuousArchiving=$(rt_condition "$c" ContinuousArchiving) LastBackupSucceeded=$(rt_condition "$c" LastBackupSucceeded)"
+  done
+  k -n "${RT_NS}" get backups.postgresql.cnpg.io \
+    -o custom-columns='BACKUP:.metadata.name,PHASE:.status.phase,METHOD:.spec.method,STOPPED:.status.stoppedAt' 2>/dev/null || true
+  k -n "${RT_NS}" get poolers.postgresql.cnpg.io,deploy \
+    -o custom-columns='NAME:.metadata.name,READY:.status.readyReplicas,SCHEDULED:.status.instances' 2>/dev/null || true
+  local r paused
+  for r in $(k -n "${RT_NS}" get pods -l cnpg.io/cluster=pg-runtime,cnpg.io/instanceRole=replica -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+    paused=$(rt_psql "$r" "SELECT pg_is_wal_replay_paused() || ' lag=' || coalesce((now() - pg_last_xact_replay_timestamp())::text, '?')" 2>/dev/null || echo "?")
+    note "$r replay paused=${paused}"
+  done
+  local p
+  p=$(rt_primary)
+  [ -n "$p" ] && note "sessions: $(rt_psql "$p" "SELECT string_agg(application_name || '=' || state || coalesce('/' || wait_event_type, ''), ' ') FROM pg_stat_activity WHERE application_name LIKE 'radar-%';" 2>/dev/null)"
+  k -n "${MON_NS}" get svc prometheus-server -o custom-columns='PROMETHEUS:.metadata.name,NAMESPACE:.metadata.namespace,PORT:.spec.ports[0].port' 2>/dev/null || true
+}
+
+print_runtime_summary() {
+  printf "\n"
+  step "CNPG runtime fixtures ready"
+  cat <<EOF
+
+  Context:    ${KUBECTL_CTX}   (operator LIVE)
+  Namespace:  ${RT_NS}
+    pg-runtime            3 instances, WAL → minio-store (plugin), hourly + immediate backup
+    pg-runtime-restore    1 instance, bootstrap.recovery from minio-store
+    pg-runtime-pooler-rw  PgBouncer, transaction mode, 2 pods
+    pg-load               pgbench through the Pooler (~5 tps)
+    pg-lock-holder        idle in transaction, holding radar_lock_demo id=1
+    pg-lock-waiter        UPDATE blocked on it (wait_event_type=Lock)
+  Prometheus: ${MON_NS}/prometheus-server:9090 — a Radar well-known location
+
+  Replica lag on demand:
+    $0 runtime-lag on | off
+  Instance status JSON (replicationInfo etc.):
+    kubectl --context ${KUBECTL_CTX} get --raw /api/v1/namespaces/${RT_NS}/pods/https:$(rt_primary):8000/proxy/pg/status
+  Remove only these:
+    $0 runtime-down
+
+EOF
+}
+
 # --- Status ----------------------------------------------------------------
 
 cmd_status() {
@@ -627,6 +928,9 @@ cmd_status() {
     -o custom-columns='NAME:.metadata.name,PHASE:.status.phase' 2>/dev/null || true
   k -n "${NS}" get clusters.apps.kubeblocks.io \
     -o custom-columns='NAME:.metadata.name' 2>/dev/null || true
+
+  step "Runtime fixtures (${RT_NS})"
+  runtime_status
 }
 
 # --- Summary ---------------------------------------------------------------
@@ -700,6 +1004,9 @@ case "${1:-help}" in
   refreeze) cmd_refreeze ;;
   thaw)     cmd_thaw     ;;
   status)   cmd_status   ;;
+  runtime)  cmd_runtime  ;;
+  runtime-lag)  cmd_runtime_lag "${2:-}" ;;
+  runtime-down) cmd_runtime_down ;;
   help|-h|--help) cmd_help ;;
   *)
     printf "${C_RED}Unknown subcommand: %s${C_RESET}\n\n" "$1"
