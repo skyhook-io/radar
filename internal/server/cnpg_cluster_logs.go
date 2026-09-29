@@ -1,10 +1,12 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -15,9 +17,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 )
@@ -368,6 +372,7 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		log.Printf("[cnpg] Failed to stream logs for %s/%s: response writer does not support flushing", namespace, name)
 		s.writeError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
@@ -387,6 +392,7 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 	logCh := make(chan workloadLogEntry, 1000)
 	var active sync.Map
 	roles := map[string]string{}
+	cursors := map[string]*cnpgStreamCursor{}
 	start := func(pods []*corev1.Pod) {
 		for _, pod := range pods {
 			roles[pod.Name] = cnpgInstanceRole(pod)
@@ -395,12 +401,19 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 				if _, exists := active.Load(key); exists {
 					continue
 				}
+				cursor := cursors[key]
+				if cursor == nil {
+					cursor = &cnpgStreamCursor{}
+					cursors[key] = cursor
+				}
+				opts := cursor.restartOptions(c, query.tailLines, query.sinceSeconds)
 				streamCtx, streamCancel := context.WithCancel(ctx)
-				active.Store(key, streamCancel)
-				go func(podName, containerName, key string) {
-					defer active.Delete(key)
-					streamPodLogs(streamCtx, client, namespace, podName, containerName, query.tailLines, query.sinceSeconds, logCh)
-				}(pod.Name, c, key)
+				handle := &cnpgStreamHandle{cancel: streamCancel}
+				active.Store(key, handle)
+				go func(podName, key string) {
+					defer active.CompareAndDelete(key, handle)
+					followCNPGContainerLogs(streamCtx, client, namespace, podName, opts, logCh)
+				}(pod.Name, key)
 			}
 		}
 	}
@@ -417,6 +430,9 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 		case <-ctx.Done():
 			return
 		case entry := <-logCh:
+			if cursor := cursors[entry.Pod+"/"+entry.Container]; cursor != nil && !cursor.admit(entry) {
+				continue
+			}
 			if !query.keep(entry) {
 				continue
 			}
@@ -452,14 +468,100 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 				delete(known, podName)
 				active.Range(func(key, value any) bool {
 					if strings.HasPrefix(key.(string), podName+"/") {
-						value.(context.CancelFunc)()
+						value.(*cnpgStreamHandle).cancel()
 						active.Delete(key)
 					}
 					return true
 				})
+				for key := range cursors {
+					if strings.HasPrefix(key, podName+"/") {
+						delete(cursors, key)
+					}
+				}
 				sendSSEEvent(w, flusher, "pod_removed", map[string]string{"pod": podName, "reason": "terminated"})
 			}
 			start(currentPods)
+		}
+	}
+}
+
+type cnpgStreamHandle struct {
+	cancel context.CancelFunc
+}
+
+// cnpgStreamCursor remembers where one container's follow left off, so a
+// stream that ends while its Pod is still an instance resumes instead of
+// replaying lines the client already has. Only the stream loop touches it.
+type cnpgStreamCursor struct {
+	last time.Time
+	// atLast holds the contents delivered with timestamp == last. The pod log
+	// API's sinceTime is second-granular, so a resume replays that second and
+	// only (timestamp, content) tells a replay from a new line.
+	atLast map[string]bool
+}
+
+// restartOptions returns the follow request for the next (re)start: the
+// caller's window the first time, and from the last delivered second after.
+func (c *cnpgStreamCursor) restartOptions(container string, tailLines int64, sinceSeconds *int64) corev1.PodLogOptions {
+	opts := corev1.PodLogOptions{Container: container, Timestamps: true, Follow: true}
+	if c.last.IsZero() {
+		opts.TailLines = &tailLines
+		opts.SinceSeconds = sinceSeconds
+		return opts
+	}
+	since := metav1.NewTime(c.last.Truncate(time.Second))
+	opts.SinceTime = &since
+	return opts
+}
+
+// admit reports whether an entry is new, recording it when it is. Lines
+// arrive in order per container, so anything before the last delivered
+// timestamp was already sent.
+func (c *cnpgStreamCursor) admit(entry workloadLogEntry) bool {
+	ts, err := time.Parse(time.RFC3339Nano, entry.Timestamp)
+	if err != nil {
+		return true
+	}
+	switch {
+	case ts.Before(c.last):
+		return false
+	case ts.Equal(c.last):
+		if c.atLast[entry.Content] {
+			return false
+		}
+	default:
+		c.last = ts
+		c.atLast = map[string]bool{}
+	}
+	c.atLast[entry.Content] = true
+	return true
+}
+
+func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, namespace, podName string, opts corev1.PodLogOptions, logCh chan<- workloadLogEntry) {
+	stream, err := client.CoreV1().Pods(namespace).GetLogs(podName, &opts).Stream(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Printf("[cnpg] Failed to follow logs for %s/%s/%s: %v", namespace, podName, opts.Container, err)
+		}
+		return
+	}
+	defer stream.Close()
+	reader := bufio.NewReader(stream)
+	for {
+		line, err := reader.ReadString('\n')
+		if line = strings.TrimSuffix(line, "\n"); line != "" && (err == nil || err == io.EOF) {
+			ts, content := parseLogLine(line)
+			select {
+			case logCh <- workloadLogEntry{Pod: podName, Container: opts.Container, Timestamp: ts, Content: content}:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if err != nil {
+			if err != io.EOF && ctx.Err() == nil {
+				log.Printf("[cnpg] Failed to read logs for %s/%s/%s: %v", namespace, podName, opts.Container, err)
+			}
+			return
 		}
 	}
 }

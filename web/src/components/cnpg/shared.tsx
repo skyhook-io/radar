@@ -273,8 +273,8 @@ export function worstCoverage(...covs: (CNPGKindCoverage | undefined)[]): CNPGKi
   return covs.filter(Boolean).sort((a, b) => (rank[a!.state] ?? 9) - (rank[b!.state] ?? 9))[0]
 }
 
-export function Mono({ children, title }: { children: ReactNode; title?: string }) {
-  return <span className="font-mono text-[12.5px] break-all" title={title}>{children}</span>
+export function Mono({ children }: { children: ReactNode }) {
+  return <span className="font-mono text-[12.5px] break-all">{children}</span>
 }
 
 export function Sub({ children }: { children: ReactNode }) {

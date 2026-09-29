@@ -4,6 +4,7 @@
 
 import type { HealthLevel } from '../resources/resource-utils'
 import {
+  CNPG_BARMAN_PLUGIN_NAME,
   getCNPGClusterBackupConfig,
   getCNPGClusterBarmanPlugin,
   getCNPGClusterImageTag,
@@ -356,6 +357,7 @@ function lastBackupFact(
   backups: any[],
   backupsCov: CNPGKindCoverage,
   window: ReturnType<typeof recoveryWindowFor>,
+  storesUnreadable: boolean,
 ): CNPGProtectionFacts['lastSuccessfulBackup'] {
   const ns = cluster.metadata?.namespace
   const name = cluster.metadata?.name
@@ -380,6 +382,7 @@ function lastBackupFact(
     if (!coverageReadable(backupsCov, ns)) {
       return { text: coverageUnavailableText(backupsCov, 'Backups'), tone: 'unknown' }
     }
+    if (storesUnreadable) return { text: 'No access to ObjectStores', tone: 'unknown' }
     return { text: 'None observed', tone: 'unknown' }
   }
   const best = candidates.reduce((a, b) => (Date.parse(a.at) >= Date.parse(b.at) ? a : b))
@@ -414,7 +417,7 @@ function restoreValidationFact(
     const sourceName = recovery.source
     if (sourceName) {
       const ext = (c.spec?.externalClusters ?? []).find((e: any) => e?.name === sourceName)
-      const params = ext?.plugin?.parameters
+      const params = ext?.plugin?.name === CNPG_BARMAN_PLUGIN_NAME ? ext.plugin.parameters : undefined
       if (store && params?.barmanObjectName === store && (params?.serverName || sourceName) === server) return true
     }
     const backupName = recovery.backup?.name
@@ -467,10 +470,13 @@ function pgVersion(cluster: any): string | null {
   return typeof major === 'number' ? String(major) : null
 }
 
-function replicationFact(cluster: any, pods: CNPGInstance[], hibernated: boolean): CNPGFact {
+function replicationFact(cluster: any, pods: CNPGInstance[], hibernated: boolean, podsCov: CNPGKindCoverage): CNPGFact {
   if (hibernated) return { text: 'Hibernated', tone: 'neutral' }
   const desired = cluster?.spec?.instances
   if (desired === 1) return { text: 'Single instance', tone: 'neutral' }
+  if (!coverageReadable(podsCov, cluster?.metadata?.namespace)) {
+    return { text: coverageUnavailableText(podsCov, 'Pods'), tone: 'unknown' }
+  }
   const replicas = pods.filter((p) => p.role === 'replica')
   const readyReplicas = replicas.filter((p) => p.ready === true).length
   if (replicas.length === 0) return { text: 'No replica pods observed', tone: 'unknown' }
@@ -616,10 +622,12 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
     const desired = typeof cluster?.spec?.instances === 'number' ? cluster.spec.instances : null
 
     const window = recoveryWindowFor(cluster, stores)
+    const storesCov = coverageOf(resp, 'objectStores')
+    const storesUnreadable = !!getCNPGClusterBarmanPlugin(cluster)?.barmanObjectName && !coverageReadable(storesCov, ns)
     const protection: CNPGProtectionFacts = {
       schedule: scheduleFact(cluster, resp.objects.scheduledBackups ?? [], coverageOf(resp, 'scheduledBackups')),
       destination: destinationFact(cluster),
-      lastSuccessfulBackup: lastBackupFact(cluster, resp.objects.backups ?? [], coverageOf(resp, 'backups'), window),
+      lastSuccessfulBackup: lastBackupFact(cluster, resp.objects.backups ?? [], coverageOf(resp, 'backups'), window, storesUnreadable),
       walArchiving: walFact(cluster),
       recoveryWindow: window?.from
         ? {
@@ -629,7 +637,9 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
             to: window.lastSuccess,
             source: `ObjectStore ${window.store} status`,
           }
-        : { text: 'Not reported', tone: 'unknown' },
+        : storesUnreadable
+          ? { text: coverageUnavailableText(storesCov, 'ObjectStores'), tone: 'unknown' }
+          : { text: 'Not reported', tone: 'unknown' },
       restoreValidation: restoreValidationFact(cluster, clusters, resp.objects.backups ?? []),
     }
     const problems = problemsFor(cluster, resp.issues ?? [], resp.audit ?? [], children)
@@ -650,7 +660,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
       hibernated,
       pgVersion: pgVersion(cluster),
       catalog: catalogRef(cluster),
-      replication: replicationFact(cluster, instancePods, hibernated),
+      replication: replicationFact(cluster, instancePods, hibernated, coverageOf(resp, 'pods')),
       protection: { ...protection, summary: protectionSummary(protection) },
       declarations: declarationsFor(cluster, resp),
       poolers: poolers

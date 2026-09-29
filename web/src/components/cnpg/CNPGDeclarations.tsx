@@ -239,7 +239,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
                       {g.cluster}
                     </button>
                   ) : (
-                    <span className="text-sm font-semibold text-theme-text-primary" title="The target cluster is not visible in this scope">
+                    <span className="text-sm font-semibold text-theme-text-primary">
                       {g.cluster}
                     </span>
                   )}

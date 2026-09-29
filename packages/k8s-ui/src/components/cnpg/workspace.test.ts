@@ -230,4 +230,28 @@ describe('buildCNPGFleet', () => {
     const unnamed = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { backups: { state: 'partial' } } }))
     expect(unnamed.rows[0].protection.lastSuccessfulBackup.text).toBe('No access to Backups')
   })
+
+  it('says no access instead of "no replica pods" when Pods are unreadable', () => {
+    const fleet = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { pods: { state: 'denied' } } }))
+    expect(fleet.rows[0].replication.text).toBe('No access to Pods')
+  })
+
+  it('does not report the recovery window or last backup as absent when ObjectStores are unreadable', () => {
+    const c = cluster('pg-a', 'db', { spec: { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }] } })
+    const p = buildCNPGFleet(resp({ clusters: [c] }, { coverage: { objectStores: { state: 'denied' } } })).rows[0].protection
+    expect(p.recoveryWindow.text).toBe('No access to ObjectStores')
+    expect(p.lastSuccessfulBackup.text).toBe('No access to ObjectStores')
+  })
+
+  it('ignores recovery sources from other plugins that reuse the barman parameter names', () => {
+    const src = cluster('pg-a', 'db', { spec: { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }] } })
+    const other = cluster('pg-x', 'db', {
+      spec: {
+        bootstrap: { recovery: { source: 'origin' } },
+        externalClusters: [{ name: 'origin', plugin: { name: 'some-other-plugin', parameters: { barmanObjectName: 'store', serverName: 'pg-a' } } }],
+      },
+    })
+    const row = buildCNPGFleet(resp({ clusters: [src, other] })).rows.find((r) => r.name === 'pg-a')!
+    expect(row.protection.restoreValidation.text).toBe('None recorded')
+  })
 })

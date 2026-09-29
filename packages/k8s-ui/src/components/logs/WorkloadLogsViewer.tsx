@@ -211,6 +211,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
               content: data.content || '',
               container: data.container || '',
               pod: data.pod || '',
+              sourceLabel: data.sourceLabel,
               podColorIndex: podColorIndexRef.current.get(data.pod || ''),
             })
           }

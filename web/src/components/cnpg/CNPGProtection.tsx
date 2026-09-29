@@ -41,6 +41,10 @@ const SEVERITY: Record<HealthLevel, 'success' | 'warning' | 'alert' | 'error' | 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000
 
 function backupTime(b: any): string | undefined {
+  return b?.status?.stoppedAt || b?.status?.startedAt || b?.metadata?.creationTimestamp
+}
+
+function backupStart(b: any): string | undefined {
   return b?.status?.startedAt || b?.metadata?.creationTimestamp
 }
 
@@ -72,10 +76,16 @@ function inferStoreHealth(store: any, users: CNPGFleetRow[]): StoreRow['health']
     return { text: 'Uploads failing', tone: 'unhealthy', evidence: `Inferred: ${parts.join('; ')}` }
   }
   const archiving = users.filter((u) => u.protection.walArchiving.tone === 'healthy')
-  if (archiving.length > 0) {
+  if (archiving.length === users.length) {
     return { text: 'Accepting uploads', tone: 'healthy', evidence: `Inferred from WAL archiving on ${archiving.map((u) => u.name).join(', ')}` }
   }
-  return { text: 'Unknown', tone: 'unknown', evidence: 'Its clusters report no archiving result yet' }
+  return {
+    text: 'No failures reported',
+    tone: 'unknown',
+    evidence: archiving.length > 0
+      ? `Archiving on ${archiving.map((u) => u.name).join(', ')}; no archiving result from the others`
+      : 'Its clusters report no archiving result yet',
+  }
 }
 
 export function CNPGProtection({
@@ -193,9 +203,7 @@ export function CNPGProtection({
               header: 'Restore validation',
               width: '13%',
               cell: (r) => (
-                <span title={r.protection.restoreValidation.source}>
-                  <FactValue fact={r.protection.restoreValidation} />
-                </span>
+                <FactValue fact={r.protection.restoreValidation} />
               ),
             },
             {
@@ -220,7 +228,7 @@ export function CNPGProtection({
           columns={[
             { header: 'Backup', width: '28%', cell: (b: any) => <Mono>{b.metadata?.name}</Mono> },
             { header: 'Cluster', width: '16%', cell: (b) => <>{b.spec?.cluster?.name ?? '—'}<Sub>{b.metadata?.namespace}</Sub></> },
-            { header: 'Started', width: '12%', cell: (b) => ageText(backupTime(b)) },
+            { header: 'Started', width: '12%', cell: (b) => ageText(backupStart(b)) },
             {
               header: 'Error',
               width: '44%',

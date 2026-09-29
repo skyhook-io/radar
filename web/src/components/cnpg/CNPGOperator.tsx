@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Badge, getCNPGImageCatalogEntries, isApiGroup, PaneLoader } from '@skyhook-io/k8s-ui'
+import { Badge, getCNPGImageCatalogEntries, isApiGroup, PaneLoader, Tooltip } from '@skyhook-io/k8s-ui'
 import { useCNPGOperator, type CNPGOperatorComponent, type CNPGOperatorConfig } from '../../api/cnpg'
 import { Notice } from '../capacity/shared'
 import {
@@ -98,7 +98,11 @@ export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenPr
                 {
                   header: 'Version',
                   width: '14%',
-                  cell: (c) => (c.version ? <Mono title={c.image}>{c.version}</Mono> : <span className="text-theme-text-tertiary" title={c.image}>Unknown</span>),
+                  cell: (c) => (
+                    <Tooltip content={c.image || 'No image recorded'}>
+                      {c.version ? <Mono>{c.version}</Mono> : <span className="text-theme-text-tertiary">Unknown</span>}
+                    </Tooltip>
+                  ),
                 },
                 { header: 'Ready', width: '14%', cell: readiness },
                 {
@@ -116,7 +120,7 @@ export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenPr
                 },
               ]}
               rows={op.components}
-              rowKey={(c) => `${c.namespace}/${c.deployment}`}
+              rowKey={(c) => `${c.namespace}/${c.deployment}/${c.pluginName ?? c.role}`}
               rowResource={(c) => (c.deployment ? { kind: 'deployments', group: 'apps', namespace: c.namespace, name: c.deployment } : null)}
               onInspect={onInspect}
               inspected={inspected}
@@ -214,7 +218,7 @@ function ConfigBlock({ config, onInspect }: { config: CNPGOperatorConfig; onInsp
         <dl className="grid grid-cols-[minmax(0,14rem)_minmax(0,1fr)] gap-x-4 gap-y-1.5 px-4 py-2.5 text-sm">
           {entries.map(([k, v]) => (
             <div key={k} className="contents">
-              <dt className="truncate font-mono text-theme-text-secondary" title={k}>{k}</dt>
+              <dt className="min-w-0 font-mono text-theme-text-secondary"><Tooltip content={k} wrapperClassName="block min-w-0"><span className="block truncate">{k}</span></Tooltip></dt>
               <dd className="break-all font-mono text-theme-text-primary">{v.length > 400 ? `${v.slice(0, 400)}…` : v}</dd>
             </div>
           ))}

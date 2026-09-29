@@ -46,9 +46,9 @@ function AttentionCell({ row }: { row: CNPGFleetRow }) {
   const more = row.problems.length - 1
   return (
     <div className="min-w-0">
-      <div className={clsx('line-clamp-2 break-words', toneTextClass(tone))} title={top.title}>
-        {top.title}
-      </div>
+      <Tooltip content={top.title} wrapperClassName="block">
+        <div className={clsx('line-clamp-2 break-words', toneTextClass(tone))}>{top.title}</div>
+      </Tooltip>
       {more > 0 && <div className="text-xs text-theme-text-tertiary">+{more} more</div>}
     </div>
   )
@@ -238,7 +238,7 @@ export function CNPGOverview({
                         <td className={TD}>
                           <div className="flex items-center gap-2 min-w-0">
                             <StatusDot tone={row.attention ? (row.problems.some((p) => p.severity === 'critical') ? 'unhealthy' : 'degraded') : row.controllerStatus.level} />
-                            <span className="truncate font-medium" title={row.name}>{row.name}</span>
+                            <Tooltip content={row.name} wrapperClassName="min-w-0"><span className="block truncate font-medium">{row.name}</span></Tooltip>
                           </div>
                           <div className="truncate pl-4 text-xs text-theme-text-tertiary">{row.namespace}</div>
                           <div className="pl-4"><InstancePills row={row} /></div>
@@ -255,7 +255,7 @@ export function CNPGOverview({
                           <div className="flex items-center justify-end gap-1">
                             <button
                               type="button"
-                              title="Logs from every instance of this cluster"
+                              aria-label={`Logs from every instance of ${row.name}`}
                               onClick={(e) => {
                                 e.stopPropagation()
                                 const podProblem = row.problems.find((p) => p.subject.kind === 'Pod')
@@ -270,7 +270,7 @@ export function CNPGOverview({
                             </button>
                             <button
                               type="button"
-                              title="Open the cluster’s full detail"
+                              aria-label={`Open ${row.name}`}
                               onClick={(e) => {
                                 e.stopPropagation()
                                 navigate(cnpgClusterFullPath(row.namespace, row.name, connection.context || undefined), {

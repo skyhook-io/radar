@@ -12,6 +12,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -445,5 +446,80 @@ func TestCNPGClusterLogsStream_SendsParsedInstanceLines(t *testing.T) {
 		if !strings.Contains(stream, want) {
 			t.Errorf("stream missing %s:\n%s", want, stream)
 		}
+	}
+}
+
+func TestCNPGClusterActivity_RecreatedClusterExcludesPreviousIncarnationPods(t *testing.T) {
+	owner := func(uid string) *timeline.OwnerInfo {
+		return &timeline.OwnerInfo{Kind: "Cluster", Name: "pg-orders", APIVersion: "postgresql.cnpg.io/v1", UID: uid}
+	}
+	// Seeding the cache records the Cluster's own rows, so the Pod rows are
+	// seeded into a fresh store afterwards and only Pod rows are compared.
+	podHistory := func(live ...runtime.Object) []string {
+		k8s.ResetTestDynamicState()
+		seedCNPGWorkspace(t, cnpgWorkspaceTestKinds, live...)
+		store := useMemoryTimeline(t)
+		seedActivity(t, store, "pgrecreate",
+			activityRow{id: "current-pod", apiVersion: "v1", kind: "Pod", name: "pg-orders-1", uid: "p-new", age: 10 * time.Minute, owner: owner("orders-uid")},
+			activityRow{id: "old-pod", apiVersion: "v1", kind: "Pod", name: "pg-orders-1", uid: "p-old", age: 2 * time.Hour, owner: owner("previous-uid")},
+			activityRow{id: "old-pod-event", apiVersion: "v1", kind: "Pod", name: "pg-orders-1", uid: "p-old", source: timeline.SourceK8sEvent, eventType: timeline.EventTypeWarning, age: 90 * time.Minute},
+		)
+		resp, err := http.Get(testServer.URL + "/api/cnpg/clusters/pgrecreate/pg-orders/activity")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var pods []string
+		for _, e := range decodeActivity(t, resp).Events {
+			if e.Kind == "Pod" {
+				pods = append(pods, e.ID)
+			}
+		}
+		return pods
+	}
+
+	live := withUID(cnpgObj("postgresql.cnpg.io/v1", "Cluster", "pgrecreate", "pg-orders", nil, nil), "orders-uid")
+	if got := strings.Join(podHistory(live), ","); got != "current-pod" {
+		t.Fatalf("with the Cluster live: pod events = %s, want only the current incarnation's", got)
+	}
+	if got := strings.Join(podHistory(), ","); got != "current-pod,old-pod-event,old-pod" {
+		t.Fatalf("with the Cluster deleted: pod events = %s, want every incarnation", got)
+	}
+}
+
+func TestCNPGStreamCursorResumesWithoutReplay(t *testing.T) {
+	var c cnpgStreamCursor
+	first := c.restartOptions("postgres", 200, nil)
+	if first.TailLines == nil || *first.TailLines != 200 || first.SinceTime != nil || !first.Follow || !first.Timestamps || first.Container != "postgres" {
+		t.Fatalf("first start = %+v", first)
+	}
+	line := func(ts, content string) workloadLogEntry {
+		return workloadLogEntry{Timestamp: ts, Content: content}
+	}
+	for _, e := range []workloadLogEntry{line("2026-09-28T14:00:00.1Z", "a"), line("2026-09-28T14:00:05.7Z", "b"), line("2026-09-28T14:00:05.7Z", "c")} {
+		if !c.admit(e) {
+			t.Fatalf("fresh line %+v rejected", e)
+		}
+	}
+
+	restart := c.restartOptions("postgres", 200, nil)
+	if restart.TailLines != nil || restart.SinceSeconds != nil || restart.SinceTime == nil ||
+		!restart.SinceTime.Time.Equal(time.Date(2026, 9, 28, 14, 0, 5, 0, time.UTC)) {
+		t.Fatalf("restart = %+v, want sinceTime at the last delivered second and no tail", restart)
+	}
+
+	// The resumed follow replays the boundary second.
+	replayed := []workloadLogEntry{line("2026-09-28T14:00:05.2Z", "earlier in the second"), line("2026-09-28T14:00:05.7Z", "b"), line("2026-09-28T14:00:05.7Z", "c")}
+	for _, e := range replayed {
+		if c.admit(e) {
+			t.Errorf("replayed line %+v admitted", e)
+		}
+	}
+	for _, e := range []workloadLogEntry{line("2026-09-28T14:00:05.7Z", "d"), line("2026-09-28T14:00:06Z", "e")} {
+		if !c.admit(e) {
+			t.Errorf("new line %+v rejected", e)
+		}
+	}
+	if c.admit(line("2026-09-28T14:00:05.7Z", "d")) {
+		t.Error("line before the new last timestamp admitted")
 	}
 }

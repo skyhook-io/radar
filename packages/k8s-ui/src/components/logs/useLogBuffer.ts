@@ -33,6 +33,15 @@ export function detectLogLevel(content: string): LogLevel {
   if (trimmed[0] === '{') {
     try {
       const obj = JSON.parse(trimmed)
+      // CloudNativePG wraps each PostgreSQL line in an instance-manager record
+      // whose own level is usually info; the database's severity is nested.
+      const pgSeverity = typeof obj.record?.error_severity === 'string' ? obj.record.error_severity.toUpperCase() : ''
+      if (pgSeverity) {
+        if (/^(ERROR|FATAL|PANIC)$/.test(pgSeverity)) return 'error'
+        if (pgSeverity === 'WARNING') return 'warn'
+        if (/^DEBUG/.test(pgSeverity)) return 'debug'
+        return 'info'
+      }
       const rawLevel = obj.level ?? obj.severity ?? obj.lvl ?? ''
       // Numeric levels (pino/bunyan): 10=trace, 20=debug, 30=info, 40=warn, 50=error, 60=fatal
       if (typeof rawLevel === 'number') {

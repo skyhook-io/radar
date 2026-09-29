@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -71,8 +72,11 @@ func cnpgActivityKindNames() []string {
 // cnpgRowAttribution decides whether a timeline row is about the named
 // Cluster. Rows about the Cluster match by identity; instance Pods by their
 // controller owner; CNPG children by the retained cnpg.io/cluster label, which
-// survives their deletion.
-func cnpgRowAttribution(e *timeline.TimelineEvent, name string) (matched, labelled bool) {
+// survives their deletion. liveUID is the UID of the Cluster that exists now
+// under this name, or "" when none does; when set, only Pods it controlled
+// count, so a previous same-named Cluster's instances don't merge into a
+// recreated one's history.
+func cnpgRowAttribution(e *timeline.TimelineEvent, name, liveUID string) (matched, labelled bool) {
 	group := resourceid.GroupFromAPIVersion(e.APIVersion)
 	if _, ok := cnpgActivityKinds[group+"/"+e.Kind]; !ok {
 		return false, false
@@ -83,7 +87,8 @@ func cnpgRowAttribution(e *timeline.TimelineEvent, name string) (matched, labell
 		return e.Name == name, false
 	case e.Kind == "Pod" && group == "":
 		o := e.Owner
-		owned := o != nil && o.Kind == "Cluster" && o.Name == name && resourceid.GroupFromAPIVersion(o.APIVersion) == cnpgGroup
+		owned := o != nil && o.Kind == "Cluster" && o.Name == name && resourceid.GroupFromAPIVersion(o.APIVersion) == cnpgGroup &&
+			(liveUID == "" || o.UID == liveUID)
 		return owned, owned && labelled
 	default:
 		return labelled, labelled
@@ -144,8 +149,15 @@ func (s *Server) handleCNPGClusterActivity(w http.ResponseWriter, r *http.Reques
 		Limit:            cnpgActivityScanLimit,
 	})
 	if err != nil {
+		log.Printf("[cnpg] Failed to query activity for %s/%s: %v", namespace, name, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	var liveUID string
+	if cache := k8s.GetResourceCache(); cache != nil {
+		if live, err := findCNPGCluster(r.Context(), cache, namespace, name); err == nil && live != nil {
+			liveUID = string(live.GetUID())
+		}
 	}
 	scanCapped := len(rows) >= cnpgActivityScanLimit
 
@@ -155,7 +167,7 @@ func (s *Server) handleCNPGClusterActivity(w http.ResponseWriter, r *http.Reques
 	matched := make([]bool, len(rows))
 	labelled := make([]bool, len(rows))
 	for i := range rows {
-		matched[i], labelled[i] = cnpgRowAttribution(&rows[i], name)
+		matched[i], labelled[i] = cnpgRowAttribution(&rows[i], name, liveUID)
 		if matched[i] && rows[i].UID != "" {
 			attributedUIDs[rows[i].UID] = true
 		}
@@ -227,6 +239,7 @@ func (s *Server) handleCNPGClusterActivity(w http.ResponseWriter, r *http.Reques
 		Limit:            1,
 	})
 	if err != nil {
+		log.Printf("[cnpg] Failed to query retention floor for %s/%s: %v", namespace, name, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

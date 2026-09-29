@@ -130,7 +130,7 @@ export function CNPGDetailPage({
           <button
             type="button"
             onClick={() => navigate(-1)}
-            title="Return to your previous task"
+            aria-label={`Return to ${returnLabel}`}
             className="inline-flex items-center gap-1 rounded-md py-0.5 pr-2 text-theme-text-secondary hover:text-theme-text-primary"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
