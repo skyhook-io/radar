@@ -167,6 +167,12 @@ describe('cnpgDimensions', () => {
       ['storage', 'unknown'],
     ])
   })
+  it('storage follows the measured disk fact, and stays unassessed without a measurement', () => {
+    const measured = cnpgDimensions({ row: row({ disk: { text: '91% used', tone: 'unhealthy', source: 'Fullest: data of pg-1' } }) })
+    expect(measured[3]).toMatchObject({ id: 'storage', tone: 'unhealthy', text: '91% used' })
+    const unmeasured = cnpgDimensions({ row: row({ disk: { text: 'No usage metrics', tone: 'unknown', source: 'needs Prometheus' } }) })
+    expect(unmeasured[3]).toMatchObject({ tone: 'unknown', text: 'unassessed', source: 'No usage metrics · needs Prometheus' })
+  })
   it('replication is unassessed without runtime, never healthy', () => {
     const d = cnpgDimensions({ row: row() })
     expect(d.find((x) => x.id === 'replication')?.text).toBe('unassessed')

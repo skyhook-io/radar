@@ -170,3 +170,21 @@ describe('summarizeSteps', () => {
     expect(summarizeSteps([{ label: 'a', done: false }])).toBe('requested')
   })
 })
+
+describe('destroyInstance observer', () => {
+  const inst = (pod: string, ready: boolean) => ({ pod, podUID: `uid-${pod}`, role: 'standby' as const, ready, healthy: ready, fenced: false, podReadable: true, podExists: true })
+  const destroy = op({ kind: 'destroyInstance', target: { name: 'pg-3', uid: 'uid-pg-3' }, baseline: { instances: ['pg-1', 'pg-2', 'pg-3'] } })
+
+  it('stays open until a replacement instance exists and is ready', () => {
+    const obs: CNPGObservation = { now: T0 + 60_000, facts: facts({ phase: 'Creating a new replica', instances: [inst('pg-1', true), inst('pg-2', true), inst('pg-4', false)] }) }
+    const next = advanceCNPGOperation(destroy, obs)
+    expect(next.state).toBe('progressing')
+    expect(next.steps?.[0].done).toBe(true)
+    expect(next.steps?.[1].label).toContain('pg-4')
+  })
+
+  it('never completes while the destroyed instance is still there', () => {
+    const obs: CNPGObservation = { now: T0 + 60_000, facts: facts({ instances: [inst('pg-1', true), inst('pg-2', true), inst('pg-3', true)] }) }
+    expect(advanceCNPGOperation(destroy, obs).state).not.toBe('completed')
+  })
+})

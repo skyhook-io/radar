@@ -279,6 +279,24 @@ registerCNPGOperationObserver(
   restartObserver((op) => (op.target ? [op.target.name] : [])),
 )
 
+registerCNPGOperationObserver('destroyInstance', (op, obs) => {
+  const f = obs.facts
+  if (!f) return { state: 'unobservable', detail: 'The Cluster is not readable' }
+  const destroyed = op.target?.name ?? ''
+  const before = new Set((op.baseline.instances as string[]) ?? [])
+  const gone = !f.instances.some((i) => i.pod === destroyed && (!op.target?.uid || i.podUID === op.target.uid))
+  const replacement = f.instances.find((i) => !before.has(i.pod))
+  const replacementReady = replacement ? readyNow(obs, replacement.pod) : false
+  const steps: CNPGOpStep[] = [
+    { label: `${destroyed} removed`, done: gone },
+    { label: replacement ? `Replacement ${replacement.pod} ready` : 'Operator created a replacement instance', done: replacement ? replacementReady : false },
+    { label: replacement ? `${replacement.pod} streaming from the primary` : 'Replacement streaming from the primary', done: replacement && replacementReady ? streamingStandby(obs, replacement.pod) : false },
+    { label: 'Cluster reports a healthy state again', done: gone && !!replacement && f.phase === 'Cluster in healthy state' },
+  ]
+  const detail = f.phase && f.phase !== 'Cluster in healthy state' ? f.phase + (f.phaseReason ? `: ${f.phaseReason}` : '') : undefined
+  return { state: summarizeSteps(steps), steps, detail, progressKey: key(steps, `${replacement?.pod ?? ''}${f.phase ?? ''}`) }
+})
+
 registerCNPGOperationObserver('reload', () => ({
   state: 'unobservable',
   detail: 'Requested. Nothing in the cluster reports when a configuration reload completes; check the instance logs for "received SIGHUP".',

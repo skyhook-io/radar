@@ -325,8 +325,16 @@ export function cnpgDimensions({
     servingDimension(row, ha),
     replicationDimension(row, replication),
     protectionDimension(row),
-    storage ?? { id: 'storage', label: 'Storage', tone: 'unknown', text: 'unassessed', source: 'Volume usage is not assessed here' },
+    storage ?? storageDimension(row),
   ]
+}
+
+function storageDimension(row: CNPGFleetRow): CNPGDimension {
+  const base = { id: 'storage' as const, label: 'Storage' }
+  const disk = row.disk
+  if (!disk) return { ...base, tone: 'unknown', text: 'unassessed', source: 'Volume usage is not assessed here' }
+  if (disk.tone === 'unknown') return { ...base, tone: 'unknown', text: 'unassessed', source: [disk.text, disk.source].filter(Boolean).join(' · ') }
+  return { ...base, tone: disk.tone, text: disk.text, source: disk.source ?? 'Fullest volume' }
 }
 
 function servingDimension(row: CNPGFleetRow, ha?: CNPGClusterHA): CNPGDimension {

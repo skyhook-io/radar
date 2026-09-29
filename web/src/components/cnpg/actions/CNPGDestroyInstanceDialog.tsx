@@ -3,6 +3,7 @@ import { ActionConfirmDialog, PaneLoader } from '@skyhook-io/k8s-ui'
 import { cnpgActionErrorCode, useCNPGAction } from '../../../api/cnpg'
 import { useCNPGDestroyPlan } from '../../../api/cnpg-sessions'
 import { useToast } from '../../ui/Toast'
+import { trackCNPGOperation } from '../operations/store'
 
 /**
  * `kubectl cnpg destroy` for one standby: its volumes are deleted (or kept,
@@ -38,6 +39,16 @@ export function CNPGDestroyInstanceDialog({ namespace, cluster, pod, onClose }: 
           {
             onSuccess: (r) => {
               showSuccess(r.message)
+              trackCNPGOperation({
+                kind: 'destroyInstance',
+                label: `Destroy ${pod}`,
+                context: data.context,
+                namespace,
+                cluster,
+                clusterUID: data.uid,
+                target: { name: pod, uid: data.podUID },
+                baseline: { instances: data.facts.instances.map((i) => i.pod) },
+              })
               onClose()
             },
           },
