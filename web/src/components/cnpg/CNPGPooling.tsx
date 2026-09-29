@@ -133,6 +133,16 @@ function PoolerPressure({ namespace, name }: { namespace: string; name: string }
     )
   }
   const pools = ok.flatMap((p) => p.pools ?? [])
+  if (pools.length === 0 && ok.every((p) => p.state === 'ok')) {
+    return (
+      <>
+        <span>Idle</span>
+        <Sub>
+          no client pools open · {ok.length}/{q.data.pods.length} pods reporting
+        </Sub>
+      </>
+    )
+  }
   // Totals are exact only when every pod answered in full and every pool
   // reported the field; otherwise they are lower bounds.
   const allPods = ok.length === q.data.pods.length && ok.every((p) => p.state === 'ok')

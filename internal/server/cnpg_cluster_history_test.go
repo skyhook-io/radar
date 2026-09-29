@@ -114,7 +114,7 @@ func TestCNPGClusterLogs_OnlyValidatedInstancesContribute(t *testing.T) {
 			t.Errorf("parsed entry = %+v", entry)
 		}
 	}
-	if got.SourceLabels["pg-orders-1"] != "primary" || got.SourceLabels["pg-orders-2"] != "replica" {
+	if got.SourceLabels["pg-orders-1"] != "primary 1" || got.SourceLabels["pg-orders-2"] != "replica 2" {
 		t.Errorf("sourceLabels = %v", got.SourceLabels)
 	}
 
@@ -442,7 +442,7 @@ func TestCNPGClusterLogsStream_SendsParsedInstanceLines(t *testing.T) {
 	if !sawConnected || strings.Contains(stream, `"name":"pg-orders-1"`) {
 		t.Fatalf("connected event wrong:\n%s", stream)
 	}
-	for _, want := range []string{`"level":"LOG"`, `"message":"hello from pg-orders-2"`, `"sourceLabel":"replica"`} {
+	for _, want := range []string{`"level":"LOG"`, `"message":"hello from pg-orders-2"`, `"sourceLabel":"replica 2"`} {
 		if !strings.Contains(stream, want) {
 			t.Errorf("stream missing %s:\n%s", want, stream)
 		}

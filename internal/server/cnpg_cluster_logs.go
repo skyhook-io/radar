@@ -37,7 +37,7 @@ const (
 
 // CNPGClusterLogsResponse is GET /api/cnpg/clusters/{namespace}/{name}/logs.
 // Pods and SourceLabels list only the instances that contributed a source to
-// this snapshot; SourceLabels maps a Pod to its instance role.
+// this snapshot; SourceLabels maps a Pod to its role and ordinal ("replica 2").
 type CNPGClusterLogsResponse struct {
 	UID          types.UID          `json:"uid"`
 	Pods         []WorkloadPodInfo  `json:"pods"`
@@ -309,7 +309,7 @@ func (s *Server) handleCNPGClusterLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		shown = append(shown, p)
 		if role := cnpgInstanceRole(p); role != "" {
-			sourceLabels[p.Name] = role
+			sourceLabels[p.Name] = cnpgInstanceSourceLabel(p, role)
 		}
 	}
 	for _, entry := range snapshot.Logs {
@@ -395,7 +395,9 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 	cursors := map[string]*cnpgStreamCursor{}
 	start := func(pods []*corev1.Pod) {
 		for _, pod := range pods {
-			roles[pod.Name] = cnpgInstanceRole(pod)
+			if role := cnpgInstanceRole(pod); role != "" {
+				roles[pod.Name] = cnpgInstanceSourceLabel(pod, role)
+			}
 			for _, c := range k8s.GetContainersForPod(pod, query.container, true) {
 				key := pod.Name + "/" + c
 				if _, exists := active.Load(key); exists {
@@ -564,4 +566,17 @@ func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, n
 			return
 		}
 	}
+}
+
+// cnpgInstanceSourceLabel names an instance by role and ordinal ("replica 3"):
+// the role alone cannot tell two replicas apart.
+func cnpgInstanceSourceLabel(p *corev1.Pod, role string) string {
+	name := p.Labels["cnpg.io/instanceName"]
+	if name == "" {
+		name = p.Name
+	}
+	if i := strings.LastIndex(name, "-"); i >= 0 && i < len(name)-1 {
+		return role + " " + name[i+1:]
+	}
+	return role
 }

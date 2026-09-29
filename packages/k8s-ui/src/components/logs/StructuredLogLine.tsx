@@ -168,8 +168,11 @@ function JsonExpanded({ text, onFilterValue, palette }: { text: string; onFilter
 }
 
 function SummaryLine({ obj, palette }: { obj: Record<string, unknown>; palette: LogPalette }) {
-  const lvl = obj.level ?? obj.severity ?? obj.lvl ?? nestedField(obj, 'log', 'level')
-  const msg = obj.msg ?? obj.message
+  // CloudNativePG wraps each PostgreSQL log line as {msg: "record", record: {...}};
+  // the line's own severity and text live in the record.
+  const pgRecord = obj.msg === 'record' && obj.record && typeof obj.record === 'object'
+  const lvl = (pgRecord ? nestedField(obj, 'record', 'error_severity') : undefined) ?? obj.level ?? obj.severity ?? obj.lvl ?? nestedField(obj, 'log', 'level')
+  const msg = (pgRecord ? nestedField(obj, 'record', 'message') : undefined) ?? obj.msg ?? obj.message
   const rawErr = obj.error ?? obj.err
   const err = typeof rawErr === 'string'
     ? rawErr
