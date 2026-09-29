@@ -379,7 +379,11 @@ func cnpgBackupMethods(cluster *unstructured.Unstructured) []CNPGBackupMethodFac
 		for _, item := range list {
 			m, _ := item.(map[string]any)
 			name, _ := m["name"].(string)
-			caps, _ := m["backupCapabilities"].([]any)
+			raw, present := m["backupCapabilities"]
+			if !present {
+				continue
+			}
+			caps, _ := raw.([]any)
 			statuses[name] = pluginStatus{reported: true, backup: len(caps) > 0}
 		}
 	}
@@ -411,7 +415,7 @@ func cnpgBackupMethods(cluster *unstructured.Unstructured) []CNPGBackupMethodFac
 		switch {
 		case !st.reported:
 			fact.Capability = "unknown"
-			fact.Reason = "The plugin has not reported its capabilities to the operator"
+			fact.Reason = "The plugin does not report whether it can take backups (older plugin versions omit this); the operator rejects the Backup if it cannot"
 		case st.backup:
 			fact.Capability = "backup"
 		default:

@@ -726,7 +726,7 @@ func TestCNPGActionCapabilitiesPlansAndEffects(t *testing.T) {
 func TestCNPGActionBackupMethodCapability(t *testing.T) {
 	c := cnpgActionCluster(func(o map[string]any) {
 		delete(o["spec"].(map[string]any), "backup")
-		o["status"].(map[string]any)["pluginStatus"] = []any{map[string]any{"name": "barman-cloud.cloudnative-pg.io"}}
+		o["status"].(map[string]any)["pluginStatus"] = []any{map[string]any{"name": "barman-cloud.cloudnative-pg.io", "backupCapabilities": []any{}}}
 	})
 	m := cnpgBackupMethods(c)
 	if len(m) != 1 || m[0].Capability != "none" {
@@ -738,6 +738,16 @@ func TestCNPGActionBackupMethodCapability(t *testing.T) {
 	c = cnpgActionCluster(func(o map[string]any) { delete(o["status"].(map[string]any), "pluginStatus") })
 	if m := cnpgBackupMethods(c); m[0].Capability != "unknown" {
 		t.Errorf("unreported plugin = %+v, want unknown", m[0])
+	}
+	// barman-cloud 0.14 reports status without a backupCapabilities field at all.
+	c = cnpgActionCluster(func(o map[string]any) {
+		o["status"].(map[string]any)["pluginStatus"] = []any{map[string]any{
+			"name": "barman-cloud.cloudnative-pg.io", "version": "0.14.0",
+			"capabilities": []any{"TYPE_RECONCILER_HOOKS", "TYPE_LIFECYCLE_SERVICE"},
+		}}
+	})
+	if m := cnpgBackupMethods(c); m[0].Capability != "unknown" {
+		t.Errorf("plugin without a backupCapabilities field = %+v, want unknown", m[0])
 	}
 }
 
