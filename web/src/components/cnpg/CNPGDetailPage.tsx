@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { Activity, ArrowLeft, Database, ShieldCheck, Unplug } from 'lucide-react'
+import { Activity, ArrowLeft, Database, Gauge, ShieldCheck, Unplug } from 'lucide-react'
 import type { WorkloadExtraTab } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
@@ -9,6 +9,7 @@ import { useContextSwitchFlow } from '../useContextSwitchFlow'
 import { WorkloadView } from '../workload/WorkloadView'
 import { EmptyState } from '../capacity/shared'
 import { CNPGClusterActivity } from './CNPGClusterActivity'
+import { CNPGClusterRuntime } from './CNPGClusterRuntime'
 import { CNPGProtection } from './CNPGProtection'
 import { CNPGScreenGate } from './shared'
 import { CNPG_DETAIL_KINDS, CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, cnpgScreenPath, type CNPGDetailTarget } from './routes'
@@ -99,6 +100,19 @@ export function CNPGDetailPage({
     if (target.plural !== 'clusters') return undefined
     return [
       {
+        id: 'runtime',
+        label: 'Runtime',
+        icon: <Gauge className="h-4 w-4" />,
+        after: 'spec',
+        render: () => (
+          <CNPGClusterRuntime
+            namespace={target.namespace}
+            name={target.name}
+            onOpenLogs={(pod) => setSearchParams(new URLSearchParams({ ...Object.fromEntries(searchParams), tab: 'logs', pod }), { replace: true, state: location.state })}
+          />
+        ),
+      },
+      {
         id: 'protection',
         label: 'Protection',
         icon: <ShieldCheck className="h-4 w-4" />,
@@ -115,7 +129,7 @@ export function CNPGDetailPage({
         ),
       },
     ]
-  }, [target.plural, target.namespace, target.name, onOpenResource, openRelated])
+  }, [target.plural, target.namespace, target.name, onOpenResource, openRelated, searchParams, setSearchParams, location.state])
 
   if (pinnedContext && activeContext && pinnedContext !== activeContext) {
     return <NotInContext target={target} pinnedContext={pinnedContext} activeContext={activeContext} homeLabel={home.label} homePath={home.path} />

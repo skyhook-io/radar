@@ -54,6 +54,8 @@ export interface CreateResourceDialogProps {
   previewError?: string | null
   schemaLoader?: YamlSchemaLoader
   onCreated?: (result: ApplyResult) => void
+  /** Start in strict create mode (e.g. a prefilled manifest that must not update an existing object). */
+  initialMode?: 'apply' | 'create'
 }
 
 export function CreateResourceDialog({
@@ -68,10 +70,11 @@ export function CreateResourceDialog({
   previewError,
   schemaLoader,
   onCreated,
+  initialMode = 'apply',
 }: CreateResourceDialogProps) {
   const titleId = useId()
   const [yaml, setYaml] = useState(initialYaml)
-  const [mode, setMode] = useState<'apply' | 'create'>('apply')
+  const [mode, setMode] = useState<'apply' | 'create'>(initialMode)
   const [dryRun, setDryRun] = useState(false)
   const [force, setForce] = useState(false)
   const [yamlValid, setYamlValid] = useState(true)
@@ -124,7 +127,7 @@ export function CreateResourceDialog({
   useEffect(() => {
     if (!open) return
     setYaml(initialYaml)
-    setMode('apply')
+    setMode(initialMode)
     setDryRun(false)
     setForce(false)
     setYamlValid(true)

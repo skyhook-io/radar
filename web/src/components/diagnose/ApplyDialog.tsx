@@ -8,6 +8,11 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { DialogPortal } from "@skyhook-io/k8s-ui/components/ui/DialogPortal";
+import { GitOpsWriteWarning } from "@skyhook-io/k8s-ui";
+import {
+  canConfirmGitOpsWrite,
+  type GitOpsWriteGuard,
+} from "@skyhook-io/k8s-ui/utils/gitops-write-guard";
 import { parseContextName } from "../../utils/context-name";
 import type { Diagnosis, ApplyMutationOutcome } from "../../api/diagnose";
 import { AIMarkdown, CopyButton } from "./AIMarkdown";
@@ -24,7 +29,8 @@ export function ApplyDialog({
   fix,
   reason,
   precondition,
-  managedBy,
+  gitOpsGuard,
+  onOpenGitOpsOwner,
   confidence,
 }: {
   open: boolean;
@@ -38,7 +44,9 @@ export function ApplyDialog({
   reason?: string;
   /** The condition the agent attached to this step; shown before the operator confirms. */
   precondition?: string;
-  managedBy?: string; // GitOps/Helm owner of the resource, if any
+  /** GitOps/Helm write guard for the target; undefined blocks Apply. */
+  gitOpsGuard?: GitOpsWriteGuard;
+  onOpenGitOpsOwner?: () => void;
   confidence?: number;
 }) {
   const titleId = useId();
@@ -47,6 +55,7 @@ export function ApplyDialog({
   // A GitOps/Helm-managed resource needs an explicit acknowledgment before applying
   // a direct change — it's the canonical footgun (the controller reverts it). Gating
   // (not just warning) makes the user opt into "yes, I know this may be undone."
+  // Apply also waits until ownership has been checked.
   // TODO(SKY-1075): once Radar can connect the user's SCM (GitHub/GitLab/…), replace
   //   direct apply on managed resources with "open a PR against the Git source"
   //   instead — the durable fix. See Linear SKY-1075.
@@ -54,7 +63,7 @@ export function ApplyDialog({
   useEffect(() => {
     if (open) setAcked(false);
   }, [open]);
-  const applyBlocked = !!managedBy && !acked;
+  const applyBlocked = !canConfirmGitOpsWrite(gitOpsGuard, acked);
   return (
     <DialogPortal
       ariaLabelledBy={titleId}
@@ -130,29 +139,13 @@ export function ApplyDialog({
         )}
       </div>
       <div className="shrink-0 space-y-2 p-4">
-        {/* The star warning: when we KNOW a controller owns this resource, a live
-            change reverts on the next reconcile — say so authoritatively. */}
-        {managedBy && (
-          <div className="space-y-2 rounded border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-theme-text-primary">
-            <div className="flex items-start gap-2">
-              <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-              <span>
-                <span className="font-medium">Managed by {managedBy}.</span>{" "}
-                Unless you turn off auto-sync, a direct change here will be
-                undone within minutes when {managedBy} re-syncs from Git — the
-                durable fix is to change it in Git (the {managedBy} source).
-              </span>
-            </div>
-            <label className="flex cursor-pointer items-center gap-2 pl-6 text-xs text-theme-text-secondary">
-              <input
-                type="checkbox"
-                checked={acked}
-                onChange={(e) => setAcked(e.target.checked)}
-                className="h-3.5 w-3.5 accent-amber-500"
-              />
-              I understand {managedBy} may revert this — apply anyway.
-            </label>
-          </div>
+        {gitOpsGuard && (
+          <GitOpsWriteWarning
+            guard={gitOpsGuard}
+            acknowledged={acked}
+            onAcknowledgedChange={setAcked}
+            onOpenOwner={onOpenGitOpsOwner}
+          />
         )}
         {lowConfidence && (
           <div className="flex items-start gap-2 rounded border border-theme-border bg-theme-elevated p-3 text-sm text-theme-text-secondary">

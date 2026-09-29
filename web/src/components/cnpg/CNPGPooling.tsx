@@ -1,12 +1,14 @@
 import { useMemo } from 'react'
 import {
   Badge,
+  toneTextClass,
   getCNPGPoolerMode,
   getCNPGPoolerStatus,
   getCNPGPoolerType,
   isApiGroup,
   type HealthLevel,
 } from '@skyhook-io/k8s-ui'
+import { useCNPGPoolerRuntime } from '../../api/cnpg'
 import {
   CNPGWorkspaceHeader,
   CoverageNotice,
@@ -93,12 +95,7 @@ export function CNPGPooling({ data, fleet, namespaces, searchParams, onSetParams
             {
               header: 'Connection pressure',
               width: '16%',
-              cell: () => (
-                <>
-                  <span className="text-theme-text-tertiary">Not measured</span>
-                  <Sub>Needs PgBouncer metrics</Sub>
-                </>
-              ),
+              cell: (p) => <PoolerPressure namespace={p.metadata?.namespace} name={p.metadata?.name} />,
             },
           ]}
           rows={poolers}
@@ -108,9 +105,46 @@ export function CNPGPooling({ data, fleet, namespaces, searchParams, onSetParams
           inspected={inspected}
           minWidth={880}
           empty={coverageEmpty(data.coverage.poolers, 'Poolers')}
-          footer="Instances are the Pooler’s own ready count. Client waits and server-pool saturation come from PgBouncer metrics, which Radar does not read yet."
+          footer="Instances are the Pooler’s own count. Pressure is read live from each PgBouncer's metrics through the Kubernetes API proxy."
         />
       </ScreenBody>
     </div>
+  )
+}
+
+function PoolerPressure({ namespace, name }: { namespace: string; name: string }) {
+  const q = useCNPGPoolerRuntime(namespace, name)
+  if (!q.data) return <span className="text-theme-text-tertiary">{q.isLoading ? 'Reading…' : 'Unavailable'}</span>
+  if (q.data.permission.proxy === 'denied') {
+    return (
+      <>
+        <span className="text-theme-text-tertiary">No access</span>
+        <Sub>needs get pods/proxy</Sub>
+      </>
+    )
+  }
+  const ok = q.data.pods.filter((p) => p.state === 'ok' || p.state === 'partial')
+  if (ok.length === 0) {
+    return (
+      <>
+        <span className="text-theme-text-tertiary">Not measured</span>
+        <Sub>{q.data.pods[0]?.error ?? q.data.pods[0]?.reason ?? 'no PgBouncer answered'}</Sub>
+      </>
+    )
+  }
+  const pools = ok.flatMap((p) => p.pools ?? [])
+  const waiting = pools.reduce((s, x) => s + (x.clWaiting ?? 0), 0)
+  const active = pools.reduce((s, x) => s + (x.svActive ?? 0), 0)
+  const maxwait = Math.max(0, ...pools.map((x) => x.maxwaitSeconds ?? 0))
+  return (
+    <>
+      <span className={waiting > 0 ? toneTextClass('degraded') : undefined}>
+        {waiting} waiting · {active} server in use
+      </span>
+      <Sub>
+        {maxwait > 0 ? `longest wait ${maxwait.toFixed(1)} s · ` : ''}
+        {ok.length}/{q.data.pods.length} pods reporting
+      </Sub>
+    </>
   )
 }

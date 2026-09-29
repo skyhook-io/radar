@@ -27,7 +27,7 @@ import { DialogPortal } from '../ui/DialogPortal'
 import type { SelectedResource, WorkloadRevision } from '../../types'
 import { displayKindName } from '../ui/drawer-components'
 import { getDefaultContainerName } from '../resources/resource-utils'
-import { SetImageDialog, type ManagedImageSource } from './SetImageDialog'
+import { SetImageDialog, type SetImageOwnership } from './SetImageDialog'
 import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
 import { isArgoRolloutResource } from '../../utils/workload-rollout'
@@ -85,7 +85,7 @@ interface ResourceActionsBarProps {
   onLoadImages?: (params: { kind: string; namespace: string; name: string }) => Promise<WorkloadImageInventory>
   onSetImages?: (params: { kind: string; namespace: string; name: string; updates: WorkloadImageUpdate[] }) => Promise<unknown>
   isSettingImages?: boolean
-  managedImageSources?: ManagedImageSource[]
+  imageOwnership?: SetImageOwnership
 
   // Rollback
   revisions?: WorkloadRevision[]
@@ -158,7 +158,7 @@ export function ResourceActionsBar({
   renderPortForward,
   onDelete, isDeleting, cascadeDependents, cascadeLoading, cascadeRootResolved,
   onRestart, isRestarting,
-  onLoadImages, onSetImages, isSettingImages, managedImageSources,
+  onLoadImages, onSetImages, isSettingImages, imageOwnership,
   revisions: revisionsList, revisionsLoading, revisionsError, onRollback, isRollingBack,
   onRolloutPromoteFull,
   onTriggerCronJob, isTriggeringCronJob,
@@ -686,7 +686,7 @@ export function ResourceActionsBar({
           workloadLabel={`${displayKindName(resource.kind, data?.kind)} ${resource.namespace}/${resource.name}`}
           workloadName={resource.name}
           workloadResource={resource.kind}
-          managedSources={managedImageSources}
+          ownership={imageOwnership}
           pending={isSettingImages}
           onClose={() => setShowSetImage(false)}
           onLoad={() => onLoadImages({ kind: resource.kind, namespace: resource.namespace, name: resource.name })}

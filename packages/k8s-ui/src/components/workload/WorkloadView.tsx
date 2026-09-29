@@ -314,6 +314,8 @@ interface WorkloadViewProps {
   }) => ReactNode
   /** Extra tabs for the expanded view (e.g. a domain's own sections). */
   extraTabs?: WorkloadExtraTab[]
+  /** Domain actions rendered in the header (drawer and expanded). */
+  renderHeaderActions?: (props: { resource: any; context: 'drawer' | 'expanded' }) => ReactNode
   /** Render a full replacement for the expanded Overview tab. */
   renderExpandedOverview?: (props: {
     kind: string
@@ -464,6 +466,7 @@ export function WorkloadView({
   renderExpandedOverview,
   renderSummary,
   extraTabs,
+  renderHeaderActions,
   renderRelatedYaml,
   renderMetricsTab,
   renderCostTab,
@@ -871,6 +874,7 @@ export function WorkloadView({
               )}
             </div>
             <div className="flex items-center gap-1.5">
+              {resource && renderHeaderActions?.({ resource, context: 'drawer' })}
               {diagnoseAction}
               {onExpand && (
                 <Tooltip content="Open full view" delay={150} position="bottom">
@@ -1123,6 +1127,7 @@ export function WorkloadView({
       }
       headerActions={
         <>
+          {resource && renderHeaderActions?.({ resource, context: 'expanded' })}
           {diagnoseAction}
           <Tooltip content="Refresh" delay={150} position="bottom">
             <button

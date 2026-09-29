@@ -21,6 +21,30 @@ import {
   type NavigateToResource,
 } from '@skyhook-io/k8s-ui'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
+import { useCNPGRuntime, type CNPGRuntimeResponse } from '../../api/cnpg'
+import type { CNPGFleetRow } from '@skyhook-io/k8s-ui'
+
+// Replaces the Kubernetes-only replication fact with the primary's
+// pg_stat_replication when it has been read; otherwise keeps "lag unknown".
+function withLiveReplication(row: CNPGFleetRow, rt: CNPGRuntimeResponse | undefined): CNPGFleetRow {
+  const primary = rt?.instances.find((i) => i.role === 'primary')
+  if (!primary || primary.status.state !== 'ok' || row.replication.text === 'Single instance' || row.replication.text === 'Hibernated') return row
+  const reps = primary.status.replication ?? []
+  const standbys = row.pods.filter((p) => p.role === 'replica').length
+  const streaming = reps.filter((r) => r.state === 'streaming').length
+  const lags = reps.map((r) => r.replayLag).filter((v): v is number => v !== undefined)
+  const maxLag = lags.length ? Math.max(...lags) : undefined
+  const tone = streaming < standbys ? 'degraded' : maxLag !== undefined && maxLag >= 30 ? 'unhealthy' : maxLag !== undefined && maxLag >= 5 ? 'degraded' : 'healthy'
+  return {
+    ...row,
+    replication: {
+      text: `${streaming}/${standbys} streaming${maxLag !== undefined ? ` · max replay lag ${maxLag < 1 ? `${Math.round(maxLag * 1000)} ms` : `${maxLag.toFixed(1)} s`}` : ''}`,
+      tone,
+      source: 'From the primary’s pg_stat_replication via the instance manager',
+      at: primary.status.capturedAt,
+    },
+  }
+}
 import { cnpgClusterFullPath, currentPageLabel } from './paths'
 import { useConnection } from '../../context/ConnectionContext'
 
@@ -40,7 +64,9 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
   // The workspace is read for the object's own namespace: an explicitly opened
   // Cluster shows its facts whatever the namespace filter is.
   const { query, fleet } = useCNPGFleet([namespace])
-  const row = fleet?.rows.find((r) => r.namespace === namespace && r.name === name)
+  const runtime = useCNPGRuntime(namespace, name)
+  const baseRow = fleet?.rows.find((r) => r.namespace === namespace && r.name === name)
+  const row = baseRow ? withLiveReplication(baseRow, runtime.data) : undefined
   if (!row) {
     if (query.isLoading) return <PaneLoader label="Loading summary…" className="h-40" />
     return (

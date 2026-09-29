@@ -19,7 +19,6 @@ import {
   type WorkloadExtraTab,
   type RendererOverrides,
   type GitOpsOwnerRef,
-  type GitOpsStatus,
   type HelmOwnerRef,
   type AppRow,
   type ResourceOwnershipContext,
@@ -27,18 +26,20 @@ import {
   type AuditFinding,
   gitOpsRouteForOwner,
   gitOpsOwnerFromRelationships,
-  getGitOpsResourceStatus,
   isDiagnoseKind,
   isRolloutKind,
   canSetWorkloadImages,
   isCoreBatchJob,
-  type ManagedImageSource,
+  type SetImageOwnership,
+  SET_IMAGE_WRITES,
   type WorkloadImageTarget,
 } from '@skyhook-io/k8s-ui'
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
 import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
 import { useHistoryPaging } from './historyPaging'
+import { findInheritedGitOpsLookupRef, useResolvedGitOpsOwner } from '../../hooks/useResolvedGitOpsOwner'
+import { useGitOpsWriteGuard } from '../../hooks/useGitOpsWriteGuard'
 import {
   kindToPlural,
   kindToPluralWithGroup,
@@ -150,6 +151,7 @@ import {
 } from '../resources/renderers/CNPGDeclarativeRenderer'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { renderCNPGSummary } from '../cnpg/CNPGSummaryHost'
+import { renderCNPGHeaderActions } from '../cnpg/actions/renderCNPGHeaderActions'
 import { CNPGClusterLogs } from '../cnpg/CNPGClusterLogs'
 import { cnpgDetailKindFor, cnpgDetailPath } from '../cnpg/routes'
 import { cleanYamlForDuplicate } from '../../utils/skeleton-yaml'
@@ -339,7 +341,6 @@ interface ImageTargetOwnershipContext {
   }
   target: WorkloadImageTarget
   response: ResourceWithRelationships<Record<string, unknown>>
-  inheritedResponse?: ResourceWithRelationships<Record<string, unknown>>
 }
 
 function useActionsBarProps(
@@ -557,6 +558,8 @@ export function WorkloadView({
   const [imageTargetOwnership, setImageTargetOwnership] =
     useState<ImageTargetOwnershipContext | null>(null)
   const imageOwnershipRequestRef = useRef(0)
+  // The image guard's evidence is read only once the user opens the dialog.
+  const [imageGuardRequested, setImageGuardRequested] = useState(false)
 
   // Tab state from URL query param — migrate legacy tab names
   const rawTab = searchParams.get('tab')
@@ -671,125 +674,33 @@ export function WorkloadView({
         : null,
     [apiKind, imageTargetOwnership, name, namespace],
   )
-  const relationshipGitopsOwner = useMemo(
-    () => gitOpsOwnerFromRelationships(relationships),
-    [relationships],
-  )
-  const inheritedGitOpsLookupRef = useMemo(
-    () =>
-      findInheritedGitOpsLookupRef(relationships, relationshipGitopsOwner, {
-        kind: apiKind,
-        namespace,
-        name,
-        group: rest.group,
-      }),
-    [relationships, relationshipGitopsOwner, apiKind, namespace, name, rest.group],
-  )
-  const inheritedGitOpsResponse = useResourceWithRelationships<any>(
-    inheritedGitOpsLookupRef ? kindToPluralWithGroup(inheritedGitOpsLookupRef.kind, inheritedGitOpsLookupRef.group ?? '') : '',
-    inheritedGitOpsLookupRef?.namespace ?? '',
-    inheritedGitOpsLookupRef?.name ?? '',
-    inheritedGitOpsLookupRef?.group,
-  )
-  const inheritedGitopsOwner = useMemo(
-    () => gitOpsOwnerFromRelationships(inheritedGitOpsResponse.data?.relationships),
-    [inheritedGitOpsResponse.data?.relationships],
-  )
-  const relationshipHelmOwner = useMemo(
-    () =>
-      nativeHelmOwnerFromRelationships(relationships, resource?.metadata?.namespace ?? namespace),
-    [relationships, resource?.metadata?.namespace, namespace],
-  )
-  const inheritedHelmOwner = useMemo(
-    () =>
-      nativeHelmOwnerFromRelationships(
-        inheritedGitOpsResponse.data?.relationships,
-        inheritedGitOpsResponse.data?.resource?.metadata?.namespace ?? namespace,
-      ),
-    [
-      inheritedGitOpsResponse.data?.relationships,
-      inheritedGitOpsResponse.data?.resource?.metadata?.namespace,
-      namespace,
-    ],
-  )
-  const rawGitopsOwner = relationshipGitopsOwner ?? inheritedGitopsOwner
-  const gitOpsSourceResource = relationshipGitopsOwner
-    ? resource
-    : inheritedGitOpsResponse.data?.resource
-  const helmOwner = relationshipHelmOwner ?? inheritedHelmOwner
-  const helmSourceResource = relationshipHelmOwner
-    ? resource
-    : inheritedGitOpsResponse.data?.resource
-  const targetRelationshipGitopsOwner = useMemo(
-    () => gitOpsOwnerFromRelationships(activeImageTargetOwnership?.response.relationships),
-    [activeImageTargetOwnership?.response.relationships],
-  )
-  const targetInheritedGitopsOwner = useMemo(
-    () =>
-      gitOpsOwnerFromRelationships(
-        activeImageTargetOwnership?.inheritedResponse?.relationships,
-      ),
-    [activeImageTargetOwnership?.inheritedResponse?.relationships],
-  )
-  const targetRawGitopsOwner = targetRelationshipGitopsOwner ?? targetInheritedGitopsOwner
-  const targetRelationshipHelmOwner = nativeHelmOwnerFromRelationships(
-    activeImageTargetOwnership?.response.relationships,
-    activeImageTargetOwnership?.target.namespace ?? namespace,
-  )
-  const targetInheritedHelmOwner = nativeHelmOwnerFromRelationships(
-    activeImageTargetOwnership?.inheritedResponse?.relationships,
-    activeImageTargetOwnership?.target.namespace ?? namespace,
-  )
-  const targetHelmOwner = targetRelationshipHelmOwner ?? targetInheritedHelmOwner
-  const shouldResolveArgoOwner =
-    (rawGitopsOwner?.tool === 'argocd' && !rawGitopsOwner.namespace) ||
-    (targetRawGitopsOwner?.tool === 'argocd' && !targetRawGitopsOwner.namespace)
-  const { data: argoApplications } = useResources<any>('applications', undefined, 'argoproj.io', {
-    enabled: shouldResolveArgoOwner,
+  const workloadOwnership = useResolvedGitOpsOwner({
+    kind: apiKind,
+    group: rest.group,
+    namespace,
+    name,
+    relationships,
+    resource,
   })
-  const gitopsOwner = useMemo(
-    () => resolveGitOpsOwner(rawGitopsOwner, argoApplications),
-    [rawGitopsOwner, argoApplications],
-  )
-  const targetGitopsOwner = useMemo(
-    () => resolveGitOpsOwner(targetRawGitopsOwner, argoApplications),
-    [argoApplications, targetRawGitopsOwner],
-  )
-  const gitopsOwnerGroup = gitopsOwner ? gitOpsOwnerGroup(gitopsOwner) : ''
-  const shouldFetchGitOpsOwner = Boolean(gitopsOwner?.namespace)
-  const gitopsOwnerQuery = useResource<any>(
-    shouldFetchGitOpsOwner ? gitopsOwner!.kind : '',
-    gitopsOwner?.namespace ?? '',
-    gitopsOwner?.name ?? '',
-    gitopsOwnerGroup,
-  )
-  const targetGitopsOwnerGroup = targetGitopsOwner ? gitOpsOwnerGroup(targetGitopsOwner) : ''
-  const shouldFetchTargetGitOpsOwner = Boolean(
-    activeImageTargetOwnership && targetGitopsOwner?.namespace,
-  )
-  const targetGitopsOwnerQuery = useResource<Record<string, unknown>>(
-    shouldFetchTargetGitOpsOwner ? targetGitopsOwner!.kind : '',
-    targetGitopsOwner?.namespace ?? '',
-    targetGitopsOwner?.name ?? '',
-    targetGitopsOwnerGroup,
-    { enabled: shouldFetchTargetGitOpsOwner },
-  )
-  const gitOpsOwnerStatus = useMemo(
-    () => deriveGitOpsOwnerStatus(gitopsOwner, gitopsOwnerQuery.data),
-    [gitopsOwner, gitopsOwnerQuery.data],
-  )
-  const gitOpsOwnerVerified = Boolean(gitopsOwner?.namespace && gitopsOwnerQuery.data)
-  const gitOpsOwnerPending = Boolean(
-    gitopsOwner?.namespace && gitopsOwnerQuery.isLoading && !gitopsOwnerQuery.data,
-  )
-  const gitOpsOwnerSource = useMemo(
-    () => describeGitOpsOwnerSource(rawGitopsOwner, gitOpsSourceResource),
-    [rawGitopsOwner, gitOpsSourceResource],
-  )
-  const helmOwnerSource = useMemo(
-    () => describeHelmOwnerSource(helmOwner, helmSourceResource),
-    [helmOwner, helmSourceResource],
-  )
+  const {
+    owner: gitopsOwner,
+    ownerObject: gitopsOwnerObject,
+    ownerVerified: gitOpsOwnerVerified,
+    ownerPending: gitOpsOwnerPending,
+    ownerSource: gitOpsOwnerSource,
+    ownerStatus: gitOpsOwnerStatus,
+    helmOwner,
+    helmSource: helmOwnerSource,
+  } = workloadOwnership
+  const imageTargetOwnershipResolution = useResolvedGitOpsOwner({
+    kind: activeImageTargetOwnership?.target.resource ?? '',
+    group: activeImageTargetOwnership?.target.group,
+    namespace: activeImageTargetOwnership?.target.namespace ?? '',
+    name: activeImageTargetOwnership?.target.name ?? '',
+    relationships: activeImageTargetOwnership?.response.relationships,
+    resource: activeImageTargetOwnership?.response.resource,
+    enabled: Boolean(activeImageTargetOwnership),
+  })
 
   // Fetch topology for hierarchy building (only when expanded). Polled like
   // useTrace's "drawer feeling live" pattern — without this, a resource
@@ -996,6 +907,7 @@ export function WorkloadView({
   const loadImagesWithTargetOwnership = useCallback(
     async (params: { kind: string; namespace: string; name: string }) => {
       const request = ++imageOwnershipRequestRef.current
+      setImageGuardRequested(true)
       const inventory = await baseActionsBarProps.onLoadImages!(params)
       const targetDiffers =
         inventory.target.resource.toLowerCase() !== params.kind.toLowerCase() ||
@@ -1041,14 +953,16 @@ export function WorkloadView({
           group: inventory.target.group,
         },
       )
-      const inheritedResponse = inheritedRef
-        ? await fetchRelationships(
-            kindToPluralWithGroup(inheritedRef.kind, inheritedRef.group ?? ''),
-            inheritedRef.namespace,
-            inheritedRef.name,
-            inheritedRef.group,
-          )
-        : undefined
+      // Warm the cache the target's ownership resolution reads, so the
+      // dialog doesn't open on a still-pending inherited lookup.
+      if (inheritedRef) {
+        await fetchRelationships(
+          kindToPluralWithGroup(inheritedRef.kind, inheritedRef.group ?? ''),
+          inheritedRef.namespace,
+          inheritedRef.name,
+          inheritedRef.group,
+        )
+      }
       if (request === imageOwnershipRequestRef.current) {
         setImageTargetOwnership({
           root: {
@@ -1058,52 +972,57 @@ export function WorkloadView({
           },
           target: inventory.target,
           response,
-          inheritedResponse,
         })
       }
       return inventory
     },
     [baseActionsBarProps.onLoadImages, queryClient, setImageTargetOwnership],
   )
-  const imageGitopsOwner = activeImageTargetOwnership ? targetGitopsOwner : gitopsOwner
-  const imageHelmOwner = activeImageTargetOwnership ? targetHelmOwner : helmOwner
-  const imageGitopsOwnerData = activeImageTargetOwnership
-    ? targetGitopsOwnerQuery.data
-    : gitopsOwnerQuery.data
-  const managedImageSources = useMemo<ManagedImageSource[] | undefined>(() => {
-    if (!activeImageTargetOwnership && inheritedGitOpsLookupRef && (inheritedGitOpsResponse.isPending || inheritedGitOpsResponse.isError)) {
-      return undefined
-    }
-    const sources: ManagedImageSource[] = []
-    if (imageGitopsOwner) {
-      sources.push({
-        type: 'GitOps',
-        label: imageGitopsOwner.namespace
-          ? `${imageGitopsOwner.namespace}/${imageGitopsOwner.name}`
-          : imageGitopsOwner.name,
-        onOpen: imageGitopsOwnerData
-          ? () => handleOpenGitOpsResource(imageGitopsOwner)
+  const imageOwnershipSource = activeImageTargetOwnership ? imageTargetOwnershipResolution : workloadOwnership
+  const imageGuardTarget = activeImageTargetOwnership
+    ? {
+        kind: activeImageTargetOwnership.target.kind,
+        group: activeImageTargetOwnership.target.group,
+        namespace: activeImageTargetOwnership.target.namespace,
+        name: activeImageTargetOwnership.target.name,
+      }
+    : { kind: resource?.kind ?? pluralToKind(apiKind), group: effectiveGroup ?? '', namespace, name }
+  const { guard: imageGuard } = useGitOpsWriteGuard({
+    target: imageGuardTarget,
+    writes: SET_IMAGE_WRITES,
+    ownership: imageOwnershipSource,
+    enabled: imageGuardRequested && Boolean(relationships),
+  })
+  const {
+    owner: imageOwner,
+    helmOwner: imageHelmOwner,
+    ownerVerified: imageOwnerVerified,
+    lookupError: imageOwnerLookupError,
+  } = imageOwnershipSource
+  const imageOwnership = useMemo<SetImageOwnership | undefined>(() => {
+    // An unreadable parent workload leaves ownership unverified; the dialog
+    // blocks rather than guess.
+    if (!imageGuard || imageOwnerLookupError) return undefined
+    const owner = imageOwner
+    const helmOwner = imageHelmOwner
+    return {
+      guard: imageGuard,
+      onOpenOwner: owner
+        ? imageOwnerVerified
+          ? () => handleOpenGitOpsResource(owner)
+          : undefined
+        : helmOwner
+          ? () => handleOpenHelmRelease(helmOwner)
           : undefined,
-      })
     }
-    if (imageHelmOwner) {
-      sources.push({
-        type: 'Helm',
-        label: `${imageHelmOwner.namespace}/${imageHelmOwner.name}`,
-        onOpen: () => handleOpenHelmRelease(imageHelmOwner),
-      })
-    }
-    return sources
   }, [
     handleOpenGitOpsResource,
     handleOpenHelmRelease,
-    activeImageTargetOwnership,
-    imageGitopsOwner,
-    imageGitopsOwnerData,
+    imageGuard,
+    imageOwner,
     imageHelmOwner,
-    inheritedGitOpsLookupRef,
-    inheritedGitOpsResponse.isError,
-    inheritedGitOpsResponse.isPending,
+    imageOwnerVerified,
+    imageOwnerLookupError,
   ])
   const actionsBarProps = useMemo(
     () => ({
@@ -1113,12 +1032,12 @@ export function WorkloadView({
         : undefined,
       onCompareTo,
       onCompareAcrossClusters,
-      managedImageSources,
+      imageOwnership,
     }),
     [
       baseActionsBarProps,
       loadImagesWithTargetOwnership,
-      managedImageSources,
+      imageOwnership,
       onCompareTo,
       onCompareAcrossClusters,
     ],
@@ -1266,6 +1185,7 @@ export function WorkloadView({
             onSelectRun={handleSelectedRunChange}
           />
         )}
+        renderHeaderActions={({ resource: res, context }) => renderCNPGHeaderActions({ resource: res, namespace, name, compact: context === 'drawer' })}
         renderSummary={({ apiKind: ak, namespace: ns, name: n, resource: res, context, onNavigate }) =>
           renderCNPGSummary({ apiKind: ak, namespace: ns, name: n, group: effectiveGroup, resource: res, context, onNavigate })
         }
@@ -1378,7 +1298,7 @@ export function WorkloadView({
         )}
         hasOperationalIssues={hasOperationalIssues}
         operationalIssuesPending={issuesPending}
-        onOpenGitOpsResource={gitopsOwnerQuery.data ? handleOpenGitOpsResource : undefined}
+        onOpenGitOpsResource={gitopsOwnerObject ? handleOpenGitOpsResource : undefined}
         resolvedGitOpsOwner={gitopsOwner}
         gitOpsOwnerVerified={gitOpsOwnerVerified}
         gitOpsOwnerPending={gitOpsOwnerPending}
@@ -1427,35 +1347,6 @@ function dedupeRefs(refs: ResourceRef[]): ResourceRef[] {
     seen.add(key)
     return true
   })
-}
-
-function resolveGitOpsOwner(
-  owner: GitOpsOwnerRef | null,
-  argoApplications: any[] | undefined,
-): GitOpsOwnerRef | null {
-  if (!owner || owner.namespace || owner.tool !== 'argocd') return owner
-  const matches = (argoApplications ?? []).filter((app) => app?.metadata?.name === owner.name)
-  if (matches.length !== 1) return owner
-  const namespace = matches[0]?.metadata?.namespace
-  return namespace ? { ...owner, namespace } : owner
-}
-
-export function findInheritedGitOpsLookupRef(
-  relationships: Relationships | undefined,
-  directOwner: GitOpsOwnerRef | null,
-  current: ResourceRef,
-): ResourceRef | null {
-  if (directOwner) return null
-  const inheritedManagerRefs = (relationships?.managedBy ?? []).filter(
-    (ref) => !gitOpsOwnerFromRelationships({ managedBy: [ref] }) && !isNativeHelmManager(ref),
-  )
-  const candidates = [
-    relationships?.deployment,
-    ...inheritedManagerRefs,
-    relationships?.owner,
-  ].filter(Boolean) as ResourceRef[]
-
-  return candidates.find((ref) => !isCurrentResource(ref, current)) ?? null
 }
 
 const POD_OWNERSHIP_WORKLOAD_KINDS = new Set([
@@ -1535,89 +1426,6 @@ function sameWorkload(
     candidate.namespace === workload.namespace &&
     candidate.name === workload.name
   )
-}
-
-function nativeHelmOwnerFromRelationships(
-  relationships: Relationships | undefined,
-  fallbackNamespace: string,
-): HelmOwnerRef | null {
-  const ref = relationships?.managedBy?.[0]
-  if (!ref || !isNativeHelmManager(ref)) return null
-  return {
-    namespace: ref.namespace || fallbackNamespace,
-    name: ref.name,
-  }
-}
-
-function isCurrentResource(ref: ResourceRef, current: ResourceRef): boolean {
-  return (
-    kindToPluralWithGroup(ref.kind, ref.group ?? '') ===
-      kindToPluralWithGroup(current.kind, current.group ?? '') &&
-    ref.namespace === current.namespace &&
-    ref.name === current.name &&
-    (ref.group ?? '') === (current.group ?? '')
-  )
-}
-
-function isNativeHelmManager(ref: ResourceRef): boolean {
-  return ref.kind === 'HelmRelease' && ref.group !== 'helm.toolkit.fluxcd.io'
-}
-
-function describeGitOpsOwnerSource(owner: GitOpsOwnerRef | null, resource: any): string | null {
-  if (!owner || !resource) return null
-  const labels = resource.metadata?.labels ?? {}
-  const annotations = resource.metadata?.annotations ?? {}
-
-  if (owner.tool === 'fluxcd') {
-    const nameKey =
-      owner.kind === 'helmreleases'
-        ? 'helm.toolkit.fluxcd.io/name'
-        : 'kustomize.toolkit.fluxcd.io/name'
-    const nsKey =
-      owner.kind === 'helmreleases'
-        ? 'helm.toolkit.fluxcd.io/namespace'
-        : 'kustomize.toolkit.fluxcd.io/namespace'
-    if (labels[nameKey] || labels[nsKey]) {
-      return `${nameKey}=${labels[nameKey] ?? ''}, ${nsKey}=${labels[nsKey] ?? ''}`
-    }
-  }
-
-  const trackingID = annotations['argocd.argoproj.io/tracking-id']
-  if (trackingID) return `argocd.argoproj.io/tracking-id=${trackingID}`
-  const argoInstance = labels['argocd.argoproj.io/instance']
-  if (argoInstance) return `argocd.argoproj.io/instance=${argoInstance}`
-  return null
-}
-
-function describeHelmOwnerSource(owner: HelmOwnerRef | null, resource: any): string | null {
-  if (!owner || !resource) return null
-  const annotations = resource.metadata?.annotations ?? {}
-  const releaseName = annotations['meta.helm.sh/release-name']
-  const releaseNamespace = annotations['meta.helm.sh/release-namespace']
-  if (releaseName || releaseNamespace) {
-    return `meta.helm.sh/release-name=${releaseName ?? ''}, meta.helm.sh/release-namespace=${releaseNamespace ?? ''}`
-  }
-  return null
-}
-
-function gitOpsOwnerGroup(owner: GitOpsOwnerRef): string {
-  if (owner.tool === 'argocd') return 'argoproj.io'
-  if (owner.kind === 'kustomizations') return 'kustomize.toolkit.fluxcd.io'
-  return 'helm.toolkit.fluxcd.io'
-}
-
-function deriveGitOpsOwnerStatus(owner: GitOpsOwnerRef | null, resource: any): GitOpsStatus | null {
-  if (!owner || !resource || !hasGitOpsStatusPayload(owner, resource)) return null
-  return getGitOpsResourceStatus(owner.kind, resource)
-}
-
-function hasGitOpsStatusPayload(owner: GitOpsOwnerRef, resource: any): boolean {
-  if (owner.kind === 'applications') {
-    const status = resource.status ?? {}
-    return Boolean(status.sync?.status || status.health?.status || status.operationState?.phase)
-  }
-  if (resource.spec?.suspend === true) return true
-  return Array.isArray(resource.status?.conditions) && resource.status.conditions.length > 0
 }
 
 // ============================================================================
