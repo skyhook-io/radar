@@ -273,7 +273,7 @@ func TestCNPGClusterStorage_VolumesWALAndUsage(t *testing.T) {
 
 	targets := got.Expansion.Targets
 	if len(targets) != 3 || targets[0].Field != "spec.storage.size" || targets[0].Declared != "2Gi" ||
-		targets[1].Field != "spec.walStorage.size" || targets[2].Field != "spec.tablespaces[0].storage.pvcTemplate.resources.requests.storage" || targets[2].Declared != "5Gi" {
+		targets[1].Field != "spec.walStorage.size" || targets[2].Field != "spec.tablespaces[name=archive].storage.pvcTemplate.resources.requests.storage" || targets[2].Declared != "5Gi" {
 		t.Errorf("expansion targets = %+v", targets)
 	}
 }

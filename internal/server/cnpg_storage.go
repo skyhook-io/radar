@@ -561,13 +561,13 @@ func cnpgStorageExpansionOf(cluster *unstructured.Unstructured) CNPGStorageExpan
 		out.Targets = append(out.Targets, cnpgStorageTargetOf(cluster.Object, cnpgPVCRoleWAL, "", "spec.walStorage", "spec", "walStorage"))
 	}
 	tablespaces, _, _ := unstructured.NestedSlice(cluster.Object, "spec", "tablespaces")
-	for i, raw := range tablespaces {
+	for _, raw := range tablespaces {
 		ts, ok := raw.(map[string]any)
 		if !ok {
 			continue
 		}
 		name, _ := ts["name"].(string)
-		out.Targets = append(out.Targets, cnpgStorageTargetOf(ts, cnpgPVCRoleTablespace, name, fmt.Sprintf("spec.tablespaces[%d].storage", i), "storage"))
+		out.Targets = append(out.Targets, cnpgStorageTargetOf(ts, cnpgPVCRoleTablespace, name, "spec.tablespaces[name="+name+"].storage", "storage"))
 	}
 	if v, found, _ := unstructured.NestedBool(cluster.Object, "spec", "storage", "resizeInUseVolumes"); found {
 		out.ResizeInUseVolumes = &v
