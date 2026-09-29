@@ -1490,7 +1490,7 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 			}
 		}
 	}
-	filtered := s.getUserNamespaces(r, namespaces)
+	filtered, discoveryFailed := s.getUserNamespacesWithStatus(r, namespaces)
 	// If picks lost RBAC mid-session, the filter shrinks the set. When the
 	// intersection is empty every read returns []; recover by dropping the
 	// stale pick entirely and recomputing as if no filter were set, so the
@@ -1498,8 +1498,9 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 	// Symmetric with handleGetNamespaceScope's partial-revocation eviction.
 	// namespaces holds the pruned picks this fallback filtered on; clear only
 	// if it's still the live pick, so a stale read can't wipe a concurrent
-	// POST or clear across a context switch.
-	if pickFallback && noNamespaceAccess(filtered) {
+	// POST or clear across a context switch. A failed access check is empty
+	// for the wrong reason and must not cost the user their pick.
+	if pickFallback && !discoveryFailed && noNamespaceAccess(filtered) {
 		s.commitPickMutation(r, pickCtx, namespaces, nil, false)
 		filtered = s.getUserNamespaces(r, nil)
 	}
@@ -5264,9 +5265,17 @@ func (s *Server) getClientSafetySnapshotForRequest(r *http.Request) (kubernetes.
 // When auth is disabled, returns the requested namespaces unchanged.
 // When auth is enabled, intersects with the user's allowed namespaces.
 func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string {
+	namespaces, _ := s.getUserNamespacesWithStatus(r, requested)
+	return namespaces
+}
+
+// getUserNamespacesWithStatus is getUserNamespaces plus whether the result is
+// a fail-closed empty set because namespace discovery errored, rather than the
+// user genuinely having no access.
+func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string) (namespaces []string, discoveryFailed bool) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil || s.permCache == nil {
-		return requested
+		return requested, false
 	}
 
 	perms := s.permCache.Get(user.Username, user.Groups)
@@ -5279,7 +5288,7 @@ func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string
 		client := k8s.GetClient()
 		if client == nil {
 			log.Printf("[auth] K8s client not available for namespace discovery (user=%s) — denying access", k8s.SanitizeForLog(user.Username))
-			return []string{} // fail-closed: cannot verify permissions
+			return []string{}, true // fail-closed: cannot verify permissions
 		}
 
 		// Get all namespace names from cache
@@ -5307,7 +5316,7 @@ func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string
 		allowed, err := auth.DiscoverNamespaces(r.Context(), client, user.Username, user.Groups, allNamespaces)
 		if err != nil {
 			log.Printf("[auth] Failed to discover namespaces for %s: %v — denying access (fail-closed)", k8s.SanitizeForLog(user.Username), err)
-			return []string{} // fail-closed: no access on discovery error
+			return []string{}, true // fail-closed: no access on discovery error
 		}
 
 		log.Printf("[auth] DiscoverNamespaces result for %s: allowed=%v (nil=all, []=none)", user.Username, allowed)
@@ -5315,7 +5324,7 @@ func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string
 		s.permCache.Set(user.Username, user.Groups, perms)
 	}
 
-	return auth.FilterNamespacesForUser(requested, user, perms)
+	return auth.FilterNamespacesForUser(requested, user, perms), false
 }
 
 // handleSSE wraps the SSEBroadcaster's HandleSSE with per-user namespace filtering.

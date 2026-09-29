@@ -1402,9 +1402,32 @@ func HasNamespaceFallback() bool {
 //     with authoritative=false AND logs the error so a flapping apiserver
 //     surfaces in diagnostics rather than silently degrading the UI.
 func GetAccessibleNamespaces(ctx context.Context) ([]string, bool) {
+	namespaces, source := GetAccessibleNamespacesWithSource(ctx)
+	return namespaces, source == NamespaceListCluster
+}
+
+// NamespaceListSource records how GetAccessibleNamespacesWithSource built its
+// list, so callers can tell an RBAC denial from a failed LIST — both return the
+// same best-effort short list.
+type NamespaceListSource string
+
+const (
+	// NamespaceListCluster: the cluster-wide namespace LIST succeeded.
+	NamespaceListCluster NamespaceListSource = "cluster"
+	// NamespaceListSeeded: the LIST was denied (401/403); the list holds only
+	// the context namespace and the --namespace / --namespaces seeds.
+	NamespaceListSeeded NamespaceListSource = "seeded"
+	// NamespaceListFailed: the LIST failed for another reason (timeout, network,
+	// no client); the list is the same seeds, but RBAC is not the cause.
+	NamespaceListFailed NamespaceListSource = "list-failed"
+)
+
+// GetAccessibleNamespacesWithSource is GetAccessibleNamespaces plus the reason
+// the list is or isn't complete.
+func GetAccessibleNamespacesWithSource(ctx context.Context) ([]string, NamespaceListSource) {
 	client := GetClient()
 	if client == nil {
-		return nil, false
+		return nil, NamespaceListFailed
 	}
 
 	listCtx, cancel := context.WithTimeout(ctx, NamespaceListTimeout)
@@ -1417,10 +1440,12 @@ func GetAccessibleNamespaces(ctx context.Context) ([]string, bool) {
 			names = append(names, ns.Name)
 		}
 		sort.Strings(names)
-		return names, true
+		return names, NamespaceListCluster
 	}
 
+	source := NamespaceListSeeded
 	if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
+		source = NamespaceListFailed
 		log.Printf("[k8s] GetAccessibleNamespaces: non-auth error listing namespaces: %v (falling back to best-effort short list)", err)
 	}
 
@@ -1438,7 +1463,7 @@ func GetAccessibleNamespaces(ctx context.Context) ([]string, bool) {
 	}
 	clientMu.RUnlock()
 	sort.Strings(fallback)
-	return fallback, false
+	return fallback, source
 }
 
 // ForceInCluster overrides in-cluster detection for testing
