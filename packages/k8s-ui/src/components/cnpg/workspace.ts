@@ -22,6 +22,7 @@ export const CNPG_WORKSPACE_KEYS = [
   'databases',
   'publications',
   'subscriptions',
+  'databaseRoles',
   'imageCatalogs',
   'clusterImageCatalogs',
   'objectStores',
@@ -84,6 +85,7 @@ export const CNPG_KIND_BY_KEY: Record<CNPGWorkspaceKey, { kind: string; group: s
   databases: { kind: 'Database', group: 'postgresql.cnpg.io', plural: 'databases' },
   publications: { kind: 'Publication', group: 'postgresql.cnpg.io', plural: 'publications' },
   subscriptions: { kind: 'Subscription', group: 'postgresql.cnpg.io', plural: 'subscriptions' },
+  databaseRoles: { kind: 'DatabaseRole', group: 'postgresql.cnpg.io', plural: 'databaseroles' },
   imageCatalogs: { kind: 'ImageCatalog', group: 'postgresql.cnpg.io', plural: 'imagecatalogs' },
   clusterImageCatalogs: { kind: 'ClusterImageCatalog', group: 'postgresql.cnpg.io', plural: 'clusterimagecatalogs' },
   objectStores: { kind: 'ObjectStore', group: 'barmancloud.cnpg.io', plural: 'objectstores' },
@@ -202,6 +204,7 @@ export function cnpgIssueCategory(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'reas
     case 'Database':
     case 'Publication':
     case 'Subscription':
+    case 'DatabaseRole':
       return 'declarations'
     case 'Pooler':
       return 'pooling'
@@ -547,6 +550,7 @@ function childIndex(resp: CNPGWorkspaceResponse): Map<string, string> {
   add('Database', resp.objects.databases)
   add('Publication', resp.objects.publications)
   add('Subscription', resp.objects.subscriptions)
+  add('DatabaseRole', resp.objects.databaseRoles)
   for (const p of resp.objects.pods ?? []) {
     const c = p?.metadata?.labels?.['cnpg.io/cluster']
     if (c) idx.set(`Pod/${p.metadata?.namespace}/${p.metadata?.name}`, c)
@@ -561,6 +565,7 @@ function declarationsFor(cluster: any, resp: CNPGWorkspaceResponse): CNPGFleetRo
     ['databases', resp.objects.databases ?? []],
     ['publications', resp.objects.publications ?? []],
     ['subscriptions', resp.objects.subscriptions ?? []],
+    ['databaseRoles', resp.objects.databaseRoles ?? []],
   ]
   let total = 0
   let failed = 0

@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { Lock } from 'lucide-react'
-import { PaneLoader, StatusDot, Tooltip, formatAge, toneFillClass, toneTextClass } from '@skyhook-io/k8s-ui'
-import { useCNPGClusterCapabilities, useCNPGRuntime, type CNPGRuntimeInstance, type CNPGRuntimeResponse } from '../../api/cnpg'
+import { PaneLoader, Tooltip, formatAge, toneTextClass } from '@skyhook-io/k8s-ui'
+import { useCNPGRuntime, type CNPGRuntimeInstance, type CNPGRuntimeResponse } from '../../api/cnpg'
 import { Notice } from '../capacity/shared'
 import { Segments } from './shared'
-import { CNPGInstanceActions } from './actions/CNPGInstanceActions'
 import { CNPGStorage } from './CNPGStorage'
 import { CNPGBlockingSessions } from './CNPGBlockingSessions'
+import { CNPGReplicationView } from './CNPGReplicationView'
 
 type Section = 'replication' | 'sessions' | 'transactions' | 'storage' | 'slots' | 'trends'
 
@@ -38,13 +38,6 @@ function seconds(s?: number): string {
   if (s < 90) return `${s.toFixed(1)} s`
   if (s < 5400) return `${Math.round(s / 60)} min`
   return `${(s / 3600).toFixed(1)} h`
-}
-
-function lagTone(s?: number) {
-  if (s === undefined) return 'unknown' as const
-  if (s >= 30) return 'unhealthy' as const
-  if (s >= 5) return 'degraded' as const
-  return 'healthy' as const
 }
 
 function SourceState({ label, state, error }: { label: string; state: string; error?: string }) {
@@ -152,7 +145,7 @@ export function CNPGClusterRuntime({ namespace, name, onOpenLogs }: { namespace:
       </div>
 
       {section === 'replication' && (
-        <ReplicationView namespace={namespace} cluster={name} primary={primary} replicas={replicas} onOpenLogs={onOpenLogs} />
+        <CNPGReplicationView namespace={namespace} cluster={name} primary={primary} replicas={replicas} onOpenLogs={onOpenLogs} card={Card} />
       )}
       {section === 'sessions' && <SessionsView namespace={namespace} cluster={name} primary={primary} />}
       {section === 'transactions' && <TransactionsView primary={primary} samples={samples} />}
@@ -170,89 +163,6 @@ function Card({ title, children, footer }: { title: ReactNode; children: ReactNo
       <div className="p-4">{children}</div>
       {footer && <div className="border-t border-theme-border px-4 py-2 text-xs text-theme-text-tertiary">{footer}</div>}
     </section>
-  )
-}
-
-function ReplicationView({
-  namespace,
-  cluster,
-  primary,
-  replicas,
-  onOpenLogs,
-}: {
-  namespace: string
-  cluster: string
-  primary?: CNPGRuntimeInstance
-  replicas: CNPGRuntimeInstance[]
-  onOpenLogs?: (pod: string) => void
-}) {
-  const rows = new Map((primary?.status.replication ?? []).map((r) => [r.applicationName, r]))
-  // The instance manager keeps answering on a fenced Pod with PostgreSQL
-  // stopped, so fencing comes from the Cluster, not from the runtime read.
-  const fenced = new Set(useCNPGClusterCapabilities(namespace, cluster).data?.facts.instances.filter((i) => i.fenced).map((i) => i.pod))
-  return (
-    <Card
-      title="Instances and replication"
-      footer="Replication rows come from the primary's pg_stat_replication through the instance manager. Lag is time behind the primary for replay."
-    >
-      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(220px,280px)_minmax(0,1fr)]">
-        <div className="rounded-lg border border-theme-border border-l-4 border-l-accent bg-theme-base p-3">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-sm font-semibold">{primary?.pod ?? 'No primary reported'}</span>
-            <span className="badge-sm bg-theme-elevated text-theme-text-secondary">primary</span>
-          </div>
-          {primary && (
-            <>
-              <div className="mt-1 font-mono text-xs text-theme-text-secondary">
-                LSN {primary.status.currentLsn ?? '—'} · TL {primary.status.timeline ?? '—'}
-              </div>
-              <SourceState label="Status" state={primary.status.state} error={primary.status.error} />
-              <div className="mt-2 flex flex-wrap gap-3 text-xs">
-                {onOpenLogs && <button type="button" className="text-accent-text hover:underline" onClick={() => onOpenLogs(primary.pod)}>Logs</button>}
-                <CNPGInstanceActions namespace={namespace} cluster={cluster} pod={primary.pod} />
-              </div>
-            </>
-          )}
-        </div>
-        <div className="space-y-2">
-          {replicas.length === 0 && <div className="text-sm text-theme-text-tertiary">Single instance: no replica to fail over to.</div>}
-          {replicas.map((r) => {
-            const rep = rows.get(r.pod)
-            const tone = rep ? lagTone(rep.replayLag) : 'unknown'
-            const pct = rep?.replayLag !== undefined ? Math.min(100, (rep.replayLag / 60) * 100) : 0
-            return (
-              <div key={r.pod} className="rounded-lg border border-theme-border bg-theme-base p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <StatusDot tone={tone} />
-                  <span className="font-mono text-sm font-semibold">{r.pod}</span>
-                  <span className={clsx('text-xs', toneTextClass(tone))}>
-                    {rep ? [rep.state, rep.syncState].filter(Boolean).join(' · ') : fenced.has(r.pod) ? 'fenced · PostgreSQL stopped' : r.role === 'unknown' ? 'role unknown' : primary?.status.state === 'ok' ? 'not streaming from the primary' : 'unknown'}
-                  </span>
-                  <span className="ml-auto font-mono text-xs text-theme-text-secondary">
-                    {rep ? `replay lag ${seconds(rep.replayLag)}` : 'lag unknown'}
-                  </span>
-                </div>
-                <div className="mt-2 flex items-center gap-2">
-                  <div className="h-1 flex-1 overflow-hidden rounded bg-theme-elevated">
-                    <div className={clsx('h-full', tone === 'unknown' ? 'bg-transparent' : toneFillClass(tone))} style={{ width: `${pct}%` }} />
-                  </div>
-                  <span className="text-[11px] text-theme-text-tertiary">60 s scale</span>
-                </div>
-                <div className="mt-1 font-mono text-xs text-theme-text-tertiary">
-                  received {r.status.receivedLsn ?? '—'} · replayed {r.status.replayLsn ?? '—'}
-                  {r.status.replayPaused ? ' · replay paused' : ''}
-                </div>
-                <SourceState label="Status" state={r.status.state} error={r.status.error} />
-                <div className="mt-2 flex flex-wrap gap-3 text-xs">
-                  {onOpenLogs && <button type="button" className="text-accent-text hover:underline" onClick={() => onOpenLogs(r.pod)}>Logs</button>}
-                  <CNPGInstanceActions namespace={namespace} cluster={cluster} pod={r.pod} />
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    </Card>
   )
 }
 

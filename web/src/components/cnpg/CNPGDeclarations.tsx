@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { AlertTriangle } from 'lucide-react'
-import { Badge, cnpgGitOpsSource, isApiGroup, toneTextClass, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
+import { Badge, cnpgDatabaseRoleFacts, cnpgDatabaseRoleMeta, cnpgGitOpsSource, isApiGroup, toneTextClass, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import {
   CNPGWorkspaceHeader,
@@ -23,7 +23,7 @@ type State = 'applied' | 'failed' | 'pending'
 
 interface DeclItem {
   key: string
-  kind: 'Database' | 'Publication' | 'Subscription' | 'Managed role'
+  kind: 'Database' | 'Publication' | 'Subscription' | 'Managed role' | 'DatabaseRole'
   pgName: string
   indent: boolean
   state: State
@@ -149,6 +149,24 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         })
       }
     }
+    for (const r of (data.objects.databaseRoles ?? []).filter(valid)) {
+      const ns = r.metadata?.namespace ?? ''
+      const clusterName = r.spec?.cluster?.name ?? '(no cluster)'
+      const g = group(ns, clusterName)
+      const f = cnpgDatabaseRoleFacts(r, g.row?.cluster ?? null)
+      g.items.push({
+        key: `databaserole/${ns}/${r.metadata?.name}`,
+        kind: 'DatabaseRole',
+        pgName: f.pgName,
+        indent: false,
+        state: f.state,
+        meta: cnpgDatabaseRoleMeta(f),
+        error: f.state === 'failed' ? f.message : undefined,
+        source: gitopsSource(r),
+        resource: cnpgResource('databaseroles', ns, r.metadata?.name),
+        isField: false,
+      })
+    }
     for (const row of fleet.rows) {
       const roles: any[] = Array.isArray(row.cluster?.spec?.managed?.roles) ? row.cluster.spec.managed.roles : []
       if (roles.length === 0) continue
@@ -179,7 +197,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         const fb = b.items.some((i) => i.state === 'failed') ? 0 : 1
         return fa - fb || a.namespace.localeCompare(b.namespace) || a.cluster.localeCompare(b.cluster)
       })
-  }, [data.objects.databases, data.objects.publications, data.objects.subscriptions, fleet.rows, clusterFilter, show])
+  }, [data.objects.databases, data.objects.publications, data.objects.subscriptions, data.objects.databaseRoles, fleet.rows, clusterFilter, show])
 
   const totals = useMemo(() => {
     let failed = 0
@@ -190,7 +208,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
     }
     return { failed, pending }
   }, [fleet.rows])
-  const declCoverage = worstCoverage(data.coverage.databases, data.coverage.publications, data.coverage.subscriptions)
+  const declCoverage = worstCoverage(data.coverage.databases, data.coverage.publications, data.coverage.subscriptions, data.coverage.databaseRoles)
 
   const chips = [
     ...(clusterFilter ? [{ label: `Cluster: ${clusterFilter}`, onClear: () => onSetParams({ cluster: null }) }] : []),
@@ -201,7 +219,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
     <div className="flex min-h-0 flex-1 flex-col">
       <CNPGWorkspaceHeader
         title="Declarations"
-        subtitle="Databases, managed roles, publications and subscriptions, by PostgreSQL cluster. Declared is not the same as reconciled."
+        subtitle="Databases, roles, publications and subscriptions, by PostgreSQL cluster. Declared is not the same as reconciled."
       />
       <ScreenBody>
         <CoverageNotice fleet={fleet} data={data} />

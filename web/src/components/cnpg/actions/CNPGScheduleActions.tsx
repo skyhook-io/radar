@@ -3,6 +3,7 @@ import { ActionConfirmDialog, Tooltip } from '@skyhook-io/k8s-ui'
 import { cnpgActionErrorCode, useCNPGAction, useCNPGScheduleCapabilities, type CNPGScheduleActionName } from '../../../api/cnpg'
 import { useToast } from '../../ui/Toast'
 import { useCNPGWriteGuard } from './useCNPGWriteGuard'
+import { trackCNPGOperation } from '../operations/store'
 
 const BUTTON =
   'inline-flex items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-2.5 py-1.5 text-xs font-medium text-theme-text-primary hover:bg-theme-hover disabled:cursor-not-allowed disabled:opacity-50'
@@ -75,6 +76,17 @@ function ScheduleDialog({ kind, namespace, name, onClose }: { kind: CNPGSchedule
           { action: kind, request: { reviewedContext: data.context, uid: data.uid, facts: data.facts as unknown as Record<string, unknown> }, successMessage: '' },
           {
             onSuccess: (r) => {
+              if (kind === 'run' && r.backup) {
+                trackCNPGOperation({
+                  kind: 'run',
+                  label: `Backup ${r.backup} (from ${name})`,
+                  context: data.context,
+                  namespace,
+                  cluster: data.facts.cluster,
+                  target: { name: r.backup },
+                  link: { kind: 'Backup', group: 'postgresql.cnpg.io', name: r.backup },
+                })
+              }
               showSuccess(kind === 'run' ? `Backup ${r.backup ?? ''} requested.` : kind === 'suspend' ? `${name} suspended.` : `${name} resumed.`)
               onClose()
             },

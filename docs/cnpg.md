@@ -12,7 +12,7 @@ CNPG stays inside **Resources**; there is no new global navigation item. When th
 |---|---|---|---|
 | Overview | `/cnpg` | The fleet: every Cluster with instances, replication, protection, declarations and its top problem. Defaults to **Needs attention**. | Cluster |
 | Protection | `/cnpg/protection` | Recovery evidence per cluster, failed backups (7 days), destinations, schedules. | Backup, ScheduledBackup, ObjectStore |
-| Declarations | `/cnpg/declarations` | Databases, Publications, Subscriptions and managed roles by cluster; declared vs reconciled. | Database, Publication, Subscription |
+| Declarations | `/cnpg/declarations` | Databases, DatabaseRoles (1.30+), Publications, Subscriptions and managed roles by cluster; declared vs reconciled. | Database, DatabaseRole, Publication, Subscription |
 | Pooling | `/cnpg/pooling` | Poolers and the clusters they front. | Pooler |
 | Operator | `/cnpg/operator` | Operator and plugin workloads, image catalogs, operator configuration. | ImageCatalog, ClusterImageCatalog |
 
@@ -42,7 +42,7 @@ Every value is something the cluster reports, labelled with where it came from. 
 | Recovery window | ObjectStore `status.serverRecoveryWindow` for the cluster's server name | "Not reported" |
 | Restore validation | A Cluster in the same namespace bootstrapped (`bootstrap.recovery`) from this cluster's store/server or one of its Backups, **with a ready instance** | "None recorded" (unknown tone) — Kubernetes records no restore tests, so this is never green. A matching cluster without a ready instance reads "Recovery declared in …". |
 | ObjectStore upload health | **Inferred** from its user clusters' WAL archiving and recovery windows (ObjectStore has no status of its own) | "Unknown" |
-| Declarations | `status.applied` (true / false / absent = pending); managed roles from `status.managedRolesStatus` (`reconciled`, `cannotReconcile`; anything else pending) | Pending, never failed |
+| Declarations | `status.applied` (true / false / absent = pending); managed roles from `status.managedRolesStatus` (`reconciled`, `cannotReconcile`; anything else pending). A DatabaseRole whose name also appears in the Cluster's `spec.managed.roles` is overridden — the Cluster spec wins and the operator reports it not applied; its summary says so, or "unknown" when the Cluster is not visible | Pending, never failed |
 | GitOps source | Argo CD / Flux labels and the Argo tracking annotation | "GitOps source not recorded" |
 | Pooler pressure | Each pooler Pod's PgBouncer exporter (`:9127/metrics`): per pool clients active/waiting, servers active/idle/used, max wait, the pool mode PgBouncer reports, and how many Pods reported | "Not measured" when no Pod could be read; partial (a lower bound) when only some reported |
 | Pooler readiness | The Pooler's Deployment (controlled by the Pooler's UID): ready of desired replicas. The Pooler's own `status.instances` counts scheduled Pods only | "Unknown" when the Deployment cannot be read |
@@ -92,6 +92,29 @@ The three WAL measures overlap and are shown side by side, never added up. Disk 
 
 Volumes and their usage do not depend on `pods/proxy`: without it the Runtime tab still shows them under its access notice.
 
+The replication view measures each standby's catch-up as **replay backlog in bytes**: the primary's current LSN minus the standby's replay LSN, broken into not sent / not written / not flushed / not replayed. PostgreSQL's `write_lag`, `flush_lag` and `replay_lag` are shown as what they are — acknowledgement delay for recent WAL, empty when idle and caught up — never as catch-up time. Each instance also carries its own report from `/pg/status`: a role detail derived only from that report (`primary`, `streaming` standby, `fileBased` = no WAL receiver, `replayPaused`, `pgRewind`), `pendingRestart` / `pendingRestartForDecrease`, timeline and instance-manager version. Pending restart is runtime-derived: it shows on the cluster page and the instance cards for callers who can read runtime, and never enters the cached-object Issues engine.
+
+## HA and instances
+
+`GET /api/cnpg/clusters/{ns}/{name}/ha` backs the Overview's "HA and instances" section, the header dimension chips, the switchover dialog and the operation tracker. Reading the Cluster (`get clusters`) never implies the rest: each part is authorized on its own and reports `ok | denied (with the grant) | notFound | notInstalled | unavailable | error`.
+
+| Fact | Source | Gate | When it is not known |
+|---|---|---|---|
+| Instances: node, QoS, running image vs desired (`status.image`, else `spec.imageName`), Pod and postgres-container start | instance Pods (controller-owned) | `list pods` | "Pods not readable" |
+| Zone | `topology.kubernetes.io/zone` on each Node | cluster-scoped `get nodes` | zones unknown (never "single zone") |
+| Failover quorum | `FailoverQuorum` of the Cluster's name (1.27+): recorded sync configuration, not the operator's verdict. N = potentially synchronous standbys, W = `standbyNumber`, R = those with a ready Pod (not the recorded primary); shows whether R + W > N | `get failoverquorums` | not installed / not found (quorum failover off) / a reset object = "no configuration recorded: a failover would wait" |
+| Disruption budgets | PDBs owned by the Cluster: expected / healthy / allowed, stale when not observed | `list poddisruptionbudgets` | `enablePDB: false` is the declared state, not a fault |
+| Primary Lease | `Lease` of the Cluster's name (1.30+), holder, renew, expired | `get leases` | "creates one from 1.30" — absence on older versions is not a fault |
+| Operator leader | `db9c8771.cnpg.io` Lease in the operator Deployment's namespace | `list deployments` + `get leases` | operator namespace unknown |
+| Cluster Jobs | Jobs owned by the Cluster (`cnpg.io/jobRole`: initdb, join, major-upgrade, snapshot-recovery…), phase | `list jobs` | "No access to Jobs" |
+| Read-write endpoints | ready EndpointSlice Pods of `<cluster>-rw` | `list endpointslices` | the Serving chip falls back to primary Pod readiness and says so |
+| Certificates | `status.certificates.expirations` (Go `Time.String()`, parsed server-side; unparseable = unknown) with renewal owner: operator-generated (CNPG renews) or named in `spec.certificates` (you renew). For user-provided Secrets, their **metadata only** names a cert-manager `Certificate` | `get secrets` (metadata client, never data) | "issuer unknown" |
+| Maintenance | `spec.nodeMaintenanceWindow` (`reusePVC` defaults to true) | — | — |
+
+Header chips — **Serving · Replication · Protection · Storage** — each come from their own source (primary Pod readiness + `-rw` endpoints; the primary's `pg_stat_replication`; WAL archiving, destination and last backup; volume usage) and read **unassessed** when it is unavailable. The controller phase stays labelled "reported by CNPG".
+
+Certificate expiry is also an Issues-engine finding (`CNPGCertificateExpiring`, one per Secret): a certificate its owner renews is a warning under 30 days and critical under 7; an operator-managed one only once renewal is overdue (under a day — CNPG renews at 7 days by default, so earlier would light every cluster for a third of each 90-day lifetime); expired is critical.
+
 ## Actions
 
 Capabilities (`GET /api/cnpg/clusters/{ns}/{name}/capabilities`, `/api/cnpg/scheduledbackups/{ns}/{name}/capabilities`) return the facts a confirmation is bound to, each action's verdict (allowed, or a reason naming the missing grant or the blocking state), per-instance actions, and the effects of a restart or hibernation. Actions are POSTs to `.../actions/{action}`, made with the caller's impersonated client:
@@ -105,6 +128,7 @@ Capabilities (`GET /api/cnpg/clusters/{ns}/{name}/capabilities`, `/api/cnpg/sche
 | Reload configuration | annotation `cnpg.io/reloadedAt` | `patch clusters` |
 | Fence / lift fence | annotation `cnpg.io/fencedInstances`, a JSON array (`["*"]` = all). Malformed JSON blocks the action; lifting one instance while `*` applies is refused | `patch clusters` |
 | Hibernate / rehydrate | annotation `cnpg.io/hibernation` `on` / `off` | `patch clusters` |
+| Node maintenance set / lift (advanced) | merge patch `spec.nodeMaintenanceWindow {inProgress, reusePVC}` as `kubectl cnpg maintenance set/unset`; binds the reviewed maintenance facts; a standing banner offers the lift | `patch clusters` |
 | ScheduledBackup suspend / resume | `spec.suspend` | `patch scheduledbackups` |
 | ScheduledBackup run now | create `Backup` copying method, plugin configuration, online settings and target | `create backups` |
 
@@ -119,6 +143,10 @@ Every request carries the facts the user reviewed (kube context, UIDs, current a
 Cancel and terminate bind the instance Pod UID, the pid and the backend's `backend_start`; destroy binds the Pod UID and the name and UID of every PVC reviewed; pause/resume binds the reviewed `paused`. Each returns `target` identifying what it acted on, so an operation tracker can follow the outcome.
 
 The dialog (`ActionConfirmDialog` in k8s-ui) leads with the effect, keeps the literal API writes in an expandable section, and requires typing the name for disruptive actions (switchover, primary fence, lifting a fence, cluster restart, hibernate, cold backups).
+
+### Operation tracker
+
+A successful POST means the write was accepted, not that it happened. The dialog hands off a tracked operation (`trackCNPGOperation` in `web/src/components/cnpg/operations/`) bound to the kube context, the Cluster UID, the target (name + UID) and a baseline; the Cluster header shows it until it finishes. States: `requested → observed → progressing → completed | failed | stalled | superseded | unobservable`. A step Radar cannot see keeps the operation **unobservable**, never completed; **stalled** needs telemetry showing no movement for 10 minutes. A newer conflicting operation, or the Cluster being recreated, supersedes it. Completion per kind: switchover — the target is `currentPrimary`, the old primary streams again, the `-rw` endpoints point at the target (where readable) and the phase is healthy; restart — per instance, a recreated Pod, a restarted postgres container or a later `cnpg_pg_postmaster_start_time`; reload — no completion signal, said so; fence / lift — Pod readiness and streaming; hibernate / rehydrate — the hibernation condition and ready instances; backup and schedule run — the Backup's phase; maintenance — the spec. Operations persist per browser session (`sessionStorage`, in memory when unavailable). New kinds register an observer with `registerCNPGOperationObserver(kind, fn)`.
 
 ## Inside PostgreSQL
 

@@ -1,4 +1,7 @@
 export * from './workspace'
+export * from './databaseRole'
+export * from './ha'
+export * from './CNPGClusterHASection'
 export * from './primitives'
 export * from './CNPGClusterSummary'
 export * from './CNPGBackupSummary'

@@ -132,6 +132,7 @@ export interface CNPGClusterFacts {
   backupMethods: CNPGBackupMethod[]
   backupTarget?: string
   isReplicaCluster: boolean
+  maintenance: { declared: boolean; inProgress: boolean; reusePVC: boolean }
   terminating: boolean
 }
 
@@ -145,6 +146,8 @@ export type CNPGClusterActionName =
   | 'unfence'
   | 'hibernate'
   | 'rehydrate'
+  | 'setMaintenance'
+  | 'unsetMaintenance'
 
 export interface CNPGClusterCapabilities {
   uid: string
@@ -277,6 +280,8 @@ export interface CNPGRuntimeReplication {
   flushLag?: number
   replayLag?: number
   sentLsn?: string
+  writeLsn?: string
+  flushLsn?: string
   replayLsn?: string
 }
 
@@ -294,6 +299,10 @@ export interface CNPGRuntimeInstance {
     timeline?: number
     replayPaused?: boolean
     pendingRestart?: boolean
+    pendingRestartForDecrease?: boolean
+    isPgRewindRunning?: boolean
+    instanceManagerVersion?: string
+    roleDetail?: 'primary' | 'pgRewind' | 'replayPaused' | 'streaming' | 'fileBased'
     isWalReceiverActive?: boolean
     archiving?: { lastArchivedWal?: string; lastArchivedAt?: string; lastFailedWal?: string; lastFailedAt?: string; readyWalFiles?: number }
     replication?: CNPGRuntimeReplication[]
@@ -317,6 +326,7 @@ export interface CNPGRuntimeInstance {
     blksHit?: number
     blksRead?: number
     deadlocksTotal?: number
+    postmasterStartTime?: number
   }
 }
 

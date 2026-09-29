@@ -62,6 +62,7 @@ var cnpgWorkspaceKinds = []cnpgWorkspaceKind{
 	{key: "databases", group: cnpgGroup, kind: "Database", resource: "databases"},
 	{key: "publications", group: cnpgGroup, kind: "Publication", resource: "publications"},
 	{key: "subscriptions", group: cnpgGroup, kind: "Subscription", resource: "subscriptions"},
+	{key: "databaseRoles", group: cnpgGroup, kind: "DatabaseRole", resource: "databaseroles"},
 	{key: "imageCatalogs", group: cnpgGroup, kind: "ImageCatalog", resource: "imagecatalogs"},
 	{key: "clusterImageCatalogs", group: cnpgGroup, kind: "ClusterImageCatalog", resource: "clusterimagecatalogs", clusterScoped: true},
 	{key: "objectStores", group: cnpgBarmanGroup, kind: "ObjectStore", resource: "objectstores"},

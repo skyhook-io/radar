@@ -602,6 +602,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/cnpg/clusters/{namespace}/{name}/runtime", s.handleCNPGClusterRuntime)
 			r.Get("/cnpg/clusters/{namespace}/{name}/storage", s.handleCNPGClusterStorage)
 			r.Get("/cnpg/disk", s.handleCNPGFleetDisk)
+			r.Get("/cnpg/clusters/{namespace}/{name}/ha", s.handleCNPGClusterHA)
 			r.Get("/cnpg/poolers/{namespace}/{name}/runtime", s.handleCNPGPoolerRuntime)
 			r.Get("/cnpg/clusters/{namespace}/{name}/capabilities", s.handleCNPGClusterCapabilities)
 			r.Post("/cnpg/clusters/{namespace}/{name}/actions/{action}", s.handleCNPGClusterAction)

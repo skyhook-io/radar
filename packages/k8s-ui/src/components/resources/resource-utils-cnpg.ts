@@ -518,7 +518,7 @@ export function getCNPGDeclarativeMessage(resource: any): string | undefined {
 export function getCNPGReclaimPolicy(resource: any): { value: string; destructive: boolean } {
   const spec = resource?.spec ?? {}
   const raw =
-    spec.databaseReclaimPolicy ?? spec.publicationReclaimPolicy ?? spec.subscriptionReclaimPolicy ?? 'retain'
+    spec.databaseReclaimPolicy ?? spec.publicationReclaimPolicy ?? spec.subscriptionReclaimPolicy ?? spec.databaseRoleReclaimPolicy ?? 'retain'
   return { value: raw, destructive: String(raw).toLowerCase() === 'delete' }
 }
 
