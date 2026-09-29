@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { Badge, getCNPGImageCatalogEntries, isApiGroup, PaneLoader, Tooltip } from '@skyhook-io/k8s-ui'
 import { useCNPGOperator, type CNPGOperatorComponent, type CNPGOperatorConfig } from '../../api/cnpg'
 import { Notice } from '../capacity/shared'
+import { CNPGOperatorDiagnosisSection } from './CNPGOperatorDiagnosis'
 import {
   CNPGWorkspaceHeader,
   CoverageNotice,
@@ -67,7 +68,7 @@ export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenPr
     <div className="flex min-h-0 flex-1 flex-col">
       <CNPGWorkspaceHeader
         title="Operator"
-        subtitle="Operator and plugin workloads, their versions, image catalogs and operator configuration."
+        subtitle="Operator and plugin workloads, whether the operator is leading, watching and reachable, image catalogs and operator configuration."
       />
       <ScreenBody>
         <CoverageNotice fleet={fleet} data={data} />
@@ -126,6 +127,7 @@ export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenPr
               inspected={inspected}
               empty="No operator or plugin Deployments found in the namespaces you can read."
             />
+            {op.diagnosis && <CNPGOperatorDiagnosisSection diagnosis={op.diagnosis} fleet={fleet} />}
           </>
         )}
 

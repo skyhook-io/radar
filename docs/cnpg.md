@@ -14,7 +14,7 @@ CNPG stays inside **Resources**; there is no new global navigation item. When th
 | Protection | `/cnpg/protection` | Recovery evidence per cluster, failed backups (7 days), destinations, schedules. | Backup, ScheduledBackup, ObjectStore |
 | Declarations | `/cnpg/declarations` | Databases, DatabaseRoles (1.30+), Publications, Subscriptions and managed roles by cluster; declared vs reconciled. | Database, DatabaseRole, Publication, Subscription |
 | Pooling | `/cnpg/pooling` | Poolers and the clusters they front. | Pooler |
-| Operator | `/cnpg/operator` | Operator and plugin workloads, image catalogs, operator configuration. | ImageCatalog, ClusterImageCatalog |
+| Operator | `/cnpg/operator` | Operator and plugin workloads, leader, watched namespaces, webhooks and reconcile errors, image catalogs, operator configuration. | ImageCatalog, ClusterImageCatalog |
 
 Destination badges count **affected clusters**, not findings, and follow the namespace filter (the sidebar says so). The exact kinds stay under a collapsible **Resource kinds** block, grouped by API group; on workspace screens it starts collapsed.
 
@@ -40,7 +40,7 @@ Every value is something the cluster reports, labelled with where it came from. 
 | Last successful backup | Newest of: completed Backup CRs (7-day window plus the newest per cluster), ObjectStore `serverRecoveryWindow[...].lastSuccessfulBackupTime`, in-tree `status.lastSuccessfulBackup` (ignored for plugin clusters, where CNPG no longer sets it) — the winning source is shown | "None observed", or "No access to Backups" |
 | WAL archiving | `ContinuousArchiving` condition | "Not reported" |
 | Recovery window | ObjectStore `status.serverRecoveryWindow` for the cluster's server name | "Not reported" |
-| Restore validation | A Cluster in the same namespace bootstrapped (`bootstrap.recovery`) from this cluster's store/server or one of its Backups, **with a ready instance** | "None recorded" (unknown tone) — Kubernetes records no restore tests, so this is never green. A matching cluster without a ready instance reads "Recovery declared in …". |
+| Restore validation | A person's note on a Cluster restored from this one (`radar.skyhook.io/restore-validation`, naming this Cluster's UID) reads "Validation recorded" with who and when; otherwise a Cluster in the same namespace bootstrapped (`bootstrap.recovery`) from this cluster's store/server or one of its Backups, **with a ready instance** | "None recorded" (unknown tone) — Kubernetes records no restore tests, so this is never green, and a recorded note is neutral, not passed. A matching cluster without a ready instance reads "Recovery declared in …". |
 | ObjectStore upload health | **Inferred** from its user clusters' WAL archiving and recovery windows (ObjectStore has no status of its own) | "Unknown" |
 | Declarations | `status.applied` (true / false / absent = pending); managed roles from `status.managedRolesStatus` (`reconciled`, `cannotReconcile`; anything else pending). A DatabaseRole whose name also appears in the Cluster's `spec.managed.roles` is overridden — the Cluster spec wins and the operator reports it not applied; its summary says so, or "unknown" when the Cluster is not visible | Pending, never failed |
 | GitOps source | Argo CD / Flux labels and the Argo tracking annotation | "GitOps source not recorded" |
@@ -150,7 +150,25 @@ Capabilities (`GET /api/cnpg/clusters/{ns}/{name}/capabilities`, `/api/cnpg/sche
 | Destroy instance (standby) | `kubectl cnpg destroy` parity: the instance's PVCs detached (`--keep-pvc`: Cluster owner removed, `cnpg.io/pvcStatus: detached`) or deleted with UID preconditions, then the Pod, then Jobs labelled `cnpg.io/instanceName`. The operator creates a replacement instance under a new name. The primary is refused (switch over first) | `delete pods`, `list`/`delete` (or `update`) `persistentvolumeclaims`, `list`/`delete jobs` |
 | Pooler pause / resume | `spec.pgbouncer.paused` (the operator runs PgBouncer `PAUSE` / `RESUME`) | `patch poolers` |
 
-Restore to a new cluster opens the standard create dialog with a `bootstrap.recovery` manifest (source Backup or ObjectStore, optional point-in-time target) for review; it is not a separate API.
+## Restore
+
+Restore starts from the Cluster's More menu, a Backup's **Restore from this backup** or an ObjectStore's **Restore a cluster from this store**. The dialog is review, not a gate:
+
+- **Recover to** the latest archived WAL, a point in time (entered in UTC or the browser's zone; the manifest always carries UTC), or — for a plugin Backup — the end of that backup (`recoveryTarget.backupID` + `targetImmediate`; CloudNativePG restores a `bootstrap.recovery.backup` reference only for in-tree and snapshot backups, so plugin Backups go through the ObjectStore with the ID pinned).
+- **What the source holds**, each with its source and in UTC and local time: first recoverability point and last successful backup (ObjectStore `serverRecoveryWindow`, completed Backups, in-tree status), WAL archiving (`ContinuousArchiving`) and the last archived / last failed WAL (the primary's instance manager, needs `pods/proxy`). A target before the first point, after the newest evidence, or in the future is **warned about, never blocked**; missing evidence is listed as a gap.
+- **Copied from the source** (instances, image or `imageCatalogRef`, storage, WAL storage, tablespaces, PostgreSQL parameters, resources) is listed for review and editable in the manifest. The manifest never carries `plugins` or `backup`; the dialog warns that the new cluster has no archiving until configured and must not reuse the source's `serverName`.
+
+The manifest opens in the standard create dialog (server dry-run, strict create). After the create, a toast links to the new Cluster, the header's operation tracker follows it (`restore`, completed at a healthy phase with every instance ready, failed on a failed recovery Job or a failing phase), and the Cluster's Overview shows **Restore in progress**: phase, the recovery Job's Pod with its init containers and a link to its logs, and Warning events, from `GET /api/cnpg/clusters/{ns}/{name}/recovery`. Once done it collapses to one "Restored from …" line.
+
+**Restore validation.** A restored Cluster's Protection tab has a Restore validation section: someone records what they checked (row counts, newest transaction vs target, a smoke query), optionally the recovery target, and the server writes it as the `radar.skyhook.io/restore-validation` annotation with their user name, the time and the source and restored Clusters' UIDs it read itself (`POST .../restore-validation`, `patch clusters`, GitOps write guard). It reads "Recorded", never "passed".
+
+## Report bundle
+
+**Download report…** (Cluster More menu) returns a zip shaped like `kubectl cnpg report cluster`: the Cluster, its owned Pods, Jobs and PVCs, events about them, its Backups, ScheduledBackups, Poolers and ObjectStore, operator and plugin versions, and the Runtime and Storage snapshots Radar shows. `report.json` lists every item with what was read, skipped or denied (and the grant), and the Secrets the cluster references by name. Secret values are never read. Pod logs are opt-in; query text inside PostgreSQL log records (statements, bind parameters, `query` fields) is removed unless also opted in. The bundle is capped at 32 MiB.
+
+## Operator diagnosis
+
+The Operator screen adds, per operator Deployment: the leader-election Lease (`db9c8771.cnpg.io`: holder Pod, last renewal, leader changes, "not renewed" when older than the lease duration; "off" without `--leader-elect`), the namespaces it watches (`WATCH_NAMESPACE` on the container — the value that sets the operator's cache — with Clusters outside them named), its admission webhooks (both configurations present, failure policy, CA bundle set, and ready endpoints behind the webhook Service — none ready with `Fail` means every CNPG write is rejected), `controller_runtime_reconcile_errors_total` / `_total` per controller from its metrics port through `pods/proxy` (cumulative since the container last started; only the leader reconciles), recent events on its Deployment, ReplicaSets and Pods, and a link to its logs. Each fact carries its own access state.
 
 Every request carries the facts the user reviewed (kube context, UIDs, current and target primary, fencing and hibernation values). The server re-reads them and returns **409** if anything changed; disruptive actions are never retried automatically. Errors carry a `code` (`context_changed`, `changed`, `blocked`, `all_fenced`, `operator_webhook_unavailable`, `outcome_unknown`). An outcome that is unknown after a timeout is resolved by re-reading the same Backup name, never by creating another.
 

@@ -52,6 +52,7 @@ function withLiveReplication(row: CNPGFleetRow, rt: CNPGRuntimeResponse | undefi
   }
 }
 import { cnpgClusterFullPath, currentPageLabel } from './paths'
+import { CNPGRestoreProgress } from './recovery/CNPGRestoreProgress'
 import { useConnection } from '../../context/ConnectionContext'
 
 interface SummaryContext {
@@ -91,7 +92,12 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
     <CNPGClusterSummary
       row={row}
       onNavigate={go}
-      lead={<CNPGMaintenanceBanner namespace={namespace} name={name} maintenance={ha.data?.maintenance} />}
+      lead={
+        <>
+          <CNPGMaintenanceBanner namespace={namespace} name={name} maintenance={ha.data?.maintenance} />
+          {row.cluster?.spec?.bootstrap?.recovery && <CNPGRestoreProgress namespace={namespace} name={name} />}
+        </>
+      }
       dimensions={cnpgDimensions({ row, ha: ha.data, replication: cnpgReplicationLive(runtime.data) })}
       haSection={
         <CNPGClusterHASection

@@ -11,6 +11,7 @@ import { EmptyState } from '../capacity/shared'
 import { CNPGClusterActivity } from './CNPGClusterActivity'
 import { CNPGClusterRuntime } from './CNPGClusterRuntime'
 import { CNPGProtection } from './CNPGProtection'
+import { CNPGRestoreValidation } from './recovery/CNPGRestoreValidation'
 import { CNPGScreenGate } from './shared'
 import { CNPG_DETAIL_KINDS, CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, cnpgScreenPath, type CNPGDetailTarget } from './routes'
 import { currentPageLabel } from './paths'
@@ -27,17 +28,22 @@ function ClusterProtectionTab({ namespace, name, onInspect }: { namespace: strin
   return (
     <CNPGScreenGate query={query} fleet={fleet}>
       {(data, readyFleet) => (
-        <CNPGProtection
-          data={data}
-          fleet={readyFleet}
-          namespaces={[namespace]}
-          searchParams={searchParams}
-          onSetParams={() => {}}
-          onInspect={onInspect}
-          inspected={null}
-          onClearNamespaces={() => {}}
-          scopeCluster={{ namespace, name }}
-        />
+        <div className="flex min-h-0 flex-1 flex-col">
+          {readyFleet.rows.find((r) => r.namespace === namespace && r.name === name)?.cluster?.spec?.bootstrap?.recovery && (
+            <CNPGRestoreValidation namespace={namespace} name={name} />
+          )}
+          <CNPGProtection
+            data={data}
+            fleet={readyFleet}
+            namespaces={[namespace]}
+            searchParams={searchParams}
+            onSetParams={() => {}}
+            onInspect={onInspect}
+            inspected={null}
+            onClearNamespaces={() => {}}
+            scopeCluster={{ namespace, name }}
+          />
+        </div>
       )}
     </CNPGScreenGate>
   )
