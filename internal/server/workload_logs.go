@@ -1788,8 +1788,14 @@ func fetchPodContainerLogs(ctx context.Context, client kubernetes.Interface, nam
 		n := maxSnapshotSourceBytes + 1
 		limit = &n
 	}
+	// Zero reads from the start of the since window instead of its tail, so a
+	// bounded read of a past interval returns that interval's first lines.
+	var tail *int64
+	if tailLines > 0 {
+		tail = &tailLines
+	}
 	stream, err := k8score.GetContainerLogs(ctx, client, namespace, podName, containerName, k8score.LogOptions{
-		TailLines: &tailLines, SinceSeconds: sinceSeconds, Timestamps: true, LimitBytes: limit,
+		TailLines: tail, SinceSeconds: sinceSeconds, Timestamps: true, LimitBytes: limit,
 	})
 	if err != nil {
 		return nil, false, err
