@@ -16,7 +16,7 @@ import {
   TIMESTAMP_FORMAT_LABELS,
 } from '../../utils/log-format'
 import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
-import { associateContinuations, groupContinuations, type LogGroup } from '../../utils/log-level'
+import { associateContinuations, groupContinuations, withoutRecordsOf, type LogGroup } from '../../utils/log-level'
 import { copyText } from '../../utils/clipboard'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
@@ -253,7 +253,15 @@ export function LogCore({
   // Search
   const search = useLogSearch(levelFilteredEntries, virtuosoRef)
 
-  const displayEntries = search.isFiltering ? search.filteredEntries : levelFilteredEntries
+  // Hide works on records: hiding a line that starts a stack trace hides its
+  // frames too, since frames without their error are only noise.
+  const displayEntries = useMemo(() => {
+    if (!search.isFiltering) return levelFilteredEntries
+    if (search.mode !== 'hide') return search.filteredEntries
+    const hiddenIds = new Set(search.matchIndices.map(i => levelFilteredEntries[i].id))
+    return withoutRecordsOf(search.filteredEntries, hiddenIds, association.headIdById)
+  }, [search.isFiltering, search.mode, search.filteredEntries, search.matchIndices, levelFilteredEntries, association])
+  const hiddenCount = levelFilteredEntries.length - displayEntries.length
   // Hidden lines leave nothing to highlight, so Hide keeps normal rendering and stack grouping.
   const highlightQuery = search.mode === 'hide' ? '' : search.query
 
@@ -920,7 +928,7 @@ export function LogCore({
                 {search.regexError
                   ? 'Invalid regex'
                   : search.mode === 'hide'
-                    ? `${search.matchCount.toLocaleString()} hidden`
+                    ? `${hiddenCount.toLocaleString()} hidden`
                     : search.matchCount > 0
                       ? `${search.currentMatch + 1} / ${search.matchCount}`
                       : '0 results'}

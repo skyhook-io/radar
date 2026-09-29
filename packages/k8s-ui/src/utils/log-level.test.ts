@@ -3,6 +3,8 @@ import {
   associateContinuations,
   detectLevel,
   groupContinuations,
+  isContinuationLine,
+  withoutRecordsOf,
   normalizeLevel,
   selectLevelField,
   type LevelSource,
@@ -60,6 +62,8 @@ const CASES: [string, string, LogLevel, LevelSource][] = [
 
   // Unstructured text — keyword fallback
   ['exception head', 'MongoServerError: Authentication failed.', 'error', 'keyword'],
+  ['node error code', 'TypeError [ERR_INVALID_ARG_TYPE]: The "path" argument must be of type string', 'error', 'keyword'],
+  ['logfmt empty level falls through', 'level= severity=error msg="failed"', 'error', 'structured'],
   ['java exception head', 'java.lang.IllegalStateException: Connection pool shut down', 'error', 'keyword'],
   ['python traceback', 'Traceback (most recent call last):', 'error', 'keyword'],
   ['go panic', 'panic: runtime error: invalid memory address or nil pointer dereference', 'error', 'keyword'],
@@ -111,6 +115,32 @@ function entry(id: number, content: string, pod = 'a'): TestEntry {
   const { level, source } = detectLevel(content)
   return { id, content, level, levelSource: source, pod, container: 'app' }
 }
+
+describe('isContinuationLine', () => {
+  it.each([
+    ['\tat com.example.Pool.get(Pool.java:10)', true],
+    ['Caused by: java.io.IOException: closed', true],
+    ['goroutine 1 [running]:', true],
+    ['main.main()', true],
+    ['net/http.(*conn).serve(0xc000112000, {0x1a2b3c, 0x4})', true],
+    ['created by net/http.(*Server).Serve in goroutine 1', true],
+    ['Starting server (version 1.2)', false],
+    ['GET /api/v1/pods(list)', false],
+    ['I0929 22:27:51.404929       1 reflector.go:376] Caches populated', false],
+  ])('%s', (line, expected) => {
+    expect(isContinuationLine(line)).toBe(expected)
+  })
+
+  it('keeps a Go panic together as one error record', () => {
+    const lines = [
+      entry(0, 'panic: runtime error: invalid memory address or nil pointer dereference'),
+      entry(1, 'goroutine 1 [running]:'),
+      entry(2, 'main.main()'),
+      entry(3, '\t/app/main.go:12 +0x1d'),
+    ]
+    expect(associateContinuations(lines).effectiveLevel).toEqual(['error', 'error', 'error', 'error'])
+  })
+})
 
 describe('associateContinuations', () => {
   const nodeTrace = [
@@ -168,9 +198,13 @@ describe('groupContinuations', () => {
   })
 
   it('leaves frames on their own rows when their record start is filtered out', () => {
-    const visible = applySearchMode(lines, [0], 'hide')
-    const groups = groupContinuations(visible, headIdById)
+    const groups = groupContinuations(lines.slice(1), headIdById)
     expect(groups.map(g => g.head.id)).toEqual([1, 2, 3])
+  })
+
+  it('hides a whole record when its first line is hidden', () => {
+    const visible = withoutRecordsOf(applySearchMode(lines, [0], 'hide'), new Set([0]), headIdById)
+    expect(visible.map(e => e.id)).toEqual([1])
   })
 })
 

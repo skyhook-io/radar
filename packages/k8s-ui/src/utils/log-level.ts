@@ -85,7 +85,8 @@ function logfmtLevel(line: string): LogLevel | null {
     if (!LOGFMT_LEVEL_KEYS.has(match[1])) continue
     let value = match[2]
     if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) value = value.slice(1, -1)
-    return normalizeLevel(value)
+    const level = normalizeLevel(value)
+    if (level) return level
   }
   return null
 }
@@ -127,7 +128,7 @@ const KEYWORD_DEBUG_RE = new RegExp(String.raw`\bdebug\b` + NOT_A_KEY)
 const KEYWORD_INFO_RE = new RegExp(String.raw`\binfo\b` + NOT_A_KEY)
 // The first line of an exception: `MongoServerError: ...`, `java.lang.IllegalStateException`,
 // `Traceback (most recent call last):`.
-const EXCEPTION_HEAD_RE = /^(?:[\w$.]*[A-Z][\w$]*(?:Error|Exception)(?::|\s*$)|Traceback \(most recent call last\):)/
+const EXCEPTION_HEAD_RE = /^(?:[\w$.]*[A-Z][\w$]*(?:Error|Exception)(?: \[[\w-]+\])?(?::|\s*$)|Traceback \(most recent call last\):)/
 
 function keywordLevel(line: string): LogLevel | null {
   if (EXCEPTION_HEAD_RE.test(line)) return 'error'
@@ -184,8 +185,18 @@ export function isContinuationLine(content: string): boolean {
   // Java `\tat com.foo.Bar`, Go `\tpackage.func`, Node `    at func`, Python `  File "..."`.
   if (/^\s/.test(content)) return true
   // Java's secondary chain markers that don't start with whitespace.
-  return /^(Caused by:|Suppressed:|\.\.\. \d+ more)/.test(content)
+  if (/^(Caused by:|Suppressed:|\.\.\. \d+ more)/.test(content)) return true
+  // A Go panic prints its goroutine header and function frames unindented;
+  // only the file:line under each frame is indented.
+  if (content.startsWith('goroutine ') || content.startsWith('created by ')) return GO_PANIC_LINE_RE.test(content)
+  const paren = content.indexOf('(')
+  if (paren <= 0 || !content.endsWith(')') || content.lastIndexOf(' ', paren) !== -1) return false
+  return GO_PANIC_LINE_RE.test(content)
 }
+
+// `goroutine 1 [running]:`, `main.main()`, `net/http.(*conn).serve(0xc000112000, {0x1a2b3c, 0x4})`,
+// `created by net/http.(*Server).Serve in goroutine 1`
+const GO_PANIC_LINE_RE = /^(?:goroutine \d+ \[[^\]]*\]:$|created by \S+|[\w./-]*[\w)\]]\.[\w*().[\]{}-]*\((?:[^()]|\([^()]*\))*\)$)/
 
 interface AssociableEntry {
   content: string
@@ -253,4 +264,12 @@ export function groupContinuations<T extends { id: number }>(visible: readonly T
     }
   }
   return groups
+}
+
+/** Drop every line whose record starts at one of `headIds`. */
+export function withoutRecordsOf<T extends { id: number }>(visible: readonly T[], headIds: ReadonlySet<number>, headIdById: ReadonlyMap<number, number>): T[] {
+  return visible.filter(e => {
+    const headId = headIdById.get(e.id)
+    return headId === undefined || !headIds.has(headId)
+  })
 }
