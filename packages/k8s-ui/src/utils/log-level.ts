@@ -181,7 +181,9 @@ export function detectLogLevel(content: string): LogLevel {
  * Lines that continue the previous line's record rather than starting a new
  * one: stack frames and wrapped detail, which almost always start indented.
  */
-export function isContinuationLine(content: string): boolean {
+export function isContinuationLine(raw: string): boolean {
+  // Colored output (Node's inspector) can put an escape code ahead of the indentation.
+  const content = raw.charCodeAt(0) === 0x1b ? raw.replace(LEADING_ANSI_RE, '') : raw
   // Java `\tat com.foo.Bar`, Go `\tpackage.func`, Node `    at func`, Python `  File "..."`.
   if (/^\s/.test(content)) return true
   // Java's secondary chain markers that don't start with whitespace.
@@ -193,6 +195,8 @@ export function isContinuationLine(content: string): boolean {
   if (paren <= 0 || !content.endsWith(')') || content.lastIndexOf(' ', paren) !== -1) return false
   return GO_PANIC_LINE_RE.test(content)
 }
+
+const LEADING_ANSI_RE = /^(?:\x1b\[[0-9;]*m)+/
 
 // `goroutine 1 [running]:`, `main.main()`, `net/http.(*conn).serve(0xc000112000, {0x1a2b3c, 0x4})`,
 // `created by net/http.(*Server).Serve in goroutine 1`
