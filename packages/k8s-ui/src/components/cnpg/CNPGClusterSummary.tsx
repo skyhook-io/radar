@@ -120,6 +120,12 @@ export function CNPGClusterSummary({
           <FactValue fact={row.replication} />
           <FactSource fact={row.replication} />
         </FactRow>
+        {row.disk && (
+          <FactRow label="Storage">
+            <FactValue fact={row.disk} />
+            <FactSource fact={row.disk} />
+          </FactRow>
+        )}
         {row.replicaCluster && (
           <FactRow label="Replica cluster">
             Follows {row.replicaCluster.source ? <span className="font-mono">{row.replicaCluster.source}</span> : 'an external primary'}

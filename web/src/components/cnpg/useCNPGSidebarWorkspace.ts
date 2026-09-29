@@ -1,9 +1,10 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Database, FileCheck2, Settings2, ShieldCheck, Waypoints } from 'lucide-react'
-import { buildCNPGFleet, type CNPGFleet, type SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
+import { applyCNPGDisk, buildCNPGFleet, type CNPGFleet, type SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 import type { APIResource } from '../../types'
 import { useCNPGWorkspace } from '../../api/cnpg'
+import { useCNPGFleetDisk } from '../../api/cnpg-storage'
 import { CNPG_SCREENS, type CNPGScreen } from './routes'
 
 export const CNPG_SIDEBAR_CATEGORY = 'CloudNativePG'
@@ -20,9 +21,15 @@ export function cnpgDiscovered(apiResources: APIResource[] | undefined): boolean
   return !!apiResources?.some((r) => r.group === 'postgresql.cnpg.io')
 }
 
+// Disk use joins the fleet here, so low-disk clusters count toward Needs
+// attention on every screen and sidebar badge that reads the fleet.
 export function useCNPGFleet(namespaces: string[], enabled = true) {
   const query = useCNPGWorkspace(namespaces, { enabled })
-  const fleet = useMemo<CNPGFleet | null>(() => (query.data?.installed ? buildCNPGFleet(query.data) : null), [query.data])
+  const disk = useCNPGFleetDisk(namespaces, enabled && !!query.data?.installed)
+  const fleet = useMemo<CNPGFleet | null>(
+    () => (query.data?.installed ? applyCNPGDisk(buildCNPGFleet(query.data), disk.data?.clusters) : null),
+    [query.data, disk.data],
+  )
   return { query, fleet }
 }
 

@@ -121,7 +121,7 @@ export function ProblemCallout({
             <RefLink refTo={problem.subject} onNavigate={onNavigate} mono />
           </span>
         )}
-        <span>{problem.source === 'audit' ? 'Radar check' : 'Radar issue'}</span>
+        <span>{problem.source === 'audit' ? 'Radar check' : problem.source === 'measurement' ? 'Measured' : 'Radar issue'}</span>
         {action}
         {more}
       </div>
