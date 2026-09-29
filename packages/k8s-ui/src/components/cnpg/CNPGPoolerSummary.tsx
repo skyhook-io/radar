@@ -54,7 +54,12 @@ export function CNPGPoolerSummary({
           {readiness ? (
             <>
               <PhaseBadge status={{ text: paused ? 'Paused' : readiness.text, color: '', level: paused ? 'degraded' : readiness.level }} />
-              {readiness.detail && <Note>{readiness.detail}</Note>}
+              {readiness.detail && (
+                <Note>
+                  {paused ? `${readiness.text} · ` : ''}
+                  {readiness.detail}
+                </Note>
+              )}
             </>
           ) : (
             <PhaseBadge status={getCNPGPoolerStatus(resource)} />

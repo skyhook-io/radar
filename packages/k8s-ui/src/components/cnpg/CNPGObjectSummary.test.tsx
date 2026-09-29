@@ -224,7 +224,7 @@ describe('CNPGPoolerSummary', () => {
         />,
       ),
     )
-    expect(t).toContain('1 of 2 ready')
+    expect(t).toContain('from Deployment main-rw')
     expect(t).toContain('Requested: paused')
     expect(t).toContain('Observed: Paused on 1 of 2 PgBouncers')
     expect(t).toContain('PgBouncer uses 20')

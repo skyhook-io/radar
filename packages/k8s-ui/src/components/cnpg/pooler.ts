@@ -74,7 +74,7 @@ export function poolerReadiness(d: CNPGPoolerDeploymentLive | undefined): CNPGPo
   }
   const want = d.replicas ?? 0
   const ready = d.readyReplicas ?? 0
-  const detail = `${ready} of ${want} ready · Deployment ${d.name}`
+  const detail = `from Deployment ${d.name}`
   if (want === 0) return { text: 'Scaled to zero', level: 'neutral', detail }
   if (ready === 0) return { text: 'Not ready', level: 'unhealthy', detail }
   if (ready < want) return { text: `${ready}/${want} ready`, level: 'degraded', detail }

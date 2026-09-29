@@ -44,7 +44,12 @@ Every value is something the cluster reports, labelled with where it came from. 
 | ObjectStore upload health | **Inferred** from its user clusters' WAL archiving and recovery windows (ObjectStore has no status of its own) | "Unknown" |
 | Declarations | `status.applied` (true / false / absent = pending); managed roles from `status.managedRolesStatus` (`reconciled`, `cannotReconcile`; anything else pending) | Pending, never failed |
 | GitOps source | Argo CD / Flux labels and the Argo tracking annotation | "GitOps source not recorded" |
-| Pooler pressure | Each pooler Pod's PgBouncer exporter (`:9127/metrics`): clients waiting, server connections in use, max wait, and how many Pods reported | "Not measured" when no Pod could be read; partial when only some reported |
+| Pooler pressure | Each pooler Pod's PgBouncer exporter (`:9127/metrics`): per pool clients active/waiting, servers active/idle/used, max wait, the pool mode PgBouncer reports, and how many Pods reported | "Not measured" when no Pod could be read; partial (a lower bound) when only some reported |
+| Pooler readiness | The Pooler's Deployment (controlled by the Pooler's UID): ready of desired replicas. The Pooler's own `status.instances` counts scheduled Pods only | "Unknown" when the Deployment cannot be read |
+| Pooler paused | Requested: `spec.pgbouncer.paused`. Observed: each PgBouncer's `SHOW STATE` over the caller's `pods/exec` | Observed reads "Not observable: needs create pods/exec"; the exporter does not publish it |
+| Pooler limits | `spec.pgbouncer.parameters`; unset ones read "default" plus PgBouncer's own default where it was read from PgBouncer (`SHOW CONFIG`, 1.24): `default_pool_size` 20, `max_client_conn` 100, the per-database/user maxima and reserve/min pools 0. CloudNativePG writes only the parameters the Pooler sets | — |
+| Blocking sessions | `pg_stat_activity` + `pg_blocking_pids()` on one instance, via psql over the caller's `pods/exec` | "Blocking detail needs create pods/exec"; the exporter's aggregate counts still apply |
+| Instance CPU / memory | metrics-server (`metrics.k8s.io`) usage of the postgres container, against its limit | "not measured: the metrics API is not available" |
 | ScheduledBackup cron | Shown verbatim | CNPG's cron is six-field (seconds first) and is never translated |
 
 Problems come from Radar's Issues engine (the same detections as `/issues`) plus the audit's `cnpgNoDeclarativeBackup`, worded "No declarative backup schedule" because that is all it proves. A cluster **needs attention** when it has an issue of warning or worse on itself, an instance Pod, or an object that references it.
@@ -61,7 +66,7 @@ Cluster logs (`/api/cnpg/clusters/{ns}/{name}/logs`) need `get pods/log`; Activi
 
 `GET /api/cnpg/clusters/{ns}/{name}/runtime` and `GET /api/cnpg/poolers/{ns}/{name}/runtime` read live data **through the caller's `pods/proxy`**: each instance manager's `/pg/status` (`:8000`) and the Postgres exporter (`:9187`), or each PgBouncer exporter (`:9127`). The apiserver strips the caller's credentials and `Impersonate-*` headers before forwarding, so a Pod never sees who asked. Only fixed GET paths are requested (some instance-manager paths mutate on GET), redirects are refused, and TLS is never downgraded after a certificate error. Requests are bounded: 4 in flight, 5 s deadlines, 1 MiB per status and 4 MiB per metrics body, memoized per identity and Pod UID for 5 s (status) or 25 s (metrics).
 
-Each source reports its own state (`ok`, `partial`, `denied`, `unreachable`, `error`). **Denied is never shown as zero**: without `get pods/proxy` the Runtime tab names the missing grant, and the rest of the workspace falls back to the facts above. The Runtime tab shows replication (per-standby write, flush and replay lag), aggregated sessions and lock waits, transaction rates, storage and WAL, replication slots, and trends sampled while the tab is open, with gaps shown where a sample failed. No per-session query text is read.
+Each source reports its own state (`ok`, `partial`, `denied`, `unreachable`, `error`). **Denied is never shown as zero**: without `get pods/proxy` the Runtime tab names the missing grant, and the rest of the workspace falls back to the facts above. The Runtime tab shows replication (per-standby write, flush and replay lag), aggregated sessions and lock waits, transaction rates, storage and WAL, replication slots, and trends sampled while the tab is open, with gaps shown where a sample failed. These reads carry no per-session query text; the blocking view (below) does, for callers who can exec into the instance.
 
 ## Actions
 
@@ -79,11 +84,23 @@ Capabilities (`GET /api/cnpg/clusters/{ns}/{name}/capabilities`, `/api/cnpg/sche
 | ScheduledBackup suspend / resume | `spec.suspend` | `patch scheduledbackups` |
 | ScheduledBackup run now | create `Backup` copying method, plugin configuration, online settings and target | `create backups` |
 
+| Cancel / terminate a backend | from the blocking view only: `pg_cancel_backend` / `pg_terminate_backend` run by psql in the instance, for the pid only while its `backend_start` still matches, client backends only | `create pods/exec` |
+| Destroy instance (standby) | `kubectl cnpg destroy` parity: the instance's PVCs detached (`--keep-pvc`: Cluster owner removed, `cnpg.io/pvcStatus: detached`) or deleted with UID preconditions, then the Pod, then Jobs labelled `cnpg.io/instanceName`. The operator creates a replacement instance under a new name. The primary is refused (switch over first) | `delete pods`, `list`/`delete` (or `update`) `persistentvolumeclaims`, `list`/`delete jobs` |
+| Pooler pause / resume | `spec.pgbouncer.paused` (the operator runs PgBouncer `PAUSE` / `RESUME`) | `patch poolers` |
+
 Restore to a new cluster opens the standard create dialog with a `bootstrap.recovery` manifest (source Backup or ObjectStore, optional point-in-time target) for review; it is not a separate API.
 
 Every request carries the facts the user reviewed (kube context, UIDs, current and target primary, fencing and hibernation values). The server re-reads them and returns **409** if anything changed; disruptive actions are never retried automatically. Errors carry a `code` (`context_changed`, `changed`, `blocked`, `all_fenced`, `operator_webhook_unavailable`, `outcome_unknown`). An outcome that is unknown after a timeout is resolved by re-reading the same Backup name, never by creating another.
 
+Cancel and terminate bind the instance Pod UID, the pid and the backend's `backend_start`; destroy binds the Pod UID and the name and UID of every PVC reviewed; pause/resume binds the reviewed `paused`. Each returns `target` identifying what it acted on, so an operation tracker can follow the outcome.
+
 The dialog (`ActionConfirmDialog` in k8s-ui) leads with the effect, keeps the literal API writes in an expandable section, and requires typing the name for disruptive actions (switchover, primary fence, lifting a fence, cluster restart, hibernate, cold backups).
+
+## Inside PostgreSQL
+
+**psql.** Every instance row in Runtime → Replication has **psql**, and the cluster menu has **Open psql on the primary**. It opens the dock terminal on the instance Pod, container `postgres`, running `psql` (`?shell=psql`, one argv element) over the caller's own `pods/exec` — the local socket as the `postgres` superuser, as `kubectl cnpg psql` does. The tab says whether the instance was the primary (read-write) or a standby (read-only while it stays one) when it opened. Disabled, with the grant named, without `create pods/exec`.
+
+**Blocking view.** Runtime → Sessions keeps the exporter's aggregates and adds, for exec-capable callers, `GET /api/cnpg/clusters/{ns}/{name}/sessions`: a fixed query (never built from input) run by psql in the primary (or a chosen instance) with a 5 s statement timeout, excluding its own backend. It lists only backends in a blocking relation as blocker → victim trees (a victim of two blockers appears under both; a lock cycle is marked), with wait event, transaction/query/connection age, user, database, application, client address and query text cut at 200 characters. Query text is shown because the same grant lets the caller open psql and read it. Beside it: client connections against `max_connections` minus the superuser reserve, and each instance's CPU and memory from metrics-server, so lock waits and resource pressure are told apart. Cancel is offered first (it does nothing for an idle-in-transaction holder, which the dialog says); terminate names the transaction it rolls back and requires typing the pid.
 
 ## GitOps write guard
 

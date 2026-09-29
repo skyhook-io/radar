@@ -376,6 +376,19 @@ func TestCNPGPoolerPauseBindsReviewedState(t *testing.T) {
 	}
 }
 
+func TestCNPGPoolerFactsReportPoolMode(t *testing.T) {
+	samples := map[string][]cnpgSample{
+		"cnpg_pgbouncer_pools_pool_mode": {
+			{labels: map[string]string{"database": "app", "user": "app"}, value: 2},
+			{labels: map[string]string{"database": "pgbouncer", "user": "pgbouncer"}, value: 3},
+		},
+	}
+	facts, _ := cnpgPoolerFacts(samples)
+	if len(facts.Pools) != 1 || facts.Pools[0].PoolMode != "transaction" {
+		t.Errorf("pools = %+v, want app/app in transaction mode and the admin pool excluded", facts.Pools)
+	}
+}
+
 func TestParseCNPGShowState(t *testing.T) {
 	st, err := parseCNPGShowState([]byte("active|yes\npaused|no\nsuspended|no\n"))
 	if err != nil || st.Paused == nil || *st.Paused || st.Active == nil || !*st.Active {
