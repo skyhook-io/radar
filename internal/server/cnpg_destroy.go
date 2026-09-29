@@ -28,8 +28,6 @@ import (
 
 const (
 	cnpgPVCStatusAnnotation = "cnpg.io/pvcStatus"
-	cnpgPVCRoleLabel        = "cnpg.io/pvcRole"
-	cnpgTablespaceLabel     = "cnpg.io/tablespaceName"
 	cnpgPVCStatusDetached   = "detached"
 )
 
@@ -135,7 +133,7 @@ func cnpgInstancePVCs(ctx context.Context, typed kubernetes.Interface, namespace
 	if err != nil {
 		return nil, err
 	}
-	inst, err := labels.NewRequirement(cnpgInstanceNameLbl, selection.Equals, []string{instance})
+	inst, err := labels.NewRequirement(cnpgInstanceNameLabel, selection.Equals, []string{instance})
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +144,7 @@ func cnpgInstancePVCs(ctx context.Context, typed kubernetes.Interface, namespace
 	out := []corev1.PersistentVolumeClaim{}
 	for _, p := range list.Items {
 		owned := cnpgOwnedByCluster(p.OwnerReferences, cluster, clusterUID)
-		detached := p.Annotations[cnpgPVCStatusAnnotation] == cnpgPVCStatusDetached && p.Labels[cnpgInstanceNameLbl] == instance
+		detached := p.Annotations[cnpgPVCStatusAnnotation] == cnpgPVCStatusDetached && p.Labels[cnpgInstanceNameLabel] == instance
 		if owned || detached {
 			out = append(out, p)
 		}
@@ -157,7 +155,7 @@ func cnpgInstancePVCs(ctx context.Context, typed kubernetes.Interface, namespace
 
 func cnpgDestroyPVCOf(p corev1.PersistentVolumeClaim, cluster string, clusterUID types.UID) CNPGDestroyPVC {
 	out := CNPGDestroyPVC{
-		Name: p.Name, UID: string(p.UID), Role: p.Labels[cnpgPVCRoleLabel], Tablespace: p.Labels[cnpgTablespaceLabel],
+		Name: p.Name, UID: string(p.UID), Role: p.Labels[cnpgPVCRoleLabel], Tablespace: p.Labels[cnpgTablespaceNameLabel],
 		Owned:    cnpgOwnedByCluster(p.OwnerReferences, cluster, clusterUID),
 		Detached: p.Annotations[cnpgPVCStatusAnnotation] == cnpgPVCStatusDetached,
 	}
@@ -171,7 +169,7 @@ func cnpgDestroyPVCOf(p corev1.PersistentVolumeClaim, cluster string, clusterUID
 }
 
 func cnpgInstanceJobs(ctx context.Context, typed kubernetes.Interface, namespace, instance string) ([]string, error) {
-	list, err := typed.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{LabelSelector: labels.Set{cnpgInstanceNameLbl: instance}.String()})
+	list, err := typed.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{LabelSelector: labels.Set{cnpgInstanceNameLabel: instance}.String()})
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +312,7 @@ func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGAction
 				pvc.Labels = map[string]string{}
 			}
 			pvc.Annotations[cnpgPVCStatusAnnotation] = cnpgPVCStatusDetached
-			pvc.Labels[cnpgInstanceNameLbl] = p.Pod
+			pvc.Labels[cnpgInstanceNameLabel] = p.Pod
 			if _, err := x.c.typed.CoreV1().PersistentVolumeClaims(namespace).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil {
 				return nil, fmt.Errorf("detaching PVC %s: %w", pvc.Name, err)
 			}

@@ -40,7 +40,6 @@ const (
 	cnpgPsqlDatabase      = "postgres"
 	cnpgSignalCancel      = "cancel"
 	cnpgSignalTerminate   = "terminate"
-	cnpgInstanceNameLbl   = "cnpg.io/instanceName"
 	cnpgSQLTimeoutPrelude = "SET statement_timeout = '5s';\n"
 )
 

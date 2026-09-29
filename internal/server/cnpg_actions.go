@@ -1044,8 +1044,8 @@ func cnpgHibernateEffectsOf(ctx context.Context, c cnpgActionClients, cluster *u
 		}
 		v := CNPGVolumeFact{
 			Name:     pvc.Name,
-			Instance: pvc.Labels["cnpg.io/instanceName"],
-			Role:     pvc.Labels["cnpg.io/pvcRole"],
+			Instance: pvc.Labels[cnpgInstanceNameLabel],
+			Role:     pvc.Labels[cnpgPVCRoleLabel],
 		}
 		if q, ok := pvc.Status.Capacity[corev1.ResourceStorage]; ok {
 			v.Capacity = q.String()

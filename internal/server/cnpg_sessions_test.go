@@ -164,11 +164,11 @@ func TestCNPGActionCancelBackendRefusals(t *testing.T) {
 	}
 }
 
-func cnpgTestPVC(name, uid, instance string, owned bool, mut func(*corev1.PersistentVolumeClaim)) *corev1.PersistentVolumeClaim {
+func cnpgDestroyTestPVC(name, uid, instance string, owned bool, mut func(*corev1.PersistentVolumeClaim)) *corev1.PersistentVolumeClaim {
 	p := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name, Namespace: "db", UID: types.UID(uid), ResourceVersion: "7",
-			Labels:      map[string]string{cnpgInstanceNameLbl: instance, cnpgPVCRoleLabel: "PG_DATA", "cnpg.io/cluster": "pg"},
+			Labels:      map[string]string{cnpgInstanceNameLabel: instance, cnpgPVCRoleLabel: "PG_DATA", "cnpg.io/cluster": "pg"},
 			Annotations: map[string]string{cnpgPVCStatusAnnotation: "ready"},
 		},
 		Status: corev1.PersistentVolumeClaimStatus{Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")}},
@@ -184,13 +184,13 @@ func cnpgTestPVC(name, uid, instance string, owned bool, mut func(*corev1.Persis
 }
 
 func cnpgDestroyEnv(t *testing.T) *cnpgActionEnv {
-	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "pg-2-join", Namespace: "db", Labels: map[string]string{cnpgInstanceNameLbl: "pg-2"}}}
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "pg-2-join", Namespace: "db", Labels: map[string]string{cnpgInstanceNameLabel: "pg-2"}}}
 	return newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil)},
 		cnpgActionPod("pg-1", "u1", true), cnpgActionPod("pg-2", "u2", true),
-		cnpgTestPVC("pg-2", "pvc-2", "pg-2", true, nil),
-		cnpgTestPVC("pg-2-wal", "pvc-2w", "pg-2", true, func(p *corev1.PersistentVolumeClaim) { p.Labels[cnpgPVCRoleLabel] = "PG_WAL" }),
-		cnpgTestPVC("pg-2-foreign", "pvc-x", "pg-2", false, nil),
-		cnpgTestPVC("pg-1", "pvc-1", "pg-1", true, nil),
+		cnpgDestroyTestPVC("pg-2", "pvc-2", "pg-2", true, nil),
+		cnpgDestroyTestPVC("pg-2-wal", "pvc-2w", "pg-2", true, func(p *corev1.PersistentVolumeClaim) { p.Labels[cnpgPVCRoleLabel] = "PG_WAL" }),
+		cnpgDestroyTestPVC("pg-2-foreign", "pvc-x", "pg-2", false, nil),
+		cnpgDestroyTestPVC("pg-1", "pvc-1", "pg-1", true, nil),
 		job)
 }
 
@@ -242,7 +242,7 @@ func TestCNPGActionDestroyInstanceKeepPVCDetaches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("kept PVC was deleted: %v", err)
 	}
-	if len(pvc.OwnerReferences) != 0 || pvc.Annotations[cnpgPVCStatusAnnotation] != "detached" || pvc.Labels[cnpgInstanceNameLbl] != "pg-2" {
+	if len(pvc.OwnerReferences) != 0 || pvc.Annotations[cnpgPVCStatusAnnotation] != "detached" || pvc.Labels[cnpgInstanceNameLabel] != "pg-2" {
 		t.Errorf("kept PVC = owners %v annotations %v labels %v", pvc.OwnerReferences, pvc.Annotations, pvc.Labels)
 	}
 	if len(env.deletes) != 1 || env.deletes[0].GetName() != "pg-2" {

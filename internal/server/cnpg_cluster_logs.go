@@ -571,7 +571,7 @@ func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, n
 // cnpgInstanceSourceLabel names an instance by role and ordinal ("replica 3"):
 // the role alone cannot tell two replicas apart.
 func cnpgInstanceSourceLabel(p *corev1.Pod, role string) string {
-	name := p.Labels["cnpg.io/instanceName"]
+	name := p.Labels[cnpgInstanceNameLabel]
 	if name == "" {
 		name = p.Name
 	}
