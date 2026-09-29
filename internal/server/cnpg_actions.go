@@ -220,6 +220,9 @@ type CNPGClusterCapabilitiesResponse struct {
 }
 
 type CNPGScheduleFacts struct {
+	// Generation binds "run" to the settings the user reviewed: every spec
+	// change bumps it.
+	Generation       int64  `json:"generation"`
 	Cluster          string `json:"cluster"`
 	Suspended        bool   `json:"suspended"`
 	NextScheduleTime string `json:"nextScheduleTime,omitempty"`
@@ -266,7 +269,8 @@ type cnpgReviewedFacts struct {
 	FencedInstances *struct {
 		Raw *string `json:"raw"`
 	} `json:"fencedInstances"`
-	Suspended *bool `json:"suspended"`
+	Suspended  *bool  `json:"suspended"`
+	Generation *int64 `json:"generation"`
 }
 
 // CNPGActionResult is a successful action's answer. Requested, not completed:
@@ -1055,6 +1059,7 @@ func cnpgScheduleFactsOf(ctx context.Context, c cnpgActionClients, sched *unstru
 	}
 	suspended, _, _ := unstructured.NestedBool(sched.Object, "spec", "suspend")
 	f := CNPGScheduleFacts{
+		Generation:       sched.GetGeneration(),
 		Cluster:          str("spec", "cluster", "name"),
 		Suspended:        suspended,
 		NextScheduleTime: str("status", "nextScheduleTime"),
@@ -1904,7 +1909,14 @@ func runCNPGScheduleAction(ctx context.Context, c cnpgActionClients, namespace, 
 	if string(sched.GetUID()) != req.UID {
 		return nil, cnpgChanged(facts, "ScheduledBackup %s/%s was deleted and recreated since you reviewed it", namespace, name)
 	}
-	if action != "run" {
+	if action == "run" {
+		if reviewed.Generation == nil {
+			return nil, cnpgRefuse(http.StatusBadRequest, "", "facts.generation is required for run")
+		}
+		if *reviewed.Generation != facts.Generation {
+			return nil, cnpgChanged(facts, "ScheduledBackup %s/%s settings changed since you confirmed; review the action again", namespace, name)
+		}
+	} else {
 		if reviewed.Suspended == nil {
 			return nil, cnpgRefuse(http.StatusBadRequest, "", "facts.suspended is required for %s", action)
 		}

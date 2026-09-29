@@ -260,13 +260,23 @@ function classifyPath(ctx: Context, path: string | null): Verdict {
   const tool = gitOpsToolLabel(owner.tool)
   const ev = path ? ctx.input.evidence?.paths.find((p) => p.path === path) : undefined
 
-  if (policy?.objectReconcile === 'ignore') {
+  // Helm's drift exemptions only stop drift correction: the next upgrade's
+  // three-way merge still resets a field the chart renders.
+  const helm = owner.kind === 'helmreleases'
+  const helmExemption = helm
+    ? policy?.objectReconcile === 'ignore'
+      ? 'the object opts out of drift detection'
+      : ev?.ignored === 'effective'
+        ? `drift detection ignores this field (${ev.ignoredBy ?? 'ignore rule'})`
+        : null
+    : null
+  if (!helm && policy?.objectReconcile === 'ignore') {
     return { level: 'info', reason: `This object opts out of ${tool} reconciliation, so a sync won't overwrite it.` }
   }
   if (policy?.objectReconcile === 'if-not-present') {
     return { level: 'info', reason: `${tool} only creates this object when it's missing, so a sync won't overwrite it.` }
   }
-  if (ev?.ignored === 'effective') {
+  if (!helm && ev?.ignored === 'effective') {
     return {
       level: 'info',
       reason: `${describeGitOpsOwner(owner)} ignores this field (${ev.ignoredBy ?? 'ignore rule'}), so a sync won't overwrite it.`,
@@ -281,7 +291,9 @@ function classifyPath(ctx: Context, path: string | null): Verdict {
         reason: `${describeGitOpsOwner(owner)} excludes this field from comparison (${ev.ignoredBy ?? 'ignoreDifferences'}) without RespectIgnoreDifferences, so self-heal won't react, but the next sync will overwrite it.`,
       }
     }
-    const outcome = declaredOutcome(ctx)
+    const outcome = helmExemption
+      ? { level: 'may-revert' as const, reason: `Flux won't correct it as drift because ${helmExemption}, but the next Helm upgrade overwrites it.` }
+      : declaredOutcome(ctx)
     const why =
       declared && ev
         ? `The GitOps source sets this field (${evidenceNote(ev, owner)}).`
@@ -322,6 +334,9 @@ function classifyDelete(ctx: Context): Verdict {
     }
   }
   if (policy.objectReconcile === 'ignore') {
+    if (owner.kind === 'helmreleases') {
+      return { level: 'may-revert', reason: "Flux drift detection skips this object, but the next Helm upgrade recreates it." }
+    }
     return { level: 'info', reason: `This object opts out of ${tool} reconciliation, so it won't be recreated.` }
   }
   if (policy.suspended) {

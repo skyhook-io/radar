@@ -202,6 +202,32 @@ describe('evaluateGitOpsWriteGuard', () => {
     })
   })
 
+  describe('HelmRelease drift exemptions', () => {
+    const helmOwned = pathEvidence({ ownedByGitOps: true, ownedBy: [{ manager: 'helm-controller', operation: 'Update', tool: 'fluxcd' }] })
+    const heal: GitOpsWritePolicyEvidence = { tool: 'fluxcd', auto: true, selfHeal: true, prune: null, suspended: false, driftDetection: 'enabled' }
+
+    it('an ignored field still reverts on the next upgrade', () => {
+      const g = guard({
+        owner: helmRelease,
+        writes: [hibernate],
+        evidence: evidence(heal, [{ ...helmOwned, ignored: 'effective', ignoredBy: 'spec.driftDetection.ignore' }]),
+      })
+      expect(g.level).toBe('may-revert')
+      expect(g.perWrite[0].reason).toContain('next Helm upgrade overwrites it')
+    })
+
+    it('an object opted out of drift detection still reverts on the next upgrade', () => {
+      const g = guard({ owner: helmRelease, writes: [hibernate], evidence: evidence({ ...heal, objectReconcile: 'ignore' }, [helmOwned]) })
+      expect(g.level).toBe('may-revert')
+    })
+
+    it('deleting an opted-out object is recreated by the next upgrade', () => {
+      const g = guard({ owner: helmRelease, writes: [{ scope: 'delete' }], evidence: evidence({ ...heal, objectReconcile: 'ignore' }) })
+      expect(g.level).toBe('may-revert')
+      expect(g.perWrite[0].reason).toContain('next Helm upgrade recreates it')
+    })
+  })
+
   describe('delete', () => {
     it('self-heal ⇒ will-revert (recreated)', () => {
       const g = guard({ writes: [{ scope: 'delete' }], evidence: evidence(selfHeal) })

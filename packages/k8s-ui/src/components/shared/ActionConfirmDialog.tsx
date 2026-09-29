@@ -43,6 +43,11 @@ export interface ActionConfirmDialogProps {
   isLoading?: boolean
   /** Error from the last attempt, shown inline so the user can adjust and retry. */
   error?: string | null
+  /**
+   * The last attempt may or may not have taken effect. Confirm stays locked:
+   * repeating it could apply the action twice.
+   */
+  outcomeUnknown?: boolean
 }
 
 export function ActionConfirmDialog({
@@ -65,6 +70,7 @@ export function ActionConfirmDialog({
   disabledReason,
   isLoading = false,
   error,
+  outcomeUnknown = false,
 }: ActionConfirmDialogProps) {
   const titleId = useId()
   const [typed, setTyped] = useState('')
@@ -79,7 +85,7 @@ export function ActionConfirmDialog({
   }, [open])
 
   const typedOk = !typedConfirmation || typed.trim() === typedConfirmation
-  const canConfirm = !disabledReason && typedOk && guardSatisfied && !isLoading
+  const canConfirm = !disabledReason && !outcomeUnknown && typedOk && guardSatisfied && !isLoading
   const where = [subject.namespace, subject.name].filter(Boolean).join('/')
 
   return (
@@ -180,7 +186,12 @@ export function ActionConfirmDialog({
           </label>
         )}
 
-        {error && <AlertBanner variant="error" title="The write did not happen" message={error} />}
+        {error &&
+          (outcomeUnknown ? (
+            <AlertBanner variant="warning" title="Radar could not tell whether this took effect" message={error} />
+          ) : (
+            <AlertBanner variant="error" title="The write did not happen" message={error} />
+          ))}
         {disabledReason && <AlertBanner variant="info" title="This action is not available" message={disabledReason} />}
       </div>
 

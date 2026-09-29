@@ -754,7 +754,7 @@ func TestCNPGActionBackupMethodCapability(t *testing.T) {
 func cnpgActionSchedule(mut func(o map[string]any)) *unstructured.Unstructured {
 	o := map[string]any{
 		"apiVersion": "postgresql.cnpg.io/v1", "kind": "ScheduledBackup",
-		"metadata": map[string]any{"name": "nightly", "namespace": "db", "uid": "sched-uid", "resourceVersion": "7"},
+		"metadata": map[string]any{"name": "nightly", "namespace": "db", "uid": "sched-uid", "resourceVersion": "7", "generation": int64(3)},
 		"spec": map[string]any{
 			"cluster":              map[string]any{"name": "pg"},
 			"schedule":             "0 0 0 * * *",
@@ -774,7 +774,7 @@ func cnpgActionSchedule(mut func(o map[string]any)) *unstructured.Unstructured {
 
 func TestCNPGActionScheduleRunCopiesSettings(t *testing.T) {
 	env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil), cnpgActionSchedule(nil)})
-	req := CNPGActionRequest{ReviewedContext: "kind-test", UID: "sched-uid"}
+	req := CNPGActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"generation":3}`)}
 	res, err := runCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "run", req)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -794,6 +794,23 @@ func TestCNPGActionScheduleRunCopiesSettings(t *testing.T) {
 	want := `{"cluster":{"name":"pg"},"method":"plugin","online":false,"onlineConfiguration":{"immediateCheckpoint":true},"pluginConfiguration":{"name":"barman-cloud.cloudnative-pg.io","parameters":{"barmanObjectName":"store"}}}`
 	if string(got) != want {
 		t.Errorf("spec\n got %s\nwant %s", got, want)
+	}
+}
+
+func TestCNPGActionScheduleRunBindsReviewedSettings(t *testing.T) {
+	env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil), cnpgActionSchedule(nil)})
+	req := CNPGActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"generation":2}`)}
+	_, err := runCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "run", req)
+	var ae *cnpgActionError
+	if !errors.As(err, &ae) || ae.Status != http.StatusConflict {
+		t.Fatalf("stale generation: err = %v, want 409", err)
+	}
+	if len(env.creates) != 0 {
+		t.Error("a Backup was created from settings the user did not review")
+	}
+	req.Facts = nil
+	if _, err := runCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "run", req); !errors.As(err, &ae) || ae.Status != http.StatusBadRequest {
+		t.Fatalf("missing generation: err = %v, want 400", err)
 	}
 }
 

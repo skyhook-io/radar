@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { CNPGWorkspaceResponse, TimelineEvent } from '@skyhook-io/k8s-ui'
-import { fetchJSON } from './client'
+import { ApiError, fetchJSON } from './client'
 
 // /api/cnpg/workspace
 //
@@ -181,6 +181,7 @@ export interface CNPGScheduleCapabilities {
   resourceVersion: string
   context: string
   facts: {
+    generation: number
     cluster: string
     suspended: boolean
     nextScheduleTime?: string
@@ -248,7 +249,19 @@ export function useCNPGAction(kind: 'clusters' | 'scheduledbackups', namespace: 
       queryClient.invalidateQueries({ queryKey: ['cnpg'] })
       queryClient.invalidateQueries({ queryKey: ['resource'] })
     },
+    // A refusal over changed facts re-reads them, so the dialog shows what
+    // the user would now be confirming.
+    onError: (err) => {
+      if (cnpgActionErrorCode(err) !== undefined) queryClient.invalidateQueries({ queryKey: ['cnpg'] })
+    },
   })
+}
+
+export type CNPGActionErrorCode = 'context_changed' | 'changed' | 'blocked' | 'all_fenced' | 'operator_webhook_unavailable' | 'outcome_unknown'
+
+export function cnpgActionErrorCode(err: unknown): CNPGActionErrorCode | undefined {
+  const code = err instanceof ApiError ? err.data?.code : undefined
+  return typeof code === 'string' ? (code as CNPGActionErrorCode) : undefined
 }
 
 export type CNPGRuntimeSourceState = 'ok' | 'denied' | 'unreachable' | 'error' | 'partial' | 'fenced'

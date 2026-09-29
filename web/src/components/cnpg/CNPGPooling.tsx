@@ -133,16 +133,25 @@ function PoolerPressure({ namespace, name }: { namespace: string; name: string }
     )
   }
   const pools = ok.flatMap((p) => p.pools ?? [])
-  const waiting = pools.reduce((s, x) => s + (x.clWaiting ?? 0), 0)
-  const active = pools.reduce((s, x) => s + (x.svActive ?? 0), 0)
-  const maxwait = Math.max(0, ...pools.map((x) => x.maxwaitSeconds ?? 0))
+  // Totals are exact only when every pod answered in full and every pool
+  // reported the field; otherwise they are lower bounds.
+  const allPods = ok.length === q.data.pods.length && ok.every((p) => p.state === 'ok')
+  const total = (field: 'clWaiting' | 'svActive') => {
+    const reported = pools.filter((x) => x[field] !== undefined)
+    if (reported.length === 0) return { sum: 0, text: 'not reported' }
+    const sum = reported.reduce((acc, x) => acc + (x[field] as number), 0)
+    return { sum, text: allPods && reported.length === pools.length ? `${sum}` : `≥ ${sum}` }
+  }
+  const waiting = total('clWaiting')
+  const waits = pools.map((x) => x.maxwaitSeconds).filter((v): v is number => v !== undefined)
+  const maxwait = waits.length > 0 ? Math.max(...waits) : undefined
   return (
     <>
-      <span className={waiting > 0 ? toneTextClass('degraded') : undefined}>
-        {waiting} waiting · {active} server in use
+      <span className={waiting.sum > 0 ? toneTextClass('degraded') : undefined}>
+        {waiting.text} waiting · {total('svActive').text} server in use
       </span>
       <Sub>
-        {maxwait > 0 ? `longest wait ${maxwait.toFixed(1)} s · ` : ''}
+        {maxwait !== undefined && maxwait > 0 ? `longest wait ${maxwait.toFixed(1)} s · ` : ''}
         {ok.length}/{q.data.pods.length} pods reporting
       </Sub>
     </>

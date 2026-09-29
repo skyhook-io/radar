@@ -2,8 +2,10 @@ import { useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, DatabaseBackup, MoreHorizontal, Repeat } from 'lucide-react'
 import { ActionConfirmDialog, Tooltip, type ActionWrite } from '@skyhook-io/k8s-ui'
 import {
+  cnpgActionErrorCode,
   useCNPGAction,
   useCNPGClusterCapabilities,
+  useCNPGRuntime,
   type CNPGActionCapability,
   type CNPGBackupMethod,
   type CNPGClusterActionName,
@@ -13,7 +15,6 @@ import { useToast } from '../../ui/Toast'
 import { useCNPGWriteGuard, type CNPGWriteScope } from './useCNPGWriteGuard'
 import { CNPGRestoreDialog } from './CNPGRestoreDialog'
 import { backupNameFor, describeBackupMethod, pickDefaultStandby, type StandbyChoice } from './actionModel'
-import { useCNPGRuntime } from '../../../api/cnpg'
 
 type DialogKind = CNPGClusterActionName | 'restore' | null
 
@@ -516,6 +517,7 @@ export function ClusterActionDialog({
       disabledReason={!cap.allowed ? capabilityTitle(cap) : spec.invalid}
       isLoading={mutation.isPending}
       error={mutation.error?.message}
+      outcomeUnknown={cnpgActionErrorCode(mutation.error) === 'outcome_unknown'}
     >
       {spec.body}
     </ActionConfirmDialog>

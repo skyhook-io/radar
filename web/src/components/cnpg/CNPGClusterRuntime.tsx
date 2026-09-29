@@ -62,6 +62,8 @@ function SourceState({ label, state, error }: { label: string; state: string; er
 // without Prometheus. It says so, and starts empty.
 interface Sample {
   t: number
+  /** When the metrics were scraped; the server memoizes them across polls. */
+  metricsAt?: number
   replayLag: Record<string, number | undefined>
   sessions?: number
   waiting?: number
@@ -86,6 +88,7 @@ function useSampleBuffer(data: CNPGRuntimeResponse | undefined): Sample[] {
         ...prev,
         {
           t: Date.parse(data.sampledAt) || Date.now(),
+          metricsAt: m?.capturedAt ? Date.parse(m.capturedAt) || undefined : undefined,
           replayLag,
           sessions: m?.state === 'ok' ? m.sessionsTotal : undefined,
           waiting: m?.state === 'ok' ? m.waitingBackends : undefined,
@@ -302,11 +305,11 @@ function Metric({ label, value, tone }: { label: string; value: ReactNode; tone?
 }
 
 function rate(samples: Sample[], key: 'commits' | 'rollbacks'): number | undefined {
-  const pts = samples.filter((s) => s[key] !== undefined)
+  const pts = samples.filter((s, i) => s[key] !== undefined && s.metricsAt !== undefined && s.metricsAt !== samples[i - 1]?.metricsAt)
   if (pts.length < 2) return undefined
   const a = pts[pts.length - 2]
   const b = pts[pts.length - 1]
-  const dt = (b.t - a.t) / 1000
+  const dt = ((b.metricsAt as number) - (a.metricsAt as number)) / 1000
   const dv = (b[key] as number) - (a[key] as number)
   if (dt <= 0 || dv < 0) return undefined
   return dv / dt

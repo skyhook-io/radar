@@ -23,9 +23,8 @@ function sourceLabel(s: RestoreSource): string {
  * that already exists fails instead of updating that object).
  */
 export function CNPGRestoreDialog({ namespace, name, onClose }: { namespace: string; name: string; onClose: () => void }) {
-  const { data: resp } = useResource<any>('clusters', namespace, name, 'postgresql.cnpg.io')
+  const { data: cluster } = useResource<any>('clusters', namespace, name, 'postgresql.cnpg.io')
   const workspace = useCNPGWorkspace([namespace])
-  const cluster = resp?.resource
   const sources = useMemo(() => (cluster ? restoreSourcesFor(cluster, workspace.data?.objects.backups ?? []) : []), [cluster, workspace.data])
   const [sourceIdx, setSourceIdx] = useState(0)
   const [newName, setNewName] = useState(`${name}-restore`)
