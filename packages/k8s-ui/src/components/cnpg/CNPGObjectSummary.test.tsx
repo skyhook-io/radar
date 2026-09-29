@@ -27,7 +27,12 @@ function ws(objects: Partial<Record<CNPGWorkspaceKey, any[]>>, over: Partial<CNP
 }
 
 function text(html: string): string {
-  return html.replace(/<[^>]+>/g, '').replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&')
+  return html
+    .split(/<[^>]*>/)
+    .join('')
+    .split('&#x27;').join("'")
+    .split('&quot;').join('"')
+    .split('&amp;').join('&')
 }
 
 const mainCluster = {

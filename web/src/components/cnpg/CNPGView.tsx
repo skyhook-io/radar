@@ -83,7 +83,7 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
       params.set('drawer', encodeDrawerTrail([resource]))
       setSearchParams(params, { replace: true, state: location.state })
     },
-    [searchParams, setSearchParams],
+    [searchParams, setSearchParams, location.state],
   )
 
   const setParams = useCallback(
@@ -95,7 +95,7 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
       }
       setSearchParams(params, { replace: true, state: location.state })
     },
-    [searchParams, setSearchParams],
+    [searchParams, setSearchParams, location.state],
   )
 
   const selectKind = useCallback(
