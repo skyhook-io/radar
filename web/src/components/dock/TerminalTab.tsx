@@ -7,12 +7,14 @@ interface TerminalTabProps {
   containerName: string
   containers: string[]
   isActive?: boolean
+  shell?: string
+  note?: string
 }
 
-export function TerminalTab({ namespace, podName, containerName, containers, isActive }: TerminalTabProps) {
+export function TerminalTab({ namespace, podName, containerName, containers, isActive, shell, note }: TerminalTabProps) {
   const createSession = (container: string) =>
     Promise.resolve({
-      wsUrl: getWsUrl(`/pods/${namespace}/${podName}/exec?container=${container}`),
+      wsUrl: getWsUrl(`/pods/${namespace}/${podName}/exec?container=${container}${shell ? `&shell=${encodeURIComponent(shell)}` : ''}`),
     })
 
   const createDebugContainer = async (targetContainer: string) => {
@@ -36,7 +38,8 @@ export function TerminalTab({ namespace, podName, containerName, containers, isA
       containers={containers}
       isActive={isActive}
       createSession={createSession}
-      createDebugContainer={createDebugContainer}
+      createDebugContainer={shell ? undefined : createDebugContainer}
+      note={note}
     />
   )
 }

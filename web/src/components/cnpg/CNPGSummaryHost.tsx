@@ -22,6 +22,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
 import { useCNPGRuntime, type CNPGRuntimeResponse } from '../../api/cnpg'
+import { useCNPGPoolerLive } from './useCNPGPoolerLive'
 import type { CNPGFleetRow } from '@skyhook-io/k8s-ui'
 
 // Replaces the Kubernetes-only replication fact with the primary's
@@ -139,6 +140,15 @@ function ObjectSummaryHost({ ctx, Summary }: { ctx: SummaryContext; Summary: Obj
   return <Summary resource={ctx.resource} workspace={workspace} onNavigate={go} />
 }
 
+function PoolerSummaryHost({ ctx }: { ctx: SummaryContext }) {
+  const { query } = useCNPGFleet([ctx.namespace])
+  const live = useCNPGPoolerLive(ctx.namespace, ctx.name)
+  if (query.isLoading) return <PaneLoader label="Loading summary…" className="h-40" />
+  const workspace = query.data?.installed ? query.data : null
+  const go = ctx.onNavigate ? (ref: CNPGRef) => ctx.onNavigate?.(refToSelectedResource(ref)) : undefined
+  return <CNPGPoolerSummary resource={ctx.resource} workspace={workspace} onNavigate={go} live={live} />
+}
+
 // The object's own apiVersion decides: Velero also ships a Backup kind.
 function groupOf(ctx: SummaryContext): string | undefined {
   const apiVersion = ctx.resource?.apiVersion
@@ -156,6 +166,7 @@ function renderSummaryFor(ctx: SummaryContext): ReactNode {
   }
   if (group !== CNPG_GROUP) return null
   if (kind === 'Cluster') return <ClusterSummaryHost {...ctx} />
+  if (kind === 'Pooler') return <PoolerSummaryHost ctx={ctx} />
   const Summary = OBJECT_SUMMARIES[kind]
   return Summary ? <ObjectSummaryHost ctx={ctx} Summary={Summary} /> : null
 }

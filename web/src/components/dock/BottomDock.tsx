@@ -17,6 +17,8 @@ function renderTabContent(tab: DockTab, isActive: boolean) {
         containerName={tab.containerName!}
         containers={tab.containers!}
         isActive={isActive}
+        shell={tab.shell}
+        note={tab.sessionNote}
       />
     )
   }

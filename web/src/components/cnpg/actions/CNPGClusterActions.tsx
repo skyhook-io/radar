@@ -14,6 +14,7 @@ import {
 import { useToast } from '../../ui/Toast'
 import { useCNPGWriteGuard, type CNPGWriteScope } from './useCNPGWriteGuard'
 import { CNPGRestoreDialog } from './CNPGRestoreDialog'
+import { useOpenCNPGPsql } from './useOpenCNPGPsql'
 import { backupNameFor, describeBackupMethod, pickDefaultStandby, type StandbyChoice } from './actionModel'
 
 type DialogKind = CNPGClusterActionName | 'restore' | null
@@ -52,6 +53,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
   const [open, setOpen] = useState<DialogKind>(null)
   const [menu, setMenu] = useState(false)
   const actions = caps.data?.actions
+  const openPsql = useOpenCNPGPsql()
 
   const item = (id: CNPGClusterActionName, label: string) => {
     const cap = actions?.[id]
@@ -124,6 +126,20 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
             {item('unfence', 'Lift fencing…')}
             {hibernated ? item('rehydrate', 'Resume from hibernation…') : item('hibernate', 'Hibernate…')}
             <div className="my-1 border-t border-theme-border" />
+            <Tooltip content={capabilityTitle(actions?.psql)} position="left" wrapperClassName="block">
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!actions?.psql.allowed || !caps.data?.facts.currentPrimary}
+                onClick={() => {
+                  setMenu(false)
+                  if (caps.data?.facts.currentPrimary) openPsql(namespace, caps.data.facts.currentPrimary, true)
+                }}
+                className={MENU_ITEM}
+              >
+                Open psql on the primary
+              </button>
+            </Tooltip>
             <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => { setMenu(false); setOpen('restore') }}>
               Restore to a new cluster…
             </button>

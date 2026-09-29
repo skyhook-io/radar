@@ -1,0 +1,69 @@
+import type { CNPGBackend } from '../../api/cnpg-sessions'
+
+export interface BlockingNode {
+  session: CNPGBackend
+  children: BlockingNode[]
+  /** Blockers of this session other than the parent it is shown under. */
+  alsoWaitsOn: number[]
+  /** This session waits on one of its own ancestors: a lock cycle (deadlock). */
+  cycle?: boolean
+}
+
+/**
+ * Blocker → victim trees from pg_blocking_pids. A root blocks others and
+ * waits on nobody listed; a victim appears under each blocker it waits on.
+ * Sessions left over after walking from the roots are in a cycle (a deadlock
+ * PostgreSQL has not resolved yet) and become roots of their own, marked.
+ */
+export function buildBlockingTree(sessions: CNPGBackend[]): BlockingNode[] {
+  const byPid = new Map(sessions.map((s) => [s.pid, s]))
+  const victimsOf = new Map<number, CNPGBackend[]>()
+  for (const s of sessions) {
+    for (const b of s.blockedBy) {
+      if (!byPid.has(b)) continue
+      victimsOf.set(b, [...(victimsOf.get(b) ?? []), s])
+    }
+  }
+  const seen = new Set<number>()
+  const build = (s: CNPGBackend, parent: number | undefined, path: Set<number>): BlockingNode => {
+    seen.add(s.pid)
+    const node: BlockingNode = { session: s, children: [], alsoWaitsOn: s.blockedBy.filter((b) => b !== parent) }
+    const nextPath = new Set(path).add(s.pid)
+    for (const v of victimsOf.get(s.pid) ?? []) {
+      if (nextPath.has(v.pid)) {
+        node.cycle = true
+        continue
+      }
+      node.children.push(build(v, s.pid, nextPath))
+    }
+    return node
+  }
+  const roots = sessions
+    .filter((s) => s.blockedBy.every((b) => !byPid.has(b)) && (victimsOf.get(s.pid)?.length ?? 0) > 0)
+    .map((s) => build(s, undefined, new Set()))
+  // Waiting on a backend that is not listed (capped, or ended between reads).
+  for (const s of sessions) {
+    if (!seen.has(s.pid) && s.blockedBy.length > 0 && s.blockedBy.every((b) => !byPid.has(b))) roots.push(build(s, undefined, new Set()))
+  }
+  for (const s of sessions) {
+    if (!seen.has(s.pid)) {
+      const node = build(s, undefined, new Set())
+      node.cycle = true
+      roots.push(node)
+    }
+  }
+  return roots
+}
+
+/** How many sessions wait behind this one, directly or transitively. */
+export function countVictims(node: BlockingNode): number {
+  const pids = new Set<number>()
+  const walk = (n: BlockingNode) => {
+    for (const c of n.children) {
+      pids.add(c.session.pid)
+      walk(c)
+    }
+  }
+  walk(node)
+  return pids.size
+}
