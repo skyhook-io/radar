@@ -403,7 +403,7 @@ func queryCNPGHistory(ctx context.Context, q cnpgQuerier, req CNPGHistoryRequest
 }
 
 func runCNPGHistoryChart(ctx context.Context, q cnpgQuerier, d cnpgHistoryDef, start, end time.Time, step time.Duration, c *CNPGHistoryChart) {
-	var series []prom.Series
+	series := []prom.Series{}
 	for _, query := range d.queries {
 		res, err := q.QueryRange(ctx, query.expr, start, end, step)
 		if err != nil {

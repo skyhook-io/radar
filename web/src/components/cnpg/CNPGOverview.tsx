@@ -250,7 +250,10 @@ export function CNPGOverview({
                         </td>
                         <td className={TD}><FactValue fact={row.replication} /></td>
                         <td className={TD}><FactValue fact={row.protection.summary} /></td>
-                        <td className={TD}><FactValue fact={row.disk ?? { text: 'Reading…', tone: 'unknown' }} /></td>
+                        <td className={TD}>
+                          <FactValue fact={row.disk ?? { text: 'Reading…', tone: 'unknown' }} />
+                          {row.diskGrowth && <div className="text-xs"><FactValue fact={row.diskGrowth} className="text-theme-text-tertiary" /></div>}
+                        </td>
                         <td className={TD}><FactValue fact={row.declarations.summary} /></td>
                         <td className={clsx(TD, 'font-mono')}>{row.pgVersion ?? '—'}</td>
                         <td className={TD}><AttentionCell row={row} /></td>

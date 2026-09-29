@@ -174,6 +174,8 @@ export interface CNPGFleetRow {
   gitops: CNPGGitOpsSource | null
   /** Fullest measured volume, set by applyCNPGDisk; absent when no disk reading was requested. */
   disk?: CNPGFact
+  /** Growth of the fastest-growing volume, set by applyCNPGFleetMetrics when measured. */
+  diskGrowth?: CNPGFact
 }
 
 export interface CNPGFleet {
@@ -488,7 +490,7 @@ function replicationFact(cluster: any, pods: CNPGInstance[], hibernated: boolean
   return {
     text: `${readyReplicas}/${replicas.length} replicas ready · lag unknown`,
     tone: 'unknown',
-    source: 'Pod readiness does not show whether a replica is streaming',
+    source: CNPG_LAG_UNMEASURED_SOURCE,
   }
 }
 
@@ -799,4 +801,87 @@ export function applyCNPGDisk(fleet: CNPGFleet, readings: CNPGDiskReading[] | un
     return { ...next, problems, attention: true, categories: new Set([...row.categories, problem.category]) }
   })
   return finishFleet(rows, fleet.incompleteKinds)
+}
+
+const CNPG_LAG_UNMEASURED_SOURCE = 'Pod readiness does not show whether a replica is streaming'
+
+/** One cluster's answer from /api/cnpg/fleet-metrics. */
+export interface CNPGFleetMetricsReading {
+  namespace: string
+  name: string
+  /** ok | noStandby | noSeries | denied | ambiguous | scopeMismatch | error | notRead */
+  lag: { state: string; grant?: string; reason?: string; seconds?: number; pod?: string }
+  /** ok | noSeries | denied | unavailable | error | notRead */
+  growth: { state: string; grant?: string; reason?: string; bytesPerHour?: number; claim?: string; instance?: string }
+}
+
+export interface CNPGFleetMetricsSources {
+  /** prometheus, or none when Radar has no Prometheus (`reason` says why). */
+  source: 'prometheus' | 'none'
+  reason?: string
+  lagSource?: string
+  growthSource?: string
+}
+
+export function cnpgLagTone(seconds: number): HealthLevel {
+  if (seconds >= 30) return 'unhealthy'
+  if (seconds >= 5) return 'degraded'
+  return 'healthy'
+}
+
+function formatLagSeconds(s: number): string {
+  if (s === 0) return '0 s'
+  if (s < 1) return `${Math.round(s * 1000)} ms`
+  if (s < 90) return `${s.toFixed(1)} s`
+  if (s < 5400) return `${Math.round(s / 60)} min`
+  return `${(s / 3600).toFixed(1)} h`
+}
+
+function measuredReplication(base: CNPGFact, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): CNPGFact {
+  const prefix = base.text.replace(/ · lag unknown$/, '')
+  if (src.source === 'none') {
+    return { text: `${prefix} · lag unknown (no metrics)`, tone: 'unknown', source: src.reason ?? 'Replication lag needs Prometheus scraping the CNPG exporter' }
+  }
+  const lag = reading?.lag
+  switch (lag?.state) {
+    case 'ok':
+      if (lag.seconds === undefined) break
+      return {
+        text: `${prefix} · max lag ${formatLagSeconds(lag.seconds)}`,
+        tone: cnpgLagTone(lag.seconds),
+        source: `Largest standby replay lag, ${lag.pod ?? 'a standby'} · ${src.lagSource ?? 'Prometheus'}`,
+      }
+    case 'noStandby':
+      return { text: `${prefix} · no standby reporting lag`, tone: 'unknown', source: `${lag.reason ?? 'No instance reports being a standby'} · ${src.lagSource ?? 'Prometheus'}` }
+    case 'denied':
+      return { text: `${prefix} · lag unknown (no access)`, tone: 'unknown', source: lag.grant ? `Needs ${lag.grant}` : lag.reason }
+  }
+  return { text: `${prefix} · lag unknown (no metrics)`, tone: 'unknown', source: lag?.reason ?? 'Replication lag needs Prometheus scraping the CNPG exporter' }
+}
+
+/** Volume growth of the fastest-growing claim, as a fact. */
+export function cnpgDiskGrowthFact(reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): CNPGFact | undefined {
+  const g = reading?.growth
+  if (src.source === 'none' || !g || g.state !== 'ok' || g.bytesPerHour === undefined) return undefined
+  const perDay = g.bytesPerHour * 24
+  const text = Math.abs(perDay) < 1024 ? 'flat over 6 h' : `${perDay > 0 ? '+' : '−'}${formatBytes(Math.abs(perDay))}/day`
+  return { text, tone: 'neutral', source: `Fastest-growing: ${g.claim ?? 'a volume'}${g.instance ? ` of ${g.instance}` : ''} · ${src.growthSource ?? 'Prometheus'}` }
+}
+
+/**
+ * Joins /api/cnpg/fleet-metrics into the fleet: a cluster whose replication
+ * fact is only Pod readiness gets its measured standby lag, or says why it has
+ * none; the disk growth, when measured, lands on `diskGrowth`. A measurement
+ * never raises a problem here — lag and growth are shown, not judged.
+ */
+export function applyCNPGFleetMetrics(fleet: CNPGFleet, readings: CNPGFleetMetricsReading[] | undefined, src: CNPGFleetMetricsSources | undefined): CNPGFleet {
+  if (!src) return fleet
+  const byKey = new Map((readings ?? []).map((r) => [key(r.namespace, r.name), r]))
+  const rows = fleet.rows.map((row) => {
+    const reading = byKey.get(row.key)
+    const next: CNPGFleetRow = { ...row, diskGrowth: cnpgDiskGrowthFact(reading, src) }
+    if (row.replication.source === CNPG_LAG_UNMEASURED_SOURCE) next.replication = measuredReplication(row.replication, reading, src)
+    return next
+  })
+  return { ...fleet, rows }
 }
