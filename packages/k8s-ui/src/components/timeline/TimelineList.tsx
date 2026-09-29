@@ -829,7 +829,9 @@ function RoutineActivityToggle({ shown, count, onChange }: { shown: boolean; cou
         Show routine activity
       </label>
       <Tooltip content={ROUTINE_ACTIVITY_INFO} delay={150} position="bottom" wrapperClassName="shrink-0">
-        <Info className="h-3.5 w-3.5 cursor-default text-theme-text-tertiary/70 hover:text-theme-text-secondary" aria-label="About routine activity" />
+        <button type="button" aria-label="About routine activity" className="flex cursor-default rounded text-theme-text-tertiary/70 hover:text-theme-text-secondary">
+          <Info className="h-3.5 w-3.5" />
+        </button>
       </Tooltip>
       <span className="tabular-nums text-theme-text-tertiary">
         · {count > 0 ? `${count.toLocaleString()} ${shown ? 'shown' : 'hidden'}` : shown ? 'none match' : 'none hidden'}
@@ -856,9 +858,11 @@ function describeFolded(others: TimelineEvent[]): string {
 // The rest of a child resource's problems in one time group, behind one line
 // under its newest card, so a crash-looping pod doesn't fill the list.
 function FoldedProblems({ latest, others, selectedEventId, renderCard }: { latest: TimelineEvent; others: TimelineEvent[]; selectedEventId?: string | null; renderCard: (item: TimelineEvent) => ReactNode }) {
-  const [userOpen, setOpen] = useState(false)
-  // A selection made elsewhere (the swimlane) must be able to land on a folded row.
-  const open = userOpen || (!!selectedEventId && others.some((e) => e.id === selectedEventId))
+  // A selection made elsewhere (the swimlane) opens the fold so it can land on a
+  // folded row; a click always wins, and a new selection hands control back.
+  const [userOpen, setOpen] = useState<boolean | null>(null)
+  useEffect(() => setOpen(null), [selectedEventId])
+  const open = userOpen ?? (!!selectedEventId && others.some((e) => e.id === selectedEventId))
   return (
     <div className="pl-3">
       <button

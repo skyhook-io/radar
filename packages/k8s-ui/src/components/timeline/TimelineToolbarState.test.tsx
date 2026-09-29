@@ -182,4 +182,9 @@ describe('TimelineList routine activity toggle', () => {
     expect(html).toContain('aria-expanded="true"')
     expect(html).toContain('data-event-id="backoff"')
   })
+
+  it('keeps the (i) explanation reachable by keyboard', () => {
+    const html = renderToString(<TimelineList events={EVENTS} isLoading={false} routineEvents={[]} onShowRoutineChange={() => {}} />)
+    expect(html).toContain('<button type="button" aria-label="About routine activity"')
+  })
 })

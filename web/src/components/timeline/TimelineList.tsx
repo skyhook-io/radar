@@ -207,7 +207,9 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
           isTruncated={sourceTruncated}
           truncationMessage={appScoped && sourceTruncated
             ? `Showing application activity found in the newest ${fetchLimit.toLocaleString()} events in this range — narrow the query to see older activity`
-            : undefined}
+            : split && sourceTruncated
+              ? 'Some older activity in this range is not listed. Narrow the time range to see it.'
+              : undefined}
         />
       </div>
     </div>
