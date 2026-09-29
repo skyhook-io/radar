@@ -264,7 +264,7 @@ export function cnpgActionErrorCode(err: unknown): CNPGActionErrorCode | undefin
   return typeof code === 'string' ? (code as CNPGActionErrorCode) : undefined
 }
 
-export type CNPGRuntimeSourceState = 'ok' | 'denied' | 'unreachable' | 'error' | 'partial' | 'fenced'
+export type CNPGRuntimeSourceState = 'ok' | 'denied' | 'unreachable' | 'error' | 'partial'
 
 export interface CNPGRuntimeReplication {
   applicationName: string

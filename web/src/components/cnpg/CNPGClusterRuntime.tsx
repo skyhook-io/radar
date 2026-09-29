@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { Lock } from 'lucide-react'
 import { PaneLoader, StatusDot, Tooltip, formatAge, toneFillClass, toneTextClass } from '@skyhook-io/k8s-ui'
-import { useCNPGRuntime, type CNPGRuntimeInstance, type CNPGRuntimeResponse } from '../../api/cnpg'
+import { useCNPGClusterCapabilities, useCNPGRuntime, type CNPGRuntimeInstance, type CNPGRuntimeResponse } from '../../api/cnpg'
 import { Notice } from '../capacity/shared'
 import { Segments } from './shared'
 import { CNPGInstanceActions } from './actions/CNPGInstanceActions'
@@ -50,11 +50,9 @@ function SourceState({ label, state, error }: { label: string; state: string; er
   const text =
     state === 'denied'
       ? `${label}: no access (needs get pods/proxy)`
-      : state === 'fenced'
-        ? `${label}: instance is fenced`
-        : state === 'partial'
-          ? `${label}: partial${error ? ` · ${error}` : ''}`
-          : `${label}: ${state}${error ? ` · ${error}` : ''}`
+      : state === 'partial'
+        ? `${label}: partial${error ? ` · ${error}` : ''}`
+        : `${label}: ${state}${error ? ` · ${error}` : ''}`
   return <div className="text-xs text-theme-text-tertiary">{text}</div>
 }
 
@@ -184,6 +182,9 @@ function ReplicationView({
   onOpenLogs?: (pod: string) => void
 }) {
   const rows = new Map((primary?.status.replication ?? []).map((r) => [r.applicationName, r]))
+  // The instance manager keeps answering on a fenced Pod with PostgreSQL
+  // stopped, so fencing comes from the Cluster, not from the runtime read.
+  const fenced = new Set(useCNPGClusterCapabilities(namespace, cluster).data?.facts.instances.filter((i) => i.fenced).map((i) => i.pod))
   return (
     <Card
       title="Instances and replication"
@@ -220,7 +221,7 @@ function ReplicationView({
                   <StatusDot tone={tone} />
                   <span className="font-mono text-sm font-semibold">{r.pod}</span>
                   <span className={clsx('text-xs', toneTextClass(tone))}>
-                    {rep ? [rep.state, rep.syncState].filter(Boolean).join(' · ') : r.role === 'unknown' ? 'role unknown' : primary?.status.state === 'ok' ? 'not streaming from the primary' : 'unknown'}
+                    {rep ? [rep.state, rep.syncState].filter(Boolean).join(' · ') : fenced.has(r.pod) ? 'fenced · PostgreSQL stopped' : r.role === 'unknown' ? 'role unknown' : primary?.status.state === 'ok' ? 'not streaming from the primary' : 'unknown'}
                   </span>
                   <span className="ml-auto font-mono text-xs text-theme-text-secondary">
                     {rep ? `replay lag ${seconds(rep.replayLag)}` : 'lag unknown'}
