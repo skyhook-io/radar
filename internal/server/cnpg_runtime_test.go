@@ -26,6 +26,7 @@ import (
 const cnpgStatusFixture = `{
  "currentLsn": "0/7000148", "systemID": "7690724460905209884", "isPrimary": true,
  "replayPaused": false, "pendingRestart": true, "isWalReceiverActive": false,
+ "pendingRestartForDecrease": true, "isPgRewindRunning": false, "instanceManagerVersion": "1.27.0",
  "mightBeUnavailable": false, "isArchivingWAL": true,
  "pod": {"metadata": {"name": "pg-orders-1"}},
  "lastArchivedWAL": "000000010000000000000006", "lastArchivedWALTime": "2026-09-29T08:24:24.875131Z",
@@ -51,6 +52,8 @@ cnpg_backends_total{application_name="api",datname="app",state="idle in transact
 cnpg_backends_total{application_name="bg",datname="app",state="",usename="app"} 7
 # TYPE cnpg_backends_waiting_total gauge
 cnpg_backends_waiting_total 1
+# TYPE cnpg_pg_postmaster_start_time gauge
+cnpg_pg_postmaster_start_time 1.790698960738028e+09
 # TYPE cnpg_backends_max_tx_duration_seconds gauge
 cnpg_backends_max_tx_duration_seconds{application_name="pg-orders-2",datname="",state="active",usename="streaming_replica"} 9000
 cnpg_backends_max_tx_duration_seconds{application_name="api",datname="app",state="idle in transaction",usename="app"} 42.5
@@ -121,6 +124,9 @@ func TestParseCNPGPgStatus(t *testing.T) {
 	if !facts.IsPrimary || !facts.PendingRestart || facts.CurrentLsn != "0/7000148" || facts.Timeline == nil || *facts.Timeline != 1 {
 		t.Errorf("facts = %+v", facts)
 	}
+	if !facts.PendingRestartForDecrease || facts.InstanceManagerVersion != "1.27.0" || facts.RoleDetail != "primary" {
+		t.Errorf("instance facts = %+v", facts)
+	}
 	a := facts.Archiving
 	if a.LastArchivedWal != "000000010000000000000006" || a.LastArchivedAt == "" || a.LastFailedAt != "" || a.ReadyWalFiles == nil || *a.ReadyWalFiles != 3 {
 		t.Errorf("archiving = %+v, want -infinity omitted", a)
@@ -142,6 +148,20 @@ func TestParseCNPGPgStatus(t *testing.T) {
 	for _, bad := range []string{`not json`, `{"pod":{}}`, `<html>proxy error</html>`} {
 		if _, _, err := parseCNPGPgStatus([]byte(bad)); err == nil {
 			t.Errorf("%q parsed as a status report", bad)
+		}
+	}
+}
+
+func TestCNPGRoleDetail(t *testing.T) {
+	for want, f := range map[string]CNPGInstanceStatusFacts{
+		"primary":      {IsPrimary: true, IsWalReceiverActive: true},
+		"pgRewind":     {IsPgRewindRunning: true, IsWalReceiverActive: true},
+		"replayPaused": {ReplayPaused: true, IsWalReceiverActive: true},
+		"streaming":    {IsWalReceiverActive: true},
+		"fileBased":    {},
+	} {
+		if got := cnpgRoleDetail(&f); got != want {
+			t.Errorf("cnpgRoleDetail(%+v) = %q, want %q", f, got, want)
 		}
 	}
 }
@@ -194,6 +214,9 @@ func TestCNPGInstanceMetricFacts(t *testing.T) {
 	}
 	if !cnpgEqF(facts.XactCommitTotal, 150) || !cnpgEqF(facts.XactRollbackTotal, 2) || !cnpgEqF(facts.BlksHit, 900) || !cnpgEqF(facts.BlksRead, 100) {
 		t.Errorf("counters = %v %v %v %v", facts.XactCommitTotal, facts.XactRollbackTotal, facts.BlksHit, facts.BlksRead)
+	}
+	if !cnpgEqF(facts.PostmasterStartTime, 1.790698960738028e+09) {
+		t.Errorf("postmaster start = %v", facts.PostmasterStartTime)
 	}
 	if facts.DeadlocksTotal != nil {
 		t.Errorf("deadlocks = %v, want absent (family not reported)", *facts.DeadlocksTotal)

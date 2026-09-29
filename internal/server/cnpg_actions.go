@@ -137,6 +137,7 @@ type CNPGClusterFacts struct {
 	BackupTarget     string                 `json:"backupTarget,omitempty"`
 	IsReplicaCluster bool                   `json:"isReplicaCluster"`
 	Terminating      bool                   `json:"terminating"`
+	Maintenance      CNPGMaintenanceFacts   `json:"maintenance"`
 }
 
 type CNPGClusterActions struct {
@@ -149,6 +150,7 @@ type CNPGClusterActions struct {
 	Unfence         CNPGActionCapability `json:"unfence"`
 	Hibernate       CNPGActionCapability `json:"hibernate"`
 	Rehydrate       CNPGActionCapability `json:"rehydrate"`
+	CNPGMaintenanceActions
 }
 
 // CNPGInstanceActions is the per-row verdict for actions that name one
@@ -269,8 +271,9 @@ type cnpgReviewedFacts struct {
 	FencedInstances *struct {
 		Raw *string `json:"raw"`
 	} `json:"fencedInstances"`
-	Suspended  *bool  `json:"suspended"`
-	Generation *int64 `json:"generation"`
+	Suspended   *bool                 `json:"suspended"`
+	Generation  *int64                `json:"generation"`
+	Maintenance *CNPGMaintenanceFacts `json:"maintenance"`
 }
 
 // CNPGActionResult is a successful action's answer. Requested, not completed:
@@ -466,6 +469,7 @@ func cnpgClusterFactsOf(ctx context.Context, typed kubernetes.Interface, cluster
 		IsReplicaCluster: cnpgIsReplicaCluster(cluster),
 		Terminating:      !cluster.GetDeletionTimestamp().IsZero(),
 		Instances:        []CNPGInstanceFact{},
+		Maintenance:      cnpgMaintenanceFactsOf(cluster),
 	}
 	facts.Hibernated = facts.Hibernation == "on"
 
@@ -891,6 +895,10 @@ func (s *Server) cnpgClusterCapabilities(r *http.Request, c cnpgActionClients, c
 			Unfence:         one(cnpgGuardUnfence(facts), cnpgGrantPatchClusters),
 			Hibernate:       one(cnpgGuardHibernate(facts), cnpgGrantPatchClusters),
 			Rehydrate:       one(cnpgGuardRehydrate(facts), cnpgGrantPatchClusters),
+			CNPGMaintenanceActions: CNPGMaintenanceActions{
+				SetMaintenance:   one(cnpgGuardSetMaintenance(facts), cnpgGrantPatchClusters),
+				UnsetMaintenance: one(cnpgGuardUnsetMaintenance(facts), cnpgGrantPatchClusters),
+			},
 		},
 		InstanceActions:  instanceActions,
 		RestartPlan:      cnpgRestartPlanOf(cluster, facts),
@@ -1276,6 +1284,14 @@ func cnpgFactsDiffer(binds []string, reviewed cnpgReviewedFacts, now CNPGCluster
 			got, want = reviewed.TargetPrimary, now.TargetPrimary
 		case "hibernation":
 			got, want = reviewed.Hibernation, now.Hibernation
+		case "maintenance":
+			if reviewed.Maintenance == nil {
+				return nil, b
+			}
+			if *reviewed.Maintenance != now.Maintenance {
+				changed = append(changed, b)
+			}
+			continue
 		case "fencedInstances":
 			b = "fencedInstances.raw"
 			if reviewed.FencedInstances != nil {

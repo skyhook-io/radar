@@ -306,6 +306,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "databases", Kind: "Database", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "publications", Kind: "Publication", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "subscriptions", Kind: "Subscription", Namespaced: true},
+	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "databaseroles", Kind: "DatabaseRole", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "imagecatalogs", Kind: "ImageCatalog", Namespaced: true},
 	{Group: "postgresql.cnpg.io", Versions: []string{"v1"}, Resource: "clusterimagecatalogs", Kind: "ClusterImageCatalog", Namespaced: false},
 	// The barman-cloud plugin ships its own group; the in-tree backup settings it

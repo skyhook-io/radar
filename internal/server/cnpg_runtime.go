@@ -90,6 +90,7 @@ var cnpgPlatformUsers = map[string]bool{"streaming_replica": true, cnpgMetricsEx
 var cnpgExpectedInstanceFamilies = []string{
 	"cnpg_backends_total",
 	"cnpg_backends_waiting_total",
+	"cnpg_pg_postmaster_start_time",
 	"cnpg_backends_max_tx_duration_seconds",
 	"cnpg_pg_settings_setting",
 	"cnpg_pg_database_size_bytes",
@@ -163,18 +164,27 @@ type CNPGInstanceStatus struct {
 }
 
 type CNPGInstanceStatusFacts struct {
-	IsPrimary           bool                    `json:"isPrimary"`
-	MightBeUnavailable  bool                    `json:"mightBeUnavailable,omitempty"`
-	CurrentLsn          string                  `json:"currentLsn,omitempty"`
-	ReceivedLsn         string                  `json:"receivedLsn,omitempty"`
-	ReplayLsn           string                  `json:"replayLsn,omitempty"`
-	Timeline            *int                    `json:"timeline,omitempty"`
-	ReplayPaused        bool                    `json:"replayPaused"`
-	PendingRestart      bool                    `json:"pendingRestart"`
-	IsWalReceiverActive bool                    `json:"isWalReceiverActive"`
-	Archiving           CNPGArchivingStatus     `json:"archiving"`
-	Replication         []CNPGReplicationStatus `json:"replication"`
-	Slots               []CNPGSlotStatus        `json:"slots"`
+	IsPrimary          bool   `json:"isPrimary"`
+	MightBeUnavailable bool   `json:"mightBeUnavailable,omitempty"`
+	CurrentLsn         string `json:"currentLsn,omitempty"`
+	ReceivedLsn        string `json:"receivedLsn,omitempty"`
+	ReplayLsn          string `json:"replayLsn,omitempty"`
+	Timeline           *int   `json:"timeline,omitempty"`
+	ReplayPaused       bool   `json:"replayPaused"`
+	PendingRestart     bool   `json:"pendingRestart"`
+	// PendingRestartForDecrease: the pending change lowers a setting a standby
+	// must match, so the primary restarts before its standbys.
+	PendingRestartForDecrease  bool   `json:"pendingRestartForDecrease"`
+	IsWalReceiverActive        bool   `json:"isWalReceiverActive"`
+	IsPgRewindRunning          bool   `json:"isPgRewindRunning"`
+	InstanceManagerVersion     string `json:"instanceManagerVersion,omitempty"`
+	IsInstanceManagerUpgrading bool   `json:"isInstanceManagerUpgrading,omitempty"`
+	// RoleDetail is derived only from the instance's own report: primary |
+	// pgRewind | replayPaused | streaming | fileBased.
+	RoleDetail  string                  `json:"roleDetail"`
+	Archiving   CNPGArchivingStatus     `json:"archiving"`
+	Replication []CNPGReplicationStatus `json:"replication"`
+	Slots       []CNPGSlotStatus        `json:"slots"`
 }
 
 // CNPGArchivingStatus times are RFC3339; the instance manager's "-infinity"
@@ -227,8 +237,11 @@ type CNPGInstanceMetrics struct {
 // absent and its family is listed in Missing. SessionsTotal counts every
 // non-platform session even when Sessions is capped.
 type CNPGInstanceMetricFacts struct {
-	Missing                       []string              `json:"missing,omitempty"`
-	MaxConnections                *float64              `json:"maxConnections,omitempty"`
+	Missing        []string `json:"missing,omitempty"`
+	MaxConnections *float64 `json:"maxConnections,omitempty"`
+	// PostmasterStartTime is epoch seconds: an in-place PostgreSQL restart
+	// moves it while the container keeps running.
+	PostmasterStartTime           *float64              `json:"postmasterStartTime,omitempty"`
 	Sessions                      []CNPGSessionGroup    `json:"sessions,omitempty"`
 	SessionsTotal                 *float64              `json:"sessionsTotal,omitempty"`
 	WaitingBackends               *float64              `json:"waitingBackends,omitempty"`
@@ -915,12 +928,17 @@ type cnpgPgStatus struct {
 	ReplayPaused        bool   `json:"replayPaused"`
 	PendingRestart      bool   `json:"pendingRestart"`
 	IsWalReceiverActive bool   `json:"isWalReceiverActive"`
-	LastArchivedWAL     string `json:"lastArchivedWAL"`
-	LastArchivedWALTime string `json:"lastArchivedWALTime"`
-	LastFailedWAL       string `json:"lastFailedWAL"`
-	LastFailedWALTime   string `json:"lastFailedWALTime"`
-	ReadyWalFiles       *int   `json:"readyWalFiles"`
-	ReplicationInfo     []struct {
+
+	PendingRestartForDecrease  bool   `json:"pendingRestartForDecrease"`
+	IsPgRewindRunning          bool   `json:"isPgRewindRunning"`
+	InstanceManagerVersion     string `json:"instanceManagerVersion"`
+	IsInstanceManagerUpgrading bool   `json:"isInstanceManagerUpgrading"`
+	LastArchivedWAL            string `json:"lastArchivedWAL"`
+	LastArchivedWALTime        string `json:"lastArchivedWALTime"`
+	LastFailedWAL              string `json:"lastFailedWAL"`
+	LastFailedWALTime          string `json:"lastFailedWALTime"`
+	ReadyWalFiles              *int   `json:"readyWalFiles"`
+	ReplicationInfo            []struct {
 		ApplicationName string `json:"applicationName"`
 		State           string `json:"state"`
 		// CNPG serializes pg_stat_replication.sent_lsn under "receivedLsn".
@@ -982,6 +1000,11 @@ func parseCNPGPgStatus(body []byte) (*CNPGInstanceStatusFacts, string, error) {
 		ReplayPaused:        st.ReplayPaused,
 		PendingRestart:      st.PendingRestart,
 		IsWalReceiverActive: st.IsWalReceiverActive,
+
+		PendingRestartForDecrease:  st.PendingRestartForDecrease,
+		IsPgRewindRunning:          st.IsPgRewindRunning,
+		InstanceManagerVersion:     st.InstanceManagerVersion,
+		IsInstanceManagerUpgrading: st.IsInstanceManagerUpgrading,
 		Archiving: CNPGArchivingStatus{
 			LastArchivedWal: st.LastArchivedWAL,
 			LastArchivedAt:  cnpgStatusTime(st.LastArchivedWALTime),
@@ -992,6 +1015,7 @@ func parseCNPGPgStatus(body []byte) (*CNPGInstanceStatusFacts, string, error) {
 		Replication: []CNPGReplicationStatus{},
 		Slots:       []CNPGSlotStatus{},
 	}
+	facts.RoleDetail = cnpgRoleDetail(facts)
 	var partial []string
 	for i, ri := range st.ReplicationInfo {
 		if i >= cnpgRuntimeMaxRows {
@@ -1026,6 +1050,25 @@ func parseCNPGPgStatus(body []byte) (*CNPGInstanceStatusFacts, string, error) {
 		})
 	}
 	return facts, strings.Join(partial, "; "), nil
+}
+
+// cnpgRoleDetail names what an instance is doing from its own report, never
+// from the Cluster's phase. A standby without an active WAL receiver is
+// replaying from the archive or waiting to reconnect; `kubectl cnpg status`
+// calls both "file based".
+func cnpgRoleDetail(f *CNPGInstanceStatusFacts) string {
+	switch {
+	case f.IsPrimary:
+		return "primary"
+	case f.IsPgRewindRunning:
+		return "pgRewind"
+	case f.ReplayPaused:
+		return "replayPaused"
+	case f.IsWalReceiverActive:
+		return "streaming"
+	default:
+		return "fileBased"
+	}
 }
 
 // cnpgStatusTime normalizes an instance manager timestamp; "-infinity" and
@@ -1300,15 +1343,16 @@ func cnpgMissingFamilies(samples map[string][]cnpgSample, expected []string) []s
 // why the answer is partial.
 func cnpgInstanceMetricFacts(samples map[string][]cnpgSample) (*CNPGInstanceMetricFacts, string) {
 	facts := &CNPGInstanceMetricFacts{
-		Missing:           cnpgMissingFamilies(samples, cnpgExpectedInstanceFamilies),
-		MaxConnections:    cnpgSingle(samples, "cnpg_pg_settings_setting", map[string]string{"name": "max_connections"}),
-		WaitingBackends:   cnpgSingle(samples, "cnpg_backends_waiting_total", nil),
-		WalBytes:          cnpgSingle(samples, "cnpg_collector_pg_wal", map[string]string{"value": "size"}),
-		XactCommitTotal:   cnpgSum(samples, "cnpg_pg_stat_database_xact_commit"),
-		XactRollbackTotal: cnpgSum(samples, "cnpg_pg_stat_database_xact_rollback"),
-		BlksHit:           cnpgSum(samples, "cnpg_pg_stat_database_blks_hit"),
-		BlksRead:          cnpgSum(samples, "cnpg_pg_stat_database_blks_read"),
-		DeadlocksTotal:    cnpgSum(samples, "cnpg_pg_stat_database_deadlocks"),
+		Missing:             cnpgMissingFamilies(samples, cnpgExpectedInstanceFamilies),
+		MaxConnections:      cnpgSingle(samples, "cnpg_pg_settings_setting", map[string]string{"name": "max_connections"}),
+		WaitingBackends:     cnpgSingle(samples, "cnpg_backends_waiting_total", nil),
+		PostmasterStartTime: cnpgSingle(samples, "cnpg_pg_postmaster_start_time", nil),
+		WalBytes:            cnpgSingle(samples, "cnpg_collector_pg_wal", map[string]string{"value": "size"}),
+		XactCommitTotal:     cnpgSum(samples, "cnpg_pg_stat_database_xact_commit"),
+		XactRollbackTotal:   cnpgSum(samples, "cnpg_pg_stat_database_xact_rollback"),
+		BlksHit:             cnpgSum(samples, "cnpg_pg_stat_database_blks_hit"),
+		BlksRead:            cnpgSum(samples, "cnpg_pg_stat_database_blks_read"),
+		DeadlocksTotal:      cnpgSum(samples, "cnpg_pg_stat_database_deadlocks"),
 	}
 	var capped []string
 
