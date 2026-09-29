@@ -332,6 +332,18 @@ curl -s 'localhost:9090/api/v1/query?query=up' | python3 -m json.tool
   against full English sentences from `api/v1/cluster_types.go`, so bumping the
   version can silently move a cluster into the unrecognised-phase bucket. Bump
   deliberately, then re-check the badges.
+- **DatabaseRole (CNPG 1.30+).** `11-databaseroles.yaml` is applied only when
+  `databaseroles.postgresql.cnpg.io` is served, so the pinned 1.27 demo skips
+  it. To see it, bring up a **separate** cluster on 1.30:
+  `CLUSTER_NAME=radar-cnpg-130 CNPG_VERSION=1.30.0 ./scripts/cnpg-demo.sh up`.
+  Do not re-run `up` with a newer `CNPG_VERSION` over an existing demo: the
+  operator upgrade rolls every instance and the phase strings may move (see
+  the first note). The fixture gives one applied role (`demo-reader`) and one
+  the operator refuses honestly (`demo-broken-role`: its password Secret does
+  not exist). The DatabaseRole controller runs in the instance manager, so both
+  settle even with the operator frozen. The manifest URL follows
+  `CNPG_VERSION`'s `release-<major.minor>` branch. This path is not exercised
+  by CI; DatabaseRole rendering is covered by unit tests.
 - `CLUSTER_NAME=foo ./scripts/cnpg-demo.sh up` uses a different cluster.
 - `up` is idempotent and re-runnable; it thaws a frozen operator first so
   fixture edits can be applied, then re-freezes.

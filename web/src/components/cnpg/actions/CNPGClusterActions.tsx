@@ -237,7 +237,7 @@ function SwitchoverContext({ ha, haLoading, target }: { ha?: CNPGClusterHA; haLo
         <span className="text-theme-text-tertiary">Synchronous replication: </span>
         {q.method || q.number !== undefined
           ? `${(q.method ?? '').toUpperCase()} ${q.number ?? ''}${q.dataDurability ? ` · dataDurability ${q.dataDurability}` : ''}`.trim()
-          : 'not configured (asynchronous): the new primary may be missing the last acknowledged commits only if it lags'}
+          : 'not configured (asynchronous)'}
       </div>
       <div>
         <span className="text-theme-text-tertiary">Failover quorum: </span>

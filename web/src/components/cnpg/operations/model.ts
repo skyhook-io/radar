@@ -171,15 +171,21 @@ function readyNow(obs: CNPGObservation, pod: string): boolean | null {
   return f && f.podReadable ? f.ready : null
 }
 
+/**
+ * Whether `pod` streams from the primary, from its own report or the
+ * primary's pg_stat_replication. With the proxy allowed, an instance that does
+ * not answer yet (restarting) is "not yet"; without it the answer is unknown.
+ */
 function streamingStandby(obs: CNPGObservation, pod: string): boolean | null {
   if (!obs.runtime || obs.runtime.permission.proxy === 'denied') return null
   const own = runtimeInstance(obs, pod)?.status
   if (own && (own.state === 'ok' || own.state === 'partial') && own.roleDetail) return own.roleDetail === 'streaming'
-  const primary = obs.runtime.instances.find((i) => i.role === 'primary')?.status
+  const primaryName = obs.facts?.currentPrimary
+  const primary = obs.runtime.instances.find((i) => (primaryName ? i.pod === primaryName : i.role === 'primary'))?.status
   if (primary && (primary.state === 'ok' || primary.state === 'partial')) {
     return (primary.replication ?? []).some((r) => r.applicationName === pod && r.state === 'streaming')
   }
-  return null
+  return own?.state === 'denied' ? null : false
 }
 
 function condition(cluster: any, type: string): { status?: string; reason?: string; message?: string } | undefined {
@@ -229,6 +235,7 @@ registerCNPGOperationObserver('switchover', (op, obs) => {
   if (rw?.state === 'ok') {
     steps.push({ label: `Read-write Service points at ${target}`, done: promoted && rw.pods.includes(target) && !rw.pods.includes(oldPrimary) })
   }
+  steps.push({ label: 'Cluster reports a healthy state again', done: promoted && f.phase === 'Cluster in healthy state' })
   let state = summarizeSteps(steps)
   if (requested && !promoted) state = 'observed'
   const detail =

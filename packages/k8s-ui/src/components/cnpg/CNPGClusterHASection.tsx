@@ -25,7 +25,7 @@ function LeaseValue({ lease, what }: { lease: CNPGHALease; what: string }) {
   if (lease.state !== 'ok') return <Unknown text={cnpgHASourceText(lease, what)} />
   return (
     <span>
-      held by <span className="font-mono">{lease.holder || '(nobody)'}</span>
+      held by <span className="font-mono break-all">{lease.holder || '(nobody)'}</span>
       {lease.renewTime && <span className="text-theme-text-secondary"> · renewed {formatAge(lease.renewTime)} ago</span>}
       {lease.expired && <span className={toneTextClass('degraded')}> · expired</span>}
       {lease.controlledByCluster === false && <span className={toneTextClass('degraded')}> · not owned by this Cluster</span>}

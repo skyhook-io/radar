@@ -211,7 +211,7 @@ export function cnpgQuorumFact(q: CNPGHAQuorum | undefined): CNPGFact {
     if (q.number !== undefined || q.method) {
       return { text: `Synchronous ${q.method ?? ''} ${q.number ?? ''}`.replace(/\s+/g, ' ').trim() + ' · quorum failover off', tone: 'neutral', source: 'Cluster spec.postgresql.synchronous' }
     }
-    return { text: 'Asynchronous replication · quorum failover off', tone: 'neutral', source: 'Cluster spec' }
+    return { text: 'Off (asynchronous replication)', tone: 'neutral', source: 'Cluster spec' }
   }
   const unread = cnpgHASourceText(q.object, 'FailoverQuorum')
   if (q.object.state !== 'ok') return { text: `Quorum failover on · ${unread}`, tone: 'unknown' }

@@ -56,7 +56,8 @@ MON_NS=monitoring
 CNPG_VERSION="${CNPG_VERSION:-1.27.0}"
 CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.16.2}"
 BARMAN_PLUGIN_VERSION="${BARMAN_PLUGIN_VERSION:-v0.14.0}"
-CNPG_MANIFEST="https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.27/releases/cnpg-${CNPG_VERSION}.yaml"
+CNPG_RELEASE_BRANCH="release-$(echo "${CNPG_VERSION}" | cut -d. -f1-2)"
+CNPG_MANIFEST="https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/${CNPG_RELEASE_BRANCH}/releases/cnpg-${CNPG_VERSION}.yaml"
 
 PHASE_UNRECOVERABLE="Cluster is unrecoverable and needs manual intervention"
 
@@ -241,6 +242,12 @@ apply_fixtures() {
       09-objectstores.yaml)
         if ! k get crd objectstores.barmancloud.cnpg.io >/dev/null 2>&1; then
           note "skipping $(basename "$f") — barman-cloud plugin not installed"
+          continue
+        fi
+        ;;
+      11-databaseroles.yaml)
+        if ! k get crd databaseroles.postgresql.cnpg.io >/dev/null 2>&1; then
+          note "skipping $(basename "$f") — DatabaseRole needs CloudNativePG 1.30+ (CNPG_VERSION=${CNPG_VERSION})"
           continue
         fi
         ;;

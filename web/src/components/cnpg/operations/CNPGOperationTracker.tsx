@@ -105,6 +105,14 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
 
   const [open, setOpen] = useState(false)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('menu'))
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open])
   if (ops.length === 0) return null
   const lead = active[active.length - 1] ?? ops[ops.length - 1]
 
