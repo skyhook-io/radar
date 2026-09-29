@@ -627,6 +627,9 @@ func cnpgWorkspaceIssueVisible(iss issues.Issue, access map[string]cnpgKindAcces
 		return false
 	}
 	key, ok := cnpgWorkspaceKeyByGroupKind[iss.Group+"/"+iss.Kind]
+	if ok && iss.Reason == issues.ReasonCNPGScheduledRunNoBackup && !access[cnpgWorkspaceSchedKey].covers(iss.Namespace) {
+		return false
+	}
 	return ok && access[key].covers(iss.Namespace)
 }
 

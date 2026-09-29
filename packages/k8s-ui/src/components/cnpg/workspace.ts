@@ -185,6 +185,7 @@ const PROTECTION_ISSUE_REASONS = new Set([
   'CNPGLastBackupFailed',
   'CNPGBackupFailed',
   'CNPGScheduledBackupMissed',
+  'CNPGScheduledRunNoBackup',
 ])
 
 export function cnpgIssueCategory(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'reason'>): CNPGProblemCategory {
