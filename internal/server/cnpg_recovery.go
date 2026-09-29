@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -17,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -43,7 +45,6 @@ const (
 
 var (
 	cnpgGrantListPods   = cnpgGrant{"list", "", "pods", ""}
-	cnpgGrantListJobs   = cnpgGrant{"list", "batch", "jobs", ""}
 	cnpgGrantListEvents = cnpgGrant{"list", "", "events", ""}
 	cnpgGrantGetCluster = cnpgGrant{"get", cnpgGroup, "clusters", ""}
 )
@@ -529,49 +530,53 @@ func (s *Server) handleCNPGRestoreValidation(w http.ResponseWriter, r *http.Requ
 		s.writeError(w, http.StatusForbidden, "Recording a validation note needs "+cnpgGrantPatchClusters.String(namespace))
 		return
 	}
-	var params cnpgRestoreValidationParams
-	if err := decodeCNPGParams(req.Params, &params); err != nil {
-		s.writeCNPGActionError(w, err, "restore-validation", namespace, name)
-		return
+	recordedBy := ""
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		recordedBy = user.Username
 	}
-	checked := strings.TrimSpace(params.Checked)
-	if checked == "" {
-		s.writeError(w, http.StatusBadRequest, "params.checked is required: say what you checked")
-		return
-	}
-	if utf8.RuneCountInString(checked) > cnpgRestoreValidationMax {
-		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("params.checked is longer than %d characters", cnpgRestoreValidationMax))
-		return
-	}
-	if params.TargetTime != "" {
-		if _, err := time.Parse(time.RFC3339, params.TargetTime); err != nil {
-			s.writeError(w, http.StatusBadRequest, "params.targetTime must be RFC 3339")
-			return
-		}
-	}
-	ctx := r.Context()
-	cluster, err := dyn.Resource(cnpgClusterGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	note, err := recordCNPGRestoreValidation(r.Context(), dyn, namespace, name, req, recordedBy, time.Now())
 	if err != nil {
 		s.writeCNPGActionError(w, err, "restore-validation", namespace, name)
 		return
 	}
+	log.Printf("[cnpg] restore validation recorded on Cluster %s/%s", sanitizeForLog(namespace), sanitizeForLog(name))
+	s.writeJSON(w, note)
+}
+
+func recordCNPGRestoreValidation(ctx context.Context, dyn dynamic.Interface, namespace, name string, req CNPGActionRequest, recordedBy string, now time.Time) (*CNPGRestoreValidation, error) {
+	var params cnpgRestoreValidationParams
+	if err := decodeCNPGParams(req.Params, &params); err != nil {
+		return nil, err
+	}
+	checked := strings.TrimSpace(params.Checked)
+	if checked == "" {
+		return nil, cnpgRefuse(http.StatusBadRequest, "", "params.checked is required: say what you checked")
+	}
+	if utf8.RuneCountInString(checked) > cnpgRestoreValidationMax {
+		return nil, cnpgRefuse(http.StatusBadRequest, "", "params.checked is longer than %d characters", cnpgRestoreValidationMax)
+	}
+	if params.TargetTime != "" {
+		if _, err := time.Parse(time.RFC3339, params.TargetTime); err != nil {
+			return nil, cnpgRefuse(http.StatusBadRequest, "", "params.targetTime must be RFC 3339")
+		}
+	}
+	cluster, err := dyn.Resource(cnpgClusterGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
 	if string(cluster.GetUID()) != req.UID {
-		s.writeCNPGActionError(w, cnpgChanged(nil, "Cluster %s/%s was deleted and recreated since you reviewed it", namespace, name), "restore-validation", namespace, name)
-		return
+		return nil, cnpgChanged(nil, "Cluster %s/%s was deleted and recreated since you reviewed it", namespace, name)
 	}
 	if cnpgRecoverySpecOf(cluster) == nil {
-		s.writeCNPGActionError(w, cnpgBlocked("This Cluster was not bootstrapped from a backup (spec.bootstrap.recovery is not set)"), "restore-validation", namespace, name)
-		return
+		return nil, cnpgBlocked("This Cluster was not bootstrapped from a backup (spec.bootstrap.recovery is not set)")
 	}
-	note := CNPGRestoreValidation{
+	note := &CNPGRestoreValidation{
 		Version:    1,
-		RecordedAt: time.Now().UTC().Format(time.RFC3339),
+		RecordedAt: now.UTC().Format(time.RFC3339),
+		RecordedBy: recordedBy,
 		Checked:    checked,
 		TargetTime: params.TargetTime,
 		Target:     CNPGRestoreValidationRef{Namespace: namespace, Name: name, UID: string(cluster.GetUID()), Verified: true},
-	}
-	if user := auth.UserFromContext(ctx); user != nil {
-		note.RecordedBy = user.Username
 	}
 	if params.Source != nil && params.Source.Name != "" {
 		srcNS := params.Source.Namespace
@@ -586,19 +591,15 @@ func (s *Server) handleCNPGRestoreValidation(w http.ResponseWriter, r *http.Requ
 	}
 	data, err := json.Marshal(note)
 	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, "failed to encode the validation note")
-		return
+		return nil, err
 	}
-	patchErr := cnpgMergePatch(ctx, dyn, cnpgClusterGVR, cluster, map[string]any{
+	if err := cnpgMergePatch(ctx, dyn, cnpgClusterGVR, cluster, map[string]any{
 		"metadata": map[string]any{"annotations": map[string]any{cnpgRestoreValidationAnno: string(data)}},
-	})
-	if patchErr != nil {
-		if apierrors.IsConflict(patchErr) {
-			patchErr = cnpgChanged(nil, "Cluster %s/%s changed while the note was being recorded; try again", namespace, name)
+	}); err != nil {
+		if apierrors.IsConflict(err) {
+			return nil, cnpgChanged(nil, "Cluster %s/%s changed while the note was being recorded; try again", namespace, name)
 		}
-		s.writeCNPGActionError(w, patchErr, "restore-validation", namespace, name)
-		return
+		return nil, err
 	}
-	log.Printf("[cnpg] restore validation recorded on Cluster %s/%s", sanitizeForLog(namespace), sanitizeForLog(name))
-	s.writeJSON(w, note)
+	return note, nil
 }

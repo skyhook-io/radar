@@ -53,7 +53,6 @@ const (
 var (
 	errCNPGReportFull        = errors.New("report size bound reached")
 	cnpgObjectStoreGVR       = schema.GroupVersionResource{Group: cnpgBarmanGroup, Version: "v1", Resource: "objectstores"}
-	cnpgGrantListPVCs        = cnpgGrant{"list", "", "persistentvolumeclaims", ""}
 	cnpgGrantListBackups     = cnpgGrant{"list", cnpgGroup, "backups", ""}
 	cnpgGrantListSchedules   = cnpgGrant{"list", cnpgGroup, "scheduledbackups", ""}
 	cnpgGrantListPoolers     = cnpgGrant{"list", cnpgGroup, "poolers", ""}

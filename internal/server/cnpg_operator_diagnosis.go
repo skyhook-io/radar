@@ -24,9 +24,8 @@ import (
 // fact is read as the caller and reports its own coverage.
 
 const (
-	// Both are constants in CloudNativePG's controller (LeaderElectionID and
-	// the webhook configuration names); they are not configurable.
-	cnpgOperatorLeaseName         = "db9c8771.cnpg.io"
+	// Constants in CloudNativePG's controller, not configurable; the leader
+	// Lease name (cnpgOperatorLeaseName) is one too.
 	cnpgMutatingWebhookConfig     = "cnpg-mutating-webhook-configuration"
 	cnpgValidatingWebhookConfig   = "cnpg-validating-webhook-configuration"
 	cnpgOperatorDefaultMetrics    = 8080

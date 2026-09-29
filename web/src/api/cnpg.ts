@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { CNPGWorkspaceResponse, TimelineEvent } from '@skyhook-io/k8s-ui'
 import { ApiError, fetchJSON } from './client'
+import type { CNPGOperatorDiagnosis } from './cnpg-recovery'
 
 // /api/cnpg/workspace
 //
@@ -51,6 +52,7 @@ export interface CNPGOperatorResponse {
   coverage: { deployments: CNPGOperatorCoverage; services: CNPGOperatorCoverage }
   components: CNPGOperatorComponent[]
   config: CNPGOperatorConfig[]
+  diagnosis?: CNPGOperatorDiagnosis[]
 }
 
 // /api/cnpg/operator

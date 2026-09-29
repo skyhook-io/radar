@@ -180,7 +180,7 @@ export interface CNPGOperatorPod {
   leader: boolean
 }
 
-export interface CNPGOperatorLeader extends CNPGReadCoverage {
+export interface CNPGOperatorLeader extends Omit<CNPGReadCoverage, 'state'> {
   state: CNPGReadState | 'disabled'
   lease?: string
   holder?: string

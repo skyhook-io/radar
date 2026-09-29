@@ -7,6 +7,8 @@ import { useConnection } from '../../../context/ConnectionContext'
 import { CreateResourceDialog } from '../../shared/CreateResourceDialog'
 import { useToast } from '../../ui/Toast'
 import { cnpgClusterFullPath } from '../paths'
+import { trackCNPGOperation } from '../operations/store'
+import './restoreOperation'
 import {
   buildRestoreManifest,
   describeSource,
@@ -132,6 +134,14 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
         title={`Restore into a new cluster ${name}`}
         onCreated={(created) => {
           onClose()
+          trackCNPGOperation({
+            kind: 'restore',
+            label: `Restore into ${created.name}`,
+            context: connection.context,
+            namespace: created.namespace || namespace,
+            cluster: created.name,
+            baseline: { source: source ? describeSource(source) : undefined },
+          })
           const path = cnpgClusterFullPath(created.namespace || namespace, created.name, connection.context || undefined)
           showSuccess(`Cluster ${created.name} created`, 'The operator is restoring it from backup.', { label: 'Follow the restore', onClick: () => navigate(path) })
         }}

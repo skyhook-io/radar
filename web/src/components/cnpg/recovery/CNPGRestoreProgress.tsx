@@ -4,6 +4,7 @@ import { Badge, StatusDot, formatAge, type HealthLevel } from '@skyhook-io/k8s-u
 import { useCNPGRecovery, type CNPGContainerState, type CNPGRecoveryResponse, type CNPGRecoverySpec } from '../../../api/cnpg-recovery'
 import { buildWorkloadPath } from '../../../utils/navigation'
 import { observeRestore, type RestoreObservation } from './restoreModel'
+import './restoreOperation'
 
 /**
  * The restore observer: the recovery snapshot of one Cluster and where its
