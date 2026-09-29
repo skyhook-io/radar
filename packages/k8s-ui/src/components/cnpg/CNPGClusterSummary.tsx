@@ -4,6 +4,7 @@ import { Badge } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
 import { CNPG_BARMAN_OBJECTSTORE_GROUP, CNPG_GROUP } from '../resources/resource-utils-cnpg'
 import type { CNPGFleetRow, CNPGInstance } from './workspace'
+import type { CNPGDimension } from './ha'
 import {
   FactGrid,
   FactRow,
@@ -47,12 +48,31 @@ function InstancePill({ pod, namespace, onNavigate }: { pod: CNPGInstance; names
   )
 }
 
+function DimensionChips({ dimensions }: { dimensions: CNPGDimension[] }) {
+  return (
+    <div className="mb-3 flex flex-wrap gap-1.5" aria-label="Health by dimension">
+      {dimensions.map((d) => (
+        <Tooltip key={d.id} content={d.source} position="top">
+          <span className="inline-flex items-center gap-1.5 rounded-md border border-theme-border bg-theme-base px-2 py-0.5 text-xs">
+            <ToneDot tone={d.tone} />
+            <span className="text-theme-text-secondary">{d.label}</span>
+            <span className={toneTextClass(d.tone)}>{d.text}</span>
+          </span>
+        </Tooltip>
+      ))}
+    </div>
+  )
+}
+
 export function CNPGClusterSummary({
   row,
   onNavigate,
   actions,
   problemsLink,
   extra,
+  lead,
+  dimensions,
+  haSection,
 }: {
   row: CNPGFleetRow
   onNavigate?: CNPGNavigate
@@ -60,6 +80,12 @@ export function CNPGClusterSummary({
   /** Link to the complete list of this cluster's findings, shown when more than one exists. */
   problemsLink?: (count: number) => ReactNode
   extra?: ReactNode
+  /** Rendered first, above the problem callout: standing states such as maintenance mode. */
+  lead?: ReactNode
+  /** Serving · Replication · Protection · Storage, each from its own source (see cnpgDimensions). */
+  dimensions?: CNPGDimension[]
+  /** The host's "HA and instances" section (CNPGClusterHASection), rendered after State. */
+  haSection?: ReactNode
 }) {
   const top = row.problems[0]
   const rest = row.problems.length - 1
@@ -69,6 +95,8 @@ export function CNPGClusterSummary({
 
   return (
     <div className="px-4 py-4">
+      {lead}
+      {dimensions && dimensions.length > 0 && <DimensionChips dimensions={dimensions} />}
       {top && (
         <ProblemCallout
           problem={top}
@@ -161,6 +189,8 @@ export function CNPGClusterSummary({
           </FactRow>
         )}
       </FactGrid>
+
+      {haSection}
 
       <SummaryHeading>Protection</SummaryHeading>
       <FactGrid>

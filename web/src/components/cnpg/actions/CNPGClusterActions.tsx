@@ -1,17 +1,20 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, DatabaseBackup, MoreHorizontal, Repeat } from 'lucide-react'
-import { ActionConfirmDialog, Tooltip, type ActionWrite } from '@skyhook-io/k8s-ui'
+import { ActionConfirmDialog, Tooltip, cnpgPDBFact, cnpgQuorumFact, type ActionWrite, type CNPGClusterHA } from '@skyhook-io/k8s-ui'
 import {
   cnpgActionErrorCode,
   useCNPGAction,
   useCNPGClusterCapabilities,
   useCNPGRuntime,
   type CNPGActionCapability,
+  type CNPGActionResult,
   type CNPGBackupMethod,
   type CNPGClusterActionName,
   type CNPGClusterCapabilities,
 } from '../../../api/cnpg'
 import { useToast } from '../../ui/Toast'
+import { useCNPGClusterHA } from '../../../api/cnpg-ha'
+import { trackCNPGOperation, type TrackCNPGOperationInput } from '../operations/store'
 import { useCNPGWriteGuard, type CNPGWriteScope } from './useCNPGWriteGuard'
 import { CNPGRestoreDialog } from './CNPGRestoreDialog'
 import { backupNameFor, describeBackupMethod, pickDefaultStandby, type StandbyChoice } from './actionModel'
@@ -124,6 +127,9 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
             {item('unfence', 'Lift fencing…')}
             {hibernated ? item('rehydrate', 'Resume from hibernation…') : item('hibernate', 'Hibernate…')}
             <div className="my-1 border-t border-theme-border" />
+            <div className="px-3 pb-0.5 pt-1 text-[11px] uppercase tracking-wide text-theme-text-tertiary">Advanced</div>
+            {caps.data?.facts.maintenance.inProgress ? item('unsetMaintenance', 'Lift node maintenance…') : item('setMaintenance', 'Set node maintenance…')}
+            <div className="my-1 border-t border-theme-border" />
             <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => { setMenu(false); setOpen('restore') }}>
               Restore to a new cluster…
             </button>
@@ -164,6 +170,92 @@ interface DialogSpec {
   invalid?: string
 }
 
+type TrackedSpec = Omit<TrackCNPGOperationInput, 'context' | 'namespace' | 'cluster' | 'clusterUID'>
+
+/** What to follow after the server accepted `kind`: the target and the baseline to compare against. */
+function trackedOperationFor(
+  kind: CNPGClusterActionName,
+  x: {
+    result: CNPGActionResult
+    facts: CNPGClusterCapabilities['facts']
+    switchTarget?: string
+    chosenPodUID?: string
+    fenceSel: string
+    fenced: string[]
+    instance?: CNPGClusterCapabilities['facts']['instances'][number]
+  },
+): TrackedSpec | null {
+  const pods = x.facts.instances.map((i) => i.pod)
+  const podUIDs = Object.fromEntries(x.facts.instances.filter((i) => i.podUID).map((i) => [i.pod, i.podUID]))
+  switch (kind) {
+    case 'backup':
+      return x.result.backup
+        ? { kind, label: `Backup ${x.result.backup}`, target: { name: x.result.backup }, link: { kind: 'Backup', group: 'postgresql.cnpg.io', name: x.result.backup } }
+        : null
+    case 'switchover':
+      return x.switchTarget
+        ? { kind, label: `Switchover to ${x.switchTarget}`, target: { name: x.switchTarget, uid: x.chosenPodUID }, baseline: { currentPrimary: x.facts.currentPrimary } }
+        : null
+    case 'restart':
+      return { kind, label: 'Rolling restart', baseline: { instances: pods, podUIDs } }
+    case 'restartInstance':
+      return x.instance
+        ? { kind, label: `Restart ${x.instance.pod}`, target: { name: x.instance.pod, uid: x.instance.podUID }, baseline: { podUIDs: { [x.instance.pod]: x.instance.podUID } } }
+        : null
+    case 'reload':
+      return { kind, label: 'Configuration reload' }
+    case 'fence':
+      return { kind, label: x.fenceSel === '*' ? 'Fence all instances' : `Fence ${x.fenceSel}`, baseline: { instances: x.fenceSel === '*' ? pods : [x.fenceSel] } }
+    case 'unfence': {
+      const lifted = x.fenceSel === '*' ? (x.fenced.includes('*') ? pods : x.fenced) : [x.fenceSel]
+      return { kind, label: x.fenceSel === '*' ? 'Lift all fencing' : `Lift fence on ${x.fenceSel}`, baseline: { instances: lifted } }
+    }
+    case 'hibernate':
+      return { kind, label: 'Hibernate' }
+    case 'rehydrate':
+      return { kind, label: 'Resume from hibernation' }
+    case 'setMaintenance':
+      return { kind, label: 'Set node maintenance' }
+    case 'unsetMaintenance':
+      return { kind, label: 'Lift node maintenance' }
+    default:
+      return null
+  }
+}
+
+/** Sync requirements, quorum and disruption budgets, as they stand before a switchover. */
+function SwitchoverContext({ ha, haLoading, target }: { ha?: CNPGClusterHA; haLoading: boolean; target?: string }) {
+  if (!ha) {
+    return <div className="mt-2 text-xs text-theme-text-tertiary">{haLoading ? 'Reading quorum and disruption budgets…' : 'Quorum and disruption budgets could not be read.'}</div>
+  }
+  const q = ha.quorum
+  const quorum = cnpgQuorumFact(q)
+  const pdb = cnpgPDBFact(ha.pdbs)
+  return (
+    <div className="mt-3 space-y-1 rounded-md border border-theme-border bg-theme-base p-2 text-xs text-theme-text-secondary">
+      <div>
+        <span className="text-theme-text-tertiary">Synchronous replication: </span>
+        {q.method || q.number !== undefined
+          ? `${(q.method ?? '').toUpperCase()} ${q.number ?? ''}${q.dataDurability ? ` · dataDurability ${q.dataDurability}` : ''}`.trim()
+          : 'not configured (asynchronous): the new primary may be missing the last acknowledged commits only if it lags'}
+      </div>
+      <div>
+        <span className="text-theme-text-tertiary">Failover quorum: </span>
+        {quorum.text}
+        {q.enabled && q.promotable && target ? (q.promotable.includes(target) ? ` · ${target} is promotable` : ` · ${target} is not counted as promotable`) : ''}
+      </div>
+      <div>
+        <span className="text-theme-text-tertiary">Disruption budgets: </span>
+        {pdb.text}
+      </div>
+      <div className="text-theme-text-tertiary">
+        The operator restarts the old primary itself rather than evicting it, so disruption budgets do not gate the switchover; the primary’s budget follows the new
+        primary for later node drains.
+      </div>
+    </div>
+  )
+}
+
 export function ClusterActionDialog({
   kind,
   caps,
@@ -184,6 +276,8 @@ export function ClusterActionDialog({
   const mutation = useCNPGAction('clusters', namespace, name)
   const { showSuccess } = useToast()
   const runtime = useCNPGRuntime(namespace, name, kind === 'switchover')
+  const ha = useCNPGClusterHA(namespace, name, { enabled: kind === 'switchover' || kind === 'setMaintenance' || kind === 'unsetMaintenance', refetchInterval: false })
+  const [reusePVC, setReusePVC] = useState(() => facts.maintenance.reusePVC)
 
   const backupMethods = facts.backupMethods.filter((m) => m.capability !== 'none')
   const [method, setMethod] = useState<CNPGBackupMethod | undefined>(backupMethods[0])
@@ -305,9 +399,16 @@ export function ClusterActionDialog({
                   </span>
                 </label>
               ))}
+              <SwitchoverContext ha={ha.data} haLoading={ha.isLoading} target={switchTarget} />
             </fieldset>
           ),
           warnings: [
+            ha.data?.quorum.enabled && ha.data.quorum.holds === false
+              ? 'The failover quorum does not hold right now (R + W ≤ N): an automatic failover would wait. A switchover you request still proceeds.'
+              : null,
+            ha.data?.quorum.enabled && switchTarget && ha.data.quorum.status && ha.data.quorum.status.standbyNames.length > 0 && !ha.data.quorum.status.standbyNames.includes(switchTarget)
+              ? `${switchTarget} is not among the recorded potentially synchronous standbys (${ha.data.quorum.status.standbyNames.join(', ')}).`
+              : null,
             chosenStandby?.replayLagSeconds !== undefined && chosenStandby.replayLagSeconds > 5
               ? `${chosenStandby.pod} is ${chosenStandby.replayLagSeconds.toFixed(0)} s behind; the switchover waits for it to catch up.`
               : null,
@@ -450,6 +551,48 @@ export function ClusterActionDialog({
           scope: { kind: 'metadata', paths: ['metadata.annotations["cnpg.io/hibernation"]'] },
           success: () => 'Resume requested.',
         }
+      case 'setMaintenance':
+      case 'unsetMaintenance': {
+        const setting = kind === 'setMaintenance'
+        const single = facts.instances.length <= 1
+        return {
+          title: setting ? `Put ${name} in node maintenance?` : `Lift node maintenance on ${name}?`,
+          confirmLabel: setting ? 'Set maintenance' : 'Lift maintenance',
+          effect: setting ? (
+            <>
+              Tells the operator that node maintenance is under way. While it lasts, self-healing, rolling updates and the PodDisruptionBudgets are limited:
+              {reusePVC
+                ? ' an instance on a drained node waits for that node to return and restarts on the same volume, and the disruption budget is removed so the drain can proceed.'
+                : ' an instance on a drained node is recreated on another node with a new volume cloned from the primary, and the old volume is deleted.'}{' '}
+              Keep the window as short as possible.
+            </>
+          ) : (
+            'Tells the operator maintenance is over: self-healing, rolling updates and disruption budgets return to normal.'
+          ),
+          body: (
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" className="mt-0.5" checked={reusePVC} onChange={(e) => setReusePVC(e.target.checked)} />
+              <span>
+                Reuse volumes (<span className="font-mono">reusePVC</span>)
+                <span className="block text-xs text-theme-text-secondary">
+                  {setting ? 'On: wait for the node and keep the data volume. Off: rebuild the instance elsewhere (slow for large databases).' : `Currently ${facts.maintenance.reusePVC ? 'on' : 'off'}; kubectl cnpg maintenance unset writes this value too.`}
+                </span>
+              </span>
+            </label>
+          ),
+          notes: [
+            'CloudNativePG recommends managing drains with PodDisruptionBudgets (spec.enablePDB) instead; this mode is kept for local-storage setups.',
+            ...(setting && single && !reusePVC ? ['With one instance and volume reuse off, the operator still refuses to drain its node: deleting the only instance would lose the data.'] : []),
+          ],
+          warnings: setting && ha.data?.pdbs.state === 'ok' && ha.data.pdbs.items.length > 0 && reusePVC ? ['The Cluster’s PodDisruptionBudgets are removed while maintenance is in progress, so drains are no longer held back.'] : [],
+          writes: [{ summary: `patch Cluster ${namespace}/${name}`, detail: `spec.nodeMaintenanceWindow = {"inProgress": ${setting}, "reusePVC": ${reusePVC}}` }],
+          scope: { kind: 'spec', paths: ['spec.nodeMaintenanceWindow.inProgress', 'spec.nodeMaintenanceWindow.reusePVC'] },
+          typed: setting,
+          disruptive: setting,
+          params: { reusePVC },
+          success: () => (setting ? 'Maintenance mode set. Lift it as soon as the node work is done.' : 'Maintenance mode lifted.'),
+        }
+      }
       case 'restartInstance':
         if (!instance) return UNSUPPORTED
         {
@@ -491,6 +634,8 @@ export function ClusterActionDialog({
       {
         onSuccess: (result) => {
           showSuccess(spec.success(result))
+          const tracked = trackedOperationFor(kind, { result, facts, switchTarget, chosenPodUID: chosenStandby?.podUID, fenceSel, fenced, instance })
+          if (tracked) trackCNPGOperation({ ...tracked, context: caps.context, namespace, cluster: name, clusterUID: caps.uid })
           onClose()
         },
       },

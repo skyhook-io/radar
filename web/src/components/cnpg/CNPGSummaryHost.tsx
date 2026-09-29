@@ -5,6 +5,8 @@ import {
   CNPG_GROUP,
   CNPGBackupSummary,
   CNPGClusterSummary,
+  CNPGClusterHASection,
+  cnpgDimensions,
   CNPGDatabaseSummary,
   CNPGImageCatalogSummary,
   CNPGObjectStoreSummary,
@@ -12,6 +14,7 @@ import {
   CNPGPublicationSummary,
   CNPGScheduledBackupSummary,
   CNPGSubscriptionSummary,
+  CNPGDatabaseRoleSummary,
   PaneLoader,
   isApiGroup,
   refToSelectedResource,
@@ -22,6 +25,8 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
 import { useCNPGRuntime, type CNPGRuntimeResponse } from '../../api/cnpg'
+import { cnpgInstanceLive, cnpgReplicationLive, useCNPGClusterHA } from '../../api/cnpg-ha'
+import { CNPGMaintenanceBanner } from './actions/CNPGMaintenanceBanner'
 import type { CNPGFleetRow } from '@skyhook-io/k8s-ui'
 
 // Replaces the Kubernetes-only replication fact with the primary's
@@ -65,8 +70,10 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
   // Cluster shows its facts whatever the namespace filter is.
   const { query, fleet } = useCNPGFleet([namespace])
   const runtime = useCNPGRuntime(namespace, name)
+  const ha = useCNPGClusterHA(namespace, name)
   const baseRow = fleet?.rows.find((r) => r.namespace === namespace && r.name === name)
   const row = baseRow ? withLiveReplication(baseRow, runtime.data) : undefined
+  const live = cnpgInstanceLive(runtime.data)
   if (!row) {
     if (query.isLoading) return <PaneLoader label="Loading summary…" className="h-40" />
     return (
@@ -83,6 +90,17 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
     <CNPGClusterSummary
       row={row}
       onNavigate={go}
+      lead={<CNPGMaintenanceBanner namespace={namespace} name={name} maintenance={ha.data?.maintenance} />}
+      dimensions={cnpgDimensions({ row, ha: ha.data, replication: cnpgReplicationLive(runtime.data) })}
+      haSection={
+        <CNPGClusterHASection
+          ha={ha.data}
+          live={live}
+          loading={ha.isLoading}
+          error={ha.error instanceof Error ? ha.error.message : undefined}
+          onNavigate={go}
+        />
+      }
       actions={
         context === 'drawer'
           ? [
@@ -124,6 +142,7 @@ const OBJECT_SUMMARIES: Record<string, ObjectSummary> = {
   Database: CNPGDatabaseSummary,
   Publication: CNPGPublicationSummary,
   Subscription: CNPGSubscriptionSummary,
+  DatabaseRole: CNPGDatabaseRoleSummary,
   ImageCatalog: CNPGImageCatalogSummary,
   ClusterImageCatalog: CNPGImageCatalogSummary,
 }

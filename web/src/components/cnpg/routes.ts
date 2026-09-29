@@ -32,6 +32,7 @@ export const CNPG_DETAIL_KINDS: Record<string, { group: string; kind: string; ho
   databases: { group: 'postgresql.cnpg.io', kind: 'Database', home: 'declarations' },
   publications: { group: 'postgresql.cnpg.io', kind: 'Publication', home: 'declarations' },
   subscriptions: { group: 'postgresql.cnpg.io', kind: 'Subscription', home: 'declarations' },
+  databaseroles: { group: 'postgresql.cnpg.io', kind: 'DatabaseRole', home: 'declarations' },
   poolers: { group: 'postgresql.cnpg.io', kind: 'Pooler', home: 'pooling' },
   imagecatalogs: { group: 'postgresql.cnpg.io', kind: 'ImageCatalog', home: 'operator' },
   clusterimagecatalogs: { group: 'postgresql.cnpg.io', kind: 'ClusterImageCatalog', home: 'operator', clusterScoped: true },

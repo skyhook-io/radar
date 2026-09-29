@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { getCNPGDeclarativeMessage, getCNPGReclaimPolicy } from '../resources/resource-utils-cnpg'
 import type { CNPGWorkspaceResponse } from './workspace'
+import { cnpgDatabaseRoleFacts } from './databaseRole'
 import { FactGrid, FactRow, FactValue, RefLink, SummaryHeading, toneTextClass, type CNPGNavigate } from './primitives'
 import { ClusterLink, NotReported, ObjectProblems, SummaryShell } from './CNPGSharedSummary'
 import {
@@ -215,6 +216,78 @@ export function CNPGPublicationSummary({ resource, workspace, onNavigate }: Summ
       </FactGrid>
 
       <Reconciled resource={resource} />
+    </SummaryShell>
+  )
+}
+
+export function CNPGDatabaseRoleSummary({ resource, workspace, onNavigate }: SummaryProps) {
+  const ns = resource?.metadata?.namespace ?? ''
+  const clusterUnavailable = relationUnavailable(workspace, 'clusters', ns, 'Clusters')
+  const cluster = clusterUnavailable ? null : targetCluster(resource, clustersIn(workspace))
+  const f = cnpgDatabaseRoleFacts(resource, cluster)
+  return (
+    <SummaryShell>
+      <ObjectProblems issues={workspace?.issues} subject={refOf(resource, 'DatabaseRole')} onNavigate={onNavigate} />
+
+      <SummaryHeading>Declared</SummaryHeading>
+      <FactGrid>
+        <FactRow label="PostgreSQL role">{f.pgName ? <span className="font-mono">{f.pgName}</span> : <NotReported text="Not set" />}</FactRow>
+        <FactRow label="Cluster">
+          <ClusterLink resource={resource} workspace={workspace} onNavigate={onNavigate} />
+        </FactRow>
+        <FactRow label="Login">{f.login ? 'Allowed' : 'Not allowed'}{f.superuser ? ' · superuser' : ''}</FactRow>
+        <FactRow label="Password">
+          {f.passwordDisabled ? (
+            'Disabled'
+          ) : f.passwordSecret ? (
+            <span>
+              From Secret <span className="font-mono">{f.passwordSecret}</span>
+            </span>
+          ) : (
+            <span className="text-theme-text-secondary">No password Secret declared</span>
+          )}
+          {f.passwordValidUntil && (
+            <div className="text-xs text-theme-text-secondary">
+              Valid until {f.passwordValidUntil} (PostgreSQL VALID UNTIL; the operator does not rotate it)
+            </div>
+          )}
+        </FactRow>
+        <FactRow label="Client certificate">
+          {f.clientCertificate ? (
+            <span>
+              Operator-issued in Secret <span className="font-mono">{f.clientCertificate.secret}</span>
+              <span className="text-theme-text-secondary">
+                {' · '}
+                {f.clientCertificate.expiration ? `expires ${f.clientCertificate.expiration}` : 'expiry not reported yet'}
+              </span>
+              {f.clientCertificate.message && <div className="text-xs text-theme-text-secondary">{f.clientCertificate.message}</div>}
+            </span>
+          ) : (
+            <span className="text-theme-text-secondary">Not requested</span>
+          )}
+        </FactRow>
+        <ReclaimRow resource={resource} />
+        <FactRow label="Declared in">
+          <DeclaredIn resource={resource} />
+        </FactRow>
+      </FactGrid>
+
+      <Reconciled
+        resource={resource}
+        extra={
+          <FactRow label="Cluster spec">
+            {f.overriddenByCluster === null ? (
+              <NotReported text={clusterUnavailable ?? 'Target Cluster not visible, so whether its spec.managed.roles overrides this role is unknown'} />
+            ) : f.overriddenByCluster ? (
+              <span className={toneTextClass('degraded')}>
+                The Cluster declares “{f.pgName}” in spec.managed.roles, which takes precedence: this DatabaseRole is not reconciled while that entry exists
+              </span>
+            ) : (
+              <span className="text-theme-text-secondary">No spec.managed.roles entry for this role</span>
+            )}
+          </FactRow>
+        }
+      />
     </SummaryShell>
   )
 }
