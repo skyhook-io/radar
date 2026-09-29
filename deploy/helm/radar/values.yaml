@@ -641,6 +641,24 @@ tolerations: []
 
 affinity: {}
 
+# Additional command-line flags appended to the container args, after the ones
+# the chart derives from the values above. Use it for flags the chart does not
+# expose yet. Each entry is rendered through `tpl`, so Helm templating is
+# allowed.
+#
+# Entries come last, which means different things depending on the flag:
+#
+#   - a scalar flag repeated here wins over the chart's own, since Go's flag
+#     package keeps the last occurrence (e.g. --list-page-size);
+#   - a repeatable flag is added to what the chart derived, not substituted for
+#     it. Radar rejects a duplicate key on --prometheus-cluster-label and exits
+#     before starting, so set those through `traffic.prometheusClusterLabels`
+#     rather than here.
+extraArgs: []
+#  - --kubeconfig-dir=/kubeconfigs
+#  - --list-page-size=200
+#  - "--cluster-name={{ .Release.Name }}"
+
 # Additional environment variables
 env: []
 #  - name: DEBUG
