@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgCheckpointView, cnpgDatabaseHealthRows } from './runtimeModel'
+import type { CNPGRuntimeInstance, CNPGRuntimeReplication } from '../../api/cnpg'
+import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgStandbyBacklogTone, cnpgStandbyHeadline } from './runtimeModel'
 
 describe('cnpgCheckpointView', () => {
   it('flags requested-checkpoint pressure only with enough checkpoints', () => {
@@ -31,5 +32,28 @@ describe('cnpgDatabaseHealthRows', () => {
     expect(rows[1].rollbackRatio).toBeUndefined()
     expect(rows[2].rollbackRatio).toBeUndefined()
     expect(rows[3]).toEqual({ database: 'postgres', mxidAge: 7 })
+  })
+})
+
+describe('standby cards', () => {
+  const standby = (status: Partial<CNPGRuntimeInstance['status']>) => ({ pod: 'pg-2', role: 'replica', status: { state: 'ok', ...status } }) as unknown as CNPGRuntimeInstance
+  const rep = { applicationName: 'pg-2', state: 'streaming', syncState: 'async' } as CNPGRuntimeReplication
+
+  it('rates replay delay on the Replication fact scale', () => {
+    expect(cnpgStandbyBacklogTone(0, 2)).toBe('healthy')
+    expect(cnpgStandbyBacklogTone(0, 8)).toBe('degraded')
+    expect(cnpgStandbyBacklogTone(0, 72)).toBe('unhealthy')
+    expect(cnpgStandbyBacklogTone(2 * 1024 ** 3, 0)).toBe('unhealthy')
+    expect(cnpgStandbyBacklogTone(undefined, 72)).toBe('unknown')
+  })
+
+  it('leads with a paused replay, keeping the streaming state secondary', () => {
+    expect(cnpgStandbyHeadline(standby({ roleDetail: 'replayPaused' }), rep, 'healthy', { fenced: false, primaryRead: true })).toEqual({
+      text: 'replay paused',
+      tone: 'degraded',
+      secondary: 'streaming · async',
+    })
+    expect(cnpgStandbyHeadline(standby({ replayPaused: true }), rep, 'unhealthy', { fenced: false, primaryRead: true }).tone).toBe('unhealthy')
+    expect(cnpgStandbyHeadline(standby({ roleDetail: 'streaming' }), rep, 'healthy', { fenced: false, primaryRead: true })).toEqual({ text: 'streaming · async', tone: 'healthy' })
   })
 })

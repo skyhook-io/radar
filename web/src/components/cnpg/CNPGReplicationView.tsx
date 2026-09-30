@@ -4,11 +4,7 @@ import { Badge, CNPG_ROLE_DETAIL_TEXT, StatusDot, Tooltip, toneFillClass, toneTe
 import { useCNPGClusterCapabilities, type CNPGRuntimeInstance, type CNPGRuntimeReplication } from '../../api/cnpg'
 import { CNPGInstanceActions } from './actions/CNPGInstanceActions'
 import { formatBytes, lsnDistance } from './lsn'
-
-// 16 MiB is one WAL segment: a standby a segment or more behind is visibly
-// catching up, not just between acknowledgements.
-const BACKLOG_DEGRADED = 16 * 1024 * 1024
-const BACKLOG_UNHEALTHY = 1024 * 1024 * 1024
+import { CNPG_BACKLOG_DEGRADED, cnpgStandbyBacklogTone, cnpgStandbyHeadline } from './runtimeModel'
 
 function seconds(s?: number): string {
   if (s === undefined) return '—'
@@ -16,14 +12,6 @@ function seconds(s?: number): string {
   if (s < 90) return `${s.toFixed(1)} s`
   if (s < 5400) return `${Math.round(s / 60)} min`
   return `${(s / 3600).toFixed(1)} h`
-}
-
-function backlogTone(bytes: number | undefined, replayLag: number | undefined) {
-  if (bytes === undefined) return 'unknown' as const
-  if (bytes >= BACKLOG_UNHEALTHY) return 'unhealthy' as const
-  if (bytes >= BACKLOG_DEGRADED) return 'degraded' as const
-  if (replayLag !== undefined && replayLag >= 30) return 'degraded' as const
-  return 'healthy' as const
 }
 
 function SourceState({ label, state, error }: { label: string; state: string; error?: string }) {
@@ -43,7 +31,7 @@ function InstanceFacts({ inst, primaryVersion }: { inst: CNPGRuntimeInstance; pr
   const skew = s.instanceManagerVersion && primaryVersion && s.instanceManagerVersion !== primaryVersion
   return (
     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-secondary">
-      {s.roleDetail && <span>{CNPG_ROLE_DETAIL_TEXT[s.roleDetail]}</span>}
+      {s.roleDetail && s.roleDetail !== 'replayPaused' && <span>{CNPG_ROLE_DETAIL_TEXT[s.roleDetail]}</span>}
       {s.timeline !== undefined && <span className="font-mono">TL {s.timeline}</span>}
       {s.instanceManagerVersion && (
         <span className={skew ? toneTextClass('degraded') : undefined}>
@@ -160,24 +148,17 @@ export function CNPGReplicationView({
           {replicas.map((r) => {
             const rep = rows.get(r.pod)
             const replayBacklog = rep ? lsnDistance(primary?.status.currentLsn, rep.replayLsn) : undefined
-            const tone = rep ? backlogTone(replayBacklog, rep.replayLag) : 'unknown'
-            const pct = replayBacklog !== undefined ? Math.min(100, (replayBacklog / BACKLOG_DEGRADED) * 100) : 0
+            const backlogTone = rep ? cnpgStandbyBacklogTone(replayBacklog, rep.replayLag) : 'unknown'
+            const headline = cnpgStandbyHeadline(r, rep, backlogTone, { fenced: fenced.has(r.pod), primaryRead: primary?.status.state === 'ok' })
+            const tone = headline.tone
+            const pct = replayBacklog !== undefined ? Math.min(100, (replayBacklog / CNPG_BACKLOG_DEGRADED) * 100) : 0
             return (
               <div key={r.pod} className="rounded-lg border border-theme-border bg-theme-base p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusDot tone={tone} />
                   <span className="font-mono text-sm font-semibold">{r.pod}</span>
-                  <span className={clsx('text-xs', toneTextClass(tone))}>
-                    {rep
-                      ? [rep.state, rep.syncState].filter(Boolean).join(' · ')
-                      : fenced.has(r.pod)
-                        ? 'fenced · PostgreSQL stopped'
-                        : r.role === 'unknown'
-                          ? 'role unknown'
-                          : primary?.status.state === 'ok'
-                            ? 'not connected to the primary'
-                            : 'unknown'}
-                  </span>
+                  <span className={clsx('text-xs', toneTextClass(tone))}>{headline.text}</span>
+                  {headline.secondary && <span className="text-xs text-theme-text-secondary">{headline.secondary}</span>}
                   <span className="ml-auto font-mono text-xs text-theme-text-secondary">
                     {rep ? `${formatBytes(replayBacklog)} behind` : 'backlog unknown'}
                   </span>
@@ -185,7 +166,7 @@ export function CNPGReplicationView({
                 {rep && (
                   <div className="mt-2 flex items-center gap-2">
                     <div className="h-1 flex-1 overflow-hidden rounded bg-theme-elevated">
-                      <div className={clsx('h-full', tone === 'unknown' ? 'bg-transparent' : toneFillClass(tone))} style={{ width: `${pct}%` }} />
+                      <div className={clsx('h-full', backlogTone === 'unknown' ? 'bg-transparent' : toneFillClass(backlogTone))} style={{ width: `${pct}%` }} />
                     </div>
                     <span className="text-[11px] text-theme-text-tertiary">scale: one 16 MiB WAL segment</span>
                   </div>
