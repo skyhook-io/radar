@@ -391,6 +391,9 @@ export interface CNPGRuntimeInstance {
     waitingBackends?: number
     oldestXactSeconds?: number
     xidAge?: { database: string; age: number }[]
+    mxidAge?: { database: string; age: number }[]
+    /** null when cnpg_pg_extensions_update_available was not exported (see missing); [] when all are current. */
+    extensionUpdates?: { database: string; extension: string; installedVersion: string; defaultVersion: string }[] | null
     databaseSizes?: { database: string; bytes: number }[]
     archiver?: { archivedCount?: number; failedCount?: number; secondsSinceLastArchival?: number; secondsSinceLastFailure?: number }
     xactCommitTotal?: number

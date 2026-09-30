@@ -68,6 +68,12 @@ cnpg_pg_database_size_bytes{datname="app"} 7.654547e+06
 cnpg_pg_database_size_bytes{datname="postgres"} 7.5e+06
 # TYPE cnpg_pg_database_xid_age gauge
 cnpg_pg_database_xid_age{datname="app"} 29
+# TYPE cnpg_pg_database_mxid_age gauge
+cnpg_pg_database_mxid_age{datname="app"} 12
+cnpg_pg_database_mxid_age{datname="reports"} 400000000
+# TYPE cnpg_pg_extensions_update_available gauge
+cnpg_pg_extensions_update_available{datname="app",default_version="1.0",extname="plpgsql",installed_version="1.0"} 0
+cnpg_pg_extensions_update_available{datname="app",default_version="3.5.1",extname="postgis",installed_version="3.4.2"} 1
 # TYPE cnpg_pg_settings_setting gauge
 cnpg_pg_settings_setting{name="max_connections"} 100
 cnpg_pg_settings_setting{name="shared_buffers"} 16384
@@ -253,6 +259,19 @@ func TestCNPGInstanceMetricFacts(t *testing.T) {
 	}
 	if len(facts.DatabaseSizes) != 2 || facts.DatabaseSizes[0].Database != "app" || len(facts.XidAge) != 1 {
 		t.Errorf("databases = %+v xid = %+v", facts.DatabaseSizes, facts.XidAge)
+	}
+	if len(facts.MxidAge) != 2 || facts.MxidAge[0].Database != "reports" || facts.MxidAge[0].Age != 400000000 {
+		t.Errorf("mxid = %+v, want oldest first", facts.MxidAge)
+	}
+	if len(facts.ExtensionUpdates) != 1 || facts.ExtensionUpdates[0] != (CNPGExtensionUpdate{Database: "app", Extension: "postgis", InstalledVersion: "3.4.2", DefaultVersion: "3.5.1"}) {
+		t.Errorf("extension updates = %+v, want only postgis", facts.ExtensionUpdates)
+	}
+	noExt, _ := cnpgInstanceMetricFacts(map[string][]cnpgSample{"cnpg_pg_extensions_update_available": {{labels: map[string]string{"extname": "plpgsql"}, value: 0}}})
+	if noExt.ExtensionUpdates == nil || len(noExt.ExtensionUpdates) != 0 {
+		t.Errorf("exported with none to update must be empty, not unknown: %+v", noExt.ExtensionUpdates)
+	}
+	if unk, _ := cnpgInstanceMetricFacts(map[string][]cnpgSample{}); unk.ExtensionUpdates != nil {
+		t.Errorf("unexported family must stay unknown: %+v", unk.ExtensionUpdates)
 	}
 	if len(facts.ReplicationSlotsRetainedBytes) != 1 || facts.ReplicationSlotsRetainedBytes[0].Bytes != 16384 {
 		t.Errorf("slot retention = %+v", facts.ReplicationSlotsRetainedBytes)

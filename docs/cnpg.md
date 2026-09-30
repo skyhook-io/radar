@@ -50,6 +50,8 @@ Every value is something the cluster reports, labelled with where it came from. 
 | Pooler paused | Requested: `spec.pgbouncer.paused`. Observed: each PgBouncer's `SHOW STATE` over the caller's `pods/exec` | Observed reads "Not observable: needs create pods/exec"; the exporter does not publish it |
 | Pooler limits | `spec.pgbouncer.parameters`; unset ones read "default" plus PgBouncer's own default where it was read from PgBouncer (`SHOW CONFIG`, 1.24): `default_pool_size` 20, `max_client_conn` 100, the per-database/user maxima and reserve/min pools 0. CloudNativePG writes only the parameters the Pooler sets | — |
 | Blocking sessions | `pg_stat_activity` + `pg_blocking_pids()` on one instance, via psql over the caller's `pods/exec` | "Blocking detail needs create pods/exec"; the exporter's aggregate counts still apply |
+| Multixact ID age | Exporter `cnpg_pg_database_mxid_age` (default query `pg_database`, `mxid_age(datminmxid)`) per database, on the primary, beside transaction ID age | "unknown: the exporter did not report …" when a custom monitoring configuration dropped the family |
+| Extensions with updates | Exporter `cnpg_pg_extensions_update_available` (default query `pg_extensions`, every database): installed ≠ default version, with both versions | same; "every installed extension is at its default version" only when the family was reported |
 | Instance CPU / memory | metrics-server (`metrics.k8s.io`) usage of the postgres container, against its limit | "not measured: the metrics API is not available" |
 | ScheduledBackup cron | Shown verbatim | CNPG's cron is six-field (seconds first) and is never translated |
 

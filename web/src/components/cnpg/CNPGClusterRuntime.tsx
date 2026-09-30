@@ -124,7 +124,7 @@ export function CNPGClusterRuntime({
           <SessionsView namespace={namespace} cluster={name} primary={primary} />
         ))}
       {section === 'transactions' &&
-        (denied ? <ProxyDenied what="Transaction rates, cache hit ratio, deadlocks and transaction ID age" grant={grant} /> : <TransactionsView primary={primary} samples={samples} />)}
+        (denied ? <ProxyDenied what="Transaction rates, cache hit ratio, deadlocks, transaction and multixact ID age, and extension versions" grant={grant} /> : <TransactionsView primary={primary} samples={samples} />)}
       {section === 'storage' && (denied ? <CNPGStorage namespace={namespace} name={name} /> : <StorageView namespace={namespace} name={name} instances={data.instances} />)}
       {section === 'slots' && (denied ? <ProxyDenied what="Replication slots and the WAL they retain" grant={grant} /> : <SlotsView primary={primary} />)}
       {section === 'trends' && <CNPGTrends namespace={namespace} name={name} samples={samples} onOpenInterval={onOpenInterval} />}
@@ -252,18 +252,68 @@ function TransactionsView({ primary, samples }: { primary?: CNPGRuntimeInstance;
         <Metric label="Deadlocks (total)" value={m.deadlocksTotal ?? '—'} tone={m.deadlocksTotal ? 'degraded' : undefined} />
         <Metric label="Oldest transaction" value={seconds(m.oldestXactSeconds)} />
       </div>
-      {m.xidAge && m.xidAge.length > 0 && (
-        <div className="mt-4 text-sm">
-          <div className="text-xs text-theme-text-tertiary">Transaction ID age (wraparound at ~2 billion)</div>
-          {m.xidAge.map((x) => (
-            <div key={x.database} className="flex gap-3 font-mono text-xs">
+      <AgeList title="Transaction ID age (wraparound at ~2 billion)" rows={m.xidAge} family="cnpg_pg_database_xid_age" missing={m.missing} />
+      <AgeList title="Multixact ID age (wraparound at ~2 billion)" rows={m.mxidAge} family="cnpg_pg_database_mxid_age" missing={m.missing} />
+      <ExtensionUpdates rows={m.extensionUpdates} missing={m.missing} />
+    </Card>
+  )
+}
+
+function NotExported({ what, family }: { what: string; family: string }) {
+  return (
+    <div className="text-xs text-theme-text-tertiary">
+      {what} unknown: the exporter did not report <span className="font-mono">{family}</span> (a custom monitoring configuration may have replaced the default query).
+    </div>
+  )
+}
+
+function AgeList({ title, rows, family, missing }: { title: string; rows?: { database: string; age: number }[]; family: string; missing?: string[] }) {
+  const absent = missing?.includes(family)
+  if (!absent && (!rows || rows.length === 0)) return null
+  return (
+    <div className="mt-4 text-sm">
+      <div className="text-xs text-theme-text-tertiary">{title}</div>
+      {absent ? (
+        <NotExported what="Age" family={family} />
+      ) : (
+        rows!.map((x) => (
+          <div key={x.database} className="flex gap-3 font-mono text-xs">
+            <span className="w-40 truncate">{x.database}</span>
+            <span className={x.age > 1_000_000_000 ? toneTextClass('degraded') : undefined}>{(x.age / 1_000_000).toFixed(0)} M</span>
+          </div>
+        ))
+      )}
+    </div>
+  )
+}
+
+const EXTENSIONS_FAMILY = 'cnpg_pg_extensions_update_available'
+
+function ExtensionUpdates({ rows, missing }: { rows?: { database: string; extension: string; installedVersion: string; defaultVersion: string }[] | null; missing?: string[] }) {
+  return (
+    <div className="mt-4 text-sm">
+      <div className="text-xs text-theme-text-tertiary">Extensions with updates available</div>
+      {missing?.includes(EXTENSIONS_FAMILY) || !rows ? (
+        <NotExported what="Extension versions" family={EXTENSIONS_FAMILY} />
+      ) : rows.length === 0 ? (
+        <div className="text-xs text-theme-text-secondary">Every installed extension is at its default version.</div>
+      ) : (
+        <>
+          {rows.map((x) => (
+            <div key={`${x.database}/${x.extension}`} className="flex gap-3 font-mono text-xs">
               <span className="w-40 truncate">{x.database}</span>
-              <span className={x.age > 1_000_000_000 ? toneTextClass('degraded') : undefined}>{(x.age / 1_000_000).toFixed(0)} M</span>
+              <span className="w-40 truncate">{x.extension}</span>
+              <span>
+                {x.installedVersion} → {x.defaultVersion}
+              </span>
             </div>
           ))}
-        </div>
+          <div className="mt-1 text-[11.5px] text-theme-text-tertiary">
+            From the primary's metrics exporter (default query pg_extensions). The installed version differs from the default version the server's packages provide; <span className="font-mono">ALTER EXTENSION … UPDATE</span> applies it.
+          </div>
+        </>
       )}
-    </Card>
+    </div>
   )
 }
 

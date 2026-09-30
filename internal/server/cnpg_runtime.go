@@ -95,6 +95,8 @@ var cnpgExpectedInstanceFamilies = []string{
 	"cnpg_pg_settings_setting",
 	"cnpg_pg_database_size_bytes",
 	"cnpg_pg_database_xid_age",
+	"cnpg_pg_database_mxid_age",
+	"cnpg_pg_extensions_update_available",
 	"cnpg_pg_stat_archiver_archived_count",
 	"cnpg_pg_stat_archiver_failed_count",
 	"cnpg_pg_stat_archiver_seconds_since_last_archival",
@@ -267,6 +269,11 @@ type CNPGInstanceMetricFacts struct {
 	WaitingBackends               *float64              `json:"waitingBackends,omitempty"`
 	OldestXactSeconds             *float64              `json:"oldestXactSeconds,omitempty"`
 	XidAge                        []CNPGDatabaseValue   `json:"xidAge,omitempty"`
+	MxidAge                       []CNPGDatabaseValue   `json:"mxidAge,omitempty"`
+	// ExtensionUpdates lists installed extensions whose installed_version is
+	// not the default_version; nil when the family was not exported (see
+	// Missing), empty when every installed extension is current.
+	ExtensionUpdates []CNPGExtensionUpdate `json:"extensionUpdates"`
 	DatabaseSizes                 []CNPGDatabaseBytes   `json:"databaseSizes,omitempty"`
 	Archiver                      *CNPGArchiverCounters `json:"archiver,omitempty"`
 	WalBytes                      *float64              `json:"walBytes,omitempty"`
@@ -290,6 +297,13 @@ type CNPGSessionGroup struct {
 type CNPGDatabaseValue struct {
 	Database string  `json:"database"`
 	Age      float64 `json:"age"`
+}
+
+type CNPGExtensionUpdate struct {
+	Database         string `json:"database"`
+	Extension        string `json:"extension"`
+	InstalledVersion string `json:"installedVersion"`
+	DefaultVersion   string `json:"defaultVersion"`
 }
 
 type CNPGDatabaseBytes struct {
@@ -1475,6 +1489,34 @@ func cnpgInstanceMetricFacts(samples map[string][]cnpgSample) (*CNPGInstanceMetr
 	if len(facts.XidAge) > cnpgRuntimeMaxRows {
 		capped = append(capped, fmt.Sprintf("%d databases; the %d oldest by xid age are listed", len(facts.XidAge), cnpgRuntimeMaxRows))
 		facts.XidAge = facts.XidAge[:cnpgRuntimeMaxRows]
+	}
+	for _, s := range samples["cnpg_pg_database_mxid_age"] {
+		facts.MxidAge = append(facts.MxidAge, CNPGDatabaseValue{Database: s.labels["datname"], Age: s.value})
+	}
+	sort.Slice(facts.MxidAge, func(i, j int) bool { return facts.MxidAge[i].Age > facts.MxidAge[j].Age })
+	if len(facts.MxidAge) > cnpgRuntimeMaxRows {
+		capped = append(capped, fmt.Sprintf("%d databases; the %d oldest by multixact age are listed", len(facts.MxidAge), cnpgRuntimeMaxRows))
+		facts.MxidAge = facts.MxidAge[:cnpgRuntimeMaxRows]
+	}
+	if exts, ok := samples["cnpg_pg_extensions_update_available"]; ok {
+		facts.ExtensionUpdates = []CNPGExtensionUpdate{}
+		for _, s := range exts {
+			if s.value <= 0 {
+				continue
+			}
+			facts.ExtensionUpdates = append(facts.ExtensionUpdates, CNPGExtensionUpdate{
+				Database: s.labels["datname"], Extension: s.labels["extname"],
+				InstalledVersion: s.labels["installed_version"], DefaultVersion: s.labels["default_version"],
+			})
+		}
+		sort.Slice(facts.ExtensionUpdates, func(i, j int) bool {
+			a, b := facts.ExtensionUpdates[i], facts.ExtensionUpdates[j]
+			return a.Database+"\x00"+a.Extension < b.Database+"\x00"+b.Extension
+		})
+		if len(facts.ExtensionUpdates) > cnpgRuntimeMaxRows {
+			capped = append(capped, fmt.Sprintf("%d extensions with updates; the first %d are listed", len(facts.ExtensionUpdates), cnpgRuntimeMaxRows))
+			facts.ExtensionUpdates = facts.ExtensionUpdates[:cnpgRuntimeMaxRows]
+		}
 	}
 	for _, s := range samples["cnpg_pg_database_size_bytes"] {
 		facts.DatabaseSizes = append(facts.DatabaseSizes, CNPGDatabaseBytes{Database: s.labels["datname"], Bytes: s.value})
