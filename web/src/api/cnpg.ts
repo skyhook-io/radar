@@ -425,7 +425,20 @@ export interface CNPGRuntimeInstance {
     blksHit?: number
     blksRead?: number
     deadlocksTotal?: number
+    tempBytesTotal?: number
     postmasterStartTime?: number
+    /** pg_stat_database counters per database, cumulative since the last stats reset. */
+    databases?: { database: string; xactCommit?: number; xactRollback?: number; tempFiles?: number; tempBytes?: number; deadlocks?: number; blksHit?: number; blksRead?: number }[]
+    /** Absent when neither pg_stat_checkpointer (17+) nor pg_stat_bgwriter was exported. */
+    checkpoints?: {
+      source: 'pg_stat_checkpointer' | 'pg_stat_bgwriter'
+      timed?: number
+      requested?: number
+      restartpointsTimed?: number
+      restartpointsRequested?: number
+      restartpointsDone?: number
+      buffersWritten?: number
+    }
   }
 }
 

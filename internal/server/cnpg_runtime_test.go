@@ -805,3 +805,59 @@ func TestParseCNPGPgStatusIncompleteReportIsNotNone(t *testing.T) {
 		t.Errorf("pg_rewind report = %+v %q", rewind, partial)
 	}
 }
+
+func TestCNPGDatabaseStatsAndCheckpoints(t *testing.T) {
+	body := `# TYPE cnpg_pg_stat_database_xact_commit counter
+cnpg_pg_stat_database_xact_commit{datname="app"} 90
+cnpg_pg_stat_database_xact_commit{datname="reports"} 10
+cnpg_pg_stat_database_xact_commit{datname=""} 5
+# TYPE cnpg_pg_stat_database_xact_rollback counter
+cnpg_pg_stat_database_xact_rollback{datname="app"} 10
+# TYPE cnpg_pg_stat_database_temp_files counter
+cnpg_pg_stat_database_temp_files{datname="app"} 3
+# TYPE cnpg_pg_stat_database_temp_bytes counter
+cnpg_pg_stat_database_temp_bytes{datname="app"} 4096
+cnpg_pg_stat_database_temp_bytes{datname="reports"} 1024
+# TYPE cnpg_pg_stat_checkpointer_checkpoints_timed counter
+cnpg_pg_stat_checkpointer_checkpoints_timed 7
+# TYPE cnpg_pg_stat_checkpointer_checkpoints_req counter
+cnpg_pg_stat_checkpointer_checkpoints_req 2
+# TYPE cnpg_pg_stat_checkpointer_restartpoints_timed counter
+cnpg_pg_stat_checkpointer_restartpoints_timed 4
+# TYPE cnpg_pg_stat_checkpointer_restartpoints_done counter
+cnpg_pg_stat_checkpointer_restartpoints_done 3
+# TYPE cnpg_pg_stat_checkpointer_buffers_written counter
+cnpg_pg_stat_checkpointer_buffers_written 1234
+`
+	samples, err := parseCNPGPromSamples([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, _ := cnpgInstanceMetricFacts(samples)
+	if len(facts.Databases) != 2 || facts.Databases[0].Database != "app" || facts.Databases[1].Database != "reports" {
+		t.Fatalf("databases = %+v, want app and reports without the shared-objects row", facts.Databases)
+	}
+	app := facts.Databases[0]
+	if !cnpgEqF(app.XactCommit, 90) || !cnpgEqF(app.XactRollback, 10) || !cnpgEqF(app.TempFiles, 3) || !cnpgEqF(app.TempBytes, 4096) || app.Deadlocks != nil {
+		t.Errorf("app = %+v", app)
+	}
+	if facts.Databases[1].XactRollback != nil {
+		t.Error("a counter the exporter did not report must stay unknown")
+	}
+	if !cnpgEqF(facts.TempBytesTotal, 5120) {
+		t.Errorf("temp bytes total = %v", facts.TempBytesTotal)
+	}
+	c := facts.Checkpoints
+	if c == nil || c.Source != "pg_stat_checkpointer" || !cnpgEqF(c.Timed, 7) || !cnpgEqF(c.Requested, 2) || !cnpgEqF(c.RestartpointsTimed, 4) || c.RestartpointsRequested != nil || !cnpgEqF(c.BuffersWritten, 1234) {
+		t.Errorf("checkpoints = %+v", c)
+	}
+
+	old, _ := parseCNPGPromSamples([]byte("# TYPE cnpg_pg_stat_bgwriter_checkpoints_timed counter\ncnpg_pg_stat_bgwriter_checkpoints_timed 5\n# TYPE cnpg_pg_stat_bgwriter_buffers_checkpoint counter\ncnpg_pg_stat_bgwriter_buffers_checkpoint 99\n"))
+	of, _ := cnpgInstanceMetricFacts(old)
+	if of.Checkpoints == nil || of.Checkpoints.Source != "pg_stat_bgwriter" || !cnpgEqF(of.Checkpoints.BuffersWritten, 99) || of.Checkpoints.RestartpointsTimed != nil {
+		t.Errorf("pre-17 checkpoints = %+v", of.Checkpoints)
+	}
+	if none, _ := cnpgInstanceMetricFacts(map[string][]cnpgSample{}); none.Checkpoints != nil || none.Databases != nil {
+		t.Error("absent families must stay unknown")
+	}
+}

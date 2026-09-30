@@ -291,6 +291,36 @@ type CNPGInstanceMetricFacts struct {
 	BlksHit                       *float64              `json:"blksHit,omitempty"`
 	BlksRead                      *float64              `json:"blksRead,omitempty"`
 	DeadlocksTotal                *float64              `json:"deadlocksTotal,omitempty"`
+	TempBytesTotal                *float64              `json:"tempBytesTotal,omitempty"`
+	// Databases are pg_stat_database counters per datname (cumulative since
+	// the statistics were last reset), for per-database ratios.
+	Databases   []CNPGDatabaseStats     `json:"databases,omitempty"`
+	Checkpoints *CNPGCheckpointCounters `json:"checkpoints,omitempty"`
+}
+
+type CNPGDatabaseStats struct {
+	Database     string   `json:"database"`
+	XactCommit   *float64 `json:"xactCommit,omitempty"`
+	XactRollback *float64 `json:"xactRollback,omitempty"`
+	TempFiles    *float64 `json:"tempFiles,omitempty"`
+	TempBytes    *float64 `json:"tempBytes,omitempty"`
+	Deadlocks    *float64 `json:"deadlocks,omitempty"`
+	BlksHit      *float64 `json:"blksHit,omitempty"`
+	BlksRead     *float64 `json:"blksRead,omitempty"`
+}
+
+// CNPGCheckpointCounters are cumulative counters from pg_stat_checkpointer
+// (PostgreSQL 17+) or pg_stat_bgwriter (before 17), whichever the exporter
+// serves. Restartpoints are counted separately only from 17; before that a
+// standby counts its restartpoints as checkpoints.
+type CNPGCheckpointCounters struct {
+	Source                 string   `json:"source"`
+	Timed                  *float64 `json:"timed,omitempty"`
+	Requested              *float64 `json:"requested,omitempty"`
+	RestartpointsTimed     *float64 `json:"restartpointsTimed,omitempty"`
+	RestartpointsRequested *float64 `json:"restartpointsRequested,omitempty"`
+	RestartpointsDone      *float64 `json:"restartpointsDone,omitempty"`
+	BuffersWritten         *float64 `json:"buffersWritten,omitempty"`
 }
 
 type CNPGSessionGroup struct {
@@ -1487,6 +1517,8 @@ func cnpgInstanceMetricFacts(samples map[string][]cnpgSample) (*CNPGInstanceMetr
 		BlksHit:             cnpgSum(samples, "cnpg_pg_stat_database_blks_hit"),
 		BlksRead:            cnpgSum(samples, "cnpg_pg_stat_database_blks_read"),
 		DeadlocksTotal:      cnpgSum(samples, "cnpg_pg_stat_database_deadlocks"),
+		TempBytesTotal:      cnpgSum(samples, "cnpg_pg_stat_database_temp_bytes"),
+		Checkpoints:         cnpgCheckpointFacts(samples),
 	}
 	var capped []string
 
@@ -1581,6 +1613,13 @@ func cnpgInstanceMetricFacts(samples map[string][]cnpgSample) (*CNPGInstanceMetr
 		facts.ReplicationSlotsRetainedBytes = facts.ReplicationSlotsRetainedBytes[:cnpgRuntimeMaxRows]
 	}
 
+	if dbs, more := cnpgDatabaseStats(samples); len(dbs) > 0 {
+		facts.Databases = dbs
+		if more > 0 {
+			capped = append(capped, fmt.Sprintf("%d databases; the first %d by name are listed", len(dbs)+more, cnpgRuntimeMaxRows))
+		}
+	}
+
 	archiver := CNPGArchiverCounters{
 		ArchivedCount:            cnpgSingle(samples, "cnpg_pg_stat_archiver_archived_count", nil),
 		FailedCount:              cnpgSingle(samples, "cnpg_pg_stat_archiver_failed_count", nil),
@@ -1591,6 +1630,67 @@ func cnpgInstanceMetricFacts(samples map[string][]cnpgSample) (*CNPGInstanceMetr
 		facts.Archiver = &archiver
 	}
 	return facts, strings.Join(capped, "; ")
+}
+
+// The row pg_stat_database keeps for shared objects has no datname; it is not
+// a database.
+func cnpgDatabaseStats(samples map[string][]cnpgSample) ([]CNPGDatabaseStats, int) {
+	byName := map[string]*CNPGDatabaseStats{}
+	set := func(family string, field func(*CNPGDatabaseStats) **float64) {
+		for _, s := range samples[family] {
+			name := s.labels["datname"]
+			if name == "" {
+				continue
+			}
+			d := byName[name]
+			if d == nil {
+				d = &CNPGDatabaseStats{Database: name}
+				byName[name] = d
+			}
+			v := s.value
+			*field(d) = &v
+		}
+	}
+	set("cnpg_pg_stat_database_xact_commit", func(d *CNPGDatabaseStats) **float64 { return &d.XactCommit })
+	set("cnpg_pg_stat_database_xact_rollback", func(d *CNPGDatabaseStats) **float64 { return &d.XactRollback })
+	set("cnpg_pg_stat_database_temp_files", func(d *CNPGDatabaseStats) **float64 { return &d.TempFiles })
+	set("cnpg_pg_stat_database_temp_bytes", func(d *CNPGDatabaseStats) **float64 { return &d.TempBytes })
+	set("cnpg_pg_stat_database_deadlocks", func(d *CNPGDatabaseStats) **float64 { return &d.Deadlocks })
+	set("cnpg_pg_stat_database_blks_hit", func(d *CNPGDatabaseStats) **float64 { return &d.BlksHit })
+	set("cnpg_pg_stat_database_blks_read", func(d *CNPGDatabaseStats) **float64 { return &d.BlksRead })
+	out := make([]CNPGDatabaseStats, 0, len(byName))
+	for _, d := range byName {
+		out = append(out, *d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Database < out[j].Database })
+	if len(out) > cnpgRuntimeMaxRows {
+		return out[:cnpgRuntimeMaxRows], len(out) - cnpgRuntimeMaxRows
+	}
+	return out, 0
+}
+
+func cnpgCheckpointFacts(samples map[string][]cnpgSample) *CNPGCheckpointCounters {
+	get := func(name string) *float64 { return cnpgSingle(samples, name, nil) }
+	if _, ok := samples["cnpg_pg_stat_checkpointer_checkpoints_timed"]; ok {
+		return &CNPGCheckpointCounters{
+			Source:                 "pg_stat_checkpointer",
+			Timed:                  get("cnpg_pg_stat_checkpointer_checkpoints_timed"),
+			Requested:              get("cnpg_pg_stat_checkpointer_checkpoints_req"),
+			RestartpointsTimed:     get("cnpg_pg_stat_checkpointer_restartpoints_timed"),
+			RestartpointsRequested: get("cnpg_pg_stat_checkpointer_restartpoints_req"),
+			RestartpointsDone:      get("cnpg_pg_stat_checkpointer_restartpoints_done"),
+			BuffersWritten:         get("cnpg_pg_stat_checkpointer_buffers_written"),
+		}
+	}
+	if _, ok := samples["cnpg_pg_stat_bgwriter_checkpoints_timed"]; ok {
+		return &CNPGCheckpointCounters{
+			Source:         "pg_stat_bgwriter",
+			Timed:          get("cnpg_pg_stat_bgwriter_checkpoints_timed"),
+			Requested:      get("cnpg_pg_stat_bgwriter_checkpoints_req"),
+			BuffersWritten: get("cnpg_pg_stat_bgwriter_buffers_checkpoint"),
+		}
+	}
+	return nil
 }
 
 // The exporter reports -1 for "never happened".
