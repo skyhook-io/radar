@@ -426,6 +426,8 @@ export interface CNPGRuntimeInstance {
     blksRead?: number
     deadlocksTotal?: number
     tempBytesTotal?: number
+    walBytes?: number
+    walSegments?: number
     postmasterStartTime?: number
     /** pg_stat_database counters per database, cumulative since the last stats reset. */
     databases?: { database: string; xactCommit?: number; xactRollback?: number; tempFiles?: number; tempBytes?: number; deadlocks?: number; blksHit?: number; blksRead?: number }[]

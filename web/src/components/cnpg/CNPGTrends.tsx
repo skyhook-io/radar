@@ -30,7 +30,18 @@ export interface Sample {
   rollbacks?: number
   archived?: number
   failed?: number
+  blksHit?: number
+  blksRead?: number
+  walBytes?: number
+  deadlocks?: number
+  tempBytes?: number
+  checkpointsTimed?: number
+  checkpointsRequested?: number
+  /** Database sizes by name (gauges). */
+  dbSizes?: Record<string, number>
 }
+
+type CounterKey = 'commits' | 'rollbacks' | 'archived' | 'failed' | 'blksHit' | 'blksRead' | 'deadlocks' | 'tempBytes' | 'checkpointsTimed' | 'checkpointsRequested'
 
 export function useSampleBuffer(data: CNPGRuntimeResponse | undefined): Sample[] {
   const [samples, setSamples] = useState<Sample[]>([])
@@ -55,6 +66,14 @@ export function useSampleBuffer(data: CNPGRuntimeResponse | undefined): Sample[]
           rollbacks: m?.xactRollbackTotal,
           archived: m?.archiver?.archivedCount,
           failed: m?.archiver?.failedCount,
+          blksHit: m?.blksHit,
+          blksRead: m?.blksRead,
+          walBytes: m?.walBytes,
+          deadlocks: m?.deadlocksTotal,
+          tempBytes: m?.tempBytesTotal,
+          checkpointsTimed: m?.checkpoints?.timed,
+          checkpointsRequested: m?.checkpoints?.requested,
+          dbSizes: m?.databaseSizes ? Object.fromEntries(m.databaseSizes.map((d) => [d.database, d.bytes])) : undefined,
         },
       ].slice(-720),
     )
@@ -253,7 +272,12 @@ function IntervalChip({ interval, onOpen, onClear }: { interval: ChartTimeRange;
   )
 }
 
-function rateSeries(samples: Sample[], key: 'commits' | 'rollbacks'): TimeSeries {
+/**
+ * A counter as a rate between consecutive exporter scrapes (`metricsAt`, not
+ * the poll time: the server memoizes metrics across polls). A decrease is a
+ * reset and leaves a gap; `per` scales per-second to per-minute.
+ */
+export function rateSeries(samples: Sample[], key: CounterKey, per = 1, label: string = key): TimeSeries {
   const points: TimeSeries['dataPoints'] = []
   let prev: Sample | undefined
   for (const s of samples) {
@@ -264,16 +288,42 @@ function rateSeries(samples: Sample[], key: 'commits' | 'rollbacks'): TimeSeries
     if (prev && prev.metricsAt !== s.metricsAt) {
       const dt = ((s.metricsAt as number) - (prev.metricsAt as number)) / 1000
       const dv = (s[key] as number) - (prev[key] as number)
-      points.push({ timestamp: s.t / 1000, value: dt > 0 && dv >= 0 ? dv / dt : null })
+      points.push({ timestamp: s.t / 1000, value: dt > 0 && dv >= 0 ? (dv / dt) * per : null })
     }
     if (!prev || prev.metricsAt !== s.metricsAt) prev = s
   }
-  return { labels: { series: key }, dataPoints: points }
+  return { labels: { series: label }, dataPoints: points }
+}
+
+/** Cache hit ratio (%) of the blocks read between consecutive scrapes; no reads leaves a gap, not 100 %. */
+export function cacheHitSeries(samples: Sample[]): TimeSeries {
+  const points: TimeSeries['dataPoints'] = []
+  let prev: Sample | undefined
+  for (const s of samples) {
+    if (s.blksHit === undefined || s.blksRead === undefined || s.metricsAt === undefined) {
+      points.push({ timestamp: s.t / 1000, value: null })
+      continue
+    }
+    if (prev && prev.metricsAt !== s.metricsAt) {
+      const hit = s.blksHit - (prev.blksHit as number)
+      const read = s.blksRead - (prev.blksRead as number)
+      points.push({ timestamp: s.t / 1000, value: hit >= 0 && read >= 0 && hit + read > 0 ? (hit / (hit + read)) * 100 : null })
+    }
+    if (!prev || prev.metricsAt !== s.metricsAt) prev = s
+  }
+  return { labels: { series: 'hit ratio' }, dataPoints: points }
 }
 
 function BufferCharts({ samples, selection, onSelect }: { samples: Sample[]; selection: ChartTimeRange | null; onSelect: (r: ChartTimeRange) => void }) {
   const recent = samples.slice(-720)
   const pods = useMemo(() => [...new Set(recent.flatMap((s) => Object.keys(s.replayLag)))].sort(), [recent])
+  const dbs = useMemo(() => {
+    const latest = [...recent].reverse().find((s) => s.dbSizes)?.dbSizes ?? {}
+    return Object.entries(latest)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([d]) => d)
+  }, [recent])
   if (recent.length < 2) {
     return <div className="text-sm text-theme-text-tertiary">Collecting samples… These trends start when this page opens and cover up to the last hour it stays open.</div>
   }
@@ -297,6 +347,25 @@ function BufferCharts({ samples, selection, onSelect }: { samples: Sample[]; sel
     { title: 'Client sessions (primary)', unit: 'count', series: [one('sessions', (s) => s.sessions)], labels: ['sessions'], source: 'cnpg_backends_total on the primary' },
     { title: 'Sessions waiting on locks', unit: 'count', series: [one('waiting', (s) => s.waiting)], labels: ['waiting'], source: 'cnpg_backends_waiting_total on the primary' },
     { title: 'Transactions per second (primary)', unit: '', series: [rateSeries(recent, 'commits'), rateSeries(recent, 'rollbacks')], labels: ['commits', 'rollbacks'], source: 'xact_commit / xact_rollback between exporter refreshes' },
+    { title: 'Cache hit ratio (primary)', unit: '%', series: [cacheHitSeries(recent)], labels: ['hit ratio'], source: 'blks_hit / (blks_hit + blks_read) between exporter refreshes' },
+    {
+      title: 'WAL archived / failed per minute',
+      unit: '',
+      series: [rateSeries(recent, 'archived', 60), rateSeries(recent, 'failed', 60)],
+      labels: ['archived', 'failed'],
+      source: 'pg_stat_archiver archived_count / failed_count on the primary',
+    },
+    { title: 'WAL on disk (primary)', unit: 'bytes', series: [one('WAL', (s) => s.walBytes)], labels: ['WAL'], source: 'cnpg_collector_pg_wal{value="size"} on the primary' },
+    { title: 'Database size (primary)', unit: 'bytes', series: dbs.map((d) => one(d, (s) => s.dbSizes?.[d])), labels: dbs, source: 'pg_database size_bytes on the primary, the five largest' },
+    {
+      title: 'Checkpoints per minute (primary)',
+      unit: '',
+      series: [rateSeries(recent, 'checkpointsTimed', 60, 'timed'), rateSeries(recent, 'checkpointsRequested', 60, 'requested')],
+      labels: ['timed', 'requested'],
+      source: 'pg_stat_checkpointer (17+) or pg_stat_bgwriter checkpoints_timed / _req',
+    },
+    { title: 'Deadlocks per minute (primary)', unit: '', series: [rateSeries(recent, 'deadlocks', 60)], labels: ['deadlocks'], source: 'pg_stat_database deadlocks, all databases' },
+    { title: 'Temporary file writes (primary)', unit: 'bytes', series: [rateSeries(recent, 'tempBytes', 1, 'bytes/s')], labels: ['bytes/s'], source: 'pg_stat_database temp_bytes per second, all databases' },
   ]
   return (
     <div className="grid gap-4 lg:grid-cols-2">
