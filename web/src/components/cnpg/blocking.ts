@@ -118,10 +118,10 @@ export function cnpgConnectionFigure(
 }
 
 /**
- * Whether the metrics API itself is missing, from each instance's metrics
- * read (null = none for that Pod, undefined = not answered yet). Only every
- * instance answering null says so; one null may be a Pod not scraped yet.
+ * Whether no instance has metrics readings (null = none for that Pod,
+ * undefined = not answered yet), so the panel says so once. That can be a
+ * missing metrics API or Pods not sampled yet; it never claims which.
  */
-export function cnpgMetricsApiMissing(results: (unknown | null | undefined)[]): boolean {
+export function cnpgNoMetricsReadings(results: (unknown | null | undefined)[]): boolean {
   return results.length > 0 && results.every((r) => r === null)
 }

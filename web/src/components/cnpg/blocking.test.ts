@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildBlockingTree, cnpgConnectionFigure, cnpgMetricsApiMissing, countVictims } from './blocking'
+import { buildBlockingTree, cnpgConnectionFigure, cnpgNoMetricsReadings, countVictims } from './blocking'
 import type { CNPGBackend } from '../../api/cnpg-sessions'
 
 const s = (pid: number, blockedBy: number[] = []): CNPGBackend => ({ pid, blockedBy, backendStart: `t${pid}` })
@@ -50,11 +50,11 @@ describe('cnpgConnectionFigure', () => {
   })
 })
 
-describe('cnpgMetricsApiMissing', () => {
-  it('says the metrics API is missing only when no instance has metrics', () => {
-    expect(cnpgMetricsApiMissing([null, null])).toBe(true)
-    expect(cnpgMetricsApiMissing([null, { containers: [] }])).toBe(false)
-    expect(cnpgMetricsApiMissing([null, undefined])).toBe(false)
-    expect(cnpgMetricsApiMissing([])).toBe(false)
+describe('cnpgNoMetricsReadings', () => {
+  it('says there are no readings only when no instance has metrics', () => {
+    expect(cnpgNoMetricsReadings([null, null])).toBe(true)
+    expect(cnpgNoMetricsReadings([null, { containers: [] }])).toBe(false)
+    expect(cnpgNoMetricsReadings([null, undefined])).toBe(false)
+    expect(cnpgNoMetricsReadings([])).toBe(false)
   })
 })

@@ -8,7 +8,7 @@ import { podMetricsQuery, usePodMetrics } from '../../api/client'
 import { cnpgActionOutcomeLocked, useCNPGAction, useCNPGClusterCapabilities } from '../../api/cnpg'
 import { useCNPGSessions, type CNPGBackend, type CNPGSessionInstance, type CNPGSessionsResponse } from '../../api/cnpg-sessions'
 import { useToast } from '../ui/Toast'
-import { buildBlockingTree, cnpgConnectionFigure, cnpgMetricsApiMissing, countVictims, type BlockingNode } from './blocking'
+import { buildBlockingTree, cnpgConnectionFigure, cnpgNoMetricsReadings, countVictims, type BlockingNode } from './blocking'
 import { CNPGRefreshFailedNotice } from './shared'
 
 function age(s?: number): string {
@@ -148,10 +148,10 @@ function Headroom({ data }: { data: CNPGSessionsResponse }) {
 function Resources({ namespace, instances }: { namespace: string; instances: CNPGSessionInstance[] }) {
   const metrics = useQueries({ queries: instances.map((i) => podMetricsQuery(namespace, i.pod)) })
   if (instances.length === 0) return null
-  // One Pod without metrics may just not be scraped yet; every Pod without
-  // them is the metrics API missing, said once rather than on every card.
-  if (cnpgMetricsApiMissing(metrics.map((m) => m.data))) {
-    return <div className="text-xs text-theme-text-tertiary">CPU and memory not measured: the metrics API (metrics-server) is not available.</div>
+  // No readings for any Pod is said once rather than on every card; it may be
+  // a missing metrics API or a cluster too new to have been sampled.
+  if (cnpgNoMetricsReadings(metrics.map((m) => m.data))) {
+    return <div className="text-xs text-theme-text-tertiary">CPU and memory not measured: the metrics API has no readings for these Pods (metrics-server may be missing, or has not sampled them yet).</div>
   }
   return (
     <div>
