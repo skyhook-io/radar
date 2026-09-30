@@ -966,9 +966,9 @@ export function SettingsDialog({
           </div>
         </div>
 
-        {/* Footer — saves startup settings, and points to drafts pending in
-            other tabs. Shown whenever an edit is pending, while confirming a
-            close, or briefly after a save. */}
+        {/* Startup settings only apply on the next launch, so they save here
+            instead of in their tabs; drafts left in other tabs surface here
+            too, so closing can't drop them unnoticed. */}
         <Collapse open={showFooter} className="shrink-0">
           <div className="border-t border-theme-border">
             <div className="flex items-center justify-between gap-3 px-4 py-2.5">
