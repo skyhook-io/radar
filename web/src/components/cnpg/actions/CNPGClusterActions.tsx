@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, DatabaseBackup, MoreHorizontal, Repeat } from 'lucide-react'
 import { ActionConfirmDialog, Tooltip, cnpgPDBFact, cnpgQuorumFact, type ActionWrite, type CNPGClusterHA } from '@skyhook-io/k8s-ui'
 import {
@@ -13,6 +13,8 @@ import {
   type CNPGClusterCapabilities,
 } from '../../../api/cnpg'
 import { useToast } from '../../ui/Toast'
+import { useAnimatedUnmount } from '../../../hooks/useAnimatedUnmount'
+import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../../utils/animation'
 import { useCNPGClusterHA } from '../../../api/cnpg-ha'
 import { trackCNPGOperation, type TrackCNPGOperationInput } from '../operations/store'
 import { useCNPGWriteGuard, type CNPGWriteScope } from './useCNPGWriteGuard'
@@ -57,6 +59,15 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
   const caps = useCNPGClusterCapabilities(namespace, name)
   const [open, setOpen] = useState<DialogKind>(null)
   const [menu, setMenu] = useState(false)
+  const menuPresence = useAnimatedUnmount(menu, overlayExitMs('menu'))
+  useEffect(() => {
+    if (!menu) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenu(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [menu])
   const actions = caps.data?.actions
   const openPsql = useOpenCNPGPsql()
   const unavailable = caps.data
@@ -125,10 +136,17 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
         <MoreHorizontal className="h-3.5 w-3.5" />
         <ChevronDown className="h-3 w-3" />
       </button>
-      {menu && (
+      {menu && <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} aria-hidden />}
+      {menuPresence.shouldRender && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} aria-hidden />
-          <div role="menu" className="absolute right-0 top-full z-50 mt-1 w-56 overflow-hidden rounded-lg border border-theme-border bg-theme-surface py-1 shadow-theme-lg">
+          <div
+            role="menu"
+            inert={!menu || undefined}
+            className={`absolute right-0 top-full z-50 mt-1 w-56 origin-top-right overflow-hidden rounded-lg border border-theme-border bg-theme-surface py-1 shadow-theme-lg ${TRANSITION_MENU} ${
+              menuPresence.isOpen ? 'translate-y-0 scale-100 opacity-100' : '-translate-y-1 scale-[0.97] opacity-0'
+            } ${menu ? '' : 'pointer-events-none'}`}
+            style={overlayTransitionStyle(menuPresence.isOpen, 'menu')}
+          >
             {compact && item('switchover', 'Switchover…')}
             {item('restart', 'Restart instances…')}
             {item('reload', 'Reload configuration…')}

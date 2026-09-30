@@ -446,6 +446,7 @@ function useTrendParams() {
 /** The interval a trend selection carried into Logs or Activity, from `?since=&until=`. */
 export function useCNPGIntervalParams(): { since: string; until: string; clear: () => void } | null {
   const [params, setParams] = useSearchParams()
+  const location = useLocation()
   const since = params.get('since')
   const until = params.get('until')
   if (!since || !until || !(Date.parse(until) > Date.parse(since))) return null
@@ -456,7 +457,7 @@ export function useCNPGIntervalParams(): { since: string; until: string; clear: 
       const next = new URLSearchParams(params)
       next.delete('since')
       next.delete('until')
-      setParams(next, { replace: true })
+      setParams(next, { replace: true, state: location.state })
     },
   }
 }
