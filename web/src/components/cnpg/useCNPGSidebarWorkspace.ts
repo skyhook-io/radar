@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Database, FileCheck2, Settings2, ShieldCheck, Waypoints } from 'lucide-react'
-import { applyCNPGDisk, applyCNPGFleetMetrics, buildCNPGFleet, type CNPGFleet, type SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
+import { applyCNPGDisk, applyCNPGFleetMetrics, buildCNPGFleet, type CNPGDiskReading, type CNPGFleet, type SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 import type { APIResource } from '../../types'
 import { useCNPGWorkspace } from '../../api/cnpg'
 import { useCNPGFleetDisk } from '../../api/cnpg-storage'
@@ -32,11 +32,22 @@ export function useCNPGFleet(namespaces: string[], enabled = true) {
   const fleet = useMemo<CNPGFleet | null>(
     () =>
       query.data?.installed
-        ? applyCNPGFleetMetrics(applyCNPGDisk(buildCNPGFleet(query.data), disk.data?.clusters), metrics.data?.clusters, metrics.data)
+        ? applyCNPGFleetMetrics(
+            applyCNPGDisk(buildCNPGFleet(query.data), disk.data?.clusters ?? (disk.error ? diskFailed(query.data.objects.clusters ?? [], disk.error) : undefined)),
+            metrics.data?.clusters,
+            metrics.data,
+          )
         : null,
-    [query.data, disk.data, metrics.data],
+    [query.data, disk.data, disk.error, metrics.data],
   )
   return { query, fleet }
+}
+
+// A failed disk read is stated per cluster; left undefined it would render as
+// still loading.
+function diskFailed(clusters: any[], err: unknown): CNPGDiskReading[] {
+  const reason = `Disk usage could not be read: ${err instanceof Error ? err.message : 'request failed'}`
+  return clusters.map((c) => ({ namespace: c?.metadata?.namespace ?? '', name: c?.metadata?.name ?? '', state: 'error', reason, claims: 0, measured: 0 }))
 }
 
 function destinationCount(screen: CNPGScreen, fleet: CNPGFleet | null): { count?: number | null; title?: string } {
