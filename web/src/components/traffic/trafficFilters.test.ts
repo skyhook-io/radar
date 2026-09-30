@@ -192,6 +192,14 @@ describe('mergeFlowVolume latency', () => {
     }
   })
 
+  it('keeps the weight through a copy of a merged edge', () => {
+    const into = { ...base, requestRate: 1, avgLatencyMs: 1000 }
+    mergeFlowVolume(into, { ...base, requestRate: 100 })
+    const collapsed = { ...into, source: { name: 'Internet', namespace: '', kind: 'Internet' } }
+    mergeFlowVolume(collapsed, { ...base, requestRate: 1, avgLatencyMs: 10 })
+    expect(collapsed.avgLatencyMs).toBeCloseTo(505, 6)
+  })
+
   it('averages edges without rates equally, however many are merged', () => {
     const into = { ...base, avgLatencyMs: 10 }
     mergeFlowVolume(into, { ...base, avgLatencyMs: 20 })

@@ -79,7 +79,12 @@ export function displayVolume(flow: Pick<AggregatedFlow, 'requestRate' | 'connec
   return isRateBased && flow.requestRate ? flow.requestRate : flow.connections
 }
 
-const latencyWeights = new WeakMap<AggregatedFlow, number>()
+/**
+ * A merged edge records the weight behind its average latency on itself, so a
+ * later `{...flow}` copy — the Internet collapse, addon grouping — carries it.
+ * Client-only: the server never sends it.
+ */
+type LatencyWeighted = AggregatedFlow & { latencyWeight?: number }
 
 /**
  * How much traffic an edge's average latency stands for: its request rate, or
@@ -87,7 +92,7 @@ const latencyWeights = new WeakMap<AggregatedFlow, number>()
  * Used to average latencies so a slow trickle does not stand for a busy path.
  */
 export function latencyWeightOf(flow: AggregatedFlow): number {
-  const merged = latencyWeights.get(flow)
+  const merged = (flow as LatencyWeighted).latencyWeight
   if (merged !== undefined) return merged
   return flow.avgLatencyMs ? (flow.requestRate || 1) : 0
 }
@@ -111,7 +116,8 @@ export function mergeFlowVolume(into: AggregatedFlow, flow: AggregatedFlow): voi
       ? (into.avgLatencyMs! * wInto + flow.avgLatencyMs! * wFlow) / (wInto + wFlow)
       : flow.avgLatencyMs
   }
-  latencyWeights.set(into, wInto + wFlow)
+  const weighted: LatencyWeighted = into
+  weighted.latencyWeight = wInto + wFlow
   into.connections += flow.connections
   into.bytesSent += flow.bytesSent
   into.bytesRecv += flow.bytesRecv
