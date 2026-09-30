@@ -1,8 +1,8 @@
 # CloudNativePG workspace
 
-A task-shaped view over [CloudNativePG](https://cloudnative-pg.io/) (CNPG): which PostgreSQL cluster needs attention, why, and what to inspect next — without assembling the story from ten separate CRD lists. The per-kind renderers, issue detection and audit check it builds on are described in [integrations.md](integrations.md#cloudnativepg).
+A task-shaped view over [CloudNativePG](https://cloudnative-pg.io/) (CNPG): which PostgreSQL cluster needs attention, why, what the instances are doing right now, and what to do about it — without assembling the story from ten separate CRD lists, `kubectl cnpg` and a Grafana dashboard. The per-kind renderers, issue detection and audit check it builds on are described in [integrations.md](integrations.md#cloudnativepg).
 
-The workspace is read-only. It never writes to a cluster.
+Reading never writes. Writes happen only through the [Actions](#actions) (backup, switchover, restart, fencing, hibernation, maintenance, pooler pause, destroy instance, cancel/terminate a backend, restore, a restore-validation note), each made with the caller's own identity after a confirmation bound to the facts they reviewed, behind the [GitOps write guard](#gitops-write-guard).
 
 ## Where it lives
 
@@ -117,7 +117,7 @@ Certificate expiry is also an Issues-engine finding (`CNPGCertificateExpiring`, 
 
 ## History
 
-`GET /api/cnpg/clusters/{ns}/{name}/history?range=15m|1h|6h|24h` backs the Runtime tab's **Trends** section. `GET /api/cnpg/fleet-metrics` fills the fleet's **Replication** column with measured standby lag and adds volume growth under **Disk**.
+`GET /api/cnpg/clusters/{ns}/{name}/history?range=15m|1h|6h|24h` backs the Runtime tab's **Trends** section. `GET /api/cnpg/fleet-metrics` fills the fleet's **Replication** column with measured standby lag and adds volume growth under **Disk**. Lag becomes a **Needs attention** problem only when it is sustained: the worst standby's replay lag never dropped below 30 s (warning) or 5 min (critical) over the last 10 minutes, with at least five samples in that window (`min_over_time`/`count_over_time`). A spike is shown and coloured, not raised. Volume growth is never raised.
 
 **Sources.** Only server-built PromQL runs; nothing from the request reaches a query except the range name. Steps keep every chart at 60–144 points (15 s, 30 s, 3 min, 10 min). Charts: replay lag per standby (`cnpg_pg_replication_lag` while `cnpg_pg_replication_in_recovery = 1`, so a primary's constant 0 is not drawn), client sessions by state (`cnpg_backends_total` without `streaming_replica` and the metrics exporter, plus an "all states" total that is 0 only while the exporter reports Postgres up), sessions waiting on locks, transactions per second, WAL archived/failed per minute, WAL on disk (`cnpg_collector_pg_wal{value="size"}`), volume used % (kubelet volume stats for the Cluster's owned claims, the Storage selection), database size, temporary-file writes, deadlocks and checkpoints (`pg_stat_checkpointer` on PostgreSQL 17+, `pg_stat_bgwriter` before). `max by (pod, …)` collapses duplicate scrapes before any sum. Each chart names its source and its sample coverage (evaluation steps with at least one sample).
 
