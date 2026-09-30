@@ -110,6 +110,15 @@ describe('PITR evidence', () => {
     expect(evidence.gaps.some((g) => g.includes('last archived WAL'))).toBe(true)
   })
 
+  it('says the primary was unreachable rather than that it reported nothing', () => {
+    const runtime = {
+      permission: { proxy: 'allowed' },
+      instances: [{ pod: 'pg-a-1', role: 'primary', status: { state: 'unreachable', error: 'the Pod did not answer on port 8000 within 5 s' }, metrics: { state: 'unreachable' } }],
+    } as any
+    const e = recoveryEvidenceFor({ kind: 'objectStore', objectStore: 'store', serverName: 'pg-a-v2' }, { sourceCluster: cluster, stores: [store], backups: [pluginBackup], namespace: 'db', runtime })
+    expect(e.gaps).toContain('The primary’s instance manager could not be read (the Pod did not answer on port 8000 within 5 s), so the last archived WAL time is unknown')
+  })
+
   it('warns, never blocks, outside the evidence', () => {
     const now = Date.parse('2026-09-30T12:00:00Z')
     expect(pitrWarnings('2026-09-25T00:00:00Z', evidence, now)).toEqual([])

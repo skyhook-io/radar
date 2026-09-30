@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { Lock } from 'lucide-react'
 import { PaneLoader, formatAge, toneTextClass } from '@skyhook-io/k8s-ui'
@@ -65,7 +66,20 @@ export function CNPGClusterRuntime({
   onOpenInterval?: (target: CNPGIntervalTarget, since: string, until: string) => void
 }) {
   const q = useCNPGRuntime(namespace, name)
-  const [section, setSection] = useState<Section>('replication')
+  // In the URL so Back from Logs or Activity returns to the same section.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const location = useLocation()
+  const section = SECTIONS.find((x) => x.id === searchParams.get('section'))?.id ?? 'replication'
+  const setSection = (next: Section) =>
+    setSearchParams(
+      (prev) => {
+        const params = new URLSearchParams(prev)
+        if (next === 'replication') params.delete('section')
+        else params.set('section', next)
+        return params
+      },
+      { replace: true, state: location.state },
+    )
   const samples = useSampleBuffer(q.data)
 
   if (!q.data && q.isLoading) return <PaneLoader label="Reading live state…" className="h-40" />

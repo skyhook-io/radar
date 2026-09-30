@@ -167,7 +167,11 @@ export function recoveryEvidenceFor(
           ? 'The last archived WAL time is not loaded'
           : ctx.runtime.permission.proxy === 'denied'
             ? `The last archived WAL time needs ${ctx.runtime.permission.grant ?? 'get pods/proxy'}`
-            : 'The primary’s instance manager did not report archiving',
+            : !primary
+              ? 'No primary is reported, so the last archived WAL time is unknown'
+              : primary.status.state !== 'ok'
+                ? `The primary’s instance manager could not be read${primary.status.error ? ` (${primary.status.error})` : ''}, so the last archived WAL time is unknown`
+                : 'The primary’s instance manager did not report archiving',
       )
     }
   } else if (source.kind !== 'backup') {

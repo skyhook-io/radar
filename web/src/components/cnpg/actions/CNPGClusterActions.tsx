@@ -59,10 +59,15 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
   const [menu, setMenu] = useState(false)
   const actions = caps.data?.actions
   const openPsql = useOpenCNPGPsql()
+  const unavailable = caps.data
+    ? undefined
+    : caps.error
+      ? `Actions unavailable: what you may do could not be checked (${caps.error instanceof Error ? caps.error.message : 'unknown error'})`
+      : 'Checking what you may do…'
 
   const item = (id: CNPGClusterActionName, label: string) => {
     const cap = actions?.[id]
-    const title = capabilityTitle(cap)
+    const title = capabilityTitle(cap) ?? unavailable
     return (
       <Tooltip key={id} content={title} position="left" wrapperClassName="block">
         <button
@@ -85,7 +90,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
 
   return (
     <div className="relative flex items-center gap-1.5">
-      <Tooltip content={capabilityTitle(actions?.backup) ?? 'Create an on-demand Backup'} position="bottom">
+      <Tooltip content={capabilityTitle(actions?.backup) ?? unavailable ?? 'Create an on-demand Backup'} position="bottom">
         <button
           type="button"
           disabled={!actions?.backup.allowed}
@@ -97,7 +102,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
         </button>
       </Tooltip>
       {!compact && (
-        <Tooltip content={capabilityTitle(actions?.switchover) ?? 'Promote a standby to primary'} position="bottom">
+        <Tooltip content={capabilityTitle(actions?.switchover) ?? unavailable ?? 'Promote a standby to primary'} position="bottom">
           <button
             type="button"
             disabled={!actions?.switchover.allowed}
@@ -131,7 +136,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
             {item('unfence', 'Lift fencing…')}
             {hibernated ? item('rehydrate', 'Resume from hibernation…') : item('hibernate', 'Hibernate…')}
             <div className="my-1 border-t border-theme-border" />
-            <Tooltip content={capabilityTitle(actions?.psql)} position="left" wrapperClassName="block">
+            <Tooltip content={capabilityTitle(actions?.psql) ?? unavailable} position="left" wrapperClassName="block">
               <button
                 type="button"
                 role="menuitem"
