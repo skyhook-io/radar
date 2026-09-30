@@ -70,13 +70,21 @@ const USAGE_UNMEASURED: Record<string, string> = {
   scopeMismatch: "this cluster's proven identity labels are not on its volume stats",
 }
 
-function UsageBar({ v }: { v: CNPGStorageVolume }) {
+// `stated`: the page's notice already names a cluster-wide cause, so the
+// line only says unknown and keeps the reason on hover.
+function UsageBar({ v, stated }: { v: CNPGStorageVolume; stated?: boolean }) {
   const u = v.usage
   if (u.state !== 'ok' || u.ratio === undefined || u.usedBytes === undefined || u.capacityBytes === undefined) {
     return (
       <div>
         <div className="h-1.5 rounded bg-[repeating-linear-gradient(45deg,var(--border-light)_0_2px,transparent_2px_5px)]" />
-        <div className="mt-1 text-xs text-theme-text-tertiary">Used space unknown: {USAGE_UNMEASURED[u.state] ?? u.state}</div>
+        {stated ? (
+          <Tooltip content={USAGE_UNMEASURED[u.state] ?? u.state}>
+            <div className="mt-1 text-xs text-theme-text-tertiary">Used space unknown</div>
+          </Tooltip>
+        ) : (
+          <div className="mt-1 text-xs text-theme-text-tertiary">Used space unknown: {USAGE_UNMEASURED[u.state] ?? u.state}</div>
+        )}
       </div>
     )
   }
@@ -131,7 +139,7 @@ const CLUSTER_STATE_BADGE: Record<string, 'warning' | 'error' | 'info'> = {
   unusable: 'error',
 }
 
-function VolumeRow({ v }: { v: CNPGStorageVolume }) {
+function VolumeRow({ v, usageStated }: { v: CNPGStorageVolume; usageStated?: boolean }) {
   const resizing = v.resize.pending || (v.resize.conditions?.length ?? 0) > 0 || !!v.resize.allocatedStatus
   return (
     <div className="rounded-lg border border-theme-border bg-theme-base p-3">
@@ -149,7 +157,7 @@ function VolumeRow({ v }: { v: CNPGStorageVolume }) {
           {v.requested && v.requested !== v.capacity ? ` · requested ${v.requested}` : ''}
         </span>
       </div>
-      <UsageBar v={v} />
+      <UsageBar v={v} stated={usageStated} />
       <div className="mt-2 text-xs text-theme-text-secondary">
         <ClassFact v={v} />
       </div>
@@ -248,7 +256,7 @@ function WALFact({
   )
 }
 
-function InstanceCard({ inst, walCoverage }: { inst: CNPGStorageInstance; walCoverage: CNPGClusterStorageResponse['wal'] }) {
+function InstanceCard({ inst, walCoverage, usageStated }: { inst: CNPGStorageInstance; walCoverage: CNPGClusterStorageResponse['wal']; usageStated: boolean }) {
   const roleLabel = inst.role === 'primary' ? 'primary' : inst.role === 'replica' ? 'replica' : inst.role === 'noInstance' ? 'no instance' : 'role unknown'
   const worst = inst.volumes.reduce<number | undefined>((m, v) => (v.usage.ratio !== undefined && (m === undefined || v.usage.ratio > m) ? v.usage.ratio : m), undefined)
   return (
@@ -265,7 +273,7 @@ function InstanceCard({ inst, walCoverage }: { inst: CNPGStorageInstance; walCov
         {inst.volumes.length === 0 ? (
           <div className="text-sm text-theme-text-tertiary">No claims read for this instance.</div>
         ) : (
-          inst.volumes.map((v) => <VolumeRow key={v.claim} v={v} />)
+          inst.volumes.map((v) => <VolumeRow key={v.claim} v={v} usageStated={usageStated} />)
         )}
       </div>
       <div className="mt-4">
@@ -273,9 +281,13 @@ function InstanceCard({ inst, walCoverage }: { inst: CNPGStorageInstance; walCov
         {inst.wal ? (
           <WALHolders wal={inst.wal} primary={inst.role === 'primary'} />
         ) : (
-          <div className="text-xs text-theme-text-tertiary">
-            {walCoverage.state === 'denied' ? `No access: needs ${walCoverage.grant}` : walCoverage.reason ?? 'No running instance to read'}
-          </div>
+          walCoverage.state === 'ok' ? (
+            <div className="text-xs text-theme-text-tertiary">No running instance to read</div>
+          ) : (
+            <Tooltip content={walCoverage.state === 'denied' ? `No access: needs ${walCoverage.grant}` : walCoverage.reason ?? walCoverage.state}>
+              <div className="text-xs text-theme-text-tertiary">Unknown</div>
+            </Tooltip>
+          )
         )}
       </div>
     </Card>
@@ -334,7 +346,7 @@ export function CNPGStorage({ namespace, name, primary }: { namespace: string; n
 
       <div className="grid items-start gap-4 xl:grid-cols-2">
         {data.instances.map((inst) => (
-          <InstanceCard key={inst.name} inst={inst} walCoverage={data.wal} />
+          <InstanceCard key={inst.name} inst={inst} walCoverage={data.wal} usageStated={data.usage.state !== 'ok' && data.usage.state !== 'notRead'} />
         ))}
       </div>
 
