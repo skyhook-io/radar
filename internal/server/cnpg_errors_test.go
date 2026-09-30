@@ -119,16 +119,53 @@ func TestCNPGPostgresDetailKeepsTheDiagnosisWithoutConnectionFacts(t *testing.T)
 	if got, _ := cnpgRelayedPodSentence(shm, cnpgStatusPort); got != "the instance manager could not read PostgreSQL's status: out of shared memory" {
 		t.Errorf("shared memory = %q", got)
 	}
-	got := cnpgPostgresDetail(`an error on the server ("query failed for user=postgres database=app host=10.0.0.5:5432: FATAL: remaining connection slots are reserved (SQLSTATE 53300) via /controller/run/.s.PGSQL.5432") has prevented the request from succeeding`)
-	if !strings.Contains(got, "remaining connection slots are reserved (SQLSTATE 53300)") {
-		t.Errorf("detail = %q", got)
+	slots := "query failed for user=postgres database=app host=10.0.0.5:5432: FATAL: remaining connection slots are reserved (SQLSTATE 53300)"
+	if got := cnpgPostgresDetail(slots); got != "remaining connection slots are reserved, too_many_connections (SQLSTATE 53300)" {
+		t.Errorf("slots = %q", got)
 	}
-	for _, leak := range []string{"user=", "database=", "10.0.0.5", ".s.PGSQL", "has prevented"} {
-		if strings.Contains(got, leak) {
-			t.Errorf("detail %q leaks %q", got, leak)
+	if got := cnpgPostgresDetail("ERROR: something odd (SQLSTATE 57P03)"); got != "cannot_connect_now (SQLSTATE 57P03)" {
+		t.Errorf("code only = %q", got)
+	}
+	for _, unknown := range []string{"the instance manager crashed", "ERROR: relation \"secret_table\" does not exist (SQLSTATE 42P01)"} {
+		if d := cnpgPostgresDetail(unknown); d != "" {
+			t.Errorf("%q: unrecognized text must add nothing, got %q", unknown, d)
 		}
 	}
-	if d := cnpgPostgresDetail("the instance manager crashed"); d != "" {
-		t.Errorf("no PostgreSQL message, got %q", d)
+}
+
+func TestCNPGPostgresDetailNeverEchoesTheError(t *testing.T) {
+	leaks := []string{
+		"pq: invalid connection string: postgresql://alice:secret@pg.private.example/db",
+		"pq: out of shared memory while connecting with password='canary secret-tail' host=pg.private.example",
+		"FATAL: password authentication failed for user \"alice\" (host = pg.private.example, password = secret tail)",
+		"ERROR: could not connect to server pg.private.example at 10.1.2.3 as alice, secret tail (SQLSTATE 08001)",
+		"FATAL: too many clients already from [2001:db8::1]:5432 user alice password secret-tail",
+	}
+	for _, raw := range leaks {
+		err := apierrors.NewGenericServerResponse(500, "get", schema.GroupResource{Resource: "pods"}, "https:pg-1:8000", raw, 0, true)
+		got, _ := cnpgRelayedPodSentence(err, cnpgStatusPort)
+		for _, leak := range []string{"alice", "secret", "pg.private", "10.1.2.3", "2001:db8", "tail", "canary"} {
+			if strings.Contains(got, leak) {
+				t.Errorf("%q leaked %q: %q", raw, leak, got)
+			}
+		}
+	}
+}
+
+func TestCNPGRelayedPodSentenceIgnoresAPIServerErrors(t *testing.T) {
+	for _, err := range []error{
+		apierrors.NewTimeoutError("request did not complete within requested timeout", 0),
+		apierrors.NewServiceUnavailable("the server is currently unable to handle the request"),
+		apierrors.NewInternalError(errors.New("etcd leader changed")),
+		apierrors.NewGenericServerResponse(504, "get", schema.GroupResource{Resource: "pods"}, "https:pg-1:8000", "", 0, false),
+	} {
+		if got, ok := cnpgRelayedPodSentence(err, cnpgStatusPort); ok {
+			t.Errorf("%v is the apiserver's own error, not the Pod's; got %q", err, got)
+		}
+	}
+	timeout := apierrors.NewTimeoutError("request did not complete within requested timeout", 0)
+	out := classifyCNPGProxyFailure(context.Background(), timeout, cnpgProxyOutcome{}, cnpgProxyTarget{namespace: "pg", pod: "pg-1", port: cnpgStatusPort, path: cnpgStatusPath})
+	if strings.Contains(out.err, "instance manager") {
+		t.Errorf("an apiserver timeout blamed the instance manager: %q", out.err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Transport failures between Radar and the Kubernetes API, as client-go words
@@ -91,47 +92,84 @@ func cnpgPostgresSentence(raw string) (string, bool) {
 	return "", false
 }
 
-// Where PostgreSQL's own message starts in a relayed error: lib/pq's prefix,
-// or the server's severity.
-var cnpgPostgresMessageMarkers = []string{"pq: ", "ERROR: ", "FATAL: ", "PANIC: "}
+// PostgreSQL conditions Radar names from a relayed SQLSTATE: the ones an
+// operator can act on. Other codes add nothing.
+var cnpgSQLStateNames = map[string]string{
+	"53000": "insufficient_resources",
+	"53100": "disk_full",
+	"53200": "out_of_memory",
+	"53300": "too_many_connections",
+	"53400": "configuration_limit_exceeded",
+	"57014": "query_canceled",
+	"57P01": "admin_shutdown",
+	"57P02": "crash_shutdown",
+	"57P03": "cannot_connect_now",
+	"57P04": "database_dropped",
+	"08000": "connection_exception",
+	"08001": "sqlclient_unable_to_establish_sqlconnection",
+	"08003": "connection_does_not_exist",
+	"08004": "sqlserver_rejected_establishment_of_sqlconnection",
+	"08006": "connection_failure",
+	"28000": "invalid_authorization_specification",
+	"28P01": "invalid_password",
+	"3D000": "invalid_catalog_name",
+	"42501": "insufficient_privilege",
+	"25006": "read_only_sql_transaction",
+	"40001": "serialization_failure",
+	"40P01": "deadlock_detected",
+	"55000": "object_not_in_prerequisite_state",
+	"55006": "object_in_use",
+	"55P03": "lock_not_available",
+	"XX000": "internal_error",
+	"XX001": "data_corrupted",
+	"XX002": "index_corrupted",
+}
 
-var (
-	cnpgConnParamRe = regexp.MustCompile(`\b(user|database|dbname|host|hostaddr|port|password|sslmode|application_name)=\S+`)
-	cnpgSocketRe    = regexp.MustCompile(`\S*\.s\.PGSQL\.\d+\S*`)
-	cnpgAddressRe   = regexp.MustCompile(`\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b`)
-	cnpgSpacesRe    = regexp.MustCompile(`\s+`)
-)
+// PostgreSQL messages Radar recognizes, each replaced by a fixed phrase.
+// Matching text is never echoed: it can sit next to user names, hosts and
+// connection strings.
+var cnpgPostgresPhrases = []struct{ match, phrase string }{
+	{"out of shared memory", "out of shared memory"},
+	{"out of memory", "out of memory"},
+	{"too many clients already", "too many clients already"},
+	{"remaining connection slots are reserved", "remaining connection slots are reserved"},
+	{"the database system is starting up", "the database system is starting up"},
+	{"the database system is shutting down", "the database system is shutting down"},
+	{"the database system is in recovery mode", "the database system is in recovery mode"},
+	{"no space left on device", "no space left on device"},
+	{"could not extend file", "could not extend a data file"},
+	{"password authentication failed", "password authentication failed"},
+}
 
-// cnpgPostgresDetail is PostgreSQL's own message inside a relayed error, e.g.
-// "out of shared memory", with connection parameters, socket paths and
-// addresses removed, or "" when there is none. It keeps an unrecognized
-// failure diagnosable in the product without echoing how Radar connects.
+var cnpgSQLStateRe = regexp.MustCompile(`SQLSTATE[ :]*([0-9A-Z]{5})\b`)
+
+// cnpgPostgresDetail names what PostgreSQL reported inside a relayed error,
+// from an allowlist only: a fixed phrase for a recognized message and the
+// condition name of a recognized SQLSTATE. It never returns the error's own
+// text, so nothing it carries (credentials, hosts, user names) reaches the
+// UI. "" when neither is recognized.
 func cnpgPostgresDetail(raw string) string {
-	body := raw
-	if i := strings.Index(body, `("`); i >= 0 {
-		if j := strings.LastIndex(body, `") has prevented`); j > i {
-			body = body[i+2 : j]
+	lower := strings.ToLower(raw)
+	phrase := ""
+	for _, p := range cnpgPostgresPhrases {
+		if strings.Contains(lower, p.match) {
+			phrase = p.phrase
+			break
 		}
 	}
-	body = strings.ReplaceAll(body, `\"`, `"`)
-	start := -1
-	for _, m := range cnpgPostgresMessageMarkers {
-		if i := strings.Index(body, m); i >= 0 && (start < 0 || i < start) {
-			start = i + len(m)
+	condition := ""
+	if m := cnpgSQLStateRe.FindStringSubmatch(raw); m != nil {
+		if name, ok := cnpgSQLStateNames[m[1]]; ok {
+			condition = name + " (SQLSTATE " + m[1] + ")"
 		}
 	}
-	if start < 0 {
-		return ""
+	switch {
+	case phrase != "" && condition != "":
+		return phrase + ", " + condition
+	case phrase != "":
+		return phrase
 	}
-	d := body[start:]
-	d = cnpgConnParamRe.ReplaceAllString(d, "")
-	d = cnpgSocketRe.ReplaceAllString(d, "the local socket")
-	d = cnpgAddressRe.ReplaceAllString(d, "an address")
-	d = strings.Trim(cnpgSpacesRe.ReplaceAllString(d, " "), " :;,")
-	if len(d) > 160 {
-		d = d[:160] + "…"
-	}
-	return d
+	return condition
 }
 
 // cnpgRelayedPodSentence says in plain words what an error answer from the
@@ -140,22 +178,43 @@ func cnpgPostgresDetail(raw string) string {
 // connection strings; callers log it instead. ok is false for anything the
 // apiserver produced itself (a failure to reach the Pod) and for non-5xx.
 func cnpgRelayedPodSentence(err error, port int) (string, bool) {
-	var status apierrors.APIStatus
-	if err == nil || !errors.As(err, &status) || status.Status().Code < 500 {
+	body, code, ok := cnpgRelayedPodBody(err)
+	if !ok || code < 500 {
 		return "", false
 	}
-	lower := strings.ToLower(err.Error())
-	if strings.Contains(lower, "error trying to reach service") {
+	if strings.Contains(strings.ToLower(body), "error trying to reach service") {
 		return "", false
 	}
 	if port == cnpgStatusPort {
-		if plain, ok := cnpgPostgresSentence(lower); ok {
+		if plain, ok := cnpgPostgresSentence(body); ok {
 			return plain, true
 		}
-		if detail := cnpgPostgresDetail(err.Error()); detail != "" {
+		if detail := cnpgPostgresDetail(body); detail != "" {
 			return "the instance manager could not read PostgreSQL's status: " + detail, true
 		}
 		return "the instance manager could not read PostgreSQL's status", true
 	}
-	return fmt.Sprintf("the metrics endpoint on port %d answered with an error (HTTP %d)", port, status.Status().Code), true
+	return fmt.Sprintf("the metrics endpoint on port %d answered with an error (HTTP %d)", port, code), true
+}
+
+// cnpgRelayedPodBody is the body of an answer the apiserver relayed from the
+// Pod through pods/proxy, with its HTTP code. client-go marks a response that
+// is not an apiserver Status (the Pod's own answer) with an
+// UnexpectedServerResponse cause carrying the body; errors the apiserver
+// produced itself (Timeout, ServiceUnavailable, InternalError) carry none.
+func cnpgRelayedPodBody(err error) (string, int, bool) {
+	var status apierrors.APIStatus
+	if err == nil || !errors.As(err, &status) {
+		return "", 0, false
+	}
+	st := status.Status()
+	if st.Details == nil {
+		return "", 0, false
+	}
+	for _, c := range st.Details.Causes {
+		if c.Type == metav1.CauseTypeUnexpectedServerResponse {
+			return c.Message, int(st.Code), true
+		}
+	}
+	return "", 0, false
 }
