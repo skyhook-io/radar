@@ -46,7 +46,7 @@ func TestTrafficFlowsPayloadKeepsWarningKind(t *testing.T) {
 
 // A partial-data warning describes the flows it arrived with. When namespace
 // filtering removes all of them, it describes edges this user cannot see.
-func TestTrafficFlowsPayloadDropsPartialWarningWhenFilteringRemovedEverything(t *testing.T) {
+func TestTrafficFlowsPayloadDropsWarningWhenFilteringRemovedEverything(t *testing.T) {
 	response := &traffic.FlowsResponse{
 		Source:      "beyla",
 		Flows:       []traffic.Flow{{Source: traffic.Endpoint{Namespace: "other"}}},
@@ -72,15 +72,28 @@ func TestTrafficFlowsPayloadDropsPartialWarningWhenFilteringRemovedEverything(t 
 		t.Error("an empty result needs its explanation kept")
 	}
 
-	// A transient warning is about the fetch, not about the flows, so filtering
-	// does not affect it.
+	// A transient warning beside flows is about figures missing from them, so it
+	// goes with them — and kept on an empty payload it would have the client poll
+	// every few seconds for traffic this user will never be shown.
 	transient := &traffic.FlowsResponse{
 		Source:      "beyla",
 		Flows:       []traffic.Flow{{Source: traffic.Endpoint{Namespace: "other"}}},
+		Warning:     "Beyla metrics are incomplete: HTTP 5xx error rates could not be read from Prometheus.",
+		WarningKind: traffic.WarningTransient,
+	}
+	if _, ok := trafficFlowsPayload(transient, []traffic.Flow{})["warning"]; ok {
+		t.Error("a transient warning about filtered-out flows must be dropped with them")
+	}
+
+	// A failed fetch returns no flows at all, so nothing was filtered and the
+	// warning is the whole answer.
+	failed := &traffic.FlowsResponse{
+		Source:      "beyla",
+		Flows:       []traffic.Flow{},
 		Warning:     "Failed to query Beyla metrics: connection refused",
 		WarningKind: traffic.WarningTransient,
 	}
-	if _, ok := trafficFlowsPayload(transient, []traffic.Flow{})["warning"]; !ok {
-		t.Error("a transient warning is about the fetch and must survive filtering")
+	if _, ok := trafficFlowsPayload(failed, []traffic.Flow{})["warning"]; !ok {
+		t.Error("a failed fetch must keep its warning")
 	}
 }

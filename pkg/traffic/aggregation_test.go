@@ -481,8 +481,34 @@ func TestAggregateFlows_KeepsUnroundedRates(t *testing.T) {
 	if math.Abs(a.RequestRate-0.3) > 1e-9 || math.Abs(a.ErrorRate-0.01) > 1e-9 {
 		t.Errorf("rates = %v req/s, %v err/s; want 0.3 and 0.01", a.RequestRate, a.ErrorRate)
 	}
-	// The rounded figures are what made the ratio wrong: one of each.
-	if a.RequestCount != 2 || a.ErrorCount != 2 {
-		t.Logf("rounded counts %d/%d", a.RequestCount, a.ErrorCount)
+}
+
+// A request and its response arrive as two records on one edge. They are one
+// request: a GET answered 503 is one failed request, not two with half failing.
+func TestAggregateFlows_RequestAndResponseRecordsAreOneRequest(t *testing.T) {
+	src := Endpoint{Name: "client", Namespace: "demo"}
+	dst := Endpoint{Name: "web", Namespace: "demo"}
+	agg := AggregateFlows([]Flow{
+		{Source: src, Destination: dst, Port: 80, L7Type: "REQUEST", HTTPMethod: "GET", HTTPPath: "/orders"},
+		{Source: src, Destination: dst, Port: 80, L7Type: "RESPONSE", HTTPMethod: "GET", HTTPPath: "/orders", HTTPStatus: 503, LatencyNs: 4e6},
+		{Source: src, Destination: dst, Port: 53, L7Type: "REQUEST", DNSQuery: "db.example.com."},
+		{Source: src, Destination: dst, Port: 53, L7Type: "RESPONSE", DNSQuery: "db.example.com.", DNSRCode: 3},
+		{Source: src, Destination: dst, Port: 53, L7Type: "REQUEST", DNSQuery: "api.example.com."},
+		{Source: src, Destination: dst, Port: 53, L7Type: "RESPONSE", DNSQuery: "api.example.com.", DNSTTL: 30},
+	})
+	for _, a := range agg {
+		for _, p := range a.TopHTTPPaths {
+			if p.Count != 1 || p.ErrorPct != 100 {
+				t.Errorf("path %s %s: count %d, errorPct %v; want 1 request, 100%% failed", p.Method, p.Path, p.Count, p.ErrorPct)
+			}
+		}
+		for _, q := range a.TopDNSQueries {
+			if q.Count != 1 {
+				t.Errorf("query %s counted %d times, want 1", q.Query, q.Count)
+			}
+			if q.Query == "api.example.com." && q.AvgTTL != 30 {
+				t.Errorf("avg TTL = %d, want 30: the query record carries no TTL to average in", q.AvgTTL)
+			}
+		}
 	}
 }

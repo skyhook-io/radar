@@ -491,11 +491,17 @@ function DetailsPanel({
       const p95s = relatedFlows.map(f => f.latencyP95Ms).filter((v): v is number => v != null && v > 0)
       return p95s.length > 0 ? Math.max(...p95s) : undefined
     })(),
-    // A metric-based source reports only an average per edge; the worst of them
-    // stands in for the node, like the P95 above.
+    // A metric-based source reports only an average per edge. The node's is
+    // those averages weighted by each edge's request rate, so a slow trickle
+    // does not stand for a node that answers almost everything quickly; when
+    // any edge has no rate they weigh equally.
     avgLatencyMs: (() => {
-      const avgs = relatedFlows.map(f => f.avgLatencyMs).filter((v): v is number => v != null && v > 0)
-      return avgs.length > 0 ? Math.max(...avgs) : undefined
+      const measured = relatedFlows.filter(f => f.avgLatencyMs != null && f.avgLatencyMs > 0)
+      if (measured.length === 0) return undefined
+      const weighted = measured.every(f => f.requestRate)
+      const weight = (f: AggregatedFlow) => (weighted ? f.requestRate! : 1)
+      const total = measured.reduce((sum, f) => sum + weight(f), 0)
+      return measured.reduce((sum, f) => sum + f.avgLatencyMs! * weight(f), 0) / total
     })(),
     // Aggregate HTTP status distribution
     httpStatusCounts: relatedFlows.reduce((acc, f) => {
@@ -1511,7 +1517,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
 
       // Add edge from addon-internet to addon-group if we have one
       if (addonMode === 'group' && groupEdgeInfo) {
-        const { connections } = groupEdgeInfo
+        const { connections, flow: groupFlow } = groupEdgeInfo
         const sourceId = 'addon-internet'
         const isHotEdge = connections >= hotPathThreshold && hotPathThreshold > 0
 
@@ -1521,7 +1527,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
           target: 'addon-group',
           type: 'smoothstep',
           animated: isHotEdge,
-          label: isRateBased ? `${formatConnections(connections)}/s` : formatConnections(connections),
+          label: isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
           labelBgStyle: {
             fill: '#581c87', // purple-900
             fillOpacity: 0.9,
@@ -1546,7 +1552,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
 
       // Add edge from addon-group to kubernetes if we have one
       if (addonMode === 'group' && groupOutEdgeInfo) {
-        const { connections, targetId } = groupOutEdgeInfo
+        const { connections, targetId, flow: groupFlow } = groupOutEdgeInfo
         const isHotEdge = connections >= hotPathThreshold && hotPathThreshold > 0
 
         finalEdges.push({
@@ -1555,7 +1561,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
           target: targetId,
           type: 'smoothstep',
           animated: isHotEdge,
-          label: isRateBased ? `${formatConnections(connections)}/s` : formatConnections(connections),
+          label: isRateBased ? `${formatRate(displayVolume(groupFlow, isRateBased))}/s` : formatConnections(connections),
           labelBgStyle: {
             fill: '#581c87', // purple-900
             fillOpacity: 0.9,

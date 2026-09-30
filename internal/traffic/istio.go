@@ -170,9 +170,9 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		}, nil
 	}
 
-	tcpFlows, err := s.queryTCPFlows(ctx, opts)
-	if err != nil {
-		log.Printf("[istio] Error querying TCP flows (continuing with HTTP only): %v", err)
+	tcpFlows, tcpErr := s.queryTCPFlows(ctx, opts)
+	if tcpErr != nil {
+		log.Printf("[istio] Error querying TCP flows (continuing with HTTP only): %v", tcpErr)
 		missing = append(missing, "TCP connections")
 	} else {
 		httpFlows = append(httpFlows, tcpFlows...)
@@ -184,10 +184,10 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		Timestamp: time.Now(),
 		Flows:     httpFlows,
 	}
-	// Only alongside flows: with none, a missing enrichment explains nothing,
-	// and a transient warning on an empty result makes the client poll for a
-	// better answer every couple of seconds.
-	if len(missing) > 0 && len(httpFlows) > 0 {
+	// With no flows a missing enrichment qualifies nothing, but missing TCP
+	// connections can be why there are no flows: a TCP-only mesh whose query
+	// failed must not read as idle.
+	if len(missing) > 0 && (len(httpFlows) > 0 || tcpErr != nil) {
 		// Without this the edges read as measured: a failed 5xx query shows as no
 		// errors, and failed TCP or byte queries as no traffic of that kind.
 		response.Warning = fmt.Sprintf("Istio metrics are incomplete: %s could not be read from Prometheus, so those figures are missing from these edges rather than zero.", strings.Join(missing, ", "))

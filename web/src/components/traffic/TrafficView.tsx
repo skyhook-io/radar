@@ -13,7 +13,7 @@ import { useDock } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume } from './trafficFilters'
 
 // Addon types for filtering
 export type AddonMode = 'show' | 'group' | 'hide'
@@ -765,23 +765,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
 
       const existing = aggregatedMap.get(key)
       if (existing) {
-        // Merge connections and bytes
-        existing.connections += flow.connections
-        existing.bytesSent += flow.bytesSent
-        existing.bytesRecv += flow.bytesRecv
-        existing.flowCount += flow.flowCount
-        if (flow.requestCount) {
-          existing.requestCount = (existing.requestCount || 0) + flow.requestCount
-        }
-        if (flow.errorCount) {
-          existing.errorCount = (existing.errorCount || 0) + flow.errorCount
-        }
-        if (flow.requestRate) {
-          existing.requestRate = (existing.requestRate || 0) + flow.requestRate
-        }
-        if (flow.errorRate) {
-          existing.errorRate = (existing.errorRate || 0) + flow.errorRate
-        }
+        mergeFlowVolume(existing, flow)
         // Everything merged here shares the key's direction-known state, so the
         // flag is already correct on the entry that was created first.
       } else {
@@ -825,11 +809,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
 
         const existing = internetFlowsMap.get(destKey)
         if (existing) {
-          // Merge into existing "Internet" flow
-          existing.connections += flow.connections
-          existing.bytesSent += flow.bytesSent
-          existing.bytesRecv += flow.bytesRecv
-          existing.flowCount += flow.flowCount
+          mergeFlowVolume(existing, flow)
         } else {
           // Create new "Internet" → destination flow
           internetFlowsMap.set(destKey, {
@@ -858,6 +838,8 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     // Track totals for aggregated edges
     let addonInternetTotal = 0
     let addonToK8sTotal = 0
+    let addonInternetRate = 0
+    let addonToK8sRate = 0
     const processedFlows: AggregatedFlow[] = []
 
     // Check if destination is the kubernetes API server
@@ -874,6 +856,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
       // Internet → Addon: aggregate into single edge to group
       if (sourceIsInternet && destIsAddon) {
         addonInternetTotal += flow.connections
+        addonInternetRate += flow.requestRate ?? 0
         processedFlows.push({
           ...flow,
           source: {
@@ -886,6 +869,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
       // Addon → Kubernetes API: aggregate into single edge from group
       else if (sourceIsAddon && destIsK8sAPI) {
         addonToK8sTotal += flow.connections
+        addonToK8sRate += flow.requestRate ?? 0
         processedFlows.push({
           ...flow,
           destination: {
@@ -915,6 +899,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         protocol: 'tcp',
         port: 0,
         connections: addonInternetTotal,
+        ...(addonInternetRate > 0 && { requestRate: addonInternetRate }),
         bytesSent: 0,
         bytesRecv: 0,
         flowCount: 1,
@@ -938,6 +923,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         protocol: 'tcp',
         port: 443,
         connections: addonToK8sTotal,
+        ...(addonToK8sRate > 0 && { requestRate: addonToK8sRate }),
         bytesSent: 0,
         bytesRecv: 0,
         flowCount: 1,

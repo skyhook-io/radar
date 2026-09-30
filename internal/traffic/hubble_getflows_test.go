@@ -8,6 +8,7 @@ import (
 
 	flowpb "github.com/cilium/cilium/api/v1/flow"
 	observerpb "github.com/cilium/cilium/api/v1/observer"
+	relaypb "github.com/cilium/cilium/api/v1/relay"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -116,7 +117,7 @@ func TestHubbleGetFlows_ReportsWhatTheStreamDidNotDeliver(t *testing.T) {
 		}
 	})
 
-	t.Run("lost events with no flows raise no warning", func(t *testing.T) {
+	t.Run("everything lost still says so", func(t *testing.T) {
 		h := connectedHubble(t, &scriptedObserver{responses: []*observerpb.GetFlowsResponse{
 			{ResponseTypes: &observerpb.GetFlowsResponse_LostEvents{LostEvents: &flowpb.LostEvent{NumEventsLost: 3}}},
 		}})
@@ -124,8 +125,31 @@ func TestHubbleGetFlows_ReportsWhatTheStreamDidNotDeliver(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.Warning != "" {
-			t.Errorf("warning %q on an empty result would make the client poll every few seconds", resp.Warning)
+		if !strings.Contains(resp.Warning, "3 events lost") {
+			t.Errorf("warning = %q: an empty result whose events were lost must not read as idle", resp.Warning)
+		}
+	})
+
+	t.Run("unreachable nodes are reported", func(t *testing.T) {
+		status := func(state relaypb.NodeState, nodes ...string) *observerpb.GetFlowsResponse {
+			return &observerpb.GetFlowsResponse{ResponseTypes: &observerpb.GetFlowsResponse_NodeStatus{NodeStatus: &relaypb.NodeStatusEvent{StateChange: state, NodeNames: nodes}}}
+		}
+		h := connectedHubble(t, &scriptedObserver{responses: []*observerpb.GetFlowsResponse{
+			status(relaypb.NodeState_NODE_CONNECTED, "node-a"),
+			status(relaypb.NodeState_NODE_UNAVAILABLE, "node-b"),
+			status(relaypb.NodeState_NODE_ERROR, "node-c", "node-b"),
+			status(relaypb.NodeState_NODE_GONE, "node-d"),
+			flowResponse("a", "b"),
+		}})
+		resp, err := h.GetFlows(context.Background(), DefaultFlowOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(resp.Warning, "2 node(s) (node-b, node-c)") {
+			t.Errorf("warning = %q, want the unavailable and errored nodes named once each", resp.Warning)
+		}
+		if strings.Contains(resp.Warning, "node-a") || strings.Contains(resp.Warning, "node-d") {
+			t.Errorf("warning = %q names a connected or removed node", resp.Warning)
 		}
 	})
 

@@ -21,17 +21,26 @@ type flowAccumulator struct {
 	l7Votes     map[string]int64
 }
 
+// A source that emits L7 records reports one request as two of them, the
+// request and its response, both on the caller's edge. Counting records would
+// double every request and halve every error rate, so requests and responses
+// are counted apart and a path's count is the larger of the two — whichever
+// side the window happened to catch more of.
 type pathAcc struct {
-	count        int64
+	requests     int64 // records that are not responses
+	responses    int64
 	latencyCount int64 // flows carrying a measured latency
 	latencySumMs float64
+	withStatus   int64 // records carrying a status code — the error rate's denominator
 	errors       int64 // 4xx + 5xx
 }
 
 type dnsAcc struct {
-	count   int64
-	nxCount int64
-	ttlSum  uint64
+	queries   int64 // records that are not responses
+	responses int64
+	nxCount   int64
+	ttlSum    uint64
+	ttlCount  int64 // records carrying a TTL
 }
 
 // AggregateFlows aggregates flows by service pair with rich L7 statistics.
@@ -128,11 +137,18 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 				pa = &pathAcc{}
 				acc.pathStats[pathKey] = pa
 			}
-			pa.count++
+			if f.L7Type == "RESPONSE" {
+				pa.responses++
+			} else {
+				pa.requests++
+			}
 			// Same rule as the edge latency above.
 			if f.LatencyNs > 0 && f.L7Type != "REQUEST" {
 				pa.latencySumMs += float64(f.LatencyNs) / 1e6
 				pa.latencyCount++
+			}
+			if f.HTTPStatus > 0 {
+				pa.withStatus++
 			}
 			if f.HTTPStatus >= 400 {
 				pa.errors++
@@ -146,11 +162,18 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 				da = &dnsAcc{}
 				acc.dnsStats[f.DNSQuery] = da
 			}
-			da.count++
+			if f.L7Type == "RESPONSE" {
+				da.responses++
+			} else {
+				da.queries++
+			}
 			if f.DNSRCode == 3 { // NXDOMAIN
 				da.nxCount++
 			}
-			da.ttlSum += uint64(f.DNSTTL)
+			if f.DNSTTL > 0 {
+				da.ttlSum += uint64(f.DNSTTL)
+				da.ttlCount++
+			}
 		}
 
 		// Verdict and drop reasons
@@ -209,13 +232,13 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 				stat := HTTPPathStat{
 					Method: method,
 					Path:   path,
-					Count:  pa.count,
+					Count:  max(pa.requests, pa.responses),
 				}
 				if pa.latencyCount > 0 {
 					stat.AvgMs = pa.latencySumMs / float64(pa.latencyCount)
 				}
-				if pa.count > 0 {
-					stat.ErrorPct = float64(pa.errors) / float64(pa.count) * 100
+				if pa.withStatus > 0 {
+					stat.ErrorPct = float64(pa.errors) / float64(pa.withStatus) * 100
 				}
 				paths = append(paths, stat)
 			}
@@ -232,11 +255,11 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 			for query, da := range acc.dnsStats {
 				stat := DNSQueryStat{
 					Query:   query,
-					Count:   da.count,
+					Count:   max(da.queries, da.responses),
 					NXCount: da.nxCount,
 				}
-				if da.count > 0 && da.ttlSum > 0 {
-					stat.AvgTTL = uint32(da.ttlSum / uint64(da.count))
+				if da.ttlCount > 0 {
+					stat.AvgTTL = uint32(da.ttlSum / uint64(da.ttlCount))
 				}
 				queries = append(queries, stat)
 			}

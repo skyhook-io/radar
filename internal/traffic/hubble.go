@@ -9,12 +9,14 @@ import (
 	"io"
 	"log"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	flowpb "github.com/cilium/cilium/api/v1/flow"
 	observerpb "github.com/cilium/cilium/api/v1/observer"
+	relaypb "github.com/cilium/cilium/api/v1/relay"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -850,11 +852,11 @@ func (h *HubbleSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRe
 		Timestamp: time.Now(),
 		Flows:     flows,
 	}
-	// Qualifies the flows that did arrive; an empty result has nothing to qualify,
-	// and a transient warning on it would make the client poll every few seconds.
-	if incomplete != "" && len(flows) > 0 {
+	if incomplete != "" {
 		response.Warning = incomplete
-		// The next poll reads the buffer afresh and may well come back whole.
+		// Transient because the next poll reads the buffer afresh; a busy node
+		// that keeps dropping events will keep saying so, which is the truth
+		// about its data rather than noise.
 		response.WarningKind = WarningTransient
 	}
 	return response, nil
@@ -909,6 +911,7 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 
 	var gaps []string
 	var lost uint64
+	var unavailableNodes []string
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
@@ -924,11 +927,18 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 			return nil, "", fmt.Errorf("stream error: %w", err)
 		}
 
-		// Hubble reports events it had to drop (a full ring buffer, an
-		// unreachable node) in-band. The flows around them are real, but the
-		// window is no longer everything that happened.
+		// Hubble reports in-band what it could not deliver: events a full
+		// buffer dropped, and nodes the relay could not reach. The flows around
+		// them are real, but the window is no longer everything that happened.
 		if le := resp.GetLostEvents(); le != nil {
 			lost += le.GetNumEventsLost()
+			continue
+		}
+		if ns := resp.GetNodeStatus(); ns != nil {
+			switch ns.GetStateChange() {
+			case relaypb.NodeState_NODE_UNAVAILABLE, relaypb.NodeState_NODE_ERROR:
+				unavailableNodes = append(unavailableNodes, ns.GetNodeNames()...)
+			}
 			continue
 		}
 
@@ -947,6 +957,11 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 
 	if lost > 0 {
 		gaps = append(gaps, fmt.Sprintf("Hubble reported %d events lost before they could be delivered", lost))
+	}
+	if len(unavailableNodes) > 0 {
+		slices.Sort(unavailableNodes)
+		unavailableNodes = slices.Compact(unavailableNodes)
+		gaps = append(gaps, fmt.Sprintf("Hubble Relay could not read flows from %d node(s) (%s), so their traffic is missing", len(unavailableNodes), strings.Join(unavailableNodes, ", ")))
 	}
 
 	log.Printf("[hubble] Retrieved %d flows", len(flows))

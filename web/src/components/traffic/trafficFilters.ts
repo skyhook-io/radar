@@ -79,6 +79,23 @@ export function displayVolume(flow: Pick<AggregatedFlow, 'requestRate' | 'connec
   return isRateBased && flow.requestRate ? flow.requestRate : flow.connections
 }
 
+/**
+ * Fold one aggregated flow's volume into another's, for the client-side merges
+ * that collapse several edges into one. Every figure displayVolume or the error
+ * rate reads has to be summed here: a field left out keeps only the first
+ * merged edge's value.
+ */
+export function mergeFlowVolume(into: AggregatedFlow, flow: AggregatedFlow): void {
+  into.connections += flow.connections
+  into.bytesSent += flow.bytesSent
+  into.bytesRecv += flow.bytesRecv
+  into.flowCount += flow.flowCount
+  if (flow.requestCount) into.requestCount = (into.requestCount || 0) + flow.requestCount
+  if (flow.errorCount) into.errorCount = (into.errorCount || 0) + flow.errorCount
+  if (flow.requestRate) into.requestRate = (into.requestRate || 0) + flow.requestRate
+  if (flow.errorRate) into.errorRate = (into.errorRate || 0) + flow.errorRate
+}
+
 /** A per-second rate, precise enough to tell a trickle from nothing: 0.30, 12, 1.2K. */
 export function formatRate(rate: number): string {
   if (rate >= 1000) return `${(rate / 1000).toFixed(1)}K`

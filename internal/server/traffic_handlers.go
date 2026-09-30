@@ -173,14 +173,15 @@ func trafficFlowsPayload(response *traffic.FlowsResponse, flows []traffic.Flow) 
 		"aggregated": traffic.AggregateFlows(flows),
 	}
 
-	// A partial-data warning qualifies the flows it came with. If the namespace
-	// filtering above removed all of them, it now qualifies nothing this user can
-	// see — and describing the shape of edges they have no access to is both
-	// confusing and more than they asked. A source that returned no flows in the
-	// first place is different: there the warning is the explanation for the empty
-	// result, which is exactly what it is for.
+	// A warning qualifies the flows it came with. If the namespace filtering
+	// above removed all of them, it now qualifies nothing this user can see —
+	// and describing the shape of edges they have no access to is both confusing
+	// and more than they asked. A transient one would also have the client poll
+	// every few seconds for a better answer about traffic it will never be shown.
+	// A source that returned no flows in the first place is different: there the
+	// warning is the explanation for the empty result, which is exactly what it is for.
 	filteredEverythingOut := len(flows) == 0 && len(response.Flows) > 0
-	if response.WarningKind == traffic.WarningPartial && filteredEverythingOut {
+	if filteredEverythingOut {
 		return result
 	}
 

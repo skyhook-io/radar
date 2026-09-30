@@ -221,13 +221,25 @@ func TestIstioGetFlows_NoPrometheus(t *testing.T) {
 	}
 }
 
-func TestIstioGetFlows_NoWarningWithoutFlowsToQualify(t *testing.T) {
+func TestIstioGetFlows_EmptyResultWarnsOnlyWhenTheGapCouldExplainIt(t *testing.T) {
+	// A TCP-only mesh whose TCP query failed has no HTTP flows either; without
+	// the warning it reads as idle.
 	resp, err := newTestIstio(fakeIstioProm(nil, map[string]error{"istio_tcp_connections_opened_total": errors.New("timeout")})).
 		GetFlows(context.Background(), DefaultFlowOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(resp.Warning, "TCP connections") {
+		t.Errorf("warning = %q, want the failed TCP query named", resp.Warning)
+	}
+
+	// A failed 5xx query qualifies edges; with none there is nothing to qualify.
+	resp, err = newTestIstio(fakeIstioProm(nil, map[string]error{`response_code=~"5.."`: errors.New("timeout")})).
+		GetFlows(context.Background(), DefaultFlowOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if resp.Warning != "" {
-		t.Errorf("warning %q on an empty result would make the client poll for a better answer", resp.Warning)
+		t.Errorf("warning = %q on an empty result the missing 5xx rates cannot explain", resp.Warning)
 	}
 }
