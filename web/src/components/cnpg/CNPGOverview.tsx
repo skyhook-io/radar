@@ -19,18 +19,22 @@ import { CNPGWorkspaceHeader, CoverageNotice, FilterChips, type CNPGScreenProps 
 import { cnpgClusterFullPath, currentPageLabel } from './paths'
 import { sameResource } from './routes'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
+import { cnpgInstancePillLabel, cnpgRowStatus } from './fleetStatus'
 
 type Filter = 'attention' | 'all'
 
 function InstancePills({ row }: { row: CNPGFleetRow }) {
   if (row.pods.length === 0) return null
   return (
-    <div className="mt-1 flex flex-wrap gap-1">
+    <div className="mt-1 flex flex-wrap gap-1 font-sans">
       {row.pods.map((p) => {
         const tone = p.ready === true ? 'healthy' : p.ready === false ? 'unhealthy' : 'unknown'
         return (
-          <Tooltip key={p.name} content={`${p.name} · ${p.role} · ${p.ready === true ? 'ready' : p.ready === false ? 'not ready' : 'readiness unknown'}`}>
-            <span className="inline-flex items-center gap-1 rounded border border-theme-border bg-theme-base px-1 text-[10.5px] font-mono text-theme-text-secondary">
+          <Tooltip key={p.name} content={cnpgInstancePillLabel(p)}>
+            <span
+              aria-label={cnpgInstancePillLabel(p)}
+              className="inline-flex items-center gap-1 rounded border border-theme-border bg-theme-base px-1 font-mono text-[10.5px] text-theme-text-secondary"
+            >
               <StatusDot tone={tone} size="xs" />
               {p.role === 'primary' ? 'P' : p.role === 'replica' ? 'R' : '?'}
             </span>
@@ -43,10 +47,27 @@ function InstancePills({ row }: { row: CNPGFleetRow }) {
 
 function ReadyCell({ row }: { row: CNPGFleetRow }) {
   const r = cnpgReadyInstances(row)
-  if (!r.note) return <>{r.text}</>
   return (
-    <Tooltip content={r.note}>
-      <span className={clsx('underline decoration-dotted underline-offset-2', toneTextClass(r.tone ?? 'unknown'))}>{r.text} Pods</span>
+    <>
+      {r.note ? (
+        <Tooltip content={r.note}>
+          <span className={clsx('underline decoration-dotted underline-offset-2', toneTextClass(r.tone ?? 'unknown'))}>{r.text} Pods</span>
+        </Tooltip>
+      ) : (
+        r.text
+      )}
+      <InstancePills row={row} />
+    </>
+  )
+}
+
+function RowStatusDot({ row }: { row: CNPGFleetRow }) {
+  const status = cnpgRowStatus(row)
+  return (
+    <Tooltip content={status.label}>
+      <span role="img" aria-label={status.label} className="inline-flex">
+        <StatusDot tone={status.tone} />
+      </span>
     </Tooltip>
   )
 }
@@ -214,21 +235,23 @@ export function CNPGOverview({
 
           <div className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
             <div className={TABLE_WRAP}>
-              <table className="w-full min-w-[1060px] table-fixed">
+              <table className="w-full min-w-[1140px] table-fixed">
                 <colgroup>
-                  <col className="w-[17%]" />
-                  <col className="w-[6%]" />
                   <col className="w-[14%]" />
-                  <col className="w-[13%]" />
                   <col className="w-[9%]" />
-                  <col className="w-[10%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[13%]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[9%]" />
                   <col className="w-[5%]" />
-                  <col className="w-[14%]" />
+                  <col className="w-[13%]" />
                   <col className="w-[9.5rem]" />
                 </colgroup>
                 <thead className={TABLE_HEAD}>
                   <tr>
                     <th className={TH}>Cluster</th>
+                    <th className={TH}>Namespace</th>
                     <th className={TH}>Ready</th>
                     <th className={TH}>Replication</th>
                     <th className={TH}>Protection</th>
@@ -252,11 +275,12 @@ export function CNPGOverview({
                       >
                         <td className={TD}>
                           <div className="flex items-center gap-2 min-w-0">
-                            <StatusDot tone={row.attention ? (row.problems.some((p) => p.severity === 'critical') ? 'unhealthy' : 'degraded') : row.controllerStatus.level} />
+                            <RowStatusDot row={row} />
                             <Tooltip content={row.name} wrapperClassName="min-w-0"><span className="block truncate font-medium">{row.name}</span></Tooltip>
                           </div>
-                          <div className="truncate pl-4 text-xs text-theme-text-tertiary">{row.namespace}</div>
-                          <div className="pl-4"><InstancePills row={row} /></div>
+                        </td>
+                        <td className={clsx(TD, 'text-theme-text-secondary')}>
+                          <Tooltip content={row.namespace} wrapperClassName="min-w-0"><span className="block truncate">{row.namespace}</span></Tooltip>
                         </td>
                         <td className={clsx(TD, 'font-mono')}>
                           <ReadyCell row={row} />
