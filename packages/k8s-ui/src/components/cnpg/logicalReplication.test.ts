@@ -61,6 +61,12 @@ describe('slot failover', () => {
     expect(failoverOf(synced(17)).tone).toBe('degraded')
     expect(failoverOf(synced(17), { failover: 'true' }).tone).toBe('healthy')
   })
+  it('is lost when HA slots are disabled, whatever synchronizeLogicalDecoding says', () => {
+    const off = cluster('src', 'src', { replicationSlots: { highAvailability: { enabled: false, synchronizeLogicalDecoding: true } } }, { pgDataImageInfo: { majorVersion: 17 } })
+    const f = failoverOf(off, { failover: 'true' })
+    expect(f.tone).toBe('degraded')
+    expect(f.text).toContain('HA replication slots are disabled')
+  })
   it('is unknown before 17 (pg_failover_slots), without a major, or outside Radar', () => {
     expect(failoverOf(synced(16)).tone).toBe('unknown')
     expect(failoverOf(cluster('src', 'src', { replicationSlots: { highAvailability: { synchronizeLogicalDecoding: true } } })).tone).toBe('unknown')

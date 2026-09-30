@@ -82,7 +82,7 @@ function truthy(v: unknown): boolean | undefined {
   return undefined
 }
 
-const FAILOVER_SOURCE = "Publisher's spec.replicationSlots.highAvailability.synchronizeLogicalDecoding, its PostgreSQL major and the Subscription's failover parameter; /pg/status does not report a slot's failover flag"
+const FAILOVER_SOURCE = "Publisher's spec.replicationSlots.highAvailability (enabled and synchronizeLogicalDecoding), its PostgreSQL major and the Subscription's failover parameter; /pg/status does not report a slot's failover flag"
 
 /**
  * Whether the publisher's slot for this subscription is kept on its standbys,
@@ -97,7 +97,16 @@ export function cnpgSlotFailover(publisher: CNPGPublisher, subscription: any): C
   if ((c?.spec?.instances ?? 1) <= 1) {
     return { text: 'No standby to fail over to: a single-instance publisher', tone: 'neutral', source: FAILOVER_SOURCE }
   }
-  const sync = c?.spec?.replicationSlots?.highAvailability?.synchronizeLogicalDecoding === true
+  const ha = c?.spec?.replicationSlots?.highAvailability
+  // GetEnabled defaults to true; the operator enables sync only with both.
+  if (ha?.synchronizeLogicalDecoding === true && ha?.enabled === false) {
+    return {
+      text: 'Lost on failover: synchronizeLogicalDecoding is on, but HA replication slots are disabled, so standbys have no physical slot to synchronize through',
+      tone: 'degraded',
+      source: FAILOVER_SOURCE,
+    }
+  }
+  const sync = ha?.synchronizeLogicalDecoding === true
   if (!sync) {
     return {
       text: 'Lost on failover: the publisher does not synchronize logical slots to standbys (synchronizeLogicalDecoding is off)',
