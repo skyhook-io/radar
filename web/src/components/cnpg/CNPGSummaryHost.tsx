@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   CNPG_BARMAN_OBJECTSTORE_GROUP,
   CNPG_GROUP,
@@ -41,7 +41,7 @@ import { CNPGMaintenanceBanner } from './actions/CNPGMaintenanceBanner'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 import { CNPGRefreshFailedNotice } from './shared'
 
-import { cnpgClusterFullPath, currentPageLabel } from './paths'
+import { cnpgClusterFullPath, cnpgDimensionPath, currentPageLabel } from './paths'
 import { CNPGRestoreProgress } from './recovery/CNPGRestoreProgress'
 import { useConnection } from '../../context/ConnectionContext'
 
@@ -76,6 +76,7 @@ function BaseBackupFact({ runtime }: { runtime: CNPGRuntimeResponse | undefined 
 
 function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryContext) {
   const navigate = useNavigate()
+  const location = useLocation()
   const { connection } = useConnection()
   // The workspace is read for the object's own namespace: an explicitly opened
   // Cluster shows its facts whatever the namespace filter is.
@@ -108,6 +109,11 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
           <CNPGMaintenanceBanner namespace={namespace} name={name} maintenance={ha.data?.maintenance} />
           {row.cluster?.spec?.bootstrap?.recovery && <CNPGRestoreProgress namespace={namespace} name={name} />}
         </>
+      }
+      onSelectDimension={(id) =>
+        navigate(cnpgDimensionPath(namespace, name, connection.context || undefined, id), {
+          state: context === 'drawer' ? { returnLabel: currentPageLabel(), returnCtx: connection.context } : location.state,
+        })
       }
       dimensions={cnpgDimensions({ row, ha: ha.data, replication: cnpgReplicationLive(runtime.data), replicationGap: cnpgReplicationGap(runtime.data, runtime.error) })}
       stateFacts={<BaseBackupFact runtime={runtime.data} />}

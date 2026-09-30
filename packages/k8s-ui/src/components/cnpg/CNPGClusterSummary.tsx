@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { Badge } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
+import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { CNPG_BARMAN_OBJECTSTORE_GROUP, CNPG_GROUP } from '../resources/resource-utils-cnpg'
 import { cnpgReadyInstances, type CNPGFleetRow, type CNPGInstance } from './workspace'
 import type { CNPGDimension } from './ha'
@@ -13,6 +14,7 @@ import {
   FactValue,
   PrimaryConflictNote,
   ProblemCallout,
+  ProblemList,
   RefLink,
   SummaryHeading,
   ToneDot,
@@ -62,19 +64,53 @@ function InstancePill({ pod, namespace, onNavigate }: { pod: CNPGInstance; names
   )
 }
 
-function DimensionChips({ dimensions }: { dimensions: CNPGDimension[] }) {
+const CHIP = 'inline-flex items-center gap-1.5 rounded-md border border-theme-border bg-theme-base px-2 py-0.5 text-xs'
+
+function DimensionChips({ dimensions, onSelect }: { dimensions: CNPGDimension[]; onSelect?: (id: CNPGDimension['id']) => void }) {
   return (
     <div className="mb-3 flex flex-wrap gap-1.5" aria-label="Health by dimension">
-      {dimensions.map((d) => (
-        <Tooltip key={d.id} content={d.source} position="top">
-          <span className="inline-flex items-center gap-1.5 rounded-md border border-theme-border bg-theme-base px-2 py-0.5 text-xs">
+      {dimensions.map((d) => {
+        const body = (
+          <>
             <ToneDot tone={d.tone} />
             <span className="text-theme-text-secondary">{d.label}</span>
             <span className={toneTextClass(d.tone)}>{d.text}</span>
-          </span>
-        </Tooltip>
-      ))}
+          </>
+        )
+        return (
+          <Tooltip key={d.id} content={d.source} position="top">
+            {onSelect ? (
+              <button
+                type="button"
+                onClick={() => onSelect(d.id)}
+                aria-label={`Open ${d.label.toLowerCase()} details`}
+                className={clsx(CHIP, 'hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent')}
+              >
+                {body}
+              </button>
+            ) : (
+              <span className={CHIP}>{body}</span>
+            )}
+          </Tooltip>
+        )
+      })}
     </div>
+  )
+}
+
+/** "+N more" that opens the rest of the problems in place, when the host links nowhere else. */
+function MoreProblems({ count, open, onToggle, panelId }: { count: number; open: boolean; onToggle: () => void; panelId: string }) {
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      aria-controls={panelId}
+      onClick={onToggle}
+      className="inline-flex items-center gap-1 text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
+    >
+      <CollapseChevron open={open} className="h-3 w-3" />
+      {open ? 'Hide' : `+${count} more`}
+    </button>
   )
 }
 
@@ -86,6 +122,7 @@ export function CNPGClusterSummary({
   extra,
   lead,
   dimensions,
+  onSelectDimension,
   haSection,
   stateFacts,
 }: {
@@ -99,6 +136,8 @@ export function CNPGClusterSummary({
   lead?: ReactNode
   /** Serving · Replication · Protection · Storage, each from its own source (see cnpgDimensions). */
   dimensions?: CNPGDimension[]
+  /** Makes each dimension chip open where that dimension is explained (e.g. Runtime → Replication). */
+  onSelectDimension?: (id: CNPGDimension['id']) => void
   /** The host's "HA and instances" section (CNPGClusterHASection), rendered after State. */
   haSection?: ReactNode
   /** Extra FactRows appended to the State grid, e.g. live facts only the host can read. */
@@ -109,17 +148,32 @@ export function CNPGClusterSummary({
   const p = row.protection
   const ns = row.namespace
   const radarFindings = row.problems.some((x) => x.severity !== 'posture')
+  const [showRest, setShowRest] = useState(false)
+  const restDisclosure = useDisclosure(showRest)
 
   return (
     <div className="px-4 py-4">
       {lead}
-      {dimensions && dimensions.length > 0 && <DimensionChips dimensions={dimensions} />}
+      {dimensions && dimensions.length > 0 && <DimensionChips dimensions={dimensions} onSelect={onSelectDimension} />}
       {top && (
         <ProblemCallout
           problem={top}
           onNavigate={onNavigate}
-          more={rest > 0 ? problemsLink?.(row.problems.length) ?? <span>+{rest} more</span> : null}
+          more={
+            rest > 0
+              ? problemsLink?.(row.problems.length) ?? (
+                  <MoreProblems count={rest} open={showRest} onToggle={() => setShowRest((v) => !v)} panelId={restDisclosure.panelId} />
+                )
+              : null
+          }
         />
+      )}
+      {top && rest > 0 && !problemsLink && (
+        <Collapse open={showRest} id={restDisclosure.panelId}>
+          <div className="mb-4 rounded-lg border border-theme-border bg-theme-base p-3">
+            <ProblemList problems={row.problems.slice(1)} onNavigate={onNavigate} />
+          </div>
+        </Collapse>
       )}
 
       {actions && actions.length > 0 && (

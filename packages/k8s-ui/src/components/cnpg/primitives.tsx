@@ -97,6 +97,29 @@ const PROBLEM_VARIANT: Record<CNPGProblem['severity'], 'error' | 'warning' | 'in
   posture: 'info',
 }
 
+/** Where a problem's evidence is and what produced it, shared by the callout and the full list. */
+export function ProblemMeta({ problem, onNavigate, subjectIsSelf, children }: { problem: CNPGProblem; onNavigate?: CNPGNavigate; subjectIsSelf?: boolean; children?: ReactNode }) {
+  const aboutChild = !subjectIsSelf && problem.subject.kind !== 'Cluster'
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-tertiary">
+      {aboutChild && (
+        <span>
+          {problem.subject.kind}{' '}
+          <RefLink refTo={problem.subject} onNavigate={onNavigate} mono />
+        </span>
+      )}
+      <span>{problem.source === 'audit' ? 'Radar check' : problem.source === 'measurement' ? 'Measured' : 'Radar issue'}</span>
+      {children}
+    </div>
+  )
+}
+
+export const CNPG_PROBLEM_TONE: Record<CNPGProblem['severity'], HealthLevel> = {
+  critical: 'unhealthy',
+  warning: 'degraded',
+  posture: 'neutral',
+}
+
 export function ProblemCallout({
   problem,
   more,
@@ -111,21 +134,33 @@ export function ProblemCallout({
   /** The callout sits on the subject's own page, so linking to it would loop. */
   subjectIsSelf?: boolean
 }) {
-  const aboutChild = !subjectIsSelf && problem.subject.kind !== 'Cluster'
   return (
     <AlertBanner variant={PROBLEM_VARIANT[problem.severity]} title={problem.title} message={problem.detail}>
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-tertiary">
-        {aboutChild && (
-          <span>
-            {problem.subject.kind}{' '}
-            <RefLink refTo={problem.subject} onNavigate={onNavigate} mono />
-          </span>
-        )}
-        <span>{problem.source === 'audit' ? 'Radar check' : problem.source === 'measurement' ? 'Measured' : 'Radar issue'}</span>
+      <ProblemMeta problem={problem} onNavigate={onNavigate} subjectIsSelf={subjectIsSelf}>
         {action}
         {more}
-      </div>
+      </ProblemMeta>
     </AlertBanner>
+  )
+}
+
+/** The problems a callout does not show, as a compact list with the callout's tone, title and source. */
+export function ProblemList({ problems, onNavigate }: { problems: CNPGProblem[]; onNavigate?: CNPGNavigate }) {
+  return (
+    <ul className="space-y-2">
+      {problems.map((p) => (
+        <li key={p.id} className="flex items-start gap-2 text-sm">
+          <span className="mt-1.5 shrink-0">
+            <StatusDot tone={CNPG_PROBLEM_TONE[p.severity]} size="sm" />
+          </span>
+          <div className="min-w-0">
+            <div className={clsx('font-medium break-words', toneTextClass(CNPG_PROBLEM_TONE[p.severity]))}>{p.title}</div>
+            {p.detail && <div className="text-xs text-theme-text-secondary break-words">{p.detail}</div>}
+            <ProblemMeta problem={p} onNavigate={onNavigate} />
+          </div>
+        </li>
+      ))}
+    </ul>
   )
 }
 
