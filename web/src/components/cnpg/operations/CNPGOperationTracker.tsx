@@ -60,7 +60,7 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
   const ops = useCNPGOperations({ namespace, cluster: name, context })
   const active = ops.filter(cnpgOperationFollowed)
   const following = active.length > 0
-  const needsRuntime = active.some((o) => ['switchover', 'fence', 'unfence', 'restart', 'restartInstance'].includes(o.kind))
+  const needsRuntime = active.some((o) => ['switchover', 'unfence', 'restart', 'restartInstance'].includes(o.kind))
 
   const queryClient = useQueryClient()
   const caps = useCNPGClusterCapabilities(namespace, name, following)

@@ -219,27 +219,23 @@ describe('fence observer', () => {
     return rt
   }
 
-  it('leaves PostgreSQL stopped unverified when only the Pod turned unready', () => {
+  it('never claims PostgreSQL stopped: CloudNativePG reports no shutdown signal', () => {
+    for (const status of [{ state: 'ok' }, { state: 'ok', mightBeUnavailable: true }, { state: 'partial' }]) {
+      const o = advanceCNPGOperation(fence(), obs({ facts: fenced, runtime: withStatus(status) }))
+      expect(o.state).not.toBe('completed')
+      expect(o.steps?.find((x) => x.label.includes('PostgreSQL stopped'))?.done).toBeNull()
+    }
+  })
+  it('stops following once the fence is recorded, as unverified', () => {
     const o = advanceCNPGOperation(fence(), obs({ facts: fenced }))
     expect(o.state).toBe('unobservable')
-    expect(o.steps?.[0].done).toBeNull()
+    expect(o.steps?.[0].done).toBe(true)
+    expect(o.finishedAt).toBeDefined()
   })
-  it('does not complete on a partial status that still reports a WAL position', () => {
-    const o = advanceCNPGOperation(fence(), obs({ facts: fenced, runtime: withStatus({ state: 'partial', receivedLsn: '0/3000000' }) }))
-    expect(o.state).not.toBe('completed')
+  it('keeps following until the fence annotation lands', () => {
+    const o = advanceCNPGOperation(fence(), obs({ facts: facts({ instances: [inst('pg-2', false)] }) }))
     expect(o.steps?.[0].done).toBe(false)
-  })
-  it('does not count a partial status without WAL positions as proof', () => {
-    const o = advanceCNPGOperation(fence(), obs({ facts: fenced, runtime: withStatus({ state: 'partial' }) }))
-    expect(o.steps?.[0].done).toBeNull()
-  })
-  it('completes when the instance manager answers in full with no WAL position', () => {
-    const o = advanceCNPGOperation(fence(), obs({ facts: fenced, runtime: withStatus({ state: 'ok' }) }))
-    expect(o.state).toBe('completed')
-  })
-  it('is not done before the fence annotation lands', () => {
-    const o = advanceCNPGOperation(fence(), obs({ facts: facts({ instances: [inst('pg-2', false)] }), runtime: withStatus({ state: 'ok' }) }))
-    expect(o.steps?.[0].done).toBe(false)
+    expect(o.finishedAt).toBeUndefined()
   })
 })
 

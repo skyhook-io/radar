@@ -343,33 +343,28 @@ registerCNPGOperationObserver('reload', () => ({
   detail: 'Requested. Nothing in the cluster reports when a configuration reload completes; check the instance logs for "received SIGHUP".',
 }))
 
-/**
- * Whether fencing stopped PostgreSQL on `pod`. Only the instance manager can
- * say so: its status answered in full (not partial) with no current,
- * received or replay WAL position. A Pod turning unready is not evidence —
- * a failing probe does that too — so without that answer the step is unknown.
- */
-function fencedPostgresStopped(obs: CNPGObservation, pod: string): boolean | null {
-  const f = obs.facts
-  if (!f) return null
-  if (!f.fencedInstances.all && !f.fencedInstances.instances.includes(pod)) return false
-  const rt = runtimeInstance(obs, pod)?.status
-  const walPosition = !!(rt?.currentLsn || rt?.receivedLsn || rt?.replayLsn)
-  if ((rt?.state === 'ok' || rt?.state === 'partial') && walPosition) return false
-  if (rt?.state === 'ok') return true
-  if (readyNow(obs, pod) === true) return false
-  return null
-}
-
+// CloudNativePG reports no shutdown signal for a fenced instance: /pg/status
+// never carries isFenced, and a masked status error (mightBeUnavailable) also
+// arrives without WAL positions. So the fence being recorded is the last thing
+// Radar can verify; the shutdown itself stays unverified.
 registerCNPGOperationObserver('fence', (op, obs) => {
   const pods = ((op.baseline.instances as string[]) ?? [])
-  const steps: CNPGOpStep[] = pods.map((p) => ({ label: `${p}: PostgreSQL stopped`, done: fencedPostgresStopped(obs, p) }))
-  const state = summarizeSteps(steps)
-  const detail =
-    state === 'unobservable'
-      ? 'Fenced; that PostgreSQL stopped is unverified: it needs the instance manager’s own status (get pods/proxy), and a Pod turning unready is not proof'
-      : 'A fenced instance keeps its Pod but stops PostgreSQL'
-  return { state, steps, detail, progressKey: key(steps) }
+  const f = obs.facts
+  const recorded = (p: string): boolean | null => (f ? f.fencedInstances.all || f.fencedInstances.instances.includes(p) : null)
+  const steps: CNPGOpStep[] = pods.flatMap((p) => [
+    { label: `${p}: fence recorded on the Cluster`, done: recorded(p) },
+    { label: `${p}: PostgreSQL stopped (CloudNativePG reports no signal for this)`, done: null },
+  ])
+  const allRecorded = pods.length > 0 && pods.every((p) => recorded(p) === true)
+  return {
+    state: allRecorded ? 'unobservable' : summarizeSteps(steps.filter((_, i) => i % 2 === 0)),
+    steps,
+    final: allRecorded,
+    detail: allRecorded
+      ? 'Fence recorded. The operator stops PostgreSQL on a fenced instance, but nothing in the cluster confirms the shutdown; the instance logs show it.'
+      : 'Waiting for the fence to be recorded on the Cluster',
+    progressKey: key(steps),
+  }
 })
 
 registerCNPGOperationObserver('unfence', (op, obs) => {
