@@ -11,13 +11,18 @@ type Checkpoints = NonNullable<CNPGRuntimeInstance['metrics']['checkpoints']>
  * on a standby or where any were done. Pressure needs enough checkpoints for
  * the requested share to mean something.
  */
+const CNPG_CHECKPOINT_SHARE_MIN = 10
+
 export function cnpgCheckpointView(c: Checkpoints, role: CNPGRuntimeInstance['role']) {
   const total = c.timed !== undefined && c.requested !== undefined ? c.timed + c.requested : undefined
   const requestedShare = total ? (c.requested as number) / total : undefined
+  const few = total !== undefined && total < CNPG_CHECKPOINT_SHARE_MIN
   return {
     total,
     requestedShare,
-    pressure: requestedShare !== undefined && (total as number) >= 10 && requestedShare > 0.5,
+    // Too few checkpoints for a percentage to mean anything: counts instead.
+    share: requestedShare === undefined ? undefined : few ? `${c.requested} of ${total} requested` : `${(requestedShare * 100).toFixed(0)} %`,
+    pressure: requestedShare !== undefined && !few && requestedShare > 0.5,
     showRestartpoints: c.source === 'pg_stat_checkpointer' && (role !== 'primary' || !!c.restartpointsDone),
   }
 }

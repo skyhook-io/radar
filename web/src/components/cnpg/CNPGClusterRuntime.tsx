@@ -418,7 +418,7 @@ function CheckpointsCard({ inst }: { inst?: CNPGRuntimeInstance }) {
       <div className="flex flex-wrap gap-8">
         <Metric label="Timed" value={n(c.timed)} />
         <Metric label="Requested" value={n(c.requested)} tone={view.pressure ? 'degraded' : undefined} />
-        {view.requestedShare !== undefined && <Metric label="Requested share" value={`${(view.requestedShare * 100).toFixed(0)} %`} />}
+        {view.share !== undefined && <Metric label="Requested share" value={view.share} />}
         <Metric label="Buffers written" value={n(c.buffersWritten)} />
         {view.showRestartpoints ? (
           <>
