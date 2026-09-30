@@ -54,7 +54,7 @@ Every value is something the cluster reports, labelled with where it came from. 
 
 Backup schedules: besides "No backup has run since this schedule was due" (the operator's own `nextScheduleTime` passed), the Issues engine raises **"No successful backup since ScheduledBackup <name> fired at <time>"** on the Cluster when an active schedule fired (six-field cron, seconds first, parsed as the operator does) after the cluster's newest successful backup (Backup objects, the ObjectStore's `lastSuccessfulBackupTime`, in-tree `status.lastSuccessfulBackup`), allowing the last successful backup's duration plus 10 minutes, and no Backup started since is still running. Suspended schedules raise nothing. The workspace shows it only to callers who can list ScheduledBackups in the namespace.
 
-Problems come from Radar's Issues engine (the same detections as `/issues`) plus the audit's `cnpgNoDeclarativeBackup`, worded "No declarative backup schedule" because that is all it proves. A cluster **needs attention** when it has an issue of warning or worse on itself, an instance Pod, or an object that references it.
+Problems come from Radar's Issues engine (the same detections as `/issues`) plus the audit's `cnpgNoDeclarativeBackup`, worded "No declarative backup schedule" because that is all it proves. A cluster **needs attention** when it has an issue of warning or worse on itself, an instance Pod, or an object that references it. The fleet lists clusters by urgency in every filter: worst problem first (critical, warning, posture, none), then the number of warning-or-worse problems, then all problems, then namespace and name.
 
 ## Access
 

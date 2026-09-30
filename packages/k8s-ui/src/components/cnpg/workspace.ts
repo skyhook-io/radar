@@ -842,8 +842,35 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
   return finishFleet(rows, incompleteKinds)
 }
 
+function urgencyOf(row: CNPGFleetRow): { worst: number; urgent: number; total: number } {
+  let worst = 3
+  let urgent = 0
+  for (const p of row.problems) {
+    worst = Math.min(worst, PROBLEM_RANK[p.severity])
+    if (p.severity !== 'posture') urgent++
+  }
+  return { worst, urgent, total: row.problems.length }
+}
+
+/**
+ * Worst problem first (critical, warning, posture, none), then the most
+ * attention-level problems, then all problems, then namespace/name — the same
+ * order in every filter, so a row never jumps when the filter changes.
+ */
+export function compareCNPGFleetUrgency(a: CNPGFleetRow, b: CNPGFleetRow): number {
+  const ua = urgencyOf(a)
+  const ub = urgencyOf(b)
+  return (
+    ua.worst - ub.worst ||
+    ub.urgent - ua.urgent ||
+    ub.total - ua.total ||
+    a.namespace.localeCompare(b.namespace) ||
+    a.name.localeCompare(b.name)
+  )
+}
+
 function finishFleet(rows: CNPGFleetRow[], incompleteKinds: CNPGWorkspaceKey[]): CNPGFleet {
-  rows.sort((a, b) => Number(b.attention) - Number(a.attention) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name))
+  rows.sort(compareCNPGFleetUrgency)
   const categoryCounts = { availability: 0, protection: 0, declarations: 0, pooling: 0 } as Record<CNPGProblemCategory, number>
   for (const r of rows) for (const c of r.categories) categoryCounts[c]++
   return {

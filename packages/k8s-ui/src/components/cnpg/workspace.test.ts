@@ -81,6 +81,22 @@ describe('buildCNPGFleet', () => {
     expect(fleet.rows[0].name).toBe('pg-b')
   })
 
+  it('orders rows by worst problem, then problem count, then namespace/name', () => {
+    const issue = (id: string, severity: 'critical' | 'warning', name: string) => ({
+      id, severity, kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name, reason: 'CNPGClusterUnhealthy', message: id,
+    })
+    const fleet = buildCNPGFleet(
+      resp(
+        { clusters: ['pg-a', 'pg-b', 'pg-c', 'pg-d', 'pg-e'].map((n) => cluster(n, 'db')) },
+        {
+          issues: [issue('w1', 'warning', 'pg-a'), issue('c1', 'critical', 'pg-b'), issue('w2', 'warning', 'pg-c'), issue('w3', 'warning', 'pg-c')],
+          audit: [{ checkId: 'cnpgNoDeclarativeBackup', severity: 'warning', kind: 'Cluster', namespace: 'db', name: 'pg-e', message: 'no ScheduledBackup' }],
+        },
+      ),
+    )
+    expect(fleet.rows.map((r) => r.name)).toEqual(['pg-b', 'pg-c', 'pg-a', 'pg-e', 'pg-d'])
+  })
+
   it('treats the no-schedule audit finding as posture, not attention, and words it narrowly', () => {
     const fleet = buildCNPGFleet(
       resp({ clusters: [cluster('pg-a', 'db')] }, {
