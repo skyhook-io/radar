@@ -4,6 +4,7 @@ import { cnpgActionCompleted, cnpgActionErrorCode, cnpgActionOutcomeLocked, useC
 import { useCNPGDestroyPlan } from '../../../api/cnpg-sessions'
 import { useToast } from '../../ui/Toast'
 import { trackCNPGOperation } from '../operations/store'
+import { cnpgDestroyBlocker } from './actionModel'
 
 /**
  * `kubectl cnpg destroy` for one standby: its volumes are deleted (or kept,
@@ -34,6 +35,7 @@ export function CNPGDestroyInstanceDialog({
   const partial = cnpgActionErrorCode(mutation.error) === 'partial'
   const fenced = !!data && (data.facts.fencedInstances.all || data.facts.fencedInstances.instances.includes(pod))
   const completed = cnpgActionCompleted(mutation.error)
+  const fenceOffered = !!data && !fenced && !!onFenceFirst
 
   return (
     <ActionConfirmDialog
@@ -99,7 +101,9 @@ export function CNPGDestroyInstanceDialog({
       }
       notes={[
         'The volumes are handled before the Pod, as kubectl cnpg destroy does, so the operator never recreates this Pod on them.',
-        `${pod} must be fenced first; its name is removed from the fence once it is destroyed (a fence on every instance, ["*"], stays).`,
+        fenceOffered
+          ? `Once ${pod} is destroyed its name is removed from the fence (a fence on every instance, ["*"], stays).`
+          : `${pod} must be fenced first; its name is removed from the fence once it is destroyed (a fence on every instance, ["*"], stays).`,
         'Use this for a standby that cannot rejoin (for example after a failed pg_rewind or a corrupted volume). A plain restart deletes only the Pod and keeps the volumes attached.',
         keep ? 'Kept volumes stay in the namespace, no longer owned by the cluster; delete them yourself once you no longer need them.' : null,
       ].filter(Boolean) as string[]}
@@ -108,10 +112,9 @@ export function CNPGDestroyInstanceDialog({
           ? 'Reading the instance’s volumes…'
           : !data
             ? plan.error instanceof Error ? plan.error.message : 'The destroy plan could not be read'
-            : !cap?.allowed
-              ? cap?.reason ?? 'Not allowed'
-              : undefined
+            : cnpgDestroyBlocker(cap, pod, fenceOffered)
       }
+      guardSatisfied={!!cap?.allowed}
       isLoading={mutation.isPending}
       error={mutation.error?.message}
       outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}
@@ -131,9 +134,9 @@ export function CNPGDestroyInstanceDialog({
         </div>
       )}
       {plan.isLoading && <PaneLoader label="Reading the instance’s volumes…" className="h-16" />}
-      {data && !fenced && onFenceFirst && (
+      {fenceOffered && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-theme-border bg-theme-elevated p-3 text-sm text-theme-text-secondary">
-          <span>The operator never promotes a fenced instance, so fencing {pod} keeps a failover from making it primary while it is destroyed.</span>
+          <span>{pod} must be fenced before it is destroyed: the operator never promotes a fenced instance, so a failover cannot make it primary meanwhile.</span>
           <button type="button" onClick={onFenceFirst} className="btn-brand rounded-lg px-3 py-1.5 text-sm font-medium">
             Fence {pod} first
           </button>

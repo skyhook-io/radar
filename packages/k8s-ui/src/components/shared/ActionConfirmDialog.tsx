@@ -40,6 +40,8 @@ export interface ActionConfirmDialogProps {
   disruptive?: boolean
   /** Why the action cannot run right now; disables confirm and is shown. */
   disabledReason?: string
+  /** What the form still needs (an unchanged value, a missing input); disables confirm with a quiet hint beside it, not an alert. */
+  incompleteReason?: string
   isLoading?: boolean
   /** Error from the last attempt, shown inline so the user can adjust and retry. */
   error?: string | null
@@ -74,6 +76,7 @@ export function ActionConfirmDialog({
   confirmLabel,
   disruptive = false,
   disabledReason,
+  incompleteReason,
   isLoading = false,
   error,
   outcomeUnknown = false,
@@ -94,7 +97,7 @@ export function ActionConfirmDialog({
   }, [open])
 
   const typedOk = !typedConfirmation || typed.trim() === typedConfirmation
-  const canConfirm = !disabledReason && !outcomeUnknown && typedOk && guardSatisfied && !isLoading
+  const canConfirm = !disabledReason && !incompleteReason && !outcomeUnknown && typedOk && guardSatisfied && !isLoading
   const where = [subject.namespace, subject.name].filter(Boolean).join('/')
 
   return (
@@ -205,6 +208,7 @@ export function ActionConfirmDialog({
       </div>
 
       <div className="flex items-center justify-end gap-3 border-t border-theme-border p-4">
+        {incompleteReason && !disabledReason && <span className="mr-auto min-w-0 text-xs text-theme-text-tertiary">{incompleteReason}</span>}
         <button
           type="button"
           onClick={onClose}

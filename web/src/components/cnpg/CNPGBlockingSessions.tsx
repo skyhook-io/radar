@@ -333,7 +333,8 @@ function SignalDialog({
       typedConfirmation={terminate ? String(session.pid) : undefined}
       confirmLabel={terminate ? 'Terminate backend' : 'Stop query'}
       disruptive={terminate}
-      disabledReason={!caps.data ? 'Reading the cluster…' : data.permission.exec === 'denied' ? `Needs ${data.permission.grant}` : undefined}
+      disabledReason={caps.data && data.permission.exec === 'denied' ? `Needs ${data.permission.grant}` : undefined}
+      incompleteReason={!caps.data ? 'Reading the cluster…' : undefined}
       isLoading={mutation.isPending}
       error={mutation.error?.message}
       outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}

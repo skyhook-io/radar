@@ -56,9 +56,9 @@ function EditScheduleDialog({ namespace, name, onClose }: { namespace: string; n
   const next = draft.trim()
   const settled = debounced === next && preview.data?.schedule === next && !preview.isFetching
   const p = settled ? preview.data : undefined
-  const disabledReason = !data.actions.setSchedule.allowed
-    ? data.actions.setSchedule.reason
-    : next === ''
+  const disabledReason = !data.actions.setSchedule.allowed ? data.actions.setSchedule.reason : preview.error ? 'The schedule could not be checked' : undefined
+  const incompleteReason =
+    next === ''
       ? 'Enter a schedule'
       : next === current
         ? 'The schedule is unchanged'
@@ -66,9 +66,7 @@ function EditScheduleDialog({ namespace, name, onClose }: { namespace: string; n
           ? 'Checking the schedule…'
           : p && !p.valid
             ? 'The operator cannot run this schedule'
-            : preview.error
-              ? 'The schedule could not be checked'
-              : undefined
+            : undefined
   const warnings = [...(operatorNote?.tone === 'warning' ? [operatorNote.text] : []), ...(p?.valid && p.runsImmediately ? ['Saving makes the operator create one backup right away: a time on the new schedule has passed since its last check.'] : [])]
   return (
     <ActionConfirmDialog
@@ -103,6 +101,7 @@ function EditScheduleDialog({ namespace, name, onClose }: { namespace: string; n
       error={mutation.error?.message}
       outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}
       disabledReason={disabledReason}
+      incompleteReason={incompleteReason}
     >
       <div className="space-y-2">
         <label className="block text-xs font-medium text-theme-text-secondary" htmlFor="cnpg-schedule-input">

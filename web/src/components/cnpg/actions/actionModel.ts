@@ -1,4 +1,4 @@
-import type { CNPGBackupMethod } from '../../../api/cnpg'
+import type { CNPGActionCapability, CNPGBackupMethod } from '../../../api/cnpg'
 
 export interface StandbyChoice {
   pod: string
@@ -37,4 +37,17 @@ export function pickDefaultStandby(standbys: StandbyChoice[]): StandbyChoice | u
   return [...eligible].sort(
     (a, b) => rank(a) - rank(b) || (a.replayLagSeconds ?? Number.POSITIVE_INFINITY) - (b.replayLagSeconds ?? Number.POSITIVE_INFINITY),
   )[0]
+}
+
+/**
+ * What blocks destroying an instance, for the dialog's alert. The missing
+ * fence is left out when the dialog already offers "Fence first": saying it
+ * again as an alert only repeats the callout. The server checks the fence
+ * after every other state guard, so its reason names the fence only when
+ * nothing else blocks.
+ */
+export function cnpgDestroyBlocker(cap: CNPGActionCapability | undefined, pod: string, fenceOffered: boolean): string | undefined {
+  if (!cap || cap.allowed) return undefined
+  if (fenceOffered && cap.permission !== 'denied' && cap.reason?.startsWith(`Fence ${pod} first`)) return undefined
+  return cap.reason ?? 'Not allowed'
 }

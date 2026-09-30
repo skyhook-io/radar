@@ -172,16 +172,9 @@ function RecordDialog({
       error={mutation.error instanceof Error ? mutation.error.message : null}
       writes={[{ summary: `patch Cluster ${namespace}/${name} metadata`, detail: `metadata.annotations["${RESTORE_VALIDATION_ANNOTATION}"] = {"checked": …, "recordedBy": <you>, "recordedAt": <now>, "source": …, "target": …}` }]}
       warnings={restoreDone ? [] : ['The restore has not completed yet; record what you checked once it has.']}
-      disabledReason={
-        !caps.data
-          ? 'Loading…'
-          : patchCap && patchCap.permission === 'denied'
-            ? `Recording needs patch clusters in ${namespace}`
-            : !checked.trim()
-              ? 'Describe what you checked.'
-              : target && !targetIso
-                ? 'The recovery target is not a valid time.'
-                : undefined
+      disabledReason={caps.data && patchCap?.permission === 'denied' ? `Recording needs patch clusters in ${namespace}` : undefined}
+      incompleteReason={
+        !caps.data ? 'Loading…' : !checked.trim() ? 'Describe what you checked.' : target && !targetIso ? 'The recovery target is not a valid time.' : undefined
       }
     >
       <div className="space-y-3">

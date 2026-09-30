@@ -131,6 +131,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
         onClose={onClose}
         initialYaml={manifest}
         initialMode="create"
+        lockMode
         title={`Restore into a new cluster ${name}`}
         onCreated={(created) => {
           onClose()
@@ -149,21 +150,23 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
     )
   }
 
-  const disabledReason = workspace.isLoading
-    ? 'Loading backups and object stores…'
-    : sources.length === 0
+  const disabledReason =
+    !workspace.isLoading && sources.length === 0
       ? entry.kind === 'backup'
         ? 'This Backup cannot be restored: it has not completed, or its object store and backup ID are not recorded.'
         : entry.kind === 'objectStore'
           ? 'This ObjectStore reports no server with backups yet.'
           : 'This cluster has no backup destination and no completed Backup to restore from.'
-      : !NAME_RE.test(name)
-        ? 'The new name must be a valid Kubernetes object name.'
-        : clusters.some((c: any) => c.metadata?.namespace === namespace && c.metadata?.name === name)
-          ? `A Cluster named ${name} already exists in ${namespace}.`
-          : effectiveKind === 'time' && !targetIso
-            ? 'Enter the point in time to recover to.'
-            : undefined
+      : undefined
+  const incompleteReason = workspace.isLoading
+    ? 'Loading backups and object stores…'
+    : !NAME_RE.test(name)
+      ? 'The new name must be a valid Kubernetes object name.'
+      : clusters.some((c: any) => c.metadata?.namespace === namespace && c.metadata?.name === name)
+        ? `A Cluster named ${name} already exists in ${namespace}.`
+        : effectiveKind === 'time' && !targetIso
+          ? 'Enter the point in time to recover to.'
+          : undefined
 
   return (
     <ActionConfirmDialog
@@ -188,6 +191,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
         ...warnings,
       ]}
       disabledReason={disabledReason}
+      incompleteReason={incompleteReason}
     >
       <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-3">

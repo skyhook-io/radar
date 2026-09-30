@@ -56,6 +56,8 @@ export interface CreateResourceDialogProps {
   onCreated?: (result: ApplyResult) => void
   /** Start in strict create mode (e.g. a prefilled manifest that must not update an existing object). */
   initialMode?: 'apply' | 'create'
+  /** Hide the Apply/Create choice and Force while the dialog stays in `initialMode` (e.g. a new object that must only be created). */
+  lockMode?: boolean
 }
 
 export function CreateResourceDialog({
@@ -71,6 +73,7 @@ export function CreateResourceDialog({
   schemaLoader,
   onCreated,
   initialMode = 'apply',
+  lockMode = false,
 }: CreateResourceDialogProps) {
   const titleId = useId()
   const [yaml, setYaml] = useState(initialYaml)
@@ -363,6 +366,7 @@ export function CreateResourceDialog({
   }, [preview, onApply, onPreview, finishApply])
 
   const dialogTitle = title || 'Create Resource'
+  const showModeControls = !lockMode || mode !== initialMode
   const submitLabel = onPreview ? 'Review' : mode === 'create' ? 'Create' : 'Apply'
 
   return (
@@ -485,33 +489,35 @@ export function CreateResourceDialog({
 
           <div className="flex shrink-0 items-center justify-between border-t border-theme-border px-5 py-3">
             <div className="flex items-center gap-3">
-              <Tooltip
-                content="Apply: create or update (idempotent). Create: fail if exists."
-                position="bottom"
-              >
-                <div
-                  className="flex items-center rounded-md border border-theme-border bg-theme-base p-0.5"
-                  role="radiogroup"
-                  aria-label="Apply mode"
+              {showModeControls && (
+                <Tooltip
+                  content="Apply: create or update (idempotent). Create: fail if exists."
+                  position="bottom"
                 >
-                  {(['apply', 'create'] as const).map((option) => (
-                    <button
-                      type="button"
-                      key={option}
-                      onClick={() => setMode(option)}
-                      role="radio"
-                      aria-checked={mode === option}
-                      className={`rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors ${
-                        mode === option
-                          ? 'bg-theme-elevated text-theme-text-primary shadow-theme-sm'
-                          : 'text-theme-text-tertiary hover:text-theme-text-secondary'
-                      }`}
-                    >
-                      {option}
-                    </button>
-                  ))}
-                </div>
-              </Tooltip>
+                  <div
+                    className="flex items-center rounded-md border border-theme-border bg-theme-base p-0.5"
+                    role="radiogroup"
+                    aria-label="Apply mode"
+                  >
+                    {(['apply', 'create'] as const).map((option) => (
+                      <button
+                        type="button"
+                        key={option}
+                        onClick={() => setMode(option)}
+                        role="radio"
+                        aria-checked={mode === option}
+                        className={`rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors ${
+                          mode === option
+                            ? 'bg-theme-elevated text-theme-text-primary shadow-theme-sm'
+                            : 'text-theme-text-tertiary hover:text-theme-text-secondary'
+                        }`}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                </Tooltip>
+              )}
 
               {!onPreview && (
                 <Tooltip
@@ -530,23 +536,25 @@ export function CreateResourceDialog({
                 </Tooltip>
               )}
 
-              <Tooltip
-                content="Override field ownership conflicts. An active controller may reconcile those fields back."
-                position="bottom"
-              >
-                <label
-                  className={`flex items-center gap-1.5 text-xs ${mode === 'apply' ? 'cursor-pointer text-theme-text-secondary' : 'cursor-not-allowed text-theme-text-tertiary'}`}
+              {showModeControls && (
+                <Tooltip
+                  content="Override field ownership conflicts. An active controller may reconcile those fields back."
+                  position="bottom"
                 >
-                  <input
-                    type="checkbox"
-                    checked={mode === 'apply' && force}
-                    disabled={mode !== 'apply'}
-                    onChange={(event) => setForce(event.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-theme-border bg-theme-base"
-                  />
-                  Force
-                </label>
-              </Tooltip>
+                  <label
+                    className={`flex items-center gap-1.5 text-xs ${mode === 'apply' ? 'cursor-pointer text-theme-text-secondary' : 'cursor-not-allowed text-theme-text-tertiary'}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={mode === 'apply' && force}
+                      disabled={mode !== 'apply'}
+                      onChange={(event) => setForce(event.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-theme-border bg-theme-base"
+                    />
+                    Force
+                  </label>
+                </Tooltip>
+              )}
             </div>
 
             <div className="flex items-center gap-2">

@@ -213,6 +213,8 @@ interface DialogSpec {
   params?: Record<string, unknown>
   success: (result: { backup?: string }) => string
   invalid?: string
+  /** What the form still needs; disables confirm without an alert. */
+  incomplete?: string
 }
 
 type TrackedSpec = Omit<TrackCNPGOperationInput, 'context' | 'namespace' | 'cluster' | 'clusterUID'>
@@ -415,7 +417,8 @@ export function ClusterActionDialog({
           ],
           scope: { kind: 'create-child' },
           params: { method: method?.method, pluginName: method?.pluginName, target: target || undefined, name: backupName },
-          invalid: !method ? 'This cluster declares no backup method.' : !/^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/.test(backupName) ? 'The name must be a valid Kubernetes object name.' : undefined,
+          invalid: !method ? 'This cluster declares no backup method.' : undefined,
+          incomplete: !/^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/.test(backupName) ? 'The name must be a valid Kubernetes object name.' : undefined,
           success: (r) => `Backup ${r.backup ?? backupName} requested. The operator does the rest.`,
         }
       case 'switchover':
@@ -470,7 +473,7 @@ export function ClusterActionDialog({
           typed: true,
           disruptive: true,
           params: { target: switchTarget, targetPodUID: chosenStandby?.podUID },
-          invalid: !switchTarget || chosenStandby?.ineligible ? 'Pick an eligible standby.' : undefined,
+          incomplete: !switchTarget || chosenStandby?.ineligible ? 'Pick an eligible standby.' : undefined,
           success: () => `Switchover to ${switchTarget} requested.`,
         }
       case 'restart':
@@ -706,6 +709,7 @@ export function ClusterActionDialog({
       confirmLabel={spec.confirmLabel}
       disruptive={spec.disruptive}
       disabledReason={!cap.allowed ? capabilityTitle(cap) : spec.invalid}
+      incompleteReason={spec.incomplete}
       isLoading={mutation.isPending}
       error={mutation.error?.message}
       outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}

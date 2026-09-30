@@ -447,7 +447,7 @@ function ResizeDialog({
   }
   const next = parseQuantityToNumber(size)
   const current = parseQuantityToNumber(target.declared)
-  const disabledReason = !cluster
+  const incompleteReason = !cluster
     ? 'Loading the cluster…'
     : !next
       ? 'Enter a size such as 20Gi.'
@@ -476,7 +476,7 @@ function ResizeDialog({
       guard={guard.node}
       guardSatisfied={guard.satisfied}
       confirmLabel="Review manifest"
-      disabledReason={disabledReason}
+      incompleteReason={incompleteReason}
     >
       <div className="grid grid-cols-[8rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
         <label className="text-xs text-theme-text-secondary" htmlFor="cnpg-resize-size">New size</label>
