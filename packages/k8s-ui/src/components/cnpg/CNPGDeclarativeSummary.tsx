@@ -202,6 +202,7 @@ export interface CNPGLogicalPathReading {
   path: CNPGLogicalPath
   /** The publisher primary's report of the slot; absent when not read. */
   slot?: CNPGFact
+  notice?: ReactNode
 }
 
 export function CNPGPublicationSummary({
@@ -251,7 +252,7 @@ export function CNPGPublicationSummary({
       ) : (
         <div className="space-y-3">
           {readings.map((r) => (
-            <CNPGLogicalPathView key={`${r.path.subscription.namespace}/${r.path.subscription.name}`} path={r.path} slot={r.slot} onNavigate={onNavigate} compact />
+            <CNPGLogicalPathView key={`${r.path.subscription.namespace}/${r.path.subscription.name}`} path={r.path} slot={r.slot} notice={r.notice} onNavigate={onNavigate} compact />
           ))}
         </div>
       )}
@@ -384,7 +385,7 @@ export function CNPGSubscriptionSummary({
       {reading.path && (
         <>
           <SummaryHeading>Replication path</SummaryHeading>
-          <CNPGLogicalPathView path={reading.path} slot={reading.slot} onNavigate={onNavigate} />
+          <CNPGLogicalPathView path={reading.path} slot={reading.slot} notice={reading.notice} onNavigate={onNavigate} />
         </>
       )}
     </SummaryShell>

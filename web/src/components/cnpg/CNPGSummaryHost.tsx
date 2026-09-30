@@ -171,16 +171,16 @@ function useLogicalWorkspace(ws: CNPGWorkspaceResponse | null, subscriptions: an
   return { clusters: merged('clusters'), publications: merged('publications'), poolers: merged('poolers') }
 }
 
-function LogicalPathSlot({ path, children }: { path: CNPGLogicalPath; children: (slot: ReturnType<typeof cnpgLogicalSlotFact>) => ReactNode }) {
-  const observed = useCNPGPublisherSlots(path.publisher)
-  return <>{children(cnpgLogicalSlotFact(path, observed))}</>
+function LogicalPathSlot({ path, children }: { path: CNPGLogicalPath; children: (slot: ReturnType<typeof cnpgLogicalSlotFact>, notice: ReactNode) => ReactNode }) {
+  const { observed, query } = useCNPGPublisherSlots(path.publisher)
+  return <>{children(cnpgLogicalSlotFact(path, observed), <CNPGRefreshFailedNotice queries={[query]} />)}</>
 }
 
 function SubscriptionSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: CNPGNavigate }) {
   const lw = useLogicalWorkspace(props.workspace, [props.resource])
   const path = props.workspace ? cnpgLogicalPaths([props.resource], lw.clusters, lw.publications, lw.poolers)[0] : undefined
   if (!path) return <CNPGSubscriptionSummary {...props} />
-  return <LogicalPathSlot path={path}>{(slot) => <CNPGSubscriptionSummary {...props} logicalPath={{ path, slot }} />}</LogicalPathSlot>
+  return <LogicalPathSlot path={path}>{(slot, notice) => <CNPGSubscriptionSummary {...props} logicalPath={{ path, slot, notice }} />}</LogicalPathSlot>
 }
 
 function PublicationSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: CNPGNavigate }) {
@@ -196,8 +196,9 @@ function PublicationSummaryHost(props: { resource: any; workspace: CNPGWorkspace
         (p) => p.publication.object?.namespace === ns && p.publication.object?.name === props.resource?.metadata?.name,
       )
     : []
-  const observed = cnpgPublisherSlotsFrom(runtime.data, runtime.error)
-  return <CNPGPublicationSummary {...props} subscribers={paths.map((path) => ({ path, slot: cnpgLogicalSlotFact(path, observed) }))} />
+  const observed = cnpgPublisherSlotsFrom(runtime.data, runtime.error, runtime.isRefetchError)
+  const notice = <CNPGRefreshFailedNotice queries={[runtime]} />
+  return <CNPGPublicationSummary {...props} subscribers={paths.map((path) => ({ path, slot: cnpgLogicalSlotFact(path, observed), notice }))} />
 }
 
 const OBJECT_SUMMARIES: Record<string, ObjectSummary> = {

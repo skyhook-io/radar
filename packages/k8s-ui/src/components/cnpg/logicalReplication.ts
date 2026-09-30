@@ -197,8 +197,11 @@ export function cnpgLogicalPaths(subscriptions: any[], clusters: any[], publicat
 
 /** What the publisher primary's instance manager says about one slot, in a shape independent of the runtime API. */
 export interface CNPGPublisherSlots {
-  state: 'ok' | 'denied' | 'unavailable' | 'notRead'
+  /** partial: the report was capped or incomplete, so a slot missing from it may exist. */
+  state: 'ok' | 'partial' | 'denied' | 'unavailable' | 'notRead'
   reason?: string
+  /** The latest refresh failed; slots are from an earlier read. */
+  stale?: boolean
   slots?: { name: string; type?: string; active?: boolean; walStatus?: string; retainedBytes?: number; database?: string }[]
 }
 
@@ -219,10 +222,17 @@ export function cnpgLogicalSlotFact(path: CNPGLogicalPath, observed: CNPGPublish
   if (!path.slot.name) return { text: path.slot.reason ?? 'No slot', tone: 'neutral' }
   if (path.publisher.kind !== 'cluster') return { text: `Slot ${path.slot.name}: not observable (publisher outside this cluster's view)`, tone: 'unknown' }
   if (observed.state === 'denied') return { text: `Slot ${path.slot.name}: no access (needs get pods/proxy on the publisher)`, tone: 'unknown', source: SLOT_SOURCE }
-  if (observed.state !== 'ok' || !observed.slots) {
+  if ((observed.state !== 'ok' && observed.state !== 'partial') || !observed.slots) {
     return { text: `Slot ${path.slot.name}: not read${observed.reason ? ` (${observed.reason})` : ''}`, tone: 'unknown', source: SLOT_SOURCE }
   }
   const s = observed.slots.find((x) => x.name === path.slot.name)
+  if (!s && (observed.state === 'partial' || observed.stale)) {
+    return {
+      text: `Slot ${path.slot.name}: not in the reported slots (${observed.stale ? 'from an earlier read; the latest refresh failed' : `report incomplete${observed.reason ? `: ${observed.reason}` : ''}`})`,
+      tone: 'unknown',
+      source: SLOT_SOURCE,
+    }
+  }
   if (!s) {
     return {
       text: `Slot ${path.slot.name} not found on the publisher primary${path.slot.reason ? `: ${path.slot.reason}` : ''}`,
@@ -234,5 +244,8 @@ export function cnpgLogicalSlotFact(path: CNPGLogicalPath, observed: CNPGPublish
   if (s.retainedBytes !== undefined) parts.push(`retains ${bytesText(s.retainedBytes)} of WAL`)
   if (s.walStatus) parts.push(`WAL ${s.walStatus}`)
   const bad = s.active === false || s.walStatus === 'lost' || s.walStatus === 'unreserved'
+  if (observed.stale) {
+    return { text: `${parts.join(' · ')} (from an earlier read; the latest refresh failed)`, tone: 'unknown', source: SLOT_SOURCE }
+  }
   return { text: parts.join(' · '), tone: s.walStatus === 'lost' ? 'unhealthy' : bad ? 'degraded' : 'healthy', source: SLOT_SOURCE }
 }

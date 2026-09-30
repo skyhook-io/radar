@@ -20,7 +20,20 @@ function Hop({ label, children }: { label: string; children: ReactNode }) {
  * failover. `slot` is the host's reading of the publisher primary; absent
  * means it was not read.
  */
-export function CNPGLogicalPathView({ path, slot, onNavigate, compact }: { path: CNPGLogicalPath; slot?: CNPGFact; onNavigate?: CNPGNavigate; compact?: boolean }) {
+export function CNPGLogicalPathView({
+  path,
+  slot,
+  onNavigate,
+  compact,
+  notice,
+}: {
+  path: CNPGLogicalPath
+  slot?: CNPGFact
+  onNavigate?: CNPGNavigate
+  compact?: boolean
+  /** The host's word on the slot reading, e.g. that its latest refresh failed. */
+  notice?: ReactNode
+}) {
   const s = path.subscription
   const pub = path.publication
   const publisher = path.publisher
@@ -64,6 +77,7 @@ export function CNPGLogicalPathView({ path, slot, onNavigate, compact }: { path:
   if (compact) {
     return (
       <div className="space-y-1">
+        {notice}
         {chain}
         <div className={`text-xs ${toneTextClass(path.failover.tone)}`}>Failover: {path.failover.text}</div>
       </div>
@@ -71,6 +85,7 @@ export function CNPGLogicalPathView({ path, slot, onNavigate, compact }: { path:
   }
   return (
     <div className="space-y-3">
+      {notice}
       {chain}
       <FactGrid>
         <FactRow label="Publisher">

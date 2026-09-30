@@ -18,6 +18,7 @@ import {
 import { useCNPGPublisherSlots } from './logicalSlots'
 import type { SelectedResource } from '../../types'
 import {
+  CNPGRefreshFailedNotice,
   CNPGWorkspaceHeader,
   CoverageNotice,
   FilterChips,
@@ -334,10 +335,16 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
 }
 
 function LogicalPathRow({ path, onInspect }: { path: CNPGLogicalPath; onInspect: CNPGScreenProps['onInspect'] }) {
-  const observed = useCNPGPublisherSlots(path.publisher)
+  const { observed, query } = useCNPGPublisherSlots(path.publisher)
   return (
     <div className="px-4 py-3">
-      <CNPGLogicalPathView path={path} slot={cnpgLogicalSlotFact(path, observed)} onNavigate={(ref) => onInspect(refToSelectedResource(ref))} compact />
+      <CNPGLogicalPathView
+        path={path}
+        slot={cnpgLogicalSlotFact(path, observed)}
+        notice={<CNPGRefreshFailedNotice queries={[query]} />}
+        onNavigate={(ref) => onInspect(refToSelectedResource(ref))}
+        compact
+      />
     </div>
   )
 }

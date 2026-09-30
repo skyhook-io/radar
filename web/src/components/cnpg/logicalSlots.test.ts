@@ -20,4 +20,11 @@ describe('cnpgPublisherSlotsFrom', () => {
     const r = cnpgPublisherSlotsFrom(rt({ state: 'ok', slots: [{ name: 'orders_sub', type: 'logical', active: true, retainedBytes: 10 }] }))
     expect(r).toEqual({ state: 'ok', slots: [{ name: 'orders_sub', type: 'logical', active: true, walStatus: undefined, retainedBytes: 10, database: undefined }] })
   })
+  it('keeps a capped report partial and marks cached data after a failed refresh', () => {
+    const capped = cnpgPublisherSlotsFrom(rt({ state: 'partial', reason: '250 replication slots; the first 200 are shown', slots: [] }))
+    expect(capped.state).toBe('partial')
+    expect(capped.reason).toContain('250')
+    expect(cnpgPublisherSlotsFrom(rt({ state: 'ok', slots: [] }), new Error('boom'), true).stale).toBe(true)
+    expect(cnpgPublisherSlotsFrom(rt({ state: 'partial', incomplete: true, slots: null })).state).toBe('unavailable')
+  })
 })
