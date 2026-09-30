@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react'
 import { getCNPGDeclarativeMessage, getCNPGReclaimPolicy } from '../resources/resource-utils-cnpg'
-import type { CNPGWorkspaceResponse } from './workspace'
+import type { CNPGFact, CNPGWorkspaceResponse } from './workspace'
+import { cnpgLogicalPaths, type CNPGLogicalPath } from './logicalReplication'
+import { CNPGLogicalPathView } from './CNPGLogicalPath'
 import { cnpgDatabaseRoleFacts } from './databaseRole'
 import { FactGrid, FactRow, FactValue, RefLink, SummaryHeading, toneTextClass, type CNPGNavigate } from './primitives'
 import { ClusterLink, NotReported, ObjectProblems, SummaryShell } from './CNPGSharedSummary'
@@ -192,7 +194,31 @@ function publicationTargets(resource: any): ReactNode {
   )
 }
 
-export function CNPGPublicationSummary({ resource, workspace, onNavigate }: SummaryProps) {
+function workspacePaths(workspace: CNPGWorkspaceResponse | null | undefined, subscriptions: any[]): CNPGLogicalPath[] {
+  return cnpgLogicalPaths(subscriptions, clustersIn(workspace), workspaceList(workspace, 'publications'), workspaceList(workspace, 'poolers'))
+}
+
+export interface CNPGLogicalPathReading {
+  path: CNPGLogicalPath
+  /** The publisher primary's report of the slot; absent when not read. */
+  slot?: CNPGFact
+}
+
+export function CNPGPublicationSummary({
+  resource,
+  workspace,
+  onNavigate,
+  subscribers,
+}: SummaryProps & {
+  /** Subscriptions reading this publication, with their slots; derived from the workspace when omitted. */
+  subscribers?: CNPGLogicalPathReading[]
+}) {
+  const readings: CNPGLogicalPathReading[] =
+    subscribers ??
+    workspacePaths(workspace, workspaceList(workspace, 'subscriptions'))
+      .filter((p) => p.publication.object?.namespace === resource?.metadata?.namespace && p.publication.object?.name === resource?.metadata?.name)
+      .map((path) => ({ path }))
+  const subsUnavailable = relationUnavailable(workspace, 'subscriptions', resource?.metadata?.namespace ?? '', 'Subscriptions')
   return (
     <SummaryShell>
       <ObjectProblems issues={workspace?.issues} subject={refOf(resource, 'Publication')} onNavigate={onNavigate} />
@@ -216,6 +242,19 @@ export function CNPGPublicationSummary({ resource, workspace, onNavigate }: Summ
       </FactGrid>
 
       <Reconciled resource={resource} />
+
+      <SummaryHeading hint="Subscription objects Radar can see">Subscribers</SummaryHeading>
+      {readings.length === 0 ? (
+        <div className="text-sm text-theme-text-tertiary">
+          {subsUnavailable ?? 'No visible Subscription object reads this publication. Subscribers outside Radar\'s view, or created in SQL, are not listed.'}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {readings.map((r) => (
+            <CNPGLogicalPathView key={`${r.path.subscription.namespace}/${r.path.subscription.name}`} path={r.path} slot={r.slot} onNavigate={onNavigate} compact />
+          ))}
+        </div>
+      )}
     </SummaryShell>
   )
 }
@@ -292,7 +331,16 @@ export function CNPGDatabaseRoleSummary({ resource, workspace, onNavigate }: Sum
   )
 }
 
-export function CNPGSubscriptionSummary({ resource, workspace, onNavigate }: SummaryProps) {
+export function CNPGSubscriptionSummary({
+  resource,
+  workspace,
+  onNavigate,
+  logicalPath,
+}: SummaryProps & {
+  /** The path and slot reading; derived from the workspace (slot not read) when omitted. */
+  logicalPath?: CNPGLogicalPathReading
+}) {
+  const reading: Partial<CNPGLogicalPathReading> = logicalPath ?? { path: workspacePaths(workspace, [resource])[0] }
   const pub = resource?.spec?.publicationName
   const ext = resource?.spec?.externalClusterName
   return (
@@ -332,6 +380,13 @@ export function CNPGSubscriptionSummary({ resource, workspace, onNavigate }: Sum
       </FactGrid>
 
       <Reconciled resource={resource} />
+
+      {reading.path && (
+        <>
+          <SummaryHeading>Replication path</SummaryHeading>
+          <CNPGLogicalPathView path={reading.path} slot={reading.slot} onNavigate={onNavigate} />
+        </>
+      )}
     </SummaryShell>
   )
 }

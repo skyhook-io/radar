@@ -15,6 +15,9 @@ import {
   CNPGScheduledBackupSummary,
   CNPGSubscriptionSummary,
   CNPGDatabaseRoleSummary,
+  cnpgLogicalPaths,
+  cnpgLogicalSlotFact,
+  cnpgSubscriptionHostNamespace,
   FactRow,
   FactSource,
   FactValue,
@@ -23,11 +26,13 @@ import {
   refToSelectedResource,
   type CNPGNavigate,
   type CNPGRef,
+  type CNPGLogicalPath,
   type CNPGWorkspaceResponse,
   type NavigateToResource,
 } from '@skyhook-io/k8s-ui'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
-import { useCNPGRuntime, useCNPGScheduleCapabilities, type CNPGRuntimeResponse } from '../../api/cnpg'
+import { useCNPGRuntime, useCNPGScheduleCapabilities, useCNPGWorkspace, type CNPGRuntimeResponse } from '../../api/cnpg'
+import { cnpgPublisherSlotsFrom, useCNPGPublisherSlots } from './logicalSlots'
 import { cnpgBaseBackupFacts, describeCNPGBaseBackup } from './baseBackup'
 import { useCNPGPoolerLive } from './useCNPGPoolerLive'
 import { cnpgInstanceLive, cnpgReplicationLive, useCNPGClusterHA, withLiveReplication } from '../../api/cnpg-ha'
@@ -156,13 +161,52 @@ function ScheduledBackupSummaryHost(props: { resource: any; workspace: CNPGWorks
   return <CNPGScheduledBackupSummary {...props} schedulePreview={caps.data?.facts.preview} />
 }
 
+// The publisher may live in another namespace than the subscriber: that
+// namespace's Clusters, Publications and Poolers are read too.
+function useLogicalWorkspace(ws: CNPGWorkspaceResponse | null, subscriptions: any[]) {
+  const hostNs = [...new Set(subscriptions.map((s) => cnpgSubscriptionHostNamespace(s, ws?.objects.clusters ?? [])).filter((n): n is string => !!n))]
+  const extra = ws?.namespaces === null ? [] : hostNs.filter((n) => !(ws?.namespaces ?? []).includes(n))
+  const other = useCNPGWorkspace(extra, { enabled: !!ws && extra.length > 0 })
+  const merged = (key: 'clusters' | 'publications' | 'poolers') => [...(ws?.objects[key] ?? []), ...(other.data?.installed ? other.data.objects[key] ?? [] : [])]
+  return { clusters: merged('clusters'), publications: merged('publications'), poolers: merged('poolers') }
+}
+
+function LogicalPathSlot({ path, children }: { path: CNPGLogicalPath; children: (slot: ReturnType<typeof cnpgLogicalSlotFact>) => ReactNode }) {
+  const observed = useCNPGPublisherSlots(path.publisher)
+  return <>{children(cnpgLogicalSlotFact(path, observed))}</>
+}
+
+function SubscriptionSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: CNPGNavigate }) {
+  const lw = useLogicalWorkspace(props.workspace, [props.resource])
+  const path = props.workspace ? cnpgLogicalPaths([props.resource], lw.clusters, lw.publications, lw.poolers)[0] : undefined
+  if (!path) return <CNPGSubscriptionSummary {...props} />
+  return <LogicalPathSlot path={path}>{(slot) => <CNPGSubscriptionSummary {...props} logicalPath={{ path, slot }} />}</LogicalPathSlot>
+}
+
+function PublicationSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: CNPGNavigate }) {
+  // Subscribers are the Subscriptions in view; the publisher's own runtime
+  // answers for every slot.
+  const pubCluster = props.resource?.spec?.cluster?.name
+  const ns = props.resource?.metadata?.namespace ?? ''
+  const runtime = useCNPGRuntime(ns, pubCluster ?? '', !!pubCluster)
+  const all = useCNPGWorkspace([], { enabled: !!props.workspace })
+  const ws = all.data?.installed ? all.data : props.workspace
+  const paths = ws
+    ? cnpgLogicalPaths(ws.objects.subscriptions ?? [], ws.objects.clusters ?? [], ws.objects.publications ?? [], ws.objects.poolers ?? []).filter(
+        (p) => p.publication.object?.namespace === ns && p.publication.object?.name === props.resource?.metadata?.name,
+      )
+    : []
+  const observed = cnpgPublisherSlotsFrom(runtime.data, runtime.error)
+  return <CNPGPublicationSummary {...props} subscribers={paths.map((path) => ({ path, slot: cnpgLogicalSlotFact(path, observed) }))} />
+}
+
 const OBJECT_SUMMARIES: Record<string, ObjectSummary> = {
   Backup: CNPGBackupSummary,
   ScheduledBackup: ScheduledBackupSummaryHost,
   Pooler: CNPGPoolerSummary,
   Database: CNPGDatabaseSummary,
-  Publication: CNPGPublicationSummary,
-  Subscription: CNPGSubscriptionSummary,
+  Publication: PublicationSummaryHost,
+  Subscription: SubscriptionSummaryHost,
   DatabaseRole: CNPGDatabaseRoleSummary,
   ImageCatalog: CNPGImageCatalogSummary,
   ClusterImageCatalog: CNPGImageCatalogSummary,

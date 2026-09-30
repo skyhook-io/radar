@@ -1,7 +1,21 @@
 import { useMemo, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { AlertTriangle } from 'lucide-react'
-import { Badge, cnpgDatabaseRoleFacts, cnpgDatabaseRoleMeta, cnpgGitOpsSource, isApiGroup, toneTextClass, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
+import {
+  Badge,
+  CNPGLogicalPathView,
+  cnpgDatabaseRoleFacts,
+  cnpgDatabaseRoleMeta,
+  cnpgGitOpsSource,
+  cnpgLogicalPaths,
+  cnpgLogicalSlotFact,
+  isApiGroup,
+  refToSelectedResource,
+  toneTextClass,
+  type CNPGFleetRow,
+  type CNPGLogicalPath,
+} from '@skyhook-io/k8s-ui'
+import { useCNPGPublisherSlots } from './logicalSlots'
 import type { SelectedResource } from '../../types'
 import {
   CNPGWorkspaceHeader,
@@ -208,6 +222,22 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
     }
     return { failed, pending }
   }, [fleet.rows])
+  const logicalPaths = useMemo(() => {
+    const valid = (o: any) => isApiGroup(o?.apiVersion, 'postgresql.cnpg.io')
+    const paths = cnpgLogicalPaths(
+      (data.objects.subscriptions ?? []).filter(valid),
+      data.objects.clusters ?? [],
+      (data.objects.publications ?? []).filter(valid),
+      data.objects.poolers ?? [],
+    )
+    if (!clusterFilter) return paths
+    return paths.filter(
+      (p) =>
+        `${p.subscription.namespace}/${p.subscription.cluster}` === clusterFilter ||
+        (p.publisher.kind === 'cluster' && `${p.publisher.namespace}/${p.publisher.name}` === clusterFilter),
+    )
+  }, [data.objects.subscriptions, data.objects.clusters, data.objects.publications, data.objects.poolers, clusterFilter])
+
   const declCoverage = worstCoverage(data.coverage.databases, data.coverage.publications, data.coverage.subscriptions, data.coverage.databaseRoles)
 
   const chips = [
@@ -282,7 +312,32 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
             )
           })
         )}
+
+        {!show && logicalPaths.length > 0 && (
+          <section className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
+            <div className="flex flex-wrap items-baseline gap-x-3 border-b border-theme-border px-4 py-2.5">
+              <span className="text-sm font-semibold text-theme-text-primary">Logical replication</span>
+              <span className="text-xs text-theme-text-tertiary">
+                Each Subscription to its publication and the slot the publisher keeps for it · Subscriptions created in SQL are not listed
+              </span>
+            </div>
+            <div className="table-divide-subtle">
+              {logicalPaths.map((p) => (
+                <LogicalPathRow key={`${p.subscription.namespace}/${p.subscription.name}`} path={p} onInspect={onInspect} />
+              ))}
+            </div>
+          </section>
+        )}
       </ScreenBody>
+    </div>
+  )
+}
+
+function LogicalPathRow({ path, onInspect }: { path: CNPGLogicalPath; onInspect: CNPGScreenProps['onInspect'] }) {
+  const observed = useCNPGPublisherSlots(path.publisher)
+  return (
+    <div className="px-4 py-3">
+      <CNPGLogicalPathView path={path} slot={cnpgLogicalSlotFact(path, observed)} onNavigate={(ref) => onInspect(refToSelectedResource(ref))} compact />
     </div>
   )
 }

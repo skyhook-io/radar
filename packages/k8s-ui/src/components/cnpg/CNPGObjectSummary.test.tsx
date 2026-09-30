@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { CNPGBackupSummary, CNPGScheduledBackupSummary } from './CNPGBackupSummary'
 import { CNPGObjectStoreSummary } from './CNPGObjectStoreSummary'
-import { CNPGDatabaseSummary } from './CNPGDeclarativeSummary'
+import { CNPGDatabaseSummary, CNPGPublicationSummary, CNPGSubscriptionSummary } from './CNPGDeclarativeSummary'
 import { CNPGPoolerSummary } from './CNPGPoolerSummary'
 import { CNPGImageCatalogSummary } from './CNPGImageCatalogSummary'
 import { CNPG_WORKSPACE_KEYS, type CNPGWorkspaceKey, type CNPGWorkspaceResponse } from './workspace'
@@ -285,5 +285,28 @@ describe('CNPGImageCatalogSummary', () => {
     const catalog = { apiVersion: PG, kind: 'ClusterImageCatalog', metadata: { name: 'pg' }, spec: {} }
     const t = text(renderToString(<CNPGImageCatalogSummary resource={catalog} workspace={ws({}, { coverage: { clusters: { state: 'denied' } } })} />))
     expect(t).toContain('No access to Clusters')
+  })
+})
+
+describe('logical replication summaries', () => {
+  const src = { apiVersion: PG, kind: 'Cluster', metadata: { name: 'src', namespace: 'pg' }, spec: { instances: 2 } }
+  const dst = { apiVersion: PG, kind: 'Cluster', metadata: { name: 'dst', namespace: 'pg' }, spec: { instances: 1, externalClusters: [{ name: 'src', connectionParameters: { host: 'src-rw', dbname: 'app' } }] } }
+  const pub = { apiVersion: PG, kind: 'Publication', metadata: { name: 'orders-pub', namespace: 'pg' }, spec: { cluster: { name: 'src' }, name: 'orders_pub', dbname: 'app', target: { allTables: true } }, status: { applied: true } }
+  const sub = { apiVersion: PG, kind: 'Subscription', metadata: { name: 'orders-sub', namespace: 'pg' }, spec: { cluster: { name: 'dst' }, name: 'orders_sub', dbname: 'app', publicationName: 'orders_pub', externalClusterName: 'src' }, status: { applied: true } }
+  const w = ws({ clusters: [src, dst], publications: [pub], subscriptions: [sub] })
+
+  it('shows the subscription path with the slot unread and the failover verdict', () => {
+    const t = text(renderToString(<CNPGSubscriptionSummary resource={sub} workspace={w} onNavigate={nav} />))
+    expect(t).toContain('Replication path')
+    expect(t).toContain('orders_pub')
+    expect(t).toContain('Slot orders_sub: not read')
+    expect(t).toContain('Lost on failover')
+    expect(t).toContain('no pg_stat_subscription query')
+  })
+
+  it('lists the subscribers of a publication', () => {
+    const t = text(renderToString(<CNPGPublicationSummary resource={pub} workspace={w} onNavigate={nav} />))
+    expect(t).toContain('Subscribers')
+    expect(t).toContain('orders_sub')
   })
 })
