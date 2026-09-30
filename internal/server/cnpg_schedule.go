@@ -163,6 +163,10 @@ func describeCNPGSchedule(spec string) string {
 	}
 
 	domAny, dowAny := cronAny(dom), cronAny(dow)
+	domPhrase := "on day " + cronListPhrase(dom, nil, nil) + " of the month"
+	if step, ok := strings.CutPrefix(dom, "*/"); ok {
+		domPhrase = "every " + step + " days of the month from day 1"
+	}
 	var days string
 	switch {
 	case domAny && dowAny:
@@ -170,9 +174,13 @@ func describeCNPGSchedule(spec string) string {
 	case domAny:
 		days = "every " + cronListPhrase(dow, cnpgCronWeekdays, cnpgCronDowIdx)
 	case dowAny:
-		days = "on day " + cronListPhrase(dom, nil, nil) + " of the month"
+		days = domPhrase
+	case cronStarred(dom) || cronStarred(dow):
+		// robfig/cron v1 marks any field starting with * (including */n) as a
+		// wildcard, and a wildcard on either day field makes both must match.
+		days = domPhrase + ", when it is a " + cronListPhrase(dow, cnpgCronWeekdays, cnpgCronDowIdx)
 	default:
-		days = "on day " + cronListPhrase(dom, nil, nil) + " of the month or every " + cronListPhrase(dow, cnpgCronWeekdays, cnpgCronDowIdx)
+		days = domPhrase + " or every " + cronListPhrase(dow, cnpgCronWeekdays, cnpgCronDowIdx)
 	}
 	if !cronAny(mon) {
 		days += " in " + cronListPhrase(mon, cnpgCronMonths, cnpgCronMonthIdx)
@@ -212,6 +220,8 @@ func isCronNumber(s string) bool {
 }
 
 func cronAny(s string) bool { return s == "*" || s == "?" }
+
+func cronStarred(s string) bool { return strings.HasPrefix(s, "*") || strings.HasPrefix(s, "?") }
 
 // cronFieldPhrase words one time field: "every minute", "every 15 minutes",
 // "minute 5", "hours 9 through 17".

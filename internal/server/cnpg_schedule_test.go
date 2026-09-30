@@ -68,6 +68,8 @@ func TestDescribeCNPGSchedule(t *testing.T) {
 		"0 */15 * * * *":    "every 15 minutes, second 0",
 		"30 0 9-17 * * *":   "at 00:30 past the hour, during hours 9 through 17",
 		"0 0 */6 * * 1":     "every Monday, at 00:00 past the hour, every 6 hours",
+		"0 0 0 */2 * 1":     "every 2 days of the month from day 1, when it is a Monday at 00:00:00 UTC",
+		"0 0 0 1,15 * 1":    "on day 1 and 15 of the month or every Monday at 00:00:00 UTC",
 	} {
 		if got := describeCNPGSchedule(spec); got != want {
 			t.Errorf("describe(%q) = %q, want %q", spec, got, want)
