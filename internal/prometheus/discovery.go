@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -238,7 +240,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	// machine). Serial by necessity — port-forwarding mutates the owner's shared
 	// forward state.
 	var lastErr error
-	forbidden := 0
+	var denied []string
 	for _, cand := range candidates {
 		// Bail promptly if the run was superseded mid-fallback (Reset / context
 		// switch) rather than churning the rest of the list while holding the gate.
@@ -296,7 +298,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 			}
 			lastErr = fmt.Errorf("port-forward to %s/%s failed: %w", cand.Namespace, cand.Name, pfErr)
 			if strings.Contains(strings.ToLower(pfErr.Error()), "forbidden") {
-				forbidden++
+				denied = append(denied, deniedGrant(pfErr))
 			}
 			if !discoveryDiagnosticsSuppressed(ctx) {
 				errorlog.Record("prometheus", "error", "port-forward to %s/%s failed: %v", cand.Namespace, cand.Name, pfErr)
@@ -346,14 +348,41 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	switch {
 	case lastErr == nil:
 		return "", "", errPrometheusUnreachable
-	case len(candidates) == 1 && forbidden == 1:
-		return "", "", unreachableBecause("Radar found a service that may be Prometheus (%s/%s) but may not port-forward to it (needs create pods/portforward)", candidates[0].Namespace, candidates[0].Name)
-	case len(candidates) > 1 && forbidden == len(candidates):
-		return "", "", unreachableBecause("Radar found %d services that may be Prometheus but may not port-forward to them (needs create pods/portforward)", len(candidates))
+	case len(candidates) == 1 && len(denied) == 1:
+		return "", "", unreachableBecause("Radar found a service that may be Prometheus (%s/%s) but may not port-forward to it (%s)", candidates[0].Namespace, candidates[0].Name, deniedGrantsPhrase(denied))
+	case len(candidates) > 1 && len(denied) == len(candidates):
+		return "", "", unreachableBecause("Radar found %d services that may be Prometheus but may not port-forward to them (%s)", len(candidates), deniedGrantsPhrase(denied))
 	case len(candidates) > 1:
 		return "", "", unreachableBecause("Radar found %d services that may be Prometheus but none answered through a port-forward", len(candidates))
 	}
 	return "", "", lastErr
+}
+
+// A port-forward can be refused at any of its steps: reading the Service,
+// listing its Pods, or creating pods/portforward. The API server's Forbidden
+// message names the verb and resource that was refused.
+var forbiddenOperationRe = regexp.MustCompile(`cannot (\w+) resource "([^"]+)"`)
+
+// deniedGrant is the grant a Forbidden port-forward error names, or "" when
+// the message does not say.
+func deniedGrant(err error) string {
+	if m := forbiddenOperationRe.FindStringSubmatch(err.Error()); m != nil {
+		return m[1] + " " + m[2]
+	}
+	return ""
+}
+
+func deniedGrantsPhrase(grants []string) string {
+	var named []string
+	for _, g := range grants {
+		if g != "" && !slices.Contains(named, g) {
+			named = append(named, g)
+		}
+	}
+	if len(named) == 0 {
+		return "permission denied"
+	}
+	return "needs " + strings.Join(named, ", ")
 }
 
 // logDiscoveryEnded logs a discovery that ended on a context error, telling a
