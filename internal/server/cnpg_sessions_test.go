@@ -578,3 +578,44 @@ func TestParseCNPGShowState(t *testing.T) {
 		t.Error("output without paused must be an error")
 	}
 }
+
+func TestCNPGActionDestroyInstanceRefusesWithoutEveryGrantBeforeAnyWrite(t *testing.T) {
+	env := cnpgDestroyEnv(t)
+	env.denied = map[string]bool{"patch clusters": true}
+	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
+		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+	var ae *cnpgActionError
+	if !errors.As(err, &ae) || ae.Status != http.StatusForbidden || ae.Code == cnpgCodePartial {
+		t.Fatalf("err = %v, want a plain 403 naming patch clusters", err)
+	}
+	if !strings.Contains(ae.Message, "patch clusters") {
+		t.Errorf("message = %q", ae.Message)
+	}
+	if len(env.deletes) != 0 || len(env.patches) != 0 {
+		t.Errorf("wrote before the preflight refused: %d deletes, %d patches", len(env.deletes), len(env.patches))
+	}
+}
+
+func TestCNPGActionDestroyInstanceLeavesARecreatedClustersFences(t *testing.T) {
+	env := cnpgDestroyEnv(t)
+	env.typed.PrependReactor("delete", "jobs", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		fresh := cnpgDestroyCluster(nil)
+		fresh.SetUID("recreated")
+		fresh.SetResourceVersion("100")
+		if err := env.dyn.Tracker().Update(cnpgClusterGVR, fresh, "db"); err != nil {
+			t.Fatal(err)
+		}
+		return false, nil, nil
+	})
+	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
+		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+	var ae *cnpgActionError
+	if !errors.As(err, &ae) || ae.Code != cnpgCodePartial {
+		t.Fatalf("err = %v, want partial", err)
+	}
+	for _, p := range env.patches {
+		if p.GetResource().Resource == "clusters" {
+			t.Errorf("patched the recreated Cluster: %s", p.GetPatch())
+		}
+	}
+}

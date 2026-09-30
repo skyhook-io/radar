@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,13 +55,34 @@ var (
 )
 
 // cnpgDestroyGrants: with keepPVC the PVCs are updated (detached), otherwise
-// deleted.
+// deleted; the fence on the destroyed name is lifted last (patch clusters).
 func cnpgDestroyGrants(keepPVC bool) []cnpgGrant {
 	pvc := cnpgGrantDeletePVCs
 	if keepPVC {
 		pvc = cnpgGrantUpdatePVCs
 	}
-	return []cnpgGrant{cnpgGrantDeletePods, cnpgGrantListPVCs, pvc, cnpgGrantListJobs, cnpgGrantDeleteJobs}
+	return []cnpgGrant{cnpgGrantDeletePods, cnpgGrantListPVCs, pvc, cnpgGrantListJobs, cnpgGrantDeleteJobs, cnpgGrantPatchClusters}
+}
+
+// cnpgDestroyPreflight asks the apiserver, as the caller, for every grant the
+// sequence needs before its first write, so a missing one refuses the action
+// instead of stopping it halfway.
+func cnpgDestroyPreflight(ctx context.Context, x *cnpgClusterRun, keepPVC bool) error {
+	namespace := x.cluster.GetNamespace()
+	for _, g := range cnpgDestroyGrants(keepPVC) {
+		resource := g.resource
+		if g.subresource != "" {
+			resource += "/" + g.subresource
+		}
+		allowed, apiErr := k8score.CanI(ctx, x.c.typed, namespace, g.group, resource, g.verb)
+		switch {
+		case apiErr:
+			return cnpgRefuse(http.StatusServiceUnavailable, "", "Could not confirm you may %s; nothing was changed", g.String(namespace))
+		case !allowed:
+			return cnpgRefuse(http.StatusForbidden, "", "Destroying needs %s; nothing was changed", g.String(namespace))
+		}
+	}
+	return nil
 }
 
 func cnpgGuardDestroyInstance(f CNPGClusterFacts, i CNPGInstanceFact) string {
@@ -296,6 +318,9 @@ func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGAction
 	if inst.PodUID != p.PodUID {
 		return nil, cnpgChanged(x.facts, "Pod %s changed since you reviewed it", p.Pod)
 	}
+	if err := cnpgDestroyPreflight(ctx, x, p.KeepPVC); err != nil {
+		return nil, err
+	}
 	namespace, cluster, clusterUID := x.cluster.GetNamespace(), x.cluster.GetName(), x.cluster.GetUID()
 	pvcs, err := cnpgInstancePVCs(ctx, x.c.typed, namespace, cluster, clusterUID, p.Pod)
 	if err != nil {
@@ -473,6 +498,9 @@ func cnpgLiftDestroyedFence(ctx context.Context, x *cnpgClusterRun, pod string) 
 	fresh, err := x.c.dyn.Resource(cnpgClusterGVR).Namespace(x.cluster.GetNamespace()).Get(ctx, x.cluster.GetName(), metav1.GetOptions{})
 	if err != nil {
 		return false, err
+	}
+	if fresh.GetUID() != x.cluster.GetUID() {
+		return false, fmt.Errorf("Cluster %s/%s was deleted and recreated; its fences were left alone", x.cluster.GetNamespace(), x.cluster.GetName())
 	}
 	f := parseCNPGFenced(fresh.GetAnnotations()[cnpgFencedAnnotation])
 	if f.All || f.Malformed || !slices.Contains(f.Instances, pod) {

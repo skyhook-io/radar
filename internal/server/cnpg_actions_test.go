@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	authv1 "k8s.io/api/authorization/v1"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -88,6 +89,8 @@ type cnpgActionEnv struct {
 	patches []k8stesting.PatchAction
 	creates []*unstructured.Unstructured
 	deletes []k8stesting.DeleteAction
+	// denied lists "verb resource[/subresource]" the caller's access review refuses.
+	denied map[string]bool
 }
 
 func (e *cnpgActionEnv) clients() cnpgActionClients {
@@ -111,6 +114,16 @@ func newCNPGActionEnv(t *testing.T, objs []runtime.Object, pods ...runtime.Objec
 	env.dyn.PrependReactor("create", "backups", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		env.creates = append(env.creates, a.(k8stesting.CreateAction).GetObject().(*unstructured.Unstructured))
 		return false, nil, nil
+	})
+	env.typed.PrependReactor("create", "selfsubjectaccessreviews", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		review := a.(k8stesting.CreateAction).GetObject().(*authv1.SelfSubjectAccessReview)
+		attrs := review.Spec.ResourceAttributes
+		res := attrs.Resource
+		if attrs.Subresource != "" {
+			res += "/" + attrs.Subresource
+		}
+		review.Status.Allowed = !env.denied[attrs.Verb+" "+res]
+		return true, review, nil
 	})
 	env.typed.PrependReactor("delete", "pods", func(a k8stesting.Action) (bool, runtime.Object, error) {
 		env.deletes = append(env.deletes, a.(k8stesting.DeleteAction))
