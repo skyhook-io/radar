@@ -173,6 +173,18 @@ describe('cnpgDimensions', () => {
     const unmeasured = cnpgDimensions({ row: row({ disk: { text: 'No usage metrics', tone: 'unknown', source: 'needs Prometheus' } }) })
     expect(unmeasured[3]).toMatchObject({ tone: 'unknown', text: 'unassessed', source: 'No usage metrics · needs Prometheus' })
   })
+  it('counts expected standbys from spec.instances, not from the Pods still running', () => {
+    // spec.instances 3, only the primary's Pod exists, nothing streams.
+    const r = row({ instances: { ready: 1, desired: 3 }, pods: [{ name: 'pg-1', role: 'primary', ready: true }] })
+    const d = cnpgDimensions({ row: r, replication: { streaming: 0, standbys: 0 } })
+    expect(d[1]).toMatchObject({ tone: 'degraded', text: '0 of 2 expected standbys streaming' })
+    const one = cnpgDimensions({ row: r, replication: { streaming: 1, standbys: 1, maxReplayLagSeconds: 0 } })
+    expect(one[1]).toMatchObject({ tone: 'degraded', text: '1 of 2 expected standbys streaming' })
+  })
+  it('replication is unknown when spec.instances is not reported', () => {
+    const d = cnpgDimensions({ row: row({ instances: { ready: null, desired: null } }), replication: { streaming: 0, standbys: 0 } })
+    expect(d[1].tone).toBe('unknown')
+  })
   it('replication is unassessed without runtime, never healthy', () => {
     const d = cnpgDimensions({ row: row() })
     expect(d.find((x) => x.id === 'replication')?.text).toBe('unassessed')

@@ -26,32 +26,11 @@ import {
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
 import { useCNPGRuntime, type CNPGRuntimeResponse } from '../../api/cnpg'
 import { useCNPGPoolerLive } from './useCNPGPoolerLive'
-import { cnpgInstanceLive, cnpgReplicationLive, useCNPGClusterHA } from '../../api/cnpg-ha'
+import { cnpgInstanceLive, cnpgReplicationLive, useCNPGClusterHA, withLiveReplication } from '../../api/cnpg-ha'
 import { CNPGMaintenanceBanner } from './actions/CNPGMaintenanceBanner'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 import type { CNPGFleetRow } from '@skyhook-io/k8s-ui'
 
-// Replaces the Kubernetes-only replication fact with the primary's
-// pg_stat_replication when it has been read; otherwise keeps "lag unknown".
-function withLiveReplication(row: CNPGFleetRow, rt: CNPGRuntimeResponse | undefined): CNPGFleetRow {
-  const primary = rt?.instances.find((i) => i.role === 'primary')
-  if (!primary || primary.status.state !== 'ok' || row.replication.text === 'Single instance' || row.replication.text === 'Hibernated') return row
-  const reps = primary.status.replication ?? []
-  const standbys = row.pods.filter((p) => p.role === 'replica').length
-  const streaming = reps.filter((r) => r.state === 'streaming').length
-  const lags = reps.map((r) => r.replayLag).filter((v): v is number => v !== undefined)
-  const maxLag = lags.length ? Math.max(...lags) : undefined
-  const tone = streaming < standbys ? 'degraded' : maxLag !== undefined && maxLag >= 30 ? 'unhealthy' : maxLag !== undefined && maxLag >= 5 ? 'degraded' : 'healthy'
-  return {
-    ...row,
-    replication: {
-      text: `${streaming}/${standbys} streaming${maxLag !== undefined ? ` · max replay lag ${maxLag < 1 ? `${Math.round(maxLag * 1000)} ms` : `${maxLag.toFixed(1)} s`}` : ''}`,
-      tone,
-      source: 'From the primary’s pg_stat_replication via the instance manager',
-      at: primary.status.capturedAt,
-    },
-  }
-}
 import { cnpgClusterFullPath, currentPageLabel } from './paths'
 import { CNPGRestoreProgress } from './recovery/CNPGRestoreProgress'
 import { useConnection } from '../../context/ConnectionContext'

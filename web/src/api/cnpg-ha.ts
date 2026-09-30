@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import type { CNPGClusterHA, CNPGInstanceLive, CNPGReplicationLive } from '@skyhook-io/k8s-ui'
+import type { CNPGClusterHA, CNPGFleetRow, CNPGInstanceLive, CNPGReplicationLive } from '@skyhook-io/k8s-ui'
 import { fetchJSON } from './client'
 import type { CNPGRuntimeResponse } from './cnpg'
 
@@ -43,4 +43,26 @@ export function cnpgReplicationLive(rt: CNPGRuntimeResponse | undefined): CNPGRe
     standbys: rt!.instances.filter((i) => i.role !== 'primary').length,
     maxReplayLagSeconds: lags.length ? Math.max(...lags) : undefined,
   }
+}
+
+// Replaces the Kubernetes-only replication fact with the primary's
+// pg_stat_replication when it has been read; otherwise keeps "lag unknown".
+// Expected standbys are spec.instances − 1: a standby whose Pod is gone is
+// missing, not absent from the count.
+export function withLiveReplication(row: CNPGFleetRow, rt: CNPGRuntimeResponse | undefined): CNPGFleetRow {
+  const primary = rt?.instances.find((i) => i.role === 'primary')
+  if (!primary || primary.status.state !== 'ok' || row.replication.text === 'Single instance' || row.replication.text === 'Hibernated') return row
+  const reps = primary.status.replication ?? []
+  const streaming = reps.filter((r) => r.state === 'streaming').length
+  const lags = reps.map((r) => r.replayLag).filter((v): v is number => v !== undefined)
+  const maxLag = lags.length ? Math.max(...lags) : undefined
+  const lagText = maxLag !== undefined ? ` · max replay lag ${maxLag < 1 ? `${Math.round(maxLag * 1000)} ms` : `${maxLag.toFixed(1)} s`}` : ''
+  const source = 'From the primary’s pg_stat_replication via the instance manager'
+  if (row.instances.desired === null) {
+    return { ...row, replication: { text: `${streaming} streaming${lagText}`, tone: 'unknown', source: `${source}; spec.instances is not reported, so the expected standbys are unknown`, at: primary.status.capturedAt } }
+  }
+  const expected = Math.max(0, row.instances.desired - 1)
+  const tone = streaming < expected ? 'degraded' : maxLag !== undefined && maxLag >= 30 ? 'unhealthy' : maxLag !== undefined && maxLag >= 5 ? 'degraded' : 'healthy'
+  const text = streaming < expected ? `${streaming} of ${expected} expected standbys streaming` : `${streaming}/${expected} streaming`
+  return { ...row, replication: { text: `${text}${lagText}`, tone, source, at: primary.status.capturedAt } }
 }

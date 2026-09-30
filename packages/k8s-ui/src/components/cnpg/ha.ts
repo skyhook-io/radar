@@ -304,6 +304,7 @@ export interface CNPGDimension {
 export interface CNPGReplicationLive {
   /** Standbys the primary reports as streaming. */
   streaming: number
+  /** Standby Pods the runtime read saw; the verdict compares against spec.instances − 1, not this. */
   standbys: number
   maxReplayLagSeconds?: number
 }
@@ -364,12 +365,20 @@ function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive): CN
   if (row.hibernated) return { ...base, tone: 'neutral', text: 'hibernated', source: 'cnpg.io/hibernation annotation' }
   if (row.instances.desired === 1) return { ...base, tone: 'degraded', text: 'no standby', source: 'spec.instances is 1: there is no failover target' }
   if (!live) return { ...base, tone: 'unknown', text: 'unassessed', source: 'Needs the primary’s pg_stat_replication (runtime data)' }
-  if (live.streaming < live.standbys) {
-    return { ...base, tone: 'degraded', text: `${live.streaming}/${live.standbys} streaming`, source: 'Primary’s pg_stat_replication' }
+  // Standbys whose Pods are gone are missing from the runtime read too, so
+  // the denominator is what the Cluster asks for, never what is running.
+  const desired = row.instances.desired
+  if (desired === null) {
+    return { ...base, tone: 'unknown', text: `${live.streaming} streaming`, source: 'spec.instances is not reported, so the expected standbys are unknown' }
+  }
+  const expected = Math.max(0, desired - 1)
+  const source = `Primary’s pg_stat_replication against spec.instances ${desired}`
+  if (live.streaming < expected) {
+    return { ...base, tone: 'degraded', text: `${live.streaming} of ${expected} expected standbys streaming`, source }
   }
   const lag = live.maxReplayLagSeconds
-  if (lag !== undefined && lag >= 30) return { ...base, tone: 'degraded', text: `replay ${Math.round(lag)} s behind`, source: 'Primary’s pg_stat_replication' }
-  return { ...base, tone: 'healthy', text: `${live.streaming}/${live.standbys} streaming`, source: 'Primary’s pg_stat_replication' }
+  if (lag !== undefined && lag >= 30) return { ...base, tone: 'degraded', text: `replay ${Math.round(lag)} s behind`, source }
+  return { ...base, tone: 'healthy', text: `${live.streaming} of ${expected} standbys streaming`, source }
 }
 
 function protectionDimension(row: CNPGFleetRow): CNPGDimension {
