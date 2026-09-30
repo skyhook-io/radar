@@ -96,8 +96,13 @@ func seedCNPGHAFixture(t *testing.T, now time.Time) *unstructured.Unstructured {
 	}
 	for _, n := range []struct{ name, zone string }{{"ha-node-a", "zone-a"}, {"ha-node-b", "zone-b"}} {
 		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: n.name, Labels: map[string]string{cnpgZoneLabel: n.zone}}}
-		create(n.name, func() error { _, err := testFakeClient.CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{}); return err })
-		t.Cleanup(func() { _ = testFakeClient.CoreV1().Nodes().Delete(context.Background(), node.Name, metav1.DeleteOptions{}) })
+		create(n.name, func() error {
+			_, err := testFakeClient.CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{})
+			return err
+		})
+		t.Cleanup(func() {
+			_ = testFakeClient.CoreV1().Nodes().Delete(context.Background(), node.Name, metav1.DeleteOptions{})
+		})
 	}
 	one := intstr.FromInt32(1)
 	pdbs := []*policyv1.PodDisruptionBudget{
@@ -126,8 +131,13 @@ func seedCNPGHAFixture(t *testing.T, now time.Time) *unstructured.Unstructured {
 			Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded", Message: "Job has reached the specified backoff limit"}}}},
 	}
 	for _, j := range jobs {
-		create(j.Name, func() error { _, err := testFakeClient.BatchV1().Jobs(cnpgHATestNS).Create(ctx, j, metav1.CreateOptions{}); return err })
-		t.Cleanup(func() { _ = testFakeClient.BatchV1().Jobs(cnpgHATestNS).Delete(context.Background(), j.Name, metav1.DeleteOptions{}) })
+		create(j.Name, func() error {
+			_, err := testFakeClient.BatchV1().Jobs(cnpgHATestNS).Create(ctx, j, metav1.CreateOptions{})
+			return err
+		})
+		t.Cleanup(func() {
+			_ = testFakeClient.BatchV1().Jobs(cnpgHATestNS).Delete(context.Background(), j.Name, metav1.DeleteOptions{})
+		})
 	}
 	cache := k8s.GetResourceCache()
 	waitFor(t, 5*time.Second, func() bool {

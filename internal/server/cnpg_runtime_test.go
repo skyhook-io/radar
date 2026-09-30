@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	authv1 "k8s.io/api/authorization/v1"
+	"k8s.io/client-go/kubernetes"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -327,6 +329,14 @@ func useCNPGProxyAPIServer(t *testing.T, handle func(w http.ResponseWriter, c cn
 	t.Helper()
 	f := &cnpgFakeProxyAPIServer{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/selfsubjectaccessreviews") {
+			var review authv1.SelfSubjectAccessReview
+			_ = json.NewDecoder(r.Body).Decode(&review)
+			review.Status.Allowed = true
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(review)
+			return
+		}
 		f.record(r)
 		// /api/v1/namespaces/{ns}/pods/{scheme:pod:port}/proxy/{path}
 		parts := strings.SplitN(r.URL.Path, "/", 9)
@@ -344,6 +354,15 @@ func useCNPGProxyAPIServer(t *testing.T, handle func(w http.ResponseWriter, c cn
 	t.Cleanup(srv.Close)
 	previous := k8s.SetTestConfig(&rest.Config{Host: srv.URL})
 	t.Cleanup(func() { k8s.SetTestConfig(previous) })
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousClient := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(previousClient) })
+	cnpgLocalCanIMu.Lock()
+	cnpgLocalCanIMemo = map[string]cnpgLocalCanIEntry{}
+	cnpgLocalCanIMu.Unlock()
 	resetCNPGRuntimeMemo(t)
 	return f
 }
