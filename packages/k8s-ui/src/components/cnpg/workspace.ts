@@ -126,7 +126,10 @@ export interface CNPGProblem {
   detail?: string
   /** The object the evidence is about (may be the Cluster or a child object). */
   subject: { kind: string; group: string; namespace: string; name: string }
-  /** measurement: derived here from a reading only callers holding its grants receive (disk use). */
+  /**
+   * measurement: derived here from a reading only callers holding its grants
+   * receive (disk use, instance Pod readiness).
+   */
   source: 'issue' | 'audit' | 'measurement'
 }
 
@@ -157,6 +160,15 @@ export interface CNPGFleetRow {
   cluster: any
   controllerStatus: { text: string; level: HealthLevel }
   instances: { ready: number | null; desired: number | null }
+  /**
+   * Ready instances counted from the instance Pods' Ready condition; absent
+   * when Pods are not readable here or any Pod's readiness is unknown.
+   */
+  podReadiness?: { ready: number; total: number }
+  /** status.readyInstances claims more ready instances than the Pods show: CNPG status is stale or lagging. */
+  readinessContradicted?: boolean
+  /** status.currentPrimary is not the Pod labelled primary; status may be stale, or a failover is under way. */
+  primaryConflict?: { status: string; labelled: string }
   pods: CNPGInstance[]
   replicaCluster: { source?: string } | null
   hibernated: boolean
@@ -586,6 +598,80 @@ function problemsFor(
   return out.sort((a, b) => rank[a.severity] - rank[b.severity] || a.title.localeCompare(b.title))
 }
 
+/**
+ * The ready count to show for a cluster: CNPG's status count, or the Pods'
+ * own count when the status claims more than the Pods show.
+ */
+export function cnpgReadyInstances(row: Pick<CNPGFleetRow, 'instances' | 'podReadiness' | 'readinessContradicted'>): { text: string; tone?: HealthLevel; note?: string } {
+  const desired = row.instances.desired ?? '–'
+  if (row.readinessContradicted && row.podReadiness) {
+    return {
+      text: `${row.podReadiness.ready}/${desired}`,
+      tone: row.podReadiness.ready === 0 ? 'unhealthy' : 'degraded',
+      note: `Counted from the instance Pods' Ready condition. CNPG status reports ${row.instances.ready} ready, so the status may be stale.`,
+    }
+  }
+  return { text: `${row.instances.ready ?? '–'}/${desired}` }
+}
+
+function sortProblems(list: CNPGProblem[]): CNPGProblem[] {
+  const rank = { critical: 0, warning: 1, posture: 2 } as const
+  return list.sort((a, b) => rank[a.severity] - rank[b.severity] || a.title.localeCompare(b.title))
+}
+
+function primaryConflictOf(cluster: any, pods: any[]): CNPGFleetRow['primaryConflict'] {
+  const status = cluster?.status?.currentPrimary
+  if (!status) return undefined
+  const labelled = pods
+    .filter((p) => (p?.metadata?.labels?.['cnpg.io/instanceRole'] ?? p?.metadata?.labels?.role) === 'primary')
+    .map((p) => p.metadata?.name as string)
+  if (labelled.length === 0 || labelled.includes(status)) return undefined
+  return { status, labelled: labelled.sort()[0] }
+}
+
+/**
+ * Availability problems Radar observes on the instance Pods when CNPG status
+ * says otherwise — the status is the operator's last word and goes stale
+ * while it is not reconciling. Worded as what is observed.
+ */
+function observedProblems(
+  cluster: any,
+  pods: CNPGInstance[],
+  contradicted: { ready: number; total: number } | undefined,
+  statusReady: number | null,
+  conflict: CNPGFleetRow['primaryConflict'],
+): CNPGProblem[] {
+  const ns = cluster.metadata?.namespace
+  const name = cluster.metadata?.name
+  const subject = { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: ns, name }
+  const out: CNPGProblem[] = []
+  if (contradicted) {
+    const primaryDown = pods.some((p) => p.role === 'primary' && p.ready === false)
+    const notReady = contradicted.total - contradicted.ready
+    out.push({
+      id: `pods-not-ready:${ns}/${name}`,
+      severity: primaryDown || contradicted.ready === 0 ? 'critical' : 'warning',
+      category: 'availability',
+      title: `${notReady} of ${contradicted.total} instance Pods not ready${primaryDown ? ', including the primary' : ''}`,
+      detail: `The Pods' Ready condition shows ${contradicted.ready} ready; CNPG status still reports ${statusReady}. The status may be stale.`,
+      subject,
+      source: 'measurement',
+    })
+  }
+  if (conflict) {
+    out.push({
+      id: `primary-conflict:${ns}/${name}`,
+      severity: 'warning',
+      category: 'availability',
+      title: `CNPG status names ${conflict.status} primary; the Pod labelled primary is ${conflict.labelled}`,
+      detail: 'Status may be stale, or a failover is under way.',
+      subject,
+      source: 'measurement',
+    })
+  }
+  return out
+}
+
 /** Index "Kind/ns/name" → owning cluster name, from each child's spec.cluster.name. */
 function childIndex(resp: CNPGWorkspaceResponse): Map<string, string> {
   const idx = new Map<string, string>()
@@ -703,7 +789,17 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
           : { text: 'Not reported', tone: 'unknown' },
       restoreValidation: restoreValidationFact(cluster, clusters, resp.objects.backups ?? []),
     }
-    const problems = problemsFor(cluster, resp.issues ?? [], resp.audit ?? [], children)
+    const podsReadable = coverageReadable(coverageOf(resp, 'pods'), ns)
+    const podReadiness =
+      podsReadable && instancePods.length > 0 && instancePods.every((p) => p.ready !== null)
+        ? { ready: instancePods.filter((p) => p.ready).length, total: instancePods.length }
+        : undefined
+    const readinessContradicted = !hibernated && !!podReadiness && readyInstances !== null && podReadiness.ready < readyInstances
+    const primaryConflict = podsReadable ? primaryConflictOf(cluster, pods.filter((p) => p.metadata?.namespace === ns && p.metadata?.labels?.['cnpg.io/cluster'] === name)) : undefined
+    const problems = sortProblems([
+      ...problemsFor(cluster, resp.issues ?? [], resp.audit ?? [], children),
+      ...observedProblems(cluster, instancePods, readinessContradicted ? podReadiness : undefined, readyInstances, primaryConflict),
+    ])
     const categories = new Set<CNPGProblemCategory>(
       problems.filter((p) => p.severity !== 'posture').map((p) => p.category),
     )
@@ -716,6 +812,9 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
       cluster,
       controllerStatus: { text: status.text, level: status.level },
       instances: { ready: readyInstances, desired },
+      ...(podReadiness ? { podReadiness } : {}),
+      ...(readinessContradicted ? { readinessContradicted } : {}),
+      ...(primaryConflict ? { primaryConflict } : {}),
       pods: instancePods,
       replicaCluster: replica,
       hibernated,

@@ -28,6 +28,7 @@ import { useCNPGRuntime, type CNPGRuntimeResponse } from '../../api/cnpg'
 import { useCNPGPoolerLive } from './useCNPGPoolerLive'
 import { cnpgInstanceLive, cnpgReplicationLive, useCNPGClusterHA } from '../../api/cnpg-ha'
 import { CNPGMaintenanceBanner } from './actions/CNPGMaintenanceBanner'
+import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 import type { CNPGFleetRow } from '@skyhook-io/k8s-ui'
 
 // Replaces the Kubernetes-only replication fact with the primary's
@@ -94,6 +95,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
       onNavigate={go}
       lead={
         <>
+          {context === 'drawer' && <CNPGOperatorBanner namespaces={[namespace]} />}
           <CNPGMaintenanceBanner namespace={namespace} name={name} maintenance={ha.data?.maintenance} />
           {row.cluster?.spec?.bootstrap?.recovery && <CNPGRestoreProgress namespace={namespace} name={name} />}
         </>
@@ -106,6 +108,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
           loading={ha.isLoading}
           error={ha.error instanceof Error ? ha.error.message : undefined}
           onNavigate={go}
+          primaryConflict={row.primaryConflict}
         />
       }
       actions={

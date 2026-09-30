@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildCNPGFleet, type CNPGWorkspaceResponse, type CNPGWorkspaceKey, CNPG_WORKSPACE_KEYS } from './workspace'
+import { buildCNPGFleet, cnpgReadyInstances, type CNPGWorkspaceResponse, type CNPGWorkspaceKey, CNPG_WORKSPACE_KEYS } from './workspace'
 
 const G = 'postgresql.cnpg.io/v1'
 
@@ -284,5 +284,50 @@ describe('buildCNPGFleet', () => {
     const p = buildCNPGFleet(resp({ clusters: [c] }, { coverage: { objectStores: { state: 'syncing' } } })).rows[0].protection
     expect(p.lastSuccessfulBackup.text).toBe('Loading…')
     expect(p.recoveryWindow.text).toBe('Loading…')
+  })
+
+  it('shows the Pods’ ready count and raises an availability problem when status claims more', () => {
+    const fleet = buildCNPGFleet(
+      resp({
+        clusters: [cluster('pg-a', 'db')],
+        pods: [pod('pg-a-1', 'db', 'pg-a', 'primary', false), pod('pg-a-2', 'db', 'pg-a', 'replica'), pod('pg-a-3', 'db', 'pg-a', 'replica', false)],
+      }),
+    )
+    const row = fleet.rows[0]
+    expect(row.podReadiness).toEqual({ ready: 1, total: 3 })
+    expect(row.readinessContradicted).toBe(true)
+    expect(cnpgReadyInstances(row)).toMatchObject({ text: '1/3', tone: 'degraded' })
+    expect(cnpgReadyInstances(row).note).toContain('CNPG status reports 3 ready')
+    const problem = row.problems[0]
+    expect(problem.severity).toBe('critical')
+    expect(problem.category).toBe('availability')
+    expect(problem.title).toBe('2 of 3 instance Pods not ready, including the primary')
+    expect(row.attention).toBe(true)
+    expect(fleet.attentionCount).toBe(1)
+  })
+
+  it('agrees with status when the Pods do, and never judges unreadable Pods', () => {
+    const agreeing = buildCNPGFleet(
+      resp({
+        clusters: [cluster('pg-a', 'db', { status: { readyInstances: 2 } })],
+        pods: [pod('pg-a-1', 'db', 'pg-a', 'primary'), pod('pg-a-2', 'db', 'pg-a', 'replica'), pod('pg-a-3', 'db', 'pg-a', 'replica', false)],
+      }),
+    ).rows[0]
+    expect(agreeing.readinessContradicted).toBeUndefined()
+    expect(cnpgReadyInstances(agreeing)).toEqual({ text: '2/3' })
+    const denied = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { pods: { state: 'denied' } } })).rows[0]
+    expect(denied.podReadiness).toBeUndefined()
+    expect(denied.problems).toEqual([])
+  })
+
+  it('names both primaries when status and the role label disagree', () => {
+    const row = buildCNPGFleet(
+      resp({
+        clusters: [cluster('pg-a', 'db', { status: { currentPrimary: 'pg-a-2', readyInstances: 1 } })],
+        pods: [pod('pg-a-1', 'db', 'pg-a', 'primary'), pod('pg-a-2', 'db', 'pg-a', 'replica', false)],
+      }),
+    ).rows[0]
+    expect(row.primaryConflict).toEqual({ status: 'pg-a-2', labelled: 'pg-a-1' })
+    expect(row.problems.map((p) => p.title)).toContain('CNPG status names pg-a-2 primary; the Pod labelled primary is pg-a-1')
   })
 })

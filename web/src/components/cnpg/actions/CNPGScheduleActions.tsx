@@ -3,6 +3,7 @@ import { ActionConfirmDialog, Tooltip } from '@skyhook-io/k8s-ui'
 import { cnpgActionErrorCode, useCNPGAction, useCNPGScheduleCapabilities, type CNPGScheduleActionName } from '../../../api/cnpg'
 import { useToast } from '../../ui/Toast'
 import { useCNPGWriteGuard } from './useCNPGWriteGuard'
+import { cnpgOperatorActionNote } from '../operatorStatus'
 import { trackCNPGOperation } from '../operations/store'
 
 const BUTTON =
@@ -67,6 +68,7 @@ function ScheduleDialog({ kind, namespace, name, onClose }: { kind: CNPGSchedule
             scope: { kind: 'spec' as const, paths: ['spec.suspend'] },
           }
   const guard = useCNPGWriteGuard({ namespace, name, scope: spec.scope, targetKind: 'ScheduledBackup' })
+  const operatorNote = cnpgOperatorActionNote(data.operator)
   return (
     <ActionConfirmDialog
       open
@@ -97,7 +99,8 @@ function ScheduleDialog({ kind, namespace, name, onClose }: { kind: CNPGSchedule
       subject={{ kind: 'ScheduledBackup', namespace, name }}
       context={data.context}
       effect={spec.effect}
-      notes={spec.notes}
+      notes={operatorNote?.tone === 'info' ? [...spec.notes, operatorNote.text] : spec.notes}
+      warnings={operatorNote?.tone === 'warning' ? [operatorNote.text] : undefined}
       writes={spec.writes}
       guard={guard.node}
       guardSatisfied={guard.satisfied}

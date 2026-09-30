@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import { ArrowRight, Database, FileText, Search } from 'lucide-react'
 import {
   CNPG_PROBLEM_CATEGORIES,
+  cnpgReadyInstances,
   FactValue,
   StatusDot,
   Tooltip,
@@ -17,6 +18,7 @@ import { EmptyState, ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '..
 import { CNPGWorkspaceHeader, CoverageNotice, FilterChips, type CNPGScreenProps } from './shared'
 import { cnpgClusterFullPath, currentPageLabel } from './paths'
 import { sameResource } from './routes'
+import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 
 type Filter = 'attention' | 'all'
 
@@ -36,6 +38,16 @@ function InstancePills({ row }: { row: CNPGFleetRow }) {
         )
       })}
     </div>
+  )
+}
+
+function ReadyCell({ row }: { row: CNPGFleetRow }) {
+  const r = cnpgReadyInstances(row)
+  if (!r.note) return <>{r.text}</>
+  return (
+    <Tooltip content={r.note}>
+      <span className={clsx('underline decoration-dotted underline-offset-2', toneTextClass(r.tone ?? 'unknown'))}>{r.text} Pods</span>
+    </Tooltip>
   )
 }
 
@@ -161,6 +173,7 @@ export function CNPGOverview({
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <div className="space-y-3 px-5 pb-6 pt-3 xl:px-7">
           <CoverageNotice fleet={fleet} data={data} />
+          <CNPGOperatorBanner namespaces={fleet.rows.map((r) => r.namespace)} className="" />
 
           <div className="flex flex-wrap items-center gap-2">
             <div role="tablist" aria-label="Clusters" className="inline-flex rounded-lg bg-theme-elevated p-0.5">
@@ -246,7 +259,7 @@ export function CNPGOverview({
                           <div className="pl-4"><InstancePills row={row} /></div>
                         </td>
                         <td className={clsx(TD, 'font-mono')}>
-                          {row.instances.ready ?? '–'}/{row.instances.desired ?? '–'}
+                          <ReadyCell row={row} />
                         </td>
                         <td className={TD}><FactValue fact={row.replication} /></td>
                         <td className={TD}><FactValue fact={row.protection.summary} /></td>

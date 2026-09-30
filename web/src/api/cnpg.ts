@@ -70,6 +70,35 @@ export function useCNPGOperator(options?: { enabled?: boolean }) {
   })
 }
 
+/**
+ * Whether the operator watching a namespace is acting on it. While it is not,
+ * CNPG status there is whatever the operator last wrote. webhookRejects is
+ * null when the webhook state could not be read.
+ */
+export interface CNPGOperatorVerdict {
+  state: 'reconciling' | 'notReconciling' | 'unknown' | 'notWatched'
+  reasons?: string[]
+  unknown?: string
+  webhookRejects: boolean | null
+  webhookReason?: string
+  operator?: string
+}
+
+// /api/cnpg/operator/status?namespaces=
+//
+// The cheap operator verdict for the fleet and cluster pages, keyed by namespace.
+export function useCNPGOperatorStatus(namespaces: string[], options?: { enabled?: boolean }) {
+  const ns = [...new Set(namespaces)].sort().join(',')
+  return useQuery<{ namespaces: Record<string, CNPGOperatorVerdict> }>({
+    queryKey: ['cnpg', 'operator-status', ns],
+    queryFn: ({ signal }) => fetchJSON<{ namespaces: Record<string, CNPGOperatorVerdict> }>(`/cnpg/operator/status?namespaces=${encodeURIComponent(ns)}`, signal),
+    enabled: (options?.enabled ?? true) && ns !== '',
+    staleTime: 10_000,
+    refetchInterval: 30_000,
+    placeholderData: (prev) => prev,
+  })
+}
+
 export interface CNPGClusterActivityResponse {
   events: TimelineEvent[]
   oldest: string | null
@@ -171,6 +200,7 @@ export interface CNPGClusterCapabilities {
     subscriptions: CNPGEffectList
     volumes: { available: boolean; reason?: string; items: { name: string; instance: string; role: string; capacity?: string; requested?: string }[] }
   }
+  operator?: CNPGOperatorVerdict
 }
 
 export interface CNPGEffectList {
@@ -198,6 +228,7 @@ export interface CNPGScheduleCapabilities {
     catchUp: boolean
   }
   actions: Record<CNPGScheduleActionName, CNPGActionCapability>
+  operator?: CNPGOperatorVerdict
 }
 
 function cnpgPath(kind: 'clusters' | 'scheduledbackups' | 'poolers', namespace: string, name: string) {

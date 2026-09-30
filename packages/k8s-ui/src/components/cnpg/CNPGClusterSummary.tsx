@@ -3,13 +3,14 @@ import { clsx } from 'clsx'
 import { Badge } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
 import { CNPG_BARMAN_OBJECTSTORE_GROUP, CNPG_GROUP } from '../resources/resource-utils-cnpg'
-import type { CNPGFleetRow, CNPGInstance } from './workspace'
+import { cnpgReadyInstances, type CNPGFleetRow, type CNPGInstance } from './workspace'
 import type { CNPGDimension } from './ha'
 import {
   FactGrid,
   FactRow,
   FactSource,
   FactValue,
+  PrimaryConflictNote,
   ProblemCallout,
   RefLink,
   SummaryHeading,
@@ -19,6 +20,18 @@ import {
   CNPG_SECONDARY_BUTTON,
   type CNPGNavigate,
 } from './primitives'
+
+function ReadyCount({ row }: { row: CNPGFleetRow }) {
+  const r = cnpgReadyInstances(row)
+  if (!r.note) return <>{r.text}</>
+  return (
+    <Tooltip content={r.note} position="top">
+      <span className={clsx('font-medium', toneTextClass(r.tone ?? 'unknown'))}>
+        {r.text} Pods <Badge severity="warning" size="sm">status says {row.instances.ready}</Badge>
+      </span>
+    </Tooltip>
+  )
+}
 
 export interface CNPGSummaryAction {
   label: string
@@ -130,11 +143,12 @@ export function CNPGClusterSummary({
         <FactRow label="Instances">
           <div>
             <span>
-              {row.instances.ready ?? '–'}/{row.instances.desired ?? '–'} ready
-              {row.cluster?.status?.currentPrimary && (
+              <ReadyCount row={row} /> ready
+              {row.cluster?.status?.currentPrimary && !row.primaryConflict && (
                 <span className="text-theme-text-secondary"> · primary <span className="font-mono">{row.cluster.status.currentPrimary}</span></span>
               )}
             </span>
+            {row.primaryConflict && <PrimaryConflictNote conflict={row.primaryConflict} />}
             {row.pods.length > 0 && (
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {row.pods.map((pod) => (

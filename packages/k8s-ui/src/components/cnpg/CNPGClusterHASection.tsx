@@ -1,7 +1,7 @@
 import { clsx } from 'clsx'
 import { Badge } from '../ui/Badge'
 import { formatAge } from '../resources/resource-utils'
-import { FactGrid, FactRow, FactValue, RefLink, SummaryHeading, ToneDot, toneTextClass, type CNPGNavigate } from './primitives'
+import { FactGrid, FactRow, FactValue, PrimaryConflictNote, RefLink, SummaryHeading, ToneDot, toneTextClass, type CNPGNavigate } from './primitives'
 import {
   CNPG_ROLE_DETAIL_TEXT,
   cnpgCertificateViews,
@@ -51,7 +51,10 @@ export function CNPGClusterHASection({
   loading,
   error,
   onNavigate,
+  primaryConflict,
 }: {
+  /** status.currentPrimary vs the Pod labelled primary, when they disagree. */
+  primaryConflict?: { status: string; labelled: string }
   ha?: CNPGClusterHA
   /** Instance-manager facts, when the caller can read them. */
   live?: CNPGInstanceLive[]
@@ -134,6 +137,7 @@ export function CNPGClusterHASection({
                   </div>
                 )
               })}
+              {primaryConflict && <PrimaryConflictNote conflict={primaryConflict} />}
               <div className="text-[11.5px] text-theme-text-tertiary">
                 {live ? 'Role detail and pending restart from each instance manager' : 'Role from Pod labels; role detail needs runtime access'}
                 {versions.size === 1 ? ` · instance manager ${[...versions][0]}` : ''}

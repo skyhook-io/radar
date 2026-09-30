@@ -16,6 +16,7 @@ import { CNPGScreenGate } from './shared'
 import { CNPG_DETAIL_KINDS, CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, cnpgScreenPath, type CNPGDetailTarget } from './routes'
 import { currentPageLabel } from './paths'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
+import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 
 interface ReturnState {
   returnLabel?: string
@@ -185,6 +186,7 @@ export function CNPGDetailPage({
           Namespace {target.namespace} is outside your namespace filter; this object stays open.
         </span>
       )}
+      {target.plural === 'clusters' && <CNPGOperatorBanner namespaces={[target.namespace]} className="mt-1 w-full" />}
     </div>
   )
 

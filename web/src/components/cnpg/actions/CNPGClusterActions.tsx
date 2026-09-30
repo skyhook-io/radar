@@ -16,6 +16,7 @@ import { useToast } from '../../ui/Toast'
 import { useCNPGClusterHA } from '../../../api/cnpg-ha'
 import { trackCNPGOperation, type TrackCNPGOperationInput } from '../operations/store'
 import { useCNPGWriteGuard, type CNPGWriteScope } from './useCNPGWriteGuard'
+import { cnpgOperatorActionNote } from '../operatorStatus'
 import { CNPGRestoreDialog } from '../recovery/CNPGRestoreDialog'
 import { CNPGReportDialog } from './CNPGReportDialog'
 import { useOpenCNPGPsql } from './useOpenCNPGPsql'
@@ -644,6 +645,7 @@ export function ClusterActionDialog({
   })()
 
   const guard = useCNPGWriteGuard({ namespace, name, scope: spec.scope })
+  const operatorNote = cnpgOperatorActionNote(caps.operator)
 
   const confirm = () => {
     mutation.mutate(
@@ -672,8 +674,8 @@ export function ClusterActionDialog({
       subject={{ kind: 'Cluster', namespace, name }}
       context={caps.context}
       effect={spec.effect}
-      notes={spec.notes}
-      warnings={spec.warnings}
+      notes={operatorNote?.tone === 'info' ? [...(spec.notes ?? []), operatorNote.text] : spec.notes}
+      warnings={operatorNote?.tone === 'warning' ? [operatorNote.text, ...(spec.warnings ?? [])] : spec.warnings}
       guard={guard.node}
       guardSatisfied={guard.satisfied}
       writes={spec.writes}
