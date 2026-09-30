@@ -1,13 +1,14 @@
 import { useState, type ReactNode } from 'react'
+import { useQueries } from '@tanstack/react-query'
 import { clsx } from 'clsx'
 import { Lock } from 'lucide-react'
 import { ActionConfirmDialog, PaneLoader, Tooltip, formatAge, toneFillClass, toneTextClass } from '@skyhook-io/k8s-ui'
 import { formatCPUString, formatMemoryString, parseCPUToNanocores, parseMemoryToBytes } from '@skyhook-io/k8s-ui/utils/format'
-import { usePodMetrics } from '../../api/client'
+import { podMetricsQuery, usePodMetrics } from '../../api/client'
 import { cnpgActionOutcomeLocked, useCNPGAction, useCNPGClusterCapabilities } from '../../api/cnpg'
 import { useCNPGSessions, type CNPGBackend, type CNPGSessionInstance, type CNPGSessionsResponse } from '../../api/cnpg-sessions'
 import { useToast } from '../ui/Toast'
-import { buildBlockingTree, cnpgConnectionFigure, countVictims, type BlockingNode } from './blocking'
+import { buildBlockingTree, cnpgConnectionFigure, cnpgMetricsApiMissing, countVictims, type BlockingNode } from './blocking'
 import { CNPGRefreshFailedNotice } from './shared'
 
 function age(s?: number): string {
@@ -145,11 +146,11 @@ function Headroom({ data }: { data: CNPGSessionsResponse }) {
 }
 
 function Resources({ namespace, instances }: { namespace: string; instances: CNPGSessionInstance[] }) {
-  // A missing metrics API is cluster-wide: one instance's answer stands for
-  // all, so it is said once rather than on every card.
-  const probe = usePodMetrics(namespace, instances[0]?.pod ?? '')
+  const metrics = useQueries({ queries: instances.map((i) => podMetricsQuery(namespace, i.pod)) })
   if (instances.length === 0) return null
-  if (probe.data === null) {
+  // One Pod without metrics may just not be scraped yet; every Pod without
+  // them is the metrics API missing, said once rather than on every card.
+  if (cnpgMetricsApiMissing(metrics.map((m) => m.data))) {
     return <div className="text-xs text-theme-text-tertiary">CPU and memory not measured: the metrics API (metrics-server) is not available.</div>
   }
   return (
@@ -175,7 +176,7 @@ function InstanceResources({ namespace, inst }: { namespace: string; inst: CNPGS
   const c = m.data?.containers.find((x) => x.name === 'postgres')
   let body: ReactNode
   if (m.isLoading) body = <span className="text-theme-text-tertiary">reading…</span>
-  else if (m.data === null) body = <span className="text-theme-text-tertiary">not measured: the metrics API (metrics-server) is not available</span>
+  else if (m.data === null) body = <span className="text-theme-text-tertiary">not measured yet: no metrics for this Pod</span>
   else if (!c) body = <span className="text-theme-text-tertiary">not measured{m.error instanceof Error ? `: ${m.error.message}` : ''}</span>
   else {
     const cpu = usage(parseCPUToNanocores(c.usage.cpu), inst.cpuLimit ? parseCPUToNanocores(inst.cpuLimit) : undefined)

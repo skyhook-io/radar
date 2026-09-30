@@ -116,3 +116,12 @@ export function cnpgConnectionFigure(
     tone: connectionTone(ratio),
   }
 }
+
+/**
+ * Whether the metrics API itself is missing, from each instance's metrics
+ * read (null = none for that Pod, undefined = not answered yet). Only every
+ * instance answering null says so; one null may be a Pod not scraped yet.
+ */
+export function cnpgMetricsApiMissing(results: (unknown | null | undefined)[]): boolean {
+  return results.length > 0 && results.every((r) => r === null)
+}

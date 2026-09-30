@@ -3027,23 +3027,31 @@ function retryMetricsQuery(failureCount: number, error: unknown): boolean {
   return !isMetricsUnavailableError(error) && failureCount < 1;
 }
 
+// The query behind usePodMetrics, for callers reading several Pods at once
+// (useQueries) that must share its cache and its null-when-unavailable rule.
+// null means no metrics for this Pod: the metrics API is missing, or the Pod
+// has not been scraped yet; one Pod's null cannot tell those apart.
+export function podMetricsQuery(namespace: string, podName: string, enabled = true) {
+  return {
+    queryKey: ["pod-metrics", namespace, podName] as const,
+    queryFn: () =>
+      fetchMetricsOrNull<PodMetrics>(`/metrics/pods/${namespace}/${podName}`),
+    enabled: Boolean(namespace && podName) && enabled,
+    staleTime: 15000,
+    refetchInterval: 30000,
+    refetchOnMount: "always" as const,
+    refetchOnReconnect: "always" as const,
+    retry: retryMetricsQuery,
+  };
+}
+
 // Fetch metrics for a specific pod
 export function usePodMetrics(
   namespace: string,
   podName: string,
   options?: { enabled?: boolean },
 ) {
-  return useQuery<PodMetrics | null>({
-    queryKey: ["pod-metrics", namespace, podName],
-    queryFn: () =>
-      fetchMetricsOrNull<PodMetrics>(`/metrics/pods/${namespace}/${podName}`),
-    enabled: Boolean(namespace && podName) && (options?.enabled ?? true),
-    staleTime: 15000,
-    refetchInterval: 30000,
-    refetchOnMount: "always",
-    refetchOnReconnect: "always",
-    retry: retryMetricsQuery,
-  });
+  return useQuery<PodMetrics | null>(podMetricsQuery(namespace, podName, options?.enabled ?? true));
 }
 
 export function usePodEnvironment(namespace: string, podName: string, enabled = true) {

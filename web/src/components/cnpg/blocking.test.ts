@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildBlockingTree, cnpgConnectionFigure, countVictims } from './blocking'
+import { buildBlockingTree, cnpgConnectionFigure, cnpgMetricsApiMissing, countVictims } from './blocking'
 import type { CNPGBackend } from '../../api/cnpg-sessions'
 
 const s = (pid: number, blockedBy: number[] = []): CNPGBackend => ({ pid, blockedBy, backendStart: `t${pid}` })
@@ -47,5 +47,14 @@ describe('cnpgConnectionFigure', () => {
     expect(f).toMatchObject({ value: '90 of 100', tone: 'degraded' })
     expect(f?.detail).toContain('superuser reserve is not read')
     expect(cnpgConnectionFigure(undefined, {})).toBeUndefined()
+  })
+})
+
+describe('cnpgMetricsApiMissing', () => {
+  it('says the metrics API is missing only when no instance has metrics', () => {
+    expect(cnpgMetricsApiMissing([null, null])).toBe(true)
+    expect(cnpgMetricsApiMissing([null, { containers: [] }])).toBe(false)
+    expect(cnpgMetricsApiMissing([null, undefined])).toBe(false)
+    expect(cnpgMetricsApiMissing([])).toBe(false)
   })
 })
