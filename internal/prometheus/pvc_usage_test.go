@@ -39,6 +39,10 @@ func TestPVCUsageAvailability(t *testing.T) {
 					return
 				}
 				calls++
+				if strings.HasPrefix(query, "max(count by (") {
+					_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1700000000,"1"]}]}}`))
+					return
+				}
 				value, kind := tc.capacity, "capacity"
 				if strings.Contains(query, "used_bytes") {
 					value, kind = tc.used, "used"
@@ -101,8 +105,8 @@ func TestQueryPVCUsageHoldsToOneClusterIdentity(t *testing.T) {
 	q := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
 		east := strings.Contains(query, `cluster="east"`)
 		switch {
-		case strings.HasPrefix(query, "count by ("):
-			return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"cluster": "east"}, 1), vec(map[string]string{"cluster": "west"}, 1)}}, nil
+		case strings.HasPrefix(query, "max(count by ("):
+			return &prom.QueryResult{Series: []prom.Series{vec(nil, 2)}}, nil
 		case strings.Contains(query, "used_bytes") && east:
 			return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"persistentvolumeclaim": "pg-1"}, 95*gi)}}, nil
 		case strings.Contains(query, "capacity_bytes") && east:
@@ -136,8 +140,8 @@ func TestPVCUsageHandlerRefusesMergedClusters(t *testing.T) {
 			return
 		}
 		result := `[{"metric":{},"value":[1700000000,"1024"]}]`
-		if strings.HasPrefix(query, "count by (") {
-			result = `[{"metric":{"cluster":"east"},"value":[1700000000,"1"]},{"metric":{"cluster":"west"},"value":[1700000000,"1"]}]`
+		if strings.HasPrefix(query, "max(count by (") {
+			result = `[{"metric":{},"value":[1700000000,"2"]}]`
 		}
 		_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":%s}}`, result)
 	}))

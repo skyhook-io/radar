@@ -132,7 +132,9 @@ func withScope(selector, matchers string) string {
 // is collected over (an instant check would miss one that stopped reporting
 // minutes ago but still fills the chart).
 type scopeProbe struct {
-	metric    string
+	metric string
+	// key is the label one Kubernetes object's series share (pod, claim).
+	key       string
 	selectors []string
 	window    time.Duration
 }
@@ -147,7 +149,7 @@ func (p scopeProbe) over(sel string) string {
 // ResolveCNPGScope decides the cluster-identity matchers for one namespace's
 // CNPG exporter series over window (0 for an instant read).
 func ResolveCNPGScope(ctx context.Context, namespace, selector string, anchors []prom.WorkloadPodIdentity, window time.Duration) (string, CNPGIsolation, error) {
-	return resolveScope(ctx, namespace, scopeProbe{metric: "cnpg_collector_up", selectors: []string{selector}, window: window}, anchors, nil)
+	return resolveScope(ctx, namespace, scopeProbe{metric: "cnpg_collector_up", key: "pod", selectors: []string{selector}, window: window}, anchors, nil)
 }
 
 // ResolvePVCScope decides the cluster-identity matchers for the named claims'
@@ -157,7 +159,7 @@ func ResolvePVCScope(ctx context.Context, namespace string, claims []string, anc
 }
 
 func pvcScopeProbe(namespace string, claims []string, window time.Duration) scopeProbe {
-	return scopeProbe{metric: "kubelet_volume_stats_capacity_bytes", selectors: CNPGClaimSelectors(namespace, claims), window: window}
+	return scopeProbe{metric: "kubelet_volume_stats_capacity_bytes", key: "persistentvolumeclaim", selectors: CNPGClaimSelectors(namespace, claims), window: window}
 }
 
 // CNPGClaimSelectors selects the named claims of one namespace, in batches
@@ -177,8 +179,9 @@ func CNPGClaimSelectors(namespace string, claims []string) []string {
 }
 
 // resolveScope applies an operator-configured scope first, then identity
-// labels proven by kube-state-metrics Pod UIDs, else the one identity the
-// probed series carry, refusing when they carry more than one.
+// labels proven by kube-state-metrics Pod UIDs. Only those two may add
+// matchers: labels merely seen on the series are not identity (the CNPG
+// exporter's own `cluster` label is the database cluster's name).
 // With no anchors, a cache lets the proof use the namespace's current Pods.
 func resolveScope(ctx context.Context, namespace string, probe scopeProbe, anchors []prom.WorkloadPodIdentity, cache *k8s.ResourceCache) (string, CNPGIsolation, error) {
 	client := GetClient()
@@ -231,47 +234,19 @@ func decideScope(ctx context.Context, q cnpgQuerier, probe scopeProbe, verified 
 		}
 		return m, cnpgVerifiedIsolation(verified), nil
 	}
-	identities := map[string]map[string]string{}
+	// Unproven: nothing is pinned. One object (Pod, claim) whose series carry
+	// more than one set of partition labels over the range may be two
+	// clusters' objects of the same name, so that is refused.
 	for _, sel := range probe.selectors {
-		res, err := q.Query(ctx, "count by ("+strings.Join(partitionLabels, ",")+") ("+probe.over(sel)+")")
+		res, err := q.Query(ctx, "max(count by ("+probe.key+") (count by ("+probe.key+","+strings.Join(partitionLabels, ",")+") ("+probe.over(sel)+")))")
 		if err != nil {
 			return "", CNPGIsolation{}, err
 		}
-		for _, s := range res.Series {
-			id := make(map[string]string, len(partitionLabels))
-			parts := make([]string, len(partitionLabels))
-			for i, l := range partitionLabels {
-				id[l], parts[i] = s.Labels[l], s.Labels[l]
-			}
-			identities[strings.Join(parts, "\x00")] = id
+		if len(res.Series) > 0 && len(res.Series[0].DataPoints) > 0 && res.Series[0].DataPoints[0].Value > 1 {
+			return "", CNPGIsolation{}, ErrCNPGScopeAmbiguous
 		}
 	}
-	switch len(identities) {
-	case 0:
-		return "", CNPGIsolation{Mode: CNPGIsolationUnverified, Note: "selected by namespace and names; Prometheus has no series for them to check the cluster identity of"}, nil
-	case 1:
-	default:
-		return "", CNPGIsolation{}, ErrCNPGScopeAmbiguous
-	}
-	var only map[string]string
-	for _, id := range identities {
-		only = id
-	}
-	// Pinning every partition label (absent ones as "") keeps a second
-	// identity that starts reporting after this check out of the answer.
-	matchers := make([]string, len(partitionLabels))
-	shown := map[string]string{}
-	for i, l := range partitionLabels {
-		matchers[i] = l + "=" + strconv.Quote(only[l])
-		if only[l] != "" {
-			shown[l] = only[l]
-		}
-	}
-	iso := CNPGIsolation{Mode: CNPGIsolationUnverified, Note: "selected by namespace and names and held to the one cluster identity these series carry; Radar could not prove it is this cluster's"}
-	if len(shown) > 0 {
-		iso.Labels = shown
-	}
-	return strings.Join(matchers, ","), iso, nil
+	return "", CNPGIsolation{Mode: CNPGIsolationUnverified, Note: "selected by namespace and names; this Prometheus shows one identity for each of them over the range, but Radar could not prove it is this cluster's"}, nil
 }
 
 func cnpgVerifiedIsolation(labels map[string]string) CNPGIsolation {

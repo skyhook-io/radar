@@ -76,27 +76,22 @@ func TestParseCNPGHistoryRangeBoundsPoints(t *testing.T) {
 }
 
 func cnpgProbe(window time.Duration) scopeProbe {
-	return scopeProbe{metric: "cnpg_collector_up", selectors: []string{`namespace="pg"`}, window: window}
+	return scopeProbe{metric: "cnpg_collector_up", key: "pod", selectors: []string{`namespace="pg"`}, window: window}
 }
 
 func TestDecideScopeRefusesAmbiguousIdentity(t *testing.T) {
 	q := &fakeCNPGQuerier{instant: func(string) (*prom.QueryResult, error) {
-		return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"cluster": "east"}, 1), vec(map[string]string{"cluster": "west"}, 1)}}, nil
+		return &prom.QueryResult{Series: []prom.Series{vec(nil, 2)}}, nil
 	}}
 	if _, _, err := decideScope(context.Background(), q, cnpgProbe(0), nil); !errors.Is(err, ErrCNPGScopeAmbiguous) {
 		t.Fatalf("err = %v, want ambiguous", err)
 	}
 	q.instant = func(string) (*prom.QueryResult, error) {
-		return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"cluster": "east"}, 1)}}, nil
+		return &prom.QueryResult{Series: []prom.Series{vec(nil, 1)}}, nil
 	}
 	m, iso, err := decideScope(context.Background(), q, cnpgProbe(0), nil)
-	if err != nil || iso.Mode != CNPGIsolationUnverified || iso.Labels["cluster"] != "east" {
+	if err != nil || m != "" || iso.Mode != CNPGIsolationUnverified {
 		t.Fatalf("single identity: m=%q iso=%+v err=%v", m, iso, err)
-	}
-	// The one identity is pinned, absent partition labels included, so a
-	// second identity appearing later cannot join the answer.
-	if !strings.Contains(m, `cluster="east"`) || !strings.Contains(m, `cluster_id=""`) {
-		t.Fatalf("pinned matchers = %q", m)
 	}
 }
 
@@ -104,14 +99,48 @@ func TestDecideScopeRefusesAmbiguousIdentity(t *testing.T) {
 // chart, so the check must span the chart's range, not the present instant.
 func TestDecideScopeChecksIdentitiesOverTheWholeRange(t *testing.T) {
 	q := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
-		series := []prom.Series{vec(map[string]string{"cluster": "east"}, 1)}
+		v := 1.0
 		if strings.Contains(query, "count_over_time(cnpg_collector_up{") && strings.Contains(query, "[1h0m0s]") {
-			series = append(series, vec(map[string]string{"cluster": "west"}, 1))
+			v = 2
 		}
-		return &prom.QueryResult{Series: series}, nil
+		return &prom.QueryResult{Series: []prom.Series{vec(nil, v)}}, nil
 	}}
 	if _, _, err := decideScope(context.Background(), q, cnpgProbe(time.Hour), nil); !errors.Is(err, ErrCNPGScopeAmbiguous) {
 		t.Fatalf("err = %v, want ambiguous over the range; queries %v", err, q.queries)
+	}
+}
+
+// The CNPG exporter labels its own series cluster=<database cluster>; that
+// is not a Kubernetes identity and must never be imposed on other families.
+func TestDecideScopeNeverPinsExporterLabels(t *testing.T) {
+	q := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
+		if strings.HasPrefix(query, "max(count by (pod)") {
+			return &prom.QueryResult{Series: []prom.Series{vec(nil, 1)}}, nil
+		}
+		return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"cluster": "pg"}, 1)}}, nil
+	}}
+	m, _, err := decideScope(context.Background(), q, scopeProbe{metric: "cnpg_collector_up", key: "pod", selectors: []string{CNPGInstanceSelector("db", "pg")}, window: time.Hour}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, def := range cnpgHistoryDefs(withScope(CNPGInstanceSelector("db", "pg"), m), "", 30*time.Second) {
+		if def.id == "replicationLag" && strings.Contains(def.queries[0].expr, `cluster="pg"`) {
+			t.Fatalf("exporter's cluster label imposed on replication metrics: %s", def.queries[0].expr)
+		}
+	}
+}
+
+// Two database clusters in one namespace carry different exporter cluster
+// labels; each Pod still has one identity, so fleet lag is not ambiguous.
+func TestDecideScopeTwoDatabasesInOneKubernetesCluster(t *testing.T) {
+	q := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
+		if strings.HasPrefix(query, "max(count by (pod)") {
+			return &prom.QueryResult{Series: []prom.Series{vec(nil, 1)}}, nil
+		}
+		return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"cluster": "pg-a"}, 1), vec(map[string]string{"cluster": "pg-b"}, 1)}}, nil
+	}}
+	if _, _, err := decideScope(context.Background(), q, scopeProbe{metric: "cnpg_collector_up", key: "pod", selectors: []string{CNPGInstancesSelector("db", []string{"pg-a", "pg-b"})}, window: 10 * time.Minute}, nil); err != nil {
+		t.Fatalf("two CNPG clusters in one Kubernetes cluster rejected: %v", err)
 	}
 }
 
