@@ -220,6 +220,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	// machine). Serial by necessity — port-forwarding mutates the owner's shared
 	// forward state.
 	var lastErr error
+	forbidden := 0
 	for _, cand := range candidates {
 		// Bail promptly if the run was superseded mid-fallback (Reset / context
 		// switch) rather than churning the rest of the list while holding the gate.
@@ -276,6 +277,9 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 				return "", "", err
 			}
 			lastErr = fmt.Errorf("port-forward to %s/%s failed: %w", cand.Namespace, cand.Name, pfErr)
+			if strings.Contains(strings.ToLower(pfErr.Error()), "forbidden") {
+				forbidden++
+			}
 			if !discoveryDiagnosticsSuppressed(ctx) {
 				errorlog.Record("prometheus", "error", "port-forward to %s/%s failed: %v", cand.Namespace, cand.Name, pfErr)
 			}
@@ -319,10 +323,17 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		return "", "", err
 	}
 	log.Printf("[prometheus] discovery failed after %s: no reachable Prometheus among %d candidate(s)", took(start), len(candidates))
-	if lastErr != nil {
-		return "", "", lastErr
+	// With several candidates the last one's failure describes whichever
+	// Service happened to rank last, often not a Prometheus at all.
+	switch {
+	case lastErr == nil:
+		return "", "", errPrometheusUnreachable
+	case len(candidates) > 1 && forbidden == len(candidates):
+		return "", "", fmt.Errorf("port-forwarding to the %d Prometheus candidates was refused (needs create pods/portforward): %w", len(candidates), errPrometheusUnreachable)
+	case len(candidates) > 1:
+		return "", "", fmt.Errorf("none of the %d candidate Prometheus services answered through a port-forward: %w", len(candidates), errPrometheusUnreachable)
 	}
-	return "", "", errPrometheusUnreachable
+	return "", "", lastErr
 }
 
 // logDiscoveryEnded logs a discovery that ended on a context error, telling a

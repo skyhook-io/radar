@@ -544,7 +544,7 @@ func TestCNPGClusterRuntime_UnreachableAndRedirect(t *testing.T) {
 		t.Fatalf("status = %d: %s", status, body)
 	}
 	for _, inst := range got.Instances {
-		if inst.Metrics.State != cnpgRuntimeStateUnreachable || !strings.Contains(inst.Metrics.Error, "connection refused") {
+		if inst.Metrics.State != cnpgRuntimeStateUnreachable || inst.Metrics.Error != "nothing is listening on port 9187 in the Pod" {
 			t.Errorf("%s metrics = %+v", inst.Pod, inst.Metrics.CNPGRuntimeSource)
 		}
 		if inst.Status.State != cnpgRuntimeStateError || !strings.Contains(inst.Status.Error, "redirect") {

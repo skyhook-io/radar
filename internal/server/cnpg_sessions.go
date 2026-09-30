@@ -118,14 +118,20 @@ func (s *Server) cnpgExecFor(r *http.Request) cnpgExecFunc {
 func cnpgExecSourceState(err error) CNPGRuntimeSource {
 	msg := err.Error()
 	lower := strings.ToLower(msg)
+	text := truncateCNPGRuntimeError(msg)
+	plain, transport := cnpgTransportSentence(err, 0, cnpgExecTimeout)
+	if transport {
+		log.Printf("[cnpg] Exec failed: %v", err)
+		text = plain
+	}
 	switch {
 	case strings.Contains(lower, "forbidden"):
 		return CNPGRuntimeSource{State: cnpgExecStateDenied, Error: truncateCNPGRuntimeError(msg)}
-	case errors.Is(err, context.DeadlineExceeded), strings.Contains(lower, "connection refused"), strings.Contains(lower, "no such host"),
+	case transport, errors.Is(err, context.DeadlineExceeded), strings.Contains(lower, "connection refused"), strings.Contains(lower, "no such host"),
 		strings.Contains(lower, "container not found"), strings.Contains(lower, "unable to upgrade connection"):
-		return CNPGRuntimeSource{State: cnpgRuntimeStateUnreachable, Error: truncateCNPGRuntimeError(msg)}
+		return CNPGRuntimeSource{State: cnpgRuntimeStateUnreachable, Error: text}
 	default:
-		return CNPGRuntimeSource{State: cnpgRuntimeStateError, Error: truncateCNPGRuntimeError(msg)}
+		return CNPGRuntimeSource{State: cnpgRuntimeStateError, Error: text}
 	}
 }
 

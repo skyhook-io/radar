@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -76,8 +77,19 @@ func cnpgReadOutcome(err error, g cnpgGrant, namespace string) CNPGReadCoverage 
 	case apierrors.IsNotFound(err):
 		return CNPGReadCoverage{State: cnpgReadNotFound, Reason: err.Error()}
 	default:
-		return CNPGReadCoverage{State: cnpgReadError, Reason: err.Error()}
+		return CNPGReadCoverage{State: cnpgReadError, Reason: cnpgPlainReadError(err.Error())}
 	}
+}
+
+// cnpgPlainReadError is the reader-facing text of a failed Kubernetes API
+// read: a sentence for a failure in transit (the raw error is logged),
+// otherwise the error itself.
+func cnpgPlainReadError(raw string) string {
+	if plain, ok := cnpgTransportSentence(errors.New(raw), 0, cnpgHAReadTimeout); ok {
+		log.Printf("[cnpg] Read failed: %s", raw)
+		return plain
+	}
+	return truncateCNPGRuntimeError(raw)
 }
 
 // CNPGRecoveryCluster is the restored Cluster's own progress. Counts are nil

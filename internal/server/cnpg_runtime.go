@@ -832,12 +832,12 @@ func cnpgProxyGet(ctx context.Context, client kubernetes.Interface, t cnpgProxyT
 		Suffix(t.path).
 		Stream(ctx)
 	if err != nil {
-		return classifyCNPGProxyError(ctx, err, out)
+		return classifyCNPGProxyFailure(ctx, err, out, t)
 	}
 	defer stream.Close()
 	body, err := io.ReadAll(io.LimitReader(stream, t.limit+1))
 	if err != nil {
-		return classifyCNPGProxyError(ctx, err, out)
+		return classifyCNPGProxyFailure(ctx, err, out, t)
 	}
 	if int64(len(body)) > t.limit {
 		out.body, out.truncated = body[:t.limit], true
@@ -856,6 +856,24 @@ var cnpgSchemeMismatchHints = []string{
 	"client sent an http request to an https server",
 	"first record does not look like a tls handshake",
 	"malformed http response",
+}
+
+// classifyCNPGProxyFailure classifies a failed read and, for a failure in
+// transit, replaces the raw error with a sentence; the raw error is logged.
+func classifyCNPGProxyFailure(ctx context.Context, err error, out cnpgProxyOutcome, t cnpgProxyTarget) cnpgProxyOutcome {
+	out = classifyCNPGProxyError(ctx, err, out)
+	if out.state == cnpgRuntimeStateDenied || errors.Is(err, context.Canceled) {
+		return out
+	}
+	cause := err
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		cause = context.DeadlineExceeded
+	}
+	if plain, ok := cnpgTransportSentence(cause, t.port, cnpgRuntimeRequestTimeout); ok {
+		log.Printf("[cnpg] Failed to read %s/%s port %d %s: %v", t.namespace, t.pod, t.port, t.path, err)
+		out.err = plain
+	}
+	return out
 }
 
 func classifyCNPGProxyError(ctx context.Context, err error, out cnpgProxyOutcome) cnpgProxyOutcome {

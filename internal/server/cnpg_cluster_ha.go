@@ -313,6 +313,10 @@ func cnpgHAReadError(err error, g cnpgGrant, namespace string) CNPGHASource {
 	case errors.Is(err, context.DeadlineExceeded) || apierrors.IsTimeout(err):
 		return CNPGHASource{State: cnpgHAStateUnavailable, Reason: "no answer within " + cnpgHAReadTimeout.String()}
 	default:
+		if plain, ok := cnpgTransportSentence(err, 0, cnpgHAReadTimeout); ok {
+			log.Printf("[cnpg] Failed to read %s: %v", g.String(namespace), err)
+			return CNPGHASource{State: cnpgHAStateUnavailable, Reason: plain}
+		}
 		return CNPGHASource{State: cnpgHAStateError, Reason: truncateCNPGRuntimeError(err.Error())}
 	}
 }

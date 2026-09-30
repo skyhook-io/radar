@@ -248,7 +248,7 @@ func cnpgReadReason(err error) string {
 	if apierrors.IsForbidden(err) {
 		return "no access"
 	}
-	return truncateCNPGRuntimeError(err.Error())
+	return cnpgPlainReadError(err.Error())
 }
 
 type cnpgDestroyParams struct {
