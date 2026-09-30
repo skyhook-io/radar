@@ -81,6 +81,13 @@ describe('CNPGClusterSummary', () => {
     expect(onNavigate).toHaveBeenCalledWith(expect.objectContaining({ kind: 'Backup', name: 'b-b' }))
     act(() => root.unmount())
   })
+  it('can open with every problem listed', () => {
+    const r = row({ problems: [problem('a', 'critical', 'WAL archiving failing'), problem('b', 'warning', 'Backup failed')], attention: true })
+    const root = render(<CNPGClusterSummary row={r} initialProblemsExpanded />)
+    const more = [...document.querySelectorAll('button')].find((b) => b.getAttribute('aria-expanded') !== null)!
+    expect(more.getAttribute('aria-expanded')).toBe('true')
+    act(() => root.unmount())
+  })
   it('keeps a host link as the override', () => {
     const r = row({ problems: [problem('a', 'warning', 'One'), problem('b', 'warning', 'Two')], attention: true })
     const root = render(<CNPGClusterSummary row={r} problemsLink={(n) => <a href="#all">All {n}</a>} />)

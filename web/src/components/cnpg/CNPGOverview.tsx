@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import { ArrowRight, Database, FileText, Search } from 'lucide-react'
 import {
   CNPG_PROBLEM_CATEGORIES,
+  CNPG_PROBLEM_TONE,
   cnpgReadyInstances,
   FactValue,
   StatusDot,
@@ -16,7 +17,7 @@ import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
 import { EmptyState, ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../capacity/shared'
 import { CNPGWorkspaceHeader, CoverageNotice, FilterChips, type CNPGScreenProps } from './shared'
-import { cnpgClusterFullPath, currentPageLabel } from './paths'
+import { cnpgClusterFullPath, cnpgClusterProblemsPath, currentPageLabel } from './paths'
 import { sameResource } from './routes'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 import { cnpgInstancePillLabel, cnpgRowStatus } from './fleetStatus'
@@ -72,17 +73,47 @@ function RowStatusDot({ row }: { row: CNPGFleetRow }) {
   )
 }
 
-function AttentionCell({ row }: { row: CNPGFleetRow }) {
+// A token this long cannot wrap at a word boundary within the cell.
+const UNBREAKABLE_TOKEN = 24
+
+function AttentionCell({ row, onOpenAll }: { row: CNPGFleetRow; onOpenAll: () => void }) {
   const top = row.problems.find((p) => p.severity !== 'posture') ?? row.problems[0]
   if (!top) return <span className="text-theme-text-tertiary">—</span>
-  const tone = top.severity === 'critical' ? 'unhealthy' : top.severity === 'warning' ? 'degraded' : 'neutral'
-  const more = row.problems.length - 1
+  const others = row.problems.filter((p) => p !== top)
+  const unbreakable = top.title.split(/\s+/).some((w) => w.length > UNBREAKABLE_TOKEN)
   return (
     <div className="min-w-0">
       <Tooltip content={top.title} wrapperClassName="w-full">
-        <div className={clsx('line-clamp-2 break-words', toneTextClass(tone))}>{top.title}</div>
+        <div className={clsx('[overflow-wrap:normal]', unbreakable ? 'truncate' : 'line-clamp-2', toneTextClass(CNPG_PROBLEM_TONE[top.severity]))}>{top.title}</div>
       </Tooltip>
-      {more > 0 && <div className="text-xs text-theme-text-tertiary">+{more} more</div>}
+      {others.length > 0 && (
+        <Tooltip
+          content={
+            <ul className="space-y-1">
+              {others.map((p) => (
+                <li key={p.id} className="flex items-start gap-1.5">
+                  <span className="mt-1 shrink-0">
+                    <StatusDot tone={CNPG_PROBLEM_TONE[p.severity]} size="xs" />
+                  </span>
+                  <span>{p.title}</span>
+                </li>
+              ))}
+            </ul>
+          }
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenAll()
+            }}
+            aria-label={`${others.length} more problems: open ${row.name} with every problem listed`}
+            className="rounded text-xs text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            +{others.length} more
+          </button>
+        </Tooltip>
+      )}
     </div>
   )
 }
@@ -293,7 +324,16 @@ export function CNPGOverview({
                         </td>
                         <td className={TD}><FactValue fact={row.declarations.summary} /></td>
                         <td className={clsx(TD, 'font-mono')}>{row.pgVersion ?? '—'}</td>
-                        <td className={clsx(TD, 'overflow-hidden')}><AttentionCell row={row} /></td>
+                        <td className={clsx(TD, 'overflow-hidden')}>
+                          <AttentionCell
+                            row={row}
+                            onOpenAll={() =>
+                              navigate(cnpgClusterProblemsPath(row.namespace, row.name, connection.context || undefined), {
+                                state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
+                              })
+                            }
+                          />
+                        </td>
                         <td className={clsx(TD, 'text-right')}>
                           <div className="flex items-center justify-end gap-1">
                             <button

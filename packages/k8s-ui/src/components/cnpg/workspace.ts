@@ -212,6 +212,32 @@ const PROTECTION_ISSUE_REASONS = new Set([
   'CNPGScheduledRunNoBackup',
 ])
 
+// What an instance Pod's bare reason means, said about the Pod.
+const CNPG_POD_REASON_SENTENCES: Record<string, string> = {
+  ReadinessProbeFailed: 'not ready (readiness probe failing)',
+  LivenessProbeFailed: 'restarting (liveness probe failing)',
+  CrashLoopBackOff: 'restarting (CrashLoopBackOff)',
+  HighRestartCount: 'restarting repeatedly',
+  OOMKilled: 'killed for running out of memory (OOMKilled)',
+  ImagePullBackOff: 'cannot pull its image (ImagePullBackOff)',
+  ErrImagePull: 'cannot pull its image (ErrImagePull)',
+}
+
+/**
+ * A problem's title from an issue: its message, unless the message is empty
+ * or only the reason token (e.g. "ReadinessProbeFailed"), which is then
+ * turned into a sentence about the subject.
+ */
+export function cnpgIssueTitle(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'name' | 'reason' | 'message'>): string {
+  const message = issue.message?.trim() ?? ''
+  if (message && message !== issue.reason && /\s/.test(message)) return message
+  const token = message || issue.reason
+  const sentence = CNPG_POD_REASON_SENTENCES[token]
+  if (sentence) return `${issue.name} ${sentence}`
+  const words = token.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()
+  return `${issue.kind} ${issue.name}: ${words}`
+}
+
 export function cnpgIssueCategory(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'reason'>): CNPGProblemCategory {
   if (PROTECTION_ISSUE_REASONS.has(issue.reason)) return 'protection'
   switch (issue.kind) {
@@ -580,7 +606,7 @@ function problemsFor(
       id: `${issue.id}:${issue.kind}/${issue.name}`,
       severity: issue.severity,
       category: cnpgIssueCategory(issue),
-      title: issue.message || issue.reason,
+      title: cnpgIssueTitle(issue),
       detail: issue.cause || undefined,
       subject: { kind: issue.kind, group: issue.group ?? '', namespace: ns, name: issue.name },
       source: 'issue',
@@ -598,8 +624,7 @@ function problemsFor(
       source: 'audit',
     })
   }
-  const rank = { critical: 0, warning: 1, posture: 2 } as const
-  return out.sort((a, b) => rank[a.severity] - rank[b.severity] || a.title.localeCompare(b.title))
+  return out.sort(cnpgCompareProblems)
 }
 
 /**
@@ -618,9 +643,22 @@ export function cnpgReadyInstances(row: Pick<CNPGFleetRow, 'instances' | 'podRea
   return { text: `${row.instances.ready ?? '–'}/${desired}` }
 }
 
+const CNPG_SEVERITY_RANK = { critical: 0, warning: 1, posture: 2 } as const
+
+/**
+ * The order problems are shown in, everywhere: most severe first, then a
+ * cause before its symptoms. One instance Pod's state (a failing probe, a
+ * crash loop) is usually the symptom of a cluster-level problem (archiving,
+ * backups, replication, reconciliation, declarations), so at equal severity
+ * those come first.
+ */
+export function cnpgCompareProblems(a: CNPGProblem, b: CNPGProblem): number {
+  const symptom = (p: CNPGProblem) => (p.subject.kind === 'Pod' && p.subject.group === '' ? 1 : 0)
+  return CNPG_SEVERITY_RANK[a.severity] - CNPG_SEVERITY_RANK[b.severity] || symptom(a) - symptom(b) || a.title.localeCompare(b.title)
+}
+
 function sortProblems(list: CNPGProblem[]): CNPGProblem[] {
-  const rank = { critical: 0, warning: 1, posture: 2 } as const
-  return list.sort((a, b) => rank[a.severity] - rank[b.severity] || a.title.localeCompare(b.title))
+  return list.sort(cnpgCompareProblems)
 }
 
 function primaryConflictOf(cluster: any, pods: any[]): CNPGFleetRow['primaryConflict'] {
@@ -851,7 +889,7 @@ function urgencyOf(row: CNPGFleetRow): { worst: number; urgent: number; total: n
   let worst = 3
   let urgent = 0
   for (const p of row.problems) {
-    worst = Math.min(worst, PROBLEM_RANK[p.severity])
+    worst = Math.min(worst, CNPG_SEVERITY_RANK[p.severity])
     if (p.severity !== 'posture') urgent++
   }
   return { worst, urgent, total: row.problems.length }
@@ -958,8 +996,6 @@ export function cnpgDiskFact(r: CNPGDiskReading | undefined): CNPGFact {
   }
 }
 
-const PROBLEM_RANK = { critical: 0, warning: 1, posture: 2 } as const
-
 /**
  * Joins /api/cnpg/disk into the fleet: every row gets its disk fact, and a
  * volume at or past the warning threshold becomes a problem, so the cluster
@@ -983,7 +1019,7 @@ export function applyCNPGDisk(fleet: CNPGFleet, readings: CNPGDiskReading[] | un
       subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
       source: 'measurement',
     }
-    const problems = [...row.problems, problem].sort((a, b) => PROBLEM_RANK[a.severity] - PROBLEM_RANK[b.severity] || a.title.localeCompare(b.title))
+    const problems = [...row.problems, problem].sort(cnpgCompareProblems)
     return { ...next, problems, attention: true, categories: new Set([...row.categories, problem.category]) }
   })
   return finishFleet(rows, fleet.incompleteKinds)
@@ -1100,7 +1136,7 @@ export function applyCNPGFleetMetrics(fleet: CNPGFleet, readings: CNPGFleetMetri
     if (row.replication.source === CNPG_LAG_UNMEASURED_SOURCE) next.replication = measuredReplication(row.replication, reading, src)
     const problem = sustainedLagProblem(row, reading, src)
     if (!problem) return next
-    const problems = [...row.problems, problem].sort((a, b) => PROBLEM_RANK[a.severity] - PROBLEM_RANK[b.severity] || a.title.localeCompare(b.title))
+    const problems = [...row.problems, problem].sort(cnpgCompareProblems)
     return { ...next, problems, attention: true, categories: new Set([...row.categories, problem.category]) }
   })
   return finishFleet(rows, fleet.incompleteKinds)

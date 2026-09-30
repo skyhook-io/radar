@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgDimensionPath, cnpgWithinDetail } from './paths'
+import { cnpgClusterProblemsPath, cnpgDimensionPath, cnpgWithinDetail } from './paths'
 
 describe('cnpgDimensionPath', () => {
   it('opens each health dimension where it is explained', () => {
@@ -22,5 +22,12 @@ describe('cnpgWithinDetail', () => {
   it('leaves a link to another page alone', () => {
     expect(cnpgWithinDetail('/cnpg', '', '/cnpg/clusters/db/pg?tab=runtime')).toBeNull()
     expect(cnpgWithinDetail('/cnpg/clusters/db/other', '', '/cnpg/clusters/db/pg?tab=runtime')).toBeNull()
+  })
+})
+
+describe('cnpgClusterProblemsPath', () => {
+  it('opens the Cluster with its problems listed', () => {
+    expect(cnpgClusterProblemsPath('db', 'pg', 'kind')).toBe('/cnpg/clusters/db/pg?ctx=kind&problems=all')
+    expect(cnpgClusterProblemsPath('db', 'pg')).toBe('/cnpg/clusters/db/pg?problems=all')
   })
 })

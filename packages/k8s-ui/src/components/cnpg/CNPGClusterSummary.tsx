@@ -123,6 +123,7 @@ export function CNPGClusterSummary({
   lead,
   dimensions,
   onSelectDimension,
+  initialProblemsExpanded = false,
   haSection,
   stateFacts,
 }: {
@@ -136,6 +137,8 @@ export function CNPGClusterSummary({
   lead?: ReactNode
   /** Serving · Replication · Protection · Storage, each from its own source (see cnpgDimensions). */
   dimensions?: CNPGDimension[]
+  /** Open with every problem listed below the callout (e.g. arriving from the fleet's "+N more"). */
+  initialProblemsExpanded?: boolean
   /** Makes each dimension chip open where that dimension is explained (e.g. Runtime → Replication). */
   onSelectDimension?: (id: CNPGDimension['id']) => void
   /** The host's "HA and instances" section (CNPGClusterHASection), rendered after State. */
@@ -148,7 +151,7 @@ export function CNPGClusterSummary({
   const p = row.protection
   const ns = row.namespace
   const radarFindings = row.problems.some((x) => x.severity !== 'posture')
-  const [showRest, setShowRest] = useState(false)
+  const [showRest, setShowRest] = useState(initialProblemsExpanded)
   const restDisclosure = useDisclosure(showRest)
 
   return (

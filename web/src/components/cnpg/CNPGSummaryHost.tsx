@@ -139,6 +139,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
           </>
         }
         onSelectDimension={(id) => go(cnpgDimensionPath(namespace, name, connection.context || undefined, id))}
+        initialProblemsExpanded={context === 'expanded' && new URLSearchParams(location.search).get('problems') === 'all'}
         dimensions={cnpgDimensions({ row, ha: ha.data, replication: cnpgReplicationLive(runtime.data), replicationGap: cnpgReplicationGap(runtime.data, runtime.error) })}
         stateFacts={<BaseBackupFact runtime={runtime.data} />}
         haSection={

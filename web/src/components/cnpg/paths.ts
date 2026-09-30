@@ -5,6 +5,12 @@ export function cnpgClusterFullPath(namespace: string, name: string, ctx?: strin
   return cnpgDetailPath({ plural: 'clusters', namespace, name }, ctx, tab)
 }
 
+/** The Cluster's page with its problems list open (`problems=all`). */
+export function cnpgClusterProblemsPath(namespace: string, name: string, ctx?: string): string {
+  const path = cnpgClusterFullPath(namespace, name, ctx)
+  return `${path}${path.includes('?') ? '&' : '?'}problems=all`
+}
+
 /**
  * The label for "← back" on the page a push lands on: the title of the page
  * being left, which Radar keeps in the document title.
