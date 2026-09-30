@@ -248,6 +248,51 @@ func TestTargetAcceptanceIsPerIntegrationAndDiscoveryNeedsNone(t *testing.T) {
 	}
 }
 
+func TestDecliningPausedSettingsSwitchesToDiscovery(t *testing.T) {
+	r, a, _ := setupResolver(t)
+	apply(t, r, a, Update{Kind: config.IntegrationArgoCD, Action: "save", Secret: &SecretEdit{Action: "set", Value: "discovery-token"}})
+	apply(t, r, a, Update{Kind: config.IntegrationCost, Action: "save", URL: stringPtr("https://cost.example"), Secret: &SecretEdit{Action: "set", Value: "key"}, ClusterID: stringPtr("cluster-a")})
+	a.Fingerprint = "changed"
+	for _, kind := range []config.Integration{config.IntegrationArgoCD, config.IntegrationCost} {
+		paused := r.Resolve(a, kind, false).View
+		if paused.State != "target_changed" {
+			t.Fatalf("%s not paused after the target changed: %+v", kind, paused)
+		}
+		decline := Update{Target: a, Kind: kind, Action: "auto", Revision: paused.Revision}
+		if kind == config.IntegrationCost {
+			decline.Mode = stringPtr("auto")
+		}
+		if _, err := r.Prepare(a, decline); err == nil {
+			t.Fatalf("%s paused credentials removed without confirmation", kind)
+		}
+		decline.ConfirmRemoval = true
+		got := apply(t, r, a, decline)
+		if got.Err != nil || got.View.State != "saved" || got.View.Mode != "auto" || got.View.URL != "" || got.View.SecretSet || got.View.ClusterID != "" {
+			t.Fatalf("%s decline did not reset to discovery: err=%v view=%+v", kind, got.Err, got.View)
+		}
+	}
+	file, _, err := r.Store.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for kind, settings := range file.Profiles[a.Binding].Integrations {
+		if settings.Target != "" || settings.Identity != nil || settings.NeedsTarget() {
+			t.Fatalf("declined %s kept the old cluster binding: %+v", kind, settings)
+		}
+	}
+	catalog, err := r.Catalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []config.Integration{config.IntegrationArgoCD, config.IntegrationCost} {
+		if !slices.ContainsFunc(catalog, func(entry StoredSettingsView) bool {
+			return entry.Binding == a.Binding && entry.Integration == kind && entry.URL == "" && !entry.SecretSet
+		}) {
+			t.Fatalf("declined %s missing from the catalog as an empty record: %+v", kind, catalog)
+		}
+	}
+}
+
 func TestCostReuseKeepsDestinationMappingAndOriginFence(t *testing.T) {
 	r, a, b := setupResolver(t)
 	apply(t, r, a, Update{Kind: config.IntegrationCost, Action: "save", URL: stringPtr("https://cost.example"), Secret: &SecretEdit{Action: "set", Value: "key"}, ClusterID: stringPtr("cluster-a")})

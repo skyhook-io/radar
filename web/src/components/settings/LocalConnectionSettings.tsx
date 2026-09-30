@@ -114,10 +114,17 @@ const savedCredential: Record<IntegrationKind, string> = {
 }
 function describeSource(kind: IntegrationKind, source: { url: string; secretSet: boolean; headerKeys: string[]; mode?: string; clusterId?: string }) {
   if (source.url) return source.url
-  if (kind === 'cost' && source.mode === 'prometheus') return 'OpenCost via this cluster’s metrics connection'
+  if (kind === 'cost' && source.mode === 'prometheus') return 'OpenCost metrics'
   if (source.secretSet || source.headerKeys.length > 0) return `Auto-discovery with ${savedCredential[kind]}`
   if (source.clusterId) return 'Auto-discovery with a Kubecost cluster mapping'
   return 'Auto-discovery'
+}
+// Cost's reset also returns the source picker to Automatic, so it can't share
+// the endpoint-only "auto-discovery" wording.
+const automaticAction: Record<IntegrationKind, string> = {
+  metrics: 'Use auto-discovery',
+  argocd: 'Use auto-discovery',
+  cost: 'Reset to Automatic'
 }
 const names: Record<IntegrationKind, string> = {
   metrics: 'Metrics',
@@ -448,7 +455,7 @@ export function LocalConnectionSettings({
         header.key.toLowerCase() === key.toLowerCase() && header.action === 'clear'))
       const keptSecret = credentialSource.secretSet && (!draft.secret || draft.secret.action === 'keep') && !draft.useCliToken
       if (keptHeaders || keptSecret) {
-        throw new Error('Remove or replace the saved credentials, or choose Use auto-discovery to clear this connection.')
+        throw new Error(`Remove or replace the saved credentials, or choose ${automaticAction[kind]} to clear this connection.`)
       }
     }
     const update: Update = automaticDraft && !draft.useCliToken
@@ -515,7 +522,7 @@ export function LocalConnectionSettings({
         }}
         className="text-xs text-accent-text hover:underline disabled:opacity-50 shrink-0"
       >
-        Use auto-discovery
+        {automaticAction[kind]}
       </button>
     ) : undefined
   const previous = task === 'main' && profile.state === 'auto' ? profile.legacy : undefined
@@ -601,36 +608,48 @@ export function LocalConnectionSettings({
       {copyAction}
     </div>
   )
+  const removedByDiscovery = [
+    profile.url && (kind === 'cost' ? 'Kubecost endpoint' : 'endpoint'),
+    (profile.secretSet || profile.headerKeys.length > 0) &&
+      (kind === 'metrics' ? 'headers' : kind === 'argocd' ? 'API token' : 'API key'),
+    kind === 'cost' && profile.clusterId && 'Kubecost cluster mapping'
+  ].filter((item): item is string => !!item)
+  const removedList: string | undefined = removedByDiscovery.length > 1
+    ? `${removedByDiscovery.slice(0, -1).join(', ')} and ${removedByDiscovery[removedByDiscovery.length - 1]}`
+    : removedByDiscovery[0]
+  const removedPhrase = kind === 'cost'
+    ? removedList ?? 'cost settings'
+    : `${names[kind]} ${removedList ?? 'settings'}`
+  const discoveryNotice = kind === 'cost'
+    ? `Saving resets this cluster’s cost source to Automatic and removes its saved ${removedPhrase}. Other clusters are unchanged.`
+    : `Saving switches this cluster to auto-discovery and removes its saved ${removedPhrase}. Other clusters are unchanged.`
   const useMetricsForCost =
     pending?.action === 'auto' && pending.mode === 'prometheus'
+  // Paused settings have no editor, so an automatic reset there can only come
+  // from declining them.
+  const decliningPaused =
+    pending?.action === 'auto' && !useMetricsForCost && profile.state === 'target_changed'
   const confirmationTitle = useMetricsForCost
     ? 'Use metrics for cost data?'
-    : 'Replace saved connection?'
+    : decliningPaused
+      ? kind === 'cost' ? 'Reset cost source to Automatic?' : 'Use auto-discovery instead?'
+      : 'Replace saved connection?'
   const confirmationLabel = useMetricsForCost
     ? 'Use metrics connection'
-    : 'Replace connection'
+    : decliningPaused
+      ? automaticAction[kind]
+      : 'Replace connection'
   const confirmationMessage = useMetricsForCost
       ? `Remove the saved Kubecost connection, credentials and cluster mapping for ${removalContext || 'this cluster'} and use its metrics connection for cost data. Other clusters are unchanged.`
-      : `Replace the saved ${names[kind]} connection for ${removalContext || 'this cluster'} with your changes? Other clusters are unchanged.`
+      : decliningPaused
+        ? `Remove the saved ${removedPhrase} for ${removalContext || 'this cluster'} and ${kind === 'cost' ? 'reset its cost source to Automatic' : 'use auto-discovery'}? Other clusters are unchanged.`
+        : `Replace the saved ${names[kind]} connection for ${removalContext || 'this cluster'} with your changes? Other clusters are unchanged.`
   if (pending)
     confirmationCopy.current = {
       title: confirmationTitle,
       message: confirmationMessage,
       label: confirmationLabel
     }
-  const removedByDiscovery = [
-    profile.url && 'endpoint',
-    (profile.secretSet || profile.headerKeys.length > 0) &&
-      (kind === 'metrics' ? 'headers' : kind === 'argocd' ? 'API token' : 'API key'),
-    kind === 'cost' && profile.clusterId && 'Kubecost cluster mapping'
-  ].filter((item): item is string => !!item)
-  const discoveryNotice = `Saving switches this cluster to auto-discovery and removes its saved ${names[kind]} ${
-    removedByDiscovery.length
-      ? removedByDiscovery.length > 1
-        ? `${removedByDiscovery.slice(0, -1).join(', ')} and ${removedByDiscovery[removedByDiscovery.length - 1]}`
-        : removedByDiscovery[0]
-      : 'settings'
-  }. Other clusters are unchanged.`
   const showFeedback = discoveryDraft ? automaticDraft && hasSavedConfiguration : !!(
     message &&
     task === 'main' &&
@@ -669,7 +688,7 @@ export function LocalConnectionSettings({
             className="flex items-center gap-1 text-xs text-accent-text"
           >
             <ArrowLeft className="h-3 w-3" />
-            Back to {names[kind].toLowerCase()}
+            Back to {names[kind]}
           </button>
           <h4
             ref={heading}
@@ -762,20 +781,29 @@ export function LocalConnectionSettings({
               </Badge>
               <p className="text-sm text-theme-text-secondary">
                 {profile.state === 'target_changed'
-                  ? `The server, certificate authority, proxy or user for this context changed, so its saved ${names[kind]} settings are paused. Review them to keep using them here.`
+                  ? `The server, certificate authority, proxy or user for this context changed, so its saved ${names[kind]} settings are paused. Review them to keep using them here, or ${kind === 'cost' ? 'reset this cluster to Automatic' : 'use auto-discovery instead'}.`
                   : profile.error}
               </p>
               {profile.state === 'target_changed' && (
-                <button
-                  type="button"
-                  className="btn-brand px-3 py-2 text-xs"
-                  onClick={() => {
-                    setAccepted([kind])
-                    openTask('reconfirm')
-                  }}
-                >
-                  Review changes
-                </button>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    className="btn-brand px-3 py-2 text-xs"
+                    onClick={() => {
+                      setAccepted([kind])
+                      openTask('reconfirm')
+                    }}
+                  >
+                    Review changes
+                  </button>
+                  <button
+                    type="button"
+                    className="text-xs text-accent-text hover:underline"
+                    onClick={() => confirm({ action: 'auto', ...(kind === 'cost' ? { mode: 'auto' } : {}) })}
+                  >
+                    {kind === 'cost' ? automaticAction.cost : 'Use auto-discovery instead'}
+                  </button>
+                </div>
               )}
               {profile.state === 'error' && !error && (
                 <button
@@ -943,7 +971,7 @@ export function LocalConnectionSettings({
                     )
                   }
                 />
-                {names[k]} · {snapshot[k].url || 'Cluster discovery'}
+                {names[k]} · {snapshot[k].url || 'Auto-discovery'}
               </label>
             ))}
           <button

@@ -143,7 +143,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `historyLimit` | Max timeline events to retain (memory only) |
 | `prometheusUrl` | Manual PromQL-compatible query URL — works with Prometheus, VictoriaMetrics, Thanos, Mimir, and similar backends. Skips auto-discovery; useful when the backend is not in the same cluster or uses a non-standard service name. Leave it empty and Radar looks for a Prometheus-like Service on startup and after each context switch. While it looks, the Metrics status says "discovering". If it finds a backend it cannot reach, and it can see a NetworkPolicy that blocks the connection, the status names that policy. |
 | `opencostCurrency` | Optional ISO 4217 override for values produced by OpenCost or Kubecost. Empty reads `currencyCode` from the pricing ConfigMap referenced by an active OpenCost/Kubecost workload, or literal `DISPLAY_CURRENCY` from an active Kubecost Deployment or StatefulSet, when the selected cost source is tied to the connected cluster; otherwise it falls back to `USD`. In local Settings → Cost, this preference saves automatically for all local clusters, independently of source testing, so it can be changed while a source is unavailable. Radar labels values but does not convert them. Equivalent CLI: `--opencost-currency`; an explicit CLI value remains authoritative while Radar runs and after restart. |
-| `costSource` | `auto` (default), `prometheus`, or `kubecost`. Auto keeps working OpenCost metrics from a PromQL-compatible backend, then tries a Kubecost 3 Aggregator; if neither is present, selection remains unavailable and retries instead of reporting an absent source as active. Local Settings saves this preference per context; connection-check behavior is described below. |
+| `costSource` | `auto` (default), `prometheus`, or `kubecost`, shown in Settings as **Automatic**, **OpenCost metrics** and **Kubecost**. Automatic keeps working OpenCost metrics from a PromQL-compatible backend, then tries a Kubecost 3 Aggregator; if neither is present, selection remains unavailable and retries instead of reporting an absent source as active. Local Settings saves this preference per context; connection-check behavior is described below. |
 | `kubecostUrl` | Optional Kubecost 3 Aggregator base URL. Empty discovers an active local Aggregator Service and tries its named `tcp-api` port (9004). When that port requires SAML/OIDC and no API key is configured, Radar can fall back to the same Service's exact `tcp-api-rbac` port (9008). Federated agent-only clusters need the central URL; root API URLs and URLs ending in `/model` are accepted. |
 | `kubecostClusterId` | Cluster ID used to filter a central Aggregator. Empty detects one distinct literal `CLUSTER_ID` from an active FinOps Agent or Aggregator; indirect or conflicting values require an override. Local Settings stores the override with this context's Cost settings; copying another cluster's backend never copies its cluster ID. |
 | `kubecostApiKey` | Optional Kubecost service-account key sent as `X-API-KEY`. Values are redacted from settings responses. An explicit key is never bypassed through an auto-discovered unauthenticated port: authentication failure remains visible. Local CLI/Desktop stores new keys in `clusters.json`, with explicit reuse and origin-change protection described below; this `config.json` field is only an import source locally. In Helm, provision a Kubernetes Secret with `cost.kubecost.existingSecret`; Settings is read-only. |
@@ -297,7 +297,7 @@ If an active context's credentials expire or are rejected, Radar disconnects clu
 |---|---|
 | Metrics URL, authentication and tenant headers | Stored directly for this kubeconfig context |
 | Argo CD URL, token and TLS verification | Stored directly for this context, including discovery credentials |
-| Cost source (Auto / Prometheus / Kubecost) | Context-specific |
+| Cost source (Automatic / OpenCost metrics / Kubecost) | Context-specific |
 | Kubecost URL and API key | Stored directly for this context, including discovery credentials |
 | Kubecost cluster ID | Context-specific, **never** inherited from another cluster's settings |
 | Prometheus-based costs | Use this context's metrics connection |
@@ -312,11 +312,12 @@ choose **Save changes**. **Discard** resets the form without changing saved sett
 Switching A → B → A restores A's settings. A context with no saved settings uses
 discovery. Local CLI and Desktop share `~/.radar/clusters.json`.
 
-**Use auto-discovery**, below the backend URL (or Cost source), stages an empty
-connection and names what saving will remove from this context: the endpoint,
-credentials and, for Cost, the Kubecost cluster mapping. **Save changes** applies
-it; **Discard** restores the saved settings. The action is disabled when already
-using auto-discovery without overrides.
+**Use auto-discovery**, below the backend URL, stages an empty connection and
+names what saving will remove from this context: the endpoint and credentials.
+On Cost the same action is **Reset to Automatic**: it also returns the cost
+source to Automatic and removes the Kubecost cluster mapping. **Save changes**
+applies it; **Discard** restores the saved settings. The action is disabled when
+already automatic without overrides.
 
 **Copy:** on another context, choose **Copy settings from…** and select the
 source from the searchable picker: another context, or **Previous global
@@ -353,10 +354,10 @@ does not encrypt credentials in transit; use HTTPS outside trusted local paths.
 
 **Connection checks:** Metrics saves first and then tests reachability; an
 unreachable backend remains saved with a warning. Saving an Argo CD endpoint or
-token, Kubecost mode, or Auto-detect with any Kubecost override (URL, API key or
+token, Kubecost mode, or Automatic with any Kubecost override (URL, API key or
 cluster ID) tests an isolated candidate first; a failed test blocks the save and
 leaves the previous connection active. Switching to auto-discovery and confirming
-a changed cluster save without a test. Auto-detect with no Kubecost overrides, or
+a changed cluster save without a test. Automatic with no Kubecost overrides, or
 Prometheus-based cost mode, saves that preference without claiming a
 successful backend test. Explicit Kubecost connections check this cluster's
 mapping and data readiness; cost queries require a narrow cluster filter. Central Argo connectivity does not add cross-cluster resource
@@ -368,7 +369,8 @@ Other contexts are unchanged. Missing kubeconfigs never trigger automatic deleti
 **Settings → Connection → Saved connections** lets you explicitly remove an
 integration for a kubeconfig entry no longer loaded, including discovery
 credentials and mappings. For the current context, use its integration tab.
-A context not loaded in this session may still be in use by another Radar process.
+An entry marked **Kubeconfig not loaded** comes from a kubeconfig file this Radar
+run didn't load; it may still be in use by another Radar process.
 
 Unsaved edits stay in the dialog when switching Settings tabs. Closing it asks
 before discarding them. If another client changes the active cluster while you
@@ -449,7 +451,10 @@ CAPI profiles use management-source/namespace/name identity, not temporary
 kubeconfig paths. Changes to the Kubernetes server, CA trust, TLS settings, proxy
 or user reference pause each affected integration, because a saved endpoint may
 now serve a different cluster's data. **Review changes** asks whether the
-settings still apply and lets you keep selected integrations together. Anonymous discovery without a saved
+settings still apply and lets you keep selected integrations together. To
+decline instead, **Use auto-discovery instead** (Cost: **Reset to Automatic**)
+removes that integration's saved endpoint and credentials after a confirmation,
+including a saved token or key with no URL. Anonymous discovery without a saved
 mapping needs no confirmation. Token rotation alone does not prompt. Replacing
 a cluster behind identical endpoint, trust and user reference is not detectable
 by this fingerprint.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { costConfigurationAction, isCostConfigurable, costDataThroughLabel, costFreshnessLabel, costIntegrationUnavailableMessage, costRateLabels, costSourceLabel, isCostDiscoveryPending } from './source'
+import { COST_SOURCE_OPTIONS, costSourcePreferenceLabel, costConfigurationAction, isCostConfigurable, costDataThroughLabel, costFreshnessLabel, costIntegrationUnavailableMessage, costRateLabels, costSourceLabel, isCostDiscoveryPending } from './source'
 
 describe('cost source presentation', () => {
   it('routes missing sources to one applicable previous connection', () => {
@@ -23,13 +23,20 @@ describe('cost source presentation', () => {
     expect(isCostConfigurable(reason)).toBe(false)
   })
   it('distinguishes Prometheus windows from Kubecost ETL freshness', () => {
-    expect(costSourceLabel('prometheus')).toBe('OpenCost via Prometheus')
-    expect(costSourceLabel('kubecost')).toBe('Kubecost Aggregator')
+    expect(costSourceLabel('prometheus')).toBe('OpenCost metrics')
+    expect(costSourceLabel('kubecost')).toBe('Kubecost')
     expect(costFreshnessLabel('prometheus', '1h')).toBe('last 1h average')
     expect(costFreshnessLabel('kubecost', '1h', '2026-08-26T13:58:00Z')).toContain('1-hour allocation average')
     expect(costFreshnessLabel('kubecost', '1d', '2026-08-26T13:58:00Z')).toContain('1-day allocation average')
     expect(costDataThroughLabel('2026-08-26T13:58:00Z')).toContain('2026')
     expect(costDataThroughLabel('invalid')).toBe('')
+  })
+
+  it('names cost-source preferences the same way in every install type', () => {
+    expect(COST_SOURCE_OPTIONS.map(option => option.label)).toEqual(['Automatic', 'OpenCost metrics', 'Kubecost'])
+    expect(costSourcePreferenceLabel(undefined)).toBe('Automatic')
+    expect(costSourcePreferenceLabel('')).toBe('Automatic')
+    expect(costSourcePreferenceLabel('prometheus')).toBe('OpenCost metrics')
   })
 
   it('labels fallback allocation windows without calling a daily average current', () => {

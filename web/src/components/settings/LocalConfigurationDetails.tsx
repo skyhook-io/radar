@@ -269,7 +269,7 @@ export function SavedClusterConnections({
                   </span>
                   {current ? (
                     <Badge tone="note" size="sm">
-                      Current
+                      Current cluster
                     </Badge>
                   ) : entry.availability === 'removed' ? (
                     <Badge tone="note" size="sm">
@@ -277,7 +277,7 @@ export function SavedClusterConnections({
                     </Badge>
                   ) : entry.availability === 'unavailable' ? (
                     <Badge tone="note" size="sm">
-                      Not loaded in this session
+                      Kubeconfig not loaded
                     </Badge>
                   ) : null}
                 </div>

@@ -31,6 +31,8 @@ import {
   costFreshnessLabel,
   costIntegrationUnavailableMessage,
   costSourceLabel,
+  costSourcePreferenceLabel,
+  COST_SOURCE_OPTIONS,
 } from '../cost/source'
 import { costSourceApplyLabel, integrationSectionLabels, pendingIntegrationSections, shouldShowSettingsFooter } from './settings-state'
 import { PrometheusConfigField } from './PrometheusConfigField'
@@ -134,6 +136,8 @@ function normalizeStartup(c: Config) {
     restoreLastDesktopContext: c.restoreLastDesktopContext ?? true,
   }
 }
+
+const localIntegrationCaption = 'Saved for this cluster · applies when you save, no restart.'
 
 export function SettingsDialog({
   open,
@@ -735,7 +739,7 @@ export function SettingsDialog({
               active={section}
               title="Metrics"
               managed={operatorManaged ? <OperatorSettingsSummary section="prometheus" config={configData} /> : undefined}
-              caption="Connect and manage your metrics backend."
+              caption={configData?.integrationProfiles ? localIntegrationCaption : 'Connect and manage your metrics backend.'}
               live
               locked={!canEditConfig}
             >
@@ -769,7 +773,7 @@ export function SettingsDialog({
               active={section}
               title="Cost"
               managed={operatorManaged ? <OperatorSettingsSummary section="cost" config={configData} /> : undefined}
-              caption="Choose where Radar gets cost data and how amounts are labeled."
+              caption={configData?.integrationProfiles ? `${localIntegrationCaption} Display currency applies to all clusters.` : 'Choose where Radar gets cost data and how amounts are labeled.'}
               live
               locked={!canEditConfig}
             >
@@ -816,7 +820,7 @@ export function SettingsDialog({
               active={section}
               title="Argo CD"
               managed={operatorManaged ? <OperatorSettingsSummary section="argocd" config={configData} /> : undefined}
-              caption="Applies immediately — no restart."
+              caption={configData?.integrationProfiles ? localIntegrationCaption : 'Applies immediately — no restart.'}
               live
               locked={!canEditConfig}
             >
@@ -964,7 +968,7 @@ export function SettingsDialog({
                 <div className="space-y-1 text-xs text-theme-text-secondary">
                   <p>
                   {integrationDirty
-                    ? `${pendingIntegrations.map(pending => integrationSectionLabels[pending]).join(', ')} changes have not been applied.${configDirty ? ' Other changes are unsaved.' : ''}`
+                    ? `${pendingIntegrations.map(pending => integrationSectionLabels[pending]).join(', ')} changes are not saved.${configDirty ? ' Startup settings are unsaved.' : ''}`
                     : 'Unsaved changes.'}
                   </p>
                   {saveMessage && <p role="status" className={saveMessage.startsWith('Error') ? 'text-semantic-error' : undefined}>{saveMessage}</p>}
@@ -1007,7 +1011,7 @@ export function SettingsDialog({
                       className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
                     >
                       {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      {integrationDirty ? 'Save other changes' : 'Save'}
+                      Save startup settings
                     </button>
                   )}
                 </div>
@@ -1052,7 +1056,7 @@ export function SettingsDialog({
                       className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
                     >
                       {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      {integrationDirty ? 'Save other changes' : 'Save'}
+                      Save startup settings
                     </button>
                   )}
                 </div>
@@ -1208,9 +1212,9 @@ function OperatorSettingsSummary({ section, config }: { section: SettingsSection
     case 'cost':
       rows = [
         ['Status', costError ? 'Status unavailable' : !cost ? 'Checking…' : cost.available ? 'Available' : 'Unavailable'],
-        ['Source preference', c.costSource || 'Auto'],
+        ['Source preference', costSourcePreferenceLabel(c.costSource)],
         ['Kubecost endpoint', c.kubecostUrl || 'Auto-discovery'],
-        ['Cluster ID', c.kubecostClusterId || 'Auto-detected when available'],
+        ['Kubecost cluster ID', c.kubecostClusterId || 'Detected automatically'],
         ['API key', config.kubecostApiKeySet ? 'Configured' : 'None configured'],
         ['Currency override', c.opencostCurrency || 'Automatic'],
       ]
@@ -1310,7 +1314,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     {
       id: 'prometheus', icon: Activity, label: 'Metrics',
       tone: prom?.connected ? 'ok' : prom?.discovering ? 'unknown' : prom?.error ? 'warn' : 'off',
-      value: prom?.connected ? 'Connected' : prom?.discovering ? 'Discovering…' : prom?.error ? 'Not connected' : 'Not configured',
+      value: prom?.connected ? 'Connected' : prom?.discovering ? 'Discovering…' : 'Not connected',
       detail: prom?.connected ? prom.address : prom?.discovering ? undefined : prom?.error ? 'Open Metrics for connection details.' : undefined,
     },
     {
@@ -1328,10 +1332,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     {
       id: 'argocd', icon: GitBranch, label: 'Argo CD',
       tone: argo?.connected ? 'ok' : argo?.configured || argo?.reason ? 'warn' : 'off',
-      // Configured-but-not-connected is often a permanently rejected/expired
-      // token, not a transient reconnect — "Not reachable" matches Prometheus and
-      // doesn't imply it will recover on its own.
-      value: argo?.connected ? (argo.anonymous ? 'Connected · no token needed' : 'Connected') : argo?.configured ? 'Not reachable' : 'Not connected',
+      value: argo?.connected ? (argo.anonymous ? 'Connected · no token needed' : 'Connected') : 'Not connected',
       detail: argo?.connected ? argo.address : argo?.reason ? 'Open Argo CD for connection details.' : undefined,
     },
     {
@@ -1760,11 +1761,7 @@ function CostSection({
           <SelectMenu
             id="cost-source"
             value={source}
-            options={[
-              { value: 'auto', label: 'Automatic (recommended)' },
-              { value: 'prometheus', label: 'OpenCost metrics only' },
-              { value: 'kubecost', label: 'Kubecost only' },
-            ]}
+            options={COST_SOURCE_OPTIONS}
             onChange={(value) => { onChangeSource(value as typeof source); setApply({ status: 'idle' }) }}
             disabled={sourceEnvManaged}
             className="w-full"
@@ -1793,7 +1790,7 @@ function CostSection({
               <div id="cost-advanced-connection" className="pt-3">
                 <div className="space-y-3 rounded-md border border-theme-border-subtle bg-theme-base/60 p-3">
                   <div>
-                    <label htmlFor="cost-kubecost-url" className="mb-1 block text-sm font-medium text-theme-text-primary">Kubecost URL</label>
+                    <label htmlFor="cost-kubecost-url" className="mb-1 block text-sm font-medium text-theme-text-primary">Kubecost Aggregator URL</label>
                     <p id="cost-kubecost-url-help" className="mb-1 text-xs text-theme-text-tertiary">
                       Leave blank when Kubecost runs in this cluster. Enter the central Aggregator URL
                       for an agent-only or federated setup.
@@ -1809,7 +1806,7 @@ function CostSection({
                     />
                   </div>
                   <div>
-                    <label htmlFor="cost-kubecost-cluster-id" className="mb-1 block text-sm font-medium text-theme-text-primary">Cluster ID</label>
+                    <label htmlFor="cost-kubecost-cluster-id" className="mb-1 block text-sm font-medium text-theme-text-primary">Kubecost cluster ID</label>
                     <p id="cost-kubecost-cluster-id-help" className="mb-1 text-xs text-theme-text-tertiary">
                       Usually detected automatically. Set it only if detection fails or the Kubecost
                       server contains data for more than one cluster. Use the <code>CLUSTER_ID</code>{' '}
@@ -1821,7 +1818,7 @@ function CostSection({
                       value={clusterId}
                       onChange={(event) => { onChangeClusterId(event.target.value); setApply({ status: 'idle' }) }}
                       disabled={sourceEnvManaged}
-                      placeholder="Auto-detect CLUSTER_ID"
+                      placeholder="Detected automatically"
                       className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
                     />
                   </div>
@@ -1853,17 +1850,17 @@ function CostSection({
                 autoComplete="off"
                 spellCheck={false}
                 disabled={sourceEnvManaged}
-                placeholder={apiKeySet && !apiKeyCleared ? 'Configured — enter to replace' : 'Optional API key'}
+                placeholder={apiKeySet && !apiKeyCleared ? 'Saved value' : 'Optional API key'}
                 className="min-w-0 flex-1 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
               />
               {apiKeySet && !apiKeyCleared && !sourceEnvManaged && (
                 <button
                   type="button"
-                  aria-label="Clear saved Kubecost API key"
+                  aria-label="Remove saved Kubecost API key"
                   onClick={() => { setApiKey(''); setApiKeyTouched(false); setApiKeyCleared(true); setApply({ status: 'idle' }) }}
                   className="px-2 py-1.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary"
                 >
-                  Clear
+                  Remove
                 </button>
               )}
             </div>
@@ -1936,7 +1933,7 @@ function CostSection({
         </label>
         {deploymentMode === 'local' && <p className="mt-1 text-xs text-theme-text-secondary">Display preference · all local clusters. Saved automatically.</p>}
         <p id="cost-currency-help" className="mb-1 mt-0.5 text-xs text-theme-text-tertiary">
-          Auto uses the currency reported by the active cost source, or USD when unavailable.
+          Automatic uses the currency reported by the active cost source, or USD when unavailable.
           Overrides relabel amounts; Radar does not convert them.
         </p>
         <SelectMenu
@@ -1967,7 +1964,7 @@ function CostSection({
         )}
         {managed && (
           <p className="mt-2 text-xs text-amber-600 dark:text-amber-400/80">
-            CLI or Helm currently sets {effectiveCurrency || 'Auto'}; that override stays active until it is removed.
+            CLI or Helm currently sets {effectiveCurrency || 'Automatic'}; that override stays active until it is removed.
           </p>
         )}
       </div>
@@ -2229,7 +2226,7 @@ function ArgoCDEnvManagedField({
                   Connected at {connectedAddress}
                 </span>
               ) : statusReason ? (
-                <span className="text-warning-text">Not reachable — {statusReason}</span>
+                <span className="text-warning-text">Not connected — {statusReason}</span>
               ) : (
                 'Not connected'
               )}
@@ -2450,7 +2447,7 @@ function ArgoCDEditableField({
       )}
 
       <label className="block text-sm font-medium text-theme-text-primary mt-3 mb-1">
-        {cliSession ? 'Or paste a token' : 'Auth token'}
+        {cliSession ? 'Or paste a token' : 'API token'}
       </label>
       <p className="text-xs text-theme-text-tertiary mb-1">
         Lets Radar read your applications. Create one with{' '}
@@ -2463,7 +2460,7 @@ function ArgoCDEditableField({
           type="password"
           value={showConfiguredPlaceholder ? '' : token}
           onChange={(e) => { setToken(e.target.value); setTokenTouched(true); setTokenCleared(false); clearStatus() }}
-          placeholder={showConfiguredPlaceholder ? '•••• configured' : 'Argo CD auth token'}
+          placeholder={showConfiguredPlaceholder ? 'Saved value' : 'Argo CD API token'}
           className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
         />
         {effectiveTokenSet && !tokenCleared && (
@@ -2471,12 +2468,12 @@ function ArgoCDEditableField({
             onClick={() => { setToken(''); setTokenTouched(false); setTokenCleared(true); clearStatus() }}
             className="shrink-0 px-2.5 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors"
           >
-            Clear
+            Remove
           </button>
         )}
       </div>
       {tokenCleared && (
-        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400/80">Token will be cleared on save.</p>
+        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400/80">Token will be removed when you save.</p>
       )}
 
       <label className="mt-2 flex items-center gap-2 cursor-pointer">

@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type ReactNode } from 'react'
 import { Input, Disclosure } from '@skyhook-io/k8s-ui'
 import { ConnectionFormActions, type ConnectionFeedback } from './ConnectionFormActions'
+import { COST_SOURCE_OPTIONS } from '../cost/source'
 
 export interface SecretEdit {
   action: 'keep' | 'set' | 'clear'
@@ -298,9 +299,9 @@ export function CostConnectionForm({
           }}
           className="block w-full rounded-md border border-theme-border bg-theme-elevated px-3 py-2 text-sm"
         >
-          <option value="auto">Auto-detect</option>
-          <option value="prometheus">OpenCost via metrics connection</option>
-          <option value="kubecost">Kubecost</option>
+          {COST_SOURCE_OPTIONS.map(option => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
         </select>
         {(value.mode === 'prometheus' || (automatic && !overridesOpen)) && connectionAction}
       </div>
@@ -374,7 +375,7 @@ export function CostConnectionForm({
                   onChange={(e) =>
                     onChange({ ...value, clusterId: e.target.value })
                   }
-                  placeholder="Auto-detect CLUSTER_ID"
+                  placeholder="Detected automatically"
                 />
                 <p className="text-xs text-theme-text-tertiary">
                   The FinOps Agent's CLUSTER_ID, not the kubeconfig context

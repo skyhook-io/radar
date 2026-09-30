@@ -7,8 +7,20 @@ export function isCostConfigurable(reason?: string): boolean {
     || reason === 'metrics_settings_error' || reason === 'cost_settings_error'
 }
 
+export type CostSourcePreference = 'auto' | CostDataSource
+
+export const COST_SOURCE_OPTIONS: { value: CostSourcePreference; label: string; description: string }[] = [
+  { value: 'auto', label: 'Automatic', description: 'OpenCost metrics when available, otherwise Kubecost' },
+  { value: 'prometheus', label: 'OpenCost metrics', description: 'From the metrics connection' },
+  { value: 'kubecost', label: 'Kubecost', description: 'From a Kubecost Aggregator' },
+]
+
+export function costSourcePreferenceLabel(preference?: string): string {
+  return COST_SOURCE_OPTIONS.find(option => option.value === (preference || 'auto'))?.label ?? preference ?? 'Automatic'
+}
+
 export function costSourceLabel(source?: CostDataSource): string {
-  return source === 'kubecost' ? 'Kubecost Aggregator' : 'OpenCost via Prometheus'
+  return costSourcePreferenceLabel(source === 'kubecost' ? 'kubecost' : 'prometheus')
 }
 
 export function isCostDiscoveryPending(reason?: string): boolean {

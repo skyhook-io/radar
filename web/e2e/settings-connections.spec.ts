@@ -2,9 +2,9 @@ import { expect, test, type Page } from '@playwright/test'
 import type { ConnectionResponse, IntegrationKind, IntegrationProfile, IntegrationProfiles } from '../src/components/settings/LocalConnectionSettings'
 
 const integrations = [
-  { kind: 'metrics', tab: 'Metrics', field: 'Metrics backend URL', apply: 'Save changes' },
-  { kind: 'argocd', tab: 'Argo CD', field: 'Argo CD server URL', apply: 'Save changes' },
-  { kind: 'cost', tab: 'Cost', field: 'Kubecost Aggregator URL', apply: 'Save changes' },
+  { kind: 'metrics', tab: 'Metrics', field: 'Metrics backend URL', apply: 'Save changes', reset: 'Use auto-discovery', notice: /^Saving switches this cluster to auto-discovery/ },
+  { kind: 'argocd', tab: 'Argo CD', field: 'Argo CD server URL', apply: 'Save changes', reset: 'Use auto-discovery', notice: /^Saving switches this cluster to auto-discovery/ },
+  { kind: 'cost', tab: 'Cost', field: 'Kubecost Aggregator URL', apply: 'Save changes', reset: 'Reset to Automatic', notice: /^Saving resets this cluster’s cost source to Automatic/ },
 ] as const
 
 for (const [width, height] of [[1280, 800], [1366, 768], [1440, 900], [1920, 1080]]) {
@@ -170,7 +170,16 @@ async function fixture(page: Page) {
         current.headerKeys = [...keys]
       }
       current.state = 'saved'
-      if (update.action === 'auto') Object.assign(current, { state: 'auto', mode: update.mode || 'auto', url: '', headerKeys: [], secretSet: false, clusterId: '' })
+      // Production keeps an empty saved record, runs no connection check, and
+      // leaves the catalog entry in place.
+      if (update.action === 'auto') {
+        Object.assign(current, { state: 'saved', mode: update.mode || 'auto', url: '', headerKeys: [], envHeaderKeys: [], headersManaged: false, secretSet: false, insecureTls: false, clusterId: '' })
+        for (const entry of connections) {
+          if (entry.binding === current.target.binding && entry.integration === update.kind)
+            Object.assign(entry, { url: '', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false })
+        }
+        return route.fulfill({ json: { profiles, connections, checked: false, connected: false } })
+      }
     }
     return route.fulfill({ json: { profiles, connections, checked: true, connected: !applyError, ...(route.request().method() === 'PUT' && applyError ? { error: applyError } : {}) } })
   })
@@ -258,7 +267,7 @@ for (const integration of integrations) {
     await dialog.getByRole('option', { name: /staging/ }).click()
     await dialog.getByRole('textbox', { name: integration.field, exact: true }).fill('')
     await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
-    await expect(dialog.getByRole('alert')).toContainText('choose Use auto-discovery')
+    await expect(dialog.getByRole('alert')).toContainText(`choose ${integration.reset}`)
     await expect(page.getByRole('heading', { name: 'Replace saved connection?', exact: true })).toHaveCount(0)
     expect(state.writes).toHaveLength(0)
   })
@@ -289,9 +298,9 @@ for (const integration of integrations) {
     await openSettings(page, integration.tab)
     await page.getByRole('textbox', { name: integration.field, exact: true }).fill('')
     await page.getByRole('button', { name: 'Save changes', exact: true }).click()
-    await expect(page.getByRole('alert')).toContainText('choose Use auto-discovery')
+    await expect(page.getByRole('alert')).toContainText(`choose ${integration.reset}`)
     expect(state.writes).toHaveLength(0)
-    await page.getByRole('button', { name: 'Use auto-discovery', exact: true }).click()
+    await page.getByRole('button', { name: integration.reset, exact: true }).click()
     await expect(page.getByRole('alert')).toHaveCount(0)
     await page.getByRole('button', { name: 'Save changes', exact: true }).click()
     await expect.poll(() => state.writes.length).toBe(1)
@@ -302,7 +311,7 @@ for (const integration of integrations) {
   test(`${integration.tab}: editing a staged discovery draft does not reuse removed credentials`, async ({ page }) => {
     const state = await fixture(page)
     await openSettings(page, integration.tab)
-    await page.getByRole('button', { name: 'Use auto-discovery', exact: true }).click()
+    await page.getByRole('button', { name: integration.reset, exact: true }).click()
     await page.getByRole('tab', { name: 'Overview', exact: true }).click()
     await page.getByRole('tab', { name: integration.tab, exact: true }).click()
     if (integration.kind === 'cost') await page.getByRole('combobox', { name: 'Cost source', exact: true }).selectOption('kubecost')
@@ -323,7 +332,7 @@ for (const integration of integrations) {
         state: stateName, mode: 'auto', url: '', secretSet: false, headerKeys: [], clusterId: ''
       })
       await openSettings(page, integration.tab)
-      await expect(page.getByRole('button', { name: 'Use auto-discovery', exact: true })).toBeDisabled()
+      await expect(page.getByRole('button', { name: integration.reset, exact: true })).toBeDisabled()
       expect(state.writes).toHaveLength(0)
     })
   }
@@ -437,7 +446,7 @@ for (const integration of integrations) {
     const dialog = await openSettings(page, integration.tab)
     const field = dialog.getByRole('textbox', { name: integration.field, exact: true })
     const copy = dialog.getByRole('button', { name: 'Copy settings from…', exact: true })
-    const discovery = dialog.getByRole('button', { name: 'Use auto-discovery', exact: true })
+    const discovery = dialog.getByRole('button', { name: integration.reset, exact: true })
     const fieldBox = (await field.boundingBox())!
     const copyBox = (await copy.boundingBox())!
     const discoveryBox = (await discovery.boundingBox())!
@@ -730,7 +739,7 @@ test('Connection preserves the removed-versus-unavailable distinction and cannot
   await page.getByRole('button', { name: 'Configuration files', exact: true }).click()
   await expect(page.getByText('config.json', { exact: true })).toBeVisible()
   await page.getByRole('tab', { name: 'Connection', exact: true }).click()
-  await expect(page.getByText('Not loaded in this session', { exact: true })).toBeVisible()
+  await expect(page.getByText('Kubeconfig not loaded', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Remove saved Metrics connection for development', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Remove saved Cost connection for staging', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Remove saved Cost connection for staging', exact: true }).click()
@@ -835,14 +844,14 @@ for (const integration of integrations) {
   test(`${integration.tab}: discovery is a discardable draft and only commits through Save changes`, async ({ page }) => {
     const state = await fixture(page)
     const settings = await openSettings(page, integration.tab)
-    const trigger = settings.getByRole('button', { name: 'Use auto-discovery', exact: true })
+    const trigger = settings.getByRole('button', { name: integration.reset, exact: true })
     const field = settings.getByRole('textbox', { name: integration.field, exact: true })
     const fieldBox = await field.boundingBox()
     const triggerBox = await trigger.boundingBox()
     expect(Math.abs(triggerBox!.y - fieldBox!.y)).toBeLessThan(70)
     await trigger.click()
     const save = settings.getByRole('button', { name: 'Save changes', exact: true })
-    await expect(settings.getByText(/^Saving switches this cluster to auto-discovery/)).toBeVisible()
+    await expect(settings.getByText(integration.notice)).toBeVisible()
     await expect(field).toHaveValue('')
     await expect(trigger).toBeDisabled()
     await expect(save).toBeEnabled()
@@ -996,12 +1005,49 @@ for (const integration of integrations.filter(item => item.kind !== 'metrics')) 
     Object.assign(state.profiles[integration.kind], discoverySettings, { state: 'target_changed', mode: 'auto', secretSet: true, error: 'The cluster behind this context changed' })
     await openSettings(page, integration.tab)
     await page.getByRole('button', { name: 'Use a different connection', exact: true }).click()
-    await page.getByRole('button', { name: 'Use auto-discovery', exact: true }).click()
-    await expect(page.getByText(/Saving switches this cluster to auto-discovery/)).toBeVisible()
+    await page.getByRole('button', { name: integration.reset, exact: true }).click()
+    await expect(page.getByText(integration.notice)).toBeVisible()
     await page.getByRole('button', { name: 'Save changes', exact: true }).click()
     await expect.poll(() => state.writes.length).toBe(1)
     expect(state.writes[0]).toMatchObject({ action: 'auto', confirmRemoval: true })
     expect(state.writes[0]).not.toHaveProperty('secret')
+  })
+}
+
+const declineCases = [
+  { kind: 'metrics', tab: 'Metrics', action: 'Use auto-discovery instead', confirm: 'Use auto-discovery', title: 'Use auto-discovery instead?', removed: 'Metrics endpoint and headers', paused: { url: 'https://metrics.example', headerKeys: ['Authorization'], secretSet: false } },
+  { kind: 'argocd', tab: 'Argo CD', action: 'Use auto-discovery instead', confirm: 'Use auto-discovery', title: 'Use auto-discovery instead?', removed: 'Argo CD API token', paused: { ...discoverySettings, secretSet: true } },
+  { kind: 'cost', tab: 'Cost', action: 'Reset to Automatic', confirm: 'Reset to Automatic', title: 'Reset cost source to Automatic?', removed: 'Kubecost endpoint, API key and Kubecost cluster mapping', paused: { url: 'https://cost.example', secretSet: true, clusterId: 'cluster-a' } },
+] as const
+
+for (const item of declineCases) {
+  test(`${item.tab}: paused settings can be declined in one step`, async ({ page }) => {
+    const state = await fixture(page)
+    Object.assign(state.profiles[item.kind], item.paused, { state: 'target_changed', mode: item.kind === 'cost' ? 'kubecost' : 'auto', error: 'The cluster behind this context changed' })
+    state.connections.push({ ...discoverySettings, url: 'url' in item.paused ? item.paused.url : '', secretSet: item.paused.secretSet,
+      binding: 'development', integration: item.kind, context: 'development', source: '/test/kubeconfig', inFileName: 'development', availability: 'available', revision: '1' })
+    const dialog = await openSettings(page, item.tab)
+    await expect(dialog.getByText('Cluster changed', { exact: true })).toBeVisible()
+    const decline = dialog.getByRole('button', { name: item.action, exact: true })
+    const confirmation = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: item.title, exact: true }) })
+
+    await decline.click()
+    await expect(confirmation).toContainText(`Remove the saved ${item.removed} for development`)
+    await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(decline).toBeFocused()
+    expect(state.writes).toHaveLength(0)
+
+    await decline.click()
+    await confirmation.getByRole('button', { name: item.confirm, exact: true }).click()
+    await expect.poll(() => state.writes.length).toBe(1)
+    expect(state.writes[0]).toMatchObject({ action: 'auto', kind: item.kind, confirmRemoval: true })
+    if (item.kind === 'cost') expect(state.writes[0].mode).toBe('auto')
+    else expect(state.writes[0]).not.toHaveProperty('mode')
+    await expect(dialog.getByText('Cluster changed', { exact: true })).toHaveCount(0)
+    await expect(dialog.getByText('Saved', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('Saved · Connected', { exact: true })).toHaveCount(0)
+    expect(state.profiles[item.kind]).toMatchObject({ state: 'saved', url: '', secretSet: false, headerKeys: [], clusterId: '' })
+    expect(state.connections).toContainEqual(expect.objectContaining({ binding: 'development', integration: item.kind, url: '', secretSet: false }))
   })
 }
 
@@ -1047,7 +1093,7 @@ for (const integration of integrations) {
     await page.getByRole('tab', { name: 'Connection', exact: true }).click()
     await page.getByPlaceholder('System default', { exact: true }).fill('Safari')
     await page.keyboard.press('Escape')
-    await dialog.getByRole('button', { name: 'Save other changes', exact: true }).click()
+    await dialog.getByRole('button', { name: 'Save startup settings', exact: true }).click()
     await expect.poll(() => state.file().browser).toBe('Safari')
     await expect(dialog.getByText('Saved. Restart Radar to apply.', { exact: true })).toBeVisible()
     await expect(dialog).toBeVisible()
@@ -1224,8 +1270,8 @@ test('Cost source changes confirm removal only when a saved connection exists', 
   await expect.poll(() => state.writes.length).toBe(1)
   expect(state.writes[0]).toMatchObject({ action: 'auto', mode: 'prometheus', confirmRemoval: true })
   await expect(confirmation).toBeHidden()
-  await page.getByRole('button', { name: 'Use auto-discovery', exact: true }).click()
-  await expect(page.getByText(/^Saving switches this cluster to auto-discovery/)).toHaveCount(0)
+  await page.getByRole('button', { name: 'Reset to Automatic', exact: true }).click()
+  await expect(page.getByText(/^Saving resets this cluster’s cost source to Automatic/)).toHaveCount(0)
   await page.getByRole('button', { name: 'Save changes', exact: true }).click()
   await expect.poll(() => state.writes.length).toBe(2)
   expect(state.writes[1]).toMatchObject({ action: 'auto' })
@@ -1239,8 +1285,8 @@ for (const integration of integrations) {
       state.profiles[integration.kind].secretSet = credentials && integration.kind !== 'metrics'
       state.profiles[integration.kind].headerKeys = credentials && integration.kind === 'metrics' ? ['Authorization'] : []
       const dialog = await openSettings(page, integration.tab)
-      await dialog.getByRole('button', { name: 'Use auto-discovery', exact: true }).click()
-      const warning = dialog.getByText(/^Saving switches this cluster to auto-discovery/)
+      await dialog.getByRole('button', { name: integration.reset, exact: true }).click()
+      const warning = dialog.getByText(integration.notice)
       const credential = integration.kind === 'metrics' ? 'headers' : integration.kind === 'argocd' ? 'API token' : 'API key'
       await expect(warning).toContainText('endpoint')
       if (credentials) await expect(warning).toContainText(credential)

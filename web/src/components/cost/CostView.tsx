@@ -873,7 +873,7 @@ function CostHelpDialog({ currency, source, window, onClose }: { currency: strin
               Which currency is shown?
             </h3>
             <p>
-              Radar labels these values <strong>{currency}</strong> and does not convert them. Auto
+              Radar labels these values <strong>{currency}</strong> and does not convert them. Automatic
               reads <code>currencyCode</code> or <code>DISPLAY_CURRENCY</code> from a
               cluster-discovered OpenCost installation or any active Kubecost installation, then
               falls back to USD. A manually configured Prometheus URL disables OpenCost currency
