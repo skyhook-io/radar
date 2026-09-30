@@ -16,7 +16,7 @@ import {
   TIMESTAMP_FORMAT_LABELS,
 } from '../../utils/log-format'
 import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
-import { associateContinuations, groupContinuations, withoutRecordsOf, type LogGroup } from '../../utils/log-level'
+import { associateContinuations, groupContinuations, type LogGroup } from '../../utils/log-level'
 import { copyText } from '../../utils/clipboard'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
@@ -72,13 +72,16 @@ interface LogCoreProps {
 interface LevelOption {
   level: LogLevel
   label: string
+  /** What the chip's lines are called in its tooltip */
+  noun: string
 }
 
 const LEVEL_OPTIONS: LevelOption[] = [
-  { level: 'error', label: 'ERR' },
-  { level: 'warn', label: 'WARN' },
-  { level: 'info', label: 'INFO' },
-  { level: 'debug', label: 'DBG' },
+  { level: 'error', label: 'ERR', noun: 'error logs' },
+  { level: 'warn', label: 'WARN', noun: 'warning logs' },
+  { level: 'info', label: 'INFO', noun: 'info logs' },
+  { level: 'debug', label: 'DBG', noun: 'debug logs' },
+  { level: 'unknown', label: 'OTHER', noun: 'lines with no level' },
 ]
 
 function getLevelActiveColor(level: LogLevel, palette: LogPalette): string {
@@ -87,7 +90,7 @@ function getLevelActiveColor(level: LogLevel, palette: LogPalette): string {
     case 'warn': return palette.levelActiveWarn
     case 'info': return palette.levelActiveInfo
     case 'debug': return palette.levelActiveDebug
-    default: return palette.levelActiveDebug
+    default: return palette.levelActiveOther
   }
 }
 
@@ -189,7 +192,7 @@ export function LogCore({
     try { return localStorage.getItem('radar-logs-collapse-stacks') !== 'false' } catch { return true }
   })
   const [enabledLevels, setEnabledLevels] = useState<Set<LogLevel>>(
-    new Set(['error', 'warn', 'info', 'debug'])
+    new Set(['error', 'warn', 'info', 'debug', 'unknown'])
   )
   const [showDownloadMenu, setShowDownloadMenu] = useState(false)
   const downloadMenu = useAnimatedUnmount(showDownloadMenu, overlayExitMs('menu'))
@@ -237,8 +240,6 @@ export function LogCore({
     [entries, association],
   )
 
-  // Level-filtered entries
-  // 'unknown' logs are shown when all 4 known levels are enabled (no active filtering)
   const levelFilteredEntries = useMemo(() => {
     const allEnabled = LEVEL_OPTIONS.every(opt => enabledLevels.has(opt.level))
     if (allEnabled) return recordEntries
@@ -256,17 +257,13 @@ export function LogCore({
 
   const hasStructuredEntries = useMemo(() => entries.some(e => e.isJson || e.isLogfmt), [entries])
 
-  // Search
-  const search = useLogSearch(levelFilteredEntries, virtuosoRef)
+  const recordIdOf = useCallback(
+    (e: LogEntry) => association.headIdById.get(e.id) ?? e.id,
+    [association],
+  )
+  const search = useLogSearch(levelFilteredEntries, virtuosoRef, recordIdOf)
 
-  // Hide works on records: hiding a line that starts a stack trace hides its
-  // frames too, since frames without their error are only noise.
-  const displayEntries = useMemo(() => {
-    if (!search.isFiltering) return levelFilteredEntries
-    if (search.mode !== 'hide') return search.filteredEntries
-    const hiddenIds = new Set(search.matchIndices.map(i => levelFilteredEntries[i].id))
-    return withoutRecordsOf(search.filteredEntries, hiddenIds, association.headIdById)
-  }, [search.isFiltering, search.mode, search.filteredEntries, search.matchIndices, levelFilteredEntries, association])
+  const displayEntries = search.isFiltering ? search.filteredEntries : levelFilteredEntries
   const hiddenCount = levelFilteredEntries.length - displayEntries.length
   // Hidden lines leave nothing to highlight, so Hide keeps normal rendering and stack grouping.
   const highlightQuery = search.mode === 'hide' ? '' : search.query
@@ -500,9 +497,7 @@ export function LogCore({
   // Highlight set for current match
   const currentHighlightId = search.matchIndices.length === 0 || search.mode === 'hide'
     ? -1
-    : search.mode === 'only'
-      ? search.filteredEntries[search.currentMatch]?.id
-      : levelFilteredEntries[search.matchIndices[search.currentMatch]]?.id
+    : levelFilteredEntries[search.matchIndices[search.currentMatch]]?.id
 
   // Group stack-trace lines under the line that started their record. Disabled
   // while highlighting so matches inside stack frames remain visible. A line
@@ -589,7 +584,7 @@ export function LogCore({
             const active = enabledLevels.has(opt.level)
             const count = levelCounts[opt.level]
             return (
-              <Tooltip key={opt.level} content={`${active ? 'Hide' : 'Show'} ${opt.label} logs`} delay={TIP_DELAY} position="bottom">
+              <Tooltip key={opt.level} content={`${active ? 'Hide' : 'Show'} ${opt.noun}`} delay={TIP_DELAY} position="bottom">
                 <button
                   onClick={() => toggleLevel(opt.level)}
                   className={`px-1.5 py-0.5 text-[10px] font-medium rounded border transition-colors ${

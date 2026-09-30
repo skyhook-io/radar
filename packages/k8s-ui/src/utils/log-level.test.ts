@@ -4,7 +4,6 @@ import {
   detectLevel,
   groupContinuations,
   isContinuationLine,
-  withoutRecordsOf,
   normalizeLevel,
   selectLevelField,
   type LevelSource,
@@ -206,21 +205,31 @@ describe('groupContinuations', () => {
     expect(groups.map(g => g.head.id)).toEqual([1, 2, 3])
   })
 
-  it('hides a whole record when its first line is hidden', () => {
-    const visible = withoutRecordsOf(applySearchMode(lines, [0], 'hide'), new Set([0]), headIdById)
-    expect(visible.map(e => e.id)).toEqual([1])
+  const recordIdOf = (e: TestEntry) => headIdById.get(e.id) ?? e.id
+
+  it('hides a whole record when its first line matches', () => {
+    expect(applySearchMode(lines, [0], 'hide', recordIdOf).map(e => e.id)).toEqual([1])
+  })
+
+  it('hides a whole record when only a frame matches', () => {
+    expect(applySearchMode(lines, [3], 'hide', recordIdOf).map(e => e.id)).toEqual([1])
+  })
+
+  it('shows a whole record, error line included, when only a frame matches', () => {
+    expect(applySearchMode(lines, [3], 'only', recordIdOf).map(e => e.id)).toEqual([0, 2, 3])
   })
 })
 
 describe('applySearchMode', () => {
-  const lines = ['a', 'b', 'c', 'd']
+  const lines = [{ id: 0 }, { id: 1 }, { id: 2 }, { id: 3 }]
+  const ids = (xs: { id: number }[]) => xs.map(x => x.id)
   it('shows everything when highlighting', () => {
-    expect(applySearchMode(lines, [1, 3], 'highlight')).toEqual(lines)
+    expect(ids(applySearchMode(lines, [1, 3], 'highlight'))).toEqual([0, 1, 2, 3])
   })
   it('keeps only matches', () => {
-    expect(applySearchMode(lines, [1, 3], 'only')).toEqual(['b', 'd'])
+    expect(ids(applySearchMode(lines, [1, 3], 'only'))).toEqual([1, 3])
   })
   it('drops matches when hiding', () => {
-    expect(applySearchMode(lines, [1, 3], 'hide')).toEqual(['a', 'c'])
+    expect(ids(applySearchMode(lines, [1, 3], 'hide'))).toEqual([0, 2])
   })
 })

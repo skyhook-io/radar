@@ -280,10 +280,3 @@ export function groupContinuations<T extends { id: number }>(visible: readonly T
   return groups
 }
 
-/** Drop every line whose record starts at one of `headIds`. */
-export function withoutRecordsOf<T extends { id: number }>(visible: readonly T[], headIds: ReadonlySet<number>, headIdById: ReadonlyMap<number, number>): T[] {
-  return visible.filter(e => {
-    const headId = headIdById.get(e.id)
-    return headId === undefined || !headIds.has(headId)
-  })
-}

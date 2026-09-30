@@ -33,17 +33,27 @@ interface UseLogSearchReturn {
   close: () => void
 }
 
-/** The lines a search mode leaves visible, given the indices of matching lines. */
-export function applySearchMode<T>(entries: readonly T[], matchIndices: readonly number[], mode: LogSearchMode): T[] {
+/**
+ * The lines a search mode leaves visible. Only and Hide act on whole records:
+ * a match on any line of a stack trace keeps or hides the trace together.
+ */
+export function applySearchMode<T extends { id: number }>(
+  entries: readonly T[],
+  matchIndices: readonly number[],
+  mode: LogSearchMode,
+  recordIdOf: (entry: T) => number = e => e.id,
+): T[] {
   if (mode === 'highlight') return [...entries]
-  const matchSet = new Set(matchIndices)
+  const matchedRecords = new Set(matchIndices.map(i => recordIdOf(entries[i])))
   const keepMatches = mode === 'only'
-  return entries.filter((_, i) => matchSet.has(i) === keepMatches)
+  return entries.filter(e => matchedRecords.has(recordIdOf(e)) === keepMatches)
 }
 
 export function useLogSearch(
   entries: LogEntry[],
   virtuosoRef: React.RefObject<VirtuosoHandle | null>,
+  /** Id of the record an entry belongs to (its first line's id); defaults to the entry itself */
+  recordIdOf?: (entry: LogEntry) => number,
 ): UseLogSearchReturn {
   const [query, setQuery] = useState('')
   const [isRegex, setIsRegex] = useState(false)
@@ -84,14 +94,17 @@ export function useLogSearch(
     }
   }, [entries, deferredQuery, isRegex, isCaseSensitive])
 
-  // Filtered entries for filter mode
   // Gate on the live query too, so clearing or closing search unfilters immediately
   // rather than after the deferred value catches up.
   const isFiltering = mode !== 'highlight' && !!query && !!deferredQuery && !regexError
   const filteredEntries = useMemo(
-    () => (isFiltering ? applySearchMode(entries, matchIndices, mode) : entries),
-    [entries, isFiltering, mode, matchIndices],
+    () => (isFiltering ? applySearchMode(entries, matchIndices, mode, recordIdOf) : entries),
+    [entries, isFiltering, mode, matchIndices, recordIdOf],
   )
+  const filteredIndexById = useMemo(() => {
+    if (mode !== 'only') return null
+    return new Map(filteredEntries.map((e, i) => [e.id, i]))
+  }, [mode, filteredEntries])
 
   // Reset current match when search criteria change (but not when new entries arrive during streaming)
   const prevCriteria = useRef({ query, isRegex, isCaseSensitive })
@@ -110,9 +123,11 @@ export function useLogSearch(
     if (matchIdx < 0 || matchIdx >= matchIndices.length) return
     if (mode === 'hide') return
     if (mode === 'only') {
-      // Only matching lines are listed, so the match index is the list index
+      // The list holds whole matching records, so find the matched line within it
+      const index = filteredIndexById?.get(entries[matchIndices[matchIdx]].id)
+      if (index === undefined) return
       virtuosoRef.current?.scrollToIndex({
-        index: matchIdx,
+        index,
         align: 'center',
         behavior: 'smooth',
       })
@@ -124,7 +139,7 @@ export function useLogSearch(
         behavior: 'smooth',
       })
     }
-  }, [matchIndices, mode, virtuosoRef])
+  }, [entries, matchIndices, mode, filteredIndexById, virtuosoRef])
 
   const goToNext = useCallback(() => {
     if (matchIndices.length === 0 || mode === 'hide') return
