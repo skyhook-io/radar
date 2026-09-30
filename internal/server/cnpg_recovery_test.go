@@ -361,3 +361,35 @@ func keysOf(m map[string]string) []string {
 func apiForbidden(resource string) error {
 	return apierrors.NewForbidden(schema.GroupResource{Resource: resource}, "", errors.New("denied"))
 }
+
+func TestCNPGReportCleanObjectRedactsDeclaredEnv(t *testing.T) {
+	cluster := &unstructured.Unstructured{Object: map[string]any{
+		"spec": map[string]any{
+			"env": []any{
+				map[string]any{"name": "AWS_SECRET_ACCESS_KEY", "value": "plaintext"},
+				map[string]any{"name": "TZ", "value": "UTC"},
+			},
+			"backup": map[string]any{"barmanObjectStore": map[string]any{"s3Credentials": map[string]any{"secretAccessKey": map[string]any{"name": "creds", "key": "k"}}}},
+		},
+	}}
+	pooler := &unstructured.Unstructured{Object: map[string]any{
+		"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{
+			map[string]any{"name": "pgbouncer", "env": []any{map[string]any{"name": "DB_PASSWORD", "value": "hunter2"}}},
+		}}}},
+	}}
+	c := cnpgReportCleanObject(cluster).Object["spec"].(map[string]any)
+	env := c["env"].([]any)
+	if env[0].(map[string]any)["value"] != cnpgReportRedacted || env[1].(map[string]any)["value"] != "UTC" {
+		t.Errorf("cluster env = %v", env)
+	}
+	if name := c["backup"].(map[string]any)["barmanObjectStore"].(map[string]any)["s3Credentials"].(map[string]any)["secretAccessKey"].(map[string]any)["name"]; name != "creds" {
+		t.Errorf("Secret reference name was blanked: %v", name)
+	}
+	pc := cnpgReportCleanObject(pooler).Object["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	if pc["env"].([]any)[0].(map[string]any)["value"] != cnpgReportRedacted {
+		t.Errorf("pooler env = %v", pc["env"])
+	}
+	if cluster.Object["spec"].(map[string]any)["env"].([]any)[0].(map[string]any)["value"] != "plaintext" {
+		t.Error("the source object was modified")
+	}
+}

@@ -665,15 +665,45 @@ func cnpgReportLogLine(line string, queryText bool) string {
 	return ts + aicontext.RedactSecrets(body)
 }
 
-// cnpgReportCleanObject drops managedFields and the last-applied copy. The
-// spec is kept verbatim: CloudNativePG kinds name Secrets through {name, key}
-// selectors and have no inline credential fields, and the generic inline
+// cnpgReportCleanObject drops managedFields and the last-applied copy and
+// blanks sensitive env values. The rest of the spec stays verbatim: CNPG
+// kinds name Secrets through {name, key} selectors, and the generic inline
 // redaction would blank those names (secretAccessKey: {name: ...}).
 func cnpgReportCleanObject(obj *unstructured.Unstructured) *unstructured.Unstructured {
 	clean := obj.DeepCopy()
 	unstructured.RemoveNestedField(clean.Object, "metadata", "managedFields")
 	unstructured.RemoveNestedField(clean.Object, "metadata", "annotations", "kubectl.kubernetes.io/last-applied-configuration")
+	cnpgReportRedactEnvLists(clean.Object)
 	return clean
+}
+
+// cnpgReportRedactEnvLists blanks sensitive env values wherever an object
+// declares them — Cluster spec.env, a Pooler's pod template — so a manifest
+// never shows what the Pods it produces have redacted.
+func cnpgReportRedactEnvLists(v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, child := range t {
+			if list, ok := child.([]any); ok && k == "env" {
+				for _, item := range list {
+					e, ok := item.(map[string]any)
+					if !ok {
+						continue
+					}
+					name, _ := e["name"].(string)
+					if val, _ := e["value"].(string); val != "" && aicontext.IsSensitiveEnvName(name) {
+						e["value"] = cnpgReportRedacted
+					}
+				}
+				continue
+			}
+			cnpgReportRedactEnvLists(child)
+		}
+	case []any:
+		for _, child := range t {
+			cnpgReportRedactEnvLists(child)
+		}
+	}
 }
 
 func cnpgReportCleanContainers(cs []corev1.Container) {
