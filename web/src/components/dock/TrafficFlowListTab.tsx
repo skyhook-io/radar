@@ -3,7 +3,7 @@ import { TrafficFlowList } from '../traffic/TrafficFlowList'
 import { List } from 'lucide-react'
 
 export function TrafficFlowListTab() {
-  const { flows } = useTrafficFlowList()
+  const { flows, responsesCallerOriented } = useTrafficFlowList()
 
   if (flows.length === 0) {
     return (
@@ -14,5 +14,5 @@ export function TrafficFlowListTab() {
     )
   }
 
-  return <TrafficFlowList flows={flows} />
+  return <TrafficFlowList flows={flows} responsesCallerOriented={responsesCallerOriented} />
 }

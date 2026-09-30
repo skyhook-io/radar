@@ -220,25 +220,28 @@ describe('dedupeHTTPPairs', () => {
     source: ep(from), destination: ep(to), protocol: 'tcp', port, l7Protocol: 'HTTP', l7Type,
     httpMethod: 'GET', httpPath: '/orders', bytesSent: 0, bytesRecv: 0, connections: 1, verdict: 'forwarded', lastSeen: '',
   } as TrafficFlow)
+  const rows = (fs: TrafficFlow[]) => fs.map(f => `${f.source.name}>${f.destination.name}:${f.port}:${f.l7Type}`)
 
-  it('pairs a response oriented like its request', () => {
-    expect(dedupeHTTPPairs([rec('client', 'web', 'REQUEST'), rec('client', 'web', 'RESPONSE')]).map(f => f.l7Type)).toEqual(['RESPONSE'])
+  describe('from a server whose responses run caller → callee', () => {
+    it('pairs a response with its request', () => {
+      expect(rows(dedupeHTTPPairs([rec('a', 'b', 'REQUEST'), rec('a', 'b', 'RESPONSE')], true))).toEqual(['a>b:80:RESPONSE'])
+    })
+    it('keeps an unanswered call the other way on the same route', () => {
+      expect(rows(dedupeHTTPPairs([rec('a', 'b', 'RESPONSE'), rec('b', 'a', 'REQUEST')], true))).toEqual(['a>b:80:RESPONSE', 'b>a:80:REQUEST'])
+    })
+    it('keeps an unanswered call on another port', () => {
+      expect(rows(dedupeHTTPPairs([rec('a', 'b', 'REQUEST'), rec('a', 'b', 'RESPONSE'), rec('a', 'b', 'REQUEST', 8080)], true)))
+        .toEqual(['a>b:80:RESPONSE', 'a>b:8080:REQUEST'])
+    })
   })
 
-  it('pairs a response from a server that sends it reversed', () => {
-    expect(dedupeHTTPPairs([rec('client', 'web', 'REQUEST'), rec('web', 'client', 'RESPONSE', 41732)]).map(f => f.l7Type)).toEqual(['RESPONSE'])
-  })
-
-  it('does not let one response hide an unanswered call the other way', () => {
-    // a and b call each other on the same route; only a → b was answered.
-    const current = dedupeHTTPPairs([rec('a', 'b', 'REQUEST'), rec('a', 'b', 'RESPONSE'), rec('b', 'a', 'REQUEST')])
-    expect(current.map(f => `${f.source.name}>${f.destination.name}:${f.l7Type}`)).toEqual(['a>b:RESPONSE', 'b>a:REQUEST'])
-    // The same, from a server that sends the response reversed on the client's port.
-    const legacy = dedupeHTTPPairs([rec('a', 'b', 'REQUEST'), rec('b', 'a', 'RESPONSE', 41732), rec('b', 'a', 'REQUEST')])
-    expect(legacy.map(f => `${f.source.name}>${f.destination.name}:${f.l7Type}`)).toEqual(['b>a:RESPONSE', 'b>a:REQUEST'])
+  describe('from an older server whose responses run server → client', () => {
+    it('pairs the reversed response with its request', () => {
+      expect(rows(dedupeHTTPPairs([rec('a', 'b', 'REQUEST'), rec('b', 'a', 'RESPONSE', 41732)], false))).toEqual(['b>a:41732:RESPONSE'])
+    })
   })
 
   it('keeps a request that got no response', () => {
-    expect(dedupeHTTPPairs([rec('client', 'web', 'REQUEST')]).map(f => f.l7Type)).toEqual(['REQUEST'])
+    expect(rows(dedupeHTTPPairs([rec('a', 'b', 'REQUEST')], true))).toEqual(['a>b:80:REQUEST'])
   })
 })

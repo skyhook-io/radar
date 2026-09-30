@@ -977,7 +977,7 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 	// matter. The threshold is a noise policy, not a completeness measure: loss
 	// markers are not scoped to the request's filters, so the two counts need
 	// not cover the same traffic.
-	if lost > 0 && float64(lost)*100 >= float64(lost+delivered)*lostEventsWarnPercent {
+	if lost > 0 && float64(lost)*100 >= (float64(lost)+float64(delivered))*lostEventsWarnPercent {
 		gaps = append(gaps, fmt.Sprintf("Hubble reported %d events lost before they could be delivered", lost))
 	}
 	if len(unavailableNodes) > 0 {

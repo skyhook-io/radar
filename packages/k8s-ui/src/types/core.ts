@@ -1439,6 +1439,9 @@ export interface TrafficFlowsResponse {
   timestamp: string
   flows: TrafficFlow[]
   aggregated: AggregatedFlow[]
+  /** L7 responses run caller → callee on the server's port, like their request.
+   *  Absent from a Radar that sent them server → client. */
+  l7ResponsesCallerOriented?: boolean
   warning?: string  // Non-fatal warning (e.g., query errors)
   /** 'transient' (or absent) means the condition may clear on its own and a
    *  retry is worthwhile. 'partial' means the flows are correct but some of

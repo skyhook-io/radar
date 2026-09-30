@@ -1088,7 +1088,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   }
 
   return (
-    <TrafficFlowListProvider flows={listFlows} graphSelection={graphSelection} clearSelection={() => setGraphSelection(null)}>
+    <TrafficFlowListProvider flows={listFlows} responsesCallerOriented={flowsData?.l7ResponsesCallerOriented === true} graphSelection={graphSelection} clearSelection={() => setGraphSelection(null)}>
     <div className="flex h-full w-full">
       {/* Sidebar */}
       <TrafficFilterSidebar

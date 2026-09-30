@@ -239,24 +239,25 @@ export function isPolicyDropReason(dropReasonDesc: string | undefined, deniedByC
  * carries the status and latency, so it stands for the call. A request with no
  * response stays, because a missing response is worth seeing.
  *
- * The server orients a response like its request, caller → callee on the
- * server's port. A Radar that predates that sends it server → client on the
- * client's ephemeral port — Radar Hub renders clusters running such builds. The
- * port tells the two apart: a response is caller-oriented when a request runs
- * the same way on the same port, and is otherwise matched the other way round.
- * Matching every response both ways would let one response hide an unanswered
- * call in the opposite direction.
+ * `callerOriented` is the server saying its responses run caller → callee on
+ * the server's port, like their requests, so they match on endpoints, route and
+ * port exactly. Without it the server is a Radar that predates that — Radar Hub
+ * renders clusters running such builds — whose responses run server → client on
+ * the client's ephemeral port, so they match reversed and without the port.
+ * The orientation is taken from the server, never inferred from which records
+ * happen to be in the window.
  */
-export function dedupeHTTPPairs(flows: TrafficFlow[]): TrafficFlow[] {
+export function dedupeHTTPPairs(flows: TrafficFlow[], callerOriented: boolean): TrafficFlow[] {
   const isHTTP = (f: TrafficFlow, type: string) => f.l7Protocol === 'HTTP' && f.l7Type === type
-  const call = (from: string, to: string, f: TrafficFlow) => `${from}|${to}|${f.httpMethod}|${f.httpPath}`
-  const onPort = (f: TrafficFlow) => `${call(f.source.name, f.destination.name, f)}|${f.port}`
+  const call = (from: string, to: string, f: TrafficFlow) =>
+    callerOriented
+      ? `${from}|${to}|${f.httpMethod}|${f.httpPath}|${f.port}`
+      : `${from}|${to}|${f.httpMethod}|${f.httpPath}`
 
-  const requestsOnPort = new Set(flows.filter(f => isHTTP(f, 'REQUEST')).map(onPort))
   const answered = new Set<string>()
   for (const f of flows) {
     if (!isHTTP(f, 'RESPONSE')) continue
-    answered.add(requestsOnPort.has(onPort(f))
+    answered.add(callerOriented
       ? call(f.source.name, f.destination.name, f)
       : call(f.destination.name, f.source.name, f))
   }

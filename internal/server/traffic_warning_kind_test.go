@@ -97,3 +97,13 @@ func TestTrafficFlowsPayloadDropsPartialWarningWhenFilteringRemovedEverything(t 
 		t.Error("a failed fetch must keep its warning")
 	}
 }
+
+// The flow list pairs a response with its request by orientation. It has to be
+// told which orientation this server uses: inferring it from whichever records
+// the window happens to hold lets a response hide an unanswered call.
+func TestTrafficFlowsPayloadDeclaresResponseOrientation(t *testing.T) {
+	payload := trafficFlowsPayload(&traffic.FlowsResponse{Source: "hubble"}, []traffic.Flow{})
+	if payload["l7ResponsesCallerOriented"] != true {
+		t.Errorf("l7ResponsesCallerOriented = %v, want true", payload["l7ResponsesCallerOriented"])
+	}
+}

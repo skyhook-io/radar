@@ -54,9 +54,11 @@ type SortDir = 'asc' | 'desc'
 
 interface TrafficFlowListProps {
   flows: TrafficFlow[]
+  /** The server said its L7 responses run caller → callee; see dedupeHTTPPairs. */
+  responsesCallerOriented: boolean
 }
 
-export function TrafficFlowList({ flows }: TrafficFlowListProps) {
+export function TrafficFlowList({ flows, responsesCallerOriented }: TrafficFlowListProps) {
   const [search] = useFlowSearch()
   const [sortField, setSortField] = useState<SortField>('time')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
@@ -71,7 +73,7 @@ export function TrafficFlowList({ flows }: TrafficFlowListProps) {
     }
   }
 
-  const deduped = useMemo(() => dedupeHTTPPairs(flows), [flows])
+  const deduped = useMemo(() => dedupeHTTPPairs(flows, responsesCallerOriented), [flows, responsesCallerOriented])
 
   const filtered = useMemo(() => {
     if (!search) return deduped

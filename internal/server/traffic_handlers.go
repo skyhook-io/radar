@@ -171,6 +171,10 @@ func trafficFlowsPayload(response *traffic.FlowsResponse, flows []traffic.Flow) 
 		"timestamp":  response.Timestamp,
 		"flows":      flows,
 		"aggregated": traffic.AggregateFlows(flows),
+		// L7 responses arrive on their request's edge, caller to callee on the
+		// server's port. A client pairing responses with requests needs to know
+		// that rather than guess it from which records happen to be present.
+		"l7ResponsesCallerOriented": true,
 	}
 
 	// A partial-data warning qualifies the flows it came with. If the namespace
