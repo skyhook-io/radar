@@ -604,10 +604,11 @@ func querySustainedCNPGLag(ctx context.Context, q cnpgQuerier, sel string, known
 	// Exact on Prometheus 2.x and 3.x alike: every raw sample in the window is
 	// at least the reported floor, and the series already existed when the
 	// window began (it answers at offset 10m), so a standby that appeared a
-	// minute ago cannot qualify. Scrape gaps are not filled in; nothing here
+	// minute ago cannot qualify. min by (pod): when two jobs scrape the same
+	// Pod, a low sample in either counts. Scrape gaps are not filled in; nothing here
 	// claims a sample at every moment.
 	window := fmt.Sprintf("%dm", int(CNPGSustainedLagWindow.Minutes()))
-	query := "(max by (pod) (min_over_time(cnpg_pg_replication_lag{" + sel + "}[" + window + "]))" +
+	query := "(min by (pod) (min_over_time(cnpg_pg_replication_lag{" + sel + "}[" + window + "]))" +
 		" and on (pod) (max by (pod) (cnpg_pg_replication_in_recovery{" + sel + "}) == 1)" +
 		" and on (pod) (max by (pod) (cnpg_pg_replication_lag{" + sel + "} offset " + window + ")))"
 	res, err := q.Query(ctx, query)

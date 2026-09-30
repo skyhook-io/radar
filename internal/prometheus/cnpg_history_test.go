@@ -292,7 +292,7 @@ func TestQueryCNPGFleetLagReportsSustainedLagSeparately(t *testing.T) {
 		if strings.Contains(query, "min_over_time") {
 			// Every raw sample in the window, and a series that already
 			// existed when the window began: a sample count cannot prove age.
-			for _, want := range []string{"min_over_time(cnpg_pg_replication_lag{", "[10m])", "} offset 10m"} {
+			for _, want := range []string{"min by (pod) (min_over_time(cnpg_pg_replication_lag{", "[10m])", "} offset 10m"} {
 				if !strings.Contains(query, want) {
 					t.Errorf("sustained query lacks %q: %s", want, query)
 				}

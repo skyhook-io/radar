@@ -999,7 +999,7 @@ export interface CNPGFleetMetricsReading {
     reason?: string
     seconds?: number
     pod?: string
-    /** The worst standby's lowest recorded lag over `sustainedWindow`; it was already reporting when the window began. */
+    /** The worst standby's lowest recorded lag over `sustainedWindow`, across every scrape of it; it was already reporting by the window's start. */
     sustainedSeconds?: number
     sustainedPod?: string
     sustainedWindow?: string
@@ -1096,7 +1096,7 @@ function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading
     severity: floor >= CNPG_SUSTAINED_LAG_CRITICAL_SECONDS ? 'critical' : 'warning',
     category: 'availability',
     title: `Every lag sample from ${lag.sustainedPod ?? 'a standby'} over the last ${window} was at least ${formatLagSeconds(floor)}`,
-    detail: `The lowest replay lag Prometheus recorded for it in the last ${window} was ${formatLagSeconds(floor)}, and it was already reporting before that window began (${src.lagSource ?? 'Prometheus'}; scrape gaps are not filled in). A failover to that standby would start that far behind the primary.`,
+    detail: `The lowest replay lag Prometheus recorded for it in the last ${window} was ${formatLagSeconds(floor)}, and it was already reporting by the window's start (${src.lagSource ?? 'Prometheus'}; scrape gaps are not filled in). A failover to that standby would start that far behind the primary.`,
     subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
     source: 'measurement',
   }
