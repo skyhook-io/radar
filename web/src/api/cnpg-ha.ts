@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { cnpgLagTone, type CNPGClusterHA, type CNPGFleetRow, type CNPGInstanceLive, type CNPGReplicationLive } from '@skyhook-io/k8s-ui'
+import { cnpgReplicationTone, type CNPGClusterHA, type CNPGFleetRow, type CNPGInstanceLive, type CNPGReplicationLive } from '@skyhook-io/k8s-ui'
 import { fetchJSON } from './client'
 import type { CNPGRuntimeResponse } from './cnpg'
 
@@ -86,7 +86,7 @@ export function withLiveReplication(row: CNPGFleetRow, rt: CNPGRuntimeResponse |
     return { ...row, replication: { text: `${streaming} streaming${lagText}`, tone: 'unknown', source: `${source}; spec.instances is not reported, so the expected standbys are unknown`, at: primary.status.capturedAt } }
   }
   const expected = Math.max(0, row.instances.desired - 1)
-  const tone = streaming < expected ? 'degraded' : maxLag !== undefined ? cnpgLagTone(maxLag) : 'healthy'
+  const tone = cnpgReplicationTone(streaming, expected, maxLag)
   const text = streaming < expected ? `${streaming} of ${expected} expected standbys streaming` : `${streaming}/${expected} streaming`
   return { ...row, replication: { text: `${text}${lagText}`, tone, source, at: primary.status.capturedAt } }
 }

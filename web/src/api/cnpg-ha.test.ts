@@ -55,3 +55,15 @@ describe('cnpgReplicationGap', () => {
     )
   })
 })
+
+describe('withLiveReplication with a missing standby', () => {
+  it('takes the worse of the missing standby and the lag', () => {
+    const rt = {
+      permission: { proxy: 'allowed' },
+      instances: [{ pod: 'pg-1', role: 'primary', status: { state: 'ok', capturedAt: 't', replication: [{ applicationName: 'pg-2', state: 'streaming', replayLag: 72 }] } }],
+    } as unknown as CNPGRuntimeResponse
+    const out = withLiveReplication(row(3), rt)
+    expect(out.replication.tone).toBe('unhealthy')
+    expect(out.replication.text).toContain('1 of 2 expected standbys streaming')
+  })
+})

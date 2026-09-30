@@ -1,4 +1,4 @@
-import { cnpgLagTone, type HealthLevel } from '@skyhook-io/k8s-ui'
+import { cnpgLagTone, cnpgWorseTone, type HealthLevel } from '@skyhook-io/k8s-ui'
 import type { CNPGRuntimeInstance, CNPGRuntimeReplication } from '../../api/cnpg'
 
 type Checkpoints = NonNullable<CNPGRuntimeInstance['metrics']['checkpoints']>
@@ -56,17 +56,11 @@ export function cnpgDatabaseHealthRows(m: CNPGRuntimeInstance['metrics']): CNPGD
 export const CNPG_BACKLOG_DEGRADED = 16 * 1024 * 1024
 const CNPG_BACKLOG_UNHEALTHY = 1024 * 1024 * 1024
 
-const TONE_RANK: Record<HealthLevel, number> = { unhealthy: 0, alert: 1, degraded: 2, unknown: 3, neutral: 4, healthy: 5 }
-
-function worse(a: HealthLevel, b: HealthLevel): HealthLevel {
-  return TONE_RANK[a] <= TONE_RANK[b] ? a : b
-}
-
 /** A standby's catch-up tone: the worse of its byte backlog and replay delay, the delay on the same scale as the cluster's Replication fact. */
 export function cnpgStandbyBacklogTone(bytes: number | undefined, replayLag: number | undefined): HealthLevel {
   if (bytes === undefined) return 'unknown'
   const byBytes: HealthLevel = bytes >= CNPG_BACKLOG_UNHEALTHY ? 'unhealthy' : bytes >= CNPG_BACKLOG_DEGRADED ? 'degraded' : 'healthy'
-  return replayLag === undefined ? byBytes : worse(byBytes, cnpgLagTone(replayLag))
+  return replayLag === undefined ? byBytes : cnpgWorseTone(byBytes, cnpgLagTone(replayLag))
 }
 
 export interface CNPGStandbyHeadline {
@@ -89,7 +83,7 @@ export function cnpgStandbyHeadline(
 ): CNPGStandbyHeadline {
   const streaming = rep ? [rep.state, rep.syncState].filter(Boolean).join(' · ') : undefined
   if (inst.status.roleDetail === 'replayPaused' || inst.status.replayPaused) {
-    return { text: 'replay paused', tone: worse('degraded', backlogTone), secondary: streaming }
+    return { text: 'replay paused', tone: cnpgWorseTone('degraded', backlogTone), secondary: streaming }
   }
   if (streaming !== undefined) return { text: streaming, tone: backlogTone }
   if (ctx.fenced) return { text: 'fenced · PostgreSQL stopped', tone: 'unknown' }

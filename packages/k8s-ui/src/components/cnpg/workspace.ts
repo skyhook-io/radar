@@ -1028,6 +1028,23 @@ export function cnpgLagTone(seconds: number): HealthLevel {
   return 'healthy'
 }
 
+const CNPG_TONE_SEVERITY: Record<HealthLevel, number> = { healthy: 0, neutral: 0, unknown: 1, degraded: 2, alert: 3, unhealthy: 4 }
+
+/** The more severe of two tones. */
+export function cnpgWorseTone(a: HealthLevel, b: HealthLevel): HealthLevel {
+  return CNPG_TONE_SEVERITY[b] > CNPG_TONE_SEVERITY[a] ? b : a
+}
+
+/**
+ * Replication's tone from the primary's pg_stat_replication: a missing
+ * standby is degraded, and the lag of the ones that do stream can make it
+ * worse. Missing standbys never hide a severe lag.
+ */
+export function cnpgReplicationTone(streaming: number, expected: number, maxLagSeconds: number | undefined): HealthLevel {
+  const missing: HealthLevel = streaming < expected ? 'degraded' : 'healthy'
+  return maxLagSeconds === undefined ? missing : cnpgWorseTone(missing, cnpgLagTone(maxLagSeconds))
+}
+
 function formatLagSeconds(s: number): string {
   if (s === 0) return '0 s'
   if (s < 1) return `${Math.round(s * 1000)} ms`

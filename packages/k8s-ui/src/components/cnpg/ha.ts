@@ -4,7 +4,7 @@
 // unavailable source is "unknown", never none or healthy.
 
 import type { HealthLevel } from '../resources/resource-utils'
-import { cnpgLagTone, type CNPGFact, type CNPGFleetRow } from './workspace'
+import { cnpgLagTone, cnpgReplicationTone, type CNPGFact, type CNPGFleetRow } from './workspace'
 
 export type CNPGHASourceState = 'ok' | 'denied' | 'notFound' | 'notInstalled' | 'unavailable' | 'error'
 
@@ -402,13 +402,13 @@ function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap
   }
   const expected = Math.max(0, desired - 1)
   const source = `Primary’s pg_stat_replication against spec.instances ${desired}`
-  if (live.streaming < expected) {
-    return { ...base, tone: 'degraded', text: `${live.streaming} of ${expected} expected standbys streaming`, source }
-  }
   const lag = live.maxReplayLagSeconds
-  if (lag !== undefined && cnpgLagTone(lag) !== 'healthy') {
-    return { ...base, tone: cnpgLagTone(lag), text: `${live.streaming} of ${expected} streaming · replay ${Math.round(lag)} s behind`, source }
+  const tone = cnpgReplicationTone(live.streaming, expected, lag)
+  const lagText = lag !== undefined && cnpgLagTone(lag) !== 'healthy' ? ` · replay ${Math.round(lag)} s behind` : ''
+  if (live.streaming < expected) {
+    return { ...base, tone, text: `${live.streaming} of ${expected} expected standbys streaming${lagText}`, source }
   }
+  if (lagText) return { ...base, tone, text: `${live.streaming} of ${expected} streaming${lagText}`, source }
   return { ...base, tone: 'healthy', text: `${live.streaming} of ${expected} standbys streaming`, source }
 }
 

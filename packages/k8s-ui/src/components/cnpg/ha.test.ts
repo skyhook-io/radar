@@ -214,6 +214,15 @@ describe('cnpgDimensions', () => {
     expect(at(72)).toMatchObject({ tone: 'unhealthy', text: '1 of 1 streaming · replay 72 s behind' })
     expect(at(72).tone).toBe(cnpgLagTone(72))
   })
+  it('a missing standby does not hide a severe lag on the one that streams', () => {
+    const r = row({ instances: { ready: 2, desired: 3 } })
+    const d = cnpgDimensions({ row: r, replication: { streaming: 1, standbys: 1, maxReplayLagSeconds: 72 } })[1]
+    expect(d).toMatchObject({ tone: 'unhealthy', text: '1 of 2 expected standbys streaming · replay 72 s behind' })
+    expect(cnpgDimensions({ row: r, replication: { streaming: 1, standbys: 1, maxReplayLagSeconds: 0.2 } })[1]).toMatchObject({
+      tone: 'degraded',
+      text: '1 of 2 expected standbys streaming',
+    })
+  })
   it('replication is unknown when spec.instances is not reported', () => {
     const d = cnpgDimensions({ row: row({ instances: { ready: null, desired: null } }), replication: { streaming: 0, standbys: 0 } })
     expect(d[1].tone).toBe('unknown')
