@@ -128,8 +128,17 @@ describe('historyLatest', () => {
     }) as unknown as CNPGClusterHistoryResponse
 
   it('takes the newest recorded point of the named series', () => {
-    expect(historyLatest(history(), 'tps', 'commits')).toEqual({ value: 7.5, at: 2, source: 'rate of xact_commit' })
+    expect(historyLatest(history({ end: new Date(3 * 1000).toISOString(), stepSeconds: 1 }), 'tps', 'commits')).toEqual({
+      value: 7.5,
+      at: 2,
+      source: 'rate of xact_commit',
+      stale: false,
+    })
     expect(historyLatest(history(), 'tps', 'rollbacks')).toBeUndefined()
+  })
+  it('marks a value stale when the series stopped more than two steps before the end', () => {
+    const got = historyLatest(history({ end: new Date(600 * 1000).toISOString(), stepSeconds: 60 }), 'tps', 'commits')
+    expect(got).toMatchObject({ value: 7.5, stale: true })
   })
   it('has nothing without Prometheus history', () => {
     expect(historyLatest(history({ source: 'none' }), 'tps', 'commits')).toBeUndefined()

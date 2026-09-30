@@ -160,18 +160,31 @@ export function latestRate(samples: Sample[], key: CounterKey): number | undefin
   return last?.value ?? undefined
 }
 
+/** How many trailing steps without a point still count as the latest reading. */
+export const HISTORY_RECENT_STEPS = 2
+
 /**
  * The newest value of one labelled series of a Prometheus history chart, or
  * undefined when history is not from Prometheus or that chart has no point.
+ * `stale` when that value is more than HISTORY_RECENT_STEPS steps older than
+ * the query's end: the series stopped, so it is not a current rate.
  */
-export function historyLatest(history: CNPGClusterHistoryResponse | undefined, chartId: string, series: string): { value: number; at: number; source: string } | undefined {
+export function historyLatest(
+  history: CNPGClusterHistoryResponse | undefined,
+  chartId: string,
+  series: string,
+): { value: number; at: number; source: string; stale: boolean } | undefined {
   if (history?.source !== 'prometheus' || history.state !== 'ok') return undefined
   const chart = history.charts.find((c) => c.id === chartId)
   if (!chart || chart.state !== 'ok') return undefined
   const pts = chart.series.find((s) => s.labels[chart.seriesBy] === series)?.dataPoints ?? []
+  const endMs = Date.parse(history.end ?? history.sampledAt)
+  const step = history.stepSeconds ?? 60
   for (let i = pts.length - 1; i >= 0; i--) {
     const v = pts[i].value
-    if (v !== null) return { value: v, at: pts[i].timestamp, source: chart.source }
+    if (v === null) continue
+    const stale = Number.isFinite(endMs) && endMs / 1000 - pts[i].timestamp > HISTORY_RECENT_STEPS * step
+    return { value: v, at: pts[i].timestamp, source: chart.source, stale }
   }
   return undefined
 }

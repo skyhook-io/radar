@@ -90,3 +90,53 @@ export function cnpgStandbyHeadline(
   if (inst.role === 'unknown') return { text: 'role unknown', tone: 'unknown' }
   return { text: ctx.primaryRead ? 'not connected to the primary' : 'unknown', tone: 'unknown' }
 }
+
+type PromLatest = { value: number; at: number; stale: boolean } | undefined
+
+export interface CNPGTransactionRates {
+  /** prometheus: cluster-wide, from history; sampled: the primary's, sampled by this page; none: neither is current. */
+  source: 'prometheus' | 'sampled' | 'none'
+  commits: string
+  rollbacks: string
+  /** Unix seconds of the Prometheus point shown, or of the last one when it is no longer recent. */
+  at?: number
+}
+
+/**
+ * Commit and rollback rates for the Transactions card. A current Prometheus
+ * rate wins; otherwise the page's own sampling when it can sample
+ * (`sampled` is null when it cannot: not the primary, or no exporter access);
+ * a Prometheus series that stopped is reported as such, never as current.
+ */
+export function cnpgTransactionRates(
+  prom: { commits: PromLatest; rollbacks: PromLatest },
+  sampled: { commits?: number; rollbacks?: number } | null,
+  cannotSample: string,
+): CNPGTransactionRates {
+  const fresh = [prom.commits, prom.rollbacks].filter((p) => p && !p.stale) as NonNullable<PromLatest>[]
+  if (fresh.length) {
+    const text = (p: PromLatest) => (p && !p.stale ? p.value.toFixed(1) : '—')
+    return { source: 'prometheus', commits: text(prom.commits), rollbacks: text(prom.rollbacks), at: Math.min(...fresh.map((p) => p.at)) }
+  }
+  if (sampled) {
+    const text = (v?: number) => (v !== undefined ? v.toFixed(1) : 'collecting…')
+    return { source: 'sampled', commits: text(sampled.commits), rollbacks: text(sampled.rollbacks) }
+  }
+  const stale = [prom.commits, prom.rollbacks].filter(Boolean) as NonNullable<PromLatest>[]
+  if (stale.length) return { source: 'none', commits: 'no recent sample', rollbacks: 'no recent sample', at: Math.max(...stale.map((p) => p.at)) }
+  return { source: 'none', commits: cannotSample, rollbacks: cannotSample }
+}
+
+/** The instance Sessions and Transactions read: the one in the URL, else the primary, else the first, so standbys stay reachable without a primary. */
+export function cnpgPickedInstance(instances: CNPGRuntimeInstance[], param: string | null): CNPGRuntimeInstance | undefined {
+  return instances.find((i) => i.pod === param) ?? instances.find((i) => i.role === 'primary') ?? instances[0]
+}
+
+/** Why the exporter's session counts are not shown, or undefined when they were measured. */
+export function cnpgSessionAggregatesGap(inst: CNPGRuntimeInstance | undefined): string | undefined {
+  if (!inst) return 'no instance is reported'
+  const m = inst.metrics
+  if (m.state !== 'ok') return `the metrics exporter on ${inst.pod} did not answer${m.error ? ` (${m.error})` : ''}`
+  if (m.sessionsTotal === undefined) return `the metrics exporter on ${inst.pod} reported no session counts`
+  return undefined
+}

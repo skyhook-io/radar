@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CNPGRuntimeInstance, CNPGRuntimeReplication } from '../../api/cnpg'
-import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgStandbyBacklogTone, cnpgStandbyHeadline } from './runtimeModel'
+import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgStandbyBacklogTone, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgStandbyHeadline, cnpgTransactionRates } from './runtimeModel'
 
 describe('cnpgCheckpointView', () => {
   it('flags requested-checkpoint pressure only with enough checkpoints', () => {
@@ -55,5 +55,45 @@ describe('standby cards', () => {
     })
     expect(cnpgStandbyHeadline(standby({ replayPaused: true }), rep, 'unhealthy', { fenced: false, primaryRead: true }).tone).toBe('unhealthy')
     expect(cnpgStandbyHeadline(standby({ roleDetail: 'streaming' }), rep, 'healthy', { fenced: false, primaryRead: true })).toEqual({ text: 'streaming · async', tone: 'healthy' })
+  })
+})
+
+describe('cnpgTransactionRates', () => {
+  const p = (value: number, at: number, stale = false) => ({ value, at, stale })
+  it('prefers a current Prometheus rate, with its time', () => {
+    expect(cnpgTransactionRates({ commits: p(12.34, 100), rollbacks: p(0.5, 100) }, { commits: 3 }, 'primary only')).toEqual({
+      source: 'prometheus',
+      commits: '12.3',
+      rollbacks: '0.5',
+      at: 100,
+    })
+  })
+  it('never shows a stopped Prometheus series as current', () => {
+    expect(cnpgTransactionRates({ commits: p(12, 100, true), rollbacks: undefined }, { commits: 3 }, 'primary only')).toMatchObject({ source: 'sampled', commits: '3.0' })
+    expect(cnpgTransactionRates({ commits: p(12, 100, true), rollbacks: undefined }, null, 'primary only')).toEqual({
+      source: 'none',
+      commits: 'no recent sample',
+      rollbacks: 'no recent sample',
+      at: 100,
+    })
+  })
+  it('shows Prometheus rates without exporter access, and says why when there is neither', () => {
+    expect(cnpgTransactionRates({ commits: p(4, 1), rollbacks: p(0, 1) }, null, 'needs get pods/proxy')).toMatchObject({ source: 'prometheus', commits: '4.0' })
+    expect(cnpgTransactionRates({ commits: undefined, rollbacks: undefined }, null, 'needs get pods/proxy')).toMatchObject({ source: 'none', commits: 'needs get pods/proxy' })
+  })
+})
+
+describe('Sessions instance and aggregates', () => {
+  const inst = (pod: string, role: string, metrics: Record<string, unknown> = { state: 'ok', sessionsTotal: 3 }) => ({ pod, role, status: { state: 'ok' }, metrics }) as unknown as CNPGRuntimeInstance
+  it('keeps standbys pickable when no primary is reported', () => {
+    const standbys = [inst('pg-2', 'replica'), inst('pg-3', 'replica')]
+    expect(cnpgPickedInstance(standbys, null)?.pod).toBe('pg-2')
+    expect(cnpgPickedInstance([inst('pg-1', 'primary'), ...standbys], null)?.pod).toBe('pg-1')
+    expect(cnpgPickedInstance([inst('pg-1', 'primary'), ...standbys], 'pg-3')?.pod).toBe('pg-3')
+  })
+  it('counts the aggregates as present only when sessions were measured', () => {
+    expect(cnpgSessionAggregatesGap(inst('pg-1', 'primary'))).toBeUndefined()
+    expect(cnpgSessionAggregatesGap(inst('pg-1', 'primary', { state: 'ok' }))).toBe('the metrics exporter on pg-1 reported no session counts')
+    expect(cnpgSessionAggregatesGap(inst('pg-1', 'primary', { state: 'unreachable', error: 'x' }))).toBe('the metrics exporter on pg-1 did not answer (x)')
   })
 })

@@ -5,14 +5,14 @@ import { Lock } from 'lucide-react'
 import { PaneLoader, Tooltip, formatAge, toneTextClass } from '@skyhook-io/k8s-ui'
 import { useCNPGRuntime, type CNPGRuntimeInstance } from '../../api/cnpg'
 import { useCNPGSessions, type CNPGSessionsResponse } from '../../api/cnpg-sessions'
-import { useCNPGClusterHistory, type CNPGClusterHistoryResponse } from '../../api/cnpg-history'
+import { useCNPGClusterHistory } from '../../api/cnpg-history'
 import { Notice } from '../capacity/shared'
 import { CNPGRefreshFailedNotice, Segments } from './shared'
 import { CNPGStorage } from './CNPGStorage'
 import { CNPGBlockingSessions } from './CNPGBlockingSessions'
 import { cnpgConnectionFigure } from './blocking'
 import { CNPGReplicationView } from './CNPGReplicationView'
-import { cnpgCheckpointView, cnpgDatabaseHealthRows } from './runtimeModel'
+import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgTransactionRates, type CNPGTransactionRates } from './runtimeModel'
 import { historyLatest, latestRate } from './trendSamples'
 import { CNPGTrends, useSampleBuffer, type CNPGIntervalTarget, type Sample } from './CNPGTrends'
 
@@ -102,19 +102,20 @@ export function CNPGClusterRuntime({
   const replicas = data.instances.filter((i) => i.role !== 'primary')
   // Sessions and Transactions read one instance's exporter; the primary
   // unless another is picked (kept in the URL like the section).
-  const picked = data.instances.find((i) => i.pod === searchParams.get('instance')) ?? primary
+  // With no primary reported, the first instance, so standbys stay reachable.
+  const picked = cnpgPickedInstance(data.instances, searchParams.get('instance'))
   const setPicked = (pod: string) =>
     setSearchParams(
       (prev) => {
         const params = new URLSearchParams(prev)
-        if (pod === primary?.pod) params.delete('instance')
+        if (primary && pod === primary.pod) params.delete('instance')
         else params.set('instance', pod)
         return params
       },
       { replace: true, state: location.state },
     )
   const picker =
-    data.instances.length > 1 && picked ? (
+    data.instances.length > 0 && picked ? (
       <label className="flex items-center gap-2 text-xs text-theme-text-secondary">
         Instance
         <select
@@ -155,13 +156,14 @@ export function CNPGClusterRuntime({
           <>
             {picker}
             <ProxyDenied what="Session counts by state, lock waits and connection headroom" grant={grant} />
-            <CNPGBlockingSessions namespace={namespace} cluster={name} pod={blockingPod(primary, picked)} aggregatesGap={`they need ${grant}`} />
+            <CNPGBlockingSessions namespace={namespace} cluster={name} pod={picked?.pod} aggregatesGap={`they need ${grant}`} />
           </>
         ) : (
-          <SessionsView namespace={namespace} cluster={name} primary={primary} instance={picked} picker={picker} />
+          <SessionsView namespace={namespace} cluster={name} instance={picked} picker={picker} />
         ))}
-      {section === 'transactions' &&
-        (denied ? <ProxyDenied what="Transaction rates, cache hit ratio, deadlocks, transaction and multixact ID age, and extension versions" grant={grant} /> : <TransactionsView namespace={namespace} cluster={name} primary={primary} instance={picked} picker={picker} samples={samples} />)}
+      {section === 'transactions' && (
+        <TransactionsView namespace={namespace} cluster={name} primary={primary} instance={picked} picker={picker} samples={samples} deniedGrant={denied ? grant : undefined} />
+      )}
       {section === 'storage' && (denied ? <CNPGStorage namespace={namespace} name={name} /> : <StorageView namespace={namespace} name={name} instances={data.instances} />)}
       {section === 'slots' && (denied ? <ProxyDenied what="Replication slots and the WAL they retain" grant={grant} /> : <SlotsView primary={primary} />)}
       {section === 'trends' && (
@@ -206,27 +208,21 @@ function Card({ title, children, footer }: { title: ReactNode; children: ReactNo
 }
 
 function Unavailable({ inst, what }: { inst?: CNPGRuntimeInstance; what: string }) {
-  if (!inst) return <div className="text-sm text-theme-text-tertiary">No primary reported, so {what} is unknown.</div>
+  if (!inst) return <div className="text-sm text-theme-text-tertiary">No instance is reported, so {what} is unknown.</div>
   return <SourceState label={what} state={inst.metrics.state} error={inst.metrics.error} />
 }
 
-// Blocking is read on the picked instance; no pod means the server's default, the primary.
-function blockingPod(primary?: CNPGRuntimeInstance, picked?: CNPGRuntimeInstance): string | undefined {
-  return picked && picked.pod !== primary?.pod ? picked.pod : undefined
-}
-
-function SessionsView({ namespace, cluster, primary, instance, picker }: { namespace: string; cluster: string; primary?: CNPGRuntimeInstance; instance?: CNPGRuntimeInstance; picker?: ReactNode }) {
-  const pod = blockingPod(primary, instance)
-  const blocking = useCNPGSessions(namespace, cluster, pod)
-  const exec = blocking.data?.state === 'ok' ? blocking.data : undefined
-  const m = instance?.metrics
-  const aggregatesGap =
-    m?.state === 'ok' ? undefined : !instance ? 'no primary is reported' : `the metrics exporter on ${instance.pod} did not answer${m?.error ? ` (${m.error})` : ''}`
+function SessionsView({ namespace, cluster, instance, picker }: { namespace: string; cluster: string; instance?: CNPGRuntimeInstance; picker?: ReactNode }) {
+  // The pod is always named: left to the server, "the primary" is its own
+  // reading of status.currentPrimary, which can differ from the one picked.
+  const blocking = useCNPGSessions(namespace, cluster, instance?.pod)
+  const exec = blocking.data?.state === 'ok' && blocking.data.pod === instance?.pod ? blocking.data : undefined
+  const aggregatesGap = cnpgSessionAggregatesGap(instance)
   return (
     <div className="space-y-4">
       {picker}
       <SessionAggregates primary={instance} exec={exec} />
-      <CNPGBlockingSessions namespace={namespace} cluster={cluster} pod={pod} aggregatesGap={aggregatesGap} headroom={aggregatesGap !== undefined} />
+      <CNPGBlockingSessions namespace={namespace} cluster={cluster} pod={instance?.pod} aggregatesGap={aggregatesGap} headroom={aggregatesGap !== undefined} />
     </div>
   )
 }
@@ -298,6 +294,7 @@ function TransactionsView({
   instance,
   picker,
   samples,
+  deniedGrant,
 }: {
   namespace: string
   cluster: string
@@ -305,43 +302,81 @@ function TransactionsView({
   instance?: CNPGRuntimeInstance
   picker?: ReactNode
   samples: Sample[]
+  /** pods/proxy is denied: no exporter figures and no sampling, but Prometheus rates may still be readable. */
+  deniedGrant?: string
 }) {
-  const history = useCNPGClusterHistory(namespace, cluster, '15m').data
+  const history = useCNPGClusterHistory(namespace, cluster, '15m')
+  const isPrimary = !!instance && instance === primary
+  const canSample = !deniedGrant && isPrimary && instance?.metrics.state === 'ok'
+  const rates = cnpgTransactionRates(
+    { commits: historyLatest(history.data, 'tps', 'commits'), rollbacks: historyLatest(history.data, 'tps', 'rollbacks') },
+    // The page samples the primary's counters only, so sampled rates are the primary's.
+    canSample ? { commits: latestRate(samples, 'commits'), rollbacks: latestRate(samples, 'rollbacks') } : null,
+    deniedGrant ? `needs ${deniedGrant}` : !isPrimary ? 'primary only' : '—',
+  )
   return (
     <div className="space-y-4">
-      {picker}
-      <TransactionsCard inst={instance} isPrimary={!!instance && instance === primary} samples={samples} history={history} />
-      <CheckpointsCard inst={instance} />
+      <CNPGRefreshFailedNotice queries={[history]} />
+      {!deniedGrant && picker}
+      {deniedGrant ? (
+        <>
+          {rates.source !== 'none' && (
+            <Card title="Transactions (cluster)" footer={RATES_FOOTER.prometheus}>
+              <Rates rates={rates} />
+            </Card>
+          )}
+          <ProxyDenied what="Per-instance transaction figures, cache hit ratio, deadlocks, transaction and multixact ID age, and extension versions" grant={deniedGrant} />
+        </>
+      ) : (
+        <>
+          <TransactionsCard inst={instance} rates={rates} />
+          <CheckpointsCard inst={instance} />
+        </>
+      )}
     </div>
   )
 }
 
-function TransactionsCard({ inst, isPrimary, samples, history }: { inst?: CNPGRuntimeInstance; isPrimary: boolean; samples: Sample[]; history?: CNPGClusterHistoryResponse }) {
-  const primary = inst
-  const m = primary?.metrics
-  if (!m || m.state !== 'ok') return <Card title="Transactions"><Unavailable inst={primary} what="Transactions" /></Card>
-  const promCommits = historyLatest(history, 'tps', 'commits')
-  const promRollbacks = historyLatest(history, 'tps', 'rollbacks')
-  const fromPrometheus = !!(promCommits || promRollbacks)
-  // The page samples the primary's counters only, so sampled rates are the primary's.
-  const commits = isPrimary ? latestRate(samples, 'commits') : undefined
-  const rollbacks = isPrimary ? latestRate(samples, 'rollbacks') : undefined
-  const sampledText = (v: number | undefined) => (!isPrimary ? 'primary only' : v !== undefined ? v.toFixed(1) : 'collecting…')
-  const promText = (p: ReturnType<typeof historyLatest>) =>
-    p ? <Tooltip content={`${p.source} · Prometheus, ${formatAge(new Date(p.at * 1000).toISOString())} ago`}>{p.value.toFixed(1)}</Tooltip> : '—'
+const RATES_FOOTER = {
+  prometheus: 'Commit and rollback rates are Prometheus’s latest rate across every instance and database of the cluster; the other figures are this instance’s.',
+  sampled: "Rates are the change between the primary exporter's last two query runs seen while this page is open, never across a change of primary.",
+  none: 'No current commit or rollback rate: Prometheus has no recent point, and this page samples only the primary through its exporter.',
+}
+
+function Rates({ rates }: { rates: CNPGTransactionRates }) {
+  const cluster = rates.source === 'prometheus' ? ' (cluster)' : ''
+  return (
+    <>
+      <Metric label={`Commits / s${cluster}`} value={rates.commits} />
+      <Metric label={`Rollbacks / s${cluster}`} value={rates.rollbacks} />
+      {rates.at !== undefined && (
+        <div className="self-end text-xs text-theme-text-tertiary">
+          {rates.source === 'prometheus' ? 'Prometheus, point from' : 'last Prometheus point'} {formatAge(new Date(rates.at * 1000).toISOString())} ago
+        </div>
+      )}
+    </>
+  )
+}
+
+function TransactionsCard({ inst, rates }: { inst?: CNPGRuntimeInstance; rates: CNPGTransactionRates }) {
+  const m = inst?.metrics
+  if (!m || m.state !== 'ok') {
+    return (
+      <Card title="Transactions" footer={rates.source === 'prometheus' ? RATES_FOOTER.prometheus : undefined}>
+        {rates.source === 'prometheus' && (
+          <div className="mb-3 flex flex-wrap gap-8">
+            <Rates rates={rates} />
+          </div>
+        )}
+        <Unavailable inst={inst} what="Transactions" />
+      </Card>
+    )
+  }
   const hit = m.blksHit !== undefined && m.blksRead !== undefined && m.blksHit + m.blksRead > 0 ? (m.blksHit / (m.blksHit + m.blksRead)) * 100 : undefined
   return (
-    <Card
-      title={<>Transactions on {primary!.pod}</>}
-      footer={
-        fromPrometheus
-          ? 'Commit and rollback rates are Prometheus’s latest rate across every instance and database of the cluster; the other figures are this instance’s.'
-          : "Rates are the change between the primary exporter's last two query runs seen while this page is open, never across a change of primary."
-      }
-    >
+    <Card title={<>Transactions on {inst!.pod}</>} footer={RATES_FOOTER[rates.source]}>
       <div className="flex flex-wrap gap-8">
-        <Metric label={fromPrometheus ? 'Commits / s (cluster)' : 'Commits / s'} value={fromPrometheus ? promText(promCommits) : sampledText(commits)} />
-        <Metric label={fromPrometheus ? 'Rollbacks / s (cluster)' : 'Rollbacks / s'} value={fromPrometheus ? promText(promRollbacks) : sampledText(rollbacks)} />
+        <Rates rates={rates} />
         <Metric label="Cache hit ratio" value={hit !== undefined ? `${hit.toFixed(1)} %` : '—'} />
         <Metric label="Deadlocks (total)" value={m.deadlocksTotal ?? '—'} tone={m.deadlocksTotal ? 'degraded' : undefined} />
         <Metric label="Oldest transaction" value={seconds(m.oldestXactSeconds)} />
