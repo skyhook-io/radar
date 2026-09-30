@@ -22,7 +22,7 @@ func TestCNPGLocalCanIAsksTheKubeconfigIdentity(t *testing.T) {
 		var review authv1.SelfSubjectAccessReview
 		_ = json.NewDecoder(r.Body).Decode(&review)
 		attrs := review.Spec.ResourceAttributes
-		review.Status.Allowed = !(attrs.Resource == "pods/proxy" && attrs.Verb == "get")
+		review.Status.Allowed = !(attrs.Resource == "pods" && attrs.Subresource == "proxy" && attrs.Verb == "get")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(review)
 	}))
