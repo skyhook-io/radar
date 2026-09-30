@@ -171,9 +171,20 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
             <div className="px-3 pb-0.5 pt-1 text-[11px] uppercase tracking-wide text-theme-text-tertiary">Advanced</div>
             {caps.data?.facts.maintenance.inProgress ? item('unsetMaintenance', 'Lift node maintenance…') : item('setMaintenance', 'Set node maintenance…')}
             <div className="my-1 border-t border-theme-border" />
-            <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => { setMenu(false); setOpen('restore') }}>
-              Restore to a new cluster…
-            </button>
+            <Tooltip content={capabilityTitle(actions?.restore) ?? unavailable} position="left" wrapperClassName="w-full">
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!actions?.restore.allowed}
+                className={MENU_ITEM}
+                onClick={() => {
+                  setMenu(false)
+                  setOpen('restore')
+                }}
+              >
+                Restore to a new cluster…
+              </button>
+            </Tooltip>
             <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => { setMenu(false); setOpen('report') }}>
               Download report…
             </button>

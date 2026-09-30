@@ -159,6 +159,9 @@ type CNPGClusterActions struct {
 	// instance that may be destroyed (per-instance verdicts are authoritative).
 	Psql            CNPGActionCapability `json:"psql"`
 	DestroyInstance CNPGActionCapability `json:"destroyInstance"`
+	// Restore is creating a new Cluster in this namespace that bootstraps
+	// from this one's backups; the source is only read.
+	Restore CNPGActionCapability `json:"restore"`
 	CNPGMaintenanceActions
 }
 
@@ -772,6 +775,7 @@ func (g cnpgGrant) String(namespace string) string {
 
 var (
 	cnpgGrantCreateBackups    = cnpgGrant{"create", cnpgGroup, "backups", ""}
+	cnpgGrantCreateClusters   = cnpgGrant{"create", cnpgGroup, "clusters", ""}
 	cnpgGrantPatchStatus      = cnpgGrant{"patch", cnpgGroup, "clusters", "status"}
 	cnpgGrantPatchClusters    = cnpgGrant{"patch", cnpgGroup, "clusters", ""}
 	cnpgGrantDeletePods       = cnpgGrant{"delete", "", "pods", ""}
@@ -1009,6 +1013,7 @@ func (s *Server) cnpgClusterCapabilities(r *http.Request, c cnpgActionClients, c
 			Rehydrate:       one(cnpgGuardRehydrate(facts), cnpgGrantPatchClusters),
 			Psql:            psql,
 			DestroyInstance: destroyInstance,
+			Restore:         one("", cnpgGrantCreateClusters),
 			CNPGMaintenanceActions: CNPGMaintenanceActions{
 				SetMaintenance:   one(cnpgGuardSetMaintenance(facts), cnpgGrantPatchClusters),
 				UnsetMaintenance: one(cnpgGuardUnsetMaintenance(facts), cnpgGrantPatchClusters),
@@ -1028,7 +1033,7 @@ func (s *Server) cnpgClusterCapabilities(r *http.Request, c cnpgActionClients, c
 // webhook rejects writes. Status patches and Pod deletes bypass it.
 func cnpgApplyOperatorGuard(resp *CNPGClusterCapabilitiesResponse) {
 	v, a := resp.Operator, &resp.Actions
-	for _, c := range []*CNPGActionCapability{&a.Backup, &a.Restart, &a.Reload, &a.Fence, &a.Unfence, &a.Hibernate, &a.Rehydrate, &a.SetMaintenance, &a.UnsetMaintenance} {
+	for _, c := range []*CNPGActionCapability{&a.Backup, &a.Restore, &a.Restart, &a.Reload, &a.Fence, &a.Unfence, &a.Hibernate, &a.Rehydrate, &a.SetMaintenance, &a.UnsetMaintenance} {
 		*c = cnpgOperatorWebhookGuard(v, *c)
 	}
 	for pod, ia := range resp.InstanceActions {

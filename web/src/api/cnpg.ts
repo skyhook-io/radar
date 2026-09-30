@@ -185,7 +185,8 @@ export interface CNPGClusterCapabilities {
   resourceVersion: string
   context: string
   facts: CNPGClusterFacts
-  actions: Record<CNPGClusterActionName, CNPGActionCapability> & { psql: CNPGActionCapability; destroyInstance: CNPGActionCapability }
+  /** `restore` is creating a new Cluster in this namespace from this one's backups (`create clusters`). */
+  actions: Record<CNPGClusterActionName, CNPGActionCapability> & { psql: CNPGActionCapability; destroyInstance: CNPGActionCapability; restore: CNPGActionCapability }
   instanceActions: Record<string, { restart: CNPGActionCapability; switchoverTarget: CNPGActionCapability; fence: CNPGActionCapability; unfence: CNPGActionCapability; psql: CNPGActionCapability; destroy: CNPGActionCapability }>
   restartPlan?: {
     primaryUpdateStrategy?: string

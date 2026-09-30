@@ -909,3 +909,30 @@ func TestCNPGActionErrorMapping(t *testing.T) {
 		})
 	}
 }
+
+func TestCNPGActionCapabilitiesRestoreNeedsCreateClusters(t *testing.T) {
+	env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil)},
+		cnpgActionPod("pg-1", "u1", true), cnpgActionPod("pg-2", "u2", true))
+	for _, allowed := range []bool{false, true} {
+		srv := &Server{permCache: auth.NewPermissionCache()}
+		perms := &auth.UserPermissions{AllowedNamespaces: []string{"db"}}
+		perms.SetCanI("create", cnpgGroup, "clusters", "db", allowed)
+		srv.permCache.Set("alice", nil, perms)
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "alice"}))
+		resp, err := srv.cnpgClusterCapabilities(r, env.clients(), "kind-test", "db", "pg")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := resp.Actions.Restore
+		if allowed {
+			if !got.Allowed || got.Permission != cnpgPermAllowed {
+				t.Errorf("restore with create clusters = %+v, want allowed", got)
+			}
+			continue
+		}
+		if got.Allowed || got.Permission != cnpgPermDenied || !strings.Contains(got.Reason, "create clusters (postgresql.cnpg.io) in namespace db") {
+			t.Errorf("restore without create clusters = %+v, want denied naming the grant", got)
+		}
+	}
+}
