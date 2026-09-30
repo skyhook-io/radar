@@ -1,12 +1,15 @@
 package prometheus
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 func TestPVCUsageAvailability(t *testing.T) {
@@ -88,5 +91,68 @@ func TestPVCUsageAvailability(t *testing.T) {
 				t.Fatal("raw query error exposed")
 			}
 		})
+	}
+}
+
+// Same-named claims in two clusters sharing one Prometheus: east is 95 of
+// 100 GiB, west 10 of 1000 GiB. Unscoped max() would report 95 of 1000.
+func TestQueryPVCUsageHoldsToOneClusterIdentity(t *testing.T) {
+	const gi = 1 << 30
+	q := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
+		east := strings.Contains(query, `cluster="east"`)
+		switch {
+		case strings.HasPrefix(query, "count by ("):
+			return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"cluster": "east"}, 1), vec(map[string]string{"cluster": "west"}, 1)}}, nil
+		case strings.Contains(query, "used_bytes") && east:
+			return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"persistentvolumeclaim": "pg-1"}, 95*gi)}}, nil
+		case strings.Contains(query, "capacity_bytes") && east:
+			return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"persistentvolumeclaim": "pg-1"}, 100*gi)}}, nil
+		case strings.Contains(query, "used_bytes"):
+			return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"persistentvolumeclaim": "pg-1"}, 95*gi)}}, nil
+		default:
+			return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"persistentvolumeclaim": "pg-1"}, 1000*gi)}}, nil
+		}
+	}}
+	_, _, err := decideScope(context.Background(), q, pvcScopeProbe("db", []string{"pg-1"}, 0), nil)
+	if out, failed := pvcScopeFailure(err); !failed || out.Status != PVCUsageAmbiguous || len(out.Usage) != 0 {
+		t.Fatalf("two identities, unproven = %+v (err %v), want ambiguous with no value", out, err)
+	}
+
+	m, _, err := decideScope(context.Background(), q, pvcScopeProbe("db", []string{"pg-1"}, 0), map[string]string{"cluster": "east"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := queryPVCUsage(context.Background(), q, "db", []string{"pg-1"}, m)
+	if u := out.Usage["pg-1"]; out.Status != PVCUsageAvailable || u.CapacityBytes != 100*gi || u.Ratio < 0.94 {
+		t.Fatalf("proven east = %+v, want 95 of 100 GiB", out)
+	}
+}
+
+func TestPVCUsageHandlerRefusesMergedClusters(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query().Get("query")
+		if query == "up" {
+			_, _ = w.Write([]byte(authProbeBody))
+			return
+		}
+		result := `[{"metric":{},"value":[1700000000,"1024"]}]`
+		if strings.HasPrefix(query, "count by (") {
+			result = `[{"metric":{"cluster":"east"},"value":[1700000000,"1"]},{"metric":{"cluster":"west"},"value":[1700000000,"1"]}]`
+		}
+		_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":%s}}`, result)
+	}))
+	defer upstream.Close()
+	Initialize(nil, nil, "pvc-test")
+	SetManualURL(upstream.URL)
+	SetAuthGate(func(*http.Request, string, string, string, string) bool { return true })
+	defer func() { SetAuthGate(nil); Reset(); Initialize(nil, nil, "") }()
+	w := httptest.NewRecorder()
+	metricsRouter().ServeHTTP(w, httptest.NewRequest("GET", "/prometheus/pvc/demo/disk", nil))
+	var response PVCUsageResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Status != PVCUsageAmbiguous || response.HasData || response.Used != 0 {
+		t.Fatalf("response = %+v, want ambiguous_scope without a value", response)
 	}
 }

@@ -152,8 +152,9 @@ func (s *Server) handleCNPGClusterHistory(w http.ResponseWriter, r *http.Request
 		req.Claims = claimNames(claims)
 	}
 
-	if req.PodsDenied == "" || len(req.Claims) > 0 {
-		matchers, iso, err := prometheuspkg.ResolveCNPGScope(r.Context(), namespace, selector, cnpgHistoryAnchors(cache, cluster))
+	anchors := cnpgHistoryAnchors(cache, cluster)
+	if req.PodsDenied == "" {
+		matchers, iso, err := prometheuspkg.ResolveCNPGScope(r.Context(), namespace, selector, anchors, rng.Duration)
 		if err != nil {
 			resp.State, resp.Reason = cnpgHistoryScopeFailure(err)
 			s.writeJSON(w, resp)
@@ -161,8 +162,19 @@ func (s *Server) handleCNPGClusterHistory(w http.ResponseWriter, r *http.Request
 		}
 		req.Matchers, resp.Isolation = matchers, &iso
 	}
+	if len(req.Claims) > 0 {
+		matchers, iso, err := prometheuspkg.ResolvePVCScope(r.Context(), namespace, req.Claims, anchors, rng.Duration)
+		switch {
+		case err != nil:
+			_, req.PVCAmbiguous = cnpgUsageScopeFailure(err)
+		case resp.Isolation == nil:
+			req.PVCMatchers, resp.Isolation = matchers, &iso
+		default:
+			req.PVCMatchers = matchers
+		}
+	}
 
-	key := strings.Join([]string{namespace, name, string(cluster.GetUID()), rng.Name, end.Format(time.RFC3339), req.Matchers, req.PodsDenied, req.PVCDenied, req.PVCReason, strings.Join(req.Claims, ",")}, "\x00")
+	key := strings.Join([]string{namespace, name, string(cluster.GetUID()), rng.Name, end.Format(time.RFC3339), req.Matchers, req.PVCMatchers, req.PVCAmbiguous, req.PodsDenied, req.PVCDenied, req.PVCReason, strings.Join(req.Claims, ",")}, "\x00")
 	charts, hit := cnpgHistoryMemoGet(key, now)
 	if !hit {
 		var err error
@@ -197,6 +209,17 @@ func cnpgHistoryScopeFailure(err error) (string, string) {
 		return cnpgHistoryStateAmbiguous, "This Prometheus holds series for these Pod names under more than one cluster identity, so history could mix clusters. An operator can configure the cluster identity labels Radar should require."
 	case errors.Is(err, prometheuspkg.ErrCNPGScopeMismatch):
 		return cnpgHistoryStateScopeMismatch, "The cluster identity labels proven for this cluster do not appear on the CNPG exporter series, so Radar cannot tell this cluster's history from another's."
+	}
+	return cnpgHistoryStateError, "Prometheus query failed: " + truncateCNPGRuntimeError(err.Error())
+}
+
+// cnpgUsageScopeFailure is cnpgHistoryScopeFailure for kubelet volume stats.
+func cnpgUsageScopeFailure(err error) (string, string) {
+	switch {
+	case errors.Is(err, prometheuspkg.ErrCNPGScopeAmbiguous):
+		return cnpgHistoryStateAmbiguous, "This Prometheus holds volume stats for these claim names under more than one cluster identity, so a value could be another cluster's. An operator can configure the cluster identity labels Radar should require."
+	case errors.Is(err, prometheuspkg.ErrCNPGScopeMismatch):
+		return cnpgHistoryStateScopeMismatch, "The cluster identity labels proven for this cluster do not appear on these claims' volume stats, so Radar cannot tell this cluster's volumes from another's."
 	}
 	return cnpgHistoryStateError, "Prometheus query failed: " + truncateCNPGRuntimeError(err.Error())
 }
@@ -374,20 +397,16 @@ func (s *Server) cnpgNamespaceFleetMetrics(r *http.Request, cache *k8s.ResourceC
 	podsAllowed := s.prometheusAuthGate(r, "", "pods", namespace, "get")
 	claimsByCluster, growthCov := s.cnpgFleetClaims(r, cache, namespace, clusters)
 
-	matchers := ""
-	if podsAllowed || len(claimsByCluster) > 0 {
-		m, _, err := prometheuspkg.ResolveCNPGScope(ctx, namespace, prometheuspkg.CNPGInstancesSelector(namespace, names), anchors)
-		if err != nil {
-			state, reason := cnpgHistoryScopeFailure(err)
-			fillLag(CNPGFleetLag{State: state, Reason: reason})
-			fillGrowth(CNPGFleetGrowth{State: state, Reason: reason})
-			return cnpgFleetMetricsRows(namespace, clusters, lags, growths)
-		}
-		matchers = m
+	matchers, scopeErr := "", error(nil)
+	if podsAllowed {
+		matchers, _, scopeErr = prometheuspkg.ResolveCNPGScope(ctx, namespace, prometheuspkg.CNPGInstancesSelector(namespace, names), anchors, prometheuspkg.CNPGSustainedLagWindow)
 	}
 
 	if !podsAllowed {
 		fillLag(CNPGFleetLag{State: cnpgHistoryStateDenied, Grant: "get pods in " + namespace})
+	} else if scopeErr != nil {
+		state, reason := cnpgHistoryScopeFailure(scopeErr)
+		fillLag(CNPGFleetLag{State: state, Reason: reason})
 	} else if res, err := prometheuspkg.QueryCNPGFleetLag(ctx, namespace, names, matchers); err != nil {
 		fillLag(CNPGFleetLag{State: cnpgHistoryStateError, Reason: "Prometheus query failed: " + truncateCNPGRuntimeError(err.Error())})
 	} else {
@@ -415,8 +434,12 @@ func (s *Server) cnpgNamespaceFleetMetrics(r *http.Request, cache *k8s.ResourceC
 		for _, cs := range claimsByCluster {
 			all = append(all, claimNames(cs)...)
 		}
-		byClaim, err := prometheuspkg.QueryCNPGDiskGrowth(ctx, namespace, all, cnpgFleetGrowthWindow, matchers)
+		pvcMatchers, _, err := prometheuspkg.ResolvePVCScope(ctx, namespace, all, anchors, cnpgFleetGrowthWindow)
+		var byClaim map[string]float64
 		if err != nil {
+			state, reason := cnpgUsageScopeFailure(err)
+			fillGrowth(CNPGFleetGrowth{State: state, Reason: reason})
+		} else if byClaim, err = prometheuspkg.QueryCNPGDiskGrowth(ctx, namespace, all, cnpgFleetGrowthWindow, pvcMatchers); err != nil {
 			fillGrowth(CNPGFleetGrowth{State: cnpgHistoryStateError, Reason: "Prometheus query failed: " + truncateCNPGRuntimeError(err.Error())})
 		}
 		for i, c := range clusters {

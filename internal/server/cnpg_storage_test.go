@@ -153,6 +153,13 @@ func getCNPGStorage(t *testing.T, path string) (int, CNPGClusterStorageResponse,
 // usePrometheusVolumeStats serves kubelet volume stats for the named claims.
 func usePrometheusVolumeStats(t *testing.T, used, capacity map[string]float64) {
 	t.Helper()
+	usePrometheusVolumeStatsFrom(t, used, capacity, false)
+}
+
+// usePrometheusVolumeStatsFrom with twoClusters answers identity checks with a
+// second cluster holding claims of the same names.
+func usePrometheusVolumeStatsFrom(t *testing.T, used, capacity map[string]float64, twoClusters bool) {
+	t.Helper()
 	series := func(values map[string]float64, query string) string {
 		var rows []string
 		for claim, v := range values {
@@ -174,6 +181,8 @@ func usePrometheusVolumeStats(t *testing.T, used, capacity map[string]float64) {
 		switch {
 		case q == "up":
 			_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"prometheus"},"value":[1700000000,"1"]}]}}`)
+		case twoClusters && strings.HasPrefix(q, "count by (cluster"):
+			_, _ = io.WriteString(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"cluster":"east"},"value":[1700000000,"1"]},{"metric":{"cluster":"west"},"value":[1700000000,"1"]}]}}`)
 		case strings.Contains(q, "kubelet_volume_stats_used_bytes"):
 			_, _ = io.WriteString(w, series(used, q))
 		case strings.Contains(q, "kubelet_volume_stats_capacity_bytes"):
@@ -369,6 +378,41 @@ func TestCNPGFleetDisk(t *testing.T) {
 	// no series, so the answer is partial.
 	if d.State != cnpgStorageStatePartial || d.Claims != 3 || d.Measured != 2 || d.Max == nil || d.Max.Claim != "pg-orders-1" || d.Max.Instance != "pg-orders-1" {
 		t.Errorf("disk = %+v max=%+v", d, d.Max)
+	}
+}
+
+// Same-named claims in another cluster sharing this Prometheus: no value is
+// reported, since max() over both could hide this cluster's fullness.
+func TestCNPGFleetDiskRefusesAmbiguousClusterIdentity(t *testing.T) {
+	seedCNPGStorageCluster(t, "pgfa")
+	useCNPGProxyAPIServer(t, cnpgHealthyInstances)
+	usePrometheusVolumeStatsFrom(t,
+		map[string]float64{"pg-orders-1": 1.7e9, "pg-orders-2": 1e9},
+		map[string]float64{"pg-orders-1": 2e9, "pg-orders-2": 2e9}, true)
+
+	resp, err := http.Get(testServer.URL + "/api/cnpg/disk?namespaces=pgfa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got CNPGFleetDiskResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Clusters) != 1 || got.Clusters[0].State != cnpgHistoryStateAmbiguous || got.Clusters[0].Max != nil || got.Clusters[0].Reason == "" {
+		t.Fatalf("disk = %+v", got.Clusters)
+	}
+
+	status, storage, body := getCNPGStorage(t, "/api/cnpg/clusters/pgfa/pg-orders/storage")
+	if status != http.StatusOK || storage.Usage.State != cnpgHistoryStateAmbiguous {
+		t.Fatalf("storage = %d %s", status, body)
+	}
+	for _, in := range storage.Instances {
+		for _, v := range in.Volumes {
+			if v.Usage.Ratio != nil || v.Usage.UsedBytes != nil {
+				t.Errorf("volume %s carries a value from an ambiguous scope: %+v", v.Claim, v.Usage)
+			}
+		}
 	}
 }
 

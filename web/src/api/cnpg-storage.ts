@@ -11,7 +11,7 @@ export interface CNPGStorageCoverage {
 }
 
 export interface CNPGStorageVolumeUsage {
-  /** ok | noSeries | invalid | noPrometheus | denied | error | notRead */
+  /** ok | noSeries | invalid | noPrometheus | denied | error | notRead | ambiguous | scopeMismatch */
   state: string
   usedBytes?: number
   capacityBytes?: number

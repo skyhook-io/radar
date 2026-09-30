@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -23,12 +24,13 @@ import (
 // knowable from the series. The pod pattern keeps deleted instances in range.
 
 const (
-	CNPGHistoryStateOK       = "ok"
-	CNPGHistoryStateNoSeries = "noSeries"
-	CNPGHistoryStateEmpty    = "empty"
-	CNPGHistoryStateDenied   = "denied"
-	CNPGHistoryStateError    = "error"
-	CNPGHistoryStateNotRead  = "notRead"
+	CNPGHistoryStateOK        = "ok"
+	CNPGHistoryStateNoSeries  = "noSeries"
+	CNPGHistoryStateEmpty     = "empty"
+	CNPGHistoryStateDenied    = "denied"
+	CNPGHistoryStateError     = "error"
+	CNPGHistoryStateNotRead   = "notRead"
+	CNPGHistoryStateAmbiguous = "ambiguous"
 
 	CNPGIsolationConfigured = "configured"
 	CNPGIsolationVerified   = "verified"
@@ -38,13 +40,13 @@ const (
 	cnpgHistoryConcurrency = 4
 )
 
-// ErrCNPGScopeAmbiguous means the selected Pod names exist under more than one
+// ErrCNPGScopeAmbiguous means the selected series exist under more than one
 // cluster identity in this Prometheus, so any answer could mix clusters.
-var ErrCNPGScopeAmbiguous = errors.New("cnpg history: pod names match series from more than one cluster")
+var ErrCNPGScopeAmbiguous = errors.New("cnpg metrics: the selected series appear under more than one cluster identity")
 
-// ErrCNPGScopeMismatch means the verified cluster identity labels select no
-// CNPG exporter series although unscoped ones exist.
-var ErrCNPGScopeMismatch = errors.New("cnpg history: cluster identity labels do not appear on CNPG exporter series")
+// ErrCNPGScopeMismatch means the verified cluster identity labels select none
+// of the probed series although unscoped ones exist.
+var ErrCNPGScopeMismatch = errors.New("cnpg metrics: cluster identity labels do not appear on the selected series")
 
 type cnpgQuerier interface {
 	Query(ctx context.Context, query string) (*prom.QueryResult, error)
@@ -125,11 +127,60 @@ func withScope(selector, matchers string) string {
 	return selector + "," + matchers
 }
 
+// scopeProbe names the series whose identity labels decide a scope: one
+// selector per batch and, for a chart over a range, the window every identity
+// is collected over (an instant check would miss one that stopped reporting
+// minutes ago but still fills the chart).
+type scopeProbe struct {
+	metric    string
+	selectors []string
+	window    time.Duration
+}
+
+func (p scopeProbe) over(sel string) string {
+	if p.window <= 0 {
+		return p.metric + "{" + sel + "}"
+	}
+	return "count_over_time(" + p.metric + "{" + sel + "}[" + p.window.String() + "])"
+}
+
 // ResolveCNPGScope decides the cluster-identity matchers for one namespace's
-// CNPG series: an operator-configured scope first, then identity labels proven
-// by kube-state-metrics Pod UIDs, else none. Without proof it refuses when the
-// selected Pod names appear under more than one identity.
-func ResolveCNPGScope(ctx context.Context, namespace, selector string, anchors []prom.WorkloadPodIdentity) (string, CNPGIsolation, error) {
+// CNPG exporter series over window (0 for an instant read).
+func ResolveCNPGScope(ctx context.Context, namespace, selector string, anchors []prom.WorkloadPodIdentity, window time.Duration) (string, CNPGIsolation, error) {
+	return resolveScope(ctx, namespace, scopeProbe{metric: "cnpg_collector_up", selectors: []string{selector}, window: window}, anchors, nil)
+}
+
+// ResolvePVCScope decides the cluster-identity matchers for the named claims'
+// kubelet volume stats over window (0 for an instant read).
+func ResolvePVCScope(ctx context.Context, namespace string, claims []string, anchors []prom.WorkloadPodIdentity, window time.Duration) (string, CNPGIsolation, error) {
+	return resolveScope(ctx, namespace, pvcScopeProbe(namespace, claims, window), anchors, nil)
+}
+
+func pvcScopeProbe(namespace string, claims []string, window time.Duration) scopeProbe {
+	return scopeProbe{metric: "kubelet_volume_stats_capacity_bytes", selectors: CNPGClaimSelectors(namespace, claims), window: window}
+}
+
+// CNPGClaimSelectors selects the named claims of one namespace, in batches
+// that keep each regex matcher small.
+func CNPGClaimSelectors(namespace string, claims []string) []string {
+	names := make([]string, len(claims))
+	for i, c := range claims {
+		names[i] = regexp.QuoteMeta(c)
+	}
+	sort.Strings(names)
+	var out []string
+	for start := 0; start < len(names); start += pvcUsageBatchSize {
+		end := min(start+pvcUsageBatchSize, len(names))
+		out = append(out, "namespace="+strconv.Quote(namespace)+",persistentvolumeclaim=~"+strconv.Quote(strings.Join(names[start:end], "|")))
+	}
+	return out
+}
+
+// resolveScope applies an operator-configured scope first, then identity
+// labels proven by kube-state-metrics Pod UIDs, else the one identity the
+// probed series carry, refusing when they carry more than one.
+// With no anchors, a cache lets the proof use the namespace's current Pods.
+func resolveScope(ctx context.Context, namespace string, probe scopeProbe, anchors []prom.WorkloadPodIdentity, cache *k8s.ResourceCache) (string, CNPGIsolation, error) {
 	client := GetClient()
 	if client == nil {
 		return "", CNPGIsolation{}, errors.New("Prometheus client not initialized")
@@ -146,26 +197,31 @@ func ResolveCNPGScope(ctx context.Context, namespace, selector string, anchors [
 		return m, iso, nil
 	}
 	var verified map[string]string
-	if len(anchors) > 0 {
-		if cfg, err := client.historicalClusterScope(ctx, PodScope{Namespace: namespace, Identities: anchors}, nil); err == nil {
+	if len(anchors) > 0 || cache != nil {
+		if cfg, err := client.historicalClusterScope(ctx, PodScope{Namespace: namespace, Identities: anchors}, cache); err == nil {
 			verified = cfg.ClusterLabels
 		}
 	}
-	return decideCNPGScope(ctx, client, selector, verified)
+	return decideScope(ctx, client, probe, verified)
 }
 
-func decideCNPGScope(ctx context.Context, q cnpgQuerier, selector string, verified map[string]string) (string, CNPGIsolation, error) {
+func decideScope(ctx context.Context, q cnpgQuerier, probe scopeProbe, verified map[string]string) (string, CNPGIsolation, error) {
 	if len(verified) > 0 {
 		m, err := prom.WorkloadMetricsScope{ClusterLabels: verified}.Matchers()
 		if err != nil {
 			return "", CNPGIsolation{}, err
 		}
-		scoped, err := q.Query(ctx, "count(cnpg_collector_up{"+withScope(selector, m)+"})")
-		if err != nil {
-			return "", CNPGIsolation{}, err
+		for _, sel := range probe.selectors {
+			scoped, err := q.Query(ctx, "count("+probe.over(withScope(sel, m))+")")
+			if err != nil {
+				return "", CNPGIsolation{}, err
+			}
+			if len(scoped.Series) > 0 {
+				return m, cnpgVerifiedIsolation(verified), nil
+			}
 		}
-		if len(scoped.Series) == 0 {
-			all, err := q.Query(ctx, "count(cnpg_collector_up{"+selector+"})")
+		for _, sel := range probe.selectors {
+			all, err := q.Query(ctx, "count("+probe.over(sel)+")")
 			if err != nil {
 				return "", CNPGIsolation{}, err
 			}
@@ -173,16 +229,53 @@ func decideCNPGScope(ctx context.Context, q cnpgQuerier, selector string, verifi
 				return "", CNPGIsolation{}, ErrCNPGScopeMismatch
 			}
 		}
-		return m, CNPGIsolation{Mode: CNPGIsolationVerified, Labels: verified, Note: "cluster identity labels matched to this cluster's Pod UIDs"}, nil
+		return m, cnpgVerifiedIsolation(verified), nil
 	}
-	res, err := q.Query(ctx, "max(count by (pod) (count by (pod,"+strings.Join(partitionLabels, ",")+") (cnpg_collector_up{"+selector+"})))")
-	if err != nil {
-		return "", CNPGIsolation{}, err
+	identities := map[string]map[string]string{}
+	for _, sel := range probe.selectors {
+		res, err := q.Query(ctx, "count by ("+strings.Join(partitionLabels, ",")+") ("+probe.over(sel)+")")
+		if err != nil {
+			return "", CNPGIsolation{}, err
+		}
+		for _, s := range res.Series {
+			id := make(map[string]string, len(partitionLabels))
+			parts := make([]string, len(partitionLabels))
+			for i, l := range partitionLabels {
+				id[l], parts[i] = s.Labels[l], s.Labels[l]
+			}
+			identities[strings.Join(parts, "\x00")] = id
+		}
 	}
-	if len(res.Series) > 0 && len(res.Series[0].DataPoints) > 0 && res.Series[0].DataPoints[0].Value > 1 {
+	switch len(identities) {
+	case 0:
+		return "", CNPGIsolation{Mode: CNPGIsolationUnverified, Note: "selected by namespace and names; Prometheus has no series for them to check the cluster identity of"}, nil
+	case 1:
+	default:
 		return "", CNPGIsolation{}, ErrCNPGScopeAmbiguous
 	}
-	return "", CNPGIsolation{Mode: CNPGIsolationUnverified, Note: "selected by namespace and instance Pod names; this Prometheus shows one identity for them but Radar could not prove it is this cluster's"}, nil
+	var only map[string]string
+	for _, id := range identities {
+		only = id
+	}
+	// Pinning every partition label (absent ones as "") keeps a second
+	// identity that starts reporting after this check out of the answer.
+	matchers := make([]string, len(partitionLabels))
+	shown := map[string]string{}
+	for i, l := range partitionLabels {
+		matchers[i] = l + "=" + strconv.Quote(only[l])
+		if only[l] != "" {
+			shown[l] = only[l]
+		}
+	}
+	iso := CNPGIsolation{Mode: CNPGIsolationUnverified, Note: "selected by namespace and names and held to the one cluster identity these series carry; Radar could not prove it is this cluster's"}
+	if len(shown) > 0 {
+		iso.Labels = shown
+	}
+	return strings.Join(matchers, ","), iso, nil
+}
+
+func cnpgVerifiedIsolation(labels map[string]string) CNPGIsolation {
+	return CNPGIsolation{Mode: CNPGIsolationVerified, Labels: labels, Note: "cluster identity labels matched to this cluster's Pod UIDs"}
 }
 
 // CNPGHistoryThreshold is a reference line on a chart.
@@ -331,8 +424,12 @@ type CNPGHistoryRequest struct {
 	Cluster   string
 	Range     CNPGHistoryRange
 	End       time.Time
-	// Matchers are cluster-identity matchers from ResolveCNPGScope.
-	Matchers string
+	// Matchers are cluster-identity matchers from ResolveCNPGScope for the
+	// exporter series; PVCMatchers from ResolvePVCScope for the claims.
+	Matchers    string
+	PVCMatchers string
+	// PVCAmbiguous says why the claims' identity could not be settled.
+	PVCAmbiguous string
 	// PodsDenied / PVCDenied carry the grant that is missing, empty when allowed.
 	PodsDenied string
 	PVCDenied  string
@@ -354,12 +451,7 @@ func queryCNPGHistory(ctx context.Context, q cnpgQuerier, req CNPGHistoryRequest
 	sel := withScope(CNPGInstanceSelector(req.Namespace, req.Cluster), req.Matchers)
 	pvcSel := ""
 	if len(req.Claims) > 0 {
-		escaped := make([]string, len(req.Claims))
-		for i, c := range req.Claims {
-			escaped[i] = regexp.QuoteMeta(c)
-		}
-		sort.Strings(escaped)
-		pvcSel = withScope("namespace="+strconv.Quote(req.Namespace)+",persistentvolumeclaim=~"+strconv.Quote(strings.Join(escaped, "|")), req.Matchers)
+		pvcSel = withScope(cnpgClaimSelector(req.Namespace, req.Claims), req.PVCMatchers)
 	}
 	end := req.End.Truncate(req.Range.Step)
 	start := end.Add(-req.Range.Duration)
@@ -378,6 +470,9 @@ func queryCNPGHistory(ctx context.Context, q cnpgQuerier, req CNPGHistoryRequest
 			continue
 		case !d.pvc && req.PodsDenied != "":
 			c.State, c.Grant = CNPGHistoryStateDenied, req.PodsDenied
+			continue
+		case d.pvc && req.PVCAmbiguous != "":
+			c.State, c.Reason = CNPGHistoryStateAmbiguous, req.PVCAmbiguous
 			continue
 		case d.pvc && pvcSel == "":
 			c.State, c.Reason = CNPGHistoryStateNotRead, req.PVCReason
@@ -575,12 +670,7 @@ func queryCNPGDiskGrowth(ctx context.Context, q cnpgQuerier, namespace string, c
 	if len(claims) == 0 {
 		return out, nil
 	}
-	escaped := make([]string, len(claims))
-	for i, c := range claims {
-		escaped[i] = regexp.QuoteMeta(c)
-	}
-	sort.Strings(escaped)
-	sel := withScope("namespace="+strconv.Quote(namespace)+",persistentvolumeclaim=~"+strconv.Quote(strings.Join(escaped, "|")), matchers)
+	sel := withScope(cnpgClaimSelector(namespace, claims), matchers)
 	res, err := q.Query(ctx, "3600 * max by (persistentvolumeclaim) (deriv(kubelet_volume_stats_used_bytes{"+sel+"}["+window.String()+"]))")
 	if err != nil {
 		return nil, err
@@ -596,4 +686,14 @@ func queryCNPGDiskGrowth(ctx context.Context, q cnpgQuerier, namespace string, c
 		out[s.Labels["persistentvolumeclaim"]] = v
 	}
 	return out, nil
+}
+
+// cnpgClaimSelector selects all the named claims in one matcher.
+func cnpgClaimSelector(namespace string, claims []string) string {
+	escaped := make([]string, len(claims))
+	for i, c := range claims {
+		escaped[i] = regexp.QuoteMeta(c)
+	}
+	sort.Strings(escaped)
+	return "namespace=" + strconv.Quote(namespace) + ",persistentvolumeclaim=~" + strconv.Quote(strings.Join(escaped, "|"))
 }

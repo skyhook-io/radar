@@ -858,7 +858,7 @@ function finishFleet(rows: CNPGFleetRow[], incompleteKinds: CNPGWorkspaceKey[]):
 export interface CNPGDiskReading {
   namespace: string
   name: string
-  /** ok | partial | noSeries | noPrometheus | denied | unavailable | error | notRead */
+  /** ok | partial | noSeries | noPrometheus | denied | unavailable | error | notRead | ambiguous | scopeMismatch */
   state: string
   grant?: string
   reason?: string

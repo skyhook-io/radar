@@ -18,6 +18,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 const (
@@ -228,7 +229,7 @@ func (s *Server) handleCNPGClusterStorage(w http.ResponseWriter, r *http.Request
 	usage := CNPGStorageCoverage{State: cnpgUsageStateNotRead, Reason: "no volumes to measure"}
 	var batch prometheuspkg.PVCUsageBatch
 	if len(claims) > 0 {
-		usage, batch = s.cnpgClaimUsage(r, namespace, claimNames(claims))
+		usage, batch = s.cnpgClaimUsage(r, namespace, claimNames(claims), cnpgHistoryAnchors(cache, cluster))
 	}
 	resp.Usage = usage
 
@@ -492,12 +493,12 @@ func cnpgStorageVolumeOf(pvc *corev1.PersistentVolumeClaim, classes map[string]C
 
 // cnpgClaimUsage reads kubelet volume stats for the claims, behind the same
 // gate as the single-claim PVC chart.
-func (s *Server) cnpgClaimUsage(r *http.Request, namespace string, claims []string) (CNPGStorageCoverage, prometheuspkg.PVCUsageBatch) {
+func (s *Server) cnpgClaimUsage(r *http.Request, namespace string, claims []string, anchors []prom.WorkloadPodIdentity) (CNPGStorageCoverage, prometheuspkg.PVCUsageBatch) {
 	grant := "get persistentvolumeclaims in " + namespace
 	if !s.prometheusAuthGate(r, "", "persistentvolumeclaims", namespace, "get") {
 		return CNPGStorageCoverage{State: cnpgUsageStateDenied, Grant: grant}, prometheuspkg.PVCUsageBatch{}
 	}
-	batch := prometheuspkg.QueryPVCUsage(r.Context(), namespace, claims)
+	batch := prometheuspkg.QueryPVCUsage(r.Context(), namespace, claims, anchors)
 	switch batch.Status {
 	case prometheuspkg.PVCUsageNoPrometheus:
 		reason := "Radar is not connected to Prometheus"
@@ -507,6 +508,12 @@ func (s *Server) cnpgClaimUsage(r *http.Request, namespace string, claims []stri
 		return CNPGStorageCoverage{State: cnpgUsageStateNoPrometheus, Reason: reason}, batch
 	case prometheuspkg.PVCUsageQueryFailed:
 		return CNPGStorageCoverage{State: cnpgUsageStateError, Reason: "Prometheus query failed: " + truncateCNPGRuntimeError(batch.Error)}, batch
+	case prometheuspkg.PVCUsageAmbiguous:
+		_, reason := cnpgUsageScopeFailure(prometheuspkg.ErrCNPGScopeAmbiguous)
+		return CNPGStorageCoverage{State: cnpgHistoryStateAmbiguous, Reason: reason}, batch
+	case prometheuspkg.PVCUsageScopeMismatch:
+		_, reason := cnpgUsageScopeFailure(prometheuspkg.ErrCNPGScopeMismatch)
+		return CNPGStorageCoverage{State: cnpgHistoryStateScopeMismatch, Reason: reason}, batch
 	}
 	switch n := len(batch.Usage); {
 	case n == 0:
@@ -873,7 +880,13 @@ func (s *Server) cnpgNamespaceDisk(r *http.Request, cache *k8s.ResourceCache, na
 	var cov CNPGStorageCoverage
 	var batch prometheuspkg.PVCUsageBatch
 	if len(names) > 0 {
-		cov, batch = s.cnpgClaimUsage(r, namespace, names)
+		var anchors []prom.WorkloadPodIdentity
+		for _, c := range clusters {
+			if len(anchors) < cnpgHistoryAnchorCap {
+				anchors = append(anchors, cnpgHistoryAnchors(cache, c)...)
+			}
+		}
+		cov, batch = s.cnpgClaimUsage(r, namespace, names, anchors)
 	}
 
 	out := make([]CNPGClusterDisk, len(clusters))
@@ -898,7 +911,8 @@ func (s *Server) cnpgNamespaceDisk(r *http.Request, cache *k8s.ResourceCache, na
 			}
 		}
 		switch {
-		case cov.State == cnpgUsageStateDenied || cov.State == cnpgUsageStateNoPrometheus || cov.State == cnpgUsageStateError:
+		case cov.State == cnpgUsageStateDenied || cov.State == cnpgUsageStateNoPrometheus || cov.State == cnpgUsageStateError ||
+			cov.State == cnpgHistoryStateAmbiguous || cov.State == cnpgHistoryStateScopeMismatch:
 			d.State, d.Grant, d.Reason = cov.State, cov.Grant, cov.Reason
 		case d.Measured == 0:
 			d.State, d.Reason = cnpgUsageStateNoSeries, "Prometheus has no kubelet volume stats for this cluster's claims"

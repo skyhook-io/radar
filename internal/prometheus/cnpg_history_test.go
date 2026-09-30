@@ -75,38 +75,86 @@ func TestParseCNPGHistoryRangeBoundsPoints(t *testing.T) {
 	}
 }
 
-func TestDecideCNPGScopeRefusesAmbiguousIdentity(t *testing.T) {
+func cnpgProbe(window time.Duration) scopeProbe {
+	return scopeProbe{metric: "cnpg_collector_up", selectors: []string{`namespace="pg"`}, window: window}
+}
+
+func TestDecideScopeRefusesAmbiguousIdentity(t *testing.T) {
 	q := &fakeCNPGQuerier{instant: func(string) (*prom.QueryResult, error) {
-		return &prom.QueryResult{Series: []prom.Series{vec(nil, 2)}}, nil
+		return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"cluster": "east"}, 1), vec(map[string]string{"cluster": "west"}, 1)}}, nil
 	}}
-	if _, _, err := decideCNPGScope(context.Background(), q, `namespace="pg"`, nil); !errors.Is(err, ErrCNPGScopeAmbiguous) {
+	if _, _, err := decideScope(context.Background(), q, cnpgProbe(0), nil); !errors.Is(err, ErrCNPGScopeAmbiguous) {
 		t.Fatalf("err = %v, want ambiguous", err)
 	}
 	q.instant = func(string) (*prom.QueryResult, error) {
-		return &prom.QueryResult{Series: []prom.Series{vec(nil, 1)}}, nil
+		return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"cluster": "east"}, 1)}}, nil
 	}
-	m, iso, err := decideCNPGScope(context.Background(), q, `namespace="pg"`, nil)
-	if err != nil || m != "" || iso.Mode != CNPGIsolationUnverified {
+	m, iso, err := decideScope(context.Background(), q, cnpgProbe(0), nil)
+	if err != nil || iso.Mode != CNPGIsolationUnverified || iso.Labels["cluster"] != "east" {
 		t.Fatalf("single identity: m=%q iso=%+v err=%v", m, iso, err)
+	}
+	// The one identity is pinned, absent partition labels included, so a
+	// second identity appearing later cannot join the answer.
+	if !strings.Contains(m, `cluster="east"`) || !strings.Contains(m, `cluster_id=""`) {
+		t.Fatalf("pinned matchers = %q", m)
 	}
 }
 
-func TestDecideCNPGScopeVerifiedLabelsMustReachExporterSeries(t *testing.T) {
+// An identity that stopped reporting minutes ago still fills a one-hour
+// chart, so the check must span the chart's range, not the present instant.
+func TestDecideScopeChecksIdentitiesOverTheWholeRange(t *testing.T) {
+	q := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
+		series := []prom.Series{vec(map[string]string{"cluster": "east"}, 1)}
+		if strings.Contains(query, "count_over_time(cnpg_collector_up{") && strings.Contains(query, "[1h0m0s]") {
+			series = append(series, vec(map[string]string{"cluster": "west"}, 1))
+		}
+		return &prom.QueryResult{Series: series}, nil
+	}}
+	if _, _, err := decideScope(context.Background(), q, cnpgProbe(time.Hour), nil); !errors.Is(err, ErrCNPGScopeAmbiguous) {
+		t.Fatalf("err = %v, want ambiguous over the range; queries %v", err, q.queries)
+	}
+}
+
+func TestDecideScopeVerifiedLabelsMustReachProbedSeries(t *testing.T) {
 	q := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
 		if strings.Contains(query, `k8s_cluster_name="east"`) {
 			return &prom.QueryResult{}, nil
 		}
 		return &prom.QueryResult{Series: []prom.Series{vec(nil, 3)}}, nil
 	}}
-	if _, _, err := decideCNPGScope(context.Background(), q, `namespace="pg"`, map[string]string{"k8s_cluster_name": "east"}); !errors.Is(err, ErrCNPGScopeMismatch) {
+	if _, _, err := decideScope(context.Background(), q, cnpgProbe(0), map[string]string{"k8s_cluster_name": "east"}); !errors.Is(err, ErrCNPGScopeMismatch) {
 		t.Fatalf("err = %v, want mismatch", err)
 	}
 	q.instant = func(string) (*prom.QueryResult, error) {
 		return &prom.QueryResult{Series: []prom.Series{vec(nil, 3)}}, nil
 	}
-	m, iso, err := decideCNPGScope(context.Background(), q, `namespace="pg"`, map[string]string{"k8s_cluster_name": "east"})
+	m, iso, err := decideScope(context.Background(), q, cnpgProbe(0), map[string]string{"k8s_cluster_name": "east"})
 	if err != nil || m != `k8s_cluster_name="east"` || iso.Mode != CNPGIsolationVerified {
 		t.Fatalf("verified: m=%q iso=%+v err=%v", m, iso, err)
+	}
+}
+
+func TestQueryCNPGHistoryKeepsPVCScopeAndAmbiguity(t *testing.T) {
+	q := &fakeCNPGQuerier{}
+	req := CNPGHistoryRequest{Namespace: "pg", Cluster: "pg", Range: cnpgHistoryRanges[1], End: time.Unix(1700000000, 0), Claims: []string{"pg-1"}, PVCMatchers: `cluster="east"`}
+	queryCNPGHistory(context.Background(), q, req)
+	found := false
+	for _, query := range q.queries {
+		if strings.Contains(query, "kubelet_volume_stats_used_bytes") {
+			found = true
+			if !strings.Contains(query, `cluster="east"`) {
+				t.Errorf("volume chart query lost the claims' scope: %s", query)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no volume chart query ran")
+	}
+	req.PVCAmbiguous = "two identities"
+	for _, c := range queryCNPGHistory(context.Background(), &fakeCNPGQuerier{}, req) {
+		if c.ID == "pvcUsed" && (c.State != CNPGHistoryStateAmbiguous || len(c.Series) != 0) {
+			t.Errorf("ambiguous claims chart = %+v", c)
+		}
 	}
 }
 

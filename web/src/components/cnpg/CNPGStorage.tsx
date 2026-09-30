@@ -65,6 +65,8 @@ const USAGE_UNMEASURED: Record<string, string> = {
   denied: 'no access to its usage metrics',
   error: 'the Prometheus query failed',
   notRead: 'not read',
+  ambiguous: 'these claim names report under more than one cluster in this Prometheus',
+  scopeMismatch: "this cluster's proven identity labels are not on its volume stats",
 }
 
 function UsageBar({ v }: { v: CNPGStorageVolume }) {
