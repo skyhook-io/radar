@@ -406,7 +406,9 @@ function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap
     return { ...base, tone: 'degraded', text: `${live.streaming} of ${expected} expected standbys streaming`, source }
   }
   const lag = live.maxReplayLagSeconds
-  if (lag !== undefined && cnpgLagTone(lag) !== 'healthy') return { ...base, tone: cnpgLagTone(lag), text: `replay ${Math.round(lag)} s behind`, source }
+  if (lag !== undefined && cnpgLagTone(lag) !== 'healthy') {
+    return { ...base, tone: cnpgLagTone(lag), text: `${live.streaming} of ${expected} streaming · replay ${Math.round(lag)} s behind`, source }
+  }
   return { ...base, tone: 'healthy', text: `${live.streaming} of ${expected} standbys streaming`, source }
 }
 

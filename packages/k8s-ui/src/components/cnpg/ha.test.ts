@@ -209,8 +209,9 @@ describe('cnpgDimensions', () => {
   it('replication lag takes the same tone as the Replication fact', () => {
     const at = (lag: number) => cnpgDimensions({ row: row(), replication: { streaming: 1, standbys: 1, maxReplayLagSeconds: lag } })[1]
     expect(at(2)).toMatchObject({ tone: 'healthy' })
-    expect(at(8)).toMatchObject({ tone: 'degraded', text: 'replay 8 s behind' })
-    expect(at(72)).toMatchObject({ tone: 'unhealthy', text: 'replay 72 s behind' })
+    expect(at(8)).toMatchObject({ tone: 'degraded', text: '1 of 1 streaming · replay 8 s behind' })
+    expect(at(23.6)).toMatchObject({ tone: 'degraded', text: '1 of 1 streaming · replay 24 s behind' })
+    expect(at(72)).toMatchObject({ tone: 'unhealthy', text: '1 of 1 streaming · replay 72 s behind' })
     expect(at(72).tone).toBe(cnpgLagTone(72))
   })
   it('replication is unknown when spec.instances is not reported', () => {
