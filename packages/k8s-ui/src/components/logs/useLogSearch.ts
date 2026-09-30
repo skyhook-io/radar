@@ -102,9 +102,9 @@ export function useLogSearch(
     [entries, isFiltering, mode, matchIndices, recordIdOf],
   )
   const filteredIndexById = useMemo(() => {
-    if (mode !== 'only') return null
+    if (mode !== 'only' || !isFiltering) return null
     return new Map(filteredEntries.map((e, i) => [e.id, i]))
-  }, [mode, filteredEntries])
+  }, [mode, isFiltering, filteredEntries])
 
   // Reset current match when search criteria change (but not when new entries arrive during streaming)
   const prevCriteria = useRef({ query, isRegex, isCaseSensitive })

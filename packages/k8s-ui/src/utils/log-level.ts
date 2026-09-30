@@ -73,8 +73,8 @@ export function selectLevelField(obj: Record<string, unknown>): { raw: unknown; 
 // Same tokenization as parseLogfmt: a quoted value is consumed whole, so a
 // `level=` inside a quoted message is never read as the line's own level.
 const LOGFMT_PAIR_RE = /(?:^|\s)([a-zA-Z_][\w.]*)=((?:"(?:[^"\\]|\\.)*")|(?:[^\s]*))/g
-const LOGFMT_LEVEL_KEYS = new Set(['level', 'lvl', 'severity'])
-const LOGFMT_LEVEL_HINT = /(?:^|\s)(?:level|lvl|severity)=/
+const LOGFMT_LEVEL_KEYS = new Set(['level', 'lvl', 'severity', 'log.level'])
+const LOGFMT_LEVEL_HINT = /(?:^|\s)(?:level|lvl|severity|log\.level)=/
 
 interface PlacedLevel {
   level: LogLevel
@@ -134,6 +134,7 @@ const KEYWORD_ERROR_RE = new RegExp(String.raw`\b(?:error|fatal|panic|critical|c
 const KEYWORD_WARN_RE = new RegExp(String.raw`\b(?:warn|warning)\b` + NOT_A_KEY)
 const KEYWORD_DEBUG_RE = new RegExp(String.raw`\bdebug\b` + NOT_A_KEY)
 const KEYWORD_INFO_RE = new RegExp(String.raw`\binfo\b` + NOT_A_KEY)
+const PYTHON_TRACEBACK_HEAD = 'Traceback (most recent call last):'
 // The first line of an exception: `MongoServerError: ...`, `java.lang.IllegalStateException`,
 // `Traceback (most recent call last):`.
 const EXCEPTION_HEAD_RE = /^(?:(?:[\w$]+\.)*[A-Z][\w$]*(?:Error|Exception)(?: \[[\w-]+\])?(?::|\s*$)|Traceback \(most recent call last\):)/
@@ -185,6 +186,12 @@ export function detectLogLevel(content: string): LogLevel {
   return detectLevel(content).level
 }
 
+const LEADING_ANSI_RE = /^(?:\x1b\[[0-9;]*m)+/
+
+// `goroutine 1 [running]:`, `main.main()`, `net/http.(*conn).serve(0xc000112000, {0x1a2b3c, 0x4})`,
+// `created by net/http.(*Server).Serve in goroutine 1`
+const GO_PANIC_LINE_RE = /^(?:goroutine \d+ \[[^\]]*\]:$|created by \S+|[\w./-]*[\w)\]]\.[\w*().[\]{}-]*\((?:[^()]|\([^()]*\))*\)$)/
+
 /**
  * Lines that continue the previous line's record rather than starting a new
  * one: stack frames and wrapped detail, which almost always start indented.
@@ -205,12 +212,6 @@ export function isContinuationLine(raw: string): boolean {
   if (paren <= 0 || !content.endsWith(')') || content.lastIndexOf(' ', paren) !== -1) return false
   return GO_PANIC_LINE_RE.test(content)
 }
-
-const LEADING_ANSI_RE = /^(?:\x1b\[[0-9;]*m)+/
-
-// `goroutine 1 [running]:`, `main.main()`, `net/http.(*conn).serve(0xc000112000, {0x1a2b3c, 0x4})`,
-// `created by net/http.(*Server).Serve in goroutine 1`
-const GO_PANIC_LINE_RE = /^(?:goroutine \d+ \[[^\]]*\]:$|created by \S+|[\w./-]*[\w)\]]\.[\w*().[\]{}-]*\((?:[^()]|\([^()]*\))*\)$)/
 
 interface AssociableEntry {
   content: string
@@ -236,18 +237,25 @@ export function associateContinuations(entries: readonly AssociableEntry[]): Con
   const headOf = new Array<number>(entries.length)
   const effectiveLevel = new Array<LogLevel>(entries.length)
   const lastHeadBySource = new Map<string, number>()
+  // Sources whose current record is a Python traceback still waiting for its
+  // closing `ValueError: ...` line, which Python prints unindented.
+  const openTraceback = new Set<string>()
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i]
     const source = `${entry.pod ?? ''}\x00${entry.container}`
     const lastHead = lastHeadBySource.get(source)
     const explicit = entry.levelSource === 'structured' || entry.levelSource === 'header'
-    if (lastHead !== undefined && !explicit && isContinuationLine(entry.content)) {
+    const closesTraceback = openTraceback.has(source) && EXCEPTION_HEAD_RE.test(entry.content)
+    if (lastHead !== undefined && !explicit && (closesTraceback || isContinuationLine(entry.content))) {
       headOf[i] = lastHead
       effectiveLevel[i] = effectiveLevel[lastHead]
+      if (closesTraceback) openTraceback.delete(source)
     } else {
       headOf[i] = i
       effectiveLevel[i] = entry.level
       lastHeadBySource.set(source, i)
+      if (entry.content.startsWith(PYTHON_TRACEBACK_HEAD)) openTraceback.add(source)
+      else openTraceback.delete(source)
     }
   }
   return { headOf, effectiveLevel }
@@ -279,4 +287,3 @@ export function groupContinuations<T extends { id: number }>(visible: readonly T
   }
   return groups
 }
-

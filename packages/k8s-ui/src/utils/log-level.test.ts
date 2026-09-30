@@ -35,6 +35,7 @@ const CASES: [string, string, LogLevel, LevelSource][] = [
   ['json info with error key', '{"level":"info","ts":"2026-09-29T20:42:20.831Z","message":"RequestCompleted HTTP/1.1 GET / 404","error":null}', 'info', 'structured'],
   ['pino numeric wins over severity text', '{"severity":"ERROR","level":50,"time":1790720767281,"errmsg":"Authentication failed."}', 'error', 'structured'],
   ['gcp severity', '{"time":"2026-09-29T12:18:58.483192609Z","severity":"INFO","message":"[audit] retention sweep"}', 'info', 'structured'],
+  ['logfmt dotted level key', 'time=2026-09-30T10:00:00Z log.level=info msg="retry after error"', 'info', 'structured'],
   ['ecs dotted key', '{"@timestamp":"2026-09-30T10:00:00Z","log.level":"warn","message":"slow"}', 'warn', 'structured'],
   ['ecs nested', '{"log":{"level":"debug"},"message":"cache miss"}', 'debug', 'structured'],
   ['empty level falls through to next field', '{"level":"","severity":"error","msg":"failed"}', 'error', 'structured'],
@@ -132,6 +133,16 @@ describe('isContinuationLine', () => {
     ['I0929 22:27:51.404929       1 reflector.go:376] Caches populated', false],
   ])('%s', (line, expected) => {
     expect(isContinuationLine(line)).toBe(expected)
+  })
+
+  it('keeps a Python traceback together, closing line included', () => {
+    const lines = [
+      entry(0, 'Traceback (most recent call last):'),
+      entry(1, '  File "/app/main.py", line 7, in <module>'),
+      entry(2, 'ValueError: bad config'),
+      entry(3, 'ValueError: a separate error'),
+    ]
+    expect(associateContinuations(lines).headOf).toEqual([0, 0, 0, 3])
   })
 
   it('keeps a Go panic together as one error record', () => {

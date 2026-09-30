@@ -1057,8 +1057,8 @@ export function LogCore({
 
 const SEARCH_MODES: { mode: LogSearchMode; label: string; tip: string; Icon: typeof Filter }[] = [
   { mode: 'highlight', label: 'Highlight', tip: 'Show all lines and highlight matches', Icon: Highlighter },
-  { mode: 'only', label: 'Only matching', tip: 'Show only lines that match', Icon: Filter },
-  { mode: 'hide', label: 'Hide matching', tip: 'Hide lines that match, like grep -v', Icon: EyeOff },
+  { mode: 'only', label: 'Only matching', tip: 'Show only matching lines, with their stack traces', Icon: Filter },
+  { mode: 'hide', label: 'Hide matching', tip: 'Hide matching lines and their stack traces, like grep -v', Icon: EyeOff },
 ]
 
 /** What the search query does to the list. Labels collapse to icons when the search row is narrow. */
