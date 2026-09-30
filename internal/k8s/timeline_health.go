@@ -49,3 +49,43 @@ func levelToTimeline(l health.Level) timeline.HealthState {
 		return timeline.HealthUnknown
 	}
 }
+
+// classifyTimelineChangeHealth labels one recorded change. The canonical
+// classifier judges standing state, so it holds back on a fresh failure (a
+// readiness grace, a restart threshold); a timeline row instead labels the
+// moment it records, and a Pod whose container just exited with an error, or
+// that just lost readiness, is not healthy at that moment.
+func classifyTimelineChangeHealth(kind string, oldObj, newObj any, now time.Time) timeline.HealthState {
+	pod, ok := newObj.(*corev1.Pod)
+	if kind != "Pod" || !ok {
+		return classifyTimelineHealth(kind, newObj, now)
+	}
+	level := health.PodDisplayLevel(pod, now)
+	if pod.Status.Phase != corev1.PodRunning || pod.DeletionTimestamp != nil {
+		return levelToTimeline(level)
+	}
+	completing := false
+	for _, cs := range pod.Status.ContainerStatuses {
+		if t := cs.State.Terminated; t != nil {
+			if t.ExitCode != 0 {
+				level = health.WorseOf(level, health.LevelUnhealthy)
+			} else {
+				completing = true
+			}
+		}
+	}
+	// A container finishing cleanly also drops readiness; that is completion.
+	if old, ok := oldObj.(*corev1.Pod); ok && old != pod && !completing && timelinePodReady(old) && !timelinePodReady(pod) {
+		level = health.WorseOf(level, health.LevelDegraded)
+	}
+	return levelToTimeline(level)
+}
+
+func timelinePodReady(p *corev1.Pod) bool {
+	for _, c := range p.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
