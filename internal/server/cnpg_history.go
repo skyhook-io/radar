@@ -275,8 +275,8 @@ type CNPGFleetLag struct {
 	Reason  string   `json:"reason,omitempty"`
 	Seconds *float64 `json:"seconds,omitempty"`
 	Pod     string   `json:"pod,omitempty"`
-	// SustainedSeconds is the worst standby's lowest lag across the one-minute
-	// checks of SustainedWindow, each backed by a sample; absent otherwise.
+	// SustainedSeconds is the worst standby's lowest recorded lag over
+	// SustainedWindow, for a standby already reporting when it began.
 	SustainedSeconds *float64 `json:"sustainedSeconds,omitempty"`
 	SustainedPod     string   `json:"sustainedPod,omitempty"`
 	SustainedWindow  string   `json:"sustainedWindow,omitempty"`

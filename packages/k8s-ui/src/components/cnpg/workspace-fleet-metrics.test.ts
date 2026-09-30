@@ -101,7 +101,7 @@ describe('sustained replication lag', () => {
     const ha = row(f, 'ha')
     expect(ha.attention).toBe(true)
     expect(ha.problems[0]).toMatchObject({ severity: 'warning', category: 'availability', source: 'measurement' })
-    expect(ha.problems[0].title).toBe('ha-2 has lagged at least 40.0 s at every check for 10 min')
+    expect(ha.problems[0].title).toBe('Every lag sample from ha-2 over the last 10 min was at least 40.0 s')
     expect(row(f, 'dark').attention).toBe(false)
     expect(f.attentionCount).toBe(1)
   })

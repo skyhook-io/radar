@@ -542,21 +542,15 @@ type CNPGLagReading struct {
 type CNPGFleetLag struct {
 	Lag     map[string]CNPGLagReading
 	Scraped map[string]bool
-	// Sustained is each Cluster's worst standby's lowest lag across the
-	// one-minute checks of CNPGSustainedLagWindow, each backed by a sample;
-	// absent when the window is not covered.
+	// Sustained is each Cluster's worst standby's lowest recorded lag over
+	// CNPGSustainedLagWindow, for standbys already reporting when the window
+	// began; absent otherwise.
 	Sustained map[string]CNPGLagReading
 }
 
 // CNPGSustainedLagWindow is how long a standby's replay lag must stay high
 // before the fleet treats it as a problem rather than a transient spike.
 const CNPGSustainedLagWindow = 10 * time.Minute
-
-// cnpgSustainedLagChecks is how many one-minute checks the window holds. Each
-// check needs a sample inside its own minute, so a standby that appeared
-// moments ago, or one with scrape gaps, never reads as lagging "for the whole
-// window".
-const cnpgSustainedLagChecks = 10
 
 // QueryCNPGFleetLag reads the current replay lag of every standby of the
 // named Clusters in one namespace with one instant query.
@@ -607,11 +601,15 @@ func queryCNPGFleetLag(ctx context.Context, q cnpgQuerier, namespace string, clu
 // querySustainedCNPGLag is best effort: without it the fleet still shows the
 // current lag, it just raises no sustained-lag problem.
 func querySustainedCNPGLag(ctx context.Context, q cnpgQuerier, sel string, known map[string]bool) map[string]CNPGLagReading {
-	perMinute := "(max by (pod) (last_over_time(cnpg_pg_replication_lag{" + sel + "}[1m])))"
-	window := fmt.Sprintf("[%dm:1m]", int(CNPGSustainedLagWindow.Minutes()))
-	query := "(min_over_time(" + perMinute + window + ")" +
+	// Exact on Prometheus 2.x and 3.x alike: every raw sample in the window is
+	// at least the reported floor, and the series already existed when the
+	// window began (it answers at offset 10m), so a standby that appeared a
+	// minute ago cannot qualify. Scrape gaps are not filled in; nothing here
+	// claims a sample at every moment.
+	window := fmt.Sprintf("%dm", int(CNPGSustainedLagWindow.Minutes()))
+	query := "(max by (pod) (min_over_time(cnpg_pg_replication_lag{" + sel + "}[" + window + "]))" +
 		" and on (pod) (max by (pod) (cnpg_pg_replication_in_recovery{" + sel + "}) == 1)" +
-		" and on (pod) (count_over_time(" + perMinute + window + ") >= " + strconv.Itoa(cnpgSustainedLagChecks) + "))"
+		" and on (pod) (max by (pod) (cnpg_pg_replication_lag{" + sel + "} offset " + window + ")))"
 	res, err := q.Query(ctx, query)
 	if err != nil {
 		return nil
