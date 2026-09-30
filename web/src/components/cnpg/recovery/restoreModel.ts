@@ -1,5 +1,5 @@
 import { CNPG_BARMAN_PLUGIN_NAME, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel } from '@skyhook-io/k8s-ui'
-import type { CNPGRuntimeResponse } from '../../../api/cnpg'
+import type { CNPGActionCapability, CNPGRuntimeResponse } from '../../../api/cnpg'
 import type { CNPGRecoveryResponse, CNPGRecoveryPod } from '../../../api/cnpg-recovery'
 
 export const RESTORE_VALIDATION_ANNOTATION = 'radar.skyhook.io/restore-validation'
@@ -420,4 +420,24 @@ export function observeRestore(snap: CNPGRecoveryResponse): RestoreObservation {
       .join(' · '),
     logsPod: starting ? { name: starting.name, container: 'postgres' } : undefined,
   }
+}
+
+/**
+ * What the restore capability means for the dialog: `blocked` disables Review
+ * with an alert (the grant, or the operator's webhook refusing writes);
+ * `pending` only while it is being checked. A failed check blocks nothing: the
+ * server dry-run at review still has the final say, and `unchecked` says so.
+ */
+export function restorePermission(
+  namespace: string,
+  cap: CNPGActionCapability | undefined,
+  error: unknown,
+): { blocked?: string; pending?: string; unchecked?: string } {
+  if (cap) {
+    if (cap.allowed) return {}
+    if (cap.permission === 'denied') return { blocked: `Restoring creates a Cluster in ${namespace}, which needs ${cap.grant ?? 'create clusters (postgresql.cnpg.io)'}.` }
+    return { blocked: cap.reason ?? 'Restoring is not available right now.' }
+  }
+  if (error) return { unchecked: `Whether you may create a Cluster in ${namespace} could not be checked (${error instanceof Error ? error.message : 'unknown error'}); the review step will tell.` }
+  return { pending: `Checking whether you may create a Cluster in ${namespace}…` }
 }

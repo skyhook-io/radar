@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CNPGRecoveryResponse } from '../../../api/cnpg-recovery'
 import {
+  restorePermission,
   buildRestoreManifest,
   observeRestore,
   pitrWarnings,
@@ -215,5 +216,22 @@ describe('restore operation observer', () => {
       ha: { jobs: { state: 'ok', items: [{ name: 'r-1-full-recovery', role: 'full-recovery', phase: 'failed', reason: 'BackoffLimitExceeded' }] } } as any,
     })
     expect(r.state).toBe('failed')
+  })
+})
+
+describe('restorePermission', () => {
+  it('blocks review with the grant when create clusters is denied, whichever way the dialog opened', () => {
+    const r = restorePermission('db', { allowed: false, permission: 'denied', grant: 'create clusters (postgresql.cnpg.io) in namespace db', reason: 'x' }, undefined)
+    expect(r.blocked).toContain('needs create clusters (postgresql.cnpg.io) in namespace db')
+  })
+  it('blocks with the refusal when the operator webhook rejects writes', () => {
+    expect(restorePermission('db', { allowed: false, permission: 'allowed', reason: 'The API server would reject it: no ready endpoint' }, undefined).blocked).toContain('no ready endpoint')
+  })
+  it('is pending while checking, open when allowed, and unchecked (not blocked) when the check failed', () => {
+    expect(restorePermission('db', undefined, undefined).pending).toBeDefined()
+    expect(restorePermission('db', { allowed: true, permission: 'allowed' }, undefined)).toEqual({})
+    const failed = restorePermission('db', undefined, new Error('boom'))
+    expect(failed.blocked).toBeUndefined()
+    expect(failed.unchecked).toContain('boom')
   })
 })

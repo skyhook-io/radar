@@ -19,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
@@ -614,4 +615,26 @@ func recordCNPGRestoreValidation(ctx context.Context, dyn dynamic.Interface, nam
 		return nil, err
 	}
 	return note, nil
+}
+
+// handleCNPGRestoreCapability answers whether the caller may create the
+// restored Cluster in a namespace: create clusters there, refused like other
+// webhook-bound writes while the operator's webhook rejects them. The restore
+// dialog asks it whichever way it was opened (Cluster, Backup, ObjectStore).
+func (s *Server) handleCNPGRestoreCapability(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	namespace := r.URL.Query().Get("namespace")
+	if errs := validation.IsDNS1123Label(namespace); namespace == "" || len(errs) > 0 {
+		s.writeError(w, http.StatusBadRequest, "namespace must be a valid namespace name")
+		return
+	}
+	s.writeJSON(w, s.cnpgRestoreCapability(r, namespace))
+}
+
+func (s *Server) cnpgRestoreCapability(r *http.Request, namespace string) CNPGActionCapability {
+	g := cnpgGrantCreateClusters
+	c := cnpgCapability("", namespace, []string{s.cnpgPermission(r, g, namespace)}, []cnpgGrant{g})
+	return cnpgOperatorWebhookGuard(s.cnpgOperatorVerdictFor(r, namespace), c)
 }

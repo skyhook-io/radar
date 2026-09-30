@@ -1013,7 +1013,7 @@ func (s *Server) cnpgClusterCapabilities(r *http.Request, c cnpgActionClients, c
 			Rehydrate:       one(cnpgGuardRehydrate(facts), cnpgGrantPatchClusters),
 			Psql:            psql,
 			DestroyInstance: destroyInstance,
-			Restore:         one("", cnpgGrantCreateClusters),
+			Restore:         s.cnpgRestoreCapability(r, namespace),
 			CNPGMaintenanceActions: CNPGMaintenanceActions{
 				SetMaintenance:   one(cnpgGuardSetMaintenance(facts), cnpgGrantPatchClusters),
 				UnsetMaintenance: one(cnpgGuardUnsetMaintenance(facts), cnpgGrantPatchClusters),
@@ -1033,7 +1033,7 @@ func (s *Server) cnpgClusterCapabilities(r *http.Request, c cnpgActionClients, c
 // webhook rejects writes. Status patches and Pod deletes bypass it.
 func cnpgApplyOperatorGuard(resp *CNPGClusterCapabilitiesResponse) {
 	v, a := resp.Operator, &resp.Actions
-	for _, c := range []*CNPGActionCapability{&a.Backup, &a.Restore, &a.Restart, &a.Reload, &a.Fence, &a.Unfence, &a.Hibernate, &a.Rehydrate, &a.SetMaintenance, &a.UnsetMaintenance} {
+	for _, c := range []*CNPGActionCapability{&a.Backup, &a.Restart, &a.Reload, &a.Fence, &a.Unfence, &a.Hibernate, &a.Rehydrate, &a.SetMaintenance, &a.UnsetMaintenance} {
 		*c = cnpgOperatorWebhookGuard(v, *c)
 	}
 	for pod, ia := range resp.InstanceActions {

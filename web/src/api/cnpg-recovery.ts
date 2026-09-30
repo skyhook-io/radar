@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch, ApiError, fetchJSON } from './client'
+import type { CNPGActionCapability } from './cnpg'
 import { getApiBase } from './config'
 
 export type CNPGReadState = 'ok' | 'denied' | 'notFound' | 'error' | 'skipped' | 'partial'
@@ -229,4 +230,17 @@ export interface CNPGOperatorDiagnosis {
   metricsPort: number
   reconcile: CNPGOperatorReconcilePod[]
   events: CNPGReadCoverage & { items: CNPGRecoveryEvent[] }
+}
+
+// /api/cnpg/restore/capability — whether the caller may create the restored
+// Cluster in `namespace` (create clusters, and the operator's webhook admits
+// writes), for every way into the restore dialog.
+export function useCNPGRestoreCapability(namespace: string) {
+  return useQuery<CNPGActionCapability>({
+    queryKey: ['cnpg', 'restore-capability', namespace],
+    queryFn: ({ signal }) => fetchJSON<CNPGActionCapability>(`/cnpg/restore/capability?namespace=${encodeURIComponent(namespace)}`, signal),
+    enabled: !!namespace,
+    staleTime: 15_000,
+    retry: false,
+  })
 }

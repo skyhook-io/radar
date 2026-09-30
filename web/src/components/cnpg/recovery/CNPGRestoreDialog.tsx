@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import yaml from 'yaml'
 import { ActionConfirmDialog, isApiGroup, toneTextClass, type HealthLevel } from '@skyhook-io/k8s-ui'
 import { useCNPGRuntime, useCNPGWorkspace } from '../../../api/cnpg'
+import { useCNPGRestoreCapability } from '../../../api/cnpg-recovery'
 import { useConnection } from '../../../context/ConnectionContext'
 import { CreateResourceDialog } from '../../shared/CreateResourceDialog'
 import { useToast } from '../../ui/Toast'
@@ -22,6 +23,7 @@ import {
   restoreSourcesFor,
   restoreSourcesForStore,
   sourceClusterFor,
+  restorePermission,
   sourcePinsBackup,
   targetIsoFrom,
   type EvidencePoint,
@@ -113,6 +115,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
   const [timeValue, setTimeValue] = useState('')
   const [zone, setZone] = useState<'utc' | 'local'>('utc')
   const [manifest, setManifest] = useState<string | null>(null)
+  const restoreCap = useCNPGRestoreCapability(namespace)
 
   const evidence = useMemo(
     () => recoveryEvidenceFor(source, { sourceCluster, stores, backups, runtime: runtime.data, namespace }),
@@ -150,23 +153,27 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
     )
   }
 
+  const permission = restorePermission(namespace, restoreCap.data, restoreCap.error)
   const disabledReason =
-    !workspace.isLoading && sources.length === 0
+    permission.blocked ??
+    (!workspace.isLoading && sources.length === 0
       ? entry.kind === 'backup'
         ? 'This Backup cannot be restored: it has not completed, or its object store and backup ID are not recorded.'
         : entry.kind === 'objectStore'
           ? 'This ObjectStore reports no server with backups yet.'
           : 'This cluster has no backup destination and no completed Backup to restore from.'
-      : undefined
-  const incompleteReason = workspace.isLoading
-    ? 'Loading backups and object stores…'
-    : !NAME_RE.test(name)
-      ? 'The new name must be a valid Kubernetes object name.'
-      : clusters.some((c: any) => c.metadata?.namespace === namespace && c.metadata?.name === name)
-        ? `A Cluster named ${name} already exists in ${namespace}.`
-        : effectiveKind === 'time' && !targetIso
-          ? 'Enter the point in time to recover to.'
-          : undefined
+      : undefined)
+  const incompleteReason =
+    permission.pending ??
+    (workspace.isLoading
+      ? 'Loading backups and object stores…'
+      : !NAME_RE.test(name)
+        ? 'The new name must be a valid Kubernetes object name.'
+        : clusters.some((c: any) => c.metadata?.namespace === namespace && c.metadata?.name === name)
+          ? `A Cluster named ${name} already exists in ${namespace}.`
+          : effectiveKind === 'time' && !targetIso
+            ? 'Enter the point in time to recover to.'
+            : undefined)
 
   return (
     <ActionConfirmDialog
@@ -189,6 +196,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
         'The new cluster has no WAL archiving or backups until you configure them.',
         ...(serverName ? [`If you add archiving later, do not reuse server name "${serverName}": the new cluster would write into the archive it restores from.`] : []),
         ...warnings,
+        ...(permission.unchecked ? [permission.unchecked] : []),
       ]}
       disabledReason={disabledReason}
       incompleteReason={incompleteReason}

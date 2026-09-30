@@ -24,6 +24,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/skyhook-io/radar/internal/auth"
 )
 
 func cnpgRestoredCluster() *unstructured.Unstructured {
@@ -438,5 +440,47 @@ func TestCNPGReportCleanObjectRedactsDeclaredEnv(t *testing.T) {
 	}
 	if cluster.Object["spec"].(map[string]any)["env"].([]any)[0].(map[string]any)["value"] != "plaintext" {
 		t.Error("the source object was modified")
+	}
+}
+
+func TestHandleCNPGRestoreCapability(t *testing.T) {
+	for _, allowed := range []bool{false, true} {
+		srv := &Server{permCache: auth.NewPermissionCache()}
+		perms := &auth.UserPermissions{AllowedNamespaces: []string{"db"}}
+		perms.SetCanI("create", cnpgGroup, "clusters", "db", allowed)
+		srv.permCache.Set("alice", nil, perms)
+		r := httptest.NewRequest(http.MethodGet, "/api/cnpg/restore/capability?namespace=db", nil)
+		r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "alice"}))
+		w := httptest.NewRecorder()
+		srv.handleCNPGRestoreCapability(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", w.Code, w.Body.String())
+		}
+		var got CNPGActionCapability
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if allowed && (!got.Allowed || got.Permission != cnpgPermAllowed) {
+			t.Errorf("allowed = %+v", got)
+		}
+		if !allowed && (got.Allowed || got.Permission != cnpgPermDenied || got.Grant != "create clusters (postgresql.cnpg.io) in namespace db" || !strings.Contains(got.Reason, got.Grant)) {
+			t.Errorf("denied = %+v, want the grant named", got)
+		}
+	}
+	for _, q := range []string{"", "?namespace=", "?namespace=Not_A_Namespace"} {
+		w := httptest.NewRecorder()
+		(&Server{}).handleCNPGRestoreCapability(w, httptest.NewRequest(http.MethodGet, "/api/cnpg/restore/capability"+q, nil))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%q: status %d, want 400", q, w.Code)
+		}
+	}
+}
+
+func TestCNPGRestoreCapabilityRefusedWhileWebhookRejects(t *testing.T) {
+	rejects := true
+	got := cnpgOperatorWebhookGuard(CNPGOperatorVerdict{WebhookRejects: &rejects, WebhookReason: "the validating webhook has no ready endpoint"},
+		cnpgCapability("", "db", []string{cnpgPermAllowed}, []cnpgGrant{cnpgGrantCreateClusters}))
+	if got.Allowed || !strings.Contains(got.Reason, "no ready endpoint") {
+		t.Errorf("restore while the webhook rejects = %+v", got)
 	}
 }
