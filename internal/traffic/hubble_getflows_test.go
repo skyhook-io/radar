@@ -117,6 +117,22 @@ func TestHubbleGetFlows_ReportsWhatTheStreamDidNotDeliver(t *testing.T) {
 		}
 	})
 
+	t.Run("a handful of losses against many delivered events is not a warning", func(t *testing.T) {
+		responses := make([]*observerpb.GetFlowsResponse, 0, 402)
+		for range 400 {
+			responses = append(responses, flowResponse("a", "b"))
+		}
+		responses = append(responses, &observerpb.GetFlowsResponse{ResponseTypes: &observerpb.GetFlowsResponse_LostEvents{LostEvents: &flowpb.LostEvent{NumEventsLost: 3}}})
+		h := connectedHubble(t, &scriptedObserver{responses: responses})
+		resp, err := h.GetFlows(context.Background(), DefaultFlowOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Warning != "" {
+			t.Errorf("warning = %q for 3 lost against 400 delivered; a live relay carries that many nearly always", resp.Warning)
+		}
+	})
+
 	t.Run("everything lost still says so", func(t *testing.T) {
 		h := connectedHubble(t, &scriptedObserver{responses: []*observerpb.GetFlowsResponse{
 			{ResponseTypes: &observerpb.GetFlowsResponse_LostEvents{LostEvents: &flowpb.LostEvent{NumEventsLost: 3}}},

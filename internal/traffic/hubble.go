@@ -910,7 +910,7 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 	}
 
 	var gaps []string
-	var lost uint64
+	var lost, delivered uint64
 	var unavailableNodes []string
 	for {
 		resp, err := stream.Recv()
@@ -949,6 +949,7 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 		if pbFlow == nil {
 			continue
 		}
+		delivered++
 
 		flow, ok := callerOrientedFlow(pbFlow)
 		if !ok {
@@ -958,6 +959,13 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 	}
 
 	if lost > 0 {
+		log.Printf("[hubble] %d events lost against %d delivered", lost, delivered)
+	}
+	// A busy relay carries a few loss markers in its buffer nearly all the time —
+	// a handful against thousands of delivered events on a live cluster — and a
+	// warning on every fetch for those would be ignored along with the ones that
+	// matter. Below the threshold the window is still, in effect, complete.
+	if lost > 0 && lost*100 >= (lost+delivered)*lostEventsWarnPercent {
 		gaps = append(gaps, fmt.Sprintf("Hubble reported %d events lost before they could be delivered", lost))
 	}
 	if len(unavailableNodes) > 0 {
@@ -975,6 +983,10 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 	}
 	return flows, "Traffic data is incomplete: " + strings.Join(gaps, "; ") + ".", nil
 }
+
+// lostEventsWarnPercent is the share of a fetch's events, lost ones included,
+// that must have been lost before the loss is worth a warning.
+const lostEventsWarnPercent = 1
 
 // callerOrientedFlow converts a Hubble flow and orients it from the caller to
 // the callee, reporting false for a flow that should not become an edge at all.
