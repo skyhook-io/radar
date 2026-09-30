@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -90,6 +91,49 @@ func cnpgPostgresSentence(raw string) (string, bool) {
 	return "", false
 }
 
+// Where PostgreSQL's own message starts in a relayed error: lib/pq's prefix,
+// or the server's severity.
+var cnpgPostgresMessageMarkers = []string{"pq: ", "ERROR: ", "FATAL: ", "PANIC: "}
+
+var (
+	cnpgConnParamRe = regexp.MustCompile(`\b(user|database|dbname|host|hostaddr|port|password|sslmode|application_name)=\S+`)
+	cnpgSocketRe    = regexp.MustCompile(`\S*\.s\.PGSQL\.\d+\S*`)
+	cnpgAddressRe   = regexp.MustCompile(`\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b`)
+	cnpgSpacesRe    = regexp.MustCompile(`\s+`)
+)
+
+// cnpgPostgresDetail is PostgreSQL's own message inside a relayed error, e.g.
+// "out of shared memory", with connection parameters, socket paths and
+// addresses removed, or "" when there is none. It keeps an unrecognized
+// failure diagnosable in the product without echoing how Radar connects.
+func cnpgPostgresDetail(raw string) string {
+	body := raw
+	if i := strings.Index(body, `("`); i >= 0 {
+		if j := strings.LastIndex(body, `") has prevented`); j > i {
+			body = body[i+2 : j]
+		}
+	}
+	body = strings.ReplaceAll(body, `\"`, `"`)
+	start := -1
+	for _, m := range cnpgPostgresMessageMarkers {
+		if i := strings.Index(body, m); i >= 0 && (start < 0 || i < start) {
+			start = i + len(m)
+		}
+	}
+	if start < 0 {
+		return ""
+	}
+	d := body[start:]
+	d = cnpgConnParamRe.ReplaceAllString(d, "")
+	d = cnpgSocketRe.ReplaceAllString(d, "the local socket")
+	d = cnpgAddressRe.ReplaceAllString(d, "an address")
+	d = strings.Trim(cnpgSpacesRe.ReplaceAllString(d, " "), " :;,")
+	if len(d) > 160 {
+		d = d[:160] + "…"
+	}
+	return d
+}
+
 // cnpgRelayedPodSentence says in plain words what an error answer from the
 // Pod itself means, once the apiserver relays it as a 5xx. The body is the
 // instance manager's or exporter's own error text, which names sockets and
@@ -107,6 +151,9 @@ func cnpgRelayedPodSentence(err error, port int) (string, bool) {
 	if port == cnpgStatusPort {
 		if plain, ok := cnpgPostgresSentence(lower); ok {
 			return plain, true
+		}
+		if detail := cnpgPostgresDetail(err.Error()); detail != "" {
+			return "the instance manager could not read PostgreSQL's status: " + detail, true
 		}
 		return "the instance manager could not read PostgreSQL's status", true
 	}

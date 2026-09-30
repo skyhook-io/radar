@@ -118,18 +118,22 @@ func (s *Server) cnpgExecFor(r *http.Request) cnpgExecFunc {
 func cnpgExecSourceState(err error) CNPGRuntimeSource {
 	msg := err.Error()
 	lower := strings.ToLower(msg)
+	if strings.Contains(lower, "forbidden") {
+		return CNPGRuntimeSource{State: cnpgExecStateDenied, Error: truncateCNPGRuntimeError(msg)}
+	}
+	// psql's own "connection refused" from PostgreSQL's socket is not a
+	// transport failure; read it before the transport hints.
+	if postgres, ok := cnpgPostgresSentence(msg); ok {
+		log.Printf("[cnpg] Exec failed: %v", err)
+		return CNPGRuntimeSource{State: cnpgRuntimeStateError, Error: postgres}
+	}
 	text := truncateCNPGRuntimeError(msg)
 	plain, transport := cnpgTransportSentence(err, 0, cnpgExecTimeout)
 	if transport {
 		log.Printf("[cnpg] Exec failed: %v", err)
 		text = plain
-	} else if postgres, ok := cnpgPostgresSentence(msg); ok {
-		log.Printf("[cnpg] Exec failed: %v", err)
-		text = postgres
 	}
 	switch {
-	case strings.Contains(lower, "forbidden"):
-		return CNPGRuntimeSource{State: cnpgExecStateDenied, Error: truncateCNPGRuntimeError(msg)}
 	case transport, errors.Is(err, context.DeadlineExceeded), strings.Contains(lower, "connection refused"), strings.Contains(lower, "no such host"),
 		strings.Contains(lower, "container not found"), strings.Contains(lower, "unable to upgrade connection"):
 		return CNPGRuntimeSource{State: cnpgRuntimeStateUnreachable, Error: text}

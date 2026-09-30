@@ -949,11 +949,13 @@ func classifyCNPGProxyFailure(ctx context.Context, err error, out cnpgProxyOutco
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		cause = context.DeadlineExceeded
 	}
-	if plain, ok := cnpgTransportSentence(cause, t.port, cnpgRuntimeRequestTimeout); ok {
-		log.Printf("[cnpg] Failed to read %s/%s port %d %s: %v", t.namespace, t.pod, t.port, t.path, err)
-		out.err = plain
-	} else if plain, ok := cnpgRelayedPodSentence(err, t.port); ok && !out.schemeMismatch {
+	// The Pod's own error answer can carry "connection refused" from
+	// PostgreSQL's socket, which is not a transport failure; read it first.
+	if plain, ok := cnpgRelayedPodSentence(err, t.port); ok && !out.schemeMismatch {
 		log.Printf("[cnpg] %s/%s port %d %s answered with an error: %v", t.namespace, t.pod, t.port, t.path, err)
+		out.err = plain
+	} else if plain, ok := cnpgTransportSentence(cause, t.port, cnpgRuntimeRequestTimeout); ok {
+		log.Printf("[cnpg] Failed to read %s/%s port %d %s: %v", t.namespace, t.pod, t.port, t.path, err)
 		out.err = plain
 	}
 	return out

@@ -55,7 +55,7 @@ func TestCNPGRelayedPodSentence(t *testing.T) {
 		want string
 	}{
 		{socketGone, cnpgStatusPort, "PostgreSQL is not running on this instance"},
-		{other, cnpgStatusPort, "the instance manager could not read PostgreSQL's status"},
+		{other, cnpgStatusPort, "the instance manager could not read PostgreSQL's status: out of shared memory"},
 		{exporter, cnpgMetricsPort, "the metrics endpoint on port 9187 answered with an error (HTTP 503)"},
 	}
 	for _, c := range cases {
@@ -98,5 +98,37 @@ func TestCNPGPostgresSentence(t *testing.T) {
 	}
 	if got, ok := cnpgPostgresSentence("ERROR: permission denied for table x"); ok {
 		t.Errorf("unrecognized text mapped to %q", got)
+	}
+}
+
+func TestCNPGPostgresRefusalIsNotATransportFailure(t *testing.T) {
+	relayed := apierrors.NewGenericServerResponse(500, "get", schema.GroupResource{Resource: "pods"}, "https:pg-1:8000",
+		"failed to connect to `user=postgres database=postgres`: /controller/run/.s.PGSQL.5432 (/controller/run): dial error: dial unix /controller/run/.s.PGSQL.5432: connect: connection refused", 0, true)
+	out := classifyCNPGProxyFailure(context.Background(), relayed, cnpgProxyOutcome{}, cnpgProxyTarget{namespace: "pg", pod: "pg-1", port: cnpgStatusPort, path: cnpgStatusPath})
+	if out.err != "PostgreSQL is not running on this instance" {
+		t.Errorf("relayed socket refusal = %q", out.err)
+	}
+	psql := errors.New(`command terminated with exit code 2: psql: error: connection to server on socket "/controller/run/.s.PGSQL.5432" failed: Connection refused`)
+	if got := cnpgExecSourceState(psql); got.Error != "PostgreSQL is not running on this instance" || got.State != cnpgRuntimeStateError {
+		t.Errorf("psql socket refusal = %+v", got)
+	}
+}
+
+func TestCNPGPostgresDetailKeepsTheDiagnosisWithoutConnectionFacts(t *testing.T) {
+	shm := apierrors.NewGenericServerResponse(500, "get", schema.GroupResource{Resource: "pods"}, "https:pg-1:8000", "while reading status: pq: out of shared memory", 0, true)
+	if got, _ := cnpgRelayedPodSentence(shm, cnpgStatusPort); got != "the instance manager could not read PostgreSQL's status: out of shared memory" {
+		t.Errorf("shared memory = %q", got)
+	}
+	got := cnpgPostgresDetail(`an error on the server ("query failed for user=postgres database=app host=10.0.0.5:5432: FATAL: remaining connection slots are reserved (SQLSTATE 53300) via /controller/run/.s.PGSQL.5432") has prevented the request from succeeding`)
+	if !strings.Contains(got, "remaining connection slots are reserved (SQLSTATE 53300)") {
+		t.Errorf("detail = %q", got)
+	}
+	for _, leak := range []string{"user=", "database=", "10.0.0.5", ".s.PGSQL", "has prevented"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("detail %q leaks %q", got, leak)
+		}
+	}
+	if d := cnpgPostgresDetail("the instance manager crashed"); d != "" {
+		t.Errorf("no PostgreSQL message, got %q", d)
 	}
 }
