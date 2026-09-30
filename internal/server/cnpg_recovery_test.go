@@ -222,6 +222,47 @@ func TestCNPGReportLogLineRedactsQueryText(t *testing.T) {
 	}
 }
 
+// Every PostgreSQL message format that carries SQL, as postgres.c and
+// auto_explain write them; none may keep the literal without the opt-in.
+func TestCNPGReportLogLineRedactsEverySQLFormat(t *testing.T) {
+	const secret = "private-customer-data"
+	record := func(message, detail string) string {
+		b, _ := json.Marshal(map[string]any{"level": "info", "logger": "postgres", "msg": "record",
+			"record": map[string]any{"message": message, "detail": detail, "error_severity": "LOG"}})
+		return "2026-09-30T00:00:00.000000000Z " + string(b)
+	}
+	for name, line := range map[string]string{
+		"statement":          record("statement: SELECT '"+secret+"'", ""),
+		"duration statement": record("duration: 0.4 ms  statement: SELECT '"+secret+"'", ""),
+		"execute":            record("execute S_1: SELECT '"+secret+"'", ""),
+		"execute unnamed":    record("execute <unnamed>: SELECT '"+secret+"'", ""),
+		"execute portal":     record("execute S_1/C_2: SELECT '"+secret+"'", ""),
+		"execute fetch":      record("execute fetch from S_1/C_2: SELECT '"+secret+"'", ""),
+		"duration execute":   record("duration: 0.4 ms  execute S_1: SELECT '"+secret+"'", ""),
+		"parse":              record("parse S_1: SELECT '"+secret+"'", ""),
+		"duration parse":     record("duration: 0.1 ms  parse <unnamed>: SELECT '"+secret+"'", ""),
+		"bind":               record("bind S_1: SELECT '"+secret+"'", ""),
+		"duration bind":      record("duration: 0.1 ms  bind <unnamed>/C_1: SELECT '"+secret+"'", ""),
+		"auto_explain":       record("duration: 12.0 ms  plan:\nQuery Text: SELECT '"+secret+"'", ""),
+		"bind parameters":    record("execute S_1: SELECT $1", "parameters: $1 = '"+secret+"'"),
+		"Parameters":         record("duration: 1 ms", "Parameters: $1 = '"+secret+"'"),
+		"plain statement":    "2026-09-30 00:00:00 UTC [42] LOG:  statement: SELECT '" + secret + "'",
+		"plain execute":      "2026-09-30 00:00:00 UTC [42] LOG:  duration: 0.4 ms  execute S_1: SELECT '" + secret + "'",
+		"plain parameters":   "2026-09-30 00:00:00 UTC [42] DETAIL:  parameters: $1 = '" + secret + "'",
+	} {
+		if out := cnpgReportLogLine(line, false); strings.Contains(out, secret) {
+			t.Errorf("%s: SQL kept with queryText off: %s", name, out)
+		}
+		if out := cnpgReportLogLine(line, true); !strings.Contains(out, secret) {
+			t.Errorf("%s: opt-in lost the query text: %s", name, out)
+		}
+	}
+	keep := record("checkpoint complete: wrote 3 buffers", "")
+	if out := cnpgReportLogLine(keep, false); !strings.Contains(out, "checkpoint complete: wrote 3 buffers") {
+		t.Errorf("a message without SQL was redacted: %s", out)
+	}
+}
+
 func TestCNPGReportSecretNames(t *testing.T) {
 	obj := map[string]any{"spec": map[string]any{
 		"superuserSecret": map[string]any{"name": "su"},

@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -624,45 +625,78 @@ func (b *cnpgReportBuilder) containerLog(p corev1.Pod, container string, previou
 
 var cnpgQueryRecordKeys = []string{"query", "internal_query", "context"}
 
+// cnpgSQLMessage finds where SQL starts in a PostgreSQL log message: after
+// "statement: ", "execute <name>[/<portal>]: ", "execute fetch from <name>: ",
+// "parse <name>: ", "bind <name>[/<portal>]: " (each possibly after
+// "duration: … ms  "), and auto_explain's "plan:". Unanchored on purpose: a
+// false positive only redacts more.
+var cnpgSQLMessage = regexp.MustCompile(`(?s)\b(?:statement|execute fetch from \S+|execute \S+|parse \S+|bind \S+|plan):\s?`)
+
+// cnpgSQLParameters finds bind values ("parameters: $1 = '…'"), in a DETAIL
+// field or line.
+var cnpgSQLParameters = regexp.MustCompile(`(?is)\bparameters:\s?`)
+
+func cnpgRedactSQLText(msg string) (string, bool) {
+	changed := false
+	for _, re := range []*regexp.Regexp{cnpgSQLMessage, cnpgSQLParameters} {
+		if loc := re.FindStringIndex(msg); loc != nil {
+			msg = msg[:loc[1]] + cnpgReportQueryRedacted
+			changed = true
+		}
+	}
+	return msg, changed
+}
+
 // cnpgReportLogLine redacts one log line. PostgreSQL records from the instance
 // manager are JSON with the statement in record.query / record.message and
 // bind parameters in record.detail; without the query-text opt-in those are
-// replaced. Every line also gets the high-confidence secret patterns.
+// replaced, and plain-text lines are cut where SQL starts. Every line also
+// gets the high-confidence secret patterns.
 func cnpgReportLogLine(line string, queryText bool) string {
 	ts, body := "", line
 	if i := strings.IndexByte(line, ' '); i > 0 && i < 40 && strings.HasPrefix(strings.TrimSpace(line[i:]), "{") {
 		ts, body = line[:i+1], line[i+1:]
 	}
-	if !queryText && strings.HasPrefix(body, "{") {
-		var entry map[string]any
-		if json.Unmarshal([]byte(body), &entry) == nil {
-			if rec, ok := entry["record"].(map[string]any); ok {
-				changed := false
-				for _, k := range cnpgQueryRecordKeys {
-					if v, ok := rec[k].(string); ok && v != "" {
-						rec[k] = cnpgReportQueryRedacted
-						changed = true
-					}
-				}
-				if msg, ok := rec["message"].(string); ok {
-					if i := strings.Index(msg, "statement: "); i >= 0 {
-						rec["message"] = msg[:i+len("statement: ")] + cnpgReportQueryRedacted
-						changed = true
-					}
-				}
-				if d, ok := rec["detail"].(string); ok && strings.HasPrefix(d, "parameters:") {
-					rec["detail"] = cnpgReportQueryRedacted
-					changed = true
-				}
-				if changed {
-					if out, err := json.Marshal(entry); err == nil {
-						body = string(out)
-					}
-				}
+	if !queryText {
+		body = cnpgRedactQueryText(body)
+	}
+	return ts + aicontext.RedactSecrets(body)
+}
+
+func cnpgRedactQueryText(body string) string {
+	var entry map[string]any
+	if !strings.HasPrefix(body, "{") || json.Unmarshal([]byte(body), &entry) != nil {
+		out, _ := cnpgRedactSQLText(body)
+		return out
+	}
+	changed := false
+	redact := func(m map[string]any, key string) {
+		if v, ok := m[key].(string); ok {
+			if out, did := cnpgRedactSQLText(v); did {
+				m[key], changed = out, true
 			}
 		}
 	}
-	return ts + aicontext.RedactSecrets(body)
+	if rec, ok := entry["record"].(map[string]any); ok {
+		for _, k := range cnpgQueryRecordKeys {
+			if v, ok := rec[k].(string); ok && v != "" {
+				rec[k] = cnpgReportQueryRedacted
+				changed = true
+			}
+		}
+		redact(rec, "message")
+		redact(rec, "detail")
+		redact(rec, "hint")
+	}
+	redact(entry, "msg")
+	if !changed {
+		return body
+	}
+	out, err := json.Marshal(entry)
+	if err != nil {
+		return cnpgReportQueryRedacted
+	}
+	return string(out)
 }
 
 // cnpgReportCleanObject drops managedFields and the last-applied copy and
