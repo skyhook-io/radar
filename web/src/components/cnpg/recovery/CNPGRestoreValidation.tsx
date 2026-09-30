@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { ActionConfirmDialog, Badge, formatAge, isApiGroup } from '@skyhook-io/k8s-ui'
 import { useCNPGClusterCapabilities, useCNPGWorkspace } from '../../../api/cnpg'
 import { useRecordCNPGRestoreValidation, type CNPGRecoveryResponse } from '../../../api/cnpg-recovery'
@@ -44,7 +45,18 @@ function useSourceCluster(namespace: string, snapshot: CNPGRecoveryResponse | un
 export function CNPGRestoreValidation({ namespace, name }: { namespace: string; name: string }) {
   const { observation, snapshot } = useRestoreObservation(namespace, name)
   const source = useSourceCluster(namespace, snapshot)
-  const [open, setOpen] = useState(false)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const location = useLocation()
+  // ?validate=1 is the restore checklist's "Record what you checked" link.
+  const [open, setOpenState] = useState(() => searchParams.get('validate') === '1')
+  const setOpen = (next: boolean) => {
+    setOpenState(next)
+    if (!next && searchParams.has('validate')) {
+      const params = new URLSearchParams(searchParams)
+      params.delete('validate')
+      setSearchParams(params, { replace: true, state: location.state })
+    }
+  }
   if (!snapshot?.recovery) return null
   const note = snapshot.validation
   const restoreDone = observation?.state === 'completed'

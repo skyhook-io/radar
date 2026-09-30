@@ -1,9 +1,9 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Badge, StatusDot, formatAge, type HealthLevel } from '@skyhook-io/k8s-ui'
+import { Badge, StatusDot, formatAge, toneTextClass, type HealthLevel } from '@skyhook-io/k8s-ui'
 import { useCNPGRecovery, type CNPGContainerState, type CNPGRecoveryResponse, type CNPGRecoverySpec } from '../../../api/cnpg-recovery'
 import { buildWorkloadPath } from '../../../utils/navigation'
-import { observeRestore, type RestoreObservation } from './restoreModel'
+import { observeRestore, restoreNextSteps, type RestoreNextStepId, type RestoreObservation } from './restoreModel'
 
 /**
  * The restore observer: the recovery snapshot of one Cluster and where its
@@ -67,7 +67,36 @@ function ContainerChip({ c, init }: { c: CNPGContainerState; init?: boolean }) {
  * recovery Job's Pods with their init containers, links to their logs, and
  * the Warning events about them. Once complete it collapses to one line.
  */
-export function CNPGRestoreProgress({ namespace, name }: { namespace: string; name: string }) {
+export interface CNPGRestoreNextStepsHost {
+  /** Whether the Cluster spec declares a backup destination; undefined when not read. */
+  backupConfigured?: boolean
+  onOpen: (step: RestoreNextStepId) => void
+}
+
+const STEP_TONE: Record<'done' | 'todo' | 'unknown', HealthLevel> = { done: 'healthy', todo: 'degraded', unknown: 'unknown' }
+
+function NextSteps({ validationRecorded, host }: { validationRecorded: boolean; host: CNPGRestoreNextStepsHost }) {
+  const steps = restoreNextSteps({ validationRecorded, backupConfigured: host.backupConfigured })
+  return (
+    <div className="mt-2 border-t border-theme-border pt-2">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Next steps</div>
+      <ul className="space-y-1">
+        {steps.map((s) => (
+          <li key={s.id} className="flex flex-wrap items-center gap-x-2 text-xs">
+            <StatusDot tone={STEP_TONE[s.state]} />
+            <button type="button" onClick={() => host.onOpen(s.id)} className="text-accent-text hover:underline">
+              {s.label}
+            </button>
+            {s.state !== 'unknown' && <span className={toneTextClass(STEP_TONE[s.state])}>{s.state === 'done' ? 'done' : 'to do'}</span>}
+            {s.note && <span className="text-theme-text-tertiary">· {s.note}</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+export function CNPGRestoreProgress({ namespace, name, nextSteps }: { namespace: string; name: string; nextSteps?: CNPGRestoreNextStepsHost }) {
   const navigate = useNavigate()
   const { observation, snapshot } = useRestoreObservation(namespace, name)
   if (!observation || !snapshot?.recovery) return null
@@ -76,10 +105,13 @@ export function CNPGRestoreProgress({ namespace, name }: { namespace: string; na
 
   if (observation.state === 'completed') {
     return (
-      <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-sm">
-        <Badge severity="success" size="sm">Restored</Badge>
-        <span className="text-theme-text-secondary">from {source}</span>
-        <span className="text-theme-text-tertiary">· {observation.detail}</span>
+      <div className="mb-3 rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-sm">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <Badge severity="success" size="sm">Restored</Badge>
+          <span className="text-theme-text-secondary">from {source}</span>
+          <span className="text-theme-text-tertiary">· {observation.detail}</span>
+        </div>
+        {nextSteps && <NextSteps validationRecorded={!!snapshot.validation} host={nextSteps} />}
       </div>
     )
   }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CNPGRecoveryResponse } from '../../../api/cnpg-recovery'
 import {
+  restoreNextSteps,
   restorePermission,
   buildRestoreManifest,
   observeRestore,
@@ -233,5 +234,20 @@ describe('restorePermission', () => {
     const failed = restorePermission('db', undefined, new Error('boom'))
     expect(failed.blocked).toBeUndefined()
     expect(failed.unchecked).toContain('boom')
+  })
+})
+
+describe('restoreNextSteps', () => {
+  it('marks done or to do only what Radar can read, never whether applications moved', () => {
+    const fresh = restoreNextSteps({ validationRecorded: false, backupConfigured: false })
+    expect(fresh.map((s) => [s.id, s.state])).toEqual([
+      ['connect', 'unknown'],
+      ['validate', 'todo'],
+      ['backup', 'todo'],
+    ])
+    expect(fresh[2].note).toContain('no backup destination')
+    const later = restoreNextSteps({ validationRecorded: true, backupConfigured: true })
+    expect(later.map((s) => s.state)).toEqual(['unknown', 'done', 'done'])
+    expect(restoreNextSteps({ validationRecorded: false, backupConfigured: undefined })[2].state).toBe('unknown')
   })
 })

@@ -51,6 +51,10 @@ const ROLE_LABEL: Record<CNPGConnectEndpoint['role'], string> = {
  * How applications reach the cluster: Services, application database and
  * owner, and the credentials Secret by name. Never reads the Secret.
  */
+
+/** The Connect section's element id, for a host that scrolls to it. */
+export const CNPG_CONNECT_ANCHOR = 'cnpg-connect'
+
 export function CNPGConnectSection({
   cluster,
   poolers,
@@ -68,7 +72,7 @@ export function CNPGConnectSection({
   const primary = info.endpoints[0]
   return (
     <>
-      <SummaryHeading hint="from the Cluster spec · hosts resolve inside the Kubernetes cluster">Connect</SummaryHeading>
+      <SummaryHeading id={CNPG_CONNECT_ANCHOR} hint="from the Cluster spec · hosts resolve inside the Kubernetes cluster">Connect</SummaryHeading>
       <FactGrid>
         <FactRow label="Services">
           <ul className="space-y-1">

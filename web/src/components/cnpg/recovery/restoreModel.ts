@@ -441,3 +441,32 @@ export function restorePermission(
   if (error) return { unchecked: `Whether you may create a Cluster in ${namespace} could not be checked (${error instanceof Error ? error.message : 'unknown error'}); the review step will tell.` }
   return { pending: `Checking whether you may create a Cluster in ${namespace}…` }
 }
+
+export type RestoreNextStepId = 'connect' | 'validate' | 'backup'
+
+export interface RestoreNextStep {
+  id: RestoreNextStepId
+  label: string
+  /** done / todo only where Radar can tell; `unknown` otherwise (whether applications moved is never known). */
+  state: 'done' | 'todo' | 'unknown'
+  note?: string
+}
+
+/**
+ * The checklist a restored cluster shows once it is healthy. Links only;
+ * Radar writes nothing. Validation reads the recorded note, backups the
+ * Cluster spec's backup destination (undefined when not read).
+ */
+export function restoreNextSteps(input: { validationRecorded: boolean; backupConfigured: boolean | undefined }): RestoreNextStep[] {
+  return [
+    { id: 'connect', label: 'Point applications at it', state: 'unknown', note: 'Radar cannot tell which applications use it' },
+    input.validationRecorded
+      ? { id: 'validate', label: 'Record what you checked', state: 'done', note: 'A validation note is recorded' }
+      : { id: 'validate', label: 'Record what you checked', state: 'todo' },
+    input.backupConfigured === undefined
+      ? { id: 'backup', label: 'Set up backups and WAL archiving', state: 'unknown', note: 'Its backup configuration was not read' }
+      : input.backupConfigured
+        ? { id: 'backup', label: 'Set up backups and WAL archiving', state: 'done', note: 'A backup destination is configured' }
+        : { id: 'backup', label: 'Set up backups and WAL archiving', state: 'todo', note: 'It has no backup destination or WAL archiving yet' },
+  ]
+}
