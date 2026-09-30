@@ -2,7 +2,7 @@
 
 A task-shaped view over [CloudNativePG](https://cloudnative-pg.io/) (CNPG): which PostgreSQL cluster needs attention, why, what the instances are doing right now, and what to do about it — without assembling the story from ten separate CRD lists, `kubectl cnpg` and a Grafana dashboard. The per-kind renderers, issue detection and audit check it builds on are described in [integrations.md](integrations.md#cloudnativepg).
 
-Reading never writes. Writes happen only through the [Actions](#actions) (backup, switchover, restart, fencing, hibernation, maintenance, pooler pause, destroy instance, cancel/terminate a backend, restore, a restore-validation note), each made with the caller's own identity after a confirmation bound to the facts they reviewed, behind the [GitOps write guard](#gitops-write-guard).
+Reading never writes. Writes happen only through the [Actions](#actions) (backup, switchover, restart, fencing, hibernation, maintenance, backup schedule edit, pooler pause, destroy instance, cancel/terminate a backend, restore, a restore-validation note), each made with the caller's own identity after a confirmation bound to the facts they reviewed, behind the [GitOps write guard](#gitops-write-guard).
 
 ## Where it lives
 
