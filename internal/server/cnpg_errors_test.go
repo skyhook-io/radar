@@ -43,3 +43,60 @@ func TestCNPGTransportSentence(t *testing.T) {
 		}
 	}
 }
+
+func TestCNPGRelayedPodSentence(t *testing.T) {
+	socketGone := apierrors.NewGenericServerResponse(500, "get", schema.GroupResource{Resource: "pods"}, "https:pg-wal-failing-1:8000",
+		"failed to connect to `user=postgres database=postgres`: /controller/run/.s.PGSQL.5432 (/controller/run): dial error: dial unix /controller/run/.s.PGSQL.5432: connect: no such file or directory", 0, true)
+	other := apierrors.NewGenericServerResponse(500, "get", schema.GroupResource{Resource: "pods"}, "https:pg-1:8000", "pq: out of shared memory", 0, true)
+	exporter := apierrors.NewGenericServerResponse(503, "get", schema.GroupResource{Resource: "pods"}, "http:pg-1:9187", "collector failed", 0, true)
+	cases := []struct {
+		err  error
+		port int
+		want string
+	}{
+		{socketGone, cnpgStatusPort, "PostgreSQL is not running on this instance"},
+		{other, cnpgStatusPort, "the instance manager could not read PostgreSQL's status"},
+		{exporter, cnpgMetricsPort, "the metrics endpoint on port 9187 answered with an error (HTTP 503)"},
+	}
+	for _, c := range cases {
+		got, ok := cnpgRelayedPodSentence(c.err, c.port)
+		if !ok || got != c.want {
+			t.Errorf("%v: %q (%v), want %q", c.err, got, ok, c.want)
+		}
+		if strings.Contains(got, "controller/run") || strings.Contains(got, "pg-") {
+			t.Errorf("raw text leaked: %q", got)
+		}
+	}
+	for _, err := range []error{
+		apierrors.NewServiceUnavailable("error trying to reach service: dial tcp 10.0.0.5:8000: connect: no route to host"),
+		apierrors.NewBadRequest("bad"),
+		errors.New("plain"),
+	} {
+		if got, ok := cnpgRelayedPodSentence(err, cnpgStatusPort); ok {
+			t.Errorf("%v is not the Pod's own error answer, got %q", err, got)
+		}
+	}
+}
+
+func TestClassifyCNPGProxyFailureReplacesRelayedInstanceManagerError(t *testing.T) {
+	err := apierrors.NewGenericServerResponse(500, "get", schema.GroupResource{Resource: "pods"}, "https:pg-1:8000",
+		"failed to connect to `user=postgres database=postgres`: dial unix /controller/run/.s.PGSQL.5432: connect: no such file or directory", 0, true)
+	out := classifyCNPGProxyFailure(context.Background(), err, cnpgProxyOutcome{}, cnpgProxyTarget{namespace: "pg", pod: "pg-1", port: cnpgStatusPort, path: cnpgStatusPath})
+	if out.err != "PostgreSQL is not running on this instance" {
+		t.Errorf("err = %q", out.err)
+	}
+}
+
+func TestCNPGPostgresSentence(t *testing.T) {
+	for raw, want := range map[string]string{
+		`psql: error: connection to server on socket "/controller/run/.s.PGSQL.5432" failed: No such file or directory`: "PostgreSQL is not running on this instance",
+		"FATAL: the database system is starting up": "PostgreSQL is starting up on this instance",
+	} {
+		if got, ok := cnpgPostgresSentence(raw); !ok || got != want {
+			t.Errorf("%q: %q, want %q", raw, got, want)
+		}
+	}
+	if got, ok := cnpgPostgresSentence("ERROR: permission denied for table x"); ok {
+		t.Errorf("unrecognized text mapped to %q", got)
+	}
+}

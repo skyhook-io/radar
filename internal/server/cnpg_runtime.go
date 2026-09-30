@@ -952,6 +952,9 @@ func classifyCNPGProxyFailure(ctx context.Context, err error, out cnpgProxyOutco
 	if plain, ok := cnpgTransportSentence(cause, t.port, cnpgRuntimeRequestTimeout); ok {
 		log.Printf("[cnpg] Failed to read %s/%s port %d %s: %v", t.namespace, t.pod, t.port, t.path, err)
 		out.err = plain
+	} else if plain, ok := cnpgRelayedPodSentence(err, t.port); ok && !out.schemeMismatch {
+		log.Printf("[cnpg] %s/%s port %d %s answered with an error: %v", t.namespace, t.pod, t.port, t.path, err)
+		out.err = plain
 	}
 	return out
 }
@@ -1195,7 +1198,11 @@ func parseCNPGPgStatus(body []byte) (*CNPGInstanceStatusFacts, string, error) {
 func cnpgIncompleteReport(st *cnpgPgStatus) string {
 	switch {
 	case st.MaskedError != "":
-		return "the instance manager answered while PostgreSQL may be unavailable and masked an error (" + truncateCNPGRuntimeError(st.MaskedError) + "); what it did not read is unknown"
+		masked := truncateCNPGRuntimeError(st.MaskedError)
+		if plain, ok := cnpgPostgresSentence(st.MaskedError); ok {
+			masked = plain
+		}
+		return "the instance manager answered while PostgreSQL may be unavailable and masked an error (" + masked + "); what it did not read is unknown"
 	case st.IsPgRewindRunning:
 		return "pg_rewind is running, so the instance manager read nothing from PostgreSQL"
 	}

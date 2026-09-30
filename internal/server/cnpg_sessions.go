@@ -123,6 +123,9 @@ func cnpgExecSourceState(err error) CNPGRuntimeSource {
 	if transport {
 		log.Printf("[cnpg] Exec failed: %v", err)
 		text = plain
+	} else if postgres, ok := cnpgPostgresSentence(msg); ok {
+		log.Printf("[cnpg] Exec failed: %v", err)
+		text = postgres
 	}
 	switch {
 	case strings.Contains(lower, "forbidden"):

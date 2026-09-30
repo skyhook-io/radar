@@ -71,3 +71,44 @@ func cnpgTransportSentence(err error, port int, timeout time.Duration) (string, 
 func cnpgSeconds(d time.Duration) string {
 	return fmt.Sprintf("%g s", d.Seconds())
 }
+
+// cnpgPostgresSentence says in plain words why the instance manager or psql
+// could not talk to PostgreSQL, or ok false when the text is not one it
+// recognizes. A missing or refusing local socket means the server is down.
+func cnpgPostgresSentence(raw string) (string, bool) {
+	lower := strings.ToLower(raw)
+	connecting := strings.Contains(lower, ".s.pgsql.") || strings.Contains(lower, "dial unix") || strings.Contains(lower, "failed to connect")
+	down := strings.Contains(lower, "no such file or directory") || strings.Contains(lower, "connection refused")
+	switch {
+	case strings.Contains(lower, "the database system is starting up"):
+		return "PostgreSQL is starting up on this instance", true
+	case strings.Contains(lower, "the database system is shutting down"):
+		return "PostgreSQL is shutting down on this instance", true
+	case connecting && down:
+		return "PostgreSQL is not running on this instance", true
+	}
+	return "", false
+}
+
+// cnpgRelayedPodSentence says in plain words what an error answer from the
+// Pod itself means, once the apiserver relays it as a 5xx. The body is the
+// instance manager's or exporter's own error text, which names sockets and
+// connection strings; callers log it instead. ok is false for anything the
+// apiserver produced itself (a failure to reach the Pod) and for non-5xx.
+func cnpgRelayedPodSentence(err error, port int) (string, bool) {
+	var status apierrors.APIStatus
+	if err == nil || !errors.As(err, &status) || status.Status().Code < 500 {
+		return "", false
+	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "error trying to reach service") {
+		return "", false
+	}
+	if port == cnpgStatusPort {
+		if plain, ok := cnpgPostgresSentence(lower); ok {
+			return plain, true
+		}
+		return "the instance manager could not read PostgreSQL's status", true
+	}
+	return fmt.Sprintf("the metrics endpoint on port %d answered with an error (HTTP %d)", port, status.Status().Code), true
+}
