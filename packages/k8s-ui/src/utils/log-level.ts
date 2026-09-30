@@ -188,6 +188,8 @@ export function isContinuationLine(raw: string): boolean {
   if (/^\s/.test(content)) return true
   // Java's secondary chain markers that don't start with whitespace.
   if (/^(Caused by:|Suppressed:|\.\.\. \d+ more)/.test(content)) return true
+  // The closing bracket of an object printed across lines (Node's util.inspect).
+  if (/^[}\])]+[;,]?$/.test(content)) return true
   // A Go panic prints its goroutine header and function frames unindented;
   // only the file:line under each frame is indented.
   if (content.startsWith('goroutine ') || content.startsWith('created by ')) return GO_PANIC_LINE_RE.test(content)

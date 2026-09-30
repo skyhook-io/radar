@@ -121,6 +121,8 @@ describe('isContinuationLine', () => {
     ['\tat com.example.Pool.get(Pool.java:10)', true],
     ['Caused by: java.io.IOException: closed', true],
     ['\x1b[90m    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)', true],
+    ['}', true],
+    ['});', true],
     ['goroutine 1 [running]:', true],
     ['main.main()', true],
     ['net/http.(*conn).serve(0xc000112000, {0x1a2b3c, 0x4})', true],
