@@ -242,19 +242,26 @@ registerCNPGOperationObserver('switchover', (op, obs) => {
     { label: `${target} is the primary`, done: promoted },
     { label: `${oldPrimary} is back as a streaming standby`, done: rejoined },
   ]
-  // The Service check is required only where the caller can read endpoints.
-  if (rw?.state === 'ok') {
-    steps.push({ label: `Read-write Service points at ${target}`, done: promoted && rw.pods.includes(target) && !rw.pods.includes(oldPrimary) })
-  }
+  // Clients reach the new primary only through the read-write Service; when
+  // its endpoints are not readable that step stays unverified, so the
+  // switchover can end "unobservable" but never "completed".
+  const rwReadable = rw?.state === 'ok'
+  steps.push({
+    label: rwReadable ? `Read-write Service points at ${target}` : `Read-write Service points at ${target} (endpoints not readable)`,
+    done: rwReadable ? promoted && rw.pods.includes(target) && !rw.pods.includes(oldPrimary) : null,
+  })
   steps.push({ label: 'Cluster reports a healthy state again', done: promoted && f.phase === 'Cluster in healthy state' })
   let state = summarizeSteps(steps)
   if (requested && !promoted) state = 'observed'
+  const rwUnverified = `the read-write Service is unverified${rw?.grant ? ` (needs ${rw.grant})` : rw?.reason ? ` (${rw.reason})` : ''}`
   const detail =
     rejoined === null && promoted
-      ? `Primary changed; whether ${oldPrimary} rejoined needs runtime access (get pods/proxy)`
+      ? `Primary changed; whether ${oldPrimary} rejoined needs runtime access (get pods/proxy)${rwReadable ? '' : `; ${rwUnverified}`}`
       : f.phase && f.phase !== 'Cluster in healthy state'
         ? f.phase + (f.phaseReason ? `: ${f.phaseReason}` : '')
-        : undefined
+        : !rwReadable && promoted
+          ? `Primary changed; ${rwUnverified}`
+          : undefined
   return { state, steps, detail, progressKey: key(steps, f.phase ?? '') }
 })
 
@@ -314,13 +321,34 @@ registerCNPGOperationObserver('reload', () => ({
   detail: 'Requested. Nothing in the cluster reports when a configuration reload completes; check the instance logs for "received SIGHUP".',
 }))
 
+/**
+ * Whether fencing stopped PostgreSQL on `pod`. Pod unreadiness alone is not
+ * evidence: the Pod may have been unready before. Stopped needs the fence
+ * applied, a Pod that was ready when the fence was requested and is not now,
+ * and no runtime answer showing PostgreSQL still serving WAL positions.
+ */
+function fencedPostgresStopped(op: CNPGTrackedOperation, obs: CNPGObservation, pod: string): boolean | null {
+  const f = obs.facts
+  if (!f) return null
+  if (!f.fencedInstances.all && !f.fencedInstances.instances.includes(pod)) return false
+  const rt = runtimeInstance(obs, pod)?.status
+  if (rt?.state === 'ok' && (rt.currentLsn || rt.receivedLsn || rt.replayLsn)) return false
+  const ready = readyNow(obs, pod)
+  if (ready === true) return false
+  if (ready === null) return null
+  const readyAtStart = (op.baseline.readyAtStart as Record<string, boolean | null> | undefined)?.[pod]
+  return readyAtStart === true ? true : null
+}
+
 registerCNPGOperationObserver('fence', (op, obs) => {
   const pods = ((op.baseline.instances as string[]) ?? [])
-  const steps: CNPGOpStep[] = pods.map((p) => {
-    const ready = readyNow(obs, p)
-    return { label: `${p}: PostgreSQL stopped (Pod not ready)`, done: ready === null ? null : !ready }
-  })
-  return { state: summarizeSteps(steps), steps, detail: 'A fenced instance keeps its Pod but stops PostgreSQL, so its Pod turns not ready', progressKey: key(steps) }
+  const steps: CNPGOpStep[] = pods.map((p) => ({ label: `${p}: PostgreSQL stopped`, done: fencedPostgresStopped(op, obs, p) }))
+  const state = summarizeSteps(steps)
+  const detail =
+    state === 'unobservable'
+      ? 'Fenced; whether PostgreSQL stopped cannot be told: the Pod was not ready before fencing, or its readiness is not readable'
+      : 'A fenced instance keeps its Pod but stops PostgreSQL, so a Pod that was ready turns not ready'
+  return { state, steps, detail, progressKey: key(steps) }
 })
 
 registerCNPGOperationObserver('unfence', (op, obs) => {

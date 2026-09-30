@@ -204,3 +204,46 @@ describe('operations Radar cannot observe', () => {
     expect(late.finishedAt).toBe(T0 + 16 * 60_000)
   })
 })
+
+describe('fence observer', () => {
+  const inst = (pod: string, ready: boolean) => ({ pod, podUID: `uid-${pod}`, role: 'standby' as const, ready, healthy: ready, fenced: true, podReadable: true, podExists: true })
+  const fenced = facts({ fencedInstances: { raw: '["pg-2"]', all: false, instances: ['pg-2'] }, instances: [inst('pg-2', false)] })
+  const fence = (readyAtStart: boolean | null) => op({ kind: 'fence', label: 'Fence pg-2', target: undefined, baseline: { instances: ['pg-2'], readyAtStart: { 'pg-2': readyAtStart } } })
+
+  it('does not infer PostgreSQL stopped from a Pod that was already unready', () => {
+    const o = advanceCNPGOperation(fence(false), obs({ facts: fenced }))
+    expect(o.state).toBe('unobservable')
+    expect(o.steps?.[0].done).toBeNull()
+  })
+  it('completes when the fence is applied and a Pod that was ready turned unready', () => {
+    const o = advanceCNPGOperation(fence(true), obs({ facts: fenced }))
+    expect(o.state).toBe('completed')
+  })
+  it('is not done while PostgreSQL still reports WAL positions', () => {
+    const rt = runtime('pg-1', [])
+    rt.instances.push({ pod: 'pg-2', role: 'replica', status: { state: 'ok', receivedLsn: '0/3000000' }, metrics: { state: 'ok' } } as never)
+    const o = advanceCNPGOperation(fence(true), obs({ facts: fenced, runtime: rt }))
+    expect(o.steps?.[0].done).toBe(false)
+  })
+  it('is not done before the fence annotation lands', () => {
+    const o = advanceCNPGOperation(fence(true), obs({ facts: facts({ instances: [inst('pg-2', false)] }) }))
+    expect(o.steps?.[0].done).toBe(false)
+  })
+})
+
+describe('switchover without readable endpoints', () => {
+  it('never completes while the read-write Service is unverified', () => {
+    const o = advanceCNPGOperation(
+      op({}),
+      obs({
+        facts: facts({ currentPrimary: 'pg-2', targetPrimary: 'pg-2' }),
+        runtime: runtime('pg-2', [{ pod: 'pg-1', state: 'streaming' }]),
+        ha: ha({ rwEndpoints: { state: 'denied', grant: 'list endpointslices in db', service: 'pg-rw', pods: [] } }),
+      }),
+    )
+    expect(o.state).toBe('unobservable')
+    const step = o.steps?.find((s) => s.label.startsWith('Read-write Service'))
+    expect(step?.done).toBeNull()
+    expect(o.detail).toContain('read-write Service is unverified')
+  })
+})

@@ -249,8 +249,10 @@ function trackedOperationFor(
         : null
     case 'reload':
       return { kind, label: 'Configuration reload' }
-    case 'fence':
-      return { kind, label: x.fenceSel === '*' ? 'Fence all instances' : `Fence ${x.fenceSel}`, baseline: { instances: x.fenceSel === '*' ? pods : [x.fenceSel] } }
+    case 'fence': {
+      const readyAtStart = Object.fromEntries(x.facts.instances.map((i) => [i.pod, i.podReadable && i.podExists ? i.ready : null]))
+      return { kind, label: x.fenceSel === '*' ? 'Fence all instances' : `Fence ${x.fenceSel}`, baseline: { instances: x.fenceSel === '*' ? pods : [x.fenceSel], readyAtStart } }
+    }
     case 'unfence': {
       const lifted = x.fenceSel === '*' ? (x.fenced.includes('*') ? pods : x.fenced) : [x.fenceSel]
       return { kind, label: x.fenceSel === '*' ? 'Lift all fencing' : `Lift fence on ${x.fenceSel}`, baseline: { instances: lifted } }
