@@ -106,6 +106,23 @@ func TestCNPGOperatorFactsVerdict(t *testing.T) {
 	if v := f.verdict("pg"); v.State != cnpgOperatorUnknown || !strings.Contains(v.Unknown, "lease") {
 		t.Errorf("unreadable lease = %+v", v)
 	}
+	// WATCH_NAMESPACE from a ConfigMap Radar does not read: a healthy leader
+	// may be restricted to another namespace, so it proves nothing here.
+	fromConfigMap := up
+	fromConfigMap.name = "op-cm"
+	fromConfigMap.watch = CNPGOperatorWatch{Source: "env WATCH_NAMESPACE", Unresolved: "set from ConfigMap cnpg-config key WATCH_NAMESPACE"}
+	f.operators = []cnpgOperatorFact{fromConfigMap}
+	if v := f.verdict("team-b"); v.State != cnpgOperatorUnknown || !strings.Contains(v.Unknown, "ConfigMap cnpg-config") {
+		t.Errorf("unresolved watch scope = %+v, want unknown naming the ConfigMap", v)
+	}
+	f.operators = []cnpgOperatorFact{fromConfigMap, up}
+	if v := f.verdict("team-b"); v.State != cnpgOperatorReconciling || v.Operator != "cnpg-system/op" {
+		t.Errorf("confirmed watcher beside an unresolved one = %+v", v)
+	}
+	f.operators = []cnpgOperatorFact{fromConfigMap, down}
+	if v := f.verdict("team-b"); v.State != cnpgOperatorUnknown {
+		t.Errorf("down confirmed watcher beside a leading unresolved one = %+v, want unknown", v)
+	}
 	f = cnpgOperatorFacts{deploymentsUnknown: "Radar cannot list Deployments in every namespace"}
 	if v := f.verdict("pg"); v.State != cnpgOperatorUnknown || v.Unknown == "" {
 		t.Errorf("no visible operator = %+v", v)

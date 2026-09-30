@@ -265,14 +265,29 @@ func dedupeSorted(in []string) []string {
 
 func (f cnpgOperatorFacts) verdict(namespace string) CNPGOperatorVerdict {
 	v := CNPGOperatorVerdict{State: cnpgOperatorUnknown, WebhookRejects: f.webhookRejects, WebhookReason: f.webhookReason}
+	// An operator whose WATCH_NAMESPACE Radar cannot resolve may or may not
+	// watch this namespace: it can neither confirm reconciliation nor rule it out.
 	var watching []cnpgOperatorFact
+	var unresolved []string
+	couldReconcile := false
 	for _, op := range f.operators {
-		if op.watch.All || op.watch.Unresolved != "" || slices.Contains(op.watch.Namespaces, namespace) {
+		switch {
+		case op.watch.Unresolved != "":
+			unresolved = append(unresolved, "whether "+op.namespace+"/"+op.name+" watches "+namespace+" is unknown: its WATCH_NAMESPACE is "+op.watch.Unresolved)
+			if op.leading == nil || *op.leading {
+				couldReconcile = true
+			}
+		case op.watch.All || slices.Contains(op.watch.Namespaces, namespace):
 			watching = append(watching, op)
 		}
 	}
 	unknown := []string{}
 	switch {
+	case len(watching) == 0 && len(unresolved) > 0:
+		unknown = append(unknown, unresolved...)
+		if f.deploymentsUnknown != "" {
+			unknown = append(unknown, f.deploymentsUnknown)
+		}
 	case len(watching) == 0 && f.deploymentsUnknown != "":
 		unknown = append(unknown, f.deploymentsUnknown)
 	case len(watching) == 0 && len(f.operators) == 0:
@@ -300,6 +315,8 @@ func (f cnpgOperatorFacts) verdict(namespace string) CNPGOperatorVerdict {
 			v.State = cnpgOperatorReconciling
 			unknown = nil
 		case anyUnknown:
+		case couldReconcile:
+			unknown = append(unknown, unresolved...)
 		default:
 			v.State = cnpgOperatorNotReconciling
 			v.Reasons = notLeading
