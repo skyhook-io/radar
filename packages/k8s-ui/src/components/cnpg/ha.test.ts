@@ -9,7 +9,7 @@ import {
   type CNPGClusterHA,
   type CNPGHAQuorum,
 } from './ha'
-import type { CNPGFleetRow } from './workspace'
+import { cnpgLagTone, type CNPGFleetRow } from './workspace'
 
 function ha(over: Partial<CNPGClusterHA> = {}): CNPGClusterHA {
   return {
@@ -188,6 +188,13 @@ describe('cnpgDimensions', () => {
     expect(d[1]).toMatchObject({ tone: 'degraded', text: '0 of 2 expected standbys streaming' })
     const one = cnpgDimensions({ row: r, replication: { streaming: 1, standbys: 1, maxReplayLagSeconds: 0 } })
     expect(one[1]).toMatchObject({ tone: 'degraded', text: '1 of 2 expected standbys streaming' })
+  })
+  it('replication lag takes the same tone as the Replication fact', () => {
+    const at = (lag: number) => cnpgDimensions({ row: row(), replication: { streaming: 1, standbys: 1, maxReplayLagSeconds: lag } })[1]
+    expect(at(2)).toMatchObject({ tone: 'healthy' })
+    expect(at(8)).toMatchObject({ tone: 'degraded', text: 'replay 8 s behind' })
+    expect(at(72)).toMatchObject({ tone: 'unhealthy', text: 'replay 72 s behind' })
+    expect(at(72).tone).toBe(cnpgLagTone(72))
   })
   it('replication is unknown when spec.instances is not reported', () => {
     const d = cnpgDimensions({ row: row({ instances: { ready: null, desired: null } }), replication: { streaming: 0, standbys: 0 } })
