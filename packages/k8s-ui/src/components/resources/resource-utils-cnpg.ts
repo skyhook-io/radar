@@ -1034,8 +1034,10 @@ export function getCNPGPoolerStatus(resource: any): StatusBadge {
     return { text: 'Paused', color: healthColors.degraded, level: 'degraded' }
   }
 
+  // status.instances counts scheduled Pods only; readiness lives on the
+  // Pooler's Deployment, so this badge must not read as healthy.
   if (desired > 0 && scheduled >= desired) {
-    return { text: 'Scheduled', color: healthColors.healthy, level: 'healthy' }
+    return { text: 'Scheduled', color: healthColors.neutral, level: 'neutral' }
   }
 
   return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
