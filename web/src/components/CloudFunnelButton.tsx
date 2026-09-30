@@ -724,9 +724,10 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
           <section>
             <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">Investigations</h4>
             <p className="text-[12px] leading-relaxed text-theme-text-secondary">
-              In our public benchmark, Radar's agent found the root cause 3× faster than the same model on plain
-              kubectl, and 2× faster than the other AI SRE tools we tested. Run it automatically on every alert, or
-              on demand from any issue, with no CLI or API key.{' '}
+              In our public benchmark, the same agent diagnosed faults 3× faster on average with Radar than with
+              plain kubectl, and Radar answered 1.6–3.6× faster on average than the other AI SRE tools we tested.
+              Run it automatically on the alert rules you choose, or on demand from any issue, with no CLI or API
+              key.{' '}
               <a href={BENCHMARK_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
                 See the benchmarks →
               </a>
@@ -735,9 +736,9 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
           <section>
             <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">What it costs</h4>
             <p className="text-[12px] leading-relaxed text-theme-text-secondary">
-              Radar Cloud is {freeLine}, with 100 investigations a month included, then $1 per investigation.
-              Paid plans add more clusters, more included investigations, and enterprise features like SSO, SCIM
-              and audit logs.{' '}
+              Radar Cloud is {freeLine}, with 100 investigations a month included. Paid plans add more clusters,
+              more included investigations per cluster, additional investigations at $1 each once an owner turns
+              them on, and enterprise features like SSO, SCIM and audit logs.{' '}
               <a href={PRICING_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
                 See pricing →
               </a>
