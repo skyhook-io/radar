@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { X } from 'lucide-react'
 import { Tooltip } from '@skyhook-io/k8s-ui'
 import { AreaChart, SeriesLegend, type ChartTimeRange, type ReferenceLine, type TimeSeries } from '@skyhook-io/k8s-ui/components/charts'
@@ -354,8 +354,7 @@ export function CNPGTrends({
   samples: Sample[]
   onOpenInterval?: (target: CNPGIntervalTarget, since: string, until: string) => void
 }) {
-  const [range, setRange] = useState<CNPGHistoryRange>('1h')
-  const [interval, setSelected] = useState<ChartTimeRange | null>(null)
+  const { range, setRange, interval, setSelected } = useTrendParams()
   const q = useCNPGClusterHistory(namespace, name, range)
   const data = q.data
   const fromPrometheus = data?.source === 'prometheus' && data.state === 'ok'
@@ -371,10 +370,7 @@ export function CNPGTrends({
           <Segments
             label="Trend range"
             value={range}
-            onChange={(r) => {
-              setRange(r)
-              setSelected(null)
-            }}
+            onChange={(r) => setRange(r)}
             options={CNPG_HISTORY_RANGES}
           />
         )}
@@ -409,6 +405,42 @@ export function CNPGTrends({
       )}
     </div>
   )
+}
+
+/**
+ * The trend range and selected interval live in the URL (replaced, keeping
+ * the navigation state), so Back from Logs or Activity lands on the same view.
+ */
+function useTrendParams() {
+  const [params, setParams] = useSearchParams()
+  const location = useLocation()
+  const range = CNPG_HISTORY_RANGES.find((r) => r.id === params.get('trendRange'))?.id ?? '1h'
+  const [a, b] = (params.get('trendSel') ?? '').split('-').map(Number)
+  const interval: ChartTimeRange | null = Number.isFinite(a) && Number.isFinite(b) && b > a ? { start: a, end: b } : null
+  const update = (mutate: (next: URLSearchParams) => void) =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        mutate(next)
+        return next
+      },
+      { replace: true, state: location.state },
+    )
+  return {
+    range,
+    interval,
+    setRange: (r: CNPGHistoryRange) =>
+      update((next) => {
+        if (r === '1h') next.delete('trendRange')
+        else next.set('trendRange', r)
+        next.delete('trendSel')
+      }),
+    setSelected: (sel: ChartTimeRange | null) =>
+      update((next) => {
+        if (sel) next.set('trendSel', `${Math.floor(sel.start)}-${Math.ceil(sel.end)}`)
+        else next.delete('trendSel')
+      }),
+  }
 }
 
 /** The interval a trend selection carried into Logs or Activity, from `?since=&until=`. */
