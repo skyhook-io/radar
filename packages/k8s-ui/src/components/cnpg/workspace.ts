@@ -1111,7 +1111,7 @@ function formatLagSeconds(s: number): string {
 function measuredReplication(base: CNPGFact, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): CNPGFact {
   const prefix = base.text.replace(/ · lag unknown$/, '')
   if (src.source === 'none') {
-    return { text: `${prefix} · lag unknown (no metrics)`, tone: 'unknown', source: CNPG_PROMETHEUS_NOT_CONNECTED, detail: src.reason }
+    return { text: `${prefix} · lag unknown`, tone: 'unknown', source: CNPG_PROMETHEUS_NOT_CONNECTED, detail: src.reason }
   }
   const lag = reading?.lag
   switch (lag?.state) {
@@ -1125,9 +1125,9 @@ function measuredReplication(base: CNPGFact, reading: CNPGFleetMetricsReading | 
     case 'noStandby':
       return { text: `${prefix} · no standby reporting lag`, tone: 'unknown', source: `${lag.reason ?? 'No instance reports being a standby'} · ${src.lagSource ?? 'Prometheus'}` }
     case 'denied':
-      return { text: `${prefix} · lag unknown (no access)`, tone: 'unknown', source: lag.grant ? `Needs ${lag.grant}` : lag.reason }
+      return { text: `${prefix} · lag unknown`, tone: 'unknown', source: lag.grant ? `Needs ${lag.grant}` : lag.reason }
   }
-  return { text: `${prefix} · lag unknown (no metrics)`, tone: 'unknown', source: lag?.reason ?? 'Replication lag needs Prometheus scraping the CNPG exporter' }
+  return { text: `${prefix} · lag unknown`, tone: 'unknown', source: lag?.reason ?? 'Replication lag needs Prometheus scraping the CNPG exporter' }
 }
 
 /** Volume growth of the fastest-growing claim, as a fact. */

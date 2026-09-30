@@ -54,16 +54,17 @@ describe('applyCNPGFleetMetrics', () => {
 
   it('says why lag is unknown instead of zero, and leaves non-replica facts alone', () => {
     const f = applyCNPGFleetMetrics(fleet(), [reading('dark', { state: 'noSeries', reason: 'no exporter series' })], { source: 'prometheus' })
-    expect(row(f, 'dark').replication.text).toBe('1/1 replicas ready · lag unknown (no metrics)')
+    expect(row(f, 'dark').replication.text).toBe('1/1 replicas ready · lag unknown')
+    expect(row(f, 'dark').replication.source).toBeTruthy()
     expect(row(f, 'dark').replication.tone).toBe('unknown')
     expect(row(f, 'solo').replication.text).toBe('Single instance')
 
     const denied = applyCNPGFleetMetrics(fleet(), [reading('ha', { state: 'denied', grant: 'get pods in db' })], { source: 'prometheus' })
-    expect(row(denied, 'ha').replication.text).toContain('lag unknown (no access)')
+    expect(row(denied, 'ha').replication.text).toBe('1/1 replicas ready · lag unknown')
     expect(row(denied, 'ha').replication.source).toBe('Needs get pods in db')
 
     const none = applyCNPGFleetMetrics(fleet(), undefined, { source: 'none', reason: 'Radar is not connected to Prometheus' })
-    expect(row(none, 'ha').replication.text).toBe('1/1 replicas ready · lag unknown (no metrics)')
+    expect(row(none, 'ha').replication.text).toBe('1/1 replicas ready · lag unknown')
     expect(row(none, 'ha').replication.source).toBe('Prometheus not connected')
     expect(row(none, 'ha').replication.detail).toBe('Radar is not connected to Prometheus')
     expect(row(none, 'ha').diskGrowth).toBeUndefined()
