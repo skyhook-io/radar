@@ -369,3 +369,15 @@ func TestCNPGClusterHA_EachReadIsAuthorizedOnItsOwn(t *testing.T) {
 		}
 	}
 }
+
+func TestCNPGUncachedReasonSaysWhatIsUnknownAndWhy(t *testing.T) {
+	if got := cnpgUncachedReason("Zones", "Nodes", "", true, false); got != "Zones unknown: Radar's own credentials could not list Nodes when it connected" {
+		t.Errorf("uncached = %q", got)
+	}
+	if got := cnpgUncachedReason("Instance Jobs", "Jobs", "pg", false, false); got != "Instance Jobs unknown: Radar is still loading Jobs" {
+		t.Errorf("syncing = %q", got)
+	}
+	if got := cnpgUncachedReason("Zones", "Nodes", "", false, true); got != "" {
+		t.Errorf("cached = %q", got)
+	}
+}

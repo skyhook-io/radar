@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -329,12 +330,31 @@ func cnpgDesiredImage(cluster *unstructured.Unstructured) string {
 	return img
 }
 
+// cnpgUncachedReason says what the reader cannot see when Radar's cache holds
+// no copy of a kind the caller may read: Radar lists with its own credentials
+// at connect time, which can be narrower than the caller's. Empty when the
+// kind is cached and synced. uncached is true when Radar holds no informer
+// for the kind (in namespace, when set).
+func cnpgUncachedReason(fact, kind, namespace string, uncached, ready bool) string {
+	in := ""
+	if namespace != "" {
+		in = " in " + namespace
+	}
+	switch {
+	case uncached:
+		return fmt.Sprintf("%s unknown: Radar's own credentials could not list %s%s when it connected", fact, kind, in)
+	case !ready:
+		return fmt.Sprintf("%s unknown: Radar is still loading %s", fact, kind)
+	}
+	return ""
+}
+
 func (s *Server) cnpgHANodesSource(r *http.Request, cache *k8s.ResourceCache) CNPGHASource {
 	if !s.canRead(r, "", "nodes", "", "get") {
 		return cnpgHAClusterDenied(cnpgGrant{"get", "", "nodes", ""})
 	}
-	if cache.Nodes() == nil || !cache.IsKindReady("nodes") {
-		return CNPGHASource{State: cnpgHAStateUnavailable, Reason: "Radar is not caching Nodes"}
+	if reason := cnpgUncachedReason("Zones", "Nodes", "", cache.Nodes() == nil, cache.IsKindReady("nodes")); reason != "" {
+		return CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}
 	}
 	return CNPGHASource{State: cnpgHAStateOK}
 }
@@ -485,8 +505,8 @@ func (s *Server) cnpgHAPDBs(r *http.Request, cache *k8s.ResourceCache, cluster *
 	}
 	lister := cache.PodDisruptionBudgets()
 	within := capacityNamespacesWithinCache(cache, "poddisruptionbudgets", []string{namespace})
-	if lister == nil || !cache.IsKindReady("poddisruptionbudgets") || within.unavailable {
-		out.CNPGHASource = CNPGHASource{State: cnpgHAStateUnavailable, Reason: "Radar is not caching PodDisruptionBudgets in " + namespace}
+	if reason := cnpgUncachedReason("Disruption budgets", "PodDisruptionBudgets", namespace, lister == nil || within.unavailable, cache.IsKindReady("poddisruptionbudgets")); reason != "" {
+		out.CNPGHASource = CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}
 		return out
 	}
 	list, err := lister.PodDisruptionBudgets(namespace).List(labels.SelectorFromSet(labels.Set{cnpgClusterLabel: cluster.GetName()}))
@@ -628,8 +648,8 @@ func (s *Server) cnpgHAJobs(r *http.Request, cache *k8s.ResourceCache, cluster *
 	}
 	lister := cache.Jobs()
 	within := capacityNamespacesWithinCache(cache, "jobs", []string{namespace})
-	if lister == nil || !cache.IsKindReady("jobs") || within.unavailable {
-		out.CNPGHASource = CNPGHASource{State: cnpgHAStateUnavailable, Reason: "Radar is not caching Jobs in " + namespace}
+	if reason := cnpgUncachedReason("Instance Jobs", "Jobs", namespace, lister == nil || within.unavailable, cache.IsKindReady("jobs")); reason != "" {
+		out.CNPGHASource = CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}
 		return out
 	}
 	list, err := lister.Jobs(namespace).List(labels.SelectorFromSet(labels.Set{cnpgClusterLabel: cluster.GetName()}))
