@@ -608,7 +608,7 @@ func (s *Server) cnpgStorageWAL(w http.ResponseWriter, r *http.Request, cache *k
 		return CNPGStorageCoverage{State: cnpgStorageStateDenied, Grant: "list pods in " + namespace}
 	}
 	grant := "get pods/proxy in " + namespace
-	if !s.canReadSubresource(r, "", "pods", "proxy", namespace, "get") {
+	if s.cnpgPermission(r, cnpgGrantGetPodsProxy, namespace) == cnpgPermDenied {
 		return CNPGStorageCoverage{State: cnpgStorageStateDenied, Grant: grant}
 	}
 	pods, err := cnpgClusterInstancePods(cache, cluster)

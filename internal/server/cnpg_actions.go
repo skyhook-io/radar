@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -27,6 +28,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // CloudNativePG write actions. Every write mirrors what `kubectl cnpg` does
@@ -753,6 +756,9 @@ func (s *Server) cnpgPermission(r *http.Request, g cnpgGrant, namespace string) 
 }
 
 func (s *Server) cnpgGrantDecision(r *http.Request, g cnpgGrant, namespace string) (bool, bool) {
+	if auth.UserFromContext(r.Context()) == nil {
+		return cnpgLocalCanI(r.Context(), g, namespace)
+	}
 	if g.subresource == "" {
 		return s.canReadDecision(r, g.group, g.resource, namespace, g.verb)
 	}
@@ -771,6 +777,47 @@ func (s *Server) cnpgGrantDecision(r *http.Request, g cnpgGrant, namespace strin
 		perms.SetCanI(g.verb, g.group, key, namespace, allowed)
 	}
 	return allowed, authoritative
+}
+
+// Without auth the apiserver still enforces the kubeconfig identity's RBAC on
+// every write and proxy read; asking it first lets capabilities name a missing
+// grant instead of offering an action that will fail.
+var (
+	cnpgLocalCanIMu   sync.Mutex
+	cnpgLocalCanIMemo = map[string]cnpgLocalCanIEntry{}
+	cnpgLocalCanITTL  = 30 * time.Second
+)
+
+type cnpgLocalCanIEntry struct {
+	allowed bool
+	expires time.Time
+}
+
+func cnpgLocalCanI(ctx context.Context, g cnpgGrant, namespace string) (bool, bool) {
+	resource := g.resource
+	if g.subresource != "" {
+		resource += "/" + g.subresource
+	}
+	key := strings.Join([]string{k8s.GetContextName(), g.verb, g.group, resource, namespace}, "\x00")
+	now := time.Now()
+	cnpgLocalCanIMu.Lock()
+	if e, ok := cnpgLocalCanIMemo[key]; ok && now.Before(e.expires) {
+		cnpgLocalCanIMu.Unlock()
+		return e.allowed, true
+	}
+	cnpgLocalCanIMu.Unlock()
+	client := k8s.GetClient()
+	if client == nil {
+		return true, true
+	}
+	allowed, apiErr := k8score.CanI(ctx, client, namespace, g.group, resource, g.verb)
+	if apiErr {
+		return false, false
+	}
+	cnpgLocalCanIMu.Lock()
+	cnpgLocalCanIMemo[key] = cnpgLocalCanIEntry{allowed: allowed, expires: now.Add(cnpgLocalCanITTL)}
+	cnpgLocalCanIMu.Unlock()
+	return allowed, true
 }
 
 // cnpgCapability folds a guard reason and one or more grants into a verdict.
