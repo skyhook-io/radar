@@ -228,6 +228,10 @@ type CNPGClusterCapabilitiesResponse struct {
 	InstanceActions  map[string]CNPGInstanceActions `json:"instanceActions"`
 	RestartPlan      CNPGRestartPlan                `json:"restartPlan"`
 	HibernateEffects CNPGHibernateEffects           `json:"hibernateEffects"`
+	// Operator is whether the operator watching this namespace is acting on
+	// it. Writes to the Cluster or new Backups are refused above when its
+	// webhook rejects them; otherwise the dialogs warn.
+	Operator CNPGOperatorVerdict `json:"operator"`
 }
 
 type CNPGScheduleFacts struct {
@@ -261,6 +265,7 @@ type CNPGScheduleCapabilitiesResponse struct {
 	Context         string              `json:"context"`
 	Facts           CNPGScheduleFacts   `json:"facts"`
 	Actions         CNPGScheduleActions `json:"actions"`
+	Operator        CNPGOperatorVerdict `json:"operator"`
 }
 
 // CNPGActionRequest is the POST body of every CNPG action.
@@ -976,8 +981,25 @@ func (s *Server) cnpgClusterCapabilities(r *http.Request, c cnpgActionClients, c
 		InstanceActions:  instanceActions,
 		RestartPlan:      cnpgRestartPlanOf(cluster, facts),
 		HibernateEffects: cnpgHibernateEffectsOf(ctx, c, cluster),
+		Operator:         s.cnpgOperatorVerdictFor(r, namespace),
 	}
+	cnpgApplyOperatorGuard(resp)
 	return resp, nil
+}
+
+// cnpgApplyOperatorGuard refuses the actions whose write the CNPG admission
+// webhook sees — a new Backup, or a patch of the Cluster itself — while that
+// webhook rejects writes. Status patches and Pod deletes bypass it.
+func cnpgApplyOperatorGuard(resp *CNPGClusterCapabilitiesResponse) {
+	v, a := resp.Operator, &resp.Actions
+	for _, c := range []*CNPGActionCapability{&a.Backup, &a.Restart, &a.Reload, &a.Fence, &a.Unfence, &a.Hibernate, &a.Rehydrate, &a.SetMaintenance, &a.UnsetMaintenance} {
+		*c = cnpgOperatorWebhookGuard(v, *c)
+	}
+	for pod, ia := range resp.InstanceActions {
+		ia.Fence = cnpgOperatorWebhookGuard(v, ia.Fence)
+		ia.Unfence = cnpgOperatorWebhookGuard(v, ia.Unfence)
+		resp.InstanceActions[pod] = ia
+	}
 }
 
 // ifNoGuard returns guard when set, fallback otherwise.
@@ -1198,16 +1220,18 @@ func (s *Server) cnpgScheduleCapabilities(r *http.Request, c cnpgActionClients, 
 	} else {
 		resumeGuard = "The schedule is not suspended"
 	}
+	operator := s.cnpgOperatorVerdictFor(r, namespace)
 	return &CNPGScheduleCapabilitiesResponse{
 		UID:             string(sched.GetUID()),
 		ResourceVersion: sched.GetResourceVersion(),
 		Context:         contextName,
 		Facts:           f,
 		Actions: CNPGScheduleActions{
-			Suspend: one(suspendGuard, cnpgGrantPatchSchedules),
-			Resume:  one(resumeGuard, cnpgGrantPatchSchedules),
-			Run:     one(cnpgGuardScheduleRun(f), cnpgGrantCreateBackups),
+			Suspend: cnpgOperatorWebhookGuard(operator, one(suspendGuard, cnpgGrantPatchSchedules)),
+			Resume:  cnpgOperatorWebhookGuard(operator, one(resumeGuard, cnpgGrantPatchSchedules)),
+			Run:     cnpgOperatorWebhookGuard(operator, one(cnpgGuardScheduleRun(f), cnpgGrantCreateBackups)),
 		},
+		Operator: operator,
 	}, nil
 }
 
