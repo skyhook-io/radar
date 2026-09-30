@@ -9,7 +9,7 @@ import { CNPGRefreshFailedNotice, Segments } from './shared'
 import { CNPGStorage } from './CNPGStorage'
 import { CNPGBlockingSessions } from './CNPGBlockingSessions'
 import { CNPGReplicationView } from './CNPGReplicationView'
-import { cnpgCheckpointView } from './runtimeModel'
+import { cnpgCheckpointView, cnpgDatabaseHealthRows } from './runtimeModel'
 import { CNPGTrends, useSampleBuffer, type CNPGIntervalTarget, type Sample } from './CNPGTrends'
 
 type Section = 'replication' | 'sessions' | 'transactions' | 'storage' | 'slots' | 'trends'
@@ -302,8 +302,7 @@ function TransactionsCard({ inst, isPrimary, samples }: { inst?: CNPGRuntimeInst
         <Metric label="Deadlocks (total)" value={m.deadlocksTotal ?? '—'} tone={m.deadlocksTotal ? 'degraded' : undefined} />
         <Metric label="Oldest transaction" value={seconds(m.oldestXactSeconds)} />
       </div>
-      <AgeList title="Transaction ID age (wraparound at ~2 billion)" rows={m.xidAge} family="cnpg_pg_database_xid_age" missing={m.missing} />
-      <AgeList title="Multixact ID age (wraparound at ~2 billion)" rows={m.mxidAge} family="cnpg_pg_database_mxid_age" missing={m.missing} />
+      <DatabaseHealth m={m} />
       <ExtensionUpdates rows={m.extensionUpdates} missing={m.missing} />
     </Card>
   )
@@ -362,22 +361,53 @@ function NotExported({ what, family }: { what: string; family: string }) {
   )
 }
 
-function AgeList({ title, rows, family, missing }: { title: string; rows?: { database: string; age: number }[]; family: string; missing?: string[] }) {
-  const absent = missing?.includes(family)
-  if (!absent && (!rows || rows.length === 0)) return null
+const AGE_FAMILIES: { family: string; what: string }[] = [
+  { family: 'cnpg_pg_stat_database_xact_rollback', what: 'Rollback ratio' },
+  { family: 'cnpg_pg_stat_database_temp_bytes', what: 'Temporary files' },
+  { family: 'cnpg_pg_database_xid_age', what: 'Transaction ID age' },
+  { family: 'cnpg_pg_database_mxid_age', what: 'Multixact ID age' },
+]
+
+function DatabaseHealth({ m }: { m: CNPGRuntimeInstance['metrics'] }) {
+  const rows = cnpgDatabaseHealthRows(m)
+  const absent = AGE_FAMILIES.filter((f) => m.missing?.includes(f.family))
+  const cell = (v: number | undefined, fmt: (v: number) => ReactNode) => (v === undefined ? <span className="text-theme-text-tertiary">—</span> : fmt(v))
+  const age = (v: number) => <span className={v > 1_000_000_000 ? toneTextClass('degraded') : undefined}>{(v / 1_000_000).toFixed(0)} M</span>
   return (
     <div className="mt-4 text-sm">
-      <div className="text-xs text-theme-text-tertiary">{title}</div>
-      {absent ? (
-        <NotExported what="Age" family={family} />
-      ) : (
-        rows!.map((x) => (
-          <div key={x.database} className="flex gap-3 font-mono text-xs">
-            <span className="w-40 truncate">{x.database}</span>
-            <span className={x.age > 1_000_000_000 ? toneTextClass('degraded') : undefined}>{(x.age / 1_000_000).toFixed(0)} M</span>
-          </div>
-        ))
+      <div className="text-xs text-theme-text-tertiary">Per database · counters since the last statistics reset · ID wraparound at ~2 billion</div>
+      {rows.length > 0 && (
+        <table className="mt-1 w-full text-sm">
+          <thead className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">
+            <tr>
+              <th className="py-1.5 pr-3">Database</th>
+              <th className="pr-3 text-right">Rollback ratio</th>
+              <th className="pr-3 text-right">Temp files</th>
+              <th className="pr-3 text-right">Temp bytes</th>
+              <th className="pr-3 text-right">Transaction ID age</th>
+              <th className="text-right">Multixact ID age</th>
+            </tr>
+          </thead>
+          <tbody className="table-divide-subtle">
+            {rows.map((r) => (
+              <tr key={r.database}>
+                <td className="py-1.5 pr-3 font-mono text-xs">{r.database}</td>
+                <td className="pr-3 text-right font-mono text-xs">
+                  {cell(r.rollbackRatio, (v) => <span className={v > 0.1 ? toneTextClass('degraded') : undefined}>{(v * 100).toFixed(1)} %</span>)}
+                </td>
+                <td className="pr-3 text-right font-mono text-xs">{cell(r.tempFiles, (v) => v.toLocaleString())}</td>
+                <td className="pr-3 text-right font-mono text-xs">{cell(r.tempBytes, bytes)}</td>
+                <td className="pr-3 text-right font-mono text-xs">{cell(r.xidAge, age)}</td>
+                <td className="text-right font-mono text-xs">{cell(r.mxidAge, age)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
+      {absent.map((f) => (
+        <NotExported key={f.family} what={f.what} family={f.family} />
+      ))}
+      {rows.length === 0 && absent.length === 0 && <div className="text-xs text-theme-text-tertiary">The exporter reported no per-database rows.</div>}
     </div>
   )
 }
