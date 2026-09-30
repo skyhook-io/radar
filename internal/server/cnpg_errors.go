@@ -172,11 +172,18 @@ func cnpgPostgresDetail(raw string) string {
 	return condition
 }
 
-// cnpgRelayedPodSentence says in plain words what an error answer from the
-// Pod itself means, once the apiserver relays it as a 5xx. The body is the
-// instance manager's or exporter's own error text, which names sockets and
-// connection strings; callers log it instead. ok is false for anything the
-// apiserver produced itself (a failure to reach the Pod) and for non-5xx.
+// Prometheus client_golang's error page, which the exporters serve on a
+// failed scrape; nothing in front of the Pod writes it.
+const cnpgPromHTTPErrorPrefix = "An error has occurred while serving metrics"
+
+// cnpgRelayedPodSentence says in plain words what a 5xx relayed through
+// pods/proxy means. A relayed body proves nothing about where it came from:
+// a gateway or the apiserver's own timeout page carries the same shape. So
+// the instance manager or exporter is named only when the body says so —
+// a PostgreSQL failure Radar recognizes on the status port, or client_golang's
+// error page on a metrics port. Anything else is worded without an origin.
+// The body can name sockets and connection strings; callers log it instead.
+// ok is false for errors that are not a relayed 5xx.
 func cnpgRelayedPodSentence(err error, port int) (string, bool) {
 	body, code, ok := cnpgRelayedPodBody(err)
 	if !ok || code < 500 {
@@ -192,9 +199,10 @@ func cnpgRelayedPodSentence(err error, port int) (string, bool) {
 		if detail := cnpgPostgresDetail(body); detail != "" {
 			return "the instance manager could not read PostgreSQL's status: " + detail, true
 		}
-		return "the instance manager could not read PostgreSQL's status", true
+	} else if strings.HasPrefix(strings.TrimSpace(body), cnpgPromHTTPErrorPrefix) {
+		return fmt.Sprintf("the metrics endpoint on port %d answered with an error (HTTP %d)", port, code), true
 	}
-	return fmt.Sprintf("the metrics endpoint on port %d answered with an error (HTTP %d)", port, code), true
+	return fmt.Sprintf("the read through the Kubernetes API failed with HTTP %d (from a gateway or the Pod; Radar can't tell which)", code), true
 }
 
 // cnpgRelayedPodBody is the body of an answer the apiserver relayed from the

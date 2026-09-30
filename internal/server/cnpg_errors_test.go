@@ -48,7 +48,14 @@ func TestCNPGRelayedPodSentence(t *testing.T) {
 	socketGone := apierrors.NewGenericServerResponse(500, "get", schema.GroupResource{Resource: "pods"}, "https:pg-wal-failing-1:8000",
 		"failed to connect to `user=postgres database=postgres`: /controller/run/.s.PGSQL.5432 (/controller/run): dial error: dial unix /controller/run/.s.PGSQL.5432: connect: no such file or directory", 0, true)
 	other := apierrors.NewGenericServerResponse(500, "get", schema.GroupResource{Resource: "pods"}, "https:pg-1:8000", "pq: out of shared memory", 0, true)
-	exporter := apierrors.NewGenericServerResponse(503, "get", schema.GroupResource{Resource: "pods"}, "http:pg-1:9187", "collector failed", 0, true)
+	exporter := apierrors.NewGenericServerResponse(500, "get", schema.GroupResource{Resource: "pods"}, "http:pg-1:9187", "An error has occurred while serving metrics:\n\ncollector failed", 0, true)
+	unknownExporter := apierrors.NewGenericServerResponse(503, "get", schema.GroupResource{Resource: "pods"}, "http:pg-1:9187", "collector failed", 0, true)
+	gateway := apierrors.NewGenericServerResponse(504, "get", schema.GroupResource{Resource: "pods"}, "https:pg-1:8000", "<html><head><title>504 Gateway Time-out</title></head><body><center><h1>504 Gateway Time-out</h1></center><hr><center>nginx</center></body></html>", 0, true)
+	untypedStatus := apierrors.NewGenericServerResponse(504, "get", schema.GroupResource{Resource: "pods"}, "https:pg-1:8000", `{"kind":"Status","status":"Failure","message":"Timeout: request did not complete within the allotted timeout","code":504}`, 0, true)
+	opaque := apierrors.NewGenericServerResponse(500, "get", schema.GroupResource{Resource: "pods"}, "https:pg-1:8000", "internal server error", 0, true)
+	neutral := func(code int) string {
+		return fmt.Sprintf("the read through the Kubernetes API failed with HTTP %d (from a gateway or the Pod; Radar can't tell which)", code)
+	}
 	cases := []struct {
 		err  error
 		port int
@@ -56,7 +63,11 @@ func TestCNPGRelayedPodSentence(t *testing.T) {
 	}{
 		{socketGone, cnpgStatusPort, "PostgreSQL is not running on this instance"},
 		{other, cnpgStatusPort, "the instance manager could not read PostgreSQL's status: out of shared memory"},
-		{exporter, cnpgMetricsPort, "the metrics endpoint on port 9187 answered with an error (HTTP 503)"},
+		{exporter, cnpgMetricsPort, "the metrics endpoint on port 9187 answered with an error (HTTP 500)"},
+		{unknownExporter, cnpgMetricsPort, neutral(503)},
+		{gateway, cnpgStatusPort, neutral(504)},
+		{untypedStatus, cnpgStatusPort, neutral(504)},
+		{opaque, cnpgStatusPort, neutral(500)},
 	}
 	for _, c := range cases {
 		got, ok := cnpgRelayedPodSentence(c.err, c.port)
