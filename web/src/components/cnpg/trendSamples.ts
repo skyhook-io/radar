@@ -2,9 +2,11 @@ import type { TimeSeries } from '@skyhook-io/k8s-ui/components/charts'
 import type { CNPGRuntimeResponse } from '../../api/cnpg'
 
 /** Sessions on one instance at one sample, by pg_stat_activity state. */
+// Session totals and lock waits come from separate exporter queries: each is
+// kept when its own query answered, so one missing never hides the other.
 export interface InstanceSessions {
-  byState: Record<string, number>
-  total: number
+  byState?: Record<string, number>
+  total?: number
   waiting?: number
 }
 
@@ -57,8 +59,13 @@ export function sampleFrom(data: CNPGRuntimeResponse): Sample {
   const instances: Record<string, InstanceSessions> = {}
   for (const inst of data.instances) {
     const im = inst.metrics
-    if ((im.state !== 'ok' && im.state !== 'partial') || im.sessionsTotal === undefined) continue
-    instances[inst.pod] = { byState: { ...(im.sessionsByState ?? {}) }, total: im.sessionsTotal, waiting: im.waitingBackends }
+    if (im.state !== 'ok' && im.state !== 'partial') continue
+    if (im.sessionsTotal === undefined && im.waitingBackends === undefined) continue
+    instances[inst.pod] = {
+      byState: im.sessionsTotal !== undefined ? { ...(im.sessionsByState ?? {}) } : undefined,
+      total: im.sessionsTotal,
+      waiting: im.waitingBackends,
+    }
   }
   return {
     t: Date.parse(data.sampledAt) || Date.now(),
@@ -165,7 +172,7 @@ export function sessionStateSeries(samples: Sample[], pod: string): TimeSeries[]
     labels: { series: g.label },
     dataPoints: samples.map((s) => {
       const inst = s.instances?.[pod]
-      if (!inst) return { timestamp: s.t / 1000, value: null }
+      if (!inst?.byState) return { timestamp: s.t / 1000, value: null }
       let v = 0
       for (const [state, n] of Object.entries(inst.byState)) if (g.states(state)) v += n
       return { timestamp: s.t / 1000, value: v }

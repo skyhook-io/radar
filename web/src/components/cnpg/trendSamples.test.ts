@@ -71,6 +71,13 @@ describe('sampleFrom', () => {
     const s = sampleFrom(rt({ state: 'ok', sessionsTotal: 0 }, { state: 'unreachable' }))
     expect(s.instances).toEqual({ 'pg-1': { byState: {}, total: 0, waiting: undefined } })
   })
+
+  it('keeps lock waits when the session-count query is missing, and leaves session states a gap', () => {
+    const s = sampleFrom(rt({ state: 'partial', waitingBackends: 3 }, { state: 'unreachable' }))
+    expect(s.instances?.['pg-1']).toEqual({ byState: undefined, total: undefined, waiting: 3 })
+    const states = sessionStateSeries([s], 'pg-1')
+    expect(states.every((series) => series.dataPoints[0].value === null)).toBe(true)
+  })
 })
 
 describe('sessionStateSeries', () => {
