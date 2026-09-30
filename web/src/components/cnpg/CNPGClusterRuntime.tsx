@@ -9,6 +9,7 @@ import { CNPGRefreshFailedNotice, Segments } from './shared'
 import { CNPGStorage } from './CNPGStorage'
 import { CNPGBlockingSessions } from './CNPGBlockingSessions'
 import { CNPGReplicationView } from './CNPGReplicationView'
+import { cnpgCheckpointView } from './runtimeModel'
 import { CNPGTrends, useSampleBuffer, type CNPGIntervalTarget, type Sample } from './CNPGTrends'
 
 type Section = 'replication' | 'sessions' | 'transactions' | 'storage' | 'slots' | 'trends'
@@ -95,6 +96,37 @@ export function CNPGClusterRuntime({
   const grant = data.permission.grant ?? `get pods/proxy in ${namespace}`
   const primary = data.instances.find((i) => i.role === 'primary')
   const replicas = data.instances.filter((i) => i.role !== 'primary')
+  // Sessions and Transactions read one instance's exporter; the primary
+  // unless another is picked (kept in the URL like the section).
+  const picked = data.instances.find((i) => i.pod === searchParams.get('instance')) ?? primary
+  const setPicked = (pod: string) =>
+    setSearchParams(
+      (prev) => {
+        const params = new URLSearchParams(prev)
+        if (pod === primary?.pod) params.delete('instance')
+        else params.set('instance', pod)
+        return params
+      },
+      { replace: true, state: location.state },
+    )
+  const picker =
+    data.instances.length > 1 && picked ? (
+      <label className="flex items-center gap-2 text-xs text-theme-text-secondary">
+        Instance
+        <select
+          value={picked.pod}
+          onChange={(e) => setPicked(e.target.value)}
+          className="rounded border border-theme-border bg-theme-base px-1.5 py-0.5 font-mono text-xs text-theme-text-primary"
+        >
+          {data.instances.map((i) => (
+            <option key={i.pod} value={i.pod}>
+              {i.pod}
+              {i.role === 'primary' ? ' (primary)' : i.role === 'replica' ? ' (standby)' : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+    ) : null
 
   return (
     <div className="space-y-4 p-4">
@@ -121,10 +153,10 @@ export function CNPGClusterRuntime({
             <CNPGBlockingSessions namespace={namespace} cluster={name} primary={primary?.pod} />
           </>
         ) : (
-          <SessionsView namespace={namespace} cluster={name} primary={primary} />
+          <SessionsView namespace={namespace} cluster={name} primary={primary} instance={picked} picker={picker} />
         ))}
       {section === 'transactions' &&
-        (denied ? <ProxyDenied what="Transaction rates, cache hit ratio, deadlocks, transaction and multixact ID age, and extension versions" grant={grant} /> : <TransactionsView primary={primary} samples={samples} />)}
+        (denied ? <ProxyDenied what="Transaction rates, cache hit ratio, deadlocks, transaction and multixact ID age, and extension versions" grant={grant} /> : <TransactionsView primary={primary} instance={picked} picker={picker} samples={samples} />)}
       {section === 'storage' && (denied ? <CNPGStorage namespace={namespace} name={name} /> : <StorageView namespace={namespace} name={name} instances={data.instances} />)}
       {section === 'slots' && (denied ? <ProxyDenied what="Replication slots and the WAL they retain" grant={grant} /> : <SlotsView primary={primary} />)}
       {section === 'trends' && <CNPGTrends namespace={namespace} name={name} samples={samples} onOpenInterval={onOpenInterval} />}
@@ -163,15 +195,17 @@ function Unavailable({ inst, what }: { inst?: CNPGRuntimeInstance; what: string 
   return <SourceState label={what} state={inst.metrics.state} error={inst.metrics.error} />
 }
 
-function SessionsView({ namespace, cluster, primary }: { namespace: string; cluster: string; primary?: CNPGRuntimeInstance }) {
+function SessionsView({ namespace, cluster, primary, instance, picker }: { namespace: string; cluster: string; primary?: CNPGRuntimeInstance; instance?: CNPGRuntimeInstance; picker?: ReactNode }) {
   return (
     <div className="space-y-4">
-      <SessionAggregates primary={primary} />
+      {picker}
+      <SessionAggregates primary={instance} />
       <CNPGBlockingSessions namespace={namespace} cluster={cluster} primary={primary?.pod} />
     </div>
   )
 }
 
+// `primary` is the instance shown: the primary unless another was picked.
 function SessionAggregates({ primary }: { primary?: CNPGRuntimeInstance }) {
   const m = primary?.metrics
   if (!m || m.state !== 'ok') return <Card title="Sessions"><Unavailable inst={primary} what="Sessions" /></Card>
@@ -237,17 +271,33 @@ function rate(samples: Sample[], key: 'commits' | 'rollbacks'): number | undefin
   return dv / dt
 }
 
-function TransactionsView({ primary, samples }: { primary?: CNPGRuntimeInstance; samples: Sample[] }) {
+function TransactionsView({ primary, instance, picker, samples }: { primary?: CNPGRuntimeInstance; instance?: CNPGRuntimeInstance; picker?: ReactNode; samples: Sample[] }) {
+  return (
+    <div className="space-y-4">
+      {picker}
+      <TransactionsCard inst={instance} isPrimary={!!instance && instance === primary} samples={samples} />
+      <CheckpointsCard inst={instance} />
+    </div>
+  )
+}
+
+function TransactionsCard({ inst, isPrimary, samples }: { inst?: CNPGRuntimeInstance; isPrimary: boolean; samples: Sample[] }) {
+  const primary = inst
   const m = primary?.metrics
   if (!m || m.state !== 'ok') return <Card title="Transactions"><Unavailable inst={primary} what="Transactions" /></Card>
-  const commits = rate(samples, 'commits')
-  const rollbacks = rate(samples, 'rollbacks')
+  // The page samples the primary's counters only, so rates are the primary's.
+  const commits = isPrimary ? rate(samples, 'commits') : undefined
+  const rollbacks = isPrimary ? rate(samples, 'rollbacks') : undefined
+  const rateText = (v: number | undefined) => (!isPrimary ? 'primary only' : v !== undefined ? v.toFixed(1) : 'collecting…')
   const hit = m.blksHit !== undefined && m.blksRead !== undefined && m.blksHit + m.blksRead > 0 ? (m.blksHit / (m.blksHit + m.blksRead)) * 100 : undefined
   return (
-    <Card title="Transactions" footer="Rates are computed from two consecutive samples taken while this page is open; the exporter refreshes about every 30 s.">
+    <Card
+      title={<>Transactions on {primary!.pod}</>}
+      footer="Rates are computed from two consecutive samples of the primary taken while this page is open; the exporter refreshes about every 30 s."
+    >
       <div className="flex flex-wrap gap-8">
-        <Metric label="Commits / s" value={commits !== undefined ? commits.toFixed(1) : 'collecting…'} />
-        <Metric label="Rollbacks / s" value={rollbacks !== undefined ? rollbacks.toFixed(1) : 'collecting…'} />
+        <Metric label="Commits / s" value={rateText(commits)} />
+        <Metric label="Rollbacks / s" value={rateText(rollbacks)} />
         <Metric label="Cache hit ratio" value={hit !== undefined ? `${hit.toFixed(1)} %` : '—'} />
         <Metric label="Deadlocks (total)" value={m.deadlocksTotal ?? '—'} tone={m.deadlocksTotal ? 'degraded' : undefined} />
         <Metric label="Oldest transaction" value={seconds(m.oldestXactSeconds)} />
@@ -255,6 +305,51 @@ function TransactionsView({ primary, samples }: { primary?: CNPGRuntimeInstance;
       <AgeList title="Transaction ID age (wraparound at ~2 billion)" rows={m.xidAge} family="cnpg_pg_database_xid_age" missing={m.missing} />
       <AgeList title="Multixact ID age (wraparound at ~2 billion)" rows={m.mxidAge} family="cnpg_pg_database_mxid_age" missing={m.missing} />
       <ExtensionUpdates rows={m.extensionUpdates} missing={m.missing} />
+    </Card>
+  )
+}
+
+function CheckpointsCard({ inst }: { inst?: CNPGRuntimeInstance }) {
+  const m = inst?.metrics
+  if (!m || m.state !== 'ok') return <Card title="Checkpoints"><Unavailable inst={inst} what="Checkpoints" /></Card>
+  const c = m.checkpoints
+  if (!c) {
+    return (
+      <Card title={<>Checkpoints on {inst!.pod}</>}>
+        <div className="text-xs text-theme-text-tertiary">
+          Unknown: the exporter reported neither pg_stat_checkpointer (PostgreSQL 17+) nor pg_stat_bgwriter checkpoint counters.
+        </div>
+      </Card>
+    )
+  }
+  const view = cnpgCheckpointView(c, inst!.role)
+  const n = (v?: number) => (v === undefined ? '—' : v.toLocaleString())
+  return (
+    <Card
+      title={<>Checkpoints on {inst!.pod}</>}
+      footer={
+        <>
+          Cumulative since the statistics were last reset, from {c.source}.{' '}
+          {c.source === 'pg_stat_checkpointer'
+            ? 'A standby performs restartpoints instead of checkpoints; they are counted separately.'
+            : 'Before PostgreSQL 17 a standby counts its restartpoints as checkpoints.'}{' '}
+          Many requested checkpoints usually mean max_wal_size is too small for the write load.
+        </>
+      }
+    >
+      <div className="flex flex-wrap gap-8">
+        <Metric label="Timed" value={n(c.timed)} />
+        <Metric label="Requested" value={n(c.requested)} tone={view.pressure ? 'degraded' : undefined} />
+        {view.requestedShare !== undefined && <Metric label="Requested share" value={`${(view.requestedShare * 100).toFixed(0)} %`} />}
+        <Metric label="Buffers written" value={n(c.buffersWritten)} />
+        {view.showRestartpoints ? (
+          <>
+            <Metric label="Restartpoints timed" value={n(c.restartpointsTimed)} />
+            <Metric label="Restartpoints requested" value={n(c.restartpointsRequested)} />
+            <Metric label="Restartpoints done" value={n(c.restartpointsDone)} />
+          </>
+        ) : null}
+      </div>
     </Card>
   )
 }
