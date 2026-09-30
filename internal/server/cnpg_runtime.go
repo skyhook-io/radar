@@ -151,6 +151,7 @@ type CNPGClusterRuntimeResponse struct {
 
 type CNPGInstanceRuntime struct {
 	Pod     string              `json:"pod"`
+	PodUID  types.UID           `json:"podUID,omitempty"`
 	Role    string              `json:"role"`
 	Fenced  bool                `json:"fenced,omitempty"`
 	Status  CNPGInstanceStatus  `json:"status"`
@@ -292,6 +293,14 @@ type CNPGInstanceMetricFacts struct {
 	BlksRead                      *float64              `json:"blksRead,omitempty"`
 	DeadlocksTotal                *float64              `json:"deadlocksTotal,omitempty"`
 	TempBytesTotal                *float64              `json:"tempBytesTotal,omitempty"`
+	// LastUpdateTimestamp is when the exporter last ran its queries (epoch
+	// seconds, cnpg_last_update_timestamp). From 1.30 query results are cached
+	// for monitoring.metricsQueriesTTL, so counters change only between
+	// generations; absent on operators that do not publish it.
+	LastUpdateTimestamp *float64 `json:"lastUpdateTimestamp,omitempty"`
+	// SessionsByState sums client sessions (platform users excluded) per
+	// pg_stat_activity state over every group, before Sessions is capped.
+	SessionsByState map[string]float64 `json:"sessionsByState,omitempty"`
 	// Databases are pg_stat_database counters per datname (cumulative since
 	// the statistics were last reset), for per-database ratios.
 	Databases   []CNPGDatabaseStats     `json:"databases,omitempty"`
@@ -488,7 +497,7 @@ func (s *Server) handleCNPGClusterRuntime(w http.ResponseWriter, r *http.Request
 		Instances:  make([]CNPGInstanceRuntime, len(pods)),
 	}
 	for i, p := range pods {
-		resp.Instances[i] = CNPGInstanceRuntime{Pod: p.Name, Role: cnpgRuntimeRole(p), Fenced: fenced.fences(p.Name)}
+		resp.Instances[i] = CNPGInstanceRuntime{Pod: p.Name, PodUID: p.UID, Role: cnpgRuntimeRole(p), Fenced: fenced.fences(p.Name)}
 	}
 	if len(pods) == 0 {
 		s.writeJSON(w, resp)
@@ -1518,6 +1527,7 @@ func cnpgInstanceMetricFacts(samples map[string][]cnpgSample) (*CNPGInstanceMetr
 		BlksRead:            cnpgSum(samples, "cnpg_pg_stat_database_blks_read"),
 		DeadlocksTotal:      cnpgSum(samples, "cnpg_pg_stat_database_deadlocks"),
 		TempBytesTotal:      cnpgSum(samples, "cnpg_pg_stat_database_temp_bytes"),
+		LastUpdateTimestamp: cnpgSingle(samples, "cnpg_last_update_timestamp", nil),
 		Checkpoints:         cnpgCheckpointFacts(samples),
 	}
 	var capped []string
@@ -1529,6 +1539,10 @@ func cnpgInstanceMetricFacts(samples map[string][]cnpgSample) (*CNPGInstanceMetr
 				continue
 			}
 			total += s.value
+			if facts.SessionsByState == nil {
+				facts.SessionsByState = map[string]float64{}
+			}
+			facts.SessionsByState[s.labels["state"]] += s.value
 			facts.Sessions = append(facts.Sessions, CNPGSessionGroup{
 				State: s.labels["state"], Database: s.labels["datname"], User: s.labels["usename"],
 				Application: s.labels["application_name"], Count: s.value,

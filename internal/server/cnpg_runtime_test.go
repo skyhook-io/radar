@@ -861,3 +861,24 @@ cnpg_pg_stat_checkpointer_buffers_written 1234
 		t.Error("absent families must stay unknown")
 	}
 }
+
+func TestCNPGMetricsGenerationAndSessionsByState(t *testing.T) {
+	samples, err := parseCNPGPromSamples([]byte(cnpgMetricsFixture + "# TYPE cnpg_last_update_timestamp gauge\ncnpg_last_update_timestamp 1.79e+09\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, _ := cnpgInstanceMetricFacts(samples)
+	if !cnpgEqF(facts.LastUpdateTimestamp, 1.79e9) {
+		t.Errorf("generation = %v", facts.LastUpdateTimestamp)
+	}
+	sum := 0.0
+	for _, v := range facts.SessionsByState {
+		sum += v
+	}
+	if facts.SessionsByState["idle"] != 4 || sum != *facts.SessionsTotal {
+		t.Errorf("by state = %v, total %v", facts.SessionsByState, *facts.SessionsTotal)
+	}
+	if old, _ := cnpgInstanceMetricFacts(map[string][]cnpgSample{}); old.LastUpdateTimestamp != nil || old.SessionsByState != nil {
+		t.Error("absent families must stay unknown")
+	}
+}
