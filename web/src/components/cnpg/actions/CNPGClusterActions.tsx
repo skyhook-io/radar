@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, DatabaseBackup, MoreHorizontal, Repeat } from 'lucide-react'
 import { ActionConfirmDialog, Tooltip, cnpgPDBFact, cnpgQuorumFact, type ActionWrite, type CNPGClusterHA } from '@skyhook-io/k8s-ui'
 import {
-  cnpgActionErrorCode,
+  cnpgActionOutcomeLocked,
   useCNPGAction,
   useCNPGClusterCapabilities,
   useCNPGRuntime,
@@ -708,7 +708,7 @@ export function ClusterActionDialog({
       disabledReason={!cap.allowed ? capabilityTitle(cap) : spec.invalid}
       isLoading={mutation.isPending}
       error={mutation.error?.message}
-      outcomeUnknown={cnpgActionErrorCode(mutation.error) === 'outcome_unknown'}
+      outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}
     >
       {spec.body}
     </ActionConfirmDialog>

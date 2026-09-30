@@ -295,7 +295,7 @@ export function useCNPGAction(kind: 'clusters' | 'scheduledbackups' | 'poolers',
   })
 }
 
-export type CNPGActionErrorCode = 'context_changed' | 'changed' | 'blocked' | 'all_fenced' | 'operator_webhook_unavailable' | 'outcome_unknown'
+export type CNPGActionErrorCode = 'context_changed' | 'changed' | 'blocked' | 'all_fenced' | 'operator_webhook_unavailable' | 'outcome_unknown' | 'partial'
 
 // A request that timed out or lost its connection may have been applied by the
 // apiserver anyway. 503 without a code is Radar refusing before any write.
@@ -307,6 +307,22 @@ export function cnpgActionErrorCode(err: unknown): CNPGActionErrorCode | undefin
   const code = err.data?.code
   if (typeof code === 'string') return code as CNPGActionErrorCode
   return CNPG_AMBIGUOUS_STATUSES.has(err.status) ? 'outcome_unknown' : undefined
+}
+
+/**
+ * Confirm stays locked when the last attempt may have taken effect (unknown)
+ * or partly did (partial): repeating it would act on a target that moved.
+ */
+export function cnpgActionOutcomeLocked(err: unknown): boolean {
+  const code = cnpgActionErrorCode(err)
+  return code === 'outcome_unknown' || code === 'partial'
+}
+
+/** The mutations a `partial` refusal reports as already done. */
+export function cnpgActionCompleted(err: unknown): string[] {
+  if (!(err instanceof ApiError) || err.data?.code !== 'partial') return []
+  const done = err.data.completed
+  return Array.isArray(done) ? done.filter((d): d is string => typeof d === 'string') : []
 }
 
 export type CNPGRuntimeSourceState = 'ok' | 'denied' | 'unreachable' | 'error' | 'partial'

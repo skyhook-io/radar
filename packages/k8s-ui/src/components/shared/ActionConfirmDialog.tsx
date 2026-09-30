@@ -48,6 +48,8 @@ export interface ActionConfirmDialogProps {
    * repeating it could apply the action twice.
    */
   outcomeUnknown?: boolean
+  /** Heading for `error` while `outcomeUnknown`; defaults to "Radar could not tell whether this took effect". */
+  outcomeTitle?: string
   /** `wide` for dialogs that show evidence beside their form fields. */
   size?: 'default' | 'wide'
   /** Heading for `error`; defaults to "The write did not happen". */
@@ -75,6 +77,7 @@ export function ActionConfirmDialog({
   isLoading = false,
   error,
   outcomeUnknown = false,
+  outcomeTitle = 'Radar could not tell whether this took effect',
   size = 'default',
   errorTitle = 'The write did not happen',
 }: ActionConfirmDialogProps) {
@@ -194,7 +197,7 @@ export function ActionConfirmDialog({
 
         {error &&
           (outcomeUnknown ? (
-            <AlertBanner variant="warning" title="Radar could not tell whether this took effect" message={error} />
+            <AlertBanner variant="warning" title={outcomeTitle} message={error} />
           ) : (
             <AlertBanner variant="error" title={errorTitle} message={error} />
           ))}

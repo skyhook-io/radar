@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ActionConfirmDialog, Tooltip } from '@skyhook-io/k8s-ui'
-import { cnpgActionErrorCode, useCNPGAction, useCNPGScheduleCapabilities, type CNPGScheduleActionName } from '../../../api/cnpg'
+import { cnpgActionOutcomeLocked, useCNPGAction, useCNPGScheduleCapabilities, type CNPGScheduleActionName } from '../../../api/cnpg'
 import { useToast } from '../../ui/Toast'
 import { useCNPGWriteGuard } from './useCNPGWriteGuard'
 import { cnpgOperatorActionNote } from '../operatorStatus'
@@ -107,7 +107,7 @@ function ScheduleDialog({ kind, namespace, name, onClose }: { kind: CNPGSchedule
       confirmLabel={spec.confirm}
       isLoading={mutation.isPending}
       error={mutation.error?.message}
-      outcomeUnknown={cnpgActionErrorCode(mutation.error) === 'outcome_unknown'}
+      outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}
       disabledReason={data.actions[kind].allowed ? undefined : data.actions[kind].reason}
     />
   )

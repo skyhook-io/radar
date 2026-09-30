@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Pause, Play } from 'lucide-react'
 import { ActionConfirmDialog, Tooltip } from '@skyhook-io/k8s-ui'
-import { cnpgActionErrorCode, useCNPGAction } from '../../../api/cnpg'
+import { cnpgActionOutcomeLocked, useCNPGAction } from '../../../api/cnpg'
 import { useCNPGPoolerCapabilities, type CNPGPoolerCapabilities } from '../../../api/cnpg-sessions'
 import { useToast } from '../../ui/Toast'
 import { useCNPGWriteGuard } from './useCNPGWriteGuard'
@@ -73,7 +73,7 @@ function PoolerDialog({ kind, caps, namespace, name, onClose }: { kind: 'pause' 
       disabledReason={cap.allowed ? undefined : cap.reason}
       isLoading={mutation.isPending}
       error={mutation.error?.message}
-      outcomeUnknown={cnpgActionErrorCode(mutation.error) === 'outcome_unknown'}
+      outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}
     />
   )
 }

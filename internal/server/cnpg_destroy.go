@@ -69,10 +69,20 @@ func cnpgGuardDestroyInstance(f CNPGClusterFacts, i CNPGInstanceFact) string {
 		return "It is the primary: destroying it forces an unplanned failover. Switch over to a standby first"
 	case i.Pod == f.TargetPrimary:
 		return "It is the target of a switchover"
-	case f.switchoverInFlight() != "":
+	case f.switchoverInFlight() != "", f.Phase == cnpgPhaseSwitchover, f.Phase == cnpgPhaseFailover:
 		return "A switchover or failover is in progress"
 	}
 	return ""
+}
+
+// cnpgPodLabelledPrimary reads the role the instance manager writes on its
+// own Pod, which can lead status.currentPrimary during a promotion.
+func cnpgPodLabelledPrimary(pod *corev1.Pod) bool {
+	role := pod.Labels["cnpg.io/instanceRole"]
+	if role == "" {
+		role = pod.Labels["role"]
+	}
+	return role == "primary"
 }
 
 type cnpgReviewedPVC struct {
@@ -292,11 +302,53 @@ func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGAction
 		return nil, cnpgChanged(x.facts, "The volumes of %s changed since you reviewed them (now: %s); review the action again", p.Pod, cnpgPVCList(now))
 	}
 
+	// CloudNativePG offers no lock against a failover, so the instance is
+	// re-verified as a standby before every destructive step: the window in
+	// which a promotion can land is one request, not the whole sequence.
+	var completed []string
+	podDeleted := false
+	stop := func(err error) error {
+		if len(completed) == 0 {
+			return err
+		}
+		return cnpgPartial(completed, err)
+	}
+	recheck := func() error {
+		fresh, err := x.c.dyn.Resource(cnpgClusterGVR).Namespace(namespace).Get(ctx, cluster, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("re-reading Cluster %s/%s: %w", namespace, cluster, err)
+		}
+		facts, _ := cnpgClusterFactsOf(ctx, nil, fresh)
+		if fresh.GetUID() != clusterUID {
+			return cnpgChanged(facts, "Cluster %s/%s was deleted and recreated; nothing further was done", namespace, cluster)
+		}
+		if r := cnpgGuardDestroyInstance(facts, CNPGInstanceFact{Pod: p.Pod}); r != "" {
+			return cnpgChanged(facts, "%s can no longer be destroyed: %s", p.Pod, r)
+		}
+		pod, err := x.c.typed.CoreV1().Pods(namespace).Get(ctx, p.Pod, metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err):
+			return nil
+		case err != nil:
+			return fmt.Errorf("re-reading Pod %s: %w", p.Pod, err)
+		case podDeleted:
+			return nil
+		case string(pod.UID) != p.PodUID:
+			return cnpgChanged(facts, "Pod %s was replaced since you reviewed it", p.Pod)
+		case cnpgPodLabelledPrimary(pod):
+			return cnpgChanged(facts, "%s is now labelled primary: it can no longer be destroyed", p.Pod)
+		}
+		return nil
+	}
+
 	if p.KeepPVC {
 		for i := range pvcs {
 			pvc := &pvcs[i]
 			if !cnpgOwnedByCluster(pvc.OwnerReferences, cluster, clusterUID) {
 				continue
+			}
+			if err := recheck(); err != nil {
+				return nil, stop(err)
 			}
 			refs := pvc.OwnerReferences[:0:0]
 			for _, ref := range pvc.OwnerReferences {
@@ -314,36 +366,52 @@ func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGAction
 			pvc.Annotations[cnpgPVCStatusAnnotation] = cnpgPVCStatusDetached
 			pvc.Labels[cnpgInstanceNameLabel] = p.Pod
 			if _, err := x.c.typed.CoreV1().PersistentVolumeClaims(namespace).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil {
-				return nil, fmt.Errorf("detaching PVC %s: %w", pvc.Name, err)
+				return nil, stop(fmt.Errorf("detaching PVC %s: %w", pvc.Name, err))
 			}
+			completed = append(completed, "detached PVC "+pvc.Name)
 		}
 	} else {
 		for _, pvc := range pvcs {
+			if err := recheck(); err != nil {
+				return nil, stop(err)
+			}
 			uid := pvc.UID
 			err := x.c.typed.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, pvc.Name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}})
 			if err != nil && !apierrors.IsNotFound(err) {
-				return nil, fmt.Errorf("deleting PVC %s: %w", pvc.Name, err)
+				return nil, stop(fmt.Errorf("deleting PVC %s: %w", pvc.Name, err))
 			}
+			completed = append(completed, "deleted PVC "+pvc.Name)
 		}
 	}
 
 	if inst.PodExists {
+		if err := recheck(); err != nil {
+			return nil, stop(err)
+		}
 		uid := types.UID(p.PodUID)
 		err := x.c.typed.CoreV1().Pods(namespace).Delete(ctx, p.Pod, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}})
 		if err != nil && !apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("deleting Pod %s: %w", p.Pod, err)
+			return nil, stop(fmt.Errorf("deleting Pod %s: %w", p.Pod, err))
 		}
+		completed = append(completed, "deleted Pod "+p.Pod)
+		podDeleted = true
 	}
 
 	jobs, err := cnpgInstanceJobs(ctx, x.c.typed, namespace, p.Pod)
 	if err != nil {
-		return nil, fmt.Errorf("listing the instance's Jobs: %w", err)
+		return nil, stop(fmt.Errorf("listing the instance's Jobs: %w", err))
+	}
+	if len(jobs) > 0 {
+		if err := recheck(); err != nil {
+			return nil, stop(err)
+		}
 	}
 	background := metav1.DeletePropagationBackground
 	for _, j := range jobs {
 		if err := x.c.typed.BatchV1().Jobs(namespace).Delete(ctx, j, metav1.DeleteOptions{PropagationPolicy: &background}); err != nil && !apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("deleting Job %s: %w", j, err)
+			return nil, stop(fmt.Errorf("deleting Job %s: %w", j, err))
 		}
+		completed = append(completed, "deleted Job "+j)
 	}
 	log.Printf("[cnpg] destroyed instance %s of %s/%s (keepPVC=%v, pvcs=%d, jobs=%d)", sanitizeForLog(p.Pod), sanitizeForLog(namespace), sanitizeForLog(cluster), p.KeepPVC, len(pvcs), len(jobs))
 

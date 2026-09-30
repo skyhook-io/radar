@@ -75,6 +75,7 @@ const (
 	cnpgCodeAllFenced      = "all_fenced"
 	cnpgCodeWebhook        = "operator_webhook_unavailable"
 	cnpgCodeAmbiguous      = "outcome_unknown"
+	cnpgCodePartial        = "partial"
 
 	cnpgPermAllowed = "allowed"
 	cnpgPermDenied  = "denied"
@@ -314,12 +315,40 @@ type cnpgActionError struct {
 	Code    string
 	Message string
 	Current any
+	// Completed lists the mutations that took effect before a multi-step
+	// action stopped (code partial).
+	Completed []string
 }
 
 func (e *cnpgActionError) Error() string { return e.Message }
 
 func cnpgRefuse(status int, code, format string, args ...any) *cnpgActionError {
 	return &cnpgActionError{Status: status, Code: code, Message: fmt.Sprintf(format, args...)}
+}
+
+// cnpgPartial reports a multi-step action that stopped after some of its
+// mutations took effect; retrying it blindly would act on a changed target.
+func cnpgPartial(completed []string, cause error) *cnpgActionError {
+	status := http.StatusInternalServerError
+	var ae *cnpgActionError
+	switch {
+	case errors.As(cause, &ae):
+		status = ae.Status
+	case apierrors.IsForbidden(cause):
+		status = http.StatusForbidden
+	case apierrors.IsConflict(cause), apierrors.IsNotFound(cause):
+		status = http.StatusConflict
+	case errors.Is(cause, context.DeadlineExceeded) || apierrors.IsTimeout(cause) || apierrors.IsServerTimeout(cause):
+		status = http.StatusGatewayTimeout
+	}
+	e := &cnpgActionError{
+		Status: status, Code: cnpgCodePartial, Completed: append([]string(nil), completed...),
+		Message: fmt.Sprintf("Stopped part-way: %s. Already done: %s", cause.Error(), strings.Join(completed, ", ")),
+	}
+	if ae != nil {
+		e.Current = ae.Current
+	}
+	return e
 }
 
 type cnpgActionClients struct {
@@ -2110,6 +2139,9 @@ func (s *Server) writeCNPGActionError(w http.ResponseWriter, err error, action, 
 		}
 		if ae.Current != nil {
 			body["current"] = ae.Current
+		}
+		if len(ae.Completed) > 0 {
+			body["completed"] = ae.Completed
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(ae.Status)

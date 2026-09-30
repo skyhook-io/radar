@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ActionConfirmDialog, PaneLoader } from '@skyhook-io/k8s-ui'
-import { cnpgActionErrorCode, useCNPGAction } from '../../../api/cnpg'
+import { cnpgActionCompleted, cnpgActionErrorCode, cnpgActionOutcomeLocked, useCNPGAction } from '../../../api/cnpg'
 import { useCNPGDestroyPlan } from '../../../api/cnpg-sessions'
 import { useToast } from '../../ui/Toast'
 import { trackCNPGOperation } from '../operations/store'
@@ -18,6 +18,8 @@ export function CNPGDestroyInstanceDialog({ namespace, cluster, pod, onClose }: 
   const data = plan.data
   const cap = data ? (keep ? data.actions.keep : data.actions.delete) : undefined
   const pvcNames = data?.pvcs.map((p) => p.name) ?? []
+  const partial = cnpgActionErrorCode(mutation.error) === 'partial'
+  const completed = cnpgActionCompleted(mutation.error)
 
   return (
     <ActionConfirmDialog
@@ -96,8 +98,22 @@ export function CNPGDestroyInstanceDialog({ namespace, cluster, pod, onClose }: 
       }
       isLoading={mutation.isPending}
       error={mutation.error?.message}
-      outcomeUnknown={cnpgActionErrorCode(mutation.error) === 'outcome_unknown'}
+      outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}
+      outcomeTitle={partial ? 'Only part of this took effect' : undefined}
     >
+      {partial && completed.length > 0 && (
+        <div className="rounded-lg border border-theme-border bg-theme-elevated p-3 text-sm">
+          <div className="mb-1 text-xs text-theme-text-secondary">Already done before it stopped</div>
+          <ul className="space-y-0.5">
+            {completed.map((c) => (
+              <li key={c} className="font-mono text-xs text-theme-text-primary">
+                {c}
+              </li>
+            ))}
+          </ul>
+          <div className="mt-2 text-xs text-theme-text-tertiary">Check the instance and its volumes before doing anything else; confirming again is disabled.</div>
+        </div>
+      )}
       {plan.isLoading && <PaneLoader label="Reading the instance’s volumes…" className="h-16" />}
       {data && (
         <div className="space-y-3">

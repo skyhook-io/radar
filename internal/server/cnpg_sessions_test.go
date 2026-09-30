@@ -11,10 +11,12 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -273,6 +275,74 @@ func TestCNPGActionDestroyInstanceRefusals(t *testing.T) {
 	}
 	if len(env.deletes) != 0 {
 		t.Errorf("a refusal deleted %v", env.deletes)
+	}
+}
+
+func TestCNPGActionDestroyInstanceStopsWhenPromotedMidway(t *testing.T) {
+	env := cnpgDestroyEnv(t)
+	promoted := false
+	env.typed.PrependReactor("delete", "persistentvolumeclaims", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if !promoted {
+			promoted = true
+			obj := cnpgActionCluster(func(o map[string]any) {
+				st := o["status"].(map[string]any)
+				st["targetPrimary"], st["phase"] = "pg-2", cnpgPhaseFailover
+			})
+			if err := env.dyn.Tracker().Update(cnpgClusterGVR, obj, "db"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return false, nil, nil
+	})
+	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
+		cnpgActionReq(t, cnpgActionFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+	ae, ok := cnpgActionStatus(t, err)
+	if !ok || ae.Code != cnpgCodePartial || ae.Status != http.StatusConflict || strings.Join(ae.Completed, ",") != "deleted PVC pg-2" {
+		t.Fatalf("promotion mid-destroy = %+v, want 409 partial after the first PVC only", err)
+	}
+	if _, err := env.typed.CoreV1().PersistentVolumeClaims("db").Get(context.Background(), "pg-2-wal", metav1.GetOptions{}); err != nil {
+		t.Errorf("the WAL volume of a now-target instance was deleted: %v", err)
+	}
+	if len(env.deletes) != 0 {
+		t.Errorf("the Pod of a now-target instance was deleted: %v", env.deletes)
+	}
+}
+
+func TestCNPGActionDestroyInstanceRefusesPodLabelledPrimary(t *testing.T) {
+	env := cnpgDestroyEnv(t)
+	pod := cnpgActionPod("pg-2", "u2", true)
+	pod.Labels["cnpg.io/instanceRole"] = "primary"
+	if _, err := env.typed.CoreV1().Pods("db").Update(context.Background(), pod, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
+		cnpgActionReq(t, cnpgActionFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeChanged || len(ae.Completed) != 0 {
+		t.Fatalf("pod labelled primary = %v, want 409 changed before any write", err)
+	}
+	if _, err := env.typed.CoreV1().PersistentVolumeClaims("db").Get(context.Background(), "pg-2", metav1.GetOptions{}); err != nil {
+		t.Errorf("PVC deleted despite the refusal: %v", err)
+	}
+}
+
+func TestCNPGActionDestroyInstanceReportsPartialOutcome(t *testing.T) {
+	env := cnpgDestroyEnv(t)
+	env.typed.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "pg-2", errors.New("denied by admission policy"))
+	})
+	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
+		cnpgActionReq(t, cnpgActionFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+	ae, ok := cnpgActionStatus(t, err)
+	if !ok || ae.Code != cnpgCodePartial || ae.Status != http.StatusForbidden ||
+		strings.Join(ae.Completed, ",") != "deleted PVC pg-2,deleted PVC pg-2-wal" {
+		t.Fatalf("pod delete refused after PVCs = %+v, want 403 partial listing both PVCs", err)
+	}
+
+	rec := httptest.NewRecorder()
+	(&Server{}).writeCNPGActionError(rec, err, "destroyInstance", "db", "pg")
+	body := rec.Body.String()
+	if rec.Code != http.StatusForbidden || !strings.Contains(body, `"code":"partial"`) || !strings.Contains(body, `"completed":["deleted PVC pg-2","deleted PVC pg-2-wal"]`) {
+		t.Errorf("response = %d %s", rec.Code, body)
 	}
 }
 
