@@ -1,3 +1,4 @@
+import { formatBytes } from './lsn'
 import type { CNPGStorageTarget } from '../../api/cnpg-storage'
 
 function setPath(obj: Record<string, any>, path: string[], value: unknown) {
@@ -38,4 +39,15 @@ export function buildResizeManifest(cluster: any, target: CNPGStorageTarget, siz
     metadata: { name: cluster?.metadata?.name, namespace: cluster?.metadata?.namespace },
     spec,
   }
+}
+
+/**
+ * WAL held by replication slots on one instance. Slots overlap (they can
+ * hold the same segments), so the figure is the largest slot, never a sum.
+ */
+export function cnpgSlotRetentionText(slots: { slot: string; bytes: number }[]): string {
+  if (slots.length === 0) return 'No slots'
+  const max = slots.reduce((m, s) => Math.max(m, s.bytes), 0)
+  if (max === 0) return formatBytes(0)
+  return slots.length === 1 ? formatBytes(max) : `${formatBytes(max)} (largest slot)`
 }

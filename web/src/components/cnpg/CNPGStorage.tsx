@@ -31,7 +31,7 @@ import {
 import { Notice } from '../capacity/shared'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { useCNPGWriteGuard } from './actions/useCNPGWriteGuard'
-import { buildResizeManifest } from './storageModel'
+import { buildResizeManifest, cnpgSlotRetentionText } from './storageModel'
 import { CNPGRefreshFailedNotice } from './shared'
 
 const CNPG_GROUP = 'postgresql.cnpg.io'
@@ -180,7 +180,6 @@ function WALHolders({ wal, primary }: { wal: CNPGStorageWAL; primary: boolean })
     )
   }
   const slots = wal.slots ?? []
-  const retained = slots.reduce((m, s) => Math.max(m, s.bytes), 0)
   return (
     <div>
       <div className="grid gap-3 sm:grid-cols-3">
@@ -209,7 +208,7 @@ function WALHolders({ wal, primary }: { wal: CNPGStorageWAL; primary: boolean })
         />
         <WALFact
           label="Held by replication slots"
-          value={wal.metrics.state !== 'ok' ? '—' : slots.length === 0 ? 'No slots' : `up to ${formatBytes(retained)}`}
+          value={wal.metrics.state !== 'ok' ? '—' : cnpgSlotRetentionText(slots)}
           detail={slots.length > 0 ? slots.map((s) => `${s.slot} ${formatBytes(s.bytes)}`).join(' · ') : undefined}
           source="Exporter pg_replication_slots"
           missing={wal.metrics.state !== 'ok' ? wal.metrics.error || wal.metrics.reason || wal.metrics.state : undefined}

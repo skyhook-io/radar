@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildResizeManifest } from './storageModel'
+import { buildResizeManifest, cnpgSlotRetentionText } from './storageModel'
 
 const cluster = {
   metadata: { name: 'pg', namespace: 'db' },
@@ -28,5 +28,16 @@ describe('buildResizeManifest', () => {
     expect(m.spec.tablespaces[0]).toEqual(cluster.spec.tablespaces[0])
     expect(m.spec.tablespaces[1].storage).toEqual({ pvcTemplate: { resources: { requests: { storage: '80Gi' } }, storageClassName: 'slow' } })
     expect(cluster.spec.tablespaces[1]!.storage.pvcTemplate?.resources.requests.storage).toBe('50Gi')
+  })
+})
+
+describe('cnpgSlotRetentionText', () => {
+  it('shows the largest slot, never a sum, and 0 B when nothing is held', () => {
+    expect(cnpgSlotRetentionText([])).toBe('No slots')
+    expect(cnpgSlotRetentionText([{ slot: 'a', bytes: 0 }])).toBe('0 B')
+    expect(cnpgSlotRetentionText([{ slot: 'a', bytes: 1024 }])).toBe('1.0 KiB')
+    const two = cnpgSlotRetentionText([{ slot: 'a', bytes: 10 * 1024 * 1024 }, { slot: 'b', bytes: 2 * 1024 * 1024 }])
+    expect(two).toBe('10 MiB (largest slot)')
+    expect(two).not.toContain('up to')
   })
 })
