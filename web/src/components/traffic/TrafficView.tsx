@@ -1220,7 +1220,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                   {coverage && (
                     // Not a warning: a busy cluster reaches the limit on every
                     // fetch. It says which part of the window the map shows.
-                    <Tooltip content={`Radar reads the newest ${(flowsData?.nodeFlowLimit ?? 0).toLocaleString()} flows from each node. On at least one node they did not reach back to the start of the ${timeRange} window, so older traffic is not shown; everything after that point is.`}>
+                    <Tooltip content={`Radar reads at most ${(flowsData?.nodeFlowLimit ?? 0).toLocaleString()} of the newest flows from each node. At least one node reached that limit before the start of the ${timeRange} window, so its earlier traffic is not included. Other nodes may still show older flows, and gaps from other causes are reported separately.`}>
                       <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[10px] text-theme-text-secondary tabular-nums">
                         <Clock className="w-3 h-3" /> {coverage} of {timeRange}
                       </div>

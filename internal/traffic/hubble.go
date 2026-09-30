@@ -903,22 +903,33 @@ func hubbleFlowsRequest(opts FlowOptions, follow bool) *observerpb.GetFlowsReque
 			{DestinationPod: []string{opts.Namespace + "/"}},
 		}
 	}
-	// Reply packets at L3/L4 are dropped by callerOrientedFlow anyway; excluding
-	// them here stops them spending the per-node limit, which on a live cluster
-	// they took over 40% of. Only trace events with an explicit is_reply=true
-	// match, which is exactly that set: L7 responses, drops, policy verdicts,
-	// socket traces and flows of unknown direction all still arrive.
-	req.Blacklist = []*flowpb.FlowFilter{{
-		Reply:     []bool{true},
-		EventType: []*flowpb.EventTypeFilter{{Type: hubbleEventTypeTrace}},
-	}}
+	req.Blacklist = []*flowpb.FlowFilter{
+		// Reply packets at L3/L4 are dropped by callerOrientedFlow anyway;
+		// excluding them here stops them spending the per-node limit, which on a
+		// live cluster they took over 40% of. Only packet traces with an explicit
+		// is_reply=true match — the only L3/L4 records Cilium marks as replies —
+		// so L7 responses, drops, policy verdicts, socket traces and flows of
+		// unknown direction all still arrive.
+		{
+			Reply:     []bool{true},
+			EventType: []*flowpb.EventTypeFilter{{Type: hubbleEventTypeTrace}},
+		},
+		// Agent and debug events are not flows, but a node counts them toward
+		// Number as it walks back through its buffer. Left in, a node could hit
+		// its limit while returning fewer flows than the limit, and the fetch
+		// would read as complete when it was cut.
+		{EventType: []*flowpb.EventTypeFilter{{Type: hubbleEventTypeAgent}, {Type: hubbleEventTypeDebug}}},
+	}
 	return req
 }
 
-// hubbleEventTypeTrace is Cilium's monitor message type for packet trace events
-// (pkg/monitor/api MessageTypeTrace), kept local rather than importing that
-// package for one number.
-const hubbleEventTypeTrace = 4
+// Cilium's monitor message types (pkg/monitor/api MessageType*), kept local
+// rather than importing that package for three numbers.
+const (
+	hubbleEventTypeDebug = 2
+	hubbleEventTypeTrace = 4
+	hubbleEventTypeAgent = 130
+)
 
 // hubbleDefaultNodeLimit is how many flows each node returns when the caller
 // sets no limit. Hubble Relay applies Number per node, not in total.

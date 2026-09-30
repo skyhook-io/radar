@@ -3,6 +3,7 @@ package traffic
 import (
 	"context"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -308,14 +309,25 @@ func TestHubbleFlowsRequest(t *testing.T) {
 		t.Errorf("namespace whitelist = %v, want source OR destination", req.GetWhitelist())
 	}
 	bl := req.GetBlacklist()
-	if len(bl) != 1 || len(bl[0].GetReply()) != 1 || !bl[0].GetReply()[0] ||
+	if len(bl) != 2 || len(bl[0].GetReply()) != 1 || !bl[0].GetReply()[0] ||
 		len(bl[0].GetEventType()) != 1 || bl[0].GetEventType()[0].GetType() != hubbleEventTypeTrace {
-		t.Errorf("blacklist = %v, want exactly explicit trace replies", bl)
+		t.Errorf("blacklist = %v, want explicit trace replies first", bl)
+	}
+	// Non-flow events would otherwise count toward each node's Number without
+	// being delivered as flows, hiding that the node reached its limit.
+	if len(bl) == 2 {
+		var types []int32
+		for _, et := range bl[1].GetEventType() {
+			types = append(types, et.GetType())
+		}
+		if len(bl[1].GetReply()) != 0 || !slices.Equal(types, []int32{hubbleEventTypeAgent, hubbleEventTypeDebug}) {
+			t.Errorf("second blacklist entry = %v, want agent and debug events", bl[1])
+		}
 	}
 	if def := hubbleFlowsRequest(FlowOptions{}, false); def.GetNumber() != hubbleDefaultNodeLimit {
 		t.Errorf("default Number = %d, want %d", def.GetNumber(), hubbleDefaultNodeLimit)
 	}
-	if stream := hubbleFlowsRequest(FlowOptions{Namespace: "shop"}, true); stream.GetNumber() != 0 || len(stream.GetBlacklist()) != 1 || !stream.GetFollow() {
+	if stream := hubbleFlowsRequest(FlowOptions{Namespace: "shop"}, true); stream.GetNumber() != 0 || len(stream.GetBlacklist()) != 2 || !stream.GetFollow() {
 		t.Errorf("stream request = %v, want follow with the same blacklist and no limit", stream)
 	}
 }
