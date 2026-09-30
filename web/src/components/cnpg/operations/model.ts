@@ -53,7 +53,29 @@ export interface CNPGObservation {
   runtime?: CNPGRuntimeResponse
   /** Backups of the namespace, or undefined when they are not readable. */
   backups?: any[]
+  /**
+   * When each source was last fetched successfully and whether its latest
+   * fetch failed. A source without a record here, not fetched successfully
+   * since the operation started, or whose refresh failed is withheld from
+   * its observer: cached answers from before the action must not certify
+   * its outcome.
+   */
+  freshness?: Partial<Record<CNPGObservedSource, { updatedAt: number; failed: boolean }>>
 }
+
+export type CNPGObservedSource = 'facts' | 'cluster' | 'ha' | 'runtime' | 'backups'
+
+/** The observation with every stale or failed source removed. */
+export function freshObservation(op: CNPGTrackedOperation, obs: CNPGObservation): CNPGObservation {
+  const out: CNPGObservation = { ...obs }
+  for (const source of CNPG_OBSERVED_SOURCES) {
+    const f = obs.freshness?.[source]
+    if (!f || f.failed || f.updatedAt < op.startedAt) out[source] = undefined
+  }
+  return out
+}
+
+const CNPG_OBSERVED_SOURCES: readonly CNPGObservedSource[] = ['facts', 'cluster', 'ha', 'runtime', 'backups']
 
 export interface CNPGObserverResult {
   state: Exclude<CNPGOpState, 'superseded' | 'stalled'>
@@ -93,7 +115,7 @@ export function advanceCNPGOperation(op: CNPGTrackedOperation, obs: CNPGObservat
   }
   const observer = observers.get(op.kind)
   if (!observer) return { ...op, state: 'unobservable', detail: 'Radar has no way to follow this operation' }
-  const res = observer(op, obs)
+  const res = observer(op, freshObservation(op, obs))
   const moved = res.progressKey !== undefined && res.progressKey !== op.progressKey
   const lastProgressAt = moved ? obs.now : op.lastProgressAt
   let state: CNPGOpState = res.state
@@ -322,32 +344,31 @@ registerCNPGOperationObserver('reload', () => ({
 }))
 
 /**
- * Whether fencing stopped PostgreSQL on `pod`. Pod unreadiness alone is not
- * evidence: the Pod may have been unready before. Stopped needs the fence
- * applied, a Pod that was ready when the fence was requested and is not now,
- * and no runtime answer showing PostgreSQL still serving WAL positions.
+ * Whether fencing stopped PostgreSQL on `pod`. Only the instance manager can
+ * say so: its status answered in full (not partial) with no current,
+ * received or replay WAL position. A Pod turning unready is not evidence —
+ * a failing probe does that too — so without that answer the step is unknown.
  */
-function fencedPostgresStopped(op: CNPGTrackedOperation, obs: CNPGObservation, pod: string): boolean | null {
+function fencedPostgresStopped(obs: CNPGObservation, pod: string): boolean | null {
   const f = obs.facts
   if (!f) return null
   if (!f.fencedInstances.all && !f.fencedInstances.instances.includes(pod)) return false
   const rt = runtimeInstance(obs, pod)?.status
-  if (rt?.state === 'ok' && (rt.currentLsn || rt.receivedLsn || rt.replayLsn)) return false
-  const ready = readyNow(obs, pod)
-  if (ready === true) return false
-  if (ready === null) return null
-  const readyAtStart = (op.baseline.readyAtStart as Record<string, boolean | null> | undefined)?.[pod]
-  return readyAtStart === true ? true : null
+  const walPosition = !!(rt?.currentLsn || rt?.receivedLsn || rt?.replayLsn)
+  if ((rt?.state === 'ok' || rt?.state === 'partial') && walPosition) return false
+  if (rt?.state === 'ok') return true
+  if (readyNow(obs, pod) === true) return false
+  return null
 }
 
 registerCNPGOperationObserver('fence', (op, obs) => {
   const pods = ((op.baseline.instances as string[]) ?? [])
-  const steps: CNPGOpStep[] = pods.map((p) => ({ label: `${p}: PostgreSQL stopped`, done: fencedPostgresStopped(op, obs, p) }))
+  const steps: CNPGOpStep[] = pods.map((p) => ({ label: `${p}: PostgreSQL stopped`, done: fencedPostgresStopped(obs, p) }))
   const state = summarizeSteps(steps)
   const detail =
     state === 'unobservable'
-      ? 'Fenced; whether PostgreSQL stopped cannot be told: the Pod was not ready before fencing, or its readiness is not readable'
-      : 'A fenced instance keeps its Pod but stops PostgreSQL, so a Pod that was ready turns not ready'
+      ? 'Fenced; that PostgreSQL stopped is unverified: it needs the instance manager’s own status (get pods/proxy), and a Pod turning unready is not proof'
+      : 'A fenced instance keeps its Pod but stops PostgreSQL'
   return { state, steps, detail, progressKey: key(steps) }
 })
 

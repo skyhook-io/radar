@@ -71,7 +71,13 @@ function ha(over: Partial<CNPGClusterHA>): CNPGClusterHA {
   }
 }
 
-const obs = (o: Partial<CNPGObservation>): CNPGObservation => ({ now: T0 + 30_000, clusterUID: 'uid-1', ...o })
+const fresh = { updatedAt: T0 + 30_000, failed: false }
+const obs = (o: Partial<CNPGObservation>): CNPGObservation => ({
+  now: T0 + 30_000,
+  clusterUID: 'uid-1',
+  freshness: { facts: fresh, cluster: fresh, ha: fresh, runtime: fresh, backups: fresh },
+  ...o,
+})
 
 describe('switchover observer', () => {
   it('walks from observed to completed only when the old primary streams and rw points at the target', () => {
@@ -176,16 +182,14 @@ describe('destroyInstance observer', () => {
   const destroy = op({ kind: 'destroyInstance', target: { name: 'pg-3', uid: 'uid-pg-3' }, baseline: { instances: ['pg-1', 'pg-2', 'pg-3'] } })
 
   it('stays open until a replacement instance exists and is ready', () => {
-    const obs: CNPGObservation = { now: T0 + 60_000, facts: facts({ phase: 'Creating a new replica', instances: [inst('pg-1', true), inst('pg-2', true), inst('pg-4', false)] }) }
-    const next = advanceCNPGOperation(destroy, obs)
+    const next = advanceCNPGOperation(destroy, obs({ now: T0 + 60_000, facts: facts({ phase: 'Creating a new replica', instances: [inst('pg-1', true), inst('pg-2', true), inst('pg-4', false)] }) }))
     expect(next.state).toBe('progressing')
     expect(next.steps?.[0].done).toBe(true)
     expect(next.steps?.[1].label).toContain('pg-4')
   })
 
   it('never completes while the destroyed instance is still there', () => {
-    const obs: CNPGObservation = { now: T0 + 60_000, facts: facts({ instances: [inst('pg-1', true), inst('pg-2', true), inst('pg-3', true)] }) }
-    expect(advanceCNPGOperation(destroy, obs).state).not.toBe('completed')
+    expect(advanceCNPGOperation(destroy, obs({ now: T0 + 60_000, facts: facts({ instances: [inst('pg-1', true), inst('pg-2', true), inst('pg-3', true)] }) })).state).not.toBe('completed')
   })
 })
 
@@ -208,26 +212,74 @@ describe('operations Radar cannot observe', () => {
 describe('fence observer', () => {
   const inst = (pod: string, ready: boolean) => ({ pod, podUID: `uid-${pod}`, role: 'standby' as const, ready, healthy: ready, fenced: true, podReadable: true, podExists: true })
   const fenced = facts({ fencedInstances: { raw: '["pg-2"]', all: false, instances: ['pg-2'] }, instances: [inst('pg-2', false)] })
-  const fence = (readyAtStart: boolean | null) => op({ kind: 'fence', label: 'Fence pg-2', target: undefined, baseline: { instances: ['pg-2'], readyAtStart: { 'pg-2': readyAtStart } } })
+  const fence = () => op({ kind: 'fence', label: 'Fence pg-2', target: undefined, baseline: { instances: ['pg-2'] } })
+  const withStatus = (status: Record<string, unknown>) => {
+    const rt = runtime('pg-1', [])
+    rt.instances.push({ pod: 'pg-2', role: 'replica', status, metrics: { state: 'ok' } } as never)
+    return rt
+  }
 
-  it('does not infer PostgreSQL stopped from a Pod that was already unready', () => {
-    const o = advanceCNPGOperation(fence(false), obs({ facts: fenced }))
+  it('leaves PostgreSQL stopped unverified when only the Pod turned unready', () => {
+    const o = advanceCNPGOperation(fence(), obs({ facts: fenced }))
     expect(o.state).toBe('unobservable')
     expect(o.steps?.[0].done).toBeNull()
   })
-  it('completes when the fence is applied and a Pod that was ready turned unready', () => {
-    const o = advanceCNPGOperation(fence(true), obs({ facts: fenced }))
+  it('does not complete on a partial status that still reports a WAL position', () => {
+    const o = advanceCNPGOperation(fence(), obs({ facts: fenced, runtime: withStatus({ state: 'partial', receivedLsn: '0/3000000' }) }))
+    expect(o.state).not.toBe('completed')
+    expect(o.steps?.[0].done).toBe(false)
+  })
+  it('does not count a partial status without WAL positions as proof', () => {
+    const o = advanceCNPGOperation(fence(), obs({ facts: fenced, runtime: withStatus({ state: 'partial' }) }))
+    expect(o.steps?.[0].done).toBeNull()
+  })
+  it('completes when the instance manager answers in full with no WAL position', () => {
+    const o = advanceCNPGOperation(fence(), obs({ facts: fenced, runtime: withStatus({ state: 'ok' }) }))
     expect(o.state).toBe('completed')
   })
-  it('is not done while PostgreSQL still reports WAL positions', () => {
-    const rt = runtime('pg-1', [])
-    rt.instances.push({ pod: 'pg-2', role: 'replica', status: { state: 'ok', receivedLsn: '0/3000000' }, metrics: { state: 'ok' } } as never)
-    const o = advanceCNPGOperation(fence(true), obs({ facts: fenced, runtime: rt }))
+  it('is not done before the fence annotation lands', () => {
+    const o = advanceCNPGOperation(fence(), obs({ facts: facts({ instances: [inst('pg-2', false)] }), runtime: withStatus({ state: 'ok' }) }))
     expect(o.steps?.[0].done).toBe(false)
   })
-  it('is not done before the fence annotation lands', () => {
-    const o = advanceCNPGOperation(fence(true), obs({ facts: facts({ instances: [inst('pg-2', false)] }) }))
-    expect(o.steps?.[0].done).toBe(false)
+})
+
+describe('stale observation sources', () => {
+  const promoted = () => ({
+    facts: facts({ currentPrimary: 'pg-2', targetPrimary: 'pg-2' }),
+    runtime: runtime('pg-2', [{ pod: 'pg-1', state: 'streaming' }]),
+    ha: ha({ rwEndpoints: { state: 'ok', service: 'pg-rw', pods: ['pg-2'] } }),
+  })
+  const now = T0 + 30_000
+
+  it('an hour-old endpoints answer whose refresh failed cannot certify a switchover', () => {
+    const o = advanceCNPGOperation(
+      op({}),
+      obs({
+        ...promoted(),
+        freshness: {
+          facts: { updatedAt: now, failed: false },
+          runtime: { updatedAt: now, failed: false },
+          ha: { updatedAt: T0 - 3_600_000, failed: true },
+        },
+      }),
+    )
+    expect(o.state).not.toBe('completed')
+    expect(o.steps?.find((s) => s.label.startsWith('Read-write Service'))?.done).toBeNull()
+  })
+  it('an answer from before the action is withheld even when its refresh did not fail', () => {
+    const o = advanceCNPGOperation(
+      op({}),
+      obs({ ...promoted(), freshness: { facts: { updatedAt: now, failed: false }, runtime: { updatedAt: now, failed: false }, ha: { updatedAt: T0 - 1, failed: false } } }),
+    )
+    expect(o.state).not.toBe('completed')
+  })
+  it('fresh sources still complete it', () => {
+    const o = advanceCNPGOperation(op({}), obs({ ...promoted(), freshness: { facts: fresh, runtime: fresh, ha: fresh } }))
+    expect(o.state).toBe('completed')
+  })
+  it('a source with no freshness record is withheld', () => {
+    const o = advanceCNPGOperation(op({}), { ...obs(promoted()), freshness: undefined })
+    expect(o.state).not.toBe('completed')
   })
 })
 

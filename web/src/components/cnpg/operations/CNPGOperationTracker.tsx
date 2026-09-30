@@ -45,6 +45,10 @@ const STATE_SEVERITY: Record<CNPGOpState, 'success' | 'error' | 'warning' | 'inf
 
 const POLL_MS = 5_000
 
+function sourceFreshness(q: { dataUpdatedAt: number; isError: boolean }) {
+  return { updatedAt: q.dataUpdatedAt, failed: q.isError }
+}
+
 /**
  * Follows the operations requested on this Cluster in this browser session
  * and shows them in the header until they finish. Reads only what the caller
@@ -56,7 +60,7 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
   const ops = useCNPGOperations({ namespace, cluster: name, context })
   const active = ops.filter(cnpgOperationFollowed)
   const following = active.length > 0
-  const needsRuntime = active.some((o) => ['switchover', 'unfence', 'restart', 'restartInstance'].includes(o.kind))
+  const needsRuntime = active.some((o) => ['switchover', 'fence', 'unfence', 'restart', 'restartInstance'].includes(o.kind))
 
   const queryClient = useQueryClient()
   const caps = useCNPGClusterCapabilities(namespace, name, following)
@@ -87,8 +91,15 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
       ha: ha.data,
       runtime: runtime.data,
       backups: backupsReadable ? ws?.objects.backups ?? [] : undefined,
+      freshness: {
+        facts: sourceFreshness(caps),
+        cluster: sourceFreshness(workspace),
+        backups: sourceFreshness(workspace),
+        ha: sourceFreshness(ha),
+        runtime: sourceFreshness(runtime),
+      },
     }
-  }, [following, caps.data, ha.data, runtime.data, workspace.data, namespace, name])
+  }, [following, caps.data, caps.dataUpdatedAt, caps.isError, ha.data, ha.dataUpdatedAt, ha.isError, runtime.data, runtime.dataUpdatedAt, runtime.isError, workspace.data, workspace.dataUpdatedAt, workspace.isError, namespace, name])
 
   useEffect(() => {
     if (!observation) return
