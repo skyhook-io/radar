@@ -101,6 +101,10 @@ func (h *HubbleSource) Detect(ctx context.Context) (*DetectionResult, error) {
 		result.Message = "Hubble Relay not found. Install Cilium with Hubble enabled for traffic visibility."
 		return result, nil
 	}
+	// From here on Hubble is installed, so every way this can still fail is a
+	// problem with that install and its message has to reach the user — without
+	// Present it is reported as never installed, with advice to install it.
+	result.Present = true
 
 	// Count running pods and get the namespace
 	var relayNamespace string
@@ -830,7 +834,7 @@ func (h *HubbleSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRe
 		}, nil
 	}
 
-	flows, err := h.fetchFlowsViaGRPC(ctx, opts)
+	flows, incomplete, err := h.fetchFlowsViaGRPC(ctx, opts)
 	if err != nil {
 		log.Printf("[hubble] gRPC error: %v", err)
 		return &FlowsResponse{
@@ -841,21 +845,31 @@ func (h *HubbleSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRe
 		}, nil
 	}
 
-	return &FlowsResponse{
+	response := &FlowsResponse{
 		Source:    "hubble",
 		Timestamp: time.Now(),
 		Flows:     flows,
-	}, nil
+	}
+	// Qualifies the flows that did arrive; an empty result has nothing to qualify,
+	// and a transient warning on it would make the client poll every few seconds.
+	if incomplete != "" && len(flows) > 0 {
+		response.Warning = incomplete
+		// The next poll reads the buffer afresh and may well come back whole.
+		response.WarningKind = WarningTransient
+	}
+	return response, nil
 }
 
-// fetchFlowsViaGRPC fetches flows using gRPC client
-func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) ([]Flow, error) {
+// fetchFlowsViaGRPC fetches flows using gRPC client. incomplete explains, in
+// terms a reader can act on, why the flows returned are not everything Hubble
+// holds for the window; it is empty when the stream ran to its end intact.
+func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) (flows []Flow, incomplete string, err error) {
 	h.mu.RLock()
 	client := h.observerClient
 	h.mu.RUnlock()
 
 	if client == nil {
-		return nil, fmt.Errorf("not connected to Hubble Relay")
+		return nil, "", fmt.Errorf("not connected to Hubble Relay")
 	}
 
 	// Build request
@@ -890,10 +904,11 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 
 	stream, err := client.GetFlows(reqCtx, req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get flows stream: %w", err)
+		return nil, "", fmt.Errorf("failed to get flows stream: %w", err)
 	}
 
-	var flows []Flow
+	var gaps []string
+	var lost uint64
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
@@ -903,9 +918,18 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 			// Check if we got any flows before the error
 			if len(flows) > 0 {
 				log.Printf("[hubble] Stream ended with partial results: %v", err)
+				gaps = append(gaps, fmt.Sprintf("the stream from Hubble Relay ended early (%v), so flows after the first %d are missing", err, len(flows)))
 				break
 			}
-			return nil, fmt.Errorf("stream error: %w", err)
+			return nil, "", fmt.Errorf("stream error: %w", err)
+		}
+
+		// Hubble reports events it had to drop (a full ring buffer, an
+		// unreachable node) in-band. The flows around them are real, but the
+		// window is no longer everything that happened.
+		if le := resp.GetLostEvents(); le != nil {
+			lost += le.GetNumEventsLost()
+			continue
 		}
 
 		// Extract flow from response
@@ -914,12 +938,62 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 			continue
 		}
 
-		flow := convertHubbleFlow(pbFlow)
+		flow, ok := callerOrientedFlow(pbFlow)
+		if !ok {
+			continue
+		}
 		flows = append(flows, flow)
 	}
 
+	if lost > 0 {
+		gaps = append(gaps, fmt.Sprintf("Hubble reported %d events lost before they could be delivered", lost))
+	}
+
 	log.Printf("[hubble] Retrieved %d flows", len(flows))
-	return flows, nil
+	if len(gaps) == 0 {
+		return flows, "", nil
+	}
+	return flows, "Traffic data is incomplete: " + strings.Join(gaps, "; ") + ".", nil
+}
+
+// callerOrientedFlow converts a Hubble flow and orients it from the caller to
+// the callee, reporting false for a flow that should not become an edge at all.
+//
+// Hubble records packets, so a conversation arrives from both ends: the reply
+// packets name the server as the source and the client's ephemeral port as the
+// destination port. Taken at face value they draw a second, reversed edge per
+// connection — server → client on a port nothing listens on. A reply at L3/L4
+// adds nothing the request-direction flow did not already say, so it is
+// dropped. An L7 response is the only record carrying the status code and
+// latency, so it is turned around onto the request's edge instead, and counts
+// no connection of its own.
+//
+// Only an explicit is_reply=true is acted on. Hubble leaves it unset when it
+// cannot tell (drops, encapsulation trace points), and those keep their
+// orientation — Hubble's own reply filter would discard them, which is why the
+// filter is not pushed into the request.
+func callerOrientedFlow(pbFlow *flowpb.Flow) (Flow, bool) {
+	flow := convertHubbleFlow(pbFlow)
+	if !pbFlow.GetIsReply().GetValue() {
+		return flow, true
+	}
+	if pbFlow.GetL7() == nil {
+		return Flow{}, false
+	}
+	flow.Source, flow.Destination = flow.Destination, flow.Source
+	flow.SourceService, flow.DestService = flow.DestService, flow.SourceService
+	if l4 := pbFlow.GetL4(); l4 != nil {
+		switch {
+		case l4.GetTCP() != nil:
+			flow.Port = int(l4.GetTCP().GetSourcePort())
+		case l4.GetUDP() != nil:
+			flow.Port = int(l4.GetUDP().GetSourcePort())
+		case l4.GetSCTP() != nil:
+			flow.Port = int(l4.GetSCTP().GetSourcePort())
+		}
+	}
+	flow.Connections = 0
+	return flow, true
 }
 
 // convertHubbleFlow converts a Hubble protobuf Flow to our internal Flow type
@@ -1126,7 +1200,10 @@ func (h *HubbleSource) StreamFlows(ctx context.Context, opts FlowOptions) (<-cha
 				continue
 			}
 
-			flow := convertHubbleFlow(pbFlow)
+			flow, ok := callerOrientedFlow(pbFlow)
+			if !ok {
+				continue
+			}
 
 			select {
 			case flowCh <- flow:

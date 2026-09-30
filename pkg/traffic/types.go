@@ -143,6 +143,13 @@ type AggregatedFlow struct {
 	L7Protocol       string           `json:"l7Protocol,omitempty"` // HTTP, gRPC, DNS (from majority of flows)
 	RequestCount     int64            `json:"requestCount,omitempty"`
 	ErrorCount       int64            `json:"errorCount,omitempty"`
+	// RequestRate and ErrorRate are the per-second rates a metric-based source
+	// measured, summed unrounded. RequestCount and ErrorCount hold the same
+	// figures rounded with a floor of one, which keeps a trickle visible but makes
+	// any ratio of the two meaningless at low rates: 0.3 req/s with 0.01 err/s
+	// rounds to one of each, a 100% error rate.
+	RequestRate float64 `json:"requestRate,omitempty"`
+	ErrorRate   float64 `json:"errorRate,omitempty"`
 	AvgLatencyMs     float64          `json:"avgLatencyMs,omitempty"`
 	LatencyP50Ms     float64          `json:"latencyP50Ms,omitempty"`
 	LatencyP95Ms     float64          `json:"latencyP95Ms,omitempty"`

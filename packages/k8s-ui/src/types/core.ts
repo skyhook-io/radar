@@ -1367,6 +1367,11 @@ export interface AggregatedFlow {
   l7Protocol?: string // HTTP, gRPC, DNS
   requestCount?: number
   errorCount?: number
+  /** Per-second rates from a metric-based source, unrounded. requestCount and
+   *  errorCount carry the same figures rounded with a floor of one, so their
+   *  ratio is meaningless at low rates. */
+  requestRate?: number
+  errorRate?: number
   avgLatencyMs?: number
   latencyP50Ms?: number
   latencyP95Ms?: number

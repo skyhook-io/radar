@@ -776,6 +776,12 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         if (flow.errorCount) {
           existing.errorCount = (existing.errorCount || 0) + flow.errorCount
         }
+        if (flow.requestRate) {
+          existing.requestRate = (existing.requestRate || 0) + flow.requestRate
+        }
+        if (flow.errorRate) {
+          existing.errorRate = (existing.errorRate || 0) + flow.errorRate
+        }
         // Everything merged here shares the key's direction-known state, so the
         // flag is already correct on the entry that was created first.
       } else {
@@ -1233,7 +1239,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
             />
           ) : finalFlows.length > 0 ? (
             <>
-              {flowsData?.warning && warningIsPermanent && (
+              {flowsData?.warning && (
                 // Sits below the two chip rows (both top-3) rather than beside
                 // them: centred at that height it would cover the flow count and
                 // the refresh control at common widths. role/aria-live because it
@@ -1245,12 +1251,15 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                 >
                   <AlertBanner
                     variant="warning"
-                    // Not "incomplete": every warning that reaches here is about a
-                    // value on an edge that is shown being wrong or absent — a port
-                    // reported as 0, UDP reported as TCP, received bytes understated.
-                    // "Incomplete" sends the reader looking for workloads that are
-                    // missing, which is the one thing none of these mean.
-                    title="Some values on this map are unreliable"
+                    // The title follows the kind. A partial warning is about values
+                    // on edges that are shown — a port reported as 0, UDP as TCP,
+                    // received bytes understated — so it says "unreliable", not
+                    // "incomplete", which would send the reader looking for missing
+                    // workloads. A transient one means part of the answer failed to
+                    // load this time (a query that errored, a stream cut short):
+                    // those figures are missing rather than zero, and the next
+                    // refresh may bring them back.
+                    title={warningIsPermanent ? 'Some values on this map are unreliable' : 'Some traffic data could not be loaded'}
                     message={flowsData.warning}
                   />
                 </div>

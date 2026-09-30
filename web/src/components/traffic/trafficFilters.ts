@@ -1,3 +1,5 @@
+import type { AggregatedFlow } from '../../types'
+
 /**
  * Does a flow fall into one of the selected HTTP status ranges?
  *
@@ -49,6 +51,42 @@ export function bucketsFromStatus(httpStatus: number | undefined): string[] {
  */
 export function isRateBasedSource(source: string | undefined): boolean {
   return source === 'istio' || source === 'beyla'
+}
+
+/**
+ * The request and 5xx rates of an edge from a rate-based source, unrounded.
+ *
+ * requestCount / errorCount carry the same figures rounded with a floor of one,
+ * which keeps a trickle visible but makes their ratio meaningless at low rates:
+ * 0.3 req/s with 0.01 err/s rounds to one of each, a 100% error rate. The counts
+ * are only read when the rates are absent — Radar Hub renders clusters whose
+ * Radar predates requestRate / errorRate, and for those they are all there is.
+ */
+export function requestRateOf(flow: Pick<AggregatedFlow, 'requestRate' | 'requestCount'>): number {
+  return flow.requestRate ?? flow.requestCount ?? 0
+}
+export function errorRateOf(flow: Pick<AggregatedFlow, 'errorRate' | 'errorCount'>): number {
+  return flow.errorRate ?? flow.errorCount ?? 0
+}
+
+/**
+ * The volume shown for an edge. For a rate-based source `connections` is its
+ * request rate rounded with a floor of one — the graph sizes, sorts and filters
+ * on that integer — so what is printed is the unrounded rate where the edge has
+ * one. An edge with no HTTP rate (plain TCP) keeps its connection figure.
+ */
+export function displayVolume(flow: Pick<AggregatedFlow, 'requestRate' | 'connections'>, isRateBased: boolean): number {
+  return isRateBased && flow.requestRate ? flow.requestRate : flow.connections
+}
+
+/** A per-second rate, precise enough to tell a trickle from nothing: 0.30, 12, 1.2K. */
+export function formatRate(rate: number): string {
+  if (rate >= 1000) return `${(rate / 1000).toFixed(1)}K`
+  if (rate >= 10) return rate.toFixed(0)
+  if (rate >= 1) return rate.toFixed(1)
+  if (rate >= 0.01) return rate.toFixed(2)
+  if (rate > 0) return '<0.01'
+  return '0'
 }
 
 /**

@@ -402,6 +402,14 @@ func (m *Manager) generateRecommendation(info *ClusterInfo, detected []SourceSta
 
 	switch info.CNI {
 	case "cilium":
+		// Hubble is installed but unusable, and the detected entry already says
+		// why. Advice to enable it would contradict that and send the user to
+		// install what they already have.
+		for _, s := range detected {
+			if s.Name == "hubble" && s.Status == "not_found" {
+				return nil
+			}
+		}
 		if info.Platform == "gke" {
 			return &Recommendation{
 				Name:   "hubble",

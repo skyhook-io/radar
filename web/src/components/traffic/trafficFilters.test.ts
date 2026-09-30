@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -126,5 +126,33 @@ describe('isPolicyDropReason', () => {
     expect(isPolicyDropReason('STALE_OR_UNROUTABLE_IP', 0)).toBe(false)
     expect(isPolicyDropReason(undefined, 0)).toBe(false)
     expect(isPolicyDropReason('', 0)).toBe(false)
+  })
+})
+
+describe('edge rates', () => {
+  it('reads the unrounded rates, so a trickle of errors is not a 100% error rate', () => {
+    const flow = { requestRate: 0.3, requestCount: 1, errorRate: 0.01, errorCount: 1 }
+    expect(errorRateOf(flow) / requestRateOf(flow)).toBeCloseTo(0.0333, 3)
+  })
+
+  it('falls back to the rounded counts from a server that sends no rates', () => {
+    expect(requestRateOf({ requestCount: 7 })).toBe(7)
+    expect(errorRateOf({ errorCount: 2 })).toBe(2)
+    expect(requestRateOf({})).toBe(0)
+  })
+
+  it('shows the unrounded rate for a rate-based edge, and the connection count otherwise', () => {
+    expect(displayVolume({ requestRate: 0.3, connections: 1 }, true)).toBe(0.3)
+    expect(displayVolume({ connections: 4 }, true)).toBe(4)
+    expect(displayVolume({ requestRate: 0.3, connections: 12 }, false)).toBe(12)
+  })
+
+  it('formats a rate without rounding a trickle away', () => {
+    expect(formatRate(0)).toBe('0')
+    expect(formatRate(0.004)).toBe('<0.01')
+    expect(formatRate(0.3)).toBe('0.30')
+    expect(formatRate(2.46)).toBe('2.5')
+    expect(formatRate(12.4)).toBe('12')
+    expect(formatRate(1530)).toBe('1.5K')
   })
 })

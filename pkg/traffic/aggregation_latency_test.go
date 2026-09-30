@@ -21,8 +21,37 @@ func TestAggregateFlowsRecordsLatencyFromAnySourceThatMeasuredIt(t *testing.T) {
 	if len(agg) != 1 {
 		t.Fatalf("expected 1 aggregated flow, got %d", len(agg))
 	}
-	if agg[0].LatencyP50Ms != 2 {
-		t.Errorf("latencyP50Ms = %v, want 2 — a measured latency must reach the aggregate", agg[0].LatencyP50Ms)
+	if agg[0].AvgLatencyMs != 2 {
+		t.Errorf("avgLatencyMs = %v, want 2 — a measured latency must reach the aggregate", agg[0].AvgLatencyMs)
+	}
+}
+
+// A metric-based source reports latency already averaged over its window, one
+// figure per series. Taking percentiles of those labels a mean as a P95 — with a
+// single series, P50, P95 and P99 all come out as the same average — so only the
+// average is reported. Hubble's per-response records keep real percentiles.
+func TestAggregateFlowsDoesNotReportPercentilesOfAverages(t *testing.T) {
+	edge := func(ms uint64, l7Type string) Flow {
+		return Flow{
+			Source:      Endpoint{Namespace: "demo", Name: "client"},
+			Destination: Endpoint{Namespace: "demo", Name: "web"},
+			Port:        80,
+			LatencyNs:   ms * 1_000_000,
+			L7Type:      l7Type,
+		}
+	}
+
+	metric := AggregateFlows([]Flow{edge(12, "")})[0]
+	if metric.LatencyP50Ms != 0 || metric.LatencyP95Ms != 0 || metric.LatencyP99Ms != 0 {
+		t.Errorf("percentiles of a mean reported: p50 %v p95 %v p99 %v", metric.LatencyP50Ms, metric.LatencyP95Ms, metric.LatencyP99Ms)
+	}
+	if metric.AvgLatencyMs != 12 {
+		t.Errorf("avgLatencyMs = %v, want 12", metric.AvgLatencyMs)
+	}
+
+	records := AggregateFlows([]Flow{edge(10, "RESPONSE"), edge(20, "RESPONSE"), edge(90, "RESPONSE")})[0]
+	if records.LatencyP50Ms != 20 || records.LatencyP99Ms != 20 {
+		t.Errorf("per-response records must keep their percentiles, got p50 %v p99 %v, want 20 and 20", records.LatencyP50Ms, records.LatencyP99Ms)
 	}
 }
 

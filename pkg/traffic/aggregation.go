@@ -11,7 +11,8 @@ import (
 // flowAccumulator collects per-flow L7 details during aggregation.
 type flowAccumulator struct {
 	agg         *AggregatedFlow
-	latencies   []float64        // measured latencies, excluding request records (ms)
+	latencies   []float64        // per-response latencies from L7 records (ms)
+	means       []float64        // latencies already averaged by a metric-based source (ms)
 	statusCount map[string]int64 // "2xx", "3xx", "4xx", "5xx"
 	pathStats   map[string]*pathAcc
 	dnsStats    map[string]*dnsAcc
@@ -83,6 +84,8 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 		// NaN, which a ratio of two rates produces at zero traffic and which has no
 		// defined conversion to int64.
 		agg.ErrorCount += RoundRate(f.ErrorRate)
+		agg.RequestRate += finiteRate(f.RequestRate)
+		agg.ErrorRate += finiteRate(f.ErrorRate)
 		if f.LastSeen.After(agg.LastSeen) {
 			agg.LastSeen = f.LastSeen
 		}
@@ -99,9 +102,16 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 		// Latency from any flow that carries a measurement, excluding request
 		// records: for a source that emits L7 records, the latency belongs to the
 		// response. A metric-based source reports a measured duration without
-		// emitting record types at all, and must not be excluded for that.
+		// emitting record types at all, and must not be excluded for that — but
+		// its figure is already an average over the window, so it is kept apart:
+		// percentiles taken over averages are not percentiles of anything.
 		if f.LatencyNs > 0 && f.L7Type != "REQUEST" {
-			acc.latencies = append(acc.latencies, float64(f.LatencyNs)/1e6)
+			ms := float64(f.LatencyNs) / 1e6
+			if f.L7Type == "" {
+				acc.means = append(acc.means, ms)
+			} else {
+				acc.latencies = append(acc.latencies, ms)
+			}
 		}
 
 		// HTTP status bucketing
@@ -170,18 +180,16 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 			agg.L7Protocol = bestProto
 		}
 
-		// Latency percentiles
+		// Latency percentiles, only from per-response measurements. Averages
+		// reported by a metric-based source yield the average alone.
 		if len(acc.latencies) > 0 {
 			sort.Float64s(acc.latencies)
 			agg.LatencyP50Ms = PercentileFloat64(acc.latencies, 0.50)
 			agg.LatencyP95Ms = PercentileFloat64(acc.latencies, 0.95)
 			agg.LatencyP99Ms = PercentileFloat64(acc.latencies, 0.99)
-			// Backward compat: also set AvgLatencyMs
-			var sum float64
-			for _, v := range acc.latencies {
-				sum += v
-			}
-			agg.AvgLatencyMs = sum / float64(len(acc.latencies))
+			agg.AvgLatencyMs = mean(acc.latencies)
+		} else if len(acc.means) > 0 {
+			agg.AvgLatencyMs = mean(acc.means)
 		}
 
 		// HTTP status distribution
@@ -254,6 +262,14 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 	return result
 }
 
+func mean(values []float64) float64 {
+	var sum float64
+	for _, v := range values {
+		sum += v
+	}
+	return sum / float64(len(values))
+}
+
 // PercentileFloat64 returns the p-th percentile from a sorted slice.
 func PercentileFloat64(sorted []float64, p float64) float64 {
 	if len(sorted) == 0 {
@@ -274,6 +290,15 @@ func RoundRate(rate float64) int64 {
 		return 1
 	}
 	return r
+}
+
+// finiteRate drops a rate that cannot be summed: negative, NaN (a ratio of two
+// rates at zero traffic) or infinite.
+func finiteRate(rate float64) float64 {
+	if rate <= 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
+		return 0
+	}
+	return rate
 }
 
 // DefaultFlowOptions returns sensible defaults for flow queries.

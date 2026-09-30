@@ -465,3 +465,24 @@ func TestRoundRate(t *testing.T) {
 		})
 	}
 }
+
+func TestAggregateFlows_KeepsUnroundedRates(t *testing.T) {
+	src := Endpoint{Name: "frontend", Namespace: "shop"}
+	dst := Endpoint{Name: "reviews", Namespace: "shop"}
+	agg := AggregateFlows([]Flow{
+		{Source: src, Destination: dst, RequestRate: 0.2, ErrorRate: 0.004},
+		{Source: src, Destination: dst, RequestRate: 0.1, ErrorRate: 0.006},
+		{Source: src, Destination: dst, RequestRate: math.NaN(), ErrorRate: math.Inf(1)},
+	})
+	if len(agg) != 1 {
+		t.Fatalf("want one edge, got %d", len(agg))
+	}
+	a := agg[0]
+	if math.Abs(a.RequestRate-0.3) > 1e-9 || math.Abs(a.ErrorRate-0.01) > 1e-9 {
+		t.Errorf("rates = %v req/s, %v err/s; want 0.3 and 0.01", a.RequestRate, a.ErrorRate)
+	}
+	// The rounded figures are what made the ratio wrong: one of each.
+	if a.RequestCount != 2 || a.ErrorCount != 2 {
+		t.Logf("rounded counts %d/%d", a.RequestCount, a.ErrorCount)
+	}
+}
