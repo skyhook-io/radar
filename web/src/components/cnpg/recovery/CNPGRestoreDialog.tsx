@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import yaml from 'yaml'
-import { ActionConfirmDialog, isApiGroup, toneTextClass, type HealthLevel } from '@skyhook-io/k8s-ui'
+import { ActionConfirmDialog, isApiGroup, toneTextClass, Tooltip, type HealthLevel } from '@skyhook-io/k8s-ui'
 import { useCNPGRuntime, useCNPGWorkspace } from '../../../api/cnpg'
 import { useCNPGRestoreCapability } from '../../../api/cnpg-recovery'
 import { useConnection } from '../../../context/ConnectionContext'
@@ -263,7 +263,9 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
             <When point={evidence.lastBackup} empty="None observed" />
           </EvidenceRow>
           <EvidenceRow label="WAL archiving">
-            <span className={toneTextClass(evidence.archiving.tone as HealthLevel)}>{evidence.archiving.text}</span>
+            <Tooltip content={evidence.archiving.detail} disabled={!evidence.archiving.detail}>
+              <span className={toneTextClass(evidence.archiving.tone as HealthLevel)}>{evidence.archiving.text}</span>
+            </Tooltip>
             <div className="text-[11px] text-theme-text-tertiary">{evidence.archiving.source}</div>
           </EvidenceRow>
           <EvidenceRow label="Last archived WAL">

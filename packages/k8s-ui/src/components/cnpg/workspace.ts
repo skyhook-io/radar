@@ -467,7 +467,13 @@ function walFact(cluster: any): CNPGFact {
   if (!c) return { text: 'Not reported', tone: 'unknown', source: 'Cluster status' }
   if (c.status === 'True') return { text: 'Archiving', tone: 'healthy', source: 'ContinuousArchiving condition' }
   if (c.status === 'False') {
-    return { text: c.message ? `Failing · ${c.message}` : 'Failing', tone: 'unhealthy', source: 'ContinuousArchiving condition' }
+    return {
+      text: 'Failing',
+      tone: 'unhealthy',
+      source: 'ContinuousArchiving condition',
+      ...(c.lastTransitionTime ? { at: c.lastTransitionTime } : {}),
+      ...(c.message ? { detail: c.message } : {}),
+    }
   }
   return { text: 'Unknown', tone: 'unknown', source: 'ContinuousArchiving condition' }
 }

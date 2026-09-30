@@ -113,7 +113,7 @@ export interface RecoveryEvidence {
   lastBackup?: EvidencePoint
   lastArchived?: EvidencePoint & { wal?: string }
   lastArchiveFailure?: EvidencePoint & { wal?: string }
-  archiving: { text: string; tone: HealthLevel; source: string }
+  archiving: { text: string; tone: HealthLevel; source: string; detail?: string }
   gaps: string[]
 }
 
@@ -154,7 +154,7 @@ export function recoveryEvidenceFor(
     const cond = (cluster.status?.conditions ?? []).find((c: any) => c?.type === 'ContinuousArchiving')
     if (!cond) out.archiving = { text: 'Not reported', tone: 'unknown', source: `Cluster ${clusterName} has no ContinuousArchiving condition` }
     else if (cond.status === 'True') out.archiving = { text: 'Archiving', tone: 'healthy', source: `ContinuousArchiving condition on ${clusterName}` }
-    else if (cond.status === 'False') out.archiving = { text: cond.message ? `Failing · ${cond.message}` : 'Failing', tone: 'unhealthy', source: `ContinuousArchiving condition on ${clusterName}` }
+    else if (cond.status === 'False') out.archiving = { text: 'Failing', tone: 'unhealthy', source: `ContinuousArchiving condition on ${clusterName}`, ...(cond.message ? { detail: cond.message } : {}) }
     else out.archiving = { text: 'Unknown', tone: 'unknown', source: `ContinuousArchiving condition on ${clusterName}` }
 
     const primary = ctx.runtime?.instances.find((i) => i.role === 'primary')
