@@ -124,7 +124,7 @@ const (
 	// everything: events the source lost, nodes it could not reach. Flows may
 	// be missing, so it holds even when the flows it came with are filtered
 	// away and matters most when there are none. Retrying at once does not
-	// help; the next regular refresh reads afresh.
+	// help; the next refresh reads afresh.
 	WarningIncomplete = "incomplete"
 	// WarningPartial marks flows that are correct but have values missing or
 	// wrong (a source not exporting an attribute, traffic that cannot be

@@ -79,6 +79,19 @@ export function displayVolume(flow: Pick<AggregatedFlow, 'requestRate' | 'connec
   return isRateBased && flow.requestRate ? flow.requestRate : flow.connections
 }
 
+const latencyWeights = new WeakMap<AggregatedFlow, number>()
+
+/**
+ * How much traffic an edge's average latency stands for: its request rate, or
+ * one for an edge with no rate, summed through merges. Zero when it has none.
+ * Used to average latencies so a slow trickle does not stand for a busy path.
+ */
+export function latencyWeightOf(flow: AggregatedFlow): number {
+  const merged = latencyWeights.get(flow)
+  if (merged !== undefined) return merged
+  return flow.avgLatencyMs ? (flow.requestRate || 1) : 0
+}
+
 /**
  * Fold one aggregated flow's volume into another's, for the client-side merges
  * that collapse several edges into one. Every figure displayVolume or the error
@@ -87,19 +100,18 @@ export function displayVolume(flow: Pick<AggregatedFlow, 'requestRate' | 'connec
  */
 export function mergeFlowVolume(into: AggregatedFlow, flow: AggregatedFlow): void {
   // A metric-based source reports only an average latency per edge, so the
-  // merged edge's is theirs weighted by request rate — taken before the rates
-  // are summed below. Keeping the first edge's would make the result depend on
-  // the order the edges arrived in.
-  if (flow.avgLatencyMs) {
-    if (!into.avgLatencyMs) {
-      into.avgLatencyMs = flow.avgLatencyMs
-    } else {
-      const weighted = into.requestRate && flow.requestRate
-      const wInto = weighted ? into.requestRate! : 1
-      const wFlow = weighted ? flow.requestRate! : 1
-      into.avgLatencyMs = (into.avgLatencyMs * wInto + flow.avgLatencyMs * wFlow) / (wInto + wFlow)
-    }
+  // merged edge's is theirs weighted by request rate. The weight behind a merged
+  // average is carried apart from the edge's request rate, which also counts
+  // traffic that had no latency measured: weighting by that would make the
+  // result depend on the order the edges arrived in.
+  const wInto = latencyWeightOf(into)
+  const wFlow = latencyWeightOf(flow)
+  if (wFlow > 0) {
+    into.avgLatencyMs = wInto > 0
+      ? (into.avgLatencyMs! * wInto + flow.avgLatencyMs! * wFlow) / (wInto + wFlow)
+      : flow.avgLatencyMs
   }
+  latencyWeights.set(into, wInto + wFlow)
   into.connections += flow.connections
   into.bytesSent += flow.bytesSent
   into.bytesRecv += flow.bytesRecv

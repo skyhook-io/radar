@@ -961,7 +961,10 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 	if len(unavailableNodes) > 0 {
 		slices.Sort(unavailableNodes)
 		unavailableNodes = slices.Compact(unavailableNodes)
-		gaps = append(gaps, fmt.Sprintf("Hubble Relay could not read flows from %d node(s) (%s), so their traffic is missing", len(unavailableNodes), strings.Join(unavailableNodes, ", ")))
+		// Counted, not named: this warning outlives namespace filtering, and a
+		// node's name is a cluster-scoped read the viewer may not have.
+		log.Printf("[hubble] Relay could not read flows from nodes: %s", strings.Join(unavailableNodes, ", "))
+		gaps = append(gaps, fmt.Sprintf("Hubble Relay could not read flows from %d node(s), so their traffic is missing", len(unavailableNodes)))
 	}
 
 	log.Printf("[hubble] Retrieved %d flows", len(flows))

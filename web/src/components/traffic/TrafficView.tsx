@@ -454,6 +454,10 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   // cannot reach, a query that keeps failing — is the answer rather than a hiccup,
   // and polling it every 2s forever costs the source a burst of queries each time.
   const emptyRetriesRef = useRef(0)
+  // A different question gets its own retries.
+  useEffect(() => {
+    emptyRetriesRef.current = 0
+  }, [namespaces, timeRange])
   useEffect(() => {
     const empty = !flowsData?.aggregated || flowsData.aggregated.length === 0
     if (!flowsData?.warning || !empty) {

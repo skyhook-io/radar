@@ -23,7 +23,7 @@ import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
 import { Tooltip } from '../ui/Tooltip'
-import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume } from './trafficFilters'
+import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf } from './trafficFilters'
 
 const elk = new ELK()
 
@@ -492,16 +492,12 @@ function DetailsPanel({
       return p95s.length > 0 ? Math.max(...p95s) : undefined
     })(),
     // A metric-based source reports only an average per edge. The node's is
-    // those averages weighted by each edge's request rate, so a slow trickle
-    // does not stand for a node that answers almost everything quickly; when
-    // any edge has no rate they weigh equally.
+    // those averages weighted by the traffic each stands for, so a slow trickle
+    // does not stand for a node that answers almost everything quickly.
     avgLatencyMs: (() => {
-      const measured = relatedFlows.filter(f => f.avgLatencyMs != null && f.avgLatencyMs > 0)
-      if (measured.length === 0) return undefined
-      const weighted = measured.every(f => f.requestRate)
-      const weight = (f: AggregatedFlow) => (weighted ? f.requestRate! : 1)
-      const total = measured.reduce((sum, f) => sum + weight(f), 0)
-      return measured.reduce((sum, f) => sum + f.avgLatencyMs! * weight(f), 0) / total
+      const total = relatedFlows.reduce((sum, f) => sum + latencyWeightOf(f), 0)
+      if (total === 0) return undefined
+      return relatedFlows.reduce((sum, f) => sum + (f.avgLatencyMs ?? 0) * latencyWeightOf(f), 0) / total
     })(),
     // Aggregate HTTP status distribution
     httpStatusCounts: relatedFlows.reduce((acc, f) => {

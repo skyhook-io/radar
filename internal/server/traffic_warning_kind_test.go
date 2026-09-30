@@ -78,7 +78,7 @@ func TestTrafficFlowsPayloadDropsPartialWarningWhenFilteringRemovedEverything(t 
 	transient := &traffic.FlowsResponse{
 		Source:      "hubble",
 		Flows:       []traffic.Flow{{Source: traffic.Endpoint{Namespace: "other"}}},
-		Warning:     "Traffic data is incomplete: Hubble Relay could not read flows from 1 node(s) (node-b), so their traffic is missing.",
+		Warning:     "Traffic data is incomplete: Hubble Relay could not read flows from 1 node(s), so their traffic is missing.",
 		WarningKind: traffic.WarningIncomplete,
 	}
 	if _, ok := trafficFlowsPayload(transient, []traffic.Flow{})["warning"]; !ok {

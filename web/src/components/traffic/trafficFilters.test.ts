@@ -181,6 +181,24 @@ describe('mergeFlowVolume latency', () => {
     expect(b.avgLatencyMs).toBeCloseTo(19.8, 1)
   })
 
+  it('ignores traffic that had no latency measured, in any merge order', () => {
+    const a = { ...base, requestRate: 1, avgLatencyMs: 10 }
+    const b = { ...base, requestRate: 100 }
+    const c = { ...base, requestRate: 1, avgLatencyMs: 1000 }
+    for (const order of [[a, b, c], [c, b, a], [a, c, b], [b, a, c]]) {
+      const into = { ...order[0] }
+      for (const f of order.slice(1)) mergeFlowVolume(into, f)
+      expect(into.avgLatencyMs).toBeCloseTo(505, 6)
+    }
+  })
+
+  it('averages edges without rates equally, however many are merged', () => {
+    const into = { ...base, avgLatencyMs: 10 }
+    mergeFlowVolume(into, { ...base, avgLatencyMs: 20 })
+    mergeFlowVolume(into, { ...base, avgLatencyMs: 30 })
+    expect(into.avgLatencyMs).toBeCloseTo(20, 6)
+  })
+
   it('takes the only latency there is', () => {
     const into = { ...base }
     mergeFlowVolume(into, { ...base, avgLatencyMs: 7 })

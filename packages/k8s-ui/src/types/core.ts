@@ -1445,7 +1445,7 @@ export interface TrafficFlowsResponse {
    *  their values are missing or wrong, so show the warning next to them and do
    *  not refetch. 'incomplete' means the fetch worked but could not see
    *  everything — events lost, nodes unreachable — so flows may be missing; show
-   *  it, with or without flows, and leave it to the regular refresh. */
+   *  it, with or without flows, and do not retry at once. */
   warningKind?: 'transient' | 'partial' | 'incomplete'
 }
 

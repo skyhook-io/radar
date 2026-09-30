@@ -145,11 +145,13 @@ func TestHubbleGetFlows_ReportsWhatTheStreamDidNotDeliver(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(resp.Warning, "2 node(s) (node-b, node-c)") {
-			t.Errorf("warning = %q, want the unavailable and errored nodes named once each", resp.Warning)
+		if !strings.Contains(resp.Warning, "from 2 node(s)") {
+			t.Errorf("warning = %q, want the unavailable and errored nodes counted once each", resp.Warning)
 		}
-		if strings.Contains(resp.Warning, "node-a") || strings.Contains(resp.Warning, "node-d") {
-			t.Errorf("warning = %q names a connected or removed node", resp.Warning)
+		// The warning survives namespace filtering; node names are a
+		// cluster-scoped read the viewer may not have.
+		if strings.Contains(resp.Warning, "node-") {
+			t.Errorf("warning = %q names a node", resp.Warning)
 		}
 	})
 
