@@ -1,4 +1,4 @@
-import type { AggregatedFlow } from '../../types'
+import type { AggregatedFlow, TrafficFlow } from '../../types'
 
 /**
  * Does a flow fall into one of the selected HTTP status ranges?
@@ -232,4 +232,26 @@ export function isPolicyDropReason(dropReasonDesc: string | undefined, deniedByC
   if (deniedByCount > 0) return true
   const code = (dropReasonDesc ?? '').toUpperCase()
   return code === 'POLICY_DENIED' || code === 'POLICY_DENY'
+}
+
+/**
+ * Drop each HTTP REQUEST record that has a matching RESPONSE: the response
+ * carries the status and latency, so it stands for the call. A request with no
+ * response stays, because a missing response is worth seeing.
+ *
+ * The server orients a response like its request, caller → callee. A Radar that
+ * predates that sends it server → client — Radar Hub renders clusters running
+ * such builds — so a response is matched in either orientation.
+ */
+export function dedupeHTTPPairs(flows: TrafficFlow[]): TrafficFlow[] {
+  const key = (from: string, to: string, f: TrafficFlow) => `${from}|${to}|${f.httpMethod}|${f.httpPath}`
+  const responseKeys = new Set<string>()
+  for (const f of flows) {
+    if (f.l7Protocol === 'HTTP' && f.l7Type === 'RESPONSE') {
+      responseKeys.add(key(f.source.name, f.destination.name, f))
+      responseKeys.add(key(f.destination.name, f.source.name, f))
+    }
+  }
+  return flows.filter(f =>
+    !(f.l7Protocol === 'HTTP' && f.l7Type === 'REQUEST' && responseKeys.has(key(f.source.name, f.destination.name, f))))
 }

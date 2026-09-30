@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import type { AggregatedFlow } from '../../types'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume } from './trafficFilters'
+import type { AggregatedFlow, TrafficFlow } from '../../types'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -211,5 +211,25 @@ describe('mergeFlowVolume latency', () => {
     const into = { ...base }
     mergeFlowVolume(into, { ...base, avgLatencyMs: 7 })
     expect(into.avgLatencyMs).toBe(7)
+  })
+})
+
+describe('dedupeHTTPPairs', () => {
+  const ep = (name: string) => ({ name, namespace: 'shop', kind: 'Pod' })
+  const rec = (from: string, to: string, l7Type: string): TrafficFlow => ({
+    source: ep(from), destination: ep(to), protocol: 'tcp', port: 80, l7Protocol: 'HTTP', l7Type,
+    httpMethod: 'GET', httpPath: '/orders', bytesSent: 0, bytesRecv: 0, connections: 1, verdict: 'forwarded', lastSeen: '',
+  } as TrafficFlow)
+
+  it('pairs a response oriented like its request', () => {
+    expect(dedupeHTTPPairs([rec('client', 'web', 'REQUEST'), rec('client', 'web', 'RESPONSE')]).map(f => f.l7Type)).toEqual(['RESPONSE'])
+  })
+
+  it('pairs a response from a server that sends it reversed', () => {
+    expect(dedupeHTTPPairs([rec('client', 'web', 'REQUEST'), rec('web', 'client', 'RESPONSE')]).map(f => f.l7Type)).toEqual(['RESPONSE'])
+  })
+
+  it('keeps a request that got no response', () => {
+    expect(dedupeHTTPPairs([rec('client', 'web', 'REQUEST')]).map(f => f.l7Type)).toEqual(['REQUEST'])
   })
 })
