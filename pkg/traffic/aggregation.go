@@ -13,6 +13,7 @@ type flowAccumulator struct {
 	agg         *AggregatedFlow
 	latencies   []float64        // per-response latencies from L7 records (ms)
 	means       []float64        // latencies already averaged by a metric-based source (ms)
+	meanWeights []float64        // the request rate behind each mean, 1 when unknown
 	statusCount map[string]int64 // "2xx", "3xx", "4xx", "5xx"
 	pathStats   map[string]*pathAcc
 	dnsStats    map[string]*dnsAcc
@@ -118,6 +119,11 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 			ms := float64(f.LatencyNs) / 1e6
 			if f.L7Type == "" {
 				acc.means = append(acc.means, ms)
+				w := finiteRate(f.RequestRate)
+				if w == 0 {
+					w = 1
+				}
+				acc.meanWeights = append(acc.meanWeights, w)
 			} else {
 				acc.latencies = append(acc.latencies, ms)
 			}
@@ -211,8 +217,14 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 			agg.LatencyP95Ms = PercentileFloat64(acc.latencies, 0.95)
 			agg.LatencyP99Ms = PercentileFloat64(acc.latencies, 0.99)
 			agg.AvgLatencyMs = mean(acc.latencies)
+			agg.LatencySamples = int64(len(acc.latencies))
 		} else if len(acc.means) > 0 {
-			agg.AvgLatencyMs = mean(acc.means)
+			var sum, weight float64
+			for i, m := range acc.means {
+				sum += m * acc.meanWeights[i]
+				weight += acc.meanWeights[i]
+			}
+			agg.AvgLatencyMs = sum / weight
 		}
 
 		// HTTP status distribution

@@ -176,6 +176,12 @@ func trafficFlowsPayload(response *traffic.FlowsResponse, flows []traffic.Flow) 
 		// that rather than guess it from which records happen to be present.
 		"l7ResponsesCallerOriented": true,
 	}
+	// Coverage describes what the source returned, not what this user may see,
+	// so it stays when filtering removes flows: it explains a thin view.
+	if response.CoveredSince != nil {
+		result["coveredSince"] = response.CoveredSince
+		result["nodeFlowLimit"] = response.NodeFlowLimit
+	}
 
 	// A partial-data warning qualifies the flows it came with. If the namespace
 	// filtering above removed all of them, it now qualifies nothing this user can

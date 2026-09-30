@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	flowpb "github.com/cilium/cilium/api/v1/flow"
 	observerpb "github.com/cilium/cilium/api/v1/observer"
@@ -13,6 +14,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,9 +28,11 @@ type scriptedObserver struct {
 	observerpb.UnimplementedObserverServer
 	responses []*observerpb.GetFlowsResponse
 	endErr    error
+	got       *observerpb.GetFlowsRequest
 }
 
-func (s *scriptedObserver) GetFlows(_ *observerpb.GetFlowsRequest, stream grpc.ServerStreamingServer[observerpb.GetFlowsResponse]) error {
+func (s *scriptedObserver) GetFlows(req *observerpb.GetFlowsRequest, stream grpc.ServerStreamingServer[observerpb.GetFlowsResponse]) error {
+	s.got = req
 	for _, r := range s.responses {
 		if err := stream.Send(r); err != nil {
 			return err
@@ -283,4 +287,92 @@ func TestGenerateRecommendation_DoesNotAdviseEnablingAnUnusableHubble(t *testing
 	if r := m.generateRecommendation(&ClusterInfo{CNI: "cilium"}, nil); r == nil || r.Name != "hubble" {
 		t.Errorf("a Cilium cluster without Hubble should still be told to enable it, got %+v", r)
 	}
+}
+
+func timedFlow(node string, at time.Time) *observerpb.GetFlowsResponse {
+	r := flowResponse("a", "b")
+	r.GetFlow().NodeName = node
+	r.GetFlow().Time = timestamppb.New(at)
+	return r
+}
+
+func TestHubbleFlowsRequest(t *testing.T) {
+	req := hubbleFlowsRequest(FlowOptions{Namespace: "shop", Since: 5 * time.Minute, Limit: 300}, false)
+	if req.GetSince() != nil {
+		t.Error("Since is set: Hubble would return the oldest flows in the window, not the newest")
+	}
+	if req.GetNumber() != 300 {
+		t.Errorf("Number = %d, want the caller's limit", req.GetNumber())
+	}
+	if len(req.GetWhitelist()) != 2 {
+		t.Errorf("namespace whitelist = %v, want source OR destination", req.GetWhitelist())
+	}
+	bl := req.GetBlacklist()
+	if len(bl) != 1 || len(bl[0].GetReply()) != 1 || !bl[0].GetReply()[0] ||
+		len(bl[0].GetEventType()) != 1 || bl[0].GetEventType()[0].GetType() != hubbleEventTypeTrace {
+		t.Errorf("blacklist = %v, want exactly explicit trace replies", bl)
+	}
+	if def := hubbleFlowsRequest(FlowOptions{}, false); def.GetNumber() != hubbleDefaultNodeLimit {
+		t.Errorf("default Number = %d, want %d", def.GetNumber(), hubbleDefaultNodeLimit)
+	}
+	if stream := hubbleFlowsRequest(FlowOptions{Namespace: "shop"}, true); stream.GetNumber() != 0 || len(stream.GetBlacklist()) != 1 || !stream.GetFollow() {
+		t.Errorf("stream request = %v, want follow with the same blacklist and no limit", stream)
+	}
+}
+
+func TestHubbleGetFlows_WindowAndCoverage(t *testing.T) {
+	now := time.Now()
+	t.Run("flows older than the window are dropped here", func(t *testing.T) {
+		obs := &scriptedObserver{responses: []*observerpb.GetFlowsResponse{
+			timedFlow("n1", now.Add(-10*time.Minute)),
+			timedFlow("n1", now.Add(-time.Minute)),
+		}}
+		resp, err := connectedHubble(t, obs).GetFlows(context.Background(), FlowOptions{Since: 5 * time.Minute, Limit: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Flows) != 1 {
+			t.Errorf("got %d flows, want only the one inside the 5m window", len(resp.Flows))
+		}
+		if resp.CoveredSince != nil {
+			t.Errorf("CoveredSince = %v: no node reached its limit", resp.CoveredSince)
+		}
+		if obs.got.GetSince() != nil {
+			t.Error("request carried Since")
+		}
+	})
+
+	t.Run("a node at its limit says where its data starts", func(t *testing.T) {
+		start := now.Add(-2 * time.Minute)
+		obs := &scriptedObserver{responses: []*observerpb.GetFlowsResponse{
+			timedFlow("busy", start), timedFlow("busy", now.Add(-time.Minute)),
+			timedFlow("quiet", now.Add(-4*time.Minute)),
+		}}
+		resp, err := connectedHubble(t, obs).GetFlows(context.Background(), FlowOptions{Since: 5 * time.Minute, Limit: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.CoveredSince == nil || !resp.CoveredSince.Equal(start.Truncate(time.Nanosecond)) {
+			t.Fatalf("CoveredSince = %v, want the busy node's oldest flow %v", resp.CoveredSince, start)
+		}
+		if resp.NodeFlowLimit != 2 {
+			t.Errorf("NodeFlowLimit = %d, want 2", resp.NodeFlowLimit)
+		}
+		if len(resp.Flows) != 3 {
+			t.Errorf("got %d flows, want all 3", len(resp.Flows))
+		}
+	})
+
+	t.Run("a node at its limit that still reaches back past the window covers it", func(t *testing.T) {
+		obs := &scriptedObserver{responses: []*observerpb.GetFlowsResponse{
+			timedFlow("n1", now.Add(-6*time.Minute)), timedFlow("n1", now.Add(-time.Minute)),
+		}}
+		resp, err := connectedHubble(t, obs).GetFlows(context.Background(), FlowOptions{Since: 5 * time.Minute, Limit: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.CoveredSince != nil {
+			t.Errorf("CoveredSince = %v: the node's data reaches before the window, so nothing was cut", resp.CoveredSince)
+		}
+	})
 }

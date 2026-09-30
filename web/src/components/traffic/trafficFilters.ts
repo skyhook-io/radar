@@ -94,7 +94,7 @@ type LatencyWeighted = AggregatedFlow & { latencyWeight?: number }
 export function latencyWeightOf(flow: AggregatedFlow): number {
   const merged = (flow as LatencyWeighted).latencyWeight
   if (merged !== undefined) return merged
-  return flow.avgLatencyMs ? (flow.requestRate || 1) : 0
+  return flow.avgLatencyMs ? (flow.requestRate || flow.latencySamples || 1) : 0
 }
 
 /**
@@ -112,9 +112,19 @@ export function mergeFlowVolume(into: AggregatedFlow, flow: AggregatedFlow): voi
   const wInto = latencyWeightOf(into)
   const wFlow = latencyWeightOf(flow)
   if (wFlow > 0) {
-    into.avgLatencyMs = wInto > 0
-      ? (into.avgLatencyMs! * wInto + flow.avgLatencyMs! * wFlow) / (wInto + wFlow)
-      : flow.avgLatencyMs
+    if (wInto > 0) {
+      into.avgLatencyMs = (into.avgLatencyMs! * wInto + flow.avgLatencyMs! * wFlow) / (wInto + wFlow)
+      // Percentiles of two edges cannot be combined into a percentile of both,
+      // so a merged edge that had latency on both sides keeps only the average.
+      delete into.latencyP50Ms
+      delete into.latencyP95Ms
+      delete into.latencyP99Ms
+    } else {
+      into.avgLatencyMs = flow.avgLatencyMs
+      into.latencyP50Ms = flow.latencyP50Ms
+      into.latencyP95Ms = flow.latencyP95Ms
+      into.latencyP99Ms = flow.latencyP99Ms
+    }
   }
   const weighted: LatencyWeighted = into
   weighted.latencyWeight = wInto + wFlow
@@ -126,6 +136,20 @@ export function mergeFlowVolume(into: AggregatedFlow, flow: AggregatedFlow): voi
   if (flow.errorCount) into.errorCount = (into.errorCount || 0) + flow.errorCount
   if (flow.requestRate) into.requestRate = (into.requestRate || 0) + flow.requestRate
   if (flow.errorRate) into.errorRate = (into.errorRate || 0) + flow.errorRate
+}
+
+/**
+ * How much of the requested window the flows cover, as a short label: "last
+ * 1m 40s". Null when the whole window is covered. Measured back from when the
+ * data was collected, not from now.
+ */
+export function coverageLabel(coveredSince: string | undefined, collectedAt: string | undefined): string | null {
+  if (!coveredSince || !collectedAt) return null
+  const seconds = Math.max(0, Math.round((Date.parse(collectedAt) - Date.parse(coveredSince)) / 1000))
+  if (!Number.isFinite(seconds)) return null
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `last ${m > 0 ? `${m}m ${s}s` : `${s}s`}`
 }
 
 /** A per-second rate, precise enough to tell a trickle from nothing: 0.30, 12, 1.2K. */

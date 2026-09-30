@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/traffic"
 )
@@ -105,5 +106,17 @@ func TestTrafficFlowsPayloadDeclaresResponseOrientation(t *testing.T) {
 	payload := trafficFlowsPayload(&traffic.FlowsResponse{Source: "hubble"}, []traffic.Flow{})
 	if payload["l7ResponsesCallerOriented"] != true {
 		t.Errorf("l7ResponsesCallerOriented = %v, want true", payload["l7ResponsesCallerOriented"])
+	}
+}
+
+func TestTrafficFlowsPayloadCarriesCoverage(t *testing.T) {
+	since := time.Now().Add(-90 * time.Second)
+	payload := trafficFlowsPayload(&traffic.FlowsResponse{Source: "hubble", CoveredSince: &since, NodeFlowLimit: 1000,
+		Flows: []traffic.Flow{{Source: traffic.Endpoint{Namespace: "other"}}}}, []traffic.Flow{})
+	if payload["coveredSince"] != &since || payload["nodeFlowLimit"] != 1000 {
+		t.Errorf("coverage = %v / %v, want it kept even when filtering removed every flow", payload["coveredSince"], payload["nodeFlowLimit"])
+	}
+	if _, ok := trafficFlowsPayload(&traffic.FlowsResponse{Source: "hubble"}, nil)["coveredSince"]; ok {
+		t.Error("coveredSince set for a window that was fully covered")
 	}
 }

@@ -171,3 +171,24 @@ func TestAggregateFlowsKeepsALowErrorRateVisible(t *testing.T) {
 		t.Errorf("an ordinary rate still rounds: got %d, want 4", got)
 	}
 }
+
+func TestAggregateFlowsWeightsLatencyByWhatWasMeasured(t *testing.T) {
+	edge := func(ms uint64, l7Type string, rate float64) Flow {
+		return Flow{
+			Source: Endpoint{Namespace: "demo", Name: "client"}, Destination: Endpoint{Namespace: "demo", Name: "web"},
+			Port: 80, LatencyNs: ms * 1_000_000, L7Type: l7Type, RequestRate: rate,
+		}
+	}
+	// Two metric series on one edge: 100 req/s at 10ms and 1 req/s at 1000ms.
+	metric := AggregateFlows([]Flow{edge(10, "", 100), edge(1000, "", 1)})[0]
+	if math.Abs(metric.AvgLatencyMs-19.80) > 0.01 {
+		t.Errorf("avgLatencyMs = %v, want the request-weighted 19.80", metric.AvgLatencyMs)
+	}
+	if metric.LatencySamples != 0 {
+		t.Errorf("latencySamples = %d for averaged series, want unset", metric.LatencySamples)
+	}
+	records := AggregateFlows([]Flow{edge(10, "RESPONSE", 0), edge(20, "RESPONSE", 0), edge(30, "RESPONSE", 0)})[0]
+	if records.LatencySamples != 3 {
+		t.Errorf("latencySamples = %d, want 3 responses", records.LatencySamples)
+	}
+}

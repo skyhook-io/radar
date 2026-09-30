@@ -6,14 +6,14 @@ import { TrafficWizard } from './TrafficWizard'
 import { TrafficGraph, type TrafficGraphSelection } from './TrafficGraph'
 import { TrafficFilterSidebar } from './TrafficFilterSidebar'
 import { TrafficFlowListProvider } from './TrafficFlowListContext'
-import { Loader2, Filter, Plug, ChevronDown, List, Activity, AlertTriangle } from 'lucide-react'
+import { Loader2, Filter, Plug, ChevronDown, List, Activity, AlertTriangle, Clock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDock } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel } from './trafficFilters'
 
 // Consecutive 2s retries of an empty result that came with a transient warning.
 const MAX_EMPTY_RETRIES = 5
@@ -445,6 +445,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   // an attribute it does not export, traffic it cannot orient. Retrying returns
   // the same answer, so retrying forever is all cost and no progress.
   const warningIsPermanent = flowsData?.warningKind === 'partial'
+  const coverage = coverageLabel(flowsData?.coveredSince, flowsData?.timestamp)
   // An 'incomplete' one is a fetch that worked but could not see everything
   // (events lost, nodes unreachable). Not a failure, so not retried at once.
   const warningIsIncomplete = flowsData?.warningKind === 'incomplete'
@@ -1214,6 +1215,15 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                       className="flex items-center gap-1 px-2 py-1 text-[10px] rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-theme-text-secondary hover:text-theme-text-primary transition-colors">
                       <List className="w-3 h-3" /> Flows
                     </button>
+                    </Tooltip>
+                  )}
+                  {coverage && (
+                    // Not a warning: a busy cluster reaches the limit on every
+                    // fetch. It says which part of the window the map shows.
+                    <Tooltip content={`Radar reads the newest ${(flowsData?.nodeFlowLimit ?? 0).toLocaleString()} flows from each node. On at least one node they did not reach back to the start of the ${timeRange} window, so older traffic is not shown; everything after that point is.`}>
+                      <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[10px] text-theme-text-secondary tabular-nums">
+                        <Clock className="w-3 h-3" /> {coverage} of {timeRange}
+                      </div>
                     </Tooltip>
                   )}
                   <div className="flex items-center px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[10px] text-theme-text-tertiary tabular-nums">

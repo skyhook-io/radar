@@ -113,6 +113,12 @@ type FlowsResponse struct {
 	// something the user needs to read rather than wait out. WarningIncomplete
 	// is not retried either.
 	WarningKind string `json:"warningKind,omitempty"`
+	// CoveredSince is when Flows start being complete, set when a source read
+	// only its newest records and some of the window did not fit: Hubble
+	// returns at most NodeFlowLimit flows per node. Before it, traffic may be
+	// missing; after it, nothing was cut. Nil when the whole window is covered.
+	CoveredSince  *time.Time `json:"coveredSince,omitempty"`
+	NodeFlowLimit int        `json:"nodeFlowLimit,omitempty"`
 }
 
 // Warning kinds for FlowsResponse.WarningKind.
@@ -157,9 +163,14 @@ type AggregatedFlow struct {
 	// figures rounded with a floor of one, which keeps a trickle visible but makes
 	// any ratio of the two meaningless at low rates: 0.3 req/s with 0.01 err/s
 	// rounds to one of each, a 100% error rate.
-	RequestRate      float64          `json:"requestRate,omitempty"`
-	ErrorRate        float64          `json:"errorRate,omitempty"`
-	AvgLatencyMs     float64          `json:"avgLatencyMs,omitempty"`
+	RequestRate  float64 `json:"requestRate,omitempty"`
+	ErrorRate    float64 `json:"errorRate,omitempty"`
+	AvgLatencyMs float64 `json:"avgLatencyMs,omitempty"`
+	// LatencySamples is how many measured responses the latency figures come
+	// from, for a source that reports individual responses. A client combining
+	// edges weights their averages by it. Unset for metric-based sources, whose
+	// averages are weighted by RequestRate instead.
+	LatencySamples   int64            `json:"latencySamples,omitempty"`
 	LatencyP50Ms     float64          `json:"latencyP50Ms,omitempty"`
 	LatencyP95Ms     float64          `json:"latencyP95Ms,omitempty"`
 	LatencyP99Ms     float64          `json:"latencyP99Ms,omitempty"`

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -243,5 +243,41 @@ describe('dedupeHTTPPairs', () => {
 
   it('keeps a request that got no response', () => {
     expect(rows(dedupeHTTPPairs([rec('a', 'b', 'REQUEST')], true))).toEqual(['a>b:80:REQUEST'])
+  })
+})
+
+describe('merged latency', () => {
+  const base: AggregatedFlow = { source: { name: 'a', namespace: 'shop', kind: 'Pod' }, destination: { name: 'web', namespace: 'shop', kind: 'Pod' }, protocol: 'tcp', port: 80, lastSeen: '', flowCount: 1, bytesSent: 0, bytesRecv: 0, connections: 1 }
+
+  it('drops percentiles once two edges with latency are merged', () => {
+    const into = { ...base, avgLatencyMs: 10, latencySamples: 90, latencyP50Ms: 9, latencyP95Ms: 30, latencyP99Ms: 40 }
+    mergeFlowVolume(into, { ...base, avgLatencyMs: 100, latencySamples: 10, latencyP50Ms: 90, latencyP95Ms: 300, latencyP99Ms: 400 })
+    expect(into.latencyP50Ms).toBeUndefined()
+    expect(into.latencyP95Ms).toBeUndefined()
+    expect(into.avgLatencyMs).toBeCloseTo(19, 6)
+  })
+
+  it('keeps the percentiles of the only edge that had latency', () => {
+    const into = { ...base }
+    mergeFlowVolume(into, { ...base, avgLatencyMs: 10, latencySamples: 5, latencyP95Ms: 30 })
+    expect(into.latencyP95Ms).toBe(30)
+    mergeFlowVolume(into, { ...base })
+    expect(into.latencyP95Ms).toBe(30)
+  })
+
+  it('weights a response-level edge by its samples', () => {
+    expect(latencyWeightOf({ ...base, avgLatencyMs: 5, latencySamples: 42 })).toBe(42)
+    expect(latencyWeightOf({ ...base, avgLatencyMs: 5, requestRate: 3, latencySamples: 42 })).toBe(3)
+    expect(latencyWeightOf({ ...base })).toBe(0)
+  })
+})
+
+describe('coverageLabel', () => {
+  it('says how far back the flows reach from when they were collected', () => {
+    expect(coverageLabel('2026-09-30T08:37:24Z', '2026-09-30T08:39:04Z')).toBe('last 1m 40s')
+    expect(coverageLabel('2026-09-30T08:38:59Z', '2026-09-30T08:39:04Z')).toBe('last 5s')
+  })
+  it('is empty when the window is fully covered', () => {
+    expect(coverageLabel(undefined, '2026-09-30T08:39:04Z')).toBeNull()
   })
 })

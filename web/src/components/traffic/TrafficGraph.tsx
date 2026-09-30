@@ -480,16 +480,14 @@ function DetailsPanel({
       if (f.l7Protocol) acc.add(f.l7Protocol)
       return acc
     }, new Set<string>()),
-    // Aggregate latency across edges (median of P50s, max of P95s)
-    latencyP50Ms: (() => {
-      const p50s = relatedFlows.map(f => f.latencyP50Ms).filter((v): v is number => v != null && v > 0)
-      if (p50s.length === 0) return undefined
-      p50s.sort((a, b) => a - b)
-      return p50s[Math.floor(p50s.length / 2)]
-    })(),
-    latencyP95Ms: (() => {
-      const p95s = relatedFlows.map(f => f.latencyP95Ms).filter((v): v is number => v != null && v > 0)
-      return p95s.length > 0 ? Math.max(...p95s) : undefined
+    // Percentiles of separate edges do not combine into a node percentile, so
+    // the node shows the slowest edge's P95 as that edge's, named.
+    slowestP95: (() => {
+      let slowest: AggregatedFlow | undefined
+      for (const f of relatedFlows) {
+        if (f.latencyP95Ms && (!slowest || f.latencyP95Ms > slowest.latencyP95Ms!)) slowest = f
+      }
+      return slowest && { ms: slowest.latencyP95Ms!, edge: `${slowest.source.workload || slowest.source.name} → ${slowest.destination.workload || slowest.destination.name}` }
     })(),
     // A metric-based source reports only an average per edge. The node's is
     // those averages weighted by the traffic each stands for, so a slow trickle
@@ -650,26 +648,17 @@ function DetailsPanel({
             )}
 
             {/* Node latency */}
-            {!nodeStats?.latencyP50Ms && nodeStats?.avgLatencyMs && (
+            {nodeStats?.avgLatencyMs && (
               <div className="pt-1">
-                <div className="text-[10px] text-theme-text-tertiary mb-1">Latency</div>
-                <div className="flex gap-2 text-xs">
+                <div className="text-[10px] text-theme-text-tertiary mb-1">Latency across its edges</div>
+                <div className="flex flex-col gap-0.5 text-xs">
                   <span className={clsx('font-medium', latencyColor(nodeStats.avgLatencyMs))}>
                     Avg: {formatLatency(nodeStats.avgLatencyMs)}
                   </span>
-                </div>
-              </div>
-            )}
-            {nodeStats?.latencyP50Ms && (
-              <div className="pt-1">
-                <div className="text-[10px] text-theme-text-tertiary mb-1">Latency</div>
-                <div className="flex gap-2 text-xs">
-                  <span className={clsx('font-medium', latencyColor(nodeStats.latencyP50Ms))}>
-                    P50: {formatLatency(nodeStats.latencyP50Ms)}
-                  </span>
-                  {nodeStats.latencyP95Ms && (
-                    <span className={clsx('font-medium', latencyColor(nodeStats.latencyP95Ms))}>
-                      P95: {formatLatency(nodeStats.latencyP95Ms)}
+                  {nodeStats.slowestP95 && (
+                    <span className="text-theme-text-secondary min-w-0 truncate">
+                      Slowest edge P95: <span className={clsx('font-medium', latencyColor(nodeStats.slowestP95.ms))}>{formatLatency(nodeStats.slowestP95.ms)}</span>
+                      <span className="text-theme-text-tertiary"> ({nodeStats.slowestP95.edge})</span>
                     </span>
                   )}
                 </div>

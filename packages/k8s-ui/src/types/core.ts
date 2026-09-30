@@ -1373,6 +1373,9 @@ export interface AggregatedFlow {
   requestRate?: number
   errorRate?: number
   avgLatencyMs?: number
+  /** How many measured responses the latency figures come from (sources that
+   *  report individual responses). Weights averages when edges are combined. */
+  latencySamples?: number
   latencyP50Ms?: number
   latencyP95Ms?: number
   latencyP99Ms?: number
@@ -1442,6 +1445,10 @@ export interface TrafficFlowsResponse {
   /** L7 responses run caller → callee on the server's port, like their request.
    *  Absent from a Radar that sent them server → client. */
   l7ResponsesCallerOriented?: boolean
+  /** When the flows start being complete: some node returned its full
+   *  nodeFlowLimit, so older traffic in the window did not fit. */
+  coveredSince?: string
+  nodeFlowLimit?: number
   warning?: string  // Non-fatal warning (e.g., query errors)
   /** 'transient' (or absent) means the condition may clear on its own and a
    *  retry is worthwhile. 'partial' means the flows are correct but some of
