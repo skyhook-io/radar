@@ -3,6 +3,7 @@ import {
   cnpgCertificateViews,
   cnpgDimensions,
   cnpgPDBFact,
+  cnpgLeaseHolderPod,
   cnpgLiveGap,
   cnpgPendingRestart,
   cnpgQuorumFact,
@@ -238,5 +239,12 @@ describe('cnpgDimensions', () => {
   it('serving is unassessed when instance Pods are not readable', () => {
     const d = cnpgDimensions({ row: row({ pods: [] }) })
     expect(d[0].text).toBe('unassessed')
+  })
+})
+
+describe('cnpgLeaseHolderPod', () => {
+  it('names the Pod of a controller-runtime holder identity', () => {
+    expect(cnpgLeaseHolderPod('cnpg-controller-manager-5fbdd6bb78-jx82z_6ec0566c-6da6-47aa-9ab1-0e5d3b2c1f11')).toBe('cnpg-controller-manager-5fbdd6bb78-jx82z')
+    expect(cnpgLeaseHolderPod('pg-1')).toBe('pg-1')
   })
 })

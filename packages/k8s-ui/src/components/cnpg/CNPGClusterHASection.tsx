@@ -1,5 +1,6 @@
 import { clsx } from 'clsx'
 import { Badge } from '../ui/Badge'
+import { Tooltip } from '../ui/Tooltip'
 import { formatAge } from '../resources/resource-utils'
 import { FactGrid, FactRow, FactValue, PrimaryConflictNote, RefLink, SummaryHeading, ToneDot, toneTextClass, type CNPGNavigate } from './primitives'
 import {
@@ -7,6 +8,7 @@ import {
   cnpgCertificateViews,
   cnpgHASourceText,
   cnpgImageDrift,
+  cnpgLeaseHolderPod,
   cnpgLiveGap,
   cnpgPDBFact,
   cnpgPendingRestart,
@@ -26,7 +28,14 @@ function LeaseValue({ lease, what }: { lease: CNPGHALease; what: string }) {
   if (lease.state !== 'ok') return <Unknown text={cnpgHASourceText(lease, what)} />
   return (
     <span>
-      held by <span className="font-mono break-all">{lease.holder || '(nobody)'}</span>
+      held by{' '}
+      {lease.holder && cnpgLeaseHolderPod(lease.holder) !== lease.holder ? (
+        <Tooltip content={lease.holder}>
+          <span className="font-mono break-all">{cnpgLeaseHolderPod(lease.holder)}</span>
+        </Tooltip>
+      ) : (
+        <span className="font-mono break-all">{lease.holder || '(nobody)'}</span>
+      )}
       {lease.renewTime && <span className="text-theme-text-secondary"> · renewed {formatAge(lease.renewTime)} ago</span>}
       {lease.expired && <span className={toneTextClass('degraded')}> · expired</span>}
       {lease.controlledByCluster === false && <span className={toneTextClass('degraded')}> · not owned by this Cluster</span>}

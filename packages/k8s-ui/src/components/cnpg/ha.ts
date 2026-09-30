@@ -423,3 +423,12 @@ function protectionDimension(row: CNPGFleetRow): CNPGDimension {
   if (p.walArchiving.tone === 'unknown') return { ...base, tone: 'unknown', text: 'unassessed', source: 'WAL archiving not reported' }
   return { ...base, tone: 'healthy', text: 'archiving', source: 'ContinuousArchiving condition' }
 }
+
+/**
+ * The Pod a Lease holder names. controller-runtime's leader election records
+ * "<pod>_<uuid>"; a CNPG primary Lease records the Pod name alone.
+ */
+export function cnpgLeaseHolderPod(holder: string): string {
+  const i = holder.indexOf('_')
+  return i > 0 ? holder.slice(0, i) : holder
+}
