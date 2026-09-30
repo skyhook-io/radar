@@ -661,13 +661,19 @@ func (s *Server) cnpgStorageWAL(w http.ResponseWriter, r *http.Request, cache *k
 			if m.CNPGInstanceMetricFacts != nil {
 				out.SizeBytes, out.Segments = m.WalBytes, m.WalSegments
 				out.Slots = append([]CNPGSlotBytes(nil), m.ReplicationSlotsRetainedBytes...)
+				// Without the WAL collector the exporter's queries are failing,
+				// so an empty slot list is not "no slots".
+				if out.Metrics.State == cnpgRuntimeStateOK && m.WalBytes == nil {
+					out.Metrics.State = cnpgRuntimeStatePartial
+					out.Metrics.Reason = "the exporter reported no WAL figures in this sample, so WAL size and slots were not measured"
+				}
 			}
 		})
 	}
 	run.wait()
 
 	cov := CNPGStorageCoverage{State: cnpgStorageStateOK, Grant: grant}
-	failed := 0
+	failed, partial := 0, 0
 	for i, p := range pods {
 		wal := results[i]
 		if fenced.fences(p.Name) {
@@ -677,8 +683,11 @@ func (s *Server) cnpgStorageWAL(w http.ResponseWriter, r *http.Request, cache *k
 		if wal.Status.State == cnpgRuntimeStateDenied || wal.Metrics.State == cnpgRuntimeStateDenied {
 			cov.State = cnpgStorageStateDenied
 		}
-		if wal.Status.State != cnpgRuntimeStateOK && wal.Metrics.State != cnpgRuntimeStateOK {
+		switch statusOK, metricsOK := wal.Status.State == cnpgRuntimeStateOK, wal.Metrics.State == cnpgRuntimeStateOK; {
+		case !statusOK && !metricsOK:
 			failed++
+		case !statusOK || !metricsOK:
+			partial++
 		}
 		wal.Volume = walVolume[p.Name]
 		in, ok := byInstance[p.Name]
@@ -688,9 +697,9 @@ func (s *Server) cnpgStorageWAL(w http.ResponseWriter, r *http.Request, cache *k
 		}
 		in.WAL = &wal
 	}
-	if cov.State == cnpgStorageStateOK && failed > 0 {
+	if cov.State == cnpgStorageStateOK && failed+partial > 0 {
 		cov.State = cnpgStorageStatePartial
-		cov.Reason = fmt.Sprintf("%d of %d instances could not be read", failed, len(pods))
+		cov.Reason = cnpgWALCoverageReason(failed, partial, len(pods))
 	}
 	return cov
 }
@@ -901,4 +910,22 @@ func (s *Server) cnpgNamespaceDisk(r *http.Request, cache *k8s.ResourceCache, na
 		out[i] = d
 	}
 	return out
+}
+
+// cnpgWALCoverageReason counts instances whose WAL facts are missing
+// entirely apart from those missing one of the two sources, so the count
+// matches what each instance card shows.
+func cnpgWALCoverageReason(failed, partial, total int) string {
+	var parts []string
+	if failed > 0 {
+		parts = append(parts, fmt.Sprintf("%d of %d instances could not be read", failed, total))
+	}
+	if partial > 0 {
+		verb := "were"
+		if partial == 1 {
+			verb = "was"
+		}
+		parts = append(parts, fmt.Sprintf("%d of %d %s read only in part", partial, total, verb))
+	}
+	return strings.Join(parts, "; ")
 }

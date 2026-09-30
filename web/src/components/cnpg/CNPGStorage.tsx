@@ -186,7 +186,7 @@ function WALHolders({ wal, primary }: { wal: CNPGStorageWAL; primary: boolean })
           value={wal.sizeBytes !== undefined ? formatBytes(wal.sizeBytes) : '—'}
           detail={wal.segments !== undefined ? `${wal.segments} segments` : undefined}
           source="Exporter cnpg_collector_pg_wal"
-          missing={wal.metrics.state !== 'ok' ? wal.metrics.error || wal.metrics.state : undefined}
+          missing={wal.metrics.state !== 'ok' ? wal.metrics.error || wal.metrics.reason || wal.metrics.state : undefined}
         />
         <WALFact
           label="Waiting to archive"
@@ -202,14 +202,14 @@ function WALHolders({ wal, primary }: { wal: CNPGStorageWAL; primary: boolean })
                   : undefined
           }
           source="Instance manager readyWalFiles"
-          missing={wal.status.state !== 'ok' ? wal.status.error || wal.status.state : undefined}
+          missing={wal.status.state !== 'ok' ? wal.status.error || wal.status.reason || wal.status.state : undefined}
         />
         <WALFact
           label="Held by replication slots"
           value={wal.metrics.state !== 'ok' ? '—' : slots.length === 0 ? 'No slots' : `up to ${formatBytes(retained)}`}
           detail={slots.length > 0 ? slots.map((s) => `${s.slot} ${formatBytes(s.bytes)}`).join(' · ') : undefined}
           source="Exporter pg_replication_slots"
-          missing={wal.metrics.state !== 'ok' ? wal.metrics.error || wal.metrics.state : undefined}
+          missing={wal.metrics.state !== 'ok' ? wal.metrics.error || wal.metrics.reason || wal.metrics.state : undefined}
         />
       </div>
       <div className="mt-2 text-[11.5px] text-theme-text-tertiary">
@@ -338,7 +338,7 @@ export function CNPGStorage({ namespace, name, primary }: { namespace: string; n
       <ExpansionCard data={data} volumes={allVolumes} onResize={setResize} />
 
       <Card title="Logical database sizes (primary)" footer="pg_database_size for each database: the data PostgreSQL holds, not the space the volume uses.">
-        {primary?.metrics.state === 'ok' && primary.metrics.databaseSizes?.length ? (
+        {(primary?.metrics.state === 'ok' || primary?.metrics.state === 'partial') && primary.metrics.databaseSizes?.length ? (
           primary.metrics.databaseSizes.map((d) => (
             <div key={d.database} className="flex justify-between font-mono text-sm">
               <span className="truncate">{d.database}</span>
@@ -347,7 +347,11 @@ export function CNPGStorage({ namespace, name, primary }: { namespace: string; n
           ))
         ) : (
           <div className="text-sm text-theme-text-tertiary">
-            {primary ? `Not available from the primary's exporter (${primary.metrics.error || primary.metrics.state}).` : 'No primary reported.'}
+            {!primary
+              ? 'No primary reported.'
+              : primary.metrics.state === 'ok' || primary.metrics.state === 'partial'
+                ? "Not reported: this sample from the primary's exporter has no database sizes."
+                : `Not available from the primary's exporter: ${primary.metrics.error || primary.metrics.reason || (primary.metrics.state === 'denied' ? 'no access (needs get pods/proxy)' : primary.metrics.state)}.`}
           </div>
         )}
       </Card>

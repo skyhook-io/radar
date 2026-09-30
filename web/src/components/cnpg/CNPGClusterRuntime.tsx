@@ -151,7 +151,8 @@ function SessionAggregates({ primary }: { primary?: CNPGRuntimeInstance }) {
   const m = primary?.metrics
   if (!m || m.state !== 'ok') return <Card title="Sessions"><Unavailable inst={primary} what="Sessions" /></Card>
   const rows = [...(m.sessions ?? [])].sort((a, b) => b.count - a.count)
-  const idleTx = rows.filter((r) => r.state.startsWith('idle in transaction')).reduce((s, r) => s + r.count, 0)
+  const measured = m.sessionsTotal !== undefined
+  const idleTx = measured ? rows.filter((r) => r.state.startsWith('idle in transaction')).reduce((s, r) => s + r.count, 0) : undefined
   return (
     <Card
       title={<>Sessions on {primary!.pod}</>}
@@ -160,11 +161,15 @@ function SessionAggregates({ primary }: { primary?: CNPGRuntimeInstance }) {
       <div className="mb-3 flex flex-wrap gap-6 text-sm">
         <Metric label="Connections" value={m.sessionsTotal !== undefined ? `${m.sessionsTotal}${m.maxConnections ? ` / ${m.maxConnections}` : ''}` : '—'} tone={m.maxConnections && m.sessionsTotal && m.sessionsTotal / m.maxConnections > 0.85 ? 'degraded' : undefined} />
         <Metric label="Waiting on locks" value={m.waitingBackends ?? '—'} tone={m.waitingBackends ? 'degraded' : undefined} />
-        <Metric label="Idle in transaction" value={idleTx} tone={idleTx ? 'degraded' : undefined} />
+        <Metric label="Idle in transaction" value={idleTx ?? '—'} tone={idleTx ? 'degraded' : undefined} />
         <Metric label="Oldest transaction" value={seconds(m.oldestXactSeconds)} tone={m.oldestXactSeconds !== undefined && m.oldestXactSeconds > 300 ? 'degraded' : undefined} />
       </div>
       {rows.length === 0 ? (
-        <div className="text-sm text-theme-text-tertiary">{m.missing?.includes('backends') ? 'The exporter does not publish session metrics on this cluster.' : 'No client sessions.'}</div>
+        <div className="text-sm text-theme-text-tertiary">
+          {measured
+            ? 'No client sessions.'
+            : 'Sessions unknown: this sample from the exporter has no cnpg_backends_total, so sessions were not measured. PostgreSQL may not be accepting connections, or the exporter does not collect it.'}
+        </div>
       ) : (
         <table className="w-full text-sm">
           <thead className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">

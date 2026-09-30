@@ -399,3 +399,44 @@ func TestCNPGStorageExpansionDefaultsToStorageSize(t *testing.T) {
 		t.Errorf("resizeInUseVolumes = %v, want the declared false", got.ResizeInUseVolumes)
 	}
 }
+
+func TestCNPGWALCoverageReason(t *testing.T) {
+	cases := []struct {
+		failed, partial, total int
+		want                   string
+	}{
+		{3, 0, 3, "3 of 3 instances could not be read"},
+		{1, 2, 3, "1 of 3 instances could not be read; 2 of 3 were read only in part"},
+		{0, 1, 3, "1 of 3 was read only in part"},
+	}
+	for _, c := range cases {
+		if got := cnpgWALCoverageReason(c.failed, c.partial, c.total); got != c.want {
+			t.Errorf("(%d, %d, %d) = %q, want %q", c.failed, c.partial, c.total, got, c.want)
+		}
+	}
+}
+
+// An exporter whose queries fail still answers, without the WAL collector:
+// that instance was read only in part, and its slot list is not "no slots".
+func TestCNPGClusterStorage_WALWithoutCollectorIsPartial(t *testing.T) {
+	seedCNPGStorageCluster(t, "pgst3")
+	useCNPGProxyAPIServer(t, func(w http.ResponseWriter, c cnpgProxyCall) {
+		if c.port == "9187" {
+			_, _ = io.WriteString(w, "# TYPE cnpg_pg_postmaster_start_time gauge\ncnpg_pg_postmaster_start_time 1.7e9\n")
+			return
+		}
+		cnpgHealthyInstances(w, c)
+	})
+	status, got, body := getCNPGStorage(t, "/api/cnpg/clusters/pgst3/pg-orders/storage")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d: %s", status, body)
+	}
+	if got.WAL.State != cnpgStorageStatePartial || got.WAL.Reason != "2 of 2 were read only in part" {
+		t.Errorf("wal coverage = %+v", got.WAL)
+	}
+	for name, in := range cnpgStorageInstances(t, got) {
+		if in.WAL == nil || in.WAL.Metrics.State != cnpgRuntimeStatePartial || in.WAL.Metrics.Reason == "" || in.WAL.Status.State != cnpgRuntimeStateOK {
+			t.Errorf("%s WAL = %+v", name, in.WAL)
+		}
+	}
+}

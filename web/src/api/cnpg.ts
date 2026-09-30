@@ -324,6 +324,7 @@ export interface CNPGRuntimeInstance {
   status: {
     state: CNPGRuntimeSourceState
     error?: string
+    reason?: string
     capturedAt?: string
     isPrimary?: boolean
     currentLsn?: string
@@ -344,6 +345,7 @@ export interface CNPGRuntimeInstance {
   metrics: {
     state: CNPGRuntimeSourceState
     error?: string
+    reason?: string
     capturedAt?: string
     missing?: string[]
     maxConnections?: number
