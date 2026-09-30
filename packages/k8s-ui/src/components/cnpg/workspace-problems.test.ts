@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgCompareProblems, cnpgIssueTitle, type CNPGProblem } from './workspace'
+import { cnpgCompareProblems, cnpgIssueText, cnpgIssueTitle, type CNPGProblem } from './workspace'
 
 const problem = (title: string, severity: CNPGProblem['severity'], kind: string, group = ''): CNPGProblem => ({
   id: title,
@@ -33,5 +33,19 @@ describe('cnpgIssueTitle', () => {
   })
   it('keeps a real message', () => {
     expect(cnpgIssueTitle({ kind: 'Cluster', name: 'pg', reason: 'ContinuousArchivingFailing', message: 'WAL archiving failing' })).toBe('WAL archiving failing')
+  })
+})
+
+describe('cnpgIssueText', () => {
+  it('heads a CNPG condition issue with a plain title and keeps the operator message beneath', () => {
+    const t = cnpgIssueText({
+      kind: 'Cluster',
+      name: 'pg-wal-failing',
+      reason: 'CNPGWALArchivingFailing',
+      message:
+        'The last WAL archival did not complete; recovery-point advancement is uncertain: unexpected failure invoking barman-cloud-wal-archive: exit status 4',
+    })
+    expect(t.title).toBe('WAL archiving is failing')
+    expect(t.detail).toContain('exit status 4')
   })
 })

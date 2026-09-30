@@ -223,19 +223,39 @@ const CNPG_POD_REASON_SENTENCES: Record<string, string> = {
   ErrImagePull: 'cannot pull its image (ErrImagePull)',
 }
 
+// Plain headlines for CNPG issues whose message carries the operator's own
+// condition text; that message becomes the detail beneath.
+const CNPG_REASON_TITLES: Record<string, string> = {
+  CNPGWALArchivingFailing: 'WAL archiving is failing',
+  CNPGLastBackupFailed: 'The last backup failed',
+  CNPGBackupFailed: 'Backup failed',
+  CNPGScheduledBackupMissed: 'A scheduled backup did not run',
+  CNPGScheduledRunNoBackup: 'A scheduled run produced no backup',
+  CNPGCertificateExpiring: 'A certificate is expiring',
+}
+
 /**
- * A problem's title from an issue: its message, unless the message is empty
- * or only the reason token (e.g. "ReadinessProbeFailed"), which is then
- * turned into a sentence about the subject.
+ * A problem's headline and detail from an issue. Known CNPG reasons get a
+ * short plain title with the operator's message beneath; otherwise the
+ * message is the title, unless it is empty or only the reason token (e.g.
+ * "ReadinessProbeFailed"), which is turned into a sentence about the subject.
  */
-export function cnpgIssueTitle(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'name' | 'reason' | 'message'>): string {
+export function cnpgIssueText(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'name' | 'reason' | 'message' | 'cause'>): { title: string; detail?: string } {
   const message = issue.message?.trim() ?? ''
-  if (message && message !== issue.reason && /\s/.test(message)) return message
+  const cause = issue.cause?.trim() || undefined
+  const known = CNPG_REASON_TITLES[issue.reason]
+  if (known) return { title: known, detail: [message, cause].filter(Boolean).join(' ') || undefined }
+  if (message && message !== issue.reason && /\s/.test(message)) return { title: message, detail: cause }
   const token = message || issue.reason
   const sentence = CNPG_POD_REASON_SENTENCES[token]
-  if (sentence) return `${issue.name} ${sentence}`
+  if (sentence) return { title: `${issue.name} ${sentence}`, detail: cause }
   const words = token.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()
-  return `${issue.kind} ${issue.name}: ${words}`
+  return { title: `${issue.kind} ${issue.name}: ${words}`, detail: cause }
+}
+
+/** The headline alone; see cnpgIssueText. */
+export function cnpgIssueTitle(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'name' | 'reason' | 'message'>): string {
+  return cnpgIssueText(issue).title
 }
 
 export function cnpgIssueCategory(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'reason'>): CNPGProblemCategory {
@@ -606,8 +626,7 @@ function problemsFor(
       id: `${issue.id}:${issue.kind}/${issue.name}`,
       severity: issue.severity,
       category: cnpgIssueCategory(issue),
-      title: cnpgIssueTitle(issue),
-      detail: issue.cause || undefined,
+      ...cnpgIssueText(issue),
       subject: { kind: issue.kind, group: issue.group ?? '', namespace: ns, name: issue.name },
       source: 'issue',
     })
