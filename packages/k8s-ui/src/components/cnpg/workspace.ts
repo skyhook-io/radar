@@ -106,6 +106,8 @@ export interface CNPGFact {
   source?: string
   /** A timestamp the text refers to; the UI renders it as an age. */
   at?: string
+  /** The full explanation behind a short `source`, shown on hover only. */
+  detail?: string
 }
 
 export type CNPGProblemCategory = 'availability' | 'protection' | 'declarations' | 'pooling'
@@ -943,8 +945,9 @@ export function cnpgDiskFact(r: CNPGDiskReading | undefined): CNPGFact {
   switch (r.state) {
     case 'denied':
       return { text: 'No access', tone: 'unknown', source: r.grant ? `Needs ${r.grant}` : r.reason }
-    case 'noSeries':
     case 'noPrometheus':
+      return { text: 'No usage metrics', tone: 'unknown', source: CNPG_PROMETHEUS_NOT_CONNECTED, detail: r.reason }
+    case 'noSeries':
     case 'ok':
     case 'partial':
       return { text: 'No usage metrics', tone: 'unknown', source: r.reason ?? 'Used space needs Prometheus with kubelet volume stats' }
@@ -985,6 +988,9 @@ export function applyCNPGDisk(fleet: CNPGFleet, readings: CNPGDiskReading[] | un
   })
   return finishFleet(rows, fleet.incompleteKinds)
 }
+
+/** The short per-fact source when Radar has no Prometheus; the reason goes in `detail`. */
+export const CNPG_PROMETHEUS_NOT_CONNECTED = 'Prometheus not connected'
 
 const CNPG_LAG_UNMEASURED_SOURCE = 'Pod readiness does not show whether a replica is streaming'
 
@@ -1033,7 +1039,7 @@ function formatLagSeconds(s: number): string {
 function measuredReplication(base: CNPGFact, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): CNPGFact {
   const prefix = base.text.replace(/ · lag unknown$/, '')
   if (src.source === 'none') {
-    return { text: `${prefix} · lag unknown (no metrics)`, tone: 'unknown', source: src.reason ?? 'Replication lag needs Prometheus scraping the CNPG exporter' }
+    return { text: `${prefix} · lag unknown (no metrics)`, tone: 'unknown', source: CNPG_PROMETHEUS_NOT_CONNECTED, detail: src.reason }
   }
   const lag = reading?.lag
   switch (lag?.state) {

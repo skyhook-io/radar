@@ -76,9 +76,9 @@ describe('applyCNPGDisk', () => {
   })
 
   it('raises nothing without a measurement', () => {
-    const fleet = applyCNPGDisk(fleetOf('pg-a'), [reading('pg-a', { state: 'noPrometheus', measured: 0 })])
+    const fleet = applyCNPGDisk(fleetOf('pg-a'), [reading('pg-a', { state: 'noPrometheus', measured: 0, reason: 'Radar is not connected to Prometheus: x' })])
     expect(fleet.attentionCount).toBe(0)
-    expect(fleet.rows[0].disk?.text).toBe('No usage metrics')
+    expect(fleet.rows[0].disk).toMatchObject({ text: 'No usage metrics', source: 'Prometheus not connected', detail: 'Radar is not connected to Prometheus: x' })
   })
 
   it('leaves the fleet as built when no reading was requested', () => {

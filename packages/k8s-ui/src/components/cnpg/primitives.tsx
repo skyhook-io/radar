@@ -42,9 +42,9 @@ export function FactValue({ fact, className }: { fact: CNPGFact; className?: str
       {age && <span className="text-theme-text-secondary">{fact.text ? ' · ' : ''}{age} ago</span>}
     </span>
   )
-  if (!fact.source && !fact.at) return body
+  if (!fact.source && !fact.at && !fact.detail) return body
   return (
-    <Tooltip content={[fact.at ? new Date(fact.at).toUTCString() : null, fact.source].filter(Boolean).join(' · ')} position="top">
+    <Tooltip content={[fact.at ? new Date(fact.at).toUTCString() : null, fact.source, fact.detail].filter(Boolean).join(' · ')} position="top">
       {body}
     </Tooltip>
   )

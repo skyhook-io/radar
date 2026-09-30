@@ -467,3 +467,17 @@ func TestProbeCandidatesWithReasons_DeadlineMarksLaunchedProbesAsTransportFailur
 		t.Fatalf("reasons[%d] = %q, want empty for a probe the pass never launched", maxConcurrentProbes, reasons[maxConcurrentProbes])
 	}
 }
+
+func TestUnreachableErrorsAreOneSentenceAndKeepTheirSentinels(t *testing.T) {
+	for _, err := range []error{
+		errPrometheusUnreachable,
+		unreachableBecause("Radar found %d services that may be Prometheus but may not port-forward to them (needs create pods/portforward)", 2),
+	} {
+		if !errors.Is(err, errPrometheusUnreachable) || !errors.Is(err, ErrPrometheusNotFound) {
+			t.Errorf("%v lost its sentinel", err)
+		}
+		if strings.Contains(err.Error(), ErrPrometheusNotFound.Error()) {
+			t.Errorf("%q claims nothing was found", err)
+		}
+	}
+}

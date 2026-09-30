@@ -64,7 +64,8 @@ describe('applyCNPGFleetMetrics', () => {
 
     const none = applyCNPGFleetMetrics(fleet(), undefined, { source: 'none', reason: 'Radar is not connected to Prometheus' })
     expect(row(none, 'ha').replication.text).toBe('1/1 replicas ready · lag unknown (no metrics)')
-    expect(row(none, 'ha').replication.source).toBe('Radar is not connected to Prometheus')
+    expect(row(none, 'ha').replication.source).toBe('Prometheus not connected')
+    expect(row(none, 'ha').replication.detail).toBe('Radar is not connected to Prometheus')
     expect(row(none, 'ha').diskGrowth).toBeUndefined()
   })
 

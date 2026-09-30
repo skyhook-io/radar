@@ -19,11 +19,29 @@ import (
 var ErrPrometheusNotFound = errors.New("no Prometheus service found in cluster")
 
 // errPrometheusUnreachable is ErrPrometheusNotFound for the case where
-// discovery enumerated a candidate and could not reach it. It wraps the
-// sentinel with an identical message so every errors.Is caller and every
-// message a user sees stay the same, while Availability can tell an
-// unreachable installation from a cluster that has none.
-var errPrometheusUnreachable = fmt.Errorf("%w", ErrPrometheusNotFound)
+// discovery enumerated a candidate and could not reach it, so every errors.Is
+// caller keeps its answer while Availability can tell an unreachable
+// installation from a cluster that has none. Its message must not claim
+// nothing was found.
+var errPrometheusUnreachable error = &prometheusUnreachableError{
+	msg:   "Radar found services that may be Prometheus but could not reach any of them",
+	cause: ErrPrometheusNotFound,
+}
+
+// prometheusUnreachableError carries a complete sentence for an unreachable
+// installation. Unlike fmt's %w it does not append the wrapped sentinel's
+// text, which would contradict the sentence.
+type prometheusUnreachableError struct {
+	msg   string
+	cause error
+}
+
+func (e *prometheusUnreachableError) Error() string { return e.msg }
+func (e *prometheusUnreachableError) Unwrap() error { return e.cause }
+
+func unreachableBecause(format string, args ...any) error {
+	return &prometheusUnreachableError{msg: fmt.Sprintf(format, args...), cause: errPrometheusUnreachable}
+}
 
 // errDiscoverySuperseded is returned when a configuration change (Reset /
 // SetManualURL / SetHeaders) invalidated a discovery mid-flight. The result is
@@ -328,10 +346,12 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	switch {
 	case lastErr == nil:
 		return "", "", errPrometheusUnreachable
+	case len(candidates) == 1 && forbidden == 1:
+		return "", "", unreachableBecause("Radar found a service that may be Prometheus (%s/%s) but may not port-forward to it (needs create pods/portforward)", candidates[0].Namespace, candidates[0].Name)
 	case len(candidates) > 1 && forbidden == len(candidates):
-		return "", "", fmt.Errorf("port-forwarding to the %d Prometheus candidates was refused (needs create pods/portforward): %w", len(candidates), errPrometheusUnreachable)
+		return "", "", unreachableBecause("Radar found %d services that may be Prometheus but may not port-forward to them (needs create pods/portforward)", len(candidates))
 	case len(candidates) > 1:
-		return "", "", fmt.Errorf("none of the %d candidate Prometheus services answered through a port-forward: %w", len(candidates), errPrometheusUnreachable)
+		return "", "", unreachableBecause("Radar found %d services that may be Prometheus but none answered through a port-forward", len(candidates))
 	}
 	return "", "", lastErr
 }
