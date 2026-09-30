@@ -143,7 +143,7 @@ export function CNPGReplicationView({
             <>
               <div className="mt-1 font-mono text-xs text-theme-text-secondary">LSN {primary.status.currentLsn ?? '—'}</div>
               <InstanceFacts inst={primary} />
-              <SourceState label="Status" state={primary.status.state} error={primary.status.error} />
+              <SourceState label="Status" state={primary.status.state} error={primary.status.error ?? primary.status.reason} />
               <div className="mt-2 flex flex-wrap gap-3 text-xs">
                 {onOpenLogs && (
                   <button type="button" className="text-accent-text hover:underline" onClick={() => onOpenLogs(primary.pod)}>
@@ -196,7 +196,7 @@ export function CNPGReplicationView({
                   received {r.status.receivedLsn ?? '—'} · replayed {r.status.replayLsn ?? '—'}
                 </div>
                 <InstanceFacts inst={r} primaryVersion={primaryVersion} />
-                <SourceState label="Status" state={r.status.state} error={r.status.error} />
+                <SourceState label="Status" state={r.status.state} error={r.status.error ?? r.status.reason} />
                 <div className="mt-2 flex flex-wrap gap-3 text-xs">
                   {onOpenLogs && (
                     <button type="button" className="text-accent-text hover:underline" onClick={() => onOpenLogs(r.pod)}>

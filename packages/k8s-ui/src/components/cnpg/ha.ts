@@ -120,6 +120,8 @@ export interface CNPGInstanceLive {
   state: string
   pendingRestart?: boolean
   pendingRestartForDecrease?: boolean
+  /** The report did not finish its reads, so pendingRestart is not established. */
+  incomplete?: boolean
   roleDetail?: 'primary' | 'pgRewind' | 'replayPaused' | 'streaming' | 'fileBased'
   instanceManagerVersion?: string
   timeline?: number
@@ -281,7 +283,7 @@ export function cnpgCertificateViews(certs: CNPGHACertificate[] | undefined, now
 }
 
 export function cnpgPendingRestart(live: CNPGInstanceLive[] | undefined): { known: boolean; pods: string[]; forDecrease: boolean } {
-  const read = (live ?? []).filter((l) => l.state === 'ok' || l.state === 'partial')
+  const read = (live ?? []).filter((l) => (l.state === 'ok' || l.state === 'partial') && !l.incomplete)
   if (read.length === 0) return { known: false, pods: [], forDecrease: false }
   const pending = read.filter((l) => l.pendingRestart)
   return { known: read.length === (live ?? []).length, pods: pending.map((l) => l.pod), forDecrease: pending.some((l) => l.pendingRestartForDecrease) }

@@ -391,10 +391,17 @@ export interface CNPGRuntimeInstance {
     roleDetail?: 'primary' | 'pgRewind' | 'replayPaused' | 'streaming' | 'fileBased'
     isWalReceiverActive?: boolean
     archiving?: { lastArchivedWal?: string; lastArchivedAt?: string; lastFailedWal?: string; lastFailedAt?: string; readyWalFiles?: number }
-    replication?: CNPGRuntimeReplication[]
-    slots?: { name: string; type?: string; plugin?: string; active?: boolean; database?: string; restartLsn?: string; walStatus?: string; retainedBytes?: number }[]
+    replication?: CNPGRuntimeReplication[] | null
+    slots?: null | { name: string; type?: string; plugin?: string; active?: boolean; database?: string; restartLsn?: string; walStatus?: string; retainedBytes?: number }[]
     /** pg_basebackup streams to joining instances; [] when the report says none run. */
-    baseBackups?: CNPGRuntimeBaseBackup[]
+    baseBackups?: CNPGRuntimeBaseBackup[] | null
+    /**
+     * The instance manager answered without finishing its reads (a masked
+     * error, or pg_rewind running): replication, slots, baseBackups and
+     * archiving are null when unread, and pendingRestart is not established.
+     */
+    incomplete?: boolean
+    maskedError?: string
   }
   metrics: {
     state: CNPGRuntimeSourceState

@@ -183,8 +183,9 @@ type CNPGInstanceStatusFacts struct {
 	IsInstanceManagerUpgrading bool   `json:"isInstanceManagerUpgrading,omitempty"`
 	// RoleDetail is derived only from the instance's own report: primary |
 	// pgRewind | replayPaused | streaming | fileBased.
-	RoleDetail  string                  `json:"roleDetail"`
-	Archiving   CNPGArchivingStatus     `json:"archiving"`
+	RoleDetail string `json:"roleDetail"`
+	// Archiving is absent when the report did not reach pg_stat_archiver.
+	Archiving   *CNPGArchivingStatus    `json:"archiving,omitempty"`
 	Replication []CNPGReplicationStatus `json:"replication"`
 	Slots       []CNPGSlotStatus        `json:"slots"`
 	// BaseBackups are pg_basebackup streams from this instance to a joining
@@ -192,6 +193,12 @@ type CNPGInstanceStatusFacts struct {
 	// for application names ending in "-join" (its join Job), so these are new
 	// replicas being cloned, never Backup objects. Empty = none running.
 	BaseBackups []CNPGBaseBackupStatus `json:"baseBackups"`
+	// Incomplete: the instance manager answered without finishing its reads
+	// (it masks errors while PostgreSQL may be unavailable, and reads nothing
+	// while pg_rewind runs). Lists it did not fill are then null, not empty,
+	// and pendingRestart and a standby's roleDetail are not established.
+	Incomplete  bool   `json:"incomplete,omitempty"`
+	MaskedError string `json:"maskedError,omitempty"`
 }
 
 // CNPGBaseBackupStatus is one pg_stat_progress_basebackup row. TotalBytes is
@@ -976,6 +983,7 @@ func formatCNPGByteCap(n int64) string {
 type cnpgPgStatus struct {
 	IsPrimary           *bool  `json:"isPrimary"`
 	MightBeUnavailable  bool   `json:"mightBeUnavailable"`
+	MaskedError         string `json:"mightBeUnavailableMaskedError"`
 	CurrentLsn          string `json:"currentLsn"`
 	ReceivedLsn         string `json:"receivedLsn"`
 	ReplayLsn           string `json:"replayLsn"`
@@ -1070,7 +1078,7 @@ func parseCNPGPgStatus(body []byte) (*CNPGInstanceStatusFacts, string, error) {
 		IsPgRewindRunning:          st.IsPgRewindRunning,
 		InstanceManagerVersion:     st.InstanceManagerVersion,
 		IsInstanceManagerUpgrading: st.IsInstanceManagerUpgrading,
-		Archiving: CNPGArchivingStatus{
+		Archiving: &CNPGArchivingStatus{
 			LastArchivedWal: st.LastArchivedWAL,
 			LastArchivedAt:  cnpgStatusTime(st.LastArchivedWALTime),
 			LastFailedWal:   st.LastFailedWAL,
@@ -1138,7 +1146,43 @@ func parseCNPGPgStatus(body []byte) (*CNPGInstanceStatusFacts, string, error) {
 		}
 		facts.BaseBackups = append(facts.BaseBackups, row)
 	}
+	if why := cnpgIncompleteReport(&st); why != "" {
+		markCNPGStatusIncomplete(facts, &st)
+		partial = append(partial, why)
+	}
 	return facts, strings.Join(partial, "; "), nil
+}
+
+func cnpgIncompleteReport(st *cnpgPgStatus) string {
+	switch {
+	case st.MaskedError != "":
+		return "the instance manager answered while PostgreSQL may be unavailable and masked an error (" + truncateCNPGRuntimeError(st.MaskedError) + "); what it did not read is unknown"
+	case st.IsPgRewindRunning:
+		return "pg_rewind is running, so the instance manager read nothing from PostgreSQL"
+	}
+	return ""
+}
+
+// markCNPGStatusIncomplete keeps what the report did carry: each list is
+// filled in one step, so a non-empty one is whole, but an empty one may never
+// have been read.
+func markCNPGStatusIncomplete(f *CNPGInstanceStatusFacts, st *cnpgPgStatus) {
+	f.Incomplete, f.MaskedError = true, st.MaskedError
+	if len(f.Replication) == 0 {
+		f.Replication = nil
+	}
+	if len(f.Slots) == 0 {
+		f.Slots = nil
+	}
+	if len(f.BaseBackups) == 0 {
+		f.BaseBackups = nil
+	}
+	if st.LastArchivedWALTime == "" {
+		f.Archiving = nil
+	}
+	if !f.IsPrimary && !f.IsPgRewindRunning {
+		f.RoleDetail = ""
+	}
 }
 
 // cnpgRoleDetail names what an instance is doing from its own report, never

@@ -216,7 +216,8 @@ function streamingStandby(obs: CNPGObservation, pod: string): boolean | null {
   const primaryName = obs.facts?.currentPrimary
   const primary = obs.runtime.instances.find((i) => (primaryName ? i.pod === primaryName : i.role === 'primary'))?.status
   if (primary && (primary.state === 'ok' || primary.state === 'partial')) {
-    return (primary.replication ?? []).some((r) => r.applicationName === pod && r.state === 'streaming')
+    if (!primary.replication) return null
+    return primary.replication.some((r) => r.applicationName === pod && r.state === 'streaming')
   }
   return own?.state === 'denied' ? null : false
 }

@@ -773,3 +773,35 @@ func TestClassifyCNPGProxyErrorSchemeMismatchOnly(t *testing.T) {
 		t.Errorf("timeout = %+v, want unreachable without retry", out)
 	}
 }
+
+func TestParseCNPGPgStatusIncompleteReportIsNotNone(t *testing.T) {
+	masked := `{"isPrimary": false, "mightBeUnavailable": true, "mightBeUnavailableMaskedError": "failed to connect to /controller/run/.s.PGSQL.5432", "instanceManagerVersion": "1.27.0"}`
+	facts, partial, err := parseCNPGPgStatus([]byte(masked))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !facts.Incomplete || facts.MaskedError == "" || !strings.Contains(partial, "masked an error") {
+		t.Errorf("incomplete not reported: %+v %q", facts, partial)
+	}
+	if facts.Replication != nil || facts.Slots != nil || facts.BaseBackups != nil || facts.Archiving != nil {
+		t.Errorf("unread lists must be unknown, not empty: repl=%v slots=%v bb=%v arch=%v", facts.Replication, facts.Slots, facts.BaseBackups, facts.Archiving)
+	}
+	if facts.RoleDetail != "" {
+		t.Errorf("a standby's role detail is not established from a masked report, got %q", facts.RoleDetail)
+	}
+	body, _ := json.Marshal(facts)
+	if !strings.Contains(string(body), `"baseBackups":null`) || strings.Contains(string(body), `"baseBackups":[]`) {
+		t.Errorf("wire form = %s", body)
+	}
+
+	withRows := `{"isPrimary": true, "mightBeUnavailable": true, "mightBeUnavailableMaskedError": "x", "replicationSlotsInfo": [{"slotName": "s", "slotType": "logical", "active": true}]}`
+	f2, _, _ := parseCNPGPgStatus([]byte(withRows))
+	if len(f2.Slots) != 1 || f2.Replication != nil || f2.RoleDetail != "primary" {
+		t.Errorf("a list the report did fill is whole; the rest unknown: %+v", f2)
+	}
+
+	rewind, partial, _ := parseCNPGPgStatus([]byte(`{"isPrimary": false, "isPgRewindRunning": true}`))
+	if !rewind.Incomplete || rewind.RoleDetail != "pgRewind" || !strings.Contains(partial, "pg_rewind") {
+		t.Errorf("pg_rewind report = %+v %q", rewind, partial)
+	}
+}

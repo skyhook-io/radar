@@ -323,13 +323,16 @@ function StorageView({ namespace, name, instances }: { namespace: string; name: 
 
 function SlotsView({ primary }: { primary?: CNPGRuntimeInstance }) {
   const slots = primary?.status.slots ?? []
+  const readable = primary?.status.state === 'ok' || primary?.status.state === 'partial'
   return (
     <Card title="Replication slots (primary)" footer="Inactive slots retain WAL until they are consumed or dropped.">
-      {primary?.status.state !== 'ok' ? (
-        <SourceState label="Status" state={primary?.status.state ?? 'error'} error={primary?.status.error} />
+      {!readable || !primary?.status.slots ? (
+        <SourceState label="Status" state={readable ? 'partial' : primary?.status.state ?? 'error'} error={primary?.status.error ?? primary?.status.reason ?? 'slots were not read'} />
       ) : slots.length === 0 ? (
         <div className="text-sm text-theme-text-tertiary">No replication slots.</div>
       ) : (
+        <>
+        {primary.status.state === 'partial' && <SourceState label="Status" state="partial" error={primary.status.reason} />}
         <table className="w-full text-sm">
           <thead className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">
             <tr><th className="py-1.5 pr-3">Slot</th><th className="pr-3">Type</th><th className="pr-3">State</th><th className="pr-3">WAL status</th><th className="text-right">Retained</th></tr>
@@ -346,6 +349,7 @@ function SlotsView({ primary }: { primary?: CNPGRuntimeInstance }) {
             ))}
           </tbody>
         </table>
+        </>
       )}
     </Card>
   )

@@ -155,6 +155,14 @@ describe('cnpgPendingRestart', () => {
     expect(p.forDecrease).toBe(true)
     expect(p.known).toBe(false)
   })
+  it('does not count an incomplete report as "no restart pending"', () => {
+    const p = cnpgPendingRestart([
+      { pod: 'pg-1', state: 'ok' },
+      { pod: 'pg-2', state: 'partial', incomplete: true },
+    ])
+    expect(p.known).toBe(false)
+    expect(cnpgPendingRestart([{ pod: 'pg-2', state: 'partial', incomplete: true }]).known).toBe(false)
+  })
 })
 
 describe('cnpgDimensions', () => {

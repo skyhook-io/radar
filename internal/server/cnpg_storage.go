@@ -655,9 +655,10 @@ func (s *Server) cnpgStorageWAL(w http.ResponseWriter, r *http.Request, cache *k
 			})
 			out.Status = st.CNPGRuntimeSource
 			if st.CNPGInstanceStatusFacts != nil {
-				a := st.Archiving
-				out.ReadyToArchive, out.LastArchivedAt, out.LastFailedAt, out.LastFailedWal = a.ReadyWalFiles, a.LastArchivedAt, a.LastFailedAt, a.LastFailedWal
-				out.ArchivingFailed = cnpgArchivingFailedLast(a)
+				if a := st.Archiving; a != nil {
+					out.ReadyToArchive, out.LastArchivedAt, out.LastFailedAt, out.LastFailedWal = a.ReadyWalFiles, a.LastArchivedAt, a.LastFailedAt, a.LastFailedWal
+					out.ArchivingFailed = cnpgArchivingFailedLast(*a)
+				}
 			}
 		})
 		run.do(func(ctx context.Context) {

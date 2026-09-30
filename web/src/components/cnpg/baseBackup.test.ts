@@ -17,6 +17,7 @@ describe('cnpgBaseBackupFacts', () => {
     expect(cnpgBaseBackupFacts(rt({ baseBackups: [] }, 'denied'))).toBeUndefined()
     expect(cnpgBaseBackupFacts(rt({ state: 'unreachable' }))).toBeUndefined()
     expect(cnpgBaseBackupFacts(rt({}))).toBeUndefined()
+    expect(cnpgBaseBackupFacts(rt({ state: 'partial', incomplete: true, maskedError: 'x', baseBackups: null }))).toBeUndefined()
   })
 
   it('says none only when the readable report lists none', () => {

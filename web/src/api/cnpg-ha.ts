@@ -29,6 +29,7 @@ export function cnpgInstanceLive(rt: CNPGRuntimeResponse | undefined): CNPGInsta
     roleDetail: i.status.roleDetail,
     instanceManagerVersion: i.status.instanceManagerVersion,
     timeline: i.status.timeline,
+    incomplete: i.status.incomplete,
   }))
 }
 
@@ -36,7 +37,8 @@ export function cnpgInstanceLive(rt: CNPGRuntimeResponse | undefined): CNPGInsta
 export function cnpgReplicationLive(rt: CNPGRuntimeResponse | undefined): CNPGReplicationLive | undefined {
   const primary = rt?.instances.find((i) => i.role === 'primary')
   if (!primary || (primary.status.state !== 'ok' && primary.status.state !== 'partial')) return undefined
-  const reps = primary.status.replication ?? []
+  const reps = primary.status.replication
+  if (!reps) return undefined
   const lags = reps.map((r) => r.replayLag).filter((v): v is number => v !== undefined)
   return {
     streaming: reps.filter((r) => r.state === 'streaming').length,
@@ -52,7 +54,8 @@ export function cnpgReplicationLive(rt: CNPGRuntimeResponse | undefined): CNPGRe
 export function withLiveReplication(row: CNPGFleetRow, rt: CNPGRuntimeResponse | undefined): CNPGFleetRow {
   const primary = rt?.instances.find((i) => i.role === 'primary')
   if (!primary || primary.status.state !== 'ok' || row.replication.text === 'Single instance' || row.replication.text === 'Hibernated') return row
-  const reps = primary.status.replication ?? []
+  const reps = primary.status.replication
+  if (!reps) return row
   const streaming = reps.filter((r) => r.state === 'streaming').length
   const lags = reps.map((r) => r.replayLag).filter((v): v is number => v !== undefined)
   const maxLag = lags.length ? Math.max(...lags) : undefined
