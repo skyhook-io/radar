@@ -50,6 +50,8 @@ export interface ActionConfirmDialogProps {
   outcomeUnknown?: boolean
   /** `wide` for dialogs that show evidence beside their form fields. */
   size?: 'default' | 'wide'
+  /** Heading for `error`; defaults to "The write did not happen". */
+  errorTitle?: string
 }
 
 export function ActionConfirmDialog({
@@ -74,6 +76,7 @@ export function ActionConfirmDialog({
   error,
   outcomeUnknown = false,
   size = 'default',
+  errorTitle = 'The write did not happen',
 }: ActionConfirmDialogProps) {
   const titleId = useId()
   const [typed, setTyped] = useState('')
@@ -193,7 +196,7 @@ export function ActionConfirmDialog({
           (outcomeUnknown ? (
             <AlertBanner variant="warning" title="Radar could not tell whether this took effect" message={error} />
           ) : (
-            <AlertBanner variant="error" title="The write did not happen" message={error} />
+            <AlertBanner variant="error" title={errorTitle} message={error} />
           ))}
         {disabledReason && <AlertBanner variant="info" title="This action is not available" message={disabledReason} />}
       </div>

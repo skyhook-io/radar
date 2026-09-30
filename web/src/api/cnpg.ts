@@ -297,9 +297,16 @@ export function useCNPGAction(kind: 'clusters' | 'scheduledbackups' | 'poolers',
 
 export type CNPGActionErrorCode = 'context_changed' | 'changed' | 'blocked' | 'all_fenced' | 'operator_webhook_unavailable' | 'outcome_unknown'
 
+// A request that timed out or lost its connection may have been applied by the
+// apiserver anyway. 503 without a code is Radar refusing before any write.
+const CNPG_AMBIGUOUS_STATUSES = new Set([500, 502, 504])
+
 export function cnpgActionErrorCode(err: unknown): CNPGActionErrorCode | undefined {
-  const code = err instanceof ApiError ? err.data?.code : undefined
-  return typeof code === 'string' ? (code as CNPGActionErrorCode) : undefined
+  if (!err) return undefined
+  if (!(err instanceof ApiError)) return 'outcome_unknown'
+  const code = err.data?.code
+  if (typeof code === 'string') return code as CNPGActionErrorCode
+  return CNPG_AMBIGUOUS_STATUSES.has(err.status) ? 'outcome_unknown' : undefined
 }
 
 export type CNPGRuntimeSourceState = 'ok' | 'denied' | 'unreachable' | 'error' | 'partial'
