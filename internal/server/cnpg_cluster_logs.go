@@ -32,6 +32,8 @@ const (
 	cnpgDefaultLogTailLines   = 200
 	cnpgLogDiscoveryInterval  = 5 * time.Second
 	cnpgLogsEmptyMessage      = "No readable logs from this cluster's instances in this snapshot. Refresh after the instances start."
+	cnpgLogsIntervalEmpty     = "No log lines in this interval from the runs Kubernetes still keeps (the current and previous run of each instance container)."
+	cnpgLogsIntervalGone      = "Kubernetes keeps only the current and previous run of each container; %d instance runs that covered part of this interval were replaced and their lines are gone."
 	cnpgLogsNoInstanceMessage = "This cluster has no instance Pods yet."
 )
 
@@ -322,7 +324,19 @@ func (s *Server) handleCNPGClusterLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snapshot := collectLogsFromPods(r.Context(), client, namespace, pods, query.container, query.tailLines, query.sinceSeconds, true)
+	var snapshot workloadLogSnapshot
+	lost := 0
+	if query.untilTime.IsZero() {
+		snapshot = collectLogsFromPods(r.Context(), client, namespace, pods, query.container, query.tailLines, query.sinceSeconds, true)
+	} else {
+		var sources []workloadLogSource
+		sources, lost = cnpgIntervalLogSources(pods, query.container, query.sinceTime, query.untilTime)
+		snapshot = collectLogSources(r.Context(), client, namespace, sources, query.tailLines, query.sinceSeconds, true)
+		snapshot.Notice = snapshot.notice(func(clip workloadLogClip) bool {
+			return clip.Last.IsZero() || clip.Last.Before(query.untilTime)
+		})
+		resp.EmptyMessage = cnpgLogsIntervalEmpty
+	}
 	shown := []*corev1.Pod{}
 	sourceLabels := map[string]string{}
 	for _, p := range pods {
@@ -339,16 +353,77 @@ func (s *Server) handleCNPGClusterLogs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		entry.SourceLabel = sourceLabels[entry.Pod]
+		if entry.Previous && entry.SourceLabel != "" {
+			entry.SourceLabel += " · previous run"
+		}
 		annotateCNPGLogEntry(&entry)
 		resp.Logs = append(resp.Logs, entry)
 	}
 	sortLogsByTimestamp(resp.Logs)
 	resp.Pods = buildPodInfos(shown)
 	resp.Notice = snapshot.Notice
+	if lost > 0 {
+		resp.Notice = strings.TrimSpace(fmt.Sprintf(cnpgLogsIntervalGone, lost) + " " + resp.Notice)
+	}
 	if len(sourceLabels) > 0 {
 		resp.SourceLabels = sourceLabels
 	}
 	s.writeJSON(w, resp)
+}
+
+// cnpgIntervalLogSources picks, per instance container, the runs whose lines
+// can fall in [since, until]. The kubelet keeps a container's current run and
+// the one before its last restart; an interval that ends before the current
+// run started lives only in the previous run. lost counts containers where an
+// older run than those two covered part of the interval.
+func cnpgIntervalLogSources(pods []*corev1.Pod, container string, since, until time.Time) (sources []workloadLogSource, lost int) {
+	for _, pod := range pods {
+		for _, c := range k8s.GetContainersForPod(pod, container, true) {
+			status := cnpgContainerStatus(pod, c)
+			if status == nil {
+				continue
+			}
+			var currentStart time.Time
+			switch {
+			case status.State.Running != nil:
+				currentStart = status.State.Running.StartedAt.Time
+			case status.State.Terminated != nil:
+				currentStart = status.State.Terminated.StartedAt.Time
+			}
+			started := status.State.Running != nil || status.State.Terminated != nil
+			if started && (currentStart.IsZero() || !until.Before(currentStart)) {
+				sources = append(sources, newWorkloadLogSource(pod, c, false))
+			}
+			if !currentStart.IsZero() && !since.Before(currentStart) {
+				continue
+			}
+			prev := status.LastTerminationState.Terminated
+			if prev == nil {
+				if status.RestartCount > 0 {
+					lost++
+				}
+				continue
+			}
+			if prev.FinishedAt.IsZero() || !prev.FinishedAt.Time.Before(since) {
+				sources = append(sources, newWorkloadLogSource(pod, c, true))
+			}
+			if status.RestartCount > 1 && !prev.StartedAt.IsZero() && since.Before(prev.StartedAt.Time) {
+				lost++
+			}
+		}
+	}
+	return sources, lost
+}
+
+func cnpgContainerStatus(pod *corev1.Pod, name string) *corev1.ContainerStatus {
+	for _, statuses := range [][]corev1.ContainerStatus{pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses, pod.Status.EphemeralContainerStatuses} {
+		for i := range statuses {
+			if statuses[i].Name == name {
+				return &statuses[i]
+			}
+		}
+	}
+	return nil
 }
 
 // handleCNPGClusterLogsStream serves GET

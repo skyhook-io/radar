@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -521,5 +522,102 @@ func TestCNPGStreamCursorResumesWithoutReplay(t *testing.T) {
 	}
 	if c.admit(line("2026-09-28T14:00:05.7Z", "d")) {
 		t.Error("line before the new last timestamp admitted")
+	}
+}
+
+func cnpgRestartedStatus(currentStart, prevStart, prevEnd time.Time, restarts int32) corev1.ContainerStatus {
+	status := corev1.ContainerStatus{
+		Name: "postgres", RestartCount: restarts,
+		State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(currentStart)}},
+	}
+	if restarts > 0 {
+		status.LastTerminationState.Terminated = &corev1.ContainerStateTerminated{StartedAt: metav1.NewTime(prevStart), FinishedAt: metav1.NewTime(prevEnd)}
+	}
+	return status
+}
+
+func TestCNPGIntervalLogSources(t *testing.T) {
+	at := func(m int) time.Time { return time.Date(2026, 9, 29, 23, m, 0, 0, time.UTC) }
+	since, until := at(20), at(30)
+	pod := func(status corev1.ContainerStatus) *corev1.Pod {
+		p := cnpgPod("ns", "pg-1", "pg")
+		p.Status.ContainerStatuses = []corev1.ContainerStatus{status}
+		return p
+	}
+	waiting := cnpgRestartedStatus(at(0), at(10), at(40), 3)
+	waiting.State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}
+	cases := []struct {
+		name              string
+		status            corev1.ContainerStatus
+		current, previous bool
+		lost              int
+	}{
+		{"restarted after the interval reads only the previous run", cnpgRestartedStatus(at(45), at(10), at(40), 1), false, true, 0},
+		{"restart inside the interval reads both runs", cnpgRestartedStatus(at(25), at(10), at(24), 1), true, true, 0},
+		{"running since before the interval reads the current run", cnpgRestartedStatus(at(5), at(0), at(4), 1), true, false, 0},
+		{"previous run ended before the interval is skipped", cnpgRestartedStatus(at(25), at(0), at(15), 2), true, false, 0},
+		{"older runs than the kept two covered the interval", cnpgRestartedStatus(at(45), at(28), at(44), 5), false, true, 1},
+		{"crash-looping container reads its previous run", waiting, false, true, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sources, lost := cnpgIntervalLogSources([]*corev1.Pod{pod(tc.status)}, "postgres", since, until)
+			var current, previous bool
+			for _, s := range sources {
+				if s.Previous {
+					previous = true
+				} else {
+					current = true
+				}
+			}
+			if current != tc.current || previous != tc.previous || lost != tc.lost {
+				t.Fatalf("current=%v previous=%v lost=%d, want %v %v %d", current, previous, lost, tc.current, tc.previous, tc.lost)
+			}
+		})
+	}
+}
+
+// An incident followed by restarts: the interval lives in the previous run,
+// and the current run's lines (all after the interval) fill the byte cap.
+func TestCNPGClusterLogs_IntervalReadsThePreviousRun(t *testing.T) {
+	ns := "pglogiv"
+	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
+		withUID(cnpgObj("postgresql.cnpg.io/v1", "Cluster", ns, "pg-orders", map[string]any{"instances": int64(1)}, nil), "iv-uid"),
+	)
+	owner := metav1.OwnerReference{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: "pg-orders", UID: "iv-uid", Controller: boolPtr(true)}
+	at := func(m int) time.Time { return time.Date(2026, 9, 29, 23, m, 0, 0, time.UTC) }
+	p := cnpgPod(ns, "pg-orders-1", "pg-orders", owner)
+	p.Status.ContainerStatuses = []corev1.ContainerStatus{cnpgRestartedStatus(at(45), at(10), at(40), 1)}
+	seedCNPGPods(t, p)
+
+	apiserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("previous") == "true" {
+			fmt.Fprintln(w, "2026-09-29T23:25:00.5Z {\"level\":\"error\",\"msg\":\"during the incident\"}")
+			return
+		}
+		for i := 0; i < 2000; i++ {
+			fmt.Fprintf(w, "2026-09-29T23:50:%02d.5Z {\"level\":\"info\",\"msg\":\"after the restart %d\"}\n", i%60, i)
+		}
+	}))
+	t.Cleanup(apiserver.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: apiserver.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(previous) })
+
+	status, got, body := getCNPGLogs(t, "/api/cnpg/clusters/"+ns+"/pg-orders/logs?sinceTime=2026-09-29T23:20:00Z&untilTime=2026-09-29T23:30:00Z")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d: %s", status, body)
+	}
+	if len(got.Logs) != 1 || got.Logs[0].Message != "during the incident" || !got.Logs[0].Previous || got.Logs[0].SourceLabel != "primary 1 · previous run" {
+		t.Fatalf("logs = %+v, want the previous run's interval line", got.Logs)
+	}
+	if strings.Contains(got.Notice, "snapshot limit") {
+		t.Errorf("notice = %q: the clip came after the interval and cut nothing from it", got.Notice)
+	}
+	if !strings.Contains(got.EmptyMessage, "interval") {
+		t.Errorf("emptyMessage = %q, want interval-specific copy", got.EmptyMessage)
 	}
 }
