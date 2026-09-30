@@ -282,6 +282,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         ) : (
           groups.map((g) => {
             const failed = g.items.filter((i) => i.state === 'failed').length
+            const noSources = g.items.every((i) => !i.source)
             return (
               <section key={`${g.namespace}/${g.cluster}`} className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-theme-border px-4 py-2.5">
@@ -299,6 +300,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
                     {g.items.length} {g.items.length === 1 ? 'declaration' : 'declarations'}
                     {failed > 0 ? ` · ${failed} not reconciled` : ''}
                     {!g.row ? ' · target cluster not visible' : ''}
+                    {noSources ? ' · no GitOps source recorded on any of them' : ''}
                   </span>
                 </div>
                 <div className="table-divide-subtle">
@@ -306,6 +308,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
                     <DeclarationRow
                       key={i.key}
                       item={i}
+                      sourceStated={noSources}
                       active={!i.isField && sameResource(inspected, i.resource)}
                       onInspect={() => onInspect(i.resource)}
                     />
@@ -351,7 +354,8 @@ function LogicalPathRow({ path, onInspect }: { path: CNPGLogicalPath; onInspect:
   )
 }
 
-function DeclarationRow({ item, active, onInspect }: { item: DeclItem; active: boolean; onInspect: () => void }) {
+// `sourceStated`: the cluster header already says none of its rows records a GitOps source.
+function DeclarationRow({ item, active, onInspect, sourceStated }: { item: DeclItem; active: boolean; onInspect: () => void; sourceStated?: boolean }) {
   const badge = STATE_BADGE[item.state]
   let detail: ReactNode = null
   if (item.error) {
@@ -386,7 +390,7 @@ function DeclarationRow({ item, active, onInspect }: { item: DeclItem; active: b
         {item.isField && <Sub>field of the Cluster</Sub>}
       </div>
       <div className="min-w-0 text-xs text-theme-text-secondary break-words">
-        {item.source ?? <span className="text-theme-text-tertiary">GitOps source not recorded</span>}
+        {item.source ?? (sourceStated ? null : <span className="text-theme-text-tertiary">GitOps source not recorded</span>)}
       </div>
     </div>
   )
