@@ -341,6 +341,18 @@ export interface CNPGRuntimeReplication {
   replayLsn?: string
 }
 
+export interface CNPGRuntimeBaseBackup {
+  applicationName: string
+  instance?: string
+  phase: string
+  startedAt?: string
+  /** Absent while PostgreSQL has no estimate (waiting for a checkpoint, or estimation disabled). */
+  totalBytes?: number
+  streamedBytes: number
+  tablespacesTotal: number
+  tablespacesStreamed: number
+}
+
 export interface CNPGRuntimeInstance {
   pod: string
   role: 'primary' | 'replica' | 'unknown'
@@ -363,7 +375,9 @@ export interface CNPGRuntimeInstance {
     isWalReceiverActive?: boolean
     archiving?: { lastArchivedWal?: string; lastArchivedAt?: string; lastFailedWal?: string; lastFailedAt?: string; readyWalFiles?: number }
     replication?: CNPGRuntimeReplication[]
-    slots?: { name: string; type?: string; active?: boolean; database?: string; restartLsn?: string; walStatus?: string; retainedBytes?: number }[]
+    slots?: { name: string; type?: string; plugin?: string; active?: boolean; database?: string; restartLsn?: string; walStatus?: string; retainedBytes?: number }[]
+    /** pg_basebackup streams to joining instances; [] when the report says none run. */
+    baseBackups?: CNPGRuntimeBaseBackup[]
   }
   metrics: {
     state: CNPGRuntimeSourceState

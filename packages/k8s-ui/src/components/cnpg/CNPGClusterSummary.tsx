@@ -86,6 +86,7 @@ export function CNPGClusterSummary({
   lead,
   dimensions,
   haSection,
+  stateFacts,
 }: {
   row: CNPGFleetRow
   onNavigate?: CNPGNavigate
@@ -99,6 +100,8 @@ export function CNPGClusterSummary({
   dimensions?: CNPGDimension[]
   /** The host's "HA and instances" section (CNPGClusterHASection), rendered after State. */
   haSection?: ReactNode
+  /** Extra FactRows appended to the State grid, e.g. live facts only the host can read. */
+  stateFacts?: ReactNode
 }) {
   const top = row.problems[0]
   const rest = row.problems.length - 1
@@ -208,6 +211,7 @@ export function CNPGClusterSummary({
             {row.gitops.tool === 'argocd' ? 'Argo CD' : 'Flux'} <span className="font-mono">{row.gitops.name}</span>
           </FactRow>
         )}
+        {stateFacts}
       </FactGrid>
 
       {haSection}

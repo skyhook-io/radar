@@ -185,6 +185,25 @@ type CNPGInstanceStatusFacts struct {
 	Archiving   CNPGArchivingStatus     `json:"archiving"`
 	Replication []CNPGReplicationStatus `json:"replication"`
 	Slots       []CNPGSlotStatus        `json:"slots"`
+	// BaseBackups are pg_basebackup streams from this instance to a joining
+	// instance: CloudNativePG's probe reads pg_stat_progress_basebackup only
+	// for application names ending in "-join" (its join Job), so these are new
+	// replicas being cloned, never Backup objects. Empty = none running.
+	BaseBackups []CNPGBaseBackupStatus `json:"baseBackups"`
+}
+
+// CNPGBaseBackupStatus is one pg_stat_progress_basebackup row. TotalBytes is
+// absent when PostgreSQL has no estimate yet (waiting for a checkpoint, or
+// estimation disabled), so progress is then unknown rather than 0 %.
+type CNPGBaseBackupStatus struct {
+	ApplicationName     string `json:"applicationName"`
+	Instance            string `json:"instance,omitempty"`
+	Phase               string `json:"phase"`
+	StartedAt           string `json:"startedAt,omitempty"`
+	TotalBytes          *int64 `json:"totalBytes,omitempty"`
+	StreamedBytes       int64  `json:"streamedBytes"`
+	TablespacesTotal    int64  `json:"tablespacesTotal"`
+	TablespacesStreamed int64  `json:"tablespacesStreamed"`
 }
 
 // CNPGArchivingStatus times are RFC3339; the instance manager's "-infinity"
@@ -219,6 +238,7 @@ type CNPGReplicationStatus struct {
 type CNPGSlotStatus struct {
 	Name          string   `json:"name"`
 	Type          string   `json:"type,omitempty"`
+	Plugin        string   `json:"plugin,omitempty"`
 	Active        bool     `json:"active"`
 	Database      string   `json:"database,omitempty"`
 	RestartLsn    string   `json:"restartLsn,omitempty"`
@@ -975,6 +995,7 @@ type cnpgPgStatus struct {
 	} `json:"replicationInfo"`
 	ReplicationSlotsInfo []struct {
 		SlotName    string `json:"slotName"`
+		Plugin      string `json:"plugin"`
 		SlotType    string `json:"slotType"`
 		Database    string `json:"database"`
 		Active      bool   `json:"active"`
@@ -982,6 +1003,15 @@ type cnpgPgStatus struct {
 		WalStatus   string `json:"walStatus"`
 		SafeWalSize *int64 `json:"safeWalSize"`
 	} `json:"replicationSlotsInfo"`
+	PgStatBasebackupsInfo []struct {
+		ApplicationName     string `json:"application_name"`
+		BackendStart        string `json:"backend_start"`
+		Phase               string `json:"phase"`
+		BackupTotal         int64  `json:"backup_total"`
+		BackupStreamed      int64  `json:"backup_streamed"`
+		TablespacesTotal    int64  `json:"tablespaces_total"`
+		TablespacesStreamed int64  `json:"tablespaces_streamed"`
+	} `json:"pgStatBasebackupsInfo"`
 }
 
 func cnpgInstanceStatusFrom(out cnpgProxyOutcome) CNPGInstanceStatus {
@@ -1035,6 +1065,7 @@ func parseCNPGPgStatus(body []byte) (*CNPGInstanceStatusFacts, string, error) {
 		},
 		Replication: []CNPGReplicationStatus{},
 		Slots:       []CNPGSlotStatus{},
+		BaseBackups: []CNPGBaseBackupStatus{},
 	}
 	facts.RoleDetail = cnpgRoleDetail(facts)
 	var partial []string
@@ -1066,9 +1097,32 @@ func parseCNPGPgStatus(body []byte) (*CNPGInstanceStatusFacts, string, error) {
 			break
 		}
 		facts.Slots = append(facts.Slots, CNPGSlotStatus{
-			Name: si.SlotName, Type: si.SlotType, Active: si.Active, Database: si.Database,
+			Name: si.SlotName, Type: si.SlotType, Plugin: si.Plugin, Active: si.Active, Database: si.Database,
 			RestartLsn: si.RestartLsn, WalStatus: si.WalStatus, SafeWalSize: si.SafeWalSize,
 		})
+	}
+	for i, bb := range st.PgStatBasebackupsInfo {
+		if i >= cnpgRuntimeMaxRows {
+			partial = append(partial, fmt.Sprintf("%d base backups; the first %d are shown", len(st.PgStatBasebackupsInfo), cnpgRuntimeMaxRows))
+			break
+		}
+		row := CNPGBaseBackupStatus{
+			ApplicationName:     bb.ApplicationName,
+			Instance:            strings.TrimSuffix(bb.ApplicationName, "-join"),
+			Phase:               bb.Phase,
+			StartedAt:           cnpgStatusTime(bb.BackendStart),
+			StreamedBytes:       bb.BackupStreamed,
+			TablespacesTotal:    bb.TablespacesTotal,
+			TablespacesStreamed: bb.TablespacesStreamed,
+		}
+		if row.Instance == row.ApplicationName {
+			row.Instance = ""
+		}
+		if bb.BackupTotal > 0 {
+			total := bb.BackupTotal
+			row.TotalBytes = &total
+		}
+		facts.BaseBackups = append(facts.BaseBackups, row)
 	}
 	return facts, strings.Join(partial, "; "), nil
 }

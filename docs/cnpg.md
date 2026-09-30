@@ -34,6 +34,7 @@ Every value is something the cluster reports, labelled with where it came from. 
 | Fact | Source | When it is not known |
 |---|---|---|
 | Instances, primary | `status.readyInstances`, `status.currentPrimary`, instance Pods (controller-owned by the Cluster's UID) | `–` |
+| Base backup | The primary's `/pg/status` `pgStatBasebackupsInfo` (`pg_stat_progress_basebackup`): phase, streamed of total bytes. CloudNativePG reads it only for application names ending in `-join` — a new instance cloning the primary, never a `Backup` — so it is shown under State, not Protection. A total PostgreSQL has not estimated yet reads "total not estimated yet", never 0 % | Omitted when runtime is unavailable; "None running" only when the primary's report was read and lists none |
 | Replication | The primary's `pg_stat_replication` via the instance manager (Runtime); otherwise Pod readiness only | "Lag unknown" when runtime data is unavailable: readiness does not show whether a replica is streaming |
 | Schedule | ScheduledBackups targeting the Cluster (`spec.suspend` → suspended) | "No access to ScheduledBackups" when unreadable in that namespace |
 | Destination | barman-cloud plugin `barmanObjectName`, in-tree `barmanObjectStore`, or volume snapshots | "No destination configured" |

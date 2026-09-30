@@ -40,7 +40,11 @@ const cnpgStatusFixture = `{
    "writeLag": "00:00:00.012", "flushLag": "1 day 00:00:01", "replayLag": "garbage",
    "syncState": "async", "syncPriority": "0"
  }],
- "replicationSlotsInfo": [{"slotName": "_cnpg_pg_orders_2", "slotType": "physical", "restartLsn": "0/7000148", "walStatus": "reserved", "active": true}]
+ "replicationSlotsInfo": [{"slotName": "_cnpg_pg_orders_2", "slotType": "physical", "restartLsn": "0/7000148", "walStatus": "reserved", "active": true}, {"slotName": "orders_sub", "plugin": "pgoutput", "slotType": "logical", "database": "app", "walStatus": "extended", "active": false}],
+  "pgStatBasebackupsInfo": [
+    {"usename": "streaming_replica", "application_name": "pg-orders-4-join", "backend_start": "2026-09-30T10:00:00.5Z", "phase": "streaming database files", "backup_total": 4000, "backup_streamed": 1000, "backup_total_pretty": "4000 bytes", "backup_streamed_pretty": "1000 bytes", "tablespaces_total": 1, "tablespaces_streamed": 0},
+    {"usename": "streaming_replica", "application_name": "pg-orders-5-join", "backend_start": "2026-09-30T10:01:00Z", "phase": "waiting for checkpoint to finish", "backup_total": 0, "backup_streamed": 0, "tablespaces_total": 0, "tablespaces_streamed": 0}
+  ]
 }`
 
 // Modeled on the CNPG 1.27 default monitoring queries. The exporter itself
@@ -143,8 +147,25 @@ func TestParseCNPGPgStatus(t *testing.T) {
 	if rep.SyncPriority == nil || *rep.SyncPriority != 0 || rep.SentLsn != "0/7000148" || rep.FlushLsn != "0/7000100" {
 		t.Errorf("replication = %+v", rep)
 	}
-	if len(facts.Slots) != 1 || facts.Slots[0].Name != "_cnpg_pg_orders_2" || !facts.Slots[0].Active {
+	if len(facts.Slots) != 2 || facts.Slots[0].Name != "_cnpg_pg_orders_2" || !facts.Slots[0].Active {
 		t.Errorf("slots = %+v", facts.Slots)
+	}
+	if l := facts.Slots[1]; l.Type != "logical" || l.Plugin != "pgoutput" || l.Database != "app" || l.Active {
+		t.Errorf("logical slot = %+v", l)
+	}
+	if len(facts.BaseBackups) != 2 {
+		t.Fatalf("base backups = %+v", facts.BaseBackups)
+	}
+	bb := facts.BaseBackups[0]
+	if bb.Instance != "pg-orders-4" || bb.Phase != "streaming database files" || bb.TotalBytes == nil || *bb.TotalBytes != 4000 || bb.StreamedBytes != 1000 || bb.StartedAt != "2026-09-30T10:00:00.5Z" {
+		t.Errorf("base backup = %+v", bb)
+	}
+	if facts.BaseBackups[1].TotalBytes != nil {
+		t.Errorf("an unestimated total must stay unknown, got %v", *facts.BaseBackups[1].TotalBytes)
+	}
+	none, _, err := parseCNPGPgStatus([]byte(`{"isPrimary": true}`))
+	if err != nil || none.BaseBackups == nil || len(none.BaseBackups) != 0 {
+		t.Errorf("a readable report without base backups must say none, got %+v %v", none, err)
 	}
 
 	for _, bad := range []string{`not json`, `{"pod":{}}`, `<html>proxy error</html>`} {
@@ -463,7 +484,7 @@ func TestCNPGClusterRuntime_OK(t *testing.T) {
 	if p.Metrics.State != cnpgRuntimeStateOK || p.Metrics.Scheme != "http" || !cnpgEqF(p.Metrics.SessionsTotal, 6) {
 		t.Errorf("primary metrics = %+v", p.Metrics.CNPGRuntimeSource)
 	}
-	if len(p.Status.Slots) != 1 || !cnpgEqF(p.Status.Slots[0].RetainedBytes, 16384) {
+	if len(p.Status.Slots) != 2 || !cnpgEqF(p.Status.Slots[0].RetainedBytes, 16384) {
 		t.Errorf("slot retention not joined from the same instance: %+v", p.Status.Slots)
 	}
 	if r.Status.State != cnpgRuntimeStateOK || r.Status.IsPrimary || !r.Status.IsWalReceiverActive || r.Status.Scheme != "http" {

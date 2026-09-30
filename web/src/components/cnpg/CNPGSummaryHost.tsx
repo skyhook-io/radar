@@ -15,6 +15,9 @@ import {
   CNPGScheduledBackupSummary,
   CNPGSubscriptionSummary,
   CNPGDatabaseRoleSummary,
+  FactRow,
+  FactSource,
+  FactValue,
   PaneLoader,
   isApiGroup,
   refToSelectedResource,
@@ -24,7 +27,8 @@ import {
   type NavigateToResource,
 } from '@skyhook-io/k8s-ui'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
-import { useCNPGRuntime } from '../../api/cnpg'
+import { useCNPGRuntime, type CNPGRuntimeResponse } from '../../api/cnpg'
+import { cnpgBaseBackupFacts, describeCNPGBaseBackup } from './baseBackup'
 import { useCNPGPoolerLive } from './useCNPGPoolerLive'
 import { cnpgInstanceLive, cnpgReplicationLive, useCNPGClusterHA, withLiveReplication } from '../../api/cnpg-ha'
 import { CNPGMaintenanceBanner } from './actions/CNPGMaintenanceBanner'
@@ -43,6 +47,25 @@ interface SummaryContext {
   resource: any
   context: 'drawer' | 'expanded'
   onNavigate?: NavigateToResource
+}
+
+function BaseBackupFact({ runtime }: { runtime: CNPGRuntimeResponse | undefined }) {
+  const bb = cnpgBaseBackupFacts(runtime)
+  if (!bb) return null
+  return (
+    <FactRow label="Base backup">
+      {bb.rows.length > 1 ? (
+        <ul className="space-y-0.5">
+          {bb.rows.map((r) => (
+            <li key={r.applicationName}>{describeCNPGBaseBackup(r)}</li>
+          ))}
+        </ul>
+      ) : (
+        <FactValue fact={bb.fact} />
+      )}
+      <FactSource fact={bb.fact} />
+    </FactRow>
+  )
 }
 
 function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryContext) {
@@ -81,6 +104,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
         </>
       }
       dimensions={cnpgDimensions({ row, ha: ha.data, replication: cnpgReplicationLive(runtime.data) })}
+      stateFacts={<BaseBackupFact runtime={runtime.data} />}
       haSection={
         <CNPGClusterHASection
           ha={ha.data}
