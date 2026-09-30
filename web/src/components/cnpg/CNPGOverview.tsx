@@ -216,7 +216,7 @@ export function CNPGOverview({
             <div className={TABLE_WRAP}>
               <table className="w-full min-w-[1060px] table-fixed">
                 <colgroup>
-                  <col className="w-[19%]" />
+                  <col className="w-[17%]" />
                   <col className="w-[6%]" />
                   <col className="w-[14%]" />
                   <col className="w-[13%]" />
@@ -224,7 +224,7 @@ export function CNPGOverview({
                   <col className="w-[10%]" />
                   <col className="w-[5%]" />
                   <col className="w-[14%]" />
-                  <col className="w-[10%]" />
+                  <col className="w-[9.5rem]" />
                 </colgroup>
                 <thead className={TABLE_HEAD}>
                   <tr>
@@ -269,7 +269,7 @@ export function CNPGOverview({
                         </td>
                         <td className={TD}><FactValue fact={row.declarations.summary} /></td>
                         <td className={clsx(TD, 'font-mono')}>{row.pgVersion ?? '—'}</td>
-                        <td className={TD}><AttentionCell row={row} /></td>
+                        <td className={clsx(TD, 'overflow-hidden')}><AttentionCell row={row} /></td>
                         <td className={clsx(TD, 'text-right')}>
                           <div className="flex items-center justify-end gap-1">
                             <button
