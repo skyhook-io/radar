@@ -10,7 +10,20 @@ import { trackCNPGOperation } from '../operations/store'
  * detached), then its Pod and its Jobs. The operator replaces it with a new
  * instance under a new name. Binds the Pod and volume identities reviewed.
  */
-export function CNPGDestroyInstanceDialog({ namespace, cluster, pod, onClose }: { namespace: string; cluster: string; pod: string; onClose: () => void }) {
+export function CNPGDestroyInstanceDialog({
+  namespace,
+  cluster,
+  pod,
+  onClose,
+  onFenceFirst,
+}: {
+  namespace: string
+  cluster: string
+  pod: string
+  onClose: () => void
+  /** Opens the fence dialog for this instance; destroy requires the fence. */
+  onFenceFirst?: () => void
+}) {
   const plan = useCNPGDestroyPlan(namespace, cluster, pod)
   const mutation = useCNPGAction('clusters', namespace, cluster)
   const { showSuccess } = useToast()
@@ -19,6 +32,7 @@ export function CNPGDestroyInstanceDialog({ namespace, cluster, pod, onClose }: 
   const cap = data ? (keep ? data.actions.keep : data.actions.delete) : undefined
   const pvcNames = data?.pvcs.map((p) => p.name) ?? []
   const partial = cnpgActionErrorCode(mutation.error) === 'partial'
+  const fenced = !!data && (data.facts.fencedInstances.all || data.facts.fencedInstances.instances.includes(pod))
   const completed = cnpgActionCompleted(mutation.error)
 
   return (
@@ -79,11 +93,13 @@ export function CNPGDestroyInstanceDialog({ namespace, cluster, pod, onClose }: 
               ),
               { summary: `delete Pod ${namespace}/${pod}`, detail: data.podUID ? `preconditions.uid = ${data.podUID}` : 'the Pod no longer exists' },
               { summary: `delete Jobs labelled cnpg.io/instanceName=${pod}`, detail: data.jobsReadable ? (data.jobs.length ? data.jobs.join('\n') : 'none now') : 'not readable now; listed again when the action runs' },
+              { summary: `patch Cluster ${namespace}/${cluster}`, detail: `metadata.annotations["cnpg.io/fencedInstances"]: ${pod} removed (unless fenced with ["*"])` },
             ]
           : []
       }
       notes={[
         'The volumes are handled before the Pod, as kubectl cnpg destroy does, so the operator never recreates this Pod on them.',
+        `${pod} must be fenced first; its name is removed from the fence once it is destroyed (a fence on every instance, ["*"], stays).`,
         'Use this for a standby that cannot rejoin (for example after a failed pg_rewind or a corrupted volume). A plain restart deletes only the Pod and keeps the volumes attached.',
         keep ? 'Kept volumes stay in the namespace, no longer owned by the cluster; delete them yourself once you no longer need them.' : null,
       ].filter(Boolean) as string[]}
@@ -115,6 +131,14 @@ export function CNPGDestroyInstanceDialog({ namespace, cluster, pod, onClose }: 
         </div>
       )}
       {plan.isLoading && <PaneLoader label="Reading the instance’s volumes…" className="h-16" />}
+      {data && !fenced && onFenceFirst && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-theme-border bg-theme-elevated p-3 text-sm text-theme-text-secondary">
+          <span>The operator never promotes a fenced instance, so fencing {pod} keeps a failover from making it primary while it is destroyed.</span>
+          <button type="button" onClick={onFenceFirst} className="btn-brand rounded-lg px-3 py-1.5 text-sm font-medium">
+            Fence {pod} first
+          </button>
+        </div>
+      )}
       {data && (
         <div className="space-y-3">
           <div>

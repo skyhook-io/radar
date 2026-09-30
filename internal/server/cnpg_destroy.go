@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 
@@ -24,7 +25,11 @@ import (
 // the operator never sees a dangling PVC and recreates the Pod on it; then the
 // Pod is deleted, then the instance's Jobs. The operator replaces the instance
 // with a new one under a new serial. Unlike upstream, Radar refuses the
-// primary: that is an unplanned failover, which a switchover does safely.
+// primary (an unplanned failover, which a switchover does safely) and
+// requires the instance to be fenced first: the operator never promotes a
+// fenced instance, which is the only thing that keeps a failover from making
+// it primary between the last check and a delete. The fence on the destroyed
+// name is lifted last.
 
 const (
 	cnpgPVCStatusAnnotation = "cnpg.io/pvcStatus"
@@ -71,6 +76,8 @@ func cnpgGuardDestroyInstance(f CNPGClusterFacts, i CNPGInstanceFact) string {
 		return "It is the target of a switchover"
 	case f.switchoverInFlight() != "", f.Phase == cnpgPhaseSwitchover, f.Phase == cnpgPhaseFailover:
 		return "A switchover or failover is in progress"
+	case !f.FencedInstances.fences(i.Pod):
+		return "Fence " + i.Pod + " first: a fenced instance cannot be promoted while it is destroyed"
 	}
 	return ""
 }
@@ -413,12 +420,23 @@ func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGAction
 		}
 		completed = append(completed, "deleted Job "+j)
 	}
+
+	lifted, err := cnpgLiftDestroyedFence(ctx, x, p.Pod)
+	if err != nil {
+		return nil, stop(fmt.Errorf("lifting the fence on %s (lift it with Unfence): %w", p.Pod, err))
+	}
+	if lifted {
+		completed = append(completed, "lifted the fence on "+p.Pod)
+	}
 	log.Printf("[cnpg] destroyed instance %s of %s/%s (keepPVC=%v, pvcs=%d, jobs=%d)", sanitizeForLog(p.Pod), sanitizeForLog(namespace), sanitizeForLog(cluster), p.KeepPVC, len(pvcs), len(jobs))
 
 	keep := p.KeepPVC
 	msg := fmt.Sprintf("Instance %s destroyed; the operator creates a replacement instance", p.Pod)
 	if keep {
 		msg = fmt.Sprintf("Instance %s destroyed and its volumes kept, detached; the operator creates a replacement instance", p.Pod)
+	}
+	if !lifted {
+		msg += `. The cluster-wide fence ["*"] stays in place`
 	}
 	return &CNPGActionResult{
 		Message: msg,
@@ -446,4 +464,32 @@ func cnpgPVCList(l []cnpgReviewedPVC) string {
 		names[i] = v.Name
 	}
 	return strings.Join(names, ", ")
+}
+
+// cnpgLiftDestroyedFence removes the destroyed name from a list-form fence,
+// against the Cluster as it is now. A ["*"] fence is the user's, not this
+// action's, and stays.
+func cnpgLiftDestroyedFence(ctx context.Context, x *cnpgClusterRun, pod string) (bool, error) {
+	fresh, err := x.c.dyn.Resource(cnpgClusterGVR).Namespace(x.cluster.GetNamespace()).Get(ctx, x.cluster.GetName(), metav1.GetOptions{})
+	if err != nil {
+		return false, err
+	}
+	f := parseCNPGFenced(fresh.GetAnnotations()[cnpgFencedAnnotation])
+	if f.All || f.Malformed || !slices.Contains(f.Instances, pod) {
+		return false, nil
+	}
+	rest := make([]string, 0, len(f.Instances))
+	for _, n := range f.Instances {
+		if n != pod {
+			rest = append(rest, n)
+		}
+	}
+	value, err := cnpgFencedValue(false, rest)
+	if err != nil {
+		return false, err
+	}
+	err = cnpgMergePatch(ctx, x.c.dyn, cnpgClusterGVR, fresh, map[string]any{
+		"metadata": map[string]any{"annotations": map[string]any{cnpgFencedAnnotation: value}},
+	})
+	return err == nil, err
 }

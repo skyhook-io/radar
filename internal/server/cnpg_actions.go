@@ -1386,7 +1386,7 @@ var cnpgClusterActionRunners = map[string]cnpgClusterRunner{
 	"rehydrate":        {binds: []string{"hibernation"}, run: cnpgRunHibernation("off")},
 	"cancelBackend":    {needsPods: true, run: cnpgRunSignalBackend(cnpgSignalCancel)},
 	"terminateBackend": {needsPods: true, run: cnpgRunSignalBackend(cnpgSignalTerminate)},
-	"destroyInstance":  {binds: []string{"currentPrimary", "targetPrimary"}, needsPods: true, run: cnpgRunDestroyInstance},
+	"destroyInstance":  {binds: []string{"currentPrimary", "targetPrimary", "fencedInstances"}, needsPods: true, run: cnpgRunDestroyInstance},
 }
 
 func decodeCNPGReviewedFacts(raw json.RawMessage) (cnpgReviewedFacts, error) {

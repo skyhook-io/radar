@@ -45,9 +45,25 @@ export function CNPGInstanceActions({ namespace, cluster, pod }: { namespace: st
       {isFenced
         ? link('unfence', 'Lift fence', allFenced ? 'The whole cluster is fenced; lift it from the cluster menu' : undefined)
         : link('fence', 'Fence')}
-      {!isPrimary && button('destroy', 'Destroy…', reasonOf(per?.destroy), () => setDestroying(true))}
+      {/* Unfenced, the dialog opens anyway: it explains the fence and offers it. */}
+      {!isPrimary && button('destroy', 'Destroy…', isFenced ? reasonOf(per?.destroy) : undefined, () => setDestroying(true))}
       {open && <ClusterActionDialog kind={open} caps={data} namespace={namespace} name={cluster} initialPod={pod} onClose={() => setOpen(null)} />}
-      {destroying && <CNPGDestroyInstanceDialog namespace={namespace} cluster={cluster} pod={pod} onClose={() => setDestroying(false)} />}
+      {destroying && (
+        <CNPGDestroyInstanceDialog
+          namespace={namespace}
+          cluster={cluster}
+          pod={pod}
+          onClose={() => setDestroying(false)}
+          onFenceFirst={
+            per?.fence?.allowed
+              ? () => {
+                  setDestroying(false)
+                  setOpen('fence')
+                }
+              : undefined
+          }
+        />
+      )}
     </>
   )
 }

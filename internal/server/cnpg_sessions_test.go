@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -185,9 +186,25 @@ func cnpgDestroyTestPVC(name, uid, instance string, owned bool, mut func(*corev1
 	return p
 }
 
+// cnpgDestroyCluster is the default fixture with pg-2 fenced, as destroy requires.
+func cnpgDestroyCluster(mut func(obj map[string]any)) *unstructured.Unstructured {
+	return cnpgActionCluster(func(o map[string]any) {
+		o["metadata"].(map[string]any)["annotations"] = map[string]any{cnpgFencedAnnotation: `["pg-2"]`}
+		if mut != nil {
+			mut(o)
+		}
+	})
+}
+
+func cnpgDestroyFacts() map[string]any {
+	f := cnpgActionFacts()
+	f["fencedInstances"] = map[string]any{"raw": `["pg-2"]`, "all": false, "instances": []any{"pg-2"}}
+	return f
+}
+
 func cnpgDestroyEnv(t *testing.T) *cnpgActionEnv {
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "pg-2-join", Namespace: "db", Labels: map[string]string{cnpgInstanceNameLabel: "pg-2"}}}
-	return newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil)},
+	return newCNPGActionEnv(t, []runtime.Object{cnpgDestroyCluster(nil)},
 		cnpgActionPod("pg-1", "u1", true), cnpgActionPod("pg-2", "u2", true),
 		cnpgDestroyTestPVC("pg-2", "pvc-2", "pg-2", true, nil),
 		cnpgDestroyTestPVC("pg-2-wal", "pvc-2w", "pg-2", true, func(p *corev1.PersistentVolumeClaim) { p.Labels[cnpgPVCRoleLabel] = "PG_WAL" }),
@@ -214,7 +231,7 @@ func TestCNPGActionDestroyInstanceDeletesLikeKubectlCNPG(t *testing.T) {
 		return false, nil, nil
 	})
 	res, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
-		cnpgActionReq(t, cnpgActionFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +253,7 @@ func TestCNPGActionDestroyInstanceDeletesLikeKubectlCNPG(t *testing.T) {
 func TestCNPGActionDestroyInstanceKeepPVCDetaches(t *testing.T) {
 	env := cnpgDestroyEnv(t)
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
-		cnpgActionReq(t, cnpgActionFacts(), cnpgDestroyParamsFor(true, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(true, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,20 +273,20 @@ func TestCNPGActionDestroyInstanceRefusals(t *testing.T) {
 	env := cnpgDestroyEnv(t)
 	primary := cnpgDestroyParamsFor(false, "pg-1=pvc-1")
 	primary["pod"], primary["podUID"] = "pg-1", "u1"
-	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance", cnpgActionReq(t, cnpgActionFacts(), primary))
+	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance", cnpgActionReq(t, cnpgDestroyFacts(), primary))
 	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeBlocked || !strings.Contains(ae.Message, "primary") {
 		t.Errorf("primary = %v, want blocked", err)
 	}
 
 	_, err = runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
-		cnpgActionReq(t, cnpgActionFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2")))
+		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2")))
 	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeChanged {
 		t.Errorf("unreviewed WAL volume = %v, want 409 changed", err)
 	}
 
 	noPVCs := cnpgDestroyParamsFor(false)
 	delete(noPVCs, "pvcs")
-	_, err = runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance", cnpgActionReq(t, cnpgActionFacts(), noPVCs))
+	_, err = runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance", cnpgActionReq(t, cnpgDestroyFacts(), noPVCs))
 	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Status != http.StatusBadRequest {
 		t.Errorf("missing pvcs = %v, want 400", err)
 	}
@@ -284,7 +301,7 @@ func TestCNPGActionDestroyInstanceStopsWhenPromotedMidway(t *testing.T) {
 	env.typed.PrependReactor("delete", "persistentvolumeclaims", func(k8stesting.Action) (bool, runtime.Object, error) {
 		if !promoted {
 			promoted = true
-			obj := cnpgActionCluster(func(o map[string]any) {
+			obj := cnpgDestroyCluster(func(o map[string]any) {
 				st := o["status"].(map[string]any)
 				st["targetPrimary"], st["phase"] = "pg-2", cnpgPhaseFailover
 			})
@@ -295,7 +312,7 @@ func TestCNPGActionDestroyInstanceStopsWhenPromotedMidway(t *testing.T) {
 		return false, nil, nil
 	})
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
-		cnpgActionReq(t, cnpgActionFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
 	ae, ok := cnpgActionStatus(t, err)
 	if !ok || ae.Code != cnpgCodePartial || ae.Status != http.StatusConflict || strings.Join(ae.Completed, ",") != "deleted PVC pg-2" {
 		t.Fatalf("promotion mid-destroy = %+v, want 409 partial after the first PVC only", err)
@@ -316,7 +333,7 @@ func TestCNPGActionDestroyInstanceRefusesPodLabelledPrimary(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
-		cnpgActionReq(t, cnpgActionFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
 	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeChanged || len(ae.Completed) != 0 {
 		t.Fatalf("pod labelled primary = %v, want 409 changed before any write", err)
 	}
@@ -331,7 +348,7 @@ func TestCNPGActionDestroyInstanceReportsPartialOutcome(t *testing.T) {
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "pg-2", errors.New("denied by admission policy"))
 	})
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
-		cnpgActionReq(t, cnpgActionFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
 	ae, ok := cnpgActionStatus(t, err)
 	if !ok || ae.Code != cnpgCodePartial || ae.Status != http.StatusForbidden ||
 		strings.Join(ae.Completed, ",") != "deleted PVC pg-2,deleted PVC pg-2-wal" {
@@ -343,6 +360,95 @@ func TestCNPGActionDestroyInstanceReportsPartialOutcome(t *testing.T) {
 	body := rec.Body.String()
 	if rec.Code != http.StatusForbidden || !strings.Contains(body, `"code":"partial"`) || !strings.Contains(body, `"completed":["deleted PVC pg-2","deleted PVC pg-2-wal"]`) {
 		t.Errorf("response = %d %s", rec.Code, body)
+	}
+}
+
+func TestCNPGActionDestroyInstanceRequiresFence(t *testing.T) {
+	env := cnpgDestroyEnv(t)
+	if err := env.dyn.Tracker().Update(cnpgClusterGVR, cnpgActionCluster(nil), "db"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
+		cnpgActionReq(t, cnpgActionFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeBlocked || !strings.HasPrefix(ae.Message, "Fence pg-2 first") {
+		t.Fatalf("unfenced destroy = %v, want blocked asking to fence first", err)
+	}
+	if _, err := env.typed.CoreV1().PersistentVolumeClaims("db").Get(context.Background(), "pg-2", metav1.GetOptions{}); err != nil || len(env.deletes) != 0 {
+		t.Errorf("an unfenced destroy wrote: PVC %v, deletes %v", err, env.deletes)
+	}
+}
+
+// A failover can only make pg-2 primary once its fence is gone, so the fence
+// is re-checked before every step like the primary itself.
+func TestCNPGActionDestroyInstanceStopsWhenUnfencedMidway(t *testing.T) {
+	env := cnpgDestroyEnv(t)
+	promoted := false
+	env.typed.PrependReactor("delete", "persistentvolumeclaims", func(k8stesting.Action) (bool, runtime.Object, error) {
+		if !promoted {
+			promoted = true
+			if err := env.dyn.Tracker().Update(cnpgClusterGVR, cnpgActionCluster(nil), "db"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return false, nil, nil
+	})
+	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
+		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodePartial || strings.Join(ae.Completed, ",") != "deleted PVC pg-2" {
+		t.Fatalf("fence lifted mid-destroy = %v, want partial after the first PVC", err)
+	}
+	if len(env.deletes) != 0 {
+		t.Errorf("the Pod of an unfenced instance was deleted: %v", env.deletes)
+	}
+}
+
+func TestCNPGActionDestroyInstanceLiftsItsFenceLast(t *testing.T) {
+	env := cnpgDestroyEnv(t)
+	res, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
+		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(env.patches) != 1 {
+		t.Fatalf("patches = %d, want the fence lift only", len(env.patches))
+	}
+	body := cnpgActionPatchBody(t, env.patches[0])
+	if v, ok := cnpgActionAnnotations(t, body)[cnpgFencedAnnotation]; !ok || v != nil {
+		t.Errorf("fence after destroy = %v (present %v), want removed", v, ok)
+	}
+	if body["metadata"].(map[string]any)["resourceVersion"] == nil {
+		t.Error("fence lift lacks resourceVersion")
+	}
+	if strings.Contains(res.Message, `["*"]`) {
+		t.Errorf("message = %q", res.Message)
+	}
+
+	all := cnpgDestroyEnv(t)
+	star := cnpgDestroyCluster(func(o map[string]any) {
+		o["metadata"].(map[string]any)["annotations"] = map[string]any{cnpgFencedAnnotation: `["*"]`}
+	})
+	if err := all.dyn.Tracker().Update(cnpgClusterGVR, star, "db"); err != nil {
+		t.Fatal(err)
+	}
+	facts := cnpgDestroyFacts()
+	facts["fencedInstances"] = map[string]any{"raw": `["*"]`, "all": true, "instances": []any{"*"}}
+	res, err = runCNPGClusterAction(context.Background(), all.clients(), "db", "pg", "destroyInstance",
+		cnpgActionReq(t, facts, cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+	if err != nil || len(all.patches) != 0 || !strings.Contains(res.Message, `["*"]`) {
+		t.Fatalf(`["*"] fence: err %v, patches %d, message %v`, err, len(all.patches), res)
+	}
+}
+
+func TestCNPGActionDestroyInstanceFailedFenceLiftIsPartial(t *testing.T) {
+	env := cnpgDestroyEnv(t)
+	env.dyn.PrependReactor("patch", "clusters", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewConflict(schema.GroupResource{Group: cnpgGroup, Resource: "clusters"}, "pg", errors.New("modified"))
+	})
+	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
+		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+	ae, ok := cnpgActionStatus(t, err)
+	if !ok || ae.Code != cnpgCodePartial || !strings.Contains(ae.Message, "Unfence") || !slices.Contains(ae.Completed, "deleted Pod pg-2") {
+		t.Fatalf("failed fence lift = %v, want partial naming Unfence", err)
 	}
 }
 
@@ -368,8 +474,12 @@ func TestCNPGDestroyPlanAndCapabilities(t *testing.T) {
 	if caps.InstanceActions["pg-1"].Destroy.Allowed || !caps.InstanceActions["pg-2"].Destroy.Allowed || !caps.Actions.DestroyInstance.Allowed {
 		t.Errorf("destroy verdicts = %+v / %+v", caps.InstanceActions, caps.Actions.DestroyInstance)
 	}
-	if !caps.Actions.Psql.Allowed || !caps.InstanceActions["pg-2"].Psql.Allowed {
-		t.Errorf("psql = %+v", caps.Actions.Psql)
+	if got := caps.InstanceActions["pg-3"].Destroy; got.Allowed || got.Reason != "Fence pg-3 first: a fenced instance cannot be promoted while it is destroyed" {
+		t.Errorf("unfenced destroy verdict = %+v", got)
+	}
+	// pg-2 is fenced here, so PostgreSQL is stopped on it.
+	if !caps.Actions.Psql.Allowed || caps.InstanceActions["pg-2"].Psql.Allowed {
+		t.Errorf("psql = %+v / %+v", caps.Actions.Psql, caps.InstanceActions["pg-2"].Psql)
 	}
 }
 
