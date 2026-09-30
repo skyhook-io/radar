@@ -2,12 +2,14 @@ import type { ReactNode } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { Lock } from 'lucide-react'
-import { PaneLoader, formatAge, toneTextClass } from '@skyhook-io/k8s-ui'
+import { PaneLoader, Tooltip, formatAge, toneTextClass } from '@skyhook-io/k8s-ui'
 import { useCNPGRuntime, type CNPGRuntimeInstance } from '../../api/cnpg'
+import { useCNPGSessions, type CNPGSessionsResponse } from '../../api/cnpg-sessions'
 import { Notice } from '../capacity/shared'
 import { CNPGRefreshFailedNotice, Segments } from './shared'
 import { CNPGStorage } from './CNPGStorage'
 import { CNPGBlockingSessions } from './CNPGBlockingSessions'
+import { cnpgConnectionFigure } from './blocking'
 import { CNPGReplicationView } from './CNPGReplicationView'
 import { cnpgCheckpointView, cnpgDatabaseHealthRows } from './runtimeModel'
 import { latestRate } from './trendSamples'
@@ -150,8 +152,9 @@ export function CNPGClusterRuntime({
       {section === 'sessions' &&
         (denied ? (
           <>
+            {picker}
             <ProxyDenied what="Session counts by state, lock waits and connection headroom" grant={grant} />
-            <CNPGBlockingSessions namespace={namespace} cluster={name} primary={primary?.pod} />
+            <CNPGBlockingSessions namespace={namespace} cluster={name} pod={blockingPod(primary, picked)} aggregatesGap={`they need ${grant}`} />
           </>
         ) : (
           <SessionsView namespace={namespace} cluster={name} primary={primary} instance={picked} picker={picker} />
@@ -206,30 +209,46 @@ function Unavailable({ inst, what }: { inst?: CNPGRuntimeInstance; what: string 
   return <SourceState label={what} state={inst.metrics.state} error={inst.metrics.error} />
 }
 
+// Blocking is read on the picked instance; no pod means the server's default, the primary.
+function blockingPod(primary?: CNPGRuntimeInstance, picked?: CNPGRuntimeInstance): string | undefined {
+  return picked && picked.pod !== primary?.pod ? picked.pod : undefined
+}
+
 function SessionsView({ namespace, cluster, primary, instance, picker }: { namespace: string; cluster: string; primary?: CNPGRuntimeInstance; instance?: CNPGRuntimeInstance; picker?: ReactNode }) {
+  const pod = blockingPod(primary, instance)
+  const blocking = useCNPGSessions(namespace, cluster, pod)
+  const exec = blocking.data?.state === 'ok' ? blocking.data : undefined
+  const m = instance?.metrics
+  const aggregatesGap =
+    m?.state === 'ok' ? undefined : !instance ? 'no primary is reported' : `the metrics exporter on ${instance.pod} did not answer${m?.error ? ` (${m.error})` : ''}`
   return (
     <div className="space-y-4">
       {picker}
-      <SessionAggregates primary={instance} />
-      <CNPGBlockingSessions namespace={namespace} cluster={cluster} primary={primary?.pod} />
+      <SessionAggregates primary={instance} exec={exec} />
+      <CNPGBlockingSessions namespace={namespace} cluster={cluster} pod={pod} aggregatesGap={aggregatesGap} headroom={aggregatesGap !== undefined} />
     </div>
   )
 }
 
 // `primary` is the instance shown: the primary unless another was picked.
-function SessionAggregates({ primary }: { primary?: CNPGRuntimeInstance }) {
+function SessionAggregates({ primary, exec }: { primary?: CNPGRuntimeInstance; exec?: CNPGSessionsResponse }) {
   const m = primary?.metrics
   if (!m || m.state !== 'ok') return <Card title="Sessions"><Unavailable inst={primary} what="Sessions" /></Card>
   const rows = [...(m.sessions ?? [])].sort((a, b) => b.count - a.count)
   const measured = m.sessionsTotal !== undefined
   const idleTx = measured ? rows.filter((r) => r.state.startsWith('idle in transaction')).reduce((s, r) => s + r.count, 0) : undefined
+  const connections = cnpgConnectionFigure(exec, m)
   return (
     <Card
       title={<>Sessions on {primary!.pod}</>}
       footer="Counts by state, database, user and application from the metrics exporter (platform users excluded). Individual blocking sessions, with their query text, are below when you can exec into the instance."
     >
       <div className="mb-3 flex flex-wrap gap-6 text-sm">
-        <Metric label="Connections" value={m.sessionsTotal !== undefined ? `${m.sessionsTotal}${m.maxConnections ? ` / ${m.maxConnections}` : ''}` : '—'} tone={m.maxConnections && m.sessionsTotal && m.sessionsTotal / m.maxConnections > 0.85 ? 'degraded' : undefined} />
+        <Metric
+          label="Connections"
+          value={connections ? <Tooltip content={connections.detail}>{connections.value}</Tooltip> : '—'}
+          tone={connections?.tone}
+        />
         <Metric label="Waiting on locks" value={m.waitingBackends ?? '—'} tone={m.waitingBackends ? 'degraded' : undefined} />
         <Metric label="Idle in transaction" value={idleTx ?? '—'} tone={idleTx ? 'degraded' : undefined} />
         <Metric label="Oldest transaction" value={seconds(m.oldestXactSeconds)} tone={m.oldestXactSeconds !== undefined && m.oldestXactSeconds > 300 ? 'degraded' : undefined} />

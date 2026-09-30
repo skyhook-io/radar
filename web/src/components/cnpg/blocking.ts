@@ -67,3 +67,52 @@ export function countVictims(node: BlockingNode): number {
   walk(node)
   return pids.size
 }
+
+export interface CNPGConnectionFigure {
+  /** e.g. "6 of 97 usable" */
+  value: string
+  /** What the figure is measured against, and from where. */
+  detail: string
+  /** used / usable, for a headroom bar; undefined when the limit is unknown. */
+  ratio?: number
+  tone?: 'degraded' | 'unhealthy'
+}
+
+function connectionTone(ratio: number | undefined): CNPGConnectionFigure['tone'] {
+  if (ratio === undefined) return undefined
+  return ratio >= 0.95 ? 'unhealthy' : ratio >= 0.8 ? 'degraded' : undefined
+}
+
+/**
+ * The one connections figure the Sessions section shows. pg_stat_activity
+ * (read over exec) knows the superuser reserve, so it gives usable headroom;
+ * the exporter's count stands in when that read is unavailable and says what
+ * it cannot account for.
+ */
+export function cnpgConnectionFigure(
+  exec: { maxConnections?: number; superuserReservedConnections?: number; clientBackends?: number } | undefined,
+  exporter?: { sessionsTotal?: number; maxConnections?: number },
+): CNPGConnectionFigure | undefined {
+  if (exec?.maxConnections !== undefined && exec.clientBackends !== undefined) {
+    const reserved = exec.superuserReservedConnections ?? 0
+    const usable = exec.maxConnections - reserved
+    const ratio = usable > 0 ? exec.clientBackends / usable : 1
+    return {
+      value: `${exec.clientBackends} of ${usable} usable`,
+      detail: `max_connections ${exec.maxConnections}, ${reserved} reserved for superusers · client backends from pg_stat_activity`,
+      ratio,
+      tone: connectionTone(ratio),
+    }
+  }
+  if (exporter?.sessionsTotal === undefined) return undefined
+  if (exporter.maxConnections === undefined) {
+    return { value: `${exporter.sessionsTotal}`, detail: 'max_connections not reported · sessions from the metrics exporter' }
+  }
+  const ratio = exporter.maxConnections > 0 ? exporter.sessionsTotal / exporter.maxConnections : 1
+  return {
+    value: `${exporter.sessionsTotal} of ${exporter.maxConnections}`,
+    detail: `max_connections ${exporter.maxConnections}; the superuser reserve is not read without exec · sessions from the metrics exporter`,
+    ratio,
+    tone: connectionTone(ratio),
+  }
+}
