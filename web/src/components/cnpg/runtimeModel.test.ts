@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CNPGRuntimeInstance, CNPGRuntimeReplication } from '../../api/cnpg'
-import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgStandbyBacklogTone, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgStandbyHeadline, cnpgTransactionRates } from './runtimeModel'
+import type { CNPGSessionsResponse } from '../../api/cnpg-sessions'
+import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgStandbyBacklogTone, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgSessionsCardShowsConnections, cnpgStandbyHeadline, cnpgTransactionRates } from './runtimeModel'
 
 describe('cnpgCheckpointView', () => {
   it('flags requested-checkpoint pressure only with enough checkpoints', () => {
@@ -95,5 +96,16 @@ describe('Sessions instance and aggregates', () => {
     expect(cnpgSessionAggregatesGap(inst('pg-1', 'primary'))).toBeUndefined()
     expect(cnpgSessionAggregatesGap(inst('pg-1', 'primary', { state: 'ok' }))).toBe('the metrics exporter on pg-1 reported no session counts')
     expect(cnpgSessionAggregatesGap(inst('pg-1', 'primary', { state: 'unreachable', error: 'x' }))).toBe('the metrics exporter on pg-1 did not answer (x)')
+  })
+})
+
+describe('cnpgSessionsCardShowsConnections', () => {
+  const inst = (metrics: Record<string, unknown>) => ({ pod: 'pg-1', role: 'primary', status: { state: 'ok' }, metrics }) as unknown as CNPGRuntimeInstance
+  const exec = { pod: 'pg-1', state: 'ok', maxConnections: 100, superuserReservedConnections: 3, clientBackends: 91 } as unknown as CNPGSessionsResponse
+  it('shows headroom once: in the card when it has a figure, otherwise in Blocking', () => {
+    expect(cnpgSessionsCardShowsConnections(inst({ state: 'ok' }), exec)).toBe(true)
+    expect(cnpgSessionsCardShowsConnections(inst({ state: 'ok', sessionsTotal: 5 }), undefined)).toBe(true)
+    expect(cnpgSessionsCardShowsConnections(inst({ state: 'ok' }), undefined)).toBe(false)
+    expect(cnpgSessionsCardShowsConnections(inst({ state: 'unreachable' }), exec)).toBe(false)
   })
 })

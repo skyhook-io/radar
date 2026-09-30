@@ -1,5 +1,7 @@
 import { cnpgLagTone, cnpgWorseTone, type HealthLevel } from '@skyhook-io/k8s-ui'
 import type { CNPGRuntimeInstance, CNPGRuntimeReplication } from '../../api/cnpg'
+import type { CNPGSessionsResponse } from '../../api/cnpg-sessions'
+import { cnpgConnectionFigure } from './blocking'
 
 type Checkpoints = NonNullable<CNPGRuntimeInstance['metrics']['checkpoints']>
 
@@ -139,4 +141,9 @@ export function cnpgSessionAggregatesGap(inst: CNPGRuntimeInstance | undefined):
   if (m.state !== 'ok') return `the metrics exporter on ${inst.pod} did not answer${m.error ? ` (${m.error})` : ''}`
   if (m.sessionsTotal === undefined) return `the metrics exporter on ${inst.pod} reported no session counts`
   return undefined
+}
+
+/** Whether the Sessions card shows the connections figure, so the Blocking panel does not repeat it. */
+export function cnpgSessionsCardShowsConnections(inst: CNPGRuntimeInstance | undefined, exec: CNPGSessionsResponse | undefined): boolean {
+  return inst?.metrics.state === 'ok' && cnpgConnectionFigure(exec, inst.metrics) !== undefined
 }

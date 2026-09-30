@@ -12,7 +12,7 @@ import { CNPGStorage } from './CNPGStorage'
 import { CNPGBlockingSessions } from './CNPGBlockingSessions'
 import { cnpgConnectionFigure } from './blocking'
 import { CNPGReplicationView } from './CNPGReplicationView'
-import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgTransactionRates, type CNPGTransactionRates } from './runtimeModel'
+import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgSessionsCardShowsConnections, cnpgTransactionRates, type CNPGTransactionRates } from './runtimeModel'
 import { historyLatest, latestRate } from './trendSamples'
 import { CNPGTrends, useSampleBuffer, type CNPGIntervalTarget, type Sample } from './CNPGTrends'
 
@@ -222,7 +222,7 @@ function SessionsView({ namespace, cluster, instance, picker }: { namespace: str
     <div className="space-y-4">
       {picker}
       <SessionAggregates primary={instance} exec={exec} />
-      <CNPGBlockingSessions namespace={namespace} cluster={cluster} pod={instance?.pod} aggregatesGap={aggregatesGap} headroom={aggregatesGap !== undefined} />
+      <CNPGBlockingSessions namespace={namespace} cluster={cluster} pod={instance?.pod} aggregatesGap={aggregatesGap} headroom={!cnpgSessionsCardShowsConnections(instance, exec)} />
     </div>
   )
 }
