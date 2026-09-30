@@ -83,7 +83,7 @@ function DimensionChips({ dimensions, onSelect }: { dimensions: CNPGDimension[];
               <button
                 type="button"
                 onClick={() => onSelect(d.id)}
-                aria-label={`Open ${d.label.toLowerCase()} details`}
+                aria-label={`${d.label}: ${d.text}. Open ${d.label.toLowerCase()} details`}
                 className={clsx(CHIP, 'hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent')}
               >
                 {body}

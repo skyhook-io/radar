@@ -92,10 +92,10 @@ describe('CNPGClusterSummary', () => {
     const dims: CNPGDimension[] = [{ id: 'replication', label: 'Replication', tone: 'healthy', text: 'ok', source: 's' }]
     const onSelect = vi.fn()
     let root = render(<CNPGClusterSummary row={row()} dimensions={dims} />)
-    expect(document.querySelector('[aria-label="Open replication details"]')).toBeNull()
+    expect(document.querySelector('[aria-label="Replication: ok. Open replication details"]')).toBeNull()
     act(() => root.unmount())
     root = render(<CNPGClusterSummary row={row()} dimensions={dims} onSelectDimension={onSelect} />)
-    const chip = document.querySelector<HTMLButtonElement>('[aria-label="Open replication details"]')!
+    const chip = document.querySelector<HTMLButtonElement>('[aria-label="Replication: ok. Open replication details"]')!
     act(() => chip.click())
     expect(onSelect).toHaveBeenCalledWith('replication')
     act(() => root.unmount())

@@ -1,8 +1,8 @@
-import type { ReactNode } from 'react'
+import { useRef, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   CNPG_BARMAN_OBJECTSTORE_GROUP,
-  CNPG_CONNECT_ANCHOR,
+  CNPG_CONNECT_SELECTOR,
   CNPG_GROUP,
   CNPGBackupSummary,
   CNPGClusterSummary,
@@ -42,7 +42,7 @@ import { CNPGMaintenanceBanner } from './actions/CNPGMaintenanceBanner'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 import { CNPGRefreshFailedNotice } from './shared'
 
-import { cnpgClusterFullPath, cnpgDimensionPath, currentPageLabel } from './paths'
+import { cnpgClusterFullPath, cnpgDimensionPath, cnpgWithinDetail, currentPageLabel } from './paths'
 import { CNPGRestoreProgress } from './recovery/CNPGRestoreProgress'
 import { restoreBackupDeclared } from './recovery/restoreModel'
 import { useConnection } from '../../context/ConnectionContext'
@@ -79,6 +79,7 @@ function BaseBackupFact({ runtime }: { runtime: CNPGRuntimeResponse | undefined 
 function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryContext) {
   const navigate = useNavigate()
   const location = useLocation()
+  const summaryRef = useRef<HTMLDivElement>(null)
   const { connection } = useConnection()
   // The workspace is read for the object's own namespace: an explicitly opened
   // Cluster shows its facts whatever the namespace filter is.
@@ -100,81 +101,87 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
     )
   }
   const goRef = onNavigate ? (ref: CNPGRef) => onNavigate(refToSelectedResource(ref)) : undefined
-  // From the drawer a push lands on the full page, which offers a way back;
-  // on the page itself the entry's own return label is kept.
-  const go = (path: string) =>
-    navigate(path, { state: context === 'drawer' ? { returnLabel: currentPageLabel(), returnCtx: connection.context } : location.state })
+  // On the Cluster's own page this is a tab change, applied like a tab click;
+  // anywhere else (the drawer, another page) it is a push to the full page
+  // with a return label.
+  const go = (path: string) => {
+    const inPlace = context === 'expanded' ? cnpgWithinDetail(location.pathname, location.search, path) : null
+    if (inPlace) navigate(inPlace, { replace: true, state: location.state })
+    else navigate(path, { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } })
+  }
   return (
-    <CNPGClusterSummary
-      row={row}
-      onNavigate={goRef}
-      lead={
-        <>
-          <CNPGRefreshFailedNotice queries={[runtime, ha]} />
-          {context === 'drawer' && <CNPGOperatorBanner namespaces={[namespace]} />}
-          <CNPGMaintenanceBanner namespace={namespace} name={name} maintenance={ha.data?.maintenance} />
-          {row.cluster?.spec?.bootstrap?.recovery && (
-            <CNPGRestoreProgress
-              namespace={namespace}
-              name={name}
-              nextSteps={{
-                backup: row.cluster ? restoreBackupDeclared(row.cluster) : undefined,
-                onOpen: (step) => {
-                  if (step === 'connect') {
-                    document.getElementById(CNPG_CONNECT_ANCHOR)?.scrollIntoView({ block: 'start' })
-                    return
-                  }
-                  const protection = cnpgClusterFullPath(namespace, name, connection.context || undefined, 'protection')
-                  go(step === 'validate' ? `${protection}&validate=1` : protection)
+    <div ref={summaryRef}>
+      <CNPGClusterSummary
+        row={row}
+        onNavigate={goRef}
+        lead={
+          <>
+            <CNPGRefreshFailedNotice queries={[runtime, ha]} />
+            {context === 'drawer' && <CNPGOperatorBanner namespaces={[namespace]} />}
+            <CNPGMaintenanceBanner namespace={namespace} name={name} maintenance={ha.data?.maintenance} />
+            {row.cluster?.spec?.bootstrap?.recovery && (
+              <CNPGRestoreProgress
+                namespace={namespace}
+                name={name}
+                nextSteps={{
+                  backup: row.cluster ? restoreBackupDeclared(row.cluster) : undefined,
+                  onOpen: (step) => {
+                    if (step === 'connect') {
+                      summaryRef.current?.querySelector(CNPG_CONNECT_SELECTOR)?.scrollIntoView({ block: 'start' })
+                      return
+                    }
+                    const protection = cnpgClusterFullPath(namespace, name, connection.context || undefined, 'protection')
+                    go(step === 'validate' ? `${protection}&validate=1` : protection)
+                  },
+                }}
+              />
+            )}
+          </>
+        }
+        onSelectDimension={(id) => go(cnpgDimensionPath(namespace, name, connection.context || undefined, id))}
+        dimensions={cnpgDimensions({ row, ha: ha.data, replication: cnpgReplicationLive(runtime.data), replicationGap: cnpgReplicationGap(runtime.data, runtime.error) })}
+        stateFacts={<BaseBackupFact runtime={runtime.data} />}
+        haSection={
+          <CNPGClusterHASection
+            ha={ha.data}
+            live={live}
+            liveUnavailable={cnpgInstanceLiveUnavailable(runtime.data, runtime.error)}
+            loading={ha.isLoading}
+            error={ha.error instanceof Error ? ha.error.message : undefined}
+            onNavigate={goRef}
+            primaryConflict={row.primaryConflict}
+          />
+        }
+        actions={
+          context === 'drawer'
+            ? [
+                {
+                  label: 'Open cluster',
+                  primary: true,
+                  onClick: () =>
+                    navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined), {
+                      state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
+                    }),
                 },
-              }}
-            />
-          )}
-        </>
-      }
-      onSelectDimension={(id) => go(cnpgDimensionPath(namespace, name, connection.context || undefined, id))}
-      dimensions={cnpgDimensions({ row, ha: ha.data, replication: cnpgReplicationLive(runtime.data), replicationGap: cnpgReplicationGap(runtime.data, runtime.error) })}
-      stateFacts={<BaseBackupFact runtime={runtime.data} />}
-      haSection={
-        <CNPGClusterHASection
-          ha={ha.data}
-          live={live}
-          liveUnavailable={cnpgInstanceLiveUnavailable(runtime.data, runtime.error)}
-          loading={ha.isLoading}
-          error={ha.error instanceof Error ? ha.error.message : undefined}
-          onNavigate={goRef}
-          primaryConflict={row.primaryConflict}
-        />
-      }
-      actions={
-        context === 'drawer'
-          ? [
-              {
-                label: 'Open cluster',
-                primary: true,
-                onClick: () =>
-                  navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined), {
-                    state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
-                  }),
-              },
-              {
-                label: 'Logs',
-                onClick: () =>
-                  navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined, 'logs'), {
-                    state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
-                  }),
-              },
-              {
-                label: 'Protection',
-                onClick: () =>
-                  navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined, 'protection'), {
-                    state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
-                  }),
-              },
-            ]
-          : undefined
-      }
-    />
+                {
+                  label: 'Logs',
+                  onClick: () =>
+                    navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined, 'logs'), {
+                      state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
+                    }),
+                },
+                {
+                  label: 'Protection',
+                  onClick: () =>
+                    navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined, 'protection'), {
+                      state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
+                    }),
+                },
+              ]
+            : undefined
+        }
+      />
+    </div>
   )
 }
 

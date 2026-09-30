@@ -29,3 +29,21 @@ export function cnpgDimensionPath(namespace: string, name: string, ctx: string |
       return cnpgClusterFullPath(namespace, name, ctx, 'runtime')
   }
 }
+
+/**
+ * `target` as a tab change on the detail page already open, or null when it
+ * is another page. A tab change keeps the page's other params, drops the
+ * previous Runtime view unless `target` names one, and is applied like a tab
+ * click (replacing the history entry) so the page's return label still leads
+ * where it says.
+ */
+export function cnpgWithinDetail(currentPathname: string, currentSearch: string, target: string): string | null {
+  const [path, query = ''] = target.split('?')
+  if (path !== currentPathname) return null
+  const params = new URLSearchParams(currentSearch)
+  params.delete('section')
+  params.delete('validate')
+  for (const [k, v] of new URLSearchParams(query)) params.set(k, v)
+  const qs = params.toString()
+  return qs ? `${path}?${qs}` : path
+}

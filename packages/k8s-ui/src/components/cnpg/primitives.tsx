@@ -68,9 +68,9 @@ export function FactRow({ label, children }: { label: ReactNode; children: React
   )
 }
 
-export function SummaryHeading({ children, hint, id }: { children: ReactNode; hint?: ReactNode; id?: string }) {
+export function SummaryHeading({ children, hint, anchor }: { children: ReactNode; hint?: ReactNode; anchor?: string }) {
   return (
-    <div id={id} className="mb-2 mt-5 flex scroll-mt-4 items-baseline gap-2 first:mt-0">
+    <div data-cnpg-anchor={anchor} className="mb-2 mt-5 flex scroll-mt-4 items-baseline gap-2 first:mt-0">
       <h3 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">{children}</h3>
       {hint && <span className="text-[11px] text-theme-text-tertiary">{hint}</span>}
     </div>

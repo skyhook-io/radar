@@ -454,11 +454,24 @@ export interface RestoreNextStep {
 
 /**
  * What the Cluster spec declares for protection: WAL archiving (the Barman
- * plugin as WAL archiver, or barmanObjectStore), base backups without WAL
- * archiving (the plugin not marked isWALArchiver), volume snapshots only, or
- * nothing.
+ * plugin as WAL archiver with its ObjectStore named, or barmanObjectStore),
+ * the plugin marked as WAL archiver but naming no ObjectStore to archive to,
+ * base backups without WAL archiving (the plugin not marked isWALArchiver),
+ * volume snapshots only, or nothing.
  */
-export type RestoreBackupDeclared = 'walArchiving' | 'backupsNoArchiving' | 'snapshotsOnly' | 'none'
+export type RestoreBackupDeclared = 'walArchiving' | 'archiverWithoutDestination' | 'backupsNoArchiving' | 'snapshotsOnly' | 'none'
+
+const BACKUP_STEP: Record<RestoreBackupDeclared | 'unread', Pick<RestoreNextStep, 'state' | 'note'>> = {
+  unread: { state: 'unknown', note: 'Its backup configuration was not read' },
+  walArchiving: { state: 'done', note: 'WAL archiving to an object store is configured' },
+  archiverWithoutDestination: {
+    state: 'partial',
+    note: 'The Barman plugin is set as WAL archiver but names no ObjectStore (parameters.barmanObjectName), so WAL has nowhere to go',
+  },
+  backupsNoArchiving: { state: 'partial', note: 'An ObjectStore is declared, but not as the WAL archiver, so no point-in-time recovery' },
+  snapshotsOnly: { state: 'partial', note: 'Volume snapshots declared, but no WAL archiving, so no point-in-time recovery' },
+  none: { state: 'todo', note: 'It has no backup destination or WAL archiving yet' },
+}
 
 /**
  * The checklist a restored cluster shows once it is healthy. Links only;
@@ -468,16 +481,7 @@ export type RestoreBackupDeclared = 'walArchiving' | 'backupsNoArchiving' | 'sna
  */
 export function restoreNextSteps(input: { validationRecorded: boolean; backup: RestoreBackupDeclared | undefined }): RestoreNextStep[] {
   const label = 'Set up backups and WAL archiving'
-  const backup: RestoreNextStep =
-    input.backup === undefined
-      ? { id: 'backup', label, state: 'unknown', note: 'Its backup configuration was not read' }
-      : input.backup === 'walArchiving'
-        ? { id: 'backup', label, state: 'done', note: 'WAL archiving to an object store is configured' }
-        : input.backup === 'snapshotsOnly'
-          ? { id: 'backup', label, state: 'partial', note: 'Volume snapshots declared, but no WAL archiving, so no point-in-time recovery' }
-          : input.backup === 'backupsNoArchiving'
-            ? { id: 'backup', label, state: 'partial', note: 'An ObjectStore is declared, but not as the WAL archiver, so no point-in-time recovery' }
-            : { id: 'backup', label, state: 'todo', note: 'It has no backup destination or WAL archiving yet' }
+  const backup: RestoreNextStep = { id: 'backup', label, ...BACKUP_STEP[input.backup ?? 'unread'] }
   return [
     { id: 'connect', label: 'Point applications at it', state: 'unknown', note: 'Radar cannot tell which applications use it' },
     input.validationRecorded
@@ -490,7 +494,10 @@ export function restoreNextSteps(input: { validationRecorded: boolean; backup: R
 /** What a Cluster spec declares for backups and WAL archiving. */
 export function restoreBackupDeclared(cluster: any): RestoreBackupDeclared {
   const plugin = getCNPGClusterBarmanPlugin(cluster)
-  if (plugin?.isWALArchiver || cluster?.spec?.backup?.barmanObjectStore?.destinationPath) return 'walArchiving'
+  // plugin-barman-cloud reads the archive destination from the plugin's own
+  // parameters; the recovery source's ObjectStore is a separate setting.
+  if ((plugin?.isWALArchiver && plugin.barmanObjectName) || cluster?.spec?.backup?.barmanObjectStore?.destinationPath) return 'walArchiving'
+  if (plugin?.isWALArchiver) return 'archiverWithoutDestination'
   if (plugin?.barmanObjectName) return 'backupsNoArchiving'
   if (cluster?.spec?.backup?.volumeSnapshot) return 'snapshotsOnly'
   return 'none'
