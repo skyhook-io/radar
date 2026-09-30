@@ -164,14 +164,24 @@ func (s *Server) cnpgOperatorDiagnoses(r *http.Request, operators []*appsv1.Depl
 		diag.MetricsPort = cnpgOperatorMetricsPort(c)
 		pods := s.cnpgOperatorPods(r, typed, d, &diag)
 		diag.Leader = s.cnpgOperatorLeader(r, typed, d, c, pods)
+		leaderPod := cnpgOperatorLeadingPod(diag.Leader)
 		for i := range diag.Pods {
-			diag.Pods[i].Leader = diag.Leader.HolderIsCurrentPod && diag.Pods[i].Name == diag.Leader.HolderPod
+			diag.Pods[i].Leader = leaderPod != "" && diag.Pods[i].Name == leaderPod
 		}
-		diag.Reconcile = s.cnpgOperatorReconcile(r, d, pods, diag.MetricsPort, diag.Leader.HolderPod)
+		diag.Reconcile = s.cnpgOperatorReconcile(r, d, pods, diag.MetricsPort, leaderPod)
 		diag.Events = s.cnpgOperatorEvents(r, typed, d, pods)
 		out = append(out, diag)
 	}
 	return out
+}
+
+// cnpgOperatorLeadingPod is the current Pod that leads, or "". A holder
+// whose lease expired leads nothing, whatever the Lease still names.
+func cnpgOperatorLeadingPod(l CNPGOperatorLeader) string {
+	if l.State != cnpgReadOK || l.Stale || !l.HolderIsCurrentPod {
+		return ""
+	}
+	return l.HolderPod
 }
 
 func (s *Server) cnpgOperatorPods(r *http.Request, typed kubernetes.Interface, d *appsv1.Deployment, diag *CNPGOperatorDiagnosis) []corev1.Pod {
@@ -208,7 +218,7 @@ func (s *Server) cnpgOperatorPods(r *http.Request, typed kubernetes.Interface, d
 }
 
 func cnpgOperatorWatchOf(c *corev1.Container, operatorNamespace string) CNPGOperatorWatch {
-	out := CNPGOperatorWatch{All: true, Namespaces: []string{}, Source: "default: WATCH_NAMESPACE is not set"}
+	out := CNPGOperatorWatch{All: true, Namespaces: []string{}, Source: "WATCH_NAMESPACE is not set, so the operator watches every namespace"}
 	if c == nil {
 		return out
 	}

@@ -142,3 +142,20 @@ func TestCNPGApplyOperatorGuard(t *testing.T) {
 		t.Error("an unknown webhook state must not block")
 	}
 }
+
+func TestCNPGOperatorLeadingPod(t *testing.T) {
+	held := CNPGOperatorLeader{CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadOK}, HolderPod: "op-1", HolderIsCurrentPod: true}
+	if got := cnpgOperatorLeadingPod(held); got != "op-1" {
+		t.Errorf("held = %q", got)
+	}
+	expired := held
+	expired.Stale = true
+	if got := cnpgOperatorLeadingPod(expired); got != "" {
+		t.Errorf("an expired holder is labelled leader: %q", got)
+	}
+	gone := held
+	gone.HolderIsCurrentPod = false
+	if got := cnpgOperatorLeadingPod(gone); got != "" {
+		t.Errorf("a holder that is no current Pod is labelled leader: %q", got)
+	}
+}
