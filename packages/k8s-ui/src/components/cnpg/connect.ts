@@ -37,7 +37,8 @@ export interface CNPGConnectInfo {
 const SELECTS: Record<'rw' | 'ro' | 'r', string> = {
   rw: 'the primary (read-write)',
   ro: 'standbys only (read-only)',
-  r: 'any instance (read-only)',
+  // -r selects every instance Pod (cnpg.io/podRole=instance), the primary included.
+  r: 'any instance (may reach the primary; not read-only)',
 }
 
 const BOOTSTRAP_ORDER = ['recovery', 'pg_basebackup', 'initdb'] as const

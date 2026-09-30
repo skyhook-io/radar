@@ -10,6 +10,10 @@ describe('cnpgConnectInfo', () => {
     expect(info.database).toEqual({ value: 'app', source: "CloudNativePG's default" })
     expect(info.owner.value).toBe('app')
     expect(info.secret).toEqual({ name: 'pg-app', source: 'name by convention (<cluster>-app)', byConvention: true })
+    expect(info.endpoints.find((e) => e.role === 'r')?.selects).toBe('any instance (may reach the primary; not read-only)')
+    expect(info.endpoints.find((e) => e.role === 'ro')?.selects).toBe('standbys only (read-only)')
+    const extra = cnpgConnectInfo(cluster({ managed: { services: { additional: [{ selectorType: 'r', serviceTemplate: { metadata: { name: 'pg-any' } } }] } } }))
+    expect(extra.endpoints.find((e) => e.name === 'pg-any')?.selects).toContain('not read-only')
   })
 
   it('reads database, owner and Secret the way CloudNativePG resolves them: recovery, pg_basebackup, then initdb', () => {
@@ -58,6 +62,7 @@ describe('cnpgConnectInfo', () => {
     expect(info.disabled).toEqual(['ro', 'r'])
     expect(info.endpoints.map((e) => `${e.role} ${e.name}:${e.port}${e.portFromTemplate ? '*' : ''}`)).toEqual(['rw pg-rw:5432', 'additional pg-lb:6543*', 'pooler pg-pooler-ro:5432'])
     expect(info.endpoints[2].poolerType).toBe('ro')
+    expect(info.endpoints[1].selects).toBe('the primary (read-write)')
   })
 
   it('builds templates with a password placeholder only', () => {

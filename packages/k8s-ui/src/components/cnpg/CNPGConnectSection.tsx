@@ -42,7 +42,7 @@ function Snippet({ text, label }: { text: string; label: string }) {
 const ROLE_LABEL: Record<CNPGConnectEndpoint['role'], string> = {
   rw: 'Read-write',
   ro: 'Read-only',
-  r: 'Read',
+  r: 'Any instance',
   pooler: 'Pooler',
   additional: 'Additional',
 }
