@@ -91,28 +91,8 @@ export function CNPGClusterRuntime({
     )
   }
   const data = q.data
-  if (data.permission.proxy === 'denied') {
-    return (
-      <div className="p-4">
-        <div className="max-w-2xl rounded-xl border border-dashed border-theme-border p-5">
-          <div className="flex items-center gap-2 font-medium text-theme-text-primary">
-            <Lock className="h-4 w-4" />
-            Runtime data unavailable for {name}
-          </div>
-          <p className="mt-2 text-sm text-theme-text-secondary">
-            Radar reads replication, sessions, WAL and slots from each instance through the Kubernetes API proxy, and your identity is not allowed to use it.
-            Nothing below is shown as zero; it is omitted.
-          </p>
-          <pre className="mt-2 rounded-md bg-theme-elevated px-3 py-2 font-mono text-xs text-theme-text-primary">{`requires: ${data.permission.grant ?? `get pods/proxy in ${namespace}`}`}</pre>
-          <p className="mt-2 text-sm text-theme-text-secondary">Still available: Overview, Protection, Activity, Logs, Spec & status and YAML, and the volumes below.</p>
-        </div>
-        <div className="mt-4">
-          <CNPGStorage namespace={namespace} name={name} />
-        </div>
-      </div>
-    )
-  }
-
+  const denied = data.permission.proxy === 'denied'
+  const grant = data.permission.grant ?? `get pods/proxy in ${namespace}`
   const primary = data.instances.find((i) => i.role === 'primary')
   const replicas = data.instances.filter((i) => i.role !== 'primary')
 
@@ -120,19 +100,49 @@ export function CNPGClusterRuntime({
     <div className="space-y-4 p-4">
       <div className="flex flex-wrap items-center gap-3">
         <Segments label="Runtime section" value={section} onChange={setSection} options={SECTIONS} />
-        <span className="text-xs text-theme-text-tertiary">
-          Live from each instance · sampled {formatAge(data.sampledAt)} ago
-        </span>
+        {section !== 'trends' && section !== 'storage' && (
+          <span className="text-xs text-theme-text-tertiary">
+            {denied ? 'Live instance data needs access you do not have' : `Live from each instance · sampled ${formatAge(data.sampledAt)} ago`}
+          </span>
+        )}
       </div>
 
-      {section === 'replication' && (
-        <CNPGReplicationView namespace={namespace} cluster={name} primary={primary} replicas={replicas} onOpenLogs={onOpenLogs} card={Card} />
-      )}
-      {section === 'sessions' && <SessionsView namespace={namespace} cluster={name} primary={primary} />}
-      {section === 'transactions' && <TransactionsView primary={primary} samples={samples} />}
-      {section === 'storage' && <StorageView namespace={namespace} name={name} instances={data.instances} />}
-      {section === 'slots' && <SlotsView primary={primary} />}
+      {section === 'replication' &&
+        (denied ? (
+          <ProxyDenied what="Replication lag, LSNs and instance state" grant={grant} />
+        ) : (
+          <CNPGReplicationView namespace={namespace} cluster={name} primary={primary} replicas={replicas} onOpenLogs={onOpenLogs} card={Card} />
+        ))}
+      {section === 'sessions' &&
+        (denied ? (
+          <>
+            <ProxyDenied what="Session counts by state, lock waits and connection headroom" grant={grant} />
+            <CNPGBlockingSessions namespace={namespace} cluster={name} primary={primary?.pod} />
+          </>
+        ) : (
+          <SessionsView namespace={namespace} cluster={name} primary={primary} />
+        ))}
+      {section === 'transactions' &&
+        (denied ? <ProxyDenied what="Transaction rates, cache hit ratio, deadlocks and transaction ID age" grant={grant} /> : <TransactionsView primary={primary} samples={samples} />)}
+      {section === 'storage' && (denied ? <CNPGStorage namespace={namespace} name={name} /> : <StorageView namespace={namespace} name={name} instances={data.instances} />)}
+      {section === 'slots' && (denied ? <ProxyDenied what="Replication slots and the WAL they retain" grant={grant} /> : <SlotsView primary={primary} />)}
       {section === 'trends' && <CNPGTrends namespace={namespace} name={name} samples={samples} onOpenInterval={onOpenInterval} />}
+    </div>
+  )
+}
+
+// Denied is not zero: the section says what it would show and the grant it needs.
+function ProxyDenied({ what, grant }: { what: string; grant: string }) {
+  return (
+    <div className="max-w-2xl rounded-xl border border-dashed border-theme-border p-5">
+      <div className="flex items-center gap-2 font-medium text-theme-text-primary">
+        <Lock className="h-4 w-4" />
+        No access to live instance data
+      </div>
+      <p className="mt-2 text-sm text-theme-text-secondary">
+        {what} are read from each instance through the Kubernetes API proxy, which your identity may not use. Nothing is shown as zero; it is omitted.
+      </p>
+      <pre className="mt-2 rounded-md bg-theme-elevated px-3 py-2 font-mono text-xs text-theme-text-primary">{`requires: ${grant}`}</pre>
     </div>
   )
 }
