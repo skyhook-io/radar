@@ -147,3 +147,15 @@ export function cnpgSessionAggregatesGap(inst: CNPGRuntimeInstance | undefined):
 export function cnpgSessionsCardShowsConnections(inst: CNPGRuntimeInstance | undefined, exec: CNPGSessionsResponse | undefined): boolean {
   return inst?.metrics.state === 'ok' && cnpgConnectionFigure(exec, inst.metrics) !== undefined
 }
+
+/** A transaction or multixact ID age as a readable count: 812, 1.2k, 45k, 3.4 M, 1.1 B. A non-zero age never reads as zero. */
+export function cnpgIdAge(v: number): string {
+  const unit = (n: number, d: number, s: string) => {
+    const x = n / d
+    return `${x < 10 ? x.toFixed(1).replace(/\.0$/, '') : Math.round(x)}${s}`
+  }
+  if (v < 1_000) return String(v)
+  if (v < 1_000_000) return unit(v, 1_000, 'k')
+  if (v < 1_000_000_000) return unit(v, 1_000_000, ' M')
+  return unit(v, 1_000_000_000, ' B')
+}

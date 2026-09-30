@@ -12,7 +12,7 @@ import { CNPGStorage } from './CNPGStorage'
 import { CNPGBlockingSessions } from './CNPGBlockingSessions'
 import { cnpgConnectionFigure } from './blocking'
 import { CNPGReplicationView } from './CNPGReplicationView'
-import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgSessionsCardShowsConnections, cnpgTransactionRates, type CNPGTransactionRates } from './runtimeModel'
+import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgIdAge, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgSessionsCardShowsConnections, cnpgTransactionRates, type CNPGTransactionRates } from './runtimeModel'
 import { historyLatest, latestRate } from './trendSamples'
 import { CNPGTrends, useSampleBuffer, type CNPGIntervalTarget, type Sample } from './CNPGTrends'
 
@@ -451,7 +451,11 @@ function DatabaseHealth({ m }: { m: CNPGRuntimeInstance['metrics'] }) {
   const rows = cnpgDatabaseHealthRows(m)
   const absent = AGE_FAMILIES.filter((f) => m.missing?.includes(f.family))
   const cell = (v: number | undefined, fmt: (v: number) => ReactNode) => (v === undefined ? <span className="text-theme-text-tertiary">—</span> : fmt(v))
-  const age = (v: number) => <span className={v > 1_000_000_000 ? toneTextClass('degraded') : undefined}>{(v / 1_000_000).toFixed(0)} M</span>
+  const age = (v: number) => (
+    <Tooltip content={`${v.toLocaleString()} of ~2 billion before wraparound`}>
+      <span className={v > 1_000_000_000 ? toneTextClass('degraded') : undefined}>{cnpgIdAge(v)}</span>
+    </Tooltip>
+  )
   return (
     <div className="mt-4 text-sm">
       <div className="text-xs text-theme-text-tertiary">Per database · counters since the last statistics reset · ID wraparound at ~2 billion</div>

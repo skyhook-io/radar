@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CNPGRuntimeInstance, CNPGRuntimeReplication } from '../../api/cnpg'
 import type { CNPGSessionsResponse } from '../../api/cnpg-sessions'
-import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgStandbyBacklogTone, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgSessionsCardShowsConnections, cnpgStandbyHeadline, cnpgTransactionRates } from './runtimeModel'
+import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgIdAge, cnpgStandbyBacklogTone, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgSessionsCardShowsConnections, cnpgStandbyHeadline, cnpgTransactionRates } from './runtimeModel'
 
 describe('cnpgCheckpointView', () => {
   it('flags requested-checkpoint pressure only with enough checkpoints', () => {
@@ -107,5 +107,17 @@ describe('cnpgSessionsCardShowsConnections', () => {
     expect(cnpgSessionsCardShowsConnections(inst({ state: 'ok', sessionsTotal: 5 }), undefined)).toBe(true)
     expect(cnpgSessionsCardShowsConnections(inst({ state: 'ok' }), undefined)).toBe(false)
     expect(cnpgSessionsCardShowsConnections(inst({ state: 'unreachable' }), exec)).toBe(false)
+  })
+})
+
+describe('cnpgIdAge', () => {
+  it('reads as a count with k / M / B and never shows a non-zero age as zero', () => {
+    expect(cnpgIdAge(0)).toBe('0')
+    expect(cnpgIdAge(812)).toBe('812')
+    expect(cnpgIdAge(1_234)).toBe('1.2k')
+    expect(cnpgIdAge(45_000)).toBe('45k')
+    expect(cnpgIdAge(3_400_000)).toBe('3.4 M')
+    expect(cnpgIdAge(1_100_000_000)).toBe('1.1 B')
+    expect(cnpgIdAge(12)).not.toBe('0 M')
   })
 })
