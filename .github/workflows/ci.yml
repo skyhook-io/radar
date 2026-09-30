@@ -251,7 +251,7 @@ jobs:
           fi
 
       - name: Intall helmfile
-        uses: helmfile/helmfile-action@v2.2.0
+        uses: helmfile/helmfile-action@v2.4.8
         with:
           helmfile-auto-init: 'true'
           # Helm 3 ONLY here: helm-unittest cannot run under Helm 4's plugin
