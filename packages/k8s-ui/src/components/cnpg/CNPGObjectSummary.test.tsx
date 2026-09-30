@@ -304,6 +304,13 @@ describe('logical replication summaries', () => {
     expect(t).toContain('no pg_stat_subscription query')
   })
 
+  it('never says no Publication declares it when Publications are unreadable', () => {
+    const denied = ws({ clusters: [src, dst], subscriptions: [sub] }, { coverage: { publications: { state: 'denied' } } })
+    const t = text(renderToString(<CNPGSubscriptionSummary resource={sub} workspace={denied} onNavigate={nav} />))
+    expect(t).toContain('Unknown: No access to Publications in pg')
+    expect(t).not.toContain('No Publication object declares it')
+  })
+
   it('lists the subscribers of a publication', () => {
     const t = text(renderToString(<CNPGPublicationSummary resource={pub} workspace={w} onNavigate={nav} />))
     expect(t).toContain('Subscribers')

@@ -43,6 +43,13 @@ describe('cnpgLogicalPaths', () => {
     const [sqlOnly] = cnpgLogicalPaths([sub({ publicationName: 'made_in_sql' })], [synced(17), subscriber('src-rw.src.svc')], [pub], [])
     expect(sqlOnly.publication.object).toBeUndefined()
   })
+  it('says a Publication is unknown when the publisher namespace\'s Publications are unreadable', () => {
+    const [p] = cnpgLogicalPaths([sub({})], [synced(17), subscriber('src-rw.src.svc')], [], [], (ns) => (ns === 'src' ? 'No access to Publications' : null))
+    expect(p.publication.object).toBeUndefined()
+    expect(p.publication.unavailable).toBe('No access to Publications')
+    const [readable] = cnpgLogicalPaths([sub({})], [synced(17), subscriber('src-rw.src.svc')], [], [], () => null)
+    expect(readable.publication.unavailable).toBeUndefined()
+  })
   it('names the slot from slot_name, and none for slot_name = NONE', () => {
     expect(cnpgLogicalPaths([sub({ parameters: { slot_name: 'custom' } })], [], [], [])[0].slot.name).toBe('custom')
     expect(cnpgLogicalPaths([sub({ parameters: { slot_name: 'NONE' } })], [], [], [])[0].slot.name).toBeUndefined()

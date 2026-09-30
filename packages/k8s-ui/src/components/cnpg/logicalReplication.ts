@@ -14,6 +14,8 @@ export interface CNPGLogicalPath {
     dbname?: string
     /** The Publication object on the publisher Cluster declaring it, when one is visible. */
     object?: { namespace: string; name: string; applied: boolean | null }
+    /** Why Publication objects in the publisher's namespace could not be read; absence then proves nothing. */
+    unavailable?: string
   }
   /** The slot PostgreSQL creates for the subscription: `slot_name`, else the subscription's name. */
   slot: { name?: string; reason?: string }
@@ -136,7 +138,14 @@ export function cnpgSlotFailover(publisher: CNPGPublisher, subscription: any): C
   }
 }
 
-export function cnpgLogicalPaths(subscriptions: any[], clusters: any[], publications: any[], poolers: any[]): CNPGLogicalPath[] {
+export function cnpgLogicalPaths(
+  subscriptions: any[],
+  clusters: any[],
+  publications: any[],
+  poolers: any[],
+  /** Why Publications in a namespace are not readable (coverage), or null when they are. */
+  publicationsUnavailable?: (namespace: string) => string | null,
+): CNPGLogicalPath[] {
   return subscriptions.map((sub) => {
     const ns: string = sub?.metadata?.namespace ?? ''
     const subscriber = clusters.find((c) => c?.metadata?.namespace === ns && c?.metadata?.name === sub?.spec?.cluster?.name)
@@ -188,6 +197,7 @@ export function cnpgLogicalPaths(subscriptions: any[], clusters: any[], publicat
         object: pubObj
           ? { namespace: pubObj.metadata.namespace, name: pubObj.metadata.name, applied: typeof pubObj.status?.applied === 'boolean' ? pubObj.status.applied : null }
           : undefined,
+        unavailable: !pubObj && publisher.kind === 'cluster' ? publicationsUnavailable?.(publisher.namespace) ?? undefined : undefined,
       },
       slot,
       failover: cnpgSlotFailover(publisher, sub),

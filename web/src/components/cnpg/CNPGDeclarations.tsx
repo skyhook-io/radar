@@ -11,6 +11,7 @@ import {
   cnpgLogicalSlotFact,
   isApiGroup,
   refToSelectedResource,
+  relationUnavailable,
   toneTextClass,
   type CNPGFleetRow,
   type CNPGLogicalPath,
@@ -230,6 +231,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
       data.objects.clusters ?? [],
       (data.objects.publications ?? []).filter(valid),
       data.objects.poolers ?? [],
+      (ns) => relationUnavailable(data, 'publications', ns, 'Publications'),
     )
     if (!clusterFilter) return paths
     return paths.filter(

@@ -195,7 +195,9 @@ function publicationTargets(resource: any): ReactNode {
 }
 
 function workspacePaths(workspace: CNPGWorkspaceResponse | null | undefined, subscriptions: any[]): CNPGLogicalPath[] {
-  return cnpgLogicalPaths(subscriptions, clustersIn(workspace), workspaceList(workspace, 'publications'), workspaceList(workspace, 'poolers'))
+  return cnpgLogicalPaths(subscriptions, clustersIn(workspace), workspaceList(workspace, 'publications'), workspaceList(workspace, 'poolers'), (ns) =>
+    relationUnavailable(workspace, 'publications', ns, 'Publications'),
+  )
 }
 
 export interface CNPGLogicalPathReading {

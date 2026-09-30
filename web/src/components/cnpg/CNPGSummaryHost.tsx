@@ -15,6 +15,7 @@ import {
   CNPGScheduledBackupSummary,
   CNPGSubscriptionSummary,
   CNPGDatabaseRoleSummary,
+  relationUnavailable,
   cnpgLogicalPaths,
   cnpgLogicalSlotFact,
   cnpgSubscriptionHostNamespace,
@@ -168,7 +169,11 @@ function useLogicalWorkspace(ws: CNPGWorkspaceResponse | null, subscriptions: an
   const extra = ws?.namespaces === null ? [] : hostNs.filter((n) => !(ws?.namespaces ?? []).includes(n))
   const other = useCNPGWorkspace(extra, { enabled: !!ws && extra.length > 0 })
   const merged = (key: 'clusters' | 'publications' | 'poolers') => [...(ws?.objects[key] ?? []), ...(other.data?.installed ? other.data.objects[key] ?? [] : [])]
-  return { clusters: merged('clusters'), publications: merged('publications'), poolers: merged('poolers') }
+  const publicationsUnavailable = (ns: string) =>
+    ws?.namespaces === null || ws?.namespaces?.includes(ns)
+      ? relationUnavailable(ws, 'publications', ns, 'Publications')
+      : relationUnavailable(other.data?.installed ? other.data : null, 'publications', ns, 'Publications')
+  return { clusters: merged('clusters'), publications: merged('publications'), poolers: merged('poolers'), publicationsUnavailable }
 }
 
 function LogicalPathSlot({ path, children }: { path: CNPGLogicalPath; children: (slot: ReturnType<typeof cnpgLogicalSlotFact>, notice: ReactNode) => ReactNode }) {
@@ -178,7 +183,7 @@ function LogicalPathSlot({ path, children }: { path: CNPGLogicalPath; children: 
 
 function SubscriptionSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: CNPGNavigate }) {
   const lw = useLogicalWorkspace(props.workspace, [props.resource])
-  const path = props.workspace ? cnpgLogicalPaths([props.resource], lw.clusters, lw.publications, lw.poolers)[0] : undefined
+  const path = props.workspace ? cnpgLogicalPaths([props.resource], lw.clusters, lw.publications, lw.poolers, lw.publicationsUnavailable)[0] : undefined
   if (!path) return <CNPGSubscriptionSummary {...props} />
   return <LogicalPathSlot path={path}>{(slot, notice) => <CNPGSubscriptionSummary {...props} logicalPath={{ path, slot, notice }} />}</LogicalPathSlot>
 }

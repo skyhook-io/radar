@@ -107,7 +107,11 @@ export function CNPGLogicalPathView({
             </span>
           ) : (
             <span className="text-theme-text-tertiary">
-              {publisher.kind === 'cluster' ? 'No Publication object declares it: it may exist in SQL only' : 'Unknown'}
+              {publisher.kind !== 'cluster'
+                ? 'Unknown'
+                : pub.unavailable
+                  ? `Unknown: ${pub.unavailable} in ${publisher.namespace}`
+                  : 'No Publication object declares it: it may exist in SQL only'}
             </span>
           )}
         </FactRow>
