@@ -61,6 +61,8 @@ export interface CNPGObserverResult {
   steps?: CNPGOpStep[]
   /** Changes whenever the operation moves; drives stall detection. */
   progressKey?: string
+  /** Nothing will ever report more: stop following now. */
+  final?: boolean
 }
 
 export type CNPGOperationObserver = (op: CNPGTrackedOperation, obs: CNPGObservation) => CNPGObserverResult
@@ -74,6 +76,14 @@ export function registerCNPGOperationObserver(kind: string, observer: CNPGOperat
 
 /** No progress for this long, with telemetry present, reads as stalled. */
 export const CNPG_OP_STALL_MS = 10 * 60_000
+
+/** An operation Radar cannot observe is followed this long, then left alone. */
+export const CNPG_OP_UNOBSERVABLE_MS = 15 * 60_000
+
+/** Whether the tracker should still poll for this operation. */
+export function cnpgOperationFollowed(op: CNPGTrackedOperation): boolean {
+  return !CNPG_OP_TERMINAL.has(op.state) && !op.finishedAt
+}
 
 /** Advance one operation against an observation. Pure. */
 export function advanceCNPGOperation(op: CNPGTrackedOperation, obs: CNPGObservation): CNPGTrackedOperation {
@@ -92,6 +102,7 @@ export function advanceCNPGOperation(op: CNPGTrackedOperation, obs: CNPGObservat
     state = 'stalled'
     detail = `No progress for ${Math.round((obs.now - lastProgressAt) / 60_000)} min${res.detail ? ` · ${res.detail}` : ''}`
   }
+  const givenUp = state === 'unobservable' && (res.final || obs.now - op.startedAt > CNPG_OP_UNOBSERVABLE_MS)
   return {
     ...op,
     state,
@@ -99,7 +110,7 @@ export function advanceCNPGOperation(op: CNPGTrackedOperation, obs: CNPGObservat
     steps: res.steps ?? op.steps,
     progressKey: res.progressKey ?? op.progressKey,
     lastProgressAt,
-    finishedAt: CNPG_OP_TERMINAL.has(state) ? obs.now : undefined,
+    finishedAt: CNPG_OP_TERMINAL.has(state) || givenUp ? obs.now : undefined,
   }
 }
 
@@ -299,6 +310,7 @@ registerCNPGOperationObserver('destroyInstance', (op, obs) => {
 
 registerCNPGOperationObserver('reload', () => ({
   state: 'unobservable',
+  final: true,
   detail: 'Requested. Nothing in the cluster reports when a configuration reload completes; check the instance logs for "received SIGHUP".',
 }))
 

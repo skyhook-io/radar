@@ -7,7 +7,7 @@ import { useCNPGClusterCapabilities, useCNPGRuntime, useCNPGWorkspace } from '..
 import { useCNPGClusterHA } from '../../../api/cnpg-ha'
 import { useAnimatedUnmount } from '../../../hooks/useAnimatedUnmount'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../../utils/animation'
-import { CNPG_OP_TERMINAL, advanceCNPGOperation, type CNPGObservation, type CNPGOpState, type CNPGTrackedOperation } from './model'
+import { CNPG_OP_TERMINAL, advanceCNPGOperation, cnpgOperationFollowed, type CNPGObservation, type CNPGOpState, type CNPGTrackedOperation } from './model'
 import { dismissCNPGOperation, updateCNPGOperations, useCNPGOperations } from './store'
 
 const STATE_TEXT: Record<CNPGOpState, string> = {
@@ -54,7 +54,7 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
   const { connection } = useConnection()
   const context = connection.context
   const ops = useCNPGOperations({ namespace, cluster: name, context })
-  const active = ops.filter((o) => !CNPG_OP_TERMINAL.has(o.state))
+  const active = ops.filter(cnpgOperationFollowed)
   const following = active.length > 0
   const needsRuntime = active.some((o) => ['switchover', 'unfence', 'restart', 'restartInstance'].includes(o.kind))
 
@@ -67,6 +67,7 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
   useEffect(() => {
     if (!following) return
     const t = setInterval(() => {
+      if (document.visibilityState === 'hidden') return
       queryClient.invalidateQueries({ queryKey: ['cnpg', 'capabilities', 'clusters', namespace, name] })
       queryClient.invalidateQueries({ queryKey: ['cnpg', 'workspace', namespace] })
     }, POLL_MS)
@@ -94,7 +95,7 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
     updateCNPGOperations((all) => {
       let changed = false
       const next = all.map((op) => {
-        if (op.namespace !== namespace || op.cluster !== name || op.context !== context || CNPG_OP_TERMINAL.has(op.state)) return op
+        if (op.namespace !== namespace || op.cluster !== name || op.context !== context || !cnpgOperationFollowed(op)) return op
         const adv = advanceCNPGOperation(op, observation)
         if (JSON.stringify(adv) !== JSON.stringify(op)) changed = true
         return adv

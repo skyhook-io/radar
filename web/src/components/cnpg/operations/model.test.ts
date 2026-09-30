@@ -188,3 +188,19 @@ describe('destroyInstance observer', () => {
     expect(advanceCNPGOperation(destroy, obs).state).not.toBe('completed')
   })
 })
+
+describe('operations Radar cannot observe', () => {
+  it('a reload finishes at once instead of being followed all session', () => {
+    const next = advanceCNPGOperation(op({ kind: 'reload', target: undefined }), { now: T0 + 1000 })
+    expect(next.state).toBe('unobservable')
+    expect(next.finishedAt).toBe(T0 + 1000)
+  })
+
+  it('anything else unobservable is left alone after the follow window', () => {
+    const early = advanceCNPGOperation(op({ kind: 'switchover' }), { now: T0 + 60_000 })
+    expect(early.finishedAt).toBeUndefined()
+    const late = advanceCNPGOperation(op({ kind: 'switchover' }), { now: T0 + 16 * 60_000 })
+    expect(late.state).toBe('unobservable')
+    expect(late.finishedAt).toBe(T0 + 16 * 60_000)
+  })
+})
