@@ -199,6 +199,15 @@ describe('restore operation observer', () => {
     expect(done.state).toBe('completed')
   })
 
+  it('completes without Job access once the restored cluster is healthy and ready', () => {
+    const done = restoreOperationObserver(op, {
+      now: 1000,
+      cluster: { spec: { instances: 1 }, status: { phase: 'Cluster in healthy state', readyInstances: 1 } },
+      ha: { jobs: { state: 'denied' } } as any,
+    })
+    expect(done.state).toBe('completed')
+  })
+
   it('fails when the recovery Job fails', () => {
     const r = restoreOperationObserver(op, {
       now: 1000,

@@ -25,7 +25,10 @@ export function restoreOperationObserver(op: CNPGTrackedOperation, obs: CNPGObse
   if (phase && phase !== HEALTHY_PHASE && FAILING_PHASE.test(phase)) {
     return { state: 'failed', detail: phase + (c.status?.phaseReason ? `: ${c.status.phaseReason}` : '') }
   }
-  const jobDone = jobs === undefined ? null : jobs.some((j) => j.phase === 'succeeded') || (typeof ready === 'number' && ready > 0)
+  // A ready restored primary proves recovery finished, whether or not the
+  // caller can read the recovery Job.
+  const primaryReady = typeof ready === 'number' && ready > 0
+  const jobDone = primaryReady ? true : jobs === undefined ? null : jobs.some((j) => j.phase === 'succeeded')
   const steps: CNPGOpStep[] = [
     { label: 'Base backup restored and WAL replayed (recovery Job finished)', done: jobDone },
     { label: 'Restored primary ready', done: typeof ready === 'number' ? ready > 0 : false },
