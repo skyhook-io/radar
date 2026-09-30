@@ -56,7 +56,7 @@ export interface CreateResourceDialogProps {
   onCreated?: (result: ApplyResult) => void
   /** Start in strict create mode (e.g. a prefilled manifest that must not update an existing object). */
   initialMode?: 'apply' | 'create'
-  /** Hide the Apply/Create choice and Force while the dialog stays in `initialMode` (e.g. a new object that must only be created). */
+  /** Stay in `initialMode` with the Apply/Create choice and Force hidden, even after a partial create (e.g. a new object that must only be created). */
   lockMode?: boolean
 }
 
@@ -335,6 +335,14 @@ export function CreateResourceDialog({
         Array.isArray(caught.appliedResults)
           ? caught.appliedResults
           : []
+      if (preview.mode === 'create' && appliedResults.length > 0 && lockMode) {
+        setYaml(preview.yaml)
+        setPreview(null)
+        setError(
+          `${message} Some documents were created before it stopped. This dialog only creates, so remove the created ones from the manifest before creating the rest.`,
+        )
+        return
+      }
       if (preview.mode === 'create' && appliedResults.length > 0) {
         setYaml(preview.yaml)
         setMode('apply')
@@ -363,10 +371,10 @@ export function CreateResourceDialog({
         }
       }
     }
-  }, [preview, onApply, onPreview, finishApply])
+  }, [preview, onApply, onPreview, finishApply, lockMode])
 
   const dialogTitle = title || 'Create Resource'
-  const showModeControls = !lockMode || mode !== initialMode
+  const showModeControls = !lockMode
   const submitLabel = onPreview ? 'Review' : mode === 'create' ? 'Create' : 'Apply'
 
   return (
