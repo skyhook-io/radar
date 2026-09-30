@@ -85,7 +85,9 @@ export function useLogSearch(
   }, [entries, deferredQuery, isRegex, isCaseSensitive])
 
   // Filtered entries for filter mode
-  const isFiltering = mode !== 'highlight' && !!deferredQuery && !regexError
+  // Gate on the live query too, so clearing or closing search unfilters immediately
+  // rather than after the deferred value catches up.
+  const isFiltering = mode !== 'highlight' && !!query && !!deferredQuery && !regexError
   const filteredEntries = useMemo(
     () => (isFiltering ? applySearchMode(entries, matchIndices, mode) : entries),
     [entries, isFiltering, mode, matchIndices],
