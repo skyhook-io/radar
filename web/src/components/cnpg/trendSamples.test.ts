@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CNPGRuntimeResponse } from '../../api/cnpg'
-import { cacheHitSeries, chartedDatabases, latestRate, rateSeries, sampleFrom, sessionStateSeries, type Sample } from './trendSamples'
+import type { CNPGClusterHistoryResponse } from '../../api/cnpg-history'
+import { cacheHitSeries, chartedDatabases, historyLatest, latestRate, rateSeries, sampleFrom, sessionStateSeries, type Sample } from './trendSamples'
 
 const sample = (t: number, metricsAt: number | undefined, over: Partial<Sample>, source = 'pg-1/uid-1'): Sample => ({
   t: t * 1000,
@@ -106,5 +107,33 @@ describe('chartedDatabases', () => {
     expect(chartedDatabases(samples, null).shown).toEqual(['f', 'e', 'd', 'c', 'b'])
     expect(chartedDatabases(samples, ['tiny', 'a']).shown).toEqual(['a', 'tiny'])
     expect(chartedDatabases(samples, 'all').shown).toHaveLength(7)
+  })
+})
+
+describe('historyLatest', () => {
+  const history = (over: Partial<CNPGClusterHistoryResponse> = {}, chartState = 'ok') =>
+    ({
+      source: 'prometheus',
+      state: 'ok',
+      charts: [
+        {
+          id: 'tps',
+          seriesBy: 'series',
+          state: chartState,
+          source: 'rate of xact_commit',
+          series: [{ labels: { series: 'commits' }, dataPoints: [{ timestamp: 1, value: 4 }, { timestamp: 2, value: 7.5 }, { timestamp: 3, value: null }] }],
+        },
+      ],
+      ...over,
+    }) as unknown as CNPGClusterHistoryResponse
+
+  it('takes the newest recorded point of the named series', () => {
+    expect(historyLatest(history(), 'tps', 'commits')).toEqual({ value: 7.5, at: 2, source: 'rate of xact_commit' })
+    expect(historyLatest(history(), 'tps', 'rollbacks')).toBeUndefined()
+  })
+  it('has nothing without Prometheus history', () => {
+    expect(historyLatest(history({ source: 'none' }), 'tps', 'commits')).toBeUndefined()
+    expect(historyLatest(history({}, 'noSeries'), 'tps', 'commits')).toBeUndefined()
+    expect(historyLatest(undefined, 'tps', 'commits')).toBeUndefined()
   })
 })

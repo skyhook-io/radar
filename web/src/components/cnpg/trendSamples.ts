@@ -1,5 +1,6 @@
 import type { TimeSeries } from '@skyhook-io/k8s-ui/components/charts'
 import type { CNPGRuntimeResponse } from '../../api/cnpg'
+import type { CNPGClusterHistoryResponse } from '../../api/cnpg-history'
 
 /** Sessions on one instance at one sample, by pg_stat_activity state. */
 // Session totals and lock waits come from separate exporter queries: each is
@@ -157,6 +158,22 @@ export function latestRate(samples: Sample[], key: CounterKey): number | undefin
   const pts = rateSeries(samples, key).dataPoints
   const last = pts[pts.length - 1]
   return last?.value ?? undefined
+}
+
+/**
+ * The newest value of one labelled series of a Prometheus history chart, or
+ * undefined when history is not from Prometheus or that chart has no point.
+ */
+export function historyLatest(history: CNPGClusterHistoryResponse | undefined, chartId: string, series: string): { value: number; at: number; source: string } | undefined {
+  if (history?.source !== 'prometheus' || history.state !== 'ok') return undefined
+  const chart = history.charts.find((c) => c.id === chartId)
+  if (!chart || chart.state !== 'ok') return undefined
+  const pts = chart.series.find((s) => s.labels[chart.seriesBy] === series)?.dataPoints ?? []
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const v = pts[i].value
+    if (v !== null) return { value: v, at: pts[i].timestamp, source: chart.source }
+  }
+  return undefined
 }
 
 export const SESSION_STATE_GROUPS: { id: string; label: string; states: (state: string) => boolean }[] = [

@@ -5,6 +5,7 @@ import { Lock } from 'lucide-react'
 import { PaneLoader, Tooltip, formatAge, toneTextClass } from '@skyhook-io/k8s-ui'
 import { useCNPGRuntime, type CNPGRuntimeInstance } from '../../api/cnpg'
 import { useCNPGSessions, type CNPGSessionsResponse } from '../../api/cnpg-sessions'
+import { useCNPGClusterHistory, type CNPGClusterHistoryResponse } from '../../api/cnpg-history'
 import { Notice } from '../capacity/shared'
 import { CNPGRefreshFailedNotice, Segments } from './shared'
 import { CNPGStorage } from './CNPGStorage'
@@ -12,7 +13,7 @@ import { CNPGBlockingSessions } from './CNPGBlockingSessions'
 import { cnpgConnectionFigure } from './blocking'
 import { CNPGReplicationView } from './CNPGReplicationView'
 import { cnpgCheckpointView, cnpgDatabaseHealthRows } from './runtimeModel'
-import { latestRate } from './trendSamples'
+import { historyLatest, latestRate } from './trendSamples'
 import { CNPGTrends, useSampleBuffer, type CNPGIntervalTarget, type Sample } from './CNPGTrends'
 
 type Section = 'replication' | 'sessions' | 'transactions' | 'storage' | 'slots' | 'trends'
@@ -160,7 +161,7 @@ export function CNPGClusterRuntime({
           <SessionsView namespace={namespace} cluster={name} primary={primary} instance={picked} picker={picker} />
         ))}
       {section === 'transactions' &&
-        (denied ? <ProxyDenied what="Transaction rates, cache hit ratio, deadlocks, transaction and multixact ID age, and extension versions" grant={grant} /> : <TransactionsView primary={primary} instance={picked} picker={picker} samples={samples} />)}
+        (denied ? <ProxyDenied what="Transaction rates, cache hit ratio, deadlocks, transaction and multixact ID age, and extension versions" grant={grant} /> : <TransactionsView namespace={namespace} cluster={name} primary={primary} instance={picked} picker={picker} samples={samples} />)}
       {section === 'storage' && (denied ? <CNPGStorage namespace={namespace} name={name} /> : <StorageView namespace={namespace} name={name} instances={data.instances} />)}
       {section === 'slots' && (denied ? <ProxyDenied what="Replication slots and the WAL they retain" grant={grant} /> : <SlotsView primary={primary} />)}
       {section === 'trends' && (
@@ -290,33 +291,57 @@ function Metric({ label, value, tone }: { label: string; value: ReactNode; tone?
   )
 }
 
-function TransactionsView({ primary, instance, picker, samples }: { primary?: CNPGRuntimeInstance; instance?: CNPGRuntimeInstance; picker?: ReactNode; samples: Sample[] }) {
+function TransactionsView({
+  namespace,
+  cluster,
+  primary,
+  instance,
+  picker,
+  samples,
+}: {
+  namespace: string
+  cluster: string
+  primary?: CNPGRuntimeInstance
+  instance?: CNPGRuntimeInstance
+  picker?: ReactNode
+  samples: Sample[]
+}) {
+  const history = useCNPGClusterHistory(namespace, cluster, '15m').data
   return (
     <div className="space-y-4">
       {picker}
-      <TransactionsCard inst={instance} isPrimary={!!instance && instance === primary} samples={samples} />
+      <TransactionsCard inst={instance} isPrimary={!!instance && instance === primary} samples={samples} history={history} />
       <CheckpointsCard inst={instance} />
     </div>
   )
 }
 
-function TransactionsCard({ inst, isPrimary, samples }: { inst?: CNPGRuntimeInstance; isPrimary: boolean; samples: Sample[] }) {
+function TransactionsCard({ inst, isPrimary, samples, history }: { inst?: CNPGRuntimeInstance; isPrimary: boolean; samples: Sample[]; history?: CNPGClusterHistoryResponse }) {
   const primary = inst
   const m = primary?.metrics
   if (!m || m.state !== 'ok') return <Card title="Transactions"><Unavailable inst={primary} what="Transactions" /></Card>
-  // The page samples the primary's counters only, so rates are the primary's.
+  const promCommits = historyLatest(history, 'tps', 'commits')
+  const promRollbacks = historyLatest(history, 'tps', 'rollbacks')
+  const fromPrometheus = !!(promCommits || promRollbacks)
+  // The page samples the primary's counters only, so sampled rates are the primary's.
   const commits = isPrimary ? latestRate(samples, 'commits') : undefined
   const rollbacks = isPrimary ? latestRate(samples, 'rollbacks') : undefined
-  const rateText = (v: number | undefined) => (!isPrimary ? 'primary only' : v !== undefined ? v.toFixed(1) : 'collecting…')
+  const sampledText = (v: number | undefined) => (!isPrimary ? 'primary only' : v !== undefined ? v.toFixed(1) : 'collecting…')
+  const promText = (p: ReturnType<typeof historyLatest>) =>
+    p ? <Tooltip content={`${p.source} · Prometheus, ${formatAge(new Date(p.at * 1000).toISOString())} ago`}>{p.value.toFixed(1)}</Tooltip> : '—'
   const hit = m.blksHit !== undefined && m.blksRead !== undefined && m.blksHit + m.blksRead > 0 ? (m.blksHit / (m.blksHit + m.blksRead)) * 100 : undefined
   return (
     <Card
       title={<>Transactions on {primary!.pod}</>}
-      footer="Rates are the change between the primary exporter's last two query runs seen while this page is open, never across a change of primary."
+      footer={
+        fromPrometheus
+          ? 'Commit and rollback rates are Prometheus’s latest rate across every instance and database of the cluster; the other figures are this instance’s.'
+          : "Rates are the change between the primary exporter's last two query runs seen while this page is open, never across a change of primary."
+      }
     >
       <div className="flex flex-wrap gap-8">
-        <Metric label="Commits / s" value={rateText(commits)} />
-        <Metric label="Rollbacks / s" value={rateText(rollbacks)} />
+        <Metric label={fromPrometheus ? 'Commits / s (cluster)' : 'Commits / s'} value={fromPrometheus ? promText(promCommits) : sampledText(commits)} />
+        <Metric label={fromPrometheus ? 'Rollbacks / s (cluster)' : 'Rollbacks / s'} value={fromPrometheus ? promText(promRollbacks) : sampledText(rollbacks)} />
         <Metric label="Cache hit ratio" value={hit !== undefined ? `${hit.toFixed(1)} %` : '—'} />
         <Metric label="Deadlocks (total)" value={m.deadlocksTotal ?? '—'} tone={m.deadlocksTotal ? 'degraded' : undefined} />
         <Metric label="Oldest transaction" value={seconds(m.oldestXactSeconds)} />
