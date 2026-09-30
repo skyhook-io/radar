@@ -250,7 +250,8 @@ func istioSeriesKeyFrom(labels map[string]string) istioSeriesKey {
 	}
 }
 
-// queryHTTPSeriesRates runs an HTTP query and returns its positive values by series.
+// queryHTTPSeriesRates reads an enrichment query's values by series. A zero or
+// negative rate is no measurement, so it is left out rather than joined as one.
 func (s *IstioSource) queryHTTPSeriesRates(ctx context.Context, query string) (map[istioSeriesKey]float64, error) {
 	result, err := s.queryFn(ctx, query)
 	if err != nil {

@@ -918,8 +918,10 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 			break
 		}
 		if err != nil {
-			// Check if we got any flows before the error
-			if len(flows) > 0 {
+			// Anything the stream delivered before failing — flows, or word of
+			// events lost and nodes unreachable — is still an answer, and a
+			// bare fetch error would throw away what is known to be missing.
+			if len(flows) > 0 || lost > 0 || len(unavailableNodes) > 0 {
 				log.Printf("[hubble] Stream ended with partial results: %v", err)
 				gaps = append(gaps, fmt.Sprintf("the stream from Hubble Relay ended early (%v), so flows after the first %d are missing", err, len(flows)))
 				break

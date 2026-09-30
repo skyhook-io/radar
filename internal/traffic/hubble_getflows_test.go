@@ -155,6 +155,22 @@ func TestHubbleGetFlows_ReportsWhatTheStreamDidNotDeliver(t *testing.T) {
 		}
 	})
 
+	t.Run("a stream that fails after reporting lost events keeps that evidence", func(t *testing.T) {
+		h := connectedHubble(t, &scriptedObserver{
+			responses: []*observerpb.GetFlowsResponse{
+				{ResponseTypes: &observerpb.GetFlowsResponse_LostEvents{LostEvents: &flowpb.LostEvent{NumEventsLost: 5}}},
+			},
+			endErr: status.Error(codes.Unavailable, "relay restarted"),
+		})
+		resp, err := h.GetFlows(context.Background(), DefaultFlowOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(resp.Warning, "5 events lost") || resp.WarningKind != WarningIncomplete {
+			t.Errorf("warning = %q (%s), want the lost events reported as incomplete data", resp.Warning, resp.WarningKind)
+		}
+	})
+
 	t.Run("reply packets draw no edge", func(t *testing.T) {
 		reply := flowResponse("b", "a")
 		reply.GetFlow().IsReply = wrapperspb.Bool(true)
