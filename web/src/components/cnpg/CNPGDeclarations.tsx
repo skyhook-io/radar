@@ -136,7 +136,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
             meta:
               kind === 'Publication'
                 ? p.spec?.target?.allTables ? 'all tables' : 'selected objects'
-                : `from ${p.spec?.publicationName ?? '?'} on ${p.spec?.externalClusterName ?? '?'}`,
+                : `from ${p.spec?.publicationName ?? 'an unnamed publication'} on ${p.spec?.externalClusterName ?? 'an unnamed external cluster'}`,
             error: pst === 'failed' ? p.status?.message : undefined,
             source: gitopsSource(p),
             resource: cnpgResource(kind === 'Publication' ? 'publications' : 'subscriptions', ns, p.metadata?.name),

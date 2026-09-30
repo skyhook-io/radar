@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { ArrowRight } from 'lucide-react'
 import { CNPG_GROUP } from '../resources/resource-utils-cnpg'
 import type { CNPGFact } from './workspace'
-import type { CNPGLogicalPath } from './logicalReplication'
+import { cnpgLogicalLocation, type CNPGLogicalPath } from './logicalReplication'
 import { FactGrid, FactRow, FactSource, FactValue, RefLink, toneTextClass, type CNPGNavigate } from './primitives'
 
 function Hop({ label, children }: { label: string; children: ReactNode }) {
@@ -44,7 +44,7 @@ export function CNPGLogicalPathView({
         <RefLink refTo={{ kind: 'Subscription', group: CNPG_GROUP, namespace: s.namespace, name: s.name }} onNavigate={onNavigate} mono>
           {s.sqlName ?? s.name}
         </RefLink>
-        <span className="text-xs text-theme-text-tertiary"> on {s.cluster ?? '?'}/{s.dbname ?? '?'}</span>
+        <span className="text-xs text-theme-text-tertiary"> on {cnpgLogicalLocation(s.cluster ?? 'an unknown cluster', s.dbname)}</span>
       </Hop>
       <ArrowRight className="mt-4 h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
       <Hop label="Publication">
@@ -52,8 +52,10 @@ export function CNPGLogicalPathView({
           <RefLink refTo={{ kind: 'Publication', group: CNPG_GROUP, namespace: pub.object.namespace, name: pub.object.name }} onNavigate={onNavigate} mono>
             {pub.name}
           </RefLink>
+        ) : pub.name ? (
+          <span className="font-mono">{pub.name}</span>
         ) : (
-          <span className="font-mono">{pub.name ?? '?'}</span>
+          <span className="text-theme-text-tertiary">name unknown</span>
         )}
         <span className="text-xs text-theme-text-tertiary">
           {' '}
@@ -63,9 +65,9 @@ export function CNPGLogicalPathView({
               {publisher.namespace === s.namespace && publisher.name === s.cluster ? 'the same cluster' : `${publisher.namespace}/${publisher.name}`}
             </RefLink>
           ) : (
-            <span>{path.externalCluster.host ?? `external cluster ${path.externalCluster.name ?? '?'}`}</span>
+            <span>{path.externalCluster.host ?? (path.externalCluster.name ? `external cluster ${path.externalCluster.name}` : 'an unnamed external cluster')}</span>
           )}
-          /{pub.dbname ?? '?'}
+          {pub.dbname ? `/${pub.dbname}` : ' · database unknown'}
         </span>
       </Hop>
       <ArrowRight className="mt-4 h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
@@ -97,7 +99,9 @@ export function CNPGLogicalPathView({
             <span className="text-theme-text-secondary">Outside Radar's view: {publisher.reason}</span>
           )}
           <div className="mt-0.5 text-[11.5px] text-theme-text-tertiary">
-            From the subscriber's spec.externalClusters[{path.externalCluster.name ?? '?'}].connectionParameters.host
+            {path.externalCluster.name
+              ? `From the subscriber's spec.externalClusters[${path.externalCluster.name}].connectionParameters.host`
+              : "The subscriber's spec.externalClusterName is not set, so no external cluster names the host"}
           </div>
         </FactRow>
         <FactRow label="Publication object">

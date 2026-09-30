@@ -259,3 +259,8 @@ export function cnpgLogicalSlotFact(path: CNPGLogicalPath, observed: CNPGPublish
   }
   return { text: parts.join(' · '), tone: s.walStatus === 'lost' ? 'unhealthy' : bad ? 'degraded' : 'healthy', source: SLOT_SOURCE }
 }
+
+/** "cluster/database", with an unknown database said in words rather than as "?". */
+export function cnpgLogicalLocation(where: string, dbname: string | undefined): string {
+  return dbname ? `${where}/${dbname}` : `${where} · database unknown`
+}

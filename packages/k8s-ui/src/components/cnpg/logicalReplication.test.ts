@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgLogicalPaths, cnpgLogicalSlotFact, cnpgResolvePublisher } from './logicalReplication'
+import { cnpgLogicalLocation, cnpgLogicalPaths, cnpgLogicalSlotFact, cnpgResolvePublisher } from './logicalReplication'
 
 const G = 'postgresql.cnpg.io/v1'
 const cluster = (name: string, ns: string, spec: any = {}, status: any = {}) => ({ apiVersion: G, kind: 'Cluster', metadata: { name, namespace: ns }, spec: { instances: 3, ...spec }, status })
@@ -101,5 +101,13 @@ describe('cnpgLogicalSlotFact', () => {
     const gone = cnpgLogicalSlotFact(path, { state: 'ok', slots: [] })
     expect(gone.text).toContain('not found')
     expect(gone.tone).toBe('degraded')
+  })
+})
+
+describe('cnpgLogicalLocation', () => {
+  it('says an unknown database in words', () => {
+    expect(cnpgLogicalLocation('upstream', 'app')).toBe('upstream/app')
+    expect(cnpgLogicalLocation('external cluster upstream', undefined)).toBe('external cluster upstream · database unknown')
+    expect(cnpgLogicalLocation('x', undefined)).not.toContain('?')
   })
 })
