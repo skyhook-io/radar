@@ -836,7 +836,7 @@ func (h *HubbleSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRe
 		}, nil
 	}
 
-	flows, incomplete, err := h.fetchFlowsViaGRPC(ctx, opts)
+	flows, incomplete, streamFailed, err := h.fetchFlowsViaGRPC(ctx, opts)
 	if err != nil {
 		log.Printf("[hubble] gRPC error: %v", err)
 		return &FlowsResponse{
@@ -858,6 +858,11 @@ func (h *HubbleSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRe
 		// dropping events will keep saying so, which is the truth about its data
 		// rather than a failure to retry.
 		response.WarningKind = WarningIncomplete
+		// A stream that failed before any flow arrived is a failed fetch that
+		// happened to report some gaps first; retrying it can bring the flows.
+		if streamFailed && len(flows) == 0 {
+			response.WarningKind = WarningTransient
+		}
 	}
 	return response, nil
 }
@@ -865,13 +870,13 @@ func (h *HubbleSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRe
 // fetchFlowsViaGRPC fetches flows using gRPC client. incomplete explains, in
 // terms a reader can act on, why the flows returned are not everything Hubble
 // holds for the window; it is empty when the stream ran to its end intact.
-func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) (flows []Flow, incomplete string, err error) {
+func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) (flows []Flow, incomplete string, streamFailed bool, err error) {
 	h.mu.RLock()
 	client := h.observerClient
 	h.mu.RUnlock()
 
 	if client == nil {
-		return nil, "", fmt.Errorf("not connected to Hubble Relay")
+		return nil, "", false, fmt.Errorf("not connected to Hubble Relay")
 	}
 
 	// Build request
@@ -906,7 +911,7 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 
 	stream, err := client.GetFlows(reqCtx, req)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to get flows stream: %w", err)
+		return nil, "", false, fmt.Errorf("failed to get flows stream: %w", err)
 	}
 
 	var gaps []string
@@ -923,10 +928,15 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 			// bare fetch error would throw away what is known to be missing.
 			if len(flows) > 0 || lost > 0 || len(unavailableNodes) > 0 {
 				log.Printf("[hubble] Stream ended with partial results: %v", err)
-				gaps = append(gaps, fmt.Sprintf("the stream from Hubble Relay ended early (%v), so flows after the first %d are missing", err, len(flows)))
+				streamFailed = true
+				if len(flows) > 0 {
+					gaps = append(gaps, fmt.Sprintf("the stream from Hubble Relay ended early (%v), so flows after the first %d are missing", err, len(flows)))
+				} else {
+					gaps = append(gaps, fmt.Sprintf("the stream from Hubble Relay failed (%v) before delivering any flows", err))
+				}
 				break
 			}
-			return nil, "", fmt.Errorf("stream error: %w", err)
+			return nil, "", false, fmt.Errorf("stream error: %w", err)
 		}
 
 		// Hubble reports in-band what it could not deliver: events a full
@@ -964,8 +974,10 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 	// A busy relay carries a few loss markers in its buffer nearly all the time —
 	// a handful against thousands of delivered events on a live cluster — and a
 	// warning on every fetch for those would be ignored along with the ones that
-	// matter. Below the threshold the window is still, in effect, complete.
-	if lost > 0 && lost*100 >= (lost+delivered)*lostEventsWarnPercent {
+	// matter. The threshold is a noise policy, not a completeness measure: loss
+	// markers are not scoped to the request's filters, so the two counts need
+	// not cover the same traffic.
+	if lost > 0 && float64(lost)*100 >= float64(lost+delivered)*lostEventsWarnPercent {
 		gaps = append(gaps, fmt.Sprintf("Hubble reported %d events lost before they could be delivered", lost))
 	}
 	if len(unavailableNodes) > 0 {
@@ -979,9 +991,9 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 
 	log.Printf("[hubble] Retrieved %d flows", len(flows))
 	if len(gaps) == 0 {
-		return flows, "", nil
+		return flows, "", false, nil
 	}
-	return flows, "Traffic data is incomplete: " + strings.Join(gaps, "; ") + ".", nil
+	return flows, "Traffic data is incomplete: " + strings.Join(gaps, "; ") + ".", streamFailed, nil
 }
 
 // lostEventsWarnPercent is the share of a fetch's events, lost ones included,

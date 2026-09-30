@@ -133,6 +133,26 @@ func TestHubbleGetFlows_ReportsWhatTheStreamDidNotDeliver(t *testing.T) {
 		}
 	})
 
+	t.Run("the threshold is inclusive", func(t *testing.T) {
+		for _, tc := range []struct {
+			delivered int
+			warn      bool
+		}{{99, true}, {100, false}} {
+			responses := make([]*observerpb.GetFlowsResponse, 0, tc.delivered+1)
+			for range tc.delivered {
+				responses = append(responses, flowResponse("a", "b"))
+			}
+			responses = append(responses, &observerpb.GetFlowsResponse{ResponseTypes: &observerpb.GetFlowsResponse_LostEvents{LostEvents: &flowpb.LostEvent{NumEventsLost: 1}}})
+			resp, err := connectedHubble(t, &scriptedObserver{responses: responses}).GetFlows(context.Background(), DefaultFlowOptions())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := resp.Warning != ""; got != tc.warn {
+				t.Errorf("1 lost against %d delivered: warned=%v, want %v", tc.delivered, got, tc.warn)
+			}
+		}
+	})
+
 	t.Run("everything lost still says so", func(t *testing.T) {
 		h := connectedHubble(t, &scriptedObserver{responses: []*observerpb.GetFlowsResponse{
 			{ResponseTypes: &observerpb.GetFlowsResponse_LostEvents{LostEvents: &flowpb.LostEvent{NumEventsLost: 3}}},
@@ -182,8 +202,12 @@ func TestHubbleGetFlows_ReportsWhatTheStreamDidNotDeliver(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(resp.Warning, "5 events lost") || resp.WarningKind != WarningIncomplete {
-			t.Errorf("warning = %q (%s), want the lost events reported as incomplete data", resp.Warning, resp.WarningKind)
+		if !strings.Contains(resp.Warning, "5 events lost") {
+			t.Errorf("warning = %q, want the lost events kept", resp.Warning)
+		}
+		// No flow arrived: the fetch failed, so it stays retryable.
+		if resp.WarningKind != WarningTransient || !strings.Contains(resp.Warning, "before delivering any flows") {
+			t.Errorf("warning = %q (%s), want a transient failed-fetch warning", resp.Warning, resp.WarningKind)
 		}
 	})
 

@@ -216,8 +216,8 @@ describe('mergeFlowVolume latency', () => {
 
 describe('dedupeHTTPPairs', () => {
   const ep = (name: string) => ({ name, namespace: 'shop', kind: 'Pod' })
-  const rec = (from: string, to: string, l7Type: string): TrafficFlow => ({
-    source: ep(from), destination: ep(to), protocol: 'tcp', port: 80, l7Protocol: 'HTTP', l7Type,
+  const rec = (from: string, to: string, l7Type: string, port = 80): TrafficFlow => ({
+    source: ep(from), destination: ep(to), protocol: 'tcp', port, l7Protocol: 'HTTP', l7Type,
     httpMethod: 'GET', httpPath: '/orders', bytesSent: 0, bytesRecv: 0, connections: 1, verdict: 'forwarded', lastSeen: '',
   } as TrafficFlow)
 
@@ -226,7 +226,16 @@ describe('dedupeHTTPPairs', () => {
   })
 
   it('pairs a response from a server that sends it reversed', () => {
-    expect(dedupeHTTPPairs([rec('client', 'web', 'REQUEST'), rec('web', 'client', 'RESPONSE')]).map(f => f.l7Type)).toEqual(['RESPONSE'])
+    expect(dedupeHTTPPairs([rec('client', 'web', 'REQUEST'), rec('web', 'client', 'RESPONSE', 41732)]).map(f => f.l7Type)).toEqual(['RESPONSE'])
+  })
+
+  it('does not let one response hide an unanswered call the other way', () => {
+    // a and b call each other on the same route; only a → b was answered.
+    const current = dedupeHTTPPairs([rec('a', 'b', 'REQUEST'), rec('a', 'b', 'RESPONSE'), rec('b', 'a', 'REQUEST')])
+    expect(current.map(f => `${f.source.name}>${f.destination.name}:${f.l7Type}`)).toEqual(['a>b:RESPONSE', 'b>a:REQUEST'])
+    // The same, from a server that sends the response reversed on the client's port.
+    const legacy = dedupeHTTPPairs([rec('a', 'b', 'REQUEST'), rec('b', 'a', 'RESPONSE', 41732), rec('b', 'a', 'REQUEST')])
+    expect(legacy.map(f => `${f.source.name}>${f.destination.name}:${f.l7Type}`)).toEqual(['b>a:RESPONSE', 'b>a:REQUEST'])
   })
 
   it('keeps a request that got no response', () => {
