@@ -582,3 +582,48 @@ func TestCNPGWorkspace_DeniedNamespacesNeverComeFromTheServerInventory(t *testin
 		t.Errorf("filtered: allowedNamespaces = %v, want [default]", cov.AllowedNamespaces)
 	}
 }
+
+func TestCNPGWorkspace_ScheduleReadingsFollowScheduledBackupAccess(t *testing.T) {
+	sched := func(ns, name string) *unstructured.Unstructured {
+		return cnpgObj("postgresql.cnpg.io/v1", "ScheduledBackup", ns, name, map[string]any{"cluster": map[string]any{"name": "pg"}, "schedule": "0 0 2 * * *"}, nil)
+	}
+	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
+		cnpgObj("postgresql.cnpg.io/v1", "Cluster", "a", "pg", nil, nil),
+		cnpgObj("postgresql.cnpg.io/v1", "Cluster", "b", "pg", nil, nil),
+		sched("a", "nightly-a"),
+		sched("b", "nightly-b"),
+	)
+	env := newAuthTestServer(t)
+	for _, u := range []struct {
+		name string
+		a, b bool
+	}{{"both", true, true}, {"only-a", true, false}, {"none", false, false}} {
+		perms := &auth.UserPermissions{AllowedNamespaces: []string{"a", "b"}}
+		allow(perms, cnpgGroup, "clusters", "", true)
+		allow(perms, cnpgGroup, "scheduledbackups", "", u.a && u.b)
+		allow(perms, cnpgGroup, "scheduledbackups", "a", u.a)
+		allow(perms, cnpgGroup, "scheduledbackups", "b", u.b)
+		env.srv.permCache.Set(u.name, nil, perms)
+	}
+
+	both := decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace", "both", ""))
+	if both.ScheduleReadings["a/nightly-a"] == "" || both.ScheduleReadings["b/nightly-b"] == "" {
+		t.Fatalf("control: readings = %v, want both schedules worded", both.ScheduleReadings)
+	}
+
+	partial := decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace", "only-a", ""))
+	if partial.Coverage["scheduledBackups"].State != cnpgCoveragePartial {
+		t.Errorf("coverage = %+v, want partial", partial.Coverage["scheduledBackups"])
+	}
+	if partial.ScheduleReadings["a/nightly-a"] == "" {
+		t.Errorf("readable schedule not worded: %v", partial.ScheduleReadings)
+	}
+	if _, ok := partial.ScheduleReadings["b/nightly-b"]; ok {
+		t.Errorf("a schedule in a namespace the caller cannot list was worded: %v", partial.ScheduleReadings)
+	}
+
+	denied := decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace", "none", ""))
+	if len(denied.ScheduleReadings) != 0 {
+		t.Errorf("readings = %v, want none when ScheduledBackups are denied", denied.ScheduleReadings)
+	}
+}
