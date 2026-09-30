@@ -44,6 +44,7 @@ import { CNPGRefreshFailedNotice } from './shared'
 
 import { cnpgClusterFullPath, cnpgDimensionPath, currentPageLabel } from './paths'
 import { CNPGRestoreProgress } from './recovery/CNPGRestoreProgress'
+import { restoreBackupDeclared } from './recovery/restoreModel'
 import { useConnection } from '../../context/ConnectionContext'
 
 interface SummaryContext {
@@ -117,7 +118,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
               namespace={namespace}
               name={name}
               nextSteps={{
-                backupConfigured: row.cluster ? row.protection.destination.method !== 'none' : undefined,
+                backup: row.cluster ? restoreBackupDeclared(row.cluster) : undefined,
                 onOpen: (step) => {
                   if (step === 'connect') {
                     document.getElementById(CNPG_CONNECT_ANCHOR)?.scrollIntoView({ block: 'start' })

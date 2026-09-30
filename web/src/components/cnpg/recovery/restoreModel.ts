@@ -1,4 +1,4 @@
-import { CNPG_BARMAN_PLUGIN_NAME, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel } from '@skyhook-io/k8s-ui'
+import { CNPG_BARMAN_PLUGIN_NAME, getCNPGClusterBarmanPlugin, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel } from '@skyhook-io/k8s-ui'
 import type { CNPGActionCapability, CNPGRuntimeResponse } from '../../../api/cnpg'
 import type { CNPGRecoveryResponse, CNPGRecoveryPod } from '../../../api/cnpg-recovery'
 
@@ -447,26 +447,51 @@ export type RestoreNextStepId = 'connect' | 'validate' | 'backup'
 export interface RestoreNextStep {
   id: RestoreNextStepId
   label: string
-  /** done / todo only where Radar can tell; `unknown` otherwise (whether applications moved is never known). */
-  state: 'done' | 'todo' | 'unknown'
+  /** Set only where Radar can tell; `unknown` otherwise (whether applications moved is never known). */
+  state: 'done' | 'partial' | 'todo' | 'unknown'
   note?: string
 }
 
 /**
- * The checklist a restored cluster shows once it is healthy. Links only;
- * Radar writes nothing. Validation reads the recorded note, backups the
- * Cluster spec's backup destination (undefined when not read).
+ * What the Cluster spec declares for protection: WAL archiving (the Barman
+ * plugin as WAL archiver, or barmanObjectStore), base backups without WAL
+ * archiving (the plugin not marked isWALArchiver), volume snapshots only, or
+ * nothing.
  */
-export function restoreNextSteps(input: { validationRecorded: boolean; backupConfigured: boolean | undefined }): RestoreNextStep[] {
+export type RestoreBackupDeclared = 'walArchiving' | 'backupsNoArchiving' | 'snapshotsOnly' | 'none'
+
+/**
+ * The checklist a restored cluster shows once it is healthy. Links only;
+ * Radar writes nothing. Validation reads the recorded note; backups read the
+ * Cluster spec (undefined when not read). Snapshots alone are partial: they
+ * give no point-in-time recovery.
+ */
+export function restoreNextSteps(input: { validationRecorded: boolean; backup: RestoreBackupDeclared | undefined }): RestoreNextStep[] {
+  const label = 'Set up backups and WAL archiving'
+  const backup: RestoreNextStep =
+    input.backup === undefined
+      ? { id: 'backup', label, state: 'unknown', note: 'Its backup configuration was not read' }
+      : input.backup === 'walArchiving'
+        ? { id: 'backup', label, state: 'done', note: 'WAL archiving to an object store is configured' }
+        : input.backup === 'snapshotsOnly'
+          ? { id: 'backup', label, state: 'partial', note: 'Volume snapshots declared, but no WAL archiving, so no point-in-time recovery' }
+          : input.backup === 'backupsNoArchiving'
+            ? { id: 'backup', label, state: 'partial', note: 'An ObjectStore is declared, but not as the WAL archiver, so no point-in-time recovery' }
+            : { id: 'backup', label, state: 'todo', note: 'It has no backup destination or WAL archiving yet' }
   return [
     { id: 'connect', label: 'Point applications at it', state: 'unknown', note: 'Radar cannot tell which applications use it' },
     input.validationRecorded
       ? { id: 'validate', label: 'Record what you checked', state: 'done', note: 'A validation note is recorded' }
       : { id: 'validate', label: 'Record what you checked', state: 'todo' },
-    input.backupConfigured === undefined
-      ? { id: 'backup', label: 'Set up backups and WAL archiving', state: 'unknown', note: 'Its backup configuration was not read' }
-      : input.backupConfigured
-        ? { id: 'backup', label: 'Set up backups and WAL archiving', state: 'done', note: 'A backup destination is configured' }
-        : { id: 'backup', label: 'Set up backups and WAL archiving', state: 'todo', note: 'It has no backup destination or WAL archiving yet' },
+    backup,
   ]
+}
+
+/** What a Cluster spec declares for backups and WAL archiving. */
+export function restoreBackupDeclared(cluster: any): RestoreBackupDeclared {
+  const plugin = getCNPGClusterBarmanPlugin(cluster)
+  if (plugin?.isWALArchiver || cluster?.spec?.backup?.barmanObjectStore?.destinationPath) return 'walArchiving'
+  if (plugin?.barmanObjectName) return 'backupsNoArchiving'
+  if (cluster?.spec?.backup?.volumeSnapshot) return 'snapshotsOnly'
+  return 'none'
 }

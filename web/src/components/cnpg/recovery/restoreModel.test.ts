@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CNPGRecoveryResponse } from '../../../api/cnpg-recovery'
 import {
+  restoreBackupDeclared,
   restoreNextSteps,
   restorePermission,
   buildRestoreManifest,
@@ -239,15 +240,26 @@ describe('restorePermission', () => {
 
 describe('restoreNextSteps', () => {
   it('marks done or to do only what Radar can read, never whether applications moved', () => {
-    const fresh = restoreNextSteps({ validationRecorded: false, backupConfigured: false })
+    const fresh = restoreNextSteps({ validationRecorded: false, backup: 'none' })
     expect(fresh.map((s) => [s.id, s.state])).toEqual([
       ['connect', 'unknown'],
       ['validate', 'todo'],
       ['backup', 'todo'],
     ])
     expect(fresh[2].note).toContain('no backup destination')
-    const later = restoreNextSteps({ validationRecorded: true, backupConfigured: true })
-    expect(later.map((s) => s.state)).toEqual(['unknown', 'done', 'done'])
-    expect(restoreNextSteps({ validationRecorded: false, backupConfigured: undefined })[2].state).toBe('unknown')
+    expect(restoreNextSteps({ validationRecorded: true, backup: 'walArchiving' }).map((s) => s.state)).toEqual(['unknown', 'done', 'done'])
+    expect(restoreNextSteps({ validationRecorded: false, backup: undefined })[2].state).toBe('unknown')
+  })
+  it('never counts volume snapshots alone, or backups without WAL archiving, as done', () => {
+    const plugin = (isWALArchiver: boolean) => ({ spec: { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', isWALArchiver, parameters: { barmanObjectName: 'store' } }] } })
+    const step = (cluster: any) => restoreNextSteps({ validationRecorded: false, backup: restoreBackupDeclared(cluster) })[2]
+    expect(step({ spec: { backup: { volumeSnapshot: { className: 'csi' } } } })).toMatchObject({
+      state: 'partial',
+      note: 'Volume snapshots declared, but no WAL archiving, so no point-in-time recovery',
+    })
+    expect(step(plugin(false))).toMatchObject({ state: 'partial' })
+    expect(step(plugin(true)).state).toBe('done')
+    expect(step({ spec: { backup: { barmanObjectStore: { destinationPath: 's3://b' } } } }).state).toBe('done')
+    expect(step({ spec: {} }).state).toBe('todo')
   })
 })
