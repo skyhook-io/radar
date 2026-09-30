@@ -178,6 +178,8 @@ export interface CNPGFleetRow {
   protection: CNPGProtectionFacts & { summary: CNPGFact }
   declarations: { summary: CNPGFact; total: number; failed: number; pending: number }
   poolers: string[]
+  /** The Pooler objects behind `poolers`, for their type and Service port. */
+  poolerObjects?: any[]
   /** False when Poolers are not readable in this cluster's namespace, so an empty list means unknown. */
   poolersKnown: boolean
   problems: CNPGProblem[]
@@ -823,6 +825,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
       replication: replicationFact(cluster, instancePods, hibernated, coverageOf(resp, 'pods')),
       protection: { ...protection, summary: protectionSummary(protection) },
       declarations: declarationsFor(cluster, resp),
+      poolerObjects: poolers.filter((p) => p.metadata?.namespace === ns && specClusterName(p) === name),
       poolers: poolers
         .filter((p) => p.metadata?.namespace === ns && specClusterName(p) === name)
         .map((p) => p.metadata?.name),

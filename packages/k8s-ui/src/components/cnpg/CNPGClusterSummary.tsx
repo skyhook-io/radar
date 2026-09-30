@@ -5,6 +5,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { CNPG_BARMAN_OBJECTSTORE_GROUP, CNPG_GROUP } from '../resources/resource-utils-cnpg'
 import { cnpgReadyInstances, type CNPGFleetRow, type CNPGInstance } from './workspace'
 import type { CNPGDimension } from './ha'
+import { CNPGConnectSection } from './CNPGConnectSection'
 import {
   FactGrid,
   FactRow,
@@ -215,6 +216,8 @@ export function CNPGClusterSummary({
       </FactGrid>
 
       {haSection}
+
+      <CNPGConnectSection cluster={row.cluster} poolers={row.poolerObjects} poolersKnown={row.poolersKnown} onNavigate={onNavigate} />
 
       <SummaryHeading>Protection</SummaryHeading>
       <FactGrid>
