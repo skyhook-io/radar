@@ -120,7 +120,7 @@ The replication view measures each standby's catch-up as **replay backlog in byt
 
 Header chips — **Serving · Replication · Protection · Storage** — each come from their own source (primary Pod readiness + `-rw` endpoints; the primary's `pg_stat_replication`; WAL archiving, destination and last backup; volume usage) and read **unassessed** when it is unavailable. The controller phase stays labelled "reported by CNPG".
 
-Certificate expiry is also an Issues-engine finding (`CNPGCertificateExpiring`, one per Secret): a certificate its owner renews is a warning under 30 days and critical under 7; an operator-managed one only once renewal is overdue (under a day — CNPG renews at 7 days by default, so earlier would light every cluster for a third of each 90-day lifetime); expired is critical.
+Certificate expiry is also an Issues-engine finding (`CNPGCertificateExpiring`, or `CNPGCertificateExpired` once past, one per Secret with the same fingerprint): a certificate its owner renews is a warning under 30 days and critical under 7; an operator-managed one only once renewal is overdue (under a day — CNPG renews at 7 days by default, so earlier would light every cluster for a third of each 90-day lifetime); expired is critical.
 
 ## History
 

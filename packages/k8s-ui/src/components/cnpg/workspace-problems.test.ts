@@ -49,3 +49,15 @@ describe('cnpgIssueText', () => {
     expect(t.detail).toContain('exit status 4')
   })
 })
+
+describe('cnpgIssueText for certificates and schedules', () => {
+  it('words expired and expiring certificates apart, and does not claim no backup was produced', () => {
+    expect(cnpgIssueText({ kind: 'Cluster', name: 'pg', reason: 'CNPGCertificateExpired', message: 'The certificate in Secret pg-ca expired 2026-09-30T11:00:00Z' }).title).toBe(
+      'A certificate has expired',
+    )
+    expect(cnpgIssueText({ kind: 'Cluster', name: 'pg', reason: 'CNPGCertificateExpiring', message: 'The certificate in Secret x expires in 3 days' }).title).toBe(
+      'A certificate expires soon',
+    )
+    expect(cnpgIssueText({ kind: 'ScheduledBackup', name: 's', reason: 'CNPGScheduledRunNoBackup', message: 'x y' }).title).toBe('No successful backup since a scheduled run')
+  })
+})

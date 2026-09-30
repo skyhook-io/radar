@@ -232,8 +232,10 @@ const CNPG_REASON_TITLES: Record<string, string> = {
   CNPGLastBackupFailed: 'The last backup failed',
   CNPGBackupFailed: 'Backup failed',
   CNPGScheduledBackupMissed: 'A scheduled backup did not run',
-  CNPGScheduledRunNoBackup: 'A scheduled run produced no backup',
-  CNPGCertificateExpiring: 'A certificate is expiring',
+  // The detector sees no successful backup since the run; a failed one may exist.
+  CNPGScheduledRunNoBackup: 'No successful backup since a scheduled run',
+  CNPGCertificateExpiring: 'A certificate expires soon',
+  CNPGCertificateExpired: 'A certificate has expired',
 }
 
 /**

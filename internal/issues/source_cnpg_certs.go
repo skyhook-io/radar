@@ -17,6 +17,14 @@ const CNPGCertExpiryLayout = "2006-01-02 15:04:05.999999999 -0700 MST"
 // ParseCNPGCertExpiry reads one status.certificates.expirations value. A
 // monotonic-clock suffix ("m=+0.1") can follow Time.String(); it is dropped.
 // ok is false when the value does not parse: the expiry is then unknown.
+
+// A certificate past its expiry and one approaching it are separate reasons
+// so a consumer can word them without reading the message.
+const (
+	ReasonCNPGCertificateExpiring = "CNPGCertificateExpiring"
+	ReasonCNPGCertificateExpired  = "CNPGCertificateExpired"
+)
+
 func ParseCNPGCertExpiry(v string) (time.Time, bool) {
 	v = strings.TrimSpace(v)
 	if i := strings.Index(v, " m="); i >= 0 {
@@ -86,9 +94,10 @@ func detectCNPGCertificateIssues(gvr schema.GroupVersionResource, kind string, u
 		_, userProvided := user[secret]
 		var sev Severity
 		var msg string
+		reason := ReasonCNPGCertificateExpiring
 		switch {
 		case left <= 0:
-			sev = SeverityCritical
+			sev, reason = SeverityCritical, ReasonCNPGCertificateExpired
 			msg = fmt.Sprintf("The certificate in Secret %s expired %s", secret, at.UTC().Format(time.RFC3339))
 		case userProvided && left < cnpgCertCriticalWithin:
 			sev = SeverityCritical
@@ -103,7 +112,9 @@ func detectCNPGCertificateIssues(gvr schema.GroupVersionResource, kind string, u
 			continue
 		}
 		out = append(out, newConditionIssue(gvr, kind, ns, name, sev,
-			"CNPGCertificateExpiring", msg, time.Time{}, false,
+			reason, msg, time.Time{}, false,
+			// One fingerprint across both reasons: expiring and then expired is
+			// the same finding growing worse, not a new one.
 			"CNPGCertificateExpiring/"+secret, u.GetCreationTimestamp().Time))
 	}
 	return out

@@ -59,9 +59,16 @@ func TestCNPGCertificateExpiryIssues(t *testing.T) {
 	}
 	for secret, sev := range want {
 		i, ok := bySecret[secret]
-		if !ok || i.Severity != sev || i.Reason != "CNPGCertificateExpiring" {
-			t.Errorf("%s: %+v, want %s", secret, i, sev)
+		wantReason := ReasonCNPGCertificateExpiring
+		if secret == "pg-main-ca" {
+			wantReason = ReasonCNPGCertificateExpired
 		}
+		if !ok || i.Severity != sev || i.Reason != wantReason {
+			t.Errorf("%s: %+v, want %s %s", secret, i, sev, wantReason)
+		}
+	}
+	if bySecret["pg-main-ca"].Category != issuesapi.CategoryCertificateNotReady {
+		t.Errorf("expired category = %q", bySecret["pg-main-ca"].Category)
 	}
 	if !strings.Contains(bySecret["user-tls"].Message, "its owner renews it") {
 		t.Errorf("user-provided message = %q", bySecret["user-tls"].Message)

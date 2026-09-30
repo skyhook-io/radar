@@ -151,7 +151,7 @@ func Classify(in classifyInput) issuesapi.Category {
 			switch in.Reason {
 			case "CNPGWALArchivingFailing", "CNPGLastBackupFailed", "CNPGBackupFailed", ReasonCNPGScheduledRunNoBackup:
 				return issuesapi.CategoryBackupFailed
-			case "CNPGCertificateExpiring":
+			case ReasonCNPGCertificateExpiring, ReasonCNPGCertificateExpired:
 				return issuesapi.CategoryCertificateNotReady
 			}
 			// A declared object that never reached PostgreSQL is a
