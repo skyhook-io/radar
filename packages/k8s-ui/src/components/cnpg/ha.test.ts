@@ -3,6 +3,7 @@ import {
   cnpgCertificateViews,
   cnpgDimensions,
   cnpgPDBFact,
+  cnpgLiveGap,
   cnpgPendingRestart,
   cnpgQuorumFact,
   cnpgZoneSpread,
@@ -162,6 +163,22 @@ describe('cnpgPendingRestart', () => {
     ])
     expect(p.known).toBe(false)
     expect(cnpgPendingRestart([{ pod: 'pg-2', state: 'partial', incomplete: true }]).known).toBe(false)
+  })
+})
+
+describe('cnpgLiveGap', () => {
+  it('names the missing grant when there is no runtime read', () => {
+    expect(cnpgLiveGap(undefined, 'needs get pods/proxy in db')).toBe('needs get pods/proxy in db')
+  })
+  it('names each instance that did not report, and why, when runtime access exists', () => {
+    const gap = cnpgLiveGap([
+      { pod: 'pg-1', state: 'ok' },
+      { pod: 'pg-2', state: 'unreachable', reason: 'PostgreSQL is not running on this instance' },
+      { pod: 'pg-3', state: 'partial', incomplete: true, reason: 'pg_rewind is running' },
+    ])
+    expect(gap).toBe('pg-2 did not report (PostgreSQL is not running on this instance); pg-3 reported incompletely (pg_rewind is running)')
+    expect(gap).not.toContain('runtime access')
+    expect(cnpgLiveGap([{ pod: 'pg-1', state: 'ok' }])).toBe('')
   })
 })
 

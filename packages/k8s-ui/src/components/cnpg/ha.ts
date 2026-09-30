@@ -122,6 +122,8 @@ export interface CNPGInstanceLive {
   pendingRestartForDecrease?: boolean
   /** The report did not finish its reads, so pendingRestart is not established. */
   incomplete?: boolean
+  /** Why the report is missing or incomplete, in words. */
+  reason?: string
   roleDetail?: 'primary' | 'pgRewind' | 'replayPaused' | 'streaming' | 'fileBased'
   instanceManagerVersion?: string
   timeline?: number
@@ -282,11 +284,33 @@ export function cnpgCertificateViews(certs: CNPGHACertificate[] | undefined, now
   })
 }
 
+function cnpgLiveRead(l: CNPGInstanceLive): boolean {
+  return (l.state === 'ok' || l.state === 'partial') && !l.incomplete
+}
+
 export function cnpgPendingRestart(live: CNPGInstanceLive[] | undefined): { known: boolean; pods: string[]; forDecrease: boolean } {
-  const read = (live ?? []).filter((l) => (l.state === 'ok' || l.state === 'partial') && !l.incomplete)
+  const read = (live ?? []).filter(cnpgLiveRead)
   if (read.length === 0) return { known: false, pods: [], forDecrease: false }
   const pending = read.filter((l) => l.pendingRestart)
   return { known: read.length === (live ?? []).length, pods: pending.map((l) => l.pod), forDecrease: pending.some((l) => l.pendingRestartForDecrease) }
+}
+
+/**
+ * Why instance-manager facts are not established: the host's reason when
+ * there is no runtime read at all (`unavailable`, e.g. the missing grant),
+ * otherwise each instance that did not report and why.
+ */
+export function cnpgLiveGap(live: CNPGInstanceLive[] | undefined, unavailable?: string): string {
+  if (!live) return unavailable ?? 'needs each instance manager’s status (get pods/proxy)'
+  if (live.length === 0) return 'no instance was read'
+  const unread = live.filter((l) => !cnpgLiveRead(l))
+  if (unread.length === 0) return ''
+  return unread
+    .map((l) => {
+      const why = l.reason ?? (l.state === 'denied' ? 'no access' : l.state)
+      return l.incomplete ? `${l.pod} reported incompletely (${why})` : `${l.pod} did not report (${why})`
+    })
+    .join('; ')
 }
 
 // ---------------------------------------------------------------------------
@@ -315,18 +339,21 @@ export function cnpgDimensions({
   row,
   ha,
   replication,
+  replicationGap,
   storage,
 }: {
   row: CNPGFleetRow
   ha?: CNPGClusterHA
   /** From the primary's pg_stat_replication; absent when runtime data is not readable. */
   replication?: CNPGReplicationLive
+  /** Why `replication` is absent (e.g. "needs get pods/proxy in db"). */
+  replicationGap?: string
   /** Supplied by the host once storage is assessed; unassessed otherwise. */
   storage?: CNPGDimension
 }): CNPGDimension[] {
   return [
     servingDimension(row, ha),
-    replicationDimension(row, replication),
+    replicationDimension(row, replication, replicationGap),
     protectionDimension(row),
     storage ?? storageDimension(row),
   ]
@@ -362,11 +389,11 @@ function servingDimension(row: CNPGFleetRow, ha?: CNPGClusterHA): CNPGDimension 
   return { ...base, tone: 'healthy', text: 'primary ready', source: `Pod ${primaryName} readiness (Service endpoints not readable)` }
 }
 
-function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive): CNPGDimension {
+function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap?: string): CNPGDimension {
   const base = { id: 'replication' as const, label: 'Replication' }
   if (row.hibernated) return { ...base, tone: 'neutral', text: 'hibernated', source: 'cnpg.io/hibernation annotation' }
   if (row.instances.desired === 1) return { ...base, tone: 'degraded', text: 'no standby', source: 'spec.instances is 1: there is no failover target' }
-  if (!live) return { ...base, tone: 'unknown', text: 'unassessed', source: 'Needs the primary’s pg_stat_replication (runtime data)' }
+  if (!live) return { ...base, tone: 'unknown', text: 'unassessed', source: `Needs the primary’s pg_stat_replication: ${gap ?? 'read through get pods/proxy'}` }
   // Standbys whose Pods are gone are missing from the runtime read too, so
   // the denominator is what the Cluster asks for, never what is running.
   const desired = row.instances.desired

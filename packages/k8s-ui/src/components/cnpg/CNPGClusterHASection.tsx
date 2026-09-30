@@ -7,6 +7,7 @@ import {
   cnpgCertificateViews,
   cnpgHASourceText,
   cnpgImageDrift,
+  cnpgLiveGap,
   cnpgPDBFact,
   cnpgPendingRestart,
   cnpgQuorumFact,
@@ -48,6 +49,7 @@ const JOB_SEVERITY: Record<CNPGHAJob['phase'], 'success' | 'error' | 'info' | 'n
 export function CNPGClusterHASection({
   ha,
   live,
+  liveUnavailable,
   loading,
   error,
   onNavigate,
@@ -58,6 +60,8 @@ export function CNPGClusterHASection({
   ha?: CNPGClusterHA
   /** Instance-manager facts, when the caller can read them. */
   live?: CNPGInstanceLive[]
+  /** Why `live` is absent (e.g. "needs get pods/proxy in db"); read from `live` itself when it is present. */
+  liveUnavailable?: string
   loading?: boolean
   error?: string
   onNavigate?: CNPGNavigate
@@ -139,7 +143,7 @@ export function CNPGClusterHASection({
               })}
               {primaryConflict && <PrimaryConflictNote conflict={primaryConflict} />}
               <div className="text-[11.5px] text-theme-text-tertiary">
-                {live ? 'Role detail and pending restart from each instance manager' : 'Role from Pod labels; role detail needs runtime access'}
+                {live ? 'Role detail and pending restart from each instance manager' : `Role from Pod labels; role detail ${cnpgLiveGap(undefined, liveUnavailable)}`}
                 {versions.size === 1 ? ` · instance manager ${[...versions][0]}` : ''}
               </div>
             </div>
@@ -148,14 +152,14 @@ export function CNPGClusterHASection({
 
         <FactRow label="Pending restart">
           {!pending.known && pending.pods.length === 0 ? (
-            <Unknown text="Unknown: needs each instance manager’s status (runtime access)" />
+            <Unknown text={`Unknown: ${cnpgLiveGap(live, liveUnavailable)}`} />
           ) : pending.pods.length === 0 ? (
             <span className="text-theme-text-secondary">None reported</span>
           ) : (
             <span className={toneTextClass('degraded')}>
               {pending.pods.join(', ')} {pending.pods.length === 1 ? 'needs' : 'need'} a restart to apply changed parameters
               {pending.forDecrease ? ' (a lowered setting: the primary restarts first)' : ''}
-              {!pending.known ? ' · some instances not read' : ''}
+              {!pending.known ? ` · ${cnpgLiveGap(live, liveUnavailable)}` : ''}
             </span>
           )}
         </FactRow>

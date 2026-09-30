@@ -36,7 +36,7 @@ import { useCNPGRuntime, useCNPGScheduleCapabilities, useCNPGWorkspace, type CNP
 import { cnpgPublisherSlotsFrom, useCNPGPublisherSlots } from './logicalSlots'
 import { cnpgBaseBackupFacts, describeCNPGBaseBackup } from './baseBackup'
 import { useCNPGPoolerLive } from './useCNPGPoolerLive'
-import { cnpgInstanceLive, cnpgReplicationLive, useCNPGClusterHA, withLiveReplication } from '../../api/cnpg-ha'
+import { cnpgInstanceLive, cnpgInstanceLiveUnavailable, cnpgReplicationGap, cnpgReplicationLive, useCNPGClusterHA, withLiveReplication } from '../../api/cnpg-ha'
 import { CNPGMaintenanceBanner } from './actions/CNPGMaintenanceBanner'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 import { CNPGRefreshFailedNotice } from './shared'
@@ -109,12 +109,13 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
           {row.cluster?.spec?.bootstrap?.recovery && <CNPGRestoreProgress namespace={namespace} name={name} />}
         </>
       }
-      dimensions={cnpgDimensions({ row, ha: ha.data, replication: cnpgReplicationLive(runtime.data) })}
+      dimensions={cnpgDimensions({ row, ha: ha.data, replication: cnpgReplicationLive(runtime.data), replicationGap: cnpgReplicationGap(runtime.data, runtime.error) })}
       stateFacts={<BaseBackupFact runtime={runtime.data} />}
       haSection={
         <CNPGClusterHASection
           ha={ha.data}
           live={live}
+          liveUnavailable={cnpgInstanceLiveUnavailable(runtime.data, runtime.error)}
           loading={ha.isLoading}
           error={ha.error instanceof Error ? ha.error.message : undefined}
           onNavigate={go}
