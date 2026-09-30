@@ -58,7 +58,7 @@ function AttentionCell({ row }: { row: CNPGFleetRow }) {
   const more = row.problems.length - 1
   return (
     <div className="min-w-0">
-      <Tooltip content={top.title} wrapperClassName="block">
+      <Tooltip content={top.title} wrapperClassName="w-full">
         <div className={clsx('line-clamp-2 break-words', toneTextClass(tone))}>{top.title}</div>
       </Tooltip>
       {more > 0 && <div className="text-xs text-theme-text-tertiary">+{more} more</div>}

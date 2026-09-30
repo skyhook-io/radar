@@ -80,7 +80,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
     const cap = actions?.[id]
     const title = capabilityTitle(cap) ?? unavailable
     return (
-      <Tooltip key={id} content={title} position="left" wrapperClassName="block">
+      <Tooltip key={id} content={title} position="left" wrapperClassName="w-full">
         <button
           type="button"
           role="menuitem"
@@ -154,7 +154,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
             {item('unfence', 'Lift fencing…')}
             {hibernated ? item('rehydrate', 'Resume from hibernation…') : item('hibernate', 'Hibernate…')}
             <div className="my-1 border-t border-theme-border" />
-            <Tooltip content={capabilityTitle(actions?.psql) ?? unavailable} position="left" wrapperClassName="block">
+            <Tooltip content={capabilityTitle(actions?.psql) ?? unavailable} position="left" wrapperClassName="w-full">
               <button
                 type="button"
                 role="menuitem"
