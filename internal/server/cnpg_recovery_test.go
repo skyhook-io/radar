@@ -249,6 +249,12 @@ func TestCNPGReportLogLineRedactsEverySQLFormat(t *testing.T) {
 		"plain statement":    "2026-09-30 00:00:00 UTC [42] LOG:  statement: SELECT '" + secret + "'",
 		"plain execute":      "2026-09-30 00:00:00 UTC [42] LOG:  duration: 0.4 ms  execute S_1: SELECT '" + secret + "'",
 		"plain parameters":   "2026-09-30 00:00:00 UTC [42] DETAIL:  parameters: $1 = '" + secret + "'",
+		"parse name spaces":  record("duration: 1 ms  parse customer lookup: SELECT '"+secret+"'", ""),
+		"bind name spaces":   record("duration: 1 ms  bind customer lookup: SELECT '"+secret+"'", ""),
+		"execute name space": record("execute customer lookup: SELECT '"+secret+"'", ""),
+		"name with colon":    record("execute a: b/c: d: SELECT '"+secret+"'", ""),
+		"upper case":         record("EXECUTE Customer Lookup: SELECT '"+secret+"'", ""),
+		"plain name spaces":  "2026-09-30 00:00:00 UTC [42] LOG:  duration: 0.4 ms  execute customer lookup: SELECT '" + secret + "'",
 	} {
 		if out := cnpgReportLogLine(line, false); strings.Contains(out, secret) {
 			t.Errorf("%s: SQL kept with queryText off: %s", name, out)

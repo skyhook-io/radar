@@ -632,13 +632,19 @@ var cnpgQueryRecordKeys = []string{"query", "internal_query", "context"}
 // false positive only redacts more.
 var cnpgSQLMessage = regexp.MustCompile(`(?s)\b(?:statement|execute fetch from \S+|execute \S+|parse \S+|bind \S+|plan):\s?`)
 
+// cnpgSQLProtocolMessage finds an extended-protocol message: after an
+// optional "duration: … ms", text starting with execute, parse or bind. The
+// statement or portal name is any string the client chose (spaces and colons
+// included), so everything after the keyword goes.
+var cnpgSQLProtocolMessage = regexp.MustCompile(`(?is)(?:^|\b(?:LOG|DEBUG[1-5]?|INFO|NOTICE|WARNING|ERROR|FATAL|PANIC):)\s*(?:duration:\s*\S+\s*ms\s+)?(?:execute|parse|bind)\b`)
+
 // cnpgSQLParameters finds bind values ("parameters: $1 = '…'"), in a DETAIL
 // field or line.
 var cnpgSQLParameters = regexp.MustCompile(`(?is)\bparameters:\s?`)
 
 func cnpgRedactSQLText(msg string) (string, bool) {
 	changed := false
-	for _, re := range []*regexp.Regexp{cnpgSQLMessage, cnpgSQLParameters} {
+	for _, re := range []*regexp.Regexp{cnpgSQLProtocolMessage, cnpgSQLMessage, cnpgSQLParameters} {
 		if loc := re.FindStringIndex(msg); loc != nil {
 			msg = msg[:loc[1]] + cnpgReportQueryRedacted
 			changed = true
