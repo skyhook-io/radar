@@ -40,6 +40,12 @@ func TestCNPGSchedulePreview(t *testing.T) {
 			t.Errorf("future first run = %+v", f)
 		}
 	})
+	t.Run("stepped day-of-month with a day of week follows robfig/cron v1, as the operator does", func(t *testing.T) {
+		p := cnpgSchedulePreview("0 0 0 */2 * 1", nil, false, now)
+		if !p.Valid || p.NextRuns[0] != "2026-10-05T00:00:00Z" {
+			t.Errorf("first run = %v, want 2026-10-05 (v1 semantics; v3 would say 2026-10-01)", p.NextRuns)
+		}
+	})
 	for _, bad := range []string{"", "0 0 * * *  * *", "not cron", "0 0 0 31 2 *", "CRON_TZ=Europe/Berlin 0 0 0 * * *", "TZ=UTC 0 0 0 * * *", "0 0 0 * * 7", strings.Repeat("1", 300)} {
 		if p := cnpgSchedulePreview(bad, nil, false, now); p.Valid || p.Error == "" || len(p.NextRuns) != 0 {
 			t.Errorf("%q accepted: %+v", bad, p)

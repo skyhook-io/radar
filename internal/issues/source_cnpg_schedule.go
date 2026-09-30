@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/robfig/cron/v3"
+	"github.com/robfig/cron"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -17,20 +17,12 @@ const (
 	ReasonCNPGScheduledRunNoBackup = "CNPGScheduledRunNoBackup"
 )
 
-// The parser the operator uses for ScheduledBackup.spec.schedule: six fields
-// with seconds first, the day of week optional, and @-descriptors.
-var cnpgCronParser = cron.NewParser(cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.DowOptional | cron.Descriptor)
-
-// ParseCNPGSchedule parses a ScheduledBackup schedule as the operator does.
-// CloudNativePG uses robfig/cron v1's Parse, which has the same field options
-// as the v3 parser above but no time zone prefix: v3 would accept
-// "CRON_TZ=… …" that the operator rejects, so it is refused here.
+// ParseCNPGSchedule parses a ScheduledBackup schedule exactly as the operator
+// does: CloudNativePG calls robfig/cron v1's Parse (six fields, seconds first,
+// day of week optional, @-descriptors). v3 differs on stepped day-of-month
+// combined with a day of week and accepts a TZ= prefix, so v1 itself is used.
 func ParseCNPGSchedule(spec string) (cron.Schedule, error) {
-	trimmed := strings.TrimSpace(spec)
-	if strings.HasPrefix(trimmed, "TZ=") || strings.HasPrefix(trimmed, "CRON_TZ=") {
-		return nil, fmt.Errorf("a time zone prefix is not supported: CloudNativePG evaluates schedules in the operator's time zone")
-	}
-	return cnpgCronParser.Parse(spec)
+	return cron.Parse(spec)
 }
 
 // cnpgBackupPhasesInFlight: a run that may still succeed. The operator's own
