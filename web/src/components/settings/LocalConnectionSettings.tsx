@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Badge, Collapse, ConfirmDialog, SelectMenu } from '@skyhook-io/k8s-ui'
 import { ArrowLeft, Info } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
-import type { ConnectionFeedback } from './ConnectionFormActions'
+import type { FormFeedback } from './FormSaveActions'
 import {
   apiUrl,
   getApiBase,
@@ -518,7 +518,8 @@ export function LocalConnectionSettings({
           setDiscoveryDraft(true)
           setDraftGeneration((generation) => generation + 1)
           setError('')
-          requestAnimationFrame(() => region.current?.querySelector<HTMLInputElement | HTMLSelectElement>('input:not(:disabled), select:not(:disabled)')?.focus())
+          // Cost's first control is its source picker, a listbox trigger.
+          requestAnimationFrame(() => region.current?.querySelector<HTMLElement>('input:not(:disabled), button[aria-haspopup="listbox"]:not(:disabled)')?.focus())
         }}
         className="text-xs text-accent-text hover:underline disabled:opacity-50 shrink-0"
       >
@@ -656,7 +657,7 @@ export function LocalConnectionSettings({
     messageRevision === profile.revision &&
     (messageWarning || !dirty)
   )
-  const feedback: ConnectionFeedback | undefined = showFeedback ? {
+  const feedback: FormFeedback | undefined = showFeedback ? {
     tone: discoveryDraft ? 'info' : messageWarning ? 'warning' : 'success',
     message: discoveryDraft ? discoveryNotice : message,
   } : undefined

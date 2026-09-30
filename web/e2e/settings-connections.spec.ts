@@ -314,7 +314,7 @@ for (const integration of integrations) {
     await page.getByRole('button', { name: integration.reset, exact: true }).click()
     await page.getByRole('tab', { name: 'Overview', exact: true }).click()
     await page.getByRole('tab', { name: integration.tab, exact: true }).click()
-    if (integration.kind === 'cost') await page.getByRole('combobox', { name: 'Cost source', exact: true }).selectOption('kubecost')
+    if (integration.kind === 'cost') await chooseCostSource(page, 'Kubecost')
     await page.getByRole('textbox', { name: integration.field, exact: true }).fill('https://replacement.example')
     await page.getByRole('button', { name: 'Save changes', exact: true }).click()
     const confirmation = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Replace saved connection?', exact: true }) })
@@ -654,6 +654,11 @@ test('copy after a target change warns before replacement and reload clears stal
   expect(state.writes[1].confirmRemoval).toBe(true)
 })
 
+async function chooseCostSource(page: Page, label: 'Automatic' | 'OpenCost metrics' | 'Kubecost') {
+  await page.getByRole('button', { name: 'Cost source', exact: true }).click()
+  await page.getByRole('option', { name: new RegExp(`^${label}`) }).click()
+}
+
 async function openSettings(page: Page, tab: string) {
   await page.goto('/')
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
@@ -695,7 +700,7 @@ test('old context cleanup lives in Connection and clearly scopes credential remo
     binding: 'old', integration: 'metrics', context: 'old-cluster', source: '/test/old', inFileName: 'old-cluster', availability: 'removed', revision: 'old-revision' })
   await openSettings(page, 'Metrics')
   await page.getByRole('tab', { name: 'Connection', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Saved connections', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Integration settings by cluster', exact: true })).toBeVisible()
   await expect(page.getByText('Not in kubeconfig', { exact: true })).toBeVisible()
   const remove = page.getByRole('button', { name: 'Remove saved Metrics connection for old-cluster', exact: true })
   await remove.click()
@@ -735,7 +740,7 @@ test('Connection preserves the removed-versus-unavailable distinction and cannot
   )
   await openSettings(page, 'Overview')
   await expect(page.getByRole('button', { name: 'Configuration files', exact: true })).toHaveAttribute('aria-expanded', 'false')
-  await expect(page.getByRole('heading', { name: 'Saved connections', exact: true })).not.toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Integration settings by cluster', exact: true })).not.toBeVisible()
   await page.getByRole('button', { name: 'Configuration files', exact: true }).click()
   await expect(page.getByText('config.json', { exact: true })).toBeVisible()
   await page.getByRole('tab', { name: 'Connection', exact: true }).click()
@@ -779,7 +784,7 @@ test('cleanup blocks close while committing and keeps remaining cards mounted wi
   await expect(page.getByText('Removed the saved Metrics connection for old-cluster.', { exact: true })).toBeVisible()
   await expect(remaining).toBeVisible()
   expect(await node!.evaluate(el => el.isConnected)).toBe(true)
-  await expect(page.getByRole('heading', { name: 'Saved connections', exact: true })).toBeFocused()
+  await expect(page.getByRole('heading', { name: 'Integration settings by cluster', exact: true })).toBeFocused()
   await expect(page.getByRole('button', { name: 'Close settings', exact: true })).toBeEnabled()
 })
 
@@ -810,7 +815,7 @@ for (const management of ['operator', 'cloud']) {
     await openSettings(page, 'Overview')
     await expect(page.getByRole('button', { name: 'Configuration files', exact: true })).toHaveCount(0)
     await page.getByRole('tab', { name: 'Connection', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'Saved connections', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: 'Integration settings by cluster', exact: true })).toHaveCount(0)
     if (management === 'operator') await expect(page.getByText(/Helm/).first()).toBeVisible()
   })
 }
@@ -1132,11 +1137,9 @@ test('discard clears drafts in all integration editors, including credentials an
   await page.getByRole('textbox', { name: 'API token', exact: true }).fill('draft-token')
   await page.getByRole('tab', { name: 'Cost', exact: true }).click()
   await page.getByRole('textbox', { name: 'API key', exact: true }).fill('draft-key')
-  await page.getByRole('button', { name: 'Cluster mapping', exact: true }).click()
   await page.getByRole('textbox', { name: 'Kubecost cluster ID', exact: true }).fill('draft-cluster')
   await dialog.getByRole('button', { name: 'Discard all changes', exact: true }).click()
   await expect(page.getByRole('textbox', { name: 'API key', exact: true })).toHaveValue('')
-  await page.getByRole('button', { name: 'Cluster mapping', exact: true }).click()
   await expect(page.getByRole('textbox', { name: 'Kubecost cluster ID', exact: true })).toHaveValue('')
   await page.getByRole('tab', { name: 'Argo CD', exact: true }).click()
   await expect(page.getByRole('textbox', { name: 'API token', exact: true })).toHaveValue('')
@@ -1188,7 +1191,9 @@ test('Cost Auto hides optional overrides, but keeps entered credentials when col
   const url = page.getByRole('textbox', { name: 'Kubecost Aggregator URL' })
   await expect(disclosure).toHaveAttribute('aria-expanded', 'false')
   await expect.poll(() => url.evaluate(el => !!el.closest('[inert]'))).toBe(true)
-  await expect(page.getByText('Display preference · all local clusters. Saved automatically.', { exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'This cluster', exact: true })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'All clusters', exact: true })).toBeVisible()
+  await expect(page.getByText('Saved automatically.', { exact: true })).toBeVisible()
   await disclosure.click()
   await url.fill('https://cost.example')
   await page.getByRole('textbox', { name: 'API key', exact: true }).fill('new-key')
@@ -1196,10 +1201,10 @@ test('Cost Auto hides optional overrides, but keeps entered credentials when col
   await disclosure.click()
   await expect(url).toHaveValue('https://cost.example')
   await expect(page.getByRole('textbox', { name: 'API key', exact: true })).toHaveValue('new-key')
-  await page.getByRole('combobox', { name: 'Cost source', exact: true }).selectOption('kubecost')
+  await chooseCostSource(page, 'Kubecost')
   await expect(disclosure).toBeHidden()
   await expect(url).toBeVisible()
-  await page.getByRole('combobox', { name: 'Cost source', exact: true }).selectOption('auto')
+  await chooseCostSource(page, 'Automatic')
   await expect(disclosure).toHaveAttribute('aria-expanded', 'true')
   await expect(url).toHaveValue('https://cost.example')
   await disclosure.click()
@@ -1263,7 +1268,7 @@ test('Cost source changes confirm removal only when a saved connection exists', 
   const state = await fixture(page)
   await openSettings(page, 'Cost')
   await page.getByRole('textbox', { name: 'Kubecost Aggregator URL', exact: true }).fill('')
-  await page.getByRole('combobox', { name: 'Cost source', exact: true }).selectOption('prometheus')
+  await chooseCostSource(page, 'OpenCost metrics')
   await page.getByRole('button', { name: 'Save changes', exact: true }).click()
   const confirmation = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Use metrics for cost data?', exact: true }) })
   await confirmation.getByRole('button', { name: 'Use metrics connection', exact: true }).click()
@@ -1488,4 +1493,124 @@ test('contextual Argo health and diff preserve benefits and open Argo settings',
   await page.getByRole('button', { name: 'Connect Argo CD', exact: true }).click()
   await expect(page.getByRole('dialog', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Argo CD', exact: true })).toHaveAttribute('aria-selected', 'true')
   expect(state.writes).toHaveLength(0)
+})
+
+const aiAgents = {
+  enabled: true, eligible: true, consented: { claude: { safeguarded: true, 'full-local': true } },
+  agents: [{ name: 'claude', label: 'Claude Code', path: '/usr/local/bin/claude', version: '2.1.0', present: true, supported: true,
+    profiles: ['safeguarded', 'full-local'], consentSurfaces: { safeguarded: 'v1', 'full-local': 'v1' } }],
+}
+
+async function mockAgents(page: Page, held?: Promise<void>) {
+  await page.route('**/api/agents', async route => {
+    await held
+    await route.fulfill({ json: aiAgents })
+  })
+}
+
+test('Cost reset focuses the source picker, which works from the keyboard', async ({ page }) => {
+  const state = await fixture(page)
+  await openSettings(page, 'Cost')
+  const reset = page.getByRole('button', { name: 'Reset to Automatic', exact: true })
+  const source = page.getByRole('button', { name: 'Cost source', exact: true })
+  await reset.focus()
+  await page.keyboard.press('Enter')
+  await expect(source).toBeFocused()
+  await expect(source).toContainText('Automatic')
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('listbox', { name: 'Cost source' })).toBeVisible()
+  await expect(source).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(page.getByRole('option', { name: /^Automatic/ })).toBeFocused()
+  await page.keyboard.press('End')
+  await expect(page.getByRole('option', { name: /^Kubecost/ })).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(source).toBeFocused()
+  await expect(source).toContainText('Kubecost')
+  await page.getByRole('button', { name: 'Discard', exact: true }).click()
+  expect(state.writes).toHaveLength(0)
+})
+
+test('AI investigations saves through the shared row and is guarded on close', async ({ page }) => {
+  await fixture(page)
+  await mockAgents(page)
+  const dialog = await openSettings(page, 'AI investigations')
+  const save = dialog.getByRole('button', { name: 'Save changes', exact: true })
+  await expect(save).toBeDisabled()
+  await dialog.getByRole('button', { name: 'Your Claude Code setup', exact: true }).click()
+  await expect(save).toBeEnabled()
+  await expect(dialog.getByText('Unsaved changes', { exact: true })).toBeVisible()
+
+  await dialog.getByRole('tab', { name: 'Metrics', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Review AI investigations', exact: true })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(dialog.getByText('AI investigations changes are not saved.', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Review AI investigations', exact: true }).click()
+  await expect(dialog.getByRole('tab', { name: 'AI investigations', exact: true })).toHaveAttribute('aria-selected', 'true')
+
+  await save.click()
+  await expect(dialog.getByText('Saved', { exact: true })).toBeVisible()
+  expect(await page.evaluate(() => localStorage.getItem('radar-ai-profile'))).toBe('full-local')
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+})
+
+test('a late agent list is not an unsaved AI edit', async ({ page }) => {
+  await fixture(page)
+  let release: (() => void) | undefined
+  await mockAgents(page, new Promise<void>(resolve => { release = resolve }))
+  await page.addInitScript(() => localStorage.setItem('radar-ai-agent', 'codex'))
+  const dialog = await openSettings(page, 'AI investigations')
+  release?.()
+  await expect(dialog.getByRole('button', { name: 'Save changes', exact: true })).toBeDisabled()
+  await expect(dialog.getByText('Unsaved changes', { exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+})
+
+test('AI drafts are guarded for non-owners and discardable when configuration fails to load', async ({ page }) => {
+  await fixture(page)
+  await mockAgents(page)
+  await page.route('**/api/auth/me', route => route.fulfill({ json: { authEnabled: true, username: 'viewer', cloudRole: 'viewer' } }))
+  await page.route('**/api/config', route => route.fulfill({ status: 500, json: { error: 'unavailable' } }))
+  const dialog = await openSettings(page, 'AI investigations')
+  await dialog.getByRole('button', { name: 'Your Claude Code setup', exact: true }).click()
+  await dialog.getByRole('tab', { name: 'Overview', exact: true }).click()
+  const discard = dialog.getByRole('button', { name: 'Discard changes', exact: true })
+  await expect(discard).toBeEnabled()
+  await page.keyboard.press('Escape')
+  await expect(dialog.getByText('AI investigations changes are not saved.', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Keep editing', exact: true }).click()
+  await discard.click()
+  await dialog.getByRole('tab', { name: 'AI investigations', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Save changes', exact: true })).toBeDisabled()
+  expect(await page.evaluate(() => localStorage.getItem('radar-ai-profile'))).not.toBe('full-local')
+})
+
+test('Overview links to the per-cluster settings list at the end of Connection', async ({ page }) => {
+  const state = await fixture(page)
+  state.connections.push({ url: 'https://old.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
+    binding: 'old', integration: 'metrics', context: 'old-cluster', source: '/test/old', inFileName: 'old-cluster', availability: 'removed', revision: 'old-revision' })
+  const dialog = await openSettings(page, 'Overview')
+  await dialog.getByRole('button', { name: 'Configuration files', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Review integration settings by cluster', exact: true }).click()
+  const heading = dialog.getByRole('heading', { name: 'Integration settings by cluster', exact: true })
+  await expect(heading).toBeFocused()
+  const server = await dialog.getByRole('heading', { name: 'Server', exact: true }).boundingBox()
+  expect((await heading.boundingBox())!.y).toBeGreaterThan(server!.y)
+})
+
+test('saving the last draft from its tab answers a pending close prompt', async ({ page }) => {
+  await fixture(page)
+  await mockAgents(page)
+  const dialog = await openSettings(page, 'AI investigations')
+  await dialog.getByRole('button', { name: 'Your Claude Code setup', exact: true }).click()
+  await page.keyboard.press('Escape')
+  const prompt = dialog.getByText('AI investigations changes are not saved.', { exact: true })
+  await expect(prompt).toBeVisible()
+  await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
+  await expect(prompt).toHaveCount(0)
+  await expect(dialog.getByText('Unsaved changes.', { exact: true })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
 })

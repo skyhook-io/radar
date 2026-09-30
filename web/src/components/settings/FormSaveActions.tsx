@@ -1,12 +1,12 @@
 import { Collapse } from "@skyhook-io/k8s-ui";
 import { Check } from "lucide-react";
 
-export interface ConnectionFeedback {
+export interface FormFeedback {
   message: string;
   tone: "success" | "warning" | "info";
 }
 
-export function ConnectionFormActions({
+export function FormSaveActions({
   dirty,
   busy,
   onSave,
@@ -18,7 +18,7 @@ export function ConnectionFormActions({
   busy: boolean;
   onSave: () => void;
   onDiscard: () => void;
-  feedback?: ConnectionFeedback;
+  feedback?: FormFeedback;
   error?: string;
 }) {
   const success = !dirty && !busy && !error && feedback?.tone === "success";

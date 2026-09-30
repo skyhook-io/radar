@@ -1,6 +1,6 @@
 import { useEffect, useId, useState, type ReactNode } from 'react'
-import { Input, Disclosure } from '@skyhook-io/k8s-ui'
-import { ConnectionFormActions, type ConnectionFeedback } from './ConnectionFormActions'
+import { Input, Disclosure, SelectMenu } from '@skyhook-io/k8s-ui'
+import { FormSaveActions, type FormFeedback } from './FormSaveActions'
 import { COST_SOURCE_OPTIONS } from '../cost/source'
 
 export interface SecretEdit {
@@ -107,7 +107,7 @@ export function ArgoCDConnectionForm({
   dirty: boolean
   onDiscard: () => void
   connectionAction?: ReactNode
-  feedback?: ConnectionFeedback
+  feedback?: FormFeedback
   onDirtyChange?: (dirty: boolean) => void
 }) {
   const id = useId()
@@ -149,6 +149,10 @@ export function ArgoCDConnectionForm({
             Argo CD server URL
           </label>
         </div>
+        <p className="text-xs text-theme-text-tertiary">
+          Reachable from Radar. Leave empty to discover the server in this
+          cluster.
+        </p>
         <Input
           className="block w-full min-w-0 px-3 py-2 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
           id={id}
@@ -157,10 +161,6 @@ export function ArgoCDConnectionForm({
           placeholder="Auto-discover, or https://argocd.example.com"
         />
         {connectionAction}
-        <p className="text-xs text-theme-text-tertiary">
-          Reachable from Radar. Leave empty to discover the server in this
-          cluster.
-        </p>
       </div>
       <CredentialField
         label="API token"
@@ -205,7 +205,7 @@ export function ArgoCDConnectionForm({
             a trusted private network.
           </p>
         )}
-      <ConnectionFormActions
+      <FormSaveActions
         dirty={dirty}
         busy={busy}
         onSave={() => void apply()}
@@ -235,7 +235,7 @@ export function CostConnectionForm({
   dirty: boolean
   onDiscard: () => void
   connectionAction?: ReactNode
-  feedback?: ConnectionFeedback
+  feedback?: FormFeedback
   onDirtyChange?: (dirty: boolean) => void
 }) {
   const id = useId()
@@ -279,13 +279,14 @@ export function CostConnectionForm({
             Cost source
           </label>
         </div>
-        <select
+        <SelectMenu
           id={`${id}-source`}
-          aria-label="Cost source"
+          ariaLabel="Cost source"
           value={value.mode}
-          onChange={(e) => {
+          options={COST_SOURCE_OPTIONS}
+          onChange={(mode) => {
             if (
-              e.target.value === 'auto' &&
+              mode === 'auto' &&
               (value.url ||
                 value.clusterId ||
                 secretSet ||
@@ -294,15 +295,11 @@ export function CostConnectionForm({
               setOverridesOpen(true)
             onChange({
               ...value,
-              mode: e.target.value as CostConnectionDraft['mode']
+              mode: mode as CostConnectionDraft['mode']
             })
           }}
-          className="block w-full rounded-md border border-theme-border bg-theme-elevated px-3 py-2 text-sm"
-        >
-          {COST_SOURCE_OPTIONS.map(option => (
-            <option key={option.value} value={option.value}>{option.label}</option>
-          ))}
-        </select>
+          className="w-full"
+        />
         {(value.mode === 'prometheus' || (automatic && !overridesOpen)) && connectionAction}
       </div>
       {value.mode !== 'prometheus' && (
@@ -331,6 +328,10 @@ export function CostConnectionForm({
               >
                 Kubecost Aggregator URL
               </label>
+              <p className="text-xs text-theme-text-tertiary">
+                Leave empty for discovery in this cluster. Use the central
+                Aggregator URL for a federated setup.
+              </p>
               <Input
                 className="block w-full min-w-0 px-3 py-2 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
                 id={id}
@@ -339,10 +340,6 @@ export function CostConnectionForm({
                 placeholder="Auto-discover, or https://kubecost.example.com"
               />
               {(!automatic || overridesOpen) && connectionAction}
-              <p className="text-xs text-theme-text-tertiary">
-                Leave empty for discovery in this cluster. Use the central
-                Aggregator URL for a federated setup.
-              </p>
             </div>
             <CredentialField
               label="API key"
@@ -357,36 +354,31 @@ export function CostConnectionForm({
                   outside a trusted private network.
                 </p>
               )}
-            <Disclosure
-              summary="Cluster mapping"
-              defaultOpen={!!value.clusterId}
-            >
-              <div className="space-y-2 pt-2">
-                <label
-                  htmlFor={`${id}-cluster`}
-                  className="text-sm font-medium text-theme-text-primary"
-                >
-                  Kubecost cluster ID
-                </label>
-                <Input
-                  className="block w-full min-w-0 px-3 py-2 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
-                  id={`${id}-cluster`}
-                  value={value.clusterId}
-                  onChange={(e) =>
-                    onChange({ ...value, clusterId: e.target.value })
-                  }
-                  placeholder="Detected automatically"
-                />
-                <p className="text-xs text-theme-text-tertiary">
-                  The FinOps Agent's CLUSTER_ID, not the kubeconfig context
-                  name. Applies only to this cluster.
-                </p>
-              </div>
-            </Disclosure>
+            <section className="space-y-1 border-t border-theme-border pt-4">
+              <label
+                htmlFor={`${id}-cluster`}
+                className="block text-sm font-medium text-theme-text-primary"
+              >
+                Kubecost cluster ID
+              </label>
+              <p className="text-xs text-theme-text-tertiary">
+                The FinOps Agent's CLUSTER_ID, not the kubeconfig context
+                name. Leave empty to detect it. Applies only to this cluster.
+              </p>
+              <Input
+                className="block w-full min-w-0 px-3 py-2 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+                id={`${id}-cluster`}
+                value={value.clusterId}
+                onChange={(e) =>
+                  onChange({ ...value, clusterId: e.target.value })
+                }
+                placeholder="Detected automatically"
+              />
+            </section>
           </div>
         </Disclosure>
       )}
-      <ConnectionFormActions
+      <FormSaveActions
         dirty={dirty}
         busy={busy}
         onSave={() => void apply()}

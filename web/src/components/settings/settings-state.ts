@@ -10,28 +10,34 @@ export type SettingsSectionId =
   | 'privacy'
 
 export type IntegrationSectionId = 'prometheus' | 'cost' | 'argocd'
+// Tabs whose drafts save through their own form, not the startup footer.
+export type PendingSectionId = IntegrationSectionId | 'ai'
 
-export const integrationSectionLabels: Record<IntegrationSectionId, string> = {
-  prometheus: 'Metrics', cost: 'Cost', argocd: 'Argo CD',
+export const pendingSectionLabels: Record<PendingSectionId, string> = {
+  prometheus: 'Metrics', cost: 'Cost', argocd: 'Argo CD', ai: 'AI investigations',
 }
 
-export function pendingIntegrationSections(dirty: Record<IntegrationSectionId, boolean>): IntegrationSectionId[] {
-  return (['prometheus', 'cost', 'argocd'] as const).filter(section => dirty[section])
+export function pendingSections(dirty: Record<PendingSectionId, boolean>): PendingSectionId[] {
+  return (['prometheus', 'cost', 'argocd', 'ai'] as const).filter(section => dirty[section])
 }
 
+// AI preferences are open to every user, so an AI draft pending in another tab
+// shows the footer even without owner access.
 export function shouldShowSettingsFooter(input: {
   canEditConfig: boolean
   confirmingClose: boolean
   configDirty: boolean
   integrationDirty: boolean
+  aiDirtyElsewhere: boolean
   hasSaveMessage: boolean
 }): boolean {
   return (
-    input.canEditConfig &&
-    (input.confirmingClose ||
-      input.configDirty ||
-      input.integrationDirty ||
-      input.hasSaveMessage)
+    input.confirmingClose ||
+    input.aiDirtyElsewhere ||
+    (input.canEditConfig &&
+      (input.configDirty ||
+        input.integrationDirty ||
+        input.hasSaveMessage))
   )
 }
 

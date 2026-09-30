@@ -71,7 +71,9 @@ export function PreviousIntegrationSettingsNotice({ profiles, onNavigate, onDism
   )
 }
 
-export function LocalConfigurationDetails() {
+export const integrationSettingsByClusterId = 'integration-settings-by-cluster'
+
+export function LocalConfigurationDetails({ onNavigate }: { onNavigate: (section: SettingsSectionId) => void }) {
   return (
     <div className="mt-5 border-t border-theme-border pt-4">
       <Disclosure
@@ -94,7 +96,17 @@ export function LocalConfigurationDetails() {
             <dt className="font-mono text-theme-text-primary">clusters.json</dt>
             <dd>
               Metrics, Argo CD and Cost connections and credentials, saved per
-              kubeconfig entry.
+              kubeconfig entry.{' '}
+              <button
+                type="button"
+                className="text-accent-text hover:underline"
+                onClick={() => {
+                  onNavigate('connection')
+                  requestAnimationFrame(() => document.getElementById(integrationSettingsByClusterId)?.focus())
+                }}
+              >
+                Review integration settings by cluster
+              </button>
             </dd>
           </dl>
           <p className="text-theme-text-tertiary">
@@ -235,15 +247,17 @@ export function SavedClusterConnections({
     >
       <h4
         ref={summary}
+        id={integrationSettingsByClusterId}
         tabIndex={-1}
-        className="text-sm font-semibold text-theme-text-primary"
+        className="text-sm font-semibold text-theme-text-primary outline-none"
       >
-        Saved connections
+        Integration settings by cluster
       </h4>
       <div className="space-y-3 pt-2">
         <p className="text-xs text-theme-text-secondary">
-          Connections saved for each kubeconfig entry. Configure them in
-          Metrics, Argo CD or Cost.
+          Metrics, Argo CD and Cost settings saved for each kubeconfig entry.
+          Edit the current cluster’s in its own tab. Removing an entry applies
+          immediately and changes nothing in Kubernetes or the backend.
         </p>
         {loading && (
           <p role="status" className="text-xs text-theme-text-tertiary">

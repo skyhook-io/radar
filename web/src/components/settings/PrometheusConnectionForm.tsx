@@ -4,7 +4,7 @@ import { Collapse, Input } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 import { prometheusHeadersFromRows } from './settings-state'
 import { ConnectionHeadersEditor, type HeaderOperation } from './ConnectionHeadersEditor'
-import { ConnectionFormActions, type ConnectionFeedback } from './ConnectionFormActions'
+import { FormSaveActions, type FormFeedback } from './FormSaveActions'
 
 export interface PrometheusApplyResult { connected: boolean; address?: string; error?: string }
 
@@ -50,7 +50,7 @@ export function PrometheusConnectionForm({
   dirty?: boolean
   onDiscard?: () => void
   connectionAction?: ReactNode
-  feedback?: ConnectionFeedback
+  feedback?: FormFeedback
 }) {
   const mounted = useRef(true)
   const urlId = useId()
@@ -262,7 +262,7 @@ export function PrometheusConnectionForm({
         )}
       </section>}
       <div className="mt-4 space-y-1">
-        {onDiscard ? <ConnectionFormActions dirty={dirty} busy={apply.status === 'applying'} onSave={() => void handleApply()} onDiscard={onDiscard} feedback={feedback} error={apply.status === 'failed' ? apply.error : undefined} /> : <Tooltip content="Save and apply this connection, then check reachability. Applying clears any workload scope override and resumes automatic identity matching.">
+        {onDiscard ? <FormSaveActions dirty={dirty} busy={apply.status === 'applying'} onSave={() => void handleApply()} onDiscard={onDiscard} feedback={feedback} error={apply.status === 'failed' ? apply.error : undefined} /> : <Tooltip content="Save and apply this connection, then check reachability. Applying clears any workload scope override and resumes automatic identity matching.">
           <button
             type="button"
             onClick={handleApply}

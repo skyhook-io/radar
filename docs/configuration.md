@@ -366,7 +366,7 @@ discovery.
 **Cleanup:** switching to discovery or replacing saved settings explicitly removes
 this context's previous credentials.
 Other contexts are unchanged. Missing kubeconfigs never trigger automatic deletion.
-**Settings → Connection → Saved connections** lets you explicitly remove an
+**Settings → Connection → Integration settings by cluster** lets you explicitly remove an
 integration for a kubeconfig entry no longer loaded, including discovery
 credentials and mappings. For the current context, use its integration tab.
 An entry marked **Kubeconfig not loaded** comes from a kubeconfig file this Radar
@@ -435,7 +435,7 @@ instruction to repair or delete the file.
 The context key includes the kubeconfig source path and in-file context name.
 Same-named contexts in different files do not share credentials. If a context is
 renamed or its file moved, copy its saved connection to the new context, then
-remove the old connection from **Settings → Connection → Saved connections**.
+remove the old connection from **Settings → Connection → Integration settings by cluster**.
 Tools that write a new temporary kubeconfig for each shell produce a new key
 each time; launch Radar with `--kubeconfig` pointing at the stable file instead.
 That section groups saved integrations by kubeconfig entry; removal is offered
@@ -470,7 +470,7 @@ disables the override; returning to that target restores it. Restart without
 the override to edit its saved settings.
 
 Workload-metrics scope assertions remain process-local and clear on a context
-switch attempt, even an unsuccessful one. Saved connections never restore them.
+switch attempt, even an unsuccessful one. Saved settings never restore them.
 Repairing a connection that was unusable at startup resumes automatic matching,
 not its startup assertion.
 

@@ -34,7 +34,7 @@ import {
   costSourcePreferenceLabel,
   COST_SOURCE_OPTIONS,
 } from '../cost/source'
-import { costSourceApplyLabel, integrationSectionLabels, pendingIntegrationSections, shouldShowSettingsFooter } from './settings-state'
+import { costSourceApplyLabel, pendingSectionLabels, pendingSections, shouldShowSettingsFooter } from './settings-state'
 import { PrometheusConfigField } from './PrometheusConfigField'
 import { LocalConnectionSettings, type IntegrationProfiles, type IntegrationKind } from './LocalConnectionSettings'
 import { LocalIntegrationStatus } from './LocalIntegrationStatus'
@@ -43,6 +43,7 @@ import { useContextSwitch } from '../../context/ContextSwitchContext'
 import { previousIntegrationSettingsKey, type IntegrationSettingsResponse } from '../../hooks/usePreviousIntegrationSettings'
 import type { SettingsSectionId } from './settings-state'
 import { OperatorManagedNotice } from './OperatorManagedNotice'
+import { FormSaveActions } from './FormSaveActions'
 export type { SettingsSectionId } from './settings-state'
 
 function mcpEndpointUrl(): string {
@@ -215,11 +216,20 @@ export function SettingsDialog({
     effort: diag.effort,
   })
   const [aiSaved, setAiSaved] = useState(false)
-  const aiDirty =
+  // Until the user edits, the draft follows the saved preferences: the agent
+  // list loads after Settings may already be open, and adopting its defaults
+  // is not an edit.
+  const [aiTouched, setAiTouched] = useState(false)
+  const aiEditable = aiAvailable && !diag.hosted && configData?.management !== 'operator'
+  const aiDirty = aiEditable && (
     aiDraft.agent !== diag.selectedAgent ||
     aiDraft.profile !== diag.profile ||
     aiDraft.model !== diag.model ||
-    aiDraft.effort !== diag.effort
+    aiDraft.effort !== diag.effort)
+  useEffect(() => {
+    if (aiTouched) return
+    setAiDraft({ agent: diag.selectedAgent, profile: diag.profile, model: diag.model, effort: diag.effort })
+  }, [aiTouched, diag.selectedAgent, diag.profile, diag.model, diag.effort])
 
   // Per-bucket normalized dirty. Only startup fields participate; integration
   // fields apply live and never light up the footer.
@@ -247,9 +257,11 @@ export function SettingsDialog({
   const advancedDirty = mcpDirty || timelineDirty
   const configDirty = configData != null && (connectionDirty || advancedDirty)
   const prometheusDirty = prometheusCredentialDirty || localDirty.metrics || (editedConfig.prometheusUrl ?? '') !== (configData?.effective.prometheusUrl ?? '')
-  const pendingIntegrations = pendingIntegrationSections({ prometheus: prometheusDirty, cost: costIntegrationDirty, argocd: localDirty.argocd })
-  const integrationDirty = pendingIntegrations.length > 0
-  const reviewIntegration = pendingIntegrations.find(pending => pending !== section)
+  const pending = pendingSections({ prometheus: prometheusDirty, cost: costIntegrationDirty, argocd: localDirty.argocd, ai: aiDirty })
+  const integrationDirty = pending.some(item => item !== 'ai')
+  // Drafts that save through their own form, which "Save startup settings" leaves in place.
+  const formDirty = pending.length > 0
+  const reviewSection = pending.find(item => item !== section)
   const settingsBusy = saving || costCurrencySaving || integrationBusy || storageBusy
   const metricsDraft = useRef({ open, scope: `${settingsApiBase}:${settingsCluster?.context}`, dirty: false })
   const [draftFrozen, setDraftFrozen] = useState(false)
@@ -287,12 +299,7 @@ export function SettingsDialog({
     setCostCredentialDirty(false)
     setCostDraftReset((current) => current + 1)
     setAiSaved(false)
-    setAiDraft({
-      agent: diag.selectedAgent,
-      profile: diag.profile,
-      model: diag.model,
-      effort: diag.effort,
-    })
+    setAiTouched(false)
     if (isSwitching) return () => controller.abort()
     fetch(apiUrl('/config'), { signal: controller.signal, credentials: getCredentialsMode(), headers: getAuthHeaders() })
       .then((res) => {
@@ -427,15 +434,23 @@ export function SettingsDialog({
     diag.setProfile(aiDraft.profile)
     diag.setModel(aiDraft.model)
     diag.setEffort(aiDraft.effort)
+    setAiTouched(false)
     setAiSaved(true)
   }, [diag, aiDraft])
+
+  const discardAi = useCallback(() => {
+    setAiTouched(false)
+    setAiSaved(false)
+  }, [])
 
   const discardChanges = useCallback(() => {
     // Revert unsaved startup edits back to the last-saved values (non-
     // destructive). configData.file holds the committed config, including the
     // live integration fields, so restoring it drops drafts without touching
-    // what's saved.
-    if (!configData || settingsBusy || draftFrozen || targetChangedWithDraft) return
+    // what's saved. AI preferences don't depend on the config load.
+    if (settingsBusy || draftFrozen || targetChangedWithDraft) return
+    discardAi()
+    if (!configData) return
     setEditedConfig({ ...configData.file, prometheusUrl: configData.effective.prometheusUrl })
     setCostCredentialDirty(false)
     setPrometheusCredentialDirty(false)
@@ -443,7 +458,7 @@ export function SettingsDialog({
     setLocalDirty({ metrics: false, argocd: false, cost: false })
     setCostDraftReset((current) => current + 1)
     setSaveMessage(null)
-  }, [configData, settingsBusy, draftFrozen, targetChangedWithDraft])
+  }, [configData, settingsBusy, draftFrozen, targetChangedWithDraft, discardAi])
 
   const finishClose = useCallback(() => {
     const action = pendingCloseActionRef.current
@@ -457,10 +472,10 @@ export function SettingsDialog({
     if (ok) finishClose()
   }, [saveConfig, finishClose])
 
-  const reviewIntegrationDraft = () => {
-    if (!reviewIntegration) return
+  const reviewPendingDraft = () => {
+    if (!reviewSection) return
     setConfirmingClose(false)
-    setSection(reviewIntegration)
+    setSection(reviewSection)
     focusIntegration.current = true
   }
   const focusIntegration = useRef(false)
@@ -471,14 +486,19 @@ export function SettingsDialog({
     panel?.querySelector<HTMLElement>('fieldset[tabindex], input, select, button')?.focus()
   }, [section])
 
-  // Close guard: a pending startup edit prompts an inline confirm rather than
-  // silently discarding. An unsaved AI draft is re-derivable, so it's fine to
-  // drop it on close.
+  // Close guard: any pending draft prompts an inline confirm rather than
+  // silently discarding. AI drafts count for every user; the rest need owner access.
+  // Saving or discarding the last draft from its own tab answers the close
+  // prompt; a stale "Unsaved changes" would otherwise linger in the footer.
+  useEffect(() => {
+    if (confirmingClose && !configDirty && !formDirty) setConfirmingClose(false)
+  }, [confirmingClose, configDirty, formDirty])
+
   const requestCloseRef = useRef<(afterClose?: () => void) => void>(() => {})
   requestCloseRef.current = (afterClose) => {
     if (settingsBusy) return
     pendingCloseActionRef.current = afterClose ?? null
-    if (canEditConfig && (configDirty || integrationDirty)) setConfirmingClose(true)
+    if ((canEditConfig && (configDirty || integrationDirty)) || aiDirty) setConfirmingClose(true)
     else finishClose()
   }
 
@@ -542,7 +562,8 @@ export function SettingsDialog({
     canEditConfig,
     confirmingClose,
     configDirty,
-    integrationDirty: integrationDirty && (!configData?.integrationProfiles || !!reviewIntegration),
+    integrationDirty: integrationDirty && (!configData?.integrationProfiles || (!!reviewSection && reviewSection !== 'ai')),
+    aiDirtyElsewhere: aiDirty && section !== 'ai',
     hasSaveMessage: Boolean(saveMessage),
   })
 
@@ -676,7 +697,7 @@ export function SettingsDialog({
                 <OverviewPanel active={section === 'overview'} onNavigate={setSection} />
               </div>
               {configData?.management === 'local' && configData.integrationProfiles && canEditConfig && (
-                <LocalConfigurationDetails />
+                <LocalConfigurationDetails onNavigate={setSection} />
               )}
             </div>
 
@@ -712,15 +733,6 @@ export function SettingsDialog({
                   onChange={updateConfigField}
                 />
               </div>
-              {configData?.management === 'local' && configData.integrationProfiles && canEditConfig && (
-                <SavedClusterConnections
-                  key={settingsScope}
-                  active={open && section === 'connection' && !draftFrozen && !isSwitching}
-                  profiles={configData.integrationProfiles}
-                  onChange={connectionsChanged}
-                  onBusyChange={setStorageBusy}
-                />
-              )}
               <div className="space-y-4 border-t border-theme-border-subtle pt-4">
                 <SubHeading>Server</SubHeading>
                 <ServerSection
@@ -731,6 +743,15 @@ export function SettingsDialog({
                   onChange={updateConfigField}
                 />
               </div>
+              {configData?.management === 'local' && configData.integrationProfiles && canEditConfig && (
+                <SavedClusterConnections
+                  key={settingsScope}
+                  active={open && section === 'connection' && !draftFrozen && !isSwitching}
+                  profiles={configData.integrationProfiles}
+                  onChange={connectionsChanged}
+                  onBusyChange={setStorageBusy}
+                />
+              )}
             </SectionPane>
 
             {/* Metrics backend — live */}
@@ -887,26 +908,19 @@ export function SettingsDialog({
                     draft={aiDraft}
                     onChange={(patch) => {
                       setAiDraft((d) => ({ ...d, ...patch }))
+                      setAiTouched(true)
                       setAiSaved(false)
                     }}
                     onHistoryCleared={diag.refreshRuns}
                   />
-                  {!diag.hosted && (
-                    <div className="flex items-center justify-end gap-3">
-                      {aiSaved && !aiDirty && (
-                        <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
-                          <Check className="w-3 h-3" />
-                          Saved
-                        </span>
-                      )}
-                      <button
-                        onClick={saveAi}
-                        disabled={!aiDirty}
-                        className="px-4 py-1.5 text-sm font-medium btn-brand rounded-md disabled:opacity-50 disabled:pointer-events-none"
-                      >
-                        Save
-                      </button>
-                    </div>
+                  {aiEditable && (
+                    <FormSaveActions
+                      dirty={aiDirty}
+                      busy={false}
+                      onSave={saveAi}
+                      onDiscard={discardAi}
+                      feedback={aiSaved ? { tone: 'success', message: 'Saved' } : undefined}
+                    />
                   )}
                 </div>
               ) : (
@@ -952,118 +966,114 @@ export function SettingsDialog({
           </div>
         </div>
 
-        {/* Footer — owner-gated persisted config. AI self-saves and integrations
-            apply separately. Shown whenever an edit is pending (any section),
-            while confirming a close, or briefly after a save. */}
-        <div
-          inert={!showFooter}
-          className={clsx(
-            'shrink-0 overflow-hidden transition-all duration-200 ease-out',
-            showFooter ? 'max-h-24 opacity-100 border-t border-theme-border' : 'max-h-0 opacity-0 pointer-events-none'
-          )}
-        >
-          <div className="flex items-center justify-between gap-3 px-4 py-2.5">
-            {confirmingClose ? (
-              <>
-                <div className="space-y-1 text-xs text-theme-text-secondary">
-                  <p>
-                  {integrationDirty
-                    ? `${pendingIntegrations.map(pending => integrationSectionLabels[pending]).join(', ')} changes are not saved.${configDirty ? ' Startup settings are unsaved.' : ''}`
-                    : 'Unsaved changes.'}
-                  </p>
-                  {saveMessage && <p role="status" className={saveMessage.startsWith('Error') ? 'text-semantic-error' : undefined}>{saveMessage}</p>}
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      pendingCloseActionRef.current = null
-                      setConfirmingClose(false)
-                    }}
-                    disabled={settingsBusy}
-                    className="px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
-                  >
-                    Keep editing
-                  </button>
-                  <button
-                    onClick={finishClose}
-                    disabled={settingsBusy}
-                    className="px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
-                  >
-                    Discard
-                  </button>
-                  {reviewIntegration && (
+        {/* Footer — saves startup settings, and points to drafts pending in
+            other tabs. Shown whenever an edit is pending, while confirming a
+            close, or briefly after a save. */}
+        <Collapse open={showFooter} className="shrink-0">
+          <div className="border-t border-theme-border">
+            <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+              {confirmingClose ? (
+                <>
+                  <div className="space-y-1 text-xs text-theme-text-secondary">
+                    <p>
+                    {formDirty
+                      ? `${pending.map(item => pendingSectionLabels[item]).join(', ')} changes are not saved.${configDirty ? ' Startup settings are unsaved.' : ''}`
+                      : 'Unsaved changes.'}
+                    </p>
+                    {saveMessage && <p role="status" className={saveMessage.startsWith('Error') ? 'text-semantic-error' : undefined}>{saveMessage}</p>}
+                  </div>
+                  <div className="flex items-center gap-2">
                     <button
-                      onClick={reviewIntegrationDraft}
-                      className={clsx(
-                        'flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium',
-                        configDirty
-                          ? 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
-                          : 'btn-brand',
-                      )}
+                      onClick={() => {
+                        pendingCloseActionRef.current = null
+                        setConfirmingClose(false)
+                      }}
+                      disabled={settingsBusy}
+                      className="px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
                     >
-                      Review {integrationSectionLabels[reviewIntegration]}
+                      Keep editing
                     </button>
-                  )}
-                  {configDirty && (
                     <button
-                      onClick={integrationDirty ? saveConfig : handleSaveAndClose}
-                      disabled={settingsBusy || draftFrozen || targetChangedWithDraft}
-                      className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
+                      onClick={finishClose}
+                      disabled={settingsBusy}
+                      className="px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
                     >
-                      {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      Save startup settings
+                      Discard
                     </button>
-                  )}
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center gap-2">
-                  {(!configData?.integrationProfiles || configDirty || !!reviewIntegration) && <Tooltip content="Discard unsaved changes and revert to the last saved values">
-                    <button
-                      onClick={discardChanges}
-                      disabled={settingsBusy || draftFrozen || targetChangedWithDraft || (!configDirty && !integrationDirty)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50 disabled:pointer-events-none"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      {configData?.integrationProfiles && integrationDirty && (configDirty || pendingIntegrations.length > 1) ? 'Discard all changes' : 'Discard changes'}
-                    </button>
-                  </Tooltip>}
-                  {saveMessage && (
-                    <span className={clsx('text-xs', saveMessage.startsWith('Error') ? 'text-red-400' : 'text-green-400')}>
-                      {saveMessage}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  {reviewIntegration && (
-                    <button
-                      onClick={reviewIntegrationDraft}
-                      className={clsx(
-                        'flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium',
-                        configDirty
-                          ? 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
-                          : 'btn-brand',
-                      )}
-                    >
-                      Review {integrationSectionLabels[reviewIntegration]}
-                    </button>
-                  )}
-                  {configDirty && (
-                    <button
-                      onClick={saveConfig}
-                      disabled={settingsBusy || draftFrozen || targetChangedWithDraft}
-                      className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
-                    >
-                      {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      Save startup settings
-                    </button>
-                  )}
-                </div>
-              </>
-            )}
+                    {reviewSection && (
+                      <button
+                        onClick={reviewPendingDraft}
+                        className={clsx(
+                          'flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium',
+                          configDirty
+                            ? 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
+                            : 'btn-brand',
+                        )}
+                      >
+                        Review {pendingSectionLabels[reviewSection]}
+                      </button>
+                    )}
+                    {configDirty && canEditConfig && (
+                      <button
+                        onClick={formDirty ? saveConfig : handleSaveAndClose}
+                        disabled={settingsBusy || draftFrozen || targetChangedWithDraft}
+                        className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
+                      >
+                        {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                        Save startup settings
+                      </button>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    {(!configData?.integrationProfiles || configDirty || !!reviewSection) && <Tooltip content="Discard unsaved changes and revert to the last saved values">
+                      <button
+                        onClick={discardChanges}
+                        disabled={settingsBusy || draftFrozen || targetChangedWithDraft || (!configDirty && !formDirty)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        {formDirty && (configDirty || pending.length > 1) ? 'Discard all changes' : 'Discard changes'}
+                      </button>
+                    </Tooltip>}
+                    {saveMessage && (
+                      <span className={clsx('text-xs', saveMessage.startsWith('Error') ? 'text-red-400' : 'text-green-400')}>
+                        {saveMessage}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {reviewSection && (
+                      <button
+                        onClick={reviewPendingDraft}
+                        className={clsx(
+                          'flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium',
+                          configDirty
+                            ? 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
+                            : 'btn-brand',
+                        )}
+                      >
+                        Review {pendingSectionLabels[reviewSection]}
+                      </button>
+                    )}
+                    {configDirty && canEditConfig && (
+                      <button
+                        onClick={saveConfig}
+                        disabled={settingsBusy || draftFrozen || targetChangedWithDraft}
+                        className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
+                      >
+                        {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                        Save startup settings
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
-        </div>
+        </Collapse>
       </div>
     </div>,
     document.body
@@ -1728,7 +1738,12 @@ function CostSection({
 
   return (
     <div className="space-y-5">
-      {integration ?? <>{sourceEnvManaged && (
+      {integration ? (
+        <div className="space-y-4">
+          <SubHeading>This cluster</SubHeading>
+          {integration}
+        </div>
+      ) : <>{sourceEnvManaged && (
         <div id="cost-source-managed" className={clsx(
           'rounded-md border p-3',
           sourceEnvError
@@ -1927,46 +1942,51 @@ function CostSection({
       </div>
 
       </>}
-      <div className="rounded-lg border border-theme-border bg-theme-base/40 p-4">
-        <label htmlFor="cost-currency" className="block text-sm font-semibold text-theme-text-primary">
-          Display currency
-        </label>
-        {deploymentMode === 'local' && <p className="mt-1 text-xs text-theme-text-secondary">Display preference · all local clusters. Saved automatically.</p>}
-        <p id="cost-currency-help" className="mb-1 mt-0.5 text-xs text-theme-text-tertiary">
-          Automatic uses the currency reported by the active cost source, or USD when unavailable.
-          Overrides relabel amounts; Radar does not convert them.
-        </p>
-        <SelectMenu
-          id="cost-currency"
-          value={currencyDraft}
-          options={currencyOptionsForValue(currencyDraft)}
-          onChange={(value) => { void saveCurrency(value) }}
-          ariaLabel="Display currency"
-          ariaDescribedBy="cost-currency-help"
-          searchPlaceholder="Search currencies by name or code"
-          disabled={settingsSaving || currencySave.status === 'saving'}
-          className="w-full"
-        />
-        {currencySave.status === 'saving' && (
-          <p role="status" aria-live="polite" className="mt-1 flex items-center gap-1 text-xs text-theme-text-tertiary">
-            <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+      <div className={integration ? 'space-y-4 border-t border-theme-border-subtle pt-4' : 'rounded-lg border border-theme-border bg-theme-base/40 p-4'}>
+        {integration && <SubHeading>All clusters</SubHeading>}
+        <div>
+          <label htmlFor="cost-currency" className="block text-sm font-semibold text-theme-text-primary">
+            Display currency
+          </label>
+          {integration
+            ? <p className="mt-1 text-xs text-theme-text-secondary">Saved automatically.</p>
+            : deploymentMode === 'local' && <p className="mt-1 text-xs text-theme-text-secondary">Display preference · all local clusters. Saved automatically.</p>}
+          <p id="cost-currency-help" className="mb-1 mt-0.5 text-xs text-theme-text-tertiary">
+            Automatic uses the currency reported by the active cost source, or USD when unavailable.
+            Overrides relabel amounts; Radar does not convert them.
           </p>
-        )}
-        {currencySave.status === 'saved' && (
-          <p role="status" aria-live="polite" className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
-            <Check className="h-3 w-3" /> {managed ? 'Saved for when the CLI or Helm override is removed' : 'Saved'}
-          </p>
-        )}
-        {currencySave.status === 'failed' && (
-          <p role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400/80">
-            Could not save: {currencySave.error}
-          </p>
-        )}
-        {managed && (
-          <p className="mt-2 text-xs text-amber-600 dark:text-amber-400/80">
-            CLI or Helm currently sets {effectiveCurrency || 'Automatic'}; that override stays active until it is removed.
-          </p>
-        )}
+          <SelectMenu
+            id="cost-currency"
+            value={currencyDraft}
+            options={currencyOptionsForValue(currencyDraft)}
+            onChange={(value) => { void saveCurrency(value) }}
+            ariaLabel="Display currency"
+            ariaDescribedBy="cost-currency-help"
+            searchPlaceholder="Search currencies by name or code"
+            disabled={settingsSaving || currencySave.status === 'saving'}
+            className="w-full"
+          />
+          {currencySave.status === 'saving' && (
+            <p role="status" aria-live="polite" className="mt-1 flex items-center gap-1 text-xs text-theme-text-tertiary">
+              <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+            </p>
+          )}
+          {currencySave.status === 'saved' && (
+            <p role="status" aria-live="polite" className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
+              <Check className="h-3 w-3" /> {managed ? 'Saved for when the CLI or Helm override is removed' : 'Saved'}
+            </p>
+          )}
+          {currencySave.status === 'failed' && (
+            <p role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400/80">
+              Could not save: {currencySave.error}
+            </p>
+          )}
+          {managed && (
+            <p className="mt-2 text-xs text-amber-600 dark:text-amber-400/80">
+              CLI or Helm currently sets {effectiveCurrency || 'Automatic'}; that override stays active until it is removed.
+            </p>
+          )}
+        </div>
       </div>
     </div>
   )
