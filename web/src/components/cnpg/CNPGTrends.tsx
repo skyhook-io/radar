@@ -13,35 +13,12 @@ import {
 } from '../../api/cnpg-history'
 import { Notice } from '../capacity/shared'
 import { Segments } from './shared'
+import { cacheHitSeries, chartedDatabases, rateSeries, sampleFrom, sessionStateSeries, SAMPLE_BUFFER_LIMIT, type Sample } from './trendSamples'
 
 const COLOR = '#60a5fa'
 const FILL = '#60a5fa22'
 
-// A ring buffer of samples taken while this view is open: the Trends section
-// without Prometheus. It says so, and starts empty.
-export interface Sample {
-  t: number
-  /** When the metrics were scraped; the server memoizes them across polls. */
-  metricsAt?: number
-  replayLag: Record<string, number | undefined>
-  sessions?: number
-  waiting?: number
-  commits?: number
-  rollbacks?: number
-  archived?: number
-  failed?: number
-  blksHit?: number
-  blksRead?: number
-  walBytes?: number
-  deadlocks?: number
-  tempBytes?: number
-  checkpointsTimed?: number
-  checkpointsRequested?: number
-  /** Database sizes by name (gauges). */
-  dbSizes?: Record<string, number>
-}
-
-type CounterKey = 'commits' | 'rollbacks' | 'archived' | 'failed' | 'blksHit' | 'blksRead' | 'deadlocks' | 'tempBytes' | 'checkpointsTimed' | 'checkpointsRequested'
+export type { Sample } from './trendSamples'
 
 export function useSampleBuffer(data: CNPGRuntimeResponse | undefined): Sample[] {
   const [samples, setSamples] = useState<Sample[]>([])
@@ -49,34 +26,7 @@ export function useSampleBuffer(data: CNPGRuntimeResponse | undefined): Sample[]
   useEffect(() => {
     if (!data || data.sampledAt === last.current) return
     last.current = data.sampledAt
-    const primary = data.instances.find((i) => i.role === 'primary')
-    const replayLag: Record<string, number | undefined> = {}
-    for (const r of primary?.status.replication ?? []) replayLag[r.applicationName] = r.replayLag
-    const m = primary?.metrics
-    setSamples((prev) =>
-      [
-        ...prev,
-        {
-          t: Date.parse(data.sampledAt) || Date.now(),
-          metricsAt: m?.capturedAt ? Date.parse(m.capturedAt) || undefined : undefined,
-          replayLag,
-          sessions: m?.state === 'ok' ? m.sessionsTotal : undefined,
-          waiting: m?.state === 'ok' ? m.waitingBackends : undefined,
-          commits: m?.xactCommitTotal,
-          rollbacks: m?.xactRollbackTotal,
-          archived: m?.archiver?.archivedCount,
-          failed: m?.archiver?.failedCount,
-          blksHit: m?.blksHit,
-          blksRead: m?.blksRead,
-          walBytes: m?.walBytes,
-          deadlocks: m?.deadlocksTotal,
-          tempBytes: m?.tempBytesTotal,
-          checkpointsTimed: m?.checkpoints?.timed,
-          checkpointsRequested: m?.checkpoints?.requested,
-          dbSizes: m?.databaseSizes ? Object.fromEntries(m.databaseSizes.map((d) => [d.database, d.bytes])) : undefined,
-        },
-      ].slice(-720),
-    )
+    setSamples((prev) => [...prev, sampleFrom(data)].slice(-SAMPLE_BUFFER_LIMIT))
   }, [data])
   return samples
 }
@@ -272,58 +222,25 @@ function IntervalChip({ interval, onOpen, onClear }: { interval: ChartTimeRange;
   )
 }
 
-/**
- * A counter as a rate between consecutive exporter scrapes (`metricsAt`, not
- * the poll time: the server memoizes metrics across polls). A decrease is a
- * reset and leaves a gap; `per` scales per-second to per-minute.
- */
-export function rateSeries(samples: Sample[], key: CounterKey, per = 1, label: string = key): TimeSeries {
-  const points: TimeSeries['dataPoints'] = []
-  let prev: Sample | undefined
-  for (const s of samples) {
-    if (s[key] === undefined || s.metricsAt === undefined) {
-      points.push({ timestamp: s.t / 1000, value: null })
-      continue
-    }
-    if (prev && prev.metricsAt !== s.metricsAt) {
-      const dt = ((s.metricsAt as number) - (prev.metricsAt as number)) / 1000
-      const dv = (s[key] as number) - (prev[key] as number)
-      points.push({ timestamp: s.t / 1000, value: dt > 0 && dv >= 0 ? (dv / dt) * per : null })
-    }
-    if (!prev || prev.metricsAt !== s.metricsAt) prev = s
-  }
-  return { labels: { series: label }, dataPoints: points }
-}
-
-/** Cache hit ratio (%) of the blocks read between consecutive scrapes; no reads leaves a gap, not 100 %. */
-export function cacheHitSeries(samples: Sample[]): TimeSeries {
-  const points: TimeSeries['dataPoints'] = []
-  let prev: Sample | undefined
-  for (const s of samples) {
-    if (s.blksHit === undefined || s.blksRead === undefined || s.metricsAt === undefined) {
-      points.push({ timestamp: s.t / 1000, value: null })
-      continue
-    }
-    if (prev && prev.metricsAt !== s.metricsAt) {
-      const hit = s.blksHit - (prev.blksHit as number)
-      const read = s.blksRead - (prev.blksRead as number)
-      points.push({ timestamp: s.t / 1000, value: hit >= 0 && read >= 0 && hit + read > 0 ? (hit / (hit + read)) * 100 : null })
-    }
-    if (!prev || prev.metricsAt !== s.metricsAt) prev = s
-  }
-  return { labels: { series: 'hit ratio' }, dataPoints: points }
-}
-
-function BufferCharts({ samples, selection, onSelect }: { samples: Sample[]; selection: ChartTimeRange | null; onSelect: (r: ChartTimeRange) => void }) {
-  const recent = samples.slice(-720)
+function BufferCharts({
+  samples,
+  selection,
+  onSelect,
+  instance,
+  picker,
+}: {
+  samples: Sample[]
+  selection: ChartTimeRange | null
+  onSelect: (r: ChartTimeRange) => void
+  /** The instance whose sessions-by-state chart is shown (the Runtime picker's choice). */
+  instance?: string
+  picker?: ReactNode
+}) {
+  const recent = samples.slice(-SAMPLE_BUFFER_LIMIT)
+  const [dbPick, setDbPick] = useState<string[] | 'all' | null>(null)
   const pods = useMemo(() => [...new Set(recent.flatMap((s) => Object.keys(s.replayLag)))].sort(), [recent])
-  const dbs = useMemo(() => {
-    const latest = [...recent].reverse().find((s) => s.dbSizes)?.dbSizes ?? {}
-    return Object.entries(latest)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([d]) => d)
-  }, [recent])
+  const instances = useMemo(() => [...new Set(recent.flatMap((s) => Object.keys(s.instances ?? {})))].sort(), [recent])
+  const dbs = useMemo(() => chartedDatabases(recent, dbPick), [recent, dbPick])
   if (recent.length < 2) {
     return <div className="text-sm text-theme-text-tertiary">Collecting samples… These trends start when this page opens and cover up to the last hour it stays open.</div>
   }
@@ -332,7 +249,13 @@ function BufferCharts({ samples, selection, onSelect }: { samples: Sample[]; sel
     labels: { series: label },
     dataPoints: recent.map((s) => ({ timestamp: s.t / 1000, value: pick(s) ?? null })),
   })
-  const charts: { title: string; unit: string; series: TimeSeries[]; labels: string[]; source: string; thresholds?: ReferenceLine[] }[] = [
+  const approximate = recent.some((s) => s.approximate)
+  const rateNote = approximate
+    ? 'approximate: the exporter publishes no cnpg_last_update_timestamp, so rates use the time Radar fetched each reading'
+    : 'rates between the exporter\'s query runs (cnpg_last_update_timestamp); a change of primary or a counter reset is a gap'
+  const sessionsOf = instance ?? instances[0]
+  const dbCapped = recent.some((s) => Object.keys(s.dbSizes ?? {}).length >= 200)
+  const charts: { title: string; unit: string; series: TimeSeries[]; labels: string[]; source: string; thresholds?: ReferenceLine[]; rate?: boolean; control?: ReactNode; note?: string }[] = [
     {
       title: 'Replay lag per standby',
       unit: 'seconds',
@@ -344,28 +267,58 @@ function BufferCharts({ samples, selection, onSelect }: { samples: Sample[]; sel
         { value: 30, label: '30 s', kind: 'limit' },
       ],
     },
-    { title: 'Client sessions (primary)', unit: 'count', series: [one('sessions', (s) => s.sessions)], labels: ['sessions'], source: 'cnpg_backends_total on the primary' },
-    { title: 'Sessions waiting on locks', unit: 'count', series: [one('waiting', (s) => s.waiting)], labels: ['waiting'], source: 'cnpg_backends_waiting_total on the primary' },
-    { title: 'Transactions per second (primary)', unit: '', series: [rateSeries(recent, 'commits'), rateSeries(recent, 'rollbacks')], labels: ['commits', 'rollbacks'], source: 'xact_commit / xact_rollback between exporter refreshes' },
-    { title: 'Cache hit ratio (primary)', unit: '%', series: [cacheHitSeries(recent)], labels: ['hit ratio'], source: 'blks_hit / (blks_hit + blks_read) between exporter refreshes' },
+    {
+      title: 'Client sessions per instance',
+      unit: 'count',
+      series: instances.map((p) => one(p, (s) => s.instances?.[p]?.total)),
+      labels: instances,
+      source: 'cnpg_backends_total on each instance, platform sessions excluded',
+    },
+    {
+      title: sessionsOf ? `Sessions by state (${sessionsOf})` : 'Sessions by state',
+      unit: 'count',
+      series: sessionsOf ? sessionStateSeries(recent, sessionsOf) : [],
+      labels: ['active', 'idle', 'idle in transaction', 'other'],
+      source: 'cnpg_backends_total by state on the instance picked above',
+      control: picker,
+    },
+    {
+      title: 'Sessions waiting on locks',
+      unit: 'count',
+      series: instances.map((p) => one(p, (s) => s.instances?.[p]?.waiting)),
+      labels: instances,
+      source: 'cnpg_backends_waiting_total on each instance',
+    },
+    { title: 'Transactions per second (primary)', unit: '', series: [rateSeries(recent, 'commits'), rateSeries(recent, 'rollbacks')], labels: ['commits', 'rollbacks'], source: 'xact_commit / xact_rollback', rate: true },
+    { title: 'Cache hit ratio (primary)', unit: '%', series: [cacheHitSeries(recent)], labels: ['hit ratio'], source: 'blks_hit / (blks_hit + blks_read)', rate: true },
     {
       title: 'WAL archived / failed per minute',
       unit: '',
       series: [rateSeries(recent, 'archived', 60), rateSeries(recent, 'failed', 60)],
       labels: ['archived', 'failed'],
       source: 'pg_stat_archiver archived_count / failed_count on the primary',
+      rate: true,
     },
     { title: 'WAL on disk (primary)', unit: 'bytes', series: [one('WAL', (s) => s.walBytes)], labels: ['WAL'], source: 'cnpg_collector_pg_wal{value="size"} on the primary' },
-    { title: 'Database size (primary)', unit: 'bytes', series: dbs.map((d) => one(d, (s) => s.dbSizes?.[d])), labels: dbs, source: 'pg_database size_bytes on the primary, the five largest' },
+    {
+      title: 'Database size (primary)',
+      unit: 'bytes',
+      series: dbs.shown.map((d) => one(d, (s) => s.dbSizes?.[d])),
+      labels: dbs.shown,
+      source: `pg_database size_bytes on the primary, ${dbPick === 'all' ? 'every database' : dbPick ? 'the databases picked' : 'the five largest'}`,
+      control: dbs.all.length > 5 ? <DatabasePicker all={dbs.all} shown={dbs.shown} pick={dbPick} onPick={setDbPick} /> : undefined,
+      note: dbCapped ? 'The exporter reports the 200 largest databases; smaller ones are not sampled.' : undefined,
+    },
     {
       title: 'Checkpoints per minute (primary)',
       unit: '',
       series: [rateSeries(recent, 'checkpointsTimed', 60, 'timed'), rateSeries(recent, 'checkpointsRequested', 60, 'requested')],
       labels: ['timed', 'requested'],
       source: 'pg_stat_checkpointer (17+) or pg_stat_bgwriter checkpoints_timed / _req',
+      rate: true,
     },
-    { title: 'Deadlocks per minute (primary)', unit: '', series: [rateSeries(recent, 'deadlocks', 60)], labels: ['deadlocks'], source: 'pg_stat_database deadlocks, all databases' },
-    { title: 'Temporary file writes (primary)', unit: 'bytes', series: [rateSeries(recent, 'tempBytes', 1, 'bytes/s')], labels: ['bytes/s'], source: 'pg_stat_database temp_bytes per second, all databases' },
+    { title: 'Deadlocks per minute (primary)', unit: '', series: [rateSeries(recent, 'deadlocks', 60)], labels: ['deadlocks'], source: 'pg_stat_database deadlocks, all databases', rate: true },
+    { title: 'Temporary file writes (primary)', unit: 'bytes', series: [rateSeries(recent, 'tempBytes', 1, 'bytes/s')], labels: ['bytes/s'], source: 'pg_stat_database temp_bytes per second, all databases', rate: true },
   ]
   return (
     <div className="grid gap-4 lg:grid-cols-2">
@@ -373,7 +326,18 @@ function BufferCharts({ samples, selection, onSelect }: { samples: Sample[]; sel
         const gaps = sampleGaps(c.series)
         const hasValue = c.series.some((s) => s.dataPoints.some((p) => p.value != null))
         return (
-          <ChartCard key={c.title} title={c.title} footer={<>Source: {c.source}, sampled by this page · gaps break the line, never zero</>}>
+          <ChartCard
+            key={c.title}
+            title={c.title}
+            meta={c.rate && approximate ? 'approximate' : undefined}
+            footer={
+              <>
+                Source: {c.source}, sampled by this page · {c.rate ? rateNote : 'gaps break the line, never zero'}
+                {c.note ? ` · ${c.note}` : ''}
+              </>
+            }
+          >
+            {c.control && <div className="mb-2">{c.control}</div>}
             {hasValue ? (
               <>
                 <AreaChart
@@ -397,12 +361,40 @@ function BufferCharts({ samples, selection, onSelect }: { samples: Sample[]; sel
               </>
             ) : (
               <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-theme-border px-4 text-center text-sm text-theme-text-tertiary">
-                {c.title.startsWith('Replay') ? 'No standby reported by the primary since this page opened.' : 'No sample since this page opened.'}
+                {c.title.startsWith('Replay')
+                  ? 'No standby reported by the primary since this page opened.'
+                  : c.rate
+                    ? 'Needs two exporter readings from the same primary since this page opened.'
+                    : 'No sample since this page opened.'}
               </div>
             )}
           </ChartCard>
         )
       })}
+    </div>
+  )
+}
+
+function DatabasePicker({ all, shown, pick, onPick }: { all: string[]; shown: string[]; pick: string[] | 'all' | null; onPick: (p: string[] | 'all' | null) => void }) {
+  const toggle = (d: string) => {
+    const next = shown.includes(d) ? shown.filter((x) => x !== d) : [...shown, d]
+    onPick(next.length === 0 ? null : next)
+  }
+  const chip = (on: boolean) =>
+    `rounded-md border px-1.5 py-0.5 font-mono text-[11px] ${on ? 'border-accent bg-accent-muted text-theme-text-primary' : 'border-theme-border text-theme-text-secondary hover:bg-theme-hover'}`
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <button type="button" className={chip(pick === null)} onClick={() => onPick(null)}>
+        five largest
+      </button>
+      <button type="button" className={chip(pick === 'all')} onClick={() => onPick('all')}>
+        all {all.length}
+      </button>
+      {all.map((d) => (
+        <button key={d} type="button" aria-pressed={pick !== null && pick !== 'all' && shown.includes(d)} className={chip(pick !== null && pick !== 'all' && shown.includes(d))} onClick={() => toggle(d)}>
+          {d}
+        </button>
+      ))}
     </div>
   )
 }
@@ -417,11 +409,16 @@ export function CNPGTrends({
   name,
   samples,
   onOpenInterval,
+  instance,
+  picker,
 }: {
   namespace: string
   name: string
   samples: Sample[]
   onOpenInterval?: (target: CNPGIntervalTarget, since: string, until: string) => void
+  /** The Runtime instance picker's choice, for the per-instance sampled charts. */
+  instance?: string
+  picker?: ReactNode
 }) {
   const { range, setRange, interval, setSelected } = useTrendParams()
   const q = useCNPGClusterHistory(namespace, name, range)
@@ -470,7 +467,7 @@ export function CNPGTrends({
           ))}
         </div>
       ) : (
-        !q.isLoading && <BufferCharts samples={samples} selection={interval} onSelect={setSelected} />
+        !q.isLoading && <BufferCharts samples={samples} selection={interval} onSelect={setSelected} instance={instance} picker={picker} />
       )}
     </div>
   )

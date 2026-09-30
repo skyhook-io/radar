@@ -10,6 +10,7 @@ import { CNPGStorage } from './CNPGStorage'
 import { CNPGBlockingSessions } from './CNPGBlockingSessions'
 import { CNPGReplicationView } from './CNPGReplicationView'
 import { cnpgCheckpointView, cnpgDatabaseHealthRows } from './runtimeModel'
+import { latestRate } from './trendSamples'
 import { CNPGTrends, useSampleBuffer, type CNPGIntervalTarget, type Sample } from './CNPGTrends'
 
 type Section = 'replication' | 'sessions' | 'transactions' | 'storage' | 'slots' | 'trends'
@@ -159,7 +160,7 @@ export function CNPGClusterRuntime({
         (denied ? <ProxyDenied what="Transaction rates, cache hit ratio, deadlocks, transaction and multixact ID age, and extension versions" grant={grant} /> : <TransactionsView primary={primary} instance={picked} picker={picker} samples={samples} />)}
       {section === 'storage' && (denied ? <CNPGStorage namespace={namespace} name={name} /> : <StorageView namespace={namespace} name={name} instances={data.instances} />)}
       {section === 'slots' && (denied ? <ProxyDenied what="Replication slots and the WAL they retain" grant={grant} /> : <SlotsView primary={primary} />)}
-      {section === 'trends' && <CNPGTrends namespace={namespace} name={name} samples={samples} onOpenInterval={onOpenInterval} />}
+      {section === 'trends' && <CNPGTrends namespace={namespace} name={name} samples={samples} onOpenInterval={onOpenInterval} instance={picked?.pod} picker={picker} />}
     </div>
   )
 }
@@ -260,17 +261,6 @@ function Metric({ label, value, tone }: { label: string; value: ReactNode; tone?
   )
 }
 
-function rate(samples: Sample[], key: 'commits' | 'rollbacks'): number | undefined {
-  const pts = samples.filter((s, i) => s[key] !== undefined && s.metricsAt !== undefined && s.metricsAt !== samples[i - 1]?.metricsAt)
-  if (pts.length < 2) return undefined
-  const a = pts[pts.length - 2]
-  const b = pts[pts.length - 1]
-  const dt = ((b.metricsAt as number) - (a.metricsAt as number)) / 1000
-  const dv = (b[key] as number) - (a[key] as number)
-  if (dt <= 0 || dv < 0) return undefined
-  return dv / dt
-}
-
 function TransactionsView({ primary, instance, picker, samples }: { primary?: CNPGRuntimeInstance; instance?: CNPGRuntimeInstance; picker?: ReactNode; samples: Sample[] }) {
   return (
     <div className="space-y-4">
@@ -286,14 +276,14 @@ function TransactionsCard({ inst, isPrimary, samples }: { inst?: CNPGRuntimeInst
   const m = primary?.metrics
   if (!m || m.state !== 'ok') return <Card title="Transactions"><Unavailable inst={primary} what="Transactions" /></Card>
   // The page samples the primary's counters only, so rates are the primary's.
-  const commits = isPrimary ? rate(samples, 'commits') : undefined
-  const rollbacks = isPrimary ? rate(samples, 'rollbacks') : undefined
+  const commits = isPrimary ? latestRate(samples, 'commits') : undefined
+  const rollbacks = isPrimary ? latestRate(samples, 'rollbacks') : undefined
   const rateText = (v: number | undefined) => (!isPrimary ? 'primary only' : v !== undefined ? v.toFixed(1) : 'collecting…')
   const hit = m.blksHit !== undefined && m.blksRead !== undefined && m.blksHit + m.blksRead > 0 ? (m.blksHit / (m.blksHit + m.blksRead)) * 100 : undefined
   return (
     <Card
       title={<>Transactions on {primary!.pod}</>}
-      footer="Rates are computed from two consecutive samples of the primary taken while this page is open; the exporter refreshes about every 30 s."
+      footer="Rates are the change between the primary exporter's last two query runs seen while this page is open, never across a change of primary."
     >
       <div className="flex flex-wrap gap-8">
         <Metric label="Commits / s" value={rateText(commits)} />

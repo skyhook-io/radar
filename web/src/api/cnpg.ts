@@ -372,6 +372,7 @@ export interface CNPGRuntimeBaseBackup {
 
 export interface CNPGRuntimeInstance {
   pod: string
+  podUID?: string
   role: 'primary' | 'replica' | 'unknown'
   status: {
     state: CNPGRuntimeSourceState
@@ -427,6 +428,10 @@ export interface CNPGRuntimeInstance {
     deadlocksTotal?: number
     tempBytesTotal?: number
     walBytes?: number
+    /** cnpg_last_update_timestamp: when the exporter last ran its queries (epoch seconds). */
+    lastUpdateTimestamp?: number
+    /** Client sessions per state over every group (absent when there are none). */
+    sessionsByState?: Record<string, number>
     walSegments?: number
     postmasterStartTime?: number
     /** pg_stat_database counters per database, cumulative since the last stats reset. */
