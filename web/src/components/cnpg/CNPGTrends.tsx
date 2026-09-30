@@ -411,6 +411,7 @@ export function CNPGTrends({
   onOpenInterval,
   instance,
   picker,
+  samplingDenied,
 }: {
   namespace: string
   name: string
@@ -419,11 +420,14 @@ export function CNPGTrends({
   /** The Runtime instance picker's choice, for the per-instance sampled charts. */
   instance?: string
   picker?: ReactNode
+  /** The grant the caller lacks for in-page samples (get pods/proxy); no sample can ever arrive. */
+  samplingDenied?: string
 }) {
   const { range, setRange, interval, setSelected } = useTrendParams()
   const q = useCNPGClusterHistory(namespace, name, range)
   const data = q.data
   const fromPrometheus = data?.source === 'prometheus' && data.state === 'ok'
+  const fallback = samplingDenied ? `In-page samples need ${samplingDenied} too.` : 'Below: samples since this page opened.'
 
   const open = onOpenInterval && interval
     ? (target: CNPGIntervalTarget) => onOpenInterval(target, new Date(interval.start * 1000).toISOString(), new Date(interval.end * 1000).toISOString())
@@ -445,18 +449,29 @@ export function CNPGTrends({
             ? `From Prometheus · one point every ${span(data.stepSeconds ?? 60)} · ${data.isolation?.note ?? ''}`
             : q.isLoading
               ? 'Checking for Prometheus…'
-              : 'Sampled every 5 s since this page opened · gaps are hatched, never zero'}
+              : samplingDenied
+                ? 'No trend source readable'
+                : 'Sampled every 5 s since this page opened · gaps are hatched, never zero'}
         </span>
         <span className="text-xs text-theme-text-tertiary">Drag across a chart, or click a point, to select an interval.</span>
       </div>
 
       {data?.source === 'none' && (
-        <Notice>History needs Prometheus: {data.reason ?? 'Radar is not connected to one'}. These trends cover only the time since this page opened.</Notice>
+        <Notice>
+          History needs Prometheus: {data.reason ?? 'Radar is not connected to one'}.{' '}
+          {samplingDenied ? fallback : 'These trends cover only the time since this page opened.'}
+        </Notice>
       )}
       {data?.source === 'prometheus' && data.state !== 'ok' && (
-        <Notice>Prometheus history is not shown: {data.reason}. Below: samples since this page opened.</Notice>
+        <Notice>
+          Prometheus history is not shown: {data.reason}. {fallback}
+        </Notice>
       )}
-      {q.error && !data && <Notice>History could not be loaded: {q.error instanceof Error ? q.error.message : 'unknown error'}. Below: samples since this page opened.</Notice>}
+      {q.error && !data && (
+        <Notice>
+          History could not be loaded: {q.error instanceof Error ? q.error.message : 'unknown error'}. {fallback}
+        </Notice>
+      )}
 
       {interval && <IntervalChip interval={interval} onOpen={open} onClear={() => setSelected(null)} />}
 
@@ -467,7 +482,7 @@ export function CNPGTrends({
           ))}
         </div>
       ) : (
-        !q.isLoading && <BufferCharts samples={samples} selection={interval} onSelect={setSelected} instance={instance} picker={picker} />
+        !q.isLoading && !samplingDenied && <BufferCharts samples={samples} selection={interval} onSelect={setSelected} instance={instance} picker={picker} />
       )}
     </div>
   )

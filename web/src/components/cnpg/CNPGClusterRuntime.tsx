@@ -160,7 +160,17 @@ export function CNPGClusterRuntime({
         (denied ? <ProxyDenied what="Transaction rates, cache hit ratio, deadlocks, transaction and multixact ID age, and extension versions" grant={grant} /> : <TransactionsView primary={primary} instance={picked} picker={picker} samples={samples} />)}
       {section === 'storage' && (denied ? <CNPGStorage namespace={namespace} name={name} /> : <StorageView namespace={namespace} name={name} instances={data.instances} />)}
       {section === 'slots' && (denied ? <ProxyDenied what="Replication slots and the WAL they retain" grant={grant} /> : <SlotsView primary={primary} />)}
-      {section === 'trends' && <CNPGTrends namespace={namespace} name={name} samples={samples} onOpenInterval={onOpenInterval} instance={picked?.pod} picker={picker} />}
+      {section === 'trends' && (
+        <CNPGTrends
+          namespace={namespace}
+          name={name}
+          samples={samples}
+          onOpenInterval={onOpenInterval}
+          instance={picked?.pod}
+          picker={picker}
+          samplingDenied={denied ? grant : undefined}
+        />
+      )}
     </div>
   )
 }
