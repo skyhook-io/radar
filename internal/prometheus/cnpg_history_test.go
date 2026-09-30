@@ -290,8 +290,13 @@ func TestQueryCNPGFleetLagSeparatesNoStandbyFromUnscraped(t *testing.T) {
 func TestQueryCNPGFleetLagReportsSustainedLagSeparately(t *testing.T) {
 	q := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
 		if strings.Contains(query, "min_over_time") {
-			if !strings.Contains(query, "count_over_time") {
-				t.Errorf("sustained query does not require samples across the window: %s", query)
+			// Coverage, not a sample count: every one-minute check of the
+			// window needs a sample inside its own minute. Five samples at a
+			// 15 s scrape span barely a minute.
+			for _, want := range []string{"[10m:1m]", "last_over_time(cnpg_pg_replication_lag{", "[1m])", "count_over_time(", ">= 10"} {
+				if !strings.Contains(query, want) {
+					t.Errorf("sustained query lacks %q: %s", want, query)
+				}
 			}
 			return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"pod": "a-2"}, 42)}}, nil
 		}

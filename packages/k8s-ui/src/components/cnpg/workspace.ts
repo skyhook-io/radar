@@ -999,7 +999,7 @@ export interface CNPGFleetMetricsReading {
     reason?: string
     seconds?: number
     pod?: string
-    /** The lag the worst standby never dropped below over `sustainedWindow`. */
+    /** The lowest lag of the worst standby across the one-minute checks of `sustainedWindow`, each backed by a sample. */
     sustainedSeconds?: number
     sustainedPod?: string
     sustainedWindow?: string
@@ -1095,8 +1095,8 @@ function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading
     id: `lag:${row.key}`,
     severity: floor >= CNPG_SUSTAINED_LAG_CRITICAL_SECONDS ? 'critical' : 'warning',
     category: 'availability',
-    title: `${lag.sustainedPod ?? 'A standby'} has lagged at least ${formatLagSeconds(floor)} for ${window}`,
-    detail: `Replay lag never dropped below ${formatLagSeconds(floor)} over ${window}, from ${src.lagSource ?? 'Prometheus'}. A failover to that standby would start that far behind the primary.`,
+    title: `${lag.sustainedPod ?? 'A standby'} has lagged at least ${formatLagSeconds(floor)} at every check for ${window}`,
+    detail: `Replay lag was at least ${formatLagSeconds(floor)} at each one-minute check over ${window}, every check backed by a sample in its minute, from ${src.lagSource ?? 'Prometheus'}. A failover to that standby would start that far behind the primary.`,
     subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
     source: 'measurement',
   }

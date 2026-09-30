@@ -542,8 +542,9 @@ type CNPGLagReading struct {
 type CNPGFleetLag struct {
 	Lag     map[string]CNPGLagReading
 	Scraped map[string]bool
-	// Sustained is the lag each Cluster's worst standby never dropped below
-	// over CNPGSustainedLagWindow; absent when that is not measurable.
+	// Sustained is each Cluster's worst standby's lowest lag across the
+	// one-minute checks of CNPGSustainedLagWindow, each backed by a sample;
+	// absent when the window is not covered.
 	Sustained map[string]CNPGLagReading
 }
 
@@ -551,9 +552,11 @@ type CNPGFleetLag struct {
 // before the fleet treats it as a problem rather than a transient spike.
 const CNPGSustainedLagWindow = 10 * time.Minute
 
-// cnpgSustainedLagMinSamples keeps a standby that appeared moments ago from
-// counting as lagging "for the whole window" on one or two samples.
-const cnpgSustainedLagMinSamples = 5
+// cnpgSustainedLagChecks is how many one-minute checks the window holds. Each
+// check needs a sample inside its own minute, so a standby that appeared
+// moments ago, or one with scrape gaps, never reads as lagging "for the whole
+// window".
+const cnpgSustainedLagChecks = 10
 
 // QueryCNPGFleetLag reads the current replay lag of every standby of the
 // named Clusters in one namespace with one instant query.
@@ -604,10 +607,11 @@ func queryCNPGFleetLag(ctx context.Context, q cnpgQuerier, namespace string, clu
 // querySustainedCNPGLag is best effort: without it the fleet still shows the
 // current lag, it just raises no sustained-lag problem.
 func querySustainedCNPGLag(ctx context.Context, q cnpgQuerier, sel string, known map[string]bool) map[string]CNPGLagReading {
-	window := fmt.Sprintf("[%dm]", int(CNPGSustainedLagWindow.Minutes()))
-	query := "(max by (pod) (min_over_time(cnpg_pg_replication_lag{" + sel + "}" + window + "))" +
+	perMinute := "(max by (pod) (last_over_time(cnpg_pg_replication_lag{" + sel + "}[1m])))"
+	window := fmt.Sprintf("[%dm:1m]", int(CNPGSustainedLagWindow.Minutes()))
+	query := "(min_over_time(" + perMinute + window + ")" +
 		" and on (pod) (max by (pod) (cnpg_pg_replication_in_recovery{" + sel + "}) == 1)" +
-		" and on (pod) (max by (pod) (count_over_time(cnpg_pg_replication_lag{" + sel + "}" + window + ")) >= " + strconv.Itoa(cnpgSustainedLagMinSamples) + "))"
+		" and on (pod) (count_over_time(" + perMinute + window + ") >= " + strconv.Itoa(cnpgSustainedLagChecks) + "))"
 	res, err := q.Query(ctx, query)
 	if err != nil {
 		return nil
