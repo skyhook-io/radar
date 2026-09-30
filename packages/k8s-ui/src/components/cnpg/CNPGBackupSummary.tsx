@@ -7,6 +7,8 @@ import {
   getCNPGScheduledBackupStatus,
 } from '../resources/resource-utils-cnpg'
 import type { CNPGWorkspaceResponse } from './workspace'
+import { cnpgScheduleBasisNote, formatCNPGRunTime, type CNPGSchedulePreview } from './schedule'
+import { Tooltip } from '../ui/Tooltip'
 import { FactGrid, FactRow, RefLink, SummaryHeading, toneTextClass, type CNPGNavigate } from './primitives'
 import { ClusterLink, NotReported, Note, ObjectProblems, PhaseBadge, SummaryShell, TimeAgo } from './CNPGSharedSummary'
 import {
@@ -152,7 +154,45 @@ export function CNPGBackupSummary({ resource, workspace, onNavigate }: SummaryPr
   )
 }
 
-export function CNPGScheduledBackupSummary({ resource, workspace, onNavigate }: SummaryProps) {
+export function CNPGSchedulePreviewFacts({ preview }: { preview: CNPGSchedulePreview }) {
+  if (!preview.valid) {
+    return (
+      <FactRow label="Reading">
+        <span className={toneTextClass('degraded')}>Not a schedule the operator can run: {preview.error}</span>
+      </FactRow>
+    )
+  }
+  return (
+    <>
+      {preview.description && <FactRow label="Reading">{preview.description}</FactRow>}
+      <FactRow label="Next runs">
+        <ul className="space-y-0.5">
+          {(preview.nextRuns ?? []).map((r, i) => {
+            const t = formatCNPGRunTime(r)
+            return (
+              <li key={r} className="font-mono text-xs">
+                <Tooltip content={`Your time: ${t.local}`} position="top">
+                  <span>{i === 0 && preview.runsImmediately ? `now (${t.utc})` : t.utc}</span>
+                </Tooltip>
+              </li>
+            )
+          })}
+        </ul>
+        <div className="mt-0.5 text-[11.5px] text-theme-text-tertiary">{cnpgScheduleBasisNote(preview)}</div>
+      </FactRow>
+    </>
+  )
+}
+
+export function CNPGScheduledBackupSummary({
+  resource,
+  workspace,
+  onNavigate,
+  schedulePreview,
+}: SummaryProps & {
+  /** The server's reading of spec.schedule; without it the schedule is shown verbatim only. */
+  schedulePreview?: CNPGSchedulePreview
+}) {
   const ns = resource?.metadata?.namespace ?? ''
   const cron = resource?.spec?.schedule
   const next = getCNPGScheduledBackupNextSchedule(resource)
@@ -182,6 +222,7 @@ export function CNPGScheduledBackupSummary({ resource, workspace, onNavigate }: 
             <NotReported text="Not set" />
           )}
         </FactRow>
+        {cron && schedulePreview && schedulePreview.schedule === cron && <CNPGSchedulePreviewFacts preview={schedulePreview} />}
         <FactRow label="Last scheduled">
           <TimeAgo at={resource?.status?.lastScheduleTime} missing="Never" />
         </FactRow>

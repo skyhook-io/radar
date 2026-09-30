@@ -101,6 +101,26 @@ describe('CNPGScheduledBackupSummary', () => {
     expect(t).toContain('Backups older than 7 days are not listed')
   })
 
+  it("shows the server's reading and next runs only for the schedule it read", () => {
+    const sched = { apiVersion: PG, kind: 'ScheduledBackup', metadata: { name: 'nightly', namespace: 'pg' }, spec: { cluster: { name: 'main' }, schedule: '0 30 2 * * *' } }
+    const preview = {
+      schedule: '0 30 2 * * *',
+      valid: true,
+      description: 'every day at 02:30:00 UTC',
+      nextRuns: ['2026-10-01T02:30:00Z', '2026-10-02T02:30:00Z', '2026-10-03T02:30:00Z'],
+      basis: 'lastCheckTime' as const,
+    }
+    const t = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={preview} />))
+    expect(t).toContain('every day at 02:30:00 UTC')
+    expect(t).toContain('2026-10-01 02:30:00 UTC')
+    expect(t).toContain("operator's last check")
+    const stale = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={{ ...preview, schedule: '0 0 0 * * *' }} />))
+    expect(stale).not.toContain('every day at')
+    const due = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={{ ...preview, runsImmediately: true }} />))
+    expect(due).toContain('now (2026-10-01 02:30:00 UTC)')
+    expect(due).toContain('runs one backup as soon as it sees this schedule')
+  })
+
   it('says when Backups are not readable instead of listing none', () => {
     const sched = { apiVersion: PG, kind: 'ScheduledBackup', metadata: { name: 'nightly', namespace: 'pg' }, spec: { cluster: { name: 'main' } } }
     const t = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({}, { coverage: { backups: { state: 'denied' } } })} />))

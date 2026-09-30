@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { CNPGWorkspaceResponse, TimelineEvent } from '@skyhook-io/k8s-ui'
+import type { CNPGSchedulePreview, CNPGWorkspaceResponse, TimelineEvent } from '@skyhook-io/k8s-ui'
 import { ApiError, fetchJSON } from './client'
 import type { CNPGOperatorDiagnosis } from './cnpg-recovery'
 
@@ -209,7 +209,7 @@ export interface CNPGEffectList {
   names: string[]
 }
 
-export type CNPGScheduleActionName = 'suspend' | 'resume' | 'run'
+export type CNPGScheduleActionName = 'suspend' | 'resume' | 'run' | 'setSchedule'
 
 export interface CNPGScheduleCapabilities {
   uid: string
@@ -226,6 +226,9 @@ export interface CNPGScheduleCapabilities {
     clusterState: 'ok' | 'missing' | 'hibernated' | 'unreadable'
     terminating: boolean
     catchUp: boolean
+    /** spec.schedule verbatim; setSchedule binds it. */
+    schedule: string
+    preview: CNPGSchedulePreview
   }
   actions: Record<CNPGScheduleActionName, CNPGActionCapability>
   operator?: CNPGOperatorVerdict
@@ -242,6 +245,20 @@ export function useCNPGClusterCapabilities(namespace: string, name: string, enab
     enabled: enabled && !!name,
     staleTime: 5_000,
     retry: false,
+  })
+}
+
+// Parsed server-side with the operator's cron semantics; runs counted from the
+// schedule's own lastCheckTime. Pure computation: writes nothing.
+export function useCNPGSchedulePreview(namespace: string, name: string, schedule: string, enabled = true) {
+  return useQuery<CNPGSchedulePreview>({
+    queryKey: ['cnpg', 'schedule-preview', namespace, name, schedule],
+    queryFn: ({ signal }) =>
+      fetchJSON<CNPGSchedulePreview>(`${cnpgPath('scheduledbackups', namespace, name)}/schedule-preview?schedule=${encodeURIComponent(schedule)}`, signal),
+    enabled: enabled && !!name,
+    staleTime: 30_000,
+    retry: false,
+    placeholderData: (prev) => prev,
   })
 }
 
@@ -295,7 +312,7 @@ export function useCNPGAction(kind: 'clusters' | 'scheduledbackups' | 'poolers',
   })
 }
 
-export type CNPGActionErrorCode = 'context_changed' | 'changed' | 'blocked' | 'all_fenced' | 'operator_webhook_unavailable' | 'outcome_unknown' | 'partial'
+export type CNPGActionErrorCode = 'context_changed' | 'changed' | 'blocked' | 'all_fenced' | 'operator_webhook_unavailable' | 'outcome_unknown' | 'partial' | 'invalid_schedule'
 
 // A request that timed out or lost its connection may have been applied by the
 // apiserver anyway. 503 without a code is Radar refusing before any write.

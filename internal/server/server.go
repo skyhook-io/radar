@@ -614,6 +614,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/cnpg/clusters/{namespace}/{name}/actions/{action}", s.handleCNPGClusterAction)
 			r.Get("/cnpg/scheduledbackups/{namespace}/{name}/capabilities", s.handleCNPGScheduleCapabilities)
 			r.Post("/cnpg/scheduledbackups/{namespace}/{name}/actions/{action}", s.handleCNPGScheduleAction)
+			r.Get("/cnpg/scheduledbackups/{namespace}/{name}/schedule-preview", s.handleCNPGSchedulePreview)
 			r.Get("/cnpg/clusters/{namespace}/{name}/sessions", s.handleCNPGClusterSessions)
 			r.Get("/cnpg/clusters/{namespace}/{name}/instances/{pod}/destroy-plan", s.handleCNPGDestroyPlan)
 			r.Get("/cnpg/poolers/{namespace}/{name}/capabilities", s.handleCNPGPoolerCapabilities)

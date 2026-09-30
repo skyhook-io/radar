@@ -1,6 +1,12 @@
 import { useState } from 'react'
-import { ActionConfirmDialog, Tooltip } from '@skyhook-io/k8s-ui'
-import { cnpgActionOutcomeLocked, useCNPGAction, useCNPGScheduleCapabilities, type CNPGScheduleActionName } from '../../../api/cnpg'
+import { ActionConfirmDialog, CNPGSchedulePreviewFacts, FactGrid, Tooltip, useDebouncedValue } from '@skyhook-io/k8s-ui'
+import {
+  cnpgActionOutcomeLocked,
+  useCNPGAction,
+  useCNPGScheduleCapabilities,
+  useCNPGSchedulePreview,
+  type CNPGScheduleActionName,
+} from '../../../api/cnpg'
 import { useToast } from '../../ui/Toast'
 import { useCNPGWriteGuard } from './useCNPGWriteGuard'
 import { cnpgOperatorActionNote } from '../operatorStatus'
@@ -9,7 +15,7 @@ import { trackCNPGOperation } from '../operations/store'
 const BUTTON =
   'inline-flex items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-2.5 py-1.5 text-xs font-medium text-theme-text-primary hover:bg-theme-hover disabled:cursor-not-allowed disabled:opacity-50'
 
-/** Suspend, resume, or run a ScheduledBackup's settings once. */
+/** Suspend, resume, run a ScheduledBackup's settings once, or change its schedule. */
 export function CNPGScheduleActions({ namespace, name }: { namespace: string; name: string }) {
   const caps = useCNPGScheduleCapabilities(namespace, name)
   const [open, setOpen] = useState<CNPGScheduleActionName | null>(null)
@@ -29,8 +35,100 @@ export function CNPGScheduleActions({ namespace, name }: { namespace: string; na
     <div className="flex items-center gap-1.5">
       {btn('run', 'Run now')}
       {data.facts.suspended ? btn('resume', 'Resume') : btn('suspend', 'Suspend')}
-      {open && <ScheduleDialog kind={open} namespace={namespace} name={name} onClose={() => setOpen(null)} />}
+      {btn('setSchedule', 'Edit schedule')}
+      {open === 'setSchedule' && <EditScheduleDialog namespace={namespace} name={name} onClose={() => setOpen(null)} />}
+      {open && open !== 'setSchedule' && <ScheduleDialog kind={open} namespace={namespace} name={name} onClose={() => setOpen(null)} />}
     </div>
+  )
+}
+
+function EditScheduleDialog({ namespace, name, onClose }: { namespace: string; name: string; onClose: () => void }) {
+  const caps = useCNPGScheduleCapabilities(namespace, name)
+  const mutation = useCNPGAction('scheduledbackups', namespace, name)
+  const { showSuccess } = useToast()
+  const data = caps.data!
+  const current = data.facts.schedule
+  const [draft, setDraft] = useState(current)
+  const debounced = useDebouncedValue(draft.trim(), 300)
+  const preview = useCNPGSchedulePreview(namespace, name, debounced, debounced !== '')
+  const guard = useCNPGWriteGuard({ namespace, name, scope: { kind: 'spec', paths: ['spec.schedule'] }, targetKind: 'ScheduledBackup' })
+  const operatorNote = cnpgOperatorActionNote(data.operator)
+  const next = draft.trim()
+  const settled = debounced === next && preview.data?.schedule === next && !preview.isFetching
+  const p = settled ? preview.data : undefined
+  const disabledReason = !data.actions.setSchedule.allowed
+    ? data.actions.setSchedule.reason
+    : next === ''
+      ? 'Enter a schedule'
+      : next === current
+        ? 'The schedule is unchanged'
+        : !settled
+          ? 'Checking the schedule…'
+          : p && !p.valid
+            ? 'The operator cannot run this schedule'
+            : preview.error
+              ? 'The schedule could not be checked'
+              : undefined
+  const warnings = [...(operatorNote?.tone === 'warning' ? [operatorNote.text] : []), ...(p?.valid && p.runsImmediately ? ['Saving makes the operator create one backup right away: a time on the new schedule has passed since its last check.'] : [])]
+  return (
+    <ActionConfirmDialog
+      open
+      onClose={onClose}
+      onConfirm={() =>
+        mutation.mutate(
+          {
+            action: 'setSchedule',
+            request: { reviewedContext: data.context, uid: data.uid, facts: data.facts as unknown as Record<string, unknown>, params: { schedule: next } },
+            successMessage: '',
+          },
+          {
+            onSuccess: () => {
+              showSuccess(`${name} now runs on ${next}.`)
+              onClose()
+            },
+          },
+        )
+      }
+      title={`Edit ${name}'s schedule`}
+      subject={{ kind: 'ScheduledBackup', namespace, name }}
+      context={data.context}
+      effect={`Backups of ${data.facts.cluster} are taken on the new schedule. Method, target and other settings are unchanged.`}
+      notes={operatorNote?.tone === 'info' ? [operatorNote.text] : []}
+      warnings={warnings}
+      writes={[{ summary: `patch ScheduledBackup ${namespace}/${name}`, detail: `spec.schedule = "${next}" (was "${current}")` }]}
+      guard={guard.node}
+      guardSatisfied={guard.satisfied}
+      confirmLabel="Save schedule"
+      isLoading={mutation.isPending}
+      error={mutation.error?.message}
+      outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}
+      disabledReason={disabledReason}
+    >
+      <div className="space-y-2">
+        <label className="block text-xs font-medium text-theme-text-secondary" htmlFor="cnpg-schedule-input">
+          Schedule · six fields, seconds first (second minute hour day-of-month month day-of-week), or a descriptor such as @daily
+        </label>
+        <input
+          id="cnpg-schedule-input"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          spellCheck={false}
+          autoComplete="off"
+          className="w-full rounded-md border border-theme-border bg-theme-elevated px-2.5 py-1.5 font-mono text-sm text-theme-text-primary focus:border-accent focus:outline-none"
+        />
+        {preview.error && next !== '' && (
+          <div className="text-xs text-theme-text-tertiary">The schedule could not be checked: {preview.error instanceof Error ? preview.error.message : 'unknown error'}</div>
+        )}
+        {preview.data && next !== '' && (
+          <div className={settled ? undefined : 'opacity-60'}>
+            <FactGrid>
+              <CNPGSchedulePreviewFacts preview={preview.data} />
+            </FactGrid>
+          </div>
+        )}
+        <div className="text-[11.5px] text-theme-text-tertiary">Checked by Radar with the parser CloudNativePG uses; the operator's admission webhook checks it again on save.</div>
+      </div>
+    </ActionConfirmDialog>
   )
 }
 

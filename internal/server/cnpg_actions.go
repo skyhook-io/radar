@@ -69,13 +69,14 @@ const (
 	// The compact UTC stamp CloudNativePG itself uses for scheduled runs.
 	cnpgCompactStamp = "20060102150405"
 
-	cnpgCodeChanged        = "changed"
-	cnpgCodeContextChanged = "context_changed"
-	cnpgCodeBlocked        = "blocked"
-	cnpgCodeAllFenced      = "all_fenced"
-	cnpgCodeWebhook        = "operator_webhook_unavailable"
-	cnpgCodeAmbiguous      = "outcome_unknown"
-	cnpgCodePartial        = "partial"
+	cnpgCodeChanged         = "changed"
+	cnpgCodeContextChanged  = "context_changed"
+	cnpgCodeBlocked         = "blocked"
+	cnpgCodeAllFenced       = "all_fenced"
+	cnpgCodeWebhook         = "operator_webhook_unavailable"
+	cnpgCodeAmbiguous       = "outcome_unknown"
+	cnpgCodePartial         = "partial"
+	cnpgCodeInvalidSchedule = "invalid_schedule"
 
 	cnpgPermAllowed = "allowed"
 	cnpgPermDenied  = "denied"
@@ -251,12 +252,17 @@ type CNPGScheduleFacts struct {
 	// CatchUp is set when resuming would create one backup right away: the
 	// next run the operator computed is already in the past.
 	CatchUp bool `json:"catchUp"`
+	// Schedule is spec.schedule verbatim; setSchedule binds it.
+	Schedule string `json:"schedule"`
+	// Preview explains Schedule and when the operator runs it next.
+	Preview CNPGSchedulePreview `json:"preview"`
 }
 
 type CNPGScheduleActions struct {
-	Suspend CNPGActionCapability `json:"suspend"`
-	Resume  CNPGActionCapability `json:"resume"`
-	Run     CNPGActionCapability `json:"run"`
+	Suspend     CNPGActionCapability `json:"suspend"`
+	Resume      CNPGActionCapability `json:"resume"`
+	Run         CNPGActionCapability `json:"run"`
+	SetSchedule CNPGActionCapability `json:"setSchedule"`
 }
 
 // CNPGScheduleCapabilitiesResponse is GET /api/cnpg/scheduledbackups/{ns}/{name}/capabilities.
@@ -287,6 +293,7 @@ type cnpgReviewedFacts struct {
 		Raw *string `json:"raw"`
 	} `json:"fencedInstances"`
 	Suspended   *bool                 `json:"suspended"`
+	Schedule    *string               `json:"schedule"`
 	Generation  *int64                `json:"generation"`
 	Maintenance *CNPGMaintenanceFacts `json:"maintenance"`
 }
@@ -771,7 +778,7 @@ var (
 	cnpgGrantGetPods          = cnpgGrant{"get", "", "pods", ""}
 	cnpgGrantPatchSchedules   = cnpgGrant{"patch", cnpgGroup, "scheduledbackups", ""}
 	cnpgClusterActionGrants   = map[string]cnpgGrant{"backup": cnpgGrantCreateBackups, "switchover": cnpgGrantPatchStatus, "restart": cnpgGrantPatchClusters, "reload": cnpgGrantPatchClusters, "fence": cnpgGrantPatchClusters, "unfence": cnpgGrantPatchClusters, "hibernate": cnpgGrantPatchClusters, "rehydrate": cnpgGrantPatchClusters}
-	cnpgScheduleActionGrants  = map[string]cnpgGrant{"suspend": cnpgGrantPatchSchedules, "resume": cnpgGrantPatchSchedules, "run": cnpgGrantCreateBackups}
+	cnpgScheduleActionGrants  = map[string]cnpgGrant{"suspend": cnpgGrantPatchSchedules, "resume": cnpgGrantPatchSchedules, "run": cnpgGrantCreateBackups, "setSchedule": cnpgGrantPatchSchedules}
 	cnpgClusterActionsOrdered = []string{"backup", "switchover", "restart", "restartInstance", "reload", "fence", "unfence", "hibernate", "rehydrate", "cancelBackend", "terminateBackend", "destroyInstance"}
 )
 
@@ -1199,10 +1206,12 @@ func cnpgScheduleFactsOf(ctx context.Context, c cnpgActionClients, sched *unstru
 		PluginName:       str("spec", "pluginConfiguration", "name"),
 		Target:           str("spec", "target"),
 		Terminating:      !sched.GetDeletionTimestamp().IsZero(),
+		Schedule:         str("spec", "schedule"),
 	}
 	if t, err := time.Parse(time.RFC3339, f.NextScheduleTime); err == nil && !t.After(c.clock()) {
 		f.CatchUp = true
 	}
+	f.Preview = cnpgSchedulePreview(f.Schedule, cnpgScheduleLastCheck(sched), suspended, c.clock())
 	switch cluster, err := c.dyn.Resource(cnpgClusterGVR).Namespace(sched.GetNamespace()).Get(ctx, f.Cluster, metav1.GetOptions{}); {
 	case f.Cluster == "":
 		f.ClusterState = "missing"
@@ -1256,9 +1265,10 @@ func (s *Server) cnpgScheduleCapabilities(r *http.Request, c cnpgActionClients, 
 		Context:         contextName,
 		Facts:           f,
 		Actions: CNPGScheduleActions{
-			Suspend: cnpgOperatorWebhookGuard(operator, one(suspendGuard, cnpgGrantPatchSchedules)),
-			Resume:  cnpgOperatorWebhookGuard(operator, one(resumeGuard, cnpgGrantPatchSchedules)),
-			Run:     cnpgOperatorWebhookGuard(operator, one(cnpgGuardScheduleRun(f), cnpgGrantCreateBackups)),
+			Suspend:     cnpgOperatorWebhookGuard(operator, one(suspendGuard, cnpgGrantPatchSchedules)),
+			Resume:      cnpgOperatorWebhookGuard(operator, one(resumeGuard, cnpgGrantPatchSchedules)),
+			Run:         cnpgOperatorWebhookGuard(operator, one(cnpgGuardScheduleRun(f), cnpgGrantCreateBackups)),
+			SetSchedule: cnpgOperatorWebhookGuard(operator, one(map[bool]string{true: "The schedule is being deleted"}[f.Terminating], cnpgGrantPatchSchedules)),
 		},
 		Operator: operator,
 	}, nil
@@ -1340,8 +1350,8 @@ func (s *Server) handleCNPGScheduleAction(w http.ResponseWriter, r *http.Request
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 	action := chi.URLParam(r, "action")
-	if action != "suspend" && action != "resume" && action != "run" {
-		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown ScheduledBackup action %q: must be suspend, resume or run", action))
+	if _, ok := cnpgScheduleActionGrants[action]; !ok {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown ScheduledBackup action %q: must be suspend, resume, run or setSchedule", action))
 		return
 	}
 	req, dyn, ok := s.decodeCNPGActionRequest(w, r)
@@ -2043,7 +2053,20 @@ func runCNPGScheduleAction(ctx context.Context, c cnpgActionClients, namespace, 
 	if err != nil {
 		return nil, cnpgRefuse(http.StatusBadRequest, "", "%v", err)
 	}
-	if err := decodeCNPGParams(req.Params, &struct{}{}); err != nil {
+	var params struct {
+		Schedule *string `json:"schedule"`
+	}
+	if action == "setSchedule" {
+		if err := decodeCNPGParams(req.Params, &params); err != nil {
+			return nil, err
+		}
+		if params.Schedule == nil {
+			return nil, cnpgRefuse(http.StatusBadRequest, "", "params.schedule is required for setSchedule")
+		}
+		if p := cnpgSchedulePreview(*params.Schedule, nil, false, c.clock()); !p.Valid {
+			return nil, cnpgRefuse(http.StatusBadRequest, cnpgCodeInvalidSchedule, "invalid schedule %q: %s", *params.Schedule, p.Error)
+		}
+	} else if err := decodeCNPGParams(req.Params, &struct{}{}); err != nil {
 		return nil, err
 	}
 	sched, err := c.dyn.Resource(cnpgScheduleGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
@@ -2054,14 +2077,22 @@ func runCNPGScheduleAction(ctx context.Context, c cnpgActionClients, namespace, 
 	if string(sched.GetUID()) != req.UID {
 		return nil, cnpgChanged(facts, "ScheduledBackup %s/%s was deleted and recreated since you reviewed it", namespace, name)
 	}
-	if action == "run" {
+	switch action {
+	case "setSchedule":
+		if reviewed.Schedule == nil {
+			return nil, cnpgRefuse(http.StatusBadRequest, "", "facts.schedule is required for setSchedule: the confirmation must bind what the dialog showed")
+		}
+		if *reviewed.Schedule != facts.Schedule {
+			return nil, cnpgChanged(facts, "ScheduledBackup %s/%s schedule changed since you reviewed it; review the action again", namespace, name)
+		}
+	case "run":
 		if reviewed.Generation == nil {
 			return nil, cnpgRefuse(http.StatusBadRequest, "", "facts.generation is required for run")
 		}
 		if *reviewed.Generation != facts.Generation {
 			return nil, cnpgChanged(facts, "ScheduledBackup %s/%s settings changed since you confirmed; review the action again", namespace, name)
 		}
-	} else {
+	default:
 		if reviewed.Suspended == nil {
 			return nil, cnpgRefuse(http.StatusBadRequest, "", "facts.suspended is required for %s", action)
 		}
@@ -2074,6 +2105,22 @@ func runCNPGScheduleAction(ctx context.Context, c cnpgActionClients, namespace, 
 	}
 
 	switch action {
+	case "setSchedule":
+		if *params.Schedule == facts.Schedule {
+			return nil, cnpgBlocked("The schedule is already " + facts.Schedule)
+		}
+		err := cnpgMergePatch(ctx, c.dyn, cnpgScheduleGVR, sched, map[string]any{"spec": map[string]any{"schedule": *params.Schedule}})
+		if apierrors.IsConflict(err) {
+			if fresh, gerr := c.dyn.Resource(cnpgScheduleGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{}); gerr == nil {
+				facts = cnpgScheduleFactsOf(ctx, c, fresh)
+			}
+			return nil, cnpgChanged(facts, "ScheduledBackup %s/%s changed while the request was being sent; review the action again", namespace, name)
+		}
+		if err != nil {
+			return nil, err
+		}
+		preview := cnpgSchedulePreview(*params.Schedule, cnpgScheduleLastCheck(sched), facts.Suspended, c.clock())
+		return &CNPGActionResult{Action: action, Message: "Schedule set to " + *params.Schedule, CatchUp: preview.RunsImmediately}, nil
 	case "suspend", "resume":
 		want := action == "suspend"
 		if facts.Suspended == want {

@@ -27,7 +27,7 @@ import {
   type NavigateToResource,
 } from '@skyhook-io/k8s-ui'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
-import { useCNPGRuntime, type CNPGRuntimeResponse } from '../../api/cnpg'
+import { useCNPGRuntime, useCNPGScheduleCapabilities, type CNPGRuntimeResponse } from '../../api/cnpg'
 import { cnpgBaseBackupFacts, describeCNPGBaseBackup } from './baseBackup'
 import { useCNPGPoolerLive } from './useCNPGPoolerLive'
 import { cnpgInstanceLive, cnpgReplicationLive, useCNPGClusterHA, withLiveReplication } from '../../api/cnpg-ha'
@@ -149,9 +149,16 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
 
 type ObjectSummary = (props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: CNPGNavigate }) => ReactNode
 
+function ScheduledBackupSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: CNPGNavigate }) {
+  const ns = props.resource?.metadata?.namespace ?? ''
+  const name = props.resource?.metadata?.name ?? ''
+  const caps = useCNPGScheduleCapabilities(ns, name)
+  return <CNPGScheduledBackupSummary {...props} schedulePreview={caps.data?.facts.preview} />
+}
+
 const OBJECT_SUMMARIES: Record<string, ObjectSummary> = {
   Backup: CNPGBackupSummary,
-  ScheduledBackup: CNPGScheduledBackupSummary,
+  ScheduledBackup: ScheduledBackupSummaryHost,
   Pooler: CNPGPoolerSummary,
   Database: CNPGDatabaseSummary,
   Publication: CNPGPublicationSummary,
