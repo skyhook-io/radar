@@ -145,7 +145,13 @@ function Headroom({ data }: { data: CNPGSessionsResponse }) {
 }
 
 function Resources({ namespace, instances }: { namespace: string; instances: CNPGSessionInstance[] }) {
+  // A missing metrics API is cluster-wide: one instance's answer stands for
+  // all, so it is said once rather than on every card.
+  const probe = usePodMetrics(namespace, instances[0]?.pod ?? '')
   if (instances.length === 0) return null
+  if (probe.data === null) {
+    return <div className="text-xs text-theme-text-tertiary">CPU and memory not measured: the metrics API (metrics-server) is not available.</div>
+  }
   return (
     <div>
       <div className="mb-1 text-xs text-theme-text-tertiary">CPU and memory of each instance’s postgres container (metrics-server)</div>
