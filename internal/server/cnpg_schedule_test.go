@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -149,5 +150,24 @@ func TestCNPGScheduleCapabilitiesCarryScheduleAndPreview(t *testing.T) {
 	}
 	if !resp.Actions.SetSchedule.Allowed {
 		t.Errorf("setSchedule = %+v", resp.Actions.SetSchedule)
+	}
+}
+
+func TestCNPGScheduleReadingsWordOnlyValidSchedules(t *testing.T) {
+	sb := func(name, spec string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"metadata": map[string]any{"namespace": "db", "name": name},
+			"spec":     map[string]any{"schedule": spec},
+		}}
+	}
+	got := cnpgScheduleReadings([]*unstructured.Unstructured{sb("daily", "0 0 2 * * *"), sb("bad", "not a cron"), sb("empty", "")})
+	if got["db/daily"] != "every day at 02:00:00 UTC" {
+		t.Errorf("daily = %q", got["db/daily"])
+	}
+	if _, ok := got["db/bad"]; ok {
+		t.Errorf("an unparseable schedule was worded: %q", got["db/bad"])
+	}
+	if _, ok := got["db/empty"]; ok {
+		t.Error("an empty schedule was worded")
 	}
 }

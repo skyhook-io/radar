@@ -278,12 +278,22 @@ export function CNPGProtection({
             {
               header: 'Schedule',
               width: '24%',
-              cell: (s) => (
-                <>
-                  <Mono>{s.spec?.schedule ?? '—'}</Mono>
-                  <Sub>CNPG cron, seconds first</Sub>
-                </>
-              ),
+              cell: (s) => {
+                const reading = data.scheduleReadings?.[`${s.metadata?.namespace}/${s.metadata?.name}`]
+                return reading ? (
+                  <>
+                    {reading}
+                    <Sub>
+                      <Mono>{s.spec?.schedule}</Mono>
+                    </Sub>
+                  </>
+                ) : (
+                  <>
+                    <Mono>{s.spec?.schedule ?? '—'}</Mono>
+                    <Sub>CNPG cron, seconds first</Sub>
+                  </>
+                )
+              },
             },
             {
               header: 'Status',

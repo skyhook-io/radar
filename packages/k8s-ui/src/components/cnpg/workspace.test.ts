@@ -39,6 +39,7 @@ function resp(objects: Partial<Record<CNPGWorkspaceKey, any[]>>, over: Partial<C
     issues: over.issues ?? [],
     audit: over.audit ?? [],
     backupsOmitted: 0,
+    ...(over.scheduleReadings ? { scheduleReadings: over.scheduleReadings } : {}),
   }
 }
 
@@ -345,5 +346,15 @@ describe('buildCNPGFleet', () => {
     ).rows[0]
     expect(row.primaryConflict).toEqual({ status: 'pg-a-2', labelled: 'pg-a-1' })
     expect(row.problems.map((p) => p.title)).toContain('CNPG status names pg-a-2 primary; the Pod labelled primary is pg-a-1')
+  })
+})
+
+describe('schedule fact', () => {
+  it('reads the schedule in words when the server supplied a reading, with the cron as its source', () => {
+    const sched = { metadata: { namespace: 'db', name: 'nightly' }, spec: { cluster: { name: 'pg-a' }, schedule: '0 0 2 * * *' } }
+    const withReading = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')], scheduledBackups: [sched] }, { scheduleReadings: { 'db/nightly': 'every day at 02:00:00 UTC' } }))
+    expect(withReading.rows[0].protection.schedule).toMatchObject({ text: 'Scheduled · every day at 02:00:00 UTC', source: 'ScheduledBackup nightly · cron 0 0 2 * * *' })
+    const without = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')], scheduledBackups: [sched] }))
+    expect(without.rows[0].protection.schedule.text).toBe('Scheduled · 0 0 2 * * *')
   })
 })

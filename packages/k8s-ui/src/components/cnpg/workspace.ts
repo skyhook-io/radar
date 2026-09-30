@@ -75,6 +75,8 @@ export interface CNPGWorkspaceResponse {
   issues: CNPGWorkspaceIssue[]
   audit: CNPGAuditFinding[]
   backupsOmitted: number
+  /** Each ScheduledBackup's schedule as the operator reads it, keyed "namespace/name"; absent when it cannot be parsed. */
+  scheduleReadings?: Record<string, string>
 }
 
 export const CNPG_KIND_BY_KEY: Record<CNPGWorkspaceKey, { kind: string; group: string; plural: string }> = {
@@ -366,6 +368,7 @@ function scheduleFact(
   cluster: any,
   schedules: any[],
   cov: CNPGKindCoverage,
+  readings: Record<string, string> = {},
 ): CNPGProtectionFacts['schedule'] {
   const ns = cluster.metadata?.namespace
   if (!coverageReadable(cov, ns)) {
@@ -379,10 +382,12 @@ function scheduleFact(
     return { text: mine.length === 1 ? 'Schedule suspended' : 'All schedules suspended', tone: 'degraded', names }
   }
   const cron = active[0]?.spec?.schedule
+  const reading = readings[`${ns}/${active[0]?.metadata?.name}`]
   return {
-    text: active.length === 1 ? (cron ? `Scheduled · ${cron}` : 'Scheduled') : `${active.length} schedules`,
+    text: active.length === 1 ? (reading ? `Scheduled · ${reading}` : cron ? `Scheduled · ${cron}` : 'Scheduled') : `${active.length} schedules`,
     tone: 'healthy',
     names,
+    ...(active.length === 1 && cron ? { source: `ScheduledBackup ${active[0]?.metadata?.name} · cron ${cron}` } : {}),
   }
 }
 
@@ -839,7 +844,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
     const storesCov = coverageOf(resp, 'objectStores')
     const storesUnreadable = !!getCNPGClusterBarmanPlugin(cluster)?.barmanObjectName && !coverageReadable(storesCov, ns)
     const protection: CNPGProtectionFacts = {
-      schedule: scheduleFact(cluster, resp.objects.scheduledBackups ?? [], coverageOf(resp, 'scheduledBackups')),
+      schedule: scheduleFact(cluster, resp.objects.scheduledBackups ?? [], coverageOf(resp, 'scheduledBackups'), resp.scheduleReadings),
       destination: destinationFact(cluster),
       lastSuccessfulBackup: lastBackupFact(cluster, resp.objects.backups ?? [], coverageOf(resp, 'backups'), window, storesUnreadable ? storesCov : null),
       walArchiving: walFact(cluster),

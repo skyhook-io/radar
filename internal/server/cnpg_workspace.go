@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -127,6 +128,10 @@ type CNPGWorkspaceResponse struct {
 	Issues         []CNPGWorkspaceIssue             `json:"issues"`
 	Audit          []CNPGWorkspaceAuditFinding      `json:"audit"`
 	BackupsOmitted int                              `json:"backupsOmitted"`
+	// ScheduleReadings words each readable ScheduledBackup's schedule as the
+	// operator reads it, keyed "namespace/name"; a schedule the operator
+	// cannot parse has no entry.
+	ScheduleReadings map[string]string `json:"scheduleReadings,omitempty"`
 }
 
 // cnpgKindAccess is the resolved read scope for one kind. all means every
@@ -238,6 +243,7 @@ func (s *Server) handleCNPGWorkspace(w http.ResponseWriter, r *http.Request) {
 
 	resp.Issues = s.cnpgWorkspaceIssues(r, namespaces, access, instancePods)
 	resp.Audit = cnpgWorkspaceAudit(items[cnpgWorkspaceClusterKey], items[cnpgWorkspaceSchedKey], access[cnpgWorkspaceSchedKey])
+	resp.ScheduleReadings = cnpgScheduleReadings(items[cnpgWorkspaceSchedKey])
 
 	s.writeJSON(w, resp)
 }
@@ -677,5 +683,22 @@ func cnpgWorkspaceAudit(clusters, scheduled []*unstructured.Unstructured, schedA
 		}
 		return out[i].Name < out[j].Name
 	})
+	return out
+}
+
+func cnpgScheduleReadings(scheduled []*unstructured.Unstructured) map[string]string {
+	out := map[string]string{}
+	for _, sb := range scheduled {
+		spec, _, _ := unstructured.NestedString(sb.Object, "spec", "schedule")
+		if strings.TrimSpace(spec) == "" || len(spec) > cnpgScheduleMaxLen {
+			continue
+		}
+		if _, err := issues.ParseCNPGSchedule(spec); err != nil {
+			continue
+		}
+		if reading := describeCNPGSchedule(spec); reading != "" {
+			out[sb.GetNamespace()+"/"+sb.GetName()] = reading
+		}
+	}
 	return out
 }
