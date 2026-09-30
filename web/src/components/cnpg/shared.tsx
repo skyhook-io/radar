@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { clsx } from 'clsx'
-import { Database, X } from 'lucide-react'
+import { AlertTriangle, Database, X } from 'lucide-react'
 import {
   CNPG_KIND_BY_KEY,
   PaneLoader,
+  formatUpdatedAgo,
+  toneTextClass,
   type CNPGFleet,
   type CNPGKindCoverage,
   type CNPGWorkspaceResponse,
@@ -287,4 +289,25 @@ export function clusterResource(namespace: string, name: string): SelectedResour
 
 export function cnpgResource(plural: string, namespace: string, name: string, group = 'postgresql.cnpg.io'): SelectedResource {
   return { kind: plural, group, namespace, name }
+}
+
+type RefreshableQuery = Pick<UseQueryResult<unknown>, 'isRefetchError' | 'error' | 'dataUpdatedAt'>
+
+/**
+ * A refetch failed while the last good answer stays on screen: say so, why,
+ * and how old that answer is, so cached values are not read as current.
+ */
+export function CNPGRefreshFailedNotice({ queries, className }: { queries: RefreshableQuery[]; className?: string }) {
+  const failed = queries.filter((q) => q.isRefetchError)
+  if (failed.length === 0) return null
+  const oldest = failed.reduce((a, b) => (b.dataUpdatedAt < a.dataUpdatedAt ? b : a))
+  const reason = oldest.error instanceof Error ? oldest.error.message : 'unknown error'
+  return (
+    <div role="status" className={clsx('flex items-start gap-1.5 text-xs text-theme-text-secondary', className)}>
+      <AlertTriangle className={clsx('mt-px h-3.5 w-3.5 shrink-0', toneTextClass('degraded'))} />
+      <span>
+        Last refresh failed: {reason.length > 160 ? `${reason.slice(0, 160)}…` : reason} · showing data from {formatUpdatedAgo(Date.now() - oldest.dataUpdatedAt)}
+      </span>
+    </div>
+  )
 }

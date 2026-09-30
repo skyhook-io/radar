@@ -24,12 +24,12 @@ import {
   type NavigateToResource,
 } from '@skyhook-io/k8s-ui'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
-import { useCNPGRuntime, type CNPGRuntimeResponse } from '../../api/cnpg'
+import { useCNPGRuntime } from '../../api/cnpg'
 import { useCNPGPoolerLive } from './useCNPGPoolerLive'
 import { cnpgInstanceLive, cnpgReplicationLive, useCNPGClusterHA, withLiveReplication } from '../../api/cnpg-ha'
 import { CNPGMaintenanceBanner } from './actions/CNPGMaintenanceBanner'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
-import type { CNPGFleetRow } from '@skyhook-io/k8s-ui'
+import { CNPGRefreshFailedNotice } from './shared'
 
 import { cnpgClusterFullPath, currentPageLabel } from './paths'
 import { CNPGRestoreProgress } from './recovery/CNPGRestoreProgress'
@@ -74,6 +74,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
       onNavigate={go}
       lead={
         <>
+          <CNPGRefreshFailedNotice queries={[runtime, ha]} />
           {context === 'drawer' && <CNPGOperatorBanner namespaces={[namespace]} />}
           <CNPGMaintenanceBanner namespace={namespace} name={name} maintenance={ha.data?.maintenance} />
           {row.cluster?.spec?.bootstrap?.recovery && <CNPGRestoreProgress namespace={namespace} name={name} />}
@@ -149,11 +150,11 @@ function ObjectSummaryHost({ ctx, Summary }: { ctx: SummaryContext; Summary: Obj
 
 function PoolerSummaryHost({ ctx }: { ctx: SummaryContext }) {
   const { query } = useCNPGFleet([ctx.namespace])
-  const live = useCNPGPoolerLive(ctx.namespace, ctx.name)
+  const { live, queries } = useCNPGPoolerLive(ctx.namespace, ctx.name)
   if (query.isLoading) return <PaneLoader label="Loading summary…" className="h-40" />
   const workspace = query.data?.installed ? query.data : null
   const go = ctx.onNavigate ? (ref: CNPGRef) => ctx.onNavigate?.(refToSelectedResource(ref)) : undefined
-  return <CNPGPoolerSummary resource={ctx.resource} workspace={workspace} onNavigate={go} live={live} />
+  return <CNPGPoolerSummary resource={ctx.resource} workspace={workspace} onNavigate={go} live={live} lead={<CNPGRefreshFailedNotice queries={queries} />} />
 }
 
 // The object's own apiVersion decides: Velero also ships a Backup kind.

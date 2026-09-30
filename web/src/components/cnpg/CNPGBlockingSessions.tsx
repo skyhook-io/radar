@@ -8,6 +8,7 @@ import { cnpgActionOutcomeLocked, useCNPGAction, useCNPGClusterCapabilities } fr
 import { useCNPGSessions, type CNPGBackend, type CNPGSessionInstance, type CNPGSessionsResponse } from '../../api/cnpg-sessions'
 import { useToast } from '../ui/Toast'
 import { buildBlockingTree, countVictims, type BlockingNode } from './blocking'
+import { CNPGRefreshFailedNotice } from './shared'
 
 function age(s?: number): string {
   if (s === undefined || s === null) return '—'
@@ -54,6 +55,7 @@ export function CNPGBlockingSessions({ namespace, cluster, primary }: { namespac
       <div className="space-y-4 p-4">
         {!data && q.isLoading && <PaneLoader label="Reading pg_stat_activity…" className="h-20" />}
         {!data && !q.isLoading && <div className="text-sm text-theme-text-tertiary">Sessions could not be read: {q.error instanceof Error ? q.error.message : 'unknown error'}</div>}
+        <CNPGRefreshFailedNotice queries={[q]} />
         {data && <Body namespace={namespace} cluster={cluster} data={data} />}
       </div>
       <div className="border-t border-theme-border px-4 py-2 text-xs text-theme-text-tertiary">

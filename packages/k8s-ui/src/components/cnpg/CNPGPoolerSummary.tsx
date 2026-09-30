@@ -26,6 +26,7 @@ export function CNPGPoolerSummary({
   onNavigate,
   live,
   actions,
+  lead,
 }: {
   resource: any
   workspace: CNPGWorkspaceResponse | null
@@ -34,6 +35,8 @@ export function CNPGPoolerSummary({
   live?: CNPGPoolerLive
   /** Operations rendered beside the paused state (pause / resume). */
   actions?: ReactNode
+  /** Rendered first, e.g. a host's notice that a live read is stale. */
+  lead?: ReactNode
 }) {
   const ns = resource?.metadata?.namespace ?? ''
   const type = resource?.spec?.type
@@ -46,6 +49,7 @@ export function CNPGPoolerSummary({
 
   return (
     <SummaryShell>
+      {lead}
       <ObjectProblems issues={workspace?.issues} subject={refOf(resource, 'Pooler')} onNavigate={onNavigate} />
 
       <SummaryHeading>State</SummaryHeading>

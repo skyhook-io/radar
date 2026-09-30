@@ -5,7 +5,7 @@ import { Lock } from 'lucide-react'
 import { PaneLoader, formatAge, toneTextClass } from '@skyhook-io/k8s-ui'
 import { useCNPGRuntime, type CNPGRuntimeInstance } from '../../api/cnpg'
 import { Notice } from '../capacity/shared'
-import { Segments } from './shared'
+import { CNPGRefreshFailedNotice, Segments } from './shared'
 import { CNPGStorage } from './CNPGStorage'
 import { CNPGBlockingSessions } from './CNPGBlockingSessions'
 import { CNPGReplicationView } from './CNPGReplicationView'
@@ -106,6 +106,7 @@ export function CNPGClusterRuntime({
           </span>
         )}
       </div>
+      <CNPGRefreshFailedNotice queries={[q]} />
 
       {section === 'replication' &&
         (denied ? (

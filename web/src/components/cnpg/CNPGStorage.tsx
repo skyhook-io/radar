@@ -32,6 +32,7 @@ import { Notice } from '../capacity/shared'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { useCNPGWriteGuard } from './actions/useCNPGWriteGuard'
 import { buildResizeManifest } from './storageModel'
+import { CNPGRefreshFailedNotice } from './shared'
 
 const CNPG_GROUP = 'postgresql.cnpg.io'
 
@@ -305,6 +306,7 @@ export function CNPGStorage({ namespace, name, primary }: { namespace: string; n
 
   return (
     <div className="space-y-4">
+      <CNPGRefreshFailedNotice queries={[q]} />
       {data.findings.map((f) => (
         <AlertBanner
           key={f.claim}

@@ -1,9 +1,13 @@
+import type { UseQueryResult } from '@tanstack/react-query'
 import type { CNPGPoolerLive } from '@skyhook-io/k8s-ui'
 import { useCNPGPoolerRuntime } from '../../api/cnpg'
 import { useCNPGPgBouncerState, useCNPGPoolerCapabilities } from '../../api/cnpg-sessions'
 
-/** The live reads the Pooler summary shows beside the spec. */
-export function useCNPGPoolerLive(namespace: string, name: string): CNPGPoolerLive {
+/**
+ * The live reads the Pooler summary shows beside the spec, and the queries
+ * behind them so a host can say when a refresh failed over cached values.
+ */
+export function useCNPGPoolerLive(namespace: string, name: string): { live: CNPGPoolerLive; queries: Pick<UseQueryResult<unknown>, 'isRefetchError' | 'error' | 'dataUpdatedAt'>[] } {
   const caps = useCNPGPoolerCapabilities(namespace, name)
   const runtime = useCNPGPoolerRuntime(namespace, name)
   const observeDenied = caps.data?.actions.observeState.permission === 'denied'
@@ -37,5 +41,5 @@ export function useCNPGPoolerLive(namespace: string, name: string): CNPGPoolerLi
         : { state: 'error', reason: state.error instanceof Error ? state.error.message : undefined, pods: [] }
     }
   }
-  return live
+  return { live, queries: [caps, runtime, state] }
 }
