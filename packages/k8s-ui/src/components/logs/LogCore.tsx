@@ -231,13 +231,19 @@ export function LogCore({
     return { headOf, effectiveLevel, headIdById }
   }, [entries])
 
+  // Frames take their record's level so they filter and render as part of it.
+  const recordEntries = useMemo(
+    () => entries.map((e, i) => (association.effectiveLevel[i] === e.level ? e : { ...e, level: association.effectiveLevel[i] })),
+    [entries, association],
+  )
+
   // Level-filtered entries
   // 'unknown' logs are shown when all 4 known levels are enabled (no active filtering)
   const levelFilteredEntries = useMemo(() => {
     const allEnabled = LEVEL_OPTIONS.every(opt => enabledLevels.has(opt.level))
-    if (allEnabled) return entries
-    return entries.filter((_, i) => enabledLevels.has(association.effectiveLevel[i]))
-  }, [entries, enabledLevels, association])
+    if (allEnabled) return recordEntries
+    return recordEntries.filter(e => enabledLevels.has(e.level))
+  }, [recordEntries, enabledLevels])
 
   // Chip counts count records, so a 40-frame stack trace is one error.
   const levelCounts = useMemo(() => {

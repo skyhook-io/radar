@@ -76,7 +76,13 @@ const LOGFMT_PAIR_RE = /(?:^|\s)([a-zA-Z_][\w.]*)=((?:"(?:[^"\\]|\\.)*")|(?:[^\s
 const LOGFMT_LEVEL_KEYS = new Set(['level', 'lvl', 'severity'])
 const LOGFMT_LEVEL_HINT = /(?:^|\s)(?:level|lvl|severity)=/
 
-function logfmtLevel(line: string): LogLevel | null {
+interface PlacedLevel {
+  level: LogLevel
+  /** Where in the line the level marker starts */
+  at: number
+}
+
+function logfmtLevel(line: string): PlacedLevel | null {
   if (!LOGFMT_LEVEL_HINT.test(line)) return null
   const re = LOGFMT_PAIR_RE
   re.lastIndex = 0
@@ -86,7 +92,7 @@ function logfmtLevel(line: string): LogLevel | null {
     let value = match[2]
     if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) value = value.slice(1, -1)
     const level = normalizeLevel(value)
-    if (level) return level
+    if (level) return { level, at: match.index }
   }
   return null
 }
@@ -106,16 +112,18 @@ const BRACKETED_TOKEN_RE = /[[<](trace|debug|information|info|notice|warning|war
 const BANG_PREFIX_RE = /^\S+\s([DIWE])!\s/
 const BANG_LEVELS: Record<string, LogLevel> = { D: 'debug', I: 'info', W: 'warn', E: 'error' }
 
-function headerLevel(line: string): LogLevel | null {
+function headerLevel(line: string): PlacedLevel | null {
   const klog = KLOG_RE.exec(line)
-  if (klog) return KLOG_LEVELS[klog[1]]
+  if (klog) return { level: KLOG_LEVELS[klog[1]], at: 0 }
   const bang = BANG_PREFIX_RE.exec(line)
-  if (bang) return BANG_LEVELS[bang[1]]
+  if (bang) return { level: BANG_LEVELS[bang[1]], at: 0 }
   const head = line.slice(0, HEADER_WINDOW)
   const token = HEADER_TOKEN_RE.exec(head)
-  if (token) return normalizeLevel(token[1])
+  const tokenLevel = token && normalizeLevel(token[1])
+  if (token && tokenLevel) return { level: tokenLevel, at: token.index }
   const bracketed = BRACKETED_TOKEN_RE.exec(head)
-  if (bracketed) return normalizeLevel(bracketed[1])
+  const bracketedLevel = bracketed && normalizeLevel(bracketed[1])
+  if (bracketed && bracketedLevel) return { level: bracketedLevel, at: bracketed.index }
   return null
 }
 
@@ -128,7 +136,7 @@ const KEYWORD_DEBUG_RE = new RegExp(String.raw`\bdebug\b` + NOT_A_KEY)
 const KEYWORD_INFO_RE = new RegExp(String.raw`\binfo\b` + NOT_A_KEY)
 // The first line of an exception: `MongoServerError: ...`, `java.lang.IllegalStateException`,
 // `Traceback (most recent call last):`.
-const EXCEPTION_HEAD_RE = /^(?:[\w$.]*[A-Z][\w$]*(?:Error|Exception)(?: \[[\w-]+\])?(?::|\s*$)|Traceback \(most recent call last\):)/
+const EXCEPTION_HEAD_RE = /^(?:(?:[\w$]+\.)*[A-Z][\w$]*(?:Error|Exception)(?: \[[\w-]+\])?(?::|\s*$)|Traceback \(most recent call last\):)/
 
 function keywordLevel(line: string): LogLevel | null {
   if (EXCEPTION_HEAD_RE.test(line)) return 'error'
@@ -156,16 +164,16 @@ export function detectLevel(content: string): DetectedLevel {
         const selected = selectLevelField(obj as Record<string, unknown>)
         if (selected) return { level: selected.level, source: 'structured' }
       }
-    } catch {
-      // not JSON after all
-    }
-  } else {
-    const fromLogfmt = logfmtLevel(trimmed)
-    if (fromLogfmt) return { level: fromLogfmt, source: 'structured' }
+    } catch {}
   }
 
+  // A console line can carry key=value pairs in its message, so between a
+  // header level word and a `level=` pair the one written first is the
+  // line's own.
   const fromHeader = headerLevel(line.trimEnd())
-  if (fromHeader) return { level: fromHeader, source: 'header' }
+  const fromLogfmt = trimmed[0] === '{' ? null : logfmtLevel(line.trimEnd())
+  if (fromLogfmt && (!fromHeader || fromLogfmt.at <= fromHeader.at)) return { level: fromLogfmt.level, source: 'structured' }
+  if (fromHeader) return { level: fromHeader.level, source: 'header' }
 
   const fromKeyword = keywordLevel(trimmed)
   if (fromKeyword) return { level: fromKeyword, source: 'keyword' }

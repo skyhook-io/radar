@@ -27,6 +27,7 @@ const CASES: [string, string, LogLevel, LevelSource][] = [
   ['slog uppercase', 'time=2026-09-12T22:00:43.702Z level=WARN msg="can\'t fetch Kubernetes Cluster Name"', 'warn', 'structured'],
   ['prometheus warning text at INFO', 'time=2026-09-25T09:12:00.796Z level=INFO source=warnings.go:107 msg="Warning: v1 Endpoints is deprecated in v1.33+; use discovery.k8s.io/v1 EndpointSlice"', 'info', 'structured'],
   ['grafana', 'logger=dashboard-service t=2026-09-29T22:28:31.732506197Z level=info msg="No last resource version found, starting from scratch" orgID=1', 'info', 'structured'],
+  ['header level before a level= pair in the message', '2026-09-30T10:00:00Z ERROR request failed level=debug', 'error', 'header'],
   ['level inside quoted message', 'msg="upstream said level=error" level=info', 'info', 'structured'],
   ['unrecognized structured level', 'level=custom_level msg="error happened"', 'unknown', 'structured'],
 
