@@ -263,17 +263,17 @@ type CNPGInstanceMetricFacts struct {
 	MaxConnections *float64 `json:"maxConnections,omitempty"`
 	// PostmasterStartTime is epoch seconds: an in-place PostgreSQL restart
 	// moves it while the container keeps running.
-	PostmasterStartTime           *float64              `json:"postmasterStartTime,omitempty"`
-	Sessions                      []CNPGSessionGroup    `json:"sessions,omitempty"`
-	SessionsTotal                 *float64              `json:"sessionsTotal,omitempty"`
-	WaitingBackends               *float64              `json:"waitingBackends,omitempty"`
-	OldestXactSeconds             *float64              `json:"oldestXactSeconds,omitempty"`
-	XidAge                        []CNPGDatabaseValue   `json:"xidAge,omitempty"`
-	MxidAge                       []CNPGDatabaseValue   `json:"mxidAge,omitempty"`
+	PostmasterStartTime *float64            `json:"postmasterStartTime,omitempty"`
+	Sessions            []CNPGSessionGroup  `json:"sessions,omitempty"`
+	SessionsTotal       *float64            `json:"sessionsTotal,omitempty"`
+	WaitingBackends     *float64            `json:"waitingBackends,omitempty"`
+	OldestXactSeconds   *float64            `json:"oldestXactSeconds,omitempty"`
+	XidAge              []CNPGDatabaseValue `json:"xidAge,omitempty"`
+	MxidAge             []CNPGDatabaseValue `json:"mxidAge,omitempty"`
 	// ExtensionUpdates lists installed extensions whose installed_version is
 	// not the default_version; nil when the family was not exported (see
 	// Missing), empty when every installed extension is current.
-	ExtensionUpdates []CNPGExtensionUpdate `json:"extensionUpdates"`
+	ExtensionUpdates              []CNPGExtensionUpdate `json:"extensionUpdates"`
 	DatabaseSizes                 []CNPGDatabaseBytes   `json:"databaseSizes,omitempty"`
 	Archiver                      *CNPGArchiverCounters `json:"archiver,omitempty"`
 	WalBytes                      *float64              `json:"walBytes,omitempty"`
