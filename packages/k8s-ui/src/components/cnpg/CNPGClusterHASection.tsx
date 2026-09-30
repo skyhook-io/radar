@@ -131,7 +131,7 @@ export function CNPGClusterHASection({
                     <ToneDot tone={i.ready ? 'healthy' : 'unhealthy'} />
                     <RefLink refTo={{ kind: 'Pod', group: '', namespace: ns, name: i.pod }} onNavigate={onNavigate} mono />
                     <span className="text-theme-text-secondary">
-                      {l?.roleDetail ? CNPG_ROLE_DETAIL_TEXT[l.roleDetail] : i.role === 'unknown' ? 'role unknown' : `${i.role} (label)`}
+                      {l?.roleDetail ? CNPG_ROLE_DETAIL_TEXT[l.roleDetail] : i.role === 'unknown' ? 'role unknown' : i.role}
                     </span>
                     {l?.timeline !== undefined && <span className="text-theme-text-tertiary">TL {l.timeline}</span>}
                     {i.qosClass && <span className="text-theme-text-tertiary">QoS {i.qosClass}</span>}
