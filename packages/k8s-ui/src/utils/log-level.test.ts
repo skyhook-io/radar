@@ -145,6 +145,29 @@ describe('isContinuationLine', () => {
     expect(associateContinuations(lines).headOf).toEqual([0, 0, 0, 3])
   })
 
+  it('closes a traceback with a generic exception name', () => {
+    const lines = [
+      entry(0, 'Traceback (most recent call last):'),
+      entry(1, '  File "/app/main.py", line 1, in <module>'),
+      entry(2, '    raise Exception("boom")'),
+      entry(3, 'Exception: boom'),
+      entry(4, 'Traceback (most recent call last):'),
+      entry(5, 'KeyboardInterrupt'),
+    ]
+    expect(associateContinuations(lines).headOf).toEqual([0, 0, 0, 0, 4, 4])
+  })
+
+  it('keeps an indented source line with a level word inside its traceback', () => {
+    const lines = [
+      entry(0, 'Traceback (most recent call last):'),
+      entry(1, '  File "/app/main.py", line 2, in <module>'),
+      entry(2, '    ERROR = "boom"'),
+      entry(3, 'ValueError: bad'),
+    ]
+    expect(lines[2].levelSource).toBe('header')
+    expect(associateContinuations(lines).headOf).toEqual([0, 0, 0, 0])
+  })
+
   it('keeps a Go panic together as one error record', () => {
     const lines = [
       entry(0, 'panic: runtime error: invalid memory address or nil pointer dereference'),

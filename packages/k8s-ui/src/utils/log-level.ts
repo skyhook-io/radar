@@ -135,6 +135,8 @@ const KEYWORD_WARN_RE = new RegExp(String.raw`\b(?:warn|warning)\b` + NOT_A_KEY)
 const KEYWORD_DEBUG_RE = new RegExp(String.raw`\bdebug\b` + NOT_A_KEY)
 const KEYWORD_INFO_RE = new RegExp(String.raw`\binfo\b` + NOT_A_KEY)
 const PYTHON_TRACEBACK_HEAD = 'Traceback (most recent call last):'
+// The unindented line that ends a traceback: `ValueError: bad`, `Exception: boom`, `KeyboardInterrupt`
+const PYTHON_EXCEPTION_LINE_RE = /^[A-Za-z_][\w.]*(?::|$)/
 // The first line of an exception: `MongoServerError: ...`, `java.lang.IllegalStateException`,
 // `Traceback (most recent call last):`.
 const EXCEPTION_HEAD_RE = /^(?:(?:[\w$]+\.)*[A-Z][\w$]*(?:Error|Exception)(?: \[[\w-]+\])?(?::|\s*$)|Traceback \(most recent call last\):)/
@@ -197,10 +199,17 @@ const GO_PANIC_LINE_RE = /^(?:goroutine \d+ \[[^\]]*\]:$|created by \S+|[\w./-]*
  * one: stack frames and wrapped detail, which almost always start indented.
  */
 export function isContinuationLine(raw: string): boolean {
+  return isIndented(raw) || looksLikeUnindentedFrame(raw)
+}
+
+// Java `\tat com.foo.Bar`, Go `\tpackage.func`, Node `    at func`, Python `  File "..."`.
+function isIndented(raw: string): boolean {
   // Colored output (Node's inspector) can put an escape code ahead of the indentation.
   const content = raw.charCodeAt(0) === 0x1b ? raw.replace(LEADING_ANSI_RE, '') : raw
-  // Java `\tat com.foo.Bar`, Go `\tpackage.func`, Node `    at func`, Python `  File "..."`.
-  if (/^\s/.test(content)) return true
+  return /^\s/.test(content)
+}
+
+function looksLikeUnindentedFrame(content: string): boolean {
   // Java's secondary chain markers that don't start with whitespace.
   if (/^(Caused by:|Suppressed:|\.\.\. \d+ more)/.test(content)) return true
   // The closing bracket of an object printed across lines (Node's util.inspect).
@@ -244,9 +253,12 @@ export function associateContinuations(entries: readonly AssociableEntry[]): Con
     const entry = entries[i]
     const source = `${entry.pod ?? ''}\x00${entry.container}`
     const lastHead = lastHeadBySource.get(source)
+    // Indentation always continues a record, even when a frame's source text
+    // holds a level word; the unindented patterns yield to a line's own level.
     const explicit = entry.levelSource === 'structured' || entry.levelSource === 'header'
-    const closesTraceback = openTraceback.has(source) && EXCEPTION_HEAD_RE.test(entry.content)
-    if (lastHead !== undefined && !explicit && (closesTraceback || isContinuationLine(entry.content))) {
+    const closesTraceback = openTraceback.has(source) && PYTHON_EXCEPTION_LINE_RE.test(entry.content)
+    const continues = isIndented(entry.content) || (!explicit && (closesTraceback || looksLikeUnindentedFrame(entry.content)))
+    if (lastHead !== undefined && continues) {
       headOf[i] = lastHead
       effectiveLevel[i] = effectiveLevel[lastHead]
       if (closesTraceback) openTraceback.delete(source)
