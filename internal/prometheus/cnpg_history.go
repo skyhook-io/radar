@@ -3,6 +3,7 @@ package prometheus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"regexp"
 	"sort"
@@ -471,7 +472,18 @@ type CNPGLagReading struct {
 type CNPGFleetLag struct {
 	Lag     map[string]CNPGLagReading
 	Scraped map[string]bool
+	// Sustained is the lag each Cluster's worst standby never dropped below
+	// over CNPGSustainedLagWindow; absent when that is not measurable.
+	Sustained map[string]CNPGLagReading
 }
+
+// CNPGSustainedLagWindow is how long a standby's replay lag must stay high
+// before the fleet treats it as a problem rather than a transient spike.
+const CNPGSustainedLagWindow = 10 * time.Minute
+
+// cnpgSustainedLagMinSamples keeps a standby that appeared moments ago from
+// counting as lagging "for the whole window" on one or two samples.
+const cnpgSustainedLagMinSamples = 5
 
 // QueryCNPGFleetLag reads the current replay lag of every standby of the
 // named Clusters in one namespace with one instant query.
@@ -515,7 +527,37 @@ func queryCNPGFleetLag(ctx context.Context, q cnpgQuerier, namespace string, clu
 			out.Lag[cluster] = CNPGLagReading{Seconds: v, Pod: pod}
 		}
 	}
+	out.Sustained = querySustainedCNPGLag(ctx, q, sel, known)
 	return out, nil
+}
+
+// querySustainedCNPGLag is best effort: without it the fleet still shows the
+// current lag, it just raises no sustained-lag problem.
+func querySustainedCNPGLag(ctx context.Context, q cnpgQuerier, sel string, known map[string]bool) map[string]CNPGLagReading {
+	window := fmt.Sprintf("[%dm]", int(CNPGSustainedLagWindow.Minutes()))
+	query := "(max by (pod) (min_over_time(cnpg_pg_replication_lag{" + sel + "}" + window + "))" +
+		" and on (pod) (max by (pod) (cnpg_pg_replication_in_recovery{" + sel + "}) == 1)" +
+		" and on (pod) (max by (pod) (count_over_time(cnpg_pg_replication_lag{" + sel + "}" + window + ")) >= " + strconv.Itoa(cnpgSustainedLagMinSamples) + "))"
+	res, err := q.Query(ctx, query)
+	if err != nil {
+		return nil
+	}
+	out := map[string]CNPGLagReading{}
+	for _, s := range res.Series {
+		if len(s.DataPoints) == 0 {
+			continue
+		}
+		pod := s.Labels["pod"]
+		cluster := CNPGClusterOfPod(pod, known)
+		v := s.DataPoints[0].Value
+		if cluster == "" || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+			continue
+		}
+		if cur, ok := out[cluster]; !ok || v > cur.Seconds || (v == cur.Seconds && pod < cur.Pod) {
+			out[cluster] = CNPGLagReading{Seconds: v, Pod: pod}
+		}
+	}
+	return out
 }
 
 // QueryCNPGDiskGrowth reads each claim's used-bytes trend over the window as

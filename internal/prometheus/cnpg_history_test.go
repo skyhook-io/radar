@@ -209,3 +209,28 @@ func TestQueryCNPGFleetLagSeparatesNoStandbyFromUnscraped(t *testing.T) {
 		t.Errorf("unexpected scraped: %v", got.Scraped)
 	}
 }
+
+func TestQueryCNPGFleetLagReportsSustainedLagSeparately(t *testing.T) {
+	q := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
+		if strings.Contains(query, "min_over_time") {
+			if !strings.Contains(query, "count_over_time") {
+				t.Errorf("sustained query does not require samples across the window: %s", query)
+			}
+			return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"pod": "a-2"}, 42)}}, nil
+		}
+		return &prom.QueryResult{Series: []prom.Series{
+			vec(map[string]string{"pod": "a-2"}, 60),
+			vec(map[string]string{"pod": "b-2"}, 90),
+		}}, nil
+	}}
+	got, err := queryCNPGFleetLag(context.Background(), q, "pg", []string{"a", "b"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Sustained["a"].Seconds != 42 || got.Sustained["a"].Pod != "a-2" {
+		t.Errorf("a sustained = %+v", got.Sustained["a"])
+	}
+	if _, ok := got.Sustained["b"]; ok {
+		t.Error("b spiked to 90 s now but has no sustained reading; it must not get one")
+	}
+}

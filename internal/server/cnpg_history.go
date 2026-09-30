@@ -252,6 +252,11 @@ type CNPGFleetLag struct {
 	Reason  string   `json:"reason,omitempty"`
 	Seconds *float64 `json:"seconds,omitempty"`
 	Pod     string   `json:"pod,omitempty"`
+	// SustainedSeconds is the lag the worst standby never dropped below over
+	// SustainedWindow; absent when Prometheus could not show that.
+	SustainedSeconds *float64 `json:"sustainedSeconds,omitempty"`
+	SustainedPod     string   `json:"sustainedPod,omitempty"`
+	SustainedWindow  string   `json:"sustainedWindow,omitempty"`
 }
 
 // CNPGFleetGrowth State: ok (BytesPerHour of the fastest-growing claim),
@@ -391,6 +396,10 @@ func (s *Server) cnpgNamespaceFleetMetrics(r *http.Request, cache *k8s.ResourceC
 			case ok:
 				v := reading.Seconds
 				lags[i] = CNPGFleetLag{State: cnpgHistoryStateOK, Seconds: &v, Pod: reading.Pod}
+				if sus, ok := res.Sustained[c.GetName()]; ok {
+					sv := sus.Seconds
+					lags[i].SustainedSeconds, lags[i].SustainedPod, lags[i].SustainedWindow = &sv, sus.Pod, prometheuspkg.CNPGSustainedLagWindow.String()
+				}
 			case res.Scraped[c.GetName()]:
 				lags[i] = CNPGFleetLag{State: "noStandby", Reason: "no instance reports being a standby"}
 			default:

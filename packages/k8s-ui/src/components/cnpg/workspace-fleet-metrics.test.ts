@@ -85,3 +85,37 @@ describe('applyCNPGFleetMetrics', () => {
     expect(row(f, 'dark').diskGrowth).toBeUndefined()
   })
 })
+
+describe('sustained replication lag', () => {
+  const src = { source: 'prometheus' as const, lagSource: 'Prometheus cnpg_pg_replication_lag' }
+
+  it('puts a cluster into Needs attention only when lag stayed high for the whole window', () => {
+    const f = applyCNPGFleetMetrics(
+      fleet(),
+      [
+        reading('ha', { state: 'ok', seconds: 95, pod: 'ha-2', sustainedSeconds: 40, sustainedPod: 'ha-2', sustainedWindow: '10m0s' }),
+        reading('dark', { state: 'ok', seconds: 120, pod: 'dark-2' }),
+      ],
+      src,
+    )
+    const ha = row(f, 'ha')
+    expect(ha.attention).toBe(true)
+    expect(ha.problems[0]).toMatchObject({ severity: 'warning', category: 'availability', source: 'measurement' })
+    expect(ha.problems[0].title).toBe('ha-2 has lagged at least 40.0 s for 10 min')
+    expect(row(f, 'dark').attention).toBe(false)
+    expect(f.attentionCount).toBe(1)
+  })
+
+  it('escalates to critical past five minutes and ignores a floor under 30 s', () => {
+    const f = applyCNPGFleetMetrics(
+      fleet(),
+      [
+        reading('ha', { state: 'ok', seconds: 400, pod: 'ha-2', sustainedSeconds: 360, sustainedPod: 'ha-2', sustainedWindow: '10m0s' }),
+        reading('dark', { state: 'ok', seconds: 20, pod: 'dark-2', sustainedSeconds: 12, sustainedPod: 'dark-2', sustainedWindow: '10m0s' }),
+      ],
+      src,
+    )
+    expect(row(f, 'ha').problems[0].severity).toBe('critical')
+    expect(row(f, 'dark').problems).toHaveLength(0)
+  })
+})

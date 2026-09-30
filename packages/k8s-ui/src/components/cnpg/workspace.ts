@@ -963,7 +963,17 @@ export interface CNPGFleetMetricsReading {
   namespace: string
   name: string
   /** ok | noStandby | noSeries | denied | ambiguous | scopeMismatch | error | notRead */
-  lag: { state: string; grant?: string; reason?: string; seconds?: number; pod?: string }
+  lag: {
+    state: string
+    grant?: string
+    reason?: string
+    seconds?: number
+    pod?: string
+    /** The lag the worst standby never dropped below over `sustainedWindow`. */
+    sustainedSeconds?: number
+    sustainedPod?: string
+    sustainedWindow?: string
+  }
   /** ok | noSeries | denied | unavailable | error | notRead */
   growth: { state: string; grant?: string; reason?: string; bytesPerHour?: number; claim?: string; instance?: string }
 }
@@ -1024,8 +1034,9 @@ export function cnpgDiskGrowthFact(reading: CNPGFleetMetricsReading | undefined,
 /**
  * Joins /api/cnpg/fleet-metrics into the fleet: a cluster whose replication
  * fact is only Pod readiness gets its measured standby lag, or says why it has
- * none; the disk growth, when measured, lands on `diskGrowth`. A measurement
- * never raises a problem here — lag and growth are shown, not judged.
+ * none; the disk growth, when measured, lands on `diskGrowth`. Only lag that
+ * stayed high for the whole sustained window raises a problem; a spike is
+ * shown, not judged, and growth is never judged.
  */
 export function applyCNPGFleetMetrics(fleet: CNPGFleet, readings: CNPGFleetMetricsReading[] | undefined, src: CNPGFleetMetricsSources | undefined): CNPGFleet {
   if (!src) return fleet
@@ -1034,7 +1045,37 @@ export function applyCNPGFleetMetrics(fleet: CNPGFleet, readings: CNPGFleetMetri
     const reading = byKey.get(row.key)
     const next: CNPGFleetRow = { ...row, diskGrowth: cnpgDiskGrowthFact(reading, src) }
     if (row.replication.source === CNPG_LAG_UNMEASURED_SOURCE) next.replication = measuredReplication(row.replication, reading, src)
-    return next
+    const problem = sustainedLagProblem(row, reading, src)
+    if (!problem) return next
+    const problems = [...row.problems, problem].sort((a, b) => PROBLEM_RANK[a.severity] - PROBLEM_RANK[b.severity] || a.title.localeCompare(b.title))
+    return { ...next, problems, attention: true, categories: new Set([...row.categories, problem.category]) }
   })
-  return { ...fleet, rows }
+  return finishFleet(rows, fleet.incompleteKinds)
+}
+
+export const CNPG_SUSTAINED_LAG_WARNING_SECONDS = 30
+export const CNPG_SUSTAINED_LAG_CRITICAL_SECONDS = 300
+
+function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): CNPGProblem | undefined {
+  const lag = reading?.lag
+  const floor = lag?.sustainedSeconds
+  if (src.source !== 'prometheus' || lag?.state !== 'ok' || floor === undefined || floor < CNPG_SUSTAINED_LAG_WARNING_SECONDS) return undefined
+  const window = lag.sustainedWindow ? formatWindow(lag.sustainedWindow) : 'the last minutes'
+  return {
+    id: `lag:${row.key}`,
+    severity: floor >= CNPG_SUSTAINED_LAG_CRITICAL_SECONDS ? 'critical' : 'warning',
+    category: 'availability',
+    title: `${lag.sustainedPod ?? 'A standby'} has lagged at least ${formatLagSeconds(floor)} for ${window}`,
+    detail: `Replay lag never dropped below ${formatLagSeconds(floor)} over ${window}, from ${src.lagSource ?? 'Prometheus'}. A failover to that standby would start that far behind the primary.`,
+    subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
+    source: 'measurement',
+  }
+}
+
+// Go durations as the server sends them ("10m0s") read as "10 min".
+function formatWindow(d: string): string {
+  const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:0s)?$/.exec(d)
+  if (!m) return d
+  const minutes = Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0)
+  return minutes >= 60 && minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`
 }
