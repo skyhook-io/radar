@@ -201,8 +201,14 @@ func TestIstioGetFlows_FailedSubqueriesAreReportedNotZeroed(t *testing.T) {
 			if !strings.Contains(resp.Warning, tc.fail) {
 				t.Errorf("warning = %q, want it to name the missing %s", resp.Warning, tc.fail)
 			}
-			if resp.WarningKind != WarningTransient {
-				t.Errorf("warningKind = %q, want transient: a failed query can succeed on the next poll", resp.WarningKind)
+			// Missing figures are about the edges shown; missing TCP edges are
+			// traffic that may not be shown at all.
+			want := WarningPartial
+			if tc.name == "tcp" {
+				want = WarningTransient
+			}
+			if resp.WarningKind != want {
+				t.Errorf("warningKind = %q, want %q", resp.WarningKind, want)
 			}
 		})
 	}

@@ -86,6 +86,20 @@ export function displayVolume(flow: Pick<AggregatedFlow, 'requestRate' | 'connec
  * merged edge's value.
  */
 export function mergeFlowVolume(into: AggregatedFlow, flow: AggregatedFlow): void {
+  // A metric-based source reports only an average latency per edge, so the
+  // merged edge's is theirs weighted by request rate — taken before the rates
+  // are summed below. Keeping the first edge's would make the result depend on
+  // the order the edges arrived in.
+  if (flow.avgLatencyMs) {
+    if (!into.avgLatencyMs) {
+      into.avgLatencyMs = flow.avgLatencyMs
+    } else {
+      const weighted = into.requestRate && flow.requestRate
+      const wInto = weighted ? into.requestRate! : 1
+      const wFlow = weighted ? flow.requestRate! : 1
+      into.avgLatencyMs = (into.avgLatencyMs * wInto + flow.avgLatencyMs * wFlow) / (wInto + wFlow)
+    }
+  }
   into.connections += flow.connections
   into.bytesSent += flow.bytesSent
   into.bytesRecv += flow.bytesRecv

@@ -95,8 +95,8 @@ func TestHubbleGetFlows_ReportsWhatTheStreamDidNotDeliver(t *testing.T) {
 		if !strings.Contains(resp.Warning, "ended early") || !strings.Contains(resp.Warning, "first 2") {
 			t.Errorf("warning = %q, want it to say the stream ended early after 2 flows", resp.Warning)
 		}
-		if resp.WarningKind != WarningTransient {
-			t.Errorf("warningKind = %q, want transient", resp.WarningKind)
+		if resp.WarningKind != WarningIncomplete {
+			t.Errorf("warningKind = %q, want incomplete: the fetch worked but could not see everything", resp.WarningKind)
 		}
 	})
 

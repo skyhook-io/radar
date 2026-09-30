@@ -191,7 +191,12 @@ func (s *IstioSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 		// Without this the edges read as measured: a failed 5xx query shows as no
 		// errors, and failed TCP or byte queries as no traffic of that kind.
 		response.Warning = fmt.Sprintf("Istio metrics are incomplete: %s could not be read from Prometheus, so those figures are missing from these edges rather than zero.", strings.Join(missing, ", "))
-		response.WarningKind = WarningTransient
+		// Missing figures qualify the edges shown. Missing TCP connections are
+		// edges that may not be shown at all, which holds whatever is filtered.
+		response.WarningKind = WarningPartial
+		if tcpErr != nil {
+			response.WarningKind = WarningTransient
+		}
 	}
 	return response, nil
 }

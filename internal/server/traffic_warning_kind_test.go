@@ -46,7 +46,7 @@ func TestTrafficFlowsPayloadKeepsWarningKind(t *testing.T) {
 
 // A partial-data warning describes the flows it arrived with. When namespace
 // filtering removes all of them, it describes edges this user cannot see.
-func TestTrafficFlowsPayloadDropsWarningWhenFilteringRemovedEverything(t *testing.T) {
+func TestTrafficFlowsPayloadDropsPartialWarningWhenFilteringRemovedEverything(t *testing.T) {
 	response := &traffic.FlowsResponse{
 		Source:      "beyla",
 		Flows:       []traffic.Flow{{Source: traffic.Endpoint{Namespace: "other"}}},
@@ -72,17 +72,17 @@ func TestTrafficFlowsPayloadDropsWarningWhenFilteringRemovedEverything(t *testin
 		t.Error("an empty result needs its explanation kept")
 	}
 
-	// A transient warning beside flows is about figures missing from them, so it
-	// goes with them — and kept on an empty payload it would have the client poll
-	// every few seconds for traffic this user will never be shown.
+	// An incomplete warning means flows may be missing — a node the relay could
+	// not reach — which may be exactly why this user sees none, so filtering
+	// does not remove it.
 	transient := &traffic.FlowsResponse{
-		Source:      "beyla",
+		Source:      "hubble",
 		Flows:       []traffic.Flow{{Source: traffic.Endpoint{Namespace: "other"}}},
-		Warning:     "Beyla metrics are incomplete: HTTP 5xx error rates could not be read from Prometheus.",
-		WarningKind: traffic.WarningTransient,
+		Warning:     "Traffic data is incomplete: Hubble Relay could not read flows from 1 node(s) (node-b), so their traffic is missing.",
+		WarningKind: traffic.WarningIncomplete,
 	}
-	if _, ok := trafficFlowsPayload(transient, []traffic.Flow{})["warning"]; ok {
-		t.Error("a transient warning about filtered-out flows must be dropped with them")
+	if _, ok := trafficFlowsPayload(transient, []traffic.Flow{})["warning"]; !ok {
+		t.Error("a warning that flows may be missing must survive filtering")
 	}
 
 	// A failed fetch returns no flows at all, so nothing was filtered and the

@@ -1847,7 +1847,7 @@ func TestBeylaSource_GetFlows_FailedEnrichmentIsReportedNotZeroed(t *testing.T) 
 			if !strings.Contains(resp.Warning, tc.want) {
 				t.Errorf("warning = %q, want it to name %q", resp.Warning, tc.want)
 			}
-			assertEq(t, "warningKind", resp.WarningKind, WarningTransient)
+			assertEq(t, "warningKind", resp.WarningKind, WarningPartial)
 		})
 	}
 }

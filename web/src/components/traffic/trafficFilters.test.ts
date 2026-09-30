@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import type { AggregatedFlow } from '../../types'
 import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
@@ -163,5 +164,26 @@ describe('mergeFlowVolume', () => {
     const into = { ...base, flowCount: 1, bytesSent: 10, bytesRecv: 20, connections: 2, requestCount: 2, requestRate: 2, errorRate: 0.5, errorCount: 1 }
     mergeFlowVolume(into, { ...base, flowCount: 1, bytesSent: 5, bytesRecv: 5, connections: 8, requestCount: 8, requestRate: 8 })
     expect(into).toMatchObject({ connections: 10, bytesSent: 15, bytesRecv: 25, flowCount: 2, requestCount: 10, requestRate: 10, errorRate: 0.5, errorCount: 1 })
+  })
+})
+
+describe('mergeFlowVolume latency', () => {
+  const base: AggregatedFlow = { source: { name: 'a', namespace: 'shop', kind: 'Pod' }, destination: { name: 'web', namespace: 'shop', kind: 'Pod' }, protocol: 'tcp', port: 80, lastSeen: '', flowCount: 1, bytesSent: 0, bytesRecv: 0, connections: 1 }
+
+  it('weights average latency by request rate, whatever the order', () => {
+    const fast = { ...base, requestRate: 100, avgLatencyMs: 10 }
+    const slow = { ...base, requestRate: 1, avgLatencyMs: 1000 }
+    const a = { ...fast }
+    mergeFlowVolume(a, slow)
+    const b = { ...slow }
+    mergeFlowVolume(b, fast)
+    expect(a.avgLatencyMs).toBeCloseTo(19.8, 1)
+    expect(b.avgLatencyMs).toBeCloseTo(19.8, 1)
+  })
+
+  it('takes the only latency there is', () => {
+    const into = { ...base }
+    mergeFlowVolume(into, { ...base, avgLatencyMs: 7 })
+    expect(into.avgLatencyMs).toBe(7)
   })
 })

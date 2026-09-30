@@ -110,18 +110,27 @@ type FlowsResponse struct {
 	// truth about this data. Empty means transient, so a source that does not set
 	// it keeps the retrying behaviour it had. A client must not retry
 	// WarningPartial: the answer will not change, and the warning explains
-	// something the user needs to read rather than wait out.
+	// something the user needs to read rather than wait out. WarningIncomplete
+	// is not retried either.
 	WarningKind string `json:"warningKind,omitempty"`
 }
 
 // Warning kinds for FlowsResponse.WarningKind.
 const (
 	// WarningTransient marks a condition that may resolve on its own — a query
-	// that failed, a port-forward still coming up.
+	// that failed, a port-forward still coming up. A retry is worthwhile.
 	WarningTransient = "transient"
-	// WarningPartial marks flows that are correct but incomplete, for a reason
-	// retrying cannot fix (a source not exporting an attribute, traffic that
-	// cannot be oriented). Always shown alongside whatever flows did arrive.
+	// WarningIncomplete marks a fetch that succeeded but could not see
+	// everything: events the source lost, nodes it could not reach. Flows may
+	// be missing, so it holds even when the flows it came with are filtered
+	// away and matters most when there are none. Retrying at once does not
+	// help; the next regular refresh reads afresh.
+	WarningIncomplete = "incomplete"
+	// WarningPartial marks flows that are correct but have values missing or
+	// wrong (a source not exporting an attribute, traffic that cannot be
+	// oriented, a figure whose query failed this time). It is about the flows it
+	// came with, so it is shown beside them and not retried for, and it goes
+	// when they are filtered away.
 	WarningPartial = "partial"
 )
 

@@ -15,6 +15,9 @@ import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
 import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume } from './trafficFilters'
 
+// Consecutive 2s retries of an empty result that came with a transient warning.
+const MAX_EMPTY_RETRIES = 5
+
 // Addon types for filtering
 export type AddonMode = 'show' | 'group' | 'hide'
 
@@ -442,19 +445,29 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   // an attribute it does not export, traffic it cannot orient. Retrying returns
   // the same answer, so retrying forever is all cost and no progress.
   const warningIsPermanent = flowsData?.warningKind === 'partial'
+  // An 'incomplete' one is a fetch that worked but could not see everything
+  // (events lost, nodes unreachable). Not a failure, so not retried at once.
+  const warningIsIncomplete = flowsData?.warningKind === 'incomplete'
 
-  // Auto-retry when flows return with warning but no data (e.g., port-forward not ready yet)
+  // Auto-retry when flows return with warning but no data (e.g., port-forward not
+  // ready yet). Bounded: a warning that keeps coming back — a node the relay
+  // cannot reach, a query that keeps failing — is the answer rather than a hiccup,
+  // and polling it every 2s forever costs the source a burst of queries each time.
+  const emptyRetriesRef = useRef(0)
   useEffect(() => {
-    if (
-      flowsData?.warning &&
-      !warningIsPermanent &&
-      (!flowsData.aggregated || flowsData.aggregated.length === 0) &&
-      !flowsFetching
-    ) {
-      const timer = setTimeout(() => refetchFlowsRaw(), 2000)
+    const empty = !flowsData?.aggregated || flowsData.aggregated.length === 0
+    if (!flowsData?.warning || !empty) {
+      emptyRetriesRef.current = 0
+      return
+    }
+    if (!warningIsPermanent && !warningIsIncomplete && !flowsFetching && emptyRetriesRef.current < MAX_EMPTY_RETRIES) {
+      const timer = setTimeout(() => {
+        emptyRetriesRef.current += 1
+        refetchFlowsRaw()
+      }, 2000)
       return () => clearTimeout(timer)
     }
-  }, [flowsData, warningIsPermanent, flowsFetching, refetchFlowsRaw])
+  }, [flowsData, warningIsPermanent, warningIsIncomplete, flowsFetching, refetchFlowsRaw])
 
   // Filter flows based on user preferences
   // Note: namespace filtering is done server-side via the global namespace selector
@@ -1238,14 +1251,14 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                   <AlertBanner
                     variant="warning"
                     // The title follows the kind. A partial warning is about values
-                    // on edges that are shown — a port reported as 0, UDP as TCP,
-                    // received bytes understated — so it says "unreliable", not
+                    // on edges that are shown — a port reported as 0, UDP as TCP, a
+                    // 5xx rate that failed to load — so it says "unreliable", not
                     // "incomplete", which would send the reader looking for missing
-                    // workloads. A transient one means part of the answer failed to
-                    // load this time (a query that errored, a stream cut short):
-                    // those figures are missing rather than zero, and the next
-                    // refresh may bring them back.
-                    title={warningIsPermanent ? 'Some values on this map are unreliable' : 'Some traffic data could not be loaded'}
+                    // workloads. An incomplete or transient one beside flows is
+                    // exactly that: a stream cut short, events lost, a node the
+                    // relay could not reach, a TCP query that failed — edges may
+                    // be missing from what is drawn.
+                    title={warningIsPermanent ? 'Some values on this map are unreliable' : 'Some traffic may be missing from this map'}
                     message={flowsData.warning}
                   />
                 </div>
@@ -1319,7 +1332,9 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                   headline={
                     warningIsPermanent
                       ? 'No traffic Radar can place on the map'
-                      : 'Unable to fetch traffic data'
+                      : warningIsIncomplete
+                        ? 'No traffic seen, but some may be missing'
+                        : 'Unable to fetch traffic data'
                   }
                   body={flowsData.warning}
                   className="max-w-md"

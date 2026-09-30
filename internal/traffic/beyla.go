@@ -355,10 +355,9 @@ func (s *BeylaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRes
 	if len(presence.failed) > 0 && len(flows) > 0 {
 		failed := fmt.Sprintf("Beyla metrics are incomplete: %s could not be read from Prometheus, so those figures are missing from these edges rather than zero.", strings.Join(presence.failed, ", "))
 		response.Warning = strings.TrimSpace(failed + " " + response.Warning)
-		// A query that failed can succeed on the next poll, unlike a missing
-		// attribute, so the combined warning is only as permanent as its most
-		// transient part.
-		response.WarningKind = WarningTransient
+		// About figures on the edges shown, like the attribute warning it may
+		// join: shown beside them, and gone when they are filtered away.
+		response.WarningKind = WarningPartial
 	}
 	return response, nil
 }

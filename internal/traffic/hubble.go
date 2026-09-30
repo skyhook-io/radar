@@ -854,10 +854,10 @@ func (h *HubbleSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRe
 	}
 	if incomplete != "" {
 		response.Warning = incomplete
-		// Transient because the next poll reads the buffer afresh; a busy node
-		// that keeps dropping events will keep saying so, which is the truth
-		// about its data rather than noise.
-		response.WarningKind = WarningTransient
+		// The fetch worked; it could not see everything. A busy node that keeps
+		// dropping events will keep saying so, which is the truth about its data
+		// rather than a failure to retry.
+		response.WarningKind = WarningIncomplete
 	}
 	return response, nil
 }
