@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Badge, formatAge, type CNPGFleet } from '@skyhook-io/k8s-ui'
 import type { CNPGOperatorDiagnosis, CNPGOperatorReconcilePod, CNPGReadCoverage } from '../../api/cnpg-recovery'
 import { buildWorkloadPath } from '../../utils/navigation'
-import { Mono, Sub } from './shared'
+import { GrantText, Mono, Sub } from './shared'
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -15,9 +15,16 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 function Unread({ cov, what }: { cov: CNPGReadCoverage; what: string }) {
+  if (cov.state === 'denied' && cov.grant) {
+    return (
+      <span className="text-theme-text-tertiary">
+        No access to {what} · needs <GrantText grant={cov.grant} />
+      </span>
+    )
+  }
   const text =
     cov.state === 'denied'
-      ? `No access to ${what} (needs ${cov.grant ?? 'a grant you do not have'})`
+      ? `No access to ${what} (needs a grant you do not have)`
       : cov.state === 'notFound'
         ? `${what} not found`
         : `${what} could not be read${cov.reason ? `: ${cov.reason}` : ''}`

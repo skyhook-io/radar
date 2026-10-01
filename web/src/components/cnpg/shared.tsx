@@ -297,6 +297,21 @@ export function PathText({ value, className }: { value: string; className?: stri
   )
 }
 
+/**
+ * A grant as one unit: the verb and resource in a code span that does not
+ * wrap, its scope ("cluster-wide", "in namespace pg") as plain text after it.
+ */
+export function GrantText({ grant }: { grant: string }) {
+  const m = /^(.*?)( cluster-wide| in namespace \S+)$/.exec(grant)
+  const [what, scope] = m ? [m[1], m[2]] : [grant, '']
+  return (
+    <>
+      <code className="whitespace-nowrap rounded bg-theme-elevated px-1 font-mono text-[12px]">{what}</code>
+      {scope}
+    </>
+  )
+}
+
 export function Mono({ children }: { children: ReactNode }) {
   return <span className="font-mono text-[12.5px] break-all">{children}</span>
 }
