@@ -38,14 +38,13 @@ describe('buildBlockingTree', () => {
 describe('cnpgConnectionFigure', () => {
   it('states usable headroom from pg_stat_activity when exec read it', () => {
     expect(cnpgConnectionFigure({ maxConnections: 100, superuserReservedConnections: 3, clientBackends: 6 }, { sessionsTotal: 6, maxConnections: 100 })).toMatchObject({
-      value: '6 of 97 usable',
-      detail: expect.stringContaining('max_connections 100, 3 reserved for superusers'),
+      value: '6 in use',
+      limit: 'of 97 usable (max_connections 100, 3 reserved)',
     })
   })
   it('falls back to the exporter count and says the reserve is unknown', () => {
     const f = cnpgConnectionFigure(undefined, { sessionsTotal: 90, maxConnections: 100 })
-    expect(f).toMatchObject({ value: '90 of 100', tone: 'degraded' })
-    expect(f?.detail).toContain('superuser reserve is not read')
+    expect(f).toMatchObject({ value: '90 in use', limit: 'of max_connections 100 (superuser reserve not read)', tone: 'degraded' })
     expect(cnpgConnectionFigure(undefined, {})).toBeUndefined()
   })
 })

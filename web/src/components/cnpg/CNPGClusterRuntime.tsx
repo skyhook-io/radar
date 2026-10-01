@@ -244,6 +244,7 @@ function SessionAggregates({ primary, exec }: { primary?: CNPGRuntimeInstance; e
         <Metric
           label="Connections"
           value={connections ? <Tooltip content={connections.detail}>{connections.value}</Tooltip> : '—'}
+          caption={connections?.limit}
           tone={connections?.tone}
         />
         <Metric label="Waiting on locks" value={m.waitingBackends ?? '—'} tone={m.waitingBackends ? 'degraded' : undefined} />
@@ -278,11 +279,12 @@ function SessionAggregates({ primary, exec }: { primary?: CNPGRuntimeInstance; e
   )
 }
 
-function Metric({ label, value, tone }: { label: string; value: ReactNode; tone?: 'degraded' | 'unhealthy' }) {
+function Metric({ label, value, tone, caption }: { label: string; value: ReactNode; tone?: 'degraded' | 'unhealthy'; caption?: ReactNode }) {
   return (
     <div>
       <div className="text-xs text-theme-text-tertiary">{label}</div>
       <div className={clsx('font-mono text-base', tone ? toneTextClass(tone) : 'text-theme-text-primary')}>{value}</div>
+      {caption && <div className="text-[11px] text-theme-text-tertiary">{caption}</div>}
     </div>
   )
 }

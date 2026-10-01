@@ -136,7 +136,9 @@ function Headroom({ data }: { data: CNPGSessionsResponse }) {
       <div className="flex flex-wrap items-baseline gap-x-3 text-sm">
         <span className="text-xs text-theme-text-tertiary">Connections</span>
         <span className={clsx('font-mono', figure.tone && toneTextClass(figure.tone))}>{figure.value}</span>
-        <span className="text-xs text-theme-text-secondary">{figure.detail}</span>
+        <Tooltip content={figure.detail}>
+          <span className="text-xs text-theme-text-secondary">{figure.limit}</span>
+        </Tooltip>
       </div>
       <div className="mt-1 h-1.5 overflow-hidden rounded bg-theme-elevated">
         <div className={clsx('h-full', figure.tone ? toneFillClass(figure.tone) : 'bg-accent')} style={{ width: `${Math.min(100, (figure.ratio ?? 0) * 100)}%` }} />

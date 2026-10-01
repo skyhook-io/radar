@@ -69,8 +69,10 @@ export function countVictims(node: BlockingNode): number {
 }
 
 export interface CNPGConnectionFigure {
-  /** e.g. "6 of 97 usable" */
+  /** e.g. "6 in use" */
   value: string
+  /** What it is out of, e.g. "of 97 usable (max_connections 100, 3 reserved)", shown beneath. */
+  limit: string
   /** What the figure is measured against, and from where. */
   detail: string
   /** used / usable, for a headroom bar; undefined when the limit is unknown. */
@@ -98,20 +100,22 @@ export function cnpgConnectionFigure(
     const usable = exec.maxConnections - reserved
     const ratio = usable > 0 ? exec.clientBackends / usable : 1
     return {
-      value: `${exec.clientBackends} of ${usable} usable`,
-      detail: `max_connections ${exec.maxConnections}, ${reserved} reserved for superusers · client backends from pg_stat_activity`,
+      value: `${exec.clientBackends} in use`,
+      limit: `of ${usable} usable (max_connections ${exec.maxConnections}, ${reserved} reserved)`,
+      detail: `Client backends from pg_stat_activity; ${reserved} of max_connections ${exec.maxConnections} are reserved for superusers`,
       ratio,
       tone: connectionTone(ratio),
     }
   }
   if (exporter?.sessionsTotal === undefined) return undefined
   if (exporter.maxConnections === undefined) {
-    return { value: `${exporter.sessionsTotal}`, detail: 'max_connections not reported · sessions from the metrics exporter' }
+    return { value: `${exporter.sessionsTotal} in use`, limit: 'max_connections not reported', detail: 'Sessions from the metrics exporter' }
   }
   const ratio = exporter.maxConnections > 0 ? exporter.sessionsTotal / exporter.maxConnections : 1
   return {
-    value: `${exporter.sessionsTotal} of ${exporter.maxConnections}`,
-    detail: `max_connections ${exporter.maxConnections}; the superuser reserve is not read without exec · sessions from the metrics exporter`,
+    value: `${exporter.sessionsTotal} in use`,
+    limit: `of max_connections ${exporter.maxConnections} (superuser reserve not read)`,
+    detail: 'Sessions from the metrics exporter; the superuser reserve is read only with exec into the instance',
     ratio,
     tone: connectionTone(ratio),
   }
