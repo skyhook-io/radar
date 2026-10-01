@@ -18,6 +18,7 @@ import {
   getRadarUpgradeRequirement,
   RadarUpgradeAction,
   radarUpgradeDetail,
+  radarUpgradeHeadline,
   memberRef,
   PaneLoader,
   ResourceBar,
@@ -1529,7 +1530,7 @@ export function integrationBlock(
       return (
         <EmptyState
           icon={Gauge}
-          title="Capacity needs a newer Radar"
+          title={radarUpgradeHeadline("Capacity")}
           detail={radarUpgradeDetail(upgrade)}
           action={
             <div className="mt-3 text-sm">

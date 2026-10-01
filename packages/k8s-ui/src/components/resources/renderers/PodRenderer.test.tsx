@@ -445,7 +445,7 @@ describe('PodRenderer on a Radar without variable sources', () => {
       <PodRenderer data={pod} onCopy={() => undefined} copied={null} environmentError={unsupported} />,
     )
     expect(html).toContain('Variable sources')
-    expect(html).toContain('need Radar v1.9 or newer.')
+    expect(html).toContain('need Radar v1.9 or newer on this cluster. It runs v1.7.2.')
     expect(html).toContain('ConfigMap')
     expect(html).not.toContain('could not be loaded')
   })

@@ -46,34 +46,39 @@ function target(requirement: RadarUpgradeRequirement): { since?: string; latest?
   return {}
 }
 
-// "You're on dev." says nothing useful, so only a real version is quoted.
-function withCurrentVersion(sentence: string, requirement: RadarUpgradeRequirement): string {
+// The Radar that is behind is the cluster's, not the UI the user is looking
+// at, so the copy names the cluster. "It runs dev." says nothing useful, so
+// only a real version is quoted.
+function clusterVersion(requirement: RadarUpgradeRequirement): string | undefined {
   const current = requirement.currentVersion?.trim()
-  return current && /^v?\d+\.\d+/.test(current)
-    ? `${sentence} You're on ${formatRadarVersion(current)}.`
-    : sentence
+  return current && /^v?\d+\.\d+/.test(current) ? formatRadarVersion(current) : undefined
 }
 
-/** Detail under a "needs a newer Radar" headline: "Available from Radar v1.9. You're on v1.7.2." */
+/** Headline for a full-page state: "Capacity needs a newer Radar on this cluster". */
+export function radarUpgradeHeadline(feature: string): string {
+  return `${feature} needs a newer Radar on this cluster`
+}
+
+/** Detail under that headline: "Available from Radar v1.9. This cluster runs v1.7.2." */
 export function radarUpgradeDetail(requirement: RadarUpgradeRequirement): string {
   const { since, latest } = target(requirement)
-  const sentence = since
-    ? `Available from Radar ${since}.`
-    : latest
-      ? `Available in the latest Radar, ${latest}.`
-      : 'Available in a newer Radar.'
-  return withCurrentVersion(sentence, requirement)
+  const current = clusterVersion(requirement)
+  return [
+    since ? `Available from Radar ${since}.` : latest ? `Available in the latest Radar, ${latest}.` : '',
+    current ? `This cluster runs ${current}.` : '',
+  ].filter(Boolean).join(' ')
 }
 
-/** Follows the feature name in an inline note: "need Radar v1.10 or newer. You're on v1.7.2." */
+/** Follows the feature name in an inline note: "need Radar v1.10 or newer on this cluster. It runs v1.7.2." */
 function radarUpgradeNeed(requirement: RadarUpgradeRequirement): string {
   const { since, latest } = target(requirement)
-  const sentence = since
-    ? `need Radar ${since} or newer.`
+  const current = clusterVersion(requirement)
+  const need = since
+    ? `need Radar ${since} or newer on this cluster.`
     : latest
-      ? `need the latest Radar, ${latest}.`
-      : 'need a newer Radar.'
-  return withCurrentVersion(sentence, requirement)
+      ? `need the latest Radar (${latest}) on this cluster.`
+      : 'need a newer Radar on this cluster.'
+  return current ? `${need} It runs ${current}.` : need
 }
 
 /** The upgrade call to action, or nothing when the host offers no way to upgrade. */

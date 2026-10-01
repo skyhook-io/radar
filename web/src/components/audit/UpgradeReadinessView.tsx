@@ -24,6 +24,7 @@ import {
   PaneLoader,
   RadarUpgradeAction,
   radarUpgradeDetail,
+  radarUpgradeHeadline,
   SelectMenu,
 } from '@skyhook-io/k8s-ui'
 import {
@@ -258,7 +259,7 @@ export function UpgradeReadinessError({ error, onResetTarget }: { error: unknown
       <EmptyState
         tone="neutral"
         icon={ShieldAlert}
-        headline="Upgrade impact needs a newer Radar"
+        headline={radarUpgradeHeadline('Upgrade impact')}
         body={radarUpgradeDetail(upgrade)}
         action={<RadarUpgradeAction requirement={upgrade} />}
       />

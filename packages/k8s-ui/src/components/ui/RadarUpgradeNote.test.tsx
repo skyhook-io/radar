@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { formatRadarVersion, radarUpgradeDetail, RadarUpgradeNote } from './RadarUpgradeNote'
+import { formatRadarVersion, radarUpgradeDetail, radarUpgradeHeadline, RadarUpgradeNote } from './RadarUpgradeNote'
 import { getRadarUpgradeRequirement } from '../../types/fetch-error'
+
+describe('radarUpgradeHeadline', () => {
+  it('says the cluster is behind, not the UI', () => {
+    expect(radarUpgradeHeadline('Capacity')).toBe('Capacity needs a newer Radar on this cluster')
+  })
+})
 
 describe('radarUpgradeDetail', () => {
   it('quotes the minimum and a real current version', () => {
     expect(radarUpgradeDetail({ feature: 'Policy results', minimumVersion: 'v1.10.0', currentVersion: '1.7.2' }))
-      .toBe("Available from Radar v1.10. You're on v1.7.2.")
+      .toBe('Available from Radar v1.10. This cluster runs v1.7.2.')
   })
 
   it('leaves out a current version that is not a version', () => {
@@ -22,18 +28,18 @@ describe('radarUpgradeDetail without a known first release', () => {
 
   it('asks for the latest release when it is newer than the running one', () => {
     expect(radarUpgradeDetail({ ...unknownSince, latestVersion: '1.16.0' }))
-      .toBe("Available in the latest Radar, v1.16. You're on v1.7.2.")
+      .toBe('Available in the latest Radar, v1.16. This cluster runs v1.7.2.')
   })
 
-  it('falls back to "a newer Radar" when the latest is unknown or not newer', () => {
-    expect(radarUpgradeDetail(unknownSince)).toBe("Available in a newer Radar. You're on v1.7.2.")
+  it('only names the running version when no target release is known', () => {
+    expect(radarUpgradeDetail(unknownSince)).toBe('This cluster runs v1.7.2.')
     expect(radarUpgradeDetail({ ...unknownSince, currentVersion: 'v1.16.0', latestVersion: 'v1.16.0' }))
-      .toBe("Available in a newer Radar. You're on v1.16.")
+      .toBe('This cluster runs v1.16.')
   })
 
   it('reads the same way inline', () => {
     const html = renderToString(<RadarUpgradeNote requirement={{ ...unknownSince, latestVersion: 'v1.16.0' }} />)
-    expect(html).toContain('need the latest Radar, v1.16. You&#x27;re on v1.7.2.')
+    expect(html).toContain('need the latest Radar (v1.16) on this cluster. It runs v1.7.2.')
   })
 })
 

@@ -169,7 +169,7 @@ describe('PolicySection — connected Radar predates policy results', () => {
   it('prompts an upgrade instead of reporting a failure', () => {
     const html = renderToString(<PolicySection data={null} error={unsupported} />)
     expect(html).toContain('Policy results')
-    expect(html).toContain('need Radar v1.10 or newer. You&#x27;re on v1.7.2.')
+    expect(html).toContain('need Radar v1.10 or newer on this cluster. It runs v1.7.2.')
     expect(html).not.toContain('Could not load policy results')
     expect(html).not.toContain('text-red-400')
   })
