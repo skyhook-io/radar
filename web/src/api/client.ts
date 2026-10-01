@@ -767,6 +767,33 @@ export function useResourceIssues(
   });
 }
 
+// The Issues page narrowed to one subject: the same per-resource lookup with
+// ?coverage=1, which also says whether Radar reads the subject's kind and what
+// the caller's RBAC withheld. Polls like the page list.
+export interface SubjectIssuesResponse {
+  issues: Issue[];
+  coverage: "ok" | "syncing" | "notWatched";
+  withheld?: { issues: number; members: number };
+  visibility?: { state?: string; impact?: string };
+}
+
+export function useSubjectIssues(
+  subject: { kind: string; group: string; namespace: string; name: string } | null,
+  enabled: boolean,
+) {
+  const pathNs = subject?.namespace ? encodeURIComponent(subject.namespace) : "_";
+  const params = new URLSearchParams({ coverage: "1" });
+  if (subject?.group) params.set("group", subject.group);
+  return useQuery<SubjectIssuesResponse>({
+    queryKey: ["issues", "subject", subject?.kind ?? "", subject?.group ?? "", subject?.namespace ?? "", subject?.name ?? ""],
+    queryFn: () =>
+      fetchJSON(`/issues/resource/${encodeURIComponent(subject!.kind)}/${pathNs}/${encodeURIComponent(subject!.name)}?${params}`),
+    staleTime: 30000,
+    refetchInterval: ISSUES_REFRESH_INTERVAL_MS,
+    enabled: enabled && !!subject,
+  });
+}
+
 import type { Trace as NetworkTrace, InClusterCapability, DrainPlan, DrainPlanPod } from '@skyhook-io/k8s-ui'
 
 // useTrace polls the static path-shaped diagnosis for one network entry

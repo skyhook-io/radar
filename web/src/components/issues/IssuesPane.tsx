@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useIssues, useResourceIssues } from "../../api/client";
+import { useIssues, useSubjectIssues, type SubjectIssuesResponse } from "../../api/client";
 import {
   useAPIResources,
   karpenterCapacityAvailable,
@@ -99,20 +99,20 @@ export type IssueSubjectState =
   | { state: "hidden" }
   | { state: "checking" }
   | { state: "unconfirmed"; why: string }
-  | { state: "found"; issues: Issue[] }
+  | { state: "found"; issues: Issue[]; withheld: number }
   | { state: "none" };
 
 /**
  * What can be said about the subject's issues. They come from the per-resource
  * lookup, which matches every grouped member (the list's inline members are
- * capped) by exact API group; an empty answer is "none" only when nothing
- * kept Radar from reading the evidence.
+ * capped) by exact API group; an empty answer is "none" only when Radar reads
+ * the subject's kind, nothing kept it from the evidence, and RBAC withheld no
+ * issue about it.
  */
 export function issueSubjectState(
   subject: IssueSubject,
   viewNamespaces: string[],
-  related: { isLoading: boolean; error: unknown; data: Issue[] | undefined },
-  visibility: { state?: string; impact?: string } | undefined,
+  related: { isLoading: boolean; error: unknown; data: SubjectIssuesResponse | undefined },
 ): IssueSubjectState {
   if (subject.namespace && viewNamespaces.length > 0 && !viewNamespaces.includes(subject.namespace)) {
     return { state: "hidden" };
@@ -120,8 +120,16 @@ export function issueSubjectState(
   if (related.error) {
     return { state: "unconfirmed", why: related.error instanceof Error ? related.error.message : String(related.error) };
   }
-  if (related.isLoading || !related.data) return { state: "checking" };
-  if (related.data.length > 0) return { state: "found", issues: related.data };
+  const data = related.data;
+  if (related.isLoading || !data) return { state: "checking" };
+  if (data.issues.length > 0) return { state: "found", issues: data.issues, withheld: data.withheld?.issues ?? 0 };
+  if (data.coverage === "notWatched") return { state: "unconfirmed", why: `Radar isn't watching ${subject.kind} yet` };
+  if (data.coverage === "syncing") return { state: "unconfirmed", why: `Radar is still loading ${subject.kind}` };
+  const withheld = data.withheld?.issues ?? 0;
+  if (withheld > 0) {
+    return { state: "unconfirmed", why: `${withheld} ${withheld === 1 ? "issue is" : "issues are"} about resources you can't read` };
+  }
+  const visibility = data.visibility;
   if (visibility?.state === "degraded" || visibility?.state === "limited") {
     return {
       state: "unconfirmed",
@@ -169,32 +177,27 @@ export function IssuesPane({
     new Set(),
   );
 
-  const allIssues = useMemo(() => data?.issues ?? [], [data]);
-  const totals = useMemo(() => {
-    const t: Record<IssueSeverity, number> = { critical: 0, warning: 0 };
-    for (const i of allIssues) t[i.severity] = (t[i.severity] ?? 0) + 1;
-    return t;
-  }, [allIssues]);
   const [searchParams, setSearchParams] = useSearchParams();
   const subject = useMemo(() => issueSubjectFromParams(searchParams), [searchParams]);
   const subjectHidden =
     !!subject?.namespace && namespaces.length > 0 && !namespaces.includes(subject.namespace);
-  const related = useResourceIssues(
-    subject?.kind ?? "",
-    subject?.group || undefined,
-    subject?.namespace ?? "",
-    subject?.name ?? "",
-    !!subject && !subjectHidden,
-  );
+  const related = useSubjectIssues(subject, !subjectHidden);
   const subjectState = subject
-    ? issueSubjectState(subject, namespaces, related, data?.visibility)
+    ? issueSubjectState(subject, namespaces, related)
     : null;
-  const subjectIssues = subjectState
+  const pageIssues = useMemo(() => data?.issues ?? [], [data]);
+  // With a subject set, the tiles and the list both describe the subject.
+  const scopeIssues = subjectState
     ? subjectState.state === "found" ? subjectState.issues : []
-    : allIssues;
+    : pageIssues;
+  const totals = useMemo(() => {
+    const t: Record<IssueSeverity, number> = { critical: 0, warning: 0 };
+    for (const i of scopeIssues) t[i.severity] = (t[i.severity] ?? 0) + 1;
+    return t;
+  }, [scopeIssues]);
   const shown = severityFilter.size
-    ? subjectIssues.filter((i) => severityFilter.has(i.severity))
-    : subjectIssues;
+    ? scopeIssues.filter((i) => severityFilter.has(i.severity))
+    : scopeIssues;
   const clearSubject = () =>
     setSearchParams(
       (prev) => {
@@ -245,18 +248,18 @@ export function IssuesPane({
           <>
             <FreshnessControl
               mode="auto"
-              dataUpdatedAt={dataUpdatedAt}
+              dataUpdatedAt={subject && !subjectHidden ? related.dataUpdatedAt : dataUpdatedAt}
               onRefresh={() => {
-                refetch();
                 if (subject && !subjectHidden) related.refetch();
+                else refetch();
               }}
               connectionState={connection.state}
             />
-            {allIssues.length > 0 && (
+            {scopeIssues.length > 0 && (
               <>
                 <SummaryTile
-                  label={allIssues.length === 1 ? "issue" : "issues"}
-                  value={allIssues.length}
+                  label={scopeIssues.length === 1 ? "issue" : "issues"}
+                  value={scopeIssues.length}
                 />
                 {ISSUE_SEVERITIES.map((s) =>
                   totals[s] > 0 || severityFilter.has(s) ? (
@@ -291,7 +294,7 @@ export function IssuesPane({
 
       {/* Truncation honesty: when more issues matched than were returned, say
           so — don't present a capped list as the complete picture. */}
-      {data?.total_matched != null &&
+      {!subject && data?.total_matched != null &&
         data.total_matched > (data.issues?.length ?? 0) && (
           <p className="text-xs text-theme-text-tertiary">
             Showing {data.issues?.length ?? 0} of {data.total_matched} issues
@@ -331,6 +334,8 @@ export function IssuesPane({
               </span>
               {subjectState.state === "none" && " — none now"}
               {subjectState.state === "unconfirmed" && ` — can't confirm: ${subjectState.why}`}
+              {subjectState.state === "found" && subjectState.withheld > 0 &&
+                ` — ${subjectState.withheld} more about resources you can't read`}
             </span>
           )}
           <button type="button" onClick={clearSubject} className="text-accent-text hover:underline">
@@ -342,7 +347,7 @@ export function IssuesPane({
       {/* Filtered-empty is NOT the healthy empty state: when a severity filter
           hides every row but issues still exist, say "no matches" rather than
           letting IssuesView render its "nothing broken" terminal state. */}
-      {subject && subjectIssues.length === 0 ? null : severityFilter.size > 0 && allIssues.length > 0 && shown.length === 0 ? (
+      {subject && scopeIssues.length === 0 ? null : severityFilter.size > 0 && scopeIssues.length > 0 && shown.length === 0 ? (
         <div className="flex flex-col items-center gap-2 py-12 text-center text-sm text-theme-text-secondary">
           <p>No issues match the selected severity.</p>
           <button
