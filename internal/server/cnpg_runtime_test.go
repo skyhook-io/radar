@@ -1008,6 +1008,12 @@ func TestCNPGMarkTimedOutIgnoresTheWordInNames(t *testing.T) {
 	if flagFor(named) {
 		t.Error("a Pod named timeout-demo-1 was read as a timeout")
 	}
+	if flagFor(apierrors.NewServiceUnavailable("error trying to reach service: dial tcp timeout-demo-1.pg:8000: connect: connection refused")) {
+		t.Error("a relayed refusal to a host named timeout-demo-1 was read as a timeout")
+	}
+	if flagFor(apierrors.NewServiceUnavailable("the server is currently unable to handle the request: i/o timeout")) {
+		t.Error("a 503 that is not the proxy's transport error was read as a timeout")
+	}
 	if flagFor(errors.New(`Get "https://api/namespaces/timeout-demo/pods/timeout-demo-1/proxy": EOF`)) {
 		t.Error("a URL containing \"timeout\" was read as a timeout")
 	}
@@ -1015,6 +1021,8 @@ func TestCNPGMarkTimedOutIgnoresTheWordInNames(t *testing.T) {
 		fmt.Errorf("x: %w", context.DeadlineExceeded),
 		apierrors.NewTimeoutError("slow", 0),
 		&net.DNSError{IsTimeout: true},
+		apierrors.NewServiceUnavailable("error trying to reach service: dial tcp 10.0.0.5:8000: i/o timeout"),
+		apierrors.NewServiceUnavailable("error trying to reach service: context deadline exceeded"),
 	} {
 		if !flagFor(err) {
 			t.Errorf("%v was not read as a timeout", err)

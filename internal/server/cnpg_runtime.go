@@ -972,9 +972,27 @@ func cnpgMarkTimedOut(ctx context.Context, err error) {
 	}
 	var netErr net.Error
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) ||
-		(errors.As(err, &netErr) && netErr.Timeout()) || apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) {
+		(errors.As(err, &netErr) && netErr.Timeout()) || apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) ||
+		cnpgRelayedTransportTimeout(err) {
 		flag.Store(true)
 	}
+}
+
+// cnpgRelayedTransportTimeout: the apiserver's proxy reports its own dial or
+// read timeout to the Pod as a 503 whose message is "error trying to reach
+// service: <transport error>". Only the transport error's end is matched, so a
+// name or URL containing "timeout" never counts.
+func cnpgRelayedTransportTimeout(err error) bool {
+	if !apierrors.IsServiceUnavailable(err) {
+		return false
+	}
+	var status apierrors.APIStatus
+	if !errors.As(err, &status) {
+		return false
+	}
+	msg := status.Status().Message
+	return strings.HasPrefix(msg, "error trying to reach service:") &&
+		(strings.HasSuffix(msg, ": i/o timeout") || strings.HasSuffix(msg, ": context deadline exceeded"))
 }
 
 func classifyCNPGProxyFailure(ctx context.Context, err error, out cnpgProxyOutcome, t cnpgProxyTarget) cnpgProxyOutcome {
