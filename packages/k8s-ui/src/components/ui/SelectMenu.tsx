@@ -46,6 +46,9 @@ export function SelectMenu({
   const searchInputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const pointerDownInsideRef = useRef(false)
+  // A keyboard open lands on the selected option, as a native select does; a
+  // pointer open keeps focus on the trigger.
+  const focusOptionOnOpenRef = useRef(false)
   const selected = options.find((option) => option.value === value) ?? (placeholder ? undefined : options[0])
   const filteredOptions = useMemo(() => {
     const normalized = query.trim().toLowerCase()
@@ -53,6 +56,20 @@ export function SelectMenu({
     return options.filter((option) => `${option.label} ${option.description ?? ''}`.toLowerCase().includes(normalized))
   }, [options, query])
   const selectedIsVisible = filteredOptions.some((option) => option.value === value)
+
+  const focusTabbableOption = () => {
+    listRef.current?.querySelector<HTMLElement>('[role="option"][tabindex="0"]')?.focus()
+  }
+
+  const openMenu = () => {
+    setHighlightedIndex(
+      Math.max(
+        options.findIndex((option) => option.value === value),
+        0,
+      ),
+    )
+    setOpen(true)
+  }
 
   const selectOption = (nextValue: string) => {
     if (options.find((option) => option.value === nextValue)?.disabled) return
@@ -88,7 +105,12 @@ export function SelectMenu({
   useEffect(() => {
     if (!open || !shouldRender) return
     if (!searchPlaceholder) {
-      triggerRef.current?.focus()
+      if (focusOptionOnOpenRef.current) {
+        focusOptionOnOpenRef.current = false
+        focusTabbableOption()
+      } else {
+        triggerRef.current?.focus()
+      }
       return
     }
     listRef.current
@@ -137,15 +159,20 @@ export function SelectMenu({
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
         onClick={() => {
-          if (!open) {
-            setHighlightedIndex(
-              Math.max(
-                options.findIndex((option) => option.value === value),
-                0,
-              ),
-            )
+          if (open) setOpen(false)
+          else openMenu()
+        }}
+        onKeyDown={(event) => {
+          if (searchPlaceholder) return
+          const arrow = event.key === 'ArrowDown' || event.key === 'ArrowUp'
+          if (!arrow && (open || (event.key !== 'Enter' && event.key !== ' '))) return
+          event.preventDefault()
+          if (open) {
+            focusTabbableOption()
+            return
           }
-          setOpen(!open)
+          focusOptionOnOpenRef.current = true
+          openMenu()
         }}
         disabled={disabled}
         className={clsx(

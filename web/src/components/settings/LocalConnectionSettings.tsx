@@ -609,6 +609,14 @@ export function LocalConnectionSettings({
       {copyAction}
     </div>
   )
+  const previousIdentity = profile.previousIdentity
+  const currentIdentity = profile.target.identity
+  const trustChanges = previousIdentity ? [
+    previousIdentity.trust !== currentIdentity.trust && 'CA trust changed',
+    previousIdentity.proxy !== currentIdentity.proxy && 'Proxy changed',
+    (previousIdentity.tlsName !== currentIdentity.tlsName ||
+      previousIdentity.insecureTls !== currentIdentity.insecureTls) && 'TLS settings changed',
+  ].filter((change): change is string => !!change) : []
   const removedByDiscovery = [
     profile.url && (kind === 'cost' ? 'Kubecost endpoint' : 'endpoint'),
     (profile.secretSet || profile.headerKeys.length > 0) &&
@@ -930,31 +938,34 @@ export function LocalConnectionSettings({
             another cluster’s data.
           </p>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 text-xs">
-            <dt className="text-theme-text-tertiary">Previous server</dt>
-            <dd className="break-all">
-              {profile.previousIdentity?.server || 'Not recorded'}
-            </dd>
-            <dt className="text-theme-text-tertiary">Current server</dt>
-            <dd className="break-all">{profile.target.identity.server}</dd>
+            {previousIdentity && previousIdentity.server === currentIdentity.server ? (
+              <>
+                <dt className="text-theme-text-tertiary">Server</dt>
+                <dd className="break-all">{currentIdentity.server} (unchanged)</dd>
+              </>
+            ) : (
+              <>
+                <dt className="text-theme-text-tertiary">Previous server</dt>
+                <dd className="break-all">
+                  {previousIdentity?.server || 'Not recorded'}
+                </dd>
+                <dt className="text-theme-text-tertiary">Current server</dt>
+                <dd className="break-all">{currentIdentity.server}</dd>
+              </>
+            )}
             <dt className="text-theme-text-tertiary">User reference</dt>
             <dd>
-              {profile.previousIdentity?.user || '—'} →{' '}
-              {profile.target.identity.user || '—'}
+              {previousIdentity && previousIdentity.user === currentIdentity.user
+                ? `${currentIdentity.user || '—'} (unchanged)`
+                : `${previousIdentity?.user || '—'} → ${currentIdentity.user || '—'}`}
             </dd>
             <dt className="text-theme-text-tertiary">Trust / proxy</dt>
             <dd>
-              {profile.previousIdentity?.trust !== profile.target.identity.trust
-                ? 'CA trust changed. '
-                : ''}
-              {profile.previousIdentity?.proxy !== profile.target.identity.proxy
-                ? 'Proxy changed. '
-                : ''}
-              {profile.previousIdentity?.tlsName !==
-                profile.target.identity.tlsName ||
-              profile.previousIdentity?.insecureTls !==
-                profile.target.identity.insecureTls
-                ? 'TLS settings changed.'
-                : ''}
+              {!previousIdentity
+                ? 'Not recorded'
+                : trustChanges.length
+                  ? trustChanges.join(' · ')
+                  : 'Unchanged'}
             </dd>
           </dl>
           {(Object.keys(snapshot) as IntegrationKind[])
