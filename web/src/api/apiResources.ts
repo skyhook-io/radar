@@ -36,14 +36,18 @@ export function useAPIResources() {
   });
 }
 
-// Mirrors the server's own "is a policy engine installed" test: Kyverno writes
-// PolicyReports to wgpolicyk8s.io, or to its successor openreports.io.
+// The report families the server watches (reportGroups in
+// internal/k8s/policy_reports.go): the wgpolicyk8s.io working-group API and
+// its openreports.io successor, which names the same resources differently.
+const POLICY_REPORT_RESOURCES: Record<string, readonly string[]> = {
+  "wgpolicyk8s.io": ["policyreports", "clusterpolicyreports"],
+  "openreports.io": ["reports", "clusterreports"],
+};
+
 export function hasPolicyReports(resources: APIResource[] | undefined): boolean {
   return (
-    resources?.some(
-      (resource) =>
-        resource.name === "policyreports" &&
-        (resource.group === "wgpolicyk8s.io" || resource.group === "openreports.io"),
+    resources?.some((resource) =>
+      POLICY_REPORT_RESOURCES[resource.group]?.includes(resource.name),
     ) ?? false
   );
 }

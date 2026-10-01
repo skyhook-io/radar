@@ -686,9 +686,9 @@ export function useUpgradeReadiness(target?: string) {
   // refetches read that memo; only the explicit manual refresh passes
   // refresh=true to force a fresh live scan (e.g. after fixing a finding).
   const forceRefresh = useRef(false)
-  const guard = useRadarFeature('upgradeReadiness')
+  const { guard, gatedKey } = useRadarFeature('upgradeReadiness')
   const query = useQuery<UpgradeReadinessResponse>({
-    queryKey: ['upgrade-readiness', target ?? 'next'],
+    queryKey: ['upgrade-readiness', target ?? 'next', ...gatedKey],
     queryFn: ({ signal }) => {
       const params = new URLSearchParams()
       if (target) params.set('target', target)
@@ -777,9 +777,9 @@ export function useResourceIssues(
   const qs = params.toString();
   // An older Radar without the endpoint settles as unsupported, so the
   // renderers fall back to their own status-derived problem banners.
-  const guard = useRadarFeature("resourceIssues");
+  const { guard, gatedKey } = useRadarFeature("resourceIssues");
   return useQuery<Issue[]>({
-    queryKey: ["issues", "resource", kind, group ?? "", namespace, name],
+    queryKey: ["issues", "resource", kind, group ?? "", namespace, name, ...gatedKey],
     queryFn: () => guard(() => fetchJSON<Issue[]>(`${path}${qs ? `?${qs}` : ""}`)),
     retry: shouldRetryRadarQuery,
     // No refetchInterval: a drawer doesn't need to poll; staleTime keeps it fresh
@@ -1424,9 +1424,9 @@ export function capacityRefetchInterval(
 
 export function useCapacityOverview(options?: CapacityQueryOptions) {
   const enabled = options?.enabled ?? true;
-  const guard = useRadarFeature("capacity");
+  const { guard, gatedKey } = useRadarFeature("capacity");
   return useQuery<CapacityOverviewResponse>({
-    queryKey: ["capacity", "overview"],
+    queryKey: ["capacity", "overview", ...gatedKey],
     queryFn: ({ signal }) =>
       guard(() =>
         fetchJSON<CapacityOverviewResponse>(
@@ -1446,9 +1446,9 @@ export function useCapacityPools(options?: CapacityPageQueryOptions) {
   const limit = options?.limit;
   const cursor = options?.cursor;
   const queryKey = ["capacity", "pools", limit, cursor];
-  const guard = useRadarFeature("capacity");
+  const { guard, gatedKey } = useRadarFeature("capacity");
   return useQuery<CapacityPoolListResponse>({
-    queryKey,
+    queryKey: [...queryKey, ...gatedKey],
     queryFn: ({ signal }) =>
       guard(() =>
         fetchJSON<CapacityPoolListResponse>(
@@ -1472,9 +1472,9 @@ export function useCapacityPoolDetail(
   options?: CapacityQueryOptions,
 ) {
   const enabled = Boolean(name) && (options?.enabled ?? true);
-  const guard = useRadarFeature("capacity");
+  const { guard, gatedKey } = useRadarFeature("capacity");
   return useQuery<CapacityPoolDetailResponse>({
-    queryKey: ["capacity", "pool", name],
+    queryKey: ["capacity", "pool", name, ...gatedKey],
     queryFn: ({ signal }) =>
       guard(() =>
         fetchJSON<CapacityPoolDetailResponse>(
@@ -1504,9 +1504,9 @@ export function useCapacityPoolMembers(
   const pageQuery = capacityPageQuery(options);
   const separator = pageQuery ? "&" : "?";
   const queryKey = ["capacity", "pool", name, "members", type, limit, cursor];
-  const guard = useRadarFeature("capacity");
+  const { guard, gatedKey } = useRadarFeature("capacity");
   return useQuery<CapacityMemberListResponse>({
-    queryKey,
+    queryKey: [...queryKey, ...gatedKey],
     queryFn: ({ signal }) =>
       guard(() =>
         fetchJSON<CapacityMemberListResponse>(
@@ -1562,9 +1562,9 @@ export function useCapacityDemand(options?: CapacityDemandQueryOptions) {
     options?.owner,
     options?.pod,
   ];
-  const guard = useRadarFeature("capacity");
+  const { guard, gatedKey } = useRadarFeature("capacity");
   return useQuery<CapacityDemandResponse>({
-    queryKey,
+    queryKey: [...queryKey, ...gatedKey],
     queryFn: ({ signal }) =>
       guard(() =>
         fetchJSON<CapacityDemandResponse>(
@@ -1610,9 +1610,9 @@ export function useCapacityActivity(options?: CapacityActivityQueryOptions) {
     options?.node,
     options?.type,
   ];
-  const guard = useRadarFeature("capacity");
+  const { guard, gatedKey } = useRadarFeature("capacity");
   return useQuery<CapacityActivityResponse>({
-    queryKey,
+    queryKey: [...queryKey, ...gatedKey],
     queryFn: ({ signal }) =>
       guard(() =>
         fetchJSON<CapacityActivityResponse>(
@@ -1766,6 +1766,11 @@ export function useVersionCheck() {
  *
  * Nothing waits on /version-check: an agent that advertises the feature flag
  * is fetched immediately, and an unknown version falls through to the fetch.
+ *
+ * Spread `gatedKey` into the query key. A gate decided from early information
+ * (a host-supplied version before /capabilities answers) can lift later, and
+ * the key change is what makes the query fetch for real; ungated keys are
+ * unchanged.
  */
 export function useRadarFeature(feature: RadarFeature) {
   const { data: capabilities } = useCapabilities()
@@ -1775,8 +1780,11 @@ export function useRadarFeature(feature: RadarFeature) {
   const latestVersion = versionInfo?.latestVersion
   const support = radarFeatureSupport(feature, capabilities?.features, currentVersion)
 
-  return <T,>(request: () => Promise<T>): Promise<T> =>
-    guardRadarFeature(feature, support, { currentVersion, latestVersion }, request)
+  return {
+    gatedKey: support === 'unsupported' ? ['radar-feature-unsupported'] : [],
+    guard: <T,>(request: () => Promise<T>): Promise<T> =>
+      guardRadarFeature(feature, support, { currentVersion, latestVersion }, request),
+  }
 }
 
 // ============================================================================
@@ -3091,9 +3099,9 @@ export function usePodMetrics(
 }
 
 export function usePodEnvironment(namespace: string, podName: string, enabled = true) {
-  const guard = useRadarFeature('podEnvironment')
+  const { guard, gatedKey } = useRadarFeature('podEnvironment')
   return useQuery<PodEnvironmentResponse>({
-    queryKey: ['pod-environment', namespace, podName],
+    queryKey: ['pod-environment', namespace, podName, ...gatedKey],
     queryFn: () => guard(() => fetchJSON<PodEnvironmentResponse>(
       `/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/environment`,
     )),
@@ -5263,7 +5271,7 @@ export function drainPlanBody(options: DrainPlanRequestOptions): string {
 // which hosts (Radar Hub) use to fall back to the plan-less drain dialog
 // instead of leaving Drain permanently disabled.
 export function useDrainPlan() {
-  const guard = useRadarFeature("drainPlan");
+  const { guard } = useRadarFeature("drainPlan");
   return useMutation<
     DrainPlan,
     Error,

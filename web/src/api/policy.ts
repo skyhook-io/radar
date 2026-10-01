@@ -25,29 +25,30 @@ const POLICY_NOT_INSTALLED: PolicyResourceResponse = {
 // a short stale window keeps drawer navigation instant without going stale in a
 // way an operator would notice.
 export function usePolicyResource(kind: string, namespace: string, name: string, enabled = true) {
-  const guard = useRadarFeature('policyResource')
+  const { guard, gatedKey } = useRadarFeature('policyResource')
   const { data: apiResources } = useAPIResources()
-  const policyEngineAbsent = apiResources !== undefined && !hasPolicyReports(apiResources)
-  return useQuery<PolicyResourceResponse>({
-    queryKey: ['policy', 'resource', kind, namespace, name],
+  const query = useQuery<PolicyResourceResponse>({
+    queryKey: ['policy', 'resource', kind, namespace, name, ...gatedKey],
     queryFn: () =>
       guard(() =>
         fetchJSON<PolicyResourceResponse>(
           `/policy/resource/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
         ),
-      ).catch((error: unknown) => {
-        // A Radar too old for policy results, on a cluster with no policy
-        // engine, gets the answer a current Radar would give: not installed.
-        // Prompting an upgrade there would promise a section that stays empty.
-        if (isRadarFeatureUnsupported(error) && policyEngineAbsent) return POLICY_NOT_INSTALLED
-        throw error
-      }),
+      ),
     enabled: enabled && !!kind && !!namespace && !!name,
     staleTime: 15000,
     // A 403 is a settled answer about this identity, not a blip — retrying
     // would just repeat the denial on every drawer open.
     retry: false,
   })
+  // A Radar too old for policy results, on a cluster with no policy engine,
+  // gets the answer a current Radar would give: not installed. Prompting an
+  // upgrade there would promise a section that stays empty. Derived at render
+  // so it follows discovery whenever /api-resources answers.
+  if (isRadarFeatureUnsupported(query.error) && apiResources !== undefined && !hasPolicyReports(apiResources)) {
+    return { ...query, data: POLICY_NOT_INSTALLED, error: null }
+  }
+  return query
 }
 
 // /api/policy/policies/{policy}

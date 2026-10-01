@@ -14,9 +14,12 @@ describe('hasKarpenterNodePools', () => {
 describe('hasPolicyReports', () => {
   const resource = (name: string, group: string) => ({ name, group }) as APIResource
 
-  it('recognizes both PolicyReport API groups', () => {
+  it('recognizes each report family by the resource names it actually serves', () => {
     expect(hasPolicyReports([resource('policyreports', 'wgpolicyk8s.io')])).toBe(true)
-    expect(hasPolicyReports([resource('policyreports', 'openreports.io')])).toBe(true)
+    expect(hasPolicyReports([resource('clusterpolicyreports', 'wgpolicyk8s.io')])).toBe(true)
+    expect(hasPolicyReports([resource('reports', 'openreports.io')])).toBe(true)
+    expect(hasPolicyReports([resource('clusterreports', 'openreports.io')])).toBe(true)
+    expect(hasPolicyReports([resource('policyreports', 'openreports.io')])).toBe(false)
   })
 
   it('reads a cluster without them as having no policy engine', () => {
