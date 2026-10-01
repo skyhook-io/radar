@@ -17,7 +17,7 @@ describe('cnpgCompareProblems', () => {
     expect([probe, wal].sort(cnpgCompareProblems).map((p) => p.title)).toEqual(['WAL archiving failing', 'pg-wal-failing-1 not ready (readiness probe failing)'])
   })
   it('keeps severity first', () => {
-    const crit = problem('pg-1 restarting (CrashLoopBackOff)', 'critical', 'Pod')
+    const crit = problem('pg-1 restarted recently (CrashLoopBackOff)', 'critical', 'Pod')
     const warn = problem('Backup failed', 'warning', 'Backup', 'postgresql.cnpg.io')
     expect([warn, crit].sort(cnpgCompareProblems)[0]).toBe(crit)
   })
@@ -28,7 +28,7 @@ describe('cnpgIssueTitle', () => {
     expect(cnpgIssueTitle({ kind: 'Pod', name: 'pg-wal-failing-1', reason: 'ReadinessProbeFailed', message: 'ReadinessProbeFailed' })).toBe(
       'pg-wal-failing-1 not ready (readiness probe failing)',
     )
-    expect(cnpgIssueTitle({ kind: 'Pod', name: 'pg-runtime-5', reason: 'CrashLoopBackOff' })).toBe('pg-runtime-5 restarting (CrashLoopBackOff)')
+    expect(cnpgIssueTitle({ kind: 'Pod', name: 'pg-runtime-5', reason: 'CrashLoopBackOff' })).toBe('pg-runtime-5 restarted recently (CrashLoopBackOff)')
     expect(cnpgIssueTitle({ kind: 'Backup', name: 'b-1', reason: 'BackupStuck' })).toBe('Backup b-1: backup stuck')
   })
   it('keeps a real message', () => {

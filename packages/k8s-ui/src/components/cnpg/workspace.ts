@@ -219,9 +219,11 @@ const PROTECTION_ISSUE_REASONS = new Set([
 // What an instance Pod's bare reason means, said about the Pod.
 const CNPG_POD_REASON_SENTENCES: Record<string, string> = {
   ReadinessProbeFailed: 'not ready (readiness probe failing)',
-  LivenessProbeFailed: 'restarting (liveness probe failing)',
-  CrashLoopBackOff: 'restarting (CrashLoopBackOff)',
-  HighRestartCount: 'restarting repeatedly',
+  // The issue does not say whether the Pod is serving now (it may have come
+  // back within the settle window), so restarts are worded as past.
+  LivenessProbeFailed: 'restarted recently (liveness probe failing)',
+  CrashLoopBackOff: 'restarted recently (CrashLoopBackOff)',
+  HighRestartCount: 'restarted repeatedly',
   OOMKilled: 'killed for running out of memory (OOMKilled)',
   ImagePullBackOff: 'cannot pull its image (ImagePullBackOff)',
   ErrImagePull: 'cannot pull its image (ErrImagePull)',
