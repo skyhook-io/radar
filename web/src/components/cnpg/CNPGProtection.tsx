@@ -185,7 +185,7 @@ export function CNPGProtection({
             { header: 'WAL archiving', width: '16%', cell: (r) => <FactValue fact={r.protection.walArchiving} className="line-clamp-2 break-words" /> },
             {
               header: 'Recovery window',
-              width: '13%',
+              width: '12%',
               cell: (r) =>
                 r.protection.recoveryWindow.from ? (
                   <>
@@ -203,20 +203,30 @@ export function CNPGProtection({
             },
             {
               header: 'Restore validation',
-              width: '13%',
+              width: '12%',
               cell: (r) => (
                 <FactValue fact={r.protection.restoreValidation} />
               ),
             },
             {
               header: 'Destination',
-              width: '15%',
-              cell: (r) =>
-                r.protection.destination.method === 'barmanObjectStore' ? (
-                  <PathText value={r.protection.destination.text} />
-                ) : (
-                  <FactValue fact={{ ...r.protection.destination, detail: r.protection.destination.text }} className="block truncate" />
-                ),
+              width: '17%',
+              cell: (r) => {
+                const d = r.protection.destination
+                if (d.method === 'barmanObjectStore') return <PathText value={d.text} />
+                // A resource name stays whole on its own line; only a name too long for the cell truncates.
+                if (d.method === 'plugin' && d.objectStore) {
+                  return (
+                    <>
+                      <div className="text-theme-text-secondary">ObjectStore</div>
+                      <Tooltip content={d.objectStore} wrapperClassName="max-w-full">
+                        <span className="block truncate">{d.objectStore}</span>
+                      </Tooltip>
+                    </>
+                  )
+                }
+                return <FactValue fact={d} />
+              },
             },
           ]}
           rows={rows}
