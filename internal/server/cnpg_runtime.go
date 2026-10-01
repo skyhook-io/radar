@@ -799,6 +799,9 @@ var (
 
 const cnpgRuntimeMemoMaxEntries = 4096
 
+// Two proxied requests (a scheme fallback) plus slack.
+const cnpgMemoizedReadTimeout = 2*cnpgRuntimeRequestTimeout + time.Second
+
 type cnpgRuntimeMemoEntry struct {
 	value   any
 	expires time.Time
@@ -825,9 +828,15 @@ func cnpgMemoized[T any](ctx context.Context, identity string, target cnpgProxyT
 	cnpgRuntimeMemoMu.Unlock()
 
 	v, _, _ := cnpgRuntimeMemoGroup.Do(key, func() (any, error) {
-		got := fetch(ctx)
-		// A read cut short by the caller going away says nothing about the Pod.
-		if ctx.Err() == nil {
+		// Every caller waiting on this key shares the one read, so it runs
+		// detached from whichever caller started it: that caller hanging up
+		// must not fail the others. Values (identity) are kept; the deadline
+		// covers a scheme fallback's second request.
+		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cnpgMemoizedReadTimeout)
+		defer cancel()
+		got := fetch(readCtx)
+		// A read that ran out of time says nothing about the Pod either.
+		if readCtx.Err() == nil {
 			cnpgRuntimeMemoMu.Lock()
 			if len(cnpgRuntimeMemoEntries) >= cnpgRuntimeMemoMaxEntries {
 				pruneCNPGRuntimeMemoLocked(time.Now())

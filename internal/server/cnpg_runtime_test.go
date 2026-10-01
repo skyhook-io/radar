@@ -882,3 +882,40 @@ func TestCNPGMetricsGenerationAndSessionsByState(t *testing.T) {
 		t.Error("absent families must stay unknown")
 	}
 }
+
+func TestCNPGMemoizedReadOutlivesTheCallerThatStartedIt(t *testing.T) {
+	target := cnpgProxyTarget{namespace: "pg", pod: "pg-1", podUID: "uid-memo-detach", port: cnpgStatusPort, path: cnpgStatusPath, scheme: "https"}
+	type key struct{}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	fetch := func(ctx context.Context) string {
+		close(started)
+		<-release
+		if ctx.Err() != nil {
+			return "cancelled"
+		}
+		if ctx.Value(key{}) != "alice" {
+			return "identity lost"
+		}
+		return "ok"
+	}
+	first, cancelFirst := context.WithCancel(context.WithValue(context.Background(), key{}, "alice"))
+	done := make(chan string, 2)
+	go func() { done <- cnpgMemoized(first, "id-detach", target, time.Minute, fetch) }()
+	<-started
+	// A second caller joins the in-flight read, then the first hangs up.
+	go func() {
+		done <- cnpgMemoized(context.WithValue(context.Background(), key{}, "alice"), "id-detach", target, time.Minute, func(context.Context) string { return "second fetch" })
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancelFirst()
+	close(release)
+	for i := 0; i < 2; i++ {
+		if got := <-done; got != "ok" {
+			t.Errorf("caller %d got %q, want the shared read's answer", i, got)
+		}
+	}
+	if got := cnpgMemoized(context.Background(), "id-detach", target, time.Minute, func(context.Context) string { return "refetched" }); got != "ok" {
+		t.Errorf("memo = %q, want the completed read cached", got)
+	}
+}
