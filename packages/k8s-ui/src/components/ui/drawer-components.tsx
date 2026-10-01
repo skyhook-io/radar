@@ -397,6 +397,7 @@ const DEFAULT_ICONS: Record<string, React.ComponentType<{ className?: string }>>
 
 interface AlertBannerProps {
   variant: 'error' | 'warning' | 'info' | 'success'
+  compact?: boolean
   icon?: React.ComponentType<{ className?: string }>
   title: string
   message?: React.ReactNode
@@ -404,18 +405,18 @@ interface AlertBannerProps {
   children?: React.ReactNode
 }
 
-export function AlertBanner({ variant, icon, title, message, items, children }: AlertBannerProps) {
+export function AlertBanner({ variant, compact = false, icon, title, message, items, children }: AlertBannerProps) {
   const colors = ALERT_COLORS[variant]
   const Icon = icon || DEFAULT_ICONS[variant]
   const hasBody = message || items || children
 
   return (
-    <div className={clsx('mb-4 p-3 border rounded-lg', colors.bg, colors.border)}>
+    <div className={clsx('border', compact ? 'p-2' : 'mb-4 p-3 rounded-lg', colors.bg, colors.border)}>
       <div className={clsx('flex gap-2', hasBody ? 'items-start' : 'items-center')}>
         <Icon className={clsx('w-4 h-4 shrink-0', colors.title, hasBody && 'mt-0.5')} />
         {hasBody ? (
           <div className="flex-1 min-w-0">
-            <div className={clsx('text-sm font-medium', colors.title, items && 'mb-1')}>{title}</div>
+            <div className={clsx(compact ? 'text-xs' : 'text-sm', 'font-medium', colors.title, items && 'mb-1')}>{title}</div>
             {message && <div className={clsx('text-xs mt-1 break-words', colors.message)}>{message}</div>}
             {items && items.length > 0 && (
               <ul className={clsx('text-xs space-y-1', colors.list)}>
@@ -430,7 +431,7 @@ export function AlertBanner({ variant, icon, title, message, items, children }: 
             {children}
           </div>
         ) : (
-          <div className={clsx('text-sm font-medium', colors.title)}>{title}</div>
+          <div className={clsx(compact ? 'text-xs' : 'text-sm', 'font-medium', colors.title)}>{title}</div>
         )}
       </div>
     </div>

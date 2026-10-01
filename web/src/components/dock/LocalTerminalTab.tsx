@@ -33,9 +33,10 @@ export function LocalTerminalTab({ tabId, title, isActive, initialCommand }: Loc
   return (
     <div className="h-full flex flex-col">
       {mismatched && (
-        <div className="shrink-0 px-2 pt-2" role="status">
+        <div className="shrink-0 max-h-24 overflow-y-auto" role="status">
           <AlertBanner
             variant="warning"
+            compact
             title="Radar is showing another context"
             message={<>Radar is showing <strong>{connection.context}</strong>. This terminal was opened for <strong>{context}</strong>.</>}
           >
