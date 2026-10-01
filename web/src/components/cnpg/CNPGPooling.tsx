@@ -175,7 +175,7 @@ function PoolerPressure({ namespace, name }: { namespace: string; name: string }
   return (
     <>
       <span className={waiting.sum > 0 ? toneTextClass('degraded') : undefined}>
-        {waiting.text} waiting · {total('svActive').text} server in use
+        <span className="whitespace-nowrap">{waiting.text} waiting</span> · <span className="whitespace-nowrap">{total('svActive').text} servers busy</span>
       </span>
       <Sub>
         {maxwait !== undefined && maxwait > 0 ? `longest wait ${maxwait.toFixed(1)} s · ` : ''}
