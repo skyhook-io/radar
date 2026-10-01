@@ -2295,7 +2295,7 @@ describe("integrationBlock version skew", () => {
       <>{integrationBlock(undefined, new RadarFeatureUnsupportedError("capacity", { currentVersion: "v1.7.2" }), false, "Loading")}</>,
     );
     expect(html).toContain("Capacity needs a newer Radar");
-    expect(html).toContain("Needs Radar v1.9 or newer. You&#x27;re on v1.7.2.");
+    expect(html).toContain("Available from Radar v1.9. You&#x27;re on v1.7.2.");
     expect(html).not.toContain("Capacity unavailable");
   });
 

@@ -20,18 +20,17 @@ export function formatRadarVersion(version: string): string {
   return patch === '0' ? `v${major}.${minor}` : `v${major}.${minor}.${patch}`
 }
 
-function requirementText(requirement: RadarUpgradeRequirement, verb: string): string {
-  const needs = `${verb} Radar ${formatRadarVersion(requirement.minimumVersion)} or newer.`
-  // "You're on dev." says nothing useful, so only a real version is quoted.
+// "You're on dev." says nothing useful, so only a real version is quoted.
+function withCurrentVersion(sentence: string, requirement: RadarUpgradeRequirement): string {
   const current = requirement.currentVersion?.trim()
   return current && /^v?\d+\.\d+/.test(current)
-    ? `${needs} You're on ${formatRadarVersion(current)}.`
-    : needs
+    ? `${sentence} You're on ${formatRadarVersion(current)}.`
+    : sentence
 }
 
-/** "Needs Radar v1.10 or newer. You're on v1.7.2." */
+/** Detail under a "needs a newer Radar" headline: "Available from Radar v1.9. You're on v1.7.2." */
 export function radarUpgradeDetail(requirement: RadarUpgradeRequirement): string {
-  return requirementText(requirement, 'Needs')
+  return withCurrentVersion(`Available from Radar ${formatRadarVersion(requirement.minimumVersion)}.`, requirement)
 }
 
 /** The upgrade call to action, or nothing when the host offers no way to upgrade. */
@@ -73,7 +72,7 @@ export function RadarUpgradeNote({
       <p className="min-w-0">
         <span className="font-medium text-theme-text-primary">{requirement.feature}</span>
         {' '}
-        {requirementText(requirement, 'need')}
+        {withCurrentVersion(`need Radar ${formatRadarVersion(requirement.minimumVersion)} or newer.`, requirement)}
         {' '}
         <RadarUpgradeAction requirement={requirement} />
       </p>

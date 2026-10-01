@@ -5,14 +5,14 @@ import { getRadarUpgradeRequirement } from '../../types/fetch-error'
 describe('radarUpgradeDetail', () => {
   it('quotes the minimum and a real current version', () => {
     expect(radarUpgradeDetail({ feature: 'Policy results', minimumVersion: 'v1.10.0', currentVersion: '1.7.2' }))
-      .toBe("Needs Radar v1.10 or newer. You're on v1.7.2.")
+      .toBe("Available from Radar v1.10. You're on v1.7.2.")
   })
 
   it('leaves out a current version that is not a version', () => {
     expect(radarUpgradeDetail({ feature: 'Policy results', minimumVersion: 'v1.10.0', currentVersion: 'dev' }))
-      .toBe('Needs Radar v1.10 or newer.')
+      .toBe('Available from Radar v1.10.')
     expect(radarUpgradeDetail({ feature: 'Policy results', minimumVersion: 'v1.10.0' }))
-      .toBe('Needs Radar v1.10 or newer.')
+      .toBe('Available from Radar v1.10.')
   })
 })
 

@@ -9,7 +9,7 @@ describe('UpgradeReadinessError', () => {
     const html = renderToStaticMarkup(UpgradeReadinessError({ error: new RadarFeatureUnsupportedError('upgradeReadiness', {}) }))
 
     expect(html).toContain('Upgrade impact needs a newer Radar')
-    expect(html).toContain('Needs Radar v1.9 or newer.')
+    expect(html).toContain('Available from Radar v1.9.')
     expect(html).not.toContain('Unable to analyze upgrade impact')
   })
 
