@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, DatabaseBackup, MoreHorizontal, Repeat } from 'lucide-react'
 import { clsx } from 'clsx'
-import { ActionConfirmDialog, Tooltip, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA } from '@skyhook-io/k8s-ui'
+import { ActionConfirmDialog, Tooltip, cnpgFormatLag, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA } from '@skyhook-io/k8s-ui'
 import {
   cnpgActionOutcomeLocked,
   useCNPGAction,
@@ -456,7 +456,7 @@ export function ClusterActionDialog({
                       <span className="font-mono">{s.pod}</span>
                       <span className="text-xs text-theme-text-tertiary">
                         {s.ineligible ??
-                          [s.state, s.syncState, s.replayLagSeconds !== undefined ? `replay lag ${s.replayLagSeconds.toFixed(1)} s` : runtime.isLoading ? 'lag loading…' : 'lag unknown']
+                          [s.state, s.syncState, s.replayLagSeconds !== undefined ? `replay lag ${cnpgFormatLag(s.replayLagSeconds)}` : runtime.isLoading ? 'lag loading…' : 'lag unknown']
                             .filter(Boolean)
                             .join(' · ')}
                       </span>

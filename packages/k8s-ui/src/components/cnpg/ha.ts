@@ -4,7 +4,7 @@
 // unavailable source is "unknown", never none or healthy.
 
 import type { HealthLevel } from '../resources/resource-utils'
-import { cnpgLagTone, cnpgReplicationTone, type CNPGFact, type CNPGFleetRow } from './workspace'
+import { cnpgFormatLag, cnpgLagTone, cnpgReplicationTone, type CNPGFact, type CNPGFleetRow } from './workspace'
 
 export type CNPGHASourceState = 'ok' | 'denied' | 'notFound' | 'notInstalled' | 'unavailable' | 'error'
 
@@ -404,7 +404,7 @@ function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap
   const source = `Primary’s pg_stat_replication against spec.instances ${desired}`
   const lag = live.maxReplayLagSeconds
   const tone = cnpgReplicationTone(live.streaming, expected, lag)
-  const lagText = lag !== undefined && cnpgLagTone(lag) !== 'healthy' ? ` · replay ${Math.round(lag)} s behind` : ''
+  const lagText = lag !== undefined && cnpgLagTone(lag) !== 'healthy' ? ` · replay ${cnpgFormatLag(lag)} behind` : ''
   if (live.streaming < expected) {
     return { ...base, tone, text: `${live.streaming} of ${expected} expected standbys streaming${lagText}`, source }
   }

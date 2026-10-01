@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { cnpgReplicationTone, type CNPGClusterHA, type CNPGFleetRow, type CNPGInstanceLive, type CNPGReplicationLive } from '@skyhook-io/k8s-ui'
+import { cnpgFormatLag, cnpgReplicationTone, type CNPGClusterHA, type CNPGFleetRow, type CNPGInstanceLive, type CNPGReplicationLive } from '@skyhook-io/k8s-ui'
 import { fetchJSON } from './client'
 import type { CNPGRuntimeResponse } from './cnpg'
 
@@ -80,7 +80,7 @@ export function withLiveReplication(row: CNPGFleetRow, rt: CNPGRuntimeResponse |
   const streaming = reps.filter((r) => r.state === 'streaming').length
   const lags = reps.map((r) => r.replayLag).filter((v): v is number => v !== undefined)
   const maxLag = lags.length ? Math.max(...lags) : undefined
-  const lagText = maxLag !== undefined ? ` · max replay lag ${maxLag < 1 ? `${Math.round(maxLag * 1000)} ms` : `${maxLag.toFixed(1)} s`}` : ''
+  const lagText = maxLag !== undefined ? ` · max replay lag ${cnpgFormatLag(maxLag)}` : ''
   const source = 'From the primary’s pg_stat_replication via the instance manager'
   if (row.instances.desired === null) {
     return { ...row, replication: { text: `${streaming} streaming${lagText}`, tone: 'unknown', source: `${source}; spec.instances is not reported, so the expected standbys are unknown`, at: primary.status.capturedAt } }

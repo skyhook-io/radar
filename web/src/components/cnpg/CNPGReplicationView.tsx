@@ -1,17 +1,13 @@
 import type { ReactNode } from 'react'
 import { clsx } from 'clsx'
-import { Badge, CNPG_ROLE_DETAIL_TEXT, StatusDot, Tooltip, toneFillClass, toneTextClass } from '@skyhook-io/k8s-ui'
+import { Badge, CNPG_ROLE_DETAIL_TEXT, cnpgFormatLag, StatusDot, Tooltip, toneFillClass, toneTextClass } from '@skyhook-io/k8s-ui'
 import { useCNPGClusterCapabilities, type CNPGRuntimeInstance, type CNPGRuntimeReplication } from '../../api/cnpg'
 import { CNPGInstanceActions } from './actions/CNPGInstanceActions'
 import { formatBytes, lsnDistance } from './lsn'
 import { CNPG_BACKLOG_DEGRADED, cnpgStandbyBacklogTone, cnpgStandbyHeadline } from './runtimeModel'
 
 function seconds(s?: number): string {
-  if (s === undefined) return '—'
-  if (s < 1) return `${(s * 1000).toFixed(0)} ms`
-  if (s < 90) return `${s.toFixed(1)} s`
-  if (s < 5400) return `${Math.round(s / 60)} min`
-  return `${(s / 3600).toFixed(1)} h`
+  return s === undefined ? '—' : cnpgFormatLag(s)
 }
 
 function SourceState({ label, state, error }: { label: string; state: string; error?: string }) {

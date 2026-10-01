@@ -1171,12 +1171,20 @@ export function cnpgReplicationTone(streaming: number, expected: number, maxLagS
   return maxLagSeconds === undefined ? missing : cnpgWorseTone(missing, cnpgLagTone(maxLagSeconds))
 }
 
-function formatLagSeconds(s: number): string {
-  if (s === 0) return '0 s'
+/**
+ * The one way a replay lag reads: milliseconds below a second, one decimal
+ * below 10 s, whole seconds below 100 s, then whole minutes, then hours and
+ * minutes. Rounded down, so a lower bound stays one.
+ */
+export function cnpgFormatLag(s: number): string {
+  if (s <= 0) return '0 s'
   if (s < 1) return `${Math.round(s * 1000)} ms`
-  if (s < 90) return `${s.toFixed(1)} s`
-  if (s < 5400) return `${Math.round(s / 60)} min`
-  return `${(s / 3600).toFixed(1)} h`
+  if (s < 10) return `${(Math.floor(s * 10) / 10).toFixed(1)} s`
+  if (s < 100) return `${Math.floor(s)} s`
+  const minutes = Math.floor(s / 60)
+  if (minutes < 60) return `${minutes} min`
+  const m = minutes % 60
+  return m === 0 ? `${Math.floor(minutes / 60)} h` : `${Math.floor(minutes / 60)} h ${m} min`
 }
 
 function measuredReplication(base: CNPGFact, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): CNPGFact {
@@ -1189,7 +1197,7 @@ function measuredReplication(base: CNPGFact, reading: CNPGFleetMetricsReading | 
     case 'ok':
       if (lag.seconds === undefined) break
       return {
-        text: `${prefix} · max lag ${formatLagSeconds(lag.seconds)}`,
+        text: `${prefix} · max lag ${cnpgFormatLag(lag.seconds)}`,
         tone: cnpgLagTone(lag.seconds),
         source: `Largest standby replay lag, ${lag.pod ?? 'a standby'} · ${src.lagSource ?? 'Prometheus'}`,
       }
@@ -1247,18 +1255,13 @@ function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading
     id: `lag:${row.key}`,
     severity: floor >= CNPG_SUSTAINED_LAG_CRITICAL_SECONDS ? 'critical' : 'warning',
     category: 'availability',
-    title: `${pod} ≥ ${formatLagFloor(floor)} behind in every sample for ${formatWindowShort(lag.sustainedWindow)}`,
+    title: `${pod} ≥ ${cnpgFormatLag(floor)} behind in every sample for ${formatWindowShort(lag.sustainedWindow)}`,
     detail: `Lowest replay lag in the samples Prometheus recorded over the last ${window}. Gaps between samples aren't covered. A failover to it would start at least that far behind.`,
     subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
     source: 'measurement',
     measuredBy: 'Prometheus',
     sourceDetail: src.lagSource ?? 'Prometheus',
   }
-}
-
-// A lag floor in words: whole seconds below 100, minutes above.
-function formatLagFloor(s: number): string {
-  return s < 100 ? `${Math.floor(s)} s` : `${Math.floor(s / 60)} min`
 }
 
 // "10m0s" as "10 min"; "1h0m0s" as "1 h", for a title that must stay short.

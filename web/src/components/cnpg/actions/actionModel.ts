@@ -1,3 +1,4 @@
+import { cnpgFormatLag } from '@skyhook-io/k8s-ui'
 import type { CNPGActionCapability, CNPGBackupMethod } from '../../../api/cnpg'
 
 export interface StandbyChoice {
@@ -63,6 +64,5 @@ const SWITCHOVER_LAG_NOTE_SECONDS = 5
 export function switchoverLagNote(s: Pick<StandbyChoice, 'pod' | 'replayLagSeconds'>): string | undefined {
   const lag = s.replayLagSeconds
   if (lag === undefined || lag <= SWITCHOVER_LAG_NOTE_SECONDS) return undefined
-  const behind = lag < 90 ? `${Math.round(lag)} s` : `${Math.round(lag / 60)} min`
-  return `${s.pod} is ${behind} behind; the switchover may take longer while it catches up.`
+  return `${s.pod} is ${cnpgFormatLag(lag)} behind; the switchover may take longer while it catches up.`
 }

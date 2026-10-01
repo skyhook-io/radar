@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgCollapseBackupFailures, cnpgCompareProblems, cnpgIssueText, cnpgIssueTitle, type CNPGProblem } from './workspace'
+import { cnpgCollapseBackupFailures, cnpgCompareProblems, cnpgFormatLag, cnpgIssueText, cnpgIssueTitle, type CNPGProblem } from './workspace'
 
 const problem = (title: string, severity: CNPGProblem['severity'], kind: string, group = ''): CNPGProblem => ({
   id: title,
@@ -103,5 +103,18 @@ describe('scheduled run without a backup', () => {
     })
     expect(t.title).toBe('No successful backup since a scheduled run')
     expect(t.detail).toBe('ScheduledBackup pg-nightly (every day at 02:00 UTC) has had no successful backup since its run 2d ago')
+  })
+})
+
+describe('cnpgFormatLag', () => {
+  it('reads every replay lag the same way, rounded down', () => {
+    expect(cnpgFormatLag(0)).toBe('0 s')
+    expect(cnpgFormatLag(0.25)).toBe('250 ms')
+    expect(cnpgFormatLag(8.27)).toBe('8.2 s')
+    expect(cnpgFormatLag(55.9)).toBe('55 s')
+    expect(cnpgFormatLag(1500.4)).toBe('25 min')
+    expect(cnpgFormatLag(1721.3)).toBe('28 min')
+    expect(cnpgFormatLag(3600)).toBe('1 h')
+    expect(cnpgFormatLag(4000)).toBe('1 h 6 min')
   })
 })
