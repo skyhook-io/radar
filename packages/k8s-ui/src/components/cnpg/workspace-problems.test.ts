@@ -114,6 +114,7 @@ describe('cnpgFormatLag', () => {
   it('reads every replay lag the same way, rounded down', () => {
     expect(cnpgFormatLag(0)).toBe('0 s')
     expect(cnpgFormatLag(0.25)).toBe('250 ms')
+    expect(cnpgFormatLag(0.2509)).toBe('250 ms')
     expect(cnpgFormatLag(8.27)).toBe('8.2 s')
     expect(cnpgFormatLag(55.9)).toBe('55 s')
     expect(cnpgFormatLag(1500.4)).toBe('25 min')
@@ -140,6 +141,10 @@ describe('cnpgFoldLastBackupFailed', () => {
     const out = cnpgFoldLastBackupFailed([group, last], 'b-3')
     expect(out.map((x) => x.id)).toEqual(['3 backups failed'])
     expect('reason' in out[0]).toBe(false)
+  })
+  it('counts only a failed-Backup problem as covering the newest Backup', () => {
+    const other = p('stuck', 'Backup', 'b-3', 'CNPGBackupStuck')
+    expect(cnpgFoldLastBackupFailed([other, last], 'b-3').map((x) => x.id)).toEqual(['stuck', 'last'])
   })
   it('keeps it when the newest Backup is not among the failures, or is unknown', () => {
     const old = p('old failure', 'Backup', 'b-1', 'CNPGBackupFailed')

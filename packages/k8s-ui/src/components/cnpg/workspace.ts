@@ -325,7 +325,10 @@ export function cnpgFoldLastBackupFailed(problems: IssueProblem[], newestBackup:
   const covered =
     !!newestBackup &&
     problems.some(
-      (p) => p.subject.kind === 'Backup' && (p.subject.name === newestBackup || p.alsoAbout?.some((o) => o.kind === 'Backup' && o.name === newestBackup)),
+      (p) =>
+        p.reason === 'CNPGBackupFailed' &&
+        p.subject.kind === 'Backup' &&
+        (p.subject.name === newestBackup || p.alsoAbout?.some((o) => o.kind === 'Backup' && o.name === newestBackup)),
     )
   return problems
     .filter((p) => !(covered && p.reason === 'CNPGLastBackupFailed'))
@@ -1213,7 +1216,7 @@ export function cnpgReplicationTone(streaming: number, expected: number, maxLagS
  */
 export function cnpgFormatLag(s: number): string {
   if (s <= 0) return '0 s'
-  if (s < 1) return `${Math.round(s * 1000)} ms`
+  if (s < 1) return `${Math.floor(s * 1000)} ms`
   if (s < 10) return `${(Math.floor(s * 10) / 10).toFixed(1)} s`
   if (s < 100) return `${Math.floor(s)} s`
   const minutes = Math.floor(s / 60)
@@ -1291,7 +1294,7 @@ function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading
     severity: floor >= CNPG_SUSTAINED_LAG_CRITICAL_SECONDS ? 'critical' : 'warning',
     category: 'availability',
     title: `${pod} ≥ ${cnpgFormatLag(floor)} behind in every sample for ${formatWindowShort(lag.sustainedWindow)}`,
-    shortTitle: `${pod} ≥ ${cnpgFormatLag(floor)} behind for ${formatWindowShort(lag.sustainedWindow)}`,
+    shortTitle: `${pod}: all samples ≥ ${cnpgFormatLag(floor)} behind (${formatWindowShort(lag.sustainedWindow)})`,
     detail: `Lowest replay lag in the samples Prometheus recorded over the last ${window}. If Prometheus missed some scrapes, those moments aren't included. If it was still that far behind, a failover to it would lose or wait on that much WAL.`,
     subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
     source: 'measurement',

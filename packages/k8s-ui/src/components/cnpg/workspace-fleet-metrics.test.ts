@@ -107,7 +107,7 @@ describe('sustained replication lag', () => {
     expect(ha.problems[0]).toMatchObject({ measuredBy: 'Prometheus' })
     expect(ha.problems[0].detail).not.toMatch(/cnpg_/)
     expect(ha.problems[0].detail).toContain("If Prometheus missed some scrapes, those moments aren't included")
-    expect(ha.problems[0].shortTitle).toBe('ha-2 ≥ 40 s behind for 10 min')
+    expect(ha.problems[0].shortTitle).toBe('ha-2: all samples ≥ 40 s behind (10 min)')
     expect(ha.problems[0].detail).not.toContain('whole window')
     expect(row(f, 'dark').attention).toBe(false)
     expect(f.attentionCount).toBe(1)
