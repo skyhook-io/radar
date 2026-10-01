@@ -26,8 +26,12 @@ export function isForbiddenError(error: unknown): boolean {
 export interface RadarUpgradeRequirement {
   /** What the user is missing, phrased to start a sentence ("Policy results"). */
   feature: string
-  /** First Radar release that serves the feature, e.g. "v1.10.0". */
-  minimumVersion: string
+  /**
+   * First Radar release that serves the feature, e.g. "v1.10.0". Absent when
+   * it isn't known yet (a feature still awaiting its release); the note then
+   * asks for the latest Radar instead.
+   */
+  minimumVersion?: string
   /** The connected Radar's version, when known. */
   currentVersion?: string
   /** Newest Radar release, when known. */
@@ -43,6 +47,7 @@ export function getRadarUpgradeRequirement(error: unknown): RadarUpgradeRequirem
   const requirement = (error as { radarUpgrade?: unknown }).radarUpgrade
   if (typeof requirement !== 'object' || requirement === null) return null
   const r = requirement as Record<string, unknown>
-  if (typeof r.feature !== 'string' || typeof r.minimumVersion !== 'string') return null
+  if (typeof r.feature !== 'string') return null
+  if (r.minimumVersion !== undefined && typeof r.minimumVersion !== 'string') return null
   return requirement as RadarUpgradeRequirement
 }

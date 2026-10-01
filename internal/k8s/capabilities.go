@@ -127,6 +127,10 @@ type CloudConnectCapability struct {
 // so an embedding host running a newer frontend (Radar Hub) can tell what this
 // binary serves. A flag, once added, is always true here: older binaries simply
 // lack it, and the frontend falls back to a minimum-version check for them.
+//
+// A new endpoint that the frontend calls as an optional feature gets its flag
+// here in the same change, plus an entry in web/src/api/radarFeatures.ts
+// (TestFeatureFlagsHaveFrontendGates enforces the pairing).
 type FeatureCapabilities struct {
 	YAMLReview     bool `json:"yamlReview"`
 	YAMLSchemas    bool `json:"yamlSchemas"`

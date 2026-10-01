@@ -6,23 +6,25 @@ import {
   guardRadarFeature,
   isRadarFeatureUnsupported,
   radarFeatureSupport,
+  radarSpecSupport,
+  type RadarFeatureSpec,
   shouldRetryRadarQuery,
 } from './radarFeatures'
 
 describe('radarFeatureSupport', () => {
   it('trusts the advertised flag over the version', () => {
-    expect(radarFeatureSupport('policyResource', { policyResource: true }, 'v1.7.2')).toBe('supported')
-    expect(radarFeatureSupport('policyResource', { policyResource: true }, undefined)).toBe('supported')
+    expect(radarFeatureSupport('policyResource', { features: { policyResource: true } }, 'v1.7.2')).toBe('supported')
+    expect(radarFeatureSupport('policyResource', { features: { policyResource: true } }, undefined)).toBe('supported')
   })
 
   it('gates a legacy agent that predates the flag by its release version', () => {
     expect(radarFeatureSupport('resourceIssues', undefined, 'v1.7.2')).toBe('unsupported')
     expect(radarFeatureSupport('resourceIssues', undefined, 'v1.8.0')).toBe('supported')
-    expect(radarFeatureSupport('podEnvironment', {}, '1.8.7')).toBe('unsupported')
-    expect(radarFeatureSupport('podEnvironment', {}, '1.9.0')).toBe('supported')
+    expect(radarFeatureSupport('podEnvironment', { features: {} }, '1.8.7')).toBe('unsupported')
+    expect(radarFeatureSupport('podEnvironment', { features: {} }, '1.9.0')).toBe('supported')
     // v1.10 advertised a features block, just not this flag.
-    expect(radarFeatureSupport('policyResource', { yamlReview: true }, 'v1.9.2')).toBe('unsupported')
-    expect(radarFeatureSupport('policyResource', { yamlReview: true }, 'v1.12.0')).toBe('supported')
+    expect(radarFeatureSupport('policyResource', { features: { yamlReview: true } }, 'v1.9.2')).toBe('unsupported')
+    expect(radarFeatureSupport('policyResource', { features: { yamlReview: true } }, 'v1.12.0')).toBe('supported')
   })
 
   it('never gates on a version it cannot place', () => {
@@ -32,9 +34,23 @@ describe('radarFeatureSupport', () => {
   })
 
   it('gates features without a flag on version alone', () => {
-    expect(radarFeatureSupport('drainPlan', { resourceIssues: true }, 'v1.13.1')).toBe('unsupported')
+    expect(radarFeatureSupport('drainPlan', { features: { resourceIssues: true } }, 'v1.13.1')).toBe('unsupported')
     expect(radarFeatureSupport('drainPlan', undefined, 'v1.14.0')).toBe('supported')
     expect(radarFeatureSupport('capacity', undefined, 'dev')).toBe('unknown')
+  })
+})
+
+describe('radarSpecSupport for a feature whose flag shipped with its endpoint', () => {
+  const driftAlerts: RadarFeatureSpec = { label: 'Drift alerts', flag: 'resourceIssues', flagShippedWithEndpoint: true }
+
+  it('reads a loaded answer without the flag as too old, whatever the version', () => {
+    expect(radarSpecSupport(driftAlerts, { features: {} }, 'dev')).toBe('unsupported')
+    expect(radarSpecSupport(driftAlerts, {}, 'v1.7.2')).toBe('unsupported')
+    expect(radarSpecSupport(driftAlerts, { features: { resourceIssues: true } }, 'v1.7.2')).toBe('supported')
+  })
+
+  it('waits for /api/capabilities before deciding, and never version-gates without a first release', () => {
+    expect(radarSpecSupport(driftAlerts, undefined, 'v1.7.2')).toBe('unknown')
   })
 })
 

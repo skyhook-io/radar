@@ -3,13 +3,27 @@ import { compareVersions } from '../utils/version'
 
 // Radar Hub embeds the newest @skyhook-io/radar-app against whatever Radar is
 // installed in each cluster, so these endpoints can be missing on a connected
-// Radar. Each entry names the release that first served it. A Radar new enough
-// to advertise the `features` flag is trusted over its version.
-interface RadarFeatureSpec {
+// Radar. A Radar that advertises the feature's `features` flag is always
+// trusted; otherwise the release that first served the endpoint decides.
+//
+// Adding an optional endpoint: advertise a flag for it in
+// FeatureCapabilities (internal/k8s/capabilities.go) in the same change, add
+// an entry here with that flag and `flagShippedWithEndpoint: true`, and guard
+// its hook with useRadarFeature. TestFeatureFlagsHaveFrontendGates keeps the
+// two lists in step. `minimumVersion` can wait for the release to be cut:
+// until then the note asks for the latest Radar.
+export interface RadarFeatureSpec {
   /** Plural noun phrase; the upgrade note reads "<label> need Radar vX or newer." */
   label: string
-  minimumVersion: string
+  /** First release that served the endpoint, once known. */
+  minimumVersion?: string
   flag?: keyof FeatureCapabilities
+  /**
+   * The flag shipped in the same release as the endpoint, so a Radar whose
+   * capabilities omit it is too old regardless of its version. False for the
+   * entries below, whose flags were added after their endpoints.
+   */
+  flagShippedWithEndpoint?: boolean
 }
 
 export const RADAR_FEATURES = {
@@ -34,25 +48,37 @@ export interface RadarVersions {
 // pre-release builds stay unknown so a custom build is never wrongly gated.
 const RELEASE_VERSION = /^v?\d+\.\d+\.\d+$/
 
-export function radarFeatureSupport(
-  feature: RadarFeature,
-  features: FeatureCapabilities | undefined,
+/**
+ * `capabilities` is the /api/capabilities answer, or undefined while it is
+ * still loading; only a loaded answer can prove a flag is absent.
+ */
+export function radarSpecSupport(
+  spec: RadarFeatureSpec,
+  capabilities: { features?: FeatureCapabilities } | undefined,
   currentVersion: string | undefined,
 ): RadarFeatureSupport {
-  const spec: RadarFeatureSpec = RADAR_FEATURES[feature]
-  if (spec.flag && features?.[spec.flag] === true) return 'supported'
+  if (spec.flag && capabilities?.features?.[spec.flag] === true) return 'supported'
+  if (spec.flag && spec.flagShippedWithEndpoint && capabilities) return 'unsupported'
   const version = currentVersion?.trim()
-  if (!version || !RELEASE_VERSION.test(version)) return 'unknown'
+  if (!spec.minimumVersion || !version || !RELEASE_VERSION.test(version)) return 'unknown'
   const order = compareVersions(version, spec.minimumVersion)
   if (order === null) return 'unknown'
   return order < 0 ? 'unsupported' : 'supported'
 }
 
+export function radarFeatureSupport(
+  feature: RadarFeature,
+  capabilities: { features?: FeatureCapabilities } | undefined,
+  currentVersion: string | undefined,
+): RadarFeatureSupport {
+  return radarSpecSupport(RADAR_FEATURES[feature], capabilities, currentVersion)
+}
+
 export function radarUpgradeRequirement(feature: RadarFeature, versions: RadarVersions): RadarUpgradeRequirement {
-  const spec = RADAR_FEATURES[feature]
+  const spec: RadarFeatureSpec = RADAR_FEATURES[feature]
   return {
     feature: spec.label,
-    minimumVersion: spec.minimumVersion,
+    ...(spec.minimumVersion ? { minimumVersion: spec.minimumVersion } : {}),
     ...(versions.currentVersion ? { currentVersion: versions.currentVersion } : {}),
     ...(versions.latestVersion ? { latestVersion: versions.latestVersion } : {}),
   }
@@ -68,7 +94,7 @@ export class RadarFeatureUnsupportedError extends Error {
 
   constructor(feature: RadarFeature, versions: RadarVersions) {
     const requirement = radarUpgradeRequirement(feature, versions)
-    super(`${requirement.feature} need Radar ${requirement.minimumVersion} or newer`)
+    super(`${requirement.feature} need a newer Radar`)
     this.name = 'RadarFeatureUnsupportedError'
     this.feature = feature
     this.radarUpgrade = requirement

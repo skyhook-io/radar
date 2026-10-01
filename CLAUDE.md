@@ -209,6 +209,10 @@ Handlers emit `{"error": "..."}` via `s.writeError(w, status, msg)`. Status conv
 
 Namespace filters accept both `?namespace=X` (single) and `?namespaces=X,Y` (preferred). Use `parseNamespaces()` to handle both.
 
+### Version skew (newer UI, older Radar)
+
+Radar Hub embeds the newest `@skyhook-io/radar-app` against whatever Radar each cluster runs, so a frontend call to a new endpoint can hit a Radar that predates it. When adding an endpoint the UI calls: advertise a flag for it in `FeatureCapabilities` (`internal/k8s/capabilities.go`) in the same PR, add an entry with that flag and `flagShippedWithEndpoint: true` to `web/src/api/radarFeatures.ts`, and guard the hook with `useRadarFeature`. An older Radar then gets a "needs a newer Radar" note instead of a red error. `TestFeatureFlagsHaveFrontendGates` fails if the flag and the entry drift apart.
+
 ### Error Handling (Frontend)
 
 React Query mutations carry `meta: { errorMessage, successMessage }` — the global toast handler reads those. Server errors arrive as `{"error": "..."}` and surface unchanged. Don't add per-mutation `onError` toasts that would duplicate the meta-driven path.

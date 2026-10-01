@@ -79,8 +79,8 @@ export interface NavCustomization {
 export interface RadarUpgradeRequest {
   /** What the user is missing, e.g. "Policy results". */
   feature: string;
-  /** First Radar release that serves it, e.g. "v1.10.0". */
-  minimumVersion: string;
+  /** First Radar release that serves it, e.g. "v1.10.0"; absent until known, meaning "the latest". */
+  minimumVersion?: string;
   currentVersion?: string;
   latestVersion?: string;
 }

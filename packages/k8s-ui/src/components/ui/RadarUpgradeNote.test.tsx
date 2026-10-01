@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { formatRadarVersion, radarUpgradeDetail } from './RadarUpgradeNote'
+import { renderToString } from 'react-dom/server'
+import { formatRadarVersion, radarUpgradeDetail, RadarUpgradeNote } from './RadarUpgradeNote'
 import { getRadarUpgradeRequirement } from '../../types/fetch-error'
 
 describe('radarUpgradeDetail', () => {
@@ -13,6 +14,26 @@ describe('radarUpgradeDetail', () => {
       .toBe('Available from Radar v1.10.')
     expect(radarUpgradeDetail({ feature: 'Policy results', minimumVersion: 'v1.10.0' }))
       .toBe('Available from Radar v1.10.')
+  })
+})
+
+describe('radarUpgradeDetail without a known first release', () => {
+  const unknownSince = { feature: 'Drift alerts', currentVersion: 'v1.7.2' }
+
+  it('asks for the latest release when it is newer than the running one', () => {
+    expect(radarUpgradeDetail({ ...unknownSince, latestVersion: '1.16.0' }))
+      .toBe("Available in the latest Radar, v1.16. You're on v1.7.2.")
+  })
+
+  it('falls back to "a newer Radar" when the latest is unknown or not newer', () => {
+    expect(radarUpgradeDetail(unknownSince)).toBe("Available in a newer Radar. You're on v1.7.2.")
+    expect(radarUpgradeDetail({ ...unknownSince, currentVersion: 'v1.16.0', latestVersion: 'v1.16.0' }))
+      .toBe("Available in a newer Radar. You're on v1.16.")
+  })
+
+  it('reads the same way inline', () => {
+    const html = renderToString(<RadarUpgradeNote requirement={{ ...unknownSince, latestVersion: 'v1.16.0' }} />)
+    expect(html).toContain('need the latest Radar, v1.16. You&#x27;re on v1.7.2.')
   })
 })
 
@@ -32,7 +53,8 @@ describe('getRadarUpgradeRequirement', () => {
 
   it('ignores plain errors and malformed requirements', () => {
     expect(getRadarUpgradeRequirement(new Error('HTTP 404 (Not Found)'))).toBeNull()
-    expect(getRadarUpgradeRequirement({ radarUpgrade: { feature: 'x' } })).toBeNull()
+    expect(getRadarUpgradeRequirement({ radarUpgrade: { minimumVersion: 'v1.9.0' } })).toBeNull()
+    expect(getRadarUpgradeRequirement({ radarUpgrade: { feature: 'x', minimumVersion: 9 } })).toBeNull()
     expect(getRadarUpgradeRequirement(null)).toBeNull()
   })
 })

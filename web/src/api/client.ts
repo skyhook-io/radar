@@ -1778,7 +1778,7 @@ export function useRadarFeature(feature: RadarFeature) {
   const { radarVersion } = useNavCustomization()
   const currentVersion = versionInfo?.currentVersion || radarVersion
   const latestVersion = versionInfo?.latestVersion
-  const support = radarFeatureSupport(feature, capabilities?.features, currentVersion)
+  const support = radarFeatureSupport(feature, capabilities, currentVersion)
 
   return {
     gatedKey: support === 'unsupported' ? ['radar-feature-unsupported'] : [],
