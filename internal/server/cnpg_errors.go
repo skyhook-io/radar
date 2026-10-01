@@ -48,6 +48,8 @@ func cnpgTransportSentence(err error, port int, timeout time.Duration) (string, 
 	switch {
 	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(lower, "context deadline exceeded"):
 		return fmt.Sprintf("the Pod did not answer%s within %s", on, cnpgSeconds(timeout)), true
+	case errors.Is(err, context.Canceled) || strings.Contains(lower, "context canceled"):
+		return "the read was cancelled before the Kubernetes API answered", true
 	case strings.Contains(lower, "container not found"):
 		return "the container is not running", true
 	case relayed && strings.Contains(lower, "connection refused"):

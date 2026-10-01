@@ -1,8 +1,13 @@
 package server
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -174,5 +179,31 @@ func TestCNPGOperatorLeadingPod(t *testing.T) {
 	gone.HolderIsCurrentPod = false
 	if got := cnpgOperatorLeadingPod(gone); got != "" {
 		t.Errorf("a holder that is no current Pod is labelled leader: %q", got)
+	}
+}
+
+func TestCNPGOperatorFactsReadOutlivesTheCaller(t *testing.T) {
+	type key struct{}
+	parent, cancelParent := context.WithCancel(context.WithValue(context.Background(), key{}, "alice"))
+	r := httptest.NewRequest(http.MethodGet, "/", nil).WithContext(parent)
+	detached, cancel := cnpgDetachedRequest(r, time.Minute)
+	defer cancel()
+	cancelParent()
+	if err := detached.Context().Err(); err != nil {
+		t.Fatalf("a caller hanging up cancelled the shared operator read: %v", err)
+	}
+	if detached.Context().Value(key{}) != "alice" {
+		t.Error("the caller's identity was not kept")
+	}
+}
+
+func TestCNPGOperatorLeadingHidesRawLeaseErrors(t *testing.T) {
+	leader := CNPGOperatorLeader{CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadError, Reason: `Get "https://127.0.0.1:55484/apis/coordination.k8s.io/v1/namespaces/cnpg-system/leases/db9c8771.cnpg.io": context canceled`}}
+	got, reason := cnpgOperatorLeading(operatorDeployment(1, 1), leader)
+	if got != nil || reason != "couldn't read its leader lease" {
+		t.Errorf("leading = %v, reason = %q", got, reason)
+	}
+	if plain, ok := cnpgTransportSentence(errors.New(leader.Reason), 0, time.Second); !ok || strings.Contains(plain, "127.0.0.1") {
+		t.Errorf("transport sentence = %q (%v)", plain, ok)
 	}
 }

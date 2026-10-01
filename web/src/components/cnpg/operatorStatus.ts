@@ -48,7 +48,7 @@ export function cnpgOperatorActionNote(v: CNPGOperatorVerdict | undefined): { to
     }
   }
   if (v.state === 'unknown' && v.unknown) {
-    return { tone: 'info', text: `Radar could not confirm the operator is reconciling: ${v.unknown}.` }
+    return { tone: 'info', text: `Radar couldn't confirm the operator is running (${v.unknown}).` }
   }
   return null
 }

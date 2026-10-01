@@ -1,6 +1,8 @@
 package server
 
 import (
+	"context"
+	"log"
 	"net/http"
 	"slices"
 	"sort"
@@ -22,6 +24,8 @@ const (
 	cnpgOperatorNotWatched = "notWatched"
 
 	cnpgOperatorStatusTTL = 10 * time.Second
+	// Bounds the detached operator read; a slow API server reads as unknown.
+	cnpgOperatorFactsTimeout = 10 * time.Second
 )
 
 // CNPGOperatorVerdict is whether the operator watching one namespace is acting
@@ -118,7 +122,12 @@ func (s *Server) cnpgOperatorFactsFor(r *http.Request) cnpgOperatorFacts {
 	}
 	cnpgOperatorStatusMu.Unlock()
 
-	facts := s.readCNPGOperatorFacts(r)
+	// Read detached from the request: the result is memoized for every caller,
+	// so a client that hangs up mid-read (a closed dialog, a navigation) must
+	// not leave "context canceled" behind as the operator's state.
+	detached, cancel := cnpgDetachedRequest(r, cnpgOperatorFactsTimeout)
+	defer cancel()
+	facts := s.readCNPGOperatorFacts(detached)
 
 	cnpgOperatorStatusMu.Lock()
 	defer cnpgOperatorStatusMu.Unlock()
@@ -185,13 +194,12 @@ func cnpgOperatorLeading(d *appsv1.Deployment, leader CNPGOperatorLeader) (*bool
 		}
 		return &t, ""
 	case cnpgReadDenied:
-		return nil, "the leader lease is not readable (needs " + leader.Grant + ")"
+		return nil, "its leader lease is not readable (needs " + leader.Grant + ")"
 	default:
-		reason := "the leader lease could not be read"
 		if leader.Reason != "" {
-			reason += ": " + leader.Reason
+			log.Printf("[cnpg] Operator %s/%s leader lease unread: %s", d.Namespace, d.Name, leader.Reason)
 		}
-		return nil, reason
+		return nil, "couldn't read its leader lease"
 	}
 }
 
@@ -339,4 +347,11 @@ func cnpgOperatorWebhookGuard(v CNPGOperatorVerdict, capability CNPGActionCapabi
 	capability.Allowed = false
 	capability.Reason = "The API server would reject it: " + v.WebhookReason
 	return capability
+}
+
+// cnpgDetachedRequest is r with a context that keeps its values (the caller's
+// identity) but not its cancellation, bounded by timeout instead.
+func cnpgDetachedRequest(r *http.Request, timeout time.Duration) (*http.Request, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), timeout)
+	return r.WithContext(ctx), cancel
 }
