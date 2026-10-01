@@ -15,7 +15,8 @@ export {
   getAuthHeaders,
   getCredentialsMode,
 } from './api/config';
-export type { NavCustomization, FleetTakeoverTarget, RadarUpgradeRequest } from './context/NavCustomization';
+export type { NavCustomization, FleetTakeoverTarget } from './context/NavCustomization';
+export type { RadarUpgradeRequest } from './context/RadarUpgradeHost';
 // Timeline data-source selection — lets an embedder back the timeline with a
 // retained-history endpoint instead of Radar's local event store. Additive;
 // absent = local (standalone behavior).

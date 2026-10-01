@@ -2,7 +2,7 @@ import { useMemo, type ReactNode } from 'react'
 import { RadarUpgradeContext, type RadarUpgradeActions } from '@skyhook-io/k8s-ui'
 import { useCapabilities, useVersionCheck } from '../api/client'
 import { IN_CLUSTER_UPGRADE_URL } from '../utils/version'
-import { useNavCustomization } from './NavCustomization'
+import { useRadarUpgradeHost } from './RadarUpgradeHost'
 
 /**
  * Supplies the "Upgrade Radar" action to the inline notes k8s-ui renders for
@@ -11,7 +11,7 @@ import { useNavCustomization } from './NavCustomization'
  * for how it was installed.
  */
 export function RadarUpgradeProvider({ children }: { children: ReactNode }) {
-  const { onRequestRadarUpgrade } = useNavCustomization()
+  const { onRequestRadarUpgrade } = useRadarUpgradeHost()
   const { data: capabilities } = useCapabilities()
   const { data: versionInfo } = useVersionCheck()
   const mode = capabilities?.deployment?.mode ?? 'local'

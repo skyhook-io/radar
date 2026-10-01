@@ -67,7 +67,7 @@ import {
   shouldRetryRadarQuery,
   type RadarFeature,
 } from './radarFeatures'
-import { useNavCustomization } from '../context/NavCustomization'
+import { useRadarUpgradeHost } from '../context/RadarUpgradeHost'
 import { apiVersionToGroup } from '../utils/navigation'
 import type { DeploymentMode } from '../types'
 
@@ -1775,7 +1775,7 @@ export function useVersionCheck() {
 export function useRadarFeature(feature: RadarFeature) {
   const { data: capabilities } = useCapabilities()
   const { data: versionInfo } = useQuery<VersionInfo>(versionCheckQueryOptions(getApiBase()))
-  const { radarVersion } = useNavCustomization()
+  const { radarVersion } = useRadarUpgradeHost()
   const currentVersion = versionInfo?.currentVersion || radarVersion
   const latestVersion = versionInfo?.latestVersion
   const support = radarFeatureSupport(feature, capabilities, currentVersion)

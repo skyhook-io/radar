@@ -13,7 +13,7 @@ import { isRadarFeatureUnsupported } from './radarFeatures'
 // /version-check and /api-resources answer; the tests settle those by seeding
 // the cache.
 const host = vi.hoisted(() => ({ radarVersion: 'v1.7.2' as string | undefined }))
-vi.mock('../context/NavCustomization', () => ({ useNavCustomization: () => host }))
+vi.mock('../context/RadarUpgradeHost', () => ({ useRadarUpgradeHost: () => host }))
 
 const CHI_404 = () => new Response('404 page not found\n', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } })
 let chiRoutes: string[] = []
