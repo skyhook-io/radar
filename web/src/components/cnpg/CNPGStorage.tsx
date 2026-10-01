@@ -308,10 +308,12 @@ function InstanceCard({ inst, walCoverage, stated }: { inst: CNPGStorageInstance
   )
 }
 
-function coverageLine(label: string, c: { state: string; grant?: string; reason?: string }): string | null {
+// "<label> needs …" lines; `plural` for a label that takes "need".
+function coverageLine(label: string, c: { state: string; grant?: string; reason?: string }, plural = false): string | null {
+  const needs = plural ? 'need' : 'needs'
   if (c.state === 'ok') return null
-  if (c.state === 'noPrometheus') return `${label} needs Prometheus. ${c.reason ?? 'Radar is not connected to one'}.`
-  if (c.state === 'denied') return `${label}: no access (needs ${c.grant})`
+  if (c.state === 'noPrometheus') return `${label} ${needs} Prometheus. ${c.reason ?? 'Radar is not connected to one'}.`
+  if (c.state === 'denied') return `${label} ${needs} ${c.grant ?? 'a grant you do not have'}.`
   return `${label}: ${c.reason ?? c.state}`
 }
 
@@ -324,7 +326,7 @@ export function CNPGStorage({ namespace, name, primary }: { namespace: string; n
   }
   const data = q.data
   const notes = [
-    coverageLine('Volumes', data.volumes),
+    coverageLine('Volumes', data.volumes, true),
     data.usage.state !== 'notRead' ? coverageLine('Used space', data.usage) : null,
     coverageLine('WAL', data.wal),
   ].filter((x): x is string => !!x)
