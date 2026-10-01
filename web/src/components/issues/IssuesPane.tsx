@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useIssues } from "../../api/client";
+import { useIssues, useResourceIssues } from "../../api/client";
 import {
   useAPIResources,
   karpenterCapacityAvailable,
@@ -75,42 +75,60 @@ export function capacityHrefForIssue(
   return null;
 }
 
-/** The subject a link into Issues narrows to (?kind=&resource=ns/name), or null. */
+/** The subject a link into Issues narrows to (?kind=&group=&resource=ns/name), or null. */
 export function issueSubjectFromParams(params: URLSearchParams): IssueSubject | null {
   const kind = params.get("kind");
   const resource = params.get("resource");
   if (!kind || !resource) return null;
+  const group = params.get("group") ?? "";
   const slash = resource.indexOf("/");
-  if (slash < 0) return { kind, namespace: "", name: resource };
+  if (slash < 0) return { kind, group, namespace: "", name: resource };
   const name = resource.slice(slash + 1);
-  return name ? { kind, namespace: resource.slice(0, slash), name } : null;
+  return name ? { kind, group, namespace: resource.slice(0, slash), name } : null;
 }
 
 export interface IssueSubject {
   kind: string;
+  /** The API group; "" for the core group. Tells a CNPG Cluster from a CAPI one. */
+  group: string;
   namespace: string;
   name: string;
 }
 
+export type IssueSubjectState =
+  | { state: "hidden" }
+  | { state: "checking" }
+  | { state: "unconfirmed"; why: string }
+  | { state: "found"; issues: Issue[] }
+  | { state: "none" };
+
 /**
- * How much the loaded issues can say about the subject. Its namespace being
- * outside the view filter, or the list being capped, means an absent issue is
- * unknown rather than none.
+ * What can be said about the subject's issues. They come from the per-resource
+ * lookup, which matches every grouped member (the list's inline members are
+ * capped) by exact API group; an empty answer is "none" only when nothing
+ * kept Radar from reading the evidence.
  */
-export function issueSubjectCoverage(
+export function issueSubjectState(
   subject: IssueSubject,
   viewNamespaces: string[],
-  capped: boolean,
-): "hidden" | "capped" | "complete" {
-  if (subject.namespace && viewNamespaces.length > 0 && !viewNamespaces.includes(subject.namespace)) return "hidden";
-  return capped ? "capped" : "complete";
-}
-
-/** Whether an issue is about the subject: its own subject, or one of the resources grouped under it. */
-export function issueMatchesSubject(issue: Issue, subject: IssueSubject): boolean {
-  const same = (r: { kind?: string; namespace?: string; name?: string }) =>
-    r.kind === subject.kind && (r.namespace ?? "") === subject.namespace && r.name === subject.name;
-  return same(issue) || (issue.members ?? []).some(same);
+  related: { isLoading: boolean; error: unknown; data: Issue[] | undefined },
+  visibility: { state?: string; impact?: string } | undefined,
+): IssueSubjectState {
+  if (subject.namespace && viewNamespaces.length > 0 && !viewNamespaces.includes(subject.namespace)) {
+    return { state: "hidden" };
+  }
+  if (related.error) {
+    return { state: "unconfirmed", why: related.error instanceof Error ? related.error.message : String(related.error) };
+  }
+  if (related.isLoading || !related.data) return { state: "checking" };
+  if (related.data.length > 0) return { state: "found", issues: related.data };
+  if (visibility?.state === "degraded" || visibility?.state === "limited") {
+    return {
+      state: "unconfirmed",
+      why: `some evidence isn't readable${visibility.impact ? ` (${visibility.impact.replace(/\.$/, "")})` : ""}`,
+    };
+  }
+  return { state: "none" };
 }
 
 const SEVERITY_TONE: Record<IssueSeverity, SummaryTone> = {
@@ -158,15 +176,22 @@ export function IssuesPane({
     return t;
   }, [allIssues]);
   const [searchParams, setSearchParams] = useSearchParams();
-  const subject = issueSubjectFromParams(searchParams);
-  const subjectIssues = subject
-    ? allIssues.filter((i) => issueMatchesSubject(i, subject))
+  const subject = useMemo(() => issueSubjectFromParams(searchParams), [searchParams]);
+  const subjectHidden =
+    !!subject?.namespace && namespaces.length > 0 && !namespaces.includes(subject.namespace);
+  const related = useResourceIssues(
+    subject?.kind ?? "",
+    subject?.group || undefined,
+    subject?.namespace ?? "",
+    subject?.name ?? "",
+    !!subject && !subjectHidden,
+  );
+  const subjectState = subject
+    ? issueSubjectState(subject, namespaces, related, data?.visibility)
+    : null;
+  const subjectIssues = subjectState
+    ? subjectState.state === "found" ? subjectState.issues : []
     : allIssues;
-  const capped =
-    data?.total_matched != null && data.total_matched > (data.issues?.length ?? 0);
-  const subjectCoverage = subject
-    ? issueSubjectCoverage(subject, namespaces, capped)
-    : "complete";
   const shown = severityFilter.size
     ? subjectIssues.filter((i) => severityFilter.has(i.severity))
     : subjectIssues;
@@ -175,6 +200,7 @@ export function IssuesPane({
       (prev) => {
         const next = new URLSearchParams(prev);
         next.delete("kind");
+        next.delete("group");
         next.delete("resource");
         return next;
       },
@@ -220,7 +246,10 @@ export function IssuesPane({
             <FreshnessControl
               mode="auto"
               dataUpdatedAt={dataUpdatedAt}
-              onRefresh={() => refetch()}
+              onRefresh={() => {
+                refetch();
+                if (subject && !subjectHidden) related.refetch();
+              }}
               connectionState={connection.state}
             />
             {allIssues.length > 0 && (
@@ -270,9 +299,9 @@ export function IssuesPane({
           </p>
         )}
 
-      {subject && (
+      {subject && subjectState && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-theme-text-secondary">
-          {subjectCoverage === "hidden" ? (
+          {subjectState.state === "hidden" ? (
             <>
               <span>
                 {subject.kind}{" "}
@@ -294,16 +323,14 @@ export function IssuesPane({
             </>
           ) : (
             <span>
-              Showing issues about {subject.kind}{" "}
+              {subjectState.state === "checking" ? "Checking issues about" : "Showing issues about"}{" "}
+              {subject.kind}{" "}
               <span className="font-mono">
                 {subject.namespace ? `${subject.namespace}/` : ""}
                 {subject.name}
               </span>
-              {subjectIssues.length === 0
-                ? subjectCoverage === "capped"
-                  ? " — none among the issues returned, which are capped"
-                  : " — none now"
-                : ""}
+              {subjectState.state === "none" && " — none now"}
+              {subjectState.state === "unconfirmed" && ` — can't confirm: ${subjectState.why}`}
             </span>
           )}
           <button type="button" onClick={clearSubject} className="text-accent-text hover:underline">

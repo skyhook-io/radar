@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Issue } from "@skyhook-io/k8s-ui";
-import { capacityHrefForIssue, issueMatchesSubject, issueSubjectCoverage, issueSubjectFromParams } from "./IssuesPane";
+import { capacityHrefForIssue, issueSubjectFromParams, issueSubjectState } from "./IssuesPane";
 
 function issue(partial: Partial<Issue>): Issue {
   return {
@@ -142,28 +142,37 @@ describe("capacityHrefForIssue subject carry", () => {
 });
 
 describe('issue subject links', () => {
-  it('reads the subject a link narrows to', () => {
-    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&resource=pg%2Fpg-main'))).toEqual({ kind: 'Cluster', namespace: 'pg', name: 'pg-main' })
-    expect(issueSubjectFromParams(new URLSearchParams('kind=ClusterImageCatalog&resource=pg'))).toEqual({ kind: 'ClusterImageCatalog', namespace: '', name: 'pg' })
+  it('reads the subject a link narrows to, with its API group', () => {
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&group=postgresql.cnpg.io&resource=pg%2Fpg-main'))).toEqual({ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'pg-main' })
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Pod&resource=pg%2Fpg-main-1'))).toEqual({ kind: 'Pod', group: '', namespace: 'pg', name: 'pg-main-1' })
+    expect(issueSubjectFromParams(new URLSearchParams('kind=ClusterImageCatalog&group=postgresql.cnpg.io&resource=pg'))).toEqual({ kind: 'ClusterImageCatalog', group: 'postgresql.cnpg.io', namespace: '', name: 'pg' })
     expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster'))).toBeNull()
     expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&resource=pg%2F'))).toBeNull()
   })
   it('never reads the view filter as the subject namespace', () => {
     expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&namespace=pg&name=pg-main'))).toBeNull()
   })
-  it('treats a subject outside the view filter, or a capped list, as unknown rather than none', () => {
-    const subject = { kind: 'Cluster', namespace: 'pg', name: 'main' }
-    expect(issueSubjectCoverage(subject, ['app'], false)).toBe('hidden')
-    expect(issueSubjectCoverage(subject, ['app'], true)).toBe('hidden')
-    expect(issueSubjectCoverage(subject, ['app', 'pg'], false)).toBe('complete')
-    expect(issueSubjectCoverage(subject, [], false)).toBe('complete')
-    expect(issueSubjectCoverage(subject, [], true)).toBe('capped')
-    expect(issueSubjectCoverage({ kind: 'ClusterImageCatalog', namespace: '', name: 'pg' }, ['app'], false)).toBe('complete')
+})
+
+describe('issueSubjectState', () => {
+  const subject = { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'main' }
+  const loaded = (data: Issue[]) => ({ isLoading: false, error: null, data })
+  it('says the view filter hides the subject rather than none', () => {
+    expect(issueSubjectState(subject, ['app'], loaded([]), undefined)).toEqual({ state: 'hidden' })
+    expect(issueSubjectState(subject, ['app', 'pg'], loaded([]), undefined)).toEqual({ state: 'none' })
+    expect(issueSubjectState(subject, [], loaded([]), undefined)).toEqual({ state: 'none' })
+    expect(issueSubjectState({ ...subject, kind: 'ClusterImageCatalog', namespace: '' }, ['app'], loaded([]), undefined)).toEqual({ state: 'none' })
   })
-  it('matches an issue by its own subject or a grouped member', () => {
-    const subject = { kind: 'Pod', namespace: 'pg', name: 'pg-main-1' }
-    expect(issueMatchesSubject({ kind: 'Pod', namespace: 'pg', name: 'pg-main-1' } as never, subject)).toBe(true)
-    expect(issueMatchesSubject({ kind: 'Cluster', namespace: 'pg', name: 'pg-main', members: [{ kind: 'Pod', namespace: 'pg', name: 'pg-main-1' }] } as never, subject)).toBe(true)
-    expect(issueMatchesSubject({ kind: 'Pod', namespace: 'other', name: 'pg-main-1' } as never, subject)).toBe(false)
+  it('reads an empty answer under limited visibility as unconfirmed, never none', () => {
+    expect(issueSubjectState(subject, [], loaded([]), { state: 'degraded', impact: 'Pods are not readable.' })).toEqual({ state: 'unconfirmed', why: "some evidence isn't readable (Pods are not readable)" })
+    expect(issueSubjectState(subject, [], loaded([]), { state: 'limited' })).toEqual({ state: 'unconfirmed', why: "some evidence isn't readable" })
+  })
+  it('reports a failed lookup as unconfirmed and a pending one as checking', () => {
+    expect(issueSubjectState(subject, [], { isLoading: false, error: new Error('forbidden'), data: undefined }, undefined)).toEqual({ state: 'unconfirmed', why: 'forbidden' })
+    expect(issueSubjectState(subject, [], { isLoading: true, error: null, data: undefined }, undefined)).toEqual({ state: 'checking' })
+  })
+  it('takes the per-resource answer, which covers members past the inline cap', () => {
+    const grouped = issue({ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'main', members: [], members_truncated: true })
+    expect(issueSubjectState(subject, [], loaded([grouped]), { state: 'limited' })).toEqual({ state: 'found', issues: [grouped] })
   })
 })

@@ -40,4 +40,7 @@ describe('cnpgIssuesPath', () => {
   it('keeps the current namespace view filter', () => {
     expect(cnpgIssuesPath({ kind: 'Cluster', namespace: 'pg', name: 'main' }, 'pg,app')).toBe('/issues?namespaces=pg%2Capp&kind=Cluster&resource=pg%2Fmain')
   })
+  it('carries the API group, so a CNPG Cluster is not a CAPI one', () => {
+    expect(cnpgIssuesPath({ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'main' })).toBe('/issues?kind=Cluster&group=postgresql.cnpg.io&resource=pg%2Fmain')
+  })
 })

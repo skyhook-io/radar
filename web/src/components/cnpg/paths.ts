@@ -59,10 +59,11 @@ export function cnpgWithinDetail(currentPathname: string, currentSearch: string,
  * The subject travels as `resource=ns/name`, never `namespace=`: App reads a bare
  * `namespace` as the view filter, and a URL without `namespaces` clears it.
  */
-export function cnpgIssuesPath(subject: { kind: string; namespace: string; name: string }, viewNamespaces?: string | null): string {
+export function cnpgIssuesPath(subject: { kind: string; group?: string; namespace: string; name: string }, viewNamespaces?: string | null): string {
   const params = new URLSearchParams()
   if (viewNamespaces) params.set('namespaces', viewNamespaces)
   params.set('kind', subject.kind)
+  if (subject.group) params.set('group', subject.group)
   params.set('resource', subject.namespace ? `${subject.namespace}/${subject.name}` : subject.name)
   return `/issues?${params}`
 }
