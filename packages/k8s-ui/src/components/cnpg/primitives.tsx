@@ -39,12 +39,13 @@ export function FactValue({ fact, className }: { fact: CNPGFact; className?: str
   const body = (
     <span className={clsx(toneTextClass(fact.tone), className)}>
       {fact.text}
-      {age && <span className="text-theme-text-secondary">{fact.text ? ' · ' : ''}{age} ago</span>}
+      {age && fact.atMeaning === 'since' && <span className="text-theme-text-secondary"> for {age}</span>}
+      {age && fact.atMeaning !== 'since' && <span className="text-theme-text-secondary">{fact.text ? ' · ' : ''}{age} ago</span>}
     </span>
   )
   if (!fact.source && !fact.at && !fact.detail) return body
   return (
-    <Tooltip content={[fact.at ? new Date(fact.at).toUTCString() : null, fact.source, fact.detail].filter(Boolean).join(' · ')} position="top">
+    <Tooltip content={[fact.at ? `${fact.atMeaning === 'since' ? 'since ' : ''}${new Date(fact.at).toUTCString()}` : null, fact.source, fact.detail].filter(Boolean).join(' · ')} position="top">
       {body}
     </Tooltip>
   )

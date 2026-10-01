@@ -108,6 +108,8 @@ export interface CNPGFact {
   source?: string
   /** A timestamp the text refers to; the UI renders it as an age. */
   at?: string
+  /** `since`: `at` is when a still-current state began, rendered "Failing for 2d" rather than "· 2d ago". */
+  atMeaning?: 'since'
   /** The full explanation behind a short `source`, shown on hover only. */
   detail?: string
 }
@@ -478,7 +480,7 @@ function walFact(cluster: any): CNPGFact {
       text: 'Failing',
       tone: 'unhealthy',
       source: 'ContinuousArchiving condition',
-      ...(c.lastTransitionTime ? { at: c.lastTransitionTime } : {}),
+      ...(c.lastTransitionTime ? { at: c.lastTransitionTime, atMeaning: 'since' as const } : {}),
       ...(c.message ? { detail: c.message } : {}),
     }
   }
