@@ -3957,6 +3957,30 @@ export function useAvailablePorts(
 // Resource Update/Delete mutations
 // ============================================================================
 
+const MAX_PLAIN_ERROR_LENGTH = 300;
+
+// Radar answers {"error": ...}, but a proxy in front of it (Radar Hub's
+// cluster tunnel, a timeout middleware) answers in plain text — keep that
+// text rather than dropping it for a JSON parse failure. Only the plain-text
+// body is capped: it can be a whole HTML error page, while Radar's own error
+// is the apiserver message, whose reason ("field is immutable") often sits at
+// the end.
+export async function readErrorMessage(response: Response): Promise<string> {
+  const body = (await response.text().catch(() => "")).trim();
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed && typeof parsed.error === "string" && parsed.error) {
+      return parsed.error;
+    }
+  } catch {
+    /* not JSON */
+  }
+  if (!body) return `HTTP ${response.status}`;
+  return body.length > MAX_PLAIN_ERROR_LENGTH
+    ? `${body.slice(0, MAX_PLAIN_ERROR_LENGTH - 1)}…`
+    : body;
+}
+
 // Update a resource with new YAML
 export function useUpdateResource() {
   const queryClient = useQueryClient();
@@ -3998,10 +4022,7 @@ export function useUpdateResource() {
         body: yaml,
       });
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new Error(await readErrorMessage(response));
       }
       return response.json();
     },
