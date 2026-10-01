@@ -13,6 +13,7 @@ import { CNPGBlockingSessions } from './CNPGBlockingSessions'
 import { cnpgConnectionFigure } from './blocking'
 import { CNPGReplicationView } from './CNPGReplicationView'
 import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgIdAge, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgSessionsCardShowsConnections, cnpgTransactionRates, type CNPGTransactionRates } from './runtimeModel'
+import { formatBytes } from './lsn'
 import { historyLatest, latestRate } from './trendSamples'
 import { CNPGTrends, useSampleBuffer, type CNPGIntervalTarget, type Sample } from './CNPGTrends'
 
@@ -26,18 +27,6 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: 'slots', label: 'Slots' },
   { id: 'trends', label: 'Trends' },
 ]
-
-function bytes(n?: number): string {
-  if (n === undefined) return '—'
-  const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
-  let v = n
-  let i = 0
-  while (v >= 1024 && i < u.length - 1) {
-    v /= 1024
-    i++
-  }
-  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`
-}
 
 function seconds(s?: number): string {
   if (s === undefined) return '—'
@@ -483,7 +472,7 @@ function DatabaseHealth({ m }: { m: CNPGRuntimeInstance['metrics'] }) {
                   {cell(r.rollbackRatio, (v) => <span className={v > 0.1 ? toneTextClass('degraded') : undefined}>{(v * 100).toFixed(1)} %</span>)}
                 </td>
                 <td className="pr-3 text-right font-mono text-xs">{cell(r.tempFiles, (v) => v.toLocaleString())}</td>
-                <td className="pr-3 text-right font-mono text-xs">{cell(r.tempBytes, bytes)}</td>
+                <td className="pr-3 text-right font-mono text-xs">{cell(r.tempBytes, formatBytes)}</td>
                 <td className="pr-3 text-right font-mono text-xs">{cell(r.xidAge, age)}</td>
                 <td className="text-right font-mono text-xs">{cell(r.mxidAge, age)}</td>
               </tr>
@@ -556,7 +545,7 @@ function SlotsView({ primary }: { primary?: CNPGRuntimeInstance }) {
                 <td className="pr-3">{s.type ?? '—'}</td>
                 <td className={clsx('pr-3', s.active === false && toneTextClass('degraded'))}>{s.active === undefined ? '—' : s.active ? 'active' : 'inactive'}</td>
                 <td className="pr-3">{s.walStatus ?? '—'}</td>
-                <td className="text-right font-mono">{bytes(s.retainedBytes)}</td>
+                <td className="text-right font-mono">{formatBytes(s.retainedBytes)}</td>
               </tr>
             ))}
           </tbody>

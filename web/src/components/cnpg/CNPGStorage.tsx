@@ -13,7 +13,6 @@ import {
   cnpgDiskTone,
   cnpgVolumeRoleLabel,
   formatAge,
-  formatBytes,
   parseQuantityToNumber,
   toneFillClass,
   toneTextClass,
@@ -32,6 +31,8 @@ import { Notice } from '../capacity/shared'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { useCNPGWriteGuard } from './actions/useCNPGWriteGuard'
 import { buildResizeManifest, cnpgSlotRetentionText } from './storageModel'
+// Binary units throughout, matching claim capacities such as 1Gi.
+import { formatBytes } from './lsn'
 import { CNPGRefreshFailedNotice } from './shared'
 
 const CNPG_GROUP = 'postgresql.cnpg.io'
