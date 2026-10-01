@@ -31,6 +31,8 @@ export interface CNPGDatabaseHealthRow {
   database: string
   /** rollbacks / (commits + rollbacks); undefined when either is unreported or there were none. */
   rollbackRatio?: number
+  /** Commits and rollbacks were both reported and both zero, so there is no ratio to show. */
+  noTransactions?: boolean
   tempFiles?: number
   tempBytes?: number
   xidAge?: number
@@ -47,8 +49,9 @@ export function cnpgDatabaseHealthRows(m: CNPGRuntimeInstance['metrics']): CNPGD
   }
   for (const d of m.databases ?? []) {
     const r = row(d.database)
-    if (d.xactCommit !== undefined && d.xactRollback !== undefined && d.xactCommit + d.xactRollback > 0) {
-      r.rollbackRatio = d.xactRollback / (d.xactCommit + d.xactRollback)
+    if (d.xactCommit !== undefined && d.xactRollback !== undefined) {
+      if (d.xactCommit + d.xactRollback > 0) r.rollbackRatio = d.xactRollback / (d.xactCommit + d.xactRollback)
+      else r.noTransactions = true
     }
     r.tempFiles = d.tempFiles
     r.tempBytes = d.tempBytes
