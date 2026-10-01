@@ -33,6 +33,7 @@ export const RADAR_FEATURES = {
   capacity: { label: 'Capacity views', minimumVersion: 'v1.9.0' },
   upgradeReadiness: { label: 'Upgrade impact reports', minimumVersion: 'v1.9.0' },
   drainPlan: { label: 'Drain plans', minimumVersion: 'v1.14.0' },
+  applications: { label: 'Applications', minimumVersion: 'v1.8.0' },
 } as const satisfies Record<string, RadarFeatureSpec>
 
 export type RadarFeature = keyof typeof RADAR_FEATURES

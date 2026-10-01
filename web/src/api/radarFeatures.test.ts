@@ -38,13 +38,15 @@ describe('radarFeatureSupport', () => {
     expect(radarFeatureSupport('drainPlan', { features: { yamlReview: true } }, 'v1.13.1')).toBe('unsupported')
     expect(radarFeatureSupport('drainPlan', undefined, 'v1.14.0')).toBe('supported')
     expect(radarFeatureSupport('capacity', undefined, 'dev')).toBe('unknown')
+    expect(radarFeatureSupport('applications', undefined, 'v1.7.2')).toBe('unsupported')
+    expect(radarFeatureSupport('applications', undefined, 'v1.8.0')).toBe('supported')
   })
 
   it('keeps the unflagged entries to those that predate the first flag', () => {
     // radarSpecSupport treats them as served by any Radar advertising
     // resourceIssues; a new entry must ship its own flag instead.
     const unflagged = Object.entries(RADAR_FEATURES).filter(([, spec]) => !('flag' in spec)).map(([name]) => name)
-    expect(unflagged.sort()).toEqual(['capacity', 'drainPlan', 'upgradeReadiness'])
+    expect(unflagged.sort()).toEqual(['applications', 'capacity', 'drainPlan', 'upgradeReadiness'])
   })
 
   it('lifts a stale host version for unflagged features once any table flag is advertised', () => {

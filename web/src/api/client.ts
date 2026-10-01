@@ -2393,15 +2393,24 @@ export function useApplications(
   const queryString = params.toString();
 
   const enabled = options?.enabled !== false;
+  const { guard, gatedKey } = useRadarFeature("applications");
   return useQuery<{ applications: AppRow[] }>({
-    queryKey: ["applications", namespaces],
+    queryKey: ["applications", namespaces, ...gatedKey],
     queryFn: () =>
-      fetchJSON(`/applications${queryString ? `?${queryString}` : ""}`),
+      guard(() =>
+        fetchJSON<{ applications: AppRow[] }>(
+          `/applications${queryString ? `?${queryString}` : ""}`,
+        ),
+      ),
     staleTime: 30_000,
+    retry: shouldRetryRadarQuery,
     // Only poll while a consumer needs the index; gated off it must not keep the
-    // background refetch alive.
+    // background refetch alive. A Radar that predates the endpoint never will.
     enabled,
-    refetchInterval: enabled ? APPLICATIONS_REFRESH_INTERVAL_MS : false,
+    refetchInterval: (query) =>
+      enabled && !(query.state.error instanceof RadarFeatureUnsupportedError)
+        ? APPLICATIONS_REFRESH_INTERVAL_MS
+        : false,
   });
 }
 
