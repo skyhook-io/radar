@@ -27,14 +27,14 @@ type Filter = 'attention' | 'all'
 function InstancePills({ row }: { row: CNPGFleetRow }) {
   if (row.pods.length === 0) return null
   return (
-    <div className="mt-1 flex flex-wrap gap-1 font-sans">
+    <div className="mt-1 flex flex-nowrap gap-0.5 font-sans">
       {row.pods.map((p) => {
         const tone = p.ready === true ? 'healthy' : p.ready === false ? 'unhealthy' : 'unknown'
         return (
           <Tooltip key={p.name} content={cnpgInstancePillLabel(p)}>
             <span
               aria-label={cnpgInstancePillLabel(p)}
-              className="inline-flex items-center gap-1 rounded border border-theme-border bg-theme-base px-1 font-mono text-[10.5px] text-theme-text-secondary"
+              className="inline-flex items-center gap-0.5 rounded border border-theme-border bg-theme-base px-0.5 font-mono text-[10.5px] text-theme-text-secondary"
             >
               <StatusDot tone={tone} size="xs" />
               {p.role === 'primary' ? 'P' : p.role === 'replica' ? 'R' : '?'}
@@ -266,29 +266,26 @@ export function CNPGOverview({
 
           <div className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
             <div className={TABLE_WRAP}>
-              <table className="w-full min-w-[1140px] table-fixed">
+              {/* Sized to fit a ~1060px content area (a 1512px window) without scrolling. */}
+              <table className="w-full min-w-[840px] table-fixed">
                 <colgroup>
+                  <col className="w-[17%]" />
+                  <col className="w-[11%]" />
                   <col className="w-[14%]" />
-                  <col className="w-[9%]" />
-                  <col className="w-[8%]" />
                   <col className="w-[13%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[8%]" />
                   <col className="w-[9%]" />
-                  <col className="w-[5%]" />
-                  <col className="w-[13%]" />
-                  <col className="w-[9.5rem]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[15%]" />
+                  <col className="w-[7.5rem]" />
                 </colgroup>
                 <thead className={TABLE_HEAD}>
                   <tr>
                     <th className={TH}>Cluster</th>
-                    <th className={TH}>Namespace</th>
                     <th className={TH}>Ready</th>
                     <th className={TH}>Replication</th>
                     <th className={TH}>Protection</th>
                     <th className={TH}>Disk</th>
                     <th className={TH}>Declarations</th>
-                    <th className={TH}>PG</th>
                     <th className={TH}>Needs attention</th>
                     <th className={TH}><span className="sr-only">Actions</span></th>
                   </tr>
@@ -305,13 +302,16 @@ export function CNPGOverview({
                         aria-selected={active}
                       >
                         <td className={TD}>
-                          <div className="flex items-center gap-2 min-w-0">
-                            <RowStatusDot row={row} />
-                            <Tooltip content={row.name} wrapperClassName="min-w-0"><span className="block truncate font-medium">{row.name}</span></Tooltip>
+                          <div className="flex min-w-0 items-start gap-2">
+                            <span className="mt-1.5 shrink-0"><RowStatusDot row={row} /></span>
+                            <div className="min-w-0">
+                              <div className="font-medium [overflow-wrap:anywhere]">{row.name}</div>
+                              <div className="text-xs text-theme-text-tertiary">
+                                <Tooltip content="Namespace"><span>ns {row.namespace}</span></Tooltip>
+                                {row.pgVersion && <Tooltip content="PostgreSQL version"><span> · PG {row.pgVersion}</span></Tooltip>}
+                              </div>
+                            </div>
                           </div>
-                        </td>
-                        <td className={clsx(TD, 'text-theme-text-secondary')}>
-                          <Tooltip content={row.namespace} wrapperClassName="min-w-0"><span className="block truncate">{row.namespace}</span></Tooltip>
                         </td>
                         <td className={clsx(TD, 'font-mono')}>
                           <ReadyCell row={row} />
@@ -323,7 +323,6 @@ export function CNPGOverview({
                           {row.diskGrowth && <div className="text-xs"><FactValue fact={row.diskGrowth} className="text-theme-text-tertiary" /></div>}
                         </td>
                         <td className={TD}><FactValue fact={row.declarations.summary} /></td>
-                        <td className={clsx(TD, 'font-mono')}>{row.pgVersion ?? '—'}</td>
                         <td className={clsx(TD, 'overflow-hidden')}>
                           <AttentionCell
                             row={row}
@@ -335,7 +334,8 @@ export function CNPGOverview({
                           />
                         </td>
                         <td className={clsx(TD, 'text-right')}>
-                          <div className="flex items-center justify-end gap-1">
+                          <div className="flex items-center justify-end gap-0.5">
+                            <Tooltip content="Logs from every instance">
                             <button
                               type="button"
                               aria-label={`Logs from every instance of ${row.name}`}
@@ -347,10 +347,11 @@ export function CNPGOverview({
                                   state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
                                 })
                               }}
-                              className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                              className="inline-flex items-center rounded-md p-1.5 text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
                             >
-                              <FileText className="h-3 w-3" /> Logs
+                              <FileText className="h-3.5 w-3.5" />
                             </button>
+                            </Tooltip>
                             <button
                               type="button"
                               aria-label={`Open ${row.name}`}
