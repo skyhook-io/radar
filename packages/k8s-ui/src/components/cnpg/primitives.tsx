@@ -109,7 +109,11 @@ export function ProblemMeta({ problem, onNavigate, subjectIsSelf, children }: { 
           <RefLink refTo={problem.subject} onNavigate={onNavigate} mono />
         </span>
       )}
-      <span>{problem.source === 'audit' ? 'Radar check' : problem.source === 'measurement' ? 'Measured' : 'Radar issue'}</span>
+      <Tooltip content={problem.sourceDetail} disabled={!problem.sourceDetail}>
+        <span>
+          {problem.source === 'audit' ? 'Radar check' : problem.source === 'measurement' ? (problem.measuredBy ? `Measured by ${problem.measuredBy}` : 'Measured') : 'Radar issue'}
+        </span>
+      </Tooltip>
       {children}
     </div>
   )

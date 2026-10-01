@@ -137,6 +137,10 @@ export interface CNPGProblem {
    * receive (disk use, instance Pod readiness).
    */
   source: 'issue' | 'audit' | 'measurement'
+  /** What took the measurement, e.g. "Prometheus" (shown as "Measured by Prometheus"). */
+  measuredBy?: string
+  /** How it was measured (queries, metric names), shown on hover over the source. */
+  sourceDetail?: string
 }
 
 export interface CNPGInstance {
@@ -1185,22 +1189,32 @@ function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading
   const lag = reading?.lag
   const floor = lag?.sustainedSeconds
   if (src.source !== 'prometheus' || lag?.state !== 'ok' || floor === undefined || floor < CNPG_SUSTAINED_LAG_WARNING_SECONDS) return undefined
-  const window = lag.sustainedWindow ? formatWindow(lag.sustainedWindow) : 'the last minutes'
+  const window = lag.sustainedWindow ? formatWindowWords(lag.sustainedWindow) : 'several minutes'
+  const pod = lag.sustainedPod ?? 'A standby'
   return {
     id: `lag:${row.key}`,
     severity: floor >= CNPG_SUSTAINED_LAG_CRITICAL_SECONDS ? 'critical' : 'warning',
     category: 'availability',
-    title: `Every lag sample from ${lag.sustainedPod ?? 'a standby'} over the last ${window} was at least ${formatLagSeconds(floor)}`,
-    detail: `The lowest replay lag Prometheus recorded for it in the last ${window} was ${formatLagSeconds(floor)}, and it was already reporting by the window's start (${src.lagSource ?? 'Prometheus'}; scrape gaps are not filled in). A failover to that standby would start that far behind the primary.`,
+    title: `${pod} has been at least ${formatLagFloor(floor)} behind for ${window}`,
+    detail: `The lowest replay lag Prometheus recorded for this standby in the last ${window}; it was reporting for the whole window, and missed scrapes are not filled in. A failover to it would start that far behind the primary.`,
     subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
     source: 'measurement',
+    measuredBy: 'Prometheus',
+    sourceDetail: src.lagSource ?? 'Prometheus',
   }
 }
 
-// Go durations as the server sends them ("10m0s") read as "10 min".
-function formatWindow(d: string): string {
+// A lag floor in words: whole seconds below 100, minutes above.
+function formatLagFloor(s: number): string {
+  return s < 100 ? `${Math.floor(s)} s` : `${Math.floor(s / 60)} min`
+}
+
+// "10m0s" as "10 minutes"; "1h0m0s" as "1 hour".
+function formatWindowWords(d: string): string {
   const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:0s)?$/.exec(d)
   if (!m) return d
   const minutes = Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0)
-  return minutes >= 60 && minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`
+  if (minutes >= 60 && minutes % 60 === 0) return minutes === 60 ? '1 hour' : `${minutes / 60} hours`
+  return minutes === 1 ? '1 minute' : `${minutes} minutes`
 }
+
