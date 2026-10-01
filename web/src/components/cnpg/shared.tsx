@@ -277,7 +277,7 @@ export function worstCoverage(...covs: (CNPGKindCoverage | undefined)[]): CNPGKi
 }
 
 /**
- * A URL or path that wraps only after "/" (never mid-word), with the whole
+ * A URL or path that wraps only after "/" (never at a hyphen or mid-word), with the whole
  * value on hover; a single segment too long for its cell is cut with an
  * ellipsis.
  */
@@ -288,7 +288,7 @@ export function PathText({ value, className }: { value: string; className?: stri
       <span className={clsx('block max-w-full overflow-hidden text-ellipsis font-mono text-[12.5px] [overflow-wrap:normal]', className)}>
         {parts.map((p, i) => (
           <span key={i}>
-            {p}
+            <span className="whitespace-nowrap">{p}</span>
             {i < parts.length - 1 && <wbr />}
           </span>
         ))}
