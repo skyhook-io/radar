@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, DatabaseBackup, MoreHorizontal, Repeat } from 'lucide-react'
-import { ActionConfirmDialog, Tooltip, cnpgPDBFact, cnpgQuorumFact, type ActionWrite, type CNPGClusterHA } from '@skyhook-io/k8s-ui'
+import { clsx } from 'clsx'
+import { ActionConfirmDialog, Tooltip, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA } from '@skyhook-io/k8s-ui'
 import {
   cnpgActionOutcomeLocked,
   useCNPGAction,
@@ -22,7 +23,7 @@ import { cnpgOperatorActionNote } from '../operatorStatus'
 import { CNPGRestoreDialog } from '../recovery/CNPGRestoreDialog'
 import { CNPGReportDialog } from './CNPGReportDialog'
 import { useOpenCNPGPsql } from './useOpenCNPGPsql'
-import { backupNameFor, describeBackupMethod, pickDefaultStandby, type StandbyChoice } from './actionModel'
+import { backupNameFor, describeBackupMethod, pickDefaultStandby, switchoverLagNote, type StandbyChoice } from './actionModel'
 
 type DialogKind = CNPGClusterActionName | 'restore' | 'report' | null
 
@@ -446,18 +447,24 @@ export function ClusterActionDialog({
             <fieldset className="space-y-1.5">
               <legend className="mb-1 text-xs text-theme-text-secondary">New primary</legend>
               {standbys.length === 0 && <div className="text-sm text-theme-text-tertiary">No standby instances.</div>}
-              {standbys.map((s) => (
-                <label key={s.pod} className="flex items-center gap-2 text-sm">
-                  <input type="radio" name="cnpg-switch" value={s.pod} disabled={!!s.ineligible} checked={switchTarget === s.pod} onChange={() => setSwitchTarget(s.pod)} />
-                  <span className="font-mono">{s.pod}</span>
-                  <span className="text-xs text-theme-text-tertiary">
-                    {s.ineligible ??
-                      [s.state, s.syncState, s.replayLagSeconds !== undefined ? `replay lag ${s.replayLagSeconds.toFixed(1)} s` : runtime.isLoading ? 'lag loading…' : 'lag unknown']
-                        .filter(Boolean)
-                        .join(' · ')}
-                  </span>
-                </label>
-              ))}
+              {standbys.map((s) => {
+                const behind = switchoverLagNote(s)
+                return (
+                  <div key={s.pod}>
+                    <label className="flex items-center gap-2 text-sm">
+                      <input type="radio" name="cnpg-switch" value={s.pod} disabled={!!s.ineligible} checked={switchTarget === s.pod} onChange={() => setSwitchTarget(s.pod)} />
+                      <span className="font-mono">{s.pod}</span>
+                      <span className="text-xs text-theme-text-tertiary">
+                        {s.ineligible ??
+                          [s.state, s.syncState, s.replayLagSeconds !== undefined ? `replay lag ${s.replayLagSeconds.toFixed(1)} s` : runtime.isLoading ? 'lag loading…' : 'lag unknown']
+                            .filter(Boolean)
+                            .join(' · ')}
+                      </span>
+                    </label>
+                    {behind && switchTarget === s.pod && <div className={clsx('ml-6 mt-0.5 text-xs', toneTextClass('degraded'))}>{behind}</div>}
+                  </div>
+                )
+              })}
               <SwitchoverContext ha={ha.data} haLoading={ha.isLoading} target={switchTarget} />
             </fieldset>
           ),
@@ -467,9 +474,6 @@ export function ClusterActionDialog({
               : null,
             ha.data?.quorum.enabled && switchTarget && ha.data.quorum.status && ha.data.quorum.status.standbyNames.length > 0 && !ha.data.quorum.status.standbyNames.includes(switchTarget)
               ? `${switchTarget} is not among the recorded potentially synchronous standbys (${ha.data.quorum.status.standbyNames.join(', ')}).`
-              : null,
-            chosenStandby?.replayLagSeconds !== undefined && chosenStandby.replayLagSeconds > 5
-              ? `${chosenStandby.pod} is ${chosenStandby.replayLagSeconds.toFixed(0)} s behind; the switchover waits for it to catch up.`
               : null,
             chosenStandby && chosenStandby.replayLagSeconds === undefined ? 'Replication lag for this standby is not known (runtime data unavailable).' : null,
           ].filter(Boolean) as string[],

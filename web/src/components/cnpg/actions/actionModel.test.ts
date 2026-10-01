@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { backupNameFor, cnpgDestroyBlocker, pickDefaultStandby } from './actionModel'
+import { backupNameFor, cnpgDestroyBlocker, pickDefaultStandby, switchoverLagNote } from './actionModel'
 
 describe('CNPG action model', () => {
   it('names backups like kubectl-cnpg, in UTC', () => {
@@ -28,5 +28,14 @@ describe('cnpgDestroyBlocker', () => {
     expect(cnpgDestroyBlocker({ allowed: false, permission: 'denied', reason: 'Needs delete pods in db', grant: 'delete pods in db' }, 'pg-2', true)).toBe('Needs delete pods in db')
     expect(cnpgDestroyBlocker({ allowed: false, permission: 'allowed', reason: 'The cluster is hibernated' }, 'pg-2', true)).toBe('The cluster is hibernated')
     expect(cnpgDestroyBlocker({ allowed: true, permission: 'allowed' }, 'pg-2', true)).toBeUndefined()
+  })
+})
+
+describe('switchoverLagNote', () => {
+  it('notes a lagging candidate in seconds or minutes, and nothing for a caught-up one', () => {
+    expect(switchoverLagNote({ pod: 'pg-2', replayLagSeconds: 247.5 })).toBe('pg-2 is 4 min behind; the switchover may take longer while it catches up.')
+    expect(switchoverLagNote({ pod: 'pg-2', replayLagSeconds: 12 })).toBe('pg-2 is 12 s behind; the switchover may take longer while it catches up.')
+    expect(switchoverLagNote({ pod: 'pg-2', replayLagSeconds: 0.4 })).toBeUndefined()
+    expect(switchoverLagNote({ pod: 'pg-2' })).toBeUndefined()
   })
 })

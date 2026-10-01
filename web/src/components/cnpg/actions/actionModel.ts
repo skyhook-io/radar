@@ -51,3 +51,18 @@ export function cnpgDestroyBlocker(cap: CNPGActionCapability | undefined, pod: s
   if (fenceOffered && cap.permission !== 'denied' && cap.reason?.startsWith(`Fence ${pod} first`)) return undefined
   return cap.reason ?? 'Not allowed'
 }
+
+// Behind by this much is visibly lagging, not just between acknowledgements.
+const SWITCHOVER_LAG_NOTE_SECONDS = 5
+
+/**
+ * The note under a switchover candidate that is behind. The new primary has to
+ * replay the WAL it has not applied yet before it takes over, so a lagging
+ * standby can make the switchover take longer; nothing is lost by choosing it.
+ */
+export function switchoverLagNote(s: Pick<StandbyChoice, 'pod' | 'replayLagSeconds'>): string | undefined {
+  const lag = s.replayLagSeconds
+  if (lag === undefined || lag <= SWITCHOVER_LAG_NOTE_SECONDS) return undefined
+  const behind = lag < 90 ? `${Math.round(lag)} s` : `${Math.round(lag / 60)} min`
+  return `${s.pod} is ${behind} behind; the switchover may take longer while it catches up.`
+}
