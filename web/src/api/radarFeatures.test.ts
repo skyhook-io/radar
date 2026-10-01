@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { getRadarUpgradeRequirement } from '@skyhook-io/k8s-ui'
 import { ApiError } from './client'
 import {
+  RADAR_FEATURES,
   RadarFeatureUnsupportedError,
   guardRadarFeature,
   isRadarFeatureUnsupported,
@@ -37,6 +38,13 @@ describe('radarFeatureSupport', () => {
     expect(radarFeatureSupport('drainPlan', { features: { yamlReview: true } }, 'v1.13.1')).toBe('unsupported')
     expect(radarFeatureSupport('drainPlan', undefined, 'v1.14.0')).toBe('supported')
     expect(radarFeatureSupport('capacity', undefined, 'dev')).toBe('unknown')
+  })
+
+  it('keeps the unflagged entries to those that predate the first flag', () => {
+    // radarSpecSupport treats them as served by any Radar advertising
+    // resourceIssues; a new entry must ship its own flag instead.
+    const unflagged = Object.entries(RADAR_FEATURES).filter(([, spec]) => !('flag' in spec)).map(([name]) => name)
+    expect(unflagged.sort()).toEqual(['capacity', 'drainPlan', 'upgradeReadiness'])
   })
 
   it('lifts a stale host version for unflagged features once any table flag is advertised', () => {
