@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -784,6 +785,11 @@ func (r *cnpgRuntimeRunner) do(fn func(ctx context.Context)) {
 			// queued read would start at once.
 			return
 		}
+		// select picks at random when both are ready: a free slot does not
+		// make a cancelled caller's read worth starting.
+		if r.ctx.Err() != nil {
+			return
+		}
 		fn(r.ctx)
 	}()
 }
@@ -964,8 +970,9 @@ func cnpgMarkTimedOut(ctx context.Context, err error) {
 	if flag == nil {
 		return
 	}
+	var netErr net.Error
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) ||
-		apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) || strings.Contains(strings.ToLower(err.Error()), "timeout") {
+		(errors.As(err, &netErr) && netErr.Timeout()) || apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) {
 		flag.Store(true)
 	}
 }

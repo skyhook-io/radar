@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	authv1 "k8s.io/api/authorization/v1"
 	"k8s.io/client-go/kubernetes"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,8 +19,10 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 
@@ -885,7 +889,7 @@ func TestCNPGMetricsGenerationAndSessionsByState(t *testing.T) {
 }
 
 func TestCNPGMemoizedReadOutlivesTheCallerThatStartedIt(t *testing.T) {
-	target := cnpgProxyTarget{namespace: "pg", pod: "pg-1", podUID: "uid-memo-detach", port: cnpgStatusPort, path: cnpgStatusPath, scheme: "https"}
+	target := cnpgProxyTarget{namespace: "pg", pod: "pg-1", podUID: types.UID(fmt.Sprint("uid-memo-detach-", time.Now().UnixNano())), port: cnpgStatusPort, path: cnpgStatusPath, scheme: "https"}
 	type key struct{}
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -958,7 +962,7 @@ func TestCNPGRuntimeRunnerKeepsItsCapWhenTheCallerGoes(t *testing.T) {
 }
 
 func TestCNPGMemoizedDoesNotKeepATimeout(t *testing.T) {
-	target := cnpgProxyTarget{namespace: "pg", pod: "pg-1", podUID: "uid-memo-timeout", port: cnpgStatusPort, path: cnpgStatusPath, scheme: "https"}
+	target := cnpgProxyTarget{namespace: "pg", pod: "pg-1", podUID: types.UID(fmt.Sprint("uid-memo-timeout-", time.Now().UnixNano())), port: cnpgStatusPort, path: cnpgStatusPath, scheme: "https"}
 	calls := 0
 	fetch := func(ctx context.Context) string {
 		calls++
@@ -970,12 +974,50 @@ func TestCNPGMemoizedDoesNotKeepATimeout(t *testing.T) {
 	if calls != 2 {
 		t.Errorf("fetches = %d, want 2: a timed-out read must not be memoized", calls)
 	}
-	ok := cnpgProxyTarget{namespace: "pg", pod: "pg-1", podUID: "uid-memo-ok", port: cnpgStatusPort, path: cnpgStatusPath, scheme: "https"}
+	ok := cnpgProxyTarget{namespace: "pg", pod: "pg-1", podUID: types.UID(fmt.Sprint("uid-memo-ok-", time.Now().UnixNano())), port: cnpgStatusPort, path: cnpgStatusPath, scheme: "https"}
 	n := 0
 	good := func(context.Context) string { n++; return "ok" }
 	cnpgMemoized(context.Background(), "id-timeout", ok, time.Minute, good)
 	cnpgMemoized(context.Background(), "id-timeout", ok, time.Minute, good)
 	if n != 1 {
 		t.Errorf("fetches = %d, want 1 for a read that answered", n)
+	}
+}
+
+func TestCNPGRuntimeRunnerRunsNothingForACancelledCaller(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	run := newCNPGRuntimeRunner(ctx)
+	var ran int32
+	for i := 0; i < 100; i++ {
+		run.do(func(context.Context) { atomic.AddInt32(&ran, 1) })
+	}
+	run.wait()
+	if ran != 0 {
+		t.Errorf("%d reads ran for a caller that had already left, want 0", ran)
+	}
+}
+
+func TestCNPGMarkTimedOutIgnoresTheWordInNames(t *testing.T) {
+	flagFor := func(err error) bool {
+		f := new(atomic.Bool)
+		cnpgMarkTimedOut(context.WithValue(context.Background(), cnpgReadTimedOutKey{}, f), err)
+		return f.Load()
+	}
+	named := apierrors.NewGenericServerResponse(500, "get", schema.GroupResource{Resource: "pods"}, "https:timeout-demo-1:8000", "pq: out of shared memory", 0, true)
+	if flagFor(named) {
+		t.Error("a Pod named timeout-demo-1 was read as a timeout")
+	}
+	if flagFor(errors.New(`Get "https://api/namespaces/timeout-demo/pods/timeout-demo-1/proxy": EOF`)) {
+		t.Error("a URL containing \"timeout\" was read as a timeout")
+	}
+	for _, err := range []error{
+		fmt.Errorf("x: %w", context.DeadlineExceeded),
+		apierrors.NewTimeoutError("slow", 0),
+		&net.DNSError{IsTimeout: true},
+	} {
+		if !flagFor(err) {
+			t.Errorf("%v was not read as a timeout", err)
+		}
 	}
 }
