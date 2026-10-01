@@ -48,7 +48,7 @@ describe('readErrorResponse', () => {
 
   it("keeps a short plain-text reason such as Radar Hub's", async () => {
     const offline = await readErrorResponse(response(503, 'cluster "prod" not connected\n', TEXT))
-    expect(offline.body.error).toBe('HTTP 503 (Service Unavailable): cluster "prod" not connected')
+    expect(offline.body.error).toBe('cluster "prod" not connected (HTTP 503)')
     // Hub's bare "not found" only repeats the status.
     const hub = await readErrorResponse(response(404, 'not found\n', TEXT))
     expect(hub.body.error).toBe('HTTP 404 (Not Found)')
@@ -60,7 +60,7 @@ describe('readErrorResponse', () => {
 describe('nonJsonErrorMessage', () => {
   it('reads a body the caller already consumed', () => {
     expect(nonJsonErrorMessage(response(502, '', TEXT), 'upstream connect error\n')).toBe(
-      'HTTP 502 (Bad Gateway): upstream connect error',
+      'upstream connect error (HTTP 502)',
     )
     expect(nonJsonErrorMessage(response(404, '', TEXT), CHI_UNKNOWN_ROUTE_BODY)).toBe('HTTP 404 (Not Found)')
     expect(nonJsonErrorMessage(response(502, '', 'text/html'), '<html>bad</html>')).toBe('HTTP 502 (Bad Gateway)')

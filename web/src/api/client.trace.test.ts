@@ -34,7 +34,7 @@ describe('runInClusterMerged error surfacing', () => {
   it("keeps a proxy's plain-text reason", async () => {
     respond(503, 'cluster "prod" not connected\n', 'text/plain; charset=utf-8')
     await expect(runInClusterMerged('Service', 'prod', 'web')).rejects.toThrow(
-      'HTTP 503 (Service Unavailable): cluster "prod" not connected',
+      'cluster "prod" not connected (HTTP 503)',
     )
   })
 
