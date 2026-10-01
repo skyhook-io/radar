@@ -28,7 +28,7 @@ export interface RadarFeatureSpec {
 
 export const RADAR_FEATURES = {
   resourceIssues: { label: 'Operational issues', minimumVersion: 'v1.8.0', flag: 'resourceIssues' },
-  podEnvironment: { label: 'Variable sources', minimumVersion: 'v1.9.0', flag: 'podEnvironment' },
+  podEnvironment: { label: 'Values from ConfigMaps and Secrets', minimumVersion: 'v1.9.0', flag: 'podEnvironment' },
   policyResource: { label: 'Policy results', minimumVersion: 'v1.10.0', flag: 'policyResource' },
   capacity: { label: 'Capacity views', minimumVersion: 'v1.9.0' },
   upgradeReadiness: { label: 'Upgrade impact reports', minimumVersion: 'v1.9.0' },

@@ -25,6 +25,7 @@ import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { AlertBanner } from '../ui/drawer-components'
 import { DialogPortal } from '../ui/DialogPortal'
 import type { SelectedResource, WorkloadRevision } from '../../types'
+import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { displayKindName } from '../ui/drawer-components'
 import { getDefaultContainerName } from '../resources/resource-utils'
 import { SetImageDialog, type ManagedImageSource } from './SetImageDialog'
@@ -147,6 +148,9 @@ interface ResourceActionsBarProps {
   // frontend against an older radar). The dialog falls back to the plan-less
   // acknowledgement-only mode instead of keeping Drain disabled on a dead request.
   drainPlanUnsupported?: boolean
+  // The same, with the Radar version that serves drain plans; the plan-less
+  // dialog says so, so the user knows a preview exists.
+  drainPlanUpgrade?: RadarUpgradeRequirement | null
 }
 
 export function ResourceActionsBar({
@@ -177,7 +181,7 @@ export function ResourceActionsBar({
   onCordonNode, isCordoningNode,
   onUncordonNode, isUncordoningNode,
   onDrainNode, isDrainingNode,
-  onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError, drainPlanUnsupported,
+  onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError, drainPlanUnsupported, drainPlanUpgrade,
 }: ResourceActionsBarProps) {
   const kind = resource.kind.toLowerCase()
   const coreBatchJob = isCoreBatchJob(kind, resource.group)
@@ -203,11 +207,16 @@ export function ResourceActionsBar({
   // so without latching every option change would refire a request known to 404 and
   // bounce the dialog out of its fallback mode.
   const [planUnsupported, setPlanUnsupported] = useState(false)
+  const [planUpgrade, setPlanUpgrade] = useState<RadarUpgradeRequirement | null>(null)
   useEffect(() => {
-    if (drainPlanUnsupported) setPlanUnsupported(true)
-  }, [drainPlanUnsupported])
+    if (drainPlanUnsupported || drainPlanUpgrade) setPlanUnsupported(true)
+    if (drainPlanUpgrade) setPlanUpgrade(drainPlanUpgrade)
+  }, [drainPlanUnsupported, drainPlanUpgrade])
   useEffect(() => {
-    if (!showDrainConfirm) setPlanUnsupported(false)
+    if (!showDrainConfirm) {
+      setPlanUnsupported(false)
+      setPlanUpgrade(null)
+    }
   }, [showDrainConfirm])
   const planSupported = Boolean(onPlanDrain) && !planUnsupported
 
@@ -719,6 +728,7 @@ export function ResourceActionsBar({
         options={drainOptions}
         onOptionsChange={setDrainOptions}
         planSupported={planSupported}
+        planUpgrade={planUpgrade}
         onRefreshPlan={planSupported ? () => onPlanDrain?.({ name: resource.name, options: drainOptions }) : undefined}
         isDraining={Boolean(isDrainingNode)}
         onClose={() => {

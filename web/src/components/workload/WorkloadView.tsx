@@ -95,7 +95,7 @@ import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
-import { AuditAlerts, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
+import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
@@ -520,7 +520,9 @@ function useActionsBarProps(
     drainPlan: drainPlanMutation.data ?? null,
     isPlanningDrain: drainPlanMutation.isPending,
     drainPlanError: drainPlanMutation.error?.message ?? null,
-    drainPlanUnsupported: isRadarFeatureUnsupported(drainPlanMutation.error, 'drainPlan'),
+    drainPlanUpgrade: isRadarFeatureUnsupported(drainPlanMutation.error, 'drainPlan')
+      ? getRadarUpgradeRequirement(drainPlanMutation.error)
+      : null,
   }
 }
 

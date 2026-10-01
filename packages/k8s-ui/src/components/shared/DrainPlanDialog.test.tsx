@@ -88,6 +88,16 @@ describe('DrainPlanContent', () => {
     )
   }
 
+  it('says a drain plan needs a newer Radar when the cluster predates it', () => {
+    const html = render({
+      planSupported: false,
+      planUpgrade: { feature: 'Drain plans', minimumVersion: 'v1.14.0', currentVersion: 'v1.13.1' },
+    })
+    expect(html).toContain('Drain plans')
+    expect(html).toContain('need Radar v1.14 or newer on this cluster.')
+    expect(html).not.toContain('Computing the plan')
+  })
+
   it('shows per-pod outcomes with reasons and calls the result an estimate', () => {
     const html = render({ plan: plan([pod('web', 'may-block', { pdb: 'shop/web', reason: 'PodDisruptionBudget shop/web currently allows no disruptions' }), pod('agent', 'skip')]) })
     expect(html).toContain('may block')

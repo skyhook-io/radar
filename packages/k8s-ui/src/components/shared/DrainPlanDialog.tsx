@@ -3,6 +3,8 @@ import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Badge, type BadgeSeverity } from '../ui/Badge'
 import { AlertBanner } from '../ui/drawer-components'
 import { Tooltip } from '../ui/Tooltip'
+import { RadarUpgradeNote } from '../ui/RadarUpgradeNote'
+import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { pluralize } from '../../utils/pluralize'
 
 // Shapes returned by POST /api/nodes/{name}/drain-plan.
@@ -102,6 +104,8 @@ interface DrainPlanContentProps {
   options: DrainDialogOptions
   onOptionsChange: (options: DrainDialogOptions) => void
   planSupported: boolean
+  /** Why there is no plan, when the connected Radar predates drain plans. */
+  planUpgrade?: RadarUpgradeRequirement | null
   /** Recompute the plan with the current options; also the retry after a failed plan. */
   onRefreshPlan?: () => void
 }
@@ -112,7 +116,7 @@ interface DrainPlanContentProps {
  * react-dom/server); the enclosing dialog owns the confirm gating.
  */
 export function DrainPlanContent({
-  nodeName, plan, loading, error, options, onOptionsChange, planSupported, onRefreshPlan,
+  nodeName, plan, loading, error, options, onOptionsChange, planSupported, planUpgrade, onRefreshPlan,
 }: DrainPlanContentProps) {
   const current = planMatches(plan, nodeName, options) ? plan : null
   const atRisk = current ? emptyDirPodsAtRisk(current) : []
@@ -139,6 +143,8 @@ export function DrainPlanContent({
           Delete emptyDir data: evict pods that use emptyDir volumes (their data is lost)
         </label>
       </div>
+
+      {!planSupported && planUpgrade && <RadarUpgradeNote requirement={planUpgrade} />}
 
       {planSupported && loading && (
         <div className="flex items-center gap-2 text-theme-text-secondary">
@@ -259,12 +265,14 @@ interface DrainPlanDialogProps {
   isDraining: boolean
   /** Whether the host can compute plans. Without it the dialog confirms without one. */
   planSupported: boolean
+  /** Why there is no plan, when the connected Radar predates drain plans. */
+  planUpgrade?: RadarUpgradeRequirement | null
   /** Recompute the plan with the current options; also the retry after a failed plan. */
   onRefreshPlan?: () => void
 }
 
 export function DrainPlanDialog({
-  open, nodeName, plan, loading, error, options, onOptionsChange, onConfirm, onClose, isDraining, planSupported, onRefreshPlan,
+  open, nodeName, plan, loading, error, options, onOptionsChange, onConfirm, onClose, isDraining, planSupported, planUpgrade, onRefreshPlan,
 }: DrainPlanDialogProps) {
   const confirmEnabled = canConfirmDrain({ plan, nodeName, options, loading, error, planSupported })
 
@@ -274,7 +282,9 @@ export function DrainPlanDialog({
       onClose={onClose}
       onConfirm={() => onConfirm(options)}
       title="Drain Node"
-      message={`Cordon "${nodeName}" and evict the pods listed below. The list is an estimate: the drain re-lists live state when it runs.`}
+      message={planSupported
+        ? `Cordon "${nodeName}" and evict the pods listed below. The list is an estimate: the drain re-lists live state when it runs.`
+        : `Cordon "${nodeName}" and evict its pods.`}
       confirmLabel={isDraining ? 'Draining...' : 'Drain'}
       variant="danger"
       isLoading={isDraining}
@@ -290,6 +300,7 @@ export function DrainPlanDialog({
         options={options}
         onOptionsChange={onOptionsChange}
         planSupported={planSupported}
+        planUpgrade={planUpgrade}
         onRefreshPlan={onRefreshPlan}
       />
     </ConfirmDialog>
