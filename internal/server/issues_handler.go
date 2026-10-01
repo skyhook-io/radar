@@ -298,7 +298,6 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
 	}, group, kind, namespace, name)
 	related, withheld := s.withholdUnreadableIssueRefs(r, related)
-	withheld.Issues += s.clusterScopedSubjectIssuesWithheld(r, provider, related, group, kind, namespace, name)
 	if related == nil {
 		related = []issues.Issue{}
 	}
@@ -306,6 +305,7 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, related)
 		return
 	}
+	withheld.Issues += s.clusterScopedSubjectIssuesWithheld(r, provider, related, group, kind, namespace, name)
 	resp := ResourceIssuesResponse{
 		Issues:   related,
 		Coverage: resourceIssuesCoverage(kind, group, namespace),
@@ -423,24 +423,31 @@ func (s *Server) withholdUnreadableIssueRefs(r *http.Request, in []issues.Issue)
 // list its kind (the gate /api/issues applies). Without the count a NotReady
 // Node would read as having none.
 func (s *Server) clusterScopedSubjectIssuesWithheld(r *http.Request, provider issues.Provider, returned []issues.Issue, group, kind, namespace, name string) int {
-	if namespace != "" || auth.UserFromContext(r.Context()) == nil || s.issueClusterScopedAccess(r)(kind, group) {
+	if namespace != "" || auth.UserFromContext(r.Context()) == nil {
 		return 0
 	}
-	subjectOnly := func(k, g string) bool {
-		return strings.EqualFold(k, kind) && resourceid.NormalizeGroup(g) == resourceid.NormalizeGroup(group)
+	resolvedGroup, _, clusterScoped, ok := k8s.ResolveChangeGVR(kind, group)
+	if !ok || !clusterScoped || s.issueClusterScopedAccess(r)(kind, resolvedGroup) {
+		return 0
 	}
-	all := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
+	subjectKind := func(k, g string) bool {
+		return strings.EqualFold(k, kind) && resourceid.NormalizeGroup(g) == resourceid.NormalizeGroup(resolvedGroup)
+	}
+	all := issues.Compose(provider, issues.Filters{
 		SkipPodTemplateContext: true,
-		CanReadClusterScoped:   subjectOnly,
+		Kinds:                  []string{kind},
+		Limit:                  issues.NoLimit,
+		CanReadClusterScoped:   subjectKind,
 		CanReadRelated:         s.issueRelatedResourceAccess(r),
-	}, group, kind, "", name)
+		Grouped:                true,
+	})
 	seen := make(map[string]bool, len(returned))
 	for _, i := range returned {
 		seen[i.ID] = true
 	}
 	n := 0
 	for _, i := range all {
-		if !seen[i.ID] && subjectOnly(i.Kind, i.Group) {
+		if !seen[i.ID] && i.Name == name && i.Namespace == "" && subjectKind(i.Kind, i.Group) {
 			n++
 		}
 	}

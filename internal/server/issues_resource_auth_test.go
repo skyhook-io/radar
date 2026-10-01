@@ -14,6 +14,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/k8score"
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -198,5 +199,47 @@ func TestResourceIssuesCountNodeIssuesTheListGateDropped(t *testing.T) {
 	}
 	if len(resp.Issues) == 0 || resp.Withheld != nil {
 		t.Fatalf("a caller who can list nodes: issues %d withheld %+v", len(resp.Issues), resp.Withheld)
+	}
+}
+
+func TestResourceIssuesCountWithheldWithAndWithoutTheGroupParam(t *testing.T) {
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	client := fake.NewClientset(&rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "dangling"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "gone"},
+		Subjects:   []rbacv1.Subject{{Kind: "User", Name: "someone"}},
+	})
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("get", "rbac.authorization.k8s.io", "clusterrolebindings", "", true)
+	perms.SetCanI("list", "rbac.authorization.k8s.io", "clusterrolebindings", "", false)
+	s.permCache.Set("pg-user", nil, perms)
+
+	for _, path := range []string{
+		"/api/issues/resource/ClusterRoleBinding/_/dangling?coverage=1",
+		"/api/issues/resource/ClusterRoleBinding/_/dangling?coverage=1&group=rbac.authorization.k8s.io",
+	} {
+		w := resourceIssuesRequest(t, s, path)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status %d (body %s)", path, w.Code, w.Body.String())
+		}
+		var resp ResourceIssuesResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("%s: decode: %v", path, err)
+		}
+		if len(resp.Issues) != 0 || resp.Withheld == nil || resp.Withheld.Issues == 0 {
+			t.Fatalf("%s: issues %d withheld %+v, want the dangling binding's issue counted as withheld", path, len(resp.Issues), resp.Withheld)
+		}
+	}
+
+	w := resourceIssuesRequest(t, s, "/api/issues/resource/ClusterRoleBinding/_/dangling")
+	var bare []issues.Issue
+	if err := json.Unmarshal(w.Body.Bytes(), &bare); err != nil || len(bare) != 0 {
+		t.Fatalf("bare path: %v, %d issues", err, len(bare))
 	}
 }
