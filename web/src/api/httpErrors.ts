@@ -52,27 +52,37 @@ export interface ErrorResponse {
   unknownRoute: boolean
 }
 
+const MAX_PLAIN_TEXT_REASON = 200
+
 /**
  * Reads a failed response once. A JSON object body is returned as-is; anything
  * else becomes `{ error: "HTTP <status> (<text>)" }` so callers never surface a
- * contentless "Unknown error".
+ * contentless "Unknown error". A short plain-text reason, such as Radar Hub's
+ * `cluster "x" not connected`, is appended; HTML pages and chi's
+ * unknown-route body add nothing and are left out.
  */
 export async function readErrorResponse(response: Response): Promise<ErrorResponse> {
   const text = await response.text().catch(() => '')
+  const contentType = response.headers.get('content-type')
+  const unknownRoute = isUnknownRouteResponse(response.status, contentType, text)
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch {
     parsed = undefined
   }
-  const body: ErrorBody =
-    typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as ErrorBody)
-      : { error: httpStatusMessage(response.status, response.statusText) }
-  return {
-    body,
-    unknownRoute: isUnknownRouteResponse(response.status, response.headers.get('content-type'), text),
+  if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+    return { body: parsed as ErrorBody, unknownRoute }
   }
+  const status = httpStatusMessage(response.status, response.statusText)
+  const reason = text.trim()
+  const showReason =
+    !unknownRoute &&
+    (contentType ?? '').toLowerCase().startsWith('text/plain') &&
+    reason.length > 0 &&
+    reason.length <= MAX_PLAIN_TEXT_REASON &&
+    !status.toLowerCase().includes(reason.toLowerCase())
+  return { body: { error: showReason ? `${status}: ${reason}` : status }, unknownRoute }
 }
 
 export async function readErrorBody(response: Response): Promise<ErrorBody> {

@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -12,7 +13,7 @@ import (
 // find missing on an older Radar, with the flag each one is negotiated by.
 const radarFeaturesPath = "../../web/src/api/radarFeatures.ts"
 
-var flagInRadarFeatures = regexp.MustCompile(`flag:\s*'([A-Za-z]+)'`)
+var flagInRadarFeatures = regexp.MustCompile(`flag:\s*['"]([A-Za-z]+)['"]`)
 
 // Flags that hide a control rather than gate an endpoint, so an older Radar
 // shows no upgrade note for them and they have no entry in the table.
@@ -42,7 +43,8 @@ func TestFeatureFlagsHaveFrontendGates(t *testing.T) {
 	advertised := map[string]bool{}
 	featuresType := reflect.TypeOf(FeatureCapabilities{})
 	for i := 0; i < featuresType.NumField(); i++ {
-		advertised[featuresType.Field(i).Tag.Get("json")] = true
+		name, _, _ := strings.Cut(featuresType.Field(i).Tag.Get("json"), ",")
+		advertised[name] = true
 	}
 
 	var ungated, unadvertised []string

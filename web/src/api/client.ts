@@ -2593,7 +2593,7 @@ export function useResource<T>(
     retry: (failureCount, error) => {
       if (isStillLoadingError(error)) return true;
       if (isKindSyncFailed(error)) return false;
-      return failureCount < 1; // matches the QueryClient default (retry: 1)
+      return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
     },
     retryDelay: (failureCount, error) =>
       isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
@@ -2625,7 +2625,7 @@ export function useResourceWithRelationships<T>(
     retry: (failureCount, error) => {
       if (isStillLoadingError(error)) return true;
       if (isKindSyncFailed(error)) return false;
-      return failureCount < 1; // matches the QueryClient default (retry: 1)
+      return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
     },
     retryDelay: (failureCount, error) =>
       isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
@@ -2657,7 +2657,7 @@ export function useResources<T>(
     retry: (failureCount, error) => {
       if (isStillLoadingError(error)) return true;
       if (isKindSyncFailed(error)) return false;
-      return failureCount < 1; // matches the QueryClient default (retry: 1)
+      return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
     },
     retryDelay: (failureCount, error) =>
       isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),

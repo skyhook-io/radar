@@ -34,9 +34,15 @@ describe('radarFeatureSupport', () => {
   })
 
   it('gates features without a flag on version alone', () => {
-    expect(radarFeatureSupport('drainPlan', { features: { resourceIssues: true } }, 'v1.13.1')).toBe('unsupported')
+    expect(radarFeatureSupport('drainPlan', { features: { yamlReview: true } }, 'v1.13.1')).toBe('unsupported')
     expect(radarFeatureSupport('drainPlan', undefined, 'v1.14.0')).toBe('supported')
     expect(radarFeatureSupport('capacity', undefined, 'dev')).toBe('unknown')
+  })
+
+  it('lifts a stale host version for unflagged features once any table flag is advertised', () => {
+    expect(radarFeatureSupport('drainPlan', { features: { resourceIssues: true } }, 'v1.7.2')).toBe('supported')
+    expect(radarFeatureSupport('capacity', { features: { resourceIssues: true } }, 'v1.7.2')).toBe('supported')
+    expect(radarFeatureSupport('upgradeReadiness', { features: { resourceIssues: true } }, undefined)).toBe('supported')
   })
 })
 
@@ -85,6 +91,14 @@ describe('guardRadarFeature', () => {
     await expect(guardRadarFeature('policyResource', 'supported', versions, () => Promise.reject(hubNotFound)))
       .rejects.toBe(hubNotFound)
     expect(getRadarUpgradeRequirement(hubNotFound)).toBeNull()
+  })
+
+  it("keeps the router's 404 an error on a Radar known to serve the feature", async () => {
+    const routing = new ApiError('HTTP 404 (Not Found)', 404, {}, { unknownRoute: true })
+    const error = await guardRadarFeature('policyResource', 'supported', versions, () => Promise.reject(routing))
+      .catch((e: unknown) => e)
+    expect(error).toBe(routing)
+    expect(getRadarUpgradeRequirement(error)).toBeNull()
   })
 
   it('returns the data when the request succeeds', async () => {

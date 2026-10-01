@@ -1,15 +1,22 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { getRadarUpgradeRequirement } from '@skyhook-io/k8s-ui'
-import { usePodEnvironment } from './client'
+import { ApiError, isNotFoundError, useCapacityPoolDetail, useDrainPlan, usePodEnvironment } from './client'
+import { getApiBase } from './config'
 import { usePolicyResource } from './policy'
+import { isRadarFeatureUnsupported } from './radarFeatures'
 
-// The host knows the agent as v1.7.2 before /capabilities, /version-check and
-// /api-resources answer; the tests settle those by seeding the cache.
-vi.mock('../context/NavCustomization', () => ({ useNavCustomization: () => ({ radarVersion: 'v1.7.2' }) }))
+// By default the host knows the agent as v1.7.2 before /capabilities,
+// /version-check and /api-resources answer; the tests settle those by seeding
+// the cache.
+const host = vi.hoisted(() => ({ radarVersion: 'v1.7.2' as string | undefined }))
+vi.mock('../context/NavCustomization', () => ({ useNavCustomization: () => host }))
+
+const CHI_404 = () => new Response('404 page not found\n', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } })
+let chiRoutes: string[] = []
 
 vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
 const requested: string[] = []
@@ -19,9 +26,13 @@ let client: QueryClient
 
 beforeEach(() => {
   requested.length = 0
+  host.radarVersion = 'v1.7.2'
+  chiRoutes = []
   vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
     const url = String(input)
     requested.push(url)
+    if (chiRoutes.some((route) => url.includes(route))) return Promise.resolve(CHI_404())
+    if (url.includes('/capacity/pools/')) return Promise.resolve(Response.json({ pool: { name: 'default' } }))
     if (url.endsWith('/environment')) return Promise.resolve(Response.json({ containers: [], coverage: {} }))
     if (url.includes('/policy/resource/')) return Promise.resolve(Response.json({ evaluated: true, status: 'ready' }))
     return new Promise<Response>(() => {})
@@ -56,7 +67,9 @@ function Environment() {
 }
 
 function Policy() {
-  const { data, error } = usePolicyResource('pods', 'shop', 'web')
+  const { data, error, isLoading, isError } = usePolicyResource('pods', 'shop', 'web')
+  if (isLoading) return <span>loading</span>
+  if (data && isError) return <span>inconsistent</span>
   return <span>{data?.status ?? (getRadarUpgradeRequirement(error) ? 'upgrade' : 'pending')}</span>
 }
 
@@ -74,7 +87,8 @@ it('fetches for real once the agent turns out to advertise the feature', async (
 
 it('turns an unsupported policy answer into not installed once discovery shows no policy engine', async () => {
   await render(<Policy />)
-  expect(element.textContent).toBe('upgrade')
+  // No upgrade note yet: discovery may still withdraw it.
+  expect(element.textContent).toBe('loading')
 
   await act(async () => { client.setQueryData(['api-resources'], [{ group: '', name: 'pods' }]) })
   await settle()
@@ -86,4 +100,80 @@ it('keeps the upgrade note when discovery shows an OpenReports policy engine', a
   client.setQueryData(['api-resources'], [{ group: 'openreports.io', name: 'reports' }])
   await render(<Policy />)
   expect(element.textContent).toBe('upgrade')
+})
+
+it('shows the upgrade note when discovery fails', async () => {
+  const answer = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation((input, init) =>
+    String(input).endsWith('/api-resources')
+      ? Promise.resolve(Response.json({ error: 'discovery down' }, { status: 500 }))
+      : answer(input, init),
+  )
+  await render(<Policy />)
+  await settle()
+  expect(element.textContent).toBe('upgrade')
+})
+
+function PoolDetail() {
+  const { data, error } = useCapacityPoolDetail('default')
+  if (data) return <span>data</span>
+  if (isNotFoundError(error)) return <span>pool not found</span>
+  return <span>{getRadarUpgradeRequirement(error) ? 'upgrade' : 'pending'}</span>
+}
+
+it('never asks an old Radar for a capacity deep link, and does not call the pool missing', async () => {
+  await render(<PoolDetail />)
+  expect(element.textContent).toBe('upgrade')
+  expect(asked('/capacity/')).toBe(false)
+})
+
+it("reads the router's 404 on a capacity deep link as unsupported when the version is unknown", async () => {
+  host.radarVersion = undefined
+  chiRoutes = ['/capacity/pools/']
+  await render(<PoolDetail />)
+  expect(element.textContent).toBe('upgrade')
+  expect(requested.filter((url) => url.includes('/capacity/pools/'))).toHaveLength(1)
+})
+
+it("prefers the agent's own version over a stale host version", async () => {
+  await render(<PoolDetail />)
+  expect(element.textContent).toBe('upgrade')
+
+  await act(async () => { client.setQueryData(['version-check', getApiBase()], { currentVersion: 'v1.12.0' }) })
+  await settle()
+  await settle()
+  expect(asked('/capacity/pools/default')).toBe(true)
+  expect(element.textContent).toBe('data')
+})
+
+const probe: { drainPlan?: ReturnType<typeof useDrainPlan> } = {}
+function DrainPlanProbe() {
+  const drainPlan = useDrainPlan()
+  useEffect(() => { probe.drainPlan = drainPlan })
+  return null
+}
+
+it('never asks a Radar older than v1.14 for a drain plan', async () => {
+  host.radarVersion = 'v1.13.1'
+  await render(<DrainPlanProbe />)
+  const error = await probe.drainPlan!.mutateAsync({ name: 'worker-1', options: { deleteEmptyDirData: false, force: false } })
+    .catch((e: unknown) => e)
+  expect(isRadarFeatureUnsupported(error, 'drainPlan')).toBe(true)
+  expect(asked('/drain-plan')).toBe(false)
+})
+
+it("reads the router's 404 on a drain plan as unsupported, and a handler 404 as an error", async () => {
+  host.radarVersion = undefined
+  chiRoutes = ['/nodes/worker-1/drain-plan']
+  await render(<DrainPlanProbe />)
+  const options = { deleteEmptyDirData: false, force: false }
+  const unsupported = await probe.drainPlan!.mutateAsync({ name: 'worker-1', options }).catch((e: unknown) => e)
+  expect(isRadarFeatureUnsupported(unsupported, 'drainPlan')).toBe(true)
+
+  vi.mocked(fetch).mockImplementationOnce(() =>
+    Promise.resolve(Response.json({ error: 'nodes "worker-2" not found' }, { status: 404 })),
+  )
+  const missing = await probe.drainPlan!.mutateAsync({ name: 'worker-2', options }).catch((e: unknown) => e)
+  expect(missing).toBeInstanceOf(ApiError)
+  expect(isRadarFeatureUnsupported(missing)).toBe(false)
 })

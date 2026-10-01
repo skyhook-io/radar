@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react';
 import type { ReactNode } from 'react';
+import type { RadarUpgradeRequirement } from '@skyhook-io/k8s-ui';
 
 /**
  * Per-cluster destinations an embedded host can take over with its own
@@ -76,14 +77,8 @@ export interface NavCustomization {
   onRequestRadarUpgrade?: (request: RadarUpgradeRequest) => void;
 }
 
-export interface RadarUpgradeRequest {
-  /** What the user is missing, e.g. "Policy results". */
-  feature: string;
-  /** First Radar release that serves it, e.g. "v1.10.0"; absent until known, meaning "the latest". */
-  minimumVersion?: string;
-  currentVersion?: string;
-  latestVersion?: string;
-}
+/** What the user is missing and which Radar serves it; see RadarUpgradeRequirement. */
+export type RadarUpgradeRequest = RadarUpgradeRequirement;
 
 const NavCustomizationContext = createContext<NavCustomization>({});
 

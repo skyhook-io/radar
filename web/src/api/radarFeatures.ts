@@ -58,6 +58,9 @@ export function radarSpecSupport(
   currentVersion: string | undefined,
 ): RadarFeatureSupport {
   if (spec.flag && capabilities?.features?.[spec.flag] === true) return 'supported'
+  // Unflagged entries all predate the first flag added for this table, so a
+  // Radar that advertises it serves them, whatever version the host reported.
+  if (!spec.flag && capabilities?.features?.resourceIssues === true) return 'supported'
   if (spec.flag && spec.flagShippedWithEndpoint && capabilities) return 'unsupported'
   const version = currentVersion?.trim()
   if (!spec.minimumVersion || !version || !RELEASE_VERSION.test(version)) return 'unknown'
@@ -106,8 +109,10 @@ export function isRadarFeatureUnsupported(error: unknown, feature?: RadarFeature
 }
 
 /**
- * Runs `request` unless the connected Radar is known to predate `feature`, and
- * reads chi's unknown-route 404 (ApiError.unknownRoute) as the same answer.
+ * Runs `request` unless the connected Radar is known to predate `feature`.
+ * When its version is unknown, chi's unknown-route 404 (ApiError.unknownRoute)
+ * is read as the same answer; on a Radar known to serve the feature that 404
+ * is a routing failure and stays an error.
  */
 export async function guardRadarFeature<T>(
   feature: RadarFeature,
@@ -119,7 +124,7 @@ export async function guardRadarFeature<T>(
   try {
     return await request()
   } catch (error) {
-    if ((error as { unknownRoute?: unknown } | null)?.unknownRoute === true) {
+    if (support === 'unknown' && (error as { unknownRoute?: unknown } | null)?.unknownRoute === true) {
       throw new RadarFeatureUnsupportedError(feature, versions)
     }
     throw error

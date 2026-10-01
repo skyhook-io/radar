@@ -26,7 +26,7 @@ const POLICY_NOT_INSTALLED: PolicyResourceResponse = {
 // way an operator would notice.
 export function usePolicyResource(kind: string, namespace: string, name: string, enabled = true) {
   const { guard, gatedKey } = useRadarFeature('policyResource')
-  const { data: apiResources } = useAPIResources()
+  const { data: apiResources, isPending: discoveryPending } = useAPIResources()
   const query = useQuery<PolicyResourceResponse>({
     queryKey: ['policy', 'resource', kind, namespace, name, ...gatedKey],
     queryFn: () =>
@@ -44,9 +44,15 @@ export function usePolicyResource(kind: string, namespace: string, name: string,
   // A Radar too old for policy results, on a cluster with no policy engine,
   // gets the answer a current Radar would give: not installed. Prompting an
   // upgrade there would promise a section that stays empty. Derived at render
-  // so it follows discovery whenever /api-resources answers.
-  if (isRadarFeatureUnsupported(query.error) && apiResources !== undefined && !hasPolicyReports(apiResources)) {
-    return { ...query, data: POLICY_NOT_INSTALLED, error: null }
+  // so it follows discovery whenever /api-resources answers; until it does the
+  // section stays loading rather than flashing a note it may withdraw.
+  if (isRadarFeatureUnsupported(query.error)) {
+    if (apiResources === undefined && discoveryPending) {
+      return { ...query, error: null, isError: false, isLoading: true, isPending: true, status: 'pending' as const }
+    }
+    if (apiResources !== undefined && !hasPolicyReports(apiResources)) {
+      return { ...query, data: POLICY_NOT_INSTALLED, error: null, isError: false, isSuccess: true, status: 'success' as const }
+    }
   }
   return query
 }

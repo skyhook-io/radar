@@ -45,6 +45,16 @@ describe('readErrorResponse', () => {
     const gateway = await readErrorResponse(response(502, '<html>Bad gateway</html>', 'text/html'))
     expect(gateway).toEqual({ body: { error: 'HTTP 502 (Bad Gateway)' }, unknownRoute: false })
   })
+
+  it("keeps a short plain-text reason such as Radar Hub's", async () => {
+    const offline = await readErrorResponse(response(503, 'cluster "prod" not connected\n', TEXT))
+    expect(offline.body.error).toBe('HTTP 503 (Service Unavailable): cluster "prod" not connected')
+    // Hub's bare "not found" only repeats the status.
+    const hub = await readErrorResponse(response(404, 'not found\n', TEXT))
+    expect(hub.body.error).toBe('HTTP 404 (Not Found)')
+    const long = await readErrorResponse(response(500, 'x'.repeat(500), TEXT))
+    expect(long.body.error).toBe('HTTP 500 (Internal Server Error)')
+  })
 })
 
 describe('httpStatusMessage', () => {
