@@ -141,6 +141,8 @@ export interface CNPGProblem {
   measuredBy?: string
   /** How it was measured (queries, metric names), shown on hover over the source. */
   sourceDetail?: string
+  /** A shorter headline for tight places (the fleet cell); `title` stays the precise one. */
+  shortTitle?: string
   /** Other objects the same problem is about, e.g. earlier Backups that failed the same way. */
   alsoAbout?: { kind: string; name: string }[]
 }
@@ -669,7 +671,7 @@ function replicationFact(cluster: any, pods: CNPGInstance[], hibernated: boolean
   const readyReplicas = replicas.filter((p) => p.ready === true).length
   if (replicas.length === 0) return { text: 'No replica pods observed', tone: 'unknown' }
   return {
-    text: `${readyReplicas}/${replicas.length} replicas ready · lag unknown`,
+    text: `${readyReplicas}/${replicas.length} ready · lag unknown`,
     tone: 'unknown',
     source: CNPG_LAG_UNMEASURED_SOURCE,
   }
@@ -1197,12 +1199,12 @@ function measuredReplication(base: CNPGFact, reading: CNPGFleetMetricsReading | 
     case 'ok':
       if (lag.seconds === undefined) break
       return {
-        text: `${prefix} · max lag ${cnpgFormatLag(lag.seconds)}`,
+        text: `${prefix} · lag ${cnpgFormatLag(lag.seconds)}`,
         tone: cnpgLagTone(lag.seconds),
         source: `Largest standby replay lag, ${lag.pod ?? 'a standby'} · ${src.lagSource ?? 'Prometheus'}`,
       }
     case 'noStandby':
-      return { text: `${prefix} · no standby reporting lag`, tone: 'unknown', source: `${lag.reason ?? 'No instance reports being a standby'} · ${src.lagSource ?? 'Prometheus'}` }
+      return { text: `${prefix} · lag unknown`, tone: 'unknown', source: `No standby reports lag: ${lag.reason ?? 'no instance reports being a standby'} · ${src.lagSource ?? 'Prometheus'}` }
     case 'denied':
       return { text: `${prefix} · lag unknown`, tone: 'unknown', source: lag.grant ? `Needs ${lag.grant}` : lag.reason }
   }
@@ -1256,7 +1258,8 @@ function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading
     severity: floor >= CNPG_SUSTAINED_LAG_CRITICAL_SECONDS ? 'critical' : 'warning',
     category: 'availability',
     title: `${pod} ≥ ${cnpgFormatLag(floor)} behind in every sample for ${formatWindowShort(lag.sustainedWindow)}`,
-    detail: `Lowest replay lag in the samples Prometheus recorded over the last ${window}. Gaps between samples aren't covered. A failover to it would start at least that far behind.`,
+    shortTitle: `${pod} ≥ ${cnpgFormatLag(floor)} behind for ${formatWindowShort(lag.sustainedWindow)}`,
+    detail: `Lowest replay lag in the samples Prometheus recorded over the last ${window}. If Prometheus missed some scrapes, those moments aren't included. A failover to it would start at least that far behind.`,
     subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
     source: 'measurement',
     measuredBy: 'Prometheus',

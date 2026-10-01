@@ -277,24 +277,28 @@ export function worstCoverage(...covs: (CNPGKindCoverage | undefined)[]): CNPGKi
 }
 
 /**
- * A URL or path that wraps only after "/" (never at a hyphen or mid-word), with the whole
- * value on hover; a single segment too long for its cell is cut with an
- * ellipsis.
+ * Text that wraps only after `after` ("/" for a path, "-" for a resource
+ * name), never mid-word; a single segment too long for its cell is cut with an
+ * ellipsis. The whole value shows on hover.
  */
-export function PathText({ value, className }: { value: string; className?: string }) {
-  const parts = value.split(/(?<=\/)/)
+export function BreakText({ value, after, className }: { value: string; after: '/' | '-'; className?: string }) {
+  const parts = value.split(after === '/' ? /(?<=\/)/ : /(?<=-)/)
   return (
     <Tooltip content={value} wrapperClassName="max-w-full">
-      <span className={clsx('block max-w-full overflow-hidden text-ellipsis font-mono text-[12.5px] [overflow-wrap:normal]', className)}>
+      <span className={clsx('block max-w-full', className)}>
         {parts.map((p, i) => (
-          <span key={i}>
-            <span className="whitespace-nowrap">{p}</span>
-            {i < parts.length - 1 && <wbr />}
+          <span key={i} className="inline-block max-w-full truncate align-top">
+            {p}
           </span>
         ))}
       </span>
     </Tooltip>
   )
+}
+
+/** A URL or path; see BreakText. */
+export function PathText({ value, className }: { value: string; className?: string }) {
+  return <BreakText value={value} after="/" className={clsx('font-mono text-[12.5px]', className)} />
 }
 
 /**

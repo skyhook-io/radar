@@ -53,7 +53,7 @@ describe('buildCNPGFleet', () => {
     )
     const row = fleet.rows[0]
     expect(row.replication.tone).toBe('unknown')
-    expect(row.replication.text).toContain('2/2 replicas ready')
+    expect(row.replication.text).toContain('2/2 ready')
     expect(row.pods[0].role).toBe('primary')
   })
 

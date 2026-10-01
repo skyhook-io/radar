@@ -16,7 +16,7 @@ import {
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
 import { EmptyState, ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../capacity/shared'
-import { CNPGWorkspaceHeader, CoverageNotice, FilterChips, type CNPGScreenProps } from './shared'
+import { BreakText, CNPGWorkspaceHeader, CoverageNotice, FilterChips, type CNPGScreenProps } from './shared'
 import { cnpgClusterFullPath, cnpgClusterProblemsPath, currentPageLabel } from './paths'
 import { sameResource } from './routes'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
@@ -102,11 +102,12 @@ function AttentionCell({ row, onOpenAll }: { row: CNPGFleetRow; onOpenAll: () =>
   const top = row.problems.find((p) => p.severity !== 'posture') ?? row.problems[0]
   if (!top) return <span className="text-theme-text-tertiary">—</span>
   const others = row.problems.filter((p) => p !== top)
-  const unbreakable = top.title.split(/\s+/).some((w) => w.length > UNBREAKABLE_TOKEN)
+  const headline = top.shortTitle ?? top.title
+  const unbreakable = headline.split(/\s+/).some((w) => w.length > UNBREAKABLE_TOKEN)
   return (
     <div className="min-w-0">
       <Tooltip content={top.title} wrapperClassName="w-full">
-        <div className={clsx('[overflow-wrap:normal]', unbreakable ? 'truncate' : 'line-clamp-2', toneTextClass(CNPG_PROBLEM_TONE[top.severity]))}>{top.title}</div>
+        <div className={clsx('[overflow-wrap:normal]', unbreakable ? 'truncate' : 'line-clamp-3', toneTextClass(CNPG_PROBLEM_TONE[top.severity]))}>{headline}</div>
       </Tooltip>
       {others.length > 0 && (
         <Tooltip
@@ -294,11 +295,11 @@ export function CNPGOverview({
                 <colgroup>
                   <col className="w-[15%]" />
                   <col className="w-[8.5rem]" />
-                  <col className="w-[12%]" />
                   <col className="w-[11%]" />
+                  <col className="w-[10%]" />
+                  <col className="w-[7%]" />
                   <col className="w-[8%]" />
-                  <col className="w-[9%]" />
-                  <col className="w-[13%]" />
+                  <col className="w-[17%]" />
                   <col className="w-[7.5rem]" />
                 </colgroup>
                 <thead className={TABLE_HEAD}>
@@ -328,7 +329,7 @@ export function CNPGOverview({
                           <div className="flex min-w-0 items-start gap-2">
                             <span className="mt-1.5 shrink-0"><RowStatusDot row={row} /></span>
                             <div className="min-w-0">
-                              <div className="font-medium [overflow-wrap:anywhere]">{row.name}</div>
+                              <BreakText value={row.name} after="-" className="font-medium" />
                               <div className="flex min-w-0 items-baseline text-xs text-theme-text-tertiary">
                                 <Tooltip content={`Namespace ${row.namespace}`} wrapperClassName="min-w-0">
                                   <span className="block truncate">{row.namespace}</span>
