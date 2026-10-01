@@ -108,3 +108,15 @@ describe('CNPGClusterSummary', () => {
     act(() => root.unmount())
   })
 })
+
+describe('problem meta', () => {
+  it('keeps a space between the Backup and "and N more"', () => {
+    const r = row({
+      problems: [{ ...problem('a', 'warning', '3 backups failed'), alsoAbout: [{ kind: 'Backup', name: 'b-2' }, { kind: 'Backup', name: 'b-1' }] }],
+      attention: true,
+    })
+    const root = render(<CNPGClusterSummary row={r} onNavigate={() => {}} />)
+    expect(document.body.textContent).toContain('b-a and 2 more')
+    act(() => root.unmount())
+  })
+})

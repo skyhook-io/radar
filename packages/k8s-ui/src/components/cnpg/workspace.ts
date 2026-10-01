@@ -284,9 +284,11 @@ function stripTitlePrefix(message: string, title: string): string {
  * named in alsoAbout. Each Backup is otherwise its own issue, and a schedule
  * failing every night would list the same sentence over and over.
  */
-export function cnpgCollapseBackupFailures(problems: (CNPGProblem & { reason?: string; firstSeen?: string })[]): CNPGProblem[] {
-  const groups = new Map<string, (CNPGProblem & { reason?: string; firstSeen?: string })[]>()
-  const out: CNPGProblem[] = []
+type IssueProblem = CNPGProblem & { reason?: string; firstSeen?: string }
+
+export function cnpgCollapseBackupFailures(problems: IssueProblem[]): IssueProblem[] {
+  const groups = new Map<string, IssueProblem[]>()
+  const out: IssueProblem[] = []
   for (const p of problems) {
     if (p.reason !== 'CNPGBackupFailed' || p.subject.kind !== 'Backup') {
       out.push(p)
@@ -310,7 +312,31 @@ export function cnpgCollapseBackupFailures(problems: (CNPGProblem & { reason?: s
       alsoAbout: sorted.slice(1).map((p) => ({ kind: p.subject.kind, name: p.subject.name })),
     })
   }
-  return out.map(({ reason: _r, firstSeen: _f, ...p }: CNPGProblem & { reason?: string; firstSeen?: string }) => p)
+  return out
+}
+
+/**
+ * "The last backup failed" restates a failed-Backup problem when that problem
+ * is about the cluster's newest Backup, so the duplicate is dropped and the
+ * count stays honest. With the newest Backup unknown, both stay.
+ */
+export function cnpgFoldLastBackupFailed(problems: IssueProblem[], newestBackup: string | undefined): CNPGProblem[] {
+  const covered =
+    !!newestBackup &&
+    problems.some(
+      (p) => p.subject.kind === 'Backup' && (p.subject.name === newestBackup || p.alsoAbout?.some((o) => o.kind === 'Backup' && o.name === newestBackup)),
+    )
+  return problems
+    .filter((p) => !(covered && p.reason === 'CNPGLastBackupFailed'))
+    .map(({ reason: _r, firstSeen: _f, ...p }) => p)
+}
+
+function newestBackupOf(cluster: any, backups: any[]): string | undefined {
+  const ns = cluster.metadata?.namespace
+  const name = cluster.metadata?.name
+  const mine = backups.filter((b) => b?.metadata?.namespace === ns && specClusterName(b) === name)
+  const at = (b: any) => Date.parse(b?.status?.startedAt ?? b?.metadata?.creationTimestamp ?? '') || 0
+  return mine.sort((a, b) => at(b) - at(a))[0]?.metadata?.name
 }
 
 /** The headline alone; see cnpgIssueText. */
@@ -682,11 +708,12 @@ function problemsFor(
   issues: CNPGWorkspaceIssue[],
   audit: CNPGAuditFinding[],
   children: Map<string, string>,
+  newestBackup?: string,
 ): CNPGProblem[] {
   const ns = cluster.metadata?.namespace
   const name = cluster.metadata?.name
   const out: CNPGProblem[] = []
-  const fromIssues: (CNPGProblem & { reason?: string; firstSeen?: string })[] = []
+  const fromIssues: IssueProblem[] = []
   for (const issue of issues) {
     if ((issue.namespace ?? '') !== ns) continue
     const isSelf = issue.kind === 'Cluster' && issue.name === name
@@ -703,7 +730,7 @@ function problemsFor(
       firstSeen: issue.first_seen,
     })
   }
-  out.push(...cnpgCollapseBackupFailures(fromIssues))
+  out.push(...cnpgFoldLastBackupFailed(cnpgCollapseBackupFailures(fromIssues), newestBackup))
   for (const f of audit) {
     if (f.kind !== 'Cluster' || f.name !== name || (f.namespace ?? '') !== ns) continue
     out.push({
@@ -931,7 +958,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
     const readinessContradicted = !hibernated && !!podReadiness && readyInstances !== null && podReadiness.ready < readyInstances
     const primaryConflict = podsReadable ? primaryConflictOf(cluster, pods.filter((p) => p.metadata?.namespace === ns && p.metadata?.labels?.['cnpg.io/cluster'] === name)) : undefined
     const problems = sortProblems([
-      ...problemsFor(cluster, resp.issues ?? [], resp.audit ?? [], children),
+      ...problemsFor(cluster, resp.issues ?? [], resp.audit ?? [], children, newestBackupOf(cluster, resp.objects.backups ?? [])),
       ...observedProblems(cluster, instancePods, readinessContradicted ? podReadiness : undefined, readyInstances, primaryConflict),
     ])
     const categories = new Set<CNPGProblemCategory>(

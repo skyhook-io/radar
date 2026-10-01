@@ -107,6 +107,7 @@ export function ProblemMeta({ problem, onNavigate, subjectIsSelf, children }: { 
         <span>
           {problem.subject.kind}{' '}
           <RefLink refTo={problem.subject} onNavigate={onNavigate} mono />
+          {problem.alsoAbout && problem.alsoAbout.length > 0 && ' '}
           {problem.alsoAbout && problem.alsoAbout.length > 0 && (
             <Tooltip
               content={
@@ -119,7 +120,7 @@ export function ProblemMeta({ problem, onNavigate, subjectIsSelf, children }: { 
                 </ul>
               }
             >
-              <span> and {problem.alsoAbout.length} more</span>
+              <span>and {problem.alsoAbout.length} more</span>
             </Tooltip>
           )}
         </span>

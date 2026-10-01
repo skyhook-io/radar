@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgCollapseBackupFailures, cnpgCompareProblems, cnpgFormatLag, cnpgIssueText, cnpgIssueTitle, type CNPGProblem } from './workspace'
+import { cnpgCollapseBackupFailures, cnpgCompareProblems, cnpgFoldLastBackupFailed, cnpgFormatLag, cnpgIssueText, cnpgIssueTitle, type CNPGProblem } from './workspace'
 
 const problem = (title: string, severity: CNPGProblem['severity'], kind: string, group = ''): CNPGProblem => ({
   id: title,
@@ -88,7 +88,6 @@ describe('backup failures', () => {
     expect(out).toHaveLength(1)
     expect(out[0]).toMatchObject({ title: '3 backups failed: cannot proceed as the cluster has no plugin configured', subject: { name: 'b-2' } })
     expect(out[0].alsoAbout?.map((o) => o.name)).toEqual(['b-3', 'b-1'])
-    expect('reason' in out[0]).toBe(false)
   })
 })
 
@@ -116,5 +115,30 @@ describe('cnpgFormatLag', () => {
     expect(cnpgFormatLag(1721.3)).toBe('28 min')
     expect(cnpgFormatLag(3600)).toBe('1 h')
     expect(cnpgFormatLag(4000)).toBe('1 h 6 min')
+  })
+})
+
+describe('cnpgFoldLastBackupFailed', () => {
+  const p = (id: string, kind: string, name: string, reason: string, alsoAbout?: { kind: string; name: string }[]) => ({
+    id,
+    severity: 'warning' as const,
+    category: 'protection' as const,
+    title: id,
+    subject: { kind, group: 'postgresql.cnpg.io', namespace: 'pg', name },
+    source: 'issue' as const,
+    reason,
+    alsoAbout,
+  })
+  const last = p('last', 'Cluster', 'pg', 'CNPGLastBackupFailed')
+  it('drops "the last backup failed" when a failed-Backup problem already covers the newest Backup', () => {
+    const group = p('3 backups failed', 'Backup', 'b-3', 'CNPGBackupFailed', [{ kind: 'Backup', name: 'b-2' }])
+    const out = cnpgFoldLastBackupFailed([group, last], 'b-3')
+    expect(out.map((x) => x.id)).toEqual(['3 backups failed'])
+    expect('reason' in out[0]).toBe(false)
+  })
+  it('keeps it when the newest Backup is not among the failures, or is unknown', () => {
+    const old = p('old failure', 'Backup', 'b-1', 'CNPGBackupFailed')
+    expect(cnpgFoldLastBackupFailed([old, last], 'b-9')).toHaveLength(2)
+    expect(cnpgFoldLastBackupFailed([old, last], undefined)).toHaveLength(2)
   })
 })
