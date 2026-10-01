@@ -291,7 +291,7 @@ export function CloudFunnelButton() {
         content={
           <>
             <span className="block font-semibold">Meet Radar Cloud</span>
-            See all your clusters in one place, share with your team, and get alerts with automatic AI investigations.
+            See all your clusters in one place, share with your team, and get alerts and automatic AI investigations.
           </>
         }
         delay={100}
@@ -665,7 +665,7 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
   // skimmable. Alerts and investigations lead: they are the two things the
   // OSS binary cannot do at all. Team, fleet and history follow.
   const highlights = [
-    { icon: Bell, lead: 'Alerts', rest: ' when something breaks, to Slack or any webhook. Once, not for every crash-looping pod.' },
+    { icon: Bell, lead: 'Alerts', rest: ' to Slack or any webhook. One per failure, not one per crash-looping pod.' },
     { icon: Sparkles, lead: 'AI investigations', rest: ': root cause with evidence, automatic on alerts or on demand' },
     { icon: Users, lead: 'Your team', rest: ': share any view with just a link, scoped by your existing RBAC' },
     { icon: Globe, lead: 'Every cluster', rest: ': the whole fleet in one view and one MCP endpoint' },
@@ -736,9 +736,9 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
           <section>
             <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">What it costs</h4>
             <p className="text-[12px] leading-relaxed text-theme-text-secondary">
-              Radar Cloud is {freeLine}, with 100 investigations a month included. Paid plans add more clusters,
-              more included investigations per cluster, additional investigations at $1 each once an owner turns
-              them on, and enterprise features like SSO, SCIM and audit logs.{' '}
+              Radar Cloud is {freeLine}, with 100 investigations a month included. Paid plans include 100 or more
+              per cluster, then $1 each if you turn it on, plus more clusters and enterprise features like SSO,
+              SCIM and audit logs.{' '}
               <a href={PRICING_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
                 See pricing →
               </a>

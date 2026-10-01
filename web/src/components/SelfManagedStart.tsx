@@ -54,16 +54,13 @@ export function SelfManagedStart({ appUrl, onBack }: { appUrl: string; onBack: (
               </li>
             ))}
           </ol>
-          {/* What a platform engineer has to bring, split by stage: a trial
-              needs no address at all in one cluster (opened with port-forward),
-              and an address other clusters can reach once they connect;
-              Postgres and a built-in admin come bundled. Production adds their
-              own Postgres and IdP. */}
+          {/* Split by stage so a trial doesn't look like a production install:
+              the trial bundles Postgres and a built-in admin. */}
           <div className="mt-5 space-y-1 text-[12px] leading-relaxed text-theme-text-tertiary">
             <p>
-              <b className="font-medium text-theme-text-secondary">For a trial</b>, run it in one cluster and open it
-              with port-forward, no public address needed. To connect more clusters, give the hub a hostname they
-              can reach.
+              <b className="font-medium text-theme-text-secondary">For a trial</b>, install it in one cluster and open
+              it with port-forward, no public address needed. To connect more clusters, give it an address they can
+              reach.
             </p>
             <p>
               <b className="font-medium text-theme-text-secondary">For production</b>, connect your own Postgres and

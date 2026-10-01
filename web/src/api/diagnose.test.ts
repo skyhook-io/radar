@@ -326,6 +326,29 @@ describe("refused requests", () => {
     });
   });
 
+  it("reads a code sent beside a sentence repeated in error", async () => {
+    const sentence = "This investigation has reached its follow-up limit.";
+    refuse(
+      409,
+      JSON.stringify({
+        error: sentence,
+        detail: sentence,
+        code: "investigation_turn_limit",
+      }),
+    );
+    await expect(addTurn("run-1", { question: "why?" })).rejects.toMatchObject({
+      status: 409,
+      message: sentence,
+      code: "investigation_turn_limit",
+    });
+  });
+
+  it("never reports the sentence as the code", async () => {
+    const sentence = "Busy.";
+    refuse(409, JSON.stringify({ error: sentence, detail: sentence }));
+    expect((await startError()).code).toBeUndefined();
+  });
+
   it("shows error when it is the only sentence", async () => {
     refuse(409, JSON.stringify({ error: "Too many investigations running." }));
     const e = await startError();

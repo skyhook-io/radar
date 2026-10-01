@@ -272,8 +272,9 @@ export interface DiagnoseRefusal {
   action?: string;
 }
 
-// Hosts that attach a code put it in `error` and the sentence to show in
-// `detail`; everything else puts the sentence in `error`.
+// The sentence to show is `detail` when a host sends one, else `error`. A
+// host's machine-readable code is `code`, or `error` when that is not the
+// sentence itself.
 async function diagnoseError(res: Response): Promise<DiagnoseError> {
   let body: Record<string, unknown> | null = null;
   try {
@@ -288,7 +289,7 @@ async function diagnoseError(res: Response): Promise<DiagnoseError> {
   const error = str(body?.error);
   const message = detail ?? error ?? `request failed (${res.status})`;
   return new DiagnoseError(res.status, message, {
-    code: detail ? error : undefined,
+    code: str(body?.code) ?? (detail && error !== detail ? error : undefined),
     reason: str(body?.reason),
     action: str(body?.action),
   });
