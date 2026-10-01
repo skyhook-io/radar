@@ -46,6 +46,7 @@ import { ConnectionProvider, useConnection } from './context/ConnectionContext'
 import { ConnectionErrorView } from './components/ConnectionErrorView'
 import { SyncProgressPanel } from './components/SyncProgressPanel'
 import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/CapabilitiesContext'
+import { RadarUpgradeProvider } from './context/RadarUpgrade'
 import { UserMenu } from './components/UserMenu'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { UpdateNotification } from './components/ui/UpdateNotification'
@@ -2533,17 +2534,19 @@ function App({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadSt
   return (
     <ConnectionProvider>
       <CapabilitiesProvider>
-        <ContextSwitchProvider>
-          <DockProvider>
-            <KeyboardShortcutProvider>
-              <AppInner
-                manageDocumentTitle={manageDocumentTitle}
-                documentTitleSuffix={documentTitleSuffix}
-                onClusterLoadStateChange={onClusterLoadStateChange}
-              />
-            </KeyboardShortcutProvider>
-          </DockProvider>
-        </ContextSwitchProvider>
+        <RadarUpgradeProvider>
+          <ContextSwitchProvider>
+            <DockProvider>
+              <KeyboardShortcutProvider>
+                <AppInner
+                  manageDocumentTitle={manageDocumentTitle}
+                  documentTitleSuffix={documentTitleSuffix}
+                  onClusterLoadStateChange={onClusterLoadStateChange}
+                />
+              </KeyboardShortcutProvider>
+            </DockProvider>
+          </ContextSwitchProvider>
+        </RadarUpgradeProvider>
       </CapabilitiesProvider>
     </ConnectionProvider>
   )

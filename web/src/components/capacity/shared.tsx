@@ -15,6 +15,9 @@ import {
 import {
   FreshnessControl,
   formatDuration,
+  getRadarUpgradeRequirement,
+  RadarUpgradeAction,
+  radarUpgradeDetail,
   memberRef,
   PaneLoader,
   ResourceBar,
@@ -51,7 +54,6 @@ import {
 import {
   isCapacityCursorInvalidError,
   isForbiddenError,
-  isNotFoundError,
   useCapacityPools,
 } from "../../api/client";
 import type { SelectedResource } from "../../types";
@@ -1520,21 +1522,19 @@ export function integrationBlock(
   if (!response && error) {
     if (isForbiddenError(error))
       return <DeniedCapacityState detail={errorMessage(error)} />;
-    // A 404 on the top-level capacity routes means the route doesn't exist on
-    // this Radar — a pre-v1.9.0 binary behind a version-skewed host (Radar
-    // Cloud), not a failure. The embedded OSS binary can never hit this.
-    if (isNotFoundError(error))
+    // Only reachable behind a version-skewed host (Radar Cloud): the OSS
+    // binary always serves the routes its own frontend calls.
+    const upgrade = getRadarUpgradeRequirement(error);
+    if (upgrade)
       return (
         <EmptyState
           icon={Gauge}
           title="Capacity needs a newer Radar"
-          detail={
-            <>
-              This cluster&rsquo;s Radar predates the Capacity view (added in
-              Radar v1.9.0).
-              <br />
-              Upgrade the in-cluster Radar to enable it.
-            </>
+          detail={radarUpgradeDetail(upgrade)}
+          action={
+            <div className="mt-3 text-sm">
+              <RadarUpgradeAction requirement={upgrade} />
+            </div>
           }
         />
       );

@@ -1363,6 +1363,9 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		YAMLReview:     true,
 		YAMLSchemas:    true,
 		WorkloadImages: true,
+		ResourceIssues: true,
+		PodEnvironment: true,
+		PolicyResource: true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()

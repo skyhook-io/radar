@@ -26,6 +26,7 @@ import { CapacityView } from "./CapacityView";
 import { updateDemandSearchParam } from "./CapacityDemand";
 import { integrationBlock } from "./shared";
 import { ApiError } from "../../api/client";
+import { RadarFeatureUnsupportedError } from "../../api/radarFeatures";
 
 vi.mock("../../context/ConnectionContext", () => ({
   useConnection: () => ({ connection: { state: "connected" } }),
@@ -2289,13 +2290,21 @@ describe("CapacityView activity", () => {
 });
 
 describe("integrationBlock version skew", () => {
-  it("maps a top-level 404 to the pre-v1.9.0 upgrade message, never 'Unknown error'", () => {
+  it("maps an unsupported-feature error to the upgrade message, never 'Unknown error'", () => {
     const html = renderToString(
-      <>{integrationBlock(undefined, new ApiError("404 page not found", 404), false, "Loading")}</>,
+      <>{integrationBlock(undefined, new RadarFeatureUnsupportedError("capacity", { currentVersion: "v1.7.2" }), false, "Loading")}</>,
     );
     expect(html).toContain("Capacity needs a newer Radar");
-    expect(html).toContain("v1.9.0");
+    expect(html).toContain("Needs Radar v1.9 or newer. You&#x27;re on v1.7.2.");
     expect(html).not.toContain("Capacity unavailable");
+  });
+
+  it("does not read a handler's JSON 404 as a missing route", () => {
+    const html = renderToString(
+      <>{integrationBlock(undefined, new ApiError("nodepool not found", 404, { error: "nodepool not found" }), false, "Loading")}</>,
+    );
+    expect(html).toContain("Capacity unavailable");
+    expect(html).not.toContain("needs a newer Radar");
   });
 
   it("keeps ordinary failures on the generic error state", () => {

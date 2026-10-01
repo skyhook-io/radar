@@ -163,6 +163,9 @@ export interface FeatureCapabilities {
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean
+  resourceIssues?: boolean
+  podEnvironment?: boolean
+  policyResource?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

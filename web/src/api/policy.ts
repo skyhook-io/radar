@@ -7,7 +7,17 @@ import type {
   VeleroStoredBackupsResponse,
   VeleroRunMessagesResponse,
 } from '@skyhook-io/k8s-ui'
-import { fetchJSON } from './client'
+import { fetchJSON, useRadarFeature } from './client'
+import { hasPolicyReports, useAPIResources } from './apiResources'
+import { isRadarFeatureUnsupported } from './radarFeatures'
+
+const POLICY_NOT_INSTALLED: PolicyResourceResponse = {
+  evaluated: false,
+  status: 'not_installed',
+  liveUpdates: false,
+  counts: { pass: 0, fail: 0, warn: 0, error: 0, skip: 0 },
+  findings: [],
+}
 
 // /api/policy/resource/{kind}/{namespace}/{name}
 //
@@ -15,12 +25,23 @@ import { fetchJSON } from './client'
 // a short stale window keeps drawer navigation instant without going stale in a
 // way an operator would notice.
 export function usePolicyResource(kind: string, namespace: string, name: string, enabled = true) {
+  const guard = useRadarFeature('policyResource')
+  const { data: apiResources } = useAPIResources()
+  const policyEngineAbsent = apiResources !== undefined && !hasPolicyReports(apiResources)
   return useQuery<PolicyResourceResponse>({
     queryKey: ['policy', 'resource', kind, namespace, name],
     queryFn: () =>
-      fetchJSON<PolicyResourceResponse>(
-        `/policy/resource/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
-      ),
+      guard(() =>
+        fetchJSON<PolicyResourceResponse>(
+          `/policy/resource/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+        ),
+      ).catch((error: unknown) => {
+        // A Radar too old for policy results, on a cluster with no policy
+        // engine, gets the answer a current Radar would give: not installed.
+        // Prompting an upgrade there would promise a section that stays empty.
+        if (isRadarFeatureUnsupported(error) && policyEngineAbsent) return POLICY_NOT_INSTALLED
+        throw error
+      }),
     enabled: enabled && !!kind && !!namespace && !!name,
     staleTime: 15000,
     // A 403 is a settled answer about this identity, not a blip — retrying

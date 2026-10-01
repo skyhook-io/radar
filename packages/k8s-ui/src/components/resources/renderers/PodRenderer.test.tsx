@@ -435,3 +435,18 @@ describe('PodRenderer metrics', () => {
     expect(html).toContain('CPU')
   })
 })
+
+describe('PodRenderer on a Radar without variable sources', () => {
+  it('falls back to the spec view with an upgrade note, not an error', () => {
+    const unsupported = Object.assign(new Error('unsupported'), {
+      radarUpgrade: { feature: 'Variable sources', minimumVersion: 'v1.9.0', currentVersion: 'v1.7.2' },
+    })
+    const html = renderToString(
+      <PodRenderer data={pod} onCopy={() => undefined} copied={null} environmentError={unsupported} />,
+    )
+    expect(html).toContain('Variable sources')
+    expect(html).toContain('need Radar v1.9 or newer.')
+    expect(html).toContain('ConfigMap')
+    expect(html).not.toContain('could not be loaded')
+  })
+})

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { PolicySection } from './PolicySection'
+import { RadarUpgradeContext } from '../../ui/RadarUpgradeNote'
 import type { PolicyResourceResponse } from '../../../types/policy'
 
 const base: PolicyResourceResponse = {
@@ -155,5 +156,46 @@ describe('when results were withheld from this caller', () => {
     )
     expect(html).toContain('All 3 checks passing')
     expect(html).not.toContain('not shown here')
+  })
+})
+
+// An older in-cluster Radar behind a newer frontend (Radar Hub) has no policy
+// endpoint. That is an expected state, so it gets an upgrade prompt, not red.
+describe('PolicySection — connected Radar predates policy results', () => {
+  const unsupported = Object.assign(new Error('Policy results need Radar v1.10.0 or newer'), {
+    radarUpgrade: { feature: 'Policy results', minimumVersion: 'v1.10.0', currentVersion: 'v1.7.2' },
+  })
+
+  it('prompts an upgrade instead of reporting a failure', () => {
+    const html = renderToString(<PolicySection data={null} error={unsupported} />)
+    expect(html).toContain('Policy results')
+    expect(html).toContain('need Radar v1.10 or newer. You&#x27;re on v1.7.2.')
+    expect(html).not.toContain('Could not load policy results')
+    expect(html).not.toContain('text-red-400')
+  })
+
+  it('hands the upgrade to the host when it offers a flow', () => {
+    const html = renderToString(
+      <RadarUpgradeContext.Provider value={{ onRequestUpgrade: () => undefined }}>
+        <PolicySection data={null} error={unsupported} />
+      </RadarUpgradeContext.Provider>,
+    )
+    expect(html).toContain('<button')
+    expect(html).toContain('Upgrade Radar')
+  })
+
+  it('links to instructions when the host has no flow', () => {
+    const html = renderToString(
+      <RadarUpgradeContext.Provider value={{ upgradeHref: 'https://radarhq.io/docs/configuration/in-cluster' }}>
+        <PolicySection data={null} error={unsupported} />
+      </RadarUpgradeContext.Provider>,
+    )
+    expect(html).toContain('href="https://radarhq.io/docs/configuration/in-cluster"')
+    expect(html).toContain('How to upgrade')
+  })
+
+  it('keeps a genuine failure red', () => {
+    const html = renderToString(<PolicySection data={null} error={new Error('HTTP 502 (Bad Gateway)')} />)
+    expect(html).toContain('Could not load policy results: HTTP 502 (Bad Gateway)')
   })
 })

@@ -60,6 +60,29 @@ export interface NavCustomization {
    * OSS / other hosts are unaffected.
    */
   onHostNavigate?: (url: string) => void;
+  /**
+   * The connected Radar's version as the host knows it (Radar Cloud: the
+   * cluster's `radar_version`). Radar prefers the agent's own /version-check
+   * answer and uses this only until that arrives or when it fails, to decide
+   * up front that a feature needs a newer Radar instead of probing for it.
+   */
+  radarVersion?: string;
+  /**
+   * Called when the user asks to upgrade from an inline "needs a newer Radar"
+   * note next to a feature the connected Radar is too old to serve. The host
+   * runs its own upgrade flow (Radar Cloud: one-click for owners, "ask an
+   * owner" otherwise). Omitted → Radar links to its upgrade instructions.
+   */
+  onRequestRadarUpgrade?: (request: RadarUpgradeRequest) => void;
+}
+
+export interface RadarUpgradeRequest {
+  /** What the user is missing, e.g. "Policy results". */
+  feature: string;
+  /** First Radar release that serves it, e.g. "v1.10.0". */
+  minimumVersion: string;
+  currentVersion?: string;
+  latestVersion?: string;
 }
 
 const NavCustomizationContext = createContext<NavCustomization>({});

@@ -79,7 +79,6 @@ import {
   useUncordonNode,
   useDrainNode,
   useDrainPlan,
-  DrainPlanUnsupportedError,
   useCascadeDeletePreview,
   useResourceEvents,
   useResource,
@@ -94,6 +93,7 @@ import { RestartEventLane } from '../resource/RestartChart'
 import { RightsizingPanel } from '../resource/RightsizingStrip'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
+import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
 import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
 import { AuditAlerts, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
@@ -520,7 +520,7 @@ function useActionsBarProps(
     drainPlan: drainPlanMutation.data ?? null,
     isPlanningDrain: drainPlanMutation.isPending,
     drainPlanError: drainPlanMutation.error?.message ?? null,
-    drainPlanUnsupported: drainPlanMutation.error instanceof DrainPlanUnsupportedError,
+    drainPlanUnsupported: isRadarFeatureUnsupported(drainPlanMutation.error, 'drainPlan'),
   }
 }
 

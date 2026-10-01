@@ -33,6 +33,7 @@ import {
   showApiSuccess,
 } from "./components/ui/Toast";
 import { setApiBase, setBasename } from "./api/config";
+import { shouldRetryRadarQuery } from "./api/radarFeatures";
 import { NavCustomizationProvider } from "./context/NavCustomization";
 import { FilterLocationBridge } from "./filter/FilterLocationBridge";
 import type { NavCustomization } from "./context/NavCustomization";
@@ -163,7 +164,7 @@ function makeDefaultQueryClient(): QueryClient {
     defaultOptions: {
       queries: {
         refetchOnWindowFocus: false,
-        retry: 1,
+        retry: shouldRetryRadarQuery,
       },
     },
     mutationCache: new MutationCache({
