@@ -7,6 +7,7 @@ import type { FileNode } from '../../types'
 import { formatBytes } from '../../utils/format'
 import { downloadBlob, filterTree } from './file-browser-utils'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { readErrorBody } from '../../api/httpErrors'
 import { isDesktopApp } from '../../utils/desktop-download'
 import { openFile, openFolder } from '../../utils/desktop-open-folder'
 import { useToast } from '../ui/Toast'
@@ -33,7 +34,7 @@ async function fetchPodFiles(
     headers: getAuthHeaders(),
   })
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Request failed' }))
+    const error = await readErrorBody(response)
     throw new Error(error.error || `HTTP ${response.status}`)
   }
   return response.json()
@@ -105,7 +106,7 @@ async function downloadPodFile(
       headers: getAuthHeaders(),
     })
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ error: 'Download failed' }))
+      const err = await readErrorBody(response)
       throw new Error(err.error || `HTTP ${response.status}`)
     }
 

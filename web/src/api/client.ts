@@ -855,13 +855,14 @@ export async function runInClusterMerged(kind: string, namespace: string, name: 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: path ?? '/' }),
   })
-  // A gateway/proxy failure (chi's 60s timeout, a Hub ingress 502) returns
-  // HTML - an unguarded .json() surfaced "Unexpected token <" instead of the
-  // status. Mirror fetchJSON's tolerant parse.
-  const body = await response.json().catch(() => undefined)
-  if (!response.ok || body?.error) {
-    throw new Error(body?.error || `In-cluster test failed (${response.status})`)
+  // A gateway/proxy failure (chi's 60s timeout, a Hub ingress 502) answers in
+  // HTML or plain text, so a failure reads its body tolerantly.
+  if (!response.ok) {
+    const error = await readErrorBody(response)
+    throw new Error(error.error || `In-cluster test failed (${response.status})`)
   }
+  const body = await response.json().catch(() => undefined)
+  if (body?.error) throw new Error(body.error)
   if (body === undefined) {
     throw new Error('In-cluster test returned an unreadable response')
   }
@@ -4568,7 +4569,7 @@ export function usePreviewResources() {
         body: JSON.stringify(request),
       })
       if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: 'Preview failed' }))
+        const error = await readErrorBody(response)
         throw new Error(error.error || `HTTP ${response.status}`)
       }
       return response.json() as Promise<YamlPreviewResponse>

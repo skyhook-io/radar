@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, fetchJSON } from './client'
-import { CHI_UNKNOWN_ROUTE_BODY, httpStatusMessage, isUnknownRouteResponse, readErrorResponse } from './httpErrors'
+import { CHI_UNKNOWN_ROUTE_BODY, httpStatusMessage, isUnknownRouteResponse, nonJsonErrorMessage, readErrorResponse } from './httpErrors'
 
 const TEXT = 'text/plain; charset=utf-8'
 
@@ -54,6 +54,16 @@ describe('readErrorResponse', () => {
     expect(hub.body.error).toBe('HTTP 404 (Not Found)')
     const long = await readErrorResponse(response(500, 'x'.repeat(500), TEXT))
     expect(long.body.error).toBe('HTTP 500 (Internal Server Error)')
+  })
+})
+
+describe('nonJsonErrorMessage', () => {
+  it('reads a body the caller already consumed', () => {
+    expect(nonJsonErrorMessage(response(502, '', TEXT), 'upstream connect error\n')).toBe(
+      'HTTP 502 (Bad Gateway): upstream connect error',
+    )
+    expect(nonJsonErrorMessage(response(404, '', TEXT), CHI_UNKNOWN_ROUTE_BODY)).toBe('HTTP 404 (Not Found)')
+    expect(nonJsonErrorMessage(response(502, '', 'text/html'), '<html>bad</html>')).toBe('HTTP 502 (Bad Gateway)')
   })
 })
 

@@ -25,9 +25,17 @@ describe('runInClusterMerged error surfacing', () => {
     await expect(runInClusterMerged('Service', 'prod', 'web')).rejects.toThrow('no eligible routes')
   })
 
+  // The banner around this message already says the in-cluster test couldn't run.
   it('rejects a non-JSON gateway failure with the status, not a parse error', async () => {
     respond(504, '<html>Gateway Timeout</html>', 'text/html')
-    await expect(runInClusterMerged('Service', 'prod', 'web')).rejects.toThrow('In-cluster test failed (504)')
+    await expect(runInClusterMerged('Service', 'prod', 'web')).rejects.toThrow('HTTP 504 (Gateway Timeout)')
+  })
+
+  it("keeps a proxy's plain-text reason", async () => {
+    respond(503, 'cluster "prod" not connected\n', 'text/plain; charset=utf-8')
+    await expect(runInClusterMerged('Service', 'prod', 'web')).rejects.toThrow(
+      'HTTP 503 (Service Unavailable): cluster "prod" not connected',
+    )
   })
 
   it('resolves a clean run with the finalized payload', async () => {

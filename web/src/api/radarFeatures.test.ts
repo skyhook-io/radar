@@ -38,8 +38,8 @@ describe('radarFeatureSupport', () => {
     expect(radarFeatureSupport('drainPlan', { features: { yamlReview: true } }, 'v1.13.1')).toBe('unsupported')
     expect(radarFeatureSupport('drainPlan', undefined, 'v1.14.0')).toBe('supported')
     expect(radarFeatureSupport('capacity', undefined, 'dev')).toBe('unknown')
-    expect(radarFeatureSupport('applications', undefined, 'v1.7.2')).toBe('unsupported')
-    expect(radarFeatureSupport('applications', undefined, 'v1.8.0')).toBe('supported')
+    expect(radarFeatureSupport('applications', undefined, 'v1.7.6')).toBe('unsupported')
+    expect(radarFeatureSupport('applications', undefined, 'v1.7.7')).toBe('supported')
   })
 
   it('keeps the unflagged entries to those that predate the first flag', () => {

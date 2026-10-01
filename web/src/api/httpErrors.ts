@@ -74,15 +74,24 @@ export async function readErrorResponse(response: Response): Promise<ErrorRespon
   if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
     return { body: parsed as ErrorBody, unknownRoute }
   }
+  return { body: { error: nonJsonErrorMessage(response, text) }, unknownRoute }
+}
+
+/**
+ * The message for a failed response whose body is not a JSON object, for
+ * callers that already read the body as text.
+ */
+export function nonJsonErrorMessage(response: Response, text: string): string {
   const status = httpStatusMessage(response.status, response.statusText)
+  const contentType = response.headers.get('content-type')
   const reason = text.trim()
   const showReason =
-    !unknownRoute &&
+    !isUnknownRouteResponse(response.status, contentType, text) &&
     (contentType ?? '').toLowerCase().startsWith('text/plain') &&
     reason.length > 0 &&
     reason.length <= MAX_PLAIN_TEXT_REASON &&
     !status.toLowerCase().includes(reason.toLowerCase())
-  return { body: { error: showReason ? `${status}: ${reason}` : status }, unknownRoute }
+  return showReason ? `${status}: ${reason}` : status
 }
 
 export async function readErrorBody(response: Response): Promise<ErrorBody> {
