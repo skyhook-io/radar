@@ -1286,7 +1286,7 @@ function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading
     category: 'availability',
     title: `${pod} ≥ ${cnpgFormatLag(floor)} behind in every sample for ${formatWindowShort(lag.sustainedWindow)}`,
     shortTitle: `${pod} ≥ ${cnpgFormatLag(floor)} behind for ${formatWindowShort(lag.sustainedWindow)}`,
-    detail: `Lowest replay lag in the samples Prometheus recorded over the last ${window}. If Prometheus missed some scrapes, those moments aren't included. A failover to it would start at least that far behind.`,
+    detail: `Lowest replay lag in the samples Prometheus recorded over the last ${window}. If Prometheus missed some scrapes, those moments aren't included. If it was still that far behind, a failover to it would lose or wait on that much WAL.`,
     subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
     source: 'measurement',
     measuredBy: 'Prometheus',
