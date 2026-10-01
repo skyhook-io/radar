@@ -127,7 +127,7 @@ export function issueSubjectState(
   if (data.coverage === "syncing") return { state: "unconfirmed", why: `Radar is still loading ${subject.kind}` };
   const withheld = data.withheld?.issues ?? 0;
   if (withheld > 0) {
-    return { state: "unconfirmed", why: `${withheld} ${withheld === 1 ? "issue is" : "issues are"} about resources you can't read` };
+    return { state: "unconfirmed", why: `your permissions withhold ${withheld} ${withheld === 1 ? "issue" : "issues"} about it` };
   }
   const visibility = data.visibility;
   if (visibility?.state === "degraded" || visibility?.state === "limited") {
@@ -335,7 +335,7 @@ export function IssuesPane({
               {subjectState.state === "none" && " — none now"}
               {subjectState.state === "unconfirmed" && ` — can't confirm: ${subjectState.why}`}
               {subjectState.state === "found" && subjectState.withheld > 0 &&
-                ` — ${subjectState.withheld} more about resources you can't read`}
+                ` — your permissions withhold ${subjectState.withheld} more`}
             </span>
           )}
           <button type="button" onClick={clearSubject} className="text-accent-text hover:underline">

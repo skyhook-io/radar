@@ -298,6 +298,7 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
 	}, group, kind, namespace, name)
 	related, withheld := s.withholdUnreadableIssueRefs(r, related)
+	withheld.Issues += s.clusterScopedSubjectIssuesWithheld(r, provider, related, group, kind, namespace, name)
 	if related == nil {
 		related = []issues.Issue{}
 	}
@@ -342,10 +343,12 @@ const (
 	resourceIssuesCoverageNotWatched = "notWatched"
 )
 
-// canGetIssueRef reports whether the caller may get ref's kind where it lives.
-// Unresolvable kinds fail closed.
+// canGetIssueRef reports whether the caller may get ref: its kind where it
+// lives, or failing that the named object, which a resourceNames-restricted
+// grant allows. Unresolvable kinds fail closed.
 func (s *Server) canGetIssueRef(r *http.Request, ref issues.Ref) bool {
-	if auth.UserFromContext(r.Context()) == nil {
+	user := auth.UserFromContext(r.Context())
+	if user == nil {
 		return true
 	}
 	group, resource, clusterScoped, ok := k8s.ResolveChangeGVR(ref.Kind, ref.Group)
@@ -356,7 +359,30 @@ func (s *Server) canGetIssueRef(r *http.Request, ref issues.Ref) bool {
 	if clusterScoped {
 		namespace = ""
 	}
-	return s.canRead(r, group, resource, namespace, "get")
+	if s.canRead(r, group, resource, namespace, "get") {
+		return true
+	}
+	if ref.Name == "" || s.permCache == nil {
+		return false
+	}
+	perms := s.permCache.Get(user.Username, user.Groups)
+	if perms != nil {
+		if v, ok := perms.CanINamed("get", group, resource, namespace, ref.Name); ok {
+			return v
+		}
+	}
+	client := k8s.GetClient()
+	if client == nil {
+		return false
+	}
+	allowed, err := auth.SubjectCanINamed(r.Context(), client, user.Username, user.Groups, namespace, group, resource, ref.Name, "get")
+	if err != nil {
+		return false
+	}
+	if perms != nil {
+		perms.SetCanINamed("get", group, resource, namespace, ref.Name, allowed)
+	}
+	return allowed
 }
 
 // withholdUnreadableIssueRefs drops grouped issues whose subject the caller
@@ -392,6 +418,35 @@ func (s *Server) withholdUnreadableIssueRefs(r *http.Request, in []issues.Issue)
 	return out, withheld
 }
 
+// clusterScopedSubjectIssuesWithheld counts the issues about a cluster-scoped
+// subject that the composition left out because the caller can get it but not
+// list its kind (the gate /api/issues applies). Without the count a NotReady
+// Node would read as having none.
+func (s *Server) clusterScopedSubjectIssuesWithheld(r *http.Request, provider issues.Provider, returned []issues.Issue, group, kind, namespace, name string) int {
+	if namespace != "" || auth.UserFromContext(r.Context()) == nil || s.issueClusterScopedAccess(r)(kind, group) {
+		return 0
+	}
+	subjectOnly := func(k, g string) bool {
+		return strings.EqualFold(k, kind) && resourceid.NormalizeGroup(g) == resourceid.NormalizeGroup(group)
+	}
+	all := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
+		SkipPodTemplateContext: true,
+		CanReadClusterScoped:   subjectOnly,
+		CanReadRelated:         s.issueRelatedResourceAccess(r),
+	}, group, kind, "", name)
+	seen := make(map[string]bool, len(returned))
+	for _, i := range returned {
+		seen[i.ID] = true
+	}
+	n := 0
+	for _, i := range all {
+		if !seen[i.ID] && subjectOnly(i.Kind, i.Group) {
+			n++
+		}
+	}
+	return n
+}
+
 // resourceIssuesCoverage reports whether the issues engine has the subject's
 // kind to read: a typed informer, or a dynamic one synced for its namespace.
 func resourceIssuesCoverage(kind, group, namespace string) string {
@@ -399,7 +454,10 @@ func resourceIssuesCoverage(kind, group, namespace string) string {
 		if g, resource, _, ok := k8s.ResolveChangeGVR(kind, group); ok {
 			if b, builtin := resourceid.BuiltinForKind(kind); builtin && b.Group == g {
 				if synced, known := cache.InformerSynced(resource); known {
-					if !synced {
+					switch {
+					case !cache.KindCoversNamespace(resource, namespace):
+						return resourceIssuesCoverageNotWatched
+					case !synced:
 						return resourceIssuesCoverageSyncing
 					}
 					return resourceIssuesCoverageOK

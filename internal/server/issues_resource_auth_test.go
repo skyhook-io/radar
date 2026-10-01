@@ -5,10 +5,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/issues"
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	authv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func resourceIssuesRequest(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
@@ -95,5 +102,101 @@ func TestResourceIssuesWithholdNothingWithoutAuth(t *testing.T) {
 func TestResourceIssuesCoverageOfAnUnwatchedKind(t *testing.T) {
 	if got := resourceIssuesCoverage("Cluster", "postgresql.cnpg.io", "pg"); got != resourceIssuesCoverageNotWatched {
 		t.Fatalf("coverage %q, want notWatched for a kind Radar has not discovered", got)
+	}
+}
+
+func TestResourceIssuesHonourAResourceNamesGrant(t *testing.T) {
+	fakeSARServer(t, func(a authv1.ResourceAttributes) bool {
+		return a.Group == "apps" && a.Resource == "deployments" && a.Namespace == "broken" && a.Name == "stuck-app" && a.Verb == "get"
+	})
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	s.permCache.Set("pg-user", nil, &auth.UserPermissions{AllowedNamespaces: nil})
+
+	w := resourceIssuesRequest(t, s, "/api/issues/resource/Deployment/broken/stuck-app?group=apps&coverage=1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("named grant: status %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	var resp ResourceIssuesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Issues) == 0 {
+		t.Fatal("named grant got no issues for the broken Deployment")
+	}
+
+	if w := resourceIssuesRequest(t, s, "/api/issues/resource/Deployment/broken/other-app?group=apps"); w.Code != http.StatusForbidden {
+		t.Fatalf("a name outside the grant: status %d, want 403", w.Code)
+	}
+}
+
+func restoreFixtureCache(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		k8s.ResetResourceCache()
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatalf("restore package fixture cache: %v", err)
+		}
+	})
+}
+
+func TestResourceIssuesCoverageOfAKindWatchedElsewhere(t *testing.T) {
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	if err := k8s.InitScopedTestResourceCache(testFakeClient, map[string]k8score.ResourceScope{
+		"deployments": {Enabled: true, Namespace: "default"},
+	}); err != nil {
+		t.Fatalf("InitScopedTestResourceCache: %v", err)
+	}
+	if got := resourceIssuesCoverage("Deployment", "apps", "broken"); got != resourceIssuesCoverageNotWatched {
+		t.Fatalf("coverage in an unwatched namespace %q, want notWatched", got)
+	}
+	if got := resourceIssuesCoverage("Deployment", "apps", "default"); got != resourceIssuesCoverageOK {
+		t.Fatalf("coverage in the watched namespace %q, want ok", got)
+	}
+}
+
+func TestResourceIssuesCountNodeIssuesTheListGateDropped(t *testing.T) {
+	restoreFixtureCache(t)
+	k8s.ResetResourceCache()
+	since := metav1.NewTime(time.Now().Add(-time.Hour))
+	client := fake.NewClientset(&corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "n1", CreationTimestamp: since},
+		Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{
+			Type: corev1.NodeReady, Status: corev1.ConditionFalse, LastTransitionTime: since,
+		}}},
+	})
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("get", "", "nodes", "", true)
+	perms.SetCanI("list", "", "nodes", "", false)
+	s.permCache.Set("pg-user", nil, perms)
+
+	w := resourceIssuesRequest(t, s, "/api/issues/resource/Node/_/n1?coverage=1")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d (body %s)", w.Code, w.Body.String())
+	}
+	var resp ResourceIssuesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Issues) != 0 {
+		t.Fatalf("a caller who cannot list nodes got node issues: %+v", resp.Issues)
+	}
+	if resp.Withheld == nil || resp.Withheld.Issues == 0 {
+		t.Fatalf("withheld %+v: the NotReady node's issue vanished instead of being counted", resp.Withheld)
+	}
+
+	perms.SetCanI("list", "", "nodes", "", true)
+	w = resourceIssuesRequest(t, s, "/api/issues/resource/Node/_/n1?coverage=1")
+	resp = ResourceIssuesResponse{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Issues) == 0 || resp.Withheld != nil {
+		t.Fatalf("a caller who can list nodes: issues %d withheld %+v", len(resp.Issues), resp.Withheld)
 	}
 }

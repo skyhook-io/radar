@@ -169,7 +169,7 @@ describe('issueSubjectState', () => {
     expect(issueSubjectState(subject, [], loaded({ coverage: 'syncing' }))).toEqual({ state: 'unconfirmed', why: 'Radar is still loading Cluster' })
   })
   it('reads an empty answer as unconfirmed when RBAC withheld issues about it', () => {
-    expect(issueSubjectState(subject, [], loaded({ withheld: { issues: 2, members: 0 } }))).toEqual({ state: 'unconfirmed', why: "2 issues are about resources you can't read" })
+    expect(issueSubjectState(subject, [], loaded({ withheld: { issues: 2, members: 0 } }))).toEqual({ state: 'unconfirmed', why: 'your permissions withhold 2 issues about it' })
   })
   it('reads an empty answer under limited visibility as unconfirmed, never none', () => {
     expect(issueSubjectState(subject, [], loaded({ visibility: { state: 'degraded', impact: 'Pods are not readable.' } }))).toEqual({ state: 'unconfirmed', why: "some evidence isn't readable (Pods are not readable)" })
