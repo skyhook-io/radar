@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CNPGFleetRow, CNPGProblem } from '@skyhook-io/k8s-ui'
-import { cnpgInstancePillLabel, cnpgRowStatus } from './fleetStatus'
+import { cnpgInstancePillLabel, cnpgPillsToShow, cnpgRowStatus } from './fleetStatus'
 
 const problem = (severity: CNPGProblem['severity'], title: string) => ({ id: title, severity, title }) as CNPGProblem
 const row = (over: Partial<CNPGFleetRow>) =>
@@ -30,5 +30,12 @@ describe('cnpgInstancePillLabel', () => {
   it('names a replica as a standby too', () => {
     expect(cnpgInstancePillLabel({ name: 'pg-wal-failing-1', role: 'replica', ready: false })).toBe('pg-wal-failing-1 · replica (standby) · not ready')
     expect(cnpgInstancePillLabel({ name: 'pg-1', role: 'primary', ready: null })).toBe('pg-1 · primary · readiness unknown')
+  })
+})
+
+describe('cnpgPillsToShow', () => {
+  it('shows every pill up to the bound, and otherwise leaves room for "+N"', () => {
+    expect(cnpgPillsToShow([1, 2, 3, 4, 5], 5)).toEqual({ shown: [1, 2, 3, 4, 5], hidden: [] })
+    expect(cnpgPillsToShow([1, 2, 3, 4, 5, 6, 7], 5)).toEqual({ shown: [1, 2, 3, 4], hidden: [5, 6, 7] })
   })
 })

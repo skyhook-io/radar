@@ -35,3 +35,8 @@ export function cnpgInstancePillLabel(pod: CNPGFleetRow['pods'][number]): string
   const ready = pod.ready === true ? 'ready' : pod.ready === false ? 'not ready' : 'readiness unknown'
   return `${pod.name} · ${role} · ${ready}`
 }
+
+/** The instance pills a fleet row shows (primary first, as listed) and those left for the "+N" hover. */
+export function cnpgPillsToShow<T>(pods: T[], max: number): { shown: T[]; hidden: T[] } {
+  return pods.length <= max ? { shown: pods, hidden: [] } : { shown: pods.slice(0, max - 1), hidden: pods.slice(max - 1) }
+}

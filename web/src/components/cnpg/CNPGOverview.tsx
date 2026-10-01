@@ -20,15 +20,22 @@ import { CNPGWorkspaceHeader, CoverageNotice, FilterChips, type CNPGScreenProps 
 import { cnpgClusterFullPath, cnpgClusterProblemsPath, currentPageLabel } from './paths'
 import { sameResource } from './routes'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
-import { cnpgInstancePillLabel, cnpgRowStatus } from './fleetStatus'
+import { cnpgInstancePillLabel, cnpgPillsToShow, cnpgRowStatus } from './fleetStatus'
 
 type Filter = 'attention' | 'all'
 
+// Headers may wrap: at a 1280px window the columns are narrower than their labels.
+const TH_WRAP = TH.replace('whitespace-nowrap', '')
+
+// Five pills fit the Ready column; the rest are counted, listed on hover.
+const MAX_PILLS = 5
+
 function InstancePills({ row }: { row: CNPGFleetRow }) {
   if (row.pods.length === 0) return null
+  const { shown, hidden } = cnpgPillsToShow(row.pods, MAX_PILLS)
   return (
-    <div className="mt-1 flex flex-nowrap gap-0.5 font-sans">
-      {row.pods.map((p) => {
+    <div className="mt-1 flex flex-nowrap items-center gap-0.5 font-sans">
+      {shown.map((p) => {
         const tone = p.ready === true ? 'healthy' : p.ready === false ? 'unhealthy' : 'unknown'
         return (
           <Tooltip key={p.name} content={cnpgInstancePillLabel(p)}>
@@ -42,6 +49,21 @@ function InstancePills({ row }: { row: CNPGFleetRow }) {
           </Tooltip>
         )
       })}
+      {hidden.length > 0 && (
+        <Tooltip
+          content={
+            <ul className="space-y-0.5">
+              {hidden.map((p) => (
+                <li key={p.name}>{cnpgInstancePillLabel(p)}</li>
+              ))}
+            </ul>
+          }
+        >
+          <span aria-label={`${hidden.length} more instances`} className="px-0.5 text-[10.5px] text-theme-text-tertiary">
+            +{hidden.length}
+          </span>
+        </Tooltip>
+      )}
     </div>
   )
 }
@@ -266,28 +288,29 @@ export function CNPGOverview({
 
           <div className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
             <div className={TABLE_WRAP}>
-              {/* Sized to fit a ~1060px content area (a 1512px window) without scrolling. */}
-              <table className="w-full min-w-[840px] table-fixed">
+              {/* Fits an ~850px content area (a 1280px window) without scrolling: the
+                  two fixed columns take 16rem and the percentages stay under the rest. */}
+              <table className="w-full min-w-[820px] table-fixed">
                 <colgroup>
-                  <col className="w-[17%]" />
-                  <col className="w-[11%]" />
-                  <col className="w-[14%]" />
-                  <col className="w-[13%]" />
-                  <col className="w-[9%]" />
-                  <col className="w-[9%]" />
                   <col className="w-[15%]" />
+                  <col className="w-[8.5rem]" />
+                  <col className="w-[12%]" />
+                  <col className="w-[11%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[9%]" />
+                  <col className="w-[13%]" />
                   <col className="w-[7.5rem]" />
                 </colgroup>
                 <thead className={TABLE_HEAD}>
                   <tr>
-                    <th className={TH}>Cluster</th>
-                    <th className={TH}>Ready</th>
-                    <th className={TH}>Replication</th>
-                    <th className={TH}>Protection</th>
-                    <th className={TH}>Disk</th>
-                    <th className={TH}>Declarations</th>
-                    <th className={TH}>Needs attention</th>
-                    <th className={TH}><span className="sr-only">Actions</span></th>
+                    <th className={TH_WRAP}>Cluster</th>
+                    <th className={TH_WRAP}>Ready</th>
+                    <th className={TH_WRAP}>Replication</th>
+                    <th className={TH_WRAP}>Protection</th>
+                    <th className={TH_WRAP}>Disk</th>
+                    <th className={TH_WRAP}>Declared</th>
+                    <th className={TH_WRAP}>Needs attention</th>
+                    <th className={TH_WRAP}><span className="sr-only">Actions</span></th>
                   </tr>
                 </thead>
                 <tbody className={TBODY}>
@@ -306,9 +329,16 @@ export function CNPGOverview({
                             <span className="mt-1.5 shrink-0"><RowStatusDot row={row} /></span>
                             <div className="min-w-0">
                               <div className="font-medium [overflow-wrap:anywhere]">{row.name}</div>
-                              <div className="text-xs text-theme-text-tertiary">
-                                <Tooltip content="Namespace"><span>ns {row.namespace}</span></Tooltip>
-                                {row.pgVersion && <Tooltip content="PostgreSQL version"><span> · PG {row.pgVersion}</span></Tooltip>}
+                              <div className="flex min-w-0 items-baseline text-xs text-theme-text-tertiary">
+                                <Tooltip content={`Namespace ${row.namespace}`} wrapperClassName="min-w-0">
+                                  <span className="block truncate">{row.namespace}</span>
+                                </Tooltip>
+                                {row.pgVersion && (
+                                  <span className="shrink-0 whitespace-pre">
+                                    {' · '}
+                                    <Tooltip content="PostgreSQL version"><span>PG {row.pgVersion}</span></Tooltip>
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </div>
