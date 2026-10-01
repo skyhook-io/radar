@@ -2,6 +2,16 @@
 
 Shared, source-distributed Kubernetes UI components used by Radar.
 
+## Local terminal metadata
+
+`LocalTerminalTab` accepts optional `onSessionInfo` and `toolbarExtra` props.
+`onSessionInfo` reports the server's `session` frame (`context` and
+`kubeconfigIsolated`), and receives `null` when a connection attempt starts.
+This describes the supplied kubeconfig, not a shell's live command target.
+`toolbarExtra` lets the host render that information in the terminal toolbar.
+Hosts can update a dock tab's label and optional full-name tooltip with
+`useDock().setTabTitle(id, title, titleTooltip)`.
+
 ## YAML editor bundling
 
 `YamlEditor` and `YamlDiffEditor` bundle Monaco, its editor worker, and the YAML language worker into the consuming application. They make no runtime CDN or internet requests, so they work in air-gapped environments.

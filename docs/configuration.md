@@ -586,6 +586,22 @@ Details worth knowing:
 - Clusters connected through CAPI are never remembered: their kubeconfig is a temporary file that no longer exists on the next run.
 - Turning the memory off takes effect on the next Desktop start: it clears the remembered cluster as well as stopping new recording, so turning it back on later starts fresh rather than reopening a cluster you stopped using months ago.
 
+## Local terminal context
+
+Each local terminal tab shows the context Radar put in its temporary kubeconfig,
+with **Opened for** in the terminal toolbar. Hover over the label to see the full
+context name. This records the terminal's startup configuration; shell settings,
+`KUBECONFIG` changes, and explicit command flags can override it.
+
+Switching clusters in Radar leaves existing local shells running. A terminal
+opened for another context shows a notice and a **New terminal** action for the
+cluster Radar is now showing. Reconnecting starts a new shell using Radar's
+then-active context, and updates the tab's label from the server's new session.
+
+If Radar cannot create a temporary kubeconfig, the existing original/inherited
+kubeconfig fallback remains available and the tab says **Context not confirmed**.
+That shell's Kubernetes target has not been established by Radar.
+
 ## Namespace Picker
 
 The header has a namespace picker on the right. Pick a single namespace to focus the view, or **All namespaces** to see everything you have access to. Cluster-scoped resources (Nodes, Namespaces, PVs, StorageClasses) appear regardless of the pick if your RBAC permits them — they have no namespace to filter on. Namespace-restricted users without their own cluster-scoped RBAC won't see cluster-scoped sections at all.

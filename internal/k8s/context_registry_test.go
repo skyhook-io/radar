@@ -629,6 +629,48 @@ func TestPickInitialContext_PrefersFirstFileCurrentContext(t *testing.T) {
 	}
 }
 
+func TestWriteKubeconfigSnapshotPreservesDisplayContext(t *testing.T) {
+	dir := t.TempDir()
+	source := writeKubeconfig(t, dir, "secondary.yaml", "staging", []kubeEntry{
+		{ctxName: "production", userName: "prod-user", clusterName: "prod-cluster"},
+		{ctxName: "staging", userName: "stage-user", clusterName: "stage-cluster"},
+	})
+	original, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := clientcmd.LoadFromFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientMu.Lock()
+	oldName, oldFile, oldSourceName, oldConfig := contextName, activeSourceFile, activeSourceName, activeSourceConfig
+	contextName, activeSourceFile, activeSourceName, activeSourceConfig = "production@secondary", source, "production", loaded
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextName, activeSourceFile, activeSourceName, activeSourceConfig = oldName, oldFile, oldSourceName, oldConfig
+		clientMu.Unlock()
+	})
+	snapshot, err := WriteKubeconfigSnapshotForCurrentContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(snapshot.Path)
+	SetTestContextName("staging")
+	written, err := clientcmd.LoadFromFile(snapshot.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Context != "production@secondary" || written.CurrentContext != "production" {
+		t.Fatalf("display context = %q, file context = %q", snapshot.Context, written.CurrentContext)
+	}
+	unchanged, err := os.ReadFile(source)
+	if err != nil || string(original) != string(unchanged) {
+		t.Fatalf("source kubeconfig changed: %v", err)
+	}
+}
+
 func TestPickInitialContext_FallsBackWhenCurrentContextEmpty(t *testing.T) {
 	dir := t.TempDir()
 	// First file has no CurrentContext; second does.

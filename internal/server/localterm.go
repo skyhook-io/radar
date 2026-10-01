@@ -37,6 +37,12 @@ type LocalTermSession struct {
 	proc  *shellProcess
 }
 
+type localTermSessionInfo struct {
+	Type               string `json:"type"`
+	Context            string `json:"context"`
+	KubeconfigIsolated bool   `json:"kubeconfigIsolated"`
+}
+
 type localTermSessionManager struct {
 	sessions map[string]*LocalTermSession
 	mu       sync.RWMutex
@@ -130,7 +136,9 @@ func (s *Server) handleLocalTerminal(w http.ResponseWriter, r *http.Request) {
 	// Set up environment: inherit current process env, override KUBECONFIG
 	// with a temp copy that has current-context set to Radar's active context.
 	env := os.Environ()
-	tmpKubeconfig, err := k8s.WriteKubeconfigForCurrentContext()
+	kubeconfig, err := k8s.WriteKubeconfigSnapshotForCurrentContext()
+	tmpKubeconfig := kubeconfig.Path
+	sessionInfo := localTermSessionInfo{Type: "session"}
 	if err != nil {
 		log.Printf("[localterm] Failed to write temp kubeconfig, falling back to default: %v", err)
 		if kubeconfigPath := k8s.GetKubeconfigPath(); kubeconfigPath != "" {
@@ -138,6 +146,9 @@ func (s *Server) handleLocalTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		env = setEnv(env, "KUBECONFIG", tmpKubeconfig)
+		sessionInfo.Context = kubeconfig.Context
+		sessionInfo.KubeconfigIsolated = true
+		defer os.Remove(tmpKubeconfig)
 	}
 
 	// Ensure TERM is set so the shell's terminfo binds the escape sequences
@@ -184,11 +195,12 @@ func (s *Server) handleLocalTerminal(w http.ResponseWriter, r *http.Request) {
 		proc.pty.Close()
 		waitProcess(proc)
 		conn.Close()
-		if tmpKubeconfig != "" {
-			os.Remove(tmpKubeconfig)
-		}
 		log.Printf("[localterm] Session %s ended", sessionID)
 	}()
+
+	if err := conn.WriteJSON(sessionInfo); err != nil {
+		return
+	}
 
 	// WebSocket write mutex (PTY reader and exit sender both write)
 	var wsMu sync.Mutex

@@ -964,11 +964,23 @@ func recordEmptyCommandWarning(source string, authInfos []string) {
 // current-context set to Radar's active context. The caller must remove the
 // file when done. Returns the temp file path.
 func WriteKubeconfigForCurrentContext() (string, error) {
+	snapshot, err := WriteKubeconfigSnapshotForCurrentContext()
+	return snapshot.Path, err
+}
+
+type KubeconfigSnapshot struct {
+	Path    string
+	Context string
+}
+
+// WriteKubeconfigSnapshotForCurrentContext returns the temporary config and its
+// display context from the same client-state snapshot. The caller owns the file.
+func WriteKubeconfigSnapshotForCurrentContext() (KubeconfigSnapshot, error) {
 	clientMu.RLock()
 	ctx := contextName
 	activeFile := activeSourceFile
 	activeName := activeSourceName
-	activeConfig := activeSourceConfig
+	activeConfig := activeSourceConfig.DeepCopy()
 	registry := contextRegistry
 	fileConfigs := perFileConfigs
 	singlePath := kubeconfigPath
@@ -1000,27 +1012,27 @@ func WriteKubeconfigForCurrentContext() (string, error) {
 		// the temp kubeconfig we hand out.
 		entry, ok := registry[ctx]
 		if !ok {
-			return "", fmt.Errorf("current context %q not found in registry", ctx)
+			return KubeconfigSnapshot{}, fmt.Errorf("current context %q not found in registry", ctx)
 		}
 		cfg, ok := fileConfigs[entry.SourceFile]
 		if !ok {
-			return "", fmt.Errorf("no cached config for file %q", entry.SourceFile)
+			return KubeconfigSnapshot{}, fmt.Errorf("no cached config for file %q", entry.SourceFile)
 		}
 		rawConfig = *cfg.DeepCopy()
 		currentContextForFile = entry.InFileName
 	} else {
 		if singlePath == "" {
-			return "", fmt.Errorf("kubeconfig path not set")
+			return KubeconfigSnapshot{}, fmt.Errorf("kubeconfig path not set")
 		}
 		if err := validateKubeconfigFileType(singlePath); err != nil {
-			return "", fmt.Errorf("failed to load kubeconfig: %w", err)
+			return KubeconfigSnapshot{}, fmt.Errorf("failed to load kubeconfig: %w", err)
 		}
 		loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: singlePath}
 		loaded, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 			loadingRules, &clientcmd.ConfigOverrides{},
 		).RawConfig()
 		if err != nil {
-			return "", fmt.Errorf("failed to load kubeconfig: %w", err)
+			return KubeconfigSnapshot{}, fmt.Errorf("failed to load kubeconfig: %w", err)
 		}
 		rawConfig = loaded
 		currentContextForFile = ctx
@@ -1032,16 +1044,16 @@ func WriteKubeconfigForCurrentContext() (string, error) {
 
 	tmpFile, err := os.CreateTemp("", "radar-kubeconfig-*.yaml")
 	if err != nil {
-		return "", fmt.Errorf("failed to create temp kubeconfig: %w", err)
+		return KubeconfigSnapshot{}, fmt.Errorf("failed to create temp kubeconfig: %w", err)
 	}
 	tmpFile.Close()
 
 	if err := clientcmd.WriteToFile(rawConfig, tmpFile.Name()); err != nil {
 		os.Remove(tmpFile.Name())
-		return "", fmt.Errorf("failed to write temp kubeconfig: %w", err)
+		return KubeconfigSnapshot{}, fmt.Errorf("failed to write temp kubeconfig: %w", err)
 	}
 
-	return tmpFile.Name(), nil
+	return KubeconfigSnapshot{Path: tmpFile.Name(), Context: ctx}, nil
 }
 
 func sameKubeconfigTarget(active, candidate *clientcmdapi.Config, contextName string) bool {

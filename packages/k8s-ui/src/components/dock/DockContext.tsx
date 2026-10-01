@@ -6,6 +6,7 @@ export interface DockTab {
   id: string
   type: DockTabType
   title: string
+  titleTooltip?: string
   // Common app context (optional — app-specific, used by tab content components)
   orgId?: string
   clusterId?: string
@@ -33,6 +34,7 @@ export interface DockContextValue {
   isMaximized: boolean
   isResizing: boolean
   addTab: (tab: Omit<DockTab, 'id'>) => string
+  setTabTitle: (id: string, title: string, titleTooltip?: string) => void
   removeTab: (id: string) => void
   setActiveTab: (id: string) => void
   toggleExpanded: () => void
@@ -118,6 +120,10 @@ export function DockProvider({ children }: { children: ReactNode }) {
     })
   }, [activeTabId])
 
+  const setTabTitle = useCallback((id: string, title: string, titleTooltip?: string) => {
+    setTabs(prev => prev.map(tab => tab.id === id ? { ...tab, title, titleTooltip } : tab))
+  }, [])
+
   const setActiveTab = useCallback((id: string) => {
     setActiveTabId(id)
   }, [])
@@ -142,6 +148,7 @@ export function DockProvider({ children }: { children: ReactNode }) {
       isMaximized,
       isResizing,
       addTab,
+      setTabTitle,
       removeTab,
       setActiveTab,
       toggleExpanded,
