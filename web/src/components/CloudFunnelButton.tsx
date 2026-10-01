@@ -736,9 +736,8 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
           <section>
             <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">What it costs</h4>
             <p className="text-[12px] leading-relaxed text-theme-text-secondary">
-              Radar Cloud is {freeLine}, with 100 investigations a month included. Paid plans include 100 or more
-              per cluster, then $1 each if you turn it on, plus more clusters and enterprise features like SSO,
-              SCIM and audit logs.{' '}
+              Radar Cloud is {freeLine}, including 100 investigations a month. Paid plans add investigations for
+              every cluster, with optional $1 overage, plus enterprise features like SSO, SCIM and audit logs.{' '}
               <a href={PRICING_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
                 See pricing →
               </a>
