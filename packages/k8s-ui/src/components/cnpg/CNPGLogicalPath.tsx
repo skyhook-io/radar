@@ -5,11 +5,16 @@ import type { CNPGFact } from './workspace'
 import { cnpgLogicalLocation, type CNPGLogicalPath } from './logicalReplication'
 import { FactGrid, FactRow, FactSource, FactValue, RefLink, toneTextClass, type CNPGNavigate } from './primitives'
 
-function Hop({ label, children }: { label: string; children: ReactNode }) {
+// A hop after the first carries its arrow, so a wrapped line never ends on an
+// arrow pointing at nothing.
+function Hop({ label, children, from }: { label: string; children: ReactNode; from?: boolean }) {
   return (
-    <div className="min-w-0">
-      <div className="text-[11px] uppercase tracking-wide text-theme-text-tertiary">{label}</div>
-      <div className="min-w-0 break-words text-sm">{children}</div>
+    <div className="flex min-w-0 items-start gap-2">
+      {from && <ArrowRight className="mt-4 h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />}
+      <div className="min-w-0">
+        <div className="text-[11px] uppercase tracking-wide text-theme-text-tertiary">{label}</div>
+        <div className="min-w-0 break-words text-sm">{children}</div>
+      </div>
     </div>
   )
 }
@@ -46,8 +51,7 @@ export function CNPGLogicalPathView({
         </RefLink>
         <span className="text-xs text-theme-text-tertiary"> on {cnpgLogicalLocation(s.cluster ?? 'an unknown cluster', s.dbname)}</span>
       </Hop>
-      <ArrowRight className="mt-4 h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
-      <Hop label="Publication">
+      <Hop label="Publication" from>
         {pub.object ? (
           <RefLink refTo={{ kind: 'Publication', group: CNPG_GROUP, namespace: pub.object.namespace, name: pub.object.name }} onNavigate={onNavigate} mono>
             {pub.name}
@@ -70,8 +74,7 @@ export function CNPGLogicalPathView({
           {pub.dbname ? `/${pub.dbname}` : ' · database unknown'}
         </span>
       </Hop>
-      <ArrowRight className="mt-4 h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
-      <Hop label="Slot on the publisher">
+      <Hop label="Slot on the publisher" from>
         <FactValue fact={slotFact} />
       </Hop>
     </div>
