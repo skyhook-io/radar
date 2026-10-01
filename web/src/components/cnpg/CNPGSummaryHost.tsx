@@ -1,5 +1,5 @@
 import { useRef, type ReactNode } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   CNPG_BARMAN_OBJECTSTORE_GROUP,
   CNPG_CONNECT_SELECTOR,
@@ -306,10 +306,11 @@ export function renderCNPGSummary(ctx: SummaryContext): ReactNode {
 // problem's subject (it has no link to a single issue).
 function IssueLinks({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   return (
     <CNPGOpenIssueContext.Provider
       value={(p) =>
-        navigate(cnpgIssuesPath(p.subject))
+        navigate(cnpgIssuesPath(p.subject, searchParams.get('namespaces')))
       }
     >
       {children}

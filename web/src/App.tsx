@@ -1423,6 +1423,23 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       { onSuccess: () => setNamespaces([]) },
     )
   }, [namespaceScope?.cacheScoped, namespaces.length, setActiveNamespace])
+  const issuesShowNamespace = useMemo(() => {
+    if (namespaceScope?.cacheScoped) {
+      if (!namespaceScope.namespaceRescope) return undefined
+      return {
+        mode: 'switch' as const,
+        show: (ns: string) => { setNamespaces([ns]); setActiveNamespace.mutate({ namespaces: [ns] }) },
+      }
+    }
+    return {
+      mode: 'add' as const,
+      show: (ns: string) => {
+        const next = namespaces.includes(ns) ? namespaces : [...namespaces, ns]
+        setNamespaces(next)
+        setActiveNamespace.mutate({ namespaces: next })
+      },
+    }
+  }, [namespaceScope?.cacheScoped, namespaceScope?.namespaceRescope, namespaces, setActiveNamespace])
   const initialBookmarkReconciledRef = useRef(false)
   const scopeActives = useMemo(() => namespaceScope?.actives ?? [], [namespaceScope?.actives])
   const namespaceScopeKey = useMemo(() => namespaceScope ? [...scopeActives].sort().join(',') : null, [namespaceScope, scopeActives])
@@ -2361,6 +2378,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <IssuesPane
             namespaces={namespaces}
             onNavigateToResource={navigateFromIssue}
+            showNamespace={issuesShowNamespace}
           />
         )}
 

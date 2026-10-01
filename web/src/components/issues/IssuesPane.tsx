@@ -37,24 +37,6 @@ import { IssueDiagnoseButton } from "../diagnose/LocalDiagnoseAction";
 // cpu, node-pinned, zonal PVC, a non-Karpenter managed node group) is NOT
 // Karpenter's to solve and gets no link, even in a Karpenter cluster. Clusters
 // without Karpenter never reach the signal checks (hasKarpenter is false).
-/** The subject a link into Issues narrows to (?kind=&namespace=&name=), or null. */
-export function issueSubjectFromParams(params: URLSearchParams): { kind: string; namespace: string; name: string } | null {
-  const kind = params.get("kind");
-  const name = params.get("name");
-  if (!kind || !name) return null;
-  return { kind, namespace: params.get("namespace") ?? "", name };
-}
-
-/** Whether an issue is about the subject: its own subject, or one of the resources grouped under it. */
-export function issueMatchesSubject(
-  issue: Issue,
-  subject: { kind: string; namespace: string; name: string },
-): boolean {
-  const same = (r: { kind?: string; namespace?: string; name?: string }) =>
-    r.kind === subject.kind && (r.namespace ?? "") === subject.namespace && r.name === subject.name;
-  return same(issue) || (issue.members ?? []).some(same);
-}
-
 export function capacityHrefForIssue(
   issue: Issue,
   hasKarpenter: boolean,
@@ -93,6 +75,44 @@ export function capacityHrefForIssue(
   return null;
 }
 
+/** The subject a link into Issues narrows to (?kind=&resource=ns/name), or null. */
+export function issueSubjectFromParams(params: URLSearchParams): IssueSubject | null {
+  const kind = params.get("kind");
+  const resource = params.get("resource");
+  if (!kind || !resource) return null;
+  const slash = resource.indexOf("/");
+  if (slash < 0) return { kind, namespace: "", name: resource };
+  const name = resource.slice(slash + 1);
+  return name ? { kind, namespace: resource.slice(0, slash), name } : null;
+}
+
+export interface IssueSubject {
+  kind: string;
+  namespace: string;
+  name: string;
+}
+
+/**
+ * How much the loaded issues can say about the subject. Its namespace being
+ * outside the view filter, or the list being capped, means an absent issue is
+ * unknown rather than none.
+ */
+export function issueSubjectCoverage(
+  subject: IssueSubject,
+  viewNamespaces: string[],
+  capped: boolean,
+): "hidden" | "capped" | "complete" {
+  if (subject.namespace && viewNamespaces.length > 0 && !viewNamespaces.includes(subject.namespace)) return "hidden";
+  return capped ? "capped" : "complete";
+}
+
+/** Whether an issue is about the subject: its own subject, or one of the resources grouped under it. */
+export function issueMatchesSubject(issue: Issue, subject: IssueSubject): boolean {
+  const same = (r: { kind?: string; namespace?: string; name?: string }) =>
+    r.kind === subject.kind && (r.namespace ?? "") === subject.namespace && r.name === subject.name;
+  return same(issue) || (issue.members ?? []).some(same);
+}
+
 const SEVERITY_TONE: Record<IssueSeverity, SummaryTone> = {
   critical: "error",
   warning: "warning",
@@ -101,6 +121,8 @@ const SEVERITY_TONE: Record<IssueSeverity, SummaryTone> = {
 interface IssuesPaneProps {
   namespaces: string[];
   onNavigateToResource: (resource: SelectedResource) => void;
+  /** Brings a namespace into the view filter: added to it, or (where Radar's scope allows only one) switched to it. */
+  showNamespace?: { mode: "add" | "switch"; show: (namespace: string) => void };
 }
 
 // The per-cluster Issues surface. Renders the same shared triage queue
@@ -114,6 +136,7 @@ interface IssuesPaneProps {
 export function IssuesPane({
   namespaces,
   onNavigateToResource,
+  showNamespace,
 }: IssuesPaneProps) {
   const { data, isLoading, error, dataUpdatedAt, refetch } =
     useIssues(namespaces);
@@ -139,6 +162,11 @@ export function IssuesPane({
   const subjectIssues = subject
     ? allIssues.filter((i) => issueMatchesSubject(i, subject))
     : allIssues;
+  const capped =
+    data?.total_matched != null && data.total_matched > (data.issues?.length ?? 0);
+  const subjectCoverage = subject
+    ? issueSubjectCoverage(subject, namespaces, capped)
+    : "complete";
   const shown = severityFilter.size
     ? subjectIssues.filter((i) => severityFilter.has(i.severity))
     : subjectIssues;
@@ -147,8 +175,7 @@ export function IssuesPane({
       (prev) => {
         const next = new URLSearchParams(prev);
         next.delete("kind");
-        next.delete("namespace");
-        next.delete("name");
+        next.delete("resource");
         return next;
       },
       { replace: true },
@@ -245,14 +272,40 @@ export function IssuesPane({
 
       {subject && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-theme-text-secondary">
-          <span>
-            Showing issues about {subject.kind}{" "}
-            <span className="font-mono">
-              {subject.namespace ? `${subject.namespace}/` : ""}
-              {subject.name}
+          {subjectCoverage === "hidden" ? (
+            <>
+              <span>
+                {subject.kind}{" "}
+                <span className="font-mono">{subject.namespace}/{subject.name}</span>{" "}
+                is in namespace <span className="font-mono">{subject.namespace}</span>, which your
+                namespace filter hides.
+              </span>
+              {showNamespace && (
+                <button
+                  type="button"
+                  onClick={() => showNamespace.show(subject.namespace)}
+                  className="text-accent-text hover:underline"
+                >
+                  {showNamespace.mode === "add" ? "Add" : "Switch to"}{" "}
+                  <span className="font-mono">{subject.namespace}</span>
+                  {showNamespace.mode === "add" ? " to the view" : ""}
+                </button>
+              )}
+            </>
+          ) : (
+            <span>
+              Showing issues about {subject.kind}{" "}
+              <span className="font-mono">
+                {subject.namespace ? `${subject.namespace}/` : ""}
+                {subject.name}
+              </span>
+              {subjectIssues.length === 0
+                ? subjectCoverage === "capped"
+                  ? " — none among the issues returned, which are capped"
+                  : " — none now"
+                : ""}
             </span>
-            {subjectIssues.length === 0 ? " — none now" : ""}
-          </span>
+          )}
           <button type="button" onClick={clearSubject} className="text-accent-text hover:underline">
             Show all issues
           </button>
@@ -262,7 +315,7 @@ export function IssuesPane({
       {/* Filtered-empty is NOT the healthy empty state: when a severity filter
           hides every row but issues still exist, say "no matches" rather than
           letting IssuesView render its "nothing broken" terminal state. */}
-      {severityFilter.size > 0 && allIssues.length > 0 && shown.length === 0 ? (
+      {subject && subjectIssues.length === 0 ? null : severityFilter.size > 0 && allIssues.length > 0 && shown.length === 0 ? (
         <div className="flex flex-col items-center gap-2 py-12 text-center text-sm text-theme-text-secondary">
           <p>No issues match the selected severity.</p>
           <button

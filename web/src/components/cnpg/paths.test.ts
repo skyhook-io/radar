@@ -34,6 +34,10 @@ describe('cnpgClusterProblemsPath', () => {
 
 describe('cnpgIssuesPath', () => {
   it('links to the Issues page narrowed to the subject', () => {
-    expect(cnpgIssuesPath({ kind: 'Backup', namespace: 'pg', name: 'b-1' })).toBe('/issues?kind=Backup&name=b-1&namespace=pg')
+    expect(cnpgIssuesPath({ kind: 'Backup', namespace: 'pg', name: 'b-1' })).toBe('/issues?kind=Backup&resource=pg%2Fb-1')
+    expect(cnpgIssuesPath({ kind: 'ClusterImageCatalog', namespace: '', name: 'pg' })).toBe('/issues?kind=ClusterImageCatalog&resource=pg')
+  })
+  it('keeps the current namespace view filter', () => {
+    expect(cnpgIssuesPath({ kind: 'Cluster', namespace: 'pg', name: 'main' }, 'pg,app')).toBe('/issues?namespaces=pg%2Capp&kind=Cluster&resource=pg%2Fmain')
   })
 })

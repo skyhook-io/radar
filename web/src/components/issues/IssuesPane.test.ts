@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Issue } from "@skyhook-io/k8s-ui";
-import { capacityHrefForIssue, issueMatchesSubject, issueSubjectFromParams } from "./IssuesPane";
+import { capacityHrefForIssue, issueMatchesSubject, issueSubjectCoverage, issueSubjectFromParams } from "./IssuesPane";
 
 function issue(partial: Partial<Issue>): Issue {
   return {
@@ -143,8 +143,22 @@ describe("capacityHrefForIssue subject carry", () => {
 
 describe('issue subject links', () => {
   it('reads the subject a link narrows to', () => {
-    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&namespace=pg&name=pg-main'))).toEqual({ kind: 'Cluster', namespace: 'pg', name: 'pg-main' })
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&resource=pg%2Fpg-main'))).toEqual({ kind: 'Cluster', namespace: 'pg', name: 'pg-main' })
+    expect(issueSubjectFromParams(new URLSearchParams('kind=ClusterImageCatalog&resource=pg'))).toEqual({ kind: 'ClusterImageCatalog', namespace: '', name: 'pg' })
     expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster'))).toBeNull()
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&resource=pg%2F'))).toBeNull()
+  })
+  it('never reads the view filter as the subject namespace', () => {
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&namespace=pg&name=pg-main'))).toBeNull()
+  })
+  it('treats a subject outside the view filter, or a capped list, as unknown rather than none', () => {
+    const subject = { kind: 'Cluster', namespace: 'pg', name: 'main' }
+    expect(issueSubjectCoverage(subject, ['app'], false)).toBe('hidden')
+    expect(issueSubjectCoverage(subject, ['app'], true)).toBe('hidden')
+    expect(issueSubjectCoverage(subject, ['app', 'pg'], false)).toBe('complete')
+    expect(issueSubjectCoverage(subject, [], false)).toBe('complete')
+    expect(issueSubjectCoverage(subject, [], true)).toBe('capped')
+    expect(issueSubjectCoverage({ kind: 'ClusterImageCatalog', namespace: '', name: 'pg' }, ['app'], false)).toBe('complete')
   })
   it('matches an issue by its own subject or a grouped member', () => {
     const subject = { kind: 'Pod', namespace: 'pg', name: 'pg-main-1' }
