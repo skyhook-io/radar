@@ -300,8 +300,8 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
                     {g.items.length} {g.items.length === 1 ? 'declaration' : 'declarations'}
                     {failed > 0 ? ` · ${failed} not reconciled` : ''}
                     {!g.row ? ' · target cluster not visible' : ''}
-                    {noSources ? ' · no GitOps source recorded on any of them' : ''}
                   </span>
+                  {noSources && <span className="text-xs text-theme-text-tertiary">no GitOps source recorded on any of them</span>}
                 </div>
                 <div className="table-divide-subtle">
                   {g.items.map((i) => (
