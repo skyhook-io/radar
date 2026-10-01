@@ -665,7 +665,7 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
   // skimmable. Alerts and investigations lead: they are the two things the
   // OSS binary cannot do at all. Team, fleet and history follow.
   const highlights = [
-    { icon: Bell, lead: 'Alerts', rest: ' to Slack or any webhook. One per failure, not one per crash-looping pod.' },
+    { icon: Bell, lead: 'Alerts', rest: ' to Slack or any webhook. One per failure, not per crash-looping pod.' },
     { icon: Sparkles, lead: 'AI investigations', rest: ': root cause with evidence, automatic on alerts or on demand' },
     { icon: Users, lead: 'Your team', rest: ': share any view with just a link, scoped by your existing RBAC' },
     { icon: Globe, lead: 'Every cluster', rest: ': the whole fleet in one view and one MCP endpoint' },
