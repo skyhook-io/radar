@@ -260,8 +260,15 @@ export function preflightFacts(cluster: any | null): PreflightFact[] {
     const keys = Object.keys(params).sort()
     add('PostgreSQL parameters', 'spec.postgresql.parameters', `${keys.length}: ${keys.slice(0, 6).join(', ')}${keys.length > 6 ? ', …' : ''}`, '')
   }
-  if (spec.resources && Object.keys(spec.resources).length > 0) add('Resources', 'spec.resources', JSON.stringify(spec.resources), '')
+  if (spec.resources && Object.keys(spec.resources).length > 0) add('Resources', 'spec.resources', resourcesText(spec.resources), '')
   return facts
+}
+
+/** "requests: cpu 50m, memory 128Mi · limits: memory 256Mi" */
+export function resourcesText(r: any): string {
+  const part = (label: string, m: Record<string, unknown> | undefined) =>
+    m && Object.keys(m).length > 0 ? `${label}: ${Object.entries(m).map(([k, v]) => `${k} ${String(v)}`).join(', ')}` : null
+  return [part('requests', r?.requests), part('limits', r?.limits)].filter(Boolean).join(' · ') || 'set'
 }
 
 function storageText(s: any): string {

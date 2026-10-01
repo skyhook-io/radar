@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CNPGRecoveryResponse } from '../../../api/cnpg-recovery'
 import {
+  resourcesText,
   restoreBackupDeclared,
   restoreNextSteps,
   restorePermission,
@@ -264,5 +265,12 @@ describe('restoreNextSteps', () => {
     expect(noDestination.note).toContain('names no ObjectStore')
     expect(step({ spec: { backup: { barmanObjectStore: { destinationPath: 's3://b' } } } }).state).toBe('done')
     expect(step({ spec: {} }).state).toBe('todo')
+  })
+})
+
+describe('resourcesText', () => {
+  it('reads requests and limits instead of JSON', () => {
+    expect(resourcesText({ requests: { cpu: '50m', memory: '128Mi' } })).toBe('requests: cpu 50m, memory 128Mi')
+    expect(resourcesText({ requests: { cpu: '50m' }, limits: { memory: '256Mi' } })).toBe('requests: cpu 50m · limits: memory 256Mi')
   })
 })
