@@ -144,12 +144,11 @@ interface ResourceActionsBarProps {
   drainPlan?: DrainPlan | null
   isPlanningDrain?: boolean
   drainPlanError?: string | null
-  // The connected backend has no drain-plan endpoint (version skew, e.g. a newer
-  // frontend against an older radar). The dialog falls back to the plan-less
-  // acknowledgement-only mode instead of keeping Drain disabled on a dead request.
-  drainPlanUnsupported?: boolean
-  // The same, with the Radar version that serves drain plans; the plan-less
-  // dialog says so, so the user knows a preview exists.
+  // The connected Radar predates the drain-plan endpoint (a newer frontend
+  // against an older Radar). The dialog falls back to the plan-less
+  // acknowledgement-only mode instead of keeping Drain disabled on a dead
+  // request, and names the Radar version that serves plans so the user knows a
+  // preview exists.
   drainPlanUpgrade?: RadarUpgradeRequirement | null
 }
 
@@ -181,7 +180,7 @@ export function ResourceActionsBar({
   onCordonNode, isCordoningNode,
   onUncordonNode, isUncordoningNode,
   onDrainNode, isDrainingNode,
-  onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError, drainPlanUnsupported, drainPlanUpgrade,
+  onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError, drainPlanUpgrade,
 }: ResourceActionsBarProps) {
   const kind = resource.kind.toLowerCase()
   const coreBatchJob = isCoreBatchJob(kind, resource.group)
@@ -206,18 +205,14 @@ export function ResourceActionsBar({
   // open: the host reports it through a mutation error, which the next request clears,
   // so without latching every option change would refire a request known to 404 and
   // bounce the dialog out of its fallback mode.
-  const [planUnsupported, setPlanUnsupported] = useState(false)
   const [planUpgrade, setPlanUpgrade] = useState<RadarUpgradeRequirement | null>(null)
   useEffect(() => {
-    if (drainPlanUnsupported || drainPlanUpgrade) setPlanUnsupported(true)
     if (drainPlanUpgrade) setPlanUpgrade(drainPlanUpgrade)
-  }, [drainPlanUnsupported, drainPlanUpgrade])
+  }, [drainPlanUpgrade])
   useEffect(() => {
-    if (!showDrainConfirm) {
-      setPlanUnsupported(false)
-      setPlanUpgrade(null)
-    }
+    if (!showDrainConfirm) setPlanUpgrade(null)
   }, [showDrainConfirm])
+  const planUnsupported = planUpgrade !== null
   const planSupported = Boolean(onPlanDrain) && !planUnsupported
 
   // Fetch (and refetch on option changes) the read-only plan while the drain dialog is open.

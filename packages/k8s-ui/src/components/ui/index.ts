@@ -78,7 +78,6 @@ export {
   RadarUpgradeNote,
   RadarUpgradeAction,
   RadarUpgradeContext,
-  formatRadarVersion,
   radarUpgradeDetail,
   radarUpgradeHeadline,
 } from "./RadarUpgradeNote";
