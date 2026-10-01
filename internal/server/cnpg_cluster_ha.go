@@ -295,11 +295,7 @@ func cnpgHADenied(g cnpgGrant, namespace string) CNPGHASource {
 }
 
 func cnpgHAClusterDenied(g cnpgGrant) CNPGHASource {
-	res := g.resource
-	if g.group != "" {
-		res += " (" + g.group + ")"
-	}
-	grant := g.verb + " " + res + " (cluster-scoped)"
+	grant := g.ClusterString()
 	return CNPGHASource{State: cnpgHAStateDenied, Grant: grant, Reason: "You are not allowed to " + grant}
 }
 

@@ -145,7 +145,7 @@ type CNPGOperatorDiagnosis struct {
 
 func cnpgGrantText(g cnpgGrant, namespace string) string {
 	if namespace == "" {
-		return strings.TrimSuffix(g.String(""), " in namespace ") + " (cluster-wide)"
+		return g.ClusterString()
 	}
 	return g.String(namespace)
 }

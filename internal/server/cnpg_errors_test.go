@@ -192,3 +192,13 @@ func TestCNPGNoPrometheusReasonIsOneSentence(t *testing.T) {
 		}
 	}
 }
+
+func TestCNPGGrantClusterStringHasNoNestedParentheses(t *testing.T) {
+	g := cnpgGrant{"get", "admissionregistration.k8s.io", "mutatingwebhookconfigurations", ""}
+	if got := g.ClusterString(); got != "get mutatingwebhookconfigurations.admissionregistration.k8s.io cluster-wide" {
+		t.Errorf("ClusterString = %q", got)
+	}
+	if got := (cnpgGrant{"get", "", "nodes", ""}).ClusterString(); got != "get nodes cluster-wide" {
+		t.Errorf("core = %q", got)
+	}
+}

@@ -762,6 +762,20 @@ type cnpgGrant struct {
 	verb, group, resource, subresource string
 }
 
+// ClusterString words a grant on a cluster-scoped resource (or a cluster-wide
+// list), naming the group in resource.group form so it reads without nested
+// parentheses where it is quoted inside "(needs …)".
+func (g cnpgGrant) ClusterString() string {
+	res := g.resource
+	if g.subresource != "" {
+		res += "/" + g.subresource
+	}
+	if g.group != "" {
+		res += "." + g.group
+	}
+	return g.verb + " " + res + " cluster-wide"
+}
+
 func (g cnpgGrant) String(namespace string) string {
 	res := g.resource
 	if g.subresource != "" {
