@@ -7,7 +7,7 @@ describe('cnpgCheckpointView', () => {
   it('flags requested-checkpoint pressure only with enough checkpoints', () => {
     expect(cnpgCheckpointView({ source: 'pg_stat_checkpointer', timed: 2, requested: 8 }, 'primary')).toMatchObject({ total: 10, requestedShare: 0.8, pressure: true })
     expect(cnpgCheckpointView({ source: 'pg_stat_checkpointer', timed: 1, requested: 3 }, 'primary').pressure).toBe(false)
-    expect(cnpgCheckpointView({ source: 'pg_stat_checkpointer', timed: 1, requested: 2 }, 'primary').share).toBe('2 of 3 requested')
+    expect(cnpgCheckpointView({ source: 'pg_stat_checkpointer', timed: 1, requested: 2 }, 'primary').share).toBeUndefined()
     expect(cnpgCheckpointView({ source: 'pg_stat_checkpointer', timed: 2, requested: 8 }, 'primary').share).toBe('80 %')
     expect(cnpgCheckpointView({ source: 'pg_stat_bgwriter', timed: 5 }, 'primary').requestedShare).toBeUndefined()
   })

@@ -20,8 +20,8 @@ export function cnpgCheckpointView(c: Checkpoints, role: CNPGRuntimeInstance['ro
   return {
     total,
     requestedShare,
-    // Too few checkpoints for a percentage to mean anything: counts instead.
-    share: requestedShare === undefined ? undefined : few ? `${c.requested} of ${total} requested` : `${(requestedShare * 100).toFixed(0)} %`,
+    // Too few checkpoints for a share to mean anything; the counts beside it say it all.
+    share: requestedShare === undefined || few ? undefined : `${(requestedShare * 100).toFixed(0)} %`,
     pressure: requestedShare !== undefined && !few && requestedShare > 0.5,
     showRestartpoints: c.source === 'pg_stat_checkpointer' && (role !== 'primary' || !!c.restartpointsDone),
   }
