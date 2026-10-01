@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/issues"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -175,5 +176,46 @@ func TestCNPGScheduleReadingsWordOnlyValidSchedules(t *testing.T) {
 	}
 	if _, ok := got["db/empty"]; ok {
 		t.Error("an empty schedule was worded")
+	}
+}
+
+// Each reading is checked against when the operator's parser actually runs the
+// schedule, so a description can never promise runs the parser would not make.
+func TestDescribeCNPGScheduleMatchesTheParser(t *testing.T) {
+	start := time.Date(2026, 10, 10, 18, 30, 0, 0, time.UTC) // a Saturday
+	cases := []struct {
+		spec string
+		want string
+		runs []string // the parser's next runs from start
+	}{
+		{"0 0 */5 * * *", "every day at 00:00, 05:00, 10:00, 15:00 and 20:00 UTC", []string{"2026-10-10T20:00:00Z", "2026-10-11T00:00:00Z"}},
+		{"0 0 */6 * * *", "every 6 hours, on the hour", []string{"2026-10-11T00:00:00Z", "2026-10-11T06:00:00Z"}},
+		{"0 0 */6,13 * * *", "cron 0 0 */6,13 * * *", nil},
+		{"0 0 0 1,*/2 * 1", "cron 0 0 0 1,*/2 * 1", nil},
+		{"0 0 0 */2 * 1", "every 2 days of the month from day 1, when it is a Monday at 00:00 UTC", []string{"2026-10-19T00:00:00Z"}},
+		{"@every 500ms", "every 1s, counted from the operator's last check", []string{"2026-10-10T18:30:01Z"}},
+		{"@every 1.5s", "every 1s, counted from the operator's last check", []string{"2026-10-10T18:30:01Z"}},
+		{"@every 1h30m", "every 1h30m, counted from the operator's last check", []string{"2026-10-10T20:00:00Z"}},
+	}
+	for _, c := range cases {
+		if got := describeCNPGSchedule(c.spec); got != c.want {
+			t.Errorf("describe(%q) = %q, want %q", c.spec, got, c.want)
+		}
+		sched, err := issues.ParseCNPGSchedule(c.spec)
+		if err != nil {
+			t.Fatalf("%q: %v", c.spec, err)
+		}
+		at := start
+		for _, want := range c.runs {
+			at = sched.Next(at)
+			if got := at.UTC().Format(time.RFC3339); got != want {
+				t.Errorf("%q: next run %s, want %s (the reading must match)", c.spec, got, want)
+			}
+		}
+	}
+	// */17 minutes restarts each hour: 0, 17, 34, 51 — never every 17 minutes across the hour.
+	got := describeCNPGSchedule("0 */17 * * * *")
+	if !strings.Contains(got, "0, 17, 34, 51") || strings.Contains(got, "every 17") {
+		t.Errorf("*/17 minutes = %q", got)
 	}
 }

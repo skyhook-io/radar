@@ -140,7 +140,11 @@ func describeCNPGSchedule(spec string) string {
 		return "every hour, on the hour"
 	}
 	if d, ok := strings.CutPrefix(spec, "@every "); ok {
-		return "every " + strings.TrimSpace(d) + ", counted from the operator's last check"
+		dur, err := time.ParseDuration(strings.TrimSpace(d))
+		if err != nil {
+			return "cron " + spec
+		}
+		return "every " + cnpgEveryDuration(dur) + ", counted from the operator's last check"
 	}
 	f := strings.Fields(spec)
 	if len(f) == 5 {
@@ -149,11 +153,34 @@ func describeCNPGSchedule(spec string) string {
 	if len(f) != 6 {
 		return ""
 	}
+	// Steps are worded only as "*/N" on a field N divides (the step restarts
+	// each minute, hour or day, so */5 hours runs 20:00 then 00:00); others
+	// become the values they select. Any other step shape is shown literally.
+	periods := []int{60, 60, 24}
+	for i, field := range f {
+		if !strings.Contains(field, "/") {
+			continue
+		}
+		n, ok := strings.CutPrefix(field, "*/")
+		step, err := strconv.Atoi(n)
+		if !ok || err != nil || step <= 0 {
+			return "cron " + spec
+		}
+		switch {
+		case i < 3 && periods[i]%step != 0:
+			f[i] = cronStepValues(step, periods[i])
+		case i == 4 || i == 5:
+			return "cron " + spec
+		}
+	}
 	sec, min, hour, dom, mon, dow := f[0], f[1], f[2], f[3], f[4], f[5]
 
 	fixedTime := isCronNumber(sec) && isCronNumber(min) && isCronNumber(hour)
 	var when string
-	if fixedTime {
+	if isCronNumber(sec) && isCronNumber(min) && cronNumberList(hour) {
+		when = "at " + cronTimesPhrase(hour, min, sec)
+		fixedTime = true
+	} else if fixedTime {
 		h, _ := strconv.Atoi(hour)
 		m, _ := strconv.Atoi(min)
 		sc, _ := strconv.Atoi(sec)
@@ -180,8 +207,8 @@ func describeCNPGSchedule(spec string) string {
 	case dowAny:
 		days = domPhrase
 	case cronStarred(dom) || cronStarred(dow):
-		// robfig/cron v1 marks any field starting with * (including */n) as a
-		// wildcard, and a wildcard on either day field makes both must match.
+		// robfig/cron v1 marks a field with any item starting with * or ? (including
+		// */n) as a wildcard, and a wildcard on either day field makes both match.
 		days = domPhrase + ", when it is a " + cronListPhrase(dow, cnpgCronWeekdays, cnpgCronDowIdx)
 	default:
 		days = domPhrase + " or every " + cronListPhrase(dow, cnpgCronWeekdays, cnpgCronDowIdx)
@@ -243,7 +270,69 @@ func isCronNumber(s string) bool {
 
 func cronAny(s string) bool { return s == "*" || s == "?" }
 
-func cronStarred(s string) bool { return strings.HasPrefix(s, "*") || strings.HasPrefix(s, "?") }
+func cronStarred(s string) bool {
+	for _, item := range strings.Split(s, ",") {
+		if strings.HasPrefix(item, "*") || strings.HasPrefix(item, "?") {
+			return true
+		}
+	}
+	return false
+}
+
+// cronStepValues lists the values "*/step" selects in a field restarting every period.
+func cronStepValues(step, period int) string {
+	var vals []string
+	for v := 0; v < period; v += step {
+		vals = append(vals, strconv.Itoa(v))
+	}
+	return strings.Join(vals, ",")
+}
+
+// cronNumberList: a comma-separated list of two or more plain numbers.
+func cronNumberList(s string) bool {
+	items := strings.Split(s, ",")
+	if len(items) < 2 {
+		return false
+	}
+	for _, item := range items {
+		if !isCronNumber(item) {
+			return false
+		}
+	}
+	return true
+}
+
+// cronTimesPhrase words the times of day a list of hours selects: "00:00, 05:00 and 10:00 UTC".
+func cronTimesPhrase(hours, min, sec string) string {
+	m, _ := strconv.Atoi(min)
+	sc, _ := strconv.Atoi(sec)
+	var times []string
+	for _, h := range strings.Split(hours, ",") {
+		hh, _ := strconv.Atoi(h)
+		if sc == 0 {
+			times = append(times, fmt.Sprintf("%02d:%02d", hh, m))
+		} else {
+			times = append(times, fmt.Sprintf("%02d:%02d:%02d", hh, m, sc))
+		}
+	}
+	return strings.Join(times[:len(times)-1], ", ") + " and " + times[len(times)-1] + " UTC"
+}
+
+// cnpgEveryDuration is the interval robfig/cron v1 actually runs an "@every"
+// schedule at: whole seconds, at least one.
+func cnpgEveryDuration(d time.Duration) string {
+	if d < time.Second {
+		d = time.Second
+	}
+	d -= d % time.Second
+	out := d.String()
+	for _, suffix := range []string{"m0s", "h0m"} {
+		if strings.HasSuffix(out, suffix) && len(out) > len(suffix) {
+			out = strings.TrimSuffix(out, suffix[1:])
+		}
+	}
+	return out
+}
 
 // cronFieldPhrase words one time field: "every minute", "every 15 minutes",
 // "minute 5", "hours 9 through 17".
