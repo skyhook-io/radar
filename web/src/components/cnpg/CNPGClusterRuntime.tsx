@@ -348,15 +348,17 @@ const RATES_FOOTER = {
 function Rates({ rates }: { rates: CNPGTransactionRates }) {
   const cluster = rates.source === 'prometheus' ? ' (cluster)' : ''
   return (
-    <>
-      <Metric label={`Commits / s${cluster}`} value={rates.commits} />
-      <Metric label={`Rollbacks / s${cluster}`} value={rates.rollbacks} />
+    <div>
+      <div className="flex gap-8">
+        <Metric label={`Commits / s${cluster}`} value={rates.commits} />
+        <Metric label={`Rollbacks / s${cluster}`} value={rates.rollbacks} />
+      </div>
       {rates.at !== undefined && (
-        <div className="self-end text-xs text-theme-text-tertiary">
-          {rates.source === 'prometheus' ? 'Prometheus, point from' : 'last Prometheus point'} {formatAge(new Date(rates.at * 1000).toISOString())} ago
+        <div className="mt-0.5 text-[11px] text-theme-text-tertiary">
+          {rates.source === 'prometheus' ? 'From Prometheus, point' : 'Last Prometheus point'} {formatAge(new Date(rates.at * 1000).toISOString())} ago
         </div>
       )}
-    </>
+    </div>
   )
 }
 
