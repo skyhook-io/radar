@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -778,8 +779,11 @@ func (r *cnpgRuntimeRunner) do(fn func(ctx context.Context)) {
 		case r.sem <- struct{}{}:
 			defer func() { <-r.sem }()
 		case <-r.ctx.Done():
+			// The caller is gone and nobody reads this result. Running fn here
+			// would bypass the cap: memoized reads outlive the caller, so every
+			// queued read would start at once.
+			return
 		}
-		// With the request gone, fn's reads fail fast on the cancelled context.
 		fn(r.ctx)
 	}()
 }
@@ -834,9 +838,11 @@ func cnpgMemoized[T any](ctx context.Context, identity string, target cnpgProxyT
 		// covers a scheme fallback's second request.
 		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cnpgMemoizedReadTimeout)
 		defer cancel()
-		got := fetch(readCtx)
-		// A read that ran out of time says nothing about the Pod either.
-		if readCtx.Err() == nil {
+		timedOut := new(atomic.Bool)
+		got := fetch(context.WithValue(readCtx, cnpgReadTimedOutKey{}, timedOut))
+		// A read that ran out of time (its own deadline or a request's inside
+		// it) says nothing lasting about the Pod: the next caller tries again.
+		if readCtx.Err() == nil && !timedOut.Load() {
 			cnpgRuntimeMemoMu.Lock()
 			if len(cnpgRuntimeMemoEntries) >= cnpgRuntimeMemoMaxEntries {
 				pruneCNPGRuntimeMemoLocked(time.Now())
@@ -949,7 +955,23 @@ var cnpgSchemeMismatchHints = []string{
 
 // classifyCNPGProxyFailure classifies a failed read and, for a failure in
 // transit, replaces the raw error with a sentence; the raw error is logged.
+// cnpgReadTimedOutKey carries a flag a memoized read sets when any request
+// inside it timed out, so the memo does not keep a timeout for its full TTL.
+type cnpgReadTimedOutKey struct{}
+
+func cnpgMarkTimedOut(ctx context.Context, err error) {
+	flag, _ := ctx.Value(cnpgReadTimedOutKey{}).(*atomic.Bool)
+	if flag == nil {
+		return
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) ||
+		apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) || strings.Contains(strings.ToLower(err.Error()), "timeout") {
+		flag.Store(true)
+	}
+}
+
 func classifyCNPGProxyFailure(ctx context.Context, err error, out cnpgProxyOutcome, t cnpgProxyTarget) cnpgProxyOutcome {
+	cnpgMarkTimedOut(ctx, err)
 	out = classifyCNPGProxyError(ctx, err, out)
 	if out.state == cnpgRuntimeStateDenied || errors.Is(err, context.Canceled) {
 		return out

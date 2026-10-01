@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -917,5 +918,64 @@ func TestCNPGMemoizedReadOutlivesTheCallerThatStartedIt(t *testing.T) {
 	}
 	if got := cnpgMemoized(context.Background(), "id-detach", target, time.Minute, func(context.Context) string { return "refetched" }); got != "ok" {
 		t.Errorf("memo = %q, want the completed read cached", got)
+	}
+}
+
+func TestCNPGRuntimeRunnerKeepsItsCapWhenTheCallerGoes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	run := newCNPGRuntimeRunner(ctx)
+	var running, maxRunning, ran int32
+	release := make(chan struct{})
+	admitted := make(chan struct{}, 32)
+	for i := 0; i < 12; i++ {
+		run.do(func(context.Context) {
+			n := atomic.AddInt32(&running, 1)
+			for {
+				m := atomic.LoadInt32(&maxRunning)
+				if n <= m || atomic.CompareAndSwapInt32(&maxRunning, m, n) {
+					break
+				}
+			}
+			atomic.AddInt32(&ran, 1)
+			admitted <- struct{}{}
+			<-release
+			atomic.AddInt32(&running, -1)
+		})
+	}
+	for i := 0; i < cnpgRuntimeConcurrency; i++ {
+		<-admitted
+	}
+	cancel()
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	run.wait()
+	if maxRunning > int32(cnpgRuntimeConcurrency) {
+		t.Errorf("max concurrent reads = %d, want ≤ %d", maxRunning, cnpgRuntimeConcurrency)
+	}
+	if ran != int32(cnpgRuntimeConcurrency) {
+		t.Errorf("reads run = %d, want only the %d admitted before the caller left", ran, cnpgRuntimeConcurrency)
+	}
+}
+
+func TestCNPGMemoizedDoesNotKeepATimeout(t *testing.T) {
+	target := cnpgProxyTarget{namespace: "pg", pod: "pg-1", podUID: "uid-memo-timeout", port: cnpgStatusPort, path: cnpgStatusPath, scheme: "https"}
+	calls := 0
+	fetch := func(ctx context.Context) string {
+		calls++
+		cnpgMarkTimedOut(ctx, fmt.Errorf("proxy: %w", context.DeadlineExceeded))
+		return "timed out"
+	}
+	cnpgMemoized(context.Background(), "id-timeout", target, time.Minute, fetch)
+	cnpgMemoized(context.Background(), "id-timeout", target, time.Minute, fetch)
+	if calls != 2 {
+		t.Errorf("fetches = %d, want 2: a timed-out read must not be memoized", calls)
+	}
+	ok := cnpgProxyTarget{namespace: "pg", pod: "pg-1", podUID: "uid-memo-ok", port: cnpgStatusPort, path: cnpgStatusPath, scheme: "https"}
+	n := 0
+	good := func(context.Context) string { n++; return "ok" }
+	cnpgMemoized(context.Background(), "id-timeout", ok, time.Minute, good)
+	cnpgMemoized(context.Background(), "id-timeout", ok, time.Minute, good)
+	if n != 1 {
+		t.Errorf("fetches = %d, want 1 for a read that answered", n)
 	}
 }
