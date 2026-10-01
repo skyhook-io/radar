@@ -13,6 +13,7 @@ import {
   toneTextClass,
   type CNPGFleetRow,
   type HealthLevel,
+  Tooltip,
 } from '@skyhook-io/k8s-ui'
 import {
   CNPGWorkspaceHeader,
@@ -214,7 +215,7 @@ export function CNPGProtection({
                 r.protection.destination.method === 'barmanObjectStore' ? (
                   <PathText value={r.protection.destination.text} />
                 ) : (
-                  <FactValue fact={r.protection.destination} className="break-words" />
+                  <FactValue fact={{ ...r.protection.destination, detail: r.protection.destination.text }} className="block truncate" />
                 ),
             },
           ]}
@@ -253,7 +254,18 @@ export function CNPGProtection({
           title="Destinations"
           subtitle="ObjectStores (barman-cloud plugin)"
           columns={[
-            { header: 'ObjectStore', width: '18%', cell: (s: StoreRow) => <>{s.name}<Sub>{s.namespace}</Sub></> },
+            {
+              header: 'ObjectStore',
+              width: '18%',
+              cell: (s: StoreRow) => (
+                <>
+                  <Tooltip content={s.name} wrapperClassName="max-w-full">
+                    <span className="block truncate">{s.name}</span>
+                  </Tooltip>
+                  <Sub>{s.namespace}</Sub>
+                </>
+              ),
+            },
             { header: 'Destination', width: '30%', cell: (s) => (s.destination ? <PathText value={s.destination} /> : '—') },
             { header: 'Used by', width: '20%', cell: (s) => (s.users.length ? s.users.map((u) => u.name).join(', ') : <span className="text-theme-text-tertiary">None visible</span>) },
             {
