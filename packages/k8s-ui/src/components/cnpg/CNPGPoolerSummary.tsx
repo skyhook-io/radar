@@ -86,9 +86,9 @@ export function CNPGPoolerSummary({
             <NotReported />
           )}
         </FactRow>
-        <FactRow label="Paused">
+        <FactRow label="Pause state">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span>{paused ? 'Requested: paused' : 'Requested: serving'}</span>
+            <span>{paused ? 'Requested: Paused' : 'Requested: Serving (not paused)'}</span>
             {actions}
           </div>
           <Note>spec.pgbouncer.paused is what was asked for; each PgBouncer applies it with PAUSE / RESUME.</Note>

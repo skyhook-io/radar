@@ -29,7 +29,7 @@ describe('observedPause', () => {
   it('distinguishes all, some and unreadable', () => {
     expect(observedPause({ state: 'ok', pods: [{ pod: 'a', state: 'ok', paused: true }, { pod: 'b', state: 'ok', paused: true }] })?.text).toBe('Paused on 2 of 2 PgBouncers')
     expect(observedPause({ state: 'ok', pods: [{ pod: 'a', state: 'ok', paused: true }, { pod: 'b', state: 'ok', paused: false }] })?.level).toBe('alert')
-    expect(observedPause({ state: 'ok', pods: [{ pod: 'a', state: 'ok', paused: false }, { pod: 'b', state: 'error' }] })?.text).toBe('Serving on 1 of 2 PgBouncers · 1 not read')
+    expect(observedPause({ state: 'ok', pods: [{ pod: 'a', state: 'ok', paused: false }, { pod: 'b', state: 'error' }] })?.text).toBe('Serving (not paused) on 1 of 2 PgBouncers · 1 not read')
     expect(observedPause({ state: 'denied', grant: 'create pods/exec in namespace x', pods: [] })?.text).toContain('create pods/exec')
   })
 })

@@ -154,7 +154,7 @@ export function observedPause(o: CNPGPoolerObservedLive | undefined): { text: st
   const unread = o.pods.length - read.length
   const tail = unread > 0 ? ` · ${unread} not read` : ''
   if (read.length === 0) return { text: `Not observable${tail}`, level: 'unknown' }
-  if (paused === 0) return { text: `Serving on ${read.length} of ${o.pods.length} PgBouncers${tail}`, level: unread ? 'unknown' : 'healthy' }
+  if (paused === 0) return { text: `Serving (not paused) on ${read.length} of ${o.pods.length} PgBouncers${tail}`, level: unread ? 'unknown' : 'healthy' }
   if (paused === read.length) return { text: `Paused on ${paused} of ${o.pods.length} PgBouncers${tail}`, level: 'degraded' }
   return { text: `Paused on ${paused} of ${o.pods.length} PgBouncers${tail}`, level: 'alert' }
 }
