@@ -210,15 +210,15 @@ describe('cnpgDimensions', () => {
   it('replication lag takes the same tone as the Replication fact', () => {
     const at = (lag: number) => cnpgDimensions({ row: row(), replication: { streaming: 1, standbys: 1, maxReplayLagSeconds: lag } })[1]
     expect(at(2)).toMatchObject({ tone: 'healthy' })
-    expect(at(8)).toMatchObject({ tone: 'degraded', text: '1 of 1 streaming · replay 8.0 s behind' })
-    expect(at(23.6)).toMatchObject({ tone: 'degraded', text: '1 of 1 streaming · replay 23 s behind' })
-    expect(at(72)).toMatchObject({ tone: 'unhealthy', text: '1 of 1 streaming · replay 72 s behind' })
+    expect(at(8)).toMatchObject({ tone: 'degraded', text: '1 of 1 streaming · replay delay 8.0 s' })
+    expect(at(23.6)).toMatchObject({ tone: 'degraded', text: '1 of 1 streaming · replay delay 23 s' })
+    expect(at(72)).toMatchObject({ tone: 'unhealthy', text: '1 of 1 streaming · replay delay 72 s' })
     expect(at(72).tone).toBe(cnpgLagTone(72))
   })
   it('a missing standby does not hide a severe lag on the one that streams', () => {
     const r = row({ instances: { ready: 2, desired: 3 } })
     const d = cnpgDimensions({ row: r, replication: { streaming: 1, standbys: 1, maxReplayLagSeconds: 72 } })[1]
-    expect(d).toMatchObject({ tone: 'unhealthy', text: '1 of 2 expected standbys streaming · replay 72 s behind' })
+    expect(d).toMatchObject({ tone: 'unhealthy', text: '1 of 2 expected standbys streaming · replay delay 72 s' })
     expect(cnpgDimensions({ row: r, replication: { streaming: 1, standbys: 1, maxReplayLagSeconds: 0.2 } })[1]).toMatchObject({
       tone: 'degraded',
       text: '1 of 2 expected standbys streaming',

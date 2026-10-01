@@ -1,11 +1,15 @@
 import { cnpgFormatLag } from '@skyhook-io/k8s-ui'
+import { formatBytes } from '../lsn'
 import type { CNPGActionCapability, CNPGBackupMethod } from '../../../api/cnpg'
 
 export interface StandbyChoice {
   pod: string
   podUID: string
   ineligible?: string
+  /** pg_stat_replication replay_lag: the recent replay delay, which can stay high after the standby caught up. */
   replayLagSeconds?: number
+  /** WAL the primary has written that this standby has not replayed, in bytes: what it still has to catch up on. */
+  replayBacklogBytes?: number
   state?: string
   syncState?: string
 }
@@ -53,16 +57,22 @@ export function cnpgDestroyBlocker(cap: CNPGActionCapability | undefined, pod: s
   return cap.reason ?? 'Not allowed'
 }
 
-// Behind by this much is visibly lagging, not just between acknowledgements.
-const SWITCHOVER_LAG_NOTE_SECONDS = 5
-
 /**
- * The note under a switchover candidate that is behind. The new primary has to
- * replay the WAL it has not applied yet before it takes over, so a lagging
- * standby can make the switchover take longer; nothing is lost by choosing it.
+ * The note under a switchover candidate that still has WAL to replay. The
+ * new primary replays it before it takes over, so the switchover can take
+ * longer; nothing is lost by choosing it. Based on the LSN backlog, not on
+ * replay_lag, which is a recent delay and stays high after a standby caught up.
  */
-export function switchoverLagNote(s: Pick<StandbyChoice, 'pod' | 'replayLagSeconds'>): string | undefined {
-  const lag = s.replayLagSeconds
-  if (lag === undefined || lag <= SWITCHOVER_LAG_NOTE_SECONDS) return undefined
-  return `${s.pod} is ${cnpgFormatLag(lag)} behind; the switchover may take longer while it catches up.`
+export function switchoverLagNote(s: Pick<StandbyChoice, 'pod' | 'replayBacklogBytes'>): string | undefined {
+  const b = s.replayBacklogBytes
+  if (b === undefined || b <= 0) return undefined
+  return `${s.pod} has ${formatBytes(b)} of WAL still to replay; the switchover may take longer while it catches up.`
+}
+
+/** A switchover candidate's catch-up facts: the backlog first, then the replay delay. */
+export function switchoverCandidateFacts(s: Pick<StandbyChoice, 'replayBacklogBytes' | 'replayLagSeconds'>): string[] {
+  return [
+    s.replayBacklogBytes !== undefined ? `backlog ${formatBytes(s.replayBacklogBytes)}` : null,
+    s.replayLagSeconds !== undefined ? `replay delay ${cnpgFormatLag(s.replayLagSeconds)}` : null,
+  ].filter((x): x is string => !!x)
 }

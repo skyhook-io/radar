@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, DatabaseBackup, MoreHorizontal, Repeat } from 'lucide-react'
 import { clsx } from 'clsx'
-import { ActionConfirmDialog, Tooltip, cnpgFormatLag, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA } from '@skyhook-io/k8s-ui'
+import { ActionConfirmDialog, Tooltip, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA } from '@skyhook-io/k8s-ui'
 import {
   cnpgActionOutcomeLocked,
   useCNPGAction,
@@ -23,7 +23,8 @@ import { cnpgOperatorActionNote } from '../operatorStatus'
 import { CNPGRestoreDialog } from '../recovery/CNPGRestoreDialog'
 import { CNPGReportDialog } from './CNPGReportDialog'
 import { useOpenCNPGPsql } from './useOpenCNPGPsql'
-import { backupNameFor, describeBackupMethod, pickDefaultStandby, switchoverLagNote, type StandbyChoice } from './actionModel'
+import { backupNameFor, describeBackupMethod, pickDefaultStandby, switchoverCandidateFacts, switchoverLagNote, type StandbyChoice } from './actionModel'
+import { lsnDistance } from '../lsn'
 
 type DialogKind = CNPGClusterActionName | 'restore' | 'report' | null
 
@@ -344,10 +345,15 @@ export function ClusterActionDialog({
   const [backupName, setBackupName] = useState(() => backupNameFor(name))
 
   const standbys: StandbyChoice[] = useMemo(() => {
-    const lags = new Map<string, { replayLagSeconds?: number; state?: string; syncState?: string }>()
+    const lags = new Map<string, { replayLagSeconds?: number; replayBacklogBytes?: number; state?: string; syncState?: string }>()
     const primary = runtime.data?.instances.find((i) => i.role === 'primary')
     for (const r of primary?.status.replication ?? []) {
-      lags.set(r.applicationName, { replayLagSeconds: r.replayLag, state: r.state, syncState: r.syncState })
+      lags.set(r.applicationName, {
+        replayLagSeconds: r.replayLag,
+        replayBacklogBytes: lsnDistance(primary?.status.currentLsn, r.replayLsn),
+        state: r.state,
+        syncState: r.syncState,
+      })
     }
     return facts.instances
       .filter((i) => i.pod !== facts.currentPrimary)
@@ -456,7 +462,7 @@ export function ClusterActionDialog({
                       <span className="font-mono">{s.pod}</span>
                       <span className="text-xs text-theme-text-tertiary">
                         {s.ineligible ??
-                          [s.state, s.syncState, s.replayLagSeconds !== undefined ? `replay lag ${cnpgFormatLag(s.replayLagSeconds)}` : runtime.isLoading ? 'lag loading…' : 'lag unknown']
+                          [s.state, s.syncState, ...(s.replayLagSeconds !== undefined || s.replayBacklogBytes !== undefined ? switchoverCandidateFacts(s) : [runtime.isLoading ? 'lag loading…' : 'lag unknown'])]
                             .filter(Boolean)
                             .join(' · ')}
                       </span>

@@ -404,7 +404,9 @@ function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap
   const source = `Primary’s pg_stat_replication against spec.instances ${desired}`
   const lag = live.maxReplayLagSeconds
   const tone = cnpgReplicationTone(live.streaming, expected, lag)
-  const lagText = lag !== undefined && cnpgLagTone(lag) !== 'healthy' ? ` · replay ${cnpgFormatLag(lag)} behind` : ''
+  // pg_stat_replication's replay_lag is the recent replay delay, not WAL still
+  // to replay; it can stay high after a standby caught up, so it is not "behind".
+  const lagText = lag !== undefined && cnpgLagTone(lag) !== 'healthy' ? ` · replay delay ${cnpgFormatLag(lag)}` : ''
   if (live.streaming < expected) {
     return { ...base, tone, text: `${live.streaming} of ${expected} expected standbys streaming${lagText}`, source }
   }

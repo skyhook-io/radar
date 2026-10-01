@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { backupNameFor, cnpgDestroyBlocker, pickDefaultStandby, switchoverLagNote } from './actionModel'
+import { backupNameFor, cnpgDestroyBlocker, pickDefaultStandby, switchoverCandidateFacts, switchoverLagNote } from './actionModel'
 
 describe('CNPG action model', () => {
   it('names backups like kubectl-cnpg, in UTC', () => {
@@ -32,10 +32,12 @@ describe('cnpgDestroyBlocker', () => {
 })
 
 describe('switchoverLagNote', () => {
-  it('notes a lagging candidate in seconds or minutes, and nothing for a caught-up one', () => {
-    expect(switchoverLagNote({ pod: 'pg-2', replayLagSeconds: 247.5 })).toBe('pg-2 is 4 min behind; the switchover may take longer while it catches up.')
-    expect(switchoverLagNote({ pod: 'pg-2', replayLagSeconds: 12 })).toBe('pg-2 is 12 s behind; the switchover may take longer while it catches up.')
-    expect(switchoverLagNote({ pod: 'pg-2', replayLagSeconds: 0.4 })).toBeUndefined()
+  it('warns from the WAL still to replay, never from replay delay alone', () => {
+    expect(switchoverLagNote({ pod: 'pg-2', replayBacklogBytes: 16 * 1024 * 1024 })).toBe('pg-2 has 16 MiB of WAL still to replay; the switchover may take longer while it catches up.')
+    expect(switchoverLagNote({ pod: 'pg-2', replayBacklogBytes: 0 })).toBeUndefined()
     expect(switchoverLagNote({ pod: 'pg-2' })).toBeUndefined()
+  })
+  it('lists the backlog before the replay delay on the candidate line', () => {
+    expect(switchoverCandidateFacts({ replayBacklogBytes: 0, replayLagSeconds: 12 })).toEqual(['backlog 0 B', 'replay delay 12 s'])
   })
 })
