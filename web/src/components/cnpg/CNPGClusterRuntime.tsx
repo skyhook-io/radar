@@ -443,7 +443,16 @@ const AGE_FAMILIES: { family: string; what: string }[] = [
 function DatabaseHealth({ m }: { m: CNPGRuntimeInstance['metrics'] }) {
   const rows = cnpgDatabaseHealthRows(m)
   const absent = AGE_FAMILIES.filter((f) => m.missing?.includes(f.family))
-  const cell = (v: number | undefined, fmt: (v: number) => ReactNode) => (v === undefined ? <span className="text-theme-text-tertiary">—</span> : fmt(v))
+  const cell = (v: number | undefined, fmt: (v: number) => ReactNode, database?: string) =>
+    v !== undefined ? (
+      fmt(v)
+    ) : database === 'template0' ? (
+      <Tooltip content="template0 doesn't accept connections; PostgreSQL keeps no statistics for it">
+        <span className="text-theme-text-tertiary">—</span>
+      </Tooltip>
+    ) : (
+      <span className="text-theme-text-tertiary">—</span>
+    )
   const age = (v: number) => (
     <Tooltip content={`${v.toLocaleString()} of ~2 billion before wraparound`}>
       <span className={v > 1_000_000_000 ? toneTextClass('degraded') : undefined}>{cnpgIdAge(v)}</span>
@@ -469,12 +478,12 @@ function DatabaseHealth({ m }: { m: CNPGRuntimeInstance['metrics'] }) {
               <tr key={r.database}>
                 <td className="py-1.5 pr-3 font-mono text-xs">{r.database}</td>
                 <td className="pr-3 text-right font-mono text-xs">
-                  {cell(r.rollbackRatio, (v) => <span className={v > 0.1 ? toneTextClass('degraded') : undefined}>{(v * 100).toFixed(1)} %</span>)}
+                  {cell(r.rollbackRatio, (v) => <span className={v > 0.1 ? toneTextClass('degraded') : undefined}>{(v * 100).toFixed(1)} %</span>, r.database)}
                 </td>
-                <td className="pr-3 text-right font-mono text-xs">{cell(r.tempFiles, (v) => v.toLocaleString())}</td>
-                <td className="pr-3 text-right font-mono text-xs">{cell(r.tempBytes, formatBytes)}</td>
-                <td className="pr-3 text-right font-mono text-xs">{cell(r.xidAge, age)}</td>
-                <td className="text-right font-mono text-xs">{cell(r.mxidAge, age)}</td>
+                <td className="pr-3 text-right font-mono text-xs">{cell(r.tempFiles, (v) => v.toLocaleString(), r.database)}</td>
+                <td className="pr-3 text-right font-mono text-xs">{cell(r.tempBytes, formatBytes, r.database)}</td>
+                <td className="pr-3 text-right font-mono text-xs">{cell(r.xidAge, age, r.database)}</td>
+                <td className="text-right font-mono text-xs">{cell(r.mxidAge, age, r.database)}</td>
               </tr>
             ))}
           </tbody>
