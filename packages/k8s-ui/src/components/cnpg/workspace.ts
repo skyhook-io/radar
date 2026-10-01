@@ -1191,12 +1191,14 @@ function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading
   if (src.source !== 'prometheus' || lag?.state !== 'ok' || floor === undefined || floor < CNPG_SUSTAINED_LAG_WARNING_SECONDS) return undefined
   const window = lag.sustainedWindow ? formatWindowWords(lag.sustainedWindow) : 'several minutes'
   const pod = lag.sustainedPod ?? 'A standby'
+  // The query proves every recorded sample was at least the floor and that
+  // the series existed at the window's start, not that samples were continuous.
   return {
     id: `lag:${row.key}`,
     severity: floor >= CNPG_SUSTAINED_LAG_CRITICAL_SECONDS ? 'critical' : 'warning',
     category: 'availability',
-    title: `${pod} has been at least ${formatLagFloor(floor)} behind for ${window}`,
-    detail: `The lowest replay lag Prometheus recorded for this standby in the last ${window}; it was reporting for the whole window, and missed scrapes are not filled in. A failover to it would start that far behind the primary.`,
+    title: `${pod} ≥ ${formatLagFloor(floor)} behind in every sample for ${formatWindowShort(lag.sustainedWindow)}`,
+    detail: `Lowest replay lag in the samples Prometheus recorded over the last ${window}. Gaps between samples aren't covered. A failover to it would start at least that far behind.`,
     subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
     source: 'measurement',
     measuredBy: 'Prometheus',
@@ -1207,6 +1209,14 @@ function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading
 // A lag floor in words: whole seconds below 100, minutes above.
 function formatLagFloor(s: number): string {
   return s < 100 ? `${Math.floor(s)} s` : `${Math.floor(s / 60)} min`
+}
+
+// "10m0s" as "10 min"; "1h0m0s" as "1 h", for a title that must stay short.
+function formatWindowShort(d: string | undefined): string {
+  const m = d ? /^(?:(\d+)h)?(?:(\d+)m)?(?:0s)?$/.exec(d) : null
+  if (!m) return d ?? 'minutes'
+  const minutes = Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0)
+  return minutes >= 60 && minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`
 }
 
 // "10m0s" as "10 minutes"; "1h0m0s" as "1 hour".

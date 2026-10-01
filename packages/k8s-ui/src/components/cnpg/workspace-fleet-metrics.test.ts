@@ -103,10 +103,11 @@ describe('sustained replication lag', () => {
     const ha = row(f, 'ha')
     expect(ha.attention).toBe(true)
     expect(ha.problems[0]).toMatchObject({ severity: 'warning', category: 'availability', source: 'measurement' })
-    expect(ha.problems[0].title).toBe('ha-2 has been at least 40 s behind for 10 minutes')
+    expect(ha.problems[0].title).toBe('ha-2 ≥ 40 s behind in every sample for 10 min')
     expect(ha.problems[0]).toMatchObject({ measuredBy: 'Prometheus' })
     expect(ha.problems[0].detail).not.toMatch(/cnpg_/)
-    expect(ha.problems[0].detail).toContain('missed scrapes are not filled in')
+    expect(ha.problems[0].detail).toContain("Gaps between samples aren't covered")
+    expect(ha.problems[0].detail).not.toContain('whole window')
     expect(row(f, 'dark').attention).toBe(false)
     expect(f.attentionCount).toBe(1)
   })
@@ -120,7 +121,7 @@ describe('sustained replication lag', () => {
       ],
       src,
     )
-    expect(row(f, 'ha').problems[0]).toMatchObject({ severity: 'critical', title: 'ha-2 has been at least 6 min behind for 10 minutes' })
+    expect(row(f, 'ha').problems[0]).toMatchObject({ severity: 'critical', title: 'ha-2 ≥ 6 min behind in every sample for 10 min' })
     expect(row(f, 'dark').problems).toHaveLength(0)
   })
 })
