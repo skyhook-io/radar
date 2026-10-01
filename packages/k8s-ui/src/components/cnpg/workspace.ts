@@ -141,6 +141,8 @@ export interface CNPGProblem {
   measuredBy?: string
   /** How it was measured (queries, metric names), shown on hover over the source. */
   sourceDetail?: string
+  /** Other objects the same problem is about, e.g. earlier Backups that failed the same way. */
+  alsoAbout?: { kind: string; name: string }[]
 }
 
 export interface CNPGInstance {
@@ -256,13 +258,55 @@ export function cnpgIssueText(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'name' | 
   const message = issue.message?.trim() ?? ''
   const cause = issue.cause?.trim() || undefined
   const known = CNPG_REASON_TITLES[issue.reason]
-  if (known) return { title: known, detail: [message, cause].filter(Boolean).join(' ') || undefined }
+  if (known) return { title: known, detail: [stripTitlePrefix(message, known), cause].filter(Boolean).join(' ') || undefined }
   if (message && message !== issue.reason && /\s/.test(message)) return { title: message, detail: cause }
   const token = message || issue.reason
   const sentence = CNPG_POD_REASON_SENTENCES[token]
   if (sentence) return { title: `${issue.name} ${sentence}`, detail: cause }
   const words = token.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()
   return { title: `${issue.kind} ${issue.name}: ${words}`, detail: cause }
+}
+
+// "Backup failed: cannot proceed…" under the title "Backup failed" repeats it.
+function stripTitlePrefix(message: string, title: string): string {
+  if (!message.toLowerCase().startsWith(title.toLowerCase())) return message
+  const rest = message.slice(title.length).replace(/^[\s:;,.\-–—]+/, '')
+  return rest ? rest[0].toUpperCase() + rest.slice(1) : ''
+}
+
+/**
+ * Failed Backups of one cluster that failed for the same reason become one
+ * problem: "3 backups failed: <reason>", about the latest of them, the others
+ * named in alsoAbout. Each Backup is otherwise its own issue, and a schedule
+ * failing every night would list the same sentence over and over.
+ */
+export function cnpgCollapseBackupFailures(problems: (CNPGProblem & { reason?: string; firstSeen?: string })[]): CNPGProblem[] {
+  const groups = new Map<string, (CNPGProblem & { reason?: string; firstSeen?: string })[]>()
+  const out: CNPGProblem[] = []
+  for (const p of problems) {
+    if (p.reason !== 'CNPGBackupFailed' || p.subject.kind !== 'Backup') {
+      out.push(p)
+      continue
+    }
+    const key = `${p.severity}\x00${p.detail ?? ''}`
+    groups.set(key, [...(groups.get(key) ?? []), p])
+  }
+  for (const list of groups.values()) {
+    if (list.length === 1) {
+      out.push(list[0])
+      continue
+    }
+    const sorted = [...list].sort((a, b) => (b.firstSeen ?? '').localeCompare(a.firstSeen ?? '') || b.subject.name.localeCompare(a.subject.name))
+    const latest = sorted[0]
+    out.push({
+      ...latest,
+      id: `backups-failed:${latest.subject.namespace}:${latest.detail ?? ''}`,
+      title: latest.detail ? `${list.length} backups failed: ${latest.detail[0].toLowerCase()}${latest.detail.slice(1)}` : `${list.length} backups failed`,
+      detail: undefined,
+      alsoAbout: sorted.slice(1).map((p) => ({ kind: p.subject.kind, name: p.subject.name })),
+    })
+  }
+  return out.map(({ reason: _r, firstSeen: _f, ...p }: CNPGProblem & { reason?: string; firstSeen?: string }) => p)
 }
 
 /** The headline alone; see cnpgIssueText. */
@@ -638,20 +682,24 @@ function problemsFor(
   const ns = cluster.metadata?.namespace
   const name = cluster.metadata?.name
   const out: CNPGProblem[] = []
+  const fromIssues: (CNPGProblem & { reason?: string; firstSeen?: string })[] = []
   for (const issue of issues) {
     if ((issue.namespace ?? '') !== ns) continue
     const isSelf = issue.kind === 'Cluster' && issue.name === name
     const owner = children.get(`${issue.kind}/${ns}/${issue.name}`)
     if (!isSelf && owner !== name) continue
-    out.push({
+    fromIssues.push({
       id: `${issue.id}:${issue.kind}/${issue.name}`,
       severity: issue.severity,
       category: cnpgIssueCategory(issue),
       ...cnpgIssueText(issue),
       subject: { kind: issue.kind, group: issue.group ?? '', namespace: ns, name: issue.name },
       source: 'issue',
+      reason: issue.reason,
+      firstSeen: issue.first_seen,
     })
   }
+  out.push(...cnpgCollapseBackupFailures(fromIssues))
   for (const f of audit) {
     if (f.kind !== 'Cluster' || f.name !== name || (f.namespace ?? '') !== ns) continue
     out.push({

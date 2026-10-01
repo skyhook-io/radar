@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgCompareProblems, cnpgIssueText, cnpgIssueTitle, type CNPGProblem } from './workspace'
+import { cnpgCollapseBackupFailures, cnpgCompareProblems, cnpgIssueText, cnpgIssueTitle, type CNPGProblem } from './workspace'
 
 const problem = (title: string, severity: CNPGProblem['severity'], kind: string, group = ''): CNPGProblem => ({
   id: title,
@@ -59,5 +59,35 @@ describe('cnpgIssueText for certificates and schedules', () => {
       'A certificate expires soon',
     )
     expect(cnpgIssueText({ kind: 'ScheduledBackup', name: 's', reason: 'CNPGScheduledRunNoBackup', message: 'x y' }).title).toBe('No successful backup since a scheduled run')
+  })
+})
+
+describe('backup failures', () => {
+  const issue = (name: string, message: string, first_seen: string) => ({ kind: 'Backup', name, reason: 'CNPGBackupFailed', message, first_seen })
+  it('does not repeat the title at the start of the detail', () => {
+    expect(cnpgIssueText({ kind: 'Backup', name: 'b', reason: 'CNPGBackupFailed', message: 'Backup failed: cannot proceed with the backup' })).toEqual({
+      title: 'Backup failed',
+      detail: 'Cannot proceed with the backup',
+    })
+  })
+  it('collapses Backups that failed the same way into one problem about the latest', () => {
+    const problems = ['b-1', 'b-3', 'b-2'].map((n, i) => {
+      const t = cnpgIssueText(issue(n, 'Backup failed: cannot proceed as the cluster has no plugin configured', `2026-09-2${i}T00:00:00Z`))
+      return {
+        id: n,
+        severity: 'warning' as const,
+        category: 'protection' as const,
+        ...t,
+        subject: { kind: 'Backup', group: 'postgresql.cnpg.io', namespace: 'pg', name: n },
+        source: 'issue' as const,
+        reason: 'CNPGBackupFailed',
+        firstSeen: `2026-09-2${i}T00:00:00Z`,
+      }
+    })
+    const out = cnpgCollapseBackupFailures(problems)
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ title: '3 backups failed: cannot proceed as the cluster has no plugin configured', subject: { name: 'b-2' } })
+    expect(out[0].alsoAbout?.map((o) => o.name)).toEqual(['b-3', 'b-1'])
+    expect('reason' in out[0]).toBe(false)
   })
 })
