@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import {
   CNPG_BARMAN_OBJECTSTORE_GROUP,
   CNPG_CONNECT_SELECTOR,
+  CNPGOpenIssueContext,
   CNPG_GROUP,
   CNPGBackupSummary,
   CNPGClusterSummary,
@@ -42,7 +43,7 @@ import { CNPGMaintenanceBanner } from './actions/CNPGMaintenanceBanner'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 import { CNPGRefreshFailedNotice } from './shared'
 
-import { cnpgClusterFullPath, cnpgDimensionPath, cnpgWithinDetail, currentPageLabel } from './paths'
+import { cnpgClusterFullPath, cnpgDimensionPath, cnpgIssuesPath, cnpgWithinDetail, currentPageLabel } from './paths'
 import { CNPGRestoreProgress } from './recovery/CNPGRestoreProgress'
 import { restoreBackupDeclared } from './recovery/restoreModel'
 import { useConnection } from '../../context/ConnectionContext'
@@ -298,5 +299,20 @@ function renderSummaryFor(ctx: SummaryContext): ReactNode {
  * without one, which keeps the default Overview.
  */
 export function renderCNPGSummary(ctx: SummaryContext): ReactNode {
-  return renderSummaryFor(ctx)
+  return <IssueLinks>{renderSummaryFor(ctx)}</IssueLinks>
+}
+
+// "See in Issues →" on every CNPG problem: the Issues page narrowed to the
+// problem's subject (it has no link to a single issue).
+function IssueLinks({ children }: { children: ReactNode }) {
+  const navigate = useNavigate()
+  return (
+    <CNPGOpenIssueContext.Provider
+      value={(p) =>
+        navigate(cnpgIssuesPath(p.subject))
+      }
+    >
+      {children}
+    </CNPGOpenIssueContext.Provider>
+  )
 }

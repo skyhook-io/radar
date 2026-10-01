@@ -53,3 +53,10 @@ export function cnpgWithinDetail(currentPathname: string, currentSearch: string,
   const qs = params.toString()
   return qs ? `${path}?${qs}` : path
 }
+
+/** Radar's Issues page narrowed to one subject (it has no link to a single issue). */
+export function cnpgIssuesPath(subject: { kind: string; namespace: string; name: string }): string {
+  const params = new URLSearchParams({ kind: subject.kind, name: subject.name })
+  if (subject.namespace) params.set('namespace', subject.namespace)
+  return `/issues?${params}`
+}

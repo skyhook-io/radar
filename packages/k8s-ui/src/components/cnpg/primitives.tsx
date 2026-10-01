@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { createContext, useContext, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import type { HealthLevel } from '../resources/resource-utils'
 import { formatAge } from '../resources/resource-utils'
@@ -99,7 +99,26 @@ const PROBLEM_VARIANT: Record<CNPGProblem['severity'], 'error' | 'warning' | 'in
 }
 
 /** Where a problem's evidence is and what produced it, shared by the callout and the full list. */
+/** A problem's provenance label: where its evidence comes from, never a generic "Radar issue". */
+export function cnpgProblemOriginLabel(problem: CNPGProblem): { label: string; detail?: string } {
+  switch (problem.source) {
+    case 'audit':
+      return { label: 'Best-practice check', detail: problem.sourceDetail }
+    case 'measurement':
+      return { label: problem.measuredBy ? `Measured by ${problem.measuredBy}` : 'Measured', detail: problem.sourceDetail }
+  }
+  return problem.origin ?? { label: 'Detected by Radar' }
+}
+
+/**
+ * How a host opens a problem on its Issues page. Supplied by context so every
+ * CNPG summary and drawer gets the link without threading a prop through each.
+ */
+export const CNPGOpenIssueContext = createContext<((problem: CNPGProblem) => void) | undefined>(undefined)
+
 export function ProblemMeta({ problem, onNavigate, subjectIsSelf, children }: { problem: CNPGProblem; onNavigate?: CNPGNavigate; subjectIsSelf?: boolean; children?: ReactNode }) {
+  const openIssue = useContext(CNPGOpenIssueContext)
+  const origin = cnpgProblemOriginLabel(problem)
   const aboutChild = !subjectIsSelf && problem.subject.kind !== 'Cluster'
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-tertiary">
@@ -125,11 +144,14 @@ export function ProblemMeta({ problem, onNavigate, subjectIsSelf, children }: { 
           )}
         </span>
       )}
-      <Tooltip content={problem.sourceDetail} disabled={!problem.sourceDetail}>
-        <span>
-          {problem.source === 'audit' ? 'Radar check' : problem.source === 'measurement' ? (problem.measuredBy ? `Measured by ${problem.measuredBy}` : 'Measured') : 'Radar issue'}
-        </span>
+      <Tooltip content={origin.detail} disabled={!origin.detail}>
+        <span>{origin.label}</span>
       </Tooltip>
+      {openIssue && problem.source === 'issue' && (
+        <button type="button" onClick={() => openIssue(problem)} className="whitespace-nowrap text-accent-text hover:underline">
+          See in Issues →
+        </button>
+      )}
       {children}
     </div>
   )

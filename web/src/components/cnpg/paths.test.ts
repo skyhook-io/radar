@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgClusterProblemsPath, cnpgDimensionPath, cnpgWithinDetail } from './paths'
+import { cnpgClusterProblemsPath, cnpgDimensionPath, cnpgIssuesPath, cnpgWithinDetail } from './paths'
 
 describe('cnpgDimensionPath', () => {
   it('opens each health dimension where it is explained', () => {
@@ -29,5 +29,11 @@ describe('cnpgClusterProblemsPath', () => {
   it('opens the Cluster with its problems listed', () => {
     expect(cnpgClusterProblemsPath('db', 'pg', 'kind')).toBe('/cnpg/clusters/db/pg?ctx=kind&problems=all')
     expect(cnpgClusterProblemsPath('db', 'pg')).toBe('/cnpg/clusters/db/pg?problems=all')
+  })
+})
+
+describe('cnpgIssuesPath', () => {
+  it('links to the Issues page narrowed to the subject', () => {
+    expect(cnpgIssuesPath({ kind: 'Backup', namespace: 'pg', name: 'b-1' })).toBe('/issues?kind=Backup&name=b-1&namespace=pg')
   })
 })

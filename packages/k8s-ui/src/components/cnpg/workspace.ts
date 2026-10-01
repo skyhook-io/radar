@@ -143,6 +143,8 @@ export interface CNPGProblem {
   sourceDetail?: string
   /** A shorter headline for tight places (the fleet cell); `title` stays the precise one. */
   shortTitle?: string
+  /** Where an issue's evidence comes from, in user terms (see cnpgIssueOrigin). */
+  origin?: CNPGProblemOrigin
   /** Other objects the same problem is about, e.g. earlier Backups that failed the same way. */
   alsoAbout?: { kind: string; name: string }[]
 }
@@ -346,6 +348,50 @@ function backupTimesOf(cluster: any, backups: any[]): Map<string, number> {
     out.set(b.metadata.name, Date.parse(b?.status?.startedAt ?? b?.metadata?.creationTimestamp ?? '') || 0)
   }
   return out
+}
+
+export interface CNPGProblemOrigin {
+  label: string
+  /** The exact field or condition, shown on hover. */
+  detail?: string
+}
+
+const CNPG_CONDITION_ORIGINS: Record<string, string> = {
+  CNPGWALArchivingFailing: 'ContinuousArchiving condition',
+  CNPGLastBackupFailed: 'LastBackupSucceeded condition',
+  CNPGClusterTerminal: 'Cluster status.phase',
+  CNPGClusterUnrecoverable: 'Cluster status.phase',
+  CNPGClusterPluginFailure: 'Cluster status.phase',
+  CNPGClusterFailingOver: 'Cluster status.phase',
+  CNPGClusterWaitingForUser: 'Cluster status.phase',
+  CNPGClusterDegraded: 'Cluster status: ready instances',
+  CNPGDeclarativeNotApplied: 'status.applied',
+}
+
+/**
+ * Where an issue's evidence comes from, in user terms: what CloudNativePG
+ * reported, a Backup's or Pod's own status, or Radar's own check of a
+ * schedule. A reason this does not know reads "Detected by Radar" rather than
+ * a guessed source.
+ */
+export function cnpgIssueOrigin(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'reason'>): CNPGProblemOrigin {
+  const condition = CNPG_CONDITION_ORIGINS[issue.reason]
+  if (condition) return { label: 'Reported by CNPG', detail: condition }
+  switch (issue.reason) {
+    case 'CNPGBackupFailed':
+      return { label: 'Backup status', detail: 'Backup status.phase and status.error' }
+    case 'CNPGScheduledRunNoBackup':
+    case 'CNPGScheduledBackupMissed':
+      return { label: 'Radar check of the backup schedule', detail: 'The schedule, read as the operator does, against the cluster\'s newest successful backup' }
+    case 'CNPGCertificateExpiring':
+    case 'CNPGCertificateExpired':
+      return { label: 'Certificate expiry (from Cluster status)', detail: 'Cluster status.certificates.expirations' }
+  }
+  if (issue.kind === 'Pod') {
+    if (/ReadinessProbe/.test(issue.reason)) return { label: 'Pod readiness probe' }
+    return { label: 'Pod status' }
+  }
+  return { label: 'Detected by Radar' }
 }
 
 /** The headline alone; see cnpgIssueText. */
@@ -735,6 +781,7 @@ function problemsFor(
       ...cnpgIssueText(issue),
       subject: { kind: issue.kind, group: issue.group ?? '', namespace: ns, name: issue.name },
       source: 'issue',
+      origin: cnpgIssueOrigin(issue),
       reason: issue.reason,
     })
   }

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useIssues } from "../../api/client";
 import {
   useAPIResources,
@@ -37,6 +37,24 @@ import { IssueDiagnoseButton } from "../diagnose/LocalDiagnoseAction";
 // cpu, node-pinned, zonal PVC, a non-Karpenter managed node group) is NOT
 // Karpenter's to solve and gets no link, even in a Karpenter cluster. Clusters
 // without Karpenter never reach the signal checks (hasKarpenter is false).
+/** The subject a link into Issues narrows to (?kind=&namespace=&name=), or null. */
+export function issueSubjectFromParams(params: URLSearchParams): { kind: string; namespace: string; name: string } | null {
+  const kind = params.get("kind");
+  const name = params.get("name");
+  if (!kind || !name) return null;
+  return { kind, namespace: params.get("namespace") ?? "", name };
+}
+
+/** Whether an issue is about the subject: its own subject, or one of the resources grouped under it. */
+export function issueMatchesSubject(
+  issue: Issue,
+  subject: { kind: string; namespace: string; name: string },
+): boolean {
+  const same = (r: { kind?: string; namespace?: string; name?: string }) =>
+    r.kind === subject.kind && (r.namespace ?? "") === subject.namespace && r.name === subject.name;
+  return same(issue) || (issue.members ?? []).some(same);
+}
+
 export function capacityHrefForIssue(
   issue: Issue,
   hasKarpenter: boolean,
@@ -116,9 +134,25 @@ export function IssuesPane({
     for (const i of allIssues) t[i.severity] = (t[i.severity] ?? 0) + 1;
     return t;
   }, [allIssues]);
-  const shown = severityFilter.size
-    ? allIssues.filter((i) => severityFilter.has(i.severity))
+  const [searchParams, setSearchParams] = useSearchParams();
+  const subject = issueSubjectFromParams(searchParams);
+  const subjectIssues = subject
+    ? allIssues.filter((i) => issueMatchesSubject(i, subject))
     : allIssues;
+  const shown = severityFilter.size
+    ? subjectIssues.filter((i) => severityFilter.has(i.severity))
+    : subjectIssues;
+  const clearSubject = () =>
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("kind");
+        next.delete("namespace");
+        next.delete("name");
+        return next;
+      },
+      { replace: true },
+    );
 
   const toggleSeverity = (s: IssueSeverity) =>
     setSeverityFilter((prev) => {
@@ -208,6 +242,22 @@ export function IssuesPane({
             (capped) — narrow by namespace to see the rest.
           </p>
         )}
+
+      {subject && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-theme-text-secondary">
+          <span>
+            Showing issues about {subject.kind}{" "}
+            <span className="font-mono">
+              {subject.namespace ? `${subject.namespace}/` : ""}
+              {subject.name}
+            </span>
+            {subjectIssues.length === 0 ? " — none now" : ""}
+          </span>
+          <button type="button" onClick={clearSubject} className="text-accent-text hover:underline">
+            Show all issues
+          </button>
+        </div>
+      )}
 
       {/* Filtered-empty is NOT the healthy empty state: when a severity filter
           hides every row but issues still exist, say "no matches" rather than

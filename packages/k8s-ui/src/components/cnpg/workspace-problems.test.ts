@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgCollapseBackupFailures, cnpgCompareProblems, cnpgFoldLastBackupFailed, cnpgFormatLag, cnpgIssueText, cnpgIssueTitle, type CNPGProblem } from './workspace'
+import { cnpgCollapseBackupFailures, cnpgCompareProblems, cnpgFoldLastBackupFailed, cnpgFormatLag, cnpgIssueOrigin, cnpgIssueText, cnpgIssueTitle, type CNPGProblem } from './workspace'
 
 const problem = (title: string, severity: CNPGProblem['severity'], kind: string, group = ''): CNPGProblem => ({
   id: title,
@@ -150,5 +150,20 @@ describe('cnpgFoldLastBackupFailed', () => {
     const old = p('old failure', 'Backup', 'b-1', 'CNPGBackupFailed')
     expect(cnpgFoldLastBackupFailed([old, last], 'b-9')).toHaveLength(2)
     expect(cnpgFoldLastBackupFailed([old, last], undefined)).toHaveLength(2)
+  })
+})
+
+describe('cnpgIssueOrigin', () => {
+  it('names where the evidence comes from', () => {
+    expect(cnpgIssueOrigin({ kind: 'Cluster', reason: 'CNPGWALArchivingFailing' })).toEqual({ label: 'Reported by CNPG', detail: 'ContinuousArchiving condition' })
+    expect(cnpgIssueOrigin({ kind: 'Cluster', reason: 'CNPGClusterFailingOver' }).label).toBe('Reported by CNPG')
+    expect(cnpgIssueOrigin({ kind: 'Backup', reason: 'CNPGBackupFailed' }).label).toBe('Backup status')
+    expect(cnpgIssueOrigin({ kind: 'Cluster', reason: 'CNPGScheduledRunNoBackup' }).label).toBe('Radar check of the backup schedule')
+    expect(cnpgIssueOrigin({ kind: 'Cluster', reason: 'CNPGCertificateExpired' }).label).toBe('Certificate expiry (from Cluster status)')
+    expect(cnpgIssueOrigin({ kind: 'Pod', reason: 'ReadinessProbeFailed' }).label).toBe('Pod readiness probe')
+    expect(cnpgIssueOrigin({ kind: 'Pod', reason: 'CrashLoopBackOff' }).label).toBe('Pod status')
+  })
+  it('falls back to "Detected by Radar" without inventing a source', () => {
+    expect(cnpgIssueOrigin({ kind: 'Pooler', reason: 'SomethingNew' })).toEqual({ label: 'Detected by Radar' })
   })
 })

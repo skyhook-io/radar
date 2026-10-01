@@ -13,7 +13,7 @@ import {
   type CNPGObjectStoreRecoveryWindow,
 } from '../resources/resource-utils-cnpg'
 import {
-  cnpgIssueCategory,
+  cnpgIssueCategory, cnpgIssueOrigin, cnpgIssueText,
   coverageReadable,
   type CNPGFact,
   type CNPGProblem,
@@ -140,10 +140,10 @@ export function problemsForObject(issues: CNPGWorkspaceIssue[] | undefined, ref:
     id: `${issue.id}:${issue.kind}/${issue.name}`,
     severity: issue.severity,
     category: cnpgIssueCategory(issue),
-    title: issue.message || issue.reason,
-    detail: issue.cause || undefined,
+    ...cnpgIssueText(issue),
     subject: { kind: issue.kind, group: issue.group ?? '', namespace: issue.namespace ?? '', name: issue.name },
     source: 'issue',
+    origin: cnpgIssueOrigin(issue),
   }))
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Issue } from "@skyhook-io/k8s-ui";
-import { capacityHrefForIssue } from "./IssuesPane";
+import { capacityHrefForIssue, issueMatchesSubject, issueSubjectFromParams } from "./IssuesPane";
 
 function issue(partial: Partial<Issue>): Issue {
   return {
@@ -140,3 +140,16 @@ describe("capacityHrefForIssue subject carry", () => {
     ).toBe("/capacity/demand");
   });
 });
+
+describe('issue subject links', () => {
+  it('reads the subject a link narrows to', () => {
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster&namespace=pg&name=pg-main'))).toEqual({ kind: 'Cluster', namespace: 'pg', name: 'pg-main' })
+    expect(issueSubjectFromParams(new URLSearchParams('kind=Cluster'))).toBeNull()
+  })
+  it('matches an issue by its own subject or a grouped member', () => {
+    const subject = { kind: 'Pod', namespace: 'pg', name: 'pg-main-1' }
+    expect(issueMatchesSubject({ kind: 'Pod', namespace: 'pg', name: 'pg-main-1' } as never, subject)).toBe(true)
+    expect(issueMatchesSubject({ kind: 'Cluster', namespace: 'pg', name: 'pg-main', members: [{ kind: 'Pod', namespace: 'pg', name: 'pg-main-1' }] } as never, subject)).toBe(true)
+    expect(issueMatchesSubject({ kind: 'Pod', namespace: 'other', name: 'pg-main-1' } as never, subject)).toBe(false)
+  })
+})

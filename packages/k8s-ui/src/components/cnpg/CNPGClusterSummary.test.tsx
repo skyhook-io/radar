@@ -3,6 +3,7 @@ import { act, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CNPGClusterSummary } from './CNPGClusterSummary'
+import { CNPGOpenIssueContext } from './primitives'
 import type { CNPGFleetRow, CNPGProblem } from './workspace'
 import type { CNPGDimension } from './ha'
 
@@ -117,6 +118,33 @@ describe('problem meta', () => {
     })
     const root = render(<CNPGClusterSummary row={r} onNavigate={() => {}} />)
     expect(document.body.textContent).toContain('b-a and 2 more')
+    act(() => root.unmount())
+  })
+})
+
+describe('problem provenance', () => {
+  it('names the origin instead of "Radar issue" and links to Issues when the host can', () => {
+    const open = vi.fn()
+    const r = row({
+      problems: [{ ...problem('a', 'critical', 'WAL archiving is failing'), subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name: 'pg' }, origin: { label: 'Reported by CNPG', detail: 'ContinuousArchiving condition' } }],
+      attention: true,
+    })
+    const root = render(
+      <CNPGOpenIssueContext.Provider value={open}>
+        <CNPGClusterSummary row={r} />
+      </CNPGOpenIssueContext.Provider>,
+    )
+    expect(document.body.textContent).toContain('Reported by CNPG')
+    expect(document.body.textContent).not.toContain('Radar issue')
+    act(() => [...document.querySelectorAll('button')].find((b) => b.textContent === 'See in Issues →')!.click())
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ id: 'a' }))
+    act(() => root.unmount())
+  })
+  it('offers no Issues link without a host handler', () => {
+    const r = row({ problems: [problem('a', 'warning', 'Backup failed')], attention: true })
+    const root = render(<CNPGClusterSummary row={r} />)
+    expect(document.body.textContent).toContain('Detected by Radar')
+    expect(document.body.textContent).not.toContain('See in Issues')
     act(() => root.unmount())
   })
 })
