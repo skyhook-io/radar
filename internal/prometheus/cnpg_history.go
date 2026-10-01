@@ -193,9 +193,9 @@ func resolveScope(ctx context.Context, namespace string, probe scopeProbe, ancho
 		if err != nil {
 			return "", CNPGIsolation{}, err
 		}
-		iso := CNPGIsolation{Mode: CNPGIsolationConfigured, Labels: config.ClusterLabels, Note: "cluster identity configured by the operator"}
+		iso := CNPGIsolation{Mode: CNPGIsolationConfigured, Labels: config.ClusterLabels, Note: "Matched by the cluster labels an operator configured"}
 		if config.SingleCluster {
-			iso.Note = "the operator declared this Prometheus single-cluster"
+			iso.Note = "An operator declared this Prometheus single-cluster"
 		}
 		return m, iso, nil
 	}
@@ -246,11 +246,11 @@ func decideScope(ctx context.Context, q cnpgQuerier, probe scopeProbe, verified 
 			return "", CNPGIsolation{}, ErrCNPGScopeAmbiguous
 		}
 	}
-	return "", CNPGIsolation{Mode: CNPGIsolationUnverified, Note: "selected by namespace and names; this Prometheus shows one identity for each of them over the range, but Radar could not prove it is this cluster's"}, nil
+	return "", CNPGIsolation{Mode: CNPGIsolationUnverified, Note: "Matched by namespace and Pod names. Radar couldn't confirm these series belong to this exact cluster (no cluster label it could check)"}, nil
 }
 
 func cnpgVerifiedIsolation(labels map[string]string) CNPGIsolation {
-	return CNPGIsolation{Mode: CNPGIsolationVerified, Labels: labels, Note: "cluster identity labels matched to this cluster's Pod UIDs"}
+	return CNPGIsolation{Mode: CNPGIsolationVerified, Labels: labels, Note: "Matched by cluster labels confirmed against this cluster's Pods"}
 }
 
 // CNPGHistoryThreshold is a reference line on a chart.
