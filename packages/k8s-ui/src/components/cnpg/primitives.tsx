@@ -26,9 +26,9 @@ const TONE_TEXT: Record<HealthLevel, string> = {
   neutral: 'text-theme-text-secondary',
 }
 
-export const CNPG_PRIMARY_BUTTON = 'btn-brand inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium'
+export const CNPG_PRIMARY_BUTTON = 'btn-brand inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 text-sm font-medium'
 export const CNPG_SECONDARY_BUTTON =
-  'inline-flex items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-3 py-1.5 text-sm text-theme-text-primary transition-colors hover:bg-theme-hover'
+  'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-theme-border bg-theme-surface px-3 py-1.5 text-sm text-theme-text-primary transition-colors hover:bg-theme-hover'
 
 export function toneTextClass(tone: HealthLevel): string {
   return TONE_TEXT[tone]

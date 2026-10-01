@@ -7,7 +7,7 @@ import { useToast } from '../../ui/Toast'
 import { useCNPGWriteGuard } from './useCNPGWriteGuard'
 
 const BUTTON =
-  'inline-flex items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-2.5 py-1.5 text-xs font-medium text-theme-text-primary hover:bg-theme-hover disabled:cursor-not-allowed disabled:opacity-50'
+  'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-theme-border bg-theme-surface px-2.5 py-1.5 text-xs font-medium text-theme-text-primary hover:bg-theme-hover disabled:cursor-not-allowed disabled:opacity-50'
 
 /** Pause or resume a Pooler's PgBouncers (spec.pgbouncer.paused). */
 export function CNPGPoolerActions({ namespace, name }: { namespace: string; name: string }) {

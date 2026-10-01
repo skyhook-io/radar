@@ -873,7 +873,7 @@ export function WorkloadView({
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
               {resource && renderHeaderActions?.({ resource, context: 'drawer' })}
               {diagnoseAction}
               {onExpand && (
