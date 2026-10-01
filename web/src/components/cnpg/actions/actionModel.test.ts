@@ -41,3 +41,11 @@ describe('switchoverLagNote', () => {
     expect(switchoverCandidateFacts({ replayBacklogBytes: 0, replayLagSeconds: 12 })).toEqual(['backlog 0 B', 'replay delay 12 s'])
   })
 })
+
+describe('pickDefaultStandby by backlog', () => {
+  it('prefers the standby with less WAL to replay over a lower replay delay', () => {
+    const a = { pod: 'a', podUID: '1', replayBacklogBytes: 0, replayLagSeconds: 12 }
+    const b = { pod: 'b', podUID: '2', replayBacklogBytes: 4096, replayLagSeconds: 1 }
+    expect(pickDefaultStandby([b, a])?.pod).toBe('a')
+  })
+})

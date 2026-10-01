@@ -35,12 +35,16 @@ export function describeBackupMethod(m: CNPGBackupMethod): string {
   }
 }
 
-/** Synchronous standbys first, then the least replay lag; ineligible never. */
+/** Synchronous standbys first, then the least WAL still to replay, then the least replay delay; ineligible never. */
 export function pickDefaultStandby(standbys: StandbyChoice[]): StandbyChoice | undefined {
   const eligible = standbys.filter((s) => !s.ineligible)
   const rank = (s: StandbyChoice) => (s.syncState === 'sync' || s.syncState === 'quorum' ? 0 : 1)
+  const inf = Number.POSITIVE_INFINITY
   return [...eligible].sort(
-    (a, b) => rank(a) - rank(b) || (a.replayLagSeconds ?? Number.POSITIVE_INFINITY) - (b.replayLagSeconds ?? Number.POSITIVE_INFINITY),
+    (a, b) =>
+      rank(a) - rank(b) ||
+      (a.replayBacklogBytes ?? inf) - (b.replayBacklogBytes ?? inf) ||
+      (a.replayLagSeconds ?? inf) - (b.replayLagSeconds ?? inf),
   )[0]
 }
 
