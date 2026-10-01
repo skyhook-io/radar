@@ -5,6 +5,7 @@ import { AlertTriangle, Database, X } from 'lucide-react'
 import {
   CNPG_KIND_BY_KEY,
   PaneLoader,
+  Tooltip,
   formatUpdatedAgo,
   toneTextClass,
   type CNPGFleet,
@@ -273,6 +274,27 @@ export function coverageEmpty(cov: CNPGKindCoverage | undefined, noun: string): 
 export function worstCoverage(...covs: (CNPGKindCoverage | undefined)[]): CNPGKindCoverage | undefined {
   const rank: Record<string, number> = { error: 0, denied: 1, syncing: 2, partial: 3, full: 4, notInstalled: 5 }
   return covs.filter(Boolean).sort((a, b) => (rank[a!.state] ?? 9) - (rank[b!.state] ?? 9))[0]
+}
+
+/**
+ * A URL or path that wraps only after "/" (never mid-word), with the whole
+ * value on hover; a single segment too long for its cell is cut with an
+ * ellipsis.
+ */
+export function PathText({ value, className }: { value: string; className?: string }) {
+  const parts = value.split(/(?<=\/)/)
+  return (
+    <Tooltip content={value} wrapperClassName="max-w-full">
+      <span className={clsx('block max-w-full overflow-hidden text-ellipsis font-mono text-[12.5px] [overflow-wrap:normal]', className)}>
+        {parts.map((p, i) => (
+          <span key={i}>
+            {p}
+            {i < parts.length - 1 && <wbr />}
+          </span>
+        ))}
+      </span>
+    </Tooltip>
+  )
 }
 
 export function Mono({ children }: { children: ReactNode }) {

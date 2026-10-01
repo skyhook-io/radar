@@ -19,6 +19,7 @@ import {
   CoverageNotice,
   FilterChips,
   Mono,
+  PathText,
   ScreenBody,
   SectionTable,
   Sub,
@@ -209,7 +210,12 @@ export function CNPGProtection({
             {
               header: 'Destination',
               width: '15%',
-              cell: (r) => <FactValue fact={r.protection.destination} className={r.protection.destination.method === 'barmanObjectStore' ? 'break-all font-mono text-[12.5px]' : 'break-words'} />,
+              cell: (r) =>
+                r.protection.destination.method === 'barmanObjectStore' ? (
+                  <PathText value={r.protection.destination.text} />
+                ) : (
+                  <FactValue fact={r.protection.destination} className="break-words" />
+                ),
             },
           ]}
           rows={rows}
@@ -248,7 +254,7 @@ export function CNPGProtection({
           subtitle="ObjectStores (barman-cloud plugin)"
           columns={[
             { header: 'ObjectStore', width: '18%', cell: (s: StoreRow) => <>{s.name}<Sub>{s.namespace}</Sub></> },
-            { header: 'Destination', width: '30%', cell: (s) => <Mono>{s.destination}</Mono> },
+            { header: 'Destination', width: '30%', cell: (s) => (s.destination ? <PathText value={s.destination} /> : '—') },
             { header: 'Used by', width: '20%', cell: (s) => (s.users.length ? s.users.map((u) => u.name).join(', ') : <span className="text-theme-text-tertiary">None visible</span>) },
             {
               header: 'Upload health (inferred)',
