@@ -352,8 +352,8 @@ describe('buildCNPGFleet', () => {
 describe('schedule fact', () => {
   it('reads the schedule in words when the server supplied a reading, with the cron as its source', () => {
     const sched = { metadata: { namespace: 'db', name: 'nightly' }, spec: { cluster: { name: 'pg-a' }, schedule: '0 0 2 * * *' } }
-    const withReading = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')], scheduledBackups: [sched] }, { scheduleReadings: { 'db/nightly': 'every day at 02:00:00 UTC' } }))
-    expect(withReading.rows[0].protection.schedule).toMatchObject({ text: 'Scheduled · every day at 02:00:00 UTC', source: 'ScheduledBackup nightly · cron 0 0 2 * * *' })
+    const withReading = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')], scheduledBackups: [sched] }, { scheduleReadings: { 'db/nightly': 'every day at 02:00 UTC' } }))
+    expect(withReading.rows[0].protection.schedule).toMatchObject({ text: 'Scheduled · every day at 02:00 UTC', source: 'ScheduledBackup nightly · cron 0 0 2 * * *' })
     const without = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')], scheduledBackups: [sched] }))
     expect(without.rows[0].protection.schedule.text).toBe('Scheduled · 0 0 2 * * *')
   })

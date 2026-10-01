@@ -129,15 +129,15 @@ func describeCNPGSchedule(spec string) string {
 	spec = strings.TrimSpace(spec)
 	switch spec {
 	case "@yearly", "@annually":
-		return "every year on 1 January at 00:00:00 UTC"
+		return "every year on 1 January at 00:00 UTC"
 	case "@monthly":
-		return "on day 1 of every month at 00:00:00 UTC"
+		return "on day 1 of every month at 00:00 UTC"
 	case "@weekly":
-		return "every Sunday at 00:00:00 UTC"
+		return "every Sunday at 00:00 UTC"
 	case "@daily", "@midnight":
-		return "every day at 00:00:00 UTC"
+		return "every day at 00:00 UTC"
 	case "@hourly":
-		return "every hour at minute 00, second 00"
+		return "every hour, on the hour"
 	}
 	if d, ok := strings.CutPrefix(spec, "@every "); ok {
 		return "every " + strings.TrimSpace(d) + ", counted from the operator's last check"
@@ -157,9 +157,13 @@ func describeCNPGSchedule(spec string) string {
 		h, _ := strconv.Atoi(hour)
 		m, _ := strconv.Atoi(min)
 		sc, _ := strconv.Atoi(sec)
-		when = fmt.Sprintf("at %02d:%02d:%02d UTC", h, m, sc)
+		if sc == 0 {
+			when = fmt.Sprintf("at %02d:%02d UTC", h, m)
+		} else {
+			when = fmt.Sprintf("at %02d:%02d:%02d UTC", h, m, sc)
+		}
 	} else {
-		when = cronSubHourPhrase(sec, min) + cronHourSuffix(hour)
+		when = cronIntraDayPhrase(sec, min, hour)
 	}
 
 	domAny, dowAny := cronAny(dom), cronAny(dow)
@@ -194,14 +198,32 @@ func describeCNPGSchedule(spec string) string {
 	return days + ", " + when
 }
 
-// cronSubHourPhrase words the second and minute fields together.
-func cronSubHourPhrase(sec, min string) string {
+// cronIntraDayPhrase words the second, minute and hour fields when they do
+// not name one time of day: "every hour, on the hour", "every hour at :15",
+// "every 6 hours at :30", "every 15 minutes".
+func cronIntraDayPhrase(sec, min, hour string) string {
 	if isCronNumber(sec) && isCronNumber(min) {
 		m, _ := strconv.Atoi(min)
 		sc, _ := strconv.Atoi(sec)
-		return fmt.Sprintf("at %02d:%02d past the hour", m, sc)
+		at := fmt.Sprintf(" at :%02d", m)
+		if sc != 0 {
+			at = fmt.Sprintf(" at :%02d:%02d", m, sc)
+		} else if m == 0 {
+			at = ", on the hour"
+		}
+		switch {
+		case cronAny(hour):
+			return "every hour" + at
+		case strings.HasPrefix(hour, "*/"):
+			return "every " + hour[2:] + " hours" + at
+		}
+		return "every hour" + at + ", during " + cronFieldPhrase(hour, "hour", "hours")
 	}
-	return cronFieldPhrase(min, "minute", "minutes") + ", " + cronFieldPhrase(sec, "second", "seconds")
+	phrase := cronFieldPhrase(min, "minute", "minutes")
+	if sec != "0" {
+		phrase += ", " + cronFieldPhrase(sec, "second", "seconds")
+	}
+	return phrase + cronHourSuffix(hour)
 }
 
 func cronHourSuffix(hour string) string {

@@ -24,7 +24,7 @@ func TestCNPGSchedulePreview(t *testing.T) {
 		if strings.Join(p.NextRuns, ",") != strings.Join(want, ",") {
 			t.Errorf("runs = %v, want %v", p.NextRuns, want)
 		}
-		if p.Description != "every day at 02:30:00 UTC" {
+		if p.Description != "every day at 02:30 UTC" {
 			t.Errorf("description = %q", p.Description)
 		}
 	})
@@ -59,18 +59,24 @@ func TestCNPGSchedulePreview(t *testing.T) {
 
 func TestDescribeCNPGSchedule(t *testing.T) {
 	for spec, want := range map[string]string{
-		"0 0 0 * * *":       "every day at 00:00:00 UTC",
-		"@daily":            "every day at 00:00:00 UTC",
+		"0 0 0 * * *":       "every day at 00:00 UTC",
+		"0 0 2 * * *":       "every day at 02:00 UTC",
+		"@daily":            "every day at 00:00 UTC",
+		"@hourly":           "every hour, on the hour",
+		"0 0 * * * *":       "every hour, on the hour",
+		"0 15 * * * *":      "every hour at :15",
 		"@every 1h30m":      "every 1h30m, counted from the operator's last check",
-		"0 15 3 * * 1-5":    "every Monday through Friday at 03:15:00 UTC",
-		"0 0 1 * * sun,wed": "every Sunday and Wednesday at 01:00:00 UTC",
-		"0 0 4 1,15 * *":    "on day 1 and 15 of the month at 04:00:00 UTC",
-		"0 0 4 1 jan,7 *":   "on day 1 of the month in January and July at 04:00:00 UTC",
-		"0 */15 * * * *":    "every 15 minutes, second 0",
-		"30 0 9-17 * * *":   "at 00:30 past the hour, during hours 9 through 17",
-		"0 0 */6 * * 1":     "every Monday, at 00:00 past the hour, every 6 hours",
-		"0 0 0 */2 * 1":     "every 2 days of the month from day 1, when it is a Monday at 00:00:00 UTC",
-		"0 0 0 1,15 * 1":    "on day 1 and 15 of the month or every Monday at 00:00:00 UTC",
+		"0 30 2 * * 1-5":    "every Monday through Friday at 02:30 UTC",
+		"0 15 3 * * 1-5":    "every Monday through Friday at 03:15 UTC",
+		"0 0 1 * * sun,wed": "every Sunday and Wednesday at 01:00 UTC",
+		"0 0 4 1,15 * *":    "on day 1 and 15 of the month at 04:00 UTC",
+		"0 0 4 1 jan,7 *":   "on day 1 of the month in January and July at 04:00 UTC",
+		"15 30 4 * * *":     "every day at 04:30:15 UTC",
+		"0 */15 * * * *":    "every 15 minutes",
+		"30 0 9-17 * * *":   "every hour at :00:30, during hours 9 through 17",
+		"0 0 */6 * * 1":     "every Monday, every 6 hours, on the hour",
+		"0 0 0 */2 * 1":     "every 2 days of the month from day 1, when it is a Monday at 00:00 UTC",
+		"0 0 0 1,15 * 1":    "on day 1 and 15 of the month or every Monday at 00:00 UTC",
 	} {
 		if got := describeCNPGSchedule(spec); got != want {
 			t.Errorf("describe(%q) = %q, want %q", spec, got, want)
@@ -142,7 +148,7 @@ func TestCNPGScheduleCapabilitiesCarryScheduleAndPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := resp.Facts
-	if f.Schedule != "0 0 0 * * *" || !f.Preview.Valid || f.Preview.Basis != "lastCheckTime" || f.Preview.Description != "every day at 00:00:00 UTC" || len(f.Preview.NextRuns) != 3 {
+	if f.Schedule != "0 0 0 * * *" || !f.Preview.Valid || f.Preview.Basis != "lastCheckTime" || f.Preview.Description != "every day at 00:00 UTC" || len(f.Preview.NextRuns) != 3 {
 		t.Errorf("facts = %+v", f)
 	}
 	if !f.Preview.RunsImmediately {
@@ -161,7 +167,7 @@ func TestCNPGScheduleReadingsWordOnlyValidSchedules(t *testing.T) {
 		}}
 	}
 	got := cnpgScheduleReadings([]*unstructured.Unstructured{sb("daily", "0 0 2 * * *"), sb("bad", "not a cron"), sb("empty", "")})
-	if got["db/daily"] != "every day at 02:00:00 UTC" {
+	if got["db/daily"] != "every day at 02:00 UTC" {
 		t.Errorf("daily = %q", got["db/daily"])
 	}
 	if _, ok := got["db/bad"]; ok {
