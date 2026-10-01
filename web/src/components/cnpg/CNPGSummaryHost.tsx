@@ -47,6 +47,7 @@ import { cnpgClusterFullPath, cnpgDimensionPath, cnpgIssuesPath, cnpgWithinDetai
 import { CNPGRestoreProgress } from './recovery/CNPGRestoreProgress'
 import { restoreBackupDeclared } from './recovery/restoreModel'
 import { useConnection } from '../../context/ConnectionContext'
+import { useNavCustomization } from '../../context/NavCustomization'
 
 interface SummaryContext {
   apiKind: string
@@ -299,17 +300,20 @@ function renderSummaryFor(ctx: SummaryContext): ReactNode {
  * without one, which keeps the default Overview.
  */
 export function renderCNPGSummary(ctx: SummaryContext): ReactNode {
-  return <IssueLinks>{renderSummaryFor(ctx)}</IssueLinks>
+  const summary = renderSummaryFor(ctx)
+  return summary ? <IssueLinks>{summary}</IssueLinks> : null
 }
 
 // "See in Issues →" on every CNPG problem: the Issues page narrowed to the
-// problem's subject (it has no link to a single issue).
+// problem's subject (it has no link to a single issue). Omitted where the host
+// takes Issues over, since its page does not read the subject.
 function IssueLinks({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const issuesTakenOver = !!useNavCustomization().fleetTakeoverHref?.('issues')
   return (
     <CNPGOpenIssueContext.Provider
-      value={(p) =>
+      value={issuesTakenOver ? undefined : (p) =>
         navigate(cnpgIssuesPath(p.subject, searchParams.get('namespaces')))
       }
     >
