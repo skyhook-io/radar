@@ -70,9 +70,10 @@ describe('backup failures', () => {
       detail: 'Cannot proceed with the backup',
     })
   })
-  it('collapses Backups that failed the same way into one problem about the latest', () => {
-    const problems = ['b-1', 'b-3', 'b-2'].map((n, i) => {
-      const t = cnpgIssueText(issue(n, 'Backup failed: cannot proceed as the cluster has no plugin configured', `2026-09-2${i}T00:00:00Z`))
+  it('collapses Backups that failed the same way into one problem about the latest, by the Backups\' own times', () => {
+    // detectCNPGBackupIssues emits no first_seen: the latest comes from the Backup objects.
+    const problems = ['b-1', 'b-3', 'b-2'].map((n) => {
+      const t = cnpgIssueText({ kind: 'Backup', name: n, reason: 'CNPGBackupFailed', message: 'Backup failed: cannot proceed as the cluster has no plugin configured' })
       return {
         id: n,
         severity: 'warning' as const,
@@ -81,10 +82,14 @@ describe('backup failures', () => {
         subject: { kind: 'Backup', group: 'postgresql.cnpg.io', namespace: 'pg', name: n },
         source: 'issue' as const,
         reason: 'CNPGBackupFailed',
-        firstSeen: `2026-09-2${i}T00:00:00Z`,
       }
     })
-    const out = cnpgCollapseBackupFailures(problems)
+    const times = new Map([
+      ['b-1', Date.parse('2026-09-20T00:00:00Z')],
+      ['b-3', Date.parse('2026-09-21T00:00:00Z')],
+      ['b-2', Date.parse('2026-09-22T00:00:00Z')],
+    ])
+    const out = cnpgCollapseBackupFailures(problems, times)
     expect(out).toHaveLength(1)
     expect(out[0]).toMatchObject({ title: '3 backups failed: cannot proceed as the cluster has no plugin configured', subject: { name: 'b-2' } })
     expect(out[0].alsoAbout?.map((o) => o.name)).toEqual(['b-3', 'b-1'])
