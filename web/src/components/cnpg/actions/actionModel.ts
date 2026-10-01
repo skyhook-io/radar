@@ -48,6 +48,11 @@ export function pickDefaultStandby(standbys: StandbyChoice[]): StandbyChoice | u
   )[0]
 }
 
+/** The switchover target: the default pick until the user has chosen one (or the dialog opened on one). */
+export function switchoverDefault(input: { touched: boolean; current: string | undefined; standbys: StandbyChoice[] }): string | undefined {
+  return input.touched ? input.current : pickDefaultStandby(input.standbys)?.pod
+}
+
 /**
  * What blocks destroying an instance, for the dialog's alert. The missing
  * fence is left out when the dialog already offers "Fence first": saying it

@@ -23,7 +23,7 @@ import { cnpgOperatorActionNote } from '../operatorStatus'
 import { CNPGRestoreDialog } from '../recovery/CNPGRestoreDialog'
 import { CNPGReportDialog } from './CNPGReportDialog'
 import { useOpenCNPGPsql } from './useOpenCNPGPsql'
-import { backupNameFor, describeBackupMethod, pickDefaultStandby, switchoverCandidateFacts, switchoverLagNote, type StandbyChoice } from './actionModel'
+import { backupNameFor, describeBackupMethod, pickDefaultStandby, switchoverCandidateFacts, switchoverDefault, switchoverLagNote, type StandbyChoice } from './actionModel'
 import { lsnDistance } from '../lsn'
 
 type DialogKind = CNPGClusterActionName | 'restore' | 'report' | null
@@ -365,6 +365,13 @@ export function ClusterActionDialog({
       })
   }, [facts, runtime.data])
   const [switchTarget, setSwitchTarget] = useState<string | undefined>(() => initialPod ?? pickDefaultStandby(standbys)?.pod)
+  const [switchTouched, setSwitchTouched] = useState(false)
+  // Lag and backlog arrive with the runtime read, often after the dialog
+  // opened: re-pick the default until the user chooses for themselves.
+  useEffect(() => {
+    const next = switchoverDefault({ touched: switchTouched || !!initialPod, current: switchTarget, standbys })
+    if (next !== switchTarget) setSwitchTarget(next)
+  }, [standbys, switchTouched, initialPod]) // eslint-disable-line react-hooks/exhaustive-deps
   const chosenStandby = standbys.find((s) => s.pod === switchTarget)
 
   const fenced = facts.fencedInstances.all ? ['*'] : facts.fencedInstances.instances
@@ -458,7 +465,11 @@ export function ClusterActionDialog({
                 return (
                   <div key={s.pod}>
                     <label className="flex items-center gap-2 text-sm">
-                      <input type="radio" name="cnpg-switch" value={s.pod} disabled={!!s.ineligible} checked={switchTarget === s.pod} onChange={() => setSwitchTarget(s.pod)} />
+                      <input type="radio" name="cnpg-switch" value={s.pod} disabled={!!s.ineligible} checked={switchTarget === s.pod} onChange={() => {
+                          setSwitchTouched(true)
+                          setSwitchTarget(s.pod)
+                        }}
+                      />
                       <span className="font-mono">{s.pod}</span>
                       <span className="text-xs text-theme-text-tertiary">
                         {s.ineligible ??

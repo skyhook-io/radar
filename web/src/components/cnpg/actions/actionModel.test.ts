@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { backupNameFor, cnpgDestroyBlocker, pickDefaultStandby, switchoverCandidateFacts, switchoverLagNote } from './actionModel'
+import { backupNameFor, cnpgDestroyBlocker, pickDefaultStandby, switchoverCandidateFacts, switchoverDefault, switchoverLagNote } from './actionModel'
 
 describe('CNPG action model', () => {
   it('names backups like kubectl-cnpg, in UTC', () => {
@@ -47,5 +47,21 @@ describe('pickDefaultStandby by backlog', () => {
     const a = { pod: 'a', podUID: '1', replayBacklogBytes: 0, replayLagSeconds: 12 }
     const b = { pod: 'b', podUID: '2', replayBacklogBytes: 4096, replayLagSeconds: 1 }
     expect(pickDefaultStandby([b, a])?.pod).toBe('a')
+  })
+})
+
+describe('switchoverDefault', () => {
+  const before = [
+    { pod: 'a', podUID: '1' },
+    { pod: 'b', podUID: '2' },
+  ]
+  const after = [
+    { pod: 'a', podUID: '1', replayBacklogBytes: 4096 },
+    { pod: 'b', podUID: '2', replayBacklogBytes: 0 },
+  ]
+  it('re-picks the default when runtime data arrives, until the user chooses', () => {
+    expect(switchoverDefault({ touched: false, current: 'a', standbys: before })).toBe('a')
+    expect(switchoverDefault({ touched: false, current: 'a', standbys: after })).toBe('b')
+    expect(switchoverDefault({ touched: true, current: 'a', standbys: after })).toBe('a')
   })
 })
