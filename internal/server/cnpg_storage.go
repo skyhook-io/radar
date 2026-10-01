@@ -377,7 +377,7 @@ func (s *Server) cnpgStorageClasses(r *http.Request, cache *k8s.ResourceCache, c
 		case !allowed:
 			fact.Reason = "needs get storageclasses"
 		case lister == nil:
-			fact.Reason = "Radar's own identity cannot list storageclasses"
+			fact.Reason = "Radar's own credentials cannot list StorageClasses"
 		default:
 			sc, err := lister.Get(name)
 			if err != nil || sc == nil {
@@ -501,11 +501,7 @@ func (s *Server) cnpgClaimUsage(r *http.Request, namespace string, claims []stri
 	batch := prometheuspkg.QueryPVCUsage(r.Context(), namespace, claims, anchors)
 	switch batch.Status {
 	case prometheuspkg.PVCUsageNoPrometheus:
-		reason := "Radar is not connected to Prometheus"
-		if batch.Error != "" {
-			reason += ": " + truncateCNPGRuntimeError(batch.Error)
-		}
-		return CNPGStorageCoverage{State: cnpgUsageStateNoPrometheus, Reason: reason}, batch
+		return CNPGStorageCoverage{State: cnpgUsageStateNoPrometheus, Reason: cnpgNoPrometheusReason(batch.Error)}, batch
 	case prometheuspkg.PVCUsageQueryFailed:
 		return CNPGStorageCoverage{State: cnpgUsageStateError, Reason: "Prometheus query failed: " + truncateCNPGRuntimeError(batch.Error)}, batch
 	case prometheuspkg.PVCUsageAmbiguous:

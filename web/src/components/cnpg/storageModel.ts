@@ -51,3 +51,15 @@ export function cnpgSlotRetentionText(slots: { slot: string; bytes: number }[]):
   if (max === 0) return formatBytes(0)
   return slots.length === 1 ? formatBytes(max) : `${formatBytes(max)} (largest slot)`
 }
+
+/**
+ * Why StorageClass expansion is unknown, when it is the same reason for
+ * every volume whose class could not be read (and more than one), so it can be
+ * said once for the page instead of under each volume.
+ */
+export function cnpgSharedExpansionGap(volumes: { storageClass: { name?: string; allowVolumeExpansion?: boolean; reason?: string } }[]): string | undefined {
+  const unknown = volumes.filter((v) => v.storageClass.name && v.storageClass.allowVolumeExpansion === undefined)
+  if (unknown.length < 2) return undefined
+  const reasons = new Set(unknown.map((v) => v.storageClass.reason ?? ''))
+  return reasons.size === 1 ? [...reasons][0] || undefined : undefined
+}

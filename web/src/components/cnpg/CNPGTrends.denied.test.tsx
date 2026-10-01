@@ -23,6 +23,8 @@ describe('CNPGTrends without Prometheus', () => {
     expect(html).toContain('In-page samples need get pods/proxy in db too.')
     expect(html).not.toContain('Collecting samples')
     expect(html).not.toContain('since this page opened')
+    expect(html).not.toContain('Drag across a chart')
+    expect(html).toContain('History needs Prometheus. Radar is not connected to Prometheus.')
   })
   it('samples in the page when the proxy is allowed', () => {
     const html = render()

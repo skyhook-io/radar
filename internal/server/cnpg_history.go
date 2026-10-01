@@ -195,12 +195,25 @@ func (s *Server) handleCNPGClusterHistory(w http.ResponseWriter, r *http.Request
 func cnpgPrometheusUnavailable(ctx context.Context) string {
 	client := prometheuspkg.GetClient()
 	if client == nil {
-		return "Radar is not connected to Prometheus"
+		return cnpgNoPrometheusReason("")
 	}
 	if _, _, err := client.EnsureConnected(ctx); err != nil {
-		return "Radar is not connected to Prometheus: " + truncateCNPGRuntimeError(err.Error())
+		return cnpgNoPrometheusReason(err.Error())
 	}
 	return ""
+}
+
+// cnpgNoPrometheusReason is one sentence for why Radar has no Prometheus.
+// Discovery's own failures are already complete sentences ("Radar found 2
+// services that may be Prometheus but …"), so they are not prefixed again.
+func cnpgNoPrometheusReason(msg string) string {
+	switch {
+	case msg == "":
+		return "Radar is not connected to Prometheus"
+	case strings.HasPrefix(msg, "Radar "):
+		return truncateCNPGRuntimeError(msg)
+	}
+	return "Radar is not connected to Prometheus: " + truncateCNPGRuntimeError(msg)
 }
 
 func cnpgHistoryScopeFailure(err error) (string, string) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildResizeManifest, cnpgSlotRetentionText } from './storageModel'
+import { buildResizeManifest, cnpgSharedExpansionGap, cnpgSlotRetentionText } from './storageModel'
 
 const cluster = {
   metadata: { name: 'pg', namespace: 'db' },
@@ -39,5 +39,15 @@ describe('cnpgSlotRetentionText', () => {
     const two = cnpgSlotRetentionText([{ slot: 'a', bytes: 10 * 1024 * 1024 }, { slot: 'b', bytes: 2 * 1024 * 1024 }])
     expect(two).toBe('10 MiB (largest slot)')
     expect(two).not.toContain('up to')
+  })
+})
+
+describe('cnpgSharedExpansionGap', () => {
+  const vol = (reason?: string, allow?: boolean) => ({ storageClass: { name: 'standard', allowVolumeExpansion: allow, reason } })
+  it('names one shared reason for every unknown volume, so the page says it once', () => {
+    expect(cnpgSharedExpansionGap([vol('cannot list StorageClasses'), vol('cannot list StorageClasses')])).toBe('cannot list StorageClasses')
+    expect(cnpgSharedExpansionGap([vol('a'), vol('b')])).toBeUndefined()
+    expect(cnpgSharedExpansionGap([vol('a')])).toBeUndefined()
+    expect(cnpgSharedExpansionGap([vol(undefined, true), vol(undefined, true)])).toBeUndefined()
   })
 })

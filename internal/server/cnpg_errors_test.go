@@ -180,3 +180,15 @@ func TestCNPGRelayedPodSentenceIgnoresAPIServerErrors(t *testing.T) {
 		t.Errorf("an apiserver timeout blamed the instance manager: %q", out.err)
 	}
 }
+
+func TestCNPGNoPrometheusReasonIsOneSentence(t *testing.T) {
+	for msg, want := range map[string]string{
+		"": "Radar is not connected to Prometheus",
+		"Radar found 2 services that may be Prometheus but may not port-forward to them (needs create pods/portforward)": "Radar found 2 services that may be Prometheus but may not port-forward to them (needs create pods/portforward)",
+		"context deadline exceeded": "Radar is not connected to Prometheus: context deadline exceeded",
+	} {
+		if got := cnpgNoPrometheusReason(msg); got != want {
+			t.Errorf("%q: %q, want %q", msg, got, want)
+		}
+	}
+}

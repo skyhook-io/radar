@@ -427,6 +427,8 @@ export function CNPGTrends({
   const q = useCNPGClusterHistory(namespace, name, range)
   const data = q.data
   const fromPrometheus = data?.source === 'prometheus' && data.state === 'ok'
+  // Interval selection needs a chart on the page: Prometheus history, or at least two in-page samples.
+  const charted = fromPrometheus || (!q.isLoading && !samplingDenied && samples.length >= 2)
   const fallback = samplingDenied ? `In-page samples need ${samplingDenied} too.` : 'Below: samples since this page opened.'
 
   const open = onOpenInterval && interval
@@ -453,12 +455,12 @@ export function CNPGTrends({
                 ? 'No trend source readable'
                 : 'Sampled every 5 s since this page opened · gaps are hatched, never zero'}
         </span>
-        <span className="text-xs text-theme-text-tertiary">Drag across a chart, or click a point, to select an interval.</span>
+        {charted && <span className="text-xs text-theme-text-tertiary">Drag across a chart, or click a point, to select an interval.</span>}
       </div>
 
       {data?.source === 'none' && (
         <Notice>
-          History needs Prometheus: {data.reason ?? 'Radar is not connected to one'}.{' '}
+          History needs Prometheus. {data.reason ?? 'Radar is not connected to one'}.{' '}
           {samplingDenied ? fallback : 'These trends cover only the time since this page opened.'}
         </Notice>
       )}

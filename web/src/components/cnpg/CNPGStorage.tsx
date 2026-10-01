@@ -30,7 +30,7 @@ import {
 import { Notice } from '../capacity/shared'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { useCNPGWriteGuard } from './actions/useCNPGWriteGuard'
-import { buildResizeManifest, cnpgSlotRetentionText } from './storageModel'
+import { buildResizeManifest, cnpgSharedExpansionGap, cnpgSlotRetentionText } from './storageModel'
 // Binary units throughout, matching claim capacities such as 1Gi.
 import { formatBytes } from './lsn'
 import { CNPGRefreshFailedNotice } from './shared'
@@ -113,13 +113,26 @@ function UsageBar({ v, stated }: { v: CNPGStorageVolume; stated?: boolean }) {
   )
 }
 
-function ClassFact({ v }: { v: CNPGStorageVolume }) {
+// Causes the page's notice already states, so each volume only says "unknown".
+interface StatedOnce {
+  usage: boolean
+  expansion: boolean
+}
+
+function ClassFact({ v, expansionStated }: { v: CNPGStorageVolume; expansionStated?: boolean }) {
   const sc = v.storageClass
   if (!sc.name) return <span className="text-theme-text-tertiary">class not named on the claim</span>
   if (sc.allowVolumeExpansion === undefined) {
     return (
       <span>
-        class <span className="font-mono">{sc.name}</span> <span className="text-theme-text-tertiary">· expansion unknown ({sc.reason})</span>
+        class <span className="font-mono">{sc.name}</span>{' '}
+        {expansionStated ? (
+          <Tooltip content={sc.reason}>
+            <span className="text-theme-text-tertiary">· expansion unknown</span>
+          </Tooltip>
+        ) : (
+          <span className="text-theme-text-tertiary">· expansion unknown ({sc.reason})</span>
+        )}
       </span>
     )
   }
@@ -140,7 +153,7 @@ const CLUSTER_STATE_BADGE: Record<string, 'warning' | 'error' | 'info'> = {
   unusable: 'error',
 }
 
-function VolumeRow({ v, usageStated }: { v: CNPGStorageVolume; usageStated?: boolean }) {
+function VolumeRow({ v, stated }: { v: CNPGStorageVolume; stated: StatedOnce }) {
   const resizing = v.resize.pending || (v.resize.conditions?.length ?? 0) > 0 || !!v.resize.allocatedStatus
   return (
     <div className="rounded-lg border border-theme-border bg-theme-base p-3">
@@ -158,9 +171,9 @@ function VolumeRow({ v, usageStated }: { v: CNPGStorageVolume; usageStated?: boo
           {v.requested && v.requested !== v.capacity ? ` · requested ${v.requested}` : ''}
         </span>
       </div>
-      <UsageBar v={v} stated={usageStated} />
+      <UsageBar v={v} stated={stated.usage} />
       <div className="mt-2 text-xs text-theme-text-secondary">
-        <ClassFact v={v} />
+        <ClassFact v={v} expansionStated={stated.expansion} />
       </div>
       {resizing && (
         <div className="mt-1.5 text-xs text-theme-text-secondary">
@@ -257,7 +270,7 @@ function WALFact({
   )
 }
 
-function InstanceCard({ inst, walCoverage, usageStated }: { inst: CNPGStorageInstance; walCoverage: CNPGClusterStorageResponse['wal']; usageStated: boolean }) {
+function InstanceCard({ inst, walCoverage, stated }: { inst: CNPGStorageInstance; walCoverage: CNPGClusterStorageResponse['wal']; stated: StatedOnce }) {
   const roleLabel = inst.role === 'primary' ? 'primary' : inst.role === 'replica' ? 'replica' : inst.role === 'noInstance' ? 'no instance' : 'role unknown'
   const worst = inst.volumes.reduce<number | undefined>((m, v) => (v.usage.ratio !== undefined && (m === undefined || v.usage.ratio > m) ? v.usage.ratio : m), undefined)
   return (
@@ -274,7 +287,7 @@ function InstanceCard({ inst, walCoverage, usageStated }: { inst: CNPGStorageIns
         {inst.volumes.length === 0 ? (
           <div className="text-sm text-theme-text-tertiary">No claims read for this instance.</div>
         ) : (
-          inst.volumes.map((v) => <VolumeRow key={v.claim} v={v} usageStated={usageStated} />)
+          inst.volumes.map((v) => <VolumeRow key={v.claim} v={v} stated={stated} />)
         )}
       </div>
       <div className="mt-4">
@@ -297,6 +310,7 @@ function InstanceCard({ inst, walCoverage, usageStated }: { inst: CNPGStorageIns
 
 function coverageLine(label: string, c: { state: string; grant?: string; reason?: string }): string | null {
   if (c.state === 'ok') return null
+  if (c.state === 'noPrometheus') return `${label} needs Prometheus. ${c.reason ?? 'Radar is not connected to one'}.`
   if (c.state === 'denied') return `${label}: no access (needs ${c.grant})`
   return `${label}: ${c.reason ?? c.state}`
 }
@@ -315,6 +329,9 @@ export function CNPGStorage({ namespace, name, primary }: { namespace: string; n
     coverageLine('WAL', data.wal),
   ].filter((x): x is string => !!x)
   const allVolumes = data.instances.flatMap((i) => i.volumes)
+  const expansionGap = cnpgSharedExpansionGap(allVolumes)
+  if (expansionGap) notes.push(`Volume expansion unknown: ${expansionGap}`)
+  const stated: StatedOnce = { usage: data.usage.state !== 'ok' && data.usage.state !== 'notRead', expansion: !!expansionGap }
 
   return (
     <div className="space-y-4">
@@ -347,7 +364,7 @@ export function CNPGStorage({ namespace, name, primary }: { namespace: string; n
 
       <div className="grid items-start gap-4 xl:grid-cols-2">
         {data.instances.map((inst) => (
-          <InstanceCard key={inst.name} inst={inst} walCoverage={data.wal} usageStated={data.usage.state !== 'ok' && data.usage.state !== 'notRead'} />
+          <InstanceCard key={inst.name} inst={inst} walCoverage={data.wal} stated={stated} />
         ))}
       </div>
 
