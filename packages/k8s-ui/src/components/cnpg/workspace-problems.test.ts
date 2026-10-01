@@ -91,3 +91,17 @@ describe('backup failures', () => {
     expect('reason' in out[0]).toBe(false)
   })
 })
+
+describe('scheduled run without a backup', () => {
+  it('words the schedule and dates the run as an age from first_seen', () => {
+    const t = cnpgIssueText({
+      kind: 'Cluster',
+      name: 'pg',
+      reason: 'CNPGScheduledRunNoBackup',
+      message: 'ScheduledBackup pg-nightly (every day at 02:00 UTC) has had no successful backup since its run',
+      first_seen: new Date(Date.now() - 2 * 24 * 3600 * 1000 - 60_000).toISOString(),
+    })
+    expect(t.title).toBe('No successful backup since a scheduled run')
+    expect(t.detail).toBe('ScheduledBackup pg-nightly (every day at 02:00 UTC) has had no successful backup since its run 2d ago')
+  })
+})

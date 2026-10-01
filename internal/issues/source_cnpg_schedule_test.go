@@ -87,12 +87,14 @@ func TestCNPGScheduledRunNoBackup(t *testing.T) {
 		backups   []*unstructured.Unstructured
 		stores    []*unstructured.Unstructured
 		want      string
+		run       string // the run the issue dates itself from (first_seen)
 	}{
 		{
 			name:      "last success before the 13:00 run, which produced nothing",
 			schedules: []*unstructured.Unstructured{cnpgHourly(false)},
 			backups:   []*unstructured.Unstructured{cnpgBackupAt("b1", "completed", at(12, 0), at(12, 2)), cnpgBackupAt("b2", "failed", at(13, 0), at(13, 1))},
-			want:      "No successful backup since ScheduledBackup hourly fired at 2026-09-30T13:00:00Z (0 0 * * * *)",
+			want:      "ScheduledBackup hourly (every hour, on the hour) has had no successful backup since its run",
+			run:       "2026-09-30T13:00:00Z",
 		},
 		{
 			name:      "the 14:00 run succeeded",
@@ -119,7 +121,8 @@ func TestCNPGScheduledRunNoBackup(t *testing.T) {
 		{
 			name:      "no success ever: measured from the schedule's first fire",
 			schedules: []*unstructured.Unstructured{cnpgHourly(false)},
-			want:      "No successful backup observed since ScheduledBackup hourly first fired at 2026-09-28T15:00:00Z",
+			want:      "has had no successful backup observed since its first run",
+			run:       "2026-09-28T15:00:00Z",
 		},
 		{
 			name:      "the ObjectStore's recovery window counts as a success",
@@ -132,7 +135,8 @@ func TestCNPGScheduledRunNoBackup(t *testing.T) {
 			cluster:   pluginCluster,
 			schedules: []*unstructured.Unstructured{cnpgHourly(false)},
 			stores:    []*unstructured.Unstructured{store(at(12, 1))},
-			want:      "fired at 2026-09-30T13:00:00Z",
+			want:      "since its run",
+			run:       "2026-09-30T13:00:00Z",
 		},
 		{
 			name:      "unparseable schedule",
@@ -167,6 +171,9 @@ func TestCNPGScheduledRunNoBackup(t *testing.T) {
 			if !strings.Contains(iss.Message, tc.want) {
 				t.Errorf("message = %q, want it to contain %q", iss.Message, tc.want)
 			}
+			if tc.run != "" && iss.FirstSeen.UTC().Format(time.RFC3339) != tc.run {
+				t.Errorf("first_seen = %s, want the run %s", iss.FirstSeen, tc.run)
+			}
 			if iss.Category != issuesapi.CategoryBackupFailed {
 				t.Errorf("category = %v, want backup_failed", iss.Category)
 			}
@@ -183,7 +190,7 @@ func TestCNPGScheduledRunFiresInUTC(t *testing.T) {
 	sched.SetCreationTimestamp(metav1.NewTime(time.Date(2026, 9, 28, 23, 0, 0, 0, zone)))
 	p := cnpgScheduleProvider([]*unstructured.Unstructured{c}, []*unstructured.Unstructured{sched}, nil, nil)
 	got := detectCNPGScheduledRunIssues(p, cnpgClusterGVR, []*unstructured.Unstructured{c}, cnpgScheduleNow)
-	if len(got) != 1 || !strings.Contains(got[0].Message, "first fired at 2026-09-29T02:00:00Z") {
+	if len(got) != 1 || !strings.Contains(got[0].Message, "(every day at 02:00 UTC) has had no successful backup observed since its first run") || !got[0].FirstSeen.Equal(time.Date(2026, 9, 29, 2, 0, 0, 0, time.UTC)) {
 		t.Fatalf("issues = %+v", got)
 	}
 }

@@ -2,7 +2,7 @@
 // payload. Every fact here is something the cluster actually reports; when it
 // does not report something the value is "unknown", never zero or healthy.
 
-import type { HealthLevel } from '../resources/resource-utils'
+import { formatAge, type HealthLevel } from '../resources/resource-utils'
 import { formatBytes } from '../../utils/format'
 import {
   CNPG_BARMAN_PLUGIN_NAME,
@@ -254,9 +254,11 @@ const CNPG_REASON_TITLES: Record<string, string> = {
  * message is the title, unless it is empty or only the reason token (e.g.
  * "ReadinessProbeFailed"), which is turned into a sentence about the subject.
  */
-export function cnpgIssueText(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'name' | 'reason' | 'message' | 'cause'>): { title: string; detail?: string } {
-  const message = issue.message?.trim() ?? ''
+export function cnpgIssueText(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'name' | 'reason' | 'message' | 'cause' | 'first_seen'>): { title: string; detail?: string } {
+  let message = issue.message?.trim() ?? ''
   const cause = issue.cause?.trim() || undefined
+  // The run's time is the issue's first_seen, not part of the message.
+  if (issue.reason === 'CNPGScheduledRunNoBackup' && issue.first_seen && message) message = `${message} ${formatAge(issue.first_seen)} ago`
   const known = CNPG_REASON_TITLES[issue.reason]
   if (known) return { title: known, detail: [stripTitlePrefix(message, known), cause].filter(Boolean).join(' ') || undefined }
   if (message && message !== issue.reason && /\s/.test(message)) return { title: message, detail: cause }

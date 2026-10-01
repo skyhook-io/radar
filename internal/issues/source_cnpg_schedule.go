@@ -146,11 +146,15 @@ func cnpgScheduledRunIssue(gvr schema.GroupVersionResource, cluster *unstructure
 		return Issue{}, false
 	}
 
-	msg := fmt.Sprintf("No successful backup since ScheduledBackup %s fired at %s (%s)",
-		worst.schedule, worst.fired.UTC().Format(time.RFC3339), worst.spec)
+	// The run's time is the issue's first_seen (a reader shows it as an age);
+	// the message names the schedule in words so nobody has to decode cron.
+	reading := DescribeCNPGSchedule(worst.spec)
+	if reading == "" {
+		reading = "cron " + worst.spec
+	}
+	msg := fmt.Sprintf("ScheduledBackup %s (%s) has had no successful backup since its run", worst.schedule, reading)
 	if lastSuccess.IsZero() {
-		msg = fmt.Sprintf("No successful backup observed since ScheduledBackup %s first fired at %s (%s)",
-			worst.schedule, worst.fired.UTC().Format(time.RFC3339), worst.spec)
+		msg = fmt.Sprintf("ScheduledBackup %s (%s) has had no successful backup observed since its first run", worst.schedule, reading)
 	}
 	return newConditionIssue(gvr, "Cluster", cluster.GetNamespace(), name, SeverityWarning,
 		ReasonCNPGScheduledRunNoBackup, msg, worst.fired, true, ReasonCNPGScheduledRunNoBackup, cluster.GetCreationTimestamp().Time), true
