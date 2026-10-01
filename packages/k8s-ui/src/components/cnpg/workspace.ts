@@ -356,41 +356,55 @@ export interface CNPGProblemOrigin {
   detail?: string
 }
 
+// Each entry names what the Go detector (internal/issues/source_cnpg*.go and
+// the Pod detector) actually reads. "Reported by CNPG" only where the operator
+// itself wrote the failure; a threshold or comparison Radar applies is a
+// "Radar check".
 const CNPG_CONDITION_ORIGINS: Record<string, string> = {
-  CNPGWALArchivingFailing: 'ContinuousArchiving condition',
-  CNPGLastBackupFailed: 'LastBackupSucceeded condition',
+  CNPGLastBackupFailed: 'Cluster LastBackupSucceeded condition',
   CNPGClusterTerminal: 'Cluster status.phase',
   CNPGClusterUnrecoverable: 'Cluster status.phase',
   CNPGClusterPluginFailure: 'Cluster status.phase',
   CNPGClusterFailingOver: 'Cluster status.phase',
   CNPGClusterWaitingForUser: 'Cluster status.phase',
-  CNPGClusterDegraded: 'Cluster status: ready instances',
-  CNPGDeclarativeNotApplied: 'status.applied',
+  CNPGDeclarativeNotApplied: 'status.applied and status.message',
+}
+
+const POD_ORIGINS: Record<string, CNPGProblemOrigin> = {
+  ReadinessProbeFailed: { label: 'Pod readiness probe', detail: 'Kubelet probe-failure events and the Pod\'s Ready condition' },
+  LivenessProbeFailed: { label: 'Pod liveness probe', detail: 'Kubelet probe-failure events and container restarts' },
+  ReadinessProbeInvalid: { label: 'Radar check of the probe', detail: 'The readiness probe names a port the container does not declare' },
+  LivenessProbeInvalid: { label: 'Radar check of the probe', detail: 'The liveness probe names a port the container does not declare' },
+  HighRestartCount: { label: 'Radar check of restarts', detail: 'More than 3 restarts on a container that is still unhealthy' },
+  InitContainerStalled: { label: 'Radar check of init containers', detail: 'An init container has not finished' },
 }
 
 /**
  * Where an issue's evidence comes from, in user terms: what CloudNativePG
- * reported, a Backup's or Pod's own status, or Radar's own check of a
- * schedule. A reason this does not know reads "Detected by Radar" rather than
- * a guessed source.
+ * reported, a Backup's or Pod's own status, or Radar's own check. A reason this
+ * does not know reads "Detected by Radar" rather than a guessed source.
  */
 export function cnpgIssueOrigin(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'reason'>): CNPGProblemOrigin {
   const condition = CNPG_CONDITION_ORIGINS[issue.reason]
   if (condition) return { label: 'Reported by CNPG', detail: condition }
   switch (issue.reason) {
+    case 'CNPGWALArchivingFailing':
+      return issue.kind === 'Backup'
+        ? { label: 'Backup status', detail: 'Backup status.phase walArchivingFailing and status.error' }
+        : { label: 'Reported by CNPG', detail: 'Cluster ContinuousArchiving condition' }
     case 'CNPGBackupFailed':
       return { label: 'Backup status', detail: 'Backup status.phase and status.error' }
+    case 'CNPGClusterDegraded':
+      return { label: 'Radar check of ready instances', detail: 'spec.instances against status.readyInstances, unless the phase, hibernation or fencing explains it' }
     case 'CNPGScheduledRunNoBackup':
-    case 'CNPGScheduledBackupMissed':
       return { label: 'Radar check of the backup schedule', detail: 'The schedule, read as the operator does, against the cluster\'s newest successful backup' }
+    case 'CNPGScheduledBackupMissed':
+      return { label: 'Radar check of the backup schedule', detail: 'ScheduledBackup status.nextScheduleTime passed more than 10 minutes ago' }
     case 'CNPGCertificateExpiring':
     case 'CNPGCertificateExpired':
-      return { label: 'Certificate expiry (from Cluster status)', detail: 'Cluster status.certificates.expirations' }
+      return { label: 'Certificate expiry (from Cluster status)', detail: 'Cluster status.certificates.expirations, compared with now' }
   }
-  if (issue.kind === 'Pod') {
-    if (/ReadinessProbe/.test(issue.reason)) return { label: 'Pod readiness probe' }
-    return { label: 'Pod status' }
-  }
+  if (issue.kind === 'Pod') return POD_ORIGINS[issue.reason] ?? { label: 'Pod status' }
   return { label: 'Detected by Radar' }
 }
 

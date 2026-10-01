@@ -155,7 +155,14 @@ describe('cnpgFoldLastBackupFailed', () => {
 
 describe('cnpgIssueOrigin', () => {
   it('names where the evidence comes from', () => {
-    expect(cnpgIssueOrigin({ kind: 'Cluster', reason: 'CNPGWALArchivingFailing' })).toEqual({ label: 'Reported by CNPG', detail: 'ContinuousArchiving condition' })
+    expect(cnpgIssueOrigin({ kind: 'Cluster', reason: 'CNPGWALArchivingFailing' })).toEqual({ label: 'Reported by CNPG', detail: 'Cluster ContinuousArchiving condition' })
+    expect(cnpgIssueOrigin({ kind: 'Backup', reason: 'CNPGWALArchivingFailing' }).label).toBe('Backup status')
+    expect(cnpgIssueOrigin({ kind: 'Cluster', reason: 'CNPGClusterDegraded' }).label).toBe('Radar check of ready instances')
+    expect(cnpgIssueOrigin({ kind: 'Cluster', reason: 'CNPGLastBackupFailed' }).label).toBe('Reported by CNPG')
+    expect(cnpgIssueOrigin({ kind: 'Database', reason: 'CNPGDeclarativeNotApplied' }).label).toBe('Reported by CNPG')
+    expect(cnpgIssueOrigin({ kind: 'ScheduledBackup', reason: 'CNPGScheduledBackupMissed' }).label).toBe('Radar check of the backup schedule')
+    expect(cnpgIssueOrigin({ kind: 'Pod', reason: 'HighRestartCount' }).label).toBe('Radar check of restarts')
+    expect(cnpgIssueOrigin({ kind: 'Pod', reason: 'ReadinessProbeInvalid' }).label).toBe('Radar check of the probe')
     expect(cnpgIssueOrigin({ kind: 'Cluster', reason: 'CNPGClusterFailingOver' }).label).toBe('Reported by CNPG')
     expect(cnpgIssueOrigin({ kind: 'Backup', reason: 'CNPGBackupFailed' }).label).toBe('Backup status')
     expect(cnpgIssueOrigin({ kind: 'Cluster', reason: 'CNPGScheduledRunNoBackup' }).label).toBe('Radar check of the backup schedule')
