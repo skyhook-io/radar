@@ -231,6 +231,7 @@ export function InvestigationView({
     sequence: number;
     status: "running" | "error";
     error?: string;
+    refusal?: InvestigationRefusal | null;
   } | null>(null);
   const [explanationReveal, setExplanationReveal] = useState<{
     sequence: number;
@@ -244,6 +245,9 @@ export function InvestigationView({
   const [actionError, setActionError] = useState<string | null>(null);
   // The host's refusal behind a failed follow-up, for its action beside the error.
   const [actionRefusal, setActionRefusal] =
+    useState<InvestigationRefusal | null>(null);
+  // The host's refusal behind a failed status check, for its action beside it.
+  const [verificationRefusal, setVerificationRefusal] =
     useState<InvestigationRefusal | null>(null);
   const [verificationError, setVerificationError] = useState<string | null>(
     null,
@@ -440,6 +444,7 @@ export function InvestigationView({
     setActionError(null);
     setActionRefusal(null);
     setVerificationError(null);
+    setVerificationRefusal(null);
     setVerificationPending(false);
     setLocalApplyAttemptAssessmentIdx(-1);
     setApplyOutcomeUncertain(null);
@@ -488,6 +493,7 @@ export function InvestigationView({
             if (ev.verify) {
               setVerificationPending(false);
               setVerificationError(null);
+              setVerificationRefusal(null);
             }
             streamInFlightRef.current = true;
             if (live) setBusy(true);
@@ -585,6 +591,7 @@ export function InvestigationView({
                 setVerificationError(
                   ev.error || "The verification could not be completed.",
                 );
+                setVerificationRefusal(null);
               }
             }
             updateLast((t) => investigationTurnWithTerminalEvent(t, ev, live));
@@ -803,6 +810,7 @@ export function InvestigationView({
           e instanceof DiagnoseError
             ? e.message
             : "Couldn't request an explanation.",
+        refusal: investigationRefusal(e),
       });
     });
   };
@@ -857,6 +865,7 @@ export function InvestigationView({
     setActionError(null);
     setActionRefusal(null);
     setVerificationError(null);
+    setVerificationRefusal(null);
     setApplyOutcomeUncertain(null);
     setNarrowPane("activity");
     suppressEvidenceMotionRef.current = false;
@@ -892,6 +901,7 @@ export function InvestigationView({
     setActionError(null);
     setActionRefusal(null);
     setVerificationError(null);
+    setVerificationRefusal(null);
     setNarrowPane("activity");
     suppressEvidenceMotionRef.current = false;
     pinnedRef.current = true;
@@ -906,6 +916,7 @@ export function InvestigationView({
           ? error.message
           : "Couldn't check status.",
       );
+      setVerificationRefusal(investigationRefusal(error));
     });
   };
 
@@ -1311,6 +1322,15 @@ export function InvestigationView({
       : verificationError;
   const displayedStatusCheckError =
     displayedVerificationError || applyOutcomeUncertain;
+  // Only a refused status-check request carries a refusal; a verification
+  // turn that ran and failed does not.
+  const statusCheckRefusal =
+    displayedVerificationError && latestVerification?.status !== "error"
+      ? verificationRefusal
+      : null;
+  const shownActionRefusal = displayedStatusCheckError
+    ? statusCheckRefusal
+    : actionRefusal;
   const findingsTabAccessibleLabel =
     "Findings: current assessment, Radar evidence, and next steps";
   const currentAssessmentCoverageLimited = investigationEvidenceCoverageLimited(
@@ -2070,10 +2090,10 @@ export function InvestigationView({
                       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
                       <div className="min-w-0 flex-1">
                         <span>{displayedStatusCheckError || actionError}</span>
-                        {!displayedStatusCheckError && actionRefusal ? (
+                        {shownActionRefusal ? (
                           <div className="mt-2">
                             <InvestigationRefusalAction
-                              refusal={actionRefusal}
+                              refusal={shownActionRefusal}
                             />
                           </div>
                         ) : null}
