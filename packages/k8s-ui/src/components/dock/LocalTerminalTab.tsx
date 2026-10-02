@@ -251,17 +251,17 @@ export function LocalTerminalTab({
         <span
           title={isConnected ? 'Connected' : isConnecting ? 'Connecting...' : 'Disconnected'}
           className={clsx(
-            'w-2 h-2 rounded-full',
+            'w-2 h-2 shrink-0 rounded-full',
             isConnected ? 'bg-green-500' : isConnecting ? 'bg-yellow-500 animate-pulse' : 'bg-red-500'
           )}
         />
-        <span className="text-xs text-theme-text-tertiary">Local Terminal</span>
+        <span className="shrink-0 text-xs text-theme-text-tertiary">Local Terminal</span>
         {toolbarExtra}
 
         {!isConnected && !isConnecting && (
           <button
             onClick={connect}
-            className="flex items-center gap-1 px-2 py-0.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+            className="shrink-0 whitespace-nowrap flex items-center gap-1 px-2 py-0.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
           >
             <RefreshCw className="w-3 h-3" />
             Reconnect

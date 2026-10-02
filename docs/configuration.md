@@ -594,9 +594,11 @@ context name. This records the terminal's startup configuration; shell settings,
 `KUBECONFIG` changes, and explicit command flags can override it.
 
 Switching clusters in Radar leaves existing local shells running. A terminal
-opened for another context shows a notice and a **New terminal** action for the
-cluster Radar is now showing. Reconnecting starts a new shell using Radar's
-then-active context, and updates the tab's label from the server's new session.
+opened for another context shows **Different context** and a **New terminal**
+action in the existing toolbar. Hover over the notice to see both full context
+names. The action opens a shell for the context Radar is now showing.
+Reconnecting starts a new shell using Radar's then-active context, and updates
+the tab's label from the server's new session.
 
 If Radar cannot create a temporary kubeconfig, the existing original/inherited
 kubeconfig fallback remains available and the tab says **Context not confirmed**.

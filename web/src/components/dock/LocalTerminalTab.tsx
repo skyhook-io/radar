@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
-import { AlertBanner, ClusterName, LocalTerminalTab as SharedLocalTerminalTab, Tooltip, parseContextName, useDock, useOpenLocalTerminal, type LocalTerminalSessionInfo } from '@skyhook-io/k8s-ui'
+import { AlertTriangle } from 'lucide-react'
+import { ClusterName, LocalTerminalTab as SharedLocalTerminalTab, Tooltip, parseContextName, useDock, useOpenLocalTerminal, type LocalTerminalSessionInfo } from '@skyhook-io/k8s-ui'
 import { getWsUrl } from '../../api/config'
 import { useConnection } from '../../context/ConnectionContext'
 
@@ -31,45 +32,48 @@ export function LocalTerminalTab({ tabId, title, isActive, initialCommand }: Loc
     })
 
   return (
-    <div className="h-full flex flex-col">
-      {mismatched && (
-        <div className="shrink-0 max-h-24 overflow-y-auto" role="status">
-          <AlertBanner
-            variant="warning"
-            compact
-            title="Radar is showing another context"
-            message={<>Radar is showing <strong>{connection.context}</strong>. This terminal was opened for <strong>{context}</strong>.</>}
-          >
-            <button className="mt-2 btn-brand px-2 py-1 text-xs" onClick={() => openLocalTerminal()}>
-              New terminal for {parseContextName(connection.context).clusterName}
-            </button>
-          </AlertBanner>
-        </div>
-      )}
-      <div className="flex-1 min-h-0">
-        <SharedLocalTerminalTab
-          isActive={isActive}
-          createSession={createSession}
-          initialCommand={initialCommand}
-          onSessionInfo={handleSessionInfo}
-          toolbarExtra={
-            context ? (
-              <Tooltip content={<>Radar supplied a temporary kubeconfig for <strong>{context}</strong>. Shell settings and commands can override it.</>} wrapperClassName="min-w-0">
-                <span className="flex items-center gap-1 min-w-0 text-xs text-theme-text-secondary">
-                  <span className="shrink-0">Opened for:</span>
-                  <ClusterName name={context} noBadge noTooltip />
+    <SharedLocalTerminalTab
+      isActive={isActive}
+      createSession={createSession}
+      initialCommand={initialCommand}
+      onSessionInfo={handleSessionInfo}
+      toolbarExtra={
+        <div className="flex items-center gap-2 min-w-0">
+          {context ? (
+            <Tooltip content={<>Radar supplied a temporary kubeconfig for <strong>{context}</strong>. Shell settings and commands can override it.</>} wrapperClassName="min-w-0">
+              <span className="flex items-center gap-1 min-w-0 text-xs text-theme-text-secondary">
+                <span className="shrink-0">Opened for:</span>
+                <ClusterName name={context} noBadge noTooltip />
+              </span>
+            </Tooltip>
+          ) : (
+            <Tooltip content={sessionInfo
+              ? 'Radar could not create a temporary kubeconfig. This shell uses the original or inherited kubeconfig.'
+              : 'The server has not reported this terminal’s kubeconfig.'}>
+              <span className="text-xs text-warning-text">Context not confirmed</span>
+            </Tooltip>
+          )}
+          {mismatched && (
+            <>
+              <Tooltip content={<>Radar is showing <strong>{connection.context}</strong>. This terminal was opened for <strong>{context}</strong>.</>} wrapperClassName="shrink-0">
+                <span
+                  role="status"
+                  aria-label={`Radar is showing ${connection.context}. This terminal was opened for ${context}.`}
+                  className="flex items-center gap-1 text-xs text-warning-text whitespace-nowrap"
+                >
+                  <AlertTriangle className="w-3 h-3" />
+                  Different context
                 </span>
               </Tooltip>
-            ) : (
-              <Tooltip content={sessionInfo
-                ? 'Radar could not create a temporary kubeconfig. This shell uses the original or inherited kubeconfig.'
-                : 'The server has not reported this terminal’s kubeconfig.'}>
-                <span className="text-xs text-warning-text">Context not confirmed</span>
+              <Tooltip content={<>Open a new terminal for <strong>{connection.context}</strong>.</>} wrapperClassName="shrink-0">
+                <button className="btn-brand px-2 py-0.5 text-xs whitespace-nowrap" aria-label={`New terminal for ${connection.context}`} onClick={() => openLocalTerminal()}>
+                  New terminal
+                </button>
               </Tooltip>
-            )
-          }
-        />
-      </div>
-    </div>
+            </>
+          )}
+        </div>
+      }
+    />
   )
 }

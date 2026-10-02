@@ -15,15 +15,14 @@ vi.mock('../../context/ConnectionContext', () => ({
 }))
 vi.mock('@skyhook-io/k8s-ui', async () => {
   const dock = await import('../../../../packages/k8s-ui/src/components/dock/DockContext')
-  const { AlertBanner } = await import('../../../../packages/k8s-ui/src/components/ui/drawer-components')
   const { ClusterName } = await import('../../../../packages/k8s-ui/src/components/ui/ClusterName')
   const { Tooltip } = await import('../../../../packages/k8s-ui/src/components/ui/Tooltip')
   const { parseContextName } = await import('../../../../packages/k8s-ui/src/utils/context-name')
   return {
-    ...dock, AlertBanner, ClusterName, Tooltip, parseContextName,
+    ...dock, ClusterName, Tooltip, parseContextName,
     LocalTerminalTab: (props: LocalTerminalTabProps) => {
       state.props.set(props.initialCommand!, props)
-      return <div>{props.toolbarExtra}</div>
+      return <div data-testid="terminal-toolbar">{props.toolbarExtra}</div>
     },
   }
 })
@@ -70,13 +69,14 @@ it('waits for server metadata, labels each tab independently, and notices a UI s
     state.props.get('second')!.onSessionInfo!({ context: 'staging', kubeconfigIsolated: true })
   })
   expect([...element.querySelectorAll('h2')].map(el => el.textContent)).toEqual(['Terminal · production', 'Auth · staging'])
-  expect(element.querySelector('[role="status"]')?.textContent).toContain('This terminal was opened for production')
+  expect(element.querySelector('[role="status"]')?.getAttribute('aria-label')).toContain('This terminal was opened for production')
+  expect(element.querySelector('[role="status"]')?.closest('[data-testid="terminal-toolbar"]')).not.toBeNull()
   state.context = 'production'
   await render()
   const sections = element.querySelectorAll('section')
   expect(sections[0].querySelector('[role="status"]')).toBeNull()
   expect(sections[0].textContent).toContain('Opened for:production')
-  expect(sections[1].querySelector('[role="status"]')?.textContent).toContain('This terminal was opened for staging')
+  expect(sections[1].querySelector('[role="status"]')?.getAttribute('aria-label')).toContain('This terminal was opened for staging')
   await act(async () => sections[1].querySelector<HTMLButtonElement>('button')!.click())
   expect([...element.querySelectorAll('h2')].map(el => el.textContent)).toEqual(['Terminal · production', 'Auth · staging', 'Terminal'])
 })
@@ -100,7 +100,7 @@ it('compares full contexts even when both have the same short cluster name', asy
   await act(async () => state.props.get('first')!.onSessionInfo!({ context: 'gke_project-a_us-east1_production', kubeconfigIsolated: true }))
   expect(element.querySelector('h2')?.textContent).toBe('Terminal · production')
   expect(element.querySelector('h2')?.getAttribute('data-tooltip')).toBe('gke_project-a_us-east1_production')
-  const message = element.querySelector('[role="status"]')?.textContent
+  const message = element.querySelector('[role="status"]')?.getAttribute('aria-label')
   expect(message).toContain('gke_project-a_us-east1_production')
   expect(message).toContain('gke_project-b_us-east1_production')
   state.context = ''
