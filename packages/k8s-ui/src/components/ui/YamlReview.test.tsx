@@ -22,11 +22,13 @@ describe('YamlReview after a failed apply', () => {
     const html = review(true, 'resource changed after review; review the latest version before applying')
     expect(html).toContain('This resource changed after your review')
     expect(html).toContain('apply again')
-    expect(html).toContain('resource changed after review')
+    // Said once: the raw API message would repeat the notice.
+    expect(html).not.toContain('review the latest version before applying')
   })
 
   it('says nothing extra when the resource did not change', () => {
     expect(review(false, 'forbidden')).not.toContain('changed after your review')
+    expect(review(false, 'forbidden')).toContain('forbidden')
     expect(review()).not.toContain('changed after your review')
   })
 })

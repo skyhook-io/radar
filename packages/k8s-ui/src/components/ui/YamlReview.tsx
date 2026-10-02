@@ -363,7 +363,9 @@ export function YamlReview({
             message="The diff above now shows its latest version. Check it, then apply again."
           />
         )}
-        {applyError && (
+        {/* The notice above already says why the apply was refused; the
+            raw API message would repeat it (the error toast carries it). */}
+        {applyError && !changedSinceReview && (
           <div className="mb-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
             {applyError}
           </div>
