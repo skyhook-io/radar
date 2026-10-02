@@ -59,10 +59,13 @@ rules:
       - podsecuritypolicies
     verbs: ["list"]
 
-  {{- if .Values.rbac.helm }}
+  {{- if and .Values.rbac.helm (eq .Values.auth.mode "none") (not .Values.cloud.enabled) }}
   # Helm write operations require broad permissions because charts can create
   # any Kubernetes resource type. Read access for common resources is granted
   # by other rules in this ClusterRole. Secrets read access is auto-enabled below.
+  # No-auth installs only: under auth or cloud mode every Helm action runs as the
+  # impersonated user, so the ServiceAccount never needs it there. The per-tier
+  # add-ons (clusterrole-helm*.yaml) are what users get instead.
   - apiGroups: ["*"]
     resources: ["*"]
     verbs: ["create", "update", "patch", "delete"]

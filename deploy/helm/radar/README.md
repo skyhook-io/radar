@@ -161,6 +161,44 @@ Radar binary (including Radar Cloud self-upgrade) does not update RBAC. Missing 
 on an older `--reuse-values` installation default to enabled; set explicit false
 before upgrading if the added visibility is unwanted.
 
+### Radar Cloud background identities (`radar:system`)
+
+The hub's alerts worker and timeline puller call Radar
+as the `radar:system` group, not as a user. `cloud.systemRbac` (default `true`)
+binds that group to a read-only set: `view`, the cluster-read and
+integration-read add-ons above, and `get/list/watch` on Secrets. Secret read is
+what Helm release alerts and Secret changes in the hub timeline need, because
+Helm stores each release as a Secret.
+
+It is independent of `cloud.defaultRbac`, so turning the role bindings off
+(`cloud.defaultRbac.create=false`, for example when IdP groups decide cluster
+access) leaves alerts and the hub timeline working. It is all or nothing:
+`cloud.systemRbac=false` removes the whole grant, and alerts and the hub
+timeline then see nothing on clusters without the role bindings unless
+you bind `radar:system` yourself. Change it through this value: a binding
+edited or deleted with `kubectl` comes back on the next upgrade.
+
+An upgrade with `--reuse-values` from a release that predates the key leaves it
+off, so an existing install never gains Secret read without choosing it. Set
+`cloud.systemRbac=true` on those installs.
+
+### Radar Cloud AI identity (`radar:ai`)
+
+Every Radar Cloud AI Diagnose run, manual or background, reads the cluster as
+the `radar:ai` group, whoever started it. `cloud.aiRbac` (default `true`) binds
+that group to `view` plus the cluster-read and integration-read add-ons above.
+No Secrets, no writes. MCP clients (Claude Desktop, Cursor) are not affected:
+they read with the user's own permissions.
+
+It is independent of `cloud.defaultRbac`, so Diagnose works when the role
+bindings are off. To narrow what the AI reads, set `cloud.aiRbac=false` and bind
+your own ClusterRole to `radar:ai`. With `cloud.aiRbac=false` and no binding of
+your own, Diagnose sees what `radar:viewer` sees, which is nothing on clusters
+without the role bindings.
+
+An upgrade with `--reuse-values` from a release that predates the key leaves it
+off. Set `cloud.aiRbac=true` on those installs.
+
 ### Connecting to Argo CD (GitOps deep diff)
 
 Radar's GitOps pages show a Git-rendered desired-vs-live diff when connected to
@@ -348,7 +386,7 @@ Disabled by default for security:
 | Terminal | `rbac.podExec: true` | Shell access to pods |
 | Port Forward | `rbac.portForward: true` | Port forwarding to pods. Also the fallback for traffic sources (Hubble/Caretta) — Radar dials the relay/metrics Service directly first, so in-cluster installs only need this when a NetworkPolicy or routing blocks Radar's namespace from reaching the service |
 | Logs | `rbac.podLogs: true` | View pod logs (**enabled by default**) |
-| Helm Write | `rbac.helm: true` | Install/upgrade/rollback/uninstall Helm releases. Under auth or cloud-mode, also emits a split helm add-on ClusterRole — `radar-helm` (member-safe: CRDs, storage, namespaces) and `radar-helm-admin` (owner-only: RBAC, webhooks, ApiServices) |
+| Helm Write | `rbac.helm: true` | Install/upgrade/rollback/uninstall Helm releases. No-auth installs: grants Radar's ServiceAccount create/update/patch/delete on all resource types, since Helm runs as it. Under auth or cloud-mode Helm runs as the signed-in user, so the ServiceAccount gets no write grant; instead a split helm add-on ClusterRole is emitted — `radar-helm` (member-safe: CRDs, storage, namespaces) and `radar-helm-admin` (owner-only: RBAC, webhooks, ApiServices) |
 | RBAC view | `rbac.viewRBAC: true` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings in the resource browser. Off by default — cache-served reads bypass per-user RBAC, so this exposes the cluster's authorization graph to every authenticated Radar user. Auto-enabled under auth or cloud mode (every read is re-checked per user there). |
 | Webhooks view | `rbac.viewWebhooks: true` | Show MutatingWebhookConfigurations and ValidatingWebhookConfigurations in the resource browser. Off by default — the configurations reveal which admission controls are enforced (Gatekeeper / Kyverno policies, image scanners, DLP) and where the gaps are, which is recon value for a low-trust viewer. Auto-enabled under auth or cloud mode. |
 | Node runtime evidence | `rbac.viewNodeRuntime: true` | Let upgrade-impact checks inspect kubelet metrics and effective configuration through `nodes/proxy`. Off by default because this exposes node-level runtime and configuration details to anyone who can reach a no-auth Radar install. Under auth, grant `get` on `nodes/proxy` to each Kubernetes identity that should inspect this evidence. |

@@ -1,0 +1,30 @@
+{{- /*
+Read-only access for Radar Cloud's AI identity.
+
+Every AI Diagnose run, manual or background, reads the cluster as the
+radar:ai group, whoever started it. The grant is the viewer set without
+Secrets: view here, plus the cluster-read and integration-read add-ons, which
+bind radar:ai in their own templates. No Secret read and no writes.
+
+It is independent of cloud.defaultRbac.create, so Diagnose works when an org
+turns the role bindings off to let IdP groups decide cluster access. To narrow
+what the AI reads, set cloud.aiRbac=false and bind your own ClusterRole to the
+radar:ai group; cloud.aiRbac=false alone leaves Diagnose blind on clusters
+whose radar:viewer binding is off.
+*/}}
+{{- if and (include "radar.cloudAiRbac" . | eq "true") .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-ai-view
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: Group
+    name: radar:ai
+    apiGroup: rbac.authorization.k8s.io
+{{- end -}}

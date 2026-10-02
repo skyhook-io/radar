@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/skyhook-io/radar/internal/k8s"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/helmhistory"
 
@@ -757,15 +759,22 @@ func (c *Client) getValuesDiff(namespace, name string, revision1, revision2 int,
 
 // GetManifestDiff returns the diff between two revisions
 func (c *Client) GetManifestDiff(namespace, name string, revision1, revision2 int) (*ManifestDiff, error) {
-	return c.getManifestDiff(namespace, name, revision1, revision2, "", nil)
+	return c.getManifestDiff(namespace, name, revision1, revision2, "", nil, false)
 }
 
 // GetManifestDiffAsUser is GetManifestDiff with K8s impersonation.
 func (c *Client) GetManifestDiffAsUser(namespace, name string, revision1, revision2 int, username string, groups []string) (*ManifestDiff, error) {
-	return c.getManifestDiff(namespace, name, revision1, revision2, username, groups)
+	return c.getManifestDiff(namespace, name, revision1, revision2, username, groups, false)
 }
 
-func (c *Client) getManifestDiff(namespace, name string, revision1, revision2 int, username string, groups []string) (*ManifestDiff, error) {
+// GetManifestDiffAsUserRedacted is GetManifestDiffAsUser with Secret values
+// removed, for callers that hand the diff to an AI model. The REST/UI diff
+// stays unredacted: it is the user's own view.
+func (c *Client) GetManifestDiffAsUserRedacted(namespace, name string, revision1, revision2 int, username string, groups []string) (*ManifestDiff, error) {
+	return c.getManifestDiff(namespace, name, revision1, revision2, username, groups, true)
+}
+
+func (c *Client) getManifestDiff(namespace, name string, revision1, revision2 int, username string, groups []string, redact bool) (*ManifestDiff, error) {
 	manifest1, err := c.GetManifestAsUser(namespace, name, revision1, username, groups)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get manifest for revision %d: %w", revision1, err)
@@ -777,7 +786,12 @@ func (c *Client) getManifestDiff(namespace, name string, revision1, revision2 in
 	}
 
 	// Compute unified diff
-	diff := computeDiff(manifest1, manifest2, revision1, revision2)
+	var diff string
+	if redact {
+		diff = computeRedactedManifestDiff(manifest1, manifest2, revision1, revision2)
+	} else {
+		diff = computeDiff(manifest1, manifest2, revision1, revision2)
+	}
 
 	return &ManifestDiff{
 		Revision1: revision1,
@@ -810,6 +824,77 @@ func (c *Client) getNotesDiff(namespace, name string, revision1, revision2 int, 
 		Revision2: revision2,
 		Diff:      computeDiff(releaseNotes(rel1), releaseNotes(rel2), revision1, revision2),
 	}, nil
+}
+
+// computeRedactedManifestDiff diffs two manifests with every Secret's data and
+// stringData values replaced by [REDACTED], so key additions and removals
+// still show. RedactSecrets then runs over the diff as a second layer, for
+// credentials that sit outside a Secret.
+func computeRedactedManifestDiff(manifest1, manifest2 string, rev1, rev2 int) string {
+	diff := computeDiff(redactSecretManifests(manifest1), redactSecretManifests(manifest2), rev1, rev2)
+	return aicontext.RedactSecrets(diff)
+}
+
+// manifestSeparator matches the document separators releaseutil.SplitManifests
+// splits on.
+var manifestSeparator = regexp.MustCompile(`(?:^|\s*\n)---\s*`)
+
+// secretKindLine spots a Secret document that failed to parse.
+var secretKindLine = regexp.MustCompile(`(?m)^kind:\s*["']?Secret["']?\s*$`)
+
+// redactSecretManifests rewrites the kind: Secret documents of a rendered
+// manifest and leaves every other document byte-for-byte untouched.
+func redactSecretManifests(manifest string) string {
+	seps := manifestSeparator.FindAllStringIndex(manifest, -1)
+	var out strings.Builder
+	start := 0
+	for _, sep := range append(seps, []int{len(manifest), len(manifest)}) {
+		out.WriteString(redactSecretDocument(manifest[start:sep[0]]))
+		out.WriteString(manifest[sep[0]:sep[1]])
+		start = sep[1]
+	}
+	return out.String()
+}
+
+func redactSecretDocument(doc string) string {
+	if strings.TrimSpace(doc) == "" {
+		return doc
+	}
+	var obj map[string]any
+	if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+		if secretKindLine.MatchString(doc) {
+			return "# [REDACTED: unparseable Secret manifest]"
+		}
+		return doc
+	}
+	if kind, _ := obj["kind"].(string); kind != "Secret" {
+		return doc
+	}
+	for _, field := range []string{"data", "stringData"} {
+		values, ok := obj[field].(map[string]any)
+		if !ok {
+			if obj[field] != nil {
+				obj[field] = "[REDACTED]"
+			}
+			continue
+		}
+		for k := range values {
+			values[k] = "[REDACTED]"
+		}
+	}
+	b, err := yaml.Marshal(obj)
+	if err != nil {
+		return "# [REDACTED: unparseable Secret manifest]"
+	}
+	// Keep the "# Source:" comment Helm puts above each document.
+	var comments strings.Builder
+	for _, line := range strings.Split(doc, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			break
+		}
+		comments.WriteString(line + "\n")
+	}
+	return comments.String() + strings.TrimSuffix(string(b), "\n")
 }
 
 func releaseNotes(rel *release.Release) string {
@@ -2353,22 +2438,25 @@ func (c *Client) Rollback(namespace, name string, revision int) error {
 // RollbackWithProgress rolls back a release with progress reporting via a channel.
 // If progressCh is nil, progress messages are silently discarded.
 func (c *Client) RollbackWithProgress(namespace, name string, revision int, progressCh chan<- InstallProgress) error {
-	sendProgress := func(phase, message, detail string) {
-		if progressCh == nil {
-			return
-		}
-		select {
-		case progressCh <- InstallProgress{Phase: phase, Message: message, Detail: detail}:
-		default:
-		}
-	}
-
-	sendProgress("preparing", fmt.Sprintf("Preparing rollback of %s to revision %d...", name, revision), "")
-
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return err
 	}
+	return c.rollbackWithProgressUsing(actionConfig, name, revision, progressCh)
+}
+
+// RollbackWithProgressAsUser is RollbackWithProgress with K8s impersonation.
+func (c *Client) RollbackWithProgressAsUser(namespace, name string, revision int, username string, groups []string, progressCh chan<- InstallProgress) error {
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
+	if err != nil {
+		return err
+	}
+	return c.rollbackWithProgressUsing(actionConfig, name, revision, progressCh)
+}
+
+func (c *Client) rollbackWithProgressUsing(actionConfig *action.Configuration, name string, revision int, progressCh chan<- InstallProgress) error {
+	sendProgress := progressSender(progressCh)
+	sendProgress("preparing", fmt.Sprintf("Preparing rollback of %s to revision %d...", name, revision), "")
 	sendProgress("rolling-back", fmt.Sprintf("Rolling back %s to revision %d...", name, revision), "")
 	if err := c.rollbackWith(actionConfig, name, revision); err != nil {
 		return err
@@ -2379,11 +2467,7 @@ func (c *Client) RollbackWithProgress(namespace, name string, revision int, prog
 
 // RollbackAsUser performs a rollback with K8s impersonation.
 func (c *Client) RollbackAsUser(namespace, name string, revision int, username string, groups []string) error {
-	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
-	if err != nil {
-		return err
-	}
-	return c.rollbackWith(actionConfig, name, revision)
+	return c.RollbackWithProgressAsUser(namespace, name, revision, username, groups, nil)
 }
 
 func (c *Client) rollbackWith(actionConfig *action.Configuration, name string, revision int) error {

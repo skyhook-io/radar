@@ -69,15 +69,6 @@ func (s *Server) handleProbeInClusterCapability(w http.ResponseWriter, r *http.R
 		s.writeJSON(w, resp)
 		return
 	}
-	// The POST gate is additive: K8s RBAC AND the Cloud-role tier (Member). Mirror
-	// the Cloud-role half here (without the 403) so the capability answer matches
-	// what the POST will actually do - a radar:viewer with the right RBAC must not
-	// see allowed=true and then get a 403 cloud_role_insufficient on submit.
-	if !auth.CloudRoleFromContext(r.Context()).AtLeast(auth.RoleMember) {
-		resp.Reason = "your Radar Cloud role cannot run an in-cluster reachability test"
-		s.writeJSON(w, resp)
-		return
-	}
 	allowed, reason, err := reachability.Capability(r.Context(), client, namespace)
 	switch {
 	case err != nil:
@@ -116,12 +107,6 @@ func (s *Server) handleTraceInCluster(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	if !trace.IsEntryKind(kind) {
 		s.writeError(w, http.StatusBadRequest, "trace is only supported for Service, Ingress, HTTPRoute, GRPCRoute, or Gateway")
-		return
-	}
-	// Creating transient probe pods is the one mutating action here - gate on the
-	// Cloud-role tier every mutating handler enforces (Member), mirroring the MCP
-	// diagnose(inCluster) path.
-	if !s.requireCloudRole(w, r, auth.RoleMember, "run an in-cluster reachability test") {
 		return
 	}
 	namespaces := s.traceNamespaceCeiling(r)

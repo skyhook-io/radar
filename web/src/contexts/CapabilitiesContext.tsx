@@ -114,6 +114,10 @@ export function useCanHelmWrite(): boolean {
   return useContext(CapabilitiesContext).helmWrite
 }
 
+export function useIsAuthEnabled(): boolean {
+  return useContext(CapabilitiesContext).authEnabled === true
+}
+
 export function useCanNodeWrite(): boolean {
   return useContext(CapabilitiesContext).nodeWrite
 }
@@ -158,7 +162,8 @@ export function useNamespacedCapabilities(namespace: string | undefined) {
     canExec: nsCaps?.exec ?? globalCaps.exec,
     canViewLogs: nsCaps?.logs ?? globalCaps.logs,
     canPortForward: nsCaps?.portForward ?? globalCaps.portForward,
+    canHelmWrite: nsCaps?.helmWrite ?? globalCaps.helmWrite,
     workloadWrites: nsCaps?.workloadWrites ?? globalCaps.workloadWrites,
     workloadWritesPending: Boolean(namespace && isPending),
-  }), [globalCaps.exec, globalCaps.logs, globalCaps.portForward, globalCaps.workloadWrites, isPending, namespace, nsCaps])
+  }), [globalCaps.exec, globalCaps.logs, globalCaps.portForward, globalCaps.helmWrite, globalCaps.workloadWrites, isPending, namespace, nsCaps])
 }

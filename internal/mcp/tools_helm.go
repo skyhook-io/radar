@@ -35,7 +35,7 @@ type listHelmReleasesInput struct {
 type getHelmReleaseInput struct {
 	Namespace string `json:"namespace" jsonschema:"Helm release storage namespace; use storageNamespace from list_helm_releases when present, otherwise namespace"`
 	Name      string `json:"name" jsonschema:"release name"`
-	Include   string `json:"include,omitempty" jsonschema:"comma-separated extras to include: values (key-aware redacted), history, operations, diff, values_diff, notes_diff, resource_diff. Hook diagnostics are included by default when present. Example: values,history"`
+	Include   string `json:"include,omitempty" jsonschema:"comma-separated extras to include: values (key-aware redacted), history, operations, diff (Secret values redacted), values_diff, notes_diff (Secret values redacted), resource_diff. Hook diagnostics are included by default when present. Example: values,history"`
 	DiffRev1  int    `json:"diff_revision_1,omitempty" jsonschema:"first revision for revision diffs; used when include contains diff, values_diff, notes_diff, or resource_diff"`
 	DiffRev2  int    `json:"diff_revision_2,omitempty" jsonschema:"second revision for revision diffs; used when include contains diff, values_diff, notes_diff, or resource_diff; defaults to current"`
 }
@@ -147,26 +147,14 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 
 	includes := parseIncludes(input.Include)
 
-	// Mirror the frontend gate on sensitive Helm reads: viewers cannot pull
-	// values/manifest/diff. Without this the user would still be blocked
-	// by K8s RBAC (view ClusterRole excludes secrets), but the error would
-	// be a confusing K8s "secrets is forbidden" rather than the structured
-	// cloud_role_insufficient code the frontend emits.
-	cloudRole := pkgauth.CloudRoleFromContext(ctx)
-	gatedSensitive := !cloudRole.AtLeast(pkgauth.RoleMember)
-
 	if includes["values"] {
-		if gatedSensitive {
-			result["valuesError"] = fmt.Sprintf("Radar Cloud role %q cannot view Helm release values (requires member or higher)", cloudRole.String())
+		values, err := helmClient.GetValuesAsUser(input.Namespace, input.Name, false, username, groups)
+		if err != nil {
+			log.Printf("[mcp] Failed to get values for %s/%s: %v", input.Namespace, input.Name, err)
+			result["valuesError"] = err.Error()
 		} else {
-			values, err := helmClient.GetValuesAsUser(input.Namespace, input.Name, false, username, groups)
-			if err != nil {
-				log.Printf("[mcp] Failed to get values for %s/%s: %v", input.Namespace, input.Name, err)
-				result["valuesError"] = err.Error()
-			} else {
-				result["values"] = redactedHelmValues(values.UserSupplied)
-				result["valuesRedacted"] = true
-			}
+			result["values"] = redactedHelmValues(values.UserSupplied)
+			result["valuesRedacted"] = true
 		}
 	}
 
@@ -181,11 +169,9 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 		if errMsg := diffRevisionError(input, detail.Revision, "diff"); errMsg != "" {
 			// Surface the contract gap instead of silently producing no diff.
 			result["diffError"] = errMsg
-		} else if gatedSensitive {
-			result["diffError"] = fmt.Sprintf("Radar Cloud role %q cannot view Helm release diffs (requires member or higher)", cloudRole.String())
 		} else {
 			rev1, rev2 := diffRevisions(input, detail.Revision)
-			diff, err := helmClient.GetManifestDiffAsUser(input.Namespace, input.Name, rev1, rev2, username, groups)
+			diff, err := helmClient.GetManifestDiffAsUserRedacted(input.Namespace, input.Name, rev1, rev2, username, groups)
 			if err != nil {
 				log.Printf("[mcp] Failed to get manifest diff for %s/%s: %v", input.Namespace, input.Name, err)
 				result["diffError"] = err.Error()
@@ -197,8 +183,6 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	if includes["values_diff"] {
 		if errMsg := diffRevisionError(input, detail.Revision, "values_diff"); errMsg != "" {
 			result["valuesDiffError"] = errMsg
-		} else if gatedSensitive {
-			result["valuesDiffError"] = fmt.Sprintf("Radar Cloud role %q cannot view Helm release value diffs (requires member or higher)", cloudRole.String())
 		} else {
 			rev1, rev2 := diffRevisions(input, detail.Revision)
 			diff, err := helmClient.GetValuesDiffAsUser(input.Namespace, input.Name, rev1, rev2, false, username, groups)
@@ -214,8 +198,6 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	if includes["notes_diff"] {
 		if errMsg := diffRevisionError(input, detail.Revision, "notes_diff"); errMsg != "" {
 			result["notesDiffError"] = errMsg
-		} else if gatedSensitive {
-			result["notesDiffError"] = fmt.Sprintf("Radar Cloud role %q cannot view Helm release notes diffs (requires member or higher)", cloudRole.String())
 		} else {
 			rev1, rev2 := diffRevisions(input, detail.Revision)
 			diff, err := helmClient.GetNotesDiffAsUser(input.Namespace, input.Name, rev1, rev2, username, groups)
@@ -223,6 +205,7 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 				log.Printf("[mcp] Failed to get notes diff for %s/%s: %v", input.Namespace, input.Name, err)
 				result["notesDiffError"] = err.Error()
 			} else {
+				diff.Diff = aicontext.RedactSecrets(diff.Diff)
 				result["notesDiff"] = diff
 			}
 		}
@@ -230,8 +213,6 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	if includes["resource_diff"] {
 		if errMsg := diffRevisionError(input, detail.Revision, "resource_diff"); errMsg != "" {
 			result["resourceDiffError"] = errMsg
-		} else if gatedSensitive {
-			result["resourceDiffError"] = fmt.Sprintf("Radar Cloud role %q cannot view Helm release resource diffs (requires member or higher)", cloudRole.String())
 		} else {
 			rev1, rev2 := diffRevisions(input, detail.Revision)
 			diff, err := helmClient.GetResourceDiffAsUser(input.Namespace, input.Name, rev1, rev2, username, groups)
