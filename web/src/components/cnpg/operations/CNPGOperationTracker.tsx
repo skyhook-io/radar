@@ -78,6 +78,10 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
     return () => clearInterval(t)
   }, [following, queryClient, namespace, name])
 
+  const capsFresh = sourceFreshness(caps)
+  const haFresh = sourceFreshness(ha)
+  const runtimeFresh = sourceFreshness(runtime)
+  const workspaceFresh = sourceFreshness(workspace)
   const observation = useMemo<CNPGObservation | null>(() => {
     if (!following) return null
     const ws = workspace.data
@@ -92,14 +96,30 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
       runtime: runtime.data,
       backups: backupsReadable ? ws?.objects.backups ?? [] : undefined,
       freshness: {
-        facts: sourceFreshness(caps),
-        cluster: sourceFreshness(workspace),
-        backups: sourceFreshness(workspace),
-        ha: sourceFreshness(ha),
-        runtime: sourceFreshness(runtime),
+        facts: { updatedAt: capsFresh.updatedAt, failed: capsFresh.failed },
+        cluster: { updatedAt: workspaceFresh.updatedAt, failed: workspaceFresh.failed },
+        backups: { updatedAt: workspaceFresh.updatedAt, failed: workspaceFresh.failed },
+        ha: { updatedAt: haFresh.updatedAt, failed: haFresh.failed },
+        runtime: { updatedAt: runtimeFresh.updatedAt, failed: runtimeFresh.failed },
       },
     }
-  }, [following, caps.data, caps.dataUpdatedAt, caps.isError, ha.data, ha.dataUpdatedAt, ha.isError, runtime.data, runtime.dataUpdatedAt, runtime.isError, workspace.data, workspace.dataUpdatedAt, workspace.isError, namespace, name])
+  }, [
+    following,
+    namespace,
+    name,
+    caps.data,
+    ha.data,
+    runtime.data,
+    workspace.data,
+    capsFresh.updatedAt,
+    capsFresh.failed,
+    haFresh.updatedAt,
+    haFresh.failed,
+    runtimeFresh.updatedAt,
+    runtimeFresh.failed,
+    workspaceFresh.updatedAt,
+    workspaceFresh.failed,
+  ])
 
   useEffect(() => {
     if (!observation) return

@@ -190,11 +190,8 @@ export function IssuesPane({
   const scopeIssues = subjectState
     ? subjectState.state === "found" ? subjectState.issues : []
     : pageIssues;
-  const totals = useMemo(() => {
-    const t: Record<IssueSeverity, number> = { critical: 0, warning: 0 };
-    for (const i of scopeIssues) t[i.severity] = (t[i.severity] ?? 0) + 1;
-    return t;
-  }, [scopeIssues]);
+  const totals: Record<IssueSeverity, number> = { critical: 0, warning: 0 };
+  for (const i of scopeIssues) totals[i.severity] = (totals[i.severity] ?? 0) + 1;
   const shown = severityFilter.size
     ? scopeIssues.filter((i) => severityFilter.has(i.severity))
     : scopeIssues;

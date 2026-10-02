@@ -63,7 +63,6 @@ describe('cnpgIssueText for certificates and schedules', () => {
 })
 
 describe('backup failures', () => {
-  const issue = (name: string, message: string, first_seen: string) => ({ kind: 'Backup', name, reason: 'CNPGBackupFailed', message, first_seen })
   it('does not repeat the title at the start of the detail', () => {
     expect(cnpgIssueText({ kind: 'Backup', name: 'b', reason: 'CNPGBackupFailed', message: 'Backup failed: cannot proceed with the backup' })).toEqual({
       title: 'Backup failed',

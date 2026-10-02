@@ -363,7 +363,7 @@ export function ClusterActionDialog({
         const ineligible = i.fenced ? 'fenced' : !i.podExists ? 'Pod missing' : !i.ready ? 'not ready' : cap && !cap.allowed ? cap.reason ?? 'not eligible' : undefined
         return { pod: i.pod, podUID: i.podUID, ineligible, ...lag }
       })
-  }, [facts, runtime.data])
+  }, [facts, runtime.data, caps.instanceActions])
   const [switchTarget, setSwitchTarget] = useState<string | undefined>(() => initialPod ?? pickDefaultStandby(standbys)?.pod)
   const [switchTouched, setSwitchTouched] = useState(false)
   // Lag and backlog arrive with the runtime read, often after the dialog

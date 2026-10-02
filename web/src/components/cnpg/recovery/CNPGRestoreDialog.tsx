@@ -74,7 +74,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
   const objects = workspace.data?.objects
   const clusters = useMemo(() => (objects?.clusters ?? []).filter((c: any) => isApiGroup(c.apiVersion, 'postgresql.cnpg.io')), [objects])
   const backups = useMemo(() => (objects?.backups ?? []).filter((b: any) => isApiGroup(b.apiVersion, 'postgresql.cnpg.io')), [objects])
-  const stores = objects?.objectStores ?? []
+  const stores = useMemo(() => objects?.objectStores ?? [], [objects])
 
   const sources = useMemo<RestoreSource[]>(() => {
     if (!objects) return []

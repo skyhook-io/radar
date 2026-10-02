@@ -239,7 +239,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         `${p.subscription.namespace}/${p.subscription.cluster}` === clusterFilter ||
         (p.publisher.kind === 'cluster' && `${p.publisher.namespace}/${p.publisher.name}` === clusterFilter),
     )
-  }, [data.objects.subscriptions, data.objects.clusters, data.objects.publications, data.objects.poolers, clusterFilter])
+  }, [data, clusterFilter])
 
   const declCoverage = worstCoverage(data.coverage.databases, data.coverage.publications, data.coverage.subscriptions, data.coverage.databaseRoles)
 
