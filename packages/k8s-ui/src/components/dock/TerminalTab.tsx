@@ -298,8 +298,8 @@ export function TerminalTab({
         {!error && <TerminalClipboardToolbar hasSelection={hasSelection} onCopy={handleCopy} />}
       </div>
 
-      {/* Terminal or error — key forces xterm canvas unmount/remount on toggle */}
-      {error ? (
+      <div ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a]" />
+      {error && (
         <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center p-4 text-center bg-slate-900">
           {errorType === 'shell_not_found' ? (
             <>
@@ -347,8 +347,6 @@ export function TerminalTab({
             </>
           )}
         </div>
-      ) : (
-        <div key="terminal" ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a]" />
       )}
       {pasteDialog}
     </div>

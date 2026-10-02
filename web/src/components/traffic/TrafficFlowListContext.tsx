@@ -4,12 +4,13 @@ import type { TrafficGraphSelection } from './TrafficGraph'
 
 interface TrafficFlowListContextValue {
   flows: TrafficFlow[]
+  responsesCallerOriented: boolean
   graphSelection: TrafficGraphSelection | null
   clearSelection: () => void
 }
 
 // Module-level store — TrafficView writes, dock tab reads.
-let currentValue: TrafficFlowListContextValue = { flows: [], graphSelection: null, clearSelection: () => {} }
+let currentValue: TrafficFlowListContextValue = { flows: [], responsesCallerOriented: false, graphSelection: null, clearSelection: () => {} }
 const listeners = new Set<() => void>()
 
 function setValue(val: TrafficFlowListContextValue) {
@@ -49,17 +50,18 @@ export function useFlowSearch(): [string, (val: string) => void] {
 // Provider — call this from TrafficView to publish flow data
 export function TrafficFlowListProvider({
   flows,
+  responsesCallerOriented,
   graphSelection,
   clearSelection,
   children,
 }: TrafficFlowListContextValue & { children: ReactNode }) {
   useEffect(() => {
-    setValue({ flows, graphSelection, clearSelection })
-  }, [flows, graphSelection, clearSelection])
+    setValue({ flows, responsesCallerOriented, graphSelection, clearSelection })
+  }, [flows, responsesCallerOriented, graphSelection, clearSelection])
 
   useEffect(() => {
     return () => {
-      setValue({ flows: [], graphSelection: null, clearSelection: () => {} })
+      setValue({ flows: [], responsesCallerOriented: false, graphSelection: null, clearSelection: () => {} })
       setFlowSearch('')
     }
   }, [])

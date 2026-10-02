@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useCallback, useState, type ReactNode } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -9,31 +9,52 @@ import { setupTerminalClipboard, copyTerminalSelection } from './terminalClipboa
 import { TerminalClipboardToolbar } from './TerminalClipboardToolbar'
 import { useMultilinePasteConfirm } from './useMultilinePasteConfirm'
 
+export interface LocalTerminalSessionInfo {
+  context: string
+  kubeconfigIsolated: boolean
+}
+
 export interface LocalTerminalTabProps {
   isActive?: boolean
   /** Returns the WebSocket URL for the local terminal session */
   createSession: () => Promise<{ wsUrl: string }>
-  /** Command to auto-execute after the terminal connects */
+  /** Command to send once per mounted terminal after a connection opens */
   initialCommand?: string
+  canConnect?: () => boolean
+  onConnectionError?: () => void
+  onSessionInfo?: (info: LocalTerminalSessionInfo | null) => void
+  toolbarExtra?: ReactNode
 }
 
 export function LocalTerminalTab({
   isActive = true,
   createSession,
   initialCommand,
+  canConnect,
+  onConnectionError,
+  onSessionInfo,
+  toolbarExtra,
 }: LocalTerminalTabProps) {
   const terminalRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const cleanupRef = useRef<(() => void) | undefined>(undefined)
-  const cancelledRef = useRef(false)
+  const connectionAttemptRef = useRef(0)
+  const initialCommandSentRef = useRef(false)
   const createSessionRef = useRef(createSession)
+  const onSessionInfoRef = useRef(onSessionInfo)
+  const canConnectRef = useRef(canConnect)
+  const onConnectionErrorRef = useRef(onConnectionError)
   useLayoutEffect(() => { createSessionRef.current = createSession }, [createSession])
+  useLayoutEffect(() => { onSessionInfoRef.current = onSessionInfo }, [onSessionInfo])
+  useLayoutEffect(() => { canConnectRef.current = canConnect }, [canConnect])
+  useLayoutEffect(() => { onConnectionErrorRef.current = onConnectionError }, [onConnectionError])
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [hasSelection, setHasSelection] = useState(false)
+  const connectAllowed = canConnect?.() !== false
   const { confirmPaste, pasteDialog } = useMultilinePasteConfirm()
 
   const handleCopy = useCallback(() => {
@@ -43,7 +64,13 @@ export function LocalTerminalTab({
   const connect = useCallback(() => {
     if (!terminalRef.current) return
 
-    cancelledRef.current = false
+    if (canConnectRef.current && !canConnectRef.current()) {
+      setIsConnecting(false)
+      return
+    }
+
+    const attempt = ++connectionAttemptRef.current
+    onSessionInfoRef.current?.(null)
     setIsConnecting(true)
     setError(null)
 
@@ -145,34 +172,39 @@ export function LocalTerminalTab({
 
     createSessionRef.current()
       .then(({ wsUrl }) => {
-        if (cancelledRef.current) return
+        if (attempt !== connectionAttemptRef.current) return
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
 
         ws.onopen = () => {
+          if (attempt !== connectionAttemptRef.current) return
           setIsConnected(true)
           setIsConnecting(false)
           doFit(ws)
           xterm.focus()
-          if (initialCommand) {
+          if (initialCommand && !initialCommandSentRef.current) {
             // Small delay to let the shell prompt initialize
             setTimeout(() => {
-              if (ws.readyState === WebSocket.OPEN) {
+              if (attempt === connectionAttemptRef.current && !initialCommandSentRef.current && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'input', data: initialCommand + '\n' }))
+                initialCommandSentRef.current = true
               }
             }, 300)
           }
         }
 
         ws.onmessage = (event) => {
-          let msg: Record<string, string> | null = null
+          if (attempt !== connectionAttemptRef.current) return
+          let msg: { type: 'output' | 'error' | 'exit'; data?: string } | ({ type: 'session' } & LocalTerminalSessionInfo)
           try {
-            msg = JSON.parse(event.data as string) as Record<string, string>
+            msg = JSON.parse(event.data as string)
           } catch {
             xterm.write(event.data as string)
             return
           }
-          if (msg.type === 'output' && msg.data) {
+          if (msg.type === 'session') {
+            onSessionInfoRef.current?.({ context: msg.context, kubeconfigIsolated: msg.kubeconfigIsolated })
+          } else if (msg.type === 'output' && msg.data) {
             xterm.write(msg.data)
           } else if (msg.type === 'exit') {
             xterm.write('\r\n\x1b[2m[Process exited]\x1b[0m\r\n')
@@ -183,12 +215,15 @@ export function LocalTerminalTab({
         }
 
         ws.onerror = () => {
+          if (attempt !== connectionAttemptRef.current) return
+          onConnectionErrorRef.current?.()
           setError((prev) => prev || 'Connection error')
           setIsConnected(false)
           setIsConnecting(false)
         }
 
         ws.onclose = () => {
+          if (attempt !== connectionAttemptRef.current) return
           setIsConnected(false)
           setIsConnecting(false)
           xterm.write('\r\n\x1b[31mConnection closed\x1b[0m\r\n')
@@ -201,6 +236,7 @@ export function LocalTerminalTab({
         })
       })
       .catch((err) => {
+        if (attempt !== connectionAttemptRef.current) return
         setError(err instanceof Error ? err.message : 'Failed to connect')
         setIsConnecting(false)
       })
@@ -209,7 +245,7 @@ export function LocalTerminalTab({
   useEffect(() => {
     connect()
     return () => {
-      cancelledRef.current = true
+      connectionAttemptRef.current++
       cleanupRef.current?.()
       wsRef.current?.close()
       xtermRef.current?.dispose()
@@ -232,16 +268,18 @@ export function LocalTerminalTab({
         <span
           title={isConnected ? 'Connected' : isConnecting ? 'Connecting...' : 'Disconnected'}
           className={clsx(
-            'w-2 h-2 rounded-full',
+            'w-2 h-2 shrink-0 rounded-full',
             isConnected ? 'bg-green-500' : isConnecting ? 'bg-yellow-500 animate-pulse' : 'bg-red-500'
           )}
         />
-        <span className="text-xs text-theme-text-tertiary">Local Terminal</span>
+        <span className="shrink-0 text-xs text-theme-text-tertiary">Local Terminal</span>
+        {toolbarExtra}
 
         {!isConnected && !isConnecting && (
           <button
             onClick={connect}
-            className="flex items-center gap-1 px-2 py-0.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+            disabled={!connectAllowed}
+            className="shrink-0 whitespace-nowrap flex items-center gap-1 px-2 py-0.5 text-xs text-theme-text-tertiary enabled:hover:text-theme-text-primary enabled:hover:bg-theme-elevated disabled:opacity-50 disabled:cursor-not-allowed rounded"
           >
             <RefreshCw className="w-3 h-3" />
             Reconnect
@@ -252,20 +290,20 @@ export function LocalTerminalTab({
       </div>
 
       {/* Terminal or error */}
-      {error ? (
+      <div ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a]" />
+      {error && (
         <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center p-4 text-center bg-slate-900">
           <div className="text-red-400 mb-2 text-sm">Failed to connect</div>
           <div className="text-xs text-theme-text-disabled mb-3">{error}</div>
           <button
             onClick={connect}
-            className="flex items-center gap-2 px-3 py-1.5 btn-brand text-xs rounded"
+            disabled={!connectAllowed}
+            className="flex items-center gap-2 px-3 py-1.5 btn-brand text-xs rounded disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <RefreshCw className="w-3 h-3" />
             Retry
           </button>
         </div>
-      ) : (
-        <div key="terminal" ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a]" />
       )}
       {pasteDialog}
     </div>

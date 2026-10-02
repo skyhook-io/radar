@@ -5,6 +5,7 @@ import { PaneLoader, ensureMonacoRuntime } from '@skyhook-io/k8s-ui'
 import { formatBytes } from '../../utils/format'
 import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { nonJsonErrorMessage } from '../../api/httpErrors'
 
 // A curated inline viewer for text files inside a pod container, rendered in
 // place of the file listing by PodFilesystemModal — never as its own dialog.
@@ -81,7 +82,9 @@ async function fetchPodFilePreview(
     return {
       ok: false,
       code: 'network_error',
-      message: `Unexpected non-JSON response (HTTP ${response.status}).`,
+      message: response.ok
+        ? `Unexpected non-JSON response (HTTP ${response.status}).`
+        : nonJsonErrorMessage(response, raw),
     }
   }
 

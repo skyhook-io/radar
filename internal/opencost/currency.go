@@ -346,6 +346,12 @@ func PublishCurrencyResolver(resolver *CurrencyResolver) {
 	processCurrencyResolver.Store(resolver)
 }
 
+func InvalidateCurrency() {
+	if resolver := processCurrencyResolver.Load(); resolver != nil {
+		resolver.Invalidate()
+	}
+}
+
 func ResolveCurrency() string {
 	resolver := processCurrencyResolver.Load()
 	if resolver == nil {

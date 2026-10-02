@@ -10,6 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	localconfig "github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
@@ -59,9 +61,9 @@ func handleSummaryScoped(w http.ResponseWriter, r *http.Request, resolveCurrency
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	client := prometheuspkg.GetClient()
-	if client == nil {
-		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: currency, Source: "prometheus"})
+	client, connectionErr := prometheuspkg.ClientForOperation()
+	if connectionErr != nil {
+		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus"})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
@@ -113,9 +115,9 @@ func handleWorkloadsScoped(w http.ResponseWriter, r *http.Request, resolveCurren
 		return
 	}
 
-	client := prometheuspkg.GetClient()
-	if client == nil {
-		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: pkgopencost.ReasonNoPrometheus, Currency: currency, Source: "prometheus"})
+	client, connectionErr := prometheuspkg.ClientForOperation()
+	if connectionErr != nil {
+		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus"})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
@@ -210,9 +212,9 @@ func handleTrendScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	client := prometheuspkg.GetClient()
-	if client == nil {
-		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: currency, Source: "prometheus", Range: r.URL.Query().Get("range")})
+	client, connectionErr := prometheuspkg.ClientForOperation()
+	if connectionErr != nil {
+		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus", Range: r.URL.Query().Get("range")})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
@@ -251,9 +253,9 @@ func handleNodesScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	client := prometheuspkg.GetClient()
-	if client == nil {
-		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: currency, Source: "prometheus"})
+	client, connectionErr := prometheuspkg.ClientForOperation()
+	if connectionErr != nil {
+		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus"})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
@@ -333,7 +335,7 @@ func ConnectionFailureReason(err error) string {
 	if errors.Is(err, ErrNoCostSource) {
 		return pkgopencost.ReasonNoCostSource
 	}
-	if errors.Is(err, prometheuspkg.ErrPrometheusNotFound) {
+	if errors.Is(err, prometheuspkg.ErrPrometheusNotFound) || errors.Is(err, prometheuspkg.ErrPrometheusUnavailable) || errors.Is(err, k8s.ErrContextConfigurationBusy) {
 		return pkgopencost.ReasonNoPrometheus
 	}
 	if errors.Is(err, ErrKubecostNoData) {
@@ -353,6 +355,17 @@ func ConnectionFailureReason(err error) string {
 	}
 	if errors.Is(err, ErrCostSourceEnvConfig) {
 		return pkgopencost.ReasonDeploymentConfig
+	}
+	var settingsErr *connections.SettingsError
+	if errors.As(err, &settingsErr) {
+		switch {
+		case settingsErr.Launch:
+			return pkgopencost.ReasonDeploymentConfig
+		case settingsErr.Kind == localconfig.IntegrationMetrics:
+			return pkgopencost.ReasonMetricsSettings
+		default:
+			return pkgopencost.ReasonCostSettings
+		}
 	}
 	var httpErr *prom.HTTPError
 	if errors.As(err, &httpErr) && (httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden) {

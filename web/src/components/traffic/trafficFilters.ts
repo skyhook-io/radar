@@ -1,3 +1,5 @@
+import type { AggregatedFlow, TrafficFlow } from '../../types'
+
 /**
  * Does a flow fall into one of the selected HTTP status ranges?
  *
@@ -49,6 +51,115 @@ export function bucketsFromStatus(httpStatus: number | undefined): string[] {
  */
 export function isRateBasedSource(source: string | undefined): boolean {
   return source === 'istio' || source === 'beyla'
+}
+
+/**
+ * The request and 5xx rates of an edge from a rate-based source, unrounded.
+ *
+ * requestCount / errorCount carry the same figures rounded with a floor of one,
+ * which keeps a trickle visible but makes their ratio meaningless at low rates:
+ * 0.3 req/s with 0.01 err/s rounds to one of each, a 100% error rate. The counts
+ * are only read when the rates are absent — Radar Hub renders clusters whose
+ * Radar predates requestRate / errorRate, and for those they are all there is.
+ */
+export function requestRateOf(flow: Pick<AggregatedFlow, 'requestRate' | 'requestCount'>): number {
+  return flow.requestRate ?? flow.requestCount ?? 0
+}
+export function errorRateOf(flow: Pick<AggregatedFlow, 'errorRate' | 'errorCount'>): number {
+  return flow.errorRate ?? flow.errorCount ?? 0
+}
+
+/**
+ * The volume shown for an edge. For a rate-based source `connections` is its
+ * request rate rounded with a floor of one — the graph sizes, sorts and filters
+ * on that integer — so what is printed is the unrounded rate where the edge has
+ * one. An edge with no HTTP rate (plain TCP) keeps its connection figure.
+ */
+export function displayVolume(flow: Pick<AggregatedFlow, 'requestRate' | 'connections'>, isRateBased: boolean): number {
+  return isRateBased && flow.requestRate ? flow.requestRate : flow.connections
+}
+
+/**
+ * A merged edge records the weight behind its average latency on itself, so a
+ * later `{...flow}` copy — the Internet collapse, addon grouping — carries it.
+ * Client-only: the server never sends it.
+ */
+type LatencyWeighted = AggregatedFlow & { latencyWeight?: number }
+
+/**
+ * How much traffic an edge's average latency stands for: its request rate, or
+ * one for an edge with no rate, summed through merges. Zero when it has none.
+ * Used to average latencies so a slow trickle does not stand for a busy path.
+ */
+export function latencyWeightOf(flow: AggregatedFlow): number {
+  const merged = (flow as LatencyWeighted).latencyWeight
+  if (merged !== undefined) return merged
+  return flow.avgLatencyMs ? (flow.requestRate || flow.latencySamples || 1) : 0
+}
+
+/**
+ * Fold one aggregated flow's volume into another's, for the client-side merges
+ * that collapse several edges into one. Every figure displayVolume or the error
+ * rate reads has to be summed here: a field left out keeps only the first
+ * merged edge's value.
+ */
+export function mergeFlowVolume(into: AggregatedFlow, flow: AggregatedFlow): void {
+  // A metric-based source reports only an average latency per edge, so the
+  // merged edge's is theirs weighted by request rate. The weight behind a merged
+  // average is carried apart from the edge's request rate, which also counts
+  // traffic that had no latency measured: weighting by that would make the
+  // result depend on the order the edges arrived in.
+  const wInto = latencyWeightOf(into)
+  const wFlow = latencyWeightOf(flow)
+  if (wFlow > 0) {
+    if (wInto > 0) {
+      into.avgLatencyMs = (into.avgLatencyMs! * wInto + flow.avgLatencyMs! * wFlow) / (wInto + wFlow)
+      // Percentiles of two edges cannot be combined into a percentile of both,
+      // so a merged edge that had latency on both sides keeps only the average.
+      delete into.latencyP50Ms
+      delete into.latencyP95Ms
+      delete into.latencyP99Ms
+    } else {
+      into.avgLatencyMs = flow.avgLatencyMs
+      into.latencyP50Ms = flow.latencyP50Ms
+      into.latencyP95Ms = flow.latencyP95Ms
+      into.latencyP99Ms = flow.latencyP99Ms
+    }
+  }
+  const weighted: LatencyWeighted = into
+  weighted.latencyWeight = wInto + wFlow
+  into.connections += flow.connections
+  into.bytesSent += flow.bytesSent
+  into.bytesRecv += flow.bytesRecv
+  into.flowCount += flow.flowCount
+  if (flow.requestCount) into.requestCount = (into.requestCount || 0) + flow.requestCount
+  if (flow.errorCount) into.errorCount = (into.errorCount || 0) + flow.errorCount
+  if (flow.requestRate) into.requestRate = (into.requestRate || 0) + flow.requestRate
+  if (flow.errorRate) into.errorRate = (into.errorRate || 0) + flow.errorRate
+}
+
+/**
+ * How much of the requested window the flows cover, as a short label: "last
+ * 1m 40s". Null when the whole window is covered. Measured back from when the
+ * data was collected, not from now.
+ */
+export function coverageLabel(coveredSince: string | undefined, collectedAt: string | undefined): string | null {
+  if (!coveredSince || !collectedAt) return null
+  const seconds = Math.max(0, Math.round((Date.parse(collectedAt) - Date.parse(coveredSince)) / 1000))
+  if (!Number.isFinite(seconds)) return null
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `last ${m > 0 ? `${m}m ${s}s` : `${s}s`}`
+}
+
+/** A per-second rate, precise enough to tell a trickle from nothing: 0.30, 12, 1.2K. */
+export function formatRate(rate: number): string {
+  if (rate >= 1000) return `${(rate / 1000).toFixed(1)}K`
+  if (rate >= 10) return rate.toFixed(0)
+  if (rate >= 1) return rate.toFixed(1)
+  if (rate >= 0.01) return rate.toFixed(2)
+  if (rate > 0) return '<0.01'
+  return '0'
 }
 
 /**
@@ -145,4 +256,34 @@ export function isPolicyDropReason(dropReasonDesc: string | undefined, deniedByC
   if (deniedByCount > 0) return true
   const code = (dropReasonDesc ?? '').toUpperCase()
   return code === 'POLICY_DENIED' || code === 'POLICY_DENY'
+}
+
+/**
+ * Drop each HTTP REQUEST record that has a matching RESPONSE: the response
+ * carries the status and latency, so it stands for the call. A request with no
+ * response stays, because a missing response is worth seeing.
+ *
+ * `callerOriented` is the server saying its responses run caller → callee on
+ * the server's port, like their requests, so they match on endpoints, route and
+ * port exactly. Without it the server is a Radar that predates that — Radar Hub
+ * renders clusters running such builds — whose responses run server → client on
+ * the client's ephemeral port, so they match reversed and without the port.
+ * The orientation is taken from the server, never inferred from which records
+ * happen to be in the window.
+ */
+export function dedupeHTTPPairs(flows: TrafficFlow[], callerOriented: boolean): TrafficFlow[] {
+  const isHTTP = (f: TrafficFlow, type: string) => f.l7Protocol === 'HTTP' && f.l7Type === type
+  const call = (from: string, to: string, f: TrafficFlow) =>
+    callerOriented
+      ? `${from}|${to}|${f.httpMethod}|${f.httpPath}|${f.port}`
+      : `${from}|${to}|${f.httpMethod}|${f.httpPath}`
+
+  const answered = new Set<string>()
+  for (const f of flows) {
+    if (!isHTTP(f, 'RESPONSE')) continue
+    answered.add(callerOriented
+      ? call(f.source.name, f.destination.name, f)
+      : call(f.destination.name, f.source.name, f))
+  }
+  return flows.filter(f => !(isHTTP(f, 'REQUEST') && answered.has(call(f.source.name, f.destination.name, f))))
 }

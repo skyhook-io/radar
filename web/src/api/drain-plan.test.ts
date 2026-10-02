@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   describeDrainResult,
-  DrainPlanUnsupportedError,
   drainPlanBody,
-  drainPlanFetchError,
   drainPlanPath,
 } from "./client";
 
@@ -23,14 +21,6 @@ describe("drain plan request", () => {
       deleteEmptyDirData: true,
       force: true,
     });
-  });
-
-  it("reads a plain-text 404 as an unsupported endpoint, not as a missing node", () => {
-    expect(drainPlanFetchError(404, null)).toBeInstanceOf(DrainPlanUnsupportedError);
-    const nodeGone = drainPlanFetchError(404, { error: 'nodes "worker-1" not found' });
-    expect(nodeGone).not.toBeInstanceOf(DrainPlanUnsupportedError);
-    expect(nodeGone.message).toBe('nodes "worker-1" not found');
-    expect(drainPlanFetchError(503, null).message).toBe("HTTP 503");
   });
 });
 

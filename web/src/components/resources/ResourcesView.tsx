@@ -5,6 +5,7 @@ import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, isKindSyncFai
 import { isBadgeWorthy } from '../../utils/auditBadges'
 import type { AuditBadgeMessage } from '@skyhook-io/k8s-ui'
 import { apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from '../../api/config'
+import { readErrorBody } from '../../api/httpErrors'
 import { useAPIResources } from '../../api/apiResources'
 import { useConnection } from '../../context/ConnectionContext'
 import { initNavigationMap, getSecretStoreProviderType } from '@skyhook-io/k8s-ui'
@@ -263,7 +264,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         durationMs: Math.round(performance.now() - startedAt),
       })
       if (!res.ok) {
-        const errorData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+        const errorData = await readErrorBody(res)
         throw new ApiError(errorData.error || `Failed to fetch ${selectedKind.name}`, res.status, errorData)
       }
       const body = await res.json()

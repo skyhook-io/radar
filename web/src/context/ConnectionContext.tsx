@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getApiBase } from '../api/config'
+import { readErrorBody } from '../api/httpErrors'
 import { apiFetch, type SyncStatusSnapshot } from '../api/client'
 
 export type ConnectionStateType = 'connected' | 'disconnected' | 'connecting'
@@ -90,7 +91,7 @@ async function retryConnection(): Promise<ConnectionState> {
     method: 'POST',
   })
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' })) as { error?: string; errorType?: string }
+    const error = await readErrorBody(response) as { error?: string; errorType?: string }
     throw new ConnectionRetryError(error.error || `HTTP ${response.status}`, error.errorType)
   }
   return response.json()

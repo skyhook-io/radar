@@ -3,6 +3,8 @@ import type { VirtuosoHandle } from 'react-virtuoso'
 import type { LogEntry } from './useLogBuffer'
 import { stripAnsi, escapeRegExp } from '../../utils/log-format'
 
+export type LogSearchMode = 'highlight' | 'only' | 'hide'
+
 interface UseLogSearchReturn {
   query: string
   setQuery: (q: string) => void
@@ -11,14 +13,16 @@ interface UseLogSearchReturn {
   setIsRegex: (v: boolean) => void
   isCaseSensitive: boolean
   toggleCaseSensitive: () => void
-  isFilterMode: boolean
-  toggleFilterMode: () => void
-  setFilterMode: (v: boolean) => void
+  /** highlight: show every line, mark matches · only: show matching lines · hide: drop matching lines */
+  mode: LogSearchMode
+  setMode: (mode: LogSearchMode) => void
+  /** Whether the query currently narrows the visible lines (only/hide with a non-empty, valid query) */
+  isFiltering: boolean
   matchCount: number
   currentMatch: number
   /** Indices into the entries array that match */
   matchIndices: number[]
-  /** When filter mode is on, only matching entries */
+  /** The lines left after applying the mode: matching lines for `only`, non-matching for `hide` */
   filteredEntries: LogEntry[]
   /** Error message when regex is invalid (null when valid) */
   regexError: string | null
@@ -29,14 +33,32 @@ interface UseLogSearchReturn {
   close: () => void
 }
 
+/**
+ * The lines a search mode leaves visible. Only and Hide act on whole records:
+ * a match on any line of a stack trace keeps or hides the trace together.
+ */
+export function applySearchMode<T extends { id: number }>(
+  entries: readonly T[],
+  matchIndices: readonly number[],
+  mode: LogSearchMode,
+  recordIdOf: (entry: T) => number = e => e.id,
+): T[] {
+  if (mode === 'highlight') return [...entries]
+  const matchedRecords = new Set(matchIndices.map(i => recordIdOf(entries[i])))
+  const keepMatches = mode === 'only'
+  return entries.filter(e => matchedRecords.has(recordIdOf(e)) === keepMatches)
+}
+
 export function useLogSearch(
   entries: LogEntry[],
   virtuosoRef: React.RefObject<VirtuosoHandle | null>,
+  /** Id of the record an entry belongs to (its first line's id); defaults to the entry itself */
+  recordIdOf?: (entry: LogEntry) => number,
 ): UseLogSearchReturn {
   const [query, setQuery] = useState('')
   const [isRegex, setIsRegex] = useState(false)
   const [isCaseSensitive, setIsCaseSensitive] = useState(false)
-  const [isFilterMode, setIsFilterMode] = useState(false)
+  const [mode, setMode] = useState<LogSearchMode>('highlight')
   const [currentMatch, setCurrentMatch] = useState(0)
   const [isOpen, setIsOpen] = useState(false)
 
@@ -72,12 +94,17 @@ export function useLogSearch(
     }
   }, [entries, deferredQuery, isRegex, isCaseSensitive])
 
-  // Filtered entries for filter mode
-  const filteredEntries = useMemo(() => {
-    if (!isFilterMode || !deferredQuery) return entries
-    const matchSet = new Set(matchIndices)
-    return entries.filter((_, i) => matchSet.has(i))
-  }, [entries, isFilterMode, deferredQuery, matchIndices])
+  // Gate on the live query too, so clearing or closing search unfilters immediately
+  // rather than after the deferred value catches up.
+  const isFiltering = mode !== 'highlight' && !!query && !!deferredQuery && !regexError
+  const filteredEntries = useMemo(
+    () => (isFiltering ? applySearchMode(entries, matchIndices, mode, recordIdOf) : entries),
+    [entries, isFiltering, mode, matchIndices, recordIdOf],
+  )
+  const filteredIndexById = useMemo(() => {
+    if (mode !== 'only' || !isFiltering) return null
+    return new Map(filteredEntries.map((e, i) => [e.id, i]))
+  }, [mode, isFiltering, filteredEntries])
 
   // Reset current match when search criteria change (but not when new entries arrive during streaming)
   const prevCriteria = useRef({ query, isRegex, isCaseSensitive })
@@ -94,10 +121,13 @@ export function useLogSearch(
 
   const scrollToMatch = useCallback((matchIdx: number) => {
     if (matchIdx < 0 || matchIdx >= matchIndices.length) return
-    if (isFilterMode) {
-      // In filter mode, match index maps directly to filtered list index
+    if (mode === 'hide') return
+    if (mode === 'only') {
+      // The list holds whole matching records, so find the matched line within it
+      const index = filteredIndexById?.get(entries[matchIndices[matchIdx]].id)
+      if (index === undefined) return
       virtuosoRef.current?.scrollToIndex({
-        index: matchIdx,
+        index,
         align: 'center',
         behavior: 'smooth',
       })
@@ -109,26 +139,24 @@ export function useLogSearch(
         behavior: 'smooth',
       })
     }
-  }, [matchIndices, isFilterMode, virtuosoRef])
+  }, [entries, matchIndices, mode, filteredIndexById, virtuosoRef])
 
   const goToNext = useCallback(() => {
-    if (matchIndices.length === 0) return
+    if (matchIndices.length === 0 || mode === 'hide') return
     const next = (currentMatch + 1) % matchIndices.length
     setCurrentMatch(next)
     scrollToMatch(next)
-  }, [currentMatch, matchIndices.length, scrollToMatch])
+  }, [currentMatch, matchIndices.length, mode, scrollToMatch])
 
   const goToPrev = useCallback(() => {
-    if (matchIndices.length === 0) return
+    if (matchIndices.length === 0 || mode === 'hide') return
     const prev = (currentMatch - 1 + matchIndices.length) % matchIndices.length
     setCurrentMatch(prev)
     scrollToMatch(prev)
-  }, [currentMatch, matchIndices.length, scrollToMatch])
+  }, [currentMatch, matchIndices.length, mode, scrollToMatch])
 
   const toggleRegex = useCallback(() => setIsRegex(p => !p), [])
   const toggleCaseSensitive = useCallback(() => setIsCaseSensitive(p => !p), [])
-  const toggleFilterMode = useCallback(() => setIsFilterMode(p => !p), [])
-  const setFilterMode = useCallback((v: boolean) => setIsFilterMode(v), [])
 
   const open = useCallback(() => setIsOpen(true), [])
   const close = useCallback(() => {
@@ -144,9 +172,9 @@ export function useLogSearch(
     setIsRegex,
     isCaseSensitive,
     toggleCaseSensitive,
-    isFilterMode,
-    toggleFilterMode,
-    setFilterMode,
+    mode,
+    setMode,
+    isFiltering,
     matchCount: matchIndices.length,
     currentMatch,
     matchIndices,

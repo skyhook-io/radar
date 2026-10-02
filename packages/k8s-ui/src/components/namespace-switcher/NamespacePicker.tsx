@@ -1,6 +1,6 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, Globe, Search, AlertTriangle } from 'lucide-react'
+import { ChevronDown, Globe, Search } from 'lucide-react'
 import { Badge } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
 import { MultiSelectPicker } from '../ui/MultiSelectPicker'
@@ -57,6 +57,12 @@ export interface NamespacePickerProps {
   variant?: 'chip' | 'segment'
   /** Muted label shown before the value in the 'segment' variant (e.g. "Namespace"). */
   label?: string
+  /**
+   * A short action (e.g. a "How to add namespaces" link) for when the list is
+   * not authoritative and the viewer can supply namespaces themselves. Omit it
+   * when the viewer can't act — the picker then says nothing about the list.
+   */
+  limitedListHelp?: ReactNode
 }
 
 /**
@@ -79,7 +85,7 @@ export interface NamespacePickerProps {
  * onApply. "Clear all" applies immediately and closes.
  */
 export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePickerProps>(function NamespacePicker(
-  { scope, onApply, loading = false, pending = false, disabled = false, disabledTooltip, className = '', variant = 'chip', label },
+  { scope, onApply, loading = false, pending = false, disabled = false, disabledTooltip, className = '', variant = 'chip', label, limitedListHelp },
   ref,
 ) {
   const [isOpen, setIsOpen] = useState(false)
@@ -116,8 +122,11 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
 
   const items = useMemo(() => {
     if (!scope) return [] as string[]
-    return [...(scope.accessibleNamespaces ?? [])].sort((a, b) => a.localeCompare(b))
-  }, [scope])
+    // A pick the backend kept through a failed namespace load can be missing
+    // from accessibleNamespaces; list it anyway so it can still be unchecked.
+    const all = new Set([...(scope.accessibleNamespaces ?? []), ...scopeActives])
+    return [...all].sort((a, b) => a.localeCompare(b))
+  }, [scope, scopeActives])
   const deniedNamespaces = useMemo(() => new Set(scope?.deniedNamespaces ?? []), [scope?.deniedNamespaces])
 
   const filteredItems = useMemo(() => {
@@ -201,8 +210,9 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
   const triggerLabel =
     activeCount === 0 ? 'All namespaces' : activeCount === 1 ? scopeActives[0] : `${activeCount} namespaces`
   const isClusterWide = activeCount === 0
-  const restrictedHint = scope.mode === 'restricted'
   const cacheScopeLocked = scope.cacheScoped && !scope.namespaceRescope
+  const needsNamespaces = scope.authoritative === false && limitedListHelp != null
+  const emptyStateLabel = needsNamespaces ? 'No namespaces yet.' : 'No namespaces available.'
   const isDisabled = disabled || loading || pending || cacheScopeLocked
   const canClearAll = scope.canClearNamespace || activeCount === 0
   const tooltipContent = disabled && disabledTooltip
@@ -211,8 +221,10 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
       ? scope.namespaceRescope
         ? `Radar is watching only ${scope.cacheScopeNamespace || triggerLabel} to stay fast on large clusters. Pick another namespace to re-point it (takes a moment; closes open terminals).`
         : `Radar is watching only ${scope.cacheScopeNamespace || triggerLabel} on this cluster.`
-      : restrictedHint
-      ? 'Limited namespace visibility — only namespaces granted by your RBAC are shown.'
+      : needsNamespaces && isClusterWide
+      ? 'Radar can\u2019t list namespaces on this cluster.'
+      : scope.authoritative === false && isClusterWide
+      ? 'Showing the namespaces your account can access.'
       : isClusterWide
         ? 'Currently viewing all namespaces. Click to narrow the view.'
         : activeCount === 1
@@ -255,11 +267,7 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
           {label && (
             <span className="shrink-0 font-normal text-theme-text-tertiary">{label}</span>
           )}
-          {isClusterWide ? (
-            <Globe className="w-3.5 h-3.5 shrink-0 text-theme-text-tertiary" />
-          ) : restrictedHint ? (
-            <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-theme-text-tertiary" />
-          ) : null}
+          {isClusterWide && <Globe className="w-3.5 h-3.5 shrink-0 text-theme-text-tertiary" />}
           <span className={`font-medium truncate ${variant === 'segment' ? 'min-w-0' : 'max-w-[180px]'}`}>
             {pending ? 'Switching…' : triggerLabel}
           </span>
@@ -299,7 +307,7 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
                 <ul className="max-h-80 overflow-y-auto py-1">
                   {filteredItems.length === 0 && (
                     <li className="px-3 py-2 text-xs text-theme-text-tertiary">
-                      {search ? 'No matches.' : 'No namespaces available.'}
+                      {search ? 'No matches.' : emptyStateLabel}
                     </li>
                   )}
 
@@ -346,18 +354,16 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
                 onSearchChange={setSearch}
                 searchPlaceholder="Filter namespaces"
                 summaryEmptyLabel="All namespaces"
-                noItemsLabel="No namespaces available."
+                noItemsLabel={emptyStateLabel}
                 clearAllDisabled={!canClearAll || activeCount === 0}
                 clearAllAriaLabel="Clear namespace selection"
                 renderItemMeta={renderNamespaceMeta}
               />
             )}
 
-            {!scope.authoritative && (
-              <div className="px-3 py-2 border-t border-theme-border text-[11px] status-degraded">
-                Limited list — your RBAC doesn&rsquo;t allow listing all
-                namespaces. Other namespaces may be accessible but won&rsquo;t
-                appear here until you switch context.
+            {needsNamespaces && (
+              <div className="px-3 py-2 border-t border-theme-border text-[11px] text-theme-text-secondary">
+                Missing a namespace? {limitedListHelp}
               </div>
             )}
           </div>,

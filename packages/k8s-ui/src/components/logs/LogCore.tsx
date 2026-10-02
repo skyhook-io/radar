@@ -1,8 +1,8 @@
 import { useRef, useCallback, useState, useMemo, useEffect, type ReactNode } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Play, Square, Download, FileDown, Search, X, Terminal, RotateCcw, ChevronUp, ChevronDown, ChevronRight, CaseSensitive, Regex, WrapText, Clock, Copy, Trash2, Filter, Braces, Palette, ListCollapse, Sun, Moon } from 'lucide-react'
+import { Play, Square, Download, FileDown, Search, X, Terminal, RotateCcw, ChevronUp, ChevronDown, ChevronRight, CaseSensitive, Regex, WrapText, Clock, Copy, Trash2, Filter, EyeOff, Highlighter, Braces, Palette, ListCollapse, Sun, Moon } from 'lucide-react'
 import type { LogEntry, LogLevel } from './useLogBuffer'
-import { useLogSearch } from './useLogSearch'
+import { useLogSearch, type LogSearchMode } from './useLogSearch'
 import { StructuredLogLine } from './StructuredLogLine'
 import { Tooltip } from '../ui/Tooltip'
 import { Input } from '../ui/Input'
@@ -16,6 +16,7 @@ import {
   TIMESTAMP_FORMAT_LABELS,
 } from '../../utils/log-format'
 import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
+import { associateContinuations, groupContinuations, type LogGroup } from '../../utils/log-level'
 import { copyText } from '../../utils/clipboard'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
@@ -71,13 +72,16 @@ interface LogCoreProps {
 interface LevelOption {
   level: LogLevel
   label: string
+  /** What the chip's lines are called in its tooltip */
+  noun: string
 }
 
 const LEVEL_OPTIONS: LevelOption[] = [
-  { level: 'error', label: 'ERR' },
-  { level: 'warn', label: 'WARN' },
-  { level: 'info', label: 'INFO' },
-  { level: 'debug', label: 'DBG' },
+  { level: 'error', label: 'ERR', noun: 'error logs' },
+  { level: 'warn', label: 'WARN', noun: 'warning logs' },
+  { level: 'info', label: 'INFO', noun: 'info logs' },
+  { level: 'debug', label: 'DBG', noun: 'debug logs' },
+  { level: 'unknown', label: 'OTHER', noun: 'lines with no level' },
 ]
 
 function getLevelActiveColor(level: LogLevel, palette: LogPalette): string {
@@ -86,7 +90,7 @@ function getLevelActiveColor(level: LogLevel, palette: LogPalette): string {
     case 'warn': return palette.levelActiveWarn
     case 'info': return palette.levelActiveInfo
     case 'debug': return palette.levelActiveDebug
-    default: return palette.levelActiveDebug
+    default: return palette.levelActiveOther
   }
 }
 
@@ -119,19 +123,6 @@ const TIMESTAMP_FORMAT_SHORT_LABELS: Record<TimestampFormat, string> = {
   'iso-utc': 'UTC date',
   'relative': 'Relative',
   'epoch': 'Unix time',
-}
-
-function isContinuationLine(content: string): boolean {
-  // Lines starting with whitespace are the dominant stack-trace continuation pattern:
-  // Java `\tat com.foo.Bar`, Go `\tpackage.func`, Node `    at func`, Python `  File "..."`.
-  if (/^\s/.test(content)) return true
-  // Java's secondary chain markers that don't start with whitespace.
-  return /^(Caused by:|Suppressed:|\.\.\. \d+ more)/.test(content)
-}
-
-interface LogGroup {
-  head: LogEntry
-  continuations: LogEntry[]
 }
 
 const TIP_DELAY = 150
@@ -201,7 +192,7 @@ export function LogCore({
     try { return localStorage.getItem('radar-logs-collapse-stacks') !== 'false' } catch { return true }
   })
   const [enabledLevels, setEnabledLevels] = useState<Set<LogLevel>>(
-    new Set(['error', 'warn', 'info', 'debug'])
+    new Set(['error', 'warn', 'info', 'debug', 'unknown'])
   )
   const [showDownloadMenu, setShowDownloadMenu] = useState(false)
   const downloadMenu = useAnimatedUnmount(showDownloadMenu, overlayExitMs('menu'))
@@ -232,32 +223,50 @@ export function LogCore({
     return () => clearInterval(id)
   }, [tsFormat, showTimestamps])
 
-  // Level-filtered entries
-  // 'unknown' logs are shown when all 4 known levels are enabled (no active filtering)
+  // One membership rule for filtering, counting and grouping: a stack-trace
+  // line belongs to the record its own pod and container started.
+  const association = useMemo(() => {
+    const { headOf, effectiveLevel } = associateContinuations(entries)
+    const headIdById = new Map<number, number>()
+    for (let i = 0; i < entries.length; i++) {
+      if (headOf[i] !== i) headIdById.set(entries[i].id, entries[headOf[i]].id)
+    }
+    return { headOf, effectiveLevel, headIdById }
+  }, [entries])
+
+  // Frames take their record's level so they filter and render as part of it.
+  const recordEntries = useMemo(
+    () => entries.map((e, i) => (association.effectiveLevel[i] === e.level ? e : { ...e, level: association.effectiveLevel[i] })),
+    [entries, association],
+  )
+
   const levelFilteredEntries = useMemo(() => {
     const allEnabled = LEVEL_OPTIONS.every(opt => enabledLevels.has(opt.level))
-    if (allEnabled) return entries
-    return entries.filter(e => enabledLevels.has(e.level))
-  }, [entries, enabledLevels])
+    if (allEnabled) return recordEntries
+    return recordEntries.filter(e => enabledLevels.has(e.level))
+  }, [recordEntries, enabledLevels])
 
-  // Level counts for badges
+  // Chip counts count records, so a 40-frame stack trace is one error.
   const levelCounts = useMemo(() => {
     const counts: Record<LogLevel, number> = { error: 0, warn: 0, info: 0, debug: 0, unknown: 0 }
-    for (const e of entries) {
-      counts[e.level]++
+    for (let i = 0; i < entries.length; i++) {
+      if (association.headOf[i] === i) counts[entries[i].level]++
     }
     return counts
-  }, [entries])
+  }, [entries, association])
 
   const hasStructuredEntries = useMemo(() => entries.some(e => e.isJson || e.isLogfmt), [entries])
 
-  // Search
-  const search = useLogSearch(levelFilteredEntries, virtuosoRef)
+  const recordIdOf = useCallback(
+    (e: LogEntry) => association.headIdById.get(e.id) ?? e.id,
+    [association],
+  )
+  const search = useLogSearch(levelFilteredEntries, virtuosoRef, recordIdOf)
 
-  // Display entries: use search-filtered when filter mode is active
-  const displayEntries = search.isFilterMode && search.query
-    ? search.filteredEntries
-    : levelFilteredEntries
+  const displayEntries = search.isFiltering ? search.filteredEntries : levelFilteredEntries
+  const hiddenCount = levelFilteredEntries.length - displayEntries.length
+  // Hidden lines leave nothing to highlight, so Hide keeps normal rendering and stack grouping.
+  const highlightQuery = search.mode === 'hide' ? '' : search.query
 
   const exportTriggerRef = useRef<HTMLButtonElement>(null)
   const closeExportMenu = useCallback(() => {
@@ -464,12 +473,12 @@ export function LogCore({
   }, [])
 
   // Clicking a filter chip in a structured log value pushes the value into the
-  // log search and enables filter mode so only matching lines are shown.
+  // log search and shows only the lines that match it.
   const handleFilterValue = useCallback((value: string) => {
     search.setQuery(value)
     // Values often contain regex metacharacters — force literal-substring matching.
     search.setIsRegex(false)
-    search.setFilterMode(true)
+    search.setMode('only')
     if (!search.isOpen) search.open()
   }, [search])
 
@@ -486,28 +495,19 @@ export function LogCore({
   }, [])
 
   // Highlight set for current match
-  const currentHighlightId = search.matchIndices.length > 0
-    ? (search.isFilterMode
-        ? search.filteredEntries[search.currentMatch]?.id
-        : levelFilteredEntries[search.matchIndices[search.currentMatch]]?.id)
-    : -1
+  const currentHighlightId = search.matchIndices.length === 0 || search.mode === 'hide'
+    ? -1
+    : levelFilteredEntries[search.matchIndices[search.currentMatch]]?.id
 
-  // Group stack-trace continuation lines under their preceding head line.
-  // Disabled while search is active so matches inside continuations remain visible.
+  // Group stack-trace lines under the line that started their record. Disabled
+  // while highlighting so matches inside stack frames remain visible. A line
+  // whose record start is filtered out stays on its own row.
   const groupedEntries = useMemo<LogGroup[]>(() => {
-    if (!collapseStacks || search.query) {
+    if (!collapseStacks || highlightQuery) {
       return displayEntries.map(e => ({ head: e, continuations: [] }))
     }
-    const groups: LogGroup[] = []
-    for (const entry of displayEntries) {
-      if (groups.length > 0 && isContinuationLine(entry.content)) {
-        groups[groups.length - 1].continuations.push(entry)
-      } else {
-        groups.push({ head: entry, continuations: [] })
-      }
-    }
-    return groups
-  }, [displayEntries, collapseStacks, search.query])
+    return groupContinuations(displayEntries, association.headIdById)
+  }, [displayEntries, collapseStacks, highlightQuery, association])
 
   const scrollToBottom = useCallback(() => {
     virtuosoRef.current?.scrollToIndex({
@@ -584,7 +584,7 @@ export function LogCore({
             const active = enabledLevels.has(opt.level)
             const count = levelCounts[opt.level]
             return (
-              <Tooltip key={opt.level} content={`${active ? 'Hide' : 'Show'} ${opt.label} logs`} delay={TIP_DELAY} position="bottom">
+              <Tooltip key={opt.level} content={`${active ? 'Hide' : 'Show'} ${opt.noun}`} delay={TIP_DELAY} position="bottom">
                 <button
                   onClick={() => toggleLevel(opt.level)}
                   className={`px-1.5 py-0.5 text-[10px] font-medium rounded border transition-colors ${
@@ -876,7 +876,7 @@ export function LogCore({
 
       {/* Search bar */}
       {search.isOpen && (
-        <div className={`flex items-center gap-2 px-3 py-2 border-b ${palette.border} ${palette.toolbarBgMuted}`}>
+        <div className={`@container/logsearch flex items-center gap-2 px-3 py-2 border-b ${palette.border} ${palette.toolbarBgMuted}`}>
           <Search className={`w-4 h-4 ${palette.textSecondary} shrink-0`} />
           <Input
             value={search.query}
@@ -921,47 +921,43 @@ export function LogCore({
             </button>
           </Tooltip>
 
-          {/* Filter mode toggle */}
-          <Tooltip content={search.isFilterMode ? 'Highlight mode' : 'Filter mode'} delay={TIP_DELAY} position="bottom">
-            <button
-              onClick={search.toggleFilterMode}
-              className={`p-1 rounded transition-colors ${
-                search.isFilterMode ? palette.toolbarActive : `${palette.textTertiary} ${palette.hoverText}`
-              }`}
-            >
-              <Filter className="w-3.5 h-3.5" />
-            </button>
-          </Tooltip>
+          <SearchModeControl mode={search.mode} onChange={search.setMode} palette={palette} />
 
           {search.query && (
             <>
               <span className={`text-xs whitespace-nowrap ${search.regexError ? palette.textError : palette.textTertiary}`}>
                 {search.regexError
                   ? 'Invalid regex'
-                  : search.matchCount > 0
-                    ? `${search.currentMatch + 1} / ${search.matchCount}`
-                    : '0 results'}
+                  : search.mode === 'hide'
+                    ? `${hiddenCount.toLocaleString()} hidden`
+                    : search.matchCount > 0
+                      ? `${search.currentMatch + 1} / ${search.matchCount}`
+                      : '0 results'}
               </span>
 
-              {/* Navigation arrows */}
-              <Tooltip content="Previous (Shift+Enter)" delay={TIP_DELAY} position="bottom">
-                <button
-                  onClick={search.goToPrev}
-                  disabled={search.matchCount === 0}
-                  className={`p-1 rounded ${palette.textSecondary} ${palette.hoverText} disabled:opacity-30`}
-                >
-                  <ChevronUp className="w-3.5 h-3.5" />
-                </button>
-              </Tooltip>
-              <Tooltip content="Next (Enter)" delay={TIP_DELAY} position="bottom">
-                <button
-                  onClick={search.goToNext}
-                  disabled={search.matchCount === 0}
-                  className={`p-1 rounded ${palette.textSecondary} ${palette.hoverText} disabled:opacity-30`}
-                >
-                  <ChevronDown className="w-3.5 h-3.5" />
-                </button>
-              </Tooltip>
+              {/* Matches are off screen in Hide mode, so there is nothing to step through */}
+              {search.mode !== 'hide' && (
+                <>
+                  <Tooltip content="Previous (Shift+Enter)" delay={TIP_DELAY} position="bottom">
+                    <button
+                      onClick={search.goToPrev}
+                      disabled={search.matchCount === 0}
+                      className={`p-1 rounded ${palette.textSecondary} ${palette.hoverText} disabled:opacity-30`}
+                    >
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    </button>
+                  </Tooltip>
+                  <Tooltip content="Next (Enter)" delay={TIP_DELAY} position="bottom">
+                    <button
+                      onClick={search.goToNext}
+                      disabled={search.matchCount === 0}
+                      className={`p-1 rounded ${palette.textSecondary} ${palette.hoverText} disabled:opacity-30`}
+                    >
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </button>
+                  </Tooltip>
+                </>
+              )}
 
               <button
                 onClick={() => search.setQuery('')}
@@ -990,8 +986,8 @@ export function LogCore({
       ) : groupedEntries.length === 0 ? (
         <div className={`${EMPTY_STATE_CLASS} ${palette.textTertiary}`}>
           <Terminal className="w-8 h-8" />
-          <span>{emptyMessage}</span>
-          {emptyCommand && (
+          <span>{entries.length > 0 ? `Filters hide all ${entries.length.toLocaleString()} loaded lines` : emptyMessage}</span>
+          {entries.length === 0 && emptyCommand && (
             <button type="button" onClick={() => { void copyText(emptyCommand) }} className={`mt-2 inline-flex max-w-[80%] items-center gap-2 rounded border px-3 py-2 font-mono text-xs ${palette.border} ${palette.toolbarBg}`} title="Copy recovery command">
               <code className="truncate">{emptyCommand}</code>
               <Copy className="h-3.5 w-3.5 shrink-0" />
@@ -1011,7 +1007,7 @@ export function LogCore({
             itemContent={(_index, group) => (
               <LogGroupItem
                 group={group}
-                searchQuery={search.query}
+                searchQuery={highlightQuery}
                 searchIsRegex={search.isRegex}
                 searchIsCaseSensitive={search.isCaseSensitive}
                 showPodName={showPodName}
@@ -1047,10 +1043,48 @@ export function LogCore({
       <div className={`flex items-center gap-4 px-3 py-1 border-t ${palette.border} ${palette.toolbarBg} text-[10px] ${palette.textDisabled}`}>
         {onStartStream && <Shortcut keys="S" label={isStreaming ? 'Stop stream' : 'Stream'} palette={palette} />}
         <Shortcut keys="Ctrl+F" label="Search" palette={palette} />
-        <Shortcut keys="Enter" label="Next match" palette={palette} />
-        <Shortcut keys="Shift+Enter" label="Prev match" palette={palette} />
+        {search.mode !== 'hide' && (
+          <>
+            <Shortcut keys="Enter" label="Next match" palette={palette} />
+            <Shortcut keys="Shift+Enter" label="Prev match" palette={palette} />
+          </>
+        )}
         <Shortcut keys="Esc" label="Close search" palette={palette} />
       </div>
+    </div>
+  )
+}
+
+const SEARCH_MODES: { mode: LogSearchMode; label: string; tip: string; Icon: typeof Filter }[] = [
+  { mode: 'highlight', label: 'Highlight', tip: 'Show all lines and highlight matches', Icon: Highlighter },
+  { mode: 'only', label: 'Only matching', tip: 'Show only matching lines, with their stack traces', Icon: Filter },
+  { mode: 'hide', label: 'Hide matching', tip: 'Hide matching lines and their stack traces, like grep -v', Icon: EyeOff },
+]
+
+/** What the search query does to the list. Labels collapse to icons when the search row is narrow. */
+function SearchModeControl({ mode, onChange, palette }: {
+  mode: LogSearchMode
+  onChange: (mode: LogSearchMode) => void
+  palette: LogPalette
+}) {
+  return (
+    <div role="radiogroup" aria-label="Search mode" className={`flex items-center shrink-0 rounded border ${palette.border}`}>
+      {SEARCH_MODES.map(({ mode: m, label, tip, Icon }) => (
+        <Tooltip key={m} content={tip} delay={TIP_DELAY} position="bottom">
+          <button
+            role="radio"
+            aria-checked={mode === m}
+            aria-label={label}
+            onClick={() => onChange(m)}
+            className={`flex items-center gap-1 px-1.5 py-0.5 text-[11px] whitespace-nowrap transition-colors ${
+              mode === m ? palette.toolbarActive : `${palette.textTertiary} ${palette.hoverText}`
+            }`}
+          >
+            <Icon className="w-3.5 h-3.5" />
+            <span className="hidden @xl/logsearch:inline">{label}</span>
+          </button>
+        </Tooltip>
+      ))}
     </div>
   )
 }

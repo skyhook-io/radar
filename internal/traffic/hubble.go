@@ -9,16 +9,17 @@ import (
 	"io"
 	"log"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	flowpb "github.com/cilium/cilium/api/v1/flow"
 	observerpb "github.com/cilium/cilium/api/v1/observer"
+	relaypb "github.com/cilium/cilium/api/v1/relay"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -101,6 +102,10 @@ func (h *HubbleSource) Detect(ctx context.Context) (*DetectionResult, error) {
 		result.Message = "Hubble Relay not found. Install Cilium with Hubble enabled for traffic visibility."
 		return result, nil
 	}
+	// From here on Hubble is installed, so every way this can still fail is a
+	// problem with that install and its message has to reach the user — without
+	// Present it is reported as never installed, with advice to install it.
+	result.Present = true
 
 	// Count running pods and get the namespace
 	var relayNamespace string
@@ -830,7 +835,7 @@ func (h *HubbleSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRe
 		}, nil
 	}
 
-	flows, err := h.fetchFlowsViaGRPC(ctx, opts)
+	fetched, err := h.fetchFlowsViaGRPC(ctx, opts)
 	if err != nil {
 		log.Printf("[hubble] gRPC error: %v", err)
 		return &FlowsResponse{
@@ -841,48 +846,117 @@ func (h *HubbleSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRe
 		}, nil
 	}
 
-	return &FlowsResponse{
-		Source:    "hubble",
-		Timestamp: time.Now(),
-		Flows:     flows,
-	}, nil
+	flows := fetched.flows
+	response := &FlowsResponse{
+		Source:        "hubble",
+		Timestamp:     time.Now(),
+		Flows:         flows,
+		CoveredSince:  fetched.coveredSince,
+		NodeFlowLimit: fetched.nodeLimit,
+	}
+	if fetched.incomplete != "" {
+		response.Warning = fetched.incomplete
+		// The fetch worked; it could not see everything. A busy node that keeps
+		// dropping events will keep saying so, which is the truth about its data
+		// rather than a failure to retry.
+		response.WarningKind = WarningIncomplete
+		// A stream that failed before any flow arrived is a failed fetch that
+		// happened to report some gaps first; retrying it can bring the flows.
+		if fetched.streamFailed && len(flows) == 0 {
+			response.WarningKind = WarningTransient
+		}
+	}
+	return response, nil
 }
 
-// fetchFlowsViaGRPC fetches flows using gRPC client
-func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) ([]Flow, error) {
-	h.mu.RLock()
-	client := h.observerClient
-	h.mu.RUnlock()
+// hubbleFetch is what one GetFlows call established.
+type hubbleFetch struct {
+	flows []Flow
+	// incomplete explains, in terms a reader can act on, why the flows are not
+	// everything Hubble holds for the window; empty when nothing is missing.
+	incomplete   string
+	streamFailed bool
+	// coveredSince is when the flows start being complete: some node reached
+	// the per-node limit, and older traffic from it is not included. Nil when
+	// every node's traffic covers the whole window.
+	coveredSince *time.Time
+	nodeLimit    int
+}
 
-	if client == nil {
-		return nil, fmt.Errorf("not connected to Hubble Relay")
+// hubbleFlowsRequest builds the request for the newest flows. Since is left out
+// on purpose: given Since, Hubble rewinds to it and reads forward, so a node
+// with more than Number flows in the window returns its oldest ones and the
+// view ends minutes before now. Without it each node returns its newest Number,
+// and the window is applied as those arrive.
+func hubbleFlowsRequest(opts FlowOptions, follow bool) *observerpb.GetFlowsRequest {
+	req := &observerpb.GetFlowsRequest{Follow: follow}
+	if !follow {
+		req.Number = hubbleDefaultNodeLimit
+		if opts.Limit > 0 {
+			req.Number = uint64(opts.Limit)
+		}
 	}
-
-	// Build request
-	req := &observerpb.GetFlowsRequest{
-		Number: 1000, // Default limit
-		Follow: false,
-	}
-
-	if opts.Limit > 0 {
-		req.Number = uint64(opts.Limit)
-	}
-
-	// Add namespace filter if specified
-	// Use separate filters for source OR destination (each filter is AND within itself,
-	// but multiple filters are OR'd together)
+	// Source OR destination: each filter is AND within itself, filters are OR'd.
 	if opts.Namespace != "" {
 		req.Whitelist = []*flowpb.FlowFilter{
 			{SourcePod: []string{opts.Namespace + "/"}},
 			{DestinationPod: []string{opts.Namespace + "/"}},
 		}
 	}
-
-	// Add time filter based on Since
-	if opts.Since > 0 {
-		since := time.Now().Add(-opts.Since)
-		req.Since = timestamppb.New(since)
+	req.Blacklist = []*flowpb.FlowFilter{
+		// Reply packets at L3/L4 are dropped by callerOrientedFlow anyway;
+		// excluding them here stops them spending the per-node limit, which on a
+		// live cluster they took over 40% of. Only packet traces with an explicit
+		// is_reply=true match — the only L3/L4 records Cilium marks as replies —
+		// so L7 responses, drops, policy verdicts, socket traces and flows of
+		// unknown direction all still arrive.
+		{
+			Reply:     []bool{true},
+			EventType: []*flowpb.EventTypeFilter{{Type: hubbleEventTypeTrace}},
+		},
+		// Agent and debug events are not flows, but a node counts them toward
+		// Number as it walks back through its buffer. Left in, a node could hit
+		// its limit while returning fewer flows than the limit, and the fetch
+		// would read as complete when it was cut.
+		{EventType: []*flowpb.EventTypeFilter{{Type: hubbleEventTypeAgent}, {Type: hubbleEventTypeDebug}}},
 	}
+	return req
+}
+
+// Cilium's monitor message types (pkg/monitor/api MessageType*), kept local
+// rather than importing that package for three numbers.
+const (
+	hubbleEventTypeDebug = 2
+	hubbleEventTypeTrace = 4
+	hubbleEventTypeAgent = 130
+)
+
+// hubbleDefaultNodeLimit is how many flows each node returns when the caller
+// sets no limit. Hubble Relay applies Number per node, not in total.
+const hubbleDefaultNodeLimit = 1000
+
+// fetchFlowsViaGRPC fetches the newest flows in the window.
+func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) (hubbleFetch, error) {
+	h.mu.RLock()
+	client := h.observerClient
+	h.mu.RUnlock()
+
+	if client == nil {
+		return hubbleFetch{}, fmt.Errorf("not connected to Hubble Relay")
+	}
+
+	req := hubbleFlowsRequest(opts, false)
+	var windowStart time.Time
+	if opts.Since > 0 {
+		windowStart = time.Now().Add(-opts.Since)
+	}
+	type nodeSeen struct {
+		count  uint64
+		oldest time.Time
+	}
+	perNode := map[string]*nodeSeen{}
+	var flows []Flow
+	var streamFailed bool
 
 	// Create context with timeout
 	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -890,22 +964,47 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 
 	stream, err := client.GetFlows(reqCtx, req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get flows stream: %w", err)
+		return hubbleFetch{}, fmt.Errorf("failed to get flows stream: %w", err)
 	}
 
-	var flows []Flow
+	var gaps []string
+	var lost, delivered uint64
+	var unavailableNodes []string
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			// Check if we got any flows before the error
-			if len(flows) > 0 {
+			// Anything the stream delivered before failing — flows, or word of
+			// events lost and nodes unreachable — is still an answer, and a
+			// bare fetch error would throw away what is known to be missing.
+			if len(flows) > 0 || lost > 0 || len(unavailableNodes) > 0 {
 				log.Printf("[hubble] Stream ended with partial results: %v", err)
+				streamFailed = true
+				if len(flows) > 0 {
+					gaps = append(gaps, fmt.Sprintf("the stream from Hubble Relay ended early (%v), so flows after the first %d are missing", err, len(flows)))
+				} else {
+					gaps = append(gaps, fmt.Sprintf("the stream from Hubble Relay failed (%v) before delivering any flows", err))
+				}
 				break
 			}
-			return nil, fmt.Errorf("stream error: %w", err)
+			return hubbleFetch{}, fmt.Errorf("stream error: %w", err)
+		}
+
+		// Hubble reports in-band what it could not deliver: events a full
+		// buffer dropped, and nodes the relay could not reach. The flows around
+		// them are real, but the window is no longer everything that happened.
+		if le := resp.GetLostEvents(); le != nil {
+			lost += le.GetNumEventsLost()
+			continue
+		}
+		if ns := resp.GetNodeStatus(); ns != nil {
+			switch ns.GetStateChange() {
+			case relaypb.NodeState_NODE_UNAVAILABLE, relaypb.NodeState_NODE_ERROR:
+				unavailableNodes = append(unavailableNodes, ns.GetNodeNames()...)
+			}
+			continue
 		}
 
 		// Extract flow from response
@@ -913,13 +1012,118 @@ func (h *HubbleSource) fetchFlowsViaGRPC(ctx context.Context, opts FlowOptions) 
 		if pbFlow == nil {
 			continue
 		}
+		delivered++
+		// A flow without a timestamp can be placed in no window; it is kept
+		// rather than silently lost, and says nothing about coverage.
+		if pbFlow.GetTime() != nil {
+			ts := pbFlow.GetTime().AsTime()
+			seen := perNode[pbFlow.GetNodeName()]
+			if seen == nil {
+				seen = &nodeSeen{oldest: ts}
+				perNode[pbFlow.GetNodeName()] = seen
+			}
+			seen.count++
+			if ts.Before(seen.oldest) {
+				seen.oldest = ts
+			}
+			if !windowStart.IsZero() && ts.Before(windowStart) {
+				continue
+			}
+		}
 
-		flow := convertHubbleFlow(pbFlow)
+		flow, ok := callerOrientedFlow(pbFlow)
+		if !ok {
+			continue
+		}
 		flows = append(flows, flow)
 	}
 
+	// A node that returned its full limit may have had older traffic in the
+	// window that did not fit. Its oldest returned flow is where its data starts
+	// being complete; the view as a whole is complete from the latest of those.
+	var coveredSince *time.Time
+	for _, seen := range perNode {
+		if seen.count < req.Number || !seen.oldest.After(windowStart) {
+			continue
+		}
+		if coveredSince == nil || seen.oldest.After(*coveredSince) {
+			t := seen.oldest
+			coveredSince = &t
+		}
+	}
+	result := hubbleFetch{flows: flows, coveredSince: coveredSince, nodeLimit: int(req.Number)}
+
+	if lost > 0 {
+		log.Printf("[hubble] %d events lost against %d delivered", lost, delivered)
+	}
+	// A busy relay carries a few loss markers in its buffer nearly all the time —
+	// a handful against thousands of delivered events on a live cluster — and a
+	// warning on every fetch for those would be ignored along with the ones that
+	// matter. The threshold is a noise policy, not a completeness measure: loss
+	// markers are not scoped to the request's filters, so the two counts need
+	// not cover the same traffic.
+	if lost > 0 && float64(lost)*100 >= (float64(lost)+float64(delivered))*lostEventsWarnPercent {
+		gaps = append(gaps, fmt.Sprintf("Hubble reported %d events lost before they could be delivered", lost))
+	}
+	if len(unavailableNodes) > 0 {
+		slices.Sort(unavailableNodes)
+		unavailableNodes = slices.Compact(unavailableNodes)
+		// Counted, not named: this warning outlives namespace filtering, and a
+		// node's name is a cluster-scoped read the viewer may not have.
+		log.Printf("[hubble] Relay could not read flows from nodes: %s", strings.Join(unavailableNodes, ", "))
+		gaps = append(gaps, fmt.Sprintf("Hubble Relay could not read flows from %d node(s), so their traffic is missing", len(unavailableNodes)))
+	}
+
 	log.Printf("[hubble] Retrieved %d flows", len(flows))
-	return flows, nil
+	if len(gaps) > 0 {
+		result.incomplete = "Traffic data is incomplete: " + strings.Join(gaps, "; ") + "."
+		result.streamFailed = streamFailed
+	}
+	return result, nil
+}
+
+// lostEventsWarnPercent is the share of a fetch's events, lost ones included,
+// that must have been lost before the loss is worth a warning.
+const lostEventsWarnPercent = 1
+
+// callerOrientedFlow converts a Hubble flow and orients it from the caller to
+// the callee, reporting false for a flow that should not become an edge at all.
+//
+// Hubble records packets, so a conversation arrives from both ends: the reply
+// packets name the server as the source and the client's ephemeral port as the
+// destination port. Taken at face value they draw a second, reversed edge per
+// connection — server → client on a port nothing listens on. A reply at L3/L4
+// adds nothing the request-direction flow did not already say, so it is
+// dropped. An L7 response is the only record carrying the status code and
+// latency, so it is turned around onto the request's edge instead, and counts
+// no connection of its own.
+//
+// Only an explicit is_reply=true is acted on. Hubble leaves it unset when it
+// cannot tell (drops, encapsulation trace points), and those keep their
+// orientation — Hubble's own reply filter would discard them, which is why the
+// filter is not pushed into the request.
+func callerOrientedFlow(pbFlow *flowpb.Flow) (Flow, bool) {
+	flow := convertHubbleFlow(pbFlow)
+	if !pbFlow.GetIsReply().GetValue() {
+		return flow, true
+	}
+	if pbFlow.GetL7() == nil {
+		return Flow{}, false
+	}
+	flow.Source, flow.Destination = flow.Destination, flow.Source
+	flow.SourceService, flow.DestService = flow.DestService, flow.SourceService
+	if l4 := pbFlow.GetL4(); l4 != nil {
+		switch {
+		case l4.GetTCP() != nil:
+			flow.Port = int(l4.GetTCP().GetSourcePort())
+		case l4.GetUDP() != nil:
+			flow.Port = int(l4.GetUDP().GetSourcePort())
+		case l4.GetSCTP() != nil:
+			flow.Port = int(l4.GetSCTP().GetSourcePort())
+		}
+	}
+	flow.Connections = 0
+	return flow, true
 }
 
 // convertHubbleFlow converts a Hubble protobuf Flow to our internal Flow type
@@ -1090,17 +1294,7 @@ func (h *HubbleSource) StreamFlows(ctx context.Context, opts FlowOptions) (<-cha
 			return
 		}
 
-		// Build streaming request
-		req := &observerpb.GetFlowsRequest{
-			Follow: true,
-		}
-
-		if opts.Namespace != "" {
-			req.Whitelist = []*flowpb.FlowFilter{
-				{SourcePod: []string{opts.Namespace + "/"}},
-				{DestinationPod: []string{opts.Namespace + "/"}},
-			}
-		}
+		req := hubbleFlowsRequest(opts, true)
 
 		stream, err := client.GetFlows(ctx, req)
 		if err != nil {
@@ -1126,7 +1320,10 @@ func (h *HubbleSource) StreamFlows(ctx context.Context, opts FlowOptions) (<-cha
 				continue
 			}
 
-			flow := convertHubbleFlow(pbFlow)
+			flow, ok := callerOrientedFlow(pbFlow)
+			if !ok {
+				continue
+			}
 
 			select {
 			case flowCh <- flow:

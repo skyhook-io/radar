@@ -33,9 +33,15 @@ import {
   showApiSuccess,
 } from "./components/ui/Toast";
 import { setApiBase, setBasename } from "./api/config";
+import { shouldRetryRadarQuery } from "./api/radarFeatures";
 import { NavCustomizationProvider } from "./context/NavCustomization";
 import { FilterLocationBridge } from "./filter/FilterLocationBridge";
 import type { NavCustomization } from "./context/NavCustomization";
+import { RadarUpgradeHostProvider } from "./context/RadarUpgradeHost";
+import type {
+  RadarUpgradeHost,
+  RadarUpgradeRequest,
+} from "./context/RadarUpgradeHost";
 import type { ClusterLoadState } from "./types/clusterLoadState";
 import { TimelineSourceProvider } from "./context/TimelineSource";
 import type { TimelineSourceConfig } from "./api/timelineSource";
@@ -65,6 +71,21 @@ declare module "@tanstack/react-query" {
 export interface RadarAppProps {
   /** API base URL (REST + SSE + WS). Defaults to '/api' (same-origin). */
   apiBase?: string;
+  /**
+   * The version of the Radar behind `apiBase`, as the host knows it (Radar
+   * Cloud: the cluster's `radar_version`). Radar prefers that Radar's own
+   * /version-check answer and uses this only until it arrives or when it
+   * fails, to decide up front that a feature needs a newer Radar instead of
+   * probing for it.
+   */
+  radarVersion?: string;
+  /**
+   * Called when the user asks to upgrade from an inline "needs a newer Radar"
+   * note next to a feature the connected Radar is too old to serve. The host
+   * runs its own upgrade flow (Radar Cloud: one-click for owners, "ask an
+   * owner" otherwise). Omitted → the note links to the upgrade instructions.
+   */
+  onRequestRadarUpgrade?: (request: RadarUpgradeRequest) => void;
   /** React Router basename. Defaults to '' (mounted at root). */
   basename?: string;
   /**
@@ -163,7 +184,7 @@ function makeDefaultQueryClient(): QueryClient {
     defaultOptions: {
       queries: {
         refetchOnWindowFocus: false,
-        retry: 1,
+        retry: shouldRetryRadarQuery,
       },
     },
     mutationCache: new MutationCache({
@@ -193,6 +214,8 @@ function makeDefaultQueryClient(): QueryClient {
 
 export function RadarApp({
   apiBase,
+  radarVersion,
+  onRequestRadarUpgrade,
   basename,
   router = "browser",
   queryClient,
@@ -223,32 +246,39 @@ export function RadarApp({
     [queryClient],
   );
 
+  const upgradeHost = React.useMemo<RadarUpgradeHost>(
+    () => ({ radarVersion, onRequestRadarUpgrade }),
+    [radarVersion, onRequestRadarUpgrade],
+  );
+
   const inner = (
     <ThemeProvider>
       <QueryClientProvider client={client}>
         <ToastProvider>
           <NavCustomizationProvider value={navSlots}>
-            <FilterLocationBridge>
-              <TimelineSourceProvider config={timelineSource}>
-                <DiagnoseCustomizationProvider
-                  value={renderDiagnoseAction ?? defaultDiagnoseAction}
-                  consentCopy={diagnoseConsent}
-                  renderRunActions={renderInvestigationRunActions}
-                >
-                  <DiagnoseProvider
-                    browserURLState={router !== "memory"}
-                    forceRouterURLState={router === "memory"}
-                    onFocusedRun={onInvestigationFocus}
+            <RadarUpgradeHostProvider value={upgradeHost}>
+              <FilterLocationBridge>
+                <TimelineSourceProvider config={timelineSource}>
+                  <DiagnoseCustomizationProvider
+                    value={renderDiagnoseAction ?? defaultDiagnoseAction}
+                    consentCopy={diagnoseConsent}
+                    renderRunActions={renderInvestigationRunActions}
                   >
-                    <App
-                      manageDocumentTitle={manageDocumentTitle}
-                      documentTitleSuffix={documentTitleSuffix}
-                      onClusterLoadStateChange={onClusterLoadStateChange}
-                    />
-                  </DiagnoseProvider>
-                </DiagnoseCustomizationProvider>
-              </TimelineSourceProvider>
-            </FilterLocationBridge>
+                    <DiagnoseProvider
+                      browserURLState={router !== "memory"}
+                      forceRouterURLState={router === "memory"}
+                      onFocusedRun={onInvestigationFocus}
+                    >
+                      <App
+                        manageDocumentTitle={manageDocumentTitle}
+                        documentTitleSuffix={documentTitleSuffix}
+                        onClusterLoadStateChange={onClusterLoadStateChange}
+                      />
+                    </DiagnoseProvider>
+                  </DiagnoseCustomizationProvider>
+                </TimelineSourceProvider>
+              </FilterLocationBridge>
+            </RadarUpgradeHostProvider>
           </NavCustomizationProvider>
         </ToastProvider>
       </QueryClientProvider>

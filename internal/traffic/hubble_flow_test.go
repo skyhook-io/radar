@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	flowpb "github.com/cilium/cilium/api/v1/flow"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func TestConvertEndpointKinds(t *testing.T) {
@@ -87,6 +88,55 @@ func TestConvertHubbleFlowDropReason(t *testing.T) {
 		flow := convertHubbleFlow(&flowpb.Flow{Verdict: flowpb.Verdict_DROPPED})
 		if flow.DropReasonDesc != "" {
 			t.Fatalf("DropReasonDesc = %q", flow.DropReasonDesc)
+		}
+	})
+}
+
+func TestCallerOrientedFlow(t *testing.T) {
+	client := &flowpb.Endpoint{Namespace: "demo", PodName: "client-0"}
+	server := &flowpb.Endpoint{Namespace: "demo", PodName: "echo-0"}
+	tcp := func(src, dst uint32) *flowpb.Layer4 {
+		return &flowpb.Layer4{Protocol: &flowpb.Layer4_TCP{TCP: &flowpb.TCP{SourcePort: src, DestinationPort: dst}}}
+	}
+	reply := func(v bool) *wrapperspb.BoolValue { return wrapperspb.Bool(v) }
+
+	t.Run("request direction is kept as is", func(t *testing.T) {
+		f, ok := callerOrientedFlow(&flowpb.Flow{Source: client, Destination: server, L4: tcp(41732, 80), IsReply: reply(false)})
+		if !ok || f.Source.Name != "client-0" || f.Destination.Name != "echo-0" || f.Port != 80 || f.Connections != 1 {
+			t.Fatalf("got ok=%v %+v", ok, f)
+		}
+	})
+	t.Run("an L4 reply draws no edge", func(t *testing.T) {
+		if f, ok := callerOrientedFlow(&flowpb.Flow{Source: server, Destination: client, L4: tcp(80, 41732), IsReply: reply(true)}); ok {
+			t.Fatalf("reply packet became an edge: %+v", f)
+		}
+	})
+	t.Run("an L7 response lands on the request's edge", func(t *testing.T) {
+		f, ok := callerOrientedFlow(&flowpb.Flow{
+			Source: server, Destination: client, L4: tcp(80, 41732), IsReply: reply(true),
+			DestinationService: &flowpb.Service{Name: "client-svc"}, SourceService: &flowpb.Service{Name: "echo"},
+			L7: &flowpb.Layer7{Type: flowpb.L7FlowType_RESPONSE, LatencyNs: 5e6, Record: &flowpb.Layer7_Http{Http: &flowpb.HTTP{Code: 503}}},
+		})
+		if !ok {
+			t.Fatal("the response carries the status and latency and must be kept")
+		}
+		if f.Source.Name != "client-0" || f.Destination.Name != "echo-0" || f.Port != 80 {
+			t.Errorf("response oriented %s -> %s :%d, want client-0 -> echo-0 :80", f.Source.Name, f.Destination.Name, f.Port)
+		}
+		if f.DestService != "echo" {
+			t.Errorf("DestService = %q, want the server's Service", f.DestService)
+		}
+		if f.Connections != 0 {
+			t.Errorf("Connections = %d, want 0: the request already counted this connection", f.Connections)
+		}
+		if f.HTTPStatus != 503 || f.LatencyNs != 5e6 {
+			t.Errorf("lost L7 detail: status %d latency %d", f.HTTPStatus, f.LatencyNs)
+		}
+	})
+	t.Run("unknown direction keeps its orientation", func(t *testing.T) {
+		f, ok := callerOrientedFlow(&flowpb.Flow{Source: server, Destination: client, L4: tcp(80, 41732), Verdict: flowpb.Verdict_DROPPED})
+		if !ok || f.Source.Name != "echo-0" {
+			t.Fatalf("a flow Hubble could not orient must pass through untouched, got ok=%v %+v", ok, f)
 		}
 	})
 }

@@ -110,18 +110,33 @@ type FlowsResponse struct {
 	// truth about this data. Empty means transient, so a source that does not set
 	// it keeps the retrying behaviour it had. A client must not retry
 	// WarningPartial: the answer will not change, and the warning explains
-	// something the user needs to read rather than wait out.
+	// something the user needs to read rather than wait out. WarningIncomplete
+	// is not retried either.
 	WarningKind string `json:"warningKind,omitempty"`
+	// CoveredSince is when Flows start being complete, set when a source read
+	// only its newest records and some of the window did not fit: Hubble
+	// returns at most NodeFlowLimit flows per node. Before it, traffic may be
+	// missing; after it, nothing was cut. Nil when the whole window is covered.
+	CoveredSince  *time.Time `json:"coveredSince,omitempty"`
+	NodeFlowLimit int        `json:"nodeFlowLimit,omitempty"`
 }
 
 // Warning kinds for FlowsResponse.WarningKind.
 const (
 	// WarningTransient marks a condition that may resolve on its own — a query
-	// that failed, a port-forward still coming up.
+	// that failed, a port-forward still coming up. A retry is worthwhile.
 	WarningTransient = "transient"
-	// WarningPartial marks flows that are correct but incomplete, for a reason
-	// retrying cannot fix (a source not exporting an attribute, traffic that
-	// cannot be oriented). Always shown alongside whatever flows did arrive.
+	// WarningIncomplete marks a fetch that succeeded but could not see
+	// everything: events the source lost, nodes it could not reach. Flows may
+	// be missing, so it holds even when the flows it came with are filtered
+	// away and matters most when there are none. Retrying at once does not
+	// help; the next refresh reads afresh.
+	WarningIncomplete = "incomplete"
+	// WarningPartial marks flows that are correct but have values missing or
+	// wrong (a source not exporting an attribute, traffic that cannot be
+	// oriented, a figure whose query failed this time). It is about the flows it
+	// came with, so it is shown beside them and not retried for, and it goes
+	// when they are filtered away.
 	WarningPartial = "partial"
 )
 
@@ -140,10 +155,22 @@ type AggregatedFlow struct {
 	// oriented; the graph then draws it without an arrowhead.
 	DirectionUnknown bool `json:"directionUnknown,omitempty"`
 	// L7 stats (if available)
-	L7Protocol       string           `json:"l7Protocol,omitempty"` // HTTP, gRPC, DNS (from majority of flows)
-	RequestCount     int64            `json:"requestCount,omitempty"`
-	ErrorCount       int64            `json:"errorCount,omitempty"`
-	AvgLatencyMs     float64          `json:"avgLatencyMs,omitempty"`
+	L7Protocol   string `json:"l7Protocol,omitempty"` // HTTP, gRPC, DNS (from majority of flows)
+	RequestCount int64  `json:"requestCount,omitempty"`
+	ErrorCount   int64  `json:"errorCount,omitempty"`
+	// RequestRate and ErrorRate are the per-second rates a metric-based source
+	// measured, summed unrounded. RequestCount and ErrorCount hold the same
+	// figures rounded with a floor of one, which keeps a trickle visible but makes
+	// any ratio of the two meaningless at low rates: 0.3 req/s with 0.01 err/s
+	// rounds to one of each, a 100% error rate.
+	RequestRate  float64 `json:"requestRate,omitempty"`
+	ErrorRate    float64 `json:"errorRate,omitempty"`
+	AvgLatencyMs float64 `json:"avgLatencyMs,omitempty"`
+	// LatencySamples is how many measured responses the latency figures come
+	// from, for a source that reports individual responses. A client combining
+	// edges weights their averages by it. Unset for metric-based sources, whose
+	// averages are weighted by RequestRate instead.
+	LatencySamples   int64            `json:"latencySamples,omitempty"`
 	LatencyP50Ms     float64          `json:"latencyP50Ms,omitempty"`
 	LatencyP95Ms     float64          `json:"latencyP95Ms,omitempty"`
 	LatencyP99Ms     float64          `json:"latencyP99Ms,omitempty"`

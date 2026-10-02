@@ -383,7 +383,7 @@ func classifyNodeClaimConditionChange(event timeline.TimelineEvent) (activityCla
 		if !ok {
 			continue
 		}
-		status, reason, _ := strings.Cut(signal, "\x00")
+		status, reason := splitConditionSignal(signal)
 		if conditionType == "Ready" && status == "True" {
 			return directActivity(capacityapi.ActivityProvision, capacityapi.ActivityCompleted, "nodeclaim_ready"), true
 		}
@@ -410,12 +410,37 @@ func classifyNodeClaimConditionChange(event timeline.TimelineEvent) (activityCla
 		if !ok {
 			continue
 		}
-		status, reason, _ := strings.Cut(signal, "\x00")
+		status, reason := splitConditionSignal(signal)
 		if (status == string(metav1.ConditionFalse) || status == string(metav1.ConditionUnknown)) && karpenter.IsFailureReason(reason) {
 			return directActivity(capacityapi.ActivityProvision, capacityapi.ActivityFailed, "nodeclaim_not_ready"), true
 		}
 	}
 	return activityClassification{}, false
+}
+
+func splitConditionSignal(signal string) (string, string) {
+	// SQLite history can still contain the NUL-delimited encoding.
+	status, reason, legacy := strings.Cut(signal, "\x00")
+	if legacy || !strings.HasPrefix(signal, `"`) {
+		return status, reason
+	}
+	quotedStatus, err := strconv.QuotedPrefix(signal)
+	if err != nil {
+		return "", ""
+	}
+	quotedReason, found := strings.CutPrefix(signal[len(quotedStatus):], ":")
+	if !found {
+		return "", ""
+	}
+	status, err = strconv.Unquote(quotedStatus)
+	if err != nil {
+		return "", ""
+	}
+	reason, err = strconv.Unquote(quotedReason)
+	if err != nil {
+		return "", ""
+	}
+	return status, reason
 }
 
 // karpenterEventClassifications maps exact event reasons Karpenter emits to

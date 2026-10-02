@@ -36,6 +36,7 @@ import {
   type RightsizingActionTone,
 } from './presentation'
 import { useNavCustomization } from '../../context/NavCustomization'
+import { previousSettingsNote, usePreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings'
 
 export const RIGHTSIZING_SCAN_DESCRIPTION =
   'Find CPU and memory requests to increase, reduce, or review. Radar never changes them.'
@@ -117,6 +118,8 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
     isLoading: statusLoading,
     refetch: retryPrometheus,
   } = usePrometheusStatus()
+  const offers = usePreviousIntegrationSettings(!!promStatus && !promStatus.connected && !promStatus.discovering && !statusLoading)
+  const previousNote = offers.metrics ? previousSettingsNote('metrics', offers.metrics) : undefined
   const scan = useRightsizingScan(namespaces, clusterInfo?.context)
   const result = scan.data
   const [openRow, setOpenRow] = useState<string | null>(null)
@@ -257,7 +260,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
           <CenteredState
             title={RIGHTSIZING_METRICS_REQUIRED_TITLE}
             body={settingsAvailable
-              ? RIGHTSIZING_METRICS_REQUIRED_BODY
+              ? `${RIGHTSIZING_METRICS_REQUIRED_BODY}${previousNote ? `\n${previousNote}` : ''}`
               : RIGHTSIZING_EMBEDDED_METRICS_REQUIRED_BODY}
             action={
               <div className="flex flex-wrap items-center justify-center gap-3">

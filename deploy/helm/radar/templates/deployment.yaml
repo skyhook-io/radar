@@ -207,6 +207,10 @@ spec:
             {{- end }}
             {{- /* cloud.token is injected via RADAR_CLOUD_TOKEN env var below, not the command line */}}
             {{- end }}
+            {{- /* extraArgs come last: a repeated scalar flag wins, a repeatable one is appended */}}
+            {{- range .Values.extraArgs }}
+            - {{ tpl . $ | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}

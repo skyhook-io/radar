@@ -1,16 +1,24 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ApiError } from '../../api/client'
-import { UPGRADE_IMPACT_DOCS_URL, UPGRADE_IMPACT_MIN_RADAR_VERSION, UpgradeReadinessError, groupFindings, incompleteUpgradeCheckCount, issueSpecificReferences, summaryMeta, upgradeEvaluationSummary, upgradeEvidenceCoverageLabel, upgradeUnavailableKindsMessage } from './UpgradeReadinessView'
+import { RadarFeatureUnsupportedError } from '../../api/radarFeatures'
+import { UPGRADE_IMPACT_DOCS_URL, UpgradeReadinessError, groupFindings, incompleteUpgradeCheckCount, issueSpecificReferences, summaryMeta, upgradeEvaluationSummary, upgradeEvidenceCoverageLabel, upgradeUnavailableKindsMessage } from './UpgradeReadinessView'
 
 describe('UpgradeReadinessError', () => {
-  it('maps an unmatched endpoint 404 to the v1.9 upgrade message', () => {
-    const html = renderToStaticMarkup(UpgradeReadinessError({ error: new ApiError('Unknown error', 404) }))
+  it('maps an unsupported-feature error to the v1.9 upgrade message', () => {
+    const html = renderToStaticMarkup(UpgradeReadinessError({ error: new RadarFeatureUnsupportedError('upgradeReadiness', {}) }))
 
-    expect(html).toContain('Upgrade impact needs a newer Radar')
-    expect(html).toContain(UPGRADE_IMPACT_MIN_RADAR_VERSION)
-    expect(html).toContain('Upgrade the in-cluster Radar to enable it')
+    expect(html).toContain('Upgrade impact needs a newer Radar on this cluster')
+    expect(html).toContain('Available from Radar v1.9.')
     expect(html).not.toContain('Unable to analyze upgrade impact')
+  })
+
+  it('keeps a non-JSON 404 that is not the router signature on the generic error state', () => {
+    // e.g. Radar Hub's plain-text "not found" for a cluster it can't resolve.
+    const html = renderToStaticMarkup(UpgradeReadinessError({ error: new ApiError('HTTP 404 (Not Found)', 404) }))
+
+    expect(html).toContain('Unable to analyze upgrade impact')
+    expect(html).not.toContain('needs a newer Radar')
   })
 
   it('keeps a real resource 404 on the generic error state', () => {

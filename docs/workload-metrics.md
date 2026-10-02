@@ -98,27 +98,28 @@ rollout; omitted values do not mean zero requests or unlimited capacity.
 
 ## Local multi-cluster settings
 
-**Manual Prometheus settings are Radar-wide today, not per-cluster profiles.**
-The configured URL, HTTP headers (including credentials and tenant headers) and
-environment-variable header mappings persist in the local config. Switching
-Kubernetes context keeps the manually selected backend and headers.
+Local CLI and Desktop Radar save the metrics URL and HTTP headers (including
+credentials, tenant headers and environment-variable header references) per
+kubeconfig context in `~/.radar/clusters.json`. Switching Kubernetes context uses
+that context's saved backend, or discovery in the selected cluster when it has
+none; another context's backend and headers are never carried over. See
+[local integration connections](configuration.md#local-integration-connections).
 
-With no manual URL or headers, Radar rediscovers a backend in the selected cluster.
-With a manual backend, select the appropriate URL and headers in Metrics settings
-when changing clusters. When changing endpoints, explicitly replace or clear
-saved headers; a URL-only change to a different server is rejected while headers
-are configured. Same-server URL edits retain headers. Headers require an explicit
-URL and are never sent to auto-discovered candidates or across HTTP redirects to
-another origin. When the URL or headers come from startup flags, or headers use
-configuration-file environment references, update that startup configuration and
-restart before switching servers; clearing headers in Settings does not remove those sources.
+When changing a saved endpoint, explicitly replace or clear saved headers; a
+URL-only change to a different server is rejected while headers are configured.
+Same-server URL edits retain headers. Headers require an explicit URL and are
+never sent to auto-discovered candidates or across HTTP redirects to another
+origin. A `--prometheus-url` launch override applies only to the context Radar
+started with; change the startup configuration and restart to change it.
 
 The new workload charts invalidate identity evidence on connection changes and
-recheck it. Optional scope assertions are discarded on context, endpoint or
-credential changes, including automatic failover to a different metrics service,
-service port or backend path. Reconnecting to the same discovered service through
-a new local port-forward preserves the assertion. Those safeguards do **not** implement per-cluster connection
-profiles or retrofit identity checks onto older name-based charts.
+recheck it. Optional scope assertions are process-local, are not saved with a
+context's connection, and are discarded on context, endpoint or credential
+changes, including automatic failover to a different metrics service, service
+port or backend path. Reconnecting to the same discovered service through a new
+local port-forward preserves the assertion. A saved connection selects a backend;
+it does not prove which cluster's series that backend holds, and older name-based
+charts are not identity-checked.
 
 See [integration settings when switching clusters](configuration.md#integration-settings-when-switching-clusters).
 In-cluster Radar has no context switcher; provision its backend and credentials for

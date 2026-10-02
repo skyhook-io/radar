@@ -445,6 +445,11 @@
     "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
     "tolerations": { "type": "array", "items": { "type": "object" } },
     "affinity": { "type": "object" },
+    "extraArgs": {
+      "type": "array",
+      "description": "Additional command-line flags appended to the container args, after the flags the chart derives from other values. A repeated scalar flag wins; a repeatable flag is appended, so do not duplicate a --prometheus-cluster-label key here. Each entry is rendered through tpl.",
+      "items": { "type": "string" }
+    },
     "env": {
       "type": "array",
       "items": {
