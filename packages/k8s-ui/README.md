@@ -12,6 +12,10 @@ This describes the supplied kubeconfig, not a shell's live command target.
 Hosts can update a dock tab's label and optional full-name tooltip with
 `useDock().setTabTitle(id, title, titleTooltip)`.
 
+`initialCommand` is sent once per mounted terminal. Reconnect does not repeat a
+command that was already sent; if the connection closes before delivery, the
+command remains pending for the next connection.
+
 ## YAML editor bundling
 
 `YamlEditor` and `YamlDiffEditor` bundle Monaco, its editor worker, and the YAML language worker into the consuming application. They make no runtime CDN or internet requests, so they work in air-gapped environments.

@@ -599,6 +599,10 @@ action in the existing toolbar. Hover over the notice to see both full context
 names. The action opens a shell for the context Radar is now showing.
 Reconnecting starts a new shell using Radar's then-active context, and updates
 the tab's label from the server's new session.
+Commands supplied by actions such as **Authenticate in terminal** are sent once
+per tab. Reconnecting does not repeat a command that was already sent. If the
+connection closes before it is sent, the command remains pending for the next
+connection.
 
 If Radar cannot create a temporary kubeconfig, the existing original/inherited
 kubeconfig fallback remains available and the tab says **Context not confirmed**.

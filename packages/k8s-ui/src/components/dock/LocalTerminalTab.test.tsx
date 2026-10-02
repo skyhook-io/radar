@@ -31,7 +31,7 @@ class Socket {
   onopen?: () => void
   onclose?: () => void
   onmessage?: (event: { data: string }) => void
-  send() {}
+  send = vi.fn()
   close() { this.readyState = 3; this.onclose?.() }
   constructor() { Socket.instances.push(this) }
   session(context: string) {
@@ -53,6 +53,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   element.remove()
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 async function render(props: Partial<LocalTerminalTabProps> = {}, strict = false) {
   await act(async () => {
@@ -91,4 +92,56 @@ it('does not open an obsolete session when Strict Mode creations resolve out of 
   expect(Socket.instances).toHaveLength(1)
   await act(async () => Socket.instances[0].session('current'))
   expect(onSessionInfo).toHaveBeenLastCalledWith({ context: 'current', kubeconfigIsolated: true })
+})
+
+it('sends the initial command once and does not replay it on reconnect', async () => {
+  vi.useFakeTimers()
+  await render({ initialCommand: 'aws sso login' })
+  const first = Socket.instances[0]
+  await act(async () => first.onopen?.())
+  expect(first.send).not.toHaveBeenCalledWith(JSON.stringify({ type: 'input', data: 'aws sso login\n' }))
+  await act(async () => vi.advanceTimersByTime(300))
+  const inputs = () => Socket.instances.flatMap(socket => socket.send.mock.calls.map(([data]) => JSON.parse(data))).filter(message => message.type === 'input')
+  expect(inputs()).toEqual([{ type: 'input', data: 'aws sso login\n' }])
+
+  await act(async () => first.close())
+  await act(async () => element.querySelector<HTMLButtonElement>('button')!.click())
+  await act(async () => Socket.instances[1].onopen?.())
+  await act(async () => vi.advanceTimersByTime(300))
+  expect(inputs()).toEqual([{ type: 'input', data: 'aws sso login\n' }])
+})
+
+it('keeps an unsent initial command available when the first connection closes before delivery', async () => {
+  vi.useFakeTimers()
+  await render({ initialCommand: 'gcloud auth login' })
+  const first = Socket.instances[0]
+  await act(async () => first.onopen?.())
+  await act(async () => vi.advanceTimersByTime(100))
+  await act(async () => first.close())
+  await act(async () => element.querySelector<HTMLButtonElement>('button')!.click())
+  const second = Socket.instances[1]
+  await act(async () => second.onopen?.())
+  await act(async () => vi.advanceTimersByTime(200))
+  const input = JSON.stringify({ type: 'input', data: 'gcloud auth login\n' })
+  expect(first.send).not.toHaveBeenCalledWith(input)
+  expect(second.send).not.toHaveBeenCalledWith(input)
+  await act(async () => vi.advanceTimersByTime(100))
+  expect(second.send.mock.calls.filter(([data]) => JSON.parse(data).type === 'input')).toEqual([[input]])
+})
+
+it('sends the initial command independently in each terminal tab', async () => {
+  vi.useFakeTimers()
+  await act(async () => {
+    root.render(<>
+      <LocalTerminalTab createSession={async () => ({ wsUrl: 'ws://localhost/first' })} initialCommand="aws sso login" />
+      <LocalTerminalTab createSession={async () => ({ wsUrl: 'ws://localhost/second' })} initialCommand="aws sso login" />
+    </>)
+  })
+  expect(Socket.instances).toHaveLength(2)
+  await act(async () => Socket.instances.forEach(socket => socket.onopen?.()))
+  await act(async () => vi.advanceTimersByTime(300))
+  const input = JSON.stringify({ type: 'input', data: 'aws sso login\n' })
+  for (const socket of Socket.instances) {
+    expect(socket.send.mock.calls.filter(([data]) => JSON.parse(data).type === 'input')).toEqual([[input]])
+  }
 })

@@ -18,7 +18,7 @@ export interface LocalTerminalTabProps {
   isActive?: boolean
   /** Returns the WebSocket URL for the local terminal session */
   createSession: () => Promise<{ wsUrl: string }>
-  /** Command to auto-execute after the terminal connects */
+  /** Command to send once per mounted terminal after a connection opens */
   initialCommand?: string
   onSessionInfo?: (info: LocalTerminalSessionInfo | null) => void
   toolbarExtra?: ReactNode
@@ -37,6 +37,7 @@ export function LocalTerminalTab({
   const wsRef = useRef<WebSocket | null>(null)
   const cleanupRef = useRef<(() => void) | undefined>(undefined)
   const connectionAttemptRef = useRef(0)
+  const initialCommandSentRef = useRef(false)
   const createSessionRef = useRef(createSession)
   const onSessionInfoRef = useRef(onSessionInfo)
   useLayoutEffect(() => { createSessionRef.current = createSession }, [createSession])
@@ -167,11 +168,12 @@ export function LocalTerminalTab({
           setIsConnecting(false)
           doFit(ws)
           xterm.focus()
-          if (initialCommand) {
+          if (initialCommand && !initialCommandSentRef.current) {
             // Small delay to let the shell prompt initialize
             setTimeout(() => {
-              if (ws.readyState === WebSocket.OPEN) {
+              if (attempt === connectionAttemptRef.current && !initialCommandSentRef.current && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'input', data: initialCommand + '\n' }))
+                initialCommandSentRef.current = true
               }
             }, 300)
           }
