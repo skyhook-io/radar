@@ -262,6 +262,11 @@ func TestCNPGActionBackupBindsInheritedTarget(t *testing.T) {
 		cnpgActionReq(t, facts, map[string]any{"method": "volumeSnapshot", "name": "manual-one"})); err != nil {
 		t.Fatalf("backup with the reviewed target: %v", err)
 	}
+	// An explicit target doesn't read the cluster's, so its change doesn't matter.
+	if _, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "backup",
+		cnpgActionReq(t, cnpgActionFacts(), map[string]any{"method": "volumeSnapshot", "name": "manual-two", "target": "prefer-standby"})); err != nil {
+		t.Fatalf("backup with an explicit target: %v", err)
+	}
 }
 
 func TestCNPGActionBackupRejectsScheduleRunName(t *testing.T) {

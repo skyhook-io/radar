@@ -1390,11 +1390,12 @@ func (s *Server) handleCNPGScheduleAction(w http.ResponseWriter, r *http.Request
 }
 
 type cnpgClusterRun struct {
-	c       cnpgActionClients
-	cluster *unstructured.Unstructured
-	facts   CNPGClusterFacts
-	pods    map[string]*corev1.Pod
-	params  json.RawMessage
+	c        cnpgActionClients
+	cluster  *unstructured.Unstructured
+	facts    CNPGClusterFacts
+	reviewed cnpgReviewedFacts
+	pods     map[string]*corev1.Pod
+	params   json.RawMessage
 }
 
 type cnpgClusterRunner struct {
@@ -1406,7 +1407,7 @@ type cnpgClusterRunner struct {
 }
 
 var cnpgClusterActionRunners = map[string]cnpgClusterRunner{
-	"backup":           {binds: []string{"hibernation", "backupTarget"}, run: cnpgRunBackup},
+	"backup":           {binds: []string{"hibernation"}, run: cnpgRunBackup},
 	"switchover":       {binds: []string{"currentPrimary", "targetPrimary", "fencedInstances"}, needsPods: true, run: cnpgRunSwitchover},
 	"restart":          {binds: []string{"currentPrimary", "targetPrimary", "hibernation", "fencedInstances"}, run: cnpgRunRestart},
 	"restartInstance":  {binds: []string{"currentPrimary", "targetPrimary", "fencedInstances"}, needsPods: true, run: cnpgRunRestartInstance},
@@ -1444,13 +1445,6 @@ func cnpgFactsDiffer(binds []string, reviewed cnpgReviewedFacts, now CNPGCluster
 			got, want = reviewed.TargetPrimary, now.TargetPrimary
 		case "hibernation":
 			got, want = reviewed.Hibernation, now.Hibernation
-		case "backupTarget":
-			// A Backup without its own target inherits this one. The facts omit
-			// it when unset, so an absent value was reviewed as unset.
-			got, want = reviewed.BackupTarget, now.BackupTarget
-			if got == nil {
-				got = new(string)
-			}
 		case "maintenance":
 			if reviewed.Maintenance == nil {
 				return nil, b
@@ -1510,7 +1504,7 @@ func runCNPGClusterAction(ctx context.Context, c cnpgActionClients, namespace, n
 	if len(changed) > 0 {
 		return nil, cnpgChanged(facts, "Cluster %s/%s changed since you confirmed (%s); review the action again", namespace, name, strings.Join(changed, ", "))
 	}
-	x := &cnpgClusterRun{c: c, cluster: cluster, facts: facts, pods: pods, params: req.Params}
+	x := &cnpgClusterRun{c: c, cluster: cluster, facts: facts, reviewed: reviewed, pods: pods, params: req.Params}
 	res, err := runner.run(ctx, x)
 	if err != nil {
 		if apierrors.IsConflict(err) {
@@ -1646,6 +1640,17 @@ func cnpgRunBackup(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, e
 	}
 	if p.Target != "" && p.Target != "primary" && p.Target != "prefer-standby" {
 		return nil, cnpgRefuse(http.StatusBadRequest, "", "target must be primary or prefer-standby (or omitted to inherit the cluster's)")
+	}
+	// A Backup without its own target inherits the cluster's, so the one the
+	// confirmation showed is bound. The facts omit it when unset.
+	if p.Target == "" {
+		reviewedTarget := ""
+		if x.reviewed.BackupTarget != nil {
+			reviewedTarget = *x.reviewed.BackupTarget
+		}
+		if reviewedTarget != x.facts.BackupTarget {
+			return nil, cnpgChanged(x.facts, "Cluster %s/%s's backup target changed since you confirmed (backupTarget); review the action again", x.cluster.GetNamespace(), x.cluster.GetName())
+		}
 	}
 	clusterName := x.cluster.GetName()
 	name := p.Name
