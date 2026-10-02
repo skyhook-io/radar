@@ -308,7 +308,6 @@ function SignalDialog({
               facts: {},
               params: { pod: data.pod, podUID: data.podUID, pid: session.pid, backendStart: session.backendStart },
             },
-            successMessage: '',
           },
           {
             onSuccess: (r) => {

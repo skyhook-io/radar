@@ -329,16 +329,16 @@ func cnpgDesiredImage(cluster *unstructured.Unstructured) string {
 // cnpgUncachedReason says what the reader cannot see when Radar's cache holds
 // no copy of a kind the caller may read: Radar lists with its own credentials
 // at connect time, which can be narrower than the caller's. Empty when the
-// kind is cached and synced. uncached is true when Radar holds no informer
-// for the kind (in namespace, when set).
-func cnpgUncachedReason(fact, kind, namespace string, uncached, ready bool) string {
-	in := ""
-	if namespace != "" {
-		in = " in " + namespace
-	}
+// kind is cached and synced. uncached: Radar holds no informer for the kind.
+// outOfScope: it watches the kind only in other namespaces, either because its
+// credentials could list it only there or because the namespace was beyond
+// the set it probed.
+func cnpgUncachedReason(fact, kind, namespace string, uncached, outOfScope, ready bool) string {
 	switch {
 	case uncached:
-		return fmt.Sprintf("%s unknown: Radar's own credentials could not list %s%s when it connected", fact, kind, in)
+		return fmt.Sprintf("%s unknown: Radar's own credentials could not list %s when it connected", fact, kind)
+	case outOfScope:
+		return fmt.Sprintf("%s unknown: Radar watches %s only in the namespaces it chose when it connected, and %s is not one of them", fact, kind, namespace)
 	case !ready:
 		return fmt.Sprintf("%s unknown: Radar is still loading %s", fact, kind)
 	}
@@ -349,7 +349,7 @@ func (s *Server) cnpgHANodesSource(r *http.Request, cache *k8s.ResourceCache) CN
 	if !s.canRead(r, "", "nodes", "", "get") {
 		return cnpgHAClusterDenied(cnpgGrant{"get", "", "nodes", ""})
 	}
-	if reason := cnpgUncachedReason("Zones", "Nodes", "", cache.Nodes() == nil, cache.IsKindReady("nodes")); reason != "" {
+	if reason := cnpgUncachedReason("Zones", "Nodes", "", cache.Nodes() == nil, false, cache.IsKindReady("nodes")); reason != "" {
 		return CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}
 	}
 	return CNPGHASource{State: cnpgHAStateOK}
@@ -501,7 +501,7 @@ func (s *Server) cnpgHAPDBs(r *http.Request, cache *k8s.ResourceCache, cluster *
 	}
 	lister := cache.PodDisruptionBudgets()
 	within := capacityNamespacesWithinCache(cache, "poddisruptionbudgets", []string{namespace})
-	if reason := cnpgUncachedReason("Disruption budgets", "PodDisruptionBudgets", namespace, lister == nil || within.unavailable, cache.IsKindReady("poddisruptionbudgets")); reason != "" {
+	if reason := cnpgUncachedReason("Disruption budgets", "PodDisruptionBudgets", namespace, lister == nil, within.unavailable, cache.IsKindReady("poddisruptionbudgets")); reason != "" {
 		out.CNPGHASource = CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}
 		return out
 	}
@@ -644,7 +644,7 @@ func (s *Server) cnpgHAJobs(r *http.Request, cache *k8s.ResourceCache, cluster *
 	}
 	lister := cache.Jobs()
 	within := capacityNamespacesWithinCache(cache, "jobs", []string{namespace})
-	if reason := cnpgUncachedReason("Instance Jobs", "Jobs", namespace, lister == nil || within.unavailable, cache.IsKindReady("jobs")); reason != "" {
+	if reason := cnpgUncachedReason("Instance Jobs", "Jobs", namespace, lister == nil, within.unavailable, cache.IsKindReady("jobs")); reason != "" {
 		out.CNPGHASource = CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}
 		return out
 	}

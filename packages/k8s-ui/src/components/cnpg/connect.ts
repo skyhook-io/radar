@@ -1,3 +1,5 @@
+import { getCNPGClusterIsReplica } from '../resources/resource-utils-cnpg'
+
 /** The port CloudNativePG gives PostgreSQL and PgBouncer when a Service template sets none. */
 export const CNPG_DEFAULT_PORT = 5432
 
@@ -112,7 +114,7 @@ export function cnpgConnectInfo(cluster: any, poolers: any[] = []): CNPGConnectI
     database,
     owner,
     secret,
-    replicaCluster: spec.replica?.enabled === true,
+    replicaCluster: cluster ? getCNPGClusterIsReplica(cluster) : false,
     disabled,
   }
 }

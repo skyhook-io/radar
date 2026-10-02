@@ -77,7 +77,6 @@ function EditScheduleDialog({ namespace, name, onClose }: { namespace: string; n
           {
             action: 'setSchedule',
             request: { reviewedContext: data.context, uid: data.uid, facts: data.facts as unknown as Record<string, unknown>, params: { schedule: next } },
-            successMessage: '',
           },
           {
             onSuccess: () => {
@@ -172,7 +171,7 @@ function ScheduleDialog({ kind, namespace, name, onClose }: { kind: CNPGSchedule
       onClose={onClose}
       onConfirm={() =>
         mutation.mutate(
-          { action: kind, request: { reviewedContext: data.context, uid: data.uid, facts: data.facts as unknown as Record<string, unknown> }, successMessage: '' },
+          { action: kind, request: { reviewedContext: data.context, uid: data.uid, facts: data.facts as unknown as Record<string, unknown> } },
           {
             onSuccess: (r) => {
               if (kind === 'run' && r.backup) {

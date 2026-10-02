@@ -292,6 +292,7 @@ type cnpgReviewedFacts struct {
 	CurrentPrimary  *string `json:"currentPrimary"`
 	TargetPrimary   *string `json:"targetPrimary"`
 	Hibernation     *string `json:"hibernation"`
+	BackupTarget    *string `json:"backupTarget"`
 	FencedInstances *struct {
 		Raw *string `json:"raw"`
 	} `json:"fencedInstances"`
@@ -384,7 +385,8 @@ func parseCNPGFenced(raw string) CNPGFencedFacts {
 		return out
 	}
 	var names []string
-	if err := json.Unmarshal([]byte(raw), &names); err != nil {
+	// "null" decodes without error but is not a list the operator accepts.
+	if err := json.Unmarshal([]byte(raw), &names); err != nil || names == nil {
 		out.Malformed = true
 		return out
 	}
@@ -1404,7 +1406,7 @@ type cnpgClusterRunner struct {
 }
 
 var cnpgClusterActionRunners = map[string]cnpgClusterRunner{
-	"backup":           {binds: []string{"hibernation"}, run: cnpgRunBackup},
+	"backup":           {binds: []string{"hibernation", "backupTarget"}, run: cnpgRunBackup},
 	"switchover":       {binds: []string{"currentPrimary", "targetPrimary", "fencedInstances"}, needsPods: true, run: cnpgRunSwitchover},
 	"restart":          {binds: []string{"currentPrimary", "targetPrimary", "hibernation", "fencedInstances"}, run: cnpgRunRestart},
 	"restartInstance":  {binds: []string{"currentPrimary", "targetPrimary", "fencedInstances"}, needsPods: true, run: cnpgRunRestartInstance},
@@ -1442,6 +1444,13 @@ func cnpgFactsDiffer(binds []string, reviewed cnpgReviewedFacts, now CNPGCluster
 			got, want = reviewed.TargetPrimary, now.TargetPrimary
 		case "hibernation":
 			got, want = reviewed.Hibernation, now.Hibernation
+		case "backupTarget":
+			// A Backup without its own target inherits this one. The facts omit
+			// it when unset, so an absent value was reviewed as unset.
+			got, want = reviewed.BackupTarget, now.BackupTarget
+			if got == nil {
+				got = new(string)
+			}
 		case "maintenance":
 			if reviewed.Maintenance == nil {
 				return nil, b

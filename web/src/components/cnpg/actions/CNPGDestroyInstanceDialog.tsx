@@ -52,7 +52,6 @@ export function CNPGDestroyInstanceDialog({
               facts: data.facts as unknown as Record<string, unknown>,
               params: { pod, podUID: data.podUID, keepPVC: keep, pvcs: data.pvcs.map((p) => ({ name: p.name, uid: p.uid })) },
             },
-            successMessage: '',
           },
           {
             onSuccess: (r) => {

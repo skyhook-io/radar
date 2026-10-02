@@ -30,6 +30,13 @@ describe('cnpgConnectInfo', () => {
     expect(info.secret).toEqual({ name: 'recovery-secret', source: 'spec.bootstrap.recovery.secret.name', byConvention: false })
   })
 
+  it('treats a distributed-topology replica (replica.primary names another cluster) as a replica, like the operator', () => {
+    expect(cnpgConnectInfo(cluster({ replica: { primary: 'pg-east', source: 'pg-east' } })).replicaCluster).toBe(true)
+    expect(cnpgConnectInfo(cluster({ replica: { primary: 'pg', source: 'pg-east' } })).replicaCluster).toBe(false)
+    expect(cnpgConnectInfo(cluster({ replica: { enabled: true, source: 'pg-east' } })).replicaCluster).toBe(true)
+    expect(cnpgConnectInfo(cluster()).replicaCluster).toBe(false)
+  })
+
   it('owner defaults to the database name', () => {
     expect(cnpgConnectInfo(cluster({ bootstrap: { initdb: { database: 'orders' } } })).owner).toEqual({
       value: 'orders',

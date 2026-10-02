@@ -9,6 +9,7 @@ import {
   getCNPGClusterBackupConfig,
   getCNPGClusterBarmanPlugin,
   getCNPGClusterImageTag,
+  getCNPGClusterIsReplica,
   getCNPGClusterStatus,
   getCNPGObjectStoreRecoveryWindows,
   isApiGroup,
@@ -1034,7 +1035,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
     const categories = new Set<CNPGProblemCategory>(
       problems.filter((p) => p.severity !== 'posture').map((p) => p.category),
     )
-    const replica = cluster?.spec?.replica?.enabled ? { source: cluster.spec.replica.source } : null
+    const replica = cluster && getCNPGClusterIsReplica(cluster) ? { source: cluster.spec.replica.source } : null
 
     return {
       key: key(ns, name),

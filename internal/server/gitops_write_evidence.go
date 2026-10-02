@@ -73,7 +73,9 @@ type gitOpsPathEvidence struct {
 	Approximate   bool `json:"approximate,omitempty"`
 	// Ignored: "" | "effective" (the owner won't revert it) |
 	// "comparison-only" (Argo ignoreDifferences without
-	// RespectIgnoreDifferences: no self-heal trigger, but a sync overwrites).
+	// RespectIgnoreDifferences: no self-heal trigger, but a sync overwrites) |
+	// "unevaluated" (a matching Argo rule uses jqPathExpressions, which Radar
+	// doesn't evaluate, so it may or may not cover the path).
 	Ignored   string `json:"ignored,omitempty"`
 	IgnoredBy string `json:"ignoredBy,omitempty"`
 }
@@ -442,6 +444,7 @@ func ignoreRuleFor(
 	switch ownerTool(owner) {
 	case "argocd":
 		entries, _, _ := unstructured.NestedSlice(ownerObj.Object, "spec", "ignoreDifferences")
+		jqRule := false
 		for _, raw := range entries {
 			entry, ok := raw.(map[string]any)
 			if !ok || !argoIgnoreEntryMatches(entry, ref) {
@@ -466,6 +469,12 @@ func ignoreRuleFor(
 				}
 				return "comparison-only", "spec.ignoreDifferences"
 			}
+			if len(stringSlice(entry["jqPathExpressions"])) > 0 {
+				jqRule = true
+			}
+		}
+		if jqRule {
+			return "unevaluated", "spec.ignoreDifferences jqPathExpressions"
 		}
 	case "fluxcd":
 		if owner.Group != "helm.toolkit.fluxcd.io" {

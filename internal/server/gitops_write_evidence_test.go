@@ -251,6 +251,23 @@ func TestWriteEvidenceArgoIgnoreDifferences(t *testing.T) {
 	}
 }
 
+// Radar doesn't evaluate jq, so a matching jq rule leaves coverage open
+// rather than reading as "not ignored".
+func TestWriteEvidenceArgoJQRuleIsUnevaluated(t *testing.T) {
+	ignore := []any{map[string]any{"group": "apps", "kind": "Deployment", "jqPathExpressions": []any{".spec.replicas"}}}
+	resp := buildGitOpsWriteEvidence(evidenceTarget(t, nil, nil), deploymentRef, []string{"spec.replicas"}, argoOwner,
+		evidenceArgoApp(map[string]any{"syncOptions": []any{"RespectIgnoreDifferences=true"}}, ignore), nil)
+	if got := resp.Paths[0]; got.Ignored != "unevaluated" {
+		t.Errorf("jq rule: %+v", got)
+	}
+	both := []any{map[string]any{"group": "apps", "kind": "Deployment", "jsonPointers": []any{"/spec/replicas"}, "jqPathExpressions": []any{".spec.x"}}}
+	resp = buildGitOpsWriteEvidence(evidenceTarget(t, nil, nil), deploymentRef, []string{"spec.replicas"}, argoOwner,
+		evidenceArgoApp(map[string]any{"syncOptions": []any{"RespectIgnoreDifferences=true"}}, both), nil)
+	if got := resp.Paths[0]; got.Ignored != "effective" {
+		t.Errorf("a pointer that covers the path wins over an unevaluated jq rule: %+v", got)
+	}
+}
+
 func TestWriteEvidenceArgoDisabledAutomation(t *testing.T) {
 	resp := buildGitOpsWriteEvidence(evidenceTarget(t, nil, nil), deploymentRef, nil, argoOwner,
 		evidenceArgoApp(map[string]any{"automated": map[string]any{"enabled": false, "selfHeal": true}}, nil), nil)

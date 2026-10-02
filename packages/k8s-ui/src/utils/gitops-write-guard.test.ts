@@ -152,6 +152,15 @@ describe('evaluateGitOpsWriteGuard', () => {
       expect(g.perWrite[0].reason).toContain('without RespectIgnoreDifferences')
     })
 
+    it('unevaluated jq ignore rule on a declared field ⇒ may-revert, not will-revert', () => {
+      const g = guard({
+        writes: [hibernate],
+        evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present', ignored: 'unevaluated', ignoredBy: 'spec.ignoreDifferences jqPathExpressions' })]),
+      })
+      expect(g.level).toBe('may-revert')
+      expect(g.perWrite[0].reason).toContain('jq')
+    })
+
     it('Flux ssa: IfNotPresent ⇒ info', () => {
       const g = guard({
         owner: kustomization,

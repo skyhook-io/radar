@@ -290,11 +290,11 @@ export interface CNPGActionResult {
   target?: { pod?: string; podUID?: string; pid?: number; backendStart?: string; keepPVC?: boolean; pvcs?: { name: string; uid: string }[]; jobs?: string[]; paused?: boolean; generation?: number }
 }
 
-// Errors stay with the dialog (shown inline so the user can adjust and retry);
-// only success goes to the global toast.
+// No mutation meta: errors stay with the dialog (shown inline so the user can
+// adjust and retry), and the caller toasts success worded from the result.
 export function useCNPGAction(kind: 'clusters' | 'scheduledbackups' | 'poolers', namespace: string, name: string) {
   const queryClient = useQueryClient()
-  return useMutation<CNPGActionResult, Error, { action: string; request: CNPGActionRequest; successMessage: string }>({
+  return useMutation<CNPGActionResult, Error, { action: string; request: CNPGActionRequest }>({
     mutationFn: ({ action, request }) =>
       fetchJSON<CNPGActionResult>(`${cnpgPath(kind, namespace, name)}/actions/${action}`, {
         method: 'POST',

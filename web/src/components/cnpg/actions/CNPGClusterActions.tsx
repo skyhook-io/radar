@@ -710,7 +710,6 @@ export function ClusterActionDialog({
       {
         action: kind,
         request: { reviewedContext: caps.context, uid: caps.uid, facts: facts as unknown as Record<string, unknown>, params: spec.params },
-        successMessage: '',
       },
       {
         onSuccess: (result) => {

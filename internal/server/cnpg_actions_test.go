@@ -241,6 +241,29 @@ func TestCNPGActionBackupOmittedTargetInherits(t *testing.T) {
 	}
 }
 
+// The confirmation showed the cluster's backup target; a Backup that inherits
+// it must not run against a target changed since.
+func TestCNPGActionBackupBindsInheritedTarget(t *testing.T) {
+	env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(func(obj map[string]any) {
+		obj["spec"].(map[string]any)["backup"].(map[string]any)["target"] = "primary"
+	})})
+	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "backup",
+		cnpgActionReq(t, cnpgActionFacts(), map[string]any{"method": "volumeSnapshot", "name": "manual-one"}))
+	ae, ok := cnpgActionStatus(t, err)
+	if !ok || ae.Status != http.StatusConflict || ae.Code != cnpgCodeChanged {
+		t.Fatalf("err = %v, want 409 changed", err)
+	}
+	if len(env.creates) != 0 {
+		t.Error("a Backup was created against an unreviewed target")
+	}
+	facts := cnpgActionFacts()
+	facts["backupTarget"] = "primary"
+	if _, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "backup",
+		cnpgActionReq(t, facts, map[string]any{"method": "volumeSnapshot", "name": "manual-one"})); err != nil {
+		t.Fatalf("backup with the reviewed target: %v", err)
+	}
+}
+
 func TestCNPGActionBackupRejectsScheduleRunName(t *testing.T) {
 	sched := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "postgresql.cnpg.io/v1", "kind": "ScheduledBackup",
@@ -933,6 +956,14 @@ func TestCNPGActionCapabilitiesRestoreNeedsCreateClusters(t *testing.T) {
 		}
 		if got.Allowed || got.Permission != cnpgPermDenied || !strings.Contains(got.Reason, "create clusters (postgresql.cnpg.io) in namespace db") {
 			t.Errorf("restore without create clusters = %+v, want denied naming the grant", got)
+		}
+	}
+}
+
+func TestParseCNPGFencedRejectsNonLists(t *testing.T) {
+	for raw, malformed := range map[string]bool{"": false, `[]`: false, `["pg-1"]`: false, `null`: true, ` null `: true, `"pg-1"`: true, `{}`: true} {
+		if got := parseCNPGFenced(raw).Malformed; got != malformed {
+			t.Errorf("parseCNPGFenced(%q).Malformed = %v, want %v", raw, got, malformed)
 		}
 	}
 }

@@ -71,8 +71,9 @@ export interface GitOpsPathEvidence {
   ownedByGitOps: boolean
   approximate?: boolean
   /** `effective`: the owner won't overwrite it. `comparison-only`: Argo
-   *  ignoreDifferences without RespectIgnoreDifferences. */
-  ignored?: 'effective' | 'comparison-only'
+   *  ignoreDifferences without RespectIgnoreDifferences. `unevaluated`: a
+   *  matching rule uses jqPathExpressions, which Radar doesn't evaluate. */
+  ignored?: 'effective' | 'comparison-only' | 'unevaluated'
   ignoredBy?: string
 }
 
@@ -285,6 +286,12 @@ function classifyPath(ctx: Context, path: string | null): Verdict {
 
   const declared = Boolean(ev && !ev.error && (ev.lastApplied === 'present' || ev.ownedByGitOps))
   if (declared || policy?.replace) {
+    if (ev?.ignored === 'unevaluated') {
+      return {
+        level: 'may-revert',
+        reason: `${describeGitOpsOwner(owner)} has an ignoreDifferences rule written in jq (${ev.ignoredBy ?? 'jqPathExpressions'}) that Radar can't evaluate, so it may or may not keep a sync from overwriting this field.`,
+      }
+    }
     if (ev?.ignored === 'comparison-only') {
       return {
         level: 'may-revert',

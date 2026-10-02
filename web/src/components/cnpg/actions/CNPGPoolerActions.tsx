@@ -43,7 +43,7 @@ function PoolerDialog({ kind, caps, namespace, name, onClose }: { kind: 'pause' 
       onClose={onClose}
       onConfirm={() =>
         mutation.mutate(
-          { action: kind, request: { reviewedContext: caps.context, uid: caps.uid, facts: { paused: caps.facts.paused } }, successMessage: '' },
+          { action: kind, request: { reviewedContext: caps.context, uid: caps.uid, facts: { paused: caps.facts.paused } } },
           {
             onSuccess: (r) => {
               showSuccess(r.message)
