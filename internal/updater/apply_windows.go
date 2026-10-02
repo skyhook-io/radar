@@ -90,6 +90,7 @@ func Relaunch() error {
 		return fmt.Errorf("start trampoline: %w", err)
 	}
 
+	runBeforeExit()
 	os.Exit(0)
 	return nil // unreachable
 }
