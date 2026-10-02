@@ -310,6 +310,9 @@ export function EditableYamlView({
 
   const handleApplyReviewed = useCallback(async () => {
     if (!preview || !onSave) return
+    // The notice belongs to one attempt: a retry that fails for another reason
+    // (and can't refresh) must show its own error, not the last notice.
+    if (preview.changedSinceReview) setPreview({ ...preview, changedSinceReview: false })
     try {
       await onSave({
         kind: resource.kind,
