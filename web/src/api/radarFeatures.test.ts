@@ -56,6 +56,15 @@ describe('radarFeatureSupport', () => {
   })
 })
 
+describe('workload history, whose flag shipped with its endpoint', () => {
+  it('trusts a loaded capabilities answer, and probes before it arrives', () => {
+    expect(radarFeatureSupport('workloadHistory', { features: { workloadHistory: true } }, undefined)).toBe('supported')
+    expect(radarFeatureSupport('workloadHistory', { features: { policyResource: true } }, 'v1.15.0')).toBe('unsupported')
+    expect(radarFeatureSupport('workloadHistory', { features: {} }, 'dev')).toBe('unsupported')
+    expect(radarFeatureSupport('workloadHistory', undefined, 'v1.15.0')).toBe('unknown')
+  })
+})
+
 describe('radarSpecSupport for a feature whose flag shipped with its endpoint', () => {
   const driftAlerts: RadarFeatureSpec = { label: 'Drift alerts', flag: 'resourceIssues', flagShippedWithEndpoint: true }
 

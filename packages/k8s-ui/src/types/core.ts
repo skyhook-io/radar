@@ -166,6 +166,7 @@ export interface FeatureCapabilities {
   resourceIssues?: boolean
   podEnvironment?: boolean
   policyResource?: boolean
+  workloadHistory?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.

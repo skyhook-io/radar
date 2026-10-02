@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { getRadarUpgradeRequirement } from '@skyhook-io/k8s-ui'
-import { ApiError, isNotFoundError, useApplications, useCapacityPoolDetail, useDrainPlan, usePodEnvironment } from './client'
+import { ApiError, isNotFoundError, useApplications, useCapacityPoolDetail, useDrainPlan, usePodEnvironment, useWorkloadHistory } from './client'
 import { getApiBase } from './config'
 import { usePolicyResource } from './policy'
 import { isRadarFeatureUnsupported } from './radarFeatures'
@@ -187,4 +187,24 @@ it('never asks a Radar older than v1.8 for applications', async () => {
   await render(<Applications />)
   expect(element.textContent).toBe('upgrade')
   expect(asked('/applications')).toBe(false)
+})
+
+function History() {
+  const { data, error } = useWorkloadHistory('deployments', 'shop', 'web', 'apps')
+  return <span>{data ? 'data' : isRadarFeatureUnsupported(error, 'workloadHistory') ? 'fallback' : 'pending'}</span>
+}
+
+it('never asks a Radar whose capabilities omit workload history', async () => {
+  client.setQueryData(['capabilities'], { features: { policyResource: true } })
+  await render(<History />)
+  expect(element.textContent).toBe('fallback')
+  expect(asked('/history')).toBe(false)
+})
+
+it("reads the router's 404 on workload history as unsupported before capabilities answer", async () => {
+  host.radarVersion = undefined
+  chiRoutes = ['/workloads/deployments/shop/web/history']
+  await render(<History />)
+  expect(element.textContent).toBe('fallback')
+  expect(requested.filter((url) => url.includes('/history'))).toHaveLength(1)
 })

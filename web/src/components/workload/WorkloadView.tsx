@@ -49,6 +49,7 @@ import {
 import {
   useWorkloadHistory,
   fetchWorkloadHistoryPage,
+  useChanges,
   useResourceWithRelationships,
   usePodLogs,
   useTopology,
@@ -803,18 +804,33 @@ export function WorkloadView({
   // colliding kind) under the wrong group and refetch once it settles.
   const historyGroupSettled = Boolean(rest.group) || resource !== undefined || resourceError != null
   const historyQuery = useWorkloadHistory(apiKind, namespace, name, effectiveGroup, expanded && historyGroupSettled)
+  // A Radar that predates the scoped history gets the namespace's newest
+  // changes instead, which the timeline filters to this workload: how the
+  // Timeline worked before that endpoint existed.
+  const historyFallback = isRadarFeatureUnsupported(historyQuery.error, 'workloadHistory')
+  const namespaceChanges = useChanges({
+    namespaces: [namespace],
+    timeRange: 'all',
+    includeK8sEvents: true,
+    includeManaged: true,
+    limit: 10000,
+    enabled: expanded && historyFallback,
+  })
   const {
-    events: allEvents,
+    events: scopedEvents,
     truncated: historyTruncated,
     loadOlder: loadOlderHistory,
     loadingOlder: loadingOlderHistory,
     olderError: olderHistoryError,
   } = useHistoryPaging(
     `${effectiveGroup ?? ''}/${apiKind}/${namespace}/${name}`,
-    historyQuery.data,
+    historyFallback ? undefined : historyQuery.data,
     (beforeSeq) => fetchWorkloadHistoryPage(apiKind, namespace, name, effectiveGroup, beforeSeq),
   )
-  const eventsLoading = historyQuery.isLoading || (expanded && !historyGroupSettled)
+  const allEvents = historyFallback ? namespaceChanges.data : scopedEvents
+  const eventsLoading = historyFallback
+    ? namespaceChanges.isLoading
+    : historyQuery.isLoading || (expanded && !historyGroupSettled)
 
   // RBAC
   const canUpdateSecrets = useCanUpdateSecrets()
@@ -1211,14 +1227,14 @@ export function WorkloadView({
         refetch={refetchResourceAndRuns}
         // Timeline
         allEvents={allEvents}
-        historyTruncated={historyTruncated}
-        onLoadOlderHistory={loadOlderHistory}
-        loadingOlderHistory={loadingOlderHistory}
-        olderHistoryError={olderHistoryError}
-        historyScoped
-        historyIncomplete={Boolean(historyQuery.data?.incomplete)}
-        historyError={historyQuery.error as Error | null}
-        onRetryHistory={() => void historyQuery.refetch()}
+        historyTruncated={!historyFallback && historyTruncated}
+        onLoadOlderHistory={historyFallback ? undefined : loadOlderHistory}
+        loadingOlderHistory={!historyFallback && loadingOlderHistory}
+        olderHistoryError={historyFallback ? null : olderHistoryError}
+        historyScoped={!historyFallback}
+        historyIncomplete={!historyFallback && Boolean(historyQuery.data?.incomplete)}
+        historyError={(historyFallback ? namespaceChanges.error : historyQuery.error) as Error | null}
+        onRetryHistory={() => void (historyFallback ? namespaceChanges.refetch() : historyQuery.refetch())}
         relatedTimelineEvents={relatedTimelineEvents}
         eventsLoading={eventsLoading || (batchExecution && batchKind !== 'JobSet' && batchRunsQuery.isLoading)}
         topology={topology}

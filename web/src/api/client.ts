@@ -2946,12 +2946,18 @@ function workloadHistoryPath(kind: string, namespace: string, name: string, grou
 // The newest page of one workload's history: the workload, what it owns, K8s
 // Events about those, and the resources attached to it. Keyed under
 // "changes" so the live-update invalidation refreshes it.
+// A Radar that predates the scoped history endpoint settles as unsupported;
+// WorkloadView then falls back to the namespace's changes.
 export function useWorkloadHistory(kind: string, namespace: string, name: string, group?: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature("workloadHistory");
   return useQuery<WorkloadHistoryPage>({
-    queryKey: ["changes", "workload-history", kind, namespace, name, group ?? ""],
-    queryFn: ({ signal }) => fetchJSON(workloadHistoryPath(kind, namespace, name, group), signal),
+    queryKey: ["changes", "workload-history", kind, namespace, name, group ?? "", ...gatedKey],
+    queryFn: ({ signal }) =>
+      guard(() => fetchJSON<WorkloadHistoryPage>(workloadHistoryPath(kind, namespace, name, group), signal)),
     staleTime: 5000,
-    refetchInterval: CHANGES_REFRESH_INTERVAL_MS,
+    retry: shouldRetryRadarQuery,
+    refetchInterval: (query) =>
+      query.state.error instanceof RadarFeatureUnsupportedError ? false : CHANGES_REFRESH_INTERVAL_MS,
     enabled,
   });
 }
