@@ -83,7 +83,7 @@
     "diff": ">=5.0.0",
     "elkjs": ">=0.9.0",
     "lucide-react": ">=0.400.0",
-    "monaco-editor": "0.55.1",
+    "monaco-editor": "0.57.0",
     "react": ">=18.0.0",
     "react-dom": ">=18.0.0",
     "yaml": ">=2.0.0"
@@ -101,7 +101,7 @@
     "elkjs": "^0.11.1",
     "jsdom": "^29.1.1",
     "lucide-react": "^1.48.0",
-    "monaco-editor": "0.55.1",
+    "monaco-editor": "0.57.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "typescript": "^6.0.2",
