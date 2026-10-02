@@ -310,6 +310,32 @@ export class DiagnoseError extends Error {
   }
 }
 
+/** A host's refusal of an investigation request, with what would unblock it. */
+export interface InvestigationRefusal {
+  status: number;
+  /** The sentence shown to the user. */
+  message: string;
+  code?: string;
+  reason?: string;
+  action?: string;
+}
+
+/** The refusal a DiagnoseError carries, or null when the host sent none
+ * (Radar's own backend never does). */
+export function investigationRefusal(
+  error: unknown,
+): InvestigationRefusal | null {
+  if (!(error instanceof DiagnoseError)) return null;
+  if (!error.code && !error.reason && !error.action) return null;
+  return {
+    status: error.status,
+    message: error.message,
+    code: error.code,
+    reason: error.reason,
+    action: error.action,
+  };
+}
+
 const RUNS = () => `${getApiBase()}/diagnose/runs`;
 
 // createRun starts a server-side investigation (or focuses a live one for the same

@@ -74,10 +74,13 @@ import {
   addTurn,
   stopRun,
   DiagnoseError,
+  investigationRefusal,
   type DiagnoseStreamEvent,
+  type InvestigationRefusal,
   type RunSummary,
 } from "../../api/diagnose";
 import { useDiagnose } from "./DiagnoseContext";
+import { InvestigationRefusalAction } from "./InvestigationRefusalAction";
 import {
   TurnView,
   ResultCard,
@@ -114,9 +117,11 @@ const RECHECK_QUESTION =
 
 export function InvestigationStartErrorAlert({
   error,
+  refusal = null,
   onDismiss,
 }: {
   error: string;
+  refusal?: InvestigationRefusal | null;
   onDismiss: () => void;
 }) {
   return (
@@ -130,6 +135,11 @@ export function InvestigationStartErrorAlert({
           Couldn&apos;t start a new investigation
         </div>
         <div className="text-theme-text-secondary">{error}</div>
+        {refusal ? (
+          <div className="mt-1.5">
+            <InvestigationRefusalAction refusal={refusal} />
+          </div>
+        ) : null}
       </div>
       <button
         type="button"
@@ -176,8 +186,14 @@ export function InvestigationView({
   onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
 }) {
   const { kind, namespace, name } = run;
-  const { refreshRuns, openInvestigation, startError, dismissError, agents } =
-    useDiagnose();
+  const {
+    refreshRuns,
+    openInvestigation,
+    startError,
+    startRefusal,
+    dismissError,
+    agents,
+  } = useDiagnose();
   // Capabilities are the declared ones of the agent that ran this run, not
   // the picker's: a reopened run keeps the backend it was made with.
   const runAgent = agents.find((agent) => agent.name === run.agent);
@@ -226,6 +242,9 @@ export function InvestigationView({
     useState<InvestigationHistoryUnavailableState | null>(null);
   const [input, setInput] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  // The host's refusal behind a failed follow-up, for its action beside the error.
+  const [actionRefusal, setActionRefusal] =
+    useState<InvestigationRefusal | null>(null);
   const [verificationError, setVerificationError] = useState<string | null>(
     null,
   );
@@ -419,6 +438,7 @@ export function InvestigationView({
     setExplanationReveal(null);
     setHistoryUnavailable(null);
     setActionError(null);
+    setActionRefusal(null);
     setVerificationError(null);
     setVerificationPending(false);
     setLocalApplyAttemptAssessmentIdx(-1);
@@ -745,6 +765,7 @@ export function InvestigationView({
     if (!q || interactionsBlocked) return;
     setInput("");
     setActionError(null);
+    setActionRefusal(null);
     setNarrowPane("activity");
     suppressEvidenceMotionRef.current = false;
     pinnedRef.current = true; // a user-initiated turn always follows to the bottom
@@ -752,6 +773,7 @@ export function InvestigationView({
     addTurn(run.id, { question: q }).catch((e) => {
       setRequestPending(false);
       setActionError(e instanceof DiagnoseError ? e.message : "Couldn't send.");
+      setActionRefusal(investigationRefusal(e));
     });
   };
   const stop = () => stopRun(run.id);
@@ -759,6 +781,7 @@ export function InvestigationView({
   const askExplanation = (sequence: number) => {
     if (interactionsBlocked) return;
     setActionError(null);
+    setActionRefusal(null);
     const serial = ++explanationRequestSerial.current;
     const previousTurns = turnsRef.current.length;
     setExplanationRequest({ sequence, status: "running" });
@@ -832,6 +855,7 @@ export function InvestigationView({
     setConfirmApply(false);
     if (interactionsBlocked) return;
     setActionError(null);
+    setActionRefusal(null);
     setVerificationError(null);
     setApplyOutcomeUncertain(null);
     setNarrowPane("activity");
@@ -866,6 +890,7 @@ export function InvestigationView({
   const checkStatus = () => {
     if (interactionsBlocked) return Promise.resolve();
     setActionError(null);
+    setActionRefusal(null);
     setVerificationError(null);
     setNarrowPane("activity");
     suppressEvidenceMotionRef.current = false;
@@ -1740,6 +1765,7 @@ export function InvestigationView({
       {startError ? (
         <InvestigationStartErrorAlert
           error={startError}
+          refusal={startRefusal}
           onDismiss={dismissError}
         />
       ) : null}
@@ -2044,6 +2070,13 @@ export function InvestigationView({
                       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
                       <div className="min-w-0 flex-1">
                         <span>{displayedStatusCheckError || actionError}</span>
+                        {!displayedStatusCheckError && actionRefusal ? (
+                          <div className="mt-2">
+                            <InvestigationRefusalAction
+                              refusal={actionRefusal}
+                            />
+                          </div>
+                        ) : null}
                         {displayedStatusCheckError ? (
                           <button
                             type="button"
