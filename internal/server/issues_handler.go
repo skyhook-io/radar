@@ -22,6 +22,10 @@ import (
 // the shared per-kind gate (RecentChange.APIVersion disambiguates CRD kind
 // collisions). Auth off → returned unchanged. Used by both the /api/issues
 // recent_changes enrichment and per-issue change correlation.
+//
+// Native Helm rows have no GVR for the per-kind gate to resolve, so it would
+// drop every one of them; they pass through because they were read as the
+// caller when the releases were listed.
 func (s *Server) filterRecentChangesByRBAC(ctx context.Context, changes []issuesapi.RecentChange) []issuesapi.RecentChange {
 	if auth.UserFromContext(ctx) == nil {
 		return changes
@@ -29,7 +33,7 @@ func (s *Server) filterRecentChangesByRBAC(ctx context.Context, changes []issues
 	authz := s.changeAuthorizerForCtx(ctx)
 	out := changes[:0]
 	for _, c := range changes {
-		if k8s.ChangeReadAllowed(c.Kind, c.APIVersion, c.Namespace, authz) {
+		if c.Source == meaningfulchanges.HelmChangeSource || k8s.ChangeReadAllowed(c.Kind, c.APIVersion, c.Namespace, authz) {
 			out = append(out, c)
 		}
 	}
