@@ -3,6 +3,7 @@ import { act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { LocalTerminalTab, type LocalTerminalTabProps } from './LocalTerminalTab'
+import { TerminalTab } from './TerminalTab'
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
@@ -144,4 +145,45 @@ it('sends the initial command independently in each terminal tab', async () => {
   for (const socket of Socket.instances) {
     expect(socket.send.mock.calls.filter(([data]) => JSON.parse(data).type === 'input')).toEqual([[input]])
   }
+})
+
+it('keeps a blocked reconnect intact until the host permits it', async () => {
+  vi.useFakeTimers()
+  let allowed = true
+  const createSession = vi.fn(async () => ({ wsUrl: 'ws://localhost' }))
+  const onSessionInfo = vi.fn()
+  await render({ createSession, canConnect: () => allowed, initialCommand: 'auth-command', onSessionInfo })
+  await act(async () => Socket.instances[0].onopen?.())
+  await act(async () => vi.advanceTimersByTime(300))
+  await act(async () => Socket.instances[0].close())
+  const terminal = element.querySelector('div.absolute')
+  expect(terminal).not.toBeNull()
+  const metadataCalls = onSessionInfo.mock.calls.length
+  allowed = false
+  await act(async () => element.querySelector<HTMLButtonElement>('button')!.click())
+  expect(createSession).toHaveBeenCalledTimes(1)
+  expect(onSessionInfo).toHaveBeenCalledTimes(metadataCalls)
+  expect(element.contains(terminal)).toBe(true)
+  allowed = true
+  await act(async () => element.querySelector<HTMLButtonElement>('button')!.click())
+  await act(async () => Socket.instances[1].onopen?.())
+  await act(async () => vi.advanceTimersByTime(300))
+  expect(createSession).toHaveBeenCalledTimes(2)
+  expect(Socket.instances.flatMap(s => s.send.mock.calls).filter(([data]) => JSON.parse(data).type === 'input')).toHaveLength(1)
+})
+
+it.each(['local', 'pod'])('allows Retry after a %s terminal creation error', async kind => {
+  const createSession = vi.fn()
+    .mockRejectedValueOnce(new Error('creation failed'))
+    .mockResolvedValueOnce({ wsUrl: 'ws://localhost' })
+  await act(async () => root.render(kind === 'local'
+    ? <LocalTerminalTab createSession={createSession} />
+    : <TerminalTab namespace="default" podName="pod" containerName="app" containers={['app']} createSession={createSession} />))
+  expect(element.textContent).toContain('creation failed')
+  const retry = [...element.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Retry')!
+  await act(async () => retry.click())
+  expect(createSession).toHaveBeenCalledTimes(2)
+  expect(Socket.instances).toHaveLength(1)
+  await act(async () => Socket.instances[0].onopen?.())
+  expect(element.textContent).not.toContain('creation failed')
 })

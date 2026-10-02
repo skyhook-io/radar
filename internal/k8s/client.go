@@ -964,7 +964,7 @@ func recordEmptyCommandWarning(source string, authInfos []string) {
 // current-context set to Radar's active context. The caller must remove the
 // file when done. Returns the temp file path.
 func WriteKubeconfigForCurrentContext() (string, error) {
-	snapshot, err := WriteKubeconfigSnapshotForCurrentContext()
+	snapshot, err := WriteKubeconfigSnapshotForCurrentContext(nil)
 	return snapshot.Path, err
 }
 
@@ -973,9 +973,12 @@ type KubeconfigSnapshot struct {
 	Context string
 }
 
+var ErrKubeconfigContextMismatch = errors.New("terminal context changed")
+
 // WriteKubeconfigSnapshotForCurrentContext returns the temporary config and its
-// display context from the same client-state snapshot. The caller owns the file.
-func WriteKubeconfigSnapshotForCurrentContext() (KubeconfigSnapshot, error) {
+// display context from the same client-state snapshot. A non-nil expectedContext
+// must match exactly, including an empty context. The caller owns the file.
+func WriteKubeconfigSnapshotForCurrentContext(expectedContext *string) (KubeconfigSnapshot, error) {
 	clientMu.RLock()
 	ctx := contextName
 	activeFile := activeSourceFile
@@ -985,6 +988,10 @@ func WriteKubeconfigSnapshotForCurrentContext() (KubeconfigSnapshot, error) {
 	fileConfigs := perFileConfigs
 	singlePath := kubeconfigPath
 	clientMu.RUnlock()
+
+	if expectedContext != nil && *expectedContext != ctx {
+		return KubeconfigSnapshot{}, fmt.Errorf("%w: this terminal is for %q; Radar is showing %q", ErrKubeconfigContextMismatch, *expectedContext, ctx)
+	}
 
 	var rawConfig clientcmdapi.Config
 	var currentContextForFile string

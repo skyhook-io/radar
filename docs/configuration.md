@@ -597,8 +597,14 @@ Switching clusters in Radar leaves existing local shells running. A terminal
 opened for another context shows **Different context** and a **New terminal**
 action in the existing toolbar. Hover over the notice to see both full context
 names. The action opens a shell for the context Radar is now showing.
-Reconnecting starts a new shell using Radar's then-active context, and updates
-the tab's label from the server's new session.
+Each tab retains the full context selected when it was opened. Reconnecting
+starts a new shell only while Radar has that context selected; otherwise it
+asks you to switch back or open a new terminal for the current context. The
+tab keeps its previous context label during reconnect attempts.
+Reconnect and Retry are disabled while Radar is showing a different context.
+When a context is selected, the toolbar says **Requested** before the first shell starts. The server checks
+the requested context against the same snapshot it exports, so switching
+contexts while a tab is opening cannot start that shell for a different context.
 Commands supplied by actions such as **Authenticate in terminal** are sent once
 per tab. Reconnecting does not repeat a command that was already sent. If the
 connection closes before it is sent, the command remains pending for the next
@@ -606,7 +612,20 @@ connection.
 
 If Radar cannot create a temporary kubeconfig, the existing original/inherited
 kubeconfig fallback remains available and the tab says **Context not confirmed**.
-That shell's Kubernetes target has not been established by Radar.
+That shell's Kubernetes target has not been established by Radar. If the selected
+context differs from the tab's requested context, its notice says **Requested
+context differs**, and the tooltip keeps that request distinct from a confirmed
+kubeconfig.
+The Desktop app can also open an unconfirmed recovery shell when no kubeconfig
+is available. Its explicit empty-context intent must match the server's empty
+active context; once a context is selected, open a new terminal for it.
+These checks preserve context selection across opens and reconnects; they do
+not enforce a shell's live command target or detect a kubeconfig context being
+repointed to a different physical cluster under the same name.
+If a context switch fails before Radar changes its active client, a terminal
+requested for the new context is refused. Finish recovering that connection,
+switch back to the previous context, or copy the recovery command into an
+external terminal. Radar will not substitute a shell for the previous context.
 
 ## Namespace Picker
 

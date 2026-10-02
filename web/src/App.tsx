@@ -1890,11 +1890,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
           {/* Local terminal */}
           {capabilities.localTerminal && (
-            <Tooltip content="Open local terminal">
+            <Tooltip content={connection.context || connection.state === 'disconnected' ? 'Open local terminal' : 'Waiting for a context to open a terminal'}>
             <button
               onClick={() => openLocalTerminal()}
+              disabled={!connection.context && connection.state !== 'disconnected'}
               aria-label="Open local terminal"
-              className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+              className="p-1.5 rounded-md bg-theme-elevated enabled:hover:bg-theme-hover text-theme-text-secondary enabled:hover:text-theme-text-primary disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <SquareTerminal className="w-4 h-4" />
             </button>

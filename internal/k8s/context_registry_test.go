@@ -652,11 +652,17 @@ func TestWriteKubeconfigSnapshotPreservesDisplayContext(t *testing.T) {
 		contextName, activeSourceFile, activeSourceName, activeSourceConfig = oldName, oldFile, oldSourceName, oldConfig
 		clientMu.Unlock()
 	})
-	snapshot, err := WriteKubeconfigSnapshotForCurrentContext()
+	expected := "production@secondary"
+	snapshot, err := WriteKubeconfigSnapshotForCurrentContext(&expected)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.Remove(snapshot.Path)
+	expected = "production"
+	rejected, err := WriteKubeconfigSnapshotForCurrentContext(&expected)
+	if !errors.Is(err, ErrKubeconfigContextMismatch) || rejected.Path != "" {
+		t.Fatalf("unqualified context accepted: snapshot=%+v error=%v", rejected, err)
+	}
 	SetTestContextName("staging")
 	written, err := clientcmd.LoadFromFile(snapshot.Path)
 	if err != nil {

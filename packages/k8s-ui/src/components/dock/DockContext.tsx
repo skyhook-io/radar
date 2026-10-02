@@ -23,6 +23,7 @@ export interface DockTab {
   nodeName?: string
   // Local terminal props
   initialCommand?: string
+  localTerminalContext?: string
 }
 
 export interface DockContextValue {

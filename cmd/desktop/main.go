@@ -227,6 +227,7 @@ func main() {
 		log.Printf("K8s init failed (will show in UI): %v", k8sInitErr)
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
+			Context:   k8s.GetContextName(),
 			Error:     k8sInitErr.Error(),
 			ErrorType: "config",
 		})
