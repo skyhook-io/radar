@@ -216,6 +216,8 @@ export function EditableYamlView({
     documents: YamlPreviewResult[]
     nonAtomic: boolean
     context?: string
+    // An apply failed and the refreshed review found a newer resource version.
+    changedSinceReview?: boolean
   } | null>(null)
 
   // Clean up restored draft flag
@@ -340,6 +342,9 @@ export function EditableYamlView({
             documents: refreshed.documents,
             nonAtomic: refreshed.nonAtomic,
             context: refreshed.context,
+            changedSinceReview:
+              refreshed.documents[0]?.reviewedResourceVersion !==
+              preview.documents[0]?.reviewedResourceVersion,
           })
         } catch {
           // Keep the last review visible when refresh is unavailable.
@@ -368,6 +373,7 @@ export function EditableYamlView({
           force={preview.force}
           isApplying={isSaving}
           applyError={saveError}
+          changedSinceReview={preview.changedSinceReview}
           onBack={() => setPreview(null)}
           onApply={handleApplyReviewed}
         />
