@@ -20,6 +20,7 @@ import {
   investigationApplyAttemptVerified,
   investigationAssessmentNeedsCurrentStateVerification,
   investigationApplyRejectionIsDefinitive,
+  investigationFailureShown,
   investigationApplyCompletionEffects,
   investigationTurnWithTerminalEvent,
   investigationApplyTerminalNeedsClusterRefresh,
@@ -773,6 +774,8 @@ export function InvestigationView({
     setInput("");
     setActionError(null);
     setActionRefusal(null);
+    setVerificationError(null);
+    setVerificationRefusal(null);
     setNarrowPane("activity");
     suppressEvidenceMotionRef.current = false;
     pinnedRef.current = true; // a user-initiated turn always follows to the bottom
@@ -885,6 +888,7 @@ export function InvestigationView({
         setLocalApplyAttemptAssessmentIdx(-1);
         setApplyOutcomeUncertain(null);
         setActionError(e.message.trim() || "Couldn't apply.");
+        setActionRefusal(investigationRefusal(e));
         return;
       }
       refreshClusterState();
@@ -1316,21 +1320,22 @@ export function InvestigationView({
     0,
   );
   const latestVerification = [...turns].reverse().find((turn) => turn.verify);
-  const displayedVerificationError =
-    latestVerification?.status === "error"
-      ? latestVerification.error || "The verification could not be completed."
-      : verificationError;
-  const displayedStatusCheckError =
-    displayedVerificationError || applyOutcomeUncertain;
-  // Only a refused status-check request carries a refusal; a verification
-  // turn that ran and failed does not.
-  const statusCheckRefusal =
-    displayedVerificationError && latestVerification?.status !== "error"
-      ? verificationRefusal
-      : null;
-  const shownActionRefusal = displayedStatusCheckError
-    ? statusCheckRefusal
-    : actionRefusal;
+  const {
+    verificationError: displayedVerificationError,
+    statusCheckError: displayedStatusCheckError,
+    message: shownFailure,
+    refusal: shownActionRefusal,
+  } = investigationFailureShown({
+    actionError,
+    actionRefusal,
+    verificationError,
+    verificationRefusal,
+    savedVerificationError:
+      latestVerification?.status === "error"
+        ? latestVerification.error || "The verification could not be completed."
+        : null,
+    applyOutcomeUncertain,
+  });
   const findingsTabAccessibleLabel =
     "Findings: current assessment, Radar evidence, and next steps";
   const currentAssessmentCoverageLimited = investigationEvidenceCoverageLimited(
@@ -2085,11 +2090,11 @@ export function InvestigationView({
                       </Fragment>
                     );
                   })}
-                  {(actionError || displayedStatusCheckError) && (
+                  {shownFailure && (
                     <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
                       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
                       <div className="min-w-0 flex-1">
-                        <span>{displayedStatusCheckError || actionError}</span>
+                        <span>{shownFailure}</span>
                         {shownActionRefusal ? (
                           <div className="mt-2">
                             <InvestigationRefusalAction

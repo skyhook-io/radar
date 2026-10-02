@@ -5,6 +5,7 @@ import { evidenceKindIsAdverse } from "./investigationEvidenceKinds";
 import {
   DiagnoseError,
   type DiagnoseStreamEvent,
+  type InvestigationRefusal,
   type RunSummary,
 } from "../../api/diagnose";
 import type { Turn } from "./parts";
@@ -121,6 +122,41 @@ export function investigationAssessmentNeedsCurrentStateVerification(input: {
   }
 
   return input.localApplyAttemptAssessmentIdx >= input.currentAssessmentIdx;
+}
+
+// Which failure the activity pane shows, and the host refusal behind it. A
+// request's own error is newer than a saved verification turn's: it is cleared
+// when the next request starts and when a new verification turn streams.
+export function investigationFailureShown(input: {
+  actionError: string | null;
+  actionRefusal: InvestigationRefusal | null;
+  verificationError: string | null;
+  verificationRefusal: InvestigationRefusal | null;
+  savedVerificationError: string | null;
+  applyOutcomeUncertain: string | null;
+}): {
+  verificationError: string | null;
+  statusCheckError: string | null;
+  message: string | null;
+  refusal: InvestigationRefusal | null;
+} {
+  const verificationError =
+    input.verificationError || input.savedVerificationError;
+  const statusCheckError = verificationError || input.applyOutcomeUncertain;
+  if (statusCheckError) {
+    return {
+      verificationError,
+      statusCheckError,
+      message: statusCheckError,
+      refusal: input.verificationError ? input.verificationRefusal : null,
+    };
+  }
+  return {
+    verificationError: null,
+    statusCheckError: null,
+    message: input.actionError,
+    refusal: input.actionError ? input.actionRefusal : null,
+  };
 }
 
 export function investigationApplyRejectionIsDefinitive(
