@@ -69,6 +69,13 @@ export function selectionToActivityKeys(sel: ActivitySelection): ActivityFilterK
   return []
 }
 
+// A row the Problems chip counts. Hosts that hide routine activity must never
+// hide these, so the Problems count and the list stay truthful.
+const PROBLEM_KEYS = selectionToActivityKeys({ source: 'all', problemsOnly: true })
+export function isTimelineProblem(event: TimelineEvent): boolean {
+  return matchesActivityFilter(event, PROBLEM_KEYS)
+}
+
 // Inverse of selectionToActivityKeys for the six canonical states. Legacy
 // multi-select key sets (pre-two-axis URLs) fall back to the widest reading —
 // showing more than a stale link intended beats silently hiding activity.

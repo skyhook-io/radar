@@ -1,6 +1,7 @@
 export * from './shared'
 export * from './DiffViewer'
 export type { ActivityTypeFilter, ActivityFilterKey } from './timeline-filters'
+export { isTimelineProblem } from './timeline-filters'
 export type { TimelineSort } from './timeline-lane-sort'
 export * from './TimelineList'
 export * from './TimelineSwimlanes'
