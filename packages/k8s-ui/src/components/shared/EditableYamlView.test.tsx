@@ -154,3 +154,83 @@ it("says nothing extra when the refreshed review found the same version", async 
   expect(text()).toContain("admission webhook denied the request");
   expect(onPreview).toHaveBeenCalledTimes(2);
 });
+
+it("doesn't call a deleted resource changed", async () => {
+  const gone = {
+    documents: [
+      {
+        index: 0,
+        kind: "ConfigMap",
+        name: "app",
+        namespace: "shop",
+        status: "rejected" as const,
+        message: 'configmaps "app" not found',
+      },
+    ],
+    nonAtomic: false,
+  };
+  const onPreview = vi
+    .fn()
+    .mockResolvedValueOnce(reviewed("1"))
+    .mockResolvedValueOnce(gone);
+  const onSave = vi.fn().mockRejectedValueOnce(new Error("not found"));
+  render({ onSave, onPreview });
+  await click(/^Edit$/);
+  await click(/Review changes/);
+  await click(/Apply reviewed changes/);
+  render({ onSave, onPreview, saveError: 'configmaps "app" not found' });
+  expect(text()).not.toContain("This resource changed after your review");
+  expect(text()).toContain('configmaps "app" not found');
+});
+
+it("doesn't call a switched cluster a changed resource", async () => {
+  const onPreview = vi
+    .fn()
+    .mockResolvedValueOnce({ ...reviewed("1"), context: "kind-a" })
+    .mockResolvedValueOnce({ ...reviewed("2"), context: "kind-b" });
+  const onSave = vi.fn().mockRejectedValueOnce(new Error("cluster changed"));
+  render({ onSave, onPreview });
+  await click(/^Edit$/);
+  await click(/Review changes/);
+  await click(/Apply reviewed changes/);
+  render({
+    onSave,
+    onPreview,
+    saveError: "the active cluster changed after review",
+  });
+  expect(text()).not.toContain("This resource changed after your review");
+  expect(text()).toContain("the active cluster changed after review");
+});
+
+it("ignores an earlier attempt's refresh that lands after a newer attempt", async () => {
+  let finishFirstRefresh: (v: ReturnType<typeof reviewed>) => void = () => {};
+  const onPreview = vi
+    .fn()
+    .mockResolvedValueOnce(reviewed("1"))
+    .mockReturnValueOnce(
+      new Promise<ReturnType<typeof reviewed>>((r) => {
+        finishFirstRefresh = r;
+      }),
+    )
+    .mockRejectedValueOnce(new Error("preview unavailable"));
+  const onSave = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("conflict"))
+    .mockRejectedValueOnce(new Error("forbidden"));
+  render({ onSave, onPreview });
+  await click(/^Edit$/);
+  await click(/Review changes/);
+  await click(/Apply reviewed changes/);
+  await click(/Apply reviewed changes/);
+  await act(async () => {
+    finishFirstRefresh(reviewed("2"));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  render({
+    onSave,
+    onPreview,
+    saveError: "forbidden: cannot patch configmaps",
+  });
+  expect(text()).not.toContain("This resource changed after your review");
+  expect(text()).toContain("forbidden: cannot patch configmaps");
+});

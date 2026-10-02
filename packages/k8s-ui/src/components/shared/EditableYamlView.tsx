@@ -202,6 +202,7 @@ export function EditableYamlView({
   // All sessionStorage calls are wrapped in try-catch — storage can throw
   // QuotaExceededError or be blocked by browser security policies.
   const savedDraft = useRef(readOnly ? null : safeSessionGet(draftKey))
+  const applyAttempt = useRef(0)
   const [isEditing, setIsEditing] = useState(savedDraft.current !== null)
   const [editedYaml, setEditedYaml] = useState(savedDraft.current ?? '')
   const [yamlErrors, setYamlErrors] = useState<string[]>([])
@@ -311,7 +312,9 @@ export function EditableYamlView({
   const handleApplyReviewed = useCallback(async () => {
     if (!preview || !onSave) return
     // The notice belongs to one attempt: a retry that fails for another reason
-    // (and can't refresh) must show its own error, not the last notice.
+    // (and can't refresh) must show its own error, not the last notice, and a
+    // slower refresh from an earlier attempt must not land over it.
+    const attempt = ++applyAttempt.current
     if (preview.changedSinceReview) setPreview({ ...preview, changedSinceReview: false })
     try {
       await onSave({
@@ -340,14 +343,19 @@ export function EditableYamlView({
               name: resource.name,
             },
           })
+          if (attempt !== applyAttempt.current) return
+          // Changed means the same resource, on the same cluster, at a newer
+          // version. A deleted resource has no version, and a cluster switch
+          // is its own error.
+          const before = preview.documents[0]?.reviewedResourceVersion
+          const after = refreshed.documents[0]?.reviewedResourceVersion
           setPreview({
             ...preview,
             documents: refreshed.documents,
             nonAtomic: refreshed.nonAtomic,
             context: refreshed.context,
             changedSinceReview:
-              refreshed.documents[0]?.reviewedResourceVersion !==
-              preview.documents[0]?.reviewedResourceVersion,
+              !!after && after !== before && refreshed.context === preview.context,
           })
         } catch {
           // Keep the last review visible when refresh is unavailable.
