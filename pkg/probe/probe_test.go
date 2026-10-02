@@ -14,6 +14,8 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 // ── P0 probe trio: DNS classification, HTTP status semantics, TLS cert inspection ──
@@ -509,5 +511,43 @@ func TestTCP_SuccessCarriesDetail(t *testing.T) {
 	}
 	if r.Detail == "" {
 		t.Error("a successful TCP probe must carry a Detail - empty evidence reads as 'nothing ran'")
+	}
+}
+
+// A denied proxy dial never reached the workload, so it must SKIP rather than
+// score. Driven through a real client against a real 403 because the branch
+// depends on client-go's error typing, which a hand-built error does not
+// reproduce faithfully.
+func TestServiceProxy_PermissionDeniedSkipsRatherThanFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure",` +
+			`"message":"services \"echo\" is forbidden: User \"radar\" cannot get resource \"services/proxy\" in API group \"\" in the namespace \"shop\"",` +
+			`"reason":"Forbidden","code":403}`))
+	}))
+	defer srv.Close()
+
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	if err != nil {
+		t.Fatalf("building client: %v", err)
+	}
+
+	r := ServiceProxy(context.Background(), client, "shop", "echo", 80, "/", VantageLocal)
+
+	if !r.Skipped {
+		t.Fatalf("a refused dial must skip, got a scored result: %+v", r)
+	}
+	if r.OK {
+		t.Errorf("OK = true on a refused dial: %+v", r)
+	}
+	if r.SkipClass != SkipClassDenied {
+		t.Errorf("SkipClass = %q, want %q", r.SkipClass, SkipClassDenied)
+	}
+	if !strings.Contains(r.Reason, "services/proxy") {
+		t.Errorf("the reason must name the grant to ask for, got %q", r.Reason)
+	}
+	if r.Error != "" {
+		t.Errorf("a permissions gap is not a probe error: %q", r.Error)
 	}
 }

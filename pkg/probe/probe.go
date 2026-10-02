@@ -131,6 +131,11 @@ const (
 	// condemn the path). A disposition, never a coverage gap: consumers must not
 	// describe it as "never tried".
 	SkipClassInformational = "informational"
+
+	// SkipClassDenied marks a probe the identity was not allowed to send. The
+	// request never reached the workload, so it says nothing about reachability -
+	// and unlike other skips it names something the operator can grant.
+	SkipClassDenied = "denied"
 )
 
 // Layer names which network layer this Result attests to. Higher layers
@@ -723,7 +728,14 @@ func proxyResult(ctx context.Context, req *rest.Request, r Result) Result {
 		// subresource, which a backend's own 403 body never does, so this
 		// distinguishes an apiserver refusal from an app that answered 403
 		// (the latter has a real status code and is "reached" below).
-		r.Error = "Permission denied. Your identity lacks get services/proxy or get pods/proxy in this namespace."
+		//
+		// This SKIPS rather than fails. A refused request tested nothing, so
+		// scoring it as a failure condemned a healthy workload for a
+		// permissions gap - red on every trace wherever the identity lacks the
+		// subresource, which is the default for Radar's own ServiceAccount.
+		r.Skipped = true
+		r.SkipClass = SkipClassDenied
+		r.Reason = "Permission denied. Your identity lacks get services/proxy or get pods/proxy in this namespace."
 		return r
 	case code == 502 || code == 503 || code == 504:
 		// A backend that genuinely answered 502/503/504 carries a real status code, and
