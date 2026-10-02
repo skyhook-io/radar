@@ -10,13 +10,14 @@ require (
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-chi/cors v1.2.2
 	github.com/godbus/dbus/v5 v5.2.2
+	github.com/gofrs/flock v0.13.1
 	github.com/google/cel-go v0.31.0
 	github.com/google/go-containerregistry v0.22.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/hashicorp/yamux v0.1.2
-	github.com/jackc/pgx/v5 v5.10.0
-	github.com/klauspost/compress v1.20.0
+	github.com/jackc/pgx/v5 v5.11.0
+	github.com/klauspost/compress v1.20.1
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/prometheus/client_golang v1.24.1
@@ -34,15 +35,15 @@ require (
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 	helm.sh/helm/v3 v3.22.0
-	k8s.io/api v0.37.0
-	k8s.io/apiextensions-apiserver v0.37.0
-	k8s.io/apimachinery v0.37.0
-	k8s.io/apiserver v0.37.0
-	k8s.io/cli-runtime v0.37.0
-	k8s.io/client-go v0.37.0
-	k8s.io/component-helpers v0.37.0
+	k8s.io/api v0.37.1
+	k8s.io/apiextensions-apiserver v0.37.1
+	k8s.io/apimachinery v0.37.1
+	k8s.io/apiserver v0.37.1
+	k8s.io/cli-runtime v0.37.1
+	k8s.io/client-go v0.37.1
+	k8s.io/component-helpers v0.37.1
 	k8s.io/klog/v2 v2.140.0
-	modernc.org/sqlite v1.58.0
+	modernc.org/sqlite v1.59.0
 	sigs.k8s.io/yaml v1.6.0
 )
 
@@ -175,13 +176,13 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
-	k8s.io/component-base v0.37.0 // indirect
-	k8s.io/csi-translation-lib v0.37.0 // indirect
+	k8s.io/component-base v0.37.1 // indirect
+	k8s.io/csi-translation-lib v0.37.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad // indirect
-	k8s.io/kubectl v0.37.0 // indirect
-	k8s.io/streaming v0.37.0 // indirect
+	k8s.io/kubectl v0.37.1 // indirect
+	k8s.io/streaming v0.37.1 // indirect
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3 // indirect
-	modernc.org/libc v1.75.6 // indirect
+	modernc.org/libc v1.75.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 	oras.land/oras-go/v2 v2.6.2 // indirect

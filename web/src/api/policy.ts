@@ -7,7 +7,17 @@ import type {
   VeleroStoredBackupsResponse,
   VeleroRunMessagesResponse,
 } from '@skyhook-io/k8s-ui'
-import { fetchJSON } from './client'
+import { fetchJSON, useRadarFeature } from './client'
+import { hasPolicyReports, useAPIResources } from './apiResources'
+import { isRadarFeatureUnsupported } from './radarFeatures'
+
+const POLICY_NOT_INSTALLED: PolicyResourceResponse = {
+  evaluated: false,
+  status: 'not_installed',
+  liveUpdates: false,
+  counts: { pass: 0, fail: 0, warn: 0, error: 0, skip: 0 },
+  findings: [],
+}
 
 // /api/policy/resource/{kind}/{namespace}/{name}
 //
@@ -15,11 +25,15 @@ import { fetchJSON } from './client'
 // a short stale window keeps drawer navigation instant without going stale in a
 // way an operator would notice.
 export function usePolicyResource(kind: string, namespace: string, name: string, enabled = true) {
-  return useQuery<PolicyResourceResponse>({
-    queryKey: ['policy', 'resource', kind, namespace, name],
+  const { guard, gatedKey } = useRadarFeature('policyResource')
+  const { data: apiResources, isPending: discoveryPending } = useAPIResources()
+  const query = useQuery<PolicyResourceResponse>({
+    queryKey: ['policy', 'resource', kind, namespace, name, ...gatedKey],
     queryFn: () =>
-      fetchJSON<PolicyResourceResponse>(
-        `/policy/resource/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+      guard(() =>
+        fetchJSON<PolicyResourceResponse>(
+          `/policy/resource/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`,
+        ),
       ),
     enabled: enabled && !!kind && !!namespace && !!name,
     staleTime: 15000,
@@ -27,6 +41,20 @@ export function usePolicyResource(kind: string, namespace: string, name: string,
     // would just repeat the denial on every drawer open.
     retry: false,
   })
+  // A Radar too old for policy results, on a cluster with no policy engine,
+  // gets the answer a current Radar would give: not installed. Prompting an
+  // upgrade there would promise a section that stays empty. Derived at render
+  // so it follows discovery whenever /api-resources answers; until it does the
+  // section stays loading rather than flashing a note it may withdraw.
+  if (isRadarFeatureUnsupported(query.error)) {
+    if (apiResources === undefined && discoveryPending) {
+      return { ...query, error: null, isError: false, isLoading: true, isPending: true, status: 'pending' as const }
+    }
+    if (apiResources !== undefined && !hasPolicyReports(apiResources)) {
+      return { ...query, data: POLICY_NOT_INSTALLED, error: null, isError: false, isSuccess: true, status: 'success' as const }
+    }
+  }
+  return query
 }
 
 // /api/policy/policies/{policy}

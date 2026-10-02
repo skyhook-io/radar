@@ -10,6 +10,7 @@ import { formatBytes } from '../../utils/format'
 import { downloadBlob, filterTree } from './file-browser-utils'
 import { Tooltip } from '../ui/Tooltip'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { readErrorBody } from '../../api/httpErrors'
 import { Input } from '@skyhook-io/k8s-ui'
 
 const radarLoadingIconUrl = assetUrl(radarLoadingIcon)
@@ -32,7 +33,7 @@ async function fetchImageFilesystem(
     headers: getAuthHeaders(),
   })
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Request failed' }))
+    const error = await readErrorBody(response)
     throw new Error(error.error || `HTTP ${response.status}`)
   }
   return response.json()

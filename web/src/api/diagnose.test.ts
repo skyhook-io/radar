@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRun, subscribeRun, type DiagnoseStreamEvent } from "./diagnose";
+import {
+  addTurn,
+  createRun,
+  DiagnoseError,
+  subscribeRun,
+  type DiagnoseStreamEvent,
+} from "./diagnose";
 
 type SSEListener = (event: { data: string; lastEventId: string }) => void;
 
@@ -264,5 +270,100 @@ describe("investigation start requests", () => {
       agent: "hub",
     });
     expect(JSON.parse(init.body as string).issueId).toBe("issue-1");
+  });
+});
+
+describe("refused requests", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const target = { kind: "Pod", group: "", namespace: "prod", name: "api-0" };
+
+  const refuse = (status: number, body: string) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(body, { status })),
+    );
+
+  const startError = async () => {
+    try {
+      await createRun(target);
+    } catch (e) {
+      return e as DiagnoseError;
+    }
+    throw new Error("createRun resolved");
+  };
+
+  it("shows the sentence a host sends in detail, not its code", async () => {
+    refuse(
+      402,
+      JSON.stringify({
+        error: "ai_quota_exhausted",
+        detail: "Your organization has used this month's investigations.",
+        reason: "allowance_used_free",
+        action: "upgrade",
+      }),
+    );
+    const e = await startError();
+    expect(e).toBeInstanceOf(DiagnoseError);
+    expect(e.status).toBe(402);
+    expect(e.message).toBe(
+      "Your organization has used this month's investigations.",
+    );
+    expect(e.code).toBe("ai_quota_exhausted");
+    expect(e.reason).toBe("allowance_used_free");
+    expect(e.action).toBe("upgrade");
+  });
+
+  it("applies the same reading to follow-up turns", async () => {
+    refuse(
+      402,
+      JSON.stringify({ error: "ai_quota_exhausted", detail: "Limit reached." }),
+    );
+    await expect(addTurn("run-1", { question: "why?" })).rejects.toMatchObject({
+      status: 402,
+      message: "Limit reached.",
+      code: "ai_quota_exhausted",
+    });
+  });
+
+  it("reads a code sent beside a sentence repeated in error", async () => {
+    const sentence = "This investigation has reached its follow-up limit.";
+    refuse(
+      409,
+      JSON.stringify({
+        error: sentence,
+        detail: sentence,
+        code: "investigation_turn_limit",
+      }),
+    );
+    await expect(addTurn("run-1", { question: "why?" })).rejects.toMatchObject({
+      status: 409,
+      message: sentence,
+      code: "investigation_turn_limit",
+    });
+  });
+
+  it("never reports the sentence as the code", async () => {
+    const sentence = "Busy.";
+    refuse(409, JSON.stringify({ error: sentence, detail: sentence }));
+    expect((await startError()).code).toBeUndefined();
+  });
+
+  it("shows error when it is the only sentence", async () => {
+    refuse(409, JSON.stringify({ error: "Too many investigations running." }));
+    const e = await startError();
+    expect(e.message).toBe("Too many investigations running.");
+    expect(e.code).toBeUndefined();
+    expect(e.reason).toBeUndefined();
+    expect(e.action).toBeUndefined();
+  });
+
+  it.each([
+    ["an empty detail", JSON.stringify({ error: "Busy.", detail: "" }), "Busy."],
+    ["a non-JSON body", "upstream timeout", "request failed (502)"],
+    ["no message at all", JSON.stringify({ error: "  " }), "request failed (502)"],
+  ])("falls back past %s", async (_name, body, message) => {
+    refuse(502, body);
+    expect((await startError()).message).toBe(message);
   });
 });

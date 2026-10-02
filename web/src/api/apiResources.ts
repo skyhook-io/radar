@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { APIResource } from "../types";
 import { apiUrl, getAuthHeaders, getCredentialsMode } from "./config";
+import { readErrorBody } from "./httpErrors";
 
 // Re-export pure functions from package
 export {
@@ -20,9 +21,7 @@ async function fetchJSON<T>(path: string): Promise<T> {
     headers: getAuthHeaders(),
   });
   if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ error: "Unknown error" }));
+    const error = await readErrorBody(response);
     throw new Error(error.error || `HTTP ${response.status}`);
   }
   return response.json();
@@ -35,6 +34,22 @@ export function useAPIResources() {
     queryFn: () => fetchJSON("/api-resources"),
     staleTime: 5 * 60 * 1000, // 5 minutes - resources don't change often
   });
+}
+
+// The report families the server watches (reportGroups in
+// internal/k8s/policy_reports.go): the wgpolicyk8s.io working-group API and
+// its openreports.io successor, which names the same resources differently.
+const POLICY_REPORT_RESOURCES: Record<string, readonly string[]> = {
+  "wgpolicyk8s.io": ["policyreports", "clusterpolicyreports"],
+  "openreports.io": ["reports", "clusterreports"],
+};
+
+export function hasPolicyReports(resources: APIResource[] | undefined): boolean {
+  return (
+    resources?.some((resource) =>
+      POLICY_REPORT_RESOURCES[resource.group]?.includes(resource.name),
+    ) ?? false
+  );
 }
 
 export function hasKarpenterNodePools(

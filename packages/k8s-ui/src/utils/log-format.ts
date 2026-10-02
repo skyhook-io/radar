@@ -3,7 +3,7 @@
  * Shared between LogsViewer and WorkloadLogsViewer components.
  */
 
-import type { LogLevel } from '../components/logs/useLogBuffer'
+import type { LogLevel } from './log-level'
 
 export type TimestampFormat =
   | 'time-local'

@@ -23,6 +23,8 @@ import type {
   RBACPolicyRule,
 } from '../../../types'
 import { Tooltip } from '../../ui/Tooltip'
+import { RadarUpgradeNote } from '../../ui/RadarUpgradeNote'
+import { getRadarUpgradeRequirement, type RadarUpgradeRequirement } from '../../../types/fetch-error'
 import { MetricsChart } from '../../ui/MetricsChart'
 import { MetricsUnavailableNotice } from './MetricsUnavailableNotice'
 import { ContainerEnvironmentSection } from './ContainerEnvironmentSection'
@@ -191,10 +193,12 @@ function EnvVarsSection({
   initContainers,
   containers,
   resolvedEnvFrom,
+  upgrade,
 }: {
   initContainers: any[]
   containers: any[]
   resolvedEnvFrom?: ResolvedEnvFrom
+  upgrade?: RadarUpgradeRequirement | null
 }) {
   const allContainers = [...initContainers, ...containers]
   const containersWithEnv = allContainers.filter((c: any) => c.env?.length > 0 || c.envFrom?.length > 0)
@@ -205,6 +209,7 @@ function EnvVarsSection({
   return (
     <Section title={`Environment Variables  ·  ${subtitle}`} icon={List} defaultExpanded={false}>
       <div className="space-y-4">
+        {upgrade && <RadarUpgradeNote requirement={upgrade} />}
         {allContainers.map((container: any) => {
           const envVars: any[] = container.env || []
           const envFrom: any[] = container.envFrom || []
@@ -312,6 +317,8 @@ export function PodRenderer({
   const hasResolvedEnvironmentRows = environment?.containers.some(
     container => container.rows.length > 0 || container.truncated,
   ) ?? false
+  // An older Radar can't resolve variable sources; fall back to the spec view.
+  const environmentUpgrade = getRadarUpgradeRequirement(environmentError)
 
   const namespace = data.metadata?.namespace
   const podName = data.metadata?.name
@@ -792,7 +799,7 @@ export function PodRenderer({
           <div className="text-xs text-theme-text-tertiary">Loading variable sources…</div>
         </Section>
       )}
-      {hasEnvironmentDeclarations && environmentError && !environment && (
+      {hasEnvironmentDeclarations && environmentError && !environment && !environmentUpgrade && (
         <Section title="Environment Variables" icon={List} defaultExpanded={false}>
           <div className="space-y-2 text-xs">
             <p className="text-theme-text-secondary">Variable sources could not be loaded.</p>
@@ -800,11 +807,12 @@ export function PodRenderer({
           </div>
         </Section>
       )}
-      {(!environment || !hasResolvedEnvironmentRows) && !environmentLoading && !environmentError && hasEnvironmentDeclarations && (
+      {(!environment || !hasResolvedEnvironmentRows) && !environmentLoading && (!environmentError || environmentUpgrade) && hasEnvironmentDeclarations && (
         <EnvVarsSection
           initContainers={initContainers}
           containers={containers}
           resolvedEnvFrom={resolvedEnvFrom}
+          upgrade={environmentUpgrade}
         />
       )}
 

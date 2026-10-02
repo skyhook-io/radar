@@ -61,12 +61,18 @@ export function hasRadarFinding(changes: GitOpsChange[] | undefined): boolean {
   return (changes ?? []).some((c) => c.healthSource === 'radar' && (c.health === 'Degraded' || c.health === 'Missing'))
 }
 
+export function hasHealthSettingsHint(summary: HealthSourceNoticeSummary | undefined, changes: GitOpsChange[] | undefined): boolean {
+  return healthSourceNoticeKind(summary) === 'appTree'
+    && (!!summary?.resourceHealthApiError || (!hasRadarFinding(changes) && summary?.health === 'Degraded'))
+}
+
 export function GitOpsHealthSourceNotice({
   summary,
   changes,
   docsUrl,
   remoteDestinationHint,
   onOpenSettings,
+  settingsNote,
 }: {
   summary: HealthSourceNoticeSummary | undefined
   // Decides between the two appTree sentences: with a Radar-sourced
@@ -84,6 +90,9 @@ export function GitOpsHealthSourceNotice({
   // the first way out, and "check Settings" when a configured connection
   // didn't deliver. Without it, only the Argo-side knob is named.
   onOpenSettings?: () => void
+  // Host context shown before the settings link, such as settings that can
+  // be copied for this cluster.
+  settingsNote?: string
 }) {
   const kind = healthSourceNoticeKind(summary)
   if (!kind) return null
@@ -92,7 +101,7 @@ export function GitOpsHealthSourceNotice({
   // app with no Radar finding has nothing here to attribute.
   const radarFinding = hasRadarFinding(changes)
   const apiError = summary?.resourceHealthApiError
-  if (kind === 'appTree' && !radarFinding && !apiError && summary?.health !== 'Degraded') return null
+  if (kind === 'appTree' && !radarFinding && !hasHealthSettingsHint(summary, changes)) return null
   const settingsLink = (label: string) =>
     onOpenSettings ? (
       <button type="button" onClick={onOpenSettings} className="underline decoration-theme-border underline-offset-2 hover:text-theme-text-primary">
@@ -117,7 +126,7 @@ export function GitOpsHealthSourceNotice({
             {apiError ? (
               <>
                 {APP_TREE_API_ERROR_NOTICE}: {apiError}.
-                {onOpenSettings && <> {settingsLink('Check Argo CD in Settings')}.</>}
+                {onOpenSettings && <> {settingsNote} {settingsLink('Check Argo CD in Settings')}.</>}
                 {' '}
                 {radarFinding ? APP_TREE_API_ERROR_FINDINGS : APP_TREE_API_ERROR_NO_FINDINGS}
               </>
@@ -127,6 +136,7 @@ export function GitOpsHealthSourceNotice({
                 {!radarFinding && (
                   <>
                     {' '}
+                    {settingsNote && onOpenSettings && <>{settingsNote}{' '}</>}
                     To see Argo's per-resource health here, {onOpenSettings && <>{settingsLink('connect Radar to your Argo CD server')}, or </>}
                     {APP_TREE_PERSIST_REMEDY}
                   </>

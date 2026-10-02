@@ -1022,24 +1022,17 @@ func (b *SSEBroadcaster) Broadcast(event SSEEvent) {
 }
 
 // broadcastResourceChange sends a per-resource change frame (k8s_event, which
-// can carry a spec/data diff) only to clients whose RBAC plausibly permits the
-// resource. Namespaced changes go only to clients whose RBAC-filtered namespace
-// set includes the namespace; cluster-scoped changes go only to clients not
-// denied that kind (the topology denied set resolved at subscribe time).
-//
-// This is a PARTIAL gate, not a complete authorization boundary, and is a big
-// reduction over the previous broadcast-to-all (which leaked every diff to every
-// client). Two gaps remain, both needing per-(group,resource) state this path
-// doesn't carry yet (ResourceChange has only Kind):
-//   - namespaced kinds the user can't read WITHIN an allowed namespace (e.g.
-//     Secrets/Roles for a list-pods-only viewer) still pass the namespace check;
-//   - cluster-scoped kinds outside the topology set (ClusterRole, webhooks,
-//     cluster-scoped CRDs) aren't in DeniedKinds, and kind-string matching misses
-//     CRD variants (EC2NodeClass vs synthesized NodeClass).
+// can carry a spec/data diff) only to clients whose RBAC permits the resource.
+// clientCanSeeChange requires the client's filtered namespace set to include a
+// namespaced change, then SAR-checks list on the exact (group, resource) — in
+// that namespace, or cluster-wide for a cluster-scoped change — so a viewer who
+// can list pods but not Secrets in a namespace never receives a Secret diff.
 //
 // The group/resource come from the change's GVR (dynamic cache) or are resolved
 // from its Kind (typed cache); an empty resource means the kind couldn't be
-// resolved and the frame fails closed for authenticated clients.
+// resolved and the frame fails closed for authenticated clients. Only a client
+// subscribed without an authorizer falls back to the coarser namespace +
+// denied-kind check.
 //
 // Clients are snapshotted under the lock, then authorized + sent WITHOUT it: an
 // authorization can miss the per-user memo and do a SAR round-trip, and holding

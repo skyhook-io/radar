@@ -319,6 +319,37 @@ func TestEnsureConnected_RetiredClientAborts(t *testing.T) {
 	}
 }
 
+// A caller that captured the client before it was retired (a scan job, an MCP
+// call) must not keep sending the previous context's headers to its endpoint.
+func TestRetiredConnectedClientSendsNoQuery(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(healthyProbeBody))
+	}))
+	t.Cleanup(srv.Close)
+	c := &Client{
+		httpClient:  &http.Client{Timeout: 5 * time.Second},
+		manualURL:   srv.URL,
+		headers:     map[string]string{"Authorization": "previous-context"},
+		contextName: "ctx",
+	}
+	if _, _, err := c.EnsureConnected(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	c.retired = true
+	c.mu.Unlock()
+	requests.Store(0)
+	if _, err := c.Query(context.Background(), "up"); err == nil {
+		t.Fatal("retired client answered a query")
+	}
+	if n := requests.Load(); n != 0 {
+		t.Fatalf("retired client sent %d requests", n)
+	}
+}
+
 // TestMarkConnected_DropsStaleGeneration verifies the generation gate: a
 // discovery whose configuration was invalidated (Reset / SetManualURL /
 // SetHeaders bump discoveryGen) mid-flight must not publish its now-stale

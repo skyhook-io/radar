@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { TrafficSourcesResponse, TrafficFlowsResponse } from '../types'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from './config'
+import { readErrorBody } from './httpErrors'
 
 async function fetchJSON<T>(path: string): Promise<T> {
   const response = await fetch(apiUrl(path), {
@@ -8,7 +9,7 @@ async function fetchJSON<T>(path: string): Promise<T> {
     headers: getAuthHeaders(),
   })
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+    const error = await readErrorBody(response)
     throw new Error(error.error || `HTTP ${response.status}`)
   }
   return response.json()
@@ -82,7 +83,7 @@ export function useSetTrafficSource() {
         body: JSON.stringify({ source }),
       })
       if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        const error = await readErrorBody(response)
         throw new Error(error.error || `HTTP ${response.status}`)
       }
       return response.json()
@@ -125,7 +126,7 @@ export function useTrafficConnect() {
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       })
       if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        const error = await readErrorBody(response)
         throw new Error(error.error || `HTTP ${response.status}`)
       }
       return response.json()

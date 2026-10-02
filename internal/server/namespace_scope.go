@@ -449,7 +449,8 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	// What the SA / kubeconfig identity sees — used as the input set for
 	// per-user filtering below. authoritative=true means "we got a real
 	// list from the apiserver"; false means "best-effort short list".
-	saAccessible, authoritative := k8s.GetAccessibleNamespaces(r.Context())
+	saAccessible, source := k8s.GetAccessibleNamespacesWithSource(r.Context())
+	authoritative := source == k8s.NamespaceListCluster
 
 	// Intersect with the calling user's RBAC-allowed namespaces. For
 	// no-auth callers and cluster-admin users, this is a pass-through
@@ -458,7 +459,8 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	// false in the restricted case — the picker UI shows the "limited
 	// visibility" affordance accordingly.
 	namespaces := saAccessible
-	if filtered := s.getUserNamespaces(r, saAccessible); filtered != nil {
+	filtered, discoveryFailed := s.getUserNamespacesWithStatus(r, saAccessible)
+	if filtered != nil {
 		namespaces = filtered
 		// If the per-user filter shrank the set, the "authoritative" claim
 		// no longer applies — we don't know whether namespaces beyond the
@@ -472,8 +474,9 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	// session). Partial revocation: keep the survivors, only clear the pick
 	// entirely when nothing survives. Store the trimmed set so it doesn't
 	// re-trim on every read — through the guarded mutation so a stale trim
-	// can't revert a concurrent POST or cross a context switch.
-	if len(actives) > 0 {
+	// can't revert a concurrent POST or cross a context switch. A failed LIST
+	// or access check says nothing about the picks, so it must not erase them.
+	if len(actives) > 0 && !discoveryFailed && source != k8s.NamespaceListFailed {
 		survivors := intersectPicksWithAllowed(actives, namespaces)
 		if len(survivors) != len(actives) {
 			s.commitPickMutation(r, pickCtx, actives, survivors, false)

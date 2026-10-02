@@ -123,10 +123,22 @@ type CloudConnectCapability struct {
 	APIURL string `json:"apiUrl,omitempty"`
 }
 
+// FeatureCapabilities advertises endpoints by meaning rather than by version,
+// so an embedding host running a newer frontend (Radar Hub) can tell what this
+// binary serves. A flag, once added, is always true here: older binaries simply
+// lack it, and the frontend falls back to a minimum-version check for them.
+//
+// A new endpoint that the frontend calls as an optional feature gets its flag
+// here in the same change, plus an entry in web/src/api/radarFeatures.ts
+// (TestFeatureFlagsHaveFrontendGates enforces the pairing).
 type FeatureCapabilities struct {
-	YAMLReview     bool `json:"yamlReview"`
-	YAMLSchemas    bool `json:"yamlSchemas"`
-	WorkloadImages bool `json:"workloadImages"`
+	YAMLReview      bool `json:"yamlReview"`
+	YAMLSchemas     bool `json:"yamlSchemas"`
+	WorkloadImages  bool `json:"workloadImages"`
+	ResourceIssues  bool `json:"resourceIssues"`  // GET /api/issues/resource/{kind}/{namespace}/{name}
+	PodEnvironment  bool `json:"podEnvironment"`  // GET /api/pods/{namespace}/{name}/environment
+	PolicyResource  bool `json:"policyResource"`  // GET /api/policy/resource/{kind}/{namespace}/{name}
+	WorkloadHistory bool `json:"workloadHistory"` // GET /api/workloads/{kind}/{namespace}/{name}/history
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

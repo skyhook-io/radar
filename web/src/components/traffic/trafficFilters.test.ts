@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason } from './trafficFilters'
+import type { AggregatedFlow, TrafficFlow } from '../../types'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -126,5 +127,157 @@ describe('isPolicyDropReason', () => {
     expect(isPolicyDropReason('STALE_OR_UNROUTABLE_IP', 0)).toBe(false)
     expect(isPolicyDropReason(undefined, 0)).toBe(false)
     expect(isPolicyDropReason('', 0)).toBe(false)
+  })
+})
+
+describe('edge rates', () => {
+  it('reads the unrounded rates, so a trickle of errors is not a 100% error rate', () => {
+    const flow = { requestRate: 0.3, requestCount: 1, errorRate: 0.01, errorCount: 1 }
+    expect(errorRateOf(flow) / requestRateOf(flow)).toBeCloseTo(0.0333, 3)
+  })
+
+  it('falls back to the rounded counts from a server that sends no rates', () => {
+    expect(requestRateOf({ requestCount: 7 })).toBe(7)
+    expect(errorRateOf({ errorCount: 2 })).toBe(2)
+    expect(requestRateOf({})).toBe(0)
+  })
+
+  it('shows the unrounded rate for a rate-based edge, and the connection count otherwise', () => {
+    expect(displayVolume({ requestRate: 0.3, connections: 1 }, true)).toBe(0.3)
+    expect(displayVolume({ connections: 4 }, true)).toBe(4)
+    expect(displayVolume({ requestRate: 0.3, connections: 12 }, false)).toBe(12)
+  })
+
+  it('formats a rate without rounding a trickle away', () => {
+    expect(formatRate(0)).toBe('0')
+    expect(formatRate(0.004)).toBe('<0.01')
+    expect(formatRate(0.3)).toBe('0.30')
+    expect(formatRate(2.46)).toBe('2.5')
+    expect(formatRate(12.4)).toBe('12')
+    expect(formatRate(1530)).toBe('1.5K')
+  })
+})
+
+describe('mergeFlowVolume', () => {
+  it('sums every figure the graph displays, not only connections and bytes', () => {
+    const base = { source: { name: 'a', namespace: '', kind: 'External' }, destination: { name: 'web', namespace: 'shop', kind: 'Pod' }, protocol: 'tcp', port: 80, lastSeen: '' }
+    const into = { ...base, flowCount: 1, bytesSent: 10, bytesRecv: 20, connections: 2, requestCount: 2, requestRate: 2, errorRate: 0.5, errorCount: 1 }
+    mergeFlowVolume(into, { ...base, flowCount: 1, bytesSent: 5, bytesRecv: 5, connections: 8, requestCount: 8, requestRate: 8 })
+    expect(into).toMatchObject({ connections: 10, bytesSent: 15, bytesRecv: 25, flowCount: 2, requestCount: 10, requestRate: 10, errorRate: 0.5, errorCount: 1 })
+  })
+})
+
+describe('mergeFlowVolume latency', () => {
+  const base: AggregatedFlow = { source: { name: 'a', namespace: 'shop', kind: 'Pod' }, destination: { name: 'web', namespace: 'shop', kind: 'Pod' }, protocol: 'tcp', port: 80, lastSeen: '', flowCount: 1, bytesSent: 0, bytesRecv: 0, connections: 1 }
+
+  it('weights average latency by request rate, whatever the order', () => {
+    const fast = { ...base, requestRate: 100, avgLatencyMs: 10 }
+    const slow = { ...base, requestRate: 1, avgLatencyMs: 1000 }
+    const a = { ...fast }
+    mergeFlowVolume(a, slow)
+    const b = { ...slow }
+    mergeFlowVolume(b, fast)
+    expect(a.avgLatencyMs).toBeCloseTo(19.8, 1)
+    expect(b.avgLatencyMs).toBeCloseTo(19.8, 1)
+  })
+
+  it('ignores traffic that had no latency measured, in any merge order', () => {
+    const a = { ...base, requestRate: 1, avgLatencyMs: 10 }
+    const b = { ...base, requestRate: 100 }
+    const c = { ...base, requestRate: 1, avgLatencyMs: 1000 }
+    for (const order of [[a, b, c], [c, b, a], [a, c, b], [b, a, c]]) {
+      const into = { ...order[0] }
+      for (const f of order.slice(1)) mergeFlowVolume(into, f)
+      expect(into.avgLatencyMs).toBeCloseTo(505, 6)
+    }
+  })
+
+  it('keeps the weight through a copy of a merged edge', () => {
+    const into = { ...base, requestRate: 1, avgLatencyMs: 1000 }
+    mergeFlowVolume(into, { ...base, requestRate: 100 })
+    const collapsed = { ...into, source: { name: 'Internet', namespace: '', kind: 'Internet' } }
+    mergeFlowVolume(collapsed, { ...base, requestRate: 1, avgLatencyMs: 10 })
+    expect(collapsed.avgLatencyMs).toBeCloseTo(505, 6)
+  })
+
+  it('averages edges without rates equally, however many are merged', () => {
+    const into = { ...base, avgLatencyMs: 10 }
+    mergeFlowVolume(into, { ...base, avgLatencyMs: 20 })
+    mergeFlowVolume(into, { ...base, avgLatencyMs: 30 })
+    expect(into.avgLatencyMs).toBeCloseTo(20, 6)
+  })
+
+  it('takes the only latency there is', () => {
+    const into = { ...base }
+    mergeFlowVolume(into, { ...base, avgLatencyMs: 7 })
+    expect(into.avgLatencyMs).toBe(7)
+  })
+})
+
+describe('dedupeHTTPPairs', () => {
+  const ep = (name: string) => ({ name, namespace: 'shop', kind: 'Pod' })
+  const rec = (from: string, to: string, l7Type: string, port = 80): TrafficFlow => ({
+    source: ep(from), destination: ep(to), protocol: 'tcp', port, l7Protocol: 'HTTP', l7Type,
+    httpMethod: 'GET', httpPath: '/orders', bytesSent: 0, bytesRecv: 0, connections: 1, verdict: 'forwarded', lastSeen: '',
+  } as TrafficFlow)
+  const rows = (fs: TrafficFlow[]) => fs.map(f => `${f.source.name}>${f.destination.name}:${f.port}:${f.l7Type}`)
+
+  describe('from a server whose responses run caller → callee', () => {
+    it('pairs a response with its request', () => {
+      expect(rows(dedupeHTTPPairs([rec('a', 'b', 'REQUEST'), rec('a', 'b', 'RESPONSE')], true))).toEqual(['a>b:80:RESPONSE'])
+    })
+    it('keeps an unanswered call the other way on the same route', () => {
+      expect(rows(dedupeHTTPPairs([rec('a', 'b', 'RESPONSE'), rec('b', 'a', 'REQUEST')], true))).toEqual(['a>b:80:RESPONSE', 'b>a:80:REQUEST'])
+    })
+    it('keeps an unanswered call on another port', () => {
+      expect(rows(dedupeHTTPPairs([rec('a', 'b', 'REQUEST'), rec('a', 'b', 'RESPONSE'), rec('a', 'b', 'REQUEST', 8080)], true)))
+        .toEqual(['a>b:80:RESPONSE', 'a>b:8080:REQUEST'])
+    })
+  })
+
+  describe('from an older server whose responses run server → client', () => {
+    it('pairs the reversed response with its request', () => {
+      expect(rows(dedupeHTTPPairs([rec('a', 'b', 'REQUEST'), rec('b', 'a', 'RESPONSE', 41732)], false))).toEqual(['b>a:41732:RESPONSE'])
+    })
+  })
+
+  it('keeps a request that got no response', () => {
+    expect(rows(dedupeHTTPPairs([rec('a', 'b', 'REQUEST')], true))).toEqual(['a>b:80:REQUEST'])
+  })
+})
+
+describe('merged latency', () => {
+  const base: AggregatedFlow = { source: { name: 'a', namespace: 'shop', kind: 'Pod' }, destination: { name: 'web', namespace: 'shop', kind: 'Pod' }, protocol: 'tcp', port: 80, lastSeen: '', flowCount: 1, bytesSent: 0, bytesRecv: 0, connections: 1 }
+
+  it('drops percentiles once two edges with latency are merged', () => {
+    const into = { ...base, avgLatencyMs: 10, latencySamples: 90, latencyP50Ms: 9, latencyP95Ms: 30, latencyP99Ms: 40 }
+    mergeFlowVolume(into, { ...base, avgLatencyMs: 100, latencySamples: 10, latencyP50Ms: 90, latencyP95Ms: 300, latencyP99Ms: 400 })
+    expect(into.latencyP50Ms).toBeUndefined()
+    expect(into.latencyP95Ms).toBeUndefined()
+    expect(into.avgLatencyMs).toBeCloseTo(19, 6)
+  })
+
+  it('keeps the percentiles of the only edge that had latency', () => {
+    const into = { ...base }
+    mergeFlowVolume(into, { ...base, avgLatencyMs: 10, latencySamples: 5, latencyP95Ms: 30 })
+    expect(into.latencyP95Ms).toBe(30)
+    mergeFlowVolume(into, { ...base })
+    expect(into.latencyP95Ms).toBe(30)
+  })
+
+  it('weights a response-level edge by its samples', () => {
+    expect(latencyWeightOf({ ...base, avgLatencyMs: 5, latencySamples: 42 })).toBe(42)
+    expect(latencyWeightOf({ ...base, avgLatencyMs: 5, requestRate: 3, latencySamples: 42 })).toBe(3)
+    expect(latencyWeightOf({ ...base })).toBe(0)
+  })
+})
+
+describe('coverageLabel', () => {
+  it('says how far back the flows reach from when they were collected', () => {
+    expect(coverageLabel('2026-09-30T08:37:24Z', '2026-09-30T08:39:04Z')).toBe('last 1m 40s')
+    expect(coverageLabel('2026-09-30T08:38:59Z', '2026-09-30T08:39:04Z')).toBe('last 5s')
+  })
+  it('is empty when the window is fully covered', () => {
+    expect(coverageLabel(undefined, '2026-09-30T08:39:04Z')).toBeNull()
   })
 })

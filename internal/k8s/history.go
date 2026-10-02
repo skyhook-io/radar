@@ -301,7 +301,8 @@ func genericConditionSignalMap(obj map[string]any, fields ...string) map[string]
 		}
 		status, _ := cond["status"].(string)
 		reason, _ := cond["reason"].(string)
-		out[typ] = status + "\x00" + reason
+		// Quote both components to avoid delimiter collisions and NULs in jsonb.
+		out[typ] = fmt.Sprintf("%q:%q", status, reason)
 	}
 	return out
 }

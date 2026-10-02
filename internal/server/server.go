@@ -46,6 +46,8 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/images"
 	"github.com/skyhook-io/radar/internal/investigationrefs"
@@ -95,6 +97,8 @@ type Server struct {
 	openCostCurrency        *opencost.CurrencyResolver
 	currencyManaged         bool
 	prometheusConfigMu      sync.Mutex
+	localConnections        *connections.Resolver
+	localRuntime            *connectionruntime.Runtime
 	promURLFlag             bool
 	promHeaderFlags         bool
 	authConfig              auth.Config
@@ -196,6 +200,8 @@ type Config struct {
 	EffectiveConfig         *config.Config              // Running startup config for GET /api/config
 	PrometheusURLFlag       bool
 	PrometheusHeaderFlags   bool
+	LocalConnections        *connections.Resolver
+	LocalRuntime            *connectionruntime.Runtime
 	OpenCostCurrency        string      // ISO 4217 code labeling values returned by OpenCost endpoints
 	OpenCostManaged         bool        // true when an explicit CLI/Helm flag owns the running value
 	AuthConfig              auth.Config // Authentication configuration
@@ -234,6 +240,8 @@ func New(cfg Config) *Server {
 		effectiveConfig:         cfg.EffectiveConfig,
 		promURLFlag:             cfg.PrometheusURLFlag,
 		promHeaderFlags:         cfg.PrometheusHeaderFlags,
+		localConnections:        cfg.LocalConnections,
+		localRuntime:            cfg.LocalRuntime,
 		openCostCurrency:        opencost.NewCurrencyResolver(cfg.OpenCostCurrency),
 		currencyManaged:         cfg.OpenCostManaged,
 		authConfig:              cfg.AuthConfig,
@@ -890,6 +898,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Put("/integrations/cost", s.handleApplyCostSource)
 			r.Put("/integrations/argocd", s.handleApplyArgoCDConfig)
 			r.Get("/integrations/argocd/status", s.handleArgoCDStatus)
+			r.Get("/integrations/connections", s.handleLocalConnections)
+			r.Put("/integrations/connections", s.handleUpdateLocalConnection)
 
 			// Desktop routes
 			r.Post("/desktop/open-url", s.handleDesktopOpenURL)
@@ -1378,9 +1388,13 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
-		YAMLReview:     true,
-		YAMLSchemas:    true,
-		WorkloadImages: true,
+		YAMLReview:      true,
+		YAMLSchemas:     true,
+		WorkloadImages:  true,
+		ResourceIssues:  true,
+		PodEnvironment:  true,
+		PolicyResource:  true,
+		WorkloadHistory: true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
@@ -1518,7 +1532,7 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 			}
 		}
 	}
-	filtered := s.getUserNamespaces(r, namespaces)
+	filtered, discoveryFailed := s.getUserNamespacesWithStatus(r, namespaces)
 	// If picks lost RBAC mid-session, the filter shrinks the set. When the
 	// intersection is empty every read returns []; recover by dropping the
 	// stale pick entirely and recomputing as if no filter were set, so the
@@ -1526,8 +1540,9 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 	// Symmetric with handleGetNamespaceScope's partial-revocation eviction.
 	// namespaces holds the pruned picks this fallback filtered on; clear only
 	// if it's still the live pick, so a stale read can't wipe a concurrent
-	// POST or clear across a context switch.
-	if pickFallback && noNamespaceAccess(filtered) {
+	// POST or clear across a context switch. A failed access check is empty
+	// for the wrong reason and must not cost the user their pick.
+	if pickFallback && !discoveryFailed && noNamespaceAccess(filtered) {
 		s.commitPickMutation(r, pickCtx, namespaces, nil, false)
 		filtered = s.getUserNamespaces(r, nil)
 	}
@@ -5292,9 +5307,17 @@ func (s *Server) getClientSafetySnapshotForRequest(r *http.Request) (kubernetes.
 // When auth is disabled, returns the requested namespaces unchanged.
 // When auth is enabled, intersects with the user's allowed namespaces.
 func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string {
+	namespaces, _ := s.getUserNamespacesWithStatus(r, requested)
+	return namespaces
+}
+
+// getUserNamespacesWithStatus is getUserNamespaces plus whether the result is
+// a fail-closed empty set because namespace discovery errored, rather than the
+// user genuinely having no access.
+func (s *Server) getUserNamespacesWithStatus(r *http.Request, requested []string) (namespaces []string, discoveryFailed bool) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil || s.permCache == nil {
-		return requested
+		return requested, false
 	}
 
 	perms := s.permCache.Get(user.Username, user.Groups)
@@ -5307,7 +5330,7 @@ func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string
 		client := k8s.GetClient()
 		if client == nil {
 			log.Printf("[auth] K8s client not available for namespace discovery (user=%s) — denying access", k8s.SanitizeForLog(user.Username))
-			return []string{} // fail-closed: cannot verify permissions
+			return []string{}, true // fail-closed: cannot verify permissions
 		}
 
 		// Get all namespace names from cache
@@ -5335,7 +5358,7 @@ func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string
 		allowed, err := auth.DiscoverNamespaces(r.Context(), client, user.Username, user.Groups, allNamespaces)
 		if err != nil {
 			log.Printf("[auth] Failed to discover namespaces for %s: %v — denying access (fail-closed)", k8s.SanitizeForLog(user.Username), err)
-			return []string{} // fail-closed: no access on discovery error
+			return []string{}, true // fail-closed: no access on discovery error
 		}
 
 		log.Printf("[auth] DiscoverNamespaces result for %s: allowed=%v (nil=all, []=none)", user.Username, allowed)
@@ -5343,7 +5366,7 @@ func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string
 		s.permCache.Set(user.Username, user.Groups, perms)
 	}
 
-	return auth.FilterNamespacesForUser(requested, user, perms)
+	return auth.FilterNamespacesForUser(requested, user, perms), false
 }
 
 // handleSSE wraps the SSEBroadcaster's HandleSSE with per-user namespace filtering.
@@ -5625,10 +5648,11 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 // configResponse bundles the on-disk config file with the effective startup
 // config so the UI can show "currently running" hints for values that differ.
 type configResponse struct {
-	Management string        `json:"management"`
-	File       config.Config `json:"file"`
-	Effective  config.Config `json:"effective"`
-	IsDesktop  bool          `json:"isDesktop"`
+	IntegrationProfiles map[config.Integration]connections.ProfileView `json:"integrationProfiles,omitempty"`
+	Management          string                                         `json:"management"`
+	File                config.Config                                  `json:"file"`
+	Effective           config.Config                                  `json:"effective"`
+	IsDesktop           bool                                           `json:"isDesktop"`
 	// OpenCostManaged tells Settings that an explicit startup flag owns the
 	// running value even when the persisted file changes.
 	OpenCostManaged bool `json:"openCostCurrencyManaged,omitempty"`
@@ -5750,6 +5774,28 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		resp.Effective = effective
 	}
 	resp.Effective.PrometheusURL = currentURL
+	if s.localConnections != nil && s.configManagement() == "local" {
+		views := s.readLocalConnectionViews()
+		resp.IntegrationProfiles = views
+		view := views[config.IntegrationMetrics]
+		resp.File.PrometheusURL = view.URL
+		resp.File.PrometheusHeadersFromEnv = nil
+		resp.Effective.PrometheusURL = view.URL
+		resp.Effective.PrometheusHeadersFromEnv = nil
+		resp.PrometheusHeaderKeys = view.HeaderKeys
+		resp.PrometheusServerManaged = view.State == "launch"
+		resp.PrometheusHeadersManaged = view.HeadersManaged || view.State == "launch"
+		resp.PrometheusURLFromFlag = view.State == "launch"
+		argo := views[config.IntegrationArgoCD]
+		resp.File.ArgoCDURL, resp.Effective.ArgoCDURL = argo.URL, argo.URL
+		resp.File.ArgoCDInsecureTLS, resp.Effective.ArgoCDInsecureTLS = argo.InsecureTLS, argo.InsecureTLS
+		resp.ArgoCDTokenSet, resp.ArgoCDEnvManaged, resp.ArgoCDEnvError = argo.SecretSet, argo.State == "launch", argo.Error
+		cost := views[config.IntegrationCost]
+		resp.File.CostSource, resp.Effective.CostSource = cost.Mode, cost.Mode
+		resp.File.KubecostURL, resp.Effective.KubecostURL = cost.URL, cost.URL
+		resp.File.KubecostClusterID, resp.Effective.KubecostClusterID = cost.ClusterID, cost.ClusterID
+		resp.KubecostAPIKeySet, resp.KubecostEnvManaged, resp.KubecostEnvError = cost.SecretSet, cost.State == "launch", cost.Error
+	}
 	s.writeJSON(w, resp)
 }
 
@@ -5858,6 +5904,10 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}
+	if s.localConnections != nil && s.configManagement() == "local" {
+		s.writeError(w, http.StatusConflict, "Use the cluster-scoped saved connections endpoint to change this local integration")
+		return
+	}
 	// No requireConnected: persisting + applying a manual URL needs no cluster
 	// (the probe hits the URL over HTTP), so operators can point at an external
 	// Prometheus even while the cluster is unreachable, like handlePutConfig.
@@ -5877,15 +5927,9 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 
 	// Reject anything startup would log.Fatalf on, so "Apply now" can't persist a
 	// config that bricks the next launch. Empty reverts to auto-discovery.
-	if rawURL != "" {
-		if u, err := url.Parse(rawURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			s.writeError(w, http.StatusBadRequest, "Prometheus URL must be an HTTP(S) base URL without credentials, query parameters or fragments (e.g., http://prometheus-server.monitoring:9090)")
-			return
-		}
-		if _, valid := prom.NormalizeOrigin(rawURL); !valid {
-			s.writeError(w, http.StatusBadRequest, "Prometheus URL has an invalid port; use a numeric port no greater than 65535")
-			return
-		}
+	if err := prom.ValidateBaseURL(rawURL); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	var headers map[string]string

@@ -163,6 +163,10 @@ export interface FeatureCapabilities {
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean
+  resourceIssues?: boolean
+  podEnvironment?: boolean
+  policyResource?: boolean
+  workloadHistory?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -1367,7 +1371,15 @@ export interface AggregatedFlow {
   l7Protocol?: string // HTTP, gRPC, DNS
   requestCount?: number
   errorCount?: number
+  /** Per-second rates from a metric-based source, unrounded. requestCount and
+   *  errorCount carry the same figures rounded with a floor of one, so their
+   *  ratio is meaningless at low rates. */
+  requestRate?: number
+  errorRate?: number
   avgLatencyMs?: number
+  /** How many measured responses the latency figures come from (sources that
+   *  report individual responses). Weights averages when edges are combined. */
+  latencySamples?: number
   latencyP50Ms?: number
   latencyP95Ms?: number
   latencyP99Ms?: number
@@ -1434,12 +1446,21 @@ export interface TrafficFlowsResponse {
   timestamp: string
   flows: TrafficFlow[]
   aggregated: AggregatedFlow[]
+  /** L7 responses run caller → callee on the server's port, like their request.
+   *  Absent from a Radar that sent them server → client. */
+  l7ResponsesCallerOriented?: boolean
+  /** When the flows start being complete: some node returned its full
+   *  nodeFlowLimit, so older traffic in the window did not fit. */
+  coveredSince?: string
+  nodeFlowLimit?: number
   warning?: string  // Non-fatal warning (e.g., query errors)
   /** 'transient' (or absent) means the condition may clear on its own and a
-   *  retry is worthwhile. 'partial' means the flows are correct but incomplete
-   *  for a reason retrying cannot change, so show the warning next to them and
-   *  do not refetch. */
-  warningKind?: 'transient' | 'partial'
+   *  retry is worthwhile. 'partial' means the flows are correct but some of
+   *  their values are missing or wrong, so show the warning next to them and do
+   *  not refetch. 'incomplete' means the fetch worked but could not see
+   *  everything — events lost, nodes unreachable — so flows may be missing; show
+   *  it, with or without flows, and do not retry at once. */
+  warningKind?: 'transient' | 'partial' | 'incomplete'
 }
 
 // Wizard state for traffic setup

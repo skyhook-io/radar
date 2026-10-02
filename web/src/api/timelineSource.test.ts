@@ -457,11 +457,7 @@ describe('retained ring fetch (the OSS-identical accumulate model)', () => {
     const flags = new Set<string>()
     const cached = ring([ev({ id: 'e-stale' })])
     mockApiFetch
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 400,
-        json: () => Promise.resolve({ error: 'invalid since cursor' }),
-      } as unknown as Response)
+      .mockResolvedValueOnce(Response.json({ error: 'invalid since cursor' }, { status: 400 }))
       .mockResolvedValueOnce(streamResponse([line(ev({ id: 'e-fresh' })), end({ cursor: '300' })]))
     const out = await runRetainedRingFetch({ ringKey: 'k', cached, forceResync: flags, capMs: CAP, now: NOW })
     expect(out.events.map((e) => e.id)).toEqual(['e-fresh'])
@@ -647,11 +643,7 @@ describe('retained ring fetch (the OSS-identical accumulate model)', () => {
   it('a non-400 delta failure propagates and keeps the cursor for the next poll', async () => {
     const flags = new Set<string>()
     const cached = ring([ev({ id: 'e1' })])
-    mockApiFetch.mockResolvedValueOnce({
-      ok: false,
-      json: () => Promise.resolve({ error: 'boom' }),
-      status: 503,
-    } as unknown as Response)
+    mockApiFetch.mockResolvedValueOnce(Response.json({ error: 'boom' }, { status: 503 }))
     await expect(
       runRetainedRingFetch({ ringKey: 'k', cached, forceResync: flags, capMs: CAP, now: NOW }),
     ).rejects.toBeInstanceOf(ApiError)

@@ -55,7 +55,7 @@ function renderTabContent(tab: DockTab, isActive: boolean) {
 
   if (tab.type === 'local-terminal') {
     return (
-      <LocalTerminalTab isActive={isActive} initialCommand={tab.initialCommand} />
+      <LocalTerminalTab tabId={tab.id} title={tab.title} intendedContext={tab.localTerminalContext} isActive={isActive} initialCommand={tab.initialCommand} />
     )
   }
 

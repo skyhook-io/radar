@@ -1,5 +1,6 @@
 import { TerminalTab as SharedTerminalTab } from '@skyhook-io/k8s-ui'
 import { apiUrl, getWsUrl } from '../../api/config'
+import { readErrorBody } from '../../api/httpErrors'
 
 interface TerminalTabProps {
   namespace: string
@@ -24,7 +25,7 @@ export function TerminalTab({ namespace, podName, containerName, containers, isA
       body: JSON.stringify({ targetContainer }),
     })
     if (!response.ok) {
-      const err = await response.json().catch(() => ({ error: 'Unknown error' }))
+      const err = await readErrorBody(response)
       throw new Error(err.error || `HTTP ${response.status}`)
     }
     return response.json()

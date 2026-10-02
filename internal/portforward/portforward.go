@@ -126,7 +126,16 @@ func SetK8sClients(client kubernetes.Interface, config *rest.Config) {
 // owner. It only replaces that owner's own forward — other owners' forwards are
 // left untouched.
 func Start(owner Owner, ctx context.Context, namespace, serviceName string, targetPort int, contextName string) (*ConnectionInfo, error) {
-	// Fast path + client capture under reg.mu, held only briefly.
+	reg.mu.RLock()
+	client := reg.k8sClient
+	config := reg.k8sConfig
+	reg.mu.RUnlock()
+	return StartWithClients(owner, ctx, namespace, serviceName, targetPort, contextName, client, config)
+}
+
+// StartWithClients keeps candidate discovery tied to its captured cluster even
+// when the application's active context changes while the forward is starting.
+func StartWithClients(owner Owner, ctx context.Context, namespace, serviceName string, targetPort int, contextName string, client kubernetes.Interface, config *rest.Config) (*ConnectionInfo, error) {
 	reg.mu.Lock()
 	f := forwardFor(owner)
 	if f.matches(namespace, serviceName, targetPort, contextName) {
@@ -134,8 +143,6 @@ func Start(owner Owner, ctx context.Context, namespace, serviceName string, targ
 		reg.mu.Unlock()
 		return info, nil
 	}
-	client := reg.k8sClient
-	config := reg.k8sConfig
 	reg.mu.Unlock()
 
 	if client == nil || config == nil {

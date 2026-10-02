@@ -147,6 +147,7 @@ export interface GitOpsDetailLayoutProps {
   remoteDestinationHint?: ReactNode
   // Opens the host's Argo CD settings, when it has such a place.
   onOpenSettings?: () => void
+  settingsNote?: string
 
   // Action buttons — Argo + Flux. Exactly one applies for any given CR.
   isArgoApp: boolean
@@ -235,6 +236,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
     healthDocsUrl,
     remoteDestinationHint,
     onOpenSettings,
+    settingsNote,
     isArgoApp,
     isFlux,
     isFluxWorkload,
@@ -475,7 +477,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
       {!fullscreen && (
         <>
           <GitOpsStatusStrip insight={insight ?? undefined} loading={insightLoading} renderRevisionMeta={renderRevisionMeta} />
-          <GitOpsHealthSourceNotice summary={insight?.summary} changes={insight?.changes} docsUrl={healthDocsUrl} remoteDestinationHint={remoteDestinationHint} onOpenSettings={onOpenSettings} />
+          <GitOpsHealthSourceNotice summary={insight?.summary} changes={insight?.changes} docsUrl={healthDocsUrl} remoteDestinationHint={remoteDestinationHint} onOpenSettings={onOpenSettings} settingsNote={settingsNote} />
           <GitOpsIssuesBand
             issues={insight?.issues}
             terminating={terminating}

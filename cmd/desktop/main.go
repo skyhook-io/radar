@@ -137,15 +137,6 @@ func main() {
 		log.Printf("ERROR: invalid --opencost-currency %q: %v", *openCostCurrency, err)
 		os.Exit(1)
 	}
-	if err := app.ValidatePrometheusHeaderDestination(fileCfg.PrometheusURL, *prometheusURL, len(fileCfg.PrometheusHeaders)+len(fileCfg.PrometheusHeadersFromEnv) > 0); err != nil {
-		log.Printf("ERROR: invalid Prometheus header configuration: %v", err)
-		os.Exit(1)
-	}
-	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(fileCfg.PrometheusHeaders, fileCfg.PrometheusHeadersFromEnv)
-	if err != nil {
-		log.Printf("ERROR: invalid Prometheus header configuration: %v", err)
-		os.Exit(1)
-	}
 	resolvedNamespace, resolvedNamespaces, err := app.ResolveNamespaceSelection(*namespace, *namespaces, namespaceFlagSet, namespacesFlagSet)
 	if err != nil {
 		log.Printf("ERROR: %v", err)
@@ -207,7 +198,8 @@ func main() {
 		KubecostClusterID:         fileCfg.KubecostClusterID,
 		KubecostClusterIDContext:  fileCfg.KubecostClusterIDContext,
 		OpenCostFlagSet:           openCostCurrencyFlagSet,
-		PrometheusHeaders:         resolvedPrometheusHeaders,
+		PrometheusHeaders:         fileCfg.PrometheusHeaders,
+		PrometheusSavedURL:        fileCfg.PrometheusURL,
 		PrometheusHeadersFromEnv:  fileCfg.PrometheusHeadersFromEnv,
 		Version:                   version,
 		HubAPIURL:                 hubAPIURL,
@@ -235,6 +227,7 @@ func main() {
 		log.Printf("K8s init failed (will show in UI): %v", k8sInitErr)
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
+			Context:   k8s.GetContextName(),
 			Error:     k8sInitErr.Error(),
 			ErrorType: "config",
 		})
@@ -244,7 +237,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid timeline configuration: %v", err)
 	}
-	app.RegisterCallbacks(cfg, timelineStoreCfg)
+	cfg = app.RegisterCallbacks(cfg, timelineStoreCfg)
 
 	// Create server and attach desktop updater
 	srv := app.CreateServer(cfg)
