@@ -324,6 +324,7 @@
             "nodeOps": { "type": "boolean" }
           }
         },
+        "systemRbac": { "type": "boolean" },
         "insecureSkipVerify": { "type": "boolean" }
       }
     },

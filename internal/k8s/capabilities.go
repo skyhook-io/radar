@@ -160,6 +160,7 @@ type NamespaceCapabilityErrors struct {
 	Exec           bool
 	Logs           bool
 	PortForward    bool
+	HelmWrite      bool
 	WorkloadWrites WorkloadWriteCapabilityErrors
 }
 
@@ -168,6 +169,7 @@ type NamespaceCapabilities struct {
 	Exec           bool                      `json:"exec"`
 	Logs           bool                      `json:"logs"`
 	PortForward    bool                      `json:"portForward"`
+	HelmWrite      bool                      `json:"helmWrite"` // Helm writes a release as a Secret in its namespace
 	WorkloadWrites WorkloadWritePermissions  `json:"workloadWrites"`
 	Errors         NamespaceCapabilityErrors `json:"-"`
 }
@@ -448,6 +450,9 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*Namespa
 		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets, apiError: &result.Errors.WorkloadWrites.StatefulSets},
 		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts, apiError: &result.Errors.WorkloadWrites.Rollouts},
 	)
+	if !ForceDisableHelmWrite {
+		checks = append(checks, capCheck{resource: "secrets", verb: "create", result: &result.HelmWrite, apiError: &result.Errors.HelmWrite})
+	}
 
 	var hadErrors atomic.Bool
 	var wg sync.WaitGroup
@@ -642,6 +647,9 @@ func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, gro
 		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets, apiError: &result.Errors.WorkloadWrites.StatefulSets},
 		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts, apiError: &result.Errors.WorkloadWrites.Rollouts},
 	)
+	if !ForceDisableHelmWrite {
+		checks = append(checks, capCheck{resource: "secrets", verb: "create", result: &result.HelmWrite, apiError: &result.Errors.HelmWrite})
+	}
 
 	var hadErrors atomic.Bool
 	var wg sync.WaitGroup

@@ -1444,6 +1444,7 @@ func mergeNamespaceCapabilities(caps *k8s.Capabilities, nsCaps *k8s.NamespaceCap
 	caps.Exec = mergeNamespaceCapability(caps.Exec, nsCaps.Exec, nsCaps.Errors.Exec)
 	caps.Logs = mergeNamespaceCapability(caps.Logs, nsCaps.Logs, nsCaps.Errors.Logs)
 	caps.PortForward = mergeNamespaceCapability(caps.PortForward, nsCaps.PortForward, nsCaps.Errors.PortForward)
+	caps.HelmWrite = mergeNamespaceCapability(caps.HelmWrite, nsCaps.HelmWrite, nsCaps.Errors.HelmWrite)
 	caps.WorkloadWrites.Deployments = mergeNamespaceCapability(caps.WorkloadWrites.Deployments, nsCaps.WorkloadWrites.Deployments, nsCaps.Errors.WorkloadWrites.Deployments)
 	caps.WorkloadWrites.DaemonSets = mergeNamespaceCapability(caps.WorkloadWrites.DaemonSets, nsCaps.WorkloadWrites.DaemonSets, nsCaps.Errors.WorkloadWrites.DaemonSets)
 	caps.WorkloadWrites.StatefulSets = mergeNamespaceCapability(caps.WorkloadWrites.StatefulSets, nsCaps.WorkloadWrites.StatefulSets, nsCaps.Errors.WorkloadWrites.StatefulSets)
@@ -5112,8 +5113,9 @@ func (s *Server) writeErrorCode(w http.ResponseWriter, status int, code, message
 	}
 }
 
-// requireCloudRole gates a mutating handler on the caller's Cloud role tier,
-// mirroring internal/helm's gate. Returns true if the request should proceed.
+// requireCloudRole gates a handler for one of Radar's own features (config,
+// settings, integrations) on the caller's Cloud role tier. Returns true if the
+// request should proceed.
 //
 // Callers with no Cloud role (OSS, OIDC, or running outside Cloud's tunnel)
 // bypass the gate — radar OSS keeps using only K8s RBAC for authz, so the
@@ -5192,6 +5194,21 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		// "not running under Cloud" (OSS deploy or no role group).
 		if role := auth.CloudRoleFromGroups(user.Groups); role != auth.RoleNone {
 			resp["cloudRole"] = string(role)
+		}
+		// Lets the shell explain an empty cluster: every read is filtered to
+		// the user's namespaces, so a user bound to none sees empty lists that
+		// look like a cluster with nothing in it. Reported only from a
+		// discovery that succeeded (the cached entry): before the cluster
+		// connects, or when a SAR errors, discovery fails closed to "none"
+		// without caching, and that is not a statement about the user's RBAC.
+		// Read from the cache only, never discovered here: app startup waits on
+		// this endpoint, and discovery costs a SAR or two per namespace. The
+		// banner asks again once content has loaded, by which point the first
+		// resource request has filled the cache.
+		if k8s.IsConnected() {
+			if perms := s.permCache.Get(user.Username, user.Groups); perms != nil && noNamespaceAccess(auth.FilterNamespacesForUser(nil, user, perms)) {
+				resp["noNamespaceAccess"] = true
+			}
 		}
 	}
 	s.writeJSON(w, resp)

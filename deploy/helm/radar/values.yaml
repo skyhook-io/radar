@@ -75,8 +75,11 @@ rbac:
   # Enable these based on features you need:
 
   # Allow Helm write operations (install, upgrade, rollback, uninstall, apply values)
-  # Requires broad permissions - grants create/update/patch/delete on all resource types,
-  # since Helm charts can create any kind of Kubernetes resource.
+  # No-auth installs: grants Radar's ServiceAccount create/update/patch/delete on all
+  # resource types, since Helm charts can create any kind of Kubernetes resource
+  # and Helm runs as that ServiceAccount there.
+  # Auth or cloud mode: Helm runs as the signed-in user, so the ServiceAccount gets no
+  # write grant; this only adds the Helm add-on roles for the Cloud owner/member tiers.
   # Automatically enables secrets read access (needed for Helm release storage).
   helm: false
 
@@ -519,6 +522,20 @@ cloud:
     # while owner=false this renders nothing, but it stays latent — re-enabling
     # owner later activates it. See templates/cloud-rbac-node-ops.yaml.
     nodeOps: false
+  # Read-only binding for Radar Cloud's own background identities (the hub's
+  # alerts worker and timeline puller), which assert the
+  # radar:system group. Grants the viewer set (view + cluster-read +
+  # integration-read) and cluster-wide Secret read, which Helm release alerts
+  # and Secret changes in the hub timeline need (Helm stores each release as a
+  # Secret). No writes. See templates/cloud-rbac-system.yaml.
+  # Independent of defaultRbac: it stays on when the role bindings above are
+  # off, so alerts and the hub timeline keep working when IdP groups decide
+  # cluster access. All or nothing: false removes the whole grant, and then
+  # alerts and the hub timeline see nothing on clusters without
+  # the role bindings unless you bind radar:system yourself.
+  # An upgrade with --reuse-values from a release that predates this key leaves
+  # it OFF, so an existing install never gains Secret read without choosing it.
+  systemRbac: true
 
 # Anonymous usage report to Skyhook, daily and when the pod stops: views,
 # actions and MCP tools used, plus this cluster's minor version, platform,

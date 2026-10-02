@@ -2353,22 +2353,25 @@ func (c *Client) Rollback(namespace, name string, revision int) error {
 // RollbackWithProgress rolls back a release with progress reporting via a channel.
 // If progressCh is nil, progress messages are silently discarded.
 func (c *Client) RollbackWithProgress(namespace, name string, revision int, progressCh chan<- InstallProgress) error {
-	sendProgress := func(phase, message, detail string) {
-		if progressCh == nil {
-			return
-		}
-		select {
-		case progressCh <- InstallProgress{Phase: phase, Message: message, Detail: detail}:
-		default:
-		}
-	}
-
-	sendProgress("preparing", fmt.Sprintf("Preparing rollback of %s to revision %d...", name, revision), "")
-
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return err
 	}
+	return c.rollbackWithProgressUsing(actionConfig, name, revision, progressCh)
+}
+
+// RollbackWithProgressAsUser is RollbackWithProgress with K8s impersonation.
+func (c *Client) RollbackWithProgressAsUser(namespace, name string, revision int, username string, groups []string, progressCh chan<- InstallProgress) error {
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
+	if err != nil {
+		return err
+	}
+	return c.rollbackWithProgressUsing(actionConfig, name, revision, progressCh)
+}
+
+func (c *Client) rollbackWithProgressUsing(actionConfig *action.Configuration, name string, revision int, progressCh chan<- InstallProgress) error {
+	sendProgress := progressSender(progressCh)
+	sendProgress("preparing", fmt.Sprintf("Preparing rollback of %s to revision %d...", name, revision), "")
 	sendProgress("rolling-back", fmt.Sprintf("Rolling back %s to revision %d...", name, revision), "")
 	if err := c.rollbackWith(actionConfig, name, revision); err != nil {
 		return err
@@ -2379,11 +2382,7 @@ func (c *Client) RollbackWithProgress(namespace, name string, revision int, prog
 
 // RollbackAsUser performs a rollback with K8s impersonation.
 func (c *Client) RollbackAsUser(namespace, name string, revision int, username string, groups []string) error {
-	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
-	if err != nil {
-		return err
-	}
-	return c.rollbackWith(actionConfig, name, revision)
+	return c.RollbackWithProgressAsUser(namespace, name, revision, username, groups, nil)
 }
 
 func (c *Client) rollbackWith(actionConfig *action.Configuration, name string, revision int) error {

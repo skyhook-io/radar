@@ -22,7 +22,7 @@ import type {
 } from '@skyhook-io/k8s-ui'
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
-import { useCanHelmWrite } from '../contexts/CapabilitiesContext'
+import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import type {
   Topology,
   ClusterInfo,
@@ -2256,6 +2256,8 @@ export interface AuthMe {
    *  When false, logout clears Radar's cookie but the proxy may re-auth
    *  the same user on the next request. */
   proxyLogoutConfigured?: boolean;
+  /** Connected, and the user's RBAC allows reading no namespace at all. */
+  noNamespaceAccess?: boolean;
 }
 
 export function useAuthMe() {
@@ -2263,6 +2265,9 @@ export function useAuthMe() {
     queryKey: ["auth-me"],
     queryFn: () => fetchJSON("/auth/me"),
     staleTime: 300000, // 5 minutes
+    // A user with no access is waiting on an admin; re-check so the banner
+    // clears once a binding lands instead of after the 5-minute stale window.
+    refetchInterval: (query) => (query.state.data?.noNamespaceAccess ? 60000 : false),
   });
 }
 
@@ -2282,16 +2287,12 @@ const CLOUD_ROLE_RANK: Record<string, number> = {
  * present (OSS, OIDC, no role group, OR auth/me is still loading),
  * `canAtLeast` returns true — the gate is strictly additive for
  * Cloud-attributed users, mirroring the backend's `requireCloudRole`
- * semantics. Use for passive content gating (panels, sections); use
- * `useCanHelmAct` (or similar) for *click-prone* surfaces where you
- * need fail-closed behavior during the auth/me round-trip to prevent
- * a viewer from clicking through during the loading window.
+ * semantics. It gates Radar's own features (settings, integrations), never
+ * operations that run as the user, which Kubernetes RBAC decides.
  *
- * Why optimistic during load: the gated empty state ("Your role can't
- * view…") rendered briefly to OSS / kubectl-plugin users before
- * auth/me resolves is a worse regression than a Cloud viewer seeing
- * a content tab populate for a tick before being gated out. Click-
- * prevention belongs in the action-button hook, not here.
+ * Why optimistic during load: a gated empty state rendered briefly to
+ * OSS / kubectl-plugin users before auth/me resolves is a worse regression
+ * than a Cloud viewer seeing content for a tick before being gated out.
  */
 export function useCloudRole() {
   const { data, isLoading } = useAuthMe();
@@ -2308,42 +2309,29 @@ export function useCloudRole() {
 }
 
 /**
- * useCanHelmAct combines the K8s capability gate (rbac.helm=true) and
- * the Cloud role gate (member+) into a single answer for any Helm
- * write or sensitive-read button. Returns { allowed, reason } so the
- * tooltip can explain which gate failed.
- *
- * Cloud role check runs FIRST so the message is actionable for Cloud
- * users — telling them "Helm write permissions required" is wrong if
- * the chart is fine and the actual gate is their viewer role.
+ * useCanHelmAct answers whether Helm write buttons are usable for a release in
+ * `namespace`. With auth on, Helm runs as the signed-in user, so the check is
+ * the user's own Kubernetes RBAC in that namespace (Helm writes each release as
+ * a Secret there); the Cloud role says nothing about cluster access when IdP
+ * groups grant it. Without auth, Helm runs as Radar's ServiceAccount, which
+ * needs the chart's rbac.helm=true.
  */
-export function useCanHelmAct(): { allowed: boolean; reason?: string } {
-  const helmWrite = useCanHelmWrite();
-  const { role, canAtLeast, isLoading } = useCloudRole();
-  // Fail-closed for action buttons during the auth/me round-trip:
-  // a Cloud viewer who clicks during loading would otherwise fire a
-  // real request that gets 403'd. For OSS / kubectl-plugin the
-  // round-trip is sub-ms so this is imperceptible; for Cloud it
-  // prevents the click-through window. Distinct from useCloudRole's
-  // canAtLeast (which is optimistic during loading) because passive
-  // content gates don't have a click-handler to misfire.
-  if (isLoading) {
-    return { allowed: false, reason: "Loading permissions…" };
-  }
-  if (!canAtLeast("member")) {
+export function useCanHelmAct(namespace?: string): { allowed: boolean; reason?: string } {
+  const { canHelmWrite } = useNamespacedCapabilities(namespace);
+  const authEnabled = useIsAuthEnabled();
+  if (canHelmWrite) return { allowed: true };
+  if (authEnabled) {
     return {
       allowed: false,
-      reason: `Your Radar Cloud role (${role ?? "unknown"}) cannot run Helm operations. Ask a member or owner.`,
+      reason: namespace
+        ? `Your Kubernetes permissions don't allow managing Helm releases in ${namespace} (creating Secrets there).`
+        : "Your Kubernetes permissions don't allow managing Helm releases.",
     };
   }
-  if (!helmWrite) {
-    return {
-      allowed: false,
-      reason:
-        "Helm write permissions required. Set rbac.helm=true in the Radar Helm chart values.",
-    };
-  }
-  return { allowed: true };
+  return {
+    allowed: false,
+    reason: "Helm write permissions required. Set rbac.helm=true in the Radar Helm chart values.",
+  };
 }
 
 // Namespaces
@@ -5451,14 +5439,10 @@ export function useHelmRelease(
 }
 
 // Get manifest for a Helm release (optionally at a specific revision).
-// `enabled` lets callers skip the query when the user's Cloud role
-// would 403 the read — saves a round-trip and avoids a transient
-// "error" state that the role-gated empty panel doesn't need.
 export function useHelmManifest(
   namespace: string,
   name: string,
   revision?: number,
-  enabled = true,
 ) {
   const params = revision ? `?revision=${revision}` : "";
   return useQuery<string>({
@@ -5473,12 +5457,12 @@ export function useHelmManifest(
       }
       return response.text();
     },
-    enabled: Boolean(namespace && name && enabled),
+    enabled: Boolean(namespace && name),
     staleTime: 60000, // 1 minute
   });
 }
 
-// Get values for a Helm release. `enabled` see useHelmManifest.
+// Get values for a Helm release.
 export function useHelmValues(
   namespace: string,
   name: string,
@@ -5499,7 +5483,7 @@ export function useHelmValues(
   });
 }
 
-// Get diff between two revisions. `enabled` see useHelmManifest.
+// Get diff between two revisions.
 export function useHelmManifestDiff(
   namespace: string,
   name: string,

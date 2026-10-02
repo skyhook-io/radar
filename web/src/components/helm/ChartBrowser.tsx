@@ -3,7 +3,7 @@ import { Search, RefreshCw, Package, Database, AlertCircle, ExternalLink, Chevro
 import { PaneLoader, Input } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import { useHelmRepositories, useSearchCharts, useUpdateRepository, useUpdateRepositorySilent, useArtifactHubSearch, type ArtifactHubSortOption } from '../../api/client'
-import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
+import { useCanHelmWrite, useIsAuthEnabled } from '../../contexts/CapabilitiesContext'
 import type { ChartInfo, HelmRepository, ArtifactHubChart, ChartSource } from '../../types'
 import { formatAge } from './helm-utils'
 import { SEVERITY_BADGE } from '../../utils/badge-colors'
@@ -25,12 +25,11 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
   const [showVerifiedOnly, setShowVerifiedOnly] = useState(false)
   const [artifactHubSort, setArtifactHubSort] = useState<ArtifactHubSortOption>('relevance')
 
-  // Repo refresh is gated only by `requireHelmWrite` on the backend
-  // (handleUpdateRepository deliberately skips requireCloudRole — it
-  // mutates pod-local chart cache, not cluster state). So the frontend gate
-  // here must NOT include the Cloud role check, or Cloud viewers with
-  // rbac.helm=true would be blocked from a refresh the backend allows.
-  const canHelmWrite = useCanHelmWrite()
+  // Refreshing repositories only touches Radar's own chart cache. With auth on,
+  // any signed-in user may do it; without auth it follows rbac.helm.
+  const helmWrite = useCanHelmWrite()
+  const authEnabled = useIsAuthEnabled()
+  const canHelmWrite = helmWrite || authEnabled
   const helmWriteReason = canHelmWrite ? '' : 'Helm write permissions required. Set rbac.helm=true in the Radar Helm chart values.'
 
   // Local repo hooks

@@ -19,7 +19,6 @@ import {
 } from 'lucide-react'
 import { PaneLoader, DiffLine, hasDiffBodyChange } from '@skyhook-io/k8s-ui'
 import {
-  useCloudRole,
   useHelmHooksDiff,
   useHelmManifestDiff,
   useHelmNotesDiff,
@@ -30,7 +29,6 @@ import {
 import type { HelmHook, HelmRevision, HooksDiff, ResourceDiff } from '../../types'
 import { getHelmStatusColor, getKindBadgeColor, SEVERITY_BADGE } from '../../utils/badge-colors'
 import { formatDate } from './helm-utils'
-import { RoleGatedPanel } from './RoleGatedPanel'
 import { Tooltip } from '../ui/Tooltip'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
@@ -53,8 +51,6 @@ export function HelmCompareRoute() {
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
-  const { canAtLeast } = useCloudRole()
-  const canViewSensitive = canAtLeast('member')
 
   const releaseRef = parseReleaseParam(searchParams.get('release'))
   const storageNamespace = searchParams.get('releaseStorage') || undefined
@@ -74,16 +70,15 @@ export function HelmCompareRoute() {
   const revision1 = defaultLeftRevision
   const revision2 = defaultRightRevision
   const pairReady = Boolean(helmNamespace && releaseName && revision1 > 0 && revision2 > 0 && revision1 !== revision2)
-  const diffEnabled = canViewSensitive && pairReady
 
   const left = revisions.find((r) => r.revision === revision1)
   const right = revisions.find((r) => r.revision === revision2)
 
-  const manifestDiff = useHelmManifestDiff(helmNamespace, releaseName, revision1, revision2, diffEnabled)
-  const valuesDiff = useHelmValuesDiff(helmNamespace, releaseName, revision1, revision2, false, diffEnabled)
-  const notesDiff = useHelmNotesDiff(helmNamespace, releaseName, revision1, revision2, diffEnabled)
-  const hooksDiff = useHelmHooksDiff(helmNamespace, releaseName, revision1, revision2, diffEnabled)
-  const resourceDiff = useHelmResourceDiff(helmNamespace, releaseName, revision1, revision2, diffEnabled)
+  const manifestDiff = useHelmManifestDiff(helmNamespace, releaseName, revision1, revision2, pairReady)
+  const valuesDiff = useHelmValuesDiff(helmNamespace, releaseName, revision1, revision2, false, pairReady)
+  const notesDiff = useHelmNotesDiff(helmNamespace, releaseName, revision1, revision2, pairReady)
+  const hooksDiff = useHelmHooksDiff(helmNamespace, releaseName, revision1, revision2, pairReady)
+  const resourceDiff = useHelmResourceDiff(helmNamespace, releaseName, revision1, revision2, pairReady)
 
   const updateRevision = useCallback(
     (key: 'revision1' | 'revision2', value: number) => {
@@ -214,120 +209,118 @@ export function HelmCompareRoute() {
         </div>
       </header>
 
-      <RoleGatedPanel min="member" feature="release revision comparison">
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className={clsx('grid w-full grid-cols-1 gap-4 px-4 py-4', pairReady && 'xl:grid-cols-[220px_minmax(0,1fr)]')}>
-            {pairReady && (
-              <nav className="hidden xl:block">
-                <div className="sticky top-4 rounded-xl border border-theme-border bg-theme-surface p-2 shadow-theme-sm">
-                  <div className="px-2 pb-2 text-[11px] font-medium uppercase text-theme-text-tertiary">Compare</div>
-                  {[
-                    ['summary', 'Summary'],
-                    ['manifest', 'Manifest'],
-                    ['resources', 'Resources'],
-                    ['values', 'Values'],
-                    ['hooks', 'Hooks'],
-                    ['notes', 'Notes'],
-                  ].map(([id, label]) => (
-                    <a
-                      key={id}
-                      href={`#${id}`}
-                      onClick={(event) => scrollCompareSection(event, id)}
-                      className="block rounded-md px-2 py-1.5 text-xs text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary"
-                    >
-                      {label}
-                    </a>
-                  ))}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className={clsx('grid w-full grid-cols-1 gap-4 px-4 py-4', pairReady && 'xl:grid-cols-[220px_minmax(0,1fr)]')}>
+          {pairReady && (
+            <nav className="hidden xl:block">
+              <div className="sticky top-4 rounded-xl border border-theme-border bg-theme-surface p-2 shadow-theme-sm">
+                <div className="px-2 pb-2 text-[11px] font-medium uppercase text-theme-text-tertiary">Compare</div>
+                {[
+                  ['summary', 'Summary'],
+                  ['manifest', 'Manifest'],
+                  ['resources', 'Resources'],
+                  ['values', 'Values'],
+                  ['hooks', 'Hooks'],
+                  ['notes', 'Notes'],
+                ].map(([id, label]) => (
+                  <a
+                    key={id}
+                    href={`#${id}`}
+                    onClick={(event) => scrollCompareSection(event, id)}
+                    className="block rounded-md px-2 py-1.5 text-xs text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary"
+                  >
+                    {label}
+                  </a>
+                ))}
+              </div>
+            </nav>
+          )}
+
+          <main className="min-w-0 space-y-4">
+            {!pairReady ? (
+              <div className="card-inner-lg flex items-start gap-3">
+                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+                <div>
+                  <div className="text-sm font-medium text-theme-text-primary">Pick two different revisions to compare</div>
+                  <div className="mt-1 text-sm text-theme-text-secondary">Use the revision selectors above to choose a source and target revision.</div>
                 </div>
-              </nav>
-            )}
-
-            <main className="min-w-0 space-y-4">
-              {!pairReady ? (
-                <div className="card-inner-lg flex items-start gap-3">
-                  <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
-                  <div>
-                    <div className="text-sm font-medium text-theme-text-primary">Pick two different revisions to compare</div>
-                    <div className="mt-1 text-sm text-theme-text-secondary">Use the revision selectors above to choose a source and target revision.</div>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <section id="summary" className="scroll-mt-4 space-y-4">
-                    <CompareSummary
-                      left={left}
-                      right={right}
-                      revision1={revision1}
-                      revision2={revision2}
-                      manifestDiff={manifestDiff.data?.diff}
-                      manifestLoading={manifestDiff.isLoading}
-                      manifestError={manifestDiff.error}
-                      valuesDiff={valuesDiff.data?.diff}
-                      valuesLoading={valuesDiff.isLoading}
-                      valuesError={valuesDiff.error}
-                      notesDiff={notesDiff.data?.diff}
-                      notesLoading={notesDiff.isLoading}
-                      notesError={notesDiff.error}
-                      hooksDiff={hooksDiff.data}
-                      hooksLoading={hooksDiff.isLoading}
-                      hooksError={hooksDiff.error}
-                      resourceDiff={resourceDiff.data}
-                      resourceLoading={resourceDiff.isLoading}
-                      resourceError={resourceDiff.error}
-                    />
-                  </section>
-
-                  <DiffSection
-                    id="manifest"
-                    icon={Code}
-                    title="Rendered manifest diff"
-                    description="Rendered Kubernetes YAML is the ground truth for what Helm would apply between these revisions."
-                    diff={manifestDiff.data?.diff || ''}
-                    isLoading={manifestDiff.isLoading}
-                    error={manifestDiff.error}
-                    emptyLabel="No rendered manifest changes found."
-                  />
-
-                  <ResourceInventoryDiffSection
-                    diff={resourceDiff.data}
-                    isLoading={resourceDiff.isLoading}
-                    error={resourceDiff.error}
+              </div>
+            ) : (
+              <>
+                <section id="summary" className="scroll-mt-4 space-y-4">
+                  <CompareSummary
                     left={left}
                     right={right}
                     revision1={revision1}
                     revision2={revision2}
+                    manifestDiff={manifestDiff.data?.diff}
+                    manifestLoading={manifestDiff.isLoading}
+                    manifestError={manifestDiff.error}
+                    valuesDiff={valuesDiff.data?.diff}
+                    valuesLoading={valuesDiff.isLoading}
+                    valuesError={valuesDiff.error}
+                    notesDiff={notesDiff.data?.diff}
+                    notesLoading={notesDiff.isLoading}
+                    notesError={notesDiff.error}
+                    hooksDiff={hooksDiff.data}
+                    hooksLoading={hooksDiff.isLoading}
+                    hooksError={hooksDiff.error}
+                    resourceDiff={resourceDiff.data}
+                    resourceLoading={resourceDiff.isLoading}
+                    resourceError={resourceDiff.error}
                   />
+                </section>
 
-                  <DiffSection
-                    id="values"
-                    icon={Settings}
-                    title="User-supplied values diff"
-                    description="Only values explicitly supplied to the release are compared here; computed chart defaults can still affect the rendered manifest."
-                    diff={valuesDiff.data?.diff || ''}
-                    isLoading={valuesDiff.isLoading}
-                    error={valuesDiff.error}
-                    emptyLabel="No user-supplied value changes found."
-                  />
+                <DiffSection
+                  id="manifest"
+                  icon={Code}
+                  title="Rendered manifest diff"
+                  description="Rendered Kubernetes YAML is the ground truth for what Helm would apply between these revisions."
+                  diff={manifestDiff.data?.diff || ''}
+                  isLoading={manifestDiff.isLoading}
+                  error={manifestDiff.error}
+                  emptyLabel="No rendered manifest changes found."
+                />
 
-                  <HooksDiffSection diff={hooksDiff.data} isLoading={hooksDiff.isLoading} error={hooksDiff.error} />
+                <ResourceInventoryDiffSection
+                  diff={resourceDiff.data}
+                  isLoading={resourceDiff.isLoading}
+                  error={resourceDiff.error}
+                  left={left}
+                  right={right}
+                  revision1={revision1}
+                  revision2={revision2}
+                />
 
-                  <DiffSection
-                    id="notes"
-                    icon={FileText}
-                    title="Release notes diff"
-                    description="NOTES.txt output can reveal chart-level instructions that changed without changing live Kubernetes objects."
-                    diff={notesDiff.data?.diff || ''}
-                    isLoading={notesDiff.isLoading}
-                    error={notesDiff.error}
-                    emptyLabel="No release notes changes found."
-                  />
+                <DiffSection
+                  id="values"
+                  icon={Settings}
+                  title="User-supplied values diff"
+                  description="Only values explicitly supplied to the release are compared here; computed chart defaults can still affect the rendered manifest."
+                  diff={valuesDiff.data?.diff || ''}
+                  isLoading={valuesDiff.isLoading}
+                  error={valuesDiff.error}
+                  emptyLabel="No user-supplied value changes found."
+                />
 
-                </>
-              )}
-            </main>
-          </div>
+                <HooksDiffSection diff={hooksDiff.data} isLoading={hooksDiff.isLoading} error={hooksDiff.error} />
+
+                <DiffSection
+                  id="notes"
+                  icon={FileText}
+                  title="Release notes diff"
+                  description="NOTES.txt output can reveal chart-level instructions that changed without changing live Kubernetes objects."
+                  diff={notesDiff.data?.diff || ''}
+                  isLoading={notesDiff.isLoading}
+                  error={notesDiff.error}
+                  emptyLabel="No release notes changes found."
+                />
+
+              </>
+            )}
+          </main>
         </div>
-      </RoleGatedPanel>
+      </div>
     </div>
   )
 }
