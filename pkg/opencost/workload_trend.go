@@ -108,12 +108,12 @@ func workloadPodCostExpr(namespace string, fallback bool) string {
 	}
 
 	return fmt.Sprintf(`sum by (namespace, pod) (
-  (label_replace(avg_over_time(container_cpu_allocation{exported_namespace="%s"}[1h]), "namespace", "$1", "exported_namespace", "(.+)")
-    or avg_over_time(container_cpu_allocation{namespace="%s", exported_namespace=""}[1h]))
+  (label_replace((sum_over_time(container_cpu_allocation{exported_namespace="%s"}[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)")
+    or (sum_over_time(container_cpu_allocation{namespace="%s", exported_namespace=""}[1h:1m]) / 60))
   * on(node) group_left() `+nodeCPUHourlyCostExpr+`
 ) + sum by (namespace, pod) (
-  (label_replace(avg_over_time(container_memory_allocation_bytes{exported_namespace="%s"}[1h]), "namespace", "$1", "exported_namespace", "(.+)")
-    or avg_over_time(container_memory_allocation_bytes{namespace="%s", exported_namespace=""}[1h]))
+  (label_replace((sum_over_time(container_memory_allocation_bytes{exported_namespace="%s"}[1h:1m]) / 60), "namespace", "$1", "exported_namespace", "(.+)")
+    or (sum_over_time(container_memory_allocation_bytes{namespace="%s", exported_namespace=""}[1h:1m]) / 60))
   / 1073741824 * on(node) group_left() `+nodeRAMHourlyCostExpr+`
 )`, namespace, namespace, namespace, namespace)
 }
