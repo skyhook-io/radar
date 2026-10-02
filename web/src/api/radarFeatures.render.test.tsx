@@ -208,3 +208,16 @@ it("reads the router's 404 on workload history as unsupported before capabilitie
   expect(element.textContent).toBe('fallback')
   expect(requested.filter((url) => url.includes('/history'))).toHaveLength(1)
 })
+
+it('asks again once capabilities confirm workload history after a probe hit an older Radar', async () => {
+  host.radarVersion = undefined
+  chiRoutes = ['/workloads/deployments/shop/web/history']
+  await render(<History />)
+  expect(element.textContent).toBe('fallback')
+
+  chiRoutes = []
+  await act(async () => { client.setQueryData(['capabilities'], { features: { workloadHistory: true } }) })
+  await settle()
+  await settle()
+  expect(requested.filter((url) => url.includes('/history'))).toHaveLength(2)
+})

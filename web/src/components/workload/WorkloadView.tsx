@@ -804,9 +804,8 @@ export function WorkloadView({
   // colliding kind) under the wrong group and refetch once it settles.
   const historyGroupSettled = Boolean(rest.group) || resource !== undefined || resourceError != null
   const historyQuery = useWorkloadHistory(apiKind, namespace, name, effectiveGroup, expanded && historyGroupSettled)
-  // A Radar that predates the scoped history gets the namespace's newest
-  // changes instead, which the timeline filters to this workload: how the
-  // Timeline worked before that endpoint existed.
+  // A Radar without the scoped history endpoint gets the namespace's newest
+  // changes instead, which the timeline filters to this workload.
   const historyFallback = isRadarFeatureUnsupported(historyQuery.error, 'workloadHistory')
   const namespaceChanges = useChanges({
     namespaces: [namespace],

@@ -1782,6 +1782,7 @@ export function useRadarFeature(feature: RadarFeature) {
   const support = radarFeatureSupport(feature, capabilities, currentVersion)
 
   return {
+    support,
     gatedKey: support === 'unsupported' ? ['radar-feature-unsupported'] : [],
     guard: <T,>(request: () => Promise<T>): Promise<T> =>
       guardRadarFeature(feature, support, { currentVersion, latestVersion }, request),
@@ -2949,8 +2950,8 @@ function workloadHistoryPath(kind: string, namespace: string, name: string, grou
 // A Radar that predates the scoped history endpoint settles as unsupported;
 // WorkloadView then falls back to the namespace's changes.
 export function useWorkloadHistory(kind: string, namespace: string, name: string, group?: string, enabled = true) {
-  const { guard, gatedKey } = useRadarFeature("workloadHistory");
-  return useQuery<WorkloadHistoryPage>({
+  const { guard, gatedKey, support } = useRadarFeature("workloadHistory");
+  const query = useQuery<WorkloadHistoryPage>({
     queryKey: ["changes", "workload-history", kind, namespace, name, group ?? "", ...gatedKey],
     queryFn: ({ signal }) =>
       guard(() => fetchJSON<WorkloadHistoryPage>(workloadHistoryPath(kind, namespace, name, group), signal)),
@@ -2960,6 +2961,14 @@ export function useWorkloadHistory(kind: string, namespace: string, name: string
       query.state.error instanceof RadarFeatureUnsupportedError ? false : CHANGES_REFRESH_INTERVAL_MS,
     enabled,
   });
+  // A probe answered by an older Radar settles as unsupported and stops
+  // polling; once /capabilities confirms the feature (the agent was upgraded),
+  // ask again rather than staying on the fallback.
+  const { error, refetch } = query;
+  useEffect(() => {
+    if (support === "supported" && error instanceof RadarFeatureUnsupportedError) void refetch();
+  }, [support, error, refetch]);
+  return query;
 }
 
 export function fetchWorkloadHistoryPage(kind: string, namespace: string, name: string, group: string | undefined, beforeSeq: number): Promise<WorkloadHistoryPage> {
