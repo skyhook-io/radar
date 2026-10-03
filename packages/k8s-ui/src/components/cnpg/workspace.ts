@@ -428,12 +428,14 @@ export function coverageReadable(cov: CNPGKindCoverage, namespace?: string): boo
  * a partial read that names neither cause says only that it was not read.
  */
 export function cnpgCoverageGap(cov: CNPGKindCoverage, what: string, namespace?: string, notInstalled = 'Not installed'): string {
+  // A namespace the server names wins over the kind's overall state: an
+  // uncached scope can still name namespaces the caller was denied.
+  if (namespace && cov.deniedNamespaces?.includes(namespace)) return `No access to ${what}`
+  if (namespace && cov.uncachedNamespaces?.includes(namespace)) return `Radar does not cache ${what} in ${namespace}`
   switch (cov.state) {
     case 'denied':
       return `No access to ${what}`
     case 'partial':
-      if (namespace && cov.uncachedNamespaces?.includes(namespace)) return `Radar does not cache ${what} in ${namespace}`
-      if (namespace && cov.deniedNamespaces?.includes(namespace)) return `No access to ${what}`
       return namespace ? `${what} not read in ${namespace}` : `${what} not read`
     case 'uncached':
       return `Radar does not cache ${what}`

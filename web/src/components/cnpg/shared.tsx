@@ -126,10 +126,13 @@ export function coverageEmpty(cov: CNPGKindCoverage | undefined, noun: string): 
   switch (cov?.state) {
     case 'full':
       return `No ${noun} in this scope.`
-    case 'partial':
-      if (cov.uncachedNamespaces?.length) return `No ${noun} visible. Radar does not cache ${noun} in ${cov.uncachedNamespaces.join(', ')}.`
-      if (cov.deniedNamespaces?.length) return `No ${noun} visible. Some namespaces are not readable with your access.`
-      return `No ${noun} visible. Some namespaces were not read.`
+    case 'partial': {
+      const causes = [
+        cov.deniedNamespaces?.length ? 'some namespaces are not readable with your access' : '',
+        cov.uncachedNamespaces?.length ? `Radar does not cache ${noun} in ${cov.uncachedNamespaces.join(', ')}` : '',
+      ].filter(Boolean)
+      return causes.length ? `No ${noun} visible: ${causes.join(', and ')}.` : `No ${noun} visible. Some namespaces were not read.`
+    }
     case 'uncached':
       return `Radar does not cache ${noun} in this scope.`
     case 'denied':

@@ -228,7 +228,8 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
   const location = useLocation()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const cnpgWorkspace = useRadarFeature('cnpgWorkspace').support !== 'unsupported'
+  // The redirect replaces the URL, so it waits for a confirmed workspace.
+  const cnpgWorkspace = useRadarFeature('cnpgWorkspace').support === 'supported'
 
   // Parse /workload/:kind/:ns/:name from pathname. Segments are URL-encoded by
   // buildWorkloadPath; names can also contain literal slashes (e.g. some CRD names),
@@ -1201,6 +1202,7 @@ export function WorkloadView({
           <LogsTabContent
             {...props}
             group={effectiveGroup}
+            cnpgWorkspace={cnpgWorkspace}
             selectedRunKey={selectedRunKey}
             onSelectRun={handleSelectedRunChange}
           />
@@ -1483,6 +1485,7 @@ function LogsTabContent({
   onConsumeInitialContainer,
   selectedRunKey,
   onSelectRun,
+  cnpgWorkspace,
 }: {
   kind: string
   apiKind: string
@@ -1497,6 +1500,8 @@ function LogsTabContent({
   onConsumeInitialContainer: () => void
   selectedRunKey: string
   onSelectRun: (runKey: string) => void
+  /** The Radar serves the CloudNativePG workspace's merged instance logs. */
+  cnpgWorkspace: boolean
 }) {
   if (SCHEDULED_LOG_KINDS.has(kind) && supportsBatchExecution(kind, apiKind, group, resource?.apiVersion)) {
     return (
@@ -1512,7 +1517,7 @@ function LogsTabContent({
     )
   }
 
-  if (kind === 'Cluster' && isApiGroup(resource?.apiVersion, 'postgresql.cnpg.io')) {
+  if (cnpgWorkspace && kind === 'Cluster' && isApiGroup(resource?.apiVersion, 'postgresql.cnpg.io')) {
     return <CNPGClusterLogs namespace={namespace} name={name} />
   }
 

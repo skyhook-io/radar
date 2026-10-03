@@ -308,6 +308,8 @@ describe('buildCNPGFleet', () => {
     expect(uncached.rows[0].replication.text).toBe('Radar does not cache Pods in db')
     const none = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { pods: { state: 'uncached' } } }))
     expect(none.rows[0].replication.text).toBe('Radar does not cache Pods')
+    const mixed = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { pods: { state: 'uncached', uncachedNamespaces: ['other'], deniedNamespaces: ['db'] } } }))
+    expect(mixed.rows[0].replication.text).toBe('No access to Pods')
   })
 
   it('says no access instead of "no replica pods" when Pods are unreadable', () => {

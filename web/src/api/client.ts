@@ -1,6 +1,6 @@
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useCallback, useMemo } from 'react'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import type { GitOpsWriteEvidence } from '@skyhook-io/k8s-ui/utils/gitops-write-guard'
 import type {
@@ -1808,13 +1808,14 @@ export function useRadarFeature(feature: RadarFeature) {
   const currentVersion = versionInfo?.currentVersion || radarVersion
   const latestVersion = versionInfo?.latestVersion
   const support = radarFeatureSupport(feature, capabilities, currentVersion)
+  // Stable across renders, so a callback built on guard keeps its identity.
+  const guard = useCallback(
+    <T,>(request: () => Promise<T>): Promise<T> => guardRadarFeature(feature, support, { currentVersion, latestVersion }, request),
+    [feature, support, currentVersion, latestVersion],
+  )
+  const gatedKey = useMemo(() => (support === 'unsupported' ? ['radar-feature-unsupported'] : []), [support])
 
-  return {
-    support,
-    gatedKey: support === 'unsupported' ? ['radar-feature-unsupported'] : [],
-    guard: <T,>(request: () => Promise<T>): Promise<T> =>
-      guardRadarFeature(feature, support, { currentVersion, latestVersion }, request),
-  }
+  return { support, gatedKey, guard }
 }
 
 // ============================================================================
