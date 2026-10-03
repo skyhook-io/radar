@@ -606,8 +606,11 @@ func (s *Server) cnpgHAOperatorLease(ctx context.Context, r *http.Request, c cnp
 	}
 	if namespace == "" {
 		reason := "The operator Deployment is not visible to you, so its namespace is unknown"
-		if acc.state == kindCoverageFull {
+		switch acc.state {
+		case kindCoverageFull:
 			reason = "No operator Deployment labelled " + cnpgOperatorNameLabel + "=" + cnpgOperatorNameValue + " was found"
+		case kindCoverageUncached:
+			reason = "Radar does not watch Deployments in the namespaces you can read, so the operator's namespace is unknown"
 		}
 		return CNPGHALease{CNPGHASource: CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}, Name: cnpgOperatorLeaseName}
 	}

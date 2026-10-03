@@ -167,7 +167,7 @@ func (s *Server) cnpgOperatorScope(r *http.Request) []string {
 
 func (s *Server) cnpgOperatorDeployments(r *http.Request, cache *k8s.ResourceCache, scope []string) (kindAccess, []*appsv1.Deployment) {
 	acc, read := s.typedKindScope(r, cache, scope, "apps", "deployments")
-	if acc.state == kindCoverageDenied || acc.state == kindCoverageError {
+	if acc.state == kindCoverageDenied || acc.state == kindCoverageUncached {
 		return acc, nil
 	}
 	lister := cache.Deployments()
@@ -194,7 +194,7 @@ func (s *Server) cnpgOperatorDeployments(r *http.Request, cache *k8s.ResourceCac
 
 func (s *Server) cnpgOperatorServices(r *http.Request, cache *k8s.ResourceCache, scope []string) (kindAccess, []*corev1.Service) {
 	acc, read := s.typedKindScope(r, cache, scope, "", "services")
-	if acc.state == kindCoverageDenied || acc.state == kindCoverageError {
+	if acc.state == kindCoverageDenied || acc.state == kindCoverageUncached {
 		return acc, nil
 	}
 	lister := cache.Services()

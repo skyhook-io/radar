@@ -367,7 +367,7 @@ func (s *Server) cnpgWorkspaceReadPods(r *http.Request, cache *k8s.ResourceCache
 	out := []any{}
 	returned := map[string]bool{}
 	acc, read := s.typedKindScope(r, cache, namespaces, "", "pods")
-	if acc.state == kindCoverageDenied || acc.state == kindCoverageError {
+	if acc.state == kindCoverageDenied || acc.state == kindCoverageUncached {
 		return acc, out, returned
 	}
 	if cache.Pods() == nil {

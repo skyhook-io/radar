@@ -15,33 +15,40 @@ import (
 
 // Coverage states for one kind a workspace lists.
 const (
-	kindCoverageFull         = "full"
-	kindCoveragePartial      = "partial"
-	kindCoverageDenied       = "denied"
+	kindCoverageFull    = "full"
+	kindCoveragePartial = "partial"
+	kindCoverageDenied  = "denied"
+	// kindCoverageUncached: the caller may list the kind, but Radar's informer
+	// holds none of the namespaces in scope, so nothing was read.
+	kindCoverageUncached     = "uncached"
 	kindCoverageNotInstalled = "notInstalled"
 	kindCoverageSyncing      = "syncing"
 	kindCoverageError        = "error"
 )
 
 // KindCoverage states how much of one kind the caller could see.
-// DeniedNamespaces lists only namespaces already in the caller's scope, so it
-// may be omitted on a partial state; AllowedNamespaces is always set on a
-// partial state and is the authority for which namespaces were read.
+// DeniedNamespaces (the caller may not list there) and UncachedNamespaces
+// (the caller may, but Radar's informer does not hold them) list only
+// namespaces already in the caller's scope, so either may be omitted on a
+// partial state; AllowedNamespaces is always set on a partial state and is
+// the authority for which namespaces were read.
 type KindCoverage struct {
-	State             string   `json:"state"`
-	DeniedNamespaces  []string `json:"deniedNamespaces,omitempty"`
-	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
+	State              string   `json:"state"`
+	DeniedNamespaces   []string `json:"deniedNamespaces,omitempty"`
+	UncachedNamespaces []string `json:"uncachedNamespaces,omitempty"`
+	AllowedNamespaces  []string `json:"allowedNamespaces,omitempty"`
 }
 
 // kindAccess is the resolved read scope for one kind. all means every
 // namespace in the request's scope (or the cluster-scoped kind itself).
-// denied names the in-scope namespaces left unread, under the disclosure rule
-// of listScope.
+// denied and uncached name the in-scope namespaces left unread, under the
+// disclosure rule of listScope.
 type kindAccess struct {
 	state      string
 	all        bool
 	namespaces map[string]bool
 	denied     []string
+	uncached   []string
 }
 
 func (a kindAccess) covers(namespace string) bool {
@@ -52,7 +59,7 @@ func (a kindAccess) covers(namespace string) bool {
 }
 
 func (a kindAccess) coverage() KindCoverage {
-	cov := KindCoverage{State: a.state, DeniedNamespaces: a.denied}
+	cov := KindCoverage{State: a.state, DeniedNamespaces: a.denied, UncachedNamespaces: a.uncached}
 	if a.state == kindCoveragePartial {
 		cov.AllowedNamespaces = make([]string, 0, len(a.namespaces))
 		for ns := range a.namespaces {
@@ -115,18 +122,15 @@ func accessFromScope(allowed []string, partial bool) kindAccess {
 // typedKindScope resolves where the caller may list a typed kind and which of
 // those namespaces Radar's informer actually holds. The informer may itself be
 // namespace-scoped when Radar's own identity cannot list the kind
-// cluster-wide; what it does not hold is unread, not empty. read is nil for
-// "every namespace".
+// cluster-wide; what it does not hold is unread, not empty, and not denied.
+// read is nil for "every namespace".
 func (s *Server) typedKindScope(r *http.Request, cache informerScope, namespaces []string, group, resource string) (acc kindAccess, read []string) {
 	allowed, denied, partial, ok := s.listScope(r, namespaces, group, resource)
 	if !ok {
 		return kindAccess{state: kindCoverageDenied}, []string{}
 	}
 	within := namespacesWithinCache(cache, resource, allowed)
-	if within.unavailable {
-		log.Printf("[workspace] %s cache does not cover the requested scope", resource)
-		return kindAccess{state: kindCoverageError}, []string{}
-	}
+	var uncached []string
 	if allowed != nil {
 		for _, ns := range allowed {
 			if slices.Contains(within.namespaces, ns) {
@@ -134,13 +138,16 @@ func (s *Server) typedKindScope(r *http.Request, cache informerScope, namespaces
 			}
 			partial = true
 			if namespaces != nil {
-				denied = append(denied, ns)
+				uncached = append(uncached, ns)
 			}
 		}
-		sort.Strings(denied)
+		sort.Strings(uncached)
+	}
+	if within.unavailable {
+		return kindAccess{state: kindCoverageUncached, denied: denied, uncached: uncached}, []string{}
 	}
 	acc = accessFromScope(within.namespaces, partial || within.partial)
-	acc.denied = denied
+	acc.denied, acc.uncached = denied, uncached
 	return acc, within.namespaces
 }
 
