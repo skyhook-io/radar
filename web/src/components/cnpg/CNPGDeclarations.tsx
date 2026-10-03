@@ -53,8 +53,8 @@ function stateOf(obj: any): State {
   return 'pending'
 }
 
-function gitopsSource(data: CNPGWorkspaceResponse, obj: any): string | undefined {
-  return managedByLabel(cnpgManagedBy(data, obj))
+function gitopsSource(managedBy: CNPGWorkspaceResponse['managedBy'], obj: any): string | undefined {
+  return managedByLabel(cnpgManagedBy({ managedBy }, obj))
 }
 
 const STATE_BADGE: Record<State, { severity: 'success' | 'warning' | 'neutral'; text: string }> = {
@@ -105,7 +105,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         state: st,
         meta: d.spec?.owner ? `owner ${d.spec.owner}` : undefined,
         error: st === 'failed' ? d.status?.message : undefined,
-        source: gitopsSource(data, d),
+        source: gitopsSource(data.managedBy, d),
         resource: cnpgResource('databases', ns, d.metadata?.name),
         isField: false,
       })
@@ -125,7 +125,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
                 ? p.spec?.target?.allTables ? 'all tables' : 'selected objects'
                 : `from ${p.spec?.publicationName ?? 'an unnamed publication'} on ${p.spec?.externalClusterName ?? 'an unnamed external cluster'}`,
             error: pst === 'failed' ? p.status?.message : undefined,
-            source: gitopsSource(data, p),
+            source: gitopsSource(data.managedBy, p),
             resource: cnpgResource(kind === 'Publication' ? 'publications' : 'subscriptions', ns, p.metadata?.name),
             isField: false,
           })
@@ -146,7 +146,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
           state: pst,
           meta: p.spec?.dbname ? `database ${p.spec.dbname}` : undefined,
           error: pst === 'failed' ? p.status?.message : undefined,
-          source: gitopsSource(data, p),
+          source: gitopsSource(data.managedBy, p),
           resource: cnpgResource(kind === 'Publication' ? 'publications' : 'subscriptions', ns, p.metadata?.name),
           isField: false,
         })
@@ -165,7 +165,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         state: f.state,
         meta: cnpgDatabaseRoleMeta(f),
         error: f.state === 'failed' ? f.message : undefined,
-        source: gitopsSource(data, r),
+        source: gitopsSource(data.managedBy, r),
         resource: cnpgResource('databaseroles', ns, r.metadata?.name),
         isField: false,
       })
@@ -200,7 +200,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         const fb = b.items.some((i) => i.state === 'failed') ? 0 : 1
         return fa - fb || a.namespace.localeCompare(b.namespace) || a.cluster.localeCompare(b.cluster)
       })
-  }, [data.objects.databases, data.objects.publications, data.objects.subscriptions, data.objects.databaseRoles, fleet.rows, clusterFilter, show])
+  }, [data.objects.databases, data.objects.publications, data.objects.subscriptions, data.objects.databaseRoles, data.managedBy, fleet.rows, clusterFilter, show])
 
   const totals = useMemo(() => {
     let failed = 0
