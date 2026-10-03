@@ -349,33 +349,19 @@ func (s *Server) handleCNPGFleetMetrics(w http.ResponseWriter, r *http.Request) 
 	}
 	sort.Strings(nsList)
 
-	results := make([][]CNPGClusterFleetMetrics, len(nsList))
-	sem := make(chan struct{}, cnpgFleetDiskConcurrency)
-	var wg sync.WaitGroup
-	for i, ns := range nsList {
-		if i >= cnpgFleetDiskMaxNamespaces {
-			reason := fmt.Sprintf("read for at most %d namespaces at a time; narrow the namespace filter", cnpgFleetDiskMaxNamespaces)
-			for _, c := range byNamespace[ns] {
-				results[i] = append(results[i], CNPGClusterFleetMetrics{Namespace: ns, Name: c.GetName(),
-					Lag: CNPGFleetLag{State: cnpgUsageStateNotRead, Reason: reason}, Growth: CNPGFleetGrowth{State: cnpgUsageStateNotRead, Reason: reason}})
-			}
-			continue
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-r.Context().Done():
-				return
-			}
-			defer func() { <-sem }()
-			results[i] = s.cnpgNamespaceFleetMetrics(r, cache, ns, byNamespace[ns])
-		}()
-	}
-	wg.Wait()
+	read := min(len(nsList), cnpgFleetDiskMaxNamespaces)
+	results := fanOut(r.Context(), read, cnpgFleetDiskConcurrency, func(i int) []CNPGClusterFleetMetrics {
+		return s.cnpgNamespaceFleetMetrics(r, cache, nsList[i], byNamespace[nsList[i]])
+	})
 	for _, rs := range results {
 		resp.Clusters = append(resp.Clusters, rs...)
+	}
+	reason := fmt.Sprintf("read for at most %d namespaces at a time; narrow the namespace filter", cnpgFleetDiskMaxNamespaces)
+	for _, ns := range nsList[read:] {
+		for _, c := range byNamespace[ns] {
+			resp.Clusters = append(resp.Clusters, CNPGClusterFleetMetrics{Namespace: ns, Name: c.GetName(),
+				Lag: CNPGFleetLag{State: cnpgUsageStateNotRead, Reason: reason}, Growth: CNPGFleetGrowth{State: cnpgUsageStateNotRead, Reason: reason}})
+		}
 	}
 	sort.Slice(resp.Clusters, func(i, j int) bool {
 		if resp.Clusters[i].Namespace != resp.Clusters[j].Namespace {

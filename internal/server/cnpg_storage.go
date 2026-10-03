@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -815,32 +814,18 @@ func (s *Server) handleCNPGFleetDisk(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(nsList)
 
-	results := make([][]CNPGClusterDisk, len(nsList))
-	sem := make(chan struct{}, cnpgFleetDiskConcurrency)
-	var wg sync.WaitGroup
-	for i, ns := range nsList {
-		if i >= cnpgFleetDiskMaxNamespaces {
-			for _, c := range byNamespace[ns] {
-				results[i] = append(results[i], CNPGClusterDisk{Namespace: ns, Name: c.GetName(), State: cnpgUsageStateNotRead,
-					Reason: fmt.Sprintf("disk use is read for at most %d namespaces at a time; narrow the namespace filter", cnpgFleetDiskMaxNamespaces)})
-			}
-			continue
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-r.Context().Done():
-				return
-			}
-			defer func() { <-sem }()
-			results[i] = s.cnpgNamespaceDisk(r, cache, ns, byNamespace[ns])
-		}()
-	}
-	wg.Wait()
+	read := min(len(nsList), cnpgFleetDiskMaxNamespaces)
+	results := fanOut(r.Context(), read, cnpgFleetDiskConcurrency, func(i int) []CNPGClusterDisk {
+		return s.cnpgNamespaceDisk(r, cache, nsList[i], byNamespace[nsList[i]])
+	})
 	for _, rs := range results {
 		resp.Clusters = append(resp.Clusters, rs...)
+	}
+	for _, ns := range nsList[read:] {
+		for _, c := range byNamespace[ns] {
+			resp.Clusters = append(resp.Clusters, CNPGClusterDisk{Namespace: ns, Name: c.GetName(), State: cnpgUsageStateNotRead,
+				Reason: fmt.Sprintf("disk use is read for at most %d namespaces at a time; narrow the namespace filter", cnpgFleetDiskMaxNamespaces)})
+		}
 	}
 	sort.Slice(resp.Clusters, func(i, j int) bool {
 		if resp.Clusters[i].Namespace != resp.Clusters[j].Namespace {
