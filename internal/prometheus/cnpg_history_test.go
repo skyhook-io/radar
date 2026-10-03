@@ -83,14 +83,14 @@ func TestDecideScopeRefusesAmbiguousIdentity(t *testing.T) {
 	q := &fakeCNPGQuerier{instant: func(string) (*prom.QueryResult, error) {
 		return &prom.QueryResult{Series: []prom.Series{vec(nil, 2)}}, nil
 	}}
-	if _, _, err := decideScope(context.Background(), q, cnpgProbe(0), nil); !errors.Is(err, ErrCNPGScopeAmbiguous) {
+	if _, _, err := decideScope(context.Background(), q, cnpgProbe(0), nil); !errors.Is(err, ErrScopeAmbiguous) {
 		t.Fatalf("err = %v, want ambiguous", err)
 	}
 	q.instant = func(string) (*prom.QueryResult, error) {
 		return &prom.QueryResult{Series: []prom.Series{vec(nil, 1)}}, nil
 	}
 	m, iso, err := decideScope(context.Background(), q, cnpgProbe(0), nil)
-	if err != nil || m != "" || iso.Mode != CNPGIsolationUnverified {
+	if err != nil || m != "" || iso.Mode != SeriesIsolationUnverified {
 		t.Fatalf("single identity: m=%q iso=%+v err=%v", m, iso, err)
 	}
 }
@@ -105,7 +105,7 @@ func TestDecideScopeChecksIdentitiesOverTheWholeRange(t *testing.T) {
 		}
 		return &prom.QueryResult{Series: []prom.Series{vec(nil, v)}}, nil
 	}}
-	if _, _, err := decideScope(context.Background(), q, cnpgProbe(time.Hour), nil); !errors.Is(err, ErrCNPGScopeAmbiguous) {
+	if _, _, err := decideScope(context.Background(), q, cnpgProbe(time.Hour), nil); !errors.Is(err, ErrScopeAmbiguous) {
 		t.Fatalf("err = %v, want ambiguous over the range; queries %v", err, q.queries)
 	}
 }
@@ -151,14 +151,14 @@ func TestDecideScopeVerifiedLabelsMustReachProbedSeries(t *testing.T) {
 		}
 		return &prom.QueryResult{Series: []prom.Series{vec(nil, 3)}}, nil
 	}}
-	if _, _, err := decideScope(context.Background(), q, cnpgProbe(0), map[string]string{"k8s_cluster_name": "east"}); !errors.Is(err, ErrCNPGScopeMismatch) {
+	if _, _, err := decideScope(context.Background(), q, cnpgProbe(0), map[string]string{"k8s_cluster_name": "east"}); !errors.Is(err, ErrScopeMismatch) {
 		t.Fatalf("err = %v, want mismatch", err)
 	}
 	q.instant = func(string) (*prom.QueryResult, error) {
 		return &prom.QueryResult{Series: []prom.Series{vec(nil, 3)}}, nil
 	}
 	m, iso, err := decideScope(context.Background(), q, cnpgProbe(0), map[string]string{"k8s_cluster_name": "east"})
-	if err != nil || m != `k8s_cluster_name="east"` || iso.Mode != CNPGIsolationVerified {
+	if err != nil || m != `k8s_cluster_name="east"` || iso.Mode != SeriesIsolationVerified {
 		t.Fatalf("verified: m=%q iso=%+v err=%v", m, iso, err)
 	}
 }

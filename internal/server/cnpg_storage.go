@@ -64,7 +64,7 @@ type CNPGStorageCoverage struct {
 	Grant  string `json:"grant,omitempty"`
 	Reason string `json:"reason,omitempty"`
 	// Isolation, on usage read from Prometheus: how the series were tied to this cluster.
-	Isolation *prometheuspkg.CNPGIsolation `json:"isolation,omitempty"`
+	Isolation *prometheuspkg.SeriesIsolation `json:"isolation,omitempty"`
 }
 
 // CNPGClusterStorageResponse is GET /api/cnpg/clusters/{namespace}/{name}/storage.
@@ -507,10 +507,10 @@ func (s *Server) cnpgClaimUsage(r *http.Request, namespace string, claims []stri
 	case prometheuspkg.PVCUsageQueryFailed:
 		return CNPGStorageCoverage{State: cnpgUsageStateError, Reason: "Prometheus query failed: " + truncateCNPGRuntimeError(batch.Error)}, batch
 	case prometheuspkg.PVCUsageAmbiguous:
-		_, reason := cnpgUsageScopeFailure(prometheuspkg.ErrCNPGScopeAmbiguous)
+		_, reason := cnpgUsageScopeFailure(prometheuspkg.ErrScopeAmbiguous)
 		return CNPGStorageCoverage{State: cnpgHistoryStateAmbiguous, Reason: reason}, batch
 	case prometheuspkg.PVCUsageScopeMismatch:
-		_, reason := cnpgUsageScopeFailure(prometheuspkg.ErrCNPGScopeMismatch)
+		_, reason := cnpgUsageScopeFailure(prometheuspkg.ErrScopeMismatch)
 		return CNPGStorageCoverage{State: cnpgHistoryStateScopeMismatch, Reason: reason}, batch
 	}
 	iso := &batch.Isolation
@@ -525,8 +525,8 @@ func (s *Server) cnpgClaimUsage(r *http.Request, namespace string, claims []stri
 
 // cnpgUnverifiedCaveat qualifies a measurement stated as this cluster's when
 // its series were matched by name alone.
-func cnpgUnverifiedCaveat(iso *prometheuspkg.CNPGIsolation) string {
-	if iso == nil || iso.Mode != prometheuspkg.CNPGIsolationUnverified {
+func cnpgUnverifiedCaveat(iso *prometheuspkg.SeriesIsolation) string {
+	if iso == nil || iso.Mode != prometheuspkg.SeriesIsolationUnverified {
 		return ""
 	}
 	return ". " + iso.Note
@@ -562,7 +562,7 @@ func cnpgVolumeLabel(role, tablespace string) string {
 
 // cnpgDiskFindings reports volumes whose measured use crosses the thresholds.
 // Only a measurement can raise one; an unmeasured volume says nothing.
-func cnpgDiskFindings(instance string, volumes []CNPGStorageVolume, iso *prometheuspkg.CNPGIsolation) []CNPGStorageFinding {
+func cnpgDiskFindings(instance string, volumes []CNPGStorageVolume, iso *prometheuspkg.SeriesIsolation) []CNPGStorageFinding {
 	var out []CNPGStorageFinding
 	for _, v := range volumes {
 		if v.Usage.Ratio == nil || *v.Usage.Ratio < cnpgDiskWarningRatio {
@@ -763,15 +763,15 @@ type CNPGFleetDiskResponse struct {
 // noPrometheus, denied (Grant names what is missing), unavailable, error, or
 // notRead (the request's namespace bound was reached).
 type CNPGClusterDisk struct {
-	Namespace string                       `json:"namespace"`
-	Name      string                       `json:"name"`
-	State     string                       `json:"state"`
-	Grant     string                       `json:"grant,omitempty"`
-	Reason    string                       `json:"reason,omitempty"`
-	Claims    int                          `json:"claims"`
-	Measured  int                          `json:"measured"`
-	Max       *CNPGDiskUsage               `json:"max,omitempty"`
-	Isolation *prometheuspkg.CNPGIsolation `json:"isolation,omitempty"`
+	Namespace string                         `json:"namespace"`
+	Name      string                         `json:"name"`
+	State     string                         `json:"state"`
+	Grant     string                         `json:"grant,omitempty"`
+	Reason    string                         `json:"reason,omitempty"`
+	Claims    int                            `json:"claims"`
+	Measured  int                            `json:"measured"`
+	Max       *CNPGDiskUsage                 `json:"max,omitempty"`
+	Isolation *prometheuspkg.SeriesIsolation `json:"isolation,omitempty"`
 }
 
 type CNPGDiskUsage struct {

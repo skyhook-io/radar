@@ -435,7 +435,7 @@ func TestCNPGDiskFindingsThresholds(t *testing.T) {
 	if got[1].Message != "The tablespace archive volume of pg-1 is 90% full" {
 		t.Errorf("message = %q", got[1].Message)
 	}
-	unverified := cnpgDiskFindings("pg-1", vols, &prometheuspkg.CNPGIsolation{Mode: prometheuspkg.CNPGIsolationUnverified, Note: "Radar couldn't confirm these volume stats belong to this exact cluster"})
+	unverified := cnpgDiskFindings("pg-1", vols, &prometheuspkg.SeriesIsolation{Mode: prometheuspkg.SeriesIsolationUnverified, Note: "Radar couldn't confirm these volume stats belong to this exact cluster"})
 	if !strings.Contains(unverified[1].Message, "couldn't confirm these volume stats belong to this exact cluster") {
 		t.Errorf("an unverified match must say so: %q", unverified[1].Message)
 	}
