@@ -122,6 +122,7 @@ describe('sustained replication lag', () => {
     )
     const p = row(f, 'ha').problems[0]
     expect(p.measuredBy).toBe('Prometheus, matched by Pod name')
+    expect(p.unverifiedMatch).toBe(true)
     expect(p.detail).toContain(note)
     const verified = applyCNPGFleetMetrics(
       fleet(),

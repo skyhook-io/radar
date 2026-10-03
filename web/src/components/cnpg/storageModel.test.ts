@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildResizeManifest, cnpgFloorTone, cnpgSharedExpansionGap, cnpgSlotRetentionText, cnpgWALUsageFloor } from './storageModel'
+import { buildResizeManifest, cnpgFloorTone, cnpgInstanceDiskTone, cnpgSharedExpansionGap, cnpgSlotRetentionText, cnpgWALUsageFloor } from './storageModel'
 import type { CNPGStorageVolume, CNPGStorageWAL } from '../../api/cnpg-storage'
 
 const cluster = {
@@ -70,5 +70,18 @@ describe('cnpgFloorTone', () => {
     expect(cnpgFloorTone(0.85)).toBe('degraded')
     expect(cnpgFloorTone(3.3)).toBe('unhealthy')
     expect(cnpgFloorTone(undefined)).toBe('unknown')
+  })
+})
+
+describe('cnpgInstanceDiskTone', () => {
+  const measured = (ratio: number, claim = 'pg-1') => ({ claim, role: 'PG_DATA', capacity: '1Gi', capacityBytes: 1024 ** 3, storageClass: {}, resize: {}, usage: { state: 'ok', ratio } }) as CNPGStorageVolume
+  const unmeasured = (claim: string) => ({ claim, role: 'PG_WAL', capacity: '1Gi', capacityBytes: 1024 ** 3, storageClass: {}, resize: {}, usage: { state: 'noSeries' } }) as CNPGStorageVolume
+  const wal = (sizeBytes: number, volume: string) => ({ status: { state: 'ok' }, metrics: { state: 'ok' }, volume, sizeBytes }) as CNPGStorageWAL
+  it('lets a dangerous WAL bound on one volume outrank a calm measurement on another', () => {
+    expect(cnpgInstanceDiskTone([measured(0.2), unmeasured('pg-1-wal')], wal(0.95 * 1024 ** 3, 'pg-1-wal'))).toBe('unhealthy')
+  })
+  it('stays unknown, not healthy, while any volume is unmeasured', () => {
+    expect(cnpgInstanceDiskTone([measured(0.2), unmeasured('pg-1-wal')], wal(0.1 * 1024 ** 3, 'pg-1-wal'))).toBe('unknown')
+    expect(cnpgInstanceDiskTone([measured(0.2)], undefined)).toBe('healthy')
   })
 })

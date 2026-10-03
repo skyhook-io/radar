@@ -98,6 +98,11 @@ function RowStatusDot({ row }: { row: CNPGFleetRow }) {
 // A token this long cannot wrap at a word boundary within the cell.
 const UNBREAKABLE_TOKEN = 24
 
+// A measured problem names what measured it, so a qualified match stays qualified in the fleet.
+function problemTip(p: CNPGFleetRow['problems'][number]): string {
+  return p.source === 'measurement' && p.measuredBy ? `${p.title} (measured by ${p.measuredBy})` : p.title
+}
+
 function AttentionCell({ row, onOpenAll }: { row: CNPGFleetRow; onOpenAll: () => void }) {
   const top = row.problems.find((p) => p.severity !== 'posture') ?? row.problems[0]
   if (!top) return <span className="text-theme-text-tertiary">—</span>
@@ -106,9 +111,12 @@ function AttentionCell({ row, onOpenAll }: { row: CNPGFleetRow; onOpenAll: () =>
   const unbreakable = headline.split(/\s+/).some((w) => w.length > UNBREAKABLE_TOKEN)
   return (
     <div className="min-w-0">
-      <Tooltip content={top.title} wrapperClassName="w-full">
+      <Tooltip content={problemTip(top)} wrapperClassName="w-full">
         <div className={clsx('[overflow-wrap:normal]', unbreakable ? 'truncate' : 'line-clamp-3', toneTextClass(CNPG_PROBLEM_TONE[top.severity]))}>{headline}</div>
       </Tooltip>
+      {top.unverifiedMatch && (
+        <div className="text-[11px] text-theme-text-tertiary">measured by {top.measuredBy}</div>
+      )}
       {others.length > 0 && (
         <Tooltip
           content={
@@ -118,7 +126,7 @@ function AttentionCell({ row, onOpenAll }: { row: CNPGFleetRow; onOpenAll: () =>
                   <span className="mt-1 shrink-0">
                     <StatusDot tone={CNPG_PROBLEM_TONE[p.severity]} size="xs" />
                   </span>
-                  <span>{p.title}</span>
+                  <span>{problemTip(p)}</span>
                 </li>
               ))}
             </ul>

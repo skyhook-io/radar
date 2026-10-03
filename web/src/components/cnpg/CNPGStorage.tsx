@@ -30,7 +30,7 @@ import {
 import { Notice } from '../capacity/shared'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { useCNPGWriteGuard } from './actions/useCNPGWriteGuard'
-import { buildResizeManifest, cnpgFloorTone, cnpgSharedExpansionGap, cnpgSlotRetentionText, cnpgWALUsageFloor } from './storageModel'
+import { buildResizeManifest, cnpgFloorTone, cnpgInstanceDiskTone, cnpgSharedExpansionGap, cnpgSlotRetentionText, cnpgWALUsageFloor } from './storageModel'
 // Binary units throughout, matching claim capacities such as 1Gi.
 import { formatBytes } from './lsn'
 import { CNPGRefreshFailedNotice } from './shared'
@@ -292,13 +292,12 @@ function WALFact({
 
 function InstanceCard({ inst, walCoverage, stated }: { inst: CNPGStorageInstance; walCoverage: CNPGClusterStorageResponse['wal']; stated: StatedOnce }) {
   const roleLabel = inst.role === 'primary' ? 'primary' : inst.role === 'replica' ? 'replica' : inst.role === 'noInstance' ? 'no instance' : 'role unknown'
-  const worst = inst.volumes.reduce<number | undefined>((m, v) => (v.usage.ratio !== undefined && (m === undefined || v.usage.ratio > m) ? v.usage.ratio : m), undefined)
-  const floorTone = inst.volumes.map((v) => cnpgFloorTone(cnpgWALUsageFloor(v, inst.wal)?.ratio)).find((t) => t !== 'unknown')
+  const diskTone = cnpgInstanceDiskTone(inst.volumes, inst.wal)
   return (
     <Card
       title={
         <span className="flex items-center gap-2">
-          <StatusDot tone={worst !== undefined ? cnpgDiskTone(worst) : floorTone ?? 'unknown'} />
+          <StatusDot tone={diskTone} />
           <span className="font-mono">{inst.name}</span>
           <span className="badge-sm bg-theme-elevated text-theme-text-secondary">{roleLabel}</span>
         </span>
@@ -351,6 +350,7 @@ export function CNPGStorage({ namespace, name, primary }: { namespace: string; n
     data.usage.state !== 'notRead' ? coverageLine('Used space', data.usage) : null,
     coverageLine('WAL', data.wal),
   ].filter((x): x is string => !!x)
+  if (data.usage.isolation?.mode === 'unverified') notes.push(`Used space: ${data.usage.isolation.note}.`)
   const allVolumes = data.instances.flatMap((i) => i.volumes)
   const expansionGap = cnpgSharedExpansionGap(allVolumes)
   if (expansionGap) notes.push(`Volume expansion unknown: ${expansionGap}`)

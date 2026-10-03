@@ -140,6 +140,8 @@ export interface CNPGProblem {
   source: 'issue' | 'audit' | 'measurement'
   /** What took the measurement, e.g. "Prometheus" (shown as "Measured by Prometheus"). */
   measuredBy?: string
+  /** The measurement's series were matched to this cluster by name only (see `measuredBy`). */
+  unverifiedMatch?: boolean
   /** How it was measured (queries, metric names), shown on hover over the source. */
   sourceDetail?: string
   /** A shorter headline for tight places (the fleet cell); `title` stays the precise one. */
@@ -1140,6 +1142,7 @@ export interface CNPGDiskReading {
     capacityBytes: number
     ratio: number
   }
+  isolation?: CNPGMetricIsolation
 }
 
 export const CNPG_DISK_WARNING_RATIO = 0.8
@@ -1174,7 +1177,7 @@ export function cnpgDiskFact(r: CNPGDiskReading | undefined): CNPGFact {
     return {
       text: `${Math.round(r.max.ratio * 100)}% used`,
       tone: cnpgDiskTone(r.max.ratio),
-      source: `Fullest: ${cnpgVolumeRoleLabel(r.max.role, r.max.tablespace)} of ${r.max.instance}, ${formatBytes(r.max.usedBytes)} of ${formatBytes(r.max.capacityBytes)} · ${CNPG_DISK_SOURCE}${partial}`,
+      source: `Fullest: ${cnpgVolumeRoleLabel(r.max.role, r.max.tablespace)} of ${r.max.instance}, ${formatBytes(r.max.usedBytes)} of ${formatBytes(r.max.capacityBytes)} · ${CNPG_DISK_SOURCE}${partial}.${isolationCaveat(r.isolation)}`,
     }
   }
   switch (r.state) {
@@ -1212,9 +1215,10 @@ export function applyCNPGDisk(fleet: CNPGFleet, readings: CNPGDiskReading[] | un
       severity: max.ratio >= CNPG_DISK_CRITICAL_RATIO ? 'critical' : 'warning',
       category: 'availability',
       title: `The ${cnpgVolumeRoleLabel(max.role, max.tablespace)} of ${max.instance} is ${Math.round(max.ratio * 100)}% full`,
-      detail: `${formatBytes(max.usedBytes)} of ${formatBytes(max.capacityBytes)} used, from ${CNPG_DISK_SOURCE}.`,
+      detail: `${formatBytes(max.usedBytes)} of ${formatBytes(max.capacityBytes)} used, from ${CNPG_DISK_SOURCE}.${isolationCaveat(reading.isolation)}`,
       subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
       source: 'measurement',
+      ...(reading.isolation?.mode === 'unverified' ? { measuredBy: 'kubelet, matched by claim name', unverifiedMatch: true } : {}),
     }
     const problems = [...row.problems, problem].sort(cnpgCompareProblems)
     return { ...next, problems, attention: true, categories: new Set([...row.categories, problem.category]) }
@@ -1380,6 +1384,7 @@ function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading
     subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
     source: 'measurement',
     measuredBy: lag.isolation?.mode === 'unverified' ? 'Prometheus, matched by Pod name' : 'Prometheus',
+    unverifiedMatch: lag.isolation?.mode === 'unverified',
     sourceDetail: src.lagSource ?? 'Prometheus',
   }
 }

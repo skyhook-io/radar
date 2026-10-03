@@ -300,12 +300,12 @@ type CNPGFleetLag struct {
 // CNPGFleetGrowth State: ok (BytesPerHour of the fastest-growing claim),
 // noSeries, denied, unavailable, error or notRead.
 type CNPGFleetGrowth struct {
-	State        string   `json:"state"`
-	Grant        string   `json:"grant,omitempty"`
-	Reason       string   `json:"reason,omitempty"`
-	BytesPerHour *float64 `json:"bytesPerHour,omitempty"`
-	Claim        string   `json:"claim,omitempty"`
-	Instance     string   `json:"instance,omitempty"`
+	State        string                       `json:"state"`
+	Grant        string                       `json:"grant,omitempty"`
+	Reason       string                       `json:"reason,omitempty"`
+	BytesPerHour *float64                     `json:"bytesPerHour,omitempty"`
+	Claim        string                       `json:"claim,omitempty"`
+	Instance     string                       `json:"instance,omitempty"`
 	Isolation    *prometheuspkg.CNPGIsolation `json:"isolation,omitempty"`
 }
 

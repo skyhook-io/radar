@@ -155,7 +155,17 @@ func ResolveCNPGScope(ctx context.Context, namespace, selector string, anchors [
 // ResolvePVCScope decides the cluster-identity matchers for the named claims'
 // kubelet volume stats over window (0 for an instant read).
 func ResolvePVCScope(ctx context.Context, namespace string, claims []string, anchors []prom.WorkloadPodIdentity, window time.Duration) (string, CNPGIsolation, error) {
-	return resolveScope(ctx, namespace, pvcScopeProbe(namespace, claims, window), anchors, nil)
+	m, iso, err := resolveScope(ctx, namespace, pvcScopeProbe(namespace, claims, window), anchors, nil)
+	return m, iso.forClaims(), err
+}
+
+// forClaims words an unverified match for volume stats, which are matched by
+// claim name rather than Pod name.
+func (iso CNPGIsolation) forClaims() CNPGIsolation {
+	if iso.Mode == CNPGIsolationUnverified {
+		iso.Note = "Matched by namespace and claim names. Radar couldn't confirm these volume stats belong to this exact cluster (no cluster label it could check)"
+	}
+	return iso
 }
 
 func pvcScopeProbe(namespace string, claims []string, window time.Duration) scopeProbe {

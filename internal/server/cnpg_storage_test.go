@@ -428,12 +428,16 @@ func TestCNPGDiskFindingsThresholds(t *testing.T) {
 		{Claim: "c", Role: cnpgPVCRoleTablespace, Tablespace: "archive", Usage: CNPGStorageVolumeUsage{State: cnpgUsageStateOK, Ratio: r(0.90)}},
 		{Claim: "d", Role: cnpgPVCRoleData, Usage: CNPGStorageVolumeUsage{State: cnpgUsageStateNoSeries}},
 	}
-	got := cnpgDiskFindings("pg-1", vols)
+	got := cnpgDiskFindings("pg-1", vols, nil)
 	if len(got) != 2 || got[0].Severity != "warning" || got[1].Severity != "critical" {
 		t.Fatalf("findings = %+v", got)
 	}
 	if got[1].Message != "The tablespace archive volume of pg-1 is 90% full" {
 		t.Errorf("message = %q", got[1].Message)
+	}
+	unverified := cnpgDiskFindings("pg-1", vols, &prometheuspkg.CNPGIsolation{Mode: prometheuspkg.CNPGIsolationUnverified, Note: "Radar couldn't confirm these volume stats belong to this exact cluster"})
+	if !strings.Contains(unverified[1].Message, "couldn't confirm these volume stats belong to this exact cluster") {
+		t.Errorf("an unverified match must say so: %q", unverified[1].Message)
 	}
 }
 

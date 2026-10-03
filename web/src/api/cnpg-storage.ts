@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import type { CNPGDiskReading } from '@skyhook-io/k8s-ui'
+import type { CNPGDiskReading, CNPGMetricIsolation } from '@skyhook-io/k8s-ui'
 import { fetchJSON } from './client'
 
 export type CNPGPVCRole = 'PG_DATA' | 'PG_WAL' | 'PG_TABLESPACE'
@@ -8,6 +8,8 @@ export interface CNPGStorageCoverage {
   state: string
   grant?: string
   reason?: string
+  /** On Prometheus usage: how the series were tied to this cluster. */
+  isolation?: CNPGMetricIsolation
 }
 
 export interface CNPGStorageVolumeUsage {

@@ -421,13 +421,14 @@ export function ClusterActionDialog({
               <input id="cnpg-backup-name" value={backupName} onChange={(e) => setBackupName(e.target.value)} className="rounded-lg border border-theme-border bg-theme-base px-2 py-1 font-mono text-sm" />
             </div>
           ),
-          warnings: facts.archivingFailing
-            ? [
-                method?.method === 'barmanObjectStore'
-                  ? 'WAL archiving is failing. The operator checks archiving before a Barman backup and marks this Backup walArchivingFailing instead of taking it: fix archiving first.'
-                  : 'WAL archiving is failing. A base backup can only be restored once the WAL written during it reaches the archive, so fix archiving first.',
-              ]
-            : [],
+          // A volume snapshot can be recovered without archived WAL, so only
+          // the object-store methods are warned.
+          warnings:
+            facts.archivingFailing && method?.method === 'barmanObjectStore'
+              ? ['WAL archiving is failing. The operator checks archiving before a Barman backup and marks this Backup walArchivingFailing instead of taking it: fix archiving first.']
+              : facts.archivingFailing && method?.method === 'plugin'
+                ? ['WAL archiving is failing. A base backup in the object store can only be restored once the WAL written during it reaches the archive, so fix archiving first.']
+                : [],
           notes: [
             method?.capability === 'unknown' ? `The plugin ${method.pluginName} does not report whether it can take backups; the operator will reject the Backup if it cannot.` : null,
             method?.method === 'barmanObjectStore' ? 'The in-tree Barman object store is deprecated in favour of the barman-cloud plugin.' : null,

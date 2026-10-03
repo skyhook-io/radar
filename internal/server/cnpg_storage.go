@@ -63,6 +63,8 @@ type CNPGStorageCoverage struct {
 	State  string `json:"state"`
 	Grant  string `json:"grant,omitempty"`
 	Reason string `json:"reason,omitempty"`
+	// Isolation, on usage read from Prometheus: how the series were tied to this cluster.
+	Isolation *prometheuspkg.CNPGIsolation `json:"isolation,omitempty"`
 }
 
 // CNPGClusterStorageResponse is GET /api/cnpg/clusters/{namespace}/{name}/storage.
@@ -266,7 +268,7 @@ func (s *Server) handleCNPGClusterStorage(w http.ResponseWriter, r *http.Request
 			return a.Claim < b.Claim
 		})
 		resp.Instances = append(resp.Instances, *in)
-		resp.Findings = append(resp.Findings, cnpgDiskFindings(in.Name, in.Volumes)...)
+		resp.Findings = append(resp.Findings, cnpgDiskFindings(in.Name, in.Volumes, resp.Usage.Isolation)...)
 	}
 	sort.Slice(resp.Instances, func(i, j int) bool { return resp.Instances[i].Name < resp.Instances[j].Name })
 	sort.SliceStable(resp.Findings, func(i, j int) bool { return resp.Findings[i].Ratio > resp.Findings[j].Ratio })
@@ -511,13 +513,23 @@ func (s *Server) cnpgClaimUsage(r *http.Request, namespace string, claims []stri
 		_, reason := cnpgUsageScopeFailure(prometheuspkg.ErrCNPGScopeMismatch)
 		return CNPGStorageCoverage{State: cnpgHistoryStateScopeMismatch, Reason: reason}, batch
 	}
+	iso := &batch.Isolation
 	switch n := len(batch.Usage); {
 	case n == 0:
 		return CNPGStorageCoverage{State: cnpgUsageStateNoSeries, Reason: "Prometheus has no kubelet volume stats for these claims"}, batch
 	case n < len(claims):
-		return CNPGStorageCoverage{State: cnpgStorageStatePartial, Reason: fmt.Sprintf("%d of %d claims have kubelet volume stats", n, len(claims))}, batch
+		return CNPGStorageCoverage{State: cnpgStorageStatePartial, Reason: fmt.Sprintf("%d of %d claims have kubelet volume stats", n, len(claims)), Isolation: iso}, batch
 	}
-	return CNPGStorageCoverage{State: cnpgUsageStateOK}, batch
+	return CNPGStorageCoverage{State: cnpgUsageStateOK, Isolation: iso}, batch
+}
+
+// cnpgUnverifiedCaveat qualifies a measurement stated as this cluster's when
+// its series were matched by name alone.
+func cnpgUnverifiedCaveat(iso *prometheuspkg.CNPGIsolation) string {
+	if iso == nil || iso.Mode != prometheuspkg.CNPGIsolationUnverified {
+		return ""
+	}
+	return ". " + iso.Note
 }
 
 func cnpgVolumeUsage(cov CNPGStorageCoverage, batch prometheuspkg.PVCUsageBatch, claim string) CNPGStorageVolumeUsage {
@@ -550,7 +562,7 @@ func cnpgVolumeLabel(role, tablespace string) string {
 
 // cnpgDiskFindings reports volumes whose measured use crosses the thresholds.
 // Only a measurement can raise one; an unmeasured volume says nothing.
-func cnpgDiskFindings(instance string, volumes []CNPGStorageVolume) []CNPGStorageFinding {
+func cnpgDiskFindings(instance string, volumes []CNPGStorageVolume, iso *prometheuspkg.CNPGIsolation) []CNPGStorageFinding {
 	var out []CNPGStorageFinding
 	for _, v := range volumes {
 		if v.Usage.Ratio == nil || *v.Usage.Ratio < cnpgDiskWarningRatio {
@@ -562,7 +574,7 @@ func cnpgDiskFindings(instance string, volumes []CNPGStorageVolume) []CNPGStorag
 		}
 		out = append(out, CNPGStorageFinding{
 			Severity: sev, Instance: instance, Claim: v.Claim, Role: v.Role, Tablespace: v.Tablespace, Ratio: *v.Usage.Ratio,
-			Message: fmt.Sprintf("The %s of %s is %.0f%% full", cnpgVolumeLabel(v.Role, v.Tablespace), instance, *v.Usage.Ratio*100),
+			Message: fmt.Sprintf("The %s of %s is %.0f%% full%s", cnpgVolumeLabel(v.Role, v.Tablespace), instance, *v.Usage.Ratio*100, cnpgUnverifiedCaveat(iso)),
 		})
 	}
 	return out
@@ -751,14 +763,15 @@ type CNPGFleetDiskResponse struct {
 // noPrometheus, denied (Grant names what is missing), unavailable, error, or
 // notRead (the request's namespace bound was reached).
 type CNPGClusterDisk struct {
-	Namespace string         `json:"namespace"`
-	Name      string         `json:"name"`
-	State     string         `json:"state"`
-	Grant     string         `json:"grant,omitempty"`
-	Reason    string         `json:"reason,omitempty"`
-	Claims    int            `json:"claims"`
-	Measured  int            `json:"measured"`
-	Max       *CNPGDiskUsage `json:"max,omitempty"`
+	Namespace string                       `json:"namespace"`
+	Name      string                       `json:"name"`
+	State     string                       `json:"state"`
+	Grant     string                       `json:"grant,omitempty"`
+	Reason    string                       `json:"reason,omitempty"`
+	Claims    int                          `json:"claims"`
+	Measured  int                          `json:"measured"`
+	Max       *CNPGDiskUsage               `json:"max,omitempty"`
+	Isolation *prometheuspkg.CNPGIsolation `json:"isolation,omitempty"`
 }
 
 type CNPGDiskUsage struct {
@@ -888,7 +901,7 @@ func (s *Server) cnpgNamespaceDisk(r *http.Request, cache *k8s.ResourceCache, na
 
 	out := make([]CNPGClusterDisk, len(clusters))
 	for i, c := range clusters {
-		d := CNPGClusterDisk{Namespace: namespace, Name: c.GetName(), Claims: len(owned[i])}
+		d := CNPGClusterDisk{Namespace: namespace, Name: c.GetName(), Claims: len(owned[i]), Isolation: cov.Isolation}
 		if d.Claims == 0 {
 			d.State, d.Reason = cnpgUsageStateNotRead, "no claims owned by this cluster"
 			out[i] = d

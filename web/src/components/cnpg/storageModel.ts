@@ -80,3 +80,15 @@ export function cnpgFloorTone(ratio: number | undefined): HealthLevel {
   const tone = cnpgDiskTone(ratio)
   return tone === 'healthy' ? 'unknown' : tone
 }
+
+/**
+ * An instance's disk tone across its volumes: the worst measured or bounded
+ * reading that crosses a line, otherwise healthy only when every volume was
+ * measured below it. One unmeasured volume leaves a calm verdict unknown.
+ */
+export function cnpgInstanceDiskTone(volumes: CNPGStorageVolume[], wal: CNPGStorageWAL | undefined): HealthLevel {
+  const rank: Record<string, number> = { unhealthy: 3, degraded: 2, unknown: 1, healthy: 0 }
+  const tones = volumes.map((v) => (v.usage.ratio !== undefined ? cnpgDiskTone(v.usage.ratio) : cnpgFloorTone(cnpgWALUsageFloor(v, wal)?.ratio)))
+  if (tones.length === 0) return 'unknown'
+  return tones.reduce((a, b) => ((rank[b] ?? 1) > (rank[a] ?? 1) ? b : a))
+}

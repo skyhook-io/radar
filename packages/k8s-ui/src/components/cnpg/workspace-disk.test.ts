@@ -57,6 +57,15 @@ describe('cnpgDiskFact', () => {
 })
 
 describe('applyCNPGDisk', () => {
+  it('says when the volume stats were matched to the cluster by claim name only', () => {
+    const note = "Matched by namespace and claim names. Radar couldn't confirm these volume stats belong to this exact cluster (no cluster label it could check)"
+    const fleet = applyCNPGDisk(fleetOf('pg-a'), [reading('pg-a', { max: max(0.95), isolation: { mode: 'unverified', note } })])
+    const p = fleet.rows[0].problems[0]
+    expect(p).toMatchObject({ measuredBy: 'kubelet, matched by claim name', unverifiedMatch: true })
+    expect(p.detail).toContain(note)
+    expect(fleet.rows[0].disk.source).toContain(note)
+  })
+
   it('puts low-disk clusters into Needs attention by severity', () => {
     const fleet = applyCNPGDisk(fleetOf('pg-a', 'pg-b', 'pg-c'), [
       reading('pg-a', { max: max(0.85) }),

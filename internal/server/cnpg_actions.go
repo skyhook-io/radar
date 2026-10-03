@@ -130,22 +130,22 @@ type CNPGBackupMethodFact struct {
 
 // CNPGClusterFacts is the state the confirm dialog shows and the POST binds.
 type CNPGClusterFacts struct {
-	CurrentPrimary   string                 `json:"currentPrimary"`
-	TargetPrimary    string                 `json:"targetPrimary"`
-	Phase            string                 `json:"phase"`
-	PhaseReason      string                 `json:"phaseReason,omitempty"`
-	Hibernation      string                 `json:"hibernation"`
-	Hibernated       bool                   `json:"hibernated"`
-	FencedInstances  CNPGFencedFacts        `json:"fencedInstances"`
-	Instances        []CNPGInstanceFact     `json:"instances"`
-	BackupMethods    []CNPGBackupMethodFact `json:"backupMethods"`
-	BackupTarget     string                 `json:"backupTarget,omitempty"`
+	CurrentPrimary  string                 `json:"currentPrimary"`
+	TargetPrimary   string                 `json:"targetPrimary"`
+	Phase           string                 `json:"phase"`
+	PhaseReason     string                 `json:"phaseReason,omitempty"`
+	Hibernation     string                 `json:"hibernation"`
+	Hibernated      bool                   `json:"hibernated"`
+	FencedInstances CNPGFencedFacts        `json:"fencedInstances"`
+	Instances       []CNPGInstanceFact     `json:"instances"`
+	BackupMethods   []CNPGBackupMethodFact `json:"backupMethods"`
+	BackupTarget    string                 `json:"backupTarget,omitempty"`
 	// ArchivingFailing: the ContinuousArchiving condition is False. An
 	// in-tree Barman backup then ends in phase walArchivingFailing.
-	ArchivingFailing bool                   `json:"archivingFailing"`
-	IsReplicaCluster bool                   `json:"isReplicaCluster"`
-	Terminating      bool                   `json:"terminating"`
-	Maintenance      CNPGMaintenanceFacts   `json:"maintenance"`
+	ArchivingFailing bool                 `json:"archivingFailing"`
+	IsReplicaCluster bool                 `json:"isReplicaCluster"`
+	Terminating      bool                 `json:"terminating"`
+	Maintenance      CNPGMaintenanceFacts `json:"maintenance"`
 }
 
 type CNPGClusterActions struct {

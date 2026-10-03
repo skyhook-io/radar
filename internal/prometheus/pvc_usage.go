@@ -36,6 +36,8 @@ type PVCUsageBatch struct {
 	Error   string
 	Usage   map[string]PVCUsage
 	Invalid map[string]bool
+	// Isolation says how the series were tied to this cluster.
+	Isolation CNPGIsolation
 }
 
 // Claims per query: keeps the regex matcher and the answer small whatever the
@@ -54,7 +56,7 @@ func QueryPVCUsage(ctx context.Context, namespace string, claims []string, ancho
 	if _, _, err := client.EnsureConnected(ctx); err != nil {
 		return PVCUsageBatch{Status: PVCUsageNoPrometheus, Error: err.Error(), Usage: map[string]PVCUsage{}, Invalid: map[string]bool{}}
 	}
-	matchers, _, err := resolveScope(ctx, namespace, pvcScopeProbe(namespace, claims, 0), anchors, nil)
+	matchers, iso, err := resolveScope(ctx, namespace, pvcScopeProbe(namespace, claims, 0), anchors, nil)
 	if out, failed := pvcScopeFailure(err); failed {
 		if out.Status == PVCUsageQueryFailed {
 			errorlog.Record("prometheus", "warning", "pvc usage scope check failed for namespace %s: %v", namespace, err)
@@ -62,6 +64,7 @@ func QueryPVCUsage(ctx context.Context, namespace string, claims []string, ancho
 		return out
 	}
 	out := queryPVCUsage(ctx, client, namespace, claims, matchers)
+	out.Isolation = iso.forClaims()
 	if out.Status == PVCUsageQueryFailed {
 		errorlog.Record("prometheus", "warning", "pvc usage query failed for namespace %s: %s", namespace, out.Error)
 	}
