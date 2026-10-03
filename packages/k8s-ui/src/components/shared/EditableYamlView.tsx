@@ -202,7 +202,9 @@ export function EditableYamlView({
   // All sessionStorage calls are wrapped in try-catch — storage can throw
   // QuotaExceededError or be blocked by browser security policies.
   const savedDraft = useRef(readOnly ? null : safeSessionGet(draftKey))
-  const applyAttempt = useRef(0)
+  // Bumped by every apply and every change of review, so a refresh that lands
+  // late never replaces the review that is on screen now.
+  const reviewGeneration = useRef(0)
   const [isEditing, setIsEditing] = useState(savedDraft.current !== null)
   const [editedYaml, setEditedYaml] = useState(savedDraft.current ?? '')
   const [yamlErrors, setYamlErrors] = useState<string[]>([])
@@ -256,6 +258,7 @@ export function EditableYamlView({
 
   const handleStartEdit = useCallback(() => {
     if (readOnly) return
+    reviewGeneration.current++
     setEditedYaml(resourceToYaml(data))
     setYamlErrors([])
     setPreview(null)
@@ -263,6 +266,7 @@ export function EditableYamlView({
   }, [data, readOnly])
 
   const handleCancelEdit = useCallback(() => {
+    reviewGeneration.current++
     setIsEditing(false)
     setEditedYaml('')
     setYamlErrors([])
@@ -271,6 +275,7 @@ export function EditableYamlView({
 
   const handleSaveEdit = useCallback(async () => {
     if (yamlErrors.length > 0 || !onSave) return
+    reviewGeneration.current++
 
     try {
       if (onPreview) {
@@ -312,9 +317,8 @@ export function EditableYamlView({
   const handleApplyReviewed = useCallback(async () => {
     if (!preview || !onSave) return
     // The notice belongs to one attempt: a retry that fails for another reason
-    // (and can't refresh) must show its own error, not the last notice, and a
-    // slower refresh from an earlier attempt must not land over it.
-    const attempt = ++applyAttempt.current
+    // (and can't refresh) must show its own error, not the last notice.
+    const attempt = ++reviewGeneration.current
     if (preview.changedSinceReview) setPreview({ ...preview, changedSinceReview: false })
     try {
       await onSave({
@@ -343,7 +347,7 @@ export function EditableYamlView({
               name: resource.name,
             },
           })
-          if (attempt !== applyAttempt.current) return
+          if (attempt !== reviewGeneration.current) return
           // Changed means the same resource, on the same cluster, at a newer
           // version. A deleted resource has no version, and a cluster switch
           // is its own error.
@@ -385,7 +389,10 @@ export function EditableYamlView({
           isApplying={isSaving}
           applyError={saveError}
           changedSinceReview={preview.changedSinceReview}
-          onBack={() => setPreview(null)}
+          onBack={() => {
+            reviewGeneration.current++
+            setPreview(null)
+          }}
           onApply={handleApplyReviewed}
         />
       )

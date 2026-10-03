@@ -234,3 +234,35 @@ it("ignores an earlier attempt's refresh that lands after a newer attempt", asyn
   expect(text()).not.toContain("This resource changed after your review");
   expect(text()).toContain("forbidden: cannot patch configmaps");
 });
+
+it("drops a refresh from an apply made before going back to a newer review", async () => {
+  let finishFirstRefresh: (v: ReturnType<typeof reviewed>) => void = () => {};
+  const onPreview = vi
+    .fn()
+    .mockResolvedValueOnce(reviewed("1"))
+    .mockReturnValueOnce(
+      new Promise<ReturnType<typeof reviewed>>((r) => {
+        finishFirstRefresh = r;
+      }),
+    )
+    .mockResolvedValueOnce(reviewed("3"));
+  const onSave = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("conflict"))
+    .mockResolvedValueOnce(undefined);
+  render({ onSave, onPreview });
+  await click(/^Edit$/);
+  await click(/Review changes/);
+  await click(/Apply reviewed changes/);
+  await click(/Back to edit/);
+  await click(/Review changes/);
+  await act(async () => {
+    finishFirstRefresh(reviewed("2"));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(text()).not.toContain("This resource changed after your review");
+  await click(/Apply reviewed changes/);
+  expect(onSave).toHaveBeenLastCalledWith(
+    expect.objectContaining({ reviewedResourceVersion: "3" }),
+  );
+});

@@ -26,6 +26,12 @@ describe('YamlReview after a failed apply', () => {
     expect(html).not.toContain('review the latest version before applying')
   })
 
+  it('keeps an unrelated apply error beside the notice', () => {
+    const html = review(true, 'admission webhook "policy.example" denied the request')
+    expect(html).toContain('This resource changed after your review')
+    expect(html).toContain('denied the request')
+  })
+
   it('says nothing extra when the resource did not change', () => {
     expect(review(false, 'forbidden')).not.toContain('changed after your review')
     expect(review(false, 'forbidden')).toContain('forbidden')

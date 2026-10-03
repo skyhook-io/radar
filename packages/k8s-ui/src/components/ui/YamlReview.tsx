@@ -52,6 +52,13 @@ function previewSeverity(status: YamlPreviewResult['status']) {
   return 'warning' as const
 }
 
+// The server's refusal when the resource moved past the reviewed version. The
+// changed-after-review notice already says this, so only this error gives way
+// to it; a timeout or an admission denial still shows beside the notice.
+function isChangedAfterReviewError(error: string) {
+  return /resource changed after review/i.test(error)
+}
+
 export function canApplyYamlPreview(
   documents: YamlPreviewResult[],
   unavailableAcknowledged: boolean,
@@ -365,7 +372,7 @@ export function YamlReview({
         )}
         {/* The notice above already says why the apply was refused; the
             raw API message would repeat it (the error toast carries it). */}
-        {applyError && !changedSinceReview && (
+        {applyError && !(changedSinceReview && isChangedAfterReviewError(applyError)) && (
           <div className="mb-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
             {applyError}
           </div>
