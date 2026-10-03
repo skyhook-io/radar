@@ -480,7 +480,7 @@ func cnpgGuardPsql(f CNPGClusterFacts, i CNPGInstanceFact) string {
 	case !i.PodExists:
 		return "The instance has no running Pod"
 	case i.Fenced:
-		return "It is fenced: PostgreSQL is stopped"
+		return "It is fenced: the operator stops PostgreSQL on a fenced instance"
 	case f.Hibernated:
 		return "The cluster is hibernated"
 	}
