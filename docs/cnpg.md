@@ -59,7 +59,7 @@ Cluster logs (`/api/cnpg/clusters/{ns}/{name}/logs`) need `get pods/log`; Activi
 
 ## Not in this version
 
-Runtime data (replication lag, sessions, locks, WAL and slots via the instance manager or Prometheus), Pooler pressure, and operations (Backup now, Switchover, Restart, Hibernate, Restore). See `docs/plans/CNPG_WORKSPACE.md`.
+Runtime data (replication lag, sessions, locks, WAL and slots via the instance manager or Prometheus), Pooler pressure, and operations (Backup now, Switchover, Restart, Hibernate, Restore).
 
 ## API
 
