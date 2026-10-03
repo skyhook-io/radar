@@ -308,11 +308,11 @@ export function CNPGClusterSummary({
           {p.recoveryWindow.from ? (
             <div>
               <span className={p.recoveryWindow.tone === 'degraded' ? toneTextClass('degraded') : undefined}>
-                {new Date(p.recoveryWindow.from).toUTCString().replace(' GMT', ' UTC')} → {p.recoveryWindow.to ? new Date(p.recoveryWindow.to).toUTCString().replace(' GMT', ' UTC') : 'unknown'}
+                from {new Date(p.recoveryWindow.from).toUTCString().replace(' GMT', ' UTC')} {p.recoveryWindow.tone === 'degraded' ? '· not advancing' : 'to the newest archived WAL'}
               </span>
               <FactSource fact={p.recoveryWindow} />
               {p.recoveryWindow.tone === 'degraded' && (
-                <div className="text-[11.5px] text-theme-text-tertiary">A backup failed after the last success, so this window is not advancing.</div>
+                <div className="text-[11.5px] text-theme-text-tertiary">WAL archiving is failing, so nothing written since the last archived WAL can be recovered.</div>
               )}
             </div>
           ) : (
