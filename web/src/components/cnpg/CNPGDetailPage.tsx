@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { Activity, ArrowLeft, Database, ShieldCheck, Unplug } from 'lucide-react'
+import { Activity, ArrowLeft, Database, Gauge, ShieldCheck, Unplug } from 'lucide-react'
 import type { WorkloadExtraTab } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
@@ -9,11 +9,14 @@ import { useContextSwitchFlow } from '../useContextSwitchFlow'
 import { WorkloadView } from '../workload/WorkloadView'
 import { EmptyState } from '../capacity/shared'
 import { CNPGClusterActivity } from './CNPGClusterActivity'
+import { CNPGClusterRuntime } from './CNPGClusterRuntime'
 import { CNPGProtection } from './CNPGProtection'
+import { CNPGRestoreValidation } from './recovery/CNPGRestoreValidation'
 import { CNPGScreenGate } from './shared'
 import { CNPG_DETAIL_KINDS, CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, cnpgScreenPath, type CNPGDetailTarget } from './routes'
 import { currentPageLabel } from './paths'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
+import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 
 interface ReturnState {
   returnLabel?: string
@@ -26,17 +29,22 @@ function ClusterProtectionTab({ namespace, name, onInspect }: { namespace: strin
   return (
     <CNPGScreenGate query={query} fleet={fleet}>
       {(data, readyFleet) => (
-        <CNPGProtection
-          data={data}
-          fleet={readyFleet}
-          namespaces={[namespace]}
-          searchParams={searchParams}
-          onSetParams={() => {}}
-          onInspect={onInspect}
-          inspected={null}
-          onClearNamespaces={() => {}}
-          scopeCluster={{ namespace, name }}
-        />
+        <div className="flex min-h-0 flex-1 flex-col">
+          {readyFleet.rows.find((r) => r.namespace === namespace && r.name === name)?.cluster?.spec?.bootstrap?.recovery && (
+            <CNPGRestoreValidation namespace={namespace} name={name} />
+          )}
+          <CNPGProtection
+            data={data}
+            fleet={readyFleet}
+            namespaces={[namespace]}
+            searchParams={searchParams}
+            onSetParams={() => {}}
+            onInspect={onInspect}
+            inspected={null}
+            onClearNamespaces={() => {}}
+            scopeCluster={{ namespace, name }}
+          />
+        </div>
       )}
     </CNPGScreenGate>
   )
@@ -99,6 +107,24 @@ export function CNPGDetailPage({
     if (target.plural !== 'clusters') return undefined
     return [
       {
+        id: 'runtime',
+        label: 'Runtime',
+        icon: <Gauge className="h-4 w-4" />,
+        after: 'spec',
+        render: () => (
+          <CNPGClusterRuntime
+            namespace={target.namespace}
+            name={target.name}
+            onOpenLogs={(pod) => setSearchParams(new URLSearchParams({ ...Object.fromEntries(searchParams), tab: 'logs', pod }), { replace: true, state: location.state })}
+            onOpenInterval={(tab, since, until) => {
+              const params = new URLSearchParams({ ...Object.fromEntries(searchParams), tab, since, until })
+              params.delete('pod')
+              setSearchParams(params, { state: location.state })
+            }}
+          />
+        ),
+      },
+      {
         id: 'protection',
         label: 'Protection',
         icon: <ShieldCheck className="h-4 w-4" />,
@@ -115,7 +141,7 @@ export function CNPGDetailPage({
         ),
       },
     ]
-  }, [target.plural, target.namespace, target.name, onOpenResource, openRelated])
+  }, [target.plural, target.namespace, target.name, onOpenResource, openRelated, searchParams, setSearchParams, location.state])
 
   if (pinnedContext && activeContext && pinnedContext !== activeContext) {
     return <NotInContext target={target} pinnedContext={pinnedContext} activeContext={activeContext} homeLabel={home.label} homePath={home.path} />
@@ -160,6 +186,7 @@ export function CNPGDetailPage({
           Namespace {target.namespace} is outside your namespace filter; this object stays open.
         </span>
       )}
+      {target.plural === 'clusters' && <CNPGOperatorBanner namespaces={[target.namespace]} className="mt-1 w-full" />}
     </div>
   )
 

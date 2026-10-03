@@ -1,11 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useId } from 'react'
-import {
-  AlertTriangle,
-  ExternalLink,
-  Loader2,
-  RefreshCw,
-  X,
-} from 'lucide-react'
+import { Loader2, RefreshCw, X } from 'lucide-react'
 import { clsx } from 'clsx'
 
 import type {
@@ -16,11 +10,18 @@ import type {
 } from '../../types/core'
 import { DialogPortal } from '../ui/DialogPortal'
 import { Badge } from '../ui/Badge'
+import {
+  canConfirmGitOpsWrite,
+  type GitOpsWrite,
+  type GitOpsWriteGuard,
+} from '../../utils/gitops-write-guard'
+import { GitOpsWriteWarning } from './GitOpsWriteWarning'
 
-export interface ManagedImageSource {
-  type: 'GitOps' | 'Helm'
-  label: string
-  onOpen?: () => void
+/** The GitOps write guard for the object whose Pod template the dialog
+ *  writes, evaluated by the host for {@link SET_IMAGE_WRITES}. */
+export interface SetImageOwnership {
+  guard: GitOpsWriteGuard
+  onOpenOwner?: () => void
 }
 
 export interface SetImageDialogProps {
@@ -28,7 +29,8 @@ export interface SetImageDialogProps {
   workloadLabel: string
   workloadName: string
   workloadResource: string
-  managedSources?: ManagedImageSource[]
+  /** Undefined while the host can't verify ownership; the dialog then blocks. */
+  ownership?: SetImageOwnership
   pending?: boolean
   onClose: () => void
   onLoad: () => Promise<WorkloadImageInventory>
@@ -83,31 +85,34 @@ export function reconcileRefreshedImageDrafts(
   return { drafts: nextDrafts, changedCurrentKeys }
 }
 
+// Which containers change isn't known until the user edits, so the guard
+// covers every container image (an approximate list path).
+export const SET_IMAGE_WRITES: GitOpsWrite[] = [
+  {
+    scope: 'spec',
+    paths: [
+      'spec.template.spec.containers[*].image',
+      'spec.template.spec.initContainers[*].image',
+    ],
+    description: 'Container images',
+  },
+]
+
 export function canSubmitImageUpdates({
   updateCount,
   hasEmptyImage,
-  managed,
-  ownershipResolved,
-  acknowledged,
+  ownershipConfirmable,
   busy,
   loadFailed = false,
 }: {
   updateCount: number
   hasEmptyImage: boolean
-  managed: boolean
-  ownershipResolved: boolean
-  acknowledged: boolean
+  /** Ownership resolved and, when it's managed, acknowledged. */
+  ownershipConfirmable: boolean
   busy: boolean
   loadFailed?: boolean
 }): boolean {
-  return (
-    updateCount > 0 &&
-    !hasEmptyImage &&
-    ownershipResolved &&
-    (!managed || acknowledged) &&
-    !busy &&
-    !loadFailed
-  )
+  return updateCount > 0 && !hasEmptyImage && ownershipConfirmable && !busy && !loadFailed
 }
 
 export function describeImageUpdateBehavior(
@@ -140,7 +145,7 @@ export function SetImageDialog({
   workloadLabel,
   workloadName,
   workloadResource,
-  managedSources,
+  ownership,
   pending = false,
   onClose,
   onLoad,
@@ -229,13 +234,12 @@ export function SetImageDialog({
       (container) => !(drafts[containerKey(container)] ?? '').trim(),
     ) ?? false
   const busy = pending || submitting
-  const ownershipResolved = managedSources !== undefined
+  const ownershipResolved = ownership !== undefined
+  const guard = ownership?.guard
   const canSubmit = canSubmitImageUpdates({
     updateCount: updates.length,
     hasEmptyImage,
-    managed: (managedSources?.length ?? 0) > 0,
-    ownershipResolved,
-    acknowledged,
+    ownershipConfirmable: canConfirmGitOpsWrite(guard, acknowledged),
     busy,
     loadFailed: Boolean(loadError),
   })
@@ -378,57 +382,14 @@ export function SetImageDialog({
               {describeImageUpdateBehavior(inventory.behavior)}
             </div>
 
-            {managedSources && managedSources.length > 0 && (
-              <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-3">
-                <div className="flex items-start gap-2">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium text-amber-800 dark:text-amber-300">
-                      The declared source may overwrite this live change
-                    </p>
-                    <p className="mt-1 text-xs text-theme-text-secondary">
-                      Managed by{' '}
-                      {managedSources
-                        .map((source) => `${source.type} ${source.label}`)
-                        .join(' and ')}
-                      . Update the declared source for a durable change; use
-                      this action only as a break-glass operation.
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {managedSources
-                        .filter((source) => source.onOpen)
-                        .map((source) => (
-                          <button
-                            key={`${source.type}-${source.label}`}
-                            type="button"
-                            onClick={source.onOpen}
-                            className="inline-flex items-center gap-1 text-xs font-medium text-skyhook-600 hover:underline dark:text-skyhook-400"
-                          >
-                            {source.type === 'GitOps'
-                              ? 'View GitOps owner'
-                              : 'View Helm release'}
-                            <ExternalLink className="h-3 w-3" />
-                          </button>
-                        ))}
-                    </div>
-                    <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs text-theme-text-primary">
-                      <input
-                        type="checkbox"
-                        checked={acknowledged}
-                        onChange={(event) =>
-                          setAcknowledged(event.target.checked)
-                        }
-                        disabled={busy}
-                        className="mt-0.5 h-3.5 w-3.5 accent-skyhook-500"
-                      />
-                      <span>
-                        I understand the declared source may overwrite this live
-                        change.
-                      </span>
-                    </label>
-                  </div>
-                </div>
-              </div>
+            {guard && (
+              <GitOpsWriteWarning
+                guard={guard}
+                acknowledged={acknowledged}
+                onAcknowledgedChange={setAcknowledged}
+                onOpenOwner={ownership?.onOpenOwner}
+                disabled={busy}
+              />
             )}
 
             <ContainerImageGroup

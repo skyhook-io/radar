@@ -68,6 +68,9 @@ type CNPGOperatorResponse struct {
 	Coverage   map[string]CNPGWorkspaceCoverage `json:"coverage"`
 	Components []CNPGOperatorComponent          `json:"components"`
 	Config     []CNPGOperatorConfigRef          `json:"config"`
+	// Diagnosis is one entry per operator Deployment: leader Lease, watched
+	// namespaces, webhook reachability, reconcile counters and recent events.
+	Diagnosis []CNPGOperatorDiagnosis `json:"diagnosis"`
 }
 
 // handleCNPGOperator serves GET /api/cnpg/operator: the operator and plugin
@@ -145,6 +148,7 @@ func (s *Server) handleCNPGOperator(w http.ResponseWriter, r *http.Request) {
 	resp.Components = append(resp.Components, plugins...)
 
 	resp.Config = s.cnpgOperatorConfig(r, cache, operators)
+	resp.Diagnosis = s.cnpgOperatorDiagnoses(r, operators)
 	s.writeJSON(w, resp)
 }
 

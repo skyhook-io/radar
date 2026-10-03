@@ -54,6 +54,10 @@ export interface CreateResourceDialogProps {
   previewError?: string | null
   schemaLoader?: YamlSchemaLoader
   onCreated?: (result: ApplyResult) => void
+  /** Start in strict create mode (e.g. a prefilled manifest that must not update an existing object). */
+  initialMode?: 'apply' | 'create'
+  /** Stay in `initialMode` with the Apply/Create choice and Force hidden, even after a partial create (e.g. a new object that must only be created). */
+  lockMode?: boolean
 }
 
 export function CreateResourceDialog({
@@ -68,10 +72,12 @@ export function CreateResourceDialog({
   previewError,
   schemaLoader,
   onCreated,
+  initialMode = 'apply',
+  lockMode = false,
 }: CreateResourceDialogProps) {
   const titleId = useId()
   const [yaml, setYaml] = useState(initialYaml)
-  const [mode, setMode] = useState<'apply' | 'create'>('apply')
+  const [mode, setMode] = useState<'apply' | 'create'>(initialMode)
   const [dryRun, setDryRun] = useState(false)
   const [force, setForce] = useState(false)
   const [yamlValid, setYamlValid] = useState(true)
@@ -124,7 +130,7 @@ export function CreateResourceDialog({
   useEffect(() => {
     if (!open) return
     setYaml(initialYaml)
-    setMode('apply')
+    setMode(initialMode)
     setDryRun(false)
     setForce(false)
     setYamlValid(true)
@@ -329,6 +335,14 @@ export function CreateResourceDialog({
         Array.isArray(caught.appliedResults)
           ? caught.appliedResults
           : []
+      if (preview.mode === 'create' && appliedResults.length > 0 && lockMode) {
+        setYaml(preview.yaml)
+        setPreview(null)
+        setError(
+          `${message} Some documents were created before it stopped. This dialog only creates, so remove the created ones from the manifest before creating the rest.`,
+        )
+        return
+      }
       if (preview.mode === 'create' && appliedResults.length > 0) {
         setYaml(preview.yaml)
         setMode('apply')
@@ -357,9 +371,10 @@ export function CreateResourceDialog({
         }
       }
     }
-  }, [preview, onApply, onPreview, finishApply])
+  }, [preview, onApply, onPreview, finishApply, lockMode])
 
   const dialogTitle = title || 'Create Resource'
+  const showModeControls = !lockMode
   const submitLabel = onPreview ? 'Review' : mode === 'create' ? 'Create' : 'Apply'
 
   return (
@@ -482,33 +497,35 @@ export function CreateResourceDialog({
 
           <div className="flex shrink-0 items-center justify-between border-t border-theme-border px-5 py-3">
             <div className="flex items-center gap-3">
-              <Tooltip
-                content="Apply: create or update (idempotent). Create: fail if exists."
-                position="bottom"
-              >
-                <div
-                  className="flex items-center rounded-md border border-theme-border bg-theme-base p-0.5"
-                  role="radiogroup"
-                  aria-label="Apply mode"
+              {showModeControls && (
+                <Tooltip
+                  content="Apply: create or update (idempotent). Create: fail if exists."
+                  position="bottom"
                 >
-                  {(['apply', 'create'] as const).map((option) => (
-                    <button
-                      type="button"
-                      key={option}
-                      onClick={() => setMode(option)}
-                      role="radio"
-                      aria-checked={mode === option}
-                      className={`rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors ${
-                        mode === option
-                          ? 'bg-theme-elevated text-theme-text-primary shadow-theme-sm'
-                          : 'text-theme-text-tertiary hover:text-theme-text-secondary'
-                      }`}
-                    >
-                      {option}
-                    </button>
-                  ))}
-                </div>
-              </Tooltip>
+                  <div
+                    className="flex items-center rounded-md border border-theme-border bg-theme-base p-0.5"
+                    role="radiogroup"
+                    aria-label="Apply mode"
+                  >
+                    {(['apply', 'create'] as const).map((option) => (
+                      <button
+                        type="button"
+                        key={option}
+                        onClick={() => setMode(option)}
+                        role="radio"
+                        aria-checked={mode === option}
+                        className={`rounded px-2.5 py-1 text-xs font-medium capitalize transition-colors ${
+                          mode === option
+                            ? 'bg-theme-elevated text-theme-text-primary shadow-theme-sm'
+                            : 'text-theme-text-tertiary hover:text-theme-text-secondary'
+                        }`}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                </Tooltip>
+              )}
 
               {!onPreview && (
                 <Tooltip
@@ -527,23 +544,25 @@ export function CreateResourceDialog({
                 </Tooltip>
               )}
 
-              <Tooltip
-                content="Override field ownership conflicts. An active controller may reconcile those fields back."
-                position="bottom"
-              >
-                <label
-                  className={`flex items-center gap-1.5 text-xs ${mode === 'apply' ? 'cursor-pointer text-theme-text-secondary' : 'cursor-not-allowed text-theme-text-tertiary'}`}
+              {showModeControls && (
+                <Tooltip
+                  content="Override field ownership conflicts. An active controller may reconcile those fields back."
+                  position="bottom"
                 >
-                  <input
-                    type="checkbox"
-                    checked={mode === 'apply' && force}
-                    disabled={mode !== 'apply'}
-                    onChange={(event) => setForce(event.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-theme-border bg-theme-base"
-                  />
-                  Force
-                </label>
-              </Tooltip>
+                  <label
+                    className={`flex items-center gap-1.5 text-xs ${mode === 'apply' ? 'cursor-pointer text-theme-text-secondary' : 'cursor-not-allowed text-theme-text-tertiary'}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={mode === 'apply' && force}
+                      disabled={mode !== 'apply'}
+                      onChange={(event) => setForce(event.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-theme-border bg-theme-base"
+                    />
+                    Force
+                  </label>
+                </Tooltip>
+              )}
             </div>
 
             <div className="flex items-center gap-2">

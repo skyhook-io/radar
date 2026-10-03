@@ -127,6 +127,8 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 
 // Convert API resource name back to topology node ID prefix
 // Extended MainView type that includes traffic and cost
+const TOPOLOGY_GROUPINGS: readonly GroupingMode[] = ['none', 'namespace', 'app', 'label']
+
 type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
 
 // Extract view from URL path
@@ -444,8 +446,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     return {
       namespaces,
       topologyMode: (searchParams.get('mode') as TopologyMode) || 'resources',
-      // Default to namespace grouping when viewing all namespaces
-      grouping: (searchParams.get('group') as GroupingMode) || (namespaces.length === 0 ? 'namespace' : 'none'),
+      // Default to namespace grouping when viewing all namespaces. Off the
+      // topology view `group` can be an API group (an Issues subject link).
+      grouping: (TOPOLOGY_GROUPINGS.find((g) => g === searchParams.get('group')) ?? (namespaces.length === 0 ? 'namespace' : 'none')) as GroupingMode,
     }
   }
 
@@ -1424,6 +1427,23 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       { onSuccess: () => setNamespaces([]) },
     )
   }, [namespaceScope?.cacheScoped, namespaces.length, setActiveNamespace])
+  const issuesShowNamespace = useMemo(() => {
+    if (namespaceScope?.cacheScoped) {
+      if (!namespaceScope.namespaceRescope) return undefined
+      return {
+        mode: 'switch' as const,
+        show: (ns: string) => { setNamespaces([ns]); setActiveNamespace.mutate({ namespaces: [ns] }) },
+      }
+    }
+    return {
+      mode: 'add' as const,
+      show: (ns: string) => {
+        const next = namespaces.includes(ns) ? namespaces : [...namespaces, ns]
+        setNamespaces(next)
+        setActiveNamespace.mutate({ namespaces: next })
+      },
+    }
+  }, [namespaceScope?.cacheScoped, namespaceScope?.namespaceRescope, namespaces, setActiveNamespace])
   const initialBookmarkReconciledRef = useRef(false)
   const scopeActives = useMemo(() => namespaceScope?.actives ?? [], [namespaceScope?.actives])
   const namespaceScopeKey = useMemo(() => namespaceScope ? [...scopeActives].sort().join(',') : null, [namespaceScope, scopeActives])
@@ -1526,7 +1546,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       }
     } else {
       params.delete('mode')
-      params.delete('group')
+      // On Issues, `group` is the narrowed subject's API group, not a grouping.
+      if (mainView !== 'issues' || !params.has('kind')) params.delete('group')
     }
 
     // Only update if params actually changed vs current URL
@@ -2363,6 +2384,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <IssuesPane
             namespaces={namespaces}
             onNavigateToResource={navigateFromIssue}
+            showNamespace={issuesShowNamespace}
           />
         )}
 

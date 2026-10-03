@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { CNPGBackupSummary, CNPGScheduledBackupSummary } from './CNPGBackupSummary'
 import { CNPGObjectStoreSummary } from './CNPGObjectStoreSummary'
-import { CNPGDatabaseSummary } from './CNPGDeclarativeSummary'
+import { CNPGDatabaseSummary, CNPGPublicationSummary, CNPGSubscriptionSummary } from './CNPGDeclarativeSummary'
 import { CNPGPoolerSummary } from './CNPGPoolerSummary'
 import { CNPGImageCatalogSummary } from './CNPGImageCatalogSummary'
 import { CNPG_WORKSPACE_KEYS, type CNPGWorkspaceKey, type CNPGWorkspaceResponse } from './workspace'
@@ -99,6 +99,26 @@ describe('CNPGScheduledBackupSummary', () => {
     expect(t).toContain('run-1')
     expect(t).toContain('Completed')
     expect(t).toContain('Backups older than 7 days are not listed')
+  })
+
+  it("shows the server's reading and next runs only for the schedule it read", () => {
+    const sched = { apiVersion: PG, kind: 'ScheduledBackup', metadata: { name: 'nightly', namespace: 'pg' }, spec: { cluster: { name: 'main' }, schedule: '0 30 2 * * *' } }
+    const preview = {
+      schedule: '0 30 2 * * *',
+      valid: true,
+      description: 'every day at 02:30:00 UTC',
+      nextRuns: ['2026-10-01T02:30:00Z', '2026-10-02T02:30:00Z', '2026-10-03T02:30:00Z'],
+      basis: 'lastCheckTime' as const,
+    }
+    const t = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={preview} />))
+    expect(t).toContain('every day at 02:30:00 UTC')
+    expect(t).toContain('2026-10-01 02:30:00 UTC')
+    expect(t).toContain("operator's last check")
+    const stale = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={{ ...preview, schedule: '0 0 0 * * *' }} />))
+    expect(stale).not.toContain('every day at')
+    const due = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={{ ...preview, runsImmediately: true }} />))
+    expect(due).toContain('now (2026-10-01 02:30:00 UTC)')
+    expect(due).toContain('runs one backup as soon as it sees this schedule')
   })
 
   it('says when Backups are not readable instead of listing none', () => {
@@ -200,6 +220,40 @@ describe('CNPGPoolerSummary', () => {
     expect(t).toContain('Not measured')
     expect(t).toContain('main-rw')
   })
+
+  it('shows Deployment readiness, limits with PgBouncer defaults, observed pause and the Service path when live data is provided', () => {
+    const pooler = {
+      apiVersion: PG,
+      kind: 'Pooler',
+      metadata: { name: 'main-rw', namespace: 'pg' },
+      spec: { cluster: { name: 'main' }, type: 'rw', instances: 2, pgbouncer: { paused: true, parameters: { max_client_conn: '200' } } },
+      status: { instances: 2 },
+    }
+    const t = text(
+      renderToString(
+        <CNPGPoolerSummary
+          resource={pooler}
+          workspace={ws({})}
+          onNavigate={nav}
+          live={{
+            deployment: { name: 'main-rw', state: 'ok', replicas: 2, readyReplicas: 1 },
+            service: { name: 'main-rw', state: 'ok', type: 'ClusterIP', port: 5432 },
+            pressure: { state: 'ok', pods: [{ pod: 'a', state: 'ok', pools: [{ database: 'app', user: 'app', clActive: 4, clWaiting: 2 }] }] },
+            observed: { state: 'ok', pods: [{ pod: 'a', state: 'ok', paused: true }, { pod: 'b', state: 'ok', paused: false }] },
+          }}
+        />,
+      ),
+    )
+    expect(t).toContain('from Deployment main-rw')
+    expect(t).toContain('Requested: Paused')
+    expect(t).toContain('Pause state')
+    expect(t).toContain('Observed: Paused on 1 of 2 PgBouncers')
+    expect(t).toContain('PgBouncer uses 20')
+    expect(t).toContain('200')
+    expect(t).toContain('main-rw')
+    expect(t).toContain('app/app')
+    expect(t).not.toContain('Not measured')
+  })
 })
 
 describe('CNPGImageCatalogSummary', () => {
@@ -232,5 +286,35 @@ describe('CNPGImageCatalogSummary', () => {
     const catalog = { apiVersion: PG, kind: 'ClusterImageCatalog', metadata: { name: 'pg' }, spec: {} }
     const t = text(renderToString(<CNPGImageCatalogSummary resource={catalog} workspace={ws({}, { coverage: { clusters: { state: 'denied' } } })} />))
     expect(t).toContain('No access to Clusters')
+  })
+})
+
+describe('logical replication summaries', () => {
+  const src = { apiVersion: PG, kind: 'Cluster', metadata: { name: 'src', namespace: 'pg' }, spec: { instances: 2 } }
+  const dst = { apiVersion: PG, kind: 'Cluster', metadata: { name: 'dst', namespace: 'pg' }, spec: { instances: 1, externalClusters: [{ name: 'src', connectionParameters: { host: 'src-rw', dbname: 'app' } }] } }
+  const pub = { apiVersion: PG, kind: 'Publication', metadata: { name: 'orders-pub', namespace: 'pg' }, spec: { cluster: { name: 'src' }, name: 'orders_pub', dbname: 'app', target: { allTables: true } }, status: { applied: true } }
+  const sub = { apiVersion: PG, kind: 'Subscription', metadata: { name: 'orders-sub', namespace: 'pg' }, spec: { cluster: { name: 'dst' }, name: 'orders_sub', dbname: 'app', publicationName: 'orders_pub', externalClusterName: 'src' }, status: { applied: true } }
+  const w = ws({ clusters: [src, dst], publications: [pub], subscriptions: [sub] })
+
+  it('shows the subscription path with the slot unread and the failover verdict', () => {
+    const t = text(renderToString(<CNPGSubscriptionSummary resource={sub} workspace={w} onNavigate={nav} />))
+    expect(t).toContain('Replication path')
+    expect(t).toContain('orders_pub')
+    expect(t).toContain('Slot orders_sub: not read')
+    expect(t).toContain('Lost on failover')
+    expect(t).toContain('no pg_stat_subscription query')
+  })
+
+  it('never says no Publication declares it when Publications are unreadable', () => {
+    const denied = ws({ clusters: [src, dst], subscriptions: [sub] }, { coverage: { publications: { state: 'denied' } } })
+    const t = text(renderToString(<CNPGSubscriptionSummary resource={sub} workspace={denied} onNavigate={nav} />))
+    expect(t).toContain('Unknown: No access to Publications in pg')
+    expect(t).not.toContain('No Publication object declares it')
+  })
+
+  it('lists the subscribers of a publication', () => {
+    const t = text(renderToString(<CNPGPublicationSummary resource={pub} workspace={w} onNavigate={nav} />))
+    expect(t).toContain('Subscribers')
+    expect(t).toContain('orders_sub')
   })
 })

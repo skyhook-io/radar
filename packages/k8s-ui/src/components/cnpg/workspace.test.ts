@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildCNPGFleet, type CNPGWorkspaceResponse, type CNPGWorkspaceKey, CNPG_WORKSPACE_KEYS } from './workspace'
+import { buildCNPGFleet, cnpgReadyInstances, type CNPGWorkspaceResponse, type CNPGWorkspaceKey, CNPG_WORKSPACE_KEYS } from './workspace'
 
 const G = 'postgresql.cnpg.io/v1'
 
@@ -39,6 +39,7 @@ function resp(objects: Partial<Record<CNPGWorkspaceKey, any[]>>, over: Partial<C
     issues: over.issues ?? [],
     audit: over.audit ?? [],
     backupsOmitted: 0,
+    ...(over.scheduleReadings ? { scheduleReadings: over.scheduleReadings } : {}),
   }
 }
 
@@ -52,7 +53,7 @@ describe('buildCNPGFleet', () => {
     )
     const row = fleet.rows[0]
     expect(row.replication.tone).toBe('unknown')
-    expect(row.replication.text).toContain('2/2 replicas ready')
+    expect(row.replication.text).toContain('2/2 Pods ready')
     expect(row.pods[0].role).toBe('primary')
   })
 
@@ -79,6 +80,22 @@ describe('buildCNPGFleet', () => {
     expect(fleet.attentionCount).toBe(1)
     expect(fleet.categoryCounts.declarations).toBe(1)
     expect(fleet.rows[0].name).toBe('pg-b')
+  })
+
+  it('orders rows by worst problem, then problem count, then namespace/name', () => {
+    const issue = (id: string, severity: 'critical' | 'warning', name: string) => ({
+      id, severity, kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name, reason: 'CNPGClusterUnhealthy', message: id,
+    })
+    const fleet = buildCNPGFleet(
+      resp(
+        { clusters: ['pg-a', 'pg-b', 'pg-c', 'pg-d', 'pg-e'].map((n) => cluster(n, 'db')) },
+        {
+          issues: [issue('w1', 'warning', 'pg-a'), issue('c1', 'critical', 'pg-b'), issue('w2', 'warning', 'pg-c'), issue('w3', 'warning', 'pg-c')],
+          audit: [{ checkId: 'cnpgNoDeclarativeBackup', severity: 'warning', kind: 'Cluster', namespace: 'db', name: 'pg-e', message: 'no ScheduledBackup' }],
+        },
+      ),
+    )
+    expect(fleet.rows.map((r) => r.name)).toEqual(['pg-b', 'pg-c', 'pg-a', 'pg-e', 'pg-d'])
   })
 
   it('treats the no-schedule audit finding as posture, not attention, and words it narrowly', () => {
@@ -151,6 +168,30 @@ describe('buildCNPGFleet', () => {
     expect(r.protection.restoreValidation.tone).toBe('unknown')
   })
 
+  it('reads a recorded validation note on the restored cluster, still never healthy', () => {
+    const plugin = { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }] }
+    const src = cluster('pg-a', 'db', { metadata: { uid: 'uid-a' }, spec: plugin })
+    const restoredSpec = {
+      bootstrap: { recovery: { source: 'origin' } },
+      externalClusters: [{ name: 'origin', plugin: { name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store', serverName: 'pg-a' } } }],
+    }
+    const note = (uid: string) =>
+      JSON.stringify({ version: 1, recordedAt: '2026-09-29T10:00:00Z', recordedBy: 'alice', checked: 'row counts on orders', source: { namespace: 'db', name: 'pg-a', uid, verified: true } })
+    const noted = cluster('pg-a-restore', 'db', { metadata: { annotations: { 'radar.skyhook.io/restore-validation': note('uid-a') } }, spec: restoredSpec })
+    const fleet = buildCNPGFleet(resp({ clusters: [src, noted] }))
+    const fact = fleet.rows.find((r) => r.name === 'pg-a')!.protection.restoreValidation
+    expect(fact.text).toBe('Validation recorded')
+    expect(fact.tone).toBe('neutral')
+    expect(fact.at).toBe('2026-09-29T10:00:00Z')
+    expect(fact.source).toContain('by alice on pg-a-restore')
+
+    const otherUID = cluster('pg-a-restore', 'db', { metadata: { annotations: { 'radar.skyhook.io/restore-validation': note('uid-previous-incarnation') } }, spec: restoredSpec })
+    expect(buildCNPGFleet(resp({ clusters: [src, otherUID] })).rows.find((r) => r.name === 'pg-a')!.protection.restoreValidation.text).toBe('Restored into pg-a-restore')
+
+    const malformed = cluster('pg-a-restore', 'db', { metadata: { annotations: { 'radar.skyhook.io/restore-validation': '{not json' } }, spec: restoredSpec })
+    expect(buildCNPGFleet(resp({ clusters: [src, malformed] })).rows.find((r) => r.name === 'pg-a')!.protection.restoreValidation.text).toBe('Restored into pg-a-restore')
+  })
+
   it('ends the recovery window at WAL archiving, not at the last base backup', () => {
     const plugin = { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }] }
     const store = {
@@ -163,6 +204,14 @@ describe('buildCNPGFleet', () => {
     expect(w).not.toHaveProperty('to')
     const failing = cluster('pg-a', 'db', { spec: plugin, status: { conditions: [{ type: 'ContinuousArchiving', status: 'False' }] } })
     expect(buildCNPGFleet(resp({ clusters: [failing], objectStores: [store] })).rows[0].protection.recoveryWindow.tone).toBe('degraded')
+  })
+
+  it('shows when archiving started working, only when that was recent and after creation', () => {
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString()
+    const resumed = cluster('pg-a', 'db', { metadata: { creationTimestamp: '2026-01-01T00:00:00Z' }, status: { conditions: [{ type: 'ContinuousArchiving', status: 'True', lastTransitionTime: hourAgo }] } })
+    expect(buildCNPGFleet(resp({ clusters: [resumed] })).rows[0].protection.walArchiving).toMatchObject({ text: 'Archiving', at: hourAgo, atMeaning: 'since' })
+    const old = cluster('pg-a', 'db', { metadata: { creationTimestamp: '2026-01-01T00:00:00Z' }, status: { conditions: [{ type: 'ContinuousArchiving', status: 'True', lastTransitionTime: '2026-01-01T00:02:00Z' }] } })
+    expect(buildCNPGFleet(resp({ clusters: [old] })).rows[0].protection.walArchiving.at).toBeUndefined()
   })
 
   it('reports WAL archiving from the condition and unknown when absent', () => {
@@ -281,5 +330,60 @@ describe('buildCNPGFleet', () => {
     const p = buildCNPGFleet(resp({ clusters: [c] }, { coverage: { objectStores: { state: 'syncing' } } })).rows[0].protection
     expect(p.lastSuccessfulBackup.text).toBe('Loading…')
     expect(p.recoveryWindow.text).toBe('Loading…')
+  })
+
+  it('shows the Pods’ ready count and raises an availability problem when status claims more', () => {
+    const fleet = buildCNPGFleet(
+      resp({
+        clusters: [cluster('pg-a', 'db')],
+        pods: [pod('pg-a-1', 'db', 'pg-a', 'primary', false), pod('pg-a-2', 'db', 'pg-a', 'replica'), pod('pg-a-3', 'db', 'pg-a', 'replica', false)],
+      }),
+    )
+    const row = fleet.rows[0]
+    expect(row.podReadiness).toEqual({ ready: 1, total: 3 })
+    expect(row.readinessContradicted).toBe(true)
+    expect(cnpgReadyInstances(row)).toMatchObject({ text: '1/3', tone: 'degraded' })
+    expect(cnpgReadyInstances(row).note).toContain('CNPG status reports 3 ready')
+    const problem = row.problems[0]
+    expect(problem.severity).toBe('critical')
+    expect(problem.category).toBe('availability')
+    expect(problem.title).toBe('2 of 3 instance Pods not ready, including the primary')
+    expect(row.attention).toBe(true)
+    expect(fleet.attentionCount).toBe(1)
+  })
+
+  it('agrees with status when the Pods do, and never judges unreadable Pods', () => {
+    const agreeing = buildCNPGFleet(
+      resp({
+        clusters: [cluster('pg-a', 'db', { status: { readyInstances: 2 } })],
+        pods: [pod('pg-a-1', 'db', 'pg-a', 'primary'), pod('pg-a-2', 'db', 'pg-a', 'replica'), pod('pg-a-3', 'db', 'pg-a', 'replica', false)],
+      }),
+    ).rows[0]
+    expect(agreeing.readinessContradicted).toBeUndefined()
+    expect(cnpgReadyInstances(agreeing)).toEqual({ text: '2/3' })
+    const denied = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { pods: { state: 'denied' } } })).rows[0]
+    expect(denied.podReadiness).toBeUndefined()
+    expect(denied.problems).toEqual([])
+  })
+
+  it('names both primaries when status and the role label disagree', () => {
+    const row = buildCNPGFleet(
+      resp({
+        clusters: [cluster('pg-a', 'db', { status: { currentPrimary: 'pg-a-2', readyInstances: 1 } })],
+        pods: [pod('pg-a-1', 'db', 'pg-a', 'primary'), pod('pg-a-2', 'db', 'pg-a', 'replica', false)],
+      }),
+    ).rows[0]
+    expect(row.primaryConflict).toEqual({ status: 'pg-a-2', labelled: 'pg-a-1' })
+    expect(row.problems.map((p) => p.title)).toContain('CNPG status names pg-a-2 primary; the Pod labelled primary is pg-a-1')
+  })
+})
+
+describe('schedule fact', () => {
+  it('reads the schedule in words when the server supplied a reading, with the cron as its source', () => {
+    const sched = { metadata: { namespace: 'db', name: 'nightly' }, spec: { cluster: { name: 'pg-a' }, schedule: '0 0 2 * * *' } }
+    const withReading = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')], scheduledBackups: [sched] }, { scheduleReadings: { 'db/nightly': 'every day at 02:00 UTC' } }))
+    expect(withReading.rows[0].protection.schedule).toMatchObject({ text: 'Scheduled · every day at 02:00 UTC', source: 'ScheduledBackup nightly · cron 0 0 2 * * *' })
+    const without = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')], scheduledBackups: [sched] }))
+    expect(without.rows[0].protection.schedule.text).toBe('Scheduled · 0 0 2 * * *')
   })
 })

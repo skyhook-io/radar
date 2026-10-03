@@ -238,12 +238,130 @@ freeze and the terminal phases with it. It also removes the three hand-written
 Backup objects before the operator starts; otherwise the controller would
 attempt them and contaminate the healthy baseline.
 
+## Runtime mode
+
+```bash
+./scripts/cnpg-demo.sh runtime          # on the EXISTING cluster; ~8 min first run on an idle Docker VM, ~20 min on a busy one
+./scripts/cnpg-demo.sh runtime-lag on   # pause WAL replay on one pg-runtime replica
+./scripts/cnpg-demo.sh runtime-lag off  # resume it (on every replica)
+./scripts/cnpg-demo.sh status           # includes a runtime section when present
+./scripts/cnpg-demo.sh runtime-down     # removes pgrt + monitoring only
+```
+
+Everything the frozen matrix cannot show, because it needs a reconciling
+controller **and** working object storage. Fixtures are in `runtime/` — a
+subdirectory, so `up`/`live` never apply them.
+
+| Resource | What it is |
+|---|---|
+| `pgrt/minio` + `ObjectStore/minio-store` | In-cluster S3 (emptyDir); the image creates bucket `cnpg` itself (`MINIO_DEFAULT_BUCKETS`) |
+| `pgrt/pg-runtime` | 3 instances, PG 17, WAL archived by the barman-cloud plugin → `ContinuousArchiving=True` for real |
+| `pgrt/pg-runtime-hourly` | ScheduledBackup, `method: plugin`, `immediate: true` → a Backup the operator actually took |
+| `pgrt/pg-runtime-restore` | 1 instance, `bootstrap.recovery` from `minio-store` / `serverName: pg-runtime` |
+| `pgrt/pg-runtime-pooler-rw` | PgBouncer, transaction mode, 2 pods |
+| `pgrt/pg-load` | pgbench through the Pooler, ~5 tps (`application_name=radar-pgbench`) |
+| `pgrt/pg-lock-holder` / `pg-lock-waiter` | `idle in transaction` holding a row lock on `radar_lock_demo`, and an `UPDATE` blocked on it |
+| `monitoring/prometheus-server` | Scrapes instances `:9187` (job `cnpg-instances`) and poolers `:9127` (job `cnpg-poolers`), 15s, keeping `namespace`, `pod`, `cluster` (+ `pooler`); and each kubelet through the apiserver node proxy (job `kubelet`, only `kubelet_volume_stats_*`) |
+
+**Why the operator must be live.** Every runtime state is produced by the
+controller: it injects the plugin sidecar at pod creation, runs the immediate
+backup, bootstraps the restore, and reconciles the Pooler. `runtime` therefore
+thaws a frozen operator the same way `live` does (frozen-only Backup fixtures
+deleted first). The `pg` terminal phases do not survive that — `refreeze`
+restores them, after which pgrt keeps archiving (the sidecar talks to the
+instance manager, not the operator) but gets no scheduled backups or failover.
+
+**How Radar finds the Prometheus.** `monitoring/prometheus-server` is an exact
+entry in `WellKnownLocations` (`pkg/prom/discovery.go`), so discovery is a
+targeted Service GET, not the scored dynamic scan; off-cluster Radar
+port-forwards to it. Its only port is 9090 so the "first port" rule is
+unambiguous. The frozen `pg` instances are scraped too.
+
+**Volume usage is honestly absent here.** The `kubelet` job reaches
+`/api/v1/nodes/<node>/proxy/metrics` with the Prometheus ServiceAccount (it
+needs `get nodes/proxy`, granted in `50-prometheus.yaml`), so no kubelet port or
+certificate is involved. But kind's default `standard` class (local-path)
+provisions **hostPath** volumes, and kubelet publishes no volume stats for
+those: every CNPG claim in this demo has no `kubelet_volume_stats_*` series, and
+the Storage & WAL view and the fleet's Disk column say "no usage metrics"
+rather than 0. That is the state to verify here. A claim annotated
+`volumeType: local` gets a `local` PV, which kubelet does measure — but as the
+node's whole filesystem (hundreds of GB), not the claim's size; the view says
+so when the two disagree. Measured-and-full states are covered by the unit
+tests (`internal/server/cnpg_storage_test.go`, `workspace-disk.test.ts`), not
+this fixture. To check the scrape itself:
+
+```bash
+kubectl --context kind-radar-cnpg-demo -n monitoring exec deploy/prometheus-server -- wget -qO- 'http://localhost:9090/api/v1/query?query=up{job="kubelet"}'
+```
+
+### Constraints, all of which fail quietly
+
+- **Order: archiving → backup → restore.** The ScheduledBackup is applied only
+  after `ContinuousArchiving=True`: a backup started earlier is refused
+  (`walArchivingFailing`) and `immediate: true` spends its one immediate run on
+  that. The restore is applied only after a Backup is `completed` — before that
+  the store has WAL and no base backup.
+- **A new pg-runtime needs an empty bucket.** It checks its WAL destination is
+  empty before archiving, and against a previous pg-runtime's archive it never
+  becomes Ready. `runtime` restarts MinIO (emptyDir → empty bucket) whenever
+  pg-runtime does not yet exist; an existing cluster keeps its bucket.
+- **Not `minio/minio`.** MinIO stopped publishing images; the Docker Hub and
+  quay.io tags (including the one `velero-demo` pins) no longer resolve. The
+  fixture pins `bitnamilegacy/minio`.
+- **The restore does not archive.** Archiving it under `serverName: pg-runtime`
+  would write into the archive it restores from.
+- **Pooler naming** — same rule as above: not `pg-runtime-rw`.
+- **The lock holder is a psql reading a pipe**, which leaves the backend `idle in
+  transaction` rather than `active` (a `pg_sleep` would read as active). It
+  heartbeats `SELECT 1` every 5 min so a failover is noticed; `state_change`
+  resets then, `xact_start` does not.
+- **It is heavy for kind.** Runtime adds 4 Postgres pods (each with a plugin
+  sidecar), MinIO and Prometheus to the 8 frozen-fixture instances. On a shared
+  Docker VM that is already busy (other kind clusters, ~8 GB), liveness probes
+  on `:8000` time out and restart instances, the kube-controller-manager loses
+  leader election, and the CNPG operator crash-loops on
+  `connection refused` to the API server — so every CNPG write fails at the
+  webhook. `rt_apply` retries through short outages. It cannot fix a VM that
+  is oversubscribed: scale `pg-load` to 0, or delete `pg-runtime-restore`
+  after verifying it (`runtime` re-creates it from the completed backup).
+- **Replay pause is not persisted.** A replica restart (or failover) resumes
+  replay; re-run `runtime-lag on`.
+
+### Verify
+
+```bash
+C="--context kind-radar-cnpg-demo"
+kubectl $C -n pgrt get clusters,backups,poolers
+kubectl $C -n pgrt get cluster pg-runtime -o jsonpath='{.status.conditions[?(@.type=="ContinuousArchiving")].status}'
+kubectl $C -n pgrt exec pg-runtime-1 -c postgres -- psql -U postgres -d app -c \
+  "SELECT application_name, state, wait_event_type, pg_blocking_pids(pid) FROM pg_stat_activity WHERE application_name LIKE 'radar-%'"
+kubectl $C get --raw /api/v1/namespaces/pgrt/pods/https:pg-runtime-1:8000/proxy/pg/status   # replicationInfo
+kubectl $C -n monitoring port-forward svc/prometheus-server 9090 &
+curl -s 'localhost:9090/api/v1/query?query=up' | python3 -m json.tool
+```
+
+(`pg-runtime-1` is the primary on a fresh run; after a switchover use
+`.status.currentPrimary`.)
+
 ## Notes
 
 - `CNPG_VERSION` is pinned to 1.27.0. Radar matches CNPG's phases on **equality**
   against full English sentences from `api/v1/cluster_types.go`, so bumping the
   version can silently move a cluster into the unrecognised-phase bucket. Bump
   deliberately, then re-check the badges.
+- **DatabaseRole (CNPG 1.30+).** `11-databaseroles.yaml` is applied only when
+  `databaseroles.postgresql.cnpg.io` is served, so the pinned 1.27 demo skips
+  it. To see it, bring up a **separate** cluster on 1.30:
+  `CLUSTER_NAME=radar-cnpg-130 CNPG_VERSION=1.30.0 ./scripts/cnpg-demo.sh up`.
+  Do not re-run `up` with a newer `CNPG_VERSION` over an existing demo: the
+  operator upgrade rolls every instance and the phase strings may move (see
+  the first note). The fixture gives one applied role (`demo-reader`) and one
+  the operator refuses honestly (`demo-broken-role`: its password Secret does
+  not exist). The DatabaseRole controller runs in the instance manager, so both
+  settle even with the operator frozen. The manifest URL follows
+  `CNPG_VERSION`'s `release-<major.minor>` branch. This path is not exercised
+  by CI; DatabaseRole rendering is covered by unit tests.
 - `CLUSTER_NAME=foo ./scripts/cnpg-demo.sh up` uses a different cluster.
 - `up` is idempotent and re-runnable; it thaws a frozen operator first so
   fixture edits can be applied, then re-freezes.

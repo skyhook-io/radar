@@ -1,6 +1,9 @@
 import type { ReactNode } from 'react'
 import { getCNPGDeclarativeMessage, getCNPGReclaimPolicy } from '../resources/resource-utils-cnpg'
-import type { CNPGWorkspaceResponse } from './workspace'
+import type { CNPGFact, CNPGWorkspaceResponse } from './workspace'
+import { cnpgLogicalPaths, type CNPGLogicalPath } from './logicalReplication'
+import { CNPGLogicalPathView } from './CNPGLogicalPath'
+import { cnpgDatabaseRoleFacts } from './databaseRole'
 import { FactGrid, FactRow, FactValue, RefLink, SummaryHeading, toneTextClass, type CNPGNavigate } from './primitives'
 import { ClusterLink, NotReported, ObjectProblems, SummaryShell } from './CNPGSharedSummary'
 import {
@@ -191,7 +194,34 @@ function publicationTargets(resource: any): ReactNode {
   )
 }
 
-export function CNPGPublicationSummary({ resource, workspace, onNavigate }: SummaryProps) {
+function workspacePaths(workspace: CNPGWorkspaceResponse | null | undefined, subscriptions: any[]): CNPGLogicalPath[] {
+  return cnpgLogicalPaths(subscriptions, clustersIn(workspace), workspaceList(workspace, 'publications'), workspaceList(workspace, 'poolers'), (ns) =>
+    relationUnavailable(workspace, 'publications', ns, 'Publications'),
+  )
+}
+
+export interface CNPGLogicalPathReading {
+  path: CNPGLogicalPath
+  /** The publisher primary's report of the slot; absent when not read. */
+  slot?: CNPGFact
+  notice?: ReactNode
+}
+
+export function CNPGPublicationSummary({
+  resource,
+  workspace,
+  onNavigate,
+  subscribers,
+}: SummaryProps & {
+  /** Subscriptions reading this publication, with their slots; derived from the workspace when omitted. */
+  subscribers?: CNPGLogicalPathReading[]
+}) {
+  const readings: CNPGLogicalPathReading[] =
+    subscribers ??
+    workspacePaths(workspace, workspaceList(workspace, 'subscriptions'))
+      .filter((p) => p.publication.object?.namespace === resource?.metadata?.namespace && p.publication.object?.name === resource?.metadata?.name)
+      .map((path) => ({ path }))
+  const subsUnavailable = relationUnavailable(workspace, 'subscriptions', resource?.metadata?.namespace ?? '', 'Subscriptions')
   return (
     <SummaryShell>
       <ObjectProblems issues={workspace?.issues} subject={refOf(resource, 'Publication')} onNavigate={onNavigate} />
@@ -215,11 +245,105 @@ export function CNPGPublicationSummary({ resource, workspace, onNavigate }: Summ
       </FactGrid>
 
       <Reconciled resource={resource} />
+
+      <SummaryHeading hint="Subscription objects Radar can see">Subscribers</SummaryHeading>
+      {readings.length === 0 ? (
+        <div className="text-sm text-theme-text-tertiary">
+          {subsUnavailable ?? 'No visible Subscription object reads this publication. Subscribers outside Radar\'s view, or created in SQL, are not listed.'}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {readings.map((r) => (
+            <CNPGLogicalPathView key={`${r.path.subscription.namespace}/${r.path.subscription.name}`} path={r.path} slot={r.slot} notice={r.notice} onNavigate={onNavigate} compact />
+          ))}
+        </div>
+      )}
     </SummaryShell>
   )
 }
 
-export function CNPGSubscriptionSummary({ resource, workspace, onNavigate }: SummaryProps) {
+export function CNPGDatabaseRoleSummary({ resource, workspace, onNavigate }: SummaryProps) {
+  const ns = resource?.metadata?.namespace ?? ''
+  const clusterUnavailable = relationUnavailable(workspace, 'clusters', ns, 'Clusters')
+  const cluster = clusterUnavailable ? null : targetCluster(resource, clustersIn(workspace))
+  const f = cnpgDatabaseRoleFacts(resource, cluster)
+  return (
+    <SummaryShell>
+      <ObjectProblems issues={workspace?.issues} subject={refOf(resource, 'DatabaseRole')} onNavigate={onNavigate} />
+
+      <SummaryHeading>Declared</SummaryHeading>
+      <FactGrid>
+        <FactRow label="PostgreSQL role">{f.pgName ? <span className="font-mono">{f.pgName}</span> : <NotReported text="Not set" />}</FactRow>
+        <FactRow label="Cluster">
+          <ClusterLink resource={resource} workspace={workspace} onNavigate={onNavigate} />
+        </FactRow>
+        <FactRow label="Login">{f.login ? 'Allowed' : 'Not allowed'}{f.superuser ? ' · superuser' : ''}</FactRow>
+        <FactRow label="Password">
+          {f.passwordDisabled ? (
+            'Disabled'
+          ) : f.passwordSecret ? (
+            <span>
+              From Secret <span className="font-mono">{f.passwordSecret}</span>
+            </span>
+          ) : (
+            <span className="text-theme-text-secondary">No password Secret declared</span>
+          )}
+          {f.passwordValidUntil && (
+            <div className="text-xs text-theme-text-secondary">
+              Valid until {f.passwordValidUntil} (PostgreSQL VALID UNTIL; the operator does not rotate it)
+            </div>
+          )}
+        </FactRow>
+        <FactRow label="Client certificate">
+          {f.clientCertificate ? (
+            <span>
+              Operator-issued in Secret <span className="font-mono">{f.clientCertificate.secret}</span>
+              <span className="text-theme-text-secondary">
+                {' · '}
+                {f.clientCertificate.expiration ? `expires ${f.clientCertificate.expiration}` : 'expiry not reported yet'}
+              </span>
+              {f.clientCertificate.message && <div className="text-xs text-theme-text-secondary">{f.clientCertificate.message}</div>}
+            </span>
+          ) : (
+            <span className="text-theme-text-secondary">Not requested</span>
+          )}
+        </FactRow>
+        <ReclaimRow resource={resource} />
+        <FactRow label="Declared in">
+          <DeclaredIn resource={resource} />
+        </FactRow>
+      </FactGrid>
+
+      <Reconciled
+        resource={resource}
+        extra={
+          <FactRow label="Cluster spec">
+            {f.overriddenByCluster === null ? (
+              <NotReported text={clusterUnavailable ?? 'Target Cluster not visible, so whether its spec.managed.roles overrides this role is unknown'} />
+            ) : f.overriddenByCluster ? (
+              <span className={toneTextClass('degraded')}>
+                The Cluster declares “{f.pgName}” in spec.managed.roles, which takes precedence: this DatabaseRole is not reconciled while that entry exists
+              </span>
+            ) : (
+              <span className="text-theme-text-secondary">No spec.managed.roles entry for this role</span>
+            )}
+          </FactRow>
+        }
+      />
+    </SummaryShell>
+  )
+}
+
+export function CNPGSubscriptionSummary({
+  resource,
+  workspace,
+  onNavigate,
+  logicalPath,
+}: SummaryProps & {
+  /** The path and slot reading; derived from the workspace (slot not read) when omitted. */
+  logicalPath?: CNPGLogicalPathReading
+}) {
+  const reading: Partial<CNPGLogicalPathReading> = logicalPath ?? { path: workspacePaths(workspace, [resource])[0] }
   const pub = resource?.spec?.publicationName
   const ext = resource?.spec?.externalClusterName
   return (
@@ -259,6 +383,13 @@ export function CNPGSubscriptionSummary({ resource, workspace, onNavigate }: Sum
       </FactGrid>
 
       <Reconciled resource={resource} />
+
+      {reading.path && (
+        <>
+          <SummaryHeading>Replication path</SummaryHeading>
+          <CNPGLogicalPathView path={reading.path} slot={reading.slot} notice={reading.notice} onNavigate={onNavigate} />
+        </>
+      )}
     </SummaryShell>
   )
 }

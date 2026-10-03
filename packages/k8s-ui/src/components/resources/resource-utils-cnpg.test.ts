@@ -370,7 +370,7 @@ describe('getCNPGPoolerStatus', () => {
     // ready) still reports status.instances=2. Calling that "Ready" renders a
     // broken Pooler green.
     const s = getCNPGPoolerStatus({ spec: { instances: 2 }, status: { instances: 2 } })
-    expect(s.level).toBe('healthy')
+    expect(s.level).toBe('neutral')
     expect(s.text).toBe('Scheduled')
     expect(s.text).not.toBe('Ready')
   })
@@ -670,7 +670,7 @@ describe('an absent count is unknown, never zero', () => {
     expect(getCNPGPoolerStatus({ spec: { instances: 2 }, status: { instances: 0 } }))
       .toMatchObject({ text: 'Not Scheduled', level: 'unhealthy' })
     expect(getCNPGPoolerStatus({ spec: { instances: 2 }, status: { instances: 2 } }))
-      .toMatchObject({ text: 'Scheduled', level: 'healthy' })
+      .toMatchObject({ text: 'Scheduled', level: 'neutral' })
   })
 })
 
@@ -696,9 +696,9 @@ describe('paused Pooler', () => {
 
   it('only an explicit true pauses', () => {
     expect(getCNPGPoolerStatus({ spec: { instances: 2, pgbouncer: {} }, status: { instances: 2 } }))
-      .toMatchObject({ text: 'Scheduled', level: 'healthy' })
+      .toMatchObject({ text: 'Scheduled', level: 'neutral' })
     expect(getCNPGPoolerStatus({ spec: { instances: 2, pgbouncer: { paused: false } }, status: { instances: 2 } }))
-      .toMatchObject({ text: 'Scheduled', level: 'healthy' })
+      .toMatchObject({ text: 'Scheduled', level: 'neutral' })
     expect(isCNPGPoolerPaused({ spec: { pgbouncer: { paused: true } } })).toBe(true)
     expect(isCNPGPoolerPaused({ spec: {} })).toBe(false)
   })

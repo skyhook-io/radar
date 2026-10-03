@@ -48,6 +48,11 @@ const DOT_CLASS: Record<StatusTone, string> = {
   unknown: 'bg-slate-400',
 };
 
+/** Solid fill for a tone, e.g. a bar or meter segment. */
+export function toneFillClass(tone: StatusTone): string {
+  return DOT_CLASS[tone]
+}
+
 // Normalize the variety of severity / health vocabularies that flow in
 // from APIs (Problems, Audit, multi-cluster aggregation endpoints) onto
 // a single tone. Inputs are case-insensitive. Returns 'unknown' for

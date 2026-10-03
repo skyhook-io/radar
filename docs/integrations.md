@@ -944,6 +944,7 @@ Deliberately narrow: the absence of a ScheduledBackup does not prove a cluster i
 | Database | `postgresql.cnpg.io/v1` | — | Yes | — |
 | Publication | `postgresql.cnpg.io/v1` | — | Yes | — |
 | Subscription | `postgresql.cnpg.io/v1` | — | Yes | — |
+| DatabaseRole | `postgresql.cnpg.io/v1` | — | Yes | — |
 | ImageCatalog | `postgresql.cnpg.io/v1` | — | Yes | — |
 | ClusterImageCatalog | `postgresql.cnpg.io/v1` | — | Yes | — |
 

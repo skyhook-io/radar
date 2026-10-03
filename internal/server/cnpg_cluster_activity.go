@@ -123,6 +123,15 @@ func (s *Server) handleCNPGClusterActivity(w http.ResponseWriter, r *http.Reques
 		}
 		since = t
 	}
+	var until time.Time
+	if raw := r.URL.Query().Get("until"); raw != "" {
+		t, err := time.Parse(time.RFC3339, raw)
+		if err != nil || !t.After(since) {
+			s.writeError(w, http.StatusBadRequest, "invalid until "+strconv.Quote(raw)+" (expected RFC3339 after since)")
+			return
+		}
+		until = t
+	}
 	limit := cnpgActivityDefaultLimit
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
@@ -211,7 +220,7 @@ func (s *Server) handleCNPGClusterActivity(w http.ResponseWriter, r *http.Reques
 			t := e.Timestamp.UTC()
 			resp.AttributionSince = &t
 		}
-		if e.Timestamp.Before(since) {
+		if e.Timestamp.Before(since) || (!until.IsZero() && e.Timestamp.After(until)) {
 			continue
 		}
 		windowed = append(windowed, *e)

@@ -136,10 +136,10 @@ func cnpgSuppressesGenericConditions(group, kind string, u *unstructured.Unstruc
 func detectCNPGIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
 	switch kind {
 	case "Cluster":
-		return detectCNPGClusterIssues(gvr, kind, u)
+		return append(detectCNPGClusterIssues(gvr, kind, u), detectCNPGCertificateIssues(gvr, kind, u, time.Now())...)
 	case "Backup":
 		return detectCNPGBackupIssues(gvr, kind, u)
-	case "Database", "Publication", "Subscription":
+	case "Database", "Publication", "Subscription", "DatabaseRole":
 		return detectCNPGDeclarativeIssues(gvr, kind, u)
 	case "ScheduledBackup":
 		return detectCNPGScheduledBackupIssues(gvr, kind, u)

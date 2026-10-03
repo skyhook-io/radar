@@ -13,12 +13,14 @@ import {
   toneTextClass,
   type CNPGFleetRow,
   type HealthLevel,
+  Tooltip,
 } from '@skyhook-io/k8s-ui'
 import {
   CNPGWorkspaceHeader,
   CoverageNotice,
   FilterChips,
   Mono,
+  PathText,
   ScreenBody,
   SectionTable,
   Sub,
@@ -183,7 +185,7 @@ export function CNPGProtection({
             { header: 'WAL archiving', width: '16%', cell: (r) => <FactValue fact={r.protection.walArchiving} className="line-clamp-2 break-words" /> },
             {
               header: 'Recovery window',
-              width: '13%',
+              width: '12%',
               cell: (r) =>
                 r.protection.recoveryWindow.from ? (
                   <>
@@ -200,15 +202,30 @@ export function CNPGProtection({
             },
             {
               header: 'Restore validation',
-              width: '13%',
+              width: '12%',
               cell: (r) => (
                 <FactValue fact={r.protection.restoreValidation} />
               ),
             },
             {
               header: 'Destination',
-              width: '15%',
-              cell: (r) => <FactValue fact={r.protection.destination} className={r.protection.destination.method === 'barmanObjectStore' ? 'break-all font-mono text-[12.5px]' : 'break-words'} />,
+              width: '17%',
+              cell: (r) => {
+                const d = r.protection.destination
+                if (d.method === 'barmanObjectStore') return <PathText value={d.text} />
+                // A resource name stays whole on its own line; only a name too long for the cell truncates.
+                if (d.method === 'plugin' && d.objectStore) {
+                  return (
+                    <>
+                      <div className="text-theme-text-secondary">ObjectStore</div>
+                      <Tooltip content={d.objectStore} wrapperClassName="max-w-full">
+                        <span className="block truncate">{d.objectStore}</span>
+                      </Tooltip>
+                    </>
+                  )
+                }
+                return <FactValue fact={d} />
+              },
             },
           ]}
           rows={rows}
@@ -246,8 +263,19 @@ export function CNPGProtection({
           title="Destinations"
           subtitle="ObjectStores (barman-cloud plugin)"
           columns={[
-            { header: 'ObjectStore', width: '18%', cell: (s: StoreRow) => <>{s.name}<Sub>{s.namespace}</Sub></> },
-            { header: 'Destination', width: '30%', cell: (s) => <Mono>{s.destination}</Mono> },
+            {
+              header: 'ObjectStore',
+              width: '18%',
+              cell: (s: StoreRow) => (
+                <>
+                  <Tooltip content={s.name} wrapperClassName="max-w-full">
+                    <span className="block truncate">{s.name}</span>
+                  </Tooltip>
+                  <Sub>{s.namespace}</Sub>
+                </>
+              ),
+            },
+            { header: 'Destination', width: '30%', cell: (s) => (s.destination ? <PathText value={s.destination} /> : '—') },
             { header: 'Used by', width: '20%', cell: (s) => (s.users.length ? s.users.map((u) => u.name).join(', ') : <span className="text-theme-text-tertiary">None visible</span>) },
             {
               header: 'Upload health (inferred)',
@@ -277,12 +305,22 @@ export function CNPGProtection({
             {
               header: 'Schedule',
               width: '24%',
-              cell: (s) => (
-                <>
-                  <Mono>{s.spec?.schedule ?? '—'}</Mono>
-                  <Sub>CNPG cron, seconds first</Sub>
-                </>
-              ),
+              cell: (s) => {
+                const reading = data.scheduleReadings?.[`${s.metadata?.namespace}/${s.metadata?.name}`]
+                return reading ? (
+                  <>
+                    {reading}
+                    <Sub>
+                      <Mono>{s.spec?.schedule}</Mono>
+                    </Sub>
+                  </>
+                ) : (
+                  <>
+                    <Mono>{s.spec?.schedule ?? '—'}</Mono>
+                    <Sub>CNPG cron, seconds first</Sub>
+                  </>
+                )
+              },
             },
             {
               header: 'Status',

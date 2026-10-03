@@ -16,6 +16,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // filterRecentChangesByRBAC drops RecentChange rows the ctx user can't read, via
@@ -227,10 +228,12 @@ func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string
 // section in the resource detail. Namespace "_" denotes a cluster-scoped resource;
 // optional ?group= disambiguates a CRD whose kind collides with a core kind.
 //
-// RBAC: namespaced targets are gated by the namespace auth-filter (the frontend
-// passes ?namespaces=<ns> to scope the scan); cluster-scoped targets are gated by
-// the same list permission /api/issues uses, so this can't surface a node's
-// issues to a user who can't list nodes.
+// RBAC: the drawer's preflight (namespace access, cluster-scoped get) and then
+// a get-SAR on the subject's own kind: namespace access does not imply reading
+// every kind in it, and an issue's message describes the object. Grouped issues
+// whose subject the caller can't get are withheld, as are members of kinds it
+// can't get; ?coverage=1 returns the envelope that counts them and says whether
+// Radar is watching the subject's kind at all.
 func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -271,6 +274,16 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if kind == rawKind {
+		if b, ok := resourceid.BuiltinForName(rawKind); ok && (group == "" || group == b.Group) {
+			kind = b.Kind
+		}
+	}
+
+	if !s.canGetIssueRef(r, issues.Ref{Group: group, Kind: kind, Namespace: namespace, Name: name}) {
+		s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to %s %s", kind, name))
+		return
+	}
 
 	// Scope the scan to the resource's namespace (a workload's owned pods live
 	// there too); cluster-scoped resources scan all namespaces (nil).
@@ -284,10 +297,199 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		CanReadClusterScoped: s.issueClusterScopedAccess(r),
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
 	}, group, kind, namespace, name)
+	related, withheld := s.withholdUnreadableIssueRefs(r, related)
 	if related == nil {
 		related = []issues.Issue{}
 	}
-	s.writeJSON(w, related)
+	if r.URL.Query().Get("coverage") != "1" {
+		s.writeJSON(w, related)
+		return
+	}
+	withheld.Issues += s.clusterScopedSubjectIssuesWithheld(r, provider, related, group, kind, namespace, name)
+	resp := ResourceIssuesResponse{
+		Issues:   related,
+		Coverage: resourceIssuesCoverage(kind, group, namespace),
+	}
+	if withheld.Issues > 0 || withheld.Members > 0 {
+		resp.Withheld = &withheld
+	}
+	if result := k8s.GetCachedPermissionResult(); result != nil {
+		resp.Visibility = k8s.BuildVisibilitySummary(result, k8s.VisibilityNamespace(namespaces))
+	}
+	s.writeJSON(w, resp)
+}
+
+// ResourceIssuesResponse is /api/issues/resource with ?coverage=1.
+type ResourceIssuesResponse struct {
+	Issues []issues.Issue `json:"issues"`
+	// Whether the issues engine reads the subject's kind: ok, syncing, or
+	// notWatched. Anything but ok makes an empty list unknown, not none.
+	Coverage   string                  `json:"coverage"`
+	Withheld   *ResourceIssuesWithheld `json:"withheld,omitempty"`
+	Visibility *k8s.VisibilitySummary  `json:"visibility,omitempty"`
+}
+
+// ResourceIssuesWithheld counts what the caller's RBAC kept out of the answer.
+type ResourceIssuesWithheld struct {
+	// Grouped issues whose subject the caller can't get.
+	Issues int `json:"issues"`
+	// Member refs of kinds the caller can't get, dropped from returned issues.
+	Members int `json:"members"`
+}
+
+const (
+	resourceIssuesCoverageOK         = "ok"
+	resourceIssuesCoverageSyncing    = "syncing"
+	resourceIssuesCoverageNotWatched = "notWatched"
+)
+
+// canGetIssueRef reports whether the caller may get ref: its kind where it
+// lives, or failing that the named object, which a resourceNames-restricted
+// grant allows. Unresolvable kinds fail closed.
+func (s *Server) canGetIssueRef(r *http.Request, ref issues.Ref) bool {
+	user := auth.UserFromContext(r.Context())
+	if user == nil {
+		return true
+	}
+	group, resource, clusterScoped, ok := k8s.ResolveChangeGVR(ref.Kind, ref.Group)
+	if !ok {
+		return false
+	}
+	namespace := ref.Namespace
+	if clusterScoped {
+		namespace = ""
+	}
+	if s.canRead(r, group, resource, namespace, "get") {
+		return true
+	}
+	if ref.Name == "" || s.permCache == nil {
+		return false
+	}
+	perms := s.permCache.Get(user.Username, user.Groups)
+	if perms != nil {
+		if v, ok := perms.CanINamed("get", group, resource, namespace, ref.Name); ok {
+			return v
+		}
+	}
+	client := k8s.GetClient()
+	if client == nil {
+		return false
+	}
+	allowed, err := auth.SubjectCanINamed(r.Context(), client, user.Username, user.Groups, namespace, group, resource, ref.Name, "get")
+	if err != nil {
+		return false
+	}
+	if perms != nil {
+		perms.SetCanINamed("get", group, resource, namespace, ref.Name, allowed)
+	}
+	return allowed
+}
+
+// withholdUnreadableIssueRefs drops grouped issues whose subject the caller
+// can't get and member refs of kinds it can't get, counting both. A trimmed
+// member list is marked truncated so it never reads as the whole fan-out.
+func (s *Server) withholdUnreadableIssueRefs(r *http.Request, in []issues.Issue) ([]issues.Issue, ResourceIssuesWithheld) {
+	var withheld ResourceIssuesWithheld
+	if auth.UserFromContext(r.Context()) == nil {
+		return in, withheld
+	}
+	out := make([]issues.Issue, 0, len(in))
+	for _, issue := range in {
+		if !s.canGetIssueRef(r, issues.Ref{Group: issue.Group, Kind: issue.Kind, Namespace: issue.Namespace, Name: issue.Name}) {
+			withheld.Issues++
+			continue
+		}
+		if len(issue.Members) > 0 {
+			kept := make([]issues.Ref, 0, len(issue.Members))
+			for _, m := range issue.Members {
+				if s.canGetIssueRef(r, m) {
+					kept = append(kept, m)
+				} else {
+					withheld.Members++
+				}
+			}
+			if len(kept) < len(issue.Members) {
+				issue.Members = kept
+				issue.MembersTruncated = true
+			}
+		}
+		out = append(out, issue)
+	}
+	return out, withheld
+}
+
+// clusterScopedSubjectIssuesWithheld counts the issues about a cluster-scoped
+// subject that the composition left out because the caller can get it but not
+// list its kind (the gate /api/issues applies). Without the count a NotReady
+// Node would read as having none.
+func (s *Server) clusterScopedSubjectIssuesWithheld(r *http.Request, provider issues.Provider, returned []issues.Issue, group, kind, namespace, name string) int {
+	if namespace != "" || auth.UserFromContext(r.Context()) == nil {
+		return 0
+	}
+	resolvedGroup, _, clusterScoped, ok := k8s.ResolveChangeGVR(kind, group)
+	if !ok || !clusterScoped || s.issueClusterScopedAccess(r)(kind, resolvedGroup) {
+		return 0
+	}
+	subjectKind := func(k, g string) bool {
+		return strings.EqualFold(k, kind) && resourceid.NormalizeGroup(g) == resourceid.NormalizeGroup(resolvedGroup)
+	}
+	all := issues.Compose(provider, issues.Filters{
+		SkipPodTemplateContext: true,
+		Kinds:                  []string{kind},
+		Limit:                  issues.NoLimit,
+		CanReadClusterScoped:   subjectKind,
+		CanReadRelated:         s.issueRelatedResourceAccess(r),
+		Grouped:                true,
+	})
+	seen := make(map[string]bool, len(returned))
+	for _, i := range returned {
+		seen[i.ID] = true
+	}
+	n := 0
+	for _, i := range all {
+		if !seen[i.ID] && i.Name == name && i.Namespace == "" && subjectKind(i.Kind, i.Group) {
+			n++
+		}
+	}
+	return n
+}
+
+// resourceIssuesCoverage reports whether the issues engine has the subject's
+// kind to read: a typed informer, or a dynamic one synced for its namespace.
+func resourceIssuesCoverage(kind, group, namespace string) string {
+	if cache := k8s.GetResourceCache(); cache != nil {
+		if g, resource, _, ok := k8s.ResolveChangeGVR(kind, group); ok {
+			if b, builtin := resourceid.BuiltinForKind(kind); builtin && b.Group == g {
+				if synced, known := cache.InformerSynced(resource); known {
+					switch {
+					case !cache.KindCoversNamespace(resource, namespace):
+						return resourceIssuesCoverageNotWatched
+					case !synced:
+						return resourceIssuesCoverageSyncing
+					}
+					return resourceIssuesCoverageOK
+				}
+			}
+		}
+	}
+	disc := k8s.GetResourceDiscovery()
+	dyn := k8s.GetDynamicResourceCache()
+	if disc == nil || dyn == nil {
+		return resourceIssuesCoverageNotWatched
+	}
+	gvr, ok := disc.GetGVRWithGroup(kind, group)
+	if !ok {
+		return resourceIssuesCoverageNotWatched
+	}
+	if dyn.IsNamespaceSynced(gvr, namespace) {
+		return resourceIssuesCoverageOK
+	}
+	for _, watched := range dyn.GetWatchedResources() {
+		if watched == gvr {
+			return resourceIssuesCoverageSyncing
+		}
+	}
+	return resourceIssuesCoverageNotWatched
 }
 
 func parseSeverities(v string) ([]issues.Severity, error) {

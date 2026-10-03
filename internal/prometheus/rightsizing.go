@@ -1011,7 +1011,7 @@ type PVCUsageResponse struct {
 	Capacity  int64   `json:"capacity"` // bytes
 	Ratio     float64 `json:"ratio"`    // 0.0 - 1.0
 	HasData   bool    `json:"hasData"`
-	Status    string  `json:"status"` // available, no_series, invalid_data, query_failed
+	Status    string  `json:"status"` // available, no_series, invalid_data, query_failed, ambiguous_scope, scope_mismatch
 }
 
 // handlePVCUsage returns current usage for a PVC, computed from
@@ -1034,13 +1034,28 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 
 	ns := prom.SanitizeLabelValue(namespace)
 	pvc := prom.SanitizeLabelValue(name)
+	resp := PVCUsageResponse{Namespace: namespace, Name: name, Status: "query_failed"}
+
+	// A claim of the same name in another cluster sharing this Prometheus
+	// would otherwise be merged in by the max() below.
+	matchers, _, err := resolveScope(r.Context(), namespace, pvcScopeProbe(namespace, []string{name}, 0), nil, k8s.GetResourceCache())
+	if failed, bad := pvcScopeFailure(err); bad {
+		if failed.Status == PVCUsageQueryFailed {
+			errorlog.Record("prometheus", "warning", "pvc usage scope check failed for %s/%s: %v", namespace, name, err)
+		}
+		resp.Status = failed.Status
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	scope := ""
+	if matchers != "" {
+		scope = "," + matchers
+	}
 
 	// kubelet's native label is `persistentvolumeclaim`; clusters with custom
 	// relabeling that renamed it will return no series.
-	usedQuery := fmt.Sprintf(`max(kubelet_volume_stats_used_bytes{namespace='%s',persistentvolumeclaim='%s'})`, ns, pvc)
-	capQuery := fmt.Sprintf(`max(kubelet_volume_stats_capacity_bytes{namespace='%s',persistentvolumeclaim='%s'})`, ns, pvc)
-
-	resp := PVCUsageResponse{Namespace: namespace, Name: name, Status: "query_failed"}
+	usedQuery := fmt.Sprintf(`max(kubelet_volume_stats_used_bytes{namespace='%s',persistentvolumeclaim='%s'%s})`, ns, pvc, scope)
+	capQuery := fmt.Sprintf(`max(kubelet_volume_stats_capacity_bytes{namespace='%s',persistentvolumeclaim='%s'%s})`, ns, pvc, scope)
 
 	usedRes, err := client.Query(r.Context(), usedQuery)
 	if err != nil {
@@ -1064,16 +1079,21 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 
 	used := firstValue(usedRes)
 	capacity := firstValue(capRes)
-	if used == nil || capacity == nil || math.IsInf(*used, 0) || math.IsInf(*capacity, 0) ||
-		*used < 0 || *capacity < 1 || *used >= math.Exp2(63) || *capacity >= math.Exp2(63) {
+	if used == nil || capacity == nil {
+		resp.Status = "invalid_data"
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	usage, ok := pvcUsageOf(*used, *capacity)
+	if !ok {
 		resp.Status = "invalid_data"
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
-	resp.Used = int64(*used)
-	resp.Capacity = int64(*capacity)
-	resp.Ratio = *used / *capacity
+	resp.Used = usage.UsedBytes
+	resp.Capacity = usage.CapacityBytes
+	resp.Ratio = usage.Ratio
 	resp.HasData = true
 	resp.Status = "available"
 	writeJSON(w, http.StatusOK, resp)

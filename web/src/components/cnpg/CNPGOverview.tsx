@@ -4,6 +4,8 @@ import { clsx } from 'clsx'
 import { ArrowRight, Database, FileText, Search } from 'lucide-react'
 import {
   CNPG_PROBLEM_CATEGORIES,
+  CNPG_PROBLEM_TONE,
+  cnpgReadyInstances,
   FactValue,
   StatusDot,
   Tooltip,
@@ -14,42 +16,135 @@ import {
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
 import { EmptyState, ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../capacity/shared'
-import { CNPGWorkspaceHeader, CoverageNotice, FilterChips, type CNPGScreenProps } from './shared'
-import { cnpgClusterFullPath, currentPageLabel } from './paths'
+import { BreakText, CNPGWorkspaceHeader, CoverageNotice, FilterChips, type CNPGScreenProps } from './shared'
+import { cnpgClusterFullPath, cnpgClusterProblemsPath, currentPageLabel } from './paths'
 import { sameResource } from './routes'
+import { CNPGOperatorBanner } from './CNPGOperatorBanner'
+import { cnpgInstancePillLabel, cnpgPillsToShow, cnpgRowStatus } from './fleetStatus'
 
 type Filter = 'attention' | 'all'
 
+// Headers may wrap: at a 1280px window the columns are narrower than their labels.
+const TH_WRAP = TH.replace('whitespace-nowrap', '')
+
+// Five pills fit the Ready column; the rest are counted, listed on hover.
+const MAX_PILLS = 5
+
 function InstancePills({ row }: { row: CNPGFleetRow }) {
   if (row.pods.length === 0) return null
+  const { shown, hidden } = cnpgPillsToShow(row.pods, MAX_PILLS)
   return (
-    <div className="mt-1 flex flex-wrap gap-1">
-      {row.pods.map((p) => {
+    <div className="mt-1 flex flex-nowrap items-center gap-0.5 font-sans">
+      {shown.map((p) => {
         const tone = p.ready === true ? 'healthy' : p.ready === false ? 'unhealthy' : 'unknown'
         return (
-          <Tooltip key={p.name} content={`${p.name} · ${p.role} · ${p.ready === true ? 'ready' : p.ready === false ? 'not ready' : 'readiness unknown'}`}>
-            <span className="inline-flex items-center gap-1 rounded border border-theme-border bg-theme-base px-1 text-[10.5px] font-mono text-theme-text-secondary">
+          <Tooltip key={p.name} content={cnpgInstancePillLabel(p)}>
+            <span
+              aria-label={cnpgInstancePillLabel(p)}
+              className="inline-flex items-center gap-0.5 rounded border border-theme-border bg-theme-base px-0.5 font-mono text-[10.5px] text-theme-text-secondary"
+            >
               <StatusDot tone={tone} size="xs" />
               {p.role === 'primary' ? 'P' : p.role === 'replica' ? 'R' : '?'}
             </span>
           </Tooltip>
         )
       })}
+      {hidden.length > 0 && (
+        <Tooltip
+          content={
+            <ul className="space-y-0.5">
+              {hidden.map((p) => (
+                <li key={p.name}>{cnpgInstancePillLabel(p)}</li>
+              ))}
+            </ul>
+          }
+        >
+          <span aria-label={`${hidden.length} more instances`} className="px-0.5 text-[10.5px] text-theme-text-tertiary">
+            +{hidden.length}
+          </span>
+        </Tooltip>
+      )}
     </div>
   )
 }
 
-function AttentionCell({ row }: { row: CNPGFleetRow }) {
+function ReadyCell({ row }: { row: CNPGFleetRow }) {
+  const r = cnpgReadyInstances(row)
+  return (
+    <>
+      {r.note ? (
+        <Tooltip content={r.note}>
+          <span className={clsx('underline decoration-dotted underline-offset-2', toneTextClass(r.tone ?? 'unknown'))}>{r.text} Pods</span>
+        </Tooltip>
+      ) : (
+        r.text
+      )}
+      <InstancePills row={row} />
+    </>
+  )
+}
+
+function RowStatusDot({ row }: { row: CNPGFleetRow }) {
+  const status = cnpgRowStatus(row)
+  return (
+    <Tooltip content={status.label}>
+      <span role="img" aria-label={status.label} className="inline-flex">
+        <StatusDot tone={status.tone} />
+      </span>
+    </Tooltip>
+  )
+}
+
+// A token this long cannot wrap at a word boundary within the cell.
+const UNBREAKABLE_TOKEN = 24
+
+// A measured problem names what measured it, so a qualified match stays qualified in the fleet.
+function problemTip(p: CNPGFleetRow['problems'][number]): string {
+  return p.source === 'measurement' && p.measuredBy ? `${p.title} (measured by ${p.measuredBy})` : p.title
+}
+
+function AttentionCell({ row, onOpenAll }: { row: CNPGFleetRow; onOpenAll: () => void }) {
   const top = row.problems.find((p) => p.severity !== 'posture') ?? row.problems[0]
   if (!top) return <span className="text-theme-text-tertiary">—</span>
-  const tone = top.severity === 'critical' ? 'unhealthy' : top.severity === 'warning' ? 'degraded' : 'neutral'
-  const more = row.problems.length - 1
+  const others = row.problems.filter((p) => p !== top)
+  const headline = top.shortTitle ?? top.title
+  const unbreakable = headline.split(/\s+/).some((w) => w.length > UNBREAKABLE_TOKEN)
   return (
     <div className="min-w-0">
-      <Tooltip content={top.title} wrapperClassName="block">
-        <div className={clsx('line-clamp-2 break-words', toneTextClass(tone))}>{top.title}</div>
+      <Tooltip content={problemTip(top)} wrapperClassName="w-full">
+        <div className={clsx('[overflow-wrap:normal]', unbreakable ? 'truncate' : 'line-clamp-3', toneTextClass(CNPG_PROBLEM_TONE[top.severity]))}>{headline}</div>
       </Tooltip>
-      {more > 0 && <div className="text-xs text-theme-text-tertiary">+{more} more</div>}
+      {top.unverifiedMatch && (
+        <div className="text-[11px] text-theme-text-tertiary">measured by {top.measuredBy}</div>
+      )}
+      {others.length > 0 && (
+        <Tooltip
+          content={
+            <ul className="space-y-1">
+              {others.map((p) => (
+                <li key={p.id} className="flex items-start gap-1.5">
+                  <span className="mt-1 shrink-0">
+                    <StatusDot tone={CNPG_PROBLEM_TONE[p.severity]} size="xs" />
+                  </span>
+                  <span>{problemTip(p)}</span>
+                </li>
+              ))}
+            </ul>
+          }
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenAll()
+            }}
+            aria-label={`${others.length} more problems: open ${row.name} with every problem listed`}
+            className="rounded text-xs text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            +{others.length} more
+          </button>
+        </Tooltip>
+      )}
     </div>
   )
 }
@@ -161,6 +256,7 @@ export function CNPGOverview({
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <div className="space-y-3 px-5 pb-6 pt-3 xl:px-7">
           <CoverageNotice fleet={fleet} data={data} />
+          <CNPGOperatorBanner namespaces={fleet.rows.map((r) => r.namespace)} className="" />
 
           <div className="flex flex-wrap items-center gap-2">
             <div role="tablist" aria-label="Clusters" className="inline-flex rounded-lg bg-theme-elevated p-0.5">
@@ -201,27 +297,29 @@ export function CNPGOverview({
 
           <div className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
             <div className={TABLE_WRAP}>
-              <table className="w-full min-w-[980px] table-fixed">
+              {/* Fits an ~850px content area (a 1280px window) without scrolling: the
+                  two fixed columns take 16rem and the percentages stay under the rest. */}
+              <table className="w-full min-w-[820px] table-fixed">
                 <colgroup>
-                  <col className="w-[22%]" />
-                  <col className="w-[7%]" />
                   <col className="w-[15%]" />
-                  <col className="w-[15%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[5%]" />
-                  <col className="w-[14%]" />
+                  <col className="w-[8.5rem]" />
+                  <col className="w-[11%]" />
                   <col className="w-[10%]" />
+                  <col className="w-[7%]" />
+                  <col className="w-[8%]" />
+                  <col className="w-[17%]" />
+                  <col className="w-[7.5rem]" />
                 </colgroup>
                 <thead className={TABLE_HEAD}>
                   <tr>
-                    <th className={TH}>Cluster</th>
-                    <th className={TH}>Ready</th>
-                    <th className={TH}>Replication</th>
-                    <th className={TH}>Protection</th>
-                    <th className={TH}>Declarations</th>
-                    <th className={TH}>PG</th>
-                    <th className={TH}>Needs attention</th>
-                    <th className={TH}><span className="sr-only">Actions</span></th>
+                    <th className={TH_WRAP}>Cluster</th>
+                    <th className={TH_WRAP}>Ready</th>
+                    <th className={TH_WRAP}>Replication</th>
+                    <th className={TH_WRAP}>Protection</th>
+                    <th className={TH_WRAP}>Disk</th>
+                    <th className={TH_WRAP}>Declared</th>
+                    <th className={TH_WRAP}>Needs attention</th>
+                    <th className={TH_WRAP}><span className="sr-only">Actions</span></th>
                   </tr>
                 </thead>
                 <tbody className={TBODY}>
@@ -236,23 +334,47 @@ export function CNPGOverview({
                         aria-selected={active}
                       >
                         <td className={TD}>
-                          <div className="flex items-center gap-2 min-w-0">
-                            <StatusDot tone={row.attention ? (row.problems.some((p) => p.severity === 'critical') ? 'unhealthy' : 'degraded') : row.controllerStatus.level} />
-                            <Tooltip content={row.name} wrapperClassName="min-w-0"><span className="block truncate font-medium">{row.name}</span></Tooltip>
+                          <div className="flex min-w-0 items-start gap-2">
+                            <span className="mt-1.5 shrink-0"><RowStatusDot row={row} /></span>
+                            <div className="min-w-0">
+                              <BreakText value={row.name} after="-" className="font-medium" />
+                              <div className="flex min-w-0 items-baseline text-xs text-theme-text-tertiary">
+                                <Tooltip content={`Namespace ${row.namespace}`} wrapperClassName="min-w-0">
+                                  <span className="block truncate">{row.namespace}</span>
+                                </Tooltip>
+                                {row.pgVersion && (
+                                  <span className="shrink-0 whitespace-pre">
+                                    {' · '}
+                                    <Tooltip content="PostgreSQL version"><span>PG {row.pgVersion}</span></Tooltip>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
                           </div>
-                          <div className="truncate pl-4 text-xs text-theme-text-tertiary">{row.namespace}</div>
-                          <div className="pl-4"><InstancePills row={row} /></div>
                         </td>
                         <td className={clsx(TD, 'font-mono')}>
-                          {row.instances.ready ?? '–'}/{row.instances.desired ?? '–'}
+                          <ReadyCell row={row} />
                         </td>
                         <td className={TD}><FactValue fact={row.replication} /></td>
                         <td className={TD}><FactValue fact={row.protection.summary} /></td>
+                        <td className={TD}>
+                          <FactValue fact={row.disk ?? { text: 'Reading…', tone: 'unknown' }} />
+                          {row.diskGrowth && <div className="text-xs"><FactValue fact={row.diskGrowth} className="text-theme-text-tertiary" /></div>}
+                        </td>
                         <td className={TD}><FactValue fact={row.declarations.summary} /></td>
-                        <td className={clsx(TD, 'font-mono')}>{row.pgVersion ?? '—'}</td>
-                        <td className={TD}><AttentionCell row={row} /></td>
+                        <td className={clsx(TD, 'overflow-hidden')}>
+                          <AttentionCell
+                            row={row}
+                            onOpenAll={() =>
+                              navigate(cnpgClusterProblemsPath(row.namespace, row.name, connection.context || undefined), {
+                                state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
+                              })
+                            }
+                          />
+                        </td>
                         <td className={clsx(TD, 'text-right')}>
-                          <div className="flex items-center justify-end gap-1">
+                          <div className="flex items-center justify-end gap-0.5">
+                            <Tooltip content="Logs from every instance">
                             <button
                               type="button"
                               aria-label={`Logs from every instance of ${row.name}`}
@@ -264,10 +386,11 @@ export function CNPGOverview({
                                   state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
                                 })
                               }}
-                              className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                              className="inline-flex items-center rounded-md p-1.5 text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
                             >
-                              <FileText className="h-3 w-3" /> Logs
+                              <FileText className="h-3.5 w-3.5" />
                             </button>
+                            </Tooltip>
                             <button
                               type="button"
                               aria-label={`Open ${row.name}`}

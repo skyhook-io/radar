@@ -1,15 +1,19 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { Badge } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
+import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { CNPG_BARMAN_OBJECTSTORE_GROUP, CNPG_GROUP } from '../resources/resource-utils-cnpg'
-import type { CNPGFleetRow, CNPGInstance } from './workspace'
+import { cnpgReadyInstances, type CNPGFleetRow, type CNPGInstance } from './workspace'
+import type { CNPGDimension } from './ha'
 import {
   FactGrid,
   FactRow,
   FactSource,
   FactValue,
+  PrimaryConflictNote,
   ProblemCallout,
+  ProblemList,
   RefLink,
   SummaryHeading,
   ToneDot,
@@ -18,6 +22,18 @@ import {
   CNPG_SECONDARY_BUTTON,
   type CNPGNavigate,
 } from './primitives'
+
+function ReadyCount({ row }: { row: CNPGFleetRow }) {
+  const r = cnpgReadyInstances(row)
+  if (!r.note) return <>{r.text}</>
+  return (
+    <Tooltip content={r.note} position="top">
+      <span className={clsx('font-medium', toneTextClass(r.tone ?? 'unknown'))}>
+        {r.text} Pods <Badge severity="warning" size="sm">status says {row.instances.ready}</Badge>
+      </span>
+    </Tooltip>
+  )
+}
 
 export interface CNPGSummaryAction {
   label: string
@@ -47,12 +63,68 @@ function InstancePill({ pod, namespace, onNavigate }: { pod: CNPGInstance; names
   )
 }
 
+const CHIP = 'inline-flex items-center gap-1.5 rounded-md border border-theme-border bg-theme-base px-2 py-0.5 text-xs'
+
+function DimensionChips({ dimensions, onSelect }: { dimensions: CNPGDimension[]; onSelect?: (id: CNPGDimension['id']) => void }) {
+  return (
+    <div className="mb-3 flex flex-wrap gap-1.5" aria-label="Health by dimension">
+      {dimensions.map((d) => {
+        const body = (
+          <>
+            <ToneDot tone={d.tone} />
+            <span className="text-theme-text-secondary">{d.label}</span>
+            <span className={toneTextClass(d.tone)}>{d.text}</span>
+          </>
+        )
+        return (
+          <Tooltip key={d.id} content={d.source} position="top">
+            {onSelect ? (
+              <button
+                type="button"
+                onClick={() => onSelect(d.id)}
+                aria-label={`${d.label}: ${d.text}. Open ${d.label.toLowerCase()} details`}
+                className={clsx(CHIP, 'hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent')}
+              >
+                {body}
+              </button>
+            ) : (
+              <span className={CHIP}>{body}</span>
+            )}
+          </Tooltip>
+        )
+      })}
+    </div>
+  )
+}
+
+/** "+N more" that opens the rest of the problems in place, when the host links nowhere else. */
+function MoreProblems({ count, open, onToggle, panelId }: { count: number; open: boolean; onToggle: () => void; panelId: string }) {
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      aria-controls={panelId}
+      onClick={onToggle}
+      className="inline-flex items-center gap-1 text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent rounded"
+    >
+      <CollapseChevron open={open} className="h-3 w-3" />
+      {open ? 'Hide' : `+${count} more`}
+    </button>
+  )
+}
+
 export function CNPGClusterSummary({
   row,
   onNavigate,
   actions,
   problemsLink,
   extra,
+  lead,
+  dimensions,
+  onSelectDimension,
+  initialProblemsExpanded = false,
+  haSection,
+  stateFacts,
 }: {
   row: CNPGFleetRow
   onNavigate?: CNPGNavigate
@@ -60,21 +132,50 @@ export function CNPGClusterSummary({
   /** Link to the complete list of this cluster's findings, shown when more than one exists. */
   problemsLink?: (count: number) => ReactNode
   extra?: ReactNode
+  /** Rendered first, above the problem callout: standing states such as maintenance mode. */
+  lead?: ReactNode
+  /** Serving · Replication · Protection · Storage, each from its own source (see cnpgDimensions). */
+  dimensions?: CNPGDimension[]
+  /** Open with every problem listed below the callout (e.g. arriving from the fleet's "+N more"). */
+  initialProblemsExpanded?: boolean
+  /** Makes each dimension chip open where that dimension is explained (e.g. Runtime → Replication). */
+  onSelectDimension?: (id: CNPGDimension['id']) => void
+  /** The host's "HA and instances" section (CNPGClusterHASection), rendered after Protection. */
+  haSection?: ReactNode
+  /** Extra FactRows appended to the State grid, e.g. live facts only the host can read. */
+  stateFacts?: ReactNode
 }) {
   const top = row.problems[0]
   const rest = row.problems.length - 1
   const p = row.protection
   const ns = row.namespace
   const radarFindings = row.problems.some((x) => x.severity !== 'posture')
+  const [showRest, setShowRest] = useState(initialProblemsExpanded)
+  const restDisclosure = useDisclosure(showRest)
 
   return (
     <div className="px-4 py-4">
+      {lead}
+      {dimensions && dimensions.length > 0 && <DimensionChips dimensions={dimensions} onSelect={onSelectDimension} />}
       {top && (
         <ProblemCallout
           problem={top}
           onNavigate={onNavigate}
-          more={rest > 0 ? problemsLink?.(row.problems.length) ?? <span>+{rest} more</span> : null}
+          more={
+            rest > 0
+              ? problemsLink?.(row.problems.length) ?? (
+                  <MoreProblems count={rest} open={showRest} onToggle={() => setShowRest((v) => !v)} panelId={restDisclosure.panelId} />
+                )
+              : null
+          }
         />
+      )}
+      {top && rest > 0 && !problemsLink && (
+        <Collapse open={showRest} id={restDisclosure.panelId}>
+          <div className="mb-4 rounded-lg border border-theme-border bg-theme-base p-3">
+            <ProblemList problems={row.problems.slice(1)} onNavigate={onNavigate} />
+          </div>
+        </Collapse>
       )}
 
       {actions && actions.length > 0 && (
@@ -102,11 +203,12 @@ export function CNPGClusterSummary({
         <FactRow label="Instances">
           <div>
             <span>
-              {row.instances.ready ?? '–'}/{row.instances.desired ?? '–'} ready
-              {row.cluster?.status?.currentPrimary && (
+              <ReadyCount row={row} /> ready
+              {row.cluster?.status?.currentPrimary && !row.primaryConflict && (
                 <span className="text-theme-text-secondary"> · primary <span className="font-mono">{row.cluster.status.currentPrimary}</span></span>
               )}
             </span>
+            {row.primaryConflict && <PrimaryConflictNote conflict={row.primaryConflict} />}
             {row.pods.length > 0 && (
               <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {row.pods.map((pod) => (
@@ -120,6 +222,12 @@ export function CNPGClusterSummary({
           <FactValue fact={row.replication} />
           <FactSource fact={row.replication} />
         </FactRow>
+        {row.disk && (
+          <FactRow label="Storage">
+            <FactValue fact={row.disk} />
+            <FactSource fact={row.disk} />
+          </FactRow>
+        )}
         {row.replicaCluster && (
           <FactRow label="Replica cluster">
             Follows {row.replicaCluster.source ? <span className="font-mono">{row.replicaCluster.source}</span> : 'an external primary'}
@@ -160,6 +268,7 @@ export function CNPGClusterSummary({
             {row.gitops.tool === 'argocd' ? 'Argo CD' : 'Flux'} <span className="font-mono">{row.gitops.name}</span>
           </FactRow>
         )}
+        {stateFacts}
       </FactGrid>
 
       <SummaryHeading>Protection</SummaryHeading>
@@ -216,6 +325,8 @@ export function CNPGClusterSummary({
           <FactSource fact={p.restoreValidation} />
         </FactRow>
       </FactGrid>
+
+      {haSection}
       {extra}
     </div>
   )

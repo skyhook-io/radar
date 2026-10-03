@@ -1,9 +1,11 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Database, FileCheck2, Settings2, ShieldCheck, Waypoints } from 'lucide-react'
-import { buildCNPGFleet, type CNPGFleet, type SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
+import { applyCNPGDisk, applyCNPGFleetMetrics, buildCNPGFleet, type CNPGDiskReading, type CNPGFleet, type SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 import type { APIResource } from '../../types'
 import { useCNPGWorkspace } from '../../api/cnpg'
+import { useCNPGFleetDisk } from '../../api/cnpg-storage'
+import { useCNPGFleetMetrics } from '../../api/cnpg-history'
 import { CNPG_SCREENS, type CNPGScreen } from './routes'
 
 export const CNPG_SIDEBAR_CATEGORY = 'CloudNativePG'
@@ -20,10 +22,32 @@ export function cnpgDiscovered(apiResources: APIResource[] | undefined): boolean
   return !!apiResources?.some((r) => r.group === 'postgresql.cnpg.io')
 }
 
+// Disk use joins the fleet here, so low-disk clusters count toward Needs
+// attention on every screen and sidebar badge that reads the fleet; measured
+// replication lag and disk growth join the same way.
 export function useCNPGFleet(namespaces: string[], enabled = true) {
   const query = useCNPGWorkspace(namespaces, { enabled })
-  const fleet = useMemo<CNPGFleet | null>(() => (query.data?.installed ? buildCNPGFleet(query.data) : null), [query.data])
+  const disk = useCNPGFleetDisk(namespaces, enabled && !!query.data?.installed)
+  const metrics = useCNPGFleetMetrics(namespaces, enabled && !!query.data?.installed)
+  const fleet = useMemo<CNPGFleet | null>(
+    () =>
+      query.data?.installed
+        ? applyCNPGFleetMetrics(
+            applyCNPGDisk(buildCNPGFleet(query.data), disk.data?.clusters ?? (disk.error ? diskFailed(query.data.objects.clusters ?? [], disk.error) : undefined)),
+            metrics.data?.clusters,
+            metrics.data,
+          )
+        : null,
+    [query.data, disk.data, disk.error, metrics.data],
+  )
   return { query, fleet }
+}
+
+// A failed disk read is stated per cluster; left undefined it would render as
+// still loading.
+function diskFailed(clusters: any[], err: unknown): CNPGDiskReading[] {
+  const reason = `Disk usage could not be read: ${err instanceof Error ? err.message : 'request failed'}`
+  return clusters.map((c) => ({ namespace: c?.metadata?.namespace ?? '', name: c?.metadata?.name ?? '', state: 'error', reason, claims: 0, measured: 0 }))
 }
 
 function destinationCount(screen: CNPGScreen, fleet: CNPGFleet | null): { count?: number | null; title?: string } {

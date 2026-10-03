@@ -1,9 +1,10 @@
-import type { ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import type { HealthLevel } from '../resources/resource-utils'
 import { formatAge } from '../resources/resource-utils'
 import { StatusDot } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
+import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { AlertBanner } from '../ui/drawer-components'
 import { TONE_TEXT_CLASS } from '../ui/severity-tone'
 import type { CNPGFact, CNPGProblem } from './workspace'
@@ -26,9 +27,9 @@ const TONE_TEXT: Record<HealthLevel, string> = {
   neutral: 'text-theme-text-secondary',
 }
 
-export const CNPG_PRIMARY_BUTTON = 'btn-brand inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium'
+export const CNPG_PRIMARY_BUTTON = 'btn-brand inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 text-sm font-medium'
 export const CNPG_SECONDARY_BUTTON =
-  'inline-flex items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-3 py-1.5 text-sm text-theme-text-primary transition-colors hover:bg-theme-hover'
+  'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-theme-border bg-theme-surface px-3 py-1.5 text-sm text-theme-text-primary transition-colors hover:bg-theme-hover'
 
 export function toneTextClass(tone: HealthLevel): string {
   return TONE_TEXT[tone]
@@ -39,12 +40,13 @@ export function FactValue({ fact, className }: { fact: CNPGFact; className?: str
   const body = (
     <span className={clsx(toneTextClass(fact.tone), className)}>
       {fact.text}
-      {age && <span className="text-theme-text-secondary">{fact.text ? ' · ' : ''}{age} ago</span>}
+      {age && fact.atMeaning === 'since' && <span className="text-theme-text-secondary"> for {age}</span>}
+      {age && fact.atMeaning !== 'since' && <span className="text-theme-text-secondary">{fact.text ? ' · ' : ''}{age} ago</span>}
     </span>
   )
-  if (!fact.source && !fact.at) return body
+  if (!fact.source && !fact.at && !fact.detail) return body
   return (
-    <Tooltip content={[fact.at ? new Date(fact.at).toUTCString() : null, fact.source].filter(Boolean).join(' · ')} position="top">
+    <Tooltip content={[fact.at ? `${fact.atMeaning === 'since' ? 'since ' : ''}${new Date(fact.at).toUTCString()}` : null, fact.source, fact.detail].filter(Boolean).join(' · ')} position="top">
       {body}
     </Tooltip>
   )
@@ -68,11 +70,56 @@ export function FactRow({ label, children }: { label: ReactNode; children: React
   )
 }
 
-export function SummaryHeading({ children, hint }: { children: ReactNode; hint?: ReactNode }) {
+export function SummaryHeading({ children, hint, anchor }: { children: ReactNode; hint?: ReactNode; anchor?: string }) {
   return (
-    <div className="mb-2 mt-5 flex items-baseline gap-2 first:mt-0">
+    <div data-cnpg-anchor={anchor} className="mb-2 mt-5 flex scroll-mt-4 items-baseline gap-2 first:mt-0">
       <h3 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">{children}</h3>
       {hint && <span className="text-[11px] text-theme-text-tertiary">{hint}</span>}
+    </div>
+  )
+}
+
+/**
+ * A section folded to one summary line. It opens itself when `attention`
+ * turns true (data arriving after the first render included), and stays as
+ * the reader left it otherwise.
+ */
+export function FoldSection({
+  title,
+  hint,
+  summary,
+  attention,
+  anchor,
+  children,
+}: {
+  title: ReactNode
+  hint?: ReactNode
+  summary: ReactNode
+  attention: boolean
+  anchor?: string
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(attention)
+  useEffect(() => {
+    if (attention) setOpen(true)
+  }, [attention])
+  const d = useDisclosure(open)
+  return (
+    <div data-cnpg-anchor={anchor} className="mt-5 scroll-mt-4 first:mt-0">
+      <button
+        type="button"
+        {...d.buttonProps}
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        <CollapseChevron open={open} className="h-3 w-3 shrink-0 self-center text-theme-text-tertiary" />
+        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">{title}</h3>
+        {hint && <span className="text-[11px] text-theme-text-tertiary">{hint}</span>}
+        {!open && <span className={clsx('min-w-0 text-sm', attention ? toneTextClass('degraded') : 'text-theme-text-secondary')}>{summary}</span>}
+      </button>
+      <Collapse open={open} id={d.panelId}>
+        <div className="pt-2">{children}</div>
+      </Collapse>
     </div>
   )
 }
@@ -97,6 +144,71 @@ const PROBLEM_VARIANT: Record<CNPGProblem['severity'], 'error' | 'warning' | 'in
   posture: 'info',
 }
 
+/** Where a problem's evidence is and what produced it, shared by the callout and the full list. */
+/** A problem's provenance label: where its evidence comes from, never a generic "Radar issue". */
+export function cnpgProblemOriginLabel(problem: CNPGProblem): { label: string; detail?: string } {
+  switch (problem.source) {
+    case 'audit':
+      return { label: 'Best-practice check', detail: problem.sourceDetail }
+    case 'measurement':
+      return { label: problem.measuredBy ? `Measured by ${problem.measuredBy}` : 'Measured', detail: problem.sourceDetail }
+  }
+  return problem.origin ?? { label: 'Detected by Radar' }
+}
+
+/**
+ * How a host opens a problem on its Issues page. Supplied by context so every
+ * CNPG summary and drawer gets the link without threading a prop through each.
+ */
+export const CNPGOpenIssueContext = createContext<((problem: CNPGProblem) => void) | undefined>(undefined)
+
+export function ProblemMeta({ problem, onNavigate, subjectIsSelf, children }: { problem: CNPGProblem; onNavigate?: CNPGNavigate; subjectIsSelf?: boolean; children?: ReactNode }) {
+  const openIssue = useContext(CNPGOpenIssueContext)
+  const origin = cnpgProblemOriginLabel(problem)
+  const aboutChild = !subjectIsSelf && problem.subject.kind !== 'Cluster'
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-tertiary">
+      {aboutChild && (
+        <span>
+          {problem.subject.kind}{' '}
+          <RefLink refTo={problem.subject} onNavigate={onNavigate} mono />
+          {problem.alsoAbout && problem.alsoAbout.length > 0 && ' '}
+          {problem.alsoAbout && problem.alsoAbout.length > 0 && (
+            <Tooltip
+              content={
+                <ul>
+                  {problem.alsoAbout.map((o) => (
+                    <li key={`${o.kind}/${o.name}`} className="font-mono">
+                      {o.kind} {o.name}
+                    </li>
+                  ))}
+                </ul>
+              }
+            >
+              <span>and {problem.alsoAbout.length} more</span>
+            </Tooltip>
+          )}
+        </span>
+      )}
+      <Tooltip content={origin.detail} disabled={!origin.detail}>
+        <span>{origin.label}</span>
+      </Tooltip>
+      {openIssue && problem.source === 'issue' && (
+        <button type="button" onClick={() => openIssue(problem)} className="whitespace-nowrap text-accent-text hover:underline">
+          See in Issues →
+        </button>
+      )}
+      {children}
+    </div>
+  )
+}
+
+export const CNPG_PROBLEM_TONE: Record<CNPGProblem['severity'], HealthLevel> = {
+  critical: 'unhealthy',
+  warning: 'degraded',
+  posture: 'neutral',
+}
+
 export function ProblemCallout({
   problem,
   more,
@@ -111,24 +223,46 @@ export function ProblemCallout({
   /** The callout sits on the subject's own page, so linking to it would loop. */
   subjectIsSelf?: boolean
 }) {
-  const aboutChild = !subjectIsSelf && problem.subject.kind !== 'Cluster'
   return (
     <AlertBanner variant={PROBLEM_VARIANT[problem.severity]} title={problem.title} message={problem.detail}>
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-tertiary">
-        {aboutChild && (
-          <span>
-            {problem.subject.kind}{' '}
-            <RefLink refTo={problem.subject} onNavigate={onNavigate} mono />
-          </span>
-        )}
-        <span>{problem.source === 'audit' ? 'Radar check' : 'Radar issue'}</span>
+      <ProblemMeta problem={problem} onNavigate={onNavigate} subjectIsSelf={subjectIsSelf}>
         {action}
         {more}
-      </div>
+      </ProblemMeta>
     </AlertBanner>
+  )
+}
+
+/** The problems a callout does not show, as a compact list with the callout's tone, title and source. */
+export function ProblemList({ problems, onNavigate }: { problems: CNPGProblem[]; onNavigate?: CNPGNavigate }) {
+  return (
+    <ul className="space-y-2">
+      {problems.map((p) => (
+        <li key={p.id} className="flex items-start gap-2 text-sm">
+          <span className="mt-1.5 shrink-0">
+            <StatusDot tone={CNPG_PROBLEM_TONE[p.severity]} size="sm" />
+          </span>
+          <div className="min-w-0">
+            <div className={clsx('font-medium break-words', toneTextClass(CNPG_PROBLEM_TONE[p.severity]))}>{p.title}</div>
+            {p.detail && <div className="text-xs text-theme-text-secondary break-words">{p.detail}</div>}
+            <ProblemMeta problem={p} onNavigate={onNavigate} />
+          </div>
+        </li>
+      ))}
+    </ul>
   )
 }
 
 export function ToneDot({ tone }: { tone: HealthLevel }) {
   return <StatusDot tone={tone} size="sm" />
+}
+
+/** status.currentPrimary and the primary role label disagree: both are named rather than one silently winning. */
+export function PrimaryConflictNote({ conflict }: { conflict: { status: string; labelled: string } }) {
+  return (
+    <div className={clsx('mt-0.5 text-xs', toneTextClass('degraded'))}>
+      CNPG status says primary <span className="font-mono">{conflict.status}</span>; the Pod labelled primary is{' '}
+      <span className="font-mono">{conflict.labelled}</span>. Status may be stale, or a failover is under way.
+    </div>
+  )
 }

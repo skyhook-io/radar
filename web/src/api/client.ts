@@ -2,6 +2,7 @@ import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef } from 'react'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
+import type { GitOpsWriteEvidence } from '@skyhook-io/k8s-ui/utils/gitops-write-guard'
 import type {
   AppHistory,
   AppRow,
@@ -20,7 +21,7 @@ import type {
   YamlDocumentIdentity,
   YamlSchemaLoadResult,
 } from '@skyhook-io/k8s-ui'
-import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
 import { useCanHelmWrite } from '../contexts/CapabilitiesContext'
 import type {
@@ -786,6 +787,33 @@ export function useResourceIssues(
     // on reopen without re-running an uncapped Compose every 30s.
     staleTime: 30000,
     enabled: enabled && !!kind && !!name,
+  });
+}
+
+// The Issues page narrowed to one subject: the same per-resource lookup with
+// ?coverage=1, which also says whether Radar reads the subject's kind and what
+// the caller's RBAC withheld. Polls like the page list.
+export interface SubjectIssuesResponse {
+  issues: Issue[];
+  coverage: "ok" | "syncing" | "notWatched";
+  withheld?: { issues: number; members: number };
+  visibility?: { state?: string; impact?: string };
+}
+
+export function useSubjectIssues(
+  subject: { kind: string; group: string; namespace: string; name: string } | null,
+  enabled: boolean,
+) {
+  const pathNs = subject?.namespace ? encodeURIComponent(subject.namespace) : "_";
+  const params = new URLSearchParams({ coverage: "1" });
+  if (subject?.group) params.set("group", subject.group);
+  return useQuery<SubjectIssuesResponse>({
+    queryKey: ["issues", "subject", subject?.kind ?? "", subject?.group ?? "", subject?.namespace ?? "", subject?.name ?? ""],
+    queryFn: () =>
+      fetchJSON(`/issues/resource/${encodeURIComponent(subject!.kind)}/${pathNs}/${encodeURIComponent(subject!.name)}?${params}`),
+    staleTime: 30000,
+    refetchInterval: ISSUES_REFRESH_INTERVAL_MS,
+    enabled: enabled && !!subject,
   });
 }
 
@@ -2498,6 +2526,24 @@ export function useGitOpsInsights(
   });
 }
 
+// Field-level evidence behind the GitOps write guard: whether each path is in
+// the object's last client-side apply or owned by its GitOps controller, plus
+// the owner's sync policy. Read server-side because Radar's caches strip both.
+export function fetchGitOpsWriteEvidence(body: {
+  kind: string;
+  group: string;
+  namespace: string;
+  name: string;
+  paths: string[];
+  owner?: { kind: string; group: string; namespace: string; name: string };
+}): Promise<GitOpsWriteEvidence> {
+  return fetchJSON<GitOpsWriteEvidence>("/gitops/write-evidence", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 // Full Git-rendered desired-vs-live diff for one Argo CD managed resource.
 // ns/name identify the Application; the ref identifies the managed resource.
 // Fetched on demand — the caller mounts this only when the user opens "Full
@@ -3104,23 +3150,31 @@ function retryMetricsQuery(failureCount: number, error: unknown): boolean {
   return !isMetricsUnavailableError(error) && failureCount < 1;
 }
 
+// The query behind usePodMetrics, for callers reading several Pods at once
+// (useQueries) that must share its cache and its null-when-unavailable rule.
+// null means no metrics for this Pod: the metrics API is missing, or the Pod
+// has not been scraped yet; one Pod's null cannot tell those apart.
+export function podMetricsQuery(namespace: string, podName: string, enabled = true) {
+  return {
+    queryKey: ["pod-metrics", namespace, podName] as const,
+    queryFn: () =>
+      fetchMetricsOrNull<PodMetrics>(`/metrics/pods/${namespace}/${podName}`),
+    enabled: Boolean(namespace && podName) && enabled,
+    staleTime: 15000,
+    refetchInterval: 30000,
+    refetchOnMount: "always" as const,
+    refetchOnReconnect: "always" as const,
+    retry: retryMetricsQuery,
+  };
+}
+
 // Fetch metrics for a specific pod
 export function usePodMetrics(
   namespace: string,
   podName: string,
   options?: { enabled?: boolean },
 ) {
-  return useQuery<PodMetrics | null>({
-    queryKey: ["pod-metrics", namespace, podName],
-    queryFn: () =>
-      fetchMetricsOrNull<PodMetrics>(`/metrics/pods/${namespace}/${podName}`),
-    enabled: Boolean(namespace && podName) && (options?.enabled ?? true),
-    staleTime: 15000,
-    refetchInterval: 30000,
-    refetchOnMount: "always",
-    refetchOnReconnect: "always",
-    retry: retryMetricsQuery,
-  });
+  return useQuery<PodMetrics | null>(podMetricsQuery(namespace, podName, options?.enabled ?? true));
 }
 
 export function usePodEnvironment(namespace: string, podName: string, enabled = true) {
@@ -3422,7 +3476,7 @@ export type PrometheusTimeRange =
 // PVC usage at a moment in time, derived from kubelet_volume_stats_*.
 export interface PrometheusPVCUsage {
   // Hub packages the frontend independently from per-cluster agent upgrades.
-  status?: "available" | "no_series" | "invalid_data" | "query_failed";
+  status?: "available" | "no_series" | "invalid_data" | "query_failed" | "ambiguous_scope" | "scope_mismatch";
   namespace: string;
   name: string;
   used: number;
@@ -6663,8 +6717,35 @@ export function useNamespaceScope() {
   });
 }
 
-const NAMESPACE_SWITCH_TIMEOUT = 5000;
+const NAMESPACE_SWITCH_TIMEOUT = 15000;
 const NAMESPACE_RESCOPE_TIMEOUT = 120000;
+const NAMESPACE_RECONCILE_TIMEOUT = 5000;
+
+// After a switch times out on the client the server may still have applied
+// it. Returns the server's scope when it holds exactly the requested pick, so
+// a slow success is not reported as a failure.
+export async function reconcileNamespaceSwitch(
+  namespaces: string[],
+): Promise<NamespaceScope | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    NAMESPACE_RECONCILE_TIMEOUT,
+  );
+  try {
+    const scope = await fetchJSON<NamespaceScope>(
+      "/cluster/namespace-scope",
+      controller.signal,
+    );
+    const want = [...new Set(namespaces)].sort().join(",");
+    const got = [...new Set(scope.actives)].sort().join(",");
+    return want === got ? scope : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 export function debugNamespaceLog(
   label: string,
@@ -6678,6 +6759,24 @@ export function debugNamespaceLog(
     href: window.location.href,
     ...payload,
   });
+}
+
+/**
+ * After a namespace switch lands, refetch what may have read the old pick.
+ * "All namespaces" is sent as no namespaces param, which the server reads as
+ * the stored pick, so a request sent while the switch was in flight used the
+ * old one. It is cancelled first: invalidating would otherwise reuse a first
+ * fetch still in flight instead of sending a new one.
+ */
+export async function refreshAfterNamespaceSwitch(
+  queryClient: QueryClient,
+  scope: Pick<NamespaceScope, "cacheScoped" | "actives">,
+): Promise<void> {
+  if (!scope.cacheScoped && scope.actives.length > 0) return;
+  const notScope = (query: { queryKey: readonly unknown[] }) =>
+    query.queryKey[0] !== "namespace-scope";
+  await queryClient.cancelQueries({ predicate: notScope });
+  await queryClient.invalidateQueries({ predicate: notScope });
 }
 
 export function useSetActiveNamespace() {
@@ -6701,7 +6800,7 @@ export function useSetActiveNamespace() {
       // flag). If the scope query is missing/stale we can't yet tell a cheap
       // view-filter change from a cache-rebuilding rescope, so bias to the long
       // timeout — only a confirmed non-scoped session gets the fast switch timeout.
-      // Aborting a real rebuild at 5s surfaces a spurious failure while the server
+      // Aborting a real rebuild at the switch timeout surfaces a spurious failure while the server
       // keeps going.
       const isRescope = currentScope?.cacheScoped !== false;
       const timeoutMs = isRescope
@@ -6735,6 +6834,11 @@ export function useSetActiveNamespace() {
           error: error instanceof Error ? error.message : String(error),
         });
         if (error instanceof Error && error.name === "AbortError") {
+          const applied = await reconcileNamespaceSwitch(namespaces);
+          if (applied) {
+            debugNamespaceLog("mutation:timeout-but-applied", { namespaces });
+            return applied;
+          }
           throw new Error(
             isRescope
               ? "Namespace rescope timed out. The cluster may still be loading."
@@ -6757,9 +6861,7 @@ export function useSetActiveNamespace() {
         });
       }
       queryClient.setQueryData<NamespaceScope>(["namespace-scope"], scope);
-      if (scope.cacheScoped) {
-        queryClient.invalidateQueries();
-      }
+      void refreshAfterNamespaceSwitch(queryClient, scope);
       debugNamespaceLog("mutation:success-after-scope-cache-write");
     },
     onError: () => {

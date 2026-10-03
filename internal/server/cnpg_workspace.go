@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -62,6 +63,7 @@ var cnpgWorkspaceKinds = []cnpgWorkspaceKind{
 	{key: "databases", group: cnpgGroup, kind: "Database", resource: "databases"},
 	{key: "publications", group: cnpgGroup, kind: "Publication", resource: "publications"},
 	{key: "subscriptions", group: cnpgGroup, kind: "Subscription", resource: "subscriptions"},
+	{key: "databaseRoles", group: cnpgGroup, kind: "DatabaseRole", resource: "databaseroles"},
 	{key: "imageCatalogs", group: cnpgGroup, kind: "ImageCatalog", resource: "imagecatalogs"},
 	{key: "clusterImageCatalogs", group: cnpgGroup, kind: "ClusterImageCatalog", resource: "clusterimagecatalogs", clusterScoped: true},
 	{key: "objectStores", group: cnpgBarmanGroup, kind: "ObjectStore", resource: "objectstores"},
@@ -126,6 +128,10 @@ type CNPGWorkspaceResponse struct {
 	Issues         []CNPGWorkspaceIssue             `json:"issues"`
 	Audit          []CNPGWorkspaceAuditFinding      `json:"audit"`
 	BackupsOmitted int                              `json:"backupsOmitted"`
+	// ScheduleReadings words each readable ScheduledBackup's schedule as the
+	// operator reads it, keyed "namespace/name"; a schedule the operator
+	// cannot parse has no entry.
+	ScheduleReadings map[string]string `json:"scheduleReadings,omitempty"`
 }
 
 // cnpgKindAccess is the resolved read scope for one kind. all means every
@@ -237,6 +243,7 @@ func (s *Server) handleCNPGWorkspace(w http.ResponseWriter, r *http.Request) {
 
 	resp.Issues = s.cnpgWorkspaceIssues(r, namespaces, access, instancePods)
 	resp.Audit = cnpgWorkspaceAudit(items[cnpgWorkspaceClusterKey], items[cnpgWorkspaceSchedKey], access[cnpgWorkspaceSchedKey])
+	resp.ScheduleReadings = cnpgScheduleReadings(items[cnpgWorkspaceSchedKey])
 
 	s.writeJSON(w, resp)
 }
@@ -627,6 +634,9 @@ func cnpgWorkspaceIssueVisible(iss issues.Issue, access map[string]cnpgKindAcces
 		return false
 	}
 	key, ok := cnpgWorkspaceKeyByGroupKind[iss.Group+"/"+iss.Kind]
+	if ok && iss.Reason == issues.ReasonCNPGScheduledRunNoBackup && !access[cnpgWorkspaceSchedKey].covers(iss.Namespace) {
+		return false
+	}
 	return ok && access[key].covers(iss.Namespace)
 }
 
@@ -673,5 +683,22 @@ func cnpgWorkspaceAudit(clusters, scheduled []*unstructured.Unstructured, schedA
 		}
 		return out[i].Name < out[j].Name
 	})
+	return out
+}
+
+func cnpgScheduleReadings(scheduled []*unstructured.Unstructured) map[string]string {
+	out := map[string]string{}
+	for _, sb := range scheduled {
+		spec, _, _ := unstructured.NestedString(sb.Object, "spec", "schedule")
+		if strings.TrimSpace(spec) == "" || len(spec) > cnpgScheduleMaxLen {
+			continue
+		}
+		if _, err := issues.ParseCNPGSchedule(spec); err != nil {
+			continue
+		}
+		if reading := describeCNPGSchedule(spec); reading != "" {
+			out[sb.GetNamespace()+"/"+sb.GetName()] = reading
+		}
+	}
 	return out
 }

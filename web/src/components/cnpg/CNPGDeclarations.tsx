@@ -1,9 +1,25 @@
 import { useMemo, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { AlertTriangle } from 'lucide-react'
-import { Badge, cnpgGitOpsSource, isApiGroup, toneTextClass, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
+import {
+  Badge,
+  CNPGLogicalPathView,
+  cnpgDatabaseRoleFacts,
+  cnpgDatabaseRoleMeta,
+  cnpgGitOpsSource,
+  cnpgLogicalPaths,
+  cnpgLogicalSlotFact,
+  isApiGroup,
+  refToSelectedResource,
+  relationUnavailable,
+  toneTextClass,
+  type CNPGFleetRow,
+  type CNPGLogicalPath,
+} from '@skyhook-io/k8s-ui'
+import { useCNPGPublisherSlots } from './logicalSlots'
 import type { SelectedResource } from '../../types'
 import {
+  CNPGRefreshFailedNotice,
   CNPGWorkspaceHeader,
   CoverageNotice,
   FilterChips,
@@ -23,7 +39,7 @@ type State = 'applied' | 'failed' | 'pending'
 
 interface DeclItem {
   key: string
-  kind: 'Database' | 'Publication' | 'Subscription' | 'Managed role'
+  kind: 'Database' | 'Publication' | 'Subscription' | 'Managed role' | 'DatabaseRole'
   pgName: string
   indent: boolean
   state: State
@@ -120,7 +136,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
             meta:
               kind === 'Publication'
                 ? p.spec?.target?.allTables ? 'all tables' : 'selected objects'
-                : `from ${p.spec?.publicationName ?? '?'} on ${p.spec?.externalClusterName ?? '?'}`,
+                : `from ${p.spec?.publicationName ?? 'an unnamed publication'} on ${p.spec?.externalClusterName ?? 'an unnamed external cluster'}`,
             error: pst === 'failed' ? p.status?.message : undefined,
             source: gitopsSource(p),
             resource: cnpgResource(kind === 'Publication' ? 'publications' : 'subscriptions', ns, p.metadata?.name),
@@ -148,6 +164,24 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
           isField: false,
         })
       }
+    }
+    for (const r of (data.objects.databaseRoles ?? []).filter(valid)) {
+      const ns = r.metadata?.namespace ?? ''
+      const clusterName = r.spec?.cluster?.name ?? '(no cluster)'
+      const g = group(ns, clusterName)
+      const f = cnpgDatabaseRoleFacts(r, g.row?.cluster ?? null)
+      g.items.push({
+        key: `databaserole/${ns}/${r.metadata?.name}`,
+        kind: 'DatabaseRole',
+        pgName: f.pgName,
+        indent: false,
+        state: f.state,
+        meta: cnpgDatabaseRoleMeta(f),
+        error: f.state === 'failed' ? f.message : undefined,
+        source: gitopsSource(r),
+        resource: cnpgResource('databaseroles', ns, r.metadata?.name),
+        isField: false,
+      })
     }
     for (const row of fleet.rows) {
       const roles: any[] = Array.isArray(row.cluster?.spec?.managed?.roles) ? row.cluster.spec.managed.roles : []
@@ -179,7 +213,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         const fb = b.items.some((i) => i.state === 'failed') ? 0 : 1
         return fa - fb || a.namespace.localeCompare(b.namespace) || a.cluster.localeCompare(b.cluster)
       })
-  }, [data.objects.databases, data.objects.publications, data.objects.subscriptions, fleet.rows, clusterFilter, show])
+  }, [data.objects.databases, data.objects.publications, data.objects.subscriptions, data.objects.databaseRoles, fleet.rows, clusterFilter, show])
 
   const totals = useMemo(() => {
     let failed = 0
@@ -190,7 +224,24 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
     }
     return { failed, pending }
   }, [fleet.rows])
-  const declCoverage = worstCoverage(data.coverage.databases, data.coverage.publications, data.coverage.subscriptions)
+  const logicalPaths = useMemo(() => {
+    const valid = (o: any) => isApiGroup(o?.apiVersion, 'postgresql.cnpg.io')
+    const paths = cnpgLogicalPaths(
+      (data.objects.subscriptions ?? []).filter(valid),
+      data.objects.clusters ?? [],
+      (data.objects.publications ?? []).filter(valid),
+      data.objects.poolers ?? [],
+      (ns) => relationUnavailable(data, 'publications', ns, 'Publications'),
+    )
+    if (!clusterFilter) return paths
+    return paths.filter(
+      (p) =>
+        `${p.subscription.namespace}/${p.subscription.cluster}` === clusterFilter ||
+        (p.publisher.kind === 'cluster' && `${p.publisher.namespace}/${p.publisher.name}` === clusterFilter),
+    )
+  }, [data, clusterFilter])
+
+  const declCoverage = worstCoverage(data.coverage.databases, data.coverage.publications, data.coverage.subscriptions, data.coverage.databaseRoles)
 
   const chips = [
     ...(clusterFilter ? [{ label: `Cluster: ${clusterFilter}`, onClear: () => onSetParams({ cluster: null }) }] : []),
@@ -201,7 +252,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
     <div className="flex min-h-0 flex-1 flex-col">
       <CNPGWorkspaceHeader
         title="Declarations"
-        subtitle="Databases, managed roles, publications and subscriptions, by PostgreSQL cluster. Declared is not the same as reconciled."
+        subtitle="Databases, roles, publications and subscriptions, by PostgreSQL cluster. Declared is not the same as reconciled."
       />
       <ScreenBody>
         <CoverageNotice fleet={fleet} data={data} />
@@ -231,6 +282,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         ) : (
           groups.map((g) => {
             const failed = g.items.filter((i) => i.state === 'failed').length
+            const noSources = g.items.every((i) => !i.source)
             return (
               <section key={`${g.namespace}/${g.cluster}`} className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
                 <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-theme-border px-4 py-2.5">
@@ -249,12 +301,14 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
                     {failed > 0 ? ` · ${failed} not reconciled` : ''}
                     {!g.row ? ' · target cluster not visible' : ''}
                   </span>
+                  {noSources && <span className="text-xs text-theme-text-tertiary">no GitOps source recorded on any of them</span>}
                 </div>
                 <div className="table-divide-subtle">
                   {g.items.map((i) => (
                     <DeclarationRow
                       key={i.key}
                       item={i}
+                      sourceStated={noSources}
                       active={!i.isField && sameResource(inspected, i.resource)}
                       onInspect={() => onInspect(i.resource)}
                     />
@@ -264,12 +318,44 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
             )
           })
         )}
+
+        {!show && logicalPaths.length > 0 && (
+          <section className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
+            <div className="flex flex-wrap items-baseline gap-x-3 border-b border-theme-border px-4 py-2.5">
+              <span className="text-sm font-semibold text-theme-text-primary">Logical replication</span>
+              <span className="text-xs text-theme-text-tertiary">
+                Each Subscription to its publication and the slot the publisher keeps for it · Subscriptions created in SQL are not listed
+              </span>
+            </div>
+            <div className="table-divide-subtle">
+              {logicalPaths.map((p) => (
+                <LogicalPathRow key={`${p.subscription.namespace}/${p.subscription.name}`} path={p} onInspect={onInspect} />
+              ))}
+            </div>
+          </section>
+        )}
       </ScreenBody>
     </div>
   )
 }
 
-function DeclarationRow({ item, active, onInspect }: { item: DeclItem; active: boolean; onInspect: () => void }) {
+function LogicalPathRow({ path, onInspect }: { path: CNPGLogicalPath; onInspect: CNPGScreenProps['onInspect'] }) {
+  const { observed, query } = useCNPGPublisherSlots(path.publisher)
+  return (
+    <div className="px-4 py-3">
+      <CNPGLogicalPathView
+        path={path}
+        slot={cnpgLogicalSlotFact(path, observed)}
+        notice={<CNPGRefreshFailedNotice queries={[query]} />}
+        onNavigate={(ref) => onInspect(refToSelectedResource(ref))}
+        compact
+      />
+    </div>
+  )
+}
+
+// `sourceStated`: the cluster header already says none of its rows records a GitOps source.
+function DeclarationRow({ item, active, onInspect, sourceStated }: { item: DeclItem; active: boolean; onInspect: () => void; sourceStated?: boolean }) {
   const badge = STATE_BADGE[item.state]
   let detail: ReactNode = null
   if (item.error) {
@@ -304,7 +390,7 @@ function DeclarationRow({ item, active, onInspect }: { item: DeclItem; active: b
         {item.isField && <Sub>field of the Cluster</Sub>}
       </div>
       <div className="min-w-0 text-xs text-theme-text-secondary break-words">
-        {item.source ?? <span className="text-theme-text-tertiary">GitOps source not recorded</span>}
+        {item.source ?? (sourceStated ? null : <span className="text-theme-text-tertiary">GitOps source not recorded</span>)}
       </div>
     </div>
   )
