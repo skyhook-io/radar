@@ -75,6 +75,17 @@ var childCategories = map[issuesapi.Category]bool{
 	issuesapi.CategoryPVCPending:               true,
 }
 
+// podCreationChildCategories are the child symptoms that explain a
+// ReplicaFailure parent: the controller could not create pods at all, so only a
+// rejection of pod creation names the cause. A pod runtime symptom such as a
+// crashloop on an existing pod does not, and must not fold it.
+var podCreationChildCategories = map[issuesapi.Category]bool{
+	issuesapi.CategoryQuotaExceeded:            true,
+	issuesapi.CategoryAdmissionWebhookBlocking: true,
+	issuesapi.CategoryPodSecurityViolation:     true,
+	issuesapi.CategoryRBACForbidden:            true,
+}
+
 // parentRollupCategories are the workload-level summaries that should be
 // suppressed when a more-specific child symptom exists for the same subject.
 //
@@ -139,11 +150,18 @@ func dedupeRepeatedCronJobFailureOverChild(in []Issue) []Issue {
 func dedupeWorkloadDegradedOverChild(in []Issue) []Issue {
 	// Per subject, the worst severity among its specific child-symptom rows.
 	maxChildSev := map[string]int{}
+	maxCreationChildSev := map[string]int{}
 	for _, i := range in {
 		if childCategories[i.Category] {
 			k := subjectKeyOf(subjectRef(i))
 			if r := SeverityRank(i.Severity); r > maxChildSev[k] {
 				maxChildSev[k] = r
+			}
+			// Only the scheduling source's admission rejections are about pod
+			// creation; the same categories from a running pod (an RBAC
+			// denial at runtime) are not.
+			if r := SeverityRank(i.Severity); i.Source == SourceScheduling && podCreationChildCategories[i.Category] && r > maxCreationChildSev[k] {
+				maxCreationChildSev[k] = r
 			}
 		}
 	}
@@ -164,7 +182,11 @@ func dedupeWorkloadDegradedOverChild(in []Issue) []Issue {
 			// Suppress only when a child at least as severe exists — never
 			// downgrade a critical rollup to a warning child.
 			k := subjectKeyOf(subjectRef(i))
-			if r, ok := maxChildSev[k]; ok && r >= SeverityRank(i.Severity) {
+			sev := maxChildSev
+			if i.Reason == "ReplicaFailure" {
+				sev = maxCreationChildSev
+			}
+			if r, ok := sev[k]; ok && r >= SeverityRank(i.Severity) {
 				if i.IssueTiming != "" {
 					if prev, seen := suppressedIssueTiming[k]; seen && prev != i.IssueTiming {
 						suppressedIssueTiming[k] = ""

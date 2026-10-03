@@ -180,6 +180,7 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		Count:                1,
 		RestartCount:         p.RestartCount,
 		LastTerminatedReason: p.LastTerminatedReason,
+		RestartLoop:          p.RestartLoop,
 		IssueTiming:          issueTiming,
 		IssueTimingBasis:     issueTimingBasis,
 	}

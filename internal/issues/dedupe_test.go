@@ -104,6 +104,28 @@ func TestDedupeWorkloadDegradedOverChild_Phase0(t *testing.T) {
 		}
 	})
 
+	t.Run("ReplicaFailure is not folded into a crashloop on an existing pod", func(t *testing.T) {
+		rollout := Issue{Source: SourceProblem, Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web",
+			Category: issuesapi.CategoryRolloutStalled, Severity: SeverityCritical, Reason: "ReplicaFailure"}
+		crash := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "web-abc",
+			Owner: dep, Category: issuesapi.CategoryCrashLoop, Severity: SeverityCritical}
+		out := dedupeWorkloadDegradedOverChild([]Issue{rollout, crash})
+		if !hasCategory(out, issuesapi.CategoryRolloutStalled) {
+			t.Fatalf("pod creation failure is independent of a crashlooping pod and must survive, got %+v", out)
+		}
+	})
+
+	t.Run("ReplicaFailure is not folded into a runtime RBAC denial on a running pod", func(t *testing.T) {
+		rollout := Issue{Source: SourceProblem, Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web",
+			Category: issuesapi.CategoryRolloutStalled, Severity: SeverityCritical, Reason: "ReplicaFailure"}
+		runtimeDenial := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "web-old",
+			Owner: dep, Category: issuesapi.CategoryRBACForbidden, Severity: SeverityCritical}
+		out := dedupeWorkloadDegradedOverChild([]Issue{rollout, runtimeDenial})
+		if !hasCategory(out, issuesapi.CategoryRolloutStalled) {
+			t.Fatalf("a running pod's RBAC denial does not explain a pod creation failure, got %+v", out)
+		}
+	})
+
 	t.Run("cronjob_failed is not a rollup and survives alongside an unrelated job_failed", func(t *testing.T) {
 		cron := Issue{Source: SourceProblem, Group: "batch", Kind: "CronJob", Namespace: "ns", Name: "nightly",
 			Category: issuesapi.CategoryCronJobFailed, Severity: SeverityWarning, Reason: "stale"}

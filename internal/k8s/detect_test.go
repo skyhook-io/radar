@@ -1233,7 +1233,7 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 		},
 		&corev1.Event{
 			ObjectMeta:     metav1.ObjectMeta{Name: "thrash.1", Namespace: "prod"},
-			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "thrash"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "thrash", FieldPath: "spec.containers{app}"},
 			Type:           corev1.EventTypeWarning,
 			Reason:         "Unhealthy",
 			Message:        "Liveness probe failed: HTTP probe failed with statuscode: 500",
@@ -1263,7 +1263,7 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 		problems = DetectProblems(cache, "prod")
 		if hasProblem(problems, "Pod", "readiness", "ReadinessProbeFailed") &&
 			hasProblem(problems, "Pod", "liveness", "LivenessProbeFailed") &&
-			hasProblem(problems, "Pod", "thrash", "HighRestartCount") &&
+			hasProblem(problems, "Pod", "thrash", "CrashLoopBackOff") &&
 			hasProblem(problems, "Pod", "stale-probe", "CrashLoopBackOff") {
 			break
 		}
@@ -1272,11 +1272,16 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 
 	assertProblem(t, problems, "Pod", "readiness", "ReadinessProbeFailed", "high")
 	assertProblem(t, problems, "Pod", "liveness", "LivenessProbeFailed", "critical")
-	assertProblem(t, problems, "Pod", "thrash", "HighRestartCount", "high")
-	assertProblem(t, problems, "Pod", "stale-probe", "CrashLoopBackOff", "critical")
-	if hasProblem(problems, "Pod", "thrash", "LivenessProbeFailed") {
-		t.Fatalf("liveness event should not mask high restart thrash: %+v", problems)
+	// Clean exits with liveness failures alongside are a restart loop: one
+	// crashloop row carrying the probe failure as evidence, not a liveness row.
+	assertProblem(t, problems, "Pod", "thrash", "CrashLoopBackOff", "critical")
+	if hasProblem(problems, "Pod", "thrash", "LivenessProbeFailed") || hasProblem(problems, "Pod", "thrash", "HighRestartCount") {
+		t.Fatalf("restart loop should be one crashloop row: %+v", problems)
 	}
+	if got, _ := lookupProblem(problems, "Pod", "thrash", "CrashLoopBackOff"); got.RestartLoop == nil || got.RestartLoop.LivenessProbeFailure == nil {
+		t.Fatalf("thrash restart loop = %+v, want liveness probe evidence", got.RestartLoop)
+	}
+	assertProblem(t, problems, "Pod", "stale-probe", "CrashLoopBackOff", "critical")
 	if hasProblem(problems, "Pod", "stale-probe", "LivenessProbeFailed") {
 		t.Fatalf("timeless probe event should not override the current pod reason: %+v", problems)
 	}

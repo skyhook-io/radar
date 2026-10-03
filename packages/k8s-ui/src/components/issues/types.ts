@@ -230,6 +230,9 @@ export interface Issue {
   // Pod crash context carried from the representative member.
   restart_count?: number;
   last_terminated_reason?: string;
+  /** Evidence for a container in an active restart loop (crashloop issues).
+   *  Probe failures are observations alongside the restarts, not a cause. */
+  restart_loop?: IssueRestartLoop;
 
   /**
    * Best-effort timing evidence from K8s-native signals. Absent when Radar has
@@ -359,4 +362,20 @@ export function issueMessageParts(issue: Issue): { headline: string; detail: str
   const normalized = isImagePull ? normalizeImagePullMessage(raw) : null;
   if (normalized && normalized !== raw) return { headline: normalized, detail: raw };
   return { headline: raw, detail: '' };
+}
+
+export interface IssueProbeFailure {
+  last_seen: string;
+  message?: string;
+}
+
+export interface IssueRestartLoop {
+  container: string;
+  sidecar?: boolean;
+  restart_count: number;
+  last_exit_code: number;
+  last_reason?: string;
+  last_finished_at?: string;
+  liveness_probe_failure?: IssueProbeFailure;
+  readiness_probe_failure?: IssueProbeFailure;
 }
