@@ -649,7 +649,7 @@ export function getCNPGObjectStoreStatus(resource: any): StatusBadge {
   // Every timestamp on a recovery window is optional, so a server can be listed
   // with no recovery point at all. The entry existing is not a backup existing.
   if (!windows.some((w) => w.firstRecoverabilityPoint || w.lastSuccessfulBackupTime)) {
-    return { text: 'No recovery point', color: healthColors.unknown, level: 'unknown' }
+    return { text: 'Recovery point not reported', color: healthColors.unknown, level: 'unknown' }
   }
   return { text: 'Recoverable', color: healthColors.healthy, level: 'healthy' }
 }
