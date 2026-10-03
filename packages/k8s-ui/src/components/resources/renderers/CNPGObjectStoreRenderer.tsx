@@ -51,7 +51,7 @@ export function CNPGObjectStoreRenderer({
         <AlertBanner
           variant="error"
           title={`Backups failing for ${failing.length === 1 ? failing[0].server : `${failing.length} servers`}`}
-          message="The most recent backup attempt failed after the last success, so the recoverable range has stopped moving forward."
+          message="The most recent base backup failed after the last success. While WAL archiving works, recovery still reaches the newest archived WAL, but it replays from an ever older base backup."
         />
       )}
 
@@ -226,8 +226,8 @@ function RecoveryWindowRow({
       </PropertyList>
       {w.failingSinceLastSuccess && (
         <div className="mt-2 pt-2 border-t border-theme-border text-xs text-theme-text-secondary">
-          Every backup since the last success has failed. The oldest restorable point will still age
-          out under the retention policy, so the window is shrinking from both ends.
+          Every backup since the last success has failed. Recovery replays from that backup, so it takes
+          longer the longer this lasts, and retention still moves the earliest restorable point forward.
         </div>
       )}
     </div>
