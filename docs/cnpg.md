@@ -29,7 +29,7 @@ Every CNPG kind's full detail is `/cnpg/<plural>/<namespace|_>/<name>` — reach
 
 ## The certainty contract
 
-Every value is something the cluster reports, labelled with where it came from. When the cluster does not report something the UI says so; it never shows zero, "none" or green in its place.
+Every value is something the cluster reports, labelled with where it came from. When the cluster does not report something the UI says so; it never shows zero, "none" or green in its place. These are Radar's shared rules for unknown and partial values ([DESIGN.md](../DESIGN.md#unknown-partial-and-denied-values)); the table below is where each CloudNativePG fact comes from.
 
 | Fact | Source | When it is not known |
 |---|---|---|

@@ -173,6 +173,17 @@ Use CSS classes from `components.css` for status cells in table rows:
 | `.border-r-subtle` | Right border |
 | `.border-t-subtle` | Top border |
 
+### Unknown, partial and denied values
+Radar shows only what the cluster reports, and says where it came from. These rules apply to every surface that reads several sources at once (workspace integrations such as Capacity and CloudNativePG, multi-source detail pages):
+
+- **Unavailable ≠ zero.** A value Radar could not read (no access, not installed, not cached, the request failed) renders as unread, naming why — never as `0`, "none" or a healthy colour. A missing grant is named exactly (`GrantText`, `formatGrant`).
+- **Partial ≠ exact.** A count or total over data read only in part is a lower bound: `≥N` (`CertaintyGlyph`, `SidebarCategoryDestination.countLowerBound`), and a zero over partial data is unknown, not none.
+- **Unread is listed, not left out.** A summary line names what it could not read ("not read: Pods, zones"); a combined tone is never calmer than a part that was not read (`worseTone` ranks `unknown` above `healthy`).
+- **Recorded ≠ observed.** A value copied from a status field, an annotation or a declaration says so; a value matched to its subject by name rather than by identity says that too.
+- **Facts keep their rows.** `FactRow` renders the unread text in place; never hide a row because its value is missing (unlike `Property`, which hides empty values).
+
+The shared pieces live in `packages/k8s-ui/src/components/workspace/` (facts, sections, problems, certainty) and `web/src/components/workspace/` (screen layout and tables); each integration's own doc lists which source each value comes from and how it reads when unknown.
+
 ## 5. Layout Principles
 
 ### Spacing
