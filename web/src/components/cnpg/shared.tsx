@@ -4,6 +4,10 @@ import { Database } from 'lucide-react'
 import {
   CNPG_KIND_BY_KEY,
   PaneLoader,
+  RadarUpgradeAction,
+  getRadarUpgradeRequirement,
+  radarUpgradeDetail,
+  radarUpgradeHeadline,
   type CNPGFleet,
   type CNPGKindCoverage,
   type CNPGWorkspaceResponse,
@@ -79,6 +83,21 @@ export function CNPGScreenGate({
   const data = query.data
   if (!data && query.isLoading) return <PaneLoader label="Loading CloudNativePG…" className="flex-1" />
   if (!data) {
+    const upgrade = getRadarUpgradeRequirement(query.error)
+    if (upgrade) {
+      return (
+        <ScreenEmptyState
+          icon={Database}
+          title={radarUpgradeHeadline('The CloudNativePG workspace')}
+          detail={radarUpgradeDetail(upgrade)}
+          action={
+            <div className="mt-3 text-sm">
+              <RadarUpgradeAction requirement={upgrade} />
+            </div>
+          }
+        />
+      )
+    }
     return (
       <ScreenEmptyState
         icon={Database}

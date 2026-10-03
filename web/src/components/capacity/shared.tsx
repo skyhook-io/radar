@@ -23,6 +23,8 @@ import {
   ResourceBar,
   Tooltip,
   WithTooltip,
+  certaintyValueLabel,
+  CertaintyGlyph,
   type CapacityActivityEpisode,
   type CapacityCertainty,
   type CapacityClaimStage,
@@ -264,20 +266,6 @@ function missingUsageMessage(coverage?: CapacitySourceCoverage): string {
 // = exact · ≥ lower bound · ≤ upper bound · ? unknown
 // ============================================================================
 
-export function certaintyGlyph(certainty: CapacityCertainty): string {
-  if (certainty === "exact") return "=";
-  if (certainty === "lower_bound") return "≥";
-  if (certainty === "upper_bound") return "≤";
-  return "?";
-}
-
-export function certaintyValueLabel(certainty: CapacityCertainty): string {
-  if (certainty === "exact") return "Exact";
-  if (certainty === "lower_bound") return "Lower bound";
-  if (certainty === "upper_bound") return "Upper bound";
-  return "Unknown certainty";
-}
-
 export function observationTitle(
   observation: CapacityQuantityObservation,
   definition?: string,
@@ -294,27 +282,6 @@ export function observationTitle(
 }
 
 /** Small bordered mono glyph chip; hover reveals certainty/source/asOf. */
-export function CertaintyGlyph({
-  certainty,
-  title,
-}: {
-  certainty: CapacityCertainty;
-  title?: string;
-}) {
-  return (
-    <WithTooltip tip={title ?? certaintyValueLabel(certainty)}>
-      <span
-        tabIndex={0}
-        role="note"
-        aria-label={title ?? certaintyValueLabel(certainty)}
-        className="cursor-help rounded border border-theme-border-light px-1 font-mono text-[10px] leading-tight text-theme-text-tertiary focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
-      >
-        {certaintyGlyph(certainty)}
-      </span>
-    </WithTooltip>
-  );
-}
-
 // ============================================================================
 // Quantity / resource formatting
 // ============================================================================

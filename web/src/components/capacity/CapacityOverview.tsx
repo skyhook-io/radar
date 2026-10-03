@@ -25,7 +25,8 @@ import { ClusterSchedulingCard } from "./ClusterSchedulingCard";
 import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
 import type { useCapacityOverview } from "../../api/client";
 import type { SelectedResource } from "../../types";
-import { actionSeverity, CapacityFreshness, capacityManagerLabel, coverageHasObservations, coverageIsDenied, coverageIsLowerBound, CertaintyGlyph, formatQuantity, coverageMessage, DeniedBadge, errorMessage, formatTimestamp, humanizeCode, identityToSelectedResource, InlineEmpty, integrationBlock, InventoryQuantityCell, KpiTile, LinkButton, managerStatusTone, pickWorstPressure, PoolReadyBadge, poolReadinessDetail, RefreshError, relativeTime, ScopeBadges, ScrollableContent, SectionCard, shortResourceLabel, sortedResourceEntries, worstManagerStatus, type CapacityConnectionState } from "./shared";
+import { actionSeverity, CapacityFreshness, capacityManagerLabel, coverageHasObservations, coverageIsDenied, coverageIsLowerBound, formatQuantity, coverageMessage, DeniedBadge, errorMessage, formatTimestamp, humanizeCode, identityToSelectedResource, InlineEmpty, integrationBlock, InventoryQuantityCell, KpiTile, LinkButton, managerStatusTone, pickWorstPressure, PoolReadyBadge, poolReadinessDetail, RefreshError, relativeTime, ScopeBadges, ScrollableContent, SectionCard, shortResourceLabel, sortedResourceEntries, worstManagerStatus, type CapacityConnectionState } from "./shared";
+import { CertaintyGlyph } from "@skyhook-io/k8s-ui";
 import { Notice, ScreenEmptyState } from "../workspace/layout";
 import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from "../workspace/table";
 

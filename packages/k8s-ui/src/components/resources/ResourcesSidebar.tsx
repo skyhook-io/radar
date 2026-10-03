@@ -13,6 +13,7 @@ import type { APIResource } from '../../types'
 import { categorizeResources, CORE_RESOURCES } from '../../utils/api-resources'
 import { getResourceIcon } from '../../utils/resource-icons'
 import { Tooltip } from '../ui/Tooltip'
+import { certaintyGlyph } from '../workspace/certainty'
 import { Input } from '../ui/Input'
 
 // Selected resource type info (need both name for API and kind for display)
@@ -36,6 +37,8 @@ export interface SidebarCategoryDestination {
   icon?: ComponentType<{ className?: string }>
   /** Problem count. `undefined` renders no badge; `null` renders the unknown dash. */
   count?: number | null
+  /** The count was taken over data read only in part: rendered "≥N", and a zero is unknown rather than none. */
+  countLowerBound?: boolean
   countTitle?: string
   active?: boolean
   /** The object currently open under this destination, nested beneath it. */
@@ -808,13 +811,16 @@ function WorkspaceDestinations({
             >
               {Icon && <Icon className="w-4 h-4 shrink-0" />}
               <span className="flex-1 text-left truncate">{d.label}</span>
-              {d.count === null ? (
+              {d.count === null || (d.count === 0 && d.countLowerBound) ? (
                 <Tooltip content={d.countTitle ?? COUNT_UNAVAILABLE_MESSAGE} position="left">
                   <span className="text-xs py-0.5 rounded text-center font-mono w-8 bg-theme-elevated text-theme-text-disabled">–</span>
                 </Tooltip>
               ) : d.count !== undefined && d.count > 0 ? (
                 <Tooltip content={d.countTitle ?? `${d.count}`} position="left">
-                  <span className="text-xs py-0.5 rounded text-center font-mono w-8 status-degraded">{d.count}</span>
+                  <span className="text-xs py-0.5 rounded text-center font-mono min-w-8 px-1 status-degraded">
+                    {d.countLowerBound && certaintyGlyph('lower_bound')}
+                    {d.count}
+                  </span>
                 </Tooltip>
               ) : null}
             </button>

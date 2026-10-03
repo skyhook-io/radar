@@ -9,7 +9,8 @@ import {
   parseCPUToNanocores,
   parseQuantityToNumber,
 } from "@skyhook-io/k8s-ui/utils/format";
-import { CertaintyGlyph, LinkButton, SectionCard, certaintyGlyph, certaintyValueLabel, formatQuantity, quantityResourceRank, resourceLabel } from "./shared";
+import { LinkButton, SectionCard, formatQuantity, quantityResourceRank, resourceLabel } from "./shared";
+import { CertaintyGlyph, certaintyGlyph, certaintyValueLabel } from "@skyhook-io/k8s-ui";
 
 // Karpenter scheduling capacity — the fleet-level "how full is Karpenter, and
 // how much is knocking at the door" bar. Karpenter-pooled nodes only: on mixed

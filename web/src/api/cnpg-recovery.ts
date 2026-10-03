@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Grant } from '@skyhook-io/k8s-ui'
-import { apiFetch, ApiError, fetchJSON } from './client'
+import { apiFetch, ApiError, fetchJSON, useRadarFeature } from './client'
 import type { CNPGActionCapability } from './cnpg'
 import { getApiBase } from './config'
+import { shouldRetryRadarQuery } from './radarFeatures'
 
 export type CNPGReadState = 'ok' | 'denied' | 'notFound' | 'error' | 'skipped' | 'partial'
 
@@ -109,16 +110,17 @@ const clusterPath = (namespace: string, name: string) => `/cnpg/clusters/${encod
 // phase, the recovery Job's Pods and their init containers, the instances and
 // Warning events about them. Polled every 5s until the Cluster reports healthy.
 export function useCNPGRecovery(namespace: string, name: string, options?: { enabled?: boolean }) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGRecoveryResponse>({
-    queryKey: ['cnpg', 'recovery', namespace, name],
-    queryFn: ({ signal }) => fetchJSON<CNPGRecoveryResponse>(`${clusterPath(namespace, name)}/recovery`, signal),
+    queryKey: ['cnpg', 'recovery', namespace, name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGRecoveryResponse>(`${clusterPath(namespace, name)}/recovery`, signal)),
     enabled: options?.enabled ?? true,
     staleTime: 3_000,
     refetchInterval: (query) => {
       const d = query.state.data
       return d?.recovery && d.cluster.phase !== 'Cluster in healthy state' ? 5_000 : 30_000
     },
-    retry: (count, err) => !(err instanceof ApiError && (err.status === 403 || err.status === 404)) && count < 2,
+    retry: (count, err) => shouldRetryRadarQuery(count, err) && !(err instanceof ApiError && (err.status === 403 || err.status === 404)) && count < 2,
   })
 }
 
@@ -129,14 +131,15 @@ export interface CNPGRestoreValidationRequest {
 }
 
 export function useRecordCNPGRestoreValidation(namespace: string, name: string) {
+  const { guard } = useRadarFeature('cnpgWorkspace')
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (body: CNPGRestoreValidationRequest) =>
+    mutationFn: (body: CNPGRestoreValidationRequest) => guard(() =>
       fetchJSON<CNPGRestoreValidation>(`${clusterPath(namespace, name)}/restore-validation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      }),
+      })),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cnpg', 'recovery', namespace, name] })
       queryClient.invalidateQueries({ queryKey: ['cnpg', 'workspace'] })
@@ -237,9 +240,10 @@ export interface CNPGOperatorDiagnosis {
 // Cluster in `namespace` (create clusters, and the operator's webhook admits
 // writes), for every way into the restore dialog.
 export function useCNPGRestoreCapability(namespace: string) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGActionCapability>({
-    queryKey: ['cnpg', 'restore-capability', namespace],
-    queryFn: ({ signal }) => fetchJSON<CNPGActionCapability>(`/cnpg/restore/capability?namespace=${encodeURIComponent(namespace)}`, signal),
+    queryKey: ['cnpg', 'restore-capability', namespace, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGActionCapability>(`/cnpg/restore/capability?namespace=${encodeURIComponent(namespace)}`, signal)),
     enabled: !!namespace,
     staleTime: 15_000,
     retry: false,

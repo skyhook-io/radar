@@ -4,7 +4,7 @@ import { Activity, ArrowLeft, Database, Gauge, ShieldCheck, Unplug } from 'lucid
 import type { WorkloadExtraTab } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
-import { useContexts } from '../../api/client'
+import { useContexts, useRadarFeature } from '../../api/client'
 import { useContextSwitchFlow } from '../useContextSwitchFlow'
 import { WorkloadView } from '../workload/WorkloadView'
 import { CNPGClusterActivity } from './CNPGClusterActivity'
@@ -103,8 +103,10 @@ export function CNPGDetailPage({
     [navigate, activeContext, onOpenResource],
   )
 
+  // A Radar without the workspace endpoints shows the standard detail.
+  const cnpgWorkspace = useRadarFeature('cnpgWorkspace').support !== 'unsupported'
   const extraTabs = useMemo<WorkloadExtraTab[] | undefined>(() => {
-    if (target.plural !== 'clusters') return undefined
+    if (target.plural !== 'clusters' || !cnpgWorkspace) return undefined
     return [
       {
         id: 'runtime',
@@ -141,7 +143,7 @@ export function CNPGDetailPage({
         ),
       },
     ]
-  }, [target.plural, target.namespace, target.name, onOpenResource, openRelated, searchParams, setSearchParams, location.state])
+  }, [target.plural, target.namespace, target.name, cnpgWorkspace, onOpenResource, openRelated, searchParams, setSearchParams, location.state])
 
   if (pinnedContext && activeContext && pinnedContext !== activeContext) {
     return <NotInContext target={target} pinnedContext={pinnedContext} activeContext={activeContext} homeLabel={home.label} homePath={home.path} />

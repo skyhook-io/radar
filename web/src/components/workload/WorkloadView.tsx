@@ -98,7 +98,7 @@ import { RightsizingPanel } from '../resource/RightsizingStrip'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
-import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
+import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged, useRadarFeature } from '../../api/client'
 import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
@@ -228,6 +228,7 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
   const location = useLocation()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const cnpgWorkspace = useRadarFeature('cnpgWorkspace').support !== 'unsupported'
 
   // Parse /workload/:kind/:ns/:name from pathname. Segments are URL-encoded by
   // buildWorkloadPath; names can also contain literal slashes (e.g. some CRD names),
@@ -284,7 +285,8 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
     )
   }
 
-  const cnpgPlural = cnpgDetailKindFor(kind, group)
+  // A Radar without the CloudNativePG workspace keeps the standard view.
+  const cnpgPlural = cnpgWorkspace ? cnpgDetailKindFor(kind, group) : null
   if (cnpgPlural) {
     const params = new URLSearchParams(searchParams)
     params.delete('apiGroup')
@@ -556,6 +558,7 @@ export function WorkloadView({
 }: WorkloadViewProps) {
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
+  const cnpgWorkspace = useRadarFeature('cnpgWorkspace').support !== 'unsupported'
   const apiKind = kindToPluralWithGroup(kindProp, rest.group ?? '')
   const queryClient = useQueryClient()
   const [imageTargetOwnership, setImageTargetOwnership] =
@@ -1202,9 +1205,16 @@ export function WorkloadView({
             onSelectRun={handleSelectedRunChange}
           />
         )}
-        renderHeaderActions={({ resource: res, context, onNavigate }) => renderCNPGHeaderActions({ resource: res, namespace, name, compact: context === 'drawer', onNavigate })}
-        renderSummary={({ apiKind: ak, namespace: ns, name: n, resource: res, context, onNavigate }) =>
-          renderCNPGSummary({ apiKind: ak, namespace: ns, name: n, group: effectiveGroup, resource: res, context, onNavigate })
+        renderHeaderActions={
+          cnpgWorkspace
+            ? ({ resource: res, context, onNavigate }) => renderCNPGHeaderActions({ resource: res, namespace, name, compact: context === 'drawer', onNavigate })
+            : undefined
+        }
+        renderSummary={
+          cnpgWorkspace
+            ? ({ apiKind: ak, namespace: ns, name: n, resource: res, context, onNavigate }) =>
+                renderCNPGSummary({ apiKind: ak, namespace: ns, name: n, group: effectiveGroup, resource: res, context, onNavigate })
+            : undefined
         }
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&

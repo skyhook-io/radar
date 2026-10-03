@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { CNPGSchedulePreview, CNPGWorkspaceResponse, Grant, TimelineEvent } from '@skyhook-io/k8s-ui'
-import { ApiError, fetchJSON } from './client'
+import { ApiError, fetchJSON, useRadarFeature } from './client'
+import { shouldRetryRadarQuery } from './radarFeatures'
 import type { CNPGOperatorDiagnosis } from './cnpg-recovery'
 
 // /api/cnpg/workspace
@@ -10,14 +11,16 @@ import type { CNPGOperatorDiagnosis } from './cnpg-recovery'
 // workspace screens, the Resources sidebar counts and the composed summaries,
 // so they can never disagree about what they count.
 export function useCNPGWorkspace(namespaces: string[], options?: { enabled?: boolean }) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   const ns = [...namespaces].sort().join(',')
   return useQuery<CNPGWorkspaceResponse>({
-    queryKey: ['cnpg', 'workspace', ns],
-    queryFn: ({ signal }) => fetchJSON<CNPGWorkspaceResponse>(`/cnpg/workspace${ns ? `?namespaces=${encodeURIComponent(ns)}` : ''}`, signal),
+    queryKey: ['cnpg', 'workspace', ns, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGWorkspaceResponse>(`/cnpg/workspace${ns ? `?namespaces=${encodeURIComponent(ns)}` : ''}`, signal)),
     enabled: options?.enabled ?? true,
     staleTime: 10_000,
     refetchInterval: 30_000,
     placeholderData: (prev) => prev,
+    retry: shouldRetryRadarQuery,
   })
 }
 
@@ -61,12 +64,14 @@ export interface CNPGOperatorResponse {
 // Deliberately not filtered by the namespace view filter: the operator runs in
 // its own namespace, which users rarely have selected.
 export function useCNPGOperator(options?: { enabled?: boolean }) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGOperatorResponse>({
-    queryKey: ['cnpg', 'operator'],
-    queryFn: ({ signal }) => fetchJSON<CNPGOperatorResponse>('/cnpg/operator', signal),
+    queryKey: ['cnpg', 'operator', ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGOperatorResponse>('/cnpg/operator', signal)),
     enabled: options?.enabled ?? true,
     staleTime: 30_000,
     refetchInterval: 60_000,
+    retry: shouldRetryRadarQuery,
   })
 }
 
@@ -88,14 +93,16 @@ export interface CNPGOperatorVerdict {
 //
 // The cheap operator verdict for the fleet and cluster pages, keyed by namespace.
 export function useCNPGOperatorStatus(namespaces: string[], options?: { enabled?: boolean }) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   const ns = [...new Set(namespaces)].sort().join(',')
   return useQuery<{ namespaces: Record<string, CNPGOperatorVerdict> }>({
-    queryKey: ['cnpg', 'operator-status', ns],
-    queryFn: ({ signal }) => fetchJSON<{ namespaces: Record<string, CNPGOperatorVerdict> }>(`/cnpg/operator/status?namespaces=${encodeURIComponent(ns)}`, signal),
+    queryKey: ['cnpg', 'operator-status', ns, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<{ namespaces: Record<string, CNPGOperatorVerdict> }>(`/cnpg/operator/status?namespaces=${encodeURIComponent(ns)}`, signal)),
     enabled: (options?.enabled ?? true) && ns !== '',
     staleTime: 10_000,
     refetchInterval: 30_000,
     placeholderData: (prev) => prev,
+    retry: shouldRetryRadarQuery,
   })
 }
 
@@ -111,17 +118,19 @@ export interface CNPGClusterActivityResponse {
 // The Cluster's history together with its instance Pods and every CNPG object
 // attributed to it, including ones since deleted.
 export function useCNPGClusterActivity(namespace: string, name: string, sinceHours = 24) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGClusterActivityResponse>({
-    queryKey: ['cnpg', 'activity', namespace, name, sinceHours],
-    queryFn: ({ signal }) => {
+    queryKey: ['cnpg', 'activity', namespace, name, sinceHours, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => {
       const since = new Date(Date.now() - sinceHours * 3600_000).toISOString()
       return fetchJSON<CNPGClusterActivityResponse>(
         `/cnpg/clusters/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/activity?since=${encodeURIComponent(since)}&limit=500`,
         signal,
       )
-    },
+    }),
     staleTime: 10_000,
     refetchInterval: 30_000,
+    retry: shouldRetryRadarQuery,
   })
 }
 
@@ -242,9 +251,10 @@ function cnpgPath(kind: 'clusters' | 'scheduledbackups' | 'poolers', namespace: 
 }
 
 export function useCNPGClusterCapabilities(namespace: string, name: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGClusterCapabilities>({
-    queryKey: ['cnpg', 'capabilities', 'clusters', namespace, name],
-    queryFn: ({ signal }) => fetchJSON<CNPGClusterCapabilities>(`${cnpgPath('clusters', namespace, name)}/capabilities`, signal),
+    queryKey: ['cnpg', 'capabilities', 'clusters', namespace, name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGClusterCapabilities>(`${cnpgPath('clusters', namespace, name)}/capabilities`, signal)),
     enabled: enabled && !!name,
     staleTime: 5_000,
     retry: false,
@@ -254,10 +264,11 @@ export function useCNPGClusterCapabilities(namespace: string, name: string, enab
 // Parsed server-side with the operator's cron semantics; runs counted from the
 // schedule's own lastCheckTime. Pure computation: writes nothing.
 export function useCNPGSchedulePreview(namespace: string, name: string, schedule: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGSchedulePreview>({
-    queryKey: ['cnpg', 'schedule-preview', namespace, name, schedule],
-    queryFn: ({ signal }) =>
-      fetchJSON<CNPGSchedulePreview>(`${cnpgPath('scheduledbackups', namespace, name)}/schedule-preview?schedule=${encodeURIComponent(schedule)}`, signal),
+    queryKey: ['cnpg', 'schedule-preview', namespace, name, schedule, ...gatedKey],
+    queryFn: ({ signal }) => guard(() =>
+      fetchJSON<CNPGSchedulePreview>(`${cnpgPath('scheduledbackups', namespace, name)}/schedule-preview?schedule=${encodeURIComponent(schedule)}`, signal)),
     enabled: enabled && !!name,
     staleTime: 30_000,
     retry: false,
@@ -266,9 +277,10 @@ export function useCNPGSchedulePreview(namespace: string, name: string, schedule
 }
 
 export function useCNPGScheduleCapabilities(namespace: string, name: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGScheduleCapabilities>({
-    queryKey: ['cnpg', 'capabilities', 'scheduledbackups', namespace, name],
-    queryFn: ({ signal }) => fetchJSON<CNPGScheduleCapabilities>(`${cnpgPath('scheduledbackups', namespace, name)}/capabilities`, signal),
+    queryKey: ['cnpg', 'capabilities', 'scheduledbackups', namespace, name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGScheduleCapabilities>(`${cnpgPath('scheduledbackups', namespace, name)}/capabilities`, signal)),
     enabled: enabled && !!name,
     staleTime: 5_000,
     retry: false,
@@ -295,14 +307,15 @@ export interface CNPGActionResult {
 // No mutation meta: errors stay with the dialog (shown inline so the user can
 // adjust and retry), and the caller toasts success worded from the result.
 export function useCNPGAction(kind: 'clusters' | 'scheduledbackups' | 'poolers', namespace: string, name: string) {
+  const { guard } = useRadarFeature('cnpgWorkspace')
   const queryClient = useQueryClient()
   return useMutation<CNPGActionResult, Error, { action: string; request: CNPGActionRequest }>({
-    mutationFn: ({ action, request }) =>
+    mutationFn: ({ action, request }) => guard(() =>
       fetchJSON<CNPGActionResult>(`${cnpgPath(kind, namespace, name)}/actions/${action}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request),
-      }),
+      })),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cnpg'] })
       queryClient.invalidateQueries({ queryKey: ['resource'] })
@@ -462,9 +475,10 @@ export interface CNPGRuntimeResponse {
 // /api/cnpg/clusters/{ns}/{name}/runtime — live instance-manager status and
 // exporter metrics read through pods/proxy. Polled only while visible.
 export function useCNPGRuntime(namespace: string, name: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGRuntimeResponse>({
-    queryKey: ['cnpg', 'runtime', namespace, name],
-    queryFn: ({ signal }) => fetchJSON<CNPGRuntimeResponse>(`/cnpg/clusters/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/runtime`, signal),
+    queryKey: ['cnpg', 'runtime', namespace, name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGRuntimeResponse>(`/cnpg/clusters/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/runtime`, signal)),
     enabled: enabled && !!name,
     refetchInterval: (q) => (q.state.data?.permission.proxy === 'denied' ? false : 5_000),
     refetchIntervalInBackground: false,
@@ -488,9 +502,10 @@ export interface CNPGPoolerRuntimeResponse {
 }
 
 export function useCNPGPoolerRuntime(namespace: string, name: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGPoolerRuntimeResponse>({
-    queryKey: ['cnpg', 'pooler-runtime', namespace, name],
-    queryFn: ({ signal }) => fetchJSON<CNPGPoolerRuntimeResponse>(`/cnpg/poolers/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/runtime`, signal),
+    queryKey: ['cnpg', 'pooler-runtime', namespace, name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGPoolerRuntimeResponse>(`/cnpg/poolers/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/runtime`, signal)),
     enabled: enabled && !!name,
     refetchInterval: (q) => (q.state.data?.permission.proxy === 'denied' ? false : 30_000),
     refetchIntervalInBackground: false,
