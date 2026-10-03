@@ -21,7 +21,7 @@ import type {
   YamlDocumentIdentity,
   YamlSchemaLoadResult,
 } from '@skyhook-io/k8s-ui'
-import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, skipToken, type QueryClient } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
 import { useCanHelmWrite } from '../contexts/CapabilitiesContext'
 import type {
@@ -6761,6 +6761,24 @@ export function debugNamespaceLog(
   });
 }
 
+/**
+ * After a namespace switch lands, refetch what may have read the old pick.
+ * "All namespaces" is sent as no namespaces param, which the server reads as
+ * the stored pick, so a request sent while the switch was in flight used the
+ * old one. It is cancelled first: invalidating would otherwise reuse a first
+ * fetch still in flight instead of sending a new one.
+ */
+export async function refreshAfterNamespaceSwitch(
+  queryClient: QueryClient,
+  scope: Pick<NamespaceScope, "cacheScoped" | "actives">,
+): Promise<void> {
+  if (!scope.cacheScoped && scope.actives.length > 0) return;
+  const notScope = (query: { queryKey: readonly unknown[] }) =>
+    query.queryKey[0] !== "namespace-scope";
+  await queryClient.cancelQueries({ predicate: notScope });
+  await queryClient.invalidateQueries({ predicate: notScope });
+}
+
 export function useSetActiveNamespace() {
   const queryClient = useQueryClient();
   return useMutation<NamespaceScope, Error, { namespaces: string[] }>({
@@ -6843,12 +6861,7 @@ export function useSetActiveNamespace() {
         });
       }
       queryClient.setQueryData<NamespaceScope>(["namespace-scope"], scope);
-      // "All namespaces" is sent as no namespaces param, which the server reads
-      // as the stored pick, so a request sent while this switch was in flight
-      // may have used the old pick. Refetch what is on screen once it landed.
-      if (scope.cacheScoped || scope.actives.length === 0) {
-        queryClient.invalidateQueries();
-      }
+      void refreshAfterNamespaceSwitch(queryClient, scope);
       debugNamespaceLog("mutation:success-after-scope-cache-write");
     },
     onError: () => {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { reconcileNamespaceSwitch } from "./client";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
+import { reconcileNamespaceSwitch, refreshAfterNamespaceSwitch } from "./client";
 
 function serveScope(actives: string[]) {
   vi.stubGlobal(
@@ -51,3 +52,39 @@ describe("reconcileNamespaceSwitch", () => {
     expect(await reconcileNamespaceSwitch([])).toBeNull();
   });
 });
+
+// A first fetch for "All namespaces" can leave before the switch lands and
+// read the old pick on the server; the refresh must send a new request.
+describe('refreshAfterNamespaceSwitch', () => {
+  it('replaces a first fetch still in flight when switching to All', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    let calls = 0
+    const resolvers: ((v: string) => void)[] = []
+    const observer = new QueryObserver(client, {
+      queryKey: ['fleet', ''],
+      queryFn: () => {
+        calls++
+        return new Promise<string>((resolve) => resolvers.push(resolve))
+      },
+    })
+    const unsubscribe = observer.subscribe(() => {})
+    await Promise.resolve()
+    expect(calls).toBe(1)
+
+    const done = refreshAfterNamespaceSwitch(client, { cacheScoped: false, actives: [] })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(calls).toBe(2)
+    resolvers[0]('old pick')
+    resolvers[1]('all namespaces')
+    await done
+    expect(client.getQueryData(['fleet', ''])).toBe('all namespaces')
+    unsubscribe()
+  })
+
+  it('leaves queries alone when switching to a named namespace', async () => {
+    const client = new QueryClient()
+    client.setQueryData(['fleet', 'db'], 'x')
+    await refreshAfterNamespaceSwitch(client, { cacheScoped: false, actives: ['db'] })
+    expect(client.getQueryState(['fleet', 'db'])?.isInvalidated).toBe(false)
+  })
+})

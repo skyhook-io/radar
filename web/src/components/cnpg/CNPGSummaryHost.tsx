@@ -129,7 +129,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
                   onOpen: (step) => {
                     if (step === 'connect') {
                       const p = new URLSearchParams(location.search)
-                      p.set(CNPG_CONNECT_PARAM, cnpgConnectParamValue(namespace, name))
+                      p.set(CNPG_CONNECT_PARAM, cnpgConnectParamValue(namespace, name, context === 'drawer' ? 'drawer' : 'page'))
                       navigate({ search: p.toString() }, { replace: true, state: location.state })
                       return
                     }

@@ -1,16 +1,17 @@
 import { useId } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { Plug, X } from 'lucide-react'
 import { CNPGConnectSection, DialogPortal, Tooltip, type CNPGRef, type NavigateToResource } from '@skyhook-io/k8s-ui'
 import { refToSelectedResource } from '../../../utils/navigation'
 import { useCNPGFleet } from '../useCNPGSidebarWorkspace'
 
-// URL-backed so a link can open it (the restore "Next steps"), scoped to one
-// Cluster so a drawer and the page behind it never both open.
+// URL-backed so a link can open it (the restore "Next steps"). The value names
+// the Cluster and the surface, so a drawer showing the page's own Cluster
+// never opens a second dialog.
 export const CNPG_CONNECT_PARAM = 'connect'
 
-export function cnpgConnectParamValue(namespace: string, name: string): string {
-  return `${namespace}/${name}`
+export function cnpgConnectParamValue(namespace: string, name: string, surface: 'page' | 'drawer'): string {
+  return surface === 'drawer' ? `${namespace}/${name}@drawer` : `${namespace}/${name}`
 }
 
 export function CNPGConnectButton({
@@ -25,9 +26,11 @@ export function CNPGConnectButton({
   onNavigate?: NavigateToResource
 }) {
   const titleId = useId()
+  const location = useLocation()
   const [params, setParams] = useSearchParams()
-  const value = cnpgConnectParamValue(namespace, name)
+  const value = cnpgConnectParamValue(namespace, name, compact ? 'drawer' : 'page')
   const open = params.get(CNPG_CONNECT_PARAM) === value
+  // Keeps the page's return label, which lives in the history state.
   const setOpen = (next: boolean) =>
     setParams(
       (prev) => {
@@ -36,7 +39,7 @@ export function CNPGConnectButton({
         else p.delete(CNPG_CONNECT_PARAM)
         return p
       },
-      { replace: true },
+      { replace: true, state: location.state },
     )
   const { fleet } = useCNPGFleet([namespace], open)
   const row = fleet?.rows.find((r) => r.namespace === namespace && r.name === name)

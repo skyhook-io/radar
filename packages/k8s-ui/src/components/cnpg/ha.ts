@@ -329,22 +329,40 @@ export function cnpgHASummary(
   if (ha.primaryLease.state === 'ok' && ha.primaryLease.controlledByCluster === false) issues.push('primary lease not owned by this Cluster')
   const failedJobs = ha.jobs.state === 'ok' ? ha.jobs.items.filter((j) => j.phase === 'failed').length : 0
   if (failedJobs > 0) issues.push(`${failedJobs} failed ${failedJobs === 1 ? 'Job' : 'Jobs'}`)
-  if (issues.length > 0) return { text: issues.join(' · '), attention: true }
-  return { text: calm.length > 0 ? calm.join(' · ') : 'Nothing reported out of line', attention: false }
+  // A fact that could not be read is named, never folded into a calm line.
+  const unread: string[] = []
+  const check = (src: CNPGHASource | undefined, label: string) => {
+    if (src && (src.state === 'denied' || src.state === 'unavailable' || src.state === 'error')) unread.push(label)
+  }
+  check(ha.pods, 'Pods')
+  check(ha.nodes, 'zones')
+  if (ha.quorum.enabled) check(ha.quorum.object, 'quorum')
+  check(ha.pdbs, 'disruption budgets')
+  check(ha.primaryLease, 'primary lease')
+  check(ha.operatorLease, 'operator lease')
+  check(ha.jobs, 'Jobs')
+  if (!pending.known) unread.push('pending restarts')
+  const notRead = unread.length > 0 ? `not read: ${unread.join(', ')}` : ''
+  if (issues.length > 0) return { text: [...issues, notRead].filter(Boolean).join(' · '), attention: true }
+  if (calm.length === 0) return { text: notRead ? notRead[0].toUpperCase() + notRead.slice(1) : 'Nothing reported out of line', attention: false }
+  return { text: [...calm, notRead].filter(Boolean).join(' · '), attention: false }
 }
 
 /** Certificates in one line: the nearest expiry and who renews them. */
 export function cnpgCertificatesSummary(certs: CNPGHACertificate[] | undefined, now = Date.now()): CNPGFoldSummary {
   const views = cnpgCertificateViews(certs, now)
   if (views.length === 0) return { text: 'No expiry reported by the operator', attention: false }
-  const attention = views.some((c) => c.tone === 'degraded' || c.tone === 'unhealthy')
-  const dated = views.filter((c) => c.daysLeft !== undefined).sort((a, b) => (a.daysLeft ?? 0) - (b.daysLeft ?? 0))
+  const dated = views.filter((c) => Number.isFinite(c.daysLeft)).sort((a, b) => (a.daysLeft ?? 0) - (b.daysLeft ?? 0))
+  const unreadable = views.length - dated.length
+  // An unreadable expiry could be past already, so it opens the section too.
+  const attention = unreadable > 0 || views.some((c) => c.tone === 'degraded' || c.tone === 'unhealthy')
   const nearest = dated[0]
-  const when = !nearest
-    ? 'expiry unreadable'
-    : nearest.daysLeft! < 0
-      ? `${nearest.secret} expired`
-      : `nearest expiry in ${nearest.daysLeft} d (${nearest.secret})`
+  const when = [
+    !nearest ? '' : nearest.daysLeft! < 0 ? `${nearest.secret} expired` : `nearest reported expiry in ${nearest.daysLeft} d (${nearest.secret})`,
+    unreadable > 0 ? `${unreadable} expiry unreadable` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
   const renewers = new Set(views.map((c) => c.renewal))
   const who = renewers.size > 1 ? 'some renewed by you' : renewers.has('user') ? 'you renew them' : 'CloudNativePG renews them'
   return { text: `${views.length} ${views.length === 1 ? 'certificate' : 'certificates'} · ${when} · ${who}`, attention }

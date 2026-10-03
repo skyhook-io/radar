@@ -255,7 +255,18 @@ describe('folded HA and certificates summaries', () => {
   const pdbs = { state: 'ok' as const, enabled: true, items: [{ name: 'pg', role: 'replicas', disruptionsAllowed: 1, currentHealthy: 1, expectedPods: 1, observed: true }] } as unknown as CNPGClusterHA['pdbs']
 
   it('stays folded with the known facts when nothing is out of line', () => {
-    expect(cnpgHASummary(ha({ pdbs }), undefined)).toEqual({ text: '2/2 instances ready · 2 zones · images match', attention: false })
+    const live = [{ pod: 'pg-1', state: 'ok' }, { pod: 'pg-2', state: 'ok' }] as never
+    expect(cnpgHASummary(ha({ pdbs, operatorLease: { state: 'ok', holder: 'op_1' } }), live)).toEqual({ text: '2/2 instances ready · 2 zones · images match', attention: false })
+  })
+
+  it('names what it could not read instead of reading calm', () => {
+    const denied = { state: 'denied' as const, grant: 'x' }
+    const unread = ha({ pods: denied, nodes: denied, pdbs: { ...denied, enabled: true, items: [] }, primaryLease: denied, operatorLease: denied, jobs: { ...denied, items: [] } } as never)
+    expect(cnpgHASummary(unread, undefined)).toEqual({
+      text: 'Not read: Pods, zones, disruption budgets, primary lease, operator lease, Jobs, pending restarts',
+      attention: false,
+    })
+    expect(cnpgHASummary(ha({ pdbs }), undefined).text).toBe('2/2 instances ready · 2 zones · images match · not read: operator lease, pending restarts')
   })
 
   it('opens and leads with what is wrong', () => {
@@ -268,7 +279,7 @@ describe('folded HA and certificates summaries', () => {
     })
     const s = cnpgHASummary(shared, [{ pod: 'pg-2', state: 'ok', pendingRestart: true } as never])
     expect(s.attention).toBe(true)
-    expect(s.text).toBe('1 of 2 instances not ready · every instance in one zone · instances share a Node · restart pending on pg-2 · an instance runs a different image')
+    expect(s.text).toBe('1 of 2 instances not ready · every instance in one zone · instances share a Node · restart pending on pg-2 · an instance runs a different image · not read: operator lease')
   })
 
   it('names the nearest certificate expiry and who renews them', () => {
@@ -277,7 +288,9 @@ describe('folded HA and certificates summaries', () => {
       { secret: 'pg-ca', expiresAt: '2026-12-29T00:00:00Z', renewal: 'operator' },
       { secret: 'pg-server', expiresAt: '2026-10-20T00:00:00Z', renewal: 'operator' },
     ] as never
-    expect(cnpgCertificatesSummary(certs, now)).toEqual({ text: '2 certificates · nearest expiry in 20 d (pg-server) · CloudNativePG renews them', attention: false })
+    expect(cnpgCertificatesSummary(certs, now)).toEqual({ text: '2 certificates · nearest reported expiry in 20 d (pg-server) · CloudNativePG renews them', attention: false })
+    const oneUnread = [{ secret: 'pg-ca', expiresAt: '2026-12-29T00:00:00Z', renewal: 'operator' }, { secret: 'pg-server', raw: 'garbage', renewal: 'operator' }] as never
+    expect(cnpgCertificatesSummary(oneUnread, now)).toEqual({ text: '2 certificates · nearest reported expiry in 90 d (pg-ca) · 1 expiry unreadable · CloudNativePG renews them', attention: true })
     const userSoon = [{ secret: 'app-tls', expiresAt: '2026-10-05T00:00:00Z', renewal: 'user' }] as never
     expect(cnpgCertificatesSummary(userSoon, now).attention).toBe(true)
     expect(cnpgCertificatesSummary([], now)).toEqual({ text: 'No expiry reported by the operator', attention: false })
