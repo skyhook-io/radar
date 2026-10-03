@@ -19,59 +19,9 @@ import {
 } from "../../api/client";
 import type { SelectedResource } from "../../types";
 import { refToSelectedResource } from "../../utils/navigation";
-import {
-  ActualUsageDetail,
-  ActualUsageInline,
-  CapacityFreshness,
-  CapacityIssueEvidence,
-  CertaintyGlyph,
-  ClaimStageBadge,
-  conditionSummary,
-  ConditionBadge,
-  coverageHasObservations,
-  coverageIsDenied,
-  coverageIsLowerBound,
-  coverageMessage,
-  DeniedBadge,
-  EmptyState,
-  errorMessage,
-  formatQuantity,
-  formatTaint,
-  humanizeCode,
-  identityKey,
-  identityToSelectedResource,
-  InlineEmpty,
-  integrationBlock,
-  KeyValueRows,
-  LinkButton,
-  memberCoverageSource,
-  MiniCount,
-  NodeReadyBadge,
-  Notice,
-  observationTitle,
-  PoolReadyBadge,
-  POOL_SECTIONS,
-  PressureDetail,
-  quantityResourceRank,
-  QuantityInline,
-  RefreshError,
-  resourceLabel,
-  ResourceLink,
-  ROW_HOVER,
-  ScopeBadges,
-  ScrollableContent,
-  SectionCard,
-  TABLE_HEAD,
-  TABLE_WRAP,
-  TBODY,
-  TD,
-  TH,
-  TokenGroup,
-  useCapacityCursorRecovery,
-  useCapacityPagination,
-  type CapacityConnectionState,
-  type PoolSection,
-} from "./shared";
+import { ActualUsageDetail, ActualUsageInline, CapacityFreshness, CapacityIssueEvidence, CertaintyGlyph, ClaimStageBadge, conditionSummary, ConditionBadge, coverageHasObservations, coverageIsDenied, coverageIsLowerBound, coverageMessage, DeniedBadge, errorMessage, formatQuantity, formatTaint, humanizeCode, identityKey, identityToSelectedResource, InlineEmpty, integrationBlock, KeyValueRows, LinkButton, memberCoverageSource, MiniCount, NodeReadyBadge, observationTitle, PoolReadyBadge, POOL_SECTIONS, PressureDetail, quantityResourceRank, QuantityInline, RefreshError, resourceLabel, ResourceLink, ScopeBadges, ScrollableContent, SectionCard, TokenGroup, useCapacityCursorRecovery, useCapacityPagination, type CapacityConnectionState, type PoolSection } from "./shared";
+import { Notice, ScreenEmptyState } from "../workspace/layout";
+import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from "../workspace/table";
 
 export function CapacityPoolDetail({
   name,
@@ -123,7 +73,7 @@ export function CapacityPoolDetail({
   const response = query.data;
   if (response && !coverageHasObservations(response.coverage.nodePools)) {
     return (
-      <EmptyState
+      <ScreenEmptyState
         icon={Layers3}
         title="NodePool inventory unavailable"
         detail={coverageMessage(
@@ -136,7 +86,7 @@ export function CapacityPoolDetail({
   const pool = response?.pool;
   if (!response || !pool) {
     return (
-      <EmptyState
+      <ScreenEmptyState
         icon={CircleHelp}
         title="NodePool unavailable"
         detail="The Capacity API did not return an observation for this NodePool."

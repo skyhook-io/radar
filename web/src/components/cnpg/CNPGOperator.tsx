@@ -1,20 +1,9 @@
 import { useMemo } from 'react'
 import { Badge, getCNPGImageCatalogEntries, isApiGroup, PaneLoader, Tooltip } from '@skyhook-io/k8s-ui'
 import { useCNPGOperator, type CNPGOperatorComponent, type CNPGOperatorConfig } from '../../api/cnpg'
-import { Notice } from '../capacity/shared'
 import { CNPGOperatorDiagnosisSection } from './CNPGOperatorDiagnosis'
-import {
-  CNPGWorkspaceHeader,
-  CoverageNotice,
-  coverageEmpty,
-  worstCoverage,
-  Mono,
-  ScreenBody,
-  SectionTable,
-  Sub,
-  cnpgResource,
-  type CNPGScreenProps,
-} from './shared'
+import { CNPGWorkspaceHeader, CoverageNotice, coverageEmpty, worstCoverage, cnpgResource, type CNPGScreenProps } from './shared'
+import { Mono, Notice, ScreenBody, SectionTable, Sub } from '../workspace/layout'
 
 interface CatalogRow {
   key: string

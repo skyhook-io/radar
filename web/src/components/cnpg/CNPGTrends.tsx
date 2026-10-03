@@ -11,9 +11,8 @@ import {
   type CNPGHistoryRange,
   type CNPGClusterHistoryResponse,
 } from '../../api/cnpg-history'
-import { Notice } from '../capacity/shared'
-import { Segments } from './shared'
 import { cacheHitSeries, chartedDatabases, rateSeries, sampleFrom, sessionStateSeries, SAMPLE_BUFFER_LIMIT, type Sample } from './trendSamples'
+import { Notice, Segments } from '../workspace/layout'
 
 const COLOR = '#60a5fa'
 const FILL = '#60a5fa22'

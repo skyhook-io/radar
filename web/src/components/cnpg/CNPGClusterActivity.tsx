@@ -3,8 +3,7 @@ import { PaneLoader, TimelineList, formatAge, type NavigateToResource } from '@s
 import { useCNPGClusterActivity } from '../../api/cnpg'
 import { useCNPGClusterActivityWindow } from '../../api/cnpg-history'
 import { CNPGIntervalBanner, useCNPGIntervalParams } from './CNPGTrends'
-import { Notice } from '../capacity/shared'
-import { Segments } from './shared'
+import { Notice, Segments } from '../workspace/layout'
 
 const RANGES = [
   { id: '6', label: '6 h' },

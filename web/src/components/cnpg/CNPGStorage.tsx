@@ -27,13 +27,12 @@ import {
   type CNPGStorageVolume,
   type CNPGStorageWAL,
 } from '../../api/cnpg-storage'
-import { Notice } from '../capacity/shared'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { useCNPGWriteGuard } from './actions/useCNPGWriteGuard'
 import { buildResizeManifest, cnpgFloorTone, cnpgInstanceDiskTone, cnpgSharedExpansionGap, cnpgSlotRetentionText, cnpgWALUsageFloor } from './storageModel'
 // Binary units throughout, matching claim capacities such as 1Gi.
 import { formatBytes } from './lsn'
-import { CNPGRefreshFailedNotice } from './shared'
+import { Notice, RefreshFailedNotice } from '../workspace/layout'
 
 const CNPG_GROUP = 'postgresql.cnpg.io'
 
@@ -358,7 +357,7 @@ export function CNPGStorage({ namespace, name, primary }: { namespace: string; n
 
   return (
     <div className="space-y-4">
-      <CNPGRefreshFailedNotice queries={[q]} />
+      <RefreshFailedNotice queries={[q]} />
       {data.findings.map((f) => (
         <AlertBanner
           key={f.claim}

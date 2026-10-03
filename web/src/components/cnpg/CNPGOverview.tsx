@@ -15,12 +15,14 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
-import { EmptyState, ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../capacity/shared'
-import { BreakText, CNPGWorkspaceHeader, CoverageNotice, FilterChips, type CNPGScreenProps } from './shared'
-import { cnpgClusterFullPath, cnpgClusterProblemsPath, currentPageLabel } from './paths'
-import { sameResource } from './routes'
+import { CNPGWorkspaceHeader, CoverageNotice, type CNPGScreenProps } from './shared'
+import { cnpgClusterFullPath, cnpgClusterProblemsPath } from './paths'
+import { currentPageLabel } from '../../utils/page-links'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 import { cnpgInstancePillLabel, cnpgPillsToShow, cnpgRowStatus } from './fleetStatus'
+import { BreakText, FilterChips, ScreenEmptyState } from '../workspace/layout'
+import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../workspace/table'
+import { sameSelectedResource } from '../../utils/drawer-trail'
 
 type Filter = 'attention' | 'all'
 
@@ -198,7 +200,7 @@ export function CNPGOverview({
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         <CNPGWorkspaceHeader title="Overview" />
-        <EmptyState
+        <ScreenEmptyState
           icon={Database}
           title={empty.title}
           detail={empty.detail}
@@ -325,7 +327,7 @@ export function CNPGOverview({
                 <tbody className={TBODY}>
                   {rows.map((row) => {
                     const ref: SelectedResource = { kind: 'clusters', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name }
-                    const active = sameResource(inspected, ref)
+                    const active = sameSelectedResource(inspected, ref)
                     return (
                       <tr
                         key={row.key}

@@ -6,8 +6,6 @@ import { PaneLoader, Tooltip, formatAge, toneTextClass } from '@skyhook-io/k8s-u
 import { useCNPGRuntime, type CNPGRuntimeInstance } from '../../api/cnpg'
 import { useCNPGSessions, type CNPGSessionsResponse } from '../../api/cnpg-sessions'
 import { useCNPGClusterHistory } from '../../api/cnpg-history'
-import { Notice } from '../capacity/shared'
-import { CNPGRefreshFailedNotice, Segments } from './shared'
 import { CNPGStorage } from './CNPGStorage'
 import { CNPGBlockingSessions } from './CNPGBlockingSessions'
 import { cnpgConnectionFigure } from './blocking'
@@ -16,6 +14,7 @@ import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgIdAge, cnpgPickedInstan
 import { formatBytes } from './lsn'
 import { historyLatest, latestRate } from './trendSamples'
 import { CNPGTrends, useSampleBuffer, type CNPGIntervalTarget, type Sample } from './CNPGTrends'
+import { Notice, RefreshFailedNotice, Segments } from '../workspace/layout'
 
 type Section = 'replication' | 'sessions' | 'transactions' | 'storage' | 'slots' | 'trends'
 
@@ -132,7 +131,7 @@ export function CNPGClusterRuntime({
           </span>
         )}
       </div>
-      <CNPGRefreshFailedNotice queries={[q]} />
+      <RefreshFailedNotice queries={[q]} />
 
       {section === 'replication' &&
         (denied ? (
@@ -307,7 +306,7 @@ function TransactionsView({
   )
   return (
     <div className="space-y-4">
-      <CNPGRefreshFailedNotice queries={[history]} />
+      <RefreshFailedNotice queries={[history]} />
       {!deniedGrant && picker}
       {deniedGrant ? (
         <>

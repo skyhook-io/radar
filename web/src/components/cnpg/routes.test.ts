@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgDetailKindFor, cnpgDetailPath, decodeDrawerTrail, encodeDrawerTrail, parseCNPGRoute, sameResource } from './routes'
+import { cnpgDetailKindFor, cnpgDetailPath, parseCNPGRoute } from './routes'
+import { decodeDrawerTrail, encodeDrawerTrail, sameSelectedResource } from '../../utils/drawer-trail'
 
 describe('CNPG routes', () => {
   it('parses workspace screens and falls back to Overview for unknown or unavailable ones', () => {
@@ -30,8 +31,8 @@ describe('CNPG routes', () => {
   it('distinguishes same-named kinds from different groups', () => {
     const cnpg = { kind: 'clusters', group: 'postgresql.cnpg.io', namespace: 'a', name: 'x' }
     const capi = { kind: 'clusters', group: 'cluster.x-k8s.io', namespace: 'a', name: 'x' }
-    expect(sameResource(cnpg, capi)).toBe(false)
-    expect(sameResource(cnpg, { ...cnpg })).toBe(true)
+    expect(sameSelectedResource(cnpg, capi)).toBe(false)
+    expect(sameSelectedResource(cnpg, { ...cnpg })).toBe(true)
   })
 
   it('parses full-detail routes for every CNPG kind and the cluster-scoped placeholder', () => {

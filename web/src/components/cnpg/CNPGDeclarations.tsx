@@ -18,22 +18,9 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { useCNPGPublisherSlots } from './logicalSlots'
 import type { SelectedResource } from '../../types'
-import {
-  CNPGRefreshFailedNotice,
-  CNPGWorkspaceHeader,
-  CoverageNotice,
-  FilterChips,
-  ScreenBody,
-  Segments,
-  Sub,
-  clusterResource,
-  cnpgResource,
-  coverageEmpty,
-  worstCoverage,
-  namespaceChip,
-  type CNPGScreenProps,
-} from './shared'
-import { sameResource } from './routes'
+import { CNPGWorkspaceHeader, CoverageNotice, clusterResource, cnpgResource, coverageEmpty, worstCoverage, type CNPGScreenProps } from './shared'
+import { FilterChips, namespaceChip, RefreshFailedNotice, ScreenBody, Segments, Sub } from '../workspace/layout'
+import { sameSelectedResource } from '../../utils/drawer-trail'
 
 type State = 'applied' | 'failed' | 'pending'
 
@@ -309,7 +296,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
                       key={i.key}
                       item={i}
                       sourceStated={noSources}
-                      active={!i.isField && sameResource(inspected, i.resource)}
+                      active={!i.isField && sameSelectedResource(inspected, i.resource)}
                       onInspect={() => onInspect(i.resource)}
                     />
                   ))}
@@ -346,7 +333,7 @@ function LogicalPathRow({ path, onInspect }: { path: CNPGLogicalPath; onInspect:
       <CNPGLogicalPathView
         path={path}
         slot={cnpgLogicalSlotFact(path, observed)}
-        notice={<CNPGRefreshFailedNotice queries={[query]} />}
+        notice={<RefreshFailedNotice queries={[query]} />}
         onNavigate={(ref) => onInspect(refToSelectedResource(ref))}
         compact
       />

@@ -41,13 +41,14 @@ import { cnpgInstanceLive, cnpgInstanceLiveUnavailable, cnpgReplicationGap, cnpg
 import { CNPGMaintenanceBanner } from './actions/CNPGMaintenanceBanner'
 import { CNPG_CONNECT_PARAM, cnpgConnectParamValue } from './actions/CNPGConnectButton'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
-import { CNPGRefreshFailedNotice } from './shared'
 
-import { cnpgClusterFullPath, cnpgDimensionPath, cnpgIssuesPath, cnpgWithinDetail, currentPageLabel } from './paths'
+import { cnpgClusterFullPath, cnpgDimensionPath, cnpgWithinDetail } from './paths'
+import { currentPageLabel, issuesPathForSubject } from '../../utils/page-links'
 import { CNPGRestoreProgress } from './recovery/CNPGRestoreProgress'
 import { restoreBackupDeclared } from './recovery/restoreModel'
 import { useConnection } from '../../context/ConnectionContext'
 import { useNavCustomization } from '../../context/NavCustomization'
+import { RefreshFailedNotice } from '../workspace/layout'
 
 interface SummaryContext {
   apiKind: string
@@ -117,7 +118,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
         onNavigate={goRef}
         lead={
           <>
-            <CNPGRefreshFailedNotice queries={[runtime, ha]} />
+            <RefreshFailedNotice queries={[runtime, ha]} />
             {context === 'drawer' && <CNPGOperatorBanner namespaces={[namespace]} />}
             <CNPGMaintenanceBanner namespace={namespace} name={name} maintenance={ha.data?.maintenance} />
             {row.cluster?.spec?.bootstrap?.recovery && (
@@ -214,7 +215,7 @@ function useLogicalWorkspace(ws: CNPGWorkspaceResponse | null, subscriptions: an
 
 function LogicalPathSlot({ path, children }: { path: CNPGLogicalPath; children: (slot: ReturnType<typeof cnpgLogicalSlotFact>, notice: ReactNode) => ReactNode }) {
   const { observed, query } = useCNPGPublisherSlots(path.publisher)
-  return <>{children(cnpgLogicalSlotFact(path, observed), <CNPGRefreshFailedNotice queries={[query]} />)}</>
+  return <>{children(cnpgLogicalSlotFact(path, observed), <RefreshFailedNotice queries={[query]} />)}</>
 }
 
 function SubscriptionSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: NavigateToRef }) {
@@ -238,7 +239,7 @@ function PublicationSummaryHost(props: { resource: any; workspace: CNPGWorkspace
       )
     : []
   const observed = cnpgPublisherSlotsFrom(runtime.data, runtime.error, runtime.isRefetchError)
-  const notice = <CNPGRefreshFailedNotice queries={[runtime]} />
+  const notice = <RefreshFailedNotice queries={[runtime]} />
   return <CNPGPublicationSummary {...props} subscribers={paths.map((path) => ({ path, slot: cnpgLogicalSlotFact(path, observed), notice }))} />
 }
 
@@ -271,7 +272,7 @@ function PoolerSummaryHost({ ctx }: { ctx: SummaryContext }) {
   if (query.isLoading) return <PaneLoader label="Loading summary…" className="h-40" />
   const workspace = query.data?.installed ? query.data : null
   const go = ctx.onNavigate ? (ref: ResourceRef) => ctx.onNavigate?.(refToSelectedResource(ref)) : undefined
-  return <CNPGPoolerSummary resource={ctx.resource} workspace={workspace} onNavigate={go} live={live} lead={<CNPGRefreshFailedNotice queries={queries} />} />
+  return <CNPGPoolerSummary resource={ctx.resource} workspace={workspace} onNavigate={go} live={live} lead={<RefreshFailedNotice queries={queries} />} />
 }
 
 // The object's own apiVersion decides: Velero also ships a Backup kind.
@@ -315,7 +316,7 @@ function IssueLinks({ children }: { children: ReactNode }) {
   return (
     <OpenIssueContext.Provider
       value={issuesTakenOver ? undefined : (p) =>
-        navigate(cnpgIssuesPath(p.subject, searchParams.get('namespaces')))
+        navigate(issuesPathForSubject(p.subject, searchParams.get('namespaces')))
       }
     >
       {children}

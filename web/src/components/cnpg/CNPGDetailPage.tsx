@@ -7,16 +7,16 @@ import { useConnection } from '../../context/ConnectionContext'
 import { useContexts } from '../../api/client'
 import { useContextSwitchFlow } from '../useContextSwitchFlow'
 import { WorkloadView } from '../workload/WorkloadView'
-import { EmptyState } from '../capacity/shared'
 import { CNPGClusterActivity } from './CNPGClusterActivity'
 import { CNPGClusterRuntime } from './CNPGClusterRuntime'
 import { CNPGProtection } from './CNPGProtection'
 import { CNPGRestoreValidation } from './recovery/CNPGRestoreValidation'
 import { CNPGScreenGate } from './shared'
 import { CNPG_DETAIL_KINDS, CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, cnpgScreenPath, type CNPGDetailTarget } from './routes'
-import { currentPageLabel } from './paths'
+import { currentPageLabel } from '../../utils/page-links'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
+import { ScreenEmptyState } from '../workspace/layout'
 
 interface ReturnState {
   returnLabel?: string
@@ -228,7 +228,7 @@ function NotInContext({
   const pinned = contexts?.find((c) => c.name === pinnedContext)
   return (
     <>
-      <EmptyState
+      <ScreenEmptyState
         icon={Unplug}
         title={`${target.name} is not in ${activeContext}`}
         detail={`This link points at ${CNPG_DETAIL_KINDS[target.plural].kind} ${target.name} in context ${pinnedContext}. Radar does not open a same-named object from another cluster.`}

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { GrantText } from './shared'
+import { GrantText } from '../workspace/layout'
 
 describe('GrantText', () => {
   it('keeps the verb and resource together, with the scope as plain text', () => {
