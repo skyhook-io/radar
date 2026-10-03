@@ -149,10 +149,10 @@ func (s *Server) readCNPGOperatorFacts(r *http.Request) cnpgOperatorFacts {
 		out.webhookUnknown = out.deploymentsUnknown
 		return out
 	}
-	acc, _, deployments := s.cnpgOperatorDeployments(r, cache, s.cnpgOperatorScope(r))
-	if acc.state != cnpgCoverageFull {
+	acc, deployments := s.cnpgOperatorDeployments(r, cache, s.cnpgOperatorScope(r))
+	if acc.state != kindCoverageFull {
 		out.deploymentsUnknown = "Radar cannot list Deployments in every namespace, so the operator may be out of view"
-		if acc.state == cnpgCoverageSyncing {
+		if acc.state == kindCoverageSyncing {
 			out.deploymentsUnknown = "Deployments are still syncing"
 		}
 	}

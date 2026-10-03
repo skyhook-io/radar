@@ -191,7 +191,7 @@ func TestCNPGOperator_DiscoversOperatorPluginAndConfig(t *testing.T) {
 
 	got, body := getCNPGOperatorNoAuth(t, "")
 	for _, key := range []string{"deployments", "services"} {
-		if got.Coverage[key].State != cnpgCoverageFull {
+		if got.Coverage[key].State != kindCoverageFull {
 			t.Errorf("coverage[%s] = %+v, want full", key, got.Coverage[key])
 		}
 	}
@@ -339,7 +339,7 @@ func TestCNPGOperator_DeniedDeploymentsWithholdComponents(t *testing.T) {
 
 	got, _ := readCNPGOperator(t, env.authGet(t, "/api/cnpg/operator", "partial", ""))
 	cov := got.Coverage["deployments"]
-	if cov.State != cnpgCoveragePartial || len(cov.DeniedNamespaces) != 1 || cov.DeniedNamespaces[0] != "cnpg-system" {
+	if cov.State != kindCoveragePartial || len(cov.DeniedNamespaces) != 1 || cov.DeniedNamespaces[0] != "cnpg-system" {
 		t.Errorf("deployments coverage = %+v, want partial denied [cnpg-system]", cov)
 	}
 	for _, c := range got.Components {
@@ -359,7 +359,7 @@ func TestCNPGOperator_DeniedDeploymentsWithholdComponents(t *testing.T) {
 	env.srv.permCache.Set("none", nil, none)
 
 	got, _ = readCNPGOperator(t, env.authGet(t, "/api/cnpg/operator", "none", ""))
-	if got.Coverage["deployments"].State != cnpgCoverageDenied || got.Coverage["services"].State != cnpgCoverageDenied {
+	if got.Coverage["deployments"].State != kindCoverageDenied || got.Coverage["services"].State != kindCoverageDenied {
 		t.Errorf("coverage = %+v, want both denied", got.Coverage)
 	}
 	if got.Components == nil || len(got.Components) != 0 || got.Config == nil {

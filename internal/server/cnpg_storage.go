@@ -796,14 +796,14 @@ func (s *Server) handleCNPGFleetDisk(w http.ResponseWriter, r *http.Request) {
 	namespaces := s.parseNamespacesForUser(r)
 	resp := CNPGFleetDiskResponse{SampledAt: time.Now().UTC().Format(time.RFC3339), Source: cnpgUsageSource, Clusters: []CNPGClusterDisk{}}
 
-	var clusterKind cnpgWorkspaceKind
+	var clusterKind workspaceKind
 	for _, k := range cnpgWorkspaceKinds {
 		if k.key == cnpgWorkspaceClusterKey {
 			clusterKind = k
 		}
 	}
-	acc, _, clusters := s.cnpgWorkspaceReadKind(r, cache, clusterKind, namespaces)
-	if acc.state != cnpgCoverageFull && acc.state != cnpgCoveragePartial {
+	acc, clusters := s.cnpgWorkspaceReadKind(r, cache, clusterKind, namespaces)
+	if acc.state != kindCoverageFull && acc.state != kindCoveragePartial {
 		s.writeJSON(w, resp)
 		return
 	}

@@ -138,7 +138,7 @@ func TestCNPGWorkspace_NotInstalled(t *testing.T) {
 	}
 	assertEveryKey(t, got)
 	for k, c := range got.Coverage {
-		if c.State != cnpgCoverageNotInstalled {
+		if c.State != kindCoverageNotInstalled {
 			t.Errorf("coverage[%s] = %q, want notInstalled", k, c.State)
 		}
 	}
@@ -216,7 +216,7 @@ func TestCNPGWorkspace_AuthDisabledReturnsEverythingAndOnlyOwnedInstancePods(t *
 	}
 	assertEveryKey(t, got)
 	for k, c := range got.Coverage {
-		if c.State != cnpgCoverageFull {
+		if c.State != kindCoverageFull {
 			t.Errorf("coverage[%s] = %+v, want full with auth disabled", k, c)
 		}
 	}
@@ -297,7 +297,7 @@ func TestCNPGWorkspace_DeniedKindAndItsIssuesAreWithheld(t *testing.T) {
 	}
 
 	control := decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace", "reader", ""))
-	if control.Coverage["backups"].State != cnpgCoverageFull || !containsName(control.Objects["backups"], "pg-orders-broken") {
+	if control.Coverage["backups"].State != kindCoverageFull || !containsName(control.Objects["backups"], "pg-orders-broken") {
 		t.Fatalf("control: backups coverage=%+v objects=%v", control.Coverage["backups"], objectNames(control.Objects["backups"]))
 	}
 	if !hasBackupIssue(control) {
@@ -305,7 +305,7 @@ func TestCNPGWorkspace_DeniedKindAndItsIssuesAreWithheld(t *testing.T) {
 	}
 
 	got := decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace", "no-backups", ""))
-	if got.Coverage["backups"].State != cnpgCoverageDenied {
+	if got.Coverage["backups"].State != kindCoverageDenied {
 		t.Errorf("backups coverage = %+v, want denied", got.Coverage["backups"])
 	}
 	if len(got.Objects["backups"]) != 0 {
@@ -314,7 +314,7 @@ func TestCNPGWorkspace_DeniedKindAndItsIssuesAreWithheld(t *testing.T) {
 	if hasBackupIssue(got) {
 		t.Error("an issue on a Backup the caller cannot list was returned")
 	}
-	if got.Coverage["clusters"].State != cnpgCoverageFull || !containsName(got.Objects["clusters"], "pg-orders") {
+	if got.Coverage["clusters"].State != kindCoverageFull || !containsName(got.Objects["clusters"], "pg-orders") {
 		t.Errorf("clusters coverage=%+v objects=%v, want full", got.Coverage["clusters"], objectNames(got.Objects["clusters"]))
 	}
 }
@@ -334,7 +334,7 @@ func TestCNPGWorkspace_PartialNamespaceCoverage(t *testing.T) {
 
 	got := decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace", "scoped", ""))
 	cov := got.Coverage["clusters"]
-	if cov.State != cnpgCoveragePartial || len(cov.DeniedNamespaces) != 1 || cov.DeniedNamespaces[0] != "b" {
+	if cov.State != kindCoveragePartial || len(cov.DeniedNamespaces) != 1 || cov.DeniedNamespaces[0] != "b" {
 		t.Errorf("clusters coverage = %+v, want partial denied [b]", cov)
 	}
 	if len(cov.AllowedNamespaces) != 1 || cov.AllowedNamespaces[0] != "a" {
@@ -347,7 +347,7 @@ func TestCNPGWorkspace_PartialNamespaceCoverage(t *testing.T) {
 
 	// A view filter narrows the scope; the denied list never grows past it.
 	filtered := decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace?namespaces=a", "scoped", ""))
-	if filtered.Coverage["clusters"].State != cnpgCoverageFull {
+	if filtered.Coverage["clusters"].State != kindCoverageFull {
 		t.Errorf("filtered to a: coverage = %+v, want full", filtered.Coverage["clusters"])
 	}
 	if len(filtered.Namespaces) != 1 || filtered.Namespaces[0] != "a" {
@@ -370,12 +370,12 @@ func TestCNPGWorkspace_ClusterImageCatalogNeedsClusterScopeGrant(t *testing.T) {
 	env.srv.permCache.Set("cluster-wide", nil, clusterWide)
 
 	got := decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace", "ns-only", ""))
-	if got.Coverage["clusterImageCatalogs"].State != cnpgCoverageDenied || len(got.Objects["clusterImageCatalogs"]) != 0 {
+	if got.Coverage["clusterImageCatalogs"].State != kindCoverageDenied || len(got.Objects["clusterImageCatalogs"]) != 0 {
 		t.Errorf("namespace-level grant exposed ClusterImageCatalogs: %+v %v", got.Coverage["clusterImageCatalogs"], objectNames(got.Objects["clusterImageCatalogs"]))
 	}
 
 	got = decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace?namespaces=pg", "cluster-wide", ""))
-	if got.Coverage["clusterImageCatalogs"].State != cnpgCoverageFull || !containsName(got.Objects["clusterImageCatalogs"], "pg-fleet") {
+	if got.Coverage["clusterImageCatalogs"].State != kindCoverageFull || !containsName(got.Objects["clusterImageCatalogs"], "pg-fleet") {
 		t.Errorf("cluster-scope grant: %+v %v, want full with pg-fleet regardless of the view filter", got.Coverage["clusterImageCatalogs"], objectNames(got.Objects["clusterImageCatalogs"]))
 	}
 }
@@ -450,7 +450,7 @@ func TestCNPGWorkspace_AuditNeedsScheduledBackupEvidence(t *testing.T) {
 	}
 
 	got = decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace", "no-schedules", ""))
-	if got.Coverage["scheduledBackups"].State != cnpgCoverageDenied {
+	if got.Coverage["scheduledBackups"].State != kindCoverageDenied {
 		t.Errorf("scheduledBackups coverage = %+v, want denied", got.Coverage["scheduledBackups"])
 	}
 	if len(got.Audit) != 0 {
@@ -532,7 +532,7 @@ func TestCNPGWorkspace_PodEvidenceFollowsPodAccess(t *testing.T) {
 	}
 
 	got := decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace", "clusters-only", ""))
-	if got.Coverage["pods"].State != cnpgCoverageDenied || len(got.Objects["pods"]) != 0 {
+	if got.Coverage["pods"].State != kindCoverageDenied || len(got.Objects["pods"]) != 0 {
 		t.Errorf("pods coverage=%+v objects=%v, want denied and []", got.Coverage["pods"], objectNames(got.Objects["pods"]))
 	}
 	for _, iss := range got.Issues {
@@ -560,7 +560,7 @@ func TestCNPGWorkspace_DeniedNamespacesNeverComeFromTheServerInventory(t *testin
 
 	got := decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace", "wide", ""))
 	cov := got.Coverage["clusters"]
-	if cov.State != cnpgCoveragePartial {
+	if cov.State != kindCoveragePartial {
 		t.Errorf("unfiltered: clusters coverage = %+v, want partial", cov)
 	}
 	if len(cov.DeniedNamespaces) != 0 {
@@ -575,7 +575,7 @@ func TestCNPGWorkspace_DeniedNamespacesNeverComeFromTheServerInventory(t *testin
 
 	got = decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace?namespaces=default,broken", "wide", ""))
 	cov = got.Coverage["clusters"]
-	if cov.State != cnpgCoveragePartial || len(cov.DeniedNamespaces) != 1 || cov.DeniedNamespaces[0] != "broken" {
+	if cov.State != kindCoveragePartial || len(cov.DeniedNamespaces) != 1 || cov.DeniedNamespaces[0] != "broken" {
 		t.Errorf("filtered: clusters coverage = %+v, want partial naming broken", cov)
 	}
 	if len(cov.AllowedNamespaces) != 1 || cov.AllowedNamespaces[0] != "default" {
@@ -612,7 +612,7 @@ func TestCNPGWorkspace_ScheduleReadingsFollowScheduledBackupAccess(t *testing.T)
 	}
 
 	partial := decodeWorkspace(t, env.authGet(t, "/api/cnpg/workspace", "only-a", ""))
-	if partial.Coverage["scheduledBackups"].State != cnpgCoveragePartial {
+	if partial.Coverage["scheduledBackups"].State != kindCoveragePartial {
 		t.Errorf("coverage = %+v, want partial", partial.Coverage["scheduledBackups"])
 	}
 	if partial.ScheduleReadings["a/nightly-a"] == "" {

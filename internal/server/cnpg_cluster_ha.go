@@ -596,7 +596,7 @@ func (s *Server) cnpgHAPrimaryLease(ctx context.Context, r *http.Request, c cnpg
 // namespace of a visible operator Deployment. Which operator replica leads is
 // a different fact from which instance is primary.
 func (s *Server) cnpgHAOperatorLease(ctx context.Context, r *http.Request, c cnpgHAClients, cache *k8s.ResourceCache, now time.Time) CNPGHALease {
-	acc, _, deployments := s.cnpgOperatorDeployments(r, cache, s.cnpgOperatorScope(r))
+	acc, deployments := s.cnpgOperatorDeployments(r, cache, s.cnpgOperatorScope(r))
 	var namespace string
 	for _, d := range deployments {
 		if d.Labels[cnpgOperatorNameLabel] == cnpgOperatorNameValue {
@@ -606,7 +606,7 @@ func (s *Server) cnpgHAOperatorLease(ctx context.Context, r *http.Request, c cnp
 	}
 	if namespace == "" {
 		reason := "The operator Deployment is not visible to you, so its namespace is unknown"
-		if acc.state == cnpgCoverageFull {
+		if acc.state == kindCoverageFull {
 			reason = "No operator Deployment labelled " + cnpgOperatorNameLabel + "=" + cnpgOperatorNameValue + " was found"
 		}
 		return CNPGHALease{CNPGHASource: CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}, Name: cnpgOperatorLeaseName}

@@ -328,14 +328,14 @@ func (s *Server) handleCNPGFleetMetrics(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var clusterKind cnpgWorkspaceKind
+	var clusterKind workspaceKind
 	for _, k := range cnpgWorkspaceKinds {
 		if k.key == cnpgWorkspaceClusterKey {
 			clusterKind = k
 		}
 	}
-	acc, _, clusters := s.cnpgWorkspaceReadKind(r, cache, clusterKind, namespaces)
-	if acc.state != cnpgCoverageFull && acc.state != cnpgCoveragePartial {
+	acc, clusters := s.cnpgWorkspaceReadKind(r, cache, clusterKind, namespaces)
+	if acc.state != kindCoverageFull && acc.state != kindCoveragePartial {
 		s.writeJSON(w, resp)
 		return
 	}
