@@ -306,7 +306,8 @@ export function cnpgHASummary(
   const calm: string[] = []
   if (ha.pods.state === 'ok') {
     const ready = ha.instances.filter((i) => i.ready).length
-    if (ready < ha.instances.length) issues.push(`${ha.instances.length - ready} of ${ha.instances.length} instances not ready`)
+    if (ha.instances.length === 0) issues.push('no instance Pods')
+    else if (ready < ha.instances.length) issues.push(`${ha.instances.length - ready} of ${ha.instances.length} instances not ready`)
     else calm.push(`${ready}/${ha.instances.length} instances ready`)
   }
   if (primaryConflict) issues.push('primary labels disagree')
@@ -318,7 +319,7 @@ export function cnpgHASummary(
   if (pending.pods.length > 0) issues.push(`restart pending on ${pending.pods.join(', ')}`)
   const drift = cnpgImageDrift(ha)
   if (drift.drifted.length > 0) issues.push(`${drift.drifted.length === 1 ? 'an instance runs' : `${drift.drifted.length} instances run`} a different image`)
-  else if (drift.known) calm.push('images match')
+  else if (drift.known && ha.instances.length > 0 && ha.instances.every((i) => i.imageMatches === true)) calm.push('images match')
   const quorum = cnpgQuorumFact(ha.quorum)
   if (quorum.tone === 'degraded' || quorum.tone === 'unhealthy') issues.push('failover quorum does not hold')
   const pdb = cnpgPDBFact(ha.pdbs)
@@ -341,7 +342,7 @@ export function cnpgHASummary(
   check(ha.primaryLease, 'primary lease')
   check(ha.operatorLease, 'operator lease')
   check(ha.jobs, 'Jobs')
-  if (!pending.known) unread.push('pending restarts')
+  if (!pending.known && !(ha.pods.state === 'ok' && ha.instances.length === 0)) unread.push('pending restarts')
   const notRead = unread.length > 0 ? `not read: ${unread.join(', ')}` : ''
   if (issues.length > 0) return { text: [...issues, notRead].filter(Boolean).join(' · '), attention: true }
   if (calm.length === 0) return { text: notRead ? notRead[0].toUpperCase() + notRead.slice(1) : 'Nothing reported out of line', attention: false }

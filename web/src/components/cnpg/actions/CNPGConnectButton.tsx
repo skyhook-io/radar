@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Plug, X } from 'lucide-react'
 import { CNPGConnectSection, DialogPortal, Tooltip, type CNPGRef, type NavigateToResource } from '@skyhook-io/k8s-ui'
@@ -15,14 +15,24 @@ export function cnpgConnectParamValue(namespace: string, name: string, surface: 
   return surface === 'drawer' ? `${namespace}/${name}@drawer` : `${namespace}/${name}`
 }
 
-// A request is answered once: a full-screen drawer can carry the same surface
-// as the page beneath it, and both buttons see the request in the same commit.
-const answeredRequests = new Set<string>()
+// A request is answered by one button: a full-screen drawer can carry the
+// same surface as the page beneath it, and both see the request in the same
+// commit. A button that answered and then unmounted (before the param was
+// dropped) gives the request back, so its remount can answer it.
+const mountedButtons = new Set<symbol>()
+let answered: { key: string; by: symbol } | null = null
 
-/** True for the first caller per history entry, false for any other. */
-export function claimConnectRequest(locationKey: string): boolean {
-  if (answeredRequests.has(locationKey)) return false
-  answeredRequests.add(locationKey)
+export function registerConnectButton(id: symbol): () => void {
+  mountedButtons.add(id)
+  return () => {
+    mountedButtons.delete(id)
+  }
+}
+
+/** True when this button should open the dialog for the request at locationKey. */
+export function claimConnectRequest(locationKey: string, id: symbol): boolean {
+  if (answered && answered.key === locationKey && answered.by !== id && mountedButtons.has(answered.by)) return false
+  answered = { key: locationKey, by: id }
   return true
 }
 
@@ -41,9 +51,11 @@ export function CNPGConnectButton({
   const location = useLocation()
   const [params, setParams] = useSearchParams()
   const [open, setOpen] = useState(false)
+  const id = useMemo(() => Symbol('cnpg-connect'), [])
+  useEffect(() => registerConnectButton(id), [id])
   const requested = params.get(CNPG_CONNECT_PARAM) === cnpgConnectParamValue(namespace, name, compact ? 'drawer' : 'page')
   useEffect(() => {
-    if (!requested || !claimConnectRequest(location.key)) return
+    if (!requested || !claimConnectRequest(location.key, id)) return
     setOpen(true)
     // Keeps the page's return label, which lives in the history state.
     setParams(
@@ -54,7 +66,7 @@ export function CNPGConnectButton({
       },
       { replace: true, state: location.state },
     )
-  }, [requested, setParams, location.key, location.state])
+  }, [requested, id, setParams, location.key, location.state])
   const { fleet } = useCNPGFleet([namespace], open)
   const row = fleet?.rows.find((r) => r.namespace === namespace && r.name === name)
   const go = onNavigate

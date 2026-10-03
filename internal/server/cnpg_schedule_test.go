@@ -190,6 +190,8 @@ func TestDescribeCNPGScheduleMatchesTheParser(t *testing.T) {
 	}{
 		{"0 0 */5 * * *", "every day at 00:00, 05:00, 10:00, 15:00 and 20:00 UTC", []string{"2026-10-10T20:00:00Z", "2026-10-11T00:00:00Z"}},
 		{"0 0 */6 * * *", "every 6 hours, on the hour", []string{"2026-10-11T00:00:00Z", "2026-10-11T06:00:00Z"}},
+		// Five fields are seconds through month; the day of week is optional.
+		{"0 30 2 * *", "every day at 02:30 UTC", []string{"2026-10-11T02:30:00Z", "2026-10-12T02:30:00Z"}},
 		{"0 0 */6,13 * * *", "cron 0 0 */6,13 * * *", nil},
 		{"0 0 0 1,*/2 * 1", "cron 0 0 0 1,*/2 * 1", nil},
 		{"0 0 0 */2 * 1", "every 2 days of the month from day 1, when it is a Monday at 00:00 UTC", []string{"2026-10-19T00:00:00Z"}},

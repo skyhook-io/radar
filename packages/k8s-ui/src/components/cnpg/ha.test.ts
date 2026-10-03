@@ -259,6 +259,12 @@ describe('folded HA and certificates summaries', () => {
     expect(cnpgHASummary(ha({ pdbs, operatorLease: { state: 'ok', holder: 'op_1' } }), live)).toEqual({ text: '2/2 instances ready · 2 zones · images match', attention: false })
   })
 
+  it('claims neither readiness nor matching images without instances', () => {
+    expect(cnpgHASummary(ha({ pdbs, instances: [], operatorLease: { state: 'ok' } }), [] as never)).toEqual({ text: 'no instance Pods', attention: true })
+    const unset = ha({ pdbs, operatorLease: { state: 'ok' }, instances: [{ pod: 'pg-1', podUID: 'a', role: 'primary', ready: true, node: 'n1', zone: 'z1', restartCount: 0 }] })
+    expect(cnpgHASummary(unset, [{ pod: 'pg-1', state: 'ok' }] as never).text).toBe('1/1 instances ready')
+  })
+
   it('names what it could not read instead of reading calm', () => {
     const denied = { state: 'denied' as const, grant: 'x' }
     const unread = ha({ pods: denied, nodes: denied, pdbs: { ...denied, enabled: true, items: [] }, primaryLease: denied, operatorLease: denied, jobs: { ...denied, items: [] } } as never)
