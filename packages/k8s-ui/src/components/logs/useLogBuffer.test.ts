@@ -8,7 +8,7 @@ describe('detectLogLevel with CloudNativePG records', () => {
     expect(detectLogLevel(line('FATAL'))).toBe('error')
     expect(detectLogLevel(line('WARNING'))).toBe('warn')
     expect(detectLogLevel(line('LOG'))).toBe('info')
-    expect(detectLogLevel(line('DEBUG1'))).toBe('debug')
+    expect(detectLogLevel(line('DEBUG'))).toBe('debug')
   })
   it('ignores a record that is not a PostgreSQL one', () => {
     expect(detectLogLevel(JSON.stringify({ level: 'error', msg: 'request failed', record: { error_severity: 20 } }))).toBe('error')

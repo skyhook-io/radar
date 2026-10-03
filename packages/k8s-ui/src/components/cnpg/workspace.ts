@@ -404,6 +404,7 @@ function restoreValidationFact(
   cluster: any,
   allClusters: any[],
   backups: any[],
+  backupsReadable: boolean,
 ): CNPGProtectionFacts['restoreValidation'] {
   const plugin = getCNPGClusterBarmanPlugin(cluster)
   const server = plugin?.serverName || cluster.metadata?.name
@@ -425,7 +426,12 @@ function restoreValidationFact(
     const backup = backups.find((b) => b.metadata?.namespace === ns && b.metadata?.name === backupName)
     return specClusterName(backup) === name
   })
-  if (!restored) return { text: 'None recorded', tone: 'unknown', source: 'Kubernetes does not record restore tests' }
+  if (!restored) {
+    // A recovery by Backup name is only attributable when that Backup could be read.
+    const unresolved = !backupsReadable && allClusters.some((c) => c !== cluster && c.metadata?.namespace === ns && c.spec?.bootstrap?.recovery?.backup?.name)
+    if (unresolved) return { text: 'Unknown: no access to Backups', tone: 'unknown', source: `A Cluster in ${ns} recovers from a Backup Radar cannot read` }
+    return { text: 'None recorded', tone: 'unknown', source: 'Kubernetes does not record restore tests' }
+  }
   const rname = restored.metadata?.name
   const ready = typeof restored.status?.readyInstances === 'number' && restored.status.readyInstances > 0
   if (!ready) {
@@ -640,7 +646,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
         : storesUnreadable
           ? { text: coverageUnavailableText(storesCov, 'ObjectStores'), tone: 'unknown' }
           : { text: 'Not reported', tone: 'unknown' },
-      restoreValidation: restoreValidationFact(cluster, clusters, resp.objects.backups ?? []),
+      restoreValidation: restoreValidationFact(cluster, clusters, resp.objects.backups ?? [], coverageReadable(coverageOf(resp, 'backups'), ns)),
     }
     const problems = problemsFor(cluster, resp.issues ?? [], resp.audit ?? [], children)
     const categories = new Set<CNPGProblemCategory>(

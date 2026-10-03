@@ -49,10 +49,10 @@ export function normalizeLevel(raw: unknown): LogLevel | null {
   return 'unknown'
 }
 
-// PostgreSQL's error_severity values; anything else under `record` isn't PostgreSQL's.
+// PostgreSQL's error_severity values (every DEBUGn is written as DEBUG);
+// anything else under `record` isn't PostgreSQL's.
 const POSTGRES_SEVERITIES: Record<string, LogLevel> = {
-  DEBUG1: 'debug', DEBUG2: 'debug', DEBUG3: 'debug', DEBUG4: 'debug', DEBUG5: 'debug',
-  LOG: 'info', INFO: 'info', NOTICE: 'info', WARNING: 'warn', ERROR: 'error', FATAL: 'error', PANIC: 'error',
+  DEBUG: 'debug', LOG: 'info', INFO: 'info', NOTICE: 'info', WARNING: 'warn', ERROR: 'error', FATAL: 'error', PANIC: 'error',
 }
 
 const LEVEL_FIELD_KEYS = ['level', 'lvl', 'severity', 'levelname', 'log.level'] as const

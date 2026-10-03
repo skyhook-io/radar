@@ -201,6 +201,13 @@ describe('buildCNPGFleet', () => {
     expect(a.protection.restoreValidation.tone).toBe('unknown')
   })
 
+  it('does not say no restore was recorded when the Backup it names is unreadable', () => {
+    const src = cluster('pg-a', 'db')
+    const restoring = cluster('pg-a-restore', 'db', { spec: { bootstrap: { recovery: { backup: { name: 'nightly-1' } } } } })
+    const a = buildCNPGFleet(resp({ clusters: [src, restoring] }, { coverage: { backups: { state: 'denied' } } })).rows.find((r) => r.name === 'pg-a')!
+    expect(a.protection.restoreValidation.text).toBe('Unknown: no access to Backups')
+  })
+
   it('does not attribute a restore by backup-name prefix alone', () => {
     const src = cluster('pg', 'db')
     const other = cluster('pg-orders-restore', 'db', { spec: { bootstrap: { recovery: { backup: { name: 'pg-orders-backup' } } } } })
