@@ -57,8 +57,8 @@ export function CNPGObjectStoreRenderer({
             neverSucceeded.length > 0
               ? `No successful base backup is recorded for ${neverSucceeded.join(', ')}, so recoverability is not established.`
               : archiveStopped.length > 0
-                ? `The most recent base backup failed after the last success, and WAL archiving has stopped for ${archiveStopped.join(', ')}: nothing written since the last archived WAL can be recovered.`
-                : 'The most recent base backup failed after the last success. While WAL archiving works, recovery from that backup can still replay archived WAL written since.'
+                ? `A base backup failure is recorded after the last recorded success, and WAL archiving has stopped for ${archiveStopped.join(', ')}: nothing written since the last archived WAL can be recovered.`
+                : 'A base backup failure is recorded after the last recorded success. While WAL archiving works, recovery from that backup can still replay archived WAL written since.'
           }
         />
       )}
@@ -235,7 +235,7 @@ function RecoveryWindowRow({
       {w.failingSinceLastSuccess && (
         <div className="mt-2 pt-2 border-t border-theme-border text-xs text-theme-text-secondary">
           {w.lastSuccessfulBackupTime
-            ? 'Every backup since the last success has failed. Recovery replays from that backup, so it takes longer the longer this lasts.'
+            ? 'A backup failure is recorded after the last recorded success. Restoring from that success replays the WAL archived since, which takes longer the longer this lasts.'
             : 'No successful backup is recorded for this server, so recoverability is not established.'}
         </div>
       )}
