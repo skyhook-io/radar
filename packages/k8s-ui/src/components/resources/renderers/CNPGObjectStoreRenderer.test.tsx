@@ -97,3 +97,20 @@ describe('a window that has stopped advancing', () => {
     expect(html).not.toContain('WAL archiving has stopped')
   })
 })
+
+describe('ObjectStore failing backups', () => {
+  const failing = {
+    ...store,
+    status: { serverRecoveryWindow: { 'pg-main': { firstRecoverabilityPoint: '2026-08-01T00:00:00Z', lastSuccessfulBackupTime: '2026-08-10T00:00:00Z', lastFailedBackupTime: '2026-08-11T00:00:00Z' } } },
+  }
+  it('does not say recovery still reaches the newest WAL when archiving has stopped too', () => {
+    const html = renderToString(<CNPGObjectStoreRenderer data={failing} archivingFailing={new Set(['pg-main'])} onNavigate={nav} />)
+    expect(html).toContain('WAL archiving has stopped for pg-main')
+    expect(html).not.toContain('recovery still reaches the newest archived WAL')
+    expect(html).toContain('WAL archiving has stopped on the cluster behind this server')
+  })
+  it('keeps recovery reaching archived WAL when only base backups fail', () => {
+    const html = renderToString(<CNPGObjectStoreRenderer data={failing} archivingFailing={new Set()} onNavigate={nav} />)
+    expect(html).toContain('recovery still reaches the newest archived WAL')
+  })
+})

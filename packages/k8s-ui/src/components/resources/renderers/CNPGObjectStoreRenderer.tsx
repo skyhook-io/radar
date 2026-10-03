@@ -44,6 +44,7 @@ export function CNPGObjectStoreRenderer({
   const credentialSecret = getCNPGObjectStoreCredentialSecret(data)
   const cfg = data?.spec?.configuration ?? {}
   const failing = windows.filter((w) => w.failingSinceLastSuccess)
+  const archiveStopped = failing.filter((w) => archivingFailing?.has(w.server)).map((w) => w.server)
 
   return (
     <>
@@ -51,7 +52,11 @@ export function CNPGObjectStoreRenderer({
         <AlertBanner
           variant="error"
           title={`Backups failing for ${failing.length === 1 ? failing[0].server : `${failing.length} servers`}`}
-          message="The most recent base backup failed after the last success. While WAL archiving works, recovery still reaches the newest archived WAL, but it replays from an ever older base backup."
+          message={
+            archiveStopped.length > 0
+              ? `The most recent base backup failed after the last success, and WAL archiving has stopped for ${archiveStopped.join(', ')}: nothing written since the last archived WAL can be recovered.`
+              : 'The most recent base backup failed after the last success. While WAL archiving works, recovery still reaches the newest archived WAL, but it replays from an ever older base backup.'
+          }
         />
       )}
 
@@ -197,7 +202,7 @@ function RecoveryWindowRow({
                 : 'No backups yet'}
         </span>
       </div>
-      {stalled && !w.failingSinceLastSuccess && (
+      {stalled && (
         <div className="text-xs text-warning-text mb-1">
           {/* The timestamps below are real and still describe the last backup that
               worked. What they no longer describe is a window still growing, and
