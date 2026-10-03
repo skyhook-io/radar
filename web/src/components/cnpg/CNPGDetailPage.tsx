@@ -242,7 +242,7 @@ function NotInContext({
             <button
               type="button"
               onClick={() => navigate(homePath)}
-              className="rounded-lg border border-theme-border bg-theme-surface px-3 py-1.5 text-sm text-theme-text-primary hover:bg-theme-hover"
+              className="btn-secondary px-3 py-1.5 text-sm"
             >
               Go to {homeLabel === 'Overview' ? 'CloudNativePG Overview' : homeLabel}
             </button>

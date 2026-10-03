@@ -155,7 +155,7 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex max-w-[22rem] items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface px-2.5 py-1.5 text-xs text-theme-text-primary hover:bg-theme-hover"
+        className="btn-secondary inline-flex max-w-[22rem] items-center gap-1.5 px-2.5 py-1.5 text-xs"
       >
         <StatusDot tone={STATE_TONE[lead.state]} />
         <span className="truncate">{lead.label}</span>

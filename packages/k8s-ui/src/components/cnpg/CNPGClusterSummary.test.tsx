@@ -3,9 +3,9 @@ import { act, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CNPGClusterSummary } from './CNPGClusterSummary'
-import { CNPGOpenIssueContext } from './primitives'
 import type { CNPGFleetRow, CNPGProblem } from './workspace'
 import type { CNPGDimension } from './ha'
+import { OpenIssueContext } from '../workspace'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -130,9 +130,9 @@ describe('problem provenance', () => {
       attention: true,
     })
     const root = render(
-      <CNPGOpenIssueContext.Provider value={open}>
+      <OpenIssueContext.Provider value={open}>
         <CNPGClusterSummary row={r} />
-      </CNPGOpenIssueContext.Provider>,
+      </OpenIssueContext.Provider>,
     )
     expect(document.body.textContent).toContain('Reported by CNPG')
     expect(document.body.textContent).not.toContain('Radar issue')

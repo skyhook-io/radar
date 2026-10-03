@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { FactValue } from './primitives'
+import { FactValue } from './facts'
 
 describe('FactValue', () => {
   const twoDaysAgo = new Date(Date.now() - 2 * 24 * 3600 * 1000 - 60_000).toISOString()

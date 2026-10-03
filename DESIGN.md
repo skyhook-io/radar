@@ -100,6 +100,7 @@ Standard Tailwind type scale. No custom sizes or tracking. Use Tailwind utilitie
 | `.btn-brand` | Primary CTAs — brand-colored bg, white text, 10px radius |
 | `.btn-brand-muted` | Secondary brand actions — dimmed brand bg, white text |
 | `.btn-brand-toggle` | Toggle buttons — 50% brand bg, primary text |
+| `.btn-secondary` | Secondary actions beside a `.btn-brand` — bordered surface bg, primary text, 10px radius |
 
 Hover/disabled states are built into the classes. For non-brand buttons, use shadcn/ui `<Button>` variants.
 

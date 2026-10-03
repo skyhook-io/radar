@@ -2,8 +2,6 @@
 // payload. Each helper answers only from what the objects record; a relation
 // that cannot be established returns null or an empty list, never a guess.
 
-import type { BadgeSeverity } from '../ui/Badge'
-import type { HealthLevel } from '../resources/resource-utils'
 import {
   CNPG_BARMAN_PLUGIN_NAME,
   CNPG_GROUP,
@@ -12,15 +10,8 @@ import {
   isApiGroup,
   type CNPGObjectStoreRecoveryWindow,
 } from '../resources/resource-utils-cnpg'
-import {
-  cnpgIssueCategory, cnpgIssueOrigin, cnpgIssueText,
-  coverageReadable,
-  type CNPGFact,
-  type CNPGProblem,
-  type CNPGWorkspaceIssue,
-  type CNPGWorkspaceKey,
-  type CNPGWorkspaceResponse,
-} from './workspace'
+import { cnpgIssueCategory, cnpgIssueOrigin, cnpgIssueText, coverageReadable, type CNPGProblem, type CNPGWorkspaceIssue, type CNPGWorkspaceKey, type CNPGWorkspaceResponse } from './workspace'
+import type { Fact } from '../workspace'
 
 export interface CNPGObjectRef {
   kind: string
@@ -56,21 +47,6 @@ export function isCNPGKind(obj: any, kind: string, group: string = CNPG_GROUP): 
 
 export function refOf(obj: any, kind: string, group: string = CNPG_GROUP): CNPGObjectRef {
   return { kind, group, namespace: nsOf(obj), name: nameOf(obj) }
-}
-
-export function healthSeverity(level: HealthLevel): BadgeSeverity {
-  switch (level) {
-    case 'healthy':
-      return 'success'
-    case 'unhealthy':
-      return 'error'
-    case 'alert':
-      return 'alert'
-    case 'degraded':
-      return 'warning'
-    default:
-      return 'neutral'
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -256,16 +232,16 @@ export function usersOfObjectStore(store: any, clusters: any[]): CNPGObjectStore
 export interface CNPGObjectStoreEvidence {
   cluster: CNPGObjectRef
   serverName: string
-  archiving: CNPGFact
+  archiving: Fact
   window: CNPGObjectStoreRecoveryWindow | null
 }
 
 export interface CNPGObjectStoreHealth {
-  summary: CNPGFact
+  summary: Fact
   evidence: CNPGObjectStoreEvidence[]
 }
 
-function archivingFact(cluster: any): CNPGFact {
+function archivingFact(cluster: any): Fact {
   const conds = cluster?.status?.conditions
   const c = Array.isArray(conds) ? conds.find((x: any) => x?.type === 'ContinuousArchiving') : null
   if (!c) return { text: 'WAL archiving not reported', tone: 'unknown' }
@@ -319,14 +295,14 @@ export function inferredObjectStoreHealth(store: any, users: CNPGObjectStoreUser
 // Declarative objects
 // ---------------------------------------------------------------------------
 
-export function appliedFact(obj: any): CNPGFact {
+export function appliedFact(obj: any): Fact {
   const applied = obj?.status?.applied
   if (applied === true) return { text: 'Applied', tone: 'healthy' }
   if (applied === false) return { text: 'Not applied', tone: 'unhealthy' }
   return { text: 'Pending · the operator has not reported a result yet', tone: 'unknown' }
 }
 
-export function observedGenerationFact(obj: any): CNPGFact {
+export function observedGenerationFact(obj: any): Fact {
   const observed = obj?.status?.observedGeneration
   const generation = obj?.metadata?.generation
   if (typeof observed !== 'number') return { text: 'Not reported', tone: 'unknown' }

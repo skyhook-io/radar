@@ -463,7 +463,7 @@ function ExpansionCard({ data, volumes, onResize }: { data: CNPGClusterStorageRe
               <button
                 type="button"
                 onClick={() => onResize(t)}
-                className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-theme-border bg-theme-surface px-2.5 py-1.5 text-xs font-medium text-theme-text-primary hover:bg-theme-hover"
+                className="btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium"
               >
                 Edit size…
               </button>

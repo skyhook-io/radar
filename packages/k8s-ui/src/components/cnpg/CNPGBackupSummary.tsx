@@ -9,7 +9,6 @@ import {
 import type { CNPGWorkspaceResponse } from './workspace'
 import { cnpgScheduleBasisNote, formatCNPGRunTime, type CNPGSchedulePreview } from './schedule'
 import { Tooltip } from '../ui/Tooltip'
-import { FactGrid, FactRow, RefLink, SummaryHeading, toneTextClass, type CNPGNavigate } from './primitives'
 import { ClusterLink, NotReported, Note, ObjectProblems, PhaseBadge, SummaryShell, TimeAgo } from './CNPGSharedSummary'
 import {
   backupDestination,
@@ -21,11 +20,14 @@ import {
   scheduledBackupOf,
   workspaceList,
 } from './relations'
+import { type NavigateToRef, RefLink } from '../ui/RefLink'
+import { toneTextClass } from '../ui/status-tone'
+import { FactGrid, FactRow, SectionHeading } from '../workspace'
 
 interface SummaryProps {
   resource: any
   workspace: CNPGWorkspaceResponse | null
-  onNavigate?: CNPGNavigate
+  onNavigate?: NavigateToRef
 }
 
 const RECENT_RUNS = 5
@@ -89,7 +91,7 @@ export function CNPGBackupSummary({ resource, workspace, onNavigate }: SummaryPr
     <SummaryShell>
       <ObjectProblems issues={workspace?.issues} subject={refOf(resource, 'Backup')} onNavigate={onNavigate} />
 
-      <SummaryHeading>Outcome</SummaryHeading>
+      <SectionHeading>Outcome</SectionHeading>
       <FactGrid>
         <FactRow label="Phase">
           <PhaseBadge status={status} />
@@ -111,7 +113,7 @@ export function CNPGBackupSummary({ resource, workspace, onNavigate }: SummaryPr
         )}
       </FactGrid>
 
-      <SummaryHeading>Relationships</SummaryHeading>
+      <SectionHeading>Relationships</SectionHeading>
       <FactGrid>
         <FactRow label="Cluster">
           <ClusterLink resource={resource} workspace={workspace} onNavigate={onNavigate} />
@@ -204,7 +206,7 @@ export function CNPGScheduledBackupSummary({
     <SummaryShell>
       <ObjectProblems issues={workspace?.issues} subject={refOf(resource, 'ScheduledBackup')} onNavigate={onNavigate} />
 
-      <SummaryHeading>Schedule</SummaryHeading>
+      <SectionHeading>Schedule</SectionHeading>
       <FactGrid>
         <FactRow label="Status">
           <PhaseBadge status={getCNPGScheduledBackupStatus(resource)} />
@@ -230,7 +232,7 @@ export function CNPGScheduledBackupSummary({
         <FactRow label="Method">{methodText(resource) ?? 'Barman object store (in-tree) · default'}</FactRow>
       </FactGrid>
 
-      <SummaryHeading hint={runs.length > shown.length ? `${shown.length} of ${runs.length}` : undefined}>Recent runs</SummaryHeading>
+      <SectionHeading hint={runs.length > shown.length ? `${shown.length} of ${runs.length}` : undefined}>Recent runs</SectionHeading>
       {runsUnavailable ? (
         <div className="text-sm">
           <NotReported text={runsUnavailable} />

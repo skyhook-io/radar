@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   CNPG_BARMAN_OBJECTSTORE_GROUP,
-  CNPGOpenIssueContext,
+  OpenIssueContext,
   CNPG_GROUP,
   CNPGBackupSummary,
   CNPGClusterSummary,
@@ -26,8 +26,8 @@ import {
   PaneLoader,
   isApiGroup,
   refToSelectedResource,
-  type CNPGNavigate,
-  type CNPGRef,
+  type NavigateToRef,
+  type ResourceRef,
   type CNPGLogicalPath,
   type CNPGWorkspaceResponse,
   type NavigateToResource,
@@ -101,7 +101,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
       </div>
     )
   }
-  const goRef = onNavigate ? (ref: CNPGRef) => onNavigate(refToSelectedResource(ref)) : undefined
+  const goRef = onNavigate ? (ref: ResourceRef) => onNavigate(refToSelectedResource(ref)) : undefined
   // On the Cluster's own page this is a tab change, applied like a tab click;
   // anywhere else (the drawer, another page) it is a push to the full page
   // with a return label.
@@ -189,9 +189,9 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
   )
 }
 
-type ObjectSummary = (props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: CNPGNavigate }) => ReactNode
+type ObjectSummary = (props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: NavigateToRef }) => ReactNode
 
-function ScheduledBackupSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: CNPGNavigate }) {
+function ScheduledBackupSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: NavigateToRef }) {
   const ns = props.resource?.metadata?.namespace ?? ''
   const name = props.resource?.metadata?.name ?? ''
   const caps = useCNPGScheduleCapabilities(ns, name)
@@ -217,14 +217,14 @@ function LogicalPathSlot({ path, children }: { path: CNPGLogicalPath; children: 
   return <>{children(cnpgLogicalSlotFact(path, observed), <CNPGRefreshFailedNotice queries={[query]} />)}</>
 }
 
-function SubscriptionSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: CNPGNavigate }) {
+function SubscriptionSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: NavigateToRef }) {
   const lw = useLogicalWorkspace(props.workspace, [props.resource])
   const path = props.workspace ? cnpgLogicalPaths([props.resource], lw.clusters, lw.publications, lw.poolers, lw.publicationsUnavailable)[0] : undefined
   if (!path) return <CNPGSubscriptionSummary {...props} />
   return <LogicalPathSlot path={path}>{(slot, notice) => <CNPGSubscriptionSummary {...props} logicalPath={{ path, slot, notice }} />}</LogicalPathSlot>
 }
 
-function PublicationSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: CNPGNavigate }) {
+function PublicationSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: NavigateToRef }) {
   // Subscribers are the Subscriptions in view; the publisher's own runtime
   // answers for every slot.
   const pubCluster = props.resource?.spec?.cluster?.name
@@ -261,7 +261,7 @@ function ObjectSummaryHost({ ctx, Summary }: { ctx: SummaryContext; Summary: Obj
   const { query } = useCNPGFleet(clusterScoped ? [] : [ctx.namespace])
   if (query.isLoading) return <PaneLoader label="Loading summary…" className="h-40" />
   const workspace = query.data?.installed ? query.data : null
-  const go = ctx.onNavigate ? (ref: CNPGRef) => ctx.onNavigate?.(refToSelectedResource(ref)) : undefined
+  const go = ctx.onNavigate ? (ref: ResourceRef) => ctx.onNavigate?.(refToSelectedResource(ref)) : undefined
   return <Summary resource={ctx.resource} workspace={workspace} onNavigate={go} />
 }
 
@@ -270,7 +270,7 @@ function PoolerSummaryHost({ ctx }: { ctx: SummaryContext }) {
   const { live, queries } = useCNPGPoolerLive(ctx.namespace, ctx.name)
   if (query.isLoading) return <PaneLoader label="Loading summary…" className="h-40" />
   const workspace = query.data?.installed ? query.data : null
-  const go = ctx.onNavigate ? (ref: CNPGRef) => ctx.onNavigate?.(refToSelectedResource(ref)) : undefined
+  const go = ctx.onNavigate ? (ref: ResourceRef) => ctx.onNavigate?.(refToSelectedResource(ref)) : undefined
   return <CNPGPoolerSummary resource={ctx.resource} workspace={workspace} onNavigate={go} live={live} lead={<CNPGRefreshFailedNotice queries={queries} />} />
 }
 
@@ -313,12 +313,12 @@ function IssueLinks({ children }: { children: ReactNode }) {
   const [searchParams] = useSearchParams()
   const issuesTakenOver = !!useNavCustomization().fleetTakeoverHref?.('issues')
   return (
-    <CNPGOpenIssueContext.Provider
+    <OpenIssueContext.Provider
       value={issuesTakenOver ? undefined : (p) =>
         navigate(cnpgIssuesPath(p.subject, searchParams.get('namespaces')))
       }
     >
       {children}
-    </CNPGOpenIssueContext.Provider>
+    </OpenIssueContext.Provider>
   )
 }

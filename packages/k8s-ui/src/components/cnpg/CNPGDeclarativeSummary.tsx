@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react'
 import { getCNPGDeclarativeMessage, getCNPGReclaimPolicy } from '../resources/resource-utils-cnpg'
-import type { CNPGFact, CNPGWorkspaceResponse } from './workspace'
+import type { CNPGWorkspaceResponse } from './workspace'
+import type { Fact } from '../workspace'
 import { cnpgLogicalPaths, type CNPGLogicalPath } from './logicalReplication'
 import { CNPGLogicalPathView } from './CNPGLogicalPath'
 import { cnpgDatabaseRoleFacts } from './databaseRole'
-import { FactGrid, FactRow, FactValue, RefLink, SummaryHeading, toneTextClass, type CNPGNavigate } from './primitives'
 import { ClusterLink, NotReported, ObjectProblems, SummaryShell } from './CNPGSharedSummary'
 import {
   appliedFact,
@@ -19,11 +19,14 @@ import {
   targetCluster,
   workspaceList,
 } from './relations'
+import { type NavigateToRef, RefLink } from '../ui/RefLink'
+import { toneTextClass } from '../ui/status-tone'
+import { FactGrid, FactRow, FactValue, SectionHeading } from '../workspace'
 
 interface SummaryProps {
   resource: any
   workspace: CNPGWorkspaceResponse | null
-  onNavigate?: CNPGNavigate
+  onNavigate?: NavigateToRef
 }
 
 function ReclaimRow({ resource }: { resource: any }) {
@@ -44,7 +47,7 @@ function Reconciled({ resource, extra }: { resource: any; extra?: ReactNode }) {
   const applied = appliedFact(resource)
   return (
     <>
-      <SummaryHeading>Reconciled</SummaryHeading>
+      <SectionHeading>Reconciled</SectionHeading>
       <FactGrid>
         <FactRow label="Applied">
           <FactValue fact={applied} />
@@ -95,7 +98,7 @@ function DatabaseRef({ resource, workspace, onNavigate }: SummaryProps) {
   )
 }
 
-function LinkList({ items, kind, onNavigate }: { items: any[]; kind: string; onNavigate?: CNPGNavigate }) {
+function LinkList({ items, kind, onNavigate }: { items: any[]; kind: string; onNavigate?: NavigateToRef }) {
   return (
     <span className="flex flex-wrap gap-x-3">
       {items.map((o) => (
@@ -117,7 +120,7 @@ export function CNPGDatabaseSummary({ resource, workspace, onNavigate }: Summary
     <SummaryShell>
       <ObjectProblems issues={workspace?.issues} subject={refOf(resource, 'Database')} onNavigate={onNavigate} />
 
-      <SummaryHeading>Declared</SummaryHeading>
+      <SectionHeading>Declared</SectionHeading>
       <FactGrid>
         <FactRow label="PostgreSQL database">
           {resource?.spec?.name ? <span className="font-mono">{resource.spec.name}</span> : <NotReported text="Not set" />}
@@ -140,7 +143,7 @@ export function CNPGDatabaseSummary({ resource, workspace, onNavigate }: Summary
         }
       />
 
-      <SummaryHeading>Source and target</SummaryHeading>
+      <SectionHeading>Source and target</SectionHeading>
       <FactGrid>
         <FactRow label="Declared in">
           <DeclaredIn resource={resource} />
@@ -203,7 +206,7 @@ function workspacePaths(workspace: CNPGWorkspaceResponse | null | undefined, sub
 export interface CNPGLogicalPathReading {
   path: CNPGLogicalPath
   /** The publisher primary's report of the slot; absent when not read. */
-  slot?: CNPGFact
+  slot?: Fact
   notice?: ReactNode
 }
 
@@ -226,7 +229,7 @@ export function CNPGPublicationSummary({
     <SummaryShell>
       <ObjectProblems issues={workspace?.issues} subject={refOf(resource, 'Publication')} onNavigate={onNavigate} />
 
-      <SummaryHeading>Declared</SummaryHeading>
+      <SectionHeading>Declared</SectionHeading>
       <FactGrid>
         <FactRow label="Publication">
           {resource?.spec?.name ? <span className="font-mono">{resource.spec.name}</span> : <NotReported text="Not set" />}
@@ -246,7 +249,7 @@ export function CNPGPublicationSummary({
 
       <Reconciled resource={resource} />
 
-      <SummaryHeading hint="Subscription objects Radar can see">Subscribers</SummaryHeading>
+      <SectionHeading hint="Subscription objects Radar can see">Subscribers</SectionHeading>
       {readings.length === 0 ? (
         <div className="text-sm text-theme-text-tertiary">
           {subsUnavailable ?? 'No visible Subscription object reads this publication. Subscribers outside Radar\'s view, or created in SQL, are not listed.'}
@@ -271,7 +274,7 @@ export function CNPGDatabaseRoleSummary({ resource, workspace, onNavigate }: Sum
     <SummaryShell>
       <ObjectProblems issues={workspace?.issues} subject={refOf(resource, 'DatabaseRole')} onNavigate={onNavigate} />
 
-      <SummaryHeading>Declared</SummaryHeading>
+      <SectionHeading>Declared</SectionHeading>
       <FactGrid>
         <FactRow label="PostgreSQL role">{f.pgName ? <span className="font-mono">{f.pgName}</span> : <NotReported text="Not set" />}</FactRow>
         <FactRow label="Cluster">
@@ -350,7 +353,7 @@ export function CNPGSubscriptionSummary({
     <SummaryShell>
       <ObjectProblems issues={workspace?.issues} subject={refOf(resource, 'Subscription')} onNavigate={onNavigate} />
 
-      <SummaryHeading>Declared</SummaryHeading>
+      <SectionHeading>Declared</SectionHeading>
       <FactGrid>
         <FactRow label="Subscription">
           {resource?.spec?.name ? <span className="font-mono">{resource.spec.name}</span> : <NotReported text="Not set" />}
@@ -386,7 +389,7 @@ export function CNPGSubscriptionSummary({
 
       {reading.path && (
         <>
-          <SummaryHeading>Replication path</SummaryHeading>
+          <SectionHeading>Replication path</SectionHeading>
           <CNPGLogicalPathView path={reading.path} slot={reading.slot} notice={reading.notice} onNavigate={onNavigate} />
         </>
       )}

@@ -4,7 +4,9 @@
 // unavailable source is "unknown", never none or healthy.
 
 import type { HealthLevel } from '../resources/resource-utils'
-import { cnpgFormatLag, cnpgLagTone, cnpgReplicationTone, cnpgSustainedLagProblemId, cnpgWorseTone, type CNPGFact, type CNPGFleetRow } from './workspace'
+import { cnpgFormatLag, cnpgLagTone, cnpgReplicationTone, cnpgSustainedLagProblemId, type CNPGFleetRow } from './workspace'
+import type { Fact, FoldSummary } from '../workspace'
+import { worseTone } from '../ui/status-tone'
 
 export type CNPGHASourceState = 'ok' | 'denied' | 'notFound' | 'notInstalled' | 'unavailable' | 'error'
 
@@ -209,7 +211,7 @@ export function cnpgZoneSpread(ha: CNPGClusterHA | undefined): CNPGZoneSpread {
 // ---------------------------------------------------------------------------
 // Quorum, PDB, images, certificates
 
-export function cnpgQuorumFact(q: CNPGHAQuorum | undefined): CNPGFact {
+export function cnpgQuorumFact(q: CNPGHAQuorum | undefined): Fact {
   if (!q) return { text: 'Unknown', tone: 'unknown' }
   if (!q.enabled) {
     if (q.number !== undefined || q.method) {
@@ -237,7 +239,7 @@ export function cnpgQuorumFact(q: CNPGHAQuorum | undefined): CNPGFact {
   }
 }
 
-export function cnpgPDBFact(pdbs: CNPGClusterHA['pdbs'] | undefined): CNPGFact {
+export function cnpgPDBFact(pdbs: CNPGClusterHA['pdbs'] | undefined): Fact {
   if (!pdbs) return { text: 'Unknown', tone: 'unknown' }
   if (pdbs.state !== 'ok') return { text: cnpgHASourceText(pdbs, 'PodDisruptionBudgets'), tone: 'unknown' }
   if (pdbs.items.length === 0) {
@@ -284,13 +286,6 @@ export function cnpgCertificateViews(certs: CNPGHACertificate[] | undefined, now
   })
 }
 
-/** A folded section's one-line summary, and whether it opens on its own. */
-export interface CNPGFoldSummary {
-  text: string
-  /** Something in the section needs a look: it opens itself. */
-  attention: boolean
-}
-
 /**
  * "HA and instances" in one line: what is wrong when something is, otherwise
  * the readiness and placement facts that are known. Unknown facts never read
@@ -300,7 +295,7 @@ export function cnpgHASummary(
   ha: CNPGClusterHA | undefined,
   live: CNPGInstanceLive[] | undefined,
   primaryConflict?: { status: string; labelled: string },
-): CNPGFoldSummary {
+): FoldSummary {
   if (!ha) return { text: 'Not read', attention: false }
   const issues: string[] = []
   const calm: string[] = []
@@ -350,7 +345,7 @@ export function cnpgHASummary(
 }
 
 /** Certificates in one line: the nearest expiry and who renews them. */
-export function cnpgCertificatesSummary(certs: CNPGHACertificate[] | undefined, now = Date.now()): CNPGFoldSummary {
+export function cnpgCertificatesSummary(certs: CNPGHACertificate[] | undefined, now = Date.now()): FoldSummary {
   const views = cnpgCertificateViews(certs, now)
   if (views.length === 0) return { text: 'No expiry reported by the operator', attention: false }
   const dated = views.filter((c) => Number.isFinite(c.daysLeft)).sort((a, b) => (a.daysLeft ?? 0) - (b.daysLeft ?? 0))
@@ -483,7 +478,7 @@ function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap
   const tone: HealthLevel = sustained.severity === 'critical' ? 'unhealthy' : 'degraded'
   return {
     ...dim,
-    tone: cnpgWorseTone(dim.tone, tone),
+    tone: worseTone(dim.tone, tone),
     text: dim.tone === 'unknown' ? 'sustained lag' : `${dim.text} · sustained lag`,
     source: sustained.title,
   }

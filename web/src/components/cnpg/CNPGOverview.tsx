@@ -4,7 +4,7 @@ import { clsx } from 'clsx'
 import { ArrowRight, Database, FileText, Search } from 'lucide-react'
 import {
   CNPG_PROBLEM_CATEGORIES,
-  CNPG_PROBLEM_TONE,
+  PROBLEM_TONE,
   cnpgReadyInstances,
   FactValue,
   StatusDot,
@@ -112,7 +112,7 @@ function AttentionCell({ row, onOpenAll }: { row: CNPGFleetRow; onOpenAll: () =>
   return (
     <div className="min-w-0">
       <Tooltip content={problemTip(top)} wrapperClassName="w-full">
-        <div className={clsx('[overflow-wrap:normal]', unbreakable ? 'truncate' : 'line-clamp-3', toneTextClass(CNPG_PROBLEM_TONE[top.severity]))}>{headline}</div>
+        <div className={clsx('[overflow-wrap:normal]', unbreakable ? 'truncate' : 'line-clamp-3', toneTextClass(PROBLEM_TONE[top.severity]))}>{headline}</div>
       </Tooltip>
       {top.unverifiedMatch && (
         <div className="text-[11px] text-theme-text-tertiary">measured by {top.measuredBy}</div>
@@ -124,7 +124,7 @@ function AttentionCell({ row, onOpenAll }: { row: CNPGFleetRow; onOpenAll: () =>
               {others.map((p) => (
                 <li key={p.id} className="flex items-start gap-1.5">
                   <span className="mt-1 shrink-0">
-                    <StatusDot tone={CNPG_PROBLEM_TONE[p.severity]} size="xs" />
+                    <StatusDot tone={PROBLEM_TONE[p.severity]} size="xs" />
                   </span>
                   <span>{problemTip(p)}</span>
                 </li>
