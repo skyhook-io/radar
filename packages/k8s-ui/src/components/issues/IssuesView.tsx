@@ -13,7 +13,7 @@ import {
   ISSUE_SEVERITY_RAIL_CLASS,
   ISSUE_SEVERITY_SOLID_CLASS,
   ISSUE_SEVERITY_TEXT_CLASS,
-  categoryLabel,
+  issueTitle,
   groupBadgeClass,
   groupLabel,
 } from './severity';
@@ -289,7 +289,7 @@ export function IssueRow({
 
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex min-w-0 items-baseline gap-2">
-            <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary">{categoryLabel(issue.category)}</span>
+            <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary">{issueTitle(issue)}</span>
             <span className={`shrink-0 self-center ${groupBadgeClass(issue.category_group)}`}>{groupLabel(issue.category_group)}</span>
             {renderBadges?.(slotCtx)}
             {/* The detector reason rides the title row while COLLAPSED so the

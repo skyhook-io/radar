@@ -20,7 +20,7 @@ import {
   FreshnessControl,
   PaneLoader,
   StatusDot,
-  categoryLabel,
+  issueTitle,
   groupLabel,
   issueFirstSeenTitle,
   issueTimingForDisplay,
@@ -448,7 +448,7 @@ function ProblemsPanel({
                           )}
                         </div>
                         <div className="flex items-center gap-1.5 mt-0.5">
-                          <span className="text-[11px] text-theme-text-secondary truncate">{categoryLabel(issue.category)}</span>
+                          <span className="text-[11px] text-theme-text-secondary truncate">{issueTitle(issue)}</span>
                           <span className="text-[10px] text-theme-text-tertiary shrink-0">{groupLabel(issue.category_group)}</span>
                           {issue.namespace && <span className="text-[10px] text-theme-text-tertiary shrink-0">{issue.namespace}</span>}
                         </div>

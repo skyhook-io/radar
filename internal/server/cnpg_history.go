@@ -293,6 +293,8 @@ type CNPGFleetLag struct {
 	SustainedSeconds *float64 `json:"sustainedSeconds,omitempty"`
 	SustainedPod     string   `json:"sustainedPod,omitempty"`
 	SustainedWindow  string   `json:"sustainedWindow,omitempty"`
+	// Isolation says how the series were tied to this cluster.
+	Isolation *prometheuspkg.CNPGIsolation `json:"isolation,omitempty"`
 }
 
 // CNPGFleetGrowth State: ok (BytesPerHour of the fastest-growing claim),
@@ -304,6 +306,7 @@ type CNPGFleetGrowth struct {
 	BytesPerHour *float64 `json:"bytesPerHour,omitempty"`
 	Claim        string   `json:"claim,omitempty"`
 	Instance     string   `json:"instance,omitempty"`
+	Isolation    *prometheuspkg.CNPGIsolation `json:"isolation,omitempty"`
 }
 
 func (s *Server) handleCNPGFleetMetrics(w http.ResponseWriter, r *http.Request) {
@@ -411,8 +414,9 @@ func (s *Server) cnpgNamespaceFleetMetrics(r *http.Request, cache *k8s.ResourceC
 	claimsByCluster, growthCov := s.cnpgFleetClaims(r, cache, namespace, clusters)
 
 	matchers, scopeErr := "", error(nil)
+	var lagIso prometheuspkg.CNPGIsolation
 	if podsAllowed {
-		matchers, _, scopeErr = prometheuspkg.ResolveCNPGScope(ctx, namespace, prometheuspkg.CNPGInstancesSelector(namespace, names), anchors, prometheuspkg.CNPGSustainedLagWindow)
+		matchers, lagIso, scopeErr = prometheuspkg.ResolveCNPGScope(ctx, namespace, prometheuspkg.CNPGInstancesSelector(namespace, names), anchors, prometheuspkg.CNPGSustainedLagWindow)
 	}
 
 	if !podsAllowed {
@@ -427,7 +431,7 @@ func (s *Server) cnpgNamespaceFleetMetrics(r *http.Request, cache *k8s.ResourceC
 			switch reading, ok := res.Lag[c.GetName()]; {
 			case ok:
 				v := reading.Seconds
-				lags[i] = CNPGFleetLag{State: cnpgHistoryStateOK, Seconds: &v, Pod: reading.Pod}
+				lags[i] = CNPGFleetLag{State: cnpgHistoryStateOK, Seconds: &v, Pod: reading.Pod, Isolation: &lagIso}
 				if sus, ok := res.Sustained[c.GetName()]; ok {
 					sv := sus.Seconds
 					lags[i].SustainedSeconds, lags[i].SustainedPod, lags[i].SustainedWindow = &sv, sus.Pod, prometheuspkg.CNPGSustainedLagWindow.String()
@@ -447,7 +451,7 @@ func (s *Server) cnpgNamespaceFleetMetrics(r *http.Request, cache *k8s.ResourceC
 		for _, cs := range claimsByCluster {
 			all = append(all, claimNames(cs)...)
 		}
-		pvcMatchers, _, err := prometheuspkg.ResolvePVCScope(ctx, namespace, all, anchors, cnpgFleetGrowthWindow)
+		pvcMatchers, pvcIso, err := prometheuspkg.ResolvePVCScope(ctx, namespace, all, anchors, cnpgFleetGrowthWindow)
 		var byClaim map[string]float64
 		if err != nil {
 			state, reason := cnpgUsageScopeFailure(err)
@@ -472,7 +476,7 @@ func (s *Server) cnpgNamespaceFleetMetrics(r *http.Request, cache *k8s.ResourceC
 				}
 				if g.BytesPerHour == nil || v > *g.BytesPerHour {
 					val := v
-					g = CNPGFleetGrowth{State: cnpgHistoryStateOK, BytesPerHour: &val, Claim: pvc.Name, Instance: pvc.Labels[cnpgInstanceNameLabel]}
+					g = CNPGFleetGrowth{State: cnpgHistoryStateOK, BytesPerHour: &val, Claim: pvc.Name, Instance: pvc.Labels[cnpgInstanceNameLabel], Isolation: &pvcIso}
 				}
 			}
 			growths[i] = g

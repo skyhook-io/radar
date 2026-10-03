@@ -1241,9 +1241,21 @@ export interface CNPGFleetMetricsReading {
     sustainedSeconds?: number
     sustainedPod?: string
     sustainedWindow?: string
+    isolation?: CNPGMetricIsolation
   }
   /** ok | noSeries | denied | unavailable | error | notRead */
-  growth: { state: string; grant?: string; reason?: string; bytesPerHour?: number; claim?: string; instance?: string }
+  growth: { state: string; grant?: string; reason?: string; bytesPerHour?: number; claim?: string; instance?: string; isolation?: CNPGMetricIsolation }
+}
+
+/** How Prometheus series were tied to one cluster; `unverified` matched only by namespace and Pod or claim names. */
+export interface CNPGMetricIsolation {
+  mode: 'configured' | 'verified' | 'unverified'
+  note: string
+}
+
+// A finding stated as this cluster's must say when its series were matched by name alone.
+function isolationCaveat(iso: CNPGMetricIsolation | undefined): string {
+  return iso?.mode === 'unverified' ? ` ${iso.note}.` : ''
 }
 
 export interface CNPGFleetMetricsSources {
@@ -1305,7 +1317,7 @@ function measuredReplication(base: CNPGFact, reading: CNPGFleetMetricsReading | 
       return {
         text: `${prefix} · lag ${cnpgFormatLag(lag.seconds)}`,
         tone: cnpgLagTone(lag.seconds),
-        source: `Largest standby replay lag, ${lag.pod ?? 'a standby'} · ${src.lagSource ?? 'Prometheus'}`,
+        source: `Largest standby replay lag, ${lag.pod ?? 'a standby'} · ${src.lagSource ?? 'Prometheus'}.${isolationCaveat(lag.isolation)}`,
       }
     case 'noStandby':
       return { text: `${prefix} · lag unknown`, tone: 'unknown', source: `No standby reports lag: ${lag.reason ?? 'no instance reports being a standby'} · ${src.lagSource ?? 'Prometheus'}` }
@@ -1321,7 +1333,7 @@ export function cnpgDiskGrowthFact(reading: CNPGFleetMetricsReading | undefined,
   if (src.source === 'none' || !g || g.state !== 'ok' || g.bytesPerHour === undefined) return undefined
   const perDay = g.bytesPerHour * 24
   const text = Math.abs(perDay) < 1024 ? 'flat over 6 h' : `${perDay > 0 ? '+' : '−'}${formatBytes(Math.abs(perDay))}/day`
-  return { text, tone: 'neutral', source: `Fastest-growing: ${g.claim ?? 'a volume'}${g.instance ? ` of ${g.instance}` : ''} · ${src.growthSource ?? 'Prometheus'}` }
+  return { text, tone: 'neutral', source: `Fastest-growing: ${g.claim ?? 'a volume'}${g.instance ? ` of ${g.instance}` : ''} · ${src.growthSource ?? 'Prometheus'}.${isolationCaveat(g.isolation)}` }
 }
 
 /**
@@ -1363,10 +1375,10 @@ function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading
     category: 'availability',
     title: `${pod} ≥ ${cnpgFormatLag(floor)} behind in every sample for ${formatWindowShort(lag.sustainedWindow)}`,
     shortTitle: `${pod}: all samples ≥ ${cnpgFormatLag(floor)} behind (${formatWindowShort(lag.sustainedWindow)})`,
-    detail: `Lowest replay lag in the samples Prometheus recorded over the last ${window}. If Prometheus missed some scrapes, those moments aren't included. If it was still that far behind, a failover to it would lose or wait on that much WAL.`,
+    detail: `Lowest replay lag in the samples Prometheus recorded over the last ${window}. If Prometheus missed some scrapes, those moments aren't included. If it was still that far behind, a failover to it would lose or wait on that much WAL.${isolationCaveat(lag.isolation)}`,
     subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
     source: 'measurement',
-    measuredBy: 'Prometheus',
+    measuredBy: lag.isolation?.mode === 'unverified' ? 'Prometheus, matched by Pod name' : 'Prometheus',
     sourceDetail: src.lagSource ?? 'Prometheus',
   }
 }

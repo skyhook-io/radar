@@ -113,6 +113,24 @@ describe('sustained replication lag', () => {
     expect(f.attentionCount).toBe(1)
   })
 
+  it('says when the series were matched to the cluster by Pod name only', () => {
+    const note = "Matched by namespace and Pod names. Radar couldn't confirm these series belong to this exact cluster (no cluster label it could check)"
+    const f = applyCNPGFleetMetrics(
+      fleet(),
+      [reading('ha', { state: 'ok', seconds: 95, pod: 'ha-2', sustainedSeconds: 40, sustainedPod: 'ha-2', sustainedWindow: '10m0s', isolation: { mode: 'unverified', note } })],
+      src,
+    )
+    const p = row(f, 'ha').problems[0]
+    expect(p.measuredBy).toBe('Prometheus, matched by Pod name')
+    expect(p.detail).toContain(note)
+    const verified = applyCNPGFleetMetrics(
+      fleet(),
+      [reading('ha', { state: 'ok', seconds: 95, pod: 'ha-2', sustainedSeconds: 40, sustainedPod: 'ha-2', sustainedWindow: '10m0s', isolation: { mode: 'verified', note: 'x' } })],
+      src,
+    )
+    expect(row(verified, 'ha').problems[0].measuredBy).toBe('Prometheus')
+  })
+
   it('escalates to critical past five minutes and ignores a floor under 30 s', () => {
     const f = applyCNPGFleetMetrics(
       fleet(),

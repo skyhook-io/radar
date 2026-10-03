@@ -30,7 +30,7 @@ import {
 import { Notice } from '../capacity/shared'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { useCNPGWriteGuard } from './actions/useCNPGWriteGuard'
-import { buildResizeManifest, cnpgSharedExpansionGap, cnpgSlotRetentionText, cnpgWALUsageFloor } from './storageModel'
+import { buildResizeManifest, cnpgFloorTone, cnpgSharedExpansionGap, cnpgSlotRetentionText, cnpgWALUsageFloor } from './storageModel'
 // Binary units throughout, matching claim capacities such as 1Gi.
 import { formatBytes } from './lsn'
 import { CNPGRefreshFailedNotice } from './shared'
@@ -76,14 +76,14 @@ const USAGE_UNMEASURED: Record<string, string> = {
 function UsageBar({ v, stated, floor }: { v: CNPGStorageVolume; stated?: boolean; floor?: { bytes: number; ratio?: number } }) {
   const u = v.usage
   if (u.state !== 'ok' && floor) {
-    const tone = floor.ratio === undefined ? 'unknown' : cnpgDiskTone(floor.ratio)
+    const tone = cnpgFloorTone(floor.ratio)
     return (
       <div>
         <div className="h-1.5 overflow-hidden rounded bg-[repeating-linear-gradient(45deg,var(--border-light)_0_2px,transparent_2px_5px)]">
-          {floor.ratio !== undefined && <div className={clsx('h-full', toneFillClass(tone))} style={{ width: `${Math.min(100, floor.ratio * 100)}%` }} />}
+          {floor.ratio !== undefined && <div className={clsx('h-full', toneFillClass(tone === 'unknown' ? 'neutral' : tone))} style={{ width: `${Math.min(100, floor.ratio * 100)}%` }} />}
         </div>
         <div className="mt-1 text-xs">
-          <span className={toneTextClass(tone === 'healthy' || tone === 'unknown' ? 'neutral' : tone)}>
+          <span className={toneTextClass(tone === 'unknown' ? 'neutral' : tone)}>
             ≥ {formatBytes(floor.bytes)} used by WAL alone
             {floor.ratio !== undefined && (floor.ratio >= 1 ? `, more than the ${v.capacity} the claim reports` : ` · ≥ ${Math.round(floor.ratio * 100)}% of ${v.capacity}`)}
           </span>
@@ -292,15 +292,13 @@ function WALFact({
 
 function InstanceCard({ inst, walCoverage, stated }: { inst: CNPGStorageInstance; walCoverage: CNPGClusterStorageResponse['wal']; stated: StatedOnce }) {
   const roleLabel = inst.role === 'primary' ? 'primary' : inst.role === 'replica' ? 'replica' : inst.role === 'noInstance' ? 'no instance' : 'role unknown'
-  const worst = inst.volumes.reduce<number | undefined>((m, v) => {
-    const r = v.usage.ratio ?? cnpgWALUsageFloor(v, inst.wal)?.ratio
-    return r !== undefined && (m === undefined || r > m) ? r : m
-  }, undefined)
+  const worst = inst.volumes.reduce<number | undefined>((m, v) => (v.usage.ratio !== undefined && (m === undefined || v.usage.ratio > m) ? v.usage.ratio : m), undefined)
+  const floorTone = inst.volumes.map((v) => cnpgFloorTone(cnpgWALUsageFloor(v, inst.wal)?.ratio)).find((t) => t !== 'unknown')
   return (
     <Card
       title={
         <span className="flex items-center gap-2">
-          <StatusDot tone={worst === undefined ? 'unknown' : cnpgDiskTone(worst)} />
+          <StatusDot tone={worst !== undefined ? cnpgDiskTone(worst) : floorTone ?? 'unknown'} />
           <span className="font-mono">{inst.name}</span>
           <span className="badge-sm bg-theme-elevated text-theme-text-secondary">{roleLabel}</span>
         </span>

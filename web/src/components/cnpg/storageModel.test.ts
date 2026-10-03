@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildResizeManifest, cnpgSharedExpansionGap, cnpgSlotRetentionText, cnpgWALUsageFloor } from './storageModel'
+import { buildResizeManifest, cnpgFloorTone, cnpgSharedExpansionGap, cnpgSlotRetentionText, cnpgWALUsageFloor } from './storageModel'
 import type { CNPGStorageVolume, CNPGStorageWAL } from '../../api/cnpg-storage'
 
 const cluster = {
@@ -61,5 +61,14 @@ describe('cnpgWALUsageFloor', () => {
     expect(cnpgWALUsageFloor(vol('ok'), wal(512 * 1024 ** 2))).toBeUndefined()
     expect(cnpgWALUsageFloor(vol('noSeries', 'pg-1-wal'), wal(512 * 1024 ** 2))).toBeUndefined()
     expect(cnpgWALUsageFloor(vol('noSeries'), { ...wal(1), metrics: { state: 'denied' } } as CNPGStorageWAL)).toBeUndefined()
+  })
+})
+
+describe('cnpgFloorTone', () => {
+  it('never reads a lower bound below the warning line as healthy', () => {
+    expect(cnpgFloorTone(0.5)).toBe('unknown')
+    expect(cnpgFloorTone(0.85)).toBe('degraded')
+    expect(cnpgFloorTone(3.3)).toBe('unhealthy')
+    expect(cnpgFloorTone(undefined)).toBe('unknown')
   })
 })

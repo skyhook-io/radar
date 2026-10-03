@@ -1,4 +1,5 @@
 import { formatBytes } from './lsn'
+import { cnpgDiskTone, type HealthLevel } from '@skyhook-io/k8s-ui'
 import type { CNPGStorageTarget, CNPGStorageVolume, CNPGStorageWAL } from '../../api/cnpg-storage'
 
 function setPath(obj: Record<string, any>, path: string[], value: unknown) {
@@ -71,4 +72,11 @@ export function cnpgSharedExpansionGap(volumes: { storageClass: { name?: string;
 export function cnpgWALUsageFloor(v: CNPGStorageVolume, wal: CNPGStorageWAL | undefined): { bytes: number; ratio?: number } | undefined {
   if (v.usage.state === 'ok' || !wal || wal.metrics.state !== 'ok' || wal.sizeBytes === undefined || wal.volume !== v.claim) return undefined
   return { bytes: wal.sizeBytes, ratio: v.capacityBytes ? wal.sizeBytes / v.capacityBytes : undefined }
+}
+
+/** A lower bound can prove a volume is filling, never that it's fine. */
+export function cnpgFloorTone(ratio: number | undefined): HealthLevel {
+  if (ratio === undefined) return 'unknown'
+  const tone = cnpgDiskTone(ratio)
+  return tone === 'healthy' ? 'unknown' : tone
 }
