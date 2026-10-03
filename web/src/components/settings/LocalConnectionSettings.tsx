@@ -126,6 +126,11 @@ const automaticAction: Record<IntegrationKind, string> = {
   argocd: 'Use auto-discovery',
   cost: 'Reset to Automatic'
 }
+function sameIdentity(a?: TargetIdentity, b?: TargetIdentity) {
+  return !!a && !!b && a.server === b.server && a.user === b.user &&
+    a.tlsName === b.tlsName && a.trust === b.trust && a.proxy === b.proxy &&
+    !!a.insecureTls === !!b.insecureTls
+}
 const names: Record<IntegrationKind, string> = {
   metrics: 'Metrics',
   argocd: 'Argo CD',
@@ -180,9 +185,18 @@ export function LocalConnectionSettings({
   const confirmationCopy = useRef({ title: '', message: '', label: '' })
   const [confirmBack, setConfirmBack] = useState(false)
   const [accepted, setAccepted] = useState<IntegrationKind[]>([])
-  const acceptedChanges = accepted.filter(
+  // The review page compares against one previous identity, so it can only
+  // approve integrations that were paused from that same identity.
+  const pausedKinds = (Object.keys(snapshot) as IntegrationKind[]).filter(
     (k) => snapshot[k].state === 'target_changed'
   )
+  const reviewKinds = pausedKinds.filter(
+    (k) => k === kind || sameIdentity(snapshot[k].previousIdentity, profile.previousIdentity)
+  )
+  const separateReviewKinds = pausedKinds.filter((k) => !reviewKinds.includes(k))
+  const separateIdentityKnown = !!profile.previousIdentity &&
+    separateReviewKinds.every((k) => !!snapshot[k].previousIdentity)
+  const acceptedChanges = accepted.filter((k) => reviewKinds.includes(k))
   const request = useRef<AbortController | null>(null)
   const catalogRequest = useRef<AbortController | null>(null)
   const heading = useRef<HTMLHeadingElement>(null)
@@ -220,7 +234,7 @@ export function LocalConnectionSettings({
       .then(async (response) => {
         const data = (await response.json().catch(() => ({}))) as ConnectionResponse
         if (!response.ok)
-          throw new Error(data.error || 'Could not load saved connections.')
+          throw new Error(data.error || 'Could not load other clusters’ settings.')
         if (!controller.signal.aborted && getApiBase() === base) {
           setCatalog(data.connections)
           setCatalogError(false)
@@ -836,7 +850,7 @@ export function LocalConnectionSettings({
           ) : null}
         </>
       )}
-      <fieldset ref={editorRegion} className="min-w-0">
+      <fieldset ref={editorRegion} className="min-w-0 empty:hidden">
         {editor &&
           (kind === 'metrics' ? (
             <PrometheusConnectionForm
@@ -904,7 +918,7 @@ export function LocalConnectionSettings({
             />
           ))}
       </fieldset>
-      {!editor && <Collapse open={showFeedback} className="!mt-0">
+      {!editor && task === 'main' && <Collapse open={showFeedback} className="!mt-0">
         <p role="status" className={`pt-2 text-xs ${messageWarning ? 'text-warning-text' : 'text-theme-text-secondary'}`}>{feedback?.message}</p>
       </Collapse>}
       <ConfirmDialog
@@ -968,8 +982,7 @@ export function LocalConnectionSettings({
                   : 'Unchanged'}
             </dd>
           </dl>
-          {(Object.keys(snapshot) as IntegrationKind[])
-            .filter((k) => snapshot[k].state === 'target_changed')
+          {reviewKinds
             .map((k) => (
               <label key={k} className="flex items-center gap-2 text-sm">
                 <input
@@ -996,6 +1009,14 @@ export function LocalConnectionSettings({
           >
             Keep selected settings for this cluster
           </button>
+          {separateReviewKinds.length > 0 && (
+            <p className="text-xs text-theme-text-secondary">
+              {separateReviewKinds.map((k) => names[k]).join(' and ')}{' '}
+              {separateIdentityKnown
+                ? `${separateReviewKinds.length > 1 ? 'were' : 'was'} saved for a different previous cluster, so ${separateReviewKinds.length > 1 ? 'review them in their own tabs' : 'review it in its own tab'}.`
+                : `${separateReviewKinds.length > 1 ? 'need separate reviews in their own tabs' : 'needs a separate review in its own tab'}.`}
+            </p>
+          )}
         </div>
       )}
       {error && !pending && (

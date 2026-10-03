@@ -168,7 +168,7 @@ export function SavedClusterConnections({
       .then(async (response) => {
         const data = (await response.json().catch(() => ({}))) as ConnectionResponse
         if (!response.ok)
-          throw new Error(data.error || 'Could not load saved connections.')
+          throw new Error(data.error || 'Could not load integration settings.')
         if (controller.signal.aborted || getApiBase() !== base) return
         setUses(data.connections)
       })
@@ -215,10 +215,10 @@ export function SavedClusterConnections({
       const data = (await response.json().catch(() => ({}))) as ConnectionResponse
       if (controller.signal.aborted || getApiBase() !== base) return
       if (!response.ok)
-        throw new Error(data.error || 'Could not remove the saved connection.')
+        throw new Error(data.error || 'Could not remove the saved settings.')
       setUses(data.connections)
       setMessage(
-        `Removed the saved ${integrationNames[selected.integration]} connection for ${selected.context}.`,
+        `Removed the saved ${integrationNames[selected.integration]} settings for ${selected.context}.`,
       )
       focusSummary.current = true
       setSelected(null)
@@ -261,12 +261,12 @@ export function SavedClusterConnections({
         </p>
         {loading && (
           <p role="status" className="text-xs text-theme-text-tertiary">
-            Loading saved connections…
+            Loading integration settings…
           </p>
         )}
         {!loading && !error && clusters.size === 0 && (
           <p className="text-xs text-theme-text-tertiary">
-            No saved connections yet.
+            No integration settings saved yet.
           </p>
         )}
         {!loading &&
@@ -300,8 +300,8 @@ export function SavedClusterConnections({
                 </p>
                 {!current && entry.availability === 'removed' && (
                   <p className="text-theme-text-secondary">
-                    This kubeconfig entry is gone, but its connections are still
-                    saved. To reuse one, select the new context and choose “Copy
+                    This kubeconfig entry is gone, but its integration settings
+                    are still saved. To reuse one, select the new context and choose “Copy
                     settings from…” in that integration’s settings.
                   </p>
                 )}
@@ -325,7 +325,7 @@ export function SavedClusterConnections({
                           type="button"
                           disabled={busy}
                           className="text-accent-text hover:underline disabled:opacity-50"
-                          aria-label={`Remove saved ${integrationNames[use.integration]} connection for ${use.context}`}
+                          aria-label={`Remove saved ${integrationNames[use.integration]} settings for ${use.context}`}
                           onClick={() => {
                             setSelected(use)
                             setError('')
@@ -353,7 +353,7 @@ export function SavedClusterConnections({
               className="underline"
               onClick={() => setVersion((value) => value + 1)}
             >
-              Reload saved connections
+              Reload integration settings
             </button>
           </p>
         )}
@@ -362,13 +362,13 @@ export function SavedClusterConnections({
         open={!!selected}
         onClose={() => setSelected(null)}
         onConfirm={() => void remove()}
-        title="Remove saved connection?"
+        title="Remove saved settings?"
         message={
           selected
-            ? `Remove the saved ${integrationNames[selected.integration]} connection and credentials for ${selected.context}? Other saved connections are unchanged. Nothing is deleted from Kubernetes or the backend.${selected.availability === 'unavailable' ? ' This entry may still exist in another kubeconfig; removal also affects any CLI or Desktop using that entry.' : ''}`
+            ? `Remove the saved ${integrationNames[selected.integration]} settings and credentials for ${selected.context}? Other saved settings are unchanged. Nothing is deleted from Kubernetes or the backend.${selected.availability === 'unavailable' ? ' This entry may still exist in another kubeconfig; removal also affects any CLI or Desktop using that entry.' : ''}`
             : ''
         }
-        confirmLabel="Remove connection"
+        confirmLabel="Remove settings"
         isLoading={busy}
         confirmDisabled={!!error}
         showWarning={false}
@@ -380,7 +380,7 @@ export function SavedClusterConnections({
             role="alert"
             className="text-sm text-warning-text"
           >
-            {error} Cancel and reload saved connections before trying again.
+            {error} Cancel and reload integration settings before trying again.
           </p>
         )}
       </ConfirmDialog>

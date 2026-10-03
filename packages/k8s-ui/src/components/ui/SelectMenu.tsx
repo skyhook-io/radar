@@ -55,7 +55,6 @@ export function SelectMenu({
     if (!normalized) return options
     return options.filter((option) => `${option.label} ${option.description ?? ''}`.toLowerCase().includes(normalized))
   }, [options, query])
-  const selectedIsVisible = filteredOptions.some((option) => option.value === value)
 
   const focusTabbableOption = () => {
     listRef.current?.querySelector<HTMLElement>('[role="option"][tabindex="0"]')?.focus()
@@ -153,7 +152,9 @@ export function SelectMenu({
         ref={triggerRef}
         id={id}
         type="button"
-        aria-label={ariaLabel}
+        // The fixed label would otherwise hide the visible value from screen
+        // readers, which a native select announces.
+        aria-label={selected ? `${ariaLabel}: ${selected.label}` : ariaLabel}
         aria-describedby={ariaDescribedBy}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -283,9 +284,7 @@ export function SelectMenu({
                   role="option"
                   aria-selected={active}
                   aria-disabled={option.disabled || undefined}
-                  tabIndex={
-                    searchPlaceholder ? (index === highlightedIndex ? 0 : -1) : active || (!selectedIsVisible && index === 0) ? 0 : -1
-                  }
+                  tabIndex={index === highlightedIndex ? 0 : -1}
                   onClick={() => selectOption(option.value)}
                   onFocus={() => setHighlightedIndex(index)}
                   className={clsx(
