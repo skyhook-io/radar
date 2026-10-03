@@ -97,6 +97,8 @@ radar/
 │       │   ├── shared/        # ResourceRendererDispatch, ResourceActionsBar, EditableYamlView
 │       │   ├── gitops/        # Argo/Flux badges + actions + tree graph + insights views
 │       │   ├── workload/      # WorkloadView
+│       │   ├── workspace/     # Workspace building blocks: facts, sections, problems, certainty glyph, GitOps manager
+│       │   ├── cnpg/          # CloudNativePG workspace model + composed summaries
 │       │   ├── timeline/      # Timeline shared components
 │       │   ├── logs/          # Log viewer core
 │       │   └── ui/            # Shared primitives, package-owned Monaco/YAML runtime, Problems + review
@@ -115,6 +117,8 @@ radar/
 │   │   │   ├── portforward/   # Port forward manager
 │   │   │   ├── resource/      # Single resource detail page
 │   │   │   ├── resources/     # Resource list panels (thin wrappers over @skyhook-io/k8s-ui)
+│   │   │   ├── workspace/     # Workspace screen layout, tables and notices (Capacity, CloudNativePG)
+│   │   │   ├── cnpg/          # CloudNativePG workspace screens, actions, runtime
 │   │   │   ├── audit/         # Cluster audit detail view
 │   │   │   ├── cost/          # Cost tracking and visualization
 │   │   │   ├── settings/      # Settings dialog
