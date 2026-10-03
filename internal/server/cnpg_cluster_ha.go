@@ -500,7 +500,7 @@ func (s *Server) cnpgHAPDBs(r *http.Request, cache *k8s.ResourceCache, cluster *
 		return out
 	}
 	lister := cache.PodDisruptionBudgets()
-	within := capacityNamespacesWithinCache(cache, "poddisruptionbudgets", []string{namespace})
+	within := namespacesWithinCache(cache, "poddisruptionbudgets", []string{namespace})
 	if reason := cnpgUncachedReason("Disruption budgets", "PodDisruptionBudgets", namespace, lister == nil, within.unavailable, cache.IsKindReady("poddisruptionbudgets")); reason != "" {
 		out.CNPGHASource = CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}
 		return out
@@ -643,7 +643,7 @@ func (s *Server) cnpgHAJobs(r *http.Request, cache *k8s.ResourceCache, cluster *
 		return out
 	}
 	lister := cache.Jobs()
-	within := capacityNamespacesWithinCache(cache, "jobs", []string{namespace})
+	within := namespacesWithinCache(cache, "jobs", []string{namespace})
 	if reason := cnpgUncachedReason("Instance Jobs", "Jobs", namespace, lister == nil, within.unavailable, cache.IsKindReady("jobs")); reason != "" {
 		out.CNPGHASource = CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}
 		return out

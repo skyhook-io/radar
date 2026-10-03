@@ -298,7 +298,7 @@ func cnpgCachedClaims(cache *k8s.ResourceCache, namespace string, selector label
 	if lister == nil {
 		return nil, "Radar's own identity cannot list persistentvolumeclaims"
 	}
-	if within := capacityNamespacesWithinCache(cache, "persistentvolumeclaims", []string{namespace}); within.unavailable {
+	if within := namespacesWithinCache(cache, "persistentvolumeclaims", []string{namespace}); within.unavailable {
 		return nil, "Radar's own identity cannot list persistentvolumeclaims in " + namespace
 	}
 	items, err := lister.PersistentVolumeClaims(namespace).List(selector)

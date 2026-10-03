@@ -523,7 +523,7 @@ func (s *Server) cnpgTypedScope(r *http.Request, cache *k8s.ResourceCache, names
 	if !ok {
 		return cnpgKindAccess{state: cnpgCoverageDenied}, nil, []string{}
 	}
-	within := capacityNamespacesWithinCache(cache, resource, allowed)
+	within := namespacesWithinCache(cache, resource, allowed)
 	if within.unavailable {
 		log.Printf("[cnpg] %s cache does not cover the requested scope", resource)
 		return cnpgKindAccess{state: cnpgCoverageError}, nil, []string{}

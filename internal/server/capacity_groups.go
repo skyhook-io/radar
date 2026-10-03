@@ -21,7 +21,7 @@ const (
 // needs: informer scope plus the ConfigMap lister. Narrowed to an interface so
 // the coverage-verdict/detection pairing is testable without an informer.
 type capacityConfigMapSource interface {
-	capacityInformerScope
+	informerScope
 	ConfigMaps() corelisters.ConfigMapLister
 }
 
@@ -53,7 +53,7 @@ func capacityAutoscalerStatus(allowed bool, cache capacityConfigMapSource) (*aut
 	if !allowed {
 		return unavailable(deniedCoverage("autoscaler_status_configmap_denied", impact))
 	}
-	if cache == nil || !capacityCacheCoversNamespace(cache, "configmaps", autoscalerStatusNamespace) {
+	if cache == nil || !cacheCoversNamespace(cache, "configmaps", autoscalerStatusNamespace) {
 		return unavailable(unavailableCoverage("autoscaler_status_cache_scope", impact))
 	}
 	lister := cache.ConfigMaps()

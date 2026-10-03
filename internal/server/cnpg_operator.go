@@ -343,7 +343,7 @@ func (s *Server) cnpgOperatorConfigMap(r *http.Request, cache *k8s.ResourceCache
 		state.Reason = "ConfigMaps are still loading"
 		return ref
 	}
-	if !capacityCacheCoversNamespace(cache, "configmaps", namespace) {
+	if !cacheCoversNamespace(cache, "configmaps", namespace) {
 		state.Reason = "Radar does not watch ConfigMaps in " + namespace
 		return ref
 	}
