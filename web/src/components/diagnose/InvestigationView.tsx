@@ -20,6 +20,7 @@ import {
   investigationApplyAttemptVerified,
   investigationAssessmentNeedsCurrentStateVerification,
   investigationApplyRejectionIsDefinitive,
+  investigationFailureShown,
   investigationApplyCompletionEffects,
   investigationTurnWithTerminalEvent,
   investigationApplyTerminalNeedsClusterRefresh,
@@ -74,10 +75,13 @@ import {
   addTurn,
   stopRun,
   DiagnoseError,
+  investigationRefusal,
   type DiagnoseStreamEvent,
+  type InvestigationRefusal,
   type RunSummary,
 } from "../../api/diagnose";
 import { useDiagnose } from "./DiagnoseContext";
+import { InvestigationRefusalAction } from "./InvestigationRefusalAction";
 import {
   TurnView,
   ResultCard,
@@ -114,9 +118,11 @@ const RECHECK_QUESTION =
 
 export function InvestigationStartErrorAlert({
   error,
+  refusal = null,
   onDismiss,
 }: {
   error: string;
+  refusal?: InvestigationRefusal | null;
   onDismiss: () => void;
 }) {
   return (
@@ -130,6 +136,11 @@ export function InvestigationStartErrorAlert({
           Couldn&apos;t start a new investigation
         </div>
         <div className="text-theme-text-secondary">{error}</div>
+        {refusal ? (
+          <div className="mt-1.5">
+            <InvestigationRefusalAction refusal={refusal} />
+          </div>
+        ) : null}
       </div>
       <button
         type="button"
@@ -176,8 +187,14 @@ export function InvestigationView({
   onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
 }) {
   const { kind, namespace, name } = run;
-  const { refreshRuns, openInvestigation, startError, dismissError, agents } =
-    useDiagnose();
+  const {
+    refreshRuns,
+    openInvestigation,
+    startError,
+    startRefusal,
+    dismissError,
+    agents,
+  } = useDiagnose();
   // Capabilities are the declared ones of the agent that ran this run, not
   // the picker's: a reopened run keeps the backend it was made with.
   const runAgent = agents.find((agent) => agent.name === run.agent);
@@ -215,6 +232,7 @@ export function InvestigationView({
     sequence: number;
     status: "running" | "error";
     error?: string;
+    refusal?: InvestigationRefusal | null;
   } | null>(null);
   const [explanationReveal, setExplanationReveal] = useState<{
     sequence: number;
@@ -226,6 +244,12 @@ export function InvestigationView({
     useState<InvestigationHistoryUnavailableState | null>(null);
   const [input, setInput] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
+  // The host's refusal behind a failed follow-up, for its action beside the error.
+  const [actionRefusal, setActionRefusal] =
+    useState<InvestigationRefusal | null>(null);
+  // The host's refusal behind a failed status check, for its action beside it.
+  const [verificationRefusal, setVerificationRefusal] =
+    useState<InvestigationRefusal | null>(null);
   const [verificationError, setVerificationError] = useState<string | null>(
     null,
   );
@@ -419,7 +443,9 @@ export function InvestigationView({
     setExplanationReveal(null);
     setHistoryUnavailable(null);
     setActionError(null);
+    setActionRefusal(null);
     setVerificationError(null);
+    setVerificationRefusal(null);
     setVerificationPending(false);
     setLocalApplyAttemptAssessmentIdx(-1);
     setApplyOutcomeUncertain(null);
@@ -468,6 +494,7 @@ export function InvestigationView({
             if (ev.verify) {
               setVerificationPending(false);
               setVerificationError(null);
+              setVerificationRefusal(null);
             }
             streamInFlightRef.current = true;
             if (live) setBusy(true);
@@ -565,6 +592,7 @@ export function InvestigationView({
                 setVerificationError(
                   ev.error || "The verification could not be completed.",
                 );
+                setVerificationRefusal(null);
               }
             }
             updateLast((t) => investigationTurnWithTerminalEvent(t, ev, live));
@@ -745,6 +773,9 @@ export function InvestigationView({
     if (!q || interactionsBlocked) return;
     setInput("");
     setActionError(null);
+    setActionRefusal(null);
+    setVerificationError(null);
+    setVerificationRefusal(null);
     setNarrowPane("activity");
     suppressEvidenceMotionRef.current = false;
     pinnedRef.current = true; // a user-initiated turn always follows to the bottom
@@ -752,6 +783,7 @@ export function InvestigationView({
     addTurn(run.id, { question: q }).catch((e) => {
       setRequestPending(false);
       setActionError(e instanceof DiagnoseError ? e.message : "Couldn't send.");
+      setActionRefusal(investigationRefusal(e));
     });
   };
   const stop = () => stopRun(run.id);
@@ -759,6 +791,7 @@ export function InvestigationView({
   const askExplanation = (sequence: number) => {
     if (interactionsBlocked) return;
     setActionError(null);
+    setActionRefusal(null);
     const serial = ++explanationRequestSerial.current;
     const previousTurns = turnsRef.current.length;
     setExplanationRequest({ sequence, status: "running" });
@@ -780,6 +813,7 @@ export function InvestigationView({
           e instanceof DiagnoseError
             ? e.message
             : "Couldn't request an explanation.",
+        refusal: investigationRefusal(e),
       });
     });
   };
@@ -832,7 +866,9 @@ export function InvestigationView({
     setConfirmApply(false);
     if (interactionsBlocked) return;
     setActionError(null);
+    setActionRefusal(null);
     setVerificationError(null);
+    setVerificationRefusal(null);
     setApplyOutcomeUncertain(null);
     setNarrowPane("activity");
     suppressEvidenceMotionRef.current = false;
@@ -852,6 +888,7 @@ export function InvestigationView({
         setLocalApplyAttemptAssessmentIdx(-1);
         setApplyOutcomeUncertain(null);
         setActionError(e.message.trim() || "Couldn't apply.");
+        setActionRefusal(investigationRefusal(e));
         return;
       }
       refreshClusterState();
@@ -866,7 +903,9 @@ export function InvestigationView({
   const checkStatus = () => {
     if (interactionsBlocked) return Promise.resolve();
     setActionError(null);
+    setActionRefusal(null);
     setVerificationError(null);
+    setVerificationRefusal(null);
     setNarrowPane("activity");
     suppressEvidenceMotionRef.current = false;
     pinnedRef.current = true;
@@ -881,6 +920,7 @@ export function InvestigationView({
           ? error.message
           : "Couldn't check status.",
       );
+      setVerificationRefusal(investigationRefusal(error));
     });
   };
 
@@ -1280,12 +1320,22 @@ export function InvestigationView({
     0,
   );
   const latestVerification = [...turns].reverse().find((turn) => turn.verify);
-  const displayedVerificationError =
-    latestVerification?.status === "error"
-      ? latestVerification.error || "The verification could not be completed."
-      : verificationError;
-  const displayedStatusCheckError =
-    displayedVerificationError || applyOutcomeUncertain;
+  const {
+    verificationError: displayedVerificationError,
+    statusCheckError: displayedStatusCheckError,
+    message: shownFailure,
+    refusal: shownActionRefusal,
+  } = investigationFailureShown({
+    actionError,
+    actionRefusal,
+    verificationError,
+    verificationRefusal,
+    savedVerificationError:
+      latestVerification?.status === "error"
+        ? latestVerification.error || "The verification could not be completed."
+        : null,
+    applyOutcomeUncertain,
+  });
   const findingsTabAccessibleLabel =
     "Findings: current assessment, Radar evidence, and next steps";
   const currentAssessmentCoverageLimited = investigationEvidenceCoverageLimited(
@@ -1740,6 +1790,7 @@ export function InvestigationView({
       {startError ? (
         <InvestigationStartErrorAlert
           error={startError}
+          refusal={startRefusal}
           onDismiss={dismissError}
         />
       ) : null}
@@ -2039,11 +2090,18 @@ export function InvestigationView({
                       </Fragment>
                     );
                   })}
-                  {(actionError || displayedStatusCheckError) && (
+                  {shownFailure && (
                     <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
                       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
                       <div className="min-w-0 flex-1">
-                        <span>{displayedStatusCheckError || actionError}</span>
+                        <span>{shownFailure}</span>
+                        {shownActionRefusal ? (
+                          <div className="mt-2">
+                            <InvestigationRefusalAction
+                              refusal={shownActionRefusal}
+                            />
+                          </div>
+                        ) : null}
                         {displayedStatusCheckError ? (
                           <button
                             type="button"

@@ -9,6 +9,7 @@ import {
   investigationApplyAttemptVerified,
   investigationAssessmentNeedsCurrentStateVerification,
   investigationApplyRejectionIsDefinitive,
+  investigationFailureShown,
   investigationApplyTerminalNeedsClusterRefresh,
   investigationTurnWithTerminalEvent,
   investigationClosedEventIsLive,
@@ -618,7 +619,9 @@ describe("investigation action gating", () => {
     expect(
       canOfferInvestigationApply({ ...base, hasNewerEvidence: true }),
     ).toBe(false);
-    expect(canOfferInvestigationApply({ ...base, canApply: false })).toBe(false);
+    expect(canOfferInvestigationApply({ ...base, canApply: false })).toBe(
+      false,
+    );
     expect(
       canOfferInvestigationApply({ ...base, interactionsBlocked: true }),
     ).toBe(false);
@@ -1271,5 +1274,71 @@ describe("investigationHealthSignals twins across scopes", () => {
       ["events-elsewhere", "unaddressed"],
       ["events-pod", "explained"],
     ]);
+  });
+});
+
+describe("investigationFailureShown", () => {
+  const quota = {
+    status: 402,
+    message: "This month's investigations are used up.",
+    code: "ai_quota_exhausted",
+    reason: "allowance_used_free",
+    action: "upgrade",
+  };
+  const none = {
+    actionError: null,
+    actionRefusal: null,
+    verificationError: null,
+    verificationRefusal: null,
+    savedVerificationError: null,
+    applyOutcomeUncertain: null,
+  };
+
+  it("shows a refused status-check retry over the failed verification it retries", () => {
+    const shown = investigationFailureShown({
+      ...none,
+      savedVerificationError: "The agent stopped before checking.",
+      verificationError: quota.message,
+      verificationRefusal: quota,
+    });
+    expect(shown.message).toBe(quota.message);
+    expect(shown.refusal).toBe(quota);
+  });
+
+  it("offers no action for a verification that ran and failed", () => {
+    const shown = investigationFailureShown({
+      ...none,
+      savedVerificationError: "The agent stopped before checking.",
+    });
+    expect(shown.message).toBe("The agent stopped before checking.");
+    expect(shown.refusal).toBeNull();
+  });
+
+  it("keeps an uncertain apply ahead of a follow-up failure, without the follow-up's action", () => {
+    const shown = investigationFailureShown({
+      ...none,
+      applyOutcomeUncertain: "Check current status before applying again.",
+      actionError: quota.message,
+      actionRefusal: quota,
+    });
+    expect(shown.message).toBe("Check current status before applying again.");
+    expect(shown.statusCheckError).toBe(
+      "Check current status before applying again.",
+    );
+    expect(shown.refusal).toBeNull();
+  });
+
+  it("shows a refused follow-up with its action", () => {
+    const shown = investigationFailureShown({
+      ...none,
+      actionError: quota.message,
+      actionRefusal: quota,
+    });
+    expect(shown).toEqual({
+      verificationError: null,
+      statusCheckError: null,
+      message: quota.message,
+      refusal: quota,
+    });
   });
 });
