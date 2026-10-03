@@ -24,6 +24,12 @@ describe('withLiveReplication', () => {
     const one = withLiveReplication(row(3), runtime([{ state: 'streaming', replayLag: 0 }]))
     expect(one.replication).toMatchObject({ tone: 'degraded', text: expect.stringContaining('1 of 2 expected standbys streaming') })
   })
+  it('says the replay delay covers only the standbys that are connected', () => {
+    const one = withLiveReplication(row(3), runtime([{ state: 'streaming', replayLag: 0 }]))
+    expect(one.replication.text).toBe('1 of 2 expected standbys streaming · max replay delay 0 s (connected standbys only)')
+    const all = withLiveReplication(row(2), runtime([{ state: 'streaming', replayLag: 0 }]))
+    expect(all.replication.text).toBe('1/1 streaming · max replay delay 0 s')
+  })
   it('is healthy only when every expected standby streams', () => {
     const r = withLiveReplication(row(2), runtime([{ state: 'streaming', replayLag: 0.1 }]))
     expect(r.replication.tone).toBe('healthy')

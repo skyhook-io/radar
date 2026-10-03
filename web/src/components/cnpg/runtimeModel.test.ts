@@ -61,6 +61,15 @@ describe('standby cards', () => {
     expect(cnpgStandbyHeadline(standby({ replayPaused: true }), rep, 'unhealthy', { fenced: false, primaryRead: true }).tone).toBe('unhealthy')
     expect(cnpgStandbyHeadline(standby({ roleDetail: 'streaming' }), rep, 'healthy', { fenced: false, primaryRead: true })).toEqual({ text: 'streaming · async', tone: 'healthy' })
   })
+
+  it('says a paused standby is not connected when the primary has no row for it', () => {
+    expect(cnpgStandbyHeadline(standby({ replayPaused: true }), undefined, 'unhealthy', { fenced: false, primaryRead: true })).toEqual({
+      text: 'replay paused',
+      tone: 'unhealthy',
+      secondary: 'not connected to the primary',
+    })
+    expect(cnpgStandbyHeadline(standby({ replayPaused: true }), undefined, 'unknown', { fenced: false, primaryRead: false }).secondary).toBeUndefined()
+  })
 })
 
 describe('cnpgTransactionRates', () => {

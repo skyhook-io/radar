@@ -30,7 +30,7 @@ import {
 import { Notice } from '../capacity/shared'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { useCNPGWriteGuard } from './actions/useCNPGWriteGuard'
-import { buildResizeManifest, cnpgSharedExpansionGap, cnpgSlotRetentionText } from './storageModel'
+import { buildResizeManifest, cnpgSharedExpansionGap, cnpgSlotRetentionText, cnpgWALUsageFloor } from './storageModel'
 // Binary units throughout, matching claim capacities such as 1Gi.
 import { formatBytes } from './lsn'
 import { CNPGRefreshFailedNotice } from './shared'
@@ -73,8 +73,28 @@ const USAGE_UNMEASURED: Record<string, string> = {
 
 // `stated`: the page's notice already names a cluster-wide cause, so the
 // line only says unknown and keeps the reason on hover.
-function UsageBar({ v, stated }: { v: CNPGStorageVolume; stated?: boolean }) {
+function UsageBar({ v, stated, floor }: { v: CNPGStorageVolume; stated?: boolean; floor?: { bytes: number; ratio?: number } }) {
   const u = v.usage
+  if (u.state !== 'ok' && floor) {
+    const tone = floor.ratio === undefined ? 'unknown' : cnpgDiskTone(floor.ratio)
+    return (
+      <div>
+        <div className="h-1.5 overflow-hidden rounded bg-[repeating-linear-gradient(45deg,var(--border-light)_0_2px,transparent_2px_5px)]">
+          {floor.ratio !== undefined && <div className={clsx('h-full', toneFillClass(tone))} style={{ width: `${Math.min(100, floor.ratio * 100)}%` }} />}
+        </div>
+        <div className="mt-1 text-xs">
+          <span className={toneTextClass(tone === 'healthy' || tone === 'unknown' ? 'neutral' : tone)}>
+            ≥ {formatBytes(floor.bytes)} used by WAL alone
+            {floor.ratio !== undefined && (floor.ratio >= 1 ? `, more than the ${v.capacity} the claim reports` : ` · ≥ ${Math.round(floor.ratio * 100)}% of ${v.capacity}`)}
+          </span>
+          <span className="text-theme-text-tertiary">{' · '}</span>
+          <Tooltip content={USAGE_UNMEASURED[u.state] ?? u.state}>
+            <span className="text-theme-text-tertiary">the rest unknown</span>
+          </Tooltip>
+        </div>
+      </div>
+    )
+  }
   if (u.state !== 'ok' || u.ratio === undefined || u.usedBytes === undefined || u.capacityBytes === undefined) {
     return (
       <div>
@@ -153,7 +173,7 @@ const CLUSTER_STATE_BADGE: Record<string, 'warning' | 'error' | 'info'> = {
   unusable: 'error',
 }
 
-function VolumeRow({ v, stated }: { v: CNPGStorageVolume; stated: StatedOnce }) {
+function VolumeRow({ v, stated, wal }: { v: CNPGStorageVolume; stated: StatedOnce; wal?: CNPGStorageWAL }) {
   const resizing = v.resize.pending || (v.resize.conditions?.length ?? 0) > 0 || !!v.resize.allocatedStatus
   return (
     <div className="rounded-lg border border-theme-border bg-theme-base p-3">
@@ -171,7 +191,7 @@ function VolumeRow({ v, stated }: { v: CNPGStorageVolume; stated: StatedOnce }) 
           {v.requested && v.requested !== v.capacity ? ` · requested ${v.requested}` : ''}
         </span>
       </div>
-      <UsageBar v={v} stated={stated.usage} />
+      <UsageBar v={v} stated={stated.usage} floor={cnpgWALUsageFloor(v, wal)} />
       <div className="mt-2 text-xs text-theme-text-secondary">
         <ClassFact v={v} expansionStated={stated.expansion} />
       </div>
@@ -272,7 +292,10 @@ function WALFact({
 
 function InstanceCard({ inst, walCoverage, stated }: { inst: CNPGStorageInstance; walCoverage: CNPGClusterStorageResponse['wal']; stated: StatedOnce }) {
   const roleLabel = inst.role === 'primary' ? 'primary' : inst.role === 'replica' ? 'replica' : inst.role === 'noInstance' ? 'no instance' : 'role unknown'
-  const worst = inst.volumes.reduce<number | undefined>((m, v) => (v.usage.ratio !== undefined && (m === undefined || v.usage.ratio > m) ? v.usage.ratio : m), undefined)
+  const worst = inst.volumes.reduce<number | undefined>((m, v) => {
+    const r = v.usage.ratio ?? cnpgWALUsageFloor(v, inst.wal)?.ratio
+    return r !== undefined && (m === undefined || r > m) ? r : m
+  }, undefined)
   return (
     <Card
       title={
@@ -287,7 +310,7 @@ function InstanceCard({ inst, walCoverage, stated }: { inst: CNPGStorageInstance
         {inst.volumes.length === 0 ? (
           <div className="text-sm text-theme-text-tertiary">No claims read for this instance.</div>
         ) : (
-          inst.volumes.map((v) => <VolumeRow key={v.claim} v={v} stated={stated} />)
+          inst.volumes.map((v) => <VolumeRow key={v.claim} v={v} stated={stated} wal={inst.wal} />)
         )}
       </div>
       <div className="mt-4">

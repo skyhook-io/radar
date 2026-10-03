@@ -358,7 +358,10 @@ export function ClusterActionDialog({
     return facts.instances
       .filter((i) => i.pod !== facts.currentPrimary)
       .map((i) => {
-        const lag = lags.get(i.pod)
+        // A standby that isn't connected has no row; its own replayed
+        // position still says how far behind it is.
+        const own = runtime.data?.instances.find((x) => x.pod === i.pod)?.status.replayLsn
+        const lag = lags.get(i.pod) ?? (own ? { replayBacklogBytes: lsnDistance(primary?.status.currentLsn, own) } : undefined)
         const cap = caps.instanceActions?.[i.pod]?.switchoverTarget
         const ineligible = i.fenced ? 'fenced' : !i.podExists ? 'Pod missing' : !i.ready ? 'not ready' : cap && !cap.allowed ? cap.reason ?? 'not eligible' : undefined
         return { pod: i.pod, podUID: i.podUID, ineligible, ...lag }
@@ -410,7 +413,7 @@ export function ClusterActionDialog({
               </select>
               <label className="text-xs text-theme-text-secondary" htmlFor="cnpg-backup-target">Target</label>
               <select id="cnpg-backup-target" value={target} onChange={(e) => setTarget(e.target.value as typeof target)} className="rounded-lg border border-theme-border bg-theme-base px-2 py-1 text-sm">
-                <option value="">Cluster default</option>
+                <option value="">{facts.backupTarget ? `Cluster default (${facts.backupTarget})` : 'Cluster default'}</option>
                 <option value="prefer-standby">Prefer a standby</option>
                 <option value="primary">Primary</option>
               </select>
@@ -418,6 +421,13 @@ export function ClusterActionDialog({
               <input id="cnpg-backup-name" value={backupName} onChange={(e) => setBackupName(e.target.value)} className="rounded-lg border border-theme-border bg-theme-base px-2 py-1 font-mono text-sm" />
             </div>
           ),
+          warnings: facts.archivingFailing
+            ? [
+                method?.method === 'barmanObjectStore'
+                  ? 'WAL archiving is failing. The operator checks archiving before a Barman backup and marks this Backup walArchivingFailing instead of taking it: fix archiving first.'
+                  : 'WAL archiving is failing. A base backup can only be restored once the WAL written during it reaches the archive, so fix archiving first.',
+              ]
+            : [],
           notes: [
             method?.capability === 'unknown' ? `The plugin ${method.pluginName} does not report whether it can take backups; the operator will reject the Backup if it cannot.` : null,
             method?.method === 'barmanObjectStore' ? 'The in-tree Barman object store is deprecated in favour of the barman-cloud plugin.' : null,
@@ -492,7 +502,7 @@ export function ClusterActionDialog({
             ha.data?.quorum.enabled && switchTarget && ha.data.quorum.status && ha.data.quorum.status.standbyNames.length > 0 && !ha.data.quorum.status.standbyNames.includes(switchTarget)
               ? `${switchTarget} is not among the recorded potentially synchronous standbys (${ha.data.quorum.status.standbyNames.join(', ')}).`
               : null,
-            chosenStandby && chosenStandby.replayLagSeconds === undefined ? 'Replication lag for this standby is not known (runtime data unavailable).' : null,
+            chosenStandby && chosenStandby.replayLagSeconds === undefined && chosenStandby.replayBacklogBytes === undefined ? 'Replication lag for this standby is not known (runtime data unavailable).' : null,
           ].filter(Boolean) as string[],
           notes: ['The operator performs a controlled shutdown of the old primary; its duration depends on spec.switchoverDelay and open transactions.'],
           writes: [

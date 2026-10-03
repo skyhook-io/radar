@@ -93,7 +93,8 @@ export function cnpgStandbyHeadline(
 ): CNPGStandbyHeadline {
   const streaming = rep ? [rep.state, rep.syncState].filter(Boolean).join(' · ') : undefined
   if (inst.status.roleDetail === 'replayPaused' || inst.status.replayPaused) {
-    return { text: 'replay paused', tone: cnpgWorseTone('degraded', backlogTone), secondary: streaming }
+    const secondary = streaming ?? (ctx.primaryRead && !ctx.fenced ? 'not connected to the primary' : undefined)
+    return { text: 'replay paused', tone: cnpgWorseTone('degraded', backlogTone), secondary }
   }
   if (streaming !== undefined) return { text: streaming, tone: backlogTone }
   if (ctx.fenced) return { text: 'fenced · PostgreSQL stopped', tone: 'unknown' }

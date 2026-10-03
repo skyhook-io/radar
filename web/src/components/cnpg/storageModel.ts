@@ -1,5 +1,5 @@
 import { formatBytes } from './lsn'
-import type { CNPGStorageTarget } from '../../api/cnpg-storage'
+import type { CNPGStorageTarget, CNPGStorageVolume, CNPGStorageWAL } from '../../api/cnpg-storage'
 
 function setPath(obj: Record<string, any>, path: string[], value: unknown) {
   let cur = obj
@@ -62,4 +62,13 @@ export function cnpgSharedExpansionGap(volumes: { storageClass: { name?: string;
   if (unknown.length < 2) return undefined
   const reasons = new Set(unknown.map((v) => v.storageClass.reason ?? ''))
   return reasons.size === 1 ? [...reasons][0] || undefined : undefined
+}
+
+/**
+ * A lower bound on a volume's used space when kubelet didn't measure it: the
+ * WAL the instance reports lives on this claim, so at least that much is used.
+ */
+export function cnpgWALUsageFloor(v: CNPGStorageVolume, wal: CNPGStorageWAL | undefined): { bytes: number; ratio?: number } | undefined {
+  if (v.usage.state === 'ok' || !wal || wal.metrics.state !== 'ok' || wal.sizeBytes === undefined || wal.volume !== v.claim) return undefined
+  return { bytes: wal.sizeBytes, ratio: v.capacityBytes ? wal.sizeBytes / v.capacityBytes : undefined }
 }

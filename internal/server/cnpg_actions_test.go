@@ -972,3 +972,15 @@ func TestParseCNPGFencedRejectsNonLists(t *testing.T) {
 		}
 	}
 }
+
+func TestCNPGClusterFactsArchivingFailing(t *testing.T) {
+	failing := cnpgActionCluster(func(obj map[string]any) {
+		obj["status"].(map[string]any)["conditions"] = []any{map[string]any{"type": "ContinuousArchiving", "status": "False"}}
+	})
+	if f, _ := cnpgClusterFactsOf(context.Background(), nil, failing); !f.ArchivingFailing {
+		t.Error("ContinuousArchiving=False must read as archiving failing")
+	}
+	if f, _ := cnpgClusterFactsOf(context.Background(), nil, cnpgActionCluster(nil)); f.ArchivingFailing {
+		t.Error("ContinuousArchiving=True must not read as archiving failing")
+	}
+}

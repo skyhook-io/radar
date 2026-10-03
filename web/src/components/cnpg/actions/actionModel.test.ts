@@ -33,7 +33,8 @@ describe('cnpgDestroyBlocker', () => {
 
 describe('switchoverLagNote', () => {
   it('warns from the WAL still to replay, never from replay delay alone', () => {
-    expect(switchoverLagNote({ pod: 'pg-2', replayBacklogBytes: 16 * 1024 * 1024 })).toBe('pg-2 has 16 MiB of WAL still to replay; the switchover may take longer while it catches up.')
+    expect(switchoverLagNote({ pod: 'pg-2', replayBacklogBytes: 16 * 1024 * 1024, state: 'streaming' })).toBe('pg-2 has 16 MiB of WAL still to replay; the switchover may take longer while it catches up.')
+    expect(switchoverLagNote({ pod: 'pg-2', replayBacklogBytes: 16 * 1024 * 1024 })).toBe("pg-2 has 16 MiB of WAL still to replay and isn't connected to the primary to receive it.")
     expect(switchoverLagNote({ pod: 'pg-2', replayBacklogBytes: 0 })).toBeUndefined()
     expect(switchoverLagNote({ pod: 'pg-2' })).toBeUndefined()
   })

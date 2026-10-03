@@ -80,12 +80,15 @@ export function withLiveReplication(row: CNPGFleetRow, rt: CNPGRuntimeResponse |
   const streaming = reps.filter((r) => r.state === 'streaming').length
   const lags = reps.map((r) => r.replayLag).filter((v): v is number => v !== undefined)
   const maxLag = lags.length ? Math.max(...lags) : undefined
-  const lagText = maxLag !== undefined ? ` · max replay delay ${cnpgFormatLag(maxLag)}` : ''
   const source = 'From the primary’s pg_stat_replication via the instance manager'
+  // A standby that isn't connected has no row, so its delay isn't in the max.
+  const lagFor = (allConnected: boolean) =>
+    maxLag === undefined ? '' : ` · max replay delay ${cnpgFormatLag(maxLag)}${allConnected ? '' : ' (connected standbys only)'}`
   if (row.instances.desired === null) {
-    return { ...row, replication: { text: `${streaming} streaming${lagText}`, tone: 'unknown', source: `${source}; spec.instances is not reported, so the expected standbys are unknown`, at: primary.status.capturedAt } }
+    return { ...row, replication: { text: `${streaming} streaming${lagFor(false)}`, tone: 'unknown', source: `${source}; spec.instances is not reported, so the expected standbys are unknown`, at: primary.status.capturedAt } }
   }
   const expected = Math.max(0, row.instances.desired - 1)
+  const lagText = lagFor(reps.length >= expected)
   const tone = cnpgReplicationTone(streaming, expected, maxLag)
   const text = streaming < expected ? `${streaming} of ${expected} expected standbys streaming` : `${streaming}/${expected} streaming`
   return { ...row, replication: { text: `${text}${lagText}`, tone, source, at: primary.status.capturedAt } }

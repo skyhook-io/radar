@@ -30,6 +30,7 @@ function facts(over: Partial<CNPGClusterFacts>): CNPGClusterFacts {
     phase: 'Cluster in healthy state',
     hibernation: '',
     hibernated: false,
+    archivingFailing: false,
     fencedInstances: { raw: '', all: false, instances: [] },
     instances: [],
     backupMethods: [],

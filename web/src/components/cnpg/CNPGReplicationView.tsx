@@ -112,8 +112,8 @@ export function CNPGReplicationView({
       footer={
         <>
           Rows come from the primary’s pg_stat_replication through the instance manager. Replay backlog is the primary’s current WAL position minus what the
-          standby has replayed, in bytes: the catch-up measure. Write, flush and replay delay are PostgreSQL’s acknowledgement delay for recent WAL; empty when
-          idle and caught up.
+          standby has replayed, in bytes: the catch-up measure. A standby that isn't connected has no row, so its backlog uses the position it reports itself.
+          Write, flush and replay delay are PostgreSQL’s acknowledgement delay for recent WAL; empty when idle and caught up.
         </>
       }
     >
@@ -143,8 +143,10 @@ export function CNPGReplicationView({
           {replicas.length === 0 && <div className="text-sm text-theme-text-tertiary">Single instance: no replica to fail over to.</div>}
           {replicas.map((r) => {
             const rep = rows.get(r.pod)
-            const replayBacklog = rep ? lsnDistance(primary?.status.currentLsn, rep.replayLsn) : undefined
-            const backlogTone = rep ? cnpgStandbyBacklogTone(replayBacklog, rep.replayLag) : 'unknown'
+            // Without a pg_stat_replication row (not connected), the standby's
+            // own replayed position still measures how far behind it is.
+            const replayBacklog = lsnDistance(primary?.status.currentLsn, rep ? rep.replayLsn : r.status.replayLsn)
+            const backlogTone = cnpgStandbyBacklogTone(replayBacklog, rep?.replayLag)
             const headline = cnpgStandbyHeadline(r, rep, backlogTone, { fenced: fenced.has(r.pod), primaryRead: primary?.status.state === 'ok' })
             const tone = headline.tone
             const pct = replayBacklog !== undefined ? Math.min(100, (replayBacklog / CNPG_BACKLOG_DEGRADED) * 100) : 0
@@ -156,10 +158,10 @@ export function CNPGReplicationView({
                   <span className={clsx('text-xs', toneTextClass(tone))}>{headline.text}</span>
                   {headline.secondary && <span className="text-xs text-theme-text-secondary">{headline.secondary}</span>}
                   <span className="ml-auto font-mono text-xs text-theme-text-secondary">
-                    {rep ? `${formatBytes(replayBacklog)} behind` : 'backlog unknown'}
+                    {replayBacklog !== undefined ? `${formatBytes(replayBacklog)} behind` : 'backlog unknown'}
                   </span>
                 </div>
-                {rep && (
+                {replayBacklog !== undefined && (
                   <div className="mt-2 flex items-center gap-2">
                     <div className="h-1 flex-1 overflow-hidden rounded bg-theme-elevated">
                       <div className={clsx('h-full', backlogTone === 'unknown' ? 'bg-transparent' : toneFillClass(backlogTone))} style={{ width: `${pct}%` }} />

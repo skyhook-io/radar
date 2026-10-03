@@ -72,9 +72,11 @@ export function cnpgDestroyBlocker(cap: CNPGActionCapability | undefined, pod: s
  * longer; nothing is lost by choosing it. Based on the LSN backlog, not on
  * replay_lag, which is a recent delay and stays high after a standby caught up.
  */
-export function switchoverLagNote(s: Pick<StandbyChoice, 'pod' | 'replayBacklogBytes'>): string | undefined {
+export function switchoverLagNote(s: Pick<StandbyChoice, 'pod' | 'replayBacklogBytes' | 'state'>): string | undefined {
   const b = s.replayBacklogBytes
   if (b === undefined || b <= 0) return undefined
+  // No pg_stat_replication row: it isn't receiving WAL, so "catches up" would be a guess.
+  if (s.state === undefined) return `${s.pod} has ${formatBytes(b)} of WAL still to replay and isn't connected to the primary to receive it.`
   return `${s.pod} has ${formatBytes(b)} of WAL still to replay; the switchover may take longer while it catches up.`
 }
 

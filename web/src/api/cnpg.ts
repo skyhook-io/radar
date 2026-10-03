@@ -162,6 +162,8 @@ export interface CNPGClusterFacts {
   instances: CNPGInstanceFact[]
   backupMethods: CNPGBackupMethod[]
   backupTarget?: string
+  /** The ContinuousArchiving condition is False. */
+  archivingFailing: boolean
   isReplicaCluster: boolean
   maintenance: { declared: boolean; inProgress: boolean; reusePVC: boolean }
   terminating: boolean

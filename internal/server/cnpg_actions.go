@@ -140,6 +140,9 @@ type CNPGClusterFacts struct {
 	Instances        []CNPGInstanceFact     `json:"instances"`
 	BackupMethods    []CNPGBackupMethodFact `json:"backupMethods"`
 	BackupTarget     string                 `json:"backupTarget,omitempty"`
+	// ArchivingFailing: the ContinuousArchiving condition is False. An
+	// in-tree Barman backup then ends in phase walArchivingFailing.
+	ArchivingFailing bool                   `json:"archivingFailing"`
 	IsReplicaCluster bool                   `json:"isReplicaCluster"`
 	Terminating      bool                   `json:"terminating"`
 	Maintenance      CNPGMaintenanceFacts   `json:"maintenance"`
@@ -532,6 +535,12 @@ func cnpgClusterFactsOf(ctx context.Context, typed kubernetes.Interface, cluster
 		Maintenance:      cnpgMaintenanceFactsOf(cluster),
 	}
 	facts.Hibernated = facts.Hibernation == "on"
+	conds, _, _ := unstructured.NestedSlice(cluster.Object, "status", "conditions")
+	for _, raw := range conds {
+		if c, ok := raw.(map[string]any); ok && c["type"] == "ContinuousArchiving" {
+			facts.ArchivingFailing = c["status"] == "False"
+		}
+	}
 
 	names, _, _ := unstructured.NestedStringSlice(cluster.Object, "status", "instanceNames")
 	if len(names) == 0 && facts.CurrentPrimary != "" {

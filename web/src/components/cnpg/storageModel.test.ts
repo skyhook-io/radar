@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildResizeManifest, cnpgSharedExpansionGap, cnpgSlotRetentionText } from './storageModel'
+import { buildResizeManifest, cnpgSharedExpansionGap, cnpgSlotRetentionText, cnpgWALUsageFloor } from './storageModel'
+import type { CNPGStorageVolume, CNPGStorageWAL } from '../../api/cnpg-storage'
 
 const cluster = {
   metadata: { name: 'pg', namespace: 'db' },
@@ -49,5 +50,16 @@ describe('cnpgSharedExpansionGap', () => {
     expect(cnpgSharedExpansionGap([vol('a'), vol('b')])).toBeUndefined()
     expect(cnpgSharedExpansionGap([vol('a')])).toBeUndefined()
     expect(cnpgSharedExpansionGap([vol(undefined, true), vol(undefined, true)])).toBeUndefined()
+  })
+})
+
+describe('cnpgWALUsageFloor', () => {
+  const vol = (state: string, claim = 'pg-1') => ({ claim, role: 'PG_DATA', capacity: '1Gi', capacityBytes: 1024 ** 3, storageClass: {}, resize: {}, usage: { state } }) as CNPGStorageVolume
+  const wal = (sizeBytes: number, volume = 'pg-1') => ({ status: { state: 'ok' }, metrics: { state: 'ok' }, volume, sizeBytes }) as CNPGStorageWAL
+  it('is the WAL size on the claim that holds it, only when kubelet did not measure', () => {
+    expect(cnpgWALUsageFloor(vol('noSeries'), wal(512 * 1024 ** 2))).toEqual({ bytes: 512 * 1024 ** 2, ratio: 0.5 })
+    expect(cnpgWALUsageFloor(vol('ok'), wal(512 * 1024 ** 2))).toBeUndefined()
+    expect(cnpgWALUsageFloor(vol('noSeries', 'pg-1-wal'), wal(512 * 1024 ** 2))).toBeUndefined()
+    expect(cnpgWALUsageFloor(vol('noSeries'), { ...wal(1), metrics: { state: 'denied' } } as CNPGStorageWAL)).toBeUndefined()
   })
 })
