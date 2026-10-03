@@ -142,7 +142,7 @@ export interface CNPGProtectionFacts {
   }
   lastSuccessfulBackup: CNPGFact
   walArchiving: CNPGFact
-  recoveryWindow: CNPGFact & { from?: string; to?: string }
+  recoveryWindow: CNPGFact & { from?: string }
   restoreValidation: CNPGFact & { restoredInto?: { namespace: string; name: string } }
 }
 
@@ -334,7 +334,7 @@ function destinationFact(cluster: any): CNPGProtectionFacts['destination'] {
   return { text: 'No destination configured', tone: 'neutral', method: 'none' }
 }
 
-function recoveryWindowFor(cluster: any, stores: any[]): { from?: string; lastSuccess?: string; lastFailed?: string; store?: string } | null {
+function recoveryWindowFor(cluster: any, stores: any[]): { from?: string; lastSuccess?: string; store?: string } | null {
   const plugin = getCNPGClusterBarmanPlugin(cluster)
   if (!plugin?.barmanObjectName) return null
   const store = stores.find(
@@ -347,7 +347,6 @@ function recoveryWindowFor(cluster: any, stores: any[]): { from?: string; lastSu
   return {
     from: w.firstRecoverabilityPoint,
     lastSuccess: w.lastSuccessfulBackupTime,
-    lastFailed: w.lastFailedBackupTime,
     store: store.metadata?.name,
   }
 }
@@ -628,20 +627,22 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
     const desired = typeof cluster?.spec?.instances === 'number' ? cluster.spec.instances : null
 
     const window = recoveryWindowFor(cluster, stores)
+    const wal = walFact(cluster)
     const storesCov = coverageOf(resp, 'objectStores')
     const storesUnreadable = !!getCNPGClusterBarmanPlugin(cluster)?.barmanObjectName && !coverageReadable(storesCov, ns)
     const protection: CNPGProtectionFacts = {
       schedule: scheduleFact(cluster, resp.objects.scheduledBackups ?? [], coverageOf(resp, 'scheduledBackups')),
       destination: destinationFact(cluster),
       lastSuccessfulBackup: lastBackupFact(cluster, resp.objects.backups ?? [], coverageOf(resp, 'backups'), window, storesUnreadable ? storesCov : null),
-      walArchiving: walFact(cluster),
+      walArchiving: wal,
+      // The latest recoverable point follows WAL archiving, not the last base
+      // backup, and no status reports it; only failing archiving stops it.
       recoveryWindow: window?.from
         ? {
             text: 'Recoverable window',
-            tone: window.lastFailed && (!window.lastSuccess || Date.parse(window.lastFailed) > Date.parse(window.lastSuccess)) ? 'degraded' : 'neutral',
+            tone: wal.tone === 'unhealthy' ? 'degraded' : 'neutral',
             from: window.from,
-            to: window.lastSuccess,
-            source: `ObjectStore ${window.store} status`,
+            source: `ObjectStore ${window.store} status (earliest point)`,
           }
         : storesUnreadable
           ? { text: coverageUnavailableText(storesCov, 'ObjectStores'), tone: 'unknown' }

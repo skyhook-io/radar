@@ -39,7 +39,7 @@ Every value is something the cluster reports, labelled with where it came from. 
 | Destination | barman-cloud plugin `barmanObjectName`, in-tree `barmanObjectStore`, or volume snapshots | "No destination configured" |
 | Last successful backup | Newest of: completed Backup CRs (7-day window plus the newest per cluster), ObjectStore `serverRecoveryWindow[...].lastSuccessfulBackupTime`, in-tree `status.lastSuccessfulBackup` (ignored for plugin clusters, where CNPG no longer sets it) — the winning source is shown | "None observed", or "No access to Backups" |
 | WAL archiving | `ContinuousArchiving` condition | "Not reported" |
-| Recovery window | ObjectStore `status.serverRecoveryWindow` for the cluster's server name | "Not reported" |
+| Recovery window | Earliest point from ObjectStore `status.serverRecoveryWindow` for the cluster's server name. The latest point follows WAL archiving, not the last base backup, and no status reports it; it reads "not advancing" only while `ContinuousArchiving` is False | "Not reported" |
 | Restore validation | A Cluster in the same namespace bootstrapped (`bootstrap.recovery`) from this cluster's store/server or one of its Backups, **with a ready instance** | "None recorded" (unknown tone) — Kubernetes records no restore tests, so this is never green. A matching cluster without a ready instance reads "Recovery declared in …". |
 | ObjectStore upload health | **Inferred** from its user clusters' WAL archiving and recovery windows (ObjectStore has no status of its own) | "Unknown" |
 | Declarations | `status.applied` (true / false / absent = pending); managed roles from `status.managedRolesStatus` (`reconciled`, `cannotReconcile`; anything else pending) | Pending, never failed |

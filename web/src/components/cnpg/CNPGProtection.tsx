@@ -191,8 +191,7 @@ export function CNPGProtection({
                       from {ageText(r.protection.recoveryWindow.from)}
                     </span>
                     <Sub>
-                      to {r.protection.recoveryWindow.to ? ageText(r.protection.recoveryWindow.to) : 'unknown'}
-                      {r.protection.recoveryWindow.tone === 'degraded' ? ' · not advancing' : ''}
+                      {r.protection.recoveryWindow.tone === 'degraded' ? 'not advancing: archiving failing' : 'to the newest archived WAL'}
                     </Sub>
                   </>
                 ) : (

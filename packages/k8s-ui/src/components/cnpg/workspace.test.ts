@@ -151,6 +151,20 @@ describe('buildCNPGFleet', () => {
     expect(r.protection.restoreValidation.tone).toBe('unknown')
   })
 
+  it('ends the recovery window at WAL archiving, not at the last base backup', () => {
+    const plugin = { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }] }
+    const store = {
+      apiVersion: 'barmancloud.cnpg.io/v1', kind: 'ObjectStore', metadata: { name: 'store', namespace: 'db' },
+      status: { serverRecoveryWindow: { 'pg-a': { firstRecoverabilityPoint: '2026-09-01T00:00:00Z', lastSuccessfulBackupTime: '2026-09-02T00:00:00Z', lastFailedBackupTime: '2026-09-03T00:00:00Z' } } },
+    }
+    const archiving = cluster('pg-a', 'db', { spec: plugin, status: { conditions: [{ type: 'ContinuousArchiving', status: 'True' }] } })
+    const w = buildCNPGFleet(resp({ clusters: [archiving], objectStores: [store] })).rows[0].protection.recoveryWindow
+    expect(w).toMatchObject({ from: '2026-09-01T00:00:00Z', tone: 'neutral' })
+    expect(w).not.toHaveProperty('to')
+    const failing = cluster('pg-a', 'db', { spec: plugin, status: { conditions: [{ type: 'ContinuousArchiving', status: 'False' }] } })
+    expect(buildCNPGFleet(resp({ clusters: [failing], objectStores: [store] })).rows[0].protection.recoveryWindow.tone).toBe('degraded')
+  })
+
   it('reports WAL archiving from the condition and unknown when absent', () => {
     const failing = cluster('pg-a', 'db', { status: { conditions: [{ type: 'ContinuousArchiving', status: 'False', message: 'exit status 1' }] } })
     const silent = cluster('pg-b', 'db')
