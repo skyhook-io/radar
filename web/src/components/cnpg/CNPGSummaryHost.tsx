@@ -1,8 +1,7 @@
-import { useRef, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   CNPG_BARMAN_OBJECTSTORE_GROUP,
-  CNPG_CONNECT_SELECTOR,
   CNPGOpenIssueContext,
   CNPG_GROUP,
   CNPGBackupSummary,
@@ -40,6 +39,7 @@ import { cnpgBaseBackupFacts, describeCNPGBaseBackup } from './baseBackup'
 import { useCNPGPoolerLive } from './useCNPGPoolerLive'
 import { cnpgInstanceLive, cnpgInstanceLiveUnavailable, cnpgReplicationGap, cnpgReplicationLive, useCNPGClusterHA, withLiveReplication } from '../../api/cnpg-ha'
 import { CNPGMaintenanceBanner } from './actions/CNPGMaintenanceBanner'
+import { CNPG_CONNECT_PARAM, cnpgConnectParamValue } from './actions/CNPGConnectButton'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 import { CNPGRefreshFailedNotice } from './shared'
 
@@ -81,7 +81,6 @@ function BaseBackupFact({ runtime }: { runtime: CNPGRuntimeResponse | undefined 
 function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryContext) {
   const navigate = useNavigate()
   const location = useLocation()
-  const summaryRef = useRef<HTMLDivElement>(null)
   const { connection } = useConnection()
   // The workspace is read for the object's own namespace: an explicitly opened
   // Cluster shows its facts whatever the namespace filter is.
@@ -112,7 +111,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
     else navigate(path, { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } })
   }
   return (
-    <div ref={summaryRef}>
+    <div>
       <CNPGClusterSummary
         row={row}
         onNavigate={goRef}
@@ -129,7 +128,9 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
                   backup: row.cluster ? restoreBackupDeclared(row.cluster) : undefined,
                   onOpen: (step) => {
                     if (step === 'connect') {
-                      summaryRef.current?.querySelector(CNPG_CONNECT_SELECTOR)?.scrollIntoView({ block: 'start' })
+                      const p = new URLSearchParams(location.search)
+                      p.set(CNPG_CONNECT_PARAM, cnpgConnectParamValue(namespace, name))
+                      navigate({ search: p.toString() }, { replace: true, state: location.state })
                       return
                     }
                     const protection = cnpgClusterFullPath(namespace, name, connection.context || undefined, 'protection')

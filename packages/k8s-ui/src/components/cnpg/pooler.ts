@@ -120,6 +120,38 @@ export function aggregatePoolerPools(pods: CNPGPoolerPressureLive['pods']): CNPG
   return [...rows.values()].sort((a, b) => a.database.localeCompare(b.database) || a.user.localeCompare(b.user))
 }
 
+export interface CNPGPoolerPodRow {
+  pod: string
+  /** ok | partial | the read's failure state. */
+  state: string
+  error?: string
+  clActive?: number
+  clWaiting?: number
+  svActive?: number
+  maxwaitSeconds?: number
+}
+
+/**
+ * Each PgBouncer Pod's own totals across its pools, so one saturated Pod is
+ * not hidden in the sum. A Pod that did not report keeps its state and no
+ * numbers; a field none of its pools reported stays undefined.
+ */
+export function poolerPodPressure(pods: CNPGPoolerPressureLive['pods']): CNPGPoolerPodRow[] {
+  const add = (a: number | undefined, b: number | undefined) => (b === undefined ? a : (a ?? 0) + b)
+  return pods
+    .map((p) => {
+      const row: CNPGPoolerPodRow = { pod: p.pod, state: p.state, error: p.error }
+      for (const pool of p.pools ?? []) {
+        row.clActive = add(row.clActive, pool.clActive)
+        row.clWaiting = add(row.clWaiting, pool.clWaiting)
+        row.svActive = add(row.svActive, pool.svActive)
+        if (pool.maxwaitSeconds !== undefined) row.maxwaitSeconds = Math.max(row.maxwaitSeconds ?? 0, pool.maxwaitSeconds)
+      }
+      return row
+    })
+    .sort((a, b) => a.pod.localeCompare(b.pod))
+}
+
 /**
  * PgBouncer settings worth showing, with the value PgBouncer uses when the
  * Pooler leaves one unset. Defaults are named only where they were read from

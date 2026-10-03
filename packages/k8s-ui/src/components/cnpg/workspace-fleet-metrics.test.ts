@@ -46,7 +46,7 @@ describe('applyCNPGFleetMetrics', () => {
   it('replaces "lag unknown" with the measured standby lag and names its source', () => {
     const f = applyCNPGFleetMetrics(fleet(), [reading('ha', { state: 'ok', seconds: 7.2, pod: 'ha-2' })], { source: 'prometheus', lagSource: 'Prometheus cnpg_pg_replication_lag' })
     const r = row(f, 'ha')
-    expect(r.replication.text).toBe('1/1 ready · lag 7.2 s')
+    expect(r.replication.text).toBe('1/1 Pods ready · lag 7.2 s')
     expect(r.replication.tone).toBe('degraded')
     expect(r.replication.source).toContain('ha-2')
     expect(r.replication.source).toContain('cnpg_pg_replication_lag')
@@ -54,17 +54,17 @@ describe('applyCNPGFleetMetrics', () => {
 
   it('says why lag is unknown instead of zero, and leaves non-replica facts alone', () => {
     const f = applyCNPGFleetMetrics(fleet(), [reading('dark', { state: 'noSeries', reason: 'no exporter series' })], { source: 'prometheus' })
-    expect(row(f, 'dark').replication.text).toBe('1/1 ready · lag unknown')
+    expect(row(f, 'dark').replication.text).toBe('1/1 Pods ready · lag unknown')
     expect(row(f, 'dark').replication.source).toBeTruthy()
     expect(row(f, 'dark').replication.tone).toBe('unknown')
     expect(row(f, 'solo').replication.text).toBe('Single instance')
 
     const denied = applyCNPGFleetMetrics(fleet(), [reading('ha', { state: 'denied', grant: 'get pods in db' })], { source: 'prometheus' })
-    expect(row(denied, 'ha').replication.text).toBe('1/1 ready · lag unknown')
+    expect(row(denied, 'ha').replication.text).toBe('1/1 Pods ready · lag unknown')
     expect(row(denied, 'ha').replication.source).toBe('Needs get pods in db')
 
     const none = applyCNPGFleetMetrics(fleet(), undefined, { source: 'none', reason: 'Radar is not connected to Prometheus' })
-    expect(row(none, 'ha').replication.text).toBe('1/1 ready · lag unknown')
+    expect(row(none, 'ha').replication.text).toBe('1/1 Pods ready · lag unknown')
     expect(row(none, 'ha').replication.source).toBe('Prometheus not connected')
     expect(row(none, 'ha').replication.detail).toBe('Radar is not connected to Prometheus')
     expect(row(none, 'ha').diskGrowth).toBeUndefined()
@@ -73,7 +73,7 @@ describe('applyCNPGFleetMetrics', () => {
   it('keeps the fleet untouched when no reading was requested', () => {
     const base = fleet()
     expect(applyCNPGFleetMetrics(base, undefined, undefined)).toBe(base)
-    expect(row(base, 'ha').replication.text).toBe('1/1 ready · lag unknown')
+    expect(row(base, 'ha').replication.text).toBe('1/1 Pods ready · lag unknown')
   })
 
   it('reports disk growth only when measured', () => {

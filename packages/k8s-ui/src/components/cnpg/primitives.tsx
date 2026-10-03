@@ -1,9 +1,10 @@
-import { createContext, useContext, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import type { HealthLevel } from '../resources/resource-utils'
 import { formatAge } from '../resources/resource-utils'
 import { StatusDot } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
+import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { AlertBanner } from '../ui/drawer-components'
 import { TONE_TEXT_CLASS } from '../ui/severity-tone'
 import type { CNPGFact, CNPGProblem } from './workspace'
@@ -74,6 +75,51 @@ export function SummaryHeading({ children, hint, anchor }: { children: ReactNode
     <div data-cnpg-anchor={anchor} className="mb-2 mt-5 flex scroll-mt-4 items-baseline gap-2 first:mt-0">
       <h3 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">{children}</h3>
       {hint && <span className="text-[11px] text-theme-text-tertiary">{hint}</span>}
+    </div>
+  )
+}
+
+/**
+ * A section folded to one summary line. It opens itself when `attention`
+ * turns true (data arriving after the first render included), and stays as
+ * the reader left it otherwise.
+ */
+export function FoldSection({
+  title,
+  hint,
+  summary,
+  attention,
+  anchor,
+  children,
+}: {
+  title: ReactNode
+  hint?: ReactNode
+  summary: ReactNode
+  attention: boolean
+  anchor?: string
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(attention)
+  useEffect(() => {
+    if (attention) setOpen(true)
+  }, [attention])
+  const d = useDisclosure(open)
+  return (
+    <div data-cnpg-anchor={anchor} className="mt-5 scroll-mt-4 first:mt-0">
+      <button
+        type="button"
+        {...d.buttonProps}
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        <CollapseChevron open={open} className="h-3 w-3 shrink-0 self-center text-theme-text-tertiary" />
+        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">{title}</h3>
+        {hint && <span className="text-[11px] text-theme-text-tertiary">{hint}</span>}
+        {!open && <span className={clsx('min-w-0 text-sm', attention ? toneTextClass('degraded') : 'text-theme-text-secondary')}>{summary}</span>}
+      </button>
+      <Collapse open={open} id={d.panelId}>
+        <div className="pt-2">{children}</div>
+      </Collapse>
     </div>
   )
 }

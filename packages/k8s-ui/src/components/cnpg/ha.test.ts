@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   cnpgCertificateViews,
+  cnpgCertificatesSummary,
+  cnpgHASummary,
   cnpgDimensions,
   cnpgPDBFact,
   cnpgLeaseHolderPod,
@@ -246,5 +248,51 @@ describe('cnpgLeaseHolderPod', () => {
   it('names the Pod of a controller-runtime holder identity', () => {
     expect(cnpgLeaseHolderPod('cnpg-controller-manager-5fbdd6bb78-jx82z_6ec0566c-6da6-47aa-9ab1-0e5d3b2c1f11')).toBe('cnpg-controller-manager-5fbdd6bb78-jx82z')
     expect(cnpgLeaseHolderPod('pg-1')).toBe('pg-1')
+  })
+})
+
+describe('folded HA and certificates summaries', () => {
+  const pdbs = { state: 'ok' as const, enabled: true, items: [{ name: 'pg', role: 'replicas', disruptionsAllowed: 1, currentHealthy: 1, expectedPods: 1, observed: true }] } as unknown as CNPGClusterHA['pdbs']
+
+  it('stays folded with the known facts when nothing is out of line', () => {
+    expect(cnpgHASummary(ha({ pdbs }), undefined)).toEqual({ text: '2/2 instances ready · 2 zones · images match', attention: false })
+  })
+
+  it('opens and leads with what is wrong', () => {
+    const shared = ha({
+      pdbs,
+      instances: [
+        { pod: 'pg-1', podUID: 'a', role: 'primary', ready: true, node: 'n1', zone: 'z1', restartCount: 0, image: 'pg:17', imageMatches: true },
+        { pod: 'pg-2', podUID: 'b', role: 'replica', ready: false, node: 'n1', zone: 'z1', restartCount: 0, image: 'pg:16', imageMatches: false },
+      ],
+    })
+    const s = cnpgHASummary(shared, [{ pod: 'pg-2', state: 'ok', pendingRestart: true } as never])
+    expect(s.attention).toBe(true)
+    expect(s.text).toBe('1 of 2 instances not ready · every instance in one zone · instances share a Node · restart pending on pg-2 · an instance runs a different image')
+  })
+
+  it('names the nearest certificate expiry and who renews them', () => {
+    const now = Date.parse('2026-09-30T00:00:00Z')
+    const certs = [
+      { secret: 'pg-ca', expiresAt: '2026-12-29T00:00:00Z', renewal: 'operator' },
+      { secret: 'pg-server', expiresAt: '2026-10-20T00:00:00Z', renewal: 'operator' },
+    ] as never
+    expect(cnpgCertificatesSummary(certs, now)).toEqual({ text: '2 certificates · nearest expiry in 20 d (pg-server) · CloudNativePG renews them', attention: false })
+    const userSoon = [{ secret: 'app-tls', expiresAt: '2026-10-05T00:00:00Z', renewal: 'user' }] as never
+    expect(cnpgCertificatesSummary(userSoon, now).attention).toBe(true)
+    expect(cnpgCertificatesSummary([], now)).toEqual({ text: 'No expiry reported by the operator', attention: false })
+  })
+})
+
+describe('replication chip and the sustained-lag finding', () => {
+  it('reads no calmer than a standby measured far behind for the whole window', () => {
+    const problem = { id: 'lag:db/pg', severity: 'critical', category: 'availability', title: 'pg-2 ≥ 24 h behind in every sample for 10 min', subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name: 'pg' }, source: 'measurement' } as never
+    const dims = cnpgDimensions({ row: row({ problems: [problem] }), replication: { streaming: 1, standbys: 1, maxReplayLagSeconds: 0 } })
+    const rep = dims.find((d) => d.id === 'replication')!
+    expect(rep.tone).toBe('unhealthy')
+    expect(rep.text).toBe('1 of 1 standbys streaming · sustained lag')
+    expect(rep.source).toBe('pg-2 ≥ 24 h behind in every sample for 10 min')
+    const unread = cnpgDimensions({ row: row({ problems: [problem] }) }).find((d) => d.id === 'replication')!
+    expect(unread).toMatchObject({ tone: 'unhealthy', text: 'sustained lag' })
   })
 })

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
-import { CNPG_BARMAN_OBJECTSTORE_GROUP, isApiGroup } from '@skyhook-io/k8s-ui'
+import { CNPG_BARMAN_OBJECTSTORE_GROUP, isApiGroup, type NavigateToResource } from '@skyhook-io/k8s-ui'
 import { CNPGClusterActions } from './CNPGClusterActions'
+import { CNPGConnectButton } from './CNPGConnectButton'
 import { CNPGScheduleActions } from './CNPGScheduleActions'
 import { CNPGPoolerActions } from './CNPGPoolerActions'
 import { CNPGOperationTracker } from '../operations/CNPGOperationTracker'
@@ -13,7 +14,19 @@ function backupRestoreBlocker(b: any): string | undefined {
   return undefined
 }
 
-export function renderCNPGHeaderActions({ resource, namespace, name, compact }: { resource: any; namespace: string; name: string; compact: boolean }): ReactNode {
+export function renderCNPGHeaderActions({
+  resource,
+  namespace,
+  name,
+  compact,
+  onNavigate,
+}: {
+  resource: any
+  namespace: string
+  name: string
+  compact: boolean
+  onNavigate?: NavigateToResource
+}): ReactNode {
   if (isApiGroup(resource?.apiVersion, CNPG_BARMAN_OBJECTSTORE_GROUP) && resource.kind === 'ObjectStore') {
     return <CNPGRestoreButton namespace={namespace} entry={{ kind: 'objectStore', name }} compact={compact} />
   }
@@ -22,6 +35,7 @@ export function renderCNPGHeaderActions({ resource, namespace, name, compact }: 
     return (
       <div className="flex items-center gap-1.5">
         <CNPGOperationTracker namespace={namespace} name={name} />
+        <CNPGConnectButton namespace={namespace} name={name} compact={compact} onNavigate={onNavigate} />
         <CNPGClusterActions namespace={namespace} name={name} compact={compact} />
       </div>
     )

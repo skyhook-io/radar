@@ -64,19 +64,22 @@ export function CNPGConnectSection({
   poolers,
   poolersKnown,
   onNavigate,
+  showHeading = true,
 }: {
   cluster: any
   poolers?: any[]
   /** False when Poolers could not be listed, so a Pooler may exist that is not shown. */
   poolersKnown?: boolean
   onNavigate?: CNPGNavigate
+  /** False where the host already titles it (e.g. the Connect dialog). */
+  showHeading?: boolean
 }) {
   const info = cnpgConnectInfo(cluster, poolers)
   const ns: string = cluster?.metadata?.namespace ?? ''
   const primary = info.endpoints[0]
   return (
     <>
-      <SummaryHeading anchor="connect" hint="from the Cluster spec · hosts resolve inside the Kubernetes cluster">Connect</SummaryHeading>
+      {showHeading && <SummaryHeading anchor="connect" hint="from the Cluster spec · hosts resolve inside the Kubernetes cluster">Connect</SummaryHeading>}
       <FactGrid>
         <FactRow label="Services">
           <ul className="space-y-1">

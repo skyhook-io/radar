@@ -6843,7 +6843,10 @@ export function useSetActiveNamespace() {
         });
       }
       queryClient.setQueryData<NamespaceScope>(["namespace-scope"], scope);
-      if (scope.cacheScoped) {
+      // "All namespaces" is sent as no namespaces param, which the server reads
+      // as the stored pick, so a request sent while this switch was in flight
+      // may have used the old pick. Refetch what is on screen once it landed.
+      if (scope.cacheScoped || scope.actives.length === 0) {
         queryClient.invalidateQueries();
       }
       debugNamespaceLog("mutation:success-after-scope-cache-write");

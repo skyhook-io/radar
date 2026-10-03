@@ -7,6 +7,7 @@ import { refOf } from './relations'
 import {
   POOLER_LIMIT_PARAMETERS,
   aggregatePoolerPools,
+  poolerPodPressure,
   observedPause,
   poolerBackendService,
   poolerReadiness,
@@ -180,6 +181,47 @@ function num(v: number | undefined): string {
   return v === undefined ? '—' : String(v)
 }
 
+// Pods take their client connections independently, so one can queue while
+// the sum still looks calm.
+function PoolerPodPressure({ pods }: { pods: NonNullable<CNPGPoolerLive['pressure']>['pods'] }) {
+  return (
+    <table className="mt-3 w-full text-sm">
+      <thead className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">
+        <tr>
+          <th className="py-1 pr-3">PgBouncer Pod</th>
+          <th className="pr-3 text-right">Clients active</th>
+          <th className="pr-3 text-right">Waiting</th>
+          <th className="pr-3 text-right">Servers active</th>
+          <th className="text-right">Max wait</th>
+        </tr>
+      </thead>
+      <tbody className="table-divide-subtle">
+        {poolerPodPressure(pods).map((r) =>
+          r.state === 'ok' || r.state === 'partial' ? (
+            <tr key={r.pod}>
+              <td className="py-1 pr-3 font-mono text-xs">
+                {r.pod}
+                {r.state === 'partial' && <span className="ml-1 font-sans text-theme-text-tertiary">partial</span>}
+              </td>
+              <td className="pr-3 text-right font-mono">{num(r.clActive)}</td>
+              <td className={`pr-3 text-right font-mono ${r.clWaiting ? toneTextClass('degraded') : ''}`}>{num(r.clWaiting)}</td>
+              <td className="pr-3 text-right font-mono">{num(r.svActive)}</td>
+              <td className={`text-right font-mono ${r.maxwaitSeconds ? toneTextClass('degraded') : ''}`}>{r.maxwaitSeconds !== undefined ? `${r.maxwaitSeconds.toFixed(1)} s` : '—'}</td>
+            </tr>
+          ) : (
+            <tr key={r.pod}>
+              <td className="py-1 pr-3 font-mono text-xs">{r.pod}</td>
+              <td colSpan={4} className="text-right text-xs text-theme-text-tertiary">
+                Not read: {r.error ?? r.state}
+              </td>
+            </tr>
+          ),
+        )}
+      </tbody>
+    </table>
+  )
+}
+
 function PoolerPressure({ pressure }: { pressure: NonNullable<CNPGPoolerLive['pressure']> }) {
   if (pressure.state === 'loading') return <div className="text-sm text-theme-text-tertiary">Reading PgBouncer metrics…</div>
   if (pressure.state === 'denied' || pressure.state === 'error') {
@@ -225,6 +267,7 @@ function PoolerPressure({ pressure }: { pressure: NonNullable<CNPGPoolerLive['pr
         Summed over {reporting.length} of {pressure.pods.length} PgBouncer Pods{partial ? ' — a lower bound: not every Pod reported in full' : ''}. PgBouncer’s admin and
         authentication pools are excluded.
       </Note>
+      {pressure.pods.length > 1 && <PoolerPodPressure pods={pressure.pods} />}
     </div>
   )
 }

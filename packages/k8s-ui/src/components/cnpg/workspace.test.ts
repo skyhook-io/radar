@@ -53,7 +53,7 @@ describe('buildCNPGFleet', () => {
     )
     const row = fleet.rows[0]
     expect(row.replication.tone).toBe('unknown')
-    expect(row.replication.text).toContain('2/2 ready')
+    expect(row.replication.text).toContain('2/2 Pods ready')
     expect(row.pods[0].role).toBe('primary')
   })
 
@@ -204,6 +204,14 @@ describe('buildCNPGFleet', () => {
     expect(w).not.toHaveProperty('to')
     const failing = cluster('pg-a', 'db', { spec: plugin, status: { conditions: [{ type: 'ContinuousArchiving', status: 'False' }] } })
     expect(buildCNPGFleet(resp({ clusters: [failing], objectStores: [store] })).rows[0].protection.recoveryWindow.tone).toBe('degraded')
+  })
+
+  it('shows when archiving started working, only when that was recent and after creation', () => {
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString()
+    const resumed = cluster('pg-a', 'db', { metadata: { creationTimestamp: '2026-01-01T00:00:00Z' }, status: { conditions: [{ type: 'ContinuousArchiving', status: 'True', lastTransitionTime: hourAgo }] } })
+    expect(buildCNPGFleet(resp({ clusters: [resumed] })).rows[0].protection.walArchiving).toMatchObject({ text: 'Archiving', at: hourAgo, atMeaning: 'since' })
+    const old = cluster('pg-a', 'db', { metadata: { creationTimestamp: '2026-01-01T00:00:00Z' }, status: { conditions: [{ type: 'ContinuousArchiving', status: 'True', lastTransitionTime: '2026-01-01T00:02:00Z' }] } })
+    expect(buildCNPGFleet(resp({ clusters: [old] })).rows[0].protection.walArchiving.at).toBeUndefined()
   })
 
   it('reports WAL archiving from the condition and unknown when absent', () => {

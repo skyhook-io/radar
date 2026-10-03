@@ -6,7 +6,6 @@ import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { CNPG_BARMAN_OBJECTSTORE_GROUP, CNPG_GROUP } from '../resources/resource-utils-cnpg'
 import { cnpgReadyInstances, type CNPGFleetRow, type CNPGInstance } from './workspace'
 import type { CNPGDimension } from './ha'
-import { CNPGConnectSection } from './CNPGConnectSection'
 import {
   FactGrid,
   FactRow,
@@ -141,7 +140,7 @@ export function CNPGClusterSummary({
   initialProblemsExpanded?: boolean
   /** Makes each dimension chip open where that dimension is explained (e.g. Runtime → Replication). */
   onSelectDimension?: (id: CNPGDimension['id']) => void
-  /** The host's "HA and instances" section (CNPGClusterHASection), rendered after State. */
+  /** The host's "HA and instances" section (CNPGClusterHASection), rendered after Protection. */
   haSection?: ReactNode
   /** Extra FactRows appended to the State grid, e.g. live facts only the host can read. */
   stateFacts?: ReactNode
@@ -272,10 +271,6 @@ export function CNPGClusterSummary({
         {stateFacts}
       </FactGrid>
 
-      {haSection}
-
-      <CNPGConnectSection cluster={row.cluster} poolers={row.poolerObjects} poolersKnown={row.poolersKnown} onNavigate={onNavigate} />
-
       <SummaryHeading>Protection</SummaryHeading>
       <FactGrid>
         <FactRow label="Schedule">
@@ -330,6 +325,8 @@ export function CNPGClusterSummary({
           <FactSource fact={p.restoreValidation} />
         </FactRow>
       </FactGrid>
+
+      {haSection}
       {extra}
     </div>
   )

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { aggregatePoolerPools, observedPause, poolerBackendService, poolerReadiness } from './pooler'
+import { aggregatePoolerPools, observedPause, poolerBackendService, poolerReadiness, poolerPodPressure } from './pooler'
 
 describe('poolerReadiness', () => {
   it('reads readiness from the Deployment, never from the scheduled count', () => {
@@ -39,5 +39,20 @@ describe('poolerBackendService', () => {
     expect(poolerBackendService('pg', 'rw')).toBe('pg-rw')
     expect(poolerBackendService('pg', 'ro')).toBe('pg-ro')
     expect(poolerBackendService('pg', undefined)).toBeUndefined()
+  })
+})
+
+describe('poolerPodPressure', () => {
+  it('totals each Pod on its own so one queuing Pod is visible', () => {
+    const rows = poolerPodPressure([
+      { pod: 'pooler-b', state: 'ok', pools: [{ database: 'app', user: 'app', clActive: 2, clWaiting: 0, svActive: 1 }, { database: 'app', user: 'ro', clActive: 1, clWaiting: 0, svActive: 0 }] },
+      { pod: 'pooler-a', state: 'ok', pools: [{ database: 'app', user: 'app', clActive: 20, clWaiting: 15, svActive: 20, maxwaitSeconds: 4.2 }] },
+      { pod: 'pooler-c', state: 'unreachable', error: 'no answer within 5s' },
+    ] as never)
+    expect(rows).toEqual([
+      { pod: 'pooler-a', state: 'ok', error: undefined, clActive: 20, clWaiting: 15, svActive: 20, maxwaitSeconds: 4.2 },
+      { pod: 'pooler-b', state: 'ok', error: undefined, clActive: 3, clWaiting: 0, svActive: 1 },
+      { pod: 'pooler-c', state: 'unreachable', error: 'no answer within 5s' },
+    ])
   })
 })

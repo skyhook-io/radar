@@ -621,11 +621,23 @@ function lastBackupFact(
   return { text: 'Completed', tone: 'healthy', at: best.at, source: best.source }
 }
 
-function walFact(cluster: any): CNPGFact {
+const ARCHIVING_RECENT_MS = 24 * 3_600_000
+const ARCHIVING_SETTLE_MS = 10 * 60_000
+
+function walFact(cluster: any, now = Date.now()): CNPGFact {
   const conds = cluster?.status?.conditions
   const c = Array.isArray(conds) ? conds.find((x: any) => x?.type === 'ContinuousArchiving') : null
   if (!c) return { text: 'Not reported', tone: 'unknown', source: 'Cluster status' }
-  if (c.status === 'True') return { text: 'Archiving', tone: 'healthy', source: 'ContinuousArchiving condition' }
+  if (c.status === 'True') {
+    // A recent change well after creation shows when archiving started working,
+    // e.g. after a fix; it says nothing about what came before it.
+    const since = Date.parse(c.lastTransitionTime ?? '')
+    const created = Date.parse(cluster?.metadata?.creationTimestamp ?? '')
+    if (now - since < ARCHIVING_RECENT_MS && since - created > ARCHIVING_SETTLE_MS) {
+      return { text: 'Archiving', tone: 'healthy', source: 'ContinuousArchiving condition, True since then', at: c.lastTransitionTime, atMeaning: 'since' }
+    }
+    return { text: 'Archiving', tone: 'healthy', source: 'ContinuousArchiving condition' }
+  }
   if (c.status === 'False') {
     return {
       text: 'Failing',
@@ -774,7 +786,7 @@ function replicationFact(cluster: any, pods: CNPGInstance[], hibernated: boolean
   const readyReplicas = replicas.filter((p) => p.ready === true).length
   if (replicas.length === 0) return { text: 'No replica pods observed', tone: 'unknown' }
   return {
-    text: `${readyReplicas}/${replicas.length} ready · lag unknown`,
+    text: `${readyReplicas}/${replicas.length} Pods ready · lag unknown`,
     tone: 'unknown',
     source: CNPG_LAG_UNMEASURED_SOURCE,
   }
@@ -1366,6 +1378,11 @@ export function applyCNPGFleetMetrics(fleet: CNPGFleet, readings: CNPGFleetMetri
 export const CNPG_SUSTAINED_LAG_WARNING_SECONDS = 30
 export const CNPG_SUSTAINED_LAG_CRITICAL_SECONDS = 300
 
+/** The id of a cluster's sustained-lag problem, so other views can find it among the row's problems. */
+export function cnpgSustainedLagProblemId(rowKey: string): string {
+  return `lag:${rowKey}`
+}
+
 function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): CNPGProblem | undefined {
   const lag = reading?.lag
   const floor = lag?.sustainedSeconds
@@ -1375,7 +1392,7 @@ function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading
   // The query proves every recorded sample was at least the floor and that
   // the series existed at the window's start, not that samples were continuous.
   return {
-    id: `lag:${row.key}`,
+    id: cnpgSustainedLagProblemId(row.key),
     severity: floor >= CNPG_SUSTAINED_LAG_CRITICAL_SECONDS ? 'critical' : 'warning',
     category: 'availability',
     title: `${pod} ≥ ${cnpgFormatLag(floor)} behind in every sample for ${formatWindowShort(lag.sustainedWindow)}`,

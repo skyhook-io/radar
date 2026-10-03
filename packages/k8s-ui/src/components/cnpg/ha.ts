@@ -4,7 +4,7 @@
 // unavailable source is "unknown", never none or healthy.
 
 import type { HealthLevel } from '../resources/resource-utils'
-import { cnpgFormatLag, cnpgLagTone, cnpgReplicationTone, type CNPGFact, type CNPGFleetRow } from './workspace'
+import { cnpgFormatLag, cnpgLagTone, cnpgReplicationTone, cnpgSustainedLagProblemId, cnpgWorseTone, type CNPGFact, type CNPGFleetRow } from './workspace'
 
 export type CNPGHASourceState = 'ok' | 'denied' | 'notFound' | 'notInstalled' | 'unavailable' | 'error'
 
@@ -284,6 +284,72 @@ export function cnpgCertificateViews(certs: CNPGHACertificate[] | undefined, now
   })
 }
 
+/** A folded section's one-line summary, and whether it opens on its own. */
+export interface CNPGFoldSummary {
+  text: string
+  /** Something in the section needs a look: it opens itself. */
+  attention: boolean
+}
+
+/**
+ * "HA and instances" in one line: what is wrong when something is, otherwise
+ * the readiness and placement facts that are known. Unknown facts never read
+ * as fine; they are left out of a calm summary rather than claimed.
+ */
+export function cnpgHASummary(
+  ha: CNPGClusterHA | undefined,
+  live: CNPGInstanceLive[] | undefined,
+  primaryConflict?: { status: string; labelled: string },
+): CNPGFoldSummary {
+  if (!ha) return { text: 'Not read', attention: false }
+  const issues: string[] = []
+  const calm: string[] = []
+  if (ha.pods.state === 'ok') {
+    const ready = ha.instances.filter((i) => i.ready).length
+    if (ready < ha.instances.length) issues.push(`${ha.instances.length - ready} of ${ha.instances.length} instances not ready`)
+    else calm.push(`${ready}/${ha.instances.length} instances ready`)
+  }
+  if (primaryConflict) issues.push('primary labels disagree')
+  const spread = cnpgZoneSpread(ha)
+  if (spread.singleZone) issues.push('every instance in one zone')
+  if (spread.sharedNode) issues.push('instances share a Node')
+  if (spread.known && !spread.singleZone && spread.zones.length > 1) calm.push(`${spread.zones.length} zones`)
+  const pending = cnpgPendingRestart(live)
+  if (pending.pods.length > 0) issues.push(`restart pending on ${pending.pods.join(', ')}`)
+  const drift = cnpgImageDrift(ha)
+  if (drift.drifted.length > 0) issues.push(`${drift.drifted.length === 1 ? 'an instance runs' : `${drift.drifted.length} instances run`} a different image`)
+  else if (drift.known) calm.push('images match')
+  const quorum = cnpgQuorumFact(ha.quorum)
+  if (quorum.tone === 'degraded' || quorum.tone === 'unhealthy') issues.push('failover quorum does not hold')
+  const pdb = cnpgPDBFact(ha.pdbs)
+  if (pdb.tone === 'degraded' || pdb.tone === 'unhealthy') issues.push('disruption budgets missing')
+  for (const [lease, what] of [[ha.primaryLease, 'primary lease'], [ha.operatorLease, 'operator lease']] as const) {
+    if (lease.state === 'ok' && lease.expired) issues.push(`${what} expired`)
+  }
+  if (ha.primaryLease.state === 'ok' && ha.primaryLease.controlledByCluster === false) issues.push('primary lease not owned by this Cluster')
+  const failedJobs = ha.jobs.state === 'ok' ? ha.jobs.items.filter((j) => j.phase === 'failed').length : 0
+  if (failedJobs > 0) issues.push(`${failedJobs} failed ${failedJobs === 1 ? 'Job' : 'Jobs'}`)
+  if (issues.length > 0) return { text: issues.join(' · '), attention: true }
+  return { text: calm.length > 0 ? calm.join(' · ') : 'Nothing reported out of line', attention: false }
+}
+
+/** Certificates in one line: the nearest expiry and who renews them. */
+export function cnpgCertificatesSummary(certs: CNPGHACertificate[] | undefined, now = Date.now()): CNPGFoldSummary {
+  const views = cnpgCertificateViews(certs, now)
+  if (views.length === 0) return { text: 'No expiry reported by the operator', attention: false }
+  const attention = views.some((c) => c.tone === 'degraded' || c.tone === 'unhealthy')
+  const dated = views.filter((c) => c.daysLeft !== undefined).sort((a, b) => (a.daysLeft ?? 0) - (b.daysLeft ?? 0))
+  const nearest = dated[0]
+  const when = !nearest
+    ? 'expiry unreadable'
+    : nearest.daysLeft! < 0
+      ? `${nearest.secret} expired`
+      : `nearest expiry in ${nearest.daysLeft} d (${nearest.secret})`
+  const renewers = new Set(views.map((c) => c.renewal))
+  const who = renewers.size > 1 ? 'some renewed by you' : renewers.has('user') ? 'you renew them' : 'CloudNativePG renews them'
+  return { text: `${views.length} ${views.length === 1 ? 'certificate' : 'certificates'} · ${when} · ${who}`, attention }
+}
+
 function cnpgLiveRead(l: CNPGInstanceLive): boolean {
   return (l.state === 'ok' || l.state === 'partial') && !l.incomplete
 }
@@ -389,7 +455,22 @@ function servingDimension(row: CNPGFleetRow, ha?: CNPGClusterHA): CNPGDimension 
   return { ...base, tone: 'healthy', text: 'primary ready', source: `Pod ${primaryName} readiness (Service endpoints not readable)` }
 }
 
+// A standby measured far behind for the whole window outranks what the live
+// read shows: the chip must not read calmer than the finding below it.
 function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap?: string): CNPGDimension {
+  const dim = liveReplicationDimension(row, live, gap)
+  const sustained = row.problems.find((p) => p.id === cnpgSustainedLagProblemId(row.key))
+  if (!sustained) return dim
+  const tone: HealthLevel = sustained.severity === 'critical' ? 'unhealthy' : 'degraded'
+  return {
+    ...dim,
+    tone: cnpgWorseTone(dim.tone, tone),
+    text: dim.tone === 'unknown' ? 'sustained lag' : `${dim.text} · sustained lag`,
+    source: sustained.title,
+  }
+}
+
+function liveReplicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap?: string): CNPGDimension {
   const base = { id: 'replication' as const, label: 'Replication' }
   if (row.hibernated) return { ...base, tone: 'neutral', text: 'hibernated', source: 'cnpg.io/hibernation annotation' }
   if (row.instances.desired === 1) return { ...base, tone: 'degraded', text: 'no standby', source: 'spec.instances is 1: there is no failover target' }

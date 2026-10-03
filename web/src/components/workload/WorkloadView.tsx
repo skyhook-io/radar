@@ -1202,7 +1202,7 @@ export function WorkloadView({
             onSelectRun={handleSelectedRunChange}
           />
         )}
-        renderHeaderActions={({ resource: res, context }) => renderCNPGHeaderActions({ resource: res, namespace, name, compact: context === 'drawer' })}
+        renderHeaderActions={({ resource: res, context, onNavigate }) => renderCNPGHeaderActions({ resource: res, namespace, name, compact: context === 'drawer', onNavigate })}
         renderSummary={({ apiKind: ak, namespace: ns, name: n, resource: res, context, onNavigate }) =>
           renderCNPGSummary({ apiKind: ak, namespace: ns, name: n, group: effectiveGroup, resource: res, context, onNavigate })
         }
