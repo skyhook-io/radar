@@ -73,7 +73,6 @@ export function toneTextClass(tone: StatusTone): string {
 // part that could not be read.
 const TONE_RANK: Record<StatusTone, number> = { healthy: 0, neutral: 0, unknown: 1, degraded: 2, alert: 3, unhealthy: 4 }
 
-/** The more severe of two tones. */
 export function worseTone(a: StatusTone, b: StatusTone): StatusTone {
   return TONE_RANK[b] > TONE_RANK[a] ? b : a
 }
