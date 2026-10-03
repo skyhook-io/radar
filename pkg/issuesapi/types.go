@@ -352,6 +352,37 @@ type ClusterDNSFinding struct {
 	Evidence  string `json:"evidence,omitempty"`
 }
 
+// RestartLoop describes a container that keeps restarting. A crashloop issue
+// carries it while the container has restarted at least three times and last
+// terminated within the past 30 minutes, whatever the exit code, so the issue
+// stays open across the loop's healthy-looking moments instead of resolving and
+// reopening on every cycle.
+//
+// Probe failures are observations from the same window (kubelet Unhealthy
+// events), not a causal verdict: a liveness failure seen next to the restarts
+// is strong evidence of a probe-driven restart, but the consumer decides.
+type RestartLoop struct {
+	Container string `json:"container"`
+	// Sidecar is true for a native sidecar (an init container with
+	// restartPolicy Always).
+	Sidecar        bool      `json:"sidecar,omitempty"`
+	RestartCount   int32     `json:"restart_count"`
+	LastExitCode   int32     `json:"last_exit_code"`
+	LastReason     string    `json:"last_reason,omitempty"`
+	LastFinishedAt time.Time `json:"last_finished_at,omitzero"`
+	// LivenessProbeFailure / ReadinessProbeFailure are the newest failure of
+	// each probe type seen for this container in the last 10 minutes.
+	LivenessProbeFailure  *ProbeFailure `json:"liveness_probe_failure,omitempty"`
+	ReadinessProbeFailure *ProbeFailure `json:"readiness_probe_failure,omitempty"`
+}
+
+// ProbeFailure is one observed probe failure: when it was last reported and
+// the kubelet's message (truncated).
+type ProbeFailure struct {
+	LastSeen time.Time `json:"last_seen"`
+	Message  string    `json:"message,omitempty"`
+}
+
 // OnsetCoverage counts contributing failure signals when at least one signal
 // has no evidence-backed active-time anchor. A signal is usually one affected
 // resource, but controllers may collapse multiple status entries for one
@@ -400,22 +431,26 @@ type Issue struct {
 	// FirstSeen is the earliest evidence-backed time the issue was active. It
 	// may be the time Radar first observed a state rather than its exact onset,
 	// so consumers should read it as "active at least since".
-	FirstSeen            time.Time          `json:"first_seen,omitzero"`
-	OnsetUnknown         bool               `json:"onset_unknown,omitempty"`
-	OnsetCoverage        *OnsetCoverage     `json:"onset_coverage,omitempty"`
-	ResourceCreatedAt    time.Time          `json:"resource_created_at,omitzero"`
-	LastSeen             time.Time          `json:"last_seen,omitzero"`
-	Count                int                `json:"count,omitempty"`
-	Owner                Ref                `json:"owner,omitzero"`
-	Fingerprint          string             `json:"-"`
-	RestartCount         int32              `json:"restart_count,omitempty"`
-	LastTerminatedReason string             `json:"last_terminated_reason,omitempty"`
-	Affected             Affected           `json:"affected,omitzero"`
-	Members              []Ref              `json:"members,omitempty"`
-	MembersTruncated     bool               `json:"members_truncated,omitempty"`
-	DiagnosticContext    *DiagnosticContext `json:"diagnostic_context,omitempty"`
-	IncidentParent       *IncidentParent    `json:"incident_parent,omitempty"`
-	ChangeContext        *ChangeContext     `json:"change_context,omitempty"`
+	FirstSeen            time.Time      `json:"first_seen,omitzero"`
+	OnsetUnknown         bool           `json:"onset_unknown,omitempty"`
+	OnsetCoverage        *OnsetCoverage `json:"onset_coverage,omitempty"`
+	ResourceCreatedAt    time.Time      `json:"resource_created_at,omitzero"`
+	LastSeen             time.Time      `json:"last_seen,omitzero"`
+	Count                int            `json:"count,omitempty"`
+	Owner                Ref            `json:"owner,omitzero"`
+	Fingerprint          string         `json:"-"`
+	RestartCount         int32          `json:"restart_count,omitempty"`
+	LastTerminatedReason string         `json:"last_terminated_reason,omitempty"`
+	// RestartLoop is set on a crashloop issue whose container Radar classifies
+	// as in an active restart loop. It is the evidence for the loop, taken
+	// from one container so every field describes the same termination.
+	RestartLoop       *RestartLoop       `json:"restart_loop,omitempty"`
+	Affected          Affected           `json:"affected,omitzero"`
+	Members           []Ref              `json:"members,omitempty"`
+	MembersTruncated  bool               `json:"members_truncated,omitempty"`
+	DiagnosticContext *DiagnosticContext `json:"diagnostic_context,omitempty"`
+	IncidentParent    *IncidentParent    `json:"incident_parent,omitempty"`
+	ChangeContext     *ChangeContext     `json:"change_context,omitempty"`
 	// IssueTiming is best-effort timing evidence for when this issue entered
 	// the failing state, derived from K8s-native signals (condition
 	// lastTransitionTime, resource phase, deletion timestamp) at detection

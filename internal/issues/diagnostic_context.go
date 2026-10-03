@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -973,6 +974,9 @@ func isBlockedInitContainer(i Issue) bool {
 }
 
 func restartCauseFact(i Issue) (issuesapi.DiagnosticFact, bool) {
+	if l := i.RestartLoop; l != nil {
+		return issuesapi.DiagnosticFact{Type: factRestartCause, Message: restartLoopEvidenceMessage(l)}, true
+	}
 	if i.RestartCount <= 0 && i.LastTerminatedReason == "" {
 		return issuesapi.DiagnosticFact{}, false
 	}
@@ -990,6 +994,37 @@ func restartCauseFact(i Issue) (issuesapi.DiagnosticFact, bool) {
 		Type:    factRestartCause,
 		Message: "Container restart evidence: " + strings.Join(parts, ", ") + ".",
 	}, true
+}
+
+// restartLoopEvidenceMessage states what was observed for a looping container.
+// Probe failures are listed beside the restarts, never as their cause.
+func restartLoopEvidenceMessage(l *issuesapi.RestartLoop) string {
+	parts := []string{
+		fmt.Sprintf("container=%s", l.Container),
+		fmt.Sprintf("restartCount=%d", l.RestartCount),
+	}
+	last := fmt.Sprintf("lastExitCode=%d", l.LastExitCode)
+	if l.LastReason != "" {
+		last += fmt.Sprintf(" (%s)", l.LastReason)
+	}
+	if !l.LastFinishedAt.IsZero() {
+		last += " at " + l.LastFinishedAt.UTC().Format(time.RFC3339)
+	}
+	parts = append(parts, last)
+	for _, p := range []struct {
+		name string
+		pf   *issuesapi.ProbeFailure
+	}{{"liveness", l.LivenessProbeFailure}, {"readiness", l.ReadinessProbeFailure}} {
+		if p.pf == nil {
+			continue
+		}
+		obs := fmt.Sprintf("%s probe failure last seen %s", p.name, p.pf.LastSeen.UTC().Format(time.RFC3339))
+		if p.pf.Message != "" {
+			obs += fmt.Sprintf(" (%q)", p.pf.Message)
+		}
+		parts = append(parts, obs)
+	}
+	return "Restart loop evidence: " + strings.Join(parts, ", ") + "."
 }
 
 func diagnosticMessage(i Issue) string {

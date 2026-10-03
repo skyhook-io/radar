@@ -403,7 +403,12 @@ export function IssueRow({
 function Diagnosis({ issue, source }: { issue: Issue; source?: IssueDiagnosisSource }) {
   const crash =
     issue.restart_count || issue.last_terminated_reason
-      ? [issue.restart_count ? `${issue.restart_count} restart${issue.restart_count === 1 ? '' : 's'}` : null, issue.last_terminated_reason ? `last exit: ${issue.last_terminated_reason}` : null]
+      ? [
+          issue.restart_count ? `${issue.restart_count} restart${issue.restart_count === 1 ? '' : 's'}` : null,
+          issue.last_terminated_reason ? `last exit: ${issue.last_terminated_reason}` : null,
+          issue.restart_loop?.liveness_probe_failure ? 'liveness probe failing' : null,
+          issue.restart_loop?.readiness_probe_failure ? 'readiness probe failing' : null,
+        ]
           .filter(Boolean)
           .join(' · ')
       : null;
