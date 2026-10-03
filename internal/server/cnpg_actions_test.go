@@ -984,3 +984,27 @@ func TestCNPGClusterFactsArchivingFailing(t *testing.T) {
 		t.Error("ContinuousArchiving=True must not read as archiving failing")
 	}
 }
+
+func TestCNPGIsReplicaClusterMatchesOperator(t *testing.T) {
+	for _, c := range []struct {
+		replica map[string]any
+		want    bool
+	}{
+		{nil, false},
+		{map[string]any{"enabled": true, "source": "east"}, true},
+		{map[string]any{"enabled": false, "primary": "east"}, false},
+		{map[string]any{"primary": "east", "source": "east"}, true},
+		{map[string]any{"primary": "pg", "source": "east"}, false},
+		{map[string]any{"self": "west", "primary": "west"}, false},
+		{map[string]any{"source": "east"}, true},
+	} {
+		cluster := cnpgActionCluster(func(obj map[string]any) {
+			if c.replica != nil {
+				obj["spec"].(map[string]any)["replica"] = c.replica
+			}
+		})
+		if got := cnpgIsReplicaCluster(cluster); got != c.want {
+			t.Errorf("replica %v: got %v, want %v", c.replica, got, c.want)
+		}
+	}
+}

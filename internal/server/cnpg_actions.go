@@ -434,9 +434,10 @@ func cnpgIsReplicaCluster(cluster *unstructured.Unstructured) bool {
 	if strings.TrimSpace(self) == "" {
 		self = cluster.GetName()
 	}
+	// The operator's Cluster.IsReplica(): without `enabled`, the cluster is a
+	// replica unless it names itself as the primary (an unset primary included).
 	primary, _ := replica["primary"].(string)
-	primary = strings.TrimSpace(primary)
-	return primary != "" && primary != strings.TrimSpace(self)
+	return strings.TrimSpace(primary) != strings.TrimSpace(self)
 }
 
 func cnpgBackupMethods(cluster *unstructured.Unstructured) []CNPGBackupMethodFact {
