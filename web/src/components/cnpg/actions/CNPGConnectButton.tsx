@@ -15,6 +15,17 @@ export function cnpgConnectParamValue(namespace: string, name: string, surface: 
   return surface === 'drawer' ? `${namespace}/${name}@drawer` : `${namespace}/${name}`
 }
 
+// A request is answered once: a full-screen drawer can carry the same surface
+// as the page beneath it, and both buttons see the request in the same commit.
+const answeredRequests = new Set<string>()
+
+/** True for the first caller per history entry, false for any other. */
+export function claimConnectRequest(locationKey: string): boolean {
+  if (answeredRequests.has(locationKey)) return false
+  answeredRequests.add(locationKey)
+  return true
+}
+
 export function CNPGConnectButton({
   namespace,
   name,
@@ -32,7 +43,7 @@ export function CNPGConnectButton({
   const [open, setOpen] = useState(false)
   const requested = params.get(CNPG_CONNECT_PARAM) === cnpgConnectParamValue(namespace, name, compact ? 'drawer' : 'page')
   useEffect(() => {
-    if (!requested) return
+    if (!requested || !claimConnectRequest(location.key)) return
     setOpen(true)
     // Keeps the page's return label, which lives in the history state.
     setParams(
@@ -43,7 +54,7 @@ export function CNPGConnectButton({
       },
       { replace: true, state: location.state },
     )
-  }, [requested, setParams, location.state])
+  }, [requested, setParams, location.key, location.state])
   const { fleet } = useCNPGFleet([namespace], open)
   const row = fleet?.rows.find((r) => r.namespace === namespace && r.name === name)
   const go = onNavigate
