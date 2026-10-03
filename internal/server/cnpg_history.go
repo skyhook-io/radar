@@ -44,18 +44,20 @@ var cnpgHistoryMemoTTL = 15 * time.Second
 // in-browser samples. State describes the query as a whole; each chart
 // carries its own state when the whole succeeded.
 type CNPGClusterHistoryResponse struct {
-	Cluster     CNPGRuntimeObjectRef             `json:"cluster"`
-	Source      string                           `json:"source"`
-	State       string                           `json:"state,omitempty"`
-	Reason      string                           `json:"reason,omitempty"`
-	Range       string                           `json:"range"`
-	Start       string                           `json:"start,omitempty"`
-	End         string                           `json:"end,omitempty"`
-	StepSeconds int                              `json:"stepSeconds,omitempty"`
-	Selector    string                           `json:"selector,omitempty"`
-	Isolation   *prometheuspkg.CNPGIsolation     `json:"isolation,omitempty"`
-	SampledAt   string                           `json:"sampledAt"`
-	Charts      []prometheuspkg.CNPGHistoryChart `json:"charts"`
+	Cluster     CNPGRuntimeObjectRef         `json:"cluster"`
+	Source      string                       `json:"source"`
+	State       string                       `json:"state,omitempty"`
+	Reason      string                       `json:"reason,omitempty"`
+	Range       string                       `json:"range"`
+	Start       string                       `json:"start,omitempty"`
+	End         string                       `json:"end,omitempty"`
+	StepSeconds int                          `json:"stepSeconds,omitempty"`
+	Selector    string                       `json:"selector,omitempty"`
+	Isolation   *prometheuspkg.CNPGIsolation `json:"isolation,omitempty"`
+	// PVCIsolation is the volume chart's own: claims are matched apart from Pods.
+	PVCIsolation *prometheuspkg.CNPGIsolation     `json:"pvcIsolation,omitempty"`
+	SampledAt    string                           `json:"sampledAt"`
+	Charts       []prometheuspkg.CNPGHistoryChart `json:"charts"`
 }
 
 type cnpgHistoryMemoEntry struct {
@@ -164,13 +166,10 @@ func (s *Server) handleCNPGClusterHistory(w http.ResponseWriter, r *http.Request
 	}
 	if len(req.Claims) > 0 {
 		matchers, iso, err := prometheuspkg.ResolvePVCScope(r.Context(), namespace, req.Claims, anchors, rng.Duration)
-		switch {
-		case err != nil:
+		if err != nil {
 			_, req.PVCAmbiguous = cnpgUsageScopeFailure(err)
-		case resp.Isolation == nil:
-			req.PVCMatchers, resp.Isolation = matchers, &iso
-		default:
-			req.PVCMatchers = matchers
+		} else {
+			req.PVCMatchers, resp.PVCIsolation = matchers, &iso
 		}
 	}
 

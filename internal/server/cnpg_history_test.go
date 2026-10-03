@@ -101,6 +101,10 @@ func TestCNPGClusterHistory_ChartsFromPrometheus(t *testing.T) {
 	if got.Source != cnpgHistorySourcePrometheus || got.State != cnpgHistoryStateOK || got.StepSeconds != 30 || got.Isolation == nil || got.Isolation.Mode != prometheuspkg.CNPGIsolationUnverified {
 		t.Fatalf("got %+v", got)
 	}
+	// The volume chart's claims are matched apart from the instance Pods, and say so.
+	if got.PVCIsolation == nil || got.PVCIsolation.Mode != prometheuspkg.CNPGIsolationUnverified || !strings.Contains(got.PVCIsolation.Note, "claim names") {
+		t.Errorf("pvcIsolation = %+v", got.PVCIsolation)
+	}
 	by := map[string]prometheuspkg.CNPGHistoryChart{}
 	for _, c := range got.Charts {
 		by[c.ID] = c

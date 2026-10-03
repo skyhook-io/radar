@@ -54,6 +54,8 @@ export interface CNPGClusterHistoryResponse {
   stepSeconds?: number
   selector?: string
   isolation?: { mode: 'configured' | 'verified' | 'unverified'; labels?: Record<string, string>; note: string }
+  /** The volume chart's own match: claims are tied to the cluster apart from Pods. */
+  pvcIsolation?: { mode: 'configured' | 'verified' | 'unverified'; labels?: Record<string, string>; note: string }
   sampledAt: string
   charts: CNPGHistoryChart[]
 }

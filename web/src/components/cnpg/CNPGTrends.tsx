@@ -162,6 +162,7 @@ function HistoryChartCard({
       footer={
         <>
           Source: <span className="font-mono">{chart.source}</span>
+          {chart.id === 'pvcUsed' && data.pvcIsolation ? ` · ${data.pvcIsolation.note}` : ''}
           {chart.omitted ? ` · ${chart.omitted} more series not shown` : ''}
           {chart.state === 'ok' && gaps.length > 0 ? ' · hatched: no sample' : ''}
         </>
@@ -448,7 +449,7 @@ export function CNPGTrends({
         )}
         <span className="text-xs text-theme-text-tertiary">
           {fromPrometheus
-            ? `From Prometheus · one point every ${span(data.stepSeconds ?? 60)} · ${data.isolation?.note ?? ''}`
+            ? `From Prometheus · one point every ${span(data.stepSeconds ?? 60)}${data.isolation ? ` · ${data.isolation.note}` : ''}`
             : q.isLoading
               ? 'Checking for Prometheus…'
               : samplingDenied
