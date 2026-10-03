@@ -29,7 +29,8 @@ export interface CNPGScreenProps {
 
 const COVERAGE_LABEL: Record<string, string> = {
   denied: 'no access',
-  partial: 'no access in some namespaces',
+  partial: 'not read in some namespaces',
+  uncached: 'not cached by Radar',
   syncing: 'still loading',
   error: 'could not be read',
 }
@@ -124,7 +125,11 @@ export function coverageEmpty(cov: CNPGKindCoverage | undefined, noun: string): 
     case 'full':
       return `No ${noun} in this scope.`
     case 'partial':
-      return `No ${noun} visible. Some namespaces are not readable with your access.`
+      if (cov.uncachedNamespaces?.length) return `No ${noun} visible. Radar does not cache ${noun} in ${cov.uncachedNamespaces.join(', ')}.`
+      if (cov.deniedNamespaces?.length) return `No ${noun} visible. Some namespaces are not readable with your access.`
+      return `No ${noun} visible. Some namespaces were not read.`
+    case 'uncached':
+      return `Radar does not cache ${noun} in this scope.`
     case 'denied':
       return `No access to ${noun}.`
     case 'syncing':
@@ -138,7 +143,7 @@ export function coverageEmpty(cov: CNPGKindCoverage | undefined, noun: string): 
 
 /** The less complete of two coverages, for collections built from several kinds. */
 export function worstCoverage(...covs: (CNPGKindCoverage | undefined)[]): CNPGKindCoverage | undefined {
-  const rank: Record<string, number> = { error: 0, denied: 1, syncing: 2, partial: 3, full: 4, notInstalled: 5 }
+  const rank: Record<string, number> = { error: 0, denied: 1, uncached: 2, syncing: 3, partial: 4, full: 5, notInstalled: 6 }
   return covs.filter(Boolean).sort((a, b) => (rank[a!.state] ?? 9) - (rank[b!.state] ?? 9))[0]
 }
 

@@ -36,12 +36,14 @@ export const CNPG_WORKSPACE_KEYS = [
 
 export type CNPGWorkspaceKey = (typeof CNPG_WORKSPACE_KEYS)[number]
 
-export type CNPGCoverageState = 'full' | 'partial' | 'denied' | 'notInstalled' | 'syncing' | 'error'
+export type CNPGCoverageState = 'full' | 'partial' | 'denied' | 'notInstalled' | 'syncing' | 'uncached' | 'error'
 
 export interface CNPGKindCoverage {
   state: CNPGCoverageState
   /** Denied namespaces, named only when the caller supplied the candidate list. */
   deniedNamespaces?: string[]
+  /** Namespaces the caller may read but Radar's cache does not hold, named under the same rule. */
+  uncachedNamespaces?: string[]
   /** For partial coverage: the namespaces that were read. */
   allowedNamespaces?: string[]
 }
@@ -410,23 +412,33 @@ export function coverageReadable(cov: CNPGKindCoverage, namespace?: string): boo
   if (cov.state === 'partial') {
     if (!namespace) return false
     if (cov.allowedNamespaces) return cov.allowedNamespaces.includes(namespace)
-    if (cov.deniedNamespaces) return !cov.deniedNamespaces.includes(namespace)
+    if (cov.deniedNamespaces || cov.uncachedNamespaces) return !cov.deniedNamespaces?.includes(namespace) && !cov.uncachedNamespaces?.includes(namespace)
     return false
   }
   return false
 }
 
-function coverageUnavailableText(cov: CNPGKindCoverage, what: string): string {
+/**
+ * Why a kind's objects were not read (in `namespace`, when given), worded for
+ * a fact. A namespace Radar's cache does not hold is never called "no access";
+ * a partial read that names neither cause says only that it was not read.
+ */
+export function cnpgCoverageGap(cov: CNPGKindCoverage, what: string, namespace?: string, notInstalled = 'Not installed'): string {
   switch (cov.state) {
     case 'denied':
-    case 'partial':
       return `No access to ${what}`
+    case 'partial':
+      if (namespace && cov.uncachedNamespaces?.includes(namespace)) return `Radar does not cache ${what} in ${namespace}`
+      if (namespace && cov.deniedNamespaces?.includes(namespace)) return `No access to ${what}`
+      return namespace ? `${what} not read in ${namespace}` : `${what} not read`
+    case 'uncached':
+      return `Radar does not cache ${what}`
     case 'syncing':
       return 'Loading…'
     case 'error':
       return `Could not read ${what}`
     default:
-      return 'Not installed'
+      return notInstalled
   }
 }
 
@@ -484,7 +496,7 @@ function scheduleFact(
 ): CNPGProtectionFacts['schedule'] {
   const ns = cluster.metadata?.namespace
   if (!coverageReadable(cov, ns)) {
-    return { text: coverageUnavailableText(cov, 'ScheduledBackups'), tone: 'unknown', names: [] }
+    return { text: cnpgCoverageGap(cov, 'ScheduledBackups', ns), tone: 'unknown', names: [] }
   }
   const mine = schedules.filter((s) => s.metadata?.namespace === ns && specClusterName(s) === cluster.metadata?.name)
   if (mine.length === 0) return { text: 'No declarative schedule', tone: 'neutral', names: [] }
@@ -568,9 +580,9 @@ function lastBackupFact(
   if (!cfg.plugin && cfg.lastSuccessfulBackup) candidates.push({ at: cfg.lastSuccessfulBackup, source: 'Cluster status' })
   if (candidates.length === 0) {
     if (!coverageReadable(backupsCov, ns)) {
-      return { text: coverageUnavailableText(backupsCov, 'Backups'), tone: 'unknown' }
+      return { text: cnpgCoverageGap(backupsCov, 'Backups', ns), tone: 'unknown' }
     }
-    if (storesUnreadable) return { text: coverageUnavailableText(storesUnreadable, 'ObjectStores'), tone: 'unknown' }
+    if (storesUnreadable) return { text: cnpgCoverageGap(storesUnreadable, 'ObjectStores', ns), tone: 'unknown' }
     return { text: 'None observed', tone: 'unknown' }
   }
   const best = candidates.reduce((a, b) => (Date.parse(a.at) >= Date.parse(b.at) ? a : b))
@@ -736,7 +748,7 @@ function replicationFact(cluster: any, pods: CNPGInstance[], hibernated: boolean
   const desired = cluster?.spec?.instances
   if (desired === 1) return { text: 'Single instance', tone: 'neutral' }
   if (!coverageReadable(podsCov, cluster?.metadata?.namespace)) {
-    return { text: coverageUnavailableText(podsCov, 'Pods'), tone: 'unknown' }
+    return { text: cnpgCoverageGap(podsCov, 'Pods', cluster?.metadata?.namespace), tone: 'unknown' }
   }
   const replicas = pods.filter((p) => p.role === 'replica')
   const readyReplicas = replicas.filter((p) => p.ready === true).length
@@ -994,7 +1006,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
             source: `ObjectStore ${window.store} status (earliest point)`,
           }
         : storesUnreadable
-          ? { text: coverageUnavailableText(storesCov, 'ObjectStores'), tone: 'unknown' }
+          ? { text: cnpgCoverageGap(storesCov, 'ObjectStores', ns), tone: 'unknown' }
           : { text: 'Not reported', tone: 'unknown' },
       restoreValidation: restoreValidationFact(cluster, clusters, resp.objects.backups ?? [], coverageReadable(coverageOf(resp, 'backups'), ns)),
     }

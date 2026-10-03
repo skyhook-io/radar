@@ -10,7 +10,7 @@ import {
   isApiGroup,
   type CNPGObjectStoreRecoveryWindow,
 } from '../resources/resource-utils-cnpg'
-import { cnpgIssueCategory, cnpgIssueOrigin, cnpgIssueText, coverageReadable, type CNPGProblem, type CNPGWorkspaceIssue, type CNPGWorkspaceKey, type CNPGWorkspaceResponse } from './workspace'
+import { cnpgIssueCategory, cnpgIssueOrigin, cnpgIssueText, cnpgCoverageGap, coverageReadable, type CNPGProblem, type CNPGWorkspaceIssue, type CNPGWorkspaceKey, type CNPGWorkspaceResponse } from './workspace'
 import type { Fact } from '../workspace'
 
 export interface CNPGObjectRef {
@@ -70,17 +70,7 @@ export function relationUnavailable(
   if (!ws) return `${what} could not be read`
   const cov = ws.coverage?.[key] ?? { state: 'notInstalled' as const }
   if (coverageReadable(cov, namespace)) return null
-  switch (cov.state) {
-    case 'denied':
-    case 'partial':
-      return `No access to ${what}`
-    case 'syncing':
-      return 'Loading…'
-    case 'error':
-      return `Could not read ${what}`
-    default:
-      return `${what} are not installed`
-  }
+  return cnpgCoverageGap(cov, what, namespace, `${what} are not installed`)
 }
 
 export function clustersIn(ws: CNPGWorkspaceResponse | null | undefined): any[] {
