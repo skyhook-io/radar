@@ -55,6 +55,9 @@ export function SelectMenu({
     if (!normalized) return options
     return options.filter((option) => `${option.label} ${option.description ?? ''}`.toLowerCase().includes(normalized))
   }, [options, query])
+  // Options can be replaced while the menu is open, leaving the highlight past
+  // the end; without the clamp no option is tabbable and Tab skips the list.
+  const activeIndex = Math.min(highlightedIndex, filteredOptions.length - 1)
 
   const focusTabbableOption = () => {
     listRef.current?.querySelector<HTMLElement>('[role="option"][tabindex="0"]')?.focus()
@@ -217,11 +220,11 @@ export function SelectMenu({
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && filteredOptions.length > 0) {
                     event.preventDefault()
-                    selectOption(filteredOptions[Math.min(highlightedIndex, filteredOptions.length - 1)].value)
+                    selectOption(filteredOptions[activeIndex].value)
                   } else if (event.key === 'ArrowDown') {
                     event.preventDefault()
                     const optionElements = listRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]')
-                    optionElements?.[Math.min(highlightedIndex, optionElements.length - 1)]?.focus()
+                    optionElements?.[activeIndex]?.focus()
                   }
                 }}
                 aria-label={searchPlaceholder}
@@ -231,7 +234,7 @@ export function SelectMenu({
                 aria-expanded="true"
                 aria-activedescendant={
                   filteredOptions.length > 0
-                    ? `${listboxId}-option-${Math.min(highlightedIndex, filteredOptions.length - 1)}`
+                    ? `${listboxId}-option-${activeIndex}`
                     : undefined
                 }
                 placeholder={searchPlaceholder}
@@ -284,13 +287,13 @@ export function SelectMenu({
                   role="option"
                   aria-selected={active}
                   aria-disabled={option.disabled || undefined}
-                  tabIndex={index === highlightedIndex ? 0 : -1}
+                  tabIndex={index === activeIndex ? 0 : -1}
                   onClick={() => selectOption(option.value)}
                   onFocus={() => setHighlightedIndex(index)}
                   className={clsx(
                     'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-theme-text-secondary transition-colors',
                     option.disabled ? 'cursor-not-allowed opacity-60' : 'hover:bg-theme-hover hover:text-theme-text-primary',
-                    searchPlaceholder && index === highlightedIndex && 'bg-theme-hover text-theme-text-primary',
+                    searchPlaceholder && index === activeIndex && 'bg-theme-hover text-theme-text-primary',
                     !searchPlaceholder && 'whitespace-nowrap'
                   )}
                 >
