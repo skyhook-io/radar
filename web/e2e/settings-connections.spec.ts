@@ -90,7 +90,7 @@ function profile(kind: IntegrationKind): IntegrationProfile {
   }
 }
 
-const discoverySettings = { url: '', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false }
+const discoverySettings = { mode: 'auto', url: '', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false, clusterId: '' }
 
 async function fixture(page: Page) {
   const profiles: IntegrationProfiles = { metrics: profile('metrics'), argocd: profile('argocd'), cost: profile('cost') }
@@ -749,6 +749,22 @@ test('Connection preserves the removed-versus-unavailable distinction and cannot
   await expect(page.getByRole('button', { name: 'Remove saved Cost settings for staging', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Remove saved Cost settings for staging', exact: true }).click()
   await expect(page.getByText(/This entry may still exist in another kubeconfig/)).toBeVisible()
+})
+
+test('the cluster list separates auto-discovery from saved settings', async ({ page }) => {
+  const state = await fixture(page)
+  const current = { binding: 'development', context: 'development', source: '/test/kubeconfig', inFileName: 'development', availability: 'available' as const }
+  const staging = { binding: 'staging', context: 'staging', source: '/test/kubeconfig', inFileName: 'staging', availability: 'available' as const }
+  state.connections.push(
+    { ...discoverySettings, ...current, integration: 'argocd', secretSet: true, revision: 'argocd' },
+    { ...discoverySettings, ...current, integration: 'cost', revision: 'cost' },
+    { ...discoverySettings, ...current, integration: 'metrics', revision: 'metrics' },
+    { ...discoverySettings, ...staging, integration: 'cost', clusterId: 'cluster-a', revision: 'staging-cost' },
+    { ...discoverySettings, ...staging, integration: 'metrics', error: 'metrics settings use only a URL and optional headers', revision: 'staging-metrics' },
+  )
+  await openSettings(page, 'Connection')
+  await expect(page.getByText('Argo CD: saved · Cost: Automatic · Metrics: auto-discovery', { exact: true })).toBeVisible()
+  await expect(page.getByText('Cost: saved · Metrics: saved', { exact: true })).toBeVisible()
 })
 
 test('saved settings load failure offers recovery rather than an empty-state claim', async ({ page }) => {

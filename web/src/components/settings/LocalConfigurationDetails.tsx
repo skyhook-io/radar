@@ -73,6 +73,13 @@ export function PreviousIntegrationSettingsNotice({ profiles, onNavigate, onDism
 
 export const integrationSettingsByClusterId = 'integration-settings-by-cluster'
 
+// Switching to auto-discovery keeps an empty record, so a record alone doesn't
+// mean anything is saved. An invalid record disables the integration instead.
+function integrationStatus(use: StoredConnection) {
+  if (use.error || use.mode !== 'auto' || use.url || use.secretSet || use.clusterId) return 'saved'
+  return use.integration === 'cost' ? 'Automatic' : 'auto-discovery'
+}
+
 export function LocalConfigurationDetails({ onNavigate }: { onNavigate: (section: SettingsSectionId) => void }) {
   return (
     <div className="mt-5 border-t border-theme-border pt-4">
@@ -308,9 +315,8 @@ export function SavedClusterConnections({
                 {(current ||
                   entries.every((use) => use.availability === 'available')) && (
                   <p className="text-theme-text-secondary">
-                    Saved:{' '}
                     {entries
-                      .map((use) => integrationNames[use.integration])
+                      .map((use) => `${integrationNames[use.integration]}: ${integrationStatus(use)}`)
                       .join(' · ')}
                   </p>
                 )}

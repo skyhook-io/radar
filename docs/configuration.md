@@ -440,6 +440,8 @@ Tools that write a new temporary kubeconfig for each shell produce a new key
 each time; launch Radar with `--kubeconfig` pointing at the stable file instead.
 That section groups saved integrations by kubeconfig entry; removal is offered
 for entries no longer loaded, with a confirmation for the selected integration.
+Each integration reads as saved, or as auto-discovery (Cost: Automatic) when
+it was switched back and no endpoint, credential or cluster mapping is left.
 Overview's collapsed **Configuration files** section explains the three local files and
 credential storage; the info button beside the cluster name in each integration
 tab identifies its kubeconfig entry. In-cluster installations show operator

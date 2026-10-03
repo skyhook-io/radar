@@ -47,11 +47,13 @@ export interface StoredConnection {
   source: string
   inFileName: string
   availability: 'available' | 'removed' | 'unavailable'
+  mode: string
   url: string
   headerKeys: string[]
   envHeaderKeys: string[]
   secretSet: boolean
   insecureTls: boolean
+  clusterId: string
   error?: string
 }
 export interface IntegrationProfile {
