@@ -1,13 +1,14 @@
-import { useId } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Plug, X } from 'lucide-react'
 import { CNPGConnectSection, DialogPortal, Tooltip, type CNPGRef, type NavigateToResource } from '@skyhook-io/k8s-ui'
 import { refToSelectedResource } from '../../../utils/navigation'
 import { useCNPGFleet } from '../useCNPGSidebarWorkspace'
 
-// URL-backed so a link can open it (the restore "Next steps"). The value names
-// the Cluster and the surface, so a drawer showing the page's own Cluster
-// never opens a second dialog.
+// A link can ask for the dialog (the restore "Next steps") with this param;
+// the button opens it and drops the param, so closing it and following a link
+// from it never write the URL at once. The value names the Cluster and the
+// surface, so a drawer showing the page's own Cluster never opens a second one.
 export const CNPG_CONNECT_PARAM = 'connect'
 
 export function cnpgConnectParamValue(namespace: string, name: string, surface: 'page' | 'drawer'): string {
@@ -28,19 +29,21 @@ export function CNPGConnectButton({
   const titleId = useId()
   const location = useLocation()
   const [params, setParams] = useSearchParams()
-  const value = cnpgConnectParamValue(namespace, name, compact ? 'drawer' : 'page')
-  const open = params.get(CNPG_CONNECT_PARAM) === value
-  // Keeps the page's return label, which lives in the history state.
-  const setOpen = (next: boolean) =>
+  const [open, setOpen] = useState(false)
+  const requested = params.get(CNPG_CONNECT_PARAM) === cnpgConnectParamValue(namespace, name, compact ? 'drawer' : 'page')
+  useEffect(() => {
+    if (!requested) return
+    setOpen(true)
+    // Keeps the page's return label, which lives in the history state.
     setParams(
       (prev) => {
         const p = new URLSearchParams(prev)
-        if (next) p.set(CNPG_CONNECT_PARAM, value)
-        else p.delete(CNPG_CONNECT_PARAM)
+        p.delete(CNPG_CONNECT_PARAM)
         return p
       },
       { replace: true, state: location.state },
     )
+  }, [requested, setParams, location.state])
   const { fleet } = useCNPGFleet([namespace], open)
   const row = fleet?.rows.find((r) => r.namespace === namespace && r.name === name)
   const go = onNavigate
@@ -63,7 +66,7 @@ export function CNPGConnectButton({
           {!compact && 'Connect'}
         </button>
       </Tooltip>
-      <DialogPortal open={open} onClose={() => setOpen(false)} className="w-full max-w-2xl" ariaLabelledBy={titleId}>
+      <DialogPortal open={open} onClose={() => setOpen(false)} className="w-full max-w-3xl" ariaLabelledBy={titleId}>
         <div className="flex items-start gap-3 border-b border-theme-border p-4">
           <div className="min-w-0 flex-1">
             <h3 id={titleId} className="text-lg font-semibold text-theme-text-primary">
