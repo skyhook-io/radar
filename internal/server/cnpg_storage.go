@@ -60,9 +60,7 @@ var (
 // CNPGStorageCoverage states whether one source could be read and, when not,
 // the grant that would allow it.
 type CNPGStorageCoverage struct {
-	State  string `json:"state"`
-	Grant  *Grant `json:"grant,omitempty"`
-	Reason string `json:"reason,omitempty"`
+	ReadSource
 	// Isolation, on usage read from Prometheus: how the series were tied to this cluster.
 	Isolation *prometheuspkg.SeriesIsolation `json:"isolation,omitempty"`
 }
@@ -228,7 +226,7 @@ func (s *Server) handleCNPGClusterStorage(w http.ResponseWriter, r *http.Request
 	classes := s.cnpgStorageClasses(r, cache, claims)
 	states := cnpgClusterPVCStates(cluster)
 
-	usage := CNPGStorageCoverage{State: cnpgUsageStateNotRead, Reason: "no volumes to measure"}
+	usage := CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgUsageStateNotRead, Reason: "no volumes to measure"}}
 	var batch prometheuspkg.PVCUsageBatch
 	if len(claims) > 0 {
 		usage, batch = s.cnpgClaimUsage(r, namespace, claimNames(claims), cnpgHistoryAnchors(cache, cluster))
@@ -281,14 +279,14 @@ func (s *Server) cnpgClusterClaims(r *http.Request, cache *k8s.ResourceCache, cl
 	namespace := cluster.GetNamespace()
 	grant := cnpgGrantListPVCs.In(namespace).Ref()
 	if !s.canRead(r, "", "persistentvolumeclaims", namespace, "list") {
-		return nil, nil, CNPGStorageCoverage{State: cnpgStorageStateDenied, Grant: grant}
+		return nil, nil, CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateDenied, Grant: grant}}
 	}
 	candidates, reason := cnpgCachedClaims(cache, namespace, labels.SelectorFromSet(labels.Set{cnpgClusterLabel: cluster.GetName()}))
 	if reason != "" {
-		return nil, nil, CNPGStorageCoverage{State: cnpgStorageStateUnavailable, Grant: grant, Reason: reason}
+		return nil, nil, CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateUnavailable, Grant: grant, Reason: reason}}
 	}
 	owned, excluded := cnpgOwnedClaims(candidates, cluster)
-	return owned, excluded, CNPGStorageCoverage{State: cnpgStorageStateOK, Grant: grant}
+	return owned, excluded, CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateOK, Grant: grant}}
 }
 
 // cnpgCachedClaims reads claims from Radar's informer. What the informer does
@@ -498,29 +496,29 @@ func cnpgStorageVolumeOf(pvc *corev1.PersistentVolumeClaim, classes map[string]C
 func (s *Server) cnpgClaimUsage(r *http.Request, namespace string, claims []string, anchors []prom.WorkloadPodIdentity) (CNPGStorageCoverage, prometheuspkg.PVCUsageBatch) {
 	grant := cnpgGrantGetPVCs.In(namespace).Ref()
 	if !s.prometheusAuthGate(r, "", "persistentvolumeclaims", namespace, "get") {
-		return CNPGStorageCoverage{State: cnpgUsageStateDenied, Grant: grant}, prometheuspkg.PVCUsageBatch{}
+		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgUsageStateDenied, Grant: grant}}, prometheuspkg.PVCUsageBatch{}
 	}
 	batch := prometheuspkg.QueryPVCUsage(r.Context(), namespace, claims, anchors)
 	switch batch.Status {
 	case prometheuspkg.PVCUsageNoPrometheus:
-		return CNPGStorageCoverage{State: cnpgUsageStateNoPrometheus, Reason: cnpgNoPrometheusReason(batch.Error)}, batch
+		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgUsageStateNoPrometheus, Reason: cnpgNoPrometheusReason(batch.Error)}}, batch
 	case prometheuspkg.PVCUsageQueryFailed:
-		return CNPGStorageCoverage{State: cnpgUsageStateError, Reason: "Prometheus query failed: " + truncateCNPGRuntimeError(batch.Error)}, batch
+		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgUsageStateError, Reason: "Prometheus query failed: " + truncateCNPGRuntimeError(batch.Error)}}, batch
 	case prometheuspkg.PVCUsageAmbiguous:
 		_, reason := cnpgUsageScopeFailure(prometheuspkg.ErrScopeAmbiguous)
-		return CNPGStorageCoverage{State: cnpgHistoryStateAmbiguous, Reason: reason}, batch
+		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgHistoryStateAmbiguous, Reason: reason}}, batch
 	case prometheuspkg.PVCUsageScopeMismatch:
 		_, reason := cnpgUsageScopeFailure(prometheuspkg.ErrScopeMismatch)
-		return CNPGStorageCoverage{State: cnpgHistoryStateScopeMismatch, Reason: reason}, batch
+		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgHistoryStateScopeMismatch, Reason: reason}}, batch
 	}
 	iso := &batch.Isolation
 	switch n := len(batch.Usage); {
 	case n == 0:
-		return CNPGStorageCoverage{State: cnpgUsageStateNoSeries, Reason: "Prometheus has no kubelet volume stats for these claims"}, batch
+		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgUsageStateNoSeries, Reason: "Prometheus has no kubelet volume stats for these claims"}}, batch
 	case n < len(claims):
-		return CNPGStorageCoverage{State: cnpgStorageStatePartial, Reason: fmt.Sprintf("%d of %d claims have kubelet volume stats", n, len(claims)), Isolation: iso}, batch
+		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStatePartial, Reason: fmt.Sprintf("%d of %d claims have kubelet volume stats", n, len(claims))}, Isolation: iso}, batch
 	}
-	return CNPGStorageCoverage{State: cnpgUsageStateOK, Isolation: iso}, batch
+	return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgUsageStateOK}, Isolation: iso}, batch
 }
 
 // cnpgUnverifiedCaveat qualifies a measurement stated as this cluster's when
@@ -620,19 +618,19 @@ func cnpgStorageTargetOf(obj map[string]any, role, tablespace, base string, path
 func (s *Server) cnpgStorageWAL(w http.ResponseWriter, r *http.Request, cache *k8s.ResourceCache, cluster *unstructured.Unstructured, byInstance map[string]*CNPGStorageInstance) CNPGStorageCoverage {
 	namespace := cluster.GetNamespace()
 	if !s.canRead(r, "", "pods", namespace, "list") {
-		return CNPGStorageCoverage{State: cnpgStorageStateDenied, Grant: cnpgGrantListPods.In(namespace).Ref()}
+		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateDenied, Grant: cnpgGrantListPods.In(namespace).Ref()}}
 	}
 	grant := cnpgGrantGetPodsProxy.In(namespace).Ref()
 	if s.grantPermission(r, cnpgGrantGetPodsProxy.In(namespace)) == permissionDenied {
-		return CNPGStorageCoverage{State: cnpgStorageStateDenied, Grant: grant}
+		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateDenied, Grant: grant}}
 	}
 	pods, err := cnpgClusterInstancePods(cache, cluster)
 	if err != nil {
 		log.Printf("[cnpg] Failed to list instance Pods for %s/%s: %v", namespace, cluster.GetName(), err)
-		return CNPGStorageCoverage{State: cnpgStorageStateUnavailable, Grant: grant, Reason: "instance Pods unavailable"}
+		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateUnavailable, Grant: grant, Reason: "instance Pods unavailable"}}
 	}
 	if len(pods) == 0 {
-		return CNPGStorageCoverage{State: cnpgStorageStateUnavailable, Grant: grant, Reason: "no instance Pods"}
+		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateUnavailable, Grant: grant, Reason: "no instance Pods"}}
 	}
 	client := cnpgRuntimeClient(r)
 	if client == nil {
@@ -688,7 +686,7 @@ func (s *Server) cnpgStorageWAL(w http.ResponseWriter, r *http.Request, cache *k
 	}
 	run.wait()
 
-	cov := CNPGStorageCoverage{State: cnpgStorageStateOK, Grant: grant}
+	cov := CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateOK, Grant: grant}}
 	failed, partial := 0, 0
 	for i, p := range pods {
 		wal := results[i]

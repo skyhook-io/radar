@@ -73,7 +73,7 @@ type CNPGReportItem struct {
 	Item  string `json:"item"`
 	File  string `json:"file,omitempty"`
 	Count *int   `json:"count,omitempty"`
-	CNPGReadCoverage
+	ReadSource
 	Note string `json:"note,omitempty"`
 }
 
@@ -222,7 +222,7 @@ func (b *cnpgReportBuilder) record(item CNPGReportItem) {
 func (b *cnpgReportBuilder) write(item CNPGReportItem, file string, v any, count int) {
 	data, err := yaml.Marshal(v)
 	if err != nil {
-		item.CNPGReadCoverage = CNPGReadCoverage{State: cnpgReadError, Reason: err.Error()}
+		item.ReadSource = ReadSource{State: cnpgReadError, Reason: err.Error()}
 		b.record(item)
 		return
 	}
@@ -232,7 +232,7 @@ func (b *cnpgReportBuilder) write(item CNPGReportItem, file string, v any, count
 func (b *cnpgReportBuilder) writeBytes(item CNPGReportItem, file string, data []byte, count *int) {
 	if err := b.z.add(file, data); err != nil {
 		b.index.Truncated = b.index.Truncated || errors.Is(err, errCNPGReportFull)
-		item.CNPGReadCoverage = CNPGReadCoverage{State: cnpgReadSkipped, Reason: err.Error()}
+		item.ReadSource = ReadSource{State: cnpgReadSkipped, Reason: err.Error()}
 		b.record(item)
 		return
 	}
@@ -321,12 +321,12 @@ func (b *cnpgReportBuilder) build(opts cnpgReportOptions) {
 		}
 		b.write(item, "manifests/cluster-pods.yaml", corev1.PodList{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "PodList"}, Items: keptPods}, len(keptPods))
 	} else {
-		b.record(CNPGReportItem{Item: "Pods", CNPGReadCoverage: podCov})
+		b.record(CNPGReportItem{Item: "Pods", ReadSource: podCov})
 	}
 	if jobCov.State == cnpgReadOK {
 		b.write(CNPGReportItem{Item: "Jobs"}, "manifests/cluster-jobs.yaml", batchv1.JobList{TypeMeta: metav1.TypeMeta{APIVersion: "batch/v1", Kind: "JobList"}, Items: keptJobs}, len(keptJobs))
 	} else {
-		b.record(CNPGReportItem{Item: "Jobs", CNPGReadCoverage: jobCov})
+		b.record(CNPGReportItem{Item: "Jobs", ReadSource: jobCov})
 	}
 
 	var pvcs []corev1.PersistentVolumeClaim
@@ -347,7 +347,7 @@ func (b *cnpgReportBuilder) build(opts cnpgReportOptions) {
 		}
 		b.write(CNPGReportItem{Item: "PersistentVolumeClaims"}, "manifests/cluster-pvcs.yaml", corev1.PersistentVolumeClaimList{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaimList"}, Items: kept}, len(kept))
 	} else {
-		b.record(CNPGReportItem{Item: "PersistentVolumeClaims", CNPGReadCoverage: pvcCov})
+		b.record(CNPGReportItem{Item: "PersistentVolumeClaims", ReadSource: pvcCov})
 	}
 
 	subjects := map[string]bool{"Cluster/" + name: true}
@@ -379,7 +379,7 @@ func (b *cnpgReportBuilder) build(opts cnpgReportOptions) {
 			return err
 		})
 		if cov.State != cnpgReadOK {
-			b.record(CNPGReportItem{Item: child.item, CNPGReadCoverage: cov})
+			b.record(CNPGReportItem{Item: child.item, ReadSource: cov})
 			continue
 		}
 		var kept []any
@@ -416,7 +416,7 @@ func (b *cnpgReportBuilder) build(opts cnpgReportOptions) {
 		sort.SliceStable(kept, func(i, j int) bool { return cnpgEventTime(&kept[i]).Before(cnpgEventTime(&kept[j])) })
 		b.write(CNPGReportItem{Item: "Events", Note: "Events about the Cluster and the objects in this report"}, "manifests/events.yaml", corev1.EventList{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "EventList"}, Items: kept}, len(kept))
 	} else {
-		b.record(CNPGReportItem{Item: "Events", CNPGReadCoverage: evCov})
+		b.record(CNPGReportItem{Item: "Events", ReadSource: evCov})
 	}
 
 	b.captured("Operator and plugins", "operator/operator.json", b.s.handleCNPGOperator, cnpgReportStripOperatorConfig)
@@ -426,7 +426,7 @@ func (b *cnpgReportBuilder) build(opts cnpgReportOptions) {
 	if opts.Logs {
 		b.logs(keptPods, opts)
 	} else {
-		b.record(CNPGReportItem{Item: "Logs", CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadSkipped, Reason: "not requested"}})
+		b.record(CNPGReportItem{Item: "Logs", ReadSource: ReadSource{State: cnpgReadSkipped, Reason: "not requested"}})
 	}
 }
 
@@ -448,7 +448,7 @@ func (b *cnpgReportBuilder) objectStores() {
 	}
 	namespace := b.cluster.GetNamespace()
 	var kept []any
-	cov := CNPGReadCoverage{State: cnpgReadOK}
+	cov := ReadSource{State: cnpgReadOK}
 	for _, name := range cnpgSortedKeys(stores) {
 		var obj *unstructured.Unstructured
 		c := b.s.cnpgGatedRead(b.r, cnpgGrantGetObjectStores, namespace, func() error {
@@ -466,7 +466,7 @@ func (b *cnpgReportBuilder) objectStores() {
 	}
 	item := CNPGReportItem{Item: "ObjectStores"}
 	if cov.State != cnpgReadOK {
-		item.CNPGReadCoverage = cov
+		item.ReadSource = cov
 		if len(kept) == 0 {
 			b.record(item)
 			return
@@ -508,7 +508,7 @@ func (b *cnpgReportBuilder) captured(item, file string, handler http.HandlerFunc
 		case http.StatusNotFound:
 			state = cnpgReadNotFound
 		}
-		b.record(CNPGReportItem{Item: item, CNPGReadCoverage: CNPGReadCoverage{State: state, Reason: strings.TrimSpace(fmt.Sprintf("HTTP %d %s", rec.status, e.Error))}})
+		b.record(CNPGReportItem{Item: item, ReadSource: ReadSource{State: state, Reason: strings.TrimSpace(fmt.Sprintf("HTTP %d %s", rec.status, e.Error))}})
 		return
 	}
 	if transform != nil {
@@ -563,7 +563,7 @@ func cnpgReportStripOperatorConfig(body []byte) []byte {
 func (b *cnpgReportBuilder) logs(pods []corev1.Pod, opts cnpgReportOptions) {
 	namespace := b.cluster.GetNamespace()
 	if b.s.grantPermission(b.r, cnpgGrantGetPodLogs.In(namespace)) == permissionDenied {
-		b.record(CNPGReportItem{Item: "Logs", CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadDenied, Grant: cnpgGrantGetPodLogs.In(namespace).Ref()}})
+		b.record(CNPGReportItem{Item: "Logs", ReadSource: ReadSource{State: cnpgReadDenied, Grant: cnpgGrantGetPodLogs.In(namespace).Ref()}})
 		return
 	}
 	note := "query text inside PostgreSQL log records is omitted"
@@ -593,7 +593,7 @@ func (b *cnpgReportBuilder) containerLog(p corev1.Pod, container string, previou
 	item := CNPGReportItem{Item: fmt.Sprintf("Logs %s/%s%s", p.Name, container, suffix), Note: note}
 	if b.z.used >= b.z.limit {
 		b.index.Truncated = true
-		item.CNPGReadCoverage = CNPGReadCoverage{State: cnpgReadSkipped, Reason: errCNPGReportFull.Error()}
+		item.ReadSource = ReadSource{State: cnpgReadSkipped, Reason: errCNPGReportFull.Error()}
 		b.record(item)
 		return
 	}
@@ -603,7 +603,7 @@ func (b *cnpgReportBuilder) containerLog(p corev1.Pod, container string, previou
 		Container: container, Previous: previous, Timestamps: true, TailLines: &tail, LimitBytes: &limit,
 	}).Stream(b.ctx)
 	if err != nil {
-		item.CNPGReadCoverage = cnpgReadOutcome(err, cnpgGrantGetPodLogs, p.Namespace)
+		item.ReadSource = cnpgReadOutcome(err, cnpgGrantGetPodLogs, p.Namespace)
 		b.record(item)
 		return
 	}

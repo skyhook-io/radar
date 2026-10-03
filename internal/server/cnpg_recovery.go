@@ -51,34 +51,26 @@ var (
 	cnpgGrantGetCluster = Grant{Verb: "get", Group: cnpgGroup, Resource: "clusters"}
 )
 
-// CNPGReadCoverage is one read's outcome. Grant names what a denied read
-// needs; Reason carries the error for anything else.
-type CNPGReadCoverage struct {
-	State  string `json:"state"`
-	Grant  *Grant `json:"grant,omitempty"`
-	Reason string `json:"reason,omitempty"`
-}
-
 // cnpgGatedRead runs read when the caller holds g in namespace. The SAR comes
 // first so a denial names the grant; the read itself is made with the caller's
 // client, so the apiserver has the final say either way.
-func (s *Server) cnpgGatedRead(r *http.Request, g Grant, namespace string, read func() error) CNPGReadCoverage {
+func (s *Server) cnpgGatedRead(r *http.Request, g Grant, namespace string, read func() error) ReadSource {
 	if s.grantPermission(r, g.In(namespace)) == permissionDenied {
-		return CNPGReadCoverage{State: cnpgReadDenied, Grant: g.In(namespace).Ref()}
+		return ReadSource{State: cnpgReadDenied, Grant: g.In(namespace).Ref()}
 	}
 	return cnpgReadOutcome(read(), g, namespace)
 }
 
-func cnpgReadOutcome(err error, g Grant, namespace string) CNPGReadCoverage {
+func cnpgReadOutcome(err error, g Grant, namespace string) ReadSource {
 	switch {
 	case err == nil:
-		return CNPGReadCoverage{State: cnpgReadOK}
+		return ReadSource{State: cnpgReadOK}
 	case apierrors.IsForbidden(err):
-		return CNPGReadCoverage{State: cnpgReadDenied, Grant: g.In(namespace).Ref()}
+		return ReadSource{State: cnpgReadDenied, Grant: g.In(namespace).Ref()}
 	case apierrors.IsNotFound(err):
-		return CNPGReadCoverage{State: cnpgReadNotFound, Reason: err.Error()}
+		return ReadSource{State: cnpgReadNotFound, Reason: err.Error()}
 	default:
-		return CNPGReadCoverage{State: cnpgReadError, Reason: cnpgPlainReadError(err.Error())}
+		return ReadSource{State: cnpgReadError, Reason: cnpgPlainReadError(err.Error())}
 	}
 }
 
@@ -193,15 +185,15 @@ type CNPGRestoreValidationRef struct {
 
 // CNPGRecoveryResponse is GET /api/cnpg/clusters/{ns}/{name}/recovery.
 type CNPGRecoveryResponse struct {
-	Cluster         CNPGRecoveryCluster         `json:"cluster"`
-	Recovery        *CNPGRecoverySpec           `json:"recovery"`
-	Pods            []CNPGRecoveryPod           `json:"pods"`
-	Jobs            []CNPGRecoveryJob           `json:"jobs"`
-	Events          []CNPGRecoveryEvent         `json:"events"`
-	Coverage        map[string]CNPGReadCoverage `json:"coverage"`
-	Validation      *CNPGRestoreValidation      `json:"validation,omitempty"`
-	ValidationError string                      `json:"validationError,omitempty"`
-	CapturedAt      string                      `json:"capturedAt"`
+	Cluster         CNPGRecoveryCluster    `json:"cluster"`
+	Recovery        *CNPGRecoverySpec      `json:"recovery"`
+	Pods            []CNPGRecoveryPod      `json:"pods"`
+	Jobs            []CNPGRecoveryJob      `json:"jobs"`
+	Events          []CNPGRecoveryEvent    `json:"events"`
+	Coverage        map[string]ReadSource  `json:"coverage"`
+	Validation      *CNPGRestoreValidation `json:"validation,omitempty"`
+	ValidationError string                 `json:"validationError,omitempty"`
+	CapturedAt      string                 `json:"capturedAt"`
 }
 
 func (s *Server) handleCNPGClusterRecovery(w http.ResponseWriter, r *http.Request) {
@@ -245,7 +237,7 @@ func (s *Server) cnpgRecoverySnapshot(r *http.Request, typed kubernetes.Interfac
 		Pods:       []CNPGRecoveryPod{},
 		Jobs:       []CNPGRecoveryJob{},
 		Events:     []CNPGRecoveryEvent{},
-		Coverage:   map[string]CNPGReadCoverage{},
+		Coverage:   map[string]ReadSource{},
 		CapturedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	resp.Validation, resp.ValidationError = parseCNPGRestoreValidation(cluster.GetAnnotations()[cnpgRestoreValidationAnno])

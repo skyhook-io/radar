@@ -60,7 +60,7 @@ type CNPGOperatorPod struct {
 // denied | error. Stale means the holder has not renewed within the lease
 // duration, so no operator instance is leading.
 type CNPGOperatorLeader struct {
-	CNPGReadCoverage
+	ReadSource
 	Lease                string `json:"lease,omitempty"`
 	Holder               string `json:"holder,omitempty"`
 	HolderPod            string `json:"holderPod,omitempty"`
@@ -93,7 +93,7 @@ type CNPGOperatorWebhook struct {
 type CNPGOperatorWebhookConfig struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
-	CNPGReadCoverage
+	ReadSource
 	Webhooks []CNPGOperatorWebhook `json:"webhooks"`
 }
 
@@ -102,7 +102,7 @@ type CNPGOperatorWebhookConfig struct {
 type CNPGOperatorWebhookService struct {
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
-	CNPGReadCoverage
+	ReadSource
 	ReadyEndpoints    *int `json:"readyEndpoints"`
 	NotReadyEndpoints *int `json:"notReadyEndpoints"`
 }
@@ -125,7 +125,7 @@ type CNPGOperatorReconcilePod struct {
 }
 
 type CNPGOperatorEvents struct {
-	CNPGReadCoverage
+	ReadSource
 	Items []CNPGRecoveryEvent `json:"items"`
 }
 
@@ -133,7 +133,7 @@ type CNPGOperatorDiagnosis struct {
 	Namespace   string                       `json:"namespace"`
 	Deployment  string                       `json:"deployment"`
 	Pods        []CNPGOperatorPod            `json:"pods"`
-	PodCoverage CNPGReadCoverage             `json:"podCoverage"`
+	PodCoverage ReadSource                   `json:"podCoverage"`
 	Leader      CNPGOperatorLeader           `json:"leader"`
 	Watch       CNPGOperatorWatch            `json:"watch"`
 	Webhooks    []CNPGOperatorWebhookConfig  `json:"webhooks"`
@@ -180,12 +180,12 @@ func cnpgOperatorLeadingPod(l CNPGOperatorLeader) string {
 func (s *Server) cnpgOperatorPods(r *http.Request, typed kubernetes.Interface, d *appsv1.Deployment, diag *CNPGOperatorDiagnosis) []corev1.Pod {
 	var pods []corev1.Pod
 	if d.Spec.Selector == nil {
-		diag.PodCoverage = CNPGReadCoverage{State: cnpgReadError, Reason: "the Deployment has no selector"}
+		diag.PodCoverage = ReadSource{State: cnpgReadError, Reason: "the Deployment has no selector"}
 		return nil
 	}
 	selector, err := metav1.LabelSelectorAsSelector(d.Spec.Selector)
 	if err != nil {
-		diag.PodCoverage = CNPGReadCoverage{State: cnpgReadError, Reason: err.Error()}
+		diag.PodCoverage = ReadSource{State: cnpgReadError, Reason: err.Error()}
 		return nil
 	}
 	diag.PodCoverage = s.cnpgGatedRead(r, cnpgGrantListPods, d.Namespace, func() error {
@@ -295,7 +295,7 @@ func (s *Server) cnpgOperatorLeader(r *http.Request, typed kubernetes.Interface,
 		return out
 	}
 	var lease *coordinationv1.Lease
-	out.CNPGReadCoverage = s.cnpgGatedRead(r, cnpgGrantGetLeases, d.Namespace, func() error {
+	out.ReadSource = s.cnpgGatedRead(r, cnpgGrantGetLeases, d.Namespace, func() error {
 		l, err := typed.CoordinationV1().Leases(d.Namespace).Get(r.Context(), cnpgOperatorLeaseName, metav1.GetOptions{})
 		lease = l
 		return err
@@ -342,12 +342,12 @@ func (s *Server) cnpgOperatorWebhooks(r *http.Request, typed kubernetes.Interfac
 	add := func(kind, name string, g Grant, read func() ([]admissionv1.WebhookClientConfig, []string, []string, error)) {
 		cfg := CNPGOperatorWebhookConfig{Kind: kind, Name: name, Webhooks: []CNPGOperatorWebhook{}}
 		if s.grantPermission(r, g) == permissionDenied {
-			cfg.CNPGReadCoverage = CNPGReadCoverage{State: cnpgReadDenied, Grant: g.Ref()}
+			cfg.ReadSource = ReadSource{State: cnpgReadDenied, Grant: g.Ref()}
 			configs = append(configs, cfg)
 			return
 		}
 		clients, names, policies, err := read()
-		cfg.CNPGReadCoverage = cnpgReadOutcome(err, g, "")
+		cfg.ReadSource = cnpgReadOutcome(err, g, "")
 		for i, cc := range clients {
 			wh := CNPGOperatorWebhook{Name: names[i], FailurePolicy: policies[i], CABundleSet: len(cc.CABundle) > 0, URL: cc.URL != nil}
 			if cc.Service != nil {
@@ -398,7 +398,7 @@ func (s *Server) cnpgOperatorWebhooks(r *http.Request, typed kubernetes.Interfac
 	for _, k := range keys {
 		svc := CNPGOperatorWebhookService{Namespace: k.ns, Name: k.name}
 		var slices []discoveryv1.EndpointSlice
-		svc.CNPGReadCoverage = s.cnpgGatedRead(r, cnpgGrantListEndpointSlcs, k.ns, func() error {
+		svc.ReadSource = s.cnpgGatedRead(r, cnpgGrantListEndpointSlcs, k.ns, func() error {
 			list, err := typed.DiscoveryV1().EndpointSlices(k.ns).List(r.Context(), metav1.ListOptions{LabelSelector: cnpgEndpointSliceServiceLabel + "=" + k.name})
 			if err == nil {
 				slices = list.Items
@@ -535,7 +535,7 @@ func cnpgReconcileStats(samples map[string][]cnpgSample) []CNPGOperatorControlle
 func (s *Server) cnpgOperatorEvents(r *http.Request, typed kubernetes.Interface, d *appsv1.Deployment, pods []corev1.Pod) CNPGOperatorEvents {
 	out := CNPGOperatorEvents{Items: []CNPGRecoveryEvent{}}
 	var events []corev1.Event
-	out.CNPGReadCoverage = s.cnpgGatedRead(r, cnpgGrantListEvents, d.Namespace, func() error {
+	out.ReadSource = s.cnpgGatedRead(r, cnpgGrantListEvents, d.Namespace, func() error {
 		list, err := typed.CoreV1().Events(d.Namespace).List(r.Context(), metav1.ListOptions{})
 		if err == nil {
 			events = list.Items
