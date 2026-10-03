@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 func cnpgTestResource(group, kind, resource string, namespaced bool) k8s.APIResource {
@@ -190,6 +192,32 @@ func cnpgPod(ns, name, clusterLabel string, owners ...metav1.OwnerReference) *co
 				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
 			}},
 		},
+	}
+}
+
+// Each returned object's GitOps or Helm manager comes from the server's one
+// metadata-only detection: an Argo CD tracking ID in the apps-in-any-namespace
+// form names the Application's namespace, the default form names none (and
+// none is invented), Flux needs both kustomization labels.
+func TestCNPGWorkspace_ManagedByFromObjectMetadata(t *testing.T) {
+	cluster := cnpgObj("postgresql.cnpg.io/v1", "Cluster", "db", "pg", nil, nil)
+	cluster.SetAnnotations(map[string]string{"argocd.argoproj.io/tracking-id": "team-a_orders:postgresql.cnpg.io/Cluster:db/pg"})
+	database := cnpgObj("postgresql.cnpg.io/v1", "Database", "db", "app", map[string]any{"cluster": map[string]any{"name": "pg"}}, nil)
+	database.SetAnnotations(map[string]string{"argocd.argoproj.io/tracking-id": "orders:postgresql.cnpg.io/Database:db/app"})
+	pooler := cnpgObj("postgresql.cnpg.io/v1", "Pooler", "db", "pg-rw", map[string]any{"cluster": map[string]any{"name": "pg"}}, nil)
+	pooler.SetLabels(map[string]string{"kustomize.toolkit.fluxcd.io/name": "databases", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"})
+	sched := cnpgObj("postgresql.cnpg.io/v1", "ScheduledBackup", "db", "nightly", map[string]any{"cluster": map[string]any{"name": "pg"}, "schedule": "0 0 2 * * *"}, nil)
+	sched.SetLabels(map[string]string{"app.kubernetes.io/name": "pg"})
+	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds, cluster, database, pooler, sched)
+
+	got := getWorkspaceNoAuth(t, "")
+	want := map[string]topology.ResourceRef{
+		"Cluster/db/pg":   {Kind: "Application", Group: "argoproj.io", Namespace: "team-a", Name: "orders"},
+		"Database/db/app": {Kind: "Application", Group: "argoproj.io", Name: "orders"},
+		"Pooler/db/pg-rw": {Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Namespace: "flux-system", Name: "databases"},
+	}
+	if !reflect.DeepEqual(got.ManagedBy, want) {
+		t.Errorf("managedBy = %+v, want %+v", got.ManagedBy, want)
 	}
 }
 

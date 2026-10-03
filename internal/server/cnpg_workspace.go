@@ -17,6 +17,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	bp "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 const cnpgBarmanGroup = "barmancloud.cnpg.io"
@@ -94,6 +95,10 @@ type CNPGWorkspaceResponse struct {
 	// operator reads it, keyed "namespace/name"; a schedule the operator
 	// cannot parse has no entry.
 	ScheduleReadings map[string]string `json:"scheduleReadings,omitempty"`
+	// ManagedBy is the GitOps or Helm manager each returned CNPG object's
+	// labels and annotations name, keyed "Kind/namespace/name"; objects with
+	// no such signal have no entry. Instance Pods are not included.
+	ManagedBy map[string]topology.ResourceRef `json:"managedBy,omitempty"`
 }
 
 func newCNPGWorkspaceResponse(namespaces []string) CNPGWorkspaceResponse {
@@ -179,6 +184,12 @@ func (s *Server) handleCNPGWorkspace(w http.ResponseWriter, r *http.Request) {
 		out := make([]any, 0, len(list))
 		for _, u := range list {
 			out = append(out, u.Object)
+			if ref := topology.ManagedByFromMeta(u); ref != nil {
+				if resp.ManagedBy == nil {
+					resp.ManagedBy = map[string]topology.ResourceRef{}
+				}
+				resp.ManagedBy[k.kind+"/"+u.GetNamespace()+"/"+u.GetName()] = *ref
+			}
 		}
 		resp.Objects[k.key] = out
 	}
