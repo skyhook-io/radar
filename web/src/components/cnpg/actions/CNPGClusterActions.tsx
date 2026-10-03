@@ -1,18 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, DatabaseBackup, MoreHorizontal, Repeat } from 'lucide-react'
 import { clsx } from 'clsx'
-import { ActionConfirmDialog, Tooltip, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA, formatGrant } from '@skyhook-io/k8s-ui'
-import {
-  cnpgActionOutcomeLocked,
-  useCNPGAction,
-  useCNPGClusterCapabilities,
-  useCNPGRuntime,
-  type CNPGActionCapability,
-  type CNPGActionResult,
-  type CNPGBackupMethod,
-  type CNPGClusterActionName,
-  type CNPGClusterCapabilities,
-} from '../../../api/cnpg'
+import { ActionConfirmDialog, Tooltip, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA } from '@skyhook-io/k8s-ui'
+import { useCNPGAction, useCNPGClusterCapabilities, useCNPGRuntime, type CNPGActionResult, type CNPGBackupMethod, type CNPGClusterActionName, type CNPGClusterCapabilities } from '../../../api/cnpg'
+import { actionOutcomeLocked, type ActionCapability, capabilityReason } from '../../../api/actions'
 import { useToast } from '../../ui/Toast'
 import { useAnimatedUnmount } from '../../../hooks/useAnimatedUnmount'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../../utils/animation'
@@ -45,10 +36,8 @@ function EffectItem({ list, label }: { list: { available: boolean; reason?: stri
   return <li>{label}: {list.names.join(', ')}</li>
 }
 
-function capabilityTitle(cap: CNPGActionCapability | undefined): string | undefined {
-  if (!cap) return 'Checking permissions…'
-  if (cap.allowed) return undefined
-  return cap.reason ?? (cap.permission === 'denied' ? `Your account may not do this (${formatGrant(cap.grant) ?? 'permission denied'})` : 'Not available')
+function capabilityTitle(cap: ActionCapability | undefined): string | undefined {
+  return cap ? capabilityReason(cap) : 'Checking permissions…'
 }
 
 /**
@@ -754,7 +743,7 @@ export function ClusterActionDialog({
       incompleteReason={spec.incomplete}
       isLoading={mutation.isPending}
       error={mutation.error?.message}
-      outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}
+      outcomeUnknown={actionOutcomeLocked(mutation.error)}
     >
       {spec.body}
     </ActionConfirmDialog>

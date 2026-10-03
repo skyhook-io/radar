@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Pause, Play } from 'lucide-react'
 import { ActionConfirmDialog, Tooltip } from '@skyhook-io/k8s-ui'
-import { cnpgActionOutcomeLocked, useCNPGAction } from '../../../api/cnpg'
+import { useCNPGAction } from '../../../api/cnpg'
+import { actionOutcomeLocked, capabilityReason } from '../../../api/actions'
 import { useCNPGPoolerCapabilities, type CNPGPoolerCapabilities } from '../../../api/cnpg-sessions'
 import { useToast } from '../../ui/Toast'
 import { useCNPGWriteGuard } from './useCNPGWriteGuard'
@@ -19,7 +20,7 @@ export function CNPGPoolerActions({ namespace, name }: { namespace: string; name
   const cap = data.actions[kind]
   return (
     <>
-      <Tooltip content={cap.allowed ? undefined : cap.reason ?? 'Not allowed'} position="bottom">
+      <Tooltip content={capabilityReason(cap)} position="bottom">
         <button type="button" className={BUTTON} disabled={!cap.allowed} onClick={() => setOpen(kind)}>
           {kind === 'pause' ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
           {kind === 'pause' ? 'Pause' : 'Resume'}
@@ -70,10 +71,10 @@ function PoolerDialog({ kind, caps, namespace, name, onClose }: { kind: 'pause' 
       typedConfirmation={pause ? name : undefined}
       confirmLabel={pause ? 'Pause' : 'Resume'}
       disruptive={pause}
-      disabledReason={cap.allowed ? undefined : cap.reason}
+      disabledReason={capabilityReason(cap)}
       isLoading={mutation.isPending}
       error={mutation.error?.message}
-      outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}
+      outcomeUnknown={actionOutcomeLocked(mutation.error)}
     />
   )
 }

@@ -5,7 +5,8 @@ import { Lock } from 'lucide-react'
 import { ActionConfirmDialog, PaneLoader, Tooltip, formatAge, toneFillClass, toneTextClass, formatGrant } from '@skyhook-io/k8s-ui'
 import { formatCPUString, formatMemoryString, parseCPUToNanocores, parseMemoryToBytes } from '@skyhook-io/k8s-ui/utils/format'
 import { podMetricsQuery, usePodMetrics } from '../../api/client'
-import { cnpgActionOutcomeLocked, useCNPGAction, useCNPGClusterCapabilities } from '../../api/cnpg'
+import { useCNPGAction, useCNPGClusterCapabilities } from '../../api/cnpg'
+import { actionOutcomeLocked } from '../../api/actions'
 import { useCNPGSessions, type CNPGBackend, type CNPGSessionInstance, type CNPGSessionsResponse } from '../../api/cnpg-sessions'
 import { useToast } from '../ui/Toast'
 import { buildBlockingTree, cnpgConnectionFigure, cnpgNoMetricsReadings, countVictims, type BlockingNode } from './blocking'
@@ -345,7 +346,7 @@ function SignalDialog({
       incompleteReason={!caps.data ? 'Reading the cluster…' : undefined}
       isLoading={mutation.isPending}
       error={mutation.error?.message}
-      outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}
+      outcomeUnknown={actionOutcomeLocked(mutation.error)}
     />
   )
 }

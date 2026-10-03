@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { CNPGSchedulePreview, CNPGWorkspaceResponse, Grant, TimelineEvent } from '@skyhook-io/k8s-ui'
-import { ApiError, fetchJSON, useRadarFeature } from './client'
+import { fetchJSON, useRadarFeature } from './client'
 import { shouldRetryRadarQuery } from './radarFeatures'
 import type { CNPGOperatorDiagnosis } from './cnpg-recovery'
+import { actionErrorCode, type ActionCapability, type ActionErrorCode, type ActionRequest } from './actions'
 
 // /api/cnpg/workspace
 //
@@ -134,13 +135,6 @@ export function useCNPGClusterActivity(namespace: string, name: string, sinceHou
   })
 }
 
-export interface CNPGActionCapability {
-  allowed: boolean
-  reason?: string
-  permission: 'allowed' | 'denied' | 'unknown'
-  grant?: Grant
-}
-
 export interface CNPGInstanceFact {
   pod: string
   podUID: string
@@ -197,8 +191,8 @@ export interface CNPGClusterCapabilities {
   context: string
   facts: CNPGClusterFacts
   /** `restore` is creating a new Cluster in this namespace from this one's backups (`create clusters`). */
-  actions: Record<CNPGClusterActionName, CNPGActionCapability> & { psql: CNPGActionCapability; destroyInstance: CNPGActionCapability; restore: CNPGActionCapability }
-  instanceActions: Record<string, { restart: CNPGActionCapability; switchoverTarget: CNPGActionCapability; fence: CNPGActionCapability; unfence: CNPGActionCapability; psql: CNPGActionCapability; destroy: CNPGActionCapability }>
+  actions: Record<CNPGClusterActionName, ActionCapability> & { psql: ActionCapability; destroyInstance: ActionCapability; restore: ActionCapability }
+  instanceActions: Record<string, { restart: ActionCapability; switchoverTarget: ActionCapability; fence: ActionCapability; unfence: ActionCapability; psql: ActionCapability; destroy: ActionCapability }>
   restartPlan?: {
     primaryUpdateStrategy?: string
     primaryUpdateMethod?: string
@@ -242,7 +236,7 @@ export interface CNPGScheduleCapabilities {
     schedule: string
     preview: CNPGSchedulePreview
   }
-  actions: Record<CNPGScheduleActionName, CNPGActionCapability>
+  actions: Record<CNPGScheduleActionName, ActionCapability>
   operator?: CNPGOperatorVerdict
 }
 
@@ -287,13 +281,6 @@ export function useCNPGScheduleCapabilities(namespace: string, name: string, ena
   })
 }
 
-export interface CNPGActionRequest {
-  reviewedContext: string
-  uid: string
-  facts: Record<string, unknown>
-  params?: Record<string, unknown>
-}
-
 export interface CNPGActionResult {
   action: string
   message: string
@@ -309,7 +296,7 @@ export interface CNPGActionResult {
 export function useCNPGAction(kind: 'clusters' | 'scheduledbackups' | 'poolers', namespace: string, name: string) {
   const { guard } = useRadarFeature('cnpgWorkspace')
   const queryClient = useQueryClient()
-  return useMutation<CNPGActionResult, Error, { action: string; request: CNPGActionRequest }>({
+  return useMutation<CNPGActionResult, Error, { action: string; request: ActionRequest }>({
     mutationFn: ({ action, request }) => guard(() =>
       fetchJSON<CNPGActionResult>(`${cnpgPath(kind, namespace, name)}/actions/${action}`, {
         method: 'POST',
@@ -328,34 +315,11 @@ export function useCNPGAction(kind: 'clusters' | 'scheduledbackups' | 'poolers',
   })
 }
 
-export type CNPGActionErrorCode = 'context_changed' | 'changed' | 'blocked' | 'all_fenced' | 'operator_webhook_unavailable' | 'outcome_unknown' | 'partial' | 'invalid_schedule'
-
-// A request that timed out or lost its connection may have been applied by the
-// apiserver anyway. 503 without a code is Radar refusing before any write.
-const CNPG_AMBIGUOUS_STATUSES = new Set([500, 502, 504])
+/** The action refusals the CloudNativePG handlers add to the shared ones. */
+export type CNPGActionErrorCode = ActionErrorCode | 'all_fenced' | 'operator_webhook_unavailable' | 'invalid_schedule'
 
 export function cnpgActionErrorCode(err: unknown): CNPGActionErrorCode | undefined {
-  if (!err) return undefined
-  if (!(err instanceof ApiError)) return 'outcome_unknown'
-  const code = err.data?.code
-  if (typeof code === 'string') return code as CNPGActionErrorCode
-  return CNPG_AMBIGUOUS_STATUSES.has(err.status) ? 'outcome_unknown' : undefined
-}
-
-/**
- * Confirm stays locked when the last attempt may have taken effect (unknown)
- * or partly did (partial): repeating it would act on a target that moved.
- */
-export function cnpgActionOutcomeLocked(err: unknown): boolean {
-  const code = cnpgActionErrorCode(err)
-  return code === 'outcome_unknown' || code === 'partial'
-}
-
-/** The mutations a `partial` refusal reports as already done. */
-export function cnpgActionCompleted(err: unknown): string[] {
-  if (!(err instanceof ApiError) || err.data?.code !== 'partial') return []
-  const done = err.data.completed
-  return Array.isArray(done) ? done.filter((d): d is string => typeof d === 'string') : []
+  return actionErrorCode<CNPGActionErrorCode>(err)
 }
 
 export type CNPGRuntimeSourceState = 'ok' | 'denied' | 'unreachable' | 'error' | 'partial'

@@ -1,5 +1,6 @@
 import { CNPG_BARMAN_PLUGIN_NAME, getCNPGClusterBarmanPlugin, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel, formatGrant } from '@skyhook-io/k8s-ui'
-import type { CNPGActionCapability, CNPGRuntimeResponse } from '../../../api/cnpg'
+import type { CNPGRuntimeResponse } from '../../../api/cnpg'
+import type { ActionCapability } from '../../../api/actions'
 import type { CNPGRecoveryResponse, CNPGRecoveryPod } from '../../../api/cnpg-recovery'
 
 export const RESTORE_VALIDATION_ANNOTATION = 'radar.skyhook.io/restore-validation'
@@ -437,7 +438,7 @@ export function observeRestore(snap: CNPGRecoveryResponse): RestoreObservation {
  */
 export function restorePermission(
   namespace: string,
-  cap: CNPGActionCapability | undefined,
+  cap: ActionCapability | undefined,
   error: unknown,
 ): { blocked?: string; pending?: string; unchecked?: string } {
   if (cap) {

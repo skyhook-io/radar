@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Grant } from '@skyhook-io/k8s-ui'
 import { apiFetch, ApiError, fetchJSON, useRadarFeature } from './client'
-import type { CNPGActionCapability } from './cnpg'
+import type { ActionCapability } from './actions'
 import { getApiBase } from './config'
 import { shouldRetryRadarQuery } from './radarFeatures'
 
@@ -241,9 +241,9 @@ export interface CNPGOperatorDiagnosis {
 // writes), for every way into the restore dialog.
 export function useCNPGRestoreCapability(namespace: string) {
   const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
-  return useQuery<CNPGActionCapability>({
+  return useQuery<ActionCapability>({
     queryKey: ['cnpg', 'restore-capability', namespace, ...gatedKey],
-    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGActionCapability>(`/cnpg/restore/capability?namespace=${encodeURIComponent(namespace)}`, signal)),
+    queryFn: ({ signal }) => guard(() => fetchJSON<ActionCapability>(`/cnpg/restore/capability?namespace=${encodeURIComponent(namespace)}`, signal)),
     enabled: !!namespace,
     staleTime: 15_000,
     retry: false,

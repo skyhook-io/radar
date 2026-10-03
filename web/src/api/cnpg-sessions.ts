@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import type { Grant } from '@skyhook-io/k8s-ui'
 import { fetchJSON, useRadarFeature } from './client'
-import type { CNPGActionCapability, CNPGClusterFacts, CNPGRuntimeSourceState } from './cnpg'
+import type { CNPGClusterFacts, CNPGRuntimeSourceState } from './cnpg'
+import type { ActionCapability } from './actions'
 
 const enc = encodeURIComponent
 
@@ -95,7 +96,7 @@ export interface CNPGDestroyPlan {
   pvcs: CNPGDestroyPVC[]
   jobsReadable: boolean
   jobs: string[]
-  actions: { delete: CNPGActionCapability; keep: CNPGActionCapability }
+  actions: { delete: ActionCapability; keep: ActionCapability }
 }
 
 export function useCNPGDestroyPlan(namespace: string, name: string, pod: string, enabled = true) {
@@ -135,7 +136,7 @@ export interface CNPGPoolerCapabilities {
   resourceVersion: string
   context: string
   facts: CNPGPoolerFacts
-  actions: { pause: CNPGActionCapability; resume: CNPGActionCapability; observeState: CNPGActionCapability }
+  actions: { pause: ActionCapability; resume: ActionCapability; observeState: ActionCapability }
 }
 
 export function useCNPGPoolerCapabilities(namespace: string, name: string, enabled = true) {
