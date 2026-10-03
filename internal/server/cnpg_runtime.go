@@ -66,7 +66,7 @@ const (
 	cnpgMetricsExporterApp   = "cnpg_metrics_exporter"
 	cnpgPgBouncerAdminDB     = "pgbouncer"
 	cnpgPgBouncerAuthUser    = "cnpg_pooler_pgbouncer"
-	cnpgFencedErrorExplained = "instance is fenced: PostgreSQL is stopped on purpose"
+	cnpgFencedErrorExplained = "instance is fenced, which asks the operator to stop PostgreSQL"
 )
 
 // Raw-size caps, enforced before parsing, and memo lifetimes sized to the

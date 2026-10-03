@@ -97,7 +97,13 @@ export function cnpgStandbyHeadline(
     return { text: 'replay paused', tone: cnpgWorseTone('degraded', backlogTone), secondary }
   }
   if (streaming !== undefined) return { text: streaming, tone: backlogTone }
-  if (ctx.fenced) return { text: 'fenced · PostgreSQL stopped', tone: 'unknown' }
+  // The fence asks the operator to stop PostgreSQL; only the instance manager
+  // reporting it down confirms the shutdown.
+  if (ctx.fenced) {
+    if (inst.status.state === 'ok') return { text: 'fenced · PostgreSQL still answering', tone: 'unknown' }
+    if (/PostgreSQL is not running/.test(inst.status.error ?? '')) return { text: 'fenced · PostgreSQL not running', tone: 'unknown' }
+    return { text: 'fenced · shutdown unverified', tone: 'unknown' }
+  }
   if (inst.role === 'unknown') return { text: 'role unknown', tone: 'unknown' }
   return { text: ctx.primaryRead ? 'not connected to the primary' : 'unknown', tone: 'unknown' }
 }

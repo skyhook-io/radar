@@ -62,6 +62,13 @@ describe('standby cards', () => {
     expect(cnpgStandbyHeadline(standby({ roleDetail: 'streaming' }), rep, 'healthy', { fenced: false, primaryRead: true })).toEqual({ text: 'streaming · async', tone: 'healthy' })
   })
 
+  it('says a fenced instance stopped only when the instance manager reports it', () => {
+    const fenced = { fenced: true, primaryRead: true }
+    expect(cnpgStandbyHeadline(standby({ state: 'unreachable', error: 'instance is fenced: (PostgreSQL is not running on this instance)' }), undefined, 'unknown', fenced).text).toBe('fenced · PostgreSQL not running')
+    expect(cnpgStandbyHeadline(standby({ state: 'denied' }), undefined, 'unknown', fenced).text).toBe('fenced · shutdown unverified')
+    expect(cnpgStandbyHeadline(standby({ state: 'ok' }), undefined, 'unknown', fenced).text).toBe('fenced · PostgreSQL still answering')
+  })
+
   it('says a paused standby is not connected when the primary has no row for it', () => {
     expect(cnpgStandbyHeadline(standby({ replayPaused: true }), undefined, 'unhealthy', { fenced: false, primaryRead: true })).toEqual({
       text: 'replay paused',
