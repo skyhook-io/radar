@@ -59,7 +59,7 @@ import type {
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
-import { httpStatusMessage, readErrorBody, readErrorResponse } from './httpErrors'
+import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
   RadarFeatureUnsupportedError,
   guardRadarFeature,
@@ -4092,7 +4092,13 @@ export function useUpdateResource() {
       });
       if (!response.ok) {
         const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        const failure = new Error(error.error || `HTTP ${response.status}`);
+        // A reviewed apply's failure is shown in the review itself (the
+        // changed-after-review notice, or the error), so it gets no toast.
+        if (reviewedResourceVersion !== undefined || reviewedContext !== undefined) {
+          markShownInline(failure);
+        }
+        throw failure;
       }
       return response.json();
     },
