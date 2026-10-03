@@ -53,9 +53,20 @@ export function CNPGWorkspaceHeader({ title, subtitle, actions }: { title: strin
   )
 }
 
+// The causes the server named for the namespaces it left unread. A partial or
+// uncached read can name both kinds of namespace at once.
+function namedCauses(cov: CNPGKindCoverage | undefined, uncachedNoun: string): { denied?: string; uncached?: string } {
+  return {
+    denied: cov?.deniedNamespaces?.length ? cov.deniedNamespaces.join(', ') : undefined,
+    uncached: cov?.uncachedNamespaces?.length ? `${uncachedNoun} in ${cov.uncachedNamespaces.join(', ')}` : undefined,
+  }
+}
+
 /** How much of a kind was read, in a few words ("not cached by Radar in pg"). */
 export function coverageLabel(cov: CNPGKindCoverage | undefined): string {
-  if (cov?.state === 'partial' && cov.uncachedNamespaces?.length) return `not cached by Radar in ${cov.uncachedNamespaces.join(', ')}`
+  const { denied, uncached } = namedCauses(cov, 'not cached by Radar')
+  const named = [denied && `no access in ${denied}`, uncached].filter(Boolean)
+  if (named.length > 0) return named.join('; ')
   return COVERAGE_LABEL[cov?.state ?? ''] ?? cov?.state ?? 'unknown'
 }
 
@@ -126,15 +137,13 @@ export function coverageEmpty(cov: CNPGKindCoverage | undefined, noun: string): 
   switch (cov?.state) {
     case 'full':
       return `No ${noun} in this scope.`
-    case 'partial': {
-      const causes = [
-        cov.deniedNamespaces?.length ? 'some namespaces are not readable with your access' : '',
-        cov.uncachedNamespaces?.length ? `Radar does not cache ${noun} in ${cov.uncachedNamespaces.join(', ')}` : '',
-      ].filter(Boolean)
-      return causes.length ? `No ${noun} visible: ${causes.join(', and ')}.` : `No ${noun} visible. Some namespaces were not read.`
+    case 'partial':
+    case 'uncached': {
+      const { denied, uncached } = namedCauses(cov, `Radar does not cache ${noun}`)
+      const causes = [denied && `no access in ${denied}`, uncached].filter(Boolean)
+      if (causes.length > 0) return `No ${noun} visible: ${causes.join('; ')}.`
+      return cov.state === 'uncached' ? `Radar does not cache ${noun} in this scope.` : `No ${noun} visible. Some namespaces were not read.`
     }
-    case 'uncached':
-      return `Radar does not cache ${noun} in this scope.`
     case 'denied':
       return `No access to ${noun}.`
     case 'syncing':
