@@ -106,11 +106,18 @@ describe('ObjectStore failing backups', () => {
   it('does not say recovery still reaches the newest WAL when archiving has stopped too', () => {
     const html = renderToString(<CNPGObjectStoreRenderer data={failing} archivingFailing={new Set(['pg-main'])} onNavigate={nav} />)
     expect(html).toContain('WAL archiving has stopped for pg-main')
-    expect(html).not.toContain('recovery still reaches the newest archived WAL')
+    expect(html).not.toContain('can still replay archived WAL')
     expect(html).toContain('WAL archiving has stopped on the cluster behind this server')
   })
-  it('keeps recovery reaching archived WAL when only base backups fail', () => {
+  it('keeps recovery replaying archived WAL when only base backups fail', () => {
     const html = renderToString(<CNPGObjectStoreRenderer data={failing} archivingFailing={new Set()} onNavigate={nav} />)
-    expect(html).toContain('recovery still reaches the newest archived WAL')
+    expect(html).toContain('can still replay archived WAL written since')
+    expect(html).not.toContain('retention')
+  })
+  it('claims no recovery when no base backup ever succeeded', () => {
+    const never = { ...store, status: { serverRecoveryWindow: { 'pg-main': { lastFailedBackupTime: '2026-08-11T00:00:00Z' } } } }
+    const html = renderToString(<CNPGObjectStoreRenderer data={never} archivingFailing={new Set()} onNavigate={nav} />)
+    expect(html).toContain('No base backup has succeeded for pg-main')
+    expect(html).not.toContain('replay')
   })
 })
