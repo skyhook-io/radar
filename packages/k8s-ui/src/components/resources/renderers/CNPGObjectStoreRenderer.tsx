@@ -44,6 +44,8 @@ export function CNPGObjectStoreRenderer({
   const credentialSecret = getCNPGObjectStoreCredentialSecret(data)
   const cfg = data?.spec?.configuration ?? {}
   const failing = windows.filter((w) => w.failingSinceLastSuccess)
+  const archiveStopped = failing.filter((w) => archivingFailing?.has(w.server)).map((w) => w.server)
+  const neverSucceeded = failing.filter((w) => !w.lastSuccessfulBackupTime).map((w) => w.server)
 
   return (
     <>
@@ -51,7 +53,13 @@ export function CNPGObjectStoreRenderer({
         <AlertBanner
           variant="error"
           title={`Backups failing for ${failing.length === 1 ? failing[0].server : `${failing.length} servers`}`}
-          message="The most recent base backup failed after the last success. While WAL archiving works, recovery still reaches the newest archived WAL, but it replays from an ever older base backup."
+          message={
+            neverSucceeded.length > 0
+              ? `No base backup has succeeded for ${neverSucceeded.join(', ')}, so this store holds nothing to restore from for ${neverSucceeded.length === 1 ? 'it' : 'them'}.`
+              : archiveStopped.length > 0
+                ? `The most recent base backup failed after the last success, and WAL archiving has stopped for ${archiveStopped.join(', ')}: nothing written since the last archived WAL can be recovered.`
+                : 'The most recent base backup failed after the last success. While WAL archiving works, recovery from that backup can still replay archived WAL written since.'
+          }
         />
       )}
 
@@ -197,7 +205,7 @@ function RecoveryWindowRow({
                 : 'No backups yet'}
         </span>
       </div>
-      {stalled && !w.failingSinceLastSuccess && (
+      {stalled && (
         <div className="text-xs text-warning-text mb-1">
           {/* The timestamps below are real and still describe the last backup that
               worked. What they no longer describe is a window still growing, and
@@ -226,8 +234,9 @@ function RecoveryWindowRow({
       </PropertyList>
       {w.failingSinceLastSuccess && (
         <div className="mt-2 pt-2 border-t border-theme-border text-xs text-theme-text-secondary">
-          Every backup since the last success has failed. Recovery replays from that backup, so it takes
-          longer the longer this lasts, and retention still moves the earliest restorable point forward.
+          {w.lastSuccessfulBackupTime
+            ? 'Every backup since the last success has failed. Recovery replays from that backup, so it takes longer the longer this lasts.'
+            : 'No backup for this server has succeeded, so there is nothing to restore from.'}
         </div>
       )}
     </div>

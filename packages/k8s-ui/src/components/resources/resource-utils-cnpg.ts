@@ -600,7 +600,7 @@ export interface CNPGObjectStoreRecoveryWindow {
   firstRecoverabilityPoint?: string
   lastSuccessfulBackupTime?: string
   lastFailedBackupTime?: string
-  /** A failure newer than the last success — the window has stopped advancing. */
+  /** A failure newer than the last success, or a failure and no success at all. */
   failingSinceLastSuccess: boolean
 }
 
