@@ -63,7 +63,7 @@ describe('applyCNPGDisk', () => {
     const p = fleet.rows[0].problems[0]
     expect(p).toMatchObject({ measuredBy: 'kubelet, matched by claim name', unverifiedMatch: true })
     expect(p.detail).toContain(note)
-    expect(fleet.rows[0].disk.source).toContain(note)
+    expect(fleet.rows[0].disk?.source).toContain(note)
   })
 
   it('puts low-disk clusters into Needs attention by severity', () => {
