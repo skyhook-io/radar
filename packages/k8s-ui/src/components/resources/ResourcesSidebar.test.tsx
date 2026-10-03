@@ -153,6 +153,21 @@ describe('ResourcesSidebar category workspaces', () => {
     expect(html).not.toContain('selection-strong selection-text">Pod')
   })
 
+  it('marks a count taken over partly readable data as a lower bound, and never shows its zero as none', () => {
+    const render = (count: number) =>
+      renderToString(
+        <ResourcesSidebar
+          selectedKind={null}
+          onSelectedKindChange={() => {}}
+          apiResources={[cnpgCluster]}
+          resourceCounts={{ 'postgresql.cnpg.io/Cluster': 1 }}
+          categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'overview', label: 'Overview', count, countLowerBound: true, onSelect: () => {} }] } }}
+        />,
+      )
+    expect(render(2)).toMatch(/≥(<!-- -->)?2/)
+    expect(render(0)).toContain('–')
+  })
+
   it('keeps a workspace category visible when it has no resources', () => {
     const html = renderToString(
       <ResourcesSidebar

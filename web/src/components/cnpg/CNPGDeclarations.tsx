@@ -6,7 +6,9 @@ import {
   CNPGLogicalPathView,
   cnpgDatabaseRoleFacts,
   cnpgDatabaseRoleMeta,
-  cnpgGitOpsSource,
+  cnpgManagedBy,
+  managedByLabel,
+  type CNPGWorkspaceResponse,
   cnpgLogicalPaths,
   cnpgLogicalSlotFact,
   isApiGroup,
@@ -18,22 +20,9 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { useCNPGPublisherSlots } from './logicalSlots'
 import type { SelectedResource } from '../../types'
-import {
-  CNPGRefreshFailedNotice,
-  CNPGWorkspaceHeader,
-  CoverageNotice,
-  FilterChips,
-  ScreenBody,
-  Segments,
-  Sub,
-  clusterResource,
-  cnpgResource,
-  coverageEmpty,
-  worstCoverage,
-  namespaceChip,
-  type CNPGScreenProps,
-} from './shared'
-import { sameResource } from './routes'
+import { CNPGWorkspaceHeader, CoverageNotice, clusterResource, cnpgResource, coverageEmpty, worstCoverage, type CNPGScreenProps } from './shared'
+import { FilterChips, namespaceChip, RefreshFailedNotice, ScreenBody, Segments, Sub } from '../workspace/layout'
+import { sameSelectedResource } from '../../utils/drawer-trail'
 
 type State = 'applied' | 'failed' | 'pending'
 
@@ -64,10 +53,8 @@ function stateOf(obj: any): State {
   return 'pending'
 }
 
-function gitopsSource(obj: any): string | undefined {
-  const src = cnpgGitOpsSource(obj)
-  if (!src) return undefined
-  return `${src.tool === 'argocd' ? 'Argo CD' : 'Flux'} ${src.name}`
+function gitopsSource(managedBy: CNPGWorkspaceResponse['managedBy'], obj: any): string | undefined {
+  return managedByLabel(cnpgManagedBy({ managedBy }, obj))
 }
 
 const STATE_BADGE: Record<State, { severity: 'success' | 'warning' | 'neutral'; text: string }> = {
@@ -118,7 +105,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         state: st,
         meta: d.spec?.owner ? `owner ${d.spec.owner}` : undefined,
         error: st === 'failed' ? d.status?.message : undefined,
-        source: gitopsSource(d),
+        source: gitopsSource(data.managedBy, d),
         resource: cnpgResource('databases', ns, d.metadata?.name),
         isField: false,
       })
@@ -138,7 +125,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
                 ? p.spec?.target?.allTables ? 'all tables' : 'selected objects'
                 : `from ${p.spec?.publicationName ?? 'an unnamed publication'} on ${p.spec?.externalClusterName ?? 'an unnamed external cluster'}`,
             error: pst === 'failed' ? p.status?.message : undefined,
-            source: gitopsSource(p),
+            source: gitopsSource(data.managedBy, p),
             resource: cnpgResource(kind === 'Publication' ? 'publications' : 'subscriptions', ns, p.metadata?.name),
             isField: false,
           })
@@ -159,7 +146,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
           state: pst,
           meta: p.spec?.dbname ? `database ${p.spec.dbname}` : undefined,
           error: pst === 'failed' ? p.status?.message : undefined,
-          source: gitopsSource(p),
+          source: gitopsSource(data.managedBy, p),
           resource: cnpgResource(kind === 'Publication' ? 'publications' : 'subscriptions', ns, p.metadata?.name),
           isField: false,
         })
@@ -178,7 +165,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         state: f.state,
         meta: cnpgDatabaseRoleMeta(f),
         error: f.state === 'failed' ? f.message : undefined,
-        source: gitopsSource(r),
+        source: gitopsSource(data.managedBy, r),
         resource: cnpgResource('databaseroles', ns, r.metadata?.name),
         isField: false,
       })
@@ -213,7 +200,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         const fb = b.items.some((i) => i.state === 'failed') ? 0 : 1
         return fa - fb || a.namespace.localeCompare(b.namespace) || a.cluster.localeCompare(b.cluster)
       })
-  }, [data.objects.databases, data.objects.publications, data.objects.subscriptions, data.objects.databaseRoles, fleet.rows, clusterFilter, show])
+  }, [data.objects.databases, data.objects.publications, data.objects.subscriptions, data.objects.databaseRoles, data.managedBy, fleet.rows, clusterFilter, show])
 
   const totals = useMemo(() => {
     let failed = 0
@@ -309,7 +296,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
                       key={i.key}
                       item={i}
                       sourceStated={noSources}
-                      active={!i.isField && sameResource(inspected, i.resource)}
+                      active={!i.isField && sameSelectedResource(inspected, i.resource)}
                       onInspect={() => onInspect(i.resource)}
                     />
                   ))}
@@ -346,7 +333,7 @@ function LogicalPathRow({ path, onInspect }: { path: CNPGLogicalPath; onInspect:
       <CNPGLogicalPathView
         path={path}
         slot={cnpgLogicalSlotFact(path, observed)}
-        notice={<CNPGRefreshFailedNotice queries={[query]} />}
+        notice={<RefreshFailedNotice queries={[query]} />}
         onNavigate={(ref) => onInspect(refToSelectedResource(ref))}
         compact
       />

@@ -1,27 +1,16 @@
 import { useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { Badge } from '../ui/Badge'
+import { healthToSeverity } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { CNPG_BARMAN_OBJECTSTORE_GROUP, CNPG_GROUP } from '../resources/resource-utils-cnpg'
 import { cnpgReadyInstances, type CNPGFleetRow, type CNPGInstance } from './workspace'
 import type { CNPGDimension } from './ha'
-import {
-  FactGrid,
-  FactRow,
-  FactSource,
-  FactValue,
-  PrimaryConflictNote,
-  ProblemCallout,
-  ProblemList,
-  RefLink,
-  SummaryHeading,
-  ToneDot,
-  toneTextClass,
-  CNPG_PRIMARY_BUTTON,
-  CNPG_SECONDARY_BUTTON,
-  type CNPGNavigate,
-} from './primitives'
+import { PrimaryConflictNote } from './primitives'
+import { type NavigateToRef, RefLink } from '../ui/RefLink'
+import { StatusDot, toneTextClass } from '../ui/status-tone'
+import { FactGrid, FactRow, FactSource, FactValue, ProblemCallout, ProblemList, SectionHeading, ManagedByText, managedByLabel } from '../workspace'
 
 function ReadyCount({ row }: { row: CNPGFleetRow }) {
   const r = cnpgReadyInstances(row)
@@ -41,7 +30,7 @@ export interface CNPGSummaryAction {
   primary?: boolean
 }
 
-function InstancePill({ pod, namespace, onNavigate }: { pod: CNPGInstance; namespace: string; onNavigate?: CNPGNavigate }) {
+function InstancePill({ pod, namespace, onNavigate }: { pod: CNPGInstance; namespace: string; onNavigate?: NavigateToRef }) {
   const tone = pod.ready === true ? 'healthy' : pod.ready === false ? 'unhealthy' : 'unknown'
   const role = pod.role === 'primary' ? 'Primary' : pod.role === 'replica' ? 'Replica' : 'Role unknown'
   const readiness = pod.ready === true ? 'Ready' : pod.ready === false ? 'Not ready' : 'Readiness unknown'
@@ -55,7 +44,7 @@ function InstancePill({ pod, namespace, onNavigate }: { pod: CNPGInstance; names
           onNavigate ? 'hover:border-accent' : 'cursor-default',
         )}
       >
-        <ToneDot tone={tone} />
+        <StatusDot tone={tone} />
         <span className="font-mono">{pod.name}</span>
         <span className="text-theme-text-tertiary">{pod.role === 'primary' ? 'P' : pod.role === 'replica' ? 'R' : '?'}</span>
       </button>
@@ -71,7 +60,7 @@ function DimensionChips({ dimensions, onSelect }: { dimensions: CNPGDimension[];
       {dimensions.map((d) => {
         const body = (
           <>
-            <ToneDot tone={d.tone} />
+            <StatusDot tone={d.tone} />
             <span className="text-theme-text-secondary">{d.label}</span>
             <span className={toneTextClass(d.tone)}>{d.text}</span>
           </>
@@ -127,7 +116,7 @@ export function CNPGClusterSummary({
   stateFacts,
 }: {
   row: CNPGFleetRow
-  onNavigate?: CNPGNavigate
+  onNavigate?: NavigateToRef
   actions?: CNPGSummaryAction[]
   /** Link to the complete list of this cluster's findings, shown when more than one exists. */
   problemsLink?: (count: number) => ReactNode
@@ -159,6 +148,7 @@ export function CNPGClusterSummary({
       {dimensions && dimensions.length > 0 && <DimensionChips dimensions={dimensions} onSelect={onSelectDimension} />}
       {top && (
         <ProblemCallout
+          rootKind="Cluster"
           problem={top}
           onNavigate={onNavigate}
           more={
@@ -173,7 +163,7 @@ export function CNPGClusterSummary({
       {top && rest > 0 && !problemsLink && (
         <Collapse open={showRest} id={restDisclosure.panelId}>
           <div className="mb-4 rounded-lg border border-theme-border bg-theme-base p-3">
-            <ProblemList problems={row.problems.slice(1)} onNavigate={onNavigate} />
+            <ProblemList rootKind="Cluster" problems={row.problems.slice(1)} onNavigate={onNavigate} />
           </div>
         </Collapse>
       )}
@@ -181,18 +171,18 @@ export function CNPGClusterSummary({
       {actions && actions.length > 0 && (
         <div className="mb-4 flex flex-wrap gap-2">
           {actions.map((a) => (
-            <button key={a.label} type="button" onClick={a.onClick} className={a.primary ? CNPG_PRIMARY_BUTTON : CNPG_SECONDARY_BUTTON}>
+            <button key={a.label} type="button" onClick={a.onClick} className={clsx(a.primary ? 'btn-brand' : 'btn-secondary', 'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-1.5 text-sm font-medium')}>
               {a.label}
             </button>
           ))}
         </div>
       )}
 
-      <SummaryHeading>State</SummaryHeading>
+      <SectionHeading>State</SectionHeading>
       <FactGrid>
         <FactRow label="Controller phase">
           <span className="inline-flex flex-wrap items-center gap-2">
-            <Badge severity={row.controllerStatus.level === 'healthy' ? 'success' : row.controllerStatus.level === 'unhealthy' ? 'error' : row.controllerStatus.level === 'degraded' || row.controllerStatus.level === 'alert' ? 'warning' : 'neutral'} size="sm">
+            <Badge severity={healthToSeverity(row.controllerStatus.level)} size="sm">
               {row.controllerStatus.text}
             </Badge>
             <span className="text-xs text-theme-text-tertiary">
@@ -263,15 +253,15 @@ export function CNPGClusterSummary({
             </span>
           )}
         </FactRow>
-        {row.gitops && (
+        {row.managedBy && managedByLabel(row.managedBy) && (
           <FactRow label="Declared in">
-            {row.gitops.tool === 'argocd' ? 'Argo CD' : 'Flux'} <span className="font-mono">{row.gitops.name}</span>
+            <ManagedByText refTo={row.managedBy} onNavigate={onNavigate} />
           </FactRow>
         )}
         {stateFacts}
       </FactGrid>
 
-      <SummaryHeading>Protection</SummaryHeading>
+      <SectionHeading>Protection</SectionHeading>
       <FactGrid>
         <FactRow label="Schedule">
           <FactValue fact={p.schedule} />

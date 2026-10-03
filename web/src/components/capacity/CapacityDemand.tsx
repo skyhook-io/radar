@@ -21,41 +21,9 @@ import {
 } from "../../api/client";
 import type { SelectedResource } from "../../types";
 import { refToSelectedResource } from "../../utils/navigation";
-import {
-  CapacityFreshness,
-  CapacityIssueEvidence,
-  DemandStateBadge,
-  EmptyState,
-  InlineEmpty,
-  LinkButton,
-  Notice,
-  PageControls,
-  PoolEvaluationBadge,
-  PoolSelector,
-  QuantityInline,
-  ResourceLink,
-  ROW_HOVER,
-  ScopeBadges,
-  ScrollableContent,
-  TABLE_HEAD,
-  TABLE_WRAP,
-  TBODY,
-  TD,
-  TH,
-  coverageHasObservations,
-  coverageIsLowerBound,
-  coverageMessage,
-  demandStateLabel,
-  errorMessage,
-  formatTimestamp,
-  humanizeCode,
-  identityKey,
-  integrationBlock,
-  namespaceCoverageDescription,
-  quantityText,
-  useCapacityCursorRecovery,
-  useCapacityPagination,
-} from "./shared";
+import { CapacityFreshness, CapacityIssueEvidence, DemandStateBadge, InlineEmpty, LinkButton, PageControls, PoolEvaluationBadge, PoolSelector, QuantityInline, ResourceLink, ScopeBadges, ScrollableContent, coverageHasObservations, coverageIsLowerBound, coverageMessage, demandStateLabel, errorMessage, formatTimestamp, humanizeCode, identityKey, integrationBlock, namespaceCoverageDescription, quantityText, useCapacityCursorRecovery, useCapacityPagination } from "./shared";
+import { Notice, ScreenEmptyState } from "../workspace/layout";
+import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from "../workspace/table";
 
 const STATE_PILLS: [CapacityDemandState | undefined, string][] = [
   [undefined, "All states"],
@@ -184,7 +152,7 @@ export function CapacityDemand({
   const clearPodFilter = () => updateSearchParam("pod", undefined);
   if (poolFilter && !responseData && isNotFoundError(query.error)) {
     return (
-      <EmptyState
+      <ScreenEmptyState
         icon={AlertTriangle}
         title="NodePool not found"
         detail={`This link evaluates demand against NodePool “${poolFilter}”, which no longer exists. It may have been removed or belongs to another cluster context.`}

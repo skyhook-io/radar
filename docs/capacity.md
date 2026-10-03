@@ -64,7 +64,7 @@ Operators rarely start at the nav. Capacity meets them where they are:
 
 ## Reading the numbers
 
-Capacity's core contract is **per-value certainty**. Every quantity carries one of:
+Capacity applies Radar's rules for unknown and partial values ([DESIGN.md](../DESIGN.md#unknown-partial-and-denied-values)) per quantity: its core contract is **per-value certainty**. Every quantity carries one of:
 
 | Glyph | Meaning |
 |-------|---------|

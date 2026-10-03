@@ -128,7 +128,7 @@ type CNPGRuntimeObjectRef struct {
 
 type CNPGRuntimePermission struct {
 	Proxy string `json:"proxy"`
-	Grant string `json:"grant"`
+	Grant *Grant `json:"grant,omitempty"`
 }
 
 // CNPGRuntimeSource describes one read. State is ok | partial | denied |
@@ -431,7 +431,7 @@ func (s *Server) authorizeCNPGRuntime(w http.ResponseWriter, r *http.Request, na
 }
 
 func cnpgRuntimePermission(namespace string, allowed bool) CNPGRuntimePermission {
-	p := CNPGRuntimePermission{Proxy: "allowed", Grant: "get pods/proxy in " + namespace}
+	p := CNPGRuntimePermission{Proxy: "allowed", Grant: cnpgGrantGetPodsProxy.In(namespace).Ref()}
 	if !allowed {
 		p.Proxy = "denied"
 	}
@@ -490,7 +490,7 @@ func (s *Server) handleCNPGClusterRuntime(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	proxyAllowed := s.cnpgPermission(r, cnpgGrantGetPodsProxy, namespace) != cnpgPermDenied
+	proxyAllowed := s.grantPermission(r, cnpgGrantGetPodsProxy.In(namespace)) != permissionDenied
 	fenced := parseCNPGFenced(cluster.GetAnnotations()[cnpgFencedAnnotation])
 	resp := CNPGClusterRuntimeResponse{
 		Cluster:    CNPGRuntimeObjectRef{Namespace: namespace, Name: name, UID: cluster.GetUID()},
@@ -594,7 +594,7 @@ func (s *Server) handleCNPGPoolerRuntime(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	proxyAllowed := s.cnpgPermission(r, cnpgGrantGetPodsProxy, namespace) != cnpgPermDenied
+	proxyAllowed := s.grantPermission(r, cnpgGrantGetPodsProxy.In(namespace)) != permissionDenied
 	resp := CNPGPoolerRuntimeResponse{
 		Pooler:     CNPGRuntimeObjectRef{Namespace: namespace, Name: name, UID: pooler.GetUID()},
 		SampledAt:  time.Now().UTC().Format(time.RFC3339),

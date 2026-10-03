@@ -2,7 +2,7 @@ import { useLocation, useSearchParams } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { CNPG_KIND_BY_KEY } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
-import { decodeDrawerTrail, encodeDrawerTrail, sameResource } from './routes'
+import { decodeDrawerTrail, encodeDrawerTrail, sameSelectedResource } from '../../utils/drawer-trail'
 
 const KIND_BY_PLURAL: Record<string, string> = Object.fromEntries(
   Object.values(CNPG_KIND_BY_KEY).map((k) => [k.plural, k.kind]),
@@ -19,7 +19,7 @@ export function CNPGDrawerTrailBack({ resource }: { resource: SelectedResource }
   const [searchParams, setSearchParams] = useSearchParams()
   if (!location.pathname.startsWith('/cnpg')) return null
   const trail = decodeDrawerTrail(searchParams.get('drawer'))
-  if (trail.length < 2 || !sameResource(trail[trail.length - 1], resource)) return null
+  if (trail.length < 2 || !sameSelectedResource(trail[trail.length - 1], resource)) return null
   const prev = trail[trail.length - 2]
   const back = () => {
     const params = new URLSearchParams(searchParams)

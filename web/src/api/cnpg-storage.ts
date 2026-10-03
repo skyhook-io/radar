@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
-import type { CNPGDiskReading, CNPGMetricIsolation } from '@skyhook-io/k8s-ui'
-import { fetchJSON } from './client'
+import type { CNPGDiskReading, CNPGMetricIsolation, Grant } from '@skyhook-io/k8s-ui'
+import { fetchJSON, useRadarFeature } from './client'
 
 export type CNPGPVCRole = 'PG_DATA' | 'PG_WAL' | 'PG_TABLESPACE'
 
 export interface CNPGStorageCoverage {
   state: string
-  grant?: string
+  grant?: Grant
   reason?: string
   /** On Prometheus usage: how the series were tied to this cluster. */
   isolation?: CNPGMetricIsolation
@@ -100,9 +100,10 @@ export interface CNPGClusterStorageResponse {
 // /api/cnpg/clusters/{ns}/{name}/storage — the Cluster's claims, their
 // measured use and each instance's WAL, every source with its own coverage.
 export function useCNPGClusterStorage(namespace: string, name: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGClusterStorageResponse>({
-    queryKey: ['cnpg', 'storage', namespace, name],
-    queryFn: ({ signal }) => fetchJSON<CNPGClusterStorageResponse>(`/cnpg/clusters/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/storage`, signal),
+    queryKey: ['cnpg', 'storage', namespace, name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGClusterStorageResponse>(`/cnpg/clusters/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/storage`, signal)),
     enabled: enabled && !!name,
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
@@ -121,10 +122,11 @@ export interface CNPGFleetDiskResponse {
 // /api/cnpg/disk — the fullest measured volume of each visible Cluster. Read
 // with the same namespace set as the workspace so the two join row for row.
 export function useCNPGFleetDisk(namespaces: string[], enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   const ns = [...namespaces].sort().join(',')
   return useQuery<CNPGFleetDiskResponse>({
-    queryKey: ['cnpg', 'disk', ns],
-    queryFn: ({ signal }) => fetchJSON<CNPGFleetDiskResponse>(`/cnpg/disk${ns ? `?namespaces=${encodeURIComponent(ns)}` : ''}`, signal),
+    queryKey: ['cnpg', 'disk', ns, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGFleetDiskResponse>(`/cnpg/disk${ns ? `?namespaces=${encodeURIComponent(ns)}` : ''}`, signal)),
     enabled,
     staleTime: 20_000,
     refetchInterval: 60_000,

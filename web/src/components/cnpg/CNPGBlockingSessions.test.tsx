@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../api/cnpg-sessions', () => ({
   useCNPGSessions: () => ({
-    data: { pod: 'pg-1', state: 'denied', permission: { exec: 'denied', grant: 'create pods/exec in db' }, instances: [] },
+    data: { pod: 'pg-1', state: 'denied', permission: { exec: 'denied', grant: { verb: 'create', resource: 'pods', subresource: 'exec', namespace: 'db' } }, instances: [] },
     isLoading: false,
     error: null,
     isRefetchError: false,

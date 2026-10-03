@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Plug, X } from 'lucide-react'
-import { CNPGConnectSection, DialogPortal, Tooltip, type CNPGRef, type NavigateToResource } from '@skyhook-io/k8s-ui'
+import { CNPGConnectSection, DialogPortal, Tooltip, type ResourceRef, type NavigateToResource } from '@skyhook-io/k8s-ui'
 import { refToSelectedResource } from '../../../utils/navigation'
 import { useCNPGFleet } from '../useCNPGSidebarWorkspace'
 
@@ -70,7 +70,7 @@ export function CNPGConnectButton({
   const { fleet } = useCNPGFleet([namespace], open)
   const row = fleet?.rows.find((r) => r.namespace === namespace && r.name === name)
   const go = onNavigate
-    ? (ref: CNPGRef) => {
+    ? (ref: ResourceRef) => {
         setOpen(false)
         onNavigate(refToSelectedResource(ref))
       }
@@ -83,7 +83,7 @@ export function CNPGConnectButton({
           type="button"
           onClick={() => setOpen(true)}
           aria-label={compact ? 'Connect' : undefined}
-          className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-theme-border bg-theme-surface px-2.5 py-1.5 text-xs font-medium text-theme-text-primary hover:bg-theme-hover"
+          className="btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium"
         >
           <Plug className="h-3.5 w-3.5" />
           {!compact && 'Connect'}

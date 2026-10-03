@@ -38,10 +38,11 @@ export function gitOpsOwnerFromRelationships(
 ): GitOpsOwnerRef | null {
   const refs = rel?.managedBy
   if (!refs || refs.length === 0) return null
-  return refToGitOpsOwner(refs[0])
+  return gitOpsOwnerFromRef(refs[0])
 }
 
-function refToGitOpsOwner(ref: ResourceRef): GitOpsOwnerRef | null {
+/** A manager ref (relationships.managedBy, a workspace's managedBy) as a GitOps owner, or null when the manager is not a GitOps controller. */
+export function gitOpsOwnerFromRef(ref: ResourceRef): GitOpsOwnerRef | null {
   switch (true) {
     case ref.kind === 'Application' && ref.group === ARGO_APPLICATION_GROUP:
       return { tool: 'argocd', kind: 'applications', namespace: ref.namespace, name: ref.name }

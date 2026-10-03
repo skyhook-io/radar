@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react'
 import { ArrowRight } from 'lucide-react'
 import { CNPG_GROUP } from '../resources/resource-utils-cnpg'
-import type { CNPGFact } from './workspace'
+import type { Fact } from '../workspace'
 import { cnpgLogicalLocation, type CNPGLogicalPath } from './logicalReplication'
-import { FactGrid, FactRow, FactSource, FactValue, RefLink, toneTextClass, type CNPGNavigate } from './primitives'
+import { type NavigateToRef, RefLink } from '../ui/RefLink'
+import { toneTextClass } from '../ui/status-tone'
+import { FactGrid, FactRow, FactSource, FactValue } from '../workspace'
 
 // A hop after the first carries its arrow, so a wrapped line never ends on an
 // arrow pointing at nothing.
@@ -33,8 +35,8 @@ export function CNPGLogicalPathView({
   notice,
 }: {
   path: CNPGLogicalPath
-  slot?: CNPGFact
-  onNavigate?: CNPGNavigate
+  slot?: Fact
+  onNavigate?: NavigateToRef
   compact?: boolean
   /** The host's word on the slot reading, e.g. that its latest refresh failed. */
   notice?: ReactNode
@@ -42,7 +44,7 @@ export function CNPGLogicalPathView({
   const s = path.subscription
   const pub = path.publication
   const publisher = path.publisher
-  const slotFact: CNPGFact = slot ?? { text: path.slot.name ? `Slot ${path.slot.name}: not read` : path.slot.reason ?? 'No slot', tone: 'unknown' }
+  const slotFact: Fact = slot ?? { text: path.slot.name ? `Slot ${path.slot.name}: not read` : path.slot.reason ?? 'No slot', tone: 'unknown' }
   const chain = (
     <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
       <Hop label="Subscription">

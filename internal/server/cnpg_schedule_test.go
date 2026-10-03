@@ -86,10 +86,10 @@ func TestDescribeCNPGSchedule(t *testing.T) {
 }
 
 func TestCNPGActionSetSchedule(t *testing.T) {
-	req := func(reviewed, next string) CNPGActionRequest {
+	req := func(reviewed, next string) ActionRequest {
 		facts, _ := json.Marshal(map[string]any{"schedule": reviewed})
 		params, _ := json.Marshal(map[string]any{"schedule": next})
-		return CNPGActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: facts, Params: params}
+		return ActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: facts, Params: params}
 	}
 	t.Run("merge-patches spec.schedule bound to the resourceVersion", func(t *testing.T) {
 		env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil), cnpgActionSchedule(nil)})
@@ -108,7 +108,7 @@ func TestCNPGActionSetSchedule(t *testing.T) {
 	t.Run("refuses a schedule changed since review", func(t *testing.T) {
 		env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil), cnpgActionSchedule(nil)})
 		_, err := runCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "setSchedule", req("0 0 1 * * *", "0 30 2 * * *"))
-		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeChanged || len(env.patches) != 0 {
+		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeChanged || len(env.patches) != 0 {
 			t.Fatalf("err = %v, want 409 changed and no write", err)
 		}
 	})
@@ -133,7 +133,7 @@ func TestCNPGActionSetSchedule(t *testing.T) {
 	t.Run("an unchanged schedule is blocked", func(t *testing.T) {
 		env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil), cnpgActionSchedule(nil)})
 		_, err := runCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "setSchedule", req("0 0 0 * * *", "0 0 0 * * *"))
-		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeBlocked {
+		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeBlocked {
 			t.Fatalf("err = %v, want blocked", err)
 		}
 	})

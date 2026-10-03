@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -28,8 +27,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/auth"
-	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // CloudNativePG write actions. Every write mirrors what `kubectl cnpg` does
@@ -65,33 +62,15 @@ const (
 	cnpgPhaseInplaceRestart = "Primary instance is being restarted in-place"
 	cnpgInplaceReason       = "Requested by the user"
 
-	cnpgActionBodyLimit = 64 << 10
 	// The compact UTC stamp CloudNativePG itself uses for scheduled runs.
 	cnpgCompactStamp = "20060102150405"
 
-	cnpgCodeChanged         = "changed"
-	cnpgCodeContextChanged  = "context_changed"
-	cnpgCodeBlocked         = "blocked"
+	// Refusal codes beyond the shared action contract's.
 	cnpgCodeAllFenced       = "all_fenced"
 	cnpgCodeWebhook         = "operator_webhook_unavailable"
 	cnpgCodeAmbiguous       = "outcome_unknown"
-	cnpgCodePartial         = "partial"
 	cnpgCodeInvalidSchedule = "invalid_schedule"
-
-	cnpgPermAllowed = "allowed"
-	cnpgPermDenied  = "denied"
-	cnpgPermUnknown = "unknown"
 )
-
-// CNPGActionCapability is one action's verdict: allowed only when the state
-// guards pass and the caller's grant is not known to be missing. An unknown
-// grant (the SubjectAccessReview itself failed) leaves the apiserver to decide.
-type CNPGActionCapability struct {
-	Allowed    bool   `json:"allowed"`
-	Reason     string `json:"reason,omitempty"`
-	Permission string `json:"permission"`
-	Grant      string `json:"grant,omitempty"`
-}
 
 // CNPGFencedFacts is the parsed cnpg.io/fencedInstances annotation. Raw is the
 // annotation exactly as stored ("" when unset) and is what a confirmation binds.
@@ -149,22 +128,22 @@ type CNPGClusterFacts struct {
 }
 
 type CNPGClusterActions struct {
-	Backup          CNPGActionCapability `json:"backup"`
-	Switchover      CNPGActionCapability `json:"switchover"`
-	Restart         CNPGActionCapability `json:"restart"`
-	RestartInstance CNPGActionCapability `json:"restartInstance"`
-	Reload          CNPGActionCapability `json:"reload"`
-	Fence           CNPGActionCapability `json:"fence"`
-	Unfence         CNPGActionCapability `json:"unfence"`
-	Hibernate       CNPGActionCapability `json:"hibernate"`
-	Rehydrate       CNPGActionCapability `json:"rehydrate"`
+	Backup          ActionCapability `json:"backup"`
+	Switchover      ActionCapability `json:"switchover"`
+	Restart         ActionCapability `json:"restart"`
+	RestartInstance ActionCapability `json:"restartInstance"`
+	Reload          ActionCapability `json:"reload"`
+	Fence           ActionCapability `json:"fence"`
+	Unfence         ActionCapability `json:"unfence"`
+	Hibernate       ActionCapability `json:"hibernate"`
+	Rehydrate       ActionCapability `json:"rehydrate"`
 	// Psql is opening psql on the primary; DestroyInstance is the first
 	// instance that may be destroyed (per-instance verdicts are authoritative).
-	Psql            CNPGActionCapability `json:"psql"`
-	DestroyInstance CNPGActionCapability `json:"destroyInstance"`
+	Psql            ActionCapability `json:"psql"`
+	DestroyInstance ActionCapability `json:"destroyInstance"`
 	// Restore is creating a new Cluster in this namespace that bootstraps
 	// from this one's backups; the source is only read.
-	Restore CNPGActionCapability `json:"restore"`
+	Restore ActionCapability `json:"restore"`
 	CNPGMaintenanceActions
 }
 
@@ -172,12 +151,12 @@ type CNPGClusterActions struct {
 // instance: a primary restarts in place (status write) where a standby's Pod
 // is deleted, so the two carry different guards and grants.
 type CNPGInstanceActions struct {
-	Restart          CNPGActionCapability `json:"restart"`
-	SwitchoverTarget CNPGActionCapability `json:"switchoverTarget"`
-	Fence            CNPGActionCapability `json:"fence"`
-	Unfence          CNPGActionCapability `json:"unfence"`
-	Psql             CNPGActionCapability `json:"psql"`
-	Destroy          CNPGActionCapability `json:"destroy"`
+	Restart          ActionCapability `json:"restart"`
+	SwitchoverTarget ActionCapability `json:"switchoverTarget"`
+	Fence            ActionCapability `json:"fence"`
+	Unfence          ActionCapability `json:"unfence"`
+	Psql             ActionCapability `json:"psql"`
+	Destroy          ActionCapability `json:"destroy"`
 }
 
 // CNPGRestartStep is one instance's fate in a cluster restart, in the order
@@ -265,10 +244,10 @@ type CNPGScheduleFacts struct {
 }
 
 type CNPGScheduleActions struct {
-	Suspend     CNPGActionCapability `json:"suspend"`
-	Resume      CNPGActionCapability `json:"resume"`
-	Run         CNPGActionCapability `json:"run"`
-	SetSchedule CNPGActionCapability `json:"setSchedule"`
+	Suspend     ActionCapability `json:"suspend"`
+	Resume      ActionCapability `json:"resume"`
+	Run         ActionCapability `json:"run"`
+	SetSchedule ActionCapability `json:"setSchedule"`
 }
 
 // CNPGScheduleCapabilitiesResponse is GET /api/cnpg/scheduledbackups/{ns}/{name}/capabilities.
@@ -279,14 +258,6 @@ type CNPGScheduleCapabilitiesResponse struct {
 	Facts           CNPGScheduleFacts   `json:"facts"`
 	Actions         CNPGScheduleActions `json:"actions"`
 	Operator        CNPGOperatorVerdict `json:"operator"`
-}
-
-// CNPGActionRequest is the POST body of every CNPG action.
-type CNPGActionRequest struct {
-	ReviewedContext string          `json:"reviewedContext"`
-	UID             string          `json:"uid"`
-	Facts           json.RawMessage `json:"facts,omitempty"`
-	Params          json.RawMessage `json:"params,omitempty"`
 }
 
 // cnpgReviewedFacts is the subset of facts a confirmation can bind. Decoded
@@ -320,49 +291,6 @@ type CNPGActionResult struct {
 	// Target identifies what the action acted on, so a caller can follow the
 	// outcome (the backend signalled, the instance destroyed, the Pooler paused).
 	Target *CNPGActionTarget `json:"target,omitempty"`
-}
-
-// cnpgActionError is a refusal with a stable code; Current carries the facts
-// as they are now when a confirmation no longer matches.
-type cnpgActionError struct {
-	Status  int
-	Code    string
-	Message string
-	Current any
-	// Completed lists the mutations that took effect before a multi-step
-	// action stopped (code partial).
-	Completed []string
-}
-
-func (e *cnpgActionError) Error() string { return e.Message }
-
-func cnpgRefuse(status int, code, format string, args ...any) *cnpgActionError {
-	return &cnpgActionError{Status: status, Code: code, Message: fmt.Sprintf(format, args...)}
-}
-
-// cnpgPartial reports a multi-step action that stopped after some of its
-// mutations took effect; retrying it blindly would act on a changed target.
-func cnpgPartial(completed []string, cause error) *cnpgActionError {
-	status := http.StatusInternalServerError
-	var ae *cnpgActionError
-	switch {
-	case errors.As(cause, &ae):
-		status = ae.Status
-	case apierrors.IsForbidden(cause):
-		status = http.StatusForbidden
-	case apierrors.IsConflict(cause), apierrors.IsNotFound(cause):
-		status = http.StatusConflict
-	case errors.Is(cause, context.DeadlineExceeded) || apierrors.IsTimeout(cause) || apierrors.IsServerTimeout(cause):
-		status = http.StatusGatewayTimeout
-	}
-	e := &cnpgActionError{
-		Status: status, Code: cnpgCodePartial, Completed: append([]string(nil), completed...),
-		Message: fmt.Sprintf("Stopped part-way: %s. Already done: %s", cause.Error(), strings.Join(completed, ", ")),
-	}
-	if ae != nil {
-		e.Current = ae.Current
-	}
-	return e
 }
 
 type cnpgActionClients struct {
@@ -770,157 +698,18 @@ func cnpgGuardRehydrate(f CNPGClusterFacts) string {
 
 // ---------- permissions ----------
 
-type cnpgGrant struct {
-	verb, group, resource, subresource string
-}
-
-// ClusterString words a grant on a cluster-scoped resource (or a cluster-wide
-// list), naming the group in resource.group form so it reads without nested
-// parentheses where it is quoted inside "(needs …)".
-func (g cnpgGrant) ClusterString() string {
-	res := g.resource
-	if g.subresource != "" {
-		res += "/" + g.subresource
-	}
-	if g.group != "" {
-		res += "." + g.group
-	}
-	return g.verb + " " + res + " cluster-wide"
-}
-
-func (g cnpgGrant) String(namespace string) string {
-	res := g.resource
-	if g.subresource != "" {
-		res += "/" + g.subresource
-	}
-	if g.group != "" {
-		res += " (" + g.group + ")"
-	}
-	return fmt.Sprintf("%s %s in namespace %s", g.verb, res, namespace)
-}
-
 var (
-	cnpgGrantCreateBackups    = cnpgGrant{"create", cnpgGroup, "backups", ""}
-	cnpgGrantCreateClusters   = cnpgGrant{"create", cnpgGroup, "clusters", ""}
-	cnpgGrantPatchStatus      = cnpgGrant{"patch", cnpgGroup, "clusters", "status"}
-	cnpgGrantPatchClusters    = cnpgGrant{"patch", cnpgGroup, "clusters", ""}
-	cnpgGrantDeletePods       = cnpgGrant{"delete", "", "pods", ""}
-	cnpgGrantGetPods          = cnpgGrant{"get", "", "pods", ""}
-	cnpgGrantPatchSchedules   = cnpgGrant{"patch", cnpgGroup, "scheduledbackups", ""}
-	cnpgClusterActionGrants   = map[string]cnpgGrant{"backup": cnpgGrantCreateBackups, "switchover": cnpgGrantPatchStatus, "restart": cnpgGrantPatchClusters, "reload": cnpgGrantPatchClusters, "fence": cnpgGrantPatchClusters, "unfence": cnpgGrantPatchClusters, "hibernate": cnpgGrantPatchClusters, "rehydrate": cnpgGrantPatchClusters}
-	cnpgScheduleActionGrants  = map[string]cnpgGrant{"suspend": cnpgGrantPatchSchedules, "resume": cnpgGrantPatchSchedules, "run": cnpgGrantCreateBackups, "setSchedule": cnpgGrantPatchSchedules}
+	cnpgGrantCreateBackups    = Grant{Verb: "create", Group: cnpgGroup, Resource: "backups"}
+	cnpgGrantCreateClusters   = Grant{Verb: "create", Group: cnpgGroup, Resource: "clusters"}
+	cnpgGrantPatchStatus      = Grant{Verb: "patch", Group: cnpgGroup, Resource: "clusters", Subresource: "status"}
+	cnpgGrantPatchClusters    = Grant{Verb: "patch", Group: cnpgGroup, Resource: "clusters"}
+	cnpgGrantDeletePods       = Grant{Verb: "delete", Resource: "pods"}
+	cnpgGrantGetPods          = Grant{Verb: "get", Resource: "pods"}
+	cnpgGrantPatchSchedules   = Grant{Verb: "patch", Group: cnpgGroup, Resource: "scheduledbackups"}
+	cnpgClusterActionGrants   = map[string]Grant{"backup": cnpgGrantCreateBackups, "switchover": cnpgGrantPatchStatus, "restart": cnpgGrantPatchClusters, "reload": cnpgGrantPatchClusters, "fence": cnpgGrantPatchClusters, "unfence": cnpgGrantPatchClusters, "hibernate": cnpgGrantPatchClusters, "rehydrate": cnpgGrantPatchClusters}
+	cnpgScheduleActionGrants  = map[string]Grant{"suspend": cnpgGrantPatchSchedules, "resume": cnpgGrantPatchSchedules, "run": cnpgGrantCreateBackups, "setSchedule": cnpgGrantPatchSchedules}
 	cnpgClusterActionsOrdered = []string{"backup", "switchover", "restart", "restartInstance", "reload", "fence", "unfence", "hibernate", "rehydrate", "cancelBackend", "terminateBackend", "destroyInstance"}
 )
-
-// cnpgPermission answers one grant for the caller. Subresource answers are
-// memoized on the same per-user cache as canRead, keyed resource/subresource.
-func (s *Server) cnpgPermission(r *http.Request, g cnpgGrant, namespace string) string {
-	allowed, authoritative := s.cnpgGrantDecision(r, g, namespace)
-	switch {
-	case !authoritative:
-		return cnpgPermUnknown
-	case allowed:
-		return cnpgPermAllowed
-	default:
-		return cnpgPermDenied
-	}
-}
-
-func (s *Server) cnpgGrantDecision(r *http.Request, g cnpgGrant, namespace string) (bool, bool) {
-	if auth.UserFromContext(r.Context()) == nil {
-		return cnpgLocalCanI(r.Context(), g, namespace)
-	}
-	if g.subresource == "" {
-		return s.canReadDecision(r, g.group, g.resource, namespace, g.verb)
-	}
-	key := g.resource + "/" + g.subresource
-	var perms *auth.UserPermissions
-	if user := auth.UserFromContext(r.Context()); user != nil && s.permCache != nil {
-		perms = s.permCache.Get(user.Username, user.Groups)
-	}
-	if perms != nil {
-		if v, ok := perms.CanI(g.verb, g.group, key, namespace); ok {
-			return v, true
-		}
-	}
-	allowed, authoritative := s.canReadSubresourceDecision(r, g.group, g.resource, g.subresource, namespace, g.verb)
-	if authoritative && perms != nil {
-		perms.SetCanI(g.verb, g.group, key, namespace, allowed)
-	}
-	return allowed, authoritative
-}
-
-// Without auth the apiserver still enforces the kubeconfig identity's RBAC on
-// every write and proxy read; asking it first lets capabilities name a missing
-// grant instead of offering an action that will fail.
-var (
-	cnpgLocalCanIMu   sync.Mutex
-	cnpgLocalCanIMemo = map[string]cnpgLocalCanIEntry{}
-	cnpgLocalCanITTL  = 30 * time.Second
-)
-
-type cnpgLocalCanIEntry struct {
-	allowed bool
-	expires time.Time
-}
-
-func cnpgLocalCanI(ctx context.Context, g cnpgGrant, namespace string) (bool, bool) {
-	resource := g.resource
-	if g.subresource != "" {
-		resource += "/" + g.subresource
-	}
-	key := strings.Join([]string{k8s.GetContextName(), g.verb, g.group, resource, namespace}, "\x00")
-	now := time.Now()
-	cnpgLocalCanIMu.Lock()
-	if e, ok := cnpgLocalCanIMemo[key]; ok && now.Before(e.expires) {
-		cnpgLocalCanIMu.Unlock()
-		return e.allowed, true
-	}
-	cnpgLocalCanIMu.Unlock()
-	client := k8s.GetClient()
-	if client == nil {
-		return true, true
-	}
-	allowed, apiErr := k8score.CanI(ctx, client, namespace, g.group, resource, g.verb)
-	if apiErr {
-		return false, false
-	}
-	cnpgLocalCanIMu.Lock()
-	cnpgLocalCanIMemo[key] = cnpgLocalCanIEntry{allowed: allowed, expires: now.Add(cnpgLocalCanITTL)}
-	cnpgLocalCanIMu.Unlock()
-	return allowed, true
-}
-
-// cnpgCapability folds a guard reason and one or more grants into a verdict.
-// The first denied grant is named; an unknown grant leaves the action offered.
-func cnpgCapability(guard string, namespace string, perms []string, grants []cnpgGrant) CNPGActionCapability {
-	out := CNPGActionCapability{Permission: cnpgPermAllowed}
-	for i, p := range perms {
-		if p == cnpgPermDenied {
-			out.Permission = cnpgPermDenied
-			out.Grant = grants[i].String(namespace)
-			break
-		}
-		if p == cnpgPermUnknown {
-			out.Permission = cnpgPermUnknown
-			if out.Grant == "" {
-				out.Grant = grants[i].String(namespace)
-			}
-		}
-	}
-	if out.Permission == cnpgPermAllowed {
-		out.Grant = ""
-	}
-	switch {
-	case out.Permission == cnpgPermDenied:
-		out.Reason = "You are not allowed to " + out.Grant
-	case guard != "":
-		out.Reason = guard
-	default:
-		out.Allowed = true
-	}
-	return out
-}
 
 // ---------- capabilities ----------
 
@@ -952,21 +741,23 @@ func (s *Server) cnpgClusterCapabilities(r *http.Request, c cnpgActionClients, c
 	}
 	facts, _ := cnpgClusterFactsOf(ctx, c.typed, cluster)
 
-	perm := map[cnpgGrant]string{}
-	permOf := func(g cnpgGrant) string {
+	perm := map[Grant]string{}
+	permOf := func(g Grant) string {
 		if v, ok := perm[g]; ok {
 			return v
 		}
-		v := s.cnpgPermission(r, g, namespace)
+		v := s.grantPermission(r, g.In(namespace))
 		perm[g] = v
 		return v
 	}
-	one := func(guard string, gs ...cnpgGrant) CNPGActionCapability {
+	one := func(guard string, gs ...Grant) ActionCapability {
 		ps := make([]string, len(gs))
+		bound := make([]Grant, len(gs))
 		for i, g := range gs {
 			ps[i] = permOf(g)
+			bound[i] = g.In(namespace)
 		}
-		return cnpgCapability(guard, namespace, ps, gs)
+		return capabilityVerdict(guard, ps, bound)
 	}
 
 	instanceActions := map[string]CNPGInstanceActions{}
@@ -1059,7 +850,7 @@ func (s *Server) cnpgClusterCapabilities(r *http.Request, c cnpgActionClients, c
 // webhook rejects writes. Status patches and Pod deletes bypass it.
 func cnpgApplyOperatorGuard(resp *CNPGClusterCapabilitiesResponse) {
 	v, a := resp.Operator, &resp.Actions
-	for _, c := range []*CNPGActionCapability{&a.Backup, &a.Restart, &a.Reload, &a.Fence, &a.Unfence, &a.Hibernate, &a.Rehydrate, &a.SetMaintenance, &a.UnsetMaintenance} {
+	for _, c := range []*ActionCapability{&a.Backup, &a.Restart, &a.Reload, &a.Fence, &a.Unfence, &a.Hibernate, &a.Rehydrate, &a.SetMaintenance, &a.UnsetMaintenance} {
 		*c = cnpgOperatorWebhookGuard(v, *c)
 	}
 	for pod, ia := range resp.InstanceActions {
@@ -1278,8 +1069,9 @@ func (s *Server) cnpgScheduleCapabilities(r *http.Request, c cnpgActionClients, 
 		return nil, err
 	}
 	f := cnpgScheduleFactsOf(r.Context(), c, sched)
-	one := func(guard string, g cnpgGrant) CNPGActionCapability {
-		return cnpgCapability(guard, namespace, []string{s.cnpgPermission(r, g, namespace)}, []cnpgGrant{g})
+	one := func(guard string, g Grant) ActionCapability {
+		g = g.In(namespace)
+		return capabilityVerdict(guard, []string{s.grantPermission(r, g)}, []Grant{g})
 	}
 	suspendGuard, resumeGuard := "", ""
 	if f.Terminating {
@@ -1307,43 +1099,6 @@ func (s *Server) cnpgScheduleCapabilities(r *http.Request, c cnpgActionClients, 
 
 // ---------- POST ----------
 
-// decodeCNPGActionRequest reads the body and checks the reviewed context.
-// The error is already written when ok is false.
-func (s *Server) decodeCNPGActionRequest(w http.ResponseWriter, r *http.Request) (CNPGActionRequest, dynamic.Interface, bool) {
-	var req CNPGActionRequest
-	if err := decodeBoundedJSONBody(w, r, cnpgActionBodyLimit, &req); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			s.writeError(w, http.StatusRequestEntityTooLarge, "request body is too large")
-			return req, nil, false
-		}
-		s.writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
-		return req, nil, false
-	}
-	if req.ReviewedContext == "" || req.UID == "" {
-		s.writeError(w, http.StatusBadRequest, "reviewedContext and uid are required")
-		return req, nil, false
-	}
-	dyn, contextName := s.getDynamicClientSnapshotForRequest(r)
-	if dyn == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
-		return req, nil, false
-	}
-	if err := cnpgCheckReviewedContext(req.ReviewedContext, contextName); err != nil {
-		s.writeCNPGActionError(w, err, "context", "", "")
-		return req, nil, false
-	}
-	return req, dyn, true
-}
-
-func cnpgCheckReviewedContext(reviewed, active string) error {
-	if reviewed != active {
-		return cnpgRefuse(http.StatusConflict, cnpgCodeContextChanged,
-			"The active cluster context is %q, not the %q you reviewed; review the action again", active, reviewed)
-	}
-	return nil
-}
-
 func (s *Server) handleCNPGClusterAction(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -1355,7 +1110,7 @@ func (s *Server) handleCNPGClusterAction(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown CloudNativePG cluster action %q: must be one of %s", action, strings.Join(cnpgClusterActionsOrdered, ", ")))
 		return
 	}
-	req, dyn, ok := s.decodeCNPGActionRequest(w, r)
+	req, dyn, ok := s.decodeActionRequest(w, r)
 	if !ok {
 		return
 	}
@@ -1385,7 +1140,7 @@ func (s *Server) handleCNPGScheduleAction(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown ScheduledBackup action %q: must be suspend, resume, run or setSchedule", action))
 		return
 	}
-	req, dyn, ok := s.decodeCNPGActionRequest(w, r)
+	req, dyn, ok := s.decodeActionRequest(w, r)
 	if !ok {
 		return
 	}
@@ -1480,20 +1235,14 @@ func cnpgFactsDiffer(binds []string, reviewed cnpgReviewedFacts, now CNPGCluster
 	return changed, ""
 }
 
-func cnpgChanged(current any, format string, args ...any) *cnpgActionError {
-	e := cnpgRefuse(http.StatusConflict, cnpgCodeChanged, format, args...)
-	e.Current = current
-	return e
-}
-
-func runCNPGClusterAction(ctx context.Context, c cnpgActionClients, namespace, name, action string, req CNPGActionRequest) (*CNPGActionResult, error) {
+func runCNPGClusterAction(ctx context.Context, c cnpgActionClients, namespace, name, action string, req ActionRequest) (*CNPGActionResult, error) {
 	runner, ok := cnpgClusterActionRunners[action]
 	if !ok {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "unknown action %q", action)
+		return nil, refuseAction(http.StatusBadRequest, "", "unknown action %q", action)
 	}
 	reviewed, err := decodeCNPGReviewedFacts(req.Facts)
 	if err != nil {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "%v", err)
+		return nil, refuseAction(http.StatusBadRequest, "", "%v", err)
 	}
 	cluster, err := c.dyn.Resource(cnpgClusterGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
@@ -1505,14 +1254,14 @@ func runCNPGClusterAction(ctx context.Context, c cnpgActionClients, namespace, n
 	}
 	facts, pods := cnpgClusterFactsOf(ctx, typed, cluster)
 	if string(cluster.GetUID()) != req.UID {
-		return nil, cnpgChanged(facts, "Cluster %s/%s was deleted and recreated since you reviewed it", namespace, name)
+		return nil, changedAction(facts, "Cluster %s/%s was deleted and recreated since you reviewed it", namespace, name)
 	}
 	changed, missing := cnpgFactsDiffer(runner.binds, reviewed, facts)
 	if missing != "" {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "facts.%s is required for %s: the confirmation must bind what the dialog showed", missing, action)
+		return nil, refuseAction(http.StatusBadRequest, "", "facts.%s is required for %s: the confirmation must bind what the dialog showed", missing, action)
 	}
 	if len(changed) > 0 {
-		return nil, cnpgChanged(facts, "Cluster %s/%s changed since you confirmed (%s); review the action again", namespace, name, strings.Join(changed, ", "))
+		return nil, changedAction(facts, "Cluster %s/%s changed since you confirmed (%s); review the action again", namespace, name, strings.Join(changed, ", "))
 	}
 	x := &cnpgClusterRun{c: c, cluster: cluster, facts: facts, reviewed: reviewed, pods: pods, params: req.Params}
 	res, err := runner.run(ctx, x)
@@ -1524,44 +1273,12 @@ func runCNPGClusterAction(ctx context.Context, c cnpgActionClients, namespace, n
 			if fresh, gerr := c.dyn.Resource(cnpgClusterGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{}); gerr == nil {
 				current, _ = cnpgClusterFactsOf(ctx, typed, fresh)
 			}
-			return nil, cnpgChanged(current, "Cluster %s/%s changed while the request was being sent; review the action again", namespace, name)
+			return nil, changedAction(current, "Cluster %s/%s changed while the request was being sent; review the action again", namespace, name)
 		}
 		return nil, err
 	}
 	res.Action = action
 	return res, nil
-}
-
-func decodeCNPGParams(raw json.RawMessage, into any) error {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || string(trimmed) == "null" {
-		trimmed = []byte("{}")
-	}
-	dec := json.NewDecoder(bytes.NewReader(trimmed))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(into); err != nil {
-		return cnpgRefuse(http.StatusBadRequest, "", "invalid params: %v", err)
-	}
-	return nil
-}
-
-func cnpgBlocked(reason string) error {
-	return cnpgRefuse(http.StatusConflict, cnpgCodeBlocked, "%s", reason)
-}
-
-func cnpgMergePatch(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, obj *unstructured.Unstructured, body map[string]any, subresources ...string) error {
-	meta, _ := body["metadata"].(map[string]any)
-	if meta == nil {
-		meta = map[string]any{}
-		body["metadata"] = meta
-	}
-	meta["resourceVersion"] = obj.GetResourceVersion()
-	data, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-	_, err = dyn.Resource(gvr).Namespace(obj.GetNamespace()).Patch(ctx, obj.GetName(), types.MergePatchType, data, metav1.PatchOptions{}, subresources...)
-	return err
 }
 
 // cnpgConditionsWithReady returns status.conditions with the Ready condition
@@ -1604,11 +1321,11 @@ func cnpgStatusPatch(ctx context.Context, x *cnpgClusterRun, status map[string]a
 		return err
 	}
 	status["conditions"] = conds
-	return cnpgMergePatch(ctx, x.c.dyn, cnpgClusterGVR, x.cluster, map[string]any{"status": status}, "status")
+	return mergePatchAtVersion(ctx, x.c.dyn, cnpgClusterGVR, x.cluster, map[string]any{"status": status}, "status")
 }
 
 func cnpgAnnotationPatch(ctx context.Context, x *cnpgClusterRun, key string, value any) error {
-	return cnpgMergePatch(ctx, x.c.dyn, cnpgClusterGVR, x.cluster, map[string]any{
+	return mergePatchAtVersion(ctx, x.c.dyn, cnpgClusterGVR, x.cluster, map[string]any{
 		"metadata": map[string]any{"annotations": map[string]any{key: value}},
 	})
 }
@@ -1626,11 +1343,11 @@ type cnpgBackupParams struct {
 
 func cnpgRunBackup(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, error) {
 	var p cnpgBackupParams
-	if err := decodeCNPGParams(x.params, &p); err != nil {
+	if err := decodeActionParams(x.params, &p); err != nil {
 		return nil, err
 	}
 	if r := cnpgGuardBackup(x.facts); r != "" {
-		return nil, cnpgBlocked(r)
+		return nil, blockedAction(r)
 	}
 	var chosen *CNPGBackupMethodFact
 	for i, m := range x.facts.BackupMethods {
@@ -1640,16 +1357,16 @@ func cnpgRunBackup(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, e
 		}
 	}
 	if chosen == nil {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "method %q%s is not a backup method this cluster declares", p.Method, cnpgPluginSuffix(p.PluginName))
+		return nil, refuseAction(http.StatusBadRequest, "", "method %q%s is not a backup method this cluster declares", p.Method, cnpgPluginSuffix(p.PluginName))
 	}
 	if chosen.Capability == "none" {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "plugin %s reports no backup capability", chosen.PluginName)
+		return nil, refuseAction(http.StatusBadRequest, "", "plugin %s reports no backup capability", chosen.PluginName)
 	}
 	if len(p.PluginParameters) > 0 && chosen.Method != "plugin" {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "pluginParameters apply only to the plugin method")
+		return nil, refuseAction(http.StatusBadRequest, "", "pluginParameters apply only to the plugin method")
 	}
 	if p.Target != "" && p.Target != "primary" && p.Target != "prefer-standby" {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "target must be primary or prefer-standby (or omitted to inherit the cluster's)")
+		return nil, refuseAction(http.StatusBadRequest, "", "target must be primary or prefer-standby (or omitted to inherit the cluster's)")
 	}
 	// A Backup without its own target inherits the cluster's, so the one the
 	// confirmation showed is bound. The facts omit it when unset.
@@ -1659,7 +1376,7 @@ func cnpgRunBackup(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, e
 			reviewedTarget = *x.reviewed.BackupTarget
 		}
 		if reviewedTarget != x.facts.BackupTarget {
-			return nil, cnpgChanged(x.facts, "Cluster %s/%s's backup target changed since you confirmed (backupTarget); review the action again", x.cluster.GetNamespace(), x.cluster.GetName())
+			return nil, changedAction(x.facts, "Cluster %s/%s's backup target changed since you confirmed (backupTarget); review the action again", x.cluster.GetNamespace(), x.cluster.GetName())
 		}
 	}
 	clusterName := x.cluster.GetName()
@@ -1724,14 +1441,14 @@ func cnpgBackupObject(namespace, name, cluster string, annotations map[string]an
 // already exists.
 func cnpgValidateBackupName(ctx context.Context, dyn dynamic.Interface, namespace, name string) error {
 	if errs := validation.IsDNS1123Subdomain(name); len(errs) > 0 {
-		return cnpgRefuse(http.StatusBadRequest, "", "backup name %q is invalid: %s", name, strings.Join(errs, "; "))
+		return refuseAction(http.StatusBadRequest, "", "backup name %q is invalid: %s", name, strings.Join(errs, "; "))
 	}
 	if cnpgScheduleRunR.MatchString(name) {
 		schedule := name[:len(name)-15]
 		_, err := dyn.Resource(cnpgScheduleGVR).Namespace(namespace).Get(ctx, schedule, metav1.GetOptions{})
 		switch {
 		case err == nil:
-			return cnpgRefuse(http.StatusBadRequest, "", "backup name %q has the form of a run of ScheduledBackup %s: the operator would skip that run", name, schedule)
+			return refuseAction(http.StatusBadRequest, "", "backup name %q has the form of a run of ScheduledBackup %s: the operator would skip that run", name, schedule)
 		case apierrors.IsNotFound(err):
 		default:
 			return fmt.Errorf("cannot check the name against ScheduledBackup %s: %w", schedule, err)
@@ -1740,7 +1457,7 @@ func cnpgValidateBackupName(ctx context.Context, dyn dynamic.Interface, namespac
 	_, err := dyn.Resource(cnpgBackupGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	switch {
 	case err == nil:
-		return cnpgRefuse(http.StatusConflict, "", "a Backup named %s already exists", name)
+		return refuseAction(http.StatusConflict, "", "a Backup named %s already exists", name)
 	case apierrors.IsNotFound(err):
 		return nil
 	default:
@@ -1776,7 +1493,7 @@ func cnpgCreateBackup(ctx context.Context, dyn dynamic.Interface, backup *unstru
 			return &CNPGActionResult{Backup: name, ResolvedAfterTimeout: true, Message: "Backup " + name + " created (confirmed by reading it back after the request timed out)"}, nil
 		}
 	}
-	return nil, cnpgRefuse(http.StatusGatewayTimeout, cnpgCodeAmbiguous,
+	return nil, refuseAction(http.StatusGatewayTimeout, cnpgCodeAmbiguous,
 		"The create of Backup %s timed out and reading it back did not find it; it may still appear. Check the cluster's backups before trying again: %v", name, err)
 }
 
@@ -1789,24 +1506,24 @@ type cnpgSwitchoverParams struct {
 
 func cnpgRunSwitchover(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, error) {
 	var p cnpgSwitchoverParams
-	if err := decodeCNPGParams(x.params, &p); err != nil {
+	if err := decodeActionParams(x.params, &p); err != nil {
 		return nil, err
 	}
 	if p.Target == "" || p.TargetPodUID == "" {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "params.target and params.targetPodUID are required")
+		return nil, refuseAction(http.StatusBadRequest, "", "params.target and params.targetPodUID are required")
 	}
 	if r := cnpgGuardSwitchover(x.facts); r != "" {
-		return nil, cnpgBlocked(r)
+		return nil, blockedAction(r)
 	}
 	inst, ok := x.facts.instance(p.Target)
 	if !ok {
-		return nil, cnpgChanged(x.facts, "%s is not an instance of this cluster", p.Target)
+		return nil, changedAction(x.facts, "%s is not an instance of this cluster", p.Target)
 	}
 	if inst.PodExists && inst.PodUID != p.TargetPodUID {
-		return nil, cnpgChanged(x.facts, "Pod %s was recreated since you reviewed it", p.Target)
+		return nil, changedAction(x.facts, "Pod %s was recreated since you reviewed it", p.Target)
 	}
 	if r := cnpgGuardSwitchoverTarget(x.facts, inst); r != "" {
-		return nil, cnpgBlocked(p.Target + " cannot be promoted: " + r)
+		return nil, blockedAction(p.Target + " cannot be promoted: " + r)
 	}
 	err := cnpgStatusPatch(ctx, x, map[string]any{
 		"targetPrimary": p.Target,
@@ -1824,11 +1541,11 @@ func cnpgRunSwitchover(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResul
 // --- restart / reload ---
 
 func cnpgRunRestart(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, error) {
-	if err := decodeCNPGParams(x.params, &struct{}{}); err != nil {
+	if err := decodeActionParams(x.params, &struct{}{}); err != nil {
 		return nil, err
 	}
 	if r := cnpgGuardRestart(x.facts); r != "" {
-		return nil, cnpgBlocked(r)
+		return nil, blockedAction(r)
 	}
 	if err := cnpgAnnotationPatch(ctx, x, cnpgRestartAnnotation, x.c.clock().Format(time.RFC3339)); err != nil {
 		return nil, err
@@ -1837,11 +1554,11 @@ func cnpgRunRestart(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, 
 }
 
 func cnpgRunReload(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, error) {
-	if err := decodeCNPGParams(x.params, &struct{}{}); err != nil {
+	if err := decodeActionParams(x.params, &struct{}{}); err != nil {
 		return nil, err
 	}
 	if r := cnpgGuardReload(x.facts); r != "" {
-		return nil, cnpgBlocked(r)
+		return nil, blockedAction(r)
 	}
 	if err := cnpgAnnotationPatch(ctx, x, cnpgReloadAnnotation, x.c.clock().Format(metav1.RFC3339Micro)); err != nil {
 		return nil, err
@@ -1856,24 +1573,24 @@ type cnpgRestartInstanceParams struct {
 
 func cnpgRunRestartInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, error) {
 	var p cnpgRestartInstanceParams
-	if err := decodeCNPGParams(x.params, &p); err != nil {
+	if err := decodeActionParams(x.params, &p); err != nil {
 		return nil, err
 	}
 	if p.Pod == "" || p.PodUID == "" {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "params.pod and params.podUID are required")
+		return nil, refuseAction(http.StatusBadRequest, "", "params.pod and params.podUID are required")
 	}
 	inst, ok := x.facts.instance(p.Pod)
 	if !ok {
-		return nil, cnpgChanged(x.facts, "%s is not an instance of this cluster", p.Pod)
+		return nil, changedAction(x.facts, "%s is not an instance of this cluster", p.Pod)
 	}
 	if r := cnpgGuardRestartInstance(x.facts, inst); r != "" {
-		return nil, cnpgBlocked(r)
+		return nil, blockedAction(r)
 	}
 	if !inst.PodReadable {
-		return nil, cnpgRefuse(http.StatusForbidden, "", "Pod %s cannot be read, so it cannot be verified as this cluster's instance", p.Pod)
+		return nil, refuseAction(http.StatusForbidden, "", "Pod %s cannot be read, so it cannot be verified as this cluster's instance", p.Pod)
 	}
 	if !inst.PodExists || inst.PodUID != p.PodUID {
-		return nil, cnpgChanged(x.facts, "Pod %s was recreated since you reviewed it", p.Pod)
+		return nil, changedAction(x.facts, "Pod %s was recreated since you reviewed it", p.Pod)
 	}
 	if inst.Pod == x.facts.CurrentPrimary {
 		err := cnpgStatusPatch(ctx, x, map[string]any{
@@ -1908,12 +1625,12 @@ func cnpgFenceTargets(raw json.RawMessage) (all bool, names []string, err error)
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
 		if s != cnpgAllInstances {
-			return false, nil, cnpgRefuse(http.StatusBadRequest, "", `params.instances must be "*" or a list of instance names`)
+			return false, nil, refuseAction(http.StatusBadRequest, "", `params.instances must be "*" or a list of instance names`)
 		}
 		return true, nil, nil
 	}
 	if err := json.Unmarshal(raw, &names); err != nil || len(names) == 0 {
-		return false, nil, cnpgRefuse(http.StatusBadRequest, "", `params.instances must be "*" or a non-empty list of instance names`)
+		return false, nil, refuseAction(http.StatusBadRequest, "", `params.instances must be "*" or a non-empty list of instance names`)
 	}
 	for _, n := range names {
 		if n == cnpgAllInstances {
@@ -1939,18 +1656,18 @@ func cnpgFencedValue(all bool, names []string) (any, error) {
 
 func cnpgRunFence(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, error) {
 	var p cnpgFenceParams
-	if err := decodeCNPGParams(x.params, &p); err != nil {
+	if err := decodeActionParams(x.params, &p); err != nil {
 		return nil, err
 	}
 	if p.ConvertFromAll || len(p.Remaining) > 0 {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "convertFromAll and remaining apply only to unfence")
+		return nil, refuseAction(http.StatusBadRequest, "", "convertFromAll and remaining apply only to unfence")
 	}
 	all, names, err := cnpgFenceTargets(p.Instances)
 	if err != nil {
 		return nil, err
 	}
 	if r := cnpgGuardFence(x.facts); r != "" {
-		return nil, cnpgBlocked(r)
+		return nil, blockedAction(r)
 	}
 	next := map[string]bool{}
 	for _, n := range x.facts.FencedInstances.Instances {
@@ -1958,10 +1675,10 @@ func cnpgRunFence(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, er
 	}
 	for _, n := range names {
 		if _, ok := x.facts.instance(n); !ok {
-			return nil, cnpgRefuse(http.StatusBadRequest, "", "%s is not an instance of this cluster", n)
+			return nil, refuseAction(http.StatusBadRequest, "", "%s is not an instance of this cluster", n)
 		}
 		if next[n] {
-			return nil, cnpgBlocked(n + " is fenced already")
+			return nil, blockedAction(n + " is fenced already")
 		}
 		next[n] = true
 	}
@@ -1977,7 +1694,7 @@ func cnpgRunFence(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, er
 
 func cnpgRunUnfence(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, error) {
 	var p cnpgFenceParams
-	if err := decodeCNPGParams(x.params, &p); err != nil {
+	if err := decodeActionParams(x.params, &p); err != nil {
 		return nil, err
 	}
 	all, names, err := cnpgFenceTargets(p.Instances)
@@ -1985,7 +1702,7 @@ func cnpgRunUnfence(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, 
 		return nil, err
 	}
 	if r := cnpgGuardUnfence(x.facts); r != "" {
-		return nil, cnpgBlocked(r)
+		return nil, blockedAction(r)
 	}
 	var value any
 	switch {
@@ -1993,7 +1710,7 @@ func cnpgRunUnfence(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, 
 		value = nil
 	case x.facts.FencedInstances.All:
 		if !p.ConvertFromAll {
-			return nil, cnpgRefuse(http.StatusConflict, cnpgCodeAllFenced,
+			return nil, refuseAction(http.StatusConflict, cnpgCodeAllFenced,
 				`Every instance is fenced with ["*"]: lifting one instance means rewriting the fence as the explicit list of the others. Lift every fence, or confirm the conversion with convertFromAll and the remaining list`)
 		}
 		// The reviewer must have seen the full explicit set that stays fenced.
@@ -2003,12 +1720,12 @@ func cnpgRunUnfence(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, 
 		}
 		for _, n := range names {
 			if _, ok := x.facts.instance(n); !ok {
-				return nil, cnpgRefuse(http.StatusBadRequest, "", "%s is not an instance of this cluster", n)
+				return nil, refuseAction(http.StatusBadRequest, "", "%s is not an instance of this cluster", n)
 			}
 			delete(want, n)
 		}
 		if !cnpgSameStringSet(p.Remaining, cnpgSortedKeys(want)) {
-			return nil, cnpgChanged(x.facts, "The instances that stay fenced are %s, not %s; review the conversion again",
+			return nil, changedAction(x.facts, "The instances that stay fenced are %s, not %s; review the conversion again",
 				strings.Join(cnpgSortedKeys(want), ", "), strings.Join(p.Remaining, ", "))
 		}
 		if value, err = cnpgFencedValue(false, cnpgSortedKeys(want)); err != nil {
@@ -2016,7 +1733,7 @@ func cnpgRunUnfence(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, 
 		}
 	default:
 		if p.ConvertFromAll {
-			return nil, cnpgRefuse(http.StatusBadRequest, "", `convertFromAll applies only while ["*"] fences every instance`)
+			return nil, refuseAction(http.StatusBadRequest, "", `convertFromAll applies only while ["*"] fences every instance`)
 		}
 		next := map[string]bool{}
 		for _, n := range x.facts.FencedInstances.Instances {
@@ -2024,7 +1741,7 @@ func cnpgRunUnfence(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, 
 		}
 		for _, n := range names {
 			if !next[n] {
-				return nil, cnpgBlocked(n + " is not fenced")
+				return nil, blockedAction(n + " is not fenced")
 			}
 			delete(next, n)
 		}
@@ -2072,7 +1789,7 @@ func cnpgSameStringSet(a, b []string) bool {
 
 func cnpgRunHibernation(value string) func(context.Context, *cnpgClusterRun) (*CNPGActionResult, error) {
 	return func(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, error) {
-		if err := decodeCNPGParams(x.params, &struct{}{}); err != nil {
+		if err := decodeActionParams(x.params, &struct{}{}); err != nil {
 			return nil, err
 		}
 		guard, msg := cnpgGuardHibernate, "Hibernation requested"
@@ -2080,7 +1797,7 @@ func cnpgRunHibernation(value string) func(context.Context, *cnpgClusterRun) (*C
 			guard, msg = cnpgGuardRehydrate, "Rehydration requested"
 		}
 		if r := guard(x.facts); r != "" {
-			return nil, cnpgBlocked(r)
+			return nil, blockedAction(r)
 		}
 		if err := cnpgAnnotationPatch(ctx, x, cnpgHibernateAnnotation, value); err != nil {
 			return nil, err
@@ -2091,25 +1808,25 @@ func cnpgRunHibernation(value string) func(context.Context, *cnpgClusterRun) (*C
 
 // --- scheduled backups ---
 
-func runCNPGScheduleAction(ctx context.Context, c cnpgActionClients, namespace, name, action string, req CNPGActionRequest) (*CNPGActionResult, error) {
+func runCNPGScheduleAction(ctx context.Context, c cnpgActionClients, namespace, name, action string, req ActionRequest) (*CNPGActionResult, error) {
 	reviewed, err := decodeCNPGReviewedFacts(req.Facts)
 	if err != nil {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "%v", err)
+		return nil, refuseAction(http.StatusBadRequest, "", "%v", err)
 	}
 	var params struct {
 		Schedule *string `json:"schedule"`
 	}
 	if action == "setSchedule" {
-		if err := decodeCNPGParams(req.Params, &params); err != nil {
+		if err := decodeActionParams(req.Params, &params); err != nil {
 			return nil, err
 		}
 		if params.Schedule == nil {
-			return nil, cnpgRefuse(http.StatusBadRequest, "", "params.schedule is required for setSchedule")
+			return nil, refuseAction(http.StatusBadRequest, "", "params.schedule is required for setSchedule")
 		}
 		if p := cnpgSchedulePreview(*params.Schedule, nil, false, c.clock()); !p.Valid {
-			return nil, cnpgRefuse(http.StatusBadRequest, cnpgCodeInvalidSchedule, "invalid schedule %q: %s", *params.Schedule, p.Error)
+			return nil, refuseAction(http.StatusBadRequest, cnpgCodeInvalidSchedule, "invalid schedule %q: %s", *params.Schedule, p.Error)
 		}
-	} else if err := decodeCNPGParams(req.Params, &struct{}{}); err != nil {
+	} else if err := decodeActionParams(req.Params, &struct{}{}); err != nil {
 		return nil, err
 	}
 	sched, err := c.dyn.Resource(cnpgScheduleGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
@@ -2118,46 +1835,46 @@ func runCNPGScheduleAction(ctx context.Context, c cnpgActionClients, namespace, 
 	}
 	facts := cnpgScheduleFactsOf(ctx, c, sched)
 	if string(sched.GetUID()) != req.UID {
-		return nil, cnpgChanged(facts, "ScheduledBackup %s/%s was deleted and recreated since you reviewed it", namespace, name)
+		return nil, changedAction(facts, "ScheduledBackup %s/%s was deleted and recreated since you reviewed it", namespace, name)
 	}
 	switch action {
 	case "setSchedule":
 		if reviewed.Schedule == nil {
-			return nil, cnpgRefuse(http.StatusBadRequest, "", "facts.schedule is required for setSchedule: the confirmation must bind what the dialog showed")
+			return nil, refuseAction(http.StatusBadRequest, "", "facts.schedule is required for setSchedule: the confirmation must bind what the dialog showed")
 		}
 		if *reviewed.Schedule != facts.Schedule {
-			return nil, cnpgChanged(facts, "ScheduledBackup %s/%s schedule changed since you reviewed it; review the action again", namespace, name)
+			return nil, changedAction(facts, "ScheduledBackup %s/%s schedule changed since you reviewed it; review the action again", namespace, name)
 		}
 	case "run":
 		if reviewed.Generation == nil {
-			return nil, cnpgRefuse(http.StatusBadRequest, "", "facts.generation is required for run")
+			return nil, refuseAction(http.StatusBadRequest, "", "facts.generation is required for run")
 		}
 		if *reviewed.Generation != facts.Generation {
-			return nil, cnpgChanged(facts, "ScheduledBackup %s/%s settings changed since you confirmed; review the action again", namespace, name)
+			return nil, changedAction(facts, "ScheduledBackup %s/%s settings changed since you confirmed; review the action again", namespace, name)
 		}
 	default:
 		if reviewed.Suspended == nil {
-			return nil, cnpgRefuse(http.StatusBadRequest, "", "facts.suspended is required for %s", action)
+			return nil, refuseAction(http.StatusBadRequest, "", "facts.suspended is required for %s", action)
 		}
 		if *reviewed.Suspended != facts.Suspended {
-			return nil, cnpgChanged(facts, "ScheduledBackup %s/%s changed since you confirmed (suspended); review the action again", namespace, name)
+			return nil, changedAction(facts, "ScheduledBackup %s/%s changed since you confirmed (suspended); review the action again", namespace, name)
 		}
 	}
 	if facts.Terminating {
-		return nil, cnpgBlocked("The schedule is being deleted")
+		return nil, blockedAction("The schedule is being deleted")
 	}
 
 	switch action {
 	case "setSchedule":
 		if *params.Schedule == facts.Schedule {
-			return nil, cnpgBlocked("The schedule is already " + facts.Schedule)
+			return nil, blockedAction("The schedule is already " + facts.Schedule)
 		}
-		err := cnpgMergePatch(ctx, c.dyn, cnpgScheduleGVR, sched, map[string]any{"spec": map[string]any{"schedule": *params.Schedule}})
+		err := mergePatchAtVersion(ctx, c.dyn, cnpgScheduleGVR, sched, map[string]any{"spec": map[string]any{"schedule": *params.Schedule}})
 		if apierrors.IsConflict(err) {
 			if fresh, gerr := c.dyn.Resource(cnpgScheduleGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{}); gerr == nil {
 				facts = cnpgScheduleFactsOf(ctx, c, fresh)
 			}
-			return nil, cnpgChanged(facts, "ScheduledBackup %s/%s changed while the request was being sent; review the action again", namespace, name)
+			return nil, changedAction(facts, "ScheduledBackup %s/%s changed while the request was being sent; review the action again", namespace, name)
 		}
 		if err != nil {
 			return nil, err
@@ -2167,14 +1884,14 @@ func runCNPGScheduleAction(ctx context.Context, c cnpgActionClients, namespace, 
 	case "suspend", "resume":
 		want := action == "suspend"
 		if facts.Suspended == want {
-			return nil, cnpgBlocked(map[bool]string{true: "The schedule is suspended already", false: "The schedule is not suspended"}[want])
+			return nil, blockedAction(map[bool]string{true: "The schedule is suspended already", false: "The schedule is not suspended"}[want])
 		}
-		err := cnpgMergePatch(ctx, c.dyn, cnpgScheduleGVR, sched, map[string]any{"spec": map[string]any{"suspend": want}})
+		err := mergePatchAtVersion(ctx, c.dyn, cnpgScheduleGVR, sched, map[string]any{"spec": map[string]any{"suspend": want}})
 		if apierrors.IsConflict(err) {
 			if fresh, gerr := c.dyn.Resource(cnpgScheduleGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{}); gerr == nil {
 				facts = cnpgScheduleFactsOf(ctx, c, fresh)
 			}
-			return nil, cnpgChanged(facts, "ScheduledBackup %s/%s changed while the request was being sent; review the action again", namespace, name)
+			return nil, changedAction(facts, "ScheduledBackup %s/%s changed while the request was being sent; review the action again", namespace, name)
 		}
 		if err != nil {
 			return nil, err
@@ -2188,11 +1905,11 @@ func runCNPGScheduleAction(ctx context.Context, c cnpgActionClients, namespace, 
 	}
 
 	if r := cnpgGuardScheduleRun(facts); r != "" {
-		return nil, cnpgBlocked(r)
+		return nil, blockedAction(r)
 	}
 	backupName := name + "-manual-" + c.clock().Format(cnpgCompactStamp)
 	if errs := validation.IsDNS1123Subdomain(backupName); len(errs) > 0 {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "backup name %q is invalid: %s", backupName, strings.Join(errs, "; "))
+		return nil, refuseAction(http.StatusBadRequest, "", "backup name %q is invalid: %s", backupName, strings.Join(errs, "; "))
 	}
 	backup := cnpgBackupObject(namespace, backupName, facts.Cluster, map[string]any{cnpgRequestedFromAnno: name}, cnpgBackupSpecFromSchedule(sched))
 	res, err := cnpgCreateBackup(ctx, c.dyn, backup, facts.Cluster)
@@ -2219,60 +1936,17 @@ func cnpgBackupSpecFromSchedule(sched *unstructured.Unstructured) map[string]any
 
 // ---------- errors ----------
 
+// writeCNPGActionError adds the CloudNativePG reading of an admission-webhook
+// failure to the shared action error answer.
 func (s *Server) writeCNPGActionError(w http.ResponseWriter, err error, action, namespace, name string) {
-	var ae *cnpgActionError
-	if errors.As(err, &ae) {
-		log.Printf("[cnpg] %q %s/%s refused %d: %s", action, sanitizeForLog(namespace), sanitizeForLog(name), ae.Status, ae.Message)
-		body := map[string]any{"error": ae.Message}
-		if ae.Code != "" {
-			body["code"] = ae.Code
-		}
-		if ae.Current != nil {
-			body["current"] = ae.Current
-		}
-		if len(ae.Completed) > 0 {
-			body["completed"] = ae.Completed
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(ae.Status)
-		if encErr := json.NewEncoder(w).Encode(body); encErr != nil {
-			log.Printf("Failed to encode error response: %v", encErr)
-		}
-		return
+	var ae *actionError
+	if !errors.As(err, &ae) && strings.Contains(err.Error(), "failed calling webhook") {
+		err = refuseAction(http.StatusServiceUnavailable, cnpgCodeWebhook, "%s", "The CloudNativePG operator's admission webhook did not answer — the operator may be down: "+err.Error())
 	}
-	msg := err.Error()
-	status := http.StatusInternalServerError
-	code := ""
-	switch {
-	case strings.Contains(msg, "failed calling webhook"):
-		status, code = http.StatusServiceUnavailable, cnpgCodeWebhook
-		msg = "The CloudNativePG operator's admission webhook did not answer — the operator may be down: " + msg
-	case errors.Is(err, context.DeadlineExceeded) || apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err):
-		status = http.StatusGatewayTimeout
-	case apierrors.IsNotFound(err):
-		status = http.StatusNotFound
-	case apierrors.IsForbidden(err):
-		status = http.StatusForbidden
-		if g, ok := cnpgGrantFor(action); ok {
-			msg = "This needs " + g.String(namespace) + ": " + msg
-		}
-	case apierrors.IsAlreadyExists(err), apierrors.IsConflict(err):
-		status = http.StatusConflict
-	case apierrors.IsInvalid(err):
-		status = http.StatusUnprocessableEntity
-	}
-	log.Printf("[cnpg] Failed to %s %s/%s (%d): %v", sanitizeForLog(action), sanitizeForLog(namespace), sanitizeForLog(name), status, err)
-	if code != "" {
-		body := map[string]any{"error": msg, "code": code}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(body)
-		return
-	}
-	s.writeError(w, status, msg)
+	s.writeActionError(w, "cnpg", err, action, namespace, name, cnpgGrantFor)
 }
 
-func cnpgGrantFor(action string) (cnpgGrant, bool) {
+func cnpgGrantFor(action string) (Grant, bool) {
 	if g, ok := cnpgClusterActionGrants[action]; ok {
 		return g, true
 	}
@@ -2282,5 +1956,5 @@ func cnpgGrantFor(action string) (cnpgGrant, bool) {
 	if g, ok := cnpgExtraActionGrants[action]; ok {
 		return g, true
 	}
-	return cnpgGrant{}, false
+	return Grant{}, false
 }

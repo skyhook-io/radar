@@ -287,7 +287,7 @@ describe('switchover without readable endpoints', () => {
       obs({
         facts: facts({ currentPrimary: 'pg-2', targetPrimary: 'pg-2' }),
         runtime: runtime('pg-2', [{ pod: 'pg-1', state: 'streaming' }]),
-        ha: ha({ rwEndpoints: { state: 'denied', grant: 'list endpointslices in db', service: 'pg-rw', pods: [] } }),
+        ha: ha({ rwEndpoints: { state: 'denied', grant: { verb: 'list', group: 'discovery.k8s.io', resource: 'endpointslices', namespace: 'db' }, service: 'pg-rw', pods: [] } }),
       }),
     )
     expect(o.state).toBe('unobservable')

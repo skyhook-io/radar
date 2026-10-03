@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { WorkloadLogsViewer, type WorkloadLogsFetchParams, type WorkloadLogsResult } from '@skyhook-io/k8s-ui'
-import { fetchJSON } from '../../api/client'
+import { fetchJSON, useRadarFeature } from '../../api/client'
 import { getApiBase, getCredentialsMode } from '../../api/config'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useTheme } from '../../context/ThemeContext'
@@ -43,18 +43,20 @@ export function CNPGClusterLogs({ namespace, name }: { namespace: string; name: 
   const since = interval?.since
   const until = interval?.until
 
+  const { guard, support } = useRadarFeature('cnpgWorkspace')
   const fetchAll = useCallback(
     (params: WorkloadLogsFetchParams) =>
-      fetchJSON<WorkloadLogsResult>(`${logsPath(namespace, name)}${since && until ? intervalQuery(params, since, until) : query(params)}`, { signal: params.signal }),
-    [namespace, name, since, until],
+      guard(() => fetchJSON<WorkloadLogsResult>(`${logsPath(namespace, name)}${since && until ? intervalQuery(params, since, until) : query(params)}`, { signal: params.signal })),
+    [guard, namespace, name, since, until],
   )
-  const createStream = useCallback(
+  const stream = useCallback(
     (params: WorkloadLogsFetchParams) =>
       new EventSource(`${getApiBase()}${logsPath(namespace, name)}/stream${query(params, 50)}`, {
         withCredentials: getCredentialsMode() === 'include',
       }),
     [namespace, name],
   )
+  const createStream = support === 'unsupported' ? undefined : stream
 
   return (
     <div className="flex h-full flex-col">

@@ -1,4 +1,4 @@
-import type { CNPGFact } from '@skyhook-io/k8s-ui'
+import type { Fact } from '@skyhook-io/k8s-ui'
 import type { CNPGRuntimeBaseBackup, CNPGRuntimeResponse } from '../../api/cnpg'
 import { formatBytes } from './lsn'
 
@@ -18,7 +18,7 @@ export function describeCNPGBaseBackup(bb: CNPGRuntimeBaseBackup): string {
  * The primary's running base backups. Undefined when the primary's report was
  * not read, so the Overview omits the fact rather than claiming none.
  */
-export function cnpgBaseBackupFacts(rt: CNPGRuntimeResponse | undefined): { fact: CNPGFact; rows: CNPGRuntimeBaseBackup[] } | undefined {
+export function cnpgBaseBackupFacts(rt: CNPGRuntimeResponse | undefined): { fact: Fact; rows: CNPGRuntimeBaseBackup[] } | undefined {
   if (!rt || rt.permission.proxy === 'denied') return undefined
   const primary = rt.instances.find((i) => i.role === 'primary')
   if (!primary || (primary.status.state !== 'ok' && primary.status.state !== 'partial')) return undefined

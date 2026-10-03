@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Badge, StatusDot, formatAge, toneTextClass, type HealthLevel } from '@skyhook-io/k8s-ui'
+import { Badge, StatusDot, formatAge, toneTextClass, type HealthLevel, formatGrant } from '@skyhook-io/k8s-ui'
 import { useCNPGRecovery, type CNPGContainerState, type CNPGRecoveryResponse, type CNPGRecoverySpec } from '../../../api/cnpg-recovery'
 import { buildWorkloadPath } from '../../../utils/navigation'
 import { observeRestore, restoreNextSteps, type RestoreBackupDeclared, type RestoreNextStep, type RestoreNextStepId, type RestoreObservation } from './restoreModel'
@@ -155,7 +155,7 @@ export function CNPGRestoreProgress({ namespace, name, nextSteps }: { namespace:
           </button>
         )}
         {snapshot.coverage.pods?.state !== 'ok' && (
-          <div className="text-xs text-theme-text-tertiary">Recovery Pods not visible: {snapshot.coverage.pods?.grant ? `needs ${snapshot.coverage.pods.grant}` : snapshot.coverage.pods?.reason}</div>
+          <div className="text-xs text-theme-text-tertiary">Recovery Pods not visible: {snapshot.coverage.pods?.grant ? `needs ${formatGrant(snapshot.coverage.pods.grant)}` : snapshot.coverage.pods?.reason}</div>
         )}
         {warnings.length > 0 && (
           <div>

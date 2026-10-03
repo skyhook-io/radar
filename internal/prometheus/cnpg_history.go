@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -32,26 +32,9 @@ const (
 	CNPGHistoryStateNotRead   = "notRead"
 	CNPGHistoryStateAmbiguous = "ambiguous"
 
-	CNPGIsolationConfigured = "configured"
-	CNPGIsolationVerified   = "verified"
-	CNPGIsolationUnverified = "unverified"
-
 	cnpgHistoryMaxSeries   = 12
 	cnpgHistoryConcurrency = 4
 )
-
-// ErrCNPGScopeAmbiguous means the selected series exist under more than one
-// cluster identity in this Prometheus, so any answer could mix clusters.
-var ErrCNPGScopeAmbiguous = errors.New("cnpg metrics: the selected series appear under more than one cluster identity")
-
-// ErrCNPGScopeMismatch means the verified cluster identity labels select none
-// of the probed series although unscoped ones exist.
-var ErrCNPGScopeMismatch = errors.New("cnpg metrics: cluster identity labels do not appear on the selected series")
-
-type cnpgQuerier interface {
-	Query(ctx context.Context, query string) (*prom.QueryResult, error)
-	QueryRange(ctx context.Context, query string, start, end time.Time, step time.Duration) (*prom.QueryResult, error)
-}
 
 // CNPGHistoryRange is one of the ranges the history endpoint accepts. Steps
 // keep every chart at 60–144 points.
@@ -79,13 +62,6 @@ func ParseCNPGHistoryRange(raw string) (CNPGHistoryRange, bool) {
 		}
 	}
 	return CNPGHistoryRange{}, false
-}
-
-// CNPGIsolation says how the queries keep to this Kubernetes cluster's series.
-type CNPGIsolation struct {
-	Mode   string            `json:"mode"`
-	Labels map[string]string `json:"labels,omitempty"`
-	Note   string            `json:"note"`
 }
 
 // CNPGInstanceSelector is the matcher set for a Cluster's instance series.
@@ -120,147 +96,10 @@ func CNPGClusterOfPod(pod string, clusters map[string]bool) string {
 	return m[1]
 }
 
-func withScope(selector, matchers string) string {
-	if matchers == "" {
-		return selector
-	}
-	return selector + "," + matchers
-}
-
-// scopeProbe names the series whose identity labels decide a scope: one
-// selector per batch and, for a chart over a range, the window every identity
-// is collected over (an instant check would miss one that stopped reporting
-// minutes ago but still fills the chart).
-type scopeProbe struct {
-	metric string
-	// key is the label one Kubernetes object's series share (pod, claim).
-	key       string
-	selectors []string
-	window    time.Duration
-}
-
-func (p scopeProbe) over(sel string) string {
-	if p.window <= 0 {
-		return p.metric + "{" + sel + "}"
-	}
-	return "count_over_time(" + p.metric + "{" + sel + "}[" + p.window.String() + "])"
-}
-
 // ResolveCNPGScope decides the cluster-identity matchers for one namespace's
 // CNPG exporter series over window (0 for an instant read).
-func ResolveCNPGScope(ctx context.Context, namespace, selector string, anchors []prom.WorkloadPodIdentity, window time.Duration) (string, CNPGIsolation, error) {
+func ResolveCNPGScope(ctx context.Context, namespace, selector string, anchors []prom.WorkloadPodIdentity, window time.Duration) (string, SeriesIsolation, error) {
 	return resolveScope(ctx, namespace, scopeProbe{metric: "cnpg_collector_up", key: "pod", selectors: []string{selector}, window: window}, anchors, nil)
-}
-
-// ResolvePVCScope decides the cluster-identity matchers for the named claims'
-// kubelet volume stats over window (0 for an instant read).
-func ResolvePVCScope(ctx context.Context, namespace string, claims []string, anchors []prom.WorkloadPodIdentity, window time.Duration) (string, CNPGIsolation, error) {
-	m, iso, err := resolveScope(ctx, namespace, pvcScopeProbe(namespace, claims, window), anchors, nil)
-	return m, iso.forClaims(), err
-}
-
-// forClaims words an unverified match for volume stats, which are matched by
-// claim name rather than Pod name.
-func (iso CNPGIsolation) forClaims() CNPGIsolation {
-	if iso.Mode == CNPGIsolationUnverified {
-		iso.Note = "Matched by namespace and claim names. Radar couldn't confirm these volume stats belong to this exact cluster (no cluster label it could check)"
-	}
-	return iso
-}
-
-func pvcScopeProbe(namespace string, claims []string, window time.Duration) scopeProbe {
-	return scopeProbe{metric: "kubelet_volume_stats_capacity_bytes", key: "persistentvolumeclaim", selectors: CNPGClaimSelectors(namespace, claims), window: window}
-}
-
-// CNPGClaimSelectors selects the named claims of one namespace, in batches
-// that keep each regex matcher small.
-func CNPGClaimSelectors(namespace string, claims []string) []string {
-	names := make([]string, len(claims))
-	for i, c := range claims {
-		names[i] = regexp.QuoteMeta(c)
-	}
-	sort.Strings(names)
-	var out []string
-	for start := 0; start < len(names); start += pvcUsageBatchSize {
-		end := min(start+pvcUsageBatchSize, len(names))
-		out = append(out, "namespace="+strconv.Quote(namespace)+",persistentvolumeclaim=~"+strconv.Quote(strings.Join(names[start:end], "|")))
-	}
-	return out
-}
-
-// resolveScope applies an operator-configured scope first, then identity
-// labels proven by kube-state-metrics Pod UIDs. Only those two may add
-// matchers: labels merely seen on the series are not identity (the CNPG
-// exporter's own `cluster` label is the database cluster's name).
-// With no anchors, a cache lets the proof use the namespace's current Pods.
-func resolveScope(ctx context.Context, namespace string, probe scopeProbe, anchors []prom.WorkloadPodIdentity, cache *k8s.ResourceCache) (string, CNPGIsolation, error) {
-	client := GetClient()
-	if client == nil {
-		return "", CNPGIsolation{}, errors.New("Prometheus client not initialized")
-	}
-	if config, _, configured := client.workloadMetricsConfig(); configured {
-		m, err := config.Matchers()
-		if err != nil {
-			return "", CNPGIsolation{}, err
-		}
-		iso := CNPGIsolation{Mode: CNPGIsolationConfigured, Labels: config.ClusterLabels, Note: "Matched by the cluster labels an operator configured"}
-		if config.SingleCluster {
-			iso.Note = "An operator declared this Prometheus single-cluster"
-		}
-		return m, iso, nil
-	}
-	var verified map[string]string
-	if len(anchors) > 0 || cache != nil {
-		if cfg, err := client.historicalClusterScope(ctx, PodScope{Namespace: namespace, Identities: anchors}, cache); err == nil {
-			verified = cfg.ClusterLabels
-		}
-	}
-	return decideScope(ctx, client, probe, verified)
-}
-
-func decideScope(ctx context.Context, q cnpgQuerier, probe scopeProbe, verified map[string]string) (string, CNPGIsolation, error) {
-	if len(verified) > 0 {
-		m, err := prom.WorkloadMetricsScope{ClusterLabels: verified}.Matchers()
-		if err != nil {
-			return "", CNPGIsolation{}, err
-		}
-		for _, sel := range probe.selectors {
-			scoped, err := q.Query(ctx, "count("+probe.over(withScope(sel, m))+")")
-			if err != nil {
-				return "", CNPGIsolation{}, err
-			}
-			if len(scoped.Series) > 0 {
-				return m, cnpgVerifiedIsolation(verified), nil
-			}
-		}
-		for _, sel := range probe.selectors {
-			all, err := q.Query(ctx, "count("+probe.over(sel)+")")
-			if err != nil {
-				return "", CNPGIsolation{}, err
-			}
-			if len(all.Series) > 0 {
-				return "", CNPGIsolation{}, ErrCNPGScopeMismatch
-			}
-		}
-		return m, cnpgVerifiedIsolation(verified), nil
-	}
-	// Unproven: nothing is pinned. One object (Pod, claim) whose series carry
-	// more than one set of partition labels over the range may be two
-	// clusters' objects of the same name, so that is refused.
-	for _, sel := range probe.selectors {
-		res, err := q.Query(ctx, "max(count by ("+probe.key+") (count by ("+probe.key+","+strings.Join(partitionLabels, ",")+") ("+probe.over(sel)+")))")
-		if err != nil {
-			return "", CNPGIsolation{}, err
-		}
-		if len(res.Series) > 0 && len(res.Series[0].DataPoints) > 0 && res.Series[0].DataPoints[0].Value > 1 {
-			return "", CNPGIsolation{}, ErrCNPGScopeAmbiguous
-		}
-	}
-	return "", CNPGIsolation{Mode: CNPGIsolationUnverified, Note: "Matched by namespace and Pod names. Radar couldn't confirm these series belong to this exact cluster (no cluster label it could check)"}, nil
-}
-
-func cnpgVerifiedIsolation(labels map[string]string) CNPGIsolation {
-	return CNPGIsolation{Mode: CNPGIsolationVerified, Labels: labels, Note: "Matched by cluster labels confirmed against this cluster's Pods"}
 }
 
 // CNPGHistoryThreshold is a reference line on a chart.
@@ -279,7 +118,7 @@ type CNPGHistoryChart struct {
 	SeriesBy   string                 `json:"seriesBy"`
 	State      string                 `json:"state"`
 	Reason     string                 `json:"reason,omitempty"`
-	Grant      string                 `json:"grant,omitempty"`
+	Grant      *auth.Grant            `json:"grant,omitempty"`
 	Thresholds []CNPGHistoryThreshold `json:"thresholds,omitempty"`
 	Series     []prom.Series          `json:"series"`
 	Omitted    int                    `json:"omitted,omitempty"`
@@ -416,8 +255,8 @@ type CNPGHistoryRequest struct {
 	// PVCAmbiguous says why the claims' identity could not be settled.
 	PVCAmbiguous string
 	// PodsDenied / PVCDenied carry the grant that is missing, empty when allowed.
-	PodsDenied string
-	PVCDenied  string
+	PodsDenied *auth.Grant
+	PVCDenied  *auth.Grant
 	// PVCReason explains an empty Claims when the claims were not denied.
 	PVCReason string
 	Claims    []string
@@ -432,7 +271,7 @@ func QueryCNPGHistory(ctx context.Context, req CNPGHistoryRequest) ([]CNPGHistor
 	return queryCNPGHistory(ctx, client, req), nil
 }
 
-func queryCNPGHistory(ctx context.Context, q cnpgQuerier, req CNPGHistoryRequest) []CNPGHistoryChart {
+func queryCNPGHistory(ctx context.Context, q seriesQuerier, req CNPGHistoryRequest) []CNPGHistoryChart {
 	sel := withScope(CNPGInstanceSelector(req.Namespace, req.Cluster), req.Matchers)
 	pvcSel := ""
 	if len(req.Claims) > 0 {
@@ -450,10 +289,10 @@ func queryCNPGHistory(ctx context.Context, q cnpgQuerier, req CNPGHistoryRequest
 		c := &charts[i]
 		*c = CNPGHistoryChart{ID: d.id, Title: d.title, Unit: d.unit, Source: d.source, SeriesBy: d.seriesBy, Thresholds: d.thresholds, Series: []prom.Series{}, Steps: steps}
 		switch {
-		case d.pvc && req.PVCDenied != "":
+		case d.pvc && req.PVCDenied != nil:
 			c.State, c.Grant = CNPGHistoryStateDenied, req.PVCDenied
 			continue
-		case !d.pvc && req.PodsDenied != "":
+		case !d.pvc && req.PodsDenied != nil:
 			c.State, c.Grant = CNPGHistoryStateDenied, req.PodsDenied
 			continue
 		case d.pvc && req.PVCAmbiguous != "":
@@ -483,7 +322,7 @@ func queryCNPGHistory(ctx context.Context, q cnpgQuerier, req CNPGHistoryRequest
 	return charts
 }
 
-func runCNPGHistoryChart(ctx context.Context, q cnpgQuerier, d cnpgHistoryDef, start, end time.Time, step time.Duration, c *CNPGHistoryChart) {
+func runCNPGHistoryChart(ctx context.Context, q seriesQuerier, d cnpgHistoryDef, start, end time.Time, step time.Duration, c *CNPGHistoryChart) {
 	series := []prom.Series{}
 	for _, query := range d.queries {
 		res, err := q.QueryRange(ctx, query.expr, start, end, step)
@@ -574,7 +413,7 @@ func QueryCNPGFleetLag(ctx context.Context, namespace string, clusters []string,
 
 // A Pod scraped but not in recovery answers -1 through the `or` branch, so one
 // query carries both lag and presence.
-func queryCNPGFleetLag(ctx context.Context, q cnpgQuerier, namespace string, clusters []string, matchers string) (CNPGFleetLag, error) {
+func queryCNPGFleetLag(ctx context.Context, q seriesQuerier, namespace string, clusters []string, matchers string) (CNPGFleetLag, error) {
 	sel := withScope(CNPGInstancesSelector(namespace, clusters), matchers)
 	query := "(max by (pod) (cnpg_pg_replication_lag{" + sel + "}) and on (pod) (max by (pod) (cnpg_pg_replication_in_recovery{" + sel + "}) == 1)) or (-1 * count by (pod) (cnpg_collector_up{" + sel + "}))"
 	res, err := q.Query(ctx, query)
@@ -610,7 +449,7 @@ func queryCNPGFleetLag(ctx context.Context, q cnpgQuerier, namespace string, clu
 
 // querySustainedCNPGLag is best effort: without it the fleet still shows the
 // current lag, it just raises no sustained-lag problem.
-func querySustainedCNPGLag(ctx context.Context, q cnpgQuerier, sel string, known map[string]bool) map[string]CNPGLagReading {
+func querySustainedCNPGLag(ctx context.Context, q seriesQuerier, sel string, known map[string]bool) map[string]CNPGLagReading {
 	// Exact on Prometheus 2.x and 3.x alike: every raw sample in the window is
 	// at least the reported floor, and the series already existed when the
 	// window began (it answers at offset 10m), so a standby that appeared a
@@ -653,7 +492,7 @@ func QueryCNPGDiskGrowth(ctx context.Context, namespace string, claims []string,
 	return queryCNPGDiskGrowth(ctx, client, namespace, claims, window, matchers)
 }
 
-func queryCNPGDiskGrowth(ctx context.Context, q cnpgQuerier, namespace string, claims []string, window time.Duration, matchers string) (map[string]float64, error) {
+func queryCNPGDiskGrowth(ctx context.Context, q seriesQuerier, namespace string, claims []string, window time.Duration, matchers string) (map[string]float64, error) {
 	out := map[string]float64{}
 	if len(claims) == 0 {
 		return out, nil

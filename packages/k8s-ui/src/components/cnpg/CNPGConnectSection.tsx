@@ -3,7 +3,8 @@ import { Check, Copy } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
 import { CNPG_GROUP } from '../resources/resource-utils-cnpg'
 import { cnpgConnectionURI, cnpgConnectInfo, cnpgPsqlCommand, type CNPGConnectEndpoint } from './connect'
-import { FactGrid, FactRow, RefLink, SummaryHeading, type CNPGNavigate } from './primitives'
+import { type NavigateToRef, RefLink } from '../ui/RefLink'
+import { FactGrid, FactRow, SectionHeading } from '../workspace'
 
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false)
@@ -57,8 +58,6 @@ const ROLE_LABEL: Record<CNPGConnectEndpoint['role'], string> = {
  * id: a drawer summary can sit over a page summary of the same kind, so a host
  * scrolls to it within its own summary's element.
  */
-export const CNPG_CONNECT_SELECTOR = '[data-cnpg-anchor="connect"]'
-
 export function CNPGConnectSection({
   cluster,
   poolers,
@@ -70,7 +69,7 @@ export function CNPGConnectSection({
   poolers?: any[]
   /** False when Poolers could not be listed, so a Pooler may exist that is not shown. */
   poolersKnown?: boolean
-  onNavigate?: CNPGNavigate
+  onNavigate?: NavigateToRef
   /** False where the host already titles it (e.g. the Connect dialog). */
   showHeading?: boolean
 }) {
@@ -79,7 +78,7 @@ export function CNPGConnectSection({
   const primary = info.endpoints[0]
   return (
     <>
-      {showHeading && <SummaryHeading anchor="connect" hint="from the Cluster spec · hosts resolve inside the Kubernetes cluster">Connect</SummaryHeading>}
+      {showHeading && <SectionHeading hint="from the Cluster spec · hosts resolve inside the Kubernetes cluster">Connect</SectionHeading>}
       <FactGrid>
         <FactRow label="Services">
           <ul className="space-y-1">

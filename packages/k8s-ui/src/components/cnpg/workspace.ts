@@ -3,7 +3,12 @@
 // does not report something the value is "unknown", never zero or healthy.
 
 import { formatAge, type HealthLevel } from '../resources/resource-utils'
+import { worseTone } from '../ui/status-tone'
+import type { Fact, ProblemOrigin, WorkspaceProblem } from '../workspace'
+import type { ResourceRef } from '../../types/core'
 import { formatBytes } from '../../utils/format'
+import { formatGrant, type Grant } from '../../utils/grant'
+import { issueReasonTitle } from '../issues/severity'
 import {
   CNPG_BARMAN_PLUGIN_NAME,
   getCNPGClusterBackupConfig,
@@ -32,12 +37,14 @@ export const CNPG_WORKSPACE_KEYS = [
 
 export type CNPGWorkspaceKey = (typeof CNPG_WORKSPACE_KEYS)[number]
 
-export type CNPGCoverageState = 'full' | 'partial' | 'denied' | 'notInstalled' | 'syncing' | 'error'
+export type CNPGCoverageState = 'full' | 'partial' | 'denied' | 'notInstalled' | 'syncing' | 'uncached' | 'error'
 
 export interface CNPGKindCoverage {
   state: CNPGCoverageState
   /** Denied namespaces, named only when the caller supplied the candidate list. */
   deniedNamespaces?: string[]
+  /** Namespaces the caller may read but Radar's cache does not hold, named under the same rule. */
+  uncachedNamespaces?: string[]
   /** For partial coverage: the namespaces that were read. */
   allowedNamespaces?: string[]
 }
@@ -78,6 +85,8 @@ export interface CNPGWorkspaceResponse {
   backupsOmitted: number
   /** Each ScheduledBackup's schedule as the operator reads it, keyed "namespace/name"; absent when it cannot be parsed. */
   scheduleReadings?: Record<string, string>
+  /** The manager of each object that has one, keyed "Kind/namespace/name". */
+  managedBy?: Record<string, ResourceRef>
 }
 
 export const CNPG_KIND_BY_KEY: Record<CNPGWorkspaceKey, { kind: string; group: string; plural: string }> = {
@@ -99,22 +108,6 @@ export function isCNPGWorkspaceKind(kind: string, group: string | undefined): bo
   return Object.values(CNPG_KIND_BY_KEY).some((k) => k.group !== '' && k.group === (group ?? '') && k.kind === kind)
 }
 
-/** The value is observed, derived, or not available from the cluster. */
-export type CNPGFactTone = HealthLevel
-
-export interface CNPGFact {
-  text: string
-  tone: CNPGFactTone
-  /** Where the value comes from, shown next to it so claims carry their source. */
-  source?: string
-  /** A timestamp the text refers to; the UI renders it as an age. */
-  at?: string
-  /** `since`: `at` is when a still-current state began, rendered "Failing for 2d" rather than "· 2d ago". */
-  atMeaning?: 'since'
-  /** The full explanation behind a short `source`, shown on hover only. */
-  detail?: string
-}
-
 export type CNPGProblemCategory = 'availability' | 'protection' | 'declarations' | 'pooling'
 
 export const CNPG_PROBLEM_CATEGORIES: { id: CNPGProblemCategory; label: string }[] = [
@@ -124,33 +117,8 @@ export const CNPG_PROBLEM_CATEGORIES: { id: CNPGProblemCategory; label: string }
   { id: 'pooling', label: 'Pooling' },
 ]
 
-export interface CNPGProblem {
-  /** Stable identity for keys. */
-  id: string
-  severity: 'critical' | 'warning' | 'posture'
-  category: CNPGProblemCategory
-  title: string
-  detail?: string
-  /** The object the evidence is about (may be the Cluster or a child object). */
-  subject: { kind: string; group: string; namespace: string; name: string }
-  /**
-   * measurement: derived here from a reading only callers holding its grants
-   * receive (disk use, instance Pod readiness).
-   */
-  source: 'issue' | 'audit' | 'measurement'
-  /** What took the measurement, e.g. "Prometheus" (shown as "Measured by Prometheus"). */
-  measuredBy?: string
-  /** The measurement's series were matched to this cluster by name only (see `measuredBy`). */
-  unverifiedMatch?: boolean
-  /** How it was measured (queries, metric names), shown on hover over the source. */
-  sourceDetail?: string
-  /** A shorter headline for tight places (the fleet cell); `title` stays the precise one. */
-  shortTitle?: string
-  /** Where an issue's evidence comes from, in user terms (see cnpgIssueOrigin). */
-  origin?: CNPGProblemOrigin
-  /** Other objects the same problem is about, e.g. earlier Backups that failed the same way. */
-  alsoAbout?: { kind: string; name: string }[]
-}
+/** A problem in the CloudNativePG workspace, categorised by the workspace's four screens. */
+export type CNPGProblem = WorkspaceProblem<CNPGProblemCategory>
 
 export interface CNPGInstance {
   name: string
@@ -161,15 +129,15 @@ export interface CNPGInstance {
 }
 
 export interface CNPGProtectionFacts {
-  schedule: CNPGFact & { names: string[] }
-  destination: CNPGFact & {
+  schedule: Fact & { names: string[] }
+  destination: Fact & {
     method: 'plugin' | 'barmanObjectStore' | 'volumeSnapshot' | 'none'
     objectStore?: string
   }
-  lastSuccessfulBackup: CNPGFact
-  walArchiving: CNPGFact
-  recoveryWindow: CNPGFact & { from?: string }
-  restoreValidation: CNPGFact & { restoredInto?: { namespace: string; name: string } }
+  lastSuccessfulBackup: Fact
+  walArchiving: Fact
+  recoveryWindow: Fact & { from?: string }
+  restoreValidation: Fact & { restoredInto?: { namespace: string; name: string } }
 }
 
 export interface CNPGFleetRow {
@@ -193,9 +161,9 @@ export interface CNPGFleetRow {
   hibernated: boolean
   pgVersion: string | null
   catalog: { kind: string; name: string } | null
-  replication: CNPGFact
-  protection: CNPGProtectionFacts & { summary: CNPGFact }
-  declarations: { summary: CNPGFact; total: number; failed: number; pending: number }
+  replication: Fact
+  protection: CNPGProtectionFacts & { summary: Fact }
+  declarations: { summary: Fact; total: number; failed: number; pending: number }
   poolers: string[]
   /** The Pooler objects behind `poolers`, for their type and Service port. */
   poolerObjects?: any[]
@@ -206,11 +174,12 @@ export interface CNPGFleetRow {
   attention: boolean
   categories: Set<CNPGProblemCategory>
   /** GitOps owner recorded on the Cluster, when it carries the standard labels. */
-  gitops: CNPGGitOpsSource | null
+  /** The GitOps or Helm object that manages the Cluster, as the server detected it. */
+  managedBy?: ResourceRef
   /** Fullest measured volume, set by applyCNPGDisk; absent when no disk reading was requested. */
-  disk?: CNPGFact
+  disk?: Fact
   /** Growth of the fastest-growing volume, set by applyCNPGFleetMetrics when measured. */
-  diskGrowth?: CNPGFact
+  diskGrowth?: Fact
 }
 
 export interface CNPGFleet {
@@ -244,13 +213,11 @@ const CNPG_POD_REASON_SENTENCES: Record<string, string> = {
 
 // Plain headlines for CNPG issues whose message carries the operator's own
 // condition text; that message becomes the detail beneath.
+// Reasons the Issues page already titles come from issueReasonTitle, so a
+// problem reads the same here and there; these are the rest.
 const CNPG_REASON_TITLES: Record<string, string> = {
-  CNPGWALArchivingFailing: 'WAL archiving is failing',
-  CNPGLastBackupFailed: 'The last backup failed',
   CNPGBackupFailed: 'Backup failed',
   CNPGScheduledBackupMissed: 'A scheduled backup did not run',
-  // The detector sees no successful backup since the run; a failed one may exist.
-  CNPGScheduledRunNoBackup: 'No successful backup since a scheduled run',
   CNPGCertificateExpiring: 'A certificate expires soon',
   CNPGCertificateExpired: 'A certificate has expired',
 }
@@ -266,7 +233,7 @@ export function cnpgIssueText(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'name' | 
   const cause = issue.cause?.trim() || undefined
   // The run's time is the issue's first_seen, not part of the message.
   if (issue.reason === 'CNPGScheduledRunNoBackup' && issue.first_seen && message) message = `${message} ${formatAge(issue.first_seen)} ago`
-  const known = CNPG_REASON_TITLES[issue.reason]
+  const known = issueReasonTitle(issue.reason) ?? CNPG_REASON_TITLES[issue.reason]
   if (known) return { title: known, detail: [stripTitlePrefix(message, known), cause].filter(Boolean).join(' ') || undefined }
   if (message && message !== issue.reason && /\s/.test(message)) return { title: message, detail: cause }
   const token = message || issue.reason
@@ -322,7 +289,7 @@ export function cnpgCollapseBackupFailures(problems: IssueProblem[], backupTimes
 }
 
 /**
- * "The last backup failed" restates a failed-Backup problem when that problem
+ * "Latest backup failed" restates a failed-Backup problem when that problem
  * is about the cluster's newest Backup, so the duplicate is dropped and the
  * count stays honest. With the newest Backup unknown, both stay.
  */
@@ -353,11 +320,6 @@ function backupTimesOf(cluster: any, backups: any[]): Map<string, number> {
   return out
 }
 
-export interface CNPGProblemOrigin {
-  label: string
-  /** The exact field or condition, shown on hover. */
-  detail?: string
-}
 
 // Each entry names what the Go detector (internal/issues/source_cnpg*.go and
 // the Pod detector) actually reads. "Reported by CNPG" only where the operator
@@ -373,7 +335,7 @@ const CNPG_CONDITION_ORIGINS: Record<string, string> = {
   CNPGDeclarativeNotApplied: 'status.applied and status.message',
 }
 
-const POD_ORIGINS: Record<string, CNPGProblemOrigin> = {
+const POD_ORIGINS: Record<string, ProblemOrigin> = {
   ReadinessProbeFailed: { label: 'Pod readiness probe', detail: 'Kubelet probe-failure events and the Pod\'s Ready condition' },
   LivenessProbeFailed: { label: 'Pod liveness probe', detail: 'Kubelet probe-failure events and container restarts' },
   ReadinessProbeInvalid: { label: 'Radar check of the probe', detail: 'The readiness probe names a port the container does not declare' },
@@ -387,7 +349,7 @@ const POD_ORIGINS: Record<string, CNPGProblemOrigin> = {
  * reported, a Backup's or Pod's own status, or Radar's own check. A reason this
  * does not know reads "Detected by Radar" rather than a guessed source.
  */
-export function cnpgIssueOrigin(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'reason'>): CNPGProblemOrigin {
+export function cnpgIssueOrigin(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'reason'>): ProblemOrigin {
   const condition = CNPG_CONDITION_ORIGINS[issue.reason]
   if (condition) return { label: 'Reported by CNPG', detail: condition }
   switch (issue.reason) {
@@ -454,23 +416,35 @@ export function coverageReadable(cov: CNPGKindCoverage, namespace?: string): boo
   if (cov.state === 'partial') {
     if (!namespace) return false
     if (cov.allowedNamespaces) return cov.allowedNamespaces.includes(namespace)
-    if (cov.deniedNamespaces) return !cov.deniedNamespaces.includes(namespace)
+    if (cov.deniedNamespaces || cov.uncachedNamespaces) return !cov.deniedNamespaces?.includes(namespace) && !cov.uncachedNamespaces?.includes(namespace)
     return false
   }
   return false
 }
 
-function coverageUnavailableText(cov: CNPGKindCoverage, what: string): string {
+/**
+ * Why a kind's objects were not read (in `namespace`, when given), worded for
+ * a fact. A namespace Radar's cache does not hold is never called "no access";
+ * a partial read that names neither cause says only that it was not read.
+ */
+export function cnpgCoverageGap(cov: CNPGKindCoverage, what: string, namespace?: string, notInstalled = 'Not installed'): string {
+  // A namespace the server names wins over the kind's overall state: an
+  // uncached scope can still name namespaces the caller was denied.
+  if (namespace && cov.deniedNamespaces?.includes(namespace)) return `No access to ${what}`
+  if (namespace && cov.uncachedNamespaces?.includes(namespace)) return `Radar does not cache ${what} in ${namespace}`
   switch (cov.state) {
     case 'denied':
-    case 'partial':
       return `No access to ${what}`
+    case 'partial':
+      return namespace ? `${what} not read in ${namespace}` : `${what} not read`
+    case 'uncached':
+      return `Radar does not cache ${what}`
     case 'syncing':
       return 'Loading…'
     case 'error':
       return `Could not read ${what}`
     default:
-      return 'Not installed'
+      return notInstalled
   }
 }
 
@@ -497,27 +471,12 @@ function podReady(pod: any): boolean | null {
   return ready.status === 'True'
 }
 
-export type CNPGGitOpsSource = { tool: 'argocd' | 'flux'; name: string; namespace?: string }
-
-/** The GitOps owner recorded on an object's standard Argo CD / Flux labels. */
-export function cnpgGitOpsSource(obj: any): CNPGGitOpsSource | null {
-  const labels = obj?.metadata?.labels ?? {}
-  const annotations = obj?.metadata?.annotations ?? {}
-  const argo = labels['argocd.argoproj.io/instance']
-  if (argo) return { tool: 'argocd', name: argo }
-  const tracking = annotations['argocd.argoproj.io/tracking-id']
-  if (typeof tracking === 'string' && tracking.includes(':')) {
-    return { tool: 'argocd', name: tracking.split(':')[0] }
-  }
-  const fluxName = labels['kustomize.toolkit.fluxcd.io/name'] || labels['helm.toolkit.fluxcd.io/name']
-  if (fluxName) {
-    return {
-      tool: 'flux',
-      name: fluxName,
-      namespace: labels['kustomize.toolkit.fluxcd.io/namespace'] || labels['helm.toolkit.fluxcd.io/namespace'],
-    }
-  }
-  return null
+/** The manager the server detected for a workspace object (Argo CD, Flux or Helm), if any. */
+export function cnpgManagedBy(ws: Pick<CNPGWorkspaceResponse, 'managedBy'> | null | undefined, obj: any): ResourceRef | undefined {
+  const kind = obj?.kind
+  const name = obj?.metadata?.name
+  if (!kind || !name) return undefined
+  return ws?.managedBy?.[`${kind}/${obj?.metadata?.namespace ?? ''}/${name}`]
 }
 
 function scheduleFact(
@@ -528,7 +487,7 @@ function scheduleFact(
 ): CNPGProtectionFacts['schedule'] {
   const ns = cluster.metadata?.namespace
   if (!coverageReadable(cov, ns)) {
-    return { text: coverageUnavailableText(cov, 'ScheduledBackups'), tone: 'unknown', names: [] }
+    return { text: cnpgCoverageGap(cov, 'ScheduledBackups', ns), tone: 'unknown', names: [] }
   }
   const mine = schedules.filter((s) => s.metadata?.namespace === ns && specClusterName(s) === cluster.metadata?.name)
   if (mine.length === 0) return { text: 'No declarative schedule', tone: 'neutral', names: [] }
@@ -612,9 +571,9 @@ function lastBackupFact(
   if (!cfg.plugin && cfg.lastSuccessfulBackup) candidates.push({ at: cfg.lastSuccessfulBackup, source: 'Cluster status' })
   if (candidates.length === 0) {
     if (!coverageReadable(backupsCov, ns)) {
-      return { text: coverageUnavailableText(backupsCov, 'Backups'), tone: 'unknown' }
+      return { text: cnpgCoverageGap(backupsCov, 'Backups', ns), tone: 'unknown' }
     }
-    if (storesUnreadable) return { text: coverageUnavailableText(storesUnreadable, 'ObjectStores'), tone: 'unknown' }
+    if (storesUnreadable) return { text: cnpgCoverageGap(storesUnreadable, 'ObjectStores', ns), tone: 'unknown' }
     return { text: 'None observed', tone: 'unknown' }
   }
   const best = candidates.reduce((a, b) => (Date.parse(a.at) >= Date.parse(b.at) ? a : b))
@@ -624,7 +583,7 @@ function lastBackupFact(
 const ARCHIVING_RECENT_MS = 24 * 3_600_000
 const ARCHIVING_SETTLE_MS = 10 * 60_000
 
-function walFact(cluster: any, now = Date.now()): CNPGFact {
+function walFact(cluster: any, now = Date.now()): Fact {
   const conds = cluster?.status?.conditions
   const c = Array.isArray(conds) ? conds.find((x: any) => x?.type === 'ContinuousArchiving') : null
   if (!c) return { text: 'Not reported', tone: 'unknown', source: 'Cluster status' }
@@ -749,7 +708,7 @@ function restoreValidationFact(
   }
 }
 
-function protectionSummary(p: CNPGProtectionFacts): CNPGFact {
+function protectionSummary(p: CNPGProtectionFacts): Fact {
   if (p.walArchiving.tone === 'unhealthy') return { text: 'WAL archiving failing', tone: 'unhealthy' }
   if (p.destination.method === 'none' && p.schedule.names.length === 0 && p.schedule.tone !== 'unknown') {
     return { text: 'No backup destination or schedule', tone: 'neutral' }
@@ -775,12 +734,12 @@ function pgVersion(cluster: any): string | null {
   return typeof major === 'number' ? String(major) : null
 }
 
-function replicationFact(cluster: any, pods: CNPGInstance[], hibernated: boolean, podsCov: CNPGKindCoverage): CNPGFact {
+function replicationFact(cluster: any, pods: CNPGInstance[], hibernated: boolean, podsCov: CNPGKindCoverage): Fact {
   if (hibernated) return { text: 'Hibernated', tone: 'neutral' }
   const desired = cluster?.spec?.instances
   if (desired === 1) return { text: 'Single instance', tone: 'neutral' }
   if (!coverageReadable(podsCov, cluster?.metadata?.namespace)) {
-    return { text: coverageUnavailableText(podsCov, 'Pods'), tone: 'unknown' }
+    return { text: cnpgCoverageGap(podsCov, 'Pods', cluster?.metadata?.namespace), tone: 'unknown' }
   }
   const replicas = pods.filter((p) => p.role === 'replica')
   const readyReplicas = replicas.filter((p) => p.ready === true).length
@@ -981,7 +940,7 @@ function declarationsFor(cluster: any, resp: CNPGWorkspaceResponse): CNPGFleetRo
     if (failedRoles.has(r.name)) failed++
     else if (!reconciledRoles.has(r.name)) pending++
   }
-  let summary: CNPGFact
+  let summary: Fact
   if (total === 0) {
     summary = unreadable ? { text: 'No access to some declarations', tone: 'unknown' } : { text: 'None declared', tone: 'neutral' }
   } else if (failed > 0) {
@@ -1038,7 +997,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
             source: `ObjectStore ${window.store} status (earliest point)`,
           }
         : storesUnreadable
-          ? { text: coverageUnavailableText(storesCov, 'ObjectStores'), tone: 'unknown' }
+          ? { text: cnpgCoverageGap(storesCov, 'ObjectStores', ns), tone: 'unknown' }
           : { text: 'Not reported', tone: 'unknown' },
       restoreValidation: restoreValidationFact(cluster, clusters, resp.objects.backups ?? [], coverageReadable(coverageOf(resp, 'backups'), ns)),
     }
@@ -1084,7 +1043,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
       problems,
       attention: problems.some((p) => p.severity !== 'posture'),
       categories,
-      gitops: cnpgGitOpsSource(cluster),
+      managedBy: cnpgManagedBy(resp, cluster),
     }
   })
 
@@ -1141,7 +1100,7 @@ export interface CNPGDiskReading {
   name: string
   /** ok | partial | noSeries | noPrometheus | denied | unavailable | error | notRead | ambiguous | scopeMismatch */
   state: string
-  grant?: string
+  grant?: Grant
   reason?: string
   claims: number
   measured: number
@@ -1182,7 +1141,7 @@ export function cnpgDiskTone(ratio: number): HealthLevel {
 }
 
 /** The fleet and summary "Storage" fact: the fullest measured volume, or why there is none. */
-export function cnpgDiskFact(r: CNPGDiskReading | undefined): CNPGFact {
+export function cnpgDiskFact(r: CNPGDiskReading | undefined): Fact {
   if (!r) return { text: 'Not read', tone: 'unknown' }
   if (r.max && (r.state === 'ok' || r.state === 'partial')) {
     const partial = r.state === 'partial' ? ` · ${r.measured} of ${r.claims} volumes measured` : ''
@@ -1194,7 +1153,7 @@ export function cnpgDiskFact(r: CNPGDiskReading | undefined): CNPGFact {
   }
   switch (r.state) {
     case 'denied':
-      return { text: 'No access', tone: 'unknown', source: r.grant ? `Needs ${r.grant}` : r.reason }
+      return { text: 'No access', tone: 'unknown', source: r.grant ? `Needs ${formatGrant(r.grant)}` : r.reason }
     case 'noPrometheus':
       return { text: 'No usage metrics', tone: 'unknown', source: CNPG_PROMETHEUS_NOT_CONNECTED, detail: r.reason }
     case 'noSeries':
@@ -1250,7 +1209,7 @@ export interface CNPGFleetMetricsReading {
   /** ok | noStandby | noSeries | denied | ambiguous | scopeMismatch | error | notRead */
   lag: {
     state: string
-    grant?: string
+    grant?: Grant
     reason?: string
     seconds?: number
     pod?: string
@@ -1261,7 +1220,7 @@ export interface CNPGFleetMetricsReading {
     isolation?: CNPGMetricIsolation
   }
   /** ok | noSeries | denied | unavailable | error | notRead */
-  growth: { state: string; grant?: string; reason?: string; bytesPerHour?: number; claim?: string; instance?: string; isolation?: CNPGMetricIsolation }
+  growth: { state: string; grant?: Grant; reason?: string; bytesPerHour?: number; claim?: string; instance?: string; isolation?: CNPGMetricIsolation }
 }
 
 /** How Prometheus series were tied to one cluster; `unverified` matched only by namespace and Pod or claim names. */
@@ -1289,13 +1248,6 @@ export function cnpgLagTone(seconds: number): HealthLevel {
   return 'healthy'
 }
 
-const CNPG_TONE_SEVERITY: Record<HealthLevel, number> = { healthy: 0, neutral: 0, unknown: 1, degraded: 2, alert: 3, unhealthy: 4 }
-
-/** The more severe of two tones. */
-export function cnpgWorseTone(a: HealthLevel, b: HealthLevel): HealthLevel {
-  return CNPG_TONE_SEVERITY[b] > CNPG_TONE_SEVERITY[a] ? b : a
-}
-
 /**
  * Replication's tone from the primary's pg_stat_replication: a missing
  * standby is degraded, and the lag of the ones that do stream can make it
@@ -1303,7 +1255,7 @@ export function cnpgWorseTone(a: HealthLevel, b: HealthLevel): HealthLevel {
  */
 export function cnpgReplicationTone(streaming: number, expected: number, maxLagSeconds: number | undefined): HealthLevel {
   const missing: HealthLevel = streaming < expected ? 'degraded' : 'healthy'
-  return maxLagSeconds === undefined ? missing : cnpgWorseTone(missing, cnpgLagTone(maxLagSeconds))
+  return maxLagSeconds === undefined ? missing : worseTone(missing, cnpgLagTone(maxLagSeconds))
 }
 
 /**
@@ -1322,7 +1274,7 @@ export function cnpgFormatLag(s: number): string {
   return m === 0 ? `${Math.floor(minutes / 60)} h` : `${Math.floor(minutes / 60)} h ${m} min`
 }
 
-function measuredReplication(base: CNPGFact, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): CNPGFact {
+function measuredReplication(base: Fact, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): Fact {
   const prefix = base.text.replace(/ · lag unknown$/, '')
   if (src.source === 'none') {
     return { text: `${prefix} · lag unknown`, tone: 'unknown', source: CNPG_PROMETHEUS_NOT_CONNECTED, detail: src.reason }
@@ -1339,13 +1291,13 @@ function measuredReplication(base: CNPGFact, reading: CNPGFleetMetricsReading | 
     case 'noStandby':
       return { text: `${prefix} · lag unknown`, tone: 'unknown', source: `No standby reports lag: ${lag.reason ?? 'no instance reports being a standby'} · ${src.lagSource ?? 'Prometheus'}` }
     case 'denied':
-      return { text: `${prefix} · lag unknown`, tone: 'unknown', source: lag.grant ? `Needs ${lag.grant}` : lag.reason }
+      return { text: `${prefix} · lag unknown`, tone: 'unknown', source: lag.grant ? `Needs ${formatGrant(lag.grant)}` : lag.reason }
   }
   return { text: `${prefix} · lag unknown`, tone: 'unknown', source: lag?.reason ?? 'Replication lag needs Prometheus scraping the CNPG exporter' }
 }
 
 /** Volume growth of the fastest-growing claim, as a fact. */
-export function cnpgDiskGrowthFact(reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): CNPGFact | undefined {
+export function cnpgDiskGrowthFact(reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): Fact | undefined {
   const g = reading?.growth
   if (src.source === 'none' || !g || g.state !== 'ok' || g.bytesPerHour === undefined) return undefined
   const perDay = g.bytesPerHour * 24

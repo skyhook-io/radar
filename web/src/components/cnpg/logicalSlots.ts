@@ -1,12 +1,13 @@
 import type { UseQueryResult } from '@tanstack/react-query'
 import type { CNPGPublisher, CNPGPublisherSlots } from '@skyhook-io/k8s-ui'
 import { useCNPGRuntime, type CNPGRuntimeResponse } from '../../api/cnpg'
+import { formatGrant } from '@skyhook-io/k8s-ui'
 
 /** The publisher primary's replication slots from its runtime answer, never read as "no slots" when unread. */
 export function cnpgPublisherSlotsFrom(rt: CNPGRuntimeResponse | undefined, error?: unknown, refetchFailed = false): CNPGPublisherSlots {
   if (!rt) return { state: 'notRead', reason: error instanceof Error ? error.message : undefined }
   const stale = refetchFailed || undefined
-  if (rt.permission.proxy === 'denied') return { state: 'denied', reason: rt.permission.grant }
+  if (rt.permission.proxy === 'denied') return { state: 'denied', reason: formatGrant(rt.permission.grant) }
   const primary = rt.instances.find((i) => i.role === 'primary')
   if (!primary) return { state: 'unavailable', reason: 'no primary reported' }
   const st = primary.status

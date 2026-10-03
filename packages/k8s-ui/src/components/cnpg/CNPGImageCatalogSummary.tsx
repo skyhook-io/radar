@@ -1,8 +1,10 @@
 import { CNPG_GROUP, getCNPGImageCatalogEntries } from '../resources/resource-utils-cnpg'
 import type { CNPGWorkspaceResponse } from './workspace'
-import { FactGrid, FactRow, RefLink, SummaryHeading, toneTextClass, type CNPGNavigate } from './primitives'
 import { NotReported, Note, ObjectProblems, SummaryShell } from './CNPGSharedSummary'
 import { clustersIn, clustersUsingCatalog, refOf, relationUnavailable } from './relations'
+import { type NavigateToRef, RefLink } from '../ui/RefLink'
+import { toneTextClass } from '../ui/status-tone'
+import { FactGrid, FactRow, SectionHeading } from '../workspace'
 
 export function CNPGImageCatalogSummary({
   resource,
@@ -11,7 +13,7 @@ export function CNPGImageCatalogSummary({
 }: {
   resource: any
   workspace: CNPGWorkspaceResponse | null
-  onNavigate?: CNPGNavigate
+  onNavigate?: NavigateToRef
 }) {
   const clusterScoped = resource?.kind === 'ClusterImageCatalog'
   const ns = resource?.metadata?.namespace ?? ''
@@ -27,7 +29,7 @@ export function CNPGImageCatalogSummary({
     <SummaryShell>
       <ObjectProblems issues={workspace?.issues} subject={refOf(resource, resource?.kind ?? 'ImageCatalog')} onNavigate={onNavigate} />
 
-      <SummaryHeading>Images</SummaryHeading>
+      <SectionHeading>Images</SectionHeading>
       {entries.length === 0 ? (
         <div className="text-sm">
           <NotReported text="No images listed" />
@@ -42,7 +44,7 @@ export function CNPGImageCatalogSummary({
         </FactGrid>
       )}
 
-      <SummaryHeading>Used by</SummaryHeading>
+      <SectionHeading>Used by</SectionHeading>
       {unavailable ? (
         <div className="text-sm">
           <NotReported text={unavailable} />

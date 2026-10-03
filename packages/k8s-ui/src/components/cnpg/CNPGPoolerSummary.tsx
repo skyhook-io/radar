@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react'
 import { getCNPGPoolerDeploymentName, getCNPGPoolerMode, getCNPGPoolerStatus, isCNPGPoolerPaused } from '../resources/resource-utils-cnpg'
 import type { CNPGWorkspaceResponse } from './workspace'
-import { FactGrid, FactRow, FactValue, RefLink, SummaryHeading, toneTextClass, type CNPGNavigate } from './primitives'
 import { ClusterLink, NotReported, Note, ObjectProblems, PhaseBadge, SummaryShell } from './CNPGSharedSummary'
 import { refOf } from './relations'
 import {
@@ -14,6 +13,9 @@ import {
   type CNPGPoolerLive,
   type CNPGPoolerPoolRow,
 } from './pooler'
+import { type NavigateToRef, RefLink } from '../ui/RefLink'
+import { toneTextClass } from '../ui/status-tone'
+import { FactGrid, FactRow, FactValue, SectionHeading } from '../workspace'
 
 const TYPE_LABEL: Record<string, string> = {
   rw: 'rw · routes to the primary',
@@ -31,7 +33,7 @@ export function CNPGPoolerSummary({
 }: {
   resource: any
   workspace: CNPGWorkspaceResponse | null
-  onNavigate?: CNPGNavigate
+  onNavigate?: NavigateToRef
   /** Live reads a host adds (Deployment readiness, PgBouncer metrics and state). */
   live?: CNPGPoolerLive
   /** Operations rendered beside the paused state (pause / resume). */
@@ -53,7 +55,7 @@ export function CNPGPoolerSummary({
       {lead}
       <ObjectProblems issues={workspace?.issues} subject={refOf(resource, 'Pooler')} onNavigate={onNavigate} />
 
-      <SummaryHeading>State</SummaryHeading>
+      <SectionHeading>State</SectionHeading>
       <FactGrid>
         <FactRow label="Status">
           {readiness ? (
@@ -102,7 +104,7 @@ export function CNPGPoolerSummary({
         </FactRow>
       </FactGrid>
 
-      <SummaryHeading hint={live?.pressure ? 'live from each PgBouncer' : undefined}>Connections</SummaryHeading>
+      <SectionHeading hint={live?.pressure ? 'live from each PgBouncer' : undefined}>Connections</SectionHeading>
       {live?.pressure ? (
         <PoolerPressure pressure={live.pressure} />
       ) : (
@@ -113,7 +115,7 @@ export function CNPGPoolerSummary({
         </FactGrid>
       )}
 
-      <SummaryHeading>Limits</SummaryHeading>
+      <SectionHeading>Limits</SectionHeading>
       <FactGrid>
         <FactRow label="Pool mode">
           {resource?.spec?.pgbouncer?.poolMode ? getCNPGPoolerMode(resource) : <span>session <span className="text-theme-text-tertiary">(default)</span></span>}
@@ -137,7 +139,7 @@ export function CNPGPoolerSummary({
         })}
       </FactGrid>
 
-      <SummaryHeading>Routing</SummaryHeading>
+      <SectionHeading>Routing</SectionHeading>
       <FactGrid>
         <FactRow label="Cluster">
           <ClusterLink resource={resource} workspace={workspace} onNavigate={onNavigate} />
@@ -153,7 +155,7 @@ export function CNPGPoolerSummary({
   )
 }
 
-function PoolerPath({ resource, live, onNavigate }: { resource: any; live: CNPGPoolerLive; onNavigate?: CNPGNavigate }) {
+function PoolerPath({ resource, live, onNavigate }: { resource: any; live: CNPGPoolerLive; onNavigate?: NavigateToRef }) {
   const ns = resource?.metadata?.namespace ?? ''
   const svc = live.service!
   const backend = poolerBackendService(resource?.spec?.cluster?.name, resource?.spec?.type)

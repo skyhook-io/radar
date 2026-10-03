@@ -144,9 +144,14 @@ const REASON_TITLE: Record<string, string> = {
   CNPGScheduledRunNoBackup: "No successful backup since a scheduled run",
 };
 
+/** The title a reason has wherever it is shown, when its category's label would name the wrong operation. */
+export function issueReasonTitle(reason: string | undefined): string | undefined {
+  return reason ? REASON_TITLE[reason] : undefined;
+}
+
 /** An issue row's title: its category, unless the reason names it better. */
 export function issueTitle(issue: { category: string; reason?: string }): string {
-  return (issue.reason && REASON_TITLE[issue.reason]) || categoryLabel(issue.category);
+  return issueReasonTitle(issue.reason) || categoryLabel(issue.category);
 }
 
 export function groupLabel(group: string): string {

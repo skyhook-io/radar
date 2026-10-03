@@ -12,19 +12,8 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { useCNPGPoolerRuntime } from '../../api/cnpg'
 import { useCNPGPoolerCapabilities } from '../../api/cnpg-sessions'
-import {
-  CNPGWorkspaceHeader,
-  CoverageNotice,
-  FilterChips,
-  Mono,
-  ScreenBody,
-  SectionTable,
-  Sub,
-  cnpgResource,
-  coverageEmpty,
-  namespaceChip,
-  type CNPGScreenProps,
-} from './shared'
+import { CNPGWorkspaceHeader, CoverageNotice, cnpgResource, coverageEmpty, type CNPGScreenProps } from './shared'
+import { FilterChips, Mono, namespaceChip, ScreenBody, SectionTable, Sub } from '../workspace/layout'
 
 const SEVERITY: Record<HealthLevel, 'success' | 'warning' | 'alert' | 'error' | 'neutral'> = {
   healthy: 'success',

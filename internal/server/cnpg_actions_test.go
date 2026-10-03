@@ -132,9 +132,9 @@ func newCNPGActionEnv(t *testing.T, objs []runtime.Object, pods ...runtime.Objec
 	return env
 }
 
-func cnpgActionReq(t *testing.T, facts map[string]any, params any) CNPGActionRequest {
+func cnpgActionReq(t *testing.T, facts map[string]any, params any) ActionRequest {
 	t.Helper()
-	req := CNPGActionRequest{ReviewedContext: "kind-test", UID: cnpgActionTestUID}
+	req := ActionRequest{ReviewedContext: "kind-test", UID: cnpgActionTestUID}
 	if facts != nil {
 		b, _ := json.Marshal(facts)
 		req.Facts = b
@@ -179,9 +179,9 @@ func cnpgActionAnnotations(t *testing.T, body map[string]any) map[string]any {
 	return a
 }
 
-func cnpgActionStatus(t *testing.T, err error) (*cnpgActionError, bool) {
+func cnpgActionStatus(t *testing.T, err error) (*actionError, bool) {
 	t.Helper()
-	var ae *cnpgActionError
+	var ae *actionError
 	ok := errors.As(err, &ae)
 	return ae, ok
 }
@@ -250,7 +250,7 @@ func TestCNPGActionBackupBindsInheritedTarget(t *testing.T) {
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "backup",
 		cnpgActionReq(t, cnpgActionFacts(), map[string]any{"method": "volumeSnapshot", "name": "manual-one"}))
 	ae, ok := cnpgActionStatus(t, err)
-	if !ok || ae.Status != http.StatusConflict || ae.Code != cnpgCodeChanged {
+	if !ok || ae.Status != http.StatusConflict || ae.Code != actionCodeChanged {
 		t.Fatalf("err = %v, want 409 changed", err)
 	}
 	if len(env.creates) != 0 {
@@ -375,7 +375,7 @@ func TestCNPGActionSwitchoverTargetChecks(t *testing.T) {
 		env := newCNPGActionEnv(t, []runtime.Object{fencedPg2}, cnpgActionPod("pg-2", "u2", true))
 		_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "switchover",
 			cnpgActionReq(t, facts, map[string]any{"target": "pg-2", "targetPodUID": "u2"}))
-		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Status != http.StatusConflict || ae.Code != cnpgCodeBlocked {
+		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Status != http.StatusConflict || ae.Code != actionCodeBlocked {
 			t.Fatalf("err = %v, want 409 blocked", err)
 		}
 	})
@@ -383,7 +383,7 @@ func TestCNPGActionSwitchoverTargetChecks(t *testing.T) {
 		env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil)}, cnpgActionPod("pg-2", "u2-new", true))
 		_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "switchover",
 			cnpgActionReq(t, cnpgActionFacts(), map[string]any{"target": "pg-2", "targetPodUID": "u2"}))
-		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeChanged {
+		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeChanged {
 			t.Fatalf("err = %v, want 409 changed", err)
 		}
 	})
@@ -391,7 +391,7 @@ func TestCNPGActionSwitchoverTargetChecks(t *testing.T) {
 		env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil)}, cnpgActionPod("pg-2", "u2", false))
 		_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "switchover",
 			cnpgActionReq(t, cnpgActionFacts(), map[string]any{"target": "pg-2", "targetPodUID": "u2"}))
-		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeBlocked {
+		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeBlocked {
 			t.Fatalf("err = %v, want 409 blocked", err)
 		}
 	})
@@ -414,7 +414,7 @@ func TestCNPGActionFactMismatchReturnsCurrentFacts(t *testing.T) {
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "switchover",
 		cnpgActionReq(t, facts, map[string]any{"target": "pg-2", "targetPodUID": "u2"}))
 	ae, ok := cnpgActionStatus(t, err)
-	if !ok || ae.Status != http.StatusConflict || ae.Code != cnpgCodeChanged {
+	if !ok || ae.Status != http.StatusConflict || ae.Code != actionCodeChanged {
 		t.Fatalf("err = %v, want 409 changed", err)
 	}
 	if cur, ok := ae.Current.(CNPGClusterFacts); !ok || cur.CurrentPrimary != "pg-1" {
@@ -430,7 +430,7 @@ func TestCNPGActionUIDMismatchAndMissingFacts(t *testing.T) {
 	req := cnpgActionReq(t, cnpgActionFacts(), nil)
 	req.UID = "old-uid"
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "restart", req)
-	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeChanged {
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeChanged {
 		t.Fatalf("err = %v, want 409 changed for a recreated Cluster", err)
 	}
 	_, err = runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "restart", cnpgActionReq(t, map[string]any{}, nil))
@@ -440,11 +440,11 @@ func TestCNPGActionUIDMismatchAndMissingFacts(t *testing.T) {
 }
 
 func TestCNPGActionReviewedContext(t *testing.T) {
-	if err := cnpgCheckReviewedContext("kind-a", "kind-a"); err != nil {
+	if err := checkReviewedContext("kind-a", "kind-a"); err != nil {
 		t.Errorf("matching context refused: %v", err)
 	}
-	ae, ok := cnpgActionStatus(t, cnpgCheckReviewedContext("kind-a", "prod"))
-	if !ok || ae.Status != http.StatusConflict || ae.Code != cnpgCodeContextChanged {
+	ae, ok := cnpgActionStatus(t, checkReviewedContext("kind-a", "prod"))
+	if !ok || ae.Status != http.StatusConflict || ae.Code != actionCodeContextChanged {
 		t.Errorf("mismatch = %v, want 409 context_changed", ae)
 	}
 }
@@ -560,7 +560,7 @@ func TestCNPGActionRestartInstance(t *testing.T) {
 		env := newCNPGActionEnv(t, []runtime.Object{upgrading}, cnpgActionPod("pg-1", "u1", true))
 		_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "restartInstance",
 			cnpgActionReq(t, cnpgActionFacts(), map[string]any{"pod": "pg-1", "podUID": "u1"}))
-		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeBlocked {
+		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeBlocked {
 			t.Fatalf("err = %v, want 409 blocked", err)
 		}
 	})
@@ -643,14 +643,14 @@ func TestCNPGActionFencing(t *testing.T) {
 	})
 	t.Run("conversion with a stale remaining list", func(t *testing.T) {
 		_, err := run(t, `["*"]`, "unfence", map[string]any{"instances": []string{"pg-2"}, "convertFromAll": true, "remaining": []string{"pg-1"}})
-		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeChanged {
+		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeChanged {
 			t.Fatalf("err = %v, want 409 changed", err)
 		}
 	})
 	t.Run("malformed annotation blocks writes", func(t *testing.T) {
 		for _, action := range []string{"fence", "unfence"} {
 			_, err := run(t, `pg-2`, action, map[string]any{"instances": "*"})
-			if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeBlocked {
+			if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeBlocked {
 				t.Errorf("%s: err = %v, want 409 blocked", action, err)
 			}
 		}
@@ -698,13 +698,13 @@ func TestCNPGActionCapabilitiesPermissionDenied(t *testing.T) {
 		t.Fatal(err)
 	}
 	sw := resp.Actions.Switchover
-	if sw.Allowed || sw.Permission != cnpgPermDenied || !strings.Contains(sw.Grant, "clusters/status") || !strings.Contains(sw.Reason, "patch clusters/status") {
+	if sw.Allowed || sw.Permission != permissionDenied || sw.Grant == nil || *sw.Grant != cnpgGrantPatchStatus.In("db") || !strings.Contains(sw.Reason, "patch clusters/status") {
 		t.Errorf("switchover = %+v, want denied naming patch clusters/status", sw)
 	}
-	if b := resp.Actions.Backup; b.Allowed || !strings.Contains(b.Grant, "create backups") {
+	if b := resp.Actions.Backup; b.Allowed || b.Grant == nil || *b.Grant != cnpgGrantCreateBackups.In("db") {
 		t.Errorf("backup = %+v, want denied naming create backups", b)
 	}
-	if !resp.Actions.Restart.Allowed || resp.Actions.Restart.Permission != cnpgPermAllowed {
+	if !resp.Actions.Restart.Allowed || resp.Actions.Restart.Permission != permissionAllowed {
 		t.Errorf("restart = %+v, want allowed", resp.Actions.Restart)
 	}
 	// The primary's in-place restart needs the status grant; a standby's needs delete pods.
@@ -815,7 +815,7 @@ func cnpgActionSchedule(mut func(o map[string]any)) *unstructured.Unstructured {
 
 func TestCNPGActionScheduleRunCopiesSettings(t *testing.T) {
 	env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil), cnpgActionSchedule(nil)})
-	req := CNPGActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"generation":3}`)}
+	req := ActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"generation":3}`)}
 	res, err := runCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "run", req)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -840,9 +840,9 @@ func TestCNPGActionScheduleRunCopiesSettings(t *testing.T) {
 
 func TestCNPGActionScheduleRunBindsReviewedSettings(t *testing.T) {
 	env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil), cnpgActionSchedule(nil)})
-	req := CNPGActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"generation":2}`)}
+	req := ActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"generation":2}`)}
 	_, err := runCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "run", req)
-	var ae *cnpgActionError
+	var ae *actionError
 	if !errors.As(err, &ae) || ae.Status != http.StatusConflict {
 		t.Fatalf("stale generation: err = %v, want 409", err)
 	}
@@ -860,7 +860,7 @@ func TestCNPGActionScheduleSuspendResume(t *testing.T) {
 		suspended := cnpgActionSchedule(func(o map[string]any) { o["spec"].(map[string]any)["suspend"] = true })
 		env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil), suspended})
 		res, err := runCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "resume",
-			CNPGActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"suspended":true}`)})
+			ActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"suspended":true}`)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -875,8 +875,8 @@ func TestCNPGActionScheduleSuspendResume(t *testing.T) {
 	t.Run("suspend binds the reviewed state", func(t *testing.T) {
 		env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil), cnpgActionSchedule(nil)})
 		_, err := runCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "suspend",
-			CNPGActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"suspended":true}`)})
-		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeChanged {
+			ActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"suspended":true}`)})
+		if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeChanged {
 			t.Fatalf("err = %v, want 409 changed", err)
 		}
 	})
@@ -890,7 +890,7 @@ func TestCNPGActionApiserverConflictIsNotRetried(t *testing.T) {
 		return true, nil, apierrors.NewConflict(schema.GroupResource{Group: cnpgGroup, Resource: "clusters"}, "pg", errors.New("the object has been modified"))
 	})
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "hibernate", cnpgActionReq(t, cnpgActionFacts(), nil))
-	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeChanged || ae.Current == nil {
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeChanged || ae.Current == nil {
 		t.Fatalf("err = %v, want 409 changed with current facts", err)
 	}
 	if calls != 1 {
@@ -915,7 +915,7 @@ func TestCNPGActionErrorMapping(t *testing.T) {
 			[]string{"admission webhook did not answer", "connection refused"}},
 		{"invalid", "backup", apierrors.NewInvalid(schema.GroupKind{Group: cnpgGroup, Kind: "Backup"}, "b", nil), http.StatusUnprocessableEntity, "", []string{"is invalid"}},
 		{"not found", "restart", apierrors.NewNotFound(gr, "pg"), http.StatusNotFound, "", []string{"not found"}},
-		{"refusal", "fence", cnpgBlocked("It is fenced already"), http.StatusConflict, cnpgCodeBlocked, []string{"fenced already"}},
+		{"refusal", "fence", blockedAction("It is fenced already"), http.StatusConflict, actionCodeBlocked, []string{"fenced already"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
@@ -954,12 +954,12 @@ func TestCNPGActionCapabilitiesRestoreNeedsCreateClusters(t *testing.T) {
 		}
 		got := resp.Actions.Restore
 		if allowed {
-			if !got.Allowed || got.Permission != cnpgPermAllowed {
+			if !got.Allowed || got.Permission != permissionAllowed {
 				t.Errorf("restore with create clusters = %+v, want allowed", got)
 			}
 			continue
 		}
-		if got.Allowed || got.Permission != cnpgPermDenied || !strings.Contains(got.Reason, "create clusters (postgresql.cnpg.io) in namespace db") {
+		if got.Allowed || got.Permission != permissionDenied || !strings.Contains(got.Reason, "create clusters (postgresql.cnpg.io) in namespace db") {
 			t.Errorf("restore without create clusters = %+v, want denied naming the grant", got)
 		}
 	}

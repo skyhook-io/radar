@@ -9,7 +9,7 @@ import {
   type GitOpsWriteTarget,
 } from '@skyhook-io/k8s-ui'
 import type { Relationships } from '../types'
-import { fetchGitOpsWriteEvidence, useResource } from '../api/client'
+import { fetchGitOpsWriteEvidence, useResource, useRadarFeature } from '../api/client'
 import { kindToPluralWithGroup } from '../utils/navigation'
 import { gitOpsOwnerKindRef, useResolvedGitOpsOwner, type ResolvedGitOpsOwner } from './useResolvedGitOpsOwner'
 
@@ -78,17 +78,20 @@ export function useGitOpsWriteGuard({
     return null
   }, [ownership.owner, ownership.helmOwner])
 
+  const evidenceFeature = useRadarFeature('gitopsWriteEvidence')
   const evidenceQuery = useQuery({
-    queryKey: ['gitops-write-evidence', target.kind, target.group, target.namespace, target.name, paths, ownerRef],
+    queryKey: ['gitops-write-evidence', target.kind, target.group, target.namespace, target.name, paths, ownerRef, ...evidenceFeature.gatedKey],
     queryFn: () =>
-      fetchGitOpsWriteEvidence({
-        kind: target.kind,
-        group: target.group,
-        namespace: target.namespace,
-        name: target.name,
-        paths,
-        owner: ownerRef ?? undefined,
-      }),
+      evidenceFeature.guard(() =>
+        fetchGitOpsWriteEvidence({
+          kind: target.kind,
+          group: target.group,
+          namespace: target.namespace,
+          name: target.name,
+          paths,
+          owner: ownerRef ?? undefined,
+        }),
+      ),
     enabled: enabled && managed && !lookupPending,
     staleTime: 0,
     retry: false,

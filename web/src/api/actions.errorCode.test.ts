@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError } from './client'
-import { cnpgActionCompleted, cnpgActionErrorCode, cnpgActionOutcomeLocked } from './cnpg'
+import { cnpgActionErrorCode } from './cnpg'
+import { actionCompleted, actionOutcomeLocked } from './actions'
 
 describe('cnpgActionErrorCode', () => {
   it('keeps the server code when there is one', () => {
@@ -22,11 +23,11 @@ describe('partial outcomes', () => {
   const partial = new ApiError('stopped', 403, { code: 'partial', completed: ['deleted PVC pg-2', 'deleted PVC pg-2-wal'] })
   it('locks confirm and lists what already happened, whatever the status', () => {
     expect(cnpgActionErrorCode(partial)).toBe('partial')
-    expect(cnpgActionOutcomeLocked(partial)).toBe(true)
-    expect(cnpgActionCompleted(partial)).toEqual(['deleted PVC pg-2', 'deleted PVC pg-2-wal'])
+    expect(actionOutcomeLocked(partial)).toBe(true)
+    expect(actionCompleted(partial)).toEqual(['deleted PVC pg-2', 'deleted PVC pg-2-wal'])
   })
   it('leaves known refusals unlocked', () => {
-    expect(cnpgActionOutcomeLocked(new ApiError('changed', 409, { code: 'changed' }))).toBe(false)
-    expect(cnpgActionCompleted(new ApiError('changed', 409, { code: 'changed' }))).toEqual([])
+    expect(actionOutcomeLocked(new ApiError('changed', 409, { code: 'changed' }))).toBe(false)
+    expect(actionCompleted(new ApiError('changed', 409, { code: 'changed' }))).toEqual([])
   })
 })

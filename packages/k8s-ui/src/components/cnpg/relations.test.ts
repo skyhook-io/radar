@@ -5,7 +5,6 @@ import {
   backupsForScheduledBackup,
   clustersUsingCatalog,
   databaseForDeclaration,
-  gitopsSourceOf,
   inferredObjectStoreHealth,
   isBackupFromSchedule,
   issuesForObject,
@@ -252,16 +251,6 @@ describe('declarations', () => {
     expect(missingManagedRole(db, cluster('main', 'pg', { managed: { roles: [{ name: 'app' }] } }))).toBeNull()
     expect(missingManagedRole(db, null)).toBeNull()
     expect(missingManagedRole({ status: { message: 'connection refused' } }, cluster('main'))).toBeNull()
-  })
-
-  it('reads the GitOps owner labels', () => {
-    expect(gitopsSourceOf({ metadata: { labels: { 'argocd.argoproj.io/instance': 'app' } } })).toEqual({ tool: 'argocd', name: 'app' })
-    expect(gitopsSourceOf({ metadata: { labels: { 'kustomize.toolkit.fluxcd.io/name': 'k', 'kustomize.toolkit.fluxcd.io/namespace': 'flux' } } })).toEqual({
-      tool: 'flux',
-      name: 'k',
-      namespace: 'flux',
-    })
-    expect(gitopsSourceOf({ metadata: {} })).toBeNull()
   })
 
   const decl = (kind: string, name: string, clusterName: string, dbname: string, ns = 'pg') => ({

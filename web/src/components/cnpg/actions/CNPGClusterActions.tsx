@@ -2,17 +2,8 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, DatabaseBackup, MoreHorizontal, Repeat } from 'lucide-react'
 import { clsx } from 'clsx'
 import { ActionConfirmDialog, Tooltip, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA } from '@skyhook-io/k8s-ui'
-import {
-  cnpgActionOutcomeLocked,
-  useCNPGAction,
-  useCNPGClusterCapabilities,
-  useCNPGRuntime,
-  type CNPGActionCapability,
-  type CNPGActionResult,
-  type CNPGBackupMethod,
-  type CNPGClusterActionName,
-  type CNPGClusterCapabilities,
-} from '../../../api/cnpg'
+import { useCNPGAction, useCNPGClusterCapabilities, useCNPGRuntime, type CNPGActionResult, type CNPGBackupMethod, type CNPGClusterActionName, type CNPGClusterCapabilities } from '../../../api/cnpg'
+import { actionOutcomeLocked, type ActionCapability, capabilityReason } from '../../../api/actions'
 import { useToast } from '../../ui/Toast'
 import { useAnimatedUnmount } from '../../../hooks/useAnimatedUnmount'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../../utils/animation'
@@ -45,10 +36,8 @@ function EffectItem({ list, label }: { list: { available: boolean; reason?: stri
   return <li>{label}: {list.names.join(', ')}</li>
 }
 
-function capabilityTitle(cap: CNPGActionCapability | undefined): string | undefined {
-  if (!cap) return 'Checking permissions…'
-  if (cap.allowed) return undefined
-  return cap.reason ?? (cap.permission === 'denied' ? `Your account may not do this (${cap.grant ?? 'permission denied'})` : 'Not available')
+function capabilityTitle(cap: ActionCapability | undefined): string | undefined {
+  return cap ? capabilityReason(cap) : 'Checking permissions…'
 }
 
 /**
@@ -108,7 +97,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
           type="button"
           disabled={!actions?.backup.allowed}
           onClick={() => setOpen('backup')}
-          className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-theme-border bg-theme-surface px-2.5 py-1.5 text-xs font-medium text-theme-text-primary hover:bg-theme-hover disabled:cursor-not-allowed disabled:opacity-50"
+          className="btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium disabled:cursor-not-allowed"
         >
           <DatabaseBackup className="h-3.5 w-3.5" />
           {!compact && 'Back up now'}
@@ -120,7 +109,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
             type="button"
             disabled={!actions?.switchover.allowed}
             onClick={() => setOpen('switchover')}
-            className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-theme-border bg-theme-surface px-2.5 py-1.5 text-xs font-medium text-theme-text-primary hover:bg-theme-hover disabled:cursor-not-allowed disabled:opacity-50"
+            className="btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium disabled:cursor-not-allowed"
           >
             <Repeat className="h-3.5 w-3.5" />
             Switchover
@@ -133,7 +122,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
         aria-expanded={menu}
         aria-label="More cluster actions"
         onClick={() => setMenu((v) => !v)}
-        className="inline-flex items-center gap-0.5 rounded-lg border border-theme-border bg-theme-surface px-2 py-1.5 text-xs text-theme-text-primary hover:bg-theme-hover"
+        className="btn-secondary inline-flex items-center gap-0.5 px-2 py-1.5 text-xs"
       >
         <MoreHorizontal className="h-3.5 w-3.5" />
         <ChevronDown className="h-3 w-3" />
@@ -754,7 +743,7 @@ export function ClusterActionDialog({
       incompleteReason={spec.incomplete}
       isLoading={mutation.isPending}
       error={mutation.error?.message}
-      outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}
+      outcomeUnknown={actionOutcomeLocked(mutation.error)}
     >
       {spec.body}
     </ActionConfirmDialog>

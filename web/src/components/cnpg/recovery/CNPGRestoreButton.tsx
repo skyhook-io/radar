@@ -14,7 +14,7 @@ export function CNPGRestoreButton({ namespace, entry, disabledReason, compact }:
           type="button"
           disabled={!!disabledReason}
           onClick={() => setOpen(true)}
-          className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-theme-border bg-theme-surface px-2.5 py-1.5 text-xs font-medium text-theme-text-primary hover:bg-theme-hover disabled:cursor-not-allowed disabled:opacity-50"
+          className="btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium disabled:cursor-not-allowed"
         >
           <History className="h-3.5 w-3.5" />
           {!compact && label}
