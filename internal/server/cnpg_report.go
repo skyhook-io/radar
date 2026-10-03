@@ -54,11 +54,11 @@ const (
 var (
 	errCNPGReportFull        = errors.New("report size bound reached")
 	cnpgObjectStoreGVR       = schema.GroupVersionResource{Group: cnpgBarmanGroup, Version: "v1", Resource: "objectstores"}
-	cnpgGrantListBackups     = cnpgGrant{"list", cnpgGroup, "backups", ""}
-	cnpgGrantListSchedules   = cnpgGrant{"list", cnpgGroup, "scheduledbackups", ""}
-	cnpgGrantListPoolers     = cnpgGrant{"list", cnpgGroup, "poolers", ""}
-	cnpgGrantGetObjectStores = cnpgGrant{"get", cnpgBarmanGroup, "objectstores", ""}
-	cnpgGrantGetPodLogs      = cnpgGrant{"get", "", "pods", "log"}
+	cnpgGrantListBackups     = Grant{Verb: "list", Group: cnpgGroup, Resource: "backups"}
+	cnpgGrantListSchedules   = Grant{Verb: "list", Group: cnpgGroup, Resource: "scheduledbackups"}
+	cnpgGrantListPoolers     = Grant{Verb: "list", Group: cnpgGroup, Resource: "poolers"}
+	cnpgGrantGetObjectStores = Grant{Verb: "get", Group: cnpgBarmanGroup, Resource: "objectstores"}
+	cnpgGrantGetPodLogs      = Grant{Verb: "get", Resource: "pods", Subresource: "log"}
 )
 
 type cnpgReportOptions struct {
@@ -363,7 +363,7 @@ func (b *cnpgReportBuilder) build(opts cnpgReportOptions) {
 	for _, child := range []struct {
 		item, file string
 		gvr        schema.GroupVersionResource
-		grant      cnpgGrant
+		grant      Grant
 		kind       string
 	}{
 		{"Backups", "manifests/backups.yaml", cnpgBackupGVR, cnpgGrantListBackups, "Backup"},
@@ -562,8 +562,8 @@ func cnpgReportStripOperatorConfig(body []byte) []byte {
 
 func (b *cnpgReportBuilder) logs(pods []corev1.Pod, opts cnpgReportOptions) {
 	namespace := b.cluster.GetNamespace()
-	if b.s.cnpgPermission(b.r, cnpgGrantGetPodLogs, namespace) == cnpgPermDenied {
-		b.record(CNPGReportItem{Item: "Logs", CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadDenied, Grant: cnpgGrantGetPodLogs.String(namespace)}})
+	if b.s.grantPermission(b.r, cnpgGrantGetPodLogs.In(namespace)) == permissionDenied {
+		b.record(CNPGReportItem{Item: "Logs", CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadDenied, Grant: cnpgGrantGetPodLogs.In(namespace).String()}})
 		return
 	}
 	note := "query text inside PostgreSQL log records is omitted"

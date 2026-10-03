@@ -33,17 +33,17 @@ func TestCNPGLocalCanIAsksTheKubeconfigIdentity(t *testing.T) {
 	}
 	previous := k8s.SetTestClient(client)
 	t.Cleanup(func() { k8s.SetTestClient(previous) })
-	cnpgLocalCanIMu.Lock()
-	cnpgLocalCanIMemo = map[string]cnpgLocalCanIEntry{}
-	cnpgLocalCanIMu.Unlock()
+	localCanIMu.Lock()
+	localCanIMemo = map[string]localCanIEntry{}
+	localCanIMu.Unlock()
 
-	if allowed, known := cnpgLocalCanI(context.Background(), cnpgGrantGetPodsProxy, "pgrt"); allowed || !known {
+	if allowed, known := localCanI(context.Background(), cnpgGrantGetPodsProxy.In("pgrt")); allowed || !known {
 		t.Fatalf("pods/proxy = %v known=%v, want denied", allowed, known)
 	}
-	if allowed, known := cnpgLocalCanI(context.Background(), cnpgGrantCreateBackups, "pgrt"); !allowed || !known {
+	if allowed, known := localCanI(context.Background(), cnpgGrantCreateBackups.In("pgrt")); !allowed || !known {
 		t.Fatalf("create backups = %v known=%v, want allowed", allowed, known)
 	}
-	cnpgLocalCanI(context.Background(), cnpgGrantGetPodsProxy, "pgrt")
+	localCanI(context.Background(), cnpgGrantGetPodsProxy.In("pgrt"))
 	if calls.Load() != 2 {
 		t.Errorf("reviews = %d, want the repeat answered from the memo", calls.Load())
 	}

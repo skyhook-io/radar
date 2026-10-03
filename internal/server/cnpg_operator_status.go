@@ -340,7 +340,7 @@ func (f cnpgOperatorFacts) verdict(namespace string) CNPGOperatorVerdict {
 // cnpgOperatorWebhookGuard refuses a write that goes through a CNPG admission
 // webhook the API server cannot reach; status subresource patches and Pod
 // deletes do not, so those actions keep their verdict.
-func cnpgOperatorWebhookGuard(v CNPGOperatorVerdict, capability CNPGActionCapability) CNPGActionCapability {
+func cnpgOperatorWebhookGuard(v CNPGOperatorVerdict, capability ActionCapability) ActionCapability {
 	if !capability.Allowed || v.WebhookRejects == nil || !*v.WebhookRejects {
 		return capability
 	}

@@ -275,7 +275,7 @@ func (s *Server) cnpgClusterHA(r *http.Request, c cnpgHAClients, cache *k8s.Reso
 			resp.Pods = CNPGHASource{State: cnpgHAStateOK}
 		}
 	} else {
-		resp.Pods = cnpgHADenied(cnpgGrant{"list", "", "pods", ""}, namespace)
+		resp.Pods = cnpgHADenied(Grant{Verb: "list", Resource: "pods"}, namespace)
 	}
 	resp.Nodes = s.cnpgHANodesSource(r, cache)
 	resp.Instances = cnpgHAInstances(cache, pods, resp.DesiredImage, resp.Nodes.State == cnpgHAStateOK)
@@ -290,18 +290,18 @@ func (s *Server) cnpgClusterHA(r *http.Request, c cnpgHAClients, cache *k8s.Reso
 	return resp
 }
 
-func cnpgHADenied(g cnpgGrant, namespace string) CNPGHASource {
-	return CNPGHASource{State: cnpgHAStateDenied, Grant: g.String(namespace), Reason: "You are not allowed to " + g.String(namespace)}
+func cnpgHADenied(g Grant, namespace string) CNPGHASource {
+	return CNPGHASource{State: cnpgHAStateDenied, Grant: g.In(namespace).String(), Reason: "You are not allowed to " + g.In(namespace).String()}
 }
 
-func cnpgHAClusterDenied(g cnpgGrant) CNPGHASource {
-	grant := g.ClusterString()
+func cnpgHAClusterDenied(g Grant) CNPGHASource {
+	grant := g.String()
 	return CNPGHASource{State: cnpgHAStateDenied, Grant: grant, Reason: "You are not allowed to " + grant}
 }
 
 // cnpgHAReadError classifies an impersonated read's failure. NotFound is left
 // to the caller: its meaning differs per object.
-func cnpgHAReadError(err error, g cnpgGrant, namespace string) CNPGHASource {
+func cnpgHAReadError(err error, g Grant, namespace string) CNPGHASource {
 	switch {
 	case apierrors.IsForbidden(err):
 		return cnpgHADenied(g, namespace)
@@ -311,7 +311,7 @@ func cnpgHAReadError(err error, g cnpgGrant, namespace string) CNPGHASource {
 		return CNPGHASource{State: cnpgHAStateUnavailable, Reason: "no answer within " + cnpgHAReadTimeout.String()}
 	default:
 		if plain, ok := cnpgTransportSentence(err, 0, cnpgHAReadTimeout); ok {
-			log.Printf("[cnpg] Failed to read %s: %v", g.String(namespace), err)
+			log.Printf("[cnpg] Failed to read %s: %v", g.In(namespace).String(), err)
 			return CNPGHASource{State: cnpgHAStateUnavailable, Reason: plain}
 		}
 		return CNPGHASource{State: cnpgHAStateError, Reason: truncateCNPGRuntimeError(err.Error())}
@@ -347,7 +347,7 @@ func cnpgUncachedReason(fact, kind, namespace string, uncached, outOfScope, read
 
 func (s *Server) cnpgHANodesSource(r *http.Request, cache *k8s.ResourceCache) CNPGHASource {
 	if !s.canRead(r, "", "nodes", "", "get") {
-		return cnpgHAClusterDenied(cnpgGrant{"get", "", "nodes", ""})
+		return cnpgHAClusterDenied(Grant{Verb: "get", Resource: "nodes"})
 	}
 	if reason := cnpgUncachedReason("Zones", "Nodes", "", cache.Nodes() == nil, false, cache.IsKindReady("nodes")); reason != "" {
 		return CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}
@@ -427,7 +427,7 @@ func (s *Server) cnpgHAQuorum(ctx context.Context, r *http.Request, c cnpgHAClie
 			return q
 		}
 	}
-	grant := cnpgGrant{"get", cnpgGroup, "failoverquorums", ""}
+	grant := Grant{Verb: "get", Group: cnpgGroup, Resource: "failoverquorums"}
 	if !s.canRead(r, cnpgGroup, "failoverquorums", namespace, "get") {
 		q.Object = cnpgHADenied(grant, namespace)
 		return q
@@ -494,7 +494,7 @@ func (s *Server) cnpgHAPDBs(r *http.Request, cache *k8s.ResourceCache, cluster *
 	if v, ok, _ := unstructured.NestedBool(cluster.Object, "spec", "enablePDB"); ok {
 		out.Enabled = v
 	}
-	grant := cnpgGrant{"list", "policy", "poddisruptionbudgets", ""}
+	grant := Grant{Verb: "list", Group: "policy", Resource: "poddisruptionbudgets"}
 	if !s.canRead(r, "policy", "poddisruptionbudgets", namespace, "list") {
 		out.CNPGHASource = cnpgHADenied(grant, namespace)
 		return out
@@ -566,7 +566,7 @@ type leaseView struct {
 
 func (s *Server) cnpgHAPrimaryLease(ctx context.Context, r *http.Request, c cnpgHAClients, cluster *unstructured.Unstructured, now time.Time) CNPGHALease {
 	namespace, name := cluster.GetNamespace(), cluster.GetName()
-	grant := cnpgGrant{"get", "coordination.k8s.io", "leases", ""}
+	grant := Grant{Verb: "get", Group: "coordination.k8s.io", Resource: "leases"}
 	if !s.canRead(r, "coordination.k8s.io", "leases", namespace, "get") {
 		return CNPGHALease{CNPGHASource: cnpgHADenied(grant, namespace), Namespace: namespace, Name: name}
 	}
@@ -614,7 +614,7 @@ func (s *Server) cnpgHAOperatorLease(ctx context.Context, r *http.Request, c cnp
 		}
 		return CNPGHALease{CNPGHASource: CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}, Name: cnpgOperatorLeaseName}
 	}
-	grant := cnpgGrant{"get", "coordination.k8s.io", "leases", ""}
+	grant := Grant{Verb: "get", Group: "coordination.k8s.io", Resource: "leases"}
 	if !s.canRead(r, "coordination.k8s.io", "leases", namespace, "get") {
 		return CNPGHALease{CNPGHASource: cnpgHADenied(grant, namespace), Namespace: namespace, Name: cnpgOperatorLeaseName}
 	}
@@ -640,7 +640,7 @@ func (s *Server) cnpgHAOperatorLease(ctx context.Context, r *http.Request, c cnp
 func (s *Server) cnpgHAJobs(r *http.Request, cache *k8s.ResourceCache, cluster *unstructured.Unstructured) CNPGHAJobs {
 	namespace := cluster.GetNamespace()
 	out := CNPGHAJobs{Items: []CNPGHAJob{}}
-	grant := cnpgGrant{"list", "batch", "jobs", ""}
+	grant := Grant{Verb: "list", Group: "batch", Resource: "jobs"}
 	if !s.canRead(r, "batch", "jobs", namespace, "list") {
 		out.CNPGHASource = cnpgHADenied(grant, namespace)
 		return out
@@ -704,7 +704,7 @@ func (s *Server) cnpgHARWEndpoints(ctx context.Context, r *http.Request, c cnpgH
 	namespace := cluster.GetNamespace()
 	svc := cluster.GetName() + "-rw"
 	out := CNPGHAEndpoints{Service: svc, Pods: []string{}}
-	grant := cnpgGrant{"list", "discovery.k8s.io", "endpointslices", ""}
+	grant := Grant{Verb: "list", Group: "discovery.k8s.io", Resource: "endpointslices"}
 	if !s.canRead(r, "discovery.k8s.io", "endpointslices", namespace, "list") {
 		out.CNPGHASource = cnpgHADenied(grant, namespace)
 		return out
@@ -753,7 +753,7 @@ func (s *Server) cnpgHACertificates(ctx context.Context, r *http.Request, c cnpg
 	}
 	user := issues.CNPGUserCertificateSecrets(cluster)
 	canGetSecrets := s.canRead(r, "", "secrets", namespace, "get")
-	grant := cnpgGrant{"get", "", "secrets", ""}
+	grant := Grant{Verb: "get", Resource: "secrets"}
 
 	out := make([]CNPGHACertificate, 0, len(exp))
 	for secret, raw := range exp {

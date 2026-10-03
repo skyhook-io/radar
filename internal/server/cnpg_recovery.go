@@ -46,9 +46,9 @@ const (
 )
 
 var (
-	cnpgGrantListPods   = cnpgGrant{"list", "", "pods", ""}
-	cnpgGrantListEvents = cnpgGrant{"list", "", "events", ""}
-	cnpgGrantGetCluster = cnpgGrant{"get", cnpgGroup, "clusters", ""}
+	cnpgGrantListPods   = Grant{Verb: "list", Resource: "pods"}
+	cnpgGrantListEvents = Grant{Verb: "list", Resource: "events"}
+	cnpgGrantGetCluster = Grant{Verb: "get", Group: cnpgGroup, Resource: "clusters"}
 )
 
 // CNPGReadCoverage is one read's outcome. Grant names what a denied read
@@ -62,19 +62,19 @@ type CNPGReadCoverage struct {
 // cnpgGatedRead runs read when the caller holds g in namespace. The SAR comes
 // first so a denial names the grant; the read itself is made with the caller's
 // client, so the apiserver has the final say either way.
-func (s *Server) cnpgGatedRead(r *http.Request, g cnpgGrant, namespace string, read func() error) CNPGReadCoverage {
-	if s.cnpgPermission(r, g, namespace) == cnpgPermDenied {
-		return CNPGReadCoverage{State: cnpgReadDenied, Grant: g.String(namespace)}
+func (s *Server) cnpgGatedRead(r *http.Request, g Grant, namespace string, read func() error) CNPGReadCoverage {
+	if s.grantPermission(r, g.In(namespace)) == permissionDenied {
+		return CNPGReadCoverage{State: cnpgReadDenied, Grant: g.In(namespace).String()}
 	}
 	return cnpgReadOutcome(read(), g, namespace)
 }
 
-func cnpgReadOutcome(err error, g cnpgGrant, namespace string) CNPGReadCoverage {
+func cnpgReadOutcome(err error, g Grant, namespace string) CNPGReadCoverage {
 	switch {
 	case err == nil:
 		return CNPGReadCoverage{State: cnpgReadOK}
 	case apierrors.IsForbidden(err):
-		return CNPGReadCoverage{State: cnpgReadDenied, Grant: g.String(namespace)}
+		return CNPGReadCoverage{State: cnpgReadDenied, Grant: g.In(namespace).String()}
 	case apierrors.IsNotFound(err):
 		return CNPGReadCoverage{State: cnpgReadNotFound, Reason: err.Error()}
 	default:
@@ -224,12 +224,12 @@ func (s *Server) handleCNPGClusterRecovery(w http.ResponseWriter, r *http.Reques
 	s.writeJSON(w, resp)
 }
 
-func (s *Server) writeCNPGReadError(w http.ResponseWriter, err error, g cnpgGrant, namespace, name string) {
+func (s *Server) writeCNPGReadError(w http.ResponseWriter, err error, g Grant, namespace, name string) {
 	switch {
 	case apierrors.IsNotFound(err):
 		s.writeError(w, http.StatusNotFound, fmt.Sprintf("CloudNativePG Cluster %s/%s not found", namespace, name))
 	case apierrors.IsForbidden(err):
-		s.writeError(w, http.StatusForbidden, "This needs "+g.String(namespace))
+		s.writeError(w, http.StatusForbidden, "This needs "+g.In(namespace).String())
 	default:
 		log.Printf("[cnpg] Failed to read Cluster %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
 		s.writeError(w, http.StatusInternalServerError, "failed to read CloudNativePG Cluster: "+err.Error())
@@ -534,13 +534,13 @@ func (s *Server) handleCNPGRestoreValidation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
-	req, dyn, ok := s.decodeCNPGActionRequest(w, r)
+	req, dyn, ok := s.decodeActionRequest(w, r)
 	if !ok {
 		return
 	}
 	auth.AuditLog(r, namespace, name)
-	if s.cnpgPermission(r, cnpgGrantPatchClusters, namespace) == cnpgPermDenied {
-		s.writeError(w, http.StatusForbidden, "Recording a validation note needs "+cnpgGrantPatchClusters.String(namespace))
+	if s.grantPermission(r, cnpgGrantPatchClusters.In(namespace)) == permissionDenied {
+		s.writeError(w, http.StatusForbidden, "Recording a validation note needs "+cnpgGrantPatchClusters.In(namespace).String())
 		return
 	}
 	recordedBy := ""
@@ -556,21 +556,21 @@ func (s *Server) handleCNPGRestoreValidation(w http.ResponseWriter, r *http.Requ
 	s.writeJSON(w, note)
 }
 
-func recordCNPGRestoreValidation(ctx context.Context, dyn dynamic.Interface, namespace, name string, req CNPGActionRequest, recordedBy string, now time.Time) (*CNPGRestoreValidation, error) {
+func recordCNPGRestoreValidation(ctx context.Context, dyn dynamic.Interface, namespace, name string, req ActionRequest, recordedBy string, now time.Time) (*CNPGRestoreValidation, error) {
 	var params cnpgRestoreValidationParams
-	if err := decodeCNPGParams(req.Params, &params); err != nil {
+	if err := decodeActionParams(req.Params, &params); err != nil {
 		return nil, err
 	}
 	checked := strings.TrimSpace(params.Checked)
 	if checked == "" {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "params.checked is required: say what you checked")
+		return nil, refuseAction(http.StatusBadRequest, "", "params.checked is required: say what you checked")
 	}
 	if utf8.RuneCountInString(checked) > cnpgRestoreValidationMax {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "params.checked is longer than %d characters", cnpgRestoreValidationMax)
+		return nil, refuseAction(http.StatusBadRequest, "", "params.checked is longer than %d characters", cnpgRestoreValidationMax)
 	}
 	if params.TargetTime != "" {
 		if _, err := time.Parse(time.RFC3339, params.TargetTime); err != nil {
-			return nil, cnpgRefuse(http.StatusBadRequest, "", "params.targetTime must be RFC 3339")
+			return nil, refuseAction(http.StatusBadRequest, "", "params.targetTime must be RFC 3339")
 		}
 	}
 	cluster, err := dyn.Resource(cnpgClusterGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
@@ -578,10 +578,10 @@ func recordCNPGRestoreValidation(ctx context.Context, dyn dynamic.Interface, nam
 		return nil, err
 	}
 	if string(cluster.GetUID()) != req.UID {
-		return nil, cnpgChanged(nil, "Cluster %s/%s was deleted and recreated since you reviewed it", namespace, name)
+		return nil, changedAction(nil, "Cluster %s/%s was deleted and recreated since you reviewed it", namespace, name)
 	}
 	if cnpgRecoverySpecOf(cluster) == nil {
-		return nil, cnpgBlocked("This Cluster was not bootstrapped from a backup (spec.bootstrap.recovery is not set)")
+		return nil, blockedAction("This Cluster was not bootstrapped from a backup (spec.bootstrap.recovery is not set)")
 	}
 	note := &CNPGRestoreValidation{
 		Version:    1,
@@ -606,11 +606,11 @@ func recordCNPGRestoreValidation(ctx context.Context, dyn dynamic.Interface, nam
 	if err != nil {
 		return nil, err
 	}
-	if err := cnpgMergePatch(ctx, dyn, cnpgClusterGVR, cluster, map[string]any{
+	if err := mergePatchAtVersion(ctx, dyn, cnpgClusterGVR, cluster, map[string]any{
 		"metadata": map[string]any{"annotations": map[string]any{cnpgRestoreValidationAnno: string(data)}},
 	}); err != nil {
 		if apierrors.IsConflict(err) {
-			return nil, cnpgChanged(nil, "Cluster %s/%s changed while the note was being recorded; try again", namespace, name)
+			return nil, changedAction(nil, "Cluster %s/%s changed while the note was being recorded; try again", namespace, name)
 		}
 		return nil, err
 	}
@@ -633,8 +633,8 @@ func (s *Server) handleCNPGRestoreCapability(w http.ResponseWriter, r *http.Requ
 	s.writeJSON(w, s.cnpgRestoreCapability(r, namespace))
 }
 
-func (s *Server) cnpgRestoreCapability(r *http.Request, namespace string) CNPGActionCapability {
-	g := cnpgGrantCreateClusters
-	c := cnpgCapability("", namespace, []string{s.cnpgPermission(r, g, namespace)}, []cnpgGrant{g})
+func (s *Server) cnpgRestoreCapability(r *http.Request, namespace string) ActionCapability {
+	g := cnpgGrantCreateClusters.In(namespace)
+	c := capabilityVerdict("", []string{s.grantPermission(r, g)}, []Grant{g})
 	return cnpgOperatorWebhookGuard(s.cnpgOperatorVerdictFor(r, namespace), c)
 }

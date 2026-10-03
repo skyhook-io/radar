@@ -172,7 +172,7 @@ func TestRecordCNPGRestoreValidationRefusals(t *testing.T) {
 	now := time.Now()
 	if _, err := recordCNPGRestoreValidation(context.Background(), env.dyn, "db", "pg", cnpgActionReq(t, nil, map[string]any{"checked": "x"}), "", now); err == nil {
 		t.Fatal("a Cluster that was not restored cannot carry a validation note")
-	} else if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeBlocked {
+	} else if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeBlocked {
 		t.Fatalf("want blocked, got %v", err)
 	}
 	env = newCNPGActionEnv(t, []runtime.Object{cnpgRestoredCluster()})
@@ -456,14 +456,14 @@ func TestHandleCNPGRestoreCapability(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("status %d: %s", w.Code, w.Body.String())
 		}
-		var got CNPGActionCapability
+		var got ActionCapability
 		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 			t.Fatal(err)
 		}
-		if allowed && (!got.Allowed || got.Permission != cnpgPermAllowed) {
+		if allowed && (!got.Allowed || got.Permission != permissionAllowed) {
 			t.Errorf("allowed = %+v", got)
 		}
-		if !allowed && (got.Allowed || got.Permission != cnpgPermDenied || got.Grant != "create clusters (postgresql.cnpg.io) in namespace db" || !strings.Contains(got.Reason, got.Grant)) {
+		if !allowed && (got.Allowed || got.Permission != permissionDenied || got.Grant != "create clusters (postgresql.cnpg.io) in namespace db" || !strings.Contains(got.Reason, got.Grant)) {
 			t.Errorf("denied = %+v, want the grant named", got)
 		}
 	}
@@ -479,7 +479,7 @@ func TestHandleCNPGRestoreCapability(t *testing.T) {
 func TestCNPGRestoreCapabilityRefusedWhileWebhookRejects(t *testing.T) {
 	rejects := true
 	got := cnpgOperatorWebhookGuard(CNPGOperatorVerdict{WebhookRejects: &rejects, WebhookReason: "the validating webhook has no ready endpoint"},
-		cnpgCapability("", "db", []string{cnpgPermAllowed}, []cnpgGrant{cnpgGrantCreateClusters}))
+		capabilityVerdict("", []string{permissionAllowed}, []Grant{cnpgGrantCreateClusters.In("db")}))
 	if got.Allowed || !strings.Contains(got.Reason, "no ready endpoint") {
 		t.Errorf("restore while the webhook rejects = %+v", got)
 	}

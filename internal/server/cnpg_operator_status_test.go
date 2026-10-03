@@ -135,8 +135,8 @@ func TestCNPGOperatorFactsVerdict(t *testing.T) {
 }
 
 func TestCNPGApplyOperatorGuard(t *testing.T) {
-	allowed := CNPGActionCapability{Allowed: true, Permission: cnpgPermAllowed}
-	refused := CNPGActionCapability{Reason: "The cluster is hibernated", Permission: cnpgPermAllowed}
+	allowed := ActionCapability{Allowed: true, Permission: permissionAllowed}
+	refused := ActionCapability{Reason: "The cluster is hibernated", Permission: permissionAllowed}
 	rejects := true
 	resp := &CNPGClusterCapabilitiesResponse{
 		Operator: CNPGOperatorVerdict{State: cnpgOperatorNotReconciling, WebhookRejects: &rejects, WebhookReason: "the admission webhook Service cnpg-system/cnpg-webhook-service has no ready endpoint"},

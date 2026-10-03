@@ -405,9 +405,9 @@ func useCNPGProxyAPIServer(t *testing.T, handle func(w http.ResponseWriter, c cn
 	}
 	previousClient := k8s.SetTestClient(client)
 	t.Cleanup(func() { k8s.SetTestClient(previousClient) })
-	cnpgLocalCanIMu.Lock()
-	cnpgLocalCanIMemo = map[string]cnpgLocalCanIEntry{}
-	cnpgLocalCanIMu.Unlock()
+	localCanIMu.Lock()
+	localCanIMemo = map[string]localCanIEntry{}
+	localCanIMu.Unlock()
 	resetCNPGRuntimeMemo(t)
 	return f
 }

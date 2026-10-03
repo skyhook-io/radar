@@ -490,7 +490,7 @@ func (s *Server) handleCNPGClusterRuntime(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	proxyAllowed := s.cnpgPermission(r, cnpgGrantGetPodsProxy, namespace) != cnpgPermDenied
+	proxyAllowed := s.grantPermission(r, cnpgGrantGetPodsProxy.In(namespace)) != permissionDenied
 	fenced := parseCNPGFenced(cluster.GetAnnotations()[cnpgFencedAnnotation])
 	resp := CNPGClusterRuntimeResponse{
 		Cluster:    CNPGRuntimeObjectRef{Namespace: namespace, Name: name, UID: cluster.GetUID()},
@@ -594,7 +594,7 @@ func (s *Server) handleCNPGPoolerRuntime(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	proxyAllowed := s.cnpgPermission(r, cnpgGrantGetPodsProxy, namespace) != cnpgPermDenied
+	proxyAllowed := s.grantPermission(r, cnpgGrantGetPodsProxy.In(namespace)) != permissionDenied
 	resp := CNPGPoolerRuntimeResponse{
 		Pooler:     CNPGRuntimeObjectRef{Namespace: namespace, Name: name, UID: pooler.GetUID()},
 		SampledAt:  time.Now().UTC().Format(time.RFC3339),

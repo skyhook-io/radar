@@ -38,12 +38,12 @@ const (
 )
 
 var (
-	cnpgGrantGetLeases        = cnpgGrant{"get", "coordination.k8s.io", "leases", ""}
-	cnpgGrantListLeases       = cnpgGrant{"list", "coordination.k8s.io", "leases", ""}
-	cnpgGrantGetMutatingWH    = cnpgGrant{"get", "admissionregistration.k8s.io", "mutatingwebhookconfigurations", ""}
-	cnpgGrantGetValidatingWH  = cnpgGrant{"get", "admissionregistration.k8s.io", "validatingwebhookconfigurations", ""}
-	cnpgGrantListEndpointSlcs = cnpgGrant{"list", "discovery.k8s.io", "endpointslices", ""}
-	cnpgGrantGetPodsProxy     = cnpgGrant{"get", "", "pods", "proxy"}
+	cnpgGrantGetLeases        = Grant{Verb: "get", Group: "coordination.k8s.io", Resource: "leases"}
+	cnpgGrantListLeases       = Grant{Verb: "list", Group: "coordination.k8s.io", Resource: "leases"}
+	cnpgGrantGetMutatingWH    = Grant{Verb: "get", Group: "admissionregistration.k8s.io", Resource: "mutatingwebhookconfigurations"}
+	cnpgGrantGetValidatingWH  = Grant{Verb: "get", Group: "admissionregistration.k8s.io", Resource: "validatingwebhookconfigurations"}
+	cnpgGrantListEndpointSlcs = Grant{Verb: "list", Group: "discovery.k8s.io", Resource: "endpointslices"}
+	cnpgGrantGetPodsProxy     = Grant{Verb: "get", Resource: "pods", Subresource: "proxy"}
 )
 
 type CNPGOperatorPod struct {
@@ -141,13 +141,6 @@ type CNPGOperatorDiagnosis struct {
 	MetricsPort int                          `json:"metricsPort"`
 	Reconcile   []CNPGOperatorReconcilePod   `json:"reconcile"`
 	Events      CNPGOperatorEvents           `json:"events"`
-}
-
-func cnpgGrantText(g cnpgGrant, namespace string) string {
-	if namespace == "" {
-		return g.ClusterString()
-	}
-	return g.String(namespace)
 }
 
 func (s *Server) cnpgOperatorDiagnoses(r *http.Request, operators []*appsv1.Deployment) []CNPGOperatorDiagnosis {
@@ -346,18 +339,15 @@ func (s *Server) cnpgOperatorWebhooks(r *http.Request, typed kubernetes.Interfac
 	configs := []CNPGOperatorWebhookConfig{}
 	type svcKey struct{ ns, name string }
 	svcs := map[svcKey]bool{}
-	add := func(kind, name string, g cnpgGrant, read func() ([]admissionv1.WebhookClientConfig, []string, []string, error)) {
+	add := func(kind, name string, g Grant, read func() ([]admissionv1.WebhookClientConfig, []string, []string, error)) {
 		cfg := CNPGOperatorWebhookConfig{Kind: kind, Name: name, Webhooks: []CNPGOperatorWebhook{}}
-		if s.cnpgPermission(r, g, "") == cnpgPermDenied {
-			cfg.CNPGReadCoverage = CNPGReadCoverage{State: cnpgReadDenied, Grant: cnpgGrantText(g, "")}
+		if s.grantPermission(r, g) == permissionDenied {
+			cfg.CNPGReadCoverage = CNPGReadCoverage{State: cnpgReadDenied, Grant: g.String()}
 			configs = append(configs, cfg)
 			return
 		}
 		clients, names, policies, err := read()
 		cfg.CNPGReadCoverage = cnpgReadOutcome(err, g, "")
-		if cfg.State == cnpgReadDenied {
-			cfg.Grant = cnpgGrantText(g, "")
-		}
 		for i, cc := range clients {
 			wh := CNPGOperatorWebhook{Name: names[i], FailurePolicy: policies[i], CABundleSet: len(cc.CABundle) > 0, URL: cc.URL != nil}
 			if cc.Service != nil {
@@ -461,7 +451,7 @@ func (s *Server) cnpgOperatorReconcile(r *http.Request, d *appsv1.Deployment, po
 	if len(pods) == 0 {
 		return out
 	}
-	allowed := s.cnpgPermission(r, cnpgGrantGetPodsProxy, d.Namespace) != cnpgPermDenied
+	allowed := s.grantPermission(r, cnpgGrantGetPodsProxy.In(d.Namespace)) != permissionDenied
 	var client kubernetes.Interface
 	if allowed {
 		client = cnpgRuntimeClient(r)
@@ -476,7 +466,7 @@ func (s *Server) cnpgOperatorReconcile(r *http.Request, d *appsv1.Deployment, po
 		res.StartedAt = cnpgOperatorProcessStart(p, container)
 		switch {
 		case !allowed:
-			res.CNPGRuntimeSource = CNPGRuntimeSource{State: cnpgRuntimeStateDenied, Error: "reading the operator's metrics needs " + cnpgGrantGetPodsProxy.String(d.Namespace)}
+			res.CNPGRuntimeSource = CNPGRuntimeSource{State: cnpgRuntimeStateDenied, Error: "reading the operator's metrics needs " + cnpgGrantGetPodsProxy.In(d.Namespace).String()}
 			continue
 		case client == nil:
 			res.CNPGRuntimeSource = CNPGRuntimeSource{State: cnpgRuntimeStateError, Error: "cluster client unavailable"}

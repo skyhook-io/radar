@@ -58,10 +58,10 @@ type CNPGPoolerFacts struct {
 }
 
 type CNPGPoolerActions struct {
-	Pause  CNPGActionCapability `json:"pause"`
-	Resume CNPGActionCapability `json:"resume"`
+	Pause  ActionCapability `json:"pause"`
+	Resume ActionCapability `json:"resume"`
 	// ObserveState is reading each PgBouncer's paused state (pods/exec).
-	ObserveState CNPGActionCapability `json:"observeState"`
+	ObserveState ActionCapability `json:"observeState"`
 }
 
 // CNPGPoolerCapabilitiesResponse is GET /api/cnpg/poolers/{ns}/{name}/capabilities.
@@ -170,8 +170,9 @@ func (s *Server) cnpgPoolerCapabilities(r *http.Request, c cnpgActionClients, co
 		return nil, err
 	}
 	f := cnpgPoolerFactsOf(r.Context(), c, pooler)
-	one := func(guard string, g cnpgGrant) CNPGActionCapability {
-		return cnpgCapability(guard, namespace, []string{s.cnpgPermission(r, g, namespace)}, []cnpgGrant{g})
+	one := func(guard string, g Grant) ActionCapability {
+		g = g.In(namespace)
+		return capabilityVerdict(guard, []string{s.grantPermission(r, g)}, []Grant{g})
 	}
 	return &CNPGPoolerCapabilitiesResponse{
 		UID:             string(pooler.GetUID()),
@@ -199,7 +200,7 @@ func (s *Server) handleCNPGPoolerAction(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown Pooler action %q: must be pause or resume", action))
 		return
 	}
-	req, dyn, ok := s.decodeCNPGActionRequest(w, r)
+	req, dyn, ok := s.decodeActionRequest(w, r)
 	if !ok {
 		return
 	}
@@ -214,17 +215,17 @@ func (s *Server) handleCNPGPoolerAction(w http.ResponseWriter, r *http.Request) 
 	s.writeJSON(w, res)
 }
 
-func runCNPGPoolerAction(ctx context.Context, c cnpgActionClients, namespace, name, action string, req CNPGActionRequest) (*CNPGActionResult, error) {
+func runCNPGPoolerAction(ctx context.Context, c cnpgActionClients, namespace, name, action string, req ActionRequest) (*CNPGActionResult, error) {
 	var reviewed cnpgPoolerReviewed
 	if len(req.Facts) > 0 {
 		if err := json.Unmarshal(req.Facts, &reviewed); err != nil {
-			return nil, cnpgRefuse(http.StatusBadRequest, "", "facts: %v", err)
+			return nil, refuseAction(http.StatusBadRequest, "", "facts: %v", err)
 		}
 	}
 	if reviewed.Paused == nil {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "facts.paused is required for %s: the confirmation must bind what the dialog showed", action)
+		return nil, refuseAction(http.StatusBadRequest, "", "facts.paused is required for %s: the confirmation must bind what the dialog showed", action)
 	}
-	if err := decodeCNPGParams(req.Params, &struct{}{}); err != nil {
+	if err := decodeActionParams(req.Params, &struct{}{}); err != nil {
 		return nil, err
 	}
 	pooler, err := c.dyn.Resource(cnpgPoolerGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
@@ -233,21 +234,21 @@ func runCNPGPoolerAction(ctx context.Context, c cnpgActionClients, namespace, na
 	}
 	facts := cnpgPoolerFactsOf(ctx, cnpgActionClients{dyn: c.dyn}, pooler)
 	if string(pooler.GetUID()) != req.UID {
-		return nil, cnpgChanged(facts, "Pooler %s/%s was deleted and recreated since you reviewed it", namespace, name)
+		return nil, changedAction(facts, "Pooler %s/%s was deleted and recreated since you reviewed it", namespace, name)
 	}
 	if *reviewed.Paused != facts.Paused {
-		return nil, cnpgChanged(facts, "Pooler %s/%s changed since you confirmed (paused); review the action again", namespace, name)
+		return nil, changedAction(facts, "Pooler %s/%s changed since you confirmed (paused); review the action again", namespace, name)
 	}
 	pause := action == "pause"
 	if r := cnpgGuardPooler(facts, pause); r != "" {
-		return nil, cnpgBlocked(r)
+		return nil, blockedAction(r)
 	}
-	err = cnpgMergePatch(ctx, c.dyn, cnpgPoolerGVR, pooler, map[string]any{"spec": map[string]any{"pgbouncer": map[string]any{"paused": pause}}})
+	err = mergePatchAtVersion(ctx, c.dyn, cnpgPoolerGVR, pooler, map[string]any{"spec": map[string]any{"pgbouncer": map[string]any{"paused": pause}}})
 	if apierrors.IsConflict(err) {
 		if fresh, gerr := c.dyn.Resource(cnpgPoolerGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{}); gerr == nil {
 			facts = cnpgPoolerFactsOf(ctx, cnpgActionClients{dyn: c.dyn}, fresh)
 		}
-		return nil, cnpgChanged(facts, "Pooler %s/%s changed while the request was being sent; review the action again", namespace, name)
+		return nil, changedAction(facts, "Pooler %s/%s changed while the request was being sent; review the action again", namespace, name)
 	}
 	if err != nil {
 		return nil, err
@@ -332,13 +333,13 @@ func (s *Server) handleCNPGPgBouncerState(w http.ResponseWriter, r *http.Request
 	resp := CNPGPgBouncerStateResponse{
 		Pooler:     CNPGRuntimeObjectRef{Namespace: namespace, Name: name, UID: pooler.GetUID()},
 		SampledAt:  time.Now().UTC().Format(time.RFC3339),
-		Permission: CNPGExecPermission{Exec: s.cnpgPermission(r, cnpgGrantCreateExec, namespace), Grant: cnpgGrantCreateExec.String(namespace)},
+		Permission: CNPGExecPermission{Exec: s.grantPermission(r, cnpgGrantCreateExec.In(namespace)), Grant: cnpgGrantCreateExec.In(namespace).String()},
 		Pods:       make([]CNPGPgBouncerState, len(pods)),
 	}
 	for i, p := range pods {
 		resp.Pods[i].Pod = p.Name
 	}
-	if resp.Permission.Exec == cnpgPermDenied {
+	if resp.Permission.Exec == permissionDenied {
 		for i := range resp.Pods {
 			resp.Pods[i].CNPGRuntimeSource = CNPGRuntimeSource{State: cnpgExecStateDenied, Error: "reading PgBouncer state needs " + resp.Permission.Grant}
 		}
@@ -361,7 +362,7 @@ func (s *Server) handleCNPGPgBouncerState(w http.ResponseWriter, r *http.Request
 	run.wait()
 	for _, p := range resp.Pods {
 		if p.State == cnpgExecStateDenied {
-			resp.Permission.Exec = cnpgPermDenied
+			resp.Permission.Exec = permissionDenied
 		}
 	}
 	s.writeJSON(w, resp)
