@@ -50,6 +50,18 @@ func TestActiveRestartLoop(t *testing.T) {
 		{"run started 11m after the termination", restartLoopPod(now, status(5, running(time.Minute), terminatedAgo(now, 12*time.Minute, "Error", 1))), false, false},
 		{"OOM is left to the OOM path", restartLoopPod(now, status(5, running(time.Minute), terminatedAgo(now, 2*time.Minute, "OOMKilled", 137))), false, false},
 		{"current termination counts", restartLoopPod(now, status(5, corev1.ContainerState{Terminated: terminatedAgo(now, 5*time.Second, "Completed", 0)}, terminatedAgo(now, 40*time.Minute, "Error", 1))), true, false},
+		{"first restart after a long run (node bounce)", restartLoopPod(now, status(5, running(time.Minute), &corev1.ContainerStateTerminated{
+			Reason: "Error", ExitCode: 255, StartedAt: metav1.NewTime(now.Add(-72 * time.Hour)), FinishedAt: metav1.NewTime(now.Add(-2 * time.Minute)),
+		})), false, false},
+		{"short previous run", restartLoopPod(now, status(5, running(time.Minute), &corev1.ContainerStateTerminated{
+			Reason: "Error", ExitCode: 1, StartedAt: metav1.NewTime(now.Add(-5 * time.Minute)), FinishedAt: metav1.NewTime(now.Add(-2 * time.Minute)),
+		})), true, false},
+		{"pod being deleted", func() *corev1.Pod {
+			p := restartLoopPod(now, status(5, corev1.ContainerState{Terminated: terminatedAgo(now, 5*time.Second, "Completed", 0)}, terminatedAgo(now, 3*time.Minute, "Error", 1)))
+			deleted := metav1.NewTime(now.Add(-10 * time.Second))
+			p.DeletionTimestamp = &deleted
+			return p
+		}(), false, false},
 		{"no termination recorded", restartLoopPod(now, status(5, running(time.Minute), nil)), false, false},
 		{"OnFailure pod (Job worker)", func() *corev1.Pod {
 			p := restartLoopPod(now, status(5, running(time.Minute), terminatedAgo(now, 2*time.Minute, "Error", 1)))
@@ -137,6 +149,19 @@ func TestActiveRestartLoop_UnattributedProbeEventNeedsSingleContainer(t *testing
 	multi.Spec.Containers = append(multi.Spec.Containers, corev1.Container{Name: "other"})
 	if loop, _ := activeRestartLoop(multi, probes, now); loop.liveness != nil {
 		t.Fatal("multi-container pod: unattributed liveness event must not be pinned on the looping container")
+	}
+}
+
+func TestActiveRestartLoop_IgnoresProbeEventsOfAPredecessorPod(t *testing.T) {
+	now := time.Now()
+	pod := restartLoopPod(now, corev1.ContainerStatus{Name: "app", RestartCount: 4, LastTerminationState: corev1.ContainerState{Terminated: terminatedAgo(now, time.Minute, "Completed", 0)}})
+	pod.UID = "new"
+	key := "ns/p/app/" + livenessProbeFailedReason
+	if loop, _ := activeRestartLoop(pod, map[string]probeFailure{key: {at: now, podUID: "old"}}, now); loop.liveness != nil {
+		t.Fatal("probe event from a previous pod with the same name was attributed")
+	}
+	if loop, _ := activeRestartLoop(pod, map[string]probeFailure{key: {at: now, podUID: "new"}}, now); loop.liveness == nil {
+		t.Fatal("probe event of this pod should be attributed")
 	}
 }
 

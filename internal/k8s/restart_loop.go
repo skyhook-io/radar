@@ -74,7 +74,9 @@ type restartLoop struct {
 // containers before sidecars) so the evidence does not hop between containers
 // from one poll to the next.
 func activeRestartLoop(pod *corev1.Pod, probes map[string]probeFailure, now time.Time) (restartLoop, bool) {
-	if pod == nil || (pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodPending) {
+	// A pod being deleted stops its containers on purpose: a rollout or
+	// drain SIGTERM ends Completed/0 and is not a crash.
+	if pod == nil || pod.DeletionTimestamp != nil || (pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodPending) {
 		return restartLoop{}, false
 	}
 	if pod.Spec.RestartPolicy == "" || pod.Spec.RestartPolicy == corev1.RestartPolicyAlways {
@@ -123,6 +125,14 @@ func containerRestartLoop(cs *corev1.ContainerStatus, now time.Time) (restartLoo
 	if now.Sub(finished) > restartLoopWindow {
 		return restartLoop{}, false
 	}
+	// A run that lasted longer than the window was not part of a loop: a
+	// container that served for days and restarted once (a node or kubelet
+	// bounce) keeps its old restarts in RestartCount, and would otherwise
+	// read as looping on its first restart. A real loop is caught from its
+	// next, short run.
+	if !term.StartedAt.IsZero() && finished.Sub(term.StartedAt.Time) > restartLoopWindow {
+		return restartLoop{}, false
+	}
 	if r := cs.State.Running; r != nil && !r.StartedAt.IsZero() && r.StartedAt.Sub(finished) > restartLoopStaleGap {
 		return restartLoop{}, false
 	}
@@ -151,14 +161,16 @@ func withProbeEvidence(loop restartLoop, pod *corev1.Pod, probes map[string]prob
 // pin another container's probe on the looping one.
 func probeFailureFor(probes map[string]probeFailure, pod *corev1.Pod, container, reason string) (probeFailure, bool) {
 	prefix := pod.Namespace + "/" + pod.Name + "/"
-	if pf, ok := probes[prefix+container+"/"+reason]; ok {
-		return pf, true
+	pf, ok := probes[prefix+container+"/"+reason]
+	if !ok && len(pod.Spec.Containers)+len(pod.Spec.InitContainers) == 1 {
+		pf, ok = probes[prefix+"/"+reason]
 	}
-	if len(pod.Spec.Containers)+len(pod.Spec.InitContainers) == 1 {
-		pf, ok := probes[prefix+"/"+reason]
-		return pf, ok
+	// Events outlive a pod; a recreated pod with the same name (a
+	// StatefulSet replica) must not inherit its predecessor's failures.
+	if ok && pf.podUID != "" && pod.UID != "" && pf.podUID != pod.UID {
+		return probeFailure{}, false
 	}
-	return probeFailure{}, false
+	return pf, ok
 }
 
 // restartLoopMayReplace reports whether the loop's crashloop reason may stand
@@ -169,7 +181,7 @@ func probeFailureFor(probes map[string]probeFailure, pod *corev1.Pod, container,
 func restartLoopMayReplace(reason string) bool {
 	switch reason {
 	case "Running", "Pending", "Unknown", "", "PodInitializing", "ContainerCreating",
-		crashLoopReason, "Error", "Completed",
+		crashLoopReason, "Error", "Completed", "StartError", "ContainerCannotRun",
 		highRestartReason, livenessProbeFailedReason, readinessProbeFailedReason:
 		return true
 	}
@@ -237,7 +249,6 @@ func (l restartLoop) diagnosis() (cause, action string) {
 	}
 }
 
-// evidence is the wire form attached to the issue.
 func (l restartLoop) evidence() *issuesapi.RestartLoop {
 	out := &issuesapi.RestartLoop{
 		Container:      l.container,

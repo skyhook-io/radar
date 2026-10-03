@@ -123,10 +123,10 @@ func probeEvent(name, probe string, at time.Time) *corev1.Event {
 
 // TestCompose_RestartLoopKeepsOneIssueAcrossTheCycle walks a liveness-driven
 // restart loop (graceful exit 0, the kourier-gateway pattern seen in
-// production) through every state the kubelet reports during one cycle. Read
-// tick by tick, these used to be crashloop, readiness_failed,
-// liveness_probe_failed, workload_degraded, and nothing at all — five issue
-// ids for one problem. They must now be one critical crashloop issue.
+// production) through every state the kubelet reports during one cycle. Each
+// state alone looks like a different problem (crash backoff, readiness,
+// liveness, a degraded Deployment, or a healthy pod); across all of them the
+// loop must stay one critical crashloop issue with one id.
 func TestCompose_RestartLoopKeepsOneIssueAcrossTheCycle(t *testing.T) {
 	defer k8s.ResetTestState()
 	now := time.Now()

@@ -1284,6 +1284,7 @@ type probeFailure struct {
 	reason  string
 	message string
 	at      time.Time
+	podUID  types.UID
 }
 
 type pvcPendingFailure struct {
@@ -1576,7 +1577,7 @@ func latestProbeFailures(cache *ResourceCache, namespace string, now time.Time) 
 			continue
 		}
 		key := e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name
-		pf := probeFailure{reason: reason, message: strings.TrimSpace(e.Message), at: t}
+		pf := probeFailure{reason: reason, message: strings.TrimSpace(e.Message), at: t, podUID: e.InvolvedObject.UID}
 		containerKey := key + "/" + eventContainerName(e.InvolvedObject.FieldPath) + "/" + reason
 		if cur, exists := byContainer[containerKey]; !exists || t.After(cur.at) {
 			byContainer[containerKey] = pf
