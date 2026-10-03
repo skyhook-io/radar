@@ -24,7 +24,7 @@ import { CNPGRestoreDialog } from '../recovery/CNPGRestoreDialog'
 import { CNPGReportDialog } from './CNPGReportDialog'
 import { useOpenCNPGPsql } from './useOpenCNPGPsql'
 import { backupNameFor, describeBackupMethod, pickDefaultStandby, switchoverCandidateFacts, switchoverDefault, switchoverLagNote, type StandbyChoice } from './actionModel'
-import { lsnDistance } from '../lsn'
+import { lsnDistance, standbyOwnBacklog } from '../lsn'
 
 type DialogKind = CNPGClusterActionName | 'restore' | 'report' | null
 
@@ -360,8 +360,8 @@ export function ClusterActionDialog({
       .map((i) => {
         // A standby that isn't connected has no row; its own replayed
         // position still says how far behind it is.
-        const own = runtime.data?.instances.find((x) => x.pod === i.pod)?.status.replayLsn
-        const lag = lags.get(i.pod) ?? (own ? { replayBacklogBytes: lsnDistance(primary?.status.currentLsn, own) } : undefined)
+        const own = standbyOwnBacklog(primary?.status, runtime.data?.instances.find((x) => x.pod === i.pod)?.status)
+        const lag = lags.get(i.pod) ?? (own !== undefined ? { replayBacklogBytes: own } : undefined)
         const cap = caps.instanceActions?.[i.pod]?.switchoverTarget
         const ineligible = i.fenced ? 'fenced' : !i.podExists ? 'Pod missing' : !i.ready ? 'not ready' : cap && !cap.allowed ? cap.reason ?? 'not eligible' : undefined
         return { pod: i.pod, podUID: i.podUID, ineligible, ...lag }

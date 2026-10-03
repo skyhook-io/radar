@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatBytes, lsnDistance, parseLsn } from './lsn'
+import { formatBytes, lsnDistance, parseLsn, standbyOwnBacklog } from './lsn'
 
 describe('parseLsn', () => {
   it('reads the high and low halves', () => {
@@ -28,5 +28,13 @@ describe('formatBytes', () => {
     expect(formatBytes(undefined)).toBe('—')
     expect(formatBytes(0)).toBe('0 B')
     expect(formatBytes(16 * 1024 * 1024)).toBe('16 MiB')
+  })
+})
+
+describe('standbyOwnBacklog', () => {
+  it('compares positions only on the same timeline', () => {
+    expect(standbyOwnBacklog({ currentLsn: '0/3000000', timeline: 4 }, { replayLsn: '0/1000000', timeline: 4 })).toBe(0x2000000)
+    expect(standbyOwnBacklog({ currentLsn: '0/3000000', timeline: 5 }, { replayLsn: '0/4000000', timeline: 4 })).toBeUndefined()
+    expect(standbyOwnBacklog({ currentLsn: '0/3000000' }, { replayLsn: '0/1000000' })).toBeUndefined()
   })
 })

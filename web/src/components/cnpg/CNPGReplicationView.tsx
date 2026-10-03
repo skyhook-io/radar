@@ -3,7 +3,7 @@ import { clsx } from 'clsx'
 import { Badge, CNPG_ROLE_DETAIL_TEXT, cnpgFormatLag, StatusDot, Tooltip, toneFillClass, toneTextClass } from '@skyhook-io/k8s-ui'
 import { useCNPGClusterCapabilities, type CNPGRuntimeInstance, type CNPGRuntimeReplication } from '../../api/cnpg'
 import { CNPGInstanceActions } from './actions/CNPGInstanceActions'
-import { formatBytes, lsnDistance } from './lsn'
+import { formatBytes, lsnDistance, standbyOwnBacklog } from './lsn'
 import { CNPG_BACKLOG_DEGRADED, cnpgStandbyBacklogTone, cnpgStandbyHeadline } from './runtimeModel'
 
 function seconds(s?: number): string {
@@ -145,7 +145,7 @@ export function CNPGReplicationView({
             const rep = rows.get(r.pod)
             // Without a pg_stat_replication row (not connected), the standby's
             // own replayed position still measures how far behind it is.
-            const replayBacklog = lsnDistance(primary?.status.currentLsn, rep ? rep.replayLsn : r.status.replayLsn)
+            const replayBacklog = rep ? lsnDistance(primary?.status.currentLsn, rep.replayLsn) : standbyOwnBacklog(primary?.status, r.status)
             const backlogTone = cnpgStandbyBacklogTone(replayBacklog, rep?.replayLag)
             const headline = cnpgStandbyHeadline(r, rep, backlogTone, { fenced: fenced.has(r.pod), primaryRead: primary?.status.state === 'ok' })
             const tone = headline.tone
