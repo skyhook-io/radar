@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Badge, Collapse, ConfirmDialog, SelectMenu } from '@skyhook-io/k8s-ui'
 import { ArrowLeft, Info } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
@@ -207,6 +207,14 @@ export function LocalConnectionSettings({
   const editorRegion = useRef<HTMLFieldSetElement>(null)
   const trigger = useRef<HTMLElement | null>(null)
   const mounted = useRef(true)
+  // Focus moves in the commit that mounts a new draft form. Deferring it to a
+  // later frame lets keystrokes typed in between land in a different field.
+  const focusAfterDraft = useRef<(() => void) | null>(null)
+  useLayoutEffect(() => {
+    const focus = focusAfterDraft.current
+    focusAfterDraft.current = null
+    focus?.()
+  })
   const copySources = catalog.filter(c => c.integration === kind && !c.error && c.url && c.binding !== profile.target.binding)
   const removalContext = profile.target.context
   const dirty =
@@ -535,7 +543,7 @@ export function LocalConnectionSettings({
           setDraftGeneration((generation) => generation + 1)
           setError('')
           // Cost's first control is its source picker, a listbox trigger.
-          requestAnimationFrame(() => region.current?.querySelector<HTMLElement>('input:not(:disabled), button[aria-haspopup="listbox"]:not(:disabled)')?.focus())
+          focusAfterDraft.current = () => region.current?.querySelector<HTMLElement>('input:not(:disabled), button[aria-haspopup="listbox"]:not(:disabled)')?.focus()
         }}
         className="text-xs text-accent-text hover:underline disabled:opacity-50 shrink-0"
       >
@@ -555,7 +563,7 @@ export function LocalConnectionSettings({
     setDraftGeneration(generation => generation + 1)
     setMessage('')
     setError('')
-    requestAnimationFrame(() => editorRegion.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus())
+    focusAfterDraft.current = () => editorRegion.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus()
   }
   const copySource = (source: StoredConnection) => {
     setSelected(source)
@@ -571,7 +579,7 @@ export function LocalConnectionSettings({
     setDraftGeneration(generation => generation + 1)
     setMessage('')
     setError('')
-    requestAnimationFrame(() => editorRegion.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus())
+    focusAfterDraft.current = () => editorRegion.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus()
   }
   const reuseOptions = task === 'main' && profile.state !== 'launch' ? [
     ...(previous ? [{

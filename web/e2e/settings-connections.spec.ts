@@ -508,7 +508,14 @@ test('copy into an unconfigured cluster saves edited headers without an intermed
     binding: 'source', integration: 'metrics', context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: 'source-revision' })
   const dialog = await openSettings(page, 'Metrics')
   await dialog.getByRole('button', { name: 'Copy settings from…', exact: true }).click()
-  await dialog.getByRole('option', { name: /staging/ }).click()
+  // Focus has to reach the copied form before the next frame; a later move can
+  // take a keystroke meant for another field.
+  const focusedBeforeFrame = await dialog.getByRole('option', { name: /staging/ }).evaluate(async option => {
+    (option as HTMLElement).click()
+    await Promise.resolve()
+    return (document.activeElement as HTMLElement | null)?.labels?.[0]?.textContent
+  })
+  expect(focusedBeforeFrame).toBe('Metrics backend URL')
   await dialog.getByRole('textbox', { name: 'X-Scope-OrgID value', exact: true }).fill('new-tenant')
   await dialog.getByRole('textbox', { name: 'Metrics backend URL', exact: true }).fill('https://source.example/query')
   expect(state.writes).toHaveLength(0)
