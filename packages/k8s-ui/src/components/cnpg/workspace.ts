@@ -7,6 +7,7 @@ import { worseTone } from '../ui/status-tone'
 import type { Fact, ProblemOrigin, WorkspaceProblem } from '../workspace'
 import { formatBytes } from '../../utils/format'
 import { formatGrant, type Grant } from '../../utils/grant'
+import { issueReasonTitle } from '../issues/severity'
 import {
   CNPG_BARMAN_PLUGIN_NAME,
   getCNPGClusterBackupConfig,
@@ -206,13 +207,11 @@ const CNPG_POD_REASON_SENTENCES: Record<string, string> = {
 
 // Plain headlines for CNPG issues whose message carries the operator's own
 // condition text; that message becomes the detail beneath.
+// Reasons the Issues page already titles come from issueReasonTitle, so a
+// problem reads the same here and there; these are the rest.
 const CNPG_REASON_TITLES: Record<string, string> = {
-  CNPGWALArchivingFailing: 'WAL archiving is failing',
-  CNPGLastBackupFailed: 'The last backup failed',
   CNPGBackupFailed: 'Backup failed',
   CNPGScheduledBackupMissed: 'A scheduled backup did not run',
-  // The detector sees no successful backup since the run; a failed one may exist.
-  CNPGScheduledRunNoBackup: 'No successful backup since a scheduled run',
   CNPGCertificateExpiring: 'A certificate expires soon',
   CNPGCertificateExpired: 'A certificate has expired',
 }
@@ -228,7 +227,7 @@ export function cnpgIssueText(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'name' | 
   const cause = issue.cause?.trim() || undefined
   // The run's time is the issue's first_seen, not part of the message.
   if (issue.reason === 'CNPGScheduledRunNoBackup' && issue.first_seen && message) message = `${message} ${formatAge(issue.first_seen)} ago`
-  const known = CNPG_REASON_TITLES[issue.reason]
+  const known = issueReasonTitle(issue.reason) ?? CNPG_REASON_TITLES[issue.reason]
   if (known) return { title: known, detail: [stripTitlePrefix(message, known), cause].filter(Boolean).join(' ') || undefined }
   if (message && message !== issue.reason && /\s/.test(message)) return { title: message, detail: cause }
   const token = message || issue.reason
@@ -284,7 +283,7 @@ export function cnpgCollapseBackupFailures(problems: IssueProblem[], backupTimes
 }
 
 /**
- * "The last backup failed" restates a failed-Backup problem when that problem
+ * "Latest backup failed" restates a failed-Backup problem when that problem
  * is about the cluster's newest Backup, so the duplicate is dropped and the
  * count stays honest. With the newest Backup unknown, both stay.
  */
