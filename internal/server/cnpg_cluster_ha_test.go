@@ -342,11 +342,11 @@ func TestCNPGClusterHA_EachReadIsAuthorizedOnItsOwn(t *testing.T) {
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatal(err)
 	}
-	for name, src := range map[string]CNPGHASource{
-		"nodes": got.Nodes, "quorum": got.Quorum.Object, "pdbs": got.PDBs.CNPGHASource,
-		"primaryLease": got.PrimaryLease.CNPGHASource, "jobs": got.Jobs.CNPGHASource, "rwEndpoints": got.RWEndpoints.CNPGHASource,
+	for name, src := range map[string]ReadSource{
+		"nodes": got.Nodes, "quorum": got.Quorum.Object, "pdbs": got.PDBs.ReadSource,
+		"primaryLease": got.PrimaryLease.ReadSource, "jobs": got.Jobs.ReadSource, "rwEndpoints": got.RWEndpoints.ReadSource,
 	} {
-		if src.State != cnpgHAStateDenied || src.Grant == "" {
+		if src.State != cnpgHAStateDenied || src.Grant == nil {
 			t.Errorf("%s = %+v, want denied naming the grant", name, src)
 		}
 	}

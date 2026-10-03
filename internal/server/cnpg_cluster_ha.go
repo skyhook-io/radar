@@ -58,21 +58,13 @@ var (
 	cnpgSecretsGVR        = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
 )
 
-// CNPGHASource is one sub-read's outcome. Grant names what a denied read
-// needs; Reason explains anything other than ok.
-type CNPGHASource struct {
-	State  string `json:"state"`
-	Reason string `json:"reason,omitempty"`
-	Grant  string `json:"grant,omitempty"`
-}
-
 type CNPGClusterHAResponse struct {
 	Cluster       CNPGRuntimeObjectRef `json:"cluster"`
 	SampledAt     string               `json:"sampledAt"`
 	DesiredImage  string               `json:"desiredImage,omitempty"`
 	Instances     []CNPGHAInstance     `json:"instances"`
-	Pods          CNPGHASource         `json:"pods"`
-	Nodes         CNPGHASource         `json:"nodes"`
+	Pods          ReadSource           `json:"pods"`
+	Nodes         ReadSource           `json:"nodes"`
 	Quorum        CNPGHAQuorum         `json:"quorum"`
 	PDBs          CNPGHAPDBs           `json:"pdbs"`
 	PrimaryLease  CNPGHALease          `json:"primaryLease"`
@@ -112,7 +104,7 @@ type CNPGHAQuorum struct {
 	Method         string              `json:"method,omitempty"`
 	Number         *int64              `json:"number,omitempty"`
 	DataDurability string              `json:"dataDurability,omitempty"`
-	Object         CNPGHASource        `json:"object"`
+	Object         ReadSource          `json:"object"`
 	Status         *CNPGHAQuorumStatus `json:"status,omitempty"`
 	N              *int                `json:"n,omitempty"`
 	W              *int                `json:"w,omitempty"`
@@ -132,7 +124,7 @@ type CNPGHAQuorumStatus struct {
 // spec.enablePDB (default true); an absent budget under enablePDB false is
 // the declared state, not a fault.
 type CNPGHAPDBs struct {
-	CNPGHASource
+	ReadSource
 	Enabled bool        `json:"enabled"`
 	Items   []CNPGHAPDB `json:"items"`
 }
@@ -153,7 +145,7 @@ type CNPGHAPDB struct {
 
 // CNPGHALease is one Lease. Expired compares renewTime + duration with now.
 type CNPGHALease struct {
-	CNPGHASource
+	ReadSource
 	Namespace           string `json:"namespace,omitempty"`
 	Name                string `json:"name,omitempty"`
 	Holder              string `json:"holder,omitempty"`
@@ -164,7 +156,7 @@ type CNPGHALease struct {
 }
 
 type CNPGHAJobs struct {
-	CNPGHASource
+	ReadSource
 	Items []CNPGHAJob `json:"items"`
 }
 
@@ -181,7 +173,7 @@ type CNPGHAJob struct {
 
 // CNPGHAEndpoints are the ready endpoints behind the -rw Service, named by Pod.
 type CNPGHAEndpoints struct {
-	CNPGHASource
+	ReadSource
 	Service string   `json:"service"`
 	Pods    []string `json:"pods"`
 }
@@ -197,7 +189,7 @@ type CNPGHACertificate struct {
 	Raw         string              `json:"raw"`
 	ExpiresAt   string              `json:"expiresAt,omitempty"`
 	Renewal     string              `json:"renewal"`
-	Metadata    *CNPGHASource       `json:"metadata,omitempty"`
+	Metadata    *ReadSource         `json:"metadata,omitempty"`
 	CertManager *CNPGCertManagerRef `json:"certManager,omitempty"`
 }
 
@@ -270,12 +262,12 @@ func (s *Server) cnpgClusterHA(r *http.Request, c cnpgHAClients, cache *k8s.Reso
 		var err error
 		pods, err = cnpgClusterInstancePods(cache, cluster)
 		if err != nil {
-			resp.Pods = CNPGHASource{State: cnpgHAStateUnavailable, Reason: err.Error()}
+			resp.Pods = ReadSource{State: cnpgHAStateUnavailable, Reason: err.Error()}
 		} else {
-			resp.Pods = CNPGHASource{State: cnpgHAStateOK}
+			resp.Pods = ReadSource{State: cnpgHAStateOK}
 		}
 	} else {
-		resp.Pods = cnpgHADenied(cnpgGrant{"list", "", "pods", ""}, namespace)
+		resp.Pods = cnpgHADenied(Grant{Verb: "list", Resource: "pods"}, namespace)
 	}
 	resp.Nodes = s.cnpgHANodesSource(r, cache)
 	resp.Instances = cnpgHAInstances(cache, pods, resp.DesiredImage, resp.Nodes.State == cnpgHAStateOK)
@@ -290,31 +282,31 @@ func (s *Server) cnpgClusterHA(r *http.Request, c cnpgHAClients, cache *k8s.Reso
 	return resp
 }
 
-func cnpgHADenied(g cnpgGrant, namespace string) CNPGHASource {
-	return CNPGHASource{State: cnpgHAStateDenied, Grant: g.String(namespace), Reason: "You are not allowed to " + g.String(namespace)}
+func cnpgHADenied(g Grant, namespace string) ReadSource {
+	g = g.In(namespace)
+	return ReadSource{State: cnpgHAStateDenied, Grant: g.Ref(), Reason: "You are not allowed to " + g.String()}
 }
 
-func cnpgHAClusterDenied(g cnpgGrant) CNPGHASource {
-	grant := g.ClusterString()
-	return CNPGHASource{State: cnpgHAStateDenied, Grant: grant, Reason: "You are not allowed to " + grant}
+func cnpgHAClusterDenied(g Grant) ReadSource {
+	return ReadSource{State: cnpgHAStateDenied, Grant: g.Ref(), Reason: "You are not allowed to " + g.String()}
 }
 
 // cnpgHAReadError classifies an impersonated read's failure. NotFound is left
 // to the caller: its meaning differs per object.
-func cnpgHAReadError(err error, g cnpgGrant, namespace string) CNPGHASource {
+func cnpgHAReadError(err error, g Grant, namespace string) ReadSource {
 	switch {
 	case apierrors.IsForbidden(err):
 		return cnpgHADenied(g, namespace)
 	case apierrors.IsNotFound(err):
-		return CNPGHASource{State: cnpgHAStateNotFound}
+		return ReadSource{State: cnpgHAStateNotFound}
 	case errors.Is(err, context.DeadlineExceeded) || apierrors.IsTimeout(err):
-		return CNPGHASource{State: cnpgHAStateUnavailable, Reason: "no answer within " + cnpgHAReadTimeout.String()}
+		return ReadSource{State: cnpgHAStateUnavailable, Reason: "no answer within " + cnpgHAReadTimeout.String()}
 	default:
 		if plain, ok := cnpgTransportSentence(err, 0, cnpgHAReadTimeout); ok {
-			log.Printf("[cnpg] Failed to read %s: %v", g.String(namespace), err)
-			return CNPGHASource{State: cnpgHAStateUnavailable, Reason: plain}
+			log.Printf("[cnpg] Failed to read %s: %v", g.In(namespace).String(), err)
+			return ReadSource{State: cnpgHAStateUnavailable, Reason: plain}
 		}
-		return CNPGHASource{State: cnpgHAStateError, Reason: truncateCNPGRuntimeError(err.Error())}
+		return ReadSource{State: cnpgHAStateError, Reason: truncateCNPGRuntimeError(err.Error())}
 	}
 }
 
@@ -345,14 +337,14 @@ func cnpgUncachedReason(fact, kind, namespace string, uncached, outOfScope, read
 	return ""
 }
 
-func (s *Server) cnpgHANodesSource(r *http.Request, cache *k8s.ResourceCache) CNPGHASource {
+func (s *Server) cnpgHANodesSource(r *http.Request, cache *k8s.ResourceCache) ReadSource {
 	if !s.canRead(r, "", "nodes", "", "get") {
-		return cnpgHAClusterDenied(cnpgGrant{"get", "", "nodes", ""})
+		return cnpgHAClusterDenied(Grant{Verb: "get", Resource: "nodes"})
 	}
 	if reason := cnpgUncachedReason("Zones", "Nodes", "", cache.Nodes() == nil, false, cache.IsKindReady("nodes")); reason != "" {
-		return CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}
+		return ReadSource{State: cnpgHAStateUnavailable, Reason: reason}
 	}
-	return CNPGHASource{State: cnpgHAStateOK}
+	return ReadSource{State: cnpgHAStateOK}
 }
 
 func cnpgHAInstances(cache *k8s.ResourceCache, pods []*corev1.Pod, desiredImage string, nodesReadable bool) []CNPGHAInstance {
@@ -423,11 +415,11 @@ func (s *Server) cnpgHAQuorum(ctx context.Context, r *http.Request, c cnpgHAClie
 
 	if disc := k8s.GetResourceDiscovery(); disc != nil {
 		if _, ok := disc.GetGVRWithGroup("FailoverQuorum", cnpgGroup); !ok {
-			q.Object = CNPGHASource{State: cnpgHAStateNotInstalled, Reason: "this CloudNativePG version has no FailoverQuorum resource"}
+			q.Object = ReadSource{State: cnpgHAStateNotInstalled, Reason: "this CloudNativePG version has no FailoverQuorum resource"}
 			return q
 		}
 	}
-	grant := cnpgGrant{"get", cnpgGroup, "failoverquorums", ""}
+	grant := Grant{Verb: "get", Group: cnpgGroup, Resource: "failoverquorums"}
 	if !s.canRead(r, cnpgGroup, "failoverquorums", namespace, "get") {
 		q.Object = cnpgHADenied(grant, namespace)
 		return q
@@ -438,10 +430,10 @@ func (s *Server) cnpgHAQuorum(ctx context.Context, r *http.Request, c cnpgHAClie
 		return q
 	}
 	if !cnpgControlledBy(obj.GetOwnerReferences(), cnpgGroup, "Cluster", name, cluster.GetUID()) {
-		q.Object = CNPGHASource{State: cnpgHAStateError, Reason: "a FailoverQuorum of this name exists but this Cluster does not own it"}
+		q.Object = ReadSource{State: cnpgHAStateError, Reason: "a FailoverQuorum of this name exists but this Cluster does not own it"}
 		return q
 	}
-	q.Object = CNPGHASource{State: cnpgHAStateOK}
+	q.Object = ReadSource{State: cnpgHAStateOK}
 	st := &CNPGHAQuorumStatus{StandbyNames: []string{}}
 	st.Method, _, _ = unstructured.NestedString(obj.Object, "status", "method")
 	st.Primary, _, _ = unstructured.NestedString(obj.Object, "status", "primary")
@@ -494,23 +486,23 @@ func (s *Server) cnpgHAPDBs(r *http.Request, cache *k8s.ResourceCache, cluster *
 	if v, ok, _ := unstructured.NestedBool(cluster.Object, "spec", "enablePDB"); ok {
 		out.Enabled = v
 	}
-	grant := cnpgGrant{"list", "policy", "poddisruptionbudgets", ""}
+	grant := Grant{Verb: "list", Group: "policy", Resource: "poddisruptionbudgets"}
 	if !s.canRead(r, "policy", "poddisruptionbudgets", namespace, "list") {
-		out.CNPGHASource = cnpgHADenied(grant, namespace)
+		out.ReadSource = cnpgHADenied(grant, namespace)
 		return out
 	}
 	lister := cache.PodDisruptionBudgets()
-	within := capacityNamespacesWithinCache(cache, "poddisruptionbudgets", []string{namespace})
+	within := namespacesWithinCache(cache, "poddisruptionbudgets", []string{namespace})
 	if reason := cnpgUncachedReason("Disruption budgets", "PodDisruptionBudgets", namespace, lister == nil, within.unavailable, cache.IsKindReady("poddisruptionbudgets")); reason != "" {
-		out.CNPGHASource = CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}
+		out.ReadSource = ReadSource{State: cnpgHAStateUnavailable, Reason: reason}
 		return out
 	}
 	list, err := lister.PodDisruptionBudgets(namespace).List(labels.SelectorFromSet(labels.Set{cnpgClusterLabel: cluster.GetName()}))
 	if err != nil {
-		out.CNPGHASource = CNPGHASource{State: cnpgHAStateError, Reason: err.Error()}
+		out.ReadSource = ReadSource{State: cnpgHAStateError, Reason: err.Error()}
 		return out
 	}
-	out.CNPGHASource = CNPGHASource{State: cnpgHAStateOK}
+	out.ReadSource = ReadSource{State: cnpgHAStateOK}
 	for _, p := range list {
 		if !cnpgControlledBy(p.OwnerReferences, cnpgGroup, "Cluster", cluster.GetName(), cluster.GetUID()) {
 			continue
@@ -547,7 +539,7 @@ func cnpgHAPDBOf(p *policyv1.PodDisruptionBudget, cluster string) CNPGHAPDB {
 }
 
 func cnpgHALeaseFrom(l *leaseView, now time.Time) CNPGHALease {
-	out := CNPGHALease{CNPGHASource: CNPGHASource{State: cnpgHAStateOK}, Namespace: l.namespace, Name: l.name, Holder: l.holder, DurationSeconds: l.duration}
+	out := CNPGHALease{ReadSource: ReadSource{State: cnpgHAStateOK}, Namespace: l.namespace, Name: l.name, Holder: l.holder, DurationSeconds: l.duration}
 	if l.renew != nil {
 		out.RenewTime = l.renew.UTC().Format(time.RFC3339)
 		if l.duration != nil {
@@ -566,9 +558,9 @@ type leaseView struct {
 
 func (s *Server) cnpgHAPrimaryLease(ctx context.Context, r *http.Request, c cnpgHAClients, cluster *unstructured.Unstructured, now time.Time) CNPGHALease {
 	namespace, name := cluster.GetNamespace(), cluster.GetName()
-	grant := cnpgGrant{"get", "coordination.k8s.io", "leases", ""}
+	grant := Grant{Verb: "get", Group: "coordination.k8s.io", Resource: "leases"}
 	if !s.canRead(r, "coordination.k8s.io", "leases", namespace, "get") {
-		return CNPGHALease{CNPGHASource: cnpgHADenied(grant, namespace), Namespace: namespace, Name: name}
+		return CNPGHALease{ReadSource: cnpgHADenied(grant, namespace), Namespace: namespace, Name: name}
 	}
 	l, err := c.typed.CoordinationV1().Leases(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
@@ -576,7 +568,7 @@ func (s *Server) cnpgHAPrimaryLease(ctx context.Context, r *http.Request, c cnpg
 		if src.State == cnpgHAStateNotFound {
 			src.Reason = "No primary Lease: CloudNativePG creates one from 1.30"
 		}
-		return CNPGHALease{CNPGHASource: src, Namespace: namespace, Name: name}
+		return CNPGHALease{ReadSource: src, Namespace: namespace, Name: name}
 	}
 	v := &leaseView{namespace: namespace, name: name, duration: l.Spec.LeaseDurationSeconds}
 	if l.Spec.HolderIdentity != nil {
@@ -596,7 +588,7 @@ func (s *Server) cnpgHAPrimaryLease(ctx context.Context, r *http.Request, c cnpg
 // namespace of a visible operator Deployment. Which operator replica leads is
 // a different fact from which instance is primary.
 func (s *Server) cnpgHAOperatorLease(ctx context.Context, r *http.Request, c cnpgHAClients, cache *k8s.ResourceCache, now time.Time) CNPGHALease {
-	acc, _, deployments := s.cnpgOperatorDeployments(r, cache, s.cnpgOperatorScope(r))
+	acc, deployments := s.cnpgOperatorDeployments(r, cache, s.cnpgOperatorScope(r))
 	var namespace string
 	for _, d := range deployments {
 		if d.Labels[cnpgOperatorNameLabel] == cnpgOperatorNameValue {
@@ -606,14 +598,17 @@ func (s *Server) cnpgHAOperatorLease(ctx context.Context, r *http.Request, c cnp
 	}
 	if namespace == "" {
 		reason := "The operator Deployment is not visible to you, so its namespace is unknown"
-		if acc.state == cnpgCoverageFull {
+		switch acc.state {
+		case kindCoverageFull:
 			reason = "No operator Deployment labelled " + cnpgOperatorNameLabel + "=" + cnpgOperatorNameValue + " was found"
+		case kindCoverageUncached:
+			reason = "Radar does not watch Deployments in the namespaces you can read, so the operator's namespace is unknown"
 		}
-		return CNPGHALease{CNPGHASource: CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}, Name: cnpgOperatorLeaseName}
+		return CNPGHALease{ReadSource: ReadSource{State: cnpgHAStateUnavailable, Reason: reason}, Name: cnpgOperatorLeaseName}
 	}
-	grant := cnpgGrant{"get", "coordination.k8s.io", "leases", ""}
+	grant := Grant{Verb: "get", Group: "coordination.k8s.io", Resource: "leases"}
 	if !s.canRead(r, "coordination.k8s.io", "leases", namespace, "get") {
-		return CNPGHALease{CNPGHASource: cnpgHADenied(grant, namespace), Namespace: namespace, Name: cnpgOperatorLeaseName}
+		return CNPGHALease{ReadSource: cnpgHADenied(grant, namespace), Namespace: namespace, Name: cnpgOperatorLeaseName}
 	}
 	l, err := c.typed.CoordinationV1().Leases(namespace).Get(ctx, cnpgOperatorLeaseName, metav1.GetOptions{})
 	if err != nil {
@@ -621,7 +616,7 @@ func (s *Server) cnpgHAOperatorLease(ctx context.Context, r *http.Request, c cnp
 		if src.State == cnpgHAStateNotFound {
 			src.Reason = "No leader-election Lease: the operator may run with leader election off"
 		}
-		return CNPGHALease{CNPGHASource: src, Namespace: namespace, Name: cnpgOperatorLeaseName}
+		return CNPGHALease{ReadSource: src, Namespace: namespace, Name: cnpgOperatorLeaseName}
 	}
 	v := &leaseView{namespace: namespace, name: cnpgOperatorLeaseName, duration: l.Spec.LeaseDurationSeconds}
 	if l.Spec.HolderIdentity != nil {
@@ -637,23 +632,23 @@ func (s *Server) cnpgHAOperatorLease(ctx context.Context, r *http.Request, c cnp
 func (s *Server) cnpgHAJobs(r *http.Request, cache *k8s.ResourceCache, cluster *unstructured.Unstructured) CNPGHAJobs {
 	namespace := cluster.GetNamespace()
 	out := CNPGHAJobs{Items: []CNPGHAJob{}}
-	grant := cnpgGrant{"list", "batch", "jobs", ""}
+	grant := Grant{Verb: "list", Group: "batch", Resource: "jobs"}
 	if !s.canRead(r, "batch", "jobs", namespace, "list") {
-		out.CNPGHASource = cnpgHADenied(grant, namespace)
+		out.ReadSource = cnpgHADenied(grant, namespace)
 		return out
 	}
 	lister := cache.Jobs()
-	within := capacityNamespacesWithinCache(cache, "jobs", []string{namespace})
+	within := namespacesWithinCache(cache, "jobs", []string{namespace})
 	if reason := cnpgUncachedReason("Instance Jobs", "Jobs", namespace, lister == nil, within.unavailable, cache.IsKindReady("jobs")); reason != "" {
-		out.CNPGHASource = CNPGHASource{State: cnpgHAStateUnavailable, Reason: reason}
+		out.ReadSource = ReadSource{State: cnpgHAStateUnavailable, Reason: reason}
 		return out
 	}
 	list, err := lister.Jobs(namespace).List(labels.SelectorFromSet(labels.Set{cnpgClusterLabel: cluster.GetName()}))
 	if err != nil {
-		out.CNPGHASource = CNPGHASource{State: cnpgHAStateError, Reason: err.Error()}
+		out.ReadSource = ReadSource{State: cnpgHAStateError, Reason: err.Error()}
 		return out
 	}
-	out.CNPGHASource = CNPGHASource{State: cnpgHAStateOK}
+	out.ReadSource = ReadSource{State: cnpgHAStateOK}
 	for _, j := range list {
 		if !cnpgControlledBy(j.OwnerReferences, cnpgGroup, "Cluster", cluster.GetName(), cluster.GetUID()) {
 			continue
@@ -701,17 +696,17 @@ func (s *Server) cnpgHARWEndpoints(ctx context.Context, r *http.Request, c cnpgH
 	namespace := cluster.GetNamespace()
 	svc := cluster.GetName() + "-rw"
 	out := CNPGHAEndpoints{Service: svc, Pods: []string{}}
-	grant := cnpgGrant{"list", "discovery.k8s.io", "endpointslices", ""}
+	grant := Grant{Verb: "list", Group: "discovery.k8s.io", Resource: "endpointslices"}
 	if !s.canRead(r, "discovery.k8s.io", "endpointslices", namespace, "list") {
-		out.CNPGHASource = cnpgHADenied(grant, namespace)
+		out.ReadSource = cnpgHADenied(grant, namespace)
 		return out
 	}
 	list, err := c.typed.DiscoveryV1().EndpointSlices(namespace).List(ctx, metav1.ListOptions{LabelSelector: discoveryv1.LabelServiceName + "=" + svc})
 	if err != nil {
-		out.CNPGHASource = cnpgHAReadError(err, grant, namespace)
+		out.ReadSource = cnpgHAReadError(err, grant, namespace)
 		return out
 	}
-	out.CNPGHASource = CNPGHASource{State: cnpgHAStateOK}
+	out.ReadSource = ReadSource{State: cnpgHAStateOK}
 	out.Pods = cnpgReadyEndpointPods(list.Items)
 	return out
 }
@@ -750,7 +745,7 @@ func (s *Server) cnpgHACertificates(ctx context.Context, r *http.Request, c cnpg
 	}
 	user := issues.CNPGUserCertificateSecrets(cluster)
 	canGetSecrets := s.canRead(r, "", "secrets", namespace, "get")
-	grant := cnpgGrant{"get", "", "secrets", ""}
+	grant := Grant{Verb: "get", Resource: "secrets"}
 
 	out := make([]CNPGHACertificate, 0, len(exp))
 	for secret, raw := range exp {
@@ -760,7 +755,7 @@ func (s *Server) cnpgHACertificates(ctx context.Context, r *http.Request, c cnpg
 		}
 		if _, ok := user[secret]; ok {
 			cert.Renewal = "user"
-			src := CNPGHASource{State: cnpgHAStateOK}
+			src := ReadSource{State: cnpgHAStateOK}
 			switch {
 			case !canGetSecrets:
 				src = cnpgHADenied(grant, namespace)

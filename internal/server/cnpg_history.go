@@ -44,18 +44,18 @@ var cnpgHistoryMemoTTL = 15 * time.Second
 // in-browser samples. State describes the query as a whole; each chart
 // carries its own state when the whole succeeded.
 type CNPGClusterHistoryResponse struct {
-	Cluster     CNPGRuntimeObjectRef         `json:"cluster"`
-	Source      string                       `json:"source"`
-	State       string                       `json:"state,omitempty"`
-	Reason      string                       `json:"reason,omitempty"`
-	Range       string                       `json:"range"`
-	Start       string                       `json:"start,omitempty"`
-	End         string                       `json:"end,omitempty"`
-	StepSeconds int                          `json:"stepSeconds,omitempty"`
-	Selector    string                       `json:"selector,omitempty"`
-	Isolation   *prometheuspkg.CNPGIsolation `json:"isolation,omitempty"`
+	Cluster     CNPGRuntimeObjectRef           `json:"cluster"`
+	Source      string                         `json:"source"`
+	State       string                         `json:"state,omitempty"`
+	Reason      string                         `json:"reason,omitempty"`
+	Range       string                         `json:"range"`
+	Start       string                         `json:"start,omitempty"`
+	End         string                         `json:"end,omitempty"`
+	StepSeconds int                            `json:"stepSeconds,omitempty"`
+	Selector    string                         `json:"selector,omitempty"`
+	Isolation   *prometheuspkg.SeriesIsolation `json:"isolation,omitempty"`
 	// PVCIsolation is the volume chart's own: claims are matched apart from Pods.
-	PVCIsolation *prometheuspkg.CNPGIsolation     `json:"pvcIsolation,omitempty"`
+	PVCIsolation *prometheuspkg.SeriesIsolation   `json:"pvcIsolation,omitempty"`
 	SampledAt    string                           `json:"sampledAt"`
 	Charts       []prometheuspkg.CNPGHistoryChart `json:"charts"`
 }
@@ -140,7 +140,7 @@ func (s *Server) handleCNPGClusterHistory(w http.ResponseWriter, r *http.Request
 
 	req := prometheuspkg.CNPGHistoryRequest{Namespace: namespace, Cluster: name, Range: rng, End: end}
 	if !s.prometheusAuthGate(r, "", "pods", namespace, "get") {
-		req.PodsDenied = "get pods in " + namespace
+		req.PodsDenied = cnpgGrantGetPods.In(namespace).Ref()
 	}
 	claims, _, claimCov := s.cnpgClusterClaims(r, cache, cluster)
 	switch {
@@ -149,13 +149,13 @@ func (s *Server) handleCNPGClusterHistory(w http.ResponseWriter, r *http.Request
 	case claimCov.State != cnpgStorageStateOK:
 		req.PVCReason = claimCov.Reason
 	case !s.prometheusAuthGate(r, "", "persistentvolumeclaims", namespace, "get"):
-		req.PVCDenied = "get persistentvolumeclaims in " + namespace
+		req.PVCDenied = cnpgGrantGetPVCs.In(namespace).Ref()
 	default:
 		req.Claims = claimNames(claims)
 	}
 
 	anchors := cnpgHistoryAnchors(cache, cluster)
-	if req.PodsDenied == "" {
+	if req.PodsDenied == nil {
 		matchers, iso, err := prometheuspkg.ResolveCNPGScope(r.Context(), namespace, selector, anchors, rng.Duration)
 		if err != nil {
 			resp.State, resp.Reason = cnpgHistoryScopeFailure(err)
@@ -173,7 +173,7 @@ func (s *Server) handleCNPGClusterHistory(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	key := strings.Join([]string{namespace, name, string(cluster.GetUID()), rng.Name, end.Format(time.RFC3339), req.Matchers, req.PVCMatchers, req.PVCAmbiguous, req.PodsDenied, req.PVCDenied, req.PVCReason, strings.Join(req.Claims, ",")}, "\x00")
+	key := strings.Join([]string{namespace, name, string(cluster.GetUID()), rng.Name, end.Format(time.RFC3339), req.Matchers, req.PVCMatchers, req.PVCAmbiguous, grantText(req.PodsDenied), grantText(req.PVCDenied), req.PVCReason, strings.Join(req.Claims, ",")}, "\x00")
 	charts, hit := cnpgHistoryMemoGet(key, now)
 	if !hit {
 		var err error
@@ -217,9 +217,9 @@ func cnpgNoPrometheusReason(msg string) string {
 
 func cnpgHistoryScopeFailure(err error) (string, string) {
 	switch {
-	case errors.Is(err, prometheuspkg.ErrCNPGScopeAmbiguous):
+	case errors.Is(err, prometheuspkg.ErrScopeAmbiguous):
 		return cnpgHistoryStateAmbiguous, "This Prometheus holds series for these Pod names under more than one cluster identity, so history could mix clusters. An operator can configure the cluster identity labels Radar should require."
-	case errors.Is(err, prometheuspkg.ErrCNPGScopeMismatch):
+	case errors.Is(err, prometheuspkg.ErrScopeMismatch):
 		return cnpgHistoryStateScopeMismatch, "The cluster identity labels proven for this cluster do not appear on the CNPG exporter series, so Radar cannot tell this cluster's history from another's."
 	}
 	return cnpgHistoryStateError, "Prometheus query failed: " + truncateCNPGRuntimeError(err.Error())
@@ -228,9 +228,9 @@ func cnpgHistoryScopeFailure(err error) (string, string) {
 // cnpgUsageScopeFailure is cnpgHistoryScopeFailure for kubelet volume stats.
 func cnpgUsageScopeFailure(err error) (string, string) {
 	switch {
-	case errors.Is(err, prometheuspkg.ErrCNPGScopeAmbiguous):
+	case errors.Is(err, prometheuspkg.ErrScopeAmbiguous):
 		return cnpgHistoryStateAmbiguous, "This Prometheus holds volume stats for these claim names under more than one cluster identity, so a value could be another cluster's. An operator can configure the cluster identity labels Radar should require."
-	case errors.Is(err, prometheuspkg.ErrCNPGScopeMismatch):
+	case errors.Is(err, prometheuspkg.ErrScopeMismatch):
 		return cnpgHistoryStateScopeMismatch, "The cluster identity labels proven for this cluster do not appear on these claims' volume stats, so Radar cannot tell this cluster's volumes from another's."
 	}
 	return cnpgHistoryStateError, "Prometheus query failed: " + truncateCNPGRuntimeError(err.Error())
@@ -283,7 +283,7 @@ type CNPGClusterFleetMetrics struct {
 // scopeMismatch, error or notRead.
 type CNPGFleetLag struct {
 	State   string   `json:"state"`
-	Grant   string   `json:"grant,omitempty"`
+	Grant   *Grant   `json:"grant,omitempty"`
 	Reason  string   `json:"reason,omitempty"`
 	Seconds *float64 `json:"seconds,omitempty"`
 	Pod     string   `json:"pod,omitempty"`
@@ -293,19 +293,19 @@ type CNPGFleetLag struct {
 	SustainedPod     string   `json:"sustainedPod,omitempty"`
 	SustainedWindow  string   `json:"sustainedWindow,omitempty"`
 	// Isolation says how the series were tied to this cluster.
-	Isolation *prometheuspkg.CNPGIsolation `json:"isolation,omitempty"`
+	Isolation *prometheuspkg.SeriesIsolation `json:"isolation,omitempty"`
 }
 
 // CNPGFleetGrowth State: ok (BytesPerHour of the fastest-growing claim),
 // noSeries, denied, unavailable, error or notRead.
 type CNPGFleetGrowth struct {
-	State        string                       `json:"state"`
-	Grant        string                       `json:"grant,omitempty"`
-	Reason       string                       `json:"reason,omitempty"`
-	BytesPerHour *float64                     `json:"bytesPerHour,omitempty"`
-	Claim        string                       `json:"claim,omitempty"`
-	Instance     string                       `json:"instance,omitempty"`
-	Isolation    *prometheuspkg.CNPGIsolation `json:"isolation,omitempty"`
+	State        string                         `json:"state"`
+	Grant        *Grant                         `json:"grant,omitempty"`
+	Reason       string                         `json:"reason,omitempty"`
+	BytesPerHour *float64                       `json:"bytesPerHour,omitempty"`
+	Claim        string                         `json:"claim,omitempty"`
+	Instance     string                         `json:"instance,omitempty"`
+	Isolation    *prometheuspkg.SeriesIsolation `json:"isolation,omitempty"`
 }
 
 func (s *Server) handleCNPGFleetMetrics(w http.ResponseWriter, r *http.Request) {
@@ -328,14 +328,14 @@ func (s *Server) handleCNPGFleetMetrics(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var clusterKind cnpgWorkspaceKind
+	var clusterKind workspaceKind
 	for _, k := range cnpgWorkspaceKinds {
 		if k.key == cnpgWorkspaceClusterKey {
 			clusterKind = k
 		}
 	}
-	acc, _, clusters := s.cnpgWorkspaceReadKind(r, cache, clusterKind, namespaces)
-	if acc.state != cnpgCoverageFull && acc.state != cnpgCoveragePartial {
+	acc, clusters := s.cnpgWorkspaceReadKind(r, cache, clusterKind, namespaces)
+	if acc.state != kindCoverageFull && acc.state != kindCoveragePartial {
 		s.writeJSON(w, resp)
 		return
 	}
@@ -349,33 +349,19 @@ func (s *Server) handleCNPGFleetMetrics(w http.ResponseWriter, r *http.Request) 
 	}
 	sort.Strings(nsList)
 
-	results := make([][]CNPGClusterFleetMetrics, len(nsList))
-	sem := make(chan struct{}, cnpgFleetDiskConcurrency)
-	var wg sync.WaitGroup
-	for i, ns := range nsList {
-		if i >= cnpgFleetDiskMaxNamespaces {
-			reason := fmt.Sprintf("read for at most %d namespaces at a time; narrow the namespace filter", cnpgFleetDiskMaxNamespaces)
-			for _, c := range byNamespace[ns] {
-				results[i] = append(results[i], CNPGClusterFleetMetrics{Namespace: ns, Name: c.GetName(),
-					Lag: CNPGFleetLag{State: cnpgUsageStateNotRead, Reason: reason}, Growth: CNPGFleetGrowth{State: cnpgUsageStateNotRead, Reason: reason}})
-			}
-			continue
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-r.Context().Done():
-				return
-			}
-			defer func() { <-sem }()
-			results[i] = s.cnpgNamespaceFleetMetrics(r, cache, ns, byNamespace[ns])
-		}()
-	}
-	wg.Wait()
+	read := min(len(nsList), cnpgFleetDiskMaxNamespaces)
+	results := fanOut(r.Context(), read, cnpgFleetDiskConcurrency, func(i int) []CNPGClusterFleetMetrics {
+		return s.cnpgNamespaceFleetMetrics(r, cache, nsList[i], byNamespace[nsList[i]])
+	})
 	for _, rs := range results {
 		resp.Clusters = append(resp.Clusters, rs...)
+	}
+	reason := fmt.Sprintf("read for at most %d namespaces at a time; narrow the namespace filter", cnpgFleetDiskMaxNamespaces)
+	for _, ns := range nsList[read:] {
+		for _, c := range byNamespace[ns] {
+			resp.Clusters = append(resp.Clusters, CNPGClusterFleetMetrics{Namespace: ns, Name: c.GetName(),
+				Lag: CNPGFleetLag{State: cnpgUsageStateNotRead, Reason: reason}, Growth: CNPGFleetGrowth{State: cnpgUsageStateNotRead, Reason: reason}})
+		}
 	}
 	sort.Slice(resp.Clusters, func(i, j int) bool {
 		if resp.Clusters[i].Namespace != resp.Clusters[j].Namespace {
@@ -413,13 +399,13 @@ func (s *Server) cnpgNamespaceFleetMetrics(r *http.Request, cache *k8s.ResourceC
 	claimsByCluster, growthCov := s.cnpgFleetClaims(r, cache, namespace, clusters)
 
 	matchers, scopeErr := "", error(nil)
-	var lagIso prometheuspkg.CNPGIsolation
+	var lagIso prometheuspkg.SeriesIsolation
 	if podsAllowed {
 		matchers, lagIso, scopeErr = prometheuspkg.ResolveCNPGScope(ctx, namespace, prometheuspkg.CNPGInstancesSelector(namespace, names), anchors, prometheuspkg.CNPGSustainedLagWindow)
 	}
 
 	if !podsAllowed {
-		fillLag(CNPGFleetLag{State: cnpgHistoryStateDenied, Grant: "get pods in " + namespace})
+		fillLag(CNPGFleetLag{State: cnpgHistoryStateDenied, Grant: cnpgGrantGetPods.In(namespace).Ref()})
 	} else if scopeErr != nil {
 		state, reason := cnpgHistoryScopeFailure(scopeErr)
 		fillLag(CNPGFleetLag{State: state, Reason: reason})
@@ -488,10 +474,10 @@ func (s *Server) cnpgNamespaceFleetMetrics(r *http.Request, cache *k8s.ResourceC
 // A non-empty returned State says why growth is not read for the namespace.
 func (s *Server) cnpgFleetClaims(r *http.Request, cache *k8s.ResourceCache, namespace string, clusters []*unstructured.Unstructured) (map[string][]*corev1.PersistentVolumeClaim, CNPGFleetGrowth) {
 	if !s.canRead(r, "", "persistentvolumeclaims", namespace, "list") {
-		return nil, CNPGFleetGrowth{State: cnpgStorageStateDenied, Grant: "list persistentvolumeclaims in " + namespace}
+		return nil, CNPGFleetGrowth{State: cnpgStorageStateDenied, Grant: cnpgGrantListPVCs.In(namespace).Ref()}
 	}
 	if !s.prometheusAuthGate(r, "", "persistentvolumeclaims", namespace, "get") {
-		return nil, CNPGFleetGrowth{State: cnpgStorageStateDenied, Grant: "get persistentvolumeclaims in " + namespace}
+		return nil, CNPGFleetGrowth{State: cnpgStorageStateDenied, Grant: cnpgGrantGetPVCs.In(namespace).Ref()}
 	}
 	req, err := labels.NewRequirement(cnpgClusterLabel, selection.Exists, nil)
 	if err != nil {

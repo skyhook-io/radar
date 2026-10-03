@@ -405,9 +405,9 @@ func useCNPGProxyAPIServer(t *testing.T, handle func(w http.ResponseWriter, c cn
 	}
 	previousClient := k8s.SetTestClient(client)
 	t.Cleanup(func() { k8s.SetTestClient(previousClient) })
-	cnpgLocalCanIMu.Lock()
-	cnpgLocalCanIMemo = map[string]cnpgLocalCanIEntry{}
-	cnpgLocalCanIMu.Unlock()
+	localCanIMu.Lock()
+	localCanIMemo = map[string]localCanIEntry{}
+	localCanIMu.Unlock()
 	resetCNPGRuntimeMemo(t)
 	return f
 }
@@ -492,7 +492,7 @@ func TestCNPGClusterRuntime_OK(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d: %s", status, body)
 	}
-	if got.Cluster.UID != "pgrt-uid" || got.SampledAt == "" || got.Permission.Proxy != "allowed" || got.Permission.Grant != "get pods/proxy in pgrt" {
+	if got.Cluster.UID != "pgrt-uid" || got.SampledAt == "" || got.Permission.Proxy != "allowed" || got.Permission.Grant == nil || *got.Permission.Grant != cnpgGrantGetPodsProxy.In("pgrt") {
 		t.Errorf("envelope = %+v", got)
 	}
 	if len(got.Instances) != 2 || got.Instances[0].Pod != "pg-orders-1" || got.Instances[1].Pod != "pg-orders-2" {

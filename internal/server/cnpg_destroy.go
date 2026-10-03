@@ -38,14 +38,15 @@ const (
 )
 
 var (
-	cnpgGrantDeletePVCs = cnpgGrant{"delete", "", "persistentvolumeclaims", ""}
-	cnpgGrantUpdatePVCs = cnpgGrant{"update", "", "persistentvolumeclaims", ""}
-	cnpgGrantListPVCs   = cnpgGrant{"list", "", "persistentvolumeclaims", ""}
-	cnpgGrantListJobs   = cnpgGrant{"list", "batch", "jobs", ""}
-	cnpgGrantDeleteJobs = cnpgGrant{"delete", "batch", "jobs", ""}
-	cnpgGrantPatchPool  = cnpgGrant{"patch", cnpgGroup, "poolers", ""}
+	cnpgGrantDeletePVCs = Grant{Verb: "delete", Resource: "persistentvolumeclaims"}
+	cnpgGrantUpdatePVCs = Grant{Verb: "update", Resource: "persistentvolumeclaims"}
+	cnpgGrantListPVCs   = Grant{Verb: "list", Resource: "persistentvolumeclaims"}
+	cnpgGrantGetPVCs    = Grant{Verb: "get", Resource: "persistentvolumeclaims"}
+	cnpgGrantListJobs   = Grant{Verb: "list", Group: "batch", Resource: "jobs"}
+	cnpgGrantDeleteJobs = Grant{Verb: "delete", Group: "batch", Resource: "jobs"}
+	cnpgGrantPatchPool  = Grant{Verb: "patch", Group: cnpgGroup, Resource: "poolers"}
 
-	cnpgExtraActionGrants = map[string]cnpgGrant{
+	cnpgExtraActionGrants = map[string]Grant{
 		"cancelBackend":    cnpgGrantCreateExec,
 		"terminateBackend": cnpgGrantCreateExec,
 		"destroyInstance":  cnpgGrantDeletePods,
@@ -56,12 +57,12 @@ var (
 
 // cnpgDestroyGrants: with keepPVC the PVCs are updated (detached), otherwise
 // deleted; the fence on the destroyed name is lifted last (patch clusters).
-func cnpgDestroyGrants(keepPVC bool) []cnpgGrant {
+func cnpgDestroyGrants(keepPVC bool) []Grant {
 	pvc := cnpgGrantDeletePVCs
 	if keepPVC {
 		pvc = cnpgGrantUpdatePVCs
 	}
-	return []cnpgGrant{cnpgGrantDeletePods, cnpgGrantListPVCs, pvc, cnpgGrantListJobs, cnpgGrantDeleteJobs, cnpgGrantPatchClusters}
+	return []Grant{cnpgGrantDeletePods, cnpgGrantListPVCs, pvc, cnpgGrantListJobs, cnpgGrantDeleteJobs, cnpgGrantPatchClusters}
 }
 
 // cnpgDestroyPreflight asks the apiserver, as the caller, for every grant the
@@ -70,16 +71,16 @@ func cnpgDestroyGrants(keepPVC bool) []cnpgGrant {
 func cnpgDestroyPreflight(ctx context.Context, x *cnpgClusterRun, keepPVC bool) error {
 	namespace := x.cluster.GetNamespace()
 	for _, g := range cnpgDestroyGrants(keepPVC) {
-		resource := g.resource
-		if g.subresource != "" {
-			resource += "/" + g.subresource
+		resource := g.Resource
+		if g.Subresource != "" {
+			resource += "/" + g.Subresource
 		}
-		allowed, apiErr := k8score.CanI(ctx, x.c.typed, namespace, g.group, resource, g.verb)
+		allowed, apiErr := k8score.CanI(ctx, x.c.typed, namespace, g.Group, resource, g.Verb)
 		switch {
 		case apiErr:
-			return cnpgRefuse(http.StatusServiceUnavailable, "", "Could not confirm you may %s; nothing was changed", g.String(namespace))
+			return refuseAction(http.StatusServiceUnavailable, "", "Could not confirm you may %s; nothing was changed", g.In(namespace).String())
 		case !allowed:
-			return cnpgRefuse(http.StatusForbidden, "", "Destroying needs %s; nothing was changed", g.String(namespace))
+			return refuseAction(http.StatusForbidden, "", "Destroying needs %s; nothing was changed", g.In(namespace).String())
 		}
 	}
 	return nil
@@ -145,8 +146,8 @@ type CNPGDestroyPlan struct {
 	JobsReadable bool             `json:"jobsReadable"`
 	Jobs         []string         `json:"jobs"`
 	Actions      struct {
-		Delete CNPGActionCapability `json:"delete"`
-		Keep   CNPGActionCapability `json:"keep"`
+		Delete ActionCapability `json:"delete"`
+		Keep   ActionCapability `json:"keep"`
 	} `json:"actions"`
 }
 
@@ -248,7 +249,7 @@ func (s *Server) cnpgDestroyPlan(r *http.Request, c cnpgActionClients, contextNa
 	facts, _ := cnpgClusterFactsOf(ctx, c.typed, cluster)
 	inst, ok := facts.instance(pod)
 	if !ok {
-		return nil, cnpgRefuse(http.StatusNotFound, "", "%s is not an instance of Cluster %s/%s", pod, namespace, name)
+		return nil, refuseAction(http.StatusNotFound, "", "%s is not an instance of Cluster %s/%s", pod, namespace, name)
 	}
 	plan := &CNPGDestroyPlan{
 		UID: string(cluster.GetUID()), Context: contextName, Facts: facts,
@@ -270,13 +271,14 @@ func (s *Server) cnpgDestroyPlan(r *http.Request, c cnpgActionClients, contextNa
 	if guard == "" && !plan.PVCsReadable {
 		guard = "The instance's PVCs cannot be read (" + plan.PVCReason + "), so they cannot be reviewed"
 	}
-	cap := func(keep bool) CNPGActionCapability {
+	cap := func(keep bool) ActionCapability {
 		gs := cnpgDestroyGrants(keep)
 		ps := make([]string, len(gs))
 		for i, g := range gs {
-			ps[i] = s.cnpgPermission(r, g, namespace)
+			gs[i] = g.In(namespace)
+			ps[i] = s.grantPermission(r, gs[i])
 		}
-		return cnpgCapability(guard, namespace, ps, gs)
+		return capabilityVerdict(guard, ps, gs)
 	}
 	plan.Actions.Delete = cap(false)
 	plan.Actions.Keep = cap(true)
@@ -299,24 +301,24 @@ type cnpgDestroyParams struct {
 
 func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, error) {
 	var p cnpgDestroyParams
-	if err := decodeCNPGParams(x.params, &p); err != nil {
+	if err := decodeActionParams(x.params, &p); err != nil {
 		return nil, err
 	}
 	if p.Pod == "" || p.PVCs == nil {
-		return nil, cnpgRefuse(http.StatusBadRequest, "", "params.pod, params.podUID and params.pvcs are required: the confirmation must bind the Pod and volumes reviewed")
+		return nil, refuseAction(http.StatusBadRequest, "", "params.pod, params.podUID and params.pvcs are required: the confirmation must bind the Pod and volumes reviewed")
 	}
 	inst, ok := x.facts.instance(p.Pod)
 	if !ok {
-		return nil, cnpgChanged(x.facts, "%s is not an instance of this cluster", p.Pod)
+		return nil, changedAction(x.facts, "%s is not an instance of this cluster", p.Pod)
 	}
 	if r := cnpgGuardDestroyInstance(x.facts, inst); r != "" {
-		return nil, cnpgBlocked(r)
+		return nil, blockedAction(r)
 	}
 	if !inst.PodReadable {
-		return nil, cnpgRefuse(http.StatusForbidden, "", "Pod %s cannot be read, so it cannot be verified as this cluster's instance", p.Pod)
+		return nil, refuseAction(http.StatusForbidden, "", "Pod %s cannot be read, so it cannot be verified as this cluster's instance", p.Pod)
 	}
 	if inst.PodUID != p.PodUID {
-		return nil, cnpgChanged(x.facts, "Pod %s changed since you reviewed it", p.Pod)
+		return nil, changedAction(x.facts, "Pod %s changed since you reviewed it", p.Pod)
 	}
 	if err := cnpgDestroyPreflight(ctx, x, p.KeepPVC); err != nil {
 		return nil, err
@@ -331,7 +333,7 @@ func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGAction
 		now = append(now, cnpgReviewedPVC{Name: v.Name, UID: string(v.UID)})
 	}
 	if !cnpgSamePVCs(now, *p.PVCs) {
-		return nil, cnpgChanged(x.facts, "The volumes of %s changed since you reviewed them (now: %s); review the action again", p.Pod, cnpgPVCList(now))
+		return nil, changedAction(x.facts, "The volumes of %s changed since you reviewed them (now: %s); review the action again", p.Pod, cnpgPVCList(now))
 	}
 
 	// CloudNativePG offers no lock against a failover, so the instance is
@@ -343,7 +345,7 @@ func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGAction
 		if len(completed) == 0 {
 			return err
 		}
-		return cnpgPartial(completed, err)
+		return partialAction(completed, err)
 	}
 	recheck := func() error {
 		fresh, err := x.c.dyn.Resource(cnpgClusterGVR).Namespace(namespace).Get(ctx, cluster, metav1.GetOptions{})
@@ -352,10 +354,10 @@ func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGAction
 		}
 		facts, _ := cnpgClusterFactsOf(ctx, nil, fresh)
 		if fresh.GetUID() != clusterUID {
-			return cnpgChanged(facts, "Cluster %s/%s was deleted and recreated; nothing further was done", namespace, cluster)
+			return changedAction(facts, "Cluster %s/%s was deleted and recreated; nothing further was done", namespace, cluster)
 		}
 		if r := cnpgGuardDestroyInstance(facts, CNPGInstanceFact{Pod: p.Pod}); r != "" {
-			return cnpgChanged(facts, "%s can no longer be destroyed: %s", p.Pod, r)
+			return changedAction(facts, "%s can no longer be destroyed: %s", p.Pod, r)
 		}
 		pod, err := x.c.typed.CoreV1().Pods(namespace).Get(ctx, p.Pod, metav1.GetOptions{})
 		switch {
@@ -366,9 +368,9 @@ func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGAction
 		case podDeleted:
 			return nil
 		case string(pod.UID) != p.PodUID:
-			return cnpgChanged(facts, "Pod %s was replaced since you reviewed it", p.Pod)
+			return changedAction(facts, "Pod %s was replaced since you reviewed it", p.Pod)
 		case cnpgPodLabelledPrimary(pod):
-			return cnpgChanged(facts, "%s is now labelled primary: it can no longer be destroyed", p.Pod)
+			return changedAction(facts, "%s is now labelled primary: it can no longer be destroyed", p.Pod)
 		}
 		return nil
 	}
@@ -516,7 +518,7 @@ func cnpgLiftDestroyedFence(ctx context.Context, x *cnpgClusterRun, pod string) 
 	if err != nil {
 		return false, err
 	}
-	err = cnpgMergePatch(ctx, x.c.dyn, cnpgClusterGVR, fresh, map[string]any{
+	err = mergePatchAtVersion(ctx, x.c.dyn, cnpgClusterGVR, fresh, map[string]any{
 		"metadata": map[string]any{"annotations": map[string]any{cnpgFencedAnnotation: value}},
 	})
 	return err == nil, err

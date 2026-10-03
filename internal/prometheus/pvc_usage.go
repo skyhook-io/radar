@@ -37,7 +37,7 @@ type PVCUsageBatch struct {
 	Usage   map[string]PVCUsage
 	Invalid map[string]bool
 	// Isolation says how the series were tied to this cluster.
-	Isolation CNPGIsolation
+	Isolation SeriesIsolation
 }
 
 // Claims per query: keeps the regex matcher and the answer small whatever the
@@ -76,9 +76,9 @@ func pvcScopeFailure(err error) (PVCUsageBatch, bool) {
 	switch {
 	case err == nil:
 		return out, false
-	case errors.Is(err, ErrCNPGScopeAmbiguous):
+	case errors.Is(err, ErrScopeAmbiguous):
 		out.Status, out.Error = PVCUsageAmbiguous, "these claim names have volume stats under more than one cluster identity in this Prometheus"
-	case errors.Is(err, ErrCNPGScopeMismatch):
+	case errors.Is(err, ErrScopeMismatch):
 		out.Status, out.Error = PVCUsageScopeMismatch, "the cluster identity proven for this cluster does not appear on these claims' volume stats"
 	default:
 		out.Status, out.Error = PVCUsageQueryFailed, err.Error()
@@ -86,9 +86,9 @@ func pvcScopeFailure(err error) (PVCUsageBatch, bool) {
 	return out, true
 }
 
-func queryPVCUsage(ctx context.Context, q cnpgQuerier, namespace string, claims []string, matchers string) PVCUsageBatch {
+func queryPVCUsage(ctx context.Context, q seriesQuerier, namespace string, claims []string, matchers string) PVCUsageBatch {
 	out := PVCUsageBatch{Status: PVCUsageAvailable, Usage: map[string]PVCUsage{}, Invalid: map[string]bool{}}
-	for _, sel := range CNPGClaimSelectors(namespace, claims) {
+	for _, sel := range ClaimSelectors(namespace, claims) {
 		if err := queryPVCUsageBatch(ctx, q, withScope(sel, matchers), &out); err != nil {
 			return PVCUsageBatch{Status: PVCUsageQueryFailed, Error: err.Error(), Usage: map[string]PVCUsage{}, Invalid: map[string]bool{}}
 		}
@@ -96,7 +96,7 @@ func queryPVCUsage(ctx context.Context, q cnpgQuerier, namespace string, claims 
 	return out
 }
 
-func queryPVCUsageBatch(ctx context.Context, q cnpgQuerier, selector string, out *PVCUsageBatch) error {
+func queryPVCUsageBatch(ctx context.Context, q seriesQuerier, selector string, out *PVCUsageBatch) error {
 	used, err := q.Query(ctx, fmt.Sprintf(`max by (persistentvolumeclaim) (kubelet_volume_stats_used_bytes{%s})`, selector))
 	if err != nil {
 		return err

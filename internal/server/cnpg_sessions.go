@@ -43,7 +43,7 @@ const (
 	cnpgSQLTimeoutPrelude = "SET statement_timeout = '5s';\n"
 )
 
-var cnpgGrantCreateExec = cnpgGrant{"create", "", "pods", "exec"}
+var cnpgGrantCreateExec = Grant{Verb: "create", Resource: "pods", Subresource: "exec"}
 
 // cnpgExecSlots bounds concurrent execs across all callers: each one holds a
 // streaming connection to a kubelet.
@@ -146,7 +146,7 @@ func cnpgExecSourceState(err error) CNPGRuntimeSource {
 
 type CNPGExecPermission struct {
 	Exec  string `json:"exec"`
-	Grant string `json:"grant"`
+	Grant *Grant `json:"grant,omitempty"`
 }
 
 // CNPGSessionsResponse is GET /api/cnpg/clusters/{ns}/{name}/sessions.
@@ -319,7 +319,7 @@ func (s *Server) handleCNPGClusterSessions(w http.ResponseWriter, r *http.Reques
 		Cluster:    CNPGRuntimeObjectRef{Namespace: namespace, Name: name, UID: cluster.GetUID()},
 		Pod:        want,
 		SampledAt:  time.Now().UTC().Format(time.RFC3339),
-		Permission: CNPGExecPermission{Exec: cnpgPermAllowed, Grant: cnpgGrantCreateExec.String(namespace)},
+		Permission: CNPGExecPermission{Exec: permissionAllowed, Grant: cnpgGrantCreateExec.In(namespace).Ref()},
 		Instances:  make([]CNPGSessionInstance, 0, len(pods)),
 	}
 	var target *corev1.Pod
@@ -341,9 +341,9 @@ func (s *Server) handleCNPGClusterSessions(w http.ResponseWriter, r *http.Reques
 	resp.PodUID = target.UID
 	resp.Role = cnpgRuntimeRole(target)
 
-	resp.Permission.Exec = s.cnpgPermission(r, cnpgGrantCreateExec, namespace)
-	if resp.Permission.Exec == cnpgPermDenied {
-		resp.CNPGRuntimeSource = CNPGRuntimeSource{State: cnpgExecStateDenied, Error: "reading sessions needs " + resp.Permission.Grant}
+	resp.Permission.Exec = s.grantPermission(r, cnpgGrantCreateExec.In(namespace))
+	if resp.Permission.Exec == permissionDenied {
+		resp.CNPGRuntimeSource = CNPGRuntimeSource{State: cnpgExecStateDenied, Error: "reading sessions needs " + grantText(resp.Permission.Grant)}
 		s.writeJSON(w, resp)
 		return
 	}
@@ -354,7 +354,7 @@ func (s *Server) handleCNPGClusterSessions(w http.ResponseWriter, r *http.Reques
 	}
 	resp.CNPGRuntimeSource, resp.CNPGSessionFacts = readCNPGSessions(r.Context(), exec, namespace, target.Name)
 	if resp.State == cnpgExecStateDenied {
-		resp.Permission.Exec = cnpgPermDenied
+		resp.Permission.Exec = permissionDenied
 	}
 	s.writeJSON(w, resp)
 }
@@ -406,30 +406,30 @@ func cnpgSignalArgv(pid int, backendStart string) []string {
 func cnpgRunSignalBackend(signal string) func(context.Context, *cnpgClusterRun) (*CNPGActionResult, error) {
 	return func(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, error) {
 		var p cnpgSignalParams
-		if err := decodeCNPGParams(x.params, &p); err != nil {
+		if err := decodeActionParams(x.params, &p); err != nil {
 			return nil, err
 		}
 		if p.Pod == "" || p.PodUID == "" || p.PID <= 0 || p.BackendStart == "" {
-			return nil, cnpgRefuse(http.StatusBadRequest, "", "params.pod, params.podUID, params.pid and params.backendStart are required")
+			return nil, refuseAction(http.StatusBadRequest, "", "params.pod, params.podUID, params.pid and params.backendStart are required")
 		}
 		if _, err := time.Parse(time.RFC3339Nano, p.BackendStart); err != nil {
-			return nil, cnpgRefuse(http.StatusBadRequest, "", "params.backendStart must be the backend_start the sessions view returned")
+			return nil, refuseAction(http.StatusBadRequest, "", "params.backendStart must be the backend_start the sessions view returned")
 		}
 		if r := cnpgGuardCommon(x.facts); r != "" {
-			return nil, cnpgBlocked(r)
+			return nil, blockedAction(r)
 		}
 		inst, ok := x.facts.instance(p.Pod)
 		if !ok {
-			return nil, cnpgChanged(x.facts, "%s is not an instance of this cluster", p.Pod)
+			return nil, changedAction(x.facts, "%s is not an instance of this cluster", p.Pod)
 		}
 		if !inst.PodReadable {
-			return nil, cnpgRefuse(http.StatusForbidden, "", "Pod %s cannot be read, so it cannot be verified as this cluster's instance", p.Pod)
+			return nil, refuseAction(http.StatusForbidden, "", "Pod %s cannot be read, so it cannot be verified as this cluster's instance", p.Pod)
 		}
 		if !inst.PodExists || inst.PodUID != p.PodUID {
-			return nil, cnpgChanged(x.facts, "Pod %s was recreated since you reviewed it; the backend is gone", p.Pod)
+			return nil, changedAction(x.facts, "Pod %s was recreated since you reviewed it; the backend is gone", p.Pod)
 		}
 		if x.c.exec == nil {
-			return nil, cnpgRefuse(http.StatusServiceUnavailable, "", "cluster client not available — check cluster connection")
+			return nil, refuseAction(http.StatusServiceUnavailable, "", "cluster client not available — check cluster connection")
 		}
 		fn, verb := "pg_cancel_backend", "Cancel of the running query"
 		if signal == cnpgSignalTerminate {
@@ -438,7 +438,7 @@ func cnpgRunSignalBackend(signal string) func(context.Context, *cnpgClusterRun) 
 		out, err := x.c.exec(ctx, x.cluster.GetNamespace(), p.Pod, cnpgDefaultLogContainer, cnpgSignalArgv(p.PID, p.BackendStart), cnpgSignalSQL(fn))
 		if err != nil {
 			if src := cnpgExecSourceState(err); src.State == cnpgExecStateDenied {
-				return nil, cnpgRefuse(http.StatusForbidden, "", "This needs %s: %s", cnpgGrantCreateExec.String(x.cluster.GetNamespace()), src.Error)
+				return nil, refuseAction(http.StatusForbidden, "", "This needs %s: %s", cnpgGrantCreateExec.In(x.cluster.GetNamespace()).String(), src.Error)
 			}
 			return nil, fmt.Errorf("psql on %s: %w", p.Pod, err)
 		}
@@ -450,7 +450,7 @@ func cnpgRunSignalBackend(signal string) func(context.Context, *cnpgClusterRun) 
 			return nil, fmt.Errorf("unexpected psql output: %w", err)
 		}
 		if res.Found == 0 || !res.Signalled {
-			return nil, cnpgChanged(nil, "Backend %d on %s ended or was replaced since you reviewed it; nothing was signalled", p.PID, p.Pod)
+			return nil, changedAction(nil, "Backend %d on %s ended or was replaced since you reviewed it; nothing was signalled", p.PID, p.Pod)
 		}
 		return &CNPGActionResult{
 			Message: fmt.Sprintf("%s for backend %d on %s sent", verb, p.PID, p.Pod),

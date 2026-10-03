@@ -22,10 +22,10 @@ func operatorDeployment(replicas, ready int32) *appsv1.Deployment {
 }
 
 func TestCNPGOperatorLeading(t *testing.T) {
-	ok := CNPGOperatorLeader{CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadOK}}
+	ok := CNPGOperatorLeader{ReadSource: ReadSource{State: cnpgReadOK}}
 	stale := ok
 	stale.Stale = true
-	denied := CNPGOperatorLeader{CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadDenied, Grant: "get leases in cnpg-system"}}
+	denied := CNPGOperatorLeader{ReadSource: ReadSource{State: cnpgReadDenied, Grant: cnpgGrantGetLeases.In("cnpg-system").Ref()}}
 	cases := []struct {
 		name    string
 		d       *appsv1.Deployment
@@ -56,8 +56,8 @@ func TestCNPGWebhookRejects(t *testing.T) {
 	cfg := func(policy string) []CNPGOperatorWebhookConfig {
 		return []CNPGOperatorWebhookConfig{{
 			Kind: "ValidatingWebhookConfiguration", Name: "cnpg-validating-webhook-configuration",
-			CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadOK},
-			Webhooks:         []CNPGOperatorWebhook{{Name: "vcluster.cnpg.io", FailurePolicy: policy, Service: "cnpg-system/cnpg-webhook-service"}},
+			ReadSource: ReadSource{State: cnpgReadOK},
+			Webhooks:   []CNPGOperatorWebhook{{Name: "vcluster.cnpg.io", FailurePolicy: policy, Service: "cnpg-system/cnpg-webhook-service"}},
 		}}
 	}
 	svc := func(ready *int) []CNPGOperatorWebhookService {
@@ -75,11 +75,11 @@ func TestCNPGWebhookRejects(t *testing.T) {
 	if got, _, unknown := cnpgWebhookRejects(cfg("Fail"), svc(nil)); got != nil || unknown == "" {
 		t.Errorf("unreadable endpoints must be unknown: %v %q", got, unknown)
 	}
-	denied := []CNPGOperatorWebhookConfig{{Kind: "ValidatingWebhookConfiguration", Name: "x", CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadDenied, Grant: "get validatingwebhookconfigurations"}}}
+	denied := []CNPGOperatorWebhookConfig{{Kind: "ValidatingWebhookConfiguration", Name: "x", ReadSource: ReadSource{State: cnpgReadDenied, Grant: cnpgGrantGetValidatingWH.Ref()}}}
 	if got, _, unknown := cnpgWebhookRejects(denied, nil); got != nil || !strings.Contains(unknown, "get validatingwebhookconfigurations") {
 		t.Errorf("denied config: %v %q", got, unknown)
 	}
-	absent := []CNPGOperatorWebhookConfig{{Kind: "ValidatingWebhookConfiguration", Name: "x", CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadNotFound}}}
+	absent := []CNPGOperatorWebhookConfig{{Kind: "ValidatingWebhookConfiguration", Name: "x", ReadSource: ReadSource{State: cnpgReadNotFound}}}
 	if got, _, _ := cnpgWebhookRejects(absent, nil); got == nil || *got {
 		t.Errorf("absent config rejects nothing: %v", got)
 	}
@@ -135,8 +135,8 @@ func TestCNPGOperatorFactsVerdict(t *testing.T) {
 }
 
 func TestCNPGApplyOperatorGuard(t *testing.T) {
-	allowed := CNPGActionCapability{Allowed: true, Permission: cnpgPermAllowed}
-	refused := CNPGActionCapability{Reason: "The cluster is hibernated", Permission: cnpgPermAllowed}
+	allowed := ActionCapability{Allowed: true, Permission: permissionAllowed}
+	refused := ActionCapability{Reason: "The cluster is hibernated", Permission: permissionAllowed}
 	rejects := true
 	resp := &CNPGClusterCapabilitiesResponse{
 		Operator: CNPGOperatorVerdict{State: cnpgOperatorNotReconciling, WebhookRejects: &rejects, WebhookReason: "the admission webhook Service cnpg-system/cnpg-webhook-service has no ready endpoint"},
@@ -166,7 +166,7 @@ func TestCNPGApplyOperatorGuard(t *testing.T) {
 }
 
 func TestCNPGOperatorLeadingPod(t *testing.T) {
-	held := CNPGOperatorLeader{CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadOK}, HolderPod: "op-1", HolderIsCurrentPod: true}
+	held := CNPGOperatorLeader{ReadSource: ReadSource{State: cnpgReadOK}, HolderPod: "op-1", HolderIsCurrentPod: true}
 	if got := cnpgOperatorLeadingPod(held); got != "op-1" {
 		t.Errorf("held = %q", got)
 	}
@@ -198,7 +198,7 @@ func TestCNPGOperatorFactsReadOutlivesTheCaller(t *testing.T) {
 }
 
 func TestCNPGOperatorLeadingHidesRawLeaseErrors(t *testing.T) {
-	leader := CNPGOperatorLeader{CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadError, Reason: `Get "https://127.0.0.1:55484/apis/coordination.k8s.io/v1/namespaces/cnpg-system/leases/db9c8771.cnpg.io": context canceled`}}
+	leader := CNPGOperatorLeader{ReadSource: ReadSource{State: cnpgReadError, Reason: `Get "https://127.0.0.1:55484/apis/coordination.k8s.io/v1/namespaces/cnpg-system/leases/db9c8771.cnpg.io": context canceled`}}
 	got, reason := cnpgOperatorLeading(operatorDeployment(1, 1), leader)
 	if got != nil || reason != "couldn't read its leader lease" {
 		t.Errorf("leading = %v, reason = %q", got, reason)

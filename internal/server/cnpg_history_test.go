@@ -98,11 +98,11 @@ func TestCNPGClusterHistory_ChartsFromPrometheus(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d: %s", status, body)
 	}
-	if got.Source != cnpgHistorySourcePrometheus || got.State != cnpgHistoryStateOK || got.StepSeconds != 30 || got.Isolation == nil || got.Isolation.Mode != prometheuspkg.CNPGIsolationUnverified {
+	if got.Source != cnpgHistorySourcePrometheus || got.State != cnpgHistoryStateOK || got.StepSeconds != 30 || got.Isolation == nil || got.Isolation.Mode != prometheuspkg.SeriesIsolationUnverified {
 		t.Fatalf("got %+v", got)
 	}
 	// The volume chart's claims are matched apart from the instance Pods, and say so.
-	if got.PVCIsolation == nil || got.PVCIsolation.Mode != prometheuspkg.CNPGIsolationUnverified || !strings.Contains(got.PVCIsolation.Note, "claim names") {
+	if got.PVCIsolation == nil || got.PVCIsolation.Mode != prometheuspkg.SeriesIsolationUnverified || !strings.Contains(got.PVCIsolation.Note, "claim names") {
 		t.Errorf("pvcIsolation = %+v", got.PVCIsolation)
 	}
 	by := map[string]prometheuspkg.CNPGHistoryChart{}
@@ -150,7 +150,7 @@ func TestCNPGClusterHistory_GatesPerSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range got.Charts {
-		if c.State != prometheuspkg.CNPGHistoryStateDenied || len(c.Series) != 0 || c.Grant == "" {
+		if c.State != prometheuspkg.CNPGHistoryStateDenied || len(c.Series) != 0 || c.Grant == nil {
 			t.Errorf("%s = %+v, want denied without series", c.ID, c)
 		}
 	}
