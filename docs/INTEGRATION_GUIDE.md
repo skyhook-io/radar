@@ -126,7 +126,112 @@ shared renderers.
   - `packages/k8s-ui/src/components/topology/`: `TopologyFilterSidebar.tsx`,
     `K8sResourceNode.tsx`, `layout.ts`, `topology.css`.
 
-## 3. Before submitting
+## 3. Workspace integrations
+
+A workspace is a set of screens for several related kinds (CloudNativePG at
+`/cnpg`, Karpenter at `/capacity`). Build one only when the operator question
+spans objects: fleet health, a chain such as Backup → ObjectStore → Cluster, or
+actions that need facts from more than one object. With fewer kinds, or no
+cross-object question, a renderer plus Issues plus the detail slots is enough.
+The batch kinds, for example, use only the detail seams.
+
+The pieces below are shared and should be imported, not copied. Read
+[DESIGN.md](../DESIGN.md#unknown-partial-and-denied-values) for the rules on
+unknown, partial and denied values first: every piece here exists to keep them.
+
+- [ ] **Placement.** Under Resources as a category workspace
+  (`ResourcesSidebar` `categoryWorkspaces`, keyed by the category name from
+  `api-resources.ts`), or a top-level page when the subject is cluster-wide.
+  Say whether the namespace filter applies, and why.
+- [ ] **Routes and navigation.** Use `/x`, `/x/<screen>` and
+  `/x/<plural>/<ns|_>/<name>?ctx=`.
+  - The in-drawer trail is `?drawer=`, encoded by `web/src/utils/drawer-trail.ts`.
+  - Back labels come from `currentPageLabel` and subject-filtered Issues links
+    from `issuesPathForSubject` (both in `web/src/utils/page-links.ts`).
+  - Pin `ctx` on a detail page. After a context switch, say the object is not in
+    this context; never open a same-named object from another cluster.
+- [ ] **One aggregate endpoint.**
+  - List each kind with `readWorkspaceKind` (dynamic kinds) or
+    `typedKindScope` (typed kinds such as Pods), both in
+    `internal/server/kind_access.go`. Their answer's `coverage()` is a
+    `KindCoverage`: `full|partial|denied|notInstalled|syncing|uncached|error`,
+    with denied and uncached namespaces named only when the caller supplied the
+    namespace list.
+  - Radar's own cache scope comes from `namespacesWithinCache`
+    (`cache_scope.go`).
+  - A per-object read with several sources reports a `ReadSource`
+    `{state, grant, reason}` per source (`read_source.go`), with the missing
+    permission as a `Grant` (`internal/auth/grant.go`), never a sentence.
+  - Fan out over namespaces with `fanOut` (`fanout.go`), behind a cap.
+  - Prometheus series matched to an object by name rather than identity carry a
+    `SeriesIsolation` (`internal/prometheus/series_scope.go`).
+  - A GitOps or Helm manager comes from `topology.ManagedByFromMeta`, never from
+    labels read on the client.
+- [ ] **Version skew.** Give the workspace's endpoints one `FeatureCapabilities`
+  flag and a `radarFeatures.ts` entry with `flagShippedWithEndpoint: true`.
+  - Gate every hook with `useRadarFeature`, including mutations, streams and
+    downloads. Never add `retry` to a mutation.
+  - When the Radar is too old, hide the sidebar destinations and fall back to
+    the standard detail views.
+- [ ] **Findings.** The Issues engine comes first. A finding that depends on
+  the caller's grants (a measurement) stays in the workspace as a
+  `WorkspaceProblem` with `source: 'measurement'`, `measuredBy` and, when
+  matched by name only, `unverifiedMatch`. Add no new severity ladder, and
+  title reasons the Issues page already titles with `issueReasonTitle`.
+- [ ] **Screens.**
+  - k8s-ui `components/workspace`:
+    - facts: `Fact`, `FactGrid`, `FactRow`, `FactValue`, `FactSource`
+    - sections: `SectionHeading`, `FoldSection`, `FoldSummary`
+    - problems: `WorkspaceProblem`, and `ProblemCallout`/`ProblemList`/`ProblemMeta`
+      with the workspace's `rootKind`
+    - also `OpenIssueContext`, `CertaintyGlyph` and `ManagedByText`
+  - Also from k8s-ui: `ui/RefLink`, `toneTextClass`/`worseTone` in
+    `ui/status-tone`, and `formatGrant`.
+  - App: `web/src/components/workspace`:
+    - layout: `ScreenBody`, `ScreenEmptyState`, `Notice`
+    - controls: `Segments`, `FilterChips`
+    - tables: `SectionTable` and its table classes
+    - text: `RefreshFailedNotice` and `GrantText`
+  - Buttons are `.btn-brand` and `.btn-secondary`.
+- [ ] **Detail page.** Through `WorkloadView`:
+  - `renderSummary`: a composed Overview; the resource's renderer moves to
+    "Spec & status".
+  - `extraTabs`
+  - `renderHeaderActions`
+- [ ] **Actions.**
+  - Server (`internal/server/actions.go`):
+    - A capabilities endpoint answers each action as an `ActionCapability`
+      `{allowed, reason, permission, grant}`, built with `grantPermission` and
+      `capabilityVerdict`.
+    - The POST body is an `ActionRequest` `{reviewedContext, uid, facts, params}`
+      read with `decodeActionRequest`.
+    - Bind the facts the user reviewed. Refuse with 409 `changed`
+      (`changedAction`) or `context_changed`, and use `partialAction` when a
+      multi-step write stops part-way.
+    - Writes are impersonated, version-bound (`mergePatchAtVersion`) and never
+      retried.
+  - Client:
+    - `web/src/api/actions.ts`: `actionErrorCode`, widened with the integration's
+      own codes; `actionOutcomeLocked`, `actionCompleted` and `capabilityReason`.
+    - `ActionConfirmDialog` and the GitOps write guard (`useGitOpsWriteGuard`).
+  - An accepted POST is not a completed action: follow the outcome in status.
+- [ ] **Docs and fixtures.** Add a `docs/<x>.md` listing which source each value
+  comes from and how it reads when unknown, a `scripts/<x>-demo.sh` with its
+  README, and a CLAUDE.md row.
+
+These pieces are not shared yet, because they have one consumer and the second
+should shape them:
+- the App/route wiring
+- the operation tracker
+- the fixed-path `pods/proxy` reader
+- the merged log stream
+- the report bundle
+- operator diagnosis
+
+Read CloudNativePG's versions (`web/src/components/cnpg/`,
+`internal/server/cnpg_*.go`), and extract one when you copy it.
+
+## 4. Before submitting
 
 - [ ] Verify status against the controller's documented API: desired versus
   observed, unknown versus false, intentional pause/stop versus failure. Consider
