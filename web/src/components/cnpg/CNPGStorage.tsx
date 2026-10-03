@@ -16,6 +16,8 @@ import {
   parseQuantityToNumber,
   toneFillClass,
   toneTextClass,
+  formatGrant,
+  type Grant,
 } from '@skyhook-io/k8s-ui'
 import { useResource } from '../../api/client'
 import type { CNPGRuntimeInstance } from '../../api/cnpg'
@@ -317,7 +319,7 @@ function InstanceCard({ inst, walCoverage, stated }: { inst: CNPGStorageInstance
           walCoverage.state === 'ok' ? (
             <div className="text-xs text-theme-text-tertiary">No running instance to read</div>
           ) : (
-            <Tooltip content={walCoverage.state === 'denied' ? `No access: needs ${walCoverage.grant}` : walCoverage.reason ?? walCoverage.state}>
+            <Tooltip content={walCoverage.state === 'denied' ? `No access: needs ${formatGrant(walCoverage.grant)}` : walCoverage.reason ?? walCoverage.state}>
               <div className="text-xs text-theme-text-tertiary">Unknown</div>
             </Tooltip>
           )
@@ -328,11 +330,11 @@ function InstanceCard({ inst, walCoverage, stated }: { inst: CNPGStorageInstance
 }
 
 // "<label> needs …" lines; `plural` for a label that takes "need".
-function coverageLine(label: string, c: { state: string; grant?: string; reason?: string }, plural = false): string | null {
+function coverageLine(label: string, c: { state: string; grant?: Grant; reason?: string }, plural = false): string | null {
   const needs = plural ? 'need' : 'needs'
   if (c.state === 'ok') return null
   if (c.state === 'noPrometheus') return `${label} ${needs} Prometheus. ${c.reason ?? 'Radar is not connected to one'}.`
-  if (c.state === 'denied') return `${label} ${needs} ${c.grant ?? 'a grant you do not have'}.`
+  if (c.state === 'denied') return `${label} ${needs} ${formatGrant(c.grant) ?? 'a grant you do not have'}.`
   return `${label}: ${c.reason ?? c.state}`
 }
 

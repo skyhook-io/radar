@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { Lock } from 'lucide-react'
-import { PaneLoader, Tooltip, formatAge, toneTextClass } from '@skyhook-io/k8s-ui'
+import { PaneLoader, Tooltip, formatAge, toneTextClass, formatGrant } from '@skyhook-io/k8s-ui'
 import { useCNPGRuntime, type CNPGRuntimeInstance } from '../../api/cnpg'
 import { useCNPGSessions, type CNPGSessionsResponse } from '../../api/cnpg-sessions'
 import { useCNPGClusterHistory } from '../../api/cnpg-history'
@@ -85,7 +85,7 @@ export function CNPGClusterRuntime({
   }
   const data = q.data
   const denied = data.permission.proxy === 'denied'
-  const grant = data.permission.grant ?? `get pods/proxy in ${namespace}`
+  const grant = formatGrant(data.permission.grant) ?? `get pods/proxy in namespace ${namespace}`
   const primary = data.instances.find((i) => i.role === 'primary')
   const replicas = data.instances.filter((i) => i.role !== 'primary')
   // Sessions and Transactions read one instance's exporter; the primary

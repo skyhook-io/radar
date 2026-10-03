@@ -2,7 +2,7 @@ import type { ComponentType, ReactNode } from 'react'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { clsx } from 'clsx'
 import { AlertTriangle, X } from 'lucide-react'
-import { Tooltip, formatUpdatedAgo, toneTextClass } from '@skyhook-io/k8s-ui'
+import { Tooltip, formatUpdatedAgo, grantParts, toneTextClass, type Grant } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { sameSelectedResource } from '../../utils/drawer-trail'
 import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from './table'
@@ -219,9 +219,8 @@ export function PathText({ value, className }: { value: string; className?: stri
  * A grant as one unit: the verb and resource in a code span that does not
  * wrap, its scope ("cluster-wide", "in namespace pg") as plain text after it.
  */
-export function GrantText({ grant }: { grant: string }) {
-  const m = /^(.*?)( cluster-wide| in namespace \S+)$/.exec(grant)
-  const [what, scope] = m ? [m[1], m[2]] : [grant, '']
+export function GrantText({ grant }: { grant: Grant }) {
+  const { what, scope } = grantParts(grant)
   return (
     <>
       <code className="whitespace-nowrap rounded bg-theme-elevated px-1 font-mono text-[12px]">{what}</code>

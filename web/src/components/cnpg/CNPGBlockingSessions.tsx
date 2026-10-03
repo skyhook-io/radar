@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import { clsx } from 'clsx'
 import { Lock } from 'lucide-react'
-import { ActionConfirmDialog, PaneLoader, Tooltip, formatAge, toneFillClass, toneTextClass } from '@skyhook-io/k8s-ui'
+import { ActionConfirmDialog, PaneLoader, Tooltip, formatAge, toneFillClass, toneTextClass, formatGrant } from '@skyhook-io/k8s-ui'
 import { formatCPUString, formatMemoryString, parseCPUToNanocores, parseMemoryToBytes } from '@skyhook-io/k8s-ui/utils/format'
 import { podMetricsQuery, usePodMetrics } from '../../api/client'
 import { cnpgActionOutcomeLocked, useCNPGAction, useCNPGClusterCapabilities } from '../../api/cnpg'
@@ -82,7 +82,7 @@ function Body({
       <div className="rounded-lg border border-dashed border-theme-border p-4">
         <div className="flex items-center gap-2 text-sm font-medium text-theme-text-primary">
           <Lock className="h-4 w-4" />
-          Blocking detail needs {data.permission.grant}
+          Blocking detail needs {formatGrant(data.permission.grant) ?? 'create pods/exec'}
         </div>
         <p className="mt-1 text-sm text-theme-text-secondary">
           Who blocks whom is read inside PostgreSQL, which needs exec into the instance.{' '}
@@ -341,7 +341,7 @@ function SignalDialog({
       typedConfirmation={terminate ? String(session.pid) : undefined}
       confirmLabel={terminate ? 'Terminate backend' : 'Stop query'}
       disruptive={terminate}
-      disabledReason={caps.data && data.permission.exec === 'denied' ? `Needs ${data.permission.grant}` : undefined}
+      disabledReason={caps.data && data.permission.exec === 'denied' ? `Needs ${formatGrant(data.permission.grant) ?? 'create pods/exec'}` : undefined}
       incompleteReason={!caps.data ? 'Reading the cluster…' : undefined}
       isLoading={mutation.isPending}
       error={mutation.error?.message}

@@ -5,7 +5,7 @@ import { cnpgPublisherSlotsFrom } from './logicalSlots'
 const rt = (status: any, proxy: 'allowed' | 'denied' = 'allowed', role: 'primary' | 'replica' = 'primary'): CNPGRuntimeResponse => ({
   cluster: { namespace: 'src', name: 'src', uid: 'u' },
   sampledAt: '2026-09-30T10:00:00Z',
-  permission: { proxy, grant: 'get pods/proxy in src' },
+  permission: { proxy, grant: { verb: 'get', resource: 'pods', subresource: 'proxy', namespace: 'src' } },
   instances: [{ pod: 'src-1', role, status, metrics: { state: 'ok' } }],
 })
 

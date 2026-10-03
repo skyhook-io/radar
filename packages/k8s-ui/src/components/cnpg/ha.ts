@@ -4,6 +4,7 @@
 // unavailable source is "unknown", never none or healthy.
 
 import type { HealthLevel } from '../resources/resource-utils'
+import { formatGrant, type Grant } from '../../utils/grant'
 import { cnpgFormatLag, cnpgLagTone, cnpgReplicationTone, cnpgSustainedLagProblemId, type CNPGFleetRow } from './workspace'
 import type { Fact, FoldSummary } from '../workspace'
 import { worseTone } from '../ui/status-tone'
@@ -13,7 +14,7 @@ export type CNPGHASourceState = 'ok' | 'denied' | 'notFound' | 'notInstalled' | 
 export interface CNPGHASource {
   state: CNPGHASourceState
   reason?: string
-  grant?: string
+  grant?: Grant
 }
 
 export interface CNPGHAInstance {
@@ -145,7 +146,7 @@ export function cnpgHASourceText(src: CNPGHASource | undefined, what: string): s
     case 'ok':
       return ''
     case 'denied':
-      return `No access to ${what}${src.grant ? ` (needs ${src.grant})` : ''}`
+      return `No access to ${what}${src.grant ? ` (needs ${formatGrant(src.grant)})` : ''}`
     case 'notInstalled':
       return src.reason ?? `${what}: not available in this CloudNativePG version`
     case 'notFound':

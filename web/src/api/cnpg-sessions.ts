@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import type { Grant } from '@skyhook-io/k8s-ui'
 import { fetchJSON } from './client'
 import type { CNPGActionCapability, CNPGClusterFacts, CNPGRuntimeSourceState } from './cnpg'
 
@@ -40,7 +41,7 @@ export interface CNPGSessionsResponse {
   podUID?: string
   role?: string
   sampledAt: string
-  permission: { exec: 'allowed' | 'denied' | 'unknown'; grant: string }
+  permission: { exec: 'allowed' | 'denied' | 'unknown'; grant?: Grant }
   state: CNPGRuntimeSourceState
   error?: string
   capturedAt?: string
@@ -149,7 +150,7 @@ export function useCNPGPoolerCapabilities(namespace: string, name: string, enabl
 export interface CNPGPgBouncerStateResponse {
   pooler: { namespace: string; name: string; uid: string }
   sampledAt: string
-  permission: { exec: 'allowed' | 'denied' | 'unknown'; grant: string }
+  permission: { exec: 'allowed' | 'denied' | 'unknown'; grant?: Grant }
   pods: { pod: string; state: CNPGRuntimeSourceState; error?: string; paused?: boolean; suspended?: boolean; active?: boolean }[]
 }
 

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { Grant } from '@skyhook-io/k8s-ui'
 import { apiFetch, ApiError, fetchJSON } from './client'
 import type { CNPGActionCapability } from './cnpg'
 import { getApiBase } from './config'
@@ -7,7 +8,7 @@ export type CNPGReadState = 'ok' | 'denied' | 'notFound' | 'error' | 'skipped' |
 
 export interface CNPGReadCoverage {
   state: CNPGReadState
-  grant?: string
+  grant?: Grant
   reason?: string
 }
 

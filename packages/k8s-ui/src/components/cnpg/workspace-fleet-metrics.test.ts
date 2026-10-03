@@ -59,9 +59,9 @@ describe('applyCNPGFleetMetrics', () => {
     expect(row(f, 'dark').replication.tone).toBe('unknown')
     expect(row(f, 'solo').replication.text).toBe('Single instance')
 
-    const denied = applyCNPGFleetMetrics(fleet(), [reading('ha', { state: 'denied', grant: 'get pods in db' })], { source: 'prometheus' })
+    const denied = applyCNPGFleetMetrics(fleet(), [reading('ha', { state: 'denied', grant: { verb: 'get', resource: 'pods', namespace: 'db' } })], { source: 'prometheus' })
     expect(row(denied, 'ha').replication.text).toBe('1/1 Pods ready · lag unknown')
-    expect(row(denied, 'ha').replication.source).toBe('Needs get pods in db')
+    expect(row(denied, 'ha').replication.source).toBe('Needs get pods in namespace db')
 
     const none = applyCNPGFleetMetrics(fleet(), undefined, { source: 'none', reason: 'Radar is not connected to Prometheus' })
     expect(row(none, 'ha').replication.text).toBe('1/1 Pods ready · lag unknown')

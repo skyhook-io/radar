@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { CNPGSchedulePreview, CNPGWorkspaceResponse, TimelineEvent } from '@skyhook-io/k8s-ui'
+import type { CNPGSchedulePreview, CNPGWorkspaceResponse, Grant, TimelineEvent } from '@skyhook-io/k8s-ui'
 import { ApiError, fetchJSON } from './client'
 import type { CNPGOperatorDiagnosis } from './cnpg-recovery'
 
@@ -129,7 +129,7 @@ export interface CNPGActionCapability {
   allowed: boolean
   reason?: string
   permission: 'allowed' | 'denied' | 'unknown'
-  grant?: string
+  grant?: Grant
 }
 
 export interface CNPGInstanceFact {
@@ -455,7 +455,7 @@ export interface CNPGRuntimeInstance {
 export interface CNPGRuntimeResponse {
   cluster: { namespace: string; name: string; uid: string }
   sampledAt: string
-  permission: { proxy: 'allowed' | 'denied'; grant?: string }
+  permission: { proxy: 'allowed' | 'denied'; grant?: Grant }
   instances: CNPGRuntimeInstance[]
 }
 
@@ -476,7 +476,7 @@ export function useCNPGRuntime(namespace: string, name: string, enabled = true) 
 export interface CNPGPoolerRuntimeResponse {
   pooler: { namespace: string; name: string; uid: string }
   sampledAt: string
-  permission: { proxy: 'allowed' | 'denied'; grant?: string }
+  permission: { proxy: 'allowed' | 'denied'; grant?: Grant }
   pods: {
     pod: string
     state: CNPGRuntimeSourceState

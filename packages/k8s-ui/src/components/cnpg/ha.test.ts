@@ -96,7 +96,7 @@ describe('cnpgZoneSpread', () => {
     expect(s.sharedNode).toBe(true)
   })
   it('is unknown, not single-zone, when Nodes are not readable', () => {
-    const s = cnpgZoneSpread(ha({ nodes: { state: 'denied', grant: 'get nodes' } }))
+    const s = cnpgZoneSpread(ha({ nodes: { state: 'denied', grant: { verb: 'get', resource: 'nodes' } } }))
     expect(s.known).toBe(false)
     expect(s.singleZone).toBe(false)
   })
@@ -118,7 +118,7 @@ describe('cnpgQuorumFact', () => {
     expect(cnpgQuorumFact(q({ status: { standbyNames: [], standbyNumber: 0 } })).text).toContain('no synchronous configuration recorded')
   })
   it('an unreadable object is unknown', () => {
-    expect(cnpgQuorumFact(q({ object: { state: 'denied', grant: 'get failoverquorums' } })).tone).toBe('unknown')
+    expect(cnpgQuorumFact(q({ object: { state: 'denied', grant: { verb: 'get', group: 'postgresql.cnpg.io', resource: 'failoverquorums', namespace: 'db' } } })).tone).toBe('unknown')
   })
 })
 
@@ -266,7 +266,7 @@ describe('folded HA and certificates summaries', () => {
   })
 
   it('names what it could not read instead of reading calm', () => {
-    const denied = { state: 'denied' as const, grant: 'x' }
+    const denied = { state: 'denied' as const, grant: { verb: 'list', resource: 'pods', namespace: 'db' } }
     const unread = ha({ pods: denied, nodes: denied, pdbs: { ...denied, enabled: true, items: [] }, primaryLease: denied, operatorLease: denied, jobs: { ...denied, items: [] } } as never)
     expect(cnpgHASummary(unread, undefined)).toEqual({
       text: 'Not read: Pods, zones, disruption budgets, primary lease, operator lease, Jobs, pending restarts',

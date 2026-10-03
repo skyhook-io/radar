@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import type { CNPGFleetMetricsReading } from '@skyhook-io/k8s-ui'
+import type { CNPGFleetMetricsReading, Grant } from '@skyhook-io/k8s-ui'
 import { fetchJSON } from './client'
 import type { CNPGClusterActivityResponse } from './cnpg'
 
@@ -33,7 +33,7 @@ export interface CNPGHistoryChart {
   /** ok | empty (scraped, nothing to plot) | noSeries (not scraped) | denied | error | notRead */
   state: string
   reason?: string
-  grant?: string
+  grant?: Grant
   thresholds?: { value: number; label: string }[]
   series: CNPGHistorySeries[]
   omitted?: number

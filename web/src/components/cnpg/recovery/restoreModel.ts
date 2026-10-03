@@ -1,4 +1,4 @@
-import { CNPG_BARMAN_PLUGIN_NAME, getCNPGClusterBarmanPlugin, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel } from '@skyhook-io/k8s-ui'
+import { CNPG_BARMAN_PLUGIN_NAME, getCNPGClusterBarmanPlugin, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel, formatGrant } from '@skyhook-io/k8s-ui'
 import type { CNPGActionCapability, CNPGRuntimeResponse } from '../../../api/cnpg'
 import type { CNPGRecoveryResponse, CNPGRecoveryPod } from '../../../api/cnpg-recovery'
 
@@ -166,7 +166,7 @@ export function recoveryEvidenceFor(
         !ctx.runtime
           ? 'The last archived WAL time is not loaded'
           : ctx.runtime.permission.proxy === 'denied'
-            ? `The last archived WAL time needs ${ctx.runtime.permission.grant ?? 'get pods/proxy'}`
+            ? `The last archived WAL time needs ${formatGrant(ctx.runtime.permission.grant) ?? 'get pods/proxy'}`
             : !primary
               ? 'No primary is reported, so the last archived WAL time is unknown'
               : primary.status.state !== 'ok'
@@ -414,7 +414,7 @@ export function observeRestore(snap: CNPGRecoveryResponse): RestoreObservation {
     }
   }
   if (!podsVisible && !c.phase) {
-    return { ...base, state: 'unobservable', tone: 'unknown', title: 'Progress not visible', detail: snap.coverage.pods?.grant ? `Following the restore needs ${snap.coverage.pods.grant}` : 'The Cluster has not reported a phase yet' }
+    return { ...base, state: 'unobservable', tone: 'unknown', title: 'Progress not visible', detail: snap.coverage.pods?.grant ? `Following the restore needs ${formatGrant(snap.coverage.pods.grant)}` : 'The Cluster has not reported a phase yet' }
   }
   const starting = instances.find((p) => !p.ready)
   return {
@@ -422,7 +422,7 @@ export function observeRestore(snap: CNPGRecoveryResponse): RestoreObservation {
     state: 'progressing',
     tone: 'neutral',
     title: recoveryPods.some((p) => p.phase === 'Succeeded') ? 'Recovery finished; starting the restored instances' : 'Waiting for the recovery to start',
-    detail: [c.phase, c.readyInstances !== null && c.instances !== null ? `${c.readyInstances}/${c.instances} ready` : null, !podsVisible ? `Pods not visible${snap.coverage.pods?.grant ? ` (needs ${snap.coverage.pods.grant})` : ''}` : null]
+    detail: [c.phase, c.readyInstances !== null && c.instances !== null ? `${c.readyInstances}/${c.instances} ready` : null, !podsVisible ? `Pods not visible${snap.coverage.pods?.grant ? ` (needs ${formatGrant(snap.coverage.pods.grant)})` : ''}` : null]
       .filter(Boolean)
       .join(' · '),
     logsPod: starting ? { name: starting.name, container: 'postgres' } : undefined,
@@ -442,7 +442,7 @@ export function restorePermission(
 ): { blocked?: string; pending?: string; unchecked?: string } {
   if (cap) {
     if (cap.allowed) return {}
-    if (cap.permission === 'denied') return { blocked: `Restoring creates a Cluster in ${namespace}, which needs ${cap.grant ?? 'create clusters (postgresql.cnpg.io)'}.` }
+    if (cap.permission === 'denied') return { blocked: `Restoring creates a Cluster in ${namespace}, which needs ${formatGrant(cap.grant) ?? 'create clusters (postgresql.cnpg.io)'}.` }
     return { blocked: cap.reason ?? 'Restoring is not available right now.' }
   }
   if (error) return { unchecked: `Whether you may create a Cluster in ${namespace} could not be checked (${error instanceof Error ? error.message : 'unknown error'}); the review step will tell.` }

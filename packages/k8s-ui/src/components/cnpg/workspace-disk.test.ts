@@ -52,7 +52,7 @@ describe('cnpgDiskFact', () => {
   })
 
   it('names the missing grant when denied', () => {
-    expect(cnpgDiskFact(reading('pg', { state: 'denied', grant: 'list persistentvolumeclaims in db', measured: 0 })).source).toBe('Needs list persistentvolumeclaims in db')
+    expect(cnpgDiskFact(reading('pg', { state: 'denied', grant: { verb: 'list', resource: 'persistentvolumeclaims', namespace: 'db' }, measured: 0 })).source).toBe('Needs list persistentvolumeclaims in namespace db')
   })
 })
 

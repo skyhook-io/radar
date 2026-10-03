@@ -6,6 +6,7 @@ import { formatAge, type HealthLevel } from '../resources/resource-utils'
 import { worseTone } from '../ui/status-tone'
 import type { Fact, ProblemOrigin, WorkspaceProblem } from '../workspace'
 import { formatBytes } from '../../utils/format'
+import { formatGrant, type Grant } from '../../utils/grant'
 import {
   CNPG_BARMAN_PLUGIN_NAME,
   getCNPGClusterBackupConfig,
@@ -1097,7 +1098,7 @@ export interface CNPGDiskReading {
   name: string
   /** ok | partial | noSeries | noPrometheus | denied | unavailable | error | notRead | ambiguous | scopeMismatch */
   state: string
-  grant?: string
+  grant?: Grant
   reason?: string
   claims: number
   measured: number
@@ -1150,7 +1151,7 @@ export function cnpgDiskFact(r: CNPGDiskReading | undefined): Fact {
   }
   switch (r.state) {
     case 'denied':
-      return { text: 'No access', tone: 'unknown', source: r.grant ? `Needs ${r.grant}` : r.reason }
+      return { text: 'No access', tone: 'unknown', source: r.grant ? `Needs ${formatGrant(r.grant)}` : r.reason }
     case 'noPrometheus':
       return { text: 'No usage metrics', tone: 'unknown', source: CNPG_PROMETHEUS_NOT_CONNECTED, detail: r.reason }
     case 'noSeries':
@@ -1206,7 +1207,7 @@ export interface CNPGFleetMetricsReading {
   /** ok | noStandby | noSeries | denied | ambiguous | scopeMismatch | error | notRead */
   lag: {
     state: string
-    grant?: string
+    grant?: Grant
     reason?: string
     seconds?: number
     pod?: string
@@ -1217,7 +1218,7 @@ export interface CNPGFleetMetricsReading {
     isolation?: CNPGMetricIsolation
   }
   /** ok | noSeries | denied | unavailable | error | notRead */
-  growth: { state: string; grant?: string; reason?: string; bytesPerHour?: number; claim?: string; instance?: string; isolation?: CNPGMetricIsolation }
+  growth: { state: string; grant?: Grant; reason?: string; bytesPerHour?: number; claim?: string; instance?: string; isolation?: CNPGMetricIsolation }
 }
 
 /** How Prometheus series were tied to one cluster; `unverified` matched only by namespace and Pod or claim names. */
@@ -1288,7 +1289,7 @@ function measuredReplication(base: Fact, reading: CNPGFleetMetricsReading | unde
     case 'noStandby':
       return { text: `${prefix} · lag unknown`, tone: 'unknown', source: `No standby reports lag: ${lag.reason ?? 'no instance reports being a standby'} · ${src.lagSource ?? 'Prometheus'}` }
     case 'denied':
-      return { text: `${prefix} · lag unknown`, tone: 'unknown', source: lag.grant ? `Needs ${lag.grant}` : lag.reason }
+      return { text: `${prefix} · lag unknown`, tone: 'unknown', source: lag.grant ? `Needs ${formatGrant(lag.grant)}` : lag.reason }
   }
   return { text: `${prefix} · lag unknown`, tone: 'unknown', source: lag?.reason ?? 'Replication lag needs Prometheus scraping the CNPG exporter' }
 }

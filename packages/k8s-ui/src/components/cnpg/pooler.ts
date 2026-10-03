@@ -1,4 +1,5 @@
 import type { HealthLevel } from '../resources/resource-utils'
+import { formatGrant, type Grant } from '../../utils/grant'
 
 /** The Deployment a Pooler runs, as the host read it. */
 export interface CNPGPoolerDeploymentLive {
@@ -39,7 +40,7 @@ export interface CNPGPoolerPressureLive {
 /** Each PgBouncer's own SHOW STATE. */
 export interface CNPGPoolerObservedLive {
   state: 'loading' | 'denied' | 'error' | 'ok'
-  grant?: string
+  grant?: Grant
   reason?: string
   pods: { pod: string; state: string; paused?: boolean; error?: string }[]
 }
@@ -178,7 +179,7 @@ export function poolerBackendService(cluster: string | undefined, type: string |
 export function observedPause(o: CNPGPoolerObservedLive | undefined): { text: string; level: HealthLevel } | null {
   if (!o) return null
   if (o.state === 'loading') return { text: 'Reading…', level: 'unknown' }
-  if (o.state === 'denied') return { text: `Not observable: needs ${o.grant ?? 'create pods/exec'}`, level: 'unknown' }
+  if (o.state === 'denied') return { text: `Not observable: needs ${formatGrant(o.grant) ?? 'create pods/exec'}`, level: 'unknown' }
   if (o.state === 'error') return { text: `Not observable: ${o.reason ?? 'read failed'}`, level: 'unknown' }
   if (o.pods.length === 0) return { text: 'No PgBouncer Pods', level: 'unknown' }
   const read = o.pods.filter((p) => p.state === 'ok' && p.paused !== undefined)

@@ -1,5 +1,6 @@
 import type { CNPGClusterHA } from '@skyhook-io/k8s-ui'
 import type { CNPGClusterFacts, CNPGRuntimeResponse } from '../../../api/cnpg'
+import { formatGrant } from '@skyhook-io/k8s-ui'
 
 // Follow-through for CloudNativePG actions. A successful POST only means the
 // write was accepted; the operator acts on it later. A tracked operation is
@@ -276,7 +277,7 @@ registerCNPGOperationObserver('switchover', (op, obs) => {
   steps.push({ label: 'Cluster reports a healthy state again', done: promoted && f.phase === 'Cluster in healthy state' })
   let state = summarizeSteps(steps)
   if (requested && !promoted) state = 'observed'
-  const rwUnverified = `the read-write Service is unverified${rw?.grant ? ` (needs ${rw.grant})` : rw?.reason ? ` (${rw.reason})` : ''}`
+  const rwUnverified = `the read-write Service is unverified${rw?.grant ? ` (needs ${formatGrant(rw.grant)})` : rw?.reason ? ` (${rw.reason})` : ''}`
   const detail =
     rejoined === null && promoted
       ? `Primary changed; whether ${oldPrimary} rejoined needs runtime access (get pods/proxy)${rwReadable ? '' : `; ${rwUnverified}`}`

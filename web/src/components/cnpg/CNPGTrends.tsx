@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { X } from 'lucide-react'
-import { Tooltip } from '@skyhook-io/k8s-ui'
+import { Tooltip, formatGrant } from '@skyhook-io/k8s-ui'
 import { AreaChart, SeriesLegend, type ChartTimeRange, type ReferenceLine, type TimeSeries } from '@skyhook-io/k8s-ui/components/charts'
 import type { CNPGRuntimeResponse } from '../../api/cnpg'
 import {
@@ -122,7 +122,7 @@ function stateText(chart: CNPGHistoryChart): string {
     case 'noSeries':
       return chart.reason ? chart.reason.charAt(0).toUpperCase() + chart.reason.slice(1) + '.' : 'Not scraped.'
     case 'denied':
-      return `No access: needs ${chart.grant ?? 'more permissions'}.`
+      return `No access: needs ${formatGrant(chart.grant) ?? 'more permissions'}.`
     case 'notRead':
       return `Not read: ${chart.reason ?? 'no source'}.`
     default:

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { cnpgFormatLag, cnpgReplicationTone, type CNPGClusterHA, type CNPGFleetRow, type CNPGInstanceLive, type CNPGReplicationLive } from '@skyhook-io/k8s-ui'
+import { cnpgFormatLag, cnpgReplicationTone, formatGrant, type CNPGClusterHA, type CNPGFleetRow, type CNPGInstanceLive, type CNPGReplicationLive } from '@skyhook-io/k8s-ui'
 import { fetchJSON } from './client'
 import type { CNPGRuntimeResponse } from './cnpg'
 
@@ -36,7 +36,7 @@ export function cnpgInstanceLive(rt: CNPGRuntimeResponse | undefined): CNPGInsta
 
 /** Why the HA section has no instance-manager facts at all; undefined when it has them. */
 export function cnpgInstanceLiveUnavailable(rt: CNPGRuntimeResponse | undefined, error: unknown): string | undefined {
-  if (rt?.permission.proxy === 'denied') return `needs ${rt.permission.grant ?? 'get pods/proxy'}`
+  if (rt?.permission.proxy === 'denied') return `needs ${formatGrant(rt.permission.grant) ?? 'get pods/proxy'}`
   if (rt) return undefined
   return error instanceof Error ? `the runtime read failed: ${error.message}` : 'instance managers not read yet'
 }

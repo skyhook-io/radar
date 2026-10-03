@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, DatabaseBackup, MoreHorizontal, Repeat } from 'lucide-react'
 import { clsx } from 'clsx'
-import { ActionConfirmDialog, Tooltip, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA } from '@skyhook-io/k8s-ui'
+import { ActionConfirmDialog, Tooltip, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA, formatGrant } from '@skyhook-io/k8s-ui'
 import {
   cnpgActionOutcomeLocked,
   useCNPGAction,
@@ -48,7 +48,7 @@ function EffectItem({ list, label }: { list: { available: boolean; reason?: stri
 function capabilityTitle(cap: CNPGActionCapability | undefined): string | undefined {
   if (!cap) return 'Checking permissions…'
   if (cap.allowed) return undefined
-  return cap.reason ?? (cap.permission === 'denied' ? `Your account may not do this (${cap.grant ?? 'permission denied'})` : 'Not available')
+  return cap.reason ?? (cap.permission === 'denied' ? `Your account may not do this (${formatGrant(cap.grant) ?? 'permission denied'})` : 'Not available')
 }
 
 /**
