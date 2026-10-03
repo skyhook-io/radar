@@ -641,7 +641,7 @@ export function getCNPGObjectStoreRecoveryWindows(resource: any): CNPGObjectStor
 export function getCNPGObjectStoreStatus(resource: any): StatusBadge {
   const windows = getCNPGObjectStoreRecoveryWindows(resource)
   if (windows.length === 0) {
-    return { text: 'No backups yet', color: healthColors.unknown, level: 'unknown' }
+    return { text: 'No backup recorded', color: healthColors.unknown, level: 'unknown' }
   }
   if (windows.some((w) => w.failingSinceLastSuccess)) {
     return { text: 'Backups Failing', color: healthColors.unhealthy, level: 'unhealthy' }

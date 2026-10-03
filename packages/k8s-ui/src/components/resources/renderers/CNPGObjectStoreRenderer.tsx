@@ -55,7 +55,7 @@ export function CNPGObjectStoreRenderer({
           title={`Backups failing for ${failing.length === 1 ? failing[0].server : `${failing.length} servers`}`}
           message={
             neverSucceeded.length > 0
-              ? `No base backup has succeeded for ${neverSucceeded.join(', ')}, so this store holds nothing to restore from for ${neverSucceeded.length === 1 ? 'it' : 'them'}.`
+              ? `No successful base backup is recorded for ${neverSucceeded.join(', ')}, so recoverability is not established.`
               : archiveStopped.length > 0
                 ? `The most recent base backup failed after the last success, and WAL archiving has stopped for ${archiveStopped.join(', ')}: nothing written since the last archived WAL can be recovered.`
                 : 'The most recent base backup failed after the last success. While WAL archiving works, recovery from that backup can still replay archived WAL written since.'
@@ -68,7 +68,7 @@ export function CNPGObjectStoreRenderer({
           // Configured but empty is NOT the same as healthy. Saying nothing here
           // would read as "backups are fine" on a store holding nothing.
           <div className="text-sm text-theme-text-secondary">
-            No server has reported a backup yet, so there is nothing to restore from this store.
+            No server has recorded a backup in this store's status, so recoverability is not established.
           </div>
         ) : (
           <div className="space-y-2">
@@ -202,7 +202,7 @@ function RecoveryWindowRow({
               ? 'Not advancing'
               : w.lastSuccessfulBackupTime
                 ? 'Recoverable'
-                : 'No backups yet'}
+                : 'No backup recorded'}
         </span>
       </div>
       {stalled && (
@@ -225,7 +225,7 @@ function RecoveryWindowRow({
         {w.lastSuccessfulBackupTime ? (
           <Property label="Last Successful Backup" value={<RecoveryTime at={w.lastSuccessfulBackupTime} />} />
         ) : (
-          <Property label="Last Successful Backup" value="never" />
+          <Property label="Last Successful Backup" value="none recorded" />
         )}
         {w.lastFailedBackupTime && (
           <Property label="Last Failed Attempt" value={<RecoveryTime at={w.lastFailedBackupTime} />} />
@@ -236,7 +236,7 @@ function RecoveryWindowRow({
         <div className="mt-2 pt-2 border-t border-theme-border text-xs text-theme-text-secondary">
           {w.lastSuccessfulBackupTime
             ? 'Every backup since the last success has failed. Recovery replays from that backup, so it takes longer the longer this lasts.'
-            : 'No backup for this server has succeeded, so there is nothing to restore from.'}
+            : 'No successful backup is recorded for this server, so recoverability is not established.'}
         </div>
       )}
     </div>
