@@ -68,6 +68,10 @@ type workloadLogEntry struct {
 	Timestamp   string `json:"timestamp"`
 	Content     string `json:"content"`
 	SourceLabel string `json:"sourceLabel,omitempty"`
+	// Parsed from a structured line by sources that know their log format.
+	Level   string `json:"level,omitempty"`
+	Logger  string `json:"logger,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 type workloadLogMetadata struct {
@@ -363,7 +367,7 @@ func (s *Server) authorizeWorkloadLogRead(w http.ResponseWriter, r *http.Request
 
 func (s *Server) authorizePodLogRead(w http.ResponseWriter, r *http.Request, namespace string) bool {
 	if !s.canReadSubresource(r, "", "pods", "log", namespace, "get") {
-		s.writeError(w, http.StatusForbidden, "no access to pod logs in namespace "+namespace)
+		s.writeError(w, http.StatusForbidden, "no access to pod logs in namespace "+namespace+": requires get pods/log")
 		return false
 	}
 	return true
