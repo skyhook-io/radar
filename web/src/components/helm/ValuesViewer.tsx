@@ -14,8 +14,9 @@ import { Tooltip } from '../ui/Tooltip'
 interface ValuesViewerProps {
   values?: HelmValues
   isLoading: boolean
-  showAllValues: boolean
-  onToggleAllValues: (show: boolean) => void
+  error?: unknown
+  showEffectiveValues: boolean
+  onToggleEffectiveValues: (show: boolean) => void
   onCopy: (text: string) => void
   copied: boolean
   // Required for editing
@@ -28,8 +29,9 @@ interface ValuesViewerProps {
 export function ValuesViewer({
   values,
   isLoading,
-  showAllValues,
-  onToggleAllValues,
+  error,
+  showEffectiveValues,
+  onToggleEffectiveValues,
   onCopy,
   copied,
   namespace,
@@ -49,23 +51,26 @@ export function ValuesViewer({
   const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
   const isHistoricalRevision = typeof revision === 'number' && typeof currentRevision === 'number' && revision !== currentRevision
 
-  const canEdit = Boolean(namespace && name) && canHelmWrite && !isHistoricalRevision
+  const overridesLoaded = values?.userSuppliedLoaded === true
+  const canOfferEdit = Boolean(namespace && name) && canHelmWrite && !isHistoricalRevision
+  const canEdit = canOfferEdit && overridesLoaded
 
-  const displayValues = showAllValues && values?.computed ? values.computed : values?.userSupplied
+  const displayValues = showEffectiveValues ? values?.computed : values?.userSupplied
   const isEmpty = !displayValues || Object.keys(displayValues).length === 0
 
   // Start editing mode
   const handleStartEdit = useCallback(() => {
+    if (!overridesLoaded) return
     // Allow editing even with no user-supplied values (start with empty YAML)
     const yamlStr = values?.userSupplied ? jsonToYaml(values.userSupplied) : ''
     setEditedYaml(yamlStr)
     setYamlError(null)
     setIsEditing(true)
-    // Switch to user-supplied view when editing
-    if (showAllValues) {
-      onToggleAllValues(false)
+    // Only user overrides are editable.
+    if (showEffectiveValues) {
+      onToggleEffectiveValues(false)
     }
-  }, [values?.userSupplied, showAllValues, onToggleAllValues])
+  }, [values, overridesLoaded, showEffectiveValues, onToggleEffectiveValues])
 
   // Cancel editing
   const handleCancelEdit = useCallback(() => {
@@ -96,7 +101,7 @@ export function ValuesViewer({
 
   // Preview changes
   const handlePreview = useCallback(async () => {
-    if (!namespace || !name || isHistoricalRevision) return
+    if (!namespace || !name || isHistoricalRevision || !overridesLoaded) return
     const parsed = parseYaml(editedYaml)
     if (!parsed) return
 
@@ -111,11 +116,11 @@ export function ValuesViewer({
     } catch {
       // Error is handled by mutation
     }
-  }, [namespace, name, isHistoricalRevision, editedYaml, parseYaml, previewMutation])
+  }, [namespace, name, isHistoricalRevision, overridesLoaded, editedYaml, parseYaml, previewMutation])
 
   // Apply changes
   const handleApply = useCallback(async () => {
-    if (!namespace || !name || isHistoricalRevision) return
+    if (!namespace || !name || isHistoricalRevision || !overridesLoaded) return
     const parsed = parseYaml(editedYaml)
     if (!parsed) return
 
@@ -130,11 +135,11 @@ export function ValuesViewer({
     } catch {
       // Error is handled by mutation
     }
-  }, [namespace, name, isHistoricalRevision, editedYaml, parseYaml, applyMutation, handleCancelEdit, onApplySuccess])
+  }, [namespace, name, isHistoricalRevision, overridesLoaded, editedYaml, parseYaml, applyMutation, handleCancelEdit, onApplySuccess])
 
   // Apply from preview modal
   const handleApplyFromPreview = useCallback(async () => {
-    if (!previewData || !namespace || !name || isHistoricalRevision) return
+    if (!previewData || !namespace || !name || isHistoricalRevision || !overridesLoaded) return
     try {
       await applyMutation.mutateAsync({
         namespace,
@@ -147,10 +152,18 @@ export function ValuesViewer({
     } catch {
       // Error is handled by mutation
     }
-  }, [previewData, namespace, name, isHistoricalRevision, applyMutation, handleCancelEdit, onApplySuccess])
+  }, [previewData, namespace, name, isHistoricalRevision, overridesLoaded, applyMutation, handleCancelEdit, onApplySuccess])
 
-  if (isLoading) {
+  if (isLoading && !isEditing) {
     return <PaneLoader label="Loading values…" className="h-32" />
+  }
+
+  if (error) {
+    return (
+      <div role="alert" className="m-4 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+        Unable to load Helm values. Editing and applying user overrides are disabled.
+      </div>
+    )
   }
 
   if (isEmpty && !isEditing) {
@@ -158,20 +171,23 @@ export function ValuesViewer({
       <div className="p-4">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-theme-text-secondary">Values</span>
+            <span className="text-sm font-medium text-theme-text-secondary">
+              {showEffectiveValues ? 'Effective Values' : 'User Overrides'}
+            </span>
             {isHistoricalRevision && (
               <span className="badge-sm bg-theme-hover/50 text-theme-text-secondary">revision {revision}</span>
             )}
           </div>
           <div className="flex items-center gap-2">
-            <ToggleButton showAll={showAllValues} onToggle={onToggleAllValues} disabled={isEditing} />
-            {canEdit && (
+            <ValuesViewToggle showEffective={showEffectiveValues} onToggle={onToggleEffectiveValues} disabled={isEditing} />
+            {canOfferEdit && (
               <button
                 onClick={handleStartEdit}
-                className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+                disabled={!canEdit}
+                className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Pencil className="w-3.5 h-3.5" />
-                Edit
+                Edit Overrides
               </button>
             )}
           </div>
@@ -181,9 +197,14 @@ export function ValuesViewer({
             Viewing historical values. Switch back to the latest revision before editing or applying changes.
           </div>
         )}
+        {!overridesLoaded && (
+          <div role="alert" className="mb-3 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
+            User overrides could not be loaded. Editing and applying changes are disabled to preserve stored overrides.
+          </div>
+        )}
         <div className="flex flex-col items-center justify-center h-32 text-theme-text-tertiary gap-2">
           <Settings className="w-8 h-8 text-theme-text-disabled" />
-          <span>{showAllValues ? 'No computed values' : 'No user-supplied values'}</span>
+          <span>{showEffectiveValues ? 'No effective values' : overridesLoaded ? 'No user overrides' : 'User overrides unavailable'}</span>
         </div>
       </div>
     )
@@ -197,7 +218,7 @@ export function ValuesViewer({
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-theme-text-secondary">
-            {isEditing ? 'Editing Values' : showAllValues ? 'All Values (Computed)' : 'User-Supplied Values'}
+            {isEditing ? 'Editing User Overrides' : showEffectiveValues ? 'Effective Values' : 'User Overrides'}
           </span>
           {isHistoricalRevision && !isEditing && (
             <span className="badge-sm bg-theme-hover/50 text-theme-text-secondary">revision {revision}</span>
@@ -211,7 +232,7 @@ export function ValuesViewer({
         <div className="flex items-center gap-2">
           {!isEditing && (
             <>
-              <ToggleButton showAll={showAllValues} onToggle={onToggleAllValues} disabled={isEditing} />
+              <ValuesViewToggle showEffective={showEffectiveValues} onToggle={onToggleEffectiveValues} disabled={isEditing} />
               <button
                 onClick={() => onCopy(yamlContent)}
                 className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
@@ -219,13 +240,14 @@ export function ValuesViewer({
                 {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
                 Copy
               </button>
-              {canEdit && (
+              {canOfferEdit && (
                 <button
                   onClick={handleStartEdit}
-                  className="flex items-center gap-1 px-2 py-1 text-xs text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 rounded border border-blue-500/30"
+                  disabled={!canEdit}
+                  className="flex items-center gap-1 px-2 py-1 text-xs text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 rounded border border-blue-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Pencil className="w-3.5 h-3.5" />
-                  Edit
+                  Edit Overrides
                 </button>
               )}
             </>
@@ -241,7 +263,7 @@ export function ValuesViewer({
               </button>
               <button
                 onClick={handlePreview}
-                disabled={!!yamlError || previewMutation.isPending || isHistoricalRevision}
+                disabled={!!yamlError || previewMutation.isPending || isHistoricalRevision || !overridesLoaded || isLoading}
                 className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded border border-theme-border disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {previewMutation.isPending ? (
@@ -254,7 +276,7 @@ export function ValuesViewer({
               <Tooltip content={!canHelmWrite ? helmActReason : ''}>
               <button
                 onClick={handleApply}
-                disabled={!!yamlError || applyMutation.isPending || !canHelmWrite || isHistoricalRevision}
+                disabled={!!yamlError || applyMutation.isPending || !canHelmWrite || isHistoricalRevision || !overridesLoaded || isLoading}
                 className="flex items-center gap-1 px-2.5 py-1 text-xs btn-brand rounded disabled:cursor-not-allowed disabled:pointer-events-none"
               >
                 {applyMutation.isPending ? (
@@ -273,6 +295,18 @@ export function ValuesViewer({
       {isHistoricalRevision && (
         <div className="mb-3 rounded border border-theme-border bg-theme-elevated/40 px-3 py-2 text-xs text-theme-text-secondary">
           Viewing historical values. Switch back to the latest revision before editing or applying changes.
+        </div>
+      )}
+
+      {!overridesLoaded && (
+        <div role="alert" className="mb-3 rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
+          User overrides could not be loaded. Editing and applying changes are disabled to preserve stored overrides.
+        </div>
+      )}
+
+      {isEditing && isLoading && (
+        <div className="mb-3 rounded border border-theme-border bg-theme-elevated/40 px-3 py-2 text-xs text-theme-text-secondary">
+          Refreshing values. Your override edit session is preserved.
         </div>
       )}
 
@@ -325,28 +359,36 @@ export function ValuesViewer({
   )
 }
 
-function ToggleButton({ showAll, onToggle, disabled }: { showAll: boolean; onToggle: (show: boolean) => void; disabled?: boolean }) {
+function ValuesViewToggle({
+  showEffective,
+  onToggle,
+  disabled,
+}: {
+  showEffective: boolean
+  onToggle: (show: boolean) => void
+  disabled?: boolean
+}) {
   return (
     <div className={clsx('flex items-center bg-theme-elevated/50 rounded-md p-0.5 text-xs', disabled && 'opacity-50 pointer-events-none')}>
-      <button
-        onClick={() => onToggle(false)}
-        disabled={disabled}
-        className={clsx(
-          'px-2 py-1 rounded transition-colors',
-          !showAll ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
-        )}
-      >
-        User
-      </button>
       <button
         onClick={() => onToggle(true)}
         disabled={disabled}
         className={clsx(
           'px-2 py-1 rounded transition-colors',
-          showAll ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
+          showEffective ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
         )}
       >
-        All
+        Effective Values
+      </button>
+      <button
+        onClick={() => onToggle(false)}
+        disabled={disabled}
+        className={clsx(
+          'px-2 py-1 rounded transition-colors',
+          !showEffective ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
+        )}
+      >
+        User Overrides
       </button>
     </div>
   )

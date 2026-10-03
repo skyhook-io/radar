@@ -42,6 +42,7 @@ import type {
   UpgradeInfo,
   BatchUpgradeInfo,
   ValuesDiff,
+  ValuesDiffs,
   ValuesPreviewResponse,
   HelmRepository,
   ChartSearchResult,
@@ -5550,6 +5551,42 @@ export function useHelmValuesDiff(
       if (allValues) params.set("all", "true");
       return fetchJSON(
         `/helm/releases/${namespace}/${name}/values/diff?${params.toString()}`,
+      );
+    },
+    enabled: Boolean(
+      namespace &&
+      name &&
+      revision1 > 0 &&
+      revision2 > 0 &&
+      revision1 !== revision2 &&
+      enabled,
+    ),
+    staleTime: 60000,
+  });
+}
+
+export function useHelmValuesDiffs(
+  namespace: string,
+  name: string,
+  revision1: number,
+  revision2: number,
+  enabled = true,
+) {
+  return useQuery<ValuesDiffs>({
+    queryKey: [
+      "helm-values-diffs",
+      namespace,
+      name,
+      revision1,
+      revision2,
+    ],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        revision1: String(revision1),
+        revision2: String(revision2),
+      });
+      return fetchJSON(
+        `/helm/releases/${namespace}/${name}/values/diffs?${params.toString()}`,
       );
     },
     enabled: Boolean(

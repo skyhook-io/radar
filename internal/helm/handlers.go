@@ -103,6 +103,7 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Post("/releases/install-stream", h.handleInstallStream)
 		r.Get("/releases/{namespace}/{name}", h.handleGetRelease)
 		r.Get("/releases/{namespace}/{name}/manifest", h.handleGetManifest)
+		r.Get("/releases/{namespace}/{name}/values/diffs", h.handleGetValuesDiffs)
 		r.Get("/releases/{namespace}/{name}/values/diff", h.handleGetValuesDiff)
 		r.Get("/releases/{namespace}/{name}/values", h.handleGetValues)
 		r.Get("/releases/{namespace}/{name}/diff", h.handleGetDiff)
@@ -298,6 +299,34 @@ func (h *Handlers) handleGetValuesDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, diff)
+}
+
+// handleGetValuesDiffs returns both user-supplied and effective values diffs
+// from one load of each release revision. Member+ only — values often contain credentials.
+func (h *Handlers) handleGetValuesDiffs(w http.ResponseWriter, r *http.Request) {
+	if !requireCloudRole(w, r, auth.RoleMember, "diff Helm release values") {
+		return
+	}
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+
+	revision1, revision2, ok := parseRevisionPair(w, r)
+	if !ok {
+		return
+	}
+
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+	username, groups := userCreds(r)
+	diffs, err := client.GetValuesDiffsAsUser(namespace, name, revision1, revision2, username, groups)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, diffs)
 }
 
 // handleGetDiff returns the diff between two revisions. Member+ only

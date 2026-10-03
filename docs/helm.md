@@ -63,7 +63,8 @@ Radar surfaces that as a Helm operation instead of making the operator infer it 
 The Helm Compare page is optimized for incident debugging. It starts with the rendered Kubernetes manifest diff as the source of truth, then keeps supporting evidence below it:
 
 - Rendered resources: a compact index of Kubernetes object identities and meaningful in-place field changes.
-- Values: key-aware redacted user values diff.
+- Effective values: revision-aware computed values diff, including each revision's chart defaults and user overrides.
+- User overrides: key-aware redacted diff of values explicitly supplied to each revision.
 - Hooks: stable hook definition diff, ignoring runtime timestamps and volatile hook status.
 - Notes: release notes diff.
 

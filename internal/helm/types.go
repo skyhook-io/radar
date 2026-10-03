@@ -207,8 +207,9 @@ type ReleaseManifestResource struct {
 
 // HelmValues represents the values for a release
 type HelmValues struct {
-	UserSupplied map[string]any `json:"userSupplied"`
-	Computed     map[string]any `json:"computed,omitempty"`
+	UserSupplied       map[string]any `json:"userSupplied"`
+	UserSuppliedLoaded bool           `json:"userSuppliedLoaded"`
+	Computed           map[string]any `json:"computed,omitempty"`
 }
 
 // ValuesDiff represents a values diff between two revisions.
@@ -217,6 +218,15 @@ type ValuesDiff struct {
 	Revision2 int    `json:"revision2"`
 	AllValues bool   `json:"allValues"`
 	Diff      string `json:"diff"`
+}
+
+// ValuesDiffs contains both user-supplied and effective values diffs for the
+// same pair of release revisions.
+type ValuesDiffs struct {
+	Revision1           int    `json:"revision1"`
+	Revision2           int    `json:"revision2"`
+	UserSuppliedDiff    string `json:"userSuppliedDiff"`
+	EffectiveValuesDiff string `json:"effectiveValuesDiff"`
 }
 
 // ManifestDiff represents a diff between two revisions
