@@ -346,7 +346,7 @@ func TestCNPGClusterHA_EachReadIsAuthorizedOnItsOwn(t *testing.T) {
 		"nodes": got.Nodes, "quorum": got.Quorum.Object, "pdbs": got.PDBs.CNPGHASource,
 		"primaryLease": got.PrimaryLease.CNPGHASource, "jobs": got.Jobs.CNPGHASource, "rwEndpoints": got.RWEndpoints.CNPGHASource,
 	} {
-		if src.State != cnpgHAStateDenied || src.Grant == "" {
+		if src.State != cnpgHAStateDenied || src.Grant == nil {
 			t.Errorf("%s = %+v, want denied naming the grant", name, src)
 		}
 	}

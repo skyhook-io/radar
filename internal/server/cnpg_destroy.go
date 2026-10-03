@@ -41,6 +41,7 @@ var (
 	cnpgGrantDeletePVCs = Grant{Verb: "delete", Resource: "persistentvolumeclaims"}
 	cnpgGrantUpdatePVCs = Grant{Verb: "update", Resource: "persistentvolumeclaims"}
 	cnpgGrantListPVCs   = Grant{Verb: "list", Resource: "persistentvolumeclaims"}
+	cnpgGrantGetPVCs    = Grant{Verb: "get", Resource: "persistentvolumeclaims"}
 	cnpgGrantListJobs   = Grant{Verb: "list", Group: "batch", Resource: "jobs"}
 	cnpgGrantDeleteJobs = Grant{Verb: "delete", Group: "batch", Resource: "jobs"}
 	cnpgGrantPatchPool  = Grant{Verb: "patch", Group: cnpgGroup, Resource: "poolers"}

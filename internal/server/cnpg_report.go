@@ -563,7 +563,7 @@ func cnpgReportStripOperatorConfig(body []byte) []byte {
 func (b *cnpgReportBuilder) logs(pods []corev1.Pod, opts cnpgReportOptions) {
 	namespace := b.cluster.GetNamespace()
 	if b.s.grantPermission(b.r, cnpgGrantGetPodLogs.In(namespace)) == permissionDenied {
-		b.record(CNPGReportItem{Item: "Logs", CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadDenied, Grant: cnpgGrantGetPodLogs.In(namespace).String()}})
+		b.record(CNPGReportItem{Item: "Logs", CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadDenied, Grant: cnpgGrantGetPodLogs.In(namespace).Ref()}})
 		return
 	}
 	note := "query text inside PostgreSQL log records is omitted"

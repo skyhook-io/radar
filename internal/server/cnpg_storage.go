@@ -61,7 +61,7 @@ var (
 // the grant that would allow it.
 type CNPGStorageCoverage struct {
 	State  string `json:"state"`
-	Grant  string `json:"grant,omitempty"`
+	Grant  *Grant `json:"grant,omitempty"`
 	Reason string `json:"reason,omitempty"`
 	// Isolation, on usage read from Prometheus: how the series were tied to this cluster.
 	Isolation *prometheuspkg.SeriesIsolation `json:"isolation,omitempty"`
@@ -279,7 +279,7 @@ func (s *Server) handleCNPGClusterStorage(w http.ResponseWriter, r *http.Request
 // list grant — reading a Cluster never implies reading its claims.
 func (s *Server) cnpgClusterClaims(r *http.Request, cache *k8s.ResourceCache, cluster *unstructured.Unstructured) ([]*corev1.PersistentVolumeClaim, []CNPGStorageExcludedPV, CNPGStorageCoverage) {
 	namespace := cluster.GetNamespace()
-	grant := "list persistentvolumeclaims in " + namespace
+	grant := cnpgGrantListPVCs.In(namespace).Ref()
 	if !s.canRead(r, "", "persistentvolumeclaims", namespace, "list") {
 		return nil, nil, CNPGStorageCoverage{State: cnpgStorageStateDenied, Grant: grant}
 	}
@@ -496,7 +496,7 @@ func cnpgStorageVolumeOf(pvc *corev1.PersistentVolumeClaim, classes map[string]C
 // cnpgClaimUsage reads kubelet volume stats for the claims, behind the same
 // gate as the single-claim PVC chart.
 func (s *Server) cnpgClaimUsage(r *http.Request, namespace string, claims []string, anchors []prom.WorkloadPodIdentity) (CNPGStorageCoverage, prometheuspkg.PVCUsageBatch) {
-	grant := "get persistentvolumeclaims in " + namespace
+	grant := cnpgGrantGetPVCs.In(namespace).Ref()
 	if !s.prometheusAuthGate(r, "", "persistentvolumeclaims", namespace, "get") {
 		return CNPGStorageCoverage{State: cnpgUsageStateDenied, Grant: grant}, prometheuspkg.PVCUsageBatch{}
 	}
@@ -620,9 +620,9 @@ func cnpgStorageTargetOf(obj map[string]any, role, tablespace, base string, path
 func (s *Server) cnpgStorageWAL(w http.ResponseWriter, r *http.Request, cache *k8s.ResourceCache, cluster *unstructured.Unstructured, byInstance map[string]*CNPGStorageInstance) CNPGStorageCoverage {
 	namespace := cluster.GetNamespace()
 	if !s.canRead(r, "", "pods", namespace, "list") {
-		return CNPGStorageCoverage{State: cnpgStorageStateDenied, Grant: "list pods in " + namespace}
+		return CNPGStorageCoverage{State: cnpgStorageStateDenied, Grant: cnpgGrantListPods.In(namespace).Ref()}
 	}
-	grant := "get pods/proxy in " + namespace
+	grant := cnpgGrantGetPodsProxy.In(namespace).Ref()
 	if s.grantPermission(r, cnpgGrantGetPodsProxy.In(namespace)) == permissionDenied {
 		return CNPGStorageCoverage{State: cnpgStorageStateDenied, Grant: grant}
 	}
@@ -766,7 +766,7 @@ type CNPGClusterDisk struct {
 	Namespace string                         `json:"namespace"`
 	Name      string                         `json:"name"`
 	State     string                         `json:"state"`
-	Grant     string                         `json:"grant,omitempty"`
+	Grant     *Grant                         `json:"grant,omitempty"`
 	Reason    string                         `json:"reason,omitempty"`
 	Claims    int                            `json:"claims"`
 	Measured  int                            `json:"measured"`
@@ -865,7 +865,7 @@ func (s *Server) cnpgNamespaceDisk(r *http.Request, cache *k8s.ResourceCache, na
 		return out
 	}
 	if !s.canRead(r, "", "persistentvolumeclaims", namespace, "list") {
-		return all(CNPGClusterDisk{State: cnpgStorageStateDenied, Grant: "list persistentvolumeclaims in " + namespace})
+		return all(CNPGClusterDisk{State: cnpgStorageStateDenied, Grant: cnpgGrantListPVCs.In(namespace).Ref()})
 	}
 	req, err := labels.NewRequirement(cnpgClusterLabel, selection.Exists, nil)
 	if err != nil {

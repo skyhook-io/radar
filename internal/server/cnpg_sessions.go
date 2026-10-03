@@ -146,7 +146,7 @@ func cnpgExecSourceState(err error) CNPGRuntimeSource {
 
 type CNPGExecPermission struct {
 	Exec  string `json:"exec"`
-	Grant string `json:"grant"`
+	Grant *Grant `json:"grant,omitempty"`
 }
 
 // CNPGSessionsResponse is GET /api/cnpg/clusters/{ns}/{name}/sessions.
@@ -319,7 +319,7 @@ func (s *Server) handleCNPGClusterSessions(w http.ResponseWriter, r *http.Reques
 		Cluster:    CNPGRuntimeObjectRef{Namespace: namespace, Name: name, UID: cluster.GetUID()},
 		Pod:        want,
 		SampledAt:  time.Now().UTC().Format(time.RFC3339),
-		Permission: CNPGExecPermission{Exec: permissionAllowed, Grant: cnpgGrantCreateExec.In(namespace).String()},
+		Permission: CNPGExecPermission{Exec: permissionAllowed, Grant: cnpgGrantCreateExec.In(namespace).Ref()},
 		Instances:  make([]CNPGSessionInstance, 0, len(pods)),
 	}
 	var target *corev1.Pod
@@ -343,7 +343,7 @@ func (s *Server) handleCNPGClusterSessions(w http.ResponseWriter, r *http.Reques
 
 	resp.Permission.Exec = s.grantPermission(r, cnpgGrantCreateExec.In(namespace))
 	if resp.Permission.Exec == permissionDenied {
-		resp.CNPGRuntimeSource = CNPGRuntimeSource{State: cnpgExecStateDenied, Error: "reading sessions needs " + resp.Permission.Grant}
+		resp.CNPGRuntimeSource = CNPGRuntimeSource{State: cnpgExecStateDenied, Error: "reading sessions needs " + grantText(resp.Permission.Grant)}
 		s.writeJSON(w, resp)
 		return
 	}

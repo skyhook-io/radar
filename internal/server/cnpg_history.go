@@ -140,7 +140,7 @@ func (s *Server) handleCNPGClusterHistory(w http.ResponseWriter, r *http.Request
 
 	req := prometheuspkg.CNPGHistoryRequest{Namespace: namespace, Cluster: name, Range: rng, End: end}
 	if !s.prometheusAuthGate(r, "", "pods", namespace, "get") {
-		req.PodsDenied = "get pods in " + namespace
+		req.PodsDenied = cnpgGrantGetPods.In(namespace).Ref()
 	}
 	claims, _, claimCov := s.cnpgClusterClaims(r, cache, cluster)
 	switch {
@@ -149,13 +149,13 @@ func (s *Server) handleCNPGClusterHistory(w http.ResponseWriter, r *http.Request
 	case claimCov.State != cnpgStorageStateOK:
 		req.PVCReason = claimCov.Reason
 	case !s.prometheusAuthGate(r, "", "persistentvolumeclaims", namespace, "get"):
-		req.PVCDenied = "get persistentvolumeclaims in " + namespace
+		req.PVCDenied = cnpgGrantGetPVCs.In(namespace).Ref()
 	default:
 		req.Claims = claimNames(claims)
 	}
 
 	anchors := cnpgHistoryAnchors(cache, cluster)
-	if req.PodsDenied == "" {
+	if req.PodsDenied == nil {
 		matchers, iso, err := prometheuspkg.ResolveCNPGScope(r.Context(), namespace, selector, anchors, rng.Duration)
 		if err != nil {
 			resp.State, resp.Reason = cnpgHistoryScopeFailure(err)
@@ -173,7 +173,7 @@ func (s *Server) handleCNPGClusterHistory(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	key := strings.Join([]string{namespace, name, string(cluster.GetUID()), rng.Name, end.Format(time.RFC3339), req.Matchers, req.PVCMatchers, req.PVCAmbiguous, req.PodsDenied, req.PVCDenied, req.PVCReason, strings.Join(req.Claims, ",")}, "\x00")
+	key := strings.Join([]string{namespace, name, string(cluster.GetUID()), rng.Name, end.Format(time.RFC3339), req.Matchers, req.PVCMatchers, req.PVCAmbiguous, grantText(req.PodsDenied), grantText(req.PVCDenied), req.PVCReason, strings.Join(req.Claims, ",")}, "\x00")
 	charts, hit := cnpgHistoryMemoGet(key, now)
 	if !hit {
 		var err error
@@ -283,7 +283,7 @@ type CNPGClusterFleetMetrics struct {
 // scopeMismatch, error or notRead.
 type CNPGFleetLag struct {
 	State   string   `json:"state"`
-	Grant   string   `json:"grant,omitempty"`
+	Grant   *Grant   `json:"grant,omitempty"`
 	Reason  string   `json:"reason,omitempty"`
 	Seconds *float64 `json:"seconds,omitempty"`
 	Pod     string   `json:"pod,omitempty"`
@@ -300,7 +300,7 @@ type CNPGFleetLag struct {
 // noSeries, denied, unavailable, error or notRead.
 type CNPGFleetGrowth struct {
 	State        string                         `json:"state"`
-	Grant        string                         `json:"grant,omitempty"`
+	Grant        *Grant                         `json:"grant,omitempty"`
 	Reason       string                         `json:"reason,omitempty"`
 	BytesPerHour *float64                       `json:"bytesPerHour,omitempty"`
 	Claim        string                         `json:"claim,omitempty"`
@@ -419,7 +419,7 @@ func (s *Server) cnpgNamespaceFleetMetrics(r *http.Request, cache *k8s.ResourceC
 	}
 
 	if !podsAllowed {
-		fillLag(CNPGFleetLag{State: cnpgHistoryStateDenied, Grant: "get pods in " + namespace})
+		fillLag(CNPGFleetLag{State: cnpgHistoryStateDenied, Grant: cnpgGrantGetPods.In(namespace).Ref()})
 	} else if scopeErr != nil {
 		state, reason := cnpgHistoryScopeFailure(scopeErr)
 		fillLag(CNPGFleetLag{State: state, Reason: reason})
@@ -488,10 +488,10 @@ func (s *Server) cnpgNamespaceFleetMetrics(r *http.Request, cache *k8s.ResourceC
 // A non-empty returned State says why growth is not read for the namespace.
 func (s *Server) cnpgFleetClaims(r *http.Request, cache *k8s.ResourceCache, namespace string, clusters []*unstructured.Unstructured) (map[string][]*corev1.PersistentVolumeClaim, CNPGFleetGrowth) {
 	if !s.canRead(r, "", "persistentvolumeclaims", namespace, "list") {
-		return nil, CNPGFleetGrowth{State: cnpgStorageStateDenied, Grant: "list persistentvolumeclaims in " + namespace}
+		return nil, CNPGFleetGrowth{State: cnpgStorageStateDenied, Grant: cnpgGrantListPVCs.In(namespace).Ref()}
 	}
 	if !s.prometheusAuthGate(r, "", "persistentvolumeclaims", namespace, "get") {
-		return nil, CNPGFleetGrowth{State: cnpgStorageStateDenied, Grant: "get persistentvolumeclaims in " + namespace}
+		return nil, CNPGFleetGrowth{State: cnpgStorageStateDenied, Grant: cnpgGrantGetPVCs.In(namespace).Ref()}
 	}
 	req, err := labels.NewRequirement(cnpgClusterLabel, selection.Exists, nil)
 	if err != nil {

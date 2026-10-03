@@ -150,7 +150,7 @@ func TestCNPGClusterHistory_GatesPerSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range got.Charts {
-		if c.State != prometheuspkg.CNPGHistoryStateDenied || len(c.Series) != 0 || c.Grant == "" {
+		if c.State != prometheuspkg.CNPGHistoryStateDenied || len(c.Series) != 0 || c.Grant == nil {
 			t.Errorf("%s = %+v, want denied without series", c.ID, c)
 		}
 	}

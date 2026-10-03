@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -117,7 +118,7 @@ type CNPGHistoryChart struct {
 	SeriesBy   string                 `json:"seriesBy"`
 	State      string                 `json:"state"`
 	Reason     string                 `json:"reason,omitempty"`
-	Grant      string                 `json:"grant,omitempty"`
+	Grant      *auth.Grant            `json:"grant,omitempty"`
 	Thresholds []CNPGHistoryThreshold `json:"thresholds,omitempty"`
 	Series     []prom.Series          `json:"series"`
 	Omitted    int                    `json:"omitted,omitempty"`
@@ -254,8 +255,8 @@ type CNPGHistoryRequest struct {
 	// PVCAmbiguous says why the claims' identity could not be settled.
 	PVCAmbiguous string
 	// PodsDenied / PVCDenied carry the grant that is missing, empty when allowed.
-	PodsDenied string
-	PVCDenied  string
+	PodsDenied *auth.Grant
+	PVCDenied  *auth.Grant
 	// PVCReason explains an empty Claims when the claims were not denied.
 	PVCReason string
 	Claims    []string
@@ -288,10 +289,10 @@ func queryCNPGHistory(ctx context.Context, q seriesQuerier, req CNPGHistoryReque
 		c := &charts[i]
 		*c = CNPGHistoryChart{ID: d.id, Title: d.title, Unit: d.unit, Source: d.source, SeriesBy: d.seriesBy, Thresholds: d.thresholds, Series: []prom.Series{}, Steps: steps}
 		switch {
-		case d.pvc && req.PVCDenied != "":
+		case d.pvc && req.PVCDenied != nil:
 			c.State, c.Grant = CNPGHistoryStateDenied, req.PVCDenied
 			continue
-		case !d.pvc && req.PodsDenied != "":
+		case !d.pvc && req.PodsDenied != nil:
 			c.State, c.Grant = CNPGHistoryStateDenied, req.PodsDenied
 			continue
 		case d.pvc && req.PVCAmbiguous != "":

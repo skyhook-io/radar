@@ -55,7 +55,7 @@ var (
 // needs; Reason carries the error for anything else.
 type CNPGReadCoverage struct {
 	State  string `json:"state"`
-	Grant  string `json:"grant,omitempty"`
+	Grant  *Grant `json:"grant,omitempty"`
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -64,7 +64,7 @@ type CNPGReadCoverage struct {
 // client, so the apiserver has the final say either way.
 func (s *Server) cnpgGatedRead(r *http.Request, g Grant, namespace string, read func() error) CNPGReadCoverage {
 	if s.grantPermission(r, g.In(namespace)) == permissionDenied {
-		return CNPGReadCoverage{State: cnpgReadDenied, Grant: g.In(namespace).String()}
+		return CNPGReadCoverage{State: cnpgReadDenied, Grant: g.In(namespace).Ref()}
 	}
 	return cnpgReadOutcome(read(), g, namespace)
 }
@@ -74,7 +74,7 @@ func cnpgReadOutcome(err error, g Grant, namespace string) CNPGReadCoverage {
 	case err == nil:
 		return CNPGReadCoverage{State: cnpgReadOK}
 	case apierrors.IsForbidden(err):
-		return CNPGReadCoverage{State: cnpgReadDenied, Grant: g.In(namespace).String()}
+		return CNPGReadCoverage{State: cnpgReadDenied, Grant: g.In(namespace).Ref()}
 	case apierrors.IsNotFound(err):
 		return CNPGReadCoverage{State: cnpgReadNotFound, Reason: err.Error()}
 	default:

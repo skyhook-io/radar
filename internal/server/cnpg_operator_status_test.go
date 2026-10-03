@@ -25,7 +25,7 @@ func TestCNPGOperatorLeading(t *testing.T) {
 	ok := CNPGOperatorLeader{CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadOK}}
 	stale := ok
 	stale.Stale = true
-	denied := CNPGOperatorLeader{CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadDenied, Grant: "get leases in cnpg-system"}}
+	denied := CNPGOperatorLeader{CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadDenied, Grant: cnpgGrantGetLeases.In("cnpg-system").Ref()}}
 	cases := []struct {
 		name    string
 		d       *appsv1.Deployment
@@ -75,7 +75,7 @@ func TestCNPGWebhookRejects(t *testing.T) {
 	if got, _, unknown := cnpgWebhookRejects(cfg("Fail"), svc(nil)); got != nil || unknown == "" {
 		t.Errorf("unreadable endpoints must be unknown: %v %q", got, unknown)
 	}
-	denied := []CNPGOperatorWebhookConfig{{Kind: "ValidatingWebhookConfiguration", Name: "x", CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadDenied, Grant: "get validatingwebhookconfigurations"}}}
+	denied := []CNPGOperatorWebhookConfig{{Kind: "ValidatingWebhookConfiguration", Name: "x", CNPGReadCoverage: CNPGReadCoverage{State: cnpgReadDenied, Grant: cnpgGrantGetValidatingWH.Ref()}}}
 	if got, _, unknown := cnpgWebhookRejects(denied, nil); got != nil || !strings.Contains(unknown, "get validatingwebhookconfigurations") {
 		t.Errorf("denied config: %v %q", got, unknown)
 	}

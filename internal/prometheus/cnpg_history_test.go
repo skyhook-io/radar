@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -210,7 +211,7 @@ func TestQueryCNPGHistoryStatesPerChart(t *testing.T) {
 	}
 	charts := queryCNPGHistory(context.Background(), q, CNPGHistoryRequest{
 		Namespace: "pg", Cluster: "pg", Range: r, End: time.Unix(1_700_000_000, 0), Matchers: `cluster_id="a"`,
-		PVCDenied: "get persistentvolumeclaims in pg",
+		PVCDenied: &auth.Grant{Verb: "get", Resource: "persistentvolumeclaims", Namespace: "pg"},
 	})
 	by := map[string]CNPGHistoryChart{}
 	for _, c := range charts {
@@ -223,7 +224,7 @@ func TestQueryCNPGHistoryStatesPerChart(t *testing.T) {
 	if by["deadlocks"].State != CNPGHistoryStateError {
 		t.Errorf("deadlocks state = %s", by["deadlocks"].State)
 	}
-	if by["pvcUsed"].State != CNPGHistoryStateDenied || by["pvcUsed"].Grant == "" {
+	if by["pvcUsed"].State != CNPGHistoryStateDenied || by["pvcUsed"].Grant == nil || *by["pvcUsed"].Grant != (auth.Grant{Verb: "get", Resource: "persistentvolumeclaims", Namespace: "pg"}) {
 		t.Errorf("pvc chart = %+v", by["pvcUsed"])
 	}
 	if by["walSize"].State != CNPGHistoryStateNoSeries || !strings.HasPrefix(by["walSize"].Reason, "not scraped") {
@@ -254,7 +255,7 @@ func TestQueryCNPGHistoryCapsSeries(t *testing.T) {
 		}
 		return &prom.QueryResult{Series: out}, nil
 	}}
-	charts := queryCNPGHistory(context.Background(), q, CNPGHistoryRequest{Namespace: "pg", Cluster: "pg", Range: r, End: time.Now(), PodsDenied: ""})
+	charts := queryCNPGHistory(context.Background(), q, CNPGHistoryRequest{Namespace: "pg", Cluster: "pg", Range: r, End: time.Now()})
 	for _, c := range charts {
 		if c.ID == "databaseSize" && (len(c.Series) != cnpgHistoryMaxSeries || c.Omitted != 20-cnpgHistoryMaxSeries) {
 			t.Fatalf("databaseSize kept %d, omitted %d", len(c.Series), c.Omitted)

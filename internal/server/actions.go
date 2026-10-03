@@ -54,7 +54,7 @@ type ActionCapability struct {
 	Allowed    bool   `json:"allowed"`
 	Reason     string `json:"reason,omitempty"`
 	Permission string `json:"permission"`
-	Grant      string `json:"grant,omitempty"`
+	Grant      *Grant `json:"grant,omitempty"`
 }
 
 // ActionRequest is the POST body of every action.
@@ -239,6 +239,14 @@ func mergePatchAtVersion(ctx context.Context, dyn dynamic.Interface, gvr schema.
 	return err
 }
 
+// grantText words an optional grant, "" when there is none.
+func grantText(g *Grant) string {
+	if g == nil {
+		return ""
+	}
+	return g.String()
+}
+
 // grantPermission answers one grant for the caller: allowed, denied, or
 // unknown when the SubjectAccessReview itself failed.
 func (s *Server) grantPermission(r *http.Request, g Grant) string {
@@ -328,22 +336,22 @@ func capabilityVerdict(guard string, perms []string, grants []Grant) ActionCapab
 	for i, p := range perms {
 		if p == permissionDenied {
 			out.Permission = permissionDenied
-			out.Grant = grants[i].String()
+			out.Grant = grants[i].Ref()
 			break
 		}
 		if p == permissionUnknown {
 			out.Permission = permissionUnknown
-			if out.Grant == "" {
-				out.Grant = grants[i].String()
+			if out.Grant == nil {
+				out.Grant = grants[i].Ref()
 			}
 		}
 	}
 	if out.Permission == permissionAllowed {
-		out.Grant = ""
+		out.Grant = nil
 	}
 	switch {
 	case out.Permission == permissionDenied:
-		out.Reason = "You are not allowed to " + out.Grant
+		out.Reason = "You are not allowed to " + out.Grant.String()
 	case guard != "":
 		out.Reason = guard
 	default:

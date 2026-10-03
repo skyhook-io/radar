@@ -342,7 +342,7 @@ func (s *Server) cnpgOperatorWebhooks(r *http.Request, typed kubernetes.Interfac
 	add := func(kind, name string, g Grant, read func() ([]admissionv1.WebhookClientConfig, []string, []string, error)) {
 		cfg := CNPGOperatorWebhookConfig{Kind: kind, Name: name, Webhooks: []CNPGOperatorWebhook{}}
 		if s.grantPermission(r, g) == permissionDenied {
-			cfg.CNPGReadCoverage = CNPGReadCoverage{State: cnpgReadDenied, Grant: g.String()}
+			cfg.CNPGReadCoverage = CNPGReadCoverage{State: cnpgReadDenied, Grant: g.Ref()}
 			configs = append(configs, cfg)
 			return
 		}

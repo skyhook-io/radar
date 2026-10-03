@@ -698,10 +698,10 @@ func TestCNPGActionCapabilitiesPermissionDenied(t *testing.T) {
 		t.Fatal(err)
 	}
 	sw := resp.Actions.Switchover
-	if sw.Allowed || sw.Permission != permissionDenied || !strings.Contains(sw.Grant, "clusters/status") || !strings.Contains(sw.Reason, "patch clusters/status") {
+	if sw.Allowed || sw.Permission != permissionDenied || sw.Grant == nil || *sw.Grant != cnpgGrantPatchStatus.In("db") || !strings.Contains(sw.Reason, "patch clusters/status") {
 		t.Errorf("switchover = %+v, want denied naming patch clusters/status", sw)
 	}
-	if b := resp.Actions.Backup; b.Allowed || !strings.Contains(b.Grant, "create backups") {
+	if b := resp.Actions.Backup; b.Allowed || b.Grant == nil || *b.Grant != cnpgGrantCreateBackups.In("db") {
 		t.Errorf("backup = %+v, want denied naming create backups", b)
 	}
 	if !resp.Actions.Restart.Allowed || resp.Actions.Restart.Permission != permissionAllowed {

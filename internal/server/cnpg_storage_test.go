@@ -337,10 +337,10 @@ func TestCNPGClusterStorage_ReadingTheClusterDoesNotImplyItsClaims(t *testing.T)
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Volumes.State != cnpgStorageStateDenied || got.Volumes.Grant != "list persistentvolumeclaims in pgst3" {
+	if got.Volumes.State != cnpgStorageStateDenied || got.Volumes.Grant == nil || *got.Volumes.Grant != cnpgGrantListPVCs.In("pgst3") {
 		t.Errorf("volumes = %+v", got.Volumes)
 	}
-	if got.WAL.State != cnpgStorageStateDenied || got.WAL.Grant != "list pods in pgst3" {
+	if got.WAL.State != cnpgStorageStateDenied || got.WAL.Grant == nil || *got.WAL.Grant != cnpgGrantListPods.In("pgst3") {
 		t.Errorf("wal = %+v", got.WAL)
 	}
 	for _, in := range got.Instances {

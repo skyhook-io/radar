@@ -194,7 +194,7 @@ func cnpgOperatorLeading(d *appsv1.Deployment, leader CNPGOperatorLeader) (*bool
 		}
 		return &t, ""
 	case cnpgReadDenied:
-		return nil, "its leader lease is not readable (needs " + leader.Grant + ")"
+		return nil, "its leader lease is not readable (needs " + grantText(leader.Grant) + ")"
 	default:
 		if leader.Reason != "" {
 			log.Printf("[cnpg] Operator %s/%s leader lease unread: %s", d.Namespace, d.Name, leader.Reason)
@@ -219,7 +219,7 @@ func cnpgWebhookRejects(configs []CNPGOperatorWebhookConfig, services []CNPGOper
 		case cnpgReadNotFound:
 			continue
 		case cnpgReadDenied:
-			unknown = append(unknown, cfg.Kind+" "+cfg.Name+" is not readable (needs "+cfg.Grant+")")
+			unknown = append(unknown, cfg.Kind+" "+cfg.Name+" is not readable (needs "+grantText(cfg.Grant)+")")
 			continue
 		default:
 			unknown = append(unknown, cfg.Kind+" "+cfg.Name+" could not be read")
@@ -233,8 +233,8 @@ func cnpgWebhookRejects(configs []CNPGOperatorWebhookConfig, services []CNPGOper
 			switch {
 			case !ok || svc.ReadyEndpoints == nil:
 				grant := ""
-				if ok && svc.Grant != "" {
-					grant = " (needs " + svc.Grant + ")"
+				if ok && svc.Grant != nil {
+					grant = " (needs " + svc.Grant.String() + ")"
 				}
 				unknown = append(unknown, "the endpoints of webhook Service "+wh.Service+" are not readable"+grant)
 			case *svc.ReadyEndpoints == 0:

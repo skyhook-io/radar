@@ -124,7 +124,7 @@ func TestCNPGRecoverySnapshotReportsDeniedReads(t *testing.T) {
 		return true, nil, apiForbidden("pods")
 	})
 	snap := (&Server{}).cnpgRecoverySnapshot(httptest.NewRequest(http.MethodGet, "/", nil), typed, cnpgRestoredCluster())
-	if snap.Coverage["pods"].State != cnpgReadDenied || !strings.Contains(snap.Coverage["pods"].Grant, "list pods") {
+	if g := snap.Coverage["pods"].Grant; snap.Coverage["pods"].State != cnpgReadDenied || g == nil || g.Verb != "list" || g.Resource != "pods" {
 		t.Fatalf("a denied Pod list must be reported with its grant: %+v", snap.Coverage["pods"])
 	}
 	if len(snap.Pods) != 0 {
@@ -463,7 +463,7 @@ func TestHandleCNPGRestoreCapability(t *testing.T) {
 		if allowed && (!got.Allowed || got.Permission != permissionAllowed) {
 			t.Errorf("allowed = %+v", got)
 		}
-		if !allowed && (got.Allowed || got.Permission != permissionDenied || got.Grant != "create clusters (postgresql.cnpg.io) in namespace db" || !strings.Contains(got.Reason, got.Grant)) {
+		if !allowed && (got.Allowed || got.Permission != permissionDenied || got.Grant == nil || *got.Grant != cnpgGrantCreateClusters.In("db") || got.Grant.String() != "create clusters (postgresql.cnpg.io) in namespace db" || !strings.Contains(got.Reason, got.Grant.String())) {
 			t.Errorf("denied = %+v, want the grant named", got)
 		}
 	}

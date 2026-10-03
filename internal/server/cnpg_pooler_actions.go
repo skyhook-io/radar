@@ -333,7 +333,7 @@ func (s *Server) handleCNPGPgBouncerState(w http.ResponseWriter, r *http.Request
 	resp := CNPGPgBouncerStateResponse{
 		Pooler:     CNPGRuntimeObjectRef{Namespace: namespace, Name: name, UID: pooler.GetUID()},
 		SampledAt:  time.Now().UTC().Format(time.RFC3339),
-		Permission: CNPGExecPermission{Exec: s.grantPermission(r, cnpgGrantCreateExec.In(namespace)), Grant: cnpgGrantCreateExec.In(namespace).String()},
+		Permission: CNPGExecPermission{Exec: s.grantPermission(r, cnpgGrantCreateExec.In(namespace)), Grant: cnpgGrantCreateExec.In(namespace).Ref()},
 		Pods:       make([]CNPGPgBouncerState, len(pods)),
 	}
 	for i, p := range pods {
@@ -341,7 +341,7 @@ func (s *Server) handleCNPGPgBouncerState(w http.ResponseWriter, r *http.Request
 	}
 	if resp.Permission.Exec == permissionDenied {
 		for i := range resp.Pods {
-			resp.Pods[i].CNPGRuntimeSource = CNPGRuntimeSource{State: cnpgExecStateDenied, Error: "reading PgBouncer state needs " + resp.Permission.Grant}
+			resp.Pods[i].CNPGRuntimeSource = CNPGRuntimeSource{State: cnpgExecStateDenied, Error: "reading PgBouncer state needs " + grantText(resp.Permission.Grant)}
 		}
 		s.writeJSON(w, resp)
 		return

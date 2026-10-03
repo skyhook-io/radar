@@ -128,7 +128,7 @@ type CNPGRuntimeObjectRef struct {
 
 type CNPGRuntimePermission struct {
 	Proxy string `json:"proxy"`
-	Grant string `json:"grant"`
+	Grant *Grant `json:"grant,omitempty"`
 }
 
 // CNPGRuntimeSource describes one read. State is ok | partial | denied |
@@ -431,7 +431,7 @@ func (s *Server) authorizeCNPGRuntime(w http.ResponseWriter, r *http.Request, na
 }
 
 func cnpgRuntimePermission(namespace string, allowed bool) CNPGRuntimePermission {
-	p := CNPGRuntimePermission{Proxy: "allowed", Grant: "get pods/proxy in " + namespace}
+	p := CNPGRuntimePermission{Proxy: "allowed", Grant: cnpgGrantGetPodsProxy.In(namespace).Ref()}
 	if !allowed {
 		p.Proxy = "denied"
 	}

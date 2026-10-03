@@ -63,7 +63,7 @@ var (
 type CNPGHASource struct {
 	State  string `json:"state"`
 	Reason string `json:"reason,omitempty"`
-	Grant  string `json:"grant,omitempty"`
+	Grant  *Grant `json:"grant,omitempty"`
 }
 
 type CNPGClusterHAResponse struct {
@@ -291,12 +291,12 @@ func (s *Server) cnpgClusterHA(r *http.Request, c cnpgHAClients, cache *k8s.Reso
 }
 
 func cnpgHADenied(g Grant, namespace string) CNPGHASource {
-	return CNPGHASource{State: cnpgHAStateDenied, Grant: g.In(namespace).String(), Reason: "You are not allowed to " + g.In(namespace).String()}
+	g = g.In(namespace)
+	return CNPGHASource{State: cnpgHAStateDenied, Grant: g.Ref(), Reason: "You are not allowed to " + g.String()}
 }
 
 func cnpgHAClusterDenied(g Grant) CNPGHASource {
-	grant := g.String()
-	return CNPGHASource{State: cnpgHAStateDenied, Grant: grant, Reason: "You are not allowed to " + grant}
+	return CNPGHASource{State: cnpgHAStateDenied, Grant: g.Ref(), Reason: "You are not allowed to " + g.String()}
 }
 
 // cnpgHAReadError classifies an impersonated read's failure. NotFound is left
