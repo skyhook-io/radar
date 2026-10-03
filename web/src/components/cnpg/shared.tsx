@@ -53,13 +53,15 @@ export function CNPGWorkspaceHeader({ title, subtitle, actions }: { title: strin
   )
 }
 
+/** How much of a kind was read, in a few words ("not cached by Radar in pg"). */
+export function coverageLabel(cov: CNPGKindCoverage | undefined): string {
+  if (cov?.state === 'partial' && cov.uncachedNamespaces?.length) return `not cached by Radar in ${cov.uncachedNamespaces.join(', ')}`
+  return COVERAGE_LABEL[cov?.state ?? ''] ?? cov?.state ?? 'unknown'
+}
+
 export function CoverageNotice({ fleet, data }: { fleet: CNPGFleet; data: CNPGWorkspaceResponse }) {
   if (fleet.incompleteKinds.length === 0) return null
-  const parts = fleet.incompleteKinds.map((k) => {
-    const cov = data.coverage[k]
-    const label = COVERAGE_LABEL[cov?.state ?? ''] ?? cov?.state
-    return `${CNPG_KIND_BY_KEY[k].kind} (${label})`
-  })
+  const parts = fleet.incompleteKinds.map((k) => `${CNPG_KIND_BY_KEY[k].kind} (${coverageLabel(data.coverage[k])})`)
   return (
     <Notice>
       Some CloudNativePG data is not readable: {parts.join(', ')}. Facts built on it read “No access” or “unknown” rather than none, and counts are lower bounds.

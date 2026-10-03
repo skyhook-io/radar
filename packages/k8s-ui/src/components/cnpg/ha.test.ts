@@ -70,7 +70,6 @@ function row(over: Partial<CNPGFleetRow> = {}): CNPGFleetRow {
     problems: [],
     attention: false,
     categories: new Set(),
-    gitops: null,
     ...over,
   }
 }

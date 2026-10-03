@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { CNPGSchedulePreview, CNPGWorkspaceResponse, Grant, TimelineEvent } from '@skyhook-io/k8s-ui'
+import type { CNPGKindCoverage, CNPGSchedulePreview, CNPGWorkspaceResponse, Grant, TimelineEvent } from '@skyhook-io/k8s-ui'
 import { fetchJSON, useRadarFeature } from './client'
 import { shouldRetryRadarQuery } from './radarFeatures'
 import type { CNPGOperatorDiagnosis } from './cnpg-recovery'
@@ -25,10 +25,8 @@ export function useCNPGWorkspace(namespaces: string[], options?: { enabled?: boo
   })
 }
 
-export interface CNPGOperatorCoverage {
-  state: 'full' | 'partial' | 'denied' | 'syncing' | 'error'
-  deniedNamespaces?: string[]
-}
+/** The operator's Deployments and Services are read with the same per-kind coverage as the workspace. */
+export type CNPGOperatorCoverage = CNPGKindCoverage
 
 export interface CNPGOperatorComponent {
   role: 'operator' | 'plugin'

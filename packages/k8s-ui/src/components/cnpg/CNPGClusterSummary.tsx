@@ -10,7 +10,7 @@ import type { CNPGDimension } from './ha'
 import { PrimaryConflictNote } from './primitives'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { StatusDot, toneTextClass } from '../ui/status-tone'
-import { FactGrid, FactRow, FactSource, FactValue, ProblemCallout, ProblemList, SectionHeading } from '../workspace'
+import { FactGrid, FactRow, FactSource, FactValue, ProblemCallout, ProblemList, SectionHeading, ManagedByText, managedByLabel } from '../workspace'
 
 function ReadyCount({ row }: { row: CNPGFleetRow }) {
   const r = cnpgReadyInstances(row)
@@ -253,9 +253,9 @@ export function CNPGClusterSummary({
             </span>
           )}
         </FactRow>
-        {row.gitops && (
+        {row.managedBy && managedByLabel(row.managedBy) && (
           <FactRow label="Declared in">
-            {row.gitops.tool === 'argocd' ? 'Argo CD' : 'Flux'} <span className="font-mono">{row.gitops.name}</span>
+            <ManagedByText refTo={row.managedBy} onNavigate={onNavigate} />
           </FactRow>
         )}
         {stateFacts}

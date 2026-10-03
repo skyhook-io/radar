@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { Badge, getCNPGImageCatalogEntries, isApiGroup, PaneLoader, Tooltip } from '@skyhook-io/k8s-ui'
 import { useCNPGOperator, type CNPGOperatorComponent, type CNPGOperatorConfig } from '../../api/cnpg'
 import { CNPGOperatorDiagnosisSection } from './CNPGOperatorDiagnosis'
-import { CNPGWorkspaceHeader, CoverageNotice, coverageEmpty, worstCoverage, cnpgResource, type CNPGScreenProps } from './shared'
+import { CNPGWorkspaceHeader, CoverageNotice, coverageEmpty, coverageLabel, worstCoverage, cnpgResource, type CNPGScreenProps } from './shared'
 import { Mono, Notice, ScreenBody, SectionTable, Sub } from '../workspace/layout'
 
 interface CatalogRow {
@@ -69,7 +69,7 @@ export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenPr
           <>
             {coverageGaps.length > 0 && (
               <Notice>
-                Some workloads are not readable ({coverageGaps.map((k) => `${k}: ${op.coverage[k].state}`).join(', ')}), so an operator or plugin running in those namespaces may be missing below.
+                Some workloads are not readable ({coverageGaps.map((k) => `${k === 'deployments' ? 'Deployments' : 'Services'}: ${coverageLabel(op.coverage[k])}`).join(', ')}), so an operator or plugin running in those namespaces may be missing below.
               </Notice>
             )}
             <SectionTable

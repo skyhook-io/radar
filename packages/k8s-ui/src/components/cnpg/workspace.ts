@@ -5,6 +5,7 @@
 import { formatAge, type HealthLevel } from '../resources/resource-utils'
 import { worseTone } from '../ui/status-tone'
 import type { Fact, ProblemOrigin, WorkspaceProblem } from '../workspace'
+import type { ResourceRef } from '../../types/core'
 import { formatBytes } from '../../utils/format'
 import { formatGrant, type Grant } from '../../utils/grant'
 import { issueReasonTitle } from '../issues/severity'
@@ -84,6 +85,8 @@ export interface CNPGWorkspaceResponse {
   backupsOmitted: number
   /** Each ScheduledBackup's schedule as the operator reads it, keyed "namespace/name"; absent when it cannot be parsed. */
   scheduleReadings?: Record<string, string>
+  /** The manager of each object that has one, keyed "Kind/namespace/name". */
+  managedBy?: Record<string, ResourceRef>
 }
 
 export const CNPG_KIND_BY_KEY: Record<CNPGWorkspaceKey, { kind: string; group: string; plural: string }> = {
@@ -171,7 +174,8 @@ export interface CNPGFleetRow {
   attention: boolean
   categories: Set<CNPGProblemCategory>
   /** GitOps owner recorded on the Cluster, when it carries the standard labels. */
-  gitops: CNPGGitOpsSource | null
+  /** The GitOps or Helm object that manages the Cluster, as the server detected it. */
+  managedBy?: ResourceRef
   /** Fullest measured volume, set by applyCNPGDisk; absent when no disk reading was requested. */
   disk?: Fact
   /** Growth of the fastest-growing volume, set by applyCNPGFleetMetrics when measured. */
@@ -465,27 +469,12 @@ function podReady(pod: any): boolean | null {
   return ready.status === 'True'
 }
 
-export type CNPGGitOpsSource = { tool: 'argocd' | 'flux'; name: string; namespace?: string }
-
-/** The GitOps owner recorded on an object's standard Argo CD / Flux labels. */
-export function cnpgGitOpsSource(obj: any): CNPGGitOpsSource | null {
-  const labels = obj?.metadata?.labels ?? {}
-  const annotations = obj?.metadata?.annotations ?? {}
-  const argo = labels['argocd.argoproj.io/instance']
-  if (argo) return { tool: 'argocd', name: argo }
-  const tracking = annotations['argocd.argoproj.io/tracking-id']
-  if (typeof tracking === 'string' && tracking.includes(':')) {
-    return { tool: 'argocd', name: tracking.split(':')[0] }
-  }
-  const fluxName = labels['kustomize.toolkit.fluxcd.io/name'] || labels['helm.toolkit.fluxcd.io/name']
-  if (fluxName) {
-    return {
-      tool: 'flux',
-      name: fluxName,
-      namespace: labels['kustomize.toolkit.fluxcd.io/namespace'] || labels['helm.toolkit.fluxcd.io/namespace'],
-    }
-  }
-  return null
+/** The manager the server detected for a workspace object (Argo CD, Flux or Helm), if any. */
+export function cnpgManagedBy(ws: Pick<CNPGWorkspaceResponse, 'managedBy'> | null | undefined, obj: any): ResourceRef | undefined {
+  const kind = obj?.kind
+  const name = obj?.metadata?.name
+  if (!kind || !name) return undefined
+  return ws?.managedBy?.[`${kind}/${obj?.metadata?.namespace ?? ''}/${name}`]
 }
 
 function scheduleFact(
@@ -1052,7 +1041,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
       problems,
       attention: problems.some((p) => p.severity !== 'posture'),
       categories,
-      gitops: cnpgGitOpsSource(cluster),
+      managedBy: cnpgManagedBy(resp, cluster),
     }
   })
 

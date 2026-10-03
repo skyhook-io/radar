@@ -317,7 +317,6 @@ export function missingManagedRole(obj: any, cluster: any | null): string | null
   return names.includes(m[1]) ? null : m[1]
 }
 
-export { cnpgGitOpsSource as gitopsSourceOf } from './workspace'
 
 /** Publications and Subscriptions on the same Cluster and PostgreSQL database. */
 export function replicationForDatabase(

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { getCNPGDeclarativeMessage, getCNPGReclaimPolicy } from '../resources/resource-utils-cnpg'
-import type { CNPGWorkspaceResponse } from './workspace'
+import { cnpgManagedBy, type CNPGWorkspaceResponse } from './workspace'
 import type { Fact } from '../workspace'
 import { cnpgLogicalPaths, type CNPGLogicalPath } from './logicalReplication'
 import { CNPGLogicalPathView } from './CNPGLogicalPath'
@@ -10,7 +10,6 @@ import {
   appliedFact,
   clustersIn,
   databaseForDeclaration,
-  gitopsSourceOf,
   missingManagedRole,
   observedGenerationFact,
   refOf,
@@ -21,7 +20,7 @@ import {
 } from './relations'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { toneTextClass } from '../ui/status-tone'
-import { FactGrid, FactRow, FactValue, SectionHeading } from '../workspace'
+import { FactGrid, FactRow, FactValue, SectionHeading, ManagedByText, managedByLabel } from '../workspace'
 
 interface SummaryProps {
   resource: any
@@ -68,14 +67,10 @@ function Reconciled({ resource, extra }: { resource: any; extra?: ReactNode }) {
   )
 }
 
-function DeclaredIn({ resource }: { resource: any }) {
-  const src = gitopsSourceOf(resource)
-  if (!src) return <NotReported text="GitOps source not recorded" />
-  return (
-    <span>
-      {src.tool === 'argocd' ? 'Argo CD application' : 'Flux'} <span className="font-mono">{src.namespace ? `${src.namespace}/${src.name}` : src.name}</span>
-    </span>
-  )
+function DeclaredIn({ resource, workspace, onNavigate }: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: NavigateToRef }) {
+  const manager = cnpgManagedBy(workspace, resource)
+  if (!manager || !managedByLabel(manager)) return <NotReported text="GitOps source not recorded" />
+  return <ManagedByText refTo={manager} onNavigate={onNavigate} />
 }
 
 function DatabaseRef({ resource, workspace, onNavigate }: SummaryProps) {
@@ -146,7 +141,7 @@ export function CNPGDatabaseSummary({ resource, workspace, onNavigate }: Summary
       <SectionHeading>Source and target</SectionHeading>
       <FactGrid>
         <FactRow label="Declared in">
-          <DeclaredIn resource={resource} />
+          <DeclaredIn resource={resource} workspace={workspace} onNavigate={onNavigate} />
         </FactRow>
         <FactRow label="Cluster">
           <ClusterLink resource={resource} workspace={workspace} onNavigate={onNavigate} />
@@ -243,7 +238,7 @@ export function CNPGPublicationSummary({
         <FactRow label="Publishes">{publicationTargets(resource)}</FactRow>
         <ReclaimRow resource={resource} />
         <FactRow label="Declared in">
-          <DeclaredIn resource={resource} />
+          <DeclaredIn resource={resource} workspace={workspace} onNavigate={onNavigate} />
         </FactRow>
       </FactGrid>
 
@@ -313,7 +308,7 @@ export function CNPGDatabaseRoleSummary({ resource, workspace, onNavigate }: Sum
         </FactRow>
         <ReclaimRow resource={resource} />
         <FactRow label="Declared in">
-          <DeclaredIn resource={resource} />
+          <DeclaredIn resource={resource} workspace={workspace} onNavigate={onNavigate} />
         </FactRow>
       </FactGrid>
 
@@ -381,7 +376,7 @@ export function CNPGSubscriptionSummary({
         </FactRow>
         <ReclaimRow resource={resource} />
         <FactRow label="Declared in">
-          <DeclaredIn resource={resource} />
+          <DeclaredIn resource={resource} workspace={workspace} onNavigate={onNavigate} />
         </FactRow>
       </FactGrid>
 
