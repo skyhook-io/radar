@@ -220,8 +220,22 @@ func TestDetectProblems_RestartLoopPrecedence(t *testing.T) {
 	plainLoop := badProbe.DeepCopy()
 	plainLoop.Name = "plain-loop"
 	plainLoop.Spec.Containers[0].LivenessProbe = nil
+	// Between attempts a container that cannot start waits in
+	// RunContainerError; its terminations are StartError with an epoch start.
+	startFailure := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "start-failure", Namespace: "prod", CreationTimestamp: old},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{
+			Name: "app", RestartCount: 5,
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "RunContainerError"}},
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+				Reason: "StartError", ExitCode: 128, Message: `exec: "/nonexistent": no such file or directory`,
+				StartedAt: metav1.NewTime(time.Unix(0, 0)), FinishedAt: metav1.NewTime(now.Add(-time.Minute)),
+			}},
+		}}},
+	}
 
-	if err := InitTestResourceCache(fake.NewClientset(badProbe, imageSibling, plainLoop)); err != nil {
+	if err := InitTestResourceCache(fake.NewClientset(badProbe, imageSibling, plainLoop, startFailure)); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
 	var problems []Detection
@@ -229,7 +243,7 @@ func TestDetectProblems_RestartLoopPrecedence(t *testing.T) {
 	for time.Now().Before(deadline) {
 		problems = DetectProblems(GetResourceCache(), "prod")
 		if hasProblem(problems, "Pod", "bad-liveness", livenessProbeInvalidReason) && hasProblem(problems, "Pod", "image-sibling", "ImagePullBackOff") &&
-			hasProblem(problems, "Pod", "plain-loop", crashLoopReason) {
+			hasProblem(problems, "Pod", "plain-loop", crashLoopReason) && hasProblem(problems, "Pod", "start-failure", crashLoopReason) {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -239,6 +253,9 @@ func TestDetectProblems_RestartLoopPrecedence(t *testing.T) {
 	}
 	if got, ok := lookupProblem(problems, "Pod", "image-sibling", "ImagePullBackOff"); !ok || got.RestartLoop != nil {
 		t.Fatalf("image-sibling = %+v (found %v), want the image pull row", got, ok)
+	}
+	if got, ok := lookupProblem(problems, "Pod", "start-failure", crashLoopReason); !ok || got.RestartLoop == nil || !strings.Contains(got.RawMessage, "no such file") || !strings.Contains(got.Cause, "failing to start") {
+		t.Fatalf("start-failure = %+v (found %v), want a crashloop row carrying the runtime error", got, ok)
 	}
 	if got, ok := lookupProblem(problems, "Pod", "plain-loop", crashLoopReason); !ok || got.Severity != "critical" || got.RestartLoop == nil {
 		t.Fatalf("plain-loop = %+v (found %v), want a critical crashloop row on a ready tick", got, ok)

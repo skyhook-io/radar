@@ -53,8 +53,11 @@ type restartLoop struct {
 	lastExitCode   int32
 	lastReason     string
 	lastFinishedAt time.Time
-	liveness       *probeFailure
-	readiness      *probeFailure
+	// lastMessage is the runtime's message for the last termination; for a
+	// start failure it is the actual error (e.g. exec: no such file).
+	lastMessage string
+	liveness    *probeFailure
+	readiness   *probeFailure
 }
 
 // activeRestartLoop reports the container keeping this pod in a restart loop.
@@ -143,6 +146,7 @@ func containerRestartLoop(cs *corev1.ContainerStatus, now time.Time) (restartLoo
 		lastExitCode:   term.ExitCode,
 		lastReason:     term.Reason,
 		lastFinishedAt: finished,
+		lastMessage:    strings.TrimSpace(term.Message),
 	}, true
 }
 
@@ -177,12 +181,15 @@ func probeFailureFor(probes map[string]probeFailure, pod *corev1.Pod, container,
 // restartLoopMayReplace reports whether the loop's crashloop reason may stand
 // in for the reason the pod walk produced. Phase strings, crash-class reasons,
 // and probe/thrash reasons are exactly the per-tick faces of the loop. Anything
-// more specific (image pulls, container-create errors, OOM, init stalls) names a
-// different problem and keeps its own row.
+// more specific (image pulls, config errors, OOM, init stalls) names a
+// different problem and keeps its own row. RunContainerError is the Waiting
+// state between attempts of a container that fails to start; once the loop
+// rule holds, the container has been started and terminated repeatedly, so it
+// is another face of the same loop.
 func restartLoopMayReplace(reason string) bool {
 	switch reason {
 	case "Running", "Pending", "Unknown", "", "PodInitializing", "ContainerCreating",
-		crashLoopReason, "Error", "Completed", "StartError", "ContainerCannotRun",
+		crashLoopReason, "Error", "Completed", "StartError", "ContainerCannotRun", "RunContainerError",
 		highRestartReason, livenessProbeFailedReason, readinessProbeFailedReason:
 		return true
 	}
@@ -228,6 +235,10 @@ func (l restartLoop) message() string {
 // observations live in the evidence and the message instead.
 func (l restartLoop) diagnosis() (cause, action string) {
 	ref := l.ref()
+	if l.lastReason == "StartError" || l.lastReason == "ContainerCannotRun" {
+		return fmt.Sprintf("%s keeps failing to start (%s): the runtime could not start its process.", ref, l.lastReason),
+			"Read the runtime error on this issue: usually a missing binary or entrypoint, a bad working directory, or a permission or mount problem in the container spec."
+	}
 	switch code := l.lastExitCode; code {
 	case 0:
 		return fmt.Sprintf("%s keeps restarting, and its last run ended with exit code 0. Under restartPolicy Always the kubelet restarts a container whenever it exits; a failed liveness probe also ends this way, because the kubelet lets the process shut down gracefully.", ref),

@@ -501,6 +501,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			} else {
 				looping = false
 			}
+			rawMessage := ""
 			fingerprint := ""
 			if inv, ok := activeProbeTargetProblem(pod, reason); ok {
 				reason = inv.reason
@@ -527,6 +528,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				restartCount = loop.restartCount
 				lastTermReason = loop.lastReason
 				restartLoopEvidence = loop.evidence()
+				rawMessage = loop.lastMessage
 			}
 			cause, action, diagnosisSource := oomLimitDiagnosis(cache, pod, reason, lastTermReason, now)
 			if cause == "" {
@@ -635,6 +637,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Severity:             severity,
 				Reason:               reason,
 				Message:              message,
+				RawMessage:           rawMessage,
 				Fingerprint:          fingerprint,
 				Age:                  FormatAge(ageDur),
 				AgeSeconds:           int64(ageDur.Seconds()),
