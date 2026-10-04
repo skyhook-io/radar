@@ -1,8 +1,8 @@
-import { useNavigate } from 'react-router-dom'
 import { AlertBanner } from '@skyhook-io/k8s-ui'
 import { useCNPGOperatorStatus } from '../../api/cnpg'
 import { cnpgScreenPath } from './routes'
 import { cnpgOperatorBannerModel } from './operatorStatus'
+import { useCNPGNavigate } from './useCNPGNavigate'
 
 /**
  * Shown above CNPG status while the operator that watches these namespaces is
@@ -10,7 +10,7 @@ import { cnpgOperatorBannerModel } from './operatorStatus'
  * ready counts below are then what the operator last wrote.
  */
 export function CNPGOperatorBanner({ namespaces, className }: { namespaces: string[]; className?: string }) {
-  const navigate = useNavigate()
+  const navigate = useCNPGNavigate()
   const q = useCNPGOperatorStatus(namespaces)
   const model = cnpgOperatorBannerModel(q.data?.namespaces, namespaces)
   if (!model) return null

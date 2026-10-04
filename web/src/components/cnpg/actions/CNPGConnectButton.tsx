@@ -1,9 +1,10 @@
 import { useEffect, useId, useMemo, useState } from 'react'
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { Plug, X } from 'lucide-react'
 import { CNPGConnectSection, DialogPortal, Tooltip, type ResourceRef, type NavigateToResource } from '@skyhook-io/k8s-ui'
 import { buildWorkloadPath, refToSelectedResource } from '../../../utils/navigation'
 import { useCNPGFleet } from '../useCNPGSidebarWorkspace'
+import { useCNPGNavigate } from '../useCNPGNavigate'
 
 // A link can ask for the dialog (the restore "Next steps") with this param;
 // the button opens it and drops the param, so closing it and following a link
@@ -75,7 +76,7 @@ export function CNPGConnectButton({
         onNavigate(refToSelectedResource(ref))
       }
     : undefined
-  const navigate = useNavigate()
+  const navigate = useCNPGNavigate()
   const openReachability = (svc: { namespace: string; name: string }) => {
     setOpen(false)
     navigate(buildWorkloadPath({ kind: 'services', group: '', namespace: svc.namespace, name: svc.name, tab: 'reachability' }))

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo } from 'react'
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { Activity, ArrowLeft, Database, Gauge, HardDrive, Network, Settings2, ShieldCheck, Unplug } from 'lucide-react'
 import { refToSelectedResource, type WorkloadExtraTab } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
@@ -17,6 +17,7 @@ import { CNPG_CLUSTER_TAB_ORDER, cnpgDimensionTab } from './paths'
 import { currentPageLabel } from '../../utils/page-links'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 import { ScreenEmptyState } from '../workspace/layout'
+import { useCNPGNavigate } from './useCNPGNavigate'
 
 interface ReturnState {
   returnLabel?: string
@@ -42,7 +43,7 @@ export function CNPGDetailPage({
   onOpenResource: (resource: SelectedResource) => void
 }) {
   const location = useLocation()
-  const navigate = useNavigate()
+  const navigate = useCNPGNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { connection } = useConnection()
   const activeContext = connection.context
@@ -246,7 +247,7 @@ function NotInContext({
   homeLabel: string
   homePath: string
 }) {
-  const navigate = useNavigate()
+  const navigate = useCNPGNavigate()
   const { data: contexts } = useContexts()
   const { requestSwitch, confirmDialog } = useContextSwitchFlow()
   const pinned = contexts?.find((c) => c.name === pinnedContext)

@@ -1,5 +1,4 @@
 import { useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { ArrowRight, Database, FileText, Search } from 'lucide-react'
 import {
@@ -24,6 +23,7 @@ import { cnpgInstancePillLabel, cnpgPillsToShow, cnpgRowStatus } from './fleetSt
 import { BreakText, FilterChips, ScreenEmptyState } from '../workspace/layout'
 import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../workspace/table'
 import { sameSelectedResource } from '../../utils/drawer-trail'
+import { useCNPGNavigate } from './useCNPGNavigate'
 
 type Filter = 'attention' | 'all'
 
@@ -193,7 +193,7 @@ export function CNPGOverview({
   inspected,
   onClearNamespaces,
 }: CNPGScreenProps) {
-  const navigate = useNavigate()
+  const navigate = useCNPGNavigate()
   const { connection } = useConnection()
   const q = searchParams.get('q') ?? ''
   const cat = (searchParams.get('cat') as CNPGProblemCategory | null) ?? null

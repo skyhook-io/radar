@@ -1,4 +1,4 @@
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { CNPGClusterCertificates, CNPGConnectSection, CNPGDimensionChips, coverageReadable, refToSelectedResource, toneTextClass, type CNPGDimension, type CNPGFleetRow, type NavigateToRef } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { buildWorkloadPath } from '../../utils/navigation'
@@ -13,6 +13,7 @@ import { useCNPGRestoreCapability } from '../../api/cnpg-recovery'
 import { CNPGScreenGate } from './shared'
 import { useCNPGClusterAssessment } from './useCNPGClusterAssessment'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
+import { useCNPGNavigate } from './useCNPGNavigate'
 
 /**
  * The four health chips under the Cluster's title, on every tab: the same
@@ -157,7 +158,7 @@ export function CNPGBackupsTab({
 /** Above the declared settings on the Configuration tab: how to connect, and the certificates that secure it. */
 export function CNPGConfigurationLead({ namespace, name, onNavigate }: { namespace: string; name: string; onNavigate: (r: SelectedResource) => void }) {
   const { row, ha } = useCNPGClusterAssessment(namespace, name)
-  const navigate = useNavigate()
+  const navigate = useCNPGNavigate()
   const go: NavigateToRef = (ref) => onNavigate(refToSelectedResource(ref))
   if (!row?.cluster) return null
   return (

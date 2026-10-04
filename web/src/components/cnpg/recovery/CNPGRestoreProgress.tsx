@@ -1,9 +1,9 @@
 import { useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { Badge, StatusDot, formatAge, toneTextClass, type HealthLevel, formatGrant } from '@skyhook-io/k8s-ui'
 import { useCNPGRecovery, type CNPGContainerState, type CNPGRecoveryResponse, type CNPGRecoverySpec } from '../../../api/cnpg-recovery'
 import { buildWorkloadPath } from '../../../utils/navigation'
 import { observeRestore, restoreNextSteps, type RestoreBackupDeclared, type RestoreNextStep, type RestoreNextStepId, type RestoreObservation } from './restoreModel'
+import { useCNPGNavigate } from '../useCNPGNavigate'
 
 /**
  * The restore observer: the recovery snapshot of one Cluster and where its
@@ -98,7 +98,7 @@ function NextSteps({ validationRecorded, host }: { validationRecorded: boolean; 
 }
 
 export function CNPGRestoreProgress({ namespace, name, nextSteps }: { namespace: string; name: string; nextSteps?: CNPGRestoreNextStepsHost }) {
-  const navigate = useNavigate()
+  const navigate = useCNPGNavigate()
   const { observation, snapshot } = useRestoreObservation(namespace, name)
   if (!observation || !snapshot?.recovery) return null
   const openLogs = (pod: string) => navigate(buildWorkloadPath({ kind: 'pods', namespace, name: pod, tab: 'logs' }))

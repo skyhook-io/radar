@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { Badge, formatAge, type CNPGFleet } from '@skyhook-io/k8s-ui'
 import type { CNPGOperatorDiagnosis, CNPGOperatorReconcilePod, CNPGReadCoverage } from '../../api/cnpg-recovery'
 import { buildWorkloadPath } from '../../utils/navigation'
 import { GrantText, Mono, Sub } from '../workspace/layout'
+import { useCNPGNavigate } from './useCNPGNavigate'
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -186,7 +186,7 @@ function Reconcile({ pods }: { pods: CNPGOperatorReconcilePod[] }) {
  * recent events. Each fact reports its own access.
  */
 export function CNPGOperatorDiagnosisSection({ diagnosis, fleet }: { diagnosis: CNPGOperatorDiagnosis[]; fleet: CNPGFleet }) {
-  const navigate = useNavigate()
+  const navigate = useCNPGNavigate()
   if (diagnosis.length === 0) return null
   return (
     <>

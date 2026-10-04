@@ -1,5 +1,4 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
 import yaml from 'yaml'
 import { ActionConfirmDialog, isApiGroup, toneTextClass, Tooltip, type HealthLevel } from '@skyhook-io/k8s-ui'
 import { useCNPGRuntime, useCNPGWorkspace } from '../../../api/cnpg'
@@ -30,6 +29,7 @@ import {
   type RestoreSource,
   type RestoreTarget,
 } from './restoreModel'
+import { useCNPGNavigate } from '../useCNPGNavigate'
 
 /** Where the restore was started from; decides the default source. */
 export type CNPGRestoreEntry = { kind: 'cluster'; name: string } | { kind: 'backup'; name: string } | { kind: 'objectStore'; name: string }
@@ -67,7 +67,7 @@ function EvidenceRow({ label, children }: { label: string; children: ReactNode }
  * user is offered the new Cluster's page, which follows the restore.
  */
 export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: string; entry: CNPGRestoreEntry; onClose: () => void }) {
-  const navigate = useNavigate()
+  const navigate = useCNPGNavigate()
   const { connection } = useConnection()
   const { showSuccess } = useToast()
   const workspace = useCNPGWorkspace([namespace])

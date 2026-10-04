@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import {
   CNPG_BARMAN_OBJECTSTORE_GROUP,
   OpenIssueContext,
@@ -39,7 +39,6 @@ import { useCNPGClusterAssessment } from './useCNPGClusterAssessment'
 import { CNPGMaintenanceBanner } from './actions/CNPGMaintenanceBanner'
 import { CNPG_CONNECT_PARAM, cnpgConnectParamValue } from './actions/CNPGConnectButton'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
-
 import { cnpgClusterFullPath, cnpgDimensionPath, cnpgDimensionTabLabel, cnpgWithinDetail } from './paths'
 import { cnpgScreenPath } from './routes'
 import { currentPageLabel, issuesPathForSubject } from '../../utils/page-links'
@@ -48,6 +47,7 @@ import { restoreBackupDeclared } from './recovery/restoreModel'
 import { useConnection } from '../../context/ConnectionContext'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { RefreshFailedNotice } from '../workspace/layout'
+import { useCNPGNavigate } from './useCNPGNavigate'
 
 interface SummaryContext {
   apiKind: string
@@ -79,7 +79,7 @@ function BaseBackupFact({ runtime }: { runtime: CNPGRuntimeResponse | undefined 
 }
 
 function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryContext) {
-  const navigate = useNavigate()
+  const navigate = useCNPGNavigate()
   const location = useLocation()
   const { connection } = useConnection()
   // The workspace is read for the object's own namespace: an explicitly opened
@@ -295,7 +295,7 @@ export function renderCNPGSummary(ctx: SummaryContext): ReactNode {
 // problem's subject (it has no link to a single issue). Omitted where the host
 // takes Issues over, since its page does not read the subject.
 function IssueLinks({ children }: { children: ReactNode }) {
-  const navigate = useNavigate()
+  const navigate = useCNPGNavigate()
   const [searchParams] = useSearchParams()
   const issuesTakenOver = !!useNavCustomization().fleetTakeoverHref?.('issues')
   return (

@@ -1,5 +1,4 @@
 import { useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { Database, FileCheck2, Settings2, ShieldCheck, Waypoints } from 'lucide-react'
 import { applyCNPGDisk, applyCNPGFleetMetrics, buildCNPGFleet, type CNPGDiskReading, type CNPGFleet, type SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 import type { APIResource } from '../../types'
@@ -8,6 +7,7 @@ import { useRadarFeature } from '../../api/client'
 import { useCNPGFleetDisk } from '../../api/cnpg-storage'
 import { useCNPGFleetMetrics } from '../../api/cnpg-history'
 import { CNPG_SCREENS, type CNPGScreen } from './routes'
+import { useCNPGNavigate } from './useCNPGNavigate'
 
 export const CNPG_SIDEBAR_CATEGORY = 'CloudNativePG'
 
@@ -84,7 +84,7 @@ export function useCNPGSidebarWorkspace({
   namespaces: string[]
   active?: { screen: CNPGScreen; child?: { label: string; title?: string } }
 }): Record<string, SidebarCategoryWorkspace> | undefined {
-  const navigate = useNavigate()
+  const navigate = useCNPGNavigate()
   // A Radar that predates the workspace serves none of its endpoints: no
   // destinations rather than ones that fail when opened.
   const { support } = useRadarFeature('cnpgWorkspace')

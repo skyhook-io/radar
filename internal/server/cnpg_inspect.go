@@ -101,12 +101,14 @@ type CNPGRoleFact struct {
 }
 
 // CNPGDatabaseContents: tables outside the system schemas. Row counts are the
-// planner's estimates (pg_class.reltuples), which can be stale; a table never
-// vacuumed or analyzed has none and is counted in NeverAnalyzed.
+// planner's estimates (pg_class.reltuples), which can be stale. A table
+// without one is counted in NoEstimate, not as zero rows: from PostgreSQL 14
+// that is -1 (never vacuumed or analyzed); before 14 it is 0, which an empty
+// analyzed table also reads, so those count as unknown too.
 type CNPGDatabaseContents struct {
 	Tables        int                `json:"tables"`
 	EstimatedRows int64              `json:"estimatedRows"`
-	NeverAnalyzed int                `json:"neverAnalyzed"`
+	NoEstimate    int                `json:"noEstimate"`
 	Largest       []CNPGTableSummary `json:"largest"`
 }
 
@@ -116,7 +118,7 @@ type CNPGTableSummary struct {
 	Bytes         int64  `json:"bytes"`
 }
 
-var cnpgRestoreFactsSQL = cnpgSQLTimeoutPrelude + `SET application_name = '` + cnpgDiagnosticsApp + `';
+var cnpgRestoreFactsSQL = cnpgSQLPrelude + cnpgSQLReadOnly + `SET application_name = '` + cnpgDiagnosticsApp + `';
 WITH tl AS (SELECT timeline_id AS id FROM pg_control_checkpoint())
 SELECT json_build_object(
   'inRecovery', pg_is_in_recovery(),
@@ -141,9 +143,10 @@ SELECT json_build_object(
 );
 `
 
-var cnpgDatabaseContentsSQL = cnpgSQLTimeoutPrelude + `SET application_name = '` + cnpgDiagnosticsApp + `';
+var cnpgDatabaseContentsSQL = cnpgSQLPrelude + cnpgSQLReadOnly + `SET application_name = '` + cnpgDiagnosticsApp + `';
 WITH t AS (
-  SELECT c.oid, n.nspname, c.relname, c.relkind, c.relispartition, c.reltuples
+  SELECT c.oid, n.nspname, c.relname, c.relkind, c.relispartition, c.reltuples,
+         CASE WHEN current_setting('server_version_num')::int >= 140000 THEN c.reltuples < 0 ELSE c.reltuples <= 0 END AS unknown
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
   WHERE c.relkind IN ('r', 'p')
     AND n.nspname NOT IN ('pg_catalog', 'information_schema')
@@ -151,12 +154,12 @@ WITH t AS (
 )
 SELECT json_build_object(
   'tables', (SELECT count(*) FROM t WHERE NOT relispartition),
-  'estimatedRows', (SELECT coalesce(sum(reltuples), 0)::bigint FROM t WHERE relkind = 'r' AND reltuples >= 0),
-  'neverAnalyzed', (SELECT count(*) FROM t WHERE relkind = 'r' AND reltuples < 0),
+  'estimatedRows', (SELECT coalesce(sum(reltuples), 0)::bigint FROM t WHERE relkind = 'r' AND NOT unknown),
+  'noEstimate', (SELECT count(*) FROM t WHERE relkind = 'r' AND unknown),
   'largest', coalesce((
     SELECT json_agg(x) FROM (
       SELECT nspname || '.' || relname AS name,
-             CASE WHEN reltuples >= 0 THEN reltuples::bigint END AS "estimatedRows",
+             CASE WHEN NOT unknown THEN reltuples::bigint END AS "estimatedRows",
              pg_total_relation_size(oid) AS bytes
       FROM t WHERE relkind = 'r'
       ORDER BY pg_total_relation_size(oid) DESC, nspname, relname
@@ -426,9 +429,12 @@ type CNPGParameterSetting struct {
 	PendingRestart bool    `json:"pendingRestart"`
 }
 
-// No SET here, unlike the other diagnostics: a SET would hide the server's
-// value of the very parameter it sets. The exec deadline bounds the read.
-var cnpgParametersSQL = `SELECT coalesce(json_agg(json_build_object(
+// Only search_path is set (see cnpgSQLPrelude): any other SET would hide the
+// server's value of the very parameter it sets, so a declared search_path is
+// the one parameter this read reports as set by its own connection. The exec
+// deadline bounds the read.
+var cnpgParametersSQL = `SET search_path = pg_catalog;
+SELECT coalesce(json_agg(json_build_object(
   'name', s.name,
   'value', CASE WHEN s.source IN ('` + cnpgSessionSourceSession + `', '` + cnpgSessionSourceClient + `') THEN NULL ELSE current_setting(s.name) END,
   'setByClient', s.source IN ('` + cnpgSessionSourceSession + `', '` + cnpgSessionSourceClient + `'),

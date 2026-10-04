@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { GitOpsWriteWarning, canConfirmGitOpsWrite, gitOpsRouteForOwner, type GitOpsWrite } from '@skyhook-io/k8s-ui'
 import { useGitOpsWriteGuard } from '../../../hooks/useGitOpsWriteGuard'
+import { useCNPGNavigate } from '../useCNPGNavigate'
 
 export type CNPGWriteScope =
   | { kind: 'status' }
@@ -25,7 +25,7 @@ export function useCNPGWriteGuard({
   scope: CNPGWriteScope
   targetKind?: string
 }): { node: ReactNode; satisfied: boolean } {
-  const navigate = useNavigate()
+  const navigate = useCNPGNavigate()
   const [acked, setAcked] = useState(false)
   const operatorOwned = scope.kind === 'delete-operator-owned'
   const writes: GitOpsWrite[] = operatorOwned

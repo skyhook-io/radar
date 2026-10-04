@@ -23,7 +23,8 @@ export interface CNPGDatabaseContents {
   tables: number
   /** The planner's estimate (pg_class.reltuples); it can be stale. */
   estimatedRows: number
-  neverAnalyzed: number
+  /** Tables without an estimate (never analyzed; before PostgreSQL 14 also an empty one), not counted as zero. */
+  noEstimate: number
   largest: { name: string; estimatedRows?: number; bytes: number }[]
 }
 

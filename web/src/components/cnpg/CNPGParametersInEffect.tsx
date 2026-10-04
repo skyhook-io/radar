@@ -59,7 +59,7 @@ export function CNPGParametersInEffect({ namespace, name }: { namespace: string;
         </table>
       </div>
       <p className="mt-2 text-[11.5px] text-theme-text-tertiary">
-        Read {d.sampledAt ? `${formatAge(d.sampledAt)} ago` : 'just now'} in a new session of Radar’s on {view.read.map((i) => i.pod).join(', ') || 'no instance'}. A role, database or
+        Read {d.sampledAt ? `${formatAge(d.sampledAt)} ago` : 'just now'} from a new Radar session on each of {view.read.map((i) => i.pod).join(', ') || 'no instance'}. A role, database or
         client can set its own value for a parameter a session can change. PostgreSQL shows values in its own units, so 1024MB reads 1GB.
         {d.skipped && d.skipped.length > 0 ? ` Not read (not a parameter name): ${d.skipped.join(', ')}.` : ''}
         {d.omitted ? ` ${d.omitted} more declared, not shown.` : ''}

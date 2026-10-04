@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { ResourcesSidebar, type SelectedKindInfo } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useAPIResources } from '../../api/apiResources'
@@ -15,6 +15,7 @@ import { CNPGDetailPage } from './CNPGDetailPage'
 import { parseCNPGRoute } from './routes'
 import { useCNPGFleet, useCNPGSidebarWorkspace } from './useCNPGSidebarWorkspace'
 import { decodeDrawerTrail, encodeDrawerTrail, sameSelectedResource } from '../../utils/drawer-trail'
+import { useCNPGNavigate } from './useCNPGNavigate'
 
 interface CNPGViewProps {
   namespaces: string[]
@@ -34,7 +35,7 @@ interface CNPGViewProps {
  */
 export function CNPGView({ namespaces, selectedResource, onOpenResource, onCloseResource, onClearNamespaces }: CNPGViewProps) {
   const location = useLocation()
-  const navigate = useNavigate()
+  const navigate = useCNPGNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const route = parseCNPGRoute(location.pathname)
   const { data: apiResources } = useAPIResources()

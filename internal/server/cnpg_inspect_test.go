@@ -44,7 +44,7 @@ func cnpgSequencedExec(calls *[]cnpgExecCall, outs ...string) cnpgExecFunc {
 
 func TestReadCNPGRestoreChecksReadsFactsThenTheBootstrapDatabase(t *testing.T) {
 	var calls []cnpgExecCall
-	contents := `{"tables" : 3, "estimatedRows" : 12000, "neverAnalyzed" : 1, "largest" : [{"name":"public.orders","estimatedRows":10000,"bytes":4096000}]}`
+	contents := `{"tables" : 3, "estimatedRows" : 12000, "noEstimate" : 1, "largest" : [{"name":"public.orders","estimatedRows":10000,"bytes":4096000}]}`
 	resp := CNPGRestoreChecksResponse{Database: "app"}
 	readCNPGRestoreChecks(context.Background(), cnpgSequencedExec(&calls, cnpgRestoreFactsJSON("1\t0/5000A28\tbefore 2026-10-01 12:00:00+00\n"), contents), "db", "pg-r-1", &resp)
 	if resp.State != cnpgRuntimeStateOK || resp.CNPGRestoreFacts == nil || resp.Timeline != 2 || len(resp.History) != 1 || resp.History[0].To != 2 {
@@ -128,8 +128,8 @@ func TestReadCNPGParametersPassesNamesAsAVariable(t *testing.T) {
 	if an := got[0].Settings[0]; an.Value != nil || !an.SetByClient {
 		t.Errorf("application_name = %+v", an)
 	}
-	if strings.Contains(cnpgParametersSQL, "SET ") {
-		t.Error("the parameters read must not SET anything: a SET hides the server value of what it sets")
+	if strings.Count(cnpgParametersSQL, "SET ") != 1 || !strings.HasPrefix(cnpgParametersSQL, "SET search_path = pg_catalog;") {
+		t.Error("the parameters read sets only search_path: any other SET hides the server value of what it sets")
 	}
 	if !slices.Contains(calls[0].argv, "names=shared_buffers,work_mem") || strings.Contains(calls[0].stdin, "shared_buffers") || !strings.Contains(calls[0].stdin, ":'names'") {
 		t.Errorf("names must travel as a psql variable, never in the SQL text: %+v", calls[0])
@@ -138,5 +138,27 @@ func TestReadCNPGParametersPassesNamesAsAVariable(t *testing.T) {
 	got = readCNPGParameters(context.Background(), cnpgFakeExec(&calls, "", context.DeadlineExceeded), "db", pods, []string{"work_mem"})
 	if got[0].State != cnpgRuntimeStateUnreachable || got[0].Settings != nil {
 		t.Errorf("an instance that does not answer reads unreachable: %+v", got[0])
+	}
+}
+
+// Every diagnostic runs as the postgres superuser, so each pins search_path
+// before anything else; an application schema's function must never stand in
+// for a built-in.
+func TestCNPGDiagnosticSQLPinsSearchPath(t *testing.T) {
+	for name, sql := range map[string]string{
+		"blocking": cnpgBlockingSQL,
+		"signal":   cnpgSignalSQL("pg_cancel_backend"),
+		"restore":  cnpgRestoreFactsSQL,
+		"contents": cnpgDatabaseContentsSQL,
+		"params":   cnpgParametersSQL,
+	} {
+		if !strings.HasPrefix(sql, "SET search_path = pg_catalog;") {
+			t.Errorf("%s SQL does not start by pinning search_path", name)
+		}
+	}
+	for name, sql := range map[string]string{"blocking": cnpgBlockingSQL, "restore": cnpgRestoreFactsSQL, "contents": cnpgDatabaseContentsSQL} {
+		if !strings.Contains(sql, "default_transaction_read_only = on") {
+			t.Errorf("%s SQL only reads, so it runs read-only", name)
+		}
 	}
 }

@@ -29,18 +29,25 @@ import (
 // variables, which psql quotes as literals.
 
 const (
-	cnpgExecTimeout       = 10 * time.Second
-	cnpgExecStdoutCap     = 1 << 20
-	cnpgExecStderrCap     = 8 << 10
-	cnpgExecConcurrency   = 4
-	cnpgSessionsMaxRows   = 200
-	cnpgQueryTextChars    = 200
-	cnpgDiagnosticsApp    = "radar-diagnostics"
-	cnpgExecStateDenied   = cnpgRuntimeStateDenied
-	cnpgPsqlDatabase      = "postgres"
-	cnpgSignalCancel      = "cancel"
-	cnpgSignalTerminate   = "terminate"
-	cnpgSQLTimeoutPrelude = "SET statement_timeout = '5s';\n"
+	cnpgExecTimeout     = 10 * time.Second
+	cnpgExecStdoutCap   = 1 << 20
+	cnpgExecStderrCap   = 8 << 10
+	cnpgExecConcurrency = 4
+	cnpgSessionsMaxRows = 200
+	cnpgQueryTextChars  = 200
+	cnpgDiagnosticsApp  = "radar-diagnostics"
+	cnpgExecStateDenied = cnpgRuntimeStateDenied
+	cnpgPsqlDatabase    = "postgres"
+	cnpgSignalCancel    = "cancel"
+	cnpgSignalTerminate = "terminate"
+	// cnpgSQLPrelude starts every diagnostic SQL. psql runs as the postgres
+	// superuser, so search_path is pinned to pg_catalog: otherwise a function
+	// someone created in an application schema with an exact-match signature
+	// (pg_total_relation_size(oid), cardinality(int[])) would be chosen over
+	// the built-in and run as superuser.
+	cnpgSQLPrelude = "SET search_path = pg_catalog;\nSET statement_timeout = '5s';\n"
+	// cnpgSQLReadOnly is added to the diagnostics that only read.
+	cnpgSQLReadOnly = "SET default_transaction_read_only = on;\n"
 )
 
 var cnpgGrantCreateExec = Grant{Verb: "create", Resource: "pods", Subresource: "exec"}
@@ -211,7 +218,7 @@ type CNPGSessionInstance struct {
 
 var cnpgPsqlArgv = []string{"psql", "-XAtq", "-v", "ON_ERROR_STOP=1", "-d", cnpgPsqlDatabase, "-f", "-"}
 
-var cnpgBlockingSQL = cnpgSQLTimeoutPrelude + `SET lock_timeout = '1s';
+var cnpgBlockingSQL = cnpgSQLPrelude + cnpgSQLReadOnly + `SET lock_timeout = '1s';
 SET application_name = '` + cnpgDiagnosticsApp + `';
 WITH a AS (
   SELECT pid, pg_blocking_pids(pid) AS blocked_by, backend_start, xact_start, query_start, state_change,
@@ -386,7 +393,7 @@ type cnpgSignalParams struct {
 // cnpgSignalSQL signals only the client backend whose pid AND start time still
 // match what the user reviewed: a reused pid is a different session.
 func cnpgSignalSQL(fn string) string {
-	return cnpgSQLTimeoutPrelude + `SET application_name = '` + cnpgDiagnosticsApp + `';
+	return cnpgSQLPrelude + `SET application_name = '` + cnpgDiagnosticsApp + `';
 SELECT json_build_object('found', count(*), 'signalled', coalesce(bool_or(` + fn + `(pid)), false))
 FROM pg_stat_activity
 WHERE pid = :'pid'::int
