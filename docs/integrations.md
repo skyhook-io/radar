@@ -892,7 +892,7 @@ Note `Pooler.status.instances` counts pods *trying to be scheduled*, not ready p
 
 ### Phase classification
 
-Cluster phases are full English sentences (`Cluster is unrecoverable and needs manual intervention`), not enum tokens, and are matched on equality. They are bucketed as healthy / transient / failing / terminal / attention; terminal phases outrank instance counts, so an unrecoverable cluster whose pods happen to still be Ready is still rendered red. An unrecognized phase from a newer CNPG minor surfaces verbatim as unknown rather than being guessed at.
+Cluster phases are full English sentences (`Cluster is unrecoverable and needs manual intervention`), not enum tokens, and are matched on equality. They are bucketed as healthy / transient / failing / terminal / attention; terminal phases outrank instance counts, so an unrecoverable cluster whose pods happen to still be Ready is still rendered red. "Terminal" means reconciliation is blocked, not that the operator gave up: it retries every one of them, the plugin phases clear on their own once the plugin loads and answers, and the banner quotes the operator's `status.phaseReason` (`cnpgBlockedPhaseExplanation`). An unrecognized phase from a newer CNPG minor surfaces verbatim as unknown rather than being guessed at.
 
 Backup phases are lowercase tokens. `walArchivingFailing` is treated as a cluster-level signal, not an ordinary backup failure — archiving is broken upstream of that Backup, so the whole recovery window is affected.
 

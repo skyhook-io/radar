@@ -4,7 +4,7 @@ import { Badge } from '../ui/Badge'
 import { healthToSeverity } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
-import { CNPG_BARMAN_OBJECTSTORE_GROUP, CNPG_GROUP } from '../resources/resource-utils-cnpg'
+import { classifyCNPGClusterPhase, cnpgBlockedPhaseExplanation, CNPG_BARMAN_OBJECTSTORE_GROUP, CNPG_GROUP } from '../resources/resource-utils-cnpg'
 import { cnpgClusterPlugins, cnpgPluginPhase, cnpgReadyInstances, type CNPGFleetRow, type CNPGInstance } from './workspace'
 import type { CNPGDimension } from './ha'
 import { PrimaryConflictNote } from './primitives'
@@ -144,6 +144,8 @@ export function CNPGClusterSummary({
   const rest = row.problems.length - 1
   const ns = row.namespace
   const radarFindings = row.problems.some((x) => x.severity !== 'posture')
+  const phase = typeof row.cluster?.status?.phase === 'string' ? row.cluster.status.phase : ''
+  const blocked = classifyCNPGClusterPhase(phase) === 'terminal' ? cnpgBlockedPhaseExplanation(phase, row.cluster?.status?.phaseReason) : null
   const [showRest, setShowRest] = useState(initialProblemsExpanded)
   const restDisclosure = useDisclosure(showRest)
 
@@ -221,12 +223,11 @@ export function CNPGClusterSummary({
               </button>
             )}
           </span>
-          {cnpgPluginPhase(row.cluster) && (
+          {blocked && (
             <div className="mt-0.5 text-[11.5px] text-theme-text-secondary">
-              {cnpgPluginPhase(row.cluster) === 'unknownPlugin'
-                ? 'The operator does not know a plugin this cluster requires'
-                : 'The operator failed talking to a plugin this cluster uses'}
-              {cnpgClusterPlugins(row.cluster).length > 0 ? ` (spec.plugins: ${cnpgClusterPlugins(row.cluster).join(', ')})` : ''}. The Operator view shows whether that plugin is running and when it last restarted.
+              {blocked.body}
+              {cnpgPluginPhase(row.cluster) &&
+                ` Plugins this cluster uses: ${cnpgClusterPlugins(row.cluster).join(', ') || 'none listed'}. The Operator view shows whether each is running and when it last restarted.`}
             </div>
           )}
         </FactRow>

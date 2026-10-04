@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { backupAfterResume, cnpgArchiveDestination, resumeBoundary } from './archivingRepair'
+import { backupAfterResume, cnpgArchiveDestination, resumeBoundary, type CNPGWALArchiver } from './archivingRepair'
 
 describe('cnpgArchiveDestination', () => {
   it('names each credential Secret and key, never reading them', () => {
@@ -33,10 +33,11 @@ describe('a base backup after archiving resumed', () => {
     apiVersion: 'postgresql.cnpg.io/v1',
     kind: 'Backup',
     metadata: { name, namespace: 'db' },
-    spec: { cluster: { name: 'pg' }, method: 'plugin' },
+    spec: { cluster: { name: 'pg' }, method: 'plugin', pluginConfiguration: { name: 'barman-cloud.cloudnative-pg.io' } },
     status: { phase: 'completed', startedAt, ...extra },
   })
   const pg = { namespace: 'db', name: 'pg' }
+  const plugin: CNPGWALArchiver = { method: 'plugin', plugin: 'barman-cloud.cloudnative-pg.io' }
 
   it('resumes no earlier than the condition turning True after the last failure', () => {
     expect(resumeBoundary(cluster('2026-10-04T10:10:00Z'), t('2026-10-04T10:00:00Z'))).toBe(t('2026-10-04T10:10:00Z'))
@@ -46,15 +47,30 @@ describe('a base backup after archiving resumed', () => {
 
   it('does not accept a backup that started between the failure and the resume', () => {
     const boundary = resumeBoundary(cluster('2026-10-04T10:10:00Z'), t('2026-10-04T10:00:00Z'))
-    expect(backupAfterResume(pg, [backup('gap', '2026-10-04T10:05:00Z')], boundary)).toBeUndefined()
-    expect(backupAfterResume(pg, [backup('gap', '2026-10-04T10:05:00Z'), backup('after', '2026-10-04T10:20:00Z')], boundary)?.metadata.name).toBe('after')
+    expect(backupAfterResume(pg, [backup('gap', '2026-10-04T10:05:00Z')], boundary, plugin)).toBeUndefined()
+    expect(backupAfterResume(pg, [backup('gap', '2026-10-04T10:05:00Z'), backup('after', '2026-10-04T10:20:00Z')], boundary, plugin)?.metadata.name).toBe('after')
   })
 
   it('ignores other clusters, unfinished runs, and says when Backups could not be read', () => {
     const boundary = t('2026-10-04T10:00:00Z')
     const other = { ...backup('other', '2026-10-04T11:00:00Z'), spec: { cluster: { name: 'pg-b' } } }
     const running = backup('running', '2026-10-04T11:00:00Z', { phase: 'running' })
-    expect(backupAfterResume(pg, [other, running], boundary)).toBeUndefined()
-    expect(backupAfterResume(pg, null, boundary)).toBe('unread')
+    expect(backupAfterResume(pg, [other, running], boundary, plugin)).toBeUndefined()
+    expect(backupAfterResume(pg, null, boundary, plugin)).toBe('unread')
+  })
+
+  it('accepts only a Backup a restore can start from with this cluster\'s WAL archive', () => {
+    const boundary = t('2026-10-04T10:00:00Z')
+    const otherPlugin = { ...backup('other-plugin', '2026-10-04T11:00:00Z'), spec: { cluster: { name: 'pg' }, method: 'plugin', pluginConfiguration: { name: 'other.example.io' } } }
+    const inTree = { ...backup('in-tree', '2026-10-04T11:00:00Z'), spec: { cluster: { name: 'pg' } } }
+    const snapshot = { ...backup('snap', '2026-10-04T11:00:00Z'), spec: { cluster: { name: 'pg' }, method: 'volumeSnapshot' } }
+    expect(backupAfterResume(pg, [otherPlugin, inTree], boundary, plugin)).toBeUndefined()
+    expect(backupAfterResume(pg, [otherPlugin, inTree], boundary, { method: 'barmanObjectStore' })?.metadata.name).toBe('in-tree')
+    expect(backupAfterResume(pg, [otherPlugin, snapshot], boundary, plugin)?.metadata.name).toBe('snap')
+  })
+
+  it('takes the resume from the condition when the instance manager no longer reports the failure', () => {
+    expect(resumeBoundary(cluster('2026-10-04T10:10:00Z'), NaN)).toBe(t('2026-10-04T10:10:00Z'))
+    expect(resumeBoundary(cluster(), NaN)).toBeNaN()
   })
 })

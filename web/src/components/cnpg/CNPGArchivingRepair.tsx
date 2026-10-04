@@ -1,7 +1,7 @@
 import { cnpgClusterPlugins, cnpgPluginPhase, formatAge, getCNPGClusterBarmanPlugin, StatusDot, toneTextClass, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import type { CNPGRuntimeInstance } from '../../api/cnpg'
-import { backupAfterResume, cnpgArchiveDestination, resumeBoundary } from './archivingRepair'
+import { backupAfterResume, backupMethod, cnpgArchiveDestination, resumeBoundary } from './archivingRepair'
 
 const RESUMED_WINDOW_MS = 24 * 60 * 60 * 1000
 
@@ -34,7 +34,13 @@ export function CNPGArchivingRepair({
   const failedAt = arch?.lastFailedAt ? Date.parse(arch.lastFailedAt) : NaN
   const archivedAt = arch?.lastArchivedAt ? Date.parse(arch.lastArchivedAt) : NaN
   const failingNow = wal.tone === 'unhealthy' || (Number.isFinite(failedAt) && (!Number.isFinite(archivedAt) || failedAt > archivedAt))
-  const resumed = !failingNow && wal.tone === 'healthy' && Number.isFinite(failedAt) && Number.isFinite(archivedAt) && archivedAt > failedAt && Date.now() - failedAt < RESUMED_WINDOW_MS
+  // The instance manager's archiver stats live in memory and restart with the
+  // primary; the condition turning True (recently, well after creation) is
+  // what survives a restart or a switchover.
+  const conditionResumed = wal.tone === 'healthy' && wal.atMeaning === 'since' && !!wal.at
+  const runtimeResumed = Number.isFinite(failedAt) && Number.isFinite(archivedAt) && archivedAt > failedAt
+  const boundary = resumeBoundary(row.cluster, failedAt)
+  const resumed = !failingNow && wal.tone === 'healthy' && (runtimeResumed || conditionResumed) && Number.isFinite(boundary) && Date.now() - boundary < RESUMED_WINDOW_MS
   if (!failingNow && !resumed) return null
 
   // A plugin archives WAL only when it is marked isWALArchiver; otherwise the
@@ -53,7 +59,7 @@ export function CNPGArchivingRepair({
   const pluginPhase = cnpgPluginPhase(row.cluster)
   const primaryPod = primary?.pod ?? row.cluster?.status?.currentPrimary
   const lastBackup = row.protection.lastSuccessfulBackup
-  const fresh = resumed ? backupAfterResume(row, backups, resumeBoundary(row.cluster, failedAt)) : undefined
+  const fresh = resumed ? backupAfterResume(row, backups, boundary, plugin ? { method: 'plugin', plugin: plugin.name } : { method: 'barmanObjectStore' }) : undefined
 
   return (
     <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
@@ -153,13 +159,13 @@ export function CNPGArchivingRepair({
           <li className="flex items-start gap-2">
             <span className="flex h-4 shrink-0 items-center"><StatusDot tone={fresh && fresh !== 'unread' ? 'healthy' : 'unknown'} /></span>
             <span className={fresh && fresh !== 'unread' ? 'text-theme-text-primary' : 'text-theme-text-secondary'}>
-              A base backup starts after archiving {failingNow ? 'resumes' : 'resumed'} (Back up now, above), so recovery does not depend on WAL from before the gap.{' '}
+              A base backup that starts after archiving {failingNow ? 'resumes' : 'resumed'} completes (Back up now, above), so recovery no longer depends on WAL archived across the failure, which Radar cannot check is complete.{' '}
               {failingNow
                 ? `Not yet. Newest successful backup: ${lastBackup.at ? `${formatAge(lastBackup.at)} ago` : lastBackup.text.toLowerCase()}.`
                 : fresh === 'unread'
                   ? 'Radar cannot read this namespace’s Backups, so it cannot tell.'
                   : fresh
-                    ? `Done: Backup ${fresh.metadata?.name}${fresh.spec?.method ? ` (${fresh.spec.method})` : ''} started ${formatAge(fresh.status.startedAt)} ago and completed.`
+                    ? `Done: Backup ${fresh.metadata?.name} (${backupMethod(fresh)}) started ${formatAge(fresh.status.startedAt)} ago and completed${backupMethod(fresh) === 'volumeSnapshot' ? '; a restore from it replays WAL from the archive' : ''}.`
                     : 'No completed Backup of this cluster started after that yet.'}
             </span>
           </li>

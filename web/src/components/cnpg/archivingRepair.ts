@@ -52,19 +52,45 @@ export function cnpgArchiveDestination(config: any, declaredIn: string): CNPGArc
 }
 
 /**
- * When archiving resumed, at the latest: the last failure the instance manager
- * saw, or the ContinuousArchiving condition turning True after it.
+ * When archiving resumed, at the latest: the later of the last failure the
+ * instance manager saw and the ContinuousArchiving condition turning True. A
+ * Backup that started after the last failure saw no archive failure while it
+ * ran. NaN when neither is known.
  */
 export function resumeBoundary(cluster: any, failedAt: number): number {
   const conds = cluster?.status?.conditions
   const c = Array.isArray(conds) ? conds.find((x: any) => x?.type === 'ContinuousArchiving') : null
   const trueSince = c?.status === 'True' ? Date.parse(c.lastTransitionTime ?? '') : NaN
-  return Number.isFinite(trueSince) && trueSince > failedAt ? trueSince : failedAt
+  if (!Number.isFinite(trueSince)) return failedAt
+  return Number.isFinite(failedAt) && failedAt > trueSince ? failedAt : trueSince
 }
 
-/** The newest completed Backup of this cluster that started after `boundary`; 'unread' when Backups could not be read. */
-export function backupAfterResume(cluster: { namespace: string; name: string }, backups: any[] | null, boundary: number): any | 'unread' | undefined {
+/** The method a Backup ran with; CloudNativePG defaults an unset one to barmanObjectStore. */
+export function backupMethod(b: any): string {
+  return b?.status?.method || b?.spec?.method || 'barmanObjectStore'
+}
+
+export type CNPGWALArchiver = { method: 'plugin'; plugin: string } | { method: 'barmanObjectStore' }
+
+/**
+ * The newest completed Backup of this cluster that started after `boundary`
+ * and that a restore can start from with this cluster's WAL archive: one
+ * written by the same archiver, or a volume snapshot (restored by replaying
+ * WAL from the archive). 'unread' when Backups could not be read.
+ */
+export function backupAfterResume(
+  cluster: { namespace: string; name: string },
+  backups: any[] | null,
+  boundary: number,
+  archiver: CNPGWALArchiver,
+): any | 'unread' | undefined {
   if (backups === null) return 'unread'
+  const sameArchive = (b: any) => {
+    const m = backupMethod(b)
+    if (m === 'volumeSnapshot') return true
+    if (archiver.method === 'plugin') return m === 'plugin' && b?.spec?.pluginConfiguration?.name === archiver.plugin
+    return m === 'barmanObjectStore'
+  }
   return backups
     .filter(
       (b) =>
@@ -72,6 +98,7 @@ export function backupAfterResume(cluster: { namespace: string; name: string }, 
         b?.metadata?.namespace === cluster.namespace &&
         b?.spec?.cluster?.name === cluster.name &&
         b?.status?.phase === 'completed' &&
+        sameArchive(b) &&
         Date.parse(b?.status?.startedAt ?? '') > boundary,
     )
     .sort((a, b) => Date.parse(b.status.startedAt) - Date.parse(a.status.startedAt))[0]

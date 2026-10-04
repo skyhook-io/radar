@@ -23,6 +23,7 @@ import {
   getCNPGWALArchivingFailure,
   getCNPGLastBackupFailure,
   classifyCNPGClusterPhase,
+  cnpgBlockedPhaseExplanation,
   getCNPGClusterAvailability,
   CNPG_BARMAN_OBJECTSTORE_GROUP,
 } from '../resource-utils-cnpg'
@@ -99,6 +100,7 @@ export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRe
   const isFailover = phaseBucket === 'failing'
   const isSwitchover = phase === 'Switchover in progress'
   const isTerminal = phaseBucket === 'terminal'
+  const blocked = cnpgBlockedPhaseExplanation(phase, data.status?.phaseReason)
   // "The cluster is otherwise serving normally, so nothing else here will look
   // wrong" is a claim about the REST OF THIS DRAWER, so any other banner
   // falsifies it. It can no longer lean on isDegraded now that a
@@ -112,11 +114,7 @@ export function CNPGClusterRenderer({ data, onNavigate, declared}: CNPGClusterRe
     <>
       {/* Problem alerts */}
       {isTerminal && (
-        <AlertBanner
-          variant="error"
-          title="Reconciliation has stopped"
-          message={`${phase}. This state does not resolve on its own — the operator has stopped reconciling this cluster and it needs manual intervention.`}
-        />
+        <AlertBanner variant="error" title={blocked.title} message={blocked.message} />
       )}
       {hasSplitBrain && (
         <AlertBanner

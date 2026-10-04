@@ -79,7 +79,7 @@ export function switchoverConcerns(
 export function switchoverConcernWarning(pod: string, concerns: string[]): string | null {
   if (concerns.length === 0) return null
   const notReceiving = concerns.includes('not connected to the primary')
-  return `${pod}: ${concerns.join(' · ')}. ${notReceiving ? 'It is not receiving WAL from the current primary, so whatever was written after it stopped receiving is not on it, and ' : ''}Radar cannot measure how far behind it is. Check its logs, or pick a streaming standby.`
+  return `${pod}: ${concerns.join(' · ')}. ${notReceiving ? 'It is not receiving WAL from the current primary, so writes since then reach it only if it replays them from the WAL archive, and ' : ''}Radar cannot measure how far behind it is. Check its logs, or pick a streaming standby.`
 }
 
 /**

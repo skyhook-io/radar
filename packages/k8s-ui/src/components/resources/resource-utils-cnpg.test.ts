@@ -14,6 +14,7 @@ import {
   getCNPGWALArchivingFailure,
   getCNPGLastBackupFailure,
   classifyCNPGClusterPhase,
+  cnpgBlockedPhaseExplanation,
   classifyCNPGBackupPhase,
   CNPG_CLUSTER_PHASES_HEALTHY,
   CNPG_CLUSTER_PHASES_TRANSIENT,
@@ -114,6 +115,25 @@ describe('getCNPGClusterCertificateExpirations', () => {
 // ============================================================================
 
 const cluster = (status: any = {}, spec: any = {}) => ({ spec, status })
+
+describe('cnpgBlockedPhaseExplanation', () => {
+  it('says the operator retries a plugin phase, and quotes its reason', () => {
+    const e = cnpgBlockedPhaseExplanation(
+      'Cluster cannot proceed to reconciliation due to an unknown plugin being required',
+      "Unknown plugin: 'barman-cloud.cloudnative-pg.io'. Check the operator and plugin logs for errors",
+    )
+    expect(e.title).toBe('Reconciliation is blocked by a plugin')
+    expect(e.body).toMatch(/retries every few seconds/)
+    expect(e.body).not.toMatch(/manual intervention|does not resolve/)
+    expect(e.body).toMatch(/The operator reports: Unknown plugin/)
+    expect(e.message.startsWith('Cluster cannot proceed')).toBe(true)
+  })
+  it('keeps manual intervention for the one phase upstream says needs it', () => {
+    expect(cnpgBlockedPhaseExplanation('Cluster is unrecoverable and needs manual intervention').title).toBe('Cluster is unrecoverable')
+    const objects = cnpgBlockedPhaseExplanation('Unable to create required cluster objects', '  ')
+    expect(objects.body).toBe('The operator keeps retrying, but this does not clear until its cause is fixed.')
+  })
+})
 
 describe('classifyCNPGClusterPhase', () => {
   it('buckets every phase constant shipped by CNPG 1.27', () => {

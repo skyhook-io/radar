@@ -71,7 +71,7 @@ function SlotRelief({ row, onOpenReplication }: { row: CNPGFleetRow; onOpenRepli
             <div className={toneTextClass('degraded')}>{p.title}</div>
             <p className="text-theme-text-secondary">
               The primary keeps that WAL until {standby ?? 'the slot’s consumer'} catches up or the slot is dropped.
-              {standby && gaps.has(standby) ? ` ${standby} is not receiving WAL from the primary, so it will not catch up on its own.` : ''}
+              {standby && gaps.has(standby) ? ` ${standby} is not streaming from the primary, and the slot advances only while it does — even if ${standby} replays WAL from the archive meanwhile.` : ''}
             </p>
             {standby && (
               <p className="text-theme-text-secondary">

@@ -1292,7 +1292,7 @@ export function cnpgStandbyNotReceivingProblem(row: Pick<CNPGFleetRow, 'key' | '
     category: 'availability',
     title: `${gap.pod} is not receiving WAL from the primary`,
     shortTitle: `${gap.pod} not receiving WAL`,
-    detail: `${capitalize(gap.evidence.join('; '))}. While it receives nothing it falls further behind and the primary keeps WAL for it; a replay lag of 0 does not mean it is caught up, only that nothing new reached it.`,
+    detail: `${capitalize(gap.evidence.join('; '))}. While it does not stream, the primary keeps WAL for its slot, and it falls behind unless it replays WAL from the archive; a replay lag of 0 does not mean it is caught up, only that nothing new reached it.`,
     subject: { kind: 'Pod', group: '', namespace: row.namespace, name: gap.pod },
     source: 'measurement',
     measuredBy: gap.measuredBy,
