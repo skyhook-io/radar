@@ -31,10 +31,12 @@ const (
 	cnpgHistoryStateError         = "error"
 	cnpgHistoryStateDenied        = "denied"
 
-	cnpgFleetLagSource    = "Prometheus cnpg_pg_replication_lag, standbys only (cnpg_pg_replication_in_recovery = 1)"
-	cnpgFleetGrowthSource = "Prometheus deriv(kubelet_volume_stats_used_bytes) over 6h"
-	cnpgFleetGrowthWindow = 6 * time.Hour
-	cnpgHistoryAnchorCap  = 100
+	cnpgFleetLagSource      = "Prometheus cnpg_pg_replication_lag, standbys only (cnpg_pg_replication_in_recovery = 1)"
+	cnpgFleetReceiverSource = "Prometheus cnpg_pg_replication_is_wal_receiver_up, standbys only (cnpg_pg_replication_in_recovery = 1)"
+	cnpgFleetSlotsSource    = "Prometheus cnpg_pg_replication_slots_active = 0 for physical slots, retained WAL from cnpg_pg_replication_slots_pg_wal_lsn_diff on each reporting instance"
+	cnpgFleetGrowthSource   = "Prometheus deriv(kubelet_volume_stats_used_bytes) over 6h"
+	cnpgFleetGrowthWindow   = 6 * time.Hour
+	cnpgHistoryAnchorCap    = 100
 )
 
 var cnpgHistoryMemoTTL = 15 * time.Second
@@ -260,21 +262,25 @@ func cnpgPodIdentities(pods []*corev1.Pod) []prom.WorkloadPodIdentity {
 // ---------- fleet ----------
 
 // CNPGFleetMetricsResponse is GET /api/cnpg/fleet-metrics: per visible
-// Cluster, its largest current standby replay lag and the growth of its
-// fastest-growing volume, both from Prometheus.
+// Cluster, its largest current standby replay lag with its standbys' WAL
+// receivers, its inactive physical replication slots and the growth of its
+// fastest-growing volume, all from Prometheus.
 type CNPGFleetMetricsResponse struct {
-	SampledAt    string                    `json:"sampledAt"`
-	Source       string                    `json:"source"`
-	Reason       string                    `json:"reason,omitempty"`
-	LagSource    string                    `json:"lagSource"`
-	GrowthSource string                    `json:"growthSource"`
-	Clusters     []CNPGClusterFleetMetrics `json:"clusters"`
+	SampledAt      string                    `json:"sampledAt"`
+	Source         string                    `json:"source"`
+	Reason         string                    `json:"reason,omitempty"`
+	LagSource      string                    `json:"lagSource"`
+	ReceiverSource string                    `json:"receiverSource"`
+	SlotsSource    string                    `json:"slotsSource"`
+	GrowthSource   string                    `json:"growthSource"`
+	Clusters       []CNPGClusterFleetMetrics `json:"clusters"`
 }
 
 type CNPGClusterFleetMetrics struct {
 	Namespace string          `json:"namespace"`
 	Name      string          `json:"name"`
 	Lag       CNPGFleetLag    `json:"lag"`
+	Slots     CNPGFleetSlots  `json:"slots"`
 	Growth    CNPGFleetGrowth `json:"growth"`
 }
 
@@ -292,8 +298,43 @@ type CNPGFleetLag struct {
 	SustainedSeconds *float64 `json:"sustainedSeconds,omitempty"`
 	SustainedPod     string   `json:"sustainedPod,omitempty"`
 	SustainedWindow  string   `json:"sustainedWindow,omitempty"`
+	// Set only with State ok. Standbys counts instances reporting
+	// cnpg_pg_replication_in_recovery = 1; Receiving those whose WAL receiver
+	// is up, ReceiverDown those whose is not. A standby whose receiver is down
+	// can still read lag 0, so receiving is never inferred from lag: when no
+	// standby reports the receiver, ReceiverUnknown is set instead, with
+	// ReceiverReason.
+	Standbys        *int     `json:"standbys,omitempty"`
+	Receiving       *int     `json:"receiving,omitempty"`
+	ReceiverDown    []string `json:"receiverDown,omitempty"`
+	ReceiverUnknown bool     `json:"receiverUnknown,omitempty"`
+	ReceiverReason  string   `json:"receiverReason,omitempty"`
 	// Isolation says how the series were tied to this cluster.
 	Isolation *prometheuspkg.SeriesIsolation `json:"isolation,omitempty"`
+}
+
+// CNPGFleetSlots State: ok (Inactive lists the inactive physical slots,
+// empty when none is), noSeries, denied, ambiguous, scopeMismatch, error or
+// notRead. Inactive is null unless State is ok.
+type CNPGFleetSlots struct {
+	State     string                         `json:"state"`
+	Grant     *Grant                         `json:"grant,omitempty"`
+	Reason    string                         `json:"reason,omitempty"`
+	Inactive  []CNPGFleetSlot                `json:"inactive"`
+	Omitted   int                            `json:"omitted,omitempty"`
+	Isolation *prometheuspkg.SeriesIsolation `json:"isolation,omitempty"`
+}
+
+// CNPGFleetSlot is one inactive physical slot as one instance reports it.
+// Role is that instance's (primary or standby), absent when it reports no
+// recovery state; CloudNativePG copies HA slots to standbys, where they are
+// never active. Bytes is the WAL the slot retains there, null when not
+// reported.
+type CNPGFleetSlot struct {
+	Slot  string   `json:"slot"`
+	Pod   string   `json:"pod"`
+	Role  string   `json:"role,omitempty"`
+	Bytes *float64 `json:"bytes"`
 }
 
 // CNPGFleetGrowth State: ok (BytesPerHour of the fastest-growing claim),
@@ -320,7 +361,8 @@ func (s *Server) handleCNPGFleetMetrics(w http.ResponseWriter, r *http.Request) 
 	namespaces := s.parseNamespacesForUser(r)
 	resp := CNPGFleetMetricsResponse{
 		SampledAt: time.Now().UTC().Format(time.RFC3339), Source: cnpgHistorySourcePrometheus,
-		LagSource: cnpgFleetLagSource, GrowthSource: cnpgFleetGrowthSource, Clusters: []CNPGClusterFleetMetrics{},
+		LagSource: cnpgFleetLagSource, ReceiverSource: cnpgFleetReceiverSource, SlotsSource: cnpgFleetSlotsSource,
+		GrowthSource: cnpgFleetGrowthSource, Clusters: []CNPGClusterFleetMetrics{},
 	}
 	if reason := cnpgPrometheusUnavailable(r.Context()); reason != "" {
 		resp.Source, resp.Reason = cnpgHistorySourceNone, reason
@@ -360,7 +402,8 @@ func (s *Server) handleCNPGFleetMetrics(w http.ResponseWriter, r *http.Request) 
 	for _, ns := range nsList[read:] {
 		for _, c := range byNamespace[ns] {
 			resp.Clusters = append(resp.Clusters, CNPGClusterFleetMetrics{Namespace: ns, Name: c.GetName(),
-				Lag: CNPGFleetLag{State: cnpgUsageStateNotRead, Reason: reason}, Growth: CNPGFleetGrowth{State: cnpgUsageStateNotRead, Reason: reason}})
+				Lag: CNPGFleetLag{State: cnpgUsageStateNotRead, Reason: reason}, Slots: CNPGFleetSlots{State: cnpgUsageStateNotRead, Reason: reason},
+				Growth: CNPGFleetGrowth{State: cnpgUsageStateNotRead, Reason: reason}})
 		}
 	}
 	sort.Slice(resp.Clusters, func(i, j int) bool {
@@ -383,10 +426,16 @@ func (s *Server) cnpgNamespaceFleetMetrics(r *http.Request, cache *k8s.ResourceC
 		}
 	}
 	lags := make([]CNPGFleetLag, len(clusters))
+	slots := make([]CNPGFleetSlots, len(clusters))
 	growths := make([]CNPGFleetGrowth, len(clusters))
 	fillLag := func(l CNPGFleetLag) {
 		for i := range lags {
 			lags[i] = l
+		}
+	}
+	fillSlots := func(sl CNPGFleetSlots) {
+		for i := range slots {
+			slots[i] = sl
 		}
 	}
 	fillGrowth := func(g CNPGFleetGrowth) {
@@ -421,11 +470,25 @@ func (s *Server) cnpgNamespaceFleetMetrics(r *http.Request, cache *k8s.ResourceC
 					sv := sus.Seconds
 					lags[i].SustainedSeconds, lags[i].SustainedPod, lags[i].SustainedWindow = &sv, sus.Pod, prometheuspkg.CNPGSustainedLagWindow.String()
 				}
+				cnpgFleetReceivers(&lags[i], res, c.GetName())
 			case res.Scraped[c.GetName()]:
 				lags[i] = CNPGFleetLag{State: "noStandby", Reason: "no instance reports being a standby"}
 			default:
 				lags[i] = CNPGFleetLag{State: cnpgUsageStateNoSeries, Reason: "Prometheus has no CNPG exporter series for this cluster's instances"}
 			}
+		}
+	}
+
+	if !podsAllowed {
+		fillSlots(CNPGFleetSlots{State: cnpgHistoryStateDenied, Grant: cnpgGrantGetPods.In(namespace).Ref()})
+	} else if scopeErr != nil {
+		state, reason := cnpgHistoryScopeFailure(scopeErr)
+		fillSlots(CNPGFleetSlots{State: state, Reason: reason})
+	} else if res, err := prometheuspkg.QueryCNPGFleetSlots(ctx, namespace, names, matchers); err != nil {
+		fillSlots(CNPGFleetSlots{State: cnpgHistoryStateError, Reason: "Prometheus query failed: " + truncateCNPGRuntimeError(err.Error())})
+	} else {
+		for i, c := range clusters {
+			slots[i] = cnpgFleetSlotsOf(res, c.GetName(), &lagIso)
 		}
 	}
 
@@ -467,7 +530,42 @@ func (s *Server) cnpgNamespaceFleetMetrics(r *http.Request, cache *k8s.ResourceC
 			growths[i] = g
 		}
 	}
-	return cnpgFleetMetricsRows(namespace, clusters, lags, growths)
+	return cnpgFleetMetricsRows(namespace, clusters, lags, slots, growths)
+}
+
+// cnpgFleetReceivers adds a standby-reporting Cluster's WAL receiver evidence
+// to its lag reading.
+func cnpgFleetReceivers(l *CNPGFleetLag, res prometheuspkg.CNPGFleetLag, cluster string) {
+	rec, ok := res.Receivers[cluster]
+	switch {
+	case res.ReceiversError != "":
+		l.ReceiverUnknown, l.ReceiverReason = true, res.ReceiversError
+	case !ok:
+		l.ReceiverUnknown, l.ReceiverReason = true, "no instance reported being a standby when the WAL receivers were read"
+	case rec.Unknown:
+		standbys := rec.Standbys
+		l.Standbys = &standbys
+		l.ReceiverUnknown, l.ReceiverReason = true, "the exporter does not report cnpg_pg_replication_is_wal_receiver_up for this cluster's standbys (custom monitoring queries)"
+	default:
+		standbys, receiving := rec.Standbys, rec.Receiving
+		l.Standbys, l.Receiving, l.ReceiverDown = &standbys, &receiving, rec.Down
+	}
+}
+
+func cnpgFleetSlotsOf(res prometheuspkg.CNPGFleetSlots, cluster string, iso *prometheuspkg.SeriesIsolation) CNPGFleetSlots {
+	cs, ok := res.Clusters[cluster]
+	switch {
+	case ok:
+		out := CNPGFleetSlots{State: cnpgHistoryStateOK, Inactive: make([]CNPGFleetSlot, 0, len(cs.Inactive)), Omitted: cs.Omitted, Isolation: iso}
+		for _, s := range cs.Inactive {
+			out.Inactive = append(out.Inactive, CNPGFleetSlot{Slot: s.Slot, Pod: s.Pod, Role: s.Role, Bytes: s.Bytes})
+		}
+		return out
+	case res.Scraped[cluster]:
+		return CNPGFleetSlots{State: cnpgUsageStateNoSeries, Reason: "no instance of this cluster reports a replication slot: it has none, or its monitoring queries leave pg_replication_slots out"}
+	default:
+		return CNPGFleetSlots{State: cnpgUsageStateNoSeries, Reason: "Prometheus has no CNPG exporter series for this cluster's instances"}
+	}
 }
 
 // cnpgFleetClaims lists each Cluster's owned claims under the caller's grants.
@@ -503,10 +601,10 @@ func (s *Server) cnpgFleetClaims(r *http.Request, cache *k8s.ResourceCache, name
 	return out, CNPGFleetGrowth{}
 }
 
-func cnpgFleetMetricsRows(namespace string, clusters []*unstructured.Unstructured, lags []CNPGFleetLag, growths []CNPGFleetGrowth) []CNPGClusterFleetMetrics {
+func cnpgFleetMetricsRows(namespace string, clusters []*unstructured.Unstructured, lags []CNPGFleetLag, slots []CNPGFleetSlots, growths []CNPGFleetGrowth) []CNPGClusterFleetMetrics {
 	out := make([]CNPGClusterFleetMetrics, len(clusters))
 	for i, c := range clusters {
-		out[i] = CNPGClusterFleetMetrics{Namespace: namespace, Name: c.GetName(), Lag: lags[i], Growth: growths[i]}
+		out[i] = CNPGClusterFleetMetrics{Namespace: namespace, Name: c.GetName(), Lag: lags[i], Slots: slots[i], Growth: growths[i]}
 	}
 	return out
 }

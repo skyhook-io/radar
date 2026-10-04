@@ -395,6 +395,22 @@ type CNPGFleetLag struct {
 	// CNPGSustainedLagWindow, for standbys already reporting when the window
 	// began; absent otherwise.
 	Sustained map[string]CNPGLagReading
+	// Receivers is keyed by Cluster, for Clusters with an instance in
+	// recovery. Nil, with ReceiversError set, when the query failed.
+	Receivers      map[string]CNPGReceiverReading
+	ReceiversError string
+}
+
+// CNPGReceiverReading is a Cluster's standbys (instances reporting
+// cnpg_pg_replication_in_recovery = 1) and their WAL receivers. Unknown is
+// set, and Receiving and Down are empty, when no standby reports
+// cnpg_pg_replication_is_wal_receiver_up. A standby that alone lacks the
+// family is counted in Standbys only.
+type CNPGReceiverReading struct {
+	Standbys  int
+	Receiving int
+	Down      []string
+	Unknown   bool
 }
 
 // CNPGSustainedLagWindow is how long a standby's replay lag must stay high
@@ -444,7 +460,201 @@ func queryCNPGFleetLag(ctx context.Context, q seriesQuerier, namespace string, c
 		}
 	}
 	out.Sustained = querySustainedCNPGLag(ctx, q, sel, known)
+	out.Receivers, out.ReceiversError = queryCNPGReceivers(ctx, q, sel, known)
 	return out, nil
+}
+
+// queryCNPGReceivers reads whether each standby's WAL receiver is up. Lag
+// cannot answer that: cnpg_pg_replication_lag is 0 whenever a standby's
+// receive and replay positions match, which is also what a standby that
+// receives nothing reports. A standby without the receiver family answers -1
+// through the `or` branch.
+func queryCNPGReceivers(ctx context.Context, q seriesQuerier, sel string, known map[string]bool) (map[string]CNPGReceiverReading, string) {
+	standby := "(max by (pod) (cnpg_pg_replication_in_recovery{" + sel + "}) == 1)"
+	query := "(max by (pod) (cnpg_pg_replication_is_wal_receiver_up{" + sel + "}) and on (pod) " + standby + ") or (-1 * " + standby + ")"
+	res, err := q.Query(ctx, query)
+	if err != nil {
+		return nil, "Prometheus query failed: " + truncate(err.Error(), 200)
+	}
+	return parseCNPGReceivers(res, known), ""
+}
+
+func parseCNPGReceivers(res *prom.QueryResult, known map[string]bool) map[string]CNPGReceiverReading {
+	out := map[string]CNPGReceiverReading{}
+	unreported := map[string]int{}
+	for _, s := range res.Series {
+		if len(s.DataPoints) == 0 {
+			continue
+		}
+		pod := s.Labels["pod"]
+		cluster := CNPGClusterOfPod(pod, known)
+		if cluster == "" {
+			continue
+		}
+		r := out[cluster]
+		r.Standbys++
+		switch v := s.DataPoints[0].Value; {
+		case v > 0:
+			r.Receiving++
+		case v == 0:
+			r.Down = append(r.Down, pod)
+		default:
+			unreported[cluster]++
+		}
+		out[cluster] = r
+	}
+	for cluster, r := range out {
+		sort.Strings(r.Down)
+		r.Unknown = unreported[cluster] == r.Standbys
+		out[cluster] = r
+	}
+	return out
+}
+
+// CNPGFleetSlotCap bounds the inactive slots kept per Cluster.
+const CNPGFleetSlotCap = 10
+
+const cnpgSlotRowLabel = "radar_row"
+
+// CNPGSlotReading is one inactive physical replication slot as one instance
+// reports it. Role is that instance's: "primary", "standby" (CloudNativePG
+// copies HA slots to standbys, where no WAL sender uses them), or "" when it
+// reports no recovery state. Bytes is the WAL the slot retains on that
+// instance, nil when not reported.
+type CNPGSlotReading struct {
+	Slot  string
+	Pod   string
+	Role  string
+	Bytes *float64
+}
+
+// CNPGClusterSlots is one Cluster's inactive physical slots, most retained
+// WAL first, at most CNPGFleetSlotCap; Omitted counts the rest.
+type CNPGClusterSlots struct {
+	Inactive []CNPGSlotReading
+	Omitted  int
+}
+
+// CNPGFleetSlots holds the Clusters whose instances report the slot family
+// at all, and the Clusters with any exporter series, so "no slot reported"
+// is told apart from "not scraped".
+type CNPGFleetSlots struct {
+	Clusters map[string]CNPGClusterSlots
+	Scraped  map[string]bool
+}
+
+// QueryCNPGFleetSlots reads the inactive physical replication slots of the
+// named Clusters in one namespace with one instant query.
+func QueryCNPGFleetSlots(ctx context.Context, namespace string, clusters []string, matchers string) (CNPGFleetSlots, error) {
+	client := GetClient()
+	if client == nil {
+		return CNPGFleetSlots{}, errors.New("Prometheus client not initialized")
+	}
+	return queryCNPGFleetSlots(ctx, client, namespace, clusters, matchers)
+}
+
+// Each branch is tagged with its own radar_row value so `or` keeps all of
+// them: inactive slots, the WAL those retain, which instances report the slot
+// family at all, each instance's recovery state (its role), and which
+// instances are scraped.
+func queryCNPGFleetSlots(ctx context.Context, q seriesQuerier, namespace string, clusters []string, matchers string) (CNPGFleetSlots, error) {
+	sel := withScope(CNPGInstancesSelector(namespace, clusters), matchers)
+	physical := sel + `,slot_type="physical"`
+	inactive := "(max by (pod, slot_name) (cnpg_pg_replication_slots_active{" + physical + "}) == 0)"
+	tag := func(expr, row string) string {
+		return "label_replace(" + expr + `, "` + cnpgSlotRowLabel + `", "` + row + `", "pod", ".*")`
+	}
+	query := strings.Join([]string{
+		tag(inactive, "inactive"),
+		tag("max by (pod, slot_name) (cnpg_pg_replication_slots_pg_wal_lsn_diff{"+physical+"}) and on (pod, slot_name) "+inactive, "retained"),
+		tag("count by (pod) (cnpg_pg_replication_slots_active{"+sel+"})", "reported"),
+		tag("max by (pod) (cnpg_pg_replication_in_recovery{"+sel+"})", "recovery"),
+		tag("count by (pod) (cnpg_collector_up{"+sel+"})", "scraped"),
+	}, " or ")
+	res, err := q.Query(ctx, query)
+	if err != nil {
+		return CNPGFleetSlots{}, err
+	}
+	known := map[string]bool{}
+	for _, c := range clusters {
+		known[c] = true
+	}
+	return parseCNPGFleetSlots(res, known), nil
+}
+
+func parseCNPGFleetSlots(res *prom.QueryResult, known map[string]bool) CNPGFleetSlots {
+	type slotKey struct{ pod, slot string }
+	inactive := map[slotKey]bool{}
+	retained := map[slotKey]float64{}
+	role := map[string]string{}
+	out := CNPGFleetSlots{Clusters: map[string]CNPGClusterSlots{}, Scraped: map[string]bool{}}
+	for _, s := range res.Series {
+		if len(s.DataPoints) == 0 {
+			continue
+		}
+		pod := s.Labels["pod"]
+		cluster := CNPGClusterOfPod(pod, known)
+		if cluster == "" {
+			continue
+		}
+		v := s.DataPoints[0].Value
+		key := slotKey{pod, s.Labels["slot_name"]}
+		switch s.Labels[cnpgSlotRowLabel] {
+		case "inactive":
+			if key.slot != "" {
+				inactive[key] = true
+			}
+		case "retained":
+			if !math.IsNaN(v) && !math.IsInf(v, 0) {
+				retained[key] = v
+			}
+		case "reported":
+			out.Scraped[cluster] = true
+			if _, ok := out.Clusters[cluster]; !ok {
+				out.Clusters[cluster] = CNPGClusterSlots{Inactive: []CNPGSlotReading{}}
+			}
+		case "recovery":
+			switch v {
+			case 1:
+				role[pod] = "standby"
+			case 0:
+				role[pod] = "primary"
+			}
+		case "scraped":
+			out.Scraped[cluster] = true
+		}
+	}
+	for key := range inactive {
+		cluster := CNPGClusterOfPod(key.pod, known)
+		reading := CNPGSlotReading{Slot: key.slot, Pod: key.pod, Role: role[key.pod]}
+		if b, ok := retained[key]; ok {
+			reading.Bytes = &b
+		}
+		cs := out.Clusters[cluster]
+		cs.Inactive = append(cs.Inactive, reading)
+		out.Clusters[cluster] = cs
+	}
+	for cluster, cs := range out.Clusters {
+		sort.Slice(cs.Inactive, func(i, j int) bool {
+			a, b := cs.Inactive[i], cs.Inactive[j]
+			if (a.Bytes == nil) != (b.Bytes == nil) {
+				return a.Bytes != nil
+			}
+			if a.Bytes != nil && *a.Bytes != *b.Bytes {
+				return *a.Bytes > *b.Bytes
+			}
+			if a.Pod != b.Pod {
+				return a.Pod < b.Pod
+			}
+			return a.Slot < b.Slot
+		})
+		if len(cs.Inactive) > CNPGFleetSlotCap {
+			cs.Omitted = len(cs.Inactive) - CNPGFleetSlotCap
+			cs.Inactive = cs.Inactive[:CNPGFleetSlotCap]
+		}
+		out.Clusters[cluster] = cs
+	}
+	return out
 }
 
 // querySustainedCNPGLag is best effort: without it the fleet still shows the

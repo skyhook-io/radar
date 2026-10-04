@@ -32,16 +32,31 @@ const (
 
 // CNPGOperatorComponent is one operator or plugin Deployment. Version is the
 // image tag, else the app.kubernetes.io/version label, else empty. Replica
-// counts are nil when unreported, which is not zero.
+// counts are nil when unreported, which is not zero. Pods is null unless
+// PodCoverage is ok; PodCoverage is absent for a plugin Service with no
+// matching Deployment.
 type CNPGOperatorComponent struct {
-	Role          string `json:"role"`
-	PluginName    string `json:"pluginName,omitempty"`
-	Namespace     string `json:"namespace"`
-	Deployment    string `json:"deployment"`
-	Image         string `json:"image"`
-	Version       string `json:"version"`
-	ReadyReplicas *int32 `json:"readyReplicas"`
-	Replicas      *int32 `json:"replicas"`
+	Role          string                     `json:"role"`
+	PluginName    string                     `json:"pluginName,omitempty"`
+	Namespace     string                     `json:"namespace"`
+	Deployment    string                     `json:"deployment"`
+	Image         string                     `json:"image"`
+	Version       string                     `json:"version"`
+	ReadyReplicas *int32                     `json:"readyReplicas"`
+	Replicas      *int32                     `json:"replicas"`
+	Pods          []CNPGOperatorComponentPod `json:"pods"`
+	PodCoverage   *ReadSource                `json:"podCoverage,omitempty"`
+}
+
+// CNPGOperatorComponentPod is one of a component's Pods. StartedAt is when
+// the component's container last started, empty while it is not running;
+// Restarts is summed over the Pod's containers.
+type CNPGOperatorComponentPod struct {
+	Name            string                    `json:"name"`
+	Ready           bool                      `json:"ready"`
+	Restarts        int32                     `json:"restarts"`
+	StartedAt       string                    `json:"startedAt,omitempty"`
+	LastTermination *CNPGContainerTermination `json:"lastTermination,omitempty"`
 }
 
 // CNPGOperatorConfigMapState is present only on ConfigMap references. A Secret
@@ -103,11 +118,25 @@ func (s *Server) handleCNPGOperator(w http.ResponseWriter, r *http.Request) {
 	svcAcc, services := s.cnpgOperatorServices(r, cache, scope)
 	resp.Coverage["services"] = svcAcc.coverage()
 
+	typed := s.getClientForRequest(r)
+	podReads := map[*appsv1.Deployment]cnpgDeploymentPodRead{}
+	podsOf := func(d *appsv1.Deployment) cnpgDeploymentPodRead {
+		if read, ok := podReads[d]; ok {
+			return read
+		}
+		read := s.cnpgDeploymentPods(r, typed, d)
+		podReads[d] = read
+		return read
+	}
+	component := func(d *appsv1.Deployment, role, pluginName string, c *corev1.Container) CNPGOperatorComponent {
+		return withCNPGComponentPods(cnpgOperatorComponent(d, role, pluginName, c), podsOf(d), c)
+	}
+
 	var operators []*appsv1.Deployment
 	for _, d := range deployments {
 		if d.Labels[cnpgOperatorNameLabel] == cnpgOperatorNameValue {
 			operators = append(operators, d)
-			resp.Components = append(resp.Components, cnpgOperatorComponent(d, cnpgOperatorRoleOperator, "", cnpgOperatorContainerOf(d)))
+			resp.Components = append(resp.Components, component(d, cnpgOperatorRoleOperator, "", cnpgOperatorContainerOf(d)))
 		}
 	}
 
@@ -127,7 +156,7 @@ func (s *Server) handleCNPGOperator(w http.ResponseWriter, r *http.Request) {
 			for _, d := range byNamespace[svc.Namespace] {
 				if sel.Matches(labels.Set(d.Spec.Template.Labels)) {
 					matched = true
-					plugins = append(plugins, cnpgOperatorComponent(d, cnpgOperatorRolePlugin, pluginName, firstContainer(d)))
+					plugins = append(plugins, component(d, cnpgOperatorRolePlugin, pluginName, firstContainer(d)))
 				}
 			}
 		}
@@ -148,8 +177,30 @@ func (s *Server) handleCNPGOperator(w http.ResponseWriter, r *http.Request) {
 	resp.Components = append(resp.Components, plugins...)
 
 	resp.Config = s.cnpgOperatorConfig(r, cache, operators)
-	resp.Diagnosis = s.cnpgOperatorDiagnoses(r, operators)
+	resp.Diagnosis = s.cnpgOperatorDiagnoses(r, typed, operators, podsOf)
 	s.writeJSON(w, resp)
+}
+
+// withCNPGComponentPods adds a component's Pods: restarts and the last
+// termination show a crash-looping operator or plugin that its Deployment's
+// ready count, read between crashes, can hide.
+func withCNPGComponentPods(comp CNPGOperatorComponent, read cnpgDeploymentPodRead, c *corev1.Container) CNPGOperatorComponent {
+	coverage := read.coverage
+	comp.PodCoverage = &coverage
+	if coverage.State != cnpgReadOK {
+		return comp
+	}
+	comp.Pods = make([]CNPGOperatorComponentPod, 0, len(read.pods))
+	for i := range read.pods {
+		p := &read.pods[i]
+		pod := CNPGOperatorComponentPod{Name: p.Name, Ready: cnpgActionPodReady(p)}
+		if c != nil {
+			pod.StartedAt = cnpgOperatorProcessStart(p, c.Name)
+		}
+		pod.Restarts, pod.LastTermination = cnpgPodRestarts(p)
+		comp.Pods = append(comp.Pods, pod)
+	}
+	return comp
 }
 
 // cnpgOperatorScope is the caller's RBAC scope without the view filter. A

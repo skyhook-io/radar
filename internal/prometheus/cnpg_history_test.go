@@ -3,6 +3,7 @@ package prometheus
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -285,6 +286,173 @@ func TestQueryCNPGFleetLagSeparatesNoStandbyFromUnscraped(t *testing.T) {
 	}
 	if got.Scraped["c"] || got.Scraped["zzz"] {
 		t.Errorf("unexpected scraped: %v", got.Scraped)
+	}
+}
+
+// A standby whose WAL receiver is down reads lag 0 (nothing received, nothing
+// left to replay), so the receiver is read on its own and never inferred.
+func TestQueryCNPGFleetLagReadsWALReceivers(t *testing.T) {
+	q := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
+		if strings.Contains(query, "cnpg_pg_replication_is_wal_receiver_up") {
+			for _, want := range []string{"max by (pod) (cnpg_pg_replication_is_wal_receiver_up{", "(max by (pod) (cnpg_pg_replication_in_recovery{", ") == 1)", `cluster_id="a"`} {
+				if !strings.Contains(query, want) {
+					t.Errorf("receiver query lacks %q: %s", want, query)
+				}
+			}
+			return &prom.QueryResult{Series: []prom.Series{
+				vec(map[string]string{"pod": "a-3"}, 0),
+				vec(map[string]string{"pod": "a-2"}, 1),
+				vec(map[string]string{"pod": "a-1"}, 0),
+				vec(map[string]string{"pod": "b-2"}, -1),
+				vec(map[string]string{"pod": "b-3"}, -1),
+				vec(map[string]string{"pod": "c-2"}, 1),
+				vec(map[string]string{"pod": "c-3"}, -1),
+				vec(map[string]string{"pod": "zzz-1"}, 0),
+			}}, nil
+		}
+		return &prom.QueryResult{Series: []prom.Series{
+			vec(map[string]string{"pod": "a-1"}, 0),
+			vec(map[string]string{"pod": "a-2"}, 0),
+			vec(map[string]string{"pod": "a-3"}, 2),
+			vec(map[string]string{"pod": "d-1"}, -1),
+		}}, nil
+	}}
+	got, err := queryCNPGFleetLag(context.Background(), q, "pg", []string{"a", "b", "c", "d"}, `cluster_id="a"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Lag["a"].Seconds != 2 || got.Lag["a"].Pod != "a-3" {
+		t.Errorf("lag reading changed: %+v", got.Lag["a"])
+	}
+	a := got.Receivers["a"]
+	if a.Standbys != 3 || a.Receiving != 1 || a.Unknown || strings.Join(a.Down, ",") != "a-1,a-3" {
+		t.Errorf("a receivers = %+v, want 3 standbys, 1 receiving, a-1 and a-3 down (sorted)", a)
+	}
+	if b := got.Receivers["b"]; b.Standbys != 2 || !b.Unknown || b.Receiving != 0 || len(b.Down) != 0 {
+		t.Errorf("b receivers = %+v, want unknown: no standby reports the receiver family", b)
+	}
+	if c := got.Receivers["c"]; c.Standbys != 2 || c.Unknown || c.Receiving != 1 || len(c.Down) != 0 {
+		t.Errorf("c receivers = %+v, want one receiving and one unreported, not unknown", c)
+	}
+	if _, ok := got.Receivers["d"]; ok {
+		t.Errorf("d has no standby but got receivers %+v", got.Receivers["d"])
+	}
+	if _, ok := got.Receivers["zzz"]; ok || got.ReceiversError != "" {
+		t.Errorf("receivers = %+v err %q", got.Receivers, got.ReceiversError)
+	}
+
+	failing := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
+		if strings.Contains(query, "is_wal_receiver_up") {
+			return nil, errors.New("boom")
+		}
+		return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"pod": "a-2"}, 1)}}, nil
+	}}
+	got, err = queryCNPGFleetLag(context.Background(), failing, "pg", []string{"a"}, "")
+	if err != nil || got.Lag["a"].Seconds != 1 {
+		t.Fatalf("a failed receiver query must not fail the lag: %+v %v", got, err)
+	}
+	if got.Receivers != nil || !strings.Contains(got.ReceiversError, "boom") {
+		t.Errorf("receivers = %+v err %q, want nil with the error", got.Receivers, got.ReceiversError)
+	}
+}
+
+func slotRow(row string, labels map[string]string, v float64) prom.Series {
+	l := map[string]string{cnpgSlotRowLabel: row}
+	for k, val := range labels {
+		l[k] = val
+	}
+	return vec(l, v)
+}
+
+func TestQueryCNPGFleetSlotsListsInactivePhysicalSlots(t *testing.T) {
+	q := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
+		for _, want := range []string{
+			`cnpg_pg_replication_slots_active{namespace="pg",pod=~"^(a|b|c|d)-[0-9]+$",cluster_id="x",slot_type="physical"}) == 0)`,
+			`cnpg_pg_replication_slots_pg_wal_lsn_diff{namespace="pg",pod=~"^(a|b|c|d)-[0-9]+$",cluster_id="x",slot_type="physical"}`,
+			`"radar_row", "retained", "pod", ".*")`,
+		} {
+			if !strings.Contains(query, want) {
+				t.Errorf("slots query lacks %q: %s", want, query)
+			}
+		}
+		return &prom.QueryResult{Series: []prom.Series{
+			// a: the primary a-6 keeps an inactive slot for a-1, and a-2 reports
+			// its synchronized copy; a-1 itself reports no recovery state.
+			slotRow("inactive", map[string]string{"pod": "a-6", "slot_name": "_cnpg_a_1"}, 0),
+			slotRow("retained", map[string]string{"pod": "a-6", "slot_name": "_cnpg_a_1"}, 4.9e9),
+			slotRow("inactive", map[string]string{"pod": "a-2", "slot_name": "_cnpg_a_1"}, 0),
+			slotRow("retained", map[string]string{"pod": "a-2", "slot_name": "_cnpg_a_1"}, 4.8e9),
+			slotRow("inactive", map[string]string{"pod": "a-1", "slot_name": "_cnpg_a_2"}, 0),
+			slotRow("reported", map[string]string{"pod": "a-6"}, 2),
+			slotRow("reported", map[string]string{"pod": "a-2"}, 1),
+			slotRow("recovery", map[string]string{"pod": "a-6"}, 0),
+			slotRow("recovery", map[string]string{"pod": "a-2"}, 1),
+			slotRow("scraped", map[string]string{"pod": "a-6"}, 1),
+			// b: slots reported, all active (the query filters active ones out).
+			slotRow("reported", map[string]string{"pod": "b-1"}, 1),
+			slotRow("scraped", map[string]string{"pod": "b-1"}, 1),
+			// c: scraped, no slot family; d: not scraped at all.
+			slotRow("scraped", map[string]string{"pod": "c-1"}, 1),
+			slotRow("inactive", map[string]string{"pod": "zzz-1", "slot_name": "s"}, 0),
+		}}, nil
+	}}
+	got, err := queryCNPGFleetSlots(context.Background(), q, "pg", []string{"a", "b", "c", "d"}, `cluster_id="x"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := got.Clusters["a"]
+	if len(a.Inactive) != 3 || a.Omitted != 0 {
+		t.Fatalf("a inactive = %+v", a)
+	}
+	want := []struct {
+		pod, slot, role string
+		bytes           float64
+	}{{"a-6", "_cnpg_a_1", "primary", 4.9e9}, {"a-2", "_cnpg_a_1", "standby", 4.8e9}}
+	for i, w := range want {
+		s := a.Inactive[i]
+		if s.Pod != w.pod || s.Slot != w.slot || s.Role != w.role || s.Bytes == nil || *s.Bytes != w.bytes {
+			t.Errorf("a inactive[%d] = %+v, want %+v", i, s, w)
+		}
+	}
+	if s := a.Inactive[2]; s.Pod != "a-1" || s.Role != "" || s.Bytes != nil {
+		t.Errorf("a slot without retained bytes or recovery state = %+v, want last with no role and no bytes", s)
+	}
+	if b, ok := got.Clusters["b"]; !ok || b.Inactive == nil || len(b.Inactive) != 0 {
+		t.Errorf("b = %+v (present %v), want read with an empty list", b, ok)
+	}
+	if _, ok := got.Clusters["c"]; ok || !got.Scraped["c"] {
+		t.Errorf("c: clusters %+v scraped %v, want scraped without a slot reading", got.Clusters["c"], got.Scraped["c"])
+	}
+	if _, ok := got.Clusters["d"]; ok || got.Scraped["d"] {
+		t.Errorf("d must be neither read nor scraped")
+	}
+	if _, ok := got.Clusters["zzz"]; ok {
+		t.Error("a Pod of an unrequested cluster was attributed")
+	}
+}
+
+func TestQueryCNPGFleetSlotsCapsBySize(t *testing.T) {
+	q := &fakeCNPGQuerier{instant: func(string) (*prom.QueryResult, error) {
+		var out []prom.Series
+		for i := 1; i <= 13; i++ {
+			pod := "a-" + strconv.Itoa(i)
+			out = append(out,
+				slotRow("inactive", map[string]string{"pod": pod, "slot_name": "_cnpg_a_99"}, 0),
+				slotRow("retained", map[string]string{"pod": pod, "slot_name": "_cnpg_a_99"}, float64(i)),
+			)
+		}
+		return &prom.QueryResult{Series: append(out, slotRow("reported", map[string]string{"pod": "a-1"}, 1))}, nil
+	}}
+	got, err := queryCNPGFleetSlots(context.Background(), q, "pg", []string{"a"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := got.Clusters["a"]
+	if len(a.Inactive) != CNPGFleetSlotCap || a.Omitted != 13-CNPGFleetSlotCap {
+		t.Fatalf("kept %d, omitted %d", len(a.Inactive), a.Omitted)
+	}
+	if *a.Inactive[0].Bytes != 13 || *a.Inactive[CNPGFleetSlotCap-1].Bytes != 4 {
+		t.Errorf("not the largest first: first %v last %v", *a.Inactive[0].Bytes, *a.Inactive[CNPGFleetSlotCap-1].Bytes)
 	}
 }
 

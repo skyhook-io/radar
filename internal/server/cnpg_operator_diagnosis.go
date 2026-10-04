@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -47,13 +48,23 @@ var (
 )
 
 type CNPGOperatorPod struct {
-	Name      string `json:"name"`
-	UID       string `json:"uid"`
-	Phase     string `json:"phase"`
-	Ready     bool   `json:"ready"`
-	StartedAt string `json:"startedAt,omitempty"`
-	Restarts  int32  `json:"restarts"`
-	Leader    bool   `json:"leader"`
+	Name            string                    `json:"name"`
+	UID             string                    `json:"uid"`
+	Phase           string                    `json:"phase"`
+	Ready           bool                      `json:"ready"`
+	StartedAt       string                    `json:"startedAt,omitempty"`
+	Restarts        int32                     `json:"restarts"`
+	LastTermination *CNPGContainerTermination `json:"lastTermination,omitempty"`
+	Leader          bool                      `json:"leader"`
+}
+
+// CNPGContainerTermination is how a container's previous run ended
+// (lastState.terminated), for the Pod's container that ended most recently.
+type CNPGContainerTermination struct {
+	Container  string `json:"container"`
+	Reason     string `json:"reason"`
+	ExitCode   int32  `json:"exitCode"`
+	FinishedAt string `json:"finishedAt,omitempty"`
 }
 
 // CNPGOperatorLeader: State ok | disabled (no --leader-elect) | notFound |
@@ -143,9 +154,10 @@ type CNPGOperatorDiagnosis struct {
 	Events      CNPGOperatorEvents           `json:"events"`
 }
 
-func (s *Server) cnpgOperatorDiagnoses(r *http.Request, operators []*appsv1.Deployment) []CNPGOperatorDiagnosis {
+// cnpgOperatorDiagnoses takes podsOf so the Pods each operator Deployment's
+// component already read are not listed again.
+func (s *Server) cnpgOperatorDiagnoses(r *http.Request, typed kubernetes.Interface, operators []*appsv1.Deployment, podsOf func(*appsv1.Deployment) cnpgDeploymentPodRead) []CNPGOperatorDiagnosis {
 	out := []CNPGOperatorDiagnosis{}
-	typed := s.getClientForRequest(r)
 	if typed == nil {
 		return out
 	}
@@ -155,7 +167,12 @@ func (s *Server) cnpgOperatorDiagnoses(r *http.Request, operators []*appsv1.Depl
 		c := cnpgOperatorContainerOf(d)
 		diag.Watch = cnpgOperatorWatchOf(c, d.Namespace)
 		diag.MetricsPort = cnpgOperatorMetricsPort(c)
-		pods := s.cnpgOperatorPods(r, typed, d, &diag)
+		read := podsOf(d)
+		pods := read.pods
+		diag.PodCoverage = read.coverage
+		for i := range pods {
+			diag.Pods = append(diag.Pods, cnpgOperatorPodOf(&pods[i]))
+		}
 		diag.Leader = s.cnpgOperatorLeader(r, typed, d, c, pods)
 		leaderPod := cnpgOperatorLeadingPod(diag.Leader)
 		for i := range diag.Pods {
@@ -177,37 +194,70 @@ func cnpgOperatorLeadingPod(l CNPGOperatorLeader) string {
 	return l.HolderPod
 }
 
-func (s *Server) cnpgOperatorPods(r *http.Request, typed kubernetes.Interface, d *appsv1.Deployment, diag *CNPGOperatorDiagnosis) []corev1.Pod {
-	var pods []corev1.Pod
+// cnpgDeploymentPodRead is the outcome of listing one Deployment's Pods.
+type cnpgDeploymentPodRead struct {
+	pods     []corev1.Pod
+	coverage ReadSource
+}
+
+// cnpgDeploymentPods lists the Pods a Deployment's selector matches, as the
+// caller, sorted by name.
+func (s *Server) cnpgDeploymentPods(r *http.Request, typed kubernetes.Interface, d *appsv1.Deployment) cnpgDeploymentPodRead {
 	if d.Spec.Selector == nil {
-		diag.PodCoverage = ReadSource{State: cnpgReadError, Reason: "the Deployment has no selector"}
-		return nil
+		return cnpgDeploymentPodRead{coverage: ReadSource{State: cnpgReadError, Reason: "the Deployment has no selector"}}
 	}
 	selector, err := metav1.LabelSelectorAsSelector(d.Spec.Selector)
 	if err != nil {
-		diag.PodCoverage = ReadSource{State: cnpgReadError, Reason: err.Error()}
-		return nil
+		return cnpgDeploymentPodRead{coverage: ReadSource{State: cnpgReadError, Reason: err.Error()}}
 	}
-	diag.PodCoverage = s.cnpgGatedRead(r, cnpgGrantListPods, d.Namespace, func() error {
+	var out cnpgDeploymentPodRead
+	out.coverage = s.cnpgGatedRead(r, cnpgGrantListPods, d.Namespace, func() error {
+		if typed == nil {
+			return errors.New("cluster client unavailable")
+		}
 		list, err := typed.CoreV1().Pods(d.Namespace).List(r.Context(), metav1.ListOptions{LabelSelector: selector.String()})
 		if err == nil {
-			pods = list.Items
+			out.pods = list.Items
 		}
 		return err
 	})
-	sort.Slice(pods, func(i, j int) bool { return pods[i].Name < pods[j].Name })
-	for i := range pods {
-		p := &pods[i]
-		op := CNPGOperatorPod{Name: p.Name, UID: string(p.UID), Phase: string(p.Status.Phase), Ready: cnpgActionPodReady(p)}
-		if p.Status.StartTime != nil {
-			op.StartedAt = p.Status.StartTime.UTC().Format(time.RFC3339)
-		}
-		for _, st := range p.Status.ContainerStatuses {
-			op.Restarts += st.RestartCount
-		}
-		diag.Pods = append(diag.Pods, op)
+	sort.Slice(out.pods, func(i, j int) bool { return out.pods[i].Name < out.pods[j].Name })
+	return out
+}
+
+func cnpgOperatorPodOf(p *corev1.Pod) CNPGOperatorPod {
+	op := CNPGOperatorPod{Name: p.Name, UID: string(p.UID), Phase: string(p.Status.Phase), Ready: cnpgActionPodReady(p)}
+	if p.Status.StartTime != nil {
+		op.StartedAt = p.Status.StartTime.UTC().Format(time.RFC3339)
 	}
-	return pods
+	op.Restarts, op.LastTermination = cnpgPodRestarts(p)
+	return op
+}
+
+// cnpgPodRestarts sums restarts over a Pod's containers and returns how the
+// container that ended most recently ended last time. Restart counts
+// accumulate over the Pod's life while each container keeps only its
+// previous run, so the newest termination is the one that explains a
+// current crash loop.
+func cnpgPodRestarts(p *corev1.Pod) (int32, *CNPGContainerTermination) {
+	var restarts int32
+	var newest *corev1.ContainerStateTerminated
+	var container string
+	for _, st := range p.Status.ContainerStatuses {
+		restarts += st.RestartCount
+		t := st.LastTerminationState.Terminated
+		if t != nil && (newest == nil || t.FinishedAt.After(newest.FinishedAt.Time)) {
+			newest, container = t, st.Name
+		}
+	}
+	if newest == nil {
+		return restarts, nil
+	}
+	out := &CNPGContainerTermination{Container: container, Reason: newest.Reason, ExitCode: newest.ExitCode}
+	if !newest.FinishedAt.IsZero() {
+		out.FinishedAt = newest.FinishedAt.UTC().Format(time.RFC3339)
+	}
+	return restarts, out
 }
 
 func cnpgOperatorWatchOf(c *corev1.Container, operatorNamespace string) CNPGOperatorWatch {
