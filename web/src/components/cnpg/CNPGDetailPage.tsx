@@ -115,7 +115,7 @@ export function CNPGDetailPage({
         id: 'storage',
         label: 'Storage',
         icon: <HardDrive className="h-4 w-4" />,
-        render: () => <CNPGStorageTab namespace={ns} name={name} onOpenHistory={() => openHistory('storage')} />,
+        render: () => <CNPGStorageTab namespace={ns} name={name} onOpenHistory={() => openHistory('storage')} onOpenReplication={() => goTab('replication')} />,
       },
       {
         id: 'performance',
@@ -140,7 +140,7 @@ export function CNPGDetailPage({
         id: 'backups',
         label: 'Backups',
         icon: <ShieldCheck className="h-4 w-4" />,
-        render: () => <CNPGBackupsTab namespace={ns} name={name} onInspect={onOpenResource} />,
+        render: () => <CNPGBackupsTab namespace={ns} name={name} onInspect={onOpenResource} onOpenLogs={(pod) => goTab('logs', { pod })} />,
       },
       {
         id: 'activity',

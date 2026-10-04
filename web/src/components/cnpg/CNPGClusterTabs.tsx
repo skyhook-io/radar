@@ -1,8 +1,9 @@
 import { useSearchParams } from 'react-router-dom'
-import { CNPGClusterCertificates, CNPGConnectSection, CNPGDimensionChips, refToSelectedResource, type CNPGDimension, type NavigateToRef } from '@skyhook-io/k8s-ui'
+import { CNPGClusterCertificates, CNPGConnectSection, CNPGDimensionChips, refToSelectedResource, toneTextClass, type CNPGDimension, type CNPGFleetRow, type NavigateToRef } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useCNPGRuntime } from '../../api/cnpg'
 import { CNPGStorage } from './CNPGStorage'
+import { CNPGArchivingRepair } from './CNPGArchivingRepair'
 import { CNPGProtection } from './CNPGProtection'
 import { CNPGRestoreValidation } from './recovery/CNPGRestoreValidation'
 import { CNPGRestoreButton } from './recovery/CNPGRestoreButton'
@@ -22,10 +23,20 @@ export function CNPGClusterHeaderChips({ namespace, name, onSelect }: { namespac
 }
 
 /** Storage: volumes, what holds WAL, and resize, with the history of both one click away. */
-export function CNPGStorageTab({ namespace, name, onOpenHistory }: { namespace: string; name: string; onOpenHistory?: () => void }) {
+export function CNPGStorageTab({
+  namespace,
+  name,
+  onOpenHistory,
+  onOpenReplication,
+}: {
+  namespace: string
+  name: string
+  onOpenHistory?: () => void
+  onOpenReplication?: () => void
+}) {
   const runtime = useCNPGRuntime(namespace, name)
-  const { fleet } = useCNPGFleet([namespace])
-  const clusterObject = fleet?.rows.find((r) => r.namespace === namespace && r.name === name)?.cluster
+  const { row } = useCNPGClusterAssessment(namespace, name)
+  const clusterObject = row?.cluster
   const primary = runtime.data?.permission.proxy === 'denied' ? undefined : runtime.data?.instances.find((i) => i.role === 'primary')
   return (
     <div className="space-y-4 p-4">
@@ -37,14 +48,54 @@ export function CNPGStorageTab({ namespace, name, onOpenHistory }: { namespace: 
           </button>
         )}
       </div>
+      {row && <SlotRelief row={row} onOpenReplication={onOpenReplication} />}
       <CNPGStorage namespace={namespace} name={name} primary={primary} clusterObject={clusterObject} />
     </div>
   )
 }
 
+/**
+ * What to do about WAL an inactive slot holds: the standby it is kept for,
+ * whether that standby receives anything, and the two ways the WAL is freed.
+ */
+function SlotRelief({ row, onOpenReplication }: { row: CNPGFleetRow; onOpenReplication?: () => void }) {
+  const slots = row.problems.filter((p) => p.id.startsWith(`slot:${row.key}:`))
+  if (slots.length === 0) return null
+  const gaps = new Set(row.problems.filter((p) => p.id.startsWith(`standby:${row.key}:`)).map((p) => p.subject.name))
+  return (
+    <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
+      {slots.map((p) => {
+        const standby = p.instance
+        return (
+          <div key={p.id} className="space-y-1 text-sm">
+            <div className={toneTextClass('degraded')}>{p.title}</div>
+            <p className="text-theme-text-secondary">
+              The primary keeps that WAL until {standby ?? 'the slot’s consumer'} catches up or the slot is dropped.
+              {standby && gaps.has(standby) ? ` ${standby} is not receiving WAL from the primary, so it will not catch up on its own.` : ''}
+            </p>
+            {standby && (
+              <p className="text-theme-text-secondary">
+                To free it, get {standby} streaming again — restart it, after checking its logs for why it stopped — or destroy it so CloudNativePG recreates it from
+                a fresh copy of the primary; the operator drops the HA slot of an instance that no longer exists.
+              </p>
+            )}
+            {onOpenReplication && (
+              <button type="button" onClick={onOpenReplication} className="text-xs text-accent-text hover:underline">
+                {standby ? `${standby} on Replication →` : 'Replication →'}
+              </button>
+            )}
+          </div>
+        )
+      })}
+    </section>
+  )
+}
+
 /** Backups: this cluster's recovery evidence, runs, schedules and destination, plus restore validation once it was restored. */
-export function CNPGBackupsTab({ namespace, name, onInspect }: { namespace: string; name: string; onInspect: (r: SelectedResource) => void }) {
+export function CNPGBackupsTab({ namespace, name, onInspect, onOpenLogs }: { namespace: string; name: string; onInspect: (r: SelectedResource) => void; onOpenLogs?: (pod: string) => void }) {
   const { query, fleet } = useCNPGFleet([namespace])
+  const { row, runtime } = useCNPGClusterAssessment(namespace, name)
+  const primary = runtime.data?.permission.proxy === 'denied' ? undefined : runtime.data?.instances.find((i) => i.role === 'primary')
   const [searchParams] = useSearchParams()
   const restore = useCNPGRestoreCapability(namespace)
   const restoreBlocked = restore.data ? (restore.data.allowed ? undefined : restore.data.reason ?? 'Not allowed') : restore.isLoading ? 'Checking whether you can create a Cluster here…' : undefined
@@ -56,6 +107,11 @@ export function CNPGBackupsTab({ namespace, name, onInspect }: { namespace: stri
             <CNPGRestoreButton namespace={namespace} entry={{ kind: 'cluster', name }} disabledReason={restoreBlocked} />
             <span className="text-xs text-theme-text-tertiary">Restores into a new Cluster beside this one; this cluster is not changed.</span>
           </div>
+          {row && (
+            <div className="px-5 pt-3 xl:px-7">
+              <CNPGArchivingRepair row={row} primary={primary} objectStores={data.objects.objectStores ?? []} onOpenLogs={onOpenLogs} onInspect={onInspect} />
+            </div>
+          )}
           {readyFleet.rows.find((r) => r.namespace === namespace && r.name === name)?.cluster?.spec?.bootstrap?.recovery && (
             <CNPGRestoreValidation namespace={namespace} name={name} />
           )}

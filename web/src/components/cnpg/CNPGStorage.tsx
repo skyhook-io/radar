@@ -450,7 +450,7 @@ function expansionVerdict(vols: CNPGStorageVolume[]): { text: string; tone?: 'de
   if (known.length < vols.length) return { text: 'Whether the class allows expansion is unknown for some claims' }
   if (known.every((v) => v.storageClass.allowVolumeExpansion)) return { text: 'The StorageClass allows expansion: the operator resizes each claim' }
   return {
-    text: 'The StorageClass does not allow expansion: a larger size will not resize the existing claims',
+    text: 'The StorageClass does not allow expansion: a larger size will not resize the existing claims. To get more space, restore into a new Cluster declared with a larger size or a class that expands (Backups → Restore to a new cluster), then move applications to it.',
     tone: 'degraded',
   }
 }

@@ -101,3 +101,23 @@ describe('operator current state claims only what it read', () => {
     expect(cnpgOperatorState(scaled).concerns[0]).toEqual({ tone: 'unhealthy', text: 'The operator is scaled to 0: nothing reconciles.' })
   })
 })
+
+describe('clusters blocked on a plugin', () => {
+  it('joins the cluster’s plugin phase to that plugin’s Deployment, side by side', () => {
+    const op = {
+      coverage: { deployments: { state: 'full' }, services: { state: 'full' } },
+      components: [{ role: 'plugin', pluginName: 'barman-cloud.cloudnative-pg.io', namespace: 'cnpg-system', deployment: 'barman-cloud', readyReplicas: 1, replicas: 1, pods: [{ name: 'b-1', ready: true, restarts: 0 }] }],
+      config: [],
+    } as unknown as CNPGOperatorResponse
+    const row = {
+      namespace: 'pgrt',
+      name: 'pg-runtime',
+      cluster: { status: { phase: 'Cluster cannot proceed to reconciliation due to an unknown plugin being required' }, spec: { plugins: [{ name: 'barman-cloud.cloudnative-pg.io' }, { name: 'missing.example.io' }] } },
+    } as any
+    const out = cnpgOperatorState(op, Date.now(), [row]).concerns
+    expect(out[0]).toEqual({
+      tone: 'unhealthy',
+      text: 'Cluster pgrt/pg-runtime requires a plugin the operator does not know — barman-cloud.cloudnative-pg.io: 1/1 ready; missing.example.io: no Deployment serving it was found.',
+    })
+  })
+})

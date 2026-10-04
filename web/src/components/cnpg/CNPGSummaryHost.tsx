@@ -41,6 +41,7 @@ import { CNPG_CONNECT_PARAM, cnpgConnectParamValue } from './actions/CNPGConnect
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 
 import { cnpgClusterFullPath, cnpgDimensionPath, cnpgDimensionTabLabel, cnpgWithinDetail } from './paths'
+import { cnpgScreenPath } from './routes'
 import { currentPageLabel, issuesPathForSubject } from '../../utils/page-links'
 import { CNPGRestoreProgress } from './recovery/CNPGRestoreProgress'
 import { restoreBackupDeclared } from './recovery/restoreModel'
@@ -137,6 +138,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
         }
         onSelectDimension={(id) => go(cnpgDimensionPath(namespace, name, connection.context || undefined, id))}
         dimensionLinkLabel={cnpgDimensionTabLabel}
+        onOpenOperator={() => navigate(cnpgScreenPath('operator'), { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } })}
         initialProblemsExpanded={context === 'expanded' && new URLSearchParams(location.search).get('problems') === 'all'}
         dimensions={dimensions}
         stateFacts={<BaseBackupFact runtime={runtime.data} />}

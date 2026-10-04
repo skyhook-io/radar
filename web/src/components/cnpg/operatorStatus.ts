@@ -1,5 +1,5 @@
 import type { CNPGOperatorComponent, CNPGOperatorResponse, CNPGOperatorVerdict } from '../../api/cnpg'
-import { formatAge } from '@skyhook-io/k8s-ui'
+import { cnpgClusterPlugins, cnpgPluginPhase, formatAge, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
 
 export interface CNPGOperatorBannerModel {
   /** The operator watching these namespaces is not leading, so their CNPG status may be stale. */
@@ -100,8 +100,8 @@ export function cnpgOperatorConcerns(op: CNPGOperatorResponse, now = Date.now())
   return cnpgOperatorState(op, now).concerns
 }
 
-export function cnpgOperatorState(op: CNPGOperatorResponse, now = Date.now()): CNPGOperatorState {
-  const concerns: CNPGOperatorConcern[] = []
+export function cnpgOperatorState(op: CNPGOperatorResponse, now = Date.now(), clusters: CNPGFleetRow[] = []): CNPGOperatorState {
+  const concerns: CNPGOperatorConcern[] = cnpgPluginBlockedClusters(op, clusters, now)
   const confirmed: string[] = []
   const unread: string[] = []
   const operators = op.components.filter((c) => c.role === 'operator')
@@ -161,4 +161,29 @@ export function cnpgOperatorState(op: CNPGOperatorResponse, now = Date.now()): C
     else if (!c.pods && c.podCoverage && c.podCoverage.state !== 'ok') unread.push(`${componentName(c)}: restart history not read${c.podCoverage.reason ? ` (${c.podCoverage.reason})` : ''}.`)
   }
   return { concerns, confirmed, unread }
+}
+
+/**
+ * Clusters whose phase says the operator is stuck on a plugin, joined to what
+ * this screen knows about that plugin: whether its Deployment is here, ready,
+ * and when it last restarted. Facts side by side; which one caused the other
+ * is not claimed.
+ */
+export function cnpgPluginBlockedClusters(op: CNPGOperatorResponse, clusters: CNPGFleetRow[], now = Date.now()): CNPGOperatorConcern[] {
+  const out: CNPGOperatorConcern[] = []
+  for (const r of clusters) {
+    const phase = cnpgPluginPhase(r.cluster)
+    if (!phase) continue
+    const what = phase === 'unknownPlugin' ? 'requires a plugin the operator does not know' : 'hit an error talking to a plugin'
+    const plugins = cnpgClusterPlugins(r.cluster)
+    const parts = plugins.map((name) => {
+      const c = op.components.find((x) => x.role === 'plugin' && x.pluginName === name)
+      if (!c) return `${name}: no Deployment serving it was found`
+      const ready = c.readyReplicas !== null && c.replicas !== null ? `${c.readyReplicas}/${c.replicas} ready` : 'readiness not reported'
+      const h = cnpgRestartHistory(c, now)
+      return `${name}: ${ready}${h ? `, ${h.text}` : ''}`
+    })
+    out.push({ tone: 'unhealthy', text: `Cluster ${r.namespace}/${r.name} ${what}${parts.length ? ` — ${parts.join('; ')}` : ''}.` })
+  }
+  return out
 }

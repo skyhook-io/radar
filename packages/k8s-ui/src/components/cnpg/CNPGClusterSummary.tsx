@@ -5,7 +5,7 @@ import { healthToSeverity } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { CNPG_BARMAN_OBJECTSTORE_GROUP, CNPG_GROUP } from '../resources/resource-utils-cnpg'
-import { cnpgReadyInstances, type CNPGFleetRow, type CNPGInstance } from './workspace'
+import { cnpgClusterPlugins, cnpgPluginPhase, cnpgReadyInstances, type CNPGFleetRow, type CNPGInstance } from './workspace'
 import type { CNPGDimension } from './ha'
 import { PrimaryConflictNote } from './primitives'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
@@ -117,6 +117,7 @@ export function CNPGClusterSummary({
   initialProblemsExpanded = false,
   stateFacts,
   dimensionLinkLabel,
+  onOpenOperator,
 }: {
   row: CNPGFleetRow
   onNavigate?: NavigateToRef
@@ -134,6 +135,8 @@ export function CNPGClusterSummary({
   onSelectDimension?: (id: CNPGDimension['id']) => void
   /** The name of the place onSelectDimension opens, for the row's link; the dimension's own label when unset. */
   dimensionLinkLabel?: (id: CNPGDimension['id']) => string
+  /** Opens the operator's own diagnosis, offered beside a controller phase that is not healthy. */
+  onOpenOperator?: () => void
   /** Extra FactRows appended to the State grid, e.g. live facts only the host can read. */
   stateFacts?: ReactNode
 }) {
@@ -212,7 +215,20 @@ export function CNPGClusterSummary({
             <span className="text-xs text-theme-text-tertiary">
               {radarFindings ? 'reported by CNPG · Radar findings above are separate' : 'reported by CNPG'}
             </span>
+            {onOpenOperator && (row.controllerStatus.level === 'unhealthy' || row.controllerStatus.level === 'degraded') && (
+              <button type="button" onClick={onOpenOperator} className="text-xs text-accent-text hover:underline">
+                Operator and plugins →
+              </button>
+            )}
           </span>
+          {cnpgPluginPhase(row.cluster) && (
+            <div className="mt-0.5 text-[11.5px] text-theme-text-secondary">
+              {cnpgPluginPhase(row.cluster) === 'unknownPlugin'
+                ? 'The operator does not know a plugin this cluster requires'
+                : 'The operator failed talking to a plugin this cluster uses'}
+              {cnpgClusterPlugins(row.cluster).length > 0 ? ` (spec.plugins: ${cnpgClusterPlugins(row.cluster).join(', ')})` : ''}. The Operator view shows whether that plugin is running and when it last restarted.
+            </div>
+          )}
         </FactRow>
       </FactGrid>
 

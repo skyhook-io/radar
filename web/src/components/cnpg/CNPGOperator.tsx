@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Badge, getCNPGImageCatalogEntries, isApiGroup, PaneLoader, StatusDot, Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
+import { Badge, getCNPGImageCatalogEntries, isApiGroup, PaneLoader, StatusDot, Tooltip, toneTextClass, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
 import { useCNPGOperator, type CNPGOperatorComponent, type CNPGOperatorConfig } from '../../api/cnpg'
 import { CNPGOperatorDiagnosisSection } from './CNPGOperatorDiagnosis'
 import { cnpgOperatorState, cnpgRestartHistory } from './operatorStatus'
@@ -36,8 +36,8 @@ function readiness(c: CNPGOperatorComponent) {
   )
 }
 
-function CurrentState({ op }: { op: NonNullable<ReturnType<typeof useCNPGOperator>['data']> }) {
-  const { concerns, confirmed, unread } = cnpgOperatorState(op)
+function CurrentState({ op, clusters }: { op: NonNullable<ReturnType<typeof useCNPGOperator>['data']>; clusters: CNPGFleetRow[] }) {
+  const { concerns, confirmed, unread } = cnpgOperatorState(op, Date.now(), clusters)
   return (
     <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
       <h3 className="text-sm font-semibold text-theme-text-primary">Current state</h3>
@@ -119,7 +119,7 @@ export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenPr
                 Some workloads are not readable ({coverageGaps.map((k) => `${k === 'deployments' ? 'Deployments' : 'Services'}: ${coverageLabel(op.coverage[k])}`).join(', ')}), so an operator or plugin running in those namespaces may be missing below.
               </Notice>
             )}
-            <CurrentState op={op} />
+            <CurrentState op={op} clusters={fleet.rows} />
             <SectionTable
               title="Operator and plugins"
               columns={[

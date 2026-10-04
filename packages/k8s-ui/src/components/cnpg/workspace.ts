@@ -117,8 +117,12 @@ export const CNPG_PROBLEM_CATEGORIES: { id: CNPGProblemCategory; label: string }
   { id: 'pooling', label: 'Pooling' },
 ]
 
-/** A problem in the CloudNativePG workspace, categorised by the workspace's four screens. */
-export type CNPGProblem = WorkspaceProblem<CNPGProblemCategory>
+/**
+ * A problem in the CloudNativePG workspace, categorised by the workspace's
+ * screens. `instance` names the instance a Cluster-level problem is about,
+ * e.g. the standby an HA slot is kept for.
+ */
+export type CNPGProblem = WorkspaceProblem<CNPGProblemCategory> & { instance?: string }
 
 export interface CNPGInstance {
   name: string
@@ -1197,6 +1201,22 @@ export function applyCNPGDisk(fleet: CNPGFleet, readings: CNPGDiskReading[] | un
   return finishFleet(rows, fleet.incompleteKinds)
 }
 
+const CNPG_PLUGIN_PHASES: Record<string, 'unknownPlugin' | 'pluginError'> = {
+  'Cluster cannot proceed to reconciliation due to an unknown plugin being required': 'unknownPlugin',
+  'Cluster cannot proceed to reconciliation due to an error while interacting with plugins': 'pluginError',
+}
+
+/** Whether the Cluster's phase says the operator is stuck on a CNPG-I plugin, and which way. */
+export function cnpgPluginPhase(cluster: any): 'unknownPlugin' | 'pluginError' | null {
+  return CNPG_PLUGIN_PHASES[cluster?.status?.phase] ?? null
+}
+
+/** The CNPG-I plugins a Cluster names in spec.plugins. */
+export function cnpgClusterPlugins(cluster: any): string[] {
+  const plugins = cluster?.spec?.plugins
+  return Array.isArray(plugins) ? plugins.map((p: any) => p?.name).filter((n: unknown): n is string => typeof n === 'string' && !!n) : []
+}
+
 /** Bytes in binary units with IEC labels (GiB), as every CloudNativePG view prints them. */
 export function cnpgFormatBytes(n: number): string {
   const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
@@ -1306,6 +1326,7 @@ export function cnpgSlotRetentionProblem(row: Pick<CNPGFleetRow, 'key' | 'namesp
     source: 'measurement',
     measuredBy: r.measuredBy,
     sourceDetail: r.sourceDetail,
+    ...(r.standby ? { instance: r.standby } : {}),
     ...(r.unverifiedMatch ? { unverifiedMatch: true } : {}),
   }
 }
@@ -1432,7 +1453,7 @@ export function cnpgFormatLag(s: number): string {
   return m === 0 ? `${Math.floor(minutes / 60)} h` : `${Math.floor(minutes / 60)} h ${m} min`
 }
 
-function measuredReplication(base: Fact, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources, designated?: string): Fact {
+function measuredReplication(base: Fact, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources, designated?: string, expectedStandbys?: number | null): Fact {
   const prefix = base.text.replace(/ · lag unknown$/, '')
   if (src.source === 'none') {
     return { text: `${prefix} · lag unknown`, tone: 'unknown', source: CNPG_PROMETHEUS_NOT_CONNECTED, detail: src.reason }
@@ -1449,9 +1470,13 @@ function measuredReplication(base: Fact, reading: CNPGFleetMetricsReading | unde
         }
       }
       if (lag.seconds === undefined) break
+      // The lag covers the standbys that report; one that does not is unknown, not caught up.
+      const partial = expectedStandbys !== undefined && expectedStandbys !== null && lag.standbys !== undefined && lag.standbys < expectedStandbys
+      const coverage = partial ? ` (${lag.standbys} of ${expectedStandbys} standbys reporting)` : ''
+      const lagTone = cnpgLagTone(lag.seconds)
       return {
-        text: `${prefix} · lag ${cnpgFormatLag(lag.seconds)}${lag.receiverUnknown ? ' · streaming unverified' : ''}`,
-        tone: lag.receiverUnknown ? 'unknown' : cnpgLagTone(lag.seconds),
+        text: `${prefix} · lag ${cnpgFormatLag(lag.seconds)}${coverage}${lag.receiverUnknown ? ' · streaming unverified' : ''}`,
+        tone: lag.receiverUnknown || (partial && lagTone === 'healthy') ? 'unknown' : lagTone,
         source: `Largest standby replay lag, ${lag.pod ?? 'a standby'} · ${src.lagSource ?? 'Prometheus'}.${lag.receiverUnknown ? ' The exporter reported no WAL receiver state, and a standby that receives nothing also reads 0.' : ''}${isolationCaveat(lag.isolation)}`,
       }
     }
@@ -1485,7 +1510,13 @@ export function applyCNPGFleetMetrics(fleet: CNPGFleet, readings: CNPGFleetMetri
   const rows = fleet.rows.map((row) => {
     const reading = byKey.get(row.key)
     const next: CNPGFleetRow = { ...row, diskGrowth: cnpgDiskGrowthFact(reading, src) }
-    if (row.replication.source === CNPG_LAG_UNMEASURED_SOURCE) next.replication = measuredReplication(row.replication, reading, src, row.replicaCluster ? row.cluster?.status?.currentPrimary : undefined)
+    if (row.replication.source === CNPG_LAG_UNMEASURED_SOURCE) next.replication = measuredReplication(
+        row.replication,
+        reading,
+        src,
+        row.replicaCluster ? row.cluster?.status?.currentPrimary : undefined,
+        row.instances.desired !== null ? Math.max(0, row.instances.desired - 1) : null,
+      )
     const sustained = sustainedLagProblem(row, reading, src)
     return cnpgWithProblems(next, [...(sustained ? [sustained] : []), ...fleetStandbyProblems(row, reading, src), ...fleetSlotProblems(row, reading, src)])
   })

@@ -217,3 +217,12 @@ describe('none receiving needs every expected standby accounted for', () => {
     expect(row(three, 'ha').problems.find((p) => p.id === 'standby:db/ha:ha-2')?.severity).toBe('warning')
   })
 })
+
+describe('fleet lag covers the standbys that report', () => {
+  it('says how many standbys the lag covers, and is not healthy while one is unreported', () => {
+    const three = fleet()
+    three.rows.find((r) => r.name === 'ha')!.instances.desired = 3
+    const f = applyCNPGFleetMetrics(three, [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-2', standbys: 1, receiving: 1 })], { source: 'prometheus' })
+    expect(row(f, 'ha').replication).toMatchObject({ text: expect.stringContaining('lag 0 s (1 of 2 standbys reporting)'), tone: 'unknown' })
+  })
+})
