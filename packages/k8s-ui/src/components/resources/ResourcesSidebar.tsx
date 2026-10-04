@@ -792,7 +792,7 @@ function WorkspaceDestinations({
 }) {
   return (
     <div className="space-y-0.5">
-      <div className="pl-5 pr-2 pt-0.5 pb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Workspace</div>
+      <div className="pl-5 pr-2 pt-0.5 pb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Views</div>
       {workspace.destinations.map((d) => {
         const Icon = d.icon
         return (

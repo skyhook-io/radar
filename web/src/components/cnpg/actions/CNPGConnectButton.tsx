@@ -105,7 +105,7 @@ export function CNPGConnectButton({
           {row?.cluster ? (
             <CNPGConnectSection cluster={row.cluster} poolers={row.poolerObjects} poolersKnown={row.poolersKnown} onNavigate={go} showHeading={false} />
           ) : (
-            <div className="text-sm text-theme-text-tertiary">{fleet ? 'This Cluster is not in the CloudNativePG workspace for your identity.' : 'Reading the Cluster…'}</div>
+            <div className="text-sm text-theme-text-tertiary">{fleet ? 'Radar cannot read this Cluster with your access.' : 'Reading the Cluster…'}</div>
           )}
         </div>
       </DialogPortal>

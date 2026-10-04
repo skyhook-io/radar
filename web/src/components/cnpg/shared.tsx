@@ -102,7 +102,7 @@ export function CNPGScreenGate({
       return (
         <ScreenEmptyState
           icon={Database}
-          title={radarUpgradeHeadline('The CloudNativePG workspace')}
+          title={radarUpgradeHeadline('CloudNativePG')}
           detail={radarUpgradeDetail(upgrade)}
           action={
             <div className="mt-3 text-sm">
@@ -115,8 +115,8 @@ export function CNPGScreenGate({
     return (
       <ScreenEmptyState
         icon={Database}
-        title="CloudNativePG workspace unavailable"
-        detail={query.error instanceof Error ? query.error.message : 'The workspace could not be loaded.'}
+        title="CloudNativePG data unavailable"
+        detail={query.error instanceof Error ? query.error.message : 'Radar could not load the CloudNativePG data.'}
       />
     )
   }

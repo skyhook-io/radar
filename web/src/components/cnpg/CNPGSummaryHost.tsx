@@ -97,7 +97,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
       <div className="px-4 py-4 text-sm text-theme-text-secondary">
         {query.error instanceof Error
           ? `The CloudNativePG summary could not be loaded: ${query.error.message}`
-          : 'This Cluster is not in the CloudNativePG workspace for your identity.'}{' '}
+          : 'Radar cannot read this Cluster with your access.'}{' '}
         Spec & status still shows everything the object reports.
       </div>
     )

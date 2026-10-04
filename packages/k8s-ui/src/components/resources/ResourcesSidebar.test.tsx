@@ -144,7 +144,7 @@ describe('ResourcesSidebar category workspaces', () => {
         }}
       />
     )
-    expect(html).toContain('Workspace')
+    expect(html).toContain('Views')
     expect(html).toContain('Overview')
     expect(html).toContain('pg-orders')
     expect(html).toContain('Counts for namespace payments')

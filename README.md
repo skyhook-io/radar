@@ -362,7 +362,7 @@ View TLS certificate details and expiry dates across all namespaces — catch ex
 
 ### GitOps
 
-Monitor, diagnose, and manage FluxCD and ArgoCD resources from a dedicated GitOps workspace.
+Monitor, diagnose, and manage FluxCD and ArgoCD resources in one place.
 
 <p align="center">
   <img src="docs/screenshots/gitops-view.png" alt="GitOps fleet view" width="800">
@@ -548,7 +548,7 @@ Upgrade impact also gets list-only access to CSIStorageCapacities, FlowSchemas, 
 | **Strimzi** | [KafkaConnector failure evidence](docs/integrations.md#strimzi-kafka-connectors) (connector/task status) |
 | **Velero** | Backup, Restore, Schedule, BackupStorageLocation, VolumeSnapshotLocation |
 | **External Secrets** | ExternalSecret, ClusterExternalSecret, SecretStore, ClusterSecretStore |
-| **CloudNativePG** | Cluster, Backup, ScheduledBackup, Pooler, Database, Publication, Subscription, ImageCatalog, ClusterImageCatalog, ObjectStore — plus a [workspace](docs/cnpg.md) for fleet, protection and declaration triage |
+| **CloudNativePG** | Cluster, Backup, ScheduledBackup, Pooler, Database, Publication, Subscription, ImageCatalog, ClusterImageCatalog, ObjectStore — plus [dedicated views](docs/cnpg.md) for fleet, protection and declaration triage |
 | **Crossplane** | Managed Resources (any provider), Composite Resources, Claims, Provider, ProviderConfig, Function, Configuration, Composition, CompositionRevision, XRD |
 | **Kyverno** | Policy, ClusterPolicy, PolicyReport, ClusterPolicyReport |
 | **Sealed Secrets** | SealedSecret |
