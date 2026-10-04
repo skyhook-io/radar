@@ -338,6 +338,9 @@ interface WorkloadViewProps {
   tabOrder?: string[]
   subheader?: ReactNode
   specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode }
+  titlePrefix?: ReactNode
+  inlineBadges?: boolean
+  namespaceNote?: ReactNode
 }
 
 interface ImageTargetOwnershipContext {

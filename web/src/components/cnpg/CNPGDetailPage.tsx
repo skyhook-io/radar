@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Activity, ArrowLeft, Database, Gauge, HardDrive, Network, Settings2, ShieldCheck, Unplug } from 'lucide-react'
-import { refToSelectedResource, type WorkloadExtraTab } from '@skyhook-io/k8s-ui'
+import { refToSelectedResource, Tooltip, type WorkloadExtraTab } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
 import { useContexts, useRadarFeature } from '../../api/client'
@@ -167,23 +167,27 @@ export function CNPGDetailPage({
 
   const outsideFilter = namespaces.length > 0 && !!target.namespace && !namespaces.includes(target.namespace)
 
-  const breadcrumb = (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+  // Where the object lives, on its title line: the return to the previous
+  // page (drill-downs only), then its place in the workspace.
+  const titlePrefix = (
+    <div className="flex min-w-0 items-center gap-x-2 text-sm">
       {returnLabel && (
         <>
-          <button
-            type="button"
-            onClick={() => navigate(-1)}
-            aria-label={`Return to ${returnLabel}`}
-            className="inline-flex items-center gap-1 rounded-md py-0.5 pr-2 text-theme-text-secondary hover:text-theme-text-primary"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            {returnLabel}
-          </button>
-          <span className="h-4 w-px bg-theme-border" aria-hidden />
+          <Tooltip content={`Return to ${returnLabel}`} position="bottom">
+            <button
+              type="button"
+              onClick={() => navigate(-1)}
+              aria-label={`Return to ${returnLabel}`}
+              className="inline-flex max-w-[12rem] items-center gap-1 rounded-md py-0.5 pr-1 text-theme-text-secondary hover:text-theme-text-primary"
+            >
+              <ArrowLeft className="h-3.5 w-3.5 shrink-0" />
+              <span className="truncate">{returnLabel}</span>
+            </button>
+          </Tooltip>
+          <span className="h-4 w-px shrink-0 bg-theme-border" aria-hidden />
         </>
       )}
-      <nav aria-label="Location" className="flex min-w-0 items-center gap-1.5 text-theme-text-tertiary">
+      <nav aria-label="Location" className="flex shrink-0 items-center gap-1.5 text-theme-text-tertiary">
         <Database className="h-3.5 w-3.5" />
         <button type="button" onClick={() => navigate(cnpgScreenPath('overview'))} className="hover:text-theme-text-primary hover:underline">
           CloudNativePG
@@ -197,39 +201,43 @@ export function CNPGDetailPage({
           </>
         )}
         <span>/</span>
-        <span className="truncate text-theme-text-secondary">{target.name}</span>
       </nav>
-      {outsideFilter && (
-        <span className="text-xs text-theme-text-tertiary">
-          Namespace {target.namespace} is outside your namespace filter; this object stays open.
-        </span>
-      )}
-      {target.plural === 'clusters' && <CNPGOperatorBanner namespaces={[target.namespace]} className="mt-1 w-full" />}
     </div>
   )
+  const namespaceNote = outsideFilter ? (
+    <Tooltip content="Your namespace filter leaves this namespace out; an object you open stays open." position="bottom">
+      <span className="whitespace-nowrap text-xs text-theme-text-tertiary">· outside your namespace filter</span>
+    </Tooltip>
+  ) : undefined
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-      <WorkloadView
-        key={`${target.plural}/${target.namespace}/${target.name}`}
-        kind={target.plural}
-        namespace={target.namespace}
-        name={target.name}
-        group={target.group}
-        expanded
-        onBack={() => (returnLabel ? navigate(-1) : navigate(home.path))}
-        hideBackButton
-        breadcrumb={breadcrumb}
-        onNavigateToResource={openRelated}
-        extraTabs={extraTabs}
-        tabOrder={isCluster ? CNPG_CLUSTER_TAB_ORDER : undefined}
-        subheader={isCluster ? <CNPGClusterHeaderChips namespace={target.namespace} name={target.name} onSelect={(id) => goTab(cnpgDimensionTab(id))} /> : undefined}
-        specTab={
-          isCluster
-            ? { label: 'Configuration', icon: <Settings2 className="h-4 w-4" />, lead: <CNPGConfigurationLead namespace={target.namespace} name={target.name} onNavigate={openRelated} /> }
-            : undefined
-        }
-      />
+      {/* Above the title line, before any status the page shows. */}
+      {target.plural === 'clusters' && <CNPGOperatorBanner namespaces={[target.namespace]} className="mx-6 mt-3 shrink-0" />}
+      <div className="flex min-h-0 flex-1 flex-col">
+        <WorkloadView
+          key={`${target.plural}/${target.namespace}/${target.name}`}
+          kind={target.plural}
+          namespace={target.namespace}
+          name={target.name}
+          group={target.group}
+          expanded
+          onBack={() => (returnLabel ? navigate(-1) : navigate(home.path))}
+          hideBackButton
+          titlePrefix={titlePrefix}
+          inlineBadges
+          namespaceNote={namespaceNote}
+          onNavigateToResource={openRelated}
+          extraTabs={extraTabs}
+          tabOrder={isCluster ? CNPG_CLUSTER_TAB_ORDER : undefined}
+          subheader={isCluster ? <CNPGClusterHeaderChips namespace={target.namespace} name={target.name} onSelect={(id) => goTab(cnpgDimensionTab(id))} /> : undefined}
+          specTab={
+            isCluster
+              ? { label: 'Configuration', icon: <Settings2 className="h-4 w-4" />, lead: <CNPGConfigurationLead namespace={target.namespace} name={target.name} onNavigate={openRelated} /> }
+              : undefined
+          }
+        />
+      </div>
     </div>
   )
 }

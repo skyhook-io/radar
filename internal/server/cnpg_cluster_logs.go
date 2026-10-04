@@ -33,9 +33,15 @@ const (
 	cnpgLogDiscoveryInterval  = 5 * time.Second
 	cnpgLogsEmptyMessage      = "No readable logs from this cluster's instances in this snapshot. Refresh after the instances start."
 	cnpgLogsIntervalEmpty     = "No log lines in this interval from the runs Kubernetes still keeps (the current and previous run of each instance container)."
-	cnpgLogsIntervalGone      = "Kubernetes keeps only the current and previous run of each container; %d instance runs that covered part of this interval were replaced and their lines are gone."
 	cnpgLogsNoInstanceMessage = "This cluster has no instance Pods yet."
 )
+
+func cnpgLogsIntervalGone(lost int) string {
+	if lost == 1 {
+		return "Kubernetes keeps only the current and previous run of each container; 1 instance run that covered part of this interval was replaced and its lines are gone."
+	}
+	return fmt.Sprintf("Kubernetes keeps only the current and previous run of each container; %d instance runs that covered part of this interval were replaced and their lines are gone.", lost)
+}
 
 // CNPGClusterLogsResponse is GET /api/cnpg/clusters/{namespace}/{name}/logs.
 // Pods and SourceLabels list only the instances that contributed a source to
@@ -363,7 +369,7 @@ func (s *Server) handleCNPGClusterLogs(w http.ResponseWriter, r *http.Request) {
 	resp.Pods = buildPodInfos(shown)
 	resp.Notice = snapshot.Notice
 	if lost > 0 {
-		resp.Notice = strings.TrimSpace(fmt.Sprintf(cnpgLogsIntervalGone, lost) + " " + resp.Notice)
+		resp.Notice = strings.TrimSpace(cnpgLogsIntervalGone(lost) + " " + resp.Notice)
 	}
 	if len(sourceLabels) > 0 {
 		resp.SourceLabels = sourceLabels

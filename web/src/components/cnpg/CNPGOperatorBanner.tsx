@@ -1,3 +1,4 @@
+import { clsx } from 'clsx'
 import { AlertBanner } from '@skyhook-io/k8s-ui'
 import { useCNPGOperatorStatus } from '../../api/cnpg'
 import { cnpgScreenPath } from './routes'
@@ -19,16 +20,20 @@ export function CNPGOperatorBanner({ namespaces, className }: { namespaces: stri
     ? 'The CloudNativePG operator is not reconciling: status below may be stale'
     : 'CloudNativePG writes are being rejected'
   const scope = stale && stale.namespaces.length < new Set(namespaces).size ? `Clusters in ${stale.namespaces.join(', ')}.` : ''
+  // Tighter than the default banner, never smaller: the title, icon, colours
+  // and every reason stay; the link moves onto the title line. A host that
+  // passes no className keeps the default bottom margin.
   return (
     <AlertBanner
       variant="warning"
       title={title}
-      message={[scope, ...(stale?.reasons ?? []), rejects ?? ''].filter(Boolean).join(' ')}
-      className={className}
-    >
-      <button type="button" onClick={() => navigate(cnpgScreenPath('operator'))} className="mt-1.5 text-xs font-medium text-accent-text hover:underline">
-        Open Operator
-      </button>
-    </AlertBanner>
+      message={[scope, ...(stale?.reasons ?? []), rejects ?? ''].filter(Boolean).join(' ') || undefined}
+      action={
+        <button type="button" onClick={() => navigate(cnpgScreenPath('operator'))} className="text-xs font-medium text-accent-text hover:underline">
+          Open Operator →
+        </button>
+      }
+      className={clsx('px-3 py-2', className ?? 'mb-4')}
+    />
   )
 }

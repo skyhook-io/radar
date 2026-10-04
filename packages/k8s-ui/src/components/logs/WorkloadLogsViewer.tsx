@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { Filter, ChevronDown } from 'lucide-react'
+import { Filter, ChevronDown, AlertTriangle } from 'lucide-react'
 import { parseLogRange } from '../../utils/log-format'
 import { triggerDownload } from '../../utils/download'
 import { useLogBuffer } from './useLogBuffer'
@@ -10,6 +10,7 @@ import type { LogExportPayload } from '../../utils/log-export'
 import type { LogPalette } from './log-palette'
 import type { WorkloadPodInfo } from '../../types'
 import { useToast } from '../ui/Toast'
+import { toneTextClass } from '../ui/status-tone'
 
 export interface WorkloadRawLog {
   pod: string
@@ -394,8 +395,23 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-    {notice && <div role="status" className="shrink-0 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">{notice}</div>}
-    {capturedAt && <div className="shrink-0 border-b border-theme-border px-3 py-1 text-xs text-theme-text-secondary">Snapshot captured {new Date(capturedAt).toLocaleTimeString()}</div>}
+    {/* One status line. A notice says what the snapshot could not show, so it
+        stays marked; the capture time alone is quiet. */}
+    {(notice || capturedAt) && (
+      <div
+        role="status"
+        className={`flex shrink-0 flex-wrap items-baseline gap-x-2 border-b border-theme-border px-3 py-1 text-xs ${notice ? 'bg-theme-elevated text-theme-text-secondary' : 'text-theme-text-tertiary'}`}
+      >
+        {capturedAt && <span className="whitespace-nowrap">Snapshot {new Date(capturedAt).toLocaleTimeString()}</span>}
+        {capturedAt && notice && <span aria-hidden>·</span>}
+        {notice && (
+          <span className="inline-flex min-w-0 items-baseline gap-1.5">
+            <AlertTriangle className={`h-3 w-3 shrink-0 self-center ${toneTextClass('degraded')}`} aria-hidden />
+            <span>{notice}</span>
+          </span>
+        )}
+      </div>
+    )}
     {(fetchError || streamError) && entries.length > 0 && <div role="alert" className="shrink-0 border-b border-theme-border bg-theme-surface px-3 py-2 text-xs text-theme-text-secondary">{fetchError || streamError} · Previously loaded logs remain below.</div>}
     <div className="min-h-0 flex-1"><LogCore
       entries={filteredEntries}

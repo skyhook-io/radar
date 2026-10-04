@@ -35,16 +35,21 @@ const COVERAGE_LABEL: Record<string, string> = {
   error: 'could not be read',
 }
 
+// The workspace name sits on the title line, as on the CloudNativePG detail
+// pages; it is not a link, since on Clusters it would lead to itself.
 export function CNPGWorkspaceHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
   return (
     <div className="px-5 pt-4 xl:px-7">
-      <div className="flex items-center gap-2 text-xs text-theme-text-tertiary">
-        <Database className="h-3.5 w-3.5" />
-        <span>CloudNativePG</span>
-      </div>
-      <div className="mt-1 flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+      <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
         <div className="min-w-0">
-          <h1 className="text-lg font-semibold text-theme-text-primary">{title}</h1>
+          <div className="flex flex-wrap items-center gap-x-2">
+            <span className="flex items-center gap-1.5 text-sm text-theme-text-tertiary">
+              <Database className="h-3.5 w-3.5" />
+              CloudNativePG
+              <span>/</span>
+            </span>
+            <h1 className="text-lg font-semibold text-theme-text-primary">{title}</h1>
+          </div>
           {subtitle && <div className="mt-0.5 text-sm text-theme-text-secondary">{subtitle}</div>}
         </div>
         {actions}

@@ -142,6 +142,17 @@ interface WorkloadViewProps {
    * the Escape shortcut.
    */
   breadcrumb?: ReactNode
+  /** Where the object lives, shown on the title line before its name (e.g. "Workspace / View /"). */
+  titlePrefix?: ReactNode
+  /**
+   * Kind, status and namespace on the title line, wrapping below the name
+   * only when there is no room; other chips (image, owners) keep a second
+   * row. The header actions then wrap below the title as a group rather
+   * than squeezing it.
+   */
+  inlineBadges?: boolean
+  /** A note right after the namespace, e.g. that it is outside the namespace filter. */
+  namespaceNote?: ReactNode
   /** Suppress the standalone back arrow — for embeddings where "back" has no
    *  meaningful target (a single-workload app has no app graph to return to). */
   hideBackButton?: boolean
@@ -412,6 +423,9 @@ export function WorkloadView({
   initialTab,
   group,
   breadcrumb,
+  titlePrefix,
+  inlineBadges = false,
+  namespaceNote,
   hideBackButton,
   scopeControls,
   compactHeader,
@@ -1062,6 +1076,7 @@ export function WorkloadView({
     <OperationalIssuesShownContext.Provider value={!!hasOperationalIssues || !!operationalIssuesPending}>
     <DetailShell
       breadcrumb={breadcrumb}
+      wrapHeader={inlineBadges}
       subheader={subheader}
       nav={
         breadcrumb || hideBackButton ? undefined : (
@@ -1076,32 +1091,23 @@ export function WorkloadView({
           </Tooltip>
         )
       }
-      identity={
-        <>
-          {showOwnershipHeading && ownershipContext ? (
-            <OwnershipHeading
-              podName={name}
-              context={ownershipContext}
-              copied={copied === 'name'}
-              onCopy={() => copyToClipboard(name, 'name')}
-              onNavigateToResource={onNavigateToResource}
-              onOpenApplication={onOpenApplication}
-            />
-          ) : (
-            <div className="flex items-center gap-3 mb-1">
-              <h1 className="text-lg font-semibold text-theme-text-primary truncate">{name}</h1>
-              <Tooltip content="Copy name" delay={150}>
-                <button
-                  onClick={() => copyToClipboard(name, 'name')}
-                  className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
-                  aria-label="Copy name"
-                >
-                  {copied === 'name' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-                </button>
-              </Tooltip>
-            </div>
-          )}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-theme-text-secondary">
+      identity={(() => {
+        const nameAndCopy = (
+          <>
+            <h1 className="text-lg font-semibold text-theme-text-primary truncate">{name}</h1>
+            <Tooltip content="Copy name" delay={150}>
+              <button
+                onClick={() => copyToClipboard(name, 'name')}
+                className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
+                aria-label="Copy name"
+              >
+                {copied === 'name' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            </Tooltip>
+          </>
+        )
+        const kindAndStatus = (
+          <>
             <span className={clsx('badge whitespace-nowrap', getKindColorOutline(apiKind))}>
               {displayKindName(apiKind, resource?.kind)}
             </span>
@@ -1110,31 +1116,79 @@ export function WorkloadView({
                 {status.text}
               </span>
             )}
+          </>
+        )
+        const coreBadges = (
+          <>
+            {/* On the title line the kind and status wrap together, never apart. */}
+            {inlineBadges ? <span className="inline-flex items-center gap-x-3">{kindAndStatus}</span> : kindAndStatus}
             {namespace && namespace !== '_' && (
               <span className="whitespace-nowrap">Namespace: <span className="text-theme-text-primary">{namespace}</span></span>
             )}
-            {headerImage && (
-              <Tooltip content={headerImage} delay={300} wrapperClassName="min-w-0 max-w-md">
-                <span className="truncate font-mono text-xs">
-                  {midTruncate(headerImage, 72)}
-                </span>
-              </Tooltip>
+            {namespace && namespace !== '_' && namespaceNote}
+          </>
+        )
+        const extraChips = [
+          headerImage && (
+            <Tooltip key="image" content={headerImage} delay={300} wrapperClassName="min-w-0 max-w-md">
+              <span className="truncate font-mono text-xs">
+                {midTruncate(headerImage, 72)}
+              </span>
+            </Tooltip>
+          ),
+          gitopsOwner && (
+            <ManagedByChip key="gitops" owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} variant="block" />
+          ),
+          helmOwner && (
+            <HelmManagedByChip key="helm" owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} variant="block" />
+          ),
+          gitOpsResourcePath && onNavigateGitOpsPath && (
+            <OpenInGitOpsChip key="open-gitops" onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
+          ),
+          relationships?.owner && !showOwnershipHeading && (
+            <span key="owner">Owner: <button onClick={() => onNavigateToResource?.(refToSelectedResource(relationships.owner!))} className="text-blue-500 hover:underline">{relationships.owner.name}</button></span>
+          ),
+        ].filter(Boolean)
+        if (inlineBadges && !(showOwnershipHeading && ownershipContext)) {
+          // The name and its copy button stay together and truncate only when
+          // the line holds nothing else; the badges wrap below before that.
+          return (
+            <>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-theme-text-secondary">
+                {titlePrefix}
+                <div className="flex min-w-0 max-w-full items-center gap-2">{nameAndCopy}</div>
+                {coreBadges}
+              </div>
+              {extraChips.length > 0 && (
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-theme-text-secondary">{extraChips}</div>
+              )}
+            </>
+          )
+        }
+        return (
+          <>
+            {showOwnershipHeading && ownershipContext ? (
+              <OwnershipHeading
+                podName={name}
+                context={ownershipContext}
+                copied={copied === 'name'}
+                onCopy={() => copyToClipboard(name, 'name')}
+                onNavigateToResource={onNavigateToResource}
+                onOpenApplication={onOpenApplication}
+              />
+            ) : (
+              <div className="flex items-center gap-3 mb-1">
+                {titlePrefix}
+                {nameAndCopy}
+              </div>
             )}
-            {gitopsOwner && (
-              <ManagedByChip owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} variant="block" />
-            )}
-            {helmOwner && (
-              <HelmManagedByChip owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} variant="block" />
-            )}
-            {gitOpsResourcePath && onNavigateGitOpsPath && (
-              <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
-            )}
-            {relationships?.owner && !showOwnershipHeading && (
-              <span>Owner: <button onClick={() => onNavigateToResource?.(refToSelectedResource(relationships.owner!))} className="text-blue-500 hover:underline">{relationships.owner.name}</button></span>
-            )}
-          </div>
-        </>
-      }
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-theme-text-secondary">
+              {coreBadges}
+              {extraChips}
+            </div>
+          </>
+        )
+      })()}
       headerActions={
         <>
           {resource && renderHeaderActions?.({ resource, context: 'expanded', onNavigate: onNavigateToResource })}

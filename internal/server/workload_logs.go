@@ -1828,12 +1828,20 @@ func (s workloadLogSnapshot) notice(counts func(workloadLogClip) bool) string {
 		}
 	}
 	if truncated > 0 {
-		notices = append(notices, fmt.Sprintf("%d sources reached the 64 KiB snapshot limit.", truncated))
+		notices = append(notices, countNoun(truncated, "source", "sources")+" reached the 64 KiB snapshot limit.")
 	}
 	if len(s.errors) > 0 {
-		notices = append(notices, fmt.Sprintf("%d sources could not be read: %s", len(s.errors), strings.Join(s.errors[:min(3, len(s.errors))], "; ")))
+		notices = append(notices, fmt.Sprintf("%s could not be read: %s", countNoun(len(s.errors), "source", "sources"), strings.Join(s.errors[:min(3, len(s.errors))], "; ")))
 	}
 	return strings.Join(notices, " ")
+}
+
+// countNoun reads "1 source", "2 sources".
+func countNoun(n int, singular, plural string) string {
+	if n == 1 {
+		return "1 " + singular
+	}
+	return fmt.Sprintf("%d %s", n, plural)
 }
 
 func fetchPodContainerLogs(ctx context.Context, client kubernetes.Interface, namespace, podName, containerName string, tailLines int64, sinceSeconds *int64, bounded, previous bool) ([]workloadLogEntry, bool, error) {

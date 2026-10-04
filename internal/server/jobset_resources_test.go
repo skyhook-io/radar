@@ -180,7 +180,7 @@ func TestSnapshotBoundsAndPartialFailures(t *testing.T) {
 	if count.Load() != 40 || peak.Load() > 8 || len(got.SourcePods) != 40 {
 		t.Fatalf("bounds: calls=%d peak=%d pods=%d", count.Load(), peak.Load(), len(got.SourcePods))
 	}
-	for _, text := range []string{"40 of 45", "64 KiB", "1 sources could not be read"} {
+	for _, text := range []string{"40 of 45", "64 KiB", "1 source could not be read"} {
 		if !strings.Contains(got.Notice, text) {
 			t.Fatalf("notice %q missing %q", got.Notice, text)
 		}

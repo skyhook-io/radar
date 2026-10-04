@@ -34,6 +34,11 @@ export interface DetailShellProps<TId extends string = string> {
   overlay?: ReactNode
   /** Hide breadcrumb/identity/header actions when a host page already owns that chrome. */
   compactHeader?: boolean
+  /**
+   * Let the header actions wrap below the identity, as one group, when both
+   * do not fit — for an identity that packs a lot onto its title line.
+   */
+  wrapHeader?: boolean
   children: ReactNode
 }
 
@@ -50,6 +55,7 @@ export function DetailShell<TId extends string = string>({
   tabStripEnd,
   overlay,
   compactHeader = false,
+  wrapHeader = false,
   children,
 }: DetailShellProps<TId>) {
   const visibleTabs = tabs.filter((t) => !t.hidden)
@@ -62,10 +68,10 @@ export function DetailShell<TId extends string = string>({
         {!compactHeader && (
           <>
             {breadcrumb && <div className="px-6 pt-2.5">{breadcrumb}</div>}
-            <div className={clsx('px-6 flex items-start gap-4', breadcrumb ? 'pb-3 pt-1.5' : 'py-3')}>
+            <div className={clsx('px-6 flex items-start gap-4', wrapHeader && 'flex-wrap gap-y-2', breadcrumb ? 'pb-3 pt-1.5' : 'py-3')}>
               {nav}
-              <div className="flex-1 min-w-0">{identity}</div>
-              {headerActions}
+              <div className={clsx('flex-1 min-w-0', wrapHeader && 'basis-[18rem]')}>{identity}</div>
+              {wrapHeader ? <div className="ml-auto flex shrink-0 items-start gap-4">{headerActions}</div> : headerActions}
             </div>
             {subheader && <div className="-mt-1 px-6 pb-3">{subheader}</div>}
           </>
