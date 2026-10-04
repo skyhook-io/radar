@@ -1,12 +1,15 @@
 package k8s
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -48,7 +51,18 @@ func TestActiveRestartLoop(t *testing.T) {
 		{"two restarts is not a loop", restartLoopPod(now, status(2, running(time.Minute), terminatedAgo(now, 2*time.Minute, "Error", 1))), false, false},
 		{"run started 9m after the termination", restartLoopPod(now, status(5, running(time.Minute), terminatedAgo(now, 10*time.Minute, "Error", 1))), true, false},
 		{"run started 11m after the termination", restartLoopPod(now, status(5, running(time.Minute), terminatedAgo(now, 12*time.Minute, "Error", 1))), false, false},
-		{"OOM is left to the OOM path", restartLoopPod(now, status(5, running(time.Minute), terminatedAgo(now, 2*time.Minute, "OOMKilled", 137))), false, false},
+		{"OOM loop counts (the row classifies as oom_killed)", restartLoopPod(now, status(5, running(time.Minute), terminatedAgo(now, 2*time.Minute, "OOMKilled", 137))), true, false},
+		{"recovered: Ready past max(10m, 2x last run)", func() *corev1.Pod {
+			cs := status(5, running(11*time.Minute), &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1, StartedAt: metav1.NewTime(now.Add(-14 * time.Minute)), FinishedAt: metav1.NewTime(now.Add(-11*time.Minute - 10*time.Second))})
+			cs.Ready = true
+			return restartLoopPod(now, cs)
+		}(), false, false},
+		{"still looping: Ready 9m after a 3m run", func() *corev1.Pod {
+			cs := status(5, running(9*time.Minute), &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1, StartedAt: metav1.NewTime(now.Add(-12 * time.Minute)), FinishedAt: metav1.NewTime(now.Add(-9*time.Minute - 10*time.Second))})
+			cs.Ready = true
+			return restartLoopPod(now, cs)
+		}(), true, false},
+		{"held while unready, even past the early-clear line", restartLoopPod(now, status(5, running(15*time.Minute), &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1, StartedAt: metav1.NewTime(now.Add(-18 * time.Minute)), FinishedAt: metav1.NewTime(now.Add(-15*time.Minute - 10*time.Second))})), true, false},
 		{"current termination counts", restartLoopPod(now, status(5, corev1.ContainerState{Terminated: terminatedAgo(now, 5*time.Second, "Completed", 0)}, terminatedAgo(now, 40*time.Minute, "Error", 1))), true, false},
 		{"first restart after a long run (node bounce)", restartLoopPod(now, status(5, running(time.Minute), &corev1.ContainerStateTerminated{
 			Reason: "Error", ExitCode: 255, StartedAt: metav1.NewTime(now.Add(-72 * time.Hour)), FinishedAt: metav1.NewTime(now.Add(-2 * time.Minute)),
@@ -76,12 +90,21 @@ func TestActiveRestartLoop(t *testing.T) {
 			p.Status.Phase = corev1.PodSucceeded
 			return p
 		}(), false, false},
-		{"ordinary init container retrying", func() *corev1.Pod {
+		{"ordinary init container failing (Init:CrashLoopBackOff)", func() *corev1.Pod {
 			p := restartLoopPod(now, corev1.ContainerStatus{Name: "app"})
 			p.Spec.InitContainers = []corev1.Container{{Name: "init"}}
 			p.Status.Phase = corev1.PodPending
 			p.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "init", RestartCount: 5, State: running(time.Minute),
 				LastTerminationState: corev1.ContainerState{Terminated: terminatedAgo(now, 2*time.Minute, "Error", 1)}}}
+			return p
+		}(), true, false},
+		{"ordinary init container that finally succeeded", func() *corev1.Pod {
+			p := restartLoopPod(now, corev1.ContainerStatus{Name: "app"})
+			p.Spec.InitContainers = []corev1.Container{{Name: "init"}}
+			p.Status.Phase = corev1.PodPending
+			p.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "init", RestartCount: 5,
+				State:                corev1.ContainerState{Terminated: terminatedAgo(now, time.Minute, "Completed", 0)},
+				LastTerminationState: corev1.ContainerState{Terminated: terminatedAgo(now, 3*time.Minute, "Error", 1)}}}
 			return p
 		}(), false, false},
 		{"native sidecar looping", func() *corev1.Pod {
@@ -177,12 +200,12 @@ func TestStalledInitContainerProblem_IgnoresStartedNativeSidecar(t *testing.T) {
 			Name: "proxy", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-20 * time.Minute))}},
 		}}},
 	}
-	if _, ok := stalledInitContainerProblem(pod, now); !ok {
+	if _, ok := stalledInitContainerProblem(pod, now, ""); !ok {
 		t.Fatal("a sidecar that has not passed its startup probe still blocks the pod")
 	}
 	started := true
 	pod.Status.InitContainerStatuses[0].Started = &started
-	if got, ok := stalledInitContainerProblem(pod, now); ok {
+	if got, ok := stalledInitContainerProblem(pod, now, ""); ok {
 		t.Fatalf("started native sidecar reported as a stalled init container: %+v", got)
 	}
 }
@@ -248,7 +271,7 @@ func TestDetectProblems_RestartLoopPrecedence(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if got, ok := lookupProblem(problems, "Pod", "bad-liveness", livenessProbeInvalidReason); !ok || got.Fingerprint == "" || got.RestartLoop != nil || got.Severity != "critical" {
+	if got, ok := lookupProblem(problems, "Pod", "bad-liveness", livenessProbeInvalidReason); !ok || got.Fingerprint == "" || got.RestartLoop == nil || got.Severity != "critical" {
 		t.Fatalf("bad-liveness = %+v (found %v), want the fingerprinted invalid-probe row", got, ok)
 	}
 	if got, ok := lookupProblem(problems, "Pod", "image-sibling", "ImagePullBackOff"); !ok || got.RestartLoop != nil {
@@ -316,5 +339,137 @@ func TestEventLastTime_UsesSeriesLastObservedTime(t *testing.T) {
 	e := &corev1.Event{EventTime: first, Series: &corev1.EventSeries{LastObservedTime: last}}
 	if got := eventLastTime(e); !got.Equal(last.Time) {
 		t.Fatalf("eventLastTime = %v, want the series' last observation %v", got, last.Time)
+	}
+}
+
+func TestDetectProblems_RestartLoopSeverityTier(t *testing.T) {
+	defer ResetTestState()
+	now := time.Now()
+	controller := true
+	created := metav1.NewTime(now.Add(-24 * time.Hour))
+	looping := func(name string, run time.Duration) corev1.ContainerStatus {
+		return corev1.ContainerStatus{Name: "app", RestartCount: 6,
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1,
+				StartedAt: metav1.NewTime(now.Add(-time.Minute - run)), FinishedAt: metav1.NewTime(now.Add(-time.Minute))}}}
+	}
+	healthy := corev1.ContainerStatus{Name: "app", Ready: true, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: created}}}
+	var objs []runtime.Object
+	workload := func(dep string, statuses ...corev1.ContainerStatus) {
+		objs = append(objs,
+			&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: dep, Namespace: "prod", CreationTimestamp: created}},
+			&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: dep + "-rs", Namespace: "prod", CreationTimestamp: created,
+				OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: dep, Controller: &controller}}}})
+		for i, cs := range statuses {
+			objs = append(objs, &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("%s-%d", dep, i), Namespace: "prod", CreationTimestamp: created,
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: dep + "-rs", Controller: &controller}}},
+				Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+				Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{cs}},
+			})
+		}
+	}
+	workload("one-of-four", looping("x", time.Minute), healthy, healthy, healthy)
+	workload("half", looping("x", time.Minute), looping("y", time.Minute), healthy, healthy)
+	workload("slow-single", looping("x", 11*time.Minute))
+	workload("fast-single", looping("x", 30*time.Second))
+	if err := InitTestResourceCache(fake.NewClientset(objs...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	want := map[string]string{"one-of-four-0": "high", "half-0": "critical", "half-1": "critical", "slow-single-0": "high", "fast-single-0": "critical"}
+	var problems []Detection
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(GetResourceCache(), "prod")
+		n := 0
+		for name := range want {
+			if hasProblem(problems, "Pod", name, crashLoopReason) {
+				n++
+			}
+		}
+		if n == len(want) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	for name, sev := range want {
+		assertProblem(t, problems, "Pod", name, crashLoopReason, sev)
+	}
+}
+
+func TestDetectProblems_InitAndOOMLoops(t *testing.T) {
+	defer ResetTestState()
+	now := time.Now()
+	old := metav1.NewTime(now.Add(-time.Hour))
+	// A failing migration: each attempt runs 7 minutes (past the 5-minute
+	// stall line) and fails; the loop, not a stall, owns the row.
+	initLoop := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "migrate", Namespace: "prod", CreationTimestamp: old},
+		Spec:       corev1.PodSpec{InitContainers: []corev1.Container{{Name: "migrate"}}, Containers: []corev1.Container{{Name: "app"}}},
+		Status: corev1.PodStatus{Phase: corev1.PodPending,
+			InitContainerStatuses: []corev1.ContainerStatus{{Name: "migrate", RestartCount: 4,
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-7 * time.Minute))}},
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1,
+					StartedAt: metav1.NewTime(now.Add(-15 * time.Minute)), FinishedAt: metav1.NewTime(now.Add(-8 * time.Minute))}}}},
+			ContainerStatuses: []corev1.ContainerStatus{{Name: "app", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "PodInitializing"}}}},
+		},
+	}
+	// An OOM loop between kills: Running and Ready again.
+	oomLoop := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "leaky", Namespace: "prod", CreationTimestamp: old},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Name: "app", Ready: true, RestartCount: 9,
+			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-6 * time.Minute))}},
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled", ExitCode: 137,
+				StartedAt: metav1.NewTime(now.Add(-10 * time.Minute)), FinishedAt: metav1.NewTime(now.Add(-6*time.Minute - 5*time.Second))}}}}},
+	}
+	if err := InitTestResourceCache(fake.NewClientset(initLoop, oomLoop)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	var problems []Detection
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(GetResourceCache(), "prod")
+		if hasProblem(problems, "Pod", "migrate", crashLoopReason) && hasProblem(problems, "Pod", "leaky", crashLoopReason) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got, ok := lookupProblem(problems, "Pod", "migrate", crashLoopReason); !ok || got.RestartLoop == nil || !strings.Contains(got.Cause, "init container") {
+		t.Fatalf("migrate = %+v (found %v), want an init-container restart loop, not a stall", got, ok)
+	}
+	if hasProblem(problems, "Pod", "migrate", initContainerStalledReason) {
+		t.Fatalf("a looping init container must not also read as stalled: %+v", problems)
+	}
+	got, ok := lookupProblem(problems, "Pod", "leaky", crashLoopReason)
+	if !ok || got.RestartLoop == nil || got.LastTerminatedReason != "OOMKilled" || !strings.Contains(got.Cause, "OOMKilled") {
+		t.Fatalf("leaky = %+v (found %v), want an OOM loop row held on a Ready tick", got, ok)
+	}
+}
+
+func TestOtherContainerActiveOOM(t *testing.T) {
+	now := time.Now()
+	oom := func(name string) corev1.ContainerStatus {
+		return corev1.ContainerStatus{Name: name, State: corev1.ContainerState{Terminated: terminatedAgo(now, 5*time.Second, "OOMKilled", 137)}}
+	}
+	pod := restartLoopPod(now, oom("app"))
+	if otherContainerActiveOOM(pod, "app", now) {
+		t.Fatal("the loop container's own OOM must not veto its OOM loop")
+	}
+	pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, oom("cache"))
+	if !otherContainerActiveOOM(pod, "app", now) {
+		t.Fatal("a sibling's active OOM owns the row")
+	}
+}
+
+func TestRestartLoopDiagnosis_OOMWordingFollowsTheLimit(t *testing.T) {
+	limited := restartLoop{container: "app", lastReason: "OOMKilled", lastExitCode: 137, memoryLimit: true}
+	if cause, action := limited.diagnosis(); !strings.Contains(cause, "OOMKilled") || !strings.Contains(action, "limit") || strings.Contains(cause, "exceeds") {
+		t.Fatalf("limited OOM diagnosis = %q / %q", cause, action)
+	}
+	unlimited := limited
+	unlimited.memoryLimit = false
+	if cause, _ := unlimited.diagnosis(); !strings.Contains(cause, "no memory limit") || !strings.Contains(cause, "node memory pressure") {
+		t.Fatalf("unlimited OOM diagnosis = %q, want node pressure named", cause)
 	}
 }

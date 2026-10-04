@@ -126,6 +126,23 @@ func TestDedupeWorkloadDegradedOverChild_Phase0(t *testing.T) {
 		}
 	})
 
+	t.Run("a warning restart loop folds its workload's critical availability row", func(t *testing.T) {
+		degraded := Issue{Source: SourceProblem, Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web",
+			Category: issuesapi.CategoryWorkloadDegraded, Severity: SeverityCritical, Reason: "9/10 available"}
+		loop := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "web-abc", Owner: dep,
+			Category: issuesapi.CategoryCrashLoop, Severity: SeverityWarning, RestartLoop: &issuesapi.RestartLoop{Container: "app"}}
+		out := dedupeWorkloadDegradedOverChild([]Issue{degraded, loop})
+		if hasCategory(out, issuesapi.CategoryWorkloadDegraded) {
+			t.Fatalf("the loop explains the unavailability and must own it at any severity, got %+v", out)
+		}
+		stalled := Issue{Source: SourceProblem, Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web",
+			Category: issuesapi.CategoryRolloutStalled, Severity: SeverityCritical, Reason: "Rollout stuck"}
+		out = dedupeWorkloadDegradedOverChild([]Issue{stalled, loop})
+		if !hasCategory(out, issuesapi.CategoryRolloutStalled) {
+			t.Fatalf("rollout_stalled keeps the severity gate; a warning loop must not hide it, got %+v", out)
+		}
+	})
+
 	t.Run("cronjob_failed is not a rollup and survives alongside an unrelated job_failed", func(t *testing.T) {
 		cron := Issue{Source: SourceProblem, Group: "batch", Kind: "CronJob", Namespace: "ns", Name: "nightly",
 			Category: issuesapi.CategoryCronJobFailed, Severity: SeverityWarning, Reason: "stale"}

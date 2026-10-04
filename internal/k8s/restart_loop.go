@@ -7,6 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -39,6 +40,14 @@ const (
 	// container that restarted three times last month and once a minute ago
 	// also qualifies, for at most restartLoopWindow.
 	restartLoopMinRestarts = 3
+	// restartLoopFastRun is the run length below which a loop is "fast": the
+	// container spends most of its time down or in backoff. It is the
+	// kubelet's own line: a container that runs longer than 10 minutes has its
+	// crash backoff reset.
+	restartLoopFastRun = 10 * time.Minute
+	// restartLoopImpactShare is the share of a workload's pods that must be
+	// looping for a fast loop to be critical.
+	restartLoopImpactShare = 0.5
 	// restartLoopProbeMessageMax caps the probe output copied into evidence;
 	// exec probes can print arbitrary amounts.
 	restartLoopProbeMessageMax = 300
@@ -47,12 +56,20 @@ const (
 // restartLoop is the evidence behind an active restart loop, taken from one
 // container so every field describes the same termination.
 type restartLoop struct {
-	container      string
-	sidecar        bool
+	container string
+	sidecar   bool
+	init      bool
+	// status is the looping container's status, for diagnoses that need it.
+	status corev1.ContainerStatus
+	// memoryLimit reports whether the container declares a memory limit.
+	memoryLimit    bool
 	restartCount   int32
 	lastExitCode   int32
 	lastReason     string
 	lastFinishedAt time.Time
+	// lastRun is how long the terminated run lasted; zero when the container
+	// never started (StartError) or the runtime did not record a start.
+	lastRun time.Duration
 	// lastMessage is the runtime's message for the last termination; for a
 	// start failure it is the actual error (e.g. exec: no such file).
 	lastMessage string
@@ -63,16 +80,18 @@ type restartLoop struct {
 
 // activeRestartLoop reports the container keeping this pod in a restart loop.
 //
-// Eligible containers are those the kubelet restarts by design: regular
-// containers of a restartPolicy=Always pod and native sidecars (init
-// containers with restartPolicy=Always). Ordinary init containers retrying
-// until they succeed, and OnFailure/Never pods such as Job workers, are
-// excluded; their retries are handled by the init and Job paths.
+// Eligible containers are those the kubelet keeps restarting: regular
+// containers whose effective restartPolicy is Always, native sidecars (init
+// containers with restartPolicy=Always), and ordinary init containers that
+// keep failing while the pod is still Pending (Init:CrashLoopBackOff). Job
+// workers (OnFailure/Never) retry by design and are excluded.
 //
-// The exit code is deliberately ignored. The kubelet backs off restarts after
-// any exit, and a liveness kill with a graceful shutdown ends Completed/0, so
-// requiring a non-zero exit misses the loops that flap the most. An OOMKilled
-// last termination is left to the OOM path, which has its own category.
+// The exit code is deliberately ignored for regular containers and sidecars.
+// The kubelet backs off restarts after any exit, and a liveness kill with a
+// graceful shutdown ends Completed/0, so requiring a non-zero exit misses the
+// loops that flap the most. An ordinary init container that exits 0 has done
+// its job, so only its failures count. OOMKilled terminations count too; the
+// row then classifies as oom_killed through its last termination reason.
 //
 // When several containers qualify, the one that terminated most recently is
 // the one actively failing; a container that looped earlier and has since
@@ -99,17 +118,61 @@ func activeRestartLoop(pod *corev1.Pod, probes map[string]probeFailure, now time
 	}
 	for i := range pod.Status.InitContainerStatuses {
 		cs := &pod.Status.InitContainerStatuses[i]
-		if !isNativeSidecarName(pod, cs.Name) {
-			continue
-		}
 		loop, ok := containerRestartLoop(cs, now)
-		loop.sidecar = true
+		if isNativeSidecarName(pod, cs.Name) {
+			loop.sidecar = true
+		} else {
+			// An ordinary init container blocks the pod until it succeeds;
+			// it loops only while the pod is still initializing and its
+			// latest attempt failed.
+			loop.init = true
+			ok = ok && pod.Status.Phase == corev1.PodPending && loop.lastExitCode != 0
+		}
 		consider(loop, ok)
 	}
 	if !found {
 		return restartLoop{}, false
 	}
+	best.memoryLimit = containerHasMemoryLimit(pod, best.container)
 	return withProbeEvidence(best, pod, probes), true
+}
+
+func containerHasMemoryLimit(pod *corev1.Pod, name string) bool {
+	for _, list := range [][]corev1.Container{pod.Spec.Containers, pod.Spec.InitContainers} {
+		for i := range list {
+			if list[i].Name == name {
+				_, ok := list[i].Resources.Limits[corev1.ResourceMemory]
+				return ok
+			}
+		}
+	}
+	return false
+}
+
+// otherContainerActiveOOM reports an active OOM on any container other than
+// the named one. A sibling's OOM owns the pod's row over a different
+// container's loop; the loop container's own OOM does not veto its loop.
+func otherContainerActiveOOM(pod *corev1.Pod, name string, now time.Time) bool {
+	for _, cs := range health.ActiveOOMKilledContainers(pod, now) {
+		if cs.Name != name {
+			return true
+		}
+	}
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if cs.Name != name && cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
+			return true
+		}
+	}
+	return false
+}
+
+// oomStatuses is the container an OOM loop's limit diagnosis should examine:
+// the looping regular container, or nil (the pod's active OOMs) otherwise.
+func (l restartLoop) oomStatuses() []corev1.ContainerStatus {
+	if l.lastReason != "OOMKilled" || l.init || l.sidecar {
+		return nil
+	}
+	return []corev1.ContainerStatus{l.status}
 }
 
 // containerRestartsAlways reports whether the kubelet restarts this regular
@@ -145,7 +208,7 @@ func containerRestartLoop(cs *corev1.ContainerStatus, now time.Time) (restartLoo
 	if term == nil {
 		term = cs.LastTerminationState.Terminated
 	}
-	if term == nil || term.FinishedAt.IsZero() || term.Reason == "OOMKilled" {
+	if term == nil || term.FinishedAt.IsZero() {
 		return restartLoop{}, false
 	}
 	finished := term.FinishedAt.Time
@@ -158,18 +221,37 @@ func containerRestartLoop(cs *corev1.ContainerStatus, now time.Time) (restartLoo
 	// read as looping on its first restart. A real loop is caught from its
 	// next, short run. A container that never started (StartError,
 	// ContainerCannotRun) is stamped with the Unix epoch, which is no start.
-	if started := term.StartedAt.Time; started.Unix() > 0 && finished.Sub(started) > restartLoopWindow {
+	var lastRun time.Duration
+	if started := term.StartedAt.Time; started.Unix() > 0 {
+		lastRun = finished.Sub(started)
+	}
+	if lastRun > restartLoopWindow {
 		return restartLoop{}, false
 	}
-	if r := cs.State.Running; r != nil && !r.StartedAt.IsZero() && r.StartedAt.Sub(finished) > restartLoopStaleGap {
-		return restartLoop{}, false
+	if r := cs.State.Running; r != nil && !r.StartedAt.IsZero() {
+		if r.StartedAt.Sub(finished) > restartLoopStaleGap {
+			return restartLoop{}, false
+		}
+		// Recovered: the container is serving and its current run has
+		// clearly outlived the loop's rhythm. A loop restarts within one run
+		// length plus backoff, so a Ready run past twice the last one (and
+		// past the kubelet's 10-minute stability line) means the cause went
+		// away; clear now instead of holding the full window after the last
+		// crash. An unready container stays held, so the row does not fall
+		// straight into a readiness issue. The window above still bounds the
+		// hold either way.
+		if cs.Ready && now.Sub(r.StartedAt.Time) > max(restartLoopFastRun, 2*lastRun) {
+			return restartLoop{}, false
+		}
 	}
 	return restartLoop{
+		status:         *cs,
 		container:      cs.Name,
 		restartCount:   cs.RestartCount,
 		lastExitCode:   term.ExitCode,
 		lastReason:     term.Reason,
 		lastFinishedAt: finished,
+		lastRun:        lastRun,
 		lastMessage:    strings.TrimSpace(term.Message),
 	}, true
 }
@@ -223,9 +305,18 @@ func restartLoopMayReplace(reason string) bool {
 	return false
 }
 
+// fast reports whether the loop keeps the container mostly down: its last run
+// was shorter than the kubelet's stability line, or it never started.
+func (l restartLoop) fast() bool {
+	return l.lastRun < restartLoopFastRun
+}
+
 func (l restartLoop) ref() string {
 	if l.sidecar {
 		return fmt.Sprintf("sidecar container %q", l.container)
+	}
+	if l.init {
+		return fmt.Sprintf("init container %q", l.container)
 	}
 	return fmt.Sprintf("container %q", l.container)
 }
@@ -265,6 +356,14 @@ func (l restartLoop) message() string {
 // observations live in the evidence and the message instead.
 func (l restartLoop) diagnosis() (cause, action string) {
 	ref := l.ref()
+	if l.lastReason == "OOMKilled" {
+		if !l.memoryLimit {
+			return fmt.Sprintf("%s keeps being OOMKilled. It has no memory limit, so the kernel killed it under node memory pressure.", ref),
+				"Check the node's memory pressure and what else runs there, set a memory request that reflects real usage so the scheduler places it with room, and look for a leak or spike in this container."
+		}
+		return fmt.Sprintf("%s keeps being OOMKilled.", ref),
+			"Compare the container's memory use before each kill with its limit: raise the limit if the working set is legitimate, or find the leak or spike (heap settings, caches, request bursts). If it stayed under its limit, the node was under memory pressure: check the node."
+	}
 	if l.lastReason == "StartError" || l.lastReason == "ContainerCannotRun" {
 		return fmt.Sprintf("%s keeps failing to start (%s): the runtime could not start its process.", ref, l.lastReason),
 			"Read the runtime error on this issue: usually a missing binary or entrypoint, a bad working directory, or a permission or mount problem in the container spec."
@@ -313,4 +412,70 @@ func (l restartLoop) evidence() *issuesapi.RestartLoop {
 		out.StartupProbeFailure = &issuesapi.ProbeFailure{LastSeen: l.startup.at.UTC(), Message: Truncate(l.startup.message, restartLoopProbeMessageMax)}
 	}
 	return out
+}
+
+// loopingInitContainer names the ordinary init container a loop is on, or ""
+// when the loop is elsewhere or absent.
+func loopingInitContainer(loop restartLoop, looping bool) string {
+	if looping && loop.init {
+		return loop.container
+	}
+	return ""
+}
+
+// loopRow marks a detection emitted for a pod in a restart loop, for
+// setLoopSeverities.
+type loopRow struct {
+	index int
+	owner string
+	fast  bool
+}
+
+func loopOwnerKey(pod *corev1.Pod, ownerGroup, ownerKind, ownerName string) string {
+	if ownerKind == "" {
+		return pod.Namespace + "//Pod/" + pod.Name
+	}
+	return pod.Namespace + "/" + ownerGroup + "/" + ownerKind + "/" + ownerName
+}
+
+// setLoopSeverities sets each loop row's pinned severity. A loop is critical
+// when it is fast (the container is mostly down) and it covers at least half
+// of its workload's pods; a slow loop, or one bad replica among many, is a
+// warning. Both inputs hold steady for the life of a loop, so the severity
+// does too. The denominator is the workload's live pods as observed, which
+// works for any owner kind; pods that were never created are not counted,
+// which errs toward critical.
+func setLoopSeverities(cache *ResourceCache, problems []Detection, rows []loopRow, podsByNamespace map[string][]*corev1.Pod) {
+	if len(rows) == 0 {
+		return
+	}
+	looping := map[string]int{}
+	namespaces := map[string]bool{}
+	for _, r := range rows {
+		looping[r.owner]++
+		namespaces[problems[r.index].Namespace] = true
+	}
+	observed := map[string]int{}
+	for ns := range namespaces {
+		for _, pod := range podsByNamespace[ns] {
+			if pod.DeletionTimestamp != nil || (pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodPending) {
+				continue
+			}
+			group, kind, name := podOwnerKindName(cache, pod)
+			if key := loopOwnerKey(pod, group, kind, name); looping[key] > 0 {
+				observed[key]++
+			}
+		}
+	}
+	for _, r := range rows {
+		share := 1.0
+		if n := observed[r.owner]; n > 0 {
+			share = float64(looping[r.owner]) / float64(n)
+		}
+		if r.fast && share >= restartLoopImpactShare {
+			problems[r.index].Severity = "critical"
+		} else {
+			problems[r.index].Severity = "high"
+		}
+	}
 }

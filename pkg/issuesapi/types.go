@@ -443,8 +443,8 @@ type Issue struct {
 	Fingerprint          string         `json:"-"`
 	RestartCount         int32          `json:"restart_count,omitempty"`
 	LastTerminatedReason string         `json:"last_terminated_reason,omitempty"`
-	// RestartLoop is set on a crashloop issue whose container Radar classifies
-	// as in an active restart loop. It is the evidence for the loop, taken
+	// RestartLoop is set on a crashloop or oom_killed issue whose container
+	// Radar classifies as in an active restart loop. It is the evidence for the loop, taken
 	// from one container so every field describes the same termination.
 	RestartLoop       *RestartLoop       `json:"restart_loop,omitempty"`
 	Affected          Affected           `json:"affected,omitzero"`

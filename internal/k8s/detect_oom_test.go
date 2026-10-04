@@ -416,7 +416,9 @@ func TestDetectProblems_OOMLimitDiscrepancy(t *testing.T) {
 				if !strings.Contains(detection.Action, "ReplicaSet template") || !strings.Contains(detection.Action, "changed after Pod creation") || !strings.Contains(detection.Action, "VPA") || !strings.Contains(detection.Action, "admission") {
 					t.Errorf("action does not identify bounded mutation sources: %q", detection.Action)
 				}
-			} else if detection.Cause != "" || detection.Action != "" {
+			} else if strings.Contains(detection.Cause, "ReplicaSet") || strings.Contains(detection.Action, "ReplicaSet template") {
+				// A restart loop still carries its generic OOM diagnosis; what
+				// must be absent is the limit-discrepancy one.
 				t.Fatalf("unexpected OOM discrepancy diagnosis: cause=%q action=%q", detection.Cause, detection.Action)
 			}
 		})

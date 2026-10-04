@@ -167,10 +167,10 @@ func TestCompose_RestartLoopKeepsOneIssueAcrossTheCycle(t *testing.T) {
 			cs.State.Running = &corev1.ContainerStateRunning{StartedAt: at(8 * time.Minute)}
 			cs.LastTerminationState.Terminated = completed(8*time.Minute + 10*time.Second)
 		})},
-		{name: "serving-29m-after-last-crash", ready: true, status: with(func(cs *corev1.ContainerStatus) {
+		{name: "serving-9m-after-restart", ready: true, status: with(func(cs *corev1.ContainerStatus) {
 			cs.Ready = true
-			cs.State.Running = &corev1.ContainerStateRunning{StartedAt: at(28 * time.Minute)}
-			cs.LastTerminationState.Terminated = completed(29 * time.Minute)
+			cs.State.Running = &corev1.ContainerStateRunning{StartedAt: at(9 * time.Minute)}
+			cs.LastTerminationState.Terminated = completed(9*time.Minute + 10*time.Second)
 		})},
 	}
 
@@ -226,15 +226,16 @@ func TestCompose_RestartLoopKeepsOneIssueAcrossTheCycle(t *testing.T) {
 		}
 	}
 
-	// 31 minutes after the last crash, the loop is over: no issue.
+	// Serving for 11 minutes after 3-minute runs: recovered, the loop is
+	// over well before its 30-minute window would have ended it.
 	issues, _ := composeRestartLoopTick(t, now, restartLoopTick{name: "recovered", ready: true, status: with(func(cs *corev1.ContainerStatus) {
 		cs.Ready = true
-		cs.State.Running = &corev1.ContainerStateRunning{StartedAt: at(30 * time.Minute)}
-		cs.LastTerminationState.Terminated = completed(31 * time.Minute)
+		cs.State.Running = &corev1.ContainerStateRunning{StartedAt: at(11 * time.Minute)}
+		cs.LastTerminationState.Terminated = completed(11*time.Minute + 10*time.Second)
 	})})
 	for _, iss := range issues {
 		if iss.Name == "gateway" || iss.Name == "gateway-abc" {
-			t.Fatalf("recovered: issue %+v still open 31m after the last crash", iss)
+			t.Fatalf("recovered: issue %+v still open after 11 Ready minutes", iss)
 		}
 	}
 }

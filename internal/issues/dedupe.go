@@ -151,9 +151,17 @@ func dedupeWorkloadDegradedOverChild(in []Issue) []Issue {
 	// Per subject, the worst severity among its specific child-symptom rows.
 	maxChildSev := map[string]int{}
 	maxCreationChildSev := map[string]int{}
+	// A restart loop explains its workload's unavailability at any severity:
+	// a slow loop or one bad replica is a warning, while the Deployment's
+	// "N/M available" row is critical whenever a replica is down and comes
+	// and goes with the crash cycle.
+	loopChild := map[string]bool{}
 	for _, i := range in {
 		if childCategories[i.Category] {
 			k := subjectKeyOf(subjectRef(i))
+			if i.RestartLoop != nil {
+				loopChild[k] = true
+			}
 			if r := SeverityRank(i.Severity); r > maxChildSev[k] {
 				maxChildSev[k] = r
 			}
@@ -186,7 +194,8 @@ func dedupeWorkloadDegradedOverChild(in []Issue) []Issue {
 			if i.Reason == "ReplicaFailure" {
 				sev = maxCreationChildSev
 			}
-			if r, ok := sev[k]; ok && r >= SeverityRank(i.Severity) {
+			loopFolds := i.Category == issuesapi.CategoryWorkloadDegraded && loopChild[k]
+			if r, ok := sev[k]; loopFolds || (ok && r >= SeverityRank(i.Severity)) {
 				if i.IssueTiming != "" {
 					if prev, seen := suppressedIssueTiming[k]; seen && prev != i.IssueTiming {
 						suppressedIssueTiming[k] = ""
