@@ -887,32 +887,50 @@ func TestHandleAuthMe_NoNamespaceAccess(t *testing.T) {
 		}
 	})
 
-	t.Run("absent when some namespace is readable", func(t *testing.T) {
+	t.Run("false when some namespace is readable", func(t *testing.T) {
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 		s := newAuthServer(auth.Config{Mode: "proxy"})
 		s.permCache.Set(user.Username, user.Groups, &auth.UserPermissions{AllowedNamespaces: []string{"team-a"}})
-		if _, has := authMeBody(t, s, user)["noNamespaceAccess"]; has {
-			t.Error("noNamespaceAccess present for a user who can read team-a")
+		if got := authMeBody(t, s, user)["noNamespaceAccess"]; got != false {
+			t.Errorf("noNamespaceAccess = %v, want false for a user who can read team-a", got)
 		}
 	})
 
-	t.Run("absent for cluster-wide access", func(t *testing.T) {
+	t.Run("false for cluster-wide access", func(t *testing.T) {
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 		s := newAuthServer(auth.Config{Mode: "proxy"})
 		s.permCache.Set(user.Username, user.Groups, &auth.UserPermissions{AllowedNamespaces: nil})
-		if _, has := authMeBody(t, s, user)["noNamespaceAccess"]; has {
-			t.Error("noNamespaceAccess present for a user with cluster-wide access")
+		if got := authMeBody(t, s, user)["noNamespaceAccess"]; got != false {
+			t.Errorf("noNamespaceAccess = %v, want false for cluster-wide access", got)
 		}
 	})
 
-	// /auth/me never discovers: with nothing cached (before the first resource
-	// request, or after a failed discovery, which caches nothing) the field is
-	// left out and the banner asks again once content has loaded.
+	// A plain /auth/me never discovers: with nothing cached (before the first
+	// resource request, or after a failed discovery, which caches nothing) the
+	// field is left out. The banner's ?check=namespaces call discovers.
 	t.Run("absent when nothing is cached", func(t *testing.T) {
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 		s := newAuthServer(auth.Config{Mode: "proxy"})
 		if _, has := authMeBody(t, s, user)["noNamespaceAccess"]; has {
 			t.Error("noNamespaceAccess present with no cached permissions")
+		}
+	})
+
+	// Discovery that can't reach the cluster fails closed without caching, and
+	// that must not read as "this user has no access".
+	t.Run("absent when the banner's discovery can't run", func(t *testing.T) {
+		k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+		prevClient := k8s.SetTestClient(nil)
+		t.Cleanup(func() { k8s.SetTestClient(prevClient) })
+		s := newAuthServer(auth.Config{Mode: "proxy"})
+		w := httptest.NewRecorder()
+		s.handleAuthMe(w, requestWithUser("GET", "/api/auth/me?check=namespaces", user))
+		var body map[string]any
+		if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if _, has := body["noNamespaceAccess"]; has {
+			t.Error("noNamespaceAccess reported from a discovery that never ran")
 		}
 	})
 

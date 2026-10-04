@@ -3,6 +3,7 @@ package helm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -63,6 +64,7 @@ func TestRequireHelmWrite_ChecksCallerInNamespace(t *testing.T) {
 		want      int
 	}{
 		{"group bound in the namespace", "helm-gate-dana", []string{"radar:viewer", "radar:idp:platform-eng"}, "payments", http.StatusOK},
+		{"same user after the IdP removes the group", "helm-gate-dana", []string{"radar:viewer"}, "payments", http.StatusForbidden},
 		{"same group, another namespace", "helm-gate-dana", []string{"radar:viewer", "radar:idp:platform-eng"}, "billing", http.StatusForbidden},
 		{"hub role alone grants nothing here", "helm-gate-eli", []string{"radar:owner"}, "payments", http.StatusForbidden},
 		{"pod-local change needs no cluster permission", "helm-gate-fay", []string{"radar:viewer"}, "", http.StatusOK},
@@ -100,4 +102,19 @@ func TestRequireHelmWrite_ChecksCallerInNamespace(t *testing.T) {
 			t.Fatalf("status = %d, want 403 before any chart fetch (body %s)", rec.Code, rec.Body.String())
 		}
 	})
+}
+
+// A chart repository's 401 is not the caller's Kubernetes RBAC.
+func TestIsReleaseReadForbidden(t *testing.T) {
+	cases := map[string]bool{
+		`secrets is forbidden: User "alice" cannot list resource "secrets"`:                     true,
+		`looks like "https://charts.example" is not a valid chart repository: 401 Unauthorized`: false,
+		`failed to fetch https://charts.example/index.yaml : 403 Forbidden`:                     false,
+		`connection refused`: false,
+	}
+	for msg, want := range cases {
+		if got := isReleaseReadForbidden(errors.New(msg)); got != want {
+			t.Errorf("isReleaseReadForbidden(%q) = %v, want %v", msg, got, want)
+		}
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -190,6 +191,8 @@ func (s *Server) issueRelatedResourceAccess(r *http.Request) func(issues.Ref) bo
 	}
 }
 
+var helmIssuesDeniedLogged sync.Map
+
 func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string, filters issues.Filters) []issues.Issue {
 	if !issues.KindFilterIncludes(filters.Kinds, "HelmRelease", "helmreleases") {
 		return nil
@@ -215,6 +218,11 @@ func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string
 	if err != nil {
 		if !helm.IsForbiddenError(err) {
 			log.Printf("[issues] Failed to list Helm releases for issue stream: %v", err)
+		} else if _, seen := helmIssuesDeniedLogged.LoadOrStore(username, struct{}{}); !seen {
+			// Logged once per identity: the alerts worker polls this, and a
+			// cluster without a Secret-read binding would otherwise drop Helm
+			// alerts with no trace anywhere.
+			log.Printf("[issues] Helm release issues omitted for %q: Kubernetes denied listing release Secrets", username)
 		}
 		return nil
 	}

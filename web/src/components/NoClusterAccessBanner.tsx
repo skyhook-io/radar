@@ -1,20 +1,23 @@
 import { useEffect, useState } from 'react'
 import { ShieldAlert } from 'lucide-react'
 import { AlertBanner, Badge, Collapse, CollapseChevron, useDisclosure } from '@skyhook-io/k8s-ui'
-import { useAuthMe } from '../api/client'
+import { useAuthMe, useNamespaceAccess } from '../api/client'
 
 // Every read is filtered to the user's namespaces, so someone bound to none
 // sees empty lists in every view and reads it as an empty cluster. Stated in
 // terms of the user's own access, not how the cluster is meant to be set up:
 // Radar can't know whether an org intends hub roles or IdP groups here.
 export function NoClusterAccessBanner() {
-  const { data: me, refetch } = useAuthMe()
-  // auth/me is first fetched before the cluster connects, when the server
-  // can't report access yet; this mounts once content is ready (and again
-  // after a context switch), so ask again then.
+  const { data: auth } = useAuthMe()
+  // Mounted once content is ready (and again after a context switch), so the
+  // cluster is connected by the time this asks.
+  const { data } = useNamespaceAccess(Boolean(auth?.authEnabled))
+  // Keep the last definite answer through a check that couldn't decide, so a
+  // transient discovery failure doesn't hide the banner from a user without access.
+  const [me, setMe] = useState<typeof data>()
   useEffect(() => {
-    void refetch()
-  }, [refetch])
+    if (data && typeof data.noNamespaceAccess === 'boolean') setMe(data)
+  }, [data])
   const [groupsOpen, setGroupsOpen] = useState(false)
   const groupsDisclosure = useDisclosure(groupsOpen)
 

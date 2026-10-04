@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/errorlog"
@@ -29,11 +31,19 @@ func IsForbiddenError(err error) bool {
 // caller. Helm stores releases as Secrets, so a denial is the caller's
 // Kubernetes RBAC, not a server fault.
 func writeReleaseReadError(w http.ResponseWriter, err error) {
-	if IsForbiddenError(err) {
+	if isReleaseReadForbidden(err) {
 		writeError(w, http.StatusForbidden, "insufficient permissions to read this Helm release: "+err.Error())
 		return
 	}
 	writeError(w, http.StatusInternalServerError, err.Error())
+}
+
+// isReleaseReadForbidden matches a Kubernetes denial only. Preview can fetch a
+// chart, and a repository's own 401/403 is not the caller's RBAC. The text
+// match covers Helm paths that flatten the API error; "is forbidden: User" is
+// the apiserver's RBAC denial wording.
+func isReleaseReadForbidden(err error) bool {
+	return apierrors.IsForbidden(err) || strings.Contains(err.Error(), "is forbidden: User")
 }
 
 // userCreds pulls the auth user off the request for *AsUser helpers.
@@ -946,9 +956,9 @@ func (h *Handlers) handleListOCISources(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, ListOCISources())
 }
 
-// handleAddOCISource registers an OCI chart-source prefix. Gated by
-// requireHelmWrite (same as repo refresh): it mutates pod-local config and
-// underpins later upgrades, but is not a cluster mutation.
+// handleAddOCISource registers an OCI chart-source prefix. The source list is
+// shared Radar configuration that later upgrades resolve against, so it is
+// gated as config (ConfigWriteAllowed), not as a cluster mutation.
 func (h *Handlers) handleAddOCISource(w http.ResponseWriter, r *http.Request) {
 	if h.ConfigWriteAllowed != nil && !h.ConfigWriteAllowed(w, r) {
 		return

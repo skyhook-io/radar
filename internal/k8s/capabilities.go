@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -492,7 +493,8 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*Namespa
 	return result, nil
 }
 
-// Per-user capabilities cache (keyed by username)
+// Per-user capabilities caches, keyed by username + groups: the verdicts come
+// from SubjectAccessReviews run with both, and they decide Helm writes.
 var (
 	userCapabilitiesCache          sync.Map // map[string]*userCapEntry
 	userNamespaceCapabilitiesCache sync.Map // map[string]*userNSCapEntry
@@ -509,16 +511,16 @@ type userNSCapEntry struct {
 	expiresAt time.Time
 }
 
-func userNamespaceCapabilitiesCacheKey(username, namespace string) string {
-	return username + "\x00" + namespace
+func userNamespaceCapabilitiesCacheKey(username string, groups []string, namespace string) string {
+	return pkgauth.IdentityCacheKey(username, groups) + "\x00" + namespace
 }
 
 // CheckCapabilitiesForUser runs SubjectAccessReview as the given user
 // to determine what the user can do (exec, logs, delete, helm, etc.)
-// Results are cached per-user with 60s TTL.
+// Results are cached per identity (username + groups) with 60s TTL.
 func CheckCapabilitiesForUser(ctx context.Context, username string, groups []string) (*Capabilities, error) {
-	// Check cache
-	if entry, ok := userCapabilitiesCache.Load(username); ok {
+	identityKey := pkgauth.IdentityCacheKey(username, groups)
+	if entry, ok := userCapabilitiesCache.Load(identityKey); ok {
 		e := entry.(*userCapEntry)
 		if time.Now().Before(e.expiresAt) {
 			caps := *e.caps
@@ -589,7 +591,7 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 	}
 
 	// Cache result
-	userCapabilitiesCache.Store(username, &userCapEntry{
+	userCapabilitiesCache.Store(identityKey, &userCapEntry{
 		caps:      caps,
 		expiresAt: time.Now().Add(userCapabilitiesTTL),
 	})
@@ -604,7 +606,7 @@ func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, gro
 		return nil, nil
 	}
 
-	cacheKey := userNamespaceCapabilitiesCacheKey(username, namespace)
+	cacheKey := userNamespaceCapabilitiesCacheKey(username, groups, namespace)
 	if entry, ok := userNamespaceCapabilitiesCache.Load(cacheKey); ok {
 		e := entry.(*userNSCapEntry)
 		if time.Now().Before(e.expiresAt) {

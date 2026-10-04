@@ -102,6 +102,12 @@ func cacheKey(username string, groups []string) string {
 	return username + cacheKeySep + groupsFingerprint(groups)
 }
 
+// IdentityCacheKey is cacheKey for callers outside this package that cache
+// per-user SubjectAccessReview results.
+func IdentityCacheKey(username string, groups []string) string {
+	return cacheKey(username, groups)
+}
+
 // groupsFingerprint returns a deterministic fingerprint of a group set:
 // sorted, deduped, and joined. Empty-string elements are dropped (an empty
 // group is not a real principal), so nil, [], [""], and ["", ""] all

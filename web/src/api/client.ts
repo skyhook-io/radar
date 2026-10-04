@@ -2256,7 +2256,8 @@ export interface AuthMe {
    *  When false, logout clears Radar's cookie but the proxy may re-auth
    *  the same user on the next request. */
   proxyLogoutConfigured?: boolean;
-  /** Connected, and the user's RBAC allows reading no namespace at all. */
+  /** Connected and the user's access is known: true when their RBAC allows
+   *  reading no namespace at all. Absent when access couldn't be determined. */
   noNamespaceAccess?: boolean;
 }
 
@@ -2265,9 +2266,24 @@ export function useAuthMe() {
     queryKey: ["auth-me"],
     queryFn: () => fetchJSON("/auth/me"),
     staleTime: 300000, // 5 minutes
-    // A user with no access is waiting on an admin; re-check so the banner
-    // clears once a binding lands instead of after the 5-minute stale window.
-    refetchInterval: (query) => (query.state.data?.noNamespaceAccess ? 60000 : false),
+  });
+}
+
+/**
+ * useNamespaceAccess asks the server to run namespace discovery for the caller,
+ * so the answer never depends on whether the permission cache happens to hold
+ * an entry. A user with no access is waiting on an admin; re-check every
+ * minute so the banner clears once a binding lands.
+ */
+export function useNamespaceAccess(enabled: boolean) {
+  return useQuery<AuthMe>({
+    queryKey: ["namespace-access"],
+    queryFn: () => fetchJSON("/auth/me?check=namespaces"),
+    enabled,
+    staleTime: 60000,
+    // Stop only on an explicit false: an absent field means discovery couldn't
+    // answer this time, which says nothing about the user's access.
+    refetchInterval: (query) => (query.state.data?.noNamespaceAccess === false ? false : 60000),
   });
 }
 
@@ -2317,8 +2333,14 @@ export function useCloudRole() {
  * needs the chart's rbac.helm=true.
  */
 export function useCanHelmAct(namespace?: string): { allowed: boolean; reason?: string } {
-  const { canHelmWrite } = useNamespacedCapabilities(namespace);
+  const { canHelmWrite, helmWriteUnknown } = useNamespacedCapabilities(namespace);
   const authEnabled = useIsAuthEnabled();
+  // Without a namespace answer (still loading, or the check failed) the global
+  // value only says the user can create Secrets somewhere, which would enable
+  // actions the server then refuses.
+  if (authEnabled && helmWriteUnknown) {
+    return { allowed: false, reason: `Couldn't confirm your permissions in ${namespace} yet.` };
+  }
   if (canHelmWrite) return { allowed: true };
   if (authEnabled) {
     return {
