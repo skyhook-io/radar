@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { renderToString } from "react-dom/server";
 import { DiagnoseError, investigationRefusal } from "../../api/diagnose";
 import { DiagnoseCustomizationProvider } from "../../context/DiagnoseCustomization";
-import { InvestigationStartErrorAlert } from "./InvestigationView";
+import {
+  InvestigationFailureNotice,
+  InvestigationStartErrorAlert,
+  InvestigationStatusCheckNotice,
+} from "./InvestigationView";
 
 const quota = new DiagnoseError(
   402,
@@ -80,5 +84,73 @@ describe("InvestigationStartErrorAlert", () => {
       </DiagnoseCustomizationProvider>,
     );
     expect(asked).toBe(false);
+  });
+});
+
+const withHost = (node: React.ReactNode) =>
+  renderToString(
+    <DiagnoseCustomizationProvider
+      value={undefined}
+      renderRefusalAction={(r) => (
+        <a href="/plans">{`Upgrade (${r.reason})`}</a>
+      )}
+    >
+      {node}
+    </DiagnoseCustomizationProvider>,
+  );
+
+describe("InvestigationStatusCheckNotice (Findings)", () => {
+  it("says a refused status check couldn't run, with the host's action", () => {
+    const html = withHost(
+      <InvestigationStatusCheckNotice
+        message={quota.message}
+        uncertainOnly={false}
+        refusal={investigationRefusal(quota)}
+        onCheck={() => {}}
+        disabled={false}
+      />,
+    );
+    expect(html).toContain("Couldn&#x27;t check status:");
+    expect(html).not.toContain("Verification did not complete");
+    expect(html).toContain("Upgrade (allowance_used_free)");
+  });
+
+  it("keeps the verification wording, and no action, for a check that ran and failed", () => {
+    const html = withHost(
+      <InvestigationStatusCheckNotice
+        message="The agent stopped before checking."
+        uncertainOnly={false}
+        refusal={null}
+        onCheck={() => {}}
+        disabled={false}
+      />,
+    );
+    expect(html).toContain("Verification did not complete:");
+    expect(html).not.toContain("Upgrade");
+  });
+});
+
+describe("InvestigationFailureNotice (Activity)", () => {
+  it("keeps a status warning first and shows a newer refused follow-up, with its action, beside it", () => {
+    const html = withHost(
+      <InvestigationFailureNotice
+        message="Radar couldn't confirm whether the apply request completed."
+        refusal={null}
+        statusCheck={{
+          label: "Check current status",
+          onCheck: () => {},
+          disabled: false,
+        }}
+        followUp={{
+          message: quota.message,
+          refusal: investigationRefusal(quota),
+        }}
+      />,
+    );
+    expect(
+      html.indexOf("couldn&#x27;t confirm whether the apply"),
+    ).toBeLessThan(html.indexOf("this month&#x27;s investigations"));
+    expect(html).toContain("Check current status");
+    expect(html).toContain("Upgrade (allowance_used_free)");
   });
 });

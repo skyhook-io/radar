@@ -127,6 +127,8 @@ export function investigationAssessmentNeedsCurrentStateVerification(input: {
 // Which failure the activity pane shows, and the host refusal behind it. A
 // request's own error is newer than a saved verification turn's: it is cleared
 // when the next request starts and when a new verification turn streams.
+// A status warning keeps first place, since it is what stops a second Apply
+// before anyone checks; a newer failed follow-up shows beside it, not instead.
 export function investigationFailureShown(input: {
   actionError: string | null;
   actionRefusal: InvestigationRefusal | null;
@@ -139,6 +141,7 @@ export function investigationFailureShown(input: {
   statusCheckError: string | null;
   message: string | null;
   refusal: InvestigationRefusal | null;
+  followUp: { message: string; refusal: InvestigationRefusal | null } | null;
 } {
   const verificationError =
     input.verificationError || input.savedVerificationError;
@@ -149,6 +152,9 @@ export function investigationFailureShown(input: {
       statusCheckError,
       message: statusCheckError,
       refusal: input.verificationError ? input.verificationRefusal : null,
+      followUp: input.actionError
+        ? { message: input.actionError, refusal: input.actionRefusal }
+        : null,
     };
   }
   return {
@@ -156,6 +162,7 @@ export function investigationFailureShown(input: {
     statusCheckError: null,
     message: input.actionError,
     refusal: input.actionError ? input.actionRefusal : null,
+    followUp: null,
   };
 }
 

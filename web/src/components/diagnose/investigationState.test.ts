@@ -1314,7 +1314,7 @@ describe("investigationFailureShown", () => {
     expect(shown.refusal).toBeNull();
   });
 
-  it("keeps an uncertain apply ahead of a follow-up failure, without the follow-up's action", () => {
+  it("keeps an uncertain apply first and shows a newer refused follow-up beside it", () => {
     const shown = investigationFailureShown({
       ...none,
       applyOutcomeUncertain: "Check current status before applying again.",
@@ -1326,6 +1326,18 @@ describe("investigationFailureShown", () => {
       "Check current status before applying again.",
     );
     expect(shown.refusal).toBeNull();
+    expect(shown.followUp).toEqual({ message: quota.message, refusal: quota });
+  });
+
+  it("shows a refused follow-up beside a failed verification turn too", () => {
+    const shown = investigationFailureShown({
+      ...none,
+      savedVerificationError: "The agent stopped before checking.",
+      actionError: quota.message,
+      actionRefusal: quota,
+    });
+    expect(shown.message).toBe("The agent stopped before checking.");
+    expect(shown.followUp).toEqual({ message: quota.message, refusal: quota });
   });
 
   it("shows a refused follow-up with its action", () => {
@@ -1339,6 +1351,7 @@ describe("investigationFailureShown", () => {
       statusCheckError: null,
       message: quota.message,
       refusal: quota,
+      followUp: null,
     });
   });
 });
