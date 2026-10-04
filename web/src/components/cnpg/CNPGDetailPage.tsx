@@ -12,7 +12,7 @@ import { CNPGPerformance } from './CNPGPerformance'
 import { CNPGReplicationTab } from './CNPGReplicationTab'
 import { CNPGBackupsTab, CNPGClusterHeaderChips, CNPGConfigurationLead, CNPGStorageTab } from './CNPGClusterTabs'
 import type { CNPGChartGroup } from './CNPGTrends'
-import { CNPG_DETAIL_KINDS, CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, cnpgScreenPath, type CNPGDetailTarget } from './routes'
+import { CNPG_DETAIL_KINDS, CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, cnpgScreenPath, cnpgViewHoldsOnlyKind, type CNPGDetailTarget } from './routes'
 import { CNPG_CLUSTER_TAB_ORDER, cnpgDimensionTab } from './paths'
 import { currentPageLabel } from '../../utils/page-links'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
@@ -187,19 +187,15 @@ export function CNPGDetailPage({
           <span className="h-4 w-px shrink-0 bg-theme-border" aria-hidden />
         </>
       )}
+      {/* Workspace / view / — the view is the place to go back to; the
+          workspace name is plain text, as on the views' own titles. */}
       <nav aria-label="Location" className="flex shrink-0 items-center gap-1.5 text-theme-text-tertiary">
         <Database className="h-3.5 w-3.5" />
-        <button type="button" onClick={() => navigate(cnpgScreenPath('overview'))} className="hover:text-theme-text-primary hover:underline">
-          CloudNativePG
+        <span>CloudNativePG</span>
+        <span>/</span>
+        <button type="button" onClick={() => navigate(home.path)} className="hover:text-theme-text-primary hover:underline">
+          {home.label}
         </button>
-        {home.id !== 'overview' && (
-          <>
-            <span>/</span>
-            <button type="button" onClick={() => navigate(home.path)} className="hover:text-theme-text-primary hover:underline">
-              {home.label}
-            </button>
-          </>
-        )}
         <span>/</span>
       </nav>
     </div>
@@ -227,6 +223,7 @@ export function CNPGDetailPage({
           titlePrefix={titlePrefix}
           inlineBadges
           namespaceNote={namespaceNote}
+          hideKindBadge={cnpgViewHoldsOnlyKind(target.plural)}
           onNavigateToResource={openRelated}
           extraTabs={extraTabs}
           tabOrder={isCluster ? CNPG_CLUSTER_TAB_ORDER : undefined}

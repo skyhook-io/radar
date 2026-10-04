@@ -46,6 +46,16 @@ export const CNPG_DETAIL_KINDS: Record<string, { group: string; kind: string; ho
   }),
 )
 
+/**
+ * Whether a kind's home view holds no other kind (Clusters, Pooling): its
+ * crumb then already says what the object is, so the kind badge is left out.
+ * Backups holds Backups, ScheduledBackups and ObjectStores, so those keep it.
+ */
+export function cnpgViewHoldsOnlyKind(plural: string): boolean {
+  const home = CNPG_DETAIL_KINDS[plural]?.home
+  return !!home && Object.values(CNPG_DETAIL_KINDS).filter((k) => k.home === home).length === 1
+}
+
 export function cnpgDetailKindFor(plural: string, group: string | undefined): string | null {
   const p = plural.toLowerCase()
   const spec = CNPG_DETAIL_KINDS[p]

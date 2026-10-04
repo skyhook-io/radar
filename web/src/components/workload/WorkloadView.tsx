@@ -341,6 +341,7 @@ interface WorkloadViewProps {
   titlePrefix?: ReactNode
   inlineBadges?: boolean
   namespaceNote?: ReactNode
+  hideKindBadge?: boolean
 }
 
 interface ImageTargetOwnershipContext {

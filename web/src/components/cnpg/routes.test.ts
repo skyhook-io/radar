@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgDetailKindFor, cnpgDetailPath, parseCNPGRoute } from './routes'
+import { cnpgDetailKindFor, cnpgDetailPath, cnpgViewHoldsOnlyKind, parseCNPGRoute } from './routes'
 import { decodeDrawerTrail, encodeDrawerTrail, sameSelectedResource } from '../../utils/drawer-trail'
 
 describe('CNPG routes', () => {
@@ -57,5 +57,17 @@ describe('CNPG routes', () => {
     expect(cnpgDetailKindFor('clusters', 'postgresql.cnpg.io')).toBe('clusters')
     expect(cnpgDetailKindFor('clusters', 'cluster.x-k8s.io')).toBeNull()
     expect(cnpgDetailKindFor('backups', 'velero.io')).toBeNull()
+  })
+})
+
+describe('cnpgViewHoldsOnlyKind', () => {
+  it('is true only where the crumb’s view names the kind on its own', () => {
+    expect(cnpgViewHoldsOnlyKind('clusters')).toBe(true)
+    expect(cnpgViewHoldsOnlyKind('poolers')).toBe(true)
+    // Backups also holds ScheduledBackups and ObjectStores.
+    expect(cnpgViewHoldsOnlyKind('backups')).toBe(false)
+    expect(cnpgViewHoldsOnlyKind('scheduledbackups')).toBe(false)
+    expect(cnpgViewHoldsOnlyKind('databases')).toBe(false)
+    expect(cnpgViewHoldsOnlyKind('pods')).toBe(false)
   })
 })

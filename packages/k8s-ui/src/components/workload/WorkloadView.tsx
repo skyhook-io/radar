@@ -153,6 +153,8 @@ interface WorkloadViewProps {
   inlineBadges?: boolean
   /** A note right after the namespace, e.g. that it is outside the namespace filter. */
   namespaceNote?: ReactNode
+  /** Leave out the kind badge, for a host whose title prefix already names the kind. */
+  hideKindBadge?: boolean
   /** Suppress the standalone back arrow — for embeddings where "back" has no
    *  meaningful target (a single-workload app has no app graph to return to). */
   hideBackButton?: boolean
@@ -426,6 +428,7 @@ export function WorkloadView({
   titlePrefix,
   inlineBadges = false,
   namespaceNote,
+  hideKindBadge = false,
   hideBackButton,
   scopeControls,
   compactHeader,
@@ -1108,9 +1111,11 @@ export function WorkloadView({
         )
         const kindAndStatus = (
           <>
-            <span className={clsx('badge whitespace-nowrap', getKindColorOutline(apiKind))}>
-              {displayKindName(apiKind, resource?.kind)}
-            </span>
+            {!hideKindBadge && (
+              <span className={clsx('badge whitespace-nowrap', getKindColorOutline(apiKind))}>
+                {displayKindName(apiKind, resource?.kind)}
+              </span>
+            )}
             {status && (
               <span className={clsx('badge whitespace-nowrap', status.color)}>
                 {status.text}
