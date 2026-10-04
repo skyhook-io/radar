@@ -165,6 +165,8 @@ export function useNamespacedCapabilities(namespace: string | undefined) {
     canHelmWrite: nsCaps?.helmWrite ?? globalCaps.helmWrite,
     workloadWrites: nsCaps?.workloadWrites ?? globalCaps.workloadWrites,
     workloadWritesPending: Boolean(namespace && isPending),
-    helmWriteUnknown: Boolean(namespace && (isPending || error)),
-  }), [globalCaps.exec, globalCaps.logs, globalCaps.portForward, globalCaps.helmWrite, globalCaps.workloadWrites, isPending, namespace, nsCaps])
+    // A failed refetch keeps the last successful namespace answer; with none,
+    // the global value is not an answer for this namespace.
+    helmWriteUnknown: Boolean(namespace && !nsCaps && (isPending || error)),
+  }), [globalCaps.exec, globalCaps.logs, globalCaps.portForward, globalCaps.helmWrite, globalCaps.workloadWrites, error, isPending, namespace, nsCaps])
 }
