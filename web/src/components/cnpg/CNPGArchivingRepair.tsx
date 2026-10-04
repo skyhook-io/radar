@@ -184,6 +184,8 @@ function recoveryBaseText(base: CNPGRecoveryBase): string {
     case 'beginsBefore':
       return `${label(base.backup)} started after archiving resumed but begins at WAL ${base.backup?.status?.beginWal ?? '(not reported)'}, not after ${base.failedWal} — likely from a standby that had not replayed past it. Take another.`
     case 'unverifiable':
-      return `${label(base.backup)} started after archiving resumed and completed; Radar cannot compare where it begins (${base.backup?.status?.beginWal ?? 'not reported'}) with the last failed WAL, which only the primary’s instance manager reports.`
+      return base.missing === 'beginWal'
+        ? `${label(base.backup)} started after archiving resumed and completed, but its status does not say which WAL it begins at, so Radar cannot compare it with the last failed one.`
+        : `${label(base.backup)} started after archiving resumed and completed; Radar cannot compare where it begins with the last failed WAL, which only the primary’s instance manager reports and is not reporting now.`
   }
 }

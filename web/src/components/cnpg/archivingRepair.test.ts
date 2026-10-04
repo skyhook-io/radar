@@ -87,7 +87,12 @@ describe('a base backup after archiving resumed', () => {
     expect(cnpgRecoveryBase(pg, [lagging], boundary, plugin, failed)).toMatchObject({ state: 'beginsBefore', failedWal: failed })
     expect(cnpgRecoveryBase(pg, [lagging, after], boundary, plugin, failed)).toMatchObject({ state: 'verified', backup: { metadata: { name: 'after' } } })
     // Without the failed WAL (the primary's stats restarted) nothing can be verified.
-    expect(cnpgRecoveryBase(pg, [after], boundary, plugin)).toMatchObject({ state: 'unverifiable' })
+    expect(cnpgRecoveryBase(pg, [after], boundary, plugin)).toMatchObject({ state: 'unverifiable', missing: 'failedWal' })
+    // A backup whose status does not say where it begins is not diagnosed as beginning before.
+    const unreported = backup('unreported', '2026-10-04T11:30:00Z')
+    const malformed = backup('malformed', '2026-10-04T11:30:00Z', { beginWal: 'n/a' })
+    expect(cnpgRecoveryBase(pg, [unreported], boundary, plugin, failed)).toMatchObject({ state: 'unverifiable', missing: 'beginWal' })
+    expect(cnpgRecoveryBase(pg, [malformed, lagging], boundary, plugin, failed)).toMatchObject({ state: 'unverifiable', missing: 'beginWal' })
     expect(cnpgRecoveryBase(pg, [], boundary, plugin, failed)).toEqual({ state: 'none' })
   })
 

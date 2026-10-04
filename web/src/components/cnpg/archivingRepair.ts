@@ -96,7 +96,8 @@ export type CNPGRecoveryBase =
   | { state: 'none' }
   | { state: 'verified'; backup: any; failedWal: string }
   | { state: 'beginsBefore'; backup: any; failedWal: string }
-  | { state: 'unverifiable'; backup: any }
+  /** `missing` says which side of the comparison could not be read. */
+  | { state: 'unverifiable'; backup: any; missing: 'failedWal' | 'beginWal' }
 
 export function cnpgRecoveryBase(
   cluster: { namespace: string; name: string },
@@ -108,9 +109,13 @@ export function cnpgRecoveryBase(
   if (backups === null) return { state: 'unread' }
   const candidates = backupsAfterResume(cluster, backups, boundary, archiver)
   if (candidates.length === 0) return { state: 'none' }
-  if (!failedWal || walAfter(failedWal, failedWal) === null) return { state: 'unverifiable', backup: candidates[0] }
+  if (!failedWal || walAfter(failedWal, failedWal) === null) return { state: 'unverifiable', backup: candidates[0], missing: 'failedWal' }
   const verified = candidates.find((b) => walAfter(b?.status?.beginWal, failedWal) === true)
-  return verified ? { state: 'verified', backup: verified, failedWal } : { state: 'beginsBefore', backup: candidates[0], failedWal }
+  if (verified) return { state: 'verified', backup: verified, failedWal }
+  const newest = candidates[0]
+  return walAfter(newest?.status?.beginWal, failedWal) === false
+    ? { state: 'beginsBefore', backup: newest, failedWal }
+    : { state: 'unverifiable', backup: newest, missing: 'beginWal' }
 }
 
 /**
