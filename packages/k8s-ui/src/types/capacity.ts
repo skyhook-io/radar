@@ -1,5 +1,5 @@
 import type { Issue } from "../components/issues/types";
-import type { Certainty } from "../components/workspace/certainty";
+import type { Certainty } from "../components/facts/certainty";
 
 export const CAPACITY_SCHEMA_VERSION = "v1alpha1" as const;
 

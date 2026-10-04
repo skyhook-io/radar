@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { getCNPGDeclarativeMessage, getCNPGReclaimPolicy } from '../resources/resource-utils-cnpg'
 import { cnpgManagedBy, type CNPGWorkspaceResponse } from './workspace'
-import type { Fact } from '../workspace'
+import { type Fact } from '../facts'
 import { cnpgLogicalPaths, type CNPGLogicalPath } from './logicalReplication'
 import { CNPGLogicalPathView } from './CNPGLogicalPath'
 import { cnpgDatabaseRoleFacts } from './databaseRole'
@@ -20,7 +20,8 @@ import {
 } from './relations'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { toneTextClass } from '../ui/status-tone'
-import { FactGrid, FactRow, FactValue, SectionHeading, ManagedByText, managedByLabel } from '../workspace'
+import { FactGrid, FactRow, FactValue, ManagedByText, managedByLabel } from '../facts'
+import { SectionHeading } from '../ui/FoldSection'
 
 interface SummaryProps {
   resource: any

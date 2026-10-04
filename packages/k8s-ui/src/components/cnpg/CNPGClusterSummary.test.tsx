@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CNPGClusterSummary } from './CNPGClusterSummary'
 import type { CNPGFleetRow, CNPGProblem } from './workspace'
 import type { CNPGDimension } from './ha'
-import { OpenIssueContext } from '../workspace'
+import { OpenIssueContext } from '../problems'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 

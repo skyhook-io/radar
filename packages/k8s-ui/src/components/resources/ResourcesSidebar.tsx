@@ -13,7 +13,7 @@ import type { APIResource } from '../../types'
 import { categorizeResources, CORE_RESOURCES } from '../../utils/api-resources'
 import { getResourceIcon } from '../../utils/resource-icons'
 import { Tooltip } from '../ui/Tooltip'
-import { certaintyGlyph } from '../workspace/certainty'
+import { certaintyGlyph } from '../facts'
 import { Input } from '../ui/Input'
 
 // Selected resource type info (need both name for API and kind for display)

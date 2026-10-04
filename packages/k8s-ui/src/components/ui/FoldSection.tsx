@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
-import { toneTextClass } from '../ui/status-tone'
-import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
+import { toneTextClass } from './status-tone'
+import { Collapse, CollapseChevron, useDisclosure } from './Collapse'
 
 /** A folded section's one-line summary, and whether it opens on its own. */
 export interface FoldSummary {

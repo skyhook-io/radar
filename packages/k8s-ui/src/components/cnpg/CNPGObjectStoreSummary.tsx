@@ -12,7 +12,8 @@ import { NotReported, Note, ObjectProblems, SummaryShell, TimeAgo } from './CNPG
 import { clustersIn, inferredObjectStoreHealth, refOf, relationUnavailable, usersOfObjectStore } from './relations'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { toneTextClass } from '../ui/status-tone'
-import { FactGrid, FactRow, FactValue, SectionHeading } from '../workspace'
+import { FactGrid, FactRow, FactValue } from '../facts'
+import { SectionHeading } from '../ui/FoldSection'
 
 function utc(at: string | undefined): string {
   if (!at || !Number.isFinite(Date.parse(at))) return 'unknown'

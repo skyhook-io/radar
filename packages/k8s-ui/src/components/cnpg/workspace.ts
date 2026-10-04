@@ -4,7 +4,8 @@
 
 import { formatAge, type HealthLevel } from '../resources/resource-utils'
 import { worseTone } from '../ui/status-tone'
-import type { Fact, ProblemOrigin, WorkspaceProblem } from '../workspace'
+import { type Fact } from '../facts'
+import { type ProblemOrigin, type WorkspaceProblem } from '../problems'
 import type { ResourceRef } from '../../types/core'
 import { formatBytes } from '../../utils/format'
 import { formatGrant, type Grant } from '../../utils/grant'

@@ -4,7 +4,8 @@ import { Tooltip } from '../ui/Tooltip'
 import { CNPG_GROUP } from '../resources/resource-utils-cnpg'
 import { cnpgConnectionURI, cnpgConnectInfo, cnpgPsqlCommand, type CNPGConnectEndpoint } from './connect'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
-import { FactGrid, FactRow, SectionHeading } from '../workspace'
+import { FactGrid, FactRow } from '../facts'
+import { SectionHeading } from '../ui/FoldSection'
 
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false)

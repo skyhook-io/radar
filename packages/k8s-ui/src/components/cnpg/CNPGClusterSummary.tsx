@@ -10,7 +10,9 @@ import type { CNPGDimension } from './ha'
 import { PrimaryConflictNote } from './primitives'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { StatusDot, toneTextClass } from '../ui/status-tone'
-import { FactGrid, FactRow, FactSource, FactValue, ProblemCallout, ProblemList, SectionHeading, ManagedByText, managedByLabel } from '../workspace'
+import { FactGrid, FactRow, FactSource, FactValue, ManagedByText, managedByLabel } from '../facts'
+import { ProblemCallout, ProblemList } from '../problems'
+import { SectionHeading } from '../ui/FoldSection'
 
 function ReadyCount({ row }: { row: CNPGFleetRow }) {
   const r = cnpgReadyInstances(row)

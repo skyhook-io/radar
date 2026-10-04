@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react'
 import { ArrowRight } from 'lucide-react'
 import { CNPG_GROUP } from '../resources/resource-utils-cnpg'
-import type { Fact } from '../workspace'
+import { type Fact } from '../facts'
 import { cnpgLogicalLocation, type CNPGLogicalPath } from './logicalReplication'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { toneTextClass } from '../ui/status-tone'
-import { FactGrid, FactRow, FactSource, FactValue } from '../workspace'
+import { FactGrid, FactRow, FactSource, FactValue } from '../facts'
 
 // A hop after the first carries its arrow, so a wrapped line never ends on an
 // arrow pointing at nothing.

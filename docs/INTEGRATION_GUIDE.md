@@ -179,13 +179,14 @@ unknown, partial and denied values first: every piece here exists to keep them.
   matched by name only, `unverifiedMatch`. Add no new severity ladder, and
   title reasons the Issues page already titles with `issueReasonTitle`.
 - [ ] **Screens.**
-  - k8s-ui `components/workspace`:
-    - facts: `Fact`, `FactGrid`, `FactRow`, `FactValue`, `FactSource`
-    - sections: `SectionHeading`, `FoldSection`, `FoldSummary`
-    - problems: `WorkspaceProblem`, and `ProblemCallout`/`ProblemList`/`ProblemMeta`
-      with the workspace's `rootKind`
-    - also `OpenIssueContext`, `CertaintyGlyph` and `ManagedByText`
-  - Also from k8s-ui: `ui/RefLink`, `toneTextClass`/`worseTone` in
+  - k8s-ui `components/facts`: `Fact`, `FactGrid`, `FactRow`, `FactValue`,
+    `FactSource`, `CertaintyGlyph` and `ManagedByText`. These are for any
+    surface that shows observed values, single-kind renderers included.
+  - k8s-ui `components/problems`: `WorkspaceProblem`, and
+    `ProblemCallout`/`ProblemList`/`ProblemMeta` with the workspace's
+    `rootKind`, plus `OpenIssueContext`.
+  - Also from k8s-ui: `SectionHeading`, `FoldSection` and `FoldSummary`
+    (`ui/FoldSection`), `ui/RefLink`, `toneTextClass`/`worseTone` in
     `ui/status-tone`, and `formatGrant`.
   - App: `web/src/components/workspace`:
     - layout: `ScreenBody`, `ScreenEmptyState`, `Notice`

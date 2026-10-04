@@ -6,7 +6,8 @@
 import type { HealthLevel } from '../resources/resource-utils'
 import { formatGrant, type Grant } from '../../utils/grant'
 import { cnpgFormatLag, cnpgLagTone, cnpgReplicationTone, cnpgSustainedLagProblemId, type CNPGFleetRow } from './workspace'
-import type { Fact, FoldSummary } from '../workspace'
+import { type Fact } from '../facts'
+import { type FoldSummary } from '../ui/FoldSection'
 import { worseTone } from '../ui/status-tone'
 
 export type CNPGHASourceState = 'ok' | 'denied' | 'notFound' | 'notInstalled' | 'unavailable' | 'error'

@@ -11,7 +11,7 @@ import {
   type CNPGObjectStoreRecoveryWindow,
 } from '../resources/resource-utils-cnpg'
 import { cnpgIssueCategory, cnpgIssueOrigin, cnpgIssueText, cnpgCoverageGap, coverageReadable, type CNPGProblem, type CNPGWorkspaceIssue, type CNPGWorkspaceKey, type CNPGWorkspaceResponse } from './workspace'
-import type { Fact } from '../workspace'
+import { type Fact } from '../facts'
 
 export interface CNPGObjectRef {
   kind: string

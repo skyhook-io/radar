@@ -6,7 +6,8 @@ import type { CNPGWorkspaceIssue, CNPGWorkspaceResponse } from './workspace'
 import { healthToSeverity } from '../../utils/badge-colors'
 import { clustersIn, problemsForObject, relationUnavailable, targetCluster, type CNPGObjectRef } from './relations'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
-import { FactValue, ProblemCallout } from '../workspace'
+import { FactValue } from '../facts'
+import { ProblemCallout } from '../problems'
 
 const MAX_PROBLEMS = 3
 

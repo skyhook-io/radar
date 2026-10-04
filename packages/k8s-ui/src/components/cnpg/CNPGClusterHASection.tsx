@@ -23,7 +23,8 @@ import {
 } from './ha'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { StatusDot, toneTextClass } from '../ui/status-tone'
-import { FactGrid, FactRow, FactValue, FoldSection, SectionHeading } from '../workspace'
+import { FactGrid, FactRow, FactValue } from '../facts'
+import { FoldSection, SectionHeading } from '../ui/FoldSection'
 
 function Unknown({ text }: { text: string }) {
   return <span className="text-theme-text-tertiary">{text}</span>

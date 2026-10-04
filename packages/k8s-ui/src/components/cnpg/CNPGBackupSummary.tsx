@@ -22,7 +22,8 @@ import {
 } from './relations'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { toneTextClass } from '../ui/status-tone'
-import { FactGrid, FactRow, SectionHeading } from '../workspace'
+import { FactGrid, FactRow } from '../facts'
+import { SectionHeading } from '../ui/FoldSection'
 
 interface SummaryProps {
   resource: any

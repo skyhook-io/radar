@@ -182,7 +182,7 @@ Radar shows only what the cluster reports, and says where it came from. These ru
 - **Recorded ≠ observed.** A value copied from a status field, an annotation or a declaration says so; a value matched to its subject by name rather than by identity says that too.
 - **Facts keep their rows.** `FactRow` renders the unread text in place; never hide a row because its value is missing (unlike `Property`, which hides empty values).
 
-The shared pieces live in `packages/k8s-ui/src/components/workspace/` (facts, sections, problems, certainty) and `web/src/components/workspace/` (screen layout and tables); each integration's own doc lists which source each value comes from and how it reads when unknown.
+The shared pieces live in `packages/k8s-ui/src/components/facts/` (facts, certainty, GitOps manager), `components/problems/` (problems with their sources), `components/ui/FoldSection.tsx` (section headings and folded sections) and `web/src/components/workspace/` (workspace screen layout and tables); each integration's own doc lists which source each value comes from and how it reads when unknown.
 
 ## 5. Layout Principles
 

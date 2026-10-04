@@ -15,7 +15,8 @@ import {
 } from './pooler'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { toneTextClass } from '../ui/status-tone'
-import { FactGrid, FactRow, FactValue, SectionHeading } from '../workspace'
+import { FactGrid, FactRow, FactValue } from '../facts'
+import { SectionHeading } from '../ui/FoldSection'
 
 const TYPE_LABEL: Record<string, string> = {
   rw: 'rw · routes to the primary',

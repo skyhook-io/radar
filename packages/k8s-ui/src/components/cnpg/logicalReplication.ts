@@ -1,4 +1,4 @@
-import type { Fact } from '../workspace'
+import { type Fact } from '../facts'
 
 /** Where a Subscription's publisher lives, as far as the subscriber's spec shows. */
 export type CNPGPublisher =

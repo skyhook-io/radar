@@ -97,7 +97,8 @@ radar/
 │       │   ├── shared/        # ResourceRendererDispatch, ResourceActionsBar, EditableYamlView
 │       │   ├── gitops/        # Argo/Flux badges + actions + tree graph + insights views
 │       │   ├── workload/      # WorkloadView
-│       │   ├── workspace/     # Workspace building blocks: facts, sections, problems, certainty glyph, GitOps manager
+│       │   ├── facts/         # Observed values with their sources: facts, certainty glyph, GitOps manager
+│       │   ├── problems/      # Problems with where their evidence came from (callout, list, origin)
 │       │   ├── cnpg/          # CloudNativePG workspace model + composed summaries
 │       │   ├── timeline/      # Timeline shared components
 │       │   ├── logs/          # Log viewer core
