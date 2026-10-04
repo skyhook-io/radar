@@ -53,8 +53,10 @@ export interface WorkloadLogsViewerProps {
   createStream?: (params: WorkloadLogsFetchParams) => EventSource
   /** Override the download mechanism (e.g. for desktop apps where blob URLs fail). */
   overrideDownload?: (content: string, mime: string, filename: string) => void
-  /** Force dark mode on the logs container (default: true) */
+  /** Pin the logs container to dark (true) or light (false) and hide the toggle */
   forceDark?: boolean
+  /** Palette used until the user toggles it, e.g. the app theme (default: true) */
+  defaultDark?: boolean
   /**
    * Open the stream automatically on mount (and on container switch) instead of
    * loading a static snapshot. The user can still Stop, and a manual Stop is not
@@ -65,7 +67,7 @@ export interface WorkloadLogsViewerProps {
   initialPods?: string[]
 }
 
-export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark, autoStream = false, initialPods }: WorkloadLogsViewerProps) {
+export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark, defaultDark, autoStream = false, initialPods }: WorkloadLogsViewerProps) {
   const initialSelection = (names: string[]) => {
     const wanted = names.filter((n) => initialPods?.includes(n))
     return new Set(wanted.length > 0 ? wanted : names)
@@ -409,6 +411,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       emptyCommand={emptyCommand}
       errorMessage={entries.length === 0 ? fetchError || streamError : null}
       forceDark={forceDark}
+      defaultDark={defaultDark}
     /></div></div>
   )
 }

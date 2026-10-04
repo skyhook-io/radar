@@ -67,6 +67,12 @@ interface LogCoreProps {
    * the viewer manages its own palette via localStorage and the Sun/Moon button.
    */
   forceDark?: boolean
+  /**
+   * Palette to use when the user hasn't picked one with the Sun/Moon toggle
+   * (e.g. the host app's theme). Unlike `forceDark`, the toggle stays visible.
+   * Defaults to dark.
+   */
+  defaultDark?: boolean
 }
 
 interface LevelOption {
@@ -143,12 +149,14 @@ export function LogCore({
   emptyCommand,
   errorMessage,
   forceDark,
+  defaultDark = true,
 }: LogCoreProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const [atBottom, setAtBottom] = useState(true)
   const themeLocked = typeof forceDark === 'boolean'
   // Seed isDark: forceDark prop wins; else localStorage['radar-logs-dark'];
-  // else default dark. See log-palette.ts for why the viewer is palette-driven
+  // else defaultDark (the host app's theme, dark if not given). See
+  // log-palette.ts for why the viewer is palette-driven
   // instead of theme-token-driven.
   const [isDark, setIsDark] = useState<boolean>(() => {
     if (typeof forceDark === 'boolean') return forceDark
@@ -157,13 +165,26 @@ export function LogCore({
       if (v === 'false') return false
       if (v === 'true') return true
     } catch {}
-    return true
+    return defaultDark
   })
   useEffect(() => {
     if (typeof forceDark === 'boolean') {
       setIsDark(forceDark)
     }
   }, [forceDark])
+  // Re-resolve whenever the host's hint changes, including when a forceDark pin
+  // is lifted: the user's saved pick wins, otherwise the host default.
+  useEffect(() => {
+    if (typeof forceDark === 'boolean') return
+    try {
+      const v = localStorage.getItem('radar-logs-dark')
+      if (v === 'true' || v === 'false') {
+        setIsDark(v === 'true')
+        return
+      }
+    } catch {}
+    setIsDark(defaultDark)
+  }, [defaultDark, forceDark])
   const palette = useMemo(() => getLogPalette(isDark), [isDark])
   const toggleDark = useCallback(() => {
     if (themeLocked) return

@@ -99,3 +99,15 @@ export function nonJsonErrorMessage(response: Response, text: string): string {
 export async function readErrorBody(response: Response): Promise<ErrorBody> {
   return (await readErrorResponse(response)).body
 }
+
+/**
+ * Marks a mutation error whose surface already shows it, so the global
+ * mutation handler doesn't toast it a second time.
+ */
+export function markShownInline(error: Error): void {
+  ;(error as Error & { shownInline?: boolean }).shownInline = true
+}
+
+export function isShownInline(error: unknown): boolean {
+  return error instanceof Error && (error as Error & { shownInline?: boolean }).shownInline === true
+}

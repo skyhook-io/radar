@@ -1,5 +1,5 @@
 // Server-side runs keep background and running investigations visible in both
-// the docked Home view and the maximized workspace's master pane.
+// the docked Home view and the investigations page's list pane.
 import {
   ArrowRight,
   CircleAlert,

@@ -544,8 +544,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     navigate(withCrossViewParams(path, location.search))
   }, [location.search, navigate])
 
-  // The standalone rail expresses intent to leave the full-width investigation
-  // workspace. Close it before routing so the destination is immediately visible;
+  // The standalone rail expresses intent to leave the full-width investigations
+  // page. Close it before routing so the destination is immediately visible;
   // docked investigations stay open across views as a persistent side panel.
   const handlePrimaryNavigate = useCallback((view: ExtendedMainView) => {
     navigateFromPrimaryRail(

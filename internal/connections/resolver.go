@@ -43,11 +43,13 @@ type StoredSettingsView struct {
 	InFileName    string             `json:"inFileName,omitempty"`
 	Availability  string             `json:"availability"`
 	Revision      string             `json:"revision"`
+	Mode          string             `json:"mode"`
 	URL           string             `json:"url"`
 	HeaderKeys    []string           `json:"headerKeys"`
 	EnvHeaderKeys []string           `json:"envHeaderKeys"`
 	SecretSet     bool               `json:"secretSet"`
 	InsecureTLS   bool               `json:"insecureTls"`
+	ClusterID     string             `json:"clusterId"`
 	Error         string             `json:"error,omitempty"`
 }
 
@@ -179,6 +181,7 @@ func (p *Resolver) Catalog() ([]StoredSettingsView, error) {
 		for kind, settings := range profile.Integrations {
 			v := settingsView(settings)
 			v.Binding, v.Integration, v.Context = binding, kind, profile.Context
+			v.Mode, v.ClusterID = settings.EffectiveMode(kind), settings.ClusterID
 			v.Source, v.InFileName = profile.Source, profile.InFileName
 			v.Revision = p.integrationRevision(file, kind, binding)
 			v.Availability = "unavailable"

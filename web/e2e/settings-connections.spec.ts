@@ -90,7 +90,7 @@ function profile(kind: IntegrationKind): IntegrationProfile {
   }
 }
 
-const discoverySettings = { url: '', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false }
+const discoverySettings = { mode: 'auto', url: '', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false, clusterId: '' }
 
 async function fixture(page: Page) {
   const profiles: IntegrationProfiles = { metrics: profile('metrics'), argocd: profile('argocd'), cost: profile('cost') }
@@ -508,7 +508,14 @@ test('copy into an unconfigured cluster saves edited headers without an intermed
     binding: 'source', integration: 'metrics', context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: 'source-revision' })
   const dialog = await openSettings(page, 'Metrics')
   await dialog.getByRole('button', { name: 'Copy settings from…', exact: true }).click()
-  await dialog.getByRole('option', { name: /staging/ }).click()
+  // Focus has to reach the copied form before the next frame; a later move can
+  // take a keystroke meant for another field.
+  const focusedBeforeFrame = await dialog.getByRole('option', { name: /staging/ }).evaluate(async option => {
+    (option as HTMLElement).click()
+    await Promise.resolve()
+    return (document.activeElement as HTMLElement | null)?.labels?.[0]?.textContent
+  })
+  expect(focusedBeforeFrame).toBe('Metrics backend URL')
   await dialog.getByRole('textbox', { name: 'X-Scope-OrgID value', exact: true }).fill('new-tenant')
   await dialog.getByRole('textbox', { name: 'Metrics backend URL', exact: true }).fill('https://source.example/query')
   expect(state.writes).toHaveLength(0)
@@ -655,7 +662,7 @@ test('copy after a target change warns before replacement and reload clears stal
 })
 
 async function chooseCostSource(page: Page, label: 'Automatic' | 'OpenCost metrics' | 'Kubecost') {
-  await page.getByRole('button', { name: 'Cost source', exact: true }).click()
+  await page.getByRole('button', { name: /^Cost source:/ }).click()
   await page.getByRole('option', { name: new RegExp(`^${label}`) }).click()
 }
 
@@ -702,10 +709,10 @@ test('old context cleanup lives in Connection and clearly scopes credential remo
   await page.getByRole('tab', { name: 'Connection', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Integration settings by cluster', exact: true })).toBeVisible()
   await expect(page.getByText('Not in kubeconfig', { exact: true })).toBeVisible()
-  const remove = page.getByRole('button', { name: 'Remove saved Metrics connection for old-cluster', exact: true })
+  const remove = page.getByRole('button', { name: 'Remove saved Metrics settings for old-cluster', exact: true })
   await remove.click()
-  await expect(page.getByText('Remove the saved Metrics connection and credentials for old-cluster?', { exact: false })).toBeVisible()
-  await expect(page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Remove saved connection?' }) })).toBeVisible()
+  await expect(page.getByText('Remove the saved Metrics settings and credentials for old-cluster?', { exact: false })).toBeVisible()
+  await expect(page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Remove saved settings?' }) })).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(remove).toBeFocused()
   await remove.click()
@@ -722,12 +729,12 @@ test('Connection groups stale integrations by context and removes only the confi
   await page.getByRole('textbox', { name: 'Metrics backend URL' }).fill('https://metrics.example/draft')
   await page.getByRole('tab', { name: 'Connection', exact: true }).click()
   await expect(page.getByText('old-cluster', { exact: true })).toHaveCount(1)
-  await page.getByRole('button', { name: 'Remove saved Cost connection for old-cluster', exact: true }).click()
-  await page.getByRole('button', { name: 'Remove connection', exact: true }).click()
-  await expect(page.getByText('Removed the saved Cost connection for old-cluster.', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Remove saved Cost settings for old-cluster', exact: true }).click()
+  await page.getByRole('button', { name: 'Remove settings', exact: true }).click()
+  await expect(page.getByText('Removed the saved Cost settings for old-cluster.', { exact: true })).toBeVisible()
   expect(state.writes).toEqual([{ action: 'forget', kind: 'cost', binding: 'old', sourceRevision: 'old-cost', confirmRemoval: true }])
-  await expect(page.getByRole('button', { name: 'Remove saved Cost connection for old-cluster', exact: true })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Remove saved Argo CD connection for old-cluster', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Remove saved Cost settings for old-cluster', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Remove saved Argo CD settings for old-cluster', exact: true })).toBeVisible()
   await page.getByRole('tab', { name: 'Metrics', exact: true }).click()
   await expect(page.getByRole('textbox', { name: 'Metrics backend URL' })).toHaveValue('https://metrics.example/draft')
 })
@@ -745,10 +752,26 @@ test('Connection preserves the removed-versus-unavailable distinction and cannot
   await expect(page.getByText('config.json', { exact: true })).toBeVisible()
   await page.getByRole('tab', { name: 'Connection', exact: true }).click()
   await expect(page.getByText('Kubeconfig not loaded', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Remove saved Metrics connection for development', exact: true })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Remove saved Cost connection for staging', exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Remove saved Cost connection for staging', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Remove saved Metrics settings for development', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Remove saved Cost settings for staging', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Remove saved Cost settings for staging', exact: true }).click()
   await expect(page.getByText(/This entry may still exist in another kubeconfig/)).toBeVisible()
+})
+
+test('the cluster list separates auto-discovery from saved settings', async ({ page }) => {
+  const state = await fixture(page)
+  const current = { binding: 'development', context: 'development', source: '/test/kubeconfig', inFileName: 'development', availability: 'available' as const }
+  const staging = { binding: 'staging', context: 'staging', source: '/test/kubeconfig', inFileName: 'staging', availability: 'available' as const }
+  state.connections.push(
+    { ...discoverySettings, ...current, integration: 'argocd', secretSet: true, revision: 'argocd' },
+    { ...discoverySettings, ...current, integration: 'cost', revision: 'cost' },
+    { ...discoverySettings, ...current, integration: 'metrics', revision: 'metrics' },
+    { ...discoverySettings, ...staging, integration: 'cost', clusterId: 'cluster-a', revision: 'staging-cost' },
+    { ...discoverySettings, ...staging, integration: 'metrics', error: 'metrics settings use only a URL and optional headers', revision: 'staging-metrics' },
+  )
+  await openSettings(page, 'Connection')
+  await expect(page.getByText('Argo CD: saved · Cost: Automatic · Metrics: auto-discovery', { exact: true })).toBeVisible()
+  await expect(page.getByText('Cost: saved · Metrics: saved', { exact: true })).toBeVisible()
 })
 
 test('saved settings load failure offers recovery rather than an empty-state claim', async ({ page }) => {
@@ -757,22 +780,22 @@ test('saved settings load failure offers recovery rather than an empty-state cla
   await page.route('**/api/integrations/connections', route => fail ? route.fulfill({ status: 500, json: { error: 'Could not read saved settings.' } }) : route.fallback())
   await openSettings(page, 'Connection')
   await expect(page.getByRole('alert')).toContainText('Could not read saved settings.')
-  await expect(page.getByText('No saved connections yet.', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('No integration settings saved yet.', { exact: true })).toHaveCount(0)
   fail = false
-  await page.getByRole('button', { name: 'Reload saved connections', exact: true }).click()
-  await expect(page.getByText('No saved connections yet.', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Reload integration settings', exact: true }).click()
+  await expect(page.getByText('No integration settings saved yet.', { exact: true })).toBeVisible()
 })
 
 test('cleanup blocks close while committing and keeps remaining cards mounted without a refetch', async ({ page }) => {
   const state = await fixture(page)
   state.connections.push(...(['metrics', 'cost'] as const).map(integration => ({ ...discoverySettings, binding: 'old', integration, context: 'old-cluster', source: '/test/old', inFileName: 'old-cluster', availability: 'removed' as const, revision: `old-${integration}` })))
   await openSettings(page, 'Connection')
-  const remaining = page.getByRole('button', { name: 'Remove saved Cost connection for old-cluster', exact: true })
+  const remaining = page.getByRole('button', { name: 'Remove saved Cost settings for old-cluster', exact: true })
   const node = await remaining.elementHandle()
-  await page.getByRole('button', { name: 'Remove saved Metrics connection for old-cluster', exact: true }).click()
-  const confirmation = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Remove saved connection?', exact: true }) })
+  await page.getByRole('button', { name: 'Remove saved Metrics settings for old-cluster', exact: true }).click()
+  const confirmation = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Remove saved settings?', exact: true }) })
   state.delayApply()
-  await confirmation.getByRole('button', { name: 'Remove connection', exact: true }).click()
+  await confirmation.getByRole('button', { name: 'Remove settings', exact: true }).click()
   await expect.poll(() => state.writes.length).toBe(1)
   await expect(page.getByRole('button', { name: 'Close settings', exact: true })).toBeDisabled()
   await expect(confirmation.getByRole('button', { name: 'Cancel', exact: true })).toBeDisabled()
@@ -781,7 +804,7 @@ test('cleanup blocks close while committing and keeps remaining cards mounted wi
   // Hold catalog refreshes so a redundant reload cannot hide the row unnoticed.
   await page.route('**/api/integrations/connections', async route => { if (route.request().method() === 'GET') return; await route.fallback() })
   state.releaseApply()
-  await expect(page.getByText('Removed the saved Metrics connection for old-cluster.', { exact: true })).toBeVisible()
+  await expect(page.getByText('Removed the saved Metrics settings for old-cluster.', { exact: true })).toBeVisible()
   await expect(remaining).toBeVisible()
   expect(await node!.evaluate(el => el.isConnected)).toBe(true)
   await expect(page.getByRole('heading', { name: 'Integration settings by cluster', exact: true })).toBeFocused()
@@ -795,17 +818,17 @@ test('stale cleanup revisions require reload and keep keyboard focus in the conf
     ? route.fulfill({ status: 409, json: { error: 'Settings changed; reload latest settings.' } })
     : route.fallback())
   await openSettings(page, 'Connection')
-  await page.getByRole('button', { name: 'Remove saved Metrics connection for old-cluster', exact: true }).click()
-  const confirmation = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Remove saved connection?', exact: true }) })
-  await confirmation.getByRole('button', { name: 'Remove connection', exact: true }).click()
+  await page.getByRole('button', { name: 'Remove saved Metrics settings for old-cluster', exact: true }).click()
+  const confirmation = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Remove saved settings?', exact: true }) })
+  await confirmation.getByRole('button', { name: 'Remove settings', exact: true }).click()
   await expect(confirmation.getByRole('alert')).toBeFocused()
   await page.keyboard.press('Shift+Tab')
   await expect.poll(() => confirmation.evaluate(el => el.contains(document.activeElement))).toBe(true)
-  await expect(confirmation.getByRole('button', { name: 'Remove connection', exact: true })).toBeDisabled()
+  await expect(confirmation.getByRole('button', { name: 'Remove settings', exact: true })).toBeDisabled()
   await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await page.getByRole('button', { name: 'Reload saved connections', exact: true }).click()
+  await page.getByRole('button', { name: 'Reload integration settings', exact: true }).click()
   await expect(page.getByRole('alert')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Remove saved Metrics connection for old-cluster', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Remove saved Metrics settings for old-cluster', exact: true })).toBeVisible()
 })
 
 for (const management of ['operator', 'cloud']) {
@@ -1229,12 +1252,14 @@ test('confirming one changed integration removes it from the sibling review pick
   state.profiles.cost.state = 'target_changed'
   await openSettings(page, 'Cost')
   await page.getByRole('button', { name: 'Review changes', exact: true }).click()
+  await expect(page.getByText('Metrics needs a separate review in its own tab.', { exact: true })).toBeVisible()
   await page.getByRole('checkbox', { name: /Cost/ }).check()
   await page.getByRole('button', { name: 'Keep selected settings for this cluster', exact: true }).click()
   await expect(page.getByRole('tabpanel').getByText('Saved · Connected', { exact: true })).toBeVisible()
   await page.getByRole('tab', { name: 'Metrics', exact: true }).click()
   await page.getByRole('button', { name: 'Review changes', exact: true }).click()
   await expect(page.getByRole('checkbox', { name: /Cost/ })).toHaveCount(0)
+  await expect(page.getByText(/different previous cluster/)).toHaveCount(0)
   await page.getByRole('checkbox', { name: /Metrics/ }).check()
   await page.getByRole('button', { name: 'Keep selected settings for this cluster', exact: true }).click()
   await expect.poll(() => state.writes.length).toBe(2)
@@ -1512,7 +1537,7 @@ test('Cost reset focuses the source picker, which works from the keyboard', asyn
   const state = await fixture(page)
   await openSettings(page, 'Cost')
   const reset = page.getByRole('button', { name: 'Reset to Automatic', exact: true })
-  const source = page.getByRole('button', { name: 'Cost source', exact: true })
+  const source = page.getByRole('button', { name: /^Cost source:/ })
   await reset.focus()
   await page.keyboard.press('Enter')
   await expect(source).toBeFocused()
@@ -1523,7 +1548,16 @@ test('Cost reset focuses the source picker, which works from the keyboard', asyn
   await expect(page.getByRole('option', { name: /^Kubecost/ })).toBeFocused()
   await page.keyboard.press('Enter')
   await expect(source).toBeFocused()
-  await expect(source).toContainText('Kubecost')
+  await expect(source).toHaveAccessibleName('Cost source: Kubecost')
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('option', { name: /^Kubecost/ })).toBeFocused()
+  await page.keyboard.press('ArrowUp')
+  await expect(page.getByRole('option', { name: /^OpenCost metrics/ })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(page.getByRole('option', { name: /^Kubecost/ })).not.toBeFocused()
+  await expect(source).toHaveAttribute('aria-expanded', 'false')
+  await expect(source).toHaveAccessibleName('Cost source: Kubecost')
+  await source.focus()
   await page.keyboard.press('Enter')
   await expect(page.getByRole('option', { name: /^Kubecost/ })).toBeFocused()
   await page.keyboard.press('Escape')
@@ -1541,6 +1575,7 @@ test('the paused-settings review names only what changed', async ({ page }) => {
   const identity = state.profiles.metrics.target.identity
   Object.assign(state.profiles.metrics, { state: 'target_changed', previousIdentity: { ...identity, server: 'https://old.example' } })
   Object.assign(state.profiles.argocd, { state: 'target_changed', previousIdentity: { ...identity, trust: 'old-ca', proxy: 'http://proxy.example' } })
+  Object.assign(state.profiles.cost, { state: 'target_changed', previousIdentity: { ...identity, server: 'https://old.example' } })
   const dialog = await openSettings(page, 'Metrics')
   await dialog.getByRole('button', { name: 'Review changes', exact: true }).click()
   const rows = dialog.getByRole('tabpanel').locator('dl')
@@ -1548,12 +1583,27 @@ test('the paused-settings review names only what changed', async ({ page }) => {
   await expect(rows).toContainText('https://old.example')
   await expect(rows).toContainText('developer (unchanged)')
   await expect(rows).toContainText('Unchanged')
+  await expect(dialog.getByRole('checkbox', { name: /Argo CD/ })).toHaveCount(0)
+  await expect(dialog.getByRole('checkbox', { name: /Cost/ })).toBeVisible()
+  await expect(dialog.getByText('Argo CD was saved for a different previous cluster, so review it in its own tab.', { exact: true })).toBeVisible()
   await dialog.getByRole('button', { name: 'Back to Metrics', exact: true }).click()
   await dialog.getByRole('tab', { name: 'Argo CD', exact: true }).click()
   await dialog.getByRole('button', { name: 'Review changes', exact: true }).click()
   await expect(rows).toContainText('https://cluster.example (unchanged)')
   await expect(rows).not.toContainText('Previous server')
   await expect(rows).toContainText('CA trust changed · Proxy changed')
+  await expect(dialog.getByText('Metrics and Cost were saved for a different previous cluster, so review them in their own tabs.', { exact: true })).toBeVisible()
+})
+
+test('an unrecorded previous identity is reviewed separately without claiming a different cluster', async ({ page }) => {
+  const state = await fixture(page)
+  const identity = state.profiles.metrics.target.identity
+  Object.assign(state.profiles.metrics, { state: 'target_changed', previousIdentity: { ...identity, server: 'https://old.example' } })
+  Object.assign(state.profiles.cost, { state: 'target_changed' })
+  const dialog = await openSettings(page, 'Metrics')
+  await dialog.getByRole('button', { name: 'Review changes', exact: true }).click()
+  await expect(dialog.getByRole('checkbox', { name: /Cost/ })).toHaveCount(0)
+  await expect(dialog.getByText('Cost needs a separate review in its own tab.', { exact: true })).toBeVisible()
 })
 
 test('AI investigations saves through the shared row and is guarded on close', async ({ page }) => {

@@ -204,7 +204,7 @@ export function InvestigationEvidencePane({
     : undefined;
 
   // A source link is a navigation request, not a disclosure preference. Open
-  // whichever collection owns the source first, then tell the workspace that
+  // whichever collection owns the source first, then tell the investigation view that
   // its double-rAF focus/scroll can safely run outside an inert subtree.
   useLayoutEffect(() => {
     if (

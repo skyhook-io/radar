@@ -70,20 +70,20 @@ export function highlightRelatedEvidence(
   row: HTMLElement,
   sourceId?: string,
 ): void {
-  const workspace = row.closest("[data-investigation-workspace]");
-  if (!workspace) return;
-  workspace
+  const view = row.closest("[data-investigation-view]");
+  if (!view) return;
+  view
     .querySelectorAll("[data-source-related]")
     .forEach((node) => node.removeAttribute("data-source-related"));
-  const findings = workspace.querySelector<HTMLElement>(
+  const findings = view.querySelector<HTMLElement>(
     "[data-investigation-findings-scroll]",
   );
-  const activity = workspace.querySelector<HTMLElement>(
+  const activity = view.querySelector<HTMLElement>(
     "[data-investigation-activity-scroll]",
   );
   if (!sourceId || !findings?.offsetParent || !activity?.offsetParent) return;
   const viewport = findings.getBoundingClientRect();
-  workspace
+  view
     .querySelectorAll<HTMLElement>("[data-evidence-source]")
     .forEach((card) => {
       if (

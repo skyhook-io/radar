@@ -38,7 +38,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
         id: 'ai-investigations',
         icon: Bot,
         title: 'AI investigations that show their work',
-        // No link: the investigations workspace redirects home when this run
+        // No link: the investigations page redirects home when this run
         // mode can't host local agents.
         description: 'A clear verdict and the story of what broke, with the charts, logs and config behind it placed where the agent cites them. Now also runs on OpenCode, including AWS Bedrock.',
       },
