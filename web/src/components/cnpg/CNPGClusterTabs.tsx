@@ -1,9 +1,11 @@
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { CNPGClusterCertificates, CNPGConnectSection, CNPGDimensionChips, coverageReadable, refToSelectedResource, toneTextClass, type CNPGDimension, type CNPGFleetRow, type NavigateToRef } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
+import { buildWorkloadPath } from '../../utils/navigation'
 import { useCNPGRuntime } from '../../api/cnpg'
 import { CNPGStorage } from './CNPGStorage'
 import { CNPGArchivingRepair } from './CNPGArchivingRepair'
+import { CNPGParametersInEffect } from './CNPGParametersInEffect'
 import { CNPGProtection } from './CNPGProtection'
 import { CNPGRestoreValidation } from './recovery/CNPGRestoreValidation'
 import { CNPGRestoreButton } from './recovery/CNPGRestoreButton'
@@ -155,12 +157,20 @@ export function CNPGBackupsTab({
 /** Above the declared settings on the Configuration tab: how to connect, and the certificates that secure it. */
 export function CNPGConfigurationLead({ namespace, name, onNavigate }: { namespace: string; name: string; onNavigate: (r: SelectedResource) => void }) {
   const { row, ha } = useCNPGClusterAssessment(namespace, name)
+  const navigate = useNavigate()
   const go: NavigateToRef = (ref) => onNavigate(refToSelectedResource(ref))
   if (!row?.cluster) return null
   return (
     <div className="mb-4 space-y-2 rounded-xl border border-theme-border bg-theme-surface px-4 pb-3 shadow-theme-sm">
-      <CNPGConnectSection cluster={row.cluster} poolers={row.poolerObjects} poolersKnown={row.poolersKnown} onNavigate={go} />
+      <CNPGConnectSection
+        cluster={row.cluster}
+        poolers={row.poolerObjects}
+        poolersKnown={row.poolersKnown}
+        onNavigate={go}
+        onOpenReachability={(svc) => navigate(buildWorkloadPath({ kind: 'services', group: '', namespace: svc.namespace, name: svc.name, tab: 'reachability' }))}
+      />
       {ha.data && <CNPGClusterCertificates ha={ha.data} onNavigate={go} />}
+      <CNPGParametersInEffect namespace={namespace} name={name} />
     </div>
   )
 }

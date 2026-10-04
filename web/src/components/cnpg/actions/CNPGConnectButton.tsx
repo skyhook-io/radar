@@ -1,8 +1,8 @@
 import { useEffect, useId, useMemo, useState } from 'react'
-import { useLocation, useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { Plug, X } from 'lucide-react'
 import { CNPGConnectSection, DialogPortal, Tooltip, type ResourceRef, type NavigateToResource } from '@skyhook-io/k8s-ui'
-import { refToSelectedResource } from '../../../utils/navigation'
+import { buildWorkloadPath, refToSelectedResource } from '../../../utils/navigation'
 import { useCNPGFleet } from '../useCNPGSidebarWorkspace'
 
 // A link can ask for the dialog (the restore "Next steps") with this param;
@@ -75,6 +75,11 @@ export function CNPGConnectButton({
         onNavigate(refToSelectedResource(ref))
       }
     : undefined
+  const navigate = useNavigate()
+  const openReachability = (svc: { namespace: string; name: string }) => {
+    setOpen(false)
+    navigate(buildWorkloadPath({ kind: 'services', group: '', namespace: svc.namespace, name: svc.name, tab: 'reachability' }))
+  }
 
   return (
     <>
@@ -103,7 +108,7 @@ export function CNPGConnectButton({
         </div>
         <div className="max-h-[70vh] overflow-y-auto p-4">
           {row?.cluster ? (
-            <CNPGConnectSection cluster={row.cluster} poolers={row.poolerObjects} poolersKnown={row.poolersKnown} onNavigate={go} showHeading={false} />
+            <CNPGConnectSection cluster={row.cluster} poolers={row.poolerObjects} poolersKnown={row.poolersKnown} onNavigate={go} onOpenReachability={openReachability} showHeading={false} />
           ) : (
             <div className="text-sm text-theme-text-tertiary">{fleet ? 'Radar cannot read this Cluster with your access.' : 'Reading the Cluster…'}</div>
           )}

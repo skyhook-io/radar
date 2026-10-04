@@ -64,6 +64,7 @@ export function CNPGConnectSection({
   poolers,
   poolersKnown,
   onNavigate,
+  onOpenReachability,
   showHeading = true,
 }: {
   cluster: any
@@ -71,6 +72,8 @@ export function CNPGConnectSection({
   /** False when Poolers could not be listed, so a Pooler may exist that is not shown. */
   poolersKnown?: boolean
   onNavigate?: NavigateToRef
+  /** Opens a host's Service on its Reachability tab; the link shows only when given. */
+  onOpenReachability?: (service: { namespace: string; name: string }) => void
   /** False where the host already titles it (e.g. the Connect dialog). */
   showHeading?: boolean
 }) {
@@ -91,6 +94,16 @@ export function CNPGConnectSection({
                 </RefLink>
                 <span className="text-xs text-theme-text-secondary">{ep.selects}</span>
                 {ep.portFromTemplate && <span className="text-xs text-theme-text-tertiary">port from serviceTemplate</span>}
+                {onOpenReachability && (
+                  <Tooltip
+                    content="Radar's check of this Service's path: endpoints, ready Pods and the NetworkPolicy rules in the way. It does not log in to PostgreSQL."
+                    position="top"
+                  >
+                    <button type="button" onClick={() => onOpenReachability({ namespace: ns, name: ep.name })} className="text-xs text-accent-text hover:underline">
+                      Reachability →
+                    </button>
+                  </Tooltip>
+                )}
               </li>
             ))}
           </ul>
