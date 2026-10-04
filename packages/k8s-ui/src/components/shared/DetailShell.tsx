@@ -70,7 +70,10 @@ export function DetailShell<TId extends string = string>({
             {breadcrumb && <div className="px-6 pt-2.5">{breadcrumb}</div>}
             <div className={clsx('px-6 flex items-start gap-4', wrapHeader && 'flex-wrap gap-y-2', breadcrumb ? 'pb-3 pt-1.5' : 'py-3')}>
               {nav}
-              <div className={clsx('flex-1 min-w-0', wrapHeader && 'basis-[18rem]')}>{identity}</div>
+              {/* Wrapping on, the identity's basis is its one-line width, so the
+                  actions move below whenever the whole title line would not fit
+                  beside them — never squeezing the name to keep them up. */}
+              <div className={clsx('min-w-0', wrapHeader ? 'flex-auto' : 'flex-1')}>{identity}</div>
               {wrapHeader ? <div className="ml-auto flex shrink-0 items-start gap-4">{headerActions}</div> : headerActions}
             </div>
             {subheader && <div className="-mt-1 px-6 pb-3">{subheader}</div>}
