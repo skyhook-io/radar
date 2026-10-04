@@ -34,13 +34,13 @@ export function CNPGArchivingRepair({
   const failedAt = arch?.lastFailedAt ? Date.parse(arch.lastFailedAt) : NaN
   const archivedAt = arch?.lastArchivedAt ? Date.parse(arch.lastArchivedAt) : NaN
   const failingNow = wal.tone === 'unhealthy' || (Number.isFinite(failedAt) && (!Number.isFinite(archivedAt) || failedAt > archivedAt))
-  // The instance manager's archiver stats live in memory and restart with the
-  // primary; the condition turning True (recently, well after creation) is
-  // what survives a restart or a switchover.
-  const conditionResumed = wal.tone === 'healthy' && wal.atMeaning === 'since' && !!wal.at
+  // Only the instance manager records that archiving failed: the condition
+  // turning True also happens when archiving is first set up, so it marks a
+  // resume only after a failure the instance manager saw. Its stats restart
+  // with the primary, and the panel then has nothing left to show.
   const runtimeResumed = Number.isFinite(failedAt) && Number.isFinite(archivedAt) && archivedAt > failedAt
   const boundary = resumeBoundary(row.cluster, failedAt)
-  const resumed = !failingNow && wal.tone === 'healthy' && (runtimeResumed || conditionResumed) && Number.isFinite(boundary) && Date.now() - boundary < RESUMED_WINDOW_MS
+  const resumed = !failingNow && wal.tone === 'healthy' && runtimeResumed && Number.isFinite(boundary) && Date.now() - boundary < RESUMED_WINDOW_MS
   if (!failingNow && !resumed) return null
 
   // A plugin archives WAL only when it is marked isWALArchiver; otherwise the
