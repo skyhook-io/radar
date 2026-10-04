@@ -45,7 +45,7 @@ function CurrentState({ op, clusters }: { op: NonNullable<ReturnType<typeof useC
         <ul className="mt-1.5 space-y-1">
           {concerns.map((c) => (
             <li key={c.text} className="flex items-start gap-2 text-sm">
-              <span className="mt-1.5 shrink-0"><StatusDot tone={c.tone} /></span>
+              <span className="flex h-5 shrink-0 items-center"><StatusDot tone={c.tone} /></span>
               <span className={c.tone === 'neutral' ? 'text-theme-text-secondary' : toneTextClass(c.tone)}>{c.text}</span>
             </li>
           ))}

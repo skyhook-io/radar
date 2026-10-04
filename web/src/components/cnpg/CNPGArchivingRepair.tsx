@@ -144,14 +144,14 @@ export function CNPGArchivingRepair({
         )}
         <ol className="mt-1 space-y-1 text-xs">
           <li className="flex items-start gap-2">
-            <span className="mt-1"><StatusDot tone={failingNow ? 'unknown' : 'healthy'} /></span>
+            <span className="flex h-4 shrink-0 items-center"><StatusDot tone={failingNow ? 'unknown' : 'healthy'} /></span>
             <span className={failingNow ? 'text-theme-text-secondary' : 'text-theme-text-primary'}>
               Archiving resumes: the operator reports ContinuousArchiving True and a WAL file archives after the last failure.
               {failingNow ? ' Not yet.' : ` Done${arch?.lastArchivedAt ? `, ${formatAge(arch.lastArchivedAt)} ago` : ''}.`}
             </span>
           </li>
           <li className="flex items-start gap-2">
-            <span className="mt-1"><StatusDot tone={fresh && fresh !== 'unread' ? 'healthy' : 'unknown'} /></span>
+            <span className="flex h-4 shrink-0 items-center"><StatusDot tone={fresh && fresh !== 'unread' ? 'healthy' : 'unknown'} /></span>
             <span className={fresh && fresh !== 'unread' ? 'text-theme-text-primary' : 'text-theme-text-secondary'}>
               A base backup starts after archiving {failingNow ? 'resumes' : 'resumed'} (Back up now, above), so recovery does not depend on WAL from before the gap.{' '}
               {failingNow
