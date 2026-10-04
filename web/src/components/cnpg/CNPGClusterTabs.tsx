@@ -1,5 +1,5 @@
 import { useSearchParams } from 'react-router-dom'
-import { CNPGClusterCertificates, CNPGConnectSection, CNPGDimensionChips, refToSelectedResource, toneTextClass, type CNPGDimension, type CNPGFleetRow, type NavigateToRef } from '@skyhook-io/k8s-ui'
+import { CNPGClusterCertificates, CNPGConnectSection, CNPGDimensionChips, coverageReadable, refToSelectedResource, toneTextClass, type CNPGDimension, type CNPGFleetRow, type NavigateToRef } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useCNPGRuntime } from '../../api/cnpg'
 import { CNPGStorage } from './CNPGStorage'
@@ -92,7 +92,19 @@ function SlotRelief({ row, onOpenReplication }: { row: CNPGFleetRow; onOpenRepli
 }
 
 /** Backups: this cluster's recovery evidence, runs, schedules and destination, plus restore validation once it was restored. */
-export function CNPGBackupsTab({ namespace, name, onInspect, onOpenLogs }: { namespace: string; name: string; onInspect: (r: SelectedResource) => void; onOpenLogs?: (pod: string) => void }) {
+export function CNPGBackupsTab({
+  namespace,
+  name,
+  onInspect,
+  onOpenLogs,
+  onOpenOperator,
+}: {
+  namespace: string
+  name: string
+  onInspect: (r: SelectedResource) => void
+  onOpenLogs?: (pod: string, container: string) => void
+  onOpenOperator?: () => void
+}) {
   const { query, fleet } = useCNPGFleet([namespace])
   const { row, runtime } = useCNPGClusterAssessment(namespace, name)
   const primary = runtime.data?.permission.proxy === 'denied' ? undefined : runtime.data?.instances.find((i) => i.role === 'primary')
@@ -109,7 +121,15 @@ export function CNPGBackupsTab({ namespace, name, onInspect, onOpenLogs }: { nam
           </div>
           {row && (
             <div className="px-5 pt-3 xl:px-7">
-              <CNPGArchivingRepair row={row} primary={primary} objectStores={data.objects.objectStores ?? []} onOpenLogs={onOpenLogs} onInspect={onInspect} />
+              <CNPGArchivingRepair
+                row={row}
+                primary={primary}
+                objectStores={data.objects.objectStores ?? []}
+                backups={coverageReadable(data.coverage?.backups ?? { state: 'notInstalled' }, namespace) ? (data.objects.backups ?? []) : null}
+                onOpenLogs={onOpenLogs}
+                onOpenOperator={onOpenOperator}
+                onInspect={onInspect}
+              />
             </div>
           )}
           {readyFleet.rows.find((r) => r.namespace === namespace && r.name === name)?.cluster?.spec?.bootstrap?.recovery && (

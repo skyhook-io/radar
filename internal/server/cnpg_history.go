@@ -293,6 +293,9 @@ type CNPGFleetLag struct {
 	Reason  string   `json:"reason,omitempty"`
 	Seconds *float64 `json:"seconds,omitempty"`
 	Pod     string   `json:"pod,omitempty"`
+	// LagStandbys counts the standbys whose replay lag was read; Seconds
+	// covers only these.
+	LagStandbys *int `json:"lagStandbys,omitempty"`
 	// SustainedSeconds is the worst standby's lowest recorded lag over
 	// SustainedWindow, for a standby already reporting when it began.
 	SustainedSeconds *float64 `json:"sustainedSeconds,omitempty"`
@@ -468,8 +471,8 @@ func (s *Server) cnpgNamespaceFleetMetrics(r *http.Request, cache *k8s.ResourceC
 		for i, c := range clusters {
 			switch reading, ok := res.Lag[c.GetName()]; {
 			case ok:
-				v := reading.Seconds
-				lags[i] = CNPGFleetLag{State: cnpgHistoryStateOK, Seconds: &v, Pod: reading.Pod, Isolation: &lagIso}
+				v, n := reading.Seconds, reading.Reporting
+				lags[i] = CNPGFleetLag{State: cnpgHistoryStateOK, Seconds: &v, Pod: reading.Pod, LagStandbys: &n, Isolation: &lagIso}
 				if sus, ok := res.Sustained[c.GetName()]; ok {
 					sv := sus.Seconds
 					lags[i].SustainedSeconds, lags[i].SustainedPod, lags[i].SustainedWindow = &sv, sus.Pod, prometheuspkg.CNPGSustainedLagWindow.String()

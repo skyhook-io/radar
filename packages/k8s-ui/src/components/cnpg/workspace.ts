@@ -1369,6 +1369,8 @@ export interface CNPGFleetMetricsReading {
     reason?: string
     seconds?: number
     pod?: string
+    /** Standbys whose replay lag was read; `seconds` covers only these. */
+    lagStandbys?: number
     /** The worst standby's lowest recorded lag over `sustainedWindow`, across every scrape of it; it was already reporting by the window's start. */
     sustainedSeconds?: number
     sustainedPod?: string
@@ -1470,9 +1472,9 @@ function measuredReplication(base: Fact, reading: CNPGFleetMetricsReading | unde
         }
       }
       if (lag.seconds === undefined) break
-      // The lag covers the standbys that report; one that does not is unknown, not caught up.
-      const partial = expectedStandbys !== undefined && expectedStandbys !== null && lag.standbys !== undefined && lag.standbys < expectedStandbys
-      const coverage = partial ? ` (${lag.standbys} of ${expectedStandbys} standbys reporting)` : ''
+      // The lag covers the standbys whose lag was read; one that is not read is unknown, not caught up.
+      const partial = expectedStandbys !== undefined && expectedStandbys !== null && lag.lagStandbys !== undefined && lag.lagStandbys < expectedStandbys
+      const coverage = partial ? ` (${lag.lagStandbys} of ${expectedStandbys} ${designated ? 'instances' : 'standbys'} reporting)` : ''
       const lagTone = cnpgLagTone(lag.seconds)
       return {
         text: `${prefix} · lag ${cnpgFormatLag(lag.seconds)}${coverage}${lag.receiverUnknown ? ' · streaming unverified' : ''}`,
@@ -1515,7 +1517,8 @@ export function applyCNPGFleetMetrics(fleet: CNPGFleet, readings: CNPGFleetMetri
         reading,
         src,
         row.replicaCluster ? row.cluster?.status?.currentPrimary : undefined,
-        row.instances.desired !== null ? Math.max(0, row.instances.desired - 1) : null,
+        // Every instance of a replica cluster is in recovery, its designated primary included.
+        row.instances.desired !== null ? (row.replicaCluster ? row.instances.desired : Math.max(0, row.instances.desired - 1)) : null,
       )
     const sustained = sustainedLagProblem(row, reading, src)
     return cnpgWithProblems(next, [...(sustained ? [sustained] : []), ...fleetStandbyProblems(row, reading, src), ...fleetSlotProblems(row, reading, src)])

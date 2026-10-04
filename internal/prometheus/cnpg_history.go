@@ -380,9 +380,12 @@ func truncate(s string, n int) string {
 }
 
 // CNPGLagReading is a Cluster's largest current standby replay lag.
+// Reporting counts the standbys whose lag was read, so a lag that covers only
+// some of them is not mistaken for all of them.
 type CNPGLagReading struct {
-	Seconds float64
-	Pod     string
+	Seconds   float64
+	Pod       string
+	Reporting int
 }
 
 // CNPGFleetLag holds, per Cluster, the largest standby replay lag, and which
@@ -464,9 +467,13 @@ func queryCNPGFleetLag(ctx context.Context, q seriesQuerier, namespace string, c
 		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
 			continue
 		}
-		if cur, ok := out.Lag[cluster]; !ok || v > cur.Seconds || (v == cur.Seconds && pod < cur.Pod) {
-			out.Lag[cluster] = CNPGLagReading{Seconds: v, Pod: pod}
+		cur, ok := out.Lag[cluster]
+		reporting := cur.Reporting + 1
+		if !ok || v > cur.Seconds || (v == cur.Seconds && pod < cur.Pod) {
+			cur = CNPGLagReading{Seconds: v, Pod: pod}
 		}
+		cur.Reporting = reporting
+		out.Lag[cluster] = cur
 	}
 	out.Sustained = querySustainedCNPGLag(ctx, q, sel, known)
 	out.Receivers, out.ReceiversError = queryCNPGReceivers(ctx, q, sel, known)

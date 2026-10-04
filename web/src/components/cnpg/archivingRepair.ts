@@ -50,3 +50,29 @@ export function cnpgArchiveDestination(config: any, declaredIn: string): CNPGArc
     declaredIn,
   }
 }
+
+/**
+ * When archiving resumed, at the latest: the last failure the instance manager
+ * saw, or the ContinuousArchiving condition turning True after it.
+ */
+export function resumeBoundary(cluster: any, failedAt: number): number {
+  const conds = cluster?.status?.conditions
+  const c = Array.isArray(conds) ? conds.find((x: any) => x?.type === 'ContinuousArchiving') : null
+  const trueSince = c?.status === 'True' ? Date.parse(c.lastTransitionTime ?? '') : NaN
+  return Number.isFinite(trueSince) && trueSince > failedAt ? trueSince : failedAt
+}
+
+/** The newest completed Backup of this cluster that started after `boundary`; 'unread' when Backups could not be read. */
+export function backupAfterResume(cluster: { namespace: string; name: string }, backups: any[] | null, boundary: number): any | 'unread' | undefined {
+  if (backups === null) return 'unread'
+  return backups
+    .filter(
+      (b) =>
+        String(b?.apiVersion ?? '').startsWith('postgresql.cnpg.io/') &&
+        b?.metadata?.namespace === cluster.namespace &&
+        b?.spec?.cluster?.name === cluster.name &&
+        b?.status?.phase === 'completed' &&
+        Date.parse(b?.status?.startedAt ?? '') > boundary,
+    )
+    .sort((a, b) => Date.parse(b.status.startedAt) - Date.parse(a.status.startedAt))[0]
+}

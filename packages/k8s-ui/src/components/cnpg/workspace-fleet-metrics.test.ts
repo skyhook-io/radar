@@ -222,7 +222,25 @@ describe('fleet lag covers the standbys that report', () => {
   it('says how many standbys the lag covers, and is not healthy while one is unreported', () => {
     const three = fleet()
     three.rows.find((r) => r.name === 'ha')!.instances.desired = 3
-    const f = applyCNPGFleetMetrics(three, [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-2', standbys: 1, receiving: 1 })], { source: 'prometheus' })
+    const f = applyCNPGFleetMetrics(three, [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-2', lagStandbys: 1, standbys: 1, receiving: 1 })], { source: 'prometheus' })
     expect(row(f, 'ha').replication).toMatchObject({ text: expect.stringContaining('lag 0 s (1 of 2 standbys reporting)'), tone: 'unknown' })
+  })
+
+  it('counts the standbys whose lag was read, not those whose receiver was', () => {
+    const three = fleet()
+    three.rows.find((r) => r.name === 'ha')!.instances.desired = 3
+    const f = applyCNPGFleetMetrics(three, [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-2', lagStandbys: 1, standbys: 2, receiving: 2 })], { source: 'prometheus' })
+    expect(row(f, 'ha').replication).toMatchObject({ text: expect.stringContaining('(1 of 2 standbys reporting)'), tone: 'unknown' })
+  })
+
+  it('expects every instance of a replica cluster to report, its designated primary included', () => {
+    const replica = fleet()
+    const r = replica.rows.find((x) => x.name === 'ha')!
+    r.instances.desired = 3
+    r.replicaCluster = { source: 'pg-origin' }
+    const f = applyCNPGFleetMetrics(replica, [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-1', lagStandbys: 2, standbys: 2, receiving: 2 })], { source: 'prometheus' })
+    expect(row(f, 'ha').replication).toMatchObject({ text: expect.stringContaining('(2 of 3 instances reporting)'), tone: 'unknown' })
+    const all = applyCNPGFleetMetrics(replica, [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-1', lagStandbys: 3, standbys: 3, receiving: 3 })], { source: 'prometheus' })
+    expect(row(all, 'ha').replication.text).not.toContain('reporting')
   })
 })

@@ -1,7 +1,7 @@
-import { formatAge, getCNPGClusterBarmanPlugin, StatusDot, toneTextClass, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
+import { cnpgClusterPlugins, cnpgPluginPhase, formatAge, getCNPGClusterBarmanPlugin, StatusDot, toneTextClass, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import type { CNPGRuntimeInstance } from '../../api/cnpg'
-import { cnpgArchiveDestination } from './archivingRepair'
+import { backupAfterResume, cnpgArchiveDestination, resumeBoundary } from './archivingRepair'
 
 const RESUMED_WINDOW_MS = 24 * 60 * 60 * 1000
 
@@ -15,13 +15,18 @@ export function CNPGArchivingRepair({
   row,
   primary,
   objectStores,
+  backups,
   onOpenLogs,
+  onOpenOperator,
   onInspect,
 }: {
   row: CNPGFleetRow
   primary?: CNPGRuntimeInstance
   objectStores: any[]
-  onOpenLogs?: (pod: string) => void
+  /** This namespace's CNPG Backups, or null when they could not be read. */
+  backups: any[] | null
+  onOpenLogs?: (pod: string, container: string) => void
+  onOpenOperator?: () => void
   onInspect: (r: SelectedResource) => void
 }) {
   const wal = row.protection.walArchiving
@@ -32,7 +37,10 @@ export function CNPGArchivingRepair({
   const resumed = !failingNow && wal.tone === 'healthy' && Number.isFinite(failedAt) && Number.isFinite(archivedAt) && archivedAt > failedAt && Date.now() - failedAt < RESUMED_WINDOW_MS
   if (!failingNow && !resumed) return null
 
-  const plugin = getCNPGClusterBarmanPlugin(row.cluster)
+  // A plugin archives WAL only when it is marked isWALArchiver; otherwise the
+  // in-tree barmanObjectStore (if any) does, from the postgres container.
+  const barman = getCNPGClusterBarmanPlugin(row.cluster)
+  const plugin = barman?.isWALArchiver ? barman : null
   const storeName = plugin?.barmanObjectName
   const store = storeName ? objectStores.find((s) => s?.metadata?.namespace === row.namespace && s?.metadata?.name === storeName) : undefined
   const inTree = row.cluster?.spec?.backup?.barmanObjectStore
@@ -41,9 +49,11 @@ export function CNPGArchivingRepair({
     : inTree
       ? cnpgArchiveDestination(inTree, 'the Cluster’s spec.backup.barmanObjectStore')
       : undefined
-  const archiver = plugin ? 'its plugin-barman-cloud container' : 'its postgres container'
+  const archiverContainer = plugin ? 'plugin-barman-cloud' : 'postgres'
+  const pluginPhase = cnpgPluginPhase(row.cluster)
   const primaryPod = primary?.pod ?? row.cluster?.status?.currentPrimary
   const lastBackup = row.protection.lastSuccessfulBackup
+  const fresh = resumed ? backupAfterResume(row, backups, resumeBoundary(row.cluster, failedAt)) : undefined
 
   return (
     <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
@@ -53,7 +63,17 @@ export function CNPGArchivingRepair({
       <div className="mt-1.5 space-y-1.5 text-sm">
         {failingNow && (
           <p className="text-theme-text-primary">
-            {wal.text.includes('·') ? wal.text.slice(wal.text.indexOf('·') + 1).trim() : 'The operator reports ContinuousArchiving False without a message.'}
+            {wal.tone === 'unhealthy' ? (
+              wal.detail ? (
+                <>
+                  The operator reports: <span className="font-mono text-xs">{wal.detail}</span>
+                </>
+              ) : (
+                'The operator reports ContinuousArchiving False without a message.'
+              )
+            ) : (
+              `The primary’s instance manager reports a failed archive after its last archived WAL${wal.tone === 'healthy' ? '; the operator’s ContinuousArchiving condition still reads True' : ''}.`
+            )}
           </p>
         )}
         {arch && (
@@ -79,11 +99,15 @@ export function CNPGArchivingRepair({
             </div>
             <div className="mt-0.5">
               Credentials:{' '}
-              {dest.identity
-                ? dest.identity
-                : dest.secrets.length === 0
-                  ? 'none referenced'
-                  : dest.secrets.map((s, i) => (
+              {dest.identity && (
+                <>
+                  {dest.identity}
+                  {dest.secrets.length > 0 && ' · '}
+                </>
+              )}
+              {!dest.identity && dest.secrets.length === 0
+                ? 'none referenced'
+                : dest.secrets.map((s, i) => (
                       <span key={`${s.secret}/${s.key}/${s.what}`}>
                         {i > 0 && ' · '}
                         {s.what} in Secret{' '}
@@ -99,10 +123,21 @@ export function CNPGArchivingRepair({
         )}
         {failingNow && primaryPod && (
           <p className="text-xs text-theme-text-secondary">
-            The primary archives from {archiver}; the failing command’s output is in its logs.{' '}
+            The primary archives from its <span className="font-mono">{archiverContainer}</span> container; the failing command’s output is in its logs.{' '}
             {onOpenLogs && (
-              <button type="button" className="text-accent-text hover:underline" onClick={() => onOpenLogs(primaryPod)}>
-                Logs of {primaryPod} →
+              <button type="button" className="text-accent-text hover:underline" onClick={() => onOpenLogs(primaryPod, archiverContainer)}>
+                {archiverContainer} logs of {primaryPod} →
+              </button>
+            )}
+          </p>
+        )}
+        {failingNow && pluginPhase && (
+          <p className="text-xs text-theme-text-secondary">
+            Separately, the Cluster’s phase says the operator {pluginPhase === 'unknownPlugin' ? 'does not know a plugin this cluster requires' : 'hit an error talking to one of this cluster’s plugins'} (spec.plugins:{' '}
+            {cnpgClusterPlugins(row.cluster).join(', ') || 'none listed'}), so it cannot reconcile this cluster until that clears.{' '}
+            {onOpenOperator && (
+              <button type="button" className="text-accent-text hover:underline" onClick={onOpenOperator}>
+                Operator and plugins →
               </button>
             )}
           </p>
@@ -116,10 +151,16 @@ export function CNPGArchivingRepair({
             </span>
           </li>
           <li className="flex items-start gap-2">
-            <span className="mt-1"><StatusDot tone={!failingNow && lastBackup.at && Number.isFinite(failedAt) && Date.parse(lastBackup.at) > failedAt ? 'healthy' : 'unknown'} /></span>
-            <span className="text-theme-text-secondary">
-              A base backup completes after archiving resumed (Back up now, above), so recovery does not depend on WAL from before the gap. Newest successful backup:{' '}
-              {lastBackup.at ? `${formatAge(lastBackup.at)} ago` : lastBackup.text.toLowerCase()}.
+            <span className="mt-1"><StatusDot tone={fresh && fresh !== 'unread' ? 'healthy' : 'unknown'} /></span>
+            <span className={fresh && fresh !== 'unread' ? 'text-theme-text-primary' : 'text-theme-text-secondary'}>
+              A base backup starts after archiving {failingNow ? 'resumes' : 'resumed'} (Back up now, above), so recovery does not depend on WAL from before the gap.{' '}
+              {failingNow
+                ? `Not yet. Newest successful backup: ${lastBackup.at ? `${formatAge(lastBackup.at)} ago` : lastBackup.text.toLowerCase()}.`
+                : fresh === 'unread'
+                  ? 'Radar cannot read this namespace’s Backups, so it cannot tell.'
+                  : fresh
+                    ? `Done: Backup ${fresh.metadata?.name}${fresh.spec?.method ? ` (${fresh.spec.method})` : ''} started ${formatAge(fresh.status.startedAt)} ago and completed.`
+                    : 'No completed Backup of this cluster started after that yet.'}
             </span>
           </li>
         </ol>

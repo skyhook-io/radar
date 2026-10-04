@@ -31,12 +31,14 @@ function intervalQuery(params: WorkloadLogsFetchParams, since: string, until: st
 
 /**
  * Logs merged from every instance Pod of a CloudNativePG Cluster. `?pod=`
- * preselects one instance (the fleet's "Logs" action and "Open instance logs");
+ * preselects one instance (the fleet's "Logs" action and "Open instance logs"),
+ * `?container=` one container (e.g. the plugin-barman-cloud sidecar);
  * `?since=&until=` bounds them to an interval selected on a History chart.
  */
 export function CNPGClusterLogs({ namespace, name }: { namespace: string; name: string }) {
   const [searchParams] = useSearchParams()
   const pod = searchParams.get('pod')
+  const container = searchParams.get('container')
   const interval = useCNPGIntervalParams()
   const desktopDownload = useDesktopDownload()
   const { theme } = useTheme()
@@ -72,7 +74,7 @@ export function CNPGClusterLogs({ namespace, name }: { namespace: string; name: 
       )}
       <div className="min-h-0 flex-1">
         <WorkloadLogsViewer
-          key={`${pod ?? ''}|${since ?? ''}|${until ?? ''}`}
+          key={`${pod ?? ''}|${container ?? ''}|${since ?? ''}|${until ?? ''}`}
           name={name}
           fetchAll={fetchAll}
           createStream={interval ? undefined : createStream}
@@ -82,6 +84,7 @@ export function CNPGClusterLogs({ namespace, name }: { namespace: string; name: 
           // light theme only sets where it starts and leaves the toggle available.
           defaultDark={false}
           initialPods={pod ? [pod] : undefined}
+          initialContainer={container ?? undefined}
         />
       </div>
     </div>

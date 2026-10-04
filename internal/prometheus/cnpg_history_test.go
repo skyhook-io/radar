@@ -278,7 +278,8 @@ func TestQueryCNPGFleetLagSeparatesNoStandbyFromUnscraped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Lag["a"].Seconds != 3.5 || got.Lag["a"].Pod != "a-2" {
+	// a-1 answers -1 (scraped, not in recovery); the lag covers a-2 and a-3.
+	if got.Lag["a"].Seconds != 3.5 || got.Lag["a"].Pod != "a-2" || got.Lag["a"].Reporting != 2 {
 		t.Errorf("a lag = %+v", got.Lag["a"])
 	}
 	if _, ok := got.Lag["b"]; ok || !got.Scraped["b"] {

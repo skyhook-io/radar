@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgArchiveDestination } from './archivingRepair'
+import { backupAfterResume, cnpgArchiveDestination, resumeBoundary } from './archivingRepair'
 
 describe('cnpgArchiveDestination', () => {
   it('names each credential Secret and key, never reading them', () => {
@@ -23,5 +23,38 @@ describe('cnpgArchiveDestination', () => {
   it('says when credentials come from the workload identity instead', () => {
     expect(cnpgArchiveDestination({ destinationPath: 's3://b/', s3Credentials: { inheritFromIAMRole: true } }, 'x').identity).toContain('IAM role')
     expect(cnpgArchiveDestination({ destinationPath: 'gs://b/', googleCredentials: { gkeEnvironment: true } }, 'x').identity).toContain('GKE')
+  })
+})
+
+describe('a base backup after archiving resumed', () => {
+  const t = (iso: string) => Date.parse(iso)
+  const cluster = (since?: string) => ({ status: { conditions: since ? [{ type: 'ContinuousArchiving', status: 'True', lastTransitionTime: since }] : [] } })
+  const backup = (name: string, startedAt: string, extra: any = {}) => ({
+    apiVersion: 'postgresql.cnpg.io/v1',
+    kind: 'Backup',
+    metadata: { name, namespace: 'db' },
+    spec: { cluster: { name: 'pg' }, method: 'plugin' },
+    status: { phase: 'completed', startedAt, ...extra },
+  })
+  const pg = { namespace: 'db', name: 'pg' }
+
+  it('resumes no earlier than the condition turning True after the last failure', () => {
+    expect(resumeBoundary(cluster('2026-10-04T10:10:00Z'), t('2026-10-04T10:00:00Z'))).toBe(t('2026-10-04T10:10:00Z'))
+    // A True transition from before the failure says nothing about the resume.
+    expect(resumeBoundary(cluster('2026-10-01T00:00:00Z'), t('2026-10-04T10:00:00Z'))).toBe(t('2026-10-04T10:00:00Z'))
+  })
+
+  it('does not accept a backup that started between the failure and the resume', () => {
+    const boundary = resumeBoundary(cluster('2026-10-04T10:10:00Z'), t('2026-10-04T10:00:00Z'))
+    expect(backupAfterResume(pg, [backup('gap', '2026-10-04T10:05:00Z')], boundary)).toBeUndefined()
+    expect(backupAfterResume(pg, [backup('gap', '2026-10-04T10:05:00Z'), backup('after', '2026-10-04T10:20:00Z')], boundary)?.metadata.name).toBe('after')
+  })
+
+  it('ignores other clusters, unfinished runs, and says when Backups could not be read', () => {
+    const boundary = t('2026-10-04T10:00:00Z')
+    const other = { ...backup('other', '2026-10-04T11:00:00Z'), spec: { cluster: { name: 'pg-b' } } }
+    const running = backup('running', '2026-10-04T11:00:00Z', { phase: 'running' })
+    expect(backupAfterResume(pg, [other, running], boundary)).toBeUndefined()
+    expect(backupAfterResume(pg, null, boundary)).toBe('unread')
   })
 })

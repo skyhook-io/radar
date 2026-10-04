@@ -84,7 +84,7 @@ export function CNPGDetailPage({
   const goTab = useCallback(
     (tab: string, extra: Record<string, string> = {}) => {
       const params = new URLSearchParams(searchParams)
-      for (const k of ['section', 'charts', 'instance', 'pod', 'since', 'until']) params.delete(k)
+      for (const k of ['section', 'charts', 'instance', 'pod', 'container', 'since', 'until']) params.delete(k)
       params.set('tab', tab)
       for (const [k, v] of Object.entries(extra)) params.set(k, v)
       setSearchParams(params, { replace: true, state: location.state })
@@ -140,7 +140,15 @@ export function CNPGDetailPage({
         id: 'backups',
         label: 'Backups',
         icon: <ShieldCheck className="h-4 w-4" />,
-        render: () => <CNPGBackupsTab namespace={ns} name={name} onInspect={onOpenResource} onOpenLogs={(pod) => goTab('logs', { pod })} />,
+        render: () => (
+          <CNPGBackupsTab
+            namespace={ns}
+            name={name}
+            onInspect={onOpenResource}
+            onOpenLogs={(pod, container) => goTab('logs', { pod, container })}
+            onOpenOperator={() => navigate(cnpgScreenPath('operator'), { state: { returnLabel: currentPageLabel(), returnCtx: activeContext } satisfies ReturnState })}
+          />
+        ),
       },
       {
         id: 'activity',
@@ -150,7 +158,7 @@ export function CNPGDetailPage({
         render: () => <CNPGClusterActivity namespace={ns} name={name} onNavigate={openRelated} />,
       },
     ]
-  }, [isCluster, target.namespace, target.name, goTab, openHistory, onOpenResource, openRelated, searchParams, setSearchParams, location.state])
+  }, [isCluster, target.namespace, target.name, goTab, openHistory, onOpenResource, openRelated, navigate, activeContext, searchParams, setSearchParams, location.state])
 
   if (pinnedContext && activeContext && pinnedContext !== activeContext) {
     return <NotInContext target={target} pinnedContext={pinnedContext} activeContext={activeContext} homeLabel={home.label} homePath={home.path} />

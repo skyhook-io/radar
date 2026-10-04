@@ -65,14 +65,16 @@ export interface WorkloadLogsViewerProps {
   autoStream?: boolean
   /** Pods selected when the pod list first loads; all pods when empty or none match. */
   initialPods?: string[]
+  /** Container selected on mount; all containers when unset. */
+  initialContainer?: string
 }
 
-export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark, defaultDark, autoStream = false, initialPods }: WorkloadLogsViewerProps) {
+export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark, defaultDark, autoStream = false, initialPods, initialContainer }: WorkloadLogsViewerProps) {
   const initialSelection = (names: string[]) => {
     const wanted = names.filter((n) => initialPods?.includes(n))
     return new Set(wanted.length > 0 ? wanted : names)
   }
-  const [selectedContainer, setSelectedContainer] = useState<string>('')
+  const [selectedContainer, setSelectedContainer] = useState<string>(initialContainer ?? '')
   const [pods, setPods] = useState<WorkloadPodInfo[]>([])
   const [selectedPods, setSelectedPods] = useState<Set<string>>(new Set())
   const [isLoading, setIsLoading] = useState(false)
