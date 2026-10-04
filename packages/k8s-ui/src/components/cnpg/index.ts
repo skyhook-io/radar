@@ -15,4 +15,10 @@ export * from './CNPGConnectSection'
 export * from './schedule'
 export * from './logicalReplication'
 export * from './CNPGLogicalPath'
-export { relationUnavailable } from './relations'
+export {
+  inferredObjectStoreHealth,
+  relationUnavailable,
+  usersOfObjectStore,
+  type CNPGObjectStoreHealth,
+  type CNPGObjectStoreUser,
+} from './relations'
