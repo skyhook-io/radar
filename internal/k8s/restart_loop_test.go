@@ -8,6 +8,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -46,7 +47,8 @@ func TestActiveRestartLoop(t *testing.T) {
 		sidecar bool
 	}{
 		{"clean exit inside window", restartLoopPod(now, status(3, running(time.Minute), terminatedAgo(now, 2*time.Minute, "Completed", 0))), true, false},
-		{"last crash 29m ago", restartLoopPod(now, status(5, running(28*time.Minute), terminatedAgo(now, 29*time.Minute, "Error", 1))), true, false},
+		{"last crash 29m ago, running 28m since: recovered", restartLoopPod(now, status(5, running(28*time.Minute), terminatedAgo(now, 29*time.Minute, "Error", 1))), false, false},
+		{"last crash 29m ago, back in backoff", restartLoopPod(now, status(5, corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}, terminatedAgo(now, 29*time.Minute, "Error", 1))), true, false},
 		{"last crash 31m ago", restartLoopPod(now, status(5, running(30*time.Minute), terminatedAgo(now, 31*time.Minute, "Error", 1))), false, false},
 		{"two restarts is not a loop", restartLoopPod(now, status(2, running(time.Minute), terminatedAgo(now, 2*time.Minute, "Error", 1))), false, false},
 		{"run started 9m after the termination", restartLoopPod(now, status(5, running(time.Minute), terminatedAgo(now, 10*time.Minute, "Error", 1))), true, false},
@@ -62,7 +64,7 @@ func TestActiveRestartLoop(t *testing.T) {
 			cs.Ready = true
 			return restartLoopPod(now, cs)
 		}(), true, false},
-		{"held while unready, even past the early-clear line", restartLoopPod(now, status(5, running(15*time.Minute), &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1, StartedAt: metav1.NewTime(now.Add(-18 * time.Minute)), FinishedAt: metav1.NewTime(now.Add(-15*time.Minute - 10*time.Second))})), true, false},
+		{"recovered even while unready (a readiness problem is its own row)", restartLoopPod(now, status(5, running(15*time.Minute), &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1, StartedAt: metav1.NewTime(now.Add(-18 * time.Minute)), FinishedAt: metav1.NewTime(now.Add(-15*time.Minute - 10*time.Second))})), false, false},
 		{"current termination counts", restartLoopPod(now, status(5, corev1.ContainerState{Terminated: terminatedAgo(now, 5*time.Second, "Completed", 0)}, terminatedAgo(now, 40*time.Minute, "Error", 1))), true, false},
 		{"first restart after a long run (node bounce)", restartLoopPod(now, status(5, running(time.Minute), &corev1.ContainerStateTerminated{
 			Reason: "Error", ExitCode: 255, StartedAt: metav1.NewTime(now.Add(-72 * time.Hour)), FinishedAt: metav1.NewTime(now.Add(-2 * time.Minute)),
@@ -471,5 +473,26 @@ func TestRestartLoopDiagnosis_OOMWordingFollowsTheLimit(t *testing.T) {
 	unlimited.memoryLimit = false
 	if cause, _ := unlimited.diagnosis(); !strings.Contains(cause, "no memory limit") || !strings.Contains(cause, "node memory pressure") {
 		t.Fatalf("unlimited OOM diagnosis = %q, want node pressure named", cause)
+	}
+}
+
+func TestOtherContainerActiveOOM_SidecarLastState(t *testing.T) {
+	now := time.Now()
+	always := corev1.ContainerRestartPolicyAlways
+	pod := restartLoopPod(now, corev1.ContainerStatus{Name: "app"})
+	pod.Spec.InitContainers = []corev1.Container{{Name: "proxy", RestartPolicy: &always}}
+	pod.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "proxy",
+		State:                corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-time.Minute))}},
+		LastTerminationState: corev1.ContainerState{Terminated: terminatedAgo(now, time.Minute, "OOMKilled", 137)}}}
+	if !otherContainerActiveOOM(pod, "app", now) {
+		t.Fatal("a sidecar that was just OOMKilled owns the row over another container's loop")
+	}
+}
+
+func TestContainerHasMemoryLimit_EnactedLimit(t *testing.T) {
+	pod := restartLoopPod(time.Now(), corev1.ContainerStatus{Name: "app", Resources: &corev1.ResourceRequirements{
+		Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("16Mi")}}})
+	if !containerHasMemoryLimit(pod, "app") {
+		t.Fatal("an enacted limit in status counts even when the spec shows none")
 	}
 }

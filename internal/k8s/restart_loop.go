@@ -138,6 +138,17 @@ func activeRestartLoop(pod *corev1.Pod, probes map[string]probeFailure, now time
 }
 
 func containerHasMemoryLimit(pod *corev1.Pod, name string) bool {
+	// The enacted limit (status) wins: an in-place resize can set one the
+	// spec no longer shows.
+	for _, list := range [][]corev1.ContainerStatus{pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses} {
+		for i := range list {
+			if list[i].Name == name && list[i].Resources != nil {
+				if _, ok := list[i].Resources.Limits[corev1.ResourceMemory]; ok {
+					return true
+				}
+			}
+		}
+	}
 	for _, list := range [][]corev1.Container{pod.Spec.Containers, pod.Spec.InitContainers} {
 		for i := range list {
 			if list[i].Name == name {
@@ -158,8 +169,22 @@ func otherContainerActiveOOM(pod *corev1.Pod, name string, now time.Time) bool {
 			return true
 		}
 	}
+	// Init containers and native sidecars, as health.PodHasActiveOOMKilled
+	// judges them: a current OOM, or a last one not yet recovered from.
 	for _, cs := range pod.Status.InitContainerStatuses {
-		if cs.Name != name && cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
+		if cs.Name == name {
+			continue
+		}
+		if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
+			return true
+		}
+		if t := cs.LastTerminationState.Terminated; t != nil && t.Reason == "OOMKilled" {
+			if cs.State.Terminated != nil && cs.State.Terminated.ExitCode == 0 {
+				continue
+			}
+			if r := cs.State.Running; r != nil && !r.StartedAt.IsZero() && now.Sub(r.StartedAt.Time) > 5*time.Minute {
+				continue
+			}
 			return true
 		}
 	}
@@ -232,15 +257,15 @@ func containerRestartLoop(cs *corev1.ContainerStatus, now time.Time) (restartLoo
 		if r.StartedAt.Sub(finished) > restartLoopStaleGap {
 			return restartLoop{}, false
 		}
-		// Recovered: the container is serving and its current run has
-		// clearly outlived the loop's rhythm. A loop restarts within one run
-		// length plus backoff, so a Ready run past twice the last one (and
-		// past the kubelet's 10-minute stability line) means the cause went
-		// away; clear now instead of holding the full window after the last
-		// crash. An unready container stays held, so the row does not fall
-		// straight into a readiness issue. The window above still bounds the
-		// hold either way.
-		if cs.Ready && now.Sub(r.StartedAt.Time) > max(restartLoopFastRun, 2*lastRun) {
+		// Recovered: the current run has clearly outlived the loop's rhythm.
+		// A loop restarts within one run length plus backoff, so a run past
+		// twice the last one (and past the kubelet's 10-minute stability
+		// line) means it has stopped crashing; clear now instead of holding
+		// the full window after the last crash. Readiness is deliberately not
+		// required: a readiness blip after recovery must not reopen the loop,
+		// and a container that runs without crashing but stays unready has a
+		// readiness problem, which its own row then reports.
+		if now.Sub(r.StartedAt.Time) > max(restartLoopFastRun, 2*lastRun) {
 			return restartLoop{}, false
 		}
 	}

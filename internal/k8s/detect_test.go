@@ -1204,7 +1204,7 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 					Name:         "app",
 					Ready:        false,
 					RestartCount: highRestartThreshold + 1,
-					State:        corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: old}},
+					State:        corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: recent}},
 					LastTerminationState: corev1.ContainerState{
 						Terminated: &corev1.ContainerStateTerminated{Reason: "Completed", FinishedAt: recent},
 					},
