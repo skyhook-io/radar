@@ -2,7 +2,7 @@
 import { act, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CNPGClusterSummary } from './CNPGClusterSummary'
+import { CNPGClusterSummary, CNPGDimensionChips } from './CNPGClusterSummary'
 import type { CNPGFleetRow, CNPGProblem } from './workspace'
 import type { CNPGDimension } from './ha'
 import { OpenIssueContext } from '../problems'
@@ -98,13 +98,23 @@ describe('CNPGClusterSummary', () => {
   it('makes dimension chips buttons only when the host can open them', () => {
     const dims: CNPGDimension[] = [{ id: 'replication', label: 'Replication', tone: 'healthy', text: 'ok', source: 's' }]
     const onSelect = vi.fn()
-    let root = render(<CNPGClusterSummary row={row()} dimensions={dims} />)
+    let root = render(<CNPGDimensionChips dimensions={dims} />)
     expect(document.querySelector('[aria-label="Replication: ok. Open replication details"]')).toBeNull()
     act(() => root.unmount())
-    root = render(<CNPGClusterSummary row={row()} dimensions={dims} onSelectDimension={onSelect} />)
+    root = render(<CNPGDimensionChips dimensions={dims} onSelect={onSelect} />)
     const chip = document.querySelector<HTMLButtonElement>('[aria-label="Replication: ok. Open replication details"]')!
     act(() => chip.click())
     expect(onSelect).toHaveBeenCalledWith('replication')
+    act(() => root.unmount())
+  })
+  it('lists each dimension at a glance, opening its tab', () => {
+    const dims: CNPGDimension[] = [{ id: 'storage', label: 'Storage', tone: 'degraded', text: 'WAL held by an inactive slot', source: 'slot' }]
+    const onSelect = vi.fn()
+    const root = render(<CNPGClusterSummary row={row()} dimensions={dims} onSelectDimension={onSelect} />)
+    expect(document.body.textContent).toContain('WAL held by an inactive slot')
+    const open = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Storage →')!
+    act(() => open.click())
+    expect(onSelect).toHaveBeenCalledWith('storage')
     act(() => root.unmount())
   })
 })

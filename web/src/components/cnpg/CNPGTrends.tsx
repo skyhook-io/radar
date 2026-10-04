@@ -222,17 +222,49 @@ function IntervalChip({ interval, onOpen, onClear }: { interval: ChartTimeRange;
   )
 }
 
+/** The chart groups History filters by; topic tabs link to theirs. */
+export type CNPGChartGroup = 'replication' | 'sessions' | 'throughput' | 'storage'
+
+export const CNPG_CHART_GROUPS: { id: CNPGChartGroup | 'all'; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'replication', label: 'Replication' },
+  { id: 'sessions', label: 'Sessions' },
+  { id: 'throughput', label: 'Throughput' },
+  { id: 'storage', label: 'Storage & WAL' },
+]
+
+// Prometheus chart ids, as the server names them.
+const HISTORY_CHART_GROUP: Record<string, CNPGChartGroup> = {
+  replicationLag: 'replication',
+  sessions: 'sessions',
+  waiting: 'sessions',
+  tps: 'throughput',
+  deadlocks: 'throughput',
+  tempBytes: 'throughput',
+  checkpoints: 'throughput',
+  walArchive: 'storage',
+  walSize: 'storage',
+  pvcUsed: 'storage',
+  databaseSize: 'storage',
+}
+
+function inGroup(group: CNPGChartGroup | undefined, chart: CNPGChartGroup | undefined): boolean {
+  return !group || chart === group
+}
+
 function BufferCharts({
   samples,
   selection,
   onSelect,
   instance,
   picker,
+  group,
 }: {
   samples: Sample[]
   selection: ChartTimeRange | null
   onSelect: (r: ChartTimeRange) => void
-  /** The instance whose sessions-by-state chart is shown (the Runtime picker's choice). */
+  group?: CNPGChartGroup
+  /** The instance whose sessions-by-state chart is shown (the Performance picker's choice). */
   instance?: string
   picker?: ReactNode
 }) {
@@ -255,8 +287,9 @@ function BufferCharts({
     : 'rates between the exporter\'s query runs (cnpg_last_update_timestamp); a change of primary or a counter reset is a gap'
   const sessionsOf = instance ?? instances[0]
   const dbCapped = recent.some((s) => Object.keys(s.dbSizes ?? {}).length >= 200)
-  const charts: { title: string; unit: string; series: TimeSeries[]; labels: string[]; source: string; thresholds?: ReferenceLine[]; rate?: boolean; control?: ReactNode; note?: string }[] = [
+  const charts: { group: CNPGChartGroup; title: string; unit: string; series: TimeSeries[]; labels: string[]; source: string; thresholds?: ReferenceLine[]; rate?: boolean; control?: ReactNode; note?: string }[] = [
     {
+      group: 'replication',
       title: 'Replay lag per standby',
       unit: 'seconds',
       series: pods.map((p) => one(p, (s) => s.replayLag[p])),
@@ -268,6 +301,7 @@ function BufferCharts({
       ],
     },
     {
+      group: 'sessions',
       title: 'Client sessions per instance',
       unit: 'count',
       series: instances.map((p) => one(p, (s) => s.instances?.[p]?.total)),
@@ -275,6 +309,7 @@ function BufferCharts({
       source: 'cnpg_backends_total on each instance, platform sessions excluded',
     },
     {
+      group: 'sessions',
       title: sessionsOf ? `Sessions by state (${sessionsOf})` : 'Sessions by state',
       unit: 'count',
       series: sessionsOf ? sessionStateSeries(recent, sessionsOf) : [],
@@ -283,15 +318,17 @@ function BufferCharts({
       control: picker,
     },
     {
+      group: 'sessions',
       title: 'Sessions waiting on locks',
       unit: 'count',
       series: instances.map((p) => one(p, (s) => s.instances?.[p]?.waiting)),
       labels: instances,
       source: 'cnpg_backends_waiting_total on each instance',
     },
-    { title: 'Transactions per second (primary)', unit: '', series: [rateSeries(recent, 'commits'), rateSeries(recent, 'rollbacks')], labels: ['commits', 'rollbacks'], source: 'xact_commit / xact_rollback', rate: true },
-    { title: 'Cache hit ratio (primary)', unit: '%', series: [cacheHitSeries(recent)], labels: ['hit ratio'], source: 'blks_hit / (blks_hit + blks_read)', rate: true },
+    { group: 'throughput', title: 'Transactions per second (primary)', unit: '', series: [rateSeries(recent, 'commits'), rateSeries(recent, 'rollbacks')], labels: ['commits', 'rollbacks'], source: 'xact_commit / xact_rollback', rate: true },
+    { group: 'throughput', title: 'Cache hit ratio (primary)', unit: '%', series: [cacheHitSeries(recent)], labels: ['hit ratio'], source: 'blks_hit / (blks_hit + blks_read)', rate: true },
     {
+      group: 'storage',
       title: 'WAL archived / failed per minute',
       unit: '',
       series: [rateSeries(recent, 'archived', 60), rateSeries(recent, 'failed', 60)],
@@ -299,8 +336,9 @@ function BufferCharts({
       source: 'pg_stat_archiver archived_count / failed_count on the primary',
       rate: true,
     },
-    { title: 'WAL on disk (primary)', unit: 'bytes', series: [one('WAL', (s) => s.walBytes)], labels: ['WAL'], source: 'cnpg_collector_pg_wal{value="size"} on the primary' },
+    { group: 'storage', title: 'WAL on disk (primary)', unit: 'bytes', series: [one('WAL', (s) => s.walBytes)], labels: ['WAL'], source: 'cnpg_collector_pg_wal{value="size"} on the primary' },
     {
+      group: 'storage',
       title: 'Database size (primary)',
       unit: 'bytes',
       series: dbs.shown.map((d) => one(d, (s) => s.dbSizes?.[d])),
@@ -310,6 +348,7 @@ function BufferCharts({
       note: dbCapped ? 'The exporter reports the 200 largest databases; smaller ones are not sampled.' : undefined,
     },
     {
+      group: 'throughput',
       title: 'Checkpoints per minute (primary)',
       unit: '',
       series: [rateSeries(recent, 'checkpointsTimed', 60, 'timed'), rateSeries(recent, 'checkpointsRequested', 60, 'requested')],
@@ -317,12 +356,12 @@ function BufferCharts({
       source: 'pg_stat_checkpointer (17+) or pg_stat_bgwriter checkpoints_timed / _req',
       rate: true,
     },
-    { title: 'Deadlocks per minute (primary)', unit: '', series: [rateSeries(recent, 'deadlocks', 60)], labels: ['deadlocks'], source: 'pg_stat_database deadlocks, all databases', rate: true },
-    { title: 'Temporary file writes (primary)', unit: 'bytes', series: [rateSeries(recent, 'tempBytes', 1, 'bytes/s')], labels: ['bytes/s'], source: 'pg_stat_database temp_bytes per second, all databases', rate: true },
+    { group: 'throughput', title: 'Deadlocks per minute (primary)', unit: '', series: [rateSeries(recent, 'deadlocks', 60)], labels: ['deadlocks'], source: 'pg_stat_database deadlocks, all databases', rate: true },
+    { group: 'throughput', title: 'Temporary file writes (primary)', unit: 'bytes', series: [rateSeries(recent, 'tempBytes', 1, 'bytes/s')], labels: ['bytes/s'], source: 'pg_stat_database temp_bytes per second, all databases', rate: true },
   ]
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      {charts.map((c) => {
+      {charts.filter((c) => inGroup(group, c.group)).map((c) => {
         const gaps = sampleGaps(c.series)
         const hasValue = c.series.some((s) => s.dataPoints.some((p) => p.value != null))
         return (
@@ -400,7 +439,7 @@ function DatabasePicker({ all, shown, pick, onPick }: { all: string[]; shown: st
 }
 
 /**
- * The Runtime Trends section: Prometheus range queries when Radar has
+ * Performance › History: Prometheus range queries when Radar has
  * Prometheus, otherwise the samples this page took since it opened. Selecting
  * a time range on any chart carries both bounds to Logs and Activity.
  */
@@ -412,16 +451,19 @@ export function CNPGTrends({
   instance,
   picker,
   samplingDenied,
+  group,
 }: {
   namespace: string
   name: string
   samples: Sample[]
   onOpenInterval?: (target: CNPGIntervalTarget, since: string, until: string) => void
-  /** The Runtime instance picker's choice, for the per-instance sampled charts. */
+  /** The Performance instance picker's choice, for the per-instance sampled charts. */
   instance?: string
   picker?: ReactNode
   /** The grant the caller lacks for in-page samples (get pods/proxy); no sample can ever arrive. */
   samplingDenied?: string
+  /** Show one chart group (from `?charts=`); all when unset. */
+  group?: CNPGChartGroup
 }) {
   const { range, setRange, interval, setSelected } = useTrendParams()
   const q = useCNPGClusterHistory(namespace, name, range)
@@ -475,18 +517,42 @@ export function CNPGTrends({
         </Notice>
       )}
 
+      <ChartGroupFilter group={group} />
       {interval && <IntervalChip interval={interval} onOpen={open} onClear={() => setSelected(null)} />}
 
       {fromPrometheus ? (
         <div className="grid gap-4 lg:grid-cols-2">
-          {data.charts.map((c) => (
+          {data.charts.filter((c) => inGroup(group, HISTORY_CHART_GROUP[c.id])).map((c) => (
             <HistoryChartCard key={c.id} chart={c} data={data} selection={interval} onSelect={setSelected} />
           ))}
         </div>
       ) : (
-        !q.isLoading && !samplingDenied && <BufferCharts samples={samples} selection={interval} onSelect={setSelected} instance={instance} picker={picker} />
+        !q.isLoading && !samplingDenied && <BufferCharts samples={samples} selection={interval} onSelect={setSelected} instance={instance} picker={picker} group={group} />
       )}
     </div>
+  )
+}
+
+function ChartGroupFilter({ group }: { group?: CNPGChartGroup }) {
+  const [, setParams] = useSearchParams()
+  const location = useLocation()
+  return (
+    <Segments
+      label="Chart group"
+      value={group ?? 'all'}
+      onChange={(g) =>
+        setParams(
+          (prev) => {
+            const next = new URLSearchParams(prev)
+            if (g === 'all') next.delete('charts')
+            else next.set('charts', g)
+            return next
+          },
+          { replace: true, state: location.state },
+        )
+      }
+      options={CNPG_CHART_GROUPS}
+    />
   )
 }
 

@@ -1,5 +1,20 @@
 import { useQuery } from '@tanstack/react-query'
-import { cnpgFormatLag, cnpgReplicationTone, formatGrant, type CNPGClusterHA, type CNPGFleetRow, type CNPGInstanceLive, type CNPGReplicationLive } from '@skyhook-io/k8s-ui'
+import {
+  CNPG_SLOT_RETENTION_WARNING_BYTES,
+  cnpgFormatLag,
+  cnpgHASlotInstance,
+  cnpgReplicationTone,
+  cnpgSlotRetentionProblem,
+  cnpgStandbyNotReceivingProblem,
+  cnpgWithProblems,
+  formatGrant,
+  type CNPGClusterHA,
+  type CNPGFleetRow,
+  type CNPGInstanceLive,
+  type CNPGReplicationLive,
+  type CNPGSlotRetention,
+  type CNPGStandbyGap,
+} from '@skyhook-io/k8s-ui'
 import { fetchJSON, useRadarFeature } from './client'
 import type { CNPGRuntimeResponse } from './cnpg'
 
@@ -69,6 +84,73 @@ export function cnpgReplicationLive(rt: CNPGRuntimeResponse | undefined): CNPGRe
   }
 }
 
+const LIVE_STANDBY_SOURCE = 'The primary’s pg_stat_replication and each standby’s /pg/status, read through the instance manager'
+
+/** Instances named in the Cluster's cnpg.io/fencedInstances annotation; '*' fences all. */
+function fencedInstances(cluster: any): { all: boolean; pods: Set<string> } {
+  const raw = cluster?.metadata?.annotations?.['cnpg.io/fencedInstances']
+  try {
+    const list = raw ? JSON.parse(raw) : []
+    if (!Array.isArray(list)) return { all: false, pods: new Set() }
+    return { all: list.includes('*'), pods: new Set(list.filter((x: unknown): x is string => typeof x === 'string')) }
+  } catch {
+    return { all: false, pods: new Set() }
+  }
+}
+
+/**
+ * Standbys the live read shows receiving nothing: no row in the primary's
+ * pg_stat_replication although the standby itself answered. A fenced standby
+ * is stopped on purpose and one running pg_rewind is rejoining, so neither is
+ * a gap.
+ */
+export function cnpgLiveStandbyGaps(row: CNPGFleetRow, rt: CNPGRuntimeResponse | undefined): CNPGStandbyGap[] {
+  const primary = rt?.instances.find((i) => i.role === 'primary')
+  const reps = primary?.status.state === 'ok' ? primary.status.replication : undefined
+  if (!rt || !primary || !reps || row.hibernated) return []
+  const fenced = fencedInstances(row.cluster)
+  if (fenced.all) return []
+  const connected = new Set(reps.map((r) => r.applicationName))
+  const standbys = rt.instances.filter((i) => i.role !== 'primary')
+  const gaps = standbys.filter(
+    (i) => !connected.has(i.pod) && !fenced.pods.has(i.pod) && (i.status.state === 'ok' || i.status.state === 'partial') && i.status.roleDetail !== 'pgRewind',
+  )
+  const expected = row.instances.desired !== null ? Math.max(0, row.instances.desired - 1) : standbys.length
+  return gaps.map((i) => {
+    const evidence = ['it has no row in the primary’s pg_stat_replication']
+    if (i.status.isWalReceiverActive === false || i.status.roleDetail === 'fileBased') evidence.push('it reports no active WAL receiver')
+    if (i.status.replayPaused || i.status.roleDetail === 'replayPaused') evidence.push('its WAL replay is paused')
+    if (i.status.timeline !== undefined && primary.status.timeline !== undefined && i.status.timeline !== primary.status.timeline) {
+      evidence.push(`it is on timeline ${i.status.timeline} while the primary is on ${primary.status.timeline}`)
+    }
+    return {
+      pod: i.pod,
+      evidence,
+      measuredBy: 'the instance manager',
+      sourceDetail: LIVE_STANDBY_SOURCE,
+      noneReceiving: expected > 0 && reps.length === 0,
+    }
+  })
+}
+
+/** Inactive physical slots on the primary that hold at least the warning amount of WAL. */
+export function cnpgLiveSlotRetentions(row: CNPGFleetRow, rt: CNPGRuntimeResponse | undefined): CNPGSlotRetention[] {
+  const primary = rt?.instances.find((i) => i.role === 'primary')
+  const slots = primary && (primary.status.state === 'ok' || primary.status.state === 'partial') ? primary.status.slots : undefined
+  if (!primary || !slots) return []
+  const instances = (rt?.instances ?? []).map((i) => i.pod)
+  return slots
+    .filter((sl) => sl.active === false && sl.type === 'physical' && (sl.retainedBytes ?? 0) >= CNPG_SLOT_RETENTION_WARNING_BYTES)
+    .map((sl) => ({
+      slot: sl.name,
+      pod: primary.pod,
+      bytes: sl.retainedBytes ?? 0,
+      standby: cnpgHASlotInstance(row.cluster, sl.name, instances),
+      measuredBy: 'the instance manager',
+      sourceDetail: 'The primary’s /pg/status replication slots (active) and the exporter’s retained WAL',
+    }))
+}
+
 // Replaces the Kubernetes-only replication fact with the primary's
 // pg_stat_replication when it has been read; otherwise keeps "lag unknown".
 // Expected standbys are spec.instances − 1: a standby whose Pod is gone is
@@ -91,6 +173,12 @@ export function withLiveReplication(row: CNPGFleetRow, rt: CNPGRuntimeResponse |
   const expected = Math.max(0, row.instances.desired - 1)
   const lagText = lagFor(reps.length >= expected)
   const tone = cnpgReplicationTone(streaming, expected, maxLag)
+  const gaps = cnpgLiveStandbyGaps(row, rt)
   const text = streaming < expected ? `${streaming} of ${expected} expected standbys streaming` : `${streaming}/${expected} streaming`
-  return { ...row, replication: { text: `${text}${lagText}`, tone, source, at: primary.status.capturedAt } }
+  const missing = gaps.length > 0 ? ` · ${gaps.map((g) => g.pod).join(', ')} not connected` : ''
+  const live = { ...row, replication: { text: `${text}${missing}${lagText}`, tone, source, at: primary.status.capturedAt } }
+  return cnpgWithProblems(live, [
+    ...gaps.map((g) => cnpgStandbyNotReceivingProblem(row, g)),
+    ...cnpgLiveSlotRetentions(row, rt).map((r) => cnpgSlotRetentionProblem(row, r)),
+  ])
 }

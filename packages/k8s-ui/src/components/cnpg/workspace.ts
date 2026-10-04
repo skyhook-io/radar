@@ -7,7 +7,6 @@ import { worseTone } from '../ui/status-tone'
 import { type Fact } from '../facts'
 import { type ProblemOrigin, type WorkspaceProblem } from '../problems'
 import type { ResourceRef } from '../../types/core'
-import { formatBytes } from '../../utils/format'
 import { formatGrant, type Grant } from '../../utils/grant'
 import { issueReasonTitle } from '../issues/severity'
 import {
@@ -113,7 +112,7 @@ export type CNPGProblemCategory = 'availability' | 'protection' | 'declarations'
 
 export const CNPG_PROBLEM_CATEGORIES: { id: CNPGProblemCategory; label: string }[] = [
   { id: 'availability', label: 'Availability' },
-  { id: 'protection', label: 'Protection' },
+  { id: 'protection', label: 'Backups' },
   { id: 'declarations', label: 'Declarations' },
   { id: 'pooling', label: 'Pooling' },
 ]
@@ -1198,6 +1197,136 @@ export function applyCNPGDisk(fleet: CNPGFleet, readings: CNPGDiskReading[] | un
   return finishFleet(rows, fleet.incompleteKinds)
 }
 
+/** Bytes in binary units with IEC labels (GiB), as every CloudNativePG view prints them. */
+export function cnpgFormatBytes(n: number): string {
+  const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
+  let v = n
+  let i = 0
+  while (v >= 1024 && i < u.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`
+}
+
+const formatBytes = cnpgFormatBytes
+
+// ---------------------------------------------------------------------------
+// Standbys and replication slots: one finding, whichever source saw it
+// ---------------------------------------------------------------------------
+
+/**
+ * Retained WAL at which an inactive physical slot becomes a concern. An HA
+ * slot only goes inactive when its standby stops consuming, and the WAL it
+ * pins keeps growing until that standby catches up or the slot is dropped.
+ */
+export const CNPG_SLOT_RETENTION_WARNING_BYTES = 1024 ** 3
+
+/** The id of a standby's "not receiving WAL" problem: the fleet (Prometheus) and the cluster page (instance manager) raise the same one. */
+export function cnpgStandbyProblemId(rowKey: string, pod: string): string {
+  return `standby:${rowKey}:${pod}`
+}
+
+/** The id of an inactive slot's retention problem, shared like cnpgStandbyProblemId. */
+export function cnpgSlotProblemId(rowKey: string, slot: string): string {
+  return `slot:${rowKey}:${slot}`
+}
+
+function haSlotPrefix(cluster: any): string {
+  const p = cluster?.spec?.replicationSlots?.highAvailability?.slotPrefix
+  return typeof p === 'string' && p ? p : '_cnpg_'
+}
+
+/** The HA slot CloudNativePG keeps for an instance: the prefix (default `_cnpg_`) then the instance name with `-` as `_`. */
+export function cnpgHASlotName(cluster: any, instance: string): string {
+  return `${haSlotPrefix(cluster)}${instance.replace(/-/g, '_')}`
+}
+
+/** The instance a managed HA slot serves, or undefined when the slot is not one of this cluster's HA slots. */
+export function cnpgHASlotInstance(cluster: any, slot: string, instances: string[]): string | undefined {
+  return instances.find((i) => cnpgHASlotName(cluster, i) === slot)
+}
+
+const CLUSTER_GROUP = 'postgresql.cnpg.io'
+
+function clusterSubject(row: Pick<CNPGFleetRow, 'namespace' | 'name'>) {
+  return { kind: 'Cluster', group: CLUSTER_GROUP, namespace: row.namespace, name: row.name }
+}
+
+export interface CNPGStandbyGap {
+  pod: string
+  /** What was observed, in words, e.g. "its WAL receiver is down", "replay is paused". */
+  evidence: string[]
+  measuredBy: string
+  sourceDetail: string
+  /** Every expected standby is out: there is no failover target with current data. */
+  noneReceiving?: boolean
+  unverifiedMatch?: boolean
+}
+
+/** A standby that receives nothing from the primary. Its replay lag reads 0 because nothing new arrives to replay. */
+export function cnpgStandbyNotReceivingProblem(row: Pick<CNPGFleetRow, 'key' | 'namespace' | 'name'>, gap: CNPGStandbyGap): CNPGProblem {
+  return {
+    id: cnpgStandbyProblemId(row.key, gap.pod),
+    severity: gap.noneReceiving ? 'critical' : 'warning',
+    category: 'availability',
+    title: `${gap.pod} is not receiving WAL from the primary`,
+    shortTitle: `${gap.pod} not receiving WAL`,
+    detail: `${capitalize(gap.evidence.join('; '))}. While it receives nothing it falls further behind and the primary keeps WAL for it; a replay lag of 0 does not mean it is caught up, only that nothing new reached it.`,
+    subject: { kind: 'Pod', group: '', namespace: row.namespace, name: gap.pod },
+    source: 'measurement',
+    measuredBy: gap.measuredBy,
+    sourceDetail: gap.sourceDetail,
+    ...(gap.unverifiedMatch ? { unverifiedMatch: true } : {}),
+  }
+}
+
+export interface CNPGSlotRetention {
+  slot: string
+  /** The instance holding the slot (the primary for an HA slot). */
+  pod: string
+  bytes: number
+  /** The standby an HA slot serves, when the name matches one of the cluster's instances. */
+  standby?: string
+  measuredBy: string
+  sourceDetail: string
+  unverifiedMatch?: boolean
+}
+
+export function cnpgSlotRetentionProblem(row: Pick<CNPGFleetRow, 'key' | 'namespace' | 'name'>, r: CNPGSlotRetention): CNPGProblem {
+  const forWhom = r.standby ? ` for ${r.standby}` : ''
+  return {
+    id: cnpgSlotProblemId(row.key, r.slot),
+    severity: 'warning',
+    category: 'availability',
+    title: `Inactive slot ${r.slot} holds ${formatBytes(r.bytes)} of WAL on ${r.pod}${forWhom}`,
+    shortTitle: `${formatBytes(r.bytes)} of WAL held${forWhom || ` by ${r.slot}`}`,
+    detail: `PostgreSQL keeps every WAL file the slot still needs until ${r.standby ? `${r.standby} catches up` : 'its consumer catches up'} or the slot is dropped, so this grows while the slot stays inactive. Storage shows it beside the volume's other WAL.`,
+    subject: clusterSubject(row),
+    source: 'measurement',
+    measuredBy: r.measuredBy,
+    sourceDetail: r.sourceDetail,
+    ...(r.unverifiedMatch ? { unverifiedMatch: true } : {}),
+  }
+}
+
+/** Adds problems to a row, replacing any with the same id, and recomputes what attention follows from them. */
+export function cnpgWithProblems(row: CNPGFleetRow, added: CNPGProblem[]): CNPGFleetRow {
+  if (added.length === 0) return row
+  const ids = new Set(added.map((p) => p.id))
+  const problems = [...row.problems.filter((p) => !ids.has(p.id)), ...added].sort(cnpgCompareProblems)
+  return {
+    ...row,
+    problems,
+    attention: problems.some((p) => p.severity !== 'posture'),
+    categories: new Set([...row.categories, ...added.map((p) => p.category)]),
+  }
+}
+
+function capitalize(s: string): string {
+  return s ? s[0].toUpperCase() + s.slice(1) : s
+}
+
 /** The short per-fact source when Radar has no Prometheus; the reason goes in `detail`. */
 export const CNPG_PROMETHEUS_NOT_CONNECTED = 'Prometheus not connected'
 
@@ -1218,6 +1347,26 @@ export interface CNPGFleetMetricsReading {
     sustainedSeconds?: number
     sustainedPod?: string
     sustainedWindow?: string
+    isolation?: CNPGMetricIsolation
+    /** Instances reporting that they are in recovery (standbys). */
+    standbys?: number
+    /** Standbys whose WAL receiver is up (cnpg_pg_replication_is_wal_receiver_up = 1). */
+    receiving?: number
+    /** Standbys whose WAL receiver is down: their lag reads 0 because nothing arrives. */
+    receiverDown?: string[]
+    /** The exporter reported no receiver state (or the read failed), so streaming is not established from lag alone. */
+    receiverUnknown?: boolean
+    receiverReason?: string
+  }
+  /** Inactive physical replication slots and the WAL each keeps: ok | noSeries | denied | ambiguous | scopeMismatch | error | notRead */
+  slots?: {
+    state: string
+    grant?: Grant
+    reason?: string
+    /** Null unless `state` is ok; [] when ok and none is inactive. */
+    inactive?: { slot: string; pod: string; role?: 'primary' | 'standby'; bytes: number | null }[] | null
+    /** Inactive slots beyond the per-cluster cap. */
+    omitted?: number
     isolation?: CNPGMetricIsolation
   }
   /** ok | noSeries | denied | unavailable | error | notRead */
@@ -1275,20 +1424,29 @@ export function cnpgFormatLag(s: number): string {
   return m === 0 ? `${Math.floor(minutes / 60)} h` : `${Math.floor(minutes / 60)} h ${m} min`
 }
 
-function measuredReplication(base: Fact, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): Fact {
+function measuredReplication(base: Fact, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources, designated?: string): Fact {
   const prefix = base.text.replace(/ · lag unknown$/, '')
   if (src.source === 'none') {
     return { text: `${prefix} · lag unknown`, tone: 'unknown', source: CNPG_PROMETHEUS_NOT_CONNECTED, detail: src.reason }
   }
   const lag = reading?.lag
   switch (lag?.state) {
-    case 'ok':
+    case 'ok': {
+      const down = (lag.receiverDown ?? []).filter((pod) => pod !== designated)
+      if (down.length > 0) {
+        return {
+          text: `${prefix} · ${down.length === 1 ? `${down[0]} not receiving WAL` : `${down.length} standbys not receiving WAL`}`,
+          tone: lag.receiving === 0 ? 'unhealthy' : 'degraded',
+          source: `WAL receiver down on ${down.join(', ')} (cnpg_pg_replication_is_wal_receiver_up = 0) · ${src.lagSource ?? 'Prometheus'}.${isolationCaveat(lag.isolation)}`,
+        }
+      }
       if (lag.seconds === undefined) break
       return {
-        text: `${prefix} · lag ${cnpgFormatLag(lag.seconds)}`,
-        tone: cnpgLagTone(lag.seconds),
-        source: `Largest standby replay lag, ${lag.pod ?? 'a standby'} · ${src.lagSource ?? 'Prometheus'}.${isolationCaveat(lag.isolation)}`,
+        text: `${prefix} · lag ${cnpgFormatLag(lag.seconds)}${lag.receiverUnknown ? ' · streaming unverified' : ''}`,
+        tone: lag.receiverUnknown ? 'unknown' : cnpgLagTone(lag.seconds),
+        source: `Largest standby replay lag, ${lag.pod ?? 'a standby'} · ${src.lagSource ?? 'Prometheus'}.${lag.receiverUnknown ? ' The exporter reported no WAL receiver state, and a standby that receives nothing also reads 0.' : ''}${isolationCaveat(lag.isolation)}`,
       }
+    }
     case 'noStandby':
       return { text: `${prefix} · lag unknown`, tone: 'unknown', source: `No standby reports lag: ${lag.reason ?? 'no instance reports being a standby'} · ${src.lagSource ?? 'Prometheus'}` }
     case 'denied':
@@ -1319,13 +1477,52 @@ export function applyCNPGFleetMetrics(fleet: CNPGFleet, readings: CNPGFleetMetri
   const rows = fleet.rows.map((row) => {
     const reading = byKey.get(row.key)
     const next: CNPGFleetRow = { ...row, diskGrowth: cnpgDiskGrowthFact(reading, src) }
-    if (row.replication.source === CNPG_LAG_UNMEASURED_SOURCE) next.replication = measuredReplication(row.replication, reading, src)
-    const problem = sustainedLagProblem(row, reading, src)
-    if (!problem) return next
-    const problems = [...row.problems, problem].sort(cnpgCompareProblems)
-    return { ...next, problems, attention: true, categories: new Set([...row.categories, problem.category]) }
+    if (row.replication.source === CNPG_LAG_UNMEASURED_SOURCE) next.replication = measuredReplication(row.replication, reading, src, row.replicaCluster ? row.cluster?.status?.currentPrimary : undefined)
+    const sustained = sustainedLagProblem(row, reading, src)
+    return cnpgWithProblems(next, [...(sustained ? [sustained] : []), ...fleetStandbyProblems(row, reading, src), ...fleetSlotProblems(row, reading, src)])
   })
   return finishFleet(rows, fleet.incompleteKinds)
+}
+
+function fleetStandbyProblems(row: CNPGFleetRow, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): CNPGProblem[] {
+  const lag = reading?.lag
+  if (src.source !== 'prometheus' || lag?.state !== 'ok' || row.hibernated) return []
+  // A replica cluster's designated primary is in recovery too, and may be fed
+  // from the WAL archive with no receiver at all.
+  const designated = row.replicaCluster ? row.cluster?.status?.currentPrimary : undefined
+  const down = (lag.receiverDown ?? []).filter((pod) => pod !== designated)
+  return down.map((pod) =>
+    cnpgStandbyNotReceivingProblem(row, {
+      pod,
+      evidence: ['its WAL receiver is down'],
+      measuredBy: lag.isolation?.mode === 'unverified' ? 'Prometheus, matched by Pod name' : 'Prometheus',
+      sourceDetail: `cnpg_pg_replication_is_wal_receiver_up = 0 while cnpg_pg_replication_in_recovery = 1 · ${src.lagSource ?? 'Prometheus'}`,
+      noneReceiving: lag.receiving === 0,
+      unverifiedMatch: lag.isolation?.mode === 'unverified',
+    }),
+  )
+}
+
+function fleetSlotProblems(row: CNPGFleetRow, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): CNPGProblem[] {
+  const slots = reading?.slots
+  if (src.source !== 'prometheus' || slots?.state !== 'ok' || !slots.inactive) return []
+  // CloudNativePG copies HA slots to the standbys, where nothing streams from
+  // them, so a standby's copy is always inactive. Only the primary's copy
+  // means a consumer stopped.
+  const instances = row.pods.map((p) => p.name)
+  return slots.inactive
+    .filter((s): s is typeof s & { bytes: number } => s.role === 'primary' && s.bytes !== null && s.bytes >= CNPG_SLOT_RETENTION_WARNING_BYTES)
+    .map((s) =>
+      cnpgSlotRetentionProblem(row, {
+        slot: s.slot,
+        pod: s.pod,
+        bytes: s.bytes,
+        standby: cnpgHASlotInstance(row.cluster, s.slot, instances),
+        measuredBy: slots.isolation?.mode === 'unverified' ? 'Prometheus, matched by Pod name' : 'Prometheus',
+        sourceDetail: 'cnpg_pg_replication_slots_pg_wal_lsn_diff where cnpg_pg_replication_slots_active = 0 (physical slots)',
+        unverifiedMatch: slots.isolation?.mode === 'unverified',
+      }),
+    )
 }
 
 export const CNPG_SUSTAINED_LAG_WARNING_SECONDS = 30

@@ -37,6 +37,26 @@ export interface CNPGOperatorComponent {
   version?: string
   readyReplicas: number | null
   replicas: number | null
+  /** The Deployment's Pods; null when they could not be read (see podCoverage). */
+  pods?: CNPGOperatorComponentPod[] | null
+  podCoverage?: { state: string; grant?: Grant; reason?: string }
+}
+
+export interface CNPGContainerTermination {
+  container: string
+  reason: string
+  exitCode: number
+  finishedAt?: string
+}
+
+export interface CNPGOperatorComponentPod {
+  name: string
+  ready: boolean
+  /** Restarts across the Pod's containers since the Pod was created. */
+  restarts: number
+  /** When the current container started. */
+  startedAt?: string
+  lastTermination?: CNPGContainerTermination
 }
 
 export interface CNPGOperatorConfig {

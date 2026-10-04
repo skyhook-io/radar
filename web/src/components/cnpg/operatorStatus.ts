@@ -1,4 +1,5 @@
-import type { CNPGOperatorVerdict } from '../../api/cnpg'
+import type { CNPGOperatorComponent, CNPGOperatorResponse, CNPGOperatorVerdict } from '../../api/cnpg'
+import { formatAge } from '@skyhook-io/k8s-ui'
 
 export interface CNPGOperatorBannerModel {
   /** The operator watching these namespaces is not leading, so their CNPG status may be stale. */
@@ -51,4 +52,60 @@ export function cnpgOperatorActionNote(v: CNPGOperatorVerdict | undefined): { to
     return { tone: 'info', text: `Radar couldn't confirm the operator is running (${v.unknown}).` }
   }
   return null
+}
+
+/** A restart that ended within this long is "recent": the operator may still be crash-looping. */
+export const CNPG_OPERATOR_RECENT_RESTART_MS = 60 * 60 * 1000
+
+export interface CNPGOperatorConcern {
+  tone: 'unhealthy' | 'degraded' | 'neutral'
+  text: string
+}
+
+/** A component's restart history in one line, with when the last one ended and why; null when it never restarted. */
+export function cnpgRestartHistory(c: Pick<CNPGOperatorComponent, 'pods'>, now = Date.now()): { text: string; recent: boolean } | null {
+  const pods = c.pods ?? []
+  const restarts = pods.reduce((n, p) => n + p.restarts, 0)
+  if (restarts === 0) return null
+  const last = pods
+    .map((p) => p.lastTermination)
+    .filter((t): t is NonNullable<typeof t> => !!t?.finishedAt)
+    .sort((a, b) => Date.parse(b.finishedAt!) - Date.parse(a.finishedAt!))[0]
+  const ended = last?.finishedAt ? Date.parse(last.finishedAt) : NaN
+  const recent = Number.isFinite(ended) && now - ended <= CNPG_OPERATOR_RECENT_RESTART_MS
+  const why = last ? ` (${[last.reason, `exit ${last.exitCode}`].filter(Boolean).join(', ')})` : ''
+  const when = last?.finishedAt ? ` · last ended ${formatAge(last.finishedAt)} ago${why}` : ''
+  return { text: `${restarts} restart${restarts === 1 ? '' : 's'} since the Pod was created${when}`, recent }
+}
+
+function componentName(c: CNPGOperatorComponent): string {
+  return c.role === 'operator' ? 'The operator' : `Plugin ${c.pluginName ?? c.deployment}`
+}
+
+/**
+ * What the Operator screen leads with: the states that stop or slow
+ * reconciliation, then restart history with when it last happened. Restart
+ * totals are cumulative, so only a recent one is worded as current trouble.
+ */
+export function cnpgOperatorConcerns(op: CNPGOperatorResponse, now = Date.now()): CNPGOperatorConcern[] {
+  const out: CNPGOperatorConcern[] = []
+  for (const c of op.components) {
+    if (c.readyReplicas !== null && c.replicas !== null && c.replicas > 0 && c.readyReplicas < c.replicas) {
+      out.push({ tone: c.readyReplicas === 0 ? 'unhealthy' : 'degraded', text: `${componentName(c)} has ${c.readyReplicas} of ${c.replicas} replicas ready.` })
+    }
+  }
+  for (const d of op.diagnosis ?? []) {
+    if (d.leader.state === 'ok' && d.leader.stale) out.push({ tone: 'unhealthy', text: `No operator instance is leading in ${d.namespace}: the leader Lease was not renewed, so nothing reconciles.` })
+    for (const svc of d.webhookServices) {
+      const fails = d.webhooks.some((w) => w.state === 'ok' && w.webhooks.some((h) => h.failurePolicy === 'Fail' && h.service === `${svc.namespace}/${svc.name}`))
+      if (svc.state === 'ok' && svc.readyEndpoints === 0 && fails) {
+        out.push({ tone: 'unhealthy', text: `The admission webhook Service ${svc.namespace}/${svc.name} has no ready endpoint and its failure policy is Fail: every CloudNativePG write is rejected.` })
+      }
+    }
+  }
+  for (const c of op.components) {
+    const h = cnpgRestartHistory(c, now)
+    if (h) out.push({ tone: h.recent ? 'degraded' : 'neutral', text: `${componentName(c)}: ${h.text}.` })
+  }
+  return out
 }

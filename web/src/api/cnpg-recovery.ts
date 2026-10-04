@@ -183,6 +183,7 @@ export interface CNPGOperatorPod {
   startedAt?: string
   restarts: number
   leader: boolean
+  lastTermination?: { container: string; reason: string; exitCode: number; finishedAt?: string }
 }
 
 export interface CNPGOperatorLeader extends Omit<CNPGReadCoverage, 'state'> {

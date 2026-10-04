@@ -1,24 +1,58 @@
-import type { ReactNode } from 'react'
 import { clsx } from 'clsx'
-import { Badge, CNPG_ROLE_DETAIL_TEXT, cnpgFormatLag, StatusDot, Tooltip, toneFillClass, toneTextClass } from '@skyhook-io/k8s-ui'
+import {
+  Badge,
+  CNPG_ROLE_DETAIL_TEXT,
+  CNPG_SLOT_RETENTION_WARNING_BYTES,
+  cnpgFormatLag,
+  cnpgHASlotName,
+  StatusDot,
+  Tooltip,
+  toneFillClass,
+  toneTextClass,
+  type CNPGClusterHA,
+  type CNPGHAInstance,
+} from '@skyhook-io/k8s-ui'
 import { useCNPGClusterCapabilities, type CNPGRuntimeInstance, type CNPGRuntimeReplication } from '../../api/cnpg'
 import { CNPGInstanceActions } from './actions/CNPGInstanceActions'
 import { formatBytes, lsnDistance, standbyOwnBacklog } from './lsn'
 import { CNPG_BACKLOG_DEGRADED, cnpgStandbyBacklogTone, cnpgStandbyHeadline } from './runtimeModel'
+import { Card, SourceState } from './runtimeParts'
 
 function seconds(s?: number): string {
   return s === undefined ? '—' : cnpgFormatLag(s)
 }
 
-function SourceState({ label, state, error }: { label: string; state: string; error?: string }) {
-  if (state === 'ok') return null
-  const text =
-    state === 'denied'
-      ? `${label}: no access (needs get pods/proxy)`
-      : state === 'partial'
-        ? `${label}: partial${error ? ` · ${error}` : ''}`
-        : `${label}: ${state}${error ? ` · ${error}` : ''}`
-  return <div className="text-xs text-theme-text-tertiary">{text}</div>
+type RuntimeSlot = NonNullable<CNPGRuntimeInstance['status']['slots']>[number]
+
+/** Readiness, node and QoS from the instance Pod: what Kubernetes says, kept apart from what PostgreSQL reports. */
+function PodLine({ pod }: { pod?: CNPGHAInstance }) {
+  if (!pod) return null
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-theme-text-secondary">
+      <span className={pod.ready ? undefined : toneTextClass('unhealthy')}>Pod {pod.ready ? 'ready' : 'not ready'}</span>
+      {pod.node && <span>node <span className="font-mono">{pod.node}</span></span>}
+      {pod.qosClass && <span>QoS {pod.qosClass}</span>}
+      {pod.restartCount > 0 && <span>{pod.restartCount} container restart{pod.restartCount === 1 ? '' : 's'}</span>}
+      {pod.imageMatches === false && <Badge severity="warning" size="sm">image differs</Badge>}
+    </div>
+  )
+}
+
+/** The HA slot the primary keeps for this standby, beside the standby it serves, as `kubectl cnpg status` shows it. */
+function SlotLine({ slot, name }: { slot?: RuntimeSlot; name: string }) {
+  if (!slot) {
+    return <div className="mt-1 text-xs text-theme-text-tertiary">Slot <span className="font-mono">{name}</span>: not present on the primary</div>
+  }
+  const held = (slot.retainedBytes ?? 0) >= CNPG_SLOT_RETENTION_WARNING_BYTES && slot.active === false
+  return (
+    <div className="mt-1 text-xs">
+      <span className="text-theme-text-secondary">Slot on the primary </span>
+      <span className="font-mono">{slot.name}</span>
+      <span className={clsx(slot.active === false ? toneTextClass('degraded') : 'text-theme-text-secondary')}> · {slot.active === undefined ? 'state unknown' : slot.active ? 'active' : 'inactive'}</span>
+      <span className={held ? toneTextClass('degraded') : 'text-theme-text-secondary'}> · holds {formatBytes(slot.retainedBytes)} of WAL</span>
+      {slot.walStatus && <span className="text-theme-text-tertiary"> · WAL status {slot.walStatus}</span>}
+    </div>
+  )
 }
 
 function InstanceFacts({ inst, primaryVersion }: { inst: CNPGRuntimeInstance; primaryVersion?: string }) {
@@ -92,27 +126,35 @@ export function CNPGReplicationView({
   primary,
   replicas,
   onOpenLogs,
-  card: Card,
+  ha,
+  clusterObject,
 }: {
   namespace: string
   cluster: string
   primary?: CNPGRuntimeInstance
   replicas: CNPGRuntimeInstance[]
   onOpenLogs?: (pod: string) => void
-  card: (props: { title: ReactNode; children: ReactNode; footer?: ReactNode }) => ReactNode
+  /** The instance Pods as Kubernetes reports them (readiness, node, QoS). */
+  ha?: CNPGClusterHA
+  /** The Cluster object, for the HA slot prefix. */
+  clusterObject?: any
 }) {
   const rows = new Map((primary?.status.replication ?? []).map((r) => [r.applicationName, r]))
   // The instance manager keeps answering on a fenced Pod with PostgreSQL
   // stopped, so fencing comes from the Cluster, not from the runtime read.
   const fenced = new Set(useCNPGClusterCapabilities(namespace, cluster).data?.facts.instances.filter((i) => i.fenced).map((i) => i.pod))
   const primaryVersion = primary?.status.instanceManagerVersion
+  const pods = new Map((ha?.pods.state === 'ok' ? ha.instances : []).map((i) => [i.pod, i]))
+  const slots = new Map((primary?.status.slots ?? []).map((sl) => [sl.name, sl]))
+  const slotsRead = !!primary?.status.slots
   return (
     <Card
       title="Instances and replication"
       footer={
         <>
           Rows come from the primary’s pg_stat_replication through the instance manager. Replay backlog is the primary’s current WAL position minus what the
-          standby has replayed, in bytes: the catch-up measure. A standby that isn't connected has no row, so its backlog uses the position it reports itself.
+          standby has replayed, in bytes: the catch-up measure. A standby that isn't connected has no row, so its backlog uses the position it reports itself — only on
+          the same timeline, since positions on different timelines aren't comparable.
           Write, flush and replay delay are PostgreSQL’s acknowledgement delay for recent WAL; empty when idle and caught up.
         </>
       }
@@ -126,6 +168,7 @@ export function CNPGReplicationView({
           {primary && (
             <>
               <div className="mt-1 font-mono text-xs text-theme-text-secondary">LSN {primary.status.currentLsn ?? '—'}</div>
+              <PodLine pod={pods.get(primary.pod)} />
               <InstanceFacts inst={primary} />
               <SourceState label="Status" state={primary.status.state} error={primary.status.error ?? primary.status.reason} />
               <div className="mt-2 flex flex-wrap gap-3 text-xs">
@@ -146,6 +189,8 @@ export function CNPGReplicationView({
             // Without a pg_stat_replication row (not connected), the standby's
             // own replayed position still measures how far behind it is.
             const replayBacklog = rep ? lsnDistance(primary?.status.currentLsn, rep.replayLsn) : standbyOwnBacklog(primary?.status, r.status)
+            const otherTimeline =
+              r.status.timeline !== undefined && primary?.status.timeline !== undefined && r.status.timeline !== primary.status.timeline ? r.status.timeline : undefined
             const backlogTone = cnpgStandbyBacklogTone(replayBacklog, rep?.replayLag)
             const headline = cnpgStandbyHeadline(r, rep, backlogTone, { fenced: fenced.has(r.pod), primaryRead: primary?.status.state === 'ok' })
             const tone = headline.tone
@@ -158,9 +203,15 @@ export function CNPGReplicationView({
                   <span className={clsx('text-xs', toneTextClass(tone))}>{headline.text}</span>
                   {headline.secondary && <span className="text-xs text-theme-text-secondary">{headline.secondary}</span>}
                   <span className="ml-auto font-mono text-xs text-theme-text-secondary">
-                    {replayBacklog !== undefined ? `${formatBytes(replayBacklog)} behind` : 'backlog unknown'}
+                    {replayBacklog !== undefined ? `${formatBytes(replayBacklog)} behind` : otherTimeline !== undefined ? 'backlog not comparable' : 'backlog unknown'}
                   </span>
                 </div>
+                {otherTimeline !== undefined && !rep && (
+                  <div className={clsx('mt-1 text-xs', toneTextClass('degraded'))}>
+                    On timeline {otherTimeline} while the primary is on {primary?.status.timeline}: it has not followed the primary’s last promotion, so how far behind it is can’t be
+                    measured from WAL positions.
+                  </div>
+                )}
                 {replayBacklog !== undefined && (
                   <div className="mt-2 flex items-center gap-2">
                     <div className="h-1 flex-1 overflow-hidden rounded bg-theme-elevated">
@@ -174,6 +225,8 @@ export function CNPGReplicationView({
                 <div className="mt-1 font-mono text-xs text-theme-text-tertiary">
                   received {r.status.receivedLsn ?? '—'} · replayed {r.status.replayLsn ?? '—'}
                 </div>
+                {slotsRead && <SlotLine slot={slots.get(cnpgHASlotName(clusterObject, r.pod))} name={cnpgHASlotName(clusterObject, r.pod)} />}
+                <PodLine pod={pods.get(r.pod)} />
                 <InstanceFacts inst={r} primaryVersion={primaryVersion} />
                 <SourceState label="Status" state={r.status.state} error={r.status.error ?? r.status.reason} />
                 <div className="mt-2 flex flex-wrap gap-3 text-xs">

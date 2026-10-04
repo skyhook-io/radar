@@ -3,7 +3,7 @@
 // the switchover dialog share. Each sub-read carries its own state: a denied or
 // unavailable source is "unknown", never none or healthy.
 
-import type { HealthLevel } from '../resources/resource-utils'
+import { formatAge, type HealthLevel } from '../resources/resource-utils'
 import { formatGrant, type Grant } from '../../utils/grant'
 import { cnpgFormatLag, cnpgLagTone, cnpgReplicationTone, cnpgSustainedLagProblemId, type CNPGFleetRow } from './workspace'
 import { type Fact } from '../facts'
@@ -436,17 +436,35 @@ export function cnpgDimensions({
   return [
     servingDimension(row, ha),
     replicationDimension(row, replication, replicationGap),
-    protectionDimension(row),
     storage ?? storageDimension(row),
+    protectionDimension(row),
   ]
 }
 
 function storageDimension(row: CNPGFleetRow): CNPGDimension {
+  return withSlotRetention(row, volumeDimension(row))
+}
+
+function volumeDimension(row: CNPGFleetRow): CNPGDimension {
   const base = { id: 'storage' as const, label: 'Storage' }
   const disk = row.disk
   if (!disk) return { ...base, tone: 'unknown', text: 'unassessed', source: 'Volume usage is not assessed here' }
   if (disk.tone === 'unknown') return { ...base, tone: 'unknown', text: 'unassessed', source: [disk.text, disk.source].filter(Boolean).join(' · ') }
   return { ...base, tone: disk.tone, text: disk.text, source: disk.source ?? 'Fullest volume' }
+}
+
+// WAL an inactive slot pins is a storage concern even while volume usage is
+// unmeasured; the chip says so instead of reading "unassessed".
+function withSlotRetention(row: CNPGFleetRow, dim: CNPGDimension): CNPGDimension {
+  const slot = row.problems.find((p) => p.id.startsWith(`slot:${row.key}:`))
+  if (!slot) return dim
+  const held = 'WAL held by an inactive slot'
+  return {
+    ...dim,
+    tone: worseTone(dim.tone, 'degraded'),
+    text: dim.tone === 'unknown' ? held : `${dim.text} · ${held}`,
+    source: dim.tone === 'unknown' ? `${slot.title}. Volume usage: ${dim.source ?? 'unassessed'}` : `${slot.title}. ${dim.source ?? ''}`.trim(),
+  }
 }
 
 function servingDimension(row: CNPGFleetRow, ha?: CNPGClusterHA): CNPGDimension {
@@ -474,7 +492,7 @@ function servingDimension(row: CNPGFleetRow, ha?: CNPGClusterHA): CNPGDimension 
 // A standby measured far behind for the whole window outranks what the live
 // read shows: the chip must not read calmer than the finding below it.
 function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap?: string): CNPGDimension {
-  const dim = liveReplicationDimension(row, live, gap)
+  const dim = withStandbyGaps(row, liveReplicationDimension(row, live, gap))
   const sustained = row.problems.find((p) => p.id === cnpgSustainedLagProblemId(row.key))
   if (!sustained) return dim
   const tone: HealthLevel = sustained.severity === 'critical' ? 'unhealthy' : 'degraded'
@@ -483,6 +501,21 @@ function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap
     tone: worseTone(dim.tone, tone),
     text: dim.tone === 'unknown' ? 'sustained lag' : `${dim.text} · sustained lag`,
     source: sustained.title,
+  }
+}
+
+// A standby another source saw receiving nothing (Prometheus in the fleet, the
+// instance manager here) keeps the chip from reading calm or unassessed.
+function withStandbyGaps(row: CNPGFleetRow, dim: CNPGDimension): CNPGDimension {
+  const gaps = row.problems.filter((p) => p.id.startsWith(`standby:${row.key}:`))
+  if (gaps.length === 0) return dim
+  const pods = gaps.map((p) => p.subject.name).join(', ')
+  const tone: HealthLevel = gaps.some((p) => p.severity === 'critical') ? 'unhealthy' : 'degraded'
+  return {
+    ...dim,
+    tone: worseTone(dim.tone, tone),
+    text: dim.tone === 'unknown' ? `${pods} not receiving WAL` : dim.text.includes('not connected') ? dim.text : `${dim.text} · ${pods} not receiving WAL`,
+    source: gaps.map((p) => p.title).join('; '),
   }
 }
 
@@ -512,7 +545,7 @@ function liveReplicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive,
 }
 
 function protectionDimension(row: CNPGFleetRow): CNPGDimension {
-  const base = { id: 'protection' as const, label: 'Protection' }
+  const base = { id: 'protection' as const, label: 'Backups' }
   const p = row.protection
   if (p.walArchiving.tone === 'unhealthy') return { ...base, tone: 'unhealthy', text: 'WAL archiving failing', source: 'ContinuousArchiving condition' }
   if (p.destination.method === 'none') return { ...base, tone: 'degraded', text: 'no backup destination', source: 'Cluster spec' }
@@ -520,7 +553,8 @@ function protectionDimension(row: CNPGFleetRow): CNPGDimension {
     return { ...base, tone: p.lastSuccessfulBackup.tone, text: p.lastSuccessfulBackup.text, source: p.lastSuccessfulBackup.source ?? 'Backups' }
   }
   if (p.walArchiving.tone === 'unknown') return { ...base, tone: 'unknown', text: 'unassessed', source: 'WAL archiving not reported' }
-  return { ...base, tone: 'healthy', text: 'archiving', source: 'ContinuousArchiving condition' }
+  const last = p.lastSuccessfulBackup.at ? ` · last backup ${formatAge(p.lastSuccessfulBackup.at)} ago` : ''
+  return { ...base, tone: 'healthy', text: `WAL archiving${last}`, source: `ContinuousArchiving condition${p.lastSuccessfulBackup.source ? ` · last backup: ${p.lastSuccessfulBackup.source}` : ''}` }
 }
 
 /**

@@ -14,22 +14,22 @@ describe('cnpgRowStatus', () => {
     })
     expect(cnpgRowStatus(row({ attention: true, problems: [problem('warning', 'Backup failed: disk'), problem('posture', 'No backup schedule')] }))).toEqual({
       tone: 'degraded',
-      label: 'Needs attention: Backup failed: disk',
+      label: 'Needs attention: Backup failed: disk (+1 more)',
     })
   })
   it('says no problems only with a readable phase, never healthy when unknown', () => {
-    expect(cnpgRowStatus(row({}))).toEqual({ tone: 'healthy', label: 'No problems found · CNPG phase: Cluster in healthy state' })
+    expect(cnpgRowStatus(row({}))).toEqual({ tone: 'healthy', label: 'No concerns detected in what Radar read · CNPG phase: Cluster in healthy state' })
     const unknown = cnpgRowStatus(row({ controllerStatus: { text: '', level: 'unknown' } }))
     expect(unknown).toEqual({ tone: 'unknown', label: 'Status unknown · CNPG phase: not reported' })
-    expect(unknown.label).not.toContain('No problems')
+    expect(unknown.label).not.toContain('No concerns')
     expect(cnpgRowStatus(row({ controllerStatus: { text: 'Upgrading cluster', level: 'degraded' } })).tone).toBe('degraded')
   })
 })
 
 describe('cnpgInstancePillLabel', () => {
   it('names a replica as a standby too', () => {
-    expect(cnpgInstancePillLabel({ name: 'pg-wal-failing-1', role: 'replica', ready: false })).toBe('pg-wal-failing-1 · replica (standby) · not ready')
-    expect(cnpgInstancePillLabel({ name: 'pg-1', role: 'primary', ready: null })).toBe('pg-1 · primary · readiness unknown')
+    expect(cnpgInstancePillLabel({ name: 'pg-wal-failing-1', role: 'replica', ready: false })).toBe('pg-wal-failing-1 · replica (standby) · Pod not ready')
+    expect(cnpgInstancePillLabel({ name: 'pg-1', role: 'primary', ready: null })).toBe('pg-1 · primary · Pod readiness unknown')
   })
 })
 

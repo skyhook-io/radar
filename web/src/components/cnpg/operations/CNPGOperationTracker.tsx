@@ -139,11 +139,16 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
   const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('menu'))
   useEffect(() => {
     if (!open) return
+    // Capture phase, consumed: the page's own Escape (leave the full view)
+    // must not also fire when Escape only closes this menu.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      setOpen(false)
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
   }, [open])
   if (ops.length === 0) return null
   const lead = active[active.length - 1] ?? ops[ops.length - 1]

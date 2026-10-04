@@ -292,7 +292,7 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
     const route = parseCNPGRoute(pathname)
     if (route.detail) return route.detail.name
     const screen = CNPG_SCREENS.find((s) => s.id === route.screen)
-    return `CloudNativePG ${screen?.label ?? 'Overview'}`
+    return `CloudNativePG ${screen?.label ?? 'Clusters'}`
   }
   if (view === 'home') return 'Overview'
   // Every other view's label is its id capitalized — getViewFromPath has already

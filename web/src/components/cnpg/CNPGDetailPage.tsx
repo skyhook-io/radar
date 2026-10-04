@@ -1,53 +1,26 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { Activity, ArrowLeft, Database, Gauge, ShieldCheck, Unplug } from 'lucide-react'
-import type { WorkloadExtraTab } from '@skyhook-io/k8s-ui'
+import { Activity, ArrowLeft, Database, Gauge, HardDrive, Network, Settings2, ShieldCheck, Unplug } from 'lucide-react'
+import { refToSelectedResource, type WorkloadExtraTab } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
 import { useContexts, useRadarFeature } from '../../api/client'
 import { useContextSwitchFlow } from '../useContextSwitchFlow'
 import { WorkloadView } from '../workload/WorkloadView'
 import { CNPGClusterActivity } from './CNPGClusterActivity'
-import { CNPGClusterRuntime } from './CNPGClusterRuntime'
-import { CNPGProtection } from './CNPGProtection'
-import { CNPGRestoreValidation } from './recovery/CNPGRestoreValidation'
-import { CNPGScreenGate } from './shared'
+import { CNPGPerformance } from './CNPGPerformance'
+import { CNPGReplicationTab } from './CNPGReplicationTab'
+import { CNPGBackupsTab, CNPGClusterHeaderChips, CNPGConfigurationLead, CNPGStorageTab } from './CNPGClusterTabs'
+import type { CNPGChartGroup } from './CNPGTrends'
 import { CNPG_DETAIL_KINDS, CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, cnpgScreenPath, type CNPGDetailTarget } from './routes'
+import { CNPG_CLUSTER_TAB_ORDER, cnpgDimensionTab } from './paths'
 import { currentPageLabel } from '../../utils/page-links'
-import { useCNPGFleet } from './useCNPGSidebarWorkspace'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 import { ScreenEmptyState } from '../workspace/layout'
 
 interface ReturnState {
   returnLabel?: string
   returnCtx?: string
-}
-
-function ClusterProtectionTab({ namespace, name, onInspect }: { namespace: string; name: string; onInspect: (r: SelectedResource) => void }) {
-  const { query, fleet } = useCNPGFleet([namespace])
-  const [searchParams] = useSearchParams()
-  return (
-    <CNPGScreenGate query={query} fleet={fleet}>
-      {(data, readyFleet) => (
-        <div className="flex min-h-0 flex-1 flex-col">
-          {readyFleet.rows.find((r) => r.namespace === namespace && r.name === name)?.cluster?.spec?.bootstrap?.recovery && (
-            <CNPGRestoreValidation namespace={namespace} name={name} />
-          )}
-          <CNPGProtection
-            data={data}
-            fleet={readyFleet}
-            namespaces={[namespace]}
-            searchParams={searchParams}
-            onSetParams={() => {}}
-            onInspect={onInspect}
-            inspected={null}
-            onClearNamespaces={() => {}}
-            scopeCluster={{ namespace, name }}
-          />
-        </div>
-      )}
-    </CNPGScreenGate>
-  )
 }
 
 /**
@@ -105,45 +78,79 @@ export function CNPGDetailPage({
 
   // A Radar without the workspace endpoints shows the standard detail.
   const cnpgWorkspace = useRadarFeature('cnpgWorkspace').support !== 'unsupported'
+  const isCluster = target.plural === 'clusters' && cnpgWorkspace
+  // A tab change on this page, applied like a tab click: the previous tab's
+  // own params (section, chart group, instance) are dropped unless named.
+  const goTab = useCallback(
+    (tab: string, extra: Record<string, string> = {}) => {
+      const params = new URLSearchParams(searchParams)
+      for (const k of ['section', 'charts', 'instance', 'pod', 'since', 'until']) params.delete(k)
+      params.set('tab', tab)
+      for (const [k, v] of Object.entries(extra)) params.set(k, v)
+      setSearchParams(params, { replace: true, state: location.state })
+    },
+    [searchParams, setSearchParams, location.state],
+  )
+  const openHistory = useCallback((charts: CNPGChartGroup) => goTab('performance', { section: 'history', charts }), [goTab])
   const extraTabs = useMemo<WorkloadExtraTab[] | undefined>(() => {
-    if (target.plural !== 'clusters' || !cnpgWorkspace) return undefined
+    if (!isCluster) return undefined
+    const ns = target.namespace
+    const name = target.name
     return [
       {
-        id: 'runtime',
-        label: 'Runtime',
-        icon: <Gauge className="h-4 w-4" />,
-        after: 'spec',
+        id: 'replication',
+        label: 'Replication',
+        icon: <Network className="h-4 w-4" />,
         render: () => (
-          <CNPGClusterRuntime
-            namespace={target.namespace}
-            name={target.name}
-            onOpenLogs={(pod) => setSearchParams(new URLSearchParams({ ...Object.fromEntries(searchParams), tab: 'logs', pod }), { replace: true, state: location.state })}
+          <CNPGReplicationTab
+            namespace={ns}
+            name={name}
+            onOpenLogs={(pod) => goTab('logs', { pod })}
+            onOpenHistory={() => openHistory('replication')}
+            onNavigate={(ref) => openRelated(refToSelectedResource(ref))}
+          />
+        ),
+      },
+      {
+        id: 'storage',
+        label: 'Storage',
+        icon: <HardDrive className="h-4 w-4" />,
+        render: () => <CNPGStorageTab namespace={ns} name={name} onOpenHistory={() => openHistory('storage')} />,
+      },
+      {
+        id: 'performance',
+        label: 'Performance',
+        icon: <Gauge className="h-4 w-4" />,
+        render: () => (
+          <CNPGPerformance
+            namespace={ns}
+            name={name}
             onOpenInterval={(tab, since, until) => {
-              const params = new URLSearchParams({ ...Object.fromEntries(searchParams), tab, since, until })
+              const params = new URLSearchParams(searchParams)
               params.delete('pod')
+              params.set('tab', tab)
+              params.set('since', since)
+              params.set('until', until)
               setSearchParams(params, { state: location.state })
             }}
           />
         ),
       },
       {
-        id: 'protection',
-        label: 'Protection',
+        id: 'backups',
+        label: 'Backups',
         icon: <ShieldCheck className="h-4 w-4" />,
-        after: 'spec',
-        render: () => <ClusterProtectionTab namespace={target.namespace} name={target.name} onInspect={onOpenResource} />,
+        render: () => <CNPGBackupsTab namespace={ns} name={name} onInspect={onOpenResource} />,
       },
       {
         id: 'activity',
         label: 'Activity',
         icon: <Activity className="h-4 w-4" />,
         replaces: 'timeline',
-        render: () => (
-          <CNPGClusterActivity namespace={target.namespace} name={target.name} onNavigate={openRelated} />
-        ),
+        render: () => <CNPGClusterActivity namespace={ns} name={name} onNavigate={openRelated} />,
       },
     ]
-  }, [target.plural, target.namespace, target.name, cnpgWorkspace, onOpenResource, openRelated, searchParams, setSearchParams, location.state])
+  }, [isCluster, target.namespace, target.name, goTab, openHistory, onOpenResource, openRelated, searchParams, setSearchParams, location.state])
 
   if (pinnedContext && activeContext && pinnedContext !== activeContext) {
     return <NotInContext target={target} pinnedContext={pinnedContext} activeContext={activeContext} homeLabel={home.label} homePath={home.path} />
@@ -206,6 +213,13 @@ export function CNPGDetailPage({
         breadcrumb={breadcrumb}
         onNavigateToResource={openRelated}
         extraTabs={extraTabs}
+        tabOrder={isCluster ? CNPG_CLUSTER_TAB_ORDER : undefined}
+        subheader={isCluster ? <CNPGClusterHeaderChips namespace={target.namespace} name={target.name} onSelect={(id) => goTab(cnpgDimensionTab(id))} /> : undefined}
+        specTab={
+          isCluster
+            ? { label: 'Configuration', icon: <Settings2 className="h-4 w-4" />, lead: <CNPGConfigurationLead namespace={target.namespace} name={target.name} onNavigate={openRelated} /> }
+            : undefined
+        }
       />
     </div>
   )
@@ -246,7 +260,7 @@ function NotInContext({
               onClick={() => navigate(homePath)}
               className="btn-secondary px-3 py-1.5 text-sm"
             >
-              Go to {homeLabel === 'Overview' ? 'CloudNativePG Overview' : homeLabel}
+              Go to CloudNativePG {homeLabel}
             </button>
           </div>
         }

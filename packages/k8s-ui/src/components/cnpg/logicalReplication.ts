@@ -1,3 +1,4 @@
+import { cnpgFormatBytes } from './workspace'
 import { type Fact } from '../facts'
 
 /** Where a Subscription's publisher lives, as far as the subscriber's spec shows. */
@@ -215,17 +216,6 @@ export interface CNPGPublisherSlots {
   slots?: { name: string; type?: string; active?: boolean; walStatus?: string; retainedBytes?: number; database?: string }[]
 }
 
-function bytesText(n: number): string {
-  const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
-  let v = n
-  let i = 0
-  while (v >= 1024 && i < u.length - 1) {
-    v /= 1024
-    i++
-  }
-  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`
-}
-
 const SLOT_SOURCE = "Publisher primary's instance manager (/pg/status replicationSlotsInfo) and exporter (retained WAL)"
 
 export function cnpgLogicalSlotFact(path: CNPGLogicalPath, observed: CNPGPublisherSlots): Fact {
@@ -251,7 +241,7 @@ export function cnpgLogicalSlotFact(path: CNPGLogicalPath, observed: CNPGPublish
     }
   }
   const parts = [`Slot ${s.name}`, s.type ?? 'type unknown', s.active === undefined ? 'activity unknown' : s.active ? 'active' : 'inactive']
-  if (s.retainedBytes !== undefined) parts.push(`retains ${bytesText(s.retainedBytes)} of WAL`)
+  if (s.retainedBytes !== undefined) parts.push(`retains ${cnpgFormatBytes(s.retainedBytes)} of WAL`)
   if (s.walStatus) parts.push(`WAL ${s.walStatus}`)
   const bad = s.active === false || s.walStatus === 'lost' || s.walStatus === 'unreserved'
   if (observed.stale) {

@@ -612,7 +612,7 @@ func cnpgStorageTargetOf(obj map[string]any, role, tablespace, base string, path
 }
 
 // cnpgStorageWAL reads each instance's WAL facts through the same memoized
-// pods/proxy reads the Runtime tab uses. It writes the error and returns an
+// pods/proxy reads the Replication and Performance tabs use. It writes the error and returns an
 // empty state only when the caller's client cannot be built.
 func (s *Server) cnpgStorageWAL(w http.ResponseWriter, r *http.Request, cache *k8s.ResourceCache, cluster *unstructured.Unstructured, byInstance map[string]*CNPGStorageInstance) CNPGStorageCoverage {
 	namespace := cluster.GetNamespace()
@@ -717,7 +717,7 @@ func (s *Server) cnpgStorageWAL(w http.ResponseWriter, r *http.Request, cache *k
 	return cov
 }
 
-// cnpgInstanceProxyTargets builds the same targets as the Runtime tab, so the
+// cnpgInstanceProxyTargets builds the same targets as the live instance reads, so the
 // memo serves both from one read.
 func cnpgInstanceProxyTargets(p *corev1.Pod, clusterMetricsTLS bool) (status, metrics cnpgProxyTarget) {
 	status = cnpgProxyTarget{

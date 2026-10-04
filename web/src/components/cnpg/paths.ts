@@ -11,27 +11,30 @@ export function cnpgClusterProblemsPath(namespace: string, name: string, ctx?: s
   return `${path}${path.includes('?') ? '&' : '?'}problems=all`
 }
 
-/**
- * Where a Cluster's health dimension is explained: Serving and Replication in
- * Runtime's Replication view (instances and their roles), Storage in Runtime's
- * Storage & WAL, Protection in the Protection tab. Tab and view are the URL
- * params the detail page and the Runtime tab read, so Back returns.
- */
-export function cnpgDimensionPath(namespace: string, name: string, ctx: string | undefined, id: CNPGDimension['id']): string {
+/** The Cluster page's tabs, in order: the task tabs, then the record (activity, logs, configuration, YAML). */
+export const CNPG_CLUSTER_TAB_ORDER = ['overview', 'replication', 'storage', 'performance', 'backups', 'activity', 'logs', 'spec', 'yaml']
+
+/** The tab that explains a health dimension: Serving and Replication in Replication, Storage in Storage, Backups in Backups. */
+export function cnpgDimensionTab(id: CNPGDimension['id']): string {
   switch (id) {
     case 'protection':
-      return cnpgClusterFullPath(namespace, name, ctx, 'protection')
+      return 'backups'
     case 'storage':
-      return `${cnpgClusterFullPath(namespace, name, ctx, 'runtime')}&section=storage`
+      return 'storage'
     default:
-      return cnpgClusterFullPath(namespace, name, ctx, 'runtime')
+      return 'replication'
   }
+}
+
+/** The Cluster page tab where a health dimension is explained (see cnpgDimensionTab). */
+export function cnpgDimensionPath(namespace: string, name: string, ctx: string | undefined, id: CNPGDimension['id']): string {
+  return cnpgClusterFullPath(namespace, name, ctx, cnpgDimensionTab(id))
 }
 
 /**
  * `target` as a tab change on the detail page already open, or null when it
  * is another page. A tab change keeps the page's other params, drops the
- * previous Runtime view unless `target` names one, and is applied like a tab
+ * previous tab's section unless `target` names one, and is applied like a tab
  * click (replacing the history entry) so the page's return label still leads
  * where it says.
  */
@@ -39,8 +42,7 @@ export function cnpgWithinDetail(currentPathname: string, currentSearch: string,
   const [path, query = ''] = target.split('?')
   if (path !== currentPathname) return null
   const params = new URLSearchParams(currentSearch)
-  params.delete('section')
-  params.delete('validate')
+  for (const k of ['section', 'charts', 'instance', 'validate']) params.delete(k)
   for (const [k, v] of new URLSearchParams(query)) params.set(k, v)
   const qs = params.toString()
   return qs ? `${path}?${qs}` : path

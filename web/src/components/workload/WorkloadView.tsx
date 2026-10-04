@@ -335,6 +335,9 @@ interface WorkloadViewProps {
   pushTabHistory?: boolean
   breadcrumb?: ReactNode
   extraTabs?: WorkloadExtraTab[]
+  tabOrder?: string[]
+  subheader?: ReactNode
+  specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode }
 }
 
 interface ImageTargetOwnershipContext {

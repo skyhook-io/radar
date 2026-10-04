@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
-import { Badge, getCNPGImageCatalogEntries, isApiGroup, PaneLoader, Tooltip } from '@skyhook-io/k8s-ui'
+import { Badge, getCNPGImageCatalogEntries, isApiGroup, PaneLoader, StatusDot, Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
 import { useCNPGOperator, type CNPGOperatorComponent, type CNPGOperatorConfig } from '../../api/cnpg'
 import { CNPGOperatorDiagnosisSection } from './CNPGOperatorDiagnosis'
+import { cnpgOperatorConcerns, cnpgRestartHistory } from './operatorStatus'
 import { CNPGWorkspaceHeader, CoverageNotice, coverageEmpty, coverageLabel, worstCoverage, cnpgResource, type CNPGScreenProps } from './shared'
 import { Mono, Notice, ScreenBody, SectionTable, Sub } from '../workspace/layout'
 
@@ -18,7 +19,42 @@ function readiness(c: CNPGOperatorComponent) {
   if (c.readyReplicas === null || c.replicas === null) return <span className="text-theme-text-tertiary">Unknown</span>
   if (c.replicas === 0) return <Badge severity="warning" size="sm">Scaled to 0</Badge>
   const ok = c.readyReplicas >= c.replicas
-  return <Badge severity={ok ? 'success' : c.readyReplicas === 0 ? 'error' : 'warning'} size="sm">{c.readyReplicas}/{c.replicas} ready</Badge>
+  const history = cnpgRestartHistory(c)
+  return (
+    <>
+      <Badge severity={ok ? 'success' : c.readyReplicas === 0 ? 'error' : 'warning'} size="sm">{c.readyReplicas}/{c.replicas} ready</Badge>
+      {history ? (
+        <Sub>
+          <span className={history.recent ? toneTextClass('degraded') : undefined}>{history.text}</span>
+        </Sub>
+      ) : c.pods ? (
+        <Sub>no restarts</Sub>
+      ) : c.podCoverage && c.podCoverage.state !== 'ok' ? (
+        <Sub>restarts not read{c.podCoverage.reason ? `: ${c.podCoverage.reason}` : ''}</Sub>
+      ) : null}
+    </>
+  )
+}
+
+function CurrentState({ op }: { op: NonNullable<ReturnType<typeof useCNPGOperator>['data']> }) {
+  const concerns = cnpgOperatorConcerns(op)
+  return (
+    <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
+      <h3 className="text-sm font-semibold text-theme-text-primary">Current state</h3>
+      {concerns.length === 0 ? (
+        <p className="mt-1 text-sm text-theme-text-secondary">No concerns in what Radar read: every component is ready, the operator is leading and its webhooks have endpoints.</p>
+      ) : (
+        <ul className="mt-1.5 space-y-1">
+          {concerns.map((c) => (
+            <li key={c.text} className="flex items-start gap-2 text-sm">
+              <span className="mt-1.5 shrink-0"><StatusDot tone={c.tone} /></span>
+              <span className={c.tone === 'neutral' ? 'text-theme-text-secondary' : toneTextClass(c.tone)}>{c.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
 }
 
 export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenProps) {
@@ -72,6 +108,7 @@ export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenPr
                 Some workloads are not readable ({coverageGaps.map((k) => `${k === 'deployments' ? 'Deployments' : 'Services'}: ${coverageLabel(op.coverage[k])}`).join(', ')}), so an operator or plugin running in those namespaces may be missing below.
               </Notice>
             )}
+            <CurrentState op={op} />
             <SectionTable
               title="Operator and plugins"
               columns={[
@@ -94,10 +131,10 @@ export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenPr
                     </Tooltip>
                   ),
                 },
-                { header: 'Ready', width: '14%', cell: readiness },
+                { header: 'Ready', width: '24%', cell: readiness },
                 {
                   header: 'Workload',
-                  width: '42%',
+                  width: '32%',
                   cell: (c) =>
                     c.deployment ? (
                       <>Deployment <Mono>{c.deployment}</Mono><Sub>{c.namespace}</Sub></>

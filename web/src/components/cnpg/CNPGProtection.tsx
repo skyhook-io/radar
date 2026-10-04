@@ -1,6 +1,9 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Badge,
+  CNPGClusterBackupFacts,
+  backupsForScheduledBackup,
+  refToSelectedResource,
   FactValue,
   formatAge,
   formatDuration,
@@ -17,7 +20,7 @@ import {
   Tooltip,
 } from '@skyhook-io/k8s-ui'
 import { CNPGWorkspaceHeader, CoverageNotice, clusterResource, coverageEmpty, cnpgResource, type CNPGScreenProps } from './shared'
-import { FilterChips, Mono, namespaceChip, PathText, ScreenBody, SectionTable, Sub } from '../workspace/layout'
+import { FilterChips, Mono, namespaceChip, PathText, ScreenBody, SectionTable, Segments, Sub } from '../workspace/layout'
 
 const SEVERITY: Record<HealthLevel, 'success' | 'warning' | 'alert' | 'error' | 'neutral'> = {
   healthy: 'success',
@@ -79,6 +82,44 @@ function storeHealth(store: any, users: CNPGFleetRow[]): StoreRow['health'] {
   }
 }
 
+function isFailedRun(b: any): boolean {
+  const level = getCNPGBackupStatus(b).level
+  return level === 'unhealthy' || level === 'alert'
+}
+
+function runDetail(b: any): string {
+  const started = Date.parse(backupStart(b) ?? '')
+  const stopped = Date.parse(b?.status?.stoppedAt ?? '')
+  const method = b?.status?.method || b?.spec?.method
+  const took = Number.isFinite(started) && Number.isFinite(stopped) && stopped >= started ? `took ${formatDuration(stopped - started)}` : null
+  return [method, took].filter(Boolean).join(' · ') || '—'
+}
+
+// The newest Backup the schedule created and how it ended; the schedule's own
+// lastScheduleTime says only that it fired.
+function LastRun({ schedule, backups, readable }: { schedule: any; backups: any[]; readable: boolean }) {
+  const fired = schedule?.status?.lastScheduleTime
+  const last = backupsForScheduledBackup(schedule, backups)[0]
+  if (!fired && !last) return <span className="text-theme-text-tertiary">Not yet</span>
+  if (!last) {
+    return (
+      <>
+        {ageText(fired)}
+        <Sub>{readable ? 'no Backup found for it' : 'outcome needs list backups'}</Sub>
+      </>
+    )
+  }
+  const st = getCNPGBackupStatus(last)
+  return (
+    <>
+      {ageText(backupStart(last) ?? fired)}
+      <Sub>
+        <span className={st.level === 'healthy' ? undefined : toneTextClass(st.level)}>{st.text.toLowerCase()}</span>
+      </Sub>
+    </>
+  )
+}
+
 export function CNPGProtection({
   data,
   fleet,
@@ -96,19 +137,21 @@ export function CNPGProtection({
     [fleet.rows, clusterFilter],
   )
 
-  const failed = useMemo(() => {
+  // Every run of the last 7 days, newest first; the failed ones are the fleet's default view.
+  const runs = useMemo(() => {
     const now = Date.now()
     return (data.objects.backups ?? [])
       .filter((b) => isApiGroup(b.apiVersion, 'postgresql.cnpg.io'))
       .filter((b) => {
-        const level = getCNPGBackupStatus(b).level
-        if (level !== 'unhealthy' && level !== 'alert') return false
         const t = Date.parse(backupTime(b) ?? '')
         return Number.isFinite(t) && now - t <= WEEK_MS
       })
       .filter((b) => !clusterFilter || `${b.metadata?.namespace}/${b.spec?.cluster?.name}` === clusterFilter)
       .sort((a, b) => Date.parse(backupTime(b) ?? '') - Date.parse(backupTime(a) ?? ''))
   }, [data.objects.backups, clusterFilter])
+  const failedRuns = useMemo(() => runs.filter((b) => isFailedRun(b)), [runs])
+  const [runFilter, setRunFilter] = useState<'failed' | 'all' | null>(null)
+  const showRuns = runFilter ?? (scopeCluster || failedRuns.length === 0 ? 'all' : 'failed')
 
   const stores = useMemo<StoreRow[]>(() => {
     return (data.objects.objectStores ?? []).map((s) => {
@@ -139,16 +182,23 @@ export function CNPGProtection({
     <div className="flex min-h-0 flex-1 flex-col">
       {!scopeCluster && (
         <CNPGWorkspaceHeader
-          title="Protection"
-          subtitle="Backup outcomes, schedules, destinations and recovery evidence for every cluster. Configured, backed up and restore-tested are separate facts."
+          title="Backups"
+          subtitle="Recovery evidence, backup runs, schedules and destinations for every cluster. Configured, backed up and restore-tested are separate facts."
         />
       )}
       <ScreenBody>
         <CoverageNotice fleet={fleet} data={data} />
         <FilterChips chips={chips} />
 
-        <SectionTable
-          title={scopeCluster ? 'Recovery evidence' : 'Recovery evidence by cluster'}
+        {scopeCluster && rows[0] && (
+          <section className="rounded-xl border border-theme-border bg-theme-surface px-4 pb-3 shadow-theme-sm">
+            <h3 className="pt-3 text-sm font-semibold text-theme-text-primary">Recovery evidence</h3>
+            <CNPGClusterBackupFacts row={rows[0]} onNavigate={(ref) => onInspect(refToSelectedResource(ref))} />
+            <p className="mt-2 text-xs text-theme-text-tertiary">Kubernetes records no restore tests, so restore validation is never shown as passed. Recovery windows come from ObjectStore status.</p>
+          </section>
+        )}
+        {!scopeCluster && <SectionTable
+          title="Recovery evidence by cluster"
           columns={[
             {
               header: 'Cluster',
@@ -225,27 +275,59 @@ export function CNPGProtection({
           minWidth={1000}
           empty={coverageEmpty(data.coverage.clusters, 'PostgreSQL clusters')}
           footer="Kubernetes records no restore tests, so restore validation is never shown as passed. Recovery windows come from ObjectStore status."
-        />
+        />}
 
         <SectionTable
-          title="Failed backups"
-          subtitle="last 7 days"
+          title="Backup runs"
+          subtitle={
+            <span className="inline-flex flex-wrap items-center gap-2">
+              last 7 days
+              <Segments
+                label="Backup runs shown"
+                value={showRuns}
+                onChange={(v) => setRunFilter(v)}
+                options={[
+                  { id: 'failed', label: `Failed ${failedRuns.length}` },
+                  { id: 'all', label: `All ${runs.length}` },
+                ]}
+              />
+            </span>
+          }
           columns={[
-            { header: 'Backup', width: '28%', cell: (b: any) => <Mono>{b.metadata?.name}</Mono> },
-            { header: 'Cluster', width: '16%', cell: (b) => <>{b.spec?.cluster?.name ?? '—'}<Sub>{b.metadata?.namespace}</Sub></> },
-            { header: 'Started', width: '12%', cell: (b) => ageText(backupStart(b)) },
+            { header: 'Backup', width: scopeCluster ? '32%' : '26%', cell: (b: any) => <Mono>{b.metadata?.name}</Mono> },
+            ...(scopeCluster ? [] : [{ header: 'Cluster', width: '14%', cell: (b: any) => <>{b.spec?.cluster?.name ?? '—'}<Sub>{b.metadata?.namespace}</Sub></> }]),
+            { header: 'Started', width: '12%', cell: (b: any) => ageText(backupStart(b)) },
             {
-              header: 'Error',
-              width: '44%',
-              cell: (b) => <span className={toneTextClass('unhealthy')}>{b.status?.error || getCNPGBackupStatus(b).text}</span>,
+              header: 'Outcome',
+              width: '12%',
+              cell: (b: any) => {
+                const st = getCNPGBackupStatus(b)
+                return <Badge severity={SEVERITY[st.level]} size="sm">{st.text}</Badge>
+              },
+            },
+            {
+              header: 'Detail',
+              width: scopeCluster ? '44%' : '36%',
+              cell: (b: any) =>
+                isFailedRun(b) ? (
+                  <span className={toneTextClass('unhealthy')}>{b.status?.error || getCNPGBackupStatus(b).text}</span>
+                ) : (
+                  <span className="text-theme-text-secondary">{runDetail(b)}</span>
+                ),
             },
           ]}
-          rows={failed}
+          rows={showRuns === 'failed' ? failedRuns : runs}
           rowKey={(b) => `${b.metadata?.namespace}/${b.metadata?.name}`}
           rowResource={(b) => cnpgResource('backups', b.metadata?.namespace, b.metadata?.name)}
           onInspect={onInspect}
           inspected={inspected}
-          empty={backupsReadable && data.coverage.backups?.state === 'full' ? 'No failed backups in the last 7 days.' : coverageEmpty(data.coverage.backups, 'failed backups')}
+          empty={
+            backupsReadable && data.coverage.backups?.state === 'full'
+              ? showRuns === 'failed'
+                ? 'No failed backups in the last 7 days.'
+                : 'No backups in the last 7 days.'
+              : coverageEmpty(data.coverage.backups, 'backups')
+          }
         />
 
         <SectionTable
@@ -312,14 +394,15 @@ export function CNPGProtection({
               },
             },
             {
-              header: 'Status',
-              width: '12%',
+              header: 'State',
+              width: '10%',
               cell: (s) => {
                 const st = getCNPGScheduledBackupStatus(s)
-                return <Badge severity={SEVERITY[st.level]} size="sm">{st.text}</Badge>
+                // Enabled says nothing about whether its runs succeed; the last run says that.
+                return st.text === 'Active' ? <span className="text-theme-text-secondary">Enabled</span> : <Badge severity={SEVERITY[st.level]} size="sm">{st.text}</Badge>
               },
             },
-            { header: 'Last run', width: '12%', cell: (s) => ageText(s.status?.lastScheduleTime) },
+            { header: 'Last run', width: '14%', cell: (s) => <LastRun schedule={s} backups={data.objects.backups ?? []} readable={backupsReadable} /> },
             {
               header: 'Next run',
               width: '12%',

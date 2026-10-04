@@ -69,7 +69,15 @@ export function CNPGClusterHASection({
   error,
   onNavigate,
   primaryConflict,
+  title = 'HA and instances',
+  showInstances = true,
+  showCertificates = true,
 }: {
+  title?: string
+  /** False where the host lists the instances itself (with their replication state). */
+  showInstances?: boolean
+  /** False where the host shows certificates elsewhere (CNPGClusterCertificates). */
+  showCertificates?: boolean
   /** status.currentPrimary vs the Pod labelled primary, when they disagree. */
   primaryConflict?: { status: string; labelled: string }
   ha?: CNPGClusterHA
@@ -84,7 +92,7 @@ export function CNPGClusterHASection({
   if (!ha) {
     return (
       <>
-        <SectionHeading>HA and instances</SectionHeading>
+        <SectionHeading>{title}</SectionHeading>
         <div className="text-sm text-theme-text-tertiary">{loading ? 'Reading HA facts…' : `HA facts could not be read${error ? `: ${error}` : ''}`}</div>
       </>
     )
@@ -93,17 +101,15 @@ export function CNPGClusterHASection({
   const spread = cnpgZoneSpread(ha)
   const drift = cnpgImageDrift(ha)
   const pending = cnpgPendingRestart(live)
-  const certs = cnpgCertificateViews(ha.certificates)
   const liveBy = new Map((live ?? []).map((l) => [l.pod, l]))
   const jobs = [...ha.jobs.items].sort((a, b) => (a.phase === 'succeeded' ? 1 : 0) - (b.phase === 'succeeded' ? 1 : 0))
   const versions = new Set((live ?? []).map((l) => l.instanceManagerVersion).filter(Boolean))
 
   const haSummary = cnpgHASummary(ha, live, primaryConflict)
-  const certSummary = cnpgCertificatesSummary(ha.certificates)
 
   return (
     <>
-      <FoldSection title="HA and instances" hint={`sampled ${formatAge(ha.sampledAt)} ago`} summary={haSummary.text} attention={haSummary.attention}>
+      <FoldSection title={title} hint={`sampled ${formatAge(ha.sampledAt)} ago`} summary={haSummary.text} attention={haSummary.attention}>
         <FactGrid>
           <FactRow label="Failure domains">
             {!spread.known ? (
@@ -137,7 +143,7 @@ export function CNPGClusterHASection({
             )}
           </FactRow>
 
-          <FactRow label="Instances">
+          {showInstances && <FactRow label="Instances">
             {ha.pods.state !== 'ok' ? (
               <Unknown text={cnpgHASourceText(ha.pods, 'instance Pods')} />
             ) : (
@@ -146,7 +152,9 @@ export function CNPGClusterHASection({
                   const l = liveBy.get(i.pod)
                   return (
                     <div key={i.pod} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
-                      <StatusDot tone={i.ready ? 'healthy' : 'unhealthy'} />
+                      <Tooltip content={`Pod ${i.ready ? 'ready' : 'not ready'}${l?.roleDetail === 'replayPaused' || l?.roleDetail === 'fileBased' ? ` · ${CNPG_ROLE_DETAIL_TEXT[l.roleDetail]}` : ''}`}>
+                        <StatusDot tone={!i.ready ? 'unhealthy' : l?.roleDetail === 'replayPaused' || l?.roleDetail === 'fileBased' ? 'degraded' : 'healthy'} />
+                      </Tooltip>
                       <RefLink refTo={{ kind: 'Pod', group: '', namespace: ns, name: i.pod }} onNavigate={onNavigate} mono />
                       <span className="text-theme-text-secondary">
                         {l?.roleDetail ? CNPG_ROLE_DETAIL_TEXT[l.roleDetail] : i.role === 'unknown' ? 'role unknown' : i.role}
@@ -166,7 +174,7 @@ export function CNPGClusterHASection({
                 </div>
               </div>
             )}
-          </FactRow>
+          </FactRow>}
 
           <FactRow label="Pending restart">
             {!pending.known && pending.pods.length === 0 ? (
@@ -235,42 +243,52 @@ export function CNPGClusterHASection({
         </FactGrid>
       </FoldSection>
 
-      <FoldSection title="Certificates" summary={certSummary.text} attention={certSummary.attention}>
-        <FactGrid>
-          <FactRow label="Expiry">
-            {certs.length === 0 ? (
-              <Unknown text="No expiry reported by the operator" />
-            ) : (
-              <div className="space-y-0.5">
-                {certs.map((c) => (
-                  <div key={c.secret} className="text-xs">
-                    <RefLink refTo={{ kind: 'Secret', group: '', namespace: ns, name: c.secret }} onNavigate={onNavigate} mono />{' '}
-                    <span className={toneTextClass(c.tone)}>
-                      {c.expiresAt ? (c.daysLeft !== undefined && c.daysLeft < 0 ? `expired ${c.expiresAt}` : `expires in ${c.daysLeft} d`) : `expiry unreadable (“${c.raw}”)`}
-                    </span>
-                    <span className="text-theme-text-secondary">
-                      {' · '}
-                      {c.renewal === 'operator' ? 'CloudNativePG renews it' : 'you renew it (spec.certificates)'}
-                    </span>
-                    {c.renewal === 'user' &&
-                      (c.certManager ? (
-                        <span className="text-theme-text-secondary">
-                          {' · cert-manager '}
-                          <RefLink refTo={{ kind: 'Certificate', group: 'cert-manager.io', namespace: ns, name: c.certManager.certificate }} onNavigate={onNavigate} mono />
-                        </span>
-                      ) : c.metadata?.state === 'ok' ? (
-                        <span className="text-theme-text-tertiary"> · not issued by cert-manager</span>
-                      ) : (
-                        <span className="text-theme-text-tertiary"> · issuer unknown ({cnpgHASourceText(c.metadata, 'Secret metadata')})</span>
-                      ))}
-                  </div>
-                ))}
-                <div className="text-[11.5px] text-theme-text-tertiary">status.certificates.expirations</div>
-              </div>
-            )}
-          </FactRow>
-        </FactGrid>
-      </FoldSection>
+      {showCertificates && <CNPGClusterCertificates ha={ha} onNavigate={onNavigate} />}
     </>
+  )
+}
+
+/** Certificate expiry and who renews each certificate, folded to one line unless one needs attention. */
+export function CNPGClusterCertificates({ ha, onNavigate }: { ha: CNPGClusterHA; onNavigate?: NavigateToRef }) {
+  const ns = ha.cluster.namespace
+  const certs = cnpgCertificateViews(ha.certificates)
+  const certSummary = cnpgCertificatesSummary(ha.certificates)
+  return (
+    <FoldSection title="Certificates" summary={certSummary.text} attention={certSummary.attention}>
+      <FactGrid>
+        <FactRow label="Expiry">
+          {certs.length === 0 ? (
+            <Unknown text="No expiry reported by the operator" />
+          ) : (
+            <div className="space-y-0.5">
+              {certs.map((c) => (
+                <div key={c.secret} className="text-xs">
+                  <RefLink refTo={{ kind: 'Secret', group: '', namespace: ns, name: c.secret }} onNavigate={onNavigate} mono />{' '}
+                  <span className={toneTextClass(c.tone)}>
+                    {c.expiresAt ? (c.daysLeft !== undefined && c.daysLeft < 0 ? `expired ${c.expiresAt}` : `expires in ${c.daysLeft} d`) : `expiry unreadable (“${c.raw}”)`}
+                  </span>
+                  <span className="text-theme-text-secondary">
+                    {' · '}
+                    {c.renewal === 'operator' ? 'CloudNativePG renews it' : 'you renew it (spec.certificates)'}
+                  </span>
+                  {c.renewal === 'user' &&
+                    (c.certManager ? (
+                      <span className="text-theme-text-secondary">
+                        {' · cert-manager '}
+                        <RefLink refTo={{ kind: 'Certificate', group: 'cert-manager.io', namespace: ns, name: c.certManager.certificate }} onNavigate={onNavigate} mono />
+                      </span>
+                    ) : c.metadata?.state === 'ok' ? (
+                      <span className="text-theme-text-tertiary"> · not issued by cert-manager</span>
+                    ) : (
+                      <span className="text-theme-text-tertiary"> · issuer unknown ({cnpgHASourceText(c.metadata, 'Secret metadata')})</span>
+                    ))}
+                </div>
+              ))}
+              <div className="text-[11.5px] text-theme-text-tertiary">status.certificates.expirations</div>
+            </div>
+          )}
+        </FactRow>
+      </FactGrid>
+    </FoldSection>
   )
 }

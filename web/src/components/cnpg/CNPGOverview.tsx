@@ -5,6 +5,7 @@ import { ArrowRight, Database, FileText, Search } from 'lucide-react'
 import {
   CNPG_PROBLEM_CATEGORIES,
   PROBLEM_TONE,
+  cnpgDimensions,
   cnpgReadyInstances,
   FactValue,
   StatusDot,
@@ -82,6 +83,37 @@ function ReadyCell({ row }: { row: CNPGFleetRow }) {
         r.text
       )}
       <InstancePills row={row} />
+    </>
+  )
+}
+
+// The Storage cell is the same assessment as the Cluster page's Storage chip:
+// measured usage, or the WAL an inactive slot holds, or why neither is known.
+function storageFact(row: CNPGFleetRow) {
+  const d = cnpgDimensions({ row }).find((x) => x.id === 'storage')!
+  return { text: d.text, tone: d.tone, source: d.source }
+}
+
+/** The one reason no cluster's volume usage is measured, when that is so; the column then says it once. */
+function cnpgStorageUnmeasured(rows: CNPGFleetRow[]): string | null {
+  if (rows.length === 0 || rows.some((r) => !r.disk || r.disk.tone !== 'unknown')) return null
+  const reasons = new Set(rows.map((r) => r.disk?.source ?? r.disk?.text ?? ''))
+  return reasons.size === 1 ? [...reasons][0] || 'no measurement' : 'no measurement'
+}
+
+function StorageCell({ row, quiet }: { row: CNPGFleetRow; quiet: boolean }) {
+  const fact = storageFact(row)
+  if (quiet && fact.tone === 'unknown') {
+    return (
+      <Tooltip content={fact.source ?? 'Volume usage not measured'}>
+        <span className="text-theme-text-tertiary">—</span>
+      </Tooltip>
+    )
+  }
+  return (
+    <>
+      <FactValue fact={fact} />
+      {row.diskGrowth && <div className="text-xs"><FactValue fact={row.diskGrowth} className="text-theme-text-tertiary" /></div>}
     </>
   )
 }
@@ -199,7 +231,7 @@ export function CNPGOverview({
                 : { title: `No PostgreSQL clusters in ${context}`, detail: 'The CloudNativePG CRDs are installed. Clusters, backups and declarations appear here once they exist.' }
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <CNPGWorkspaceHeader title="Overview" />
+        <CNPGWorkspaceHeader title="Clusters" />
         <ScreenEmptyState
           icon={Database}
           title={empty.title}
@@ -242,11 +274,12 @@ export function CNPGOverview({
   }
 
   const lowerBound = fleet.incompleteKinds.length > 0
+  const storageUnmeasured = cnpgStorageUnmeasured(fleet.rows)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <CNPGWorkspaceHeader
-        title="Overview"
+        title="Clusters"
         subtitle={
           <>
             {total} PostgreSQL {total === 1 ? 'cluster' : 'clusters'} · {fleet.attentionCount}
@@ -296,6 +329,11 @@ export function CNPGOverview({
           </div>
 
           <FilterChips chips={chips} />
+          {storageUnmeasured && (
+            <div className="text-xs text-theme-text-tertiary">
+              Storage: volume usage is not measured for any cluster here ({storageUnmeasured}). Retained WAL and resize state are on each cluster’s Storage tab.
+            </div>
+          )}
 
           <div className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
             <div className={TABLE_WRAP}>
@@ -303,23 +341,19 @@ export function CNPGOverview({
                   two fixed columns take 16rem and the percentages stay under the rest. */}
               <table className="w-full min-w-[820px] table-fixed">
                 <colgroup>
+                  <col className="w-[22%]" />
+                  <col className="w-[18%]" />
+                  <col className="w-[13%]" />
                   <col className="w-[15%]" />
-                  <col className="w-[8.5rem]" />
-                  <col className="w-[11%]" />
-                  <col className="w-[10%]" />
-                  <col className="w-[7%]" />
-                  <col className="w-[8%]" />
-                  <col className="w-[17%]" />
+                  <col />
                   <col className="w-[7.5rem]" />
                 </colgroup>
                 <thead className={TABLE_HEAD}>
                   <tr>
                     <th className={TH_WRAP}>Cluster</th>
-                    <th className={TH_WRAP}>Ready</th>
                     <th className={TH_WRAP}>Replication</th>
-                    <th className={TH_WRAP}>Protection</th>
-                    <th className={TH_WRAP}>Disk</th>
-                    <th className={TH_WRAP}>Declared</th>
+                    <th className={TH_WRAP}>Storage</th>
+                    <th className={TH_WRAP}>Backups</th>
                     <th className={TH_WRAP}>Needs attention</th>
                     <th className={TH_WRAP}><span className="sr-only">Actions</span></th>
                   </tr>
@@ -351,19 +385,15 @@ export function CNPGOverview({
                                   </span>
                                 )}
                               </div>
+                              <div className="mt-0.5 font-mono text-xs">
+                                <ReadyCell row={row} />
+                              </div>
                             </div>
                           </div>
                         </td>
-                        <td className={clsx(TD, 'font-mono')}>
-                          <ReadyCell row={row} />
-                        </td>
                         <td className={TD}><FactValue fact={row.replication} /></td>
+                        <td className={TD}><StorageCell row={row} quiet={!!storageUnmeasured} /></td>
                         <td className={TD}><FactValue fact={row.protection.summary} /></td>
-                        <td className={TD}>
-                          <FactValue fact={row.disk ?? { text: 'Reading…', tone: 'unknown' }} />
-                          {row.diskGrowth && <div className="text-xs"><FactValue fact={row.diskGrowth} className="text-theme-text-tertiary" /></div>}
-                        </td>
-                        <td className={TD}><FactValue fact={row.declarations.summary} /></td>
                         <td className={clsx(TD, 'overflow-hidden')}>
                           <AttentionCell
                             row={row}

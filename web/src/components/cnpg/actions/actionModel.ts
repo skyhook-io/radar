@@ -13,6 +13,8 @@ export interface StandbyChoice {
   replayBacklogBytes?: number
   state?: string
   syncState?: string
+  /** What the live read shows wrong with it as a new primary: not connected, replay paused, another timeline. */
+  concerns?: string[]
 }
 
 function pad(n: number) {
@@ -36,10 +38,10 @@ export function describeBackupMethod(m: CNPGBackupMethod): string {
   }
 }
 
-/** Synchronous standbys first, then the least WAL still to replay, then the least replay delay; ineligible never. */
+/** Synchronous standbys first, then the least WAL still to replay, then the least replay delay; one with concerns last; ineligible never. */
 export function pickDefaultStandby(standbys: StandbyChoice[]): StandbyChoice | undefined {
   const eligible = standbys.filter((s) => !s.ineligible)
-  const rank = (s: StandbyChoice) => (s.syncState === 'sync' || s.syncState === 'quorum' ? 0 : 1)
+  const rank = (s: StandbyChoice) => ((s.concerns?.length ?? 0) > 0 ? 2 : s.syncState === 'sync' || s.syncState === 'quorum' ? 0 : 1)
   const inf = Number.POSITIVE_INFINITY
   return [...eligible].sort(
     (a, b) =>
@@ -52,6 +54,28 @@ export function pickDefaultStandby(standbys: StandbyChoice[]): StandbyChoice | u
 /** The switchover target: the default pick until the user has chosen one (or the dialog opened on one). */
 export function switchoverDefault(input: { touched: boolean; current: string | undefined; standbys: StandbyChoice[] }): string | undefined {
   return input.touched ? input.current : pickDefaultStandby(input.standbys)?.pod
+}
+
+/** The live facts that make a standby a poor switchover target, in the words the dialog shows. */
+export function switchoverConcerns(
+  primary: { state: string; timeline?: number; replication?: { applicationName: string }[] | null } | undefined,
+  standby: { pod: string; status: { state: string; timeline?: number; replayPaused?: boolean; roleDetail?: string } } | undefined,
+): string[] {
+  if (!primary || !standby) return []
+  const out: string[] = []
+  if (primary.state === 'ok' && primary.replication && !primary.replication.some((r) => r.applicationName === standby.pod)) out.push('not connected to the primary')
+  if (standby.status.replayPaused || standby.status.roleDetail === 'replayPaused') out.push('replay paused')
+  if (standby.status.timeline !== undefined && primary.timeline !== undefined && standby.status.timeline !== primary.timeline) {
+    out.push(`timeline ${standby.status.timeline}, primary on ${primary.timeline}`)
+  }
+  return out
+}
+
+/** The warning for a chosen target the live read shows trouble with; nothing it says depends on how CloudNativePG then handles the promotion. */
+export function switchoverConcernWarning(pod: string, concerns: string[]): string | null {
+  if (concerns.length === 0) return null
+  const notReceiving = concerns.includes('not connected to the primary')
+  return `${pod}: ${concerns.join(' · ')}. ${notReceiving ? 'It is not receiving WAL from the current primary, so whatever was written after it stopped receiving is not on it, and ' : ''}Radar cannot measure how far behind it is. Check its logs, or pick a streaming standby.`
 }
 
 /**

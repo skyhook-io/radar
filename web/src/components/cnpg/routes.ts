@@ -3,8 +3,8 @@ import { CNPG_KIND_BY_KEY, type CNPGWorkspaceKey } from '@skyhook-io/k8s-ui'
 export type CNPGScreen = 'overview' | 'protection' | 'declarations' | 'pooling' | 'operator'
 
 export const CNPG_SCREENS: { id: CNPGScreen; label: string; path: string }[] = [
-  { id: 'overview', label: 'Overview', path: '/cnpg' },
-  { id: 'protection', label: 'Protection', path: '/cnpg/protection' },
+  { id: 'overview', label: 'Clusters', path: '/cnpg' },
+  { id: 'protection', label: 'Backups', path: '/cnpg/protection' },
   { id: 'declarations', label: 'Declarations', path: '/cnpg/declarations' },
   { id: 'pooling', label: 'Pooling', path: '/cnpg/pooling' },
   { id: 'operator', label: 'Operator', path: '/cnpg/operator' },

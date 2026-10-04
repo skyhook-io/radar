@@ -105,7 +105,8 @@ export function cnpgStandbyHeadline(
     return { text: 'fenced · shutdown unverified', tone: 'unknown' }
   }
   if (inst.role === 'unknown') return { text: 'role unknown', tone: 'unknown' }
-  return { text: ctx.primaryRead ? 'not connected to the primary' : 'unknown', tone: 'unknown' }
+  // A standby the primary reports no row for receives nothing: a concern, not an unknown.
+  return ctx.primaryRead ? { text: 'not connected to the primary', tone: 'degraded' } : { text: 'unknown', tone: 'unknown' }
 }
 
 type PromLatest = { value: number; at: number; stale: boolean } | undefined

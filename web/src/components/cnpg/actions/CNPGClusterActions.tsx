@@ -14,7 +14,17 @@ import { cnpgOperatorActionNote } from '../operatorStatus'
 import { CNPGRestoreDialog } from '../recovery/CNPGRestoreDialog'
 import { CNPGReportDialog } from './CNPGReportDialog'
 import { useOpenCNPGPsql } from './useOpenCNPGPsql'
-import { backupNameFor, describeBackupMethod, pickDefaultStandby, switchoverCandidateFacts, switchoverDefault, switchoverLagNote, type StandbyChoice } from './actionModel'
+import {
+  backupNameFor,
+  describeBackupMethod,
+  pickDefaultStandby,
+  switchoverCandidateFacts,
+  switchoverConcernWarning,
+  switchoverConcerns,
+  switchoverDefault,
+  switchoverLagNote,
+  type StandbyChoice,
+} from './actionModel'
 import { lsnDistance, standbyOwnBacklog } from '../lsn'
 
 type DialogKind = CNPGClusterActionName | 'restore' | 'report' | null
@@ -53,11 +63,16 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
   const menuPresence = useAnimatedUnmount(menu, overlayExitMs('menu'))
   useEffect(() => {
     if (!menu) return
+    // Capture phase, consumed: the page's own Escape (leave the full view)
+    // must not also fire when Escape only closes this menu.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMenu(false)
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      setMenu(false)
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
   }, [menu])
   const actions = caps.data?.actions
   const openPsql = useOpenCNPGPsql()
@@ -198,7 +213,7 @@ const UNSUPPORTED = {
   writes: [],
   scope: { kind: 'status' as const },
   success: () => '',
-  invalid: 'Restart a single instance from its row in the Runtime tab.',
+  invalid: 'Restart a single instance from its row in the Replication tab.',
 }
 
 interface DialogSpec {
@@ -353,7 +368,8 @@ export function ClusterActionDialog({
         const lag = lags.get(i.pod) ?? (own !== undefined ? { replayBacklogBytes: own } : undefined)
         const cap = caps.instanceActions?.[i.pod]?.switchoverTarget
         const ineligible = i.fenced ? 'fenced' : !i.podExists ? 'Pod missing' : !i.ready ? 'not ready' : cap && !cap.allowed ? cap.reason ?? 'not eligible' : undefined
-        return { pod: i.pod, podUID: i.podUID, ineligible, ...lag }
+        const concerns = switchoverConcerns(primary?.status, runtime.data?.instances.find((x) => x.pod === i.pod))
+        return { pod: i.pod, podUID: i.podUID, ineligible, ...lag, concerns }
       })
   }, [facts, runtime.data, caps.instanceActions])
   const [switchTarget, setSwitchTarget] = useState<string | undefined>(() => initialPod ?? pickDefaultStandby(standbys)?.pod)
@@ -471,11 +487,13 @@ export function ClusterActionDialog({
                         }}
                       />
                       <span className="font-mono">{s.pod}</span>
-                      <span className="text-xs text-theme-text-tertiary">
+                      <span className={clsx('text-xs', !s.ineligible && s.concerns?.length ? toneTextClass('degraded') : 'text-theme-text-tertiary')}>
                         {s.ineligible ??
-                          [s.state, s.syncState, ...(s.replayLagSeconds !== undefined || s.replayBacklogBytes !== undefined ? switchoverCandidateFacts(s) : [runtime.isLoading ? 'lag loading…' : 'lag unknown'])]
-                            .filter(Boolean)
-                            .join(' · ')}
+                          (s.concerns?.length
+                            ? s.concerns.join(' · ')
+                            : [s.state, s.syncState, ...(s.replayLagSeconds !== undefined || s.replayBacklogBytes !== undefined ? switchoverCandidateFacts(s) : [runtime.isLoading ? 'lag loading…' : 'lag unknown'])]
+                                .filter(Boolean)
+                                .join(' · '))}
                       </span>
                     </label>
                     {behind && switchTarget === s.pod && <div className={clsx('ml-6 mt-0.5 text-xs', toneTextClass('degraded'))}>{behind}</div>}
@@ -492,7 +510,13 @@ export function ClusterActionDialog({
             ha.data?.quorum.enabled && switchTarget && ha.data.quorum.status && ha.data.quorum.status.standbyNames.length > 0 && !ha.data.quorum.status.standbyNames.includes(switchTarget)
               ? `${switchTarget} is not among the recorded potentially synchronous standbys (${ha.data.quorum.status.standbyNames.join(', ')}).`
               : null,
-            chosenStandby && chosenStandby.replayLagSeconds === undefined && chosenStandby.replayBacklogBytes === undefined ? 'Replication lag for this standby is not known (runtime data unavailable).' : null,
+            chosenStandby && chosenStandby.concerns?.length
+              ? switchoverConcernWarning(chosenStandby.pod, chosenStandby.concerns)
+              : chosenStandby && chosenStandby.replayLagSeconds === undefined && chosenStandby.replayBacklogBytes === undefined
+                ? runtime.data && runtime.data.permission.proxy !== 'denied'
+                  ? 'How far behind this standby is was not reported.'
+                  : 'How far behind this standby is is unknown: live instance data is not readable.'
+                : null,
           ].filter(Boolean) as string[],
           notes: ['The operator performs a controlled shutdown of the old primary; its duration depends on spec.switchoverDelay and open transactions.'],
           writes: [

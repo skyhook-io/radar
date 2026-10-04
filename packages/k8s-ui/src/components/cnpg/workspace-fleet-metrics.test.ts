@@ -82,7 +82,7 @@ describe('applyCNPGFleetMetrics', () => {
       [reading('ha', { state: 'ok', seconds: 0.2, pod: 'ha-2' }, { state: 'ok', bytesPerHour: 1024 ** 3 / 24, claim: 'ha-1', instance: 'ha-1' })],
       { source: 'prometheus', growthSource: 'deriv' },
     )
-    expect(row(f, 'ha').diskGrowth?.text).toBe('+1 GB/day')
+    expect(row(f, 'ha').diskGrowth?.text).toBe('+1.0 GiB/day')
     expect(row(f, 'ha').replication.tone).toBe('healthy')
     expect(row(f, 'dark').diskGrowth).toBeUndefined()
   })
@@ -143,5 +143,50 @@ describe('sustained replication lag', () => {
     )
     expect(row(f, 'ha').problems[0]).toMatchObject({ severity: 'critical', title: 'ha-2 ≥ 6 min behind in every sample for 10 min' })
     expect(row(f, 'dark').problems).toHaveLength(0)
+  })
+})
+
+describe('standbys that receive nothing, and the WAL slots hold', () => {
+  const src = { source: 'prometheus' as const, lagSource: 'Prometheus cnpg_pg_replication_lag' }
+  it('a standby whose WAL receiver is down is a problem, never "lag 0 s"', () => {
+    const f = applyCNPGFleetMetrics(fleet(), [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-2', standbys: 1, receiving: 0, receiverDown: ['ha-2'] })], src)
+    const r = row(f, 'ha')
+    expect(r.replication.text).toBe('1/1 Pods ready · ha-2 not receiving WAL')
+    expect(r.replication.tone).toBe('unhealthy')
+    expect(r.attention).toBe(true)
+    const p = r.problems.find((x) => x.id === 'standby:db/ha:ha-2')!
+    expect(p).toMatchObject({ severity: 'critical', title: 'ha-2 is not receiving WAL from the primary', subject: { kind: 'Pod', name: 'ha-2' }, measuredBy: 'Prometheus' })
+    expect(p.detail).toContain('Its WAL receiver is down')
+  })
+  it('lag alone does not establish streaming when the exporter reports no receiver state', () => {
+    const f = applyCNPGFleetMetrics(fleet(), [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-2', standbys: 1, receiverUnknown: true })], src)
+    expect(row(f, 'ha').replication).toMatchObject({ text: '1/1 Pods ready · lag 0 s · streaming unverified', tone: 'unknown' })
+    expect(row(f, 'ha').attention).toBe(false)
+  })
+  it('raises an inactive slot only from the primary, at 1 GiB or more, naming the standby it serves', () => {
+    const big = 4.9e9
+    const f = applyCNPGFleetMetrics(
+      fleet(),
+      [
+        {
+          ...reading('ha', { state: 'ok', seconds: 0.1, pod: 'ha-2', standbys: 1, receiving: 1 }),
+          slots: {
+            state: 'ok',
+            inactive: [
+              { slot: '_cnpg_ha_2', pod: 'ha-1', role: 'primary', bytes: big },
+              { slot: '_cnpg_ha_2', pod: 'ha-2', role: 'standby', bytes: big },
+            ],
+          },
+        },
+        { ...reading('dark', { state: 'ok', seconds: 0.1, pod: 'dark-2', standbys: 1, receiving: 1 }), slots: { state: 'ok', inactive: [{ slot: '_cnpg_dark_9', pod: 'dark-2', role: 'standby', bytes: big }] } },
+      ],
+      src,
+    )
+    const slots = row(f, 'ha').problems.filter((p) => p.id.startsWith('slot:'))
+    expect(slots).toHaveLength(1)
+    expect(slots[0].title).toBe('Inactive slot _cnpg_ha_2 holds 4.6 GiB of WAL on ha-1 for ha-2')
+    expect(row(f, 'dark').problems.some((p) => p.id.startsWith('slot:'))).toBe(false)
+    const small = applyCNPGFleetMetrics(fleet(), [{ ...reading('ha', { state: 'ok', seconds: 0.1, pod: 'ha-2' }), slots: { state: 'ok', inactive: [{ slot: '_cnpg_ha_2', pod: 'ha-1', role: 'primary', bytes: 5e8 }] } }], src)
+    expect(row(small, 'ha').problems.some((p) => p.id.startsWith('slot:'))).toBe(false)
   })
 })

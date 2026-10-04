@@ -11,7 +11,8 @@ export function cnpgRowStatus(row: Pick<CNPGFleetRow, 'attention' | 'problems' |
   if (row.attention && counted.length > 0) {
     const critical = counted.filter((p) => p.severity === 'critical')
     const lead = critical[0] ?? counted[0]
-    const more = counted.length - 1
+    // The same count the Needs attention cell shows: every other problem, posture included.
+    const more = row.problems.length - 1
     return {
       tone: critical.length > 0 ? 'unhealthy' : 'degraded',
       label: `${critical.length > 0 ? 'Critical' : 'Needs attention'}: ${lead.title}${more > 0 ? ` (+${more} more)` : ''}`,
@@ -21,18 +22,18 @@ export function cnpgRowStatus(row: Pick<CNPGFleetRow, 'attention' | 'problems' |
   switch (level) {
     case 'healthy':
     case 'neutral':
-      return { tone: level, label: `No problems found · ${phase}` }
+      return { tone: level, label: `No concerns detected in what Radar read · ${phase}` }
     case 'unknown':
       return { tone: 'unknown', label: `Status unknown · ${phase}` }
     default:
-      return { tone: level, label: `No problems found, but the cluster is not healthy · ${phase}` }
+      return { tone: level, label: `No concerns detected, but the cluster is not healthy · ${phase}` }
   }
 }
 
 /** "pg-1 · replica (standby) · not ready": CNPG's docs say standby where the role label says replica. */
 export function cnpgInstancePillLabel(pod: CNPGFleetRow['pods'][number]): string {
   const role = pod.role === 'primary' ? 'primary' : pod.role === 'replica' ? 'replica (standby)' : 'role unknown'
-  const ready = pod.ready === true ? 'ready' : pod.ready === false ? 'not ready' : 'readiness unknown'
+  const ready = pod.ready === true ? 'Pod ready' : pod.ready === false ? 'Pod not ready' : 'Pod readiness unknown'
   return `${pod.name} · ${role} · ${ready}`
 }
 

@@ -6,8 +6,6 @@ import {
   CNPG_GROUP,
   CNPGBackupSummary,
   CNPGClusterSummary,
-  CNPGClusterHASection,
-  cnpgDimensions,
   CNPGDatabaseSummary,
   CNPGImageCatalogSummary,
   CNPGObjectStoreSummary,
@@ -37,7 +35,7 @@ import { useCNPGRuntime, useCNPGScheduleCapabilities, useCNPGWorkspace, type CNP
 import { cnpgPublisherSlotsFrom, useCNPGPublisherSlots } from './logicalSlots'
 import { cnpgBaseBackupFacts, describeCNPGBaseBackup } from './baseBackup'
 import { useCNPGPoolerLive } from './useCNPGPoolerLive'
-import { cnpgInstanceLive, cnpgInstanceLiveUnavailable, cnpgReplicationGap, cnpgReplicationLive, useCNPGClusterHA, withLiveReplication } from '../../api/cnpg-ha'
+import { useCNPGClusterAssessment } from './useCNPGClusterAssessment'
 import { CNPGMaintenanceBanner } from './actions/CNPGMaintenanceBanner'
 import { CNPG_CONNECT_PARAM, cnpgConnectParamValue } from './actions/CNPGConnectButton'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
@@ -85,12 +83,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
   const { connection } = useConnection()
   // The workspace is read for the object's own namespace: an explicitly opened
   // Cluster shows its facts whatever the namespace filter is.
-  const { query, fleet } = useCNPGFleet([namespace])
-  const runtime = useCNPGRuntime(namespace, name)
-  const ha = useCNPGClusterHA(namespace, name)
-  const baseRow = fleet?.rows.find((r) => r.namespace === namespace && r.name === name)
-  const row = baseRow ? withLiveReplication(baseRow, runtime.data) : undefined
-  const live = cnpgInstanceLive(runtime.data)
+  const { query, runtime, ha, row, dimensions } = useCNPGClusterAssessment(namespace, name)
   if (!row) {
     if (query.isLoading) return <PaneLoader label="Loading summary…" className="h-40" />
     return (
@@ -98,7 +91,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
         {query.error instanceof Error
           ? `The CloudNativePG summary could not be loaded: ${query.error.message}`
           : 'Radar cannot read this Cluster with your access.'}{' '}
-        Spec & status still shows everything the object reports.
+        Spec & status (Configuration on a Cluster) still shows everything the object reports.
       </div>
     )
   }
@@ -134,7 +127,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
                       navigate({ search: p.toString() }, { replace: true, state: location.state })
                       return
                     }
-                    const protection = cnpgClusterFullPath(namespace, name, connection.context || undefined, 'protection')
+                    const protection = cnpgClusterFullPath(namespace, name, connection.context || undefined, 'backups')
                     go(step === 'validate' ? `${protection}&validate=1` : protection)
                   },
                 }}
@@ -144,19 +137,8 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
         }
         onSelectDimension={(id) => go(cnpgDimensionPath(namespace, name, connection.context || undefined, id))}
         initialProblemsExpanded={context === 'expanded' && new URLSearchParams(location.search).get('problems') === 'all'}
-        dimensions={cnpgDimensions({ row, ha: ha.data, replication: cnpgReplicationLive(runtime.data), replicationGap: cnpgReplicationGap(runtime.data, runtime.error) })}
+        dimensions={dimensions}
         stateFacts={<BaseBackupFact runtime={runtime.data} />}
-        haSection={
-          <CNPGClusterHASection
-            ha={ha.data}
-            live={live}
-            liveUnavailable={cnpgInstanceLiveUnavailable(runtime.data, runtime.error)}
-            loading={ha.isLoading}
-            error={ha.error instanceof Error ? ha.error.message : undefined}
-            onNavigate={goRef}
-            primaryConflict={row.primaryConflict}
-          />
-        }
         actions={
           context === 'drawer'
             ? [
@@ -176,9 +158,9 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
                     }),
                 },
                 {
-                  label: 'Protection',
+                  label: 'Backups',
                   onClick: () =>
-                    navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined, 'protection'), {
+                    navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined, 'backups'), {
                       state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
                     }),
                 },

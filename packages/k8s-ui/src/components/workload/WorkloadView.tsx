@@ -314,6 +314,12 @@ interface WorkloadViewProps {
   }) => ReactNode
   /** Extra tabs for the expanded view (e.g. a domain's own sections). */
   extraTabs?: WorkloadExtraTab[]
+  /** Expanded view: a line under the title, above the tabs, shown on every tab. */
+  subheader?: ReactNode
+  /** Expanded view: tab ids in display order; tabs not listed follow in their usual order. */
+  tabOrder?: string[]
+  /** Expanded view: relabel the "Spec & status" tab and show content above the resource's renderer. */
+  specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode }
   /** Domain actions rendered in the header (drawer and expanded). */
   renderHeaderActions?: (props: { resource: any; context: 'drawer' | 'expanded'; onNavigate?: NavigateToResource }) => ReactNode
   /** Render a full replacement for the expanded Overview tab. */
@@ -466,6 +472,9 @@ export function WorkloadView({
   renderExpandedOverview,
   renderSummary,
   extraTabs,
+  tabOrder,
+  specTab,
+  subheader,
   renderHeaderActions,
   renderRelatedYaml,
   renderMetricsTab,
@@ -816,7 +825,7 @@ export function WorkloadView({
   const drawerSummary = !expanded && resource ? renderSummary?.({ ...summaryContext, context: 'drawer' }) ?? null : null
   const tabs: DetailShellTab<TabType>[] = [
     { id: 'overview', label: 'Overview', icon: <Layers className="w-4 h-4" /> },
-    { id: 'spec', label: 'Spec & status', icon: <FileText className="w-4 h-4" />, hidden: !expandedSummary },
+    { id: 'spec', label: specTab?.label ?? 'Spec & status', icon: specTab?.icon ?? <FileText className="w-4 h-4" />, hidden: !expandedSummary },
     { id: 'topology', label: 'Topology', icon: <Network className="w-4 h-4" />, hidden: topologyTabHidden },
     {
       id: 'timeline',
@@ -835,7 +844,7 @@ export function WorkloadView({
     { id: 'cost', label: 'Cost', icon: <Coins className="w-4 h-4" />, hidden: !costTabVisible },
     { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" /> },
   ]
-  const allTabs = mergeExtraTabs(tabs, expanded ? extraTabs : undefined)
+  const allTabs = orderTabs(mergeExtraTabs(tabs, expanded ? extraTabs : undefined), expanded ? tabOrder : undefined)
   const requestedTabAvailable = allTabs.some((tab) => tab.id === requestedTab && !tab.hidden)
   const effectiveTab: TabType = requestedTabAvailable ? requestedTab : 'overview'
   const activeExtraTab = expanded ? extraTabs?.find((x) => x.id === effectiveTab) : undefined
@@ -1053,6 +1062,7 @@ export function WorkloadView({
     <OperationalIssuesShownContext.Provider value={!!hasOperationalIssues || !!operationalIssuesPending}>
     <DetailShell
       breadcrumb={breadcrumb}
+      subheader={subheader}
       nav={
         breadcrumb || hideBackButton ? undefined : (
           <Tooltip content="Go back (Esc)" delay={150} position="bottom">
@@ -1219,7 +1229,14 @@ export function WorkloadView({
               updatesError={resourceFocusedUpdatesError}
               extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name, group, context: 'expanded' })}
               introContent={overviewIntro}
-              leadContent={hasOperationalIssues && renderOverviewLead ? renderOverviewLead({ kind, namespace, name }) : undefined}
+              leadContent={
+                effectiveTab === 'spec' && specTab?.lead ? (
+                  <>
+                    {specTab.lead}
+                    {hasOperationalIssues && renderOverviewLead ? renderOverviewLead({ kind, namespace, name }) : null}
+                  </>
+                ) : hasOperationalIssues && renderOverviewLead ? renderOverviewLead({ kind, namespace, name }) : undefined
+              }
               onEvaluateCapacity={onEvaluateCapacity}
               recentImageSave={recentImageSave}
             />
@@ -3916,6 +3933,15 @@ function mergeAndRankEvents(events: TimelineEvent[], updates: TimelineEvent[]): 
       if (aProblem !== bProblem) return bProblem - aProblem
       return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     })
+}
+
+function orderTabs(tabs: DetailShellTab<TabType>[], order: string[] | undefined): DetailShellTab<TabType>[] {
+  if (!order || order.length === 0) return tabs
+  const rank = (id: string) => {
+    const i = order.indexOf(id)
+    return i < 0 ? order.length : i
+  }
+  return tabs.map((t, i) => ({ t, i })).sort((a, b) => rank(a.t.id) - rank(b.t.id) || a.i - b.i).map((x) => x.t)
 }
 
 function mergeExtraTabs(tabs: DetailShellTab<TabType>[], extra: WorkloadExtraTab[] | undefined): DetailShellTab<TabType>[] {

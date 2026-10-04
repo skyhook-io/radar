@@ -16,6 +16,7 @@ export * from './schedule'
 export * from './logicalReplication'
 export * from './CNPGLogicalPath'
 export {
+  backupsForScheduledBackup,
   inferredObjectStoreHealth,
   relationUnavailable,
   usersOfObjectStore,

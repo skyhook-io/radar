@@ -32,7 +32,7 @@ function intervalQuery(params: WorkloadLogsFetchParams, since: string, until: st
 /**
  * Logs merged from every instance Pod of a CloudNativePG Cluster. `?pod=`
  * preselects one instance (the fleet's "Logs" action and "Open instance logs");
- * `?since=&until=` bounds them to an interval selected on a Runtime trend.
+ * `?since=&until=` bounds them to an interval selected on a History chart.
  */
 export function CNPGClusterLogs({ namespace, name }: { namespace: string; name: string }) {
   const [searchParams] = useSearchParams()
@@ -65,7 +65,7 @@ export function CNPGClusterLogs({ namespace, name }: { namespace: string; name: 
           <CNPGIntervalBanner
             since={interval.since}
             until={interval.until}
-            note="Selected on a Runtime trend. Lines from the start of the interval, up to 64 KiB per instance; the line-count selector does not apply and streaming is off."
+            note="Selected on a History chart. Lines from the start of the interval, up to 64 KiB per instance; the line-count selector does not apply and streaming is off."
             onClear={interval.clear}
           />
         </div>

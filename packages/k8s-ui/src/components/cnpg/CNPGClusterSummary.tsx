@@ -35,7 +35,7 @@ export interface CNPGSummaryAction {
 function InstancePill({ pod, namespace, onNavigate }: { pod: CNPGInstance; namespace: string; onNavigate?: NavigateToRef }) {
   const tone = pod.ready === true ? 'healthy' : pod.ready === false ? 'unhealthy' : 'unknown'
   const role = pod.role === 'primary' ? 'Primary' : pod.role === 'replica' ? 'Replica' : 'Role unknown'
-  const readiness = pod.ready === true ? 'Ready' : pod.ready === false ? 'Not ready' : 'Readiness unknown'
+  const readiness = pod.ready === true ? 'Pod ready' : pod.ready === false ? 'Pod not ready' : 'Pod readiness unknown'
   return (
     <Tooltip content={`${pod.name} · ${role} · ${readiness}${pod.node ? ` · ${pod.node}` : ''}`} position="top">
       <button
@@ -56,9 +56,10 @@ function InstancePill({ pod, namespace, onNavigate }: { pod: CNPGInstance; names
 
 const CHIP = 'inline-flex items-center gap-1.5 rounded-md border border-theme-border bg-theme-base px-2 py-0.5 text-xs'
 
-function DimensionChips({ dimensions, onSelect }: { dimensions: CNPGDimension[]; onSelect?: (id: CNPGDimension['id']) => void }) {
+/** One chip per health dimension, each opening where that dimension is explained. */
+export function CNPGDimensionChips({ dimensions, onSelect, className }: { dimensions: CNPGDimension[]; onSelect?: (id: CNPGDimension['id']) => void; className?: string }) {
   return (
-    <div className="mb-3 flex flex-wrap gap-1.5" aria-label="Health by dimension">
+    <div className={clsx('flex flex-wrap gap-1.5', className)} aria-label="Health by dimension">
       {dimensions.map((d) => {
         const body = (
           <>
@@ -114,7 +115,6 @@ export function CNPGClusterSummary({
   dimensions,
   onSelectDimension,
   initialProblemsExpanded = false,
-  haSection,
   stateFacts,
 }: {
   row: CNPGFleetRow
@@ -125,20 +125,17 @@ export function CNPGClusterSummary({
   extra?: ReactNode
   /** Rendered first, above the problem callout: standing states such as maintenance mode. */
   lead?: ReactNode
-  /** Serving · Replication · Protection · Storage, each from its own source (see cnpgDimensions). */
+  /** Serving · Replication · Storage · Backups, each from its own source (see cnpgDimensions); the At a glance rows. */
   dimensions?: CNPGDimension[]
   /** Open with every problem listed below the callout (e.g. arriving from the fleet's "+N more"). */
   initialProblemsExpanded?: boolean
-  /** Makes each dimension chip open where that dimension is explained (e.g. Runtime → Replication). */
+  /** Makes each dimension row open where that dimension is explained (its tab). */
   onSelectDimension?: (id: CNPGDimension['id']) => void
-  /** The host's "HA and instances" section (CNPGClusterHASection), rendered after Protection. */
-  haSection?: ReactNode
   /** Extra FactRows appended to the State grid, e.g. live facts only the host can read. */
   stateFacts?: ReactNode
 }) {
   const top = row.problems[0]
   const rest = row.problems.length - 1
-  const p = row.protection
   const ns = row.namespace
   const radarFindings = row.problems.some((x) => x.severity !== 'posture')
   const [showRest, setShowRest] = useState(initialProblemsExpanded)
@@ -147,7 +144,6 @@ export function CNPGClusterSummary({
   return (
     <div className="px-4 py-4">
       {lead}
-      {dimensions && dimensions.length > 0 && <DimensionChips dimensions={dimensions} onSelect={onSelectDimension} />}
       {top && (
         <ProblemCallout
           rootKind="Cluster"
@@ -180,18 +176,13 @@ export function CNPGClusterSummary({
         </div>
       )}
 
-      <SectionHeading>State</SectionHeading>
+      <SectionHeading>At a glance</SectionHeading>
       <FactGrid>
-        <FactRow label="Controller phase">
-          <span className="inline-flex flex-wrap items-center gap-2">
-            <Badge severity={healthToSeverity(row.controllerStatus.level)} size="sm">
-              {row.controllerStatus.text}
-            </Badge>
-            <span className="text-xs text-theme-text-tertiary">
-              {radarFindings ? 'reported by CNPG · Radar findings above are separate' : 'reported by CNPG'}
-            </span>
-          </span>
-        </FactRow>
+        {dimensions?.map((d) => (
+          <FactRow key={d.id} label={d.label}>
+            <DimensionValue dimension={d} onOpen={onSelectDimension ? () => onSelectDimension(d.id) : undefined} />
+          </FactRow>
+        ))}
         <FactRow label="Instances">
           <div>
             <span>
@@ -210,16 +201,20 @@ export function CNPGClusterSummary({
             )}
           </div>
         </FactRow>
-        <FactRow label="Replication">
-          <FactValue fact={row.replication} />
-          <FactSource fact={row.replication} />
+        <FactRow label="Controller phase">
+          <span className="inline-flex flex-wrap items-center gap-2">
+            <Badge severity={healthToSeverity(row.controllerStatus.level)} size="sm">
+              {row.controllerStatus.text}
+            </Badge>
+            <span className="text-xs text-theme-text-tertiary">
+              {radarFindings ? 'reported by CNPG · Radar findings above are separate' : 'reported by CNPG'}
+            </span>
+          </span>
         </FactRow>
-        {row.disk && (
-          <FactRow label="Storage">
-            <FactValue fact={row.disk} />
-            <FactSource fact={row.disk} />
-          </FactRow>
-        )}
+      </FactGrid>
+
+      <SectionHeading>About</SectionHeading>
+      <FactGrid>
         {row.replicaCluster && (
           <FactRow label="Replica cluster">
             Follows {row.replicaCluster.source ? <span className="font-mono">{row.replicaCluster.source}</span> : 'an external primary'}
@@ -263,7 +258,34 @@ export function CNPGClusterSummary({
         {stateFacts}
       </FactGrid>
 
-      <SectionHeading>Protection</SectionHeading>
+      {extra}
+    </div>
+  )
+}
+
+function DimensionValue({ dimension: d, onOpen }: { dimension: CNPGDimension; onOpen?: () => void }) {
+  return (
+    <div>
+      <span className="inline-flex flex-wrap items-center gap-x-2">
+        <StatusDot tone={d.tone} />
+        <span className={toneTextClass(d.tone)}>{d.text}</span>
+        {onOpen && (
+          <button type="button" onClick={onOpen} className="text-xs text-accent-text hover:underline">
+            {d.label} →
+          </button>
+        )}
+      </span>
+      {d.source && <div className="text-[11.5px] text-theme-text-tertiary">{d.source}</div>}
+    </div>
+  )
+}
+
+/** A cluster's recovery evidence as facts: schedule, destination, newest backup, WAL archiving, recovery window and restore validation. */
+export function CNPGClusterBackupFacts({ row, onNavigate }: { row: CNPGFleetRow; onNavigate?: NavigateToRef }) {
+  const p = row.protection
+  const ns = row.namespace
+  return (
+    <>
       <FactGrid>
         <FactRow label="Schedule">
           <FactValue fact={p.schedule} />
@@ -318,8 +340,6 @@ export function CNPGClusterSummary({
         </FactRow>
       </FactGrid>
 
-      {haSection}
-      {extra}
-    </div>
+    </>
   )
 }

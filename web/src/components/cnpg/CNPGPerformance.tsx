@@ -1,60 +1,40 @@
 import type { ReactNode } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { Lock } from 'lucide-react'
 import { PaneLoader, Tooltip, formatAge, toneTextClass, formatGrant } from '@skyhook-io/k8s-ui'
 import { useCNPGRuntime, type CNPGRuntimeInstance } from '../../api/cnpg'
 import { useCNPGSessions, type CNPGSessionsResponse } from '../../api/cnpg-sessions'
 import { useCNPGClusterHistory } from '../../api/cnpg-history'
-import { CNPGStorage } from './CNPGStorage'
 import { CNPGBlockingSessions } from './CNPGBlockingSessions'
 import { cnpgConnectionFigure } from './blocking'
-import { CNPGReplicationView } from './CNPGReplicationView'
 import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgIdAge, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgSessionsCardShowsConnections, cnpgTransactionRates, type CNPGTransactionRates } from './runtimeModel'
 import { formatBytes } from './lsn'
 import { historyLatest, latestRate } from './trendSamples'
-import { CNPGTrends, useSampleBuffer, type CNPGIntervalTarget, type Sample } from './CNPGTrends'
+import { CNPGTrends, useSampleBuffer, type CNPGChartGroup, type CNPGIntervalTarget, type Sample } from './CNPGTrends'
 import { Notice, RefreshFailedNotice, Segments } from '../workspace/layout'
+import { Card, Metric, ProxyDenied, Unavailable, seconds } from './runtimeParts'
 
-type Section = 'replication' | 'sessions' | 'transactions' | 'storage' | 'slots' | 'trends'
+type Section = 'sessions' | 'health' | 'history'
 
 const SECTIONS: { id: Section; label: string }[] = [
-  { id: 'replication', label: 'Replication' },
   { id: 'sessions', label: 'Sessions' },
-  { id: 'transactions', label: 'Transactions' },
-  { id: 'storage', label: 'Storage & WAL' },
-  { id: 'slots', label: 'Slots' },
-  { id: 'trends', label: 'Trends' },
+  { id: 'health', label: 'Database health' },
+  { id: 'history', label: 'History' },
 ]
 
-function seconds(s?: number): string {
-  if (s === undefined) return '—'
-  if (s < 1) return `${(s * 1000).toFixed(0)} ms`
-  if (s < 90) return `${s.toFixed(1)} s`
-  if (s < 5400) return `${Math.round(s / 60)} min`
-  return `${(s / 3600).toFixed(1)} h`
-}
-
-function SourceState({ label, state, error }: { label: string; state: string; error?: string }) {
-  if (state === 'ok') return null
-  const text =
-    state === 'denied'
-      ? `${label}: no access (needs get pods/proxy)`
-      : state === 'partial'
-        ? `${label}: partial${error ? ` · ${error}` : ''}`
-        : `${label}: ${state}${error ? ` · ${error}` : ''}`
-  return <div className="text-xs text-theme-text-tertiary">{text}</div>
-}
-
-export function CNPGClusterRuntime({
+/**
+ * Performance: who is connected and what is blocked (Sessions), how the
+ * databases are doing (Database health), and how it changed (History). The
+ * instance picker drives Sessions and Database health; History covers the
+ * cluster.
+ */
+export function CNPGPerformance({
   namespace,
   name,
-  onOpenLogs,
   onOpenInterval,
 }: {
   namespace: string
   name: string
-  onOpenLogs?: (pod: string) => void
   /** Opens Logs or Activity bounded to an interval selected on a trend chart. */
   onOpenInterval?: (target: CNPGIntervalTarget, since: string, until: string) => void
 }) {
@@ -62,12 +42,12 @@ export function CNPGClusterRuntime({
   // In the URL so Back from Logs or Activity returns to the same section.
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
-  const section = SECTIONS.find((x) => x.id === searchParams.get('section'))?.id ?? 'replication'
+  const section = SECTIONS.find((x) => x.id === searchParams.get('section'))?.id ?? 'sessions'
   const setSection = (next: Section) =>
     setSearchParams(
       (prev) => {
         const params = new URLSearchParams(prev)
-        if (next === 'replication') params.delete('section')
+        if (next === 'sessions') params.delete('section')
         else params.set('section', next)
         return params
       },
@@ -79,7 +59,7 @@ export function CNPGClusterRuntime({
   if (!q.data) {
     return (
       <div className="p-4">
-        <Notice>Runtime data could not be loaded: {q.error instanceof Error ? q.error.message : 'unknown error'}</Notice>
+        <Notice>Live instance data could not be loaded: {q.error instanceof Error ? q.error.message : 'unknown error'}</Notice>
       </div>
     )
   }
@@ -87,8 +67,7 @@ export function CNPGClusterRuntime({
   const denied = data.permission.proxy === 'denied'
   const grant = formatGrant(data.permission.grant) ?? `get pods/proxy in namespace ${namespace}`
   const primary = data.instances.find((i) => i.role === 'primary')
-  const replicas = data.instances.filter((i) => i.role !== 'primary')
-  // Sessions and Transactions read one instance's exporter; the primary
+  // Sessions and Database health read one instance's exporter; the primary
   // unless another is picked (kept in the URL like the section).
   // With no primary reported, the first instance, so standbys stay reachable.
   const picked = cnpgPickedInstance(data.instances, searchParams.get('instance'))
@@ -120,12 +99,13 @@ export function CNPGClusterRuntime({
         </select>
       </label>
     ) : null
+  const charts = (searchParams.get('charts') as CNPGChartGroup | null) ?? undefined
 
   return (
     <div className="space-y-4 p-4">
       <div className="flex flex-wrap items-center gap-3">
-        <Segments label="Runtime section" value={section} onChange={setSection} options={SECTIONS} />
-        {section !== 'trends' && section !== 'storage' && (
+        <Segments label="Performance section" value={section} onChange={setSection} options={SECTIONS} />
+        {section !== 'history' && (
           <span className="text-xs text-theme-text-tertiary">
             {denied ? 'Live instance data needs access you do not have' : `Live from each instance · sampled ${formatAge(data.sampledAt)} ago`}
           </span>
@@ -133,12 +113,6 @@ export function CNPGClusterRuntime({
       </div>
       <RefreshFailedNotice queries={[q]} />
 
-      {section === 'replication' &&
-        (denied ? (
-          <ProxyDenied what="Replication lag, LSNs and instance state" grant={grant} />
-        ) : (
-          <CNPGReplicationView namespace={namespace} cluster={name} primary={primary} replicas={replicas} onOpenLogs={onOpenLogs} card={Card} />
-        ))}
       {section === 'sessions' &&
         (denied ? (
           <>
@@ -149,12 +123,10 @@ export function CNPGClusterRuntime({
         ) : (
           <SessionsView namespace={namespace} cluster={name} instance={picked} picker={picker} />
         ))}
-      {section === 'transactions' && (
+      {section === 'health' && (
         <TransactionsView namespace={namespace} cluster={name} primary={primary} instance={picked} picker={picker} samples={samples} deniedGrant={denied ? grant : undefined} />
       )}
-      {section === 'storage' && (denied ? <CNPGStorage namespace={namespace} name={name} /> : <StorageView namespace={namespace} name={name} instances={data.instances} />)}
-      {section === 'slots' && (denied ? <ProxyDenied what="Replication slots and the WAL they retain" grant={grant} /> : <SlotsView primary={primary} />)}
-      {section === 'trends' && (
+      {section === 'history' && (
         <CNPGTrends
           namespace={namespace}
           name={name}
@@ -163,41 +135,11 @@ export function CNPGClusterRuntime({
           instance={picked?.pod}
           picker={picker}
           samplingDenied={denied ? grant : undefined}
+          group={charts}
         />
       )}
     </div>
   )
-}
-
-// Denied is not zero: the section says what it would show and the grant it needs.
-function ProxyDenied({ what, grant }: { what: string; grant: string }) {
-  return (
-    <div className="max-w-2xl rounded-xl border border-dashed border-theme-border p-5">
-      <div className="flex items-center gap-2 font-medium text-theme-text-primary">
-        <Lock className="h-4 w-4" />
-        No access to live instance data
-      </div>
-      <p className="mt-2 text-sm text-theme-text-secondary">
-        {what} are read from each instance through the Kubernetes API proxy, which your identity may not use. Nothing is shown as zero; it is omitted.
-      </p>
-      <pre className="mt-2 rounded-md bg-theme-elevated px-3 py-2 font-mono text-xs text-theme-text-primary">{`requires: ${grant}`}</pre>
-    </div>
-  )
-}
-
-function Card({ title, children, footer }: { title: ReactNode; children: ReactNode; footer?: ReactNode }) {
-  return (
-    <section className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
-      <div className="border-b border-theme-border px-4 py-2.5 text-sm font-semibold text-theme-text-primary">{title}</div>
-      <div className="p-4">{children}</div>
-      {footer && <div className="border-t border-theme-border px-4 py-2 text-xs text-theme-text-tertiary">{footer}</div>}
-    </section>
-  )
-}
-
-function Unavailable({ inst, what }: { inst?: CNPGRuntimeInstance; what: string }) {
-  if (!inst) return <div className="text-sm text-theme-text-tertiary">No instance is reported, so {what} is unknown.</div>
-  return <SourceState label={what} state={inst.metrics.state} error={inst.metrics.error} />
 }
 
 function SessionsView({ namespace, cluster, instance, picker }: { namespace: string; cluster: string; instance?: CNPGRuntimeInstance; picker?: ReactNode }) {
@@ -267,16 +209,6 @@ function SessionAggregates({ primary, exec }: { primary?: CNPGRuntimeInstance; e
   )
 }
 
-function Metric({ label, value, tone, caption }: { label: string; value: ReactNode; tone?: 'degraded' | 'unhealthy'; caption?: ReactNode }) {
-  return (
-    <div>
-      <div className="text-xs text-theme-text-tertiary">{label}</div>
-      <div className={clsx('font-mono text-base', tone ? toneTextClass(tone) : 'text-theme-text-primary')}>{value}</div>
-      {caption && <div className="text-[11px] text-theme-text-tertiary">{caption}</div>}
-    </div>
-  )
-}
-
 function TransactionsView({
   namespace,
   cluster,
@@ -296,22 +228,22 @@ function TransactionsView({
   deniedGrant?: string
 }) {
   const history = useCNPGClusterHistory(namespace, cluster, '15m')
-  const isPrimary = !!instance && instance === primary
-  const canSample = !deniedGrant && isPrimary && instance?.metrics.state === 'ok'
+  // The page samples the primary's counters whichever instance is picked, so
+  // sampled rates are the primary's and do not follow the picker.
+  const canSample = !deniedGrant && primary?.metrics.state === 'ok'
   const rates = cnpgTransactionRates(
     { commits: historyLatest(history.data, 'tps', 'commits'), rollbacks: historyLatest(history.data, 'tps', 'rollbacks') },
-    // The page samples the primary's counters only, so sampled rates are the primary's.
     canSample ? { commits: latestRate(samples, 'commits'), rollbacks: latestRate(samples, 'rollbacks') } : null,
-    deniedGrant ? `needs ${deniedGrant}` : !isPrimary ? 'primary only' : '—',
+    deniedGrant ? `needs ${deniedGrant}` : '—',
   )
+  const throughputTitle = rates.source === 'prometheus' ? 'Cluster throughput' : 'Throughput on the primary'
   return (
     <div className="space-y-4">
       <RefreshFailedNotice queries={[history]} />
-      {!deniedGrant && picker}
       {deniedGrant ? (
         <>
           {rates.source !== 'none' && (
-            <Card title="Transactions (cluster)" footer={RATES_FOOTER.prometheus}>
+            <Card title="Cluster throughput" footer={RATES_FOOTER.prometheus}>
               <Rates rates={rates} />
             </Card>
           )}
@@ -319,7 +251,11 @@ function TransactionsView({
         </>
       ) : (
         <>
-          <TransactionsCard inst={instance} rates={rates} />
+          <Card title={throughputTitle} footer={RATES_FOOTER[rates.source]}>
+            <Rates rates={rates} />
+          </Card>
+          {picker}
+          <TransactionsCard inst={instance} />
           <CheckpointsCard inst={instance} />
         </>
       )}
@@ -328,18 +264,17 @@ function TransactionsView({
 }
 
 const RATES_FOOTER = {
-  prometheus: 'Commit and rollback rates are Prometheus’s latest rate across every instance and database of the cluster; the other figures are this instance’s.',
+  prometheus: 'Prometheus’s latest commit and rollback rates across every instance and database of the cluster.',
   sampled: "Rates are the change between the primary exporter's last two query runs seen while this page is open, never across a change of primary.",
   none: 'No current commit or rollback rate: Prometheus has no recent point, and this page samples only the primary through its exporter.',
 }
 
 function Rates({ rates }: { rates: CNPGTransactionRates }) {
-  const cluster = rates.source === 'prometheus' ? ' (cluster)' : ''
   return (
     <div>
       <div className="flex gap-8">
-        <Metric label={`Commits / s${cluster}`} value={rates.commits} />
-        <Metric label={`Rollbacks / s${cluster}`} value={rates.rollbacks} />
+        <Metric label="Commits / s" value={rates.commits} />
+        <Metric label="Rollbacks / s" value={rates.rollbacks} />
       </div>
       {rates.at !== undefined && (
         <div className="mt-0.5 text-[11px] text-theme-text-tertiary">
@@ -350,25 +285,19 @@ function Rates({ rates }: { rates: CNPGTransactionRates }) {
   )
 }
 
-function TransactionsCard({ inst, rates }: { inst?: CNPGRuntimeInstance; rates: CNPGTransactionRates }) {
+function TransactionsCard({ inst }: { inst?: CNPGRuntimeInstance }) {
   const m = inst?.metrics
   if (!m || m.state !== 'ok') {
     return (
-      <Card title="Transactions" footer={rates.source === 'prometheus' ? RATES_FOOTER.prometheus : undefined}>
-        {rates.source === 'prometheus' && (
-          <div className="mb-3 flex flex-wrap gap-8">
-            <Rates rates={rates} />
-          </div>
-        )}
-        <Unavailable inst={inst} what="Transactions" />
+      <Card title="Database health">
+        <Unavailable inst={inst} what="Database health" />
       </Card>
     )
   }
   const hit = m.blksHit !== undefined && m.blksRead !== undefined && m.blksHit + m.blksRead > 0 ? (m.blksHit / (m.blksHit + m.blksRead)) * 100 : undefined
   return (
-    <Card title={<>Transactions on {inst!.pod}</>} footer={RATES_FOOTER[rates.source]}>
+    <Card title={<>Database health on {inst!.pod}</>} footer="This instance’s exporter. Counters are cumulative since the last statistics reset.">
       <div className="flex flex-wrap gap-8">
-        <Rates rates={rates} />
         <Metric label="Cache hit ratio" value={hit !== undefined ? `${hit.toFixed(1)} %` : '—'} />
         <Metric label="Deadlocks (total)" value={m.deadlocksTotal ?? '—'} tone={m.deadlocksTotal ? 'degraded' : undefined} />
         <Metric label="Oldest transaction" value={seconds(m.oldestXactSeconds)} />
@@ -530,40 +459,3 @@ function ExtensionUpdates({ rows, missing }: { rows?: { database: string; extens
   )
 }
 
-function StorageView({ namespace, name, instances }: { namespace: string; name: string; instances: CNPGRuntimeInstance[] }) {
-  return <CNPGStorage namespace={namespace} name={name} primary={instances.find((i) => i.role === 'primary')} />
-}
-
-function SlotsView({ primary }: { primary?: CNPGRuntimeInstance }) {
-  const slots = primary?.status.slots ?? []
-  const readable = primary?.status.state === 'ok' || primary?.status.state === 'partial'
-  return (
-    <Card title="Replication slots (primary)" footer="Inactive slots retain WAL until they are consumed or dropped.">
-      {!readable || !primary?.status.slots ? (
-        <SourceState label="Status" state={readable ? 'partial' : primary?.status.state ?? 'error'} error={primary?.status.error ?? primary?.status.reason ?? 'slots were not read'} />
-      ) : slots.length === 0 ? (
-        <div className="text-sm text-theme-text-tertiary">No replication slots.</div>
-      ) : (
-        <>
-        {primary.status.state === 'partial' && <SourceState label="Status" state="partial" error={primary.status.reason} />}
-        <table className="w-full text-sm">
-          <thead className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">
-            <tr><th className="py-1.5 pr-3">Slot</th><th className="pr-3">Type</th><th className="pr-3">State</th><th className="pr-3">WAL status</th><th className="text-right">Retained</th></tr>
-          </thead>
-          <tbody className="table-divide-subtle">
-            {slots.map((s) => (
-              <tr key={s.name}>
-                <td className="py-1.5 pr-3 font-mono text-xs">{s.name}</td>
-                <td className="pr-3">{s.type ?? '—'}</td>
-                <td className={clsx('pr-3', s.active === false && toneTextClass('degraded'))}>{s.active === undefined ? '—' : s.active ? 'active' : 'inactive'}</td>
-                <td className="pr-3">{s.walStatus ?? '—'}</td>
-                <td className="text-right font-mono">{formatBytes(s.retainedBytes)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        </>
-      )}
-    </Card>
-  )
-}

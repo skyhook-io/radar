@@ -190,15 +190,33 @@ describe('cnpgDimensions', () => {
     expect(d.map((x) => [x.id, x.tone])).toEqual([
       ['serving', 'healthy'],
       ['replication', 'healthy'],
-      ['protection', 'healthy'],
       ['storage', 'unknown'],
+      ['protection', 'healthy'],
     ])
+    expect(d.find((x) => x.id === 'protection')?.label).toBe('Backups')
   })
   it('storage follows the measured disk fact, and stays unassessed without a measurement', () => {
     const measured = cnpgDimensions({ row: row({ disk: { text: '91% used', tone: 'unhealthy', source: 'Fullest: data of pg-1' } }) })
-    expect(measured[3]).toMatchObject({ id: 'storage', tone: 'unhealthy', text: '91% used' })
+    expect(measured[2]).toMatchObject({ id: 'storage', tone: 'unhealthy', text: '91% used' })
     const unmeasured = cnpgDimensions({ row: row({ disk: { text: 'No usage metrics', tone: 'unknown', source: 'needs Prometheus' } }) })
-    expect(unmeasured[3]).toMatchObject({ tone: 'unknown', text: 'unassessed', source: 'No usage metrics · needs Prometheus' })
+    expect(unmeasured[2]).toMatchObject({ tone: 'unknown', text: 'unassessed', source: 'No usage metrics · needs Prometheus' })
+  })
+  it('names WAL an inactive slot holds even while volume usage is unassessed', () => {
+    const slot = { id: 'slot:pg/pg:_cnpg_pg_2', severity: 'warning', category: 'availability', title: 'Inactive slot _cnpg_pg_2 holds 4.5 GiB of WAL on pg-1 for pg-2', subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'pg' }, source: 'measurement' } as const
+    const r = row({ key: 'pg/pg', problems: [slot], disk: { text: 'No usage metrics', tone: 'unknown', source: 'no series' } })
+    const d = cnpgDimensions({ row: r })
+    expect(d[2]).toMatchObject({ id: 'storage', tone: 'degraded', text: 'WAL held by an inactive slot' })
+    expect(d[2].source).toContain('4.5 GiB')
+    const measured = cnpgDimensions({ row: { ...r, disk: { text: '40% used', tone: 'healthy', source: 'Fullest' } } })
+    expect(measured[2]).toMatchObject({ tone: 'degraded', text: '40% used · WAL held by an inactive slot' })
+  })
+  it('a standby another source saw receiving nothing keeps Replication from reading unassessed or calm', () => {
+    const gap = { id: 'standby:pg/pg:pg-2', severity: 'warning', category: 'availability', title: 'pg-2 is not receiving WAL from the primary', subject: { kind: 'Pod', group: '', namespace: 'pg', name: 'pg-2' }, source: 'measurement' } as const
+    const r = row({ key: 'pg/pg', problems: [gap] })
+    expect(cnpgDimensions({ row: r })[1]).toMatchObject({ tone: 'degraded', text: 'pg-2 not receiving WAL' })
+    const live = cnpgDimensions({ row: r, replication: { streaming: 1, standbys: 1, maxReplayLagSeconds: 0 } })[1]
+    expect(live.tone).toBe('degraded')
+    expect(live.text).toContain('pg-2 not receiving WAL')
   })
   it('counts expected standbys from spec.instances, not from the Pods still running', () => {
     // spec.instances 3, only the primary's Pod exists, nothing streams.

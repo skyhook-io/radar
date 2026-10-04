@@ -27,7 +27,7 @@ export function CNPGClusterActivity({ namespace, name, onNavigate }: { namespace
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 p-4">
       {interval ? (
-        <CNPGIntervalBanner since={interval.since} until={interval.until} note="Selected on a Runtime trend: events and changes inside this interval only." onClear={interval.clear} />
+        <CNPGIntervalBanner since={interval.since} until={interval.until} note="Selected on a History chart: events and changes inside this interval only." onClear={interval.clear} />
       ) : (
         <div className="flex flex-wrap items-center gap-3">
           <Segments label="Range" value={hours} onChange={setHours} options={RANGES.map((r) => ({ id: r.id, label: r.label }))} />

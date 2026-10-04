@@ -10,7 +10,7 @@ const INCLUDED = [
   'Events about those objects',
   'Backups, ScheduledBackups and Poolers of this cluster, and the ObjectStore it uses',
   'Operator and plugin versions and readiness',
-  'The Runtime and Storage snapshots Radar shows (instance manager status, selected exporter metrics)',
+  'The live instance and storage snapshots Radar shows (instance manager status, selected exporter metrics)',
   'report.json: what was read, what was skipped and why, and the Secrets referenced (names only)',
 ]
 
