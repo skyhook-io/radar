@@ -56,6 +56,9 @@ func TestActiveRestartLoop(t *testing.T) {
 		{"short previous run", restartLoopPod(now, status(5, running(time.Minute), &corev1.ContainerStateTerminated{
 			Reason: "Error", ExitCode: 1, StartedAt: metav1.NewTime(now.Add(-5 * time.Minute)), FinishedAt: metav1.NewTime(now.Add(-2 * time.Minute)),
 		})), true, false},
+		{"start failure stamped with the Unix epoch", restartLoopPod(now, status(5, corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}, &corev1.ContainerStateTerminated{
+			Reason: "StartError", ExitCode: 128, StartedAt: metav1.NewTime(time.Unix(0, 0)), FinishedAt: metav1.NewTime(now.Add(-time.Minute)),
+		})), true, false},
 		{"pod being deleted", func() *corev1.Pod {
 			p := restartLoopPod(now, status(5, corev1.ContainerState{Terminated: terminatedAgo(now, 5*time.Second, "Completed", 0)}, terminatedAgo(now, 3*time.Minute, "Error", 1)))
 			deleted := metav1.NewTime(now.Add(-10 * time.Second))

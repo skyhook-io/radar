@@ -129,8 +129,9 @@ func containerRestartLoop(cs *corev1.ContainerStatus, now time.Time) (restartLoo
 	// container that served for days and restarted once (a node or kubelet
 	// bounce) keeps its old restarts in RestartCount, and would otherwise
 	// read as looping on its first restart. A real loop is caught from its
-	// next, short run.
-	if !term.StartedAt.IsZero() && finished.Sub(term.StartedAt.Time) > restartLoopWindow {
+	// next, short run. A container that never started (StartError,
+	// ContainerCannotRun) is stamped with the Unix epoch, which is no start.
+	if started := term.StartedAt.Time; started.Unix() > 0 && finished.Sub(started) > restartLoopWindow {
 		return restartLoop{}, false
 	}
 	if r := cs.State.Running; r != nil && !r.StartedAt.IsZero() && r.StartedAt.Sub(finished) > restartLoopStaleGap {
