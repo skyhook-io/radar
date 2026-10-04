@@ -284,8 +284,10 @@ describe('cnpgRestoredPrimaryUp', () => {
     expect(observeRestore(degraded).state).not.toBe('completed')
     expect(cnpgRestoredPrimaryUp(degraded)).toBe(true)
   })
-  it('is not up while recovery runs or when Pods cannot be seen', () => {
-    expect(cnpgRestoredPrimaryUp(snapshot({ pods: [pod('job', 'Running', false), pod('instance', 'Running', true)] as any }))).toBe(false)
+  it('is not up while recovery runs or when Pods cannot be seen, and a join Job does not hide it', () => {
+    expect(cnpgRestoredPrimaryUp(snapshot({ pods: [pod('job', 'Running', false)] as any }))).toBe(false)
+    // A replica joining after the restore runs a Job too.
+    expect(cnpgRestoredPrimaryUp(snapshot({ pods: [pod('job', 'Running', false), pod('instance', 'Running', true)] as any }))).toBe(true)
     expect(cnpgRestoredPrimaryUp(snapshot({ pods: [pod('instance', 'Running', true)] as any, coverage: { pods: { state: 'denied' }, jobs: { state: 'ok' }, events: { state: 'ok' } } as any }))).toBe(false)
   })
 })

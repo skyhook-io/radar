@@ -367,14 +367,14 @@ function activeContainer(p: CNPGRecoveryPod) {
 }
 
 /**
- * Whether the restored primary is up: a restored instance Pod is ready and no
- * recovery Pod still runs. Unlike a completed restore, this stays true when
- * the cluster later loses a replica or is mid-switchover.
+ * Whether the restored primary is up: an instance Pod is ready. CloudNativePG
+ * starts the first instance only after the recovery Job succeeded, so this
+ * needs no look at Jobs (a replica's join Job later is not recovery). Unlike
+ * a completed restore, it stays true when the cluster later loses a replica
+ * or is mid-switchover.
  */
 export function cnpgRestoredPrimaryUp(snap: CNPGRecoveryResponse): boolean {
-  if (snap.coverage.pods?.state !== 'ok') return false
-  const recovering = snap.pods.some((p) => p.kind === 'job' && (p.phase === 'Running' || p.phase === 'Pending'))
-  return !recovering && snap.pods.some((p) => p.kind === 'instance' && p.ready)
+  return snap.coverage.pods?.state === 'ok' && snap.pods.some((p) => p.kind === 'instance' && p.ready)
 }
 
 /**
