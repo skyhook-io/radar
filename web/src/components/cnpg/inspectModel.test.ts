@@ -76,6 +76,10 @@ describe('cnpgParametersView', () => {
     expect(v.summary.text).toBe('3 declared · 2 of 3 instances read · restart pending on pg-2 · 1 differ between instances')
   })
 
+  it('says so when there is no instance Pod to read', () => {
+    expect(cnpgParametersView(resp([])).summary).toEqual({ text: '3 declared · no instance Pod to read', tone: 'unknown', attention: false })
+  })
+
   it('never reads a value the connection itself sets', () => {
     const v = cnpgParametersView(
       resp([{ pod: 'pg-1', role: 'primary', state: 'ok', settings: [setting('shared_buffers', null, { source: 'client', context: 'user' })] }]),

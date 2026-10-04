@@ -413,7 +413,8 @@ type CNPGInstanceSettings struct {
 	Pod  string `json:"pod"`
 	Role string `json:"role"`
 	CNPGRuntimeSource
-	Settings []CNPGParameterSetting `json:"settings,omitempty"`
+	// Settings is null when the read failed; [] is a read that matched nothing.
+	Settings []CNPGParameterSetting `json:"settings"`
 }
 
 // CNPGParameterSetting is one pg_settings row. Value is PostgreSQL's display

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -138,6 +139,12 @@ func TestReadCNPGParametersPassesNamesAsAVariable(t *testing.T) {
 	got = readCNPGParameters(context.Background(), cnpgFakeExec(&calls, "", context.DeadlineExceeded), "db", pods, []string{"work_mem"})
 	if got[0].State != cnpgRuntimeStateUnreachable || got[0].Settings != nil {
 		t.Errorf("an instance that does not answer reads unreachable: %+v", got[0])
+	}
+
+	// A read that matches nothing is a read: settings serializes as [], not as absent.
+	got = readCNPGParameters(context.Background(), cnpgFakeExec(&calls, "[]", nil), "db", pods, []string{"no_such_parameter"})
+	if b, _ := json.Marshal(got[0]); !strings.Contains(string(b), `"settings":[]`) {
+		t.Errorf("empty read = %s", b)
 	}
 }
 

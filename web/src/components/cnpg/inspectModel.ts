@@ -110,6 +110,10 @@ export function cnpgParametersView(resp: CNPGParametersResponse): CNPGParameters
   })
   const pending = new Set(rows.flatMap((r) => r.pendingRestart))
   const differing = rows.filter((r) => r.perInstance).length
+  if (resp.instances.length === 0) {
+    // Hibernated, or no instance Pod yet: nothing was read, which is not calm.
+    return { rows, read, unread, summary: { text: `${rows.length} declared · no instance Pod to read`, tone: 'unknown', attention: false } }
+  }
   const bits = [`${rows.length} declared`, `${read.length} of ${resp.instances.length} instances read`]
   if (pending.size > 0) bits.push(`restart pending on ${[...pending].sort().join(', ')}`)
   if (differing > 0) bits.push(`${differing} differ between instances`)

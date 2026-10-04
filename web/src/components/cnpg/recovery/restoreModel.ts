@@ -367,6 +367,17 @@ function activeContainer(p: CNPGRecoveryPod) {
 }
 
 /**
+ * Whether the restored primary is up: a restored instance Pod is ready and no
+ * recovery Pod still runs. Unlike a completed restore, this stays true when
+ * the cluster later loses a replica or is mid-switchover.
+ */
+export function cnpgRestoredPrimaryUp(snap: CNPGRecoveryResponse): boolean {
+  if (snap.coverage.pods?.state !== 'ok') return false
+  const recovering = snap.pods.some((p) => p.kind === 'job' && (p.phase === 'Running' || p.phase === 'Pending'))
+  return !recovering && snap.pods.some((p) => p.kind === 'instance' && p.ready)
+}
+
+/**
  * Where a restore stands, from the recovery snapshot alone. Completion is the
  * Cluster reporting a healthy phase with every instance ready; failure is a
  * failed recovery Job or a failing phase. Missing Pod access never reads as

@@ -6,6 +6,7 @@ import {
   restoreNextSteps,
   restorePermission,
   buildRestoreManifest,
+  cnpgRestoredPrimaryUp,
   observeRestore,
   pitrWarnings,
   preflightFacts,
@@ -272,5 +273,19 @@ describe('resourcesText', () => {
   it('reads requests and limits instead of JSON', () => {
     expect(resourcesText({ requests: { cpu: '50m', memory: '128Mi' } })).toBe('requests: cpu 50m, memory 128Mi')
     expect(resourcesText({ requests: { cpu: '50m' }, limits: { memory: '256Mi' } })).toBe('requests: cpu 50m · limits: memory 256Mi')
+  })
+})
+
+describe('cnpgRestoredPrimaryUp', () => {
+  const pod = (kind: 'job' | 'instance', phase: string, ready: boolean) => ({ name: `${kind}-x`, uid: kind, kind, ownerVerified: true, phase, ready, initContainers: [], containers: [] })
+  it('is up once a restored instance is ready, even if the cluster later degrades', () => {
+    // A replica lost after the restore: not "completed", but the primary answers.
+    const degraded = snapshot({ phase: 'Cluster in healthy state', ready: 1, instances: 2, pods: [pod('job', 'Succeeded', false), pod('instance', 'Running', true), pod('instance', 'Running', false)] as any })
+    expect(observeRestore(degraded).state).not.toBe('completed')
+    expect(cnpgRestoredPrimaryUp(degraded)).toBe(true)
+  })
+  it('is not up while recovery runs or when Pods cannot be seen', () => {
+    expect(cnpgRestoredPrimaryUp(snapshot({ pods: [pod('job', 'Running', false), pod('instance', 'Running', true)] as any }))).toBe(false)
+    expect(cnpgRestoredPrimaryUp(snapshot({ pods: [pod('instance', 'Running', true)] as any, coverage: { pods: { state: 'denied' }, jobs: { state: 'ok' }, events: { state: 'ok' } } as any }))).toBe(false)
   })
 })

@@ -6,7 +6,7 @@ import { useRecordCNPGRestoreValidation, type CNPGRecoveryResponse } from '../..
 import { useCNPGWriteGuard } from '../actions/useCNPGWriteGuard'
 import { useRestoreObservation, describeRecoverySource } from './CNPGRestoreProgress'
 import { CNPGRestoreChecks } from './CNPGRestoreChecks'
-import { RESTORE_VALIDATION_ANNOTATION, formatLocal, formatUTC, sourceClusterFor, targetIsoFrom } from './restoreModel'
+import { RESTORE_VALIDATION_ANNOTATION, cnpgRestoredPrimaryUp, formatLocal, formatUTC, sourceClusterFor, targetIsoFrom } from './restoreModel'
 
 const CHECKLIST = [
   'Confirm the databases and roles Radar lists are the ones you expect',
@@ -74,7 +74,7 @@ export function CNPGRestoreValidation({ namespace, name }: { namespace: string; 
           </button>
         </div>
       </div>
-      {restoreDone && <CNPGRestoreChecks namespace={namespace} name={name} />}
+      {(restoreDone || cnpgRestoredPrimaryUp(snapshot)) && <CNPGRestoreChecks namespace={namespace} name={name} />}
       <div className="px-4 py-3 text-sm">
         {note ? (
           <dl className="grid grid-cols-[9rem_minmax(0,1fr)] gap-x-4 gap-y-1.5">
