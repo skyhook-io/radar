@@ -2,6 +2,13 @@
 
 Radar treats Helm as a release system, not just a set of Kubernetes objects. The Helm view combines release metadata, rendered resources, revision history, operation insight, revision comparison, and live Kubernetes evidence around failed hooks.
 
+## Requirements
+
+Radar reads releases from Helm's default Secret storage driver. Two consequences:
+
+- **Permissions.** Listing releases requires `list` on Secrets. In-cluster installs get this automatically when authentication or cloud mode is enabled, which is the recommended route because each read is then checked against the user's own RBAC. Without authentication the flag is `rbac.secrets=true`, which grants Radar read access to every Secret in the cluster; read the trade-off in [Opt-in Permissions](in-cluster.md#opt-in-permissions) first.
+- **Storage driver.** Releases recorded with `HELM_DRIVER=configmap` or the SQL driver are not visible.
+
 ## Release List
 
 The Helm list shows:

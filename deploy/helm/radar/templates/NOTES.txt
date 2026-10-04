@@ -1,0 +1,21 @@
+{{- if and .Values.rbac.create (or .Values.rbac.secrets .Values.rbac.helm) (eq .Values.auth.mode "none") (not .Values.cloud.enabled) }}
+WARNING: Radar can read every Secret in this cluster, and authentication is off.
+
+  {{ ternary "rbac.helm" "rbac.secrets" .Values.rbac.helm }} grants Radar's ServiceAccount cluster-wide read on Secrets
+  (Helm stores releases there). With auth.mode=none Radar does not check who
+  is asking, so anyone who can reach the Radar UI can reveal those values in
+  plaintext.
+{{- if .Values.rbac.helm }}
+
+  rbac.helm also grants cluster-wide create, update, patch and delete on every
+  resource type, to that same unauthenticated audience.
+{{- end }}
+
+  Restrict who can reach Radar, or enable authentication so each user's own
+  Kubernetes RBAC is enforced:
+  https://github.com/skyhook-io/radar/blob/main/docs/authentication.md
+{{- end }}
+
+Radar is installed in the {{ .Release.Namespace }} namespace.
+In-cluster setup, RBAC options and upgrades:
+https://github.com/skyhook-io/radar/blob/main/docs/in-cluster.md
