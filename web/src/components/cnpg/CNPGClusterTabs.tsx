@@ -5,6 +5,8 @@ import { useCNPGRuntime } from '../../api/cnpg'
 import { CNPGStorage } from './CNPGStorage'
 import { CNPGProtection } from './CNPGProtection'
 import { CNPGRestoreValidation } from './recovery/CNPGRestoreValidation'
+import { CNPGRestoreButton } from './recovery/CNPGRestoreButton'
+import { useCNPGRestoreCapability } from '../../api/cnpg-recovery'
 import { CNPGScreenGate } from './shared'
 import { useCNPGClusterAssessment } from './useCNPGClusterAssessment'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
@@ -22,6 +24,8 @@ export function CNPGClusterHeaderChips({ namespace, name, onSelect }: { namespac
 /** Storage: volumes, what holds WAL, and resize, with the history of both one click away. */
 export function CNPGStorageTab({ namespace, name, onOpenHistory }: { namespace: string; name: string; onOpenHistory?: () => void }) {
   const runtime = useCNPGRuntime(namespace, name)
+  const { fleet } = useCNPGFleet([namespace])
+  const clusterObject = fleet?.rows.find((r) => r.namespace === namespace && r.name === name)?.cluster
   const primary = runtime.data?.permission.proxy === 'denied' ? undefined : runtime.data?.instances.find((i) => i.role === 'primary')
   return (
     <div className="space-y-4 p-4">
@@ -33,7 +37,7 @@ export function CNPGStorageTab({ namespace, name, onOpenHistory }: { namespace: 
           </button>
         )}
       </div>
-      <CNPGStorage namespace={namespace} name={name} primary={primary} />
+      <CNPGStorage namespace={namespace} name={name} primary={primary} clusterObject={clusterObject} />
     </div>
   )
 }
@@ -42,10 +46,16 @@ export function CNPGStorageTab({ namespace, name, onOpenHistory }: { namespace: 
 export function CNPGBackupsTab({ namespace, name, onInspect }: { namespace: string; name: string; onInspect: (r: SelectedResource) => void }) {
   const { query, fleet } = useCNPGFleet([namespace])
   const [searchParams] = useSearchParams()
+  const restore = useCNPGRestoreCapability(namespace)
+  const restoreBlocked = restore.data ? (restore.data.allowed ? undefined : restore.data.reason ?? 'Not allowed') : restore.isLoading ? 'Checking whether you can create a Cluster here…' : undefined
   return (
     <CNPGScreenGate query={query} fleet={fleet}>
       {(data, readyFleet) => (
         <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex flex-wrap items-center gap-2 px-5 pt-3 xl:px-7">
+            <CNPGRestoreButton namespace={namespace} entry={{ kind: 'cluster', name }} disabledReason={restoreBlocked} />
+            <span className="text-xs text-theme-text-tertiary">Restores into a new Cluster beside this one; this cluster is not changed.</span>
+          </div>
           {readyFleet.rows.find((r) => r.namespace === namespace && r.name === name)?.cluster?.spec?.bootstrap?.recovery && (
             <CNPGRestoreValidation namespace={namespace} name={name} />
           )}

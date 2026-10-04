@@ -11,6 +11,7 @@ import {
   StatusDot,
   Tooltip,
   cnpgDiskTone,
+  cnpgHASlotInstance,
   cnpgVolumeRoleLabel,
   formatAge,
   parseQuantityToNumber,
@@ -214,7 +215,7 @@ function VolumeRow({ v, stated, wal }: { v: CNPGStorageVolume; stated: StatedOnc
   )
 }
 
-function WALHolders({ wal, primary }: { wal: CNPGStorageWAL; primary: boolean }) {
+function WALHolders({ wal, primary, slotStandby }: { wal: CNPGStorageWAL; primary: boolean; slotStandby: (slot: string) => string | undefined }) {
   if (wal.status.state !== 'ok' && wal.metrics.state !== 'ok') {
     return (
       <div className="text-xs text-theme-text-tertiary">
@@ -252,7 +253,16 @@ function WALHolders({ wal, primary }: { wal: CNPGStorageWAL; primary: boolean })
         <WALFact
           label="Held by replication slots"
           value={wal.metrics.state !== 'ok' ? '—' : cnpgSlotRetentionText(slots)}
-          detail={slots.length > 0 ? slots.map((s) => `${s.slot} ${formatBytes(s.bytes)}`).join(' · ') : undefined}
+          detail={
+            slots.length > 0
+              ? slots
+                  .map((s) => {
+                    const standby = slotStandby(s.slot)
+                    return `${s.slot} ${formatBytes(s.bytes)}${standby ? ` (for ${standby})` : ''}`
+                  })
+                  .join(' · ')
+              : undefined
+          }
           source="Exporter pg_replication_slots"
           missing={wal.metrics.state !== 'ok' ? wal.metrics.error || wal.metrics.reason || wal.metrics.state : undefined}
         />
@@ -291,7 +301,17 @@ function WALFact({
   )
 }
 
-function InstanceCard({ inst, walCoverage, stated }: { inst: CNPGStorageInstance; walCoverage: CNPGClusterStorageResponse['wal']; stated: StatedOnce }) {
+function InstanceCard({
+  inst,
+  walCoverage,
+  stated,
+  slotStandby,
+}: {
+  inst: CNPGStorageInstance
+  walCoverage: CNPGClusterStorageResponse['wal']
+  stated: StatedOnce
+  slotStandby: (slot: string) => string | undefined
+}) {
   const roleLabel = inst.role === 'primary' ? 'primary' : inst.role === 'replica' ? 'replica' : inst.role === 'noInstance' ? 'no instance' : 'role unknown'
   const diskTone = cnpgInstanceDiskTone(inst.volumes, inst.wal)
   return (
@@ -314,7 +334,7 @@ function InstanceCard({ inst, walCoverage, stated }: { inst: CNPGStorageInstance
       <div className="mt-4">
         <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">What is holding WAL</div>
         {inst.wal ? (
-          <WALHolders wal={inst.wal} primary={inst.role === 'primary'} />
+          <WALHolders wal={inst.wal} primary={inst.role === 'primary'} slotStandby={slotStandby} />
         ) : (
           walCoverage.state === 'ok' ? (
             <div className="text-xs text-theme-text-tertiary">No running instance to read</div>
@@ -338,7 +358,7 @@ function coverageLine(label: string, c: { state: string; grant?: Grant; reason?:
   return `${label}: ${c.reason ?? c.state}`
 }
 
-export function CNPGStorage({ namespace, name, primary }: { namespace: string; name: string; primary?: CNPGRuntimeInstance }) {
+export function CNPGStorage({ namespace, name, primary, clusterObject }: { namespace: string; name: string; primary?: CNPGRuntimeInstance; clusterObject?: any }) {
   const q = useCNPGClusterStorage(namespace, name)
   const [resize, setResize] = useState<CNPGStorageTarget | null>(null)
   if (!q.data && q.isLoading) return <PaneLoader label="Reading volumes…" className="h-40" />
@@ -353,6 +373,8 @@ export function CNPGStorage({ namespace, name, primary }: { namespace: string; n
   ].filter((x): x is string => !!x)
   if (data.usage.isolation?.mode === 'unverified') notes.push(`Used space: ${data.usage.isolation.note}.`)
   const allVolumes = data.instances.flatMap((i) => i.volumes)
+  // The standby a CloudNativePG HA slot is kept for, so retained WAL names its cause.
+  const slotStandby = (slot: string) => cnpgHASlotInstance(clusterObject, slot, data.instances.map((i) => i.name))
   const expansionGap = cnpgSharedExpansionGap(allVolumes)
   if (expansionGap) notes.push(`Volume expansion unknown: ${expansionGap}`)
   const stated: StatedOnce = { usage: data.usage.state !== 'ok' && data.usage.state !== 'notRead', expansion: !!expansionGap }
@@ -388,7 +410,7 @@ export function CNPGStorage({ namespace, name, primary }: { namespace: string; n
 
       <div className="grid items-start gap-4 xl:grid-cols-2">
         {data.instances.map((inst) => (
-          <InstanceCard key={inst.name} inst={inst} walCoverage={data.wal} stated={stated} />
+          <InstanceCard key={inst.name} inst={inst} walCoverage={data.wal} stated={stated} slotStandby={slotStandby} />
         ))}
       </div>
 

@@ -122,6 +122,17 @@ describe('a live read replaces what it disproves', () => {
     expect(r.attention).toBe(false)
     expect(r.replication.text).toBe('1/1 streaming')
   })
+  it('keeps a fleet slot warning the live read cannot disprove', () => {
+    // Unmeasured: inactive, retained bytes not reported.
+    const unmeasured = withLiveReplication(base([fleetSlot]), rt({ state: 'ok', timeline: 1, replication: [{ applicationName: 'pg-2', state: 'streaming' }], slots: [{ name: '_cnpg_pg_2', type: 'physical', active: false }] }))
+    expect(unmeasured.problems.map((p) => p.id)).toEqual(['slot:db/pg:_cnpg_pg_2'])
+    // Absent from a capped, partial list.
+    const partial = withLiveReplication(base([fleetSlot]), rt({ state: 'partial', replication: null, slots: [] }))
+    expect(partial.problems.map((p) => p.id)).toEqual(['slot:db/pg:_cnpg_pg_2'])
+    // Absent from a complete list: the slot is gone.
+    const gone = withLiveReplication(base([fleetSlot]), rt({ state: 'ok', timeline: 1, replication: [{ applicationName: 'pg-2', state: 'streaming' }], slots: [] }))
+    expect(gone.problems).toEqual([])
+  })
   it('judges slots from a partial primary report the replication rows cannot use', () => {
     const r = withLiveReplication(base([]), rt({ state: 'partial', incomplete: true, replication: null, slots: [{ name: '_cnpg_pg_2', type: 'physical', active: false, retainedBytes: 3 * 1024 ** 3 }] }))
     expect(r.problems.map((p) => p.id)).toEqual(['slot:db/pg:_cnpg_pg_2'])

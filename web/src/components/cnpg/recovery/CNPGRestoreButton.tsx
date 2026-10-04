@@ -3,10 +3,10 @@ import { History } from 'lucide-react'
 import { Tooltip } from '@skyhook-io/k8s-ui'
 import { CNPGRestoreDialog, type CNPGRestoreEntry } from './CNPGRestoreDialog'
 
-/** Header action on a Backup or ObjectStore: restore into a new Cluster. */
+/** Restore into a new Cluster, from a Backup, an ObjectStore or a Cluster's backups. */
 export function CNPGRestoreButton({ namespace, entry, disabledReason, compact }: { namespace: string; entry: CNPGRestoreEntry; disabledReason?: string; compact?: boolean }) {
   const [open, setOpen] = useState(false)
-  const label = entry.kind === 'backup' ? 'Restore from this backup' : 'Restore a cluster from this store'
+  const label = entry.kind === 'backup' ? 'Restore from this backup' : entry.kind === 'cluster' ? 'Restore to a new cluster' : 'Restore a cluster from this store'
   return (
     <>
       <Tooltip content={disabledReason ?? `${label} into a new Cluster`} position="bottom">

@@ -145,7 +145,12 @@ export function cnpgOperatorState(op: CNPGOperatorResponse, now = Date.now()): C
       }
     }
     const unreadHooks = d.webhooks.filter((w) => w.state !== 'ok')
-    if (unreadHooks.length > 0) unread.push(`Admission webhook configurations not read (${unreadHooks.map((w) => w.name).join(', ')}).`)
+    if (unreadHooks.length > 0) {
+      // Services are found through readable configurations only, so an unread
+      // one may name a Service with no endpoint.
+      webhooksServed = false
+      unread.push(`Admission webhook configurations not read (${unreadHooks.map((w) => w.name).join(', ')}).`)
+    }
     if (d.webhookServices.length === 0) webhooksServed = false
   }
   if (leading) confirmed.push('the operator is leading')

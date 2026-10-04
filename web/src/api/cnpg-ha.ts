@@ -141,11 +141,11 @@ export function cnpgLiveSlotRetentions(row: CNPGFleetRow, rt: CNPGRuntimeRespons
   if (!primary || !slots) return []
   const instances = (rt?.instances ?? []).map((i) => i.pod)
   return slots
-    .filter((sl) => sl.active === false && sl.type === 'physical' && (sl.retainedBytes ?? 0) >= CNPG_SLOT_RETENTION_WARNING_BYTES)
+    .filter((sl): sl is typeof sl & { retainedBytes: number } => sl.active === false && sl.type === 'physical' && sl.retainedBytes !== undefined && sl.retainedBytes >= CNPG_SLOT_RETENTION_WARNING_BYTES)
     .map((sl) => ({
       slot: sl.name,
       pod: primary.pod,
-      bytes: sl.retainedBytes ?? 0,
+      bytes: sl.retainedBytes,
       standby: cnpgHASlotInstance(row.cluster, sl.name, instances),
       measuredBy: 'the instance manager',
       sourceDetail: 'The primary’s /pg/status replication slots (active) and the exporter’s retained WAL',
@@ -198,14 +198,22 @@ function withLiveStandbys(row: CNPGFleetRow, rt: CNPGRuntimeResponse | undefined
 }
 
 // Slots are judged from the primary's own slot list whenever it was read,
-// whatever the replication rows say; that read replaces the fleet's.
+// whatever the replication rows say. A fleet warning is cleared only by
+// evidence against it: the slot active, measured below the threshold, or
+// absent from a complete list. An unmeasured slot or a capped, partial list
+// leaves it standing.
 function withLiveSlots(row: CNPGFleetRow, rt: CNPGRuntimeResponse | undefined): CNPGFleetRow {
   const primary = rt?.instances.find((i) => i.role === 'primary')
-  if (!primary || (primary.status.state !== 'ok' && primary.status.state !== 'partial') || !primary.status.slots) return row
+  const slots = primary && (primary.status.state === 'ok' || primary.status.state === 'partial') ? primary.status.slots : undefined
+  if (!primary || !slots) return row
+  const complete = primary.status.state === 'ok'
+  const byName = new Map(slots.map((sl) => [sl.name, sl]))
   const slotPrefix = `slot:${row.key}:`
-  return cnpgWithProblems(
-    row,
-    cnpgLiveSlotRetentions(row, rt).map((r) => cnpgSlotRetentionProblem(row, r)),
-    (p) => p.id.startsWith(slotPrefix),
-  )
+  const disproven = (p: CNPGProblem) => {
+    if (!p.id.startsWith(slotPrefix)) return false
+    const sl = byName.get(p.id.slice(slotPrefix.length))
+    if (!sl) return complete
+    return sl.active === true || (sl.retainedBytes !== undefined && sl.retainedBytes < CNPG_SLOT_RETENTION_WARNING_BYTES)
+  }
+  return cnpgWithProblems(row, cnpgLiveSlotRetentions(row, rt).map((r) => cnpgSlotRetentionProblem(row, r)), disproven)
 }

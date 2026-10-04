@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CNPGOperatorResponse, CNPGOperatorVerdict } from '../../api/cnpg'
-import { cnpgOperatorActionNote, cnpgOperatorBannerModel, cnpgOperatorConcerns, cnpgRestartHistory } from './operatorStatus'
+import { cnpgOperatorActionNote, cnpgOperatorBannerModel, cnpgOperatorConcerns, cnpgOperatorState, cnpgRestartHistory } from './operatorStatus'
 
 const down: CNPGOperatorVerdict = {
   state: 'notReconciling',
@@ -63,5 +63,41 @@ describe('operator current state', () => {
     const notReady = op([{ name: 'm-1', ready: false, restarts: 0 }])
     notReady.components[0].readyReplicas = 0
     expect(cnpgOperatorConcerns(notReady, now)).toEqual([{ tone: 'unhealthy', text: 'The operator has 0 of 1 replicas ready.' }])
+  })
+})
+
+describe('operator current state claims only what it read', () => {
+  const diag = (webhooks: any[]) => ({
+    namespace: 'cnpg-system',
+    deployment: 'cnpg-controller-manager',
+    pods: [],
+    podCoverage: { state: 'ok' },
+    leader: { state: 'ok', holderIsCurrentPod: true, stale: false },
+    watch: { all: true, namespaces: [], source: '' },
+    webhooks,
+    webhookServices: [{ state: 'ok', namespace: 'cnpg-system', name: 'cnpg-webhook-service', readyEndpoints: 1, notReadyEndpoints: 0 }],
+    metricsPort: 8080,
+    reconcile: [],
+    events: { state: 'ok', items: [] },
+  })
+  const op = (webhooks: any[]): CNPGOperatorResponse =>
+    ({
+      coverage: { deployments: { state: 'full' }, services: { state: 'full' } },
+      components: [{ role: 'operator', namespace: 'cnpg-system', deployment: 'cnpg-controller-manager', readyReplicas: 1, replicas: 1, pods: [] }],
+      config: [],
+      diagnosis: [diag(webhooks)],
+    }) as unknown as CNPGOperatorResponse
+  const mutating = { state: 'ok', kind: 'MutatingWebhookConfiguration', name: 'cnpg-mutating', webhooks: [{ name: 'm', failurePolicy: 'Fail', caBundleSet: true, service: 'cnpg-system/cnpg-webhook-service', url: false }] }
+  it('confirms webhooks only when every configuration was read', () => {
+    expect(cnpgOperatorState(op([mutating])).confirmed).toContain('its webhooks have ready endpoints')
+    const partial = cnpgOperatorState(op([mutating, { state: 'denied', kind: 'ValidatingWebhookConfiguration', name: 'cnpg-validating', webhooks: [] }]))
+    expect(partial.confirmed).not.toContain('its webhooks have ready endpoints')
+    expect(partial.unread.join(' ')).toContain('cnpg-validating')
+  })
+  it('treats an operator scaled to zero as not reconciling', () => {
+    const scaled = op([mutating])
+    scaled.components[0].readyReplicas = 0
+    scaled.components[0].replicas = 0
+    expect(cnpgOperatorState(scaled).concerns[0]).toEqual({ tone: 'unhealthy', text: 'The operator is scaled to 0: nothing reconciles.' })
   })
 })

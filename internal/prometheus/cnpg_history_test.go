@@ -293,6 +293,9 @@ func TestQueryCNPGFleetLagSeparatesNoStandbyFromUnscraped(t *testing.T) {
 // left to replay), so the receiver is read on its own and never inferred.
 func TestQueryCNPGFleetLagReadsWALReceivers(t *testing.T) {
 	q := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
+		if strings.Contains(query, "max_over_time(cnpg_pg_replication_is_wal_receiver_up") {
+			return &prom.QueryResult{}, nil
+		}
 		if strings.Contains(query, "cnpg_pg_replication_is_wal_receiver_up") {
 			for _, want := range []string{"max by (pod) (cnpg_pg_replication_is_wal_receiver_up{", "(max by (pod) (cnpg_pg_replication_in_recovery{", ") == 1)", `cluster_id="a"`} {
 				if !strings.Contains(query, want) {
@@ -458,6 +461,9 @@ func TestQueryCNPGFleetSlotsCapsBySize(t *testing.T) {
 
 func TestQueryCNPGFleetLagReportsSustainedLagSeparately(t *testing.T) {
 	q := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
+		if strings.Contains(query, "cnpg_pg_replication_is_wal_receiver_up") {
+			return &prom.QueryResult{}, nil
+		}
 		if strings.Contains(query, "min_over_time") {
 			// Every raw sample in the window, and a series that already
 			// existed when the window began: a sample count cannot prove age.
@@ -482,5 +488,38 @@ func TestQueryCNPGFleetLagReportsSustainedLagSeparately(t *testing.T) {
 	}
 	if _, ok := got.Sustained["b"]; ok {
 		t.Error("b spiked to 90 s now but has no sustained reading; it must not get one")
+	}
+}
+
+func TestQueryCNPGFleetLagSustainedReceiverLossNeedsAStandbyThroughout(t *testing.T) {
+	q := &fakeCNPGQuerier{instant: func(query string) (*prom.QueryResult, error) {
+		if !strings.Contains(query, "max_over_time(cnpg_pg_replication_is_wal_receiver_up") {
+			return &prom.QueryResult{}, nil
+		}
+		// Down in every sample, a standby in every sample (a primary reports no
+		// receiver, so a former primary must not qualify on its primary
+		// samples), and reporting since before the window.
+		for _, want := range []string{
+			"max by (pod) (max_over_time(cnpg_pg_replication_is_wal_receiver_up{",
+			"[5m])) == 0)",
+			"min by (pod) (min_over_time(cnpg_pg_replication_in_recovery{",
+			"[5m])) == 1)",
+			"} offset 5m))",
+		} {
+			if !strings.Contains(query, want) {
+				t.Errorf("sustained receiver query lacks %q: %s", want, query)
+			}
+		}
+		return &prom.QueryResult{Series: []prom.Series{vec(map[string]string{"pod": "a-3"}, 0), vec(map[string]string{"pod": "a-2"}, 0), vec(map[string]string{"pod": "zzz-1"}, 0)}}, nil
+	}}
+	got, err := queryCNPGFleetLag(context.Background(), q, "pg", []string{"a", "b"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.ReceiversDownSustained["a"], ",") != "a-2,a-3" {
+		t.Errorf("a sustained down = %v, want a-2,a-3 (sorted)", got.ReceiversDownSustained["a"])
+	}
+	if _, ok := got.ReceiversDownSustained["b"]; ok {
+		t.Error("b has no sustained receiver loss")
 	}
 }

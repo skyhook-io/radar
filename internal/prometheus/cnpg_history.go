@@ -475,12 +475,14 @@ func queryCNPGFleetLag(ctx context.Context, q seriesQuerier, namespace string, c
 }
 
 // querySustainedReceiverDown is best effort like the sustained lag: every raw
-// receiver sample in the window was 0, and the series already existed when
-// the window began, so a standby that just started cannot qualify.
+// receiver sample in the window was 0, the instance was a standby in every
+// sample of the window (a primary reports no receiver, so a former primary
+// just after a switchover must not qualify on its primary samples), and the
+// series already existed when the window began.
 func querySustainedReceiverDown(ctx context.Context, q seriesQuerier, sel string, known map[string]bool) map[string][]string {
 	window := fmt.Sprintf("%dm", int(CNPGReceiverDownWindow.Minutes()))
 	query := "(max by (pod) (max_over_time(cnpg_pg_replication_is_wal_receiver_up{" + sel + "}[" + window + "])) == 0)" +
-		" and on (pod) (max by (pod) (cnpg_pg_replication_in_recovery{" + sel + "}) == 1)" +
+		" and on (pod) (min by (pod) (min_over_time(cnpg_pg_replication_in_recovery{" + sel + "}[" + window + "])) == 1)" +
 		" and on (pod) (max by (pod) (cnpg_pg_replication_is_wal_receiver_up{" + sel + "} offset " + window + "))"
 	res, err := q.Query(ctx, query)
 	if err != nil {
