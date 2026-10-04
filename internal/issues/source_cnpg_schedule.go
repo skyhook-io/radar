@@ -36,9 +36,14 @@ type cnpgNamespaceBackupEvidence struct {
 	schedules []*unstructured.Unstructured
 	backups   []*unstructured.Unstructured
 	stores    []*unstructured.Unstructured
-	// schedulesKnown: the ScheduledBackup kind is watched, so an empty list
-	// means none rather than unread. Without it nothing is evaluated.
+	// schedulesKnown, backupsKnown, storesKnown: the kind is watched and its
+	// list was read, so an empty list means none rather than unread. A run is
+	// judged missed only from evidence that was read: without schedules
+	// nothing is evaluated, without Backups no cluster is, and without
+	// ObjectStores no cluster whose backups land in one is.
 	schedulesKnown bool
+	backupsKnown   bool
+	storesKnown    bool
 }
 
 // detectCNPGScheduledRunIssues raises, per Cluster, that a schedule fired and
@@ -76,10 +81,14 @@ func detectCNPGScheduledRunIssues(p Provider, clusterGVR schema.GroupVersionReso
 			e.schedules, e.schedulesKnown = items, true
 		}
 		if g, ok := gvrs[cnpgGroup+"/Backup"]; ok {
-			e.backups, _ = p.ListDynamic(g, ns)
+			if items, err := p.ListDynamic(g, ns); err == nil {
+				e.backups, e.backupsKnown = items, true
+			}
 		}
 		if g, ok := gvrs[cnpgBarmanGroup+"/ObjectStore"]; ok {
-			e.stores, _ = p.ListDynamic(g, ns)
+			if items, err := p.ListDynamic(g, ns); err == nil {
+				e.stores, e.storesKnown = items, true
+			}
 		}
 		evidence[ns] = e
 		return e
@@ -91,7 +100,10 @@ func detectCNPGScheduledRunIssues(p Provider, clusterGVR schema.GroupVersionReso
 			continue
 		}
 		e := load(c.GetNamespace())
-		if !e.schedulesKnown {
+		if !e.schedulesKnown || !e.backupsKnown {
+			continue
+		}
+		if cnpgBarmanPlugin(c).objectStore != "" && !e.storesKnown {
 			continue
 		}
 		if iss, ok := cnpgScheduledRunIssue(clusterGVR, c, e, now); ok {

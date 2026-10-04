@@ -39,6 +39,7 @@ type fakeProvider struct {
 	change          map[string]*issuesapi.ChangeContext
 	webhookRefs     map[string][]AdmissionWebhookRef
 	workloadBacks   map[string]bool
+	listErr         map[schema.GroupVersionResource]error
 }
 
 type secretProducerResult struct {
@@ -59,6 +60,9 @@ func (f *fakeProvider) WatchedDynamic() []schema.GroupVersionResource {
 	return out
 }
 func (f *fakeProvider) ListDynamic(gvr schema.GroupVersionResource, _ string) ([]*unstructured.Unstructured, error) {
+	if err := f.listErr[gvr]; err != nil {
+		return nil, err
+	}
 	return f.dynamic[gvr], nil
 }
 func (f *fakeProvider) ListDynamicAllNamespaces(gvr schema.GroupVersionResource) ([]*unstructured.Unstructured, error) {

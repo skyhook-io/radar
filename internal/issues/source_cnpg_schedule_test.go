@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -205,6 +206,45 @@ func TestCNPGScheduledRunNeedsTheScheduleKind(t *testing.T) {
 	}
 	if got := detectCNPGScheduledRunIssues(p, cnpgClusterGVR, []*unstructured.Unstructured{c}, cnpgScheduleNow); len(got) != 0 {
 		t.Errorf("issues = %v", reasonsOf(got))
+	}
+}
+
+// A run is judged missed only from backups that were read: a Backup list that
+// failed or is not watched, or an unread ObjectStore for a cluster backing up
+// to one, says nothing about whether the run produced a backup.
+func TestCNPGScheduledRunNeedsReadableBackups(t *testing.T) {
+	at := func(h, m int) time.Time { return time.Date(2026, 9, 30, h, m, 0, 0, time.UTC) }
+	schedules := []*unstructured.Unstructured{cnpgHourly(false)}
+	backups := []*unstructured.Unstructured{cnpgBackupAt("b1", "completed", at(12, 0), at(12, 2))}
+	plain := cnpgCluster(nil, nil)
+	plugin := cnpgCluster(map[string]any{"plugins": []any{map[string]any{
+		"name": "barman-cloud.cloudnative-pg.io", "parameters": map[string]any{"barmanObjectName": "store", "serverName": "main-v2"},
+	}}}, nil)
+	detect := func(p *fakeProvider, c *unstructured.Unstructured) []Issue {
+		return detectCNPGScheduledRunIssues(p, cnpgClusterGVR, []*unstructured.Unstructured{c}, cnpgScheduleNow)
+	}
+
+	readable := cnpgScheduleProvider([]*unstructured.Unstructured{plain}, schedules, backups, nil)
+	if got := detect(readable, plain); len(got) != 1 {
+		t.Fatalf("with readable backups the missed run is reported, got %v", reasonsOf(got))
+	}
+
+	failed := cnpgScheduleProvider([]*unstructured.Unstructured{plain}, schedules, backups, nil)
+	failed.listErr = map[schema.GroupVersionResource]error{cnpgBackupGVR: errors.New("forbidden")}
+	if got := detect(failed, plain); len(got) != 0 {
+		t.Errorf("a failed Backup list raised %v", reasonsOf(got))
+	}
+
+	unwatched := cnpgScheduleProvider([]*unstructured.Unstructured{plain}, schedules, backups, nil)
+	delete(unwatched.dynamic, cnpgBackupGVR)
+	if got := detect(unwatched, plain); len(got) != 0 {
+		t.Errorf("an unwatched Backup kind raised %v", reasonsOf(got))
+	}
+
+	storeFailed := cnpgScheduleProvider([]*unstructured.Unstructured{plugin}, schedules, backups, nil)
+	storeFailed.listErr = map[schema.GroupVersionResource]error{cnpgObjectStoreGVR: errors.New("forbidden")}
+	if got := detect(storeFailed, plugin); len(got) != 0 {
+		t.Errorf("an unread ObjectStore raised %v for a plugin cluster", reasonsOf(got))
 	}
 }
 
