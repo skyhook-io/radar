@@ -35,6 +35,7 @@ func writeReleaseReadError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, "insufficient permissions to read this Helm release: "+err.Error())
 		return
 	}
+	log.Printf("[helm] Failed to read release content: %v", err)
 	writeError(w, http.StatusInternalServerError, err.Error())
 }
 

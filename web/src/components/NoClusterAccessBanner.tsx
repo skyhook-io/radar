@@ -21,7 +21,8 @@ export function NoClusterAccessBanner() {
   const [groupsOpen, setGroupsOpen] = useState(false)
   const groupsDisclosure = useDisclosure(groupsOpen)
 
-  if (!me?.noNamespaceAccess) return null
+  // The remembered answer only counts for the person signed in now.
+  if (!me?.noNamespaceAccess || me.username !== auth?.username) return null
 
   const groups = me.groups ?? []
   return (

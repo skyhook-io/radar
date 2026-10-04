@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"log"
 	"net/http"
 	"strings"
@@ -218,10 +219,10 @@ func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string
 	if err != nil {
 		if !helm.IsForbiddenError(err) {
 			log.Printf("[issues] Failed to list Helm releases for issue stream: %v", err)
-		} else if _, seen := helmIssuesDeniedLogged.LoadOrStore(username, struct{}{}); !seen {
-			// Logged once per identity: the alerts worker polls this, and a
-			// cluster without a Secret-read binding would otherwise drop Helm
-			// alerts with no trace anywhere.
+		} else if _, seen := helmIssuesDeniedLogged.LoadOrStore(pkgauth.IdentityCacheKey(username, groups), struct{}{}); !seen {
+			// Logged once per identity (username + groups): the alerts worker
+			// polls this, and a cluster without a Secret-read binding would
+			// otherwise drop Helm alerts with no trace anywhere.
 			log.Printf("[issues] Helm release issues omitted for %q: Kubernetes denied listing release Secrets", username)
 		}
 		return nil
