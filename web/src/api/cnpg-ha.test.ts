@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { CNPGFleetRow } from '@skyhook-io/k8s-ui'
+import type { CNPGFleetRow, Grant } from '@skyhook-io/k8s-ui'
 import type { CNPGRuntimeResponse } from './cnpg'
 import { cnpgInstanceLiveUnavailable, cnpgReplicationGap, withLiveReplication } from './cnpg-ha'
 
@@ -40,9 +40,9 @@ describe('withLiveReplication', () => {
 })
 
 describe('cnpgInstanceLiveUnavailable', () => {
-  const rt = (proxy: 'allowed' | 'denied', grant?: string) => ({ permission: { proxy, grant }, instances: [] }) as unknown as CNPGRuntimeResponse
+  const rt = (proxy: 'allowed' | 'denied', grant?: Grant) => ({ permission: { proxy, grant }, instances: [] }) as unknown as CNPGRuntimeResponse
   it('names the grant only when the proxy is denied', () => {
-    expect(cnpgInstanceLiveUnavailable(rt('denied', 'get pods/proxy in db'), undefined)).toBe('needs get pods/proxy in db')
+    expect(cnpgInstanceLiveUnavailable(rt('denied', { verb: 'get', resource: 'pods', subresource: 'proxy', namespace: 'db' }), undefined)).toBe('needs get pods/proxy in namespace db')
     expect(cnpgInstanceLiveUnavailable(rt('allowed'), undefined)).toBeUndefined()
     expect(cnpgInstanceLiveUnavailable(undefined, undefined)).toBe('instance managers not read yet')
     expect(cnpgInstanceLiveUnavailable(undefined, new Error('boom'))).toBe('the runtime read failed: boom')
@@ -56,8 +56,8 @@ describe('cnpgReplicationGap', () => {
       'pg-1 did not report (PostgreSQL is not running on this instance)',
     )
     expect(cnpgReplicationGap(rt([{ pod: 'pg-1', role: 'primary', status: { state: 'ok', replication: [] } }]), undefined)).toBeUndefined()
-    expect(cnpgReplicationGap({ permission: { proxy: 'denied', grant: 'get pods/proxy in db' }, instances: [] } as unknown as CNPGRuntimeResponse, undefined)).toBe(
-      'needs get pods/proxy in db',
+    expect(cnpgReplicationGap({ permission: { proxy: 'denied', grant: { verb: 'get', resource: 'pods', subresource: 'proxy', namespace: 'db' } }, instances: [] } as unknown as CNPGRuntimeResponse, undefined)).toBe(
+      'needs get pods/proxy in namespace db',
     )
   })
 })

@@ -4,6 +4,7 @@ import { Database, FileCheck2, Settings2, ShieldCheck, Waypoints } from 'lucide-
 import { applyCNPGDisk, applyCNPGFleetMetrics, buildCNPGFleet, type CNPGDiskReading, type CNPGFleet, type SidebarCategoryWorkspace } from '@skyhook-io/k8s-ui'
 import type { APIResource } from '../../types'
 import { useCNPGWorkspace } from '../../api/cnpg'
+import { useRadarFeature } from '../../api/client'
 import { useCNPGFleetDisk } from '../../api/cnpg-storage'
 import { useCNPGFleetMetrics } from '../../api/cnpg-history'
 import { CNPG_SCREENS, type CNPGScreen } from './routes'
@@ -50,18 +51,20 @@ function diskFailed(clusters: any[], err: unknown): CNPGDiskReading[] {
   return clusters.map((c) => ({ namespace: c?.metadata?.namespace ?? '', name: c?.metadata?.name ?? '', state: 'error', reason, claims: 0, measured: 0 }))
 }
 
-function destinationCount(screen: CNPGScreen, fleet: CNPGFleet | null): { count?: number | null; title?: string } {
+function destinationCount(screen: CNPGScreen, fleet: CNPGFleet | null): { count?: number | null; lowerBound?: boolean; title?: string } {
   if (!fleet) return {}
-  const lowerBound = fleet.incompleteKinds.length > 0 ? ' Some CloudNativePG data is not readable, so this is a lower bound.' : ''
+  const partial = fleet.incompleteKinds.length > 0
+  const note = partial ? ' Some CloudNativePG data is not readable, so this is a lower bound.' : ''
+  const at = (count: number, what: string) => ({ count, lowerBound: partial, title: `${partial ? 'At least ' : ''}${count} ${what}.${note}` })
   switch (screen) {
     case 'overview':
-      return { count: fleet.attentionCount, title: `${fleet.attentionCount} clusters need attention.${lowerBound}` }
+      return at(fleet.attentionCount, 'clusters need attention')
     case 'protection':
-      return { count: fleet.categoryCounts.protection, title: `${fleet.categoryCounts.protection} clusters with failing backups or WAL archiving.${lowerBound}` }
+      return at(fleet.categoryCounts.protection, 'clusters with failing backups or WAL archiving')
     case 'declarations':
-      return { count: fleet.categoryCounts.declarations, title: `${fleet.categoryCounts.declarations} clusters with declarations that are not reconciled.${lowerBound}` }
+      return at(fleet.categoryCounts.declarations, 'clusters with declarations that are not reconciled')
     case 'pooling':
-      return { count: fleet.categoryCounts.pooling, title: `${fleet.categoryCounts.pooling} clusters with Pooler problems.${lowerBound}` }
+      return at(fleet.categoryCounts.pooling, 'clusters with Pooler problems')
     default:
       return {}
   }
@@ -82,19 +85,23 @@ export function useCNPGSidebarWorkspace({
   active?: { screen: CNPGScreen; child?: { label: string; title?: string } }
 }): Record<string, SidebarCategoryWorkspace> | undefined {
   const navigate = useNavigate()
-  const discovered = cnpgDiscovered(apiResources)
-  const { fleet } = useCNPGFleet(namespaces, discovered)
+  // A Radar that predates the workspace serves none of its endpoints: no
+  // destinations rather than ones that fail when opened.
+  const { support } = useRadarFeature('cnpgWorkspace')
+  const available = cnpgDiscovered(apiResources) && support !== 'unsupported'
+  const { fleet } = useCNPGFleet(namespaces, available)
   const nsKey = namespaces.join(',')
 
   return useMemo(() => {
-    if (!discovered) return undefined
+    if (!available) return undefined
     const destinations = CNPG_SCREENS.map((s) => {
-      const { count, title } = destinationCount(s.id, fleet)
+      const { count, lowerBound, title } = destinationCount(s.id, fleet)
       return {
         id: s.id,
         label: s.label,
         icon: ICONS[s.id],
         count,
+        countLowerBound: lowerBound,
         countTitle: title,
         active: active?.screen === s.id,
         child: active?.screen === s.id ? active.child : undefined,
@@ -108,5 +115,5 @@ export function useCNPGSidebarWorkspace({
         scopeNote: nsKey ? `Counts for namespace ${nsKey.split(',').join(', ')}` : undefined,
       },
     }
-  }, [discovered, fleet, active?.screen, active?.child?.label, active?.child?.title, navigate, nsKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [available, fleet, active?.screen, active?.child?.label, active?.child?.title, navigate, nsKey]) // eslint-disable-line react-hooks/exhaustive-deps
 }

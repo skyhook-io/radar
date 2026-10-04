@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgClusterProblemsPath, cnpgDimensionPath, cnpgIssuesPath, cnpgWithinDetail } from './paths'
+import { cnpgClusterProblemsPath, cnpgDimensionPath, cnpgWithinDetail } from './paths'
+import { issuesPathForSubject } from '../../utils/page-links'
 
 describe('cnpgDimensionPath', () => {
   it('opens each health dimension where it is explained', () => {
@@ -32,15 +33,15 @@ describe('cnpgClusterProblemsPath', () => {
   })
 })
 
-describe('cnpgIssuesPath', () => {
+describe('issuesPathForSubject', () => {
   it('links to the Issues page narrowed to the subject', () => {
-    expect(cnpgIssuesPath({ kind: 'Backup', namespace: 'pg', name: 'b-1' })).toBe('/issues?kind=Backup&resource=pg%2Fb-1')
-    expect(cnpgIssuesPath({ kind: 'ClusterImageCatalog', namespace: '', name: 'pg' })).toBe('/issues?kind=ClusterImageCatalog&resource=pg')
+    expect(issuesPathForSubject({ kind: 'Backup', namespace: 'pg', name: 'b-1' })).toBe('/issues?kind=Backup&resource=pg%2Fb-1')
+    expect(issuesPathForSubject({ kind: 'ClusterImageCatalog', namespace: '', name: 'pg' })).toBe('/issues?kind=ClusterImageCatalog&resource=pg')
   })
   it('keeps the current namespace view filter', () => {
-    expect(cnpgIssuesPath({ kind: 'Cluster', namespace: 'pg', name: 'main' }, 'pg,app')).toBe('/issues?namespaces=pg%2Capp&kind=Cluster&resource=pg%2Fmain')
+    expect(issuesPathForSubject({ kind: 'Cluster', namespace: 'pg', name: 'main' }, 'pg,app')).toBe('/issues?namespaces=pg%2Capp&kind=Cluster&resource=pg%2Fmain')
   })
   it('carries the API group, so a CNPG Cluster is not a CAPI one', () => {
-    expect(cnpgIssuesPath({ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'main' })).toBe('/issues?kind=Cluster&group=postgresql.cnpg.io&resource=pg%2Fmain')
+    expect(issuesPathForSubject({ kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'main' })).toBe('/issues?kind=Cluster&group=postgresql.cnpg.io&resource=pg%2Fmain')
   })
 })

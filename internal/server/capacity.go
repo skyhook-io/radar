@@ -441,7 +441,7 @@ func (s *Server) loadCapacityModel(w http.ResponseWriter, r *http.Request, ident
 	result.meta.Provider = capacityProvider(result.meta.Provider, nodePools, nodeClaims, nodeClasses, result.meta.Coverage)
 	resourceCache := k8s.GetResourceCache()
 	ownerResolutionAllowed, workloadAttributionPartial := capacityOwnerResolutionPermissions(pods, func(group, resource, namespace string) bool {
-		return s.canRead(r, group, resource, namespace, "list") && capacityCacheCoversNamespace(resourceCache, resource, namespace)
+		return s.canRead(r, group, resource, namespace, "list") && cacheCoversNamespace(resourceCache, resource, namespace)
 	})
 	if workloadAttributionPartial {
 		coverage := result.meta.Coverage[capacityapi.CoverageWorkloads]
@@ -712,7 +712,7 @@ func (s *Server) loadCapacityPods(r *http.Request, meta *capacityapi.ResponseMet
 		return nil
 	}
 	sourceNamespaces := namespaces
-	cacheNamespaces := capacityNamespacesWithinCache(cache, "pods", sourceNamespaces)
+	cacheNamespaces := namespacesWithinCache(cache, "pods", sourceNamespaces)
 	namespaces = cacheNamespaces.namespaces
 	if cacheNamespaces.unavailable {
 		coverage := unavailableCoverage("pod_cache_scope_unavailable", []string{"scheduledRequests", "aggregateDemand", "workloads", "summary.actions", "demand.summary"})

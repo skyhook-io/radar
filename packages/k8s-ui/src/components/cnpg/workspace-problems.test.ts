@@ -45,7 +45,7 @@ describe('cnpgIssueText', () => {
       message:
         'The last WAL archival did not complete; recovery-point advancement is uncertain: unexpected failure invoking barman-cloud-wal-archive: exit status 4',
     })
-    expect(t.title).toBe('WAL archiving is failing')
+    expect(t.title).toBe('WAL archiving failing')
     expect(t.detail).toContain('exit status 4')
   })
 })

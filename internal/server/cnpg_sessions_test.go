@@ -149,7 +149,7 @@ func TestCNPGActionCancelBackendRefusals(t *testing.T) {
 
 	c.exec = cnpgFakeExec(&calls, `{"found" : 0, "signalled" : false}`, nil)
 	_, err := runCNPGClusterAction(context.Background(), c, "db", "pg", "cancelBackend", cnpgActionReq(t, nil, cnpgSignalParamsFor("u1")))
-	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Status != http.StatusConflict || ae.Code != cnpgCodeChanged {
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Status != http.StatusConflict || ae.Code != actionCodeChanged {
 		t.Errorf("gone backend = %v, want 409 changed", err)
 	}
 
@@ -274,13 +274,13 @@ func TestCNPGActionDestroyInstanceRefusals(t *testing.T) {
 	primary := cnpgDestroyParamsFor(false, "pg-1=pvc-1")
 	primary["pod"], primary["podUID"] = "pg-1", "u1"
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance", cnpgActionReq(t, cnpgDestroyFacts(), primary))
-	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeBlocked || !strings.Contains(ae.Message, "primary") {
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeBlocked || !strings.Contains(ae.Message, "primary") {
 		t.Errorf("primary = %v, want blocked", err)
 	}
 
 	_, err = runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
 		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2")))
-	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeChanged {
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeChanged {
 		t.Errorf("unreviewed WAL volume = %v, want 409 changed", err)
 	}
 
@@ -314,7 +314,7 @@ func TestCNPGActionDestroyInstanceStopsWhenPromotedMidway(t *testing.T) {
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
 		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
 	ae, ok := cnpgActionStatus(t, err)
-	if !ok || ae.Code != cnpgCodePartial || ae.Status != http.StatusConflict || strings.Join(ae.Completed, ",") != "deleted PVC pg-2" {
+	if !ok || ae.Code != actionCodePartial || ae.Status != http.StatusConflict || strings.Join(ae.Completed, ",") != "deleted PVC pg-2" {
 		t.Fatalf("promotion mid-destroy = %+v, want 409 partial after the first PVC only", err)
 	}
 	if _, err := env.typed.CoreV1().PersistentVolumeClaims("db").Get(context.Background(), "pg-2-wal", metav1.GetOptions{}); err != nil {
@@ -334,7 +334,7 @@ func TestCNPGActionDestroyInstanceRefusesPodLabelledPrimary(t *testing.T) {
 	}
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
 		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
-	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeChanged || len(ae.Completed) != 0 {
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeChanged || len(ae.Completed) != 0 {
 		t.Fatalf("pod labelled primary = %v, want 409 changed before any write", err)
 	}
 	if _, err := env.typed.CoreV1().PersistentVolumeClaims("db").Get(context.Background(), "pg-2", metav1.GetOptions{}); err != nil {
@@ -350,7 +350,7 @@ func TestCNPGActionDestroyInstanceReportsPartialOutcome(t *testing.T) {
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
 		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
 	ae, ok := cnpgActionStatus(t, err)
-	if !ok || ae.Code != cnpgCodePartial || ae.Status != http.StatusForbidden ||
+	if !ok || ae.Code != actionCodePartial || ae.Status != http.StatusForbidden ||
 		strings.Join(ae.Completed, ",") != "deleted PVC pg-2,deleted PVC pg-2-wal" {
 		t.Fatalf("pod delete refused after PVCs = %+v, want 403 partial listing both PVCs", err)
 	}
@@ -370,7 +370,7 @@ func TestCNPGActionDestroyInstanceRequiresFence(t *testing.T) {
 	}
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
 		cnpgActionReq(t, cnpgActionFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
-	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeBlocked || !strings.HasPrefix(ae.Message, "Fence pg-2 first") {
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeBlocked || !strings.HasPrefix(ae.Message, "Fence pg-2 first") {
 		t.Fatalf("unfenced destroy = %v, want blocked asking to fence first", err)
 	}
 	if _, err := env.typed.CoreV1().PersistentVolumeClaims("db").Get(context.Background(), "pg-2", metav1.GetOptions{}); err != nil || len(env.deletes) != 0 {
@@ -394,7 +394,7 @@ func TestCNPGActionDestroyInstanceStopsWhenUnfencedMidway(t *testing.T) {
 	})
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
 		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
-	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodePartial || strings.Join(ae.Completed, ",") != "deleted PVC pg-2" {
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodePartial || strings.Join(ae.Completed, ",") != "deleted PVC pg-2" {
 		t.Fatalf("fence lifted mid-destroy = %v, want partial after the first PVC", err)
 	}
 	if len(env.deletes) != 0 {
@@ -447,7 +447,7 @@ func TestCNPGActionDestroyInstanceFailedFenceLiftIsPartial(t *testing.T) {
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
 		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
 	ae, ok := cnpgActionStatus(t, err)
-	if !ok || ae.Code != cnpgCodePartial || !strings.Contains(ae.Message, "Unfence") || !slices.Contains(ae.Completed, "deleted Pod pg-2") {
+	if !ok || ae.Code != actionCodePartial || !strings.Contains(ae.Message, "Unfence") || !slices.Contains(ae.Completed, "deleted Pod pg-2") {
 		t.Fatalf("failed fence lift = %v, want partial naming Unfence", err)
 	}
 }
@@ -518,7 +518,7 @@ func TestCNPGPoolerPauseBindsReviewedState(t *testing.T) {
 		Status:     appsv1.DeploymentStatus{ReadyReplicas: 1, UpdatedReplicas: 2, AvailableReplicas: 1},
 	}
 	env := newCNPGActionEnv(t, []runtime.Object{cnpgTestPooler(false)}, deploy)
-	req := CNPGActionRequest{ReviewedContext: "kind-test", UID: "pooler-uid", Facts: []byte(`{"paused":false}`)}
+	req := ActionRequest{ReviewedContext: "kind-test", UID: "pooler-uid", Facts: []byte(`{"paused":false}`)}
 
 	res, err := runCNPGPoolerAction(context.Background(), env.clients(), "db", "pool", "pause", req)
 	if err != nil {
@@ -533,11 +533,11 @@ func TestCNPGPoolerPauseBindsReviewedState(t *testing.T) {
 		t.Errorf("target = %+v", res.Target)
 	}
 
-	_, err = runCNPGPoolerAction(context.Background(), env.clients(), "db", "pool", "resume", CNPGActionRequest{ReviewedContext: "kind-test", UID: "pooler-uid", Facts: []byte(`{"paused":true}`)})
-	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeChanged {
+	_, err = runCNPGPoolerAction(context.Background(), env.clients(), "db", "pool", "resume", ActionRequest{ReviewedContext: "kind-test", UID: "pooler-uid", Facts: []byte(`{"paused":true}`)})
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeChanged {
 		t.Errorf("stale paused = %v, want 409 changed", err)
 	}
-	_, err = runCNPGPoolerAction(context.Background(), env.clients(), "db", "pool", "pause", CNPGActionRequest{ReviewedContext: "kind-test", UID: "pooler-uid"})
+	_, err = runCNPGPoolerAction(context.Background(), env.clients(), "db", "pool", "pause", ActionRequest{ReviewedContext: "kind-test", UID: "pooler-uid"})
 	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Status != http.StatusBadRequest {
 		t.Errorf("missing facts = %v, want 400", err)
 	}
@@ -584,8 +584,8 @@ func TestCNPGActionDestroyInstanceRefusesWithoutEveryGrantBeforeAnyWrite(t *test
 	env.denied = map[string]bool{"patch clusters": true}
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
 		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
-	var ae *cnpgActionError
-	if !errors.As(err, &ae) || ae.Status != http.StatusForbidden || ae.Code == cnpgCodePartial {
+	var ae *actionError
+	if !errors.As(err, &ae) || ae.Status != http.StatusForbidden || ae.Code == actionCodePartial {
 		t.Fatalf("err = %v, want a plain 403 naming patch clusters", err)
 	}
 	if !strings.Contains(ae.Message, "patch clusters") {
@@ -609,8 +609,8 @@ func TestCNPGActionDestroyInstanceLeavesARecreatedClustersFences(t *testing.T) {
 	})
 	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "destroyInstance",
 		cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
-	var ae *cnpgActionError
-	if !errors.As(err, &ae) || ae.Code != cnpgCodePartial {
+	var ae *actionError
+	if !errors.As(err, &ae) || ae.Code != actionCodePartial {
 		t.Fatalf("err = %v, want partial", err)
 	}
 	for _, p := range env.patches {

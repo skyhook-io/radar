@@ -15,21 +15,8 @@ import {
   type HealthLevel,
   Tooltip,
 } from '@skyhook-io/k8s-ui'
-import {
-  CNPGWorkspaceHeader,
-  CoverageNotice,
-  FilterChips,
-  Mono,
-  PathText,
-  ScreenBody,
-  SectionTable,
-  Sub,
-  clusterResource,
-  coverageEmpty,
-  cnpgResource,
-  namespaceChip,
-  type CNPGScreenProps,
-} from './shared'
+import { CNPGWorkspaceHeader, CoverageNotice, clusterResource, coverageEmpty, cnpgResource, type CNPGScreenProps } from './shared'
+import { FilterChips, Mono, namespaceChip, PathText, ScreenBody, SectionTable, Sub } from '../workspace/layout'
 
 const SEVERITY: Record<HealthLevel, 'success' | 'warning' | 'alert' | 'error' | 'neutral'> = {
   healthy: 'success',

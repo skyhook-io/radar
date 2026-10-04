@@ -149,10 +149,10 @@ func (s *Server) readCNPGOperatorFacts(r *http.Request) cnpgOperatorFacts {
 		out.webhookUnknown = out.deploymentsUnknown
 		return out
 	}
-	acc, _, deployments := s.cnpgOperatorDeployments(r, cache, s.cnpgOperatorScope(r))
-	if acc.state != cnpgCoverageFull {
+	acc, deployments := s.cnpgOperatorDeployments(r, cache, s.cnpgOperatorScope(r))
+	if acc.state != kindCoverageFull {
 		out.deploymentsUnknown = "Radar cannot list Deployments in every namespace, so the operator may be out of view"
-		if acc.state == cnpgCoverageSyncing {
+		if acc.state == kindCoverageSyncing {
 			out.deploymentsUnknown = "Deployments are still syncing"
 		}
 	}
@@ -194,7 +194,7 @@ func cnpgOperatorLeading(d *appsv1.Deployment, leader CNPGOperatorLeader) (*bool
 		}
 		return &t, ""
 	case cnpgReadDenied:
-		return nil, "its leader lease is not readable (needs " + leader.Grant + ")"
+		return nil, "its leader lease is not readable (needs " + grantText(leader.Grant) + ")"
 	default:
 		if leader.Reason != "" {
 			log.Printf("[cnpg] Operator %s/%s leader lease unread: %s", d.Namespace, d.Name, leader.Reason)
@@ -219,7 +219,7 @@ func cnpgWebhookRejects(configs []CNPGOperatorWebhookConfig, services []CNPGOper
 		case cnpgReadNotFound:
 			continue
 		case cnpgReadDenied:
-			unknown = append(unknown, cfg.Kind+" "+cfg.Name+" is not readable (needs "+cfg.Grant+")")
+			unknown = append(unknown, cfg.Kind+" "+cfg.Name+" is not readable (needs "+grantText(cfg.Grant)+")")
 			continue
 		default:
 			unknown = append(unknown, cfg.Kind+" "+cfg.Name+" could not be read")
@@ -233,8 +233,8 @@ func cnpgWebhookRejects(configs []CNPGOperatorWebhookConfig, services []CNPGOper
 			switch {
 			case !ok || svc.ReadyEndpoints == nil:
 				grant := ""
-				if ok && svc.Grant != "" {
-					grant = " (needs " + svc.Grant + ")"
+				if ok && svc.Grant != nil {
+					grant = " (needs " + svc.Grant.String() + ")"
 				}
 				unknown = append(unknown, "the endpoints of webhook Service "+wh.Service+" are not readable"+grant)
 			case *svc.ReadyEndpoints == 0:
@@ -340,7 +340,7 @@ func (f cnpgOperatorFacts) verdict(namespace string) CNPGOperatorVerdict {
 // cnpgOperatorWebhookGuard refuses a write that goes through a CNPG admission
 // webhook the API server cannot reach; status subresource patches and Pod
 // deletes do not, so those actions keep their verdict.
-func cnpgOperatorWebhookGuard(v CNPGOperatorVerdict, capability CNPGActionCapability) CNPGActionCapability {
+func cnpgOperatorWebhookGuard(v CNPGOperatorVerdict, capability ActionCapability) ActionCapability {
 	if !capability.Allowed || v.WebhookRejects == nil || !*v.WebhookRejects {
 		return capability
 	}

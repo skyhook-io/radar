@@ -2,14 +2,15 @@ import { useState, type ReactNode } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import { clsx } from 'clsx'
 import { Lock } from 'lucide-react'
-import { ActionConfirmDialog, PaneLoader, Tooltip, formatAge, toneFillClass, toneTextClass } from '@skyhook-io/k8s-ui'
+import { ActionConfirmDialog, PaneLoader, Tooltip, formatAge, toneFillClass, toneTextClass, formatGrant } from '@skyhook-io/k8s-ui'
 import { formatCPUString, formatMemoryString, parseCPUToNanocores, parseMemoryToBytes } from '@skyhook-io/k8s-ui/utils/format'
 import { podMetricsQuery, usePodMetrics } from '../../api/client'
-import { cnpgActionOutcomeLocked, useCNPGAction, useCNPGClusterCapabilities } from '../../api/cnpg'
+import { useCNPGAction, useCNPGClusterCapabilities } from '../../api/cnpg'
+import { actionOutcomeLocked } from '../../api/actions'
 import { useCNPGSessions, type CNPGBackend, type CNPGSessionInstance, type CNPGSessionsResponse } from '../../api/cnpg-sessions'
 import { useToast } from '../ui/Toast'
 import { buildBlockingTree, cnpgConnectionFigure, cnpgNoMetricsReadings, countVictims, type BlockingNode } from './blocking'
-import { CNPGRefreshFailedNotice } from './shared'
+import { RefreshFailedNotice } from '../workspace/layout'
 
 function age(s?: number): string {
   if (s === undefined || s === null) return '—'
@@ -53,7 +54,7 @@ export function CNPGBlockingSessions({
       <div className="space-y-4 p-4">
         {!data && q.isLoading && <PaneLoader label="Reading pg_stat_activity…" className="h-20" />}
         {!data && !q.isLoading && <div className="text-sm text-theme-text-tertiary">Sessions could not be read: {q.error instanceof Error ? q.error.message : 'unknown error'}</div>}
-        <CNPGRefreshFailedNotice queries={[q]} />
+        <RefreshFailedNotice queries={[q]} />
         {data && <Body namespace={namespace} cluster={cluster} data={data} aggregatesGap={aggregatesGap} headroom={headroom} />}
       </div>
       <div className="border-t border-theme-border px-4 py-2 text-xs text-theme-text-tertiary">
@@ -82,7 +83,7 @@ function Body({
       <div className="rounded-lg border border-dashed border-theme-border p-4">
         <div className="flex items-center gap-2 text-sm font-medium text-theme-text-primary">
           <Lock className="h-4 w-4" />
-          Blocking detail needs {data.permission.grant}
+          Blocking detail needs {formatGrant(data.permission.grant) ?? 'create pods/exec'}
         </div>
         <p className="mt-1 text-sm text-theme-text-secondary">
           Who blocks whom is read inside PostgreSQL, which needs exec into the instance.{' '}
@@ -341,11 +342,11 @@ function SignalDialog({
       typedConfirmation={terminate ? String(session.pid) : undefined}
       confirmLabel={terminate ? 'Terminate backend' : 'Stop query'}
       disruptive={terminate}
-      disabledReason={caps.data && data.permission.exec === 'denied' ? `Needs ${data.permission.grant}` : undefined}
+      disabledReason={caps.data && data.permission.exec === 'denied' ? `Needs ${formatGrant(data.permission.grant) ?? 'create pods/exec'}` : undefined}
       incompleteReason={!caps.data ? 'Reading the cluster…' : undefined}
       isLoading={mutation.isPending}
       error={mutation.error?.message}
-      outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}
+      outcomeUnknown={actionOutcomeLocked(mutation.error)}
     />
   )
 }

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ActionConfirmDialog, PaneLoader } from '@skyhook-io/k8s-ui'
-import { cnpgActionCompleted, cnpgActionErrorCode, cnpgActionOutcomeLocked, useCNPGAction } from '../../../api/cnpg'
+import { cnpgActionErrorCode, useCNPGAction } from '../../../api/cnpg'
+import { actionCompleted, actionOutcomeLocked } from '../../../api/actions'
 import { useCNPGDestroyPlan } from '../../../api/cnpg-sessions'
 import { useToast } from '../../ui/Toast'
 import { trackCNPGOperation } from '../operations/store'
@@ -34,7 +35,7 @@ export function CNPGDestroyInstanceDialog({
   const pvcNames = data?.pvcs.map((p) => p.name) ?? []
   const partial = cnpgActionErrorCode(mutation.error) === 'partial'
   const fenced = !!data && (data.facts.fencedInstances.all || data.facts.fencedInstances.instances.includes(pod))
-  const completed = cnpgActionCompleted(mutation.error)
+  const completed = actionCompleted(mutation.error)
   const fenceOffered = !!data && !fenced && !!onFenceFirst
 
   return (
@@ -116,7 +117,7 @@ export function CNPGDestroyInstanceDialog({
       guardSatisfied={!!cap?.allowed}
       isLoading={mutation.isPending}
       error={mutation.error?.message}
-      outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}
+      outcomeUnknown={actionOutcomeLocked(mutation.error)}
       outcomeTitle={partial ? 'Only part of this took effect' : undefined}
     >
       {partial && completed.length > 0 && (

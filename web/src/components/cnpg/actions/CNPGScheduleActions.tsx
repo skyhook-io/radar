@@ -1,19 +1,14 @@
 import { useState } from 'react'
 import { ActionConfirmDialog, CNPGSchedulePreviewFacts, FactGrid, Tooltip, useDebouncedValue } from '@skyhook-io/k8s-ui'
-import {
-  cnpgActionOutcomeLocked,
-  useCNPGAction,
-  useCNPGScheduleCapabilities,
-  useCNPGSchedulePreview,
-  type CNPGScheduleActionName,
-} from '../../../api/cnpg'
+import { useCNPGAction, useCNPGScheduleCapabilities, useCNPGSchedulePreview, type CNPGScheduleActionName } from '../../../api/cnpg'
+import { actionOutcomeLocked, capabilityReason } from '../../../api/actions'
 import { useToast } from '../../ui/Toast'
 import { useCNPGWriteGuard } from './useCNPGWriteGuard'
 import { cnpgOperatorActionNote } from '../operatorStatus'
 import { trackCNPGOperation } from '../operations/store'
 
 const BUTTON =
-  'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-theme-border bg-theme-surface px-2.5 py-1.5 text-xs font-medium text-theme-text-primary hover:bg-theme-hover disabled:cursor-not-allowed disabled:opacity-50'
+  'btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium disabled:cursor-not-allowed'
 
 /** Suspend, resume, run a ScheduledBackup's settings once, or change its schedule. */
 export function CNPGScheduleActions({ namespace, name }: { namespace: string; name: string }) {
@@ -24,7 +19,7 @@ export function CNPGScheduleActions({ namespace, name }: { namespace: string; na
   const btn = (id: CNPGScheduleActionName, label: string) => {
     const cap = data.actions[id]
     return (
-      <Tooltip key={id} content={cap.allowed ? undefined : cap.reason ?? 'Not allowed'} position="bottom">
+      <Tooltip key={id} content={capabilityReason(cap)} position="bottom">
         <button type="button" className={BUTTON} disabled={!cap.allowed} onClick={() => setOpen(id)}>
           {label}
         </button>
@@ -98,7 +93,7 @@ function EditScheduleDialog({ namespace, name, onClose }: { namespace: string; n
       confirmLabel="Save schedule"
       isLoading={mutation.isPending}
       error={mutation.error?.message}
-      outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}
+      outcomeUnknown={actionOutcomeLocked(mutation.error)}
       disabledReason={disabledReason}
       incompleteReason={incompleteReason}
     >
@@ -203,7 +198,7 @@ function ScheduleDialog({ kind, namespace, name, onClose }: { kind: CNPGSchedule
       confirmLabel={spec.confirm}
       isLoading={mutation.isPending}
       error={mutation.error?.message}
-      outcomeUnknown={cnpgActionOutcomeLocked(mutation.error)}
+      outcomeUnknown={actionOutcomeLocked(mutation.error)}
       disabledReason={data.actions[kind].allowed ? undefined : data.actions[kind].reason}
     />
   )

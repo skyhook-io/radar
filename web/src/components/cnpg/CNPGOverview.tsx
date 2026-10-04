@@ -4,7 +4,7 @@ import { clsx } from 'clsx'
 import { ArrowRight, Database, FileText, Search } from 'lucide-react'
 import {
   CNPG_PROBLEM_CATEGORIES,
-  CNPG_PROBLEM_TONE,
+  PROBLEM_TONE,
   cnpgReadyInstances,
   FactValue,
   StatusDot,
@@ -15,12 +15,14 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
-import { EmptyState, ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../capacity/shared'
-import { BreakText, CNPGWorkspaceHeader, CoverageNotice, FilterChips, type CNPGScreenProps } from './shared'
-import { cnpgClusterFullPath, cnpgClusterProblemsPath, currentPageLabel } from './paths'
-import { sameResource } from './routes'
+import { CNPGWorkspaceHeader, CoverageNotice, type CNPGScreenProps } from './shared'
+import { cnpgClusterFullPath, cnpgClusterProblemsPath } from './paths'
+import { currentPageLabel } from '../../utils/page-links'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 import { cnpgInstancePillLabel, cnpgPillsToShow, cnpgRowStatus } from './fleetStatus'
+import { BreakText, FilterChips, ScreenEmptyState } from '../workspace/layout'
+import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../workspace/table'
+import { sameSelectedResource } from '../../utils/drawer-trail'
 
 type Filter = 'attention' | 'all'
 
@@ -112,7 +114,7 @@ function AttentionCell({ row, onOpenAll }: { row: CNPGFleetRow; onOpenAll: () =>
   return (
     <div className="min-w-0">
       <Tooltip content={problemTip(top)} wrapperClassName="w-full">
-        <div className={clsx('[overflow-wrap:normal]', unbreakable ? 'truncate' : 'line-clamp-3', toneTextClass(CNPG_PROBLEM_TONE[top.severity]))}>{headline}</div>
+        <div className={clsx('[overflow-wrap:normal]', unbreakable ? 'truncate' : 'line-clamp-3', toneTextClass(PROBLEM_TONE[top.severity]))}>{headline}</div>
       </Tooltip>
       {top.unverifiedMatch && (
         <div className="text-[11px] text-theme-text-tertiary">measured by {top.measuredBy}</div>
@@ -124,7 +126,7 @@ function AttentionCell({ row, onOpenAll }: { row: CNPGFleetRow; onOpenAll: () =>
               {others.map((p) => (
                 <li key={p.id} className="flex items-start gap-1.5">
                   <span className="mt-1 shrink-0">
-                    <StatusDot tone={CNPG_PROBLEM_TONE[p.severity]} size="xs" />
+                    <StatusDot tone={PROBLEM_TONE[p.severity]} size="xs" />
                   </span>
                   <span>{problemTip(p)}</span>
                 </li>
@@ -198,7 +200,7 @@ export function CNPGOverview({
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         <CNPGWorkspaceHeader title="Overview" />
-        <EmptyState
+        <ScreenEmptyState
           icon={Database}
           title={empty.title}
           detail={empty.detail}
@@ -325,7 +327,7 @@ export function CNPGOverview({
                 <tbody className={TBODY}>
                   {rows.map((row) => {
                     const ref: SelectedResource = { kind: 'clusters', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name }
-                    const active = sameResource(inspected, ref)
+                    const active = sameSelectedResource(inspected, ref)
                     return (
                       <tr
                         key={row.key}

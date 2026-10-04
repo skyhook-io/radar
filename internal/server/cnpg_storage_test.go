@@ -337,10 +337,10 @@ func TestCNPGClusterStorage_ReadingTheClusterDoesNotImplyItsClaims(t *testing.T)
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Volumes.State != cnpgStorageStateDenied || got.Volumes.Grant != "list persistentvolumeclaims in pgst3" {
+	if got.Volumes.State != cnpgStorageStateDenied || got.Volumes.Grant == nil || *got.Volumes.Grant != cnpgGrantListPVCs.In("pgst3") {
 		t.Errorf("volumes = %+v", got.Volumes)
 	}
-	if got.WAL.State != cnpgStorageStateDenied || got.WAL.Grant != "list pods in pgst3" {
+	if got.WAL.State != cnpgStorageStateDenied || got.WAL.Grant == nil || *got.WAL.Grant != cnpgGrantListPods.In("pgst3") {
 		t.Errorf("wal = %+v", got.WAL)
 	}
 	for _, in := range got.Instances {
@@ -435,7 +435,7 @@ func TestCNPGDiskFindingsThresholds(t *testing.T) {
 	if got[1].Message != "The tablespace archive volume of pg-1 is 90% full" {
 		t.Errorf("message = %q", got[1].Message)
 	}
-	unverified := cnpgDiskFindings("pg-1", vols, &prometheuspkg.CNPGIsolation{Mode: prometheuspkg.CNPGIsolationUnverified, Note: "Radar couldn't confirm these volume stats belong to this exact cluster"})
+	unverified := cnpgDiskFindings("pg-1", vols, &prometheuspkg.SeriesIsolation{Mode: prometheuspkg.SeriesIsolationUnverified, Note: "Radar couldn't confirm these volume stats belong to this exact cluster"})
 	if !strings.Contains(unverified[1].Message, "couldn't confirm these volume stats belong to this exact cluster") {
 		t.Errorf("an unverified match must say so: %q", unverified[1].Message)
 	}

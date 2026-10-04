@@ -22,8 +22,8 @@ type CNPGMaintenanceFacts struct {
 }
 
 type CNPGMaintenanceActions struct {
-	SetMaintenance   CNPGActionCapability `json:"setMaintenance"`
-	UnsetMaintenance CNPGActionCapability `json:"unsetMaintenance"`
+	SetMaintenance   ActionCapability `json:"setMaintenance"`
+	UnsetMaintenance ActionCapability `json:"unsetMaintenance"`
 }
 
 func init() {
@@ -82,20 +82,20 @@ type cnpgMaintenanceParams struct {
 func cnpgRunMaintenance(inProgress bool) func(context.Context, *cnpgClusterRun) (*CNPGActionResult, error) {
 	return func(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, error) {
 		var p cnpgMaintenanceParams
-		if err := decodeCNPGParams(x.params, &p); err != nil {
+		if err := decodeActionParams(x.params, &p); err != nil {
 			return nil, err
 		}
 		if p.ReusePVC == nil {
-			return nil, cnpgRefuse(http.StatusBadRequest, "", "params.reusePVC is required")
+			return nil, refuseAction(http.StatusBadRequest, "", "params.reusePVC is required")
 		}
 		guard, msg := cnpgGuardSetMaintenance, "Maintenance mode set"
 		if !inProgress {
 			guard, msg = cnpgGuardUnsetMaintenance, "Maintenance mode lifted"
 		}
 		if r := guard(x.facts); r != "" {
-			return nil, cnpgBlocked(r)
+			return nil, blockedAction(r)
 		}
-		err := cnpgMergePatch(ctx, x.c.dyn, cnpgClusterGVR, x.cluster, map[string]any{
+		err := mergePatchAtVersion(ctx, x.c.dyn, cnpgClusterGVR, x.cluster, map[string]any{
 			"spec": map[string]any{"nodeMaintenanceWindow": map[string]any{
 				"inProgress": inProgress,
 				"reusePVC":   *p.ReusePVC,

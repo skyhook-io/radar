@@ -1,6 +1,7 @@
 import { cnpgFormatLag } from '@skyhook-io/k8s-ui'
 import { formatBytes } from '../lsn'
-import type { CNPGActionCapability, CNPGBackupMethod } from '../../../api/cnpg'
+import type { CNPGBackupMethod } from '../../../api/cnpg'
+import type { ActionCapability } from '../../../api/actions'
 
 export interface StandbyChoice {
   pod: string
@@ -60,7 +61,7 @@ export function switchoverDefault(input: { touched: boolean; current: string | u
  * after every other state guard, so its reason names the fence only when
  * nothing else blocks.
  */
-export function cnpgDestroyBlocker(cap: CNPGActionCapability | undefined, pod: string, fenceOffered: boolean): string | undefined {
+export function cnpgDestroyBlocker(cap: ActionCapability | undefined, pod: string, fenceOffered: boolean): string | undefined {
   if (!cap || cap.allowed) return undefined
   if (fenceOffered && cap.permission !== 'denied' && cap.reason?.startsWith(`Fence ${pod} first`)) return undefined
   return cap.reason ?? 'Not allowed'

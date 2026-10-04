@@ -65,9 +65,9 @@ type CNPGOperatorConfigRef struct {
 
 // CNPGOperatorResponse is GET /api/cnpg/operator.
 type CNPGOperatorResponse struct {
-	Coverage   map[string]CNPGWorkspaceCoverage `json:"coverage"`
-	Components []CNPGOperatorComponent          `json:"components"`
-	Config     []CNPGOperatorConfigRef          `json:"config"`
+	Coverage   map[string]KindCoverage `json:"coverage"`
+	Components []CNPGOperatorComponent `json:"components"`
+	Config     []CNPGOperatorConfigRef `json:"config"`
 	// Diagnosis is one entry per operator Deployment: leader Lease, watched
 	// namespaces, webhook reachability, reconcile counters and recent events.
 	Diagnosis []CNPGOperatorDiagnosis `json:"diagnosis"`
@@ -93,15 +93,15 @@ func (s *Server) handleCNPGOperator(w http.ResponseWriter, r *http.Request) {
 
 	scope := s.cnpgOperatorScope(r)
 	resp := CNPGOperatorResponse{
-		Coverage:   map[string]CNPGWorkspaceCoverage{},
+		Coverage:   map[string]KindCoverage{},
 		Components: []CNPGOperatorComponent{},
 		Config:     []CNPGOperatorConfigRef{},
 	}
 
-	depAcc, depDenied, deployments := s.cnpgOperatorDeployments(r, cache, scope)
-	resp.Coverage["deployments"] = cnpgCoverageOf(depAcc, depDenied)
-	svcAcc, svcDenied, services := s.cnpgOperatorServices(r, cache, scope)
-	resp.Coverage["services"] = cnpgCoverageOf(svcAcc, svcDenied)
+	depAcc, deployments := s.cnpgOperatorDeployments(r, cache, scope)
+	resp.Coverage["deployments"] = depAcc.coverage()
+	svcAcc, services := s.cnpgOperatorServices(r, cache, scope)
+	resp.Coverage["services"] = svcAcc.coverage()
 
 	var operators []*appsv1.Deployment
 	for _, d := range deployments {
@@ -165,14 +165,14 @@ func (s *Server) cnpgOperatorScope(r *http.Request) []string {
 	return s.getUserNamespaces(r, nil)
 }
 
-func (s *Server) cnpgOperatorDeployments(r *http.Request, cache *k8s.ResourceCache, scope []string) (cnpgKindAccess, []string, []*appsv1.Deployment) {
-	acc, denied, read := s.cnpgTypedScope(r, cache, scope, "apps", "deployments")
-	if acc.state == cnpgCoverageDenied || acc.state == cnpgCoverageError {
-		return acc, denied, nil
+func (s *Server) cnpgOperatorDeployments(r *http.Request, cache *k8s.ResourceCache, scope []string) (kindAccess, []*appsv1.Deployment) {
+	acc, read := s.typedKindScope(r, cache, scope, "apps", "deployments")
+	if acc.state == kindCoverageDenied || acc.state == kindCoverageUncached {
+		return acc, nil
 	}
 	lister := cache.Deployments()
 	if lister == nil || !cache.IsKindReady("deployments") {
-		return cnpgKindAccess{state: cnpgCoverageSyncing}, nil, nil
+		return kindAccess{state: kindCoverageSyncing}, nil
 	}
 	var out []*appsv1.Deployment
 	if read == nil {
@@ -189,22 +189,22 @@ func (s *Server) cnpgOperatorDeployments(r *http.Request, cache *k8s.ResourceCac
 		}
 		return out[i].Name < out[j].Name
 	})
-	return acc, denied, out
+	return acc, out
 }
 
-func (s *Server) cnpgOperatorServices(r *http.Request, cache *k8s.ResourceCache, scope []string) (cnpgKindAccess, []string, []*corev1.Service) {
-	acc, denied, read := s.cnpgTypedScope(r, cache, scope, "", "services")
-	if acc.state == cnpgCoverageDenied || acc.state == cnpgCoverageError {
-		return acc, denied, nil
+func (s *Server) cnpgOperatorServices(r *http.Request, cache *k8s.ResourceCache, scope []string) (kindAccess, []*corev1.Service) {
+	acc, read := s.typedKindScope(r, cache, scope, "", "services")
+	if acc.state == kindCoverageDenied || acc.state == kindCoverageUncached {
+		return acc, nil
 	}
 	lister := cache.Services()
 	if lister == nil || !cache.IsKindReady("services") {
-		return cnpgKindAccess{state: cnpgCoverageSyncing}, nil, nil
+		return kindAccess{state: kindCoverageSyncing}, nil
 	}
 	hasPlugin, err := labels.Parse(cnpgPluginNameLabel)
 	if err != nil {
 		log.Printf("[cnpg] Failed to build plugin selector: %v", err)
-		return cnpgKindAccess{state: cnpgCoverageError}, nil, nil
+		return kindAccess{state: kindCoverageError}, nil
 	}
 	var out []*corev1.Service
 	if read == nil {
@@ -215,7 +215,7 @@ func (s *Server) cnpgOperatorServices(r *http.Request, cache *k8s.ResourceCache,
 			out = append(out, items...)
 		}
 	}
-	return acc, denied, out
+	return acc, out
 }
 
 func cnpgOperatorContainerOf(d *appsv1.Deployment) *corev1.Container {
@@ -343,7 +343,7 @@ func (s *Server) cnpgOperatorConfigMap(r *http.Request, cache *k8s.ResourceCache
 		state.Reason = "ConfigMaps are still loading"
 		return ref
 	}
-	if !capacityCacheCoversNamespace(cache, "configmaps", namespace) {
+	if !cacheCoversNamespace(cache, "configmaps", namespace) {
 		state.Reason = "Radar does not watch ConfigMaps in " + namespace
 		return ref
 	}

@@ -139,6 +139,9 @@ type FeatureCapabilities struct {
 	PodEnvironment  bool `json:"podEnvironment"`  // GET /api/pods/{namespace}/{name}/environment
 	PolicyResource  bool `json:"policyResource"`  // GET /api/policy/resource/{kind}/{namespace}/{name}
 	WorkloadHistory bool `json:"workloadHistory"` // GET /api/workloads/{kind}/{namespace}/{name}/history
+	// Every /api/cnpg/* route except the two image-catalog reverse lookups, which predate it.
+	CNPGWorkspace       bool `json:"cnpgWorkspace"`
+	GitOpsWriteEvidence bool `json:"gitopsWriteEvidence"` // POST /api/gitops/write-evidence
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

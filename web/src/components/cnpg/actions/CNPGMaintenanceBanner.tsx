@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { AlertBanner, Tooltip } from '@skyhook-io/k8s-ui'
 import { useCNPGClusterCapabilities } from '../../../api/cnpg'
 import { ClusterActionDialog } from './CNPGClusterActions'
+import { capabilityReason } from '../../../api/actions'
 
 /**
  * Standing notice while spec.nodeMaintenanceWindow.inProgress is true. The
@@ -33,7 +34,7 @@ export function CNPGMaintenanceBanner({
         }
       >
         <div className="mt-2">
-          <Tooltip content={cap && !cap.allowed ? cap.reason : undefined}>
+          <Tooltip content={cap ? capabilityReason(cap) : undefined}>
             <button
               type="button"
               disabled={!cap?.allowed}

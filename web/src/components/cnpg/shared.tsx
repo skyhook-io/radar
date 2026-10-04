@@ -1,21 +1,20 @@
 import type { ReactNode } from 'react'
 import type { UseQueryResult } from '@tanstack/react-query'
-import { clsx } from 'clsx'
-import { AlertTriangle, Database, X } from 'lucide-react'
+import { Database } from 'lucide-react'
 import {
   CNPG_KIND_BY_KEY,
   PaneLoader,
-  Tooltip,
-  formatUpdatedAgo,
-  toneTextClass,
+  RadarUpgradeAction,
+  getRadarUpgradeRequirement,
+  radarUpgradeDetail,
+  radarUpgradeHeadline,
   type CNPGFleet,
   type CNPGKindCoverage,
   type CNPGWorkspaceResponse,
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
-import { EmptyState, Notice, ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../capacity/shared'
-import { sameResource } from './routes'
+import { Notice, ScreenEmptyState } from '../workspace/layout'
 
 export interface CNPGScreenProps {
   data: CNPGWorkspaceResponse
@@ -30,7 +29,8 @@ export interface CNPGScreenProps {
 
 const COVERAGE_LABEL: Record<string, string> = {
   denied: 'no access',
-  partial: 'no access in some namespaces',
+  partial: 'not read in some namespaces',
+  uncached: 'not cached by Radar',
   syncing: 'still loading',
   error: 'could not be read',
 }
@@ -53,13 +53,26 @@ export function CNPGWorkspaceHeader({ title, subtitle, actions }: { title: strin
   )
 }
 
+// The causes the server named for the namespaces it left unread. A partial or
+// uncached read can name both kinds of namespace at once.
+function namedCauses(cov: CNPGKindCoverage | undefined, uncachedNoun: string): { denied?: string; uncached?: string } {
+  return {
+    denied: cov?.deniedNamespaces?.length ? cov.deniedNamespaces.join(', ') : undefined,
+    uncached: cov?.uncachedNamespaces?.length ? `${uncachedNoun} in ${cov.uncachedNamespaces.join(', ')}` : undefined,
+  }
+}
+
+/** How much of a kind was read, in a few words ("not cached by Radar in pg"). */
+export function coverageLabel(cov: CNPGKindCoverage | undefined): string {
+  const { denied, uncached } = namedCauses(cov, 'not cached by Radar')
+  const named = [denied && `no access in ${denied}`, uncached].filter(Boolean)
+  if (named.length > 0) return named.join('; ')
+  return COVERAGE_LABEL[cov?.state ?? ''] ?? cov?.state ?? 'unknown'
+}
+
 export function CoverageNotice({ fleet, data }: { fleet: CNPGFleet; data: CNPGWorkspaceResponse }) {
   if (fleet.incompleteKinds.length === 0) return null
-  const parts = fleet.incompleteKinds.map((k) => {
-    const cov = data.coverage[k]
-    const label = COVERAGE_LABEL[cov?.state ?? ''] ?? cov?.state
-    return `${CNPG_KIND_BY_KEY[k].kind} (${label})`
-  })
+  const parts = fleet.incompleteKinds.map((k) => `${CNPG_KIND_BY_KEY[k].kind} (${coverageLabel(data.coverage[k])})`)
   return (
     <Notice>
       Some CloudNativePG data is not readable: {parts.join(', ')}. Facts built on it read “No access” or “unknown” rather than none, and counts are lower bounds.
@@ -84,17 +97,32 @@ export function CNPGScreenGate({
   const data = query.data
   if (!data && query.isLoading) return <PaneLoader label="Loading CloudNativePG…" className="flex-1" />
   if (!data) {
+    const upgrade = getRadarUpgradeRequirement(query.error)
+    if (upgrade) {
+      return (
+        <ScreenEmptyState
+          icon={Database}
+          title={radarUpgradeHeadline('CloudNativePG')}
+          detail={radarUpgradeDetail(upgrade)}
+          action={
+            <div className="mt-3 text-sm">
+              <RadarUpgradeAction requirement={upgrade} />
+            </div>
+          }
+        />
+      )
+    }
     return (
-      <EmptyState
+      <ScreenEmptyState
         icon={Database}
-        title="CloudNativePG workspace unavailable"
-        detail={query.error instanceof Error ? query.error.message : 'The workspace could not be loaded.'}
+        title="CloudNativePG data unavailable"
+        detail={query.error instanceof Error ? query.error.message : 'Radar could not load the CloudNativePG data.'}
       />
     )
   }
   if (!data.installed || !fleet) {
     return (
-      <EmptyState
+      <ScreenEmptyState
         icon={Database}
         title="CloudNativePG is not installed"
         detail={`No postgresql.cnpg.io resources are served in ${connection.context || 'this cluster'}.`}
@@ -104,161 +132,18 @@ export function CNPGScreenGate({
   return <>{children(data, fleet)}</>
 }
 
-export function ScreenBody({ children }: { children: ReactNode }) {
-  return (
-    <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-      <div className="space-y-5 px-5 pb-6 pt-3 xl:px-7">{children}</div>
-    </div>
-  )
-}
-
-export function FilterChips({ chips }: { chips: { label: string; onClear: () => void }[] }) {
-  if (chips.length === 0) return null
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {chips.map((c) => (
-        <span key={c.label} className="inline-flex items-center gap-1 rounded-full bg-theme-elevated px-2.5 py-0.5 text-xs text-theme-text-secondary">
-          {c.label}
-          <button type="button" onClick={c.onClear} aria-label={`Remove ${c.label}`} className="rounded-full p-0.5 hover:bg-theme-hover">
-            <X className="h-3 w-3" />
-          </button>
-        </span>
-      ))}
-    </div>
-  )
-}
-
-export function namespaceChip(namespaces: string[], onClear: () => void) {
-  return namespaces.length > 0 ? [{ label: `Namespace: ${namespaces.join(', ')}`, onClear }] : []
-}
-
-export function Segments<T extends string>({
-  value,
-  options,
-  onChange,
-  label,
-}: {
-  value: T
-  options: { id: T; label: string; count?: number }[]
-  onChange: (id: T) => void
-  label: string
-}) {
-  return (
-    <div role="tablist" aria-label={label} className="inline-flex rounded-lg bg-theme-elevated p-0.5">
-      {options.map((o) => {
-        const on = o.id === value
-        return (
-          <button
-            key={o.id}
-            type="button"
-            role="tab"
-            aria-selected={on}
-            onClick={() => onChange(o.id)}
-            className={clsx(
-              'inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-sm font-medium transition-colors',
-              on ? 'bg-theme-surface text-theme-text-primary shadow-theme-sm' : 'text-theme-text-secondary hover:text-theme-text-primary',
-            )}
-          >
-            {o.label}
-            {o.count !== undefined && <span className="font-mono text-xs text-theme-text-tertiary">{o.count}</span>}
-          </button>
-        )
-      })}
-    </div>
-  )
-}
-
-export interface TableColumn<T> {
-  header: ReactNode
-  width?: string
-  cell: (row: T) => ReactNode
-  className?: string
-}
-
-/** A workspace table. Rows inspect in the drawer; the inspected row is highlighted. */
-export function SectionTable<T>({
-  title,
-  subtitle,
-  columns,
-  rows,
-  rowKey,
-  rowResource,
-  onInspect,
-  inspected,
-  empty,
-  minWidth = 760,
-  footer,
-}: {
-  title: ReactNode
-  subtitle?: ReactNode
-  columns: TableColumn<T>[]
-  rows: T[]
-  rowKey: (row: T) => string
-  rowResource?: (row: T) => SelectedResource | null
-  onInspect?: (resource: SelectedResource) => void
-  inspected?: SelectedResource | null
-  empty: ReactNode
-  minWidth?: number
-  footer?: ReactNode
-}) {
-  return (
-    <section>
-      <div className="mb-2 flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-        <h2 className="text-sm font-semibold text-theme-text-primary">{title}</h2>
-        {subtitle && <span className="text-xs text-theme-text-tertiary">{subtitle}</span>}
-      </div>
-      <div className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
-        {rows.length === 0 ? (
-          <div className="px-4 py-5 text-sm text-theme-text-tertiary">{empty}</div>
-        ) : (
-          <div className={TABLE_WRAP}>
-            <table className="w-full table-fixed" style={{ minWidth }}>
-              <colgroup>
-                {columns.map((c, i) => (
-                  <col key={i} style={c.width ? { width: c.width } : undefined} />
-                ))}
-              </colgroup>
-              <thead className={TABLE_HEAD}>
-                <tr>
-                  {columns.map((c, i) => (
-                    <th key={i} className={TH}>{c.header}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className={TBODY}>
-                {rows.map((row) => {
-                  const res = rowResource?.(row) ?? null
-                  const active = !!res && sameResource(inspected, res)
-                  return (
-                    <tr
-                      key={rowKey(row)}
-                      onClick={res && onInspect ? () => onInspect(res) : undefined}
-                      className={clsx(res && onInspect && 'cursor-pointer', ROW_HOVER, active && 'selection')}
-                      aria-selected={res ? active : undefined}
-                    >
-                      {columns.map((c, i) => (
-                        <td key={i} className={clsx(TD, c.className)}>{c.cell(row)}</td>
-                      ))}
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-      {footer && <div className="mt-1.5 text-xs text-theme-text-tertiary">{footer}</div>}
-    </section>
-  )
-}
-
 /** Empty-state text for a collection, derived from how much of it was readable. */
 export function coverageEmpty(cov: CNPGKindCoverage | undefined, noun: string): string {
   switch (cov?.state) {
     case 'full':
       return `No ${noun} in this scope.`
     case 'partial':
-      return `No ${noun} visible. Some namespaces are not readable with your access.`
+    case 'uncached': {
+      const { denied, uncached } = namedCauses(cov, `Radar does not cache ${noun}`)
+      const causes = [denied && `no access in ${denied}`, uncached].filter(Boolean)
+      if (causes.length > 0) return `No ${noun} visible: ${causes.join('; ')}.`
+      return cov.state === 'uncached' ? `Radar does not cache ${noun} in this scope.` : `No ${noun} visible. Some namespaces were not read.`
+    }
     case 'denied':
       return `No access to ${noun}.`
     case 'syncing':
@@ -272,56 +157,8 @@ export function coverageEmpty(cov: CNPGKindCoverage | undefined, noun: string): 
 
 /** The less complete of two coverages, for collections built from several kinds. */
 export function worstCoverage(...covs: (CNPGKindCoverage | undefined)[]): CNPGKindCoverage | undefined {
-  const rank: Record<string, number> = { error: 0, denied: 1, syncing: 2, partial: 3, full: 4, notInstalled: 5 }
+  const rank: Record<string, number> = { error: 0, denied: 1, uncached: 2, syncing: 3, partial: 4, full: 5, notInstalled: 6 }
   return covs.filter(Boolean).sort((a, b) => (rank[a!.state] ?? 9) - (rank[b!.state] ?? 9))[0]
-}
-
-/**
- * Text that wraps only after `after` ("/" for a path, "-" for a resource
- * name), never mid-word; a single segment too long for its cell is cut with an
- * ellipsis. The whole value shows on hover.
- */
-export function BreakText({ value, after, className }: { value: string; after: '/' | '-'; className?: string }) {
-  const parts = value.split(after === '/' ? /(?<=\/)/ : /(?<=-)/)
-  return (
-    <Tooltip content={value} wrapperClassName="max-w-full">
-      <span className={clsx('block max-w-full', className)}>
-        {parts.map((p, i) => (
-          <span key={i} className="inline-block max-w-full truncate align-top">
-            {p}
-          </span>
-        ))}
-      </span>
-    </Tooltip>
-  )
-}
-
-/** A URL or path; see BreakText. */
-export function PathText({ value, className }: { value: string; className?: string }) {
-  return <BreakText value={value} after="/" className={clsx('font-mono text-[12.5px]', className)} />
-}
-
-/**
- * A grant as one unit: the verb and resource in a code span that does not
- * wrap, its scope ("cluster-wide", "in namespace pg") as plain text after it.
- */
-export function GrantText({ grant }: { grant: string }) {
-  const m = /^(.*?)( cluster-wide| in namespace \S+)$/.exec(grant)
-  const [what, scope] = m ? [m[1], m[2]] : [grant, '']
-  return (
-    <>
-      <code className="whitespace-nowrap rounded bg-theme-elevated px-1 font-mono text-[12px]">{what}</code>
-      {scope}
-    </>
-  )
-}
-
-export function Mono({ children }: { children: ReactNode }) {
-  return <span className="font-mono text-[12.5px] break-all">{children}</span>
-}
-
-export function Sub({ children }: { children: ReactNode }) {
-  return <div className="mt-0.5 text-xs text-theme-text-tertiary break-words">{children}</div>
 }
 
 export function clusterResource(namespace: string, name: string): SelectedResource {
@@ -330,25 +167,4 @@ export function clusterResource(namespace: string, name: string): SelectedResour
 
 export function cnpgResource(plural: string, namespace: string, name: string, group = 'postgresql.cnpg.io'): SelectedResource {
   return { kind: plural, group, namespace, name }
-}
-
-type RefreshableQuery = Pick<UseQueryResult<unknown>, 'isRefetchError' | 'error' | 'dataUpdatedAt'>
-
-/**
- * A refetch failed while the last good answer stays on screen: say so, why,
- * and how old that answer is, so cached values are not read as current.
- */
-export function CNPGRefreshFailedNotice({ queries, className }: { queries: RefreshableQuery[]; className?: string }) {
-  const failed = queries.filter((q) => q.isRefetchError)
-  if (failed.length === 0) return null
-  const oldest = failed.reduce((a, b) => (b.dataUpdatedAt < a.dataUpdatedAt ? b : a))
-  const reason = oldest.error instanceof Error ? oldest.error.message : 'unknown error'
-  return (
-    <div role="status" className={clsx('flex items-start gap-1.5 text-xs text-theme-text-secondary', className)}>
-      <AlertTriangle className={clsx('mt-px h-3.5 w-3.5 shrink-0', toneTextClass('degraded'))} />
-      <span>
-        Last refresh failed: {reason.length > 160 ? `${reason.slice(0, 160)}…` : reason} · showing data from {formatUpdatedAgo(Date.now() - oldest.dataUpdatedAt)}
-      </span>
-    </div>
-  )
 }

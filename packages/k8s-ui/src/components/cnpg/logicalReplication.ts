@@ -1,4 +1,4 @@
-import type { CNPGFact } from './workspace'
+import { type Fact } from '../facts'
 
 /** Where a Subscription's publisher lives, as far as the subscriber's spec shows. */
 export type CNPGPublisher =
@@ -19,7 +19,7 @@ export interface CNPGLogicalPath {
   }
   /** The slot PostgreSQL creates for the subscription: `slot_name`, else the subscription's name. */
   slot: { name?: string; reason?: string }
-  failover: CNPGFact
+  failover: Fact
 }
 
 const SERVICE_SUFFIXES = ['-rw', '-ro', '-r']
@@ -91,7 +91,7 @@ const FAILOVER_SOURCE = "Publisher's spec.replicationSlots.highAvailability (ena
  * so a failover of the publisher does not lose it. Declared configuration
  * only: CloudNativePG does not report which slots were actually synchronized.
  */
-export function cnpgSlotFailover(publisher: CNPGPublisher, subscription: any): CNPGFact {
+export function cnpgSlotFailover(publisher: CNPGPublisher, subscription: any): Fact {
   if (publisher.kind !== 'cluster') {
     return { text: 'Unknown: the publisher is not a CloudNativePG Cluster Radar can see', tone: 'unknown', source: FAILOVER_SOURCE }
   }
@@ -228,7 +228,7 @@ function bytesText(n: number): string {
 
 const SLOT_SOURCE = "Publisher primary's instance manager (/pg/status replicationSlotsInfo) and exporter (retained WAL)"
 
-export function cnpgLogicalSlotFact(path: CNPGLogicalPath, observed: CNPGPublisherSlots): CNPGFact {
+export function cnpgLogicalSlotFact(path: CNPGLogicalPath, observed: CNPGPublisherSlots): Fact {
   if (!path.slot.name) return { text: path.slot.reason ?? 'No slot', tone: 'neutral' }
   if (path.publisher.kind !== 'cluster') return { text: `Slot ${path.slot.name}: not observable (publisher outside this cluster's view)`, tone: 'unknown' }
   if (observed.state === 'denied') return { text: `Slot ${path.slot.name}: no access (needs get pods/proxy on the publisher)`, tone: 'unknown', source: SLOT_SOURCE }

@@ -2,6 +2,7 @@ import type { UseQueryResult } from '@tanstack/react-query'
 import type { CNPGPoolerLive } from '@skyhook-io/k8s-ui'
 import { useCNPGPoolerRuntime } from '../../api/cnpg'
 import { useCNPGPgBouncerState, useCNPGPoolerCapabilities } from '../../api/cnpg-sessions'
+import { formatGrant } from '@skyhook-io/k8s-ui'
 
 /**
  * The live reads the Pooler summary shows beside the spec, and the queries
@@ -22,7 +23,7 @@ export function useCNPGPoolerLive(namespace: string, name: string): { live: CNPG
     const denied = runtime.data.permission.proxy === 'denied'
     live.pressure = {
       state: denied ? 'denied' : 'ok',
-      reason: denied ? `needs ${runtime.data.permission.grant ?? 'get pods/proxy'}` : undefined,
+      reason: denied ? `needs ${formatGrant(runtime.data.permission.grant) ?? 'get pods/proxy'}` : undefined,
       pods: runtime.data.pods,
     }
   } else {

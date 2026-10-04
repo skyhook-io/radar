@@ -2,7 +2,7 @@ import { clsx } from 'clsx'
 import { Badge } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
 import { formatAge } from '../resources/resource-utils'
-import { FactGrid, FactRow, FactValue, FoldSection, PrimaryConflictNote, RefLink, SummaryHeading, ToneDot, toneTextClass, type CNPGNavigate } from './primitives'
+import { PrimaryConflictNote } from './primitives'
 import {
   CNPG_ROLE_DETAIL_TEXT,
   cnpgCertificateViews,
@@ -21,6 +21,10 @@ import {
   type CNPGHALease,
   type CNPGInstanceLive,
 } from './ha'
+import { type NavigateToRef, RefLink } from '../ui/RefLink'
+import { StatusDot, toneTextClass } from '../ui/status-tone'
+import { FactGrid, FactRow, FactValue } from '../facts'
+import { FoldSection, SectionHeading } from '../ui/FoldSection'
 
 function Unknown({ text }: { text: string }) {
   return <span className="text-theme-text-tertiary">{text}</span>
@@ -75,12 +79,12 @@ export function CNPGClusterHASection({
   liveUnavailable?: string
   loading?: boolean
   error?: string
-  onNavigate?: CNPGNavigate
+  onNavigate?: NavigateToRef
 }) {
   if (!ha) {
     return (
       <>
-        <SummaryHeading>HA and instances</SummaryHeading>
+        <SectionHeading>HA and instances</SectionHeading>
         <div className="text-sm text-theme-text-tertiary">{loading ? 'Reading HA facts…' : `HA facts could not be read${error ? `: ${error}` : ''}`}</div>
       </>
     )
@@ -142,7 +146,7 @@ export function CNPGClusterHASection({
                   const l = liveBy.get(i.pod)
                   return (
                     <div key={i.pod} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
-                      <ToneDot tone={i.ready ? 'healthy' : 'unhealthy'} />
+                      <StatusDot tone={i.ready ? 'healthy' : 'unhealthy'} />
                       <RefLink refTo={{ kind: 'Pod', group: '', namespace: ns, name: i.pod }} onNavigate={onNavigate} mono />
                       <span className="text-theme-text-secondary">
                         {l?.roleDetail ? CNPG_ROLE_DETAIL_TEXT[l.roleDetail] : i.role === 'unknown' ? 'role unknown' : i.role}

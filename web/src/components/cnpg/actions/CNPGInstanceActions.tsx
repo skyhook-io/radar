@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { useCNPGClusterCapabilities, type CNPGActionCapability, type CNPGClusterActionName } from '../../../api/cnpg'
+import { useCNPGClusterCapabilities, type CNPGClusterActionName } from '../../../api/cnpg'
+import { type ActionCapability, capabilityReason } from '../../../api/actions'
 import { ClusterActionDialog } from './CNPGClusterActions'
 import { CNPGDestroyInstanceDialog } from './CNPGDestroyInstanceDialog'
 import { useOpenCNPGPsql } from './useOpenCNPGPsql'
@@ -33,9 +34,9 @@ export function CNPGInstanceActions({ namespace, cluster, pod }: { namespace: st
   )
   const link = (id: CNPGClusterActionName, label: string, extraReason?: string) => {
     const cap = capFor(id) ?? data.actions[id]
-    return button(id, label, extraReason ?? (!cap.allowed ? cap.reason ?? 'Not allowed' : undefined), () => setOpen(id))
+    return button(id, label, extraReason ?? capabilityReason(cap), () => setOpen(id))
   }
-  const reasonOf = (cap: CNPGActionCapability | undefined) => (!cap ? 'Not available for this instance' : !cap.allowed ? cap.reason ?? 'Not allowed' : undefined)
+  const reasonOf = (cap: ActionCapability | undefined) => (!cap ? 'Not available for this instance' : capabilityReason(cap))
 
   return (
     <>

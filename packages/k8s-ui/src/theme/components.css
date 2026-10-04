@@ -35,6 +35,21 @@
     opacity: 0.5;
   }
 
+  /* Bordered surface button for secondary actions next to a .btn-brand. */
+  .btn-secondary {
+    border: 1px solid var(--border-default);
+    background-color: var(--bg-surface);
+    color: var(--text-primary);
+    border-radius: 0.625rem;
+    transition: background-color 0.15s ease;
+  }
+  .btn-secondary:hover {
+    background-color: var(--bg-hover);
+  }
+  .btn-secondary:disabled {
+    opacity: 0.5;
+  }
+
   .btn-brand-toggle {
     background-color: color-mix(in srgb, var(--color-brand) 50%, transparent);
     color: var(--text-primary);

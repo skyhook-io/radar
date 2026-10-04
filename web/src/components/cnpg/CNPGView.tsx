@@ -12,8 +12,9 @@ import { CNPGPooling } from './CNPGPooling'
 import { CNPGOperator } from './CNPGOperator'
 import { CNPGScreenGate } from './shared'
 import { CNPGDetailPage } from './CNPGDetailPage'
-import { decodeDrawerTrail, encodeDrawerTrail, parseCNPGRoute, sameResource } from './routes'
+import { parseCNPGRoute } from './routes'
 import { useCNPGFleet, useCNPGSidebarWorkspace } from './useCNPGSidebarWorkspace'
+import { decodeDrawerTrail, encodeDrawerTrail, sameSelectedResource } from '../../utils/drawer-trail'
 
 interface CNPGViewProps {
   namespaces: string[]
@@ -59,7 +60,7 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
   useEffect(() => {
     if (targetKey !== (lastSynced.current ?? '')) {
       lastSynced.current = targetKey
-      if (drawerTarget && !sameResource(drawerTarget, selectedResource)) onOpenResource(drawerTarget)
+      if (drawerTarget && !sameSelectedResource(drawerTarget, selectedResource)) onOpenResource(drawerTarget)
       else if (!drawerTarget && selectedResource) onCloseResource()
       return
     }
@@ -69,7 +70,7 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
       if (!selectedResource) {
         params.delete('drawer')
       } else {
-        const idx = trail.findIndex((r) => sameResource(r, selectedResource))
+        const idx = trail.findIndex((r) => sameSelectedResource(r, selectedResource))
         const next = idx >= 0 ? trail.slice(0, idx + 1) : [...trail, selectedResource]
         params.set('drawer', encodeDrawerTrail(next))
       }

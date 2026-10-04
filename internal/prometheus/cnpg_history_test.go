@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -83,14 +84,14 @@ func TestDecideScopeRefusesAmbiguousIdentity(t *testing.T) {
 	q := &fakeCNPGQuerier{instant: func(string) (*prom.QueryResult, error) {
 		return &prom.QueryResult{Series: []prom.Series{vec(nil, 2)}}, nil
 	}}
-	if _, _, err := decideScope(context.Background(), q, cnpgProbe(0), nil); !errors.Is(err, ErrCNPGScopeAmbiguous) {
+	if _, _, err := decideScope(context.Background(), q, cnpgProbe(0), nil); !errors.Is(err, ErrScopeAmbiguous) {
 		t.Fatalf("err = %v, want ambiguous", err)
 	}
 	q.instant = func(string) (*prom.QueryResult, error) {
 		return &prom.QueryResult{Series: []prom.Series{vec(nil, 1)}}, nil
 	}
 	m, iso, err := decideScope(context.Background(), q, cnpgProbe(0), nil)
-	if err != nil || m != "" || iso.Mode != CNPGIsolationUnverified {
+	if err != nil || m != "" || iso.Mode != SeriesIsolationUnverified {
 		t.Fatalf("single identity: m=%q iso=%+v err=%v", m, iso, err)
 	}
 }
@@ -105,7 +106,7 @@ func TestDecideScopeChecksIdentitiesOverTheWholeRange(t *testing.T) {
 		}
 		return &prom.QueryResult{Series: []prom.Series{vec(nil, v)}}, nil
 	}}
-	if _, _, err := decideScope(context.Background(), q, cnpgProbe(time.Hour), nil); !errors.Is(err, ErrCNPGScopeAmbiguous) {
+	if _, _, err := decideScope(context.Background(), q, cnpgProbe(time.Hour), nil); !errors.Is(err, ErrScopeAmbiguous) {
 		t.Fatalf("err = %v, want ambiguous over the range; queries %v", err, q.queries)
 	}
 }
@@ -151,14 +152,14 @@ func TestDecideScopeVerifiedLabelsMustReachProbedSeries(t *testing.T) {
 		}
 		return &prom.QueryResult{Series: []prom.Series{vec(nil, 3)}}, nil
 	}}
-	if _, _, err := decideScope(context.Background(), q, cnpgProbe(0), map[string]string{"k8s_cluster_name": "east"}); !errors.Is(err, ErrCNPGScopeMismatch) {
+	if _, _, err := decideScope(context.Background(), q, cnpgProbe(0), map[string]string{"k8s_cluster_name": "east"}); !errors.Is(err, ErrScopeMismatch) {
 		t.Fatalf("err = %v, want mismatch", err)
 	}
 	q.instant = func(string) (*prom.QueryResult, error) {
 		return &prom.QueryResult{Series: []prom.Series{vec(nil, 3)}}, nil
 	}
 	m, iso, err := decideScope(context.Background(), q, cnpgProbe(0), map[string]string{"k8s_cluster_name": "east"})
-	if err != nil || m != `k8s_cluster_name="east"` || iso.Mode != CNPGIsolationVerified {
+	if err != nil || m != `k8s_cluster_name="east"` || iso.Mode != SeriesIsolationVerified {
 		t.Fatalf("verified: m=%q iso=%+v err=%v", m, iso, err)
 	}
 }
@@ -210,7 +211,7 @@ func TestQueryCNPGHistoryStatesPerChart(t *testing.T) {
 	}
 	charts := queryCNPGHistory(context.Background(), q, CNPGHistoryRequest{
 		Namespace: "pg", Cluster: "pg", Range: r, End: time.Unix(1_700_000_000, 0), Matchers: `cluster_id="a"`,
-		PVCDenied: "get persistentvolumeclaims in pg",
+		PVCDenied: &auth.Grant{Verb: "get", Resource: "persistentvolumeclaims", Namespace: "pg"},
 	})
 	by := map[string]CNPGHistoryChart{}
 	for _, c := range charts {
@@ -223,7 +224,7 @@ func TestQueryCNPGHistoryStatesPerChart(t *testing.T) {
 	if by["deadlocks"].State != CNPGHistoryStateError {
 		t.Errorf("deadlocks state = %s", by["deadlocks"].State)
 	}
-	if by["pvcUsed"].State != CNPGHistoryStateDenied || by["pvcUsed"].Grant == "" {
+	if by["pvcUsed"].State != CNPGHistoryStateDenied || by["pvcUsed"].Grant == nil || *by["pvcUsed"].Grant != (auth.Grant{Verb: "get", Resource: "persistentvolumeclaims", Namespace: "pg"}) {
 		t.Errorf("pvc chart = %+v", by["pvcUsed"])
 	}
 	if by["walSize"].State != CNPGHistoryStateNoSeries || !strings.HasPrefix(by["walSize"].Reason, "not scraped") {
@@ -254,7 +255,7 @@ func TestQueryCNPGHistoryCapsSeries(t *testing.T) {
 		}
 		return &prom.QueryResult{Series: out}, nil
 	}}
-	charts := queryCNPGHistory(context.Background(), q, CNPGHistoryRequest{Namespace: "pg", Cluster: "pg", Range: r, End: time.Now(), PodsDenied: ""})
+	charts := queryCNPGHistory(context.Background(), q, CNPGHistoryRequest{Namespace: "pg", Cluster: "pg", Range: r, End: time.Now()})
 	for _, c := range charts {
 		if c.ID == "databaseSize" && (len(c.Series) != cnpgHistoryMaxSeries || c.Omitted != 20-cnpgHistoryMaxSeries) {
 			t.Fatalf("databaseSize kept %d, omitted %d", len(c.Series), c.Omitted)

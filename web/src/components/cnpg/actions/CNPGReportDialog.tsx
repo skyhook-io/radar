@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ActionConfirmDialog } from '@skyhook-io/k8s-ui'
 import { downloadCNPGReport } from '../../../api/cnpg-recovery'
+import { useRadarFeature } from '../../../api/client'
 import { useConnection } from '../../../context/ConnectionContext'
 import { downloadBlob } from '../../resources/file-browser-utils'
 
@@ -24,6 +25,7 @@ export function CNPGReportDialog({ namespace, name, onClose }: { namespace: stri
   const [queryText, setQueryText] = useState(false)
   const [tailLines, setTailLines] = useState(1000)
   const [busy, setBusy] = useState(false)
+  const { guard } = useRadarFeature('cnpgWorkspace')
   const [error, setError] = useState<string | null>(null)
 
   return (
@@ -34,7 +36,7 @@ export function CNPGReportDialog({ namespace, name, onClose }: { namespace: stri
         setBusy(true)
         setError(null)
         try {
-          const { blob, filename } = await downloadCNPGReport(namespace, name, { logs, queryText: logs && queryText, tailLines })
+          const { blob, filename } = await guard(() => downloadCNPGReport(namespace, name, { logs, queryText: logs && queryText, tailLines }))
           await downloadBlob(blob, filename)
           onClose()
         } catch (e) {

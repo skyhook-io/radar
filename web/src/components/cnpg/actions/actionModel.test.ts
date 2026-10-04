@@ -25,7 +25,7 @@ describe('cnpgDestroyBlocker', () => {
     expect(cnpgDestroyBlocker(fence, 'pg-2', false)).toBe(fence.reason)
   })
   it('keeps real blockers as the alert', () => {
-    expect(cnpgDestroyBlocker({ allowed: false, permission: 'denied', reason: 'Needs delete pods in db', grant: 'delete pods in db' }, 'pg-2', true)).toBe('Needs delete pods in db')
+    expect(cnpgDestroyBlocker({ allowed: false, permission: 'denied', reason: 'Needs delete pods in db', grant: { verb: 'delete', resource: 'pods', namespace: 'db' } }, 'pg-2', true)).toBe('Needs delete pods in db')
     expect(cnpgDestroyBlocker({ allowed: false, permission: 'allowed', reason: 'The cluster is hibernated' }, 'pg-2', true)).toBe('The cluster is hibernated')
     expect(cnpgDestroyBlocker({ allowed: true, permission: 'allowed' }, 'pg-2', true)).toBeUndefined()
   })

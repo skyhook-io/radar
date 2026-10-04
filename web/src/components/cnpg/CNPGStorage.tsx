@@ -16,6 +16,8 @@ import {
   parseQuantityToNumber,
   toneFillClass,
   toneTextClass,
+  formatGrant,
+  type Grant,
 } from '@skyhook-io/k8s-ui'
 import { useResource } from '../../api/client'
 import type { CNPGRuntimeInstance } from '../../api/cnpg'
@@ -27,13 +29,12 @@ import {
   type CNPGStorageVolume,
   type CNPGStorageWAL,
 } from '../../api/cnpg-storage'
-import { Notice } from '../capacity/shared'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { useCNPGWriteGuard } from './actions/useCNPGWriteGuard'
 import { buildResizeManifest, cnpgFloorTone, cnpgInstanceDiskTone, cnpgSharedExpansionGap, cnpgSlotRetentionText, cnpgWALUsageFloor } from './storageModel'
 // Binary units throughout, matching claim capacities such as 1Gi.
 import { formatBytes } from './lsn'
-import { CNPGRefreshFailedNotice } from './shared'
+import { Notice, RefreshFailedNotice } from '../workspace/layout'
 
 const CNPG_GROUP = 'postgresql.cnpg.io'
 
@@ -318,7 +319,7 @@ function InstanceCard({ inst, walCoverage, stated }: { inst: CNPGStorageInstance
           walCoverage.state === 'ok' ? (
             <div className="text-xs text-theme-text-tertiary">No running instance to read</div>
           ) : (
-            <Tooltip content={walCoverage.state === 'denied' ? `No access: needs ${walCoverage.grant}` : walCoverage.reason ?? walCoverage.state}>
+            <Tooltip content={walCoverage.state === 'denied' ? `No access: needs ${formatGrant(walCoverage.grant)}` : walCoverage.reason ?? walCoverage.state}>
               <div className="text-xs text-theme-text-tertiary">Unknown</div>
             </Tooltip>
           )
@@ -329,11 +330,11 @@ function InstanceCard({ inst, walCoverage, stated }: { inst: CNPGStorageInstance
 }
 
 // "<label> needs …" lines; `plural` for a label that takes "need".
-function coverageLine(label: string, c: { state: string; grant?: string; reason?: string }, plural = false): string | null {
+function coverageLine(label: string, c: { state: string; grant?: Grant; reason?: string }, plural = false): string | null {
   const needs = plural ? 'need' : 'needs'
   if (c.state === 'ok') return null
   if (c.state === 'noPrometheus') return `${label} ${needs} Prometheus. ${c.reason ?? 'Radar is not connected to one'}.`
-  if (c.state === 'denied') return `${label} ${needs} ${c.grant ?? 'a grant you do not have'}.`
+  if (c.state === 'denied') return `${label} ${needs} ${formatGrant(c.grant) ?? 'a grant you do not have'}.`
   return `${label}: ${c.reason ?? c.state}`
 }
 
@@ -358,7 +359,7 @@ export function CNPGStorage({ namespace, name, primary }: { namespace: string; n
 
   return (
     <div className="space-y-4">
-      <CNPGRefreshFailedNotice queries={[q]} />
+      <RefreshFailedNotice queries={[q]} />
       {data.findings.map((f) => (
         <AlertBanner
           key={f.claim}
@@ -463,7 +464,7 @@ function ExpansionCard({ data, volumes, onResize }: { data: CNPGClusterStorageRe
               <button
                 type="button"
                 onClick={() => onResize(t)}
-                className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-theme-border bg-theme-surface px-2.5 py-1.5 text-xs font-medium text-theme-text-primary hover:bg-theme-hover"
+                className="btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium"
               >
                 Edit size…
               </button>

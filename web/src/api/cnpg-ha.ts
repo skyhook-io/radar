@@ -1,15 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
-import { cnpgFormatLag, cnpgReplicationTone, type CNPGClusterHA, type CNPGFleetRow, type CNPGInstanceLive, type CNPGReplicationLive } from '@skyhook-io/k8s-ui'
-import { fetchJSON } from './client'
+import { cnpgFormatLag, cnpgReplicationTone, formatGrant, type CNPGClusterHA, type CNPGFleetRow, type CNPGInstanceLive, type CNPGReplicationLive } from '@skyhook-io/k8s-ui'
+import { fetchJSON, useRadarFeature } from './client'
 import type { CNPGRuntimeResponse } from './cnpg'
 
 // /api/cnpg/clusters/{ns}/{name}/ha — quorum, disruption budgets, Leases,
 // failure domains, Jobs, image drift and certificate renewal ownership. Each
 // part is authorized on its own and says when it could not be read.
 export function useCNPGClusterHA(namespace: string, name: string, options?: { enabled?: boolean; refetchInterval?: number | false }) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGClusterHA>({
-    queryKey: ['cnpg', 'ha', namespace, name],
-    queryFn: ({ signal }) => fetchJSON<CNPGClusterHA>(`/cnpg/clusters/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/ha`, signal),
+    queryKey: ['cnpg', 'ha', namespace, name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGClusterHA>(`/cnpg/clusters/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/ha`, signal)),
     enabled: (options?.enabled ?? true) && !!name,
     staleTime: 10_000,
     refetchInterval: options?.refetchInterval ?? 30_000,
@@ -36,7 +37,7 @@ export function cnpgInstanceLive(rt: CNPGRuntimeResponse | undefined): CNPGInsta
 
 /** Why the HA section has no instance-manager facts at all; undefined when it has them. */
 export function cnpgInstanceLiveUnavailable(rt: CNPGRuntimeResponse | undefined, error: unknown): string | undefined {
-  if (rt?.permission.proxy === 'denied') return `needs ${rt.permission.grant ?? 'get pods/proxy'}`
+  if (rt?.permission.proxy === 'denied') return `needs ${formatGrant(rt.permission.grant) ?? 'get pods/proxy'}`
   if (rt) return undefined
   return error instanceof Error ? `the runtime read failed: ${error.message}` : 'instance managers not read yet'
 }

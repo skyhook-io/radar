@@ -1,4 +1,5 @@
 import { type HealthLevel } from '../resources/resource-utils';
+import { TONE_TEXT_CLASS } from './severity-tone';
 
 // StatusDot + mapHealthToTone are typed helpers over the canonical OSS
 // status vocabulary defined in `packages/k8s-ui/src/theme/components.css`.
@@ -51,6 +52,29 @@ const DOT_CLASS: Record<StatusTone, string> = {
 /** Solid fill for a tone, e.g. a bar or meter segment. */
 export function toneFillClass(tone: StatusTone): string {
   return DOT_CLASS[tone]
+}
+
+// Text for a value read in a tone. Healthy reads as plain primary text: only
+// what needs a look is coloured.
+const TEXT_CLASS: Record<StatusTone, string> = {
+  healthy: 'text-theme-text-primary',
+  degraded: TONE_TEXT_CLASS.amber,
+  alert: TONE_TEXT_CLASS.orange,
+  unhealthy: TONE_TEXT_CLASS.red,
+  unknown: 'text-theme-text-tertiary',
+  neutral: 'text-theme-text-secondary',
+}
+
+export function toneTextClass(tone: StatusTone): string {
+  return TEXT_CLASS[tone]
+}
+
+// Unknown ranks above healthy: a combined reading never looks calmer than a
+// part that could not be read.
+const TONE_RANK: Record<StatusTone, number> = { healthy: 0, neutral: 0, unknown: 1, degraded: 2, alert: 3, unhealthy: 4 }
+
+export function worseTone(a: StatusTone, b: StatusTone): StatusTone {
+  return TONE_RANK[b] > TONE_RANK[a] ? b : a
 }
 
 // Normalize the variety of severity / health vocabularies that flow in

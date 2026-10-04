@@ -57,12 +57,12 @@ func TestCNPGActionMaintenanceGuardsAndBinding(t *testing.T) {
 
 	// Nothing is in progress: unset is refused.
 	_, err := runCNPGClusterAction(ctx, env.clients(), "db", "pg", "unsetMaintenance", cnpgActionReq(t, cnpgMaintenanceFactsMap(false, false, true), map[string]any{"reusePVC": true}))
-	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != cnpgCodeBlocked {
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != actionCodeBlocked {
 		t.Errorf("unset while not in progress = %v, want blocked", err)
 	}
 	// The reviewed values differ from the cluster's: 409 changed, nothing written.
 	_, err = runCNPGClusterAction(ctx, env.clients(), "db", "pg", "setMaintenance", cnpgActionReq(t, cnpgMaintenanceFactsMap(true, false, false), map[string]any{"reusePVC": true}))
-	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Status != http.StatusConflict || ae.Code != cnpgCodeChanged {
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Status != http.StatusConflict || ae.Code != actionCodeChanged {
 		t.Errorf("stale maintenance facts = %v, want 409 changed", err)
 	}
 	// Missing binding or missing reusePVC is a malformed request.

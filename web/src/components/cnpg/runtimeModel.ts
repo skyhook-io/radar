@@ -1,4 +1,4 @@
-import { cnpgLagTone, cnpgWorseTone, type HealthLevel } from '@skyhook-io/k8s-ui'
+import { cnpgLagTone, worseTone, type HealthLevel } from '@skyhook-io/k8s-ui'
 import type { CNPGRuntimeInstance, CNPGRuntimeReplication } from '../../api/cnpg'
 import type { CNPGSessionsResponse } from '../../api/cnpg-sessions'
 import { cnpgConnectionFigure } from './blocking'
@@ -70,7 +70,7 @@ const CNPG_BACKLOG_UNHEALTHY = 1024 * 1024 * 1024
 export function cnpgStandbyBacklogTone(bytes: number | undefined, replayLag: number | undefined): HealthLevel {
   if (bytes === undefined) return 'unknown'
   const byBytes: HealthLevel = bytes >= CNPG_BACKLOG_UNHEALTHY ? 'unhealthy' : bytes >= CNPG_BACKLOG_DEGRADED ? 'degraded' : 'healthy'
-  return replayLag === undefined ? byBytes : cnpgWorseTone(byBytes, cnpgLagTone(replayLag))
+  return replayLag === undefined ? byBytes : worseTone(byBytes, cnpgLagTone(replayLag))
 }
 
 export interface CNPGStandbyHeadline {
@@ -94,7 +94,7 @@ export function cnpgStandbyHeadline(
   const streaming = rep ? [rep.state, rep.syncState].filter(Boolean).join(' · ') : undefined
   if (inst.status.roleDetail === 'replayPaused' || inst.status.replayPaused) {
     const secondary = streaming ?? (ctx.primaryRead && !ctx.fenced ? 'not connected to the primary' : undefined)
-    return { text: 'replay paused', tone: cnpgWorseTone('degraded', backlogTone), secondary }
+    return { text: 'replay paused', tone: worseTone('degraded', backlogTone), secondary }
   }
   if (streaming !== undefined) return { text: streaming, tone: backlogTone }
   // The fence asks the operator to stop PostgreSQL; only the instance manager

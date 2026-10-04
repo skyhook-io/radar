@@ -298,7 +298,18 @@ describe('buildCNPGFleet', () => {
     const named = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { backups: { state: 'partial', allowedNamespaces: ['db'] } } }))
     expect(named.rows[0].protection.lastSuccessfulBackup.text).toBe('None observed')
     const unnamed = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { backups: { state: 'partial' } } }))
-    expect(unnamed.rows[0].protection.lastSuccessfulBackup.text).toBe('No access to Backups')
+    expect(unnamed.rows[0].protection.lastSuccessfulBackup.text).toBe('Backups not read in db')
+  })
+
+  it('names the cause of a partial read only when the server names the namespace', () => {
+    const denied = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { backups: { state: 'partial', allowedNamespaces: ['other'], deniedNamespaces: ['db'] } } }))
+    expect(denied.rows[0].protection.lastSuccessfulBackup.text).toBe('No access to Backups')
+    const uncached = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { pods: { state: 'partial', allowedNamespaces: ['other'], uncachedNamespaces: ['db'] } } }))
+    expect(uncached.rows[0].replication.text).toBe('Radar does not cache Pods in db')
+    const none = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { pods: { state: 'uncached' } } }))
+    expect(none.rows[0].replication.text).toBe('Radar does not cache Pods')
+    const mixed = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { pods: { state: 'uncached', uncachedNamespaces: ['other'], deniedNamespaces: ['db'] } } }))
+    expect(mixed.rows[0].replication.text).toBe('No access to Pods')
   })
 
   it('says no access instead of "no replica pods" when Pods are unreadable', () => {

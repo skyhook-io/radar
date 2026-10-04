@@ -4,19 +4,19 @@ import { Activity, ArrowLeft, Database, Gauge, ShieldCheck, Unplug } from 'lucid
 import type { WorkloadExtraTab } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
-import { useContexts } from '../../api/client'
+import { useContexts, useRadarFeature } from '../../api/client'
 import { useContextSwitchFlow } from '../useContextSwitchFlow'
 import { WorkloadView } from '../workload/WorkloadView'
-import { EmptyState } from '../capacity/shared'
 import { CNPGClusterActivity } from './CNPGClusterActivity'
 import { CNPGClusterRuntime } from './CNPGClusterRuntime'
 import { CNPGProtection } from './CNPGProtection'
 import { CNPGRestoreValidation } from './recovery/CNPGRestoreValidation'
 import { CNPGScreenGate } from './shared'
 import { CNPG_DETAIL_KINDS, CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, cnpgScreenPath, type CNPGDetailTarget } from './routes'
-import { currentPageLabel } from './paths'
+import { currentPageLabel } from '../../utils/page-links'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
+import { ScreenEmptyState } from '../workspace/layout'
 
 interface ReturnState {
   returnLabel?: string
@@ -103,8 +103,10 @@ export function CNPGDetailPage({
     [navigate, activeContext, onOpenResource],
   )
 
+  // A Radar without the workspace endpoints shows the standard detail.
+  const cnpgWorkspace = useRadarFeature('cnpgWorkspace').support !== 'unsupported'
   const extraTabs = useMemo<WorkloadExtraTab[] | undefined>(() => {
-    if (target.plural !== 'clusters') return undefined
+    if (target.plural !== 'clusters' || !cnpgWorkspace) return undefined
     return [
       {
         id: 'runtime',
@@ -141,7 +143,7 @@ export function CNPGDetailPage({
         ),
       },
     ]
-  }, [target.plural, target.namespace, target.name, onOpenResource, openRelated, searchParams, setSearchParams, location.state])
+  }, [target.plural, target.namespace, target.name, cnpgWorkspace, onOpenResource, openRelated, searchParams, setSearchParams, location.state])
 
   if (pinnedContext && activeContext && pinnedContext !== activeContext) {
     return <NotInContext target={target} pinnedContext={pinnedContext} activeContext={activeContext} homeLabel={home.label} homePath={home.path} />
@@ -228,7 +230,7 @@ function NotInContext({
   const pinned = contexts?.find((c) => c.name === pinnedContext)
   return (
     <>
-      <EmptyState
+      <ScreenEmptyState
         icon={Unplug}
         title={`${target.name} is not in ${activeContext}`}
         detail={`This link points at ${CNPG_DETAIL_KINDS[target.plural].kind} ${target.name} in context ${pinnedContext}. Radar does not open a same-named object from another cluster.`}
@@ -242,7 +244,7 @@ function NotInContext({
             <button
               type="button"
               onClick={() => navigate(homePath)}
-              className="rounded-lg border border-theme-border bg-theme-surface px-3 py-1.5 text-sm text-theme-text-primary hover:bg-theme-hover"
+              className="btn-secondary px-3 py-1.5 text-sm"
             >
               Go to {homeLabel === 'Overview' ? 'CloudNativePG Overview' : homeLabel}
             </button>

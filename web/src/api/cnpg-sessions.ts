@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import { fetchJSON } from './client'
-import type { CNPGActionCapability, CNPGClusterFacts, CNPGRuntimeSourceState } from './cnpg'
+import type { Grant } from '@skyhook-io/k8s-ui'
+import { fetchJSON, useRadarFeature } from './client'
+import type { CNPGClusterFacts, CNPGRuntimeSourceState } from './cnpg'
+import type { ActionCapability } from './actions'
 
 const enc = encodeURIComponent
 
@@ -40,7 +42,7 @@ export interface CNPGSessionsResponse {
   podUID?: string
   role?: string
   sampledAt: string
-  permission: { exec: 'allowed' | 'denied' | 'unknown'; grant: string }
+  permission: { exec: 'allowed' | 'denied' | 'unknown'; grant?: Grant }
   state: CNPGRuntimeSourceState
   error?: string
   capturedAt?: string
@@ -58,10 +60,11 @@ export interface CNPGSessionsResponse {
 // /api/cnpg/clusters/{ns}/{name}/sessions — who blocks whom on one instance,
 // read with fixed SQL over the caller's pods/exec. Denied is a state, not an error.
 export function useCNPGSessions(namespace: string, name: string, pod?: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGSessionsResponse>({
-    queryKey: ['cnpg', 'sessions', namespace, name, pod ?? ''],
-    queryFn: ({ signal }) =>
-      fetchJSON<CNPGSessionsResponse>(`/cnpg/clusters/${enc(namespace)}/${enc(name)}/sessions${pod ? `?pod=${enc(pod)}` : ''}`, signal),
+    queryKey: ['cnpg', 'sessions', namespace, name, pod ?? '', ...gatedKey],
+    queryFn: ({ signal }) => guard(() =>
+      fetchJSON<CNPGSessionsResponse>(`/cnpg/clusters/${enc(namespace)}/${enc(name)}/sessions${pod ? `?pod=${enc(pod)}` : ''}`, signal)),
     enabled: enabled && !!name,
     refetchInterval: (q) => (q.state.data?.state === 'denied' ? false : 10_000),
     refetchIntervalInBackground: false,
@@ -93,13 +96,14 @@ export interface CNPGDestroyPlan {
   pvcs: CNPGDestroyPVC[]
   jobsReadable: boolean
   jobs: string[]
-  actions: { delete: CNPGActionCapability; keep: CNPGActionCapability }
+  actions: { delete: ActionCapability; keep: ActionCapability }
 }
 
 export function useCNPGDestroyPlan(namespace: string, name: string, pod: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGDestroyPlan>({
-    queryKey: ['cnpg', 'destroy-plan', namespace, name, pod],
-    queryFn: ({ signal }) => fetchJSON<CNPGDestroyPlan>(`/cnpg/clusters/${enc(namespace)}/${enc(name)}/instances/${enc(pod)}/destroy-plan`, signal),
+    queryKey: ['cnpg', 'destroy-plan', namespace, name, pod, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGDestroyPlan>(`/cnpg/clusters/${enc(namespace)}/${enc(name)}/instances/${enc(pod)}/destroy-plan`, signal)),
     enabled: enabled && !!pod,
     staleTime: 0,
     retry: false,
@@ -132,13 +136,14 @@ export interface CNPGPoolerCapabilities {
   resourceVersion: string
   context: string
   facts: CNPGPoolerFacts
-  actions: { pause: CNPGActionCapability; resume: CNPGActionCapability; observeState: CNPGActionCapability }
+  actions: { pause: ActionCapability; resume: ActionCapability; observeState: ActionCapability }
 }
 
 export function useCNPGPoolerCapabilities(namespace: string, name: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGPoolerCapabilities>({
-    queryKey: ['cnpg', 'capabilities', 'poolers', namespace, name],
-    queryFn: ({ signal }) => fetchJSON<CNPGPoolerCapabilities>(`/cnpg/poolers/${enc(namespace)}/${enc(name)}/capabilities`, signal),
+    queryKey: ['cnpg', 'capabilities', 'poolers', namespace, name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGPoolerCapabilities>(`/cnpg/poolers/${enc(namespace)}/${enc(name)}/capabilities`, signal)),
     enabled: enabled && !!name,
     staleTime: 5_000,
     refetchInterval: 30_000,
@@ -149,16 +154,17 @@ export function useCNPGPoolerCapabilities(namespace: string, name: string, enabl
 export interface CNPGPgBouncerStateResponse {
   pooler: { namespace: string; name: string; uid: string }
   sampledAt: string
-  permission: { exec: 'allowed' | 'denied' | 'unknown'; grant: string }
+  permission: { exec: 'allowed' | 'denied' | 'unknown'; grant?: Grant }
   pods: { pod: string; state: CNPGRuntimeSourceState; error?: string; paused?: boolean; suspended?: boolean; active?: boolean }[]
 }
 
 // /api/cnpg/poolers/{ns}/{name}/pgbouncer-state — each PgBouncer's own SHOW
 // STATE, the only place "paused" is observed rather than requested.
 export function useCNPGPgBouncerState(namespace: string, name: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGPgBouncerStateResponse>({
-    queryKey: ['cnpg', 'pgbouncer-state', namespace, name],
-    queryFn: ({ signal }) => fetchJSON<CNPGPgBouncerStateResponse>(`/cnpg/poolers/${enc(namespace)}/${enc(name)}/pgbouncer-state`, signal),
+    queryKey: ['cnpg', 'pgbouncer-state', namespace, name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGPgBouncerStateResponse>(`/cnpg/poolers/${enc(namespace)}/${enc(name)}/pgbouncer-state`, signal)),
     enabled: enabled && !!name,
     refetchInterval: (q) => (q.state.data?.permission.exec === 'denied' ? false : 15_000),
     refetchIntervalInBackground: false,

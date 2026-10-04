@@ -182,7 +182,7 @@ describe('observeRestore', () => {
   })
 
   it('never reads missing access as progress or failure', () => {
-    const o = observeRestore(snapshot({ coverage: { pods: { state: 'denied', grant: 'list pods in namespace db' }, jobs: { state: 'denied' }, events: { state: 'denied' } } }))
+    const o = observeRestore(snapshot({ coverage: { pods: { state: 'denied', grant: { verb: 'list', resource: 'pods', namespace: 'db' } }, jobs: { state: 'denied' }, events: { state: 'denied' } } }))
     expect(o.state).toBe('unobservable')
     expect(o.detail).toContain('list pods')
   })
@@ -224,7 +224,7 @@ describe('restore operation observer', () => {
 
 describe('restorePermission', () => {
   it('blocks review with the grant when create clusters is denied, whichever way the dialog opened', () => {
-    const r = restorePermission('db', { allowed: false, permission: 'denied', grant: 'create clusters (postgresql.cnpg.io) in namespace db', reason: 'x' }, undefined)
+    const r = restorePermission('db', { allowed: false, permission: 'denied', grant: { verb: 'create', group: 'postgresql.cnpg.io', resource: 'clusters', namespace: 'db' }, reason: 'x' }, undefined)
     expect(r.blocked).toContain('needs create clusters (postgresql.cnpg.io) in namespace db')
   })
   it('blocks with the refusal when the operator webhook rejects writes', () => {
