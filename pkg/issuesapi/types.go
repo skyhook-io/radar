@@ -370,10 +370,12 @@ type RestartLoop struct {
 	LastExitCode   int32     `json:"last_exit_code"`
 	LastReason     string    `json:"last_reason,omitempty"`
 	LastFinishedAt time.Time `json:"last_finished_at,omitzero"`
-	// LivenessProbeFailure / ReadinessProbeFailure are the newest failure of
-	// each probe type seen for this container in the last 10 minutes.
+	// LivenessProbeFailure / ReadinessProbeFailure / StartupProbeFailure are
+	// the newest failure of each probe type seen for this container in the
+	// last 10 minutes.
 	LivenessProbeFailure  *ProbeFailure `json:"liveness_probe_failure,omitempty"`
 	ReadinessProbeFailure *ProbeFailure `json:"readiness_probe_failure,omitempty"`
+	StartupProbeFailure   *ProbeFailure `json:"startup_probe_failure,omitempty"`
 }
 
 // ProbeFailure is one observed probe failure: when it was last reported and

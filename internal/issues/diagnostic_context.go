@@ -1014,7 +1014,7 @@ func restartLoopEvidenceMessage(l *issuesapi.RestartLoop) string {
 	for _, p := range []struct {
 		name string
 		pf   *issuesapi.ProbeFailure
-	}{{"liveness", l.LivenessProbeFailure}, {"readiness", l.ReadinessProbeFailure}} {
+	}{{"startup", l.StartupProbeFailure}, {"liveness", l.LivenessProbeFailure}, {"readiness", l.ReadinessProbeFailure}} {
 		if p.pf == nil {
 			continue
 		}

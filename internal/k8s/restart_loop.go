@@ -58,6 +58,7 @@ type restartLoop struct {
 	lastMessage string
 	liveness    *probeFailure
 	readiness   *probeFailure
+	startup     *probeFailure
 }
 
 // activeRestartLoop reports the container keeping this pod in a restart loop.
@@ -73,20 +74,27 @@ type restartLoop struct {
 // requiring a non-zero exit misses the loops that flap the most. An OOMKilled
 // last termination is left to the OOM path, which has its own category.
 //
-// When several containers loop, the first in status order wins (regular
-// containers before sidecars) so the evidence does not hop between containers
-// from one poll to the next.
+// When several containers qualify, the one that terminated most recently is
+// the one actively failing; a container that looped earlier and has since
+// recovered can still qualify for the rest of the window and must not be the
+// one named. Ties keep status order (regular containers before sidecars).
 func activeRestartLoop(pod *corev1.Pod, probes map[string]probeFailure, now time.Time) (restartLoop, bool) {
 	// A pod being deleted stops its containers on purpose: a rollout or
 	// drain SIGTERM ends Completed/0 and is not a crash.
 	if pod == nil || pod.DeletionTimestamp != nil || (pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodPending) {
 		return restartLoop{}, false
 	}
-	if pod.Spec.RestartPolicy == "" || pod.Spec.RestartPolicy == corev1.RestartPolicyAlways {
-		for i := range pod.Status.ContainerStatuses {
-			if loop, ok := containerRestartLoop(&pod.Status.ContainerStatuses[i], now); ok {
-				return withProbeEvidence(loop, pod, probes), true
-			}
+	var best restartLoop
+	found := false
+	consider := func(loop restartLoop, ok bool) {
+		if ok && (!found || loop.lastFinishedAt.After(best.lastFinishedAt)) {
+			best, found = loop, true
+		}
+	}
+	for i := range pod.Status.ContainerStatuses {
+		cs := &pod.Status.ContainerStatuses[i]
+		if containerRestartsAlways(pod, cs.Name) {
+			consider(containerRestartLoop(cs, now))
 		}
 	}
 	for i := range pod.Status.InitContainerStatuses {
@@ -94,12 +102,28 @@ func activeRestartLoop(pod *corev1.Pod, probes map[string]probeFailure, now time
 		if !isNativeSidecarName(pod, cs.Name) {
 			continue
 		}
-		if loop, ok := containerRestartLoop(cs, now); ok {
-			loop.sidecar = true
-			return withProbeEvidence(loop, pod, probes), true
+		loop, ok := containerRestartLoop(cs, now)
+		loop.sidecar = true
+		consider(loop, ok)
+	}
+	if !found {
+		return restartLoop{}, false
+	}
+	return withProbeEvidence(best, pod, probes), true
+}
+
+// containerRestartsAlways reports whether the kubelet restarts this regular
+// container after every exit: its own restartPolicy when set (per-container
+// policies, Kubernetes 1.34+), else the pod's. OnFailure and Never containers
+// (Job workers) retry or stop by design and are not restart loops.
+func containerRestartsAlways(pod *corev1.Pod, name string) bool {
+	policy := corev1.ContainerRestartPolicy(pod.Spec.RestartPolicy)
+	for i := range pod.Spec.Containers {
+		if c := &pod.Spec.Containers[i]; c.Name == name && c.RestartPolicy != nil {
+			policy = *c.RestartPolicy
 		}
 	}
-	return restartLoop{}, false
+	return policy == "" || policy == corev1.ContainerRestartPolicyAlways
 }
 
 func isNativeSidecarName(pod *corev1.Pod, name string) bool {
@@ -156,6 +180,9 @@ func withProbeEvidence(loop restartLoop, pod *corev1.Pod, probes map[string]prob
 	}
 	if pf, ok := probeFailureFor(probes, pod, loop.container, readinessProbeFailedReason); ok {
 		loop.readiness = &pf
+	}
+	if pf, ok := probeFailureFor(probes, pod, loop.container, startupProbeFailedReason); ok {
+		loop.startup = &pf
 	}
 	return loop
 }
@@ -215,6 +242,9 @@ func (l restartLoop) lastExit() string {
 func (l restartLoop) message() string {
 	msg := fmt.Sprintf("%s is in a restart loop: %d restarts, last %s", l.ref(), l.restartCount, l.lastExit())
 	var seen []string
+	if l.startup != nil {
+		seen = append(seen, "startup")
+	}
 	if l.liveness != nil {
 		seen = append(seen, "liveness")
 	}
@@ -222,7 +252,7 @@ func (l restartLoop) message() string {
 		seen = append(seen, "readiness")
 	}
 	if len(seen) > 0 {
-		msg += "; " + strings.Join(seen, " and ") + " probe failures observed"
+		msg += "; " + strings.Join(seen, ", ") + " probe failures observed"
 	}
 	return msg
 }
@@ -241,8 +271,8 @@ func (l restartLoop) diagnosis() (cause, action string) {
 	}
 	switch code := l.lastExitCode; code {
 	case 0:
-		return fmt.Sprintf("%s keeps restarting, and its last run ended with exit code 0. Under restartPolicy Always the kubelet restarts a container whenever it exits; a failed liveness probe also ends this way, because the kubelet lets the process shut down gracefully.", ref),
-			"Check the pod's Unhealthy events for liveness probe failures; if present, check the probe against the app (path and port, timeoutSeconds, failureThreshold, startup time or a missing startupProbe). If not, check why the main process exits: command and args, a process that daemonizes, or one-shot work that belongs in a Job."
+		return fmt.Sprintf("%s keeps restarting, and its last run ended with exit code 0. Under restartPolicy Always the kubelet restarts a container whenever it exits; a failed liveness or startup probe also ends this way, because the kubelet lets the process shut down gracefully.", ref),
+			"Check the pod's Unhealthy events for liveness or startup probe failures; if present, check the probe against the app (path and port, timeoutSeconds, failureThreshold, startup time). If not, check why the main process exits: command and args, a process that daemonizes, or one-shot work that belongs in a Job."
 	case 127:
 		return fmt.Sprintf("%s keeps restarting after exit code 127: command not found.", ref),
 			"Check the image entrypoint and pod command/args; verify the binary exists in the image."
@@ -252,6 +282,9 @@ func (l restartLoop) diagnosis() (cause, action string) {
 	case 139:
 		return fmt.Sprintf("%s keeps restarting after exit code 139: segmentation fault.", ref),
 			"Inspect previous container logs and recent image/code changes; check native libraries or unsafe code for a segfault."
+	case 143:
+		return fmt.Sprintf("%s keeps restarting after exit code 143 (SIGTERM).", ref),
+			"A process that exits 143 on SIGTERM (common for JVM and Node apps) was told to stop: check the pod's Unhealthy events for a liveness or startup probe restart, and the previous container logs for shutdown context."
 	case 137:
 		return fmt.Sprintf("%s keeps restarting after exit code 137 (SIGKILL), but Kubernetes did not report OOMKilled.", ref),
 			"Check for a liveness probe kill that outlived its grace period, node pressure, process-level SIGKILLs, and memory limits; inspect previous container logs for shutdown context."
@@ -275,6 +308,9 @@ func (l restartLoop) evidence() *issuesapi.RestartLoop {
 	}
 	if l.readiness != nil {
 		out.ReadinessProbeFailure = &issuesapi.ProbeFailure{LastSeen: l.readiness.at.UTC(), Message: Truncate(l.readiness.message, restartLoopProbeMessageMax)}
+	}
+	if l.startup != nil {
+		out.StartupProbeFailure = &issuesapi.ProbeFailure{LastSeen: l.startup.at.UTC(), Message: Truncate(l.startup.message, restartLoopProbeMessageMax)}
 	}
 	return out
 }

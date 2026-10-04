@@ -248,7 +248,7 @@ func TestDetectProblems_RestartLoopPrecedence(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if got, ok := lookupProblem(problems, "Pod", "bad-liveness", livenessProbeInvalidReason); !ok || got.Fingerprint == "" || got.RestartLoop != nil {
+	if got, ok := lookupProblem(problems, "Pod", "bad-liveness", livenessProbeInvalidReason); !ok || got.Fingerprint == "" || got.RestartLoop != nil || got.Severity != "critical" {
 		t.Fatalf("bad-liveness = %+v (found %v), want the fingerprinted invalid-probe row", got, ok)
 	}
 	if got, ok := lookupProblem(problems, "Pod", "image-sibling", "ImagePullBackOff"); !ok || got.RestartLoop != nil {
@@ -259,5 +259,62 @@ func TestDetectProblems_RestartLoopPrecedence(t *testing.T) {
 	}
 	if got, ok := lookupProblem(problems, "Pod", "plain-loop", crashLoopReason); !ok || got.Severity != "critical" || got.RestartLoop == nil {
 		t.Fatalf("plain-loop = %+v (found %v), want a critical crashloop row on a ready tick", got, ok)
+	}
+}
+
+func TestActiveRestartLoop_NamesTheContainerFailingNow(t *testing.T) {
+	now := time.Now()
+	recovered := corev1.ContainerStatus{Name: "api", Ready: true, RestartCount: 3,
+		State:                corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-19 * time.Minute))}},
+		LastTerminationState: corev1.ContainerState{Terminated: terminatedAgo(now, 20*time.Minute, "Error", 1)}}
+	failing := corev1.ContainerStatus{Name: "sql-proxy", RestartCount: 4,
+		State:                corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+		LastTerminationState: corev1.ContainerState{Terminated: terminatedAgo(now, time.Minute, "Error", 2)}}
+	pod := restartLoopPod(now, recovered)
+	pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: "sql-proxy"})
+	pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, failing)
+	loop, ok := activeRestartLoop(pod, nil, now)
+	if !ok || loop.container != "sql-proxy" || loop.lastExitCode != 2 {
+		t.Fatalf("loop = %+v, want the container that crashed a minute ago", loop)
+	}
+}
+
+func TestActiveRestartLoop_UsesContainerRestartPolicy(t *testing.T) {
+	now := time.Now()
+	cs := corev1.ContainerStatus{Name: "app", RestartCount: 5, LastTerminationState: corev1.ContainerState{Terminated: terminatedAgo(now, time.Minute, "Error", 1)}}
+	always, onFailure := corev1.ContainerRestartPolicyAlways, corev1.ContainerRestartPolicyOnFailure
+
+	jobPodAlwaysContainer := restartLoopPod(now, cs)
+	jobPodAlwaysContainer.Spec.RestartPolicy = corev1.RestartPolicyOnFailure
+	jobPodAlwaysContainer.Spec.Containers[0].RestartPolicy = &always
+	if _, ok := activeRestartLoop(jobPodAlwaysContainer, nil, now); !ok {
+		t.Fatal("a container with restartPolicy Always loops whatever the pod's policy")
+	}
+	alwaysPodOnFailureContainer := restartLoopPod(now, cs)
+	alwaysPodOnFailureContainer.Spec.Containers[0].RestartPolicy = &onFailure
+	if _, ok := activeRestartLoop(alwaysPodOnFailureContainer, nil, now); ok {
+		t.Fatal("a container with restartPolicy OnFailure retries by design and is not a restart loop")
+	}
+}
+
+func TestActiveRestartLoop_StartupProbeEvidence(t *testing.T) {
+	now := time.Now()
+	pod := restartLoopPod(now, corev1.ContainerStatus{Name: "app", RestartCount: 4, LastTerminationState: corev1.ContainerState{Terminated: terminatedAgo(now, time.Minute, "Error", 143)}})
+	probes := map[string]probeFailure{"ns/p/app/" + startupProbeFailedReason: {reason: startupProbeFailedReason, at: now, message: "Startup probe failed: connection refused"}}
+	loop, ok := activeRestartLoop(pod, probes, now)
+	if !ok || loop.startup == nil || loop.evidence().StartupProbeFailure == nil || !strings.Contains(loop.message(), "startup probe failures observed") {
+		t.Fatalf("loop = %+v, want startup probe evidence", loop)
+	}
+	if cause, _ := loop.diagnosis(); !strings.Contains(cause, "143 (SIGTERM)") {
+		t.Fatalf("cause = %q, want the SIGTERM exit explained", cause)
+	}
+}
+
+func TestEventLastTime_UsesSeriesLastObservedTime(t *testing.T) {
+	first := metav1.NewMicroTime(time.Now().Add(-time.Hour))
+	last := metav1.NewMicroTime(time.Now().Add(-time.Minute))
+	e := &corev1.Event{EventTime: first, Series: &corev1.EventSeries{LastObservedTime: last}}
+	if got := eventLastTime(e); !got.Equal(last.Time) {
+		t.Fatalf("eventLastTime = %v, want the series' last observation %v", got, last.Time)
 	}
 }

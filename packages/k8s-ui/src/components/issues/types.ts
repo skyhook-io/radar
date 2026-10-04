@@ -378,4 +378,5 @@ export interface IssueRestartLoop {
   last_finished_at?: string;
   liveness_probe_failure?: IssueProbeFailure;
   readiness_probe_failure?: IssueProbeFailure;
+  startup_probe_failure?: IssueProbeFailure;
 }

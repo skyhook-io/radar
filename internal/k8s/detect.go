@@ -44,6 +44,10 @@ const ScaledToZeroReason = "Backing workload scaled to 0"
 
 const livenessProbeFailedReason = "LivenessProbeFailed"
 
+// startupProbeFailedReason is evidence only: a failed startup probe restarts
+// the container like a liveness failure, but it never becomes a row reason.
+const startupProbeFailedReason = "StartupProbeFailed"
+
 // Core ConfigMaps and Secrets have no kind-specific graceful termination phase.
 // Once deletion starts, a remaining finalizer is the only thing keeping the
 // object present, so delayed cleanup is actionable sooner than workload drain.
@@ -495,6 +499,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			// (image pulls, create errors) and an active OOM keep their own
 			// paths. Applied before the structural checks below so an invalid
 			// probe target still wins on every tick, not only on some.
+			loopActive := looping
 			if looping && restartLoopMayReplace(reason) && !health.PodHasActiveOOMKilled(pod, now) {
 				reason = crashLoopReason
 				message = loop.message()
@@ -515,6 +520,12 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				reason = init.reason
 				message = init.message
 				fingerprint = init.fingerprint
+			}
+			// A structural root (an invalid probe target) that wins the row
+			// during a loop keeps the loop's pinned severity, or its alert
+			// would come and go with the crash cycle like the loop's used to.
+			if loopActive && fingerprint != "" {
+				severity = "critical"
 			}
 			var restartLoopEvidence *issuesapi.RestartLoop
 			if looping && reason == crashLoopReason {
@@ -1585,6 +1596,9 @@ func latestProbeFailures(cache *ResourceCache, namespace string, now time.Time) 
 		if cur, exists := byContainer[containerKey]; !exists || t.After(cur.at) {
 			byContainer[containerKey] = pf
 		}
+		if reason == startupProbeFailedReason {
+			continue
+		}
 		if cur, exists := out[key]; exists && !t.After(cur.at) {
 			continue
 		}
@@ -1616,6 +1630,8 @@ func classifyProbeFailureEvent(reason, msg string) (string, bool) {
 		return livenessProbeFailedReason, true
 	case strings.Contains(lower, "readiness probe failed"):
 		return readinessProbeFailedReason, true
+	case strings.Contains(lower, "startup probe failed"):
+		return startupProbeFailedReason, true
 	default:
 		return "", false
 	}
