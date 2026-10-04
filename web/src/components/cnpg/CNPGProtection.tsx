@@ -7,10 +7,11 @@ import {
   getCNPGBackupStatus,
   getCNPGClusterBarmanPlugin,
   getCNPGObjectStoreDestination,
-  getCNPGObjectStoreRecoveryWindows,
   getCNPGScheduledBackupStatus,
+  inferredObjectStoreHealth,
   isApiGroup,
   toneTextClass,
+  usersOfObjectStore,
   type CNPGFleetRow,
   type HealthLevel,
 } from '@skyhook-io/k8s-ui'
@@ -61,29 +62,30 @@ interface StoreRow {
   health: { text: string; tone: HealthLevel; evidence: string }
 }
 
-function inferStoreHealth(store: any, users: CNPGFleetRow[]): StoreRow['health'] {
-  if (users.length === 0) {
-    return { text: 'Unknown', tone: 'unknown', evidence: 'No visible cluster uses this store' }
-  }
-  const failingArchiving = users.filter((u) => u.protection.walArchiving.tone === 'unhealthy')
-  const windows = getCNPGObjectStoreRecoveryWindows(store)
-  const failingBackups = windows.filter((w) => w.failingSinceLastSuccess)
-  if (failingArchiving.length > 0 || failingBackups.length > 0) {
+// The same inference the ObjectStore summary shows, so the two never disagree:
+// only the recovery windows of clusters that use the store now count.
+function storeHealth(store: any, users: CNPGFleetRow[]): StoreRow['health'] {
+  const { summary, evidence } = inferredObjectStoreHealth(store, usersOfObjectStore(store, users.map((u) => u.cluster)))
+  const names = (list: typeof evidence) => list.map((e) => e.cluster.name).join(', ')
+  if (evidence.length === 0) return { text: 'Unknown', tone: 'unknown', evidence: summary.text }
+  if (summary.tone === 'unhealthy') {
+    const archiving = evidence.filter((e) => e.archiving.tone === 'unhealthy')
+    const backups = evidence.filter((e) => e.window?.failingSinceLastSuccess)
     const parts = [
-      failingArchiving.length > 0 ? `WAL archiving failing on ${failingArchiving.map((u) => u.name).join(', ')}` : null,
-      failingBackups.length > 0 ? `a backup failed after the last success for ${failingBackups.map((w) => w.server).join(', ')}` : null,
+      archiving.length > 0 ? `WAL archiving failing on ${names(archiving)}` : null,
+      backups.length > 0 ? `a backup failed after the last success for ${names(backups)}` : null,
     ].filter(Boolean)
-    return { text: 'Uploads failing', tone: 'unhealthy', evidence: `Inferred: ${parts.join('; ')}` }
+    return { text: summary.text, tone: summary.tone, evidence: `Inferred: ${parts.join('; ')}` }
   }
-  const archiving = users.filter((u) => u.protection.walArchiving.tone === 'healthy')
-  if (archiving.length === users.length) {
-    return { text: 'Accepting uploads', tone: 'healthy', evidence: `Inferred from WAL archiving on ${archiving.map((u) => u.name).join(', ')}` }
+  const archiving = evidence.filter((e) => e.archiving.tone === 'healthy')
+  if (summary.tone === 'healthy') {
+    return { text: summary.text, tone: summary.tone, evidence: `Inferred from WAL archiving on ${names(archiving)}` }
   }
   return {
-    text: 'No failures reported',
-    tone: 'unknown',
+    text: summary.text,
+    tone: summary.tone,
     evidence: archiving.length > 0
-      ? `Archiving on ${archiving.map((u) => u.name).join(', ')}; no archiving result from the others`
+      ? `Archiving on ${names(archiving)}; no archiving result from the others`
       : 'Its clusters report no archiving result yet',
   }
 }
@@ -126,7 +128,7 @@ export function CNPGProtection({
       const users = fleet.rows.filter(
         (r) => r.namespace === ns && getCNPGClusterBarmanPlugin(r.cluster)?.barmanObjectName === name,
       )
-      return { key: `${ns}/${name}`, namespace: ns, name, destination: getCNPGObjectStoreDestination(s), users, health: inferStoreHealth(s, users) }
+      return { key: `${ns}/${name}`, namespace: ns, name, destination: getCNPGObjectStoreDestination(s), users, health: storeHealth(s, users) }
     }).filter((s) => !clusterFilter || s.users.some((u) => `${u.namespace}/${u.name}` === clusterFilter))
   }, [data.objects.objectStores, fleet.rows, clusterFilter])
 

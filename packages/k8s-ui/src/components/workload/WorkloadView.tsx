@@ -1917,6 +1917,7 @@ const LOGS_TAB_WITHOUT_PODS_KINDS = new Set([
   'clusterworkflowtemplates',
   'scaledjobs',
   'jobsets',
+  'clusters',
 ])
 const RUNTIME_WORKLOAD_OVERVIEW_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'])
 const ROLLOUT_STATUS_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'rollouts'])
@@ -1932,6 +1933,11 @@ export function supportsLogsWithoutPods(
   if (normalizedKind === 'jobs') return isCoreBatchJob(kind, group)
   if (normalizedKind === 'jobsets') {
     return group === 'jobset.x-k8s.io' && apiVersion === 'jobset.x-k8s.io/v1alpha2'
+  }
+  // A CloudNativePG Cluster's instance Pods are its children, not related
+  // Pods, and its logs are resolved server-side from the Cluster itself.
+  if (normalizedKind === 'clusters') {
+    return group === 'postgresql.cnpg.io' || !!apiVersion?.startsWith('postgresql.cnpg.io/')
   }
   return true
 }
