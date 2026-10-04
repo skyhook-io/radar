@@ -26,6 +26,13 @@ export function cnpgDimensionTab(id: CNPGDimension['id']): string {
   }
 }
 
+const TAB_LABEL: Record<string, string> = { replication: 'Replication', storage: 'Storage', backups: 'Backups' }
+
+/** The name of the tab cnpgDimensionTab opens, for a link that leads there. */
+export function cnpgDimensionTabLabel(id: CNPGDimension['id']): string {
+  return TAB_LABEL[cnpgDimensionTab(id)]
+}
+
 /** The Cluster page tab where a health dimension is explained (see cnpgDimensionTab). */
 export function cnpgDimensionPath(namespace: string, name: string, ctx: string | undefined, id: CNPGDimension['id']): string {
   return cnpgClusterFullPath(namespace, name, ctx, cnpgDimensionTab(id))

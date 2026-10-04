@@ -116,6 +116,7 @@ export function CNPGClusterSummary({
   onSelectDimension,
   initialProblemsExpanded = false,
   stateFacts,
+  dimensionLinkLabel,
 }: {
   row: CNPGFleetRow
   onNavigate?: NavigateToRef
@@ -131,6 +132,8 @@ export function CNPGClusterSummary({
   initialProblemsExpanded?: boolean
   /** Makes each dimension row open where that dimension is explained (its tab). */
   onSelectDimension?: (id: CNPGDimension['id']) => void
+  /** The name of the place onSelectDimension opens, for the row's link; the dimension's own label when unset. */
+  dimensionLinkLabel?: (id: CNPGDimension['id']) => string
   /** Extra FactRows appended to the State grid, e.g. live facts only the host can read. */
   stateFacts?: ReactNode
 }) {
@@ -180,7 +183,7 @@ export function CNPGClusterSummary({
       <FactGrid>
         {dimensions?.map((d) => (
           <FactRow key={d.id} label={d.label}>
-            <DimensionValue dimension={d} onOpen={onSelectDimension ? () => onSelectDimension(d.id) : undefined} />
+            <DimensionValue dimension={d} linkLabel={dimensionLinkLabel?.(d.id) ?? d.label} onOpen={onSelectDimension ? () => onSelectDimension(d.id) : undefined} />
           </FactRow>
         ))}
         <FactRow label="Instances">
@@ -263,7 +266,7 @@ export function CNPGClusterSummary({
   )
 }
 
-function DimensionValue({ dimension: d, onOpen }: { dimension: CNPGDimension; onOpen?: () => void }) {
+function DimensionValue({ dimension: d, linkLabel, onOpen }: { dimension: CNPGDimension; linkLabel: string; onOpen?: () => void }) {
   return (
     <div>
       <span className="inline-flex flex-wrap items-center gap-x-2">
@@ -271,7 +274,7 @@ function DimensionValue({ dimension: d, onOpen }: { dimension: CNPGDimension; on
         <span className={toneTextClass(d.tone)}>{d.text}</span>
         {onOpen && (
           <button type="button" onClick={onOpen} className="text-xs text-accent-text hover:underline">
-            {d.label} →
+            {linkLabel} →
           </button>
         )}
       </span>

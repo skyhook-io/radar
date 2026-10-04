@@ -399,7 +399,16 @@ type CNPGFleetLag struct {
 	// recovery. Nil, with ReceiversError set, when the query failed.
 	Receivers      map[string]CNPGReceiverReading
 	ReceiversError string
+	// ReceiversDownSustained is keyed by Cluster: standbys whose WAL receiver
+	// was down in every sample over CNPGReceiverDownWindow. Nil when that
+	// best-effort query failed.
+	ReceiversDownSustained map[string][]string
 }
+
+// CNPGReceiverDownWindow is how long a standby's WAL receiver must stay down
+// before it is a problem: a restarting standby is briefly down on every
+// rolling update and reconnects on its own.
+const CNPGReceiverDownWindow = 5 * time.Minute
 
 // CNPGReceiverReading is a Cluster's standbys (instances reporting
 // cnpg_pg_replication_in_recovery = 1) and their WAL receivers. Unknown is
@@ -461,7 +470,36 @@ func queryCNPGFleetLag(ctx context.Context, q seriesQuerier, namespace string, c
 	}
 	out.Sustained = querySustainedCNPGLag(ctx, q, sel, known)
 	out.Receivers, out.ReceiversError = queryCNPGReceivers(ctx, q, sel, known)
+	out.ReceiversDownSustained = querySustainedReceiverDown(ctx, q, sel, known)
 	return out, nil
+}
+
+// querySustainedReceiverDown is best effort like the sustained lag: every raw
+// receiver sample in the window was 0, and the series already existed when
+// the window began, so a standby that just started cannot qualify.
+func querySustainedReceiverDown(ctx context.Context, q seriesQuerier, sel string, known map[string]bool) map[string][]string {
+	window := fmt.Sprintf("%dm", int(CNPGReceiverDownWindow.Minutes()))
+	query := "(max by (pod) (max_over_time(cnpg_pg_replication_is_wal_receiver_up{" + sel + "}[" + window + "])) == 0)" +
+		" and on (pod) (max by (pod) (cnpg_pg_replication_in_recovery{" + sel + "}) == 1)" +
+		" and on (pod) (max by (pod) (cnpg_pg_replication_is_wal_receiver_up{" + sel + "} offset " + window + "))"
+	res, err := q.Query(ctx, query)
+	if err != nil {
+		return nil
+	}
+	out := map[string][]string{}
+	for _, s := range res.Series {
+		if len(s.DataPoints) == 0 {
+			continue
+		}
+		pod := s.Labels["pod"]
+		if cluster := CNPGClusterOfPod(pod, known); cluster != "" {
+			out[cluster] = append(out[cluster], pod)
+		}
+	}
+	for c := range out {
+		sort.Strings(out[c])
+	}
+	return out
 }
 
 // queryCNPGReceivers reads whether each standby's WAL receiver is up. Lag

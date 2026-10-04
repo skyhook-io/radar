@@ -97,7 +97,7 @@ function storageFact(row: CNPGFleetRow) {
 /** The one reason no cluster's volume usage is measured, when that is so; the column then says it once. */
 function cnpgStorageUnmeasured(rows: CNPGFleetRow[]): string | null {
   if (rows.length === 0 || rows.some((r) => !r.disk || r.disk.tone !== 'unknown')) return null
-  const reasons = new Set(rows.map((r) => r.disk?.source ?? r.disk?.text ?? ''))
+  const reasons = new Set(rows.map((r) => (r.disk?.source ?? r.disk?.text ?? '').replace("this cluster's claims", 'their claims')))
   return reasons.size === 1 ? [...reasons][0] || 'no measurement' : 'no measurement'
 }
 

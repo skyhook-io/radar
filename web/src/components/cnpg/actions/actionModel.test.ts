@@ -86,7 +86,7 @@ describe('switchover concerns', () => {
         { pod: 'pg-2', podUID: '2', replayBacklogBytes: 1024, syncState: 'async' },
       ])?.pod,
     ).toBe('pg-2')
-    expect(pickDefaultStandby([{ pod: 'pg-1', podUID: '1', concerns: ['replay paused'] }])?.pod).toBe('pg-1')
+    expect(pickDefaultStandby([{ pod: 'pg-1', podUID: '1', concerns: ['replay paused'] }])).toBeUndefined()
   })
   it('warns with what was observed, not with a guess at the outcome', () => {
     const w = switchoverConcernWarning('pg-1', ['not connected to the primary', 'replay paused'])!

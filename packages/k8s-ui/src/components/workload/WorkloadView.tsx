@@ -1230,12 +1230,12 @@ export function WorkloadView({
               extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name, group, context: 'expanded' })}
               introContent={overviewIntro}
               leadContent={
-                effectiveTab === 'spec' && specTab?.lead ? (
-                  <>
-                    {specTab.lead}
-                    {hasOperationalIssues && renderOverviewLead ? renderOverviewLead({ kind, namespace, name }) : null}
-                  </>
-                ) : hasOperationalIssues && renderOverviewLead ? renderOverviewLead({ kind, namespace, name }) : undefined
+                // A host's spec lead replaces the operational issues there: its Overview already leads with them.
+                effectiveTab === 'spec' && specTab?.lead
+                  ? specTab.lead
+                  : hasOperationalIssues && renderOverviewLead
+                    ? renderOverviewLead({ kind, namespace, name })
+                    : undefined
               }
               onEvaluateCapacity={onEvaluateCapacity}
               recentImageSave={recentImageSave}

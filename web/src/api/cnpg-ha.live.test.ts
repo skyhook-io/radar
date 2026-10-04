@@ -86,3 +86,44 @@ describe('standbys and slots from the live read', () => {
     expect(r.problems.find((p) => p.id === 'slot:db/pg:_cnpg_pg_1')!.title).toBe('Inactive slot _cnpg_pg_1 holds 4.4 GiB of WAL on pg-6 for pg-1')
   })
 })
+
+describe('a live read replaces what it disproves', () => {
+  const base = (problems: any[]): CNPGFleetRow =>
+    ({
+      key: 'db/pg',
+      namespace: 'db',
+      name: 'pg',
+      cluster: { metadata: {}, status: {} },
+      instances: { ready: 2, desired: 2 },
+      pods: [],
+      replication: { text: '2/2 Pods ready · pg-2 not receiving WAL', tone: 'degraded' },
+      problems,
+      attention: true,
+      categories: new Set(['availability']),
+      hibernated: false,
+    }) as unknown as CNPGFleetRow
+  const fleetStandby = { id: 'standby:db/pg:pg-2', severity: 'warning', category: 'availability', title: 'pg-2 is not receiving WAL from the primary', subject: { kind: 'Pod', group: '', namespace: 'db', name: 'pg-2' }, source: 'measurement' }
+  const fleetSlot = { id: 'slot:db/pg:_cnpg_pg_2', severity: 'warning', category: 'availability', title: 'Inactive slot _cnpg_pg_2 holds 2 GiB', subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name: 'pg' }, source: 'measurement' }
+  const rt = (primaryStatus: any): CNPGRuntimeResponse => ({
+    cluster: { namespace: 'db', name: 'pg', uid: 'u' },
+    sampledAt: '2026-10-04T10:00:00Z',
+    permission: { proxy: 'allowed' },
+    instances: [
+      { pod: 'pg-1', role: 'primary', status: primaryStatus, metrics: { state: 'ok' } },
+      { pod: 'pg-2', role: 'replica', status: { state: 'ok', timeline: 1 }, metrics: { state: 'ok' } },
+    ],
+  })
+  it('clears the fleet’s standby and slot problems when the primary streams to it and the slot is active', () => {
+    const r = withLiveReplication(
+      base([fleetStandby, fleetSlot]),
+      rt({ state: 'ok', timeline: 1, replication: [{ applicationName: 'pg-2', state: 'streaming' }], slots: [{ name: '_cnpg_pg_2', type: 'physical', active: true, retainedBytes: 0 }] }),
+    )
+    expect(r.problems).toEqual([])
+    expect(r.attention).toBe(false)
+    expect(r.replication.text).toBe('1/1 streaming')
+  })
+  it('judges slots from a partial primary report the replication rows cannot use', () => {
+    const r = withLiveReplication(base([]), rt({ state: 'partial', incomplete: true, replication: null, slots: [{ name: '_cnpg_pg_2', type: 'physical', active: false, retainedBytes: 3 * 1024 ** 3 }] }))
+    expect(r.problems.map((p) => p.id)).toEqual(['slot:db/pg:_cnpg_pg_2'])
+  })
+})

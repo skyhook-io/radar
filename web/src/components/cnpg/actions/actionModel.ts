@@ -38,10 +38,14 @@ export function describeBackupMethod(m: CNPGBackupMethod): string {
   }
 }
 
-/** Synchronous standbys first, then the least WAL still to replay, then the least replay delay; one with concerns last; ineligible never. */
+/**
+ * Synchronous standbys first, then the least WAL still to replay, then the
+ * least replay delay. Never an ineligible one, and never one the live read
+ * shows trouble with: when only such standbys remain, the user picks.
+ */
 export function pickDefaultStandby(standbys: StandbyChoice[]): StandbyChoice | undefined {
-  const eligible = standbys.filter((s) => !s.ineligible)
-  const rank = (s: StandbyChoice) => ((s.concerns?.length ?? 0) > 0 ? 2 : s.syncState === 'sync' || s.syncState === 'quorum' ? 0 : 1)
+  const eligible = standbys.filter((s) => !s.ineligible && !(s.concerns?.length ?? 0))
+  const rank = (s: StandbyChoice) => (s.syncState === 'sync' || s.syncState === 'quorum' ? 0 : 1)
   const inf = Number.POSITIVE_INFINITY
   return [...eligible].sort(
     (a, b) =>

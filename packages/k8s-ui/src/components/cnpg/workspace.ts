@@ -1310,16 +1310,21 @@ export function cnpgSlotRetentionProblem(row: Pick<CNPGFleetRow, 'key' | 'namesp
   }
 }
 
-/** Adds problems to a row, replacing any with the same id, and recomputes what attention follows from them. */
-export function cnpgWithProblems(row: CNPGFleetRow, added: CNPGProblem[]): CNPGFleetRow {
-  if (added.length === 0) return row
+/**
+ * Adds problems to a row, replacing any with the same id, and drops those a
+ * newer, complete read has disproven (`drop`); attention and categories
+ * follow from what remains.
+ */
+export function cnpgWithProblems(row: CNPGFleetRow, added: CNPGProblem[], drop?: (p: CNPGProblem) => boolean): CNPGFleetRow {
+  if (added.length === 0 && !drop) return row
   const ids = new Set(added.map((p) => p.id))
-  const problems = [...row.problems.filter((p) => !ids.has(p.id)), ...added].sort(cnpgCompareProblems)
+  const problems = [...row.problems.filter((p) => !ids.has(p.id) && !drop?.(p)), ...added].sort(cnpgCompareProblems)
+  if (problems.length === row.problems.length && problems.every((p, i) => p === row.problems[i])) return row
   return {
     ...row,
     problems,
     attention: problems.some((p) => p.severity !== 'posture'),
-    categories: new Set([...row.categories, ...added.map((p) => p.category)]),
+    categories: new Set(problems.filter((p) => p.severity !== 'posture').map((p) => p.category)),
   }
 }
 
@@ -1357,6 +1362,9 @@ export interface CNPGFleetMetricsReading {
     /** The exporter reported no receiver state (or the read failed), so streaming is not established from lag alone. */
     receiverUnknown?: boolean
     receiverReason?: string
+    /** Standbys whose receiver was down in every sample over `receiverDownWindow`: only these raise a problem, since a restarting standby is briefly down. */
+    receiverDownSustained?: string[]
+    receiverDownWindow?: string
   }
   /** Inactive physical replication slots and the WAL each keeps: ok | noSeries | denied | ambiguous | scopeMismatch | error | notRead */
   slots?: {
@@ -1436,7 +1444,7 @@ function measuredReplication(base: Fact, reading: CNPGFleetMetricsReading | unde
       if (down.length > 0) {
         return {
           text: `${prefix} · ${down.length === 1 ? `${down[0]} not receiving WAL` : `${down.length} standbys not receiving WAL`}`,
-          tone: lag.receiving === 0 ? 'unhealthy' : 'degraded',
+          tone: lag.receiving === 0 && down.length === lag.standbys ? 'unhealthy' : 'degraded',
           source: `WAL receiver down on ${down.join(', ')} (cnpg_pg_replication_is_wal_receiver_up = 0) · ${src.lagSource ?? 'Prometheus'}.${isolationCaveat(lag.isolation)}`,
         }
       }
@@ -1490,17 +1498,26 @@ function fleetStandbyProblems(row: CNPGFleetRow, reading: CNPGFleetMetricsReadin
   // A replica cluster's designated primary is in recovery too, and may be fed
   // from the WAL archive with no receiver at all.
   const designated = row.replicaCluster ? row.cluster?.status?.currentPrimary : undefined
-  const down = (lag.receiverDown ?? []).filter((pod) => pod !== designated)
+  const down = (lag.receiverDownSustained ?? []).filter((pod) => pod !== designated)
+  const window = lag.receiverDownWindow ? formatWindowWords(lag.receiverDownWindow) : 'several minutes'
   return down.map((pod) =>
     cnpgStandbyNotReceivingProblem(row, {
       pod,
-      evidence: ['its WAL receiver is down'],
+      evidence: [`its WAL receiver was down in every sample Prometheus recorded over the last ${window}`],
       measuredBy: lag.isolation?.mode === 'unverified' ? 'Prometheus, matched by Pod name' : 'Prometheus',
       sourceDetail: `cnpg_pg_replication_is_wal_receiver_up = 0 while cnpg_pg_replication_in_recovery = 1 · ${src.lagSource ?? 'Prometheus'}`,
-      noneReceiving: lag.receiving === 0,
+      noneReceiving: noStandbyReceives(row, lag),
       unverifiedMatch: lag.isolation?.mode === 'unverified',
     }),
   )
+}
+
+// "None receives" only when every expected standby reported its receiver and
+// every one was down; one that did not report leaves it open.
+function noStandbyReceives(row: CNPGFleetRow, lag: CNPGFleetMetricsReading['lag']): boolean {
+  const expected = row.instances.desired !== null ? Math.max(0, row.instances.desired - 1) : null
+  const down = lag.receiverDownSustained?.length ?? 0
+  return lag.receiving === 0 && expected !== null && expected > 0 && lag.standbys === expected && down === expected
 }
 
 function fleetSlotProblems(row: CNPGFleetRow, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): CNPGProblem[] {

@@ -309,6 +309,10 @@ type CNPGFleetLag struct {
 	ReceiverDown    []string `json:"receiverDown,omitempty"`
 	ReceiverUnknown bool     `json:"receiverUnknown,omitempty"`
 	ReceiverReason  string   `json:"receiverReason,omitempty"`
+	// ReceiverDownSustained lists the standbys whose receiver was down in every
+	// sample over ReceiverDownWindow; only these raise a problem.
+	ReceiverDownSustained []string `json:"receiverDownSustained,omitempty"`
+	ReceiverDownWindow    string   `json:"receiverDownWindow,omitempty"`
 	// Isolation says how the series were tied to this cluster.
 	Isolation *prometheuspkg.SeriesIsolation `json:"isolation,omitempty"`
 }
@@ -549,6 +553,9 @@ func cnpgFleetReceivers(l *CNPGFleetLag, res prometheuspkg.CNPGFleetLag, cluster
 	default:
 		standbys, receiving := rec.Standbys, rec.Receiving
 		l.Standbys, l.Receiving, l.ReceiverDown = &standbys, &receiving, rec.Down
+		if res.ReceiversDownSustained != nil {
+			l.ReceiverDownSustained, l.ReceiverDownWindow = res.ReceiversDownSustained[cluster], prometheuspkg.CNPGReceiverDownWindow.String()
+		}
 	}
 }
 

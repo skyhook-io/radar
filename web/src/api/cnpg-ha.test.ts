@@ -8,6 +8,9 @@ function row(desired: number | null): CNPGFleetRow {
     instances: { ready: 1, desired },
     pods: [{ name: 'pg-1', role: 'primary', ready: true }],
     replication: { text: 'Lag unknown', tone: 'unknown' },
+    key: 'db/pg',
+    problems: [],
+    categories: new Set(),
   } as unknown as CNPGFleetRow
 }
 

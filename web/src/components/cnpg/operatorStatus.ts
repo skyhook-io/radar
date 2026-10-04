@@ -82,30 +82,76 @@ function componentName(c: CNPGOperatorComponent): string {
   return c.role === 'operator' ? 'The operator' : `Plugin ${c.pluginName ?? c.deployment}`
 }
 
+export interface CNPGOperatorState {
+  concerns: CNPGOperatorConcern[]
+  /** What was read and found in order, said only from evidence. */
+  confirmed: string[]
+  /** What could not be read, so its absence from `concerns` proves nothing. */
+  unread: string[]
+}
+
 /**
  * What the Operator screen leads with: the states that stop or slow
- * reconciliation, then restart history with when it last happened. Restart
- * totals are cumulative, so only a recent one is worded as current trouble.
+ * reconciliation, then restart history with when it last happened, and what
+ * could not be read. Restart totals are cumulative, so only a recent one is
+ * worded as current trouble.
  */
 export function cnpgOperatorConcerns(op: CNPGOperatorResponse, now = Date.now()): CNPGOperatorConcern[] {
-  const out: CNPGOperatorConcern[] = []
+  return cnpgOperatorState(op, now).concerns
+}
+
+export function cnpgOperatorState(op: CNPGOperatorResponse, now = Date.now()): CNPGOperatorState {
+  const concerns: CNPGOperatorConcern[] = []
+  const confirmed: string[] = []
+  const unread: string[] = []
+  const operators = op.components.filter((c) => c.role === 'operator')
+  if (operators.length === 0) unread.push('No operator Deployment was found in the namespaces you can read.')
+  let allReady = op.components.length > 0
   for (const c of op.components) {
-    if (c.readyReplicas !== null && c.replicas !== null && c.replicas > 0 && c.readyReplicas < c.replicas) {
-      out.push({ tone: c.readyReplicas === 0 ? 'unhealthy' : 'degraded', text: `${componentName(c)} has ${c.readyReplicas} of ${c.replicas} replicas ready.` })
+    if (c.readyReplicas === null || c.replicas === null) {
+      allReady = false
+      unread.push(`${componentName(c)}: readiness not reported.`)
+    } else if (c.replicas === 0) {
+      allReady = false
+      concerns.push({ tone: c.role === 'operator' ? 'unhealthy' : 'degraded', text: `${componentName(c)} is scaled to 0${c.role === 'operator' ? ': nothing reconciles' : ''}.` })
+    } else if (c.readyReplicas < c.replicas) {
+      allReady = false
+      concerns.push({ tone: c.readyReplicas === 0 ? 'unhealthy' : 'degraded', text: `${componentName(c)} has ${c.readyReplicas} of ${c.replicas} replicas ready.` })
     }
   }
-  for (const d of op.diagnosis ?? []) {
-    if (d.leader.state === 'ok' && d.leader.stale) out.push({ tone: 'unhealthy', text: `No operator instance is leading in ${d.namespace}: the leader Lease was not renewed, so nothing reconciles.` })
+  if (allReady) confirmed.push('every component is ready')
+  const diagnoses = op.diagnosis ?? []
+  if (operators.length > 0 && diagnoses.length === 0) unread.push('Leadership and webhooks were not read.')
+  let leading = diagnoses.length > 0
+  let webhooksServed = diagnoses.length > 0
+  for (const d of diagnoses) {
+    if (d.leader.state === 'ok') {
+      if (d.leader.stale) {
+        leading = false
+        concerns.push({ tone: 'unhealthy', text: `No operator instance is leading in ${d.namespace}: the leader Lease was not renewed, so nothing reconciles.` })
+      }
+    } else if (d.leader.state !== 'disabled') {
+      leading = false
+      unread.push(`Leadership in ${d.namespace} not read${d.leader.reason ? `: ${d.leader.reason}` : ''}.`)
+    }
     for (const svc of d.webhookServices) {
       const fails = d.webhooks.some((w) => w.state === 'ok' && w.webhooks.some((h) => h.failurePolicy === 'Fail' && h.service === `${svc.namespace}/${svc.name}`))
-      if (svc.state === 'ok' && svc.readyEndpoints === 0 && fails) {
-        out.push({ tone: 'unhealthy', text: `The admission webhook Service ${svc.namespace}/${svc.name} has no ready endpoint and its failure policy is Fail: every CloudNativePG write is rejected.` })
+      if (svc.state !== 'ok' || svc.readyEndpoints === null) {
+        webhooksServed = false
+        unread.push(`Endpoints of the webhook Service ${svc.namespace}/${svc.name} not read.`)
+      } else if (svc.readyEndpoints === 0) {
+        webhooksServed = false
+        if (fails) concerns.push({ tone: 'unhealthy', text: `The admission webhook Service ${svc.namespace}/${svc.name} has no ready endpoint and its failure policy is Fail: every CloudNativePG write is rejected.` })
       }
     }
+    if (d.webhookServices.length === 0) webhooksServed = false
   }
+  if (leading) confirmed.push('the operator is leading')
+  if (webhooksServed) confirmed.push('its webhooks have ready endpoints')
   for (const c of op.components) {
     const h = cnpgRestartHistory(c, now)
-    if (h) out.push({ tone: h.recent ? 'degraded' : 'neutral', text: `${componentName(c)}: ${h.text}.` })
+    if (h) concerns.push({ tone: h.recent ? 'degraded' : 'neutral', text: `${componentName(c)}: ${h.text}.` })
+    else if (!c.pods && c.podCoverage && c.podCoverage.state !== 'ok') unread.push(`${componentName(c)}: restart history not read${c.podCoverage.reason ? ` (${c.podCoverage.reason})` : ''}.`)
   }
-  return out
+  return { concerns, confirmed, unread }
 }

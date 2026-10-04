@@ -458,4 +458,3 @@ function ExtensionUpdates({ rows, missing }: { rows?: { database: string; extens
     </div>
   )
 }
-

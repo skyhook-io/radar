@@ -149,14 +149,23 @@ describe('sustained replication lag', () => {
 describe('standbys that receive nothing, and the WAL slots hold', () => {
   const src = { source: 'prometheus' as const, lagSource: 'Prometheus cnpg_pg_replication_lag' }
   it('a standby whose WAL receiver is down is a problem, never "lag 0 s"', () => {
-    const f = applyCNPGFleetMetrics(fleet(), [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-2', standbys: 1, receiving: 0, receiverDown: ['ha-2'] })], src)
+    const f = applyCNPGFleetMetrics(
+      fleet(),
+      [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-2', standbys: 1, receiving: 0, receiverDown: ['ha-2'], receiverDownSustained: ['ha-2'], receiverDownWindow: '5m0s' })],
+      src,
+    )
     const r = row(f, 'ha')
     expect(r.replication.text).toBe('1/1 Pods ready · ha-2 not receiving WAL')
     expect(r.replication.tone).toBe('unhealthy')
     expect(r.attention).toBe(true)
     const p = r.problems.find((x) => x.id === 'standby:db/ha:ha-2')!
     expect(p).toMatchObject({ severity: 'critical', title: 'ha-2 is not receiving WAL from the primary', subject: { kind: 'Pod', name: 'ha-2' }, measuredBy: 'Prometheus' })
-    expect(p.detail).toContain('Its WAL receiver is down')
+    expect(p.detail).toContain('Its WAL receiver was down in every sample Prometheus recorded over the last 5 minutes')
+  })
+  it('a receiver down for less than the window is shown, not raised: a restarting standby reconnects on its own', () => {
+    const f = applyCNPGFleetMetrics(fleet(), [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-2', standbys: 1, receiving: 0, receiverDown: ['ha-2'], receiverDownSustained: [], receiverDownWindow: '5m0s' })], src)
+    expect(row(f, 'ha').replication.text).toBe('1/1 Pods ready · ha-2 not receiving WAL')
+    expect(row(f, 'ha').problems.some((p) => p.id.startsWith('standby:'))).toBe(false)
   })
   it('lag alone does not establish streaming when the exporter reports no receiver state', () => {
     const f = applyCNPGFleetMetrics(fleet(), [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-2', standbys: 1, receiverUnknown: true })], src)
@@ -188,5 +197,23 @@ describe('standbys that receive nothing, and the WAL slots hold', () => {
     expect(row(f, 'dark').problems.some((p) => p.id.startsWith('slot:'))).toBe(false)
     const small = applyCNPGFleetMetrics(fleet(), [{ ...reading('ha', { state: 'ok', seconds: 0.1, pod: 'ha-2' }), slots: { state: 'ok', inactive: [{ slot: '_cnpg_ha_2', pod: 'ha-1', role: 'primary', bytes: 5e8 }] } }], src)
     expect(row(small, 'ha').problems.some((p) => p.id.startsWith('slot:'))).toBe(false)
+  })
+})
+
+describe('none receiving needs every expected standby accounted for', () => {
+  it('one standby down with another unreported is a warning, not "none receive"', () => {
+    const f = applyCNPGFleetMetrics(
+      fleet(),
+      [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-2', standbys: 1, receiving: 0, receiverDown: ['ha-2'], receiverDownSustained: ['ha-2'], receiverDownWindow: '5m0s' })],
+      { source: 'prometheus' },
+    )
+    expect(row(f, 'ha').problems.find((p) => p.id === 'standby:db/ha:ha-2')?.severity).toBe('critical')
+    const three = applyCNPGFleetMetrics(
+      fleet(),
+      [reading('ha', { state: 'ok', seconds: 0, pod: 'ha-2', standbys: 2, receiving: 0, receiverDown: ['ha-2'], receiverDownSustained: ['ha-2'], receiverDownWindow: '5m0s' })],
+      { source: 'prometheus' },
+    )
+    // spec.instances 2 expects one standby; two reporting with one down is not "all down".
+    expect(row(three, 'ha').problems.find((p) => p.id === 'standby:db/ha:ha-2')?.severity).toBe('warning')
   })
 })

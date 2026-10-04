@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { Badge, getCNPGImageCatalogEntries, isApiGroup, PaneLoader, StatusDot, Tooltip, toneTextClass } from '@skyhook-io/k8s-ui'
 import { useCNPGOperator, type CNPGOperatorComponent, type CNPGOperatorConfig } from '../../api/cnpg'
 import { CNPGOperatorDiagnosisSection } from './CNPGOperatorDiagnosis'
-import { cnpgOperatorConcerns, cnpgRestartHistory } from './operatorStatus'
+import { cnpgOperatorState, cnpgRestartHistory } from './operatorStatus'
 import { CNPGWorkspaceHeader, CoverageNotice, coverageEmpty, coverageLabel, worstCoverage, cnpgResource, type CNPGScreenProps } from './shared'
 import { Mono, Notice, ScreenBody, SectionTable, Sub } from '../workspace/layout'
 
@@ -37,19 +37,30 @@ function readiness(c: CNPGOperatorComponent) {
 }
 
 function CurrentState({ op }: { op: NonNullable<ReturnType<typeof useCNPGOperator>['data']> }) {
-  const concerns = cnpgOperatorConcerns(op)
+  const { concerns, confirmed, unread } = cnpgOperatorState(op)
   return (
     <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
       <h3 className="text-sm font-semibold text-theme-text-primary">Current state</h3>
-      {concerns.length === 0 ? (
-        <p className="mt-1 text-sm text-theme-text-secondary">No concerns in what Radar read: every component is ready, the operator is leading and its webhooks have endpoints.</p>
-      ) : (
+      {concerns.length > 0 && (
         <ul className="mt-1.5 space-y-1">
           {concerns.map((c) => (
             <li key={c.text} className="flex items-start gap-2 text-sm">
               <span className="mt-1.5 shrink-0"><StatusDot tone={c.tone} /></span>
               <span className={c.tone === 'neutral' ? 'text-theme-text-secondary' : toneTextClass(c.tone)}>{c.text}</span>
             </li>
+          ))}
+        </ul>
+      )}
+      {confirmed.length > 0 && (
+        <p className="mt-1.5 text-sm text-theme-text-secondary">
+          {concerns.length === 0 ? 'No concerns in what Radar read: ' : 'Otherwise: '}
+          {confirmed.join(', ')}.
+        </p>
+      )}
+      {unread.length > 0 && (
+        <ul className="mt-1.5 space-y-0.5">
+          {unread.map((u) => (
+            <li key={u} className="text-xs text-theme-text-tertiary">{u}</li>
           ))}
         </ul>
       )}

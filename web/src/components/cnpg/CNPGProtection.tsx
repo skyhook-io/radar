@@ -82,6 +82,10 @@ function storeHealth(store: any, users: CNPGFleetRow[]): StoreRow['health'] {
   }
 }
 
+// Enough to see the pattern of recent runs without pushing schedules and
+// destinations off the page.
+const RUNS_SHOWN = 10
+
 function isFailedRun(b: any): boolean {
   const level = getCNPGBackupStatus(b).level
   return level === 'unhealthy' || level === 'alert'
@@ -106,6 +110,18 @@ function LastRun({ schedule, backups, readable }: { schedule: any; backups: any[
       <>
         {ageText(fired)}
         <Sub>{readable ? 'no Backup found for it' : 'outcome needs list backups'}</Sub>
+      </>
+    )
+  }
+  // Settled Backups older than 7 days are not loaded, so the newest one here
+  // can be from an earlier run than the schedule's last firing.
+  const firedAt = Date.parse(fired ?? '')
+  const startedAt = Date.parse(backupStart(last) ?? '')
+  if (Number.isFinite(firedAt) && Number.isFinite(startedAt) && startedAt < firedAt - 2 * 60_000) {
+    return (
+      <>
+        {ageText(fired)}
+        <Sub>its Backup is not loaded</Sub>
       </>
     )
   }
@@ -152,6 +168,8 @@ export function CNPGProtection({
   const failedRuns = useMemo(() => runs.filter((b) => isFailedRun(b)), [runs])
   const [runFilter, setRunFilter] = useState<'failed' | 'all' | null>(null)
   const showRuns = runFilter ?? (scopeCluster || failedRuns.length === 0 ? 'all' : 'failed')
+  const [allRuns, setAllRuns] = useState(false)
+  const shownRuns = showRuns === 'failed' ? failedRuns : runs
 
   const stores = useMemo<StoreRow[]>(() => {
     return (data.objects.objectStores ?? []).map((s) => {
@@ -316,7 +334,7 @@ export function CNPGProtection({
                 ),
             },
           ]}
-          rows={showRuns === 'failed' ? failedRuns : runs}
+          rows={allRuns ? shownRuns : shownRuns.slice(0, RUNS_SHOWN)}
           rowKey={(b) => `${b.metadata?.namespace}/${b.metadata?.name}`}
           rowResource={(b) => cnpgResource('backups', b.metadata?.namespace, b.metadata?.name)}
           onInspect={onInspect}
@@ -327,6 +345,13 @@ export function CNPGProtection({
                 ? 'No failed backups in the last 7 days.'
                 : 'No backups in the last 7 days.'
               : coverageEmpty(data.coverage.backups, 'backups')
+          }
+          footer={
+            shownRuns.length > RUNS_SHOWN ? (
+              <button type="button" onClick={() => setAllRuns((v) => !v)} className="text-accent-text hover:underline">
+                {allRuns ? `Show the newest ${RUNS_SHOWN}` : `Show all ${shownRuns.length} runs`}
+              </button>
+            ) : undefined
           }
         />
 

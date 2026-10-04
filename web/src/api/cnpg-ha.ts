@@ -10,6 +10,7 @@ import {
   formatGrant,
   type CNPGClusterHA,
   type CNPGFleetRow,
+  type CNPGProblem,
   type CNPGInstanceLive,
   type CNPGReplicationLive,
   type CNPGSlotRetention,
@@ -151,11 +152,21 @@ export function cnpgLiveSlotRetentions(row: CNPGFleetRow, rt: CNPGRuntimeRespons
     }))
 }
 
+/**
+ * The fleet row with what the instance managers report: the live replication
+ * fact, standbys that receive nothing, and inactive slots. A complete live read
+ * replaces the fleet's (Prometheus) answer for what it covers, clearing a
+ * problem it disproves — a standby now connected, a slot no longer inactive.
+ */
+export function withLiveReplication(row: CNPGFleetRow, rt: CNPGRuntimeResponse | undefined): CNPGFleetRow {
+  return withLiveSlots(withLiveStandbys(row, rt), rt)
+}
+
 // Replaces the Kubernetes-only replication fact with the primary's
 // pg_stat_replication when it has been read; otherwise keeps "lag unknown".
 // Expected standbys are spec.instances − 1: a standby whose Pod is gone is
 // missing, not absent from the count.
-export function withLiveReplication(row: CNPGFleetRow, rt: CNPGRuntimeResponse | undefined): CNPGFleetRow {
+function withLiveStandbys(row: CNPGFleetRow, rt: CNPGRuntimeResponse | undefined): CNPGFleetRow {
   const primary = rt?.instances.find((i) => i.role === 'primary')
   if (!primary || primary.status.state !== 'ok' || row.replication.text === 'Single instance' || row.replication.text === 'Hibernated') return row
   const reps = primary.status.replication
@@ -167,18 +178,34 @@ export function withLiveReplication(row: CNPGFleetRow, rt: CNPGRuntimeResponse |
   // A standby that isn't connected has no row, so its delay isn't in the max.
   const lagFor = (allConnected: boolean) =>
     maxLag === undefined ? '' : ` · max replay delay ${cnpgFormatLag(maxLag)}${allConnected ? '' : ' (connected standbys only)'}`
+  const gaps = cnpgLiveStandbyGaps(row, rt)
+  const connected = new Set(reps.map((r) => r.applicationName))
+  const standbyPrefix = `standby:${row.key}:`
+  // The fleet's standby problem for one the primary now streams to is disproven.
+  const disproven = (p: CNPGProblem) => p.id.startsWith(standbyPrefix) && connected.has(p.id.slice(standbyPrefix.length))
+  const raised = gaps.map((g) => cnpgStandbyNotReceivingProblem(row, g))
   if (row.instances.desired === null) {
-    return { ...row, replication: { text: `${streaming} streaming${lagFor(false)}`, tone: 'unknown', source: `${source}; spec.instances is not reported, so the expected standbys are unknown`, at: primary.status.capturedAt } }
+    const live = { ...row, replication: { text: `${streaming} streaming${lagFor(false)}`, tone: 'unknown' as const, source: `${source}; spec.instances is not reported, so the expected standbys are unknown`, at: primary.status.capturedAt } }
+    return cnpgWithProblems(live, raised, disproven)
   }
   const expected = Math.max(0, row.instances.desired - 1)
   const lagText = lagFor(reps.length >= expected)
   const tone = cnpgReplicationTone(streaming, expected, maxLag)
-  const gaps = cnpgLiveStandbyGaps(row, rt)
   const text = streaming < expected ? `${streaming} of ${expected} expected standbys streaming` : `${streaming}/${expected} streaming`
   const missing = gaps.length > 0 ? ` · ${gaps.map((g) => g.pod).join(', ')} not connected` : ''
   const live = { ...row, replication: { text: `${text}${missing}${lagText}`, tone, source, at: primary.status.capturedAt } }
-  return cnpgWithProblems(live, [
-    ...gaps.map((g) => cnpgStandbyNotReceivingProblem(row, g)),
-    ...cnpgLiveSlotRetentions(row, rt).map((r) => cnpgSlotRetentionProblem(row, r)),
-  ])
+  return cnpgWithProblems(live, raised, disproven)
+}
+
+// Slots are judged from the primary's own slot list whenever it was read,
+// whatever the replication rows say; that read replaces the fleet's.
+function withLiveSlots(row: CNPGFleetRow, rt: CNPGRuntimeResponse | undefined): CNPGFleetRow {
+  const primary = rt?.instances.find((i) => i.role === 'primary')
+  if (!primary || (primary.status.state !== 'ok' && primary.status.state !== 'partial') || !primary.status.slots) return row
+  const slotPrefix = `slot:${row.key}:`
+  return cnpgWithProblems(
+    row,
+    cnpgLiveSlotRetentions(row, rt).map((r) => cnpgSlotRetentionProblem(row, r)),
+    (p) => p.id.startsWith(slotPrefix),
+  )
 }
