@@ -57,6 +57,9 @@ describe('operator current state', () => {
     expect(cnpgOperatorConcerns(old, now)).toEqual([expect.objectContaining({ tone: 'neutral' })])
     const fresh = op([{ name: 'm-1', ready: true, restarts: 2, lastTermination: { container: 'manager', reason: 'OOMKilled', exitCode: 137, finishedAt: '2026-10-04T09:40:00Z' } }])
     expect(cnpgOperatorConcerns(fresh, now)[0]).toMatchObject({ tone: 'degraded' })
+    // Ready at this read is not "ready" for a component that just restarted.
+    expect(cnpgOperatorState(old, now).confirmed).toContain('every component is ready')
+    expect(cnpgOperatorState(fresh, now).confirmed).toContain('every component reports ready right now (see the restarts above)')
   })
   it('says nothing about restarts that never happened, and leads with readiness', () => {
     expect(cnpgRestartHistory({ pods: [{ name: 'm-1', ready: true, restarts: 0 }] }, now)).toBeNull()

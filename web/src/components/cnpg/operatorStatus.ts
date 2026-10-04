@@ -119,7 +119,9 @@ export function cnpgOperatorState(op: CNPGOperatorResponse, now = Date.now(), cl
       concerns.push({ tone: c.readyReplicas === 0 ? 'unhealthy' : 'degraded', text: `${componentName(c)} has ${c.readyReplicas} of ${c.replicas} replicas ready.` })
     }
   }
-  if (allReady) confirmed.push('every component is ready')
+  // Ready now says little about a component that keeps restarting.
+  const restartedRecently = op.components.some((c) => cnpgRestartHistory(c, now)?.recent)
+  if (allReady) confirmed.push(restartedRecently ? 'every component reports ready right now (see the restarts above)' : 'every component is ready')
   const diagnoses = op.diagnosis ?? []
   if (operators.length > 0 && diagnoses.length === 0) unread.push('Leadership and webhooks were not read.')
   let leading = diagnoses.length > 0
