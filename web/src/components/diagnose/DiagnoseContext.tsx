@@ -748,7 +748,7 @@ function RoutedDiagnoseProvider({
   );
 
   // Browser navigation is the source of truth for presentation: a dedicated
-  // /investigations route is the full workspace, while ?ai-run keeps the
+  // /investigations route is the full investigations page, while ?ai-run keeps the
   // contextual drawer on its underlying page. Fetch exact ids rather than
   // assuming the bounded recent list contains them.
   useEffect(() => {
@@ -756,7 +756,7 @@ function RoutedDiagnoseProvider({
       return;
     const workspace = isInvestigationWorkspacePath(location.pathname);
     // Eligibility is unresolved until the agent probe returns. Once it has
-    // definitively resolved to off, workspace routes cannot render anything
+    // definitively resolved to off, investigations-page routes cannot render anything
     // useful; return to the app instead of leaving an eternal loading panel.
     if (agentEligibilityResolved && !eligible) {
       setActiveRunId(null);
@@ -876,8 +876,8 @@ function RoutedDiagnoseProvider({
         return;
       }
       const current = locationRef.current;
-      // The global entry remains visible in the workspace. Treat clicking it
-      // there as an idempotent reveal rather than pushing another workspace
+      // The global entry remains visible on the investigations page. Treat clicking it
+      // there as an idempotent reveal rather than pushing another page
       // entry and replacing the page that Close should return to.
       if (isInvestigationWorkspacePath(current.pathname)) {
         setMaximized(true);

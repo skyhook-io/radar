@@ -13,7 +13,7 @@ const OPENCODE_FULL_LOCAL_WARNING =
   "Radar runs OpenCode with --auto, which automatically approves actions that your configuration would normally ask about, including built-in tools and configured MCP servers. Explicit denials still apply. Radar does not enforce a CLI sandbox.";
 
 const CURSOR_FULL_LOCAL_WARNING =
-  "Radar passes Cursor --force, which auto-approves its built-in tools and every MCP server it loads, including your global servers. Cursor’s sandbox does not reliably confine those tools to Radar’s temporary workspace.";
+  "Radar passes Cursor --force, which auto-approves its built-in tools and every MCP server it loads, including your global servers. Cursor’s sandbox does not reliably confine those tools to Radar’s temporary working directory.";
 
 // Segmented two-or-more-way selector — shared shape for the agent and execution
 // profile pickers.
