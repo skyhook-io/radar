@@ -397,6 +397,16 @@ func TestDetectProblems_RestartLoopSeverityTier(t *testing.T) {
 	for name, sev := range want {
 		assertProblem(t, problems, "Pod", name, crashLoopReason, sev)
 	}
+	// The loop carries its impact and why it got its severity, replacing the
+	// folded "N/M available" row with numbers that hold steady.
+	got, _ := lookupProblem(problems, "Pod", "one-of-four-0", crashLoopReason)
+	if ev := got.RestartLoop; ev == nil || ev.LoopingPods != 1 || ev.WorkloadPods != 4 || !strings.Contains(ev.SeverityReason, "only 1 of 4 pods") || ev.LastStartedAt.IsZero() {
+		t.Fatalf("one-of-four evidence = %+v, want 1/4 pods, a severity reason and the last run's start", got.RestartLoop)
+	}
+	got, _ = lookupProblem(problems, "Pod", "slow-single-0", crashLoopReason)
+	if ev := got.RestartLoop; ev == nil || !strings.Contains(ev.SeverityReason, "serves 10 minutes or more") {
+		t.Fatalf("slow-single evidence = %+v, want the slow-loop reason", got.RestartLoop)
+	}
 }
 
 func TestDetectProblems_InitAndOOMLoops(t *testing.T) {

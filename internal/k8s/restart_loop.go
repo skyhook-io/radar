@@ -70,6 +70,9 @@ type restartLoop struct {
 	// lastRun is how long the terminated run lasted; zero when the container
 	// never started (StartError) or the runtime did not record a start.
 	lastRun time.Duration
+	// lastStartedAt is when the last terminated run started; zero when it
+	// never started.
+	lastStartedAt time.Time
 	// lastMessage is the runtime's message for the last termination; for a
 	// start failure it is the actual error (e.g. exec: no such file).
 	lastMessage string
@@ -247,8 +250,10 @@ func containerRestartLoop(cs *corev1.ContainerStatus, now time.Time) (restartLoo
 	// next, short run. A container that never started (StartError,
 	// ContainerCannotRun) is stamped with the Unix epoch, which is no start.
 	var lastRun time.Duration
+	var lastStarted time.Time
 	if started := term.StartedAt.Time; started.Unix() > 0 {
 		lastRun = finished.Sub(started)
+		lastStarted = started
 	}
 	if lastRun > restartLoopWindow {
 		return restartLoop{}, false
@@ -277,6 +282,7 @@ func containerRestartLoop(cs *corev1.ContainerStatus, now time.Time) (restartLoo
 		lastReason:     term.Reason,
 		lastFinishedAt: finished,
 		lastRun:        lastRun,
+		lastStartedAt:  lastStarted,
 		lastMessage:    strings.TrimSpace(term.Message),
 	}, true
 }
@@ -427,6 +433,9 @@ func (l restartLoop) evidence() *issuesapi.RestartLoop {
 		LastReason:     l.lastReason,
 		LastFinishedAt: l.lastFinishedAt.UTC(),
 	}
+	if !l.lastStartedAt.IsZero() {
+		out.LastStartedAt = l.lastStartedAt.UTC()
+	}
 	if l.liveness != nil {
 		out.LivenessProbeFailure = &issuesapi.ProbeFailure{LastSeen: l.liveness.at.UTC(), Message: Truncate(l.liveness.message, restartLoopProbeMessageMax)}
 	}
@@ -493,14 +502,29 @@ func setLoopSeverities(cache *ResourceCache, problems []Detection, rows []loopRo
 		}
 	}
 	for _, r := range rows {
-		share := 1.0
-		if n := observed[r.owner]; n > 0 {
-			share = float64(looping[r.owner]) / float64(n)
-		}
-		if r.fast && share >= restartLoopImpactShare {
+		n := max(observed[r.owner], looping[r.owner])
+		share := float64(looping[r.owner]) / float64(n)
+		critical := r.fast && share >= restartLoopImpactShare
+		if critical {
 			problems[r.index].Severity = "critical"
 		} else {
 			problems[r.index].Severity = "high"
 		}
+		if ev := problems[r.index].RestartLoop; ev != nil {
+			ev.LoopingPods, ev.WorkloadPods = looping[r.owner], n
+			ev.SeverityReason = loopSeverityReason(critical, r.fast, looping[r.owner], n)
+		}
+	}
+}
+
+func loopSeverityReason(critical, fast bool, looping, pods int) string {
+	share := fmt.Sprintf("%d of %d pods", looping, pods)
+	switch {
+	case critical:
+		return fmt.Sprintf("critical: the container runs under 10 minutes between restarts, so it is mostly down, and %s are looping", share)
+	case !fast:
+		return fmt.Sprintf("warning: the container serves 10 minutes or more between restarts (%s looping)", share)
+	default:
+		return fmt.Sprintf("warning: only %s are looping; the rest of the workload is serving", share)
 	}
 }

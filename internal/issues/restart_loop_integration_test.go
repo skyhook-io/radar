@@ -216,7 +216,7 @@ func TestCompose_RestartLoopKeepsOneIssueAcrossTheCycle(t *testing.T) {
 			if got.RestartLoop.LivenessProbeFailure == nil {
 				t.Fatalf("%s: want liveness evidence, got %+v", tick.name, got.RestartLoop)
 			}
-			if fact := restartCauseFactMessage(got); !strings.Contains(fact, "liveness probe failure last seen") {
+			if fact := restartCauseFactMessage(got); !strings.Contains(fact, "liveness probe failure last seen") || !strings.Contains(fact, "after running 3m0s") || !strings.Contains(fact, "loopingPods=1/1") || !strings.Contains(fact, "Severity critical") {
 				t.Fatalf("%s: restart_cause fact = %q, want the liveness observation", tick.name, fact)
 			}
 		case "readiness-failing":

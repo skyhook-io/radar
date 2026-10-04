@@ -370,6 +370,19 @@ type RestartLoop struct {
 	LastExitCode   int32     `json:"last_exit_code"`
 	LastReason     string    `json:"last_reason,omitempty"`
 	LastFinishedAt time.Time `json:"last_finished_at,omitzero"`
+	// LastStartedAt is when the last terminated run started; absent when the
+	// container never started (a start failure). With LastFinishedAt it gives
+	// the run length: seconds means it dies on startup, minutes that it
+	// serves between restarts.
+	LastStartedAt time.Time `json:"last_started_at,omitzero"`
+	// LoopingPods / WorkloadPods are how many of the workload's live pods are
+	// in this restart loop. This is the loop's impact: the workload's own
+	// "N/M available" row is folded into the loop because it flips with
+	// every crash.
+	LoopingPods  int `json:"looping_pods,omitempty"`
+	WorkloadPods int `json:"workload_pods,omitempty"`
+	// SeverityReason says why the loop is critical or warning.
+	SeverityReason string `json:"severity_reason,omitempty"`
 	// LivenessProbeFailure / ReadinessProbeFailure / StartupProbeFailure are
 	// the newest failure of each probe type seen for this container in the
 	// last 10 minutes.

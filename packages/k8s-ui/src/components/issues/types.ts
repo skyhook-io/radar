@@ -376,6 +376,10 @@ export interface IssueRestartLoop {
   last_exit_code: number;
   last_reason?: string;
   last_finished_at?: string;
+  last_started_at?: string;
+  looping_pods?: number;
+  workload_pods?: number;
+  severity_reason?: string;
   liveness_probe_failure?: IssueProbeFailure;
   readiness_probe_failure?: IssueProbeFailure;
   startup_probe_failure?: IssueProbeFailure;
