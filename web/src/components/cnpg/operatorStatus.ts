@@ -144,6 +144,8 @@ export function cnpgOperatorState(op: CNPGOperatorResponse, now = Date.now()): C
         if (fails) concerns.push({ tone: 'unhealthy', text: `The admission webhook Service ${svc.namespace}/${svc.name} has no ready endpoint and its failure policy is Fail: every CloudNativePG write is rejected.` })
       }
     }
+    const unreadHooks = d.webhooks.filter((w) => w.state !== 'ok')
+    if (unreadHooks.length > 0) unread.push(`Admission webhook configurations not read (${unreadHooks.map((w) => w.name).join(', ')}).`)
     if (d.webhookServices.length === 0) webhooksServed = false
   }
   if (leading) confirmed.push('the operator is leading')

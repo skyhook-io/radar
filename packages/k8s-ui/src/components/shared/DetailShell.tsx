@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 
 // Shared tabbed detail chrome. Hosts provide all data-aware pieces; this owns
@@ -53,6 +53,7 @@ export function DetailShell<TId extends string = string>({
   children,
 }: DetailShellProps<TId>) {
   const visibleTabs = tabs.filter((t) => !t.hidden)
+  const { stripRef, compact } = useCompactTabs(visibleTabs.map((t) => `${t.id}:${t.label}`).join('|'))
 
   return (
     <div className="flex flex-col h-full w-full bg-theme-base">
@@ -72,10 +73,10 @@ export function DetailShell<TId extends string = string>({
 
         {/* Tabs (left) + scope controls / actions (right) */}
         <div className={clsx('flex items-center', compactHeader ? 'px-0' : 'border-t border-theme-border px-6')}>
-          <div className="flex min-w-0 gap-1 overflow-x-auto" role="tablist">
+          <div ref={stripRef} className={clsx('flex min-w-0 flex-1 overflow-x-auto', compact ? 'gap-0' : 'gap-1')} role="tablist">
             {visibleTabs.map((t) => (
-              <DetailShellTabButton key={t.id} active={activeTab === t.id} onClick={() => onTabChange(t.id)}>
-                {t.icon}
+              <DetailShellTabButton key={t.id} active={activeTab === t.id} compact={compact} onClick={() => onTabChange(t.id)}>
+                {!compact && t.icon}
                 {t.label}
                 {t.badge}
               </DetailShellTabButton>
@@ -98,7 +99,37 @@ export function DetailShell<TId extends string = string>({
   )
 }
 
-function DetailShellTabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+/**
+ * Drops the tab icons and tightens spacing only while the full strip does not
+ * fit, so a page with many tabs stays on one line at laptop widths and others
+ * keep their look. The width the strip needs with icons is measured while it
+ * shows them, so toggling cannot oscillate.
+ */
+function useCompactTabs(tabsKey: string) {
+  const stripRef = useRef<HTMLDivElement>(null)
+  const needed = useRef(0)
+  const [compact, setCompact] = useState(false)
+  useLayoutEffect(() => {
+    needed.current = 0
+    setCompact(false)
+  }, [tabsKey])
+  useLayoutEffect(() => {
+    const el = stripRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const measure = () => {
+      if (!compact) needed.current = el.scrollWidth
+      const next = needed.current > el.clientWidth + 1
+      setCompact((prev) => (prev === next ? prev : next))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [compact, tabsKey])
+  return { stripRef, compact }
+}
+
+function DetailShellTabButton({ active, compact, onClick, children }: { active: boolean; compact: boolean; onClick: () => void; children: ReactNode }) {
   return (
     <button
       type="button"
@@ -106,7 +137,8 @@ function DetailShellTabButton({ active, onClick, children }: { active: boolean; 
       aria-selected={active}
       onClick={onClick}
       className={clsx(
-        'flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-2 text-sm font-medium border-b-2 transition-colors',
+        'flex shrink-0 items-center gap-1.5 whitespace-nowrap py-2 text-sm font-medium border-b-2 transition-colors',
+        compact ? 'px-2.5' : 'px-3',
         active
           ? 'text-theme-text-primary border-skyhook-500'
           : 'text-theme-text-secondary border-transparent hover:text-theme-text-primary hover:border-theme-border-light',

@@ -396,8 +396,8 @@ export function CNPGProtection({
         <SectionTable
           title="Schedules"
           columns={[
-            { header: 'ScheduledBackup', width: '24%', cell: (s: any) => <>{s.metadata?.name}<Sub>{s.metadata?.namespace}</Sub></> },
-            { header: 'Cluster', width: '16%', cell: (s) => s.spec?.cluster?.name ?? '—' },
+            { header: 'ScheduledBackup', width: scopeCluster ? '30%' : '24%', cell: (s: any) => <>{s.metadata?.name}<Sub>{s.metadata?.namespace}</Sub></> },
+            ...(scopeCluster ? [] : [{ header: 'Cluster', width: '16%', cell: (s: any) => s.spec?.cluster?.name ?? '—' }]),
             {
               header: 'Schedule',
               width: '24%',

@@ -1101,17 +1101,17 @@ export function WorkloadView({
               </Tooltip>
             </div>
           )}
-          <div className="flex items-center gap-3 text-sm text-theme-text-secondary">
-            <span className={clsx('badge', getKindColorOutline(apiKind))}>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-theme-text-secondary">
+            <span className={clsx('badge whitespace-nowrap', getKindColorOutline(apiKind))}>
               {displayKindName(apiKind, resource?.kind)}
             </span>
             {status && (
-              <span className={clsx('badge', status.color)}>
+              <span className={clsx('badge whitespace-nowrap', status.color)}>
                 {status.text}
               </span>
             )}
             {namespace && namespace !== '_' && (
-              <span>Namespace: <span className="text-theme-text-primary">{namespace}</span></span>
+              <span className="whitespace-nowrap">Namespace: <span className="text-theme-text-primary">{namespace}</span></span>
             )}
             {headerImage && (
               <Tooltip content={headerImage} delay={300} wrapperClassName="min-w-0 max-w-md">
