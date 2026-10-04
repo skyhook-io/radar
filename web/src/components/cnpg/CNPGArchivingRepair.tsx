@@ -1,7 +1,7 @@
 import { cnpgClusterPlugins, cnpgPluginPhase, formatAge, getCNPGClusterBarmanPlugin, StatusDot, toneTextClass, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import type { CNPGRuntimeInstance } from '../../api/cnpg'
-import { backupAfterResume, backupMethod, cnpgArchiveDestination, resumeBoundary } from './archivingRepair'
+import { backupMethod, cnpgArchiveDestination, cnpgRecoveryBase, resumeBoundary, type CNPGRecoveryBase } from './archivingRepair'
 
 const RESUMED_WINDOW_MS = 24 * 60 * 60 * 1000
 
@@ -59,7 +59,8 @@ export function CNPGArchivingRepair({
   const pluginPhase = cnpgPluginPhase(row.cluster)
   const primaryPod = primary?.pod ?? row.cluster?.status?.currentPrimary
   const lastBackup = row.protection.lastSuccessfulBackup
-  const fresh = resumed ? backupAfterResume(row, backups, boundary, plugin ? { method: 'plugin', plugin: plugin.name } : { method: 'barmanObjectStore' }) : undefined
+  const base = resumed ? cnpgRecoveryBase(row, backups, boundary, plugin ? { method: 'plugin', plugin: plugin.name } : { method: 'barmanObjectStore' }, arch?.lastFailedWal) : undefined
+  const baseDone = base?.state === 'verified'
 
   return (
     <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
@@ -157,20 +158,32 @@ export function CNPGArchivingRepair({
             </span>
           </li>
           <li className="flex items-start gap-2">
-            <span className="flex h-4 shrink-0 items-center"><StatusDot tone={fresh && fresh !== 'unread' ? 'healthy' : 'unknown'} /></span>
-            <span className={fresh && fresh !== 'unread' ? 'text-theme-text-primary' : 'text-theme-text-secondary'}>
-              A base backup that starts after archiving {failingNow ? 'resumes' : 'resumed'} completes (Back up now, above), so recovery no longer depends on WAL archived across the failure, which Radar cannot check is complete.{' '}
-              {failingNow
+            <span className="flex h-4 shrink-0 items-center"><StatusDot tone={baseDone ? 'healthy' : 'unknown'} /></span>
+            <span className={baseDone ? 'text-theme-text-primary' : 'text-theme-text-secondary'}>
+              A base backup that begins after the last WAL that failed to archive completes (Back up now, above), so a restore from it needs none of that WAL.{' '}
+              {failingNow || !base
                 ? `Not yet. Newest successful backup: ${lastBackup.at ? `${formatAge(lastBackup.at)} ago` : lastBackup.text.toLowerCase()}.`
-                : fresh === 'unread'
-                  ? 'Radar cannot read this namespace’s Backups, so it cannot tell.'
-                  : fresh
-                    ? `Done: Backup ${fresh.metadata?.name} (${backupMethod(fresh)}) started ${formatAge(fresh.status.startedAt)} ago and completed${backupMethod(fresh) === 'volumeSnapshot' ? '; a restore from it replays WAL from the archive' : ''}.`
-                    : 'No completed Backup of this cluster started after that yet.'}
+                : recoveryBaseText(base)}
             </span>
           </li>
         </ol>
       </div>
     </section>
   )
+}
+
+function recoveryBaseText(base: CNPGRecoveryBase): string {
+  const label = (b: any) => `Backup ${b?.metadata?.name} (${backupMethod(b)})`
+  switch (base.state) {
+    case 'unread':
+      return 'Radar cannot read this namespace’s Backups, so it cannot tell.'
+    case 'none':
+      return 'No completed Backup of this cluster has started since archiving resumed.'
+    case 'verified':
+      return `Done: ${label(base.backup)} begins at WAL ${base.backup.status.beginWal}, after ${base.failedWal}, and completed ${formatAge(base.backup.status.stoppedAt ?? base.backup.status.startedAt)} ago.`
+    case 'beginsBefore':
+      return `${label(base.backup)} started after archiving resumed but begins at WAL ${base.backup?.status?.beginWal ?? '(not reported)'}, not after ${base.failedWal} — likely from a standby that had not replayed past it. Take another.`
+    case 'unverifiable':
+      return `${label(base.backup)} started after archiving resumed and completed; Radar cannot compare where it begins (${base.backup?.status?.beginWal ?? 'not reported'}) with the last failed WAL, which only the primary’s instance manager reports.`
+  }
 }

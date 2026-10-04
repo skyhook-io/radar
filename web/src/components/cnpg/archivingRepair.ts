@@ -72,19 +72,54 @@ export function backupMethod(b: any): string {
 
 export type CNPGWALArchiver = { method: 'plugin'; plugin: string } | { method: 'barmanObjectStore' }
 
+const WAL_FILE = /^[0-9A-F]{24}$/i
+
 /**
- * The newest completed Backup of this cluster that started after `boundary`
- * and that a restore can start from with this cluster's WAL archive: one
- * written by the same archiver, or a volume snapshot (restored by replaying
- * WAL from the archive). 'unread' when Backups could not be read.
+ * Whether WAL file `a` comes after `b`. The last 16 hex digits are the
+ * segment's position, which keeps increasing across timelines; null when
+ * either name is not a WAL file name.
  */
-export function backupAfterResume(
+export function walAfter(a: unknown, b: unknown): boolean | null {
+  if (typeof a !== 'string' || typeof b !== 'string' || !WAL_FILE.test(a) || !WAL_FILE.test(b)) return null
+  return a.slice(8).toUpperCase() > b.slice(8).toUpperCase()
+}
+
+/**
+ * Whether a restore can start after the failure without any WAL that failed
+ * to archive. A Backup that started after archiving resumed can still begin
+ * earlier in the WAL — CloudNativePG backs up a standby by default, and a
+ * lagging one begins where it has replayed to — so its own beginWal decides,
+ * against the last WAL the instance manager failed to archive.
+ */
+export type CNPGRecoveryBase =
+  | { state: 'unread' }
+  | { state: 'none' }
+  | { state: 'verified'; backup: any; failedWal: string }
+  | { state: 'beginsBefore'; backup: any; failedWal: string }
+  | { state: 'unverifiable'; backup: any }
+
+export function cnpgRecoveryBase(
   cluster: { namespace: string; name: string },
   backups: any[] | null,
   boundary: number,
   archiver: CNPGWALArchiver,
-): any | 'unread' | undefined {
-  if (backups === null) return 'unread'
+  failedWal?: string,
+): CNPGRecoveryBase {
+  if (backups === null) return { state: 'unread' }
+  const candidates = backupsAfterResume(cluster, backups, boundary, archiver)
+  if (candidates.length === 0) return { state: 'none' }
+  if (!failedWal || walAfter(failedWal, failedWal) === null) return { state: 'unverifiable', backup: candidates[0] }
+  const verified = candidates.find((b) => walAfter(b?.status?.beginWal, failedWal) === true)
+  return verified ? { state: 'verified', backup: verified, failedWal } : { state: 'beginsBefore', backup: candidates[0], failedWal }
+}
+
+/**
+ * Completed Backups of this cluster that started after `boundary`, newest
+ * first, that a restore can start from with this cluster's WAL archive: one
+ * written by the same archiver, or a volume snapshot (restored by replaying
+ * WAL from the archive).
+ */
+export function backupsAfterResume(cluster: { namespace: string; name: string }, backups: any[], boundary: number, archiver: CNPGWALArchiver): any[] {
   const sameArchive = (b: any) => {
     const m = backupMethod(b)
     if (m === 'volumeSnapshot') return true
@@ -101,5 +136,5 @@ export function backupAfterResume(
         sameArchive(b) &&
         Date.parse(b?.status?.startedAt ?? '') > boundary,
     )
-    .sort((a, b) => Date.parse(b.status.startedAt) - Date.parse(a.status.startedAt))[0]
+    .sort((a, b) => Date.parse(b.status.startedAt) - Date.parse(a.status.startedAt))
 }
