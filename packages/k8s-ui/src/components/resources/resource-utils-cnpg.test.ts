@@ -126,6 +126,7 @@ describe('cnpgBlockedPhaseExplanation', () => {
     expect(e.body).toMatch(/retries every few seconds/)
     expect(e.body).not.toMatch(/manual intervention|does not resolve/)
     expect(e.body).toMatch(/The operator reports: Unknown plugin/)
+    expect(e.body.endsWith('for errors.')).toBe(true)
     expect(e.message.startsWith('Cluster cannot proceed')).toBe(true)
   })
   it('keeps manual intervention for the one phase upstream says needs it', () => {

@@ -152,7 +152,8 @@ const CNPG_PLUGIN_BLOCKED_PHASES = new Set<string>([
  * one upstream itself says needs manual intervention.
  */
 export function cnpgBlockedPhaseExplanation(phase: string, phaseReason?: string): { title: string; message: string; body: string } {
-  const reason = typeof phaseReason === 'string' && phaseReason.trim() ? ` The operator reports: ${phaseReason.trim()}` : ''
+  const said = typeof phaseReason === 'string' ? phaseReason.trim() : ''
+  const reason = said ? ` The operator reports: ${/[.!?]$/.test(said) ? said : `${said}.`}` : ''
   const out = (title: string, body: string) => ({ title, body: `${body}${reason}`, message: `${phase}. ${body}${reason}` })
   if (phase === 'Cluster is unrecoverable and needs manual intervention') {
     return out('Cluster is unrecoverable', 'The operator cannot bring it back by itself.')
