@@ -242,7 +242,7 @@ export function InvestigationView({
   // the server-owned verification turn arrives. This is presentation state only:
   // the durable server job, never the browser, schedules verification.
   const [verificationPending, setVerificationPending] = useState(false);
-  // The panes are simultaneous above the workspace breakpoint and tabs below it.
+  // On the full page the panes sit side by side; in the panel they are tabs.
   // Successful/stale history opens on its outcome; running and ended-early runs
   // open on Activity, where the user can immediately see what happened.
   const [narrowPane, setNarrowPane] = useState<"activity" | "evidence">(() =>
@@ -294,11 +294,11 @@ export function InvestigationView({
   const paneSelectionTouchedRef = useRef(false);
   const evidenceRevealRequestIdRef = useRef(0);
   const activityRevealRequestIdRef = useRef(0);
-  const workspaceId = useId();
-  const activityTabId = `${workspaceId}-activity-tab`;
-  const activityPaneId = `${workspaceId}-activity-pane`;
-  const findingsTabId = `${workspaceId}-findings-tab`;
-  const findingsPaneId = `${workspaceId}-findings-pane`;
+  const viewId = useId();
+  const activityTabId = `${viewId}-activity-tab`;
+  const activityPaneId = `${viewId}-activity-pane`;
+  const findingsTabId = `${viewId}-findings-tab`;
+  const findingsPaneId = `${viewId}-findings-pane`;
   // Stick-to-bottom: follow streaming output while the user is at/near the bottom,
   // detach the moment they scroll up to read history, re-attach when they return.
   // Tracked from scroll events (the user's intent) — NOT post-render geometry, which
@@ -1476,17 +1476,17 @@ export function InvestigationView({
       ? Math.round((Date.now() - runningSinceRef.current) / 1000)
       : 0,
   });
-  const showSplitWorkspace = maximized;
-  const splitGridClass = showSplitWorkspace
+  const showSidePanes = maximized;
+  const splitGridClass = showSidePanes
     ? "@min-[1000px]/investigation:grid-cols-[minmax(320px,min(30%,520px))_minmax(0,1fr)]"
     : "";
-  const splitTabClass = showSplitWorkspace
+  const splitTabClass = showSidePanes
     ? "@min-[1000px]/investigation:hidden"
     : "";
-  const splitPaneClass = showSplitWorkspace
+  const splitPaneClass = showSidePanes
     ? "@min-[1000px]/investigation:flex"
     : "";
-  const splitActivityBorderClass = showSplitWorkspace
+  const splitActivityBorderClass = showSidePanes
     ? "@min-[1000px]/investigation:border-r @min-[1000px]/investigation:border-theme-border"
     : "";
 
@@ -1637,11 +1637,11 @@ export function InvestigationView({
       <section
         ref={nextStepsRef}
         tabIndex={-1}
-        aria-labelledby={`${workspaceId}-next-steps`}
+        aria-labelledby={`${viewId}-next-steps`}
         className="investigation-next-steps rounded-xl border p-4 outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
       >
         <h2
-          id={`${workspaceId}-next-steps`}
+          id={`${viewId}-next-steps`}
           className="text-lg font-semibold text-theme-text-primary"
         >
           {earlierPlan ? "Earlier proposed steps" : "Next steps"}
@@ -1678,7 +1678,7 @@ export function InvestigationView({
 
   return (
     <div
-      data-investigation-workspace
+      data-investigation-view
       className={`@container/investigation relative flex min-h-0 flex-1 flex-col bg-theme-surface ${maximized ? "investigation-split-enabled" : ""}`}
     >
       {stale ? (
@@ -1769,7 +1769,7 @@ export function InvestigationView({
 
       <div
         role="group"
-        aria-label="Investigation workspace"
+        aria-label="Investigation view"
         className={`grid grid-cols-2 border-b border-theme-border bg-theme-base/40 p-1 ${splitTabClass}`}
       >
         <button
@@ -1989,7 +1989,7 @@ export function InvestigationView({
                             ) : undefined;
                           })()}
                         />
-                        {showSplitWorkspace &&
+                        {showSidePanes &&
                         index === currentAssessmentIdx &&
                         turn.timeline.length === 0 ? (
                           <p className="hidden text-sm text-theme-text-tertiary @min-[1000px]/investigation:block">
@@ -2169,12 +2169,12 @@ export function InvestigationView({
                       not a fifth, and it fills the pane it is given. */}
                   <div className="space-y-3">
                     <section
-                      aria-labelledby={`${workspaceId}-assessment-heading`}
+                      aria-labelledby={`${viewId}-assessment-heading`}
                       className="investigation-assessment rounded-xl border p-3"
                     >
                       <div className="flex flex-wrap items-center gap-1.5">
                         <h2
-                          id={`${workspaceId}-assessment-heading`}
+                          id={`${viewId}-assessment-heading`}
                           className="text-lg font-semibold text-theme-text-primary"
                         >
                           {assessmentNeedsCurrentStateVerification

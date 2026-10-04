@@ -34,6 +34,7 @@ import {
 } from "./components/ui/Toast";
 import { setApiBase, setBasename } from "./api/config";
 import { shouldRetryRadarQuery } from "./api/radarFeatures";
+import { isShownInline } from "./api/httpErrors";
 import { NavCustomizationProvider } from "./context/NavCustomization";
 import { FilterLocationBridge } from "./filter/FilterLocationBridge";
 import type { NavCustomization } from "./context/NavCustomization";
@@ -179,7 +180,7 @@ export interface RadarAppProps {
 // Default QueryClient with the same shape Radar's standalone binary uses.
 // Extracted so both standalone + library consumers get identical
 // toast-on-error / toast-on-success behavior.
-function makeDefaultQueryClient(): QueryClient {
+export function makeDefaultQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
       queries: {
@@ -190,7 +191,7 @@ function makeDefaultQueryClient(): QueryClient {
     mutationCache: new MutationCache({
       onError: (error, _variables, _context, mutation) => {
         const message = mutation.options.meta?.errorMessage;
-        if (message) showApiError(message, (error as Error).message);
+        if (message && !isShownInline(error)) showApiError(message, (error as Error).message);
       },
       onSuccess: (_data, _variables, _context, mutation) => {
         const message = mutation.options.meta?.successMessage;

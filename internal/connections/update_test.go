@@ -252,6 +252,15 @@ func TestDecliningPausedSettingsSwitchesToDiscovery(t *testing.T) {
 	r, a, _ := setupResolver(t)
 	apply(t, r, a, Update{Kind: config.IntegrationArgoCD, Action: "save", Secret: &SecretEdit{Action: "set", Value: "discovery-token"}})
 	apply(t, r, a, Update{Kind: config.IntegrationCost, Action: "save", URL: stringPtr("https://cost.example"), Secret: &SecretEdit{Action: "set", Value: "key"}, ClusterID: stringPtr("cluster-a")})
+	saved, err := r.Catalog()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(saved, func(entry StoredSettingsView) bool {
+		return entry.Integration == config.IntegrationCost && entry.ClusterID == "cluster-a"
+	}) {
+		t.Fatalf("catalog omits the saved Kubecost cluster ID: %+v", saved)
+	}
 	a.Fingerprint = "changed"
 	for _, kind := range []config.Integration{config.IntegrationArgoCD, config.IntegrationCost} {
 		paused := r.Resolve(a, kind, false).View
@@ -286,7 +295,7 @@ func TestDecliningPausedSettingsSwitchesToDiscovery(t *testing.T) {
 	}
 	for _, kind := range []config.Integration{config.IntegrationArgoCD, config.IntegrationCost} {
 		if !slices.ContainsFunc(catalog, func(entry StoredSettingsView) bool {
-			return entry.Binding == a.Binding && entry.Integration == kind && entry.URL == "" && !entry.SecretSet
+			return entry.Binding == a.Binding && entry.Integration == kind && entry.Mode == "auto" && entry.URL == "" && !entry.SecretSet && entry.ClusterID == ""
 		}) {
 			t.Fatalf("declined %s missing from the catalog as an empty record: %+v", kind, catalog)
 		}

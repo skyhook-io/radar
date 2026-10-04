@@ -43,12 +43,12 @@ export function buildLaunchCommand(
 ): string | null {
   if (!run.sessionId || run.status === "stale") return null;
 
-  // OpenCode terminal handoff needs a persistent MCP configuration outside the run workspace.
+  // OpenCode terminal handoff needs a persistent MCP configuration outside the run's working directory.
   if (run.agent === "opencode") return null;
 
   if (run.agent === "cursor-agent") {
     // Cursor's --resume is workspace-scoped, and Radar runs each investigation in a
-    // throwaway per-run workspace the user doesn't have — no command can reattach
+    // throwaway per-run working directory the user doesn't have — no command can reattach
     // both that session and Radar's MCP in the user's own terminal. So there's no
     // hand-off for Cursor; the in-panel investigation is self-contained.
     return null;

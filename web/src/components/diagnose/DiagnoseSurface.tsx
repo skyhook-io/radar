@@ -1,6 +1,6 @@
 // The right-docked shell of the AI surface. Two layouts:
 //  - docked: a single-pane right column (app reflows left via the provider's push)
-//  - expanded: a master-detail workspace that fills ONLY the content area (does
+//  - expanded: the investigations page, a master-detail layout that fills ONLY the content area (does
 //    not cover the left nav rail or top bar) — recent list on the left, the
 //    selected investigation/report on the right.
 import {
@@ -419,7 +419,7 @@ export function DiagnoseSurface({
     panelWidthKey: widthKey,
   } = useDiagnoseLayout();
   // Home has no detail pane competing for width, so its history is always part
-  // of the workspace. Only a focused run collapses history into a drawer when
+  // of the page. Only a focused run collapses history into a drawer when
   // the two-pane layout would become cramped.
   const persistentHistory = investigationHistoryIsPersistent({
     maximized,

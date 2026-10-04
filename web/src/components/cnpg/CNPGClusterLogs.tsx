@@ -52,6 +52,9 @@ export function CNPGClusterLogs({ namespace, name }: { namespace: string; name: 
         createStream={createStream}
         overrideDownload={desktopDownload}
         forceDark={theme === 'dark' ? true : undefined}
+        // Light logs on a dark app are never wanted: dark theme pins the palette,
+        // light theme only sets where it starts and leaves the toggle available.
+        defaultDark={false}
         initialPods={pod ? [pod] : undefined}
       />
     </div>
