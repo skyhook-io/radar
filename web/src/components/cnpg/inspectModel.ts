@@ -85,10 +85,11 @@ export interface CNPGParametersView {
  * CloudNativePG merges some values itself. Instances disagreeing or a pending
  * restart are observations — a rolling restart passes through both.
  */
-export function cnpgParametersView(resp: CNPGParametersResponse): CNPGParametersView {
+export function cnpgParametersView(resp: CNPGParametersResponse, declared = resp.declared): CNPGParametersView {
   const read = resp.instances.filter((i) => i.state === 'ok' && i.settings)
   const unread = resp.instances.filter((i) => !(i.state === 'ok' && i.settings))
-  const rows = resp.declared.map((d): CNPGParameterRow => {
+  const queriedNames = new Set(resp.declared.filter((p) => !resp.skipped?.includes(p.name)).map((p) => p.name.toLowerCase()))
+  const rows = declared.map((d): CNPGParameterRow => {
     const key = d.name.toLowerCase()
     const seen = read.map((i) => ({ pod: i.pod, s: i.settings!.find((x) => x.name.toLowerCase() === key) }))
     const reported = seen.filter((x) => x.s)
@@ -101,7 +102,9 @@ export function cnpgParametersView(resp: CNPGParametersResponse): CNPGParameters
       declared: d.value,
       value: distinct.size === 1 ? values[0].value : undefined,
       perInstance: distinct.size > 1 ? values : undefined,
-      takesEffect: cnpgSettingTakesEffect(first?.context),
+      takesEffect: new Set(reported.map((x) => x.s!.context)).size > 1
+        ? reported.map((x) => `${x.pod}: ${cnpgSettingTakesEffect(x.s!.context)}`).join(' · ')
+        : cnpgSettingTakesEffect(first?.context),
       source: sources.size === 1 ? [...sources][0] : sources.size > 1 ? 'differs by instance' : undefined,
       setByClient: reported.some((x) => x.s!.setByClient),
       pendingRestart: reported.filter((x) => x.s!.pendingRestart).map((x) => x.pod),
@@ -110,11 +113,17 @@ export function cnpgParametersView(resp: CNPGParametersResponse): CNPGParameters
   })
   const pending = new Set(rows.flatMap((r) => r.pendingRestart))
   const differing = rows.filter((r) => r.perInstance).length
+  const unsampled = rows.filter((r) => !queriedNames.has(r.name.toLowerCase())).length
+  if (queriedNames.size === 0) {
+    return { rows, read, unread, summary: { text: `${rows.length} declared · no parameters sampled`, tone: 'unknown', attention: false } }
+  }
   if (resp.instances.length === 0) {
     // Hibernated, or no instance Pod yet: nothing was read, which is not calm.
     return { rows, read, unread, summary: { text: `${rows.length} declared · no instance Pod to read`, tone: 'unknown', attention: false } }
   }
-  const bits = [`${rows.length} declared`, `${read.length} of ${resp.instances.length} instances read`]
+  const bits = [`${rows.length} declared`]
+  if (unsampled > 0) bits.push(`${rows.length - unsampled} sampled`, `${unsampled} not sampled`)
+  bits.push(`${read.length} of ${resp.instances.length} instances read`)
   if (pending.size > 0) bits.push(`restart pending on ${[...pending].sort().join(', ')}`)
   if (differing > 0) bits.push(`${differing} differ between instances`)
   const attention = pending.size > 0 || differing > 0
@@ -122,6 +131,6 @@ export function cnpgParametersView(resp: CNPGParametersResponse): CNPGParameters
     rows,
     read,
     unread,
-    summary: { text: bits.join(' · '), tone: attention ? 'degraded' : unread.length > 0 ? 'unknown' : 'healthy', attention },
+    summary: { text: bits.join(' · '), tone: attention ? 'degraded' : unread.length > 0 || unsampled > 0 ? 'unknown' : 'healthy', attention },
   }
 }

@@ -52,4 +52,7 @@ describe('useCNPGNavigate', () => {
   it('leaves a destination that names its own namespaces alone', () => {
     expect(landAt('/cnpg?namespaces=pg', '/cnpg?namespaces=other')).toBe('/cnpg?namespaces=other')
   })
+  it('keeps namespace and investigation parameters when opening cluster-scoped Declarations', () => {
+    expect(landAt('/cnpg/clusters/db/pg?tab=spec&namespaces=db&ai-run=run-1', '/cnpg/declarations?cluster=db%2Fpg')).toBe('/cnpg/declarations?cluster=db%2Fpg&namespaces=db&ai-run=run-1')
+  })
 })

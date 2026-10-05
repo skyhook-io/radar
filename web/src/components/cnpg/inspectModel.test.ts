@@ -79,11 +79,31 @@ describe('cnpgParametersView', () => {
   it('says so when there is no instance Pod to read', () => {
     expect(cnpgParametersView(resp([])).summary).toEqual({ text: '3 declared · no instance Pod to read', tone: 'unknown', attention: false })
   })
+  it('keeps differing change contexts attributed to the instances that reported them', () => {
+    const v = cnpgParametersView(resp([
+      { pod: 'pg-1', role: 'primary', state: 'ok', settings: [setting('work_mem', '8MB', { context: 'user' })] },
+      { pod: 'pg-2', role: 'replica', state: 'ok', settings: [setting('work_mem', '8MB', { context: 'backend' })] },
+    ]))
+    expect(v.rows[1].takesEffect).toBe('pg-1: reload · a session can override it · pg-2: new connections')
+  })
 
   it('never reads a value the connection itself sets', () => {
     const v = cnpgParametersView(
       resp([{ pod: 'pg-1', role: 'primary', state: 'ok', settings: [setting('shared_buffers', null, { source: 'client', context: 'user' })] }]),
     )
     expect(v.rows[0]).toMatchObject({ setByClient: true, value: undefined, perInstance: undefined })
+  })
+  it('qualifies an existing sample when the Cluster adds an unsampled declaration', () => {
+    const r = resp([{ pod: 'pg-1', role: 'primary', state: 'ok', settings: [setting('work_mem', '8MB')] }])
+    r.declared = [{ name: 'work_mem', value: '8MB' }]
+    const v = cnpgParametersView(r, [...r.declared, { name: 'new_parameter', value: 'on' }])
+    expect(v.summary).toEqual({ text: '2 declared · 1 sampled · 1 not sampled · 1 of 1 instances read', tone: 'unknown', attention: false })
+    expect(v.rows).toHaveLength(2)
+  })
+  it('does not infer absent Pods when all names were skipped or the earlier spec had no parameters', () => {
+    const empty = { ...resp([]), declared: [] }
+    expect(cnpgParametersView(empty, [{ name: 'work_mem', value: '8MB' }]).summary.text).toBe('1 declared · no parameters sampled')
+    const skipped = { ...resp([]), declared: [{ name: 'invalid name', value: 'x' }], skipped: ['invalid name'] }
+    expect(cnpgParametersView(skipped).summary.text).toBe('1 declared · no parameters sampled')
   })
 })

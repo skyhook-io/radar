@@ -67,6 +67,30 @@ afterEach(() => {
 })
 
 describe('CNPGClusterSummary', () => {
+  it('keeps flat sections by default and frames only At a glance and About when asked', () => {
+    for (const framed of [false, true]) {
+      const root = render(<CNPGClusterSummary row={row({ problems: [problem('a', 'warning', 'Backup failed')] })} framed={framed} lead={<p>Maintenance notice</p>} operationalFacts={<div>Base backup progress</div>} stateFacts={<div>Existing host facts</div>} />)
+      const headings = [...document.querySelectorAll('h3')].filter((h) => ['At a glance', 'About'].includes(h.textContent!))
+      expect(headings).toHaveLength(2)
+      for (const heading of headings) expect(heading.closest('section') !== null).toBe(framed)
+      const glance = headings[0].parentElement!.parentElement!
+      const about = headings[1].parentElement!.parentElement!
+      if (framed) {
+        expect(glance.textContent).toContain('Base backup progress')
+        expect(about.textContent).not.toContain('Base backup progress')
+        expect(about.textContent).toContain('Existing host facts')
+        expect(glance.textContent).not.toContain('Existing host facts')
+        expect(glance.textContent).not.toContain('Maintenance notice')
+        expect(glance.textContent).not.toContain('Backup failed')
+      }
+      expect(document.body.textContent!.indexOf('Base backup progress')).toBeLessThan(document.body.textContent!.indexOf('About'))
+      expect(document.body.textContent!.indexOf('Existing host facts')).toBeGreaterThan(document.body.textContent!.indexOf('About'))
+      act(() => root.unmount())
+    }
+    const root = render(<CNPGClusterSummary row={row()} />)
+    expect(document.querySelector('section')).toBeNull()
+    act(() => root.unmount())
+  })
   it('opens the other problems in place when the host links nowhere else', () => {
     const onNavigate = vi.fn()
     const r = row({ problems: [problem('a', 'critical', 'WAL archiving failing'), problem('b', 'warning', 'Backup failed'), problem('c', 'posture', 'No schedule')], attention: true })

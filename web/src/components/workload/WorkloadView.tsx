@@ -337,7 +337,7 @@ interface WorkloadViewProps {
   extraTabs?: WorkloadExtraTab[]
   tabOrder?: string[]
   subheader?: ReactNode
-  specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode }
+  specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode; render?: () => ReactNode }
   titlePrefix?: ReactNode
   inlineBadges?: boolean
   namespaceNote?: ReactNode

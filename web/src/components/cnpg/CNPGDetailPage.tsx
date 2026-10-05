@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { refetchCNPGDetail } from './refresh'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Activity, Database, Gauge, HardDrive, Network, Settings2, ShieldCheck, Unplug } from 'lucide-react'
-import { refToSelectedResource, Tooltip, type WorkloadExtraTab } from '@skyhook-io/k8s-ui'
+import { CNPG_GROUP, refToSelectedResource, Tooltip, type WorkloadExtraTab } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
 import { useContexts, useRadarFeature } from '../../api/client'
@@ -12,7 +12,8 @@ import { WorkloadView } from '../workload/WorkloadView'
 import { CNPGClusterActivity } from './CNPGClusterActivity'
 import { CNPGPerformance } from './CNPGPerformance'
 import { CNPGReplicationTab } from './CNPGReplicationTab'
-import { CNPGBackupsTab, CNPGClusterServing, CNPGConfigurationLead, CNPGStorageTab, CNPGTabMark } from './CNPGClusterTabs'
+import { CNPGBackupsTab, CNPGClusterServing, CNPGStorageTab, CNPGTabMark } from './CNPGClusterTabs'
+import { CNPGConfiguration } from './CNPGConfiguration'
 import type { CNPGChartGroup } from './CNPGTrends'
 import { CNPG_DETAIL_KINDS, CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, cnpgScreenPath, cnpgViewNamedForKind, type CNPGDetailTarget } from './routes'
 import { CNPG_CLUSTER_TAB_ORDER, cnpgDimensionTab } from './paths'
@@ -84,7 +85,7 @@ export function CNPGDetailPage({
 
   // A Radar without the workspace endpoints shows the standard detail.
   const cnpgWorkspace = useRadarFeature('cnpgWorkspace').support !== 'unsupported'
-  const isCluster = target.plural === 'clusters' && cnpgWorkspace
+  const isCluster = target.plural === 'clusters' && target.group === CNPG_GROUP && cnpgWorkspace
   // A tab change on this page, applied like a tab click: the previous tab's
   // own params (section, chart group, instance) are dropped unless named.
   const goTab = useCallback(
@@ -221,7 +222,7 @@ export function CNPGDetailPage({
           statusNote={isCluster ? <CNPGClusterServing namespace={target.namespace} name={target.name} onSelect={() => goTab(cnpgDimensionTab('serving'))} /> : undefined}
           specTab={
             isCluster
-              ? { label: 'Configuration', icon: <Settings2 className="h-4 w-4" />, lead: <CNPGConfigurationLead namespace={target.namespace} name={target.name} onNavigate={openRelated} /> }
+              ? { label: 'Configuration', icon: <Settings2 className="h-4 w-4" />, render: () => <CNPGConfiguration namespace={target.namespace} name={target.name} onNavigate={openRelated} onSelectTab={goTab} /> }
               : undefined
           }
         />

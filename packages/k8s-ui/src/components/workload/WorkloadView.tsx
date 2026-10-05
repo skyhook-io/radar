@@ -335,8 +335,8 @@ interface WorkloadViewProps {
   subheader?: ReactNode
   /** Expanded view: tab ids in display order; tabs not listed follow in their usual order. */
   tabOrder?: string[]
-  /** Expanded view: relabel the "Spec & status" tab and show content above the resource's renderer. */
-  specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode }
+  /** Expanded view: relabel, lead, or replace the whole "Spec & status" body. */
+  specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode; render?: () => ReactNode }
   /** Domain actions rendered in the header (drawer and expanded). */
   renderHeaderActions?: (props: { resource: any; context: 'drawer' | 'expanded'; onNavigate?: NavigateToResource }) => ReactNode
   /** Render a full replacement for the expanded Overview tab. */
@@ -1260,6 +1260,8 @@ export function WorkloadView({
             )}
             {expandedOverview}
           </div>
+        ) : effectiveTab === 'spec' && specTab?.render ? (
+          <div className="h-full min-h-0 overflow-y-auto">{specTab.render()}</div>
         ) : (effectiveTab === 'overview' || effectiveTab === 'spec') && (
             <InfoTab
               resource={resource}

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { Fragment, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { Badge } from '../ui/Badge'
 import { healthToSeverity } from '../../utils/badge-colors'
@@ -157,8 +157,10 @@ export function CNPGClusterSummary({
   onSelectDimension,
   initialProblemsExpanded = false,
   stateFacts,
+  operationalFacts,
   dimensionLinkLabel,
   onOpenOperator,
+  framed = false,
 }: {
   row: CNPGFleetRow
   onNavigate?: NavigateToRef
@@ -178,8 +180,12 @@ export function CNPGClusterSummary({
   dimensionLinkLabel?: (id: CNPGDimension['id']) => string
   /** Opens the operator's own diagnosis, offered beside a controller phase that is not healthy. */
   onOpenOperator?: () => void
-  /** Extra FactRows appended to the State grid, e.g. live facts only the host can read. */
+  /** Extra FactRows appended to About. */
   stateFacts?: ReactNode
+  /** Extra FactRows appended to At a glance, e.g. live instance operations. */
+  operationalFacts?: ReactNode
+  /** Cards for the full page; drawers keep flat sections. */
+  framed?: boolean
 }) {
   const top = row.problems[0]
   const rest = row.problems.length - 1
@@ -189,6 +195,8 @@ export function CNPGClusterSummary({
   const blocked = classifyCNPGClusterPhase(phase) === 'terminal' ? cnpgBlockedPhaseExplanation(phase, row.cluster?.status?.phaseReason) : null
   const [showRest, setShowRest] = useState(initialProblemsExpanded)
   const restDisclosure = useDisclosure(showRest)
+  const Frame = framed ? 'section' : Fragment
+  const frameProps = framed ? { className: 'mb-4 last:mb-0 rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm' } : {}
 
   return (
     <div className="px-4 py-4">
@@ -225,99 +233,104 @@ export function CNPGClusterSummary({
         </div>
       )}
 
-      <SectionHeading>At a glance</SectionHeading>
-      <FactGrid>
-        {dimensions?.map((d) => (
-          <FactRow key={d.id} label={d.label}>
-            <DimensionValue dimension={d} linkLabel={dimensionLinkLabel?.(d.id) ?? d.label} onOpen={onSelectDimension ? () => onSelectDimension(d.id) : undefined} />
+      <Frame {...frameProps}>
+        <SectionHeading>At a glance</SectionHeading>
+        <FactGrid>
+          {dimensions?.map((d) => (
+            <FactRow key={d.id} label={d.label}>
+              <DimensionValue dimension={d} linkLabel={dimensionLinkLabel?.(d.id) ?? d.label} onOpen={onSelectDimension ? () => onSelectDimension(d.id) : undefined} />
+            </FactRow>
+          ))}
+          <FactRow label="Instances">
+            <div>
+              <span>
+                <ReadyCount row={row} /> ready
+                {row.cluster?.status?.currentPrimary && !row.primaryConflict && (
+                  <span className="text-theme-text-secondary"> · primary <span className="font-mono">{row.cluster.status.currentPrimary}</span></span>
+                )}
+              </span>
+              {row.primaryConflict && <PrimaryConflictNote conflict={row.primaryConflict} />}
+              {row.pods.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {row.pods.map((pod) => (
+                    <InstancePill key={pod.name} pod={pod} namespace={ns} onNavigate={onNavigate} />
+                  ))}
+                </div>
+              )}
+            </div>
           </FactRow>
-        ))}
-        <FactRow label="Instances">
-          <div>
-            <span>
-              <ReadyCount row={row} /> ready
-              {row.cluster?.status?.currentPrimary && !row.primaryConflict && (
-                <span className="text-theme-text-secondary"> · primary <span className="font-mono">{row.cluster.status.currentPrimary}</span></span>
+          <FactRow label="Controller phase">
+            <span className="inline-flex flex-wrap items-center gap-2">
+              <Badge severity={healthToSeverity(row.controllerStatus.level)} size="sm">
+                {row.controllerStatus.text}
+              </Badge>
+              <span className="text-xs text-theme-text-tertiary">
+                {radarFindings ? 'reported by CNPG · Radar findings above are separate' : 'reported by CNPG'}
+              </span>
+              {onOpenOperator && (row.controllerStatus.level === 'unhealthy' || row.controllerStatus.level === 'degraded') && (
+                <button type="button" onClick={onOpenOperator} className="text-xs text-accent-text hover:underline">
+                  Operator and plugins →
+                </button>
               )}
             </span>
-            {row.primaryConflict && <PrimaryConflictNote conflict={row.primaryConflict} />}
-            {row.pods.length > 0 && (
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {row.pods.map((pod) => (
-                  <InstancePill key={pod.name} pod={pod} namespace={ns} onNavigate={onNavigate} />
-                ))}
+            {blocked && (
+              <div className="mt-0.5 text-[11.5px] text-theme-text-secondary">
+                {blocked.body}
+                {cnpgPluginPhase(row.cluster) &&
+                  ` Plugins this cluster uses: ${cnpgClusterPlugins(row.cluster).join(', ') || 'none listed'}. The Operator view shows whether each is running and when it last restarted.`}
               </div>
             )}
-          </div>
-        </FactRow>
-        <FactRow label="Controller phase">
-          <span className="inline-flex flex-wrap items-center gap-2">
-            <Badge severity={healthToSeverity(row.controllerStatus.level)} size="sm">
-              {row.controllerStatus.text}
-            </Badge>
-            <span className="text-xs text-theme-text-tertiary">
-              {radarFindings ? 'reported by CNPG · Radar findings above are separate' : 'reported by CNPG'}
-            </span>
-            {onOpenOperator && (row.controllerStatus.level === 'unhealthy' || row.controllerStatus.level === 'degraded') && (
-              <button type="button" onClick={onOpenOperator} className="text-xs text-accent-text hover:underline">
-                Operator and plugins →
-              </button>
-            )}
-          </span>
-          {blocked && (
-            <div className="mt-0.5 text-[11.5px] text-theme-text-secondary">
-              {blocked.body}
-              {cnpgPluginPhase(row.cluster) &&
-                ` Plugins this cluster uses: ${cnpgClusterPlugins(row.cluster).join(', ') || 'none listed'}. The Operator view shows whether each is running and when it last restarted.`}
-            </div>
-          )}
-        </FactRow>
-      </FactGrid>
+          </FactRow>
+          {operationalFacts}
+        </FactGrid>
+      </Frame>
 
-      <SectionHeading>About</SectionHeading>
-      <FactGrid>
-        {row.replicaCluster && (
-          <FactRow label="Replica cluster">
-            Follows {row.replicaCluster.source ? <span className="font-mono">{row.replicaCluster.source}</span> : 'an external primary'}
-          </FactRow>
-        )}
-        <FactRow label="PostgreSQL">
-          {row.pgVersion ?? 'Unknown'}
-          {row.catalog && (
-            <span className="text-theme-text-secondary">
-              {' · '}
-              <RefLink
-                refTo={{ kind: row.catalog.kind, group: CNPG_GROUP, namespace: row.catalog.kind === 'ClusterImageCatalog' ? '' : ns, name: row.catalog.name }}
-                onNavigate={onNavigate}
-              >
-                {row.catalog.name}
-              </RefLink>
-            </span>
+      <Frame {...frameProps}>
+        <SectionHeading>About</SectionHeading>
+        <FactGrid>
+          {row.replicaCluster && (
+            <FactRow label="Replica cluster">
+              Follows {row.replicaCluster.source ? <span className="font-mono">{row.replicaCluster.source}</span> : 'an external primary'}
+            </FactRow>
           )}
-        </FactRow>
-        <FactRow label="Declarations">
-          <FactValue fact={row.declarations.summary} />
-        </FactRow>
-        <FactRow label="Poolers">
-          {row.poolers.length === 0 ? (
-            <span className={row.poolersKnown ? 'text-theme-text-secondary' : 'text-theme-text-tertiary'}>
-              {row.poolersKnown ? 'None' : 'No access to Poolers'}
-            </span>
-          ) : (
-            <span className="flex flex-wrap gap-x-3">
-              {row.poolers.map((name) => (
-                <RefLink key={name} refTo={{ kind: 'Pooler', group: CNPG_GROUP, namespace: ns, name }} onNavigate={onNavigate} mono />
-              ))}
-            </span>
-          )}
-        </FactRow>
-        {row.managedBy && managedByLabel(row.managedBy) && (
-          <FactRow label="Declared in">
-            <ManagedByText refTo={row.managedBy} onNavigate={onNavigate} />
+          <FactRow label="PostgreSQL">
+            {row.pgVersion ?? 'Unknown'}
+            {row.catalog && (
+              <span className="text-theme-text-secondary">
+                {' · '}
+                <RefLink
+                  refTo={{ kind: row.catalog.kind, group: CNPG_GROUP, namespace: row.catalog.kind === 'ClusterImageCatalog' ? '' : ns, name: row.catalog.name }}
+                  onNavigate={onNavigate}
+                >
+                  {row.catalog.name}
+                </RefLink>
+              </span>
+            )}
           </FactRow>
-        )}
-        {stateFacts}
-      </FactGrid>
+          <FactRow label="Declarations">
+            <FactValue fact={row.declarations.summary} />
+          </FactRow>
+          <FactRow label="Poolers">
+            {row.poolers.length === 0 ? (
+              <span className={row.poolersKnown ? 'text-theme-text-secondary' : 'text-theme-text-tertiary'}>
+                {row.poolersKnown ? 'None' : 'No access to Poolers'}
+              </span>
+            ) : (
+              <span className="flex flex-wrap gap-x-3">
+                {row.poolers.map((name) => (
+                  <RefLink key={name} refTo={{ kind: 'Pooler', group: CNPG_GROUP, namespace: ns, name }} onNavigate={onNavigate} mono />
+                ))}
+              </span>
+            )}
+          </FactRow>
+          {row.managedBy && managedByLabel(row.managedBy) && (
+            <FactRow label="Declared in">
+              <ManagedByText refTo={row.managedBy} onNavigate={onNavigate} />
+            </FactRow>
+          )}
+          {stateFacts}
+        </FactGrid>
+      </Frame>
 
       {extra}
     </div>

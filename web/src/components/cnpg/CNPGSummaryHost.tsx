@@ -48,6 +48,7 @@ import { useConnection } from '../../context/ConnectionContext'
 import { useNavCustomization } from '../../context/NavCustomization'
 import { RefreshFailedNotice } from '../workspace/layout'
 import { useCNPGNavigate } from './useCNPGNavigate'
+import { CNPGOperatorConditions } from './CNPGOperatorConditions'
 
 interface SummaryContext {
   apiKind: string
@@ -78,22 +79,26 @@ function BaseBackupFact({ runtime }: { runtime: CNPGRuntimeResponse | undefined 
   )
 }
 
-function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryContext) {
+function ClusterSummaryHost({ namespace, name, resource, context, onNavigate }: SummaryContext) {
   const navigate = useCNPGNavigate()
   const location = useLocation()
   const { connection } = useConnection()
   // The workspace is read for the object's own namespace: an explicitly opened
   // Cluster shows its facts whatever the namespace filter is.
   const { query, runtime, ha, row, dimensions } = useCNPGClusterAssessment(namespace, name)
+  const operatorConditions = context === 'expanded' ? <CNPGOperatorConditions conditions={resource.status?.conditions ?? []} /> : null
   if (!row) {
-    if (query.isLoading) return <PaneLoader label="Loading summary…" className="h-40" />
+    if (query.isLoading) return <><PaneLoader label="Loading summary…" className="h-40" />{operatorConditions}</>
     return (
-      <div className="px-4 py-4 text-sm text-theme-text-secondary">
-        {query.error instanceof Error
-          ? `The CloudNativePG summary could not be loaded: ${query.error.message}`
-          : 'Radar cannot read this Cluster with your access.'}{' '}
-        Spec & status (Configuration on a Cluster) still shows everything the object reports.
-      </div>
+      <>
+        <div className="px-4 py-4 text-sm text-theme-text-secondary">
+          {query.error instanceof Error
+            ? `The CloudNativePG summary could not be loaded: ${query.error.message}`
+            : 'The CloudNativePG workspace summary could not be read.'}{' '}
+          {context === 'expanded' ? 'Configuration shows the declared settings; Operator conditions are below. YAML holds the full object.' : 'Spec & status still shows the object’s fields.'}
+        </div>
+        {operatorConditions}
+      </>
     )
   }
   const goRef = onNavigate ? (ref: ResourceRef) => onNavigate(refToSelectedResource(ref)) : undefined
@@ -109,6 +114,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
     <div>
       <CNPGClusterSummary
         row={row}
+        framed={context === 'expanded'}
         onNavigate={goRef}
         lead={
           <>
@@ -141,7 +147,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
         onOpenOperator={() => navigate(cnpgScreenPath('operator'), { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } })}
         initialProblemsExpanded={context === 'expanded' && new URLSearchParams(location.search).get('problems') === 'all'}
         dimensions={dimensions}
-        stateFacts={<BaseBackupFact runtime={runtime.data} />}
+        operationalFacts={<BaseBackupFact runtime={runtime.data} />}
         actions={
           context === 'drawer'
             ? [
@@ -171,6 +177,7 @@ function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryCon
             : undefined
         }
       />
+      {operatorConditions}
     </div>
   )
 }
