@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { clsx } from 'clsx'
-import { ArrowRight, Database, FileText, Search } from 'lucide-react'
+import { ArrowRight, Database, FileText, Plus, Search } from 'lucide-react'
 import {
   CNPG_PROBLEM_CATEGORIES,
   PROBLEM_TONE,
@@ -15,7 +15,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
-import { CNPGWorkspaceHeader, CoverageNotice, type CNPGScreenProps } from './shared'
+import { CNPGWorkspaceHeader, CoverageNotice, coverageEmpty, type CNPGScreenProps } from './shared'
 import { cnpgClusterFullPath, cnpgClusterProblemsPath } from './paths'
 import { currentPageLabel } from '../../utils/page-links'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
@@ -192,13 +192,15 @@ export function CNPGOverview({
   onInspect,
   inspected,
   onClearNamespaces,
+  onCreate,
 }: CNPGScreenProps) {
   const navigate = useCNPGNavigate()
   const { connection } = useConnection()
   const q = searchParams.get('q') ?? ''
   const cat = (searchParams.get('cat') as CNPGProblemCategory | null) ?? null
   const rawFilter = searchParams.get('filter') as Filter | null
-  const filter: Filter = rawFilter ?? (fleet.attentionCount > 0 ? 'attention' : 'all')
+  // The view is the list of clusters: all of them unless asked for less.
+  const filter: Filter = rawFilter === 'attention' ? 'attention' : 'all'
 
   const rows = useMemo(() => {
     let list = fleet.rows
@@ -214,6 +216,14 @@ export function CNPGOverview({
   const clustersCov = data.coverage.clusters
   const total = fleet.rows.length
   const context = connection.context || data.context
+  // Some namespaces were not read: the count is a floor, not the cluster's total.
+  const totalText = `${clustersCov?.state === 'partial' ? '≥' : ''}${total}`
+  const createAction = onCreate ? (
+    <button type="button" onClick={onCreate} className="btn-secondary inline-flex items-center gap-1.5 px-3 py-1.5 text-sm">
+      <Plus className="h-3.5 w-3.5" />
+      Create
+    </button>
+  ) : undefined
 
   if (total === 0) {
     const state = clustersCov?.state ?? 'notInstalled'
@@ -224,14 +234,14 @@ export function CNPGOverview({
           ? { title: 'Loading PostgreSQL clusters', detail: 'Radar is still syncing CloudNativePG Clusters from the API server.' }
           : state === 'error'
             ? { title: 'PostgreSQL clusters could not be read', detail: 'Reading CloudNativePG Clusters failed; see the Radar server log.' }
-            : state === 'partial'
-              ? { title: 'No visible PostgreSQL clusters', detail: 'None in the namespaces you can read. Clusters in namespaces you cannot list are not shown.' }
+            : state === 'partial' || state === 'uncached'
+              ? { title: 'No visible PostgreSQL clusters', detail: coverageEmpty(clustersCov, 'PostgreSQL clusters') }
               : namespaces.length > 0
                 ? { title: `No PostgreSQL clusters in ${context}`, detail: `None in namespace ${namespaces.join(', ')}. Clear the namespace filter to see the whole cluster.` }
                 : { title: `No PostgreSQL clusters in ${context}`, detail: 'The CloudNativePG CRDs are installed. Clusters, backups and declarations appear here once they exist.' }
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <CNPGWorkspaceHeader title="Clusters" />
+        <CNPGWorkspaceHeader title="Clusters" actions={createAction} />
         <ScreenEmptyState
           icon={Database}
           title={empty.title}
@@ -253,7 +263,7 @@ export function CNPGOverview({
   if (q) chips.push({ label: `Search: ${q}`, onClear: () => onSetParams({ q: null }) })
   if (namespaces.length > 0) chips.push({ label: `Namespace: ${namespaces.join(', ')}`, onClear: onClearNamespaces })
 
-  const segment = (id: Filter, label: string, n: number) => {
+  const segment = (id: Filter, label: string, n: number | string) => {
     const on = filter === id
     return (
       <button
@@ -261,7 +271,7 @@ export function CNPGOverview({
         type="button"
         role="tab"
         aria-selected={on}
-        onClick={() => onSetParams({ filter: id })}
+        onClick={() => onSetParams({ filter: id === 'all' ? null : id })}
         className={clsx(
           'inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-sm font-medium transition-colors',
           on ? 'bg-theme-surface text-theme-text-primary shadow-theme-sm' : 'text-theme-text-secondary hover:text-theme-text-primary',
@@ -282,11 +292,12 @@ export function CNPGOverview({
         title="Clusters"
         subtitle={
           <>
-            {total} PostgreSQL {total === 1 ? 'cluster' : 'clusters'} · {fleet.attentionCount}
+            {totalText} PostgreSQL {total === 1 ? 'cluster' : 'clusters'} · {fleet.attentionCount}
             {lowerBound ? '+' : ''} need attention
             <span className="text-theme-text-tertiary"> · {context}</span>
           </>
         }
+        actions={createAction}
       />
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <div className="space-y-3 px-5 pb-6 pt-3 xl:px-7">
@@ -295,8 +306,8 @@ export function CNPGOverview({
 
           <div className="flex flex-wrap items-center gap-2">
             <div role="tablist" aria-label="Clusters" className="inline-flex rounded-lg bg-theme-elevated p-0.5">
+              {segment('all', 'All clusters', totalText)}
               {segment('attention', 'Needs attention', fleet.attentionCount)}
-              {segment('all', 'All clusters', total)}
             </div>
             {CNPG_PROBLEM_CATEGORIES.filter((c) => fleet.categoryCounts[c.id] > 0).map((c) => {
               const on = cat === c.id

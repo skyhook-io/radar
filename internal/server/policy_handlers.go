@@ -613,6 +613,12 @@ type PolicyQueuedResponse struct {
 // Falls back to the plain read when the machinery is missing, leaving the
 // caller's not-installed path to answer.
 func listDynamicSynced(ctx context.Context, cache *k8s.ResourceCache, kind, group, namespace string) ([]*unstructured.Unstructured, error) {
+	return listDynamicSyncedWithin(ctx, cache, kind, group, namespace, nil)
+}
+
+// listDynamicSyncedWithin is listDynamicSynced bounded by budget (nil: wait
+// dynamicSyncWait for the sync).
+func listDynamicSyncedWithin(ctx context.Context, cache *k8s.ResourceCache, kind, group, namespace string, budget *syncBudget) ([]*unstructured.Unstructured, error) {
 	discovery := k8s.GetResourceDiscovery()
 	dynamicCache := k8s.GetDynamicResourceCache()
 	if discovery == nil || dynamicCache == nil {
@@ -622,7 +628,7 @@ func listDynamicSynced(ctx context.Context, cache *k8s.ResourceCache, kind, grou
 	if !found {
 		return cache.ListDynamicWithGroup(ctx, kind, namespace, group)
 	}
-	items, err := dynamicCache.ListBlocking(gvr, namespace, dynamicSyncWait)
+	items, err := budget.listBlocking(dynamicCache, gvr, namespace)
 	if err != nil {
 		return nil, err
 	}

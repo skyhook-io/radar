@@ -152,6 +152,7 @@ func (s *Server) handleCNPGWorkspace(w http.ResponseWriter, r *http.Request) {
 
 	access := map[string]kindAccess{}
 	items := map[string][]*unstructured.Unstructured{}
+	budget := newSyncBudget(r.Context())
 	for _, k := range cnpgWorkspaceKinds {
 		if disc != nil {
 			if _, ok := disc.GetGVRWithGroup(k.kind, k.group); !ok {
@@ -159,7 +160,7 @@ func (s *Server) handleCNPGWorkspace(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
-		acc, list := s.cnpgWorkspaceReadKind(r, cache, k, namespaces)
+		acc, list := s.cnpgWorkspaceReadKind(r, cache, k, namespaces, budget)
 		if acc.state != kindCoverageNotInstalled {
 			resp.Installed = true
 		}
@@ -206,8 +207,8 @@ func (s *Server) handleCNPGWorkspace(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, resp)
 }
 
-func (s *Server) cnpgWorkspaceReadKind(r *http.Request, cache *k8s.ResourceCache, k workspaceKind, namespaces []string) (kindAccess, []*unstructured.Unstructured) {
-	return s.readWorkspaceKind(r, cache, k, namespaces, cnpgGroups)
+func (s *Server) cnpgWorkspaceReadKind(r *http.Request, cache *k8s.ResourceCache, k workspaceKind, namespaces []string, budget *syncBudget) (kindAccess, []*unstructured.Unstructured) {
+	return s.readWorkspaceKind(r, cache, k, namespaces, cnpgGroups, budget)
 }
 
 // filterCNPGGroup drops anything whose apiVersion is not a CNPG group, so a

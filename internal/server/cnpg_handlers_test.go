@@ -131,12 +131,22 @@ func TestHandlersEstablishAbsenceRatherThanAssumeIt(t *testing.T) {
 		t.Fatalf("read: %v", err)
 	}
 	body := string(src)
-	i := strings.Index(body, "func listDynamicSynced")
+	// listDynamicSynced delegates to listDynamicSyncedWithin, which reads
+	// through syncBudget.listBlocking.
+	i := strings.Index(body, "func listDynamicSyncedWithin")
 	if i < 0 {
 		t.Fatal("helper moved")
 	}
 	fn := body[i : i+1400]
-	if !strings.Contains(fn, "ListBlocking") {
+	ka, err := os.ReadFile("kind_access.go")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	j := strings.Index(string(ka), "func (b *syncBudget) listBlocking")
+	if j < 0 {
+		t.Fatal("budget helper moved")
+	}
+	if !strings.Contains(fn, "budget.listBlocking(") || !strings.Contains(string(ka)[j:j+1400], "dc.ListBlocking(") {
 		t.Error("the read does not wait for sync, so an empty list may be a cache that never looked")
 	}
 	// ListBlocking discards WaitForCacheSync's result: on timeout it returns an

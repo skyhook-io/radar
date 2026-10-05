@@ -1,4 +1,5 @@
 import { CNPG_KIND_BY_KEY, type CNPGWorkspaceKey } from '@skyhook-io/k8s-ui'
+import type { RadarFeatureSupport } from '../../api/radarFeatures'
 
 export type CNPGScreen = 'overview' | 'protection' | 'declarations' | 'pooling' | 'operator'
 
@@ -58,6 +59,27 @@ const CNPG_VIEW_NAMESAKES: Partial<Record<CNPGScreen, string>> = { overview: 'cl
 export function cnpgViewNamedForKind(plural: string): boolean {
   const home = CNPG_DETAIL_KINDS[plural]?.home
   return !!home && CNPG_VIEW_NAMESAKES[home] === plural
+}
+
+/** The CloudNativePG Cluster kind, whose list is the Clusters view. */
+export function isCNPGClusterKind(kind: { name: string; group: string } | null | undefined): boolean {
+  return !!kind && kind.name === 'clusters' && kind.group === 'postgresql.cnpg.io'
+}
+
+/**
+ * What the CloudNativePG Cluster kind's Resources route shows: the Clusters
+ * view when this Radar serves it; a loader while capabilities load for the
+ * first time, so the table never flashes before it; otherwise the table (a
+ * Radar older than the views, or capabilities that could not be read).
+ */
+export function cnpgClusterKindListMode(
+  kind: { name: string; group: string } | null | undefined,
+  support: RadarFeatureSupport,
+  capabilitiesPending: boolean,
+): 'view' | 'wait' | 'table' {
+  if (!isCNPGClusterKind(kind)) return 'table'
+  if (support === 'supported') return 'view'
+  return support === 'unknown' && capabilitiesPending ? 'wait' : 'table'
 }
 
 export function cnpgDetailKindFor(plural: string, group: string | undefined): string | null {

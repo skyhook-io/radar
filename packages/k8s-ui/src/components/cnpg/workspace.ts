@@ -1053,7 +1053,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
 
   const incompleteKinds = CNPG_WORKSPACE_KEYS.filter((k) => {
     const s = coverageOf(resp, k).state
-    return s === 'partial' || s === 'denied' || s === 'syncing' || s === 'error'
+    return s === 'partial' || s === 'denied' || s === 'syncing' || s === 'error' || s === 'uncached'
   })
 
   return finishFleet(rows, incompleteKinds)

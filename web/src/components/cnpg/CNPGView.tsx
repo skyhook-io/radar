@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { ResourcesSidebar, type SelectedKindInfo } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
@@ -10,12 +10,16 @@ import { CNPGProtection } from './CNPGProtection'
 import { CNPGDeclarations } from './CNPGDeclarations'
 import { CNPGPooling } from './CNPGPooling'
 import { CNPGOperator } from './CNPGOperator'
-import { CNPGScreenGate } from './shared'
+import { CNPGScreenGate, clusterResource } from './shared'
+import { CreateResourceDialog } from '../shared/CreateResourceDialog'
+import { getSkeletonYaml } from '../../utils/skeleton-yaml'
+import { apiVersionToGroup } from '../../utils/navigation'
 import { CNPGDetailPage } from './CNPGDetailPage'
 import { parseCNPGRoute } from './routes'
 import { useCNPGFleet, useCNPGSidebarWorkspace } from './useCNPGSidebarWorkspace'
 import { decodeDrawerTrail, encodeDrawerTrail, sameSelectedResource } from '../../utils/drawer-trail'
 import { useCNPGNavigate } from './useCNPGNavigate'
+import { useCNPGScreenParams } from './useCNPGScreenParams'
 
 interface CNPGViewProps {
   namespaces: string[]
@@ -88,17 +92,8 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
     [searchParams, setSearchParams, location.state],
   )
 
-  const setParams = useCallback(
-    (update: Record<string, string | null>) => {
-      const params = new URLSearchParams(searchParams)
-      for (const [k, v] of Object.entries(update)) {
-        if (v === null || v === '') params.delete(k)
-        else params.set(k, v)
-      }
-      setSearchParams(params, { replace: true, state: location.state })
-    },
-    [searchParams, setSearchParams, location.state],
-  )
+  const [, setParams] = useCNPGScreenParams()
+  const [creating, setCreating] = useState(false)
 
   const selectKind = useCallback(
     (kind: SelectedKindInfo) => {
@@ -136,6 +131,7 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
               onInspect: inspect,
               inspected: drawerTarget,
               onClearNamespaces,
+              onCreate: () => setCreating(true),
             }
             switch (route.screen) {
               case 'protection':
@@ -153,6 +149,15 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
         </CNPGScreenGate>
         )}
       </div>
+      <CreateResourceDialog
+        open={creating}
+        onClose={() => setCreating(false)}
+        initialYaml={getSkeletonYaml('Cluster', 'postgresql.cnpg.io')}
+        title="Create Cluster"
+        onCreated={(result) => {
+          if (result.kind === 'Cluster' && apiVersionToGroup(result.apiVersion) === 'postgresql.cnpg.io') inspect(clusterResource(result.namespace, result.name))
+        }}
+      />
     </div>
   )
 }

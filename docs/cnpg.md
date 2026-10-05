@@ -10,13 +10,17 @@ CNPG stays inside **Resources**; there is no new global navigation item. When th
 
 | Destination | Route | Job | Detail home for |
 |---|---|---|---|
-| Clusters | `/cnpg` | The fleet: every Cluster with readiness, replication, storage, backups and its top problem. Defaults to **Needs attention**. | Cluster |
+| Clusters | `/cnpg` | The fleet: every Cluster with readiness, replication, storage, backups and its top problem, ordered by urgency; **Needs attention** narrows it. | Cluster |
 | Backups | `/cnpg/protection` | Recovery evidence per cluster, backup runs (7 days; failed first when any failed), schedules with their last run's outcome, destinations. | Backup, ScheduledBackup, ObjectStore |
 | Declarations | `/cnpg/declarations` | Databases, DatabaseRoles (1.30+), Publications, Subscriptions and managed roles by cluster; declared vs reconciled. | Database, DatabaseRole, Publication, Subscription |
 | Pooling | `/cnpg/pooling` | Poolers and the clusters they front. | Pooler |
 | Operator | `/cnpg/operator` | Operator and plugin workloads, leader, watched namespaces, webhooks and reconcile errors, image catalogs, operator configuration. | ImageCatalog, ClusterImageCatalog |
 
 Destination badges count **affected clusters**, not findings, and follow the namespace filter (the sidebar says so). The exact kinds stay under a collapsible **Resource kinds** block, grouped by API group; on the CloudNativePG views it starts collapsed.
+
+**The Cluster kind's list is the Clusters view.** The generic route for the kind, `/resources/clusters?apiGroup=postgresql.cnpg.io` — where the sidebar's Cluster kind, a pinned favorite, search and every link to a CNPG Cluster from Issues, Home, Checks or an investigation land — renders the same Clusters view (one component over the same data and parameters) in place of the generic table, inside the Resources page: its drawer (`?resource=ns/name`), history and Back behave as for any kind, and expanding opens the Cluster's page. `/cnpg` stays the workspace's own home with its `?drawer=` trail; the sidebar highlights whichever was opened. A Radar without these views, or one whose capabilities could not be read, keeps the generic table; while capabilities load for the first time the page waits instead of showing the table first. Cluster API's `clusters` kind (`cluster.x-k8s.io`) is untouched. The table's column picker, column sorting, compare and bulk selection are not offered for this kind; **Create** is, on both routes.
+
+**What "every Cluster" means.** The view lists every CNPG Cluster the caller may list, in the namespaces Radar can see for them: the namespace filter, the caller's namespace visibility (derived from their Pod/Deployment access, as everywhere in Radar) and Radar's own watch scope. When Radar's identity may not list Clusters cluster-wide, its cache watches them namespace by namespace: what it holds is listed, the rest reads as not read (named when the caller named the namespaces), and the count reads "≥N" — never an empty list or a total that looks exact.
 
 Every CNPG kind's full detail is `/cnpg/<plural>/<namespace|_>/<name>` — reached from a row's **Open**, from the drawer's expand control, and by redirect from the generic `/workload/...` URL. The page keeps the sidebar with the CloudNativePG views (its destination highlighted, the object nested under it) and uses Radar's detail view underneath: **Overview** is a composed summary, **Spec & status** is the kind's existing renderer, then YAML and the rest.
 

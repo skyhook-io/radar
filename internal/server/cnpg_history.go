@@ -383,7 +383,7 @@ func (s *Server) handleCNPGFleetMetrics(w http.ResponseWriter, r *http.Request) 
 			clusterKind = k
 		}
 	}
-	acc, clusters := s.cnpgWorkspaceReadKind(r, cache, clusterKind, namespaces)
+	acc, clusters := s.cnpgWorkspaceReadKind(r, cache, clusterKind, namespaces, newSyncBudget(r.Context()))
 	if acc.state != kindCoverageFull && acc.state != kindCoveragePartial {
 		s.writeJSON(w, resp)
 		return

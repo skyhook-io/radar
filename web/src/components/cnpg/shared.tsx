@@ -25,6 +25,8 @@ export interface CNPGScreenProps {
   onInspect: (resource: SelectedResource) => void
   inspected: SelectedResource | null
   onClearNamespaces: () => void
+  /** Opens the create dialog for this screen's kind (the Clusters view's Create). */
+  onCreate?: () => void
 }
 
 const COVERAGE_LABEL: Record<string, string> = {
