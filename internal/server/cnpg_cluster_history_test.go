@@ -623,3 +623,50 @@ func TestCNPGClusterLogs_IntervalReadsThePreviousRun(t *testing.T) {
 		t.Errorf("emptyMessage = %q, want interval-specific copy", got.EmptyMessage)
 	}
 }
+
+func TestCNPGClusterActivity_JobPodsNeedVerifiedOwnershipAndJobAccess(t *testing.T) {
+	ns := "pgactivityjobs"
+	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds, withUID(cnpgObj("postgresql.cnpg.io/v1", "Cluster", ns, "analytics", map[string]any{"instances": int64(1)}, nil), "analytics-uid"))
+	seedCNPGJobs(t, cnpgJob(ns, "analytics-1-initdb", "job-uid", clusterRef("analytics", "analytics-uid")))
+	pod := cnpgJobPod(ns, "analytics-1-initdb-abc", "analytics", jobRef("analytics-1-initdb", "job-uid"))
+	pod.UID = "job-pod-uid"
+	stale := cnpgJobPod(ns, "analytics-1-initdb-old", "analytics", jobRef("analytics-1-initdb", "old-job-uid"))
+	stale.UID = "old-pod-uid"
+	seedCNPGPods(t, pod, stale)
+	store := useMemoryTimeline(t)
+	seedActivity(t, store, ns,
+		activityRow{id: "job-pod-pending", apiVersion: "v1", kind: "Pod", name: pod.Name, uid: string(pod.UID), age: time.Minute, owner: &timeline.OwnerInfo{APIVersion: "batch/v1", Kind: "Job", Name: "analytics-1-initdb", UID: "job-uid"}},
+		activityRow{id: "stale-job-pod", apiVersion: "v1", kind: "Pod", name: stale.Name, uid: string(stale.UID), age: time.Minute, owner: &timeline.OwnerInfo{APIVersion: "batch/v1", Kind: "Job", Name: "analytics-1-initdb", UID: "old-job-uid"}},
+	)
+	env := newAuthTestServer(t)
+	for _, jobs := range []bool{true, false} {
+		user := fmt.Sprintf("jobs-%v", jobs)
+		perms := &auth.UserPermissions{AllowedNamespaces: []string{ns}}
+		perms.SetCanI("get", cnpgGroup, "clusters", ns, true)
+		allow(perms, "", "pods", ns, true)
+		allow(perms, "batch", "jobs", ns, jobs)
+		env.srv.permCache.Set(user, nil, perms)
+		got := decodeActivity(t, env.authGet(t, "/api/cnpg/clusters/"+ns+"/analytics/activity", user, ""))
+		if ids := strings.Join(activityIDs(got), ","); jobs && ids != "job-pod-pending" || !jobs && ids != "" {
+			t.Fatalf("Job access %v: %s", jobs, ids)
+		}
+	}
+}
+func TestCNPGClusterActivity_AttributionBoundaryExcludesInstancePods(t *testing.T) {
+	store := useMemoryTimeline(t)
+	ns := "pgactivityboundary"
+	owner := &timeline.OwnerInfo{Kind: "Cluster", Name: "payments", APIVersion: "postgresql.cnpg.io/v1", UID: "payments-uid"}
+	labels := map[string]string{pkgtimeline.CNPGClusterLabel: "payments"}
+	seedActivity(t, store, ns,
+		activityRow{id: "pod-old", apiVersion: "v1", kind: "Pod", name: "payments-1", uid: "p1", age: 5 * time.Hour, owner: owner, labels: labels},
+		activityRow{id: "backup-new", apiVersion: "postgresql.cnpg.io/v1", kind: "Backup", name: "payments-backup", uid: "b1", age: time.Hour, labels: labels},
+	)
+	resp, err := http.Get(testServer.URL + "/api/cnpg/clusters/" + ns + "/payments/activity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeActivity(t, resp)
+	if got.AttributionSince == nil || time.Since(*got.AttributionSince) > 2*time.Hour {
+		t.Fatalf("boundary must describe CNPG children: %+v", got.AttributionSince)
+	}
+}

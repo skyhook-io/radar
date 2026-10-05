@@ -45,6 +45,7 @@ export interface CNPGStorageSource {
 }
 
 export interface CNPGStorageWAL {
+  slotInventoryTruncated?: boolean
   status: CNPGStorageSource
   metrics: CNPGStorageSource
   volume?: string
@@ -56,6 +57,7 @@ export interface CNPGStorageWAL {
   lastFailedWal?: string
   archivingFailed?: boolean
   slots?: { slot: string; bytes: number }[]
+  slotInventory?: { name: string; active?: boolean; retainedBytes?: number }[] | null
 }
 
 export interface CNPGStorageInstance {

@@ -58,7 +58,8 @@ interface LogCoreProps {
   onClear?: () => void
   toolbarExtra?: ToolbarExtraRenderer
   showPodName?: boolean
-  emptyMessage?: string
+  emptyMessage?: ReactNode
+  sourceUnavailable?: boolean
   emptyCommand?: string | null
   errorMessage?: string | null
   /**
@@ -146,6 +147,7 @@ export function LogCore({
   toolbarExtra,
   showPodName = false,
   emptyMessage = 'No logs available',
+  sourceUnavailable = false,
   emptyCommand,
   errorMessage,
   forceDark,
@@ -422,7 +424,7 @@ export function LogCore({
         search.open()
         return
       }
-      if (e.key === 's' && !e.ctrlKey && !e.metaKey && !e.altKey && onStartStream) {
+      if (e.key === 's' && !e.ctrlKey && !e.metaKey && !e.altKey && onStartStream && !sourceUnavailable) {
         const target = e.target as HTMLElement | null
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return
         e.preventDefault()
@@ -432,7 +434,7 @@ export function LogCore({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [search.open, onStartStream, onStopStream, isStreaming])
+  }, [search.open, onStartStream, onStopStream, isStreaming, sourceUnavailable])
 
   const handleFollowOutput = useCallback((isAtBottom: boolean) => {
     if (isAtBottom) return 'smooth' as const
@@ -576,6 +578,7 @@ export function LogCore({
           <Tooltip content={isStreaming ? 'Stop streaming' : 'Start streaming'} delay={TIP_DELAY} position="bottom">
             <button
               onClick={isStreaming ? onStopStream : onStartStream}
+              disabled={sourceUnavailable && !isStreaming}
               className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded transition-colors ${
                 isStreaming
                   ? 'bg-green-600 text-white hover:bg-green-700'
@@ -1007,7 +1010,7 @@ export function LogCore({
       ) : groupedEntries.length === 0 ? (
         <div className={`${EMPTY_STATE_CLASS} ${palette.textTertiary}`}>
           <Terminal className="w-8 h-8" />
-          <span>{entries.length > 0 ? `Filters hide all ${entries.length.toLocaleString()} loaded lines` : emptyMessage}</span>
+          <div>{entries.length > 0 ? `Filters hide all ${entries.length.toLocaleString()} loaded lines` : emptyMessage}</div>
           {entries.length === 0 && emptyCommand && (
             <button type="button" onClick={() => { void copyText(emptyCommand) }} className={`mt-2 inline-flex max-w-[80%] items-center gap-2 rounded border px-3 py-2 font-mono text-xs ${palette.border} ${palette.toolbarBg}`} title="Copy recovery command">
               <code className="truncate">{emptyCommand}</code>

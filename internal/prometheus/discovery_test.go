@@ -527,3 +527,16 @@ func TestDeniedGrantNamesTheRefusedStep(t *testing.T) {
 		t.Errorf("unnamed = %q", got)
 	}
 }
+
+func TestPrometheusRejectedCandidateWording(t *testing.T) {
+	err := prometheusCandidateProbeError("cert-manager", "cert-manager")
+	if !strings.HasPrefix(err.Error(), "No working Prometheus endpoint found") || !strings.Contains(err.Error(), "Candidate cert-manager/cert-manager") {
+		t.Fatal(err)
+	}
+	if strings.Contains(err.Error(), "Prometheus at cert-manager") {
+		t.Fatal(err)
+	}
+	if lines := strings.Split(err.Error(), "\n"); len(lines) != 2 || !strings.HasPrefix(lines[1], "Candidate cert-manager/cert-manager") {
+		t.Fatalf("candidate details must follow the heading: %q", err.Error())
+	}
+}

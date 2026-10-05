@@ -44,7 +44,7 @@ export function CNPGConfiguration({ namespace, name, onNavigate, onSelectTab }: 
         </FoldSection>
       </section>
       <section className={cardClass}>
-        <CNPGParametersInEffect namespace={namespace} name={name} declared={getCNPGClusterPostgresParams(cluster)} />
+        <CNPGParametersInEffect namespace={namespace} name={name} declared={getCNPGClusterPostgresParams(cluster)} scope={{ declaredInstances: cluster.spec?.instances, expectedInstances: [...new Set<string>([...(cluster.status?.instanceNames ?? []), ...(ha.data?.expectedInstances ?? [])])] }} />
       </section>
       <CNPGDeclaredSettings cluster={cluster} onNavigate={go} onSelectTab={onSelectTab} onOpenDeclarations={() => navigate(`${cnpgScreenPath('declarations')}?${new URLSearchParams({ cluster: `${namespace}/${name}` })}`, { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } })} />
       <section className={cardClass}>

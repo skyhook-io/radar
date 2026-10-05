@@ -1,11 +1,14 @@
 import { useCallback } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { WorkloadLogsViewer, type WorkloadLogsFetchParams, type WorkloadLogsResult } from '@skyhook-io/k8s-ui'
 import { fetchJSON, useRadarFeature } from '../../api/client'
 import { getApiBase, getCredentialsMode } from '../../api/config'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useTheme } from '../../context/ThemeContext'
 import { CNPGIntervalBanner, useCNPGIntervalParams } from './CNPGTrends'
+import { useCNPGFleet } from './useCNPGSidebarWorkspace'
+import { useCNPGNavigate } from './useCNPGNavigate'
+import { cnpgClusterProblemsPath, cnpgWithinDetail } from './paths'
 
 function logsPath(namespace: string, name: string) {
   return `/cnpg/clusters/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/logs`
@@ -37,6 +40,13 @@ export function intervalQuery(params: WorkloadLogsFetchParams, since: string, un
  */
 export function CNPGClusterLogs({ namespace, name }: { namespace: string; name: string }) {
   const [searchParams] = useSearchParams()
+  const navigate = useCNPGNavigate()
+  const location = useLocation()
+  const { fleet } = useCNPGFleet([namespace])
+  const row = fleet?.rows.find((r) => r.namespace === namespace && r.name === name)
+  const problem = row?.problems.find((p) => p.job === 'initdb')
+  const overviewPath = `${cnpgClusterProblemsPath(namespace, name, searchParams.get('ctx') ?? undefined)}&tab=overview`
+  const inPlace = cnpgWithinDetail(location.pathname, location.search, overviewPath)
   const pod = searchParams.get('pod')
   const container = searchParams.get('container')
   const interval = useCNPGIntervalParams()
@@ -76,6 +86,11 @@ export function CNPGClusterLogs({ namespace, name }: { namespace: string; name: 
         <WorkloadLogsViewer
           key={`${pod ?? ''}|${container ?? ''}|${since ?? ''}|${until ?? ''}`}
           name={name}
+          disableSourceControlsWithoutSource
+          emptySourceState={<div className="space-y-2 text-sm text-theme-text-secondary">
+            <p>No instance log source yet. {row?.hibernated ? 'The Cluster is hibernated.' : problem?.title}</p>
+            <button type="button" className="text-accent-text hover:underline" onClick={() => navigate(inPlace ?? overviewPath, { replace: !!inPlace, state: location.state })}>{problem ? 'See Overview’s problem →' : 'Open Overview →'}</button>
+          </div>}
           fetchAll={fetchAll}
           createStream={interval ? undefined : createStream}
           overrideDownload={desktopDownload}

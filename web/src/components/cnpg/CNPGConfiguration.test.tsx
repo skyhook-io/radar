@@ -78,7 +78,8 @@ describe('Configuration composition', () => {
     const html = render()
     expect(html).toContain('Last refresh failed: refresh timed out')
     expect(html).toContain('showing data from')
-    expect(html).toContain('pg-1: 8MB')
+    expect(html).toContain('>8MB</span>')
+    expect(html).toContain('on pg-1')
     expect(html).not.toContain('Instance values could not be read')
   })
   it('distinguishes skipped names, no readable instances and a parameter missing from a successful read', () => {

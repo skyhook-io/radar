@@ -85,7 +85,7 @@ export interface CNPGParametersView {
  * CloudNativePG merges some values itself. Instances disagreeing or a pending
  * restart are observations — a rolling restart passes through both.
  */
-export function cnpgParametersView(resp: CNPGParametersResponse, declared = resp.declared): CNPGParametersView {
+export function cnpgParametersView(resp: CNPGParametersResponse, declared = resp.declared, scope?: { declaredInstances?: number; expectedInstances?: string[] }): CNPGParametersView {
   const read = resp.instances.filter((i) => i.state === 'ok' && i.settings)
   const unread = resp.instances.filter((i) => !(i.state === 'ok' && i.settings))
   const queriedNames = new Set(resp.declared.filter((p) => !resp.skipped?.includes(p.name)).map((p) => p.name.toLowerCase()))
@@ -123,7 +123,11 @@ export function cnpgParametersView(resp: CNPGParametersResponse, declared = resp
   }
   const bits = [`${rows.length} declared`]
   if (unsampled > 0) bits.push(`${rows.length - unsampled} sampled`, `${unsampled} not sampled`)
-  bits.push(`${read.length} of ${resp.instances.length} instances read`)
+  bits.push(read.length > 0 ? `read on ${read.map((i) => i.pod).join(', ')}` : 'no instance answered')
+  const missing = (scope?.expectedInstances ?? []).filter((pod) => !resp.instances.some((i) => i.pod === pod))
+  if (missing.length > 0) bits.push(`${missing.join(', ')} not running`)
+  if (scope?.declaredInstances !== undefined) bits.push(`${scope.declaredInstances} instances declared`)
+  if (unread.length > 0) bits.push(`not read on ${unread.map((i) => i.pod).join(', ')}`)
   if (pending.size > 0) bits.push(`restart pending on ${[...pending].sort().join(', ')}`)
   if (differing > 0) bits.push(`${differing} differ between instances`)
   const attention = pending.size > 0 || differing > 0
@@ -131,6 +135,6 @@ export function cnpgParametersView(resp: CNPGParametersResponse, declared = resp
     rows,
     read,
     unread,
-    summary: { text: bits.join(' · '), tone: attention ? 'degraded' : unread.length > 0 || unsampled > 0 ? 'unknown' : 'healthy', attention },
+    summary: { text: bits.join(' · '), tone: attention ? 'degraded' : unread.length > 0 || unsampled > 0 || missing.length > 0 || (scope?.declaredInstances !== undefined && read.length < scope.declaredInstances) ? 'unknown' : 'healthy', attention },
   }
 }

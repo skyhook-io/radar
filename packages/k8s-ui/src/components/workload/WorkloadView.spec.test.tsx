@@ -50,3 +50,13 @@ it('still opens the original Spec & status in a drawer when a page replacement i
   expect(replacement).not.toHaveBeenCalled()
   act(() => root.unmount())
 })
+
+it('lets a host render the reported phase while preserving the default derived badge', () => {
+  const instance = { ...resource, status: { phase: 'Cluster in healthy state', readyInstances: 1 } }
+  for (const expanded of [true, false]) {
+    const html = renderToStaticMarkup(<WorkloadView {...props} expanded={expanded} resource={instance} renderStatusBadge={(r) => <span>Phase: {r.status.phase}</span>} />)
+    expect(html).toContain('Phase: Cluster in healthy state')
+    expect(html).not.toMatch(/badge[^>]*>Degraded/)
+    expect(renderToStaticMarkup(<WorkloadView {...props} expanded={expanded} resource={instance} />)).toMatch(/badge[^>]*>Degraded/)
+  }
+})

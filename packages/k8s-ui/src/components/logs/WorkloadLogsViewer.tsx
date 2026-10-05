@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { Filter, ChevronDown, AlertTriangle } from 'lucide-react'
 import { parseLogRange } from '../../utils/log-format'
 import { triggerDownload } from '../../utils/download'
@@ -39,6 +39,8 @@ export interface WorkloadLogsResult {
 }
 
 export interface WorkloadLogsViewerProps {
+  /** Disable streaming and the source filters while no log source exists. Off by default: streams can wait for Pods to appear. */
+  disableSourceControlsWithoutSource?: boolean
   /** Workload name — used for the download filename */
   name: string
   /**
@@ -68,9 +70,11 @@ export interface WorkloadLogsViewerProps {
   initialPods?: string[]
   /** Container selected on mount; all containers when unset. */
   initialContainer?: string
+  /** Rendered only when the loaded source list is empty. */
+  emptySourceState?: ReactNode
 }
 
-export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark, defaultDark, autoStream = false, initialPods, initialContainer }: WorkloadLogsViewerProps) {
+export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark, defaultDark, autoStream = false, initialPods, initialContainer, emptySourceState, disableSourceControlsWithoutSource = false }: WorkloadLogsViewerProps) {
   const initialSelection = (names: string[]) => {
     const wanted = names.filter((n) => initialPods?.includes(n))
     return new Set(wanted.length > 0 ? wanted : names)
@@ -95,6 +99,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const { isStreaming, streamError, connecting, startStreaming, stopStreaming } = useLogStream()
 
   const willAutoStream = autoStream && !!createStream
+  const sourceUnavailable = disableSourceControlsWithoutSource && pods.length === 0
   // null sentinel so the initial selectedContainer ('' = all) still arms once.
   const autoStartedForRef = useRef<string | null>(null)
   const userStoppedRef = useRef(false)
@@ -315,6 +320,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: LogPalette }) => (
     <>
       {/* Pod filter */}
+      <fieldset disabled={sourceUnavailable} className="flex items-center gap-2 disabled:opacity-50">
       <div className="relative">
         <button
           onClick={() => setShowPodFilter(v => !v)}
@@ -384,8 +390,10 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         lineOptions={[50, 100, 500, 1000]}
         tooltip="How many logs to load per pod — by line count or time range"
         isDark={isDark}
-        disabled={isStreaming}
+        disabled={isStreaming || sourceUnavailable}
+        disabledReason={sourceUnavailable ? 'No log source is available yet' : undefined}
       />
+      </fieldset>
     </>
   )
 
@@ -419,13 +427,14 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       isLoading={isLoading || isConnecting}
       isStreaming={isStreaming}
       onStartStream={createStream ? handleStartStreaming : undefined}
+      sourceUnavailable={sourceUnavailable}
       onStopStream={handleStopStreaming}
       onRefresh={loadLogs}
       onDownload={downloadLogs}
       onClear={clear}
       toolbarExtra={renderToolbarExtra}
       showPodName
-      emptyMessage={emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
+      emptyMessage={pods.length === 0 && emptySourceState ? emptySourceState : emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
       emptyCommand={emptyCommand}
       errorMessage={entries.length === 0 ? fetchError || streamError : null}
       forceDark={forceDark}

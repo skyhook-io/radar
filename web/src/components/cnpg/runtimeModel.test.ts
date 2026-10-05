@@ -156,3 +156,17 @@ it('keeps the measured connections in Sessions when only its row lists were capp
   expect(cnpgSessionAggregatesGap(inst)).toBeUndefined()
   expect(cnpgSessionsCardShowsConnections(inst, undefined)).toBe(true)
 })
+
+it('does not treat a captured empty or failed read as a measurement', async () => {
+  const { cnpgRuntimeMeasured } = await import('./runtimeModel')
+  const instance = { pod: 'pg-1', role: 'primary', status: { state: 'ok', capturedAt: 'now' }, metrics: { state: 'ok', capturedAt: 'now', databases: [] } } as CNPGRuntimeInstance
+  expect(cnpgRuntimeMeasured([], 'metrics')).toBe(false)
+  expect(cnpgRuntimeMeasured([instance], 'status')).toBe(false)
+  expect(cnpgRuntimeMeasured([instance], 'metrics')).toBe(false)
+  instance.metrics.sessionsTotal = 0
+  expect(cnpgRuntimeMeasured([instance], 'metrics')).toBe(true)
+  instance.status.slots = []
+  expect(cnpgRuntimeMeasured([instance], 'status')).toBe(true)
+  instance.metrics.state = 'error'
+  expect(cnpgRuntimeMeasured([instance], 'metrics')).toBe(false)
+})

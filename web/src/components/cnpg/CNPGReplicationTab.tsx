@@ -18,6 +18,7 @@ import { CNPGTabVerdict } from './CNPGClusterTabs'
 import { formatBytes } from './lsn'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
 import { Card, ProxyDenied, SourceState } from './runtimeParts'
+import { cnpgRuntimeMeasured } from './runtimeModel'
 import { buildWorkloadPath } from '../../utils/navigation'
 import { useCNPGNavigate } from './useCNPGNavigate'
 import { Notice, RefreshFailedNotice } from '../workspace/layout'
@@ -58,7 +59,7 @@ export function CNPGReplicationTab({
         <h2 className="text-sm font-semibold text-theme-text-primary">Instances, replication and HA</h2>
         {data && (
           <span className="text-xs text-theme-text-tertiary">
-            {denied ? 'Live instance data needs access you do not have' : `Live from each instance · sampled ${formatAge(data.sampledAt)} ago`}
+            {denied ? 'Live instance data needs access you do not have' : cnpgRuntimeMeasured(data.instances, 'status') ? `Live instance data · sampled ${formatAge(data.sampledAt)} ago` : `No instance data yet; checked ${formatAge(data.sampledAt)} ago`}
           </span>
         )}
         {onOpenHistory && (
@@ -91,7 +92,13 @@ export function CNPGReplicationTab({
             ha={ha.data}
             clusterObject={clusterObject}
           />
-          <OtherSlots primary={primary} instances={data.instances.map((i) => i.pod)} clusterObject={clusterObject} />
+          <OtherSlots
+            primary={primary}
+            instances={data.instances.map((i) => i.pod)}
+            expectedInstances={[...(clusterObject?.status?.instanceNames ?? []), ...(ha.data?.expectedInstances ?? [])]}
+            joiningInstances={ha.data?.jobs.items.filter((j) => j.role === 'join' && ['pending', 'active', 'running'].includes(j.phase)).map((j) => j.instance).filter((n): n is string => !!n)}
+            clusterObject={clusterObject}
+          />
         </>
       )}
 
@@ -141,8 +148,7 @@ function PodsOnly({ ha, namespace, onNavigate }: { ha?: CNPGClusterHA; namespace
   )
 }
 
-/** Slots on the primary that no current instance accounts for: logical slots, and physical ones no instance owns. */
-function OtherSlots({ primary, instances, clusterObject }: { primary?: CNPGRuntimeInstance; instances: string[]; clusterObject?: any }) {
+export function OtherSlots({ primary, instances, expectedInstances = [], joiningInstances = [], clusterObject }: { primary?: CNPGRuntimeInstance; instances: string[]; expectedInstances?: string[]; joiningInstances?: string[]; clusterObject?: any }) {
   const readable = primary?.status.state === 'ok' || primary?.status.state === 'partial'
   if (!primary) return null
   if (!readable || !primary.status.slots) {
@@ -152,11 +158,29 @@ function OtherSlots({ primary, instances, clusterObject }: { primary?: CNPGRunti
       </Card>
     )
   }
-  const others = primary.status.slots.filter((sl) => sl.type !== 'physical' || !cnpgHASlotInstance(clusterObject, sl.name, instances))
+  const standbys = instances.filter((name) => name !== primary.pod)
+  const expectedStandbys = expectedInstances.filter((name) => name !== primary.pod)
+  const allInstances = [...new Set([...standbys, ...expectedStandbys])]
+  const waiting = primary.status.slots.filter((sl) => sl.type === 'physical' && !cnpgHASlotInstance(clusterObject, sl.name, standbys) && cnpgHASlotInstance(clusterObject, sl.name, expectedStandbys))
+  const others = primary.status.slots.filter((sl) => sl.type !== 'physical' || !cnpgHASlotInstance(clusterObject, sl.name, allInstances))
   return (
-    <Card title="Other replication slots" footer="Slots on the primary not kept for one of this cluster's instances: logical slots and unmanaged physical ones. An inactive slot keeps WAL until it is consumed or dropped.">
+    <>
+    {waiting.length > 0 && (
+      <Card title="Expected standby slots">
+        {waiting.map((sl) => {
+          const instance = cnpgHASlotInstance(clusterObject, sl.name, expectedStandbys)!
+          return (
+            <div key={sl.name} className={clsx('text-sm', sl.active === false ? toneTextClass('degraded') : 'text-theme-text-secondary')}>
+              <span className="font-mono">{instance}</span> — {joiningInstances.includes(instance) ? 'waiting to join' : 'no instance Pod observed'}
+              <div className="text-xs text-theme-text-tertiary">Slot {sl.name} · {sl.active === undefined ? 'state unknown' : sl.active ? 'active' : 'inactive'} · {sl.retainedBytes === undefined ? 'retained WAL not reported' : formatBytes(sl.retainedBytes)}</div>
+            </div>
+          )
+        })}
+      </Card>
+    )}
+    <Card title="Other replication slots" footer="Slot inventory from the primary’s instance manager. Physical slot associations use CloudNativePG’s naming convention.">
       {others.length === 0 ? (
-        <div className="text-sm text-theme-text-tertiary">None: every slot on the primary belongs to one of this cluster's standbys.</div>
+        <div className="text-sm text-theme-text-tertiary">{primary.status.slots.length === 0 ? primary.status.slotsTruncated ? 'No slots in the reported inventory; inventory incomplete' : `No replication slots on ${primary.pod}` : primary.status.slots.length === 1 ? `The ${primary.status.slotsTruncated ? 'one reported' : 'only'} slot belongs to a standby` : `All ${primary.status.slots.length}${primary.status.slotsTruncated ? ' reported' : ''} slots belong to standbys`}</div>
       ) : (
         <table className="w-full text-sm">
           <thead className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">
@@ -172,10 +196,10 @@ function OtherSlots({ primary, instances, clusterObject }: { primary?: CNPGRunti
           <tbody className="table-divide-subtle">
             {others.map((sl) => (
               <tr key={sl.name}>
-                <td className="py-1.5 pr-3 font-mono text-xs">{sl.name}</td>
+                <td className="py-1.5 pr-3 font-mono text-xs">{sl.name}{sl.type === 'physical' && <div className="font-sans text-theme-text-tertiary">association unverified</div>}</td>
                 <td className="pr-3">{sl.type ?? '—'}</td>
                 <td className="pr-3 font-mono text-xs">{sl.database ?? '—'}</td>
-                <td className={clsx('pr-3', sl.active === false && toneTextClass('degraded'))}>{sl.active === undefined ? '—' : sl.active ? 'active' : 'inactive'}</td>
+                <td className={clsx('pr-3', sl.active === false && toneTextClass('degraded'))}>{sl.active === undefined ? 'state unknown' : sl.active ? 'active' : 'inactive'}</td>
                 <td className="pr-3">{sl.walStatus ?? '—'}</td>
                 <td className="text-right font-mono">{formatBytes(sl.retainedBytes)}</td>
               </tr>
@@ -184,5 +208,6 @@ function OtherSlots({ primary, instances, clusterObject }: { primary?: CNPGRunti
         </table>
       )}
     </Card>
+    </>
   )
 }

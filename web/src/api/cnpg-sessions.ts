@@ -43,8 +43,9 @@ export interface CNPGSessionsResponse {
   role?: string
   sampledAt: string
   permission: { exec: 'allowed' | 'denied' | 'unknown'; grant?: Grant }
-  state: CNPGRuntimeSourceState
+  state: CNPGRuntimeSourceState | 'unavailable'
   error?: string
+  reason?: string
   capturedAt?: string
   serverTime?: string
   maxConnections?: number

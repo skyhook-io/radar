@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { CNPGOperatorConditions } from './CNPGOperatorConditions'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 it('starts folded and keeps every condition field, including unknown status and exact transition', () => {
+  vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T13:34:56Z'))
   const host = document.createElement('div')
   const root = createRoot(host)
   act(() => root.render(<CNPGOperatorConditions conditions={[
@@ -19,8 +20,18 @@ it('starts folded and keeps every condition field, including unknown status and 
   expect(button.getAttribute('aria-expanded')).toBe('false')
   act(() => button.click())
   expect(button.getAttribute('aria-expanded')).toBe('true')
-  for (const text of ['Ready', 'False', 'Waiting', 'Waiting for the primary', '2026-10-04T12:34:56Z', 'ContinuousArchiving', 'Unknown', 'Checking', 'Archive not checked yet', 'Last transition: Not reported']) expect(host.textContent).toContain(text)
+  for (const text of ['Ready', 'False', 'Waiting', 'Waiting for the primary', '1h ago', 'ContinuousArchiving', 'Unknown', 'Checking', 'Archive not checked yet', 'Last transition: Not reported']) expect(host.textContent).toContain(text)
   expect(host.querySelector('time')?.getAttribute('datetime')).toBe('2026-10-04T12:34:56Z')
+  const badge = [...host.querySelectorAll('.badge-sm')].find((b) => b.textContent === 'False')
+  expect(badge).toBeDefined()
+  expect(badge?.className).not.toMatch(/success|warning|error/)
+  expect(badge?.className).toContain('bg-theme-hover/50 text-theme-text-secondary border-theme-border')
+  expect(badge?.className).not.toMatch(/emerald|amber|orange|red|sky-/)
+  const time = host.querySelector('time')!
+  act(() => time.parentElement!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })))
+  act(() => vi.advanceTimersByTime(1000))
+  expect(document.body.textContent).toContain('2026-10-04T12:34:56Z')
+  vi.useRealTimers()
   act(() => root.unmount())
 })
 

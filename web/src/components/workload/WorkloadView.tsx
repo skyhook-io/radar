@@ -341,6 +341,7 @@ interface WorkloadViewProps {
   titlePrefix?: ReactNode
   inlineBadges?: boolean
   namespaceNote?: ReactNode
+  renderStatusBadge?: (resource: any) => ReactNode
   statusNote?: ReactNode
   onRefresh?: () => Promise<unknown>
   hideKindBadge?: boolean

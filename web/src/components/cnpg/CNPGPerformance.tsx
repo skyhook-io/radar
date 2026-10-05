@@ -7,7 +7,7 @@ import { useCNPGSessions, type CNPGSessionsResponse } from '../../api/cnpg-sessi
 import { useCNPGClusterHistory } from '../../api/cnpg-history'
 import { CNPGBlockingSessions } from './CNPGBlockingSessions'
 import { cnpgConnectionFigure } from './blocking'
-import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgIdAge, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgSessionsCardShowsConnections, cnpgTransactionRates, type CNPGTransactionRates } from './runtimeModel'
+import { cnpgRuntimeMeasured, cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgIdAge, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgSessionsCardShowsConnections, cnpgTransactionRates, type CNPGTransactionRates } from './runtimeModel'
 import { formatBytes } from './lsn'
 import { historyLatest, latestRate } from './trendSamples'
 import { CNPGTrends, useSampleBuffer, type CNPGChartGroup, type CNPGIntervalTarget, type Sample } from './CNPGTrends'
@@ -107,7 +107,7 @@ export function CNPGPerformance({
         <Segments label="Performance section" value={section} onChange={setSection} options={SECTIONS} />
         {section !== 'history' && (
           <span className="text-xs text-theme-text-tertiary">
-            {denied ? 'Live instance data needs access you do not have' : `Live from each instance · sampled ${formatAge(data.sampledAt)} ago`}
+            {denied ? 'Live instance data needs access you do not have' : cnpgRuntimeMeasured(data.instances, 'metrics') ? `Live instance data · sampled ${formatAge(data.sampledAt)} ago` : `No instance data yet; checked ${formatAge(data.sampledAt)} ago`}
           </span>
         )}
       </div>
@@ -117,7 +117,7 @@ export function CNPGPerformance({
         (denied ? (
           <>
             {picker}
-            <ProxyDenied what="Session counts by state, lock waits and connection headroom" grant={grant} />
+            <Card title={picked ? `Sessions on ${picked.pod}` : 'Sessions'}><ProxyDenied what="Session counts by state, lock waits and connection headroom" grant={grant} /></Card>
             <CNPGBlockingSessions namespace={namespace} cluster={name} pod={picked?.pod} aggregatesGap={`they need ${grant}`} />
           </>
         ) : (

@@ -183,3 +183,14 @@ export function cnpgNoStandbyText(desired: unknown): string {
   const expected = desired - 1
   return `No standby is running: spec.instances is ${desired}, so ${expected === 1 ? 'one standby is' : `${expected} standbys are`} expected. Nothing to fail over to until one joins.`
 }
+
+export function cnpgRuntimeMeasured(instances: CNPGRuntimeInstance[], source: 'status' | 'metrics'): boolean {
+  return instances.some((instance) => {
+    const report = instance[source]
+    if (report.state !== 'ok' && report.state !== 'partial') return false
+    if (source === 'status') return instance.status.currentLsn !== undefined || instance.status.replayLsn !== undefined || instance.status.timeline !== undefined || instance.status.slots != null
+    return Object.values(instance.metrics).some((value) => typeof value === 'number')
+      || !!instance.metrics.databases?.length || !!instance.metrics.sessions?.length
+      || !!instance.metrics.databaseSizes?.length || instance.metrics.extensionUpdates != null || instance.metrics.checkpoints !== undefined
+  })
+}

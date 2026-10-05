@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -59,20 +60,22 @@ var (
 )
 
 type CNPGClusterHAResponse struct {
-	Cluster       CNPGRuntimeObjectRef `json:"cluster"`
-	SampledAt     string               `json:"sampledAt"`
-	DesiredImage  string               `json:"desiredImage,omitempty"`
-	Instances     []CNPGHAInstance     `json:"instances"`
-	Pods          ReadSource           `json:"pods"`
-	Nodes         ReadSource           `json:"nodes"`
-	Quorum        CNPGHAQuorum         `json:"quorum"`
-	PDBs          CNPGHAPDBs           `json:"pdbs"`
-	PrimaryLease  CNPGHALease          `json:"primaryLease"`
-	OperatorLease CNPGHALease          `json:"operatorLease"`
-	Jobs          CNPGHAJobs           `json:"jobs"`
-	RWEndpoints   CNPGHAEndpoints      `json:"rwEndpoints"`
-	Certificates  []CNPGHACertificate  `json:"certificates"`
-	Maintenance   CNPGMaintenanceFacts `json:"maintenance"`
+	Cluster           CNPGRuntimeObjectRef `json:"cluster"`
+	SampledAt         string               `json:"sampledAt"`
+	DesiredImage      string               `json:"desiredImage,omitempty"`
+	DeclaredInstances *int64               `json:"declaredInstances,omitempty"`
+	ExpectedInstances []string             `json:"expectedInstances"`
+	Instances         []CNPGHAInstance     `json:"instances"`
+	Pods              ReadSource           `json:"pods"`
+	Nodes             ReadSource           `json:"nodes"`
+	Quorum            CNPGHAQuorum         `json:"quorum"`
+	PDBs              CNPGHAPDBs           `json:"pdbs"`
+	PrimaryLease      CNPGHALease          `json:"primaryLease"`
+	OperatorLease     CNPGHALease          `json:"operatorLease"`
+	Jobs              CNPGHAJobs           `json:"jobs"`
+	RWEndpoints       CNPGHAEndpoints      `json:"rwEndpoints"`
+	Certificates      []CNPGHACertificate  `json:"certificates"`
+	Maintenance       CNPGMaintenanceFacts `json:"maintenance"`
 }
 
 // CNPGHAInstance is one instance Pod. Zone is empty when the Node is not
@@ -160,7 +163,7 @@ type CNPGHAJobs struct {
 	Items []CNPGHAJob `json:"items"`
 }
 
-// CNPGHAJob Phase: running | succeeded | failed | pending.
+// CNPGHAJob Phase: active | succeeded | failed | pending.
 type CNPGHAJob struct {
 	Name           string `json:"name"`
 	Role           string `json:"role,omitempty"`
@@ -257,6 +260,11 @@ func (s *Server) cnpgClusterHA(r *http.Request, c cnpgHAClients, cache *k8s.Reso
 		Maintenance:  cnpgMaintenanceFactsOf(cluster),
 	}
 
+	if n, found, _ := unstructured.NestedInt64(cluster.Object, "spec", "instances"); found {
+		resp.DeclaredInstances = &n
+	}
+	resp.ExpectedInstances = append([]string{}, cnpgStatusStrings(cluster, "instanceNames")...)
+
 	var pods []*corev1.Pod
 	if s.canRead(r, "", "pods", namespace, "list") {
 		var err error
@@ -277,6 +285,13 @@ func (s *Server) cnpgClusterHA(r *http.Request, c cnpgHAClients, cache *k8s.Reso
 	resp.PrimaryLease = s.cnpgHAPrimaryLease(ctx, r, c, cluster, now)
 	resp.OperatorLease = s.cnpgHAOperatorLease(ctx, r, c, cache, now)
 	resp.Jobs = s.cnpgHAJobs(r, cache, cluster)
+	for _, job := range resp.Jobs.Items {
+		if job.Instance != "" && (job.Role == "join" || job.Role == "initdb") && (job.Phase == "active" || job.Phase == "pending") {
+			resp.ExpectedInstances = append(resp.ExpectedInstances, job.Instance)
+		}
+	}
+	slices.Sort(resp.ExpectedInstances)
+	resp.ExpectedInstances = slices.Compact(resp.ExpectedInstances)
 	resp.RWEndpoints = s.cnpgHARWEndpoints(ctx, r, c, cluster)
 	resp.Certificates = s.cnpgHACertificates(ctx, r, c, cluster)
 	return resp
@@ -649,11 +664,15 @@ func (s *Server) cnpgHAJobs(r *http.Request, cache *k8s.ResourceCache, cluster *
 		return out
 	}
 	out.ReadSource = ReadSource{State: cnpgHAStateOK}
+	var jobPods []*corev1.Pod
+	if s.canRead(r, "", "pods", namespace, "list") && cache.Pods() != nil && cache.IsKindReady("pods") && !namespacesWithinCache(cache, "pods", []string{namespace}).unavailable {
+		jobPods, _ = cache.Pods().Pods(namespace).List(labels.Everything())
+	}
 	for _, j := range list {
 		if !cnpgControlledBy(j.OwnerReferences, cnpgGroup, "Cluster", cluster.GetName(), cluster.GetUID()) {
 			continue
 		}
-		out.Items = append(out.Items, cnpgHAJobOf(j))
+		out.Items = append(out.Items, cnpgHAJobOf(j, jobPods...))
 	}
 	sort.Slice(out.Items, func(i, j int) bool {
 		if out.Items[i].StartTime != out.Items[j].StartTime {
@@ -664,7 +683,7 @@ func (s *Server) cnpgHAJobs(r *http.Request, cache *k8s.ResourceCache, cluster *
 	return out
 }
 
-func cnpgHAJobOf(j *batchv1.Job) CNPGHAJob {
+func cnpgHAJobOf(j *batchv1.Job, pods ...*corev1.Pod) CNPGHAJob {
 	item := CNPGHAJob{Name: j.Name, Role: j.Labels[cnpgJobRoleLabel], Instance: j.Labels["cnpg.io/instanceName"], Phase: "pending"}
 	if j.Status.StartTime != nil {
 		item.StartTime = j.Status.StartTime.UTC().Format(time.RFC3339)
@@ -687,7 +706,27 @@ func cnpgHAJobOf(j *batchv1.Job) CNPGHAJob {
 		}
 	}
 	if j.Status.Active > 0 {
-		item.Phase = "running"
+		item.Phase = "active"
+		var schedulerReason string
+		for _, pod := range pods {
+			if pod.DeletionTimestamp != nil || !cnpgControlledBy(pod.OwnerReferences, "batch", "Job", j.Name, j.UID) {
+				continue
+			}
+			if pod.Status.Phase == corev1.PodRunning {
+				return item
+			}
+			if pod.Status.Phase != corev1.PodPending {
+				continue
+			}
+			for _, condition := range pod.Status.Conditions {
+				if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse && condition.Reason == corev1.PodReasonUnschedulable {
+					schedulerReason = "Pod cannot be scheduled: " + condition.Reason + ": " + condition.Message
+				}
+			}
+		}
+		if schedulerReason != "" {
+			item.Phase, item.Reason = "pending", schedulerReason
+		}
 	}
 	return item
 }

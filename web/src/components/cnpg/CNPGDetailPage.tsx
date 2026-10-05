@@ -3,7 +3,8 @@ import { useQueryClient } from '@tanstack/react-query'
 import { refetchCNPGDetail } from './refresh'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Activity, Database, Gauge, HardDrive, Network, Settings2, ShieldCheck, Unplug } from 'lucide-react'
-import { CNPG_GROUP, refToSelectedResource, Tooltip, type WorkloadExtraTab } from '@skyhook-io/k8s-ui'
+import { CNPG_GROUP, refToSelectedResource, Tooltip, Badge, type WorkloadExtraTab } from '@skyhook-io/k8s-ui'
+import { getCNPGClusterDisplayState } from '@skyhook-io/k8s-ui/components/resources/resource-utils-cnpg'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
 import { useContexts, useRadarFeature } from '../../api/client'
@@ -219,6 +220,14 @@ export function CNPGDetailPage({
           onRefresh={cnpgWorkspace ? refresh : undefined}
           extraTabs={extraTabs}
           tabOrder={isCluster ? CNPG_CLUSTER_TAB_ORDER : undefined}
+          renderStatusBadge={isCluster ? (resource) => (
+            <Tooltip content={resource?.status?.phase ? `status.phase, reported by CloudNativePG: ${resource.status.phase}` : 'CloudNativePG has not reported status.phase'}>
+              <Badge severity="neutral">
+                <span className="mr-1 font-normal text-theme-text-tertiary">Phase</span>
+                {resource?.status?.phase ? getCNPGClusterDisplayState(resource.status.phase) : 'Not reported'}
+              </Badge>
+            </Tooltip>
+          ) : undefined}
           statusNote={isCluster ? <CNPGClusterServing namespace={target.namespace} name={target.name} onSelect={() => goTab(cnpgDimensionTab('serving'))} /> : undefined}
           specTab={
             isCluster

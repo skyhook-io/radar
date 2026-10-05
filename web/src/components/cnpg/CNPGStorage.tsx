@@ -217,14 +217,14 @@ function VolumeRow({ v, stated, wal }: { v: CNPGStorageVolume; stated: StatedOnc
 }
 
 function WALHolders({ wal, primary, slotStandby }: { wal: CNPGStorageWAL; primary: boolean; slotStandby: (slot: string) => string | undefined }) {
-  if (wal.status.state !== 'ok' && wal.metrics.state !== 'ok') {
+  if (!['ok', 'partial'].includes(wal.status.state) && !['ok', 'partial'].includes(wal.metrics.state)) {
     return (
       <div className="text-xs text-theme-text-tertiary">
         WAL facts unavailable: {wal.status.error || wal.metrics.error || wal.status.state}
       </div>
     )
   }
-  const slots = wal.slots ?? []
+  const slots = wal.slotInventory ?? []
   return (
     <div>
       <div className="grid gap-3 sm:grid-cols-3">
@@ -253,19 +253,18 @@ function WALHolders({ wal, primary, slotStandby }: { wal: CNPGStorageWAL; primar
         />
         <WALFact
           label="Held by replication slots"
-          value={wal.metrics.state !== 'ok' ? '—' : cnpgSlotRetentionText(slots)}
+          value={cnpgSlotRetentionText(wal.slotInventory, !wal.slotInventoryTruncated, wal.slots)}
           detail={
             slots.length > 0
               ? slots
                   .map((s) => {
-                    const standby = slotStandby(s.slot)
-                    return `${s.slot} ${formatBytes(s.bytes)}${standby ? ` (for ${standby})` : ''}`
+                    const standby = slotStandby(s.name)
+                    return `${s.name} ${s.retainedBytes === undefined ? 'retained WAL not reported' : formatBytes(s.retainedBytes)}${standby ? ` (for ${standby})` : ''}`
                   })
                   .join(' · ')
-              : undefined
+              : wal.slots?.map((s) => `${s.slot} ${formatBytes(s.bytes)} retained WAL`).join(' · ')
           }
-          source="Exporter pg_replication_slots"
-          missing={wal.metrics.state !== 'ok' ? wal.metrics.error || wal.metrics.reason || wal.metrics.state : undefined}
+          source="Instance manager slot inventory · exporter retained WAL"
         />
       </div>
       <div className="mt-2 text-[11.5px] text-theme-text-tertiary">
@@ -404,13 +403,13 @@ export function CNPGStorage({ namespace, name, primary, runtime, clusterObject }
           key={f.claim}
           variant={f.severity === 'critical' ? 'error' : 'warning'}
           title={f.message}
-          message={`Claim ${f.claim}; measured from ${CNPG_DISK_SOURCE}. Expand the volume below, or find what is growing (WAL held for the archive or by a slot is shown per instance).`}
+          message={`Claim ${f.claim}; measured from ${CNPG_DISK_SOURCE}. Check volume expansion below, or find what is growing (WAL held for the archive or by a slot is shown per instance).`}
         />
       ))}
       {notes.length > 0 && (
         <Notice>
           {notes.map((n) => (
-            <div key={n}>{n}</div>
+            <div key={n} className="whitespace-pre-line">{n}</div>
           ))}
         </Notice>
       )}
@@ -465,13 +464,16 @@ function targetVolumes(t: CNPGStorageTarget, volumes: CNPGStorageVolume[]): CNPG
 
 function expansionVerdict(vols: CNPGStorageVolume[]): { text: string; tone?: 'degraded' } {
   if (vols.length === 0) return { text: 'No claims read, so whether the class allows expansion is unknown' }
-  const known = vols.filter((v) => v.storageClass.allowVolumeExpansion !== undefined)
-  if (known.length < vols.length) return { text: 'Whether the class allows expansion is unknown for some claims' }
-  if (known.every((v) => v.storageClass.allowVolumeExpansion)) return { text: 'The StorageClass allows expansion: the operator resizes each claim' }
-  return {
-    text: 'The StorageClass does not allow expansion: a larger size will not resize the existing claims. To get more space, restore into a new Cluster declared with a larger size or a class that expands (Backups → Restore to a new cluster), then move applications to it.',
+  const blocked = vols.filter((v) => v.storageClass.allowVolumeExpansion === false)
+  if (blocked.length > 0) return {
+    text: blocked.length === vols.length
+      ? 'The StorageClass does not allow expansion: a larger size will not resize the existing claims. To get more space, restore into a new Cluster with a larger size or a class that expands, then move applications to it.'
+      : 'Some StorageClasses do not allow expansion: their existing claims will not grow. Editing changes the declared size.',
     tone: 'degraded',
   }
+  const known = vols.filter((v) => v.storageClass.allowVolumeExpansion !== undefined)
+  if (known.length < vols.length) return { text: 'Whether the class allows expansion is unknown for some claims' }
+  return { text: 'The StorageClass allows expansion: the operator can resize each claim' }
 }
 
 function ExpansionCard({ data, volumes, onResize, canResize, resizeReason, grant, onRetry }: { data: CNPGClusterStorageResponse; volumes: CNPGStorageVolume[]; onResize: (t: CNPGStorageTarget) => void; canResize: boolean; resizeReason?: string; grant?: Grant; onRetry: () => void }) {
@@ -481,13 +483,13 @@ function ExpansionCard({ data, volumes, onResize, canResize, resizeReason, grant
       title={
         <span className="flex items-center gap-2">
           <HardDrive className="h-4 w-4" />
-          Expanding volumes
+          Declared volume sizes
         </span>
       }
       footer={
         inUse === false
           ? 'spec.storage.resizeInUseVolumes is false: the operator does not resize claims while their Pod uses them. See the CloudNativePG volume expansion documentation for the offline procedure.'
-          : 'Sizes are declared on the Cluster and the operator applies them to every instance. CloudNativePG does not shrink volumes.'
+          : 'Editing changes the Cluster’s declared size. Existing claims can grow only if their StorageClass allows expansion. CloudNativePG does not shrink volumes.'
       }
     >
       {!canResize && <div className="mb-3 text-xs text-theme-text-secondary">
@@ -512,7 +514,7 @@ function ExpansionCard({ data, volumes, onResize, canResize, resizeReason, grant
                 onClick={() => onResize(t)}
                 className="btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium"
               >
-                Edit size…
+                {verdict.tone === 'degraded' ? targetVolumes(t, volumes).every((v) => v.storageClass.allowVolumeExpansion === false) ? 'Edit declared size — existing volumes unchanged' : 'Edit declared size…' : 'Edit size…'}
               </button>
             </div>
           )
@@ -544,7 +546,7 @@ function ResizeDialog({
   const verdict = expansionVerdict(targetVolumes(target, volumes))
 
   if (manifest) {
-    return <CreateResourceDialog open onClose={onClose} initialYaml={manifest} initialMode="apply" title={`Resize ${roleTitle(target).toLowerCase()} volumes of ${name}`} />
+    return <CreateResourceDialog open onClose={onClose} initialYaml={manifest} initialMode="apply" title={`Edit declared ${roleTitle(target).toLowerCase()} size of ${name}`} />
   }
   const next = parseQuantityToNumber(size)
   const current = parseQuantityToNumber(target.declared)
@@ -567,7 +569,7 @@ function ResizeDialog({
             yaml.stringify(buildResizeManifest(cluster, target, size.trim())),
         )
       }}
-      title={`Resize ${cnpgVolumeRoleLabel(target.role, target.tablespace)}s of ${name}?`}
+      title={`Edit declared ${cnpgVolumeRoleLabel(target.role, target.tablespace)} size of ${name}?`}
       subject={{ kind: 'Cluster', namespace, name }}
       effect={
         <>

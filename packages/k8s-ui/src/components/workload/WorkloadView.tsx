@@ -155,6 +155,8 @@ interface WorkloadViewProps {
   inlineBadges?: boolean
   /** A note right after the namespace, e.g. that it is outside the namespace filter. */
   namespaceNote?: ReactNode
+  /** Replaces the derived status badge on the title line, e.g. with the controller's own reported phase. */
+  renderStatusBadge?: (resource: any) => ReactNode
   /** A short status right after the controller status on the title line, e.g. a derived health verdict. */
   statusNote?: ReactNode
   /** Leave out the kind badge, for a host whose title prefix already names the kind. */
@@ -432,6 +434,7 @@ export function WorkloadView({
   titlePrefix,
   inlineBadges = false,
   namespaceNote,
+  renderStatusBadge,
   statusNote,
   hideKindBadge = false,
   hideBackButton,
@@ -898,7 +901,7 @@ export function WorkloadView({
               <span className={clsx('badge', getKindColorOutline(apiKind))}>
                 {displayKindName(apiKind, resource?.kind)}
               </span>
-              {status && (
+              {renderStatusBadge ? renderStatusBadge(resource) : status && (
                 <span className={clsx('badge', status.color)}>
                   {status.text}
                 </span>
@@ -1121,7 +1124,7 @@ export function WorkloadView({
                 {displayKindName(apiKind, resource?.kind)}
               </span>
             )}
-            {status && (
+            {renderStatusBadge ? renderStatusBadge(resource) : status && (
               <span className={clsx('badge whitespace-nowrap', status.color)}>
                 {status.text}
               </span>

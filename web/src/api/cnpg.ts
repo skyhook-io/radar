@@ -394,6 +394,7 @@ export interface CNPGRuntimeInstance {
     archiving?: { lastArchivedWal?: string; lastArchivedAt?: string; lastFailedWal?: string; lastFailedAt?: string; readyWalFiles?: number }
     replication?: CNPGRuntimeReplication[] | null
     slots?: null | { name: string; type?: string; plugin?: string; active?: boolean; database?: string; restartLsn?: string; walStatus?: string; retainedBytes?: number }[]
+    slotsTruncated?: boolean
     /** pg_basebackup streams to joining instances; [] when the report says none run. */
     baseBackups?: CNPGRuntimeBaseBackup[] | null
     /**

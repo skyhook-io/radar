@@ -33,7 +33,7 @@ export function ProxyDenied({ what, grant }: { what: string; grant: string }) {
         No access to live instance data
       </div>
       <p className="mt-2 text-sm text-theme-text-secondary">
-        {what} are read from each instance through the Kubernetes API proxy, which your identity may not use. Nothing is shown as zero; it is omitted.
+        {what} are read from each instance through the Kubernetes API proxy, which your identity may not use. These readings are unavailable.
       </p>
       <pre className="mt-2 rounded-md bg-theme-elevated px-3 py-2 font-mono text-xs text-theme-text-primary">{`requires: ${grant}`}</pre>
     </div>

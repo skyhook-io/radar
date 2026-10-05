@@ -50,3 +50,16 @@ it('does not flag deliberately absent read-write endpoints while hibernated', ()
   expect(html).toContain('None expected while hibernated')
   expect(html).not.toContain('No ready endpoints')
 })
+
+it('shows the desired image without claiming any instance runs it', () => {
+  const html = renderToStaticMarkup(<CNPGClusterHASection ha={noInstances} />)
+  expect(html).toContain('Desired image pg:17; no instance running')
+  expect(html).not.toContain('every instance runs it')
+})
+
+it('describes matching Pod images without claiming the Pods are running', () => {
+  const ha: CNPGClusterHA = { ...noInstances, instances: [{ pod: 'pg-1', podUID: 'p1', role: 'primary', ready: false, restartCount: 0, image: 'pg:17', imageMatches: true }] }
+  const html = renderToStaticMarkup(<CNPGClusterHASection ha={ha} />)
+  expect(html).toContain('observed Pod images match')
+  expect(html).not.toContain('instances run it')
+})

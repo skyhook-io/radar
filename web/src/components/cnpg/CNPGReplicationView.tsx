@@ -151,12 +151,12 @@ export function CNPGReplicationView({
     <Card
       title="Instances and replication"
       footer={
-        <>
+        primary?.status.currentLsn || replicas.some((r) => r.status.currentLsn || r.status.replayLsn) ? <>
           Rows come from the primary’s pg_stat_replication through the instance manager. Replay backlog is the primary’s current WAL position minus what the
           standby has replayed, in bytes: the catch-up measure. A standby that isn't connected has no row, so its backlog uses the position it reports itself — only on
           the same timeline, since positions on different timelines aren't comparable.
           Write, flush and replay delay are PostgreSQL’s acknowledgement delay for recent WAL; empty when idle and caught up.
-        </>
+        </> : 'Source: instance manager status and the primary’s pg_stat_replication.'
       }
     >
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(220px,300px)_minmax(0,1fr)]">

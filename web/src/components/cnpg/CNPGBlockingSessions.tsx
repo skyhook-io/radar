@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { useQueries } from '@tanstack/react-query'
+import { useLocation } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { Lock } from 'lucide-react'
 import { ActionConfirmDialog, PaneLoader, Tooltip, formatAge, toneFillClass, toneTextClass, formatGrant } from '@skyhook-io/k8s-ui'
@@ -11,6 +12,8 @@ import { useCNPGSessions, type CNPGBackend, type CNPGSessionInstance, type CNPGS
 import { useToast } from '../ui/Toast'
 import { buildBlockingTree, cnpgConnectionFigure, cnpgNoMetricsReadings, countVictims, type BlockingNode } from './blocking'
 import { RefreshFailedNotice } from '../workspace/layout'
+import { useCNPGNavigate } from './useCNPGNavigate'
+import { cnpgClusterProblemsPath, cnpgWithinDetail } from './paths'
 
 function age(s?: number): string {
   if (s === undefined || s === null) return '—'
@@ -58,8 +61,8 @@ export function CNPGBlockingSessions({
         {data && <Body namespace={namespace} cluster={cluster} data={data} aggregatesGap={aggregatesGap} headroom={headroom} />}
       </div>
       <div className="border-t border-theme-border px-4 py-2 text-xs text-theme-text-tertiary">
-        Read with a fixed query (pg_stat_activity, pg_blocking_pids) run by psql in the instance through your own pods/exec. Query text is shown because that same access
-        lets you open psql and read it yourself; it is cut at 200 characters.
+        Source: pg_stat_activity and pg_blocking_pids over pods/exec.
+        {data?.state === 'ok' && !!data.sessions?.length && <> Query text is cut at 200 characters.</>}
       </div>
     </section>
   )
@@ -78,6 +81,11 @@ function Body({
   aggregatesGap?: string
   headroom: boolean
 }) {
+  const navigate = useCNPGNavigate()
+  const location = useLocation()
+  const overviewPath = `${cnpgClusterProblemsPath(namespace, cluster, new URLSearchParams(location.search).get('ctx') ?? undefined)}&tab=overview`
+  const inPlace = cnpgWithinDetail(location.pathname, location.search, overviewPath)
+  if (data.state === 'unavailable') return <div className="text-sm text-theme-text-tertiary">Available once the primary is running. <button type="button" className="text-accent-text hover:underline" onClick={() => navigate(inPlace ?? overviewPath, { replace: !!inPlace, state: location.state })}>See Overview →</button></div>
   if (data.state === 'denied') {
     return (
       <div className="rounded-lg border border-dashed border-theme-border p-4">
@@ -185,17 +193,16 @@ function InstanceResources({ namespace, inst }: { namespace: string; inst: CNPGS
     const cpu = usage(parseCPUToNanocores(c.usage.cpu), inst.cpuLimit ? parseCPUToNanocores(inst.cpuLimit) : undefined)
     const mem = usage(parseMemoryToBytes(c.usage.memory), inst.memoryLimit ? parseMemoryToBytes(inst.memoryLimit) : undefined)
     body = (
-      <span className="font-mono text-xs">
-        <span className={cpu.tone && toneTextClass(cpu.tone)}>
-          CPU {formatCPUString(c.usage.cpu)}
-          {inst.cpuLimit ? ` / ${formatCPUString(inst.cpuLimit)}` : ' (no limit)'}
-        </span>
-        {' · '}
-        <span className={mem.tone && toneTextClass(mem.tone)}>
-          mem {formatMemoryString(c.usage.memory)}
-          {inst.memoryLimit ? ` / ${formatMemoryString(inst.memoryLimit)}` : ' (no limit)'}
-        </span>
-      </span>
+      <div className="space-y-0.5 font-mono text-xs">
+        <div className={cpu.tone && toneTextClass(cpu.tone)}>
+          CPU <span className="whitespace-nowrap">{formatCPUString(c.usage.cpu)}</span>
+           · {inst.cpuLimit ? <>limit <span className="whitespace-nowrap">{formatCPUString(inst.cpuLimit)}</span></> : 'no limit'}
+        </div>
+        <div className={mem.tone && toneTextClass(mem.tone)}>
+          Memory <span className="whitespace-nowrap">{formatMemoryString(c.usage.memory)}</span>
+           · {inst.memoryLimit ? <>limit <span className="whitespace-nowrap">{formatMemoryString(inst.memoryLimit)}</span></> : 'no limit'}
+        </div>
+      </div>
     )
   }
   return (

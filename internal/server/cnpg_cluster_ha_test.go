@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -194,12 +195,18 @@ func cnpgHAClientsFor(t *testing.T, now time.Time) cnpgHAClients {
 func TestCNPGClusterHA_ReadsEveryFact(t *testing.T) {
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	cluster := seedCNPGHAFixture(t, now)
+	if err := unstructured.SetNestedStringSlice(cluster.Object, []string{"pg-ha-1", "pg-ha-2", "pg-ha-3"}, "status", "instanceNames"); err != nil {
+		t.Fatal(err)
+	}
 	srv := &Server{}
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	got := srv.cnpgClusterHA(r, cnpgHAClientsFor(t, now), k8s.GetResourceCache(), cluster, now)
 
 	if got.DesiredImage != "pg:17.2" || len(got.Instances) != 3 {
 		t.Fatalf("instances = %+v", got.Instances)
+	}
+	if got.DeclaredInstances == nil || *got.DeclaredInstances != 3 || !slices.Contains(got.ExpectedInstances, "pg-ha-1") {
+		t.Fatalf("declared/expected instances: %+v %+v", got.DeclaredInstances, got.ExpectedInstances)
 	}
 	inst := map[string]CNPGHAInstance{}
 	for _, i := range got.Instances {
@@ -382,5 +389,57 @@ func TestCNPGUncachedReasonSaysWhatIsUnknownAndWhy(t *testing.T) {
 	}
 	if got := cnpgUncachedReason("Zones", "Nodes", "", false, false, true); got != "" {
 		t.Errorf("cached = %q", got)
+	}
+}
+
+func TestCNPGHAJobSchedulerEvidence(t *testing.T) {
+	job := cnpgJob("db", "analytics-1-initdb", "job-uid", clusterRef("analytics", "cluster-uid"))
+	job.Status.Active = 1
+	pod := cnpgJobPod("db", "analytics-1-initdb-abc", "analytics", jobRef(job.Name, string(job.UID)))
+	got := cnpgHAJobOf(job, pod)
+	if got.Phase != "pending" || !strings.Contains(got.Reason, "Pod cannot be scheduled: Unschedulable: 0/2 nodes") {
+		t.Fatalf("job = %+v", got)
+	}
+	if got := cnpgHAJobOf(job); got.Phase != "active" {
+		t.Fatalf("without Pod access: %+v", got)
+	}
+	pod.OwnerReferences[0].UID = "previous-job"
+	if got := cnpgHAJobOf(job, pod); got.Phase != "active" {
+		t.Fatalf("stale Job Pod adopted: %+v", got)
+	}
+	pod.OwnerReferences[0] = jobRef(job.Name, string(job.UID))
+	pod.Status.Phase = corev1.PodRunning
+	if got := cnpgHAJobOf(job, pod); got.Phase != "active" {
+		t.Fatalf("active Job: %+v", got)
+	}
+	pending := pod.DeepCopy()
+	pending.Status.Phase = corev1.PodPending
+	for _, pods := range [][]*corev1.Pod{{pending, pod}, {pod, pending}} {
+		if got := cnpgHAJobOf(job, pods...); got.Phase != "active" {
+			t.Fatalf("Job with a running Pod: %+v", got)
+		}
+	}
+}
+
+func TestCNPGClusterHA_ExpectedJobInstancesAreOwnedAndInProgress(t *testing.T) {
+	now := time.Now()
+	cluster := cnpgHACluster(now)
+	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds, cluster)
+	active := cnpgJob(cnpgHATestNS, "pg-ha-4-join", "active-job", cnpgHAOwner("ha-uid"))
+	active.Labels[cnpgJobRoleLabel], active.Labels["cnpg.io/instanceName"] = "join", "pg-ha-4"
+	active.Status.Active = 1
+	failed := active.DeepCopy()
+	failed.Name, failed.UID = "pg-ha-5-join", "failed-job"
+	failed.Labels["cnpg.io/instanceName"] = "pg-ha-5"
+	failed.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue}}
+	foreign := active.DeepCopy()
+	foreign.Name, foreign.UID = "pg-ha-6-join", "foreign-job"
+	foreign.Labels["cnpg.io/instanceName"] = "pg-ha-6"
+	foreign.OwnerReferences[0].UID = "previous-cluster"
+	seedCNPGJobs(t, active, failed, foreign)
+	srv := &Server{}
+	got := srv.cnpgClusterHA(httptest.NewRequest(http.MethodGet, "/", nil), cnpgHAClientsFor(t, now), k8s.GetResourceCache(), cluster, now)
+	if len(got.ExpectedInstances) != 1 || got.ExpectedInstances[0] != "pg-ha-4" {
+		t.Fatalf("expected instances must come from current in-progress owned Jobs: %v", got.ExpectedInstances)
 	}
 }

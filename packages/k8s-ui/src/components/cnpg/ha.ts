@@ -74,7 +74,7 @@ export interface CNPGHAJob {
   name: string
   role?: string
   instance?: string
-  phase: 'running' | 'succeeded' | 'failed' | 'pending'
+  phase: 'running' | 'active' | 'succeeded' | 'failed' | 'pending'
   reason?: string
   startTime?: string
   completionTime?: string
@@ -100,6 +100,8 @@ export interface CNPGClusterHA {
   cluster: { namespace: string; name: string; uid: string }
   sampledAt: string
   desiredImage?: string
+  declaredInstances?: number
+  expectedInstances?: string[]
   instances: CNPGHAInstance[]
   pods: CNPGHASource
   nodes: CNPGHASource
@@ -259,8 +261,8 @@ export function cnpgPDBFact(pdbs: CNPGClusterHA['pdbs'] | undefined): Fact {
 }
 
 export function cnpgImageDrift(ha: CNPGClusterHA | undefined): { known: boolean; drifted: CNPGHAInstance[] } {
-  if (!ha || ha.pods.state !== 'ok' || !ha.desiredImage) return { known: false, drifted: [] }
-  return { known: true, drifted: ha.instances.filter((i) => i.imageMatches === false) }
+  if (!ha || ha.pods.state !== 'ok' || !ha.desiredImage || ha.instances.length === 0) return { known: false, drifted: [] }
+  return { known: ha.instances.every((i) => i.imageMatches !== undefined), drifted: ha.instances.filter((i) => i.imageMatches === false) }
 }
 
 export interface CNPGCertificateView extends CNPGHACertificate {
@@ -303,9 +305,14 @@ export function cnpgHASummary(
   const calm: string[] = []
   if (ha.pods.state === 'ok') {
     const ready = ha.instances.filter((i) => i.ready).length
-    if (ha.instances.length === 0) issues.push('no instance Pods')
+    const missing = [...new Set(ha.expectedInstances ?? [])].filter((name) => !ha.instances.some((i) => i.pod === name))
+    if (ha.declaredInstances !== undefined && ready < ha.declaredInstances) {
+      issues.push(`${ready} of ${ha.declaredInstances} declared instances ready${missing.length ? `; no instance Pod observed for ${missing.join(', ')}` : ''}`)
+    } else if (ha.declaredInstances !== undefined && ready > ha.declaredInstances) {
+      issues.push(`${ready} observed instances ready; ${ha.declaredInstances} instances declared`)
+    } else if (ha.instances.length === 0) issues.push('no instance Pods')
     else if (ready < ha.instances.length) issues.push(`${ha.instances.length - ready} of ${ha.instances.length} instances not ready`)
-    else calm.push(`${ready}/${ha.instances.length} instances ready`)
+    else calm.push(ha.declaredInstances !== undefined ? `${ready} of ${ha.declaredInstances} declared instances ready` : `${ready}/${ha.instances.length} observed instances ready`)
   }
   if (primaryConflict) issues.push('primary labels disagree')
   const spread = cnpgZoneSpread(ha)
@@ -315,7 +322,7 @@ export function cnpgHASummary(
   const pending = cnpgPendingRestart(live)
   if (pending.pods.length > 0) issues.push(`restart pending on ${pending.pods.join(', ')}`)
   const drift = cnpgImageDrift(ha)
-  if (drift.drifted.length > 0) issues.push(`${drift.drifted.length === 1 ? 'an instance runs' : `${drift.drifted.length} instances run`} a different image`)
+  if (drift.drifted.length > 0) issues.push(`${drift.drifted.length === 1 ? 'an instance Pod has' : `${drift.drifted.length} instance Pods have`} a different image`)
   else if (drift.known && ha.instances.length > 0 && ha.instances.every((i) => i.imageMatches === true)) calm.push('images match')
   const quorum = cnpgQuorumFact(ha.quorum)
   if (quorum.tone === 'degraded' || quorum.tone === 'unhealthy') issues.push('failover quorum does not hold')

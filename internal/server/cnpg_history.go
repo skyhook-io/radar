@@ -204,14 +204,12 @@ func cnpgPrometheusUnavailable(ctx context.Context) string {
 	return ""
 }
 
-// cnpgNoPrometheusReason is one sentence for why Radar has no Prometheus.
-// Discovery's own failures are already complete sentences ("Radar found 2
-// services that may be Prometheus but …"), so they are not prefixed again.
+// Discovery's own failures are complete diagnoses, so they are not prefixed again.
 func cnpgNoPrometheusReason(msg string) string {
 	switch {
 	case msg == "":
 		return "Radar is not connected to Prometheus"
-	case strings.HasPrefix(msg, "Radar "):
+	case strings.HasPrefix(msg, "Radar "), strings.HasPrefix(msg, "No working Prometheus endpoint found"):
 		return truncateCNPGRuntimeError(msg)
 	}
 	return "Radar is not connected to Prometheus: " + truncateCNPGRuntimeError(msg)

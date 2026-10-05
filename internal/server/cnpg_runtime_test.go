@@ -186,6 +186,26 @@ func TestParseCNPGPgStatus(t *testing.T) {
 	}
 }
 
+func TestCNPGSlotInventoryTruncationIsIndependent(t *testing.T) {
+	for _, cappedFamily := range []string{"replicationInfo", "replicationSlotsInfo", "pgStatBasebackupsInfo"} {
+		rows := make([]map[string]any, cnpgRuntimeMaxRows+1)
+		for i := range rows {
+			rows[i] = map[string]any{"slotName": fmt.Sprintf("slot-%d", i)}
+		}
+		body, err := json.Marshal(map[string]any{"isPrimary": true, cappedFamily: rows})
+		if err != nil {
+			t.Fatal(err)
+		}
+		facts, partial, err := parseCNPGPgStatus(body)
+		if err != nil || partial == "" || facts.SlotsTruncated != (cappedFamily == "replicationSlotsInfo") {
+			t.Fatalf("%s: facts=%+v partial=%q err=%v", cappedFamily, facts, partial, err)
+		}
+		if cappedFamily == "replicationSlotsInfo" && len(facts.Slots) != cnpgRuntimeMaxRows {
+			t.Fatalf("slot cap: %d", len(facts.Slots))
+		}
+	}
+}
+
 func TestCNPGRoleDetail(t *testing.T) {
 	for want, f := range map[string]CNPGInstanceStatusFacts{
 		"primary":      {IsPrimary: true, IsWalReceiverActive: true},

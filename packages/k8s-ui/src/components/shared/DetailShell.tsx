@@ -59,7 +59,17 @@ export function DetailShell<TId extends string = string>({
   children,
 }: DetailShellProps<TId>) {
   const visibleTabs = tabs.filter((t) => !t.hidden)
-  const { stripRef, compact } = useCompactTabs(visibleTabs.map((t) => `${t.id}:${t.label}`).join('|'))
+  const { stripRef, compact } = useCompactTabs(visibleTabs.map((t) => `${t.id}:${t.label}:${!!t.badge}`).join('|'))
+
+  useLayoutEffect(() => {
+    const strip = stripRef.current
+    const active = strip?.querySelector<HTMLElement>('[aria-selected="true"]')
+    if (strip && active) {
+      const left = active.offsetLeft - strip.offsetLeft
+      if (left < strip.scrollLeft) strip.scrollLeft = left
+      else if (left + active.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = left + active.offsetWidth - strip.clientWidth
+    }
+  }, [activeTab, compact])
 
   return (
     <div className="flex flex-col h-full w-full bg-theme-base">
@@ -125,15 +135,35 @@ function useCompactTabs(tabsKey: string) {
   useLayoutEffect(() => {
     const el = stripRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
+    const childWidth = () => [...el.children].reduce((sum, child) => sum + child.getBoundingClientRect().width, 0)
+    let previousWidth = childWidth()
+    let followActive = true
+    const onScroll = () => {
+      const active = el.querySelector<HTMLElement>('[aria-selected="true"]')
+      if (!active) return
+      const left = active.offsetLeft - el.offsetLeft
+      followActive = left >= el.scrollLeft && left + active.offsetWidth <= el.scrollLeft + el.clientWidth
+    }
     const measure = () => {
+      const width = childWidth()
+      if (compact) needed.current += width - previousWidth
+      previousWidth = width
       if (!compact) needed.current = el.scrollWidth
       const next = needed.current > el.clientWidth + 1
       setCompact((prev) => (prev === next ? prev : next))
+      const active = el.querySelector<HTMLElement>('[aria-selected="true"]')
+      if (active && followActive) {
+        const left = active.offsetLeft - el.offsetLeft
+        if (left < el.scrollLeft) el.scrollLeft = left
+        else if (left + active.offsetWidth > el.scrollLeft + el.clientWidth) el.scrollLeft = left + active.offsetWidth - el.clientWidth
+      }
     }
     measure()
     const ro = new ResizeObserver(measure)
     ro.observe(el)
-    return () => ro.disconnect()
+    for (const child of el.children) ro.observe(child)
+    el.addEventListener('scroll', onScroll)
+    return () => { ro.disconnect(); el.removeEventListener('scroll', onScroll) }
   }, [compact, tabsKey])
   return { stripRef, compact }
 }

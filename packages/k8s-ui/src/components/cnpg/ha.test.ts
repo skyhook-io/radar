@@ -3,6 +3,7 @@ import {
   cnpgCertificateViews,
   cnpgCertificatesSummary,
   cnpgHASummary,
+  cnpgImageDrift,
   cnpgDimensions,
   cnpgPDBFact,
   cnpgLeaseHolderPod,
@@ -273,13 +274,13 @@ describe('folded HA and certificates summaries', () => {
 
   it('stays folded with the known facts when nothing is out of line', () => {
     const live = [{ pod: 'pg-1', state: 'ok' }, { pod: 'pg-2', state: 'ok' }] as never
-    expect(cnpgHASummary(ha({ pdbs, operatorLease: { state: 'ok', holder: 'op_1' } }), live)).toEqual({ text: '2/2 instances ready · 2 zones · images match', attention: false })
+    expect(cnpgHASummary(ha({ pdbs, operatorLease: { state: 'ok', holder: 'op_1' } }), live)).toEqual({ text: '2/2 observed instances ready · 2 zones · images match', attention: false })
   })
 
   it('claims neither readiness nor matching images without instances', () => {
     expect(cnpgHASummary(ha({ pdbs, instances: [], operatorLease: { state: 'ok' } }), [] as never)).toEqual({ text: 'no instance Pods', attention: true })
     const unset = ha({ pdbs, operatorLease: { state: 'ok' }, instances: [{ pod: 'pg-1', podUID: 'a', role: 'primary', ready: true, node: 'n1', zone: 'z1', restartCount: 0 }] })
-    expect(cnpgHASummary(unset, [{ pod: 'pg-1', state: 'ok' }] as never).text).toBe('1/1 instances ready')
+    expect(cnpgHASummary(unset, [{ pod: 'pg-1', state: 'ok' }] as never).text).toBe('1/1 observed instances ready')
   })
 
   it('names what it could not read instead of reading calm', () => {
@@ -289,7 +290,7 @@ describe('folded HA and certificates summaries', () => {
       text: 'Not read: Pods, zones, disruption budgets, primary lease, operator lease, Jobs, pending restarts',
       attention: false,
     })
-    expect(cnpgHASummary(ha({ pdbs }), undefined).text).toBe('2/2 instances ready · 2 zones · images match · not read: operator lease, pending restarts')
+    expect(cnpgHASummary(ha({ pdbs }), undefined).text).toBe('2/2 observed instances ready · 2 zones · images match · not read: operator lease, pending restarts')
   })
 
   it('opens and leads with what is wrong', () => {
@@ -302,7 +303,7 @@ describe('folded HA and certificates summaries', () => {
     })
     const s = cnpgHASummary(shared, [{ pod: 'pg-2', state: 'ok', pendingRestart: true } as never])
     expect(s.attention).toBe(true)
-    expect(s.text).toBe('1 of 2 instances not ready · every instance in one zone · instances share a Node · restart pending on pg-2 · an instance runs a different image · not read: operator lease')
+    expect(s.text).toBe('1 of 2 instances not ready · every instance in one zone · instances share a Node · restart pending on pg-2 · an instance Pod has a different image · not read: operator lease')
   })
 
   it('names the nearest certificate expiry and who renews them', () => {
@@ -341,4 +342,25 @@ describe('backup dimension certainty', () => {
     r.protection.lastSuccessfulBackup = { text: 'No access to Backups', tone: 'unknown', source: 'Backups not read' }
     expect(cnpgDimensions({ row: r }).find((d) => d.id === 'protection')).toMatchObject({ text: 'unassessed', tone: 'unknown', source: 'Backups not read' })
   })
+})
+
+it('uses declared instances for readiness and opens for an instance Pod not observed', () => {
+  const base = ha({ declaredInstances: 2, expectedInstances: ['pg-1', 'pg-2'] })
+  base.instances = base.instances.slice(0, 1)
+  const summary = cnpgHASummary(base, [{ pod: 'pg-1', state: 'ok' }])
+  expect(summary.attention).toBe(true)
+  expect(summary.text).toContain('1 of 2 declared instances ready; no instance Pod observed for pg-2')
+  expect(summary.text).not.toContain('1/1')
+})
+
+it('names excess observed instances without putting them over a smaller denominator', () => {
+  const summary = cnpgHASummary(ha({ declaredInstances: 1 }), undefined)
+  expect(summary.text).toContain('2 observed instances ready; 1 instances declared')
+  expect(summary.text).not.toContain('2 of 1')
+})
+it('does not claim matching images without observed image evidence', () => {
+  expect(cnpgImageDrift(ha({ instances: [] })).known).toBe(false)
+  const base = ha()
+  base.instances[0].imageMatches = undefined
+  expect(cnpgImageDrift(base).known).toBe(false)
 })

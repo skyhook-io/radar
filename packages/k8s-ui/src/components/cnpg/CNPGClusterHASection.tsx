@@ -53,6 +53,7 @@ const JOB_SEVERITY: Record<CNPGHAJob['phase'], 'success' | 'error' | 'info' | 'n
   succeeded: 'success',
   failed: 'error',
   running: 'info',
+  active: 'info',
   pending: 'neutral',
 }
 
@@ -118,7 +119,7 @@ export function CNPGClusterHASection({
 
   return (
     <>
-      <FoldSection title={title} hint={`sampled ${formatAge(ha.sampledAt)} ago`} summary={[endpointProblem, haSummary.text].filter(Boolean).join(' · ')} attention={haSummary.attention || !!endpointProblem}>
+      <FoldSection title={title} hint={`checked ${formatAge(ha.sampledAt)} ago`} summary={[endpointProblem, haSummary.text].filter(Boolean).join(' · ')} attention={haSummary.attention || !!endpointProblem}>
         <FactGrid>
           <FactRow label="Read-write Service">
             <div className="space-y-1">
@@ -217,16 +218,16 @@ export function CNPGClusterHASection({
           </FactRow>
 
           <FactRow label="Image">
-            {!drift.known ? (
-              <Unknown text={ha.desiredImage ? 'Running images unknown (Pods not readable)' : 'Desired image not reported'} />
+            {!drift.known && drift.drifted.length === 0 ? (
+              <Unknown text={!ha.desiredImage ? 'Desired image not reported' : ha.pods.state === 'ok' && ha.instances.length === 0 ? `Desired image ${ha.desiredImage}; no instance running` : `Desired image ${ha.desiredImage}; running images unknown`} />
             ) : drift.drifted.length === 0 ? (
               <span>
                 <span className="font-mono text-xs break-all">{ha.desiredImage}</span>
-                <span className="text-theme-text-secondary"> · every instance runs it</span>
+                <span className="text-theme-text-secondary"> · observed Pod images match</span>
               </span>
             ) : (
               <span className={toneTextClass('degraded')}>
-                {drift.drifted.map((d) => `${d.pod} runs ${d.image}`).join(' · ')} · desired <span className="font-mono">{ha.desiredImage}</span>
+                {drift.drifted.map((d) => `${d.pod} has image ${d.image}`).join(' · ')} · desired <span className="font-mono">{ha.desiredImage}</span>
               </span>
             )}
           </FactRow>

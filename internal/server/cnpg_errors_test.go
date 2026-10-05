@@ -186,6 +186,7 @@ func TestCNPGNoPrometheusReasonIsOneSentence(t *testing.T) {
 		"": "Radar is not connected to Prometheus",
 		"Radar found 2 services that may be Prometheus but may not port-forward to them (needs create pods/portforward)": "Radar found 2 services that may be Prometheus but may not port-forward to them (needs create pods/portforward)",
 		"context deadline exceeded": "Radar is not connected to Prometheus: context deadline exceeded",
+		"No working Prometheus endpoint found.\nCandidate cert-manager/cert-manager did not respond after port-forward": "No working Prometheus endpoint found.\nCandidate cert-manager/cert-manager did not respond after port-forward",
 	} {
 		if got := cnpgNoPrometheusReason(msg); got != want {
 			t.Errorf("%q: %q, want %q", msg, got, want)

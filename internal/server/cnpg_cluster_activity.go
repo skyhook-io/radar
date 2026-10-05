@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -89,7 +91,7 @@ func cnpgRowAttribution(e *timeline.TimelineEvent, name, liveUID string) (matche
 		o := e.Owner
 		owned := o != nil && o.Kind == "Cluster" && o.Name == name && resourceid.GroupFromAPIVersion(o.APIVersion) == cnpgGroup &&
 			(liveUID == "" || o.UID == liveUID)
-		return owned, owned && labelled
+		return owned, false
 	default:
 		return labelled, labelled
 	}
@@ -163,9 +165,15 @@ func (s *Server) handleCNPGClusterActivity(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var liveUID string
+	jobPods := map[string]cnpgWorkspacePod{}
 	if cache := k8s.GetResourceCache(); cache != nil {
 		if live, err := findCNPGCluster(r.Context(), cache, namespace, name); err == nil && live != nil {
 			liveUID = string(live.GetUID())
+			_, _, jobs, _, _ := s.cnpgWorkspaceReadPods(r, cache, []string{namespace}, cnpgClusterUIDs([]*unstructured.Unstructured{live}))
+			for _, raw := range jobs {
+				pod := raw.(cnpgWorkspacePod)
+				jobPods[string(pod.Metadata.UID)] = pod
+			}
 		}
 	}
 	scanCapped := len(rows) >= cnpgActivityScanLimit
@@ -177,6 +185,12 @@ func (s *Server) handleCNPGClusterActivity(w http.ResponseWriter, r *http.Reques
 	labelled := make([]bool, len(rows))
 	for i := range rows {
 		matched[i], labelled[i] = cnpgRowAttribution(&rows[i], name, liveUID)
+		if !matched[i] && rows[i].Kind == "Pod" && resourceid.GroupFromAPIVersion(rows[i].APIVersion) == "" {
+			if pod, ok := jobPods[rows[i].UID]; ok && rows[i].Owner != nil {
+				o := rows[i].Owner
+				matched[i] = cnpgControlledBy(pod.Metadata.OwnerReferences, resourceid.GroupFromAPIVersion(o.APIVersion), o.Kind, o.Name, types.UID(o.UID))
+			}
+		}
 		if matched[i] && rows[i].UID != "" {
 			attributedUIDs[rows[i].UID] = true
 		}

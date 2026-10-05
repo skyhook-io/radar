@@ -188,9 +188,10 @@ type CNPGInstanceStatusFacts struct {
 	// pgRewind | replayPaused | streaming | fileBased.
 	RoleDetail string `json:"roleDetail"`
 	// Archiving is absent when the report did not reach pg_stat_archiver.
-	Archiving   *CNPGArchivingStatus    `json:"archiving,omitempty"`
-	Replication []CNPGReplicationStatus `json:"replication"`
-	Slots       []CNPGSlotStatus        `json:"slots"`
+	Archiving      *CNPGArchivingStatus    `json:"archiving,omitempty"`
+	Replication    []CNPGReplicationStatus `json:"replication"`
+	Slots          []CNPGSlotStatus        `json:"slots"`
+	SlotsTruncated bool                    `json:"slotsTruncated,omitempty"`
 	// BaseBackups are pg_basebackup streams from this instance to a joining
 	// instance: CloudNativePG's probe reads pg_stat_progress_basebackup only
 	// for application names ending in "-join" (its join Job), so these are new
@@ -1185,9 +1186,10 @@ func parseCNPGPgStatus(body []byte) (*CNPGInstanceStatusFacts, string, error) {
 			LastFailedAt:    cnpgStatusTime(st.LastFailedWALTime),
 			ReadyWalFiles:   st.ReadyWalFiles,
 		},
-		Replication: []CNPGReplicationStatus{},
-		Slots:       []CNPGSlotStatus{},
-		BaseBackups: []CNPGBaseBackupStatus{},
+		Replication:    []CNPGReplicationStatus{},
+		Slots:          []CNPGSlotStatus{},
+		SlotsTruncated: len(st.ReplicationSlotsInfo) > cnpgRuntimeMaxRows,
+		BaseBackups:    []CNPGBaseBackupStatus{},
 	}
 	facts.RoleDetail = cnpgRoleDetail(facts)
 	var partial []string

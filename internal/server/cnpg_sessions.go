@@ -336,24 +336,24 @@ func (s *Server) handleCNPGClusterSessions(w http.ResponseWriter, r *http.Reques
 			target = p
 		}
 	}
-	if target == nil {
-		if r.URL.Query().Get("pod") != "" {
-			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("%s is not an instance Pod of Cluster %s/%s", want, namespace, name))
-			return
-		}
-		resp.CNPGRuntimeSource = CNPGRuntimeSource{State: cnpgRuntimeStateError, Error: "no primary instance Pod is reported"}
-		s.writeJSON(w, resp)
-		return
-	}
-	resp.PodUID = target.UID
-	resp.Role = cnpgRuntimeRole(target)
-
 	resp.Permission.Exec = s.grantPermission(r, cnpgGrantCreateExec.In(namespace))
 	if resp.Permission.Exec == permissionDenied {
 		resp.CNPGRuntimeSource = CNPGRuntimeSource{State: cnpgExecStateDenied, Error: "reading sessions needs " + grantText(resp.Permission.Grant)}
 		s.writeJSON(w, resp)
 		return
 	}
+	if target == nil {
+		if r.URL.Query().Get("pod") != "" {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("%s is not an instance Pod of Cluster %s/%s", want, namespace, name))
+			return
+		}
+		resp.CNPGRuntimeSource = CNPGRuntimeSource{State: "unavailable", Reason: "Available once the primary is running"}
+		s.writeJSON(w, resp)
+		return
+	}
+	resp.PodUID = target.UID
+	resp.Role = cnpgRuntimeRole(target)
+
 	exec := s.cnpgExecFor(r)
 	if exec == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")

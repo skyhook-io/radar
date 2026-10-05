@@ -35,9 +35,9 @@ describe('buildResizeManifest', () => {
 describe('cnpgSlotRetentionText', () => {
   it('shows the largest slot, never a sum, and 0 B when nothing is held', () => {
     expect(cnpgSlotRetentionText([])).toBe('No slots')
-    expect(cnpgSlotRetentionText([{ slot: 'a', bytes: 0 }])).toBe('0 B')
-    expect(cnpgSlotRetentionText([{ slot: 'a', bytes: 1024 }])).toBe('1.0 KiB')
-    const two = cnpgSlotRetentionText([{ slot: 'a', bytes: 10 * 1024 * 1024 }, { slot: 'b', bytes: 2 * 1024 * 1024 }])
+    expect(cnpgSlotRetentionText([{ name: 'a', retainedBytes: 0 }])).toBe('0 B')
+    expect(cnpgSlotRetentionText([{ name: 'a', retainedBytes: 1024 }])).toBe('1.0 KiB')
+    const two = cnpgSlotRetentionText([{ name: 'a', retainedBytes: 10 * 1024 * 1024 }, { name: 'b', retainedBytes: 2 * 1024 * 1024 }])
     expect(two).toBe('10 MiB (largest slot)')
     expect(two).not.toContain('up to')
   })
@@ -84,4 +84,17 @@ describe('cnpgInstanceDiskTone', () => {
     expect(cnpgInstanceDiskTone([measured(0.2), unmeasured('pg-1-wal')], wal(0.1 * 1024 ** 3, 'pg-1-wal'))).toBe('unknown')
     expect(cnpgInstanceDiskTone([measured(0.2)], undefined)).toBe('healthy')
   })
+})
+
+it('does not infer slot absence from absent byte readings', () => {
+  expect(cnpgSlotRetentionText(undefined)).toBe('Slot inventory not read')
+  expect(cnpgSlotRetentionText(null)).toBe('Slot inventory not read')
+  expect(cnpgSlotRetentionText([], false)).toBe('Slot inventory partly read')
+  expect(cnpgSlotRetentionText([{ name: 'a', active: false }], false)).toBe('≥1 inactive slot; retained WAL not reported')
+  expect(cnpgSlotRetentionText([{ name: '_cnpg_orders_2', active: false }])).toBe('1 inactive slot; retained WAL not reported')
+  expect(cnpgSlotRetentionText([{ name: 'a', retainedBytes: 10 }, { name: 'b' }])).toContain('≥10 B reported; some slots unmeasured')
+})
+
+it('keeps measured retained WAL when slot inventory is unavailable', () => {
+  expect(cnpgSlotRetentionText(null, true, [{ slot: 'a', bytes: 2048 }])).toBe('≥2.0 KiB retained WAL reported; slot inventory not read')
 })

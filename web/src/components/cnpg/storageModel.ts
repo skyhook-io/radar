@@ -46,11 +46,17 @@ export function buildResizeManifest(cluster: any, target: CNPGStorageTarget, siz
  * WAL held by replication slots on one instance. Slots overlap (they can
  * hold the same segments), so the figure is the largest slot, never a sum.
  */
-export function cnpgSlotRetentionText(slots: { slot: string; bytes: number }[]): string {
-  if (slots.length === 0) return 'No slots'
-  const max = slots.reduce((m, s) => Math.max(m, s.bytes), 0)
-  if (max === 0) return formatBytes(0)
-  return slots.length === 1 ? formatBytes(max) : `${formatBytes(max)} (largest slot)`
+export function cnpgSlotRetentionText(slots: { name: string; active?: boolean; retainedBytes?: number }[] | null | undefined, complete = true, retained: { slot: string; bytes: number }[] = []): string {
+  if (!slots) return retained.length ? `≥${formatBytes(Math.max(...retained.map((s) => s.bytes)))} retained WAL reported; slot inventory not read` : 'Slot inventory not read'
+  if (slots.length === 0) return complete ? 'No slots' : 'Slot inventory partly read'
+  const measured = slots.filter((s) => s.retainedBytes !== undefined)
+  if (measured.length < slots.length) {
+    const inactive = slots.filter((s) => s.active === false).length
+    const count = inactive === slots.length ? `${inactive} inactive slot${inactive === 1 ? '' : 's'}` : `${slots.length} slot${slots.length === 1 ? '' : 's'}`
+    return `${complete ? '' : '≥'}${count}; retained WAL ${measured.length ? `≥${formatBytes(Math.max(...measured.map((s) => s.retainedBytes!)))} reported; some slots unmeasured` : 'not reported'}`
+  }
+  const max = Math.max(...measured.map((s) => s.retainedBytes!))
+  return !complete ? `${formatBytes(max)} (largest reported slot)` : max === 0 || slots.length === 1 ? formatBytes(max) : `${formatBytes(max)} (largest slot)`
 }
 
 /**

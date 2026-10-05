@@ -73,9 +73,15 @@ describe('cnpgParametersView', () => {
     expect(custom.unreported).toEqual(['pg-1', 'pg-2'])
     expect(v.unread.map((i) => i.pod)).toEqual(['pg-3'])
     expect(v.summary).toMatchObject({ attention: true, tone: 'degraded' })
-    expect(v.summary.text).toBe('3 declared · 2 of 3 instances read · restart pending on pg-2 · 1 differ between instances')
+    expect(v.summary.text).toBe('3 declared · read on pg-1, pg-2 · not read on pg-3 · restart pending on pg-2 · 1 differ between instances')
   })
 
+  it('names the instances read and the declared instance that is not running', () => {
+    const v = cnpgParametersView(resp([{ pod: 'orders-1', role: 'primary', state: 'ok', settings: [setting('work_mem', '8MB')] }]), undefined, { declaredInstances: 2, expectedInstances: ['orders-1', 'orders-2'] })
+    expect(v.summary.text).toBe('3 declared · read on orders-1 · orders-2 not running · 2 instances declared')
+    expect(v.summary.tone).toBe('unknown')
+    expect(cnpgParametersView(resp([{ pod: 'orders-1', role: 'primary', state: 'ok', settings: [setting('work_mem', '8MB')] }]), undefined, { declaredInstances: 1, expectedInstances: ['orders-1', 'orders-2'] }).summary.tone).toBe('unknown')
+  })
   it('says so when there is no instance Pod to read', () => {
     expect(cnpgParametersView(resp([])).summary).toEqual({ text: '3 declared · no instance Pod to read', tone: 'unknown', attention: false })
   })
@@ -97,7 +103,7 @@ describe('cnpgParametersView', () => {
     const r = resp([{ pod: 'pg-1', role: 'primary', state: 'ok', settings: [setting('work_mem', '8MB')] }])
     r.declared = [{ name: 'work_mem', value: '8MB' }]
     const v = cnpgParametersView(r, [...r.declared, { name: 'new_parameter', value: 'on' }])
-    expect(v.summary).toEqual({ text: '2 declared · 1 sampled · 1 not sampled · 1 of 1 instances read', tone: 'unknown', attention: false })
+    expect(v.summary).toEqual({ text: '2 declared · 1 sampled · 1 not sampled · read on pg-1', tone: 'unknown', attention: false })
     expect(v.rows).toHaveLength(2)
   })
   it('does not infer absent Pods when all names were skipped or the earlier spec had no parameters', () => {

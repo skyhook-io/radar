@@ -154,17 +154,19 @@ type CNPGStorageVolumeUsage struct {
 // segments waiting to be archived and the WAL each slot retains overlap, so
 // they are never added up.
 type CNPGStorageWAL struct {
-	Status          CNPGRuntimeSource `json:"status"`
-	Metrics         CNPGRuntimeSource `json:"metrics"`
-	Volume          string            `json:"volume,omitempty"`
-	SizeBytes       *float64          `json:"sizeBytes,omitempty"`
-	Segments        *float64          `json:"segments,omitempty"`
-	ReadyToArchive  *int              `json:"readyToArchive,omitempty"`
-	LastArchivedAt  string            `json:"lastArchivedAt,omitempty"`
-	LastFailedAt    string            `json:"lastFailedAt,omitempty"`
-	LastFailedWal   string            `json:"lastFailedWal,omitempty"`
-	ArchivingFailed bool              `json:"archivingFailed,omitempty"`
-	Slots           []CNPGSlotBytes   `json:"slots,omitempty"`
+	Status                 CNPGRuntimeSource `json:"status"`
+	Metrics                CNPGRuntimeSource `json:"metrics"`
+	Volume                 string            `json:"volume,omitempty"`
+	SizeBytes              *float64          `json:"sizeBytes,omitempty"`
+	Segments               *float64          `json:"segments,omitempty"`
+	ReadyToArchive         *int              `json:"readyToArchive,omitempty"`
+	LastArchivedAt         string            `json:"lastArchivedAt,omitempty"`
+	LastFailedAt           string            `json:"lastFailedAt,omitempty"`
+	LastFailedWal          string            `json:"lastFailedWal,omitempty"`
+	ArchivingFailed        bool              `json:"archivingFailed,omitempty"`
+	Slots                  []CNPGSlotBytes   `json:"slots,omitempty"`
+	SlotInventory          []CNPGSlotStatus  `json:"slotInventory"`
+	SlotInventoryTruncated bool              `json:"slotInventoryTruncated,omitempty"`
 }
 
 type CNPGStorageFinding struct {
@@ -660,6 +662,8 @@ func (s *Server) cnpgStorageWAL(w http.ResponseWriter, r *http.Request, cache *k
 			})
 			out.Status = st.CNPGRuntimeSource
 			if st.CNPGInstanceStatusFacts != nil {
+				out.SlotInventory = st.Slots
+				out.SlotInventoryTruncated = st.SlotsTruncated
 				if a := st.Archiving; a != nil {
 					out.ReadyToArchive, out.LastArchivedAt, out.LastFailedAt, out.LastFailedWal = a.ReadyWalFiles, a.LastArchivedAt, a.LastFailedAt, a.LastFailedWal
 					out.ArchivingFailed = cnpgArchivingFailedLast(*a)
@@ -689,6 +693,7 @@ func (s *Server) cnpgStorageWAL(w http.ResponseWriter, r *http.Request, cache *k
 	failed, partial := 0, 0
 	for i, p := range pods {
 		wal := results[i]
+		wal.SlotInventory = withCNPGSlotRetention(&CNPGInstanceStatusFacts{Slots: wal.SlotInventory}, wal.Slots).Slots
 		if fenced.fences(p.Name) {
 			explainCNPGFenced(&wal.Status)
 			explainCNPGFenced(&wal.Metrics)

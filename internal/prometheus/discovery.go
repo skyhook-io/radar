@@ -26,7 +26,7 @@ var ErrPrometheusNotFound = errors.New("no Prometheus service found in cluster")
 // installation from a cluster that has none. Its message must not claim
 // nothing was found.
 var errPrometheusUnreachable error = &prometheusUnreachableError{
-	msg:   "Radar found services that may be Prometheus but could not reach any of them",
+	msg:   "No working Prometheus endpoint found.\nCandidate services could not be reached",
 	cause: ErrPrometheusNotFound,
 }
 
@@ -296,7 +296,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 				logDiscoveryEnded(start, err)
 				return "", "", err
 			}
-			lastErr = fmt.Errorf("port-forward to %s/%s failed: %w", cand.Namespace, cand.Name, pfErr)
+			lastErr = fmt.Errorf("No working Prometheus endpoint found.\nCandidate %s/%s: port-forward failed: %w", cand.Namespace, cand.Name, pfErr)
 			if strings.Contains(strings.ToLower(pfErr.Error()), "forbidden") {
 				denied = append(denied, deniedGrant(pfErr))
 			}
@@ -329,9 +329,9 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 			logDiscoveryEnded(start, err)
 			return "", "", err
 		}
-		lastErr = fmt.Errorf("Prometheus at %s/%s not responding after port-forward", cand.Namespace, cand.Name)
+		lastErr = prometheusCandidateProbeError(cand.Namespace, cand.Name)
 		if !discoveryDiagnosticsSuppressed(ctx) {
-			errorlog.Record("prometheus", "error", "Prometheus at %s/%s not responding after port-forward", cand.Namespace, cand.Name)
+			errorlog.Record("prometheus", "error", "Candidate %s/%s did not respond after port-forward", cand.Namespace, cand.Name)
 		}
 	}
 
@@ -349,11 +349,11 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	case lastErr == nil:
 		return "", "", errPrometheusUnreachable
 	case len(candidates) == 1 && len(denied) == 1:
-		return "", "", unreachableBecause("Radar found a service that may be Prometheus (%s/%s) but may not port-forward to it (%s)", candidates[0].Namespace, candidates[0].Name, deniedGrantsPhrase(denied))
+		return "", "", unreachableBecause("No working Prometheus endpoint found.\nCandidate %s/%s: port-forward denied (%s)", candidates[0].Namespace, candidates[0].Name, deniedGrantsPhrase(denied))
 	case len(candidates) > 1 && len(denied) == len(candidates):
-		return "", "", unreachableBecause("Radar found %d services that may be Prometheus but may not port-forward to them (%s)", len(candidates), deniedGrantsPhrase(denied))
+		return "", "", unreachableBecause("No working Prometheus endpoint found.\n%d candidates: port-forward denied (%s)", len(candidates), deniedGrantsPhrase(denied))
 	case len(candidates) > 1:
-		return "", "", unreachableBecause("Radar found %d services that may be Prometheus but none answered through a port-forward", len(candidates))
+		return "", "", unreachableBecause("No working Prometheus endpoint found.\n%d candidates did not answer through a port-forward", len(candidates))
 	}
 	return "", "", lastErr
 }
@@ -584,4 +584,8 @@ func (c *Client) markConnected(addr, basePath, identity string, gen uint64) bool
 	c.lastDiscoverErr = nil
 	c.lastDiscoverAt = time.Time{}
 	return true
+}
+
+func prometheusCandidateProbeError(namespace, name string) error {
+	return fmt.Errorf("No working Prometheus endpoint found.\nCandidate %s/%s did not respond after port-forward", namespace, name)
 }

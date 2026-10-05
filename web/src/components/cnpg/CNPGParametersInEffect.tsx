@@ -8,14 +8,14 @@ import { RefreshFailedNotice } from '../workspace/layout'
  * reports: whether a change took effect, and whether it waits for a restart.
  * Observation only — changes go through the Cluster spec.
  */
-export function CNPGParametersInEffect({ namespace, name, declared }: { namespace: string; name: string; declared: Record<string, string> }) {
+export function CNPGParametersInEffect({ namespace, name, declared, scope }: { namespace: string; name: string; declared: Record<string, string>; scope?: { declaredInstances?: number; expectedInstances?: string[] } }) {
   const q = useCNPGParameters(namespace, name)
   const d = q.data
   const declarations = Object.entries(declared).sort(([a], [b]) => a.localeCompare(b)).map(([name, value]) => ({ name, value }))
   const view = cnpgParametersView(d ?? {
     cluster: { namespace, name, uid: '' }, sampledAt: '', permission: { exec: 'unknown' }, state: 'error', instances: [],
     declared: declarations,
-  }, declarations)
+  }, declarations, scope)
   const unavailable = !d && q.error instanceof Error
     ? `Instance values could not be read: ${q.error.message}`
     : !d ? (q.isLoading ? 'Reading each instance…' : 'Instance values could not be read')
@@ -72,14 +72,16 @@ export function CNPGParametersInEffect({ namespace, name, declared }: { namespac
   return <><SectionHeading hint="spec.postgresql.parameters">PostgreSQL parameters</SectionHeading>{content}</>
 }
 
-function ParameterRow({ row, reports, unreadText }: { row: CNPGParameterRow; reports: { pod: string; value: string }[]; unreadText: string }) {
+export function ParameterRow({ row, reports, unreadText }: { row: CNPGParameterRow; reports: { pod: string; value: string }[]; unreadText: string }) {
   return (
     <tr className="border-b border-theme-border/60 align-top last:border-0">
       <td className="py-1.5 pr-4 font-mono text-xs text-theme-text-primary">{row.name}</td>
       <td className="py-1.5 pr-4 font-mono text-xs text-theme-text-secondary">{row.declared === '' ? <span className="text-theme-text-tertiary">(empty)</span> : row.declared}</td>
       <td className="py-1.5 pr-4 text-xs">
         {reports.length > 0 ? (
-          <span className={row.perInstance ? toneTextClass('degraded') : 'font-mono text-theme-text-primary'}>{reports.map((p) => `${p.pod}: ${p.value === '' ? '(empty)' : p.value}`).join(' · ')}</span>
+          row.perInstance
+            ? <span className={toneTextClass('degraded')}>{reports.map((p) => `${p.pod}: ${p.value === '' ? '(empty)' : p.value}`).join(' · ')}</span>
+            : <><span className="font-mono text-theme-text-primary">{row.value === '' ? '(empty)' : row.value}</span><div className="text-theme-text-tertiary">on {reports.map((p) => p.pod).join(', ')}</div></>
         ) : row.setByClient ? (
           <span className="text-theme-text-tertiary">Set by each connection, so not readable here</span>
         ) : (

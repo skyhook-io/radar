@@ -492,3 +492,30 @@ func TestCNPGClusterStorage_WALWithoutCollectorIsPartial(t *testing.T) {
 		}
 	}
 }
+
+func TestCNPGClusterStorage_SlotInventoryWithoutRetention(t *testing.T) {
+	seedCNPGStorageCluster(t, "pgstinventory")
+	useCNPGProxyAPIServer(t, func(w http.ResponseWriter, c cnpgProxyCall) {
+		if c.port == "9187" {
+			_, _ = io.WriteString(w, "cnpg_collector_pg_wal{type=\"size\"} 83886080\n")
+			return
+		}
+		if c.pod == "pg-orders-1" {
+			_, _ = io.WriteString(w, `{"isPrimary":true,"replicationSlotsInfo":[{"slotName":"_cnpg_pg_orders_2","slotType":"physical","active":false}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"isPrimary":false,"replicationSlotsInfo":[]}`)
+	})
+	status, got, body := getCNPGStorage(t, "/api/cnpg/clusters/pgstinventory/pg-orders/storage")
+	if status != http.StatusOK {
+		t.Fatalf("%d: %s", status, body)
+	}
+	instances := cnpgStorageInstances(t, got)
+	slots := instances["pg-orders-1"].WAL.SlotInventory
+	if len(slots) != 1 || slots[0].Active || slots[0].RetainedBytes != nil {
+		t.Fatalf("inventory must survive absent retention: %+v", slots)
+	}
+	if slots := instances["pg-orders-2"].WAL.SlotInventory; slots == nil || len(slots) != 0 {
+		t.Fatalf("read empty inventory: %+v", slots)
+	}
+}
