@@ -1,5 +1,5 @@
 import { useSearchParams } from 'react-router-dom'
-import { CNPGClusterCertificates, CNPGConnectSection, CNPGDimensionChips, coverageReadable, refToSelectedResource, toneTextClass, type CNPGDimension, type CNPGFleetRow, type NavigateToRef } from '@skyhook-io/k8s-ui'
+import { CNPGClusterCertificates, CNPGConnectSection, CNPGDimensionMark, CNPGServingStatus, coverageReadable, refToSelectedResource, toneTextClass, type CNPGDimension, type CNPGFleetRow, type NavigateToRef } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { buildWorkloadPath } from '../../utils/navigation'
 import { useCNPGRuntime } from '../../api/cnpg'
@@ -15,14 +15,18 @@ import { useCNPGClusterAssessment } from './useCNPGClusterAssessment'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
 import { useCNPGNavigate } from './useCNPGNavigate'
 
-/**
- * The four health chips under the Cluster's title, on every tab: the same
- * assessment the Overview explains, each opening the tab that holds its detail.
- */
-export function CNPGClusterHeaderChips({ namespace, name, onSelect }: { namespace: string; name: string; onSelect: (id: CNPGDimension['id']) => void }) {
+/** The health mark beside a tab: the same assessment the Overview explains, for the dimension that tab holds. */
+export function CNPGTabMark({ namespace, name, id }: { namespace: string; name: string; id: CNPGDimension['id'] }) {
   const { dimensions } = useCNPGClusterAssessment(namespace, name)
-  if (!dimensions) return null
-  return <CNPGDimensionChips dimensions={dimensions} onSelect={onSelect} />
+  const dimension = dimensions?.find((d) => d.id === id)
+  return dimension ? <CNPGDimensionMark dimension={dimension} /> : null
+}
+
+/** Whether the cluster serves writes, on its title line, opening the tab that explains it. */
+export function CNPGClusterServing({ namespace, name, onSelect }: { namespace: string; name: string; onSelect: () => void }) {
+  const { dimensions } = useCNPGClusterAssessment(namespace, name)
+  const dimension = dimensions?.find((d) => d.id === 'serving')
+  return dimension ? <CNPGServingStatus dimension={dimension} onSelect={onSelect} /> : null
 }
 
 /** Storage: volumes, what holds WAL, and resize, with the history of both one click away. */

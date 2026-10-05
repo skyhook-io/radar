@@ -2,7 +2,7 @@
 import { act, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CNPGClusterSummary, CNPGDimensionChips } from './CNPGClusterSummary'
+import { CNPGClusterSummary, CNPGDimensionMark, CNPGServingStatus } from './CNPGClusterSummary'
 import type { CNPGFleetRow, CNPGProblem } from './workspace'
 import type { CNPGDimension } from './ha'
 import { OpenIssueContext } from '../problems'
@@ -95,16 +95,36 @@ describe('CNPGClusterSummary', () => {
     expect([...document.querySelectorAll('button')].some((b) => b.textContent?.includes('+1 more'))).toBe(false)
     act(() => root.unmount())
   })
-  it('makes dimension chips buttons only when the host can open them', () => {
-    const dims: CNPGDimension[] = [{ id: 'replication', label: 'Replication', tone: 'healthy', text: 'ok', source: 's' }]
-    const onSelect = vi.fn()
-    let root = render(<CNPGDimensionChips dimensions={dims} />)
-    expect(document.querySelector('[aria-label="Replication: ok. Open replication details"]')).toBeNull()
+  it('marks a tab only when its dimension needs a look or could not be assessed', () => {
+    const dim = (tone: CNPGDimension['tone']): CNPGDimension => ({ id: 'protection', label: 'Backups', tone, text: 'verdict', source: 's' })
+    for (const tone of ['healthy', 'neutral'] as const) {
+      const root = render(<CNPGDimensionMark dimension={dim(tone)} />)
+      expect(document.querySelector('[aria-label="Backups: verdict"]')).toBeNull()
+      act(() => root.unmount())
+    }
+    for (const tone of ['degraded', 'unhealthy', 'unknown'] as const) {
+      const root = render(<CNPGDimensionMark dimension={dim(tone)} />)
+      expect(document.querySelector('[aria-label="Backups: verdict"]')).not.toBeNull()
+      act(() => root.unmount())
+    }
+  })
+  it('draws an unassessed dimension as a ring, never a calm dot', () => {
+    const root = render(<CNPGDimensionMark dimension={{ id: 'storage', label: 'Storage', tone: 'unknown', text: 'unassessed', source: 's' }} />)
+    const mark = document.querySelector('[aria-label="Storage: unassessed"]')!
+    expect(mark.className).toContain('border')
+    expect(mark.querySelector('.rounded-full:not(.border)')).toBeNull()
     act(() => root.unmount())
-    root = render(<CNPGDimensionChips dimensions={dims} onSelect={onSelect} />)
-    const chip = document.querySelector<HTMLButtonElement>('[aria-label="Replication: ok. Open replication details"]')!
-    act(() => chip.click())
-    expect(onSelect).toHaveBeenCalledWith('replication')
+  })
+  it('makes the Serving status a button only when the host can open its details', () => {
+    const serving: CNPGDimension = { id: 'serving', label: 'Serving', tone: 'healthy', text: 'primary ready', source: 's' }
+    const onSelect = vi.fn()
+    let root = render(<CNPGServingStatus dimension={serving} />)
+    expect(document.querySelector('button')).toBeNull()
+    expect(document.body.textContent).toContain('primary ready')
+    act(() => root.unmount())
+    root = render(<CNPGServingStatus dimension={serving} onSelect={onSelect} />)
+    act(() => document.querySelector<HTMLButtonElement>('[aria-label="Serving: primary ready. Open its details"]')!.click())
+    expect(onSelect).toHaveBeenCalled()
     act(() => root.unmount())
   })
   it('lists each dimension at a glance, opening its tab', () => {

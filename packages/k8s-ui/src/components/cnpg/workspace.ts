@@ -8,7 +8,7 @@ import { type Fact } from '../facts'
 import { type ProblemOrigin, type WorkspaceProblem } from '../problems'
 import type { ResourceRef } from '../../types/core'
 import { formatGrant, type Grant } from '../../utils/grant'
-import { issueReasonTitle } from '../issues/severity'
+import { issueReasonTitle, issueTitle } from '../issues/severity'
 import {
   CNPG_BARMAN_PLUGIN_NAME,
   getCNPGClusterBackupConfig,
@@ -87,6 +87,10 @@ export interface CNPGWorkspaceResponse {
   scheduleReadings?: Record<string, string>
   /** The manager of each object that has one, keyed "Kind/namespace/name". */
   managedBy?: Record<string, ResourceRef>
+  /** Pods of the Jobs a Cluster controls (initdb, join, restore…), never counted as instances. */
+  jobPods?: any[]
+  /** Where the caller's Jobs were read; a Job Pod is returned only there. Absent from a Radar that predates it. */
+  jobCoverage?: CNPGKindCoverage
 }
 
 export const CNPG_KIND_BY_KEY: Record<CNPGWorkspaceKey, { kind: string; group: string; plural: string }> = {
@@ -122,7 +126,13 @@ export const CNPG_PROBLEM_CATEGORIES: { id: CNPGProblemCategory; label: string }
  * screens. `instance` names the instance a Cluster-level problem is about,
  * e.g. the standby an HA slot is kept for.
  */
-export type CNPGProblem = WorkspaceProblem<CNPGProblemCategory> & { instance?: string }
+export type CNPGProblem = WorkspaceProblem<CNPGProblemCategory> & {
+  instance?: string
+  /** The cnpg.io/jobRole of the Cluster's own Job whose Pod this is about: a cause, not an instance's symptom. */
+  job?: string
+  /** The Cluster's own Ready condition: a roll-up of the other problems, shown after them. */
+  rollup?: boolean
+}
 
 export interface CNPGInstance {
   name: string
@@ -346,6 +356,7 @@ const POD_ORIGINS: Record<string, ProblemOrigin> = {
   LivenessProbeInvalid: { label: 'Radar check of the probe', detail: 'The liveness probe names a port the container does not declare' },
   HighRestartCount: { label: 'Radar check of restarts', detail: 'More than 3 restarts on a container that is still unhealthy' },
   InitContainerStalled: { label: 'Radar check of init containers', detail: 'An init container has not finished' },
+  Unschedulable: { label: 'Kubernetes scheduler', detail: "The Pod's PodScheduled condition (reason Unschedulable) and the scheduler's message" },
 }
 
 /**
@@ -755,12 +766,44 @@ function replicationFact(cluster: any, pods: CNPGInstance[], hibernated: boolean
   }
 }
 
+const CNPG_JOB_PURPOSE: Record<string, string> = {
+  initdb: 'First instance',
+  join: 'New standby',
+  'full-recovery': 'Restore into',
+  'snapshot-recovery': 'Restore into',
+  pgbasebackup: 'Clone into',
+  import: 'Import into',
+  'major-upgrade': 'Major upgrade of',
+}
+
+/** What a Cluster's own Job is for, naming the instance it builds ("New standby pg-2"). */
+export function cnpgJobPurpose(role: string | undefined, instance: string | undefined, pod: string): string {
+  const purpose = role ? CNPG_JOB_PURPOSE[role] : undefined
+  if (purpose && instance) return `${purpose} ${instance}`
+  return `${role ? `${role} ` : ''}Job Pod ${pod}`
+}
+
+interface CNPGJobPod {
+  role?: string
+  instance?: string
+}
+
+function jobPodIndex(resp: CNPGWorkspaceResponse): Map<string, CNPGJobPod> {
+  const idx = new Map<string, CNPGJobPod>()
+  for (const p of resp.jobPods ?? []) {
+    const labels = p?.metadata?.labels ?? {}
+    idx.set(`${p.metadata?.namespace}/${p.metadata?.name}`, { role: labels['cnpg.io/jobRole'], instance: labels['cnpg.io/instanceName'] })
+  }
+  return idx
+}
+
 function problemsFor(
   cluster: any,
   issues: CNPGWorkspaceIssue[],
   audit: CNPGAuditFinding[],
   children: Map<string, string>,
   backupTimes: Map<string, number> = new Map(),
+  jobPods: Map<string, CNPGJobPod> = new Map(),
 ): CNPGProblem[] {
   const ns = cluster.metadata?.namespace
   const name = cluster.metadata?.name
@@ -771,15 +814,25 @@ function problemsFor(
     const isSelf = issue.kind === 'Cluster' && issue.name === name
     const owner = children.get(`${issue.kind}/${ns}/${issue.name}`)
     if (!isSelf && owner !== name) continue
+    const job = issue.kind === 'Pod' ? jobPods.get(`${ns}/${issue.name}`) : undefined
+    const text = cnpgIssueText(issue)
     fromIssues.push({
       id: `${issue.id}:${issue.kind}/${issue.name}`,
-      severity: issue.severity,
+      // A standby that cannot join costs redundancy, not service: the primary keeps serving.
+      severity: job?.role === 'join' ? 'warning' : issue.severity,
       category: cnpgIssueCategory(issue),
-      ...cnpgIssueText(issue),
+      ...(job
+        ? {
+            title: `${cnpgJobPurpose(job.role, job.instance, issue.name)}: ${issue.category ? issueTitle({ category: issue.category, reason: issue.reason }) : text.title}`,
+            detail: [issue.message?.trim(), issue.cause?.trim()].filter(Boolean).join(' ') || undefined,
+            job: job.role ?? 'job',
+          }
+        : text),
       subject: { kind: issue.kind, group: issue.group ?? '', namespace: ns, name: issue.name },
       source: 'issue',
       origin: cnpgIssueOrigin(issue),
       reason: issue.reason,
+      ...(isSelf && issue.reason.startsWith('Ready:') ? { rollup: true } : {}),
     })
   }
   const newestBackup = [...backupTimes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
@@ -821,11 +874,12 @@ const CNPG_SEVERITY_RANK = { critical: 0, warning: 1, posture: 2 } as const
  * The order problems are shown in, everywhere: most severe first, then a
  * cause before its symptoms. One instance Pod's state (a failing probe, a
  * crash loop) is usually the symptom of a cluster-level problem (archiving,
- * backups, replication, reconciliation, declarations), so at equal severity
- * those come first.
+ * backups, replication, reconciliation, declarations) or of a Job the Cluster
+ * runs (an initdb or join Pod that cannot start), so at equal severity those
+ * come first; the Cluster's own Ready condition sums them all up and comes last.
  */
 export function cnpgCompareProblems(a: CNPGProblem, b: CNPGProblem): number {
-  const symptom = (p: CNPGProblem) => (p.subject.kind === 'Pod' && p.subject.group === '' ? 1 : 0)
+  const symptom = (p: CNPGProblem) => (p.rollup ? 2 : p.subject.kind === 'Pod' && p.subject.group === '' && !p.job ? 1 : 0)
   return CNPG_SEVERITY_RANK[a.severity] - CNPG_SEVERITY_RANK[b.severity] || symptom(a) - symptom(b) || a.title.localeCompare(b.title)
 }
 
@@ -902,7 +956,7 @@ function childIndex(resp: CNPGWorkspaceResponse): Map<string, string> {
   add('Publication', resp.objects.publications)
   add('Subscription', resp.objects.subscriptions)
   add('DatabaseRole', resp.objects.databaseRoles)
-  for (const p of resp.objects.pods ?? []) {
+  for (const p of [...(resp.objects.pods ?? []), ...(resp.jobPods ?? [])]) {
     const c = p?.metadata?.labels?.['cnpg.io/cluster']
     if (c) idx.set(`Pod/${p.metadata?.namespace}/${p.metadata?.name}`, c)
   }
@@ -963,6 +1017,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
   const pods = resp.objects.pods ?? []
   const stores = resp.objects.objectStores ?? []
   const children = childIndex(resp)
+  const jobs = jobPodIndex(resp)
   const poolers = resp.objects.poolers ?? []
 
   const rows: CNPGFleetRow[] = clusters.map((cluster) => {
@@ -1013,7 +1068,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
     const readinessContradicted = !hibernated && !!podReadiness && readyInstances !== null && podReadiness.ready < readyInstances
     const primaryConflict = podsReadable ? primaryConflictOf(cluster, pods.filter((p) => p.metadata?.namespace === ns && p.metadata?.labels?.['cnpg.io/cluster'] === name)) : undefined
     const problems = sortProblems([
-      ...problemsFor(cluster, resp.issues ?? [], resp.audit ?? [], children, backupTimesOf(cluster, resp.objects.backups ?? [])),
+      ...problemsFor(cluster, resp.issues ?? [], resp.audit ?? [], children, backupTimesOf(cluster, resp.objects.backups ?? []), jobs),
       ...observedProblems(cluster, instancePods, readinessContradicted ? podReadiness : undefined, readyInstances, primaryConflict),
     ])
     const categories = new Set<CNPGProblemCategory>(

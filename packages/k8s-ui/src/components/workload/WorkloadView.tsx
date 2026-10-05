@@ -87,6 +87,8 @@ export interface WorkloadExtraTab {
   icon?: ReactNode
   after?: WorkloadTabType
   replaces?: WorkloadTabType
+  /** Trailing adornment after the label, e.g. a status mark. */
+  badge?: ReactNode
   render: () => ReactNode
 }
 
@@ -153,6 +155,8 @@ interface WorkloadViewProps {
   inlineBadges?: boolean
   /** A note right after the namespace, e.g. that it is outside the namespace filter. */
   namespaceNote?: ReactNode
+  /** A short status right after the controller status on the title line, e.g. a derived health verdict. */
+  statusNote?: ReactNode
   /** Leave out the kind badge, for a host whose title prefix already names the kind. */
   hideKindBadge?: boolean
   /** Suppress the standalone back arrow — for embeddings where "back" has no
@@ -428,6 +432,7 @@ export function WorkloadView({
   titlePrefix,
   inlineBadges = false,
   namespaceNote,
+  statusNote,
   hideKindBadge = false,
   hideBackButton,
   scopeControls,
@@ -1121,6 +1126,7 @@ export function WorkloadView({
                 {status.text}
               </span>
             )}
+            {statusNote}
           </>
         )
         const coreBadges = (
@@ -4008,7 +4014,7 @@ function mergeExtraTabs(tabs: DetailShellTab<TabType>[], extra: WorkloadExtraTab
   const replaced = new Set(extra.map((x) => x.replaces).filter(Boolean))
   const out = tabs.map((t) => (replaced.has(t.id) ? { ...t, hidden: true } : t))
   for (const x of extra) {
-    const tab: DetailShellTab<TabType> = { id: x.id as TabType, label: x.label, icon: x.icon }
+    const tab: DetailShellTab<TabType> = { id: x.id as TabType, label: x.label, icon: x.icon, badge: x.badge }
     const anchor = x.after ?? x.replaces
     const idx = anchor ? out.findIndex((t) => t.id === anchor) : -1
     if (idx >= 0) out.splice(idx + 1, 0, tab)

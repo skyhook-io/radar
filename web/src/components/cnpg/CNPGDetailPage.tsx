@@ -10,7 +10,7 @@ import { WorkloadView } from '../workload/WorkloadView'
 import { CNPGClusterActivity } from './CNPGClusterActivity'
 import { CNPGPerformance } from './CNPGPerformance'
 import { CNPGReplicationTab } from './CNPGReplicationTab'
-import { CNPGBackupsTab, CNPGClusterHeaderChips, CNPGConfigurationLead, CNPGStorageTab } from './CNPGClusterTabs'
+import { CNPGBackupsTab, CNPGClusterServing, CNPGConfigurationLead, CNPGStorageTab, CNPGTabMark } from './CNPGClusterTabs'
 import type { CNPGChartGroup } from './CNPGTrends'
 import { CNPG_DETAIL_KINDS, CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, cnpgScreenPath, cnpgViewNamedForKind, type CNPGDetailTarget } from './routes'
 import { CNPG_CLUSTER_TAB_ORDER, cnpgDimensionTab } from './paths'
@@ -102,6 +102,7 @@ export function CNPGDetailPage({
       {
         id: 'replication',
         label: 'Replication',
+        badge: <CNPGTabMark namespace={ns} name={name} id="replication" />,
         icon: <Network className="h-4 w-4" />,
         render: () => (
           <CNPGReplicationTab
@@ -116,6 +117,7 @@ export function CNPGDetailPage({
       {
         id: 'storage',
         label: 'Storage',
+        badge: <CNPGTabMark namespace={ns} name={name} id="storage" />,
         icon: <HardDrive className="h-4 w-4" />,
         render: () => <CNPGStorageTab namespace={ns} name={name} onOpenHistory={() => openHistory('storage')} onOpenReplication={() => goTab('replication')} />,
       },
@@ -141,6 +143,7 @@ export function CNPGDetailPage({
       {
         id: 'backups',
         label: 'Backups',
+        badge: <CNPGTabMark namespace={ns} name={name} id="protection" />,
         icon: <ShieldCheck className="h-4 w-4" />,
         render: () => (
           <CNPGBackupsTab
@@ -210,7 +213,7 @@ export function CNPGDetailPage({
           onNavigateToResource={openRelated}
           extraTabs={extraTabs}
           tabOrder={isCluster ? CNPG_CLUSTER_TAB_ORDER : undefined}
-          subheader={isCluster ? <CNPGClusterHeaderChips namespace={target.namespace} name={target.name} onSelect={(id) => goTab(cnpgDimensionTab(id))} /> : undefined}
+          statusNote={isCluster ? <CNPGClusterServing namespace={target.namespace} name={target.name} onSelect={() => goTab(cnpgDimensionTab('serving'))} /> : undefined}
           specTab={
             isCluster
               ? { label: 'Configuration', icon: <Settings2 className="h-4 w-4" />, lead: <CNPGConfigurationLead namespace={target.namespace} name={target.name} onNavigate={openRelated} /> }

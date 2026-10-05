@@ -294,6 +294,28 @@ describe('buildCNPGFleet', () => {
     expect(fleet.rows[0].categories.has('availability')).toBe(true)
   })
 
+  it("names a Cluster's own Job Pod problem by what the Job is for, as the cause, never as an instance", () => {
+    const joinPod = {
+      apiVersion: 'v1',
+      kind: 'Pod',
+      metadata: { name: 'pg-a-2-join-x1', namespace: 'db', labels: { 'cnpg.io/cluster': 'pg-a', 'cnpg.io/jobRole': 'join', 'cnpg.io/instanceName': 'pg-a-2' } },
+      status: { phase: 'Pending' },
+    }
+    const base = resp({ clusters: [cluster('pg-a', 'db', { status: { readyInstances: 1 } })], pods: [pod('pg-a-1', 'db', 'pg-a', 'primary')] }, {
+      issues: [
+        { id: 'c1', severity: 'warning', category: 'operator_condition_failed', kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name: 'pg-a', reason: 'Ready: ClusterIsNotReady', message: 'Cluster Is Not Ready' },
+        { id: 'j1', severity: 'critical', category: 'unschedulable', kind: 'Pod', namespace: 'db', name: 'pg-a-2-join-x1', reason: 'Unschedulable', message: '2 node(s) insufficient pods (0/2 nodes available)' },
+      ],
+    })
+    const row = buildCNPGFleet({ ...base, jobPods: [joinPod] }).rows[0]
+    expect(row.problems[0].title).toBe("New standby pg-a-2: Can't be scheduled")
+    expect(row.problems[0].severity).toBe('warning')
+    expect(row.problems[0].detail).toBe('2 node(s) insufficient pods (0/2 nodes available)')
+    expect(row.problems[0].origin?.label).toBe('Kubernetes scheduler')
+    expect(row.pods.map((p) => p.name)).toEqual(['pg-a-1'])
+    expect(buildCNPGFleet(base).rows[0].problems.some((p) => p.subject.name === 'pg-a-2-join-x1')).toBe(false)
+  })
+
   it('reads partial coverage by allowed namespaces and treats unnamed partial coverage as unknown', () => {
     const named = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { backups: { state: 'partial', allowedNamespaces: ['db'] } } }))
     expect(named.rows[0].protection.lastSuccessfulBackup.text).toBe('None observed')

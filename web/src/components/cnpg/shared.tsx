@@ -77,21 +77,30 @@ export function coverageLabel(cov: CNPGKindCoverage | undefined): string {
   return COVERAGE_LABEL[cov?.state ?? ''] ?? cov?.state ?? 'unknown'
 }
 
-/** The incomplete kinds grouped by what was left unread, each reason said once. */
-export function incompleteKindsText(kinds: CNPGFleet['incompleteKinds'], coverage: CNPGWorkspaceResponse['coverage']): string {
+const INCOMPLETE_STATES = new Set(['partial', 'denied', 'syncing', 'error', 'uncached'])
+
+/**
+ * The incomplete kinds grouped by what was left unread, each reason said once.
+ * Jobs count when their coverage is incomplete: a Cluster's initdb, join and
+ * restore Job Pods are read only where they are.
+ */
+export function incompleteKindsText(kinds: CNPGFleet['incompleteKinds'], coverage: CNPGWorkspaceResponse['coverage'], jobCoverage?: CNPGKindCoverage): string {
   const byLabel = new Map<string, string[]>()
-  for (const k of kinds) {
-    const label = coverageLabel(coverage[k])
-    byLabel.set(label, [...(byLabel.get(label) ?? []), CNPG_KIND_BY_KEY[k].kind])
+  const add = (kind: string, cov: CNPGKindCoverage | undefined) => {
+    const label = coverageLabel(cov)
+    byLabel.set(label, [...(byLabel.get(label) ?? []), kind])
   }
+  for (const k of kinds) add(CNPG_KIND_BY_KEY[k].kind, coverage[k])
+  if (jobCoverage && INCOMPLETE_STATES.has(jobCoverage.state)) add('Job', jobCoverage)
   return [...byLabel].map(([label, names]) => `${names.join(', ')} (${label})`).join('; ')
 }
 
 export function CoverageNotice({ fleet, data }: { fleet: CNPGFleet; data: CNPGWorkspaceResponse }) {
-  if (fleet.incompleteKinds.length === 0) return null
+  const jobsIncomplete = !!data.jobCoverage && INCOMPLETE_STATES.has(data.jobCoverage.state)
+  if (fleet.incompleteKinds.length === 0 && !jobsIncomplete) return null
   return (
     <Notice>
-      Some CloudNativePG data is not readable: {incompleteKindsText(fleet.incompleteKinds, data.coverage)}. Facts built on it read “No access” or “unknown” rather than none, and counts are lower bounds.
+      Some CloudNativePG data is not readable: {incompleteKindsText(fleet.incompleteKinds, data.coverage, data.jobCoverage)}. Facts built on it read “No access” or “unknown” rather than none, and counts are lower bounds.
     </Notice>
   )
 }

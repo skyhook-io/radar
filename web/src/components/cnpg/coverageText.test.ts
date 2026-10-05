@@ -20,4 +20,8 @@ describe('coverage wording', () => {
     })
     expect(text).toBe('Cluster, Backup (not read in some namespaces); ClusterImageCatalog (not cached by Radar)')
   })
+  it("lists Jobs it could not read, since a Cluster's Job Pods are read only where they are", () => {
+    expect(incompleteKindsText(['clusters'], { clusters: { state: 'partial' } }, { state: 'denied' })).toBe('Cluster (not read in some namespaces); Job (no access)')
+    expect(incompleteKindsText([], {}, { state: 'full' })).toBe('')
+  })
 })

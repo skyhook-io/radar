@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	listersbatchv1 "k8s.io/client-go/listers/batch/v1"
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -99,6 +100,11 @@ type CNPGWorkspaceResponse struct {
 	// labels and annotations name, keyed "Kind/namespace/name"; objects with
 	// no such signal have no entry. Instance Pods are not included.
 	ManagedBy map[string]topology.ResourceRef `json:"managedBy,omitempty"`
+	// JobPods are the Pods of Jobs a returned Cluster controls (initdb, join,
+	// restore…), kept apart from its instance Pods. JobCoverage says where the
+	// caller's Jobs were read: a Job Pod is returned only there.
+	JobPods     []any         `json:"jobPods,omitempty"`
+	JobCoverage *KindCoverage `json:"jobCoverage,omitempty"`
 }
 
 func newCNPGWorkspaceResponse(namespaces []string) CNPGWorkspaceResponse {
@@ -195,12 +201,14 @@ func (s *Server) handleCNPGWorkspace(w http.ResponseWriter, r *http.Request) {
 		resp.Objects[k.key] = out
 	}
 
-	podAccess, pods, instancePods := s.cnpgWorkspaceReadPods(r, cache, namespaces, cnpgClusterUIDs(items[cnpgWorkspaceClusterKey]))
+	podAccess, pods, jobPods, jobAccess, returnedPods := s.cnpgWorkspaceReadPods(r, cache, namespaces, cnpgClusterUIDs(items[cnpgWorkspaceClusterKey]))
+	jobCov := jobAccess.coverage()
+	resp.JobPods, resp.JobCoverage = jobPods, &jobCov
 	access[cnpgWorkspacePodsKey] = podAccess
 	resp.Coverage[cnpgWorkspacePodsKey] = podAccess.coverage()
 	resp.Objects[cnpgWorkspacePodsKey] = pods
 
-	resp.Issues = s.cnpgWorkspaceIssues(r, namespaces, access, instancePods)
+	resp.Issues = s.cnpgWorkspaceIssues(r, namespaces, access, returnedPods)
 	resp.Audit = cnpgWorkspaceAudit(items[cnpgWorkspaceClusterKey], items[cnpgWorkspaceSchedKey], access[cnpgWorkspaceSchedKey])
 	resp.ScheduleReadings = cnpgScheduleReadings(items[cnpgWorkspaceSchedKey])
 
@@ -372,19 +380,23 @@ func trimCNPGPod(p *corev1.Pod) cnpgWorkspacePod {
 	return out
 }
 
-// cnpgWorkspaceReadPods returns the instance Pods of visible Clusters, plus
-// the namespace/name set of what it returned — the only Pods whose issues the
-// response may carry.
-func (s *Server) cnpgWorkspaceReadPods(r *http.Request, cache *k8s.ResourceCache, namespaces []string, clusterUIDs map[string]types.UID) (kindAccess, []any, map[string]bool) {
-	out := []any{}
-	returned := map[string]bool{}
-	acc, read := s.typedKindScope(r, cache, namespaces, "", "pods")
-	if acc.state == kindCoverageDenied || acc.state == kindCoverageUncached {
-		return acc, out, returned
+// cnpgWorkspaceReadPods returns the instance Pods of visible Clusters and,
+// where the caller may also list Jobs, the Pods of the Jobs those Clusters
+// control, plus the namespace/name set of what it returned — the only Pods
+// whose issues the response may carry.
+func (s *Server) cnpgWorkspaceReadPods(r *http.Request, cache *k8s.ResourceCache, namespaces []string, clusterUIDs map[string]types.UID) (podAcc kindAccess, out, jobOut []any, jobAcc kindAccess, returned map[string]bool) {
+	out, jobOut, returned = []any{}, []any{}, map[string]bool{}
+	podAcc, read := s.typedKindScope(r, cache, namespaces, "", "pods")
+	jobAcc, _ = s.typedKindScope(r, cache, namespaces, "batch", "jobs")
+	if (jobAcc.state == kindCoverageFull || jobAcc.state == kindCoveragePartial) && (cache.Jobs() == nil || !cache.IsKindReady("jobs")) {
+		jobAcc = kindAccess{state: kindCoverageSyncing}
+	}
+	if podAcc.state == kindCoverageDenied || podAcc.state == kindCoverageUncached {
+		return podAcc, out, jobOut, jobAcc, returned
 	}
 	if cache.Pods() == nil {
 		log.Printf("[cnpg] Pod cache unavailable for workspace")
-		return kindAccess{state: kindCoverageError}, out, returned
+		return kindAccess{state: kindCoverageError}, out, jobOut, jobAcc, returned
 	}
 
 	pods := listPodsScoped(cache.Pods(), read)
@@ -395,12 +407,42 @@ func (s *Server) cnpgWorkspaceReadPods(r *http.Request, cache *k8s.ResourceCache
 		return pods[i].Name < pods[j].Name
 	})
 	for _, p := range pods {
-		if p != nil && isCNPGInstancePod(p, clusterUIDs) {
+		switch {
+		case p == nil:
+		case isCNPGInstancePod(p, clusterUIDs):
 			out = append(out, trimCNPGPod(p))
+			returned[p.Namespace+"/"+p.Name] = true
+		case jobAcc.covers(p.Namespace) && isCNPGClusterJobPod(p, clusterUIDs, cache.Jobs()):
+			jobOut = append(jobOut, trimCNPGPod(p))
 			returned[p.Namespace+"/"+p.Name] = true
 		}
 	}
-	return acc, out, returned
+	return podAcc, out, jobOut, jobAcc, returned
+}
+
+// isCNPGClusterJobPod reports a Pod of a Job its Cluster controls: the Pod's
+// controller is that exact Job (name and UID), and the Job's controller is the
+// Cluster (name and UID). Labels alone never adopt a Pod, and a Job recreated
+// under the same name does not adopt the previous Job's Pods.
+func isCNPGClusterJobPod(p *corev1.Pod, clusterUIDs map[string]types.UID, jobs listersbatchv1.JobLister) bool {
+	clusterName := p.Labels[cnpgClusterLabel]
+	if clusterName == "" || p.Labels[cnpgJobRoleLabel] == "" || jobs == nil {
+		return false
+	}
+	uid, ok := clusterUIDs[p.Namespace+"/"+clusterName]
+	if !ok || uid == "" {
+		return false
+	}
+	ref := cnpgControllerRef(p.OwnerReferences)
+	if ref == nil || ref.Kind != "Job" {
+		return false
+	}
+	job, err := jobs.Jobs(p.Namespace).Get(ref.Name)
+	if err != nil || job == nil {
+		return false
+	}
+	return cnpgControlledBy(p.OwnerReferences, "batch", "Job", job.Name, job.UID) &&
+		cnpgControlledBy(job.OwnerReferences, cnpgGroup, "Cluster", clusterName, uid)
 }
 
 var cnpgWorkspaceKeyByGroupKind = func() map[string]string {
@@ -415,9 +457,9 @@ var cnpgWorkspaceKeyByGroupKind = func() map[string]string {
 // the flat evidence rows: the grouped view folds instance-Pod evidence into
 // the owning Cluster's row, which would hand Pod failure detail to a caller
 // who may list Clusters but not Pods. A row is kept only when its own subject
-// is visible here — a CNPG kind covered in its namespace, or an instance Pod
-// this response returned. IDs are the subject-derived IDs /api/issues uses.
-func (s *Server) cnpgWorkspaceIssues(r *http.Request, namespaces []string, access map[string]kindAccess, instancePods map[string]bool) []CNPGWorkspaceIssue {
+// is visible here — a CNPG kind covered in its namespace, or an instance or
+// Cluster Job Pod this response returned. IDs are the subject-derived IDs /api/issues uses.
+func (s *Server) cnpgWorkspaceIssues(r *http.Request, namespaces []string, access map[string]kindAccess, returnedPods map[string]bool) []CNPGWorkspaceIssue {
 	out := []CNPGWorkspaceIssue{}
 	if noNamespaceAccess(namespaces) {
 		return out
@@ -433,7 +475,7 @@ func (s *Server) cnpgWorkspaceIssues(r *http.Request, namespaces []string, acces
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
 	})
 	for _, iss := range composed {
-		if !cnpgWorkspaceIssueVisible(iss, access, instancePods) {
+		if !cnpgWorkspaceIssueVisible(iss, access, returnedPods) {
 			continue
 		}
 		out = append(out, CNPGWorkspaceIssue{
@@ -454,9 +496,9 @@ func (s *Server) cnpgWorkspaceIssues(r *http.Request, namespaces []string, acces
 	return out
 }
 
-func cnpgWorkspaceIssueVisible(iss issues.Issue, access map[string]kindAccess, instancePods map[string]bool) bool {
+func cnpgWorkspaceIssueVisible(iss issues.Issue, access map[string]kindAccess, returnedPods map[string]bool) bool {
 	if iss.Group == "" && iss.Kind == "Pod" {
-		return access[cnpgWorkspacePodsKey].covers(iss.Namespace) && instancePods[iss.Namespace+"/"+iss.Name]
+		return access[cnpgWorkspacePodsKey].covers(iss.Namespace) && returnedPods[iss.Namespace+"/"+iss.Name]
 	}
 	if iss.Group != cnpgGroup && iss.Group != cnpgBarmanGroup {
 		return false

@@ -54,38 +54,56 @@ function InstancePill({ pod, namespace, onNavigate }: { pod: CNPGInstance; names
   )
 }
 
-const CHIP = 'inline-flex items-center gap-1.5 rounded-md border border-theme-border bg-theme-base px-2 py-0.5 text-xs'
-
-/** One chip per health dimension, each opening where that dimension is explained. */
-export function CNPGDimensionChips({ dimensions, onSelect, className }: { dimensions: CNPGDimension[]; onSelect?: (id: CNPGDimension['id']) => void; className?: string }) {
+/**
+ * One dimension's state as a mark beside the tab that explains it: a dot when
+ * something needs a look, a hollow ring when it could not be assessed (never a
+ * calm colour), nothing when it is fine. The verdict is in the tooltip; the
+ * Overview's At a glance has it in words.
+ */
+export function CNPGDimensionMark({ dimension }: { dimension: CNPGDimension }) {
+  const label = `${dimension.label}: ${dimension.text}`
+  if (dimension.tone === 'unknown') {
+    return (
+      <Tooltip content={<><div>{label}</div><div className="text-theme-text-tertiary">{dimension.source}</div></>} position="bottom">
+        <span role="img" aria-label={label} className="inline-block h-[7px] w-[7px] shrink-0 rounded-full border border-theme-text-tertiary" />
+      </Tooltip>
+    )
+  }
+  if (dimension.tone === 'healthy' || dimension.tone === 'neutral') return null
   return (
-    <div className={clsx('flex flex-wrap gap-1.5', className)} aria-label="Health by dimension">
-      {dimensions.map((d) => {
-        const body = (
-          <>
-            <StatusDot tone={d.tone} />
-            <span className="text-theme-text-secondary">{d.label}</span>
-            <span className={toneTextClass(d.tone)}>{d.text}</span>
-          </>
-        )
-        return (
-          <Tooltip key={d.id} content={d.source} position="top">
-            {onSelect ? (
-              <button
-                type="button"
-                onClick={() => onSelect(d.id)}
-                aria-label={`${d.label}: ${d.text}. Open ${d.label.toLowerCase()} details`}
-                className={clsx(CHIP, 'hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent')}
-              >
-                {body}
-              </button>
-            ) : (
-              <span className={CHIP}>{body}</span>
-            )}
-          </Tooltip>
-        )
-      })}
-    </div>
+    <Tooltip content={<><div>{label}</div><div className="text-theme-text-tertiary">{dimension.source}</div></>} position="bottom">
+      <span role="img" aria-label={label} className="inline-flex shrink-0">
+        <StatusDot tone={dimension.tone} />
+      </span>
+    </Tooltip>
+  )
+}
+
+/** Whether the cluster serves writes, on its title line: the headline the tabs do not carry. */
+export function CNPGServingStatus({ dimension, onSelect }: { dimension: CNPGDimension; onSelect?: () => void }) {
+  const body = (
+    <>
+      <StatusDot tone={dimension.tone} />
+      <span className="text-theme-text-secondary">{dimension.label}</span>
+      <span className={toneTextClass(dimension.tone)}>{dimension.text}</span>
+    </>
+  )
+  const className = 'inline-flex items-center gap-1.5 whitespace-nowrap text-sm'
+  return (
+    <Tooltip content={dimension.source} position="bottom">
+      {onSelect ? (
+        <button
+          type="button"
+          onClick={onSelect}
+          aria-label={`${dimension.label}: ${dimension.text}. Open its details`}
+          className={clsx(className, 'rounded hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent')}
+        >
+          {body}
+        </button>
+      ) : (
+        <span className={className}>{body}</span>
+      )}
+    </Tooltip>
   )
 }
 

@@ -147,7 +147,7 @@ function DetailShellTabButton({ active, compact, onClick, children }: { active: 
       onClick={onClick}
       className={clsx(
         'flex shrink-0 items-center gap-1.5 whitespace-nowrap py-2 text-sm font-medium border-b-2 transition-colors',
-        compact ? 'px-2.5' : 'px-3',
+        compact ? 'px-2' : 'px-3',
         active
           ? 'text-theme-text-primary border-skyhook-500'
           : 'text-theme-text-secondary border-transparent hover:text-theme-text-primary hover:border-theme-border-light',
