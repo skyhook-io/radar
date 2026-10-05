@@ -143,10 +143,10 @@ describe('cnpgIdAge', () => {
 })
 
 describe('cnpgNoStandbyText', () => {
-  it('calls a one-instance cluster single, and a larger one short of standbys', () => {
+  it('calls a one-instance cluster single, a larger one short of standbys, and claims neither unread', () => {
     expect(cnpgNoStandbyText(1)).toBe('Single instance: no replica to fail over to.')
     expect(cnpgNoStandbyText(2)).toBe('No standby is running: spec.instances is 2, so one standby is expected. Nothing to fail over to until one joins.')
     expect(cnpgNoStandbyText(3)).toContain('2 standbys are expected')
-    expect(cnpgNoStandbyText(undefined)).toBe('Single instance: no replica to fail over to.')
+    expect(cnpgNoStandbyText(undefined)).toBe('No standby is running.')
   })
 })
