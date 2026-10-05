@@ -336,6 +336,10 @@ export function ResourcesSidebar({
     }))
   }, [categories])
 
+  const visiblePinned = useMemo(() => apiResources
+    ? pinned.filter(p => apiResources.some(r => r.name === p.name && r.group === p.group))
+    : pinned, [apiResources, pinned])
+
   const unavailableKinds = useMemo(() => new Set(resourceUnavailable ?? []), [resourceUnavailable])
 
   // null for a key means "count unknown/unavailable" (rendered as a
@@ -463,7 +467,7 @@ export function ResourcesSidebar({
   const flatVisibleKinds = useMemo<SelectedKindInfo[]>(() => {
     const kinds: SelectedKindInfo[] = []
     if (favoritesExpanded) {
-      for (const p of pinned) {
+      for (const p of visiblePinned) {
         kinds.push({ name: p.name, kind: p.kind, group: p.group })
       }
     }
@@ -477,7 +481,7 @@ export function ResourcesSidebar({
       }
     }
     return kinds
-  }, [favoritesExpanded, pinned, filteredCategories, effectiveExpandedCategories, kindsOpenOverrides, categoryWorkspaces, activeDestinationCategory]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [favoritesExpanded, visiblePinned, filteredCategories, effectiveExpandedCategories, kindsOpenOverrides, categoryWorkspaces, activeDestinationCategory]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
   // Reset highlight when the filter or kind list changes
@@ -577,20 +581,20 @@ export function ResourcesSidebar({
           >
             <CollapseChevron open={favoritesExpanded} className="w-3 h-3" />
             <span className="flex-1 text-left">Favorites</span>
-            {!favoritesExpanded && pinned.length > 0 && (
-              <span className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center font-mono', pinned.length < 1000 ? 'w-8' : 'w-9')}>
-                {pinned.length}
+            {!favoritesExpanded && visiblePinned.length > 0 && (
+              <span className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center font-mono', visiblePinned.length < 1000 ? 'w-8' : 'w-9')}>
+                {visiblePinned.length}
               </span>
             )}
           </button>
           <Collapse open={favoritesExpanded} id={favoritesDisclosure.panelId}>
             <div className="space-y-0.5">
-              {pinned.length === 0 ? (
+              {visiblePinned.length === 0 ? (
                 <div className="px-3 py-2 text-xs text-theme-text-disabled">
-                  No pinned resources. Click <Pin className="w-3 h-3 inline" /> on any resource type to pin it here.
+                  {pinned.length > 0 ? 'No pinned kinds are served on this connection.' : <>No pinned resources. Click <Pin className="w-3 h-3 inline" /> on any resource type to pin it here.</>}
                 </div>
               ) : (
-                pinned.map((p) => {
+                visiblePinned.map((p) => {
                   const isResourceSelected =
                     (effectiveSelectedKind.name === p.name && effectiveSelectedKind.group === p.group) ||
                     (effectiveSelectedKind.kind.toLowerCase() === p.kind.toLowerCase() && effectiveSelectedKind.group === p.group)

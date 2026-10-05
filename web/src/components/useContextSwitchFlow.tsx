@@ -16,6 +16,7 @@ function shouldSuppressSwitchErrorToast(error: unknown): boolean {
 interface PendingSwitch {
   context: ContextInfo
   openAfter?: SelectedResource
+  execute?: () => Promise<unknown>
 }
 
 // The one way to switch contexts from the UI: the switching overlay, a
@@ -30,7 +31,7 @@ export function useContextSwitchFlow() {
   const [pending, setPending] = useState<PendingSwitch | null>(null)
   const [sessionCounts, setSessionCounts] = useState<SessionCounts | null>(null)
 
-  const performSwitch = async ({ context, openAfter }: PendingSwitch) => {
+  const performSwitch = async ({ context, openAfter, execute }: PendingSwitch) => {
     const parsed = parseContextForSwitcher(context)
     startSwitch({
       raw: parsed.raw,
@@ -41,21 +42,21 @@ export function useContextSwitchFlow() {
     })
     setOpenAfterSwitch(openAfter ? { context: context.name, resource: openAfter } : null)
     try {
-      await switchContext.mutateAsync({ name: context.name })
+      await (execute ? execute() : switchContext.mutateAsync({ name: context.name }))
     } catch (error) {
       console.error('Failed to switch context:', error)
       setOpenAfterSwitch(null)
       endSwitch()
       // Backend may not transition to StateDisconnected on client-side errors
       // (network, timeout) — without this toast the user gets no feedback.
-      if (!shouldSuppressSwitchErrorToast(error)) {
+      if (!execute && !shouldSuppressSwitchErrorToast(error)) {
         const message = error instanceof Error ? error.message : 'Unknown error'
         showError('Failed to switch context', message)
       }
     }
   }
 
-  const requestSwitch = async (context: ContextInfo, openAfter?: SelectedResource) => {
+  const requestSwitch = async (context: ContextInfo, openAfter?: SelectedResource, execute?: () => Promise<unknown>) => {
     if (context.isCurrent || switchContext.isPending) return
     // Active sessions (port forwards from API + terminal tabs from dock) get
     // a confirmation prompt — switching contexts kills both.
@@ -65,7 +66,7 @@ export function useContextSwitchFlow() {
       const total = counts.portForwards + terminalTabs
       if (total > 0) {
         setSessionCounts({ ...counts, execSessions: terminalTabs, total })
-        setPending({ context, openAfter })
+        setPending({ context, openAfter, execute })
         return
       }
     } catch (error) {
@@ -78,7 +79,7 @@ export function useContextSwitchFlow() {
         'Switching anyway. Any open port-forwards or terminals will be terminated.',
       )
     }
-    performSwitch({ context, openAfter })
+    performSwitch({ context, openAfter, execute })
   }
 
   const confirm = () => {

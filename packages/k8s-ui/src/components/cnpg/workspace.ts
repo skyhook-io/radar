@@ -37,17 +37,8 @@ export const CNPG_WORKSPACE_KEYS = [
 
 export type CNPGWorkspaceKey = (typeof CNPG_WORKSPACE_KEYS)[number]
 
-export type CNPGCoverageState = 'full' | 'partial' | 'denied' | 'notInstalled' | 'syncing' | 'uncached' | 'error'
-
-export interface CNPGKindCoverage {
-  state: CNPGCoverageState
-  /** Denied namespaces, named only when the caller supplied the candidate list. */
-  deniedNamespaces?: string[]
-  /** Namespaces the caller may read but Radar's cache does not hold, named under the same rule. */
-  uncachedNamespaces?: string[]
-  /** For partial coverage: the namespaces that were read. */
-  allowedNamespaces?: string[]
-}
+export type { KindCoverageState as CNPGCoverageState, KindCoverage as CNPGKindCoverage } from '../facts/coverage'
+import type { KindCoverage as CNPGKindCoverage } from '../facts/coverage'
 
 export interface CNPGWorkspaceIssue {
   id: string

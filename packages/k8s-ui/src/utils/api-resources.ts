@@ -106,7 +106,7 @@ export function categorizeResources(resources: APIResource[]): ResourceCategory[
   )
 
   const seenKinds = new Map<string, APIResource>()
-  const dedupKey = (r: APIResource) => r.isCrd ? `${r.group}/${r.kind}` : r.kind
+  const dedupKey = (r: APIResource) => `${r.group}/${r.kind}`
 
   for (const resource of listableResources) {
     seenKinds.set(dedupKey(resource), resource)
@@ -237,6 +237,10 @@ export function formatGroupName(group: string): string {
     'networking.k8s.aws': 'AWS Networking',
     'acid.zalan.do': 'Zalando Postgres',
     'postgresql.cnpg.io': 'CloudNativePG',
+    'dns.networking.miloapis.com': 'Datum',
+    'networking.datumapis.com': 'Datum',
+    'compute.datumapis.com': 'Datum',
+    'resourcemanager.miloapis.com': 'Datum',
     'barmancloud.cnpg.io': 'CloudNativePG',
     'serving.kserve.io': 'KServe',
     'ray.io': 'KubeRay',
@@ -329,7 +333,7 @@ function sortResources(resources: APIResource[]): APIResource[] {
 }
 
 export function getKindLabel(kind: string): string {
-  return kind.replace(/([A-Z])/g, ' $1').trim()
+  return kind.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z])([A-Z][a-z])/g, '$1 $2').trim()
 }
 
 export function getKindPlural(resource: APIResource): string {

@@ -1,3 +1,5 @@
+import { DatumView } from './components/datum/DatumView'
+import { DATUM_SCREENS, datumDetailKindFor, datumDetailPath, parseDatumRoute } from './components/datum/routes'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
@@ -129,7 +131,7 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 // Extended MainView type that includes traffic and cost
 const TOPOLOGY_GROUPINGS: readonly GroupingMode[] = ['none', 'namespace', 'app', 'label']
 
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'datum' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
@@ -144,6 +146,7 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'cost') return 'cost'
   if (path === 'capacity') return 'capacity'
   if (path === 'cnpg') return 'cnpg'
+  if (path === 'datum') return 'datum'
   if (path === 'workload') return 'workload'
   if (path === 'checks' || path === 'audit') return 'checks'  // /audit = legacy → checks
   if (path === 'gitops') return 'gitops'
@@ -171,7 +174,7 @@ function usageView(pathname: string, view: ExtendedMainView, upgrade: boolean): 
 const CRASH_LABELS: Record<ExtendedMainView, string> = {
   home: 'Home', topology: 'Topology', resources: 'Resources', timeline: 'Timeline',
   issues: 'Issues', helm: 'Helm', helmCompare: 'HelmCompare', traffic: 'Traffic',
-  cost: 'Cost', capacity: 'Capacity', cnpg: 'CloudNativePG', checks: 'Checks', gitops: 'GitOps',
+  cost: 'Cost', capacity: 'Capacity', cnpg: 'CloudNativePG', datum: 'Datum', checks: 'Checks', gitops: 'GitOps',
   applications: 'Applications', workload: 'Workload', compare: 'Compare',
   investigations: 'Investigations',
 }
@@ -288,6 +291,11 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
     if (pathSegments[1] === 'activity') return 'Capacity Activity'
   }
 
+  if (view === 'datum') {
+    const route = parseDatumRoute(pathname)
+    if (route.detail) return route.detail.name
+    return `Datum ${DATUM_SCREENS.find(s => s.id === route.screen)?.label || 'Hostnames'}`
+  }
   if (view === 'cnpg') {
     const route = parseCNPGRoute(pathname)
     if (route.detail) return route.detail.name
@@ -358,6 +366,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const [searchParams, setSearchParams] = useSearchParams()
   const capabilities = useCapabilitiesContext()
   // Expanding a CloudNativePG object opens its workspace page only on a Radar that serves it.
+  const datumWorkspaceSupported = useRadarFeature('datumWorkspace').support === 'supported'
   const cnpgWorkspaceSupported = useRadarFeature('cnpgWorkspace').support === 'supported'
   const openLocalTerminal = useOpenLocalTerminal()
   const navCustomization = useNavCustomization()
@@ -890,7 +899,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     gitops: 'g o', checks: 'g u', cost: 'g c', capacity: 'g p',
     // Non-rail views (reachable via deep links / actions, not the rail) get no
     // dedicated mnemonic — listed for exhaustiveness so the type stays total.
-    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '',
+    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '', datum: '',
   }
   const views = Object.keys(VIEW_SHORTCUT_KEYS).filter(
     (v): v is ExtendedMainView => VIEW_SHORTCUT_KEYS[v as ExtendedMainView] !== '',
@@ -1080,6 +1089,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     timer: number | null
   }>({ changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
   const cnpgInvalidationPendingRef = useRef(false)
+  const datumInvalidationPendingRef = useRef(false)
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     timer: number | null
@@ -1112,6 +1122,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     const applicationWorkload = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
 
     if (event.group?.endsWith('.cnpg.io')) cnpgInvalidationPendingRef.current = true
+    if (['dns.networking.miloapis.com', 'networking.datumapis.com', 'compute.datumapis.com', 'resourcemanager.miloapis.com', 'coordination.k8s.io', 'discovery.k8s.io'].includes(event.group || '')) datumInvalidationPendingRef.current = true
 
     const fast = fastInvalidationRef.current
     fast.changedKinds.add(kind)
@@ -1156,6 +1167,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         // GitOps view is mounted (Phase 2 will make this relevance-aware).
         queryClient.invalidateQueries({ queryKey: ['gitops-tree'] })
         queryClient.invalidateQueries({ queryKey: ['gitops-insights'] })
+        if (datumInvalidationPendingRef.current) {
+          datumInvalidationPendingRef.current = false
+          queryClient.invalidateQueries({ queryKey: ['datum', 'workspace'] })
+        }
         if (cnpgInvalidationPendingRef.current) {
           cnpgInvalidationPendingRef.current = false
           queryClient.invalidateQueries({ queryKey: ['cnpg', 'workspace'] })
@@ -1248,7 +1263,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         // A CNPG detail keeps the context it belongs to, so it can say it is
         // not in the new one instead of loading a same-named object.
         const pinnedCtx = new URLSearchParams(location.search).get('ctx')
-        if (pinnedCtx && location.pathname.startsWith('/cnpg/')) nextParams.set('ctx', pinnedCtx)
+        if (pinnedCtx && (location.pathname.startsWith('/cnpg/') || location.pathname.startsWith('/datum/'))) nextParams.set('ctx', pinnedCtx)
         navigate(
           { pathname: location.pathname, search: nextParams.toString() },
           { replace: true, state: location.state },
@@ -1793,7 +1808,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     setVisibleKinds(new Set())
   }, [])
 
-  const navActiveView = mainView === 'helmCompare' ? 'helm' : mainView === 'cnpg' ? 'resources' : mainView
+  const navActiveView = mainView === 'helmCompare' ? 'helm' : (mainView === 'cnpg' || mainView === 'datum') ? 'resources' : mainView
 
   return (
     <PortForwardProvider>
@@ -2346,6 +2361,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <CapacityView onOpenResource={navigateToResource} />
         )}
 
+        {!viewsSyncGated && mainView === 'datum' && (
+          <DatumView namespaces={namespaces} selectedResource={routeSelectedResource} onOpenResource={navigateToResource} onCloseResource={() => setSelectedResource(null)} onClearNamespaces={clearAllNamespaces} />
+        )}
+
         {!viewsSyncGated && mainView === 'cnpg' && (
           <CNPGView
             namespaces={namespaces}
@@ -2425,6 +2444,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           onNavigate={(res) => navigateToResource(res)}
           canCollapseToDrawer={!isMobile}
           onExpand={(res, opts) => {
+            const datumPlural = datumWorkspaceSupported ? datumDetailKindFor(res.kind, res.group) : null
+            if (datumPlural) {
+              navigate(datumDetailPath({ plural: datumPlural, namespace: res.namespace, name: res.name }, connection.context || undefined, opts?.yaml ? 'yaml' : undefined), { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } })
+              return
+            }
             const cnpgPlural = cnpgWorkspaceSupported ? cnpgDetailKindFor(res.kind, res.group) : null
             if (cnpgPlural) {
               navigate(

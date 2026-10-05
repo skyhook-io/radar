@@ -59,7 +59,11 @@
     "./theme/components.css": "./src/theme/components.css",
     "./theme": "./src/theme/index.ts",
     "./topology.css": "./src/components/topology/topology.css",
-    "./assets/radar/radar-icon-loading.svg": "./src/assets/radar/radar-icon-loading.svg"
+    "./assets/radar/radar-icon-loading.svg": "./src/assets/radar/radar-icon-loading.svg",
+    "./components/datum/*": [
+      "./src/components/datum/*.tsx",
+      "./src/components/datum/*.ts"
+    ]
   },
   "scripts": {
     "tsc": "node ../../node_modules/typescript-7/bin/tsc --noEmit",
