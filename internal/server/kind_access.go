@@ -329,6 +329,9 @@ func kindAccessFromListError(k workspaceKind, err error) kindAccess {
 		return kindAccess{state: kindCoverageNotInstalled}
 	case errors.Is(err, errDynamicNotSynced):
 		return kindAccess{state: kindCoverageSyncing}
+	case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
+		// Radar's own identity may not watch it; the caller's access was checked first.
+		return kindAccess{state: kindCoverageUncached}
 	default:
 		log.Printf("[workspace] Failed to list %s.%s: %v", k.kind, k.group, err)
 		return kindAccess{state: kindCoverageError}

@@ -69,6 +69,18 @@ describe('CNPGOverview is the list of clusters', () => {
     expect(html).not.toContain('No PostgreSQL clusters in kind-test')
   })
 
+  it('says once, for the whole list, why no volume usage is measured', () => {
+    const resp = response([cluster('pg', 'pg-a'), cluster('pg', 'pg-b')])
+    const fleet = buildCNPGFleet(resp)
+    for (const row of fleet.rows) row.disk = { text: 'not measured', tone: 'unknown', source: 'no claims owned by this cluster' }
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <CNPGOverview data={resp} fleet={fleet} namespaces={[]} searchParams={new URLSearchParams()} onSetParams={() => {}} onInspect={() => {}} inspected={null} onClearNamespaces={() => {}} />
+      </MemoryRouter>,
+    )
+    expect(html).toContain('not measured for any cluster here (no claims owned by them)')
+  })
+
   it('offers Create when the host can create', () => {
     expect(render(two, '', { onCreate: () => {} })).toContain('Create')
     expect(render(two)).not.toMatch(/>Create</)

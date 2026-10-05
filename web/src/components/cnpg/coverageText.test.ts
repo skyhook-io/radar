@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { coverageEmpty, coverageLabel } from './shared'
+import { coverageEmpty, coverageLabel, incompleteKindsText } from './shared'
 
 describe('coverage wording', () => {
   it('names every cause the server named, whatever the overall state', () => {
@@ -11,5 +11,13 @@ describe('coverage wording', () => {
     expect(coverageEmpty({ state: 'uncached' }, 'Pods')).toBe('Radar does not cache Pods in this scope.')
     expect(coverageEmpty({ state: 'partial' }, 'Pods')).toBe('No Pods visible. Some namespaces were not read.')
     expect(coverageLabel({ state: 'denied' })).toBe('no access')
+  })
+  it('says each reason once for the kinds it applies to', () => {
+    const text = incompleteKindsText(['clusters', 'backups', 'clusterImageCatalogs'], {
+      clusters: { state: 'partial' },
+      backups: { state: 'partial' },
+      clusterImageCatalogs: { state: 'uncached' },
+    })
+    expect(text).toBe('Cluster, Backup (not read in some namespaces); ClusterImageCatalog (not cached by Radar)')
   })
 })

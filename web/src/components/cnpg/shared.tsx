@@ -77,12 +77,21 @@ export function coverageLabel(cov: CNPGKindCoverage | undefined): string {
   return COVERAGE_LABEL[cov?.state ?? ''] ?? cov?.state ?? 'unknown'
 }
 
+/** The incomplete kinds grouped by what was left unread, each reason said once. */
+export function incompleteKindsText(kinds: CNPGFleet['incompleteKinds'], coverage: CNPGWorkspaceResponse['coverage']): string {
+  const byLabel = new Map<string, string[]>()
+  for (const k of kinds) {
+    const label = coverageLabel(coverage[k])
+    byLabel.set(label, [...(byLabel.get(label) ?? []), CNPG_KIND_BY_KEY[k].kind])
+  }
+  return [...byLabel].map(([label, names]) => `${names.join(', ')} (${label})`).join('; ')
+}
+
 export function CoverageNotice({ fleet, data }: { fleet: CNPGFleet; data: CNPGWorkspaceResponse }) {
   if (fleet.incompleteKinds.length === 0) return null
-  const parts = fleet.incompleteKinds.map((k) => `${CNPG_KIND_BY_KEY[k].kind} (${coverageLabel(data.coverage[k])})`)
   return (
     <Notice>
-      Some CloudNativePG data is not readable: {parts.join(', ')}. Facts built on it read “No access” or “unknown” rather than none, and counts are lower bounds.
+      Some CloudNativePG data is not readable: {incompleteKindsText(fleet.incompleteKinds, data.coverage)}. Facts built on it read “No access” or “unknown” rather than none, and counts are lower bounds.
     </Notice>
   )
 }

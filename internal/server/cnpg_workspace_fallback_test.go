@@ -99,6 +99,9 @@ func TestCNPGWorkspace_FallbackCacheAllNamespaces(t *testing.T) {
 	if names := sortedNames(got.Objects["clusters"]); len(names) != 1 || names[0] != "pg-a" {
 		t.Errorf("clusters = %v, want [pg-a]", names)
 	}
+	if cov := got.Coverage["clusterImageCatalogs"]; cov.State != kindCoverageUncached {
+		t.Errorf("clusterImageCatalogs coverage = %+v: a cluster-scoped kind Radar may not watch is uncached, not an error", cov)
+	}
 }
 
 // A namespace the caller names is read on its own, which starts its watch even

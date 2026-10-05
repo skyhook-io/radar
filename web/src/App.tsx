@@ -39,7 +39,7 @@ import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
 import { CNPGView } from './components/cnpg/CNPGView'
-import { CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, parseCNPGRoute } from './components/cnpg/routes'
+import { CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, isCNPGClusterKind, parseCNPGRoute } from './components/cnpg/routes'
 import { currentPageLabel } from './utils/page-links'
 import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
@@ -264,6 +264,8 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
     const resourceName = decode(pathSegments[1] ?? '')
     if (!resourceName) return 'Resources'
     const group = new URLSearchParams(search).get('apiGroup') || ''
+    // The same list as the workspace's Clusters view, and not Cluster API's.
+    if (isCNPGClusterKind({ name: resourceName, group })) return 'CloudNativePG Clusters'
     const match = findAPIResourceForRoute(apiResources, resourceName, group)
     return pluralKindTitle(match?.kind ?? pluralToKind(resourceName), resourceName)
   }
