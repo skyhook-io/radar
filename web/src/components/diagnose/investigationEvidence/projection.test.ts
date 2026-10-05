@@ -2271,6 +2271,11 @@ describe("honest zero and partial-result states", () => {
     );
   });
 
+  it("reports on-demand topology inventories as unopened rather than not started", () => {
+    const result = project([tool("topology", "get_topology", { nodes: [], edges: [], crdDiscoveryStatus: "on-demand" })]);
+    expect(result.limitations).toEqual(expect.arrayContaining([expect.objectContaining({source:"Custom Resource topology",message:expect.stringContaining("observed on demand")})]));
+  });
+
   it("rejects malformed optional topology coverage metadata", () => {
     const result = project([
       tool("topology", "get_topology", {

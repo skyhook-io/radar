@@ -95,3 +95,27 @@ func TestClusterConfigurationRejectsBusyOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestProjectProfileDoesNotStoreFictitiousKubeconfigSource(t *testing.T) {
+	t.Cleanup(SetTestProfileSource("runtime:project", "parent", "user"))
+	previous := SetTestConfig(&rest.Config{Host: "https://api.example.test/apis/resourcemanager.miloapis.com/v1alpha1/projects/p/control-plane"})
+	t.Cleanup(func() { SetTestConfig(previous) })
+	clientMu.Lock()
+	name := contextName
+	saved, had := projectContexts[name]
+	projectContexts[name] = projectContext{Project: "p"}
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		defer clientMu.Unlock()
+		if had {
+			projectContexts[name] = saved
+		} else {
+			delete(projectContexts, name)
+		}
+	})
+	target, err := CurrentProfileTarget()
+	if err != nil || target.Source != "" || target.InFileName != "" {
+		t.Fatalf("runtime source leaked: %+v %v", target, err)
+	}
+}

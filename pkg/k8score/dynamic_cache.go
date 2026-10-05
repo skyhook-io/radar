@@ -326,7 +326,7 @@ func (d *DynamicResourceCache) ensureWatchingContext(ctx context.Context, gvr sc
 			if isAuthProbeError(err) {
 				d.retainDeniedObservation(gvr, preferredNS, complete)
 			}
-			return nil, fmt.Errorf("no access to %s.%s/%s: %w", gvr.Resource, gvr.Group, gvr.Version, err)
+			return nil, fmt.Errorf("could not observe %s.%s/%s: %w", gvr.Resource, gvr.Group, gvr.Version, err)
 		}
 		if preferredNS == "" {
 			d.mu.Lock()
@@ -577,11 +577,14 @@ func (d *DynamicResourceCache) probeScopesContext(parent context.Context, gvr sc
 	if err == nil {
 		return []string{""}, true, nil
 	}
-	if apierrors.IsNotFound(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if apierrors.IsNotFound(err) {
+		return nil, true, &ResourceReadError{Code: "kind_not_served", Resource: gvr.Resource}
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return nil, true, err
 	}
 	if !isAuthProbeError(err) {
-		// Transient/NotFound on proxy-fronted clusters — fail open to a
+		// Transient errors on proxy-fronted clusters — fail open to a
 		// cluster-wide informer rather than disabling the kind; real
 		// problems surface when the informer lists.
 		log.Printf("[dynamic cache] Cluster-wide probe for %s.%s/%s returned non-auth error (allowing): %v", gvr.Resource, gvr.Group, gvr.Version, err)
@@ -841,6 +844,12 @@ func (d *DynamicResourceCache) enqueueDynamicChange(kind string, gvr schema.Grou
 		d.safeCallback("OnReceived", func() { d.config.OnReceived(kind) })
 	}
 
+	if d.config.IsNoisyResource != nil && d.config.IsNoisyResource(kind, name, op) {
+		if d.config.OnDrop != nil {
+			d.safeCallback("OnDrop", func() { d.config.OnDrop(kind, namespace, name, "noisy_filter", op) })
+		}
+		return
+	}
 	// During initial sync, still fire OnChange (for historical recording)
 	// but skip the channel send (no SSE flood).
 	isSyncAdd := false
@@ -1814,7 +1823,7 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 				log.Printf("PANIC in CRD discovery goroutine: %v\n%s", r, buf[:n])
 			}
 			d.discoveryMu.Lock()
-			if d.discoveryStatus != CRDDiscoveryComplete {
+			if d.discoveryStatus != CRDDiscoveryComplete && d.discoveryStatus != CRDDiscoveryOnDemand {
 				d.discoveryStatus = CRDDiscoveryComplete
 				close(d.discoveryDone)
 			}
@@ -1974,6 +1983,20 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 // ---------------------------------------------------------------------------
 // Discovery status / sync
 // ---------------------------------------------------------------------------
+
+// MarkDiscoveryOnDemand records that API discovery finished without an eager
+// inventory scan; unopened kinds can still be absent from topology.
+func (d *DynamicResourceCache) MarkDiscoveryOnDemand() {
+	if d == nil {
+		return
+	}
+	d.discoveryMu.Lock()
+	defer d.discoveryMu.Unlock()
+	if d.discoveryStatus == CRDDiscoveryIdle {
+		d.discoveryStatus = CRDDiscoveryOnDemand
+		close(d.discoveryDone)
+	}
+}
 
 // GetDiscoveryStatus returns the current CRD discovery status.
 func (d *DynamicResourceCache) GetDiscoveryStatus() CRDDiscoveryStatus {
@@ -2188,7 +2211,7 @@ func (d *DynamicResourceCache) Stop() {
 		d.mu.Unlock()
 
 		d.discoveryMu.Lock()
-		if d.discoveryStatus != CRDDiscoveryComplete {
+		if d.discoveryStatus != CRDDiscoveryComplete && d.discoveryStatus != CRDDiscoveryOnDemand {
 			d.discoveryStatus = CRDDiscoveryComplete
 			close(d.discoveryDone)
 		}

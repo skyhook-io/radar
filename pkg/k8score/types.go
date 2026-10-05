@@ -284,6 +284,7 @@ type CacheConfig struct {
 type CRDDiscoveryStatus string
 
 const (
+	CRDDiscoveryOnDemand   CRDDiscoveryStatus = "on-demand"
 	CRDDiscoveryIdle       CRDDiscoveryStatus = "idle"        // Not started
 	CRDDiscoveryInProgress CRDDiscoveryStatus = "discovering" // Discovery in progress
 	CRDDiscoveryComplete   CRDDiscoveryStatus = "ready"       // Discovery complete
@@ -341,6 +342,9 @@ type DynamicCacheConfig struct {
 	// OnReceived is called for every dynamic resource change before processing.
 	// May be nil.
 	OnReceived func(kind string)
+
+	// IsNoisyResource filters notifications without removing objects from the cache.
+	IsNoisyResource func(kind, name, op string) bool
 
 	// OnChange is called for each change after it is recorded. It receives
 	// the ResourceChange plus the raw new and old objects. May be nil.

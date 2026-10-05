@@ -392,7 +392,7 @@ var ErrContextSwitchPreflight = errors.New("context switch preflight rejected")
 
 // ErrReconnectSuperseded is returned by PerformContextSwitchIfOperationCurrent
 // when another operation started after the caller captured its generation.
-var ErrProjectConnectionRestored = errors.New("project connection failed; previous connection restored")
+var ErrProjectConnectionRestored = errors.New("project connection failed; parent connection restored")
 
 var ErrReconnectSuperseded = errors.New("reconnect superseded by a newer operation")
 

@@ -273,6 +273,7 @@ export const NODE_DIMENSIONS: Record<
   TLSStore: { width: 280, height: 84 },
   HTTPProxy: { width: 280, height: 84 }, // Contour
   DatumHTTPProxy: { width: 280, height: 84 },
+  ConfiguredEndpoint: { width: 300, height: 84 },
   CAPICluster: { width: 280, height: 84 }, // Cluster API
   MachineDeployment: { width: 300, height: 84 },
   MachineSet: { width: 280, height: 84 },

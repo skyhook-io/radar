@@ -197,6 +197,7 @@ export interface Deployment {
 // - resource-hierarchy.ts kindPriority maps + appLabelEligibleKinds
 export type CoreNodeKind =
   | 'Internet'
+  | 'ConfiguredEndpoint'
   | 'Ingress'
   | 'Gateway'
   | 'HTTPRoute'
@@ -350,7 +351,7 @@ export interface Topology {
   requiresNamespaceFilter?: boolean // True if cluster is too large for all-namespace topology
   estimatedNodes?: number // Pre-build node count estimate
   summaryMode?: boolean // True when the pod tier was collapsed into per-workload/service counts
-  crdDiscoveryStatus?: 'idle' | 'discovering' | 'ready' // CRD discovery status
+  crdDiscoveryStatus?: 'idle' | 'discovering' | 'ready' | 'on-demand' // CRD discovery status
 }
 
 // PodSummary is stamped onto a workload or service node's data in summary mode.
@@ -510,7 +511,7 @@ export interface ClusterInfo {
   podCount: number
   namespaceCount: number
   inCluster: boolean
-  crdDiscoveryStatus?: 'idle' | 'discovering' | 'ready'
+  crdDiscoveryStatus?: 'idle' | 'discovering' | 'ready' | 'on-demand'
 }
 
 // Context info for context switching

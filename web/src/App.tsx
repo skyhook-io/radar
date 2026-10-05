@@ -1122,7 +1122,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     const applicationWorkload = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
 
     if (event.group?.endsWith('.cnpg.io')) cnpgInvalidationPendingRef.current = true
-    if (['dns.networking.miloapis.com', 'networking.datumapis.com', 'compute.datumapis.com', 'resourcemanager.miloapis.com', 'coordination.k8s.io', 'discovery.k8s.io'].includes(event.group || '')) datumInvalidationPendingRef.current = true
+    if (['dns.networking.miloapis.com', 'networking.datumapis.com', 'compute.datumapis.com', 'resourcemanager.miloapis.com'].includes(event.group || '')) datumInvalidationPendingRef.current = true
 
     const fast = fastInvalidationRef.current
     fast.changedKinds.add(kind)
@@ -1389,7 +1389,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Handle node selection - convert TopologyNode to SelectedResource for the drawer
   const handleNodeClick = useCallback((node: TopologyNode) => {
     // Skip Internet node - it's not a real resource
-    if (node.kind === 'Internet') return
+    if (node.kind === 'Internet' || node.kind === 'ConfiguredEndpoint') return
 
     const nodeGroup = apiVersionToGroup(node.data.apiVersion as string | undefined)
     const resourceKind = topologyNodeResourceKind(node)

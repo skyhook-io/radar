@@ -32,6 +32,10 @@ func (p ProfileTarget) Same(other ProfileTarget) bool {
 func CurrentProfileTarget() (ProfileTarget, error) {
 	clientMu.RLock()
 	p := ProfileTarget{Binding: contextBinding, Context: contextName, Source: activeSourceFile, InFileName: activeSourceName, ClientGeneration: activeClientGeneration}
+	if _, runtime := projectContexts[contextName]; runtime {
+		p.Source = ""
+		p.InFileName = ""
+	}
 	var identity struct {
 		Server, TLSName, User string
 		CA                    []byte

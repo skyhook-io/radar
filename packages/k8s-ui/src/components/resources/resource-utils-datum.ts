@@ -102,6 +102,7 @@ const required: Record<string, string[]> = {
   Domain: ["ValidDomain", "Verified"],
   Connector: ["Accepted", "Ready"],
   Workload: ["Available"],
+  Instance: ["Available"],
   DNSZoneClass: ["Accepted", "Programmed"],
   ConnectorAdvertisement: ["Accepted"],
 };

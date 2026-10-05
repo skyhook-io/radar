@@ -171,3 +171,7 @@ it("keeps stale workload availability reconciling using the reported top-level g
     }).color,
   ).toBe("neutral");
 });
+
+it('reads compute Instance Available rather than requiring a fictional Ready condition', () => {
+ expect(getDatumStatus({kind:'Instance',status:{conditions:[{type:'Available',status:'True'},{type:'Progressing',status:'False',reason:'Stable'}]}}).color).toBe('healthy')
+})

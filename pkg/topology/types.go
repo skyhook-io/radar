@@ -36,6 +36,7 @@ type NodeKind string
 
 const (
 	KindInternet                       NodeKind = "Internet"
+	KindConfiguredEndpoint             NodeKind = "ConfiguredEndpoint"
 	KindIngress                        NodeKind = "Ingress"
 	KindGateway                        NodeKind = "Gateway"
 	KindHTTPRoute                      NodeKind = "HTTPRoute"

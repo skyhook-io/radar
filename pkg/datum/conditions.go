@@ -76,7 +76,7 @@ func Failures(u *unstructured.Unstructured) []Condition {
 			}
 			if c.Scope == "" && nestedType != "" {
 				for _, nested := range observations {
-					if nested.Scope != "" && nested.Type == nestedType && nested.Status == "False" && nested.Reason == c.Reason && !nested.Stale && !nested.Transient {
+					if nested.Scope != "" && nested.Type == nestedType && nested.Status == "False" && !nested.Stale && !nested.Transient {
 						duplicate = true
 					}
 				}
@@ -154,7 +154,7 @@ func RequiredConditions(kind string) []string {
 		return []string{"ValidDomain", "Verified"}
 	case "Connector":
 		return []string{"Accepted", "Ready"}
-	case "Workload":
+	case "Workload", "Instance":
 		return []string{"Available"}
 	case "DNSZoneClass":
 		return []string{"Accepted", "Programmed"}

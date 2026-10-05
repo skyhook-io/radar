@@ -69,6 +69,7 @@ export function topologyPartiality(
     (value.summaryMode !== undefined &&
       typeof value.summaryMode !== "boolean") ||
     (discovery !== undefined &&
+      discovery !== "on-demand" &&
       discovery !== "idle" &&
       discovery !== "discovering" &&
       discovery !== "ready") ||
@@ -140,13 +141,16 @@ export function addTopologyLimitations(
   }
 
   if (
+    partiality.crdDiscoveryStatus === "on-demand" ||
     partiality.crdDiscoveryStatus === "idle" ||
     partiality.crdDiscoveryStatus === "discovering"
   ) {
     builder.limit(
       source,
       "Custom Resource topology",
-      partiality.crdDiscoveryStatus === "idle"
+      partiality.crdDiscoveryStatus === "on-demand"
+        ? "Custom Resource inventories are observed on demand; unopened kinds may be missing from topology."
+        : partiality.crdDiscoveryStatus === "idle"
         ? "Custom Resource discovery had not started when this topology was captured; Custom Resource nodes and relationships may be missing."
         : "Custom Resource discovery was still in progress when this topology was captured; Custom Resource nodes and relationships may be missing.",
       "unknown",

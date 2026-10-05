@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import { Globe } from "lucide-react";
 import {
@@ -6,6 +7,7 @@ import {
   type SelectedKindInfo,
 } from "@skyhook-io/k8s-ui";
 import { useAPIResources } from "../../api/apiResources";
+import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 import { useDatumWorkspace } from "../../api/datum";
 import { usePinnedKinds } from "../../hooks/useFavorites";
 import { useResourceCounts } from "../../hooks/useResourceCounts";
@@ -44,12 +46,24 @@ export function DatumView({
       child: route.detail ? { label: route.detail.name } : undefined,
     },
   });
-  const query = useDatumWorkspace(namespaces, !route.detail),
+  const capabilities = useCapabilitiesContext();
+  const local =
+    capabilities.deployment?.mode === "local" && !capabilities.authEnabled;
+  const query = useDatumWorkspace(namespaces, !route.detail && local),
     { drawerTarget, inspect } = useWorkspaceDrawer(
       selectedResource,
       onOpenResource,
       onCloseResource,
     );
+  useEffect(() => {
+    if (
+      route.screen === "projects" &&
+      query.data?.installed &&
+      query.data.coverage.projects?.state === "notInstalled"
+    ) {
+      navigate("/datum", { replace: true });
+    }
+  }, [route.screen, query.data, navigate]);
   const selectKind = (kind: SelectedKindInfo) =>
     navigate(
       `/resources/${kind.name}${kind.group ? `?apiGroup=${encodeURIComponent(kind.group)}` : ""}`,
@@ -69,7 +83,13 @@ export function DatumView({
         categoryWorkspaces={workspace}
       />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-theme-base">
-        {route.detail ? (
+        {!local ? (
+          <ScreenEmptyState
+            icon={Globe}
+            title="Datum workspace is available in local Radar only"
+            detail="Open local Radar with your own kubeconfig and authentication disabled."
+          />
+        ) : route.detail ? (
           <DatumDetailPage
             target={route.detail}
             namespaces={namespaces}

@@ -139,6 +139,8 @@ func InitAllSubsystems(ctx context.Context, progress func(string)) error {
 						dt := time.Now()
 						if !resourceAbsent("", "pods") {
 							dc.DiscoverAllCRDs()
+						} else {
+							dc.MarkDiscoveryOnDemand()
 						}
 						logTiming("   CRD full discovery: %v (background)", time.Since(dt))
 					},

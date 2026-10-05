@@ -136,7 +136,7 @@ func (b *Builder) addDatumNodes(nodes []Node, edges []Edge, opts BuildOptions) (
 					id := source + "/endpoint/" + parsed.Hostname()
 					if ids[id] == "" {
 						ids[id] = id
-						nodes = append(nodes, Node{ID: id, Kind: KindInternet, Name: parsed.Hostname(), Status: StatusUnknown, Data: map[string]any{"namespace": u.GetNamespace(), "external": true, "status": "Configured endpoint; reachability not tested"}})
+						nodes = append(nodes, Node{ID: id, Kind: KindConfiguredEndpoint, Name: parsed.Hostname(), Status: StatusUnknown, Data: map[string]any{"namespace": u.GetNamespace(), "external": true, "status": "Configured endpoint; reachability not tested"}})
 					}
 					connect(source, id, "Configured endpoint")
 				}

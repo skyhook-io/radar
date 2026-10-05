@@ -89,6 +89,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			NamespaceScoped:             nsScoped,
 			Namespace:                   nsTarget,
 			DebugEvents:                 DebugEvents,
+			IsNoisyResource:             isNoisyResource,
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)
 			},

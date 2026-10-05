@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useState, useRef, type ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { pluralize } from '@skyhook-io/k8s-ui'
 import { useSwitchContext, fetchSessionCounts, type SessionCounts } from '../api/client'
@@ -25,9 +25,10 @@ interface PendingSwitch {
 // live. Callers render `confirmDialog`.
 export function useContextSwitchFlow() {
   const switchContext = useSwitchContext()
-  const { startSwitch, endSwitch, setOpenAfterSwitch } = useContextSwitch()
+  const { isSwitching, startSwitch, endSwitch, setOpenAfterSwitch } = useContextSwitch()
   const { showError } = useToast()
   const { tabs } = useDock()
+  const switchRequested = useRef(false)
   const [pending, setPending] = useState<PendingSwitch | null>(null)
   const [sessionCounts, setSessionCounts] = useState<SessionCounts | null>(null)
 
@@ -53,11 +54,14 @@ export function useContextSwitchFlow() {
         const message = error instanceof Error ? error.message : 'Unknown error'
         showError('Failed to switch context', message)
       }
+    } finally {
+      switchRequested.current = false
     }
   }
 
   const requestSwitch = async (context: ContextInfo, openAfter?: SelectedResource, execute?: () => Promise<unknown>) => {
-    if (context.isCurrent || switchContext.isPending) return
+    if (context.isCurrent || switchContext.isPending || isSwitching || switchRequested.current) return
+    switchRequested.current = true
     // Active sessions (port forwards from API + terminal tabs from dock) get
     // a confirmation prompt — switching contexts kills both.
     try {
@@ -88,6 +92,7 @@ export function useContextSwitchFlow() {
   }
 
   const cancel = () => {
+    switchRequested.current = false
     setPending(null)
     setSessionCounts(null)
   }

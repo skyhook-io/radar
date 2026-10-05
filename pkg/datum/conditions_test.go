@@ -28,7 +28,7 @@ func TestConditionCertainty(t *testing.T) {
 	}
 }
 func TestNestedHostnameFailure(t *testing.T) {
-	u := &unstructured.Unstructured{Object: map[string]any{"kind": "HTTPProxy", "status": map[string]any{"hostnameStatuses": []any{map[string]any{"hostname": "bad.example", "conditions": []any{map[string]any{"type": "CertificateReady", "status": "False", "reason": "IssuerFailed"}}}}}}}
+	u := &unstructured.Unstructured{Object: map[string]any{"kind": "HTTPProxy", "status": map[string]any{"hostnameStatuses": []any{map[string]any{"hostname": "bad.example", "conditions": []any{map[string]any{"type": "CertificateReady", "status": "False", "reason": "ProvisioningFailed"}}}}}}}
 	failures := Failures(u)
 	if len(failures) != 1 || failures[0].Scope != "bad.example" {
 		t.Fatalf("failures=%+v", failures)
@@ -49,13 +49,13 @@ func TestInstanceBackendNamesEndpointSlice(t *testing.T) {
 }
 
 func TestScopedFailuresPreserveDistinctEvidenceWithoutAggregateDuplicate(t *testing.T) {
-	u := &unstructured.Unstructured{Object: map[string]any{"kind": "HTTPProxy", "status": map[string]any{"conditions": []any{map[string]any{"type": "CertificatesReady", "status": "False", "reason": "IssuerFailed"}}, "hostnameStatuses": []any{map[string]any{"hostname": "one.example", "conditions": []any{map[string]any{"type": "CertificateReady", "status": "False", "reason": "IssuerFailed"}}}, map[string]any{"hostname": "two.example", "conditions": []any{map[string]any{"type": "CertificateReady", "status": "False", "reason": "IssuerFailed"}}}}}}}
+	u := &unstructured.Unstructured{Object: map[string]any{"kind": "HTTPProxy", "status": map[string]any{"conditions": []any{map[string]any{"type": "CertificatesReady", "status": "False", "reason": "CertificatesFailed"}}, "hostnameStatuses": []any{map[string]any{"hostname": "one.example", "conditions": []any{map[string]any{"type": "CertificateReady", "status": "False", "reason": "ProvisioningFailed"}}}, map[string]any{"hostname": "two.example", "conditions": []any{map[string]any{"type": "CertificateReady", "status": "False", "reason": "ProvisioningFailed"}}}}}}}
 	if got := Failures(u); len(got) != 2 {
 		t.Fatalf("failures=%+v", got)
 	}
 	unstructured.SetNestedSlice(u.Object, []any{map[string]any{"type": "CertificatesReady", "status": "False", "reason": "AnotherFailure"}}, "status", "conditions")
-	if got := Failures(u); len(got) != 3 {
-		t.Fatalf("distinct aggregate lost: %+v", got)
+	if got := Failures(u); len(got) != 2 {
+		t.Fatalf("aggregate repeated scoped evidence: %+v", got)
 	}
 }
 func TestWorkloadObservedGenerationAndExpectedProgress(t *testing.T) {
@@ -69,5 +69,12 @@ func TestWorkloadObservedGenerationAndExpectedProgress(t *testing.T) {
 		if State(u) != "Reconciling" || len(Failures(u)) != 0 {
 			t.Fatalf("progress %s = %s", reason, State(u))
 		}
+	}
+}
+
+func TestInstanceAvailabilityIsItsReadinessReport(t *testing.T) {
+	u := &unstructured.Unstructured{Object: map[string]any{"kind": "Instance", "status": map[string]any{"conditions": []any{map[string]any{"type": "Available", "status": "True"}, map[string]any{"type": "Progressing", "status": "False", "reason": "Stable"}}}}}
+	if State(u) != "Ready" {
+		t.Fatalf("available Instance=%s", State(u))
 	}
 }

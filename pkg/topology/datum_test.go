@@ -75,3 +75,14 @@ func TestDatumConfiguredGraphAndRelatedResources(t *testing.T) {
 		t.Fatalf("cross-namespace nodes=%+v", nodes)
 	}
 }
+
+func TestConfiguredEndpointIsUnknownAndNotAnInternetTrafficSource(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: datum.NetworkGroup, Version: "v1alpha", Resource: "httpproxies"}
+	proxy := genericIdentityObject(gvr, "HTTPProxy", "p", "web")
+	proxy.Object["spec"] = map[string]any{"rules": []any{map[string]any{"backends": []any{map[string]any{"endpoint": "https://origin.example.test"}}}}}
+	dp := &genericIdentityDynamic{watched: []schema.GroupVersionResource{gvr}, kinds: map[schema.GroupVersionResource]string{gvr: "HTTPProxy"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {proxy}}, listCalls: map[schema.GroupVersionResource]int{}}
+	nodes, edges := (&Builder{dynamic: dp}).addDatumNodes(nil, nil, BuildOptions{})
+	if len(nodes) != 2 || nodes[1].Kind != KindConfiguredEndpoint || nodes[1].Status != StatusUnknown || nodes[1].Name != "origin.example.test" || edges[0].Type != EdgeConfigures {
+		t.Fatalf("nodes=%+v edges=%+v", nodes, edges)
+	}
+}

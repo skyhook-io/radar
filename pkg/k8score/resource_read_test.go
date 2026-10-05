@@ -105,3 +105,44 @@ func TestCallerCancellationDoesNotCancelSharedScopeProbe(t *testing.T) {
 		t.Fatal("unverified cluster-wide informer or missing scoped informer")
 	}
 }
+
+func TestListedEndpoint404NeverStartsAnInformer(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "test.example", Version: "v1", Resource: "widgets"}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"})
+	client.PrependReactor("list", "widgets", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewNotFound(gvr.GroupResource(), "")
+	})
+	dc, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dc.Stop()
+	_, err = dc.ListComplete(context.Background(), gvr, nil)
+	var readErr *ResourceReadError
+	if !errors.As(err, &readErr) || readErr.Code != "kind_not_served" || len(dc.WatchedGVRs()) != 0 {
+		t.Fatalf("404 observed as %v; informers=%v", err, dc.WatchedGVRs())
+	}
+}
+func TestDynamicNoiseDoesNotReachTimelineOrChangeChannel(t *testing.T) {
+	changes := make(chan ResourceChange, 2)
+	callbacks := 0
+	dc, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), Changes: changes, OnChange: func(ResourceChange, any, any) { callbacks++ }, IsNoisyResource: func(kind, name, op string) bool { return kind == "Lease" && op == OpUpdate }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dc.Stop()
+	gvr := schema.GroupVersionResource{Group: "coordination.k8s.io", Version: "v1", Resource: "leases"}
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "coordination.k8s.io/v1", "kind": "Lease", "metadata": map[string]any{"name": "leader"}}}
+	dc.enqueueDynamicChange("Lease", gvr, obj, nil, OpUpdate)
+	if callbacks != 0 || len(changes) != 0 {
+		t.Fatal("lease renewal reached timeline or SSE")
+	}
+	dc.enqueueDynamicChange("Lease", gvr, obj, nil, OpDelete)
+	if callbacks != 1 || len(changes) != 1 {
+		t.Fatal("lease deletion was hidden")
+	}
+	dc.MarkDiscoveryOnDemand()
+	if dc.GetDiscoveryStatus() != CRDDiscoveryOnDemand {
+		t.Fatal("on-demand observation reported idle")
+	}
+}

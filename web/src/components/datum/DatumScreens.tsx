@@ -116,7 +116,9 @@ export function DatumScreens({
   const empty = (key: string) =>
     datumCoverage(data, key)
       ? "None observed in this view."
-      : `Inventory ${data.coverage[key]?.state === "notInstalled" ? "API is not served" : data.coverage[key]?.state === "denied" ? "access is denied" : data.coverage[key]?.state === "syncing" ? "is still synchronizing or discovery is incomplete" : "could not be read"}; absence is not established.`;
+      : data.coverage[key]?.state === "notInstalled"
+        ? "This API is not served on this connection."
+        : `Inventory ${data.coverage[key]?.state === "denied" ? "access is denied" : data.coverage[key]?.state === "syncing" ? "is still synchronizing or discovery is incomplete" : "could not be read"}; absence is not established.`;
   const partial = Object.entries(data.coverage).filter(
     ([, c]) => !["full", "notInstalled"].includes(c.state),
   );
@@ -168,8 +170,14 @@ export function DatumScreens({
       {partial.length > 0 && (
         <Notice>
           Not fully read:{" "}
-          {partial.map(([key, c]) => `${key} (${c.state})`).join(", ")}. Counts
-          over partial inventory are lower bounds; unread values remain unknown.
+          {partial
+            .map(
+              ([key, c]) =>
+                `${key}: ${c.state === "partial" ? "only some namespaces read" : c.state === "denied" ? "access denied" : c.state === "syncing" ? "still synchronizing" : c.state === "uncached" ? "not cached in this scope" : "read failed"}`,
+            )
+            .join(", ")}
+          . Counts over partial inventory are lower bounds; unread values remain
+          unknown.
         </Notice>
       )}
       {screen === "hostnames" && (

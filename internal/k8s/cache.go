@@ -1483,7 +1483,11 @@ func (c *ResourceCache) ListDynamicWithGroup(ctx context.Context, kind string, n
 // ResourceReadTimeout leaves direct inventories enough time for large API responses;
 // informer-backed reads return pending promptly while synchronization continues.
 func ResourceReadTimeout(kind, group string) time.Duration {
-	if gvr, ok := BuiltinGVR(kind, group); ok && shouldBypassDynamicInformer(gvr) {
+	gvr, ok := BuiltinGVR(kind, group)
+	if group == "" {
+		gvr, ok = BuiltinGVRAnyGroup(kind)
+	}
+	if ok && shouldBypassDynamicInformer(gvr) {
 		return 15 * time.Second
 	}
 	return 3 * time.Second
