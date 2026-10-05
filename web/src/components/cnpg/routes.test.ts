@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgDetailKindFor, cnpgDetailPath, cnpgViewHoldsOnlyKind, parseCNPGRoute } from './routes'
+import { cnpgDetailKindFor, cnpgDetailPath, cnpgViewNamedForKind, parseCNPGRoute } from './routes'
 import { decodeDrawerTrail, encodeDrawerTrail, sameSelectedResource } from '../../utils/drawer-trail'
 
 describe('CNPG routes', () => {
@@ -60,14 +60,15 @@ describe('CNPG routes', () => {
   })
 })
 
-describe('cnpgViewHoldsOnlyKind', () => {
-  it('is true only where the crumb’s view names the kind on its own', () => {
-    expect(cnpgViewHoldsOnlyKind('clusters')).toBe(true)
-    expect(cnpgViewHoldsOnlyKind('poolers')).toBe(true)
-    // Backups also holds ScheduledBackups and ObjectStores.
-    expect(cnpgViewHoldsOnlyKind('backups')).toBe(false)
-    expect(cnpgViewHoldsOnlyKind('scheduledbackups')).toBe(false)
-    expect(cnpgViewHoldsOnlyKind('databases')).toBe(false)
-    expect(cnpgViewHoldsOnlyKind('pods')).toBe(false)
+describe('cnpgViewNamedForKind', () => {
+  it('is true only for the kind the crumb’s view is named after', () => {
+    expect(cnpgViewNamedForKind('clusters')).toBe(true)
+    expect(cnpgViewNamedForKind('backups')).toBe(true)
+    expect(cnpgViewNamedForKind('poolers')).toBe(true)
+    // Also under Backups, but not what the view is named after.
+    expect(cnpgViewNamedForKind('scheduledbackups')).toBe(false)
+    expect(cnpgViewNamedForKind('objectstores')).toBe(false)
+    expect(cnpgViewNamedForKind('databases')).toBe(false)
+    expect(cnpgViewNamedForKind('pods')).toBe(false)
   })
 })

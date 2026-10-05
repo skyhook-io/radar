@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
-import { Activity, ArrowLeft, Database, Gauge, HardDrive, Network, Settings2, ShieldCheck, Unplug } from 'lucide-react'
+import { Activity, Database, Gauge, HardDrive, Network, Settings2, ShieldCheck, Unplug } from 'lucide-react'
 import { refToSelectedResource, Tooltip, type WorkloadExtraTab } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
@@ -12,13 +12,14 @@ import { CNPGPerformance } from './CNPGPerformance'
 import { CNPGReplicationTab } from './CNPGReplicationTab'
 import { CNPGBackupsTab, CNPGClusterHeaderChips, CNPGConfigurationLead, CNPGStorageTab } from './CNPGClusterTabs'
 import type { CNPGChartGroup } from './CNPGTrends'
-import { CNPG_DETAIL_KINDS, CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, cnpgScreenPath, cnpgViewHoldsOnlyKind, type CNPGDetailTarget } from './routes'
+import { CNPG_DETAIL_KINDS, CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, cnpgScreenPath, cnpgViewNamedForKind, type CNPGDetailTarget } from './routes'
 import { CNPG_CLUSTER_TAB_ORDER, cnpgDimensionTab } from './paths'
 import { currentPageLabel } from '../../utils/page-links'
 import { CNPGOperatorBanner } from './CNPGOperatorBanner'
 import { ScreenEmptyState } from '../workspace/layout'
 import { useCNPGNavigate } from './useCNPGNavigate'
 
+// Set by drill-downs; Esc then goes back to that page instead of the home view.
 interface ReturnState {
   returnLabel?: string
   returnCtx?: string
@@ -26,9 +27,9 @@ interface ReturnState {
 
 /**
  * The full detail of a CloudNativePG object, framed by the workspace: the
- * Resources sidebar keeps the workspace destination highlighted, a return
- * control goes back to the task the user came from, and the crumb names the
- * object's place. The object's own sections come from Radar's detail view.
+ * Resources sidebar keeps the workspace destination highlighted and the crumb
+ * names the object's place. The object's own sections come from Radar's
+ * detail view.
  *
  * `ctx` in the URL pins the Kubernetes context; when the active context is a
  * different one, the page says so instead of loading a same-named object.
@@ -167,28 +168,10 @@ export function CNPGDetailPage({
 
   const outsideFilter = namespaces.length > 0 && !!target.namespace && !namespaces.includes(target.namespace)
 
-  // Where the object lives, on its title line: the return to the previous
-  // page (drill-downs only), then its place in the workspace.
+  // Where the object lives, on its title line: workspace / view /. The way
+  // back to the previous page is the browser's Back, or Esc.
   const titlePrefix = (
     <div className="flex min-w-0 items-center gap-x-2 text-sm">
-      {returnLabel && (
-        <>
-          <Tooltip content={`Return to ${returnLabel}`} position="bottom">
-            <button
-              type="button"
-              onClick={() => navigate(-1)}
-              aria-label={`Return to ${returnLabel}`}
-              className="inline-flex max-w-[12rem] items-center gap-1 rounded-md py-0.5 pr-1 text-theme-text-secondary hover:text-theme-text-primary"
-            >
-              <ArrowLeft className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">{returnLabel}</span>
-            </button>
-          </Tooltip>
-          <span className="h-4 w-px shrink-0 bg-theme-border" aria-hidden />
-        </>
-      )}
-      {/* Workspace / view / — the view is the place to go back to; the
-          workspace name is plain text, as on the views' own titles. */}
       <nav aria-label="Location" className="flex shrink-0 items-center gap-1.5 text-theme-text-tertiary">
         <Database className="h-3.5 w-3.5" />
         <span>CloudNativePG</span>
@@ -223,7 +206,7 @@ export function CNPGDetailPage({
           titlePrefix={titlePrefix}
           inlineBadges
           namespaceNote={namespaceNote}
-          hideKindBadge={cnpgViewHoldsOnlyKind(target.plural)}
+          hideKindBadge={cnpgViewNamedForKind(target.plural)}
           onNavigateToResource={openRelated}
           extraTabs={extraTabs}
           tabOrder={isCluster ? CNPG_CLUSTER_TAB_ORDER : undefined}

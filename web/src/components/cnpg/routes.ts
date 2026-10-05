@@ -46,14 +46,18 @@ export const CNPG_DETAIL_KINDS: Record<string, { group: string; kind: string; ho
   }),
 )
 
+// The kind each view is named after.
+const CNPG_VIEW_NAMESAKES: Partial<Record<CNPGScreen, string>> = { overview: 'clusters', protection: 'backups', pooling: 'poolers' }
+
 /**
- * Whether a kind's home view holds no other kind (Clusters, Pooling): its
- * crumb then already says what the object is, so the kind badge is left out.
- * Backups holds Backups, ScheduledBackups and ObjectStores, so those keep it.
+ * Whether a kind is the one its home view is named after (Cluster in
+ * Clusters, Backup in Backups, Pooler in Pooling): the crumb then already says
+ * what the object is, so the kind badge is left out. Other kinds in the same
+ * view, such as ScheduledBackup and ObjectStore under Backups, keep it.
  */
-export function cnpgViewHoldsOnlyKind(plural: string): boolean {
+export function cnpgViewNamedForKind(plural: string): boolean {
   const home = CNPG_DETAIL_KINDS[plural]?.home
-  return !!home && Object.values(CNPG_DETAIL_KINDS).filter((k) => k.home === home).length === 1
+  return !!home && CNPG_VIEW_NAMESAKES[home] === plural
 }
 
 export function cnpgDetailKindFor(plural: string, group: string | undefined): string | null {
