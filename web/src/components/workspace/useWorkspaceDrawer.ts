@@ -18,12 +18,15 @@ export function useWorkspaceDrawer(
   const trail = useMemo(() => decodeDrawerTrail(drawerParam), [drawerParam])
   const target = trail.at(-1) ?? null
   const lastSynced = useRef<string | null>(null)
+  const lastProcessed = useRef<{ targetKey: string; selectedKey: string } | null>(null)
   const selectedKey = selectedResource
     ? encodeDrawerTrail([selectedResource])
     : ''
   const targetKey = target ? encodeDrawerTrail([target]) : ''
   useEffect(() => {
-    if (targetKey !== (lastSynced.current ?? '')) {
+    if (lastProcessed.current?.targetKey === targetKey && lastProcessed.current?.selectedKey === selectedKey) return
+    lastProcessed.current = { targetKey, selectedKey }
+    if (lastSynced.current === null || targetKey !== lastSynced.current) {
       lastSynced.current = targetKey
       if (target && !sameSelectedResource(target, selectedResource))
         onOpenResource(target)

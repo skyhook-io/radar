@@ -362,6 +362,8 @@ interface AppProps {
 function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange }: AppProps) {
   const navigate = useNavigate()
   const location = useLocation()
+  const routerLocationRef = useRef(location)
+  routerLocationRef.current = location
   const navigationType = useNavigationType()
   const [searchParams, setSearchParams] = useSearchParams()
   const capabilities = useCapabilitiesContext()
@@ -760,10 +762,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     // Record the page this peek was opened on. Outside /resources the drawer is
     // not URL-backed, so this ref is what lets the render-time gate below close
     // the peek when the page under it changes (e.g. browser Back off a GitOps
-    // detail page, or Applications detail → list via ?app). window.location is
-    // read (not the `location` closure) so the value is always current
-    // regardless of this callback's memoization.
-    peekOwnerKeyRef.current = peekOwnerKey(window.location.pathname, window.location.search)
+    // detail page, or Applications detail → list via ?app).
+    const ownerLocation = routerLocationRef.current
+    peekOwnerKeyRef.current = peekOwnerKey(ownerLocation.pathname, ownerLocation.search)
     const update = () => { setDrawerInitialTab(tab); setSelectedResource(res) }
     // Skip the cross-fade animation entirely on first open (no
     // `selectedResource`); otherwise route through
@@ -1686,7 +1687,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     // (drawerExpanded is URL-derived from ?full=1, so leaving /resources drops it
     // automatically — no explicit reset needed.)
     const params = new URLSearchParams(window.location.search)
-    if (!navigatingToResources && !params.has('resource')) {
+    if (!navigatingToResources && !params.has('resource') && !searchParams.has('drawer')) {
       setSelectedResource(null)
     }
     if (!params.has('release')) {
@@ -1699,7 +1700,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // while they adjust the namespace scope filter).
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
-    if (!params.has('resource')) setSelectedResource(null)
+    if (!params.has('resource') && !searchParams.has('drawer')) setSelectedResource(null)
     if (!params.has('release')) setSelectedHelmRelease(null)
   }, [namespacesKey])
 
@@ -2335,12 +2336,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               // the inline workload selection so the app graph (not a second
               // detail panel) sits behind the peek. Search-only change keeps the
               // pathname — and thus the peek's owner-path — intact.
-              const params = new URLSearchParams(window.location.search)
+              const params = new URLSearchParams(location.search)
               if (params.has('workload') || params.has('tab') || params.has('run')) {
                 params.delete('workload')
                 params.delete('tab')
                 params.delete('run')
-                navigate({ pathname: window.location.pathname, search: params.toString() }, { replace: true })
+                navigate({ pathname: location.pathname, search: params.toString() }, { replace: true })
               }
               navigateToResource(resource)
             }}
