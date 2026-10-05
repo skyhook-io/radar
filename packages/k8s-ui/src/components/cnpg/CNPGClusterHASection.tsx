@@ -37,10 +37,10 @@ function LeaseValue({ lease, what }: { lease: CNPGHALease; what: string }) {
       held by{' '}
       {lease.holder && cnpgLeaseHolderPod(lease.holder) !== lease.holder ? (
         <Tooltip content={lease.holder}>
-          <span className="font-mono break-all">{cnpgLeaseHolderPod(lease.holder)}</span>
+          <span className="font-mono text-xs break-all">{cnpgLeaseHolderPod(lease.holder)}</span>
         </Tooltip>
       ) : (
-        <span className="font-mono break-all">{lease.holder || '(nobody)'}</span>
+        <span className="font-mono text-xs break-all">{lease.holder || '(nobody)'}</span>
       )}
       {lease.renewTime && <span className="text-theme-text-secondary"> · renewed {formatAge(lease.renewTime)} ago</span>}
       {lease.expired && <span className={toneTextClass('degraded')}> · expired</span>}
@@ -121,6 +121,8 @@ export function CNPGClusterHASection({
                   </div>
                 )}
               </div>
+            ) : spread.zones.length === 0 && spread.unlabelled.length === 0 ? (
+              <Unknown text="No instance Pods to place" />
             ) : (
               <div>
                 <div className="flex flex-wrap gap-x-3">

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CNPGRuntimeInstance, CNPGRuntimeReplication } from '../../api/cnpg'
 import type { CNPGSessionsResponse } from '../../api/cnpg-sessions'
-import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgIdAge, cnpgStandbyBacklogTone, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgSessionsCardShowsConnections, cnpgStandbyHeadline, cnpgTransactionRates } from './runtimeModel'
+import { cnpgCheckpointView, cnpgDatabaseHealthRows, cnpgNoStandbyText, cnpgIdAge, cnpgStandbyBacklogTone, cnpgPickedInstance, cnpgSessionAggregatesGap, cnpgSessionsCardShowsConnections, cnpgStandbyHeadline, cnpgTransactionRates } from './runtimeModel'
 
 describe('cnpgCheckpointView', () => {
   it('flags requested-checkpoint pressure only with enough checkpoints', () => {
@@ -139,5 +139,14 @@ describe('cnpgIdAge', () => {
     expect(cnpgIdAge(3_400_000)).toBe('3.4 M')
     expect(cnpgIdAge(1_100_000_000)).toBe('1.1 B')
     expect(cnpgIdAge(12)).not.toBe('0 M')
+  })
+})
+
+describe('cnpgNoStandbyText', () => {
+  it('calls a one-instance cluster single, and a larger one short of standbys', () => {
+    expect(cnpgNoStandbyText(1)).toBe('Single instance: no replica to fail over to.')
+    expect(cnpgNoStandbyText(2)).toBe('No standby is running: spec.instances is 2, so one standby is expected. Nothing to fail over to until one joins.')
+    expect(cnpgNoStandbyText(3)).toContain('2 standbys are expected')
+    expect(cnpgNoStandbyText(undefined)).toBe('Single instance: no replica to fail over to.')
   })
 })

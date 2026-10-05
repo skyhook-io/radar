@@ -175,3 +175,10 @@ export function cnpgIdAge(v: number): string {
   if (v < 1_000_000_000) return unit(v, 1_000_000, ' M')
   return unit(v, 1_000_000_000, ' B')
 }
+
+/** Why no standby is listed: a one-instance cluster has none, a larger one is missing them. */
+export function cnpgNoStandbyText(desired: unknown): string {
+  if (typeof desired !== 'number' || desired <= 1) return 'Single instance: no replica to fail over to.'
+  const expected = desired - 1
+  return `No standby is running: spec.instances is ${desired}, so ${expected === 1 ? 'one standby is' : `${expected} standbys are`} expected. Nothing to fail over to until one joins.`
+}

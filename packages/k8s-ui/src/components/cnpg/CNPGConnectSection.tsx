@@ -89,9 +89,11 @@ export function CNPGConnectSection({
             {info.endpoints.map((ep) => (
               <li key={`${ep.role}/${ep.name}`} className="flex flex-wrap items-baseline gap-x-2">
                 <span className="w-20 shrink-0 text-xs text-theme-text-tertiary">{ROLE_LABEL[ep.role]}</span>
-                <RefLink refTo={{ kind: ep.role === 'pooler' ? 'Pooler' : 'Service', group: ep.role === 'pooler' ? CNPG_GROUP : '', namespace: ns, name: ep.name }} onNavigate={onNavigate} mono>
-                  {`${ep.host}:${ep.port}`}
-                </RefLink>
+                <span className="text-xs">
+                  <RefLink refTo={{ kind: ep.role === 'pooler' ? 'Pooler' : 'Service', group: ep.role === 'pooler' ? CNPG_GROUP : '', namespace: ns, name: ep.name }} onNavigate={onNavigate} mono>
+                    {`${ep.host}:${ep.port}`}
+                  </RefLink>
+                </span>
                 <span className="text-xs text-theme-text-secondary">{ep.selects}</span>
                 {ep.portFromTemplate && <span className="text-xs text-theme-text-tertiary">port from serviceTemplate</span>}
                 {onOpenReachability && (
@@ -118,17 +120,19 @@ export function CNPGConnectSection({
           )}
         </FactRow>
         <FactRow label="Database">
-          {info.database.value ? <span className="font-mono">{info.database.value}</span> : <span className="text-theme-text-tertiary">Unknown</span>}
+          {info.database.value ? <span className="font-mono text-xs">{info.database.value}</span> : <span className="text-theme-text-tertiary">Unknown</span>}
           <div className="mt-0.5 text-[11.5px] text-theme-text-tertiary">{info.database.source}</div>
         </FactRow>
         <FactRow label="Owner">
-          {info.owner.value ? <span className="font-mono">{info.owner.value}</span> : <span className="text-theme-text-tertiary">Unknown</span>}
+          {info.owner.value ? <span className="font-mono text-xs">{info.owner.value}</span> : <span className="text-theme-text-tertiary">Unknown</span>}
           <div className="mt-0.5 text-[11.5px] text-theme-text-tertiary">{info.owner.source}</div>
         </FactRow>
         <FactRow label="Credentials">
-          <RefLink refTo={{ kind: 'Secret', group: '', namespace: ns, name: info.secret.name }} onNavigate={onNavigate} mono>
-            {info.secret.name}
-          </RefLink>
+          <span className="text-xs">
+            <RefLink refTo={{ kind: 'Secret', group: '', namespace: ns, name: info.secret.name }} onNavigate={onNavigate} mono>
+              {info.secret.name}
+            </RefLink>
+          </span>
           <div className="mt-0.5 text-[11.5px] text-theme-text-tertiary">
             {info.secret.source} · Radar does not read it; the password is its <span className="font-mono">password</span> key
           </div>

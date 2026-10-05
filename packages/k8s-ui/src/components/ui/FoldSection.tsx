@@ -48,12 +48,15 @@ export function FoldSection({
         type="button"
         {...d.buttonProps}
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full flex-wrap items-baseline gap-x-2 gap-y-0.5 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        className="flex w-full items-start gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
-        <CollapseChevron open={open} className="h-3 w-3 shrink-0 self-center text-theme-text-tertiary" />
-        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">{title}</h3>
-        {hint && <span className="text-[11px] text-theme-text-tertiary">{hint}</span>}
-        {!open && <span className={clsx('min-w-0 text-sm', attention ? toneTextClass('degraded') : 'text-theme-text-secondary')}>{summary}</span>}
+        <CollapseChevron open={open} className="mt-1 h-3 w-3 shrink-0 text-theme-text-tertiary" />
+        {/* Wrapped parts line up under the title, not under the chevron. */}
+        <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <h3 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">{title}</h3>
+          {hint && <span className="text-[11px] text-theme-text-tertiary">{hint}</span>}
+          {!open && <span className={clsx('min-w-0 text-sm', attention ? toneTextClass('degraded') : 'text-theme-text-secondary')}>{summary}</span>}
+        </span>
       </button>
       <Collapse open={open} id={d.panelId}>
         <div className="pt-2">{children}</div>

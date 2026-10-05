@@ -47,7 +47,7 @@ export function FactSource({ fact }: { fact: Fact }) {
 
 /** Label/value rows. Empty values stay visible: an unread value is shown as unread, not hidden. */
 export function FactGrid({ children }: { children: ReactNode }) {
-  return <dl className="grid grid-cols-[9.5rem_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">{children}</dl>
+  return <dl className="grid grid-cols-[9.5rem_minmax(0,1fr)] items-baseline gap-x-4 gap-y-2 text-sm">{children}</dl>
 }
 
 export function FactRow({ label, children }: { label: ReactNode; children: ReactNode }) {

@@ -89,7 +89,7 @@ export function CNPGReplicationTab({
         </>
       )}
 
-      <div className="rounded-xl border border-theme-border bg-theme-surface px-4 pb-3 shadow-theme-sm">
+      <div className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
         <CNPGClusterHASection
           ha={ha.data}
           live={cnpgInstanceLive(data)}

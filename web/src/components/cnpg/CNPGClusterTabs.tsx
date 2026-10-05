@@ -162,7 +162,7 @@ export function CNPGConfigurationLead({ namespace, name, onNavigate }: { namespa
   const go: NavigateToRef = (ref) => onNavigate(refToSelectedResource(ref))
   if (!row?.cluster) return null
   return (
-    <div className="mb-4 space-y-2 rounded-xl border border-theme-border bg-theme-surface px-4 pb-3 shadow-theme-sm">
+    <div className="mb-4 space-y-2 rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
       <CNPGConnectSection
         cluster={row.cluster}
         poolers={row.poolerObjects}

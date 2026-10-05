@@ -15,7 +15,7 @@ import {
 import { useCNPGClusterCapabilities, type CNPGRuntimeInstance, type CNPGRuntimeReplication } from '../../api/cnpg'
 import { CNPGInstanceActions } from './actions/CNPGInstanceActions'
 import { formatBytes, lsnDistance, standbyOwnBacklog } from './lsn'
-import { CNPG_BACKLOG_DEGRADED, cnpgStandbyBacklogTone, cnpgStandbyHeadline } from './runtimeModel'
+import { CNPG_BACKLOG_DEGRADED, cnpgNoStandbyText, cnpgStandbyBacklogTone, cnpgStandbyHeadline } from './runtimeModel'
 import { Card, SourceState } from './runtimeParts'
 
 function seconds(s?: number): string {
@@ -161,10 +161,14 @@ export function CNPGReplicationView({
     >
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(220px,300px)_minmax(0,1fr)]">
         <div className="rounded-lg border border-theme-border border-l-4 border-l-accent bg-theme-base p-3">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-sm font-semibold">{primary?.pod ?? 'No primary reported'}</span>
-            <Badge tone="structural" size="sm">primary</Badge>
-          </div>
+          {primary ? (
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-sm font-semibold">{primary.pod}</span>
+              <Badge tone="structural" size="sm">primary</Badge>
+            </div>
+          ) : (
+            <div className="text-sm text-theme-text-tertiary">No primary reported</div>
+          )}
           {primary && (
             <>
               <div className="mt-1 font-mono text-xs text-theme-text-secondary">LSN {primary.status.currentLsn ?? '—'}</div>
@@ -183,7 +187,7 @@ export function CNPGReplicationView({
           )}
         </div>
         <div className="space-y-2">
-          {replicas.length === 0 && <div className="text-sm text-theme-text-tertiary">Single instance: no replica to fail over to.</div>}
+          {replicas.length === 0 && <div className="text-sm text-theme-text-tertiary">{cnpgNoStandbyText(clusterObject?.spec?.instances)}</div>}
           {replicas.map((r) => {
             const rep = rows.get(r.pod)
             // Without a pg_stat_replication row (not connected), the standby's
