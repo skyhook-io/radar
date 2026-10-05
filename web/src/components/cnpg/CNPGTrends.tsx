@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { X } from 'lucide-react'
-import { Tooltip, formatGrant } from '@skyhook-io/k8s-ui'
+import { Tooltip, formatGrant, toneTextClass } from '@skyhook-io/k8s-ui'
 import { AreaChart, SeriesLegend, type ChartTimeRange, type ReferenceLine, type TimeSeries } from '@skyhook-io/k8s-ui/components/charts'
 import type { CNPGRuntimeResponse } from '../../api/cnpg'
 import {
@@ -96,6 +96,35 @@ export function sampleGaps(series: TimeSeries[]): (ChartTimeRange & { label: str
   return out
 }
 
+/**
+ * The instances a per-instance chart should have a line for but does not. A
+ * chart draws only what reported, so a stopped standby would otherwise vanish
+ * from the very chart about it and leave the others reading calm.
+ */
+export function unchartedInstances(expected: readonly string[] | undefined, charted: readonly string[]): string[] {
+  if (!expected?.length) return []
+  const seen = new Set(charted)
+  return expected.filter((p) => !seen.has(p))
+}
+
+/** Why each instance has no line; `why` reads after "No line for <pods>: ". */
+function MissingLines({ pods, why }: { pods: string[]; why: (them: string) => string }) {
+  if (pods.length === 0) return null
+  return (
+    <p className={`mb-2 text-xs ${toneTextClass('degraded')}`}>
+      No line for {pods.join(', ')}: {why(pods.length === 1 ? 'it' : 'them')}.
+    </p>
+  )
+}
+
+const promMissingWhy = (them: string) => `Prometheus has no samples from ${them} in this range`
+
+/** The instances a history chart should have a line for, when its lines are per Pod. */
+function expectedLines(chart: CNPGHistoryChart, standbys?: string[], instancePods?: string[]): string[] | undefined {
+  if (chart.id === 'replicationLag') return standbys
+  return chart.seriesBy === 'pod' ? instancePods : undefined
+}
+
 function referenceLines(chart: CNPGHistoryChart): ReferenceLine[] | undefined {
   const t = chart.thresholds ?? []
   if (t.length === 0) return undefined
@@ -135,11 +164,14 @@ function HistoryChartCard({
   data,
   selection,
   onSelect,
+  expected,
 }: {
   chart: CNPGHistoryChart
   data: CNPGClusterHistoryResponse
   selection: ChartTimeRange | null
   onSelect: (r: ChartTimeRange) => void
+  /** The Pods this chart should have a line for, when its lines are per Pod. */
+  expected?: string[]
 }) {
   const start = Date.parse(data.start ?? '') / 1000
   const end = Date.parse(data.end ?? '') / 1000
@@ -147,6 +179,8 @@ function HistoryChartCard({
   const series: TimeSeries[] = chart.series
   const labels = series.map((s) => s.labels[chart.seriesBy] ?? chart.title)
   const gaps = useMemo(() => historyGaps(series, start, end, step), [series, start, end, step])
+  // Omitted series may include the ones that look missing, so nothing is claimed then.
+  const missing = (chart.state === 'ok' || chart.state === 'empty') && !chart.omitted ? unchartedInstances(expected, labels) : []
   const coverage = (
     <Tooltip content="Evaluation steps in this range with at least one sample" position="top">
       <span className="font-mono">
@@ -169,6 +203,7 @@ function HistoryChartCard({
     >
       {chart.state === 'ok' ? (
         <>
+          <MissingLines pods={missing} why={promMissingWhy} />
           <AreaChart
             series={series}
             seriesLabels={labels}
@@ -190,8 +225,10 @@ function HistoryChartCard({
           )}
         </>
       ) : (
-        <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-theme-border px-4 text-center text-sm text-theme-text-tertiary">
-          {stateText(chart)}
+        <div
+          className={`flex h-24 items-center justify-center rounded-lg border border-dashed border-theme-border px-4 text-center text-sm ${missing.length > 0 ? toneTextClass('degraded') : 'text-theme-text-tertiary'}`}
+        >
+          {missing.length > 0 ? `No line for ${missing.join(', ')}: ${promMissingWhy(missing.length === 1 ? 'it' : 'them')}.` : stateText(chart)}
         </div>
       )}
     </ChartCard>
@@ -259,6 +296,8 @@ function BufferCharts({
   instance,
   picker,
   group,
+  standbys,
+  instancePods,
 }: {
   samples: Sample[]
   selection: ChartTimeRange | null
@@ -267,6 +306,8 @@ function BufferCharts({
   /** The instance whose sessions-by-state chart is shown (the Performance picker's choice). */
   instance?: string
   picker?: ReactNode
+  standbys?: string[]
+  instancePods?: string[]
 }) {
   const recent = samples.slice(-SAMPLE_BUFFER_LIMIT)
   const [dbPick, setDbPick] = useState<string[] | 'all' | null>(null)
@@ -287,7 +328,19 @@ function BufferCharts({
     : 'rates between the exporter\'s query runs (cnpg_last_update_timestamp); a change of primary or a counter reset is a gap'
   const sessionsOf = instance ?? instances[0]
   const dbCapped = recent.some((s) => Object.keys(s.dbSizes ?? {}).length >= 200)
-  const charts: { group: CNPGChartGroup; title: string; unit: string; series: TimeSeries[]; labels: string[]; source: string; thresholds?: ReferenceLine[]; rate?: boolean; control?: ReactNode; note?: string }[] = [
+  const charts: {
+    group: CNPGChartGroup
+    title: string
+    unit: string
+    series: TimeSeries[]
+    labels: string[]
+    source: string
+    thresholds?: ReferenceLine[]
+    rate?: boolean
+    control?: ReactNode
+    note?: string
+    missing?: { pods: string[]; why: (them: string) => string }
+  }[] = [
     {
       group: 'replication',
       title: 'Replay lag per standby',
@@ -295,6 +348,7 @@ function BufferCharts({
       series: pods.map((p) => one(p, (s) => s.replayLag[p])),
       labels: pods,
       source: "the primary's pg_stat_replication",
+      missing: { pods: unchartedInstances(standbys, pods), why: (them) => `the primary has not listed ${them} as a connected standby since this page opened` },
       thresholds: [
         { value: 5, label: '5 s', kind: 'request' },
         { value: 30, label: '30 s', kind: 'limit' },
@@ -307,6 +361,7 @@ function BufferCharts({
       series: instances.map((p) => one(p, (s) => s.instances?.[p]?.total)),
       labels: instances,
       source: 'cnpg_backends_total on each instance, platform sessions excluded',
+      missing: { pods: unchartedInstances(instancePods, instances), why: (them) => `no reading from ${them} since this page opened` },
     },
     {
       group: 'sessions',
@@ -377,6 +432,7 @@ function BufferCharts({
             }
           >
             {c.control && <div className="mb-2">{c.control}</div>}
+            {c.missing && <MissingLines pods={c.missing.pods} why={c.missing.why} />}
             {hasValue ? (
               <>
                 <AreaChart
@@ -452,6 +508,8 @@ export function CNPGTrends({
   picker,
   samplingDenied,
   group,
+  standbys,
+  instancePods,
 }: {
   namespace: string
   name: string
@@ -464,6 +522,9 @@ export function CNPGTrends({
   samplingDenied?: string
   /** Show one chart group (from `?charts=`); all when unset. */
   group?: CNPGChartGroup
+  /** The instance Pods that are standbys now, and all instance Pods: a per-instance chart names any of them it has no line for. */
+  standbys?: string[]
+  instancePods?: string[]
 }) {
   const { range, setRange, interval, setSelected } = useTrendParams()
   const q = useCNPGClusterHistory(namespace, name, range)
@@ -523,11 +584,23 @@ export function CNPGTrends({
       {fromPrometheus ? (
         <div className="grid gap-4 lg:grid-cols-2">
           {data.charts.filter((c) => inGroup(group, HISTORY_CHART_GROUP[c.id])).map((c) => (
-            <HistoryChartCard key={c.id} chart={c} data={data} selection={interval} onSelect={setSelected} />
+            <HistoryChartCard key={c.id} chart={c} data={data} selection={interval} onSelect={setSelected} expected={expectedLines(c, standbys, instancePods)} />
           ))}
         </div>
       ) : (
-        !q.isLoading && !samplingDenied && <BufferCharts samples={samples} selection={interval} onSelect={setSelected} instance={instance} picker={picker} group={group} />
+        !q.isLoading &&
+        !samplingDenied && (
+          <BufferCharts
+            samples={samples}
+            selection={interval}
+            onSelect={setSelected}
+            instance={instance}
+            picker={picker}
+            group={group}
+            standbys={standbys}
+            instancePods={instancePods}
+          />
+        )
       )}
     </div>
   )

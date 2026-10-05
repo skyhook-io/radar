@@ -201,13 +201,16 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
       disabledReason={disabledReason}
       incompleteReason={incompleteReason}
     >
+      {/* Full width: source names (a Backup, its ID and its store) outgrow one column. */}
+      <div className="mb-4 grid grid-cols-[7.5rem_minmax(0,1fr)] items-center gap-x-3">
+        <label className="text-xs text-theme-text-secondary" htmlFor="cnpg-restore-source">Restore from</label>
+        <select id="cnpg-restore-source" value={sourceIdx} onChange={(e) => { setSourceIdx(Number(e.target.value)); setTargetKind(null) }} className={FIELD}>
+          {sources.map((s, i) => <option key={i} value={i}>{describeSource(s)}</option>)}
+        </select>
+      </div>
       <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-3">
           <div className="grid grid-cols-[7.5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
-            <label className="text-xs text-theme-text-secondary" htmlFor="cnpg-restore-source">Restore from</label>
-            <select id="cnpg-restore-source" value={sourceIdx} onChange={(e) => { setSourceIdx(Number(e.target.value)); setTargetKind(null) }} className={FIELD}>
-              {sources.map((s, i) => <option key={i} value={i}>{describeSource(s)}</option>)}
-            </select>
             <label className="text-xs text-theme-text-secondary" htmlFor="cnpg-restore-name">New cluster</label>
             <input id="cnpg-restore-name" value={name} onChange={(e) => setNewName(e.target.value)} className={`${FIELD} font-mono`} />
           </div>

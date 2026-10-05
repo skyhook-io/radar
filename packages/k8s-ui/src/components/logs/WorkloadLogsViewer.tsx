@@ -318,7 +318,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       <div className="relative">
         <button
           onClick={() => setShowPodFilter(v => !v)}
-          className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded transition-colors ${
+          className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded whitespace-nowrap transition-colors ${
             showPodFilter ? palette.toolbarActive : `${palette.elevatedBg} ${palette.textSecondary} ${palette.hoverBg}`
           }`}
         >

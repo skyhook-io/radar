@@ -568,7 +568,7 @@ export function LogCore({
       style={{ colorScheme: isDark ? 'dark' : 'light', fontFamily: "'SF Mono', 'Cascadia Code', 'Fira Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace" }}
     >
       {/* Toolbar */}
-      <div className={`flex items-center gap-2 px-3 py-2 border-b ${palette.border} ${palette.toolbarBg}`}>
+      <div className={`flex flex-wrap items-center gap-2 px-3 py-2 border-b ${palette.border} ${palette.toolbarBg}`}>
         {toolbarExtraNode}
 
         {/* Stream / Stop toggle — only shown when streaming is supported */}
@@ -608,7 +608,7 @@ export function LogCore({
               <Tooltip key={opt.level} content={`${active ? 'Hide' : 'Show'} ${opt.noun}`} delay={TIP_DELAY} position="bottom">
                 <button
                   onClick={() => toggleLevel(opt.level)}
-                  className={`px-1.5 py-0.5 text-[10px] font-medium rounded border transition-colors ${
+                  className={`px-1.5 py-0.5 text-[10px] font-medium rounded border whitespace-nowrap transition-colors ${
                     active
                       ? getLevelActiveColor(opt.level, palette)
                       : levelChipInactive

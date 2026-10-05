@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { historyGaps, sampleGaps } from './CNPGTrends'
+import { historyGaps, sampleGaps, unchartedInstances } from './CNPGTrends'
 
 const s = (points: [number, number | null][], label = 'a') => ({ labels: { pod: label }, dataPoints: points.map(([timestamp, value]) => ({ timestamp, value })) })
 
@@ -25,3 +25,14 @@ describe('sampleGaps', () => {
   })
 })
 
+
+describe('unchartedInstances', () => {
+  it('names the expected instances a chart has no line for', () => {
+    expect(unchartedInstances(['pg-1', 'pg-2'], ['pg-2'])).toEqual(['pg-1'])
+    expect(unchartedInstances(['pg-1'], ['pg-1'])).toEqual([])
+  })
+  it('claims nothing when the expected set is unknown', () => {
+    expect(unchartedInstances(undefined, [])).toEqual([])
+    expect(unchartedInstances([], ['pg-1'])).toEqual([])
+  })
+})

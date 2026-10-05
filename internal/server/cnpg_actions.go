@@ -125,6 +125,9 @@ type CNPGClusterFacts struct {
 	IsReplicaCluster bool                 `json:"isReplicaCluster"`
 	Terminating      bool                 `json:"terminating"`
 	Maintenance      CNPGMaintenanceFacts `json:"maintenance"`
+	// ColdSnapshotBackup names a running offline volume-snapshot Backup of
+	// the cluster: the operator fenced its instance and lifts the fence itself.
+	ColdSnapshotBackup string `json:"coldSnapshotBackup,omitempty"`
 }
 
 type CNPGClusterActions struct {
@@ -673,6 +676,56 @@ func cnpgGuardUnfence(f CNPGClusterFacts) string {
 	if len(f.FencedInstances.Instances) == 0 {
 		return "No instance is fenced"
 	}
+	if f.ColdSnapshotBackup != "" {
+		return fmt.Sprintf("Backup %s is a cold snapshot: the operator fenced the instance for it and lifts the fence itself once the snapshot is taken. Lifting it now would start PostgreSQL under the snapshot", f.ColdSnapshotBackup)
+	}
+	return ""
+}
+
+// cnpgRunningColdSnapshot names a running offline (cold) volume-snapshot
+// Backup of the cluster, or "" when there is none. A failed list also gives
+// "": lifting a fence must stay possible during an incident, and the operator
+// still owns its own fence.
+func cnpgRunningColdSnapshot(ctx context.Context, dyn dynamic.Interface, cluster *unstructured.Unstructured) string {
+	if dyn == nil {
+		return ""
+	}
+	list, err := dyn.Resource(cnpgBackupGVR).Namespace(cluster.GetNamespace()).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return ""
+	}
+	// An unset online follows the Cluster's default, which is online.
+	clusterOnline, found, _ := unstructured.NestedBool(cluster.Object, "spec", "backup", "volumeSnapshot", "online")
+	if !found {
+		clusterOnline = true
+	}
+	for i := range list.Items {
+		b := &list.Items[i]
+		if name, _, _ := unstructured.NestedString(b.Object, "spec", "cluster", "name"); name != cluster.GetName() {
+			continue
+		}
+		method, _, _ := unstructured.NestedString(b.Object, "status", "method")
+		if method == "" {
+			method, _, _ = unstructured.NestedString(b.Object, "spec", "method")
+		}
+		if method != "volumeSnapshot" {
+			continue
+		}
+		online, found, _ := unstructured.NestedBool(b.Object, "status", "online")
+		if !found {
+			if online, found, _ = unstructured.NestedBool(b.Object, "spec", "online"); !found {
+				online = clusterOnline
+			}
+		}
+		if online {
+			continue
+		}
+		switch phase, _, _ := unstructured.NestedString(b.Object, "status", "phase"); phase {
+		case "", "completed", "failed", "walArchivingFailing":
+			continue
+		}
+		return b.GetName()
+	}
 	return ""
 }
 
@@ -740,6 +793,7 @@ func (s *Server) cnpgClusterCapabilities(r *http.Request, c cnpgActionClients, c
 		return nil, err
 	}
 	facts, _ := cnpgClusterFactsOf(ctx, c.typed, cluster)
+	facts.ColdSnapshotBackup = cnpgRunningColdSnapshot(ctx, c.dyn, cluster)
 
 	perm := map[Grant]string{}
 	permOf := func(g Grant) string {
@@ -1253,6 +1307,7 @@ func runCNPGClusterAction(ctx context.Context, c cnpgActionClients, namespace, n
 		typed = nil
 	}
 	facts, pods := cnpgClusterFactsOf(ctx, typed, cluster)
+	facts.ColdSnapshotBackup = cnpgRunningColdSnapshot(ctx, c.dyn, cluster)
 	if string(cluster.GetUID()) != req.UID {
 		return nil, changedAction(facts, "Cluster %s/%s was deleted and recreated since you reviewed it", namespace, name)
 	}

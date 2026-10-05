@@ -188,6 +188,8 @@ export interface CNPGClusterFacts {
   isReplicaCluster: boolean
   maintenance: { declared: boolean; inProgress: boolean; reusePVC: boolean }
   terminating: boolean
+  /** A running offline volume-snapshot Backup: the operator fenced its instance and lifts the fence itself. */
+  coldSnapshotBackup?: string
 }
 
 export type CNPGClusterActionName =

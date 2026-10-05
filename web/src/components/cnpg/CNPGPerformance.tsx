@@ -136,6 +136,8 @@ export function CNPGPerformance({
           picker={picker}
           samplingDenied={denied ? grant : undefined}
           group={charts}
+          standbys={data.instances.filter((i) => i.role === 'replica').map((i) => i.pod)}
+          instancePods={data.instances.map((i) => i.pod)}
         />
       )}
     </div>

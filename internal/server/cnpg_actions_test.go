@@ -657,6 +657,77 @@ func TestCNPGActionFencing(t *testing.T) {
 	})
 }
 
+func cnpgSnapshotBackup(name, phase string, online any) *unstructured.Unstructured {
+	spec := map[string]any{"cluster": map[string]any{"name": "pg"}, "method": "volumeSnapshot"}
+	if online != nil {
+		spec["online"] = online
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "postgresql.cnpg.io/v1",
+		"kind":       "Backup",
+		"metadata":   map[string]any{"name": name, "namespace": "db"},
+		"spec":       spec,
+		"status":     map[string]any{"phase": phase},
+	}}
+}
+
+// The operator fences the instance for a cold snapshot and lifts the fence
+// itself; lifting it first would start PostgreSQL under the snapshot.
+func TestCNPGActionUnfenceWaitsForColdSnapshot(t *testing.T) {
+	fenced := func(o map[string]any) {
+		o["metadata"].(map[string]any)["annotations"] = map[string]any{cnpgFencedAnnotation: `["pg-2"]`}
+	}
+	facts := func() map[string]any {
+		f := cnpgActionFacts()
+		f["fencedInstances"] = map[string]any{"raw": `["pg-2"]`}
+		return f
+	}
+	cases := []struct {
+		name    string
+		backups []runtime.Object
+		cluster func(o map[string]any)
+		blocked bool
+	}{
+		{"running cold snapshot", []runtime.Object{cnpgSnapshotBackup("cold", "running", false)}, nil, true},
+		{"cold by the cluster's default", []runtime.Object{cnpgSnapshotBackup("cold", "started", nil)}, func(o map[string]any) {
+			o["spec"].(map[string]any)["backup"] = map[string]any{"volumeSnapshot": map[string]any{"className": "csi", "online": false}}
+		}, true},
+		{"finished cold snapshot", []runtime.Object{cnpgSnapshotBackup("cold", "completed", false)}, nil, false},
+		{"running online snapshot", []runtime.Object{cnpgSnapshotBackup("hot", "running", true)}, nil, false},
+		{"online by default", []runtime.Object{cnpgSnapshotBackup("hot", "running", nil)}, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := cnpgActionCluster(func(o map[string]any) {
+				fenced(o)
+				if tc.cluster != nil {
+					tc.cluster(o)
+				}
+			})
+			env := newCNPGActionEnv(t, append([]runtime.Object{c}, tc.backups...), cnpgActionPod("pg-1", "u1", true))
+			resp, err := (&Server{}).cnpgClusterCapabilities(httptest.NewRequest(http.MethodGet, "/", nil), env.clients(), "kind-test", "db", "pg")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := !resp.Actions.Unfence.Allowed; got != tc.blocked {
+				t.Errorf("unfence blocked = %v (%q), want %v", got, resp.Actions.Unfence.Reason, tc.blocked)
+			}
+			if got := !resp.InstanceActions["pg-2"].Unfence.Allowed; got != tc.blocked {
+				t.Errorf("pg-2 unfence blocked = %v, want %v", got, tc.blocked)
+			}
+			_, err = runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "unfence", cnpgActionReq(t, facts(), map[string]any{"instances": []string{"pg-2"}}))
+			ae, isBlocked := cnpgActionStatus(t, err)
+			isBlocked = isBlocked && ae.Code == actionCodeBlocked
+			if isBlocked != tc.blocked {
+				t.Errorf("run: err = %v, want blocked %v", err, tc.blocked)
+			}
+			if tc.blocked && len(env.patches) != 0 {
+				t.Error("a write went out")
+			}
+		})
+	}
+}
+
 func TestCNPGActionMalformedFencingBlocksCapability(t *testing.T) {
 	c := cnpgActionCluster(func(o map[string]any) {
 		o["metadata"].(map[string]any)["annotations"] = map[string]any{cnpgFencedAnnotation: "{not json"}
