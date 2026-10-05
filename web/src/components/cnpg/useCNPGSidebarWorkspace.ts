@@ -34,7 +34,7 @@ export function useCNPGFleet(namespaces: string[], enabled = true) {
     () =>
       query.data?.installed
         ? applyCNPGFleetMetrics(
-            applyCNPGDisk(buildCNPGFleet(query.data), disk.data?.clusters ?? (disk.error ? diskFailed(query.data.objects.clusters ?? [], disk.error) : undefined)),
+            applyCNPGDisk(buildCNPGFleet(query.data, { plainStory: true }), disk.data?.clusters ?? (disk.error ? diskFailed(query.data.objects.clusters ?? [], disk.error) : undefined)),
             metrics.data?.clusters,
             metrics.data,
           )

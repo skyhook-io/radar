@@ -372,3 +372,17 @@ it('does not claim matching images without observed image evidence', () => {
   base.instances[0].imageMatches = undefined
   expect(cnpgImageDrift(base).known).toBe(false)
 })
+
+it('opts into a definitive non-serving verdict from an empty complete endpoint read without a primary', () => {
+  const r = row({ cluster: { status: {} }, pods: [] })
+  const empty = ha({ rwEndpoints: { state: 'ok', service: 'analytics-rw', pods: [] } })
+  expect(cnpgDimensions({ row: r, ha: empty, plainStory: true })[0]).toMatchObject({ tone: 'unhealthy', text: 'not serving: no ready read-write endpoint', source: 'EndpointSlices of Service analytics-rw' })
+  expect(cnpgDimensions({ row: r, ha: empty })[0].tone).toBe('unknown')
+  expect(cnpgDimensions({ row: r, ha: ha({ rwEndpoints: { state: 'denied', service: 'analytics-rw', pods: [] } }), plainStory: true })[0].tone).toBe('unknown')
+  expect(cnpgDimensions({ row: { ...r, hibernated: true }, ha: empty, plainStory: true })[0].text).toBe('hibernated')
+})
+it('opts into storage reasons for loading, missing Prometheus and denied usage', () => {
+  expect(cnpgDimensions({ row: row(), plainStory: true })[2].text).toBe('Reading…')
+  expect(cnpgDimensions({ row: row({ disk: { tone: 'unknown', text: 'No usage metrics', source: 'Prometheus not connected' } }), plainStory: true })[2].text).toBe('No usage metrics: Prometheus not connected')
+  expect(cnpgDimensions({ row: row({ disk: { tone: 'unknown', text: 'No access', source: 'Needs list persistentvolumeclaims in namespace db' } }), plainStory: true })[2].text).toContain('Needs list persistentvolumeclaims')
+})

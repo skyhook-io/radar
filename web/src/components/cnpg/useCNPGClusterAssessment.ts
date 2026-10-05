@@ -21,7 +21,7 @@ export function useCNPGClusterAssessment(namespace: string, name: string) {
   const dimensions = useMemo(
     () =>
       row
-        ? cnpgDimensions({ row, ha: ha.data, replication: cnpgReplicationLive(runtime.data), replicationGap: cnpgReplicationGap(runtime.data, runtime.error) })
+        ? cnpgDimensions({ row, plainStory: true, ha: ha.data, replication: cnpgReplicationLive(runtime.data), replicationGap: cnpgReplicationGap(runtime.data, runtime.error) })
         : undefined,
     [row, ha.data, runtime.data, runtime.error],
   )

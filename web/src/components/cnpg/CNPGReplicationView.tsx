@@ -147,11 +147,15 @@ export function CNPGReplicationView({
   const pods = new Map((ha?.pods.state === 'ok' ? ha.instances : []).map((i) => [i.pod, i]))
   const slots = new Map((primary?.status.slots ?? []).map((sl) => [sl.name, sl]))
   const slotsRead = !!primary?.status.slots
+  const standbyMeasurementShown = replicas.some((r) => {
+    const rep = rows.get(r.pod)
+    return !!(r.status.receivedLsn || r.status.replayLsn) || !!rep && [rep.sentLsn, rep.writeLsn, rep.flushLsn, rep.replayLsn, rep.writeLag, rep.flushLag, rep.replayLag].some((value) => value !== undefined)
+  })
   return (
     <Card
       title="Instances and replication"
       footer={
-        primary?.status.currentLsn || replicas.some((r) => r.status.currentLsn || r.status.replayLsn) ? <>
+        standbyMeasurementShown ? <>
           Rows come from the primary’s pg_stat_replication through the instance manager. Replay backlog is the primary’s current WAL position minus what the
           standby has replayed, in bytes: the catch-up measure. A standby that isn't connected has no row, so its backlog uses the position it reports itself — only on
           the same timeline, since positions on different timelines aren't comparable.

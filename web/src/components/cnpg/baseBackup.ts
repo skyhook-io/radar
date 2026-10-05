@@ -3,7 +3,7 @@ import type { CNPGRuntimeBaseBackup, CNPGRuntimeResponse } from '../../api/cnpg'
 import { formatBytes } from './lsn'
 
 export const CNPG_BASE_BACKUP_SOURCE =
-  "The primary's instance manager (pg_stat_progress_basebackup, joining instances only)"
+  'pg_basebackup on the primary, joining instances only'
 
 export function describeCNPGBaseBackup(bb: CNPGRuntimeBaseBackup): string {
   const who = bb.instance ? `to new instance ${bb.instance}` : `for ${bb.applicationName}`

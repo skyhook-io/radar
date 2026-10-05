@@ -1,8 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { useQueries } from '@tanstack/react-query'
-import { useLocation } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { Lock } from 'lucide-react'
 import { ActionConfirmDialog, PaneLoader, Tooltip, formatAge, toneFillClass, toneTextClass, formatGrant } from '@skyhook-io/k8s-ui'
 import { formatCPUString, formatMemoryString, parseCPUToNanocores, parseMemoryToBytes } from '@skyhook-io/k8s-ui/utils/format'
 import { podMetricsQuery, usePodMetrics } from '../../api/client'
@@ -12,8 +10,7 @@ import { useCNPGSessions, type CNPGBackend, type CNPGSessionInstance, type CNPGS
 import { useToast } from '../ui/Toast'
 import { buildBlockingTree, cnpgConnectionFigure, cnpgNoMetricsReadings, countVictims, type BlockingNode } from './blocking'
 import { RefreshFailedNotice } from '../workspace/layout'
-import { useCNPGNavigate } from './useCNPGNavigate'
-import { cnpgClusterProblemsPath, cnpgWithinDetail } from './paths'
+import { Denied, PrimaryPrerequisite } from './runtimeParts'
 
 function age(s?: number): string {
   if (s === undefined || s === null) return '—'
@@ -81,28 +78,11 @@ function Body({
   aggregatesGap?: string
   headroom: boolean
 }) {
-  const navigate = useCNPGNavigate()
-  const location = useLocation()
-  const overviewPath = `${cnpgClusterProblemsPath(namespace, cluster, new URLSearchParams(location.search).get('ctx') ?? undefined)}&tab=overview`
-  const inPlace = cnpgWithinDetail(location.pathname, location.search, overviewPath)
-  if (data.state === 'unavailable') return <div className="text-sm text-theme-text-tertiary">Available once the primary is running. <button type="button" className="text-accent-text hover:underline" onClick={() => navigate(inPlace ?? overviewPath, { replace: !!inPlace, state: location.state })}>See Overview →</button></div>
-  if (data.state === 'denied') {
-    return (
-      <div className="rounded-lg border border-dashed border-theme-border p-4">
-        <div className="flex items-center gap-2 text-sm font-medium text-theme-text-primary">
-          <Lock className="h-4 w-4" />
-          Blocking detail needs {formatGrant(data.permission.grant) ?? 'create pods/exec'}
-        </div>
-        <p className="mt-1 text-sm text-theme-text-secondary">
-          Who blocks whom is read inside PostgreSQL, which needs exec into the instance.{' '}
-          {aggregatesGap
-            ? `The aggregate session counts are unavailable too: ${aggregatesGap}.`
-            : 'The aggregate counts above come from the metrics exporter and still apply.'}{' '}
-          Nothing here is shown as zero.
-        </p>
-      </div>
-    )
-  }
+  if (data.state === 'denied') return <Denied title="No access to blocking detail" grant={formatGrant(data.permission.grant) ?? 'create pods/exec'}>
+    Who blocks whom is read inside PostgreSQL, which needs exec into the instance.{' '}
+    {aggregatesGap ? `The aggregate session counts are unavailable too: ${aggregatesGap}.` : 'The aggregate counts above come from the metrics exporter and still apply.'}
+  </Denied>
+  if (data.state === 'unavailable') return <PrimaryPrerequisite namespace={namespace} cluster={cluster} />
   if (data.state !== 'ok') {
     return (
       <>
@@ -118,7 +98,6 @@ function Body({
   return (
     <>
       {headroom && <Headroom data={data} />}
-      <Resources namespace={namespace} instances={data.instances} />
       {roots.length === 0 ? (
         <div className="text-sm text-theme-text-secondary">No session is waiting on another session’s lock on {data.pod}.</div>
       ) : (
@@ -133,6 +112,7 @@ function Body({
           ))}
         </div>
       )}
+      <Resources namespace={namespace} instances={data.instances} />
     </>
   )
 }
@@ -162,10 +142,11 @@ function Resources({ namespace, instances }: { namespace: string; instances: CNP
   // No readings for any Pod is said once rather than on every card; it may be
   // a missing metrics API or a cluster too new to have been sampled.
   if (cnpgNoMetricsReadings(metrics.map((m) => m.data))) {
-    return <div className="text-xs text-theme-text-tertiary">CPU and memory not measured: the metrics API has no readings for these Pods (metrics-server may be missing, or has not sampled them yet).</div>
+    return <div><h3 className="mb-1 text-sm font-semibold text-theme-text-primary">Resource usage</h3><div className="text-xs text-theme-text-tertiary">CPU and memory not measured: the metrics API has no readings for these Pods (metrics-server may be missing, or has not sampled them yet).</div></div>
   }
   return (
     <div>
+      <h3 className="mb-1 text-sm font-semibold text-theme-text-primary">Resource usage</h3>
       <div className="mb-1 text-xs text-theme-text-tertiary">CPU and memory of each instance’s postgres container (metrics-server)</div>
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {instances.map((i) => (

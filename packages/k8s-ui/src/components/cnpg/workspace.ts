@@ -2,8 +2,9 @@
 // payload. Every fact here is something the cluster actually reports; when it
 // does not report something the value is "unknown", never zero or healthy.
 
+import { backupsForScheduledBackup, cnpgScheduleDestinationBlocker } from './relations'
 import { cnpgRoleState } from './databaseRole'
-import { formatAge, type HealthLevel } from '../resources/resource-utils'
+import { formatAge, summarizeSchedulerMessage, type HealthLevel } from '../resources/resource-utils'
 import { worseTone } from '../ui/status-tone'
 import { type Fact } from '../facts'
 import { type ProblemOrigin, type WorkspaceProblem } from '../problems'
@@ -150,7 +151,7 @@ export interface CNPGProtectionFacts {
     objectStore?: string
   }
   lastSuccessfulBackup: Fact
-  walArchiving: Fact
+  walArchiving: Fact & { operatorCondition?: { type: string; status: string; message?: string; lastTransitionTime?: string } }
   recoveryWindow: Fact & { from?: string }
   restoreValidation: Fact & { restoredInto?: { namespace: string; name: string } }
 }
@@ -500,6 +501,8 @@ function scheduleFact(
   schedules: any[],
   cov: CNPGKindCoverage,
   readings: Record<string, string> = {},
+  plainStory = false,
+  backups: any[] = [],
 ): CNPGProtectionFacts['schedule'] {
   const ns = cluster.metadata?.namespace
   if (!coverageReadable(cov, ns)) {
@@ -514,6 +517,17 @@ function scheduleFact(
   }
   const cron = active[0]?.spec?.schedule
   const reading = readings[`${ns}/${active[0]?.metadata?.name}`]
+  if (plainStory) {
+    const blockers = active.map((s) => cnpgScheduleDestinationBlocker(s, [cluster])).filter((b): b is string => !!b)
+    const cadence = active.length === 1 ? reading || cron : undefined
+    const run = active.some((s) => s.status?.lastScheduleTime || backupsForScheduledBackup(s, backups).length > 0)
+    return {
+      text: [active.length === 1 ? 'Enabled' : `${active.length} enabled schedules`, blockers.length || run ? cadence : undefined, blockers.length ? `blocked: ${[...new Set(blockers)].map((blocker) => blocker[0].toLowerCase() + blocker.slice(1)).join(', ')}` : !run ? 'not run yet' : undefined].filter(Boolean).join(' · '),
+      tone: blockers.length ? 'degraded' : 'neutral',
+      names,
+      ...(active.length === 1 && cron ? { source: `ScheduledBackup ${active[0]?.metadata?.name} · cron ${cron}` } : {}),
+    }
+  }
   return {
     text: active.length === 1 ? (reading ? `Scheduled · ${reading}` : cron ? `Scheduled · ${cron}` : 'Scheduled') : `${active.length} schedules`,
     tone: 'neutral',
@@ -596,7 +610,7 @@ function lastBackupFact(
   return { text: 'Completed', tone: 'healthy', at: best.at, source: best.source }
 }
 
-function walFact(cluster: any): Fact {
+function walFact(cluster: any, plainStory = false): CNPGProtectionFacts['walArchiving'] {
   const conds = cluster?.status?.conditions
   const c = Array.isArray(conds) ? conds.find((x: any) => x?.type === 'ContinuousArchiving') : null
   const plugin = getCNPGClusterBarmanPlugin(cluster)
@@ -609,10 +623,10 @@ function walFact(cluster: any): Fact {
   const customArchiver = archivers.some((p: any) => p.name !== plugin?.name)
   if (!destinationKnown && !customArchiver) {
     return {
-      text: 'No archive destination configured',
+      text: plainStory ? 'Not archived: no destination configured' : 'No archive destination configured',
       tone: 'neutral',
       source: 'Cluster spec',
-      ...(c ? { detail: `CNPG reports ContinuousArchiving=${c.status}${c.lastTransitionTime ? ` since ${c.lastTransitionTime}` : ''}${c.message ? `: ${c.message}` : ''}` } : {}),
+      ...(plainStory ? { detail: "PostgreSQL's WAL is not stored anywhere, so point-in-time recovery is not possible. CloudNativePG still reports archiving as working because, with no destination, it accepts each WAL file without keeping it.", ...(c ? { operatorCondition: { type: c.type, status: c.status, message: c.message, lastTransitionTime: c.lastTransitionTime } } : {}) } : c ? { detail: `CNPG reports ContinuousArchiving=${c.status}${c.lastTransitionTime ? ` since ${c.lastTransitionTime}` : ''}${c.message ? `: ${c.message}` : ''}` } : {}),
     }
   }
   if (!c) return { text: 'Not reported', tone: 'unknown', source: 'Cluster status' }
@@ -1016,7 +1030,7 @@ function declarationsFor(cluster: any, resp: CNPGWorkspaceResponse): CNPGFleetRo
   return { summary, total, failed, pending }
 }
 
-export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
+export function buildCNPGFleet(resp: CNPGWorkspaceResponse, options: { plainStory?: boolean } = {}): CNPGFleet {
   const clusters = (resp.objects.clusters ?? []).filter((c) => isApiGroup(c?.apiVersion, 'postgresql.cnpg.io'))
   const pods = resp.objects.pods ?? []
   const stores = resp.objects.objectStores ?? []
@@ -1042,11 +1056,11 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
     const desired = typeof cluster?.spec?.instances === 'number' ? cluster.spec.instances : null
 
     const window = recoveryWindowFor(cluster, stores)
-    const wal = walFact(cluster)
+    const wal = walFact(cluster, options.plainStory)
     const storesCov = coverageOf(resp, 'objectStores')
     const storesUnreadable = !!getCNPGClusterBarmanPlugin(cluster)?.barmanObjectName && !coverageReadable(storesCov, ns)
     const protection: CNPGProtectionFacts = {
-      schedule: scheduleFact(cluster, resp.objects.scheduledBackups ?? [], coverageOf(resp, 'scheduledBackups'), resp.scheduleReadings),
+      schedule: scheduleFact(cluster, resp.objects.scheduledBackups ?? [], coverageOf(resp, 'scheduledBackups'), resp.scheduleReadings, options.plainStory, resp.objects.backups ?? []),
       destination: destinationFact(cluster),
       lastSuccessfulBackup: lastBackupFact(cluster, resp.objects.backups ?? [], coverageOf(resp, 'backups'), window, storesUnreadable ? storesCov : null),
       walArchiving: wal,
@@ -1061,7 +1075,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
           }
         : storesUnreadable
           ? { text: cnpgCoverageGap(storesCov, 'ObjectStores', ns), tone: 'unknown' }
-          : { text: 'Not reported', tone: 'unknown' },
+          : options.plainStory && destinationFact(cluster).method === 'none' ? { text: 'None: no backup destination', tone: 'neutral' } : { text: 'Not reported', tone: 'unknown' },
       restoreValidation: restoreValidationFact(cluster, clusters, resp.objects.backups ?? [], coverageReadable(coverageOf(resp, 'backups'), ns)),
     }
     const podsReadable = coverageReadable(coverageOf(resp, 'pods'), ns)
@@ -1071,10 +1085,11 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
         : undefined
     const readinessContradicted = !hibernated && !!podReadiness && readyInstances !== null && podReadiness.ready < readyInstances
     const primaryConflict = podsReadable ? primaryConflictOf(cluster, pods.filter((p) => p.metadata?.namespace === ns && p.metadata?.labels?.['cnpg.io/cluster'] === name)) : undefined
-    const problems = sortProblems([
+    let problems = sortProblems([
       ...problemsFor(cluster, resp.issues ?? [], resp.audit ?? [], children, backupTimesOf(cluster, resp.objects.backups ?? []), jobs),
       ...observedProblems(cluster, instancePods, readinessContradicted ? podReadiness : undefined, readyInstances, primaryConflict),
     ])
+    if (options.plainStory) problems = problems.map((p) => p.origin?.label === 'Kubernetes scheduler' ? { ...p, detail: `Cannot be scheduled: ${summarizeSchedulerMessage(p.detail, { plain: true })}`, rawDetail: p.detail } : p)
     const categories = new Set<CNPGProblemCategory>(
       problems.filter((p) => p.severity !== 'posture').map((p) => p.category),
     )

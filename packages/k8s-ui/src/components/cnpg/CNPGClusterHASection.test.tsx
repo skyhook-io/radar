@@ -63,3 +63,15 @@ it('describes matching Pod images without claiming the Pods are running', () => 
   expect(html).toContain('observed Pod images match')
   expect(html).not.toContain('instances run it')
 })
+
+it('keeps the readiness statement inside expanded HA and lists missing expected instances without an observed role', () => {
+  const ha: CNPGClusterHA = { ...noInstances, declaredInstances: 2, expectedInstances: ['orders-1', 'orders-2'], instances: [{ pod: 'orders-1', podUID: 'a', role: 'primary', ready: true, restartCount: 0 }], jobs: { state: 'ok', items: [{ name: 'orders-2-join', role: 'join', phase: 'pending', reason: 'Pod cannot be scheduled: Unschedulable: 0/2 nodes are available: 2 Too many pods. preemption: no victims.' }] } }
+  const html = renderToStaticMarkup(<CNPGClusterHASection ha={ha} showReadiness showInstances={false} />)
+  expect(html).toContain('1 of 2 declared instances ready; no instance Pod observed for orders-2')
+  expect(html).toContain('orders-1')
+  expect(html).toContain('orders-2</span> · not running')
+  expect(html).toContain('Cannot be scheduled: both nodes have reached their Pod limit')
+  expect(html).toContain('Scheduler message')
+  expect(html).toContain('aria-expanded="false"')
+  expect(html).toContain('preemption: no victims')
+})

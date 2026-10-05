@@ -5,12 +5,14 @@ const state = vi.hoisted(() => ({ haProps: {} as any, navigate: vi.fn(), runtime
 vi.mock('../../api/cnpg', () => ({ useCNPGRuntime: () => ({ data: state.runtime }), useCNPGClusterCapabilities: () => ({}) }))
 vi.mock('../../api/cnpg-ha', () => ({ useCNPGClusterHA: () => ({}), cnpgInstanceLive: () => undefined, cnpgInstanceLiveUnavailable: () => 'not read' }))
 vi.mock('./useCNPGSidebarWorkspace', () => ({ useCNPGFleet: () => ({ fleet: { rows: [{ name: 'pg', namespace: 'db', cluster: { status: { currentPrimary: 'pg-1' } } }] } }) }))
+vi.mock('./actions/CNPGInstanceActions', () => ({ CNPGInstanceActions: () => null }))
 vi.mock('./useCNPGNavigate', () => ({ useCNPGNavigate: () => state.navigate }))
-vi.mock('./CNPGClusterTabs', () => ({ CNPGTabVerdict: ({ id }: { id: string }) => <span>verdict: {id}</span> }))
+vi.mock('./CNPGClusterTabs', () => ({ CNPGTabVerdict: ({ id, alwaysShow }: { id: string; alwaysShow?: boolean }) => <span>verdict: {id}{alwaysShow ? " always" : ""}</span> }))
 vi.mock('@skyhook-io/k8s-ui', async (original) => ({ ...(await original<typeof import('@skyhook-io/k8s-ui')>()), CNPGClusterHASection: (props: any) => { state.haProps = props; return null } }))
 it('explains Serving on Replication and connects endpoint evidence to Reachability', () => {
   const html = renderToStaticMarkup(<CNPGReplicationTab namespace="db" name="pg" />)
-  expect(html).toContain('verdict: serving')
+  expect(html).toContain('verdict: serving always')
+  expect(state.haProps.showReadiness).toBe(true)
   expect(html).toContain('verdict: replication')
   expect(state.haProps.currentPrimary).toBe('pg-1')
   state.haProps.onOpenReachability({ namespace: 'db', name: 'pg-rw' })
@@ -48,5 +50,13 @@ it('says checked instead of sampled when no instance answered', () => {
   expect(html).not.toContain('sampled')
   expect(html).not.toContain('catch-up measure')
   expect(html).toContain('Source: instance manager status')
+  state.runtime = undefined
+})
+
+it('keeps the replication measurement explanation absent for a lone primary, and present for measured standby rows', () => {
+  state.runtime = { permission: { proxy: 'allowed' }, sampledAt: '2026-10-05T12:00:00Z', instances: [{ pod: 'pg-1', role: 'primary', status: { state: 'ok', currentLsn: '0/4000' }, metrics: { state: 'ok' } }] }
+  expect(renderToStaticMarkup(<CNPGReplicationTab namespace="db" name="pg" />)).not.toContain('catch-up measure')
+  state.runtime.instances.push({ pod: 'pg-2', role: 'replica', status: { state: 'ok', replayLsn: '0/3000' }, metrics: { state: 'ok' } })
+  expect(renderToStaticMarkup(<CNPGReplicationTab namespace="db" name="pg" />)).toContain('catch-up measure')
   state.runtime = undefined
 })

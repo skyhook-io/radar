@@ -12,7 +12,7 @@ import { formatBytes } from './lsn'
 import { historyLatest, latestRate } from './trendSamples'
 import { CNPGTrends, useSampleBuffer, type CNPGChartGroup, type CNPGIntervalTarget, type Sample } from './CNPGTrends'
 import { Notice, RefreshFailedNotice, Segments } from '../workspace/layout'
-import { Card, Metric, ProxyDenied, Unavailable, SourceState, seconds } from './runtimeParts'
+import { Card, Metric, ProxyDenied, Denied, PrimaryPrerequisite, Unavailable, SourceState, seconds } from './runtimeParts'
 
 type Section = 'sessions' | 'health' | 'history'
 
@@ -82,7 +82,7 @@ export function CNPGPerformance({
       { replace: true, state: location.state },
     )
   const picker =
-    data.instances.length > 0 && picked ? (
+    data.instances.length > 1 && picked ? (
       <label className="flex items-center gap-2 text-xs text-theme-text-secondary">
         Instance
         <select
@@ -153,16 +153,17 @@ function SessionsView({ namespace, cluster, instance, picker }: { namespace: str
   return (
     <div className="space-y-4">
       {picker}
-      <SessionAggregates primary={instance} exec={exec} />
+      <SessionAggregates namespace={namespace} cluster={cluster} primary={instance} exec={exec} sessionRead={blocking.data} />
       <CNPGBlockingSessions namespace={namespace} cluster={cluster} pod={instance?.pod} aggregatesGap={aggregatesGap} headroom={!cnpgSessionsCardShowsConnections(instance, exec)} />
     </div>
   )
 }
 
 // `primary` is the instance shown: the primary unless another was picked.
-function SessionAggregates({ primary, exec }: { primary?: CNPGRuntimeInstance; exec?: CNPGSessionsResponse }) {
+function SessionAggregates({ namespace, cluster, primary, exec, sessionRead }: { namespace: string; cluster: string; primary?: CNPGRuntimeInstance; exec?: CNPGSessionsResponse; sessionRead?: CNPGSessionsResponse }) {
   const m = primary?.metrics
-  if (!m || (m.state !== 'ok' && m.state !== 'partial')) return <Card title="Sessions"><Unavailable inst={primary} what="Sessions" /></Card>
+  if (!primary) return <Card title="Sessions">{sessionRead?.state === 'denied' ? <Denied title="No access to sessions" grant={formatGrant(sessionRead.permission.grant) ?? 'create pods/exec'}>Session detail needs exec into the instance.</Denied> : <PrimaryPrerequisite namespace={namespace} cluster={cluster} />}</Card>
+  if (!m || (m.state !== 'ok' && m.state !== 'partial')) return <Card title={`Sessions on ${primary.pod}`}><Unavailable inst={primary} what="Sessions" /></Card>
   const rows = [...(m.sessions ?? [])].sort((a, b) => b.count - a.count)
   const measured = m.sessionsTotal !== undefined
   const idleTx = measured

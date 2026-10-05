@@ -2,6 +2,9 @@ import type { ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { Lock } from 'lucide-react'
 import { toneTextClass } from '@skyhook-io/k8s-ui'
+import { useLocation } from 'react-router-dom'
+import { useCNPGNavigate } from './useCNPGNavigate'
+import { cnpgClusterProblemsPath, cnpgWithinDetail } from './paths'
 import type { CNPGRuntimeInstance } from '../../api/cnpg'
 
 export function seconds(s?: number): string {
@@ -26,18 +29,25 @@ export function SourceState({ label, state, error, reason }: { label: string; st
 
 // Denied is not zero: the section says what it would show and the grant it needs.
 export function ProxyDenied({ what, grant }: { what: string; grant: string }) {
-  return (
-    <div className="max-w-2xl rounded-xl border border-dashed border-theme-border p-5">
-      <div className="flex items-center gap-2 font-medium text-theme-text-primary">
-        <Lock className="h-4 w-4" />
-        No access to live instance data
-      </div>
-      <p className="mt-2 text-sm text-theme-text-secondary">
-        {what} are read from each instance through the Kubernetes API proxy, which your identity may not use. These readings are unavailable.
-      </p>
-      <pre className="mt-2 rounded-md bg-theme-elevated px-3 py-2 font-mono text-xs text-theme-text-primary">{`requires: ${grant}`}</pre>
-    </div>
-  )
+  return <Denied title="No access to live instance data" grant={grant}>
+    {what} are read from each instance through the Kubernetes API proxy, which your identity may not use. These readings are unavailable.
+  </Denied>
+}
+
+export function Denied({ title, grant, children }: { title: string; grant: string; children: ReactNode }) {
+  return <div className="w-full rounded-xl border border-dashed border-theme-border p-4">
+    <div className="flex items-center gap-2 text-sm font-medium text-theme-text-primary"><Lock className="h-4 w-4 shrink-0" />{title}</div>
+    <p className="mt-2 text-sm text-theme-text-secondary">{children}</p>
+    <div className="mt-2 break-words rounded-md bg-theme-elevated px-3 py-2 font-mono text-xs text-theme-text-primary">requires: {grant}</div>
+  </div>
+}
+
+export function PrimaryPrerequisite({ namespace, cluster }: { namespace: string; cluster: string }) {
+  const navigate = useCNPGNavigate()
+  const location = useLocation()
+  const overviewPath = `${cnpgClusterProblemsPath(namespace, cluster, new URLSearchParams(location.search).get('ctx') ?? undefined)}&tab=overview`
+  const inPlace = cnpgWithinDetail(location.pathname, location.search, overviewPath)
+  return <div className="text-sm text-theme-text-tertiary">Available once the primary is running. <button type="button" className="text-accent-text hover:underline" onClick={() => navigate(inPlace ?? overviewPath, { replace: !!inPlace, state: location.state })}>See Overview →</button></div>
 }
 
 export function Card({ title, children, footer, aside }: { title: ReactNode; children: ReactNode; footer?: ReactNode; aside?: ReactNode }) {

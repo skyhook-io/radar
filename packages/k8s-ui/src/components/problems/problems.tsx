@@ -4,6 +4,7 @@ import type { HealthLevel } from '../resources/resource-utils'
 import { StatusDot, toneTextClass } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
 import { AlertBanner } from '../ui/drawer-components'
+import { FoldSection } from '../ui/FoldSection'
 import { RefLink, type NavigateToRef } from '../ui/RefLink'
 
 /** Where a problem's evidence comes from, in user terms. */
@@ -24,6 +25,7 @@ export interface WorkspaceProblem<C extends string = string> {
   category: C
   title: string
   detail?: string
+  rawDetail?: string
   /** The object the evidence is about: the workspace's root object or one of its children. */
   subject: { kind: string; group: string; namespace: string; name: string }
   /**
@@ -146,6 +148,7 @@ export function ProblemCallout({
 }) {
   return (
     <AlertBanner variant={PROBLEM_VARIANT[problem.severity]} title={problem.title} message={problem.detail}>
+      {problem.rawDetail && <FoldSection title="Scheduler message" summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{problem.rawDetail}</div></FoldSection>}
       <ProblemMeta problem={problem} rootKind={rootKind} onNavigate={onNavigate} subjectIsSelf={subjectIsSelf}>
         {action}
         {more}
@@ -166,6 +169,7 @@ export function ProblemList({ problems, rootKind, onNavigate }: { problems: Work
           <div className="min-w-0">
             <div className={clsx('font-medium break-words', toneTextClass(PROBLEM_TONE[p.severity]))}>{p.title}</div>
             {p.detail && <div className="text-xs text-theme-text-secondary break-words">{p.detail}</div>}
+            {p.rawDetail && <FoldSection title="Scheduler message" summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{p.rawDetail}</div></FoldSection>}
             <ProblemMeta problem={p} rootKind={rootKind} onNavigate={onNavigate} />
           </div>
         </li>

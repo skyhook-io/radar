@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import {
   Badge,
   CNPGClusterBackupFacts,
+  CNPGWALArchivingFact,
   backupsForScheduledBackup,
   cnpgScheduleDestinationBlocker,
   refToSelectedResource,
@@ -209,7 +210,7 @@ export function CNPGProtection({
           <section className="rounded-xl border border-theme-border bg-theme-surface px-4 pb-3 shadow-theme-sm">
             <h3 className="pt-3 text-sm font-semibold text-theme-text-primary">Recovery evidence</h3>
             <CNPGClusterBackupFacts row={rows[0]} onNavigate={(ref) => onInspect(refToSelectedResource(ref))} />
-            <p className="mt-2 text-xs text-theme-text-tertiary">Recovery windows come from ObjectStore status.</p>
+            {stores.length > 0 && <p className="mt-2 text-xs text-theme-text-tertiary">Recovery windows come from ObjectStore status.</p>}
           </section>
         )}
         {!scopeCluster && <SectionTable
@@ -236,7 +237,7 @@ export function CNPGProtection({
                 </>
               ),
             },
-            { header: 'WAL archiving', width: '16%', cell: (r) => <><FactValue fact={r.protection.walArchiving} className="break-words" /><Sub>{r.protection.walArchiving.source}</Sub>{r.protection.walArchiving.detail && <Sub>{r.protection.walArchiving.detail}</Sub>}</> },
+            { header: 'WAL archiving', width: '16%', cell: (r) => <CNPGWALArchivingFact fact={r.protection.walArchiving} /> },
             {
               header: 'Recovery window',
               width: '12%',
@@ -289,7 +290,7 @@ export function CNPGProtection({
           inspected={inspected}
           minWidth={1000}
           empty={coverageEmpty(data.coverage.clusters, 'PostgreSQL clusters')}
-          footer="Kubernetes records no restore tests, so restore validation is never shown as passed. Recovery windows come from ObjectStore status."
+          footer={`Kubernetes records no restore tests, so restore validation is never shown as passed.${stores.length > 0 ? " Recovery windows come from ObjectStore status." : ""}`}
         />}
 
         <SectionTable
@@ -388,17 +389,18 @@ export function CNPGProtection({
           onInspect={onInspect}
           inspected={inspected}
           empty={data.coverage.objectStores?.state === 'notInstalled' ? 'The barman-cloud plugin’s ObjectStore kind is not installed.' : coverageEmpty(data.coverage.objectStores, 'ObjectStores')}
-          footer="ObjectStore has no health status of its own; upload health is inferred from its clusters’ WAL archiving and backup results."
+          footer={stores.length > 0 ? "ObjectStore has no health status of its own; upload health is inferred from its clusters’ WAL archiving and backup results." : undefined}
         />
 
         <SectionTable
           title="Schedules"
+          minWidth={820}
           columns={[
-            { header: 'ScheduledBackup', width: scopeCluster ? '30%' : '24%', cell: (s: any) => <>{s.metadata?.name}<Sub>{s.metadata?.namespace}</Sub></> },
-            ...(scopeCluster ? [] : [{ header: 'Cluster', width: '16%', cell: (s: any) => s.spec?.cluster?.name ?? '—' }]),
+            { header: 'ScheduledBackup', width: scopeCluster ? '22%' : '20%', cell: (s: any) => <>{s.metadata?.name}<Sub>{s.metadata?.namespace}</Sub></> },
+            ...(scopeCluster ? [] : [{ header: 'Cluster', width: '12%', cell: (s: any) => s.spec?.cluster?.name ?? '—' }]),
             {
               header: 'Schedule',
-              width: '24%',
+              width: scopeCluster ? '24%' : '20%',
               cell: (s) => {
                 const reading = data.scheduleReadings?.[`${s.metadata?.namespace}/${s.metadata?.name}`]
                 return reading ? (
@@ -418,21 +420,21 @@ export function CNPGProtection({
             },
             {
               header: 'State',
-              width: '10%',
+              width: scopeCluster ? '25%' : '27%',
               cell: (s) => {
                 const st = getCNPGScheduledBackupStatus(s)
                 const last = backupsForScheduledBackup(s, data.objects.backups ?? [])[0]
                 const blocker = cnpgScheduleDestinationBlocker(s, data.objects.clusters ?? [])
                 const guarded = s.spec?.suspend || st.text === 'Overdue'
-                const text = guarded ? st.text : last || s.status?.lastScheduleTime ? 'Enabled' : 'Enabled · not run yet'
+                const text = guarded ? st.text : blocker || last || s.status?.lastScheduleTime ? 'Enabled' : 'Enabled · not run yet'
                 const severity = guarded ? SEVERITY[st.level] : 'neutral'
-                return <><Badge severity={severity} size="sm">{text}</Badge>{blocker && <div className="mt-1"><Badge severity="warning" size="sm">{blocker}</Badge></div>}</>
+                return <div className="flex flex-wrap gap-1"><Badge severity={severity} size="sm" className="whitespace-nowrap">{text}</Badge>{blocker && <Badge severity="warning" size="sm" className="whitespace-nowrap">{blocker}</Badge>}</div>
               },
             },
-            { header: 'Last run', width: '14%', cell: (s) => <LastRun schedule={s} backups={data.objects.backups ?? []} readable={backupsReadable} /> },
+            { header: 'Last run', width: scopeCluster ? '13%' : '10%', cell: (s) => <LastRun schedule={s} backups={data.objects.backups ?? []} readable={backupsReadable} /> },
             {
-              header: 'Next run reported by the operator',
-              width: '12%',
+              header: <span className="block whitespace-normal">Next run reported by the operator</span>,
+              width: scopeCluster ? '16%' : '11%',
               cell: (s) => { const next = getCNPGScheduledBackupNextSchedule(s); return next === '-' ? 'Not reported' : next },
             },
           ]}

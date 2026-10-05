@@ -4,9 +4,9 @@ import { expect, it, vi } from 'vitest'
 import { CNPGPerformance } from './CNPGPerformance'
 import type { CNPGRuntimeInstance } from '../../api/cnpg'
 
-const live = vi.hoisted(() => ({ denied: false, empty: false, metrics: { state: 'partial', reason: '150 session groups; the largest 100 are listed and sessionsTotal counts all', sessionsTotal: 150, sessions: [{ state: 'active', database: 'app', user: 'app', application: 'client', count: 3 }], sessionsByState: { 'idle in transaction': 12 }, waitingBackends: 2, databases: [{ database: 'app', xactCommit: 90, xactRollback: 10 }], checkpoints: { source: 'pg_stat_checkpointer', timed: 7, requested: 2 }, extensionUpdates: [] } as CNPGRuntimeInstance['metrics'] }))
-vi.mock('../../api/cnpg', () => ({ useCNPGRuntime: () => ({ data: { sampledAt: '2026-10-05T12:00:00Z', permission: { proxy: live.denied ? 'denied' : 'allowed' }, instances: live.empty ? [] : [{ pod: 'pg-1', role: 'primary', metrics: live.metrics }] } }) }))
-vi.mock('../../api/cnpg-sessions', () => ({ useCNPGSessions: () => ({}) }))
+const live = vi.hoisted(() => ({ denied: false, empty: false, count: 1, sessionRead: undefined as any, metrics: { state: 'partial', reason: '150 session groups; the largest 100 are listed and sessionsTotal counts all', sessionsTotal: 150, sessions: [{ state: 'active', database: 'app', user: 'app', application: 'client', count: 3 }], sessionsByState: { 'idle in transaction': 12 }, waitingBackends: 2, databases: [{ database: 'app', xactCommit: 90, xactRollback: 10 }], checkpoints: { source: 'pg_stat_checkpointer', timed: 7, requested: 2 }, extensionUpdates: [] } as CNPGRuntimeInstance['metrics'] }))
+vi.mock('../../api/cnpg', () => ({ useCNPGRuntime: () => ({ data: { sampledAt: '2026-10-05T12:00:00Z', permission: { proxy: live.denied ? 'denied' : 'allowed' }, instances: live.empty ? [] : Array.from({ length: live.count }, (_, i) => ({ pod: `pg-${i + 1}`, role: i === 0 ? 'primary' : 'replica', metrics: live.metrics })) } }) }))
+vi.mock('../../api/cnpg-sessions', () => ({ useCNPGSessions: () => ({ data: live.sessionRead }) }))
 vi.mock('../../api/cnpg-history', () => ({ useCNPGClusterHistory: () => ({}) }))
 vi.mock('./CNPGBlockingSessions', () => ({ CNPGBlockingSessions: () => null }))
 vi.mock('./CNPGTrends', () => ({ CNPGTrends: () => null, useSampleBuffer: () => [] }))
@@ -47,4 +47,26 @@ it('says checked when no instance answered and sampled when a measurement was ca
   live.empty = false
   live.metrics.capturedAt = '2026-10-05T12:00:00Z'
   expect(render('sessions')).toContain('Live instance data · sampled')
+})
+
+it('hides a single-instance picker, names that instance in the card, and retains multi-instance selection', () => {
+  live.count = 1
+  const single = render('sessions')
+  expect(single).not.toContain('<select')
+  expect(single).toContain('Sessions on pg-1')
+  live.count = 2
+  expect(render('sessions')).toContain('<select')
+  live.count = 1
+})
+it('uses the primary prerequisite for empty Sessions, with exec denial taking precedence', () => {
+  live.empty = true
+  const html = render('sessions')
+  expect(html).toContain('Available once the primary is running')
+  expect(html).toContain('See Overview')
+  expect(html).not.toContain('No instance is reported')
+  live.sessionRead = { state: 'denied', permission: { exec: 'denied', grant: { verb: 'create', resource: 'pods', subresource: 'exec', namespace: 'pg' } } }
+  const denied = render('sessions')
+  expect(denied).toContain('create pods/exec')
+  expect(denied).not.toContain('Available once the primary is running')
+  live.empty = false; live.sessionRead = undefined
 })

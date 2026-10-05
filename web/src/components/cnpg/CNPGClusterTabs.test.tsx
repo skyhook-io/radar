@@ -32,12 +32,15 @@ it('uses the shared restore assessment for the Backups button', () => {
 it('offers the destination setup path and Cluster YAML without claiming it is configured', () => {
   state.schedules = [{ metadata: { name: 'pg-nightly', namespace: 'db' }, spec: { cluster: { name: 'pg' } } }]
   const html = renderToStaticMarkup(<MemoryRouter><CNPGBackupsTab namespace="db" name="pg" onInspect={() => {}} onOpenYaml={() => {}} /></MemoryRouter>)
-  expect(html).toContain('How to set up backups:')
-  expect(html).toContain('barman-cloud plugin and an ObjectStore')
+  expect(html).toContain('Configure spec.backup.barmanObjectStore')
+  expect(html).toContain('spec.backup.barmanObjectStore')
+  expect(html).toContain('plugin/ObjectStore')
   expect(html).toContain('volume snapshots')
   expect(html).toContain('CloudNativePG backup docs')
   expect(html).toContain('Cluster YAML →')
-  expect(html).toContain('pg-nightly (barmanObjectStore) cannot back up pg until its method has a destination')
+  expect(html).toContain('Configure spec.backup.barmanObjectStore for pg-nightly')
+  expect(html).toContain('pg-nightly’s spec.method to match')
+  expect(html).toContain('pluginConfiguration')
   state.schedules = []
 })
 
@@ -45,7 +48,7 @@ it('explains a schedule method mismatch without asking to configure an existing 
   cluster.spec.plugins = [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }]
   state.schedules = [{ metadata: { name: 'pg-nightly', namespace: 'db' }, spec: { cluster: { name: 'pg' } } }]
   const html = renderToStaticMarkup(<MemoryRouter><CNPGBackupsTab namespace="db" name="pg" onInspect={() => {}} /></MemoryRouter>)
-  expect(html).toContain('This Cluster uses ObjectStore store')
+  expect(html).toContain('this Cluster’s ObjectStore store')
   expect(html).toContain('spec.method to plugin')
   expect(html).toContain('spec.pluginConfiguration.name to barman-cloud.cloudnative-pg.io')
   expect(html).not.toContain('configure a destination with the barman-cloud plugin')
@@ -56,6 +59,6 @@ it('explains a schedule method mismatch without asking to configure an existing 
 it('does not invent a missing destination for an enabled third-party plugin', () => {
   cluster.spec.plugins = [{ name: 'third-party-backup' }]
   const html = renderToStaticMarkup(<MemoryRouter><CNPGBackupsTab namespace="db" name="pg" onInspect={() => {}} /></MemoryRouter>)
-  expect(html).not.toContain('How to set up backups')
+  expect(html).not.toContain('Configure spec.backup')
   delete cluster.spec.plugins
 })

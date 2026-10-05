@@ -54,4 +54,5 @@ it('keeps CPU and memory measurements and limits on separate rows with unbreakab
   expect(html).toMatch(/Memory <span class="whitespace-nowrap">59 MiB<\/span>/)
   expect(html).toContain('limit <span class="whitespace-nowrap">384 MiB</span>')
   expect(html).not.toContain('Query text')
+  expect(html.indexOf('No session is waiting')).toBeLessThan(html.indexOf('Resource usage'))
 })

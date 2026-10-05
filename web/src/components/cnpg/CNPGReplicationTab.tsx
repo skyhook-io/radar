@@ -68,7 +68,7 @@ export function CNPGReplicationTab({
           </button>
         )}
       </div>
-      <CNPGTabVerdict namespace={namespace} name={name} id="serving" />
+      <CNPGTabVerdict namespace={namespace} name={name} id="serving" alwaysShow />
       <CNPGTabVerdict namespace={namespace} name={name} id="replication" />
       <RefreshFailedNotice queries={[runtime, ha]} />
 
@@ -79,7 +79,7 @@ export function CNPGReplicationTab({
       ) : denied ? (
         <>
           <PodsOnly ha={ha.data} namespace={namespace} onNavigate={onNavigate} />
-          <ProxyDenied what="Streaming state, WAL positions, backlog and replication slots" grant={grant} />
+          <Card title="Live replication"><ProxyDenied what="Streaming state, WAL positions, backlog and replication slots" grant={grant} /></Card>
         </>
       ) : (
         <>
@@ -115,6 +115,7 @@ export function CNPGReplicationTab({
           hibernated={fleet?.rows.find((r) => r.namespace === namespace && r.name === name)?.hibernated}
           onOpenReachability={(svc) => navigate(buildWorkloadPath({ kind: 'services', group: '', namespace: svc.namespace, name: svc.name, tab: 'reachability' }))}
           showInstances={false}
+          showReadiness
           showCertificates={false}
         />
       </div>

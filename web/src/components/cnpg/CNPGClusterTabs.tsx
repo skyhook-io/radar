@@ -21,10 +21,10 @@ export function CNPGTabMark({ namespace, name, id }: { namespace: string; name: 
 }
 
 /** Why a tab carries its mark, as the tab's first line; nothing when the dimension is fine. */
-export function CNPGTabVerdict({ namespace, name, id, className }: { namespace: string; name: string; id: CNPGDimension['id']; className?: string }) {
+export function CNPGTabVerdict({ namespace, name, id, className, alwaysShow }: { namespace: string; name: string; id: CNPGDimension['id']; className?: string; alwaysShow?: boolean }) {
   const { dimensions } = useCNPGClusterAssessment(namespace, name)
   const dimension = dimensions?.find((d) => d.id === id)
-  return dimension ? <CNPGDimensionVerdict dimension={dimension} className={className} /> : null
+  return dimension ? <CNPGDimensionVerdict dimension={dimension} className={className} alwaysShow={alwaysShow} /> : null
 }
 
 /** Whether the cluster serves writes, on its title line, opening the tab that explains it. */
@@ -141,8 +141,10 @@ export function CNPGBackupsTab({
           <CNPGTabVerdict namespace={namespace} name={name} id="protection" className="px-5 pt-3 xl:px-7" />
           {(missingDestination || blockedSchedules.length > 0) && (
             <p className="px-5 pt-2 text-sm text-theme-text-secondary xl:px-7">
-              How to set up backups: {missingDestination ? blockedSchedules.some((s) => s.spec?.method === 'volumeSnapshot') ? 'configure volume snapshots on this Cluster with a snapshot-capable StorageClass.' : 'configure a destination with the barman-cloud plugin and an ObjectStore, or use volume snapshots.' : 'configure the schedule’s method, or change spec.method to match this Cluster’s destination.'}
-              {blockedSchedules.length > 0 && <> {blockedSchedules.map((s) => `${s.metadata.name} (${s.spec?.method || 'barmanObjectStore'})`).join(', ')} cannot back up {name} until its method has a destination.{pluginDestination?.barmanObjectName && <> This Cluster uses ObjectStore {pluginDestination.barmanObjectName}: set the schedule’s spec.method to plugin and spec.pluginConfiguration.name to {pluginDestination.name}.</>}</>}
+              {blockedSchedules.length > 0 ? <>
+                Configure {blockedSchedules.some((s) => (s.spec?.method || 'barmanObjectStore') === 'barmanObjectStore') ? 'spec.backup.barmanObjectStore' : blockedSchedules.some((s) => s.spec?.method === 'volumeSnapshot') ? 'spec.backup.volumeSnapshot' : 'the plugin and its ObjectStore'} for {blockedSchedules.map((s) => s.metadata.name).join(', ')}.
+                {' '}{pluginDestination?.barmanObjectName ? <>Or use this Cluster’s ObjectStore {pluginDestination.barmanObjectName}: change {blockedSchedules.map((s) => s.metadata.name).join(', ')}’s spec.method to plugin and spec.pluginConfiguration.name to {pluginDestination.name}.</> : <>Or set up plugin/ObjectStore or volume snapshots; change {blockedSchedules.map((s) => s.metadata.name).join(', ')}’s spec.method to match (plugin needs pluginConfiguration).</>}
+              </> : 'Configure a destination with the barman-cloud plugin and an ObjectStore, or use volume snapshots.'}
               {' '}<a href="https://cloudnative-pg.io/docs/devel/backup/" target="_blank" rel="noopener noreferrer" className="text-accent-text hover:underline">CloudNativePG backup docs ↗</a>
               {onOpenYaml && <>{' · '}<button type="button" onClick={onOpenYaml} className="text-accent-text hover:underline">Cluster YAML →</button></>}
             </p>

@@ -64,7 +64,7 @@ function BaseBackupFact({ runtime }: { runtime: CNPGRuntimeResponse | undefined 
   const bb = cnpgBaseBackupFacts(runtime)
   if (!bb) return null
   return (
-    <FactRow label="Base backup">
+    <FactRow label="Standby cloning">
       {bb.rows.length > 1 ? (
         <ul className="space-y-0.5">
           {bb.rows.map((r) => (
@@ -114,6 +114,7 @@ function ClusterSummaryHost({ namespace, name, resource, context, onNavigate }: 
     <div>
       <CNPGClusterSummary
         row={row}
+        literalPhase
         framed={context === 'expanded'}
         onNavigate={goRef}
         lead={

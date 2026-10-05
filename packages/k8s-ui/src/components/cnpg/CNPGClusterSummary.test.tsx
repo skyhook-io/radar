@@ -218,3 +218,40 @@ it('shows the declaration read limitation inline on Overview', () => {
   expect(document.body.textContent).toContain('≥1 reconciled; Databases not read')
   act(() => root.unmount())
 })
+
+it('opts into neutral literal operator phases while retaining other consumers defaults', () => {
+  const r = row({ cluster: { status: { phase: 'Cluster in healthy state' } } })
+  const root = render(<CNPGClusterSummary row={r} literalPhase />)
+  expect(document.body.textContent).toContain('Cluster in healthy state')
+  const badge = [...document.querySelectorAll('span')].find((el) => el.textContent === 'Cluster in healthy state')!
+  expect(badge.className).not.toContain('emerald')
+  act(() => root.unmount())
+  const old = render(<CNPGClusterSummary row={r} />)
+  expect(document.body.textContent).toContain('Healthy')
+  act(() => old.unmount())
+})
+it('shows healthy Serving only when requested and keeps its tab mark absent', () => {
+  const dimension: CNPGDimension = { id: 'serving', label: 'Serving', tone: 'healthy', text: 'primary ready', source: 'Pod pg-1 and Service pg-rw' }
+  const root = render(<><CNPGDimensionVerdict dimension={dimension} alwaysShow /><CNPGDimensionMark dimension={dimension} /></>)
+  expect(document.body.textContent).toContain('primary ready')
+  expect(document.querySelector('[role="img"]')).toBeNull()
+  act(() => root.unmount())
+  const old = render(<CNPGDimensionVerdict dimension={dimension} />)
+  expect(document.body.textContent).not.toContain('primary ready')
+  act(() => old.unmount())
+})
+
+it('keeps literal blocked phases neutral with their explanation and Operator action', () => {
+  const phase = 'Cluster cannot proceed to reconciliation due to an unknown plugin being required'
+  const r = row({ cluster: { status: { phase } }, controllerStatus: { text: 'Unknown Plugin', level: 'unhealthy' } })
+  const open = vi.fn()
+  const root = render(<CNPGClusterSummary row={r} literalPhase onOpenOperator={open} />)
+  expect(document.body.textContent).toContain(phase)
+  expect(document.body.textContent).toContain('reported by CNPG')
+  expect(document.body.textContent).toContain('Plugins this cluster uses')
+  const badge = [...document.querySelectorAll('span')].find((el) => el.textContent === phase)!
+  expect(badge.className).not.toMatch(/red|amber|emerald/)
+  act(() => [...document.querySelectorAll('button')].find((b) => b.textContent === 'Operator and plugins →')!.click())
+  expect(open).toHaveBeenCalled()
+  act(() => root.unmount())
+})

@@ -98,3 +98,10 @@ it('does not infer slot absence from absent byte readings', () => {
 it('keeps measured retained WAL when slot inventory is unavailable', () => {
   expect(cnpgSlotRetentionText(null, true, [{ slot: 'a', bytes: 2048 }])).toBe('≥2.0 KiB retained WAL reported; slot inventory not read')
 })
+
+it('can separate an unmeasured retention note from slot counts without changing the default', () => {
+  const slots = [{ name: '_cnpg_orders_2', active: false }]
+  expect(cnpgSlotRetentionText(slots, true, [], { separateMissingBytes: true })).toBe('1 inactive slot')
+  expect(cnpgSlotRetentionText(slots, false, [], { separateMissingBytes: true })).toBe('≥1 inactive slot')
+  expect(cnpgSlotRetentionText(slots)).toBe('1 inactive slot; retained WAL not reported')
+})

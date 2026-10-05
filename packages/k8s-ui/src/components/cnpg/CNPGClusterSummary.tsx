@@ -13,7 +13,8 @@ import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { StatusDot, toneTextClass } from '../ui/status-tone'
 import { FactGrid, FactRow, FactSource, FactValue, ManagedByText, managedByLabel } from '../facts'
 import { ProblemCallout, ProblemList } from '../problems'
-import { SectionHeading } from '../ui/FoldSection'
+import { formatAge } from '../resources/resource-utils'
+import { FoldSection, SectionHeading } from '../ui/FoldSection'
 
 function ReadyCount({ row }: { row: CNPGFleetRow }) {
   const r = cnpgReadyInstances(row)
@@ -89,8 +90,8 @@ function DimensionGlyph({ tone }: { tone: CNPGDimension['tone'] }) {
  * The verdict behind a tab's mark, as the tab's first line, so a mark always
  * points at words on the tab it marks. Nothing when the dimension is fine.
  */
-export function CNPGDimensionVerdict({ dimension, className }: { dimension: CNPGDimension; className?: string }) {
-  if (!dimensionMarked(dimension)) return null
+export function CNPGDimensionVerdict({ dimension, className, alwaysShow = false }: { dimension: CNPGDimension; className?: string; alwaysShow?: boolean }) {
+  if (!alwaysShow && !dimensionMarked(dimension)) return null
   return (
     <div className={clsx('flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm', className)}>
       <span className="inline-flex self-center">
@@ -162,6 +163,7 @@ export function CNPGClusterSummary({
   dimensionLinkLabel,
   onOpenOperator,
   framed = false,
+  literalPhase = false,
 }: {
   row: CNPGFleetRow
   onNavigate?: NavigateToRef
@@ -187,6 +189,7 @@ export function CNPGClusterSummary({
   operationalFacts?: ReactNode
   /** Cards for the full page; drawers keep flat sections. */
   framed?: boolean
+  literalPhase?: boolean
 }) {
   const top = row.problems[0]
   const rest = row.problems.length - 1
@@ -262,8 +265,8 @@ export function CNPGClusterSummary({
           </FactRow>
           <FactRow label="Controller phase">
             <span className="inline-flex flex-wrap items-center gap-2">
-              <Badge severity={healthToSeverity(row.controllerStatus.level)} size="sm">
-                {row.controllerStatus.text}
+              <Badge severity={literalPhase ? 'neutral' : healthToSeverity(row.controllerStatus.level)} size="sm">
+                {literalPhase ? phase || 'Not reported' : row.controllerStatus.text}
               </Badge>
               <span className="text-xs text-theme-text-tertiary">
                 {radarFindings ? 'reported by CNPG · Radar findings above are separate' : 'reported by CNPG'}
@@ -386,9 +389,7 @@ export function CNPGClusterBackupFacts({ row, onNavigate }: { row: CNPGFleetRow;
           <FactSource fact={p.lastSuccessfulBackup} />
         </FactRow>
         <FactRow label="WAL archiving">
-          <FactValue fact={p.walArchiving} />
-          <FactSource fact={p.walArchiving} />
-          {p.walArchiving.detail && <Note>{p.walArchiving.detail}</Note>}
+          <CNPGWALArchivingFact fact={p.walArchiving} />
         </FactRow>
         <FactRow label="Recovery window">
           {p.recoveryWindow.from ? (
@@ -419,4 +420,20 @@ export function CNPGClusterBackupFacts({ row, onNavigate }: { row: CNPGFleetRow;
 
     </>
   )
+}
+
+export function CNPGWALArchivingFact({ fact }: { fact: CNPGFleetRow['protection']['walArchiving'] }) {
+  const c = fact.operatorCondition
+  return <div>
+    <FactValue fact={fact} className="break-words" />
+    <FactSource fact={fact} />
+    {fact.detail && <Note>{fact.detail}</Note>}
+    {c && <div className="mt-1" onClick={(e) => e.stopPropagation()}>
+      <FoldSection title="Operator report" summary="" attention={false}>
+        <div className="break-words text-xs text-theme-text-secondary">{c.type}: {c.status}</div>
+        <div className="break-words text-xs text-theme-text-secondary">{c.message || 'No message reported'}</div>
+        <div className="text-xs text-theme-text-tertiary">Last transition: {c.lastTransitionTime ? <Tooltip content={c.lastTransitionTime}><time dateTime={c.lastTransitionTime}>{formatAge(c.lastTransitionTime)} ago</time></Tooltip> : 'Not reported'}</div>
+      </FoldSection>
+    </div>}
+  </div>
 }

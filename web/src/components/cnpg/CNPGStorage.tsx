@@ -253,15 +253,15 @@ function WALHolders({ wal, primary, slotStandby }: { wal: CNPGStorageWAL; primar
         />
         <WALFact
           label="Held by replication slots"
-          value={cnpgSlotRetentionText(wal.slotInventory, !wal.slotInventoryTruncated, wal.slots)}
+          value={cnpgSlotRetentionText(wal.slotInventory, !wal.slotInventoryTruncated, wal.slots, { separateMissingBytes: true })}
           detail={
             slots.length > 0
-              ? slots
+              ? <>{slots.some((s) => s.retainedBytes === undefined) && <div>retained WAL not reported</div>}<div>{slots
                   .map((s) => {
                     const standby = slotStandby(s.name)
-                    return `${s.name} ${s.retainedBytes === undefined ? 'retained WAL not reported' : formatBytes(s.retainedBytes)}${standby ? ` (for ${standby})` : ''}`
+                    return `${s.name}${s.retainedBytes === undefined ? '' : ` ${formatBytes(s.retainedBytes)}`}${standby ? ` (expected instance ${standby})` : ''}`
                   })
-                  .join(' · ')
+                  .join(' · ')}</div></>
               : wal.slots?.map((s) => `${s.slot} ${formatBytes(s.bytes)} retained WAL`).join(' · ')
           }
           source="Instance manager slot inventory · exporter retained WAL"
@@ -285,7 +285,7 @@ function WALFact({
 }: {
   label: string
   value: string
-  detail?: string
+  detail?: ReactNode
   source: string
   tone?: 'degraded' | 'unhealthy'
   missing?: string
@@ -306,13 +306,15 @@ function InstanceCard({
   walCoverage,
   stated,
   slotStandby,
+  notRunning,
 }: {
+  notRunning?: boolean
   inst: CNPGStorageInstance
   walCoverage: CNPGClusterStorageResponse['wal']
   stated: StatedOnce
   slotStandby: (slot: string) => string | undefined
 }) {
-  const roleLabel = inst.role === 'primary' ? 'primary' : inst.role === 'replica' ? 'replica' : inst.role === 'noInstance' ? 'no instance' : 'role unknown'
+  const roleLabel = notRunning && inst.role === 'replica' ? 'expected standby · not running' : inst.role === 'primary' ? 'primary' : inst.role === 'replica' ? 'replica' : inst.role === 'noInstance' ? 'no instance' : 'role unknown'
   const diskTone = cnpgInstanceDiskTone(inst.volumes, inst.wal)
   return (
     <Card
@@ -320,7 +322,7 @@ function InstanceCard({
         <span className="flex items-center gap-2">
           <StatusDot tone={diskTone} />
           <span className="font-mono">{inst.name}</span>
-          <span className="badge-sm bg-theme-elevated text-theme-text-secondary">{roleLabel}</span>
+          <Badge severity="neutral" size="sm">{roleLabel}</Badge>
         </span>
       }
     >
@@ -426,7 +428,7 @@ export function CNPGStorage({ namespace, name, primary, runtime, clusterObject }
 
       <div className="grid items-start gap-4 xl:grid-cols-2">
         {data.instances.map((inst) => (
-          <InstanceCard key={inst.name} inst={inst} walCoverage={data.wal} stated={stated} slotStandby={slotStandby} />
+          <InstanceCard key={inst.name} inst={inst} notRunning={!!runtime?.data && !runtime.data.instances.some((i) => i.pod === inst.name)} walCoverage={data.wal} stated={stated} slotStandby={slotStandby} />
         ))}
       </div>
 

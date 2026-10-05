@@ -10,14 +10,14 @@ const backup = (name: string, phase: string, ageDays: number) => ({ apiVersion: 
 
 function render(objects: CNPGWorkspaceResponse['objects'], coverage: CNPGKindCoverage = { state: 'full' }, query = '', scopeCluster?: { namespace: string; name: string }) {
   const data: CNPGWorkspaceResponse = { installed: true, context: 'test', namespaces: null, coverage: { ...Object.fromEntries(CNPG_WORKSPACE_KEYS.map((k) => [k, { state: 'full' as const }])), backups: coverage }, objects, issues: [], audit: [], backupsOmitted: 0 }
-  return renderToStaticMarkup(<CNPGProtection data={data} fleet={buildCNPGFleet(data)} namespaces={[]} searchParams={new URLSearchParams(query)} onSetParams={() => {}} onInspect={() => {}} inspected={null} onClearNamespaces={() => {}} scopeCluster={scopeCluster} />)
+  return renderToStaticMarkup(<CNPGProtection data={data} fleet={buildCNPGFleet(data, { plainStory: true })} namespaces={[]} searchParams={new URLSearchParams(query)} onSetParams={() => {}} onInspect={() => {}} inspected={null} onClearNamespaces={() => {}} scopeCluster={scopeCluster} />)
 }
 
-it('keeps an enabled schedule neutral and names its missing destination and unreported time', () => {
+it('marks a blocked schedule amber and names its missing destination and unreported time', () => {
   const cluster = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'payments', namespace: 'pg' }, spec: {} }
   const schedule = { metadata: { name: 'nightly', namespace: 'pg' }, spec: { cluster: { name: 'payments' }, schedule: '0 0 2 * * *' } }
   const html = render({ clusters: [cluster], scheduledBackups: [schedule] })
-  expect(html).toContain('Enabled · not run yet')
+  expect(html).toContain('Enabled · 0 0 2 * * * · blocked: no backup destination')
   expect(html).toContain('No backup destination')
   expect(html).toContain('Next run reported by the operator')
   expect(html).toContain('Not reported')
@@ -80,4 +80,36 @@ it('marks backup run counts as lower bounds or unknown when coverage is incomple
   const scoped = render({ backups: [backup('failed-read', 'failed', 1)] }, { state: 'partial', allowedNamespaces: ['pg'] }, 'cluster=pg/pg')
   expect(scoped).toContain('Failed 1')
   expect(scoped).not.toContain('Failed ≥1')
+})
+
+it('explains absent WAL storage and suppresses ObjectStore-only footnotes on fleet and cluster views', () => {
+  const cluster = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'payments', namespace: 'pg' }, spec: {}, status: { conditions: [{ type: 'ContinuousArchiving', status: 'True', message: 'Continuous archiving is working', lastTransitionTime: '2026-10-01T12:00:00Z' }] } }
+  for (const scope of [undefined, { namespace: 'pg', name: 'payments' }]) {
+    const html = render({ clusters: [cluster] }, { state: 'full' }, '', scope)
+    expect(html).toContain('Not archived: no destination configured')
+    expect(html).toContain('point-in-time recovery is not possible')
+    expect(html).toContain('Operator report')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('None: no backup destination')
+    expect(html).not.toContain('Recovery windows come from ObjectStore status')
+    expect(html).not.toContain('ObjectStore has no health status')
+  }
+})
+it('keeps ObjectStore notes when ObjectStore evidence is present', () => {
+  const cluster = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'pg', namespace: 'pg' }, spec: { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }] } }
+  const store = { apiVersion: 'barmancloud.cnpg.io/v1', kind: 'ObjectStore', metadata: { name: 'store', namespace: 'pg' }, spec: {} }
+  for (const scope of [undefined, { namespace: 'pg', name: 'pg' }]) {
+    const html = render({ clusters: [cluster], objectStores: [store] }, { state: 'full' }, '', scope)
+    expect(html).toContain('Recovery windows come from ObjectStore status')
+    expect(html).toContain('ObjectStore has no health status')
+  }
+})
+it('gives schedule state space and wraps the long next-run heading without changing shared table headings', () => {
+  const schedule = { metadata: { name: 'nightly', namespace: 'pg' }, spec: { cluster: { name: 'payments' } } }
+  const html = render({ scheduledBackups: [schedule] }, { state: 'full' }, '', { namespace: 'pg', name: 'payments' })
+  const table = html.slice(html.indexOf('Schedules</h2>'))
+  expect(table).toContain('min-width:820px')
+  expect(table).toContain('width:25%')
+  expect(table).toContain('block whitespace-normal')
+  expect(table).toContain('whitespace-nowrap')
 })
