@@ -1,0 +1,111 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd
+  namespace: milo-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: etcd}
+  template:
+    metadata:
+      labels: {app: etcd}
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      containers:
+      - name: etcd
+        image: registry.k8s.io/etcd:3.5.15-0
+        command:
+        - etcd
+        - --name=etcd0
+        - --data-dir=/var/lib/etcd
+        - --listen-client-urls=http://0.0.0.0:2379
+        - --advertise-client-urls=http://etcd.milo-system.svc.cluster.local:2379
+        ports:
+        - containerPort: 2379
+        volumeMounts:
+        - {name: data, mountPath: /var/lib/etcd}
+        resources:
+          requests: {cpu: 100m, memory: 256Mi}
+      volumes:
+      - name: data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd
+  namespace: milo-system
+spec:
+  selector: {app: etcd}
+  ports:
+  - port: 2379
+    targetPort: 2379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: milo-apiserver
+  namespace: milo-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: milo-apiserver}
+  template:
+    metadata:
+      labels: {app: milo-apiserver}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsUser: 65534
+        runAsGroup: 65534
+        runAsNonRoot: true
+      containers:
+      - name: milo-apiserver
+        image: ghcr.io/milo-os/milo:v0.36.0
+        args:
+        - apiserver
+        - --authorization-mode=RBAC
+        - --bind-address=0.0.0.0
+        - --secure-port=6443
+        - --etcd-servers=http://etcd.milo-system.svc.cluster.local:2379
+        - --etcd-prefix=/
+        - --tls-cert-file=/etc/kubernetes/pki/apiserver/tls.crt
+        - --tls-private-key-file=/etc/kubernetes/pki/apiserver/tls.key
+        - --client-ca-file=/etc/kubernetes/pki/apiserver/ca.crt
+        - --service-account-key-file=/etc/kubernetes/pki/apiserver/tls.key
+        - --service-account-issuer=https://milo-apiserver.milo-system.svc.cluster.local
+        - --token-auth-file=/etc/kubernetes/auth/tokens.csv
+        - --feature-gates=DiscoveryContextFilter=true,ProjectSuspension=true
+        - --v=2
+        ports:
+        - {containerPort: 6443, name: https}
+        readinessProbe:
+          httpGet: {path: /readyz, port: https, scheme: HTTPS}
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests: {cpu: 200m, memory: 512Mi}
+          limits: {memory: 1Gi}
+        volumeMounts:
+        - {name: tls, mountPath: /etc/kubernetes/pki/apiserver, readOnly: true}
+        - {name: tokens, mountPath: /etc/kubernetes/auth, readOnly: true}
+      volumes:
+      - name: tls
+        secret: {secretName: milo-apiserver-tls}
+      - name: tokens
+        secret: {secretName: milo-apiserver-auth-tokens}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: milo-apiserver
+  namespace: milo-system
+spec:
+  selector: {app: milo-apiserver}
+  ports:
+  - port: 6443
+    targetPort: 6443

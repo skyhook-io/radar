@@ -2,6 +2,23 @@
 
 Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar provides dedicated detail views, topology edges, smart table columns, and AI-optimized summaries for seamless integration.
 
+## Datum / Milo (experimental, local only)
+
+A project-oriented [Datum workspace](datum.md) brings together Hostnames, DNS, Connectors, Networking and root-plane Projects. Composed resource summaries show sourced controller evidence, exact references and explicitly inferred hostname associations. Unknown, pending and stale reports remain distinct from successful programming and public reachability.
+
+| Resources | Exact API group | Topology | Detail view |
+|---|---|---|---|
+| DNSZone, DNSRecordSet, DNSZoneClass | `dns.networking.miloapis.com` | Zone → records, controller Domain reference; classes stay outside shared graph | Nameservers, reported/observed counts, programming and per-record conditions |
+| Domain, HTTPProxy | `networking.datumapis.com` | Inferred hostname association; configured connector, EndpointSlice, NetworkService and endpoint backends | Verification, per-hostname availability/DNS/certificates and routes |
+| Connector, ConnectorClass, ConnectorAdvertisement | `networking.datumapis.com` | Configured proxy/connector and advertisement references | Lease, declared/reported capabilities and nested conditions |
+| Network, NetworkContext, NetworkBinding, Subnet, SubnetClaim, NetworkService | `networking.datumapis.com` | Configured network/context/binding/subnet references | Allocation, consumers, membership and conditions |
+| Instance, Workload | `compute.datumapis.com` | Observed configured binding/owner relationships | Runtime and reported instance/replica state |
+| Project, Organization | `resourcemanager.miloapis.com` | Not included in shared graph | Root-plane inventory; verified runtime project connection and copyable datumctl command |
+
+Local kubeconfig only; no shared authorization policy or default Helm/Cloud grants are added. The [fixture](../scripts/datum-demo/README.md) uses pinned real CRDs and clearly synthetic controller status. Configured edges never represent traffic. `backends[].instance.name` names an EndpointSlice, not a compute Instance. See [the evidence and navigation contract](datum.md) for coverage, redaction and validation limits.
+
+---
+
 ## ConfigMap and Secret reflection (Reflector)
 
 [EmberStack Reflector](https://github.com/emberstack/kubernetes-reflector) copies

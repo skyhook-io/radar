@@ -740,7 +740,9 @@ for their initial inventory, returning `kind_sync_pending` instead of an empty l
 or a missing object. Failed synchronization is terminal and asks for reconnect.
 
 Home omits workload counts for APIs the server does not serve and shows observed
-custom-resource inventory instead. Unobserved kinds are labeled **Not observed**;
+API/custom-resource inventory instead. Unobserved kinds are labeled **Not observed**;
 Home does not start a watch to manufacture a count. On control planes that do not
 serve Pods, startup warms only Radar's curated integrations, not every discovered
 CRD. Resources continues to browse any served API on demand.
+
+Experimental local Milo project navigation is described in [Datum](datum.md#project-control-plane-navigation). Derived connections are runtime-only, preserve the parent CA/TLS/exec configuration, replace tenant paths, verify before switching and isolate inventory/history without modifying kubeconfig.
