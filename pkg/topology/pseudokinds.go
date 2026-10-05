@@ -30,6 +30,10 @@ import "strings"
 // kindMap then handles URL-plural-to-singular flattening.
 func KindForGVK(kind, group string) string {
 	switch strings.ToLower(group) {
+	case "networking.datumapis.com":
+		if strings.EqualFold(kind, "HTTPProxy") || strings.EqualFold(kind, "HTTPProxies") {
+			return "datumhttpproxy"
+		}
 	case "serving.knative.dev":
 		switch strings.ToLower(kind) {
 		case "service", "services":

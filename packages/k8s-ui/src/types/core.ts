@@ -161,6 +161,7 @@ export interface CloudConnectCapability {
 }
 
 export interface FeatureCapabilities {
+ datumWorkspace?: boolean
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean
@@ -251,6 +252,7 @@ export type CoreNodeKind =
   | 'ServersTransportTCP' // Traefik ServersTransportTCP
   | 'TLSOption'          // Traefik TLSOption
   | 'TLSStore'           // Traefik TLSStore
+  | 'DatumHTTPProxy'
   | 'HTTPProxy'          // Contour HTTPProxy
   | 'CAPICluster'        // Cluster API Cluster
   | 'MachineDeployment'  // Cluster API MachineDeployment
@@ -631,6 +633,7 @@ export interface PodEnvironmentRevealResponse {
 
 // Resource reference (for relationships)
 export interface ResourceRef {
+  inferred?: boolean
   kind: string
   namespace: string
   name: string

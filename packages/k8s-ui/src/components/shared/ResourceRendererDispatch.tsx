@@ -1,3 +1,5 @@
+import { DatumRenderer } from '../resources/renderers/DatumRenderer'
+import { isDatumResource, getDatumStatus } from '../resources/resource-utils-datum'
 import { hasReflectorDetails } from '../resources/renderers/ReflectorSection'
 import { clsx } from 'clsx'
 import { SEVERITY_BADGE, HEALTH_BADGE_COLORS } from '../../utils/badge-colors'
@@ -624,6 +626,7 @@ export function ResourceRendererDispatch({
   const kind = resource.kind.toLowerCase()
  const collisionOwners: Record<string, string> = { serviceaccounts: '', roles: 'rbac.authorization.k8s.io', clusterroles: 'rbac.authorization.k8s.io', rolebindings: 'rbac.authorization.k8s.io', clusterrolebindings: 'rbac.authorization.k8s.io', httpproxies: 'projectcontour.io' }
  const collisionMatched = !(kind in collisionOwners) || isApiGroup(data?.apiVersion, collisionOwners[kind])
+ const isDatum = isDatumResource(data)
  const identityCollisionFallthrough = !collisionMatched
 
   // Crossplane Managed Resources / Composites / Claims are detected by spec
@@ -824,6 +827,7 @@ export function ResourceRendererDispatch({
             workloadPods={workloadPods}
           />
         )}
+        {isDatum && <DatumRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'replicasets' && <ReplicaSetRenderer data={data} />}
         {kind === 'services' && !data?.apiVersion?.includes('serving.knative.dev') && <ServiceComp data={data} onCopy={onCopy} copied={copied} onNavigate={onNavigate} />}
         {kind === 'endpointslices' && <EndpointSliceRenderer data={data} onNavigate={onNavigate} />}
@@ -1042,7 +1046,7 @@ export function ResourceRendererDispatch({
             for known-plural collisions where no apiVersion-gated renderer
             matched (e.g. a Knative Configuration sharing the `configurations`
             plural with Crossplane Configuration). */}
-        {(!isKnownKind || identityCollisionFallthrough || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough || groupGatedFallthrough || calicoCollisionFallthrough || nonCoreJobFallthrough) && <GenericRenderer data={data} />}
+        {(!isKnownKind || identityCollisionFallthrough || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough || groupGatedFallthrough || calicoCollisionFallthrough || nonCoreJobFallthrough) && !isDatum && <GenericRenderer data={data} />}
 
         {/* Common sections - can be disabled when parent handles them separately */}
         {showCommonSections && (
@@ -1091,8 +1095,9 @@ export function diagnoseHealthHint(kind: string, data: any): DiagnoseHealthHint 
   }
 }
 
-export function getResourceStatus(kind: string, data: any): { text: string; color: string } | null {
+export function getResourceStatus(kind: string, data: any): { text: string; color: string; level?: string } | null {
   if (!data) return null
+  if (isDatumResource(data)) { const s = getDatumStatus(data); return { text: s.label, color: HEALTH_BADGE_COLORS[s.color], level:s.color } }
   const k = kind.toLowerCase()
 
   if (k === 'pods') return getPodStatus(data)

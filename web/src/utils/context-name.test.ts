@@ -61,3 +61,9 @@ describe('visibleContextQualifier', () => {
     expect(visibleContextQualifier('(secondary)', 'secondary', false)).toBe('(secondary)')
   })
 })
+
+it('does not invent a suffix for a runtime context whose display name is not its prefix', () => {
+ const parsed = parseContextForSwitcher(context('root / project edge [uid]', 'edge'))
+ expect(parsed.raw).toBe('edge')
+ expect(parsed.nameQualifier).toBeUndefined()
+})

@@ -81,6 +81,9 @@ func TestIntegrationReadBaselineCatalogCoverage(t *testing.T) {
 		}
 	}
 	for _, candidate := range supportedCRDFallbacks {
+		if candidate.LocalOnly {
+			continue
+		}
 		scope := "Cluster"
 		if candidate.Namespaced {
 			scope = "Namespaced"

@@ -1087,3 +1087,12 @@ it('uses RayJob native detail only for the supported exact API', () => {
     if (apiVersion !== 'ray.io/v1') { expect(html).toContain('native-fallback'); expect(getResourceStatus('rayjobs', data)).toBeNull() }
   }
 })
+
+it('maps Datum readiness to the shared health color and Diagnose level', () => {
+ const data={apiVersion:'networking.datumapis.com/v1alpha',kind:'HTTPProxy',status:{conditions:[{type:'Programmed',status:'False',reason:'OriginUnavailable'}]}}
+ const status=getResourceStatus('httpproxies',data)
+ expect(status.level).toBe('degraded')
+ expect(status.color).not.toBe('degraded')
+ expect(getResourceStatus('httpproxies',{...data,status:{}}).level).toBe('unknown')
+ expect(getResourceStatus('httpproxies',{...data,apiVersion:'projectcontour.io/v1',status:{currentStatus:'valid'}}).level).not.toBe('degraded')
+})

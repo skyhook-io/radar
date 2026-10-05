@@ -14,6 +14,7 @@ import (
 // K8s Kind. None of these collision kinds are audited today; this keeps topology
 // badges correct if one ever gains a check — the single place that needs to know.
 var collisionKindToK8sKind = map[NodeKind]string{
+	KindDatumHTTPProxy:                      "HTTPProxy",
 	KindIstioGateway:                        "Gateway",
 	KindKnativeService:                      "Service",
 	KindKnativeConfiguration:                "Configuration",
