@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import type { APIResource } from '../../types'
-import { rawCRDGroupTitle, resourceMatchesSidebarFilter, ResourcesSidebar } from './ResourcesSidebar'
+import { rawCRDGroupTitle, resourceMatchesSidebarFilter, ResourcesSidebar, sidebarDestinationsMatching } from './ResourcesSidebar'
 
 const sqlInstance: APIResource = {
   group: 'sql.cnrm.cloud.google.com',
@@ -194,5 +194,24 @@ describe('ResourcesSidebar category workspaces', () => {
     )
     expect(html).toContain('postgresql.cnpg.io')
     expect(html).toContain('barmancloud.cnpg.io')
+  })
+})
+
+describe('sidebarDestinationsMatching', () => {
+  const views = ['Clusters', 'Backups', 'Declarations', 'Pooling', 'Operator'].map((label) => ({ id: label, label, onSelect: () => {} }))
+  const resources = [{ group: 'postgresql.cnpg.io' }, { group: 'barmancloud.cnpg.io' }]
+  const labels = (term: string) => sidebarDestinationsMatching('CloudNativePG', resources, views, term).map((d) => d.label)
+
+  it('keeps every view when the term names the category or one of its API groups', () => {
+    expect(labels('cloud')).toEqual(['Clusters', 'Backups', 'Declarations', 'Pooling', 'Operator'])
+    expect(labels('cnpg')).toEqual(['Clusters', 'Backups', 'Declarations', 'Pooling', 'Operator'])
+  })
+  it('keeps the views whose label matches otherwise', () => {
+    expect(labels('backup')).toEqual(['Backups'])
+    expect(labels('declar')).toEqual(['Declarations'])
+    expect(labels('deployment')).toEqual([])
+  })
+  it('keeps every view without a term', () => {
+    expect(labels('  ')).toHaveLength(5)
   })
 })

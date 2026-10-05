@@ -100,6 +100,24 @@ const CORE_RESOURCE_TYPES = [
   { kind: 'hpas', label: 'HPAs' },
 ] as const
 
+/**
+ * The workspace views a filter keeps: all of them when the term names the
+ * category or one of its API groups ("cloud", "cnpg"), otherwise the views
+ * whose label matches. The views are the way into a workspace, so a filter
+ * that finds the category's kinds must not hide them.
+ */
+export function sidebarDestinationsMatching(
+  categoryName: string,
+  resources: Pick<APIResource, 'group'>[],
+  destinations: SidebarCategoryDestination[],
+  term: string,
+): SidebarCategoryDestination[] {
+  const normalized = term.trim().toLowerCase()
+  if (!normalized) return destinations
+  if (categoryName.toLowerCase().includes(normalized) || resources.some((r) => r.group.toLowerCase().includes(normalized))) return destinations
+  return destinations.filter((d) => d.label.toLowerCase().includes(normalized))
+}
+
 export function resourceMatchesSidebarFilter(resource: Pick<APIResource, 'kind' | 'name' | 'group'>, term: string): boolean {
   const normalized = term.trim().toLowerCase()
   if (!normalized) return true
@@ -430,14 +448,16 @@ export function ResourcesSidebar({
         // If the group name matches, show all its resources
         if (categoryMatches || rawGroupMatches) return category
         const matchingResources = category.visibleResources.filter((resource: APIResource) => resourceMatchesSidebarFilter(resource, term))
-        if (matchingResources.length === 0) return null
+        const ws = categoryWorkspaces?.[category.name]
+        const matchingViews = ws ? sidebarDestinationsMatching(category.name, category.resources, ws.destinations, term) : []
+        if (matchingResources.length === 0 && matchingViews.length === 0) return null
         return {
           ...category,
           visibleResources: matchingResources,
         }
       })
       .filter(Boolean) as typeof sortedCategories
-  }, [sortedCategories, kindFilter])
+  }, [sortedCategories, kindFilter, categoryWorkspaces])
 
   // Auto-expand all categories when filtering
   const isKindFiltering = kindFilter.trim().length > 0
@@ -621,6 +641,7 @@ export function ResourcesSidebar({
             const rawGroupTitle = rawCRDGroupTitle(category.resources)
             const workspace = categoryWorkspaces?.[category.name]
             const showKinds = isKindFiltering || kindsOpen(category.name)
+            const views = workspace ? sidebarDestinationsMatching(category.name, category.resources, workspace.destinations, kindFilter) : []
             return (
               <div key={category.name} className="mb-2">
                 <button
@@ -638,9 +659,12 @@ export function ResourcesSidebar({
                   )}
                 </button>
                 <Collapse open={isExpanded} id={disclosurePanelId(categoryPanelBase, category.name)}>
-                  {workspace && !isKindFiltering && (
+                  {workspace && views.length > 0 && (
                     <WorkspaceDestinations
                       workspace={workspace}
+                      destinations={views}
+                      filtering={isKindFiltering}
+                      hasKinds={category.visibleResources.length > 0}
                       kindsOpen={showKinds}
                       onToggleKinds={() => toggleKinds(category.name)}
                       kindsPanelId={disclosurePanelId(categoryPanelBase, `${category.name}-kinds`)}
@@ -779,13 +803,21 @@ function groupHeaderBefore(resources: APIResource[], index: number): string | nu
   return group || 'core'
 }
 
+// While the sidebar is filtered, `destinations` are the views that match and
+// the kinds below are forced open, so they get a label rather than a toggle.
 function WorkspaceDestinations({
   workspace,
+  destinations,
+  filtering,
+  hasKinds,
   kindsOpen,
   onToggleKinds,
   kindsPanelId,
 }: {
   workspace: SidebarCategoryWorkspace
+  destinations: SidebarCategoryDestination[]
+  filtering: boolean
+  hasKinds: boolean
   kindsOpen: boolean
   onToggleKinds: () => void
   kindsPanelId: string
@@ -793,7 +825,7 @@ function WorkspaceDestinations({
   return (
     <div className="space-y-0.5">
       <div className="pl-5 pr-2 pt-0.5 pb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Views</div>
-      {workspace.destinations.map((d) => {
+      {destinations.map((d) => {
         const Icon = d.icon
         return (
           <div key={d.id}>
@@ -839,15 +871,19 @@ function WorkspaceDestinations({
       {workspace.scopeNote && (
         <div className="pl-6 pr-2 pt-0.5 text-[11px] text-theme-text-tertiary">{workspace.scopeNote}</div>
       )}
-      <button
-        aria-expanded={kindsOpen}
-        aria-controls={kindsPanelId}
-        onClick={onToggleKinds}
-        className="w-full flex items-center gap-1.5 pl-5 pr-2 pt-2 pb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary hover:text-theme-text-secondary"
-      >
-        <CollapseChevron open={kindsOpen} className="w-3 h-3" />
-        <span>Resource kinds</span>
-      </button>
+      {filtering ? (
+        hasKinds && <div className="pl-5 pr-2 pt-2 pb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Resource kinds</div>
+      ) : (
+        <button
+          aria-expanded={kindsOpen}
+          aria-controls={kindsPanelId}
+          onClick={onToggleKinds}
+          className="w-full flex items-center gap-1.5 pl-5 pr-2 pt-2 pb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary hover:text-theme-text-secondary"
+        >
+          <CollapseChevron open={kindsOpen} className="w-3 h-3" />
+          <span>Resource kinds</span>
+        </button>
+      )}
     </div>
   )
 }
