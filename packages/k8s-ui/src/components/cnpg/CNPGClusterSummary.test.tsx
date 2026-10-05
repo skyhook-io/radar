@@ -2,7 +2,7 @@
 import { act, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CNPGClusterSummary, CNPGDimensionMark, CNPGServingStatus } from './CNPGClusterSummary'
+import { CNPGClusterSummary, CNPGDimensionMark, CNPGDimensionVerdict, CNPGServingStatus } from './CNPGClusterSummary'
 import type { CNPGFleetRow, CNPGProblem } from './workspace'
 import type { CNPGDimension } from './ha'
 import { OpenIssueContext } from '../problems'
@@ -108,10 +108,20 @@ describe('CNPGClusterSummary', () => {
       act(() => root.unmount())
     }
   })
+  it("says on the tab why it is marked, and nothing when it is not", () => {
+    const backups = (tone: CNPGDimension['tone']): CNPGDimension => ({ id: 'protection', label: 'Backups', tone, text: 'no backup destination', source: 'Cluster spec' })
+    let root = render(<CNPGDimensionVerdict dimension={backups('degraded')} />)
+    expect(document.body.textContent).toContain('no backup destination')
+    expect(document.body.textContent).toContain('Cluster spec')
+    act(() => root.unmount())
+    root = render(<CNPGDimensionVerdict dimension={backups('healthy')} />)
+    expect(document.body.textContent).toBe('')
+    act(() => root.unmount())
+  })
   it('draws an unassessed dimension as a ring, never a calm dot', () => {
     const root = render(<CNPGDimensionMark dimension={{ id: 'storage', label: 'Storage', tone: 'unknown', text: 'unassessed', source: 's' }} />)
     const mark = document.querySelector('[aria-label="Storage: unassessed"]')!
-    expect(mark.className).toContain('border')
+    expect(mark.querySelector('.rounded-full.border')).not.toBeNull()
     expect(mark.querySelector('.rounded-full:not(.border)')).toBeNull()
     act(() => root.unmount())
   })

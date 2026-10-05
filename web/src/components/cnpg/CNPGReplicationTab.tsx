@@ -14,6 +14,7 @@ import {
 import { useCNPGRuntime, type CNPGRuntimeInstance } from '../../api/cnpg'
 import { cnpgInstanceLive, cnpgInstanceLiveUnavailable, useCNPGClusterHA } from '../../api/cnpg-ha'
 import { CNPGReplicationView } from './CNPGReplicationView'
+import { CNPGTabVerdict } from './CNPGClusterTabs'
 import { formatBytes } from './lsn'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
 import { Card, ProxyDenied, SourceState } from './runtimeParts'
@@ -63,6 +64,7 @@ export function CNPGReplicationTab({
           </button>
         )}
       </div>
+      <CNPGTabVerdict namespace={namespace} name={name} id="replication" />
       <RefreshFailedNotice queries={[runtime, ha]} />
 
       {!data && runtime.isLoading ? (

@@ -34,7 +34,7 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 
 function Snippet({ text, label }: { text: string; label: string }) {
   return (
-    <div className="flex items-start gap-1 rounded-md bg-theme-elevated px-2 py-1">
+    <div className="flex items-center gap-1 rounded-md bg-theme-elevated px-2 py-1">
       <code className="min-w-0 flex-1 break-all font-mono text-xs text-theme-text-primary">{text}</code>
       <CopyButton text={text} label={label} />
     </div>

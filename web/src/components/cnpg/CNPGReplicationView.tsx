@@ -187,7 +187,7 @@ export function CNPGReplicationView({
           )}
         </div>
         <div className="space-y-2">
-          {replicas.length === 0 && <div className="text-sm text-theme-text-tertiary">{cnpgNoStandbyText(clusterObject?.spec?.instances)}</div>}
+          {replicas.length === 0 && <div className="pt-[13px] text-sm text-theme-text-tertiary">{cnpgNoStandbyText(clusterObject?.spec?.instances)}</div>}
           {replicas.map((r) => {
             const rep = rows.get(r.pod)
             // Without a pg_stat_replication row (not connected), the standby's

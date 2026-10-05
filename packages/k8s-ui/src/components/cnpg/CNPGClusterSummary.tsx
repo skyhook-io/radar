@@ -61,21 +61,44 @@ function InstancePill({ pod, namespace, onNavigate }: { pod: CNPGInstance; names
  * Overview's At a glance has it in words.
  */
 export function CNPGDimensionMark({ dimension }: { dimension: CNPGDimension }) {
+  if (!dimensionMarked(dimension)) return null
   const label = `${dimension.label}: ${dimension.text}`
-  if (dimension.tone === 'unknown') {
-    return (
-      <Tooltip content={<><div>{label}</div><div className="text-theme-text-tertiary">{dimension.source}</div></>} position="bottom">
-        <span role="img" aria-label={label} className="inline-block h-[7px] w-[7px] shrink-0 rounded-full border border-theme-text-tertiary" />
-      </Tooltip>
-    )
-  }
-  if (dimension.tone === 'healthy' || dimension.tone === 'neutral') return null
   return (
     <Tooltip content={<><div>{label}</div><div className="text-theme-text-tertiary">{dimension.source}</div></>} position="bottom">
       <span role="img" aria-label={label} className="inline-flex shrink-0">
-        <StatusDot tone={dimension.tone} />
+        <DimensionGlyph tone={dimension.tone} />
       </span>
     </Tooltip>
+  )
+}
+
+function dimensionMarked(dimension: CNPGDimension): boolean {
+  return dimension.tone !== 'healthy' && dimension.tone !== 'neutral'
+}
+
+function DimensionGlyph({ tone }: { tone: CNPGDimension['tone'] }) {
+  return tone === 'unknown' ? (
+    <span aria-hidden className="inline-block h-[7px] w-[7px] shrink-0 rounded-full border border-theme-text-tertiary" />
+  ) : (
+    <StatusDot tone={tone} />
+  )
+}
+
+/**
+ * The verdict behind a tab's mark, as the tab's first line, so a mark always
+ * points at words on the tab it marks. Nothing when the dimension is fine.
+ */
+export function CNPGDimensionVerdict({ dimension, className }: { dimension: CNPGDimension; className?: string }) {
+  if (!dimensionMarked(dimension)) return null
+  return (
+    <div className={clsx('flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm', className)}>
+      <span className="inline-flex self-center">
+        <DimensionGlyph tone={dimension.tone} />
+      </span>
+      <span className="text-theme-text-secondary">{dimension.label}</span>
+      <span className={toneTextClass(dimension.tone)}>{dimension.text}</span>
+      <span className="text-xs text-theme-text-tertiary">{dimension.source}</span>
+    </div>
   )
 }
 

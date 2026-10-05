@@ -154,6 +154,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
   }
 
   const permission = restorePermission(namespace, restoreCap.data, restoreCap.error)
+  const noSource = !workspace.isLoading && sources.length === 0
   const disabledReason =
     permission.blocked ??
     (!workspace.isLoading && sources.length === 0
@@ -192,7 +193,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
       context={connection.context || undefined}
       effect="Creates a new Cluster that bootstraps from backups. Nothing existing is changed; the source keeps running."
       confirmLabel="Review manifest"
-      warnings={[
+      warnings={noSource ? [] : [
         'The new cluster has no WAL archiving or backups until you configure them.',
         ...(serverName ? [`If you add archiving later, do not reuse server name "${serverName}": the new cluster would write into the archive it restores from.`] : []),
         ...warnings,
@@ -201,6 +202,12 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
       disabledReason={disabledReason}
       incompleteReason={incompleteReason}
     >
+      {noSource ? (
+        <p className="text-sm text-theme-text-secondary">
+          A restore needs a completed Backup, or WAL archived to a backup destination. The Backups tab shows what this cluster has and where to set it up.
+        </p>
+      ) : (
+      <>
       {/* Full width: source names (a Backup, its ID and its store) outgrow one column. */}
       <div className="mb-4 grid grid-cols-[7.5rem_minmax(0,1fr)] items-center gap-x-3">
         <label className="text-xs text-theme-text-secondary" htmlFor="cnpg-restore-source">Restore from</label>
@@ -302,6 +309,8 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
           ))}
         </dl>
       </div>
+      </>
+      )}
     </ActionConfirmDialog>
   )
 }
