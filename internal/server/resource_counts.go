@@ -272,11 +272,15 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Deduplicate CRDs by group+kind, keeping the most stable served version.
+			watched := make(map[schema.GroupVersionResource]bool)
+			for _, gvr := range dynamicCache.GetWatchedResources() {
+				watched[gvr] = true
+			}
 			crdSeen := make(map[string]bool)
 			crds := make(map[string]discoveredInfo)
 			var crdOrder []string
 			for _, res := range resources {
-				if !res.IsCRD {
+				if !res.IsCRD && !watched[schema.GroupVersionResource{Group: res.Group, Version: res.Version, Resource: res.Name}] {
 					continue
 				}
 				// Informer-backed counts only work for listable+watchable kinds.

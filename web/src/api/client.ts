@@ -2651,7 +2651,7 @@ export function useResource<T>(
     // Kind still completing its initial sync: stay in loading and poll until
     // it becomes readable instead of erroring out (deep links during startup).
     retry: (failureCount, error) => {
-      if (isStillLoadingError(error)) return failureCount < 15;
+      if (isStillLoadingError(error)) return true;
       if (isKindSyncFailed(error)) return false;
       return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
     },
@@ -2683,7 +2683,7 @@ export function useResourceWithRelationships<T>(
     // Deep-linked detail views can mount while the kind's informer is still
     // completing its initial sync: keep polling instead of erroring out.
     retry: (failureCount, error) => {
-      if (isStillLoadingError(error)) return failureCount < 15;
+      if (isStillLoadingError(error)) return true;
       if (isKindSyncFailed(error)) return false;
       return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
     },
@@ -2715,7 +2715,7 @@ export function useResources<T>(
     // deferred kind shortly after connect): keep polling instead of
     // surfacing an error.
     retry: (failureCount, error) => {
-      if (isStillLoadingError(error)) return failureCount < 15;
+      if (isStillLoadingError(error)) return true;
       if (isKindSyncFailed(error)) return false;
       return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
     },

@@ -321,7 +321,7 @@ func (d *DynamicResourceCache) ensureWatchingContext(ctx context.Context, gvr sc
 		if d.hasCoveringInformer(gvr, preferredNS) {
 			return nil, nil
 		}
-		scopes, complete, err := d.probeScopesContext(ctx, gvr, preferredNS)
+		scopes, complete, err := d.probeScopesContext(context.Background(), gvr, preferredNS)
 		if err != nil {
 			if isAuthProbeError(err) {
 				d.retainDeniedObservation(gvr, preferredNS, complete)
@@ -577,7 +577,7 @@ func (d *DynamicResourceCache) probeScopesContext(parent context.Context, gvr sc
 	if err == nil {
 		return []string{""}, true, nil
 	}
-	if apierrors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return nil, true, err
 	}
 	if !isAuthProbeError(err) {
@@ -626,14 +626,11 @@ func (d *DynamicResourceCache) probeScopesContext(parent context.Context, gvr sc
 			complete = false
 			break
 		}
+		if nsCtxExpired(probeErr) {
+			complete = false
+			continue
+		}
 		if nsErr == nil {
-			if probeErr != nil && nsCtxExpired(probeErr) {
-				// The candidate's own sub-deadline fired; classifyScope's
-				// fail-open would count that as a grant. Record the walk as
-				// incomplete instead so a later attempt re-tries it.
-				complete = false
-				continue
-			}
 			granted = append(granted, scoped)
 		}
 	}
@@ -666,7 +663,7 @@ func (d *DynamicResourceCache) classifyScope(gvr schema.GroupVersionResource, ns
 	if err == nil {
 		return ns, nil
 	}
-	if isAuthProbeError(err) || apierrors.IsNotFound(err) {
+	if isAuthProbeError(err) || apierrors.IsNotFound(err) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return "", err
 	}
 	log.Printf("[dynamic cache] Probe for %s.%s/%s in namespace %q returned non-auth error (allowing): %v", gvr.Resource, gvr.Group, gvr.Version, ns, err)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/policyreports"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
@@ -601,40 +602,25 @@ type PolicyQueuedResponse struct {
 	Messages []string `json:"messages,omitempty"`
 }
 
-// listDynamicSynced reads a kind after making sure the cache can actually answer
-// for the scope being read.
-//
-// Not a gate before the read: the informer for a namespace is started BY the
-// read, so refusing to read until one exists is a deadlock — the first request
-// for a namespace would fail forever. ListBlocking starts it and waits, so an
-// empty result afterwards is an absence the cache established rather than one it
-// simply had not looked for.
-//
-// Falls back to the plain read when the machinery is missing, leaving the
-// caller's not-installed path to answer.
+// listDynamicSynced establishes a complete read before an empty list can be
+// interpreted as absence. The wait shares the caller's cancellation budget.
 func listDynamicSynced(ctx context.Context, cache *k8s.ResourceCache, kind, group, namespace string) ([]*unstructured.Unstructured, error) {
-	discovery := k8s.GetResourceDiscovery()
-	dynamicCache := k8s.GetDynamicResourceCache()
-	if discovery == nil || dynamicCache == nil {
+	if k8s.GetResourceDiscovery() == nil || k8s.GetDynamicResourceCache() == nil {
 		return cache.ListDynamicWithGroup(ctx, kind, namespace, group)
 	}
-	gvr, found := discovery.GetGVRWithGroup(kind, group)
-	if !found {
-		return cache.ListDynamicWithGroup(ctx, kind, namespace, group)
+	readCtx, cancel := context.WithTimeout(ctx, k8s.ResourceReadTimeout(kind, group))
+	defer cancel()
+	items, err := cache.ListDynamicComplete(readCtx, kind, namespace, group)
+	var readErr *k8score.ResourceReadError
+	if errors.As(err, &readErr) {
+		if readErr.Code == "kind_not_served" {
+			return nil, k8s.ErrUnknownDynamicKind
+		}
+		if readErr.Code == "kind_sync_pending" {
+			return nil, errDynamicNotSynced
+		}
 	}
-	items, err := dynamicCache.ListBlocking(gvr, namespace, dynamicSyncWait)
-	if err != nil {
-		return nil, err
-	}
-	// ListBlocking discards what WaitForCacheSync returned, so an informer that
-	// did not finish in time falls through to an empty indexer and no error —
-	// the false absence again, one layer down. Confirm afterwards: the read has
-	// already started the informer, so asking now cannot deadlock the way a gate
-	// before the read did.
-	if !dynamicCache.IsNamespaceSynced(gvr, namespace) {
-		return nil, errDynamicNotSynced
-	}
-	return items, nil
+	return items, err
 }
 
 // errDynamicNotSynced means the cache could not answer for the scope in time.

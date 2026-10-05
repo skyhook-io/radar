@@ -261,7 +261,7 @@ export function ClusterHealthCard({
                 <KubernetesVersionLine
                   version={cluster.version}
                   reviewedThrough={cluster.upgradeReviewedThrough}
-                  onNavigate={onNavigateToUpgradeImpact}
+                  onNavigate={hasWorkloads ? onNavigateToUpgradeImpact : undefined}
                 />
               )}
               {radarVersion}
@@ -559,7 +559,7 @@ function KubernetesVersionLine({
   onNavigate?: () => void
 }) {
   if (!onNavigate) {
-    return <span>Kubernetes {version}</span>
+    return <span className="block truncate" title={version}>Kubernetes {version}</span>
   }
 
   const behind = minorsBehind(version, reviewedThrough)
@@ -571,13 +571,13 @@ function KubernetesVersionLine({
           ? `Radar's upgrade checks cover Kubernetes through ${reviewedThrough}. Click to assess the next minor upgrade.`
           : 'Assess the next minor Kubernetes upgrade.'
       }
-      wrapperClassName="w-fit"
+      wrapperClassName="min-w-0 max-w-full w-fit"
     >
       <button
         onClick={onNavigate}
-        className="group flex items-center gap-1 hover:text-theme-text-secondary transition-colors"
+        className="group flex min-w-0 max-w-full items-center gap-1 hover:text-theme-text-secondary transition-colors"
       >
-        <span>Kubernetes {version}</span>
+        <span className="truncate" title={version}>Kubernetes {version}</span>
         {behind > 0 && (
           <span>· Upgrade impact</span>
         )}

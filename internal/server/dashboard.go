@@ -23,6 +23,7 @@ import (
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
@@ -1414,11 +1415,11 @@ func collectObservedCRDCounts(allowed []string, namespaced bool, authorize func(
 	seen := map[string]bool{}
 	var counts []DashboardCRDCount
 	for _, res := range resources {
-		if !res.IsCRD || res.Namespaced != namespaced {
+		if res.Namespaced != namespaced {
 			continue
 		}
 		key := res.Group + "/" + res.Name
-		if seen[key] || (authorize != nil && !authorize(res.Group, res.Name)) {
+		if seen[key] {
 			continue
 		}
 		seen[key] = true
@@ -1427,6 +1428,15 @@ func collectObservedCRDCounts(allowed []string, namespaced bool, authorize func(
 			continue
 		}
 		observation := dc.Observation(gvr)
+		if !res.IsCRD && observation.State == k8score.DynamicObservationUnwatched {
+			continue
+		}
+		if observation.State == k8score.DynamicObservationUnwatched {
+			continue
+		}
+		if authorize != nil && !authorize(res.Group, res.Name) {
+			continue
+		}
 		count := DashboardCRDCount{Kind: res.Kind, Name: res.Name, Group: res.Group, Observation: string(observation.State)}
 		complete := dc.IsClusterWideSynced(gvr)
 		if namespaced && allowed != nil {

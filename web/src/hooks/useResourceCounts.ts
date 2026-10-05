@@ -42,7 +42,7 @@ export function useResourceCounts(namespaces: string[]) {
     // query pending rather than parking it in error state, which would
     // unlatch the large-list guard at the connected flip.
     retry: (failureCount: number, error: Error) =>
-      isStillLoadingError(error) ? failureCount < 15 : failureCount < 3,
+      isStillLoadingError(error) ? true : failureCount < 3,
     retryDelay: (failureCount: number, error: Error) =>
       isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   })

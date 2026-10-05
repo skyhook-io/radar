@@ -95,7 +95,7 @@ func KindNotServed(kind, group string) bool {
 	if ok && (group == "" || group == gvr.Group) {
 		return resourceAbsent(gvr.Group, gvr.Resource)
 	}
-	if disc := GetResourceDiscovery(); disc != nil {
+	if disc := GetResourceDiscovery(); disc != nil && group != "" {
 		return disc.ResourceAbsent(group, strings.ToLower(kind))
 	}
 	return false

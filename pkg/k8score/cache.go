@@ -2081,8 +2081,8 @@ func (rc *ResourceCache) FailedKinds() []string {
 		return nil
 	}
 	var failed []string
-	for _, s := range rc.GetSyncStatus().Informers {
-		if rc.KindReadinessFor(s.Key) == KindFailed {
+	for _, s := range rc.GetSyncSnapshot().Kinds {
+		if s.Failed {
 			failed = append(failed, s.Kind)
 		}
 	}

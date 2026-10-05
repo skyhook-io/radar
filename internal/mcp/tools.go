@@ -975,6 +975,8 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 }
 
 func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, group string, namespaces []string, clusterScoped bool, contextMode string) (*mcp.CallToolResult, any, error) {
+	ctx, cancel := context.WithTimeout(ctx, k8s.ResourceReadTimeout(kind, group))
+	defer cancel()
 	var rawItems []*unstructured.Unstructured
 	if len(namespaces) > 0 {
 		for _, ns := range namespaces {

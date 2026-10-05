@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // Coverage states for one kind a workspace lists.
@@ -153,11 +154,12 @@ func (s *Server) typedKindScope(r *http.Request, cache informerScope, namespaces
 
 // workspaceKind is one kind a workspace lists from Radar's dynamic cache.
 type workspaceKind struct {
-	key           string
-	group         string
-	kind          string
-	resource      string
-	clusterScoped bool
+	observeDynamic bool
+	key            string
+	group          string
+	kind           string
+	resource       string
+	clusterScoped  bool
 }
 
 // readWorkspaceKind authorizes and lists one kind, keeping only objects of
@@ -182,6 +184,10 @@ func (s *Server) readWorkspaceKind(r *http.Request, cache *k8s.ResourceCache, k 
 	}
 
 	list, err := listKindInGroups(r.Context(), cache, k, readNamespaces, groups)
+	var readErr *k8score.ResourceReadError
+	if errors.As(err, &readErr) && readErr.Code == "kind_sync_pending" {
+		return kindAccess{state: kindCoverageSyncing}, nil
+	}
 	switch {
 	case err == nil:
 		return acc, list
@@ -198,6 +204,20 @@ func (s *Server) readWorkspaceKind(r *http.Request, cache *k8s.ResourceCache, k 
 // listKindInGroups lists k in namespaces (nil = all), keeping only objects of
 // groups.
 func listKindInGroups(ctx context.Context, cache *k8s.ResourceCache, k workspaceKind, namespaces, groups []string) ([]*unstructured.Unstructured, error) {
+	ctx, cancel := context.WithTimeout(ctx, k8s.ResourceReadTimeout(k.kind, k.group))
+	defer cancel()
+	if k.observeDynamic {
+		dc, disc := k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()
+		if dc == nil || disc == nil {
+			return nil, k8s.ErrDynamicNotReady
+		}
+		gvr, ok := disc.GetGVRWithGroup(k.kind, k.group)
+		if !ok {
+			return nil, k8s.ErrUnknownDynamicKind
+		}
+		list, err := dc.ListComplete(ctx, gvr, namespaces)
+		return keepGroups(list, groups), err
+	}
 	if namespaces == nil {
 		list, err := listDynamicSynced(ctx, cache, k.kind, k.group, "")
 		if err != nil {

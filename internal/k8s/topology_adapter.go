@@ -34,6 +34,9 @@ func NewTopologyResourceProvider(cache *ResourceCache) topology.ResourceProvider
 func (a *topologyResourceProvider) Pods() ([]*corev1.Pod, error) {
 	lister := a.cache.Pods()
 	if lister == nil {
+		if KindNotServed("pods", "") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("pods not available (RBAC not granted)")
 	}
 	return lister.List(labels.Everything())
@@ -42,6 +45,9 @@ func (a *topologyResourceProvider) Pods() ([]*corev1.Pod, error) {
 func (a *topologyResourceProvider) Services() ([]*corev1.Service, error) {
 	lister := a.cache.Services()
 	if lister == nil {
+		if KindNotServed("services", "") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("services not available (RBAC not granted)")
 	}
 	return lister.List(labels.Everything())
@@ -50,6 +56,9 @@ func (a *topologyResourceProvider) Services() ([]*corev1.Service, error) {
 func (a *topologyResourceProvider) Deployments() ([]*appsv1.Deployment, error) {
 	lister := a.cache.Deployments()
 	if lister == nil {
+		if KindNotServed("deployments", "") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("deployments not available (RBAC not granted)")
 	}
 	return lister.List(labels.Everything())
@@ -58,6 +67,9 @@ func (a *topologyResourceProvider) Deployments() ([]*appsv1.Deployment, error) {
 func (a *topologyResourceProvider) DaemonSets() ([]*appsv1.DaemonSet, error) {
 	lister := a.cache.DaemonSets()
 	if lister == nil {
+		if KindNotServed("daemonsets", "") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("daemonsets not available (RBAC not granted)")
 	}
 	return lister.List(labels.Everything())
@@ -66,6 +78,9 @@ func (a *topologyResourceProvider) DaemonSets() ([]*appsv1.DaemonSet, error) {
 func (a *topologyResourceProvider) StatefulSets() ([]*appsv1.StatefulSet, error) {
 	lister := a.cache.StatefulSets()
 	if lister == nil {
+		if KindNotServed("statefulsets", "") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("statefulsets not available (RBAC not granted)")
 	}
 	return lister.List(labels.Everything())
@@ -74,6 +89,9 @@ func (a *topologyResourceProvider) StatefulSets() ([]*appsv1.StatefulSet, error)
 func (a *topologyResourceProvider) ReplicaSets() ([]*appsv1.ReplicaSet, error) {
 	lister := a.cache.ReplicaSets()
 	if lister == nil {
+		if KindNotServed("replicasets", "") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("replicasets not available (RBAC not granted)")
 	}
 	return lister.List(labels.Everything())
@@ -82,6 +100,9 @@ func (a *topologyResourceProvider) ReplicaSets() ([]*appsv1.ReplicaSet, error) {
 func (a *topologyResourceProvider) Jobs() ([]*batchv1.Job, error) {
 	lister := a.cache.Jobs()
 	if lister == nil {
+		if KindNotServed("jobs", "") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("jobs not available (RBAC not granted)")
 	}
 	return lister.List(labels.Everything())
@@ -90,6 +111,9 @@ func (a *topologyResourceProvider) Jobs() ([]*batchv1.Job, error) {
 func (a *topologyResourceProvider) CronJobs() ([]*batchv1.CronJob, error) {
 	lister := a.cache.CronJobs()
 	if lister == nil {
+		if KindNotServed("cronjobs", "") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("cronjobs not available (RBAC not granted)")
 	}
 	return lister.List(labels.Everything())
@@ -98,6 +122,9 @@ func (a *topologyResourceProvider) CronJobs() ([]*batchv1.CronJob, error) {
 func (a *topologyResourceProvider) Ingresses() ([]*networkingv1.Ingress, error) {
 	lister := a.cache.Ingresses()
 	if lister == nil {
+		if KindNotServed("ingresses", "") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("ingresses not available (RBAC not granted)")
 	}
 	return lister.List(labels.Everything())
@@ -106,6 +133,9 @@ func (a *topologyResourceProvider) Ingresses() ([]*networkingv1.Ingress, error) 
 func (a *topologyResourceProvider) ConfigMaps() ([]*corev1.ConfigMap, error) {
 	lister := a.cache.ConfigMaps()
 	if lister == nil {
+		if KindNotServed("configmaps", "") {
+			return nil, nil
+		}
 		if a.cache.IsDeferredPending(k8score.ConfigMaps) {
 			return nil, nil
 		}
@@ -117,6 +147,9 @@ func (a *topologyResourceProvider) ConfigMaps() ([]*corev1.ConfigMap, error) {
 func (a *topologyResourceProvider) Secrets() ([]*corev1.Secret, error) {
 	lister := a.cache.Secrets()
 	if lister == nil {
+		if KindNotServed("secrets", "") {
+			return nil, nil
+		}
 		if a.cache.IsDeferredPending(k8score.Secrets) {
 			return nil, nil
 		}
@@ -128,6 +161,9 @@ func (a *topologyResourceProvider) Secrets() ([]*corev1.Secret, error) {
 func (a *topologyResourceProvider) ServiceAccounts() ([]*corev1.ServiceAccount, error) {
 	lister := a.cache.ServiceAccounts()
 	if lister == nil {
+		if KindNotServed("serviceaccounts", "") {
+			return nil, nil
+		}
 		if a.cache.IsDeferredPending(k8score.ServiceAccounts) {
 			return nil, nil
 		}
@@ -139,6 +175,9 @@ func (a *topologyResourceProvider) ServiceAccounts() ([]*corev1.ServiceAccount, 
 func (a *topologyResourceProvider) Namespaces() ([]*corev1.Namespace, error) {
 	lister := a.cache.Namespaces()
 	if lister == nil {
+		if KindNotServed("namespaces", "") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("namespaces not available (RBAC not granted)")
 	}
 	return lister.List(labels.Everything())
@@ -147,6 +186,9 @@ func (a *topologyResourceProvider) Namespaces() ([]*corev1.Namespace, error) {
 func (a *topologyResourceProvider) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
 	lister := a.cache.PersistentVolumeClaims()
 	if lister == nil {
+		if KindNotServed("persistentvolumeclaims", "") {
+			return nil, nil
+		}
 		if a.cache.IsDeferredPending(k8score.PersistentVolumeClaims) {
 			return nil, nil
 		}
@@ -158,6 +200,9 @@ func (a *topologyResourceProvider) PersistentVolumeClaims() ([]*corev1.Persisten
 func (a *topologyResourceProvider) PersistentVolumes() ([]*corev1.PersistentVolume, error) {
 	lister := a.cache.PersistentVolumes()
 	if lister == nil {
+		if KindNotServed("persistentvolumes", "") {
+			return nil, nil
+		}
 		if a.cache.IsDeferredPending(k8score.PersistentVolumes) {
 			return nil, nil
 		}
@@ -169,6 +214,9 @@ func (a *topologyResourceProvider) PersistentVolumes() ([]*corev1.PersistentVolu
 func (a *topologyResourceProvider) HorizontalPodAutoscalers() ([]*autoscalingv2.HorizontalPodAutoscaler, error) {
 	lister := a.cache.HorizontalPodAutoscalers()
 	if lister == nil {
+		if KindNotServed("horizontalpodautoscalers", "") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("horizontalpodautoscalers not available (RBAC not granted)")
 	}
 	return lister.List(labels.Everything())
@@ -177,6 +225,9 @@ func (a *topologyResourceProvider) HorizontalPodAutoscalers() ([]*autoscalingv2.
 func (a *topologyResourceProvider) PodDisruptionBudgets() ([]*policyv1.PodDisruptionBudget, error) {
 	lister := a.cache.PodDisruptionBudgets()
 	if lister == nil {
+		if KindNotServed("poddisruptionbudgets", "") {
+			return nil, nil
+		}
 		if a.cache.IsDeferredPending(k8score.PodDisruptionBudgets) {
 			return nil, nil
 		}
@@ -188,6 +239,9 @@ func (a *topologyResourceProvider) PodDisruptionBudgets() ([]*policyv1.PodDisrup
 func (a *topologyResourceProvider) NetworkPolicies() ([]*networkingv1.NetworkPolicy, error) {
 	lister := a.cache.NetworkPolicies()
 	if lister == nil {
+		if KindNotServed("networkpolicies", "") {
+			return nil, nil
+		}
 		if a.cache.IsDeferredPending(k8score.NetworkPolicies) {
 			return nil, nil
 		}
@@ -199,6 +253,9 @@ func (a *topologyResourceProvider) NetworkPolicies() ([]*networkingv1.NetworkPol
 func (a *topologyResourceProvider) Nodes() ([]*corev1.Node, error) {
 	lister := a.cache.Nodes()
 	if lister == nil {
+		if KindNotServed("nodes", "") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("nodes not available (RBAC not granted)")
 	}
 	return lister.List(labels.Everything())

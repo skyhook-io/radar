@@ -171,3 +171,22 @@ func TestTopologyAdapter_NetworkPolicies_DeferredPending(t *testing.T) {
 		t.Errorf("expected nil slice during deferred-pending, got %d items", len(nps))
 	}
 }
+
+func TestTopologyAdapterDistinguishesUnservedFromDenied(t *testing.T) {
+	cache := newAdapterCache(t, map[string]bool{k8score.ConfigMaps: true}, nil, time.Second, nil)
+	resourcePermsMu.Lock()
+	old := cachedPermResult
+	cachedPermResult = &PermissionCheckResult{NotServed: map[string]bool{"pods": true}}
+	resourcePermsMu.Unlock()
+	defer func() { resourcePermsMu.Lock(); cachedPermResult = old; resourcePermsMu.Unlock() }()
+	provider := NewTopologyResourceProvider(cache)
+	if _, err := provider.Pods(); err != nil {
+		t.Fatalf("inapplicable Pods became topology warning: %v", err)
+	}
+	resourcePermsMu.Lock()
+	cachedPermResult = &PermissionCheckResult{}
+	resourcePermsMu.Unlock()
+	if _, err := provider.Pods(); err == nil {
+		t.Fatal("denied Pods became an empty successful read")
+	}
+}

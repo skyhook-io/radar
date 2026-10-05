@@ -262,6 +262,9 @@ func issueIndexNamespaces(namespaces []string, kind, group string) []string {
 
 // aiListDynamic handles the CRD/dynamic fallback for AI list.
 func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8s.ResourceCache, kind string, namespaces []string, group string, level aicontext.VerbosityLevel, skipContext bool) {
+	readCtx, cancel := context.WithTimeout(r.Context(), k8s.ResourceReadTimeout(kind, group))
+	defer cancel()
+	r = r.WithContext(readCtx)
 	var allItems []*unstructured.Unstructured
 
 	if len(namespaces) > 0 {

@@ -22,3 +22,20 @@ func TestAbsentResourcesSkipEveryListProbe(t *testing.T) {
 		t.Fatalf("absence reported as restricted: %+v", got)
 	}
 }
+
+func TestGroupLessNonTypedKindsAreResolvedBeforeAbsenceCheck(t *testing.T) {
+	withCleanDiscoveryGlobals(t)
+	core := buildFakeDiscoveryCore(t)
+	discoveryMu.Lock()
+	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
+	resourceDiscoveryClient = GetDiscoveryClient()
+	discoveryMu.Unlock()
+	for _, kind := range []string{"certificates", "EndpointSlice", "Lease", "PriorityClass"} {
+		if KindNotServed(kind, "") {
+			t.Errorf("group-less %s falsely classified core absent", kind)
+		}
+	}
+	if !KindNotServed("certificates", "cert-manager.io") {
+		t.Fatal("explicit absent endpoint was not classified")
+	}
+}
