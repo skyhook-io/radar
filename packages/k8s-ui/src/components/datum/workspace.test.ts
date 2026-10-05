@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildDatumHostnames,
   datumLeaseFact,
+  datumCombined,
   type DatumWorkspace,
 } from "./workspace";
 import { getDatumStatus } from "../resources/resource-utils-datum";
@@ -174,4 +175,15 @@ it("keeps stale workload availability reconciling using the reported top-level g
 
 it('reads compute Instance Available rather than requiring a fictional Ready condition', () => {
  expect(getDatumStatus({kind:'Instance',status:{conditions:[{type:'Available',status:'True'},{type:'Progressing',status:'False',reason:'Stable'}]}}).color).toBe('healthy')
+})
+
+it('keeps combined stage labels concise while preserving each observation on hover', () => {
+  const combined = datumCombined([
+    { text: 'Programmed', tone: 'healthy', source: 'DNSZone z · Programmed' },
+    { text: 'ProviderError', tone: 'degraded', source: 'DNSRecordSet r · Programmed', detail: 'provider refused record' },
+  ], 'Unknown')
+  expect(combined.text).toBe('ProviderError')
+  expect(combined.tone).toBe('degraded')
+  expect(combined.detail).toContain('DNSZone z · Programmed: Programmed')
+  expect(combined.detail).toContain('provider refused record')
 })

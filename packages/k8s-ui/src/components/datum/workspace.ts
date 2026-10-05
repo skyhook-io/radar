@@ -166,13 +166,10 @@ export function datumCombined(facts: Fact[], empty: string): Fact {
   const chosen = failed || unknown || pending || facts[0];
   return {
     ...chosen,
-    text:
-      facts.length === 1
-        ? chosen.text
-        : `${chosen.text} (${facts.length} reports)`,
+    text: chosen.text,
     source: chosen.source,
     detail: facts
-      .map((f) => [f.source, f.detail].filter(Boolean).join(": "))
+      .map((f) => [f.source, f.text, f.detail].filter(Boolean).join(": "))
       .join("; "),
   };
 }
@@ -292,7 +289,9 @@ export function buildDatumHostnames(ws: DatumWorkspace): HostnameRow[] {
         ...(!row.records.length && row.zones.length
           ? [
               {
-                text: "Hostname records not observed",
+                text: datumCoverage(ws, "dnsrecordsets", row.namespace)
+                  ? "No DNSRecordSet for this hostname"
+                  : "DNSRecordSet inventory unread",
                 tone: "unknown" as const,
                 source: "DNSRecordSet inventory",
               },

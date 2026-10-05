@@ -30,10 +30,10 @@ export function DatumSummary({
   const ns = obj.metadata?.namespace || "",
     spec = obj.spec || {},
     status = obj.status || {};
-  const fact = (label: string, value: Fact) => (
+  const fact = (label: string, value: Fact, showSource = false) => (
     <FactRow key={label} label={label}>
-      <FactValue fact={value} />
-      <FactSource fact={value} />
+      <FactValue fact={value} showStatusDot />
+      {showSource && <FactSource fact={value} />}
     </FactRow>
   );
   const recorded = (value: any, source: string): Fact => ({
@@ -255,8 +255,7 @@ export function DatumSummary({
                 .filter((c) => c.scope)
                 .map((c, i) => (
                   <FactRow key={i} label={`${c.scope} · ${c.type}`}>
-                    <FactValue fact={conditionFact(obj, c.type, c.scope)} />
-                    <FactSource fact={conditionFact(obj, c.type, c.scope)} />
+                    <FactValue fact={conditionFact(obj, c.type, c.scope)} showStatusDot />
                   </FactRow>
                 ))}
             </FactGrid>
@@ -297,11 +296,11 @@ export function DatumSummary({
                   {row.hostname}
                 </div>
                 <FactGrid>
-                  {fact("Verification", row.verification)}
-                  {fact("DNS programming", row.dns)}
-                  {fact("Proxy programming", row.proxy)}
-                  {fact("Backends", row.backend)}
-                  {fact("Certificates", row.tls)}
+                  {fact("Verification", row.verification, true)}
+                  {fact("DNS programming", row.dns, true)}
+                  {fact("Proxy programming", row.proxy, true)}
+                  {fact("Backends", row.backend, true)}
+                  {fact("Certificates", row.tls, true)}
                 </FactGrid>
                 <div className="flex flex-wrap gap-3 text-xs mt-3">
                   {[

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { clsx } from 'clsx'
 import type { HealthLevel } from '../resources/resource-utils'
 import { formatAge } from '../resources/resource-utils'
-import { toneTextClass } from '../ui/status-tone'
+import { StatusDot, toneTextClass } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
 
 /**
@@ -13,7 +13,7 @@ import { Tooltip } from '../ui/Tooltip'
 export interface Fact {
   text: string
   tone: HealthLevel
-  /** Where the value comes from, shown next to it so claims carry their source. */
+  /** Where the value comes from, available inline or on hover so claims carry their source. */
   source?: string
   /** A timestamp the text refers to; the UI renders it as an age. */
   at?: string
@@ -23,10 +23,11 @@ export interface Fact {
   detail?: string
 }
 
-export function FactValue({ fact, className }: { fact: Fact; className?: string }) {
+export function FactValue({ fact, className, showStatusDot = false }: { fact: Fact; className?: string; showStatusDot?: boolean }) {
   const age = fact.at ? formatAge(fact.at) : null
   const body = (
-    <span className={clsx(toneTextClass(fact.tone), className)}>
+    <span className={clsx(toneTextClass(fact.tone), showStatusDot && 'inline-flex items-center gap-1.5', className)}>
+      {showStatusDot && <StatusDot tone={fact.tone} />}
       {fact.text}
       {age && fact.atMeaning === 'since' && <span className="text-theme-text-secondary"> for {age}</span>}
       {age && fact.atMeaning !== 'since' && <span className="text-theme-text-secondary">{fact.text ? ' · ' : ''}{age} ago</span>}

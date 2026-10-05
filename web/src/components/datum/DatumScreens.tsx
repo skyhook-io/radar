@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { Globe, Network, Cable, Folder, List } from "lucide-react";
-import { FactValue, FactSource, type Fact, RefLink } from "@skyhook-io/k8s-ui";
+import { FactValue, Tooltip, Collapse, CollapseChevron, useDisclosure, type Fact, RefLink } from "@skyhook-io/k8s-ui";
 import {
   buildDatumHostnames,
   conditionFact,
   datumCoverage,
+  datumCombined,
   datumLeaseFact,
   datumConnectorConsumers,
   datumList,
@@ -32,14 +34,7 @@ import {
 import { DatumProjectConnection } from "./DatumProjectConnection";
 
 export function DatumFactCell({ fact }: { fact: Fact }) {
-  return (
-    <div>
-      <FactValue fact={fact} />
-      <div className="line-clamp-2 break-words">
-        <FactSource fact={fact} />
-      </div>
-    </div>
-  );
+  return <FactValue fact={fact} showStatusDot />;
 }
 const recorded = (v: any, source: string): Fact => ({
   text: v === undefined || v === null || v === "" ? "Not reported" : String(v),
@@ -79,6 +74,9 @@ export function DatumScreens({
   onAttentionChange: (value: boolean) => void;
 }) {
   const navigate = useWorkspaceNavigate();
+  const [reachabilityOpen, setReachabilityOpen] = useState(false);
+  const reachabilityDisclosure = useDisclosure(reachabilityOpen);
+  const reachabilityDetails = "DNS resolution, actual delegation, the certificate served to your client and HTTP traffic are not tested here. Hostname-to-Domain association is inferred by the longest matching domain suffix; DNSZone-to-Domain and backend references come from the API.";
   const open = (obj: any) => {
     const ref = datumRef(obj),
       plural = datumDetailKindFor(ref.kind, ref.group);
@@ -182,12 +180,17 @@ export function DatumScreens({
       )}
       {screen === "hostnames" && (
         <>
-          <Notice>
-            DNS resolution, actual delegation, the certificate served to your
-            client and HTTP traffic are not tested here. Hostname-to-Domain
-            association is inferred by the longest matching domain suffix;
-            DNSZone-to-Domain and backend references come from the API.
-          </Notice>
+          <div>
+            <Tooltip content={reachabilityDetails} position="bottom" disabled={reachabilityOpen} preserveWrapperWhenDisabled>
+              <button type="button" {...reachabilityDisclosure.buttonProps} onClick={() => setReachabilityOpen(v => !v)} className="inline-flex items-center gap-1 text-left text-xs text-theme-text-tertiary underline decoration-dotted underline-offset-4">
+                Controller status only · public reachability unassessed
+                <CollapseChevron open={reachabilityOpen} className="w-3 h-3" />
+              </button>
+            </Tooltip>
+            <Collapse open={reachabilityOpen} id={reachabilityDisclosure.panelId}>
+              <p className="mt-2 text-xs text-theme-text-secondary">{reachabilityDetails}</p>
+            </Collapse>
+          </div>
           <Segments
             label="Hostname filter"
             value={attentionOnly ? "attention" : "all"}
@@ -260,7 +263,7 @@ export function DatumScreens({
                     }
                   >
                     {r.problem ||
-                      "No reported failure; reachability unassessed"}
+                      "–"}
                   </span>
                 ),
               },
@@ -324,10 +327,10 @@ export function DatumScreens({
                       r.spec?.dnsZoneRef?.name === o.metadata.name,
                   );
                   return (
-                    <>
+                    <div className="flex flex-col items-start gap-1">
                       <DatumFactCell
                         fact={recorded(
-                          o.status?.recordCount,
+                          o.status?.recordCount == null ? undefined : `${o.status.recordCount} reported`,
                           "DNSZone · status.recordCount",
                         )}
                       />
@@ -348,7 +351,7 @@ export function DatumScreens({
                               )
                         }
                       />
-                    </>
+                    </div>
                   );
                 },
               },
@@ -395,11 +398,10 @@ export function DatumScreens({
                     {(o.status?.recordSets || []).map((r: any) => (
                       <div key={r.name}>
                         {r.name}:{" "}
-                        {(r.conditions || [])
-                          .map(
-                            (c: any) => `${c.type}=${c.status} (${c.reason})`,
-                          )
-                          .join(", ")}
+                        <DatumFactCell fact={datumCombined(
+                          (r.conditions || []).map((c: any) => conditionFact(o, c.type, r.name)),
+                          "Not reported",
+                        )} />
                       </div>
                     ))}
                   </div>
@@ -436,9 +438,10 @@ export function DatumScreens({
                   {(o.status?.capabilities || []).map((c: any) => (
                     <div key={c.type}>
                       {c.type}:{" "}
-                      {(c.conditions || [])
-                        .map((v: any) => `${v.type}=${v.status} (${v.reason})`)
-                        .join(", ")}
+                      <DatumFactCell fact={datumCombined(
+                        (c.conditions || []).map((v: any) => conditionFact(o, v.type, c.type)),
+                        "Not reported",
+                      )} />
                     </div>
                   ))}
                   {!o.status?.capabilities?.length && (
@@ -529,14 +532,14 @@ export function DatumScreens({
                           o.metadata.namespace,
                     );
                   return (
-                    <div>
+                    <div className="flex flex-col items-start gap-1">
                       {["networkcontexts", "networkbindings"].map((key) => (
                         <DatumFactCell
                           key={key}
                           fact={
                             datumCoverage(data, key, o.metadata.namespace)
                               ? recorded(
-                                  `${related(key).length} ${key} observed in this view`,
+                                  `${related(key).length} ${key === "networkcontexts" ? "contexts" : "bindings"} observed`,
                                   "Configured Network references observed in the current namespace filter; bindings in other namespaces are not counted",
                                 )
                               : unknown(
