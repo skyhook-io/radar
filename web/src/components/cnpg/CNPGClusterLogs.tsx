@@ -11,9 +11,9 @@ function logsPath(namespace: string, name: string) {
   return `/cnpg/clusters/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/logs`
 }
 
-function query(params: WorkloadLogsFetchParams, tailDefault?: number) {
+export function query(params: WorkloadLogsFetchParams, tailDefault?: number) {
   const q = new URLSearchParams()
-  if (params.container) q.set('container', params.container)
+  q.set('container', params.container || 'all')
   const tail = params.tailLines ?? tailDefault
   if (tail) q.set('tailLines', String(tail))
   if (params.sinceSeconds) q.set('sinceSeconds', String(params.sinceSeconds))
@@ -23,9 +23,9 @@ function query(params: WorkloadLogsFetchParams, tailDefault?: number) {
 
 // An interval is read from its start with both bounds applied server-side; the
 // viewer's line-count and since selectors do not apply to it.
-function intervalQuery(params: WorkloadLogsFetchParams, since: string, until: string) {
+export function intervalQuery(params: WorkloadLogsFetchParams, since: string, until: string) {
   const q = new URLSearchParams({ sinceTime: since, untilTime: until })
-  if (params.container) q.set('container', params.container)
+  q.set('container', params.container || 'all')
   return `?${q.toString()}`
 }
 

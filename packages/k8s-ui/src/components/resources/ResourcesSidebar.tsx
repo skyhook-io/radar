@@ -478,26 +478,23 @@ export function ResourcesSidebar({
     })
   }
 
-  // --- Keyboard navigation ---
-  // Flat list of all navigable kinds in the order they appear in the sidebar.
-  const flatVisibleKinds = useMemo<SelectedKindInfo[]>(() => {
-    const kinds: SelectedKindInfo[] = []
+  const visibleResults = useMemo(() => {
+    const results: ({ type: 'kind'; kind: SelectedKindInfo } | { type: 'view'; category: string; destination: SidebarCategoryDestination })[] = []
     if (favoritesExpanded) {
-      for (const p of pinned) {
-        kinds.push({ name: p.name, kind: p.kind, group: p.group })
+      for (const kind of pinned) results.push({ type: 'kind', kind })
+    }
+    for (const cat of filteredCategories ?? []) {
+      if (!effectiveExpandedCategories.has(cat.name)) continue
+      const workspace = categoryWorkspaces?.[cat.name]
+      for (const destination of workspace ? sidebarDestinationsMatching(cat.name, cat.resources, workspace.destinations, kindFilter) : []) {
+        results.push({ type: 'view', category: cat.name, destination })
+      }
+      if (isKindFiltering || kindsOpen(cat.name)) {
+        for (const kind of workspace ? sortByGroup(cat.visibleResources) : cat.visibleResources) results.push({ type: 'kind', kind })
       }
     }
-    if (filteredCategories) {
-      for (const cat of filteredCategories) {
-        if (effectiveExpandedCategories.has(cat.name) && (isKindFiltering || kindsOpen(cat.name))) {
-          for (const r of cat.visibleResources) {
-            kinds.push({ name: r.name, kind: r.kind, group: r.group })
-          }
-        }
-      }
-    }
-    return kinds
-  }, [favoritesExpanded, pinned, filteredCategories, effectiveExpandedCategories, kindsOpenOverrides, categoryWorkspaces, activeDestinationCategory]) // eslint-disable-line react-hooks/exhaustive-deps
+    return results
+  }, [favoritesExpanded, pinned, filteredCategories, effectiveExpandedCategories, kindsOpenOverrides, categoryWorkspaces, activeDestinationCategory, isKindFiltering, kindFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
   // Reset highlight when the filter or kind list changes
@@ -505,9 +502,11 @@ export function ResourcesSidebar({
     setHighlightedIndex(kindFilter ? 0 : -1)
   }, [kindFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const highlightedKind = highlightedIndex >= 0 && highlightedIndex < flatVisibleKinds.length
-    ? flatVisibleKinds[highlightedIndex]
+  const highlightedResult = highlightedIndex >= 0 && highlightedIndex < visibleResults.length
+    ? visibleResults[highlightedIndex]
     : null
+
+  const highlightedKind = highlightedResult?.type === 'kind' ? highlightedResult.kind : null
 
   // Scroll the highlighted kind button into view
   const highlightedRef = useRef<HTMLButtonElement>(null)
@@ -524,18 +523,19 @@ export function ResourcesSidebar({
       ;(e.target as HTMLInputElement).blur()
     } else if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setHighlightedIndex(prev => Math.min(prev + 1, flatVisibleKinds.length - 1))
+      setHighlightedIndex(prev => Math.min(prev + 1, visibleResults.length - 1))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       setHighlightedIndex(prev => Math.max(prev - 1, 0))
-    } else if (e.key === 'Enter' && highlightedKind) {
+    } else if (e.key === 'Enter' && highlightedResult) {
       e.preventDefault()
-      selectKind(highlightedKind)
+      if (highlightedResult.type === 'view') highlightedResult.destination.onSelect()
+      else selectKind(highlightedResult.kind)
       setHighlightedIndex(-1)
       setKindFilter('')
       onKindNavigated?.()
     }
-  }, [flatVisibleKinds.length, highlightedKind, selectKind, onKindNavigated]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [visibleResults.length, highlightedResult, selectKind, onKindNavigated]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const isKindHighlighted = useCallback((name: string, group: string) => {
     return highlightedKind?.name === name && highlightedKind?.group === group
@@ -662,6 +662,8 @@ export function ResourcesSidebar({
                   {workspace && views.length > 0 && (
                     <WorkspaceDestinations
                       workspace={workspace}
+                      highlightedId={highlightedResult?.type === 'view' && highlightedResult.category === category.name ? highlightedResult.destination.id : undefined}
+                      highlightedRef={highlightedRef}
                       destinations={views}
                       filtering={isKindFiltering}
                       hasKinds={category.visibleResources.length > 0}
@@ -813,8 +815,12 @@ function WorkspaceDestinations({
   kindsOpen,
   onToggleKinds,
   kindsPanelId,
+  highlightedId,
+  highlightedRef,
 }: {
   workspace: SidebarCategoryWorkspace
+  highlightedId?: string
+  highlightedRef: React.RefObject<HTMLButtonElement | null>
   destinations: SidebarCategoryDestination[]
   filtering: boolean
   hasKinds: boolean
@@ -830,15 +836,18 @@ function WorkspaceDestinations({
         return (
           <div key={d.id}>
             <button
+              ref={highlightedId === d.id ? highlightedRef : undefined}
               onClick={d.onSelect}
               aria-current={d.active && !d.child ? 'page' : undefined}
               className={clsx(
                 'w-full flex items-center gap-2 pl-5 xl:pl-6 pr-2 xl:pr-3 py-1.5 rounded-lg text-sm transition-colors min-w-0',
                 d.active && !d.child
                   ? 'selection-strong selection-text'
-                  : d.active
-                    ? 'text-theme-text-primary font-medium hover:bg-theme-elevated'
-                    : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary',
+                  : highlightedId === d.id
+                    ? 'bg-theme-hover text-theme-text-primary'
+                    : d.active
+                      ? 'text-theme-text-primary font-medium hover:bg-theme-elevated'
+                      : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary',
               )}
             >
               {Icon && <Icon className="w-4 h-4 shrink-0" />}

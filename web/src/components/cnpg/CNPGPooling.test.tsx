@@ -3,9 +3,9 @@ import { expect, it, vi } from 'vitest'
 import { buildCNPGFleet, CNPG_WORKSPACE_KEYS, type CNPGWorkspaceResponse, type CNPGPoolerPressureLive } from '@skyhook-io/k8s-ui'
 import { CNPGPooling } from './CNPGPooling'
 
-const live = vi.hoisted(() => ({ pods: [] as CNPGPoolerPressureLive['pods'] }))
-vi.mock('../../api/cnpg', () => ({ useCNPGPoolerRuntime: () => ({ data: { permission: { proxy: 'allowed' }, pods: live.pods } }) }))
-vi.mock('../../api/cnpg-sessions', () => ({ useCNPGPoolerCapabilities: () => ({ data: { facts: { deployment: { name: 'p', state: 'ok', replicas: 2, readyReplicas: 0 } } } }) }))
+const live = vi.hoisted(() => ({ pods: [] as CNPGPoolerPressureLive['pods'], failed: false }))
+vi.mock('../../api/cnpg', () => ({ useCNPGPoolerRuntime: () => ({ data: { permission: { proxy: 'allowed' }, pods: live.pods }, isRefetchError: live.failed, error: new Error('Pressure timeout'), dataUpdatedAt: Date.now() - 120_000 }) }))
+vi.mock('../../api/cnpg-sessions', () => ({ useCNPGPoolerCapabilities: () => ({ data: { facts: { deployment: { name: 'p', state: 'ok', replicas: 2, readyReplicas: 0 } } }, isRefetchError: live.failed, error: new Error('Readiness timeout'), dataUpdatedAt: Date.now() - 180_000 }) }))
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'test' } }) }))
 function render() {
   const data: CNPGWorkspaceResponse = { installed: true, context: 'test', namespaces: null, coverage: Object.fromEntries(CNPG_WORKSPACE_KEYS.map((k) => [k, { state: 'full' }])), objects: { poolers: [{ apiVersion: 'postgresql.cnpg.io/v1', metadata: { name: 'p', namespace: 'pg' }, spec: { cluster: { name: 'pg' }, pgbouncer: { paused: true } } }] }, issues: [], audit: [], backupsOmitted: 0 }
@@ -30,4 +30,16 @@ it('qualifies partial totals and retains readiness beside the request', () => {
 it('says idle for complete empty reads', () => {
   live.pods = [{ pod: 'a', state: 'ok', pools: [] }]
   expect(render()).toContain('Idle: no client pools open')
+})
+it('labels retained pressure and readiness after their refreshes fail', () => {
+  live.failed = true
+  live.pods = [{ pod: 'a', state: 'ok', pools: [] }]
+  const html = render()
+  expect(html).toContain('Idle: no client pools open')
+  expect(html).toContain('Not ready')
+  expect(html).toContain('Last refresh failed: Readiness timeout')
+  expect(html).toContain('Last refresh failed: Pressure timeout')
+  expect(html).toContain('3m ago')
+  expect(html).toContain('2m ago')
+  live.failed = false
 })

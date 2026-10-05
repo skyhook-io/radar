@@ -1,5 +1,5 @@
 import { useSearchParams } from 'react-router-dom'
-import { CNPGClusterCertificates, CNPGConnectSection, CNPGDimensionMark, CNPGDimensionVerdict, CNPGServingStatus, coverageReadable, isApiGroup, refToSelectedResource, toneTextClass, type CNPGDimension, type CNPGFleetRow, type CNPGWorkspaceResponse, type NavigateToRef } from '@skyhook-io/k8s-ui'
+import { CNPGClusterCertificates, CNPGConnectSection, CNPGDimensionMark, CNPGDimensionVerdict, CNPGServingStatus, coverageReadable, refToSelectedResource, toneTextClass, type CNPGDimension, type CNPGFleetRow, type NavigateToRef } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { buildWorkloadPath } from '../../utils/navigation'
 import { useCNPGRuntime } from '../../api/cnpg'
@@ -9,7 +9,7 @@ import { CNPGParametersInEffect } from './CNPGParametersInEffect'
 import { CNPGProtection } from './CNPGProtection'
 import { CNPGRestoreValidation } from './recovery/CNPGRestoreValidation'
 import { CNPGRestoreButton } from './recovery/CNPGRestoreButton'
-import { restoreSourcesFor } from './recovery/restoreModel'
+import { assessRestoreSources } from './recovery/restoreModel'
 import { useCNPGRestoreCapability } from '../../api/cnpg-recovery'
 import { CNPGScreenGate } from './shared'
 import { useCNPGClusterAssessment } from './useCNPGClusterAssessment'
@@ -52,7 +52,7 @@ export function CNPGStorageTab({
   const runtime = useCNPGRuntime(namespace, name)
   const { row } = useCNPGClusterAssessment(namespace, name)
   const clusterObject = row?.cluster
-  const primary = runtime.data?.permission.proxy === 'denied' ? undefined : runtime.data?.instances.find((i) => i.role === 'primary')
+  const primary = runtime.data?.instances.find((i) => i.role === 'primary')
   return (
     <div className="space-y-4 p-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -65,7 +65,7 @@ export function CNPGStorageTab({
       </div>
       <CNPGTabVerdict namespace={namespace} name={name} id="storage" />
       {row && <SlotRelief row={row} onOpenReplication={onOpenReplication} />}
-      <CNPGStorage namespace={namespace} name={name} primary={primary} clusterObject={clusterObject} />
+      <CNPGStorage namespace={namespace} name={name} primary={primary} runtime={runtime} clusterObject={clusterObject} />
     </div>
   )
 }
@@ -107,17 +107,6 @@ function SlotRelief({ row, onOpenReplication }: { row: CNPGFleetRow; onOpenRepli
   )
 }
 
-/**
- * Why a restore cannot start, when the cluster has neither a backup destination
- * nor a completed Backup. Only said where Backups were read: an unread list
- * proves nothing.
- */
-function nothingToRestore(data: CNPGWorkspaceResponse, namespace: string, cluster: any): string | undefined {
-  if (!cluster || !coverageReadable(data.coverage?.backups ?? { state: 'notInstalled' }, namespace)) return undefined
-  const backups = (data.objects.backups ?? []).filter((b: any) => isApiGroup(b.apiVersion, 'postgresql.cnpg.io'))
-  return restoreSourcesFor(cluster, backups).length === 0 ? 'Nothing to restore from yet: no backup destination and no completed Backup.' : undefined
-}
-
 /** Backups: this cluster's recovery evidence, runs, schedules and destination, plus restore validation once it was restored. */
 export function CNPGBackupsTab({
   namespace,
@@ -134,14 +123,14 @@ export function CNPGBackupsTab({
 }) {
   const { query, fleet } = useCNPGFleet([namespace])
   const { row, runtime } = useCNPGClusterAssessment(namespace, name)
-  const primary = runtime.data?.permission.proxy === 'denied' ? undefined : runtime.data?.instances.find((i) => i.role === 'primary')
+  const primary = runtime.data?.instances.find((i) => i.role === 'primary')
   const [searchParams] = useSearchParams()
   const restore = useCNPGRestoreCapability(namespace)
   const restoreBlocked = restore.data ? (restore.data.allowed ? undefined : restore.data.reason ?? 'Not allowed') : restore.isLoading ? 'Checking whether you can create a Cluster here…' : undefined
   return (
     <CNPGScreenGate query={query} fleet={fleet}>
       {(data, readyFleet) => {
-        const nothing = nothingToRestore(data, namespace, readyFleet.rows.find((r) => r.namespace === namespace && r.name === name)?.cluster)
+        const nothing = assessRestoreSources(data, namespace, readyFleet.rows.find((r) => r.namespace === namespace && r.name === name)?.cluster).disabledReason
         return (
         <div className="flex min-h-0 flex-1 flex-col">
           <CNPGTabVerdict namespace={namespace} name={name} id="protection" className="px-5 pt-3 xl:px-7" />

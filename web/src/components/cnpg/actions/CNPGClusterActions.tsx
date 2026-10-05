@@ -25,6 +25,9 @@ import {
   switchoverLagNote,
   type StandbyChoice,
 } from './actionModel'
+import { useCNPGFleet } from '../useCNPGSidebarWorkspace'
+import { RefreshFailedNotice } from '../../workspace/layout'
+import { assessRestoreSources } from '../recovery/restoreModel'
 import { lsnDistance, standbyOwnBacklog } from '../lsn'
 
 type DialogKind = CNPGClusterActionName | 'restore' | 'report' | null
@@ -47,7 +50,7 @@ function EffectItem({ list, label }: { list: { available: boolean; reason?: stri
 }
 
 function capabilityTitle(cap: ActionCapability | undefined): string | undefined {
-  return cap ? capabilityReason(cap) : 'Checking permissions…'
+  return cap ? capabilityReason(cap) : undefined
 }
 
 /**
@@ -74,6 +77,8 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
     document.addEventListener('keydown', onKey, true)
     return () => document.removeEventListener('keydown', onKey, true)
   }, [menu])
+  const { query: workspace, fleet } = useCNPGFleet([namespace])
+  const restoreSourceReason = assessRestoreSources(workspace.data, namespace, fleet?.rows.find((r) => r.name === name && r.namespace === namespace)?.cluster).disabledReason
   const actions = caps.data?.actions
   const openPsql = useOpenCNPGPsql()
   const unavailable = caps.data
@@ -84,7 +89,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
 
   const item = (id: CNPGClusterActionName, label: string) => {
     const cap = actions?.[id]
-    const title = capabilityTitle(cap) ?? unavailable
+    const title = unavailable ?? capabilityTitle(cap)
     return (
       <Tooltip key={id} content={title} position="left" wrapperClassName="w-full">
         <button
@@ -107,7 +112,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
 
   return (
     <div className="relative flex items-center gap-1.5">
-      <Tooltip content={capabilityTitle(actions?.backup) ?? unavailable ?? 'Create an on-demand Backup'} position="bottom">
+      <Tooltip content={unavailable ?? capabilityTitle(actions?.backup) ?? 'Create an on-demand Backup'} position="bottom">
         <button
           type="button"
           disabled={!actions?.backup.allowed}
@@ -119,7 +124,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
         </button>
       </Tooltip>
       {!compact && (
-        <Tooltip content={capabilityTitle(actions?.switchover) ?? unavailable ?? 'Promote a standby to primary'} position="bottom">
+        <Tooltip content={unavailable ?? capabilityTitle(actions?.switchover) ?? 'Promote a standby to primary'} position="bottom">
           <button
             type="button"
             disabled={!actions?.switchover.allowed}
@@ -160,7 +165,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
             {item('unfence', 'Lift fencing…')}
             {hibernated ? item('rehydrate', 'Resume from hibernation…') : item('hibernate', 'Hibernate…')}
             <div className="my-1 border-t border-theme-border" />
-            <Tooltip content={capabilityTitle(actions?.psql) ?? unavailable} position="left" wrapperClassName="w-full">
+            <Tooltip content={unavailable ?? capabilityTitle(actions?.psql)} position="left" wrapperClassName="w-full">
               <button
                 type="button"
                 role="menuitem"
@@ -177,11 +182,11 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
             <div className="px-3 pb-0.5 pt-1 text-[11px] uppercase tracking-wide text-theme-text-tertiary">Advanced</div>
             {caps.data?.facts.maintenance.inProgress ? item('unsetMaintenance', 'Lift node maintenance…') : item('setMaintenance', 'Set node maintenance…')}
             <div className="my-1 border-t border-theme-border" />
-            <Tooltip content={capabilityTitle(actions?.restore) ?? unavailable} position="left" wrapperClassName="w-full">
+            <Tooltip content={unavailable ?? capabilityTitle(actions?.restore) ?? restoreSourceReason} position="left" wrapperClassName="w-full">
               <button
                 type="button"
                 role="menuitem"
-                disabled={!actions?.restore.allowed}
+                disabled={!actions?.restore.allowed || !!restoreSourceReason}
                 className={MENU_ITEM}
                 onClick={() => {
                   setMenu(false)
@@ -191,11 +196,19 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
                 Restore to a new cluster…
               </button>
             </Tooltip>
+            {restoreSourceReason && <div className="px-3 py-1 text-xs text-theme-text-secondary">{restoreSourceReason}</div>}
             <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => { setMenu(false); setOpen('report') }}>
               Download report…
             </button>
           </div>
         </>
+      )}
+      <RefreshFailedNotice queries={[caps]} />
+      {caps.error && !caps.data && (
+        <div role="status" className="text-xs text-theme-text-secondary">
+          Actions could not be checked: {caps.error instanceof Error ? caps.error.message : 'unknown error'}.{' '}
+          <button type="button" onClick={() => void caps.refetch()} disabled={caps.isFetching} className="text-accent-text hover:underline">Retry</button>
+        </div>
       )}
       {caps.data && open && open !== 'restore' && open !== 'report' && (
         <ClusterActionDialog kind={open} caps={caps.data} namespace={namespace} name={name} onClose={() => setOpen(null)} />

@@ -72,7 +72,13 @@ export function CNPGClusterHASection({
   title = 'HA and instances',
   showInstances = true,
   showCertificates = true,
+  currentPrimary,
+  hibernated = false,
+  onOpenReachability,
 }: {
+  currentPrimary?: string
+  hibernated?: boolean
+  onOpenReachability?: (service: { namespace: string; name: string }) => void
   title?: string
   /** False where the host lists the instances itself (with their replication state). */
   showInstances?: boolean
@@ -106,11 +112,29 @@ export function CNPGClusterHASection({
   const versions = new Set((live ?? []).map((l) => l.instanceManagerVersion).filter(Boolean))
 
   const haSummary = cnpgHASummary(ha, live, primaryConflict)
+  const endpointProblem = !hibernated && currentPrimary && ha.rwEndpoints.state === 'ok' && !ha.rwEndpoints.pods.includes(currentPrimary)
+    ? ha.rwEndpoints.pods.length === 0 ? 'no read-write endpoint' : 'read-write endpoint not on the primary'
+    : undefined
 
   return (
     <>
-      <FoldSection title={title} hint={`sampled ${formatAge(ha.sampledAt)} ago`} summary={haSummary.text} attention={haSummary.attention}>
+      <FoldSection title={title} hint={`sampled ${formatAge(ha.sampledAt)} ago`} summary={[endpointProblem, haSummary.text].filter(Boolean).join(' · ')} attention={haSummary.attention || !!endpointProblem}>
         <FactGrid>
+          <FactRow label="Read-write Service">
+            <div className="space-y-1">
+              <RefLink refTo={{ kind: 'Service', group: '', namespace: ns, name: ha.rwEndpoints.service }} onNavigate={onNavigate} mono />
+              {ha.rwEndpoints.state !== 'ok' ? <Unknown text={cnpgHASourceText(ha.rwEndpoints, 'read-write endpoints')} /> : (
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    {ha.rwEndpoints.pods.length === 0 ? <span className={hibernated ? 'text-theme-text-secondary' : toneTextClass('unhealthy')}>{hibernated ? 'None expected while hibernated' : 'No ready endpoints'}</span> : ha.rwEndpoints.pods.map((pod) => <RefLink key={pod} refTo={{ kind: 'Pod', group: '', namespace: ns, name: pod }} onNavigate={onNavigate} mono />)}
+                  </div>
+                  {!hibernated && currentPrimary && ha.rwEndpoints.pods.length > 0 && !ha.rwEndpoints.pods.includes(currentPrimary) && <div className={clsx('text-xs', toneTextClass('unhealthy'))}>Read-write endpoint is not on the reported primary {currentPrimary}.</div>}
+                </>
+              )}
+              {onOpenReachability && <button type="button" className="text-xs text-accent-text hover:underline" onClick={() => onOpenReachability({ namespace: ns, name: ha.rwEndpoints.service })}>Reachability →</button>}
+              <div className="text-[11.5px] text-theme-text-tertiary">Ready Pods from the Service’s EndpointSlices</div>
+            </div>
+          </FactRow>
           <FactRow label="Failure domains">
             {!spread.known ? (
               <div>

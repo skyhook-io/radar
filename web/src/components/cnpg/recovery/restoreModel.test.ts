@@ -291,3 +291,34 @@ describe('cnpgRestoredPrimaryUp', () => {
     expect(cnpgRestoredPrimaryUp(snapshot({ pods: [pod('instance', 'Running', true)] as any, coverage: { pods: { state: 'denied' }, jobs: { state: 'ok' }, events: { state: 'ok' } } as any }))).toBe(false)
   })
 })
+
+describe('restore availability and image review', () => {
+  it('disables only a readable, empty source list', async () => {
+    const { assessRestoreSources } = await import('./restoreModel')
+    const sourceCluster = { metadata: { name: 'pg', namespace: 'db' }, spec: {} }
+    const data = { objects: { backups: [] }, coverage: { backups: { state: 'full' } } } as any
+    expect(assessRestoreSources(data, 'db', sourceCluster).disabledReason).toContain('Nothing to restore')
+    for (const state of ['denied', 'error', 'syncing', 'uncached']) {
+      const result = assessRestoreSources({ ...data, coverage: { backups: { state } } }, 'db', sourceCluster)
+      expect(result.disabledReason).toBeUndefined()
+      expect(result.unreadReason).toContain('could not be read')
+    }
+    const partial = { ...data, coverage: { backups: { state: 'partial', deniedNamespaces: ['other'] } } }
+    expect(assessRestoreSources(partial, 'db', sourceCluster).disabledReason).toBeDefined()
+    expect(assessRestoreSources(partial, 'other', sourceCluster).disabledReason).toBeUndefined()
+    expect(assessRestoreSources(data, 'db', cluster).disabledReason).toBeUndefined()
+  })
+  it('copies status.image only without a declared image or catalog and labels its origin', () => {
+    const source = { kind: 'backup', backup: 'b' } as const
+    const build = (sourceCluster: any) => buildRestoreManifest({ sourceCluster, source, namespace: 'db', newName: 'r', target: { kind: 'latest' } }).spec
+    const fromStatus = { spec: {}, status: { image: 'pg:17.6' } }
+    expect(build(fromStatus).imageName).toBe('pg:17.6')
+    expect(preflightFacts(fromStatus).find((f) => f.label === 'Image')).toMatchObject({ copied: true, value: 'pg:17.6 (from status.image)' })
+    const declared = { spec: { imageName: 'pg:17.7' }, status: { image: 'pg:17.6' } }
+    expect(build(declared).imageName).toBe('pg:17.7')
+    const catalog = { ...cluster, status: { image: 'pg:17.6' } }
+    expect(build(catalog).imageCatalogRef).toEqual(cluster.spec.imageCatalogRef)
+    expect(build(catalog).imageName).toBeUndefined()
+    expect(preflightFacts(catalog).find((f) => f.label === 'Image')?.path).toBe('spec.imageCatalogRef')
+  })
+})

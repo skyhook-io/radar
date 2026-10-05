@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { refetchCNPGDetail } from './refresh'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Activity, Database, Gauge, HardDrive, Network, Settings2, ShieldCheck, Unplug } from 'lucide-react'
 import { refToSelectedResource, Tooltip, type WorkloadExtraTab } from '@skyhook-io/k8s-ui'
@@ -47,6 +49,8 @@ export function CNPGDetailPage({
   const navigate = useCNPGNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { connection } = useConnection()
+  const queryClient = useQueryClient()
+  const refresh = useCallback(() => refetchCNPGDetail(queryClient, target), [queryClient, target.plural, target.namespace, target.name])
   const activeContext = connection.context
   const pinnedContext = searchParams.get('ctx')
 
@@ -211,6 +215,7 @@ export function CNPGDetailPage({
           namespaceNote={namespaceNote}
           hideKindBadge={cnpgViewNamedForKind(target.plural)}
           onNavigateToResource={openRelated}
+          onRefresh={cnpgWorkspace ? refresh : undefined}
           extraTabs={extraTabs}
           tabOrder={isCluster ? CNPG_CLUSTER_TAB_ORDER : undefined}
           statusNote={isCluster ? <CNPGClusterServing namespace={target.namespace} name={target.name} onSelect={() => goTab(cnpgDimensionTab('serving'))} /> : undefined}

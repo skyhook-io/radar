@@ -18,6 +18,8 @@ import { CNPGTabVerdict } from './CNPGClusterTabs'
 import { formatBytes } from './lsn'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
 import { Card, ProxyDenied, SourceState } from './runtimeParts'
+import { buildWorkloadPath } from '../../utils/navigation'
+import { useCNPGNavigate } from './useCNPGNavigate'
 import { Notice, RefreshFailedNotice } from '../workspace/layout'
 
 /**
@@ -39,6 +41,7 @@ export function CNPGReplicationTab({
   onOpenHistory?: () => void
   onNavigate?: NavigateToRef
 }) {
+  const navigate = useCNPGNavigate()
   const runtime = useCNPGRuntime(namespace, name)
   const ha = useCNPGClusterHA(namespace, name)
   const { fleet } = useCNPGFleet([namespace])
@@ -64,6 +67,7 @@ export function CNPGReplicationTab({
           </button>
         )}
       </div>
+      <CNPGTabVerdict namespace={namespace} name={name} id="serving" />
       <CNPGTabVerdict namespace={namespace} name={name} id="replication" />
       <RefreshFailedNotice queries={[runtime, ha]} />
 
@@ -100,6 +104,9 @@ export function CNPGReplicationTab({
           error={ha.error instanceof Error ? ha.error.message : undefined}
           onNavigate={onNavigate}
           title="High availability"
+          currentPrimary={clusterObject?.status?.currentPrimary}
+          hibernated={fleet?.rows.find((r) => r.namespace === namespace && r.name === name)?.hibernated}
+          onOpenReachability={(svc) => navigate(buildWorkloadPath({ kind: 'services', group: '', namespace: svc.namespace, name: svc.name, tab: 'reachability' }))}
           showInstances={false}
           showCertificates={false}
         />

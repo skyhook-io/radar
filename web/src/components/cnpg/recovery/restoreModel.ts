@@ -1,4 +1,4 @@
-import { CNPG_BARMAN_PLUGIN_NAME, getCNPGClusterBarmanPlugin, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel, formatGrant } from '@skyhook-io/k8s-ui'
+import { CNPG_BARMAN_PLUGIN_NAME, getCNPGClusterBarmanPlugin, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel, type CNPGWorkspaceResponse, coverageReadable, formatGrant } from '@skyhook-io/k8s-ui'
 import type { CNPGRuntimeResponse } from '../../../api/cnpg'
 import type { ActionCapability } from '../../../api/actions'
 import type { CNPGRecoveryResponse, CNPGRecoveryPod } from '../../../api/cnpg-recovery'
@@ -58,6 +58,21 @@ export function restoreSourcesFor(cluster: any, backups: any[]): RestoreSource[]
     if (s) out.push(s)
   }
   return out
+}
+
+export function assessRestoreSources(data: CNPGWorkspaceResponse | undefined, namespace: string, cluster: any): { sources: RestoreSource[]; disabledReason?: string; unreadReason?: string } {
+  const readable = !!data && coverageReadable(data.coverage.backups ?? { state: 'notInstalled' }, namespace)
+  const sources = cluster ? restoreSourcesFor(cluster, readable ? data!.objects.backups ?? [] : []) : []
+  if (!readable) return { sources, unreadReason: `Backup sources could not be read in ${namespace}.` }
+  if (!cluster) return { sources, unreadReason: 'The source Cluster could not be read.' }
+  return { sources, disabledReason: sources.length === 0 ? 'Nothing to restore from yet: no backup destination and no completed Backup.' : undefined }
+}
+
+function restoreImage(cluster: any): { imageCatalogRef?: any; imageName?: string } {
+  const spec = cluster?.spec
+  if (spec?.imageCatalogRef) return { imageCatalogRef: spec.imageCatalogRef }
+  const imageName = spec?.imageName || cluster?.status?.image
+  return imageName ? { imageName } : {}
 }
 
 /** One ObjectStore source per server its status reports, newest evidence first. */
@@ -245,11 +260,12 @@ export function preflightFacts(cluster: any | null): PreflightFact[] {
   const add = (label: string, path: string, value: string | undefined, fallback: string) =>
     facts.push({ label, path, value: value ?? fallback, copied: value !== undefined })
   add('Instances', 'spec.instances', spec.instances !== undefined ? String(spec.instances) : undefined, '1 (default; no source cluster to copy from)')
-  if (spec.imageCatalogRef) {
-    const ref = spec.imageCatalogRef
+  const image = restoreImage(cluster)
+  if (image.imageCatalogRef) {
+    const ref = image.imageCatalogRef
     add('Image', 'spec.imageCatalogRef', `${ref.kind ?? 'ImageCatalog'} ${ref.name}, major ${ref.major}`, '')
   } else {
-    add('Image', 'spec.imageName', spec.imageName ?? cluster?.status?.image, 'operator default — set it to the source’s PostgreSQL major')
+    add('Image', 'spec.imageName', image.imageName ? `${image.imageName}${spec.imageName ? '' : ' (from status.image)'}` : undefined, 'operator default — set it to the source’s PostgreSQL major')
   }
   add('Data storage', 'spec.storage', spec.storage ? storageText(spec.storage) : undefined, 'not set — set spec.storage.size to at least the source’s data size')
   if (spec.walStorage) add('WAL storage', 'spec.walStorage', storageText(spec.walStorage), '')
@@ -302,7 +318,7 @@ export function buildRestoreManifest(args: {
     metadata: { name: newName, namespace },
     spec: {
       instances: spec.instances ?? 1,
-      ...(spec.imageCatalogRef ? { imageCatalogRef: spec.imageCatalogRef } : spec.imageName ? { imageName: spec.imageName } : {}),
+      ...restoreImage(sourceCluster),
       ...(spec.postgresql?.parameters ? { postgresql: { parameters: spec.postgresql.parameters } } : {}),
       ...(spec.resources ? { resources: spec.resources } : {}),
       storage: spec.storage ?? { size: '1Gi' },

@@ -3,7 +3,7 @@ import { PaneLoader, TimelineList, formatAge, type NavigateToResource } from '@s
 import { useCNPGClusterActivity } from '../../api/cnpg'
 import { useCNPGClusterActivityWindow } from '../../api/cnpg-history'
 import { CNPGIntervalBanner, useCNPGIntervalParams } from './CNPGTrends'
-import { Notice, Segments } from '../workspace/layout'
+import { Notice, RefreshFailedNotice, Segments } from '../workspace/layout'
 
 const RANGES = [
   { id: '6', label: '6 h' },
@@ -42,6 +42,7 @@ export function CNPGClusterActivity({ namespace, name, onNavigate }: { namespace
           : 'Radar has not recorded any Backup, Pooler or declaration events linked to this cluster yet, so deleted child objects may be missing.'}
         {' '}Events for kinds you cannot list are omitted.
       </div>
+      <RefreshFailedNotice queries={[q]} />
       {q.data?.truncated && <Notice>Showing the most recent events only; narrow the range to see all of them.</Notice>}
       {q.error && !q.data ? (
         <Notice>Activity could not be loaded: {q.error instanceof Error ? q.error.message : 'unknown error'}</Notice>

@@ -19,7 +19,7 @@ import {
   recoveryEvidenceFor,
   restoreManifestHeader,
   restoreSourceForBackup,
-  restoreSourcesFor,
+  assessRestoreSources,
   restoreSourcesForStore,
   sourceClusterFor,
   restorePermission,
@@ -80,7 +80,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
     if (!objects) return []
     if (entry.kind === 'cluster') {
       const c = clusters.find((x: any) => x.metadata?.namespace === namespace && x.metadata?.name === entry.name)
-      return c ? restoreSourcesFor(c, backups) : []
+      return assessRestoreSources(workspace.data, namespace, c).sources
     }
     if (entry.kind === 'backup') {
       const b = backups.find((x: any) => x.metadata?.namespace === namespace && x.metadata?.name === entry.name)
@@ -90,7 +90,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
     }
     const store = stores.find((x: any) => x.metadata?.namespace === namespace && x.metadata?.name === entry.name)
     return store ? restoreSourcesForStore(store) : []
-  }, [objects, clusters, backups, stores, entry, namespace])
+  }, [objects, clusters, backups, stores, entry, namespace, workspace.data])
 
   const [sourceIdx, setSourceIdx] = useState(0)
   const source = sources[sourceIdx]
@@ -154,6 +154,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
   }
 
   const permission = restorePermission(namespace, restoreCap.data, restoreCap.error)
+  const availability = entry.kind === 'cluster' ? assessRestoreSources(workspace.data, namespace, clusters.find((c: any) => c.metadata?.namespace === namespace && c.metadata?.name === entry.name)) : undefined
   const noSource = !workspace.isLoading && sources.length === 0
   const disabledReason =
     permission.blocked ??
@@ -162,7 +163,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
         ? 'This Backup cannot be restored: it has not completed, or its object store and backup ID are not recorded.'
         : entry.kind === 'objectStore'
           ? 'This ObjectStore reports no server with backups yet.'
-          : 'This cluster has no backup destination and no completed Backup to restore from.'
+          : availability?.unreadReason ?? availability?.disabledReason
       : undefined)
   const incompleteReason =
     permission.pending ??
@@ -194,6 +195,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
       effect="Creates a new Cluster that bootstraps from backups. Nothing existing is changed; the source keeps running."
       confirmLabel="Review manifest"
       warnings={noSource ? [] : [
+        ...(availability?.unreadReason ? [availability.unreadReason] : []),
         'The new cluster has no WAL archiving or backups until you configure them.',
         ...(serverName ? [`If you add archiving later, do not reuse server name "${serverName}": the new cluster would write into the archive it restores from.`] : []),
         ...warnings,
@@ -204,7 +206,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
     >
       {noSource ? (
         <p className="text-sm text-theme-text-secondary">
-          A restore needs a completed Backup, or WAL archived to a backup destination. The Backups tab shows what this cluster has and where to set it up.
+          {availability?.unreadReason ?? 'A restore needs a completed Backup, or WAL archived to a backup destination. The Backups tab shows what this cluster has and where to set it up.'}
         </p>
       ) : (
       <>

@@ -27,3 +27,26 @@ describe('CNPGClusterHASection', () => {
     expect(html).not.toContain('topology.kubernetes.io/zone of each instance')
   })
 })
+
+it('shows the read-write Service, its Pods and primary mismatch beside Reachability', () => {
+  const ha: CNPGClusterHA = { ...noInstances, rwEndpoints: { state: 'ok', service: 'pg-rw', pods: ['pg-2'] } }
+  const html = renderToStaticMarkup(<CNPGClusterHASection ha={ha} currentPrimary="pg-1" onOpenReachability={() => {}} />)
+  expect(html).toContain('Read-write Service')
+  expect(html).toContain('pg-rw')
+  expect(html).toContain('pg-2')
+  expect(html).toContain('not on the reported primary pg-1')
+  expect(html).toContain('Reachability')
+  expect(html).toContain('aria-expanded="true"')
+})
+it('distinguishes absent endpoints from denied endpoint reads', () => {
+  expect(renderToStaticMarkup(<CNPGClusterHASection ha={noInstances} />)).toContain('No ready endpoints')
+  const denied: CNPGClusterHA = { ...noInstances, rwEndpoints: { state: 'denied', service: 'pg-rw', pods: [], grant: { verb: 'list', resource: 'endpointslices', group: 'discovery.k8s.io', namespace: 'db' } } }
+  const html = renderToStaticMarkup(<CNPGClusterHASection ha={denied} />)
+  expect(html).toContain('endpointslices')
+  expect(html).not.toContain('No ready endpoints')
+})
+it('does not flag deliberately absent read-write endpoints while hibernated', () => {
+  const html = renderToStaticMarkup(<CNPGClusterHASection ha={noInstances} currentPrimary="pg-1" hibernated />)
+  expect(html).toContain('None expected while hibernated')
+  expect(html).not.toContain('No ready endpoints')
+})

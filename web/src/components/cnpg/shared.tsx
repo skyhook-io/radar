@@ -14,7 +14,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
-import { Notice, ScreenEmptyState } from '../workspace/layout'
+import { Notice, RefreshFailedNotice, ScreenEmptyState } from '../workspace/layout'
 
 export interface CNPGScreenProps {
   data: CNPGWorkspaceResponse
@@ -154,7 +154,7 @@ export function CNPGScreenGate({
       />
     )
   }
-  return <>{children(data, fleet)}</>
+  return <><RefreshFailedNotice queries={[query]} className="px-5 pt-3 xl:px-7" />{children(data, fleet)}</>
 }
 
 /** Empty-state text for a collection, derived from how much of it was readable. */

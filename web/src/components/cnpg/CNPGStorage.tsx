@@ -21,7 +21,8 @@ import {
   type Grant,
 } from '@skyhook-io/k8s-ui'
 import { useResource } from '../../api/client'
-import type { CNPGRuntimeInstance } from '../../api/cnpg'
+import { useCNPGClusterCapabilities, type CNPGRuntimeInstance, type CNPGRuntimeResponse } from '../../api/cnpg'
+import type { UseQueryResult } from '@tanstack/react-query'
 import {
   useCNPGClusterStorage,
   type CNPGClusterStorageResponse,
@@ -35,7 +36,7 @@ import { useCNPGWriteGuard } from './actions/useCNPGWriteGuard'
 import { buildResizeManifest, cnpgFloorTone, cnpgInstanceDiskTone, cnpgSharedExpansionGap, cnpgSlotRetentionText, cnpgWALUsageFloor } from './storageModel'
 // Binary units throughout, matching claim capacities such as 1Gi.
 import { formatBytes } from './lsn'
-import { Notice, RefreshFailedNotice } from '../workspace/layout'
+import { GrantText, Notice, RefreshFailedNotice } from '../workspace/layout'
 
 const CNPG_GROUP = 'postgresql.cnpg.io'
 
@@ -358,8 +359,24 @@ function coverageLine(label: string, c: { state: string; grant?: Grant; reason?:
   return `${label}: ${c.reason ?? c.state}`
 }
 
-export function CNPGStorage({ namespace, name, primary, clusterObject }: { namespace: string; name: string; primary?: CNPGRuntimeInstance; clusterObject?: any }) {
+export function CNPGStorage({ namespace, name, primary, runtime, clusterObject }: { namespace: string; name: string; primary?: CNPGRuntimeInstance; runtime?: UseQueryResult<CNPGRuntimeResponse>; clusterObject?: any }) {
   const q = useCNPGClusterStorage(namespace, name)
+  const caps = useCNPGClusterCapabilities(namespace, name)
+  const patch = caps.data?.actions.reload
+  const resizeReason = caps.error && !caps.data
+    ? `Permissions could not be checked: ${caps.error.message}`
+    : !patch
+      ? 'Checking permissions…'
+      : patch.permission === 'denied'
+        ? `Needs ${formatGrant(patch.grant)}`
+        : patch.permission === 'unknown'
+          ? 'Patch permission could not be checked.'
+          : caps.data?.facts.terminating
+            ? 'The Cluster is being deleted.'
+            : caps.data?.operator?.webhookRejects
+              ? `The API server would reject it: ${caps.data.operator.webhookReason}`
+              : undefined
+  const canResize = patch?.permission === 'allowed' && !resizeReason
   const [resize, setResize] = useState<CNPGStorageTarget | null>(null)
   if (!q.data && q.isLoading) return <PaneLoader label="Reading volumes…" className="h-40" />
   if (!q.data) {
@@ -381,7 +398,7 @@ export function CNPGStorage({ namespace, name, primary, clusterObject }: { names
 
   return (
     <div className="space-y-4">
-      <RefreshFailedNotice queries={[q]} />
+      <RefreshFailedNotice queries={runtime ? [q, runtime, caps] : [q, caps]} />
       {data.findings.map((f) => (
         <AlertBanner
           key={f.claim}
@@ -414,7 +431,7 @@ export function CNPGStorage({ namespace, name, primary, clusterObject }: { names
         ))}
       </div>
 
-      <ExpansionCard data={data} volumes={allVolumes} onResize={setResize} />
+      <ExpansionCard data={data} volumes={allVolumes} onResize={setResize} canResize={canResize} resizeReason={resizeReason} grant={patch?.permission === 'denied' ? patch.grant : undefined} onRetry={() => void caps.refetch()} />
 
       <Card title="Logical database sizes (primary)" footer="pg_database_size for each database: the data PostgreSQL holds, not the space the volume uses.">
         {(primary?.metrics.state === 'ok' || primary?.metrics.state === 'partial') && primary.metrics.databaseSizes?.length ? (
@@ -426,8 +443,10 @@ export function CNPGStorage({ namespace, name, primary, clusterObject }: { names
           ))
         ) : (
           <div className="text-sm text-theme-text-tertiary">
-            {!primary
-              ? 'No primary reported.'
+            {runtime?.data?.permission.proxy === 'denied'
+              ? <>Database sizes unavailable: needs <GrantText grant={runtime.data.permission.grant ?? { verb: 'get', resource: 'pods', subresource: 'proxy', namespace }} />.</>
+              : !primary
+              ? clusterObject?.status?.currentPrimary ? `Database sizes unavailable: ${clusterObject.status.currentPrimary} has not reported${runtime?.error ? ` (${runtime.error.message})` : ''}.` : 'No primary reported.'
               : primary.metrics.state === 'ok' || primary.metrics.state === 'partial'
                 ? "Not reported: this sample from the primary's exporter has no database sizes."
                 : `Not available from the primary's exporter: ${primary.metrics.error || primary.metrics.reason || (primary.metrics.state === 'denied' ? 'no access (needs get pods/proxy)' : primary.metrics.state)}.`}
@@ -435,7 +454,7 @@ export function CNPGStorage({ namespace, name, primary, clusterObject }: { names
         )}
       </Card>
 
-      {resize && <ResizeDialog namespace={namespace} name={name} target={resize} volumes={allVolumes} onClose={() => setResize(null)} />}
+      {resize && <ResizeDialog namespace={namespace} name={name} target={resize} volumes={allVolumes} disabledReason={resizeReason} onClose={() => setResize(null)} />}
     </div>
   )
 }
@@ -455,7 +474,7 @@ function expansionVerdict(vols: CNPGStorageVolume[]): { text: string; tone?: 'de
   }
 }
 
-function ExpansionCard({ data, volumes, onResize }: { data: CNPGClusterStorageResponse; volumes: CNPGStorageVolume[]; onResize: (t: CNPGStorageTarget) => void }) {
+function ExpansionCard({ data, volumes, onResize, canResize, resizeReason, grant, onRetry }: { data: CNPGClusterStorageResponse; volumes: CNPGStorageVolume[]; onResize: (t: CNPGStorageTarget) => void; canResize: boolean; resizeReason?: string; grant?: Grant; onRetry: () => void }) {
   const inUse = data.expansion.resizeInUseVolumes
   return (
     <Card
@@ -471,6 +490,10 @@ function ExpansionCard({ data, volumes, onResize }: { data: CNPGClusterStorageRe
           : 'Sizes are declared on the Cluster and the operator applies them to every instance. CloudNativePG does not shrink volumes.'
       }
     >
+      {!canResize && <div className="mb-3 text-xs text-theme-text-secondary">
+        {grant ? <>Editing size needs <GrantText grant={grant} />.</> : resizeReason}{' '}
+        <button type="button" onClick={onRetry} className="text-accent-text hover:underline">Retry</button>
+      </div>}
       <div className="space-y-3">
         {data.expansion.targets.map((t) => {
           const verdict = expansionVerdict(targetVolumes(t, volumes))
@@ -485,6 +508,7 @@ function ExpansionCard({ data, volumes, onResize }: { data: CNPGClusterStorageRe
               </div>
               <button
                 type="button"
+                disabled={!canResize}
                 onClick={() => onResize(t)}
                 className="btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium"
               >
@@ -503,12 +527,14 @@ function ResizeDialog({
   name,
   target,
   volumes,
+  disabledReason,
   onClose,
 }: {
   namespace: string
   name: string
   target: CNPGStorageTarget
   volumes: CNPGStorageVolume[]
+  disabledReason?: string
   onClose: () => void
 }) {
   const { data: cluster } = useResource<any>('clusters', namespace, name, CNPG_GROUP)
@@ -551,6 +577,7 @@ function ResizeDialog({
       guard={guard.node}
       guardSatisfied={guard.satisfied}
       confirmLabel="Review manifest"
+      disabledReason={disabledReason}
       incompleteReason={incompleteReason}
     >
       <div className="grid grid-cols-[8rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2">

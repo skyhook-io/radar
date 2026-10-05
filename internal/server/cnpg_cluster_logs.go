@@ -333,7 +333,7 @@ func (s *Server) handleCNPGClusterLogs(w http.ResponseWriter, r *http.Request) {
 	var snapshot workloadLogSnapshot
 	lost := 0
 	if query.untilTime.IsZero() {
-		snapshot = collectLogsFromPods(r.Context(), client, namespace, pods, query.container, query.tailLines, query.sinceSeconds, true)
+		snapshot = collectLogSources(r.Context(), client, namespace, cnpgSnapshotLogSources(pods, query.container), query.tailLines, query.sinceSeconds, true)
 	} else {
 		var sources []workloadLogSource
 		sources, lost = cnpgIntervalLogSources(pods, query.container, query.sinceTime, query.untilTime)
@@ -358,7 +358,7 @@ func (s *Server) handleCNPGClusterLogs(w http.ResponseWriter, r *http.Request) {
 		if !query.keep(entry) {
 			continue
 		}
-		entry.SourceLabel = sourceLabels[entry.Pod]
+		entry.SourceLabel = cnpgLogSourceLabel(sourceLabels[entry.Pod], entry.Container, query.container)
 		if entry.Previous && entry.SourceLabel != "" {
 			entry.SourceLabel += " · previous run"
 		}
@@ -377,6 +377,52 @@ func (s *Server) handleCNPGClusterLogs(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, resp)
 }
 
+func cnpgLogSourceLabel(role, container, selected string) string {
+	if selected == "all" {
+		if role == "" {
+			return container
+		}
+		return role + " · " + container
+	}
+	return role
+}
+
+func cnpgLogContainers(pod *corev1.Pod, selected string) []string {
+	if selected != "all" {
+		containers := k8s.GetContainersForPod(pod, selected, true)
+		if len(containers) > 0 {
+			return containers
+		}
+		for _, c := range pod.Spec.EphemeralContainers {
+			if c.Name == selected {
+				return []string{selected}
+			}
+		}
+		return nil
+	}
+	containers := k8s.GetContainersForPod(pod, "", true)
+	for _, c := range pod.Spec.InitContainers {
+		containers = append(containers, c.Name)
+	}
+	for _, c := range pod.Spec.EphemeralContainers {
+		containers = append(containers, c.Name)
+	}
+	return containers
+}
+
+func cnpgSnapshotLogSources(pods []*corev1.Pod, selected string) []workloadLogSource {
+	sources := []workloadLogSource{}
+	for _, pod := range pods {
+		for _, container := range cnpgLogContainers(pod, selected) {
+			status := cnpgContainerStatus(pod, container)
+			if status != nil && (status.State.Running != nil || status.State.Terminated != nil) {
+				sources = append(sources, newWorkloadLogSource(pod, container, false))
+			}
+		}
+	}
+	return sources
+}
+
 // cnpgIntervalLogSources picks, per instance container, the runs whose lines
 // can fall in [since, until]. The kubelet keeps a container's current run and
 // the one before its last restart; an interval that ends before the current
@@ -384,7 +430,7 @@ func (s *Server) handleCNPGClusterLogs(w http.ResponseWriter, r *http.Request) {
 // older run than those two covered part of the interval.
 func cnpgIntervalLogSources(pods []*corev1.Pod, container string, since, until time.Time) (sources []workloadLogSource, lost int) {
 	for _, pod := range pods {
-		for _, c := range k8s.GetContainersForPod(pod, container, true) {
+		for _, c := range cnpgLogContainers(pod, container) {
 			status := cnpgContainerStatus(pod, c)
 			if status == nil {
 				continue
@@ -494,6 +540,7 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 	defer cancel()
 	logCh := make(chan workloadLogEntry, 1000)
 	var active sync.Map
+	var completed sync.Map
 	roles := map[string]string{}
 	cursors := map[string]*cnpgStreamCursor{}
 	start := func(pods []*corev1.Pod) {
@@ -501,8 +548,17 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 			if role := cnpgInstanceRole(pod); role != "" {
 				roles[pod.Name] = cnpgInstanceSourceLabel(pod, role)
 			}
-			for _, c := range k8s.GetContainersForPod(pod, query.container, true) {
+			for _, c := range cnpgLogContainers(pod, query.container) {
+				status := cnpgContainerStatus(pod, c)
+				if status == nil || (status.State.Running == nil && status.State.Terminated == nil) {
+					continue
+				}
 				key := pod.Name + "/" + c
+				run := fmt.Sprintf("%s/%d", status.ContainerID, status.RestartCount)
+				terminated := status.State.Terminated != nil
+				if read, ok := completed.Load(key); terminated && ok && read == run {
+					continue
+				}
 				if _, exists := active.Load(key); exists {
 					continue
 				}
@@ -517,7 +573,9 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 				active.Store(key, handle)
 				go func(podName, key string) {
 					defer active.CompareAndDelete(key, handle)
-					followCNPGContainerLogs(streamCtx, client, namespace, podName, opts, logCh)
+					if followCNPGContainerLogs(streamCtx, client, namespace, podName, opts, logCh) && terminated {
+						completed.Store(key, run)
+					}
 				}(pod.Name, key)
 			}
 		}
@@ -541,7 +599,7 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 			if !query.keep(entry) {
 				continue
 			}
-			entry.SourceLabel = roles[entry.Pod]
+			entry.SourceLabel = cnpgLogSourceLabel(roles[entry.Pod], entry.Container, query.container)
 			annotateCNPGLogEntry(&entry)
 			sendSSEEvent(w, flusher, "log", entry)
 		case <-ticker.C:
@@ -583,6 +641,12 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 						delete(cursors, key)
 					}
 				}
+				completed.Range(func(key, _ any) bool {
+					if strings.HasPrefix(key.(string), podName+"/") {
+						completed.Delete(key)
+					}
+					return true
+				})
 				sendSSEEvent(w, flusher, "pod_removed", map[string]string{"pod": podName, "reason": "terminated"})
 			}
 			start(currentPods)
@@ -642,13 +706,13 @@ func (c *cnpgStreamCursor) admit(entry workloadLogEntry) bool {
 	return true
 }
 
-func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, namespace, podName string, opts corev1.PodLogOptions, logCh chan<- workloadLogEntry) {
+func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, namespace, podName string, opts corev1.PodLogOptions, logCh chan<- workloadLogEntry) bool {
 	stream, err := client.CoreV1().Pods(namespace).GetLogs(podName, &opts).Stream(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			log.Printf("[cnpg] Failed to follow logs for %s/%s/%s: %v", namespace, podName, opts.Container, err)
 		}
-		return
+		return false
 	}
 	defer stream.Close()
 	reader := bufio.NewReader(stream)
@@ -659,14 +723,14 @@ func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, n
 			select {
 			case logCh <- workloadLogEntry{Pod: podName, Container: opts.Container, Timestamp: ts, Content: content}:
 			case <-ctx.Done():
-				return
+				return false
 			}
 		}
 		if err != nil {
 			if err != io.EOF && ctx.Err() == nil {
 				log.Printf("[cnpg] Failed to read logs for %s/%s/%s: %v", namespace, podName, opts.Container, err)
 			}
-			return
+			return err == io.EOF
 		}
 	}
 }

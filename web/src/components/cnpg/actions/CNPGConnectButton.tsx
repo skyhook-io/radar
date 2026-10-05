@@ -4,6 +4,7 @@ import { Plug, X } from 'lucide-react'
 import { CNPGConnectSection, DialogPortal, Tooltip, type ResourceRef, type NavigateToResource } from '@skyhook-io/k8s-ui'
 import { buildWorkloadPath, refToSelectedResource } from '../../../utils/navigation'
 import { useCNPGFleet } from '../useCNPGSidebarWorkspace'
+import { Notice, RefreshFailedNotice } from '../../workspace/layout'
 import { useCNPGNavigate } from '../useCNPGNavigate'
 
 // A link can ask for the dialog (the restore "Next steps") with this param;
@@ -68,7 +69,7 @@ export function CNPGConnectButton({
       { replace: true, state: location.state },
     )
   }, [requested, id, setParams, location.key, location.state])
-  const { fleet } = useCNPGFleet([namespace], open)
+  const { query, fleet } = useCNPGFleet([namespace], open)
   const row = fleet?.rows.find((r) => r.namespace === namespace && r.name === name)
   const go = onNavigate
     ? (ref: ResourceRef) => {
@@ -108,8 +109,14 @@ export function CNPGConnectButton({
           </button>
         </div>
         <div className="max-h-[70vh] overflow-y-auto p-4">
+          <RefreshFailedNotice queries={[query]} />
           {row?.cluster ? (
             <CNPGConnectSection cluster={row.cluster} poolers={row.poolerObjects} poolersKnown={row.poolersKnown} onNavigate={go} onOpenReachability={openReachability} showHeading={false} />
+          ) : query.error && !query.data ? (
+            <Notice>
+              Cluster could not be read: {query.error instanceof Error ? query.error.message : 'unknown error'}.{' '}
+              <button type="button" onClick={() => void query.refetch()} disabled={query.isFetching} className="text-accent-text hover:underline">Retry</button>
+            </Notice>
           ) : (
             <div className="text-sm text-theme-text-tertiary">{fleet ? 'Radar cannot read this Cluster with your access.' : 'Reading the Cluster…'}</div>
           )}

@@ -164,6 +164,8 @@ func TestCNPGClusterLogs_Authorization(t *testing.T) {
 		{"no-clusters", "/api/cnpg/clusters/pglogsauth/missing/logs", "clusters.postgresql.cnpg.io"},
 		{"no-logs", "/api/cnpg/clusters/pglogsauth/pg-orders/logs", "get pods/log"},
 		{"no-logs", "/api/cnpg/clusters/pglogsauth/pg-orders/logs/stream", "get pods/log"},
+		{"no-logs", "/api/cnpg/clusters/pglogsauth/pg-orders/logs?container=all", "get pods/log"},
+		{"no-logs", "/api/cnpg/clusters/pglogsauth/pg-orders/logs/stream?container=all", "get pods/log"},
 	} {
 		resp := env.authGet(t, tc.path, tc.user, "")
 		body, _ := io.ReadAll(resp.Body)

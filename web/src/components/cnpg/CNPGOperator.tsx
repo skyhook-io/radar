@@ -4,7 +4,7 @@ import { useCNPGOperator, type CNPGOperatorComponent, type CNPGOperatorConfig } 
 import { CNPGOperatorDiagnosisSection } from './CNPGOperatorDiagnosis'
 import { cnpgOperatorState, cnpgRestartHistory } from './operatorStatus'
 import { CNPGWorkspaceHeader, CoverageNotice, coverageEmpty, coverageLabel, worstCoverage, cnpgResource, type CNPGScreenProps } from './shared'
-import { Mono, Notice, ScreenBody, SectionTable, Sub } from '../workspace/layout'
+import { Mono, Notice, RefreshFailedNotice, ScreenBody, SectionTable, Sub } from '../workspace/layout'
 
 interface CatalogRow {
   key: string
@@ -108,6 +108,7 @@ export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenPr
       />
       <ScreenBody>
         <CoverageNotice fleet={fleet} data={data} />
+        <RefreshFailedNotice queries={[operator]} />
         {operator.isLoading && !op ? (
           <PaneLoader label="Loading operator…" className="h-32" />
         ) : !op ? (

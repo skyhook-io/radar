@@ -15,7 +15,7 @@ import {
 import { useCNPGPoolerRuntime } from '../../api/cnpg'
 import { useCNPGPoolerCapabilities } from '../../api/cnpg-sessions'
 import { CNPGWorkspaceHeader, CoverageNotice, cnpgResource, coverageEmpty, type CNPGScreenProps } from './shared'
-import { FilterChips, Mono, namespaceChip, ScreenBody, SectionTable, Sub } from '../workspace/layout'
+import { FilterChips, Mono, namespaceChip, RefreshFailedNotice, ScreenBody, SectionTable, Sub } from '../workspace/layout'
 
 const SEVERITY: Record<HealthLevel, 'success' | 'warning' | 'alert' | 'error' | 'neutral'> = {
   healthy: 'success',
@@ -117,6 +117,7 @@ function PoolerReadiness({ pooler }: { pooler: any }) {
         {paused && <Badge severity="warning" size="sm">Pause requested</Badge>}
       </span>
       <Sub>{r.detail}</Sub>
+      <RefreshFailedNotice queries={[caps]} />
     </>
   )
 }
@@ -124,7 +125,11 @@ function PoolerReadiness({ pooler }: { pooler: any }) {
 function PoolerPressure({ namespace, name }: { namespace: string; name: string }) {
   const q = useCNPGPoolerRuntime(namespace, name)
   if (!q.data) return <span className="text-theme-text-tertiary">{q.isLoading ? 'Reading…' : 'Unavailable'}</span>
-  if (q.data.permission.proxy === 'denied') {
+  return <><RefreshFailedNotice queries={[q]} /><PoolerPressureData data={q.data} /></>
+}
+
+function PoolerPressureData({ data }: { data: NonNullable<ReturnType<typeof useCNPGPoolerRuntime>['data']> }) {
+  if (data.permission.proxy === 'denied') {
     return (
       <>
         <span className="text-theme-text-tertiary">No access</span>
@@ -132,7 +137,7 @@ function PoolerPressure({ namespace, name }: { namespace: string; name: string }
       </>
     )
   }
-  const { reporting: ok, limitation, empty } = poolerPressureCoverage(q.data.pods)
+  const { reporting: ok, limitation, empty } = poolerPressureCoverage(data.pods)
   if (ok.length === 0) {
     return (
       <>
@@ -147,22 +152,22 @@ function PoolerPressure({ namespace, name }: { namespace: string; name: string }
       <>
         <span>{empty}</span>
         <Sub>
-          {limitation ?? `${ok.length}/${q.data.pods.length} pods reporting`}
+          {limitation ?? `${ok.length}/${data.pods.length} pods reporting`}
         </Sub>
       </>
     )
   }
-  const waiting = poolerPressureFact(q.data.pods, 'clWaiting')
+  const waiting = poolerPressureFact(data.pods, 'clWaiting')
   const waits = pools.map((x) => x.maxwaitSeconds).filter((v): v is number => v !== undefined)
   const maxwait = waits.length > 0 ? Math.max(...waits) : undefined
   return (
     <>
       <span className={toneTextClass(waiting.tone)}>
-        <span className="whitespace-nowrap"><FactValue fact={waiting} /> waiting</span> · <span className="whitespace-nowrap"><FactValue fact={poolerPressureFact(q.data.pods, 'svActive')} /> servers busy</span>
+        <span className="whitespace-nowrap"><FactValue fact={waiting} /> waiting</span> · <span className="whitespace-nowrap"><FactValue fact={poolerPressureFact(data.pods, 'svActive')} /> servers busy</span>
       </span>
       <Sub>
-        {maxwait !== undefined && maxwait > 0 ? `longest wait ${poolerPressureFact(q.data.pods, 'maxwaitSeconds').text} · ` : ''}
-        {ok.length}/{q.data.pods.length} pods reporting{limitation ? ` · ${limitation}` : ''}
+        {maxwait !== undefined && maxwait > 0 ? `longest wait ${poolerPressureFact(data.pods, 'maxwaitSeconds').text} · ` : ''}
+        {ok.length}/{data.pods.length} pods reporting{limitation ? ` · ${limitation}` : ''}
       </Sub>
     </>
   )
