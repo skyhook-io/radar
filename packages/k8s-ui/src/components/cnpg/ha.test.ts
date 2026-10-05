@@ -75,6 +75,14 @@ function row(over: Partial<CNPGFleetRow> = {}): CNPGFleetRow {
   }
 }
 
+it('does not call successful snapshot protection WAL archiving when no archive is configured', () => {
+  const r = row()
+  r.protection.destination = { text: 'Volume snapshots', tone: 'neutral', method: 'volumeSnapshot' }
+  r.protection.walArchiving = { text: 'No archive destination configured', tone: 'neutral', source: 'Cluster spec' }
+  r.protection.lastSuccessfulBackup = { text: 'Completed', tone: 'healthy', source: 'Backup snapshot' }
+  expect(cnpgDimensions({ row: r }).find((d) => d.id === 'protection')).toMatchObject({ text: 'Backup completed', tone: 'healthy', source: 'Backup snapshot' })
+})
+
 describe('cnpgZoneSpread', () => {
   it('groups instances by zone and names the primary’s', () => {
     const s = cnpgZoneSpread(ha())
@@ -338,7 +346,7 @@ describe('backup dimension certainty', () => {
   it('never treats archiving alone as restorable', () => {
     const r = row()
     r.protection.lastSuccessfulBackup = { text: 'No successful backup yet', tone: 'degraded', source: 'Backups read in this namespace; none completed' }
-    expect(cnpgDimensions({ row: r }).find((d) => d.id === 'protection')).toMatchObject({ text: 'WAL archiving · no successful backup yet', tone: 'degraded', source: 'Backups read in this namespace; none completed' })
+    expect(cnpgDimensions({ row: r }).find((d) => d.id === 'protection')).toMatchObject({ text: 'CNPG reports archiving · no successful backup yet', tone: 'degraded', source: 'Backups read in this namespace; none completed' })
     r.protection.lastSuccessfulBackup = { text: 'No access to Backups', tone: 'unknown', source: 'Backups not read' }
     expect(cnpgDimensions({ row: r }).find((d) => d.id === 'protection')).toMatchObject({ text: 'unassessed', tone: 'unknown', source: 'Backups not read' })
   })

@@ -156,6 +156,7 @@ export function CNPGDetailPage({
             namespace={ns}
             name={name}
             onInspect={onOpenResource}
+            onOpenYaml={() => goTab('yaml')}
             onOpenLogs={(pod, container) => goTab('logs', { pod, container })}
             onOpenOperator={() => navigate(cnpgScreenPath('operator'), { state: { returnLabel: currentPageLabel(), returnCtx: activeContext } satisfies ReturnState })}
           />

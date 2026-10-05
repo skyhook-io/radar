@@ -383,7 +383,8 @@ type CNPGPoolerRuntimeResponse struct {
 }
 
 type CNPGPoolerPodRuntime struct {
-	Pod string `json:"pod"`
+	Pod              string `json:"pod"`
+	SchedulingReason string `json:"schedulingReason,omitempty"`
 	CNPGRuntimeSource
 	*CNPGPoolerPodFacts
 }
@@ -604,6 +605,11 @@ func (s *Server) handleCNPGPoolerRuntime(w http.ResponseWriter, r *http.Request)
 	}
 	for i, p := range pods {
 		resp.Pods[i] = CNPGPoolerPodRuntime{Pod: p.Name}
+		for _, condition := range p.Status.Conditions {
+			if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse {
+				resp.Pods[i].SchedulingReason = strings.TrimSpace(condition.Reason + ": " + condition.Message)
+			}
+		}
 	}
 	if len(pods) == 0 {
 		s.writeJSON(w, resp)
@@ -636,6 +642,7 @@ func (s *Server) handleCNPGPoolerRuntime(w http.ResponseWriter, r *http.Request)
 				return cnpgPoolerPodFrom(cnpgProxyGetWithFallback(ctx, client, target))
 			})
 			got.Pod = p.Name
+			got.SchedulingReason = out.SchedulingReason
 			*out = got
 		})
 	}

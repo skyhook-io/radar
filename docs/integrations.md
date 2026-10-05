@@ -886,7 +886,7 @@ Beyond the per-kind views below, the CloudNativePG **workspace** (`/cnpg`) compo
 - PgBouncer parameters
 - Degraded state detection (AlertBanner when not all instances are scheduled)
 
-Note `Pooler.status.instances` counts pods *trying to be scheduled*, not ready pods — a Pooler whose PgBouncer pods are all Pending still reports the full count. Radar therefore labels the healthy state **Scheduled** rather than Ready; actual readiness lives on the Deployment CNPG generates for the Pooler (same name, same namespace).
+Note `Pooler.status.instances` counts pods *trying to be scheduled*, not ready pods — a Pooler whose PgBouncer pods are all Pending still reports the full count. Radar labels the declared `spec.instances` count neutrally as **N instances requested**; actual readiness lives on the Deployment CNPG generates for the Pooler (same name, same namespace).
 
 **Resource Browser:** Smart columns show status, instance counts (with degraded highlighting), primary instance, image tag, storage size, cluster reference, and schedule expressions.
 

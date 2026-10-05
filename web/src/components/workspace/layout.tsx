@@ -230,7 +230,7 @@ export function GrantText({ grant }: { grant: Grant }) {
 }
 
 export function Mono({ children }: { children: ReactNode }) {
-  return <span className="font-mono text-[12.5px] break-all">{children}</span>
+  return <Tooltip content={children} wrapperClassName="min-w-0"><span className="font-mono text-[12.5px] break-normal [overflow-wrap:anywhere]">{children}</span></Tooltip>
 }
 
 export function Sub({ children }: { children: ReactNode }) {

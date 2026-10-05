@@ -516,7 +516,7 @@ function scheduleFact(
   const reading = readings[`${ns}/${active[0]?.metadata?.name}`]
   return {
     text: active.length === 1 ? (reading ? `Scheduled · ${reading}` : cron ? `Scheduled · ${cron}` : 'Scheduled') : `${active.length} schedules`,
-    tone: 'healthy',
+    tone: 'neutral',
     names,
     ...(active.length === 1 && cron ? { source: `ScheduledBackup ${active[0]?.metadata?.name} · cron ${cron}` } : {}),
   }
@@ -596,31 +596,28 @@ function lastBackupFact(
   return { text: 'Completed', tone: 'healthy', at: best.at, source: best.source }
 }
 
-const ARCHIVING_RECENT_MS = 24 * 3_600_000
-const ARCHIVING_SETTLE_MS = 10 * 60_000
-
-function walFact(cluster: any, now = Date.now()): Fact {
+function walFact(cluster: any): Fact {
   const conds = cluster?.status?.conditions
   const c = Array.isArray(conds) ? conds.find((x: any) => x?.type === 'ContinuousArchiving') : null
+  const plugin = getCNPGClusterBarmanPlugin(cluster)
+  const archivers = (cluster.spec?.plugins ?? []).filter((p: any) => p.enabled !== false && p.isWALArchiver === true)
+  const archiveConfigured = archivers.length > 0 || !!getCNPGClusterBackupConfig(cluster).destinationPath
+  if (c?.status === 'False' && archiveConfigured) {
+    return { text: 'Failing', tone: 'unhealthy', source: 'ContinuousArchiving condition', ...(c.lastTransitionTime ? { at: c.lastTransitionTime, atMeaning: 'since' as const } : {}), ...(c.message ? { detail: c.message } : {}) }
+  }
+  const destinationKnown = !!(plugin?.isWALArchiver && plugin.barmanObjectName) || !!getCNPGClusterBackupConfig(cluster).destinationPath
+  const customArchiver = archivers.some((p: any) => p.name !== plugin?.name)
+  if (!destinationKnown && !customArchiver) {
+    return {
+      text: 'No archive destination configured',
+      tone: 'neutral',
+      source: 'Cluster spec',
+      ...(c ? { detail: `CNPG reports ContinuousArchiving=${c.status}${c.lastTransitionTime ? ` since ${c.lastTransitionTime}` : ''}${c.message ? `: ${c.message}` : ''}` } : {}),
+    }
+  }
   if (!c) return { text: 'Not reported', tone: 'unknown', source: 'Cluster status' }
   if (c.status === 'True') {
-    // A recent change well after creation shows when archiving started working,
-    // e.g. after a fix; it says nothing about what came before it.
-    const since = Date.parse(c.lastTransitionTime ?? '')
-    const created = Date.parse(cluster?.metadata?.creationTimestamp ?? '')
-    if (now - since < ARCHIVING_RECENT_MS && since - created > ARCHIVING_SETTLE_MS) {
-      return { text: 'Archiving', tone: 'healthy', source: 'ContinuousArchiving condition, True since then', at: c.lastTransitionTime, atMeaning: 'since' }
-    }
-    return { text: 'Archiving', tone: 'healthy', source: 'ContinuousArchiving condition' }
-  }
-  if (c.status === 'False') {
-    return {
-      text: 'Failing',
-      tone: 'unhealthy',
-      source: 'ContinuousArchiving condition',
-      ...(c.lastTransitionTime ? { at: c.lastTransitionTime, atMeaning: 'since' as const } : {}),
-      ...(c.message ? { detail: c.message } : {}),
-    }
+    return { text: 'CNPG reports archiving', tone: 'healthy', source: 'Cluster status · ContinuousArchiving=True', ...(customArchiver && !destinationKnown ? { detail: 'Archive plugin declared; its destination is not assessed here' } : {}), ...(c.lastTransitionTime ? { at: c.lastTransitionTime, atMeaning: 'since' as const } : {}) }
   }
   return { text: 'Unknown', tone: 'unknown', source: 'ContinuousArchiving condition' }
 }
@@ -1685,4 +1682,3 @@ function formatWindowWords(d: string): string {
   if (minutes >= 60 && minutes % 60 === 0) return minutes === 60 ? '1 hour' : `${minutes / 60} hours`
   return minutes === 1 ? '1 minute' : `${minutes} minutes`
 }
-

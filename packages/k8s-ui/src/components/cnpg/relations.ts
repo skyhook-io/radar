@@ -195,6 +195,25 @@ export function backupDestination(backup: any, clusters: any[]): CNPGBackupDesti
   return { type: 'unknown' }
 }
 
+/** Whether the Cluster declares a destination for this schedule's method; unread Clusters stay unknown. */
+export function cnpgScheduleDestinationBlocker(schedule: any, clusters: any[]): string | null {
+  const cluster = targetCluster(schedule, clusters)
+  if (!cluster) return null
+  const method = schedule?.spec?.method || 'barmanObjectStore'
+  const plugin = getCNPGClusterBarmanPlugin(cluster)
+  const hasDestination = !!plugin?.barmanObjectName || !!cluster.spec?.backup?.volumeSnapshot || !!cluster.spec?.backup?.barmanObjectStore?.destinationPath || (cluster.spec?.plugins ?? []).some((p: any) => p.enabled !== false && p.name !== CNPG_BARMAN_PLUGIN_NAME)
+  const missing = hasDestination ? `No ${method} destination` : 'No backup destination'
+  if (method === 'volumeSnapshot') return cluster.spec?.backup?.volumeSnapshot ? null : missing
+  if (method === 'barmanObjectStore') return cluster.spec?.backup?.barmanObjectStore?.destinationPath ? null : missing
+  if (method === 'plugin') {
+    const name = schedule.spec?.pluginConfiguration?.name
+    const plugin = cluster.spec?.plugins?.find((p: any) => p.name === name && p.enabled !== false)
+    if (!plugin) return missing
+    if (name === CNPG_BARMAN_PLUGIN_NAME && !(schedule.spec?.pluginConfiguration?.parameters?.barmanObjectName || plugin.parameters?.barmanObjectName)) return missing
+  }
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // ObjectStore
 // ---------------------------------------------------------------------------

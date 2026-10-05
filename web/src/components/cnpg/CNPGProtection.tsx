@@ -3,6 +3,7 @@ import {
   Badge,
   CNPGClusterBackupFacts,
   backupsForScheduledBackup,
+  cnpgScheduleDestinationBlocker,
   refToSelectedResource,
   FactValue,
   formatAge,
@@ -129,7 +130,7 @@ function LastRun({ schedule, backups, readable }: { schedule: any; backups: any[
     <>
       {ageText(backupStart(last) ?? fired)}
       <Sub>
-        <span className={st.level === 'healthy' ? undefined : toneTextClass(st.level)}>{st.text.toLowerCase()}</span>
+        {st.level === 'healthy' ? <Badge severity="success" size="sm">{st.text.toLowerCase()}</Badge> : <span className={toneTextClass(st.level)}>{st.text.toLowerCase()}</span>}
       </Sub>
     </>
   )
@@ -201,14 +202,14 @@ export function CNPGProtection({
         />
       )}
       <ScreenBody>
-        <CoverageNotice fleet={fleet} data={data} />
+        <CoverageNotice fleet={fleet} data={data} kinds={['clusters', 'backups', 'scheduledBackups', 'objectStores']} namespace={scopeCluster?.namespace} />
         <FilterChips chips={chips} />
 
         {scopeCluster && rows[0] && (
           <section className="rounded-xl border border-theme-border bg-theme-surface px-4 pb-3 shadow-theme-sm">
             <h3 className="pt-3 text-sm font-semibold text-theme-text-primary">Recovery evidence</h3>
             <CNPGClusterBackupFacts row={rows[0]} onNavigate={(ref) => onInspect(refToSelectedResource(ref))} />
-            <p className="mt-2 text-xs text-theme-text-tertiary">Kubernetes records no restore tests, so restore validation is never shown as passed. Recovery windows come from ObjectStore status.</p>
+            <p className="mt-2 text-xs text-theme-text-tertiary">Recovery windows come from ObjectStore status.</p>
           </section>
         )}
         {!scopeCluster && <SectionTable
@@ -235,7 +236,7 @@ export function CNPGProtection({
                 </>
               ),
             },
-            { header: 'WAL archiving', width: '16%', cell: (r) => <FactValue fact={r.protection.walArchiving} className="line-clamp-2 break-words" /> },
+            { header: 'WAL archiving', width: '16%', cell: (r) => <><FactValue fact={r.protection.walArchiving} className="break-words" /><Sub>{r.protection.walArchiving.source}</Sub>{r.protection.walArchiving.detail && <Sub>{r.protection.walArchiving.detail}</Sub>}</> },
             {
               header: 'Recovery window',
               width: '12%',
@@ -420,15 +421,19 @@ export function CNPGProtection({
               width: '10%',
               cell: (s) => {
                 const st = getCNPGScheduledBackupStatus(s)
-                // Enabled says nothing about whether its runs succeed; the last run says that.
-                return st.text === 'Active' ? <span className="text-theme-text-secondary">Enabled</span> : <Badge severity={SEVERITY[st.level]} size="sm">{st.text}</Badge>
+                const last = backupsForScheduledBackup(s, data.objects.backups ?? [])[0]
+                const blocker = cnpgScheduleDestinationBlocker(s, data.objects.clusters ?? [])
+                const guarded = s.spec?.suspend || st.text === 'Overdue'
+                const text = guarded ? st.text : last || s.status?.lastScheduleTime ? 'Enabled' : 'Enabled · not run yet'
+                const severity = guarded ? SEVERITY[st.level] : 'neutral'
+                return <><Badge severity={severity} size="sm">{text}</Badge>{blocker && <div className="mt-1"><Badge severity="warning" size="sm">{blocker}</Badge></div>}</>
               },
             },
             { header: 'Last run', width: '14%', cell: (s) => <LastRun schedule={s} backups={data.objects.backups ?? []} readable={backupsReadable} /> },
             {
-              header: 'Next run',
+              header: 'Next run reported by the operator',
               width: '12%',
-              cell: (s) => getCNPGScheduledBackupNextSchedule(s),
+              cell: (s) => { const next = getCNPGScheduledBackupNextSchedule(s); return next === '-' ? 'Not reported' : next },
             },
           ]}
           rows={schedules}

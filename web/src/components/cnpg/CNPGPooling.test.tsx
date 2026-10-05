@@ -24,7 +24,7 @@ it('qualifies partial totals and retains readiness beside the request', () => {
   expect(html).toContain('Unknown')
   expect(html).toContain('≥3')
   expect(html).toContain('pools capped')
-  expect(html).toContain('Not ready')
+  expect(html).toContain('0/2 ready')
   expect(html).toContain('Pause requested')
 })
 it('says idle for complete empty reads', () => {
@@ -36,10 +36,19 @@ it('labels retained pressure and readiness after their refreshes fail', () => {
   live.pods = [{ pod: 'a', state: 'ok', pools: [] }]
   const html = render()
   expect(html).toContain('Idle: no client pools open')
-  expect(html).toContain('Not ready')
+  expect(html).toContain('0/2 ready')
   expect(html).toContain('Last refresh failed: Readiness timeout')
   expect(html).toContain('Last refresh failed: Pressure timeout')
   expect(html).toContain('3m ago')
   expect(html).toContain('2m ago')
   live.failed = false
+})
+
+it('shows a pending Pod scheduling cause and inspection link beside Deployment readiness', () => {
+  live.pods = [{ pod: 'p-pending', state: 'unreachable', reason: 'proxy failed', schedulingReason: 'Unschedulable: insufficient memory' }]
+  const html = render()
+  expect(html).toContain('0/2 ready')
+  expect(html).toContain('Unschedulable: insufficient memory')
+  expect(html).toMatch(/<button[^>]*>p-pending<\/button>/)
+  expect(html).toContain('p-pending: not read (proxy failed)')
 })

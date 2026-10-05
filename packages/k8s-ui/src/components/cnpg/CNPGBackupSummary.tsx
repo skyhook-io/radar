@@ -168,7 +168,7 @@ export function CNPGSchedulePreviewFacts({ preview }: { preview: CNPGSchedulePre
   return (
     <>
       {preview.description && <FactRow label="Reading">{preview.description}</FactRow>}
-      <FactRow label="Next runs">
+      <FactRow label="Calculated upcoming times">
         <ul className="space-y-0.5">
           {(preview.nextRuns ?? []).map((r, i) => {
             const t = formatCNPGRunTime(r)
@@ -229,7 +229,7 @@ export function CNPGScheduledBackupSummary({
         <FactRow label="Last scheduled">
           <TimeAgo at={resource?.status?.lastScheduleTime} missing="Never" />
         </FactRow>
-        <FactRow label="Next scheduled">{next === '-' ? <NotReported /> : next}</FactRow>
+        <FactRow label="Next run reported by the operator">{next === '-' ? <NotReported /> : next}</FactRow>
         <FactRow label="Method">{methodText(resource) ?? 'Barman object store (in-tree) · default'}</FactRow>
       </FactGrid>
 

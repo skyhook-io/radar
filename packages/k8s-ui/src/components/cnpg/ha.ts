@@ -558,14 +558,15 @@ function protectionDimension(row: CNPGFleetRow): CNPGDimension {
   if (p.destination.method === 'none') return { ...base, tone: 'degraded', text: 'no backup destination', source: 'Cluster spec' }
   if (p.lastSuccessfulBackup.tone === 'unhealthy' || p.lastSuccessfulBackup.tone === 'degraded') {
     const text = !p.lastSuccessfulBackup.at && p.walArchiving.tone === 'healthy'
-      ? `WAL archiving · ${p.lastSuccessfulBackup.text.toLowerCase()}`
+      ? `CNPG reports archiving · ${p.lastSuccessfulBackup.text.toLowerCase()}`
       : p.lastSuccessfulBackup.text
     return { ...base, tone: p.lastSuccessfulBackup.tone, text, source: p.lastSuccessfulBackup.source ?? 'Backups' }
   }
   if (p.lastSuccessfulBackup.tone === 'unknown') return { ...base, tone: 'unknown', text: 'unassessed', source: p.lastSuccessfulBackup.source ?? p.lastSuccessfulBackup.text }
   if (p.walArchiving.tone === 'unknown') return { ...base, tone: 'unknown', text: 'unassessed', source: 'WAL archiving not reported' }
   const last = p.lastSuccessfulBackup.at ? ` · last backup ${formatAge(p.lastSuccessfulBackup.at)} ago` : ''
-  return { ...base, tone: 'healthy', text: `WAL archiving${last}`, source: `ContinuousArchiving condition${p.lastSuccessfulBackup.source ? ` · last backup: ${p.lastSuccessfulBackup.source}` : ''}` }
+  if (p.walArchiving.tone === 'neutral') return { ...base, tone: 'healthy', text: `Backup completed${last}`, source: p.lastSuccessfulBackup.source ?? 'Backups' }
+  return { ...base, tone: 'healthy', text: `CNPG reports archiving${last}`, source: `ContinuousArchiving condition${p.lastSuccessfulBackup.source ? ` · last backup: ${p.lastSuccessfulBackup.source}` : ''}` }
 }
 
 /**

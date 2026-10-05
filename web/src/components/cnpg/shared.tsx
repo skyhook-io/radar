@@ -3,6 +3,8 @@ import type { UseQueryResult } from '@tanstack/react-query'
 import { Database } from 'lucide-react'
 import {
   CNPG_KIND_BY_KEY,
+  FoldSection,
+  coverageReadable,
   PaneLoader,
   RadarUpgradeAction,
   getRadarUpgradeRequirement,
@@ -11,6 +13,7 @@ import {
   type CNPGFleet,
   type CNPGKindCoverage,
   type CNPGWorkspaceResponse,
+  type CNPGWorkspaceKey,
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useConnection } from '../../context/ConnectionContext'
@@ -95,12 +98,16 @@ export function incompleteKindsText(kinds: CNPGFleet['incompleteKinds'], coverag
   return [...byLabel].map(([label, names]) => `${names.join(', ')} (${label})`).join('; ')
 }
 
-export function CoverageNotice({ fleet, data }: { fleet: CNPGFleet; data: CNPGWorkspaceResponse }) {
-  const jobsIncomplete = !!data.jobCoverage && INCOMPLETE_STATES.has(data.jobCoverage.state)
-  if (fleet.incompleteKinds.length === 0 && !jobsIncomplete) return null
+export function CoverageNotice({ fleet, data, kinds, namespace, includeJobs = false }: { fleet: CNPGFleet; data: CNPGWorkspaceResponse; kinds: readonly CNPGWorkspaceKey[]; namespace?: string; includeJobs?: boolean }) {
+  const incomplete = fleet.incompleteKinds.filter((k) => { const coverage = data.coverage[k]; return kinds.includes(k) && (!coverage || !coverageReadable(coverage, namespace)) })
+  const jobsIncomplete = includeJobs && !!data.jobCoverage && INCOMPLETE_STATES.has(data.jobCoverage.state) && !coverageReadable(data.jobCoverage, namespace)
+  if (incomplete.length === 0 && !jobsIncomplete) return null
   return (
     <Notice>
-      Some CloudNativePG data is not readable: {incompleteKindsText(fleet.incompleteKinds, data.coverage, data.jobCoverage)}. Facts built on it read “No access” or “unknown” rather than none, and counts are lower bounds.
+      Some data used on this screen was not read.
+      <FoldSection title="Coverage details" summary="Kinds and reasons" attention={false}>
+        {incompleteKindsText(incomplete, data.coverage, jobsIncomplete ? data.jobCoverage : undefined)}. Counts over incomplete data are lower bounds.
+      </FoldSection>
     </Notice>
   )
 }

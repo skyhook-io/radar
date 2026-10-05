@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, DatabaseBackup, MoreHorizontal, Repeat } from 'lucide-react'
 import { clsx } from 'clsx'
-import { ActionConfirmDialog, Tooltip, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA } from '@skyhook-io/k8s-ui'
+import { ActionConfirmDialog, Tooltip, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA, type CNPGProblem } from '@skyhook-io/k8s-ui'
 import { useCNPGAction, useCNPGClusterCapabilities, useCNPGRuntime, type CNPGActionResult, type CNPGBackupMethod, type CNPGClusterActionName, type CNPGClusterCapabilities } from '../../../api/cnpg'
 import { actionOutcomeLocked, type ActionCapability, capabilityReason } from '../../../api/actions'
 import { useToast } from '../../ui/Toast'
@@ -32,7 +32,7 @@ import { lsnDistance, standbyOwnBacklog } from '../lsn'
 
 type DialogKind = CNPGClusterActionName | 'restore' | 'report' | null
 
-const MENU_ITEM = 'flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover disabled:cursor-not-allowed disabled:text-theme-text-disabled'
+const MENU_ITEM = 'block w-full px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover disabled:cursor-not-allowed disabled:text-theme-text-disabled'
 
 const RESTART_EFFECT: Record<string, string> = {
   recreate: 'Pod recreated',
@@ -63,6 +63,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
   const caps = useCNPGClusterCapabilities(namespace, name)
   const [open, setOpen] = useState<DialogKind>(null)
   const [menu, setMenu] = useState(false)
+  const [blockedAction, setBlockedAction] = useState<'backup' | 'switchover'>()
   const menuPresence = useAnimatedUnmount(menu, overlayExitMs('menu'))
   useEffect(() => {
     if (!menu) return
@@ -86,6 +87,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
     : caps.error
       ? `Actions unavailable: what you may do could not be checked (${caps.error instanceof Error ? caps.error.message : 'unknown error'})`
       : 'Checking what you may do…'
+  const blockedReason = blockedAction && !actions?.[blockedAction]?.allowed ? unavailable ?? capabilityTitle(actions?.[blockedAction]) : undefined
 
   const item = (id: CNPGClusterActionName, label: string) => {
     const cap = actions?.[id]
@@ -103,6 +105,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
           className={MENU_ITEM}
         >
           {label}
+          {!cap?.allowed && <span className="mt-0.5 block text-xs text-theme-text-secondary">{title}</span>}
         </button>
       </Tooltip>
     )
@@ -111,13 +114,14 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
   const hibernated = !!caps.data?.facts.hibernated
 
   return (
-    <div className="relative flex items-center gap-1.5">
+    <div className="relative flex flex-wrap items-center gap-1.5">
       <Tooltip content={unavailable ?? capabilityTitle(actions?.backup) ?? 'Create an on-demand Backup'} position="bottom">
         <button
           type="button"
-          disabled={!actions?.backup.allowed}
-          onClick={() => setOpen('backup')}
-          className="btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium disabled:cursor-not-allowed"
+          aria-disabled={!actions?.backup.allowed}
+          aria-label="Back up now"
+          onClick={() => { if (actions?.backup.allowed) { setBlockedAction(undefined); setOpen('backup') } else setBlockedAction('backup') }}
+          className={clsx('btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium', !actions?.backup.allowed && 'cursor-not-allowed opacity-50')}
         >
           <DatabaseBackup className="h-3.5 w-3.5" />
           {!compact && 'Back up now'}
@@ -127,9 +131,9 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
         <Tooltip content={unavailable ?? capabilityTitle(actions?.switchover) ?? 'Promote a standby to primary'} position="bottom">
           <button
             type="button"
-            disabled={!actions?.switchover.allowed}
-            onClick={() => setOpen('switchover')}
-            className="btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium disabled:cursor-not-allowed"
+            aria-disabled={!actions?.switchover.allowed}
+            onClick={() => { if (actions?.switchover.allowed) { setBlockedAction(undefined); setOpen('switchover') } else setBlockedAction('switchover') }}
+            className={clsx('btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium', !actions?.switchover.allowed && 'cursor-not-allowed opacity-50')}
           >
             <Repeat className="h-3.5 w-3.5" />
             Switchover
@@ -141,12 +145,13 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
         aria-haspopup="menu"
         aria-expanded={menu}
         aria-label="More cluster actions"
-        onClick={() => setMenu((v) => !v)}
+        onClick={() => { setBlockedAction(undefined); setMenu((v) => !v) }}
         className="btn-secondary inline-flex items-center gap-0.5 px-2 py-1.5 text-xs"
       >
         <MoreHorizontal className="h-3.5 w-3.5" />
         <ChevronDown className="h-3 w-3" />
       </button>
+      {blockedReason && <div role="status" className="basis-full text-xs text-theme-text-secondary">{blockedReason}</div>}
       {menu && <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} aria-hidden />}
       {menuPresence.shouldRender && (
         <>
@@ -177,6 +182,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
                 className={MENU_ITEM}
               >
                 Open psql on the primary
+                {(!actions?.psql.allowed || !caps.data?.facts.currentPrimary) && <span className="mt-0.5 block text-xs text-theme-text-secondary">{unavailable ?? capabilityTitle(actions?.psql) ?? 'No primary instance is reported'}</span>}
               </button>
             </Tooltip>
             <div className="px-3 pb-0.5 pt-1 text-[11px] uppercase tracking-wide text-theme-text-tertiary">Advanced</div>
@@ -196,7 +202,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
                 Restore to a new cluster…
               </button>
             </Tooltip>
-            {restoreSourceReason && <div className="px-3 py-1 text-xs text-theme-text-secondary">{restoreSourceReason}</div>}
+            {(!actions?.restore.allowed || restoreSourceReason) && <div className="px-3 py-1 text-xs text-theme-text-secondary">{unavailable ?? capabilityTitle(actions?.restore) ?? restoreSourceReason}</div>}
             <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => { setMenu(false); setOpen('report') }}>
               Download report…
             </button>
@@ -352,6 +358,7 @@ export function ClusterActionDialog({
   const cap = caps.actions[kind]
   const mutation = useCNPGAction('clusters', namespace, name)
   const { showSuccess } = useToast()
+  const { fleet } = useCNPGFleet([namespace])
   const runtime = useCNPGRuntime(namespace, name, kind === 'switchover')
   const ha = useCNPGClusterHA(namespace, name, { enabled: kind === 'switchover' || kind === 'setMaintenance' || kind === 'unsetMaintenance', refetchInterval: false })
   const [reusePVC, setReusePVC] = useState(() => facts.maintenance.reusePVC)
@@ -550,20 +557,7 @@ export function ClusterActionDialog({
           title: `Restart ${name}?`,
           confirmLabel: 'Restart instances',
           effect: 'Restarts every instance with a rolling update: standbys first, then the primary.',
-          body: caps.restartPlan ? (
-            <div>
-              <div className="mb-1 text-xs text-theme-text-secondary">
-                Expected order (primaryUpdateStrategy {caps.restartPlan.primaryUpdateStrategy ?? 'unsupervised'}, primaryUpdateMethod {caps.restartPlan.primaryUpdateMethod ?? 'restart'}):
-              </div>
-              <ol className="list-decimal space-y-1 pl-5 text-xs text-theme-text-secondary">
-                {caps.restartPlan.steps.map((s, i) => (
-                  <li key={i}>
-                    <span className="font-mono">{s.instance}</span> ({s.role}): {RESTART_EFFECT[s.effect] ?? s.effect}
-                  </li>
-                ))}
-              </ol>
-            </div>
-          ) : undefined,
+          body: <CNPGRestartReview caps={caps} problems={fleet?.rows.find((r) => r.namespace === namespace && r.name === name)?.problems} />,
           writes: [{ summary: `patch Cluster ${namespace}/${name}`, detail: 'metadata.annotations["kubectl.kubernetes.io/restartedAt"] = <now, RFC 3339>' }],
           scope: { kind: 'metadata', paths: ['metadata.annotations["kubectl.kubernetes.io/restartedAt"]'] },
           typed: true,
@@ -784,5 +778,36 @@ export function ClusterActionDialog({
     >
       {spec.body}
     </ActionConfirmDialog>
+  )
+}
+
+export function CNPGRestartReview({ caps, problems = [] }: { caps: CNPGClusterCapabilities; problems?: CNPGProblem[] }) {
+  const instances = caps.facts.instances
+  const other = instances.filter((i) => i.pod !== caps.facts.currentPrimary)
+  const noOtherReady = other.every((i) => i.podReadable && !i.ready)
+  const primary = caps.restartPlan?.steps.find((s) => s.role === 'primary')
+  const waiting = instances.filter((i) => i.podReadable && (!i.podExists || !i.ready))
+  const primaryWillRestart = primary && ['restart', 'restart_only_instance', 'switchover'].includes(primary.effect)
+  return (
+    <div className="space-y-2 text-xs text-theme-text-secondary">
+      {waiting.length > 0 && <p className={toneTextClass('degraded')}>The rolling restart waits for every instance to be ready. Currently blocked by {waiting.map((i) => i.pod).join(', ')}.</p>}
+      {primaryWillRestart && <p>Restarting the primary interrupts its connections.{primary.effect === 'restart_only_instance' ? ' There is no other instance: the cluster stops serving until the primary is back.' : noOtherReady ? ' No other instance is ready now. If the primary restarts without another ready instance, the cluster stops serving until it is back.' : !other.some((i) => i.ready) ? ' Other instances’ readiness could not be read; service continuity is unknown.' : ''}</p>}
+      {primary?.effect === 'wait_for_user' && <p>The primary waits for your manual promotion or restart. Restarting it later interrupts its connections.</p>}
+      {primary?.effect === 'skipped_fenced' && <p>The fenced primary is skipped.</p>}
+      {caps.restartPlan && <>
+        <div>Expected order (primaryUpdateStrategy {caps.restartPlan.primaryUpdateStrategy}, primaryUpdateMethod {caps.restartPlan.primaryUpdateMethod}):</div>
+        <ol className="list-decimal space-y-1 pl-5">
+          {caps.restartPlan.steps.map((s) => {
+            const instance = instances.find((i) => i.pod === s.instance)
+            const blockers = problems.filter((p) => p.instance === s.instance || p.subject.kind === 'Pod' && p.subject.name === s.instance)
+            return <li key={s.instance}>
+              <span className="font-mono">{s.instance}</span> ({s.role}): {RESTART_EFFECT[s.effect] ?? s.effect}
+              <span> · {instance?.podReadable ? instance.podExists ? instance.ready ? 'ready now' : 'not ready now' : 'instance Pod absent' : 'readiness not read'}</span>
+              {blockers.map((p) => <div key={p.id} className={toneTextClass('degraded')}>{p.title}{p.detail ? ` · ${p.detail}` : ''}</div>)}
+            </li>
+          })}
+        </ol>
+      </>}
+    </div>
   )
 }

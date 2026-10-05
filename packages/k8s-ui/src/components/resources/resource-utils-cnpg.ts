@@ -969,15 +969,15 @@ export function getCNPGScheduledBackupStatus(resource: any): StatusBadge {
 
   // If we have a last schedule time, it's active
   if (resource.status?.lastScheduleTime) {
-    return { text: 'Active', color: healthColors.healthy, level: 'healthy' }
+    return { text: 'Enabled', color: healthColors.neutral, level: 'neutral' }
   }
 
   // Check if immediate flag is set and no schedule has run yet
   if (resource.spec?.immediate) {
-    return { text: 'Immediate', color: healthColors.healthy, level: 'healthy' }
+    return { text: 'Immediate run requested', color: healthColors.neutral, level: 'neutral' }
   }
 
-  return { text: 'Scheduled', color: healthColors.healthy, level: 'healthy' }
+  return { text: 'Enabled · not run yet', color: healthColors.neutral, level: 'neutral' }
 }
 
 export function getCNPGScheduledBackupCluster(resource: any): string {
@@ -1069,7 +1069,7 @@ export function getCNPGPoolerStatus(resource: any): StatusBadge {
   // status.instances counts scheduled Pods only; readiness lives on the
   // Pooler's Deployment, so this badge must not read as healthy.
   if (desired > 0 && scheduled >= desired) {
-    return { text: 'Scheduled', color: healthColors.neutral, level: 'neutral' }
+    return { text: `${desired} instance${desired === 1 ? '' : 's'} requested`, color: healthColors.neutral, level: 'neutral' }
   }
 
   return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }

@@ -679,7 +679,7 @@ func TestCNPGClusterRuntime_FencedExplained(t *testing.T) {
 	}
 }
 
-func seedCNPGPoolerChain(t *testing.T, ns string, poolerUID types.UID) {
+func seedCNPGPoolerChain(t *testing.T, ns string, poolerUID types.UID, conditions ...corev1.PodCondition) {
 	t.Helper()
 	ctx := context.Background()
 	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
@@ -708,7 +708,8 @@ func seedCNPGPoolerChain(t *testing.T, ns string, poolerUID types.UID) {
 		return &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: types.UID(ns + "-" + name),
 				Labels: map[string]string{cnpgPoolerNameLabel: "pg-orders-rw"}, OwnerReferences: []metav1.OwnerReference{owner}},
-			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "pgbouncer"}}},
+			Spec:   corev1.PodSpec{Containers: []corev1.Container{{Name: "pgbouncer"}}},
+			Status: corev1.PodStatus{Conditions: conditions},
 		}
 	}
 	cache := k8s.GetResourceCache()
@@ -735,7 +736,7 @@ func TestCNPGPoolerRuntime(t *testing.T) {
 	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
 		cnpgRuntimeWithUID(cnpgObj("postgresql.cnpg.io/v1", "Pooler", "pgrtpool", "pg-orders-rw", map[string]any{"cluster": map[string]any{"name": "pg-orders"}}, nil), "pooler-uid"),
 	)
-	seedCNPGPoolerChain(t, "pgrtpool", "pooler-uid")
+	seedCNPGPoolerChain(t, "pgrtpool", "pooler-uid", corev1.PodCondition{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: "Unschedulable", Message: "0/2 nodes are available: insufficient cpu"})
 	api := useCNPGProxyAPIServer(t, func(w http.ResponseWriter, c cnpgProxyCall) {
 		if c.port != "9127" || c.path != cnpgMetricsPath || c.scheme != "http" {
 			http.Error(w, "unexpected", http.StatusTeapot)
@@ -761,6 +762,9 @@ func TestCNPGPoolerRuntime(t *testing.T) {
 		t.Fatalf("pods = %s, want only the Pod on the Pooler's controller chain", body)
 	}
 	pod := got.Pods[0]
+	if pod.SchedulingReason != "Unschedulable: 0/2 nodes are available: insufficient cpu" {
+		t.Errorf("scheduling reason = %q", pod.SchedulingReason)
+	}
 	if pod.State != cnpgRuntimeStateOK || pod.CNPGPoolerPodFacts == nil || len(pod.Pools) != 1 || !cnpgEqF(pod.Pools[0].ClWaiting, 2) {
 		t.Errorf("pod = %s", body)
 	}
@@ -773,6 +777,35 @@ func TestCNPGPoolerRuntime(t *testing.T) {
 	r2.Body.Close()
 	if r2.StatusCode != http.StatusNotFound {
 		t.Errorf("missing pooler: %d, want 404", r2.StatusCode)
+	}
+}
+
+func TestCNPGPoolerRuntimeProxyDeniedKeepsSchedulingEvidence(t *testing.T) {
+	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
+		cnpgRuntimeWithUID(cnpgObj("postgresql.cnpg.io/v1", "Pooler", "pgrtpooldeny", "pg-orders-rw", map[string]any{"cluster": map[string]any{"name": "pg-orders"}}, nil), "pooler-denied-uid"),
+	)
+	seedCNPGPoolerChain(t, "pgrtpooldeny", "pooler-denied-uid", corev1.PodCondition{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: "Unschedulable", Message: "insufficient cpu"})
+	api := useCNPGProxyAPIServer(t, func(w http.ResponseWriter, c cnpgProxyCall) {
+		cnpgWriteAPIStatus(w, http.StatusForbidden, metav1.StatusReasonForbidden, "pods/proxy is forbidden")
+	})
+	resp, err := http.Get(testServer.URL + "/api/cnpg/poolers/pgrtpooldeny/pg-orders-rw/runtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got CNPGPoolerRuntimeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || got.Permission.Proxy != "denied" || len(got.Pods) != 1 {
+		t.Fatalf("status %d: %+v", resp.StatusCode, got)
+	}
+	pod := got.Pods[0]
+	if pod.State != cnpgRuntimeStateDenied || pod.CNPGPoolerPodFacts != nil || pod.SchedulingReason != "Unschedulable: insufficient cpu" {
+		t.Fatalf("denied measurement must preserve scheduling evidence without metric facts: %+v", pod)
+	}
+	if len(api.seen()) != 1 {
+		t.Fatalf("proxy attempts = %d, want one denied request without scheme retry", len(api.seen()))
 	}
 }
 

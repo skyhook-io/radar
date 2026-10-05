@@ -250,6 +250,7 @@ export interface CNPGScheduleCapabilities {
     pluginName?: string
     target?: string
     clusterState: 'ok' | 'missing' | 'hibernated' | 'unreadable'
+    backupBlockedReason?: string
     terminating: boolean
     catchUp: boolean
     /** spec.schedule verbatim; setSchedule binds it. */
@@ -478,6 +479,7 @@ export interface CNPGPoolerRuntimeResponse {
   permission: { proxy: 'allowed' | 'denied'; grant?: Grant }
   pods: {
     pod: string
+    schedulingReason?: string
     state: CNPGRuntimeSourceState
     error?: string
     reason?: string
@@ -492,7 +494,7 @@ export function useCNPGPoolerRuntime(namespace: string, name: string, enabled = 
     queryKey: ['cnpg', 'pooler-runtime', namespace, name, ...gatedKey],
     queryFn: ({ signal }) => guard(() => fetchJSON<CNPGPoolerRuntimeResponse>(`/cnpg/poolers/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/runtime`, signal)),
     enabled: enabled && !!name,
-    refetchInterval: (q) => (q.state.data?.permission.proxy === 'denied' ? false : 30_000),
+    refetchInterval: 30_000,
     refetchIntervalInBackground: false,
     staleTime: 25_000,
     retry: false,

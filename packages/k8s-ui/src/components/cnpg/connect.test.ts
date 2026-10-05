@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { cnpgConnectInfo, cnpgConnectionURI, cnpgPsqlCommand } from './connect'
+import { cnpgConnectInfo, cnpgConnectionURI, cnpgPortForwardCommand, cnpgPsqlCommand } from './connect'
 
 const cluster = (spec: any = {}) => ({ apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'pg', namespace: 'db' }, spec: { instances: 3, ...spec } })
 
 describe('cnpgConnectInfo', () => {
+  it('forwards the actual Service port to the local template port', () => {
+    const endpoint = { ...cnpgConnectInfo(cluster()).endpoints[0], port: 6543 }
+    expect(cnpgPortForwardCommand(endpoint, 'db')).toBe('kubectl -n db port-forward service/pg-rw 5432:6543')
+    expect(cnpgPortForwardCommand(endpoint, 'db', 15432)).toBe('kubectl -n db port-forward service/pg-rw 15432:6543')
+  })
   it('lists the default Services and names the Secret by convention when the spec does not', () => {
     const info = cnpgConnectInfo(cluster())
     expect(info.endpoints.map((e) => `${e.role} ${e.host}:${e.port}`)).toEqual(['rw pg-rw.db.svc:5432', 'ro pg-ro.db.svc:5432', 'r pg-r.db.svc:5432'])

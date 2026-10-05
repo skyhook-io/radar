@@ -235,8 +235,9 @@ type CNPGScheduleFacts struct {
 	PluginName       string `json:"pluginName,omitempty"`
 	Target           string `json:"target,omitempty"`
 	// ClusterState: ok | missing | hibernated | unreadable
-	ClusterState string `json:"clusterState"`
-	Terminating  bool   `json:"terminating"`
+	ClusterState        string `json:"clusterState"`
+	BackupBlockedReason string `json:"backupBlockedReason,omitempty"`
+	Terminating         bool   `json:"terminating"`
 	// CatchUp is set when resuming would create one backup right away: the
 	// next run the operator computed is already in the past.
 	CatchUp bool `json:"catchUp"`
@@ -432,7 +433,63 @@ func cnpgBackupMethods(cluster *unstructured.Unstructured) []CNPGBackupMethodFac
 	if v, ok, _ := unstructured.NestedFieldNoCopy(cluster.Object, "spec", "backup", "barmanObjectStore"); ok && v != nil {
 		out = append(out, CNPGBackupMethodFact{Method: "barmanObjectStore", Capability: "backup", Deprecated: true})
 	}
+	for i := range out {
+		if reason := cnpgBackupDestinationGuard(cluster, out[i].Method, out[i].PluginName, nil); reason != "" {
+			out[i].Capability, out[i].Reason = "none", reason
+		}
+	}
 	return out
+}
+
+func cnpgBackupDestinationGuard(cluster *unstructured.Unstructured, method, pluginName string, parameters map[string]string) string {
+	if method == "" {
+		method = "barmanObjectStore"
+	}
+	missing := "Configure a backup destination on " + cluster.GetName() + " first"
+	path, _, _ := unstructured.NestedString(cluster.Object, "spec", "backup", "barmanObjectStore", "destinationPath")
+	snapshot, _, _ := unstructured.NestedFieldNoCopy(cluster.Object, "spec", "backup", "volumeSnapshot")
+	plugins, _, _ := unstructured.NestedSlice(cluster.Object, "spec", "plugins")
+	if path != "" || snapshot != nil {
+		missing = "No " + method + " destination on " + cluster.GetName() + ". Configure this method or choose the cluster's configured backup method"
+	}
+	for _, raw := range plugins {
+		p, _ := raw.(map[string]any)
+		name, _ := p["name"].(string)
+		cfg, _ := p["parameters"].(map[string]any)
+		if p["enabled"] == false || name == "" || name == "barman-cloud.cloudnative-pg.io" && (cfg["barmanObjectName"] == nil || cfg["barmanObjectName"] == "") {
+			continue
+		}
+		missing = "No " + method + " destination on " + cluster.GetName() + ". Use method plugin with pluginConfiguration.name " + name + ", or configure this method"
+		break
+	}
+	switch method {
+	case "barmanObjectStore":
+		if path == "" {
+			return missing
+		}
+	case "volumeSnapshot":
+		if snapshot == nil {
+			return missing
+		}
+	case "plugin":
+		for _, raw := range plugins {
+			p, _ := raw.(map[string]any)
+			if p["name"] != pluginName || p["enabled"] == false {
+				continue
+			}
+			if pluginName == "barman-cloud.cloudnative-pg.io" {
+				cfg, _ := p["parameters"].(map[string]any)
+				if cfg["barmanObjectName"] == "" || cfg["barmanObjectName"] == nil {
+					if parameters["barmanObjectName"] == "" {
+						return missing
+					}
+				}
+			}
+			return ""
+		}
+		return missing
+	}
+	return ""
 }
 
 func cnpgActionPodReady(p *corev1.Pod) bool {
@@ -554,7 +611,12 @@ func cnpgGuardBackup(f CNPGClusterFacts) string {
 		}
 	}
 	if len(f.BackupMethods) == 0 {
-		return "The cluster declares no backup plugin and no backup section: the operator would fail the backup"
+		return "Configure a backup destination first: the cluster declares no backup plugin or snapshot configuration"
+	}
+	for _, m := range f.BackupMethods {
+		if m.Reason != "" {
+			return m.Reason
+		}
 	}
 	return "No declared backup method can take a backup"
 }
@@ -1099,6 +1161,8 @@ func cnpgScheduleFactsOf(ctx context.Context, c cnpgActionClients, sched *unstru
 		f.ClusterState = "hibernated"
 	default:
 		f.ClusterState = "ok"
+		parameters, _, _ := unstructured.NestedStringMap(sched.Object, "spec", "pluginConfiguration", "parameters")
+		f.BackupBlockedReason = cnpgBackupDestinationGuard(cluster, f.Method, f.PluginName, parameters)
 	}
 	return f
 }
@@ -1113,8 +1177,10 @@ func cnpgGuardScheduleRun(f CNPGScheduleFacts) string {
 		return "The cluster of the schedule does not exist in this namespace"
 	case f.ClusterState == "hibernated":
 		return "The cluster is hibernated: the operator fails a backup requested now"
+	case f.ClusterState == "unreadable":
+		return "The cluster's backup destination could not be read"
 	}
-	return ""
+	return f.BackupBlockedReason
 }
 
 func (s *Server) cnpgScheduleCapabilities(r *http.Request, c cnpgActionClients, contextName, namespace, name string) (*CNPGScheduleCapabilitiesResponse, error) {
@@ -1413,6 +1479,9 @@ func cnpgRunBackup(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, e
 	}
 	if chosen == nil {
 		return nil, refuseAction(http.StatusBadRequest, "", "method %q%s is not a backup method this cluster declares", p.Method, cnpgPluginSuffix(p.PluginName))
+	}
+	if r := cnpgBackupDestinationGuard(x.cluster, p.Method, p.PluginName, p.PluginParameters); r != "" {
+		return nil, blockedAction(r)
 	}
 	if chosen.Capability == "none" {
 		return nil, refuseAction(http.StatusBadRequest, "", "plugin %s reports no backup capability", chosen.PluginName)

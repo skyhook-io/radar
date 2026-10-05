@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  cnpgScheduleDestinationBlocker,
   appliedFact,
   backupDestination,
   backupsForScheduledBackup,
@@ -15,6 +16,15 @@ import {
   scheduledBackupOf,
   usersOfObjectStore,
 } from './relations'
+
+it('checks the destination for the schedule method and keeps unread targets unknown', () => {
+  const cluster = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'payments', namespace: 'pg' }, spec: { backup: { volumeSnapshot: {} }, plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }] } }
+  const schedule = { metadata: { namespace: 'pg' }, spec: { cluster: { name: 'payments' } } }
+  expect(cnpgScheduleDestinationBlocker(schedule, [cluster])).toBe('No barmanObjectStore destination')
+  expect(cnpgScheduleDestinationBlocker(schedule, [])).toBeNull()
+  expect(cnpgScheduleDestinationBlocker({ ...schedule, spec: { ...schedule.spec, method: 'volumeSnapshot' } }, [cluster])).toBeNull()
+  expect(cnpgScheduleDestinationBlocker({ ...schedule, spec: { ...schedule.spec, method: 'plugin', pluginConfiguration: { name: 'barman-cloud.cloudnative-pg.io' } } }, [cluster])).toBeNull()
+})
 import { CNPG_WORKSPACE_KEYS, type CNPGWorkspaceIssue, type CNPGWorkspaceResponse } from './workspace'
 
 const PG = 'postgresql.cnpg.io/v1'

@@ -3,6 +3,25 @@ import { buildCNPGFleet, cnpgReadyInstances, type CNPGWorkspaceResponse, type CN
 
 const G = 'postgresql.cnpg.io/v1'
 
+it('does not promote an archiving condition into evidence of an archive destination', () => {
+  const c = cluster('payments', 'db', { status: { conditions: [{ type: 'ContinuousArchiving', status: 'True', lastTransitionTime: '2026-10-01T12:00:00Z' }] } })
+  const fact = buildCNPGFleet(resp({ clusters: [c] })).rows[0].protection.walArchiving
+  expect(fact).toMatchObject({ text: 'No archive destination configured', tone: 'neutral', source: 'Cluster spec' })
+  expect(fact.detail).toBe('CNPG reports ContinuousArchiving=True since 2026-10-01T12:00:00Z')
+  const snapshot = cluster('snapshot', 'db', { spec: { backup: { volumeSnapshot: {} } }, status: c.status })
+  expect(buildCNPGFleet(resp({ clusters: [snapshot] })).rows[0].protection.walArchiving.text).toBe('No archive destination configured')
+})
+
+it('preserves declared archiver failures and distinguishes backup-only and opaque archiver plugins', () => {
+  const make = (plugins: any[], status = 'True') => buildCNPGFleet(resp({ clusters: [cluster('pg', 'db', { spec: { plugins }, status: { conditions: [{ type: 'ContinuousArchiving', status, message: 'archive report' }] } })] })).rows[0].protection.walArchiving
+  const barman = { name: 'barman-cloud.cloudnative-pg.io', isWALArchiver: true }
+  expect(make([barman], 'False')).toMatchObject({ text: 'Failing', tone: 'unhealthy', detail: 'archive report' })
+  expect(make([barman])).toMatchObject({ text: 'No archive destination configured', tone: 'neutral' })
+  expect(make([{ ...barman, isWALArchiver: false, parameters: { barmanObjectName: 'store' } }])).toMatchObject({ text: 'No archive destination configured', tone: 'neutral' })
+  expect(make([{ name: 'third-party-archive', isWALArchiver: true }])).toMatchObject({ text: 'CNPG reports archiving', detail: 'Archive plugin declared; its destination is not assessed here' })
+  expect(make([{ ...barman, enabled: false, parameters: { barmanObjectName: 'store' } }])).toMatchObject({ text: 'No archive destination configured', tone: 'neutral' })
+})
+
 function cluster(name: string, ns: string, extra: any = {}): any {
   return {
     apiVersion: G,
@@ -193,7 +212,7 @@ describe('buildCNPGFleet', () => {
   })
 
   it('ends the recovery window at WAL archiving, not at the last base backup', () => {
-    const plugin = { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }] }
+    const plugin = { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', isWALArchiver: true, parameters: { barmanObjectName: 'store' } }] }
     const store = {
       apiVersion: 'barmancloud.cnpg.io/v1', kind: 'ObjectStore', metadata: { name: 'store', namespace: 'db' },
       status: { serverRecoveryWindow: { 'pg-a': { firstRecoverabilityPoint: '2026-09-01T00:00:00Z', lastSuccessfulBackupTime: '2026-09-02T00:00:00Z', lastFailedBackupTime: '2026-09-03T00:00:00Z' } } },
@@ -206,17 +225,17 @@ describe('buildCNPGFleet', () => {
     expect(buildCNPGFleet(resp({ clusters: [failing], objectStores: [store] })).rows[0].protection.recoveryWindow.tone).toBe('degraded')
   })
 
-  it('shows when archiving started working, only when that was recent and after creation', () => {
+  it('qualifies archiving as the operator report with its transition time', () => {
     const hourAgo = new Date(Date.now() - 3_600_000).toISOString()
-    const resumed = cluster('pg-a', 'db', { metadata: { creationTimestamp: '2026-01-01T00:00:00Z' }, status: { conditions: [{ type: 'ContinuousArchiving', status: 'True', lastTransitionTime: hourAgo }] } })
-    expect(buildCNPGFleet(resp({ clusters: [resumed] })).rows[0].protection.walArchiving).toMatchObject({ text: 'Archiving', at: hourAgo, atMeaning: 'since' })
-    const old = cluster('pg-a', 'db', { metadata: { creationTimestamp: '2026-01-01T00:00:00Z' }, status: { conditions: [{ type: 'ContinuousArchiving', status: 'True', lastTransitionTime: '2026-01-01T00:02:00Z' }] } })
-    expect(buildCNPGFleet(resp({ clusters: [old] })).rows[0].protection.walArchiving.at).toBeUndefined()
+    const resumed = cluster('pg-a', 'db', { spec: { backup: { barmanObjectStore: { destinationPath: 's3://backups' } } }, metadata: { creationTimestamp: '2026-01-01T00:00:00Z' }, status: { conditions: [{ type: 'ContinuousArchiving', status: 'True', lastTransitionTime: hourAgo }] } })
+    expect(buildCNPGFleet(resp({ clusters: [resumed] })).rows[0].protection.walArchiving).toMatchObject({ text: 'CNPG reports archiving', source: 'Cluster status · ContinuousArchiving=True', at: hourAgo, atMeaning: 'since' })
+    const old = cluster('pg-a', 'db', { spec: { backup: { barmanObjectStore: { destinationPath: 's3://backups' } } }, metadata: { creationTimestamp: '2026-01-01T00:00:00Z' }, status: { conditions: [{ type: 'ContinuousArchiving', status: 'True', lastTransitionTime: '2026-01-01T00:02:00Z' }] } })
+    expect(buildCNPGFleet(resp({ clusters: [old] })).rows[0].protection.walArchiving.at).toBe('2026-01-01T00:02:00Z')
   })
 
   it('reports WAL archiving from the condition and unknown when absent', () => {
-    const failing = cluster('pg-a', 'db', { status: { conditions: [{ type: 'ContinuousArchiving', status: 'False', message: 'exit status 1' }] } })
-    const silent = cluster('pg-b', 'db')
+    const failing = cluster('pg-a', 'db', { spec: { backup: { barmanObjectStore: { destinationPath: 's3://backups' } } }, status: { conditions: [{ type: 'ContinuousArchiving', status: 'False', message: 'exit status 1' }] } })
+    const silent = cluster('pg-b', 'db', { spec: { backup: { barmanObjectStore: { destinationPath: 's3://backups' } } } })
     const fleet = buildCNPGFleet(resp({ clusters: [failing, silent] }))
     expect(fleet.rows.find((r) => r.name === 'pg-a')!.protection.walArchiving.tone).toBe('unhealthy')
     expect(fleet.rows.find((r) => r.name === 'pg-a')!.protection.summary.text).toBe('WAL archiving failing')

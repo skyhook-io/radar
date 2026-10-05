@@ -48,7 +48,7 @@ vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ conn
 const G = 'postgresql.cnpg.io/v1'
 const declaration = (cluster: string, name: string, applied?: boolean, stale = false) => ({ apiVersion: G, kind: 'Database', metadata: { name, namespace: 'pg', generation: 2 }, spec: { name, cluster: { name: cluster } }, status: { applied, observedGeneration: stale ? 1 : 2 } })
 
-function renderDeclarations(query: string) {
+function renderDeclarations(query: string, pgName?: string) {
   const data: CNPGWorkspaceResponse = {
     installed: true, context: 'test', namespaces: null,
     coverage: Object.fromEntries(CNPG_WORKSPACE_KEYS.map((k) => [k, { state: 'full' }])),
@@ -57,6 +57,7 @@ function renderDeclarations(query: string) {
       databases: [declaration('a', 'failed-a', false), declaration('a', 'stale-a', true, true), declaration('b', 'failed-b1', false), declaration('b', 'failed-b2', false), declaration('b', 'pending-b')],
     }, issues: [], audit: [], backupsOmitted: 0,
   }
+  if (pgName) data.objects.databases![0].spec.name = pgName
   return renderToStaticMarkup(createElement(CNPGDeclarations, {
     data, fleet: buildCNPGFleet(data), namespaces: [], searchParams: new URLSearchParams(query), onSetParams: () => {}, onInspect: () => {}, inspected: null, onClearNamespaces: () => {},
   }))
@@ -76,4 +77,13 @@ it('shows stale success as pending in the declaration list', () => {
   expect(html).toContain('stale-a')
   expect(html).toContain('awaiting the operator for the current spec')
   expect(html).not.toContain('failed-a')
+})
+
+it('offers inspection with the Kubernetes object identity beside the database name', () => {
+  const html = renderDeclarations('cluster=pg/a', 'appdb')
+  expect(html).toContain('appdb')
+  expect(html).toContain('Inspect →')
+  expect(html).toContain('Database failed-a')
+  expect(html).toContain('role="button"')
+  expect(html).toContain('tabindex="0"')
 })

@@ -134,3 +134,7 @@ function shellWord(v: string): string {
 export function cnpgPsqlCommand(ep: CNPGConnectEndpoint, info: CNPGConnectInfo): string {
   return `psql -h ${ep.host} -p ${ep.port} -U ${shellWord(info.owner.value ?? '<user>')} -d ${shellWord(info.database.value ?? '<database>')}`
 }
+
+export function cnpgPortForwardCommand(ep: CNPGConnectEndpoint, namespace: string, localPort = CNPG_DEFAULT_PORT): string {
+  return `kubectl -n ${shellWord(namespace)} port-forward ${shellWord(`service/${ep.name}`)} ${localPort}:${ep.port}`
+}

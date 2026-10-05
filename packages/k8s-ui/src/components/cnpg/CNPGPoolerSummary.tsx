@@ -67,6 +67,9 @@ export function CNPGPoolerSummary({
             {paused && <Badge severity="warning" size="sm">Pause requested</Badge>}
           </div>
           {readiness.detail && <Note>{readiness.detail}</Note>}
+          {live?.pressure?.pods.filter((p) => p.schedulingReason).map((p) => <div key={p.pod} className={`mt-1 text-xs ${toneTextClass('degraded')}`}>
+            <RefLink refTo={{ kind: 'Pod', group: '', namespace: ns, name: p.pod }} onNavigate={onNavigate} mono /> cannot be scheduled: {p.schedulingReason}
+          </div>)}
         </FactRow>
         <FactRow label="Instances">
           <span>
@@ -224,7 +227,7 @@ function PoolerPressure({ pressure }: { pressure: NonNullable<CNPGPoolerLive['pr
   const { reporting, limitation, empty } = poolerPressureCoverage(pressure.pods)
   const rows = aggregatePoolerPools(reporting)
   if (reporting.length === 0) {
-    return <FactValue fact={{ text: `Not measured — ${limitation ?? 'no PgBouncer answered'}`, tone: 'unknown' }} />
+    return <div><FactValue fact={{ text: 'Not measured', tone: 'unknown' }} />{pressure.pods.length > 0 ? pressure.pods.map((p) => <Note key={p.pod}>{p.pod}: {p.error ?? p.reason ?? p.state}</Note>) : <Note>No PgBouncer answered</Note>}</div>
   }
   return (
     <div>

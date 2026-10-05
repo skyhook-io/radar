@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
-import { Badge, getCNPGImageCatalogEntries, isApiGroup, PaneLoader, StatusDot, Tooltip, toneTextClass, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
+import { Badge, FoldSection, getCNPGImageCatalogEntries, isApiGroup, PaneLoader, StatusDot, Tooltip, toneTextClass, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
+import { parse } from 'yaml'
 import { useCNPGOperator, type CNPGOperatorComponent, type CNPGOperatorConfig } from '../../api/cnpg'
 import { CNPGOperatorDiagnosisSection } from './CNPGOperatorDiagnosis'
 import { cnpgOperatorState, cnpgRestartHistory } from './operatorStatus'
@@ -107,7 +108,7 @@ export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenPr
         subtitle="Operator and plugin workloads, whether the operator is leading, watching and reachable, image catalogs and operator configuration."
       />
       <ScreenBody>
-        <CoverageNotice fleet={fleet} data={data} />
+        <CoverageNotice fleet={fleet} data={data} kinds={['clusters', 'imageCatalogs', 'clusterImageCatalogs']} />
         <RefreshFailedNotice queries={[operator]} />
         {operator.isLoading && !op ? (
           <PaneLoader label="Loading operator…" className="h-32" />
@@ -231,12 +232,12 @@ export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenPr
   )
 }
 
-function ConfigBlock({ config, onInspect }: { config: CNPGOperatorConfig; onInspect: CNPGScreenProps['onInspect'] }) {
+export function ConfigBlock({ config, onInspect }: { config: CNPGOperatorConfig; onInspect: CNPGScreenProps['onInspect'] }) {
   const open = () => onInspect({ kind: config.kind === 'ConfigMap' ? 'configmaps' : 'secrets', group: '', namespace: config.namespace, name: config.name })
   const title = (
     <div className="flex flex-wrap items-baseline gap-x-2 border-b border-theme-border px-4 py-2.5">
       <span className="text-xs text-theme-text-tertiary">{config.kind}</span>
-      <button type="button" onClick={open} className="font-mono text-sm text-accent-text hover:underline">{config.name}</button>
+      {config.exists === false ? <span className="font-mono text-sm text-theme-text-primary">{config.name}</span> : <button type="button" onClick={open} className="font-mono text-sm text-accent-text hover:underline">{config.name}</button>}
       <span className="text-xs text-theme-text-tertiary">
         {config.namespace} · {config.purpose === 'monitoring' ? 'monitoring queries' : 'operator settings'}
       </span>
@@ -246,9 +247,24 @@ function ConfigBlock({ config, onInspect }: { config: CNPGOperatorConfig; onInsp
   if (config.kind === 'Secret') {
     body = <div className="px-4 py-2.5 text-sm text-theme-text-secondary">Referenced by the operator. Secret contents are not shown here.</div>
   } else if (config.exists === false) {
-    body = <div className="px-4 py-2.5 text-sm text-theme-text-secondary">Referenced but does not exist; the operator runs with its defaults.</div>
+    body = <div className="px-4 py-2.5 text-sm text-theme-text-secondary">This referenced ConfigMap does not exist; settings from other sources are not shown here.</div>
   } else if (!config.readable) {
     body = <div className="px-4 py-2.5 text-sm text-theme-text-tertiary">{config.reason ?? 'Not readable with your access.'}</div>
+  } else if (config.purpose === 'monitoring') {
+    const queries = config.data?.queries ?? ''
+    let count: number | null = null
+    try {
+      const parsed = parse(queries)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) count = Object.keys(parsed).length
+    } catch { /* The raw configuration remains inspectable when it cannot be parsed. */ }
+    body = <div className="px-4 py-2.5 text-sm text-theme-text-secondary">
+      <p>{count === null ? 'Query count unavailable' : `${count} ${count === 1 ? 'query' : 'queries'}`} · ConfigMap {config.name}</p>
+      <FoldSection title="Query definitions" summary="Show SQL and settings" attention={false}>
+        <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-normal font-mono text-xs [overflow-wrap:anywhere]">{queries.slice(0, 8000)}</pre>
+        {queries.length > 8000 && <p className="mt-1 text-xs text-theme-text-tertiary">Preview truncated to 8,000 of {queries.length.toLocaleString()} characters.</p>}
+        <button type="button" onClick={open} className="mt-2 text-xs text-accent-text hover:underline">Inspect ConfigMap {config.name} →</button>
+      </FoldSection>
+    </div>
   } else {
     const entries = Object.entries(config.data ?? {})
     body =

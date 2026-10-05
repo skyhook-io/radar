@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Check, Copy } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
 import { CNPG_GROUP } from '../resources/resource-utils-cnpg'
-import { cnpgConnectionURI, cnpgConnectInfo, cnpgPsqlCommand, type CNPGConnectEndpoint } from './connect'
+import { CNPG_DEFAULT_PORT, cnpgConnectionURI, cnpgConnectInfo, cnpgPsqlCommand, cnpgPortForwardCommand, type CNPGConnectEndpoint } from './connect'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { FactGrid, FactRow } from '../facts'
 import { SectionHeading } from '../ui/FoldSection'
@@ -80,23 +80,24 @@ export function CNPGConnectSection({
   const info = cnpgConnectInfo(cluster, poolers)
   const ns: string = cluster?.metadata?.namespace ?? ''
   const primary = info.endpoints[0]
+  const local = { ...primary, host: '127.0.0.1', port: CNPG_DEFAULT_PORT }
   return (
     <>
       {showHeading && <SectionHeading hint="from the Cluster spec · hosts resolve inside the Kubernetes cluster">Connect</SectionHeading>}
       <FactGrid>
         <FactRow label="Services">
-          <ul className="space-y-1">
+          <ul className="grid grid-cols-[5rem_minmax(0,1fr)_auto] items-baseline gap-x-2 gap-y-2">
             {info.endpoints.map((ep) => (
-              <li key={`${ep.role}/${ep.name}`} className="flex flex-wrap items-baseline gap-x-2">
+              <li key={`${ep.role}/${ep.name}`} className="contents">
                 <span className="w-20 shrink-0 text-xs text-theme-text-tertiary">{ROLE_LABEL[ep.role]}</span>
-                <span className="text-xs">
+                <div className="min-w-0 text-xs [overflow-wrap:anywhere]">
                   <RefLink refTo={{ kind: ep.role === 'pooler' ? 'Pooler' : 'Service', group: ep.role === 'pooler' ? CNPG_GROUP : '', namespace: ns, name: ep.name }} onNavigate={onNavigate} mono>
                     {`${ep.host}:${ep.port}`}
                   </RefLink>
-                </span>
-                <span className="text-xs text-theme-text-secondary">{ep.selects}</span>
-                {ep.portFromTemplate && <span className="text-xs text-theme-text-tertiary">port from serviceTemplate</span>}
-                {onOpenReachability && (
+                  <div className="mt-0.5 text-xs text-theme-text-secondary">{ep.selects}</div>
+                  {ep.portFromTemplate && <div className="text-xs text-theme-text-tertiary">port from serviceTemplate</div>}
+                </div>
+                {onOpenReachability ? (
                   <Tooltip
                     content="Radar's check of this Service's path: endpoints, ready Pods and the NetworkPolicy rules in the way. It does not log in to PostgreSQL."
                     position="top"
@@ -105,7 +106,7 @@ export function CNPGConnectSection({
                       Reachability →
                     </button>
                   </Tooltip>
-                )}
+                ) : <span />}
               </li>
             ))}
           </ul>
@@ -138,14 +139,24 @@ export function CNPGConnectSection({
           </div>
         </FactRow>
         {info.database.value && (
-          <FactRow label="Templates">
+          <FactRow label="Inside Kubernetes">
             <div className="space-y-1">
               <Snippet text={cnpgConnectionURI(primary, info)} label="connection string" />
               <Snippet text={cnpgPsqlCommand(primary, info)} label="psql command" />
             </div>
             <div className="mt-0.5 text-[11.5px] text-theme-text-tertiary">
-              Via <span className="font-mono">{primary.name}</span>. Replace <span className="font-mono">{'<password>'}</span>; psql prompts for it. From outside the cluster, port-forward the Service first.
+              Via <span className="font-mono">{primary.name}</span>. Replace <span className="font-mono">{'<password>'}</span>; psql prompts for it.
             </div>
+          </FactRow>
+        )}
+        {info.database.value && (
+          <FactRow label="From this computer">
+            <div className="space-y-1">
+              <Snippet text={cnpgPortForwardCommand(primary, ns)} label="port-forward command" />
+              <Snippet text={cnpgConnectionURI(local, info)} label="local connection string" />
+              <Snippet text={cnpgPsqlCommand(local, info)} label="local psql command" />
+            </div>
+            <div className="mt-0.5 text-[11.5px] text-theme-text-tertiary">Keep port-forward running, then connect in another terminal. Local port 5432 must be free. Replace {'<password>'}; psql prompts for it.</div>
           </FactRow>
         )}
       </FactGrid>

@@ -301,7 +301,7 @@ export function CNPGOverview({
       />
       <div className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         <div className="space-y-3 px-5 pb-6 pt-3 xl:px-7">
-          <CoverageNotice fleet={fleet} data={data} />
+          <CoverageNotice fleet={fleet} data={data} kinds={['clusters', 'pods', 'backups', 'scheduledBackups', 'objectStores', 'poolers', 'databases', 'databaseRoles', 'publications', 'subscriptions']} includeJobs />
           <CNPGOperatorBanner namespaces={fleet.rows.map((r) => r.namespace)} className="" />
 
           <div className="flex flex-wrap items-center gap-2">

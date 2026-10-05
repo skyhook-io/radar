@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	authv1 "k8s.io/api/authorization/v1"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,7 +39,7 @@ func cnpgActionCluster(mut func(obj map[string]any)) *unstructured.Unstructured 
 		},
 		"spec": map[string]any{
 			"instances": int64(3),
-			"plugins":   []any{map[string]any{"name": "barman-cloud.cloudnative-pg.io", "isWALArchiver": true}},
+			"plugins":   []any{map[string]any{"name": "barman-cloud.cloudnative-pg.io", "isWALArchiver": true, "parameters": map[string]any{"barmanObjectName": "store"}}},
 			"backup":    map[string]any{"volumeSnapshot": map[string]any{"className": "csi"}},
 		},
 		"status": map[string]any{
@@ -882,6 +882,115 @@ func cnpgActionSchedule(mut func(o map[string]any)) *unstructured.Unstructured {
 		mut(o)
 	}
 	return &unstructured.Unstructured{Object: o}
+}
+
+func TestCNPGScheduleRunDestinationGuard(t *testing.T) {
+	for _, tc := range []struct {
+		name, method string
+		configure    bool
+	}{
+		{"default without destination", "", false},
+		{"in-tree without destination", "barmanObjectStore", false},
+		{"in-tree with destination", "barmanObjectStore", true},
+		{"snapshot without configuration", "volumeSnapshot", false},
+		{"snapshot configured", "volumeSnapshot", true},
+		{"plugin without destination", "plugin", false},
+		{"plugin configured", "plugin", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := cnpgActionCluster(func(o map[string]any) {
+				spec := o["spec"].(map[string]any)
+				delete(spec, "backup")
+				delete(spec, "plugins")
+				if tc.method == "plugin" {
+					p := map[string]any{"name": "barman-cloud.cloudnative-pg.io"}
+					if tc.configure {
+						p["parameters"] = map[string]any{"barmanObjectName": "store"}
+					}
+					spec["plugins"] = []any{p}
+				} else if tc.configure {
+					if tc.method == "volumeSnapshot" {
+						spec["backup"] = map[string]any{"volumeSnapshot": map[string]any{}}
+					} else {
+						spec["backup"] = map[string]any{"barmanObjectStore": map[string]any{"destinationPath": "s3://backups"}}
+					}
+				}
+			})
+			schedule := cnpgActionSchedule(func(o map[string]any) {
+				spec := o["spec"].(map[string]any)
+				spec["method"] = tc.method
+				delete(spec, "pluginConfiguration")
+				if tc.method == "plugin" {
+					spec["pluginConfiguration"] = map[string]any{"name": "barman-cloud.cloudnative-pg.io"}
+				}
+			})
+			env := newCNPGActionEnv(t, []runtime.Object{cluster, schedule})
+			caps, err := (&Server{}).cnpgScheduleCapabilities(httptest.NewRequest(http.MethodGet, "/", nil), env.clients(), "kind-test", "db", "nightly")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if caps.Actions.Run.Allowed != tc.configure {
+				t.Fatalf("run capability = %+v", caps.Actions.Run)
+			}
+			if !tc.configure && caps.Actions.Run.Reason != "Configure a backup destination on pg first" {
+				t.Fatalf("reason = %s", caps.Actions.Run.Reason)
+			}
+			_, err = runCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "run", ActionRequest{UID: "sched-uid", Facts: json.RawMessage(`{"generation":3}`)})
+			if tc.configure {
+				if err != nil || len(env.creates) != 1 {
+					t.Fatalf("configured run: %v, creates=%d", err, len(env.creates))
+				}
+			} else {
+				var ae *actionError
+				if !errors.As(err, &ae) || ae.Code != "blocked" || len(env.creates) != 0 {
+					t.Fatalf("unconfigured run: %v, creates=%d", err, len(env.creates))
+				}
+			}
+		})
+	}
+}
+
+func TestCNPGScheduleRunMethodMismatch(t *testing.T) {
+	cluster := cnpgActionCluster(nil)
+	schedule := cnpgActionSchedule(func(o map[string]any) {
+		spec := o["spec"].(map[string]any)
+		delete(spec, "method")
+		delete(spec, "pluginConfiguration")
+	})
+	env := newCNPGActionEnv(t, []runtime.Object{cluster, schedule})
+	caps, err := (&Server{}).cnpgScheduleCapabilities(httptest.NewRequest(http.MethodGet, "/", nil), env.clients(), "kind-test", "db", "nightly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if caps.Actions.Run.Allowed || !strings.Contains(caps.Actions.Run.Reason, "No barmanObjectStore destination on pg") || !strings.Contains(caps.Actions.Run.Reason, "Use method plugin") {
+		t.Fatalf("method mismatch should identify the existing plugin destination: %+v", caps.Actions.Run)
+	}
+	_, err = runCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "run", ActionRequest{UID: "sched-uid", Facts: json.RawMessage(`{"generation":3}`)})
+	var ae *actionError
+	if !errors.As(err, &ae) || ae.Code != "blocked" || len(env.creates) != 0 {
+		t.Fatalf("mismatched method must not create a Backup: %v, creates=%d", err, len(env.creates))
+	}
+}
+
+func TestCNPGBackupDestinationGuard(t *testing.T) {
+	cluster := cnpgActionCluster(func(o map[string]any) {
+		spec := o["spec"].(map[string]any)
+		delete(spec, "plugins")
+		spec["backup"] = map[string]any{"barmanObjectStore": map[string]any{}}
+	})
+	env := newCNPGActionEnv(t, []runtime.Object{cluster})
+	caps, err := (&Server{}).cnpgClusterCapabilities(httptest.NewRequest(http.MethodGet, "/", nil), env.clients(), "kind-test", "db", "pg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if caps.Actions.Backup.Allowed || caps.Actions.Backup.Reason != "Configure a backup destination on pg first" {
+		t.Fatalf("backup capability = %+v", caps.Actions.Backup)
+	}
+	_, err = runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "backup", cnpgActionReq(t, cnpgActionFacts(), map[string]any{"method": "barmanObjectStore"}))
+	var ae *actionError
+	if !errors.As(err, &ae) || ae.Code != "blocked" || len(env.creates) != 0 {
+		t.Fatalf("backup: %v, creates=%d", err, len(env.creates))
+	}
 }
 
 func TestCNPGActionScheduleRunCopiesSettings(t *testing.T) {

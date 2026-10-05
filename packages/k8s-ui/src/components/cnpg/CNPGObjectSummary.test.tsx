@@ -113,6 +113,8 @@ describe('CNPGScheduledBackupSummary', () => {
     const t = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={preview} />))
     expect(t).toContain('every day at 02:30:00 UTC')
     expect(t).toContain('2026-10-01 02:30:00 UTC')
+    expect(t).toContain('Calculated upcoming times')
+    expect(t).toContain('Next run reported by the operatorNot reported')
     expect(t).toContain("operator's last check")
     const stale = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={{ ...preview, schedule: '0 0 0 * * *' }} />))
     expect(stale).not.toContain('every day at')
@@ -330,9 +332,20 @@ it('shows the stale declaration as pending in its drawer', () => {
 it('keeps Deployment readiness beside the pause request even when no Pods are ready', () => {
   const resource = { metadata: { name: 'p' }, spec: { pgbouncer: { paused: true } } }
   const t = text(renderToString(<CNPGPoolerSummary resource={resource} workspace={ws({})} live={{ deployment: { name: 'p', state: 'ok', replicas: 2, readyReplicas: 0 } }} />))
-  expect(t).toContain('Not ready')
+  expect(t).toContain('0/2 ready')
   expect(t).toContain('Pause requested')
   expect(t).not.toContain('Observed: Paused')
+})
+
+it('puts the pending Pooler cause under readiness and names the Pod whose metric read failed', () => {
+  const html = renderToString(<CNPGPoolerSummary resource={{ metadata: { name: 'pooler', namespace: 'pg' } }} workspace={ws({})} onNavigate={nav} live={{ deployment: { name: 'pooler', state: 'ok', replicas: 1, readyReplicas: 0 }, pressure: { state: 'ok', pods: [{ pod: 'pooler-pod', state: 'unreachable', error: 'address not allowed', schedulingReason: 'Unschedulable: insufficient cpu' }] } }} />)
+  const t = text(html)
+  expect(t).toContain('0/1 ready')
+  expect(t).toContain('pooler-pod cannot be scheduled: Unschedulable: insufficient cpu')
+  expect(t).toContain('Not measuredpooler-pod: address not allowed')
+  expect(t.indexOf('cannot be scheduled')).toBeLessThan(t.indexOf('Connections'))
+  expect(t.indexOf('address not allowed')).toBeGreaterThan(t.indexOf('Connections'))
+  expect(html).toContain('button')
 })
 
 it('never calls an incomplete empty Pooler read idle and names the unread Pod', () => {

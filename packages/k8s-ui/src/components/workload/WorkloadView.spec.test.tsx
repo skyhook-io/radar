@@ -60,3 +60,31 @@ it('lets a host render the reported phase while preserving the default derived b
     expect(renderToStaticMarkup(<WorkloadView {...props} expanded={expanded} resource={instance} />)).toMatch(/badge[^>]*>Degraded/)
   }
 })
+
+it.each(['ScheduledBackup', 'Database', 'Publication', 'ClusterImageCatalog', 'Deployment'])('keeps %s drawer utilities apart from identity and object actions', (kind) => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const name = 'a-long-object-name-that-needs-the-full-drawer-width'
+  act(() => root.render(<WorkloadView {...props} name={name} resource={{ ...resource, kind }} expanded={false} onExpand={() => {}} onClose={() => {}} renderStatusBadge={() => <span>Reported status</span>} renderHeaderActions={() => <button>Object action</button>} />))
+  const expand = host.querySelector('[aria-label="Open full view"]')!
+  const utilityRow = expand.parentElement!.parentElement!
+  expect(utilityRow.classList.contains('shrink-0')).toBe(true)
+  expect(utilityRow.classList.contains('flex-nowrap')).toBe(true)
+  expect(utilityRow.querySelector('[aria-label="Refresh"]')).not.toBeNull()
+  expect(utilityRow.querySelector('[aria-label="Close"]')).not.toBeNull()
+  expect(utilityRow.textContent).not.toContain('Object action')
+  const identity = host.querySelector('h2')!.parentElement!
+  expect(identity.textContent).toContain(name)
+  expect(identity.textContent).toContain('Reported status')
+  const action = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Object action')!
+  expect(identity.contains(action)).toBe(false)
+  expect(utilityRow.contains(action)).toBe(false)
+  act(() => root.unmount())
+})
+
+it('preserves Diagnose before the resource loads while deferring resource-dependent actions', () => {
+  const header = vi.fn(() => <button>Resource action</button>)
+  const html = renderToStaticMarkup(<WorkloadView {...props} resource={undefined} expanded={false} renderHeaderActions={header} actionsBarProps={{ renderDiagnose: () => <button>Diagnose this object</button> }} />)
+  expect(html).toContain('Diagnose this object')
+  expect(header).not.toHaveBeenCalled()
+})

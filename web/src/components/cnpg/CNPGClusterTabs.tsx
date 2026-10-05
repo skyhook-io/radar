@@ -1,5 +1,5 @@
 import { useSearchParams } from 'react-router-dom'
-import { CNPGDimensionMark, CNPGDimensionVerdict, CNPGServingStatus, coverageReadable, toneTextClass, type CNPGDimension, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
+import { CNPGDimensionMark, CNPGDimensionVerdict, CNPGServingStatus, cnpgScheduleDestinationBlocker, getCNPGClusterBackupConfig, getCNPGClusterBarmanPlugin, coverageReadable, toneTextClass, type CNPGDimension, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useCNPGRuntime } from '../../api/cnpg'
 import { CNPGStorage } from './CNPGStorage'
@@ -111,12 +111,14 @@ export function CNPGBackupsTab({
   onInspect,
   onOpenLogs,
   onOpenOperator,
+  onOpenYaml,
 }: {
   namespace: string
   name: string
   onInspect: (r: SelectedResource) => void
   onOpenLogs?: (pod: string, container: string) => void
   onOpenOperator?: () => void
+  onOpenYaml?: () => void
 }) {
   const { query, fleet } = useCNPGFleet([namespace])
   const { row, runtime } = useCNPGClusterAssessment(namespace, name)
@@ -127,10 +129,24 @@ export function CNPGBackupsTab({
   return (
     <CNPGScreenGate query={query} fleet={fleet}>
       {(data, readyFleet) => {
-        const nothing = assessRestoreSources(data, namespace, readyFleet.rows.find((r) => r.namespace === namespace && r.name === name)?.cluster).disabledReason
+        const cluster = readyFleet.rows.find((r) => r.namespace === namespace && r.name === name)?.cluster
+        const nothing = assessRestoreSources(data, namespace, cluster).disabledReason
+        const schedules = (data.objects.scheduledBackups ?? []).filter((s) => s.metadata?.namespace === namespace && s.spec?.cluster?.name === name)
+        const blockedSchedules = schedules.filter((s) => cnpgScheduleDestinationBlocker(s, [cluster]))
+        const pluginDestination = cluster && getCNPGClusterBarmanPlugin(cluster)
+        const customPlugin = cluster?.spec?.plugins?.some((p: any) => p.enabled !== false && p.name !== 'barman-cloud.cloudnative-pg.io')
+        const missingDestination = cluster && !pluginDestination?.barmanObjectName && !getCNPGClusterBackupConfig(cluster).destinationPath && !cluster.spec?.backup?.volumeSnapshot && !customPlugin
         return (
         <div className="flex min-h-0 flex-1 flex-col">
           <CNPGTabVerdict namespace={namespace} name={name} id="protection" className="px-5 pt-3 xl:px-7" />
+          {(missingDestination || blockedSchedules.length > 0) && (
+            <p className="px-5 pt-2 text-sm text-theme-text-secondary xl:px-7">
+              How to set up backups: {missingDestination ? blockedSchedules.some((s) => s.spec?.method === 'volumeSnapshot') ? 'configure volume snapshots on this Cluster with a snapshot-capable StorageClass.' : 'configure a destination with the barman-cloud plugin and an ObjectStore, or use volume snapshots.' : 'configure the schedule’s method, or change spec.method to match this Cluster’s destination.'}
+              {blockedSchedules.length > 0 && <> {blockedSchedules.map((s) => `${s.metadata.name} (${s.spec?.method || 'barmanObjectStore'})`).join(', ')} cannot back up {name} until its method has a destination.{pluginDestination?.barmanObjectName && <> This Cluster uses ObjectStore {pluginDestination.barmanObjectName}: set the schedule’s spec.method to plugin and spec.pluginConfiguration.name to {pluginDestination.name}.</>}</>}
+              {' '}<a href="https://cloudnative-pg.io/docs/devel/backup/" target="_blank" rel="noopener noreferrer" className="text-accent-text hover:underline">CloudNativePG backup docs ↗</a>
+              {onOpenYaml && <>{' · '}<button type="button" onClick={onOpenYaml} className="text-accent-text hover:underline">Cluster YAML →</button></>}
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-2 px-5 pt-3 xl:px-7">
             <CNPGRestoreButton namespace={namespace} entry={{ kind: 'cluster', name }} disabledReason={restoreBlocked ?? nothing} />
             <span className="text-xs text-theme-text-tertiary">{nothing ?? 'Restores into a new Cluster beside this one; this cluster is not changed.'}</span>

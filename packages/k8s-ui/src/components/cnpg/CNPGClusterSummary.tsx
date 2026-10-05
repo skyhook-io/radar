@@ -8,6 +8,7 @@ import { classifyCNPGClusterPhase, cnpgBlockedPhaseExplanation, CNPG_BARMAN_OBJE
 import { cnpgClusterPlugins, cnpgPluginPhase, cnpgReadyInstances, type CNPGFleetRow, type CNPGInstance } from './workspace'
 import type { CNPGDimension } from './ha'
 import { PrimaryConflictNote } from './primitives'
+import { Note } from './CNPGSharedSummary'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { StatusDot, toneTextClass } from '../ui/status-tone'
 import { FactGrid, FactRow, FactSource, FactValue, ManagedByText, managedByLabel } from '../facts'
@@ -386,6 +387,8 @@ export function CNPGClusterBackupFacts({ row, onNavigate }: { row: CNPGFleetRow;
         </FactRow>
         <FactRow label="WAL archiving">
           <FactValue fact={p.walArchiving} />
+          <FactSource fact={p.walArchiving} />
+          {p.walArchiving.detail && <Note>{p.walArchiving.detail}</Note>}
         </FactRow>
         <FactRow label="Recovery window">
           {p.recoveryWindow.from ? (

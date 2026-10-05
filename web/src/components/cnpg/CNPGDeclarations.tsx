@@ -277,7 +277,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         subtitle="Databases, roles, publications and subscriptions, by PostgreSQL cluster. Declared is not the same as reconciled."
       />
       <ScreenBody>
-        <CoverageNotice fleet={fleet} data={data} />
+        <CoverageNotice fleet={fleet} data={data} kinds={['clusters', 'databases', 'databaseRoles', 'publications', 'subscriptions', 'poolers']} />
         <div className="flex flex-wrap items-center gap-2">
           <Segments
             label="Declarations"
@@ -434,7 +434,7 @@ function DeclarationRow({
       role="button"
       tabIndex={0}
       onClick={onInspect}
-      onKeyDown={(e) => { if (e.key === 'Enter') onInspect() }}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onInspect() } }}
       className={clsx(
         'relative grid cursor-pointer gap-x-4 px-4 py-2.5 text-sm transition-colors hover:bg-theme-hover/50',
         sourceStated ? 'grid-cols-[minmax(0,1fr)_auto]' : 'grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_minmax(0,1fr)]',
@@ -444,14 +444,15 @@ function DeclarationRow({
       {nested && <span aria-hidden className="absolute bottom-0 left-[1.6rem] top-0 w-px bg-theme-border" />}
       <div className={clsx('min-w-0', nested && 'pl-6')}>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs text-theme-text-tertiary">{item.kind}</span>
           <span className="font-mono font-medium text-theme-text-primary">{item.pgName}</span>
+          <span className="text-xs text-theme-text-tertiary">· {item.kind}{!item.isField && ` ${item.resource.name}`}</span>
           {item.meta && <span className="text-xs text-theme-text-tertiary">{item.meta}</span>}
         </div>
         {detail}
       </div>
       <div className={clsx(sourceStated && 'text-right')}>
         <Badge severity={badge.severity} size="sm">{badge.text}</Badge>
+        <div className="mt-1 text-xs text-accent-text">Inspect →</div>
         {item.state === 'pending' && <Sub>awaiting the operator for the current spec</Sub>}
         {item.isField && <Sub>field of the Cluster</Sub>}
       </div>

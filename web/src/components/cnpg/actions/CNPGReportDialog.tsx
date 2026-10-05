@@ -53,7 +53,7 @@ export function CNPGReportDialog({ namespace, name, onClose }: { namespace: stri
       isLoading={busy}
       error={error}
       errorTitle="The report could not be downloaded"
-      notes={['Secret values are never included. The bundle is capped at 32 MiB; anything past that is listed as skipped.']}
+      notes={['Secret contents are never included. Included logs are redacted for recognisable secrets on a best-effort basis; review them before sharing.', 'The bundle is capped at 32 MiB; anything past that is listed as skipped.']}
     >
       <ul className="mb-3 list-disc space-y-0.5 pl-5 text-sm text-theme-text-secondary">
         {INCLUDED.map((i) => <li key={i}>{i}</li>)}

@@ -47,7 +47,7 @@ export function CNPGPooling({ data, fleet, namespaces, searchParams, onSetParams
         subtitle="PgBouncer Poolers, the clusters they front, and their readiness."
       />
       <ScreenBody>
-        <CoverageNotice fleet={fleet} data={data} />
+        <CoverageNotice fleet={fleet} data={data} kinds={['clusters', 'poolers']} />
         <FilterChips chips={chips} />
         <SectionTable
           title="Poolers"
@@ -72,7 +72,7 @@ export function CNPGPooling({ data, fleet, namespaces, searchParams, onSetParams
             {
               header: 'Readiness',
               width: '24%',
-              cell: (p) => <PoolerReadiness pooler={p} />,
+              cell: (p) => <PoolerReadiness pooler={p} onInspect={onInspect} />,
             },
             {
               header: 'Connection pressure',
@@ -94,10 +94,11 @@ export function CNPGPooling({ data, fleet, namespaces, searchParams, onSetParams
   )
 }
 
-function PoolerReadiness({ pooler }: { pooler: any }) {
+function PoolerReadiness({ pooler, onInspect }: { pooler: any; onInspect: CNPGScreenProps['onInspect'] }) {
   const namespace = pooler.metadata?.namespace
   const name = pooler.metadata?.name
   const caps = useCNPGPoolerCapabilities(namespace, name)
+  const runtime = useCNPGPoolerRuntime(namespace, name)
   const paused = isCNPGPoolerPaused(pooler)
   if (!caps.data) {
     const st = poolerReadiness(undefined)
@@ -117,6 +118,7 @@ function PoolerReadiness({ pooler }: { pooler: any }) {
         {paused && <Badge severity="warning" size="sm">Pause requested</Badge>}
       </span>
       <Sub>{r.detail}</Sub>
+      {runtime.data?.pods.filter((p) => p.schedulingReason).map((p) => <Sub key={p.pod}><button type="button" onClick={(e) => { e.stopPropagation(); onInspect({ kind: 'pods', group: '', namespace, name: p.pod }) }} className="text-accent-text hover:underline">{p.pod}</button> cannot be scheduled: {p.schedulingReason}</Sub>)}
       <RefreshFailedNotice queries={[caps]} />
     </>
   )

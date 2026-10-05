@@ -35,7 +35,7 @@ export interface CNPGPoolerPoolSample {
 export interface CNPGPoolerPressureLive {
   state: 'loading' | 'denied' | 'error' | 'ok'
   reason?: string
-  pods: { pod: string; state: string; error?: string; reason?: string; pools?: CNPGPoolerPoolSample[] }[]
+  pods: { pod: string; state: string; error?: string; reason?: string; schedulingReason?: string; pools?: CNPGPoolerPoolSample[] }[]
 }
 
 /** Each PgBouncer's own SHOW STATE. */
@@ -78,7 +78,7 @@ export function poolerReadiness(d: CNPGPoolerDeploymentLive | undefined): CNPGPo
   const ready = d.readyReplicas ?? 0
   const detail = `from Deployment ${d.name}`
   if (want === 0) return { text: 'Scaled to zero', level: 'neutral', detail }
-  if (ready === 0) return { text: 'Not ready', level: 'unhealthy', detail }
+  if (ready === 0) return { text: `0/${want} ready`, level: 'unhealthy', detail }
   if (ready < want) return { text: `${ready}/${want} ready`, level: 'degraded', detail }
   return { text: `${ready}/${want} ready`, level: 'healthy', detail }
 }

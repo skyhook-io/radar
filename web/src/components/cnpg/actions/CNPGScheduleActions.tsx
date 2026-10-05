@@ -27,8 +27,9 @@ export function CNPGScheduleActions({ namespace, name }: { namespace: string; na
     )
   }
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex flex-wrap items-center gap-1.5">
       {btn('run', 'Run now')}
+      {!data.actions.run.allowed && <span className="text-xs text-theme-text-secondary">{capabilityReason(data.actions.run)}</span>}
       {data.facts.suspended ? btn('resume', 'Resume') : btn('suspend', 'Suspend')}
       {btn('setSchedule', 'Edit schedule')}
       {open === 'setSchedule' && <EditScheduleDialog namespace={namespace} name={name} onClose={() => setOpen(null)} />}
