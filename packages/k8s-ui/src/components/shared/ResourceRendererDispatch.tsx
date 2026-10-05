@@ -622,6 +622,9 @@ export function ResourceRendererDispatch({
   rendererOverrides,
 }: ResourceRendererDispatchProps) {
   const kind = resource.kind.toLowerCase()
+ const collisionOwners: Record<string, string> = { serviceaccounts: '', roles: 'rbac.authorization.k8s.io', clusterroles: 'rbac.authorization.k8s.io', rolebindings: 'rbac.authorization.k8s.io', clusterrolebindings: 'rbac.authorization.k8s.io', httpproxies: 'projectcontour.io' }
+ const collisionMatched = !(kind in collisionOwners) || isApiGroup(data?.apiVersion, collisionOwners[kind])
+ const identityCollisionFallthrough = !collisionMatched
 
   // Crossplane Managed Resources / Composites / Claims are detected by spec
   // shape because their plurals are unbounded (one CRD kind per provider
@@ -869,10 +872,10 @@ export function ResourceRendererDispatch({
         {(kind === 'ciliumnetworkpolicies' || kind === 'ciliumnetworkpolicy' || kind === 'ciliumclusterwidenetworkpolicies' || kind === 'ciliumclusterwidenetworkpolicy') && <CiliumNetworkPolicyRenderer data={data} />}
         {(kind === 'clusternetworkpolicies' || kind === 'clusternetworkpolicy') && <ClusterNetworkPolicyRenderer data={data} />}
         {kind === 'poddisruptionbudgets' && <PodDisruptionBudgetRenderer data={data} />}
-        {kind === 'serviceaccounts' && <ServiceAccountComp data={data} onNavigate={onNavigate} />}
+        {kind === 'serviceaccounts' && collisionMatched && <ServiceAccountComp data={data} onNavigate={onNavigate} />}
         {kind === 'namespaces' && <NamespaceComp data={data} onNavigate={onNavigate} />}
-        {(kind === 'roles' || kind === 'clusterroles') && <RoleComp data={data} onNavigate={onNavigate} />}
-        {(kind === 'rolebindings' || kind === 'clusterrolebindings') && <RoleBindingComp data={data} onNavigate={onNavigate} />}
+        {(kind === 'roles' || kind === 'clusterroles') && collisionMatched && <RoleComp data={data} onNavigate={onNavigate} />}
+        {(kind === 'rolebindings' || kind === 'clusterrolebindings') && collisionMatched && <RoleBindingComp data={data} onNavigate={onNavigate} />}
         {kind === 'events' && <EventRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'gitrepositories' && <GitRepositoryRenderer data={data} />}
         {kind === 'ocirepositories' && <OCIRepositoryRenderer data={data} />}
@@ -1021,7 +1024,7 @@ export function ResourceRendererDispatch({
         {kind === 'tlsoptions' && <TraefikTLSOptionRenderer data={data} />}
 
         {/* Contour */}
-        {kind === 'httpproxies' && <ContourHTTPProxyRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'httpproxies' && collisionMatched && <ContourHTTPProxyRenderer data={data} onNavigate={onNavigate} />}
 
         {/* Crossplane — kind-dispatched for the static package/config kinds, spec-shape
             detected for MR/XR/Claim (their plurals are unbounded). */}
@@ -1039,7 +1042,7 @@ export function ResourceRendererDispatch({
             for known-plural collisions where no apiVersion-gated renderer
             matched (e.g. a Knative Configuration sharing the `configurations`
             plural with Crossplane Configuration). */}
-        {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough || groupGatedFallthrough || calicoCollisionFallthrough || nonCoreJobFallthrough) && <GenericRenderer data={data} />}
+        {(!isKnownKind || identityCollisionFallthrough || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough || groupGatedFallthrough || calicoCollisionFallthrough || nonCoreJobFallthrough) && <GenericRenderer data={data} />}
 
         {/* Common sections - can be disabled when parent handles them separately */}
         {showCommonSections && (
@@ -1315,7 +1318,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   }
 
   // Contour HTTPProxy
-  if (k === 'httpproxies') {
+  if (k === 'httpproxies' && isApiGroup(data.apiVersion, 'projectcontour.io')) {
     const s = getHTTPProxyStatus(data)
     if (s.status === 'healthy') return { text: s.label, color: SEVERITY_BADGE.success }
     if (s.status === 'unhealthy') return { text: s.label, color: SEVERITY_BADGE.error }

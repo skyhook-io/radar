@@ -1586,7 +1586,7 @@ func (rc *ResourceCache) PromotedKinds() []string {
 // background informers finish, so a UI bound to this method shows a
 // truthful "still loading" indicator.
 func (rc *ResourceCache) PendingPromotedKinds() []string {
-	if rc == nil {
+	if rc == nil || rc.deferredFailed.Load() {
 		return nil
 	}
 	rc.informerMu.RLock()
@@ -2057,4 +2057,34 @@ func (rc *ResourceCache) IsDeferredPending(key string) bool {
 	// a just-synced kind serves from its lister while this still says 503.
 	synced, known := rc.InformerSynced(key)
 	return !(known && synced)
+}
+
+// DeferredLoading settles on either successful sync or the deferred deadline.
+func (rc *ResourceCache) DeferredLoading() bool {
+	if rc == nil {
+		return false
+	}
+	done := rc.DeferredDone()
+	if done == nil {
+		return true
+	}
+	select {
+	case <-done:
+		return false
+	default:
+		return true
+	}
+}
+
+func (rc *ResourceCache) FailedKinds() []string {
+	if rc == nil {
+		return nil
+	}
+	var failed []string
+	for _, s := range rc.GetSyncStatus().Informers {
+		if rc.KindReadinessFor(s.Key) == KindFailed {
+			failed = append(failed, s.Kind)
+		}
+	}
+	return failed
 }

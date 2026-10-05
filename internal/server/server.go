@@ -2322,8 +2322,11 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		if len(namespaces) > 0 {
 			var merged []any
 			for _, ns := range namespaces {
-				items, listErr := cache.ListDynamicWithGroup(r.Context(), kind, ns, group)
+				items, listErr := cache.ListDynamicComplete(r.Context(), kind, ns, group)
 				if listErr != nil {
+					if s.writeResourceReadError(w, listErr) {
+						return
+					}
 					if strings.Contains(listErr.Error(), "unknown resource kind") {
 						s.writeError(w, http.StatusBadRequest, listErr.Error())
 						return
@@ -2342,8 +2345,11 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			}
 			result = merged
 		} else {
-			result, err = cache.ListDynamicWithGroup(r.Context(), kind, "", group)
+			result, err = cache.ListDynamicComplete(r.Context(), kind, "", group)
 			if err != nil {
+				if s.writeResourceReadError(w, err) {
+					return
+				}
 				if strings.Contains(err.Error(), "unknown resource kind") {
 					s.writeError(w, http.StatusBadRequest, err.Error())
 					return
@@ -2646,8 +2652,11 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		if len(namespaces) > 0 {
 			var merged []any
 			for _, ns := range namespaces {
-				items, listErr := cache.ListDynamicWithGroup(r.Context(), kind, ns, group)
+				items, listErr := cache.ListDynamicComplete(r.Context(), kind, ns, group)
 				if listErr != nil {
+					if s.writeResourceReadError(w, listErr) {
+						return
+					}
 					if strings.Contains(listErr.Error(), "unknown resource kind") {
 						s.writeError(w, http.StatusBadRequest, listErr.Error())
 						return
@@ -2662,8 +2671,11 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			}
 			result = merged
 		} else {
-			result, err = cache.ListDynamicWithGroup(r.Context(), kind, "", group)
+			result, err = cache.ListDynamicComplete(r.Context(), kind, "", group)
 			if err != nil {
+				if s.writeResourceReadError(w, err) {
+					return
+				}
 				if strings.Contains(err.Error(), "unknown resource kind") {
 					s.writeError(w, http.StatusBadRequest, err.Error())
 					return
@@ -2772,6 +2784,10 @@ func informerKeyForKind(kind string) string {
 // apply unchanged; the dynamic path keeps the connected gate (the dynamic
 // cache exists only after full initialization).
 func (s *Server) gateResourceRead(w http.ResponseWriter, kind, group string) (*k8s.ResourceCache, bool) {
+	if k8s.KindNotServed(kind, group) {
+		s.writeErrorCode(w, http.StatusNotFound, "kind_not_served", fmt.Sprintf("%s API is not served on this connection; specify an API group for colliding kinds", kind))
+		return nil, false
+	}
 	key := informerKeyForKind(kind)
 	if key == "" || (group != "" && !k8s.TypedKindOwnsGroup(kind, group)) {
 		if !s.requireConnected(w) {
@@ -2984,6 +3000,9 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
 		resource, err = cache.GetDynamicWithGroup(r.Context(), kind, namespace, name, group)
 		if err != nil {
+			if s.writeResourceReadError(w, err) {
+				return
+			}
 			if strings.Contains(err.Error(), "unknown resource kind") {
 				s.writeError(w, http.StatusBadRequest, err.Error())
 				return
@@ -3200,6 +3219,9 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		// Use group to disambiguate when multiple API groups have similar resource names
 		resource, err = cache.GetDynamicWithGroup(r.Context(), kind, namespace, name, group)
 		if err != nil {
+			if s.writeResourceReadError(w, err) {
+				return
+			}
 			if strings.Contains(err.Error(), "unknown resource kind") {
 				s.writeError(w, http.StatusBadRequest, err.Error())
 				return
@@ -3849,6 +3871,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		for _, ns := range namespaces {
 			items, listErr := eventsLister.Events(ns).List(labels.Everything())
 			if listErr != nil {
+				if s.writeResourceReadError(w, listErr) {
+					return
+				}
 				s.writeError(w, http.StatusInternalServerError, listErr.Error())
 				return
 			}

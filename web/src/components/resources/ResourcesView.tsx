@@ -289,7 +289,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       // Cluster still connecting, or this kind's informer still completing
       // its initial sync: keep the query in its loading state and retry —
       // the header's sync-progress label explains the wait.
-      if (isStillLoadingError(error)) return true
+      if (isStillLoadingError(error)) return failureCount < 15
       return failureCount < 3
     },
     retryDelay: (failureCount: number, error: Error) =>

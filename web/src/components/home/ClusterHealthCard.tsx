@@ -128,7 +128,7 @@ export function ClusterHealthCard({
   cluster,
   metrics,
   metricsServerAvailable,
-  topCRDs: _topCRDs,
+  topCRDs,
   issueCount,
   hasCriticalIssues,
   nodeVersionSkew,
@@ -140,7 +140,6 @@ export function ClusterHealthCard({
   freshness,
   radarVersion,
 }: ClusterHealthCardProps) {
-  void _topCRDs // Reserved for future CRD display
 
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false)
   const caps = useCapabilitiesContext()
@@ -149,7 +148,9 @@ export function ClusterHealthCard({
   // OSS-shape default — wrong-direction defaults would briefly suppress
   // chrome OSS users expect to see.
   const deployment = caps.deployment ?? { mode: 'local' as const }
-  const mcpEnabled = caps.mcpEnabled
+  const applicable = (kind: string) => !caps.absentResources?.includes(kind)
+ const hasWorkloads = applicable("pods") || applicable("deployments") || applicable("nodes")
+ const mcpEnabled = caps.mcpEnabled
   const isCloud = deployment.mode === 'cloud'
   const isInCluster = deployment.mode === 'in-cluster' || deployment.mode === 'cloud'
   const mcpUrl = `${window.location.origin}${routePath('/mcp')}`
@@ -327,8 +328,16 @@ export function ClusterHealthCard({
 
           {/* Center: Three health rings */}
           <div className="flex-1 flex items-center justify-center gap-12">
-            {/* Pods Ring */}
-            {isRestricted('pods') ? (
+            {!hasWorkloads && <div className="w-full space-y-3">
+ <h3 className="font-medium text-theme-text-primary">API resource inventory</h3>
+ <p className="text-sm text-theme-text-secondary">This connection serves APIs without Kubernetes workloads. Counts cover observed inventories.</p>
+ <div className="grid grid-cols-2 gap-2">{topCRDs?.map(crd => <button key={`${crd.group}/${crd.name}`} onClick={() => onNavigateToKind(crd.name, crd.group)} className="card-inner flex items-center justify-between text-sm hover:bg-theme-hover">
+ <span className="text-theme-text-primary">{crd.kind}</span><span className="text-theme-text-tertiary">{crd.observation && crd.observation !== 'synced' ? 'Not observed' : crd.count}</span>
+ </button>)}</div>
+ <button className="text-sm text-accent" onClick={onNavigateToView}>Browse served APIs →</button>
+ </div>}
+ {/* Pods Ring */}
+            {applicable('pods') && (isRestricted('pods') ? (
               <RestrictedRing label="Pods" />
             ) : (
               <button
@@ -358,10 +367,10 @@ export function ClusterHealthCard({
                   )}
                 </div>
               </button>
-            )}
+            ))}
 
             {/* Deployments Ring */}
-            {isRestricted('deployments') ? (
+            {applicable('deployments') && (isRestricted('deployments') ? (
               <RestrictedRing label="Deployments" />
             ) : (
               <button
@@ -377,10 +386,10 @@ export function ClusterHealthCard({
                   )}
                 </div>
               </button>
-            )}
+            ))}
 
             {/* Nodes Ring */}
-            {isRestricted('nodes') ? (
+            {applicable('nodes') && (isRestricted('nodes') ? (
               <RestrictedRing label="Nodes" />
             ) : (
               <button
@@ -399,11 +408,11 @@ export function ClusterHealthCard({
                   )}
                 </div>
               </button>
-            )}
+            ))}
           </div>
 
           {/* Right: Resource utilization */}
-          <div className="flex flex-col justify-center w-[300px] shrink-0 pl-8 border-l border-theme-border/50">
+          {applicable("nodes") && <div className="flex flex-col justify-center w-[300px] shrink-0 pl-8 border-l border-theme-border/50">
             <div className="flex items-center gap-2 mb-3">
               <Boxes className="w-4 h-4 text-theme-text-tertiary" />
               <span className="text-[10px] uppercase tracking-wider text-theme-text-tertiary">Resource Utilization</span>
@@ -459,7 +468,7 @@ export function ClusterHealthCard({
               )}
             </div>
 
-          </div>
+          </div>}
         </div>
       </div>
 
@@ -493,7 +502,7 @@ export function ClusterHealthCard({
 
         {/* Center column: Resources (aligned with health rings) */}
         <div className="w-1/2 grid grid-cols-3 items-center justify-items-center px-4">
-          {secondaryResources.map((res) => (
+          {secondaryResources.filter(res => applicable(res.kind)).map((res) => (
             <button
               key={res.kind}
               onClick={() => onNavigateToKind(res.kind, res.group)}

@@ -14,7 +14,7 @@ const STORAGE_KINDS = ['PersistentVolumeClaim', 'PersistentVolume', 'StorageClas
 const ACCESS_CONTROL_KINDS = ['ServiceAccount', 'Role', 'ClusterRole', 'RoleBinding', 'ClusterRoleBinding']
 const CLUSTER_KINDS = ['Node', 'Namespace', 'Event']
 const CORE_CATEGORY_NAMES = new Set(['Workloads', 'Networking', 'Configuration', 'Storage', 'Access Control', 'Cluster'])
-// Core resources that must always be present (fallback if API discovery misses them)
+// Built-in identity and labels; discovery determines which resources are served.
 export const CORE_RESOURCES: APIResource[] = [
   { group: '', version: 'v1', kind: 'Pod', name: 'pods', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
   { group: '', version: 'v1', kind: 'Service', name: 'services', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
@@ -108,9 +108,6 @@ export function categorizeResources(resources: APIResource[]): ResourceCategory[
   const seenKinds = new Map<string, APIResource>()
   const dedupKey = (r: APIResource) => r.isCrd ? `${r.group}/${r.kind}` : r.kind
 
-  for (const resource of CORE_RESOURCES) {
-    seenKinds.set(dedupKey(resource), resource)
-  }
   for (const resource of listableResources) {
     seenKinds.set(dedupKey(resource), resource)
   }

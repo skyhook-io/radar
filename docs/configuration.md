@@ -730,3 +730,17 @@ Deciding whether to connect is a separate question from the requests above.
 - [CLI reference](https://radarhq.io/docs/configuration/cli) — Commands and operator-facing flags
 - [In-Cluster Deployment](in-cluster.md) — Deploy Radar inside your cluster with Helm
 - [Authentication & Authorization](authentication.md) — Proxy and OIDC auth for shared deployments
+
+## Control planes without workload APIs
+
+Radar uses served API discovery before starting typed caches. A conclusively absent
+endpoint is inapplicable rather than an RBAC restriction; discovery failures remain
+unknown and do not disable APIs. Resource reads wait within a bounded request budget
+for their initial inventory, returning `kind_sync_pending` instead of an empty list
+or a missing object. Failed synchronization is terminal and asks for reconnect.
+
+Home omits workload counts for APIs the server does not serve and shows observed
+custom-resource inventory instead. Unobserved kinds are labeled **Not observed**;
+Home does not start a watch to manufacture a count. On control planes that do not
+serve Pods, startup warms only Radar's curated integrations, not every discovered
+CRD. Resources continues to browse any served API on demand.

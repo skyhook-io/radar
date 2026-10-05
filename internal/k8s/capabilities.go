@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -68,6 +69,7 @@ type ResourcePermissions struct {
 //     namespace-scoped on the same cluster, and a namespace-scoped kind may
 //     be readable in several explicitly named namespaces.
 type PermissionCheckResult struct {
+	NotServed                map[string]bool
 	Perms                    *ResourcePermissions
 	NamespaceScoped          bool   // True if at least one resource type ended up namespace-scoped
 	Namespace                string // The fallback namespace used for namespace-scoped probes
@@ -79,6 +81,7 @@ type PermissionCheckResult struct {
 
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
+	AbsentResources  []string                 `json:"absentResources,omitempty"`
 	ConfigManagement string                   `json:"configManagement"`
 	Exec             bool                     `json:"exec"`                    // Can create pods/exec (terminal feature)
 	LocalTerminal    bool                     `json:"localTerminal"`           // Local terminal available (not in-cluster, not disabled)
@@ -336,6 +339,12 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	logTiming("   [caps] CheckCapabilities RBAC checks done (%v)", time.Since(capStart))
 
 	// Local terminal is not RBAC-gated — it depends on runtime mode only
+	if result := GetCachedPermissionResult(); result != nil {
+		for key := range result.NotServed {
+			caps.AbsentResources = append(caps.AbsentResources, key)
+		}
+		sort.Strings(caps.AbsentResources)
+	}
 	caps.LocalTerminal = !IsInCluster() && !ForceDisableLocalTerminal
 
 	// Port-forward binds a local TCP listener on the radar host; like the local
@@ -371,6 +380,9 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 // canI checks if the current user/service account can perform an action.
 // Returns (allowed, apiErr) — wraps k8score.CanI with the singleton client.
 func canI(ctx context.Context, namespace, group, resource, verb string) (allowed bool, apiErr bool) {
+	if resourceAbsent(group, strings.Split(resource, "/")[0]) {
+		return false, false
+	}
 	if ctx.Err() != nil {
 		logTiming("   [caps] canI(%s %s) skipped: context canceled", verb, resource)
 		return false, true
@@ -681,6 +693,9 @@ func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, gro
 // Unlike canI which uses SelfSubjectAccessReview (checks the ServiceAccount),
 // this checks on behalf of a specific user.
 func canIAs(ctx context.Context, client *kubernetes.Clientset, username string, groups []string, namespace, group, resource, verb string) (bool, bool) {
+	if resourceAbsent(group, strings.Split(resource, "/")[0]) {
+		return false, false
+	}
 	if ctx.Err() != nil {
 		return false, true
 	}
@@ -949,6 +964,7 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 			scopeNamespacesCopy[k] = append([]string(nil), v...)
 		}
 		result := &PermissionCheckResult{
+			NotServed:                maps.Clone(cachedPermResult.NotServed),
 			Perms:                    &permsCopy,
 			NamespaceScoped:          cachedPermResult.NamespaceScoped,
 			Namespace:                cachedPermResult.Namespace,
@@ -982,7 +998,7 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 		}
 	}
 
-	result, hadErrors := probeResourceAccess(ctx, GetDynamicClient(), scopeNamespaces, forceNamespace)
+	result, hadErrors := probeResourceAccess(ctx, GetDynamicClient(), scopeNamespaces, forceNamespace, discoverProbeAbsence(ctx))
 	result.ScopeCandidatesTruncated = scopeCandidatesIncomplete
 
 	resourcePermsMu.Lock()
@@ -1143,9 +1159,13 @@ func pickPrimaryNs(scopeNamespaces []string, scopes map[string]k8score.ResourceS
 //     Used by --namespace-scope to pin the informer cache. Cluster-only kinds
 //     (nodes, namespaces, PV, storageclasses, ingressclasses) are still probed
 //     cluster-wide since they have no namespace dimension to pin to.
-func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamespaces []string, forceNamespace bool) (*PermissionCheckResult, bool) {
+func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamespaces []string, forceNamespace bool, absent ...map[string]bool) (*PermissionCheckResult, bool) {
 	perms := &ResourcePermissions{}
 	probes := resourceProbeTargets(perms)
+	notServed := map[string]bool{}
+	if len(absent) > 0 {
+		notServed = absent[0]
+	}
 
 	type probeOutcome struct {
 		scope      k8score.ResourceScope
@@ -1169,6 +1189,9 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 	for i, p := range probes {
 		go func(i int, p resourceProbe) {
 			defer wg.Done()
+			if notServed[p.key] {
+				return
+			}
 			// A panic inside the dynamic client (codec issues, nil-interface
 			// returns from a misbehaving fake in tests, version-skew bugs
 			// in client-go) would otherwise crash the whole server. Recover
@@ -1294,7 +1317,7 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 					scopeNamespacesByKind[p.key] = append([]string(nil), r.namespaces...)
 				}
 			}
-		} else {
+		} else if !notServed[p.key] && !p.requiresDiscovery {
 			restricted = append(restricted, p.key)
 		}
 	}
@@ -1352,6 +1375,7 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamesp
 	// the dynamic cache ignores this field anyway).
 	primaryNs := pickPrimaryNs(scopeNamespaces, scopes)
 	return &PermissionCheckResult{
+		NotServed:       notServed,
 		Perms:           perms,
 		NamespaceScoped: namespaceScoped,
 		Namespace:       primaryNs,
@@ -1381,6 +1405,7 @@ func GetCachedPermissionResult() *PermissionCheckResult {
 		scopeNamespacesCopy[k] = append([]string(nil), v...)
 	}
 	return &PermissionCheckResult{
+		NotServed:                maps.Clone(cachedPermResult.NotServed),
 		Perms:                    &permsCopy,
 		NamespaceScoped:          cachedPermResult.NamespaceScoped,
 		Namespace:                cachedPermResult.Namespace,

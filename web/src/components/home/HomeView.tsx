@@ -138,6 +138,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
             <span>{fallbackClusterLoadState.message}</span>
           </div>
         )}
+        {data.failedKinds && data.failedKinds.length > 0 && <div className="text-sm text-warning-text">Failed to load: {data.failedKinds.join(', ')}. Reconnect to retry the initial inventory.</div>}
         {/* Row 1: Cluster Health Card (combined health + resource counts) */}
         <ClusterHealthCard
           radarVersion={versionInfo && deploymentMode !== 'cloud' ? (

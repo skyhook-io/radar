@@ -22,7 +22,7 @@ export function isApiGroup(apiVersion: unknown, group: string): boolean {
   if (typeof apiVersion !== 'string') return false
   const slash = apiVersion.lastIndexOf('/')
   // A core-group resource ("v1") has no slash and belongs to no CRD group.
-  return slash > 0 && apiVersion.slice(0, slash) === group
+  return slash < 0 ? group === '' : apiVersion.slice(0, slash) === group
 }
 
 // Phase strings are full English sentences copied verbatim from CNPG's

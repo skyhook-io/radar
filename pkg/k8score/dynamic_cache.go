@@ -43,6 +43,7 @@ type informerEntry struct {
 	cancel    context.CancelFunc
 	synced    bool
 	startedAt time.Time
+	lastError string
 }
 
 type retainedObservation struct {
@@ -276,10 +277,17 @@ func (d *DynamicResourceCache) EnsureWatching(gvr schema.GroupVersionResource) e
 // This is what lets a namespace-restricted user read a CRD in the namespaces
 // they actually have access to, instead of being pinned to a single fallback.
 func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, preferredNS string) error {
+	return d.ensureWatchingContext(context.Background(), gvr, preferredNS)
+}
+
+func (d *DynamicResourceCache) ensureWatchingContext(ctx context.Context, gvr schema.GroupVersionResource, preferredNS string) error {
 	if d == nil {
 		return fmt.Errorf("dynamic resource cache not initialized")
 	}
 
+	if d.config.Discovery != nil && d.config.Discovery.ResourceAbsent(gvr.Group, gvr.Resource) {
+		return &ResourceReadError{Code: "kind_not_served", Resource: gvr.Resource}
+	}
 	// Check if resource supports list/watch before attempting to watch
 	if d.config.Discovery != nil && !d.config.Discovery.SupportsWatchGVR(gvr) {
 		return fmt.Errorf("resource %s.%s/%s does not support list/watch", gvr.Resource, gvr.Group, gvr.Version)
@@ -293,6 +301,8 @@ func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, p
 	if d.GetDiscoveryStatus() == CRDDiscoveryInProgress {
 		select {
 		case <-d.discoveryDone:
+		case <-ctx.Done():
+			return &ResourceReadError{Code: "kind_sync_pending", Resource: gvr.Resource}
 		case <-time.After(45 * time.Second):
 			log.Printf("[dynamic cache] Timeout waiting for CRD discovery, probing %s independently", gvr.Resource)
 		}
@@ -307,11 +317,11 @@ func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, p
 	// parallel enrichment fan-out over many objects of one unwatched kind —
 	// share one probe fan-out + informer start instead of stampeding the
 	// apiserver with redundant limit=1 lists.
-	_, err, _ := d.watchStarts.Do(gvr.String()+"|"+preferredNS, func() (any, error) {
+	result := d.watchStarts.DoChan(gvr.String()+"|"+preferredNS, func() (any, error) {
 		if d.hasCoveringInformer(gvr, preferredNS) {
 			return nil, nil
 		}
-		scopes, complete, err := d.probeScopes(gvr, preferredNS)
+		scopes, complete, err := d.probeScopesContext(ctx, gvr, preferredNS)
 		if err != nil {
 			if isAuthProbeError(err) {
 				d.retainDeniedObservation(gvr, preferredNS, complete)
@@ -342,7 +352,12 @@ func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, p
 		}
 		return nil, nil
 	})
-	return err
+	select {
+	case r := <-result:
+		return r.Err
+	case <-ctx.Done():
+		return &ResourceReadError{Code: "kind_sync_pending", Resource: gvr.Resource}
+	}
 }
 
 // hasCoveringInformer reports whether an existing informer already serves
@@ -433,6 +448,13 @@ func (d *DynamicResourceCache) startWatching(gvr schema.GroupVersionResource, sc
 		cancel:    cancel,
 		startedAt: time.Now().UTC(),
 	}
+	_ = informer.SetWatchErrorHandlerWithContext(func(_ context.Context, _ *cache.Reflector, err error) {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if entry := d.informers[key]; entry != nil {
+			entry.lastError = initialListErrorReason(err)
+		}
+	})
 	delete(d.observations, gvr)
 
 	kind := d.gvrToKind(gvr)
@@ -523,6 +545,10 @@ func (d *DynamicResourceCache) fallbackNamespaces() []string {
 // is denied and the caller named none, every configured fallback namespace
 // is probed and each granted one becomes a scope.
 func (d *DynamicResourceCache) probeScopes(gvr schema.GroupVersionResource, preferredNS string) (scopes []string, complete bool, err error) {
+	return d.probeScopesContext(context.Background(), gvr, preferredNS)
+}
+
+func (d *DynamicResourceCache) probeScopesContext(parent context.Context, gvr schema.GroupVersionResource, preferredNS string) (scopes []string, complete bool, err error) {
 	// The budget covers the cluster-wide probe plus the whole candidate walk;
 	// scale it with the candidate count so a 20-namespace fanout isn't judged
 	// by a budget sized for the single-fallback case, while staying bounded
@@ -531,7 +557,7 @@ func (d *DynamicResourceCache) probeScopes(gvr schema.GroupVersionResource, pref
 	if n := len(d.fallbackNamespaces()); n > 1 {
 		budget = min(5*time.Second+time.Duration(n)*500*time.Millisecond, 15*time.Second)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
 
 	// Forced namespace mode (--namespace-scope): pin NAMESPACED resources to the
@@ -550,6 +576,9 @@ func (d *DynamicResourceCache) probeScopes(gvr schema.GroupVersionResource, pref
 	err = d.listProbe(ctx, gvr, "")
 	if err == nil {
 		return []string{""}, true, nil
+	}
+	if apierrors.IsNotFound(err) {
+		return nil, true, err
 	}
 	if !isAuthProbeError(err) {
 		// Transient/NotFound on proxy-fronted clusters — fail open to a
@@ -637,7 +666,7 @@ func (d *DynamicResourceCache) classifyScope(gvr schema.GroupVersionResource, ns
 	if err == nil {
 		return ns, nil
 	}
-	if isAuthProbeError(err) {
+	if isAuthProbeError(err) || apierrors.IsNotFound(err) {
 		return "", err
 	}
 	log.Printf("[dynamic cache] Probe for %s.%s/%s in namespace %q returned non-auth error (allowing): %v", gvr.Resource, gvr.Group, gvr.Version, ns, err)
@@ -1425,59 +1454,116 @@ func (d *DynamicResourceCache) ListNamespaces(gvr schema.GroupVersionResource, n
 
 // ListBlocking returns all resources, waiting for cache sync first.
 func (d *DynamicResourceCache) ListBlocking(gvr schema.GroupVersionResource, namespace string, timeout time.Duration) ([]*unstructured.Unstructured, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return d.ListComplete(ctx, gvr, []string{namespace})
+}
+
+// ListComplete refuses to infer absence from an indexer before its initial LIST completes.
+func (d *DynamicResourceCache) ListComplete(ctx context.Context, gvr schema.GroupVersionResource, namespaces []string) ([]*unstructured.Unstructured, error) {
 	if d == nil {
-		return nil, fmt.Errorf("dynamic resource cache not initialized")
+		return nil, fmt.Errorf("dynamic cache not initialized")
 	}
-
-	if err := d.ensureWatching(gvr, namespace); err != nil {
-		return nil, err
+	scopes := namespaces
+	if len(scopes) == 0 || !d.gvrIsNamespaced(gvr) {
+		scopes = []string{""}
 	}
-
-	entries := d.readEntries(gvr, namespace)
-	if len(entries) == 0 {
-		return nil, fmt.Errorf("informer not found for %v", gvr)
-	}
-
-	for _, e := range entries {
-		if !e.informer.HasSynced() {
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			cache.WaitForCacheSync(ctx.Done(), e.informer.HasSynced)
-			cancel()
+	result := make([]*unstructured.Unstructured, 0)
+	for _, ns := range scopes {
+		if err := d.ensureWatchingContext(ctx, gvr, ns); err != nil {
+			return nil, err
+		}
+		entries := d.readEntries(gvr, ns)
+		if err := d.waitForRead(ctx, gvr, entries); err != nil {
+			return nil, err
+		}
+		d.mu.RLock()
+		incomplete := ns == "" && d.fanoutIncomplete[gvr]
+		stopped := d.stopped
+		d.mu.RUnlock()
+		if stopped {
+			return nil, &ResourceReadError{Code: "kind_sync_failed", Resource: gvr.Resource, Reason: "cache stopped"}
+		}
+		if incomplete {
+			return nil, &ResourceReadError{Code: "kind_sync_pending", Resource: gvr.Resource, Reason: "namespace scope probe incomplete"}
+		}
+		items, err := indexerItems(entries, ns)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range items {
+			if u, ok := item.(*unstructured.Unstructured); ok {
+				result = append(result, StripUnstructuredFields(u))
+			}
 		}
 	}
-
-	items, err := indexerItems(entries, namespace)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list resources: %w", err)
-	}
-
-	result := make([]*unstructured.Unstructured, 0, len(items))
-	for _, item := range items {
-		if u, ok := item.(*unstructured.Unstructured); ok {
-			result = append(result, StripUnstructuredFields(u))
-		}
-	}
-
 	return result, nil
+}
+
+func (d *DynamicResourceCache) waitForRead(ctx context.Context, gvr schema.GroupVersionResource, entries []*informerEntry) error {
+	if len(entries) == 0 {
+		return &ResourceReadError{Code: "kind_sync_pending", Resource: gvr.Resource}
+	}
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if entriesSynced(entries) {
+			return nil
+		}
+		d.mu.RLock()
+		failedReason := ""
+		for _, e := range entries {
+			if !e.informer.HasSynced() && time.Since(e.startedAt) >= 30*time.Second {
+				failedReason = e.lastError
+				if failedReason == "" {
+					failedReason = "initial LIST did not complete within 30 seconds"
+				}
+				break
+			}
+		}
+		stopped := d.stopped
+		d.mu.RUnlock()
+		if stopped {
+			failedReason = "cache stopped"
+		}
+		if failedReason != "" {
+			return &ResourceReadError{Code: "kind_sync_failed", Resource: gvr.Resource, Reason: failedReason}
+		}
+		select {
+		case <-ctx.Done():
+			return &ResourceReadError{Code: "kind_sync_pending", Resource: gvr.Resource}
+		case <-d.stopCh:
+			return &ResourceReadError{Code: "kind_sync_failed", Resource: gvr.Resource, Reason: "cache stopped"}
+		case <-ticker.C:
+		}
+	}
 }
 
 // Get returns a single resource by namespace and name.
 func (d *DynamicResourceCache) Get(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
-	return d.get(gvr, namespace, name, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return d.GetComplete(ctx, gvr, namespace, name)
 }
 
 // GetPreserveLastApplied returns a single cached resource while preserving the
 // kubectl last-applied annotation for internal drift computation.
 func (d *DynamicResourceCache) GetPreserveLastApplied(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
-	return d.get(gvr, namespace, name, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return d.get(ctx, gvr, namespace, name, true)
 }
 
-func (d *DynamicResourceCache) get(gvr schema.GroupVersionResource, namespace, name string, preserveLastApplied bool) (*unstructured.Unstructured, error) {
+func (d *DynamicResourceCache) GetComplete(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
+	return d.get(ctx, gvr, namespace, name, false)
+}
+
+func (d *DynamicResourceCache) get(ctx context.Context, gvr schema.GroupVersionResource, namespace, name string, preserveLastApplied bool) (*unstructured.Unstructured, error) {
 	if d == nil {
 		return nil, fmt.Errorf("dynamic resource cache not initialized")
 	}
 
-	if err := d.ensureWatching(gvr, namespace); err != nil {
+	if err := d.ensureWatchingContext(ctx, gvr, namespace); err != nil {
 		return nil, err
 	}
 
@@ -1498,12 +1584,11 @@ func (d *DynamicResourceCache) get(gvr schema.GroupVersionResource, namespace, n
 		return nil, fmt.Errorf("failed to get resource: %w", err)
 	}
 
-	if !found && !entriesSynced(entries) {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		for _, e := range entries {
-			cache.WaitForCacheSync(ctx.Done(), e.informer.HasSynced)
+	if !entriesSynced(entries) {
+		waitErr := d.waitForRead(ctx, gvr, entries)
+		if waitErr != nil {
+			return nil, waitErr
 		}
-		cancel()
 
 		item, found, err = getByKeyFromEntries(entries, key)
 		if err != nil {

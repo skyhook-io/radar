@@ -29,6 +29,7 @@ import (
 
 // DashboardResponse is the aggregated response for the home dashboard
 type DashboardResponse struct {
+	FailedKinds            []string                        `json:"failedKinds,omitempty"`
 	Cluster                DashboardCluster                `json:"cluster"`
 	Health                 DashboardHealth                 `json:"health"`
 	Problems               []DashboardProblem              `json:"problems"`
@@ -224,10 +225,11 @@ type PVCCount struct {
 }
 
 type DashboardCRDCount struct {
-	Kind  string `json:"kind"`
-	Name  string `json:"name"` // plural resource name (e.g. "rollouts")
-	Group string `json:"group"`
-	Count int    `json:"count"`
+	Observation string `json:"observation"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name"` // plural resource name (e.g. "rollouts")
+	Group       string `json:"group"`
+	Count       int    `json:"count"`
 }
 
 type DashboardChange struct {
@@ -316,7 +318,8 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	// Signal to the frontend that some data (events, secrets, configmaps, etc.)
 	// may be incomplete because deferred informers are still syncing.
-	resp.DeferredLoading = !cache.IsDeferredSynced()
+	resp.DeferredLoading = cache.DeferredLoading()
+	resp.FailedKinds = cache.FailedKinds()
 
 	// If critical informers were promoted at first paint, tell the
 	// frontend which kinds are STILL loading (live-filtered, not the
@@ -1387,124 +1390,64 @@ func (s *Server) getDashboardMetrics(ctx context.Context, allowedNamespaces []st
 // the calling user is authorized to see. Each cluster-scoped CRD is gated by
 // a per-kind SubjectAccessReview; CRDs the user can't list are omitted.
 func (s *Server) collectClusterScopedCRDCounts(r *http.Request) []DashboardCRDCount {
-	disc := k8s.GetResourceDiscovery()
-	dynamicCache := k8s.GetDynamicResourceCache()
-	if disc == nil || dynamicCache == nil {
-		return nil
-	}
-	resources, err := disc.GetAPIResources()
-	if err != nil {
-		return nil
-	}
-
-	seen := make(map[string]bool)
-	var counts []DashboardCRDCount
-	for _, res := range resources {
-		if !res.IsCRD || res.Namespaced {
-			continue
-		}
-		key := res.Group + "/" + res.Kind
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-
-		// Per-kind cluster-scoped SAR. canRead caches the result on
-		// UserPermissions and short-circuits when auth is disabled.
-		if !s.canRead(r, res.Group, res.Name, "", "list") {
-			continue
-		}
-		gvr, ok := disc.GetGVRWithGroup(res.Kind, res.Group)
-		if !ok {
-			continue
-		}
-		if !dynamicCache.IsSynced(gvr) {
-			continue
-		}
-		items, err := dynamicCache.List(gvr, "")
-		if err != nil {
-			log.Printf("WARNING [dashboard] Failed to count cluster-scoped CRD %s.%s: %v", res.Name, res.Group, err)
-			continue
-		}
-		if len(items) > 0 {
-			counts = append(counts, DashboardCRDCount{
-				Kind:  res.Kind,
-				Name:  res.Name,
-				Group: res.Group,
-				Count: len(items),
-			})
-		}
-	}
-	return counts
+	return collectObservedCRDCounts(nil, false, func(group, resource string) bool { return s.canRead(r, group, resource, "", "list") })
 }
 
-// collectNamespacedCRDCounts returns counts of namespaced CRD instances.
-//
-// allowed semantics (matches parseNamespacesForUser):
-//   - nil:        cluster-wide listing (auth off or cluster-wide namespaced
-//     access). One call to dynamicCache.List with namespace="".
-//   - empty:      user has no namespace access; returns nil.
-//   - non-empty:  iterate per allowed namespace and sum.
 func (s *Server) collectNamespacedCRDCounts(_ context.Context, allowed []string) []DashboardCRDCount {
-	if allowed != nil && len(allowed) == 0 {
+	if noNamespaceAccess(allowed) {
 		return nil
 	}
+	return collectObservedCRDCounts(allowed, true, nil)
+}
+
+// Home reads only existing watches; opening it never fans out over every API.
+func collectObservedCRDCounts(allowed []string, namespaced bool, authorize func(string, string) bool) []DashboardCRDCount {
 	disc := k8s.GetResourceDiscovery()
-	dynamicCache := k8s.GetDynamicResourceCache()
-	if disc == nil || dynamicCache == nil {
+	dc := k8s.GetDynamicResourceCache()
+	if disc == nil || dc == nil {
 		return nil
 	}
 	resources, err := disc.GetAPIResources()
 	if err != nil {
 		return nil
 	}
-
-	seen := make(map[string]bool)
+	seen := map[string]bool{}
 	var counts []DashboardCRDCount
 	for _, res := range resources {
-		if !res.IsCRD || !res.Namespaced {
+		if !res.IsCRD || res.Namespaced != namespaced {
 			continue
 		}
-		key := res.Group + "/" + res.Kind
-		if seen[key] {
+		key := res.Group + "/" + res.Name
+		if seen[key] || (authorize != nil && !authorize(res.Group, res.Name)) {
 			continue
 		}
 		seen[key] = true
-
 		gvr, ok := disc.GetGVRWithGroup(res.Kind, res.Group)
 		if !ok {
 			continue
 		}
-		if !dynamicCache.IsSynced(gvr) {
-			continue
+		observation := dc.Observation(gvr)
+		count := DashboardCRDCount{Kind: res.Kind, Name: res.Name, Group: res.Group, Observation: string(observation.State)}
+		complete := dc.IsClusterWideSynced(gvr)
+		if namespaced && allowed != nil {
+			complete = true
+			for _, ns := range allowed {
+				complete = complete && dc.IsNamespaceSynced(gvr, ns)
+			}
 		}
-		total := 0
-		if allowed == nil {
-			// Cluster-wide list across all namespaces.
-			items, err := dynamicCache.List(gvr, "")
+		if complete {
+			items, err := dc.ListWatchedReadOnly(gvr)
 			if err != nil {
-				log.Printf("WARNING [dashboard] Failed to count namespaced CRD %s.%s cluster-wide: %v", k8s.SanitizeForLog(res.Name), k8s.SanitizeForLog(res.Group), err)
 				continue
 			}
-			total = len(items)
-		} else {
-			for _, ns := range allowed {
-				items, err := dynamicCache.List(gvr, ns)
-				if err != nil {
-					log.Printf("WARNING [dashboard] Failed to count namespaced CRD %s.%s in ns=%s: %v", k8s.SanitizeForLog(res.Name), k8s.SanitizeForLog(res.Group), k8s.SanitizeForLog(ns), err)
-					continue
+			count.Observation = "synced"
+			for _, item := range items {
+				if !namespaced || allowed == nil || slices.Contains(allowed, item.GetNamespace()) {
+					count.Count++
 				}
-				total += len(items)
 			}
 		}
-		if total > 0 {
-			counts = append(counts, DashboardCRDCount{
-				Kind:  res.Kind,
-				Name:  res.Name,
-				Group: res.Group,
-				Count: total,
-			})
-		}
+		counts = append(counts, count)
 	}
 	return counts
 }
