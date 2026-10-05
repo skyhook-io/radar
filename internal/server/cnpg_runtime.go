@@ -643,6 +643,9 @@ func (s *Server) handleCNPGPoolerRuntime(w http.ResponseWriter, r *http.Request)
 			})
 			got.Pod = p.Name
 			got.SchedulingReason = out.SchedulingReason
+			if reason := cnpgPoolerNotStarted(p); reason != "" && got.State != cnpgRuntimeStateDenied && got.CNPGPoolerPodFacts == nil {
+				got.CNPGRuntimeSource = CNPGRuntimeSource{State: cnpgRuntimeStateUnreachable, Reason: reason}
+			}
 			*out = got
 		})
 	}
@@ -1872,4 +1875,20 @@ func cnpgPoolerFacts(samples map[string][]cnpgSample) (*CNPGPoolerPodFacts, stri
 		out = out[:cnpgRuntimeMaxRows]
 	}
 	return &CNPGPoolerPodFacts{Missing: cnpgMissingFamilies(samples, cnpgExpectedPoolerFamilies), Pools: out}, capped
+}
+
+func cnpgPoolerNotStarted(p *corev1.Pod) string {
+	if p.Status.Phase == "" || p.Status.Phase == corev1.PodRunning {
+		return ""
+	}
+	reason := "PgBouncer has not started"
+	if p.Status.Phase != corev1.PodPending {
+		return "PgBouncer is not running (Pod " + string(p.Status.Phase) + ")"
+	}
+	for _, condition := range p.Status.Conditions {
+		if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse {
+			return reason + " (Pod cannot be scheduled)"
+		}
+	}
+	return reason + " (Pod " + string(p.Status.Phase) + ")"
 }

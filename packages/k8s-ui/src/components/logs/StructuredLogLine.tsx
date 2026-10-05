@@ -44,7 +44,7 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
 
   if (!parsed) {
     return (
-      <span className={`${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'} ${getLogLevelColor(level, isDark)}`}>
+      <span className={`${wordWrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre'} ${getLogLevelColor(level, isDark)}`}>
         {content}
       </span>
     )
@@ -63,11 +63,11 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
         // Collapsed: entire summary line is clickable
         <span
           onClick={toggle}
-          className={`cursor-pointer ${palette.hoverSurface} rounded px-0.5 -ml-0.5 ${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}
+          className={`cursor-pointer ${palette.hoverSurface} rounded px-0.5 -ml-0.5 ${wordWrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre'}`}
         >
           <span className="inline-flex items-center align-middle mr-0.5">{chevron}</span>
           <SummaryLine obj={parsed} level={level} palette={palette} />
-          <span className={`${palette.textTertiary} ml-1`}>{`{${fieldCount} fields}`}</span>
+          <span className={`${palette.textTertiary} ml-1 inline-block whitespace-nowrap`}>{`{${fieldCount} fields}`}</span>
         </span>
       ) : (
         // Expanded: summary header is clickable to collapse, JSON content is selectable
@@ -78,9 +78,9 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
         >
           <span className="inline-flex items-center align-middle mr-0.5">{chevron}</span>
           <SummaryLine obj={parsed} level={level} palette={palette} />
-          <span className={`${palette.textTertiary} ml-1`}>{`{${fieldCount} fields}`}</span>
+          <span className={`${palette.textTertiary} ml-1 inline-block whitespace-nowrap`}>{`{${fieldCount} fields}`}</span>
         </span>
-        <span className={`block ml-4 ${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}>
+        <span className={`block ml-4 ${wordWrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre'}`}>
           {isLogfmt ? (
             <ExpandedLogfmt obj={parsed} onFilterValue={onFilterValue} palette={palette} />
           ) : (

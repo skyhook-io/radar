@@ -218,7 +218,7 @@ describe('CNPGPoolerSummary', () => {
   it('reports unknown scheduled count and unmeasured pressure', () => {
     const pooler = { apiVersion: PG, kind: 'Pooler', metadata: { name: 'main-rw', namespace: 'pg' }, spec: { cluster: { name: 'main' }, type: 'rw', instances: 2 } }
     const t = text(renderToString(<CNPGPoolerSummary resource={pooler} workspace={ws({})} onNavigate={nav} />))
-    expect(t).toContain('Scheduled count not reported')
+    expect(t).toContain('Pooler instance count not reported')
     expect(t).toContain('Not measured')
     expect(t).toContain('main-rw')
   })
@@ -341,8 +341,11 @@ it('puts the pending Pooler cause under readiness and names the Pod whose metric
   const html = renderToString(<CNPGPoolerSummary resource={{ metadata: { name: 'pooler', namespace: 'pg' } }} workspace={ws({})} onNavigate={nav} live={{ deployment: { name: 'pooler', state: 'ok', replicas: 1, readyReplicas: 0 }, pressure: { state: 'ok', pods: [{ pod: 'pooler-pod', state: 'unreachable', error: 'address not allowed', schedulingReason: 'Unschedulable: insufficient cpu' }] } }} />)
   const t = text(html)
   expect(t).toContain('0/1 ready')
-  expect(t).toContain('pooler-pod cannot be scheduled: Unschedulable: insufficient cpu')
-  expect(t).toContain('Not measuredpooler-pod: address not allowed')
+  expect(t).toContain('pooler-pod cannot be scheduled: insufficient cpu.')
+  expect(t).toContain('Not measured: PgBouncer did not answer')
+  expect(t).toContain('pooler-pod')
+  expect(t).toContain('Measurement details')
+  expect(t).toContain('address not allowed')
   expect(t.indexOf('cannot be scheduled')).toBeLessThan(t.indexOf('Connections'))
   expect(t.indexOf('address not allowed')).toBeGreaterThan(t.indexOf('Connections'))
   expect(html).toContain('button')
@@ -353,4 +356,16 @@ it('never calls an incomplete empty Pooler read idle and names the unread Pod', 
   expect(t).toContain('No pools seen in what was read')
   expect(t).toContain('b: not read (timeout)')
   expect(t).not.toContain('Idle:')
+})
+
+it('leads Pooler observations with the scheduling cause and labels the operator count', () => {
+  const pod = { pod: 'orders-pooler-pod', state: 'unreachable', reason: 'PgBouncer has not started (Pod cannot be scheduled)', schedulingReason: 'Unschedulable: 0/2 nodes are available: 2 Too many pods. preemption: no victims.' }
+  const html = renderToString(<CNPGPoolerSummary resource={{ metadata: { name: 'p', namespace: 'db' }, spec: { instances: 1 }, status: { instances: 1 } }} workspace={ws({})} live={{ pressure: { state: 'ok', pods: [pod] }, observed: { state: 'ok', pods: [{ ...pod, error: pod.reason }] } }} />)
+  const t = text(html)
+  expect(t).toContain('Pooler status reports 1 instance · 1 requested')
+  expect(t).toContain('cannot be scheduled: both nodes have reached their Pod limit')
+  expect(t).toContain('Not measured: PgBouncer has not started (Pod cannot be scheduled)')
+  expect(t).toContain('1 not read: orders-pooler-pod (PgBouncer has not started (Pod cannot be scheduled))')
+  expect(html).toContain('aria-expanded="false"')
+  expect(t).toContain('preemption: no victims.')
 })

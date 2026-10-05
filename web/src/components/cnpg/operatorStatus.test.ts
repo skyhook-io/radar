@@ -124,3 +124,11 @@ describe('clusters blocked on a plugin', () => {
     })
   })
 })
+
+it('qualifies unseen operator components without contradicting the ready components read', () => {
+  const data = { coverage: { deployments: { state: 'partial' }, services: { state: 'full' } }, components: [{ role: 'operator', namespace: 'system', deployment: 'cnpg', replicas: 1, readyReplicas: 1 }], config: [] } as unknown as CNPGOperatorResponse
+  const state = cnpgOperatorState(data)
+  expect(state.unread.join(' ')).toContain('Other operator or plugin components may be outside this read: Deployments not read in some namespaces')
+  expect(state.unread.join(' ')).not.toContain('Operator health cannot be assessed')
+  expect(state.confirmed.join(' ')).toContain('every component is ready')
+})

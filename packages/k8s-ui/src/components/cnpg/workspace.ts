@@ -501,7 +501,6 @@ function scheduleFact(
   schedules: any[],
   cov: CNPGKindCoverage,
   readings: Record<string, string> = {},
-  plainStory = false,
   backups: any[] = [],
 ): CNPGProtectionFacts['schedule'] {
   const ns = cluster.metadata?.namespace
@@ -517,20 +516,12 @@ function scheduleFact(
   }
   const cron = active[0]?.spec?.schedule
   const reading = readings[`${ns}/${active[0]?.metadata?.name}`]
-  if (plainStory) {
-    const blockers = active.map((s) => cnpgScheduleDestinationBlocker(s, [cluster])).filter((b): b is string => !!b)
-    const cadence = active.length === 1 ? reading || cron : undefined
-    const run = active.some((s) => s.status?.lastScheduleTime || backupsForScheduledBackup(s, backups).length > 0)
-    return {
-      text: [active.length === 1 ? 'Enabled' : `${active.length} enabled schedules`, blockers.length || run ? cadence : undefined, blockers.length ? `blocked: ${[...new Set(blockers)].map((blocker) => blocker[0].toLowerCase() + blocker.slice(1)).join(', ')}` : !run ? 'not run yet' : undefined].filter(Boolean).join(' · '),
-      tone: blockers.length ? 'degraded' : 'neutral',
-      names,
-      ...(active.length === 1 && cron ? { source: `ScheduledBackup ${active[0]?.metadata?.name} · cron ${cron}` } : {}),
-    }
-  }
+  const blockers = active.map((s) => cnpgScheduleDestinationBlocker(s, [cluster])).filter((b): b is string => !!b)
+  const cadence = active.length === 1 ? reading || cron : undefined
+  const run = active.some((s) => s.status?.lastScheduleTime || backupsForScheduledBackup(s, backups).length > 0)
   return {
-    text: active.length === 1 ? (reading ? `Scheduled · ${reading}` : cron ? `Scheduled · ${cron}` : 'Scheduled') : `${active.length} schedules`,
-    tone: 'neutral',
+    text: [active.length === 1 ? 'Enabled' : `${active.length} enabled schedules`, blockers.length || run ? cadence : undefined, blockers.length ? `blocked: ${[...new Set(blockers)].map((blocker) => blocker[0].toLowerCase() + blocker.slice(1)).join(', ')}` : !run ? 'not run yet' : undefined].filter(Boolean).join(' · '),
+    tone: blockers.length ? 'degraded' : 'neutral',
     names,
     ...(active.length === 1 && cron ? { source: `ScheduledBackup ${active[0]?.metadata?.name} · cron ${cron}` } : {}),
   }
@@ -610,7 +601,7 @@ function lastBackupFact(
   return { text: 'Completed', tone: 'healthy', at: best.at, source: best.source }
 }
 
-function walFact(cluster: any, plainStory = false): CNPGProtectionFacts['walArchiving'] {
+function walFact(cluster: any): CNPGProtectionFacts['walArchiving'] {
   const conds = cluster?.status?.conditions
   const c = Array.isArray(conds) ? conds.find((x: any) => x?.type === 'ContinuousArchiving') : null
   const plugin = getCNPGClusterBarmanPlugin(cluster)
@@ -623,10 +614,11 @@ function walFact(cluster: any, plainStory = false): CNPGProtectionFacts['walArch
   const customArchiver = archivers.some((p: any) => p.name !== plugin?.name)
   if (!destinationKnown && !customArchiver) {
     return {
-      text: plainStory ? 'Not archived: no destination configured' : 'No archive destination configured',
+      text: 'Not archived: no destination configured',
       tone: 'neutral',
       source: 'Cluster spec',
-      ...(plainStory ? { detail: "PostgreSQL's WAL is not stored anywhere, so point-in-time recovery is not possible. CloudNativePG still reports archiving as working because, with no destination, it accepts each WAL file without keeping it.", ...(c ? { operatorCondition: { type: c.type, status: c.status, message: c.message, lastTransitionTime: c.lastTransitionTime } } : {}) } : c ? { detail: `CNPG reports ContinuousArchiving=${c.status}${c.lastTransitionTime ? ` since ${c.lastTransitionTime}` : ''}${c.message ? `: ${c.message}` : ''}` } : {}),
+      detail: "PostgreSQL's WAL is not stored anywhere, so point-in-time recovery is not possible. CloudNativePG still reports archiving as working because, with no destination, it accepts each WAL file without keeping it.",
+      ...(c ? { operatorCondition: { type: c.type, status: c.status, message: c.message, lastTransitionTime: c.lastTransitionTime } } : {}),
     }
   }
   if (!c) return { text: 'Not reported', tone: 'unknown', source: 'Cluster status' }
@@ -838,6 +830,7 @@ function problemsFor(
             title: `${cnpgJobPurpose(job.role, job.instance, issue.name)}: ${issue.category ? issueTitle({ category: issue.category, reason: issue.reason }) : text.title}`,
             detail: [issue.message?.trim(), issue.cause?.trim()].filter(Boolean).join(' ') || undefined,
             job: job.role ?? 'job',
+            instance: job.instance,
           }
         : text),
       subject: { kind: issue.kind, group: issue.group ?? '', namespace: ns, name: issue.name },
@@ -1030,7 +1023,7 @@ function declarationsFor(cluster: any, resp: CNPGWorkspaceResponse): CNPGFleetRo
   return { summary, total, failed, pending }
 }
 
-export function buildCNPGFleet(resp: CNPGWorkspaceResponse, options: { plainStory?: boolean } = {}): CNPGFleet {
+export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
   const clusters = (resp.objects.clusters ?? []).filter((c) => isApiGroup(c?.apiVersion, 'postgresql.cnpg.io'))
   const pods = resp.objects.pods ?? []
   const stores = resp.objects.objectStores ?? []
@@ -1056,11 +1049,11 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse, options: { plainStor
     const desired = typeof cluster?.spec?.instances === 'number' ? cluster.spec.instances : null
 
     const window = recoveryWindowFor(cluster, stores)
-    const wal = walFact(cluster, options.plainStory)
+    const wal = walFact(cluster)
     const storesCov = coverageOf(resp, 'objectStores')
     const storesUnreadable = !!getCNPGClusterBarmanPlugin(cluster)?.barmanObjectName && !coverageReadable(storesCov, ns)
     const protection: CNPGProtectionFacts = {
-      schedule: scheduleFact(cluster, resp.objects.scheduledBackups ?? [], coverageOf(resp, 'scheduledBackups'), resp.scheduleReadings, options.plainStory, resp.objects.backups ?? []),
+      schedule: scheduleFact(cluster, resp.objects.scheduledBackups ?? [], coverageOf(resp, 'scheduledBackups'), resp.scheduleReadings, resp.objects.backups ?? []),
       destination: destinationFact(cluster),
       lastSuccessfulBackup: lastBackupFact(cluster, resp.objects.backups ?? [], coverageOf(resp, 'backups'), window, storesUnreadable ? storesCov : null),
       walArchiving: wal,
@@ -1075,7 +1068,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse, options: { plainStor
           }
         : storesUnreadable
           ? { text: cnpgCoverageGap(storesCov, 'ObjectStores', ns), tone: 'unknown' }
-          : options.plainStory && destinationFact(cluster).method === 'none' ? { text: 'None: no backup destination', tone: 'neutral' } : { text: 'Not reported', tone: 'unknown' },
+          : destinationFact(cluster).method === 'none' ? { text: 'None: no backup destination', tone: 'neutral' } : { text: 'Not reported', tone: 'unknown' },
       restoreValidation: restoreValidationFact(cluster, clusters, resp.objects.backups ?? [], coverageReadable(coverageOf(resp, 'backups'), ns)),
     }
     const podsReadable = coverageReadable(coverageOf(resp, 'pods'), ns)
@@ -1089,7 +1082,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse, options: { plainStor
       ...problemsFor(cluster, resp.issues ?? [], resp.audit ?? [], children, backupTimesOf(cluster, resp.objects.backups ?? []), jobs),
       ...observedProblems(cluster, instancePods, readinessContradicted ? podReadiness : undefined, readyInstances, primaryConflict),
     ])
-    if (options.plainStory) problems = problems.map((p) => p.origin?.label === 'Kubernetes scheduler' ? { ...p, detail: `Cannot be scheduled: ${summarizeSchedulerMessage(p.detail, { plain: true })}`, rawDetail: p.detail } : p)
+    problems = problems.map((p) => p.origin?.label === 'Kubernetes scheduler' ? { ...p, detail: summarizeSchedulerMessage(p.detail, { plain: true }), rawDetail: p.detail } : p)
     const categories = new Set<CNPGProblemCategory>(
       problems.filter((p) => p.severity !== 'posture').map((p) => p.category),
     )

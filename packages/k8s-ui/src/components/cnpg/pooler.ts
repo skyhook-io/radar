@@ -186,7 +186,7 @@ export function observedPause(o: CNPGPoolerObservedLive | undefined): { text: st
   const read = o.pods.filter((p) => p.state === 'ok' && p.paused !== undefined)
   const paused = read.filter((p) => p.paused).length
   const unread = o.pods.length - read.length
-  const tail = unread > 0 ? ` · ${unread} not read` : ''
+  const tail = unread > 0 ? ` · ${unread} not read: ${o.pods.filter((p) => p.state !== 'ok' || p.paused === undefined).map((p) => `${p.pod} (${p.error ?? p.state})`).join('; ')}` : ''
   if (read.length === 0) return { text: `Not observable${tail}`, level: 'unknown' }
   if (paused === 0) return { text: `Serving (not paused) on ${read.length} of ${o.pods.length} PgBouncers${tail}`, level: unread ? 'unknown' : 'healthy' }
   if (paused === read.length) return { text: `Paused on ${paused} of ${o.pods.length} PgBouncers${tail}`, level: 'degraded' }

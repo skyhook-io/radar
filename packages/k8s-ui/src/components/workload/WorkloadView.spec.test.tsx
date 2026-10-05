@@ -61,7 +61,7 @@ it('lets a host render the reported phase while preserving the default derived b
   }
 })
 
-it.each(['ScheduledBackup', 'Database', 'Publication', 'ClusterImageCatalog', 'Deployment'])('keeps %s drawer utilities apart from identity and object actions', (kind) => {
+it.each(['ScheduledBackup', 'Database', 'Publication', 'ClusterImageCatalog', 'Deployment', 'Pod', 'Pooler'])('keeps %s drawer utilities apart from identity and object actions', (kind) => {
   const host = document.createElement('div')
   const root = createRoot(host)
   const name = 'a-long-object-name-that-needs-the-full-drawer-width'
@@ -87,4 +87,33 @@ it('preserves Diagnose before the resource loads while deferring resource-depend
   const html = renderToStaticMarkup(<WorkloadView {...props} resource={undefined} expanded={false} renderHeaderActions={header} actionsBarProps={{ renderDiagnose: () => <button>Diagnose this object</button> }} />)
   expect(html).toContain('Diagnose this object')
   expect(header).not.toHaveBeenCalled()
+})
+
+it.each(['Deployment', 'Pod', 'ScheduledBackup', 'Database', 'Pooler'])('groups Diagnose with %s drawer utilities and omits empty object actions', (kind) => {
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  const header = vi.fn(() => null)
+  const group = kind === 'Deployment' ? 'apps' : kind === 'Pod' ? '' : 'postgresql.cnpg.io'
+  const data = { ...resource, kind, apiVersion: group ? `${group}/v1` : 'v1' }
+  act(() => root.render(<WorkloadView {...props} kind={`${kind.toLowerCase()}s`} group={group} resource={data} expanded={false} onExpand={() => {}} onClose={() => {}} renderHeaderActions={header} actionsBarProps={{ renderDiagnose: () => <button>Diagnose</button> }} />))
+  const utility = host.querySelector('[aria-label="Open full view"]')!.parentElement!.parentElement!
+  expect(utility.textContent).toContain('Diagnose')
+  expect(host.querySelector('.px-4.pb-2.justify-end')).toBeNull()
+  expect(header).toHaveBeenCalledTimes(1)
+  act(() => root.render(<WorkloadView {...props} kind={`${kind.toLowerCase()}s`} group={group} resource={data} expanded renderHeaderActions={header} actionsBarProps={{ renderDiagnose: () => <button>Diagnose</button> }} />))
+  const refresh = host.querySelector('[aria-label="Refresh"]')!
+  expect(refresh.parentElement!.parentElement!.textContent).toContain('Diagnose')
+  act(() => root.unmount())
+})
+
+it('hides the object action band when a host action component has no content yet', () => {
+  const EmptyAction = () => null
+  const host = document.createElement('div'); const root = createRoot(host)
+  act(() => root.render(<WorkloadView {...props} expanded={false} renderHeaderActions={() => <EmptyAction />} />))
+  const row = host.querySelector('.px-4.pb-2.justify-end')!
+  expect(row.matches(':empty')).toBe(true)
+  expect(row.classList.contains('empty:hidden')).toBe(true)
+  act(() => root.render(<WorkloadView {...props} expanded={false} renderHeaderActions={() => <button>Run now</button>} />))
+  expect(row.matches(':empty')).toBe(false)
+  act(() => root.unmount())
 })

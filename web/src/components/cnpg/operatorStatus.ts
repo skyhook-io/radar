@@ -1,3 +1,4 @@
+import { coverageLabel } from './shared'
 import type { CNPGOperatorComponent, CNPGOperatorResponse, CNPGOperatorVerdict } from '../../api/cnpg'
 import { cnpgClusterPlugins, cnpgPluginPhase, formatAge, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
 
@@ -105,7 +106,9 @@ export function cnpgOperatorState(op: CNPGOperatorResponse, now = Date.now(), cl
   const confirmed: string[] = []
   const unread: string[] = []
   const operators = op.components.filter((c) => c.role === 'operator')
-  if (operators.length === 0) unread.push('No operator Deployment was found in the namespaces you can read.')
+  const coverageGaps = (['deployments', 'services'] as const).filter((k) => op.coverage[k]?.state !== 'full')
+  if (coverageGaps.length > 0) unread.push(`${operators.length === 0 ? 'Operator health cannot be assessed with your access' : 'Other operator or plugin components may be outside this read'}: ${coverageGaps.map((k) => `${k === 'deployments' ? 'Deployments' : 'Services'} ${coverageLabel(op.coverage[k])}`).join('; ')}.`)
+  else if (operators.length === 0) unread.push('No operator Deployment was found in the namespaces you can read.')
   let allReady = op.components.length > 0
   for (const c of op.components) {
     if (c.readyReplicas === null || c.replicas === null) {

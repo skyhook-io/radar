@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -354,9 +355,8 @@ func (s *Server) handleCNPGPgBouncerState(w http.ResponseWriter, r *http.Request
 	run := newCNPGRuntimeRunner(r.Context())
 	for i, p := range pods {
 		out := &resp.Pods[i]
-		pod := p.Name
 		run.do(func(ctx context.Context) {
-			*out = readCNPGPgBouncerState(ctx, exec, namespace, pod)
+			*out = readCNPGPgBouncerState(ctx, exec, namespace, p)
 		})
 	}
 	run.wait()
@@ -368,16 +368,19 @@ func (s *Server) handleCNPGPgBouncerState(w http.ResponseWriter, r *http.Request
 	s.writeJSON(w, resp)
 }
 
-func readCNPGPgBouncerState(ctx context.Context, exec cnpgExecFunc, namespace, pod string) CNPGPgBouncerState {
+func readCNPGPgBouncerState(ctx context.Context, exec cnpgExecFunc, namespace string, pod *corev1.Pod) CNPGPgBouncerState {
 	captured := time.Now().UTC().Format(time.RFC3339)
-	out, err := exec(ctx, namespace, pod, cnpgPgBouncerContainer, cnpgShowStateArgv, "")
+	out, err := exec(ctx, namespace, pod.Name, cnpgPgBouncerContainer, cnpgShowStateArgv, "")
 	if err != nil {
 		src := cnpgExecSourceState(err)
 		src.CapturedAt = captured
-		return CNPGPgBouncerState{Pod: pod, CNPGRuntimeSource: src}
+		if reason := cnpgPoolerNotStarted(pod); reason != "" && src.State != cnpgExecStateDenied {
+			src.State, src.Error = cnpgRuntimeStateUnreachable, reason
+		}
+		return CNPGPgBouncerState{Pod: pod.Name, CNPGRuntimeSource: src}
 	}
 	st, err := parseCNPGShowState(out)
-	st.Pod = pod
+	st.Pod = pod.Name
 	if err != nil {
 		st.CNPGRuntimeSource = CNPGRuntimeSource{State: cnpgRuntimeStateError, Error: err.Error(), CapturedAt: captured}
 		return st

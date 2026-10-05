@@ -3242,6 +3242,7 @@ export interface ContainerMetricsHistory {
 }
 
 export interface PodMetricsHistory {
+  metricsAPIReachable?: boolean;
   namespace: string;
   name: string;
   containers: ContainerMetricsHistory[];

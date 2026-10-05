@@ -1,7 +1,6 @@
 import { Fragment, useState, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { Badge } from '../ui/Badge'
-import { healthToSeverity } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { classifyCNPGClusterPhase, cnpgBlockedPhaseExplanation, CNPG_BARMAN_OBJECTSTORE_GROUP, CNPG_GROUP } from '../resources/resource-utils-cnpg'
@@ -163,7 +162,6 @@ export function CNPGClusterSummary({
   dimensionLinkLabel,
   onOpenOperator,
   framed = false,
-  literalPhase = false,
 }: {
   row: CNPGFleetRow
   onNavigate?: NavigateToRef
@@ -189,7 +187,6 @@ export function CNPGClusterSummary({
   operationalFacts?: ReactNode
   /** Cards for the full page; drawers keep flat sections. */
   framed?: boolean
-  literalPhase?: boolean
 }) {
   const top = row.problems[0]
   const rest = row.problems.length - 1
@@ -265,8 +262,8 @@ export function CNPGClusterSummary({
           </FactRow>
           <FactRow label="Controller phase">
             <span className="inline-flex flex-wrap items-center gap-2">
-              <Badge severity={literalPhase ? 'neutral' : healthToSeverity(row.controllerStatus.level)} size="sm">
-                {literalPhase ? phase || 'Not reported' : row.controllerStatus.text}
+              <Badge severity={'neutral'} size="sm">
+                {phase || 'Not reported'}
               </Badge>
               <span className="text-xs text-theme-text-tertiary">
                 {radarFindings ? 'reported by CNPG · Radar findings above are separate' : 'reported by CNPG'}

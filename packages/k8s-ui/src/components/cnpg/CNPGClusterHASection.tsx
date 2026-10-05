@@ -72,7 +72,6 @@ export function CNPGClusterHASection({
   primaryConflict,
   title = 'HA and instances',
   showInstances = true,
-  showReadiness = false,
   showCertificates = true,
   currentPrimary,
   hibernated = false,
@@ -84,7 +83,6 @@ export function CNPGClusterHASection({
   title?: string
   /** False where the host lists the instances itself (with their replication state). */
   showInstances?: boolean
-  showReadiness?: boolean
   /** False where the host shows certificates elsewhere (CNPGClusterCertificates). */
   showCertificates?: boolean
   /** status.currentPrimary vs the Pod labelled primary, when they disagree. */
@@ -122,8 +120,8 @@ export function CNPGClusterHASection({
   return (
     <>
       <FoldSection title={title} hint={`checked ${formatAge(ha.sampledAt)} ago`} summary={[endpointProblem, haSummary.text].filter(Boolean).join(' · ')} attention={haSummary.attention || !!endpointProblem}>
-        {showReadiness && <div className="mb-3 text-sm text-theme-text-secondary">{haSummary.text}</div>}
-        {showReadiness && ha.pods.state === 'ok' && <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+        {<div className="mb-3 text-sm text-theme-text-secondary">{haSummary.text}</div>}
+        {ha.pods.state === 'ok' && <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs">
           {ha.instances.map((i) => <span key={i.pod}><RefLink refTo={{ kind: 'Pod', group: '', namespace: ns, name: i.pod }} onNavigate={onNavigate} mono /> · Pod {i.ready ? 'ready' : 'not ready'}</span>)}
           {[...new Set(ha.expectedInstances ?? [])].filter((name) => !ha.instances.some((i) => i.pod === name)).map((name) => <span key={name} className="text-theme-text-tertiary"><span className="font-mono">{name}</span> · not running</span>)}
         </div>}
@@ -267,7 +265,7 @@ export function CNPGClusterHASection({
                     <Badge severity={JOB_SEVERITY[j.phase]} size="sm">{j.phase}</Badge>
                     <span className="text-theme-text-secondary">{j.role ?? 'job'}</span>
                     <RefLink refTo={{ kind: 'Job', group: 'batch', namespace: ns, name: j.name }} onNavigate={onNavigate} mono />
-                    {j.reason && (showReadiness && /schedul|Too many pods|Insufficient/i.test(j.reason) ? <div className="w-full">
+                    {j.reason && (/schedul|Too many pods|Insufficient/i.test(j.reason) ? <div className="w-full">
                       <span className={toneTextClass('degraded')}>Cannot be scheduled: {summarizeSchedulerMessage(j.reason, { plain: true })}</span>
                       <FoldSection title="Scheduler message" summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{j.reason}</div></FoldSection>
                     </div> : <span className={toneTextClass('degraded')}>{j.reason}</span>)}

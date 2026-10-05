@@ -79,7 +79,7 @@ describe('Configuration composition', () => {
     expect(html).toContain('Last refresh failed: refresh timed out')
     expect(html).toContain('showing data from')
     expect(html).toContain('>8MB</span>')
-    expect(html).toContain('on pg-1')
+    expect(html).toContain('read on pg-1')
     expect(html).not.toContain('Instance values could not be read')
   })
   it('distinguishes skipped names, no readable instances and a parameter missing from a successful read', () => {
@@ -166,4 +166,34 @@ describe('Declared settings', () => {
     expect(html).toContain('resolved:17')
     expect(html).toContain('spec.imageCatalogRef')
   })
+})
+
+it.each(['unsupervised', 'supervised'])('explains %s and anti-affinity while keeping raw fields', (strategy) => {
+  state.cluster.spec = { primaryUpdateStrategy: strategy, primaryUpdateMethod: 'restart', affinity: { podAntiAffinityType: 'preferred' } }
+  const html = renderToStaticMarkup(<CNPGDeclaredSettings cluster={state.cluster} onSelectTab={() => {}} onOpenDeclarations={() => {}} />)
+  expect(html).toContain(strategy === 'unsupervised' ? 'the operator updates the primary automatically' : 'waits for a manual switchover')
+  expect(html).toContain(`${strategy} · spec.primaryUpdateStrategy`)
+  expect(html).toContain('Pod anti-affinity')
+  expect(html).toContain('preferred (instances spread across nodes when possible)')
+  expect(html).toContain('preferred · spec.affinity.podAntiAffinityType')
+  expect(html).toContain('restart: updates the primary in place')
+})
+
+it('does not promise spreading when anti-affinity is disabled and respects its topology', () => {
+  state.cluster.spec = { affinity: { podAntiAffinityType: 'preferred', enablePodAntiAffinity: false } }
+  const render = () => renderToStaticMarkup(<CNPGDeclaredSettings cluster={state.cluster} onSelectTab={() => {}} onOpenDeclarations={() => {}} />)
+  expect(render()).toContain('preferred (not applied: pod anti-affinity is disabled)')
+  expect(render()).not.toContain('instances spread across nodes')
+  state.cluster.spec.affinity = { podAntiAffinityType: 'preferred', topologyKey: 'topology.kubernetes.io/zone' }
+  expect(render()).toContain('instances spread across topology domains when possible')
+  expect(render()).toContain('topology.kubernetes.io/zone')
+})
+
+it('explains required anti-affinity for node and zone topology', () => {
+  state.cluster.spec = { affinity: { podAntiAffinityType: 'required' } }
+  const render = () => renderToStaticMarkup(<CNPGDeclaredSettings cluster={state.cluster} onSelectTab={() => {}} onOpenDeclarations={() => {}} />)
+  expect(render()).toContain('required (instances must run on separate nodes)')
+  state.cluster.spec.affinity.topologyKey = 'topology.kubernetes.io/zone'
+  expect(render()).toContain('required (instances must run on separate topology domains)')
+  expect(render()).toContain('required · spec.affinity.podAntiAffinityType')
 })

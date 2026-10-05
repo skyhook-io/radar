@@ -12,7 +12,7 @@ vi.mock('@skyhook-io/k8s-ui', async (original) => ({ ...(await original<typeof i
 it('explains Serving on Replication and connects endpoint evidence to Reachability', () => {
   const html = renderToStaticMarkup(<CNPGReplicationTab namespace="db" name="pg" />)
   expect(html).toContain('verdict: serving always')
-  expect(state.haProps.showReadiness).toBe(true)
+  expect(state.haProps.showInstances).toBe(false)
   expect(html).toContain('verdict: replication')
   expect(state.haProps.currentPrimary).toBe('pg-1')
   state.haProps.onOpenReachability({ namespace: 'db', name: 'pg-rw' })

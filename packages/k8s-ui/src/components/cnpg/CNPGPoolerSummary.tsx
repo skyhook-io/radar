@@ -19,7 +19,8 @@ import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { toneTextClass } from '../ui/status-tone'
 import { FactGrid, FactRow, FactValue } from '../facts'
 import { Badge } from '../ui/Badge'
-import { SectionHeading } from '../ui/FoldSection'
+import { summarizeSchedulerMessage } from '../resources/resource-utils'
+import { SectionHeading, FoldSection } from '../ui/FoldSection'
 
 const TYPE_LABEL: Record<string, string> = {
   rw: 'rw · routes to the primary',
@@ -48,7 +49,7 @@ export function CNPGPoolerSummary({
   const ns = resource?.metadata?.namespace ?? ''
   const type = resource?.spec?.type
   const desired = resource?.spec?.instances
-  const scheduled = resource?.status?.instances
+  const reported = resource?.status?.instances
   const deployment = getCNPGPoolerDeploymentName(resource)
   const paused = isCNPGPoolerPaused(resource)
   const readiness = poolerReadiness(live?.deployment)
@@ -67,19 +68,17 @@ export function CNPGPoolerSummary({
             {paused && <Badge severity="warning" size="sm">Pause requested</Badge>}
           </div>
           {readiness.detail && <Note>{readiness.detail}</Note>}
-          {live?.pressure?.pods.filter((p) => p.schedulingReason).map((p) => <div key={p.pod} className={`mt-1 text-xs ${toneTextClass('degraded')}`}>
-            <RefLink refTo={{ kind: 'Pod', group: '', namespace: ns, name: p.pod }} onNavigate={onNavigate} mono /> cannot be scheduled: {p.schedulingReason}
-          </div>)}
+          <CNPGPoolerScheduling namespace={ns} pods={live?.pressure?.pods ?? []} onNavigate={onNavigate} />
         </FactRow>
         <FactRow label="Instances">
           <span>
-            {typeof scheduled === 'number' ? `${scheduled} scheduled` : <NotReported text="Scheduled count not reported" />}
+            {typeof reported === 'number' ? `Pooler status reports ${reported} ${reported === 1 ? 'instance' : 'instances'}` : <NotReported text="Pooler instance count not reported" />}
             <span className="text-theme-text-secondary">
               {' · '}
-              {typeof desired === 'number' ? `${desired} desired` : 'desired not set'}
+              {typeof desired === 'number' ? `${desired} requested` : 'requested count not set'}
             </span>
           </span>
-          <Note>The Pooler counts scheduled pods, not ready ones; readiness is on its Deployment.</Note>
+          <Note>status.instances is the operator’s count; observed readiness is on its Deployment and Pods.</Note>
         </FactRow>
         <FactRow label="Deployment">
           {deployment ? (
@@ -227,7 +226,7 @@ function PoolerPressure({ pressure }: { pressure: NonNullable<CNPGPoolerLive['pr
   const { reporting, limitation, empty } = poolerPressureCoverage(pressure.pods)
   const rows = aggregatePoolerPools(reporting)
   if (reporting.length === 0) {
-    return <div><FactValue fact={{ text: 'Not measured', tone: 'unknown' }} />{pressure.pods.length > 0 ? pressure.pods.map((p) => <Note key={p.pod}>{p.pod}: {p.error ?? p.reason ?? p.state}</Note>) : <Note>No PgBouncer answered</Note>}</div>
+    return <CNPGPoolerUnmeasured pods={pressure.pods} />
   }
   return (
     <div>
@@ -266,4 +265,20 @@ function PoolerPressure({ pressure }: { pressure: NonNullable<CNPGPoolerLive['pr
       {pressure.pods.length > 1 && <PoolerPodPressure pods={pressure.pods} />}
     </div>
   )
+}
+
+export function CNPGPoolerScheduling({ namespace, pods, onNavigate }: { namespace: string; pods: NonNullable<CNPGPoolerLive['pressure']>['pods']; onNavigate?: NavigateToRef }) {
+  return <>{pods.filter((p) => p.schedulingReason).map((p) => <div key={p.pod} className={`mt-1 text-xs ${toneTextClass('degraded')}`}>
+    <RefLink refTo={{ kind: 'Pod', group: '', namespace, name: p.pod }} onNavigate={onNavigate} mono /> cannot be scheduled: {summarizeSchedulerMessage(p.schedulingReason, { plain: true })}.
+    <FoldSection title="Scheduler message" summary="" attention={false}><div className="break-words text-theme-text-secondary">{p.schedulingReason}</div></FoldSection>
+  </div>)}</>
+}
+
+export function CNPGPoolerUnmeasured({ pods }: { pods: NonNullable<CNPGPoolerLive['pressure']>['pods'] }) {
+  if (pods.length === 0) return <div className="text-theme-text-tertiary">Not measured: no PgBouncer answered</div>
+  return <>{pods.map((p) => <div key={p.pod} className="text-theme-text-tertiary">
+    Not measured: {p.state === 'denied' ? 'needs get pods/proxy' : p.reason ?? 'PgBouncer did not answer'}
+    <Note>{p.pod}</Note>
+    {p.error && <FoldSection title="Measurement details" summary="" attention={false}><div className="break-words text-xs">{p.error}</div></FoldSection>}
+  </div>)}</>
 }

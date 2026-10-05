@@ -10,7 +10,7 @@ const backup = (name: string, phase: string, ageDays: number) => ({ apiVersion: 
 
 function render(objects: CNPGWorkspaceResponse['objects'], coverage: CNPGKindCoverage = { state: 'full' }, query = '', scopeCluster?: { namespace: string; name: string }) {
   const data: CNPGWorkspaceResponse = { installed: true, context: 'test', namespaces: null, coverage: { ...Object.fromEntries(CNPG_WORKSPACE_KEYS.map((k) => [k, { state: 'full' as const }])), backups: coverage }, objects, issues: [], audit: [], backupsOmitted: 0 }
-  return renderToStaticMarkup(<CNPGProtection data={data} fleet={buildCNPGFleet(data, { plainStory: true })} namespaces={[]} searchParams={new URLSearchParams(query)} onSetParams={() => {}} onInspect={() => {}} inspected={null} onClearNamespaces={() => {}} scopeCluster={scopeCluster} />)
+  return renderToStaticMarkup(<CNPGProtection data={data} fleet={buildCNPGFleet(data)} namespaces={[]} searchParams={new URLSearchParams(query)} onSetParams={() => {}} onInspect={() => {}} inspected={null} onClearNamespaces={() => {}} scopeCluster={scopeCluster} />)
 }
 
 it('marks a blocked schedule amber and names its missing destination and unreported time', () => {

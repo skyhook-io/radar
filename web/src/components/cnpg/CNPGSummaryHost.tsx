@@ -114,7 +114,6 @@ function ClusterSummaryHost({ namespace, name, resource, context, onNavigate }: 
     <div>
       <CNPGClusterSummary
         row={row}
-        literalPhase
         framed={context === 'expanded'}
         onNavigate={goRef}
         lead={

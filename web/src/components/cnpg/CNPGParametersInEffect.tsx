@@ -40,7 +40,7 @@ export function CNPGParametersInEffect({ namespace, name, declared, scope }: { n
           </thead>
           <tbody>
             {view.rows.map((r) => (
-              <ParameterRow key={r.name} row={r}
+              <ParameterRow key={r.name} row={r} readPods={view.read.map((i) => i.pod)}
                 unreadText={d?.skipped?.includes(r.name) ? 'Not read: not a parameter name'
                   : !d ? (q.isLoading ? 'Not read: loading' : 'Not read: request failed')
                     : d.state === 'denied' ? 'Not read: pods/exec denied'
@@ -58,7 +58,7 @@ export function CNPGParametersInEffect({ namespace, name, declared, scope }: { n
       )}
       {d && view.read.length > 0 && <p className="mt-2 text-[11.5px] text-theme-text-tertiary">
         Read {d.sampledAt ? `${formatAge(d.sampledAt)} ago` : 'just now'} from a new Radar session on each of {view.read.map((i) => i.pod).join(', ')}. A role, database or
-        client can set its own value for a parameter a session can change. PostgreSQL shows values in its own units, so 1024MB reads 1GB.
+        client can set its own value for a parameter a session can change. PostgreSQL normalizes units and boolean spellings (such as false to off), so different text alone does not mean a different value.
       </p>}
       {d?.skipped && d.skipped.length > 0 && <p className="mt-1 text-xs text-theme-text-tertiary">Not read (not a parameter name): {d.skipped.join(', ')}.</p>}
       {!!d?.omitted && <p className="mt-1 text-xs text-theme-text-tertiary">{d.omitted} declarations were not sampled.</p>}
@@ -72,7 +72,11 @@ export function CNPGParametersInEffect({ namespace, name, declared, scope }: { n
   return <><SectionHeading hint="spec.postgresql.parameters">PostgreSQL parameters</SectionHeading>{content}</>
 }
 
-export function ParameterRow({ row, reports, unreadText }: { row: CNPGParameterRow; reports: { pod: string; value: string }[]; unreadText: string }) {
+export function ParameterRow({ row, reports, unreadText, readPods }: { row: CNPGParameterRow; reports: { pod: string; value: string }[]; unreadText: string; readPods: string[] }) {
+  const namesNeeded = !!row.perInstance || row.pendingRestart.length > 0 || row.unreported.length > 0 || reports.length !== readPods.length || reports.some((p) => !readPods.includes(p.pod))
+  const declaredBoolean = cnpgParameterBoolean(row.declared)
+  const sameBoolean = declaredBoolean !== undefined && reports.length > 0 && reports.some((p) => p.value !== row.declared) && reports.every((p) => ['on', 'off'].includes(p.value.trim().toLowerCase()) && cnpgParameterBoolean(p.value) === declaredBoolean)
+
   return (
     <tr className="border-b border-theme-border/60 align-top last:border-0">
       <td className="py-1.5 pr-4 font-mono text-xs text-theme-text-primary">{row.name}</td>
@@ -81,12 +85,13 @@ export function ParameterRow({ row, reports, unreadText }: { row: CNPGParameterR
         {reports.length > 0 ? (
           row.perInstance
             ? <span className={toneTextClass('degraded')}>{reports.map((p) => `${p.pod}: ${p.value === '' ? '(empty)' : p.value}`).join(' · ')}</span>
-            : <><span className="font-mono text-theme-text-primary">{row.value === '' ? '(empty)' : row.value}</span><div className="text-theme-text-tertiary">on {reports.map((p) => p.pod).join(', ')}</div></>
+            : <><span className="font-mono text-theme-text-primary">{row.value === '' ? '(empty)' : row.value}</span>{namesNeeded && <div className="text-theme-text-tertiary">on {reports.map((p) => p.pod).join(', ')}</div>}</>
         ) : row.setByClient ? (
           <span className="text-theme-text-tertiary">Set by each connection, so not readable here</span>
         ) : (
           <span className="text-theme-text-tertiary">{unreadText}</span>
         )}
+        {sameBoolean && <span className="ml-1.5 text-theme-text-tertiary">same as declared</span>}
         {row.source && row.source !== 'configuration file' && !row.setByClient && <span className="ml-1.5 text-theme-text-tertiary">source: {row.source}</span>}
         {row.pendingRestart.length > 0 && <div className={toneTextClass('degraded')}>Restart pending on {row.pendingRestart.join(', ')}</div>}
         {row.unreported.length > 0 && unreadText === 'Not reported' && (
@@ -96,4 +101,14 @@ export function ParameterRow({ row, reports, unreadText }: { row: CNPGParameterR
       <td className="py-1.5 text-xs text-theme-text-secondary">{row.takesEffect}</td>
     </tr>
   )
+}
+
+export function cnpgParameterBoolean(value: string): boolean | undefined {
+  const normalized = value.trim().toLowerCase()
+  if (normalized === '1') return true
+  if (normalized === '0') return false
+  if (!normalized) return undefined
+  const matches = ['on', 'off', 'true', 'false', 'yes', 'no'].filter((spelling) => spelling.startsWith(normalized))
+  if (matches.length !== 1) return undefined
+  return ['on', 'true', 'yes'].includes(matches[0])
 }

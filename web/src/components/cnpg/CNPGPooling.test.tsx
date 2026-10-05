@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it, vi } from 'vitest'
 import { buildCNPGFleet, CNPG_WORKSPACE_KEYS, type CNPGWorkspaceResponse, type CNPGPoolerPressureLive } from '@skyhook-io/k8s-ui'
@@ -50,5 +53,29 @@ it('shows a pending Pod scheduling cause and inspection link beside Deployment r
   expect(html).toContain('0/2 ready')
   expect(html).toContain('Unschedulable: insufficient memory')
   expect(html).toMatch(/<button[^>]*>p-pending<\/button>/)
-  expect(html).toContain('p-pending: not read (proxy failed)')
+  expect(html).toContain('Not measured: proxy failed')
+  expect(html).toContain('p-pending')
+})
+
+it('opens the Pod once and folds details without opening the Pooler row', () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const inspect = vi.fn()
+  live.pods = [{ pod: 'p-pending', state: 'unreachable', error: 'address not allowed', schedulingReason: 'Unschedulable: insufficient memory' }]
+  const data: CNPGWorkspaceResponse = { installed: true, context: 'test', namespaces: null, coverage: Object.fromEntries(CNPG_WORKSPACE_KEYS.map((k) => [k, { state: 'full' }])), objects: { poolers: [{ apiVersion: 'postgresql.cnpg.io/v1', metadata: { name: 'p', namespace: 'pg' }, spec: {} }] }, issues: [], audit: [], backupsOmitted: 0 }
+  const host = document.createElement('div'); const root = createRoot(host)
+  act(() => root.render(<CNPGPooling data={data} fleet={buildCNPGFleet(data)} namespaces={[]} searchParams={new URLSearchParams()} onSetParams={() => {}} onInspect={inspect} inspected={null} onClearNamespaces={() => {}} />))
+  const button = [...host.querySelectorAll('button')].find((b) => b.textContent === 'p-pending')!
+  act(() => button.click())
+  expect(inspect).toHaveBeenCalledExactlyOnceWith({ kind: 'pods', group: '', namespace: 'pg', name: 'p-pending' })
+  inspect.mockClear()
+  for (const label of ['Scheduler message', 'Measurement details']) {
+    const fold = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes(label))!
+    expect(fold.getAttribute('aria-expanded')).toBe('false')
+    act(() => fold.click())
+    expect(fold.getAttribute('aria-expanded')).toBe('true')
+    expect(inspect).not.toHaveBeenCalled()
+  }
+  act(() => host.querySelector('tbody tr td:nth-child(5)')!.querySelector('span')!.click())
+  expect(inspect).toHaveBeenCalledExactlyOnceWith({ kind: 'poolers', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'p' })
+  act(() => root.unmount())
 })

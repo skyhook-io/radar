@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { useCNPGNavigate } from '../useCNPGNavigate'
+import { cnpgDetailPath } from '../routes'
 import { ActionConfirmDialog, CNPGSchedulePreviewFacts, FactGrid, Tooltip, useDebouncedValue } from '@skyhook-io/k8s-ui'
 import { useCNPGAction, useCNPGScheduleCapabilities, useCNPGSchedulePreview, type CNPGScheduleActionName } from '../../../api/cnpg'
 import { actionOutcomeLocked, capabilityReason } from '../../../api/actions'
@@ -13,6 +15,7 @@ const BUTTON =
 /** Suspend, resume, run a ScheduledBackup's settings once, or change its schedule. */
 export function CNPGScheduleActions({ namespace, name }: { namespace: string; name: string }) {
   const caps = useCNPGScheduleCapabilities(namespace, name)
+  const navigate = useCNPGNavigate()
   const [open, setOpen] = useState<CNPGScheduleActionName | null>(null)
   const data = caps.data
   if (!data) return null
@@ -27,11 +30,21 @@ export function CNPGScheduleActions({ namespace, name }: { namespace: string; na
     )
   }
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
+    <div className="space-y-1.5">
+      <div className="flex flex-nowrap items-center gap-1.5">
       {btn('run', 'Run now')}
-      {!data.actions.run.allowed && <span className="text-xs text-theme-text-secondary">{capabilityReason(data.actions.run)}</span>}
       {data.facts.suspended ? btn('resume', 'Resume') : btn('suspend', 'Suspend')}
       {btn('setSchedule', 'Edit schedule')}
+      </div>
+      {!data.actions.run.allowed && <div className="text-xs text-theme-text-secondary">{(() => {
+        const reason = capabilityReason(data.actions.run) ?? ''
+        const cluster = data.facts.cluster
+        const mention = ` on ${cluster} first`
+        const destinationBlocked = data.facts.clusterState === 'ok' && !!data.facts.backupBlockedReason && reason === data.facts.backupBlockedReason
+        const start = cluster && destinationBlocked ? reason.indexOf(mention) : -1
+        const index = start < 0 ? -1 : start + 4
+        return index < 0 ? <>{reason}{cluster && destinationBlocked && <button type="button" className="ml-1 text-accent-text hover:underline" onClick={() => navigate(cnpgDetailPath({ plural: 'clusters', namespace, name: cluster }, data.context, 'backups'))}>Cluster {cluster} Backups →</button>}</> : <>{reason.slice(0, index)}<button type="button" className="text-accent-text hover:underline" onClick={() => navigate(cnpgDetailPath({ plural: 'clusters', namespace, name: cluster }, data.context, 'backups'))}>{cluster}</button>{reason.slice(index + cluster.length)}</>
+      })()}</div>}
       {open === 'setSchedule' && <EditScheduleDialog namespace={namespace} name={name} onClose={() => setOpen(null)} />}
       {open && open !== 'setSchedule' && <ScheduleDialog kind={open} namespace={namespace} name={name} onClose={() => setOpen(null)} />}
     </div>

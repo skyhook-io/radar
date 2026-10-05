@@ -24,3 +24,10 @@ describe('StructuredLogLine summary', () => {
     expect(html).toContain('Fencing status changed')
   })
 })
+
+it.each([false, true])('keeps annotations intact with word wrapping, expanded=%s', (expanded) => {
+  const html = renderToStaticMarkup(<StructuredLogLine content={JSON.stringify({ level: 'info', msg: 'normal words', token: 'x'.repeat(400) })} level="info" wordWrap defaultExpanded={expanded} />)
+  expect(html).toMatch(/inline-block whitespace-nowrap[^>]*>\{3 fields\}/)
+  expect(html).toContain('[overflow-wrap:anywhere]')
+  expect(html).not.toContain('break-all')
+})

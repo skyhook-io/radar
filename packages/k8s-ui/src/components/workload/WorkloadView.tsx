@@ -827,6 +827,7 @@ export function WorkloadView({
   const renderDiagnose = actionsBarProps?.renderDiagnose as
     | ((ctx: { kind: string; group?: string; namespace: string; name: string; health?: DiagnoseHealthHint }) => ReactNode)
     | undefined
+  const headerActions = resource && renderHeaderActions?.({ resource, context: expanded ? 'expanded' : 'drawer', onNavigate: onNavigateToResource })
   const diagnoseAction = renderDiagnose?.({
     kind: resource?.kind ?? knownKindForPluralWithGroup(apiKind, group ?? '') ?? apiKind,
     group,
@@ -916,6 +917,7 @@ export function WorkloadView({
               <p className="mt-1 text-sm text-theme-text-tertiary">{namespace}</p>
             </div>
             <div className="flex shrink-0 flex-nowrap items-center justify-end gap-1.5">
+              {diagnoseAction}
               {onExpand && (
                 <Tooltip content="Open full view" delay={150} position="bottom">
                   <button
@@ -958,9 +960,8 @@ export function WorkloadView({
             </div>
           </div>
 
-          {((resource && renderHeaderActions) || diagnoseAction) && <div className="flex flex-wrap items-center justify-end gap-1.5 px-4 pb-2">
-            {resource && renderHeaderActions?.({ resource, context: 'drawer', onNavigate: onNavigateToResource })}
-            {diagnoseAction}
+          {headerActions && <div className="flex flex-wrap items-center justify-end gap-1.5 px-4 pb-2 empty:hidden">
+            {headerActions}
           </div>}
           {(gitopsOwner || helmOwner || (gitOpsResourcePath && onNavigateGitOpsPath)) && (
             <div className="flex flex-wrap items-center gap-1.5 px-4 pb-3">
@@ -1199,7 +1200,7 @@ export function WorkloadView({
       })()}
       headerActions={
         <>
-          {resource && renderHeaderActions?.({ resource, context: 'expanded', onNavigate: onNavigateToResource })}
+          {headerActions}
           {diagnoseAction}
           <Tooltip content="Refresh" delay={150} position="bottom">
             <button

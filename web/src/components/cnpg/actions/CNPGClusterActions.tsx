@@ -25,6 +25,8 @@ import {
   switchoverLagNote,
   type StandbyChoice,
 } from './actionModel'
+import { cnpgDetailPath } from '../routes'
+import { useCNPGNavigate } from '../useCNPGNavigate'
 import { useCNPGFleet } from '../useCNPGSidebarWorkspace'
 import { RefreshFailedNotice } from '../../workspace/layout'
 import { assessRestoreSources } from '../recovery/restoreModel'
@@ -354,6 +356,7 @@ export function ClusterActionDialog({
   onClose: () => void
   initialPod?: string
 }) {
+  const navigate = useCNPGNavigate()
   const facts = caps.facts
   const cap = caps.actions[kind]
   const mutation = useCNPGAction('clusters', namespace, name)
@@ -557,7 +560,7 @@ export function ClusterActionDialog({
           title: `Restart ${name}?`,
           confirmLabel: 'Restart instances',
           effect: 'Restarts every instance with a rolling update: standbys first, then the primary.',
-          body: <CNPGRestartReview caps={caps} problems={fleet?.rows.find((r) => r.namespace === namespace && r.name === name)?.problems} />,
+          body: <CNPGRestartReview caps={caps} problems={fleet?.rows.find((r) => r.namespace === namespace && r.name === name)?.problems} onOpenOverview={() => { onClose(); navigate(cnpgDetailPath({ plural: 'clusters', namespace, name }, caps.context, 'overview')) }} />,
           writes: [{ summary: `patch Cluster ${namespace}/${name}`, detail: 'metadata.annotations["kubectl.kubernetes.io/restartedAt"] = <now, RFC 3339>' }],
           scope: { kind: 'metadata', paths: ['metadata.annotations["kubectl.kubernetes.io/restartedAt"]'] },
           typed: true,
@@ -781,7 +784,7 @@ export function ClusterActionDialog({
   )
 }
 
-export function CNPGRestartReview({ caps, problems = [] }: { caps: CNPGClusterCapabilities; problems?: CNPGProblem[] }) {
+export function CNPGRestartReview({ caps, problems = [], onOpenOverview }: { caps: CNPGClusterCapabilities; problems?: CNPGProblem[]; onOpenOverview?: () => void }) {
   const instances = caps.facts.instances
   const other = instances.filter((i) => i.pod !== caps.facts.currentPrimary)
   const noOtherReady = other.every((i) => i.podReadable && !i.ready)
@@ -803,7 +806,7 @@ export function CNPGRestartReview({ caps, problems = [] }: { caps: CNPGClusterCa
             return <li key={s.instance}>
               <span className="font-mono">{s.instance}</span> ({s.role}): {RESTART_EFFECT[s.effect] ?? s.effect}
               <span> · {instance?.podReadable ? instance.podExists ? instance.ready ? 'ready now' : 'not ready now' : 'instance Pod absent' : 'readiness not read'}</span>
-              {blockers.map((p) => <div key={p.id} className={toneTextClass('degraded')}>{p.title}{p.detail ? ` · ${p.detail}` : ''}</div>)}
+              {blockers.map((p) => <div key={p.id} className={toneTextClass('degraded')}>{p.title}{p.detail ? ` · ${p.detail}` : ''}{onOpenOverview && <button type="button" onClick={onOpenOverview} className="ml-1 text-accent-text hover:underline">See Overview’s problems →</button>}</div>)}
             </li>
           })}
         </ol>

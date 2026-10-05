@@ -430,7 +430,6 @@ export function cnpgDimensions({
   replication,
   replicationGap,
   storage,
-  plainStory = false,
 }: {
   row: CNPGFleetRow
   ha?: CNPGClusterHA
@@ -440,25 +439,24 @@ export function cnpgDimensions({
   replicationGap?: string
   /** Supplied by the host once storage is assessed; unassessed otherwise. */
   storage?: CNPGDimension
-  plainStory?: boolean
 }): CNPGDimension[] {
   return [
-    servingDimension(row, ha, plainStory),
+    servingDimension(row, ha),
     replicationDimension(row, replication, replicationGap),
-    storage ?? (plainStory && !row.disk ? { id: 'storage' as const, label: 'Storage', tone: 'unknown' as const, text: 'Reading…', source: 'Reading volume usage' } : storageDimension(row, plainStory)),
+    storage ?? storageDimension(row),
     protectionDimension(row),
   ]
 }
 
-function storageDimension(row: CNPGFleetRow, plainStory = false): CNPGDimension {
-  return withSlotRetention(row, volumeDimension(row, plainStory))
+function storageDimension(row: CNPGFleetRow): CNPGDimension {
+  return withSlotRetention(row, volumeDimension(row))
 }
 
-function volumeDimension(row: CNPGFleetRow, plainStory = false): CNPGDimension {
+function volumeDimension(row: CNPGFleetRow): CNPGDimension {
   const base = { id: 'storage' as const, label: 'Storage' }
   const disk = row.disk
-  if (!disk) return { ...base, tone: 'unknown', text: 'unassessed', source: 'Volume usage is not assessed here' }
-  if (disk.tone === 'unknown') return { ...base, tone: 'unknown', text: plainStory ? [disk.text, disk.source].filter(Boolean).join(': ') : 'unassessed', source: plainStory ? disk.detail ?? '' : [disk.text, disk.source].filter(Boolean).join(' · ') }
+  if (!disk) return { ...base, tone: 'unknown', text: 'Reading…', source: 'Reading volume usage' }
+  if (disk.tone === 'unknown') return { ...base, tone: 'unknown', text: [disk.text, disk.source].filter(Boolean).join(': '), source: disk.detail ?? '' }
   return { ...base, tone: disk.tone, text: disk.text, source: disk.source ?? 'Fullest volume' }
 }
 
@@ -472,14 +470,14 @@ function withSlotRetention(row: CNPGFleetRow, dim: CNPGDimension): CNPGDimension
     ...dim,
     tone: worseTone(dim.tone, 'degraded'),
     text: dim.tone === 'unknown' ? held : `${dim.text} · ${held}`,
-    source: dim.tone === 'unknown' ? `${slot.title}. Volume usage: ${dim.source ?? 'unassessed'}` : `${slot.title}. ${dim.source ?? ''}`.trim(),
+    source: dim.tone === 'unknown' ? `${slot.title}. Volume usage: ${[dim.text, dim.source].filter(Boolean).join(' · ')}` : `${slot.title}. ${dim.source ?? ''}`.trim(),
   }
 }
 
-function servingDimension(row: CNPGFleetRow, ha?: CNPGClusterHA, plainStory = false): CNPGDimension {
+function servingDimension(row: CNPGFleetRow, ha?: CNPGClusterHA): CNPGDimension {
   const base = { id: 'serving' as const, label: 'Serving' }
   if (row.hibernated) return { ...base, tone: 'neutral', text: 'hibernated', source: 'cnpg.io/hibernation annotation' }
-  if (plainStory && ha?.rwEndpoints.state === 'ok' && ha.rwEndpoints.pods.length === 0) return { ...base, tone: 'unhealthy', text: 'not serving: no ready read-write endpoint', source: `EndpointSlices of Service ${ha.rwEndpoints.service}` }
+  if (ha?.rwEndpoints.state === 'ok' && ha.rwEndpoints.pods.length === 0) return { ...base, tone: 'unhealthy', text: 'not serving: no ready read-write endpoint', source: `EndpointSlices of Service ${ha.rwEndpoints.service}` }
   const primaryName = row.cluster?.status?.currentPrimary as string | undefined
   const primary = row.pods.find((p) => p.name === primaryName)
   if (!primaryName) return { ...base, tone: 'unknown', text: 'unassessed', source: 'No current primary reported' }

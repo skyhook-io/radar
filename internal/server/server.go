@@ -3525,7 +3525,12 @@ func (s *Server) handlePodMetricsHistory(w http.ResponseWriter, r *http.Request)
 	s.writeJSON(w, history)
 }
 
-func podMetricsHistoryResponse(ctx context.Context, history *k8s.PodMetricsHistory, namespace, name string, health k8s.MetricsCollectionHealth, includeAPIServiceConditionMessage bool) *k8s.PodMetricsHistory {
+type podMetricsHistoryWithAvailability struct {
+	*k8s.PodMetricsHistory
+	MetricsAPIReachable bool `json:"metricsAPIReachable"`
+}
+
+func podMetricsHistoryResponse(ctx context.Context, history *k8s.PodMetricsHistory, namespace, name string, health k8s.MetricsCollectionHealth, includeAPIServiceConditionMessage bool) *podMetricsHistoryWithAvailability {
 	if history == nil {
 		history = &k8s.PodMetricsHistory{
 			Namespace:  namespace,
@@ -3536,7 +3541,10 @@ func podMetricsHistoryResponse(ctx context.Context, history *k8s.PodMetricsHisto
 	if health.PodMetrics.ConsecutiveErrors > 0 {
 		history.CollectionError, history.RawCollectionError, history.MetricsUnavailableDiagnosis, history.MetricsUnavailable = metricsHistoryCollectionError(ctx, "Pod", health.PodMetrics.LastError, includeAPIServiceConditionMessage)
 	}
-	return history
+	return &podMetricsHistoryWithAvailability{
+		PodMetricsHistory:   history,
+		MetricsAPIReachable: health.PodMetrics.LastSuccess != "" && health.PodMetrics.ConsecutiveErrors == 0,
+	}
 }
 
 // handleNodeMetricsHistory returns historical metrics for a specific node

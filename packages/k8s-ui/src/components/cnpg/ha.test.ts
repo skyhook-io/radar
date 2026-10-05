@@ -208,7 +208,7 @@ describe('cnpgDimensions', () => {
     const measured = cnpgDimensions({ row: row({ disk: { text: '91% used', tone: 'unhealthy', source: 'Fullest: data of pg-1' } }) })
     expect(measured[2]).toMatchObject({ id: 'storage', tone: 'unhealthy', text: '91% used' })
     const unmeasured = cnpgDimensions({ row: row({ disk: { text: 'No usage metrics', tone: 'unknown', source: 'needs Prometheus' } }) })
-    expect(unmeasured[2]).toMatchObject({ tone: 'unknown', text: 'unassessed', source: 'No usage metrics · needs Prometheus' })
+    expect(unmeasured[2]).toMatchObject({ tone: 'unknown', text: 'No usage metrics: needs Prometheus', source: '' })
   })
   it('names WAL an inactive slot holds even while volume usage is unassessed', () => {
     const slot = { id: 'slot:pg/pg:_cnpg_pg_2', severity: 'warning', category: 'availability', title: 'Inactive slot _cnpg_pg_2 holds 4.5 GiB of WAL on pg-1 for pg-2', subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'pg' }, source: 'measurement' } as const
@@ -216,6 +216,7 @@ describe('cnpgDimensions', () => {
     const d = cnpgDimensions({ row: r })
     expect(d[2]).toMatchObject({ id: 'storage', tone: 'degraded', text: 'WAL held by an inactive slot' })
     expect(d[2].source).toContain('4.5 GiB')
+    expect(d[2].source).toContain('No usage metrics: no series')
     const measured = cnpgDimensions({ row: { ...r, disk: { text: '40% used', tone: 'healthy', source: 'Fullest' } } })
     expect(measured[2]).toMatchObject({ tone: 'degraded', text: '40% used · WAL held by an inactive slot' })
   })
@@ -373,16 +374,16 @@ it('does not claim matching images without observed image evidence', () => {
   expect(cnpgImageDrift(base).known).toBe(false)
 })
 
-it('opts into a definitive non-serving verdict from an empty complete endpoint read without a primary', () => {
+it('uses a definitive non-serving verdict from an empty complete endpoint read without a primary', () => {
   const r = row({ cluster: { status: {} }, pods: [] })
   const empty = ha({ rwEndpoints: { state: 'ok', service: 'analytics-rw', pods: [] } })
-  expect(cnpgDimensions({ row: r, ha: empty, plainStory: true })[0]).toMatchObject({ tone: 'unhealthy', text: 'not serving: no ready read-write endpoint', source: 'EndpointSlices of Service analytics-rw' })
-  expect(cnpgDimensions({ row: r, ha: empty })[0].tone).toBe('unknown')
-  expect(cnpgDimensions({ row: r, ha: ha({ rwEndpoints: { state: 'denied', service: 'analytics-rw', pods: [] } }), plainStory: true })[0].tone).toBe('unknown')
-  expect(cnpgDimensions({ row: { ...r, hibernated: true }, ha: empty, plainStory: true })[0].text).toBe('hibernated')
+  expect(cnpgDimensions({ row: r, ha: empty })[0]).toMatchObject({ tone: 'unhealthy', text: 'not serving: no ready read-write endpoint', source: 'EndpointSlices of Service analytics-rw' })
+  expect(cnpgDimensions({ row: r, ha: empty })[0].tone).toBe('unhealthy')
+  expect(cnpgDimensions({ row: r, ha: ha({ rwEndpoints: { state: 'denied', service: 'analytics-rw', pods: [] } }) })[0].tone).toBe('unknown')
+  expect(cnpgDimensions({ row: { ...r, hibernated: true }, ha: empty })[0].text).toBe('hibernated')
 })
-it('opts into storage reasons for loading, missing Prometheus and denied usage', () => {
-  expect(cnpgDimensions({ row: row(), plainStory: true })[2].text).toBe('Reading…')
-  expect(cnpgDimensions({ row: row({ disk: { tone: 'unknown', text: 'No usage metrics', source: 'Prometheus not connected' } }), plainStory: true })[2].text).toBe('No usage metrics: Prometheus not connected')
-  expect(cnpgDimensions({ row: row({ disk: { tone: 'unknown', text: 'No access', source: 'Needs list persistentvolumeclaims in namespace db' } }), plainStory: true })[2].text).toContain('Needs list persistentvolumeclaims')
+it('uses storage reasons for loading, missing Prometheus and denied usage', () => {
+  expect(cnpgDimensions({ row: row() })[2].text).toBe('Reading…')
+  expect(cnpgDimensions({ row: row({ disk: { tone: 'unknown', text: 'No usage metrics', source: 'Prometheus not connected' } }) })[2].text).toBe('No usage metrics: Prometheus not connected')
+  expect(cnpgDimensions({ row: row({ disk: { tone: 'unknown', text: 'No access', source: 'Needs list persistentvolumeclaims in namespace db' } }) })[2].text).toContain('Needs list persistentvolumeclaims')
 })

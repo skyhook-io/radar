@@ -115,7 +115,6 @@ export function CNPGReplicationTab({
           hibernated={fleet?.rows.find((r) => r.namespace === namespace && r.name === name)?.hibernated}
           onOpenReachability={(svc) => navigate(buildWorkloadPath({ kind: 'services', group: '', namespace: svc.namespace, name: svc.name, tab: 'reachability' }))}
           showInstances={false}
-          showReadiness
           showCertificates={false}
         />
       </div>

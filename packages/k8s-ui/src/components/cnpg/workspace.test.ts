@@ -6,20 +6,21 @@ const G = 'postgresql.cnpg.io/v1'
 it('does not promote an archiving condition into evidence of an archive destination', () => {
   const c = cluster('payments', 'db', { status: { conditions: [{ type: 'ContinuousArchiving', status: 'True', lastTransitionTime: '2026-10-01T12:00:00Z' }] } })
   const fact = buildCNPGFleet(resp({ clusters: [c] })).rows[0].protection.walArchiving
-  expect(fact).toMatchObject({ text: 'No archive destination configured', tone: 'neutral', source: 'Cluster spec' })
-  expect(fact.detail).toBe('CNPG reports ContinuousArchiving=True since 2026-10-01T12:00:00Z')
+  expect(fact).toMatchObject({ text: 'Not archived: no destination configured', tone: 'neutral', source: 'Cluster spec' })
+  expect(fact.detail).toContain("PostgreSQL's WAL is not stored anywhere")
+  expect(fact.operatorCondition).toMatchObject({ type: 'ContinuousArchiving', status: 'True', lastTransitionTime: '2026-10-01T12:00:00Z' })
   const snapshot = cluster('snapshot', 'db', { spec: { backup: { volumeSnapshot: {} } }, status: c.status })
-  expect(buildCNPGFleet(resp({ clusters: [snapshot] })).rows[0].protection.walArchiving.text).toBe('No archive destination configured')
+  expect(buildCNPGFleet(resp({ clusters: [snapshot] })).rows[0].protection.walArchiving.text).toBe('Not archived: no destination configured')
 })
 
 it('preserves declared archiver failures and distinguishes backup-only and opaque archiver plugins', () => {
   const make = (plugins: any[], status = 'True') => buildCNPGFleet(resp({ clusters: [cluster('pg', 'db', { spec: { plugins }, status: { conditions: [{ type: 'ContinuousArchiving', status, message: 'archive report' }] } })] })).rows[0].protection.walArchiving
   const barman = { name: 'barman-cloud.cloudnative-pg.io', isWALArchiver: true }
   expect(make([barman], 'False')).toMatchObject({ text: 'Failing', tone: 'unhealthy', detail: 'archive report' })
-  expect(make([barman])).toMatchObject({ text: 'No archive destination configured', tone: 'neutral' })
-  expect(make([{ ...barman, isWALArchiver: false, parameters: { barmanObjectName: 'store' } }])).toMatchObject({ text: 'No archive destination configured', tone: 'neutral' })
+  expect(make([barman])).toMatchObject({ text: 'Not archived: no destination configured', tone: 'neutral' })
+  expect(make([{ ...barman, isWALArchiver: false, parameters: { barmanObjectName: 'store' } }])).toMatchObject({ text: 'Not archived: no destination configured', tone: 'neutral' })
   expect(make([{ name: 'third-party-archive', isWALArchiver: true }])).toMatchObject({ text: 'CNPG reports archiving', detail: 'Archive plugin declared; its destination is not assessed here' })
-  expect(make([{ ...barman, enabled: false, parameters: { barmanObjectName: 'store' } }])).toMatchObject({ text: 'No archive destination configured', tone: 'neutral' })
+  expect(make([{ ...barman, enabled: false, parameters: { barmanObjectName: 'store' } }])).toMatchObject({ text: 'Not archived: no destination configured', tone: 'neutral' })
 })
 
 function cluster(name: string, ns: string, extra: any = {}): any {
@@ -329,7 +330,8 @@ describe('buildCNPGFleet', () => {
     const row = buildCNPGFleet({ ...base, jobPods: [joinPod] }).rows[0]
     expect(row.problems[0].title).toBe("New standby pg-a-2: Can't be scheduled")
     expect(row.problems[0].severity).toBe('warning')
-    expect(row.problems[0].detail).toBe('2 node(s) insufficient pods (0/2 nodes available)')
+    expect(row.problems[0].detail).toBe('both nodes have reached their Pod limit')
+    expect(row.problems[0].rawDetail).toBe('2 node(s) insufficient pods (0/2 nodes available)')
     expect(row.problems[0].origin?.label).toBe('Kubernetes scheduler')
     expect(row.pods.map((p) => p.name)).toEqual(['pg-a-1'])
     expect(buildCNPGFleet(base).rows[0].problems.some((p) => p.subject.name === 'pg-a-2-join-x1')).toBe(false)
@@ -434,9 +436,9 @@ describe('schedule fact', () => {
   it('reads the schedule in words when the server supplied a reading, with the cron as its source', () => {
     const sched = { metadata: { namespace: 'db', name: 'nightly' }, spec: { cluster: { name: 'pg-a' }, schedule: '0 0 2 * * *' } }
     const withReading = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')], scheduledBackups: [sched] }, { scheduleReadings: { 'db/nightly': 'every day at 02:00 UTC' } }))
-    expect(withReading.rows[0].protection.schedule).toMatchObject({ text: 'Scheduled · every day at 02:00 UTC', source: 'ScheduledBackup nightly · cron 0 0 2 * * *' })
+    expect(withReading.rows[0].protection.schedule).toMatchObject({ text: 'Enabled · every day at 02:00 UTC · blocked: no backup destination', source: 'ScheduledBackup nightly · cron 0 0 2 * * *' })
     const without = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')], scheduledBackups: [sched] }))
-    expect(without.rows[0].protection.schedule.text).toBe('Scheduled · 0 0 2 * * *')
+    expect(without.rows[0].protection.schedule.text).toBe('Enabled · 0 0 2 * * * · blocked: no backup destination')
   })
 })
 
@@ -468,23 +470,23 @@ describe('schedule fact', () => {
   })
 })
 
-it('opts into plain WAL evidence without turning an operator success into an archive', () => {
+it('uses plain WAL evidence without turning an operator success into an archive', () => {
   const condition = { type: 'ContinuousArchiving', status: 'True', message: 'Continuous archiving is working', lastTransitionTime: '2026-10-01T12:00:00Z' }
   const c = cluster('payments', 'db', { status: { conditions: [condition] } })
-  const p = buildCNPGFleet(resp({ clusters: [c] }), { plainStory: true }).rows[0].protection
+  const p = buildCNPGFleet(resp({ clusters: [c] })).rows[0].protection
   expect(p.walArchiving).toMatchObject({ text: 'Not archived: no destination configured', operatorCondition: condition })
   expect(p.walArchiving.detail).toBe("PostgreSQL's WAL is not stored anywhere, so point-in-time recovery is not possible. CloudNativePG still reports archiving as working because, with no destination, it accepts each WAL file without keeping it.")
   expect(p.recoveryWindow.text).toBe('None: no backup destination')
   c.spec.backup = { barmanObjectStore: { destinationPath: 's3://backups' } }
-  const configured = buildCNPGFleet(resp({ clusters: [c] }), { plainStory: true }).rows[0].protection.walArchiving
-  expect(configured).toEqual(buildCNPGFleet(resp({ clusters: [c] })).rows[0].protection.walArchiving)
+  const configured = buildCNPGFleet(resp({ clusters: [c] })).rows[0].protection.walArchiving
+  expect(configured).toMatchObject({ tone: 'healthy', source: 'Cluster status · ContinuousArchiving=True' })
   expect(configured.text).toBe('CNPG reports archiving')
 })
 it('uses the schedule method blocker in plain recovery summaries, including a mismatched destination', () => {
   const c = cluster('payments', 'db')
   const schedule = { metadata: { name: 'nightly', namespace: 'db' }, spec: { method: 'barmanObjectStore', cluster: { name: 'payments' }, schedule: '0 0 2 * * *' } }
   const data = resp({ clusters: [c], scheduledBackups: [schedule] }, { scheduleReadings: { 'db/nightly': 'every day at 02:00 UTC' } })
-  const fact = () => buildCNPGFleet(data, { plainStory: true }).rows[0].protection.schedule
+  const fact = () => buildCNPGFleet(data).rows[0].protection.schedule
   expect(fact()).toMatchObject({ text: 'Enabled · every day at 02:00 UTC · blocked: no backup destination', tone: 'degraded' })
   c.spec.backup = { volumeSnapshot: {} }
   expect(fact()).toMatchObject({ text: 'Enabled · every day at 02:00 UTC · blocked: no barmanObjectStore destination', tone: 'degraded' })
@@ -503,7 +505,8 @@ it('keeps the plain scheduler cause and the complete scheduler message as separa
   const pending = { apiVersion: 'v1', kind: 'Pod', metadata: { name: 'orders-2-join-x', namespace: 'db', labels: { 'cnpg.io/cluster': 'orders', 'cnpg.io/jobRole': 'join', 'cnpg.io/instanceName': 'orders-2' } } }
   const raw = '0/2 nodes are available: 2 Too many pods. preemption: no victims.'
   const data = { ...resp({ clusters: [cluster('orders', 'db')] }, { issues: [{ id: 'j', severity: 'critical' as const, category: 'unschedulable', kind: 'Pod', namespace: 'db', name: 'orders-2-join-x', reason: 'Unschedulable', message: raw }] }), jobPods: [pending] }
-  const problem = buildCNPGFleet(data, { plainStory: true }).rows[0].problems.find((p) => p.subject.name === 'orders-2-join-x')!
-  expect(problem.detail).toBe('Cannot be scheduled: both nodes have reached their Pod limit')
+  const problem = buildCNPGFleet(data).rows[0].problems.find((p) => p.subject.name === 'orders-2-join-x')!
+  expect(problem.instance).toBe('orders-2')
+  expect(problem.detail).toBe('both nodes have reached their Pod limit')
   expect(problem.rawDetail).toBe(raw)
 })

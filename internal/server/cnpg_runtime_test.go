@@ -1082,3 +1082,89 @@ func TestCNPGMarkTimedOutIgnoresTheWordInNames(t *testing.T) {
 		}
 	}
 }
+
+func TestCNPGPoolerNotStarted(t *testing.T) {
+	for _, phase := range []corev1.PodPhase{corev1.PodFailed, corev1.PodSucceeded} {
+		p := &corev1.Pod{Status: corev1.PodStatus{Phase: phase}}
+		if got := cnpgPoolerNotStarted(p); got != "PgBouncer is not running (Pod "+string(phase)+")" {
+			t.Errorf("%s: %s", phase, got)
+		}
+	}
+	pending := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodPending}}
+	if got := cnpgPoolerNotStarted(pending); got != "PgBouncer has not started (Pod Pending)" {
+		t.Fatal(got)
+	}
+	p := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodPending, Conditions: []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse}}}}
+	if got := cnpgPoolerNotStarted(p); got != "PgBouncer has not started (Pod cannot be scheduled)" {
+		t.Fatal(got)
+	}
+	p.Status.Phase = corev1.PodRunning
+	if got := cnpgPoolerNotStarted(p); got != "" {
+		t.Fatal(got)
+	}
+	p.Status.Phase = ""
+	if got := cnpgPoolerNotStarted(p); got != "" {
+		t.Fatal("unreported phase must stay unknown: " + got)
+	}
+}
+func TestCNPGPoolerPendingRuntime(t *testing.T) {
+	for _, outcome := range []string{"unreachable", "denied", "measured"} {
+		t.Run(outcome, func(t *testing.T) {
+			denied := outcome == "denied"
+			ns := "b7pool" + outcome
+			seedCNPGWorkspace(t, cnpgWorkspaceTestKinds, cnpgRuntimeWithUID(cnpgObj("postgresql.cnpg.io/v1", "Pooler", ns, "pg-orders-rw", map[string]any{"cluster": map[string]any{"name": "pg-orders"}}, nil), ns+"-uid"))
+			seedCNPGPoolerChain(t, ns, types.UID(ns+"-uid"), corev1.PodCondition{Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: "Unschedulable", Message: "2 Too many pods"})
+			p, err := testFakeClient.CoreV1().Pods(ns).Get(context.Background(), "pg-orders-rw-abc-1", metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.Status.Phase = corev1.PodPending
+			if _, err = testFakeClient.CoreV1().Pods(ns).UpdateStatus(context.Background(), p, metav1.UpdateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				cached, err := k8s.GetResourceCache().Pods().Pods(ns).Get(p.Name)
+				if err == nil && cached.Status.Phase == corev1.PodPending {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("pending Pod did not reach cache")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			useCNPGProxyAPIServer(t, func(w http.ResponseWriter, c cnpgProxyCall) {
+				if denied {
+					cnpgWriteAPIStatus(w, http.StatusForbidden, metav1.StatusReasonForbidden, "pods/proxy is forbidden")
+				} else if outcome == "measured" {
+					_, _ = w.Write([]byte(cnpgPoolerMetricsFixture))
+				} else {
+					http.Error(w, "address not allowed", http.StatusBadGateway)
+				}
+			})
+			resp, err := http.Get(testServer.URL + "/api/cnpg/poolers/" + ns + "/pg-orders-rw/runtime")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			var got CNPGPoolerRuntimeResponse
+			if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Pods) != 1 {
+				t.Fatalf("%+v", got)
+			}
+			if denied {
+				if got.Permission.Proxy != "denied" || got.Pods[0].State != cnpgRuntimeStateDenied {
+					t.Fatalf("denial must win: %+v", got)
+				}
+			} else if outcome == "measured" {
+				if got.Pods[0].State != cnpgRuntimeStateOK || got.Pods[0].CNPGPoolerPodFacts == nil {
+					t.Fatalf("live read must beat stale Pod phase: %+v", got.Pods[0])
+				}
+			} else if got.Pods[0].Reason != "PgBouncer has not started (Pod cannot be scheduled)" || got.Pods[0].Error != "" {
+				t.Fatalf("%+v", got.Pods[0])
+			}
+		})
+	}
+}

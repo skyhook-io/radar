@@ -424,7 +424,7 @@ export function LogCore({
         search.open()
         return
       }
-      if (e.key === 's' && !e.ctrlKey && !e.metaKey && !e.altKey && onStartStream && !sourceUnavailable) {
+      if (e.key === 's' && !e.ctrlKey && !e.metaKey && !e.altKey && onStartStream && (isStreaming || !sourceUnavailable)) {
         const target = e.target as HTMLElement | null
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return
         e.preventDefault()
@@ -575,11 +575,11 @@ export function LogCore({
 
         {/* Stream / Stop toggle — only shown when streaming is supported */}
         {onStartStream && (
-          <Tooltip content={isStreaming ? 'Stop streaming' : 'Start streaming'} delay={TIP_DELAY} position="bottom">
+          <Tooltip content={isStreaming ? 'Stop streaming' : sourceUnavailable ? 'Available once an instance is running' : 'Start streaming'} delay={TIP_DELAY} position="bottom">
             <button
               onClick={isStreaming ? onStopStream : onStartStream}
               disabled={sourceUnavailable && !isStreaming}
-              className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded transition-colors ${
+              className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 isStreaming
                   ? 'bg-green-600 text-white hover:bg-green-700'
                   : `${palette.elevatedBg} ${palette.textSecondary} ${palette.hoverBg}`
@@ -624,7 +624,7 @@ export function LogCore({
           })}
         </div>
 
-        <div className="flex-1" />
+        <div role="group" aria-label="Log display and utilities" className="ml-auto flex shrink-0 flex-nowrap items-center gap-2">
 
         {/* Structured-log display mode: icon cycles compact→expanded→raw, chevron picks explicitly. */}
         {hasStructuredEntries && (
@@ -896,6 +896,7 @@ export function LogCore({
             </button>
           </Tooltip>
         )}
+        </div>
       </div>
 
       {/* Search bar */}
@@ -1065,7 +1066,7 @@ export function LogCore({
 
       {/* Keyboard shortcut hints */}
       <div className={`flex items-center gap-4 px-3 py-1 border-t ${palette.border} ${palette.toolbarBg} text-[10px] ${palette.textDisabled}`}>
-        {onStartStream && <Shortcut keys="S" label={isStreaming ? 'Stop stream' : 'Stream'} palette={palette} />}
+        {onStartStream && (!sourceUnavailable || isStreaming) && <Shortcut keys="S" label={isStreaming ? 'Stop stream' : 'Stream'} palette={palette} />}
         <Shortcut keys="Ctrl+F" label="Search" palette={palette} />
         {search.mode !== 'hide' && (
           <>
@@ -1192,7 +1193,7 @@ function LogLine({
     const highlighted = highlightSearchMatches(plain, searchQuery, searchIsRegex, searchIsCaseSensitive)
     contentElement = (
       <span
-        className={`${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'} ${levelColor}`}
+        className={`${wordWrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre'} ${levelColor}`}
         dangerouslySetInnerHTML={{ __html: highlighted }}
       />
     )
@@ -1212,13 +1213,13 @@ function LogLine({
     const html = ansiToHtml(entry.content)
     contentElement = (
       <span
-        className={`${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'} ${levelColor}`}
+        className={`${wordWrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre'} ${levelColor}`}
         dangerouslySetInnerHTML={{ __html: html }}
       />
     )
   } else {
     contentElement = (
-      <span className={`${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'} ${levelColor}`}>
+      <span className={`${wordWrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre'} ${levelColor}`}>
         {stripAnsi(entry.content)}
       </span>
     )

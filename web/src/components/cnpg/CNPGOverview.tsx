@@ -284,6 +284,7 @@ export function CNPGOverview({
   }
 
   const lowerBound = fleet.incompleteKinds.length > 0
+  const attentionText = lowerBound ? fleet.attentionCount > 0 ? `≥${fleet.attentionCount}` : 'Unknown' : String(fleet.attentionCount)
   const storageUnmeasured = cnpgStorageUnmeasured(fleet.rows)
 
   return (
@@ -292,8 +293,7 @@ export function CNPGOverview({
         title="Clusters"
         subtitle={
           <>
-            {totalText} PostgreSQL {total === 1 ? 'cluster' : 'clusters'} · {fleet.attentionCount}
-            {lowerBound ? '+' : ''} need attention
+            {totalText} PostgreSQL {total === 1 ? 'cluster' : 'clusters'} · {lowerBound && fleet.attentionCount === 0 ? 'Needs attention: unknown' : `${attentionText} need attention`}
             <span className="text-theme-text-tertiary"> · {context}</span>
           </>
         }
@@ -307,7 +307,7 @@ export function CNPGOverview({
           <div className="flex flex-wrap items-center gap-2">
             <div role="tablist" aria-label="Clusters" className="inline-flex rounded-lg bg-theme-elevated p-0.5">
               {segment('all', 'All clusters', totalText)}
-              {segment('attention', 'Needs attention', fleet.attentionCount)}
+              {segment('attention', 'Needs attention', attentionText)}
             </div>
             {CNPG_PROBLEM_CATEGORIES.filter((c) => fleet.categoryCounts[c.id] > 0).map((c) => {
               const on = cat === c.id
@@ -323,7 +323,7 @@ export function CNPGOverview({
                   )}
                 >
                   {c.label}
-                  <span className="font-mono">{fleet.categoryCounts[c.id]}</span>
+                  <span className="font-mono">{lowerBound ? '≥' : ''}{fleet.categoryCounts[c.id]}</span>
                 </button>
               )
             })}
@@ -458,7 +458,7 @@ export function CNPGOverview({
             {rows.length === 0 && (
               <div className="px-4 py-6 text-sm text-theme-text-tertiary">
                 {filter === 'attention' && !cat && !q
-                  ? 'No clusters need attention.'
+                  ? lowerBound ? 'No attention findings in the readable data; other data was not read.' : 'No clusters need attention.'
                   : 'No clusters match these filters.'}{' '}
                 <button type="button" onClick={() => onSetParams({ filter: 'all', cat: null, q: null })} className="font-medium text-accent-text hover:underline">
                   Show all clusters

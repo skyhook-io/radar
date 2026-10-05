@@ -34,7 +34,7 @@ export function useCNPGFleet(namespaces: string[], enabled = true) {
     () =>
       query.data?.installed
         ? applyCNPGFleetMetrics(
-            applyCNPGDisk(buildCNPGFleet(query.data, { plainStory: true }), disk.data?.clusters ?? (disk.error ? diskFailed(query.data.objects.clusters ?? [], disk.error) : undefined)),
+            applyCNPGDisk(buildCNPGFleet(query.data), disk.data?.clusters ?? (disk.error ? diskFailed(query.data.objects.clusters ?? [], disk.error) : undefined)),
             metrics.data?.clusters,
             metrics.data,
           )
@@ -55,7 +55,9 @@ function destinationCount(screen: CNPGScreen, fleet: CNPGFleet | null): { count?
   if (!fleet) return {}
   const partial = fleet.incompleteKinds.length > 0
   const note = partial ? ' Some CloudNativePG data is not readable, so this is a lower bound.' : ''
-  const at = (count: number, what: string) => ({ count, lowerBound: partial, title: `${partial ? 'At least ' : ''}${count} ${what}.${note}` })
+  const at = (count: number, what: string) => partial && count === 0
+    ? { count: null, lowerBound: true, title: 'Unknown: some CloudNativePG data could not be read.' }
+    : { count, lowerBound: partial, title: `${partial ? 'At least ' : ''}${count} ${what}.${note}` }
   switch (screen) {
     case 'overview':
       return at(fleet.attentionCount, 'clusters need attention')

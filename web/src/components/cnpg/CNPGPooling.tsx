@@ -10,6 +10,8 @@ import {
   isApiGroup,
   isCNPGPoolerPaused,
   poolerReadiness,
+  CNPGPoolerScheduling,
+  CNPGPoolerUnmeasured,
   type HealthLevel,
 } from '@skyhook-io/k8s-ui'
 import { useCNPGPoolerRuntime } from '../../api/cnpg'
@@ -72,12 +74,12 @@ export function CNPGPooling({ data, fleet, namespaces, searchParams, onSetParams
             {
               header: 'Readiness',
               width: '24%',
-              cell: (p) => <PoolerReadiness pooler={p} onInspect={onInspect} />,
+              cell: (p) => <div onClick={(e) => { if ((e.target as Element).closest('button, a')) e.stopPropagation() }}><PoolerReadiness pooler={p} onInspect={onInspect} /></div>,
             },
             {
               header: 'Connection pressure',
               width: '16%',
-              cell: (p) => <PoolerPressure namespace={p.metadata?.namespace} name={p.metadata?.name} />,
+              cell: (p) => <div onClick={(e) => { if ((e.target as Element).closest('button, a')) e.stopPropagation() }}><PoolerPressure namespace={p.metadata?.namespace} name={p.metadata?.name} /></div>,
             },
           ]}
           rows={poolers}
@@ -87,7 +89,7 @@ export function CNPGPooling({ data, fleet, namespaces, searchParams, onSetParams
           inspected={inspected}
           minWidth={880}
           empty={coverageEmpty(data.coverage.poolers, 'Poolers')}
-          footer="Readiness is the Pooler’s Deployment (the Pooler itself only counts scheduled Pods). Pressure is read live from each PgBouncer's metrics through the Kubernetes API proxy."
+          footer="Readiness is the Pooler’s Deployment (the Pooler status reports an operator count). Pressure is read live from each PgBouncer's metrics through the Kubernetes API proxy."
         />
       </ScreenBody>
     </div>
@@ -118,7 +120,7 @@ function PoolerReadiness({ pooler, onInspect }: { pooler: any; onInspect: CNPGSc
         {paused && <Badge severity="warning" size="sm">Pause requested</Badge>}
       </span>
       <Sub>{r.detail}</Sub>
-      {runtime.data?.pods.filter((p) => p.schedulingReason).map((p) => <Sub key={p.pod}><button type="button" onClick={(e) => { e.stopPropagation(); onInspect({ kind: 'pods', group: '', namespace, name: p.pod }) }} className="text-accent-text hover:underline">{p.pod}</button> cannot be scheduled: {p.schedulingReason}</Sub>)}
+      <CNPGPoolerScheduling namespace={namespace} pods={runtime.data?.pods ?? []} onNavigate={(ref) => onInspect({ kind: 'pods', group: '', namespace, name: ref.name })} />
       <RefreshFailedNotice queries={[caps]} />
     </>
   )
@@ -141,12 +143,7 @@ function PoolerPressureData({ data }: { data: NonNullable<ReturnType<typeof useC
   }
   const { reporting: ok, limitation, empty } = poolerPressureCoverage(data.pods)
   if (ok.length === 0) {
-    return (
-      <>
-        <span className="text-theme-text-tertiary">Not measured</span>
-        <Sub>{limitation ?? 'no PgBouncer answered'}</Sub>
-      </>
-    )
+    return <CNPGPoolerUnmeasured pods={data.pods} />
   }
   const pools = ok.flatMap((p) => p.pools ?? [])
   if (pools.length === 0) {

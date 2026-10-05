@@ -66,7 +66,7 @@ export function CNPGConfiguration({ namespace, name, onNavigate, onSelectTab }: 
   )
 }
 
-type DeclaredFact = { label: string; path: string; value: ReactNode }
+type DeclaredFact = { label: string; path: string; value: ReactNode; raw?: string }
 
 export function CNPGDeclaredSettings({ cluster, onNavigate, onSelectTab, onOpenDeclarations }: {
   cluster: any; onNavigate?: NavigateToRef; onSelectTab: (tab: string) => void; onOpenDeclarations: () => void
@@ -87,8 +87,8 @@ export function CNPGDeclaredSettings({ cluster, onNavigate, onSelectTab, onOpenD
     const image = basic.find((f) => f.label === 'Image')
     if (image) image.value = <>{image.value}<div className="text-xs text-theme-text-secondary">Running: {cluster.status.image} · status.image</div></>
   }
-  add(basic, 'Primary update strategy', 'spec.primaryUpdateStrategy', spec.primaryUpdateStrategy)
-  add(basic, 'Primary update method', 'spec.primaryUpdateMethod', spec.primaryUpdateMethod)
+  if (spec.primaryUpdateStrategy) basic.push({ label: 'Primary update strategy', path: 'spec.primaryUpdateStrategy', raw: spec.primaryUpdateStrategy, value: spec.primaryUpdateStrategy === 'unsupervised' ? 'unsupervised: the operator updates the primary automatically (switchover or restart per update method)' : spec.primaryUpdateStrategy === 'supervised' ? 'supervised: waits for a manual switchover' : spec.primaryUpdateStrategy })
+  if (spec.primaryUpdateMethod) basic.push({ label: 'Primary update method', path: 'spec.primaryUpdateMethod', raw: spec.primaryUpdateMethod, value: spec.primaryUpdateMethod === 'restart' ? 'restart: updates the primary in place, interrupting its connections' : spec.primaryUpdateMethod === 'switchover' ? 'switchover: promotes an updated standby before updating the old primary' : spec.primaryUpdateMethod })
   add(basic, 'Superuser access', 'spec.enableSuperuserAccess', spec.enableSuperuserAccess)
   add(basic, 'Minimum sync replicas', 'spec.minSyncReplicas', spec.minSyncReplicas)
   add(basic, 'Maximum sync replicas', 'spec.maxSyncReplicas', spec.maxSyncReplicas)
@@ -101,7 +101,7 @@ export function CNPGDeclaredSettings({ cluster, onNavigate, onSelectTab, onOpenD
   if (affinity && Object.keys(affinity).length > 0) {
     const bits: string[] = []
     if (affinity.enablePodAntiAffinity !== undefined) bits.push(`pod anti-affinity ${affinity.enablePodAntiAffinity ? 'enabled' : 'disabled'}`)
-    if (affinity.podAntiAffinityType) bits.push(affinity.podAntiAffinityType)
+    if (affinity.podAntiAffinityType) placement.push({ label: 'Pod anti-affinity', path: 'spec.affinity.podAntiAffinityType', raw: affinity.podAntiAffinityType, value: affinity.enablePodAntiAffinity === false ? `${affinity.podAntiAffinityType} (not applied: pod anti-affinity is disabled)` : affinity.podAntiAffinityType === 'preferred' ? `preferred (instances spread across ${affinity.topologyKey && affinity.topologyKey !== 'kubernetes.io/hostname' ? 'topology domains' : 'nodes'} when possible)` : affinity.podAntiAffinityType === 'required' ? `required (instances must run on separate ${affinity.topologyKey && affinity.topologyKey !== 'kubernetes.io/hostname' ? 'topology domains' : 'nodes'})` : affinity.podAntiAffinityType })
     if (affinity.topologyKey) bits.push(`topology ${affinity.topologyKey}`)
     if (Object.keys(affinity.nodeSelector ?? {}).length > 0) bits.push(`nodes ${Object.entries(affinity.nodeSelector).map(([k, v]) => `${k}=${v}`).join(', ')}`)
     for (const key of ['nodeAffinity', 'podAffinity', 'podAntiAffinity', 'additionalPodAffinity', 'additionalPodAntiAffinity', 'tolerations']) {
@@ -181,7 +181,7 @@ export function CNPGDeclaredSettings({ cluster, onNavigate, onSelectTab, onOpenD
   ].filter((c) => c.facts.length > 0).map((c) => <section key={c.title} className={cardClass}>
     <SectionHeading>{c.title}</SectionHeading>
     <FactGrid>{c.facts.map((f) => <FactRow key={`${f.label}/${f.path}`} label={f.label}>
-      {f.value}<div className="mt-0.5 text-[11px] text-theme-text-tertiary">{f.path}</div>
+      {f.value}<div className="mt-0.5 text-[11px] text-theme-text-tertiary">{f.raw ? `${f.raw} · ${f.path}` : f.path}</div>
     </FactRow>)}</FactGrid>
     {c.tab && <button type="button" onClick={() => onSelectTab(c.tab!)} className="mt-2 text-xs text-accent-text hover:underline">{c.link}</button>}
   </section>)}</>

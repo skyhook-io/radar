@@ -219,16 +219,17 @@ it('shows the declaration read limitation inline on Overview', () => {
   act(() => root.unmount())
 })
 
-it('opts into neutral literal operator phases while retaining other consumers defaults', () => {
+it('shows neutral literal operator phases for every CNPG caller', () => {
   const r = row({ cluster: { status: { phase: 'Cluster in healthy state' } } })
-  const root = render(<CNPGClusterSummary row={r} literalPhase />)
+  const root = render(<CNPGClusterSummary row={r} />)
   expect(document.body.textContent).toContain('Cluster in healthy state')
   const badge = [...document.querySelectorAll('span')].find((el) => el.textContent === 'Cluster in healthy state')!
   expect(badge.className).not.toContain('emerald')
   act(() => root.unmount())
-  const old = render(<CNPGClusterSummary row={r} />)
-  expect(document.body.textContent).toContain('Healthy')
-  act(() => old.unmount())
+  const expanded = render(<CNPGClusterSummary row={r} framed />)
+  expect(document.body.textContent).toContain('Cluster in healthy state')
+  expect(document.body.textContent).not.toContain('Healthy')
+  act(() => expanded.unmount())
 })
 it('shows healthy Serving only when requested and keeps its tab mark absent', () => {
   const dimension: CNPGDimension = { id: 'serving', label: 'Serving', tone: 'healthy', text: 'primary ready', source: 'Pod pg-1 and Service pg-rw' }
@@ -245,7 +246,7 @@ it('keeps literal blocked phases neutral with their explanation and Operator act
   const phase = 'Cluster cannot proceed to reconciliation due to an unknown plugin being required'
   const r = row({ cluster: { status: { phase } }, controllerStatus: { text: 'Unknown Plugin', level: 'unhealthy' } })
   const open = vi.fn()
-  const root = render(<CNPGClusterSummary row={r} literalPhase onOpenOperator={open} />)
+  const root = render(<CNPGClusterSummary row={r} onOpenOperator={open} />)
   expect(document.body.textContent).toContain(phase)
   expect(document.body.textContent).toContain('reported by CNPG')
   expect(document.body.textContent).toContain('Plugins this cluster uses')

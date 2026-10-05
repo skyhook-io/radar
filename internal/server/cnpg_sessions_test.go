@@ -650,3 +650,34 @@ func TestCNPGClusterSessions_WaitsForPrimary(t *testing.T) {
 		t.Fatalf("missing primary must not imply exec access: %d %+v", denied.StatusCode, got)
 	}
 }
+
+func TestCNPGPoolerStatePending(t *testing.T) {
+	pending := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pooler-1"}, Status: corev1.PodStatus{Phase: corev1.PodPending, Conditions: []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionFalse}}}}
+	for _, tc := range []struct {
+		name, output  string
+		err           error
+		state, reason string
+	}{
+		{"pending transport", "", errors.New("address not allowed"), cnpgRuntimeStateUnreachable, "PgBouncer has not started (Pod cannot be scheduled)"},
+		{"permission wins", "", apierrors.NewForbidden(schema.GroupResource{Resource: "pods/exec"}, "pooler-1", errors.New("denied")), cnpgExecStateDenied, "denied"},
+		{"successful read wins", "paused|no\n", nil, cnpgRuntimeStateOK, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []cnpgExecCall
+			got := readCNPGPgBouncerState(context.Background(), cnpgFakeExec(&calls, tc.output, tc.err), "db", pending)
+			if got.State != tc.state || !strings.Contains(got.Error, tc.reason) || got.Pod != "pooler-1" {
+				t.Fatalf("%+v", got)
+			}
+			if tc.state == cnpgRuntimeStateOK && (got.Paused == nil || *got.Paused) {
+				t.Fatalf("lost SHOW STATE: %+v", got)
+			}
+		})
+	}
+	running := pending.DeepCopy()
+	running.Status.Phase = corev1.PodRunning
+	var calls []cnpgExecCall
+	got := readCNPGPgBouncerState(context.Background(), cnpgFakeExec(&calls, "", errors.New("address not allowed")), "db", running)
+	if !strings.Contains(got.Error, "address not allowed") {
+		t.Fatalf("lost running Pod transport details: %+v", got)
+	}
+}

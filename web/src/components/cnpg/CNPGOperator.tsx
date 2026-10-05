@@ -4,7 +4,7 @@ import { parse } from 'yaml'
 import { useCNPGOperator, type CNPGOperatorComponent, type CNPGOperatorConfig } from '../../api/cnpg'
 import { CNPGOperatorDiagnosisSection } from './CNPGOperatorDiagnosis'
 import { cnpgOperatorState, cnpgRestartHistory } from './operatorStatus'
-import { CNPGWorkspaceHeader, CoverageNotice, coverageEmpty, coverageLabel, worstCoverage, cnpgResource, type CNPGScreenProps } from './shared'
+import { CNPGWorkspaceHeader, CoverageNotice, coverageEmpty, worstCoverage, cnpgResource, type CNPGScreenProps } from './shared'
 import { Mono, Notice, RefreshFailedNotice, ScreenBody, SectionTable, Sub } from '../workspace/layout'
 
 interface CatalogRow {
@@ -97,9 +97,6 @@ export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenPr
 
   const direct = fleet.rows.filter((r) => !r.cluster?.spec?.imageCatalogRef)
   const op = operator.data
-  const coverageGaps = op
-    ? (['deployments', 'services'] as const).filter((k) => op.coverage[k]?.state !== 'full')
-    : []
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -116,11 +113,6 @@ export function CNPGOperator({ data, fleet, onInspect, inspected }: CNPGScreenPr
           <Notice>Operator details could not be loaded{operator.error instanceof Error ? `: ${operator.error.message}` : '.'}</Notice>
         ) : (
           <>
-            {coverageGaps.length > 0 && (
-              <Notice>
-                Some workloads are not readable ({coverageGaps.map((k) => `${k === 'deployments' ? 'Deployments' : 'Services'}: ${coverageLabel(op.coverage[k])}`).join(', ')}), so an operator or plugin running in those namespaces may be missing below.
-              </Notice>
-            )}
             <CurrentState op={op} clusters={fleet.rows} />
             <SectionTable
               title="Operator and plugins"

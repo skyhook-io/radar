@@ -60,8 +60,9 @@ it('keeps blocked header buttons focusable, explains on focus and click, and pri
 it('reviews each restart step with current readiness, scheduling blockers and primary downtime', () => {
   const caps = { facts: { currentPrimary: 'orders-1', instances: [{ pod: 'orders-1', ready: true, podReadable: true, podExists: true }, { pod: 'orders-2', ready: false, podReadable: true, podExists: false }] }, restartPlan: { primaryUpdateStrategy: 'unsupervised', primaryUpdateMethod: 'restart', steps: [{ instance: 'orders-2', role: 'standby', effect: 'recreate' }, { instance: 'orders-1', role: 'primary', effect: 'restart' }] } } as any
   const problem = { id: 'join', instance: 'orders-2', title: "New standby orders-2: Can't be scheduled", detail: '2 nodes insufficient pods', subject: { kind: 'Pod', name: 'orders-2-join' } } as any
-  const html = renderToStaticMarkup(<CNPGRestartReview caps={caps} problems={[problem]} />)
+  const html = renderToStaticMarkup(<CNPGRestartReview caps={caps} problems={[problem]} onOpenOverview={() => {}} />)
   for (const text of ['ready now', 'instance Pod absent', 'insufficient pods', 'Restarting the primary interrupts its connections.', 'The rolling restart waits for every instance to be ready.', 'Currently blocked by orders-2.', 'If the primary restarts without another ready instance, the cluster stops serving until it is back.']) expect(html).toContain(text)
+  expect(html).toContain('See Overview’s problems →')
   caps.facts.instances[1].ready = true
   expect(renderToStaticMarkup(<CNPGRestartReview caps={caps} />)).not.toContain('cluster stops serving')
   caps.facts.instances[1].ready = false; caps.facts.instances[1].podReadable = false
@@ -97,4 +98,17 @@ it('disables header restore for known no sources and keeps unread sources enable
   expect(host.textContent).toContain('3m ago')
   expect(host.textContent).not.toContain('Actions could not be checked')
   expect(restore.disabled).toBe(false)
+})
+
+it('carries a verified join-Job blocker into the matching restart step and opens Overview', () => {
+  const open = vi.fn()
+  const caps = { facts: { currentPrimary: 'orders-1', instances: [{ pod: 'orders-2', ready: false, podReadable: true, podExists: false }] }, restartPlan: { steps: [{ instance: 'orders-2', role: 'standby', effect: 'recreate' }] } } as any
+  const problem = { id: 'join', instance: 'orders-2', title: "New standby orders-2: Can't be scheduled", detail: 'Cannot be scheduled: both nodes have reached their Pod limit', subject: { kind: 'Pod', name: 'orders-2-join-dz4fc' } } as any
+  host = document.createElement('div'); document.body.append(host); root = createRoot(host)
+  act(() => root.render(<CNPGRestartReview caps={caps} problems={[problem]} onOpenOverview={open} />))
+  const step = host.querySelector('li')!
+  expect(step.textContent).toContain('orders-2 (standby)')
+  expect(step.textContent).toContain('both nodes have reached their Pod limit')
+  act(() => step.querySelector('button')!.click())
+  expect(open).toHaveBeenCalledOnce()
 })
