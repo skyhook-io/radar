@@ -286,6 +286,9 @@ export function inferredObjectStoreHealth(store: any, users: CNPGObjectStoreUser
 // ---------------------------------------------------------------------------
 
 export function appliedFact(obj: any): Fact {
+  if (observedGenerationFact(obj).tone === 'degraded') {
+    return { text: 'Pending · awaiting the operator for the current spec', tone: 'unknown' }
+  }
   const applied = obj?.status?.applied
   if (applied === true) return { text: 'Applied', tone: 'healthy' }
   if (applied === false) return { text: 'Not applied', tone: 'unhealthy' }

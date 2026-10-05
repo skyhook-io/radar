@@ -12,14 +12,15 @@ export function seconds(s?: number): string {
   return `${(s / 3600).toFixed(1)} h`
 }
 
-export function SourceState({ label, state, error }: { label: string; state: string; error?: string }) {
+export function SourceState({ label, state, error, reason }: { label: string; state: string; error?: string; reason?: string }) {
   if (state === 'ok') return null
+  const detail = [reason, error].filter(Boolean).join(' · ')
   const text =
     state === 'denied'
       ? `${label}: no access (needs get pods/proxy)`
       : state === 'partial'
-        ? `${label}: partial${error ? ` · ${error}` : ''}`
-        : `${label}: ${state}${error ? ` · ${error}` : ''}`
+        ? `${label}: partial${detail ? ` · ${detail}` : ''}`
+        : `${label}: ${state}${detail ? ` · ${detail}` : ''}`
   return <div className="text-xs text-theme-text-tertiary">{text}</div>
 }
 
@@ -54,7 +55,7 @@ export function Card({ title, children, footer, aside }: { title: ReactNode; chi
 
 export function Unavailable({ inst, what }: { inst?: CNPGRuntimeInstance; what: string }) {
   if (!inst) return <div className="text-sm text-theme-text-tertiary">No instance is reported, so {what} is unknown.</div>
-  return <SourceState label={what} state={inst.metrics.state} error={inst.metrics.error} />
+  return <SourceState label={what} state={inst.metrics.state} error={inst.metrics.error} reason={inst.metrics.reason} />
 }
 
 export function Metric({ label, value, tone, caption }: { label: string; value: ReactNode; tone?: 'degraded' | 'unhealthy'; caption?: ReactNode }) {

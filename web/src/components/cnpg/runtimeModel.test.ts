@@ -150,3 +150,9 @@ describe('cnpgNoStandbyText', () => {
     expect(cnpgNoStandbyText(undefined)).toBe('No standby is running.')
   })
 })
+
+it('keeps the measured connections in Sessions when only its row lists were capped', () => {
+  const inst = { pod: 'pg-1', metrics: { state: 'partial', reason: 'sessions capped', sessionsTotal: 150 } } as CNPGRuntimeInstance
+  expect(cnpgSessionAggregatesGap(inst)).toBeUndefined()
+  expect(cnpgSessionsCardShowsConnections(inst, undefined)).toBe(true)
+})

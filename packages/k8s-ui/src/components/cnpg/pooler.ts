@@ -1,3 +1,4 @@
+import type { Fact } from '../facts'
 import type { HealthLevel } from '../resources/resource-utils'
 import { formatGrant, type Grant } from '../../utils/grant'
 
@@ -34,7 +35,7 @@ export interface CNPGPoolerPoolSample {
 export interface CNPGPoolerPressureLive {
   state: 'loading' | 'denied' | 'error' | 'ok'
   reason?: string
-  pods: { pod: string; state: string; error?: string; pools?: CNPGPoolerPoolSample[] }[]
+  pods: { pod: string; state: string; error?: string; reason?: string; pools?: CNPGPoolerPoolSample[] }[]
 }
 
 /** Each PgBouncer's own SHOW STATE. */
@@ -190,4 +191,35 @@ export function observedPause(o: CNPGPoolerObservedLive | undefined): { text: st
   if (paused === 0) return { text: `Serving (not paused) on ${read.length} of ${o.pods.length} PgBouncers${tail}`, level: unread ? 'unknown' : 'healthy' }
   if (paused === read.length) return { text: `Paused on ${paused} of ${o.pods.length} PgBouncers${tail}`, level: 'degraded' }
   return { text: `Paused on ${paused} of ${o.pods.length} PgBouncers${tail}`, level: 'alert' }
+}
+
+export function poolerPressureCoverage(pods: CNPGPoolerPressureLive['pods']) {
+  const reporting = pods.filter((p) => p.state === 'ok' || p.state === 'partial')
+  const complete = pods.length > 0 && pods.every((p) => p.state === 'ok')
+  const gaps = pods.filter((p) => p.state !== 'ok').map((p) => {
+    const reason = [p.reason, p.error].filter(Boolean).join(' · ')
+    return `${p.pod}: ${p.state === 'partial' ? 'partial' : 'not read'}${reason ? ` (${reason})` : p.state === 'partial' ? '' : ` (${p.state})`}`
+  })
+  return {
+    reporting,
+    complete,
+    limitation: gaps.join('; ') || (pods.length === 0 ? 'No PgBouncer Pods answered' : undefined),
+    empty: complete ? 'Idle: no client pools open' : 'No pools seen in what was read',
+  }
+}
+
+type PoolerMetric = 'clActive' | 'clWaiting' | 'svActive' | 'svIdle' | 'svUsed' | 'maxwaitSeconds'
+
+export function poolerPressureFact(pods: CNPGPoolerPressureLive['pods'], field: PoolerMetric, pool?: { database: string; user: string }): Fact {
+  const coverage = poolerPressureCoverage(pods)
+  const pools = coverage.reporting.flatMap((p) => p.pools ?? []).filter((p) => !pool || (p.database === pool.database && p.user === pool.user))
+  const values = pools.map((p) => p[field]).filter((v): v is number => v !== undefined)
+  const complete = coverage.complete && values.length === pools.length
+  const value = field === 'maxwaitSeconds' ? Math.max(0, ...values) : values.reduce((a, b) => a + b, 0)
+  const label = { clActive: 'Active clients', clWaiting: 'Waiting clients', svActive: 'Active servers', svIdle: 'Idle servers', svUsed: 'Used servers', maxwaitSeconds: 'Max wait' }[field]
+  if ((!complete && value === 0) || (pools.length > 0 && values.length === 0)) {
+    return { text: 'Unknown', tone: 'unknown', source: coverage.limitation ?? `${label} not reported for every pool` }
+  }
+  const text = field === 'maxwaitSeconds' ? `${value.toFixed(1)} s` : String(value)
+  return { text: `${complete ? '' : '≥'}${text}`, tone: field === 'clWaiting' && value > 0 ? 'degraded' : complete ? 'neutral' : 'unknown', source: complete ? undefined : coverage.limitation ?? `${label} not reported for every pool` }
 }

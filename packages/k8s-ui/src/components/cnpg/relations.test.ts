@@ -291,3 +291,10 @@ describe('relationUnavailable', () => {
     expect(relationUnavailable(null, 'backups', 'pg', 'Backups')).toBe('Backups could not be read')
   })
 })
+
+it('does not apply declaration results from an earlier spec', () => {
+  for (const applied of [true, false]) {
+    expect(appliedFact({ metadata: { generation: 3 }, status: { applied, observedGeneration: 2 } })).toEqual({ text: 'Pending · awaiting the operator for the current spec', tone: 'unknown' })
+  }
+  expect(appliedFact({ metadata: { generation: 3 }, status: { applied: true, observedGeneration: 3 } }).tone).toBe('healthy')
+})

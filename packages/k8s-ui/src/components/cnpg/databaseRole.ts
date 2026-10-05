@@ -1,3 +1,5 @@
+import { appliedFact } from './relations'
+
 // CloudNativePG DatabaseRole (1.30+): one PostgreSQL role declared as its own
 // object. The same role name in the Cluster's spec.managed.roles always wins:
 // the operator does not reconcile the DatabaseRole and reports it not applied
@@ -27,9 +29,9 @@ export interface CNPGDatabaseRoleFacts {
 }
 
 export function cnpgRoleState(obj: any): CNPGRoleState {
-  const applied = obj?.status?.applied
-  if (applied === true) return 'applied'
-  if (applied === false) return 'failed'
+  const fact = appliedFact(obj)
+  if (fact.tone === 'healthy') return 'applied'
+  if (fact.tone === 'unhealthy') return 'failed'
   return 'pending'
 }
 

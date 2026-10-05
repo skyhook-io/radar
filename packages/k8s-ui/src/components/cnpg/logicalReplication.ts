@@ -1,3 +1,4 @@
+import { cnpgRoleState } from './databaseRole'
 import { cnpgFormatBytes } from './workspace'
 import { type Fact } from '../facts'
 
@@ -187,7 +188,7 @@ export function cnpgLogicalPaths(
         sqlName: sub?.spec?.name,
         dbname: sub?.spec?.dbname,
         cluster: sub?.spec?.cluster?.name,
-        applied: typeof sub?.status?.applied === 'boolean' ? sub.status.applied : null,
+        applied: cnpgRoleState(sub) === 'pending' ? null : cnpgRoleState(sub) === 'applied',
         message: sub?.status?.message || undefined,
       },
       externalCluster: { name: extName, declared: !!ext, host: params.host, dbname: params.dbname },
@@ -196,7 +197,7 @@ export function cnpgLogicalPaths(
         name: pubName,
         dbname: pubDb,
         object: pubObj
-          ? { namespace: pubObj.metadata.namespace, name: pubObj.metadata.name, applied: typeof pubObj.status?.applied === 'boolean' ? pubObj.status.applied : null }
+          ? { namespace: pubObj.metadata.namespace, name: pubObj.metadata.name, applied: cnpgRoleState(pubObj) === 'pending' ? null : cnpgRoleState(pubObj) === 'applied' }
           : undefined,
         unavailable: !pubObj && publisher.kind === 'cluster' ? publicationsUnavailable?.(publisher.namespace) ?? undefined : undefined,
       },

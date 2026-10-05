@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { aggregatePoolerPools, observedPause, poolerBackendService, poolerReadiness, poolerPodPressure } from './pooler'
+import { poolerPressureCoverage, poolerPressureFact, aggregatePoolerPools, observedPause, poolerBackendService, poolerReadiness, poolerPodPressure } from './pooler'
 
 describe('poolerReadiness', () => {
   it('reads readiness from the Deployment, never from the scheduled count', () => {
@@ -54,5 +54,31 @@ describe('poolerPodPressure', () => {
       { pod: 'pooler-b', state: 'ok', error: undefined, clActive: 3, clWaiting: 0, svActive: 1 },
       { pod: 'pooler-c', state: 'unreachable', error: 'no answer within 5s' },
     ])
+  })
+})
+
+describe('pooler pressure certainty', () => {
+  it('says idle only when every Pod answered in full', () => {
+    const a = { pod: 'a', state: 'ok', pools: [] }
+    expect(poolerPressureCoverage([a]).empty).toBe('Idle: no client pools open')
+    for (const state of ['partial', 'unreachable']) {
+      const c = poolerPressureCoverage([a, { pod: 'b', state, reason: 'pool list capped' }])
+      expect(c.complete).toBe(false)
+      expect(c.empty).toBe('No pools seen in what was read')
+      expect(c.limitation).toContain('b:')
+      expect(c.limitation).toContain('pool list capped')
+    }
+  })
+  it('shows unknown for partial zero and a lower bound for partial positive counts', () => {
+    const p = { pod: 'a', state: 'partial', pools: [{ database: 'app', user: 'app', clWaiting: 0, clActive: 3 }] }
+    expect(poolerPressureFact([p], 'clWaiting')).toMatchObject({ text: 'Unknown', tone: 'unknown' })
+    expect(poolerPressureFact([p], 'clActive')).toMatchObject({ text: '≥3', tone: 'unknown' })
+    expect(poolerPressureFact([{ ...p, state: 'ok' }], 'clWaiting').text).toBe('0')
+    expect(poolerPressureFact([{ ...p, state: 'ok' }, { pod: 'b', state: 'unreachable' }], 'clWaiting').text).toBe('Unknown')
+  })
+  it('qualifies a total when a pool omitted the field, even with complete Pod reads', () => {
+    const pods = [{ pod: 'a', state: 'ok', pools: [{ database: 'app', user: 'a', clActive: 2 }, { database: 'app', user: 'b' }] }]
+    expect(poolerPressureFact(pods, 'clActive').text).toBe('≥2')
+    expect(poolerPressureFact(pods, 'clWaiting').text).toBe('Unknown')
   })
 })

@@ -2,6 +2,7 @@
 // payload. Every fact here is something the cluster actually reports; when it
 // does not report something the value is "unknown", never zero or healthy.
 
+import { cnpgRoleState } from './databaseRole'
 import { formatAge, type HealthLevel } from '../resources/resource-utils'
 import { worseTone } from '../ui/status-tone'
 import { type Fact } from '../facts'
@@ -586,10 +587,10 @@ function lastBackupFact(
   if (!cfg.plugin && cfg.lastSuccessfulBackup) candidates.push({ at: cfg.lastSuccessfulBackup, source: 'Cluster status' })
   if (candidates.length === 0) {
     if (!coverageReadable(backupsCov, ns)) {
-      return { text: cnpgCoverageGap(backupsCov, 'Backups', ns), tone: 'unknown' }
+      return { text: cnpgCoverageGap(backupsCov, 'Backups', ns), tone: 'unknown', source: 'Backups not read' }
     }
     if (storesUnreadable) return { text: cnpgCoverageGap(storesUnreadable, 'ObjectStores', ns), tone: 'unknown' }
-    return { text: 'None observed', tone: 'unknown' }
+    return { text: 'No successful backup yet', tone: 'degraded', source: 'Backups read in this namespace; none completed' }
   }
   const best = candidates.reduce((a, b) => (Date.parse(a.at) >= Date.parse(b.at) ? a : b))
   return { text: 'Completed', tone: 'healthy', at: best.at, source: best.source }
@@ -975,17 +976,19 @@ function declarationsFor(cluster: any, resp: CNPGWorkspaceResponse): CNPGFleetRo
   let total = 0
   let failed = 0
   let pending = 0
-  let unreadable = false
+  const unread: string[] = []
+  const labels = { databases: 'Databases', publications: 'Publications', subscriptions: 'Subscriptions', databaseRoles: 'DatabaseRoles' }
   for (const [k, list] of lists) {
     if (!coverageReadable(coverageOf(resp, k), ns)) {
-      if (coverageOf(resp, k).state !== 'notInstalled') unreadable = true
+      if (coverageOf(resp, k).state !== 'notInstalled') unread.push(labels[k as keyof typeof labels])
       continue
     }
     for (const o of list) {
       if (o.metadata?.namespace !== ns || specClusterName(o) !== name) continue
       total++
-      if (o.status?.applied === false) failed++
-      else if (o.status?.applied !== true) pending++
+      const state = cnpgRoleState(o)
+      if (state === 'failed') failed++
+      else if (state === 'pending') pending++
     }
   }
   const roleStatus = cluster?.status?.managedRolesStatus
@@ -998,9 +1001,10 @@ function declarationsFor(cluster: any, resp: CNPGWorkspaceResponse): CNPGFleetRo
     if (failedRoles.has(r.name)) failed++
     else if (!reconciledRoles.has(r.name)) pending++
   }
+  const unreadable = unread.length > 0
   let summary: Fact
   if (total === 0) {
-    summary = unreadable ? { text: 'No access to some declarations', tone: 'unknown' } : { text: 'None declared', tone: 'neutral' }
+    summary = { text: 'None declared', tone: 'neutral' }
   } else if (failed > 0) {
     summary = { text: `${failed} of ${total} not reconciled`, tone: 'degraded' }
   } else if (pending > 0) {
@@ -1008,7 +1012,10 @@ function declarationsFor(cluster: any, resp: CNPGWorkspaceResponse): CNPGFleetRo
   } else {
     summary = { text: `${total} reconciled`, tone: 'healthy' }
   }
-  if (unreadable && total > 0) summary = { ...summary, source: 'Some declaration kinds are not readable' }
+  if (unreadable) {
+    const count = total === 0 ? 'Reconciliation unknown' : failed > 0 ? `≥${failed} not reconciled` : pending > 0 ? `≥${pending} pending` : `≥${total} reconciled`
+    summary = { text: `${count}; ${unread.join(', ')} not read`, tone: failed > 0 ? 'degraded' : 'unknown' }
+  }
   return { summary, total, failed, pending }
 }
 

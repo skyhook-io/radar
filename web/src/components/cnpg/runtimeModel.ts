@@ -154,14 +154,14 @@ export function cnpgPickedInstance(instances: CNPGRuntimeInstance[], param: stri
 export function cnpgSessionAggregatesGap(inst: CNPGRuntimeInstance | undefined): string | undefined {
   if (!inst) return 'no instance is reported'
   const m = inst.metrics
-  if (m.state !== 'ok') return `the metrics exporter on ${inst.pod} did not answer${m.error ? ` (${m.error})` : ''}`
+  if (m.state !== 'ok' && m.state !== 'partial') return `the metrics exporter on ${inst.pod} did not answer${m.error ? ` (${m.error})` : ''}`
   if (m.sessionsTotal === undefined) return `the metrics exporter on ${inst.pod} reported no session counts`
   return undefined
 }
 
 /** Whether the Sessions card shows the connections figure, so the Blocking panel does not repeat it. */
 export function cnpgSessionsCardShowsConnections(inst: CNPGRuntimeInstance | undefined, exec: CNPGSessionsResponse | undefined): boolean {
-  return inst?.metrics.state === 'ok' && cnpgConnectionFigure(exec, inst.metrics) !== undefined
+  return (inst?.metrics.state === 'ok' || inst?.metrics.state === 'partial') && cnpgConnectionFigure(exec, inst.metrics) !== undefined
 }
 
 /** A transaction or multixact ID age as a readable count: 812, 1.2k, 45k, 3.4 M, 1.1 B. A non-zero age never reads as zero. */

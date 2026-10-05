@@ -3,7 +3,9 @@ import {
   Badge,
   toneTextClass,
   getCNPGPoolerMode,
-  getCNPGPoolerStatus,
+  FactValue,
+  poolerPressureCoverage,
+  poolerPressureFact,
   getCNPGPoolerType,
   isApiGroup,
   isCNPGPoolerPaused,
@@ -98,11 +100,12 @@ function PoolerReadiness({ pooler }: { pooler: any }) {
   const caps = useCNPGPoolerCapabilities(namespace, name)
   const paused = isCNPGPoolerPaused(pooler)
   if (!caps.data) {
-    const st = getCNPGPoolerStatus(pooler)
+    const st = poolerReadiness(undefined)
     return (
       <>
         <Badge severity={SEVERITY[st.level]} size="sm">{st.text}</Badge>
-        <Sub>{caps.isLoading ? 'reading Deployment…' : 'Pooler status only; its Deployment was not read'}</Sub>
+        {paused && <Badge severity="warning" size="sm">Pause requested</Badge>}
+        <Sub>{caps.isLoading ? 'reading Deployment…' : 'Deployment was not read'}</Sub>
       </>
     )
   }
@@ -111,7 +114,7 @@ function PoolerReadiness({ pooler }: { pooler: any }) {
     <>
       <span className="inline-flex flex-wrap items-center gap-1">
         <Badge severity={SEVERITY[r.level]} size="sm">{r.text}</Badge>
-        {paused && <Badge severity="warning" size="sm">Paused (requested)</Badge>}
+        {paused && <Badge severity="warning" size="sm">Pause requested</Badge>}
       </span>
       <Sub>{r.detail}</Sub>
     </>
@@ -129,46 +132,37 @@ function PoolerPressure({ namespace, name }: { namespace: string; name: string }
       </>
     )
   }
-  const ok = q.data.pods.filter((p) => p.state === 'ok' || p.state === 'partial')
+  const { reporting: ok, limitation, empty } = poolerPressureCoverage(q.data.pods)
   if (ok.length === 0) {
     return (
       <>
         <span className="text-theme-text-tertiary">Not measured</span>
-        <Sub>{q.data.pods[0]?.error ?? q.data.pods[0]?.reason ?? 'no PgBouncer answered'}</Sub>
+        <Sub>{limitation ?? 'no PgBouncer answered'}</Sub>
       </>
     )
   }
   const pools = ok.flatMap((p) => p.pools ?? [])
-  if (pools.length === 0 && ok.every((p) => p.state === 'ok')) {
+  if (pools.length === 0) {
     return (
       <>
-        <span>Idle</span>
+        <span>{empty}</span>
         <Sub>
-          no client pools open · {ok.length}/{q.data.pods.length} pods reporting
+          {limitation ?? `${ok.length}/${q.data.pods.length} pods reporting`}
         </Sub>
       </>
     )
   }
-  // Totals are exact only when every pod answered in full and every pool
-  // reported the field; otherwise they are lower bounds.
-  const allPods = ok.length === q.data.pods.length && ok.every((p) => p.state === 'ok')
-  const total = (field: 'clWaiting' | 'svActive') => {
-    const reported = pools.filter((x) => x[field] !== undefined)
-    if (reported.length === 0) return { sum: 0, text: 'not reported' }
-    const sum = reported.reduce((acc, x) => acc + (x[field] as number), 0)
-    return { sum, text: allPods && reported.length === pools.length ? `${sum}` : `≥ ${sum}` }
-  }
-  const waiting = total('clWaiting')
+  const waiting = poolerPressureFact(q.data.pods, 'clWaiting')
   const waits = pools.map((x) => x.maxwaitSeconds).filter((v): v is number => v !== undefined)
   const maxwait = waits.length > 0 ? Math.max(...waits) : undefined
   return (
     <>
-      <span className={waiting.sum > 0 ? toneTextClass('degraded') : undefined}>
-        <span className="whitespace-nowrap">{waiting.text} waiting</span> · <span className="whitespace-nowrap">{total('svActive').text} servers busy</span>
+      <span className={toneTextClass(waiting.tone)}>
+        <span className="whitespace-nowrap"><FactValue fact={waiting} /> waiting</span> · <span className="whitespace-nowrap"><FactValue fact={poolerPressureFact(q.data.pods, 'svActive')} /> servers busy</span>
       </span>
       <Sub>
-        {maxwait !== undefined && maxwait > 0 ? `longest wait ${maxwait.toFixed(1)} s · ` : ''}
-        {ok.length}/{q.data.pods.length} pods reporting
+        {maxwait !== undefined && maxwait > 0 ? `longest wait ${poolerPressureFact(q.data.pods, 'maxwaitSeconds').text} · ` : ''}
+        {ok.length}/{q.data.pods.length} pods reporting{limitation ? ` · ${limitation}` : ''}
       </Sub>
     </>
   )

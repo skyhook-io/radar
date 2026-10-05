@@ -245,7 +245,8 @@ describe('CNPGPoolerSummary', () => {
       ),
     )
     expect(t).toContain('from Deployment main-rw')
-    expect(t).toContain('Requested: Paused')
+    expect(t).toContain('Pause requested')
+    expect(t).toContain('1/2 ready')
     expect(t).toContain('Pause state')
     expect(t).toContain('Observed: Paused on 1 of 2 PgBouncers')
     expect(t).toContain('PgBouncer uses 20')
@@ -317,4 +318,26 @@ describe('logical replication summaries', () => {
     expect(t).toContain('Subscribers')
     expect(t).toContain('orders_sub')
   })
+})
+
+it('shows the stale declaration as pending in its drawer', () => {
+  const resource = { apiVersion: PG, kind: 'Database', metadata: { name: 'app', namespace: 'pg', generation: 3 }, spec: { name: 'app' }, status: { applied: true, observedGeneration: 2 } }
+  const t = text(renderToString(<CNPGDatabaseSummary resource={resource} workspace={ws({})} />))
+  expect(t).toContain('Pending · awaiting the operator for the current spec')
+  expect(t).toContain('AppliedPending')
+})
+
+it('keeps Deployment readiness beside the pause request even when no Pods are ready', () => {
+  const resource = { metadata: { name: 'p' }, spec: { pgbouncer: { paused: true } } }
+  const t = text(renderToString(<CNPGPoolerSummary resource={resource} workspace={ws({})} live={{ deployment: { name: 'p', state: 'ok', replicas: 2, readyReplicas: 0 } }} />))
+  expect(t).toContain('Not ready')
+  expect(t).toContain('Pause requested')
+  expect(t).not.toContain('Observed: Paused')
+})
+
+it('never calls an incomplete empty Pooler read idle and names the unread Pod', () => {
+  const t = text(renderToString(<CNPGPoolerSummary resource={{}} workspace={ws({})} live={{ pressure: { state: 'ok', pods: [{ pod: 'a', state: 'ok', pools: [] }, { pod: 'b', state: 'unreachable', error: 'timeout' }] } }} />))
+  expect(t).toContain('No pools seen in what was read')
+  expect(t).toContain('b: not read (timeout)')
+  expect(t).not.toContain('Idle:')
 })

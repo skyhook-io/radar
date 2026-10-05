@@ -111,3 +111,11 @@ describe('cnpgLogicalLocation', () => {
     expect(cnpgLogicalLocation('x', undefined)).not.toContain('?')
   })
 })
+
+it('keeps stale Publication and Subscription results pending on the logical path', () => {
+  const staleSub = { ...sub({}, { applied: true, observedGeneration: 1 }), metadata: { ...sub({}).metadata, generation: 2 } }
+  const stalePub = { ...pub, metadata: { ...pub.metadata, generation: 2 }, status: { applied: true, observedGeneration: 1 } }
+  const [path] = cnpgLogicalPaths([staleSub], [synced(17), subscriber('src-rw.src.svc')], [stalePub], [])
+  expect(path.subscription.applied).toBeNull()
+  expect(path.publication.object?.applied).toBeNull()
+})

@@ -12,7 +12,12 @@ import {
   getCNPGObjectStoreDestination,
   getCNPGScheduledBackupStatus,
   inferredObjectStoreHealth,
-  isApiGroup,
+  cnpgBackupRunsInWindow,
+  cnpgBackupRunInFlight,
+  CNPG_BACKUP_RUN_WINDOW_MS,
+  coverageReadable,
+  cnpgCoverageGap,
+  getCNPGScheduledBackupNextSchedule,
   toneTextClass,
   usersOfObjectStore,
   type CNPGFleetRow,
@@ -29,12 +34,6 @@ const SEVERITY: Record<HealthLevel, 'success' | 'warning' | 'alert' | 'error' | 
   unhealthy: 'error',
   unknown: 'neutral',
   neutral: 'neutral',
-}
-
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000
-
-function backupTime(b: any): string | undefined {
-  return b?.status?.stoppedAt || b?.status?.startedAt || b?.metadata?.creationTimestamp
 }
 
 function backupStart(b: any): string | undefined {
@@ -153,18 +152,11 @@ export function CNPGProtection({
     [fleet.rows, clusterFilter],
   )
 
-  // Every run of the last 7 days, newest first; the failed ones are the fleet's default view.
-  const runs = useMemo(() => {
-    const now = Date.now()
-    return (data.objects.backups ?? [])
-      .filter((b) => isApiGroup(b.apiVersion, 'postgresql.cnpg.io'))
-      .filter((b) => {
-        const t = Date.parse(backupTime(b) ?? '')
-        return Number.isFinite(t) && now - t <= WEEK_MS
-      })
-      .filter((b) => !clusterFilter || `${b.metadata?.namespace}/${b.spec?.cluster?.name}` === clusterFilter)
-      .sort((a, b) => Date.parse(backupTime(b) ?? '') - Date.parse(backupTime(a) ?? ''))
-  }, [data.objects.backups, clusterFilter])
+  const runs = useMemo(
+    () => cnpgBackupRunsInWindow(data.objects.backups ?? [])
+      .filter((b) => !clusterFilter || `${b.metadata?.namespace}/${b.spec?.cluster?.name}` === clusterFilter),
+    [data.objects.backups, clusterFilter],
+  )
   const failedRuns = useMemo(() => runs.filter((b) => isFailedRun(b)), [runs])
   const [runFilter, setRunFilter] = useState<'failed' | 'all' | null>(null)
   const showRuns = runFilter ?? (scopeCluster || failedRuns.length === 0 ? 'all' : 'failed')
@@ -194,7 +186,11 @@ export function CNPGProtection({
     ...(clusterFilter ? [{ label: `Cluster: ${clusterFilter}`, onClear: () => onSetParams({ cluster: null }) }] : []),
     ...namespaceChip(namespaces, onClearNamespaces),
   ]
-  const backupsReadable = data.coverage.backups?.state === 'full'
+  const backupsCoverage = data.coverage.backups!
+  const scopedNamespace = scopeCluster?.namespace ?? clusterFilter?.split('/')[0]
+  const backupsReadable = coverageReadable(backupsCoverage, scopedNamespace)
+  const countText = (count: number) => backupsReadable ? String(count) : count > 0 ? `≥${count}` : '?'
+  const backupsGap = backupsReadable ? undefined : cnpgCoverageGap(backupsCoverage, 'Backups', scopedNamespace)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -299,22 +295,23 @@ export function CNPGProtection({
           title="Backup runs"
           subtitle={
             <span className="inline-flex flex-wrap items-center gap-2">
-              last 7 days
+              last 7 days · all in-flight runs
               <Segments
                 label="Backup runs shown"
                 value={showRuns}
                 onChange={(v) => setRunFilter(v)}
                 options={[
-                  { id: 'failed', label: `Failed ${failedRuns.length}` },
-                  { id: 'all', label: `All ${runs.length}` },
+                  { id: 'failed', label: `Failed ${countText(failedRuns.length)}` },
+                  { id: 'all', label: `All ${countText(runs.length)}` },
                 ]}
               />
+              {backupsGap && <span className="text-theme-text-tertiary">{backupsGap}</span>}
             </span>
           }
           columns={[
             { header: 'Backup', width: scopeCluster ? '32%' : '26%', cell: (b: any) => <Mono>{b.metadata?.name}</Mono> },
             ...(scopeCluster ? [] : [{ header: 'Cluster', width: '14%', cell: (b: any) => <>{b.spec?.cluster?.name ?? '—'}<Sub>{b.metadata?.namespace}</Sub></> }]),
-            { header: 'Started', width: '12%', cell: (b: any) => ageText(backupStart(b)) },
+            { header: 'Started', width: '12%', cell: (b: any) => <>{ageText(backupStart(b))}{cnpgBackupRunInFlight(b) && Date.now() - Date.parse(backupStart(b) ?? '') > CNPG_BACKUP_RUN_WINDOW_MS && <Sub>started more than a week ago</Sub>}</> },
             {
               header: 'Outcome',
               width: '12%',
@@ -340,7 +337,7 @@ export function CNPGProtection({
           onInspect={onInspect}
           inspected={inspected}
           empty={
-            backupsReadable && data.coverage.backups?.state === 'full'
+            backupsReadable
               ? showRuns === 'failed'
                 ? 'No failed backups in the last 7 days.'
                 : 'No backups in the last 7 days.'
@@ -431,12 +428,7 @@ export function CNPGProtection({
             {
               header: 'Next run',
               width: '12%',
-              cell: (s) => {
-                const next = s.status?.nextScheduleTime
-                if (!next) return '—'
-                const ms = Date.parse(next) - Date.now()
-                return ms >= 0 ? `in ${formatDuration(ms)}` : `${formatDuration(-ms)} overdue`
-              },
+              cell: (s) => getCNPGScheduledBackupNextSchedule(s),
             },
           ]}
           rows={schedules}

@@ -12,7 +12,7 @@ import { formatBytes } from './lsn'
 import { historyLatest, latestRate } from './trendSamples'
 import { CNPGTrends, useSampleBuffer, type CNPGChartGroup, type CNPGIntervalTarget, type Sample } from './CNPGTrends'
 import { Notice, RefreshFailedNotice, Segments } from '../workspace/layout'
-import { Card, Metric, ProxyDenied, Unavailable, seconds } from './runtimeParts'
+import { Card, Metric, ProxyDenied, Unavailable, SourceState, seconds } from './runtimeParts'
 
 type Section = 'sessions' | 'health' | 'history'
 
@@ -162,16 +162,19 @@ function SessionsView({ namespace, cluster, instance, picker }: { namespace: str
 // `primary` is the instance shown: the primary unless another was picked.
 function SessionAggregates({ primary, exec }: { primary?: CNPGRuntimeInstance; exec?: CNPGSessionsResponse }) {
   const m = primary?.metrics
-  if (!m || m.state !== 'ok') return <Card title="Sessions"><Unavailable inst={primary} what="Sessions" /></Card>
+  if (!m || (m.state !== 'ok' && m.state !== 'partial')) return <Card title="Sessions"><Unavailable inst={primary} what="Sessions" /></Card>
   const rows = [...(m.sessions ?? [])].sort((a, b) => b.count - a.count)
   const measured = m.sessionsTotal !== undefined
-  const idleTx = measured ? rows.filter((r) => r.state.startsWith('idle in transaction')).reduce((s, r) => s + r.count, 0) : undefined
+  const idleTx = measured
+    ? Object.entries(m.sessionsByState ?? {}).filter(([state]) => state.startsWith('idle in transaction')).reduce((s, [, count]) => s + count, 0)
+    : undefined
   const connections = cnpgConnectionFigure(exec, m)
   return (
     <Card
       title={<>Sessions on {primary!.pod}</>}
       footer="Counts by state, database, user and application from the metrics exporter (platform users excluded). Individual blocking sessions, with their query text, are below when you can exec into the instance."
     >
+      <SourceState label="Sessions" state={m.state} reason={m.reason} error={m.error} />
       <div className="mb-3 flex flex-wrap gap-6 text-sm">
         <Metric
           label="Connections"
@@ -186,7 +189,9 @@ function SessionAggregates({ primary, exec }: { primary?: CNPGRuntimeInstance; e
       {rows.length === 0 ? (
         <div className="text-sm text-theme-text-tertiary">
           {measured
-            ? 'No client sessions.'
+            ? m.state === 'partial'
+              ? 'No client sessions seen in what was read.'
+              : 'No client sessions.'
             : 'Sessions unknown: this sample from the exporter has no cnpg_backends_total, so sessions were not measured. PostgreSQL may not be accepting connections, or the exporter does not collect it.'}
         </div>
       ) : (
@@ -232,7 +237,7 @@ function TransactionsView({
   const history = useCNPGClusterHistory(namespace, cluster, '15m')
   // The page samples the primary's counters whichever instance is picked, so
   // sampled rates are the primary's and do not follow the picker.
-  const canSample = !deniedGrant && primary?.metrics.state === 'ok'
+  const canSample = !deniedGrant && (primary?.metrics.state === 'ok' || primary?.metrics.state === 'partial')
   const rates = cnpgTransactionRates(
     { commits: historyLatest(history.data, 'tps', 'commits'), rollbacks: historyLatest(history.data, 'tps', 'rollbacks') },
     canSample ? { commits: latestRate(samples, 'commits'), rollbacks: latestRate(samples, 'rollbacks') } : null,
@@ -289,7 +294,7 @@ function Rates({ rates }: { rates: CNPGTransactionRates }) {
 
 function TransactionsCard({ inst }: { inst?: CNPGRuntimeInstance }) {
   const m = inst?.metrics
-  if (!m || m.state !== 'ok') {
+  if (!m || (m.state !== 'ok' && m.state !== 'partial')) {
     return (
       <Card title="Database health">
         <Unavailable inst={inst} what="Database health" />
@@ -299,24 +304,26 @@ function TransactionsCard({ inst }: { inst?: CNPGRuntimeInstance }) {
   const hit = m.blksHit !== undefined && m.blksRead !== undefined && m.blksHit + m.blksRead > 0 ? (m.blksHit / (m.blksHit + m.blksRead)) * 100 : undefined
   return (
     <Card title={<>Database health on {inst!.pod}</>} footer="This instance’s exporter. Counters are cumulative since the last statistics reset.">
+      <SourceState label="Database health" state={m.state} reason={m.reason} error={m.error} />
       <div className="flex flex-wrap gap-8">
         <Metric label="Cache hit ratio" value={hit !== undefined ? `${hit.toFixed(1)} %` : '—'} />
         <Metric label="Deadlocks (total)" value={m.deadlocksTotal ?? '—'} tone={m.deadlocksTotal ? 'degraded' : undefined} />
         <Metric label="Oldest transaction" value={seconds(m.oldestXactSeconds)} />
       </div>
       <DatabaseHealth m={m} />
-      <ExtensionUpdates rows={m.extensionUpdates} missing={m.missing} />
+      <ExtensionUpdates rows={m.extensionUpdates} missing={m.missing} partial={m.state === 'partial'} />
     </Card>
   )
 }
 
 function CheckpointsCard({ inst }: { inst?: CNPGRuntimeInstance }) {
   const m = inst?.metrics
-  if (!m || m.state !== 'ok') return <Card title="Checkpoints"><Unavailable inst={inst} what="Checkpoints" /></Card>
+  if (!m || (m.state !== 'ok' && m.state !== 'partial')) return <Card title="Checkpoints"><Unavailable inst={inst} what="Checkpoints" /></Card>
   const c = m.checkpoints
   if (!c) {
     return (
       <Card title={<>Checkpoints on {inst!.pod}</>}>
+        <SourceState label="Checkpoints" state={m.state} reason={m.reason} error={m.error} />
         <div className="text-xs text-theme-text-tertiary">
           Unknown: the exporter reported neither pg_stat_checkpointer (PostgreSQL 17+) nor pg_stat_bgwriter checkpoint counters.
         </div>
@@ -338,6 +345,7 @@ function CheckpointsCard({ inst }: { inst?: CNPGRuntimeInstance }) {
         </>
       }
     >
+      <SourceState label="Checkpoints" state={m.state} reason={m.reason} error={m.error} />
       <div className="flex flex-wrap gap-8">
         <Metric label="Timed" value={n(c.timed)} />
         <Metric label="Requested" value={n(c.requested)} tone={view.pressure ? 'degraded' : undefined} />
@@ -433,14 +441,14 @@ function DatabaseHealth({ m }: { m: CNPGRuntimeInstance['metrics'] }) {
 
 const EXTENSIONS_FAMILY = 'cnpg_pg_extensions_update_available'
 
-function ExtensionUpdates({ rows, missing }: { rows?: { database: string; extension: string; installedVersion: string; defaultVersion: string }[] | null; missing?: string[] }) {
+function ExtensionUpdates({ rows, missing, partial }: { partial?: boolean; rows?: { database: string; extension: string; installedVersion: string; defaultVersion: string }[] | null; missing?: string[] }) {
   return (
     <div className="mt-4 text-sm">
       <div className="text-xs text-theme-text-tertiary">Extensions with updates available</div>
       {missing?.includes(EXTENSIONS_FAMILY) || !rows ? (
         <NotExported what="Extension versions" family={EXTENSIONS_FAMILY} />
       ) : rows.length === 0 ? (
-        <div className="text-xs text-theme-text-secondary">Every installed extension is at its default version.</div>
+        <div className="text-xs text-theme-text-secondary">{partial ? 'No extension updates seen in what was read.' : 'Every installed extension is at its default version.'}</div>
       ) : (
         <>
           {rows.map((x) => (

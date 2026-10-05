@@ -31,3 +31,8 @@ describe('cnpgDatabaseRoleFacts', () => {
     expect(cnpgDatabaseRoleMeta(f)).toBe('no login · password valid until 2027-01-01T00:00:00Z · client cert until 2026-12-01T00:00:00Z')
   })
 })
+
+it('keeps a DatabaseRole pending until its current generation is observed', () => {
+  const r = { ...role({}, { applied: true, observedGeneration: 1 }), metadata: { name: 'reader', generation: 2 } }
+  expect(cnpgDatabaseRoleFacts(r, null).state).toBe('pending')
+})

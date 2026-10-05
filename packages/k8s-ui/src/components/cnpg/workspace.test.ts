@@ -148,7 +148,7 @@ describe('buildCNPGFleet', () => {
         })],
       }),
     )
-    expect(fleet.rows[0].protection.lastSuccessfulBackup.text).toBe('None observed')
+    expect(fleet.rows[0].protection.lastSuccessfulBackup.text).toBe('No successful backup yet')
   })
 
   it('never marks restore validation healthy', () => {
@@ -318,7 +318,7 @@ describe('buildCNPGFleet', () => {
 
   it('reads partial coverage by allowed namespaces and treats unnamed partial coverage as unknown', () => {
     const named = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { backups: { state: 'partial', allowedNamespaces: ['db'] } } }))
-    expect(named.rows[0].protection.lastSuccessfulBackup.text).toBe('None observed')
+    expect(named.rows[0].protection.lastSuccessfulBackup.text).toBe('No successful backup yet')
     const unnamed = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')] }, { coverage: { backups: { state: 'partial' } } }))
     expect(unnamed.rows[0].protection.lastSuccessfulBackup.text).toBe('Backups not read in db')
   })
@@ -418,5 +418,33 @@ describe('schedule fact', () => {
     expect(withReading.rows[0].protection.schedule).toMatchObject({ text: 'Scheduled · every day at 02:00 UTC', source: 'ScheduledBackup nightly · cron 0 0 2 * * *' })
     const without = buildCNPGFleet(resp({ clusters: [cluster('pg-a', 'db')], scheduledBackups: [sched] }))
     expect(without.rows[0].protection.schedule.text).toBe('Scheduled · 0 0 2 * * *')
+  })
+})
+
+ describe('CNPG certainty', () => {
+  const archiving = cluster('pg', 'db', { spec: { backup: { barmanObjectStore: { destinationPath: 's3://backups' } } }, status: { conditions: [{ type: 'ContinuousArchiving', status: 'True' }] } })
+  it('degrades an archiving cluster with no completed Backup and names the read', () => {
+    const p = buildCNPGFleet(resp({ clusters: [archiving] })).rows[0].protection
+    expect(p.lastSuccessfulBackup).toMatchObject({ tone: 'degraded', text: 'No successful backup yet', source: 'Backups read in this namespace; none completed' })
+  })
+  it('keeps unread Backups unknown', () => {
+    const p = buildCNPGFleet(resp({ clusters: [archiving] }, { coverage: { backups: { state: 'denied' } } })).rows[0].protection
+    expect(p.lastSuccessfulBackup).toMatchObject({ tone: 'unknown', source: 'Backups not read' })
+  })
+  const declaration = (applied: boolean, observed = 2) => ({ apiVersion: G, kind: 'Database', metadata: { name: 'app', namespace: 'db', generation: 2 }, spec: { cluster: { name: 'pg' } }, status: { applied, observedGeneration: observed } })
+  it('shows a qualified lower bound inline when a declaration kind was not read', () => {
+    const d = buildCNPGFleet(resp({ clusters: [archiving], databases: [declaration(true)] }, { coverage: { publications: { state: 'denied' } } })).rows[0].declarations
+    expect(d.summary).toEqual({ text: '≥1 reconciled; Publications not read', tone: 'unknown' })
+  })
+  it('does not use an exact denominator when some declarations were not read', () => {
+    const d = buildCNPGFleet(resp({ clusters: [archiving], databases: [declaration(false)] }, { coverage: { subscriptions: { state: 'denied' } } })).rows[0].declarations
+    expect(d.summary.text).toBe('≥1 not reconciled; Subscriptions not read')
+    expect(d.summary.tone).toBe('degraded')
+  })
+  it('counts stale success and failure as pending in the fleet', () => {
+    for (const applied of [true, false]) {
+      const d = buildCNPGFleet(resp({ clusters: [archiving], databases: [declaration(applied, 1)] })).rows[0].declarations
+      expect(d).toMatchObject({ total: 1, pending: 1, failed: 0, summary: { text: '1 of 1 pending', tone: 'unknown' } })
+    }
   })
 })

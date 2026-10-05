@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { getCNPGPoolerDeploymentName, getCNPGPoolerMode, getCNPGPoolerStatus, isCNPGPoolerPaused } from '../resources/resource-utils-cnpg'
+import { getCNPGPoolerDeploymentName, getCNPGPoolerMode, isCNPGPoolerPaused } from '../resources/resource-utils-cnpg'
 import type { CNPGWorkspaceResponse } from './workspace'
 import { ClusterLink, NotReported, Note, ObjectProblems, PhaseBadge, SummaryShell } from './CNPGSharedSummary'
 import { refOf } from './relations'
@@ -7,6 +7,8 @@ import {
   POOLER_LIMIT_PARAMETERS,
   aggregatePoolerPools,
   poolerPodPressure,
+  poolerPressureCoverage,
+  poolerPressureFact,
   observedPause,
   poolerBackendService,
   poolerReadiness,
@@ -16,6 +18,7 @@ import {
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { toneTextClass } from '../ui/status-tone'
 import { FactGrid, FactRow, FactValue } from '../facts'
+import { Badge } from '../ui/Badge'
 import { SectionHeading } from '../ui/FoldSection'
 
 const TYPE_LABEL: Record<string, string> = {
@@ -48,7 +51,7 @@ export function CNPGPoolerSummary({
   const scheduled = resource?.status?.instances
   const deployment = getCNPGPoolerDeploymentName(resource)
   const paused = isCNPGPoolerPaused(resource)
-  const readiness = live?.deployment ? poolerReadiness(live.deployment) : null
+  const readiness = poolerReadiness(live?.deployment)
   const observed = observedPause(live?.observed)
 
   return (
@@ -59,19 +62,11 @@ export function CNPGPoolerSummary({
       <SectionHeading>State</SectionHeading>
       <FactGrid>
         <FactRow label="Status">
-          {readiness ? (
-            <>
-              <PhaseBadge status={{ text: paused ? 'Paused' : readiness.text, color: '', level: paused ? 'degraded' : readiness.level }} />
-              {readiness.detail && (
-                <Note>
-                  {paused ? `${readiness.text} · ` : ''}
-                  {readiness.detail}
-                </Note>
-              )}
-            </>
-          ) : (
-            <PhaseBadge status={getCNPGPoolerStatus(resource)} />
-          )}
+          <div className="flex flex-wrap items-center gap-1">
+            <PhaseBadge status={{ text: readiness.text, color: '', level: readiness.level }} />
+            {paused && <Badge severity="warning" size="sm">Pause requested</Badge>}
+          </div>
+          {readiness.detail && <Note>{readiness.detail}</Note>}
         </FactRow>
         <FactRow label="Instances">
           <span>
@@ -92,11 +87,11 @@ export function CNPGPoolerSummary({
         </FactRow>
         <FactRow label="Pause state">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span>{paused ? 'Requested: Paused' : 'Requested: Serving (not paused)'}</span>
+            <span>{paused ? 'Pause requested' : 'Serving requested (not paused)'}</span>
             {actions}
           </div>
           <Note>spec.pgbouncer.paused is what was asked for; each PgBouncer applies it with PAUSE / RESUME.</Note>
-          {paused && <Note>While paused, PgBouncer holds client connections instead of serving them.</Note>}
+          {paused && <Note>When PgBouncer applies the pause, it holds client connections instead of serving them.</Note>}
           {observed && (
             <div className="mt-1">
               <FactValue fact={{ text: `Observed: ${observed.text}`, tone: observed.level, source: 'Each PgBouncer’s SHOW STATE' }} />
@@ -180,10 +175,6 @@ function PoolerPath({ resource, live, onNavigate }: { resource: any; live: CNPGP
   )
 }
 
-function num(v: number | undefined): string {
-  return v === undefined ? '—' : String(v)
-}
-
 // Pods take their client connections independently, so one can queue while
 // the sum still looks calm.
 function PoolerPodPressure({ pods }: { pods: NonNullable<CNPGPoolerLive['pressure']>['pods'] }) {
@@ -206,10 +197,10 @@ function PoolerPodPressure({ pods }: { pods: NonNullable<CNPGPoolerLive['pressur
                 {r.pod}
                 {r.state === 'partial' && <span className="ml-1 font-sans text-theme-text-tertiary">partial</span>}
               </td>
-              <td className="pr-3 text-right font-mono">{num(r.clActive)}</td>
-              <td className={`pr-3 text-right font-mono ${r.clWaiting ? toneTextClass('degraded') : ''}`}>{num(r.clWaiting)}</td>
-              <td className="pr-3 text-right font-mono">{num(r.svActive)}</td>
-              <td className={`text-right font-mono ${r.maxwaitSeconds ? toneTextClass('degraded') : ''}`}>{r.maxwaitSeconds !== undefined ? `${r.maxwaitSeconds.toFixed(1)} s` : '—'}</td>
+              <td className="pr-3 text-right font-mono"><FactValue fact={poolerPressureFact(pods.filter((p) => p.pod === r.pod), 'clActive')} /></td>
+              <td className={`pr-3 text-right font-mono ${r.clWaiting ? toneTextClass('degraded') : ''}`}><FactValue fact={poolerPressureFact(pods.filter((p) => p.pod === r.pod), 'clWaiting')} /></td>
+              <td className="pr-3 text-right font-mono"><FactValue fact={poolerPressureFact(pods.filter((p) => p.pod === r.pod), 'svActive')} /></td>
+              <td className={`text-right font-mono ${r.maxwaitSeconds ? toneTextClass('degraded') : ''}`}><FactValue fact={poolerPressureFact(pods.filter((p) => p.pod === r.pod), 'maxwaitSeconds')} /></td>
             </tr>
           ) : (
             <tr key={r.pod}>
@@ -230,16 +221,15 @@ function PoolerPressure({ pressure }: { pressure: NonNullable<CNPGPoolerLive['pr
   if (pressure.state === 'denied' || pressure.state === 'error') {
     return <FactValue fact={{ text: `Not measured — ${pressure.reason ?? (pressure.state === 'denied' ? 'needs get pods/proxy' : 'read failed')}`, tone: 'unknown' }} />
   }
-  const reporting = pressure.pods.filter((p) => p.state === 'ok' || p.state === 'partial')
+  const { reporting, limitation, empty } = poolerPressureCoverage(pressure.pods)
   const rows = aggregatePoolerPools(reporting)
-  const partial = reporting.length < pressure.pods.length || reporting.some((p) => p.state !== 'ok')
   if (reporting.length === 0) {
-    return <FactValue fact={{ text: `Not measured — ${pressure.pods[0]?.error ?? 'no PgBouncer answered'}`, tone: 'unknown' }} />
+    return <FactValue fact={{ text: `Not measured — ${limitation ?? 'no PgBouncer answered'}`, tone: 'unknown' }} />
   }
   return (
     <div>
       {rows.length === 0 ? (
-        <div className="text-sm text-theme-text-secondary">Idle: no client pools open.</div>
+        <div className="text-sm text-theme-text-secondary">{empty}</div>
       ) : (
         <table className="w-full text-sm">
           <thead className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">
@@ -257,17 +247,17 @@ function PoolerPressure({ pressure }: { pressure: NonNullable<CNPGPoolerLive['pr
               <tr key={`${r.database}/${r.user}`}>
                 <td className="py-1 pr-3 font-mono text-xs">{r.database}/{r.user}</td>
                 <td className="pr-3 text-xs">{r.poolModes.join(', ') || '—'}</td>
-                <td className="pr-3 text-right font-mono">{num(r.clActive)}</td>
-                <td className={`pr-3 text-right font-mono ${r.clWaiting ? toneTextClass('degraded') : ''}`}>{num(r.clWaiting)}</td>
-                <td className="pr-3 text-right font-mono">{num(r.svActive)} / {num(r.svIdle)} / {num(r.svUsed)}</td>
-                <td className={`text-right font-mono ${r.maxwaitSeconds ? toneTextClass('degraded') : ''}`}>{r.maxwaitSeconds !== undefined ? `${r.maxwaitSeconds.toFixed(1)} s` : '—'}</td>
+                <td className="pr-3 text-right font-mono"><FactValue fact={poolerPressureFact(pressure.pods, 'clActive', r)} /></td>
+                <td className={`pr-3 text-right font-mono ${r.clWaiting ? toneTextClass('degraded') : ''}`}><FactValue fact={poolerPressureFact(pressure.pods, 'clWaiting', r)} /></td>
+                <td className="pr-3 text-right font-mono"><FactValue fact={poolerPressureFact(pressure.pods, 'svActive', r)} /> / <FactValue fact={poolerPressureFact(pressure.pods, 'svIdle', r)} /> / <FactValue fact={poolerPressureFact(pressure.pods, 'svUsed', r)} /></td>
+                <td className={`text-right font-mono ${r.maxwaitSeconds ? toneTextClass('degraded') : ''}`}><FactValue fact={poolerPressureFact(pressure.pods, 'maxwaitSeconds', r)} /></td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
       <Note>
-        Summed over {reporting.length} of {pressure.pods.length} PgBouncer Pods{partial ? ' — a lower bound: not every Pod reported in full' : ''}. PgBouncer’s admin and
+        Summed over {reporting.length} of {pressure.pods.length} PgBouncer Pods{limitation ? ` · ${limitation}` : ''}. PgBouncer’s admin and
         authentication pools are excluded.
       </Note>
       {pressure.pods.length > 1 && <PoolerPodPressure pods={pressure.pods} />}

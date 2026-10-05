@@ -5,6 +5,7 @@ import {
   Badge,
   CNPGLogicalPathView,
   cnpgDatabaseRoleFacts,
+  cnpgRoleState,
   cnpgDatabaseRoleMeta,
   cnpgManagedBy,
   managedByLabel,
@@ -87,13 +88,6 @@ export function cnpgDeclarationBlocks(items: DeclItem[], show: State | null): De
   return out
 }
 
-function stateOf(obj: any): State {
-  const applied = obj?.status?.applied
-  if (applied === true) return 'applied'
-  if (applied === false) return 'failed'
-  return 'pending'
-}
-
 function gitopsSource(managedBy: CNPGWorkspaceResponse['managedBy'], obj: any): string | undefined {
   return managedByLabel(cnpgManagedBy({ managedBy }, obj))
 }
@@ -117,7 +111,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
   const clusterFilter = searchParams.get('cluster')
   const show = (searchParams.get('show') as 'failed' | 'pending' | null) ?? null
 
-  const groups = useMemo(() => {
+  const scopedGroups = useMemo(() => {
     const byCluster = new Map<string, DeclGroup>()
     const group = (ns: string, cluster: string) => {
       const k = `${ns}/${cluster}`
@@ -137,7 +131,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
       const ns = d.metadata?.namespace ?? ''
       const cluster = d.spec?.cluster?.name ?? '(no cluster)'
       const g = group(ns, cluster)
-      const st = stateOf(d)
+      const st = cnpgRoleState(d)
       g.items.push({
         key: `db/${ns}/${d.metadata?.name}`,
         kind: 'Database',
@@ -154,7 +148,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         for (const p of list) {
           if (p.metadata?.namespace !== ns || p.spec?.cluster?.name !== d.spec?.cluster?.name || p.spec?.dbname !== d.spec?.name) continue
           placed.add(p)
-          const pst = stateOf(p)
+          const pst = cnpgRoleState(p)
           g.items.push({
             key: `${kind}/${ns}/${p.metadata?.name}`,
             kind,
@@ -175,7 +169,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
         if (placed.has(p)) continue
         const ns = p.metadata?.namespace ?? ''
         const g = group(ns, p.spec?.cluster?.name ?? '(no cluster)')
-        const pst = stateOf(p)
+        const pst = cnpgRoleState(p)
         g.items.push({
           key: `${kind}/${ns}/${p.metadata?.name}`,
           kind,
@@ -229,24 +223,29 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
     }
     return [...byCluster.values()]
       .filter((g) => !clusterFilter || `${g.namespace}/${g.cluster}` === clusterFilter)
+  }, [data.objects.databases, data.objects.publications, data.objects.subscriptions, data.objects.databaseRoles, data.managedBy, fleet.rows, clusterFilter])
+
+  const groups = useMemo(() =>
+    scopedGroups
       .map((g) => ({ ...g, matched: show ? g.items.filter((i) => i.state === show) : g.items, blocks: cnpgDeclarationBlocks(g.items, show) }))
       .filter((g) => g.matched.length > 0)
       .sort((a, b) => {
         const fa = a.matched.some((i) => i.state === 'failed') ? 0 : 1
         const fb = b.matched.some((i) => i.state === 'failed') ? 0 : 1
         return fa - fb || a.namespace.localeCompare(b.namespace) || a.cluster.localeCompare(b.cluster)
-      })
-  }, [data.objects.databases, data.objects.publications, data.objects.subscriptions, data.objects.databaseRoles, data.managedBy, fleet.rows, clusterFilter, show])
+      }),
+    [scopedGroups, show],
+  )
 
   const totals = useMemo(() => {
     let failed = 0
     let pending = 0
-    for (const r of fleet.rows) {
-      failed += r.declarations.failed
-      pending += r.declarations.pending
+    for (const g of scopedGroups) {
+      failed += g.items.filter((i) => i.state === 'failed').length
+      pending += g.items.filter((i) => i.state === 'pending').length
     }
     return { failed, pending }
-  }, [fleet.rows])
+  }, [scopedGroups])
   const logicalPaths = useMemo(() => {
     const valid = (o: any) => isApiGroup(o?.apiVersion, 'postgresql.cnpg.io')
     const paths = cnpgLogicalPaths(
@@ -453,6 +452,7 @@ function DeclarationRow({
       </div>
       <div className={clsx(sourceStated && 'text-right')}>
         <Badge severity={badge.severity} size="sm">{badge.text}</Badge>
+        {item.state === 'pending' && <Sub>awaiting the operator for the current spec</Sub>}
         {item.isField && <Sub>field of the Cluster</Sub>}
       </div>
       {!sourceStated && (

@@ -23,3 +23,5 @@ export {
   type CNPGObjectStoreHealth,
   type CNPGObjectStoreUser,
 } from './relations'
+
+export * from './backupRuns'

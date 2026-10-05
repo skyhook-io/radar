@@ -187,3 +187,10 @@ describe('problem provenance', () => {
     act(() => root.unmount())
   })
 })
+
+it('shows the declaration read limitation inline on Overview', () => {
+  const r = row({ declarations: { total: 1, failed: 0, pending: 0, summary: { text: '≥1 reconciled; Databases not read', tone: 'unknown' } } })
+  const root = render(<CNPGClusterSummary row={r} />)
+  expect(document.body.textContent).toContain('≥1 reconciled; Databases not read')
+  act(() => root.unmount())
+})

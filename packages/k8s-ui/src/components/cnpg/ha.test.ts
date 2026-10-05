@@ -332,3 +332,13 @@ describe('replication chip and the sustained-lag finding', () => {
     expect(unread).toMatchObject({ tone: 'unhealthy', text: 'sustained lag' })
   })
 })
+
+describe('backup dimension certainty', () => {
+  it('never treats archiving alone as restorable', () => {
+    const r = row()
+    r.protection.lastSuccessfulBackup = { text: 'No successful backup yet', tone: 'degraded', source: 'Backups read in this namespace; none completed' }
+    expect(cnpgDimensions({ row: r }).find((d) => d.id === 'protection')).toMatchObject({ text: 'WAL archiving · no successful backup yet', tone: 'degraded', source: 'Backups read in this namespace; none completed' })
+    r.protection.lastSuccessfulBackup = { text: 'No access to Backups', tone: 'unknown', source: 'Backups not read' }
+    expect(cnpgDimensions({ row: r }).find((d) => d.id === 'protection')).toMatchObject({ text: 'unassessed', tone: 'unknown', source: 'Backups not read' })
+  })
+})
