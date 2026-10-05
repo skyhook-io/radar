@@ -206,7 +206,7 @@ roleRef:
   name: {{ $fullname }}-cluster-read
 subjects:
   - kind: Group
-    name: radar:ai
+    name: radar:ai:reader
     apiGroup: rbac.authorization.k8s.io
 {{- end }}
 {{- end -}}

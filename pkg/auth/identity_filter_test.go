@@ -31,6 +31,7 @@ func TestForwardedIdentityAllowed(t *testing.T) {
 		{"cloud: non-vocabulary group rejected", "user_01ABC", []string{"radar:owner", "sre-team"}, true, false},
 		{"cloud: empty username rejected", "", []string{"radar:owner"}, true, false},
 		{"cloud mode internal synthetic username allowed", "radar:system:alerts:o1", []string{"radar:owner"}, true, true},
+		{"cloud: AI reader identity allowed", "radar:ai:o1", []string{"radar:ai:reader"}, true, true},
 		{"cloud: no groups, valid user, allowed", "user_01ABC", nil, true, true},
 	}
 	for _, tc := range cases {

@@ -174,7 +174,7 @@ func TestIntegrationReadBindings(t *testing.T) {
 		name, overrides      string
 		namespaced, cluster  []string
 		removeMap, removeKey bool
-		// radar:system and radar:ai are bound whenever cloud mode renders
+		// radar:system and radar:ai:reader are bound whenever cloud mode renders
 		// RBAC at all, independent of the tier settings.
 		noSystem, noAI bool
 	}{
@@ -231,8 +231,12 @@ func TestIntegrationReadBindings(t *testing.T) {
 							continue
 						}
 						found = true
-						wantSubjects := []rbacv1.Subject{{Kind: "Group", Name: "radar:" + tier, APIGroup: rbacv1.GroupName}}
-						// radar:system and radar:ai have no legacy cloud:* twin.
+						group := "radar:" + tier
+						if tier == "ai" {
+							group = "radar:ai:reader"
+						}
+						wantSubjects := []rbacv1.Subject{{Kind: "Group", Name: group, APIGroup: rbacv1.GroupName}}
+						// radar:system and radar:ai:reader have no legacy cloud:* twin.
 						if tier != "system" && tier != "ai" {
 							wantSubjects = append(wantSubjects, rbacv1.Subject{Kind: "Group", Name: "cloud:" + tier, APIGroup: rbacv1.GroupName})
 						}

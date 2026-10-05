@@ -1,10 +1,11 @@
 {{- /*
 Read-only access for automatic (alert-triggered) Radar Cloud Diagnose runs.
 
-Automatic runs read as radar:ai only. Manual turns read as the person who
-started them, with that person's identity and groups forwarded by Radar Cloud;
-radar:ai is not involved. Keep radar:ai permanently read-only; any future
-write-capable feature needs its own group.
+Automatic runs use username radar:ai:<org> and group radar:ai:reader only.
+Manual turns read as the person who started them, with that person's identity
+and groups forwarded by Radar Cloud; radar:ai:reader is not involved. Keep
+radar:ai:reader permanently read-only; a future write-capable AI identity needs
+a separate opt-in group (e.g. radar:ai:operator).
 
 The default grant is view plus the cluster-read and integration-read add-ons.
 With the standard view role it grants no Kubernetes Secret permission; it
@@ -44,6 +45,6 @@ roleRef:
   name: {{ include "radar.fullname" . }}-cloud-ai-read
 subjects:
   - kind: Group
-    name: radar:ai
+    name: radar:ai:reader
     apiGroup: rbac.authorization.k8s.io
 {{- end -}}

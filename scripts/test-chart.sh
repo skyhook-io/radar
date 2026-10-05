@@ -256,19 +256,21 @@ assert_not_contains 'name: radar-node-ops$'                     "node-ops absent
 echo
 
 for identity in ai system; do
+  group="radar:$identity"
+  if [[ "$identity" == ai ]]; then group="radar:ai:reader"; fi
   ROLE_OUT=$(yq 'select(.kind == "ClusterRole" and .metadata.name == "radar-cloud-'"$identity"'-read")' <<< "$OUT")
   BINDING_OUT=$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == "radar-cloud-'"$identity"'-read")' <<< "$OUT")
   if [[ $(yq '.aggregationRule.clusterRoleSelectors | length' <<< "$ROLE_OUT") == 1 ]] &&
      [[ $(yq '.aggregationRule.clusterRoleSelectors[0].matchLabels["rbac.authorization.k8s.io/aggregate-to-view"]' <<< "$ROLE_OUT") == true ]] &&
      [[ $(yq 'has("rules")' <<< "$ROLE_OUT") == false ]]; then
-    pass "radar:$identity read role aggregates view with no curated rules"
+    pass "$group read role aggregates view with no curated rules"
   else
-    fail "radar:$identity read role must aggregate view with no curated rules"
+    fail "$group read role must aggregate view with no curated rules"
   fi
   if yq '.metadata.labels | keys | .[]' <<< "$ROLE_OUT" | grep -q '^rbac.authorization.k8s.io/aggregate-to-'; then
-    fail "radar:$identity read role must not feed into built-in roles"
+    fail "$group read role must not feed into built-in roles"
   else
-    pass "radar:$identity read role has no aggregate-to labels"
+    pass "$group read role has no aggregate-to labels"
   fi
   if [[ $(yq '.roleRef.apiGroup' <<< "$BINDING_OUT") == rbac.authorization.k8s.io ]] &&
      [[ $(yq '.roleRef.kind' <<< "$BINDING_OUT") == ClusterRole ]] &&
@@ -276,10 +278,10 @@ for identity in ai system; do
      [[ $(yq '.subjects | length' <<< "$BINDING_OUT") == 1 ]] &&
      [[ $(yq '.subjects[0].kind' <<< "$BINDING_OUT") == Group ]] &&
      [[ $(yq '.subjects[0].apiGroup' <<< "$BINDING_OUT") == rbac.authorization.k8s.io ]] &&
-     [[ $(yq '.subjects[0].name' <<< "$BINDING_OUT") == "radar:$identity" ]]; then
-    pass "owned read role bound only to radar:$identity"
+     [[ $(yq '.subjects[0].name' <<< "$BINDING_OUT") == "$group" ]]; then
+    pass "owned read role bound only to $group"
   else
-    fail "owned read role must bind only radar:$identity"
+    fail "owned read role must bind only $group"
   fi
 done
 assert_not_contains 'name: radar-cloud-(ai|system)-view$'        "old view bindings absent"
@@ -299,29 +301,29 @@ render "all tiers disabled: no orphan cluster-read role" $CLOUD   --set cloud.sy
 assert_not_contains 'name: radar-cluster-read$'                 "no unbound ClusterRole when every tier is off"
 echo
 
-render "role bindings off: cluster-read stays for radar:system and radar:ai only" $CLOUD   --set cloud.defaultRbac.create=false
-assert_contains 'name: radar-cluster-read$'                     "cluster-read role kept for radar:system and radar:ai"
+render "role bindings off: cluster-read stays for radar:system and radar:ai:reader only" $CLOUD   --set cloud.defaultRbac.create=false
+assert_contains 'name: radar-cluster-read$'                     "cluster-read role kept for radar:system and radar:ai:reader"
 assert_contains 'name: radar-cloud-system-cluster-read$'        "radar:system bound to cluster-read"
-assert_contains 'name: radar-cloud-ai-cluster-read$'            "radar:ai bound to cluster-read"
-assert_contains 'name: radar-cloud-ai-read$'                    "radar:ai bound to the owned read role"
+assert_contains 'name: radar-cloud-ai-cluster-read$'            "radar:ai:reader bound to cluster-read"
+assert_contains 'name: radar-cloud-ai-read$'                    "radar:ai:reader bound to the owned read role"
 assert_contains 'name: radar-cloud-system-read$'                "radar:system bound to the owned read role"
 assert_not_contains 'name: radar-cloud-viewer-cluster-read$'    "no tier cluster-read bindings"
 echo
 
-render "radar:ai alone: aggregated read role and the read add-ons, no Secret role" $CLOUD   --set cloud.defaultRbac.create=false   --set cloud.systemRbac=false
-assert_contains 'name: radar-cloud-ai-read$'                    "radar:ai bound to the owned read role"
-assert_contains 'name: radar-cloud-ai-cluster-read$'            "radar:ai bound to cluster-read"
-assert_contains 'name: radar-cloud-ai-integration-read-namespaced$' "radar:ai bound to integration-read"
+render "radar:ai:reader alone: aggregated read role and the read add-ons, no Secret role" $CLOUD   --set cloud.defaultRbac.create=false   --set cloud.systemRbac=false
+assert_contains 'name: radar-cloud-ai-read$'                    "radar:ai:reader bound to the owned read role"
+assert_contains 'name: radar-cloud-ai-cluster-read$'            "radar:ai:reader bound to cluster-read"
+assert_contains 'name: radar-cloud-ai-integration-read-namespaced$' "radar:ai:reader bound to integration-read"
 assert_not_contains 'secrets-read'                              "no Secret role rendered"
 echo
 
-render "aiRbac=false: no radar:ai binding" $CLOUD   --set cloud.aiRbac=false
-assert_not_contains 'name: radar:ai$'                           "radar:ai bound nowhere"
+render "aiRbac=false: no radar:ai:reader binding" $CLOUD   --set cloud.aiRbac=false
+assert_not_contains 'name: radar:ai:reader$'                    "radar:ai:reader bound nowhere"
 assert_not_contains 'name: radar-cloud-ai-read$'               "AI read role and binding absent"
 echo
 
-render "aiRbac absent (reused values): no radar:ai binding" $CLOUD   --set cloud.aiRbac=null
-assert_not_contains 'name: radar:ai$'                           "absent aiRbac creates no default grant"
+render "aiRbac absent (reused values): no radar:ai:reader binding" $CLOUD   --set cloud.aiRbac=null
+assert_not_contains 'name: radar:ai:reader$'                    "absent aiRbac creates no default grant"
 assert_not_contains 'name: radar-cloud-ai-read$'               "AI read role and binding absent"
 echo
 

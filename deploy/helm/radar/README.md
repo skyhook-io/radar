@@ -170,15 +170,16 @@ integration-read add-ons, and cluster-wide `get/list/watch` on Secrets.
 Helm release alerts and Secret changes in the timeline need Secret read;
 Helm stores releases as Secrets. The grant includes no writes.
 
-### Radar Cloud automatic Diagnose (`radar:ai`)
+### Radar Cloud automatic Diagnose (`radar:ai:reader`)
 
 Manual Diagnose turns read as the person who started them. Radar Cloud forwards
-that person's identity and groups; `radar:ai` is not involved. MCP clients also
-read with the user's own permissions.
+that person's identity and groups; `radar:ai:reader` is not involved. MCP clients
+also read with the user's own permissions.
 
-Automatic (alert-triggered) Diagnose runs read as `radar:ai` only, a permanent
-read-only background diagnostic reader. Never grant this group write
-permissions; a future write-capable feature needs its own group.
+Automatic (alert-triggered) Diagnose runs use username `radar:ai:<org>` and
+group `radar:ai:reader` only, a permanent read-only background diagnostic reader.
+Never grant this group write permissions; a future write-capable AI identity
+needs a separate opt-in group (e.g. `radar:ai:operator`).
 `cloud.aiRbac` (default `true`) creates the chart's default grant: a chart-owned
 role aggregated to match `view` plus the cluster-read and integration-read
 add-ons. With the standard `view` role this grant includes no Kubernetes Secret

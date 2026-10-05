@@ -89,7 +89,7 @@ false
 {{- end -}}
 
 {{/*
-Whether the default read grant for automatic Diagnose (radar:ai) renders.
+Whether the default read grant for automatic Diagnose (radar:ai:reader) renders.
 An absent value means OFF, as with radar.cloudSystemRbac: a
 `--reuse-values` upgrade from a release that predates the key never gains a
 new reader without someone choosing it.

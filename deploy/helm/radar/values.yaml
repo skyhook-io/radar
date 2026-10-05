@@ -529,14 +529,16 @@ cloud:
   # False or absent (e.g. an older --reuse-values install) creates no default
   # grant; customer bindings remain. This is not a feature switch.
   systemRbac: true
-  # Create the default read grant for radar:ai, used only by automatic
-  # (alert-triggered) Diagnose runs. Manual turns read as the person who started
-  # them; Radar Cloud forwards that person's identity and groups.
+  # Create the default read grant for radar:ai:reader, used only by automatic
+  # (alert-triggered) Diagnose runs with username radar:ai:<org>. Manual turns
+  # read as the person who started them; Radar Cloud forwards that person's
+  # identity and groups.
   # Includes view via a chart-owned aggregated role and the cluster-read and
   # integration-read add-ons. No Kubernetes Secret permission with the standard
   # view role (it inherits anything added to view via aggregate-to-view); pod
-  # logs and ConfigMaps are readable and may contain sensitive data. Keep radar:ai
-  # permanently read-only; future write-capable features need their own group.
+  # logs and ConfigMaps are readable and may contain sensitive data. Keep
+  # radar:ai:reader permanently read-only; a future write-capable AI identity
+  # needs a separate opt-in group (e.g. radar:ai:operator).
   # Independent of defaultRbac. False or absent (e.g. an older --reuse-values
   # install) creates no default grant; customer bindings remain. Radar Cloud
   # controls whether Diagnose runs; this is not a feature switch.

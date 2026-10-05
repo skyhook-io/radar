@@ -1,4 +1,4 @@
-suite: Cloud radar:ai RBAC
+suite: Cloud radar:ai:reader RBAC
 templates:
   - cloud-rbac-ai.yaml
   - cloud-rbac-cluster-read.yaml
@@ -35,7 +35,7 @@ tests:
       - notExists:
           path: metadata.labels["rbac.authorization.k8s.io/aggregate-to-admin"]
 
-  - it: binds only radar:ai to the owned read role
+  - it: binds only radar:ai:reader to the owned read role
     template: cloud-rbac-ai.yaml
     documentIndex: 1
     asserts:
@@ -54,10 +54,10 @@ tests:
           path: subjects
           value:
             - kind: Group
-              name: radar:ai
+              name: radar:ai:reader
               apiGroup: rbac.authorization.k8s.io
 
-  - it: keeps radar:ai's read grant when the tier bindings are off
+  - it: keeps radar:ai:reader's read grant when the tier bindings are off
     set:
       cloud.defaultRbac.create: false
     template: cloud-rbac-ai.yaml
@@ -67,7 +67,7 @@ tests:
           count: 2
       - equal:
           path: subjects[0].name
-          value: radar:ai
+          value: radar:ai:reader
 
   # --reuse-values from a release predating aiRbac renders with the key
   # absent: nothing renders, so an existing install never gains a new reader
@@ -104,7 +104,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: binds radar:ai to no Secret role
+  - it: binds radar:ai:reader to no Secret role
     set:
       cloud.defaultRbac.create: false
     template: cloud-rbac-ai.yaml
@@ -118,7 +118,7 @@ tests:
           path: roleRef.name
           value: RELEASE-NAME-radar-cloud-ai-read
 
-  - it: gives radar:ai the cluster-read add-on without the tiers
+  - it: gives radar:ai:reader the cluster-read add-on without the tiers
     set:
       cloud.defaultRbac.create: false
       cloud.systemRbac: false
@@ -142,11 +142,11 @@ tests:
           path: subjects
           value:
             - kind: Group
-              name: radar:ai
+              name: radar:ai:reader
               apiGroup: rbac.authorization.k8s.io
         documentIndex: 1
 
-  - it: gives radar:ai the cluster-read add-on beside the tiers
+  - it: gives radar:ai:reader the cluster-read add-on beside the tiers
     template: cloud-rbac-cluster-read.yaml
     documentSelector:
       path: metadata.name
@@ -156,7 +156,7 @@ tests:
           path: roleRef.name
           value: RELEASE-NAME-radar-cluster-read
 
-  - it: drops radar:ai's cluster-read binding when aiRbac is false
+  - it: drops radar:ai:reader's cluster-read binding when aiRbac is false
     set:
       cloud.aiRbac: false
     template: cloud-rbac-cluster-read.yaml
@@ -165,11 +165,11 @@ tests:
           path: subjects
           content:
             kind: Group
-            name: radar:ai
+            name: radar:ai:reader
             apiGroup: rbac.authorization.k8s.io
           any: true
 
-  - it: gives radar:ai both integration-read add-ons without the tiers
+  - it: gives radar:ai:reader both integration-read add-ons without the tiers
     set:
       cloud.defaultRbac.create: false
       cloud.systemRbac: false
@@ -181,7 +181,7 @@ tests:
           path: subjects
           value:
             - kind: Group
-              name: radar:ai
+              name: radar:ai:reader
               apiGroup: rbac.authorization.k8s.io
         documentSelector:
           path: metadata.name
@@ -190,13 +190,13 @@ tests:
           path: subjects
           value:
             - kind: Group
-              name: radar:ai
+              name: radar:ai:reader
               apiGroup: rbac.authorization.k8s.io
         documentSelector:
           path: metadata.name
           value: RELEASE-NAME-radar-cloud-ai-integration-read-cluster
 
-  - it: gives radar:ai the integration-read add-ons beside the tiers
+  - it: gives radar:ai:reader the integration-read add-ons beside the tiers
     template: cloud-rbac-integration-read.yaml
     documentSelector:
       path: metadata.name

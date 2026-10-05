@@ -88,9 +88,9 @@ func ForwardedIdentityAllowed(username string, groups []string, cloudMode bool) 
 // isCloudUsername reports whether a username is one the Radar Cloud control
 // plane legitimately injects: the opaque per-user id the hub sets as
 // X-Forwarded-User, or an internal synthetic principal namespaced under
-// "radar:system:". The hub never forwards a K8s-reserved username, so
-// rejecting reserved is the meaningful check; the opaque WorkOS id has no
-// fixed prefix to match beyond "non-empty and not reserved".
+// "radar:system:" or the AI username "radar:ai:<org>". The hub never forwards
+// a K8s-reserved username, so rejecting reserved is the meaningful check; the
+// opaque WorkOS id has no fixed prefix to match beyond "non-empty and not reserved".
 func isCloudUsername(username string) bool {
 	return username != "" && !IsReservedPrincipal(username)
 }
