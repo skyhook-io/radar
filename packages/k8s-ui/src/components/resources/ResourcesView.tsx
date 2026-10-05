@@ -1,3 +1,4 @@
+import { getDatumStatus } from './resource-utils-datum'
 import React, { useState, useMemo, useEffect, useCallback, useDeferredValue, useRef, useContext, useId } from 'react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
@@ -2576,6 +2577,13 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
+  datumhttpproxies: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-32' },
+    { key: 'datumHostnames', label: 'Declared hostnames', width: 'min-w-56', tooltip: 'HTTPProxy.spec.hostnames: configured hostnames, independently of programming or public reachability.' },
+    { key: 'status', label: 'Reported state', width: 'w-40', tooltip: 'Current controller conditions, including hostname conditions. Missing principal conditions remain unknown.' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
   // Contour
   httpproxies: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
@@ -2628,6 +2636,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
 
 // Map (plural, group) → KNOWN_COLUMNS key for kinds that collide with core K8s
 const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
+  httpproxy: { 'networking.datumapis.com': 'datumhttpproxies' },
+  httpproxies: { 'networking.datumapis.com': 'datumhttpproxies' },
   networkpolicy: {
     'networking.k8s.io': 'networkpolicies',
     'projectcalico.org': 'caliconetworkpolicies',
@@ -2959,6 +2969,7 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   calicostagednetworkpolicies: ['projectcalico.org', 'crd.projectcalico.org'],
   calicotiers: ['projectcalico.org', 'crd.projectcalico.org'],
   httpproxies: ['projectcontour.io'],
+  datumhttpproxies: ['networking.datumapis.com'],
   clusterephemeralreports: ['reports.kyverno.io'],
   ephemeralreports: ['reports.kyverno.io'],
   authorizationpolicies: ['security.istio.io'],
@@ -5040,7 +5051,7 @@ export function ResourcesView({
     resourcesToCount.forEach((resource, index) => {
       const data = resourceQueries[index]?.data
       const key = resource.group ? `${resource.group}/${resource.kind}` : resource.kind
-      results[key] = Array.isArray(data) ? data.length : 0
+      results[key] = Array.isArray(data) ? data.length : null
     })
     return results
   }, [useNewCountsMode, resourcesToCount, resourceCountsProp, resourceUnavailableProp, loadedCountCache, selectedQueryHasLoadedCount, selectedLoadedResourceCount, selectedKindCountKey, resourceQueries])
@@ -7158,6 +7169,16 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     return <KyvernoCleanupPolicyCell resource={resource} column={column} />
   }
 
+  if (kindLower === 'datumhttpproxies') {
+    if (column === 'datumHostnames') {
+      const hosts = (resource.spec?.hostnames || []).join(', ') || 'None declared'
+      return <Tooltip content={hosts}><span className="block truncate text-sm text-theme-text-secondary">{hosts}</span></Tooltip>
+    }
+    if (column === 'status') {
+      const state = getDatumStatus(resource)
+      return <span className={clsx('badge', healthColors[state.color])}>{state.label}</span>
+    }
+  }
   switch (kindLower) {
     case 'pods':
       return <PodCell resource={resource} column={column} />

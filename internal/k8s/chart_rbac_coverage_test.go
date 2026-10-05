@@ -32,6 +32,9 @@ func TestChartGrantsEveryWatchedCRDGroup(t *testing.T) {
 	// group -> a human-readable pointer to where Radar watches it, for the failure message.
 	watched := map[string]string{}
 	for _, c := range supportedCRDFallbacks {
+		if c.LocalOnly {
+			continue
+		}
 		if c.Group != "" {
 			watched[c.Group] = "supportedCRDFallbacks (internal/k8s/dynamic_cache.go)"
 		}

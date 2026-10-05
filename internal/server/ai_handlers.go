@@ -181,7 +181,10 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 	}
 	namespaces = finalNamespaces
 
-	cache := k8s.GetResourceCache()
+	cache, ready := s.gateResourceRead(w, kind, group)
+	if !ready {
+		return
+	}
 	if cache == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
 		return
@@ -259,12 +262,18 @@ func issueIndexNamespaces(namespaces []string, kind, group string) []string {
 
 // aiListDynamic handles the CRD/dynamic fallback for AI list.
 func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8s.ResourceCache, kind string, namespaces []string, group string, level aicontext.VerbosityLevel, skipContext bool) {
+	readCtx, cancel := context.WithTimeout(r.Context(), k8s.ResourceReadTimeout(kind, group))
+	defer cancel()
+	r = r.WithContext(readCtx)
 	var allItems []*unstructured.Unstructured
 
 	if len(namespaces) > 0 {
 		for _, ns := range namespaces {
-			items, err := cache.ListDynamicWithGroup(r.Context(), kind, ns, group)
+			items, err := cache.ListDynamicComplete(r.Context(), kind, ns, group)
 			if err != nil {
+				if s.writeResourceReadError(w, err) {
+					return
+				}
 				if strings.Contains(err.Error(), "unknown resource kind") {
 					s.writeError(w, http.StatusBadRequest, err.Error())
 					return
@@ -275,8 +284,11 @@ func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8
 			allItems = append(allItems, items...)
 		}
 	} else {
-		items, err := cache.ListDynamicWithGroup(r.Context(), kind, "", group)
+		items, err := cache.ListDynamicComplete(r.Context(), kind, "", group)
 		if err != nil {
+			if s.writeResourceReadError(w, err) {
+				return
+			}
 			if strings.Contains(err.Error(), "unknown resource kind") {
 				s.writeError(w, http.StatusBadRequest, err.Error())
 				return
@@ -392,6 +404,9 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 // addressed by its OWN group (deployments?group=apps) — that's a typed lookup;
 // the dynamic cache has no informer for built-ins. Mirrors handleGetResource.
 func (s *Server) fetchAIResource(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name, group string) (runtime.Object, bool, error) {
+	if err := k8s.PublicReadReady(cache, kind, group); err != nil {
+		return nil, false, err
+	}
 	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
 		u, err := cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
 		if err != nil {
@@ -416,6 +431,9 @@ func (s *Server) fetchAIResource(ctx context.Context, cache *k8s.ResourceCache, 
 // writeAIFetchError maps fetch errors to HTTP status codes. Mirrors the
 // previous inline behavior so consumers don't see a status-code drift.
 func (s *Server) writeAIFetchError(w http.ResponseWriter, kind string, err error) {
+	if s.writeResourceReadError(w, err) {
+		return
+	}
 	msg := err.Error()
 	switch {
 	case strings.HasPrefix(msg, "forbidden:"):

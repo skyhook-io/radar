@@ -804,7 +804,7 @@ func GetDynamicClientSnapshot() (dynamic.Interface, string) {
 func GetKubeconfigPath() string {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
-	if contextRegistry != nil {
+	if _, runtime := projectContexts[contextName]; runtime || contextRegistry != nil {
 		return ""
 	}
 	return kubeconfigPath
@@ -1568,7 +1568,7 @@ func extractAWSProfile(ai *clientcmdapi.AuthInfo) string {
 }
 
 // GetAvailableContexts returns all available contexts from the kubeconfig
-func GetAvailableContexts() ([]ContextInfo, error) {
+func getFileContexts() ([]ContextInfo, error) {
 	if IsInCluster() {
 		// In-cluster mode - only one "context" available
 		return []ContextInfo{
@@ -1740,6 +1740,16 @@ func clusterServer(cfg *clientcmdapi.Config, cluster string) string {
 }
 
 func validateContextSwitchTarget(name string) error {
+	if target, ok := runtimeProjectContext(name); ok {
+		raw, err := target.loadAndVerify(context.Background())
+		if err == nil {
+			clientMu.Lock()
+			target.Prepared = raw
+			projectContexts[name] = target
+			clientMu.Unlock()
+		}
+		return err
+	}
 	clientMu.RLock()
 	registry := contextRegistry
 	singlePath := kubeconfigPath
@@ -1783,6 +1793,9 @@ func validateContextSwitchTarget(name string) error {
 // SwitchContext switches the K8s client to use a different context
 // This reinitializes all clients (k8sClient, discoveryClient, dynamicClient)
 func SwitchContext(name string) error {
+	if target, ok := runtimeProjectContext(name); ok {
+		return activateProjectContext(name, target)
+	}
 	if IsInCluster() {
 		return fmt.Errorf("cannot switch context when running in-cluster")
 	}
@@ -2291,6 +2304,9 @@ func findQualifiedNameForPath(registry map[string]contextEntry, file, inFileName
 func GetContextSource(name string) (sourceFile, inFileName string, ok bool) {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
+	if _, runtime := projectContexts[name]; runtime {
+		return "", "", false
+	}
 	if name == contextName && activeSourceFile != "" && activeSourceName != "" {
 		return activeSourceFile, activeSourceName, true
 	}

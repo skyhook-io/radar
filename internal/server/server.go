@@ -602,6 +602,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/rbac/namespace/{namespace}", s.handleRBACNamespace)
 			r.Get("/rbac/whoami", s.handleRBACWhoami)
 			r.Get("/cnpg/workspace", s.handleCNPGWorkspace)
+			r.Get("/datum/workspace", s.handleDatumWorkspace)
+			r.Post("/datum/projects/{name}/connect", s.handleDatumProjectConnect)
 			r.Get("/cnpg/operator", s.handleCNPGOperator)
 			r.Get("/cnpg/operator/status", s.handleCNPGOperatorStatus)
 			r.Get("/cnpg/imagecatalogs/{namespace}/{name}/clusters", s.handleCNPGCatalogUsers)
@@ -1397,6 +1399,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		PodEnvironment:      true,
 		PolicyResource:      true,
 		WorkloadHistory:     true,
+		DatumWorkspace:      s.configManagement() == "local" && !s.authConfig.Enabled(),
 		CNPGWorkspace:       true,
 		GitOpsWriteEvidence: true,
 	}
@@ -2105,6 +2108,20 @@ func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if cache := k8s.GetResourceCache(); cache != nil {
+		seen := map[string]bool{}
+		for _, r := range resources {
+			seen[r.Group+"/"+r.Kind] = true
+		}
+		for _, state := range cache.GetSyncSnapshot().Kinds {
+			b, ok := resourceid.BuiltinForKind(state.Kind)
+			if !ok || seen[b.Group+"/"+b.Kind] || k8s.KindNotServed(b.Kind, b.Group) {
+				continue
+			}
+			resources = append(resources, k8s.APIResource{Name: b.Resource, Kind: b.Kind, Group: b.Group, Version: b.Version, Namespaced: b.Namespaced, Verbs: []string{"get", "list", "watch"}})
+		}
+	}
+
 	result := make([]apiResourceResponse, 0, len(resources))
 	dynamicCache := k8s.GetDynamicResourceCache()
 	var visibleNamespaces []string
@@ -2114,7 +2131,7 @@ func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
 			APIResource: resource,
 			Featured:    isFeaturedKubernetesAPI(resource.Group, resource.Kind),
 		}
-		if resource.IsCRD && dynamicCache != nil {
+		if dynamicCache != nil && (resource.IsCRD || !isFeaturedKubernetesAPI(resource.Group, resource.Kind)) {
 			observation := dynamicCache.Observation(schema.GroupVersionResource{
 				Group:    resource.Group,
 				Version:  resource.Version,
@@ -2319,11 +2336,17 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	// dynamic path (which has no informer for built-ins). Cluster-scoped gating
 	// is already done at the top of this handler via k8s.ClassifyKindScope.
 	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
+		readCtx, cancel := context.WithTimeout(r.Context(), k8s.ResourceReadTimeout(kind, group))
+		defer cancel()
+		r = r.WithContext(readCtx)
 		if len(namespaces) > 0 {
 			var merged []any
 			for _, ns := range namespaces {
-				items, listErr := cache.ListDynamicWithGroup(r.Context(), kind, ns, group)
+				items, listErr := cache.ListDynamicComplete(r.Context(), kind, ns, group)
 				if listErr != nil {
+					if s.writeResourceReadError(w, listErr) {
+						return
+					}
 					if strings.Contains(listErr.Error(), "unknown resource kind") {
 						s.writeError(w, http.StatusBadRequest, listErr.Error())
 						return
@@ -2342,8 +2365,11 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			}
 			result = merged
 		} else {
-			result, err = cache.ListDynamicWithGroup(r.Context(), kind, "", group)
+			result, err = cache.ListDynamicComplete(r.Context(), kind, "", group)
 			if err != nil {
+				if s.writeResourceReadError(w, err) {
+					return
+				}
 				if strings.Contains(err.Error(), "unknown resource kind") {
 					s.writeError(w, http.StatusBadRequest, err.Error())
 					return
@@ -2643,11 +2669,17 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		)
 	default:
 		// Fall back to dynamic cache for CRDs and other unknown resources
+		readCtx, cancel := context.WithTimeout(r.Context(), k8s.ResourceReadTimeout(kind, group))
+		defer cancel()
+		r = r.WithContext(readCtx)
 		if len(namespaces) > 0 {
 			var merged []any
 			for _, ns := range namespaces {
-				items, listErr := cache.ListDynamicWithGroup(r.Context(), kind, ns, group)
+				items, listErr := cache.ListDynamicComplete(r.Context(), kind, ns, group)
 				if listErr != nil {
+					if s.writeResourceReadError(w, listErr) {
+						return
+					}
 					if strings.Contains(listErr.Error(), "unknown resource kind") {
 						s.writeError(w, http.StatusBadRequest, listErr.Error())
 						return
@@ -2662,8 +2694,11 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			}
 			result = merged
 		} else {
-			result, err = cache.ListDynamicWithGroup(r.Context(), kind, "", group)
+			result, err = cache.ListDynamicComplete(r.Context(), kind, "", group)
 			if err != nil {
+				if s.writeResourceReadError(w, err) {
+					return
+				}
 				if strings.Contains(err.Error(), "unknown resource kind") {
 					s.writeError(w, http.StatusBadRequest, err.Error())
 					return
@@ -2772,6 +2807,10 @@ func informerKeyForKind(kind string) string {
 // apply unchanged; the dynamic path keeps the connected gate (the dynamic
 // cache exists only after full initialization).
 func (s *Server) gateResourceRead(w http.ResponseWriter, kind, group string) (*k8s.ResourceCache, bool) {
+	if k8s.KindNotServed(kind, group) {
+		s.writeErrorCode(w, http.StatusNotFound, "kind_not_served", fmt.Sprintf("%s API is not served on this connection; specify an API group for colliding kinds", kind))
+		return nil, false
+	}
 	key := informerKeyForKind(kind)
 	if key == "" || (group != "" && !k8s.TypedKindOwnsGroup(kind, group)) {
 		if !s.requireConnected(w) {
@@ -2984,6 +3023,9 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
 		resource, err = cache.GetDynamicWithGroup(r.Context(), kind, namespace, name, group)
 		if err != nil {
+			if s.writeResourceReadError(w, err) {
+				return
+			}
 			if strings.Contains(err.Error(), "unknown resource kind") {
 				s.writeError(w, http.StatusBadRequest, err.Error())
 				return
@@ -3200,6 +3242,9 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		// Use group to disambiguate when multiple API groups have similar resource names
 		resource, err = cache.GetDynamicWithGroup(r.Context(), kind, namespace, name, group)
 		if err != nil {
+			if s.writeResourceReadError(w, err) {
+				return
+			}
 			if strings.Contains(err.Error(), "unknown resource kind") {
 				s.writeError(w, http.StatusBadRequest, err.Error())
 				return
@@ -3849,6 +3894,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		for _, ns := range namespaces {
 			items, listErr := eventsLister.Events(ns).List(labels.Everything())
 			if listErr != nil {
+				if s.writeResourceReadError(w, listErr) {
+					return
+				}
 				s.writeError(w, http.StatusInternalServerError, listErr.Error())
 				return
 			}
@@ -4800,7 +4848,7 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 	if err := k8s.PerformContextSwitch(name); err != nil {
 		// A preflight rejection fails before any teardown — the current cluster is
 		// still connected, so don't poison the global connection status.
-		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
+		if errors.Is(err, k8s.ErrContextSwitchPreflight) || errors.Is(err, k8s.ErrProjectConnectionRestored) {
 			s.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -4881,7 +4929,7 @@ func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := k8s.RetryCurrentConnection(); err != nil {
-		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
+		if errors.Is(err, k8s.ErrContextSwitchPreflight) || errors.Is(err, k8s.ErrProjectConnectionRestored) {
 			s.writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -5049,7 +5097,7 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		if discarded {
 			log.Printf("[capi] Discarded inactive kubeconfig after failed switch to %q", qualifiedName)
 		}
-		if errors.Is(err, k8s.ErrContextSwitchPreflight) {
+		if errors.Is(err, k8s.ErrContextSwitchPreflight) || errors.Is(err, k8s.ErrProjectConnectionRestored) {
 			s.writeError(w, http.StatusBadRequest, "failed to switch context: "+err.Error())
 			return
 		}

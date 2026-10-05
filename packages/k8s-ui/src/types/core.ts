@@ -116,6 +116,7 @@ export interface IntegrationCapability {
 
 // Feature capabilities based on RBAC permissions
 export interface Capabilities {
+  absentResources?: string[]
   configManagement?: 'local' | 'operator' | 'cloud'
   exec: boolean           // Terminal feature (pods/exec)
   localTerminal: boolean  // Local terminal available (not in-cluster, not disabled)
@@ -160,6 +161,7 @@ export interface CloudConnectCapability {
 }
 
 export interface FeatureCapabilities {
+ datumWorkspace?: boolean
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean
@@ -195,6 +197,7 @@ export interface Deployment {
 // - resource-hierarchy.ts kindPriority maps + appLabelEligibleKinds
 export type CoreNodeKind =
   | 'Internet'
+  | 'ConfiguredEndpoint'
   | 'Ingress'
   | 'Gateway'
   | 'HTTPRoute'
@@ -250,6 +253,7 @@ export type CoreNodeKind =
   | 'ServersTransportTCP' // Traefik ServersTransportTCP
   | 'TLSOption'          // Traefik TLSOption
   | 'TLSStore'           // Traefik TLSStore
+  | 'DatumHTTPProxy'
   | 'HTTPProxy'          // Contour HTTPProxy
   | 'CAPICluster'        // Cluster API Cluster
   | 'MachineDeployment'  // Cluster API MachineDeployment
@@ -347,7 +351,7 @@ export interface Topology {
   requiresNamespaceFilter?: boolean // True if cluster is too large for all-namespace topology
   estimatedNodes?: number // Pre-build node count estimate
   summaryMode?: boolean // True when the pod tier was collapsed into per-workload/service counts
-  crdDiscoveryStatus?: 'idle' | 'discovering' | 'ready' // CRD discovery status
+  crdDiscoveryStatus?: 'idle' | 'discovering' | 'ready' | 'on-demand' // CRD discovery status
 }
 
 // PodSummary is stamped onto a workload or service node's data in summary mode.
@@ -507,7 +511,7 @@ export interface ClusterInfo {
   podCount: number
   namespaceCount: number
   inCluster: boolean
-  crdDiscoveryStatus?: 'idle' | 'discovering' | 'ready'
+  crdDiscoveryStatus?: 'idle' | 'discovering' | 'ready' | 'on-demand'
 }
 
 // Context info for context switching
@@ -630,6 +634,7 @@ export interface PodEnvironmentRevealResponse {
 
 // Resource reference (for relationships)
 export interface ResourceRef {
+  inferred?: boolean
   kind: string
   namespace: string
   name: string

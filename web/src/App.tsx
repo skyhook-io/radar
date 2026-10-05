@@ -1,3 +1,5 @@
+import { DatumView } from './components/datum/DatumView'
+import { DATUM_SCREENS, datumDetailKindFor, datumDetailPath, parseDatumRoute } from './components/datum/routes'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
@@ -9,7 +11,7 @@ import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
-import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
+import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, FetchResult } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { topologyNodeResourceKind } from '@skyhook-io/k8s-ui/utils/topology-neighborhood'
 import { useAPIResources, findAPIResourceForRoute } from './api/apiResources'
@@ -74,7 +76,7 @@ import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
 import { SettingsDialog, type SettingsSectionId } from './components/settings/SettingsDialog'
 import type { APIResource, TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
-import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams } from './utils/navigation'
+import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams, defaultResourcesPath } from './utils/navigation'
 import { findSelectedTopologyNode } from './utils/topology-selection'
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
@@ -129,7 +131,7 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 // Extended MainView type that includes traffic and cost
 const TOPOLOGY_GROUPINGS: readonly GroupingMode[] = ['none', 'namespace', 'app', 'label']
 
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'datum' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
@@ -144,6 +146,7 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'cost') return 'cost'
   if (path === 'capacity') return 'capacity'
   if (path === 'cnpg') return 'cnpg'
+  if (path === 'datum') return 'datum'
   if (path === 'workload') return 'workload'
   if (path === 'checks' || path === 'audit') return 'checks'  // /audit = legacy → checks
   if (path === 'gitops') return 'gitops'
@@ -171,7 +174,7 @@ function usageView(pathname: string, view: ExtendedMainView, upgrade: boolean): 
 const CRASH_LABELS: Record<ExtendedMainView, string> = {
   home: 'Home', topology: 'Topology', resources: 'Resources', timeline: 'Timeline',
   issues: 'Issues', helm: 'Helm', helmCompare: 'HelmCompare', traffic: 'Traffic',
-  cost: 'Cost', capacity: 'Capacity', cnpg: 'CloudNativePG', checks: 'Checks', gitops: 'GitOps',
+  cost: 'Cost', capacity: 'Capacity', cnpg: 'CloudNativePG', datum: 'Datum', checks: 'Checks', gitops: 'GitOps',
   applications: 'Applications', workload: 'Workload', compare: 'Compare',
   investigations: 'Investigations',
 }
@@ -288,6 +291,11 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
     if (pathSegments[1] === 'activity') return 'Capacity Activity'
   }
 
+  if (view === 'datum') {
+    const route = parseDatumRoute(pathname)
+    if (route.detail) return route.detail.name
+    return `Datum ${DATUM_SCREENS.find(s => s.id === route.screen)?.label || 'Hostnames'}`
+  }
   if (view === 'cnpg') {
     const route = parseCNPGRoute(pathname)
     if (route.detail) return route.detail.name
@@ -354,10 +362,13 @@ interface AppProps {
 function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange }: AppProps) {
   const navigate = useNavigate()
   const location = useLocation()
+  const routerLocationRef = useRef(location)
+  routerLocationRef.current = location
   const navigationType = useNavigationType()
   const [searchParams, setSearchParams] = useSearchParams()
   const capabilities = useCapabilitiesContext()
   // Expanding a CloudNativePG object opens its workspace page only on a Radar that serves it.
+  const datumWorkspaceSupported = useRadarFeature('datumWorkspace').support === 'supported'
   const cnpgWorkspaceSupported = useRadarFeature('cnpgWorkspace').support === 'supported'
   const openLocalTerminal = useOpenLocalTerminal()
   const navCustomization = useNavCustomization()
@@ -467,7 +478,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // mount) so the omnibar can open a CRD hit with an irregular plural from any
   // view — kindToPlural would otherwise English-guess the route before a
   // resources view has run initNavigationMap().
-  const { data: navApiResources } = useAPIResources()
+  const { data: navApiResources, error: navApiResourcesError, refetch: refetchNavApiResources } = useAPIResources()
   useEffect(() => { if (navApiResources) initNavigationMap(navApiResources) }, [navApiResources])
 
   // View-aware namespace scope: disabled on cluster-scoped surfaces so the
@@ -479,22 +490,23 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // (standalone passes manageDocumentTitle), so embedders keep title ownership.
   useDocumentTitle(manageDocumentTitle ? radarPageTitle(location.pathname, location.search, navApiResources) : null, documentTitleSuffix)
 
-  // Workload slug after `/resources/` (defaults to `pods`). Bare `/resources` redirects to `/resources/pods`.
+  // A bare resource route waits for discovery before mounting a kind list.
   const normalizedResourcesKindSlug = useMemo(() => {
     const m = location.pathname.match(/^\/resources(?:\/([^/]+))?/)
     const slug = m?.[1] ?? ''
     return slug || 'pods'
   }, [location.pathname])
 
-  // Canonical URL — `/resources` is not stable for bookmarks/sharing; normalize to `/resources/pods`.
+  const resourcesLanding = navApiResources ? defaultResourcesPath(navApiResources) : null
   useEffect(() => {
     const path = location.pathname.replace(/\/+$/, '') || '/'
-    if (path !== '/resources') return
-    navigate(
-      { pathname: '/resources/pods', search: location.search, hash: location.hash },
-      { replace: true },
-    )
-  }, [location.pathname, location.search, location.hash, navigate])
+    if (path !== '/resources' || !resourcesLanding) return
+    const destination = new URL(resourcesLanding, 'http://radar.invalid')
+    const params = new URLSearchParams(location.search)
+    params.delete('apiGroup')
+    if (destination.searchParams.has('apiGroup')) params.set('apiGroup', destination.searchParams.get('apiGroup')!)
+    navigate({ pathname: destination.pathname, search: params.toString(), hash: location.hash }, { replace: true })
+  }, [location.pathname, location.search, location.hash, navigate, resourcesLanding])
 
   // Set mainView by navigating to the path
   const setMainView = useCallback((view: ExtendedMainView, params?: Record<string, string>) => {
@@ -751,10 +763,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     // Record the page this peek was opened on. Outside /resources the drawer is
     // not URL-backed, so this ref is what lets the render-time gate below close
     // the peek when the page under it changes (e.g. browser Back off a GitOps
-    // detail page, or Applications detail → list via ?app). window.location is
-    // read (not the `location` closure) so the value is always current
-    // regardless of this callback's memoization.
-    peekOwnerKeyRef.current = peekOwnerKey(window.location.pathname, window.location.search)
+    // detail page, or Applications detail → list via ?app).
+    const ownerLocation = routerLocationRef.current
+    peekOwnerKeyRef.current = peekOwnerKey(ownerLocation.pathname, ownerLocation.search)
     const update = () => { setDrawerInitialTab(tab); setSelectedResource(res) }
     // Skip the cross-fade animation entirely on first open (no
     // `selectedResource`); otherwise route through
@@ -890,7 +901,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     gitops: 'g o', checks: 'g u', cost: 'g c', capacity: 'g p',
     // Non-rail views (reachable via deep links / actions, not the rail) get no
     // dedicated mnemonic — listed for exhaustiveness so the type stays total.
-    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '',
+    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '', datum: '',
   }
   const views = Object.keys(VIEW_SHORTCUT_KEYS).filter(
     (v): v is ExtendedMainView => VIEW_SHORTCUT_KEYS[v as ExtendedMainView] !== '',
@@ -1080,6 +1091,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     timer: number | null
   }>({ changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
   const cnpgInvalidationPendingRef = useRef(false)
+  const datumInvalidationPendingRef = useRef(false)
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     timer: number | null
@@ -1112,6 +1124,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     const applicationWorkload = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
 
     if (event.group?.endsWith('.cnpg.io')) cnpgInvalidationPendingRef.current = true
+    if (['dns.networking.miloapis.com', 'networking.datumapis.com', 'compute.datumapis.com', 'resourcemanager.miloapis.com'].includes(event.group || '')) datumInvalidationPendingRef.current = true
 
     const fast = fastInvalidationRef.current
     fast.changedKinds.add(kind)
@@ -1156,6 +1169,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         // GitOps view is mounted (Phase 2 will make this relevance-aware).
         queryClient.invalidateQueries({ queryKey: ['gitops-tree'] })
         queryClient.invalidateQueries({ queryKey: ['gitops-insights'] })
+        if (datumInvalidationPendingRef.current) {
+          datumInvalidationPendingRef.current = false
+          queryClient.invalidateQueries({ queryKey: ['datum', 'workspace'] })
+        }
         if (cnpgInvalidationPendingRef.current) {
           cnpgInvalidationPendingRef.current = false
           queryClient.invalidateQueries({ queryKey: ['cnpg', 'workspace'] })
@@ -1248,7 +1265,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         // A CNPG detail keeps the context it belongs to, so it can say it is
         // not in the new one instead of loading a same-named object.
         const pinnedCtx = new URLSearchParams(location.search).get('ctx')
-        if (pinnedCtx && location.pathname.startsWith('/cnpg/')) nextParams.set('ctx', pinnedCtx)
+        if (pinnedCtx && (location.pathname.startsWith('/cnpg/') || location.pathname.startsWith('/datum/'))) nextParams.set('ctx', pinnedCtx)
         navigate(
           { pathname: location.pathname, search: nextParams.toString() },
           { replace: true, state: location.state },
@@ -1374,7 +1391,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Handle node selection - convert TopologyNode to SelectedResource for the drawer
   const handleNodeClick = useCallback((node: TopologyNode) => {
     // Skip Internet node - it's not a real resource
-    if (node.kind === 'Internet') return
+    if (node.kind === 'Internet' || node.kind === 'ConfiguredEndpoint') return
 
     const nodeGroup = apiVersionToGroup(node.data.apiVersion as string | undefined)
     const resourceKind = topologyNodeResourceKind(node)
@@ -1671,7 +1688,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     // (drawerExpanded is URL-derived from ?full=1, so leaving /resources drops it
     // automatically — no explicit reset needed.)
     const params = new URLSearchParams(window.location.search)
-    if (!navigatingToResources && !params.has('resource')) {
+    if (!navigatingToResources && !params.has('resource') && !searchParams.has('drawer')) {
       setSelectedResource(null)
     }
     if (!params.has('release')) {
@@ -1684,7 +1701,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // while they adjust the namespace scope filter).
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
-    if (!params.has('resource')) setSelectedResource(null)
+    if (!params.has('resource') && !searchParams.has('drawer')) setSelectedResource(null)
     if (!params.has('release')) setSelectedHelmRelease(null)
   }, [namespacesKey])
 
@@ -1793,7 +1810,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     setVisibleKinds(new Set())
   }, [])
 
-  const navActiveView = mainView === 'helmCompare' ? 'helm' : mainView === 'cnpg' ? 'resources' : mainView
+  const navActiveView = mainView === 'helmCompare' ? 'helm' : (mainView === 'cnpg' || mainView === 'datum') ? 'resources' : mainView
 
   return (
     <PortForwardProvider>
@@ -2251,7 +2268,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         )}
 
         {/* Resources view */}
-        {mainView === 'resources' && (
+        {mainView === 'resources' && /^\/resources\/?$/.test(location.pathname) && (
+          navApiResources && !resourcesLanding
+            ? <div className="p-6 text-theme-text-secondary">No listable APIs discovered.</div>
+            : <FetchResult loading={!navApiResourcesError} error={navApiResourcesError} onRetry={() => { void refetchNavApiResources() }} className="flex-1" />
+        )}
+        {mainView === 'resources' && !/^\/resources\/?$/.test(location.pathname) && (
           <ResourcesView
             namespaces={namespaces}
             selectedResource={routeSelectedResource}
@@ -2320,12 +2342,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               // the inline workload selection so the app graph (not a second
               // detail panel) sits behind the peek. Search-only change keeps the
               // pathname — and thus the peek's owner-path — intact.
-              const params = new URLSearchParams(window.location.search)
+              const params = new URLSearchParams(location.search)
               if (params.has('workload') || params.has('tab') || params.has('run')) {
                 params.delete('workload')
                 params.delete('tab')
                 params.delete('run')
-                navigate({ pathname: window.location.pathname, search: params.toString() }, { replace: true })
+                navigate({ pathname: location.pathname, search: params.toString() }, { replace: true })
               }
               navigateToResource(resource)
             }}
@@ -2344,6 +2366,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
         {!viewsSyncGated && mainView === 'capacity' && (
           <CapacityView onOpenResource={navigateToResource} />
+        )}
+
+        {!viewsSyncGated && mainView === 'datum' && (
+          <DatumView namespaces={namespaces} selectedResource={routeSelectedResource} onOpenResource={navigateToResource} onCloseResource={() => setSelectedResource(null)} onClearNamespaces={clearAllNamespaces} />
         )}
 
         {!viewsSyncGated && mainView === 'cnpg' && (
@@ -2425,6 +2451,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           onNavigate={(res) => navigateToResource(res)}
           canCollapseToDrawer={!isMobile}
           onExpand={(res, opts) => {
+            const datumPlural = datumWorkspaceSupported ? datumDetailKindFor(res.kind, res.group) : null
+            if (datumPlural) {
+              navigate(datumDetailPath({ plural: datumPlural, namespace: res.namespace, name: res.name }, connection.context || undefined, opts?.yaml ? 'yaml' : undefined), { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } })
+              return
+            }
             const cnpgPlural = cnpgWorkspaceSupported ? cnpgDetailKindFor(res.kind, res.group) : null
             if (cnpgPlural) {
               navigate(

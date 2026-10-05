@@ -1,3 +1,5 @@
+import { renderDatumSummary } from '../datum/DatumSummaryHost'
+import { datumDetailKindFor, datumDetailPath } from '../datum/routes'
 import { RayJobRenderer } from '../resources/renderers/RayJobRenderer'
 import { JobRenderer, JobSetRenderer } from '../resources/renderers/JobAdmissionRenderers'
 import { RayClusterRenderer } from '../resources/renderers/RayClusterRenderer'
@@ -229,6 +231,7 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   // The redirect replaces the URL, so it waits for a confirmed workspace.
+  const datumWorkspace = useRadarFeature('datumWorkspace').support === 'supported'
   const cnpgWorkspace = useRadarFeature('cnpgWorkspace').support === 'supported'
 
   // Parse /workload/:kind/:ns/:name from pathname. Segments are URL-encoded by
@@ -296,6 +299,13 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
     const base = cnpgDetailPath({ plural: cnpgPlural, namespace, name })
     const qs = params.toString()
     return <Navigate replace to={qs ? `${base}?${qs}` : base} state={location.state} />
+  }
+
+  const datumPlural = datumWorkspace ? datumDetailKindFor(kind, group) : null
+  if (datumPlural) {
+    const params = new URLSearchParams(searchParams); params.delete('apiGroup')
+    const path = datumDetailPath({ plural: datumPlural, namespace, name })
+    return <Navigate replace to={params.size ? `${path}?${params}` : path} state={location.state} />
   }
 
   return (
@@ -567,6 +577,9 @@ export function WorkloadView({
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
   const cnpgWorkspace = useRadarFeature('cnpgWorkspace').support !== 'unsupported'
+  const datumFeature = useRadarFeature('datumWorkspace').support === 'supported'
+  const datumCaps = useCapabilitiesContext()
+  const datumWorkspace = datumFeature && datumCaps.deployment?.mode === 'local' && !datumCaps.authEnabled
   const apiKind = kindToPluralWithGroup(kindProp, rest.group ?? '')
   const queryClient = useQueryClient()
   const [imageTargetOwnership, setImageTargetOwnership] =
@@ -1220,10 +1233,9 @@ export function WorkloadView({
             : undefined
         }
         renderSummary={
-          cnpgWorkspace
-            ? ({ apiKind: ak, namespace: ns, name: n, resource: res, context, onNavigate }) =>
-                renderCNPGSummary({ apiKind: ak, namespace: ns, name: n, group: effectiveGroup, resource: res, context, onNavigate })
-            : undefined
+          ({ apiKind: ak, namespace: ns, name: n, resource: res, context, onNavigate }) =>
+            (datumWorkspace ? renderDatumSummary(res, onNavigate) : null) ??
+            (cnpgWorkspace ? renderCNPGSummary({ apiKind: ak, namespace: ns, name: n, group: effectiveGroup, resource: res, context, onNavigate }) : null)
         }
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&

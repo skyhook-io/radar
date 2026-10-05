@@ -62,6 +62,7 @@ func Minify(obj runtime.Object, level VerbosityLevel) (any, error) {
 
 // MinifyUnstructured minifies a CRD/dynamic resource at the requested level.
 func MinifyUnstructured(obj *unstructured.Unstructured, level VerbosityLevel) any {
+	obj = redactDatum(obj)
 	switch level {
 	case LevelSummary:
 		return summarizeUnstructured(obj)
@@ -98,5 +99,5 @@ func MinifyResource(obj runtime.Object) (map[string]any, error) {
 
 // MinifyResourceUnstructured is the backward-compatible wrapper for unstructured resources.
 func MinifyResourceUnstructured(obj *unstructured.Unstructured) map[string]any {
-	return minifyCompactUnstructured(obj.DeepCopy().Object)
+	return minifyCompactUnstructured(redactDatum(obj).DeepCopy().Object)
 }

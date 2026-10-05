@@ -192,3 +192,5 @@ export { RayServiceRenderer } from './RayServiceRenderer'
 export { RayClusterRenderer } from './RayClusterRenderer'
 
 export { RayJobRenderer } from './RayJobRenderer'
+
+export { DatumRenderer } from './DatumRenderer'

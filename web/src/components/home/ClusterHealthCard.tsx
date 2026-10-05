@@ -128,7 +128,7 @@ export function ClusterHealthCard({
   cluster,
   metrics,
   metricsServerAvailable,
-  topCRDs: _topCRDs,
+  topCRDs,
   issueCount,
   hasCriticalIssues,
   nodeVersionSkew,
@@ -140,7 +140,6 @@ export function ClusterHealthCard({
   freshness,
   radarVersion,
 }: ClusterHealthCardProps) {
-  void _topCRDs // Reserved for future CRD display
 
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false)
   const caps = useCapabilitiesContext()
@@ -149,7 +148,9 @@ export function ClusterHealthCard({
   // OSS-shape default — wrong-direction defaults would briefly suppress
   // chrome OSS users expect to see.
   const deployment = caps.deployment ?? { mode: 'local' as const }
-  const mcpEnabled = caps.mcpEnabled
+  const applicable = (kind: string) => !caps.absentResources?.includes(kind)
+ const hasWorkloads = applicable("pods") || applicable("deployments") || applicable("nodes")
+ const mcpEnabled = caps.mcpEnabled
   const isCloud = deployment.mode === 'cloud'
   const isInCluster = deployment.mode === 'in-cluster' || deployment.mode === 'cloud'
   const mcpUrl = `${window.location.origin}${routePath('/mcp')}`
@@ -199,7 +200,7 @@ export function ClusterHealthCard({
     { kind: 'jobs', label: 'Jobs', icon: Briefcase, total: counts.jobs.total, subtitle: `${counts.jobs.active} active`, hasIssues: counts.jobs.failed > 0 },
     { kind: 'cronjobs', label: 'CronJobs', icon: Clock, total: counts.cronJobs.total, subtitle: `${counts.cronJobs.active} active` },
   ]
-  const platformInfo = getPlatformInfo(cluster.platform)
+  const platformInfo = hasWorkloads ? getPlatformInfo(cluster.platform) : { name: 'API server', icon: null }
   // Headline-name derivation has three branches, in priority order:
   //  1. Local-kubeconfig users get the parsed short clusterName from a
   //     string like `gke_koalabackend_us-east1-b_nonprod-cluster-us-east1`
@@ -260,7 +261,7 @@ export function ClusterHealthCard({
                 <KubernetesVersionLine
                   version={cluster.version}
                   reviewedThrough={cluster.upgradeReviewedThrough}
-                  onNavigate={onNavigateToUpgradeImpact}
+                  onNavigate={hasWorkloads ? onNavigateToUpgradeImpact : undefined}
                 />
               )}
               {radarVersion}
@@ -327,8 +328,16 @@ export function ClusterHealthCard({
 
           {/* Center: Three health rings */}
           <div className="flex-1 flex items-center justify-center gap-12">
-            {/* Pods Ring */}
-            {isRestricted('pods') ? (
+            {!hasWorkloads && <div className="w-full space-y-3">
+ <h3 className="font-medium text-theme-text-primary">API resource inventory</h3>
+ <p className="text-sm text-theme-text-secondary">This connection serves APIs without Kubernetes workloads. Counts cover observed inventories.</p>
+ <div className="grid grid-cols-2 gap-2">{topCRDs?.map(crd => <button key={`${crd.group}/${crd.name}`} onClick={() => onNavigateToKind(crd.name, crd.group)} className="card-inner flex items-center justify-between text-sm hover:bg-theme-hover">
+ <span className="text-theme-text-primary">{crd.kind}</span><span className="text-theme-text-tertiary">{crd.observation && crd.observation !== 'synced' ? 'Not observed' : crd.count}</span>
+ </button>)}</div>
+ <button className="text-sm text-accent" onClick={onNavigateToView}>Browse served APIs →</button>
+ </div>}
+ {/* Pods Ring */}
+            {applicable('pods') && (isRestricted('pods') ? (
               <RestrictedRing label="Pods" />
             ) : (
               <button
@@ -358,10 +367,10 @@ export function ClusterHealthCard({
                   )}
                 </div>
               </button>
-            )}
+            ))}
 
             {/* Deployments Ring */}
-            {isRestricted('deployments') ? (
+            {applicable('deployments') && (isRestricted('deployments') ? (
               <RestrictedRing label="Deployments" />
             ) : (
               <button
@@ -377,10 +386,10 @@ export function ClusterHealthCard({
                   )}
                 </div>
               </button>
-            )}
+            ))}
 
             {/* Nodes Ring */}
-            {isRestricted('nodes') ? (
+            {applicable('nodes') && (isRestricted('nodes') ? (
               <RestrictedRing label="Nodes" />
             ) : (
               <button
@@ -399,11 +408,11 @@ export function ClusterHealthCard({
                   )}
                 </div>
               </button>
-            )}
+            ))}
           </div>
 
           {/* Right: Resource utilization */}
-          <div className="flex flex-col justify-center w-[300px] shrink-0 pl-8 border-l border-theme-border/50">
+          {applicable("nodes") && <div className="flex flex-col justify-center w-[300px] shrink-0 pl-8 border-l border-theme-border/50">
             <div className="flex items-center gap-2 mb-3">
               <Boxes className="w-4 h-4 text-theme-text-tertiary" />
               <span className="text-[10px] uppercase tracking-wider text-theme-text-tertiary">Resource Utilization</span>
@@ -459,7 +468,7 @@ export function ClusterHealthCard({
               )}
             </div>
 
-          </div>
+          </div>}
         </div>
       </div>
 
@@ -493,7 +502,7 @@ export function ClusterHealthCard({
 
         {/* Center column: Resources (aligned with health rings) */}
         <div className="w-1/2 grid grid-cols-3 items-center justify-items-center px-4">
-          {secondaryResources.map((res) => (
+          {secondaryResources.filter(res => applicable(res.kind)).map((res) => (
             <button
               key={res.kind}
               onClick={() => onNavigateToKind(res.kind, res.group)}
@@ -550,7 +559,7 @@ function KubernetesVersionLine({
   onNavigate?: () => void
 }) {
   if (!onNavigate) {
-    return <span>Kubernetes {version}</span>
+    return <span className="block truncate" title={version}>Kubernetes {version}</span>
   }
 
   const behind = minorsBehind(version, reviewedThrough)
@@ -562,13 +571,13 @@ function KubernetesVersionLine({
           ? `Radar's upgrade checks cover Kubernetes through ${reviewedThrough}. Click to assess the next minor upgrade.`
           : 'Assess the next minor Kubernetes upgrade.'
       }
-      wrapperClassName="w-fit"
+      wrapperClassName="min-w-0 max-w-full w-fit"
     >
       <button
         onClick={onNavigate}
-        className="group flex items-center gap-1 hover:text-theme-text-secondary transition-colors"
+        className="group flex min-w-0 max-w-full items-center gap-1 hover:text-theme-text-secondary transition-colors"
       >
-        <span>Kubernetes {version}</span>
+        <span className="truncate" title={version}>Kubernetes {version}</span>
         {behind > 0 && (
           <span>· Upgrade impact</span>
         )}

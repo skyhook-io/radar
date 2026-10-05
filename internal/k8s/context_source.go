@@ -48,6 +48,9 @@ func ContextForSafetyBinding(binding string) ContextRef {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 	if binding == contextBinding {
+		if _, runtime := projectContexts[contextName]; runtime {
+			return ContextRef{Name: contextName}
+		}
 		return ContextRef{Name: contextName, SourceFile: activeSourceFile, InFileName: activeSourceName}
 	}
 	for name, entry := range contextRegistry {
@@ -108,6 +111,9 @@ func IsEphemeralContext(name string) bool {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 
+	if _, ok := projectContexts[name]; ok {
+		return true
+	}
 	entry, ok := contextRegistry[name]
 	if !ok {
 		return false

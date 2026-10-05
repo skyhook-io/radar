@@ -36,6 +36,7 @@ type NodeKind string
 
 const (
 	KindInternet                       NodeKind = "Internet"
+	KindConfiguredEndpoint             NodeKind = "ConfiguredEndpoint"
 	KindIngress                        NodeKind = "Ingress"
 	KindGateway                        NodeKind = "Gateway"
 	KindHTTPRoute                      NodeKind = "HTTPRoute"
@@ -84,7 +85,8 @@ const (
 	KindServersTransportTCP            NodeKind = "ServersTransportTCP"  // Traefik ServersTransportTCP
 	KindTLSOption                      NodeKind = "TLSOption"            // Traefik TLSOption
 	KindTLSStore                       NodeKind = "TLSStore"             // Traefik TLSStore
-	KindHTTPProxy                      NodeKind = "HTTPProxy"            // Contour HTTPProxy
+	KindDatumHTTPProxy                 NodeKind = "DatumHTTPProxy"
+	KindHTTPProxy                      NodeKind = "HTTPProxy" // Contour HTTPProxy
 	KindDaemonSet                      NodeKind = "DaemonSet"
 	KindStatefulSet                    NodeKind = "StatefulSet"
 	KindReplicaSet                     NodeKind = "ReplicaSet"
@@ -413,6 +415,7 @@ type ResourceRef struct {
 	Kind      string `json:"kind"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
+	Inferred  bool   `json:"inferred,omitempty"`
 	Group     string `json:"group,omitempty"` // API group for CRDs (e.g., "cert-manager.io")
 }
 

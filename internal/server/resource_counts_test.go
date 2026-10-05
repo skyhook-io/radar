@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,6 +16,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
 )
 
@@ -450,4 +453,54 @@ func containsString(items []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestResourceCountsAbsentTypedAPIsAreUnavailableNotForbidden(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1":
+			fmt.Fprint(w, `{"apiVersion":"v1","kind":"APIResourceList","groupVersion":"v1","resources":[{"name":"namespaces","kind":"Namespace","namespaced":false,"verbs":["get","list","watch"]}]}`)
+		case "/api/v1/namespaces":
+			fmt.Fprint(w, `{"apiVersion":"v1","kind":"NamespaceList","items":[]}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"apiVersion":"v1","kind":"Status","status":"Failure","reason":"NotFound","code":404}`)
+		}
+	}))
+	defer api.Close()
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: api.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := k8s.SetTestClient(client)
+	k8s.InvalidateResourcePermissionsCache()
+	t.Cleanup(func() { k8s.SetTestClient(previous); k8s.InvalidateResourcePermissionsCache() })
+
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		{Version: "v1", Resource: "namespaces"}:                                "NamespaceList",
+		{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}: "EndpointSliceList",
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, nil); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	k8s.CheckResourcePermissions(context.Background())
+	rec := httptest.NewRecorder()
+	testServerSrv.handleResourceCounts(rec, httptest.NewRequest(http.MethodGet, "/api/resource-counts", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%d: %s", rec.Code, rec.Body.String())
+	}
+	var body ResourceCountsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"Pod", "Service", "Node", "apps/Deployment"} {
+		if containsString(body.Forbidden, key) || !containsString(body.Unavailable, key) || body.Reasons[key] != reasonNotServed {
+			t.Fatalf("absence classified as denial for %s: %+v", key, body)
+		}
+		if _, ok := body.Counts[key]; ok {
+			t.Fatalf("absent %s received count", key)
+		}
+	}
 }

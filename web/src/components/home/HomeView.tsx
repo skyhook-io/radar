@@ -62,9 +62,11 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
   // returns null otherwise — the outer gate only excludes states with nothing
   // to fetch against.
   const capabilities = useCapabilitiesContext()
+  const podsApplicable = !capabilities.absentResources?.includes('pods')
+  const nodesApplicable = !capabilities.absentResources?.includes('nodes')
   const karpenterState = capabilities.karpenter?.state
   const capacityCardPossible =
-    karpenterState === 'available' || karpenterState === 'denied' || karpenterState === 'not_detected'
+    nodesApplicable && (karpenterState === 'available' || karpenterState === 'denied' || karpenterState === 'not_detected')
   const { data, isLoading, error, dataUpdatedAt, refetch } = useDashboard(namespaces)
   const { connection } = useConnection()
   const { data: issuesData, isLoading: issuesLoading, isFetching: issuesFetching, error: issuesError } = useIssues(namespaces)
@@ -138,6 +140,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
             <span>{fallbackClusterLoadState.message}</span>
           </div>
         )}
+        {data.failedKinds && data.failedKinds.length > 0 && <div className="text-sm text-warning-text">Failed to load: {data.failedKinds.join(', ')}. Reconnect to retry the initial inventory.</div>}
         {/* Row 1: Cluster Health Card (combined health + resource counts) */}
         <ClusterHealthCard
           radarVersion={versionInfo && deploymentMode !== 'cloud' ? (
@@ -198,21 +201,21 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
                 Cost card self-hides via BandItem's empty:hidden when OpenCost is absent,
                 leaving Traffic + Helm to stretch rather than stranding an empty cell. */}
             <div className="flex flex-wrap gap-6">
-              <BandItem>
+              {podsApplicable && <BandItem>
                 <TrafficSummary
                   data={data.trafficSummary}
                   onNavigate={() => onNavigateToView('traffic')}
                 />
-              </BandItem>
+              </BandItem>}
               <BandItem>
                 <HelmSummary
                   data={helmData}
                   onNavigate={() => onNavigateToView('helm')}
                 />
               </BandItem>
-              <BandItem>
+              {podsApplicable && <BandItem>
                 <CostCard onNavigate={() => onNavigateToView('cost')} />
-              </BandItem>
+              </BandItem>}
             </div>
 
             {/* Posture band — same flex-grow wrap so any subset of compliance cards
@@ -228,7 +231,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
                     />
                   </BandItem>
                 )}
-                {data.networkPolicyCoverage && (
+                {data.networkPolicyCoverage && !capabilities.absentResources?.includes('networkpolicies') && (
                   <BandItem>
                     <NetworkPolicyCoverageCard
                       data={data.networkPolicyCoverage}
@@ -255,7 +258,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
                     <CapacityCard onNavigate={() => onNavigateToView('capacity')} />
                   </BandItem>
                 )}
-                {data.audit && (
+                {data.audit && (podsApplicable || nodesApplicable) && (
                   <BandItem>
                     <AuditCard
                       data={data.audit}

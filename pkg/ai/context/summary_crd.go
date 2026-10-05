@@ -2,6 +2,7 @@ package context
 
 import (
 	"fmt"
+	"github.com/skyhook-io/radar/pkg/datum"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -12,6 +13,10 @@ import (
 func summarizeUnstructured(obj *unstructured.Unstructured) *ResourceSummary {
 	kind := obj.GetKind()
 	group := obj.GroupVersionKind().Group
+
+	if _, ok := datum.Lookup(group, kind); ok {
+		return summarizeDatum(obj)
+	}
 
 	// Known CRD extractors
 	switch {

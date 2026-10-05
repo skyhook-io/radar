@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/pkg/datum"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -349,6 +350,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			continue
 		}
 
+		ref.Inferred = strings.HasPrefix(edge.Label, "Inferred")
 		switch edge.Type {
 		case EdgeManages:
 			// This resource manages/owns the target
@@ -398,8 +400,13 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			// of EdgeProtects unsurfaced. The topology graph itself still
 			// carries these edges; only the per-resource projection skips them.
 		case EdgeConfigures:
-			// ConfigMap/Secret is used by a workload (outgoing from config)
-			rel.Consumers = append(rel.Consumers, *ref)
+			if objectGroup == datum.NetworkGroup && objectKind == "HTTPProxy" {
+				if ref.Kind != string(KindInternet) && ref.Kind != string(KindConfiguredEndpoint) {
+					rel.ConfigRefs = appendResourceRef(rel.ConfigRefs, *ref)
+				}
+			} else {
+				rel.Consumers = appendResourceRef(rel.Consumers, *ref)
+			}
 			if reflectionEdge(edge, nodeByID) {
 				if rel.Reflection == nil {
 					rel.Reflection = &ReflectionRelationships{}
@@ -417,6 +424,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			continue
 		}
 
+		ref.Inferred = strings.HasPrefix(edge.Label, "Inferred")
 		switch edge.Type {
 		case EdgeManages:
 			// Something manages/owns this resource
@@ -462,6 +470,10 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				}
 				rel.Reflection.Source = ref
 				rel.Reflection.SourceResourceVersion, _ = nodeByID[edge.Source].Data["resourceVersion"].(string)
+			}
+			if ref.Group == datum.NetworkGroup && ref.Kind == "HTTPProxy" {
+				rel.Consumers = appendResourceRef(rel.Consumers, *ref)
+				continue
 			}
 			switch ref.Kind {
 			case "ServiceAccount":

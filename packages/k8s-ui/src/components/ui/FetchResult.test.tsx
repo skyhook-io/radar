@@ -109,3 +109,10 @@ describe('FetchResult', () => {
     expect(html).toContain('Copy error')
   })
 })
+
+ it('distinguishes an unserved API from a missing object and denied access', () => {
+   const html = renderToString(<FetchResult loading={false} error={shaped('Pod API is absent', 404, { error_code: 'kind_not_served' })} />)
+   expect(html).toContain('Not served by this API server')
+   expect(html).not.toContain('Resource not found')
+   expect(html).not.toContain('Access denied')
+ })

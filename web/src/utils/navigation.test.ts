@@ -4,7 +4,7 @@ import {
   initNavigationMap,
   resetNavigationMap,
 } from '@skyhook-io/k8s-ui/utils/navigation'
-import { getNetworkPolicyResourceTarget, relatedResourcePath, resourcePath, withCrossViewParams } from './navigation'
+import { getNetworkPolicyResourceTarget, relatedResourcePath, resourcePath, withCrossViewParams, defaultResourcesPath } from './navigation'
 
 afterEach(resetNavigationMap)
 
@@ -74,5 +74,18 @@ describe('withCrossViewParams', () => {
 
   it('leaves the path alone when nothing is scoped', () => {
     expect(withCrossViewParams('/helm', '')).toBe('/helm')
+  })
+})
+
+describe('resource landing on the served API inventory', () => {
+  const namespace = { name: 'namespaces', kind: 'Namespace', group: '', version: 'v1', namespaced: false, isCrd: false, verbs: ['list'] }
+  const pod = { ...namespace, name: 'pods', kind: 'Pod', namespaced: true }
+  const iam = { ...namespace, name: 'serviceaccounts', kind: 'ServiceAccount', group: 'iam.miloapis.com' }
+  it('keeps ordinary Kubernetes on Pods and API-only planes on a served kind', () => {
+    expect(defaultResourcesPath([namespace, pod])).toBe('/resources/pods')
+    expect(defaultResourcesPath([iam, namespace])).toBe('/resources/namespaces')
+    expect(defaultResourcesPath([iam])).toBe('/resources/serviceaccounts?apiGroup=iam.miloapis.com')
+    expect(defaultResourcesPath([{ ...iam, verbs: ['create'] }])).toBeNull()
+    expect(defaultResourcesPath(JSON.parse(JSON.stringify([{ ...iam, verbs: null }])))).toBeNull()
   })
 })

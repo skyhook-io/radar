@@ -336,6 +336,10 @@ export function ResourcesSidebar({
     }))
   }, [categories])
 
+  const visiblePinned = useMemo(() => apiResources
+    ? pinned.filter(p => apiResources.some(r => r.name === p.name && r.group === p.group))
+    : pinned, [apiResources, pinned])
+
   const unavailableKinds = useMemo(() => new Set(resourceUnavailable ?? []), [resourceUnavailable])
 
   // null for a key means "count unknown/unavailable" (rendered as a
@@ -376,13 +380,12 @@ export function ResourcesSidebar({
     let totalHiddenGroups = 0
 
     const withTotals = categories.map(category => {
-      // Coerce nulls (loading) to 0 for the category total — we still
-      // want to show *some* number on collapsed categories during
-      // load, just not "0" badges on every individual kind.
-      const total = category.resources.reduce(
-        (sum, resource) => sum + (counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind] ?? 0),
-        0
+      const categoryCounts = category.resources.map(resource =>
+        counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind]
       )
+      const countLowerBound = categoryCounts.some(count => count == null)
+      const observedTotal = categoryCounts.reduce<number>((sum, count) => sum + (count ?? 0), 0)
+      const total = countLowerBound && observedTotal === 0 ? null : observedTotal
 
       // Filter resources: hide only confirmed-empty kinds. Unknown counts stay
       // visible as a dash so count coverage gaps do not masquerade as emptiness.
@@ -396,7 +399,7 @@ export function ResourcesSidebar({
         return shouldShow
       })
 
-      return { ...category, total, visibleResources }
+      return { ...category, total, countLowerBound, visibleResources }
     })
 
     // Sort: the category whose workspace is open first, then categories with
@@ -404,14 +407,14 @@ export function ResourcesSidebar({
     const sorted = withTotals.sort((a, b) => {
       if (a.name === activeDestinationCategory) return -1
       if (b.name === activeDestinationCategory) return 1
-      if (a.total === 0 && b.total > 0) return 1
-      if (a.total > 0 && b.total === 0) return -1
+      if (a.total === 0 && (b.total ?? 0) > 0) return 1
+      if ((a.total ?? 0) > 0 && b.total === 0) return -1
       return 0
     })
 
     // Filter out empty groups unless they have visible resources or showEmptyKinds is true.
     const visibleCategories = sorted.filter(category => {
-      const shouldShow = category.total > 0 || category.visibleResources.length > 0 || showEmptyKinds || !!categoryWorkspaces?.[category.name]
+      const shouldShow = (category.total ?? 0) > 0 || category.visibleResources.length > 0 || showEmptyKinds || !!categoryWorkspaces?.[category.name]
       if (!shouldShow) totalHiddenGroups++
       return shouldShow
     })
@@ -463,7 +466,7 @@ export function ResourcesSidebar({
   const flatVisibleKinds = useMemo<SelectedKindInfo[]>(() => {
     const kinds: SelectedKindInfo[] = []
     if (favoritesExpanded) {
-      for (const p of pinned) {
+      for (const p of visiblePinned) {
         kinds.push({ name: p.name, kind: p.kind, group: p.group })
       }
     }
@@ -477,7 +480,7 @@ export function ResourcesSidebar({
       }
     }
     return kinds
-  }, [favoritesExpanded, pinned, filteredCategories, effectiveExpandedCategories, kindsOpenOverrides, categoryWorkspaces, activeDestinationCategory]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [favoritesExpanded, visiblePinned, filteredCategories, effectiveExpandedCategories, kindsOpenOverrides, categoryWorkspaces, activeDestinationCategory]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
   // Reset highlight when the filter or kind list changes
@@ -577,20 +580,20 @@ export function ResourcesSidebar({
           >
             <CollapseChevron open={favoritesExpanded} className="w-3 h-3" />
             <span className="flex-1 text-left">Favorites</span>
-            {!favoritesExpanded && pinned.length > 0 && (
-              <span className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center font-mono', pinned.length < 1000 ? 'w-8' : 'w-9')}>
-                {pinned.length}
+            {!favoritesExpanded && visiblePinned.length > 0 && (
+              <span className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center font-mono', visiblePinned.length < 1000 ? 'w-8' : 'w-9')}>
+                {visiblePinned.length}
               </span>
             )}
           </button>
           <Collapse open={favoritesExpanded} id={favoritesDisclosure.panelId}>
             <div className="space-y-0.5">
-              {pinned.length === 0 ? (
+              {visiblePinned.length === 0 ? (
                 <div className="px-3 py-2 text-xs text-theme-text-disabled">
-                  No pinned resources. Click <Pin className="w-3 h-3 inline" /> on any resource type to pin it here.
+                  {pinned.length > 0 ? 'No pinned kinds are served on this connection.' : <>No pinned resources. Click <Pin className="w-3 h-3 inline" /> on any resource type to pin it here.</>}
                 </div>
               ) : (
-                pinned.map((p) => {
+                visiblePinned.map((p) => {
                   const isResourceSelected =
                     (effectiveSelectedKind.name === p.name && effectiveSelectedKind.group === p.group) ||
                     (effectiveSelectedKind.kind.toLowerCase() === p.kind.toLowerCase() && effectiveSelectedKind.group === p.group)
@@ -632,8 +635,8 @@ export function ResourcesSidebar({
                   <CollapseChevron open={isExpanded} className="w-3 h-3" />
                   <span className="flex-1 text-left truncate" title={rawGroupTitle}>{category.name}</span>
                   {!isExpanded && (
-                    <span className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center font-mono', category.total < 1000 ? 'w-8' : 'w-9')}>
-                      {category.total}
+                    <span role="note" aria-label={category.countLowerBound ? `${category.total == null ? '' : `At least ${category.total} resources observed. `}Group count not observed for every kind.` : undefined} title={category.countLowerBound ? 'Counts are unread for some kinds; positive totals are lower bounds.' : undefined} className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center font-mono', (category.total ?? 0) < 1000 ? 'w-8' : 'w-9')}>
+                      {category.total == null ? '–' : `${category.countLowerBound ? certaintyGlyph('lower_bound') : ''}${category.total}`}
                     </span>
                   )}
                 </button>

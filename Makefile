@@ -1,4 +1,5 @@
 .PHONY: build install clean dev frontend backend test test-e2e test-chart lint help restart restart-fe kill watch-backend watch-frontend loadtest
+.PHONY: datum-demo
 .PHONY: calico-demo calico-demo-down calico-demo-status
 .PHONY: kueue-demo kueue-demo-down kueue-demo-status kueue-demo-verify
 .PHONY: cilium-demo cilium-demo-down cilium-demo-status
@@ -411,6 +412,10 @@ calico-demo-down:
 
 calico-demo-status:
 	./scripts/calico-demo.sh status
+
+datum-demo:
+	@test -n "$(DATUM_KUBECONFIG)" || (echo "Set DATUM_KUBECONFIG to a private Milo kubeconfig; see scripts/datum-demo/README.md"; exit 1)
+	./scripts/datum-demo.sh all --milo-kubeconfig "$(DATUM_KUBECONFIG)"
 
 # Run linter
 lint:

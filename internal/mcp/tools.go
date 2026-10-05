@@ -919,6 +919,9 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	}
 
 	// Try typed cache first (group=="" → core/built-in lookup).
+	if err := k8s.PublicReadReady(cache, kind, group); err != nil {
+		return nil, nil, err
+	}
 	objs, err := k8s.FetchResourceList(cache, kind, listScope)
 	if err == k8s.ErrUnknownKind {
 		// Fall through to dynamic cache for CRDs. ClassifyKindScope/SAR
@@ -972,17 +975,19 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 }
 
 func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, group string, namespaces []string, clusterScoped bool, contextMode string) (*mcp.CallToolResult, any, error) {
+	ctx, cancel := context.WithTimeout(ctx, k8s.ResourceReadTimeout(kind, group))
+	defer cancel()
 	var rawItems []*unstructured.Unstructured
 	if len(namespaces) > 0 {
 		for _, ns := range namespaces {
-			items, err := cache.ListDynamicWithGroup(ctx, kind, ns, group)
+			items, err := cache.ListDynamicComplete(ctx, kind, ns, group)
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to list %s: %w", kind, err)
 			}
 			rawItems = append(rawItems, items...)
 		}
 	} else {
-		items, err := cache.ListDynamicWithGroup(ctx, kind, "", group)
+		items, err := cache.ListDynamicComplete(ctx, kind, "", group)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to list %s: %w", kind, err)
 		}
@@ -1070,6 +1075,9 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		resourceData = aicontext.MinifyUnstructured(u, aicontext.LevelDetail)
 		rawObj = u
 	} else {
+		if err := k8s.PublicReadReady(cache, kind, group); err != nil {
+			return nil, nil, err
+		}
 		obj, err := k8s.FetchResource(cache, kind, namespace, name)
 		if err == k8s.ErrUnknownKind {
 			u, dynErr := cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)

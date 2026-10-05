@@ -14,7 +14,7 @@ const STORAGE_KINDS = ['PersistentVolumeClaim', 'PersistentVolume', 'StorageClas
 const ACCESS_CONTROL_KINDS = ['ServiceAccount', 'Role', 'ClusterRole', 'RoleBinding', 'ClusterRoleBinding']
 const CLUSTER_KINDS = ['Node', 'Namespace', 'Event']
 const CORE_CATEGORY_NAMES = new Set(['Workloads', 'Networking', 'Configuration', 'Storage', 'Access Control', 'Cluster'])
-// Core resources that must always be present (fallback if API discovery misses them)
+// Built-in identity and labels; discovery determines which resources are served.
 export const CORE_RESOURCES: APIResource[] = [
   { group: '', version: 'v1', kind: 'Pod', name: 'pods', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
   { group: '', version: 'v1', kind: 'Service', name: 'services', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
@@ -106,11 +106,8 @@ export function categorizeResources(resources: APIResource[]): ResourceCategory[
   )
 
   const seenKinds = new Map<string, APIResource>()
-  const dedupKey = (r: APIResource) => r.isCrd ? `${r.group}/${r.kind}` : r.kind
+  const dedupKey = (r: APIResource) => `${r.group}/${r.kind}`
 
-  for (const resource of CORE_RESOURCES) {
-    seenKinds.set(dedupKey(resource), resource)
-  }
   for (const resource of listableResources) {
     seenKinds.set(dedupKey(resource), resource)
   }
@@ -240,6 +237,10 @@ export function formatGroupName(group: string): string {
     'networking.k8s.aws': 'AWS Networking',
     'acid.zalan.do': 'Zalando Postgres',
     'postgresql.cnpg.io': 'CloudNativePG',
+    'dns.networking.miloapis.com': 'Datum',
+    'networking.datumapis.com': 'Datum',
+    'compute.datumapis.com': 'Datum',
+    'resourcemanager.miloapis.com': 'Datum',
     'barmancloud.cnpg.io': 'CloudNativePG',
     'serving.kserve.io': 'KServe',
     'ray.io': 'KubeRay',
@@ -332,7 +333,7 @@ function sortResources(resources: APIResource[]): APIResource[] {
 }
 
 export function getKindLabel(kind: string): string {
-  return kind.replace(/([A-Z])/g, ' $1').trim()
+  return kind.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z])([A-Z][a-z])/g, '$1 $2').trim()
 }
 
 export function getKindPlural(resource: APIResource): string {

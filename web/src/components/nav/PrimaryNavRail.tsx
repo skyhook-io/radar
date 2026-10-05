@@ -21,6 +21,7 @@ import {
 import { clsx } from "clsx";
 import type { MainView } from "../../types";
 import { Tooltip } from "../ui/Tooltip";
+import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 import { assetUrl } from "@skyhook-io/k8s-ui";
 
 const radarLogoUrl = assetUrl("/images/radar/radar-icon.svg");
@@ -112,6 +113,14 @@ export function PrimaryNavRail({
   accountSlot,
   whatsNew,
 }: PrimaryNavRailProps) {
+  const { absentResources } = useCapabilitiesContext();
+  const absent = new Set(absentResources);
+  const applicable = (view: string) => {
+    if (["applications", "traffic", "cost"].includes(view)) return !absent.has("pods");
+    if (view === "capacity") return !absent.has("nodes");
+    if (view === "checks") return !absent.has("pods") || !absent.has("nodes");
+    return true;
+  };
   return (
     <aside
       aria-label="Primary navigation"
@@ -143,7 +152,7 @@ export function PrimaryNavRail({
           pinned && "flex-1 min-h-0 overflow-y-auto",
         )}
       >
-        {NAV_ITEMS.map((item) => (
+        {NAV_ITEMS.filter(item => applicable(item.view)).map((item) => (
           <NavRailItem
             key={item.view}
             item={item}

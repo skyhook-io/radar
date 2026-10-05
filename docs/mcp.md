@@ -19,6 +19,12 @@ Radar's MCP server solves these:
 - **RBAC-aware** — respects your cluster's RBAC permissions
 - **Vendor-neutral** — works with any MCP-compatible AI tool
 
+## API-only and Datum control planes
+
+Resource reads establish a complete initial inventory within a bounded budget. A cold cache reports `kind_sync_pending`; it never answers with a false empty list or false “resource not found.” A conclusively unserved API is inapplicable, and failed initial synchronization is terminal until reconnect.
+
+Experimental [Datum summaries](datum.md#resources-topology-timeline-and-ai) reuse the existing resource tools, retaining exact API groups, configured targets, hostname and condition evidence. Domain verification challenges and Connector connection material are withheld; compute sandbox container environment values follow the existing secret redaction rules. Reported programming does not establish client DNS/TLS/HTTP reachability.
+
 ## Enabling / Disabling
 
 The MCP server is **enabled by default** when Radar starts. To disable it:

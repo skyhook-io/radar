@@ -121,6 +121,9 @@ func ClassifyKindScope(kind, group string) (clusterScoped bool, gvrGroup, gvrRes
 	if g, r, ok := ClusterOnlyKindGVR(kind); ok && (group == "" || group == g) {
 		return true, g, r
 	}
+	if gvr, ok := lookupTypedBuiltinGVR(kind); ok && (group == "" || group == gvr.Group) {
+		return false, "", ""
+	}
 	disc := GetResourceDiscovery()
 	if disc == nil {
 		return false, "", ""

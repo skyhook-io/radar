@@ -331,7 +331,7 @@ export function getResourceIcon(kind: string, group?: string): LucideIcon {
 
 /** Get the icon for a topology node kind, including virtual kinds (Internet, PodGroup). */
 export function getTopologyIcon(kind: string): LucideIcon {
-  if (kind === 'Internet') return Globe
+  if (kind === 'Internet' || kind === 'ConfiguredEndpoint') return Globe
   if (kind === 'PodGroup') return Boxes
   if (TOPOLOGY_KIND_ICONS[kind]) return TOPOLOGY_KIND_ICONS[kind]
   return getResourceIcon(kind)

@@ -1,3 +1,4 @@
+import { getDatumStatus } from './resource-utils-datum'
 // Utility functions for resource display in tables
 
 import { effectivePolicyTypeNames } from '../../utils/network-policy'
@@ -2330,7 +2331,10 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'events') return resource.type || ''
       if (kindLower === 'helmrepositories') return getHelmRepositoryType(resource)
       return resource.spec?.type || resource.type || ''
+    case 'datumHostnames':
+      return kindLower === 'datumhttpproxies' ? (resource.spec?.hostnames || []).join(', ') : ''
     case 'status':
+      if (kindLower === 'datumhttpproxies') return getDatumStatus(resource).label
       if (kindLower === 'pods') return getPodStatus(resource).text
       if (['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'rollouts'].includes(kindLower)) {
         let status: StatusBadge

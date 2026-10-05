@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { usePinnedDetailContext } from '../workspace/detailContext'
+import { useCallback, useMemo } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Activity, ArrowLeft, Database, Gauge, HardDrive, Network, Settings2, ShieldCheck, Unplug } from 'lucide-react'
 import { refToSelectedResource, Tooltip, type WorkloadExtraTab } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
-import { useConnection } from '../../context/ConnectionContext'
 import { useContexts, useRadarFeature } from '../../api/client'
 import { useContextSwitchFlow } from '../useContextSwitchFlow'
 import { WorkloadView } from '../workload/WorkloadView'
@@ -45,19 +45,7 @@ export function CNPGDetailPage({
   const location = useLocation()
   const navigate = useCNPGNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const { connection } = useConnection()
-  const activeContext = connection.context
-  const pinnedContext = searchParams.get('ctx')
-
-  // A link opened without a context belongs to the one active now; pin it so a
-  // later context switch shows "not in this context" instead of a same-named
-  // object from the other cluster.
-  useEffect(() => {
-    if (pinnedContext || !activeContext) return
-    const params = new URLSearchParams(searchParams)
-    params.set('ctx', activeContext)
-    setSearchParams(params, { replace: true, state: location.state })
-  }, [pinnedContext, activeContext]) // eslint-disable-line react-hooks/exhaustive-deps
+  const { activeContext, pinnedContext } = usePinnedDetailContext()
   const returnState = (location.state ?? {}) as ReturnState
   const spec = CNPG_DETAIL_KINDS[target.plural]
   const home = CNPG_SCREENS.find((s) => s.id === spec.home)!

@@ -135,17 +135,9 @@ func TestHandlersEstablishAbsenceRatherThanAssumeIt(t *testing.T) {
 	if i < 0 {
 		t.Fatal("helper moved")
 	}
-	fn := body[i : i+1400]
-	if !strings.Contains(fn, "ListBlocking") {
-		t.Error("the read does not wait for sync, so an empty list may be a cache that never looked")
-	}
-	// ListBlocking discards WaitForCacheSync's result: on timeout it returns an
-	// empty list and no error, which is the false absence one layer down.
-	if !strings.Contains(fn, "IsNamespaceSynced") {
-		t.Error("nothing confirms the wait actually succeeded; a timed-out informer reads as an absence")
-	}
-	if !strings.Contains(fn, "errDynamicNotSynced") {
-		t.Error("a cache that could not answer must say so, not return an empty result")
+	fn := body[i : strings.Index(body[i:], "// errDynamicNotSynced")+i]
+	if !strings.Contains(fn, "ListDynamicComplete") || !strings.Contains(fn, "WithTimeout(ctx") || !strings.Contains(fn, "errDynamicNotSynced") {
+		t.Error("the read must establish synchronization within the caller's budget")
 	}
 	for _, f := range []string{"policy_handlers.go", "cnpg_handlers.go"} {
 		b, err := os.ReadFile(f)

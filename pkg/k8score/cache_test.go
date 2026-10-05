@@ -1,6 +1,7 @@
 package k8score
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"log"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -2008,5 +2010,23 @@ func TestDynamicResourceCache_SingleFallbackCountsWithoutAllNamespacesRead(t *te
 	}
 	if n, err := d.Count(gvr, nil); err != nil || n != 1 {
 		t.Fatalf("single-fallback Count = %d, %v; want 1", n, err)
+	}
+}
+
+func TestMinimalSetDoesNotWarnForIntentionallyDisabledKinds(t *testing.T) {
+	var logs bytes.Buffer
+	rc, err := NewResourceCache(CacheConfig{
+		Client:         fake.NewSimpleClientset(),
+		ResourceTypes:  map[string]bool{Namespaces: true},
+		PatienceWindow: time.Second,
+		MinimalSet:     map[string]bool{Pods: true, Services: true, Nodes: true, Deployments: true},
+		Logger:         log.New(&logs, "", 0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Stop()
+	if strings.Contains(logs.String(), "WARNING: MinimalSet") {
+		t.Fatalf("disabled kinds reported as invalid: %s", logs.String())
 	}
 }

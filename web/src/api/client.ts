@@ -494,6 +494,7 @@ export interface DashboardHelmSummary {
 }
 
 export interface DashboardCRDCount {
+  observation?: string;
   kind: string;
   name: string;
   group: string;
@@ -628,6 +629,7 @@ export interface DashboardGitOpsController {
 }
 
 export interface DashboardResponse {
+  failedKinds?: string[];
   cluster: DashboardCluster
   health: DashboardHealth
   problems: DashboardProblem[]

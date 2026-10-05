@@ -5798,6 +5798,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		nodes, edges = b.addCrossplaneNodes(nodes, edges, opts)
 	}
 
+	nodes, edges = b.addDatumNodes(nodes, edges, opts)
+
 	// 17. Add generic CRD nodes connected via owner references
 	// Only includes CRDs already being watched and with owner refs to existing nodes
 	if opts.IncludeGenericCRDs {

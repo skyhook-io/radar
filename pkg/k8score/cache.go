@@ -741,21 +741,20 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 					minimalEntries = append(minimalEntries, e)
 				}
 			}
-			// Validate MinimalSet keys: typos or kinds not enabled produce a
-			// silently-empty minimalEntries → cache returns ~PatienceWindow
-			// later with nothing meaningful synced. Surface that loud.
+			// Intentionally disabled kinds cannot gate startup; unknown or
+			// deferred keys still indicate an invalid minimal-set configuration.
 			var unknown []string
 			for k := range cfg.MinimalSet {
-				if !knownCritical[k] {
+				if !knownCritical[k] && (!slices.Contains(InformerResourceKeys(), k) || rc.enabledResources[k]) {
 					unknown = append(unknown, k)
 				}
 			}
 			if len(unknown) > 0 {
 				sort.Strings(unknown)
-				stdlog.Printf("WARNING: MinimalSet keys not registered as critical informers (typo or RBAC-denied?): %s",
+				stdlog.Printf("WARNING: MinimalSet keys not registered as critical informers (unknown or deferred kind): %s",
 					strings.Join(unknown, ", "))
 			}
-			if len(minimalEntries) == 0 {
+			if len(minimalEntries) == 0 && len(unknown) > 0 {
 				stdlog.Printf("WARNING: MinimalSet matched no enabled critical informers; first paint will fire as soon as PatienceWindow elapses regardless of sync state")
 			}
 		}
@@ -1586,7 +1585,7 @@ func (rc *ResourceCache) PromotedKinds() []string {
 // background informers finish, so a UI bound to this method shows a
 // truthful "still loading" indicator.
 func (rc *ResourceCache) PendingPromotedKinds() []string {
-	if rc == nil {
+	if rc == nil || rc.deferredFailed.Load() {
 		return nil
 	}
 	rc.informerMu.RLock()
@@ -2057,4 +2056,34 @@ func (rc *ResourceCache) IsDeferredPending(key string) bool {
 	// a just-synced kind serves from its lister while this still says 503.
 	synced, known := rc.InformerSynced(key)
 	return !(known && synced)
+}
+
+// DeferredLoading settles on either successful sync or the deferred deadline.
+func (rc *ResourceCache) DeferredLoading() bool {
+	if rc == nil {
+		return false
+	}
+	done := rc.DeferredDone()
+	if done == nil {
+		return true
+	}
+	select {
+	case <-done:
+		return false
+	default:
+		return true
+	}
+}
+
+func (rc *ResourceCache) FailedKinds() []string {
+	if rc == nil {
+		return nil
+	}
+	var failed []string
+	for _, s := range rc.GetSyncSnapshot().Kinds {
+		if s.Failed {
+			failed = append(failed, s.Kind)
+		}
+	}
+	return failed
 }

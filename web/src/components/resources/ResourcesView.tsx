@@ -1,3 +1,4 @@
+import { useDatumSidebarWorkspace } from '../datum/useDatumSidebarWorkspace'
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
@@ -110,6 +111,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   }, [apiResources])
 
   const cnpgSidebarWorkspace = useCNPGSidebarWorkspace({ apiResources, namespaces })
+  const datumSidebarWorkspace = useDatumSidebarWorkspace({ apiResources })
 
   // Track the selected kind from the k8s-ui component
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(null)
@@ -188,8 +190,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // the list endpoint, whose 503 kind_sync_failed renders the honest error —
   // the guard would otherwise trap it on "count unavailable" forever. Safe to
   // unblock: the server serves no rows for a failed kind.
-  const selectedCountFailedSync =
-    selectedCountUnavailable && countsData?.reasons?.[selectedCountKey] === 'kind_sync_failed'
+  const selectedCountTerminal =
+    selectedCountUnavailable && ['kind_sync_failed', 'kind_not_served'].includes(countsData?.reasons?.[selectedCountKey] ?? '')
   // A guarded kind whose informer hasn't finished reports unavailable with a
   // kind_sync_pending reason — "count not known YET", so keep the loading
   // state. Keyed on the reason, not on connection.state: deferred kinds sync
@@ -197,10 +199,10 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // and blocks the view as before.
   const selectedCountPendingSync =
     (selectedCountUnavailable && countsData?.reasons?.[selectedCountKey] === 'kind_sync_pending') ||
-    (syncShellActive && selectedCountUnavailable && !selectedCountFailedSync)
+    (syncShellActive && selectedCountUnavailable && !selectedCountTerminal)
   const waitingForGuardCount = isSelectedKindGuarded &&
     ((!countsData && (!countsIsError || syncShellActive)) || selectedCountPendingSync)
-  const largeListBlocked = isSelectedKindGuarded && countsData != null && !selectedCountPendingSync && !selectedCountFailedSync &&
+  const largeListBlocked = isSelectedKindGuarded && countsData != null && !selectedCountPendingSync && !selectedCountTerminal &&
     (selectedCountUnavailable || (selectedCountKnown && (selectedCount ?? 0) > selectedKindRowLimit))
   const selectedKindQueryBlocked = waitingForGuardCount || largeListBlocked
   const podCount = countsData?.counts.Pod
@@ -230,12 +232,12 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
   // Fetch full data only for the selected kind
   const selectedKindQuery = useQuery({
-    queryKey: ['resources', selectedKind?.name, isSelectedCrd ? selectedKind?.group : '', namespaces],
+    queryKey: ['resources', selectedKind?.name, selectedKind?.group || '', namespaces],
     queryFn: async (): Promise<{ items: any[]; printerTable: PrinterTable | null }> => {
       if (!selectedKind) return { items: [], printerTable: null }
       const params = new URLSearchParams()
       if (namespaces.length > 0) params.set('namespaces', namespacesParam)
-      if (isSelectedCrd && selectedKind.group) params.set('group', selectedKind.group)
+      if (selectedKind.group) params.set('group', selectedKind.group)
       if (selectedKindSummaryServed) params.set('include', 'summary')
       // Only CRDs can declare printer columns, and a curated kind discards the
       // result — so table mode is requested from exactly the kinds that can use
@@ -407,7 +409,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       connectionState={connection.state === 'connecting' && connection.syncStatus ? 'syncing' : connection.state}
       largeListGuard={largeListGuard}
       onSelectedKindChange={setSelectedKind}
-      sidebarCategoryWorkspaces={cnpgSidebarWorkspace}
+      sidebarCategoryWorkspaces={{ ...cnpgSidebarWorkspace, ...datumSidebarWorkspace }}
       topPodMetrics={topPodMetrics}
       topNodeMetrics={topNodeMetrics}
       certExpiry={certExpiry}

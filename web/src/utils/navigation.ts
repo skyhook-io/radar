@@ -1,7 +1,7 @@
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../api/config'
 import { apiVersionToGroup, kindToPluralWithGroup } from '@skyhook-io/k8s-ui/utils/navigation'
 import { topologyNodeResourceKind } from '@skyhook-io/k8s-ui/utils/topology-neighborhood'
-import type { SelectedResource, Topology } from '@skyhook-io/k8s-ui/types/core'
+import type { APIResource, SelectedResource, Topology } from '@skyhook-io/k8s-ui/types/core'
 import type { SearchHit } from '../api/client'
 
 /**
@@ -148,4 +148,15 @@ export function withCrossViewParams(path: string, currentSearch: string): string
     if (value && !destination.searchParams.has(key)) destination.searchParams.set(key, value)
   }
   return `${destination.pathname}${destination.search}${destination.hash}`
+}
+
+export function defaultResourcesPath(resources: APIResource[]): string | null {
+  const listable = resources.filter(r => r.verbs?.includes('list') && !r.name.includes('/'))
+  const resource = listable.find(r => r.group === '' && r.kind === 'Pod')
+    ?? listable.find(r => r.group === '' && r.kind === 'Namespace')
+    ?? listable[0]
+  if (!resource) return null
+  const params = new URLSearchParams()
+  if (resource.group) params.set('apiGroup', resource.group)
+  return `/resources/${resource.name}${params.size ? `?${params}` : ''}`
 }

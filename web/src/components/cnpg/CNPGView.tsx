@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { ResourcesSidebar, type SelectedKindInfo } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
@@ -14,7 +14,7 @@ import { CNPGScreenGate } from './shared'
 import { CNPGDetailPage } from './CNPGDetailPage'
 import { parseCNPGRoute } from './routes'
 import { useCNPGFleet, useCNPGSidebarWorkspace } from './useCNPGSidebarWorkspace'
-import { decodeDrawerTrail, encodeDrawerTrail, sameSelectedResource } from '../../utils/drawer-trail'
+import { useWorkspaceDrawer } from '../workspace/useWorkspaceDrawer'
 import { useCNPGNavigate } from './useCNPGNavigate'
 
 interface CNPGViewProps {
@@ -48,45 +48,7 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
   })
   const { query, fleet } = useCNPGFleet(namespaces)
 
-  const drawerParam = searchParams.get('drawer')
-  const trail = useMemo(() => decodeDrawerTrail(drawerParam), [drawerParam])
-  const drawerTarget = trail.length > 0 ? trail[trail.length - 1] : null
-
-  // Two-way sync between ?drawer= and the app drawer. Whichever side changed
-  // since the last sync wins, so URL navigation (Back, a pasted link) opens the
-  // drawer and drawer navigation (close, a link inside it) rewrites the URL.
-  const lastSynced = useRef<string | null>(null)
-  const selectedKey = selectedResource ? encodeDrawerTrail([selectedResource]) : ''
-  const targetKey = drawerTarget ? encodeDrawerTrail([drawerTarget]) : ''
-  useEffect(() => {
-    if (targetKey !== (lastSynced.current ?? '')) {
-      lastSynced.current = targetKey
-      if (drawerTarget && !sameSelectedResource(drawerTarget, selectedResource)) onOpenResource(drawerTarget)
-      else if (!drawerTarget && selectedResource) onCloseResource()
-      return
-    }
-    if (selectedKey !== targetKey) {
-      lastSynced.current = selectedKey
-      const params = new URLSearchParams(searchParams)
-      if (!selectedResource) {
-        params.delete('drawer')
-      } else {
-        const idx = trail.findIndex((r) => sameSelectedResource(r, selectedResource))
-        const next = idx >= 0 ? trail.slice(0, idx + 1) : [...trail, selectedResource]
-        params.set('drawer', encodeDrawerTrail(next))
-      }
-      setSearchParams(params, { replace: true, state: location.state })
-    }
-  }, [targetKey, selectedKey]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const inspect = useCallback(
-    (resource: SelectedResource) => {
-      const params = new URLSearchParams(searchParams)
-      params.set('drawer', encodeDrawerTrail([resource]))
-      setSearchParams(params, { replace: true, state: location.state })
-    },
-    [searchParams, setSearchParams, location.state],
-  )
+  const { drawerTarget, inspect } = useWorkspaceDrawer(selectedResource, onOpenResource, onCloseResource)
 
   const setParams = useCallback(
     (update: Record<string, string | null>) => {

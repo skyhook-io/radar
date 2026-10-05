@@ -96,3 +96,9 @@ describe('status sort scope', () => {
     expect(getCellFilterValue(uncuratedCR, 'status', 'widgets')).toBe(shown)
   })
 })
+
+it('Datum and Contour HTTPProxy tables remain independent', () => {
+ expect(columnSettingsKey('httpproxies', 'networking.datumapis.com')).not.toBe(columnSettingsKey('httpproxies','projectcontour.io'))
+ expect(hasCuratedColumns('httpproxies','networking.datumapis.com')).toBe(true)
+ expect(getCellFilterValue({spec:{hostnames:['web.example.test']}},'datumHostnames','datumhttpproxies')).toBe('web.example.test')
+})

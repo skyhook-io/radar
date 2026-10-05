@@ -10,6 +10,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/logsafe"
 	"github.com/skyhook-io/radar/pkg/conditions"
+	"github.com/skyhook-io/radar/pkg/datum"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -109,6 +110,10 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			out = append(out, detectCNPGScheduledRunIssues(p, gvr, items, time.Now())...)
 		}
 		for _, u := range items {
+			if _, ok := datum.Lookup(gvr.Group, kind); ok {
+				out = append(out, detectDatumIssues(gvr, u)...)
+				continue
+			}
 			if gvr.Group == "kafka.strimzi.io" && kind == "KafkaConnector" {
 				out = append(out, detectStrimziConnectorIssues(gvr, u)...)
 				continue

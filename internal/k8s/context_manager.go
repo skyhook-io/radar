@@ -392,10 +392,12 @@ var ErrContextSwitchPreflight = errors.New("context switch preflight rejected")
 
 // ErrReconnectSuperseded is returned by PerformContextSwitchIfOperationCurrent
 // when another operation started after the caller captured its generation.
+var ErrProjectConnectionRestored = errors.New("project connection failed; restored connection")
+
 var ErrReconnectSuperseded = errors.New("reconnect superseded by a newer operation")
 
 func PerformContextSwitch(newContext string) error {
-	return performContextSwitch(newContext, 0, false)
+	return performContextSwitch(newContext, 0, false, "")
 }
 
 // RetryCurrentConnection reconnects the active context. In-cluster mode has no
@@ -437,7 +439,7 @@ func RetryCurrentConnection() error {
 // which closes the TOCTOU a check-then-switch caller would have: a user
 // switch that started mid-probe bumps the generation before this can.
 func PerformContextSwitchIfOperationCurrent(newContext string, observedOperationGen uint64) error {
-	return performContextSwitch(newContext, observedOperationGen, true)
+	return performContextSwitch(newContext, observedOperationGen, true, "")
 }
 
 // reinitializeCurrentContextIfOperationCurrent restores subsystems after an
@@ -494,7 +496,14 @@ func reinitializeCurrentContextIfOperationCurrent(
 	return nil
 }
 
-func performContextSwitch(newContext string, observedOperationGen uint64, requireOperationCurrent bool) error {
+func PerformProjectContextSwitch(newContext, expectedBinding string) error {
+	if expectedBinding == "" {
+		return fmt.Errorf("%w: project parent identity is unavailable", ErrContextSwitchPreflight)
+	}
+	return performContextSwitch(newContext, 0, false, expectedBinding)
+}
+
+func performContextSwitch(newContext string, observedOperationGen uint64, requireOperationCurrent bool, expectedBinding string) error {
 	switchStart := time.Now()
 	log.Printf("[ops] Context switch START → %q", newContext)
 
@@ -507,6 +516,26 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 		contextOpMu.Unlock()
 	}()
 
+	if expectedBinding != "" && ClusterSafetyBinding(context.Background()) != expectedBinding {
+		return fmt.Errorf("%w: connection changed; reopen the project", ErrContextSwitchPreflight)
+	}
+	parent := GetContextName()
+	target, derived := runtimeProjectContext(newContext)
+	if derived && parent == newContext {
+		parent = target.Parent
+	}
+	err := performContextSwitchLocked(newContext, observedOperationGen, requireOperationCurrent, switchStart)
+	if err != nil && derived && !errors.Is(err, ErrContextSwitchPreflight) && !errors.Is(err, ErrReconnectSuperseded) {
+		if rollbackErr := performContextSwitchLocked(parent, currentOperationGen(), true, time.Now()); rollbackErr != nil {
+			SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: GetContextName(), Error: rollbackErr.Error(), ErrorType: ClassifyError(rollbackErr)})
+			return fmt.Errorf("project connection failed; restoring connection %q also failed: %w", parent, rollbackErr)
+		}
+		return fmt.Errorf("%w %q: %v", ErrProjectConnectionRestored, parent, err)
+	}
+	return err
+}
+
+func performContextSwitchLocked(newContext string, observedOperationGen uint64, requireOperationCurrent bool, switchStart time.Time) error {
 	if requireOperationCurrent && currentOperationGen() != observedOperationGen {
 		return ErrReconnectSuperseded
 	}

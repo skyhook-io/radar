@@ -2,7 +2,9 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/labels"
@@ -22,6 +24,10 @@ const maxNotFoundSuggestions = 3
 // notFoundError wraps a not-found error with retry suggestions when the
 // cache knows a likely match. Falls back to the bare error otherwise.
 func notFoundError(ctx context.Context, baseErr error, kind, namespace, name string) error {
+	var readErr *k8score.ResourceReadError
+	if errors.As(baseErr, &readErr) {
+		return baseErr
+	}
 	if s := notFoundSuggestion(ctx, kind, namespace, name); s != "" {
 		return fmt.Errorf("resource not found: %w — %s", baseErr, s)
 	}

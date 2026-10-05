@@ -112,7 +112,7 @@ function classify(error: unknown, notFoundMessage: string): Classified {
       case 403:
         return { headline: 'Access denied', detail: error.message, icon: ShieldOff }
       case 404:
-        return { headline: notFoundMessage, detail: error.message, icon: AlertTriangle }
+        return { headline: errorCodeOf(error) === 'kind_not_served' ? 'Not served by this API server' : notFoundMessage, detail: error.message, icon: AlertTriangle }
       case 401:
         return { headline: 'Sign-in required', detail: error.message, icon: LogIn }
       case 503:

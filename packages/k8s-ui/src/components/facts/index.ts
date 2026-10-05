@@ -4,3 +4,5 @@
 export * from './facts'
 export * from './certainty'
 export * from './managed-by'
+
+export * from './coverage'

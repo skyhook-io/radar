@@ -129,19 +129,19 @@ function isOptionalKind(kind: string): boolean {
 }
 
 export function useRestrictedResources(): string[] {
-  const resources = useContext(CapabilitiesContext).resources
+  const { resources, absentResources } = useContext(CapabilitiesContext)
   return useMemo(() => {
     if (!resources) return []
     return Object.entries(resources)
-      .filter(([kind, allowed]) => !allowed && !isOptionalKind(kind))
+      .filter(([kind, allowed]) => !allowed && !isOptionalKind(kind) && !absentResources?.includes(kind.toLowerCase()))
       .map(([kind]) => kind)
-  }, [resources])
+  }, [resources, absentResources])
 }
 
 export function useHasLimitedAccess(): boolean {
-  const resources = useContext(CapabilitiesContext).resources
+  const { resources, absentResources } = useContext(CapabilitiesContext)
   if (!resources) return false
-  return Object.entries(resources).some(([kind, allowed]) => !allowed && !isOptionalKind(kind))
+  return Object.entries(resources).some(([kind, allowed]) => !allowed && !isOptionalKind(kind) && !absentResources?.includes(kind.toLowerCase()))
 }
 
 // Namespace-scoped capability hooks. A concrete namespace gets its own

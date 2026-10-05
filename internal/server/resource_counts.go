@@ -15,18 +15,21 @@ type ResourceCountsResponse struct {
 	Counts      map[string]int `json:"counts"`
 	Forbidden   []string       `json:"forbidden,omitempty"`
 	Unavailable []string       `json:"unavailable,omitempty"`
-	// Reasons maps a forbidden kind key to why it's hidden:
+	// Reasons maps a kind key to why its count is unavailable:
 	//   "rbac_denied" — Radar's ServiceAccount can read the kind but the user's
 	//      own RBAC denies it. Granting the user list access surfaces it.
 	//   "unavailable" — Radar can't read the kind at all (no informer): its type
 	//      isn't installed, the SA lacks RBAC, or the feature is off (e.g.
 	//      rbac.viewRBAC). A user-level grant won't help.
+	//   "kind_not_served" — successful discovery established that the API is
+	//      absent. Listed in unavailable, never forbidden.
 	Reasons map[string]string `json:"reasons,omitempty"`
 }
 
 const (
 	reasonRBACDenied  = "rbac_denied"
 	reasonUnavailable = "unavailable"
+	reasonNotServed   = "kind_not_served"
 )
 
 const (
@@ -141,6 +144,11 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, kl := range k8score.AllKindListers() {
+		if k8s.KindNotServed(kl.Kind(), kl.Group()) {
+			markUnavailable(kl.CountKey())
+			reasons[kl.CountKey()] = reasonNotServed
+			continue
+		}
 		// An unsynced informer has a partial (or empty) store — its count is
 		// not a fact yet. Unavailable keeps the sidebar badge at "–" and the
 		// large-list guard latched. A terminally-failed kind carries a reason
@@ -272,11 +280,15 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Deduplicate CRDs by group+kind, keeping the most stable served version.
+			watched := make(map[schema.GroupVersionResource]bool)
+			for _, gvr := range dynamicCache.GetWatchedResources() {
+				watched[gvr] = true
+			}
 			crdSeen := make(map[string]bool)
 			crds := make(map[string]discoveredInfo)
 			var crdOrder []string
 			for _, res := range resources {
-				if !res.IsCRD {
+				if !res.IsCRD && !watched[schema.GroupVersionResource{Group: res.Group, Version: res.Version, Resource: res.Name}] {
 					continue
 				}
 				// Informer-backed counts only work for listable+watchable kinds.

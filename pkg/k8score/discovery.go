@@ -42,6 +42,7 @@ type ResourceDiscovery struct {
 	lastRefresh time.Time
 	partial     bool
 	failedGroup map[string]bool
+	initialized bool
 	cacheTTL    time.Duration
 	refreshMu   sync.Mutex
 	mu          sync.RWMutex
@@ -209,6 +210,8 @@ func (d *ResourceDiscovery) refresh() error {
 	}
 	if err != nil && !hasResourceData {
 		d.mu.Lock()
+		d.partial = true
+		d.failedGroup = nil
 		d.lastRefresh = time.Now()
 		d.mu.Unlock()
 		return err
@@ -219,12 +222,13 @@ func (d *ResourceDiscovery) refresh() error {
 			failedGroups[gv.Group] = true
 		}
 	}
-	partial := discovery.IsGroupDiscoveryFailedError(err) || len(failedGroups) > 0
+	partial := err != nil
 	log.Printf("API resource discovery took %v", time.Since(start))
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	d.initialized = true
 	d.resources = nil
 	d.resourceMap = make(map[string]APIResource)
 	d.gvrMap = make(map[string]schema.GroupVersionResource)
@@ -723,4 +727,22 @@ func (d *ResourceDiscovery) GetKindForGVR(gvr schema.GroupVersionResource) strin
 		}
 	}
 	return ""
+}
+
+// ResourceAbsent requires a successful discovery snapshot for this API group.
+func (d *ResourceDiscovery) ResourceAbsent(group, resource string) bool {
+	if d == nil {
+		return false
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if !d.initialized || (d.partial && (len(d.failedGroup) == 0 || d.failedGroup[group])) {
+		return false
+	}
+	for _, r := range d.resources {
+		if r.Group == group && (r.Name == resource || strings.EqualFold(r.Kind, resource)) {
+			return false
+		}
+	}
+	return true
 }

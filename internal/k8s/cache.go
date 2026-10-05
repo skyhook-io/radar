@@ -1480,6 +1480,70 @@ func (c *ResourceCache) ListDynamicWithGroup(ctx context.Context, kind string, n
 	return dynamicCache.List(gvr, namespace)
 }
 
+// ResourceReadTimeout leaves direct inventories enough time for large API responses;
+// informer-backed reads return pending promptly while synchronization continues.
+func ResourceReadTimeout(kind, group string) time.Duration {
+	gvr, ok := BuiltinGVR(kind, group)
+	if group == "" {
+		gvr, ok = BuiltinGVRAnyGroup(kind)
+	}
+	if ok && shouldBypassDynamicInformer(gvr) {
+		return 15 * time.Second
+	}
+	return 3 * time.Second
+}
+
+// ListDynamicComplete is the bounded request-facing counterpart of ListDynamicWithGroup.
+func (c *ResourceCache) ListDynamicComplete(ctx context.Context, kind, namespace, group string) ([]*unstructured.Unstructured, error) {
+	if err := PublicReadReady(c, kind, group); err != nil {
+		return nil, err
+	}
+	if gvr, ok := typedRouteGVR(kind, group); ok {
+		if out, handled, err := c.listTypedAsUnstructured(ctx, gvr, kind, namespace); handled {
+			return out, err
+		}
+	}
+	disc := GetResourceDiscovery()
+	dc := GetDynamicResourceCache()
+	if disc == nil || dc == nil {
+		return nil, ErrDynamicNotReady
+	}
+	gvr, ok := disc.GetGVRWithGroup(kind, group)
+	if group == "" {
+		gvr, ok = disc.GetGVR(kind)
+	}
+	if !ok {
+		gvr, ok = builtinGVRFallback(kind, group)
+	}
+	if !ok {
+		return nil, fmt.Errorf("%w: %s (%s)", ErrUnknownDynamicKind, kind, group)
+	}
+	if shouldBypassDynamicInformer(gvr) {
+		return dc.ListDirect(ctx, gvr, namespace)
+	}
+	readCtx, cancel := context.WithTimeout(ctx, ResourceReadTimeout(kind, group))
+	defer cancel()
+	return dc.ListComplete(readCtx, gvr, []string{namespace})
+}
+
+func PublicReadReady(c *ResourceCache, kind, group string) error {
+	if KindNotServed(kind, group) {
+		return &k8score.ResourceReadError{Code: "kind_not_served", Resource: kind}
+	}
+	gvr, typed := lookupTypedBuiltinGVR(kind)
+	if !typed || (group != "" && group != gvr.Group) {
+		return nil
+	}
+	switch c.KindReadinessFor(gvr.Resource) {
+	case KindPending:
+		return &k8score.ResourceReadError{Code: "kind_sync_pending", Resource: kind}
+	case KindFailed:
+		return &k8score.ResourceReadError{Code: "kind_sync_failed", Resource: kind, Reason: "initial cache synchronization failed"}
+	default:
+		return nil
+	}
+}
+
 // builtinGVRFallback resolves a built-in kind's GVR from the static table when
 // API discovery couldn't (partial discovery under restricted RBAC, or a
 // transient refresh miss). It only resolves built-ins addressed by their own
@@ -1532,6 +1596,9 @@ func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, na
 	// strips kubectl last-applied at ingestion, so serving drift reads from it
 	// would silently return "no drift" for every built-in kind.
 	if !preserveLastApplied {
+		if KindNotServed(kind, group) {
+			return nil, &k8score.ResourceReadError{Code: "kind_not_served", Resource: kind}
+		}
 		if gvr, ok := typedRouteGVR(kind, group); ok {
 			if u, handled, err := c.getTypedAsUnstructured(ctx, gvr, kind, namespace, name); handled {
 				return u, err
@@ -1591,7 +1658,9 @@ func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, na
 	} else if gvr.Group == "apiregistration.k8s.io" && gvr.Resource == "apiservices" {
 		u, err = dynamicCache.GetDirect(ctx, gvr, namespace, name)
 	} else {
-		u, err = dynamicCache.Get(gvr, namespace, name)
+		readCtx, cancel := context.WithTimeout(ctx, ResourceReadTimeout(kind, group))
+		defer cancel()
+		u, err = dynamicCache.GetComplete(readCtx, gvr, namespace, name)
 	}
 	if err != nil {
 		return nil, err

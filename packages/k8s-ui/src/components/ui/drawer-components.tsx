@@ -945,11 +945,13 @@ export function ResourceRefBadge({ resourceRef, onClick, wrapAtSeparator }: Reso
     <>
       <span className="shrink-0 opacity-60">{kindName}/</span>
       <span className="min-w-0 max-w-full whitespace-normal break-normal text-left leading-tight">{resourceRef.name}</span>
+      {resourceRef.inferred && <span className="opacity-60">(inferred)</span>}
     </>
   ) : (
     <>
       <span className="opacity-60">{kindName}/</span>
       {resourceRef.name}
+      {resourceRef.inferred && <span className="opacity-60 ml-1">(inferred)</span>}
     </>
   )
   const layoutClass = wrapAtSeparator

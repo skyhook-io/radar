@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/skyhook-io/radar/pkg/datum"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -239,6 +240,33 @@ func diffGenericUnstructured(oldU, newU *unstructured.Unstructured) ([]FieldChan
 	for _, change := range genericConditionChanges(oldU, newU, "status", "conditions") {
 		changes = append(changes, change)
 		summary = append(summary, fmt.Sprintf("%s changed", change.Path))
+	}
+
+	if _, ok := datum.Lookup(newU.GroupVersionKind().Group, newU.GetKind()); ok {
+		scoped := func(u *unstructured.Unstructured) map[string]string {
+			out := map[string]string{}
+			for _, c := range datum.Observations(u) {
+				if c.Scope != "" {
+					out[c.Path] = fmt.Sprintf("%q (%q)", c.Status, c.Reason)
+				}
+			}
+			return out
+		}
+		oldScoped, newScoped := scoped(oldU), scoped(newU)
+		keys := map[string]bool{}
+		for k := range oldScoped {
+			keys[k] = true
+		}
+		for k := range newScoped {
+			keys[k] = true
+		}
+		for key := range keys {
+			if oldScoped[key] != newScoped[key] {
+				path := key
+				changes = append(changes, FieldChange{Path: path, OldValue: oldScoped[key], NewValue: newScoped[key]})
+				summary = append(summary, path+" changed")
+			}
+		}
 	}
 
 	if len(changes) > 0 {

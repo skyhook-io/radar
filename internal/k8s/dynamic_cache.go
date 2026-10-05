@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/datum"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -88,6 +89,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			NamespaceScoped:             nsScoped,
 			Namespace:                   nsTarget,
 			DebugEvents:                 DebugEvents,
+			IsNoisyResource:             isNoisyResource,
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)
 			},
@@ -169,6 +171,7 @@ type supportedCRDResource struct {
 	Resource   string
 	Kind       string
 	Namespaced bool
+	LocalOnly  bool
 }
 
 // supportedCRDFallbacks is the server-side catalog of dynamic integrations
@@ -177,7 +180,7 @@ type supportedCRDResource struct {
 // partial-discovery recovery, startup warmup, capability probes, and chart-RBAC
 // drift checks. Only installed catalog entries are warmed, so watch identities
 // stay bounded even when discovery exposes an unbounded CRD set.
-var supportedCRDFallbacks = []supportedCRDResource{
+var supportedCRDFallbacks = append(datumFallbacks(), []supportedCRDResource{
 	{Group: "kafka.strimzi.io", Versions: []string{"v1", "v1beta2"}, Resource: "kafkaconnectors", Kind: "KafkaConnector", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "applications", Kind: "Application", Namespaced: true},
 	{Group: "argoproj.io", Versions: []string{"v1alpha1"}, Resource: "applicationsets", Kind: "ApplicationSet", Namespaced: true},
@@ -457,7 +460,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	// them here would warm them up on every cluster that has the CRD
 	// installed (e.g. for Trivy reports), which we don't want until we have
 	// a generic per-engine policy index. See T5 in the plan.
-}
+}...)
 
 func RegisterSupportedCRDFallbacks() {
 	discovery := GetResourceDiscovery()
@@ -484,6 +487,9 @@ func RegisterSupportedCRDFallbacks() {
 	registered := 0
 
 	for _, candidate := range supportedCRDFallbacks {
+		if candidate.LocalOnly && IsInCluster() {
+			continue
+		}
 		if _, ok := discovery.GetResourceWithGroup(candidate.Kind, candidate.Group); ok {
 			continue
 		}
@@ -633,6 +639,9 @@ func WarmupCommonCRDs() {
 	var gvrs []schema.GroupVersionResource
 	seen := make(map[schema.GroupVersionResource]bool)
 	for _, candidate := range supportedCRDFallbacks {
+		if candidate.LocalOnly && IsInCluster() {
+			continue
+		}
 		if gvr, ok := discovery.GetGVRWithGroup(candidate.Kind, candidate.Group); ok && discovery.SupportsWatchGVR(gvr) && !seen[gvr] {
 			seen[gvr] = true
 			gvrs = append(gvrs, gvr)
@@ -643,4 +652,12 @@ func WarmupCommonCRDs() {
 	if len(gvrs) > 0 {
 		cache.WarmupParallel(gvrs, 10*time.Second)
 	}
+}
+
+func datumFallbacks() []supportedCRDResource {
+	var out []supportedCRDResource
+	for _, r := range datum.Resources {
+		out = append(out, supportedCRDResource{Group: r.Group, Versions: []string{r.Version}, Resource: r.Plural, Kind: r.Kind, Namespaced: r.Namespaced, LocalOnly: true})
+	}
+	return out
 }

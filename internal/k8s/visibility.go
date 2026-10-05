@@ -45,8 +45,8 @@ func BuildVisibilitySummary(result *PermissionCheckResult, namespace string) *Vi
 		"services":    visibilityStatus(result, k8score.Services, namespace),
 	}
 
-	podsVisible := core["pods"] == "allowed" || core["pods"] == "namespace_limited"
-	deploymentsVisible := core["deployments"] == "allowed" || core["deployments"] == "namespace_limited"
+	podsVisible := core["pods"] == "not_served" || core["pods"] == "allowed" || core["pods"] == "namespace_limited"
+	deploymentsVisible := core["deployments"] == "not_served" || core["deployments"] == "allowed" || core["deployments"] == "namespace_limited"
 
 	optionalKinds := []struct {
 		key  string
@@ -68,7 +68,7 @@ func BuildVisibilitySummary(result *PermissionCheckResult, namespace string) *Vi
 	if !podsVisible && !deploymentsVisible {
 		state = "degraded"
 		impact = "Radar cannot read core workload resources for this scope; pod health, workload status, topology, and issue detection may be empty or misleading."
-	} else if core["pods"] != "allowed" || core["deployments"] != "allowed" || core["services"] != "allowed" || len(missingOptional) > 0 {
+	} else if (core["pods"] != "allowed" && core["pods"] != "not_served") || (core["deployments"] != "allowed" && core["deployments"] != "not_served") || (core["services"] != "allowed" && core["services"] != "not_served") || len(missingOptional) > 0 {
 		state = "limited"
 		impact = "Some related resource types are unavailable; diagnostics may omit supporting context."
 	}
@@ -89,6 +89,9 @@ func BuildVisibilitySummary(result *PermissionCheckResult, namespace string) *Vi
 }
 
 func visibilityStatus(result *PermissionCheckResult, key string, namespace string) string {
+	if result.NotServed[key] {
+		return "not_served"
+	}
 	scope, ok := result.Scopes[key]
 	if !ok || !scope.Enabled {
 		return "unavailable"

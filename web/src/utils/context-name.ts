@@ -6,7 +6,7 @@ export * from '@skyhook-io/k8s-ui/utils/context-name'
 
 export function parseContextForSwitcher(context: ContextInfo) {
   const raw = context.originalName || context.name
-  const nameQualifier = context.originalName && context.name !== context.originalName
+  const nameQualifier = context.originalName && context.name.startsWith(context.originalName) && context.name !== context.originalName
     ? context.name.slice(context.originalName.length).trim() || undefined
     : undefined
   return {

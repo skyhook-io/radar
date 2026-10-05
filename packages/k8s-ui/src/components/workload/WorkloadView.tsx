@@ -622,7 +622,7 @@ export function WorkloadView({
       ReplicaSet: 4, Pod: 5,
     }
     return neighborhood.nodes
-      .filter((n) => n.kind !== 'Internet' && n.kind !== 'PodGroup')
+      .filter((n) => n.kind !== 'Internet' && n.kind !== 'ConfiguredEndpoint' && n.kind !== 'PodGroup')
       .map((n) => ({
         id: n.id,
         kind: topologyNodeResourceKind(n),
@@ -643,6 +643,7 @@ export function WorkloadView({
   const yamlObject = yamlObjectId ? yamlObjects.find((o) => o.id === yamlObjectId) : undefined
   const handleTopologyNodeClick = useCallback(
     (node: TopologyNode) => {
+      if (node.kind === 'Internet' || node.kind === 'ConfiguredEndpoint') return
       const resourceKind = topologyNodeResourceKind(node)
       if (!onNavigateToResource || !resourceKind || !node.name) return
       const group = apiVersionToGroup(node.data?.apiVersion as string | undefined)
