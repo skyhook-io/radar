@@ -190,8 +190,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // the list endpoint, whose 503 kind_sync_failed renders the honest error —
   // the guard would otherwise trap it on "count unavailable" forever. Safe to
   // unblock: the server serves no rows for a failed kind.
-  const selectedCountFailedSync =
-    selectedCountUnavailable && countsData?.reasons?.[selectedCountKey] === 'kind_sync_failed'
+  const selectedCountTerminal =
+    selectedCountUnavailable && ['kind_sync_failed', 'kind_not_served'].includes(countsData?.reasons?.[selectedCountKey] ?? '')
   // A guarded kind whose informer hasn't finished reports unavailable with a
   // kind_sync_pending reason — "count not known YET", so keep the loading
   // state. Keyed on the reason, not on connection.state: deferred kinds sync
@@ -199,10 +199,10 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // and blocks the view as before.
   const selectedCountPendingSync =
     (selectedCountUnavailable && countsData?.reasons?.[selectedCountKey] === 'kind_sync_pending') ||
-    (syncShellActive && selectedCountUnavailable && !selectedCountFailedSync)
+    (syncShellActive && selectedCountUnavailable && !selectedCountTerminal)
   const waitingForGuardCount = isSelectedKindGuarded &&
     ((!countsData && (!countsIsError || syncShellActive)) || selectedCountPendingSync)
-  const largeListBlocked = isSelectedKindGuarded && countsData != null && !selectedCountPendingSync && !selectedCountFailedSync &&
+  const largeListBlocked = isSelectedKindGuarded && countsData != null && !selectedCountPendingSync && !selectedCountTerminal &&
     (selectedCountUnavailable || (selectedCountKnown && (selectedCount ?? 0) > selectedKindRowLimit))
   const selectedKindQueryBlocked = waitingForGuardCount || largeListBlocked
   const podCount = countsData?.counts.Pod

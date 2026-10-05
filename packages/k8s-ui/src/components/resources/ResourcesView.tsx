@@ -5051,7 +5051,7 @@ export function ResourcesView({
     resourcesToCount.forEach((resource, index) => {
       const data = resourceQueries[index]?.data
       const key = resource.group ? `${resource.group}/${resource.kind}` : resource.kind
-      results[key] = Array.isArray(data) ? data.length : 0
+      results[key] = Array.isArray(data) ? data.length : null
     })
     return results
   }, [useNewCountsMode, resourcesToCount, resourceCountsProp, resourceUnavailableProp, loadedCountCache, selectedQueryHasLoadedCount, selectedLoadedResourceCount, selectedKindCountKey, resourceQueries])

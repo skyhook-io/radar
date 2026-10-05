@@ -741,21 +741,20 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 					minimalEntries = append(minimalEntries, e)
 				}
 			}
-			// Validate MinimalSet keys: typos or kinds not enabled produce a
-			// silently-empty minimalEntries → cache returns ~PatienceWindow
-			// later with nothing meaningful synced. Surface that loud.
+			// Intentionally disabled kinds cannot gate startup; unknown or
+			// deferred keys still indicate an invalid minimal-set configuration.
 			var unknown []string
 			for k := range cfg.MinimalSet {
-				if !knownCritical[k] {
+				if !knownCritical[k] && (!slices.Contains(InformerResourceKeys(), k) || rc.enabledResources[k]) {
 					unknown = append(unknown, k)
 				}
 			}
 			if len(unknown) > 0 {
 				sort.Strings(unknown)
-				stdlog.Printf("WARNING: MinimalSet keys not registered as critical informers (typo or RBAC-denied?): %s",
+				stdlog.Printf("WARNING: MinimalSet keys not registered as critical informers (unknown or deferred kind): %s",
 					strings.Join(unknown, ", "))
 			}
-			if len(minimalEntries) == 0 {
+			if len(minimalEntries) == 0 && len(unknown) > 0 {
 				stdlog.Printf("WARNING: MinimalSet matched no enabled critical informers; first paint will fire as soon as PatienceWindow elapses regardless of sync state")
 			}
 		}

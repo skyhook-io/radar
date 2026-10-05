@@ -989,6 +989,8 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 		return &PermissionCheckResult{Perms: &ResourcePermissions{}, Scopes: map[string]k8score.ResourceScope{}}
 	}
 
+	absence := make(chan map[string]bool, 1)
+	go func() { absence <- discoverProbeAbsence(ctx) }()
 	forceNamespace := ForceNamespaceScope
 	scopeNamespaces, scopeCandidatesIncomplete := buildScopeCandidates(ctx)
 	if forceNamespace {
@@ -999,7 +1001,7 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 		}
 	}
 
-	result, hadErrors := probeResourceAccess(ctx, GetDynamicClient(), scopeNamespaces, forceNamespace, discoverProbeAbsence(ctx))
+	result, hadErrors := probeResourceAccess(ctx, GetDynamicClient(), scopeNamespaces, forceNamespace, <-absence)
 	result.ScopeCandidatesTruncated = scopeCandidatesIncomplete
 
 	resourcePermsMu.Lock()
@@ -1160,13 +1162,9 @@ func pickPrimaryNs(scopeNamespaces []string, scopes map[string]k8score.ResourceS
 //     Used by --namespace-scope to pin the informer cache. Cluster-only kinds
 //     (nodes, namespaces, PV, storageclasses, ingressclasses) are still probed
 //     cluster-wide since they have no namespace dimension to pin to.
-func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamespaces []string, forceNamespace bool, absent ...map[string]bool) (*PermissionCheckResult, bool) {
+func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamespaces []string, forceNamespace bool, notServed map[string]bool) (*PermissionCheckResult, bool) {
 	perms := &ResourcePermissions{}
 	probes := resourceProbeTargets(perms)
-	notServed := map[string]bool{}
-	if len(absent) > 0 {
-		notServed = absent[0]
-	}
 
 	type probeOutcome struct {
 		scope      k8score.ResourceScope

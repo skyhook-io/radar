@@ -11,7 +11,7 @@ import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
-import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
+import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, FetchResult } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { topologyNodeResourceKind } from '@skyhook-io/k8s-ui/utils/topology-neighborhood'
 import { useAPIResources, findAPIResourceForRoute } from './api/apiResources'
@@ -76,7 +76,7 @@ import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
 import { SettingsDialog, type SettingsSectionId } from './components/settings/SettingsDialog'
 import type { APIResource, TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
-import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams } from './utils/navigation'
+import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams, defaultResourcesPath } from './utils/navigation'
 import { findSelectedTopologyNode } from './utils/topology-selection'
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
@@ -478,7 +478,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // mount) so the omnibar can open a CRD hit with an irregular plural from any
   // view — kindToPlural would otherwise English-guess the route before a
   // resources view has run initNavigationMap().
-  const { data: navApiResources } = useAPIResources()
+  const { data: navApiResources, error: navApiResourcesError, refetch: refetchNavApiResources } = useAPIResources()
   useEffect(() => { if (navApiResources) initNavigationMap(navApiResources) }, [navApiResources])
 
   // View-aware namespace scope: disabled on cluster-scoped surfaces so the
@@ -490,22 +490,23 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // (standalone passes manageDocumentTitle), so embedders keep title ownership.
   useDocumentTitle(manageDocumentTitle ? radarPageTitle(location.pathname, location.search, navApiResources) : null, documentTitleSuffix)
 
-  // Workload slug after `/resources/` (defaults to `pods`). Bare `/resources` redirects to `/resources/pods`.
+  // A bare resource route waits for discovery before mounting a kind list.
   const normalizedResourcesKindSlug = useMemo(() => {
     const m = location.pathname.match(/^\/resources(?:\/([^/]+))?/)
     const slug = m?.[1] ?? ''
     return slug || 'pods'
   }, [location.pathname])
 
-  // Canonical URL — `/resources` is not stable for bookmarks/sharing; normalize to `/resources/pods`.
+  const resourcesLanding = navApiResources ? defaultResourcesPath(navApiResources) : null
   useEffect(() => {
     const path = location.pathname.replace(/\/+$/, '') || '/'
-    if (path !== '/resources') return
-    navigate(
-      { pathname: '/resources/pods', search: location.search, hash: location.hash },
-      { replace: true },
-    )
-  }, [location.pathname, location.search, location.hash, navigate])
+    if (path !== '/resources' || !resourcesLanding) return
+    const destination = new URL(resourcesLanding, 'http://radar.invalid')
+    const params = new URLSearchParams(location.search)
+    params.delete('apiGroup')
+    if (destination.searchParams.has('apiGroup')) params.set('apiGroup', destination.searchParams.get('apiGroup')!)
+    navigate({ pathname: destination.pathname, search: params.toString(), hash: location.hash }, { replace: true })
+  }, [location.pathname, location.search, location.hash, navigate, resourcesLanding])
 
   // Set mainView by navigating to the path
   const setMainView = useCallback((view: ExtendedMainView, params?: Record<string, string>) => {
@@ -2267,7 +2268,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         )}
 
         {/* Resources view */}
-        {mainView === 'resources' && (
+        {mainView === 'resources' && /^\/resources\/?$/.test(location.pathname) && (
+          navApiResources && !resourcesLanding
+            ? <div className="p-6 text-theme-text-secondary">No listable APIs discovered.</div>
+            : <FetchResult loading={!navApiResourcesError} error={navApiResourcesError} onRetry={() => { void refetchNavApiResources() }} className="flex-1" />
+        )}
+        {mainView === 'resources' && !/^\/resources\/?$/.test(location.pathname) && (
           <ResourcesView
             namespaces={namespaces}
             selectedResource={routeSelectedResource}

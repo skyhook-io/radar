@@ -196,3 +196,28 @@ describe('ResourcesSidebar category workspaces', () => {
     expect(html).toContain('barmancloud.cnpg.io')
   })
 })
+
+describe('collapsed category count coverage', () => {
+  it.each(['iam.miloapis.com', 'postgresql.cnpg.io', 'example.com'])('keeps unread totals unknown for %s', group => {
+    const html = renderToString(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}}
+      apiResources={[{ ...sqlInstance, group }]} resourceCounts={{}} />)
+    expect(html).toContain('Group count not observed for every kind.')
+    expect(html).not.toContain('>0</span>')
+  })
+  it('does not present a known subtotal as a complete category count', () => {
+    const html = renderToString(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}}
+      apiResources={[sqlInstance, { ...sqlInstance, kind: 'SQLDatabase', name: 'sqldatabases' }]}
+      resourceCounts={{ 'sql.cnrm.cloud.google.com/SQLInstance': 3 }} />)
+    expect(html).toContain('Group count not observed for every kind.')
+    expect(html).toContain('≥3')
+  })
+})
+
+it('labels a partially observed ordinary Kubernetes category as a lower bound', () => {
+  const html = renderToString(<ResourcesSidebar selectedKind={null} onSelectedKindChange={() => {}}
+    apiResources={[
+      { ...sqlInstance, kind: 'PersistentVolume', name: 'persistentvolumes', group: '', isCrd: false },
+      { ...sqlInstance, kind: 'VolumeAttachment', name: 'volumeattachments', group: 'storage.k8s.io', isCrd: false },
+    ]} resourceCounts={{ PersistentVolume: 11 }} />)
+  expect(html).toContain('≥11')
+})

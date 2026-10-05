@@ -200,7 +200,7 @@ export function ClusterHealthCard({
     { kind: 'jobs', label: 'Jobs', icon: Briefcase, total: counts.jobs.total, subtitle: `${counts.jobs.active} active`, hasIssues: counts.jobs.failed > 0 },
     { kind: 'cronjobs', label: 'CronJobs', icon: Clock, total: counts.cronJobs.total, subtitle: `${counts.cronJobs.active} active` },
   ]
-  const platformInfo = getPlatformInfo(cluster.platform)
+  const platformInfo = hasWorkloads ? getPlatformInfo(cluster.platform) : { name: 'API server', icon: null }
   // Headline-name derivation has three branches, in priority order:
   //  1. Local-kubeconfig users get the parsed short clusterName from a
   //     string like `gke_koalabackend_us-east1-b_nonprod-cluster-us-east1`

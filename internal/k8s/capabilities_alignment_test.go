@@ -176,7 +176,7 @@ func TestCapabilitiesAlignment_JSONTagMatchesProbeKey(t *testing.T) {
 func TestCapabilitiesAlignment_FullyAllowedProbeSetsEveryField(t *testing.T) {
 	dyn := fakeDyn(t, func(_ schema.GroupVersionResource, _ string) bool { return true })
 
-	result, hadErrors := probeResourceAccess(context.Background(), dyn, nil, false)
+	result, hadErrors := probeResourceAccess(context.Background(), dyn, nil, false, nil)
 	if hadErrors {
 		t.Fatalf("hadErrors should be false on a fully-allowed run")
 	}

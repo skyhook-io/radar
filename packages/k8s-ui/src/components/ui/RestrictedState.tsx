@@ -22,8 +22,8 @@ interface Props {
   resource?: string
   /** Why the kind is hidden. "rbac_denied" (default): Radar can read it but the
    *  user's RBAC can't — show the grant request. "unavailable": Radar's
-   *  ServiceAccount can't read it at all (not installed / SA RBAC / feature off)
-   *  — a user grant won't help, so show a different message and no snippet. */
+   *  configured reader or resource settings cannot supply the inventory.
+   *  Caller grants in shared deployments won't enable it; show no snippet. */
   reason?: 'rbac_denied' | 'unavailable' | string
   /** Tightens spacing for inline/embedded use (topology overlay, etc.). */
   compact?: boolean
@@ -94,14 +94,13 @@ export function RestrictedState({ kindLabel, group = '', resource, reason, compa
     >
       <Shield className="w-8 h-8 text-amber-400 mb-2" />
       {isUnavailable ? (
-        // Radar's ServiceAccount can't read this kind — a user grant won't help.
+        // Caller grants in a shared deployment do not enable Radar's inventory.
         <>
           <p className="text-theme-text-secondary font-medium">{kindLabel} isn't available here</p>
           <p className="text-sm mt-1 max-w-md">
-            Radar can't read {kindLabel} resources in this cluster — the type may not be installed,
-            or read access isn't granted to Radar's ServiceAccount (some kinds, like RBAC objects
-            and Secrets, are off unless enabled in the Radar chart). Granting your own identity
-            access won't surface it.
+            Radar isn't reading {kindLabel} resources on this connection. Check the
+            list/watch permissions of Radar's Kubernetes reader and its enabled resource types.
+            In shared deployments, granting your own identity access alone won't enable Radar's inventory.
           </p>
         </>
       ) : (
