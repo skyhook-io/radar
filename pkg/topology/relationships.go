@@ -401,7 +401,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			// carries these edges; only the per-resource projection skips them.
 		case EdgeConfigures:
 			if objectGroup == datum.NetworkGroup && objectKind == "HTTPProxy" {
-				if ref.Kind != string(KindInternet) {
+				if ref.Kind != string(KindInternet) && ref.Kind != string(KindConfiguredEndpoint) {
 					rel.ConfigRefs = appendResourceRef(rel.ConfigRefs, *ref)
 				}
 			} else {

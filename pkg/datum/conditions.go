@@ -70,7 +70,7 @@ func Failures(u *unstructured.Unstructured) []Condition {
 	for _, c := range observations {
 		if (positive(u.GetKind(), c.Type) && c.Status == "False" || u.GetKind() == "HTTPProxy" && c.Type == "HostnamesInUse" && c.Status == "True") && !c.Stale && !c.Transient {
 			duplicate := false
-			nestedType := map[string]string{"CertificatesReady": "CertificateReady", "DNSRecordsProgrammed": "DNSRecordProgrammed", "HostnamesVerified": "Verified", "HostnamesInUse": "Available", "Programmed": "Available", "Ready": "Ready"}[c.Type]
+			nestedType := map[string]string{"CertificatesReady": "CertificateReady", "DNSRecordsProgrammed": "DNSRecordProgrammed", "HostnamesVerified": "Verified", "HostnamesInUse": "Available", "Ready": "Ready"}[c.Type]
 			if u.GetKind() == "DNSRecordSet" && c.Type == "Programmed" {
 				nestedType = "RecordProgrammed"
 			}

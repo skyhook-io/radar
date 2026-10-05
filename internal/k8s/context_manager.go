@@ -392,7 +392,7 @@ var ErrContextSwitchPreflight = errors.New("context switch preflight rejected")
 
 // ErrReconnectSuperseded is returned by PerformContextSwitchIfOperationCurrent
 // when another operation started after the caller captured its generation.
-var ErrProjectConnectionRestored = errors.New("project connection failed; parent connection restored")
+var ErrProjectConnectionRestored = errors.New("project connection failed; restored connection")
 
 var ErrReconnectSuperseded = errors.New("reconnect superseded by a newer operation")
 
@@ -528,9 +528,9 @@ func performContextSwitch(newContext string, observedOperationGen uint64, requir
 	if err != nil && derived && !errors.Is(err, ErrContextSwitchPreflight) && !errors.Is(err, ErrReconnectSuperseded) {
 		if rollbackErr := performContextSwitchLocked(parent, currentOperationGen(), true, time.Now()); rollbackErr != nil {
 			SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: GetContextName(), Error: rollbackErr.Error(), ErrorType: ClassifyError(rollbackErr)})
-			return fmt.Errorf("project connection failed; restoring parent also failed: %w", rollbackErr)
+			return fmt.Errorf("project connection failed; restoring connection %q also failed: %w", parent, rollbackErr)
 		}
-		return fmt.Errorf("%w: %v", ErrProjectConnectionRestored, err)
+		return fmt.Errorf("%w %q: %v", ErrProjectConnectionRestored, parent, err)
 	}
 	return err
 }

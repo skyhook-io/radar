@@ -48,7 +48,7 @@ export function DatumView({
   });
   const capabilities = useCapabilitiesContext();
   const local =
-    capabilities.deployment?.mode === "local" && !capabilities.authEnabled;
+    capabilities.configManagement === "local" && !capabilities.authEnabled;
   const query = useDatumWorkspace(namespaces, !route.detail && local),
     { drawerTarget, inspect } = useWorkspaceDrawer(
       selectedResource,

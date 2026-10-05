@@ -78,3 +78,14 @@ func TestInstanceAvailabilityIsItsReadinessReport(t *testing.T) {
 		t.Fatalf("available Instance=%s", State(u))
 	}
 }
+
+func TestProxyProgrammingFailureIsIndependentOfHostnameClaim(t *testing.T) {
+	u := &unstructured.Unstructured{Object: map[string]any{"kind": "HTTPProxy", "status": map[string]any{
+		"conditions":       []any{map[string]any{"type": "Programmed", "status": "False", "reason": "InstanceBackendNotFound"}, map[string]any{"type": "HostnamesInUse", "status": "True", "reason": "HostnamesInUse"}},
+		"hostnameStatuses": []any{map[string]any{"hostname": "taken.example", "conditions": []any{map[string]any{"type": "Available", "status": "False", "reason": "InUse"}}}},
+	}}}
+	failures := Failures(u)
+	if len(failures) != 2 || failures[0].Reason != "InstanceBackendNotFound" || failures[1].Reason != "InUse" {
+		t.Fatalf("independent failures=%+v", failures)
+	}
+}

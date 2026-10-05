@@ -185,8 +185,13 @@ func (s *Server) readWorkspaceKind(r *http.Request, cache *k8s.ResourceCache, k 
 
 	list, err := listKindInGroups(r.Context(), cache, k, readNamespaces, groups)
 	var readErr *k8score.ResourceReadError
-	if errors.As(err, &readErr) && readErr.Code == "kind_sync_pending" {
-		return kindAccess{state: kindCoverageSyncing}, nil
+	if errors.As(err, &readErr) {
+		switch readErr.Code {
+		case "kind_sync_pending":
+			return kindAccess{state: kindCoverageSyncing}, nil
+		case "kind_not_served":
+			return kindAccess{state: kindCoverageNotInstalled}, nil
+		}
 	}
 	switch {
 	case err == nil:

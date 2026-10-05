@@ -12,18 +12,18 @@ func TestDatumConfiguredGraphAndRelatedResources(t *testing.T) {
 	cg := schema.GroupVersionResource{Group: datum.NetworkGroup, Version: "v1alpha1", Resource: "connectors"}
 	dg := schema.GroupVersionResource{Group: datum.NetworkGroup, Version: "v1alpha", Resource: "domains"}
 	proxy := genericIdentityObject(pg, "HTTPProxy", "p", "web")
-	proxy.Object["spec"] = map[string]any{"hostnames": []any{"web.example.test"}, "rules": []any{map[string]any{"backends": []any{map[string]any{"connector": map[string]any{"name": "edge"}}, map[string]any{"instance": map[string]any{"name": "origin"}}}}}}
+	proxy.Object["spec"] = map[string]any{"hostnames": []any{"web.example.test"}, "rules": []any{map[string]any{"backends": []any{map[string]any{"connector": map[string]any{"name": "edge"}}, map[string]any{"instance": map[string]any{"name": "origin"}}, map[string]any{"endpoint": "https://origin.example.test"}}}}}
 	connector := genericIdentityObject(cg, "Connector", "p", "edge")
 	domain := genericIdentityObject(dg, "Domain", "p", "domain")
 	domain.Object["spec"] = map[string]any{"domainName": "example.test"}
 	dp := &genericIdentityDynamic{watched: []schema.GroupVersionResource{pg, cg, dg}, kinds: map[schema.GroupVersionResource]string{pg: "HTTPProxy", cg: "Connector", dg: "Domain"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{pg: {proxy}, cg: {connector}, dg: {domain}}, listCalls: map[schema.GroupVersionResource]int{}}
 	b := &Builder{dynamic: dp}
 	nodes, edges := b.addDatumNodes(nil, nil, BuildOptions{})
-	if len(nodes) != 4 || len(edges) != 3 {
+	if len(nodes) != 5 || len(edges) != 4 {
 		t.Fatalf("nodes=%+v edges=%+v", nodes, edges)
 	}
 	neighborhood := BuildNeighborhoodWithIndex(&Topology{Nodes: nodes, Edges: edges}, ResourceRef{Kind: "HTTPProxy", Namespace: "p", Name: "web", Group: datum.NetworkGroup}, NeighborhoodOptions{}, nil, dp)
-	if neighborhood.Root.Kind != "HTTPProxy" || len(neighborhood.Edges) != 3 {
+	if neighborhood.Root.Kind != "HTTPProxy" || len(neighborhood.Edges) != 4 {
 		t.Fatalf("Datum neighborhood=%+v", neighborhood)
 	}
 	for _, edge := range edges {
@@ -45,6 +45,9 @@ func TestDatumConfiguredGraphAndRelatedResources(t *testing.T) {
 	for _, ref := range rel.ConfigRefs {
 		if ref.Kind == "Domain" && !ref.Inferred {
 			t.Fatal("related domain lost inferred label")
+		}
+		if ref.Kind == string(KindConfiguredEndpoint) {
+			t.Fatal("external endpoint emitted as a Kubernetes resource reference")
 		}
 		if ref.Kind == "Instance" {
 			t.Fatal("backend resolved to compute Instance")
