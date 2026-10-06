@@ -3,6 +3,7 @@ package resourcecontext
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -2026,5 +2027,22 @@ func TestProjectionContextMonitoringAndPolicyPermissions(t *testing.T) {
 	denied := Build(context.Background(), obj, Options{Relationships: rel, AccessChecker: denyChecker{group: "example.io", kind: "Widget", namespace: "demo"}})
 	if len(denied.Monitors)+len(denied.MonitorTargets)+len(denied.Protects)+len(denied.HealthChecks)+len(denied.StagedPolicies)+len(denied.ExposedBy) != 0 {
 		t.Fatalf("new context refs ignored permissions: %+v", denied)
+	}
+}
+
+func TestPodSpecReferencePathsContainerAndVolumeProvenance(t *testing.T) {
+	spec := corev1.PodSpec{
+		InitContainers:      []corev1.Container{{EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "credential"}}}}}},
+		EphemeralContainers: []corev1.EphemeralContainer{{EphemeralContainerCommon: corev1.EphemeralContainerCommon{EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "credential"}}}}}}},
+		Volumes:             []corev1.Volume{{VolumeSource: corev1.VolumeSource{CSI: &corev1.CSIVolumeSource{NodePublishSecretRef: &corev1.LocalObjectReference{Name: "credential"}}}}},
+	}
+	got := podSpecReferencePaths(spec, "spec", refTarget{kind: "Secret", namespace: "team", name: "credential"})
+	want := []string{
+		"spec.ephemeralContainers[].envFrom[].secretRef.name",
+		"spec.initContainers[].envFrom[].secretRef.name",
+		"spec.volumes[].csi.nodePublishSecretRef.name",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("reference paths = %#v, want %#v", got, want)
 	}
 }
