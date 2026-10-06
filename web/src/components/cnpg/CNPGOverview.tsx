@@ -238,7 +238,7 @@ export function CNPGOverview({
             : state === 'partial' || state === 'uncached'
               ? { title: 'No visible PostgreSQL clusters', detail: coverageEmpty(clustersCov, 'PostgreSQL clusters') }
               : namespaces.length > 0
-                ? { title: `No PostgreSQL clusters in ${context}`, detail: `None in namespace ${namespaces.join(', ')}. Clear the namespace filter to see the whole cluster.` }
+                ? { title: 'No PostgreSQL clusters in the selected namespaces', detail: `None in ${namespaces.join(', ')} in ${context}. Clear the namespace filter to see the whole cluster.` }
                 : { title: `No PostgreSQL clusters in ${context}`, detail: 'The CloudNativePG CRDs are installed. Clusters, backups and declarations appear here once they exist.' }
     return (
       <div className="flex min-h-0 flex-1 flex-col">

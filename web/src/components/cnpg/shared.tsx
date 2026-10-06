@@ -149,6 +149,11 @@ export function CNPGScreenGate({
         icon={Database}
         title="CloudNativePG data unavailable"
         detail={query.error instanceof Error ? query.error.message : 'Radar could not load the CloudNativePG data.'}
+        action={
+          <button type="button" onClick={() => void query.refetch()} disabled={query.isFetching} className="btn-secondary mt-3 px-3 py-1.5 text-sm">
+            {query.isFetching ? 'Retrying…' : 'Retry'}
+          </button>
+        }
       />
     )
   }

@@ -27,7 +27,7 @@ function response(clusters: ReturnType<typeof cluster>[], coverage: CNPGKindCove
   return { installed: true, context: 'kind-test', namespaces: null, coverage: { clusters: coverage }, objects: { clusters }, issues: [], audit: [], backupsOmitted: 0 }
 }
 
-function render(resp: CNPGWorkspaceResponse, query = '', opts: { attention?: string[]; onCreate?: () => void } = {}) {
+function render(resp: CNPGWorkspaceResponse, query = '', opts: { attention?: string[]; onCreate?: () => void; namespaces?: string[] } = {}) {
   const fleet = buildCNPGFleet(resp)
   for (const row of fleet.rows) row.attention = !!opts.attention?.includes(row.name)
   fleet.attentionCount = fleet.rows.filter((r) => r.attention).length
@@ -36,7 +36,7 @@ function render(resp: CNPGWorkspaceResponse, query = '', opts: { attention?: str
       <CNPGOverview
         data={resp}
         fleet={fleet}
-        namespaces={[]}
+        namespaces={opts.namespaces ?? []}
         searchParams={new URLSearchParams(query)}
         onSetParams={() => {}}
         onInspect={() => {}}
@@ -74,6 +74,15 @@ describe('CNPGOverview is the list of clusters', () => {
     expect(html).toContain('No visible PostgreSQL clusters')
     expect(html).toContain('Radar does not cache PostgreSQL clusters in c')
     expect(html).not.toContain('No PostgreSQL clusters in kind-test')
+  })
+
+  it('limits an empty read to the selected scope and keeps partial coverage distinct', () => {
+    const html = render(response([]), '', { namespaces: ['db', 'prod'] })
+    expect(html).toContain('No PostgreSQL clusters in the selected namespaces')
+    expect(html).toContain('None in db, prod in kind-test')
+    expect(html).not.toContain('No PostgreSQL clusters in kind-test')
+    expect(render(response([]))).toContain('No PostgreSQL clusters in kind-test')
+    expect(render(response([], { state: 'partial' }), '', { namespaces: ['db'] })).toContain('No visible PostgreSQL clusters')
   })
 
   it('says once, for the whole list, why no volume usage is measured', () => {

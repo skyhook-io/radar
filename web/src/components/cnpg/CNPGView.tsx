@@ -10,10 +10,8 @@ import { CNPGProtection } from './CNPGProtection'
 import { CNPGDeclarations } from './CNPGDeclarations'
 import { CNPGPooling } from './CNPGPooling'
 import { CNPGOperator } from './CNPGOperator'
-import { CNPGScreenGate, clusterResource } from './shared'
-import { CreateResourceDialog } from '../shared/CreateResourceDialog'
-import { getSkeletonYaml } from '../../utils/skeleton-yaml'
-import { apiVersionToGroup } from '../../utils/navigation'
+import { CNPGScreenGate } from './shared'
+import { CNPGCreateClusterDialog } from './CNPGCreateClusterDialog'
 import { CNPGDetailPage } from './CNPGDetailPage'
 import { parseCNPGRoute } from './routes'
 import { useCNPGFleet, useCNPGSidebarWorkspace } from './useCNPGSidebarWorkspace'
@@ -149,15 +147,9 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
         </CNPGScreenGate>
         )}
       </div>
-      <CreateResourceDialog
-        open={creating}
-        onClose={() => setCreating(false)}
-        initialYaml={getSkeletonYaml('Cluster', 'postgresql.cnpg.io')}
-        title="Create Cluster"
-        onCreated={(result) => {
-          if (result.kind === 'Cluster' && apiVersionToGroup(result.apiVersion) === 'postgresql.cnpg.io') inspect(clusterResource(result.namespace, result.name))
-        }}
-      />
+      {creating && (
+        <CNPGCreateClusterDialog namespaces={namespaces} onClose={() => setCreating(false)} onCreated={inspect} />
+      )}
     </div>
   )
 }

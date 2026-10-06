@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import yaml from 'yaml'
-import { ActionConfirmDialog, isApiGroup, toneTextClass, Tooltip, type HealthLevel } from '@skyhook-io/k8s-ui'
+import { ActionConfirmDialog, ConfirmDialog, isApiGroup, toneTextClass, Tooltip, type HealthLevel } from '@skyhook-io/k8s-ui'
 import { useCNPGRuntime, useCNPGWorkspace } from '../../../api/cnpg'
 import { useCNPGRestoreCapability } from '../../../api/cnpg-recovery'
 import { useConnection } from '../../../context/ConnectionContext'
@@ -69,6 +69,7 @@ function EvidenceRow({ label, children }: { label: string; children: ReactNode }
 export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: string; entry: CNPGRestoreEntry; onClose: () => void }) {
   const navigate = useCNPGNavigate()
   const { connection } = useConnection()
+  const [context] = useState(connection.context)
   const { showSuccess } = useToast()
   const workspace = useCNPGWorkspace([namespace])
   const objects = workspace.data?.objects
@@ -115,6 +116,9 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
   const [timeValue, setTimeValue] = useState('')
   const [zone, setZone] = useState<'utc' | 'local'>('utc')
   const [manifest, setManifest] = useState<string | null>(null)
+  const [manifestBasis, setManifestBasis] = useState<string | null>(null)
+  const [editingManifest, setEditingManifest] = useState(false)
+  const [replacementManifest, setReplacementManifest] = useState<string | null>(null)
   const restoreCap = useCNPGRestoreCapability(namespace)
 
   const evidence = useMemo(
@@ -127,17 +131,56 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
   const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const serverName = source && source.kind !== 'backup' ? source.serverName : undefined
 
-  if (manifest) {
+  if (context !== connection.context) {
+    return <ActionConfirmDialog
+      open
+      onClose={onClose}
+      onConfirm={() => {}}
+      title="Restore to a new cluster"
+      subject={{ kind: 'Cluster', namespace, name }}
+      context={context || undefined}
+      effect="This restore was prepared in a different Kubernetes context."
+      confirmLabel="Review manifest"
+      disabledReason="Close this dialog and start again in the current context."
+    />
+  }
+
+  if (replacementManifest !== null) {
+    return <ConfirmDialog
+      open
+      onClose={() => setReplacementManifest(null)}
+      onConfirm={() => {
+        setManifest(replacementManifest)
+        setManifestBasis(replacementManifest)
+        setReplacementManifest(null)
+        setEditingManifest(true)
+      }}
+      variant="warning"
+      showWarning={false}
+      title="Replace edited restore manifest?"
+      message="The setup changed. Rebuilding the manifest uses these setup choices and discards your YAML edits."
+      confirmLabel="Replace manifest"
+      cancelLabel="Keep editing setup"
+    />
+  }
+
+  if (editingManifest && manifest !== null) {
     return (
       <CreateResourceDialog
         open
         onClose={onClose}
+        onBack={(draft) => {
+          setManifest(draft)
+          setEditingManifest(false)
+        }}
+        backLabel="Back to restore setup"
         initialYaml={manifest}
         initialMode="create"
         lockMode
         title={`Restore into a new cluster ${name}`}
         onCreated={(created) => {
           onClose()
+          if (created.kind !== 'Cluster' || !isApiGroup(created.apiVersion, 'postgresql.cnpg.io')) return
           trackCNPGOperation({
             kind: CNPG_RESTORE_OPERATION,
             label: `Restore into ${created.name}`,
@@ -187,7 +230,14 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
         const target: RestoreTarget = effectiveKind === 'time' && targetIso ? { kind: 'time', iso: targetIso } : effectiveKind === 'backupEnd' ? { kind: 'backupEnd' } : { kind: 'latest' }
         const m = buildRestoreManifest({ sourceCluster, source, namespace, newName: name, target })
         // The apiserver reads YAML 1.1, where unquoted on/off/yes are booleans (postgresql parameters are strings).
-        setManifest(restoreManifestHeader(describeSource(source), serverName, sourceName ?? null) + yaml.stringify(m, { version: '1.1' }))
+        const nextManifest = restoreManifestHeader(describeSource(source), serverName, sourceName ?? null) + yaml.stringify(m, { version: '1.1' })
+        if (manifest !== null && manifest !== manifestBasis && nextManifest !== manifestBasis) {
+          setReplacementManifest(nextManifest)
+          return
+        }
+        if (nextManifest !== manifestBasis) setManifest(nextManifest)
+        setManifestBasis(nextManifest)
+        setEditingManifest(true)
       }}
       title="Restore to a new cluster"
       subject={{ kind: entry.kind === 'cluster' ? 'Cluster' : entry.kind === 'backup' ? 'Backup' : 'ObjectStore', namespace, name: entry.name }}
@@ -203,6 +253,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
       ]}
       disabledReason={disabledReason}
       incompleteReason={incompleteReason}
+      notes={manifest !== null && manifest !== manifestBasis ? ['Your YAML edits are retained. Changing the setup will ask before replacing them.'] : []}
     >
       {noSource ? (
         <p className="text-sm text-theme-text-secondary">

@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { isApiGroup } from '@skyhook-io/k8s-ui'
 import type { RenderDiagnoseAction } from '../../context/DiagnoseCustomization'
 import { CNPGClustersKindView } from './CNPGClustersKindView'
+import { CNPGCreateClusterDialog } from './CNPGCreateClusterDialog'
 import { CNPGClusterLogs } from './CNPGClusterLogs'
 import { CNPGDrawerTrailBack } from './CNPGDrawerTrail'
 import { CNPGInvestigationAction } from './CNPGClusterTabs'
@@ -55,8 +57,12 @@ export const cnpgHost = {
   },
 }
 
-function CNPGKindList({ onCreate, ...props }: KindListProps) {
-  return <CNPGClustersKindView {...props} onCreate={() => onCreate(cnpgHost.clusterKind)} />
+function CNPGKindList(props: KindListProps) {
+  const [creating, setCreating] = useState(false)
+  return <>
+    <CNPGClustersKindView {...props} onCreate={() => setCreating(true)} />
+    {creating && <CNPGCreateClusterDialog namespaces={props.namespaces} onClose={() => setCreating(false)} onCreated={props.onInspect} />}
+  </>
 }
 
 export const cnpgResourceHost: ResourceHost = {

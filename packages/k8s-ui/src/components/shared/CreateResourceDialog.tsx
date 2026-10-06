@@ -34,6 +34,9 @@ export interface ApplyResult {
 export interface CreateResourceDialogProps {
   open: boolean
   onClose: () => void
+  /** Return the current draft to a parent flow without closing that flow. */
+  onBack?: (yaml: string) => void
+  backLabel?: string
   initialYaml?: string
   title?: string
   onApply: (params: {
@@ -63,6 +66,8 @@ export interface CreateResourceDialogProps {
 export function CreateResourceDialog({
   open,
   onClose,
+  onBack,
+  backLabel = 'Back',
   initialYaml = '',
   title,
   onApply,
@@ -566,6 +571,19 @@ export function CreateResourceDialog({
             </div>
 
             <div className="flex items-center gap-2">
+              {onBack && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    retireDeferredImports()
+                    onBack(yamlRef.current)
+                  }}
+                  disabled={pending || importing !== null}
+                  className="btn-secondary rounded-lg px-3 py-1.5 text-xs"
+                >
+                  {backLabel}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleClose}
