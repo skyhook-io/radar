@@ -168,19 +168,15 @@ describe('TimelineList routine activity toggle', () => {
     expect(plain).not.toContain('more on this')
   })
 
-  it('opens a fold that holds the selected row, and counts each event\'s occurrences', () => {
+  it('counts each event\'s occurrences in the fold summary', () => {
     const crash = (id: string, minutesAgo: number, over: Partial<TimelineEvent>) =>
       at(id, { kind: 'Pod', name: 'api-1', timestamp: new Date(NOW - minutesAgo * 60_000).toISOString(), ...over })
     const rows = [
       crash('newest', 0, { eventType: 'update', healthState: 'unhealthy' }),
       crash('backoff', 1, { source: 'k8s_event', eventType: 'Warning', reason: 'BackOff', count: 43 }),
     ]
-    const html = renderToString(
-      <TimelineList events={rows} isLoading={false} selectedEventId="backoff" foldPerResource={() => true} />,
-    )
+    const html = renderToString(<TimelineList events={rows} isLoading={false} foldPerResource={() => true} />)
     expect(html).toContain('BackOff ×43')
-    expect(html).toContain('aria-expanded="true"')
-    expect(html).toContain('data-event-id="backoff"')
   })
 
   it('keeps the (i) explanation reachable by keyboard', () => {

@@ -568,7 +568,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
                         data-ts-to={new Date(aggItem.latest.timestamp).getTime()}
                       >
                         {renderActivityCard(aggItem.latest)}
-                        <FoldedProblems latest={aggItem.latest} others={aggItem.others} selectedEventId={selectedEventId} renderCard={renderActivityCard} />
+                        <FoldedProblems latest={aggItem.latest} others={aggItem.others} renderCard={renderActivityCard} />
                       </div>
                     ) : aggItem.type === 'aggregated' ? (
                       <div
@@ -857,19 +857,8 @@ function describeFolded(others: TimelineEvent[]): string {
 
 // The rest of a child resource's problems in one time group, behind one line
 // under its newest card, so a crash-looping pod doesn't fill the list.
-function FoldedProblems({ latest, others, selectedEventId, renderCard }: { latest: TimelineEvent; others: TimelineEvent[]; selectedEventId?: string | null; renderCard: (item: TimelineEvent) => ReactNode }) {
-  // A selection made elsewhere (the swimlane) opens the fold so it can land on a
-  // folded row, and a click always wins. A new selection inside the fold hands
-  // control back; it is applied during render, not in an effect, so the fold is
-  // already open on the render that scrolls to the selected row.
-  const selectedInside = !!selectedEventId && others.some((e) => e.id === selectedEventId)
-  const [userOpen, setOpen] = useState<boolean | null>(null)
-  const [seenSelection, setSeenSelection] = useState(selectedEventId)
-  if (seenSelection !== selectedEventId) {
-    setSeenSelection(selectedEventId)
-    if (selectedInside) setOpen(null)
-  }
-  const open = userOpen ?? selectedInside
+function FoldedProblems({ latest, others, renderCard }: { latest: TimelineEvent; others: TimelineEvent[]; renderCard: (item: TimelineEvent) => ReactNode }) {
+  const [open, setOpen] = useState(false)
   return (
     <div className="pl-3">
       <button
@@ -881,12 +870,12 @@ function FoldedProblems({ latest, others, selectedEventId, renderCard }: { lates
         <CollapseChevron open={open} inheritColor className="h-3.5 w-3.5" />
         {others.length} more on this {latest.kind}: {describeFolded(others)}
       </button>
-      <Collapse open={open}>
-        {open && <div className="mt-2 space-y-2 border-l-2 border-theme-border pl-3">{others.map((e) => (
+      <Collapse open={open} unmountOnExit>
+        <div className="mt-2 space-y-2 border-l-2 border-theme-border pl-3">{others.map((e) => (
           <div key={e.id} data-event-id={e.id} data-ts-from={new Date(e.timestamp).getTime()} data-ts-to={new Date(e.timestamp).getTime()}>
             {renderCard(e)}
           </div>
-        ))}</div>}
+        ))}</div>
       </Collapse>
     </div>
   )
