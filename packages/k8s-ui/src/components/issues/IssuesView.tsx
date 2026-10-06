@@ -211,7 +211,7 @@ export function IssueRow({
   const cluster = clusterLabel?.(issue);
   const affected = affectedSummary(issue.affected);
   const { headline } = issueMessageParts(issue);
-  const schedulingCause = compact && issue.kind === 'Pod' && issue.reason === 'Unschedulable' ? summarizeSchedulerMessage(issue.cause || issue.message || headline || '', { plain: true }) : undefined;
+  const schedulingCause = compact && issue.reason === 'Unschedulable' ? summarizeSchedulerMessage(issue.cause || issue.message || headline || '', { plain: true }) : undefined;
   const { panelId, buttonProps } = useDisclosure(open);
   const Container = as;
   const severity = normalizeIssueSeverity(issue.severity);

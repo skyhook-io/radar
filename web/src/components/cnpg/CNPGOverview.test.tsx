@@ -92,6 +92,33 @@ describe('CNPGOverview is the list of clusters', () => {
     expect(render(two, '', { onCreate: () => {} })).toContain('Create')
     expect(render(two)).not.toMatch(/>Create</)
   })
+
+  it('names missing operator readiness and separately shows observed zero ready instance Pods', () => {
+    const analytics = cluster('db', 'analytics')
+    delete (analytics.status as Partial<typeof analytics.status>).readyInstances
+    const resp = response([analytics])
+    resp.coverage.pods = { state: 'full' }
+    resp.objects.pods = []
+    const html = render(resp)
+    expect(html).toContain('Not reported by the operator')
+    expect(html).toContain('0 of 1 instance Pods ready')
+    expect(html).not.toContain('–/1')
+  })
+
+  it('does not turn unread Pod readiness into an observed zero', () => {
+    const analytics = cluster('db', 'analytics')
+    delete (analytics.status as Partial<typeof analytics.status>).readyInstances
+    const resp = response([analytics])
+    resp.coverage.pods = { state: 'denied' }
+    const html = render(resp)
+    expect(html).toContain('Not reported by the operator')
+    expect(html).not.toContain('instance Pods ready')
+    expect(html).not.toContain('–/1')
+  })
+
+  it('keeps reported operator readiness as a ratio', () => {
+    expect(render(response([cluster('db', 'payments')]))).toContain('1/1')
+  })
 })
 
 it('qualifies heading, attention filter and category counts on both fleet routes', () => {

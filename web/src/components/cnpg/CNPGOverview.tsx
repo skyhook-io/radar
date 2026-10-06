@@ -82,6 +82,7 @@ function ReadyCell({ row }: { row: CNPGFleetRow }) {
       ) : (
         r.text
       )}
+      {r.podText && <span className="block text-xs text-theme-text-secondary">{r.podText}</span>}
       <InstancePills row={row} />
     </>
   )

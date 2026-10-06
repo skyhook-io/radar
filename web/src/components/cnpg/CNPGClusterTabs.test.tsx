@@ -1,11 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { expect, it, vi } from 'vitest'
+import type { CNPGDimension } from '@skyhook-io/k8s-ui'
 import { CNPGBackupsTab, CNPGStorageTab } from './CNPGClusterTabs'
-const state = vi.hoisted(() => ({ coverage: 'full', primary: {} as any, storageProps: {} as any, schedules: [] as any[] }))
+const state = vi.hoisted(() => ({ coverage: 'full', primary: {} as any, storageProps: {} as any, schedules: [] as any[], dimensions: [] as CNPGDimension[] }))
 const cluster = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'pg', namespace: 'db' }, status: { currentPrimary: 'pg-1' } as any, spec: {} as any }
 vi.mock('../../api/cnpg', () => ({ useCNPGRuntime: () => ({ data: { permission: { proxy: 'denied' }, instances: [state.primary] } }) }))
-vi.mock('./useCNPGClusterAssessment', () => ({ useCNPGClusterAssessment: () => ({ dimensions: [], row: { cluster, problems: [], protection: { walArchiving: { text: 'Not archived: no destination configured', tone: 'neutral' } } }, query: { data: { coverage: { backups: { state: state.coverage } }, objects: { backups: [], clusters: [cluster] } } }, runtime: {} }) }))
+vi.mock('./useCNPGClusterAssessment', () => ({ useCNPGClusterAssessment: () => ({ dimensions: state.dimensions, row: { cluster, problems: [], protection: { walArchiving: { text: 'Not archived: no destination configured', tone: 'neutral' } } }, query: { data: { coverage: { backups: { state: state.coverage } }, objects: { backups: [], clusters: [cluster] } } }, runtime: {} }) }))
 vi.mock('./useCNPGSidebarWorkspace', () => ({ useCNPGFleet: () => ({ query: { data: { installed: true, coverage: { backups: { state: state.coverage } }, objects: { backups: [], scheduledBackups: state.schedules } } }, fleet: { rows: [{ name: 'pg', namespace: 'db', cluster }] } }) }))
 vi.mock('../../api/cnpg-recovery', () => ({ useCNPGRestoreCapability: () => ({ data: { allowed: true } }) }))
 vi.mock('./CNPGProtection', () => ({ CNPGProtection: () => null }))
@@ -39,7 +40,7 @@ it('offers the destination setup path and Cluster YAML without claiming it is co
   expect(html).toContain('CloudNativePG backup docs')
   expect(html).toContain('Cluster YAML →')
   expect(html).toContain('Configure spec.backup.barmanObjectStore for pg-nightly')
-  expect(html).toContain('pg-nightly cannot run: pg has no backup destination.')
+  expect(html).not.toContain('pg-nightly cannot run: pg has no backup destination.')
   expect(html).toContain('Other backup methods')
   expect(html).toContain('inline-flex whitespace-nowrap')
   expect(html).toContain('aria-expanded="false"')
@@ -58,6 +59,20 @@ it('explains a schedule method mismatch without asking to configure an existing 
   expect(html).not.toContain('configure a destination with the barman-cloud plugin')
   state.schedules = []
   delete cluster.spec.plugins
+})
+
+it('states the schedule blocker once in the verdict, then starts setup with the repair', () => {
+  state.schedules = [{ metadata: { name: 'pg-nightly', namespace: 'db' }, spec: { cluster: { name: 'pg' } } }]
+  state.dimensions = [{ id: 'protection', label: 'Backups', tone: 'degraded', text: 'Backup schedule pg-nightly cannot run: no backup destination', source: 'ScheduledBackup method against its target Cluster spec' }]
+  const html = renderToStaticMarkup(<MemoryRouter><CNPGBackupsTab namespace="db" name="pg" onInspect={() => {}} onOpenYaml={() => {}} /></MemoryRouter>)
+  expect(html.match(/cannot run:/g)).toHaveLength(1)
+  expect(html).toContain(state.dimensions[0].text)
+  expect(html).toMatch(/<div class="px-4 pt-2 text-sm text-theme-text-secondary"><p>Configure spec.backup.barmanObjectStore for pg-nightly\./)
+  expect(html).toContain('href="https://cloudnative-pg.io/docs/devel/backup/"')
+  expect(html).toContain('Cluster YAML →')
+  expect(html).toContain('Other backup methods')
+  expect(html).toContain('aria-expanded="false"')
+  state.schedules = []; state.dimensions = []
 })
 
 it('does not invent a missing destination for an enabled third-party plugin', () => {

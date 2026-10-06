@@ -603,7 +603,8 @@ export function ClusterActionDialog({
           typed: fencesPrimary,
           disruptive: fencesPrimary,
           params: { instances: fenceSel === '*' ? '*' : [fenceSel] },
-          invalid: fencingMalformed ? 'The cnpg.io/fencedInstances annotation is not valid JSON; fix it in YAML first.' : !fenceSel ? 'Choose an instance to fence.' : undefined,
+          invalid: fencingMalformed ? 'The cnpg.io/fencedInstances annotation is not valid JSON; fix it in YAML first.' : undefined,
+          incomplete: !fenceSel ? 'Choose an instance to fence.' : undefined,
           success: () => 'Fencing requested.',
         }
       }

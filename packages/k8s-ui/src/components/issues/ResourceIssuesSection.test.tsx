@@ -121,3 +121,16 @@ it('wraps a compact Pod scheduling cause separately and retains the full message
   const regular = renderToString(<IssueRow issue={pod} open={false} onToggle={() => {}} />)
   expect(regular).not.toContain('both nodes have reached their Pod limit')
 })
+
+it.each(['Cluster', 'Deployment'])('wraps compact scheduling causes aggregated under %s', (kind) => {
+  const raw = '2 node(s) insufficient pods (0/2 nodes available)'
+  const aggregated: Issue = { ...issue, kind, reason: 'Unschedulable', cause: raw, message: raw }
+  const collapsed = renderToString(<IssueRow issue={aggregated} compact open={false} onToggle={() => {}} />)
+  expect(collapsed).toContain('<div class="break-words text-xs text-theme-text-secondary">both nodes have reached their Pod limit</div>')
+  expect(collapsed).not.toContain(raw)
+  const expanded = renderToString(<IssueRow issue={aggregated} compact open onToggle={() => {}} />)
+  expect(expanded).toContain(raw)
+  const regular = renderToString(<IssueRow issue={aggregated} open={false} onToggle={() => {}} />)
+  expect(regular).toContain('Unschedulable')
+  expect(regular).not.toContain('both nodes have reached their Pod limit')
+})

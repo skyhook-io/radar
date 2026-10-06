@@ -143,7 +143,6 @@ export function CNPGBackupsTab({
           <CNPGTabVerdict namespace={namespace} name={name} id="protection" className="px-4 pt-4" />
           {(missingDestination || blockedSchedules.length > 0) && (
             <div className="px-4 pt-2 text-sm text-theme-text-secondary">
-              {blockedSchedules.length > 0 && <p>{blockedSchedules.map((s) => s.metadata.name).join(', ')} cannot run: {missingDestination ? `${name} has no backup destination.` : 'the destination does not match the schedule’s method.'}</p>}
               <p>
                 {blockedSchedules.length > 0 ? <>
                   Configure {blockedSchedules.some((s) => (s.spec?.method || 'barmanObjectStore') === 'barmanObjectStore') ? 'spec.backup.barmanObjectStore' : blockedSchedules.some((s) => s.spec?.method === 'volumeSnapshot') ? 'spec.backup.volumeSnapshot' : 'the plugin and its ObjectStore'} for {blockedSchedules.map((s) => s.metadata.name).join(', ')}.

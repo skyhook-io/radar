@@ -421,6 +421,16 @@ describe('buildCNPGFleet', () => {
     expect(denied.problems).toEqual([])
   })
 
+  it('separates missing operator readiness from an observed Pod count', () => {
+    const instances = { ready: null, desired: 1 }
+    expect(cnpgReadyInstances({ instances, podReadiness: { ready: 0, total: 0 } })).toEqual({
+      text: 'Not reported by the operator', podText: '0 of 1 instance Pods ready',
+    })
+    expect(cnpgReadyInstances({ instances })).toEqual({ text: 'Not reported by the operator', podText: undefined })
+    expect(cnpgReadyInstances({ instances: { ready: null, desired: null }, podReadiness: { ready: 1, total: 1 } }).podText).toBe('1 instance Pod ready')
+    expect(cnpgReadyInstances({ instances: { ready: 0, desired: 1 } })).toEqual({ text: '0/1' })
+  })
+
   it('names both primaries when status and the role label disagree', () => {
     const row = buildCNPGFleet(
       resp({

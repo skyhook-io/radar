@@ -863,7 +863,17 @@ function problemsFor(
  * The ready count to show for a cluster: CNPG's status count, or the Pods'
  * own count when the status claims more than the Pods show.
  */
-export function cnpgReadyInstances(row: Pick<CNPGFleetRow, 'instances' | 'podReadiness' | 'readinessContradicted'>): { text: string; tone?: HealthLevel; note?: string } {
+export function cnpgReadyInstances(row: Pick<CNPGFleetRow, 'instances' | 'podReadiness' | 'readinessContradicted'>): { text: string; podText?: string; tone?: HealthLevel; note?: string } {
+  if (row.instances.ready === null) {
+    return {
+      text: 'Not reported by the operator',
+      podText: row.podReadiness
+        ? row.instances.desired !== null
+          ? `${row.podReadiness.ready} of ${row.instances.desired} instance Pods ready`
+          : `${row.podReadiness.ready} instance Pod${row.podReadiness.ready === 1 ? '' : 's'} ready`
+        : undefined,
+    }
+  }
   const desired = row.instances.desired ?? '–'
   if (row.readinessContradicted && row.podReadiness) {
     return {

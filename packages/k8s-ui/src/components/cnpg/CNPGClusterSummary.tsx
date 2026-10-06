@@ -17,7 +17,7 @@ import { FoldSection, SectionHeading } from '../ui/FoldSection'
 
 function ReadyCount({ row }: { row: CNPGFleetRow }) {
   const r = cnpgReadyInstances(row)
-  if (row.instances.ready === null) return <>Not reported by the operator{row.podReadiness && <span className="block text-xs text-theme-text-secondary">{row.podReadiness.ready}{row.instances.desired !== null ? ` of ${row.instances.desired}` : ''} instance Pods ready</span>}</>
+  if (row.instances.ready === null) return <>{r.text}{r.podText && <span className="block text-xs text-theme-text-secondary">{r.podText}</span>}</>
   if (!r.note) return <>{r.text} ready</>
   return (
     <Tooltip content={r.note} position="top">
