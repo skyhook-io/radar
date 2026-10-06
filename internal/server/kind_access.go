@@ -13,68 +13,12 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
-// Coverage states for one kind a workspace lists.
-const (
-	kindCoverageFull    = "full"
-	kindCoveragePartial = "partial"
-	kindCoverageDenied  = "denied"
-	// kindCoverageUncached: the caller may list the kind, but Radar's informer
-	// holds none of the namespaces in scope, so nothing was read.
-	kindCoverageUncached     = "uncached"
-	kindCoverageNotInstalled = "notInstalled"
-	kindCoverageSyncing      = "syncing"
-	kindCoverageError        = "error"
-)
-
-// KindCoverage states how much of one kind the caller could see.
-// DeniedNamespaces (the caller may not list there) and UncachedNamespaces
-// (the caller may, but Radar's informer does not hold them) list only
-// namespaces already in the caller's scope, so either may be omitted on a
-// partial state; AllowedNamespaces is always set on a partial state and is
-// the authority for which namespaces were read.
-type KindCoverage struct {
-	State              string   `json:"state"`
-	DeniedNamespaces   []string `json:"deniedNamespaces,omitempty"`
-	UncachedNamespaces []string `json:"uncachedNamespaces,omitempty"`
-	AllowedNamespaces  []string `json:"allowedNamespaces,omitempty"`
-}
-
-// kindAccess is the resolved read scope for one kind. all means every
-// namespace in the request's scope (or the cluster-scoped kind itself).
-// denied and uncached name the in-scope namespaces left unread, under the
-// disclosure rule of listScope.
-type kindAccess struct {
-	state      string
-	all        bool
-	namespaces map[string]bool
-	denied     []string
-	uncached   []string
-}
-
-func (a kindAccess) covers(namespace string) bool {
-	if a.state != kindCoverageFull && a.state != kindCoveragePartial {
-		return false
-	}
-	return a.all || a.namespaces[namespace]
-}
-
-func (a kindAccess) coverage() KindCoverage {
-	cov := KindCoverage{State: a.state, DeniedNamespaces: a.denied, UncachedNamespaces: a.uncached}
-	if a.state == kindCoveragePartial {
-		cov.AllowedNamespaces = make([]string, 0, len(a.namespaces))
-		for ns := range a.namespaces {
-			cov.AllowedNamespaces = append(cov.AllowedNamespaces, ns)
-		}
-		sort.Strings(cov.AllowedNamespaces)
-	}
-	return cov
-}
-
-// listScope resolves where the caller may list one namespaced resource: nil
+// listScope resolves where the caller may list one namespaced Resource: nil
 // allowed means the whole request scope.
 //
 // denied names namespaces only when the candidate set came from the caller —
@@ -83,7 +27,11 @@ func (a kindAccess) coverage() KindCoverage {
 // would disclose namespaces the caller was never shown; partial then carries
 // the fact without the names.
 func (s *Server) listScope(r *http.Request, namespaces []string, group, resource string) (allowed, denied []string, partial, any bool) {
-	if noNamespaceAccess(namespaces) {
+	return s.listScopeWithCandidates(r, namespaces, group, resource, allNamespaceNames)
+}
+
+func (s *Server) listScopeWithCandidates(r *http.Request, namespaces []string, group, resource string, knownNamespaces func() []string) (allowed, denied []string, partial, any bool) {
+	if integration.NoNamespaceAccess(namespaces) {
 		return []string{}, nil, false, false
 	}
 	if s.canRead(r, group, resource, "", "list") {
@@ -91,7 +39,7 @@ func (s *Server) listScope(r *http.Request, namespaces []string, group, resource
 	}
 	candidates := namespaces
 	if candidates == nil {
-		candidates = allNamespaceNames()
+		candidates = knownNamespaces()
 	}
 	if len(candidates) == 0 {
 		return []string{}, nil, false, false
@@ -109,35 +57,25 @@ func (s *Server) listScope(r *http.Request, namespaces []string, group, resource
 	return allowed, denied, partial, len(allowed) > 0
 }
 
-func accessFromScope(allowed []string, partial bool) kindAccess {
-	acc := kindAccess{state: kindCoverageFull, all: allowed == nil}
-	if partial {
-		acc.state = kindCoveragePartial
-	}
-	if allowed != nil {
-		acc.namespaces = make(map[string]bool, len(allowed))
-		for _, ns := range allowed {
-			acc.namespaces[ns] = true
-		}
-	}
-	return acc
-}
-
 // typedKindScope resolves where the caller may list a typed kind and which of
 // those namespaces Radar's informer actually holds. The informer may itself be
 // namespace-scoped when Radar's own identity cannot list the kind
 // cluster-wide; what it does not hold is unread, not empty, and not denied.
 // read is nil for "every namespace".
-func (s *Server) typedKindScope(r *http.Request, cache informerScope, namespaces []string, group, resource string) (acc kindAccess, read []string) {
-	allowed, denied, partial, ok := s.listScope(r, namespaces, group, resource)
+func (s *Server) typedKindScope(r *http.Request, cache integration.InformerScope, namespaces []string, group, resource string) (acc integration.KindAccess, read []string) {
+	return s.typedKindScopeWithCandidates(r, cache, namespaces, group, resource, allNamespaceNames)
+}
+
+func (s *Server) typedKindScopeWithCandidates(r *http.Request, cache integration.InformerScope, namespaces []string, group, resource string, candidates func() []string) (acc integration.KindAccess, read []string) {
+	allowed, denied, partial, ok := s.listScopeWithCandidates(r, namespaces, group, resource, candidates)
 	if !ok {
-		return kindAccess{state: kindCoverageDenied}, []string{}
+		return integration.KindAccess{State: integration.KindCoverageDenied}, []string{}
 	}
-	within := namespacesWithinCache(cache, resource, allowed)
+	within := integration.NamespacesWithinCache(cache, resource, allowed)
 	var uncached []string
 	if allowed != nil {
 		for _, ns := range allowed {
-			if slices.Contains(within.namespaces, ns) {
+			if slices.Contains(within.Namespaces, ns) {
 				continue
 			}
 			partial = true
@@ -147,21 +85,12 @@ func (s *Server) typedKindScope(r *http.Request, cache informerScope, namespaces
 		}
 		sort.Strings(uncached)
 	}
-	if within.unavailable {
-		return kindAccess{state: kindCoverageUncached, denied: denied, uncached: uncached}, []string{}
+	if within.Unavailable {
+		return integration.KindAccess{State: integration.KindCoverageUncached, Denied: denied, Uncached: uncached}, []string{}
 	}
-	acc = accessFromScope(within.namespaces, partial || within.partial)
-	acc.denied, acc.uncached = denied, uncached
-	return acc, within.namespaces
-}
-
-// workspaceKind is one kind a workspace lists from Radar's dynamic cache.
-type workspaceKind struct {
-	key           string
-	group         string
-	kind          string
-	resource      string
-	clusterScoped bool
+	acc = integration.AccessFromScope(within.Namespaces, partial || within.Partial)
+	acc.Denied, acc.Uncached = denied, uncached
+	return acc, within.Namespaces
 }
 
 // readWorkspaceKind authorizes and lists one kind, keeping only objects of
@@ -170,24 +99,24 @@ type workspaceKind struct {
 // cluster-scope list. Radar's own watch scope counts as well, as for typed
 // kinds: where its identity watches the kind namespace by namespace, what it
 // does not hold is unread (uncached), never empty and never syncing forever.
-func (s *Server) readWorkspaceKind(r *http.Request, cache *k8s.ResourceCache, k workspaceKind, namespaces, groups []string, budget *syncBudget) (kindAccess, []*unstructured.Unstructured) {
+func (s *Server) readWorkspaceKind(r *http.Request, cache *k8s.ResourceCache, k integration.WorkspaceKind, namespaces, groups []string, budget *syncBudget) (integration.KindAccess, []*unstructured.Unstructured) {
 	ctx := r.Context()
-	if k.clusterScoped {
-		if !s.canRead(r, k.group, k.resource, "", "list") {
-			return kindAccess{state: kindCoverageDenied}, nil
+	if k.ClusterScoped {
+		if !s.canRead(r, k.Group, k.Resource, "", "list") {
+			return integration.KindAccess{State: integration.KindCoverageDenied}, nil
 		}
 		list, err := listKindInGroups(ctx, cache, k, nil, groups, budget)
 		if err != nil {
 			return kindAccessFromListError(k, err), nil
 		}
-		return kindAccess{state: kindCoverageFull, all: true}, list
+		return integration.KindAccess{State: integration.KindCoverageFull, All: true}, list
 	}
-	allowed, denied, partial, ok := s.listScope(r, namespaces, k.group, k.resource)
+	allowed, denied, partial, ok := s.listScopeWithCandidates(r, namespaces, k.Group, k.Resource, func() []string { return namespaceNamesInCache(cache) })
 	if !ok {
-		return kindAccess{state: kindCoverageDenied}, nil
+		return integration.KindAccess{State: integration.KindCoverageDenied}, nil
 	}
-	acc := accessFromScope(allowed, partial)
-	acc.denied = denied
+	acc := integration.AccessFromScope(allowed, partial)
+	acc.Denied = denied
 	if allowed == nil {
 		return readWorkspaceKindEverywhere(ctx, cache, k, groups, acc, budget)
 	}
@@ -199,12 +128,22 @@ func (s *Server) readWorkspaceKind(r *http.Request, cache *k8s.ResourceCache, k 
 // apiserver, as well as waiting for it to sync. Once it is spent, or the
 // request is cancelled, a namespace that has not synced is unread.
 type syncBudget struct {
-	ctx      context.Context
-	deadline time.Time
+	ctx          context.Context
+	deadline     time.Time
+	bound        bool
+	discovery    *k8s.ResourceDiscovery
+	dynamicCache *k8s.DynamicResourceCache
 }
 
 func newSyncBudget(ctx context.Context) *syncBudget {
 	return &syncBudget{ctx: ctx, deadline: time.Now().Add(dynamicSyncWait)}
+}
+
+func (b *syncBudget) dynamicDependencies() (*k8s.ResourceDiscovery, *k8s.DynamicResourceCache) {
+	if b != nil && b.bound {
+		return b.discovery, b.dynamicCache
+	}
+	return k8s.GetResourceDiscovery(), k8s.GetDynamicResourceCache()
 }
 
 // listBlocking is ListBlocking within the budget; a nil budget waits
@@ -218,7 +157,7 @@ func (b *syncBudget) listBlocking(dc *k8s.DynamicResourceCache, gvr schema.Group
 		return dc.ListBlocking(gvr, namespace, 0)
 	}
 	if b.ctx.Err() != nil {
-		return nil, errDynamicNotSynced
+		return nil, integration.ErrDynamicNotSynced
 	}
 	wait := max(0, time.Until(b.deadline))
 	type result struct {
@@ -238,7 +177,7 @@ func (b *syncBudget) listBlocking(dc *k8s.DynamicResourceCache, gvr schema.Group
 	case <-timer.C:
 	case <-b.ctx.Done():
 	}
-	return nil, errDynamicNotSynced
+	return nil, integration.ErrDynamicNotSynced
 }
 
 // readWorkspaceKindEverywhere reads a kind in every namespace. When Radar's
@@ -246,21 +185,21 @@ func (b *syncBudget) listBlocking(dc *k8s.DynamicResourceCache, gvr schema.Group
 // syncs (or is refused outright); each watched namespace that has synced is
 // read instead and the rest stays unread, unnamed (the caller did not name the
 // scope).
-func readWorkspaceKindEverywhere(ctx context.Context, cache *k8s.ResourceCache, k workspaceKind, groups []string, acc kindAccess, budget *syncBudget) (kindAccess, []*unstructured.Unstructured) {
+func readWorkspaceKindEverywhere(ctx context.Context, cache *k8s.ResourceCache, k integration.WorkspaceKind, groups []string, acc integration.KindAccess, budget *syncBudget) (integration.KindAccess, []*unstructured.Unstructured) {
 	list, err := listKindInGroups(ctx, cache, k, nil, groups, budget)
 	if err == nil {
 		return acc, list
 	}
 	radarDenied := apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err)
-	if !errors.Is(err, errDynamicNotSynced) && !radarDenied {
+	if !errors.Is(err, integration.ErrDynamicNotSynced) && !radarDenied {
 		return kindAccessFromListError(k, err), nil
 	}
-	dc, gvr, watched, ok := dynamicNamespaceWatches(k)
+	dc, gvr, watched, ok := dynamicNamespaceWatches(k, budget)
 	if !ok {
 		if radarDenied {
-			return kindAccess{state: kindCoverageUncached}, nil
+			return integration.KindAccess{State: integration.KindCoverageUncached}, nil
 		}
-		return kindAccess{state: kindCoverageSyncing}, nil
+		return integration.KindAccess{State: integration.KindCoverageSyncing}, nil
 	}
 	read := map[string]bool{}
 	var out []*unstructured.Unstructured
@@ -268,24 +207,24 @@ func readWorkspaceKindEverywhere(ctx context.Context, cache *k8s.ResourceCache, 
 		if !dc.IsNamespaceSynced(gvr, ns) {
 			continue
 		}
-		items, err := cache.ListDynamicWithGroup(ctx, k.kind, ns, k.group)
+		items, err := listDynamicSyncedWithin(ctx, cache, k.Kind, k.Group, ns, budget)
 		if err != nil {
 			continue
 		}
 		read[ns] = true
-		out = append(out, keepGroups(items, groups)...)
+		out = append(out, integration.KeepGroups(items, groups)...)
 	}
 	if len(read) == 0 {
-		return kindAccess{state: kindCoverageSyncing}, nil
+		return integration.KindAccess{State: integration.KindCoverageSyncing}, nil
 	}
-	return kindAccess{state: kindCoveragePartial, namespaces: read, denied: acc.denied}, out
+	return integration.KindAccess{State: integration.KindCoveragePartial, Namespaces: read, Denied: acc.Denied}, out
 }
 
 // readWorkspaceKindIn reads each allowed namespace on its own, which starts
 // that namespace's watch when Radar watches the kind namespace by namespace. A
 // namespace Radar's identity cannot watch, or that has not synced in time, is
 // unread: uncached, named only when the caller named the scope.
-func readWorkspaceKindIn(ctx context.Context, cache *k8s.ResourceCache, k workspaceKind, groups []string, acc kindAccess, allowed []string, callerScoped bool, budget *syncBudget) (kindAccess, []*unstructured.Unstructured) {
+func readWorkspaceKindIn(ctx context.Context, cache *k8s.ResourceCache, k integration.WorkspaceKind, groups []string, acc integration.KindAccess, allowed []string, callerScoped bool, budget *syncBudget) (integration.KindAccess, []*unstructured.Unstructured) {
 	read := map[string]bool{}
 	var out []*unstructured.Unstructured
 	var unread []string
@@ -296,7 +235,7 @@ func readWorkspaceKindIn(ctx context.Context, cache *k8s.ResourceCache, k worksp
 		case err == nil:
 			read[ns] = true
 			out = append(out, items...)
-		case errors.Is(err, errDynamicNotSynced):
+		case errors.Is(err, integration.ErrDynamicNotSynced):
 			syncing = true
 			unread = append(unread, ns)
 		case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
@@ -312,41 +251,40 @@ func readWorkspaceKindIn(ctx context.Context, cache *k8s.ResourceCache, k worksp
 	}
 	if len(read) == 0 {
 		if syncing {
-			return kindAccess{state: kindCoverageSyncing}, nil
+			return integration.KindAccess{State: integration.KindCoverageSyncing}, nil
 		}
-		return kindAccess{state: kindCoverageUncached, denied: acc.denied, uncached: named}, nil
+		return integration.KindAccess{State: integration.KindCoverageUncached, Denied: acc.Denied, Uncached: named}, nil
 	}
-	acc.all, acc.namespaces = false, read
+	acc.All, acc.Namespaces = false, read
 	if len(unread) > 0 {
-		acc.state, acc.uncached = kindCoveragePartial, named
+		acc.State, acc.Uncached = integration.KindCoveragePartial, named
 	}
 	return acc, out
 }
 
-func kindAccessFromListError(k workspaceKind, err error) kindAccess {
+func kindAccessFromListError(k integration.WorkspaceKind, err error) integration.KindAccess {
 	switch {
 	case errors.Is(err, k8s.ErrUnknownDynamicKind):
-		return kindAccess{state: kindCoverageNotInstalled}
-	case errors.Is(err, errDynamicNotSynced):
-		return kindAccess{state: kindCoverageSyncing}
+		return integration.KindAccess{State: integration.KindCoverageNotInstalled}
+	case errors.Is(err, integration.ErrDynamicNotSynced):
+		return integration.KindAccess{State: integration.KindCoverageSyncing}
 	case apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err):
 		// Radar's own identity may not watch it; the caller's access was checked first.
-		return kindAccess{state: kindCoverageUncached}
+		return integration.KindAccess{State: integration.KindCoverageUncached}
 	default:
-		log.Printf("[workspace] Failed to list %s.%s: %v", k.kind, k.group, err)
-		return kindAccess{state: kindCoverageError}
+		log.Printf("[workspace] Failed to list %s.%s: %v", k.Kind, k.Group, err)
+		return integration.KindAccess{State: integration.KindCoverageError}
 	}
 }
 
 // dynamicNamespaceWatches returns the namespaces Radar's identity watches k in
 // when it holds no cluster-wide informer for it.
-func dynamicNamespaceWatches(k workspaceKind) (*k8s.DynamicResourceCache, schema.GroupVersionResource, []string, bool) {
-	discovery := k8s.GetResourceDiscovery()
-	dc := k8s.GetDynamicResourceCache()
+func dynamicNamespaceWatches(k integration.WorkspaceKind, budget *syncBudget) (*k8s.DynamicResourceCache, schema.GroupVersionResource, []string, bool) {
+	discovery, dc := budget.dynamicDependencies()
 	if discovery == nil || dc == nil {
 		return nil, schema.GroupVersionResource{}, nil, false
 	}
-	gvr, found := discovery.GetGVRWithGroup(k.kind, k.group)
+	gvr, found := discovery.GetGVRWithGroup(k.Kind, k.Group)
 	if !found {
 		return nil, schema.GroupVersionResource{}, nil, false
 	}
@@ -359,35 +297,21 @@ func dynamicNamespaceWatches(k workspaceKind) (*k8s.DynamicResourceCache, schema
 
 // listKindInGroups lists k in namespaces (nil = all), keeping only objects of
 // groups, waiting for sync no longer than budget allows.
-func listKindInGroups(ctx context.Context, cache *k8s.ResourceCache, k workspaceKind, namespaces, groups []string, budget *syncBudget) ([]*unstructured.Unstructured, error) {
+func listKindInGroups(ctx context.Context, cache *k8s.ResourceCache, k integration.WorkspaceKind, namespaces, groups []string, budget *syncBudget) ([]*unstructured.Unstructured, error) {
 	if namespaces == nil {
-		list, err := listDynamicSyncedWithin(ctx, cache, k.kind, k.group, "", budget)
+		list, err := listDynamicSyncedWithin(ctx, cache, k.Kind, k.Group, "", budget)
 		if err != nil {
 			return nil, err
 		}
-		return keepGroups(list, groups), nil
+		return integration.KeepGroups(list, groups), nil
 	}
 	var out []*unstructured.Unstructured
 	for _, ns := range namespaces {
-		list, err := listDynamicSyncedWithin(ctx, cache, k.kind, k.group, ns, budget)
+		list, err := listDynamicSyncedWithin(ctx, cache, k.Kind, k.Group, ns, budget)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, keepGroups(list, groups)...)
+		out = append(out, integration.KeepGroups(list, groups)...)
 	}
 	return out, nil
-}
-
-// keepGroups drops anything whose apiVersion is not one of groups, so an
-// object of another group can never ride along on a kind-name match (a Velero
-// Backup on a CloudNativePG Backup, a CAPI Cluster on a CNPG Cluster).
-func keepGroups(items []*unstructured.Unstructured, groups []string) []*unstructured.Unstructured {
-	out := items[:0:0]
-	for _, u := range items {
-		if u == nil || !slices.Contains(groups, u.GroupVersionKind().Group) {
-			continue
-		}
-		out = append(out, u)
-	}
-	return out
 }

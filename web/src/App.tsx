@@ -23,7 +23,6 @@ import { HelmView } from './components/helm/HelmView'
 import { HelmCompareRoute } from './components/helm/HelmCompareRoute'
 import { TrafficView } from './components/traffic/TrafficView'
 import { CostView } from './components/cost/CostView'
-import { CapacityView } from './components/capacity/CapacityView'
 import { AuditView } from './components/audit/AuditView'
 import { IssuesPane } from './components/issues/IssuesPane'
 import { GitOpsView } from './components/gitops/GitOpsView'
@@ -38,9 +37,9 @@ import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
-import { CNPGView } from './components/cnpg/CNPGView'
-import { cnpgHost, useCNPGHostSupport } from './components/cnpg/host'
-import { CNPG_SCREENS, isCNPGClusterKind, parseCNPGRoute } from './components/cnpg/routes'
+import { resourceExpandedPath, resourceKindListTitle, useResourceHostFeatures } from './integrations/resourceHosts'
+import { workspaceContextSwitchSearch, workspaceForPath, workspaceForView, workspaceLabels } from './integrations/workspaceRoutes'
+import { WorkspaceScreen } from './integrations/workspaceScreens'
 import { currentPageLabel } from './utils/page-links'
 import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
@@ -143,8 +142,8 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'helm') return 'helm'
   if (path === 'traffic') return 'traffic'
   if (path === 'cost') return 'cost'
-  if (path === 'capacity') return 'capacity'
-  if (path === 'cnpg') return 'cnpg'
+  const workspace = workspaceForPath(pathname)
+  if (workspace) return workspace.id
   if (path === 'workload') return 'workload'
   if (path === 'checks' || path === 'audit') return 'checks'  // /audit = legacy → checks
   if (path === 'gitops') return 'gitops'
@@ -169,13 +168,14 @@ function usageView(pathname: string, view: ExtendedMainView, upgrade: boolean): 
 
 // The screen a crash is counted under. Fixed names, because release builds
 // shorten component names and the component stack can't say which screen.
-const CRASH_LABELS: Record<ExtendedMainView, string> = {
+const CRASH_LABELS = {
   home: 'Home', topology: 'Topology', resources: 'Resources', timeline: 'Timeline',
   issues: 'Issues', helm: 'Helm', helmCompare: 'HelmCompare', traffic: 'Traffic',
-  cost: 'Cost', capacity: 'Capacity', cnpg: 'CloudNativePG', checks: 'Checks', gitops: 'GitOps',
+  cost: 'Cost', checks: 'Checks', gitops: 'GitOps',
   applications: 'Applications', workload: 'Workload', compare: 'Compare',
   investigations: 'Investigations',
-}
+  ...workspaceLabels,
+} satisfies Record<ExtendedMainView, string>
 
 // The namespace scope filter is meaningful only on namespaced surfaces. On
 // cluster-scoped views it does nothing, so we disable it with an explanation
@@ -205,12 +205,8 @@ function namespaceFilterDisabled(
       tooltip: 'Cost is reported per namespace across the whole cluster — the namespace filter doesn’t apply here.',
     }
   }
-  if (view === 'capacity') {
-    return {
-      disabled: true,
-      tooltip: 'Capacity is reported across the cluster — the namespace filter doesn’t apply here.',
-    }
-  }
+  const workspace = workspaceForView(view)
+  if (workspace?.namespaceScope === 'cluster') return { disabled: true, tooltip: workspace.namespaceFilterTooltip }
   if (view === 'checks' && pathname.startsWith('/checks/upgrade')) {
     return {
       disabled: true,
@@ -265,8 +261,8 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
     const resourceName = decode(pathSegments[1] ?? '')
     if (!resourceName) return 'Resources'
     const group = new URLSearchParams(search).get('apiGroup') || ''
-    // The same list as the workspace's Clusters view, and not Cluster API's.
-    if (isCNPGClusterKind({ name: resourceName, group })) return 'CloudNativePG Clusters'
+    const hostTitle = resourceKindListTitle({ name: resourceName, group })
+    if (hostTitle) return hostTitle
     const match = findAPIResourceForRoute(apiResources, resourceName, group)
     return pluralKindTitle(match?.kind ?? pluralToKind(resourceName), resourceName)
   }
@@ -285,18 +281,8 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
   if (view === 'checks' && pathSegments[1] === 'upgrade') return 'Upgrade impact'
 
   // The landing view reads "Overview" rather than "Home" in the tab.
-  if (view === 'capacity') {
-    if (pathSegments[1] === 'pools') return decode(pathSegments[2] ?? '') || 'Capacity'
-    if (pathSegments[1] === 'demand') return 'Capacity Demand'
-    if (pathSegments[1] === 'activity') return 'Capacity Activity'
-  }
-
-  if (view === 'cnpg') {
-    const route = parseCNPGRoute(pathname)
-    if (route.detail) return route.detail.name
-    const screen = CNPG_SCREENS.find((s) => s.id === route.screen)
-    return `CloudNativePG ${screen?.label ?? 'Clusters'}`
-  }
+  const workspace = workspaceForView(view)
+  if (workspace) return workspace.pageTitle(pathname)
   if (view === 'home') return 'Overview'
   // Every other view's label is its id capitalized — getViewFromPath has already
   // normalized aliases (e.g. /audit → 'checks'), so no lookup table is needed.
@@ -360,8 +346,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const navigationType = useNavigationType()
   const [searchParams, setSearchParams] = useSearchParams()
   const capabilities = useCapabilitiesContext()
-  // Expanding a CloudNativePG object opens its workspace page only on a Radar that serves it.
-  const { canRedirect: cnpgWorkspaceSupported } = useCNPGHostSupport()
+  const hostFeatures = useResourceHostFeatures()
   const openLocalTerminal = useOpenLocalTerminal()
   const navCustomization = useNavCustomization()
   // The AI panel is an absolute slot in the body frame (the column under the header):
@@ -459,6 +444,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Get mainView from URL path
   const mainView = getViewFromPath(location.pathname)
+  const activeWorkspace = workspaceForView(mainView)
   const upgradeReadinessRoute = location.pathname.startsWith('/checks/upgrade')
 
   // Opt-in usage data. Embedded hosts own their own consent, so Radar never asks there.
@@ -1248,10 +1234,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         const nextParams = new URLSearchParams()
         const diagnoseRun = new URLSearchParams(location.search).get('ai-run')
         if (diagnoseRun) nextParams.set('ai-run', diagnoseRun)
-        // A CNPG detail keeps the context it belongs to, so it can say it is
-        // not in the new one instead of loading a same-named object.
-        const pinnedCtx = new URLSearchParams(location.search).get('ctx')
-        if (pinnedCtx && location.pathname.startsWith('/cnpg/')) nextParams.set('ctx', pinnedCtx)
+        for (const [key, value] of workspaceContextSwitchSearch(location.pathname, new URLSearchParams(location.search))) nextParams.set(key, value)
         navigate(
           { pathname: location.pathname, search: nextParams.toString() },
           { replace: true, state: location.state },
@@ -1796,7 +1779,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     setVisibleKinds(new Set())
   }, [])
 
-  const navActiveView = mainView === 'helmCompare' ? 'helm' : mainView === 'cnpg' ? 'resources' : mainView
+  const navActiveView = mainView === 'helmCompare' ? 'helm' : activeWorkspace?.navView ?? mainView
 
   return (
     <PortForwardProvider>
@@ -2345,12 +2328,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <CostView namespaces={namespaces} onBack={() => setMainView('home')} onOpenResource={navigateToResource} />
         )}
 
-        {!viewsSyncGated && mainView === 'capacity' && (
-          <CapacityView onOpenResource={navigateToResource} />
-        )}
-
-        {!viewsSyncGated && mainView === 'cnpg' && (
-          <CNPGView
+        {!viewsSyncGated && activeWorkspace && (
+          <WorkspaceScreen
+            workspace={activeWorkspace}
             namespaces={namespaces}
             selectedResource={routeSelectedResource}
             onOpenResource={navigateToResource}
@@ -2428,10 +2408,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           onNavigate={(res) => navigateToResource(res)}
           canCollapseToDrawer={!isMobile}
           onExpand={(res, opts) => {
-            const cnpgPath = cnpgWorkspaceSupported ? cnpgHost.expandedPath(res, connection.context || undefined, opts?.yaml ? 'yaml' : undefined) : null
-            if (cnpgPath) {
+            const detailPath = resourceExpandedPath(res, hostFeatures, connection.context || undefined, opts?.yaml ? 'yaml' : undefined)
+            if (detailPath) {
               navigate(
-                cnpgPath,
+                detailPath,
                 { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } },
               )
               return

@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	integration "github.com/skyhook-io/radar/internal/integration"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 )
 
@@ -34,7 +35,7 @@ func (s *Server) handleRightsizingScan(w http.ResponseWriter, r *http.Request) {
 	} else {
 		namespaces = s.parseNamespacesForUser(r)
 	}
-	if noNamespaceAccess(namespaces) && (id != "" || hasExplicitNamespaceFilter(r)) {
+	if integration.NoNamespaceAccess(namespaces) && (id != "" || hasExplicitNamespaceFilter(r)) {
 		s.writeError(w, http.StatusForbidden, "no access to the requested namespace(s)")
 		return
 	}
@@ -83,7 +84,7 @@ func (a serverScanAuthorizer) FilterNamespaces(resource string, namespaces []str
 func (s *Server) resolveRightsizingScanScope(r *http.Request, namespaces []string) prometheuspkg.RightsizingScanScope {
 	// No readable namespace at all is reported as every kind restricted rather
 	// than an empty scan, so the response carries why it found nothing.
-	if noNamespaceAccess(namespaces) {
+	if integration.NoNamespaceAccess(namespaces) {
 		scope := prometheuspkg.RightsizingScanScope{
 			NamespacesByKind: make(map[string][]string, len(prometheuspkg.RightsizingScanKinds)),
 		}

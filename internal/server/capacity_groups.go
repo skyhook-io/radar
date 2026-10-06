@@ -4,12 +4,14 @@ import (
 	"log"
 	"net/http"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	corelisters "k8s.io/client-go/listers/core/v1"
+
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/autoscalerstatus"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	corelisters "k8s.io/client-go/listers/core/v1"
 )
 
 const (
@@ -21,7 +23,7 @@ const (
 // needs: informer scope plus the ConfigMap lister. Narrowed to an interface so
 // the coverage-verdict/detection pairing is testable without an informer.
 type capacityConfigMapSource interface {
-	informerScope
+	integration.InformerScope
 	ConfigMaps() corelisters.ConfigMapLister
 }
 
@@ -53,7 +55,7 @@ func capacityAutoscalerStatus(allowed bool, cache capacityConfigMapSource) (*aut
 	if !allowed {
 		return unavailable(deniedCoverage("autoscaler_status_configmap_denied", impact))
 	}
-	if cache == nil || !cacheCoversNamespace(cache, "configmaps", autoscalerStatusNamespace) {
+	if cache == nil || !integration.CacheCoversNamespace(cache, "configmaps", autoscalerStatusNamespace) {
 		return unavailable(unavailableCoverage("autoscaler_status_cache_scope", impact))
 	}
 	lister := cache.ConfigMaps()

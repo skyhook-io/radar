@@ -66,16 +66,12 @@ import { Notice, ScreenEmptyState } from "../workspace/layout";
 // Route model + navigation
 // ============================================================================
 
-export type CapacityTopTab = "overview" | "demand" | "activity";
-export type PoolSection = "summary" | "workloads" | "members" | "configuration";
+import type { PoolSection } from './routes'
+export { capacityPoolPath, parseCapacityRoute } from './routes'
+export type { CapacityRoute, CapacityTopTab, PoolSection } from './routes'
+
 export type CapacityConnectionState =
   "connected" | "disconnected" | "connecting";
-
-export interface CapacityRoute {
-  topTab: CapacityTopTab;
-  poolName?: string;
-  poolSection: PoolSection;
-}
 
 export const POOL_SECTIONS: { id: PoolSection; label: string }[] = [
   { id: "summary", label: "Summary" },
@@ -83,40 +79,6 @@ export const POOL_SECTIONS: { id: PoolSection; label: string }[] = [
   { id: "members", label: "Nodes & claims" },
   { id: "configuration", label: "Configuration" },
 ];
-
-export function parseCapacityRoute(pathname: string): CapacityRoute {
-  const segments = pathname.replace(/^\/+|\/+$/g, "").split("/");
-  if (segments[0] !== "capacity")
-    return { topTab: "overview", poolSection: "summary" };
-  if (segments[1] === "pools" && segments[2]) {
-    const section = segments[3];
-    return {
-      topTab: "overview",
-      poolName: decodePathSegment(segments[2]),
-      poolSection:
-        section === "workloads" ||
-        section === "members" ||
-        section === "configuration"
-          ? section
-          : "summary",
-    };
-  }
-  if (segments[1] === "demand" || segments[1] === "activity")
-    return { topTab: segments[1], poolSection: "summary" };
-  return { topTab: "overview", poolSection: "summary" };
-}
-
-function decodePathSegment(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-export function capacityPoolPath(name: string): string {
-  return `/capacity/pools/${encodeURIComponent(name)}`;
-}
 
 export function identityToSelectedResource(
   identity: CapacityResourceIdentity,

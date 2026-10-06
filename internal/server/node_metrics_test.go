@@ -3,12 +3,13 @@ package server
 import (
 	"testing"
 
-	"k8s.io/apimachinery/pkg/api/resource"
-
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
+
+	integration "github.com/skyhook-io/radar/internal/integration"
 )
 
 func TestListPodsScoped_SentinelContract(t *testing.T) {
@@ -25,16 +26,16 @@ func TestListPodsScoped_SentinelContract(t *testing.T) {
 	f.WaitForCacheSync(stop)
 	lister := informer.Lister()
 
-	if got := listPodsScoped(lister, nil); len(got) != 2 {
+	if got := integration.ListPodsScoped(lister, nil); len(got) != 2 {
 		t.Errorf("nil scope = %d pods, want 2 (cluster-wide)", len(got))
 	}
-	if got := listPodsScoped(lister, []string{}); len(got) != 0 {
+	if got := integration.ListPodsScoped(lister, []string{}); len(got) != 0 {
 		t.Errorf("empty scope = %d pods, want 0 (no namespace access)", len(got))
 	}
-	if got := listPodsScoped(lister, []string{"ns1"}); len(got) != 1 {
+	if got := integration.ListPodsScoped(lister, []string{"ns1"}); len(got) != 1 {
 		t.Errorf("ns1 scope = %d pods, want 1", len(got))
 	}
-	if got := listPodsScoped(nil, nil); got != nil {
+	if got := integration.ListPodsScoped(nil, nil); got != nil {
 		t.Errorf("nil lister must yield nil")
 	}
 }

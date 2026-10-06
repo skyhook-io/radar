@@ -12,6 +12,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/skyhook-io/radar/internal/auth"
+	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -37,13 +39,13 @@ func TestCNPGLocalCanIAsksTheKubeconfigIdentity(t *testing.T) {
 	localCanIMemo = map[string]localCanIEntry{}
 	localCanIMu.Unlock()
 
-	if allowed, known := localCanI(context.Background(), cnpgGrantGetPodsProxy.In("pgrt")); allowed || !known {
+	if allowed, known := localCanI(context.Background(), (auth.Grant{Verb: "get", Resource: "pods", Subresource: "proxy"}).In("pgrt")); allowed || !known {
 		t.Fatalf("pods/proxy = %v known=%v, want denied", allowed, known)
 	}
-	if allowed, known := localCanI(context.Background(), cnpgGrantCreateBackups.In("pgrt")); !allowed || !known {
+	if allowed, known := localCanI(context.Background(), (auth.Grant{Verb: "create", Group: cnpgsvc.Group, Resource: "backups", Namespace: "pgrt"})); !allowed || !known {
 		t.Fatalf("create backups = %v known=%v, want allowed", allowed, known)
 	}
-	localCanI(context.Background(), cnpgGrantGetPodsProxy.In("pgrt"))
+	localCanI(context.Background(), (auth.Grant{Verb: "get", Resource: "pods", Subresource: "proxy"}).In("pgrt"))
 	if calls.Load() != 2 {
 		t.Errorf("reviews = %d, want the repeat answered from the memo", calls.Load())
 	}

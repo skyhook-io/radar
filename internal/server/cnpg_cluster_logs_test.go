@@ -92,27 +92,6 @@ func TestCNPGLogsAllContainers(t *testing.T) {
 	}
 }
 
-func TestCNPGLogsContainerSelection(t *testing.T) {
-	q, err := parseCNPGLogQuery(httptest.NewRequest("GET", "/?container=all", nil), time.Now())
-	if err != nil || q.container != "all" {
-		t.Fatalf("%+v %v", q, err)
-	}
-	q, err = parseCNPGLogQuery(httptest.NewRequest("GET", "/", nil), time.Now())
-	if err != nil || q.container != "postgres" {
-		t.Fatalf("default: %+v %v", q, err)
-	}
-	p := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "postgres"}}, InitContainers: []corev1.Container{{Name: "sidecar"}}}}
-	if got := strings.Join(cnpgLogContainers(p, "all"), ","); got != "postgres,sidecar" {
-		t.Fatal(got)
-	}
-	if got := strings.Join(cnpgLogContainers(p, "sidecar"), ","); got != "sidecar" {
-		t.Fatal(got)
-	}
-	if len(cnpgLogContainers(p, "no-such-container")) != 0 {
-		t.Fatal("selected unknown container")
-	}
-}
-
 func TestCNPGLogsStreamCompletedContainers(t *testing.T) {
 	ns := "pglogscompleted"
 	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds, withUID(cnpgObj("postgresql.cnpg.io/v1", "Cluster", ns, "pg-orders", nil, nil), "orders-uid"))
@@ -177,27 +156,6 @@ func TestCNPGLogsStreamCompletedContainers(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("a new terminated container run was not read")
 		}
-	}
-}
-
-func TestCNPGLogsWaitingSources(t *testing.T) {
-	for _, retained := range []bool{true, false} {
-		t.Run(fmt.Sprintf("retained=%t", retained), func(t *testing.T) {
-			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pg-1"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "postgres"}}}, Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "postgres", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}}}}
-			if retained {
-				pod.Status.ContainerStatuses[0].LastTerminationState.Terminated = &corev1.ContainerStateTerminated{ContainerID: "containerd://crash", ExitCode: 1}
-			}
-			sources := cnpgSnapshotLogSources([]*corev1.Pod{pod}, "postgres")
-			if !retained {
-				if len(sources) != 0 {
-					t.Fatalf("read container that never started: %+v", sources)
-				}
-				return
-			}
-			if len(sources) != 1 || !sources[0].Previous {
-				t.Fatalf("missing previous-run source: %+v", sources)
-			}
-		})
 	}
 }
 

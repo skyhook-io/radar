@@ -5,12 +5,12 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
-	"golang.org/x/sync/singleflight"
-
 	"github.com/skyhook-io/radar/internal/auth"
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -167,7 +167,7 @@ func (s *Server) handleVitals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if integration.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, VitalsResponse{
 			Completeness: VitalsCompleteness{AccessRestricted: true},
 		})
@@ -204,7 +204,7 @@ func (s *Server) handleVitals(w http.ResponseWriter, r *http.Request) {
 	}
 	var scopedPods []*corev1.Pod
 	if podsReadable {
-		scopedPods = listPodsScoped(cache.Pods(), podNamespaces)
+		scopedPods = integration.ListPodsScoped(cache.Pods(), podNamespaces)
 	}
 	if podsReadable && cache.Pods() != nil {
 		pods := scopedPods

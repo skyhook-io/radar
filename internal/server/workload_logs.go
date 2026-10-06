@@ -26,55 +26,13 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/podlogs"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 )
-
-// WorkloadPodContainerInfo contains compact per-container runtime status for the UI.
-type WorkloadPodContainerInfo struct {
-	Name         string `json:"name"`
-	Init         bool   `json:"init,omitempty"`
-	Ready        bool   `json:"ready"`
-	RestartCount int32  `json:"restartCount"`
-}
-
-// WorkloadPodInfo contains compact runtime status about a pod for workload views.
-type WorkloadPodInfo struct {
-	Name                  string                     `json:"name"`
-	Containers            []string                   `json:"containers"`
-	Ready                 bool                       `json:"ready"`
-	Phase                 string                     `json:"phase,omitempty"`
-	NodeName              string                     `json:"nodeName,omitempty"`
-	HealthLevel           string                     `json:"healthLevel,omitempty"`
-	Reason                string                     `json:"reason,omitempty"`
-	Message               string                     `json:"message,omitempty"`
-	RestartCount          int32                      `json:"restartCount,omitempty"`
-	LastTerminationReason string                     `json:"lastTerminationReason,omitempty"`
-	CreatedAt             string                     `json:"createdAt,omitempty"`
-	ContainerStatuses     []WorkloadPodContainerInfo `json:"containerStatuses,omitempty"`
-	StepID                string                     `json:"stepID,omitempty"`
-	StepName              string                     `json:"stepName,omitempty"`
-	StepPhase             string                     `json:"stepPhase,omitempty"`
-	RevisionIdentity      string                     `json:"revisionIdentity,omitempty"`
-	UpdatedRevision       *bool                      `json:"updatedRevision,omitempty"`
-}
-
-// workloadLogEntry is an internal structure for log lines from pods
-type workloadLogEntry struct {
-	Pod         string `json:"pod"`
-	Container   string `json:"container"`
-	Timestamp   string `json:"timestamp"`
-	Content     string `json:"content"`
-	SourceLabel string `json:"sourceLabel,omitempty"`
-	// Previous marks a line from the container run before its last restart.
-	Previous bool `json:"previous,omitempty"`
-	// Parsed from a structured line by sources that know their log format.
-	Level   string `json:"level,omitempty"`
-	Logger  string `json:"logger,omitempty"`
-	Message string `json:"message,omitempty"`
-}
 
 type workloadLogMetadata struct {
 	EmptyReason  string `json:"emptyReason,omitempty"`
@@ -225,12 +183,12 @@ func (s *Server) handleWorkloadRuns(w http.ResponseWriter, r *http.Request) {
 	runNamespaces := []string{namespace}
 	if clusterScoped {
 		runNamespaces = s.parseNamespacesForUser(r)
-		if noNamespaceAccess(runNamespaces) {
+		if integration.NoNamespaceAccess(runNamespaces) {
 			s.writeError(w, http.StatusForbidden, "no namespace access")
 			return
 		}
 	} else {
-		if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
+		if allowed := s.getUserNamespaces(r, []string{namespace}); integration.NoNamespaceAccess(allowed) {
 			s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 			return
 		}
@@ -325,7 +283,7 @@ func (s *Server) handleWorkloadRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) readableRunNamespaces(r *http.Request, group, resource string, namespaces []string) ([]string, bool) {
-	if noNamespaceAccess(namespaces) {
+	if integration.NoNamespaceAccess(namespaces) {
 		return nil, false
 	}
 	if namespaces == nil {
@@ -345,7 +303,7 @@ func (s *Server) authorizeWorkloadPodRead(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusBadRequest, "only deployments, statefulsets, daemonsets, rollouts, jobs, and workflows are supported")
 		return false
 	}
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
+	if integration.NoNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
 		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 		return false
 	}
@@ -386,8 +344,8 @@ func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	container := r.URL.Query().Get("container")
-	tailLines := parseTailLines(r.URL.Query().Get("tailLines"), 100)
-	sinceSeconds := parseSinceSeconds(r.URL.Query().Get("sinceSeconds"))
+	tailLines := podlogs.ParseTailLines(r.URL.Query().Get("tailLines"), 100)
+	sinceSeconds := podlogs.ParseSinceSeconds(r.URL.Query().Get("sinceSeconds"))
 
 	pods, err := s.getWorkloadPods(kind, namespace, name)
 	if err != nil {
@@ -398,8 +356,8 @@ func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 	if len(pods) == 0 {
 		metadata := s.describeWorkloadLogEmpty(r.Context(), kind, namespace, name)
 		response := map[string]any{
-			"pods": []WorkloadPodInfo{},
-			"logs": []workloadLogEntry{},
+			"pods": []podlogs.PodInfo{},
+			"logs": []podlogs.Entry{},
 		}
 		addWorkloadLogMetadata(response, metadata)
 		s.writeJSON(w, response)
@@ -413,9 +371,9 @@ func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Collect logs from all pods concurrently
-	snapshot := collectLogsFromPods(r.Context(), client, namespace, pods, container, tailLines, sinceSeconds, false)
+	snapshot := podlogs.CollectPods(r.Context(), client, namespace, pods, container, tailLines, sinceSeconds, false)
 
-	sortLogsByTimestamp(snapshot.Logs)
+	podlogs.Sort(snapshot.Logs)
 
 	s.writeJSON(w, map[string]any{
 		"pods":   buildPodInfos(pods),
@@ -435,8 +393,8 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	}
 
 	container := r.URL.Query().Get("container")
-	tailLines := parseTailLines(r.URL.Query().Get("tailLines"), 50)
-	sinceSeconds := parseSinceSeconds(r.URL.Query().Get("sinceSeconds"))
+	tailLines := podlogs.ParseTailLines(r.URL.Query().Get("tailLines"), 50)
+	sinceSeconds := podlogs.ParseSinceSeconds(r.URL.Query().Get("sinceSeconds"))
 
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -496,7 +454,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	defer cancel()
 
 	// Channel for aggregated log lines
-	logCh := make(chan workloadLogEntry, 1000)
+	logCh := make(chan podlogs.Entry, 1000)
 
 	// Track active streams
 	var activeStreams sync.Map // podName/containerName -> cancel func
@@ -570,7 +528,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 					knownPods[p.Name] = true
 					// Notify frontend about new pod
 					sendSSEEvent(w, flusher, "pod_added", map[string]any{
-						"pods": []WorkloadPodInfo{buildPodInfo(p, time.Now())},
+						"pods": []podlogs.PodInfo{podlogs.BuildPodInfo(p, time.Now())},
 					})
 				}
 			}
@@ -631,7 +589,7 @@ func shouldWaitForPodsInLogStream(kind string, metadata workloadLogMetadata) boo
 }
 
 // streamPodLogs streams logs from a single pod/container to the log channel
-func streamPodLogs(ctx context.Context, client kubernetes.Interface, namespace, podName, containerName string, tailLines int64, sinceSeconds *int64, logCh chan<- workloadLogEntry) {
+func streamPodLogs(ctx context.Context, client kubernetes.Interface, namespace, podName, containerName string, tailLines int64, sinceSeconds *int64, logCh chan<- podlogs.Entry) {
 	stream, err := k8score.GetContainerLogs(ctx, client, namespace, podName, containerName, k8score.LogOptions{
 		TailLines:    &tailLines,
 		SinceSeconds: sinceSeconds,
@@ -664,9 +622,9 @@ func streamPodLogs(ctx context.Context, client kubernetes.Interface, namespace, 
 				continue
 			}
 
-			ts, content := parseLogLine(line)
+			ts, content := podlogs.ParseLine(line)
 			select {
-			case logCh <- workloadLogEntry{
+			case logCh <- podlogs.Entry{
 				Pod:       podName,
 				Container: containerName,
 				Timestamp: ts,
@@ -679,29 +637,16 @@ func streamPodLogs(ctx context.Context, client kubernetes.Interface, namespace, 
 	}
 }
 
-// isPodReady checks if all containers in a pod are ready
-func isPodReady(pod *corev1.Pod) bool {
-	if pod.Status.Phase != corev1.PodRunning {
-		return false
-	}
-	for _, cs := range pod.Status.ContainerStatuses {
-		if !cs.Ready {
-			return false
-		}
-	}
-	return true
-}
-
-// buildPodInfos converts pods to WorkloadPodInfo slice
-func buildPodInfos(pods []*corev1.Pod) []WorkloadPodInfo {
+// buildPodInfos converts pods to podlogs.PodInfo slice
+func buildPodInfos(pods []*corev1.Pod) []podlogs.PodInfo {
 	return buildPodInfosForRevision(pods, workloadRevisionTarget{})
 }
 
-func buildPodInfosForRevision(pods []*corev1.Pod, target workloadRevisionTarget) []WorkloadPodInfo {
-	infos := make([]WorkloadPodInfo, 0, len(pods))
+func buildPodInfosForRevision(pods []*corev1.Pod, target workloadRevisionTarget) []podlogs.PodInfo {
+	infos := make([]podlogs.PodInfo, 0, len(pods))
 	now := time.Now()
 	for _, pod := range pods {
-		info := buildPodInfo(pod, now)
+		info := podlogs.BuildPodInfo(pod, now)
 		if target.label != "" && target.value != "" {
 			if identity := pod.Labels[target.label]; identity != "" {
 				updated := identity == target.value
@@ -716,7 +661,7 @@ func buildPodInfosForRevision(pods []*corev1.Pod, target workloadRevisionTarget)
 
 const maxWorkloadPodResponseLimit = 200
 
-func limitWorkloadPodInfos(infos []WorkloadPodInfo, limit int) ([]WorkloadPodInfo, bool) {
+func limitWorkloadPodInfos(infos []podlogs.PodInfo, limit int) ([]podlogs.PodInfo, bool) {
 	sort.SliceStable(infos, func(i, j int) bool {
 		leftRank := health.Rank(health.Level(infos[i].HealthLevel))
 		rightRank := health.Rank(health.Level(infos[j].HealthLevel))
@@ -732,89 +677,6 @@ func limitWorkloadPodInfos(infos []WorkloadPodInfo, limit int) ([]WorkloadPodInf
 		return infos, false
 	}
 	return infos[:limit], true
-}
-
-// buildPodInfo converts a single pod to WorkloadPodInfo
-func buildPodInfo(pod *corev1.Pod, now time.Time) WorkloadPodInfo {
-	containers := make([]string, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
-	containerStatuses := make([]WorkloadPodContainerInfo, 0, len(pod.Status.InitContainerStatuses)+len(pod.Status.ContainerStatuses))
-	for _, c := range pod.Spec.InitContainers {
-		containers = append(containers, c.Name)
-	}
-	for _, c := range pod.Spec.Containers {
-		containers = append(containers, c.Name)
-	}
-	for _, cs := range pod.Status.InitContainerStatuses {
-		containerStatuses = append(containerStatuses, WorkloadPodContainerInfo{
-			Name:         cs.Name,
-			Init:         true,
-			Ready:        cs.Ready,
-			RestartCount: cs.RestartCount,
-		})
-	}
-	for _, cs := range pod.Status.ContainerStatuses {
-		containerStatuses = append(containerStatuses, WorkloadPodContainerInfo{
-			Name:         cs.Name,
-			Ready:        cs.Ready,
-			RestartCount: cs.RestartCount,
-		})
-	}
-	verdict := health.Pod(pod, now)
-	displayLevel := health.PodDisplayLevel(pod, now)
-	if displayLevel != verdict.Level {
-		verdict.Level = displayLevel
-		if verdict.Reason == "" {
-			verdict.Reason = health.PodProblemReason(pod, now)
-		}
-		if verdict.Message == "" {
-			verdict.Message = health.PodProblemMessage(pod)
-		}
-	}
-	restartCount, lastTerminationReason := health.PodRestartContext(pod)
-	createdAt := ""
-	if !pod.CreationTimestamp.IsZero() {
-		createdAt = pod.CreationTimestamp.Time.Format(time.RFC3339)
-	}
-	annotations := pod.GetAnnotations()
-	labels := pod.GetLabels()
-	return WorkloadPodInfo{
-		Name:                  pod.Name,
-		Containers:            containers,
-		Ready:                 isPodReady(pod),
-		Phase:                 string(pod.Status.Phase),
-		NodeName:              pod.Spec.NodeName,
-		HealthLevel:           string(verdict.Level),
-		Reason:                verdict.Reason,
-		Message:               verdict.Message,
-		RestartCount:          restartCount,
-		LastTerminationReason: lastTerminationReason,
-		CreatedAt:             createdAt,
-		ContainerStatuses:     containerStatuses,
-		StepID:                annotations["workflows.argoproj.io/node-id"],
-		StepName:              annotations["workflows.argoproj.io/node-name"],
-		StepPhase:             labels["workflows.argoproj.io/phase"],
-	}
-}
-
-// sortLogsByTimestamp sorts log entries by timestamp using efficient sort
-func sortLogsByTimestamp(logs []workloadLogEntry) {
-	sort.SliceStable(logs, func(i, j int) bool {
-		left, le := time.Parse(time.RFC3339Nano, logs[i].Timestamp)
-		right, re := time.Parse(time.RFC3339Nano, logs[j].Timestamp)
-		if le == nil && re == nil && !left.Equal(right) {
-			return left.Before(right)
-		}
-		if (le == nil) != (re == nil) {
-			return le != nil
-		}
-		if le != nil && logs[i].Timestamp != logs[j].Timestamp {
-			return logs[i].Timestamp < logs[j].Timestamp
-		}
-		if logs[i].Pod != logs[j].Pod {
-			return logs[i].Pod < logs[j].Pod
-		}
-		return logs[i].Container < logs[j].Container
-	})
 }
 
 // workloadError represents a typed error for workload operations
@@ -1647,246 +1509,4 @@ func applyTerminalWorkflowEmptyState(metadata *workloadLogMetadata, workflow map
 // writeWorkloadError writes an error response based on workloadError
 func (s *Server) writeWorkloadError(w http.ResponseWriter, err *workloadError) {
 	s.writeError(w, err.statusCode, err.message)
-}
-
-// parseSinceSeconds parses sinceSeconds query parameter, returning nil if not set
-func parseSinceSeconds(str string) *int64 {
-	if str == "" {
-		return nil
-	}
-	if s, err := strconv.ParseInt(str, 10, 64); err == nil && s > 0 {
-		return &s
-	}
-	return nil
-}
-
-// parseTailLines parses tailLines query parameter with a default value
-func parseTailLines(str string, defaultVal int64) int64 {
-	if str == "" {
-		return defaultVal
-	}
-	if t, err := strconv.ParseInt(str, 10, 64); err == nil && t > 0 {
-		return t
-	}
-	return defaultVal
-}
-
-// collectLogsFromPods fetches logs from all pods concurrently. Non-nil even
-// when nothing is retrievable (e.g. every pod is crashlooping) — a nil slice
-// marshals as JSON null and consumers expect an array.
-type workloadLogSnapshot struct {
-	SourcePods map[string]bool
-	Logs       []workloadLogEntry
-	Notice     string
-	// Clipped lists the sources that reached maxSnapshotSourceBytes, with the
-	// timestamp of the last line kept from each, so a caller filtering by time
-	// can tell whether the clip cut into its window.
-	Clipped []workloadLogClip
-	shown   int
-	total   int
-	errors  []string
-}
-
-type workloadLogClip struct {
-	Pod, Container string
-	Previous       bool
-	Last           time.Time
-}
-
-// workloadLogSource is one container run to read: the current run, or with
-// Previous the one before the last restart.
-type workloadLogSource struct {
-	Pod, Container string
-	Previous       bool
-	running        bool
-	created        time.Time
-}
-
-func (s workloadLogSource) key() string {
-	if s.Previous {
-		return s.Pod + "/" + s.Container + " (previous run)"
-	}
-	return s.Pod + "/" + s.Container
-}
-
-const maxSnapshotSources = 40
-const maxSnapshotSourceBytes int64 = 64 * 1024
-
-func collectLogsFromPods(ctx context.Context, client kubernetes.Interface, namespace string, pods []*corev1.Pod, container string, tailLines int64, sinceSeconds *int64, bounded bool) workloadLogSnapshot {
-	sources := []workloadLogSource{}
-	for _, pod := range pods {
-		for _, c := range k8s.GetContainersForPod(pod, container, true) {
-			if bounded {
-				started := false
-				for _, statuses := range [][]corev1.ContainerStatus{pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses, pod.Status.EphemeralContainerStatuses} {
-					for _, status := range statuses {
-						if status.Name == c && (status.State.Running != nil || status.State.Terminated != nil) {
-							started = true
-						}
-					}
-				}
-				if !started {
-					continue
-				}
-			}
-			sources = append(sources, newWorkloadLogSource(pod, c, false))
-		}
-	}
-	return collectLogSources(ctx, client, namespace, sources, tailLines, sinceSeconds, bounded)
-}
-
-func newWorkloadLogSource(pod *corev1.Pod, container string, previous bool) workloadLogSource {
-	return workloadLogSource{Pod: pod.Name, Container: container, Previous: previous, running: pod.Status.Phase == corev1.PodRunning, created: pod.CreationTimestamp.Time}
-}
-
-// collectLogSources reads each source concurrently; bounded caps the source
-// count, bytes per source and overall time.
-func collectLogSources(ctx context.Context, client kubernetes.Interface, namespace string, sources []workloadLogSource, tailLines int64, sinceSeconds *int64, bounded bool) workloadLogSnapshot {
-	sort.Slice(sources, func(i, j int) bool {
-		if bounded && sources[i].running != sources[j].running {
-			return sources[i].running
-		}
-		if bounded && !sources[i].created.Equal(sources[j].created) {
-			return sources[i].created.After(sources[j].created)
-		}
-		if sources[i].Pod != sources[j].Pod {
-			return sources[i].Pod < sources[j].Pod
-		}
-		if sources[i].Container != sources[j].Container {
-			return sources[i].Container < sources[j].Container
-		}
-		return sources[i].Previous && !sources[j].Previous
-	})
-	total := len(sources)
-	if bounded && len(sources) > maxSnapshotSources {
-		sources = sources[:maxSnapshotSources]
-	}
-	if bounded {
-		tailLines = min(tailLines, 1000)
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-	}
-	result := workloadLogSnapshot{Logs: []workloadLogEntry{}, SourcePods: map[string]bool{}, shown: len(sources), total: total}
-	for _, src := range sources {
-		result.SourcePods[src.Pod] = true
-	}
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	concurrency := len(sources)
-	if bounded {
-		concurrency = min(concurrency, 8)
-	}
-	sem := make(chan struct{}, concurrency)
-	for _, src := range sources {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				mu.Lock()
-				result.errors = append(result.errors, src.key()+": request cancelled")
-				mu.Unlock()
-				return
-			}
-			entries, clipped, err := fetchPodContainerLogs(ctx, client, namespace, src.Pod, src.Container, tailLines, sinceSeconds, bounded, src.Previous)
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				result.errors = append(result.errors, src.key()+": "+err.Error())
-			}
-			if clipped {
-				clip := workloadLogClip{Pod: src.Pod, Container: src.Container, Previous: src.Previous}
-				if n := len(entries); n > 0 {
-					clip.Last, _ = time.Parse(time.RFC3339Nano, entries[n-1].Timestamp)
-				}
-				result.Clipped = append(result.Clipped, clip)
-			}
-			result.Logs = append(result.Logs, entries...)
-		}()
-	}
-	wg.Wait()
-	sort.Strings(result.errors)
-	result.Notice = result.notice(func(workloadLogClip) bool { return true })
-	return result
-}
-
-// notice summarizes what the snapshot could not show. counts decides which
-// clipped sources are worth reporting — a clip past the caller's window cut
-// nothing the caller asked for.
-func (s workloadLogSnapshot) notice(counts func(workloadLogClip) bool) string {
-	notices := []string{}
-	if s.total > s.shown {
-		notices = append(notices, fmt.Sprintf("Showing %d of %d container sources. Narrow the scope to see other sources.", s.shown, s.total))
-	}
-	truncated := 0
-	for _, clip := range s.Clipped {
-		if counts(clip) {
-			truncated++
-		}
-	}
-	if truncated > 0 {
-		notices = append(notices, countNoun(truncated, "source", "sources")+" reached the 64 KiB snapshot limit.")
-	}
-	if len(s.errors) > 0 {
-		notices = append(notices, fmt.Sprintf("%s could not be read: %s", countNoun(len(s.errors), "source", "sources"), strings.Join(s.errors[:min(3, len(s.errors))], "; ")))
-	}
-	return strings.Join(notices, " ")
-}
-
-// countNoun reads "1 source", "2 sources".
-func countNoun(n int, singular, plural string) string {
-	if n == 1 {
-		return "1 " + singular
-	}
-	return fmt.Sprintf("%d %s", n, plural)
-}
-
-func fetchPodContainerLogs(ctx context.Context, client kubernetes.Interface, namespace, podName, containerName string, tailLines int64, sinceSeconds *int64, bounded, previous bool) ([]workloadLogEntry, bool, error) {
-	var limit *int64
-	if bounded {
-		n := maxSnapshotSourceBytes + 1
-		limit = &n
-	}
-	// Zero reads from the start of the since window instead of its tail, so a
-	// bounded read of a past interval returns that interval's first lines.
-	var tail *int64
-	if tailLines > 0 {
-		tail = &tailLines
-	}
-	stream, err := k8score.GetContainerLogs(ctx, client, namespace, podName, containerName, k8score.LogOptions{
-		TailLines: tail, SinceSeconds: sinceSeconds, Timestamps: true, LimitBytes: limit, Previous: previous,
-	})
-	if err != nil {
-		return nil, false, err
-	}
-	defer stream.Close()
-	var reader io.Reader = stream
-	if limit != nil {
-		reader = io.LimitReader(stream, *limit)
-	}
-	content, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, false, err
-	}
-	clipped := bounded && int64(len(content)) > maxSnapshotSourceBytes
-	if clipped {
-		content = content[:maxSnapshotSourceBytes]
-		if last := strings.LastIndexByte(string(content), '\n'); last >= 0 {
-			content = content[:last+1]
-		} else {
-			content = nil
-		}
-	}
-	entries := []workloadLogEntry{}
-	for _, line := range strings.Split(string(content), "\n") {
-		if line == "" {
-			continue
-		}
-		ts, text := parseLogLine(line)
-		entries = append(entries, workloadLogEntry{Pod: podName, Container: containerName, Timestamp: ts, Content: text, Previous: previous})
-	}
-	return entries, clipped, nil
 }

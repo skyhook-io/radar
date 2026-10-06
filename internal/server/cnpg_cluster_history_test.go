@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	pkgtimeline "github.com/skyhook-io/radar/pkg/timeline"
@@ -42,7 +43,7 @@ func seedCNPGLogCluster(t *testing.T, ns string) {
 	)
 }
 
-func getCNPGLogs(t *testing.T, path string) (int, CNPGClusterLogsResponse, string) {
+func getCNPGLogs(t *testing.T, path string) (int, cnpgsvc.ClusterLogsResponse, string) {
 	t.Helper()
 	resp, err := http.Get(testServer.URL + path)
 	if err != nil {
@@ -50,7 +51,7 @@ func getCNPGLogs(t *testing.T, path string) (int, CNPGClusterLogsResponse, strin
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	var out CNPGClusterLogsResponse
+	var out cnpgsvc.ClusterLogsResponse
 	if resp.StatusCode == http.StatusOK {
 		if err := json.Unmarshal(body, &out); err != nil {
 			t.Fatalf("decode: %v (%s)", err, body)
@@ -155,7 +156,7 @@ func TestCNPGClusterLogs_Authorization(t *testing.T) {
 		clusters bool
 	}{{"no-clusters", false}, {"no-logs", true}} {
 		perms := &auth.UserPermissions{AllowedNamespaces: []string{"pglogsauth"}}
-		perms.SetCanI("get", cnpgGroup, "clusters", "pglogsauth", u.clusters)
+		perms.SetCanI("get", cnpgsvc.Group, "clusters", "pglogsauth", u.clusters)
 		allow(perms, "", "pods", "pglogsauth", true)
 		env.srv.permCache.Set(u.name, nil, perms)
 	}
@@ -173,63 +174,6 @@ func TestCNPGClusterLogs_Authorization(t *testing.T) {
 		if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), tc.want) {
 			t.Errorf("%s %s: status=%d body=%s, want 403 naming %q", tc.user, tc.path, resp.StatusCode, body, tc.want)
 		}
-	}
-}
-
-func TestAnnotateCNPGLogEntry(t *testing.T) {
-	cases := []struct {
-		name, content, level, logger, message string
-	}{
-		{
-			name:    "postgres record",
-			content: `{"level":"info","ts":"2026-09-28T14:19:58.123Z","logger":"postgres","msg":"record","record":{"error_severity":"FATAL","message":"password authentication failed","log_time":"2026-09-28 14:19:58.123 UTC"}}`,
-			level:   "FATAL", logger: "postgres", message: "password authentication failed",
-		},
-		{
-			name:    "instance manager error",
-			content: `{"level":"error","ts":"2026-09-28T14:19:58Z","logger":"barman-cloud-wal-archive","msg":"Error invoking barman-cloud-wal-archive","error":"exit status 4"}`,
-			level:   "ERROR", logger: "barman-cloud-wal-archive", message: "Error invoking barman-cloud-wal-archive: exit status 4",
-		},
-		{
-			name:    "structured error",
-			content: `{"level":"error","msg":"failed","error":{"code":2}}`,
-			level:   "ERROR", message: `failed: {"code":2}`,
-		},
-		{name: "plain text", content: "LOG:  database system is ready"},
-		{name: "broken json", content: `{"level":"info"`},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			entry := workloadLogEntry{Content: tc.content}
-			annotateCNPGLogEntry(&entry)
-			if entry.Level != tc.level || entry.Logger != tc.logger || entry.Message != tc.message || entry.Content != tc.content {
-				t.Fatalf("got level=%q logger=%q message=%q content-changed=%v", entry.Level, entry.Logger, entry.Message, entry.Content != tc.content)
-			}
-		})
-	}
-	raw, _ := json.Marshal(workloadLogEntry{Pod: "p", Content: "x"})
-	if strings.Contains(string(raw), "level") || strings.Contains(string(raw), "message") {
-		t.Fatalf("unparsed entries grew fields: %s", raw)
-	}
-}
-
-func TestParseCNPGLogQuery(t *testing.T) {
-	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
-	req := httptest.NewRequest("GET", "/?sinceTime=2026-09-28T11:59:00.5Z", nil)
-	if _, err := parseCNPGLogQuery(req, now); err != nil {
-		t.Fatalf("fractional RFC3339 rejected: %v", err)
-	}
-	req = httptest.NewRequest("GET", "/?sinceTime=2026-09-28T11:58:30Z", nil)
-	q, err := parseCNPGLogQuery(req, now)
-	if err != nil || q.sinceSeconds == nil || *q.sinceSeconds != 90 || q.container != "postgres" || q.tailLines != 200 {
-		t.Fatalf("query = %+v err=%v", q, err)
-	}
-	if q.keep(workloadLogEntry{Timestamp: "2026-09-28T11:58:29.9Z"}) || !q.keep(workloadLogEntry{Timestamp: "2026-09-28T11:58:30Z"}) {
-		t.Fatal("sinceTime overlap not trimmed")
-	}
-	req = httptest.NewRequest("GET", "/?sinceTime=2026-09-28T11:58:30Z&sinceSeconds=5", nil)
-	if _, err := parseCNPGLogQuery(req, now); err == nil {
-		t.Fatal("sinceTime with sinceSeconds accepted")
 	}
 }
 
@@ -302,21 +246,21 @@ func cnpgActivityFixture(t *testing.T, ns string) {
 	)
 }
 
-func decodeActivity(t *testing.T, resp *http.Response) CNPGClusterActivityResponse {
+func decodeActivity(t *testing.T, resp *http.Response) cnpgsvc.CNPGClusterActivityResponse {
 	t.Helper()
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d: %s", resp.StatusCode, body)
 	}
-	var out CNPGClusterActivityResponse
+	var out cnpgsvc.CNPGClusterActivityResponse
 	if err := json.Unmarshal(body, &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	return out
 }
 
-func activityIDs(resp CNPGClusterActivityResponse) []string {
+func activityIDs(resp cnpgsvc.CNPGClusterActivityResponse) []string {
 	var out []string
 	for _, e := range resp.Events {
 		out = append(out, e.ID)
@@ -370,11 +314,11 @@ func TestCNPGClusterActivity_DropsKindsTheCallerCannotList(t *testing.T) {
 		eventsListed  bool
 	}{{"reader", true, true, true}, {"no-backups", true, false, true}, {"no-clusters", false, true, true}, {"no-events", true, true, false}} {
 		perms := &auth.UserPermissions{AllowedNamespaces: []string{"pgactauth"}}
-		perms.SetCanI("get", cnpgGroup, "clusters", "pgactauth", u.clusterGet)
+		perms.SetCanI("get", cnpgsvc.Group, "clusters", "pgactauth", u.clusterGet)
 		allow(perms, "", "events", "pgactauth", u.eventsListed)
-		allow(perms, cnpgGroup, "clusters", "pgactauth", true)
-		allow(perms, cnpgGroup, "backups", "pgactauth", u.backupsListed)
-		allow(perms, cnpgGroup, "poolers", "pgactauth", true)
+		allow(perms, cnpgsvc.Group, "clusters", "pgactauth", true)
+		allow(perms, cnpgsvc.Group, "backups", "pgactauth", u.backupsListed)
+		allow(perms, cnpgsvc.Group, "poolers", "pgactauth", true)
 		allow(perms, "", "pods", "pgactauth", true)
 		env.srv.permCache.Set(u.name, nil, perms)
 	}
@@ -489,44 +433,6 @@ func TestCNPGClusterActivity_RecreatedClusterExcludesPreviousIncarnationPods(t *
 	}
 }
 
-func TestCNPGStreamCursorResumesWithoutReplay(t *testing.T) {
-	var c cnpgStreamCursor
-	first := c.restartOptions("postgres", 200, nil)
-	if first.TailLines == nil || *first.TailLines != 200 || first.SinceTime != nil || !first.Follow || !first.Timestamps || first.Container != "postgres" {
-		t.Fatalf("first start = %+v", first)
-	}
-	line := func(ts, content string) workloadLogEntry {
-		return workloadLogEntry{Timestamp: ts, Content: content}
-	}
-	for _, e := range []workloadLogEntry{line("2026-09-28T14:00:00.1Z", "a"), line("2026-09-28T14:00:05.7Z", "b"), line("2026-09-28T14:00:05.7Z", "c")} {
-		if !c.admit(e) {
-			t.Fatalf("fresh line %+v rejected", e)
-		}
-	}
-
-	restart := c.restartOptions("postgres", 200, nil)
-	if restart.TailLines != nil || restart.SinceSeconds != nil || restart.SinceTime == nil ||
-		!restart.SinceTime.Time.Equal(time.Date(2026, 9, 28, 14, 0, 5, 0, time.UTC)) {
-		t.Fatalf("restart = %+v, want sinceTime at the last delivered second and no tail", restart)
-	}
-
-	// The resumed follow replays the boundary second.
-	replayed := []workloadLogEntry{line("2026-09-28T14:00:05.2Z", "earlier in the second"), line("2026-09-28T14:00:05.7Z", "b"), line("2026-09-28T14:00:05.7Z", "c")}
-	for _, e := range replayed {
-		if c.admit(e) {
-			t.Errorf("replayed line %+v admitted", e)
-		}
-	}
-	for _, e := range []workloadLogEntry{line("2026-09-28T14:00:05.7Z", "d"), line("2026-09-28T14:00:06Z", "e")} {
-		if !c.admit(e) {
-			t.Errorf("new line %+v rejected", e)
-		}
-	}
-	if c.admit(line("2026-09-28T14:00:05.7Z", "d")) {
-		t.Error("line before the new last timestamp admitted")
-	}
-}
-
 func cnpgRestartedStatus(currentStart, prevStart, prevEnd time.Time, restarts int32) corev1.ContainerStatus {
 	status := corev1.ContainerStatus{
 		Name: "postgres", RestartCount: restarts,
@@ -536,47 +442,6 @@ func cnpgRestartedStatus(currentStart, prevStart, prevEnd time.Time, restarts in
 		status.LastTerminationState.Terminated = &corev1.ContainerStateTerminated{StartedAt: metav1.NewTime(prevStart), FinishedAt: metav1.NewTime(prevEnd)}
 	}
 	return status
-}
-
-func TestCNPGIntervalLogSources(t *testing.T) {
-	at := func(m int) time.Time { return time.Date(2026, 9, 29, 23, m, 0, 0, time.UTC) }
-	since, until := at(20), at(30)
-	pod := func(status corev1.ContainerStatus) *corev1.Pod {
-		p := cnpgPod("ns", "pg-1", "pg")
-		p.Status.ContainerStatuses = []corev1.ContainerStatus{status}
-		return p
-	}
-	waiting := cnpgRestartedStatus(at(0), at(10), at(40), 3)
-	waiting.State = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}
-	cases := []struct {
-		name              string
-		status            corev1.ContainerStatus
-		current, previous bool
-		lost              int
-	}{
-		{"restarted after the interval reads only the previous run", cnpgRestartedStatus(at(45), at(10), at(40), 1), false, true, 0},
-		{"restart inside the interval reads both runs", cnpgRestartedStatus(at(25), at(10), at(24), 1), true, true, 0},
-		{"running since before the interval reads the current run", cnpgRestartedStatus(at(5), at(0), at(4), 1), true, false, 0},
-		{"previous run ended before the interval is skipped", cnpgRestartedStatus(at(25), at(0), at(15), 2), true, false, 0},
-		{"older runs than the kept two covered the interval", cnpgRestartedStatus(at(45), at(28), at(44), 5), false, true, 1},
-		{"crash-looping container reads its previous run", waiting, false, true, 0},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			sources, lost := cnpgIntervalLogSources([]*corev1.Pod{pod(tc.status)}, "postgres", since, until)
-			var current, previous bool
-			for _, s := range sources {
-				if s.Previous {
-					previous = true
-				} else {
-					current = true
-				}
-			}
-			if current != tc.current || previous != tc.previous || lost != tc.lost {
-				t.Fatalf("current=%v previous=%v lost=%d, want %v %v %d", current, previous, lost, tc.current, tc.previous, tc.lost)
-			}
-		})
-	}
 }
 
 // An incident followed by restarts: the interval lives in the previous run,
@@ -642,7 +507,7 @@ func TestCNPGClusterActivity_JobPodsNeedVerifiedOwnershipAndJobAccess(t *testing
 	for _, jobs := range []bool{true, false} {
 		user := fmt.Sprintf("jobs-%v", jobs)
 		perms := &auth.UserPermissions{AllowedNamespaces: []string{ns}}
-		perms.SetCanI("get", cnpgGroup, "clusters", ns, true)
+		perms.SetCanI("get", cnpgsvc.Group, "clusters", ns, true)
 		allow(perms, "", "pods", ns, true)
 		allow(perms, "batch", "jobs", ns, jobs)
 		env.srv.permCache.Set(user, nil, perms)

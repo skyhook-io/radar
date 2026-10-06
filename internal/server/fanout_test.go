@@ -5,11 +5,13 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	integration "github.com/skyhook-io/radar/internal/integration"
 )
 
 func TestFanOutKeepsIndexOrderAndBoundsConcurrency(t *testing.T) {
 	var running, peak atomic.Int32
-	got := fanOut(context.Background(), 20, 3, func(i int) int {
+	got := integration.FanOut(context.Background(), 20, 3, func(i int) int {
 		n := running.Add(1)
 		for {
 			p := peak.Load()
@@ -35,7 +37,7 @@ func TestFanOutKeepsIndexOrderAndBoundsConcurrency(t *testing.T) {
 }
 
 func TestFanOutOfNothing(t *testing.T) {
-	if got := fanOut(context.Background(), 0, 4, func(int) string { t.Fatal("ran"); return "" }); len(got) != 0 {
+	if got := integration.FanOut(context.Background(), 0, 4, func(int) string { t.Fatal("ran"); return "" }); len(got) != 0 {
 		t.Errorf("got %v", got)
 	}
 }

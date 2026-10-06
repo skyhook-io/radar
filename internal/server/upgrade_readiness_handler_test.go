@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -43,7 +44,7 @@ func TestUpgradeReadinessNamespacesIntersectsForcedScopeWithUserAccess(t *testin
 	s := &Server{permCache: auth.NewPermissionCache()}
 	s.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"tenant-b"}})
 	req := requestWithUser("GET", "/api/upgrade-readiness", &auth.User{Username: "alice"})
-	if got := s.upgradeReadinessNamespaces(req); !noNamespaceAccess(got) {
+	if got := s.upgradeReadinessNamespaces(req); !integration.NoNamespaceAccess(got) {
 		t.Fatalf("upgrade namespace scope = %v, want no access", got)
 	}
 }

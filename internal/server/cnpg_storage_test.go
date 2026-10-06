@@ -15,10 +15,10 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
 	"github.com/skyhook-io/radar/internal/k8s"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 )
@@ -26,7 +26,7 @@ import (
 func cnpgTestPVC(ns, name, cluster, instance, role string, owner *metav1.OwnerReference, requested, capacity string) *corev1.PersistentVolumeClaim {
 	sc := "fast"
 	pvc := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: map[string]string{cnpgClusterLabel: cluster, cnpgPVCRoleLabel: role}},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: map[string]string{"cnpg.io/cluster": cluster, "cnpg.io/pvcRole": role}},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			StorageClassName: &sc,
 			Resources:        corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(requested)}},
@@ -34,7 +34,7 @@ func cnpgTestPVC(ns, name, cluster, instance, role string, owner *metav1.OwnerRe
 		Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound, Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(capacity)}},
 	}
 	if instance != "" {
-		pvc.Labels[cnpgInstanceNameLabel] = instance
+		pvc.Labels["cnpg.io/instanceName"] = instance
 	}
 	if owner != nil {
 		pvc.OwnerReferences = []metav1.OwnerReference{*owner}
@@ -115,13 +115,13 @@ func seedCNPGStorageCluster(t *testing.T, ns string) {
 	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds, cnpgRuntimeWithUID(cluster, string(uid)))
 	owner := &metav1.OwnerReference{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: "pg-orders", UID: uid, Controller: boolPtr(true)}
 	foreign := &metav1.OwnerReference{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: "pg-orders", UID: "someone-else"}
-	wal := cnpgTestPVC(ns, "pg-orders-1-wal", "pg-orders", "pg-orders-1", cnpgPVCRoleWAL, owner, "2Gi", "1Gi")
+	wal := cnpgTestPVC(ns, "pg-orders-1-wal", "pg-orders", "pg-orders-1", "PG_WAL", owner, "2Gi", "1Gi")
 	wal.Status.Conditions = []corev1.PersistentVolumeClaimCondition{{Type: corev1.PersistentVolumeClaimFileSystemResizePending, Status: corev1.ConditionTrue, Message: "waiting for pod restart"}}
 	seedCNPGClaims(t,
-		cnpgTestPVC(ns, "pg-orders-1", "pg-orders", "pg-orders-1", cnpgPVCRoleData, owner, "2Gi", "2Gi"),
+		cnpgTestPVC(ns, "pg-orders-1", "pg-orders", "pg-orders-1", "PG_DATA", owner, "2Gi", "2Gi"),
 		wal,
-		cnpgTestPVC(ns, "pg-orders-2", "pg-orders", "pg-orders-2", cnpgPVCRoleData, owner, "2Gi", "2Gi"),
-		cnpgTestPVC(ns, "pg-orders-9", "pg-orders", "pg-orders-9", cnpgPVCRoleData, foreign, "2Gi", "2Gi"),
+		cnpgTestPVC(ns, "pg-orders-2", "pg-orders", "pg-orders-2", "PG_DATA", owner, "2Gi", "2Gi"),
+		cnpgTestPVC(ns, "pg-orders-9", "pg-orders", "pg-orders-9", "PG_DATA", foreign, "2Gi", "2Gi"),
 	)
 	ownerPod := metav1.OwnerReference{APIVersion: owner.APIVersion, Kind: owner.Kind, Name: owner.Name, UID: uid, Controller: boolPtr(true)}
 	primary := cnpgPod(ns, "pg-orders-1", "pg-orders", ownerPod)
@@ -133,7 +133,7 @@ func seedCNPGStorageCluster(t *testing.T, ns string) {
 	seedCNPGPods(t, primary, replica)
 }
 
-func getCNPGStorage(t *testing.T, path string) (int, CNPGClusterStorageResponse, string) {
+func getCNPGStorage(t *testing.T, path string) (int, cnpgsvc.CNPGClusterStorageResponse, string) {
 	t.Helper()
 	resp, err := http.Get(testServer.URL + path)
 	if err != nil {
@@ -141,7 +141,7 @@ func getCNPGStorage(t *testing.T, path string) (int, CNPGClusterStorageResponse,
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	var out CNPGClusterStorageResponse
+	var out cnpgsvc.CNPGClusterStorageResponse
 	if resp.StatusCode == http.StatusOK {
 		if err := json.Unmarshal(body, &out); err != nil {
 			t.Fatalf("decode: %v (%s)", err, body)
@@ -204,9 +204,9 @@ func usePrometheusVolumeStatsFrom(t *testing.T, used, capacity map[string]float6
 	})
 }
 
-func cnpgStorageInstances(t *testing.T, got CNPGClusterStorageResponse) map[string]CNPGStorageInstance {
+func cnpgStorageInstances(t *testing.T, got cnpgsvc.CNPGClusterStorageResponse) map[string]cnpgsvc.CNPGStorageInstance {
 	t.Helper()
-	out := map[string]CNPGStorageInstance{}
+	out := map[string]cnpgsvc.CNPGStorageInstance{}
 	for _, in := range got.Instances {
 		out[in.Name] = in
 	}
@@ -231,7 +231,7 @@ func TestCNPGClusterStorage_VolumesWALAndUsage(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d: %s", status, body)
 	}
-	if got.Volumes.State != cnpgStorageStateOK || got.WAL.State != cnpgStorageStateOK {
+	if got.Volumes.State != "ok" || got.WAL.State != "ok" {
 		t.Fatalf("coverage volumes=%+v wal=%+v", got.Volumes, got.WAL)
 	}
 	if len(got.Excluded) != 1 || got.Excluded[0].Claim != "pg-orders-9" {
@@ -245,7 +245,7 @@ func TestCNPGClusterStorage_VolumesWALAndUsage(t *testing.T) {
 	if p.Role != "primary" || insts["pg-orders-2"].Role != "replica" {
 		t.Errorf("roles = %s %s", p.Role, insts["pg-orders-2"].Role)
 	}
-	if len(p.Volumes) != 2 || p.Volumes[0].Role != cnpgPVCRoleData || p.Volumes[1].Role != cnpgPVCRoleWAL {
+	if len(p.Volumes) != 2 || p.Volumes[0].Role != "PG_DATA" || p.Volumes[1].Role != "PG_WAL" {
 		t.Fatalf("primary volumes = %+v, want data then WAL", p.Volumes)
 	}
 	data, wal := p.Volumes[0], p.Volumes[1]
@@ -255,15 +255,15 @@ func TestCNPGClusterStorage_VolumesWALAndUsage(t *testing.T) {
 	if !wal.Resize.Pending || len(wal.Resize.Conditions) != 1 || wal.Resize.Conditions[0].Type != "FileSystemResizePending" || wal.ClusterState != "resizing" {
 		t.Errorf("wal resize = %+v state %q", wal.Resize, wal.ClusterState)
 	}
-	if data.Usage.State != cnpgUsageStateOK || data.Usage.Ratio == nil || *data.Usage.Ratio < 0.94 {
+	if data.Usage.State != "ok" || data.Usage.Ratio == nil || *data.Usage.Ratio < 0.94 {
 		t.Errorf("data usage = %+v", data.Usage)
 	}
 	// Prometheus answered for the data claims only: the WAL claim is unmeasured,
 	// never zero.
-	if wal.Usage.State != cnpgUsageStateNoSeries || wal.Usage.Ratio != nil || wal.Usage.UsedBytes != nil {
+	if wal.Usage.State != "noSeries" || wal.Usage.Ratio != nil || wal.Usage.UsedBytes != nil {
 		t.Errorf("wal usage = %+v, want noSeries without figures", wal.Usage)
 	}
-	if got.Usage.State != cnpgStorageStatePartial {
+	if got.Usage.State != "partial" {
 		t.Errorf("usage coverage = %+v, want partial", got.Usage)
 	}
 	if len(got.Findings) != 1 || got.Findings[0].Severity != "critical" || got.Findings[0].Claim != "pg-orders-1" {
@@ -300,12 +300,12 @@ func TestCNPGClusterStorage_NoPrometheusIsNeverZero(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d: %s", status, body)
 	}
-	if got.Usage.State != cnpgUsageStateNoPrometheus {
+	if got.Usage.State != "noPrometheus" {
 		t.Fatalf("usage = %+v, want noPrometheus", got.Usage)
 	}
 	for _, in := range got.Instances {
 		for _, v := range in.Volumes {
-			if v.Usage.State != cnpgUsageStateNoPrometheus || v.Usage.Ratio != nil || v.Usage.UsedBytes != nil {
+			if v.Usage.State != "noPrometheus" || v.Usage.Ratio != nil || v.Usage.UsedBytes != nil {
 				t.Errorf("%s usage = %+v", v.Claim, v.Usage)
 			}
 		}
@@ -322,7 +322,7 @@ func TestCNPGClusterStorage_ReadingTheClusterDoesNotImplyItsClaims(t *testing.T)
 	seedCNPGStorageCluster(t, "pgst3")
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"pgst3"}}
-	perms.SetCanI("get", cnpgGroup, "clusters", "pgst3", true)
+	perms.SetCanI("get", cnpgsvc.Group, "clusters", "pgst3", true)
 	allow(perms, "", "persistentvolumeclaims", "pgst3", false)
 	allow(perms, "", "pods", "pgst3", false)
 	env.srv.permCache.Set("dba", nil, perms)
@@ -333,14 +333,14 @@ func TestCNPGClusterStorage_ReadingTheClusterDoesNotImplyItsClaims(t *testing.T)
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d: %s", resp.StatusCode, b)
 	}
-	var got CNPGClusterStorageResponse
+	var got cnpgsvc.CNPGClusterStorageResponse
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Volumes.State != cnpgStorageStateDenied || got.Volumes.Grant == nil || *got.Volumes.Grant != cnpgGrantListPVCs.In("pgst3") {
+	if got.Volumes.State != "denied" || got.Volumes.Grant == nil || *got.Volumes.Grant != (auth.Grant{Verb: "list", Resource: "persistentvolumeclaims", Namespace: "pgst3"}) {
 		t.Errorf("volumes = %+v", got.Volumes)
 	}
-	if got.WAL.State != cnpgStorageStateDenied || got.WAL.Grant == nil || *got.WAL.Grant != cnpgGrantListPods.In("pgst3") {
+	if got.WAL.State != "denied" || got.WAL.Grant == nil || *got.WAL.Grant != cnpgsvc.GrantListPods.In("pgst3") {
 		t.Errorf("wal = %+v", got.WAL)
 	}
 	for _, in := range got.Instances {
@@ -350,7 +350,7 @@ func TestCNPGClusterStorage_ReadingTheClusterDoesNotImplyItsClaims(t *testing.T)
 	}
 
 	perms2 := &auth.UserPermissions{AllowedNamespaces: []string{"pgst3"}}
-	perms2.SetCanI("get", cnpgGroup, "clusters", "pgst3", false)
+	perms2.SetCanI("get", cnpgsvc.Group, "clusters", "pgst3", false)
 	env.srv.permCache.Set("nobody", nil, perms2)
 	denied := env.authGet(t, "/api/cnpg/clusters/pgst3/pg-orders/storage", "nobody", "")
 	denied.Body.Close()
@@ -370,7 +370,7 @@ func TestCNPGFleetDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	var got CNPGFleetDiskResponse
+	var got cnpgsvc.CNPGFleetDiskResponse
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +380,7 @@ func TestCNPGFleetDisk(t *testing.T) {
 	d := got.Clusters[0]
 	// The foreign claim is fuller but is not this cluster's; the WAL claim has
 	// no series, so the answer is partial.
-	if d.State != cnpgStorageStatePartial || d.Claims != 3 || d.Measured != 2 || d.Max == nil || d.Max.Claim != "pg-orders-1" || d.Max.Instance != "pg-orders-1" {
+	if d.State != "partial" || d.Claims != 3 || d.Measured != 2 || d.Max == nil || d.Max.Claim != "pg-orders-1" || d.Max.Instance != "pg-orders-1" {
 		t.Errorf("disk = %+v max=%+v", d, d.Max)
 	}
 }
@@ -399,16 +399,16 @@ func TestCNPGFleetDiskRefusesAmbiguousClusterIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	var got CNPGFleetDiskResponse
+	var got cnpgsvc.CNPGFleetDiskResponse
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Clusters) != 1 || got.Clusters[0].State != cnpgHistoryStateAmbiguous || got.Clusters[0].Max != nil || got.Clusters[0].Reason == "" {
+	if len(got.Clusters) != 1 || got.Clusters[0].State != "ambiguous" || got.Clusters[0].Max != nil || got.Clusters[0].Reason == "" {
 		t.Fatalf("disk = %+v", got.Clusters)
 	}
 
 	status, storage, body := getCNPGStorage(t, "/api/cnpg/clusters/pgfa/pg-orders/storage")
-	if status != http.StatusOK || storage.Usage.State != cnpgHistoryStateAmbiguous {
+	if status != http.StatusOK || storage.Usage.State != "ambiguous" {
 		t.Fatalf("storage = %d %s", status, body)
 	}
 	for _, in := range storage.Instances {
@@ -416,54 +416,6 @@ func TestCNPGFleetDiskRefusesAmbiguousClusterIdentity(t *testing.T) {
 			if v.Usage.Ratio != nil || v.Usage.UsedBytes != nil {
 				t.Errorf("volume %s carries a value from an ambiguous scope: %+v", v.Claim, v.Usage)
 			}
-		}
-	}
-}
-
-func TestCNPGDiskFindingsThresholds(t *testing.T) {
-	r := func(v float64) *float64 { return &v }
-	vols := []CNPGStorageVolume{
-		{Claim: "a", Role: cnpgPVCRoleData, Usage: CNPGStorageVolumeUsage{State: cnpgUsageStateOK, Ratio: r(0.79)}},
-		{Claim: "b", Role: cnpgPVCRoleWAL, Usage: CNPGStorageVolumeUsage{State: cnpgUsageStateOK, Ratio: r(0.80)}},
-		{Claim: "c", Role: cnpgPVCRoleTablespace, Tablespace: "archive", Usage: CNPGStorageVolumeUsage{State: cnpgUsageStateOK, Ratio: r(0.90)}},
-		{Claim: "d", Role: cnpgPVCRoleData, Usage: CNPGStorageVolumeUsage{State: cnpgUsageStateNoSeries}},
-	}
-	got := cnpgDiskFindings("pg-1", vols, nil)
-	if len(got) != 2 || got[0].Severity != "warning" || got[1].Severity != "critical" {
-		t.Fatalf("findings = %+v", got)
-	}
-	if got[1].Message != "The tablespace archive volume of pg-1 is 90% full" {
-		t.Errorf("message = %q", got[1].Message)
-	}
-	unverified := cnpgDiskFindings("pg-1", vols, &prometheuspkg.SeriesIsolation{Mode: prometheuspkg.SeriesIsolationUnverified, Note: "Radar couldn't confirm these volume stats belong to this exact cluster"})
-	if !strings.Contains(unverified[1].Message, "couldn't confirm these volume stats belong to this exact cluster") {
-		t.Errorf("an unverified match must say so: %q", unverified[1].Message)
-	}
-}
-
-func TestCNPGStorageExpansionDefaultsToStorageSize(t *testing.T) {
-	c := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"storage": map[string]any{"resizeInUseVolumes": false}}}}
-	got := cnpgStorageExpansionOf(c)
-	if len(got.Targets) != 1 || got.Targets[0].Field != "spec.storage.size" || got.Targets[0].Declared != "" {
-		t.Errorf("targets = %+v", got.Targets)
-	}
-	if got.ResizeInUseVolumes == nil || *got.ResizeInUseVolumes {
-		t.Errorf("resizeInUseVolumes = %v, want the declared false", got.ResizeInUseVolumes)
-	}
-}
-
-func TestCNPGWALCoverageReason(t *testing.T) {
-	cases := []struct {
-		failed, partial, total int
-		want                   string
-	}{
-		{3, 0, 3, "3 of 3 instances could not be read"},
-		{1, 2, 3, "1 of 3 instances could not be read; 2 of 3 were read only in part"},
-		{0, 1, 3, "1 of 3 was read only in part"},
-	}
-	for _, c := range cases {
-		if got := cnpgWALCoverageReason(c.failed, c.partial, c.total); got != c.want {
-			t.Errorf("(%d, %d, %d) = %q, want %q", c.failed, c.partial, c.total, got, c.want)
 		}
 	}
 }
@@ -483,11 +435,11 @@ func TestCNPGClusterStorage_WALWithoutCollectorIsPartial(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d: %s", status, body)
 	}
-	if got.WAL.State != cnpgStorageStatePartial || got.WAL.Reason != "2 of 2 were read only in part" {
+	if got.WAL.State != "partial" || got.WAL.Reason != "2 of 2 were read only in part" {
 		t.Errorf("wal coverage = %+v", got.WAL)
 	}
 	for name, in := range cnpgStorageInstances(t, got) {
-		if in.WAL == nil || in.WAL.Metrics.State != cnpgRuntimeStatePartial || in.WAL.Metrics.Reason == "" || in.WAL.Status.State != cnpgRuntimeStateOK {
+		if in.WAL == nil || in.WAL.Metrics.State != "partial" || in.WAL.Metrics.Reason == "" || in.WAL.Status.State != "ok" {
 			t.Errorf("%s WAL = %+v", name, in.WAL)
 		}
 	}

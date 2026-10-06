@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -28,6 +27,7 @@ import (
 	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/podlogs"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -81,7 +81,7 @@ func TestBuildPodInfosForRevisionAttributesOnlyKnownIdentities(t *testing.T) {
 }
 
 func TestLimitWorkloadPodInfosBoundsProblemFirst(t *testing.T) {
-	infos := []WorkloadPodInfo{
+	infos := []podlogs.PodInfo{
 		{Name: "healthy", HealthLevel: string(health.LevelHealthy)},
 		{Name: "degraded-low-restarts", HealthLevel: string(health.LevelDegraded), RestartCount: 1},
 		{Name: "unhealthy", HealthLevel: string(health.LevelUnhealthy)},

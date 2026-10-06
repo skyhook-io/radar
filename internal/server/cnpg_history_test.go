@@ -8,9 +8,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 )
 
@@ -74,7 +74,7 @@ func useCNPGHistoryPrometheusAnswering(t *testing.T, answer func(q string) strin
 	return &seen
 }
 
-func getCNPGHistory(t *testing.T, path string) (int, CNPGClusterHistoryResponse, string) {
+func getCNPGHistory(t *testing.T, path string) (int, cnpgsvc.CNPGClusterHistoryResponse, string) {
 	t.Helper()
 	resp, err := http.Get(testServer.URL + path)
 	if err != nil {
@@ -82,7 +82,7 @@ func getCNPGHistory(t *testing.T, path string) (int, CNPGClusterHistoryResponse,
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	var got CNPGClusterHistoryResponse
+	var got cnpgsvc.CNPGClusterHistoryResponse
 	_ = json.Unmarshal(body, &got)
 	return resp.StatusCode, got, string(body)
 }
@@ -94,7 +94,7 @@ func TestCNPGClusterHistory_NoPrometheusSaysSo(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d: %s", status, body)
 	}
-	if got.Source != cnpgHistorySourceNone || got.Reason == "" || len(got.Charts) != 0 {
+	if got.Source != "none" || got.Reason == "" || len(got.Charts) != 0 {
 		t.Fatalf("got %+v", got)
 	}
 	if status, _, _ := getCNPGHistory(t, "/api/cnpg/clusters/pghi1/pg-orders/history?range=7d"); status != http.StatusBadRequest {
@@ -112,7 +112,7 @@ func TestCNPGClusterHistory_ChartsFromPrometheus(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d: %s", status, body)
 	}
-	if got.Source != cnpgHistorySourcePrometheus || got.State != cnpgHistoryStateOK || got.StepSeconds != 30 || got.Isolation == nil || got.Isolation.Mode != prometheuspkg.SeriesIsolationUnverified {
+	if got.Source != "prometheus" || got.State != "ok" || got.StepSeconds != 30 || got.Isolation == nil || got.Isolation.Mode != prometheuspkg.SeriesIsolationUnverified {
 		t.Fatalf("got %+v", got)
 	}
 	// The volume chart's claims are matched apart from the instance Pods, and say so.
@@ -148,7 +148,7 @@ func TestCNPGClusterHistory_GatesPerSource(t *testing.T) {
 	useCNPGHistoryPrometheus(t)
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"pghi3"}}
-	perms.SetCanI("get", cnpgGroup, "clusters", "pghi3", true)
+	perms.SetCanI("get", cnpgsvc.Group, "clusters", "pghi3", true)
 	allow(perms, "", "persistentvolumeclaims", "pghi3", false)
 	allow(perms, "", "pods", "pghi3", false)
 	env.srv.permCache.Set("dba", nil, perms)
@@ -159,7 +159,7 @@ func TestCNPGClusterHistory_GatesPerSource(t *testing.T) {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("status = %d: %s", resp.StatusCode, b)
 	}
-	var got CNPGClusterHistoryResponse
+	var got cnpgsvc.CNPGClusterHistoryResponse
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestCNPGClusterHistory_GatesPerSource(t *testing.T) {
 	}
 
 	perms2 := &auth.UserPermissions{AllowedNamespaces: []string{"pghi3"}}
-	perms2.SetCanI("get", cnpgGroup, "clusters", "pghi3", false)
+	perms2.SetCanI("get", cnpgsvc.Group, "clusters", "pghi3", false)
 	env.srv.permCache.Set("nobody", nil, perms2)
 	denied := env.authGet(t, "/api/cnpg/clusters/pghi3/pg-orders/history", "nobody", "")
 	denied.Body.Close()
@@ -187,24 +187,24 @@ func TestCNPGFleetMetrics(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	var got CNPGFleetMetricsResponse
+	var got cnpgsvc.CNPGFleetMetricsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Source != cnpgHistorySourcePrometheus || len(got.Clusters) != 1 {
+	if got.Source != "prometheus" || len(got.Clusters) != 1 {
 		t.Fatalf("got %+v", got)
 	}
 	c := got.Clusters[0]
-	if c.Lag.State != cnpgHistoryStateOK || c.Lag.Seconds == nil || *c.Lag.Seconds != 4 || c.Lag.Pod != "pg-orders-2" {
+	if c.Lag.State != "ok" || c.Lag.Seconds == nil || *c.Lag.Seconds != 4 || c.Lag.Pod != "pg-orders-2" {
 		t.Errorf("lag = %+v", c.Lag)
 	}
-	if c.Growth.State != cnpgUsageStateNoSeries || c.Growth.BytesPerHour != nil {
+	if c.Growth.State != "noSeries" || c.Growth.BytesPerHour != nil {
 		t.Errorf("growth = %+v", c.Growth)
 	}
 	if !c.Lag.ReceiverUnknown || c.Lag.Receiving != nil || c.Lag.ReceiverDown != nil {
 		t.Errorf("no receiver series must read unknown, never receiving: %+v", c.Lag)
 	}
-	if c.Slots.State != cnpgUsageStateNoSeries || c.Slots.Inactive != nil {
+	if c.Slots.State != "noSeries" || c.Slots.Inactive != nil {
 		t.Errorf("slots = %+v, want noSeries without a list", c.Slots)
 	}
 }
@@ -291,15 +291,15 @@ func TestCNPGFleetMetricsSlotsFollowPodsGate(t *testing.T) {
 	seen := useCNPGHistoryPrometheus(t)
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"pgfd"}}
-	allow(perms, cnpgGroup, "clusters", "", true)
-	allow(perms, cnpgGroup, "clusters", "pgfd", true)
+	allow(perms, cnpgsvc.Group, "clusters", "", true)
+	allow(perms, cnpgsvc.Group, "clusters", "pgfd", true)
 	perms.SetCanI("get", "", "pods", "pgfd", false)
 	allow(perms, "", "persistentvolumeclaims", "pgfd", false)
 	env.srv.permCache.Set("dba", nil, perms)
 
 	resp := env.authGet(t, "/api/cnpg/fleet-metrics?namespaces=pgfd", "dba", "")
 	defer resp.Body.Close()
-	var got CNPGFleetMetricsResponse
+	var got cnpgsvc.CNPGFleetMetricsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 		t.Fatal(err)
 	}
@@ -308,11 +308,11 @@ func TestCNPGFleetMetricsSlotsFollowPodsGate(t *testing.T) {
 	}
 	c := got.Clusters[0]
 	for name, st := range map[string]struct {
-		state string
-		grant *Grant
+		State string
+		Grant *Grant
 	}{"lag": {c.Lag.State, c.Lag.Grant}, "slots": {c.Slots.State, c.Slots.Grant}} {
-		if st.state != cnpgHistoryStateDenied || st.grant == nil || st.grant.Verb != "get" || st.grant.Resource != "pods" || st.grant.Namespace != "pgfd" {
-			t.Errorf("%s = %s %+v, want denied naming get pods in pgfd", name, st.state, st.grant)
+		if st.State != "denied" || st.Grant == nil || st.Grant.Verb != "get" || st.Grant.Resource != "pods" || st.Grant.Namespace != "pgfd" {
+			t.Errorf("%s = %s %+v, want denied naming get pods in pgfd", name, st.State, st.Grant)
 		}
 	}
 	if c.Slots.Inactive != nil || c.Lag.Standbys != nil {
@@ -321,22 +321,6 @@ func TestCNPGFleetMetricsSlotsFollowPodsGate(t *testing.T) {
 	for _, q := range *seen {
 		if strings.Contains(q, "cnpg_") {
 			t.Errorf("denied caller's CNPG series were queried: %s", q)
-		}
-	}
-}
-
-func TestParseCNPGLogQueryInterval(t *testing.T) {
-	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
-	q, err := parseCNPGLogQuery(httptest.NewRequest("GET", "/?sinceTime=2026-09-28T11:00:00Z&untilTime=2026-09-28T11:05:00Z", nil), now)
-	if err != nil || q.tailLines != 0 || q.sinceSeconds == nil || *q.sinceSeconds != 3600 {
-		t.Fatalf("q = %+v err = %v", q, err)
-	}
-	if !q.keep(workloadLogEntry{Timestamp: "2026-09-28T11:05:00Z"}) || q.keep(workloadLogEntry{Timestamp: "2026-09-28T11:05:00.1Z"}) || q.keep(workloadLogEntry{Timestamp: "2026-09-28T10:59:59Z"}) {
-		t.Fatal("interval bounds not applied")
-	}
-	for _, bad := range []string{"/?untilTime=2026-09-28T11:05:00Z", "/?sinceTime=2026-09-28T11:05:00Z&untilTime=2026-09-28T11:00:00Z", "/?sinceTime=2026-09-28T11:00:00Z&untilTime=x"} {
-		if _, err := parseCNPGLogQuery(httptest.NewRequest("GET", bad, nil), now); err == nil {
-			t.Errorf("%s accepted", bad)
 		}
 	}
 }

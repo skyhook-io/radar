@@ -14,6 +14,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/config"
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/checks"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
@@ -316,7 +317,7 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if namespace != "" {
-		if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
+		if allowed := s.getUserNamespaces(r, []string{namespace}); integration.NoNamespaceAccess(allowed) {
 			s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 			return
 		}

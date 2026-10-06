@@ -18,6 +18,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -90,7 +91,7 @@ func TestCNPGWorkspace_FallbackCacheAllNamespaces(t *testing.T) {
 
 	got := getWorkspaceNoAuth(t, "")
 	cov := got.Coverage["clusters"]
-	if cov.State != kindCoveragePartial {
+	if cov.State != integration.KindCoveragePartial {
 		t.Fatalf("clusters coverage = %+v, want partial", cov)
 	}
 	if len(cov.UncachedNamespaces) != 0 {
@@ -99,7 +100,7 @@ func TestCNPGWorkspace_FallbackCacheAllNamespaces(t *testing.T) {
 	if names := sortedNames(got.Objects["clusters"]); len(names) != 1 || names[0] != "pg-a" {
 		t.Errorf("clusters = %v, want [pg-a]", names)
 	}
-	if cov := got.Coverage["clusterImageCatalogs"]; cov.State != kindCoverageUncached {
+	if cov := got.Coverage["clusterImageCatalogs"]; cov.State != integration.KindCoverageUncached {
 		t.Errorf("clusterImageCatalogs coverage = %+v: a cluster-scoped kind Radar may not watch is uncached, not an error", cov)
 	}
 }
@@ -110,7 +111,7 @@ func TestCNPGWorkspace_FallbackCacheNamedNamespaces(t *testing.T) {
 	seedCNPGFallbackCache(t, fallbackFixture{fallbacks: []string{"a"}, forbid: inNamespaces("c")}, "a", "pg-a", "b", "pg-b", "c", "pg-c")
 
 	b := getWorkspaceNoAuth(t, "?namespaces=b")
-	if cov := b.Coverage["clusters"]; cov.State != kindCoverageFull {
+	if cov := b.Coverage["clusters"]; cov.State != integration.KindCoverageFull {
 		t.Errorf("namespaces=b: coverage = %+v, want full", cov)
 	}
 	if names := sortedNames(b.Objects["clusters"]); len(names) != 1 || names[0] != "pg-b" {
@@ -119,7 +120,7 @@ func TestCNPGWorkspace_FallbackCacheNamedNamespaces(t *testing.T) {
 
 	ac := getWorkspaceNoAuth(t, "?namespaces=a,c")
 	cov := ac.Coverage["clusters"]
-	if cov.State != kindCoveragePartial || len(cov.UncachedNamespaces) != 1 || cov.UncachedNamespaces[0] != "c" {
+	if cov.State != integration.KindCoveragePartial || len(cov.UncachedNamespaces) != 1 || cov.UncachedNamespaces[0] != "c" {
 		t.Errorf("namespaces=a,c: coverage = %+v, want partial with c not cached", cov)
 	}
 	if names := sortedNames(ac.Objects["clusters"]); len(names) != 1 || names[0] != "pg-a" {
@@ -127,7 +128,7 @@ func TestCNPGWorkspace_FallbackCacheNamedNamespaces(t *testing.T) {
 	}
 
 	c := getWorkspaceNoAuth(t, "?namespaces=c")
-	if cov := c.Coverage["clusters"]; cov.State != kindCoverageUncached || len(cov.UncachedNamespaces) != 1 || cov.UncachedNamespaces[0] != "c" {
+	if cov := c.Coverage["clusters"]; cov.State != integration.KindCoverageUncached || len(cov.UncachedNamespaces) != 1 || cov.UncachedNamespaces[0] != "c" {
 		t.Errorf("namespaces=c: coverage = %+v, want uncached c", cov)
 	}
 }
@@ -141,7 +142,7 @@ func TestCNPGWorkspace_FallbackCacheRetriesUnsyncedNamespace(t *testing.T) {
 
 	first := getWorkspaceNoAuth(t, "?namespaces=a,x")
 	cov := first.Coverage["clusters"]
-	if cov.State != kindCoveragePartial || len(cov.UncachedNamespaces) != 1 || cov.UncachedNamespaces[0] != "x" {
+	if cov.State != integration.KindCoveragePartial || len(cov.UncachedNamespaces) != 1 || cov.UncachedNamespaces[0] != "x" {
 		t.Fatalf("first read: coverage = %+v, want partial with x unread", cov)
 	}
 	if names := sortedNames(first.Objects["clusters"]); len(names) != 1 || names[0] != "pg-a" {
@@ -152,7 +153,7 @@ func TestCNPGWorkspace_FallbackCacheRetriesUnsyncedNamespace(t *testing.T) {
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		got := getWorkspaceNoAuth(t, "?namespaces=a,x")
-		if got.Coverage["clusters"].State == kindCoverageFull {
+		if got.Coverage["clusters"].State == integration.KindCoverageFull {
 			if names := sortedNames(got.Objects["clusters"]); len(names) != 2 || names[0] != "pg-a" || names[1] != "pg-x" {
 				t.Errorf("after sync: clusters = %v, want [pg-a pg-x]", names)
 			}
@@ -171,12 +172,12 @@ func TestCNPGWorkspace_FallbackCacheRetriesUnsyncedNamespace(t *testing.T) {
 func TestCNPGWorkspace_FallbackCacheAllKeepsNamedWatches(t *testing.T) {
 	seedCNPGFallbackCache(t, fallbackFixture{fallbacks: []string{"a"}, forbid: inNamespaces("a")}, "a", "pg-a", "b", "pg-b")
 
-	if b := getWorkspaceNoAuth(t, "?namespaces=b"); b.Coverage["clusters"].State != kindCoverageFull {
+	if b := getWorkspaceNoAuth(t, "?namespaces=b"); b.Coverage["clusters"].State != integration.KindCoverageFull {
 		t.Fatalf("namespaces=b: coverage = %+v, want full", b.Coverage["clusters"])
 	}
 	all := getWorkspaceNoAuth(t, "")
 	cov := all.Coverage["clusters"]
-	if cov.State != kindCoveragePartial {
+	if cov.State != integration.KindCoveragePartial {
 		t.Fatalf("all: coverage = %+v, want partial from the watch on b", cov)
 	}
 	if names := sortedNames(all.Objects["clusters"]); len(names) != 1 || names[0] != "pg-b" {
@@ -195,7 +196,7 @@ func TestCNPGWorkspace_FallbackCacheWaitsWithinOneBudget(t *testing.T) {
 		t.Errorf("request took %v; stalled namespaces must share one %v wait", elapsed, dynamicSyncWait)
 	}
 	cov := got.Coverage["clusters"]
-	if cov.State != kindCoveragePartial || len(cov.UncachedNamespaces) != 3 {
+	if cov.State != integration.KindCoveragePartial || len(cov.UncachedNamespaces) != 3 {
 		t.Errorf("coverage = %+v, want partial with x, y, z unread", cov)
 	}
 	if names := sortedNames(got.Objects["clusters"]); len(names) != 1 || names[0] != "pg-a" {
@@ -206,16 +207,16 @@ func TestCNPGWorkspace_FallbackCacheWaitsWithinOneBudget(t *testing.T) {
 // readCNPGClusters runs the workspace's kind reads as its handler does, under
 // one budget, and returns the Clusters. The issues the handler composes
 // afterwards read through the same watches and are not bounded by it.
-func readCNPGClusters(namespaces []string) (KindCoverage, []*unstructured.Unstructured, time.Duration) {
+func readCNPGClusters(namespaces []string) (integration.KindCoverage, []*unstructured.Unstructured, time.Duration) {
 	r := httptest.NewRequest(http.MethodGet, "/api/cnpg/workspace", nil)
 	budget := newSyncBudget(r.Context())
 	start := time.Now()
-	var cov KindCoverage
+	var cov integration.KindCoverage
 	var clusters []*unstructured.Unstructured
-	for _, k := range cnpgWorkspaceKinds {
-		acc, list := testServerSrv.cnpgWorkspaceReadKind(r, k8s.GetResourceCache(), k, namespaces, budget)
-		if k.key == cnpgWorkspaceClusterKey {
-			cov, clusters = acc.coverage(), list
+	for _, k := range cnpgWorkspaceFixtureKinds {
+		acc, list := testServerSrv.readWorkspaceKind(r, k8s.GetResourceCache(), k, namespaces, []string{"postgresql.cnpg.io", "barmancloud.cnpg.io"}, budget)
+		if k.Key == "clusters" {
+			cov, clusters = acc.Coverage(), list
 		}
 	}
 	return cov, clusters, time.Since(start)
@@ -232,7 +233,7 @@ func TestCNPGWorkspace_FallbackCacheSlowWatchStartsWithinOneBudget(t *testing.T)
 	if elapsed > dynamicSyncWait+time.Second {
 		t.Errorf("kind reads took %v; starting three slow watches must share one %v budget", elapsed, dynamicSyncWait)
 	}
-	if cov.State != kindCoveragePartial || len(cov.UncachedNamespaces) != 3 {
+	if cov.State != integration.KindCoveragePartial || len(cov.UncachedNamespaces) != 3 {
 		t.Errorf("coverage = %+v, want partial with x, y, z unread", cov)
 	}
 	if len(clusters) != 1 || clusters[0].GetName() != "pg-a" {
@@ -242,7 +243,7 @@ func TestCNPGWorkspace_FallbackCacheSlowWatchStartsWithinOneBudget(t *testing.T)
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		cov, clusters, _ := readCNPGClusters(namespaces)
-		if cov.State == kindCoverageFull {
+		if cov.State == integration.KindCoverageFull {
 			if len(clusters) != 4 {
 				t.Errorf("after the watches started: %d clusters, want 4", len(clusters))
 			}
@@ -265,7 +266,7 @@ func TestCNPGWorkspace_FallbackCacheAllWaitsWithinOneBudget(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > dynamicSyncWait+time.Second {
 		t.Errorf("request took %v; stalled fallback watches must share one %v wait", elapsed, dynamicSyncWait)
 	}
-	if cov := got.Coverage["clusters"]; cov.State != kindCoveragePartial || len(cov.UncachedNamespaces) != 0 {
+	if cov := got.Coverage["clusters"]; cov.State != integration.KindCoveragePartial || len(cov.UncachedNamespaces) != 0 {
 		t.Errorf("coverage = %+v, want partial, naming nothing", cov)
 	}
 	if names := sortedNames(got.Objects["clusters"]); len(names) != 1 || names[0] != "pg-a" {
@@ -287,7 +288,7 @@ func TestSyncBudget_StopsWhenRequestEnds(t *testing.T) {
 
 	start := time.Now()
 	_, err := budget.listBlocking(k8s.GetDynamicResourceCache(), gvr, "x")
-	if !errors.Is(err, errDynamicNotSynced) {
+	if !errors.Is(err, integration.ErrDynamicNotSynced) {
 		t.Errorf("err = %v, want errDynamicNotSynced", err)
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {

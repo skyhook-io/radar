@@ -1,11 +1,9 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -13,13 +11,10 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -34,98 +29,12 @@ import (
 // lacked too.
 type Grant = auth.Grant
 
-const (
-	actionBodyLimit = 64 << 10
-
-	actionCodeChanged        = "changed"
-	actionCodeContextChanged = "context_changed"
-	actionCodeBlocked        = "blocked"
-	actionCodePartial        = "partial"
-
-	permissionAllowed = "allowed"
-	permissionDenied  = "denied"
-	permissionUnknown = "unknown"
-)
-
-// ActionCapability is one action's verdict: allowed only when the state
-// guards pass and the caller's grant is not known to be missing. An unknown
-// grant (the SubjectAccessReview itself failed) leaves the apiserver to decide.
-type ActionCapability struct {
-	Allowed    bool   `json:"allowed"`
-	Reason     string `json:"reason,omitempty"`
-	ReasonCode string `json:"reasonCode,omitempty"`
-	Permission string `json:"permission"`
-	Grant      *Grant `json:"grant,omitempty"`
-}
-
-// ActionRequest is the POST body of every action.
-type ActionRequest struct {
-	ReviewedContext string          `json:"reviewedContext"`
-	UID             string          `json:"uid"`
-	Facts           json.RawMessage `json:"facts,omitempty"`
-	Params          json.RawMessage `json:"params,omitempty"`
-}
-
-// actionError is a refusal with a stable code; Current carries the facts as
-// they are now when a confirmation no longer matches.
-type actionError struct {
-	Status  int
-	Code    string
-	Message string
-	Current any
-	// Completed lists the mutations that took effect before a multi-step
-	// action stopped (code partial).
-	Completed []string
-}
-
-func (e *actionError) Error() string { return e.Message }
-
-func refuseAction(status int, code, format string, args ...any) *actionError {
-	return &actionError{Status: status, Code: code, Message: fmt.Sprintf(format, args...)}
-}
-
-// changedAction refuses a confirmation whose reviewed facts no longer hold.
-func changedAction(current any, format string, args ...any) *actionError {
-	e := refuseAction(http.StatusConflict, actionCodeChanged, format, args...)
-	e.Current = current
-	return e
-}
-
-func blockedAction(reason string) error {
-	return refuseAction(http.StatusConflict, actionCodeBlocked, "%s", reason)
-}
-
-// partialAction reports a multi-step action that stopped after some of its
-// mutations took effect; retrying it blindly would act on a changed target.
-func partialAction(completed []string, cause error) *actionError {
-	status := http.StatusInternalServerError
-	var ae *actionError
-	switch {
-	case errors.As(cause, &ae):
-		status = ae.Status
-	case apierrors.IsForbidden(cause):
-		status = http.StatusForbidden
-	case apierrors.IsConflict(cause), apierrors.IsNotFound(cause):
-		status = http.StatusConflict
-	case errors.Is(cause, context.DeadlineExceeded) || apierrors.IsTimeout(cause) || apierrors.IsServerTimeout(cause):
-		status = http.StatusGatewayTimeout
-	}
-	e := &actionError{
-		Status: status, Code: actionCodePartial, Completed: append([]string(nil), completed...),
-		Message: fmt.Sprintf("Stopped part-way: %s. Already done: %s", cause.Error(), strings.Join(completed, ", ")),
-	}
-	if ae != nil {
-		e.Current = ae.Current
-	}
-	return e
-}
-
 // decodeActionRequest reads the body and checks the reviewed context. The
 // dynamic client is the caller's, snapshotted with the context it belongs to.
 // The error is already written when ok is false.
-func (s *Server) decodeActionRequest(w http.ResponseWriter, r *http.Request) (ActionRequest, dynamic.Interface, bool) {
-	var req ActionRequest
-	if err := decodeBoundedJSONBody(w, r, actionBodyLimit, &req); err != nil {
+func (s *Server) decodeActionRequest(w http.ResponseWriter, r *http.Request) (integration.ActionRequest, dynamic.Interface, bool) {
+	var req integration.ActionRequest
+	if err := decodeBoundedJSONBody(w, r, integration.ActionBodyLimit, &req); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			s.writeError(w, http.StatusRequestEntityTooLarge, "request body is too large")
@@ -143,34 +52,11 @@ func (s *Server) decodeActionRequest(w http.ResponseWriter, r *http.Request) (Ac
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return req, nil, false
 	}
-	if err := checkReviewedContext(req.ReviewedContext, contextName); err != nil {
+	if err := integration.CheckReviewedContext(req.ReviewedContext, contextName); err != nil {
 		s.writeActionError(w, "actions", err, "context", "", "", nil)
 		return req, nil, false
 	}
 	return req, dyn, true
-}
-
-func checkReviewedContext(reviewed, active string) error {
-	if reviewed != active {
-		return refuseAction(http.StatusConflict, actionCodeContextChanged,
-			"The active cluster context is %q, not the %q you reviewed; review the action again", active, reviewed)
-	}
-	return nil
-}
-
-// decodeActionParams decodes an action's params strictly: an unknown field is
-// a client that means something this server does not do.
-func decodeActionParams(raw json.RawMessage, into any) error {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || string(trimmed) == "null" {
-		trimmed = []byte("{}")
-	}
-	dec := json.NewDecoder(bytes.NewReader(trimmed))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(into); err != nil {
-		return refuseAction(http.StatusBadRequest, "", "invalid params: %v", err)
-	}
-	return nil
 }
 
 // writeActionError answers a failed action. A refusal keeps its status, code,
@@ -178,7 +64,7 @@ func decodeActionParams(raw json.RawMessage, into any) error {
 // and a Forbidden one names the grant needs(action) returns, bound to
 // namespace. tag prefixes the log lines.
 func (s *Server) writeActionError(w http.ResponseWriter, tag string, err error, action, namespace, name string, needs func(action string) (Grant, bool)) {
-	var ae *actionError
+	var ae *integration.ActionError
 	if errors.As(err, &ae) {
 		log.Printf("[%s] %q %s/%s refused %d: %s", tag, action, sanitizeForLog(namespace), sanitizeForLog(name), ae.Status, ae.Message)
 		body := map[string]any{"error": ae.Message}
@@ -221,44 +107,17 @@ func (s *Server) writeActionError(w http.ResponseWriter, tag string, err error, 
 	s.writeError(w, status, msg)
 }
 
-// mergePatchAtVersion merge-patches obj bound to the resourceVersion it was
-// read at, so a write the caller did not review is refused with a Conflict
-// rather than applied over. Callers turn the Conflict into "changed"; it is
-// never retried.
-func mergePatchAtVersion(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, obj *unstructured.Unstructured, body map[string]any, subresources ...string) error {
-	meta, _ := body["metadata"].(map[string]any)
-	if meta == nil {
-		meta = map[string]any{}
-		body["metadata"] = meta
-	}
-	meta["resourceVersion"] = obj.GetResourceVersion()
-	data, err := json.Marshal(body)
-	if err != nil {
-		return err
-	}
-	_, err = dyn.Resource(gvr).Namespace(obj.GetNamespace()).Patch(ctx, obj.GetName(), types.MergePatchType, data, metav1.PatchOptions{}, subresources...)
-	return err
-}
-
-// grantText words an optional grant, "" when there is none.
-func grantText(g *Grant) string {
-	if g == nil {
-		return ""
-	}
-	return g.String()
-}
-
 // grantPermission answers one grant for the caller: allowed, denied, or
 // unknown when the SubjectAccessReview itself failed.
 func (s *Server) grantPermission(r *http.Request, g Grant) string {
 	allowed, authoritative := s.grantDecision(r, g)
 	switch {
 	case !authoritative:
-		return permissionUnknown
+		return integration.PermissionUnknown
 	case allowed:
-		return permissionAllowed
+		return integration.PermissionAllowed
 	default:
-		return permissionDenied
+		return integration.PermissionDenied
 	}
 }
 
@@ -327,36 +186,4 @@ func localCanI(ctx context.Context, g Grant) (bool, bool) {
 	localCanIMemo[key] = localCanIEntry{allowed: allowed, expires: now.Add(localCanITTL)}
 	localCanIMu.Unlock()
 	return allowed, true
-}
-
-// capabilityVerdict folds a guard reason and the permission of each grant
-// (perms[i] answers grants[i]) into a verdict. The first denied grant is
-// named; an unknown grant leaves the action offered.
-func capabilityVerdict(guard string, perms []string, grants []Grant) ActionCapability {
-	out := ActionCapability{Permission: permissionAllowed}
-	for i, p := range perms {
-		if p == permissionDenied {
-			out.Permission = permissionDenied
-			out.Grant = grants[i].Ref()
-			break
-		}
-		if p == permissionUnknown {
-			out.Permission = permissionUnknown
-			if out.Grant == nil {
-				out.Grant = grants[i].Ref()
-			}
-		}
-	}
-	if out.Permission == permissionAllowed {
-		out.Grant = nil
-	}
-	switch {
-	case out.Permission == permissionDenied:
-		out.Reason = "You are not allowed to " + out.Grant.String()
-	case guard != "":
-		out.Reason = guard
-	default:
-		out.Allowed = true
-	}
-	return out
 }

@@ -98,8 +98,8 @@ func CNPGClusterOfPod(pod string, clusters map[string]bool) string {
 
 // ResolveCNPGScope decides the cluster-identity matchers for one namespace's
 // CNPG exporter series over window (0 for an instant read).
-func ResolveCNPGScope(ctx context.Context, namespace, selector string, anchors []prom.WorkloadPodIdentity, window time.Duration) (string, SeriesIsolation, error) {
-	return resolveScope(ctx, namespace, scopeProbe{metric: "cnpg_collector_up", key: "pod", selectors: []string{selector}, window: window}, anchors, nil)
+func (client *Client) ResolveCNPGScope(ctx context.Context, namespace, selector string, anchors []prom.WorkloadPodIdentity, window time.Duration) (string, SeriesIsolation, error) {
+	return client.resolveScope(ctx, namespace, scopeProbe{metric: "cnpg_collector_up", key: "pod", selectors: []string{selector}, window: window}, anchors, nil)
 }
 
 // CNPGHistoryThreshold is a reference line on a chart.
@@ -263,8 +263,7 @@ type CNPGHistoryRequest struct {
 }
 
 // QueryCNPGHistory runs every chart query, a few at a time.
-func QueryCNPGHistory(ctx context.Context, req CNPGHistoryRequest) ([]CNPGHistoryChart, error) {
-	client := GetClient()
+func (client *Client) QueryCNPGHistory(ctx context.Context, req CNPGHistoryRequest) ([]CNPGHistoryChart, error) {
 	if client == nil {
 		return nil, errors.New("Prometheus client not initialized")
 	}
@@ -431,8 +430,7 @@ const CNPGSustainedLagWindow = 10 * time.Minute
 
 // QueryCNPGFleetLag reads the current replay lag of every standby of the
 // named Clusters in one namespace with one instant query.
-func QueryCNPGFleetLag(ctx context.Context, namespace string, clusters []string, matchers string) (CNPGFleetLag, error) {
-	client := GetClient()
+func (client *Client) QueryCNPGFleetLag(ctx context.Context, namespace string, clusters []string, matchers string) (CNPGFleetLag, error) {
 	if client == nil {
 		return CNPGFleetLag{}, errors.New("Prometheus client not initialized")
 	}
@@ -592,8 +590,7 @@ type CNPGFleetSlots struct {
 
 // QueryCNPGFleetSlots reads the inactive physical replication slots of the
 // named Clusters in one namespace with one instant query.
-func QueryCNPGFleetSlots(ctx context.Context, namespace string, clusters []string, matchers string) (CNPGFleetSlots, error) {
-	client := GetClient()
+func (client *Client) QueryCNPGFleetSlots(ctx context.Context, namespace string, clusters []string, matchers string) (CNPGFleetSlots, error) {
 	if client == nil {
 		return CNPGFleetSlots{}, errors.New("Prometheus client not initialized")
 	}
@@ -741,8 +738,7 @@ func querySustainedCNPGLag(ctx context.Context, q seriesQuerier, sel string, kno
 
 // QueryCNPGDiskGrowth reads each claim's used-bytes trend over the window as
 // bytes per hour (linear regression, so a single deletion does not dominate).
-func QueryCNPGDiskGrowth(ctx context.Context, namespace string, claims []string, window time.Duration, matchers string) (map[string]float64, error) {
-	client := GetClient()
+func (client *Client) QueryCNPGDiskGrowth(ctx context.Context, namespace string, claims []string, window time.Duration, matchers string) (map[string]float64, error) {
 	if client == nil {
 		return nil, errors.New("Prometheus client not initialized")
 	}

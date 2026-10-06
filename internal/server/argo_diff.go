@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/skyhook-io/radar/internal/argocd"
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -96,7 +97,7 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 	// Gate 1: the Application root. A caller who can't see the Application's
 	// namespace is denied here, before any upstream fetch. Matches the
 	// namespace-access check parseGitOpsRequest runs for /api/gitops/insights.
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{appNamespace})) {
+	if integration.NoNamespaceAccess(s.getUserNamespaces(r, []string{appNamespace})) {
 		s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", appNamespace))
 		return
 	}
@@ -617,7 +618,7 @@ func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Reque
 
 	// Gate: the caller must be able to see the Application's namespace, matching
 	// the resource-diff and insights handlers.
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{appNamespace})) {
+	if integration.NoNamespaceAccess(s.getUserNamespaces(r, []string{appNamespace})) {
 		s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", appNamespace))
 		return
 	}

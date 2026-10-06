@@ -71,8 +71,8 @@ func (p scopeProbe) over(sel string) string {
 
 // ResolvePVCScope decides the cluster-identity matchers for the named claims'
 // kubelet volume stats over window (0 for an instant read).
-func ResolvePVCScope(ctx context.Context, namespace string, claims []string, anchors []prom.WorkloadPodIdentity, window time.Duration) (string, SeriesIsolation, error) {
-	m, iso, err := resolveScope(ctx, namespace, pvcScopeProbe(namespace, claims, window), anchors, nil)
+func (client *Client) ResolvePVCScope(ctx context.Context, namespace string, claims []string, anchors []prom.WorkloadPodIdentity, window time.Duration) (string, SeriesIsolation, error) {
+	m, iso, err := client.resolveScope(ctx, namespace, pvcScopeProbe(namespace, claims, window), anchors, nil)
 	return m, iso.forClaims(), err
 }
 
@@ -111,7 +111,10 @@ func ClaimSelectors(namespace string, claims []string) []string {
 // exporter's own `cluster` label is the database cluster's name).
 // With no anchors, a cache lets the proof use the namespace's current Pods.
 func resolveScope(ctx context.Context, namespace string, probe scopeProbe, anchors []prom.WorkloadPodIdentity, cache *k8s.ResourceCache) (string, SeriesIsolation, error) {
-	client := GetClient()
+	return GetClient().resolveScope(ctx, namespace, probe, anchors, cache)
+}
+
+func (client *Client) resolveScope(ctx context.Context, namespace string, probe scopeProbe, anchors []prom.WorkloadPodIdentity, cache *k8s.ResourceCache) (string, SeriesIsolation, error) {
 	if client == nil {
 		return "", SeriesIsolation{}, errors.New("Prometheus client not initialized")
 	}

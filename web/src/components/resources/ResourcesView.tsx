@@ -12,7 +12,7 @@ import { initNavigationMap, getSecretStoreProviderType } from '@skyhook-io/k8s-u
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useResourceCounts } from '../../hooks/useResourceCounts'
 import { useCNPGSidebarWorkspace } from '../cnpg/useCNPGSidebarWorkspace'
-import { cnpgHost, useCNPGHostSupport } from '../cnpg/host'
+import { renderResourceKindList, resourceKindListMode, useResourceHostFeatures } from '../../integrations/resourceHosts'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import {
   canBulkRestartKind,
@@ -77,7 +77,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const { connection } = useConnection()
 
   const { data: capabilities, isPending: capabilitiesPending } = useCapabilities()
-  const { support: cnpgSupport } = useCNPGHostSupport()
+  const hostFeatures = useResourceHostFeatures()
   const namespaceForCapabilities = namespaces.length === 1 ? namespaces[0] : undefined
   const { data: namespaceCapabilities } = useNamespaceCapabilities(namespaceForCapabilities, capabilities)
   const namespaceCapabilityNames = useMemo(() => namespaces.length > 1 ? [...namespaces].sort() : [], [namespaces])
@@ -283,7 +283,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         printerTable: sanitizePrinterTable(body),
       }
     },
-    enabled: !!selectedKind && !selectedKindQueryBlocked && cnpgHost.kindListMode(selectedKind, cnpgSupport, capabilitiesPending) === 'table',
+    enabled: !!selectedKind && !selectedKindQueryBlocked && resourceKindListMode(selectedKind, hostFeatures, capabilitiesPending) === 'table',
     staleTime: 30000,
     refetchInterval: 120000, // Safety net — SSE k8s_event drives near-real-time invalidation
     retry: (failureCount: number, error: Error) => {
@@ -387,16 +387,15 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     setCreateDialogOpen(true)
   }, [])
 
-  // The CloudNativePG Cluster kind's list is the CloudNativePG Clusters view.
   const renderKindView = useCallback(
-    (kind: SelectedKindInfo) => cnpgHost.kindView(kind, cnpgSupport, capabilitiesPending, {
+    (kind: SelectedKindInfo) => renderResourceKindList(kind, hostFeatures, capabilitiesPending, {
       namespaces,
       inspected: selectedResource ?? null,
       onInspect: (resource) => onResourceClick?.(resource),
       onClearNamespaces: onClearNamespaces ?? (() => {}),
-      onCreate: () => handleCreateResource(cnpgHost.clusterKind),
+      onCreate: handleCreateResource,
     }),
-    [cnpgSupport, capabilitiesPending, namespaces, selectedResource, onResourceClick, onClearNamespaces, handleCreateResource],
+    [hostFeatures, capabilitiesPending, namespaces, selectedResource, onResourceClick, onClearNamespaces, handleCreateResource],
   )
 
   return (

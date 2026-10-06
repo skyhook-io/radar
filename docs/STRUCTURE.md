@@ -10,6 +10,7 @@ radar/
 ├── internal/
 │   ├── app/                   # Application lifecycle management
 │   ├── audit/                 # Radar-specific audit runner (cache → pkg/audit bridge)
+│   ├── cnpg/                  # CNPG service: caller-scoped reads, actions, reports and log/activity interpretation
 │   ├── config/                # Configuration management
 │   ├── errorlog/              # Error logging utilities
 │   ├── helm/                  # Helm client integration
@@ -17,6 +18,8 @@ radar/
 │   │   ├── handlers.go        # HTTP handlers for Helm operations
 │   │   ├── hook_evidence.go   # Live Job/Pod/Event/log evidence for failed hooks
 │   │   └── types.go           # Helm release types
+│   ├── imageutil/             # Explicit image-tag parsing shared by app and integration observations
+│   ├── integration/           # Shared read coverage, action contracts, scope helpers and bounded fan-out
 │   ├── images/                # Container image analysis
 │   │   ├── auth.go            # Registry authentication (pull secrets, ECR, GCR, ACR)
 │   │   ├── handlers.go        # HTTP handlers for image inspection
@@ -49,6 +52,7 @@ radar/
 │   │   ├── tools_workloads.go # Workload-specific MCP tools
 │   │   └── resources.go       # MCP resource definitions
 │   ├── opencost/              # OpenCost integration (cost analysis)
+│   ├── podlogs/               # Bounded log snapshots and Pod/container projections shared by workload integrations
 │   ├── prometheus/            # Prometheus client integration
 │   ├── server/
 │   │   ├── server.go          # chi router, main REST endpoints (SOURCE OF TRUTH for routes)
@@ -133,6 +137,7 @@ radar/
 │   │   ├── context/           # React contexts (connection, theme, context-switch)
 │   │   ├── contexts/          # React contexts (capabilities)
 │   │   ├── hooks/             # Custom React hooks
+│   │   ├── integrations/      # App-private resource hosts and workspace route/screen composition
 │   │   └── utils/             # Topology and utility helpers
 │   └── package.json
 ├── deploy/                    # Docker, Helm, Krew configs

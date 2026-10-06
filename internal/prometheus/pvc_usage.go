@@ -48,15 +48,14 @@ const pvcUsageBatchSize = 100
 // claims of one namespace, held to this cluster's identity (anchors are the
 // Pods that prove it). Authorization is the caller's: this reads nothing the
 // caller did not name.
-func QueryPVCUsage(ctx context.Context, namespace string, claims []string, anchors []prom.WorkloadPodIdentity) PVCUsageBatch {
-	client := GetClient()
+func (client *Client) QueryPVCUsage(ctx context.Context, namespace string, claims []string, anchors []prom.WorkloadPodIdentity) PVCUsageBatch {
 	if client == nil {
 		return PVCUsageBatch{Status: PVCUsageNoPrometheus, Usage: map[string]PVCUsage{}, Invalid: map[string]bool{}}
 	}
 	if _, _, err := client.EnsureConnected(ctx); err != nil {
 		return PVCUsageBatch{Status: PVCUsageNoPrometheus, Error: err.Error(), Usage: map[string]PVCUsage{}, Invalid: map[string]bool{}}
 	}
-	matchers, iso, err := resolveScope(ctx, namespace, pvcScopeProbe(namespace, claims, 0), anchors, nil)
+	matchers, iso, err := client.resolveScope(ctx, namespace, pvcScopeProbe(namespace, claims, 0), anchors, nil)
 	if out, failed := pvcScopeFailure(err); failed {
 		if out.Status == PVCUsageQueryFailed {
 			errorlog.Record("prometheus", "warning", "pvc usage scope check failed for namespace %s: %v", namespace, err)

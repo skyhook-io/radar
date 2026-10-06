@@ -1,9 +1,4 @@
-import { cnpgHost, useCNPGHostSupport } from '../cnpg/host'
-import { RayJobRenderer } from '../resources/renderers/RayJobRenderer'
-import { JobRenderer, JobSetRenderer } from '../resources/renderers/JobAdmissionRenderers'
-import { RayClusterRenderer } from '../resources/renderers/RayClusterRenderer'
-import { RayServiceRenderer } from '../resources/renderers/RayServiceRenderer'
-import { KueueWorkloadRenderer } from '../resources/renderers/KueueWorkloadRenderer'
+import { decorateResourceDiagnose, resourceDetailRedirect, resourceDetailSlots, resourceLogs, resourceRendererOverrides, useResourceHostFeatures } from '../../integrations/resourceHosts'
 import { useMemo, useEffect, useCallback, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
@@ -17,7 +12,6 @@ import {
   Section,
   type WorkloadTabType,
   type WorkloadExtraTab,
-  type RendererOverrides,
   type GitOpsOwnerRef,
   type HelmOwnerRef,
   type AppRow,
@@ -123,33 +117,6 @@ import {
 } from '../curl/ServiceCurlButton'
 import { useToast } from '../ui/Toast'
 import { Tooltip } from '../ui/Tooltip'
-import { PodRenderer } from '../resources/renderers/PodRenderer'
-import { KarpenterNodePoolRenderer } from '../resources/renderers/KarpenterNodePoolRenderer'
-import { NodeRenderer } from '../resources/renderers/NodeRenderer'
-import { ServiceRenderer } from '../resources/renderers/ServiceRenderer'
-import { WorkloadRenderer } from '../resources/renderers/WorkloadRenderer'
-import { CompositeRenderer } from '../resources/CompositeRenderer'
-import { ServiceAccountRenderer } from '../resources/renderers/ServiceAccountRenderer'
-import { RoleRenderer } from '../resources/renderers/RoleRenderer'
-import { RoleBindingRenderer } from '../resources/renderers/RoleBindingRenderer'
-import { NamespaceRenderer } from '../resources/renderers/NamespaceRenderer'
-import { CAPIClusterRenderer } from '../resources/renderers/CAPIClusterRenderer'
-import { HPARenderer } from '../resources/renderers/HPARenderer'
-import { PVCRenderer } from '../resources/renderers/PVCRenderer'
-import { RolloutRenderer } from '../resources/renderers/RolloutRenderer'
-import { KyvernoPolicyCoverage } from '../resources/renderers/KyvernoPolicyCoverage'
-import { KyvernoPolicyQueued } from '../resources/renderers/KyvernoPolicyQueued'
-import { CNPGObjectStoreRenderer } from '../resources/renderers/CNPGObjectStoreRenderer'
-import { VeleroBSLRenderer } from '../resources/renderers/VeleroBSLRenderer'
-import { VeleroBackupRenderer } from '../resources/renderers/VeleroBackupRenderer'
-import { VeleroRestoreRenderer } from '../resources/renderers/VeleroRestoreRenderer'
-import { CNPGClusterRenderer } from '../resources/renderers/CNPGClusterRenderer'
-import { CNPGImageCatalogRenderer } from '../resources/renderers/CNPGImageCatalogRenderer'
-import {
-  CNPGDatabaseRenderer,
-  CNPGPublicationRenderer,
-  CNPGSubscriptionRenderer,
-} from '../resources/renderers/CNPGDeclarativeRenderer'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { cleanYamlForDuplicate } from '../../utils/skeleton-yaml'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
@@ -177,41 +144,6 @@ export function supportsBatchExecution(kind: string, apiKind: string, group?: st
   return true
 }
 
-// Stable reference — web renderer wrappers inject platform hooks internally
-const rendererOverrides: RendererOverrides = {
-  RayJobRenderer,
-  JobRenderer,
-  JobSetRenderer,
-  RayServiceRenderer,
-  RayClusterRenderer,
-  KueueWorkloadRenderer,
-  CAPIClusterRenderer,
-  PodRenderer,
-  KarpenterNodePoolRenderer,
-  NodeRenderer,
-  ServiceRenderer,
-  WorkloadRenderer,
-  CompositeRenderer,
-  ServiceAccountRenderer,
-  RoleRenderer,
-  RoleBindingRenderer,
-  NamespaceRenderer,
-  HPARenderer,
-  PVCRenderer,
-  RolloutRenderer,
-  KyvernoPolicyCoverage,
-  KyvernoPolicyQueued,
-  CNPGObjectStoreRenderer,
-  VeleroBSLRenderer,
-  VeleroBackupRenderer,
-  VeleroRestoreRenderer,
-  CNPGClusterRenderer,
-  CNPGDatabaseRenderer,
-  CNPGPublicationRenderer,
-  CNPGSubscriptionRenderer,
-  CNPGImageCatalogRenderer,
-}
-
 // ============================================================================
 // ROUTE WRAPPER — parses kind/ns/name from URL
 // ============================================================================
@@ -225,7 +157,7 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   // The redirect replaces the URL, so it waits for a confirmed workspace.
-  const { canRedirect: cnpgWorkspace } = useCNPGHostSupport()
+  const hostFeatures = useResourceHostFeatures()
 
   // Parse /workload/:kind/:ns/:name from pathname. Segments are URL-encoded by
   // buildWorkloadPath; names can also contain literal slashes (e.g. some CRD names),
@@ -255,7 +187,7 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
     namespace = nsSegment === '_' || nsSegment === '' ? '' : decode(nsSegment)
     name = parts.slice(3).map(decode).join('/')
   }
-  const group = searchParams.get('apiGroup') || ''
+  const group = searchParams.get('apiGroup') ?? undefined
 
   const handleBack = useCallback(() => {
     if (window.history.length > 1) {
@@ -282,9 +214,8 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
     )
   }
 
-  // A Radar without the CloudNativePG workspace keeps the standard view.
-  const cnpgPath = cnpgWorkspace ? cnpgHost.detailRedirect({ kind, group, namespace, name }, searchParams) : null
-  if (cnpgPath) return <Navigate replace to={cnpgPath} state={location.state} />
+  const detailPath = resourceDetailRedirect({ kind, group, namespace, name }, hostFeatures, searchParams)
+  if (detailPath) return <Navigate replace to={detailPath} state={location.state} />
 
   return (
     <WorkloadView
@@ -455,7 +386,7 @@ function useActionsBarProps(
       name: string
       className?: string
     }) => <PortForwardButton type={type} namespace={ns} name={n} className={className} />,
-    renderDiagnose: cnpgHost.diagnoseAction(renderDiagnose),
+    renderDiagnose: decorateResourceDiagnose(renderDiagnose),
     onDelete: (
       params: Parameters<typeof deleteMutation.mutate>[0],
       callbacks?: { onSuccess?: () => void },
@@ -557,7 +488,7 @@ export function WorkloadView({
 }: WorkloadViewProps) {
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
-  const { canRender: cnpgWorkspace } = useCNPGHostSupport()
+  const hostFeatures = useResourceHostFeatures()
   const apiKind = kindToPluralWithGroup(kindProp, rest.group ?? '')
   const queryClient = useQueryClient()
   const [imageTargetOwnership, setImageTargetOwnership] =
@@ -1201,12 +1132,12 @@ export function WorkloadView({
           <LogsTabContent
             {...props}
             group={effectiveGroup}
-            cnpgWorkspace={cnpgWorkspace}
+            hostFeatures={hostFeatures}
             selectedRunKey={selectedRunKey}
             onSelectRun={handleSelectedRunChange}
           />
         )}
-        {...(cnpgWorkspace ? cnpgHost.detailSlots(namespace, name, effectiveGroup) : {})}
+        {...resourceDetailSlots({ kind: apiKind, group: resource?.apiVersion ? resourceGroup : effectiveGroup, namespace, name }, hostFeatures, rest.extraTabs)}
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&
           res ? (
@@ -1271,7 +1202,7 @@ export function WorkloadView({
         onDuplicate={handleDuplicate}
         onDownload={desktopDownload}
         actionsBarProps={actionsBarProps}
-        rendererOverrides={rendererOverrides}
+        rendererOverrides={resourceRendererOverrides}
         renderOverviewExtra={({ kind: k, namespace: ns, name: n, group: g, context }) => {
           // Network entry kinds (Service/Ingress/Route/Gateway) ARE the diagnosis
           // target: DiagnoseInlineSection renders in the drawer, no hint. Workload
@@ -1475,7 +1406,7 @@ function LogsTabContent({
   onConsumeInitialContainer,
   selectedRunKey,
   onSelectRun,
-  cnpgWorkspace,
+  hostFeatures,
 }: {
   kind: string
   apiKind: string
@@ -1490,8 +1421,7 @@ function LogsTabContent({
   onConsumeInitialContainer: () => void
   selectedRunKey: string
   onSelectRun: (runKey: string) => void
-  /** The Radar serves the CloudNativePG workspace's merged instance logs. */
-  cnpgWorkspace: boolean
+  hostFeatures: import('../../integrations/resourceHost').HostFeatures
 }) {
   if (SCHEDULED_LOG_KINDS.has(kind) && supportsBatchExecution(kind, apiKind, group, resource?.apiVersion)) {
     return (
@@ -1507,7 +1437,7 @@ function LogsTabContent({
     )
   }
 
-  const integrationLogs = cnpgWorkspace ? cnpgHost.logs(kind, resource, namespace, name) : null
+  const integrationLogs = resourceLogs({ kind, group, namespace, name }, resource, hostFeatures)
   if (integrationLogs) return integrationLogs
 
   // Workload kinds with stable pod selectors use the aggregated workload logs viewer

@@ -30,6 +30,8 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
@@ -69,7 +71,7 @@ func cnpgHACluster(now time.Time) *unstructured.Unstructured {
 
 func seedCNPGHAFixture(t *testing.T, now time.Time) *unstructured.Unstructured {
 	t.Helper()
-	kinds := append(append([]k8s.APIResource(nil), cnpgWorkspaceTestKinds...), cnpgTestResource(cnpgGroup, "FailoverQuorum", "failoverquorums", true))
+	kinds := append(append([]k8s.APIResource(nil), cnpgWorkspaceTestKinds...), cnpgTestResource(cnpgsvc.Group, "FailoverQuorum", "failoverquorums", true))
 	cluster := cnpgHACluster(now)
 	seedCNPGWorkspace(t, kinds, cluster)
 
@@ -96,7 +98,7 @@ func seedCNPGHAFixture(t *testing.T, now time.Time) *unstructured.Unstructured {
 		}
 	}
 	for _, n := range []struct{ name, zone string }{{"ha-node-a", "zone-a"}, {"ha-node-b", "zone-b"}} {
-		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: n.name, Labels: map[string]string{cnpgZoneLabel: n.zone}}}
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: n.name, Labels: map[string]string{"topology.kubernetes.io/zone": n.zone}}}
 		create(n.name, func() error {
 			_, err := testFakeClient.CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{})
 			return err
@@ -107,13 +109,13 @@ func seedCNPGHAFixture(t *testing.T, now time.Time) *unstructured.Unstructured {
 	}
 	one := intstr.FromInt32(1)
 	pdbs := []*policyv1.PodDisruptionBudget{
-		{ObjectMeta: metav1.ObjectMeta{Name: "pg-ha", Namespace: cnpgHATestNS, Generation: 2, Labels: map[string]string{cnpgClusterLabel: "pg-ha"}, OwnerReferences: []metav1.OwnerReference{owner}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "pg-ha", Namespace: cnpgHATestNS, Generation: 2, Labels: map[string]string{"cnpg.io/cluster": "pg-ha"}, OwnerReferences: []metav1.OwnerReference{owner}},
 			Spec:   policyv1.PodDisruptionBudgetSpec{MinAvailable: &one},
 			Status: policyv1.PodDisruptionBudgetStatus{ObservedGeneration: 2, ExpectedPods: 2, CurrentHealthy: 1, DesiredHealthy: 1, DisruptionsAllowed: 0}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "pg-ha-primary", Namespace: cnpgHATestNS, Generation: 1, Labels: map[string]string{cnpgClusterLabel: "pg-ha"}, OwnerReferences: []metav1.OwnerReference{owner}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "pg-ha-primary", Namespace: cnpgHATestNS, Generation: 1, Labels: map[string]string{"cnpg.io/cluster": "pg-ha"}, OwnerReferences: []metav1.OwnerReference{owner}},
 			Spec:   policyv1.PodDisruptionBudgetSpec{MinAvailable: &one},
 			Status: policyv1.PodDisruptionBudgetStatus{ObservedGeneration: 1, ExpectedPods: 1, CurrentHealthy: 1, DesiredHealthy: 1}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "pg-ha-foreign", Namespace: cnpgHATestNS, Labels: map[string]string{cnpgClusterLabel: "pg-ha"}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "pg-ha-foreign", Namespace: cnpgHATestNS, Labels: map[string]string{"cnpg.io/cluster": "pg-ha"}}},
 	}
 	for _, p := range pdbs {
 		create(p.Name, func() error {
@@ -126,9 +128,9 @@ func seedCNPGHAFixture(t *testing.T, now time.Time) *unstructured.Unstructured {
 	}
 	started := metav1.NewTime(now.Add(-time.Hour))
 	jobs := []*batchv1.Job{
-		{ObjectMeta: metav1.ObjectMeta{Name: "pg-ha-1-initdb", Namespace: cnpgHATestNS, Labels: map[string]string{cnpgClusterLabel: "pg-ha", cnpgJobRoleLabel: "initdb", "cnpg.io/instanceName": "pg-ha-1"}, OwnerReferences: []metav1.OwnerReference{owner}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "pg-ha-1-initdb", Namespace: cnpgHATestNS, Labels: map[string]string{"cnpg.io/cluster": "pg-ha", "cnpg.io/jobRole": "initdb", "cnpg.io/instanceName": "pg-ha-1"}, OwnerReferences: []metav1.OwnerReference{owner}},
 			Status: batchv1.JobStatus{StartTime: &started, Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}}},
-		{ObjectMeta: metav1.ObjectMeta{Name: "pg-ha-3-join", Namespace: cnpgHATestNS, Labels: map[string]string{cnpgClusterLabel: "pg-ha", cnpgJobRoleLabel: "join"}, OwnerReferences: []metav1.OwnerReference{owner}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "pg-ha-3-join", Namespace: cnpgHATestNS, Labels: map[string]string{"cnpg.io/cluster": "pg-ha", "cnpg.io/jobRole": "join"}, OwnerReferences: []metav1.OwnerReference{owner}},
 			Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded", Message: "Job has reached the specified backoff limit"}}}},
 	}
 	for _, j := range jobs {
@@ -150,7 +152,7 @@ func seedCNPGHAFixture(t *testing.T, now time.Time) *unstructured.Unstructured {
 	return cluster
 }
 
-func cnpgHAClientsFor(t *testing.T, now time.Time) cnpgHAClients {
+func cnpgHAClientsFor(t *testing.T, now time.Time) cnpgsvc.HAClients {
 	t.Helper()
 	renew := metav1.NewMicroTime(now.Add(-3 * time.Second))
 	stale := metav1.NewMicroTime(now.Add(-time.Minute))
@@ -160,7 +162,7 @@ func cnpgHAClientsFor(t *testing.T, now time.Time) cnpgHAClients {
 	typed := fake.NewClientset(
 		&coordinationv1.Lease{ObjectMeta: metav1.ObjectMeta{Name: "pg-ha", Namespace: cnpgHATestNS, OwnerReferences: []metav1.OwnerReference{owner}},
 			Spec: coordinationv1.LeaseSpec{HolderIdentity: &holder, RenewTime: &renew, LeaseDurationSeconds: &fifteen}},
-		&coordinationv1.Lease{ObjectMeta: metav1.ObjectMeta{Name: cnpgOperatorLeaseName, Namespace: "cnpg-system"},
+		&coordinationv1.Lease{ObjectMeta: metav1.ObjectMeta{Name: "db9c8771.cnpg.io", Namespace: "cnpg-system"},
 			Spec: coordinationv1.LeaseSpec{HolderIdentity: &opHolder, RenewTime: &stale, LeaseDurationSeconds: &fifteen}},
 		&discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Name: "pg-ha-rw-x", Namespace: cnpgHATestNS, Labels: map[string]string{discoveryv1.LabelServiceName: "pg-ha-rw"}},
 			Endpoints: []discoveryv1.Endpoint{
@@ -176,20 +178,20 @@ func cnpgHAClientsFor(t *testing.T, now time.Time) cnpgHAClients {
 		"status": map[string]any{"method": "ANY", "standbyNames": []any{"pg-ha-2", "pg-ha-3"}, "standbyNumber": int64(1), "primary": "pg-ha-1"},
 	}}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
-		map[schema.GroupVersionResource]string{cnpgFailoverQuorumGVR: "FailoverQuorumList"}, fq)
+		map[schema.GroupVersionResource]string{schema.GroupVersionResource{Group: cnpgsvc.Group, Version: "v1", Resource: "failoverquorums"}: "FailoverQuorumList"}, fq)
 	metaScheme := metadatafake.NewTestScheme()
 	metaScheme.AddKnownTypeWithName(corev1.SchemeGroupVersion.WithKind("Secret"), &metav1.PartialObjectMetadata{})
 	meta := metadatafake.NewSimpleMetadataClient(metaScheme,
 		&metav1.PartialObjectMetadata{
 			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
-			ObjectMeta: metav1.ObjectMeta{Name: "pg-ha-user-tls", Namespace: cnpgHATestNS, Annotations: map[string]string{certManagerCertificateAnno: "pg-ha-server", certManagerIssuerAnno: "internal-ca", certManagerIssuerKindAnno: "ClusterIssuer"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "pg-ha-user-tls", Namespace: cnpgHATestNS, Annotations: map[string]string{"cert-manager.io/certificate-name": "pg-ha-server", "cert-manager.io/issuer-name": "internal-ca", "cert-manager.io/issuer-kind": "ClusterIssuer"}},
 		},
 		&metav1.PartialObjectMetadata{
 			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "Secret"},
 			ObjectMeta: metav1.ObjectMeta{Name: "pg-ha-user-ca", Namespace: cnpgHATestNS},
 		},
 	)
-	return cnpgHAClients{typed: typed, dyn: dyn, meta: meta}
+	return cnpgsvc.HAClients{Typed: typed, Dynamic: dyn, Metadata: meta}
 }
 
 func TestCNPGClusterHA_ReadsEveryFact(t *testing.T) {
@@ -200,7 +202,7 @@ func TestCNPGClusterHA_ReadsEveryFact(t *testing.T) {
 	}
 	srv := &Server{}
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	got := srv.cnpgClusterHA(r, cnpgHAClientsFor(t, now), k8s.GetResourceCache(), cluster, now)
+	got := srv.cnpgReader(r).ClusterHA(r.Context(), cnpgHAClientsFor(t, now), k8s.GetResourceCache(), cluster, now)
 
 	if got.DesiredImage != "pg:17.2" || len(got.Instances) != 3 {
 		t.Fatalf("instances = %+v", got.Instances)
@@ -208,7 +210,7 @@ func TestCNPGClusterHA_ReadsEveryFact(t *testing.T) {
 	if got.DeclaredInstances == nil || *got.DeclaredInstances != 3 || !slices.Contains(got.ExpectedInstances, "pg-ha-1") {
 		t.Fatalf("declared/expected instances: %+v %+v", got.DeclaredInstances, got.ExpectedInstances)
 	}
-	inst := map[string]CNPGHAInstance{}
+	inst := map[string]cnpgsvc.CNPGHAInstance{}
 	for _, i := range got.Instances {
 		inst[i.Pod] = i
 	}
@@ -220,7 +222,7 @@ func TestCNPGClusterHA_ReadsEveryFact(t *testing.T) {
 	}
 
 	q := got.Quorum
-	if !q.Enabled || q.EnabledBy != "spec" || q.Object.State != cnpgHAStateOK || q.Status == nil {
+	if !q.Enabled || q.EnabledBy != "spec" || q.Object.State != "ok" || q.Status == nil {
 		t.Fatalf("quorum = %+v", q)
 	}
 	// N=2 potentially synchronous, W=1, R=1 (pg-ha-3 is not ready): 1+1 > 2 is false.
@@ -228,14 +230,14 @@ func TestCNPGClusterHA_ReadsEveryFact(t *testing.T) {
 		t.Errorf("quorum arithmetic = N%v W%v R%v holds %v", q.N, q.W, q.R, q.Holds)
 	}
 
-	if got.PDBs.State != cnpgHAStateOK || len(got.PDBs.Items) != 2 {
+	if got.PDBs.State != "ok" || len(got.PDBs.Items) != 2 {
 		t.Fatalf("pdbs = %+v (the unowned budget must be ignored)", got.PDBs)
 	}
 	if p := got.PDBs.Items[0]; p.Name != "pg-ha" || p.Role != "replicas" || p.DisruptionsAllowed != 0 || !p.Observed || p.MinAvailable != "1" {
 		t.Errorf("replica pdb = %+v", p)
 	}
 
-	if l := got.PrimaryLease; l.State != cnpgHAStateOK || l.Holder != "pg-ha-1" || l.Expired == nil || *l.Expired || l.ControlledByCluster == nil || !*l.ControlledByCluster {
+	if l := got.PrimaryLease; l.State != "ok" || l.Holder != "pg-ha-1" || l.Expired == nil || *l.Expired || l.ControlledByCluster == nil || !*l.ControlledByCluster {
 		t.Errorf("primary lease = %+v", l)
 	}
 
@@ -250,18 +252,18 @@ func TestCNPGClusterHA_ReadsEveryFact(t *testing.T) {
 		t.Errorf("job phases = %v", phases)
 	}
 
-	if e := got.RWEndpoints; e.State != cnpgHAStateOK || len(e.Pods) != 1 || e.Pods[0] != "pg-ha-1" {
+	if e := got.RWEndpoints; e.State != "ok" || len(e.Pods) != 1 || e.Pods[0] != "pg-ha-1" {
 		t.Errorf("rw endpoints = %+v", e)
 	}
 
-	certs := map[string]CNPGHACertificate{}
+	certs := map[string]cnpgsvc.CNPGHACertificate{}
 	for _, c := range got.Certificates {
 		certs[c.Secret] = c
 	}
-	if c := certs["pg-ha-user-tls"]; c.Renewal != "user" || c.ExpiresAt == "" || c.CertManager == nil || c.CertManager.Certificate != "pg-ha-server" || c.Metadata == nil || c.Metadata.State != cnpgHAStateOK {
+	if c := certs["pg-ha-user-tls"]; c.Renewal != "user" || c.ExpiresAt == "" || c.CertManager == nil || c.CertManager.Certificate != "pg-ha-server" || c.Metadata == nil || c.Metadata.State != "ok" {
 		t.Errorf("user tls = %+v", c)
 	}
-	if c := certs["pg-ha-user-ca"]; c.Renewal != "user" || c.CertManager != nil || c.Metadata.State != cnpgHAStateOK {
+	if c := certs["pg-ha-user-ca"]; c.Renewal != "user" || c.CertManager != nil || c.Metadata.State != "ok" {
 		t.Errorf("user ca without cert-manager = %+v", c)
 	}
 	if c := certs["pg-ha-replication"]; c.Renewal != "operator" || c.ExpiresAt != "" || c.Raw != "garbage" || c.Metadata != nil {
@@ -270,35 +272,6 @@ func TestCNPGClusterHA_ReadsEveryFact(t *testing.T) {
 
 	if !got.Maintenance.Declared || !got.Maintenance.InProgress || !got.Maintenance.ReusePVC {
 		t.Errorf("maintenance = %+v, want in progress with reusePVC defaulting to true", got.Maintenance)
-	}
-}
-
-func TestCNPGQuorumArithmetic(t *testing.T) {
-	ready := func(name string, ok bool) *corev1.Pod {
-		st := corev1.ConditionFalse
-		if ok {
-			st = corev1.ConditionTrue
-		}
-		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name}, Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: st}}}}
-	}
-	pods := []*corev1.Pod{ready("a", true), ready("b", true), ready("c", false)}
-
-	q := CNPGHAQuorum{Status: &CNPGHAQuorumStatus{StandbyNames: []string{"b", "c"}, StandbyNumber: 2, Primary: "a"}}
-	cnpgQuorumArithmetic(&q, pods, true)
-	if *q.R != 1 || !*q.Holds {
-		t.Errorf("R=1 W=2 N=2 should hold: %+v", q)
-	}
-
-	reset := CNPGHAQuorum{Status: &CNPGHAQuorumStatus{StandbyNames: []string{}}}
-	cnpgQuorumArithmetic(&reset, pods, true)
-	if reset.N != nil || reset.Holds != nil {
-		t.Errorf("a reset object records no configuration; nothing may be computed: %+v", reset)
-	}
-
-	unknownPods := CNPGHAQuorum{Status: &CNPGHAQuorumStatus{StandbyNames: []string{"b"}, StandbyNumber: 1}}
-	cnpgQuorumArithmetic(&unknownPods, nil, false)
-	if unknownPods.N == nil || unknownPods.R != nil || unknownPods.Holds != nil {
-		t.Errorf("without Pods R and the verdict are unknown: %+v", unknownPods)
 	}
 }
 
@@ -323,11 +296,11 @@ func TestCNPGClusterHA_EachReadIsAuthorizedOnItsOwn(t *testing.T) {
 
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{cnpgHATestNS}}
-	perms.SetCanI("get", cnpgGroup, "clusters", cnpgHATestNS, true)
+	perms.SetCanI("get", cnpgsvc.Group, "clusters", cnpgHATestNS, true)
 	perms.SetCanI("list", "", "pods", cnpgHATestNS, true)
 	for _, d := range []struct{ verb, group, resource, ns string }{
 		{"get", "", "nodes", ""},
-		{"get", cnpgGroup, "failoverquorums", cnpgHATestNS},
+		{"get", cnpgsvc.Group, "failoverquorums", cnpgHATestNS},
 		{"list", "policy", "poddisruptionbudgets", cnpgHATestNS},
 		{"get", "coordination.k8s.io", "leases", cnpgHATestNS},
 		{"list", "batch", "jobs", cnpgHATestNS},
@@ -345,23 +318,23 @@ func TestCNPGClusterHA_EachReadIsAuthorizedOnItsOwn(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status %d: %s", resp.StatusCode, body)
 	}
-	var got CNPGClusterHAResponse
+	var got cnpgsvc.CNPGClusterHAResponse
 	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatal(err)
 	}
-	for name, src := range map[string]ReadSource{
+	for name, src := range map[string]integration.ReadSource{
 		"nodes": got.Nodes, "quorum": got.Quorum.Object, "pdbs": got.PDBs.ReadSource,
 		"primaryLease": got.PrimaryLease.ReadSource, "jobs": got.Jobs.ReadSource, "rwEndpoints": got.RWEndpoints.ReadSource,
 	} {
-		if src.State != cnpgHAStateDenied || src.Grant == nil {
+		if src.State != "denied" || src.Grant == nil {
 			t.Errorf("%s = %+v, want denied naming the grant", name, src)
 		}
 	}
-	if got.Pods.State != cnpgHAStateOK || len(got.Instances) != 3 || got.Instances[0].Zone != "" {
+	if got.Pods.State != "ok" || len(got.Instances) != 3 || got.Instances[0].Zone != "" {
 		t.Errorf("pods readable, zones not: %+v", got.Instances)
 	}
 	for _, c := range got.Certificates {
-		if c.Renewal == "user" && (c.Metadata == nil || c.Metadata.State != cnpgHAStateDenied || c.CertManager != nil) {
+		if c.Renewal == "user" && (c.Metadata == nil || c.Metadata.State != "denied" || c.CertManager != nil) {
 			t.Errorf("%s: cert-manager link must be unknown without get secrets: %+v", c.Secret, c)
 		}
 	}
@@ -377,56 +350,12 @@ func TestCNPGClusterHA_EachReadIsAuthorizedOnItsOwn(t *testing.T) {
 	}
 }
 
-func TestCNPGUncachedReasonSaysWhatIsUnknownAndWhy(t *testing.T) {
-	if got := cnpgUncachedReason("Zones", "Nodes", "", true, false, false); got != "Zones unknown: Radar's own credentials could not list Nodes when it connected" {
-		t.Errorf("uncached = %q", got)
-	}
-	if got := cnpgUncachedReason("Instance Jobs", "Jobs", "pg", false, true, true); got != "Instance Jobs unknown: Radar watches Jobs only in the namespaces it chose when it connected, and pg is not one of them" {
-		t.Errorf("out of scope = %q", got)
-	}
-	if got := cnpgUncachedReason("Instance Jobs", "Jobs", "pg", false, false, false); got != "Instance Jobs unknown: Radar is still loading Jobs" {
-		t.Errorf("syncing = %q", got)
-	}
-	if got := cnpgUncachedReason("Zones", "Nodes", "", false, false, true); got != "" {
-		t.Errorf("cached = %q", got)
-	}
-}
-
-func TestCNPGHAJobSchedulerEvidence(t *testing.T) {
-	job := cnpgJob("db", "analytics-1-initdb", "job-uid", clusterRef("analytics", "cluster-uid"))
-	job.Status.Active = 1
-	pod := cnpgJobPod("db", "analytics-1-initdb-abc", "analytics", jobRef(job.Name, string(job.UID)))
-	got := cnpgHAJobOf(job, pod)
-	if got.Phase != "pending" || !strings.Contains(got.Reason, "Pod cannot be scheduled: Unschedulable: 0/2 nodes") {
-		t.Fatalf("job = %+v", got)
-	}
-	if got := cnpgHAJobOf(job); got.Phase != "active" {
-		t.Fatalf("without Pod access: %+v", got)
-	}
-	pod.OwnerReferences[0].UID = "previous-job"
-	if got := cnpgHAJobOf(job, pod); got.Phase != "active" {
-		t.Fatalf("stale Job Pod adopted: %+v", got)
-	}
-	pod.OwnerReferences[0] = jobRef(job.Name, string(job.UID))
-	pod.Status.Phase = corev1.PodRunning
-	if got := cnpgHAJobOf(job, pod); got.Phase != "active" {
-		t.Fatalf("active Job: %+v", got)
-	}
-	pending := pod.DeepCopy()
-	pending.Status.Phase = corev1.PodPending
-	for _, pods := range [][]*corev1.Pod{{pending, pod}, {pod, pending}} {
-		if got := cnpgHAJobOf(job, pods...); got.Phase != "active" {
-			t.Fatalf("Job with a running Pod: %+v", got)
-		}
-	}
-}
-
 func TestCNPGClusterHA_ExpectedJobInstancesAreOwnedAndInProgress(t *testing.T) {
 	now := time.Now()
 	cluster := cnpgHACluster(now)
 	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds, cluster)
 	active := cnpgJob(cnpgHATestNS, "pg-ha-4-join", "active-job", cnpgHAOwner("ha-uid"))
-	active.Labels[cnpgJobRoleLabel], active.Labels["cnpg.io/instanceName"] = "join", "pg-ha-4"
+	active.Labels["cnpg.io/jobRole"], active.Labels["cnpg.io/instanceName"] = "join", "pg-ha-4"
 	active.Status.Active = 1
 	failed := active.DeepCopy()
 	failed.Name, failed.UID = "pg-ha-5-join", "failed-job"
@@ -438,7 +367,7 @@ func TestCNPGClusterHA_ExpectedJobInstancesAreOwnedAndInProgress(t *testing.T) {
 	foreign.OwnerReferences[0].UID = "previous-cluster"
 	seedCNPGJobs(t, active, failed, foreign)
 	srv := &Server{}
-	got := srv.cnpgClusterHA(httptest.NewRequest(http.MethodGet, "/", nil), cnpgHAClientsFor(t, now), k8s.GetResourceCache(), cluster, now)
+	got := srv.cnpgReader(httptest.NewRequest(http.MethodGet, "/", nil)).ClusterHA(context.Background(), cnpgHAClientsFor(t, now), k8s.GetResourceCache(), cluster, now)
 	if len(got.ExpectedInstances) != 1 || got.ExpectedInstances[0] != "pg-ha-4" {
 		t.Fatalf("expected instances must come from current in-progress owned Jobs: %v", got.ExpectedInstances)
 	}

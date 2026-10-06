@@ -10,9 +10,10 @@
 package server
 
 import (
+	"net/http"
+
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/summarycontext"
-	"net/http"
 )
 
 // newResourceSummaryContextBuilder assembles the per-request closure for the

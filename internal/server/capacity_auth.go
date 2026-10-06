@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"slices"
 
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -26,7 +27,7 @@ func (s *Server) capacityNamespacesForUser(r *http.Request) []string {
 }
 
 func (s *Server) capacityNamespacesForSource(r *http.Request, namespaces []string, group, resource string) []string {
-	if noNamespaceAccess(namespaces) {
+	if integration.NoNamespaceAccess(namespaces) {
 		return namespaces
 	}
 	if namespaces == nil {

@@ -1,7 +1,7 @@
 import { ResourceDetailDrawer as BaseResourceDetailDrawer } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { WorkloadView } from '../workload/WorkloadView'
-import { cnpgHost } from '../cnpg/host'
+import { ResourceDrawerNavigation } from '../../integrations/resourceHosts'
 
 interface ResourceDetailDrawerProps {
   resource: SelectedResource
@@ -33,7 +33,7 @@ export function ResourceDetailDrawer(props: ResourceDetailDrawerProps) {
     <BaseResourceDetailDrawer {...props}>
       {({ resource, expanded, active, initialTab, onClose, onExpand, onExpandIntent, onCancelExpandIntent, onBack, onNavigateToResource, onCollapseToDrawer }) => (
         <div className="flex h-full min-h-0 flex-col">
-        {!expanded && <cnpgHost.DrawerNavigation resource={resource} />}
+        {!expanded && <ResourceDrawerNavigation resource={resource} />}
         <div className="min-h-0 flex-1">
         <WorkloadView
           kind={resource.kind}

@@ -1,37 +1,33 @@
-import type { ComponentProps } from 'react'
-import { PaneLoader, WorkloadView, isApiGroup } from '@skyhook-io/k8s-ui'
+import { isApiGroup } from '@skyhook-io/k8s-ui'
 import type { RenderDiagnoseAction } from '../../context/DiagnoseCustomization'
-import type { SelectedResource } from '../../types'
-import { useRadarFeature } from '../../api/client'
-import type { RadarFeatureSupport } from '../../api/radarFeatures'
 import { CNPGClustersKindView } from './CNPGClustersKindView'
 import { CNPGClusterLogs } from './CNPGClusterLogs'
 import { CNPGDrawerTrailBack } from './CNPGDrawerTrail'
 import { CNPGInvestigationAction } from './CNPGClusterTabs'
 import { renderCNPGSummary } from './CNPGSummaryHost'
 import { renderCNPGHeaderActions } from './actions/renderCNPGHeaderActions'
-import { cnpgClusterKindListMode, cnpgDetailKindFor, cnpgDetailPath } from './routes'
-
-type DetailSlots = Pick<ComponentProps<typeof WorkloadView>, 'renderSummary' | 'renderHeaderActions'>
-type HostResource = Pick<SelectedResource, 'kind' | 'group' | 'namespace' | 'name'>
-
-export function useCNPGHostSupport() {
-  const { support } = useRadarFeature('cnpgWorkspace')
-  return { support, canRedirect: support === 'supported', canRender: support !== 'unsupported' }
-}
+import { CNPG_DETAIL_KINDS, cnpgClusterKindListMode, cnpgDetailKindFor, cnpgDetailPath } from './routes'
+import type { DetailSlots, HostResource, KindListProps, ResourceHost } from '../../integrations/resourceHost'
+import { kindToPluralWithGroup } from '../../utils/navigation'
+import { CNPGObjectStoreRenderer } from '../resources/renderers/CNPGObjectStoreRenderer'
+import { CNPGClusterRenderer } from '../resources/renderers/CNPGClusterRenderer'
+import { CNPGImageCatalogRenderer } from '../resources/renderers/CNPGImageCatalogRenderer'
+import {
+  CNPGDatabaseRenderer,
+  CNPGPublicationRenderer,
+  CNPGSubscriptionRenderer,
+} from '../resources/renderers/CNPGDeclarativeRenderer'
 
 export const cnpgHost = {
   clusterKind: { name: 'clusters', kind: 'Cluster', group: 'postgresql.cnpg.io' },
-  DrawerNavigation: CNPGDrawerTrailBack,
-  kindListMode: cnpgClusterKindListMode,
 
   expandedPath(resource: HostResource, context?: string, tab?: 'yaml'): string | null {
-    const plural = cnpgDetailKindFor(resource.kind, resource.group)
+    const plural = cnpgDetailKindFor(kindToPluralWithGroup(resource.kind, resource.group ?? ''), resource.group)
     return plural ? cnpgDetailPath({ plural, namespace: resource.namespace, name: resource.name }, context, tab) : null
   },
 
   detailRedirect(resource: HostResource, search: URLSearchParams): string | null {
-    const plural = cnpgDetailKindFor(resource.kind, resource.group)
+    const plural = cnpgDetailKindFor(kindToPluralWithGroup(resource.kind, resource.group ?? ''), resource.group)
     if (!plural) return null
     const params = new URLSearchParams(search)
     params.delete('apiGroup')
@@ -57,12 +53,36 @@ export const cnpgHost = {
   logs(kind: string, resource: { apiVersion?: string } | null | undefined, namespace: string, name: string) {
     return kind === 'Cluster' && isApiGroup(resource?.apiVersion, 'postgresql.cnpg.io') ? <CNPGClusterLogs namespace={namespace} name={name} /> : null
   },
+}
 
-  kindView(kind: Parameters<typeof cnpgClusterKindListMode>[0], support: RadarFeatureSupport, pending: boolean, props: ComponentProps<typeof CNPGClustersKindView>) {
-    switch (cnpgClusterKindListMode(kind, support, pending)) {
-      case 'view': return <CNPGClustersKindView {...props} />
-      case 'wait': return <PaneLoader label="Loading…" className="flex-1" />
-      default: return null
-    }
+function CNPGKindList({ onCreate, ...props }: KindListProps) {
+  return <CNPGClustersKindView {...props} onCreate={() => onCreate(cnpgHost.clusterKind)} />
+}
+
+export const cnpgResourceHost: ResourceHost = {
+  id: 'cnpg',
+  renderers: {
+    CNPGObjectStoreRenderer, CNPGClusterRenderer, CNPGDatabaseRenderer,
+    CNPGPublicationRenderer, CNPGSubscriptionRenderer, CNPGImageCatalogRenderer,
   },
+  resources: Object.entries(CNPG_DETAIL_KINDS).map(([name, kind]) => ({ name, group: kind.group })),
+  feature: 'cnpgWorkspace',
+  canRender: support => support !== 'unsupported',
+  canRedirect: support => support === 'supported',
+  expandedPath: cnpgHost.expandedPath,
+  detailRedirect: cnpgHost.detailRedirect,
+  detailOwnership: ['summary', 'destination', 'logs'],
+  detailSlots: resource => cnpgHost.detailSlots(resource.namespace, resource.name, resource.group),
+  diagnoseAction: cnpgHost.diagnoseAction,
+  logs: (resource, data) => kindToPluralWithGroup(resource.kind, resource.group ?? '') === 'clusters' ? cnpgHost.logs('Cluster', data, resource.namespace, resource.name) : null,
+  drawerNavigation: {
+    ownsPath: pathname => pathname === '/cnpg' || pathname.startsWith('/cnpg/'),
+    Component: CNPGDrawerTrailBack,
+  },
+  kindLists: [{
+    kind: cnpgHost.clusterKind,
+    title: 'CloudNativePG Clusters',
+    mode: (support, pending) => cnpgClusterKindListMode(cnpgHost.clusterKind, support, pending),
+    Component: CNPGKindList,
+  }],
 }

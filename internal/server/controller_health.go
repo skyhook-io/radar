@@ -1,6 +1,10 @@
 package server
 
-import corev1 "k8s.io/api/core/v1"
+import (
+	corev1 "k8s.io/api/core/v1"
+
+	"github.com/skyhook-io/radar/internal/podlogs"
+)
 
 type controllerPodHealth struct {
 	Ready       int
@@ -22,7 +26,7 @@ func summarizeControllerPods(pods []*corev1.Pod) controllerPodHealth {
 				break
 			}
 		}
-		if isPodReady(p) {
+		if podlogs.IsPodReady(p) {
 			out.Ready++
 		}
 		if p.Status.Phase == corev1.PodPending {

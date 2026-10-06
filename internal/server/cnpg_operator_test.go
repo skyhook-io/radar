@@ -5,19 +5,16 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
-	k8sfake "k8s.io/client-go/kubernetes/fake"
-	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -156,7 +153,7 @@ func seedFullCNPGOperator(t *testing.T) {
 	)
 }
 
-func readCNPGOperator(t *testing.T, resp *http.Response) (CNPGOperatorResponse, []byte) {
+func readCNPGOperator(t *testing.T, resp *http.Response) (cnpgsvc.CNPGOperatorResponse, []byte) {
 	t.Helper()
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
@@ -166,14 +163,14 @@ func readCNPGOperator(t *testing.T, resp *http.Response) (CNPGOperatorResponse, 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", resp.StatusCode, body)
 	}
-	var out CNPGOperatorResponse
+	var out cnpgsvc.CNPGOperatorResponse
 	if err := json.Unmarshal(body, &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	return out, body
 }
 
-func getCNPGOperatorNoAuth(t *testing.T, query string) (CNPGOperatorResponse, []byte) {
+func getCNPGOperatorNoAuth(t *testing.T, query string) (cnpgsvc.CNPGOperatorResponse, []byte) {
 	t.Helper()
 	resp, err := http.Get(testServer.URL + "/api/cnpg/operator" + query)
 	if err != nil {
@@ -182,7 +179,7 @@ func getCNPGOperatorNoAuth(t *testing.T, query string) (CNPGOperatorResponse, []
 	return readCNPGOperator(t, resp)
 }
 
-func findConfigRef(refs []CNPGOperatorConfigRef, kind, purpose string) *CNPGOperatorConfigRef {
+func findConfigRef(refs []cnpgsvc.CNPGOperatorConfigRef, kind, purpose string) *cnpgsvc.CNPGOperatorConfigRef {
 	for i := range refs {
 		if refs[i].Kind == kind && refs[i].Purpose == purpose {
 			return &refs[i]
@@ -196,7 +193,7 @@ func TestCNPGOperator_DiscoversOperatorPluginAndConfig(t *testing.T) {
 
 	got, body := getCNPGOperatorNoAuth(t, "")
 	for _, key := range []string{"deployments", "services"} {
-		if got.Coverage[key].State != kindCoverageFull {
+		if got.Coverage[key].State != integration.KindCoverageFull {
 			t.Errorf("coverage[%s] = %+v, want full", key, got.Coverage[key])
 		}
 	}
@@ -331,79 +328,7 @@ func TestCNPGOperator_ConfigMapDataNeedsGet(t *testing.T) {
 	}
 }
 
-func cnpgOperatorTestPod(name string, labels map[string]string, statuses ...corev1.ContainerStatus) *corev1.Pod {
-	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "cnpg-system", UID: types.UID(name + "-uid"), Labels: labels},
-		Status: corev1.PodStatus{
-			Phase:             corev1.PodRunning,
-			StartTime:         &metav1.Time{Time: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)},
-			Conditions:        []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
-			ContainerStatuses: statuses,
-		},
-	}
-}
-
-func TestCNPGOperatorComponentPods(t *testing.T) {
-	started := time.Date(2026, 10, 4, 9, 0, 0, 0, time.UTC)
-	running := corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(started)}}
-	opLabels := map[string]string{"app.kubernetes.io/name": "cloudnative-pg"}
-	crashed := cnpgOperatorTestPod("cnpg-controller-manager-a", opLabels,
-		corev1.ContainerStatus{Name: "sidecar", RestartCount: 3, State: running, LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
-			Reason: "Completed", ExitCode: 0, FinishedAt: metav1.NewTime(started.Add(-48 * time.Hour)),
-		}}},
-		corev1.ContainerStatus{Name: "manager", RestartCount: 30, State: running, LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
-			Reason: "OOMKilled", ExitCode: 137, FinishedAt: metav1.NewTime(started.Add(-time.Minute)),
-		}}},
-	)
-	steady := cnpgOperatorTestPod("cnpg-controller-manager-b", opLabels, corev1.ContainerStatus{Name: "manager", State: running})
-	other := cnpgOperatorTestPod("unrelated", map[string]string{"app": "other"})
-	s := &Server{}
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	d := cnpgOperatorDeployment()
-	read := s.cnpgDeploymentPods(req, k8sfake.NewSimpleClientset(steady, crashed, other), d)
-
-	comp := withCNPGComponentPods(cnpgOperatorComponent(d, cnpgOperatorRoleOperator, "", cnpgOperatorContainerOf(d)), read, cnpgOperatorContainerOf(d))
-	if comp.PodCoverage == nil || comp.PodCoverage.State != cnpgReadOK || len(comp.Pods) != 2 {
-		t.Fatalf("component = %+v", comp)
-	}
-	a, b := comp.Pods[0], comp.Pods[1]
-	if a.Name != "cnpg-controller-manager-a" || !a.Ready || a.Restarts != 33 || a.StartedAt != "2026-10-04T09:00:00Z" {
-		t.Errorf("crashed pod = %+v, want restarts summed over containers and the manager container's start", a)
-	}
-	if lt := a.LastTermination; lt == nil || lt.Container != "manager" || lt.Reason != "OOMKilled" || lt.ExitCode != 137 || lt.FinishedAt != "2026-10-04T08:59:00Z" {
-		t.Errorf("lastTermination = %+v, want the most recently ended container's", a.LastTermination)
-	}
-	if b.Name != "cnpg-controller-manager-b" || b.Restarts != 0 || b.LastTermination != nil {
-		t.Errorf("steady pod = %+v", b)
-	}
-
-	diag := cnpgOperatorPodOf(&read.pods[0])
-	if diag.Restarts != 33 || diag.LastTermination == nil || diag.LastTermination.Reason != "OOMKilled" || diag.StartedAt != "2026-09-01T00:00:00Z" {
-		t.Errorf("diagnosis pod = %+v, want the same restarts and termination, with the Pod's own start", diag)
-	}
-
-	notRunning := cnpgOperatorTestPod("cnpg-controller-manager-c", opLabels, corev1.ContainerStatus{Name: "manager", RestartCount: 70,
-		State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}})
-	comp = withCNPGComponentPods(CNPGOperatorComponent{}, cnpgDeploymentPodRead{pods: []corev1.Pod{*notRunning}, coverage: ReadSource{State: cnpgReadOK}}, cnpgOperatorContainerOf(d))
-	if p := comp.Pods[0]; p.StartedAt != "" || p.Restarts != 70 {
-		t.Errorf("a container that is not running has no current start: %+v", p)
-	}
-}
-
 func TestCNPGOperatorComponentPodsDenied(t *testing.T) {
-	typed := k8sfake.NewSimpleClientset()
-	typed.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apiForbidden("pods")
-	})
-	d := cnpgPluginDeployment()
-	read := (&Server{}).cnpgDeploymentPods(httptest.NewRequest(http.MethodGet, "/", nil), typed, d)
-	comp := withCNPGComponentPods(cnpgOperatorComponent(d, cnpgOperatorRolePlugin, "barman-cloud.cloudnative-pg.io", firstContainer(d)), read, firstContainer(d))
-	if g := comp.PodCoverage.Grant; comp.PodCoverage.State != cnpgReadDenied || g == nil || g.Verb != "list" || g.Resource != "pods" || g.Namespace != "cnpg-system" {
-		t.Fatalf("podCoverage = %+v, want denied naming list pods in cnpg-system", comp.PodCoverage)
-	}
-	if comp.Pods != nil {
-		t.Errorf("pods = %+v, want none when they cannot be read", comp.Pods)
-	}
 
 	seedFullCNPGOperator(t)
 	env := newAuthTestServer(t)
@@ -421,7 +346,7 @@ func TestCNPGOperatorComponentPodsDenied(t *testing.T) {
 	}
 	_ = json.Unmarshal(body, &raw)
 	for i, c := range got.Components {
-		if c.PodCoverage == nil || c.PodCoverage.State != cnpgReadDenied || c.PodCoverage.Grant == nil || c.PodCoverage.Grant.Resource != "pods" {
+		if c.PodCoverage == nil || c.PodCoverage.State != "denied" || c.PodCoverage.Grant == nil || c.PodCoverage.Grant.Resource != "pods" {
 			t.Errorf("%s podCoverage = %+v", c.Deployment, c.PodCoverage)
 		}
 		if v, ok := raw.Components[i]["pods"]; !ok || v != nil {
@@ -443,7 +368,7 @@ func TestCNPGOperator_DeniedDeploymentsWithholdComponents(t *testing.T) {
 
 	got, _ := readCNPGOperator(t, env.authGet(t, "/api/cnpg/operator", "partial", ""))
 	cov := got.Coverage["deployments"]
-	if cov.State != kindCoveragePartial || len(cov.DeniedNamespaces) != 1 || cov.DeniedNamespaces[0] != "cnpg-system" {
+	if cov.State != integration.KindCoveragePartial || len(cov.DeniedNamespaces) != 1 || cov.DeniedNamespaces[0] != "cnpg-system" {
 		t.Errorf("deployments coverage = %+v, want partial denied [cnpg-system]", cov)
 	}
 	for _, c := range got.Components {
@@ -463,7 +388,7 @@ func TestCNPGOperator_DeniedDeploymentsWithholdComponents(t *testing.T) {
 	env.srv.permCache.Set("none", nil, none)
 
 	got, _ = readCNPGOperator(t, env.authGet(t, "/api/cnpg/operator", "none", ""))
-	if got.Coverage["deployments"].State != kindCoverageDenied || got.Coverage["services"].State != kindCoverageDenied {
+	if got.Coverage["deployments"].State != integration.KindCoverageDenied || got.Coverage["services"].State != integration.KindCoverageDenied {
 		t.Errorf("coverage = %+v, want both denied", got.Coverage)
 	}
 	if got.Components == nil || len(got.Components) != 0 || got.Config == nil {

@@ -4,16 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/skyhook-io/radar/internal/argocd"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/types"
 )
 
 func overlayApp(health string) *unstructured.Unstructured {
