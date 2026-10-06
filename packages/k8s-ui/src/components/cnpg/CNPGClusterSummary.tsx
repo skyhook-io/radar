@@ -4,7 +4,7 @@ import { Badge } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { classifyCNPGClusterPhase, cnpgBlockedPhaseExplanation, CNPG_BARMAN_OBJECTSTORE_GROUP, CNPG_GROUP } from '../resources/resource-utils-cnpg'
-import { CNPG_NO_WAL_ARCHIVE_DESTINATION, cnpgClusterPlugins, cnpgPluginPhase, cnpgReadyInstances, type CNPGFleetRow, type CNPGInstance } from './workspace'
+import { cnpgClusterPlugins, cnpgPluginPhase, cnpgReadyInstances, type CNPGFleetRow, type CNPGInstance } from './workspace'
 import type { CNPGDimension } from './ha'
 import { PrimaryConflictNote } from './primitives'
 import { Note } from './CNPGSharedSummary'
@@ -425,7 +425,7 @@ export function CNPGWALArchivingFact({ fact, compact = false }: { fact: CNPGFlee
   return <div>
     <FactValue fact={fact} className="break-words" />
     <FactSource fact={fact} />
-    {fact.detail && <Note>{compact && fact.text === CNPG_NO_WAL_ARCHIVE_DESTINATION ? 'No point-in-time recovery' : fact.detail}</Note>}
+    {fact.detail && <Note>{compact && fact.state === 'no_destination' ? 'No point-in-time recovery' : fact.detail}</Note>}
     {c && <div className="mt-1" onClick={(e) => e.stopPropagation()}>
       <FoldSection title="Operator report" summary="" attention={false}>
         <div className="break-words text-xs text-theme-text-secondary">{c.type}: {c.status}</div>

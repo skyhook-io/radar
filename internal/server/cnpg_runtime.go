@@ -22,13 +22,13 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
+	"github.com/skyhook-io/radar/pkg/cnpg"
 	"golang.org/x/sync/singleflight"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -414,19 +414,8 @@ type CNPGPoolerPool struct {
 // deliberately not part of the gate: without it the Kubernetes facts still
 // render and each source reports itself denied.
 func (s *Server) authorizeCNPGRuntime(w http.ResponseWriter, r *http.Request, namespace, resource string) bool {
-	if !s.requireConnected(w) {
-		return false
-	}
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
-		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
-		return false
-	}
-	if !s.canRead(r, cnpgGroup, resource, namespace, "get") {
-		s.writeError(w, http.StatusForbidden, "no access to "+resource+".postgresql.cnpg.io in namespace "+namespace)
-		return false
-	}
-	if !s.canRead(r, "", "pods", namespace, "list") {
-		s.writeError(w, http.StatusForbidden, "no access to pods in namespace "+namespace)
+	if err := s.authorizeCNPGCachedRead(r, namespace, resource, cnpgGrantListPods); err != nil {
+		s.writeCNPGCachedReadError(w, err)
 		return false
 	}
 	return true
@@ -473,23 +462,23 @@ func cnpgRuntimeClient(r *http.Request) kubernetes.Interface {
 // own pods/proxy.
 func (s *Server) handleCNPGClusterRuntime(w http.ResponseWriter, r *http.Request) {
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
-	if !s.authorizeCNPGRuntime(w, r, namespace, "clusters") {
+	resp, err := s.readCNPGClusterRuntime(r, namespace, name)
+	if err != nil {
+		s.writeCNPGCachedReadError(w, err)
 		return
 	}
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "resource cache not available")
-		return
-	}
-	cluster, ok := s.loadCNPGCluster(w, r, cache, namespace, name)
-	if !ok {
-		return
+	s.writeJSON(w, resp)
+}
+
+func (s *Server) readCNPGClusterRuntime(r *http.Request, namespace, name string) (*CNPGClusterRuntimeResponse, error) {
+	cache, cluster, err := s.cnpgClusterRead(r, namespace, name, cnpgGrantListPods)
+	if err != nil {
+		return nil, err
 	}
 	pods, err := cnpgClusterInstancePods(cache, cluster)
 	if err != nil {
 		log.Printf("[cnpg] Failed to list instance Pods for %s/%s: %v", namespace, name, err)
-		s.writeError(w, http.StatusServiceUnavailable, "instance Pods unavailable: "+err.Error())
-		return
+		return nil, &cnpgReadFailure{http.StatusServiceUnavailable, "instance Pods unavailable: " + err.Error()}
 	}
 
 	proxyAllowed := s.grantPermission(r, cnpgGrantGetPodsProxy.In(namespace)) != permissionDenied
@@ -501,24 +490,21 @@ func (s *Server) handleCNPGClusterRuntime(w http.ResponseWriter, r *http.Request
 		Instances:  make([]CNPGInstanceRuntime, len(pods)),
 	}
 	for i, p := range pods {
-		resp.Instances[i] = CNPGInstanceRuntime{Pod: p.Name, PodUID: p.UID, Role: cnpgRuntimeRole(p), Fenced: fenced.fences(p.Name)}
+		resp.Instances[i] = CNPGInstanceRuntime{Pod: p.Name, PodUID: p.UID, Role: cnpgRuntimeRole(p), Fenced: fenced.Fences(p.Name)}
 	}
 	if len(pods) == 0 {
-		s.writeJSON(w, resp)
-		return
+		return &resp, nil
 	}
 	if !proxyAllowed {
 		for i := range resp.Instances {
 			resp.Instances[i].Status.CNPGRuntimeSource = cnpgProxyDenied(namespace)
 			resp.Instances[i].Metrics.CNPGRuntimeSource = cnpgProxyDenied(namespace)
 		}
-		s.writeJSON(w, resp)
-		return
+		return &resp, nil
 	}
 	client := cnpgRuntimeClient(r)
 	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "cluster client unavailable")
-		return
+		return nil, &cnpgReadFailure{http.StatusServiceUnavailable, "cluster client unavailable"}
 	}
 
 	clusterMetricsTLS, _, _ := unstructured.NestedBool(cluster.Object, "spec", "monitoring", "tls", "enabled")
@@ -526,14 +512,7 @@ func (s *Server) handleCNPGClusterRuntime(w http.ResponseWriter, r *http.Request
 	run := newCNPGRuntimeRunner(r.Context())
 	for i, p := range pods {
 		inst := &resp.Instances[i]
-		statusTarget := cnpgProxyTarget{
-			namespace: namespace, pod: p.Name, podUID: p.UID, port: cnpgStatusPort, path: cnpgStatusPath,
-			scheme: cnpgSchemeFor(cnpgContainerHasFlag(p, cnpgDefaultLogContainer, cnpgStatusPortTLSFlag)), limit: cnpgRuntimeStatusCap,
-		}
-		metricsTarget := cnpgProxyTarget{
-			namespace: namespace, pod: p.Name, podUID: p.UID, port: cnpgMetricsPort, path: cnpgMetricsPath,
-			scheme: cnpgSchemeFor(cnpgContainerHasFlag(p, cnpgDefaultLogContainer, cnpgMetricsPortTLSFlag) || clusterMetricsTLS), limit: cnpgRuntimeMetricsCap,
-		}
+		statusTarget, metricsTarget := cnpgInstanceProxyTargets(p, clusterMetricsTLS)
 		run.do(func(ctx context.Context) {
 			inst.Status = cnpgMemoized(ctx, identity, statusTarget, cnpgStatusMemoTTL, func(ctx context.Context) CNPGInstanceStatus {
 				return cnpgInstanceStatusFrom(cnpgProxyGetWithFallback(ctx, client, statusTarget))
@@ -560,7 +539,7 @@ func (s *Server) handleCNPGClusterRuntime(w http.ResponseWriter, r *http.Request
 			inst.Status.CNPGInstanceStatusFacts = withCNPGSlotRetention(inst.Status.CNPGInstanceStatusFacts, inst.Metrics.ReplicationSlotsRetainedBytes)
 		}
 	}
-	s.writeJSON(w, resp)
+	return &resp, nil
 }
 
 // handleCNPGPoolerRuntime serves GET /api/cnpg/poolers/{namespace}/{name}/runtime:
@@ -723,12 +702,7 @@ func cnpgControllerRef(refs []metav1.OwnerReference) *metav1.OwnerReference {
 }
 
 func cnpgControlledBy(refs []metav1.OwnerReference, group, kind, name string, uid types.UID) bool {
-	ref := cnpgControllerRef(refs)
-	if ref == nil || ref.Kind != kind || ref.Name != name || ref.UID != uid {
-		return false
-	}
-	gv, err := schema.ParseGroupVersion(ref.APIVersion)
-	return err == nil && gv.Group == group
+	return cnpg.ControlledBy(refs, group, kind, name, uid)
 }
 
 func cnpgRuntimeRole(p *corev1.Pod) string {

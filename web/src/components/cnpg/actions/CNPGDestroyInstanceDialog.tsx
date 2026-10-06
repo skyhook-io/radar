@@ -50,7 +50,7 @@ export function CNPGDestroyInstanceDialog({
             request: {
               reviewedContext: data.context,
               uid: data.uid,
-              facts: data.facts as unknown as Record<string, unknown>,
+              facts: data.facts,
               params: { pod, podUID: data.podUID, keepPVC: keep, pvcs: data.pvcs.map((p) => ({ name: p.name, uid: p.uid })) },
             },
           },
@@ -112,7 +112,7 @@ export function CNPGDestroyInstanceDialog({
           ? 'Reading the instance’s volumes…'
           : !data
             ? plan.error instanceof Error ? plan.error.message : 'The destroy plan could not be read'
-            : cnpgDestroyBlocker(cap, pod, fenceOffered)
+            : cnpgDestroyBlocker(cap, fenceOffered)
       }
       guardSatisfied={!!cap?.allowed}
       isLoading={mutation.isPending}

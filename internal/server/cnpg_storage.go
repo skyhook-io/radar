@@ -192,27 +192,19 @@ type CNPGStorageExcludedPV struct {
 // each need their own grant and report their own coverage.
 func (s *Server) handleCNPGClusterStorage(w http.ResponseWriter, r *http.Request) {
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
-	if !s.requireConnected(w) {
+	resp, err := s.readCNPGClusterStorage(r, namespace, name)
+	if err != nil {
+		s.writeCNPGCachedReadError(w, err)
 		return
 	}
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
-		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
-		return
-	}
-	if !s.canRead(r, cnpgGroup, "clusters", namespace, "get") {
-		s.writeError(w, http.StatusForbidden, "no access to clusters.postgresql.cnpg.io in namespace "+namespace)
-		return
-	}
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "resource cache not available")
-		return
-	}
-	cluster, ok := s.loadCNPGCluster(w, r, cache, namespace, name)
-	if !ok {
-		return
-	}
+	s.writeJSON(w, resp)
+}
 
+func (s *Server) readCNPGClusterStorage(r *http.Request, namespace, name string) (*CNPGClusterStorageResponse, error) {
+	cache, cluster, err := s.cnpgClusterRead(r, namespace, name)
+	if err != nil {
+		return nil, err
+	}
 	resp := CNPGClusterStorageResponse{
 		Cluster:   CNPGRuntimeObjectRef{Namespace: namespace, Name: name, UID: cluster.GetUID()},
 		SampledAt: time.Now().UTC().Format(time.RFC3339),
@@ -253,9 +245,9 @@ func (s *Server) handleCNPGClusterStorage(w http.ResponseWriter, r *http.Request
 		in.Volumes = append(in.Volumes, v)
 	}
 
-	resp.WAL = s.cnpgStorageWAL(w, r, cache, cluster, byInstance)
-	if resp.WAL.State == "" {
-		return
+	resp.WAL, err = s.cnpgStorageWAL(r, cache, cluster, byInstance)
+	if err != nil {
+		return nil, err
 	}
 
 	for _, in := range byInstance {
@@ -271,7 +263,7 @@ func (s *Server) handleCNPGClusterStorage(w http.ResponseWriter, r *http.Request
 	}
 	sort.Slice(resp.Instances, func(i, j int) bool { return resp.Instances[i].Name < resp.Instances[j].Name })
 	sort.SliceStable(resp.Findings, func(i, j int) bool { return resp.Findings[i].Ratio > resp.Findings[j].Ratio })
-	s.writeJSON(w, resp)
+	return &resp, nil
 }
 
 // cnpgClusterClaims lists the claims the Cluster owns, after the caller's own
@@ -616,27 +608,26 @@ func cnpgStorageTargetOf(obj map[string]any, role, tablespace, base string, path
 // cnpgStorageWAL reads each instance's WAL facts through the same memoized
 // pods/proxy reads the Replication and Performance tabs use. It writes the error and returns an
 // empty state only when the caller's client cannot be built.
-func (s *Server) cnpgStorageWAL(w http.ResponseWriter, r *http.Request, cache *k8s.ResourceCache, cluster *unstructured.Unstructured, byInstance map[string]*CNPGStorageInstance) CNPGStorageCoverage {
+func (s *Server) cnpgStorageWAL(r *http.Request, cache *k8s.ResourceCache, cluster *unstructured.Unstructured, byInstance map[string]*CNPGStorageInstance) (CNPGStorageCoverage, error) {
 	namespace := cluster.GetNamespace()
 	if !s.canRead(r, "", "pods", namespace, "list") {
-		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateDenied, Grant: cnpgGrantListPods.In(namespace).Ref()}}
+		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateDenied, Grant: cnpgGrantListPods.In(namespace).Ref()}}, nil
 	}
 	grant := cnpgGrantGetPodsProxy.In(namespace).Ref()
 	if s.grantPermission(r, cnpgGrantGetPodsProxy.In(namespace)) == permissionDenied {
-		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateDenied, Grant: grant}}
+		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateDenied, Grant: grant}}, nil
 	}
 	pods, err := cnpgClusterInstancePods(cache, cluster)
 	if err != nil {
 		log.Printf("[cnpg] Failed to list instance Pods for %s/%s: %v", namespace, cluster.GetName(), err)
-		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateUnavailable, Grant: grant, Reason: "instance Pods unavailable"}}
+		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateUnavailable, Grant: grant, Reason: "instance Pods unavailable"}}, nil
 	}
 	if len(pods) == 0 {
-		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateUnavailable, Grant: grant, Reason: "no instance Pods"}}
+		return CNPGStorageCoverage{ReadSource: ReadSource{State: cnpgStorageStateUnavailable, Grant: grant, Reason: "no instance Pods"}}, nil
 	}
 	client := cnpgRuntimeClient(r)
 	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "cluster client unavailable")
-		return CNPGStorageCoverage{}
+		return CNPGStorageCoverage{}, &cnpgReadFailure{http.StatusServiceUnavailable, "cluster client unavailable"}
 	}
 
 	metricsTLS, _, _ := unstructured.NestedBool(cluster.Object, "spec", "monitoring", "tls", "enabled")
@@ -694,7 +685,7 @@ func (s *Server) cnpgStorageWAL(w http.ResponseWriter, r *http.Request, cache *k
 	for i, p := range pods {
 		wal := results[i]
 		wal.SlotInventory = withCNPGSlotRetention(&CNPGInstanceStatusFacts{Slots: wal.SlotInventory}, wal.Slots).Slots
-		if fenced.fences(p.Name) {
+		if fenced.Fences(p.Name) {
 			explainCNPGFenced(&wal.Status)
 			explainCNPGFenced(&wal.Metrics)
 		}
@@ -719,7 +710,7 @@ func (s *Server) cnpgStorageWAL(w http.ResponseWriter, r *http.Request, cache *k
 		cov.State = cnpgStorageStatePartial
 		cov.Reason = cnpgWALCoverageReason(failed, partial, len(pods))
 	}
-	return cov
+	return cov, nil
 }
 
 // cnpgInstanceProxyTargets builds the same targets as the live instance reads, so the

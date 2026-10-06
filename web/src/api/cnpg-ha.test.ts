@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CNPGFleetRow, Grant } from '@skyhook-io/k8s-ui'
 import type { CNPGRuntimeResponse } from './cnpg'
-import { cnpgInstanceLiveUnavailable, cnpgReplicationGap, withLiveReplication } from './cnpg-ha'
+import { cnpgInstanceLiveUnavailable, cnpgReplicationGap, withLiveReplication } from '../components/cnpg/runtimeAssessment'
 
 function row(desired: number | null): CNPGFleetRow {
   return {

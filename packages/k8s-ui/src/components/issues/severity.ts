@@ -141,6 +141,9 @@ export function categoryLabel(category: string): string {
 const REASON_TITLE: Record<string, string> = {
   CNPGWALArchivingFailing: "WAL archiving failing",
   CNPGLastBackupFailed: "Latest backup failed",
+  CNPGScheduleDestinationMissing: "Backup schedule has no destination",
+  CNPGInstanceReadinessMismatch: "Instance Pods contradict Cluster readiness",
+  CNPGPrimaryLabelMismatch: "Primary Pod label contradicts Cluster status",
   CNPGScheduledRunNoBackup: "No successful backup since a scheduled run",
 };
 

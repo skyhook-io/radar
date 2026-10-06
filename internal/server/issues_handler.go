@@ -99,6 +99,7 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		Grouped:              q.Get("view") != "flat",
 		CanReadClusterScoped: s.issueClusterScopedAccess(r),
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
+		CanReadEvidence:      s.issueEvidenceAccess(r),
 	}
 	if expr := q.Get("filter"); expr != "" {
 		f, err := filter.CachedIssueFilter(expr)
@@ -296,6 +297,7 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		Namespaces:           namespaces,
 		CanReadClusterScoped: s.issueClusterScopedAccess(r),
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
+		CanReadEvidence:      s.issueEvidenceAccess(r),
 	}, group, kind, namespace, name)
 	related, withheld := s.withholdUnreadableIssueRefs(r, related)
 	if related == nil {
@@ -439,6 +441,7 @@ func (s *Server) clusterScopedSubjectIssuesWithheld(r *http.Request, provider is
 		Limit:                  issues.NoLimit,
 		CanReadClusterScoped:   subjectKind,
 		CanReadRelated:         s.issueRelatedResourceAccess(r),
+		CanReadEvidence:        s.issueEvidenceAccess(r),
 		Grouped:                true,
 	})
 	seen := make(map[string]bool, len(returned))
@@ -526,4 +529,10 @@ func splitCSV(v string) []string {
 		}
 	}
 	return out
+}
+
+func (s *Server) issueEvidenceAccess(r *http.Request) func(issues.EvidenceRead) bool {
+	return func(read issues.EvidenceRead) bool {
+		return s.canRead(r, read.Group, read.Resource, read.Namespace, read.Verb)
+	}
 }

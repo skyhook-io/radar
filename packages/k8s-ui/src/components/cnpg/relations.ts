@@ -1,3 +1,4 @@
+import { cnpgBackupDeclaration, cnpgBackupDestinationBlocker, cnpgBackupBlockerText } from '../../utils/cnpg-backup'
 // Pure relationship lookups between CloudNativePG objects in the workspace
 // payload. Each helper answers only from what the objects record; a relation
 // that cannot be established returns null or an empty list, never a guess.
@@ -196,19 +197,8 @@ export function backupDestination(backup: any, clusters: any[]): CNPGBackupDesti
 export function cnpgScheduleDestinationBlocker(schedule: any, clusters: any[]): string | null {
   const cluster = targetCluster(schedule, clusters)
   if (!cluster) return null
-  const method = schedule?.spec?.method || 'barmanObjectStore'
-  const plugin = getCNPGClusterBarmanPlugin(cluster)
-  const hasDestination = !!plugin?.barmanObjectName || !!cluster.spec?.backup?.volumeSnapshot || !!cluster.spec?.backup?.barmanObjectStore?.destinationPath || (cluster.spec?.plugins ?? []).some((p: any) => p.enabled !== false && p.name !== CNPG_BARMAN_PLUGIN_NAME)
-  const missing = hasDestination ? `No ${method} destination` : 'No backup destination'
-  if (method === 'volumeSnapshot') return cluster.spec?.backup?.volumeSnapshot ? null : missing
-  if (method === 'barmanObjectStore') return cluster.spec?.backup?.barmanObjectStore?.destinationPath ? null : missing
-  if (method === 'plugin') {
-    const name = schedule.spec?.pluginConfiguration?.name
-    const plugin = cluster.spec?.plugins?.find((p: any) => p.name === name && p.enabled !== false)
-    if (!plugin) return missing
-    if (name === CNPG_BARMAN_PLUGIN_NAME && !plugin.parameters?.barmanObjectName) return missing
-  }
-  return null
+  const blocker = cnpgBackupDestinationBlocker(cnpgBackupDeclaration(cluster), schedule.spec?.method || 'barmanObjectStore', schedule.spec?.pluginConfiguration?.name)
+  return blocker ? cnpgBackupBlockerText(blocker) : null
 }
 
 // ---------------------------------------------------------------------------

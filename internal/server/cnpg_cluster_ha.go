@@ -210,24 +210,9 @@ type cnpgHAClients struct {
 
 func (s *Server) handleCNPGClusterHA(w http.ResponseWriter, r *http.Request) {
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
-	if !s.requireConnected(w) {
-		return
-	}
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) {
-		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
-		return
-	}
-	if !s.canRead(r, cnpgGroup, "clusters", namespace, "get") {
-		s.writeError(w, http.StatusForbidden, "no access to clusters.postgresql.cnpg.io in namespace "+namespace)
-		return
-	}
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "resource cache not available")
-		return
-	}
-	cluster, ok := s.loadCNPGCluster(w, r, cache, namespace, name)
-	if !ok {
+	cache, cluster, err := s.cnpgClusterRead(r, namespace, name)
+	if err != nil {
+		s.writeCNPGCachedReadError(w, err)
 		return
 	}
 	typed := s.getClientForRequest(r)

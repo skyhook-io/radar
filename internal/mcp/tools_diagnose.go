@@ -613,6 +613,7 @@ func handleGitOpsDiagnose(ctx context.Context, input diagnoseInput, canonicalKin
 			Namespaces:           issueNamespacesForResource(input.Namespace),
 			CanReadClusterScoped: issueClusterScopedAccess(ctx),
 			CanReadRelated:       issueRelatedResourceAccess(ctx),
+			CanReadEvidence:      issueEvidenceAccess(ctx),
 		}, group, canonicalKind, input.Namespace, input.Name),
 		Warnings: k8score.EnrichRuntimeObjectWarnings(u),
 	}

@@ -5,7 +5,7 @@
 
 import { formatAge, type HealthLevel } from '../resources/resource-utils'
 import { formatGrant, type Grant } from '../../utils/grant'
-import { CNPG_PROMETHEUS_NOT_CONNECTED, cnpgFormatLag, cnpgLagTone, cnpgReplicationTone, cnpgSustainedLagProblemId, type CNPGFleetRow } from './workspace'
+import { CNPG_PROMETHEUS_NOT_CONNECTED, cnpgFormatLag, cnpgLagTone, cnpgReplicationTone, type CNPGFleetRow } from './workspace'
 import { type Fact } from '../facts'
 import { type FoldSummary } from '../ui/FoldSection'
 import { worseTone } from '../ui/status-tone'
@@ -463,7 +463,7 @@ function volumeDimension(row: CNPGFleetRow): CNPGDimension {
 // WAL an inactive slot pins is a storage concern even while volume usage is
 // unmeasured; the chip says so instead of reading "unassessed".
 function withSlotRetention(row: CNPGFleetRow, dim: CNPGDimension): CNPGDimension {
-  const slot = row.problems.find((p) => p.id.startsWith(`slot:${row.key}:`))
+  const slot = row.problems.find((p) => p.reason === 'CNPGInactiveSlot')
   if (!slot) return dim
   const held = 'WAL held by an inactive slot'
   return {
@@ -508,7 +508,7 @@ function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap
       const expected = ha?.pods.state === 'ok' ? ha.expectedInstances ?? row.cluster?.status?.instanceNames ?? [] : row.cluster?.status?.instanceNames ?? []
       const missing = expected.filter((name: string) => name !== primary && !pods.some((p) => p.name === name))
       if (!live && missing.length > 0) {
-        const otherGaps = row.problems.filter((p) => p.id.startsWith(`standby:${row.key}:`) && !missing.includes(p.subject.name))
+        const otherGaps = row.problems.filter((p) => p.reason === 'CNPGStandbyNotReceiving' && !missing.includes(p.subject.name))
         const measuredGaps = withStandbyGaps({ ...row, problems: otherGaps }, liveReplicationDimension(row, live, gap))
         dim = {
           ...dim, tone: worseTone(dim.tone, 'degraded'),
@@ -521,7 +521,7 @@ function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap
       }
     }
   }
-  const sustained = row.problems.find((p) => p.id === cnpgSustainedLagProblemId(row.key))
+  const sustained = row.problems.find((p) => p.reason === 'CNPGSustainedLag')
   if (!sustained) return dim
   const tone: HealthLevel = sustained.severity === 'critical' ? 'unhealthy' : 'degraded'
   return {
@@ -535,14 +535,14 @@ function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap
 // A standby another source saw receiving nothing (Prometheus in the fleet, the
 // instance manager here) keeps the chip from reading calm or unassessed.
 function withStandbyGaps(row: CNPGFleetRow, dim: CNPGDimension): CNPGDimension {
-  const gaps = row.problems.filter((p) => p.id.startsWith(`standby:${row.key}:`))
+  const gaps = row.problems.filter((p) => p.reason === 'CNPGStandbyNotReceiving')
   if (gaps.length === 0) return dim
   const pods = gaps.map((p) => p.subject.name).join(', ')
   const tone: HealthLevel = gaps.some((p) => p.severity === 'critical') ? 'unhealthy' : 'degraded'
   return {
     ...dim,
     tone: worseTone(dim.tone, tone),
-    text: dim.tone === 'unknown' ? `${pods} not receiving WAL` : dim.text.includes('not connected') ? dim.text : `${dim.text} · ${pods} not receiving WAL`,
+    text: dim.tone === 'unknown' ? `${pods} not receiving WAL` : `${dim.text} · ${pods} not receiving WAL`,
     source: gaps.map((p) => p.title).join('; '),
   }
 }
@@ -576,7 +576,7 @@ function protectionDimension(row: CNPGFleetRow): CNPGDimension {
   const base = { id: 'protection' as const, label: 'Backups' }
   const p = row.protection
   if (p.walArchiving.tone === 'unhealthy') return { ...base, tone: 'unhealthy', text: 'WAL archiving failing', source: 'ContinuousArchiving condition' }
-  const blockedSchedule = row.problems.find((problem) => problem.id.startsWith('schedule-destination:'))
+  const blockedSchedule = row.problems.find((problem) => problem.reason === 'CNPGScheduleDestinationMissing')
   if (blockedSchedule) return { ...base, tone: 'degraded', text: blockedSchedule.title, source: blockedSchedule.origin?.detail ?? 'ScheduledBackup method against Cluster spec' }
   if (p.destination.method === 'none') return { ...base, tone: 'degraded', text: 'no backup destination', source: 'Cluster spec' }
   if (p.lastSuccessfulBackup.tone === 'unhealthy' || p.lastSuccessfulBackup.tone === 'degraded') {

@@ -19,11 +19,13 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 	// not the grouped issue's inline Members (capped at maxInlineMembers) — is
 	// what makes member #11..#N in a large fan-out resolve correctly.
 	flat := Compose(p, Filters{
-		SkipPodTemplateContext: true,
-		Namespaces:             opts.Namespaces,
-		Limit:                  NoLimit,
-		CanReadClusterScoped:   opts.CanReadClusterScoped,
-		CanReadRelated:         opts.CanReadRelated,
+		SkipPodTemplateContext:  true,
+		Namespaces:              opts.Namespaces,
+		Limit:                   NoLimit,
+		CanReadClusterScoped:    opts.CanReadClusterScoped,
+		CanReadRelated:          opts.CanReadRelated,
+		CanReadEvidence:         opts.CanReadEvidence,
+		AllowUnfilteredEvidence: opts.AllowUnfilteredEvidence,
 	})
 	grouped := GroupIssues(flat)
 	// Run the grouped-mode enrichment (mirrors the cluster path) so the grouped
@@ -57,7 +59,7 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 	}
 	matched := make(map[string]bool) // grouped issue IDs the resource touches
 	for _, g := range grouped {      // as the grouped SUBJECT (owner-collapsed)
-		if match(g.Group, g.Kind, g.Namespace, g.Name) && CanReadIssueRelatedRefs(g, opts.CanReadRelated) {
+		if match(g.Group, g.Kind, g.Namespace, g.Name) && CanReadIssueRelatedRefs(g, opts.CanReadRelated) && CanReadIssueEvidence(g, opts.CanReadEvidence, opts.AllowUnfilteredEvidence) {
 			matched[g.ID] = true
 		}
 		if g.DiagnosticContext != nil {
@@ -77,13 +79,13 @@ func RelatedIssuesFrom(flat, grouped []Issue, opts RelatedIssueOptions, group, k
 		}
 	}
 	for _, f := range flat { // as ANY evidence row (uncapped)
-		if match(f.Group, f.Kind, f.Namespace, f.Name) && CanReadIssueRelatedRefs(f, opts.CanReadRelated) {
+		if match(f.Group, f.Kind, f.Namespace, f.Name) && CanReadIssueRelatedRefs(f, opts.CanReadRelated) && CanReadIssueEvidence(f, opts.CanReadEvidence, opts.AllowUnfilteredEvidence) {
 			matched[f.ID] = true
 		}
 	}
 	var out []Issue
 	for _, g := range grouped {
-		if matched[g.ID] {
+		if matched[g.ID] && CanReadIssueEvidence(g, opts.CanReadEvidence, opts.AllowUnfilteredEvidence) {
 			out = append(out, g)
 		}
 	}
@@ -167,6 +169,15 @@ func foldGroup(members []Issue) Issue {
 		// links / change context.
 		DiagnosticContext: rep.DiagnosticContext,
 		ChangeContext:     rep.ChangeContext,
+	}
+	reads := map[EvidenceRead]bool{}
+	for _, member := range members {
+		for _, read := range member.RequiredReads {
+			if !reads[read] {
+				reads[read] = true
+				g.RequiredReads = append(g.RequiredReads, read)
+			}
+		}
 	}
 	// A parsed diagnosis (cause/action/remediation) describes ONE resource's
 	// failure. Carry it onto the grouped row only when it is true for the

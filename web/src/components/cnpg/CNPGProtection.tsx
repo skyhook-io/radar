@@ -13,12 +13,11 @@ import {
   getCNPGBackupStatus,
   getCNPGClusterBarmanPlugin,
   getCNPGObjectStoreDestination,
-  getCNPGScheduledBackupStatus,
+  getCNPGScheduledBackupStatus, getCNPGScheduledBackupOverdueMs,
   inferredObjectStoreHealth,
   cnpgBackupRunsInWindow,
   cnpgBackupRunInFlight,
   CNPG_BACKUP_RUN_WINDOW_MS,
-  CNPG_NO_WAL_ARCHIVE_DESTINATION,
   coverageReadable,
   cnpgCoverageGap,
   getCNPGScheduledBackupNextSchedule,
@@ -285,7 +284,7 @@ export function CNPGProtection({
           inspected={inspected}
           minWidth={1000}
           empty={coverageEmpty(data.coverage.clusters, 'PostgreSQL clusters')}
-          footer={`${rows.some((r) => r.protection.walArchiving.text === CNPG_NO_WAL_ARCHIVE_DESTINATION && r.protection.walArchiving.operatorCondition?.status === 'True') ? "With no backup destination, CloudNativePG reports archiving as working because it accepts each WAL file without keeping it. " : ""}Kubernetes records no restore tests, so restore validation is never shown as passed.${stores.length > 0 ? " Recovery windows come from ObjectStore status." : ""}`}
+          footer={`${rows.some((r) => r.protection.walArchiving.state === 'no_destination' && r.protection.walArchiving.operatorCondition?.status === 'True') ? "With no backup destination, CloudNativePG reports archiving as working because it accepts each WAL file without keeping it. " : ""}Kubernetes records no restore tests, so restore validation is never shown as passed.${stores.length > 0 ? " Recovery windows come from ObjectStore status." : ""}`}
         />}
 
         <SectionTable
@@ -420,7 +419,7 @@ export function CNPGProtection({
                 const st = getCNPGScheduledBackupStatus(s)
                 const last = backupsForScheduledBackup(s, data.objects.backups ?? [])[0]
                 const blocker = cnpgScheduleDestinationBlocker(s, data.objects.clusters ?? [])
-                const guarded = s.spec?.suspend || st.text === 'Overdue'
+                const guarded = s.spec?.suspend || getCNPGScheduledBackupOverdueMs(s) !== null
                 const text = guarded ? st.text : blocker || last || s.status?.lastScheduleTime ? 'Enabled' : 'Enabled · not run yet'
                 const severity = guarded ? SEVERITY[st.level] : 'neutral'
                 return <div className="flex flex-wrap gap-1"><Badge severity={severity} size="sm" className="whitespace-nowrap">{text}</Badge>{blocker && <Badge severity="warning" size="sm" className="whitespace-nowrap">{blocker}</Badge>}</div>

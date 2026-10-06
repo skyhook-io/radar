@@ -10,16 +10,17 @@ import { ApiError } from './client'
 export interface ActionCapability {
   allowed: boolean
   reason?: string
+  reasonCode?: string
   /** `unknown`: the permission check itself failed; the apiserver decides on submit. */
   permission: 'allowed' | 'denied' | 'unknown'
   grant?: Grant
 }
 
-export interface ActionRequest {
+export interface ActionRequest<Facts extends object = object, Params extends object = object> {
   reviewedContext: string
   uid: string
-  facts: Record<string, unknown>
-  params?: Record<string, unknown>
+  facts: Facts
+  params?: Params
 }
 
 /**

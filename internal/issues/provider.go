@@ -16,6 +16,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/cnpg"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -829,4 +830,22 @@ func (p *CacheProvider) karpenterResources(group, kind string) karpenterResource
 		return karpenterResourceInventory{GVR: gvr, Coverage: karpenterCoverageUnknown}
 	}
 	return karpenterResourceInventory{GVR: gvr, Items: items, Coverage: karpenterCoverageAuthoritative}
+}
+
+func (p *CacheProvider) cnpgInstancePods(cluster *unstructured.Unstructured) ([]*corev1.Pod, bool) {
+	ns := cluster.GetNamespace()
+	if p == nil || p.cache == nil || p.cache.Pods() == nil || !p.cache.IsKindReady("pods") || !p.cache.KindCoversNamespace("pods", ns) {
+		return nil, false
+	}
+	candidates, err := p.cache.Pods().Pods(ns).List(labels.SelectorFromSet(labels.Set{"cnpg.io/cluster": cluster.GetName()}))
+	if err != nil {
+		return nil, false
+	}
+	var pods []*corev1.Pod
+	for _, pod := range candidates {
+		if cnpg.IsInstancePod(pod, ns, cluster.GetName(), cluster.GetUID()) {
+			pods = append(pods, pod)
+		}
+	}
+	return pods, true
 }

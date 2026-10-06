@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/pkg/cnpg"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -419,9 +420,12 @@ func (b *cnpgReportBuilder) build(opts cnpgReportOptions) {
 		b.record(CNPGReportItem{Item: "Events", ReadSource: evCov})
 	}
 
-	b.captured("Operator and plugins", "operator/operator.json", b.s.handleCNPGOperator, cnpgReportStripOperatorConfig)
-	b.captured("Runtime (instance manager status and exporter metrics)", "runtime/runtime.json", b.s.handleCNPGClusterRuntime, nil)
-	b.captured("Storage", "runtime/storage.json", b.s.handleCNPGClusterStorage, nil)
+	operator, err := b.s.readCNPGOperator(b.r)
+	b.readJSON("Operator and plugins", "operator/operator.json", cnpgReportOperator(operator), err)
+	runtime, err := b.s.readCNPGClusterRuntime(b.r, namespace, name)
+	b.readJSON("Runtime (instance manager status and exporter metrics)", "runtime/runtime.json", runtime, err)
+	storage, err := b.s.readCNPGClusterStorage(b.r, namespace, name)
+	b.readJSON("Storage", "runtime/storage.json", storage, err)
 
 	if opts.Logs {
 		b.logs(keptPods, opts)
@@ -477,87 +481,73 @@ func (b *cnpgReportBuilder) objectStores() {
 }
 
 func cnpgClusterBarmanPlugin(cluster *unstructured.Unstructured) string {
-	plugins, _, _ := unstructured.NestedSlice(cluster.Object, "spec", "plugins")
-	for _, p := range plugins {
-		m, _ := p.(map[string]any)
-		if m == nil || m["name"] != "barman-cloud.cloudnative-pg.io" {
-			continue
+	for _, p := range cnpg.ParseBackupDeclaration(cluster).Plugins {
+		if p.Name == cnpg.BarmanPluginName {
+			return p.ObjectStore
 		}
-		params, _, _ := unstructured.NestedStringMap(m, "parameters")
-		return params["barmanObjectName"]
 	}
 	return ""
 }
 
-// captured runs one of Radar's own read handlers for this Cluster, as the
-// caller, and stores its JSON answer verbatim: the bundle then holds exactly
-// what the UI showed, with the same gates and coverage.
-func (b *cnpgReportBuilder) captured(item, file string, handler http.HandlerFunc, transform func([]byte) []byte) {
-	rec := &cnpgCaptureWriter{header: http.Header{}, status: http.StatusOK}
-	handler(rec, b.r)
-	body := rec.body.Bytes()
-	if rec.status != http.StatusOK {
-		var e struct {
-			Error string `json:"error"`
+func (b *cnpgReportBuilder) readJSON(item, file string, value any, err error) {
+	if err != nil {
+		status := http.StatusInternalServerError
+		var failure *cnpgReadFailure
+		if errors.As(err, &failure) {
+			status = failure.status
 		}
-		_ = json.Unmarshal(body, &e)
+		if errors.Is(err, errCNPGDisconnected) {
+			status = http.StatusServiceUnavailable
+		}
 		state := cnpgReadError
-		switch rec.status {
+		switch status {
 		case http.StatusForbidden:
 			state = cnpgReadDenied
 		case http.StatusNotFound:
 			state = cnpgReadNotFound
 		}
-		b.record(CNPGReportItem{Item: item, ReadSource: ReadSource{State: state, Reason: strings.TrimSpace(fmt.Sprintf("HTTP %d %s", rec.status, e.Error))}})
+		b.record(CNPGReportItem{Item: item, ReadSource: ReadSource{State: state, Reason: fmt.Sprintf("HTTP %d %s", status, err)}})
 		return
 	}
-	if transform != nil {
-		body = transform(body)
-	}
-	var pretty bytes.Buffer
-	if json.Indent(&pretty, body, "", "  ") == nil {
-		body = pretty.Bytes()
+	body, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		b.record(CNPGReportItem{Item: item, ReadSource: ReadSource{State: cnpgReadError, Reason: err.Error()}})
+		return
 	}
 	b.writeBytes(CNPGReportItem{Item: item}, file, body, nil)
 }
 
-type cnpgCaptureWriter struct {
-	header http.Header
-	status int
-	body   bytes.Buffer
+type cnpgReportOperatorConfig struct {
+	CNPGOperatorConfigRef
+	Keys *[]string `json:"keys,omitempty"`
 }
 
-func (c *cnpgCaptureWriter) Header() http.Header         { return c.header }
-func (c *cnpgCaptureWriter) Write(p []byte) (int, error) { return c.body.Write(p) }
-func (c *cnpgCaptureWriter) WriteHeader(status int)      { c.status = status }
+type cnpgReportOperatorResponse struct {
+	*CNPGOperatorResponse
+	Config []cnpgReportOperatorConfig `json:"config"`
+}
 
-// The operator's ConfigMap values are left out, as kubectl cnpg's operator
-// report redacts them by default; the references stay.
-func cnpgReportStripOperatorConfig(body []byte) []byte {
-	var resp map[string]any
-	if json.Unmarshal(body, &resp) != nil {
-		return body
+// Operator reports retain configuration references and keys, never their values.
+func cnpgReportOperator(resp *CNPGOperatorResponse) *cnpgReportOperatorResponse {
+	if resp == nil {
+		return nil
 	}
-	if cfg, ok := resp["config"].([]any); ok {
-		for _, c := range cfg {
-			if m, ok := c.(map[string]any); ok {
-				if data, ok := m["data"].(map[string]any); ok {
-					keys := make([]string, 0, len(data))
-					for k := range data {
-						keys = append(keys, k)
-					}
-					sort.Strings(keys)
-					m["data"] = nil
-					m["keys"] = keys
-				}
+	config := make([]cnpgReportOperatorConfig, len(resp.Config))
+	for i, c := range resp.Config {
+		config[i].CNPGOperatorConfigRef = c
+		if c.CNPGOperatorConfigMapState != nil && c.Data != nil {
+			keys := make([]string, 0, len(c.Data))
+			for k := range c.Data {
+				keys = append(keys, k)
 			}
+			sort.Strings(keys)
+			state := *c.CNPGOperatorConfigMapState
+			state.Data = nil
+			config[i].CNPGOperatorConfigMapState = &state
+			config[i].Keys = &keys
 		}
 	}
-	out, err := json.Marshal(resp)
-	if err != nil {
-		return body
-	}
-	return out
+	return &cnpgReportOperatorResponse{resp, config}
 }
 
 func (b *cnpgReportBuilder) logs(pods []corev1.Pod, opts cnpgReportOptions) {

@@ -12,6 +12,7 @@ package server
 import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/summarycontext"
+	"net/http"
 )
 
 // newResourceSummaryContextBuilder assembles the per-request closure for the
@@ -27,12 +28,12 @@ import (
 // Use newSearchSummaryContextBuilder for search, which routes per-hit
 // between a namespaced and a cluster-wide index — search returns mixed
 // kinds in one response, so a single index can't get both right.
-func (s *Server) newResourceSummaryContextBuilder(namespaces []string) summarycontext.Builder {
+func (s *Server) newResourceSummaryContextBuilder(r *http.Request, namespaces []string) summarycontext.Builder {
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil
 	}
-	idx := summarycontext.BuildIssueIndex(provider, namespaces)
+	idx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: namespaces, CanReadClusterScoped: s.issueClusterScopedAccess(r), CanReadRelated: s.issueRelatedResourceAccess(r), CanReadEvidence: s.issueEvidenceAccess(r)})
 	return summarycontext.BuilderFromIndexes(s.broadcaster.GetCachedTopology(), idx, idx)
 }
 
@@ -56,15 +57,15 @@ func (s *Server) newResourceSummaryContextBuilder(namespaces []string) summaryco
 // The cluster-wide index is skipped when scanNamespaces is already nil
 // (cluster-wide user) — both indexes would be identical, so one pass
 // suffices.
-func (s *Server) newSearchSummaryContextBuilder(scanNamespaces []string) summarycontext.Builder {
+func (s *Server) newSearchSummaryContextBuilder(r *http.Request, scanNamespaces []string) summarycontext.Builder {
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil
 	}
-	namespacedIdx := summarycontext.BuildIssueIndex(provider, scanNamespaces)
+	namespacedIdx := summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: scanNamespaces, CanReadClusterScoped: s.issueClusterScopedAccess(r), CanReadRelated: s.issueRelatedResourceAccess(r), CanReadEvidence: s.issueEvidenceAccess(r)})
 	clusterIdx := namespacedIdx
 	if scanNamespaces != nil {
-		clusterIdx = summarycontext.BuildIssueIndex(provider, nil)
+		clusterIdx = summarycontext.BuildIssueIndex(provider, issues.Filters{Namespaces: nil, CanReadClusterScoped: s.issueClusterScopedAccess(r), CanReadRelated: s.issueRelatedResourceAccess(r), CanReadEvidence: s.issueEvidenceAccess(r)})
 	}
 	return summarycontext.BuilderFromIndexes(s.broadcaster.GetCachedTopology(), namespacedIdx, clusterIdx)
 }

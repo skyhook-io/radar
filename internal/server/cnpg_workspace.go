@@ -10,13 +10,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	listersbatchv1 "k8s.io/client-go/listers/batch/v1"
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	bp "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/cnpg"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -330,23 +330,8 @@ type cnpgWorkspacePod struct {
 // can carry, and a Pod left behind by a deleted Cluster must not be attributed
 // to a new one created under the same name. clusterUIDs is keyed ns/name.
 func isCNPGInstancePod(p *corev1.Pod, clusterUIDs map[string]types.UID) bool {
-	clusterName := p.Labels["cnpg.io/cluster"]
-	if clusterName == "" {
-		return false
-	}
-	uid, ok := clusterUIDs[p.Namespace+"/"+clusterName]
-	if !ok || uid == "" {
-		return false
-	}
-	for _, ref := range p.OwnerReferences {
-		if ref.Controller == nil || !*ref.Controller || ref.Kind != "Cluster" || ref.Name != clusterName || ref.UID != uid {
-			continue
-		}
-		if gv, err := schema.ParseGroupVersion(ref.APIVersion); err == nil && gv.Group == cnpgGroup {
-			return true
-		}
-	}
-	return false
+	name := p.Labels["cnpg.io/cluster"]
+	return cnpg.IsInstancePod(p, p.Namespace, name, clusterUIDs[p.Namespace+"/"+name])
 }
 
 func cnpgClusterUIDs(clusters []*unstructured.Unstructured) map[string]types.UID {
@@ -473,6 +458,7 @@ func (s *Server) cnpgWorkspaceIssues(r *http.Request, namespaces []string, acces
 		Limit:                issues.NoLimit,
 		CanReadClusterScoped: s.issueClusterScopedAccess(r),
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
+		CanReadEvidence:      s.issueEvidenceAccess(r),
 	})
 	for _, iss := range composed {
 		if !cnpgWorkspaceIssueVisible(iss, access, returnedPods) {
@@ -503,10 +489,23 @@ func cnpgWorkspaceIssueVisible(iss issues.Issue, access map[string]kindAccess, r
 	if iss.Group != cnpgGroup && iss.Group != cnpgBarmanGroup {
 		return false
 	}
-	key, ok := cnpgWorkspaceKeyByGroupKind[iss.Group+"/"+iss.Kind]
-	if ok && iss.Reason == issues.ReasonCNPGScheduledRunNoBackup && !access[cnpgWorkspaceSchedKey].covers(iss.Namespace) {
-		return false
+	for _, read := range iss.RequiredReads {
+		key := ""
+		if read.Group == "" && read.Resource == "pods" {
+			key = cnpgWorkspacePodsKey
+		}
+		for _, kind := range cnpgWorkspaceKinds {
+			if kind.group == read.Group && kind.resource == read.Resource {
+				key = kind.key
+				break
+			}
+		}
+		if key == "" || !access[key].covers(read.Namespace) {
+			return false
+		}
 	}
+	key, ok := cnpgWorkspaceKeyByGroupKind[iss.Group+"/"+iss.Kind]
+
 	return ok && access[key].covers(iss.Namespace)
 }
 
@@ -563,7 +562,7 @@ func cnpgScheduleReadings(scheduled []*unstructured.Unstructured) map[string]str
 		if strings.TrimSpace(spec) == "" || len(spec) > cnpgScheduleMaxLen {
 			continue
 		}
-		if _, err := issues.ParseCNPGSchedule(spec); err != nil {
+		if _, err := cnpg.ParseSchedule(spec); err != nil {
 			continue
 		}
 		if reading := describeCNPGSchedule(spec); reading != "" {

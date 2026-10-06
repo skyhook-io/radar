@@ -3,6 +3,7 @@ import type { CNPGKindCoverage, CNPGSchedulePreview, CNPGWorkspaceResponse, Gran
 import { fetchJSON, useRadarFeature } from './client'
 import { shouldRetryRadarQuery } from './radarFeatures'
 import type { CNPGOperatorDiagnosis } from './cnpg-recovery'
+import type { CNPGPoolerFacts } from './cnpg-sessions'
 import { actionErrorCode, type ActionCapability, type ActionErrorCode, type ActionRequest } from './actions'
 
 // /api/cnpg/workspace
@@ -314,10 +315,18 @@ export interface CNPGActionResult {
 
 // No mutation meta: errors stay with the dialog (shown inline so the user can
 // adjust and retry), and the caller toasts success worded from the result.
-export function useCNPGAction(kind: 'clusters' | 'scheduledbackups' | 'poolers', namespace: string, name: string) {
+type CNPGActionMutation = {
+  clusters:
+    | { action: CNPGClusterActionName | 'destroyInstance'; request: ActionRequest<CNPGClusterFacts> }
+    | { action: 'cancelBackend' | 'terminateBackend'; request: ActionRequest<Record<string, never>, { pod: string; podUID?: string; pid: number; backendStart: string }> }
+  scheduledbackups: { action: CNPGScheduleActionName; request: ActionRequest<CNPGScheduleCapabilities['facts']> }
+  poolers: { action: 'pause' | 'resume'; request: ActionRequest<Pick<CNPGPoolerFacts, 'paused'>> }
+}
+
+export function useCNPGAction<Kind extends keyof CNPGActionMutation>(kind: Kind, namespace: string, name: string) {
   const { guard } = useRadarFeature('cnpgWorkspace')
   const queryClient = useQueryClient()
-  return useMutation<CNPGActionResult, Error, { action: string; request: ActionRequest }>({
+  return useMutation<CNPGActionResult, Error, CNPGActionMutation[Kind]>({
     mutationFn: ({ action, request }) => guard(() =>
       fetchJSON<CNPGActionResult>(`${cnpgPath(kind, namespace, name)}/actions/${action}`, {
         method: 'POST',

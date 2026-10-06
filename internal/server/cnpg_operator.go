@@ -97,15 +97,22 @@ type CNPGOperatorResponse struct {
 // filter would report "no operator" to anyone looking at their databases, so
 // scope follows permission here, as it does for the catalog reverse lookups.
 func (s *Server) handleCNPGOperator(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	resp, err := s.readCNPGOperator(r)
+	if err != nil {
+		s.writeCNPGCachedReadError(w, err)
 		return
+	}
+	s.writeJSON(w, resp)
+}
+
+func (s *Server) readCNPGOperator(r *http.Request) (*CNPGOperatorResponse, error) {
+	if !k8s.IsConnected() {
+		return nil, errCNPGDisconnected
 	}
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
-		return
+		return nil, &cnpgReadFailure{http.StatusServiceUnavailable, "Resource cache not available"}
 	}
-
 	scope := s.cnpgOperatorScope(r)
 	resp := CNPGOperatorResponse{
 		Coverage:   map[string]KindCoverage{},
@@ -178,7 +185,7 @@ func (s *Server) handleCNPGOperator(w http.ResponseWriter, r *http.Request) {
 
 	resp.Config = s.cnpgOperatorConfig(r, cache, operators)
 	resp.Diagnosis = s.cnpgOperatorDiagnoses(r, typed, operators, podsOf)
-	s.writeJSON(w, resp)
+	return &resp, nil
 }
 
 // withCNPGComponentPods adds a component's Pods: restarts and the last

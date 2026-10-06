@@ -1,4 +1,4 @@
-import { CNPG_BARMAN_PLUGIN_NAME, getCNPGClusterBarmanPlugin, getCNPGBackupPlugin, objectStoreForBackup, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel, type CNPGWorkspaceResponse, coverageReadable, formatGrant } from '@skyhook-io/k8s-ui'
+import { CNPG_BARMAN_PLUGIN_NAME, cnpgBackupDeclaration, cnpgBarmanPlugin, getCNPGClusterBarmanPlugin, getCNPGBackupPlugin, objectStoreForBackup, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel, type CNPGWorkspaceResponse, coverageReadable, formatGrant } from '@skyhook-io/k8s-ui'
 import type { CNPGRuntimeResponse } from '../../../api/cnpg'
 import type { ActionCapability } from '../../../api/actions'
 import type { CNPGRecoveryResponse, CNPGRecoveryPod } from '../../../api/cnpg-recovery'
@@ -565,12 +565,13 @@ export function restoreNextSteps(input: { validationRecorded: boolean; backup: R
 
 /** What a Cluster spec declares for backups and WAL archiving. */
 export function restoreBackupDeclared(cluster: any): RestoreBackupDeclared {
-  const plugin = getCNPGClusterBarmanPlugin(cluster)
+  const declaration = cnpgBackupDeclaration(cluster)
+  const plugin = cnpgBarmanPlugin(declaration)
   // plugin-barman-cloud reads the archive destination from the plugin's own
   // parameters; the recovery source's ObjectStore is a separate setting.
-  if ((plugin?.isWALArchiver && plugin.barmanObjectName) || cluster?.spec?.backup?.barmanObjectStore?.destinationPath) return 'walArchiving'
+  if ((plugin?.isWALArchiver && plugin.barmanObjectName) || declaration.inTreeDestination) return 'walArchiving'
   if (plugin?.isWALArchiver) return 'archiverWithoutDestination'
   if (plugin?.barmanObjectName) return 'backupsNoArchiving'
-  if (cluster?.spec?.backup?.volumeSnapshot) return 'snapshotsOnly'
+  if (declaration.snapshotsConfigured) return 'snapshotsOnly'
   return 'none'
 }

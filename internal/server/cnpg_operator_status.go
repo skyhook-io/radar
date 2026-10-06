@@ -345,6 +345,7 @@ func cnpgOperatorWebhookGuard(v CNPGOperatorVerdict, capability ActionCapability
 		return capability
 	}
 	capability.Allowed = false
+	capability.ReasonCode = "operator_webhook"
 	capability.Reason = "The API server would reject it: " + v.WebhookReason
 	return capability
 }

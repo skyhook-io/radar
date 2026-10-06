@@ -53,6 +53,7 @@ const (
 type ActionCapability struct {
 	Allowed    bool   `json:"allowed"`
 	Reason     string `json:"reason,omitempty"`
+	ReasonCode string `json:"reasonCode,omitempty"`
 	Permission string `json:"permission"`
 	Grant      *Grant `json:"grant,omitempty"`
 }

@@ -211,7 +211,7 @@ describe('cnpgDimensions', () => {
     expect(unmeasured[2]).toMatchObject({ tone: 'unknown', text: 'No usage metrics: needs Prometheus', source: '' })
   })
   it('names WAL an inactive slot holds even while volume usage is unassessed', () => {
-    const slot = { id: 'slot:pg/pg:_cnpg_pg_2', severity: 'warning', category: 'availability', title: 'Inactive slot _cnpg_pg_2 holds 4.5 GiB of WAL on pg-1 for pg-2', subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'pg' }, source: 'measurement' } as const
+    const slot = { id: 'slot:pg/pg:_cnpg_pg_2', reason: 'CNPGInactiveSlot', slot: '_cnpg_pg_2', severity: 'warning', category: 'availability', title: 'Inactive slot _cnpg_pg_2 holds 4.5 GiB of WAL on pg-1 for pg-2', subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'pg' }, source: 'measurement' } as const
     const r = row({ key: 'pg/pg', problems: [slot], disk: { text: 'No usage metrics', tone: 'unknown', source: 'no series' } })
     const d = cnpgDimensions({ row: r })
     expect(d[2]).toMatchObject({ id: 'storage', tone: 'degraded', text: 'WAL held by an inactive slot' })
@@ -221,7 +221,7 @@ describe('cnpgDimensions', () => {
     expect(measured[2]).toMatchObject({ tone: 'degraded', text: '40% used · WAL held by an inactive slot' })
   })
   it('a standby another source saw receiving nothing keeps Replication from reading unassessed or calm', () => {
-    const gap = { id: 'standby:pg/pg:pg-2', severity: 'warning', category: 'availability', title: 'pg-2 is not receiving WAL from the primary', subject: { kind: 'Pod', group: '', namespace: 'pg', name: 'pg-2' }, source: 'measurement' } as const
+    const gap = { id: 'standby:pg/pg:pg-2', reason: 'CNPGStandbyNotReceiving', severity: 'warning', category: 'availability', title: 'pg-2 is not receiving WAL from the primary', subject: { kind: 'Pod', group: '', namespace: 'pg', name: 'pg-2' }, source: 'measurement' } as const
     const r = row({ key: 'pg/pg', problems: [gap] })
     expect(cnpgDimensions({ row: r })[1]).toMatchObject({ tone: 'degraded', text: 'pg-2 not receiving WAL' })
     const live = cnpgDimensions({ row: r, replication: { streaming: 1, standbys: 1, maxReplayLagSeconds: 0 } })[1]
@@ -332,7 +332,7 @@ describe('folded HA and certificates summaries', () => {
 
 describe('replication chip and the sustained-lag finding', () => {
   it('reads no calmer than a standby measured far behind for the whole window', () => {
-    const problem = { id: 'lag:db/pg', severity: 'critical', category: 'availability', title: 'pg-2 ≥ 24 h behind in every sample for 10 min', subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name: 'pg' }, source: 'measurement' } as never
+    const problem = { id: 'lag:db/pg', reason: 'CNPGSustainedLag', severity: 'critical', category: 'availability', title: 'pg-2 ≥ 24 h behind in every sample for 10 min', subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name: 'pg' }, source: 'measurement' } as never
     const dims = cnpgDimensions({ row: row({ problems: [problem] }), replication: { streaming: 1, standbys: 1, maxReplayLagSeconds: 0 } })
     const rep = dims.find((d) => d.id === 'replication')!
     expect(rep.tone).toBe('unhealthy')
@@ -414,7 +414,7 @@ it('adds the failover consequence to measured replication without duplicating st
 
 it('preserves separately measured standby gaps beside missing Pods and avoids inventing a grant', () => {
   const h = ha({ expectedInstances: ['pg-1', 'pg-2', 'pg-3'], instances: [ha().instances[0], { ...ha().instances[1], pod: 'pg-3' }] })
-  const r = row({ instances: { desired: 3, ready: 2 }, problems: [{ id: 'standby:db/pg:pg-3', severity: 'warning', category: 'replication', title: 'pg-3 receiver is down', subject: { kind: 'Pod', name: 'pg-3' }, source: 'measurement' } as any] })
+  const r = row({ instances: { desired: 3, ready: 2 }, problems: [{ id: 'standby:db/pg:pg-3', reason: 'CNPGStandbyNotReceiving', severity: 'warning', category: 'replication', title: 'pg-3 receiver is down', subject: { kind: 'Pod', name: 'pg-3' }, source: 'measurement' } as any] })
   const d = cnpgDimensions({ row: r, ha: h }).find((d) => d.id === 'replication')!
   expect(d.text).toContain('Expected standby pg-2 is not running')
   expect(d.text).toContain('pg-3 not receiving WAL')

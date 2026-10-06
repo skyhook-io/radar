@@ -475,8 +475,15 @@ func TestCNPGDestroyPlanAndCapabilities(t *testing.T) {
 	if caps.InstanceActions["pg-1"].Destroy.Allowed || !caps.InstanceActions["pg-2"].Destroy.Allowed || !caps.Actions.DestroyInstance.Allowed {
 		t.Errorf("destroy verdicts = %+v / %+v", caps.InstanceActions, caps.Actions.DestroyInstance)
 	}
-	if got := caps.InstanceActions["pg-3"].Destroy; got.Allowed || got.Reason != "Fence pg-3 first: a fenced instance cannot be promoted while it is destroyed" {
+	if got := caps.InstanceActions["pg-3"].Destroy; got.Allowed || got.ReasonCode != "fence_required" || got.Reason != "Fence pg-3 first: a fenced instance cannot be promoted while it is destroyed" {
 		t.Errorf("unfenced destroy verdict = %+v", got)
+	}
+	unfenced, err := srv.cnpgDestroyPlan(r, env.clients(), "kind-test", "db", "pg", "pg-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unfenced.Actions.Delete.Allowed || unfenced.Actions.Delete.ReasonCode != "fence_required" || unfenced.Actions.Keep.ReasonCode != "fence_required" {
+		t.Errorf("unfenced destroy plan = %+v", unfenced.Actions)
 	}
 	// pg-2 is fenced here, so PostgreSQL is stopped on it.
 	if !caps.Actions.Psql.Allowed || caps.InstanceActions["pg-2"].Psql.Allowed {

@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
 import { cnpgDimensions } from '@skyhook-io/k8s-ui'
 import { useCNPGRuntime } from '../../api/cnpg'
-import { cnpgReplicationGap, cnpgReplicationLive, useCNPGClusterHA, withLiveReplication } from '../../api/cnpg-ha'
+import { useCNPGClusterHA } from '../../api/cnpg-ha'
+import { cnpgReplicationGap, cnpgReplicationLive, withLiveReplication } from './runtimeAssessment'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
 
 /**

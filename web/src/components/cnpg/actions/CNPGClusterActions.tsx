@@ -513,7 +513,7 @@ export function ClusterActionDialog({
                       <span className={clsx('text-xs', !s.ineligible && s.concerns?.length ? toneTextClass('degraded') : 'text-theme-text-tertiary')}>
                         {s.ineligible ??
                           (s.concerns?.length
-                            ? s.concerns.join(' · ')
+                            ? s.concerns.map((c) => c.text).join(' · ')
                             : [s.state, s.syncState, ...(s.replayLagSeconds !== undefined || s.replayBacklogBytes !== undefined ? switchoverCandidateFacts(s) : [runtime.isLoading ? 'lag loading…' : 'lag unknown'])]
                                 .filter(Boolean)
                                 .join(' · '))}
@@ -745,7 +745,7 @@ export function ClusterActionDialog({
     mutation.mutate(
       {
         action: kind,
-        request: { reviewedContext: caps.context, uid: caps.uid, facts: facts as unknown as Record<string, unknown>, params: spec.params },
+        request: { reviewedContext: caps.context, uid: caps.uid, facts: facts, params: spec.params },
       },
       {
         onSuccess: (result) => {

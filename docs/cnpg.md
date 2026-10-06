@@ -4,6 +4,16 @@ A task-shaped view over [CloudNativePG](https://cloudnative-pg.io/) (CNPG): whic
 
 Reading never writes. Writes happen only through the [Actions](#actions) (backup, switchover, restart, fencing, hibernation, maintenance, backup schedule edit, pooler pause, destroy instance, cancel/terminate a backend, restore, a restore-validation note), each made with the caller's own identity after a confirmation bound to the facts they reviewed, behind the [GitOps write guard](#gitops-write-guard).
 
+## Code boundaries
+
+- `pkg/cnpg` owns pure interpretation of backup declarations, fencing, cron schedules and instance ownership. It has no Radar `internal/` dependencies. Audit, Issues and action guards use those rules; the TypeScript backup model in `packages/k8s-ui/src/utils/cnpg-backup.ts` runs against the same fixture cases in `pkg/cnpg/testdata/backup-declarations.json`.
+- `internal/server/cnpg_reads.go` owns the common caller and cached-Cluster read gate. The runtime, storage and operator read builders return typed responses and errors. HTTP handlers serialize them; the report builder calls them directly and applies its own typed redaction projection. Reports do not invoke HTTP handlers or parse their JSON output.
+- `internal/issues/source_cnpg*.go` owns findings derived from cached Kubernetes objects, including schedule destination blockers and Pod/status contradictions. Cross-resource findings retain the exact inventory grants in `Issue.RequiredReads`; composition, list/search counts and cached/grouped related-issue projections authorize them before serving REST, MCP or Diagnose results. Without an evidence authorizer these findings are withheld; only an internal memo may explicitly retain them for a later per-user projection. Unread or incomplete Pod inventories never establish a contradiction. Workspace-only live measurements remain in the frontend assessment model.
+- `packages/k8s-ui/src/components/cnpg` owns presentation and pure fleet derivations. Problems carry semantic `reason` values and WAL facts carry `state`; consumers do not inspect generated IDs or display sentences to decide behavior.
+- `web/src/api/cnpg*.ts` owns fetching and wire types. `web/src/components/cnpg/runtimeAssessment.ts` owns pure runtime assessment; `host.tsx` owns CNPG's summary, actions, logs, navigation and kind-list composition through the generic detail slots. Generic resource views import this adapter instead of the individual CNPG implementations.
+
+A backup destination, a WAL archive and a destination for a particular ScheduledBackup method are different facts. The shared declaration model records backup methods, enabled plugins and their WAL archiver designation; snapshots and backup-only plugins do not establish continuous archiving. Action capabilities expose `reasonCode` for behavior and `reason` for display, so a translated or reworded refusal cannot change its navigation.
+
 ## Where it lives
 
 CNPG stays inside **Resources**; there is no new global navigation item. When the `postgresql.cnpg.io` CRDs are discovered, the Resources sidebar's CloudNativePG group gains a **Views** block above its exact kinds:

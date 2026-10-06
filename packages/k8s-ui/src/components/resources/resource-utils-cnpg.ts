@@ -2,6 +2,9 @@
 
 import type { StatusBadge } from './resource-utils'
 import { healthColors, formatAge, formatDuration } from './resource-utils'
+import { cnpgBackupDeclaration, cnpgBarmanPlugin } from '../../utils/cnpg-backup'
+export { CNPG_BARMAN_PLUGIN_NAME } from '../../utils/cnpg-backup'
+
 import { parseGoTimeString } from '../../utils/parse-go-time'
 
 // ============================================================================
@@ -446,7 +449,6 @@ export function getCNPGClusterUpdateStrategy(resource: any): string {
   return resource.spec?.primaryUpdateStrategy || 'unsupervised'
 }
 
-export const CNPG_BARMAN_PLUGIN_NAME = 'barman-cloud.cloudnative-pg.io'
 
 /** The API group ObjectStore is served under. `objectstores` is a generic
  *  plural several operators ship, so every link to one has to be qualified —
@@ -470,20 +472,10 @@ export interface CNPGBarmanPlugin {
  * status.lastSuccessfulBackup / firstRecoverabilityPoint entirely.
  */
 export function getCNPGClusterBarmanPlugin(resource: any): CNPGBarmanPlugin | null {
-  const plugins = resource.spec?.plugins
-  if (!Array.isArray(plugins)) return null
-  const plugin = plugins.find(
-    (p: any) => p?.name === CNPG_BARMAN_PLUGIN_NAME && p?.enabled !== false
-  )
+  const plugin = cnpgBarmanPlugin(cnpgBackupDeclaration(resource))
   if (!plugin) return null
-  return {
-    name: plugin.name,
-    barmanObjectName: plugin.parameters?.barmanObjectName,
-    // ObjectStore keys the recovery window by the plugin's serverName when set,
-    // otherwise by the cluster name.
-    serverName: plugin.parameters?.serverName || resource.metadata?.name,
-    isWALArchiver: plugin.isWALArchiver === true,
-  }
+  const { name, barmanObjectName, serverName, isWALArchiver } = plugin
+  return { name, barmanObjectName, serverName, isWALArchiver }
 }
 
 export function getCNPGClusterBackupConfig(resource: any): {

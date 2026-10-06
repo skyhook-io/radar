@@ -139,7 +139,7 @@ describe('cnpgFoldLastBackupFailed', () => {
     const group = p('3 backups failed', 'Backup', 'b-3', 'CNPGBackupFailed', [{ kind: 'Backup', name: 'b-2' }])
     const out = cnpgFoldLastBackupFailed([group, last], 'b-3')
     expect(out.map((x) => x.id)).toEqual(['3 backups failed'])
-    expect('reason' in out[0]).toBe(false)
+    expect(out[0].reason).toBe('CNPGBackupFailed')
   })
   it('counts only a failed-Backup problem as covering the newest Backup', () => {
     const other = p('stuck', 'Backup', 'b-3', 'CNPGBackupStuck')

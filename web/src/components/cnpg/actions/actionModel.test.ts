@@ -19,15 +19,16 @@ describe('CNPG action model', () => {
 })
 
 describe('cnpgDestroyBlocker', () => {
-  const fence = { allowed: false, permission: 'allowed' as const, reason: 'Fence pg-2 first: a fenced instance cannot be promoted while it is destroyed' }
+  const fence = { allowed: false, permission: 'allowed' as const, reasonCode: 'fence_required', reason: 'Fence pg-2 first: a fenced instance cannot be promoted while it is destroyed' }
   it('leaves the missing fence to the Fence-first callout', () => {
-    expect(cnpgDestroyBlocker(fence, 'pg-2', true)).toBeUndefined()
-    expect(cnpgDestroyBlocker(fence, 'pg-2', false)).toBe(fence.reason)
+    expect(cnpgDestroyBlocker(fence, true)).toBeUndefined()
+    expect(cnpgDestroyBlocker(fence, false)).toBe(fence.reason)
+    expect(cnpgDestroyBlocker({ ...fence, reason: 'A different explanation' }, true)).toBeUndefined()
   })
   it('keeps real blockers as the alert', () => {
-    expect(cnpgDestroyBlocker({ allowed: false, permission: 'denied', reason: 'Needs delete pods in db', grant: { verb: 'delete', resource: 'pods', namespace: 'db' } }, 'pg-2', true)).toBe('Needs delete pods in db')
-    expect(cnpgDestroyBlocker({ allowed: false, permission: 'allowed', reason: 'The cluster is hibernated' }, 'pg-2', true)).toBe('The cluster is hibernated')
-    expect(cnpgDestroyBlocker({ allowed: true, permission: 'allowed' }, 'pg-2', true)).toBeUndefined()
+    expect(cnpgDestroyBlocker({ allowed: false, permission: 'denied', reason: 'Needs delete pods in db', grant: { verb: 'delete', resource: 'pods', namespace: 'db' } }, true)).toBe('Needs delete pods in db')
+    expect(cnpgDestroyBlocker({ allowed: false, permission: 'allowed', reason: 'The cluster is hibernated' }, true)).toBe('The cluster is hibernated')
+    expect(cnpgDestroyBlocker({ allowed: true, permission: 'allowed' }, true)).toBeUndefined()
   })
 })
 
@@ -72,9 +73,9 @@ describe('switchover concerns', () => {
   it('names a standby that is not connected, paused, or on another timeline', () => {
     expect(switchoverConcerns(primary, { pod: 'pg-2', status: { state: 'ok', timeline: 7 } })).toEqual([])
     expect(switchoverConcerns(primary, { pod: 'pg-1', status: { state: 'ok', timeline: 4, replayPaused: true } })).toEqual([
-      'not connected to the primary',
-      'replay paused',
-      'timeline 4, primary on 7',
+      { code: 'not_receiving', text: 'not connected to the primary' },
+      { code: 'replay_paused', text: 'replay paused' },
+      { code: 'timeline_mismatch', text: 'timeline 4, primary on 7' },
     ])
     // Without the primary's replication rows, connection is not judged.
     expect(switchoverConcerns({ state: 'partial', timeline: 7, replication: null }, { pod: 'pg-1', status: { state: 'ok', timeline: 7 } })).toEqual([])
@@ -82,16 +83,17 @@ describe('switchover concerns', () => {
   it('never picks a standby with concerns by default while a clean one exists', () => {
     expect(
       pickDefaultStandby([
-        { pod: 'pg-1', podUID: '1', concerns: ['not connected to the primary'] },
+        { pod: 'pg-1', podUID: '1', concerns: [{ code: 'not_receiving', text: 'not connected to the primary' }] },
         { pod: 'pg-2', podUID: '2', replayBacklogBytes: 1024, syncState: 'async' },
       ])?.pod,
     ).toBe('pg-2')
-    expect(pickDefaultStandby([{ pod: 'pg-1', podUID: '1', concerns: ['replay paused'] }])).toBeUndefined()
+    expect(pickDefaultStandby([{ pod: 'pg-1', podUID: '1', concerns: [{ code: 'replay_paused', text: 'replay paused' }] }])).toBeUndefined()
   })
   it('warns with what was observed, not with a guess at the outcome', () => {
-    const w = switchoverConcernWarning('pg-1', ['not connected to the primary', 'replay paused'])!
+    const w = switchoverConcernWarning('pg-1', [{ code: 'not_receiving', text: 'not connected to the primary' }, { code: 'replay_paused', text: 'replay paused' }])!
     expect(w).toContain('pg-1: not connected to the primary · replay paused.')
     expect(w).toContain('not receiving WAL from the current primary')
+    expect(switchoverConcernWarning('pg-1', [{ code: 'not_receiving', text: 'Connection unavailable' }])).toContain('not receiving WAL from the current primary')
     expect(switchoverConcernWarning('pg-1', [])).toBeNull()
   })
 })

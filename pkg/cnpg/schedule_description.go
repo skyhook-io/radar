@@ -1,4 +1,4 @@
-package issues
+package cnpg
 
 import (
 	"fmt"
@@ -14,10 +14,10 @@ var (
 	cnpgCronDowIdx   = map[string]int{"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
 )
 
-// DescribeCNPGSchedule words an already-validated schedule. It is an aid next
+// DescribeSchedule words an already-validated schedule. It is an aid next
 // to the verbatim spec, so anything it cannot word plainly falls back to a
 // field-by-field reading rather than a guess.
-func DescribeCNPGSchedule(spec string) string {
+func DescribeSchedule(spec string) string {
 	spec = strings.TrimSpace(spec)
 	switch spec {
 	case "@yearly", "@annually":

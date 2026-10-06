@@ -76,6 +76,7 @@ radar/
 ├── pkg/
 │   ├── ai/context/            # AI context minification for LLM-friendly output
 │   ├── audit/                 # Shared cluster audit check engine (reusable by skyhook-connector)
+│   ├── cnpg/                  # Pure CNPG declarations, identity, fencing and cron rules
 │   ├── gitops/
 │   │   ├── insights/          # Per-app diagnosis pipeline: issues + drift diff + recent events + plan + history
 │   │   └── tree/              # GitOps resource tree builder for ArgoCD/FluxCD detail graphs

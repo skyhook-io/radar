@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/pkg/cnpg"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -147,19 +148,12 @@ func (s *Server) authorizeCNPGClusterLogs(w http.ResponseWriter, r *http.Request
 // loadCNPGCluster reads one CNPG Cluster from the dynamic cache. The error is
 // already written when ok is false.
 func (s *Server) loadCNPGCluster(w http.ResponseWriter, r *http.Request, cache *k8s.ResourceCache, namespace, name string) (*unstructured.Unstructured, bool) {
-	cluster, err := findCNPGCluster(r.Context(), cache, namespace, name)
-	switch {
-	case err == nil && cluster != nil:
-		return cluster, true
-	case err == nil, errors.Is(err, k8s.ErrUnknownDynamicKind):
-		s.writeError(w, http.StatusNotFound, "CloudNativePG Cluster "+namespace+"/"+name+" not found")
-	case errors.Is(err, errDynamicNotSynced):
-		s.writeError(w, http.StatusServiceUnavailable, "CloudNativePG Clusters are still syncing")
-	default:
-		log.Printf("[cnpg] Failed to read Cluster %s/%s: %v", namespace, name, err)
-		s.writeError(w, http.StatusInternalServerError, "failed to read CloudNativePG Cluster")
+	cluster, err := readCNPGCachedCluster(r, cache, namespace, name)
+	if err != nil {
+		s.writeCNPGCachedReadError(w, err)
+		return nil, false
 	}
-	return nil, false
+	return cluster, true
 }
 
 func findCNPGCluster(ctx context.Context, cache *k8s.ResourceCache, namespace, name string) (*unstructured.Unstructured, error) {
@@ -198,12 +192,7 @@ func cnpgClusterInstancePods(cache *k8s.ResourceCache, cluster *unstructured.Uns
 	return pods, nil
 }
 
-func cnpgInstanceRole(p *corev1.Pod) string {
-	if role := p.Labels["cnpg.io/instanceRole"]; role != "" {
-		return role
-	}
-	return p.Labels["role"]
-}
+func cnpgInstanceRole(p *corev1.Pod) string { return cnpg.InstanceRole(p) }
 
 // selectCNPGLogPods narrows to the requested instance. ok is false when the
 // requested Pod is not one of the Cluster's instances.

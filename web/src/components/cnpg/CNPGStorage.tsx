@@ -9,7 +9,6 @@ import {
   FoldSection,
   type CNPGProtectionFacts,
   CNPG_DISK_SOURCE,
-  CNPG_NO_WAL_ARCHIVE_DESTINATION,
   PaneLoader,
   StatusDot,
   Tooltip,
@@ -228,7 +227,7 @@ function VolumeRow({ v, stated, wal }: { v: CNPGStorageVolume; stated: StatedOnc
 }
 
 function WALHolders({ wal, primary, slotStandby, walArchiving }: { walArchiving?: CNPGProtectionFacts['walArchiving']; wal: CNPGStorageWAL; primary: boolean; slotStandby: (slot: string) => string | undefined }) {
-  const noArchive = walArchiving?.text === CNPG_NO_WAL_ARCHIVE_DESTINATION
+  const noArchive = walArchiving?.state === 'no_destination'
   const statusRead = ['ok', 'partial'].includes(wal.status.state)
   if (!noArchive && !statusRead && !['ok', 'partial'].includes(wal.metrics.state)) {
     return (

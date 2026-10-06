@@ -14,7 +14,7 @@ export interface StandbyChoice {
   state?: string
   syncState?: string
   /** What the live read shows wrong with it as a new primary: not connected, replay paused, another timeline. */
-  concerns?: string[]
+  concerns?: SwitchoverConcern[]
 }
 
 function pad(n: number) {
@@ -61,25 +61,30 @@ export function switchoverDefault(input: { touched: boolean; current: string | u
 }
 
 /** The live facts that make a standby a poor switchover target, in the words the dialog shows. */
+export interface SwitchoverConcern {
+  code: 'not_receiving' | 'replay_paused' | 'timeline_mismatch'
+  text: string
+}
+
 export function switchoverConcerns(
   primary: { state: string; timeline?: number; replication?: { applicationName: string }[] | null } | undefined,
   standby: { pod: string; status: { state: string; timeline?: number; replayPaused?: boolean; roleDetail?: string } } | undefined,
-): string[] {
+): SwitchoverConcern[] {
   if (!primary || !standby) return []
-  const out: string[] = []
-  if (primary.state === 'ok' && primary.replication && !primary.replication.some((r) => r.applicationName === standby.pod)) out.push('not connected to the primary')
-  if (standby.status.replayPaused || standby.status.roleDetail === 'replayPaused') out.push('replay paused')
+  const out: SwitchoverConcern[] = []
+  if (primary.state === 'ok' && primary.replication && !primary.replication.some((r) => r.applicationName === standby.pod)) out.push({ code: 'not_receiving', text: 'not connected to the primary' })
+  if (standby.status.replayPaused || standby.status.roleDetail === 'replayPaused') out.push({ code: 'replay_paused', text: 'replay paused' })
   if (standby.status.timeline !== undefined && primary.timeline !== undefined && standby.status.timeline !== primary.timeline) {
-    out.push(`timeline ${standby.status.timeline}, primary on ${primary.timeline}`)
+    out.push({ code: 'timeline_mismatch', text: `timeline ${standby.status.timeline}, primary on ${primary.timeline}` })
   }
   return out
 }
 
 /** The warning for a chosen target the live read shows trouble with; nothing it says depends on how CloudNativePG then handles the promotion. */
-export function switchoverConcernWarning(pod: string, concerns: string[]): string | null {
+export function switchoverConcernWarning(pod: string, concerns: SwitchoverConcern[]): string | null {
   if (concerns.length === 0) return null
-  const notReceiving = concerns.includes('not connected to the primary')
-  return `${pod}: ${concerns.join(' · ')}. ${notReceiving ? 'It is not receiving WAL from the current primary, so writes since then reach it only if it replays them from the WAL archive, and ' : ''}Radar cannot measure how far behind it is. Check its logs, or pick a streaming standby.`
+  const notReceiving = concerns.some((c) => c.code === 'not_receiving')
+  return `${pod}: ${concerns.map((c) => c.text).join(' · ')}. ${notReceiving ? 'It is not receiving WAL from the current primary, so writes since then reach it only if it replays them from the WAL archive, and ' : ''}Radar cannot measure how far behind it is. Check its logs, or pick a streaming standby.`
 }
 
 /**
@@ -89,9 +94,9 @@ export function switchoverConcernWarning(pod: string, concerns: string[]): strin
  * after every other state guard, so its reason names the fence only when
  * nothing else blocks.
  */
-export function cnpgDestroyBlocker(cap: ActionCapability | undefined, pod: string, fenceOffered: boolean): string | undefined {
+export function cnpgDestroyBlocker(cap: ActionCapability | undefined, fenceOffered: boolean): string | undefined {
   if (!cap || cap.allowed) return undefined
-  if (fenceOffered && cap.permission !== 'denied' && cap.reason?.startsWith(`Fence ${pod} first`)) return undefined
+  if (fenceOffered && cap.permission !== 'denied' && cap.reasonCode === 'fence_required') return undefined
   return cap.reason ?? 'Not allowed'
 }
 

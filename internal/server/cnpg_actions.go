@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/pkg/cnpg"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -74,12 +75,7 @@ const (
 
 // CNPGFencedFacts is the parsed cnpg.io/fencedInstances annotation. Raw is the
 // annotation exactly as stored ("" when unset) and is what a confirmation binds.
-type CNPGFencedFacts struct {
-	Raw       string   `json:"raw"`
-	All       bool     `json:"all"`
-	Instances []string `json:"instances"`
-	Malformed bool     `json:"malformed,omitempty"`
-}
+type CNPGFencedFacts = cnpg.FencedInstances
 
 // CNPGInstanceFact is one instance as the Cluster names it, joined to its Pod
 // when the caller can read it. PodUID is empty when the Pod is missing or
@@ -314,45 +310,7 @@ func (c cnpgActionClients) clock() time.Time {
 
 // ---------- facts ----------
 
-func parseCNPGFenced(raw string) CNPGFencedFacts {
-	out := CNPGFencedFacts{Raw: raw, Instances: []string{}}
-	if strings.TrimSpace(raw) == "" {
-		return out
-	}
-	var names []string
-	// "null" decodes without error but is not a list the operator accepts.
-	if err := json.Unmarshal([]byte(raw), &names); err != nil || names == nil {
-		out.Malformed = true
-		return out
-	}
-	seen := map[string]bool{}
-	for _, n := range names {
-		if n == cnpgAllInstances {
-			out.All = true
-		}
-		if !seen[n] {
-			seen[n] = true
-			out.Instances = append(out.Instances, n)
-		}
-	}
-	sort.Strings(out.Instances)
-	return out
-}
-
-func (f CNPGFencedFacts) fences(instance string) bool {
-	if f.Malformed {
-		return false
-	}
-	if f.All {
-		return true
-	}
-	for _, n := range f.Instances {
-		if n == instance {
-			return true
-		}
-	}
-	return false
-}
+func parseCNPGFenced(raw string) CNPGFencedFacts { return cnpg.ParseFencedInstances(raw) }
 
 func cnpgIsReplicaCluster(cluster *unstructured.Unstructured) bool {
 	replica, ok, _ := unstructured.NestedMap(cluster.Object, "spec", "replica")
@@ -390,31 +348,19 @@ func cnpgBackupMethods(cluster *unstructured.Unstructured) []CNPGBackupMethodFac
 			statuses[name] = pluginStatus{reported: true, backup: len(caps) > 0}
 		}
 	}
-	type declared struct {
-		name     string
-		archiver bool
-	}
-	var plugins []declared
-	if list, ok, _ := unstructured.NestedSlice(cluster.Object, "spec", "plugins"); ok {
-		for _, item := range list {
-			m, _ := item.(map[string]any)
-			name, _ := m["name"].(string)
-			if name == "" {
-				continue
-			}
-			if enabled, ok := m["enabled"].(bool); ok && !enabled {
-				continue
-			}
-			archiver, _ := m["isWALArchiver"].(bool)
-			plugins = append(plugins, declared{name: name, archiver: archiver})
+	var plugins []cnpg.BackupPlugin
+	declaration := cnpg.ParseBackupDeclaration(cluster)
+	for _, plugin := range declaration.Plugins {
+		if plugin.Enabled {
+			plugins = append(plugins, plugin)
 		}
 	}
-	sort.SliceStable(plugins, func(i, j int) bool { return plugins[i].archiver && !plugins[j].archiver })
+	sort.SliceStable(plugins, func(i, j int) bool { return plugins[i].WALArchiver && !plugins[j].WALArchiver })
 
 	out := []CNPGBackupMethodFact{}
 	for _, p := range plugins {
-		fact := CNPGBackupMethodFact{Method: "plugin", PluginName: p.name}
-		st := statuses[p.name]
+		fact := CNPGBackupMethodFact{Method: "plugin", PluginName: p.Name}
+		st := statuses[p.Name]
 		switch {
 		case !st.reported:
 			fact.Capability = "unknown"
@@ -427,10 +373,10 @@ func cnpgBackupMethods(cluster *unstructured.Unstructured) []CNPGBackupMethodFac
 		}
 		out = append(out, fact)
 	}
-	if v, ok, _ := unstructured.NestedFieldNoCopy(cluster.Object, "spec", "backup", "volumeSnapshot"); ok && v != nil {
+	if declaration.SnapshotsConfigured {
 		out = append(out, CNPGBackupMethodFact{Method: "volumeSnapshot", Capability: "backup"})
 	}
-	if v, ok, _ := unstructured.NestedFieldNoCopy(cluster.Object, "spec", "backup", "barmanObjectStore"); ok && v != nil {
+	if declaration.InTreeConfigured {
 		out = append(out, CNPGBackupMethodFact{Method: "barmanObjectStore", Capability: "backup", Deprecated: true})
 	}
 	for i := range out {
@@ -442,52 +388,17 @@ func cnpgBackupMethods(cluster *unstructured.Unstructured) []CNPGBackupMethodFac
 }
 
 func cnpgBackupDestinationGuard(cluster *unstructured.Unstructured, method, pluginName string) string {
-	if method == "" {
-		method = "barmanObjectStore"
+	blocker := cnpg.ParseBackupDeclaration(cluster).DestinationBlocker(method, pluginName)
+	if blocker == nil {
+		return ""
 	}
-	missing := "Configure a backup destination on " + cluster.GetName() + " first"
-	path, _, _ := unstructured.NestedString(cluster.Object, "spec", "backup", "barmanObjectStore", "destinationPath")
-	snapshot, _, _ := unstructured.NestedFieldNoCopy(cluster.Object, "spec", "backup", "volumeSnapshot")
-	plugins, _, _ := unstructured.NestedSlice(cluster.Object, "spec", "plugins")
-	if path != "" || snapshot != nil {
-		missing = "No " + method + " destination on " + cluster.GetName() + ". Configure this method or choose the cluster's configured backup method"
+	if blocker.Plugin != "" {
+		return "No " + blocker.Method + " destination on " + cluster.GetName() + ". Use method plugin with pluginConfiguration.name " + blocker.Plugin + ", or configure this method"
 	}
-	for _, raw := range plugins {
-		p, _ := raw.(map[string]any)
-		name, _ := p["name"].(string)
-		cfg, _ := p["parameters"].(map[string]any)
-		if p["enabled"] == false || name == "" || name == "barman-cloud.cloudnative-pg.io" && (cfg["barmanObjectName"] == nil || cfg["barmanObjectName"] == "") {
-			continue
-		}
-		missing = "No " + method + " destination on " + cluster.GetName() + ". Use method plugin with pluginConfiguration.name " + name + ", or configure this method"
-		break
+	if blocker.Code == "method_destination_missing" {
+		return "No " + blocker.Method + " destination on " + cluster.GetName() + ". Configure this method or choose the cluster's configured backup method"
 	}
-	switch method {
-	case "barmanObjectStore":
-		if path == "" {
-			return missing
-		}
-	case "volumeSnapshot":
-		if snapshot == nil {
-			return missing
-		}
-	case "plugin":
-		for _, raw := range plugins {
-			p, _ := raw.(map[string]any)
-			if p["name"] != pluginName || p["enabled"] == false {
-				continue
-			}
-			if pluginName == "barman-cloud.cloudnative-pg.io" {
-				cfg, _ := p["parameters"].(map[string]any)
-				if cfg["barmanObjectName"] == "" || cfg["barmanObjectName"] == nil {
-					return missing
-				}
-			}
-			return ""
-		}
-		return missing
-	}
-	return ""
+	return "Configure a backup destination on " + cluster.GetName() + " first"
 }
 
 func cnpgActionPodReady(p *corev1.Pod) bool {
@@ -542,7 +453,7 @@ func cnpgClusterFactsOf(ctx context.Context, typed kubernetes.Interface, cluster
 	uids := map[string]types.UID{cluster.GetNamespace() + "/" + cluster.GetName(): cluster.GetUID()}
 	pods := map[string]*corev1.Pod{}
 	for _, n := range names {
-		inst := CNPGInstanceFact{Pod: n, Role: "standby", Healthy: healthy[n], Fenced: facts.FencedInstances.fences(n)}
+		inst := CNPGInstanceFact{Pod: n, Role: "standby", Healthy: healthy[n], Fenced: facts.FencedInstances.Fences(n)}
 		if n == facts.CurrentPrimary {
 			inst.Role = "primary"
 		}
@@ -908,7 +819,11 @@ func (s *Server) cnpgClusterCapabilities(r *http.Request, c cnpgActionClients, c
 				unfenceGuard = "It is not fenced"
 			}
 		}
-		destroy := one(cnpgGuardDestroyInstance(facts, inst), cnpgDestroyGrants(false)...)
+		destroyCode, destroyGuard := cnpgDestroyInstanceBlocker(facts, inst)
+		destroy := one(destroyGuard, cnpgDestroyGrants(false)...)
+		if destroy.Permission != permissionDenied && destroyGuard != "" {
+			destroy.ReasonCode = destroyCode
+		}
 		if !destroyInstance.Allowed && (destroy.Allowed || !destroyAdopted) {
 			destroyInstance = destroy
 			destroyAdopted = true
@@ -1009,7 +924,7 @@ func cnpgRestartPlanOf(cluster *unstructured.Unstructured, f CNPGClusterFacts) C
 	}
 	step := CNPGRestartStep{Instance: f.CurrentPrimary, Role: "primary"}
 	switch {
-	case f.FencedInstances.fences(f.CurrentPrimary):
+	case f.FencedInstances.Fences(f.CurrentPrimary):
 		step.Effect = "skipped_fenced"
 	case standbys == 0:
 		step.Effect = "restart_only_instance"
@@ -1164,20 +1079,28 @@ func cnpgScheduleFactsOf(ctx context.Context, c cnpgActionClients, sched *unstru
 	return f
 }
 
-func cnpgGuardScheduleRun(f CNPGScheduleFacts) string {
+func cnpgScheduleRunBlocker(f CNPGScheduleFacts) (string, string) {
 	switch {
 	case f.Terminating:
-		return "The schedule is being deleted"
+		return "terminating", "The schedule is being deleted"
 	case f.Cluster == "":
-		return "The schedule names no cluster"
+		return "cluster_missing", "The schedule names no cluster"
 	case f.ClusterState == "missing":
-		return "The cluster of the schedule does not exist in this namespace"
+		return "cluster_missing", "The cluster of the schedule does not exist in this namespace"
 	case f.ClusterState == "hibernated":
-		return "The cluster is hibernated: the operator fails a backup requested now"
+		return "hibernated", "The cluster is hibernated: the operator fails a backup requested now"
 	case f.ClusterState == "unreadable":
-		return "The cluster's backup destination could not be read"
+		return "cluster_unreadable", "The cluster's backup destination could not be read"
+	case f.BackupBlockedReason != "":
+		return "backup_destination", f.BackupBlockedReason
+	default:
+		return "", ""
 	}
-	return f.BackupBlockedReason
+}
+
+func cnpgGuardScheduleRun(f CNPGScheduleFacts) string {
+	_, message := cnpgScheduleRunBlocker(f)
+	return message
 }
 
 func (s *Server) cnpgScheduleCapabilities(r *http.Request, c cnpgActionClients, contextName, namespace, name string) (*CNPGScheduleCapabilitiesResponse, error) {
@@ -1199,6 +1122,12 @@ func (s *Server) cnpgScheduleCapabilities(r *http.Request, c cnpgActionClients, 
 		resumeGuard = "The schedule is not suspended"
 	}
 	operator := s.cnpgOperatorVerdictFor(r, namespace)
+	code, message := cnpgScheduleRunBlocker(f)
+	run := one(message, cnpgGrantCreateBackups)
+	if run.Permission != permissionDenied {
+		run.ReasonCode = code
+	}
+	run = cnpgOperatorWebhookGuard(operator, run)
 	return &CNPGScheduleCapabilitiesResponse{
 		UID:             string(sched.GetUID()),
 		ResourceVersion: sched.GetResourceVersion(),
@@ -1207,7 +1136,7 @@ func (s *Server) cnpgScheduleCapabilities(r *http.Request, c cnpgActionClients, 
 		Actions: CNPGScheduleActions{
 			Suspend:     cnpgOperatorWebhookGuard(operator, one(suspendGuard, cnpgGrantPatchSchedules)),
 			Resume:      cnpgOperatorWebhookGuard(operator, one(resumeGuard, cnpgGrantPatchSchedules)),
-			Run:         cnpgOperatorWebhookGuard(operator, one(cnpgGuardScheduleRun(f), cnpgGrantCreateBackups)),
+			Run:         run,
 			SetSchedule: cnpgOperatorWebhookGuard(operator, one(map[bool]string{true: "The schedule is being deleted"}[f.Terminating], cnpgGrantPatchSchedules)),
 		},
 		Operator: operator,

@@ -1006,7 +1006,7 @@ func TestCNPGScheduleRunMethodMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if caps.Actions.Run.Allowed || !strings.Contains(caps.Actions.Run.Reason, "No barmanObjectStore destination on pg") || !strings.Contains(caps.Actions.Run.Reason, "Use method plugin") {
+	if caps.Actions.Run.Allowed || caps.Actions.Run.ReasonCode != "backup_destination" || !strings.Contains(caps.Actions.Run.Reason, "No barmanObjectStore destination on pg") || !strings.Contains(caps.Actions.Run.Reason, "Use method plugin") {
 		t.Fatalf("method mismatch should identify the existing plugin destination: %+v", caps.Actions.Run)
 	}
 	_, err = runCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "run", ActionRequest{UID: "sched-uid", Facts: json.RawMessage(`{"generation":3}`)})

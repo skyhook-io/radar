@@ -1,3 +1,4 @@
+import { cnpgBackupDeclaration, cnpgBarmanPlugin } from '../../utils/cnpg-backup'
 // CloudNativePG workspace model: pure derivations over the /api/cnpg/workspace
 // payload. Every fact here is something the cluster actually reports; when it
 // does not report something the value is "unknown", never zero or healthy.
@@ -129,6 +130,8 @@ export const CNPG_PROBLEM_CATEGORIES: { id: CNPGProblemCategory; label: string }
  * e.g. the standby an HA slot is kept for.
  */
 export type CNPGProblem = WorkspaceProblem<CNPGProblemCategory> & {
+  reason?: string
+  slot?: string
   instance?: string
   /** The cnpg.io/jobRole of the Cluster's own Job whose Pod this is about: a cause, not an instance's symptom. */
   job?: string
@@ -151,7 +154,7 @@ export interface CNPGProtectionFacts {
     objectStore?: string
   }
   lastSuccessfulBackup: Fact
-  walArchiving: Fact & { operatorCondition?: { type: string; status: string; message?: string; lastTransitionTime?: string } }
+  walArchiving: Fact & { state?: 'no_destination' | 'failing' | 'archiving' | 'unknown'; operatorCondition?: { type: string; status: string; message?: string; lastTransitionTime?: string } }
   recoveryWindow: Fact & { from?: string }
   restoreValidation: Fact & { restoredInto?: { namespace: string; name: string } }
 }
@@ -212,6 +215,7 @@ const PROTECTION_ISSUE_REASONS = new Set([
   'CNPGBackupFailed',
   'CNPGScheduledBackupMissed',
   'CNPGScheduledRunNoBackup',
+  'CNPGScheduleDestinationMissing',
 ])
 
 // What an instance Pod's bare reason means, said about the Pod.
@@ -249,6 +253,7 @@ export function cnpgIssueText(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'name' | 
   const cause = issue.cause?.trim() || undefined
   // The run's time is the issue's first_seen, not part of the message.
   if (issue.reason === 'CNPGScheduledRunNoBackup' && issue.first_seen && message) message = `${message} ${formatAge(issue.first_seen)} ago`
+  if (['CNPGScheduleDestinationMissing', 'CNPGInstanceReadinessMismatch', 'CNPGPrimaryLabelMismatch'].includes(issue.reason)) return { title: message, detail: cause }
   const known = issueReasonTitle(issue.reason) ?? CNPG_REASON_TITLES[issue.reason]
   if (known) return { title: known, detail: [stripTitlePrefix(message, known), cause].filter(Boolean).join(' ') || undefined }
   if (message && message !== issue.reason && /\s/.test(message)) return { title: message, detail: cause }
@@ -272,7 +277,7 @@ function stripTitlePrefix(message: string, title: string): string {
  * named in alsoAbout. Each Backup is otherwise its own issue, and a schedule
  * failing every night would list the same sentence over and over.
  */
-type IssueProblem = CNPGProblem & { reason?: string }
+type IssueProblem = CNPGProblem
 
 export function cnpgCollapseBackupFailures(problems: IssueProblem[], backupTimes: Map<string, number> = new Map()): IssueProblem[] {
   const groups = new Map<string, IssueProblem[]>()
@@ -320,7 +325,6 @@ export function cnpgFoldLastBackupFailed(problems: IssueProblem[], newestBackup:
     )
   return problems
     .filter((p) => !(covered && p.reason === 'CNPGLastBackupFailed'))
-    .map(({ reason: _r, ...p }) => p)
 }
 
 // When each of the cluster's Backups started (status.startedAt, else its
@@ -378,6 +382,12 @@ export function cnpgIssueOrigin(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'reason
       return { label: 'Backup status', detail: 'Backup status.phase and status.error' }
     case 'CNPGClusterDegraded':
       return { label: 'Radar check of ready instances', detail: 'spec.instances against status.readyInstances, unless the phase, hibernation or fencing explains it' }
+    case 'CNPGScheduleDestinationMissing':
+      return { label: 'Radar check of the backup destination', detail: 'ScheduledBackup method against its target Cluster spec' }
+    case 'CNPGInstanceReadinessMismatch':
+      return { label: 'Radar check of instance readiness', detail: 'Instance Pod Ready conditions against Cluster status.readyInstances' }
+    case 'CNPGPrimaryLabelMismatch':
+      return { label: 'Radar check of the primary', detail: 'Instance Pod role labels against Cluster status.currentPrimary' }
     case 'CNPGScheduledRunNoBackup':
       return { label: 'Radar check of the backup schedule', detail: 'The schedule, read as the operator does, against the cluster\'s newest successful backup' }
     case 'CNPGScheduledBackupMissed':
@@ -528,7 +538,8 @@ function scheduleFact(
 }
 
 function destinationFact(cluster: any): CNPGProtectionFacts['destination'] {
-  const plugin = getCNPGClusterBarmanPlugin(cluster)
+  const declaration = cnpgBackupDeclaration(cluster)
+  const plugin = cnpgBarmanPlugin(declaration)
   if (plugin?.barmanObjectName) {
     return {
       text: `ObjectStore ${plugin.barmanObjectName}`,
@@ -537,11 +548,10 @@ function destinationFact(cluster: any): CNPGProtectionFacts['destination'] {
       objectStore: plugin.barmanObjectName,
     }
   }
-  const cfg = getCNPGClusterBackupConfig(cluster)
-  if (cfg.destinationPath) {
-    return { text: cfg.destinationPath, tone: 'neutral', method: 'barmanObjectStore' }
+  if (declaration.inTreeDestination) {
+    return { text: declaration.inTreeDestination, tone: 'neutral', method: 'barmanObjectStore' }
   }
-  if (cluster?.spec?.backup?.volumeSnapshot) {
+  if (declaration.snapshotsConfigured) {
     return { text: 'Volume snapshots', tone: 'neutral', method: 'volumeSnapshot' }
   }
   return { text: 'No destination configured', tone: 'neutral', method: 'none' }
@@ -606,28 +616,29 @@ export const CNPG_NO_WAL_ARCHIVE_DESTINATION = 'Not archived: no destination con
 function walFact(cluster: any): CNPGProtectionFacts['walArchiving'] {
   const conds = cluster?.status?.conditions
   const c = Array.isArray(conds) ? conds.find((x: any) => x?.type === 'ContinuousArchiving') : null
-  const plugin = getCNPGClusterBarmanPlugin(cluster)
-  const archivers = (cluster.spec?.plugins ?? []).filter((p: any) => p.enabled !== false && p.isWALArchiver === true)
-  const archiveConfigured = archivers.length > 0 || !!getCNPGClusterBackupConfig(cluster).destinationPath
+  const declaration = cnpgBackupDeclaration(cluster)
+  const plugin = cnpgBarmanPlugin(declaration)
+  const archivers = declaration.plugins.filter((p) => p.enabled && p.isWALArchiver)
+  const archiveConfigured = archivers.length > 0 || !!declaration.inTreeDestination
   if (c?.status === 'False' && archiveConfigured) {
-    return { text: 'Failing', tone: 'unhealthy', source: 'ContinuousArchiving condition', ...(c.lastTransitionTime ? { at: c.lastTransitionTime, atMeaning: 'since' as const } : {}), ...(c.message ? { detail: c.message } : {}) }
+    return { state: 'failing', text: 'Failing', tone: 'unhealthy', source: 'ContinuousArchiving condition', ...(c.lastTransitionTime ? { at: c.lastTransitionTime, atMeaning: 'since' as const } : {}), ...(c.message ? { detail: c.message } : {}) }
   }
-  const destinationKnown = !!(plugin?.isWALArchiver && plugin.barmanObjectName) || !!getCNPGClusterBackupConfig(cluster).destinationPath
+  const destinationKnown = !!(plugin?.isWALArchiver && plugin.barmanObjectName) || !!declaration.inTreeDestination
   const customArchiver = archivers.some((p: any) => p.name !== plugin?.name)
   if (!destinationKnown && !customArchiver) {
     return {
-      text: CNPG_NO_WAL_ARCHIVE_DESTINATION,
+      state: 'no_destination', text: CNPG_NO_WAL_ARCHIVE_DESTINATION,
       tone: 'neutral',
       source: 'Cluster spec',
       detail: "WAL is not archived to recovery storage, so point-in-time recovery is unavailable." + (c?.status === 'True' ? " CloudNativePG still reports archiving as working because, with no destination, it accepts each WAL file without keeping it." : ''),
       ...(c ? { operatorCondition: { type: c.type, status: c.status, message: c.message, lastTransitionTime: c.lastTransitionTime } } : {}),
     }
   }
-  if (!c) return { text: 'Not reported', tone: 'unknown', source: 'Cluster status' }
+  if (!c) return { state: 'unknown', text: 'Not reported', tone: 'unknown', source: 'Cluster status' }
   if (c.status === 'True') {
-    return { text: 'CNPG reports archiving', tone: 'healthy', source: 'Cluster status · ContinuousArchiving=True', ...(customArchiver && !destinationKnown ? { detail: 'Archive plugin declared; its destination is not assessed here' } : {}), ...(c.lastTransitionTime ? { at: c.lastTransitionTime, atMeaning: 'since' as const } : {}) }
+    return { state: 'archiving', text: 'CNPG reports archiving', tone: 'healthy', source: 'Cluster status · ContinuousArchiving=True', ...(customArchiver && !destinationKnown ? { detail: 'Archive plugin declared; its destination is not assessed here' } : {}), ...(c.lastTransitionTime ? { at: c.lastTransitionTime, atMeaning: 'since' as const } : {}) }
   }
-  return { text: 'Unknown', tone: 'unknown', source: 'ContinuousArchiving condition' }
+  return { state: 'unknown', text: 'Unknown', tone: 'unknown', source: 'ContinuousArchiving condition' }
 }
 
 export const CNPG_RESTORE_VALIDATION_ANNOTATION = 'radar.skyhook.io/restore-validation'
@@ -914,49 +925,6 @@ function primaryConflictOf(cluster: any, pods: any[]): CNPGFleetRow['primaryConf
   return { status, labelled: labelled.sort()[0] }
 }
 
-/**
- * Availability problems Radar observes on the instance Pods when CNPG status
- * says otherwise — the status is the operator's last word and goes stale
- * while it is not reconciling. Worded as what is observed.
- */
-function observedProblems(
-  cluster: any,
-  pods: CNPGInstance[],
-  contradicted: { ready: number; total: number } | undefined,
-  statusReady: number | null,
-  conflict: CNPGFleetRow['primaryConflict'],
-): CNPGProblem[] {
-  const ns = cluster.metadata?.namespace
-  const name = cluster.metadata?.name
-  const subject = { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: ns, name }
-  const out: CNPGProblem[] = []
-  if (contradicted) {
-    const primaryDown = pods.some((p) => p.role === 'primary' && p.ready === false)
-    const notReady = contradicted.total - contradicted.ready
-    out.push({
-      id: `pods-not-ready:${ns}/${name}`,
-      severity: primaryDown || contradicted.ready === 0 ? 'critical' : 'warning',
-      category: 'availability',
-      title: `${notReady} of ${contradicted.total} instance Pods not ready${primaryDown ? ', including the primary' : ''}`,
-      detail: `The Pods' Ready condition shows ${contradicted.ready} ready; CNPG status still reports ${statusReady}. The status may be stale.`,
-      subject,
-      source: 'measurement',
-    })
-  }
-  if (conflict) {
-    out.push({
-      id: `primary-conflict:${ns}/${name}`,
-      severity: 'warning',
-      category: 'availability',
-      title: `CNPG status names ${conflict.status} primary; the Pod labelled primary is ${conflict.labelled}`,
-      detail: 'Status may be stale, or a failover is under way.',
-      subject,
-      source: 'measurement',
-    })
-  }
-  return out
-}
-
 /** Index "Kind/ns/name" → owning cluster name, from each child's spec.cluster.name. */
 function childIndex(resp: CNPGWorkspaceResponse): Map<string, string> {
   const idx = new Map<string, string>()
@@ -1092,21 +1060,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
     const primaryConflict = podsReadable ? primaryConflictOf(cluster, pods.filter((p) => p.metadata?.namespace === ns && p.metadata?.labels?.['cnpg.io/cluster'] === name)) : undefined
     let problems = sortProblems([
       ...problemsFor(cluster, resp.issues ?? [], resp.audit ?? [], children, backupTimesOf(cluster, resp.objects.backups ?? []), jobs),
-      ...observedProblems(cluster, instancePods, readinessContradicted ? podReadiness : undefined, readyInstances, primaryConflict),
-      ...(coverageReadable(coverageOf(resp, 'scheduledBackups'), ns) ? (resp.objects.scheduledBackups ?? []).flatMap((schedule): CNPGProblem[] => {
-        if (schedule.metadata?.namespace !== ns || specClusterName(schedule) !== name || schedule.spec?.suspend === true) return []
-        const blocker = cnpgScheduleDestinationBlocker(schedule, [cluster])
-        if (!blocker) return []
-        return [{
-          id: `schedule-destination:${ns}/${schedule.metadata.name}`,
-          severity: 'warning', category: 'protection', source: 'measurement',
-          measuredBy: 'Radar from ScheduledBackup and Cluster specs',
-          sourceDetail: 'ScheduledBackup method against its target Cluster spec',
-          title: `Backup schedule ${schedule.metadata.name} cannot run: ${blocker[0].toLowerCase()}${blocker.slice(1)}`,
-          subject: { kind: 'ScheduledBackup', group: 'postgresql.cnpg.io', namespace: ns, name: schedule.metadata.name },
-          origin: { label: 'Radar check of the backup destination', detail: 'ScheduledBackup method against its target Cluster spec' },
-        }]
-      }) : []),
+
     ])
     problems = problems.map((p) => p.origin?.label === 'Kubernetes scheduler' ? { ...p, detail: summarizeSchedulerMessage(p.detail, { plain: true }), rawDetail: p.detail } : p)
     const categories = new Set<CNPGProblemCategory>(
@@ -1381,6 +1335,7 @@ export interface CNPGStandbyGap {
 export function cnpgStandbyNotReceivingProblem(row: Pick<CNPGFleetRow, 'key' | 'namespace' | 'name'>, gap: CNPGStandbyGap): CNPGProblem {
   return {
     id: cnpgStandbyProblemId(row.key, gap.pod),
+    reason: 'CNPGStandbyNotReceiving',
     severity: gap.noneReceiving ? 'critical' : 'warning',
     category: 'availability',
     title: `${gap.pod} is not receiving WAL from the primary`,
@@ -1410,6 +1365,8 @@ export function cnpgSlotRetentionProblem(row: Pick<CNPGFleetRow, 'key' | 'namesp
   const forWhom = r.standby ? ` for ${r.standby}` : ''
   return {
     id: cnpgSlotProblemId(row.key, r.slot),
+    reason: 'CNPGInactiveSlot',
+    slot: r.slot,
     severity: 'warning',
     category: 'availability',
     title: `Inactive slot ${r.slot} holds ${formatBytes(r.bytes)} of WAL on ${r.pod}${forWhom}`,
@@ -1687,6 +1644,7 @@ function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading
   // the series existed at the window's start, not that samples were continuous.
   return {
     id: cnpgSustainedLagProblemId(row.key),
+    reason: 'CNPGSustainedLag',
     severity: floor >= CNPG_SUSTAINED_LAG_CRITICAL_SECONDS ? 'critical' : 'warning',
     category: 'availability',
     title: `${pod} ≥ ${cnpgFormatLag(floor)} behind in every sample for ${formatWindowShort(lag.sustainedWindow)}`,

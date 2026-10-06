@@ -12,7 +12,8 @@ import {
   type NavigateToRef,
 } from '@skyhook-io/k8s-ui'
 import { useCNPGRuntime, type CNPGRuntimeInstance } from '../../api/cnpg'
-import { cnpgInstanceLive, cnpgInstanceLiveUnavailable, useCNPGClusterHA } from '../../api/cnpg-ha'
+import { useCNPGClusterHA } from '../../api/cnpg-ha'
+import { cnpgInstanceLive, cnpgInstanceLiveUnavailable } from './runtimeAssessment'
 import { CNPGReplicationView } from './CNPGReplicationView'
 import { CNPGTabVerdict } from './CNPGClusterTabs'
 import { formatBytes } from './lsn'

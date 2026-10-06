@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import type { RenderDiagnoseAction } from '../../context/DiagnoseCustomization'
 import { useSearchParams } from 'react-router-dom'
-import { FoldSection, CNPGDimensionMark, CNPGDimensionVerdict, CNPGServingStatus, cnpgScheduleDestinationBlocker, getCNPGClusterBackupConfig, getCNPGClusterBarmanPlugin, coverageReadable, toneTextClass, type CNPGDimension, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
+import { FoldSection, CNPGDimensionMark, CNPGDimensionVerdict, CNPGServingStatus, cnpgScheduleDestinationBlocker, cnpgBackupDeclaration, cnpgHasBackupDestination, getCNPGClusterBarmanPlugin, coverageReadable, toneTextClass, type CNPGDimension, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useCNPGRuntime } from '../../api/cnpg'
 import { CNPGStorage } from './CNPGStorage'
@@ -74,9 +74,9 @@ export function CNPGStorageTab({
  * whether that standby receives anything, and the two ways the WAL is freed.
  */
 function SlotRelief({ row, onOpenReplication }: { row: CNPGFleetRow; onOpenReplication?: () => void }) {
-  const slots = row.problems.filter((p) => p.id.startsWith(`slot:${row.key}:`))
+  const slots = row.problems.filter((p) => p.reason === 'CNPGInactiveSlot')
   if (slots.length === 0) return null
-  const gaps = new Set(row.problems.filter((p) => p.id.startsWith(`standby:${row.key}:`)).map((p) => p.subject.name))
+  const gaps = new Set(row.problems.filter((p) => p.reason === 'CNPGStandbyNotReceiving').map((p) => p.subject.name))
   return (
     <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
       {slots.map((p) => {
@@ -136,8 +136,7 @@ export function CNPGBackupsTab({
         const schedules = (data.objects.scheduledBackups ?? []).filter((s) => s.metadata?.namespace === namespace && s.spec?.cluster?.name === name)
         const blockedSchedules = schedules.filter((s) => cnpgScheduleDestinationBlocker(s, [cluster]))
         const pluginDestination = cluster && getCNPGClusterBarmanPlugin(cluster)
-        const customPlugin = cluster?.spec?.plugins?.some((p: any) => p.enabled !== false && p.name !== 'barman-cloud.cloudnative-pg.io')
-        const missingDestination = cluster && !pluginDestination?.barmanObjectName && !getCNPGClusterBackupConfig(cluster).destinationPath && !cluster.spec?.backup?.volumeSnapshot && !customPlugin
+        const missingDestination = cluster && !cnpgHasBackupDestination(cnpgBackupDeclaration(cluster))
         return (
         <div className="flex min-h-0 flex-1 flex-col">
           <CNPGTabVerdict namespace={namespace} name={name} id="protection" className="px-4 pt-4" />

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/pkg/cnpg"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -86,34 +87,33 @@ func cnpgDestroyPreflight(ctx context.Context, x *cnpgClusterRun, keepPVC bool) 
 	return nil
 }
 
-func cnpgGuardDestroyInstance(f CNPGClusterFacts, i CNPGInstanceFact) string {
+func cnpgDestroyInstanceBlocker(f CNPGClusterFacts, i CNPGInstanceFact) (string, string) {
 	if r := cnpgGuardCommon(f); r != "" {
-		return r
+		return "state_blocked", r
 	}
 	switch {
 	case f.Hibernated:
-		return "The cluster is hibernated"
+		return "hibernated", "The cluster is hibernated"
 	case i.Pod == f.CurrentPrimary:
-		return "It is the primary: destroying it forces an unplanned failover. Switch over to a standby first"
+		return "primary", "It is the primary: destroying it forces an unplanned failover. Switch over to a standby first"
 	case i.Pod == f.TargetPrimary:
-		return "It is the target of a switchover"
+		return "switchover_target", "It is the target of a switchover"
 	case f.switchoverInFlight() != "", f.Phase == cnpgPhaseSwitchover, f.Phase == cnpgPhaseFailover:
-		return "A switchover or failover is in progress"
-	case !f.FencedInstances.fences(i.Pod):
-		return "Fence " + i.Pod + " first: a fenced instance cannot be promoted while it is destroyed"
+		return "switchover_in_progress", "A switchover or failover is in progress"
+	case !f.FencedInstances.Fences(i.Pod):
+		return "fence_required", "Fence " + i.Pod + " first: a fenced instance cannot be promoted while it is destroyed"
 	}
-	return ""
+	return "", ""
+}
+
+func cnpgGuardDestroyInstance(f CNPGClusterFacts, i CNPGInstanceFact) string {
+	_, reason := cnpgDestroyInstanceBlocker(f, i)
+	return reason
 }
 
 // cnpgPodLabelledPrimary reads the role the instance manager writes on its
 // own Pod, which can lead status.currentPrimary during a promotion.
-func cnpgPodLabelledPrimary(pod *corev1.Pod) bool {
-	role := pod.Labels["cnpg.io/instanceRole"]
-	if role == "" {
-		role = pod.Labels["role"]
-	}
-	return role == "primary"
-}
+func cnpgPodLabelledPrimary(pod *corev1.Pod) bool { return cnpg.InstanceRole(pod) == "primary" }
 
 type cnpgReviewedPVC struct {
 	Name string `json:"name"`
@@ -267,9 +267,10 @@ func (s *Server) cnpgDestroyPlan(r *http.Request, c cnpgActionClients, contextNa
 		plan.JobsReadable = true
 		plan.Jobs = jobs
 	}
-	guard := cnpgGuardDestroyInstance(facts, inst)
+	reasonCode, guard := cnpgDestroyInstanceBlocker(facts, inst)
 	if guard == "" && !plan.PVCsReadable {
 		guard = "The instance's PVCs cannot be read (" + plan.PVCReason + "), so they cannot be reviewed"
+		reasonCode = "pvcs_unreadable"
 	}
 	cap := func(keep bool) ActionCapability {
 		gs := cnpgDestroyGrants(keep)
@@ -278,7 +279,11 @@ func (s *Server) cnpgDestroyPlan(r *http.Request, c cnpgActionClients, contextNa
 			gs[i] = g.In(namespace)
 			ps[i] = s.grantPermission(r, gs[i])
 		}
-		return capabilityVerdict(guard, ps, gs)
+		capability := capabilityVerdict(guard, ps, gs)
+		if capability.Permission != permissionDenied {
+			capability.ReasonCode = reasonCode
+		}
+		return capability
 	}
 	plan.Actions.Delete = cap(false)
 	plan.Actions.Keep = cap(true)

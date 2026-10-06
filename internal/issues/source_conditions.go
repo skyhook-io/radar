@@ -107,7 +107,12 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 		// evaluated per namespace over the Cluster list, not per object.
 		if gvr.Group == cnpgGroup && kind == "Cluster" {
 			out = append(out, detectCNPGScheduledRunIssues(p, gvr, items, time.Now())...)
+			out = append(out, detectCNPGInstanceObservationIssues(p, gvr, items)...)
 		}
+		if gvr.Group == cnpgGroup && kind == "ScheduledBackup" {
+			out = append(out, detectCNPGScheduleDestinationIssues(p, gvr, items)...)
+		}
+
 		for _, u := range items {
 			if gvr.Group == "kafka.strimzi.io" && kind == "KafkaConnector" {
 				out = append(out, detectStrimziConnectorIssues(gvr, u)...)

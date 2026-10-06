@@ -86,7 +86,7 @@ it('labels volumes for an absent instance as an expected standby and associates 
 it('keeps raw last-archived time folded when no recovery destination exists', () => {
   state.instances = [{ name: 'pg-1', role: 'primary', volumes: [], wal: { status: { state: 'ok' }, metrics: { state: 'ok' }, lastArchivedAt: '2026-10-01T12:00:00Z', readyToArchive: 0, slots: [], slotInventory: [] } }]
   const host = document.createElement('div')
-  host.innerHTML = renderToStaticMarkup(<MemoryRouter><CNPGStorage namespace="db" name="pg" walArchiving={{ text: 'Not archived: no destination configured', tone: 'neutral' }} /></MemoryRouter>)
+  host.innerHTML = renderToStaticMarkup(<MemoryRouter><CNPGStorage namespace="db" name="pg" walArchiving={{ state: 'no_destination' as const, text: 'Not archived: no destination configured', tone: 'neutral' }} /></MemoryRouter>)
   expect(host.textContent).toContain('Not archived: no destination configured')
   expect(host.textContent).toContain('Instance manager record')
   expect(host.querySelector('[inert]')?.textContent).toContain('as recorded by the instance manager')
@@ -131,7 +131,7 @@ it('does not prescribe backup setup or restoration when the source is unread', (
 })
 it('keeps a configured-destination absence independent of unread instance records', () => {
   state.instances = [{ name: 'pg-1', role: 'primary', volumes: [], wal: { status: { state: 'unreachable', error: 'proxy timeout' }, metrics: { state: 'error' }, slots: [] } }]
-  const html = renderToStaticMarkup(<MemoryRouter><CNPGStorage namespace="db" name="pg" walArchiving={{ text: 'Not archived: no destination configured', tone: 'neutral' }} /></MemoryRouter>)
+  const html = renderToStaticMarkup(<MemoryRouter><CNPGStorage namespace="db" name="pg" walArchiving={{ state: 'no_destination' as const, text: 'Not archived: no destination configured', tone: 'neutral' }} /></MemoryRouter>)
   expect(html).toContain('Not archived: no destination configured')
   expect(html).toContain('Archiving record not read: proxy timeout')
   expect(html).not.toContain('Last archived time not reported')

@@ -1,10 +1,10 @@
 package issues
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/cnpg"
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -230,24 +230,9 @@ func cnpgHibernated(u *unstructured.Unstructured) bool {
 // array of instance names; "*" fences them all, so nothing serves — by intent,
 // not fault. A malformed value counts as not-fenced rather than erroring.
 func cnpgFencedAll(u *unstructured.Unstructured) bool {
-	raw := u.GetAnnotations()["cnpg.io/fencedInstances"]
-	if raw == "" {
-		return false
-	}
-	var names []string
-	if err := json.Unmarshal([]byte(raw), &names); err != nil {
-		return false
-	}
-	for _, n := range names {
-		if n == "*" {
-			return true
-		}
-	}
-	return false
+	return cnpg.ParseFencedInstances(u.GetAnnotations()["cnpg.io/fencedInstances"]).All
 }
 
-// cnpgHasConditions mirrors the frontend's `status.conditions?.length` half of
-// the reported check — any condition the operator wrote proves it reconciled.
 func cnpgHasConditions(u *unstructured.Unstructured) bool {
 	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	return len(conds) > 0

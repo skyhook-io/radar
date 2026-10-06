@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/robfig/cron"
+	"github.com/skyhook-io/radar/pkg/cnpg"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -16,14 +16,6 @@ const (
 
 	ReasonCNPGScheduledRunNoBackup = "CNPGScheduledRunNoBackup"
 )
-
-// ParseCNPGSchedule parses a ScheduledBackup schedule exactly as the operator
-// does: CloudNativePG calls robfig/cron v1's Parse (six fields, seconds first,
-// day of week optional, @-descriptors). v3 differs on stepped day-of-month
-// combined with a day of week and accepts a TZ= prefix, so v1 itself is used.
-func ParseCNPGSchedule(spec string) (cron.Schedule, error) {
-	return cron.Parse(spec)
-}
 
 // cnpgBackupPhasesInFlight: a run that may still succeed. The operator's own
 // terminal phases are completed and failed (walArchivingFailing also ends a
@@ -107,6 +99,11 @@ func detectCNPGScheduledRunIssues(p Provider, clusterGVR schema.GroupVersionReso
 			continue
 		}
 		if iss, ok := cnpgScheduledRunIssue(clusterGVR, c, e, now); ok {
+			ns := c.GetNamespace()
+			iss.RequiredReads = []EvidenceRead{{Group: cnpgGroup, Resource: "clusters", Namespace: ns, Verb: "list"}, {Group: cnpgGroup, Resource: "scheduledbackups", Namespace: ns, Verb: "list"}, {Group: cnpgGroup, Resource: "backups", Namespace: ns, Verb: "list"}}
+			if cnpgBarmanPlugin(c).objectStore != "" {
+				iss.RequiredReads = append(iss.RequiredReads, EvidenceRead{Group: cnpgBarmanGroup, Resource: "objectstores", Namespace: ns, Verb: "list"})
+			}
 			out = append(out, iss)
 		}
 	}
@@ -129,7 +126,7 @@ func cnpgScheduledRunIssue(gvr schema.GroupVersionResource, cluster *unstructure
 			continue
 		}
 		spec, _, _ := unstructured.NestedString(s.Object, "spec", "schedule")
-		sched, err := ParseCNPGSchedule(spec)
+		sched, err := cnpg.ParseSchedule(spec)
 		if err != nil {
 			continue
 		}
@@ -160,7 +157,7 @@ func cnpgScheduledRunIssue(gvr schema.GroupVersionResource, cluster *unstructure
 
 	// The run's time is the issue's first_seen (a reader shows it as an age);
 	// the message names the schedule in words so nobody has to decode cron.
-	reading := DescribeCNPGSchedule(worst.spec)
+	reading := cnpg.DescribeSchedule(worst.spec)
 	if reading == "" {
 		reading = "cron " + worst.spec
 	}
@@ -247,26 +244,8 @@ type cnpgPluginRef struct {
 // barman-cloud plugin entry, its ObjectStore and the server key the recovery
 // window is recorded under (serverName, else the cluster name).
 func cnpgBarmanPlugin(cluster *unstructured.Unstructured) cnpgPluginRef {
-	plugins, _, _ := unstructured.NestedSlice(cluster.Object, "spec", "plugins")
-	for _, raw := range plugins {
-		p, ok := raw.(map[string]any)
-		if !ok || p["name"] != "barman-cloud.cloudnative-pg.io" {
-			continue
-		}
-		if enabled, ok := p["enabled"].(bool); ok && !enabled {
-			continue
-		}
-		ref := cnpgPluginRef{present: true, serverName: cluster.GetName()}
-		params, _ := p["parameters"].(map[string]any)
-		if v, _ := params["barmanObjectName"].(string); v != "" {
-			ref.objectStore = v
-		}
-		if v, _ := params["serverName"].(string); v != "" {
-			ref.serverName = v
-		}
-		return ref
-	}
-	return cnpgPluginRef{}
+	plugin, present := cnpg.ParseBackupDeclaration(cluster).BarmanPlugin()
+	return cnpgPluginRef{present: present, objectStore: plugin.ObjectStore, serverName: plugin.ServerName}
 }
 
 func cnpgSpecClusterName(u *unstructured.Unstructured) string {

@@ -7,10 +7,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/pkg/cnpg"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"github.com/skyhook-io/radar/internal/issues"
 )
 
 const (
@@ -52,7 +51,7 @@ func cnpgSchedulePreview(spec string, lastCheck *time.Time, suspended bool, now 
 		p.Error = fmt.Sprintf("the schedule is longer than %d characters", cnpgScheduleMaxLen)
 		return p
 	}
-	sched, err := issues.ParseCNPGSchedule(spec)
+	sched, err := cnpg.ParseSchedule(spec)
 	if err != nil {
 		p.Error = err.Error()
 		return p
@@ -115,5 +114,5 @@ func (s *Server) handleCNPGSchedulePreview(w http.ResponseWriter, r *http.Reques
 }
 
 // describeCNPGSchedule words an already-validated schedule; see
-// issues.DescribeCNPGSchedule, shared with the Issues engine's own messages.
-func describeCNPGSchedule(spec string) string { return issues.DescribeCNPGSchedule(spec) }
+// cnpg.DescribeSchedule, shared with the Issues engine's own messages.
+func describeCNPGSchedule(spec string) string { return cnpg.DescribeSchedule(spec) }

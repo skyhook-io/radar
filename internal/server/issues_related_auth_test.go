@@ -14,6 +14,31 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 )
 
+func TestRESTCachedIssuesAuthorizeCNPGInventories(t *testing.T) {
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"db"}}
+	perms.SetCanI("list", "postgresql.cnpg.io", "clusters", "db", true)
+	perms.SetCanI("get", "", "pods", "db", true)
+	perms.SetCanI("list", "", "pods", "db", false)
+	s.permCache.Set("cnpg-evidence", nil, perms)
+	r := requestWithUser(http.MethodGet, "/api/issues/resource/cluster/db/pg", &auth.User{Username: "cnpg-evidence"})
+	issue := issues.Issue{ID: "contradiction", Group: "postgresql.cnpg.io", Kind: "Cluster", Namespace: "db", Name: "pg", RequiredReads: []issues.EvidenceRead{
+		{Group: "postgresql.cnpg.io", Resource: "clusters", Namespace: "db", Verb: "list"},
+		{Resource: "pods", Namespace: "db", Verb: "list"},
+	}}
+	options := issues.RelatedIssueOptions{CanReadEvidence: s.issueEvidenceAccess(r)}
+	lookup := func() []issues.Issue {
+		return issues.RelatedIssuesFrom(nil, []issues.Issue{issue}, options, issue.Group, issue.Kind, issue.Namespace, issue.Name)
+	}
+	if len(lookup()) != 0 {
+		t.Fatal("get Pods must not authorize a list-dependent finding")
+	}
+	perms.SetCanI("list", "", "pods", "db", true)
+	if len(lookup()) != 1 {
+		t.Fatal("authorized inventory withheld")
+	}
+}
+
 func TestRESTRelatedIssuesAuthorizeNodeClassSubject(t *testing.T) {
 	initRelatedIssueAuthDiscovery(t)
 	s := newAuthServer(auth.Config{Mode: "proxy"})

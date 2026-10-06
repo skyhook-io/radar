@@ -173,11 +173,8 @@ unknown, partial and denied values first: every piece here exists to keep them.
     downloads. Never add `retry` to a mutation.
   - When the Radar is too old, hide the sidebar destinations and fall back to
     the standard detail views.
-- [ ] **Findings.** The Issues engine comes first. A finding that depends on
-  the caller's grants (a measurement) stays in the workspace as a
-  `WorkspaceProblem` with `source: 'measurement'`, `measuredBy` and, when
-  matched by name only, `unverifiedMatch`. Add no new severity ladder, and
-  title reasons the Issues page already titles with `issueReasonTitle`.
+- [ ] **Domain rules.** Put interpretation reused by checks, findings and actions in a pure integration package (CNPG uses `pkg/cnpg`), independent of HTTP and caller permissions. Keep matching frontend derivations together; share fixture cases for rules represented in both languages. Share typed read builders between endpoints and reports rather than invoking handlers through a response recorder.
+- [ ] **Findings.** The Issues engine owns findings from cached Kubernetes objects. Cross-resource findings retain their inventory operations in `Issue.RequiredReads`; hosts supply `CanReadEvidence` for both composition and cached related-issue projections. A live proxy or Prometheus measurement stays in the workspace as a `WorkspaceProblem` with `source: 'measurement'`, `measuredBy` and, when matched by name only, `unverifiedMatch`. Add no new severity ladder, and title reasons the Issues page already titles with `issueReasonTitle`. Carry semantic reasons/states through presentation; never branch on generated IDs or display text.
 - [ ] **Screens.**
   - k8s-ui `components/facts`: `Fact`, `FactGrid`, `FactRow`, `FactValue`,
     `FactSource`, `CertaintyGlyph` and `ManagedByText`. These are for any
@@ -199,10 +196,11 @@ unknown, partial and denied values first: every piece here exists to keep them.
     "Spec & status".
   - `extraTabs`
   - `renderHeaderActions`
+  - Keep an integration's composition in its own host adapter (`web/src/components/cnpg/host.tsx`), so generic views use one interface for routing, summary, header actions and logs. Fetching stays in the app; shared presentation receives facts and callbacks.
 - [ ] **Actions.**
   - Server (`internal/server/actions.go`):
     - A capabilities endpoint answers each action as an `ActionCapability`
-      `{allowed, reason, permission, grant}`, built with `grantPermission` and
+      `{allowed, reason, reasonCode?, permission, grant}`, built with `grantPermission` and
       `capabilityVerdict`.
     - The POST body is an `ActionRequest` `{reviewedContext, uid, facts, params}`
       read with `decodeActionRequest`.

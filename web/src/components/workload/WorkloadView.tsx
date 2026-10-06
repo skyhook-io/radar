@@ -1,4 +1,4 @@
-import { CNPGInvestigationAction } from '../cnpg/CNPGClusterTabs'
+import { cnpgHost, useCNPGHostSupport } from '../cnpg/host'
 import { RayJobRenderer } from '../resources/renderers/RayJobRenderer'
 import { JobRenderer, JobSetRenderer } from '../resources/renderers/JobAdmissionRenderers'
 import { RayClusterRenderer } from '../resources/renderers/RayClusterRenderer'
@@ -12,7 +12,6 @@ import { clsx } from 'clsx'
 import { Terminal, Stethoscope } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
-  isApiGroup,
   EditableYamlView,
   FetchResult,
   Section,
@@ -99,7 +98,7 @@ import { RightsizingPanel } from '../resource/RightsizingStrip'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
-import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged, useRadarFeature } from '../../api/client'
+import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
 import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { ScheduledWorkloadLogsViewer } from '../logs/ScheduledWorkloadLogsViewer'
@@ -152,10 +151,6 @@ import {
   CNPGSubscriptionRenderer,
 } from '../resources/renderers/CNPGDeclarativeRenderer'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
-import { renderCNPGSummary } from '../cnpg/CNPGSummaryHost'
-import { renderCNPGHeaderActions } from '../cnpg/actions/renderCNPGHeaderActions'
-import { CNPGClusterLogs } from '../cnpg/CNPGClusterLogs'
-import { cnpgDetailKindFor, cnpgDetailPath } from '../cnpg/routes'
 import { cleanYamlForDuplicate } from '../../utils/skeleton-yaml'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
@@ -230,7 +225,7 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   // The redirect replaces the URL, so it waits for a confirmed workspace.
-  const cnpgWorkspace = useRadarFeature('cnpgWorkspace').support === 'supported'
+  const { canRedirect: cnpgWorkspace } = useCNPGHostSupport()
 
   // Parse /workload/:kind/:ns/:name from pathname. Segments are URL-encoded by
   // buildWorkloadPath; names can also contain literal slashes (e.g. some CRD names),
@@ -288,16 +283,8 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
   }
 
   // A Radar without the CloudNativePG workspace keeps the standard view.
-  const cnpgPlural = cnpgWorkspace ? cnpgDetailKindFor(kind, group) : null
-  if (cnpgPlural) {
-    const params = new URLSearchParams(searchParams)
-    params.delete('apiGroup')
-    const tab = params.get('tab')
-    if (cnpgPlural === 'clusters' && (tab === 'timeline' || tab === 'events')) params.set('tab', 'activity')
-    const base = cnpgDetailPath({ plural: cnpgPlural, namespace, name })
-    const qs = params.toString()
-    return <Navigate replace to={qs ? `${base}?${qs}` : base} state={location.state} />
-  }
+  const cnpgPath = cnpgWorkspace ? cnpgHost.detailRedirect({ kind, group, namespace, name }, searchParams) : null
+  if (cnpgPath) return <Navigate replace to={cnpgPath} state={location.state} />
 
   return (
     <WorkloadView
@@ -468,10 +455,7 @@ function useActionsBarProps(
       name: string
       className?: string
     }) => <PortForwardButton type={type} namespace={ns} name={n} className={className} />,
-    renderDiagnose: renderDiagnose ? (ctx: Parameters<typeof renderDiagnose>[0]) =>
-      ctx.kind === 'Cluster' && ctx.group === 'postgresql.cnpg.io'
-        ? <CNPGInvestigationAction namespace={ctx.namespace} name={ctx.name} render={renderDiagnose} context={ctx} />
-        : renderDiagnose(ctx) : undefined,
+    renderDiagnose: cnpgHost.diagnoseAction(renderDiagnose),
     onDelete: (
       params: Parameters<typeof deleteMutation.mutate>[0],
       callbacks?: { onSuccess?: () => void },
@@ -573,7 +557,7 @@ export function WorkloadView({
 }: WorkloadViewProps) {
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
-  const cnpgWorkspace = useRadarFeature('cnpgWorkspace').support !== 'unsupported'
+  const { canRender: cnpgWorkspace } = useCNPGHostSupport()
   const apiKind = kindToPluralWithGroup(kindProp, rest.group ?? '')
   const queryClient = useQueryClient()
   const [imageTargetOwnership, setImageTargetOwnership] =
@@ -1222,17 +1206,7 @@ export function WorkloadView({
             onSelectRun={handleSelectedRunChange}
           />
         )}
-        renderHeaderActions={
-          cnpgWorkspace
-            ? ({ resource: res, context, onNavigate }) => renderCNPGHeaderActions({ resource: res, namespace, name, compact: context === 'drawer', onNavigate })
-            : undefined
-        }
-        renderSummary={
-          cnpgWorkspace
-            ? ({ apiKind: ak, namespace: ns, name: n, resource: res, context, onNavigate }) =>
-                renderCNPGSummary({ apiKind: ak, namespace: ns, name: n, group: effectiveGroup, resource: res, context, onNavigate })
-            : undefined
-        }
+        {...(cnpgWorkspace ? cnpgHost.detailSlots(namespace, name, effectiveGroup) : {})}
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&
           res ? (
@@ -1533,9 +1507,8 @@ function LogsTabContent({
     )
   }
 
-  if (cnpgWorkspace && kind === 'Cluster' && isApiGroup(resource?.apiVersion, 'postgresql.cnpg.io')) {
-    return <CNPGClusterLogs namespace={namespace} name={name} />
-  }
+  const integrationLogs = cnpgWorkspace ? cnpgHost.logs(kind, resource, namespace, name) : null
+  if (integrationLogs) return integrationLogs
 
   // Workload kinds with stable pod selectors use the aggregated workload logs viewer
   if (WORKLOAD_LOG_KINDS.has(kind) && (kind !== 'Job' || isCoreBatchJob(apiKind, group))) {

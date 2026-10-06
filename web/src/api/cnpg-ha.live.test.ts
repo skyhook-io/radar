@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CNPGFleetRow } from '@skyhook-io/k8s-ui'
 import type { CNPGRuntimeResponse } from './cnpg'
-import { cnpgInstanceLive, cnpgLiveStandbyGaps, cnpgReplicationLive, withLiveReplication } from './cnpg-ha'
+import { cnpgInstanceLive, cnpgLiveStandbyGaps, cnpgReplicationLive, withLiveReplication } from '../components/cnpg/runtimeAssessment'
 
 const rt = (status: any): CNPGRuntimeResponse => ({
   cluster: { namespace: 'db', name: 'pg', uid: 'u' },
@@ -102,8 +102,8 @@ describe('a live read replaces what it disproves', () => {
       categories: new Set(['availability']),
       hibernated: false,
     }) as unknown as CNPGFleetRow
-  const fleetStandby = { id: 'standby:db/pg:pg-2', severity: 'warning', category: 'availability', title: 'pg-2 is not receiving WAL from the primary', subject: { kind: 'Pod', group: '', namespace: 'db', name: 'pg-2' }, source: 'measurement' }
-  const fleetSlot = { id: 'slot:db/pg:_cnpg_pg_2', severity: 'warning', category: 'availability', title: 'Inactive slot _cnpg_pg_2 holds 2 GiB', subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name: 'pg' }, source: 'measurement' }
+  const fleetStandby = { id: 'standby:db/pg:pg-2', reason: 'CNPGStandbyNotReceiving', severity: 'warning', category: 'availability', title: 'pg-2 is not receiving WAL from the primary', subject: { kind: 'Pod', group: '', namespace: 'db', name: 'pg-2' }, source: 'measurement' }
+  const fleetSlot = { id: 'slot:db/pg:_cnpg_pg_2', reason: 'CNPGInactiveSlot', slot: '_cnpg_pg_2', severity: 'warning', category: 'availability', title: 'Inactive slot _cnpg_pg_2 holds 2 GiB', subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'db', name: 'pg' }, source: 'measurement' }
   const rt = (primaryStatus: any): CNPGRuntimeResponse => ({
     cluster: { namespace: 'db', name: 'pg', uid: 'u' },
     sampledAt: '2026-10-04T10:00:00Z',

@@ -255,7 +255,7 @@ func TestCNPGScheduledRunThroughCompose(t *testing.T) {
 	sched := cnpgSchedObj("ScheduledBackup", "hourly", time.Now().Add(-48*time.Hour),
 		map[string]any{"schedule": "0 0 * * * *", "cluster": map[string]any{"name": "pg-main"}}, nil)
 	p := cnpgScheduleProvider([]*unstructured.Unstructured{c}, []*unstructured.Unstructured{sched}, nil, nil)
-	got := Compose(p, Filters{Kinds: []string{"Cluster"}, Limit: NoLimit})
+	got := Compose(p, Filters{Kinds: []string{"Cluster"}, Limit: NoLimit, AllowUnfilteredEvidence: true})
 	found := false
 	for _, iss := range got {
 		if iss.Reason == ReasonCNPGScheduledRunNoBackup {

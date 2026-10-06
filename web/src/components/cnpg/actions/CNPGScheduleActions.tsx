@@ -39,11 +39,8 @@ export function CNPGScheduleActions({ namespace, name }: { namespace: string; na
       {!data.actions.run.allowed && <div className="text-xs text-theme-text-secondary">{(() => {
         const reason = capabilityReason(data.actions.run) ?? ''
         const cluster = data.facts.cluster
-        const mention = ` on ${cluster} first`
-        const destinationBlocked = data.facts.clusterState === 'ok' && !!data.facts.backupBlockedReason && reason === data.facts.backupBlockedReason
-        const start = cluster && destinationBlocked ? reason.indexOf(mention) : -1
-        const index = start < 0 ? -1 : start + 4
-        return index < 0 ? <>{reason}{cluster && destinationBlocked && <button type="button" className="ml-1 text-accent-text hover:underline" onClick={() => navigate(cnpgDetailPath({ plural: 'clusters', namespace, name: cluster }, data.context, 'backups'))}>Cluster {cluster} Backups →</button>}</> : <>{reason.slice(0, index)}<button type="button" className="text-accent-text hover:underline" onClick={() => navigate(cnpgDetailPath({ plural: 'clusters', namespace, name: cluster }, data.context, 'backups'))}>{cluster}</button>{reason.slice(index + cluster.length)}</>
+        const destinationBlocked = data.actions.run.reasonCode === 'backup_destination'
+        return <>{reason}{cluster && destinationBlocked && <button type="button" className="ml-1 text-accent-text hover:underline" onClick={() => navigate(cnpgDetailPath({ plural: 'clusters', namespace, name: cluster }, data.context, 'backups'))}>Cluster {cluster} Backups →</button>}</>
       })()}</div>}
       {open === 'setSchedule' && <EditScheduleDialog namespace={namespace} name={name} onClose={() => setOpen(null)} />}
       {open && open !== 'setSchedule' && <ScheduleDialog kind={open} namespace={namespace} name={name} onClose={() => setOpen(null)} />}
@@ -85,7 +82,7 @@ function EditScheduleDialog({ namespace, name, onClose }: { namespace: string; n
         mutation.mutate(
           {
             action: 'setSchedule',
-            request: { reviewedContext: data.context, uid: data.uid, facts: data.facts as unknown as Record<string, unknown>, params: { schedule: next } },
+            request: { reviewedContext: data.context, uid: data.uid, facts: data.facts, params: { schedule: next } },
           },
           {
             onSuccess: () => {
@@ -180,7 +177,7 @@ function ScheduleDialog({ kind, namespace, name, onClose }: { kind: CNPGSchedule
       onClose={onClose}
       onConfirm={() =>
         mutation.mutate(
-          { action: kind, request: { reviewedContext: data.context, uid: data.uid, facts: data.facts as unknown as Record<string, unknown> } },
+          { action: kind, request: { reviewedContext: data.context, uid: data.uid, facts: data.facts } },
           {
             onSuccess: (r) => {
               if (kind === 'run' && r.backup) {

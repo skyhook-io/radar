@@ -39,7 +39,8 @@ import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
 import { CNPGView } from './components/cnpg/CNPGView'
-import { CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, isCNPGClusterKind, parseCNPGRoute } from './components/cnpg/routes'
+import { cnpgHost, useCNPGHostSupport } from './components/cnpg/host'
+import { CNPG_SCREENS, isCNPGClusterKind, parseCNPGRoute } from './components/cnpg/routes'
 import { currentPageLabel } from './utils/page-links'
 import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
@@ -59,7 +60,7 @@ import { UsageDataPrompt } from './components/usage-data/UsageDataPrompt'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit, useRadarFeature } from './api/client'
+import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
 import { routePath, apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
@@ -360,7 +361,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const [searchParams, setSearchParams] = useSearchParams()
   const capabilities = useCapabilitiesContext()
   // Expanding a CloudNativePG object opens its workspace page only on a Radar that serves it.
-  const cnpgWorkspaceSupported = useRadarFeature('cnpgWorkspace').support === 'supported'
+  const { canRedirect: cnpgWorkspaceSupported } = useCNPGHostSupport()
   const openLocalTerminal = useOpenLocalTerminal()
   const navCustomization = useNavCustomization()
   // The AI panel is an absolute slot in the body frame (the column under the header):
@@ -2427,10 +2428,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           onNavigate={(res) => navigateToResource(res)}
           canCollapseToDrawer={!isMobile}
           onExpand={(res, opts) => {
-            const cnpgPlural = cnpgWorkspaceSupported ? cnpgDetailKindFor(res.kind, res.group) : null
-            if (cnpgPlural) {
+            const cnpgPath = cnpgWorkspaceSupported ? cnpgHost.expandedPath(res, connection.context || undefined, opts?.yaml ? 'yaml' : undefined) : null
+            if (cnpgPath) {
               navigate(
-                cnpgDetailPath({ plural: cnpgPlural, namespace: res.namespace, name: res.name }, connection.context || undefined, opts?.yaml ? 'yaml' : undefined),
+                cnpgPath,
                 { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } },
               )
               return

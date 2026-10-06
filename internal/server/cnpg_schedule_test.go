@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/issues"
+	"github.com/skyhook-io/radar/pkg/cnpg"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -203,7 +203,7 @@ func TestDescribeCNPGScheduleMatchesTheParser(t *testing.T) {
 		if got := describeCNPGSchedule(c.spec); got != c.want {
 			t.Errorf("describe(%q) = %q, want %q", c.spec, got, c.want)
 		}
-		sched, err := issues.ParseCNPGSchedule(c.spec)
+		sched, err := cnpg.ParseSchedule(c.spec)
 		if err != nil {
 			t.Fatalf("%q: %v", c.spec, err)
 		}
