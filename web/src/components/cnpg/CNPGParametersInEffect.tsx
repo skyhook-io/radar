@@ -17,10 +17,10 @@ export function CNPGParametersInEffect({ namespace, name, declared, scope }: { n
     declared: declarations,
   }, declarations, scope)
   const unavailable = !d && q.error instanceof Error
-    ? `Instance values could not be read: ${q.error.message}`
-    : !d ? (q.isLoading ? 'Reading each instance…' : 'Instance values could not be read')
+    ? `Not read: ${q.error.message}`
+    : !d ? (q.isLoading ? 'Not read: reading each instance…' : 'Not read: instance values unavailable')
       : d.state === 'denied' ? `Reading instance values needs ${formatGrant(d.permission.grant) ?? `create pods/exec in namespace ${namespace}`}.`
-        : d.error ? `Instance values could not be read: ${d.error}` : null
+        : d.error ? `Not read: ${d.error}` : null
   const content = (
     <>
       <RefreshFailedNotice queries={[q]} className="mb-2" />
@@ -39,7 +39,13 @@ export function CNPGParametersInEffect({ namespace, name, declared, scope }: { n
             </tr>
           </thead>
           <tbody>
-            {view.rows.map((r) => (
+            {view.rows.map((r) => view.read.length === 0 ? (
+              <tr key={r.name} className="border-b border-theme-border/60 align-top last:border-0">
+                <td className="py-1.5 pr-4 font-mono text-xs text-theme-text-primary">{r.name}</td>
+                <td className="py-1.5 pr-4 font-mono text-xs text-theme-text-secondary">{r.declared === '' ? <span className="text-theme-text-tertiary">(empty)</span> : r.declared}</td>
+                <td /><td />
+              </tr>
+            ) : (
               <ParameterRow key={r.name} row={r} readPods={view.read.map((i) => i.pod)}
                 unreadText={d?.skipped?.includes(r.name) ? 'Not read: not a parameter name'
                   : !d ? (q.isLoading ? 'Not read: loading' : 'Not read: request failed')
@@ -61,7 +67,7 @@ export function CNPGParametersInEffect({ namespace, name, declared, scope }: { n
         client can set its own value for a parameter a session can change. PostgreSQL normalizes units and boolean spellings (such as false to off), so different text alone does not mean a different value.
       </p>}
       {d?.skipped && d.skipped.length > 0 && <p className="mt-1 text-xs text-theme-text-tertiary">Not read (not a parameter name): {d.skipped.join(', ')}.</p>}
-      {!!d?.omitted && <p className="mt-1 text-xs text-theme-text-tertiary">{d.omitted} declarations were not sampled.</p>}
+      {!!d?.omitted && <p className="mt-1 text-xs text-theme-text-tertiary">{d.omitted} declaration{d.omitted === 1 ? ' was' : 's were'} not sampled.</p>}
       {view.unread.length > 0 && (
         <p className={`mt-1 text-xs ${toneTextClass('unknown')}`}>
           Not read on {view.unread.map((i) => `${i.pod} (${i.error ?? i.state})`).join(', ')}.

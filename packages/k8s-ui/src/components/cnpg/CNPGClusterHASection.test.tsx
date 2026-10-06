@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { CNPGClusterHASection } from './CNPGClusterHASection'
@@ -74,4 +75,16 @@ it('keeps the readiness statement inside expanded HA and lists missing expected 
   expect(html).toContain('Scheduler message')
   expect(html).toContain('aria-expanded="false"')
   expect(html).toContain('preemption: no victims')
+})
+
+it('keeps each Job reason and scheduler disclosure inside its own block', () => {
+  const jobs = ['pg-1-initdb', 'pg-2-join'].map((name) => ({ name, role: 'join', phase: 'pending' as const, reason: `Pod cannot be scheduled: ${name}: 0/2 nodes are available: 2 Too many pods.` }))
+  const host = document.createElement('div'); host.innerHTML = renderToStaticMarkup(<CNPGClusterHASection ha={{ ...noInstances, jobs: { state: 'ok', items: jobs } }} />)
+  const blocks = [...host.querySelectorAll('div.space-y-1.text-xs')]
+  expect(blocks).toHaveLength(2)
+  for (let i = 0; i < jobs.length; i++) {
+    expect(blocks[i].textContent).toContain(jobs[i].name)
+    expect(blocks[i].querySelector('[inert]')?.textContent).toContain(jobs[i].reason)
+    expect(blocks[i].textContent).not.toContain(jobs[1 - i].name)
+  }
 })

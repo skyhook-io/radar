@@ -1,5 +1,5 @@
 import { useSearchParams } from 'react-router-dom'
-import { CNPGDimensionMark, CNPGDimensionVerdict, CNPGServingStatus, cnpgScheduleDestinationBlocker, getCNPGClusterBackupConfig, getCNPGClusterBarmanPlugin, coverageReadable, toneTextClass, type CNPGDimension, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
+import { FoldSection, CNPGDimensionMark, CNPGDimensionVerdict, CNPGServingStatus, cnpgScheduleDestinationBlocker, getCNPGClusterBackupConfig, getCNPGClusterBarmanPlugin, coverageReadable, toneTextClass, type CNPGDimension, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useCNPGRuntime } from '../../api/cnpg'
 import { CNPGStorage } from './CNPGStorage'
@@ -47,7 +47,7 @@ export function CNPGStorageTab({
   onOpenReplication?: () => void
 }) {
   const runtime = useCNPGRuntime(namespace, name)
-  const { row } = useCNPGClusterAssessment(namespace, name)
+  const { row, query } = useCNPGClusterAssessment(namespace, name)
   const clusterObject = row?.cluster
   const primary = runtime.data?.instances.find((i) => i.role === 'primary')
   return (
@@ -62,7 +62,7 @@ export function CNPGStorageTab({
       </div>
       <CNPGTabVerdict namespace={namespace} name={name} id="storage" />
       {row && <SlotRelief row={row} onOpenReplication={onOpenReplication} />}
-      <CNPGStorage namespace={namespace} name={name} primary={primary} runtime={runtime} clusterObject={clusterObject} />
+      <CNPGStorage namespace={namespace} name={name} primary={primary} runtime={runtime} clusterObject={clusterObject} restoreState={assessRestoreSources(query.data, namespace, clusterObject).recoveryState} walArchiving={row?.protection.walArchiving} />
     </div>
   )
 }
@@ -138,23 +138,30 @@ export function CNPGBackupsTab({
         const missingDestination = cluster && !pluginDestination?.barmanObjectName && !getCNPGClusterBackupConfig(cluster).destinationPath && !cluster.spec?.backup?.volumeSnapshot && !customPlugin
         return (
         <div className="flex min-h-0 flex-1 flex-col">
-          <CNPGTabVerdict namespace={namespace} name={name} id="protection" className="px-5 pt-3 xl:px-7" />
+          <CNPGTabVerdict namespace={namespace} name={name} id="protection" className="px-4 pt-4" />
           {(missingDestination || blockedSchedules.length > 0) && (
-            <p className="px-5 pt-2 text-sm text-theme-text-secondary xl:px-7">
-              {blockedSchedules.length > 0 ? <>
-                Configure {blockedSchedules.some((s) => (s.spec?.method || 'barmanObjectStore') === 'barmanObjectStore') ? 'spec.backup.barmanObjectStore' : blockedSchedules.some((s) => s.spec?.method === 'volumeSnapshot') ? 'spec.backup.volumeSnapshot' : 'the plugin and its ObjectStore'} for {blockedSchedules.map((s) => s.metadata.name).join(', ')}.
-                {' '}{pluginDestination?.barmanObjectName ? <>Or use this Cluster’s ObjectStore {pluginDestination.barmanObjectName}: change {blockedSchedules.map((s) => s.metadata.name).join(', ')}’s spec.method to plugin and spec.pluginConfiguration.name to {pluginDestination.name}.</> : <>Or set up plugin/ObjectStore or volume snapshots; change {blockedSchedules.map((s) => s.metadata.name).join(', ')}’s spec.method to match (plugin needs pluginConfiguration).</>}
-              </> : 'Configure a destination with the barman-cloud plugin and an ObjectStore, or use volume snapshots.'}
-              {' '}<a href="https://cloudnative-pg.io/docs/devel/backup/" target="_blank" rel="noopener noreferrer" className="text-accent-text hover:underline">CloudNativePG backup docs ↗</a>
-              {onOpenYaml && <>{' · '}<button type="button" onClick={onOpenYaml} className="text-accent-text hover:underline">Cluster YAML →</button></>}
-            </p>
+            <div className="px-4 pt-2 text-sm text-theme-text-secondary">
+              {blockedSchedules.length > 0 && <p>{blockedSchedules.map((s) => s.metadata.name).join(', ')} cannot run: {missingDestination ? `${name} has no backup destination.` : 'the destination does not match the schedule’s method.'}</p>}
+              <p>
+                {blockedSchedules.length > 0 ? <>
+                  Configure {blockedSchedules.some((s) => (s.spec?.method || 'barmanObjectStore') === 'barmanObjectStore') ? 'spec.backup.barmanObjectStore' : blockedSchedules.some((s) => s.spec?.method === 'volumeSnapshot') ? 'spec.backup.volumeSnapshot' : 'the plugin and its ObjectStore'} for {blockedSchedules.map((s) => s.metadata.name).join(', ')}.
+                </> : 'Configure spec.backup.barmanObjectStore.'}
+                {' '}<a href="https://cloudnative-pg.io/docs/devel/backup/" target="_blank" rel="noopener noreferrer" className="inline-flex whitespace-nowrap text-accent-text hover:underline">CloudNativePG backup docs ↗</a>
+                {onOpenYaml && <>{' · '}<button type="button" onClick={onOpenYaml} className="text-accent-text hover:underline">Cluster YAML →</button></>}
+              </p>
+              <div className="mt-2">
+                <FoldSection title="Other backup methods" summary="" attention={false}>
+                  <p>{pluginDestination?.barmanObjectName ? <>Or use this Cluster’s ObjectStore {pluginDestination.barmanObjectName}: change {blockedSchedules.map((s) => s.metadata.name).join(', ')}’s spec.method to plugin and spec.pluginConfiguration.name to {pluginDestination.name}.</> : <>Or set up plugin/ObjectStore or volume snapshots{blockedSchedules.length > 0 && <>; change {blockedSchedules.map((s) => s.metadata.name).join(', ')}’s spec.method to match (plugin needs pluginConfiguration)</>}.</>}</p>
+                </FoldSection>
+              </div>
+            </div>
           )}
-          <div className="flex flex-wrap items-center gap-2 px-5 pt-3 xl:px-7">
+          <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
             <CNPGRestoreButton namespace={namespace} entry={{ kind: 'cluster', name }} disabledReason={restoreBlocked ?? nothing} />
             <span className="text-xs text-theme-text-tertiary">{nothing ?? 'Restores into a new Cluster beside this one; this cluster is not changed.'}</span>
           </div>
           {row && (
-            <div className="px-5 pt-3 xl:px-7">
+            <div className="px-4 pt-4">
               <CNPGArchivingRepair
                 row={row}
                 primary={primary}

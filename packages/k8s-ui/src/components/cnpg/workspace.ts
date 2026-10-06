@@ -601,6 +601,8 @@ function lastBackupFact(
   return { text: 'Completed', tone: 'healthy', at: best.at, source: best.source }
 }
 
+export const CNPG_NO_WAL_ARCHIVE_DESTINATION = 'Not archived: no destination configured'
+
 function walFact(cluster: any): CNPGProtectionFacts['walArchiving'] {
   const conds = cluster?.status?.conditions
   const c = Array.isArray(conds) ? conds.find((x: any) => x?.type === 'ContinuousArchiving') : null
@@ -614,10 +616,10 @@ function walFact(cluster: any): CNPGProtectionFacts['walArchiving'] {
   const customArchiver = archivers.some((p: any) => p.name !== plugin?.name)
   if (!destinationKnown && !customArchiver) {
     return {
-      text: 'Not archived: no destination configured',
+      text: CNPG_NO_WAL_ARCHIVE_DESTINATION,
       tone: 'neutral',
       source: 'Cluster spec',
-      detail: "PostgreSQL's WAL is not stored anywhere, so point-in-time recovery is not possible. CloudNativePG still reports archiving as working because, with no destination, it accepts each WAL file without keeping it.",
+      detail: "WAL is not archived to recovery storage, so point-in-time recovery is unavailable." + (c?.status === 'True' ? " CloudNativePG still reports archiving as working because, with no destination, it accepts each WAL file without keeping it." : ''),
       ...(c ? { operatorCondition: { type: c.type, status: c.status, message: c.message, lastTransitionTime: c.lastTransitionTime } } : {}),
     }
   }
@@ -1073,7 +1075,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
     }
     const podsReadable = coverageReadable(coverageOf(resp, 'pods'), ns)
     const podReadiness =
-      podsReadable && instancePods.length > 0 && instancePods.every((p) => p.ready !== null)
+      podsReadable && resp.objects.pods !== undefined && instancePods.every((p) => p.ready !== null)
         ? { ready: instancePods.filter((p) => p.ready).length, total: instancePods.length }
         : undefined
     const readinessContradicted = !hibernated && !!podReadiness && readyInstances !== null && podReadiness.ready < readyInstances

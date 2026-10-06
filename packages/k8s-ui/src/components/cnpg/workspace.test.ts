@@ -7,7 +7,7 @@ it('does not promote an archiving condition into evidence of an archive destinat
   const c = cluster('payments', 'db', { status: { conditions: [{ type: 'ContinuousArchiving', status: 'True', lastTransitionTime: '2026-10-01T12:00:00Z' }] } })
   const fact = buildCNPGFleet(resp({ clusters: [c] })).rows[0].protection.walArchiving
   expect(fact).toMatchObject({ text: 'Not archived: no destination configured', tone: 'neutral', source: 'Cluster spec' })
-  expect(fact.detail).toContain("PostgreSQL's WAL is not stored anywhere")
+  expect(fact.detail).toContain("WAL is not archived to recovery storage")
   expect(fact.operatorCondition).toMatchObject({ type: 'ContinuousArchiving', status: 'True', lastTransitionTime: '2026-10-01T12:00:00Z' })
   const snapshot = cluster('snapshot', 'db', { spec: { backup: { volumeSnapshot: {} } }, status: c.status })
   expect(buildCNPGFleet(resp({ clusters: [snapshot] })).rows[0].protection.walArchiving.text).toBe('Not archived: no destination configured')
@@ -475,7 +475,7 @@ it('uses plain WAL evidence without turning an operator success into an archive'
   const c = cluster('payments', 'db', { status: { conditions: [condition] } })
   const p = buildCNPGFleet(resp({ clusters: [c] })).rows[0].protection
   expect(p.walArchiving).toMatchObject({ text: 'Not archived: no destination configured', operatorCondition: condition })
-  expect(p.walArchiving.detail).toBe("PostgreSQL's WAL is not stored anywhere, so point-in-time recovery is not possible. CloudNativePG still reports archiving as working because, with no destination, it accepts each WAL file without keeping it.")
+  expect(p.walArchiving.detail).toBe("WAL is not archived to recovery storage, so point-in-time recovery is unavailable. CloudNativePG still reports archiving as working because, with no destination, it accepts each WAL file without keeping it.")
   expect(p.recoveryWindow.text).toBe('None: no backup destination')
   c.spec.backup = { barmanObjectStore: { destinationPath: 's3://backups' } }
   const configured = buildCNPGFleet(resp({ clusters: [c] })).rows[0].protection.walArchiving
@@ -509,4 +509,14 @@ it('keeps the plain scheduler cause and the complete scheduler message as separa
   expect(problem.instance).toBe('orders-2')
   expect(problem.detail).toBe('both nodes have reached their Pod limit')
   expect(problem.rawDetail).toBe(raw)
+})
+
+it.each(['False', 'Unknown', undefined])('does not invent operator archiving success for %s', (status) => {
+  const c = cluster('analytics', 'db', { status: { conditions: status ? [{ type: 'ContinuousArchiving', status }] : [] } })
+  expect(buildCNPGFleet(resp({ clusters: [c] })).rows[0].protection.walArchiving.detail).toBe('WAL is not archived to recovery storage, so point-in-time recovery is unavailable.')
+})
+it('counts zero ready instance Pods only when the Pod inventory was read', () => {
+  const c = cluster('analytics', 'db', { spec: { instances: 1 }, status: { readyInstances: undefined } })
+  expect(buildCNPGFleet(resp({ clusters: [c], pods: [] })).rows[0].podReadiness).toEqual({ ready: 0, total: 0 })
+  expect(buildCNPGFleet(resp({ clusters: [c] }, { coverage: { pods: { state: 'denied' } } })).rows[0].podReadiness).toBeUndefined()
 })

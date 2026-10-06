@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import {
   Badge,
+  SectionHeading,
   CNPGClusterBackupFacts,
   CNPGWALArchivingFact,
   backupsForScheduledBackup,
@@ -194,21 +195,14 @@ export function CNPGProtection({
   const countText = (count: number) => backupsReadable ? String(count) : count > 0 ? `≥${count}` : '?'
   const backupsGap = backupsReadable ? undefined : cnpgCoverageGap(backupsCoverage, 'Backups', scopedNamespace)
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {!scopeCluster && (
-        <CNPGWorkspaceHeader
-          title="Backups"
-          subtitle="Recovery evidence, backup runs, schedules and destinations for every cluster. Configured, backed up and restore-tested are separate facts."
-        />
-      )}
-      <ScreenBody>
+  const body = (
+    <>
         <CoverageNotice fleet={fleet} data={data} kinds={['clusters', 'backups', 'scheduledBackups', 'objectStores']} namespace={scopeCluster?.namespace} />
         <FilterChips chips={chips} />
 
         {scopeCluster && rows[0] && (
-          <section className="rounded-xl border border-theme-border bg-theme-surface px-4 pb-3 shadow-theme-sm">
-            <h3 className="pt-3 text-sm font-semibold text-theme-text-primary">Recovery evidence</h3>
+          <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
+            <SectionHeading>Recovery evidence</SectionHeading>
             <CNPGClusterBackupFacts row={rows[0]} onNavigate={(ref) => onInspect(refToSelectedResource(ref))} />
             {stores.length > 0 && <p className="mt-2 text-xs text-theme-text-tertiary">Recovery windows come from ObjectStore status.</p>}
           </section>
@@ -446,7 +440,12 @@ export function CNPGProtection({
           empty={coverageEmpty(data.coverage.scheduledBackups, 'ScheduledBackups')}
           footer={data.backupsOmitted > 0 ? `${data.backupsOmitted} settled backups older than 7 days are not listed.` : undefined}
         />
-      </ScreenBody>
+    </>
+  )
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {!scopeCluster && <CNPGWorkspaceHeader title="Backups" subtitle="Recovery evidence, backup runs, schedules and destinations for every cluster. Configured, backed up and restore-tested are separate facts." />}
+      {scopeCluster ? <div className="space-y-4 p-4">{body}</div> : <ScreenBody>{body}</ScreenBody>}
     </div>
   )
 }

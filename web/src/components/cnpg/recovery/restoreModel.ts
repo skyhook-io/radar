@@ -60,12 +60,21 @@ export function restoreSourcesFor(cluster: any, backups: any[]): RestoreSource[]
   return out
 }
 
-export function assessRestoreSources(data: CNPGWorkspaceResponse | undefined, namespace: string, cluster: any): { sources: RestoreSource[]; disabledReason?: string; unreadReason?: string } {
+export type CNPGRestoreSourceState = 'available' | 'none' | 'unknown'
+
+export function assessRestoreSources(data: CNPGWorkspaceResponse | undefined, namespace: string, cluster: any): { sources: RestoreSource[]; recoveryState: CNPGRestoreSourceState; disabledReason?: string; unreadReason?: string } {
   const readable = !!data && coverageReadable(data.coverage.backups ?? { state: 'notInstalled' }, namespace)
   const sources = cluster ? restoreSourcesFor(cluster, readable ? data!.objects.backups ?? [] : []) : []
-  if (!readable) return { sources, unreadReason: `Backup sources could not be read in ${namespace}.` }
-  if (!cluster) return { sources, unreadReason: 'The source Cluster could not be read.' }
-  return { sources, disabledReason: sources.length === 0 ? 'Nothing to restore from yet: no backup destination and no completed Backup.' : undefined }
+  const recordedRecovery = sources.some((source) => {
+    if (source.kind === 'backup') return true
+    const evidence = recoveryEvidenceFor(source, { sourceCluster: cluster, stores: data?.objects.objectStores ?? [], backups: readable ? data!.objects.backups ?? [] : [], namespace })
+    return !!(evidence.lastBackup || evidence.firstPoint)
+  })
+  const storeUnread = sources.some((s) => s.kind === 'objectStore') && (!data || !coverageReadable(data.coverage.objectStores ?? { state: 'notInstalled' }, namespace))
+  const recoveryState: CNPGRestoreSourceState = recordedRecovery ? 'available' : !readable || !cluster || storeUnread ? 'unknown' : 'none'
+  if (!readable) return { sources, recoveryState, unreadReason: `Backup sources could not be read in ${namespace}.` }
+  if (!cluster) return { sources, recoveryState, unreadReason: 'The source Cluster could not be read.' }
+  return { sources, recoveryState, disabledReason: sources.length === 0 ? 'Nothing to restore from yet: no backup destination and no completed Backup.' : undefined }
 }
 
 function restoreImage(cluster: any): { imageCatalogRef?: any; imageName?: string } {

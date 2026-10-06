@@ -139,7 +139,7 @@ function PodsOnly({ ha, namespace, onNavigate }: { ha?: CNPGClusterHA; namespace
               <span className="text-theme-text-secondary">{i.role === 'replica' ? 'standby' : i.role === 'unknown' ? 'role unknown' : 'primary'}</span>
               <span className={clsx('text-xs', i.ready ? 'text-theme-text-secondary' : toneTextClass('unhealthy'))}>Pod {i.ready ? 'ready' : 'not ready'}</span>
               {i.node && <span className="text-xs text-theme-text-tertiary">node {i.node}</span>}
-              <span className="text-xs text-theme-text-tertiary">streaming not read</span>
+              <span className="text-xs text-theme-text-tertiary">{i.role === 'replica' ? 'streaming not read' : 'live PostgreSQL status not read'}</span>
             </div>
           ))}
         </div>
@@ -153,7 +153,7 @@ export function OtherSlots({ primary, instances, expectedInstances = [], joining
   if (!primary) return null
   if (!readable || !primary.status.slots) {
     return (
-      <Card title="Other replication slots">
+      <Card title="Replication slots">
         <SourceState label="Slots" state={readable ? 'partial' : primary.status.state} error={primary.status.error ?? primary.status.reason ?? 'slots were not read'} />
       </Card>
     )
@@ -164,9 +164,9 @@ export function OtherSlots({ primary, instances, expectedInstances = [], joining
   const waiting = primary.status.slots.filter((sl) => sl.type === 'physical' && !cnpgHASlotInstance(clusterObject, sl.name, standbys) && cnpgHASlotInstance(clusterObject, sl.name, expectedStandbys))
   const others = primary.status.slots.filter((sl) => sl.type !== 'physical' || !cnpgHASlotInstance(clusterObject, sl.name, allInstances))
   return (
-    <>
+    <Card title="Replication slots" footer="Slot inventory from the primary’s instance manager. Physical slot associations use CloudNativePG’s naming convention.">
     {waiting.length > 0 && (
-      <Card title="Expected standby slots">
+      <div className="mb-3 space-y-2">
         {waiting.map((sl) => {
           const instance = cnpgHASlotInstance(clusterObject, sl.name, expectedStandbys)!
           return (
@@ -176,11 +176,10 @@ export function OtherSlots({ primary, instances, expectedInstances = [], joining
             </div>
           )
         })}
-      </Card>
+      </div>
     )}
-    <Card title="Other replication slots" footer="Slot inventory from the primary’s instance manager. Physical slot associations use CloudNativePG’s naming convention.">
       {others.length === 0 ? (
-        <div className="text-sm text-theme-text-tertiary">{primary.status.slots.length === 0 ? primary.status.slotsTruncated ? 'No slots in the reported inventory; inventory incomplete' : `No replication slots on ${primary.pod}` : primary.status.slots.length === 1 ? `The ${primary.status.slotsTruncated ? 'one reported' : 'only'} slot belongs to a standby` : `All ${primary.status.slots.length}${primary.status.slotsTruncated ? ' reported' : ''} slots belong to standbys`}</div>
+        <div className="text-xs text-theme-text-tertiary">{primary.status.slotsTruncated ? 'No other slots in the reported inventory; inventory incomplete' : 'No other slots reported'}</div>
       ) : (
         <table className="w-full text-sm">
           <thead className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">
@@ -208,6 +207,5 @@ export function OtherSlots({ primary, instances, expectedInstances = [], joining
         </table>
       )}
     </Card>
-    </>
   )
 }

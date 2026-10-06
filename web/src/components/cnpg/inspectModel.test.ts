@@ -113,3 +113,8 @@ describe('cnpgParametersView', () => {
     expect(cnpgParametersView(skipped).summary.text).toBe('1 declared · no parameters sampled')
   })
 })
+
+it.each([1, 2])('uses the correct declared-instance noun for %s', (count) => {
+  const response = { state: 'ok', declared: [{ name: 'work_mem', value: '8MB' }], instances: [{ pod: 'pg-1', state: 'ok', settings: [{ name: 'work_mem', value: '8MB' }] }] } as CNPGParametersResponse
+  expect(cnpgParametersView(response, response.declared, { declaredInstances: count }).summary.text).toContain(`${count} instance${count === 1 ? '' : 's'} declared`)
+})

@@ -256,3 +256,20 @@ it('keeps literal blocked phases neutral with their explanation and Operator act
   expect(open).toHaveBeenCalled()
   act(() => root.unmount())
 })
+
+it('separates absent operator readiness from observed zero ready Pods', () => {
+  const root = render(<CNPGClusterSummary row={row({ instances: { ready: null, desired: 1 }, pods: [], podReadiness: { ready: 0, total: 0 } })} />)
+  expect(document.body.textContent).toContain('Not reported by the operator')
+  expect(document.body.textContent).toContain('0 of 1 instance Pods ready')
+  expect(document.body.textContent).not.toContain('—/1')
+  act(() => root.unmount())
+})
+
+it('compacts only the scheduler disclosure inside the CNPG problem callout', () => {
+  const root = render(<CNPGClusterSummary row={row({ problems: [{ ...problem('schedule', 'warning', 'Instance cannot be scheduled'), rawDetail: '0/2 nodes are available: 2 Too many pods.' }] })} />)
+  const disclosure = [...document.body.querySelectorAll('button')].find((b) => b.textContent?.includes('Scheduler message'))!
+  const callout = [...document.body.querySelectorAll('div')].find((d) => d.classList.contains('[&_.mt-5]:mt-2'))
+  expect(callout?.contains(disclosure)).toBe(true)
+  expect(disclosure.getAttribute('aria-expanded')).toBe('false')
+  act(() => root.unmount())
+})

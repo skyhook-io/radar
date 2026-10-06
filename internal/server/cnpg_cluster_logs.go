@@ -415,8 +415,13 @@ func cnpgSnapshotLogSources(pods []*corev1.Pod, selected string) []workloadLogSo
 	for _, pod := range pods {
 		for _, container := range cnpgLogContainers(pod, selected) {
 			status := cnpgContainerStatus(pod, container)
-			if status != nil && (status.State.Running != nil || status.State.Terminated != nil) {
+			if status == nil {
+				continue
+			}
+			if status.State.Running != nil || status.State.Terminated != nil {
 				sources = append(sources, newWorkloadLogSource(pod, container, false))
+			} else if status.State.Waiting != nil && status.LastTerminationState.Terminated != nil {
+				sources = append(sources, newWorkloadLogSource(pod, container, true))
 			}
 		}
 	}
@@ -550,12 +555,19 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 			}
 			for _, c := range cnpgLogContainers(pod, query.container) {
 				status := cnpgContainerStatus(pod, c)
-				if status == nil || (status.State.Running == nil && status.State.Terminated == nil) {
+				if status == nil {
+					continue
+				}
+				previous := status.State.Waiting != nil && status.LastTerminationState.Terminated != nil
+				if status.State.Running == nil && status.State.Terminated == nil && !previous {
 					continue
 				}
 				key := pod.Name + "/" + c
 				run := fmt.Sprintf("%s/%d", status.ContainerID, status.RestartCount)
-				terminated := status.State.Terminated != nil
+				if previous {
+					run = fmt.Sprintf("%s/%d/previous", status.LastTerminationState.Terminated.ContainerID, status.RestartCount)
+				}
+				terminated := status.State.Terminated != nil || previous
 				if read, ok := completed.Load(key); terminated && ok && read == run {
 					continue
 				}
@@ -568,6 +580,10 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 					cursors[key] = cursor
 				}
 				opts := cursor.restartOptions(c, query.tailLines, query.sinceSeconds)
+				if previous {
+					opts.Previous = true
+					opts.Follow = false
+				}
 				streamCtx, streamCancel := context.WithCancel(ctx)
 				handle := &cnpgStreamHandle{cancel: streamCancel}
 				active.Store(key, handle)
@@ -600,6 +616,9 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 				continue
 			}
 			entry.SourceLabel = cnpgLogSourceLabel(roles[entry.Pod], entry.Container, query.container)
+			if entry.Previous && entry.SourceLabel != "" {
+				entry.SourceLabel += " · previous run"
+			}
 			annotateCNPGLogEntry(&entry)
 			sendSSEEvent(w, flusher, "log", entry)
 		case <-ticker.C:
@@ -721,7 +740,7 @@ func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, n
 		if line = strings.TrimSuffix(line, "\n"); line != "" && (err == nil || err == io.EOF) {
 			ts, content := parseLogLine(line)
 			select {
-			case logCh <- workloadLogEntry{Pod: podName, Container: opts.Container, Timestamp: ts, Content: content}:
+			case logCh <- workloadLogEntry{Pod: podName, Container: opts.Container, Timestamp: ts, Content: content, Previous: opts.Previous}:
 			case <-ctx.Done():
 				return false
 			}

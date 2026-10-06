@@ -191,11 +191,11 @@ export function CNPGClusterHASection({
                       <span className="text-theme-text-secondary">
                         {l?.roleDetail ? CNPG_ROLE_DETAIL_TEXT[l.roleDetail] : i.role === 'unknown' ? 'role unknown' : i.role}
                       </span>
-                      {l?.timeline !== undefined && <span className="text-theme-text-tertiary">TL {l.timeline}</span>}
+                      {l?.timeline !== undefined && <span className="text-theme-text-tertiary">timeline {l.timeline}</span>}
                       {i.qosClass && <span className="text-theme-text-tertiary">QoS {i.qosClass}</span>}
                       {l?.pendingRestart && <Badge severity="warning" size="sm">pending restart</Badge>}
                       {i.imageMatches === false && <Badge severity="warning" size="sm">image differs</Badge>}
-                      {l?.instanceManagerVersion && versions.size > 1 && <span className="text-theme-text-tertiary">manager {l.instanceManagerVersion}</span>}
+                      {l?.instanceManagerVersion && versions.size > 1 && <span className="text-theme-text-tertiary">CNPG instance manager {l.instanceManagerVersion}</span>}
                     </div>
                   )
                 })}
@@ -259,15 +259,17 @@ export function CNPGClusterHASection({
             ) : jobs.length === 0 ? (
               <span className="text-theme-text-secondary">None present</span>
             ) : (
-              <div className="space-y-0.5">
+              <div className="space-y-3">
                 {jobs.slice(0, 6).map((j) => (
-                  <div key={j.name} className="flex flex-wrap items-center gap-2 text-xs">
+                  <div key={j.name} className="space-y-1 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
                     <Badge severity={JOB_SEVERITY[j.phase]} size="sm">{j.phase}</Badge>
                     <span className="text-theme-text-secondary">{j.role ?? 'job'}</span>
                     <RefLink refTo={{ kind: 'Job', group: 'batch', namespace: ns, name: j.name }} onNavigate={onNavigate} mono />
+                    </div>
                     {j.reason && (/schedul|Too many pods|Insufficient/i.test(j.reason) ? <div className="w-full">
                       <span className={toneTextClass('degraded')}>Cannot be scheduled: {summarizeSchedulerMessage(j.reason, { plain: true })}</span>
-                      <FoldSection title="Scheduler message" summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{j.reason}</div></FoldSection>
+                      <div className="mt-1"><FoldSection title="Scheduler message" summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{j.reason}</div></FoldSection></div>
                     </div> : <span className={toneTextClass('degraded')}>{j.reason}</span>)}
                   </div>
                 ))}

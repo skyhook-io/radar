@@ -63,7 +63,9 @@ describe('Configuration composition', () => {
     expect(html).toContain('extra')
     expect(html).toContain('256MB')
     expect(html).not.toContain('old declaration')
-    expect(html).toContain('Not sampled')
+    expect(html).toContain('no instance Pod to read')
+    expect(html).toContain('1 declaration was not sampled')
+    expect(html).not.toContain('>unknown<')
   })
   it('renders the shared certificate section once when HA answers, including the renewal owner', () => {
     state.ha = { data: { cluster: { namespace: 'db', name: 'pg' }, certificates: [{ secret: 'pg-server', raw: '2100-01-01', expiresAt: '2100-01-01T00:00:00Z', renewal: 'operator' }] } }
@@ -80,14 +82,15 @@ describe('Configuration composition', () => {
     expect(html).toContain('showing data from')
     expect(html).toContain('>8MB</span>')
     expect(html).toContain('read on pg-1')
-    expect(html).not.toContain('Instance values could not be read')
+    expect(html).not.toContain('Not read: refresh timed out')
   })
   it('distinguishes skipped names, no readable instances and a parameter missing from a successful read', () => {
     state.cluster.spec.postgresql.parameters['invalid name'] = 'x'
     state.params = { data: { state: 'ok', declared: Object.entries(state.cluster.spec.postgresql.parameters).map(([name, value]) => ({ name, value })), skipped: ['invalid name'], permission: { exec: 'allowed' }, instances: [{ pod: 'pg-1', state: 'unreachable', error: 'timeout' }] } }
     let html = render()
-    expect(html).toContain('Not read: not a parameter name')
-    expect(html).toContain('Not read: no instance answered')
+    expect(html).toContain('Not read (not a parameter name): invalid name')
+    expect(html).toContain('no instance answered')
+    expect(html).not.toContain('>unknown<')
     state.params.data.instances = [{ pod: 'pg-1', state: 'ok', settings: [] }]
     html = render()
     expect(html).toContain('Not reported by pg-1')
@@ -114,7 +117,8 @@ describe('Configuration composition', () => {
     const html = render()
     expect(html).toContain('2 declared · no parameters sampled')
     expect(html).not.toContain('no instance Pod')
-    expect(html).toContain('Not sampled')
+    expect(html).toContain('no parameters sampled')
+    expect(html).not.toContain('>unknown<')
   })
 })
 
@@ -171,29 +175,46 @@ describe('Declared settings', () => {
 it.each(['unsupervised', 'supervised'])('explains %s and anti-affinity while keeping raw fields', (strategy) => {
   state.cluster.spec = { primaryUpdateStrategy: strategy, primaryUpdateMethod: 'restart', affinity: { podAntiAffinityType: 'preferred' } }
   const html = renderToStaticMarkup(<CNPGDeclaredSettings cluster={state.cluster} onSelectTab={() => {}} onOpenDeclarations={() => {}} />)
-  expect(html).toContain(strategy === 'unsupervised' ? 'the operator updates the primary automatically' : 'waits for a manual switchover')
+  expect(html).toContain(strategy === 'unsupervised' ? 'Updates the primary automatically' : 'Waits for a manual switchover')
   expect(html).toContain(`${strategy} · spec.primaryUpdateStrategy`)
   expect(html).toContain('Pod anti-affinity')
-  expect(html).toContain('preferred (instances spread across nodes when possible)')
+  expect(html).toContain('Spreads instances across nodes when possible')
   expect(html).toContain('preferred · spec.affinity.podAntiAffinityType')
-  expect(html).toContain('restart: updates the primary in place')
+  expect(html).toContain('Updates the primary in place')
 })
 
 it('does not promise spreading when anti-affinity is disabled and respects its topology', () => {
   state.cluster.spec = { affinity: { podAntiAffinityType: 'preferred', enablePodAntiAffinity: false } }
   const render = () => renderToStaticMarkup(<CNPGDeclaredSettings cluster={state.cluster} onSelectTab={() => {}} onOpenDeclarations={() => {}} />)
-  expect(render()).toContain('preferred (not applied: pod anti-affinity is disabled)')
-  expect(render()).not.toContain('instances spread across nodes')
+  expect(render()).toContain('Not applied: pod anti-affinity is disabled')
+  expect(render()).not.toContain('Spreads instances across')
   state.cluster.spec.affinity = { podAntiAffinityType: 'preferred', topologyKey: 'topology.kubernetes.io/zone' }
-  expect(render()).toContain('instances spread across topology domains when possible')
+  expect(render()).toContain('Spreads instances across topology domains when possible')
   expect(render()).toContain('topology.kubernetes.io/zone')
 })
 
 it('explains required anti-affinity for node and zone topology', () => {
   state.cluster.spec = { affinity: { podAntiAffinityType: 'required' } }
   const render = () => renderToStaticMarkup(<CNPGDeclaredSettings cluster={state.cluster} onSelectTab={() => {}} onOpenDeclarations={() => {}} />)
-  expect(render()).toContain('required (instances must run on separate nodes)')
+  expect(render()).toContain('Requires instances on separate nodes')
   state.cluster.spec.affinity.topologyKey = 'topology.kubernetes.io/zone'
-  expect(render()).toContain('required (instances must run on separate topology domains)')
+  expect(render()).toContain('Requires instances on separate topology domains')
   expect(render()).toContain('required · spec.affinity.podAntiAffinityType')
+})
+
+it('shows one shared denial while retaining every declaration with empty observation cells', () => {
+  const host = document.createElement('div'); host.innerHTML = render()
+  const table = [...host.querySelectorAll('table')].find((t) => t.textContent?.includes('Reported by instance'))!
+  expect(table.querySelectorAll('tbody tr')).toHaveLength(2)
+  for (const r of table.querySelectorAll('tbody tr')) {
+    expect(r.children[2].textContent).toBe('')
+    expect(r.children[3].textContent).toBe('')
+  }
+  expect(host.textContent!.match(/Reading instance values needs/g)).toHaveLength(1)
+})
+it('labels the operator target image without claiming a running image', () => {
+  state.cluster.spec = { imageName: 'declared:17' }; state.cluster.status.image = 'target:17'
+  const html = render()
+  expect(html).toContain('Target image (status.image): target:17')
+  expect(html).not.toContain('Running target:17')
 })

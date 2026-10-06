@@ -5,7 +5,7 @@
 
 import { formatAge, type HealthLevel } from '../resources/resource-utils'
 import { formatGrant, type Grant } from '../../utils/grant'
-import { cnpgFormatLag, cnpgLagTone, cnpgReplicationTone, cnpgSustainedLagProblemId, type CNPGFleetRow } from './workspace'
+import { CNPG_PROMETHEUS_NOT_CONNECTED, cnpgFormatLag, cnpgLagTone, cnpgReplicationTone, cnpgSustainedLagProblemId, type CNPGFleetRow } from './workspace'
 import { type Fact } from '../facts'
 import { type FoldSummary } from '../ui/FoldSection'
 import { worseTone } from '../ui/status-tone'
@@ -442,7 +442,7 @@ export function cnpgDimensions({
 }): CNPGDimension[] {
   return [
     servingDimension(row, ha),
-    replicationDimension(row, replication, replicationGap),
+    replicationDimension(row, replication, replicationGap, ha),
     storage ?? storageDimension(row),
     protectionDimension(row),
   ]
@@ -456,7 +456,7 @@ function volumeDimension(row: CNPGFleetRow): CNPGDimension {
   const base = { id: 'storage' as const, label: 'Storage' }
   const disk = row.disk
   if (!disk) return { ...base, tone: 'unknown', text: 'Reading…', source: 'Reading volume usage' }
-  if (disk.tone === 'unknown') return { ...base, tone: 'unknown', text: [disk.text, disk.source].filter(Boolean).join(': '), source: disk.detail ?? '' }
+  if (disk.tone === 'unknown') return { ...base, tone: 'unknown', text: disk.source === CNPG_PROMETHEUS_NOT_CONNECTED ? disk.text : [disk.text, disk.source].filter(Boolean).join(': '), source: disk.source === CNPG_PROMETHEUS_NOT_CONNECTED ? '' : disk.detail ?? '' }
   return { ...base, tone: disk.tone, text: disk.text, source: disk.source ?? 'Fullest volume' }
 }
 
@@ -499,8 +499,28 @@ function servingDimension(row: CNPGFleetRow, ha?: CNPGClusterHA): CNPGDimension 
 
 // A standby measured far behind for the whole window outranks what the live
 // read shows: the chip must not read calmer than the finding below it.
-function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap?: string): CNPGDimension {
-  const dim = withStandbyGaps(row, liveReplicationDimension(row, live, gap))
+function replicationDimension(row: CNPGFleetRow, live?: CNPGReplicationLive, gap?: string, ha?: CNPGClusterHA): CNPGDimension {
+  let dim = withStandbyGaps(row, liveReplicationDimension(row, live, gap))
+  if (!row.hibernated && !row.replicaCluster && (row.instances.desired ?? 0) > 1) {
+    const primary = row.cluster?.status?.currentPrimary
+    const pods = ha?.pods.state === 'ok' ? ha.instances.map((i) => ({ name: i.pod, ready: i.ready })) : row.podReadiness ? row.pods : undefined
+    if (pods && primary) {
+      const expected = ha?.pods.state === 'ok' ? ha.expectedInstances ?? row.cluster?.status?.instanceNames ?? [] : row.cluster?.status?.instanceNames ?? []
+      const missing = expected.filter((name: string) => name !== primary && !pods.some((p) => p.name === name))
+      if (!live && missing.length > 0) {
+        const otherGaps = row.problems.filter((p) => p.id.startsWith(`standby:${row.key}:`) && !missing.includes(p.subject.name))
+        const measuredGaps = withStandbyGaps({ ...row, problems: otherGaps }, liveReplicationDimension(row, live, gap))
+        dim = {
+          ...dim, tone: worseTone(dim.tone, 'degraded'),
+          text: `Expected standby${missing.length === 1 ? '' : 's'} ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not running${otherGaps.length > 0 ? ` · ${measuredGaps.text}` : ''}`,
+          source: `${otherGaps.length > 0 ? `${measuredGaps.source}; ` : ''}Instance Pods; streaming not measured: ${gap ?? 'not read'}`,
+        }
+      }
+      if (pods.some((p) => p.name === primary && p.ready === true) && !pods.some((p) => p.name !== primary && p.ready === true)) dim = {
+        ...dim, tone: worseTone(dim.tone, 'degraded'), source: `${dim.source}. No ready standby to fail over to`,
+      }
+    }
+  }
   const sustained = row.problems.find((p) => p.id === cnpgSustainedLagProblemId(row.key))
   if (!sustained) return dim
   const tone: HealthLevel = sustained.severity === 'critical' ? 'unhealthy' : 'degraded'

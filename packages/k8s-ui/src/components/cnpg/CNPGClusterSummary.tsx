@@ -17,11 +17,12 @@ import { FoldSection, SectionHeading } from '../ui/FoldSection'
 
 function ReadyCount({ row }: { row: CNPGFleetRow }) {
   const r = cnpgReadyInstances(row)
-  if (!r.note) return <>{r.text}</>
+  if (row.instances.ready === null) return <>Not reported by the operator{row.podReadiness && <span className="block text-xs text-theme-text-secondary">{row.podReadiness.ready}{row.instances.desired !== null ? ` of ${row.instances.desired}` : ''} instance Pods ready</span>}</>
+  if (!r.note) return <>{r.text} ready</>
   return (
     <Tooltip content={r.note} position="top">
       <span className={clsx('font-medium', toneTextClass(r.tone ?? 'unknown'))}>
-        {r.text} Pods <Badge severity="warning" size="sm">status says {row.instances.ready}</Badge>
+        {r.text} Pods ready <Badge severity="warning" size="sm">status says {row.instances.ready}</Badge>
       </span>
     </Tooltip>
   )
@@ -203,7 +204,7 @@ export function CNPGClusterSummary({
     <div className="px-4 py-4">
       {lead}
       {top && (
-        <ProblemCallout
+        <div className="[&_.mt-5]:mt-2"><ProblemCallout
           rootKind="Cluster"
           problem={top}
           onNavigate={onNavigate}
@@ -214,7 +215,7 @@ export function CNPGClusterSummary({
                 )
               : null
           }
-        />
+        /></div>
       )}
       {top && rest > 0 && !problemsLink && (
         <Collapse open={showRest} id={restDisclosure.panelId}>
@@ -245,7 +246,7 @@ export function CNPGClusterSummary({
           <FactRow label="Instances">
             <div>
               <span>
-                <ReadyCount row={row} /> ready
+                <ReadyCount row={row} />
                 {row.cluster?.status?.currentPrimary && !row.primaryConflict && (
                   <span className="text-theme-text-secondary"> · primary <span className="font-mono">{row.cluster.status.currentPrimary}</span></span>
                 )}

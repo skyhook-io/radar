@@ -10,7 +10,7 @@ import { useCNPGSessions, type CNPGBackend, type CNPGSessionInstance, type CNPGS
 import { useToast } from '../ui/Toast'
 import { buildBlockingTree, cnpgConnectionFigure, cnpgNoMetricsReadings, countVictims, type BlockingNode } from './blocking'
 import { RefreshFailedNotice } from '../workspace/layout'
-import { Denied, PrimaryPrerequisite } from './runtimeParts'
+import { Denied } from './runtimeParts'
 
 function age(s?: number): string {
   if (s === undefined || s === null) return '—'
@@ -30,15 +30,12 @@ export function CNPGBlockingSessions({
   namespace,
   cluster,
   pod,
-  aggregatesGap,
   headroom = true,
 }: {
   namespace: string
   cluster: string
   /** The instance to read; undefined reads the primary. */
   pod?: string
-  /** Why the exporter's aggregate counts are not shown above; undefined when they are. */
-  aggregatesGap?: string
   /** false when the host already shows the connection figure. */
   headroom?: boolean
 }) {
@@ -55,7 +52,7 @@ export function CNPGBlockingSessions({
         {!data && q.isLoading && <PaneLoader label="Reading pg_stat_activity…" className="h-20" />}
         {!data && !q.isLoading && <div className="text-sm text-theme-text-tertiary">Sessions could not be read: {q.error instanceof Error ? q.error.message : 'unknown error'}</div>}
         <RefreshFailedNotice queries={[q]} />
-        {data && <Body namespace={namespace} cluster={cluster} data={data} aggregatesGap={aggregatesGap} headroom={headroom} />}
+        {data && <Body namespace={namespace} cluster={cluster} data={data} headroom={headroom} />}
       </div>
       <div className="border-t border-theme-border px-4 py-2 text-xs text-theme-text-tertiary">
         Source: pg_stat_activity and pg_blocking_pids over pods/exec.
@@ -69,20 +66,17 @@ function Body({
   namespace,
   cluster,
   data,
-  aggregatesGap,
   headroom,
 }: {
   namespace: string
   cluster: string
   data: CNPGSessionsResponse
-  aggregatesGap?: string
   headroom: boolean
 }) {
   if (data.state === 'denied') return <Denied title="No access to blocking detail" grant={formatGrant(data.permission.grant) ?? 'create pods/exec'}>
-    Who blocks whom is read inside PostgreSQL, which needs exec into the instance.{' '}
-    {aggregatesGap ? `The aggregate session counts are unavailable too: ${aggregatesGap}.` : 'The aggregate counts above come from the metrics exporter and still apply.'}
+    Who blocks whom is read inside PostgreSQL, which needs exec into the instance.
   </Denied>
-  if (data.state === 'unavailable') return <PrimaryPrerequisite namespace={namespace} cluster={cluster} />
+  if (data.state === 'unavailable') return <div className="text-sm text-theme-text-tertiary">Blocking detail not measured.</div>
   if (data.state !== 'ok') {
     return (
       <>

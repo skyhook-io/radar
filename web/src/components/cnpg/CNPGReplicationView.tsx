@@ -62,10 +62,10 @@ function InstanceFacts({ inst, primaryVersion }: { inst: CNPGRuntimeInstance; pr
   return (
     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-theme-text-secondary">
       {s.roleDetail && s.roleDetail !== 'replayPaused' && <span>{CNPG_ROLE_DETAIL_TEXT[s.roleDetail]}</span>}
-      {s.timeline !== undefined && <span className="font-mono">TL {s.timeline}</span>}
+      {s.timeline !== undefined && <span className="font-mono">timeline {s.timeline}</span>}
       {s.instanceManagerVersion && (
         <span className={skew ? toneTextClass('degraded') : undefined}>
-          manager {s.instanceManagerVersion}
+          CNPG instance manager {s.instanceManagerVersion}
           {skew ? ` (primary runs ${primaryVersion})` : ''}
         </span>
       )}
@@ -175,7 +175,7 @@ export function CNPGReplicationView({
           )}
           {primary && (
             <>
-              <div className="mt-1 font-mono text-xs text-theme-text-secondary">LSN {primary.status.currentLsn ?? '—'}</div>
+              <div className="mt-1 font-mono text-xs text-theme-text-secondary">WAL position {primary.status.currentLsn ?? '—'}</div>
               <PodLine pod={pods.get(primary.pod)} />
               <InstanceFacts inst={primary} />
               <SourceState label="Status" state={primary.status.state} error={primary.status.error ?? primary.status.reason} />

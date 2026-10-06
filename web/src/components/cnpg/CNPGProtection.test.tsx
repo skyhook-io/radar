@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it, vi, afterEach } from 'vitest'
 import { buildCNPGFleet, CNPG_WORKSPACE_KEYS, type CNPGWorkspaceResponse, type CNPGKindCoverage } from '@skyhook-io/k8s-ui'
@@ -87,7 +88,7 @@ it('explains absent WAL storage and suppresses ObjectStore-only footnotes on fle
   for (const scope of [undefined, { namespace: 'pg', name: 'payments' }]) {
     const html = render({ clusters: [cluster] }, { state: 'full' }, '', scope)
     expect(html).toContain('Not archived: no destination configured')
-    expect(html).toContain('point-in-time recovery is not possible')
+    expect(html).toContain('point-in-time recovery is unavailable')
     expect(html).toContain('Operator report')
     expect(html).toContain('aria-expanded="false"')
     expect(html).toContain('None: no backup destination')
@@ -112,4 +113,13 @@ it('gives schedule state space and wraps the long next-run heading without chang
   expect(table).toContain('width:25%')
   expect(table).toContain('block whitespace-normal')
   expect(table).toContain('whitespace-nowrap')
+})
+
+it('uses the Configuration card gutter and SectionHeading in scoped recovery evidence', () => {
+  const cluster = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'pg', namespace: 'pg' }, spec: {}, status: {} }
+  const host = document.createElement('div'); host.innerHTML = render({ clusters: [cluster] }, { state: 'full' }, '', { namespace: 'pg', name: 'pg' })
+  const title = [...host.querySelectorAll('h3')].find((h) => h.textContent === 'Recovery evidence')!
+  expect(title.classList.contains('uppercase')).toBe(true)
+  expect(title.closest('section')?.classList.contains('px-4')).toBe(true)
+  expect(title.closest('section')?.parentElement?.classList.contains('p-4')).toBe(true)
 })

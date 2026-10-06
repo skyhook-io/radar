@@ -8,7 +8,7 @@ const live = vi.hoisted(() => ({ denied: false, empty: false, count: 1, sessionR
 vi.mock('../../api/cnpg', () => ({ useCNPGRuntime: () => ({ data: { sampledAt: '2026-10-05T12:00:00Z', permission: { proxy: live.denied ? 'denied' : 'allowed' }, instances: live.empty ? [] : Array.from({ length: live.count }, (_, i) => ({ pod: `pg-${i + 1}`, role: i === 0 ? 'primary' : 'replica', metrics: live.metrics })) } }) }))
 vi.mock('../../api/cnpg-sessions', () => ({ useCNPGSessions: () => ({ data: live.sessionRead }) }))
 vi.mock('../../api/cnpg-history', () => ({ useCNPGClusterHistory: () => ({}) }))
-vi.mock('./CNPGBlockingSessions', () => ({ CNPGBlockingSessions: () => null }))
+vi.mock('./CNPGBlockingSessions', () => ({ CNPGBlockingSessions: () => live.sessionRead?.state === 'denied' ? <span>create pods/exec</span> : null }))
 vi.mock('./CNPGTrends', () => ({ CNPGTrends: () => null, useSampleBuffer: () => [] }))
 function render(section: string) {
   return renderToStaticMarkup(<MemoryRouter initialEntries={[`/?section=${section}`]}><CNPGPerformance namespace="pg" name="pg" /></MemoryRouter>)
@@ -58,7 +58,7 @@ it('hides a single-instance picker, names that instance in the card, and retains
   expect(render('sessions')).toContain('<select')
   live.count = 1
 })
-it('uses the primary prerequisite for empty Sessions, with exec denial taking precedence', () => {
+it('uses one primary prerequisite for empty Sessions while Blocking owns exec denial', () => {
   live.empty = true
   const html = render('sessions')
   expect(html).toContain('Available once the primary is running')
@@ -67,6 +67,7 @@ it('uses the primary prerequisite for empty Sessions, with exec denial taking pr
   live.sessionRead = { state: 'denied', permission: { exec: 'denied', grant: { verb: 'create', resource: 'pods', subresource: 'exec', namespace: 'pg' } } }
   const denied = render('sessions')
   expect(denied).toContain('create pods/exec')
-  expect(denied).not.toContain('Available once the primary is running')
+  expect(denied).toContain('Available once the primary is running')
+  expect(denied.match(/create pods\/exec/g)).toHaveLength(1)
   live.empty = false; live.sessionRead = undefined
 })

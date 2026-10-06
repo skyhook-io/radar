@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useState, type ReactNode, type CSSProperties } from 'react'
 import { clsx } from 'clsx'
 import yaml from 'yaml'
 import { HardDrive } from 'lucide-react'
@@ -6,7 +6,10 @@ import {
   ActionConfirmDialog,
   AlertBanner,
   Badge,
+  FoldSection,
+  type CNPGProtectionFacts,
   CNPG_DISK_SOURCE,
+  CNPG_NO_WAL_ARCHIVE_DESTINATION,
   PaneLoader,
   StatusDot,
   Tooltip,
@@ -36,6 +39,10 @@ import { useCNPGWriteGuard } from './actions/useCNPGWriteGuard'
 import { buildResizeManifest, cnpgFloorTone, cnpgInstanceDiskTone, cnpgSharedExpansionGap, cnpgSlotRetentionText, cnpgWALUsageFloor } from './storageModel'
 // Binary units throughout, matching claim capacities such as 1Gi.
 import { formatBytes } from './lsn'
+import { cnpgDimensionPath, cnpgWithinDetail } from './paths'
+import type { CNPGRestoreSourceState } from './recovery/restoreModel'
+import { useCNPGNavigate } from './useCNPGNavigate'
+import { useLocation } from 'react-router-dom'
 import { GrantText, Notice, RefreshFailedNotice } from '../workspace/layout'
 
 const CNPG_GROUP = 'postgresql.cnpg.io'
@@ -179,26 +186,29 @@ const CLUSTER_STATE_BADGE: Record<string, 'warning' | 'error' | 'info'> = {
 function VolumeRow({ v, stated, wal }: { v: CNPGStorageVolume; stated: StatedOnce; wal?: CNPGStorageWAL }) {
   const resizing = v.resize.pending || (v.resize.conditions?.length ?? 0) > 0 || !!v.resize.allocatedStatus
   return (
-    <div className="rounded-lg border border-theme-border bg-theme-base p-3">
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-theme-text-primary">{roleTitle(v)}</span>
-        <span className="font-mono text-xs text-theme-text-secondary">{v.claim}</span>
-        {v.clusterState && CLUSTER_STATE_BADGE[v.clusterState] && (
-          <Tooltip content={`Named in the Cluster's status.${v.clusterState}PVC`}>
-            <Badge severity={CLUSTER_STATE_BADGE[v.clusterState]} size="sm">{v.clusterState}</Badge>
-          </Tooltip>
-        )}
-        {v.phase && v.phase !== 'Bound' && <Badge severity="warning" size="sm">{v.phase}</Badge>}
-        <span className="ml-auto font-mono text-xs text-theme-text-secondary">
-          capacity {v.capacity ?? '—'}
-          {v.requested && v.requested !== v.capacity ? ` · requested ${v.requested}` : ''}
-        </span>
+    <div className="grid gap-1 rounded-lg border border-theme-border bg-theme-base p-3 xl:row-span-3 xl:grid-rows-subgrid">
+      <div className="mb-2 space-y-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-medium text-theme-text-primary">{roleTitle(v)}</span>
+          <span className="font-mono text-xs text-theme-text-secondary">{v.claim}</span>
+          <span className="ml-auto font-mono text-xs text-theme-text-secondary">
+            {v.phase === 'Pending' && !v.capacity ? 'No capacity provisioned yet' : `capacity ${v.capacity ?? 'not reported'}`}
+            {v.requested && v.requested !== v.capacity ? ` · requested ${v.requested}` : ''}
+          </span>
+        </div>
+        <div className="flex min-h-5 flex-wrap items-center gap-2">
+          {v.clusterState && CLUSTER_STATE_BADGE[v.clusterState] && (
+            <Tooltip content={`Named in the Cluster's status.${v.clusterState}PVC`}>
+              <Badge severity={CLUSTER_STATE_BADGE[v.clusterState]} size="sm">Operator: {v.clusterState}</Badge>
+            </Tooltip>
+          )}
+          {v.phase && <Badge severity={v.phase === 'Bound' ? 'neutral' : 'warning'} size="sm">Claim: {v.phase}</Badge>}
+        </div>
       </div>
       <UsageBar v={v} stated={stated.usage} floor={cnpgWALUsageFloor(v, wal)} />
       <div className="mt-2 text-xs text-theme-text-secondary">
         <ClassFact v={v} expansionStated={stated.expansion} />
-      </div>
-      {resizing && (
+        {resizing && (
         <div className="mt-1.5 text-xs text-theme-text-secondary">
           <span className="font-medium text-theme-text-primary">Resize</span>
           {v.resize.pending && <> · requested {v.requested} is larger than the capacity the claim reports</>}
@@ -212,12 +222,15 @@ function VolumeRow({ v, stated, wal }: { v: CNPGStorageVolume; stated: StatedOnc
           {v.resize.allocatedStatus && <> · <span className="font-mono">{v.resize.allocatedStatus}</span></>}
         </div>
       )}
+      </div>
     </div>
   )
 }
 
-function WALHolders({ wal, primary, slotStandby }: { wal: CNPGStorageWAL; primary: boolean; slotStandby: (slot: string) => string | undefined }) {
-  if (!['ok', 'partial'].includes(wal.status.state) && !['ok', 'partial'].includes(wal.metrics.state)) {
+function WALHolders({ wal, primary, slotStandby, walArchiving }: { walArchiving?: CNPGProtectionFacts['walArchiving']; wal: CNPGStorageWAL; primary: boolean; slotStandby: (slot: string) => string | undefined }) {
+  const noArchive = walArchiving?.text === CNPG_NO_WAL_ARCHIVE_DESTINATION
+  const statusRead = ['ok', 'partial'].includes(wal.status.state)
+  if (!noArchive && !statusRead && !['ok', 'partial'].includes(wal.metrics.state)) {
     return (
       <div className="text-xs text-theme-text-tertiary">
         WAL facts unavailable: {wal.status.error || wal.metrics.error || wal.status.state}
@@ -237,10 +250,13 @@ function WALHolders({ wal, primary, slotStandby }: { wal: CNPGStorageWAL; primar
         />
         <WALFact
           label="Waiting to archive"
-          value={wal.readyToArchive !== undefined ? `${wal.readyToArchive} files` : '—'}
-          tone={wal.archivingFailed ? 'unhealthy' : wal.readyToArchive ? 'degraded' : undefined}
+          value={noArchive ? walArchiving.text : wal.readyToArchive !== undefined ? `${wal.readyToArchive} files` : '—'}
+          tone={noArchive ? undefined : wal.archivingFailed ? 'unhealthy' : wal.readyToArchive ? 'degraded' : undefined}
           detail={
-            wal.archivingFailed
+            noArchive ? <FoldSection title="Instance manager record" summary="" attention={false}>
+              <div>{!statusRead ? `Archiving record not read: ${wal.status.error || wal.status.reason || wal.status.state}.` : wal.lastArchivedAt ? `Last archived ${formatAge(wal.lastArchivedAt)} ago, as recorded by the instance manager.` : 'Last archived time not reported by the instance manager.'}</div>
+              {statusRead && wal.readyToArchive !== undefined && <div>{wal.readyToArchive} files waiting, as recorded by the instance manager.</div>}
+            </FoldSection> : wal.archivingFailed
               ? `archiving failing${wal.lastFailedWal ? ` at ${wal.lastFailedWal}` : ''}${wal.lastFailedAt ? `, ${formatAge(wal.lastFailedAt)} ago` : ''}`
               : !primary
                 ? 'a standby; the primary archives'
@@ -249,7 +265,7 @@ function WALHolders({ wal, primary, slotStandby }: { wal: CNPGStorageWAL; primar
                   : undefined
           }
           source="Instance manager readyWalFiles"
-          missing={wal.status.state !== 'ok' ? wal.status.error || wal.status.reason || wal.status.state : undefined}
+          missing={!noArchive && wal.status.state !== 'ok' ? wal.status.error || wal.status.reason || wal.status.state : undefined}
         />
         <WALFact
           label="Held by replication slots"
@@ -268,7 +284,7 @@ function WALHolders({ wal, primary, slotStandby }: { wal: CNPGStorageWAL; primar
         />
       </div>
       <div className="mt-2 text-[11.5px] text-theme-text-tertiary">
-        These overlap (a slot can hold the same segments that wait for the archive), so they are not added up.
+        {noArchive ? 'Slot retention is part of WAL on disk, so these measurements are not added up.' : 'These overlap (a slot can hold the same segments that wait for the archive), so they are not added up.'}
         {wal.volume && <> WAL lives on <span className="font-mono">{wal.volume}</span>.</>}
       </div>
     </div>
@@ -307,47 +323,43 @@ function InstanceCard({
   stated,
   slotStandby,
   notRunning,
+  walArchiving,
+  volumeRows,
 }: {
+  volumeRows: number
+  walArchiving?: CNPGProtectionFacts['walArchiving']
   notRunning?: boolean
   inst: CNPGStorageInstance
   walCoverage: CNPGClusterStorageResponse['wal']
   stated: StatedOnce
   slotStandby: (slot: string) => string | undefined
 }) {
-  const roleLabel = notRunning && inst.role === 'replica' ? 'expected standby · not running' : inst.role === 'primary' ? 'primary' : inst.role === 'replica' ? 'replica' : inst.role === 'noInstance' ? 'no instance' : 'role unknown'
+  const roleLabel = notRunning ? inst.role === 'replica' ? 'expected standby · not running' : inst.role === 'primary' ? 'expected primary · not running' : inst.role === 'noInstance' ? 'no instance' : inst.volumes.some((v) => v.clusterState === 'initializing') ? 'expected first instance · not running' : 'expected instance · not running' : inst.role === 'primary' ? 'primary' : inst.role === 'replica' ? 'replica' : inst.role === 'noInstance' ? 'no instance' : 'role unknown'
   const diskTone = cnpgInstanceDiskTone(inst.volumes, inst.wal)
   return (
-    <Card
-      title={
-        <span className="flex items-center gap-2">
-          <StatusDot tone={diskTone} />
-          <span className="font-mono">{inst.name}</span>
-          <Badge severity="neutral" size="sm">{roleLabel}</Badge>
-        </span>
-      }
-    >
-      <div className="space-y-2">
-        {inst.volumes.length === 0 ? (
-          <div className="text-sm text-theme-text-tertiary">No claims read for this instance.</div>
-        ) : (
-          inst.volumes.map((v) => <VolumeRow key={v.claim} v={v} stated={stated} wal={inst.wal} />)
-        )}
+    <section className="grid gap-y-3 overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm xl:grid-rows-subgrid xl:[grid-row:span_var(--cnpg-instance-rows)]" style={{ '--cnpg-instance-rows': 2 + volumeRows * 3 } as CSSProperties}>
+      <div className="flex items-center gap-2 border-b border-theme-border px-4 py-2.5 text-sm font-semibold text-theme-text-primary">
+        <StatusDot tone={diskTone} />
+        <span className="font-mono">{inst.name}</span>
+        <Badge severity="neutral" size="sm">{roleLabel}</Badge>
       </div>
-      <div className="mt-4">
+      {inst.volumes.map((v) => <div key={v.claim} className="mx-4 grid xl:row-span-3 xl:grid-rows-subgrid"><VolumeRow v={v} stated={stated} wal={inst.wal} /></div>)}
+      {Array.from({ length: Math.max(0, volumeRows - inst.volumes.length) }, (_, i) => <div key={`unread-${i}`} className={clsx('mx-4 xl:row-span-3', !(i === 0 && inst.volumes.length === 0) && 'hidden xl:block')}>{i === 0 && inst.volumes.length === 0 && <div className="text-sm text-theme-text-tertiary">No claims read for this instance.</div>}</div>)}
+      <div className="px-4 pb-4">
         <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">What is holding WAL</div>
         {inst.wal ? (
-          <WALHolders wal={inst.wal} primary={inst.role === 'primary'} slotStandby={slotStandby} />
+          <WALHolders wal={inst.wal} primary={inst.role === 'primary'} slotStandby={slotStandby} walArchiving={walArchiving} />
+        ) : notRunning ? (
+          <div className="text-xs text-theme-text-tertiary">WAL cannot be measured until the instance starts</div>
+        ) : walCoverage.state === 'ok' ? (
+          <div className="text-xs text-theme-text-tertiary">No running instance to read</div>
         ) : (
-          walCoverage.state === 'ok' ? (
-            <div className="text-xs text-theme-text-tertiary">No running instance to read</div>
-          ) : (
-            <Tooltip content={walCoverage.state === 'denied' ? `No access: needs ${formatGrant(walCoverage.grant)}` : walCoverage.reason ?? walCoverage.state}>
-              <div className="text-xs text-theme-text-tertiary">Unknown</div>
-            </Tooltip>
-          )
+          <Tooltip content={walCoverage.state === 'denied' ? `No access: needs ${formatGrant(walCoverage.grant)}` : walCoverage.reason ?? walCoverage.state}>
+            <div className="text-xs text-theme-text-tertiary">Unknown</div>
+          </Tooltip>
         )}
       </div>
-    </Card>
+    </section>
   )
 }
 
@@ -355,12 +367,12 @@ function InstanceCard({
 function coverageLine(label: string, c: { state: string; grant?: Grant; reason?: string }, plural = false): string | null {
   const needs = plural ? 'need' : 'needs'
   if (c.state === 'ok') return null
-  if (c.state === 'noPrometheus') return `${label} ${needs} Prometheus. ${c.reason ?? 'Radar is not connected to one'}.`
+  if (c.state === 'noPrometheus') return `${label} ${needs} Prometheus: ${c.reason?.split(/\s+Candidate /)[0] ?? 'Radar is not connected to one'}`
   if (c.state === 'denied') return `${label} ${needs} ${formatGrant(c.grant) ?? 'a grant you do not have'}.`
   return `${label}: ${c.reason ?? c.state}`
 }
 
-export function CNPGStorage({ namespace, name, primary, runtime, clusterObject }: { namespace: string; name: string; primary?: CNPGRuntimeInstance; runtime?: UseQueryResult<CNPGRuntimeResponse>; clusterObject?: any }) {
+export function CNPGStorage({ namespace, name, primary, runtime, clusterObject, restoreState = 'unknown', walArchiving }: { restoreState?: CNPGRestoreSourceState; walArchiving?: CNPGProtectionFacts['walArchiving']; namespace: string; name: string; primary?: CNPGRuntimeInstance; runtime?: UseQueryResult<CNPGRuntimeResponse>; clusterObject?: any }) {
   const q = useCNPGClusterStorage(namespace, name)
   const caps = useCNPGClusterCapabilities(namespace, name)
   const patch = caps.data?.actions.reload
@@ -390,7 +402,10 @@ export function CNPGStorage({ namespace, name, primary, runtime, clusterObject }
     coverageLine('WAL', data.wal),
   ].filter((x): x is string => !!x)
   if (data.usage.isolation?.mode === 'unverified') notes.push(`Used space: ${data.usage.isolation.note}.`)
+  const discoveryCandidates = data.usage.state === 'noPrometheus' ? data.usage.reason?.match(/\s+(Candidate [\s\S]*)$/)?.[1] : undefined
   const allVolumes = data.instances.flatMap((i) => i.volumes)
+  const volumeRows = Math.max(1, ...data.instances.map((i) => i.volumes.length))
+  const notStarted = !!clusterObject && !clusterObject.status?.currentPrimary && !!runtime?.data && runtime.data.instances.length === 0 && data.instances.length > 0 && allVolumes.length > 0 && allVolumes.every((v) => v.clusterState === 'initializing' && v.phase === 'Pending' && !v.capacity)
   // The standby a CloudNativePG HA slot is kept for, so retained WAL names its cause.
   const slotStandby = (slot: string) => cnpgHASlotInstance(clusterObject, slot, data.instances.map((i) => i.name))
   const expansionGap = cnpgSharedExpansionGap(allVolumes)
@@ -413,6 +428,7 @@ export function CNPGStorage({ namespace, name, primary, runtime, clusterObject }
           {notes.map((n) => (
             <div key={n} className="whitespace-pre-line">{n}</div>
           ))}
+          {discoveryCandidates && <div className="mt-2"><FoldSection title="Discovery candidates" summary="" attention={false}><div>{discoveryCandidates}</div></FoldSection></div>}
         </Notice>
       )}
       {data.excluded && data.excluded.length > 0 && (
@@ -426,13 +442,13 @@ export function CNPGStorage({ namespace, name, primary, runtime, clusterObject }
         </Notice>
       )}
 
-      <div className="grid items-start gap-4 xl:grid-cols-2">
+      <div className="grid gap-4 xl:grid-cols-2">
         {data.instances.map((inst) => (
-          <InstanceCard key={inst.name} inst={inst} notRunning={!!runtime?.data && !runtime.data.instances.some((i) => i.pod === inst.name)} walCoverage={data.wal} stated={stated} slotStandby={slotStandby} />
+          <InstanceCard volumeRows={volumeRows} key={inst.name} inst={inst} notRunning={!!runtime?.data && !runtime.data.instances.some((i) => i.pod === inst.name)} walCoverage={data.wal} stated={stated} slotStandby={slotStandby} walArchiving={walArchiving} />
         ))}
       </div>
 
-      <ExpansionCard data={data} volumes={allVolumes} onResize={setResize} canResize={canResize} resizeReason={resizeReason} grant={patch?.permission === 'denied' ? patch.grant : undefined} onRetry={() => void caps.refetch()} />
+      <ExpansionCard restoreState={restoreState} notStarted={notStarted} namespace={namespace} name={name} data={data} volumes={allVolumes} onResize={setResize} canResize={canResize} resizeReason={resizeReason} grant={patch?.permission === 'denied' ? patch.grant : undefined} onRetry={() => void caps.refetch()} />
 
       <Card title="Logical database sizes (primary)" footer="pg_database_size for each database: the data PostgreSQL holds, not the space the volume uses.">
         {(primary?.metrics.state === 'ok' || primary?.metrics.state === 'partial') && primary.metrics.databaseSizes?.length ? (
@@ -455,7 +471,7 @@ export function CNPGStorage({ namespace, name, primary, runtime, clusterObject }
         )}
       </Card>
 
-      {resize && <ResizeDialog namespace={namespace} name={name} target={resize} volumes={allVolumes} disabledReason={resizeReason} onClose={() => setResize(null)} />}
+      {resize && <ResizeDialog restoreState={restoreState} notStarted={notStarted} namespace={namespace} name={name} target={resize} volumes={allVolumes} disabledReason={resizeReason} onClose={() => setResize(null)} />}
     </div>
   )
 }
@@ -464,12 +480,12 @@ function targetVolumes(t: CNPGStorageTarget, volumes: CNPGStorageVolume[]): CNPG
   return volumes.filter((v) => v.role === t.role && (t.role !== 'PG_TABLESPACE' || v.tablespace === t.tablespace))
 }
 
-function expansionVerdict(vols: CNPGStorageVolume[]): { text: string; tone?: 'degraded' } {
+function expansionVerdict(vols: CNPGStorageVolume[], restoreState: CNPGRestoreSourceState = 'unknown', notStarted = false): { text: string; tone?: 'degraded' } {
   if (vols.length === 0) return { text: 'No claims read, so whether the class allows expansion is unknown' }
   const blocked = vols.filter((v) => v.storageClass.allowVolumeExpansion === false)
   if (blocked.length > 0) return {
     text: blocked.length === vols.length
-      ? 'The StorageClass does not allow expansion: a larger size will not resize the existing claims. To get more space, restore into a new Cluster with a larger size or a class that expands, then move applications to it.'
+      ? 'The StorageClass does not allow expansion: a larger size will not resize the existing claims. ' + (notStarted ? 'The first instance has not started. Edit the declared size for future claims; the existing Pending claims keep their size and class. A fresh Cluster can use the new settings.' : restoreState === 'available' ? 'Restore into a new Cluster with a larger size or a class that expands, then move applications to it.' : restoreState === 'none' ? 'An expandable class applies to new claims. Set up backups before moving to a new Cluster.' : 'An expandable class applies to new claims. A restore source has not been verified.')
       : 'Some StorageClasses do not allow expansion: their existing claims will not grow. Editing changes the declared size.',
     tone: 'degraded',
   }
@@ -478,7 +494,9 @@ function expansionVerdict(vols: CNPGStorageVolume[]): { text: string; tone?: 'de
   return { text: 'The StorageClass allows expansion: the operator can resize each claim' }
 }
 
-function ExpansionCard({ data, volumes, onResize, canResize, resizeReason, grant, onRetry }: { data: CNPGClusterStorageResponse; volumes: CNPGStorageVolume[]; onResize: (t: CNPGStorageTarget) => void; canResize: boolean; resizeReason?: string; grant?: Grant; onRetry: () => void }) {
+function ExpansionCard({ restoreState, notStarted, namespace, name, data, volumes, onResize, canResize, resizeReason, grant, onRetry }: { restoreState: CNPGRestoreSourceState; notStarted: boolean; namespace: string; name: string; data: CNPGClusterStorageResponse; volumes: CNPGStorageVolume[]; onResize: (t: CNPGStorageTarget) => void; canResize: boolean; resizeReason?: string; grant?: Grant; onRetry: () => void }) {
+  const navigate = useCNPGNavigate()
+  const location = useLocation()
   const inUse = data.expansion.resizeInUseVolumes
   return (
     <Card
@@ -500,7 +518,7 @@ function ExpansionCard({ data, volumes, onResize, canResize, resizeReason, grant
       </div>}
       <div className="space-y-3">
         {data.expansion.targets.map((t) => {
-          const verdict = expansionVerdict(targetVolumes(t, volumes))
+          const verdict = expansionVerdict(targetVolumes(t, volumes), restoreState, notStarted)
           return (
             <div key={t.field} className="flex flex-wrap items-center gap-x-4 gap-y-1">
               <div className="min-w-0 flex-1">
@@ -508,7 +526,7 @@ function ExpansionCard({ data, volumes, onResize, canResize, resizeReason, grant
                   {roleTitle(t)} · <span className="font-mono text-xs">{t.field}</span>
                   <span className="text-theme-text-secondary"> = {t.declared ?? 'not set'}</span>
                 </div>
-                <div className={clsx('text-xs', verdict.tone ? toneTextClass(verdict.tone) : 'text-theme-text-tertiary')}>{verdict.text}</div>
+                <div className={clsx('text-xs', verdict.tone ? toneTextClass(verdict.tone) : 'text-theme-text-tertiary')}>{verdict.text}{verdict.tone && restoreState === 'none' && !notStarted && targetVolumes(t, volumes).every((v) => v.storageClass.allowVolumeExpansion === false) && <>{' '}<button type="button" onClick={() => { const target = cnpgDimensionPath(namespace, name, new URLSearchParams(location.search).get('ctx') ?? undefined, 'protection'); const inPlace = cnpgWithinDetail(location.pathname, location.search, target); navigate(inPlace ?? target, { replace: !!inPlace, state: location.state }) }} className="text-accent-text hover:underline">Backups →</button></>}</div>
               </div>
               <button
                 type="button"
@@ -527,6 +545,8 @@ function ExpansionCard({ data, volumes, onResize, canResize, resizeReason, grant
 }
 
 function ResizeDialog({
+  restoreState,
+  notStarted,
   namespace,
   name,
   target,
@@ -537,6 +557,8 @@ function ResizeDialog({
   namespace: string
   name: string
   target: CNPGStorageTarget
+  restoreState: CNPGRestoreSourceState
+  notStarted: boolean
   volumes: CNPGStorageVolume[]
   disabledReason?: string
   onClose: () => void
@@ -545,7 +567,7 @@ function ResizeDialog({
   const [size, setSize] = useState(target.declared ?? '')
   const [manifest, setManifest] = useState<string | null>(null)
   const guard = useCNPGWriteGuard({ namespace, name, scope: { kind: 'spec', paths: [target.field] } })
-  const verdict = expansionVerdict(targetVolumes(target, volumes))
+  const verdict = expansionVerdict(targetVolumes(target, volumes), restoreState, notStarted)
 
   if (manifest) {
     return <CreateResourceDialog open onClose={onClose} initialYaml={manifest} initialMode="apply" title={`Edit declared ${roleTitle(target).toLowerCase()} size of ${name}`} />
@@ -575,7 +597,7 @@ function ResizeDialog({
       subject={{ kind: 'Cluster', namespace, name }}
       effect={
         <>
-          Changes <span className="font-mono">{target.field}</span> from {target.declared ?? 'unset'} to the size you enter. {verdict.text}.
+          Changes <span className="font-mono">{target.field}</span> from {target.declared ?? 'unset'} to the size you enter. {verdict.text}
         </>
       }
       guard={guard.node}

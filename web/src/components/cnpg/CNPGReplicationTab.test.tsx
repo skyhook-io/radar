@@ -1,9 +1,9 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it, vi } from 'vitest'
 import { CNPGReplicationTab, OtherSlots } from './CNPGReplicationTab'
-const state = vi.hoisted(() => ({ haProps: {} as any, navigate: vi.fn(), runtime: undefined as any }))
+const state = vi.hoisted(() => ({ haProps: {} as any, navigate: vi.fn(), runtime: undefined as any, ha: undefined as any }))
 vi.mock('../../api/cnpg', () => ({ useCNPGRuntime: () => ({ data: state.runtime }), useCNPGClusterCapabilities: () => ({}) }))
-vi.mock('../../api/cnpg-ha', () => ({ useCNPGClusterHA: () => ({}), cnpgInstanceLive: () => undefined, cnpgInstanceLiveUnavailable: () => 'not read' }))
+vi.mock('../../api/cnpg-ha', () => ({ useCNPGClusterHA: () => ({ data: state.ha }), cnpgInstanceLive: () => undefined, cnpgInstanceLiveUnavailable: () => 'not read' }))
 vi.mock('./useCNPGSidebarWorkspace', () => ({ useCNPGFleet: () => ({ fleet: { rows: [{ name: 'pg', namespace: 'db', cluster: { status: { currentPrimary: 'pg-1' } } }] } }) }))
 vi.mock('./actions/CNPGInstanceActions', () => ({ CNPGInstanceActions: () => null }))
 vi.mock('./useCNPGNavigate', () => ({ useCNPGNavigate: () => state.navigate }))
@@ -35,12 +35,12 @@ it('associates a slot with a recorded expected standby while keeping unknown ass
 it('distinguishes an empty slot inventory from slots associated with standbys', () => {
   const primary = { pod: 'payments-1', status: { state: 'ok', slots: [] } } as any
   const html = renderToStaticMarkup(<OtherSlots primary={primary} instances={['payments-1']} />)
-  expect(html).toContain('No replication slots on payments-1')
+  expect(html).toContain('No other slots reported')
   expect(html).not.toContain('every slot')
   primary.status.slots = [{ name: '_cnpg_payments_2', type: 'physical' }]
-  expect(renderToStaticMarkup(<OtherSlots primary={primary} instances={['payments-1', 'payments-2']} />)).toContain('The only slot belongs to a standby')
+  expect(renderToStaticMarkup(<OtherSlots primary={primary} instances={['payments-1', 'payments-2']} />)).toContain('No other slots reported')
   primary.status.slotsTruncated = true
-  expect(renderToStaticMarkup(<OtherSlots primary={primary} instances={['payments-1', 'payments-2']} />)).toContain('The one reported slot belongs to a standby')
+  expect(renderToStaticMarkup(<OtherSlots primary={primary} instances={['payments-1', 'payments-2']} />)).toContain('No other slots in the reported inventory; inventory incomplete')
 })
 it('says checked instead of sampled when no instance answered', () => {
   state.runtime = { permission: { proxy: 'allowed' }, sampledAt: '2026-10-05T12:00:00Z', instances: [] }
@@ -58,5 +58,30 @@ it('keeps the replication measurement explanation absent for a lone primary, and
   expect(renderToStaticMarkup(<CNPGReplicationTab namespace="db" name="pg" />)).not.toContain('catch-up measure')
   state.runtime.instances.push({ pod: 'pg-2', role: 'replica', status: { state: 'ok', replayLsn: '0/3000' }, metrics: { state: 'ok' } })
   expect(renderToStaticMarkup(<CNPGReplicationTab namespace="db" name="pg" />)).toContain('catch-up measure')
+  state.runtime = undefined
+})
+
+it('keeps expected and other slots in one section', () => {
+  const primary = { pod: 'orders-1', status: { state: 'ok', slots: [{ name: '_cnpg_orders_2', type: 'physical', active: false }] } } as any
+  const html = renderToStaticMarkup(<OtherSlots primary={primary} instances={['orders-1']} expectedInstances={['orders-2']} />)
+  expect(html.match(/>Replication slots</g)).toHaveLength(1)
+  expect(html).toContain('No other slots reported')
+  expect(html.match(/_cnpg_orders_2/g)).toHaveLength(1)
+})
+it('uses streaming language only for standbys when PostgreSQL reads are denied', () => {
+  state.runtime = { permission: { proxy: 'denied' }, instances: [] }
+  state.ha = { pods: { state: 'ok' }, instances: [{ pod: 'pg-1', role: 'primary', ready: true, restartCount: 0 }, { pod: 'pg-2', role: 'replica', ready: true, restartCount: 0 }] }
+  const html = renderToStaticMarkup(<CNPGReplicationTab namespace="db" name="pg" />)
+  expect(html.match(/streaming not read/g)).toHaveLength(1)
+  expect(html.match(/live PostgreSQL status not read/g)).toHaveLength(1)
+  state.runtime = undefined; state.ha = undefined
+})
+it('names instance position, timeline and manager version without abbreviations', () => {
+  state.runtime = { permission: { proxy: 'allowed' }, instances: [{ pod: 'pg-1', role: 'primary', status: { state: 'ok', currentLsn: '0/4000', timeline: 1, instanceManagerVersion: '1.30.1' }, metrics: { state: 'ok' } }] }
+  const html = renderToStaticMarkup(<CNPGReplicationTab namespace="db" name="pg" />)
+  expect(html).toContain('WAL position')
+  expect(html).toContain('0/4000')
+  expect(html).toContain('timeline 1')
+  expect(html).toContain('CNPG instance manager 1.30.1')
   state.runtime = undefined
 })

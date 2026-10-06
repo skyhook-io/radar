@@ -126,7 +126,7 @@ export function cnpgParametersView(resp: CNPGParametersResponse, declared = resp
   bits.push(read.length > 0 ? `read on ${read.map((i) => i.pod).join(', ')}` : 'no instance answered')
   const missing = (scope?.expectedInstances ?? []).filter((pod) => !resp.instances.some((i) => i.pod === pod))
   if (missing.length > 0) bits.push(`${missing.join(', ')} not running`)
-  if (scope?.declaredInstances !== undefined) bits.push(`${scope.declaredInstances} instances declared`)
+  if (scope?.declaredInstances !== undefined) bits.push(`${scope.declaredInstances} instance${scope.declaredInstances === 1 ? '' : 's'} declared`)
   if (unread.length > 0) bits.push(`not read on ${unread.map((i) => i.pod).join(', ')}`)
   if (pending.size > 0) bits.push(`restart pending on ${[...pending].sort().join(', ')}`)
   if (differing > 0) bits.push(`${differing} differ between instances`)

@@ -322,3 +322,22 @@ describe('restore availability and image review', () => {
     expect(preflightFacts(catalog).find((f) => f.label === 'Image')?.path).toBe('spec.imageCatalogRef')
   })
 })
+
+it('separates declared destinations, unread sources and recorded recovery evidence', async () => {
+  const { assessRestoreSources } = await import('./restoreModel')
+  const cluster = { metadata: { name: 'pg', namespace: 'db' }, spec: { backup: { barmanObjectStore: { destinationPath: 's3://backups' } } }, status: {} as any }
+  const data = { coverage: { backups: { state: 'full' } }, objects: { backups: [] as any[] } } as any
+  expect(assessRestoreSources(data, 'db', cluster).recoveryState).toBe('none')
+  expect(assessRestoreSources(undefined, 'db', cluster).recoveryState).toBe('unknown')
+  expect(assessRestoreSources({ ...data, coverage: { backups: { state: 'denied' } } }, 'db', cluster).recoveryState).toBe('unknown')
+  cluster.status.lastSuccessfulBackup = '2026-10-01T00:00:00Z'
+  expect(assessRestoreSources(data, 'db', cluster).recoveryState).toBe('available')
+  delete cluster.status.lastSuccessfulBackup
+  data.objects.backups = [{ metadata: { name: 'completed', namespace: 'db' }, spec: { cluster: { name: 'pg' }, method: 'volumeSnapshot' }, status: { phase: 'completed' } }]
+  expect(assessRestoreSources(data, 'db', { ...cluster, spec: {} }).recoveryState).toBe('available')
+  const plugin = { ...cluster, spec: { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }] } }
+  data.objects.backups = []
+  expect(assessRestoreSources({ ...data, coverage: { ...data.coverage, objectStores: { state: 'denied' } } }, 'db', plugin).recoveryState).toBe('unknown')
+  data.objects.objectStores = [{ metadata: { name: 'store', namespace: 'db' }, status: { serverRecoveryWindow: { pg: { lastSuccessfulBackupTime: '2026-10-01T00:00:00Z' } } } }]
+  expect(assessRestoreSources({ ...data, coverage: { ...data.coverage, objectStores: { state: 'full' } } }, 'db', plugin).recoveryState).toBe('available')
+})

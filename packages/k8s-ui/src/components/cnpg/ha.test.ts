@@ -384,6 +384,43 @@ it('uses a definitive non-serving verdict from an empty complete endpoint read w
 })
 it('uses storage reasons for loading, missing Prometheus and denied usage', () => {
   expect(cnpgDimensions({ row: row() })[2].text).toBe('Reading…')
-  expect(cnpgDimensions({ row: row({ disk: { tone: 'unknown', text: 'No usage metrics', source: 'Prometheus not connected' } }) })[2].text).toBe('No usage metrics: Prometheus not connected')
+  expect(cnpgDimensions({ row: row({ disk: { tone: 'unknown', text: 'No usage metrics', source: 'Prometheus not connected' } }) })[2].text).toBe('No usage metrics')
   expect(cnpgDimensions({ row: row({ disk: { tone: 'unknown', text: 'No access', source: 'Needs list persistentvolumeclaims in namespace db' } }) })[2].text).toContain('Needs list persistentvolumeclaims')
+})
+
+it('retains the missing standby and failover consequence when streaming is denied', () => {
+  const h = ha({ expectedInstances: ['pg-1', 'pg-2'], instances: [ha().instances[0]] })
+  const d = cnpgDimensions({ row: row(), ha: h, replicationGap: 'needs get pods/proxy in namespace db' }).find((d) => d.id === 'replication')!
+  expect(d.tone).toBe('degraded')
+  expect(d.text).toBe('Expected standby pg-2 is not running')
+  expect(d.source).toContain('streaming not measured: needs get pods/proxy in namespace db')
+  expect(d.source).toContain('No ready standby to fail over to')
+  const unread = cnpgDimensions({ row: row(), ha: { ...h, pods: { state: 'denied' } } }).find((d) => d.id === 'replication')!
+  expect(unread.text).toBe('unassessed')
+  expect(unread.source).not.toContain('No ready standby')
+})
+
+it('keeps the Storage verdict concise while the Storage notice owns discovery details', () => {
+  const r = row({ disk: { tone: 'unknown', text: 'No usage metrics', source: 'Prometheus not connected', detail: 'No working endpoint. Candidate monitoring/prometheus.' } })
+  expect(cnpgDimensions({ row: r }).find((d) => d.id === 'storage')).toMatchObject({ text: 'No usage metrics', source: '' })
+})
+it('adds the failover consequence to measured replication without duplicating streaming facts', () => {
+  const h = ha({ instances: [ha().instances[0]], expectedInstances: ['pg-1', 'pg-2'] })
+  const d = cnpgDimensions({ row: row(), ha: h, replication: { streaming: 0, standbys: 0 } }).find((d) => d.id === 'replication')!
+  expect(d.text).toBe('0 of 1 expected standbys streaming')
+  expect(d.source).toContain('No ready standby to fail over to')
+  expect(d.tone).toBe('degraded')
+})
+
+it('preserves separately measured standby gaps beside missing Pods and avoids inventing a grant', () => {
+  const h = ha({ expectedInstances: ['pg-1', 'pg-2', 'pg-3'], instances: [ha().instances[0], { ...ha().instances[1], pod: 'pg-3' }] })
+  const r = row({ instances: { desired: 3, ready: 2 }, problems: [{ id: 'standby:db/pg:pg-3', severity: 'warning', category: 'replication', title: 'pg-3 receiver is down', subject: { kind: 'Pod', name: 'pg-3' }, source: 'measurement' } as any] })
+  const d = cnpgDimensions({ row: r, ha: h }).find((d) => d.id === 'replication')!
+  expect(d.text).toContain('Expected standby pg-2 is not running')
+  expect(d.text).toContain('pg-3 not receiving WAL')
+  expect(d.source).toContain('pg-3 receiver is down')
+  expect(d.source).toContain('streaming not measured: not read')
+  expect(d.source).not.toContain('needs get pods/proxy')
+  h.instances = [h.instances[0]]
+  expect(cnpgDimensions({ row: r, ha: h }).find((d) => d.id === 'replication')!.text).toContain('Expected standbys pg-2, pg-3 are not running')
 })
