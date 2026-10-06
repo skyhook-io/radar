@@ -1,3 +1,4 @@
+import { CNPGInvestigationAction } from '../cnpg/CNPGClusterTabs'
 import { RayJobRenderer } from '../resources/renderers/RayJobRenderer'
 import { JobRenderer, JobSetRenderer } from '../resources/renderers/JobAdmissionRenderers'
 import { RayClusterRenderer } from '../resources/renderers/RayClusterRenderer'
@@ -467,7 +468,10 @@ function useActionsBarProps(
       name: string
       className?: string
     }) => <PortForwardButton type={type} namespace={ns} name={n} className={className} />,
-    renderDiagnose,
+    renderDiagnose: renderDiagnose ? (ctx: Parameters<typeof renderDiagnose>[0]) =>
+      ctx.kind === 'Cluster' && ctx.group === 'postgresql.cnpg.io'
+        ? <CNPGInvestigationAction namespace={ctx.namespace} name={ctx.name} render={renderDiagnose} context={ctx} />
+        : renderDiagnose(ctx) : undefined,
     onDelete: (
       params: Parameters<typeof deleteMutation.mutate>[0],
       callbacks?: { onSuccess?: () => void },
@@ -1322,6 +1326,7 @@ export function WorkloadView({
         renderOverviewLead={() => (
           <ResourceIssuesSection
             issues={liveIssues}
+            compact={!expanded}
             subjectResource={{ kind: apiKind, namespace, name, group: rest.group }}
             onResourceClick={
               rest.onNavigateToResource

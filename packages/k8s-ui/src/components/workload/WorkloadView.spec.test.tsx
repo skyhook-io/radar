@@ -98,7 +98,7 @@ it.each(['Deployment', 'Pod', 'ScheduledBackup', 'Database', 'Pooler'])('groups 
   act(() => root.render(<WorkloadView {...props} kind={`${kind.toLowerCase()}s`} group={group} resource={data} expanded={false} onExpand={() => {}} onClose={() => {}} renderHeaderActions={header} actionsBarProps={{ renderDiagnose: () => <button>Diagnose</button> }} />))
   const utility = host.querySelector('[aria-label="Open full view"]')!.parentElement!.parentElement!
   expect(utility.textContent).toContain('Diagnose')
-  expect(host.querySelector('.px-4.pb-2.justify-end')).toBeNull()
+  expect(host.querySelector('[data-action-group=object]')!.matches(':empty')).toBe(true)
   expect(header).toHaveBeenCalledTimes(1)
   act(() => root.render(<WorkloadView {...props} kind={`${kind.toLowerCase()}s`} group={group} resource={data} expanded renderHeaderActions={header} actionsBarProps={{ renderDiagnose: () => <button>Diagnose</button> }} />))
   const refresh = host.querySelector('[aria-label="Refresh"]')!
@@ -110,10 +110,29 @@ it('hides the object action band when a host action component has no content yet
   const EmptyAction = () => null
   const host = document.createElement('div'); const root = createRoot(host)
   act(() => root.render(<WorkloadView {...props} expanded={false} renderHeaderActions={() => <EmptyAction />} />))
-  const row = host.querySelector('.px-4.pb-2.justify-end')!
+  const row = host.querySelector('[data-action-group=object]')!
   expect(row.matches(':empty')).toBe(true)
   expect(row.classList.contains('empty:hidden')).toBe(true)
   act(() => root.render(<WorkloadView {...props} expanded={false} renderHeaderActions={() => <button>Run now</button>} />))
   expect(row.matches(':empty')).toBe(false)
+  act(() => root.unmount())
+})
+
+it.each(['Deployment', 'Pod', 'Pooler', 'ScheduledBackup'])('groups %s drawer actions with utilities in one toolbar', (kind) => {
+  const host = document.createElement('div'); const root = createRoot(host)
+  const apiKind = kind === 'Deployment' ? 'deployments' : kind === 'Pod' ? 'pods' : kind === 'Pooler' ? 'poolers' : 'scheduledbackups'
+  const group = kind === 'Deployment' ? 'apps' : kind === 'Pod' ? '' : 'postgresql.cnpg.io'
+  const data = { ...resource, kind, apiVersion: group ? `${group}/v1` : 'v1', spec: { containers: [{ name: 'postgres', image: 'postgres' }] }, status: { phase: 'Running' } }
+  act(() => root.render(<WorkloadView {...props} kind={apiKind} group={group} expanded={false} resource={data} actionsBarProps={{ canExec: true, onOpenTerminal: () => {}, onRestart: () => {} }} renderHeaderActions={() => kind === 'ScheduledBackup' ? <><div><button>Suspend</button><button>Run now</button><button>Edit schedule</button></div><div>Run blocked: no backup destination</div></> : <button>{kind === 'Pooler' ? 'Pause' : 'Object action'}</button>} />))
+  const object = host.querySelector('[data-action-group=object]')!
+  const utility = host.querySelector('[data-action-group=utility]')!
+  expect(object.parentElement).toBe(utility.parentElement)
+  expect(object.parentElement!.classList.contains('flex-wrap')).toBe(true)
+  expect(utility.classList.contains('ml-auto')).toBe(true)
+  expect(object.querySelector('button')).not.toBeNull()
+  expect(utility.textContent).toContain('YAML')
+  if (kind === 'Pod') expect(object.textContent).toContain('Terminal')
+  if (kind === 'Deployment') expect(object.textContent).toContain('Restart')
+  if (kind === 'ScheduledBackup') { expect(object.querySelectorAll('button')).toHaveLength(3); expect(object.textContent).toContain('Run blocked: no backup destination') }
   act(() => root.unmount())
 })

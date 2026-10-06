@@ -1,3 +1,4 @@
+import { cnpgHASourceText, type CNPGClusterHA } from './ha'
 import { getCNPGClusterIsReplica } from '../resources/resource-utils-cnpg'
 
 /** The port CloudNativePG gives PostgreSQL and PgBouncer when a Service template sets none. */
@@ -16,7 +17,7 @@ export interface CNPGConnectEndpoint {
   /** What the Service selects: the primary, standbys only, any instance, or through a Pooler. */
   selects: string
   /** Pooler `spec.type`, for pooler endpoints. */
-  poolerType?: 'rw' | 'ro'
+  poolerType?: string
 }
 
 export interface CNPGConnectValue {
@@ -88,9 +89,9 @@ export function cnpgConnectInfo(cluster: any, poolers: any[] = []): CNPGConnectI
   }
   for (const p of poolers) {
     if (p?.metadata?.namespace !== ns || p?.spec?.cluster?.name !== name || !p?.metadata?.name) continue
-    const type: 'rw' | 'ro' = p.spec?.type === 'ro' ? 'ro' : 'rw'
+    const type: string = p.spec?.type || 'rw'
     endpoints.push({
-      ...endpoint('pooler', p.metadata.name, ns, `PgBouncer in front of ${type === 'rw' ? 'the primary' : 'the standbys'}`, p.spec?.serviceTemplate),
+      ...endpoint('pooler', p.metadata.name, ns, `PgBouncer in front of ${type === 'rw' ? 'the primary' : type === 'ro' ? 'the standbys' : type === 'r' ? 'any instance (may reach the primary; not read-only)' : `selector ${type}`}`, p.spec?.serviceTemplate),
       poolerType: type,
     })
   }
@@ -135,6 +136,20 @@ export function cnpgPsqlCommand(ep: CNPGConnectEndpoint, info: CNPGConnectInfo):
   return `psql -h ${ep.host} -p ${ep.port} -U ${shellWord(info.owner.value ?? '<user>')} -d ${shellWord(info.database.value ?? '<database>')}`
 }
 
-export function cnpgPortForwardCommand(ep: CNPGConnectEndpoint, namespace: string, localPort = CNPG_DEFAULT_PORT): string {
-  return `kubectl -n ${shellWord(namespace)} port-forward ${shellWord(`service/${ep.name}`)} ${localPort}:${ep.port}`
+export function cnpgPortForwardCommand(ep: CNPGConnectEndpoint, namespace: string, localPort = CNPG_DEFAULT_PORT, kubeconfigContext?: string): string {
+  return `kubectl${kubeconfigContext ? ` --context ${shellWord(kubeconfigContext)}` : ''} -n ${shellWord(namespace)} port-forward ${shellWord(`service/${ep.name}`)} ${localPort}:${ep.port}`
+}
+
+export function cnpgEndpointAvailability(ep: CNPGConnectEndpoint, ha?: CNPGClusterHA, unreadReason?: string): { text: string; source?: string } {
+  if (ep.role === 'rw' && ha?.rwEndpoints.state === 'ok') {
+    return { text: ha.rwEndpoints.pods.length > 0 ? 'Ready endpoints' : 'Unavailable: no ready endpoint', source: 'Service EndpointSlices' }
+  }
+  if ((ep.role === 'ro' || ep.role === 'r') && ha?.pods.state === 'ok') {
+    const candidates = ep.role === 'ro' ? ha.instances.filter((i) => i.role === 'replica') : ha.instances
+    if (ep.role === 'ro' && ha.instances.some((i) => i.ready && i.role === 'unknown') && !candidates.some((i) => i.ready)) return { text: 'Not checked', source: 'Ready instance roles were not reported' }
+    return { text: candidates.some((i) => i.ready) ? 'Ready instance observed' : ep.role === 'ro' ? 'Unavailable: no ready standby' : 'Unavailable: no ready instance', source: 'Instance Pod readiness' }
+  }
+  const source = ep.role === 'rw' ? ha?.rwEndpoints : ep.role === 'ro' || ep.role === 'r' ? ha?.pods : undefined
+  const what = ep.role === 'rw' ? 'Service EndpointSlices' : 'instance Pods'
+  return { text: 'Not checked', source: ep.role === 'pooler' || ep.role === 'additional' ? 'This Service’s availability has not been read' : source ? cnpgHASourceText(source, what) : unreadReason ?? 'HA evidence has not been read' }
 }

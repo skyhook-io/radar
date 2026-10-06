@@ -13,6 +13,7 @@ import (
 	authv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -1186,5 +1187,30 @@ func TestCNPGIsReplicaClusterMatchesOperator(t *testing.T) {
 		if got := cnpgIsReplicaCluster(cluster); got != c.want {
 			t.Errorf("replica %v: got %v, want %v", c.replica, got, c.want)
 		}
+	}
+}
+
+func TestCNPGHibernateCapacityIsNotRequestedSize(t *testing.T) {
+	cluster := cnpgActionCluster(nil)
+	claim := func(name, capacity, requested string) *corev1.PersistentVolumeClaim {
+		pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "db", Labels: map[string]string{cnpgClusterLabel: "pg", cnpgInstanceNameLabel: name}}}
+		if requested != "" {
+			pvc.Spec.Resources.Requests = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(requested)}
+		}
+		if capacity != "" {
+			pvc.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse(capacity)}
+		}
+		return pvc
+	}
+	env := newCNPGActionEnv(t, []runtime.Object{cluster}, claim("pg-1", "1Gi", "2Gi"), claim("pg-2", "", "2Gi"))
+	volumes := cnpgHibernateEffectsOf(context.Background(), env.clients(), cluster).Volumes
+	if !volumes.Available || len(volumes.Items) != 2 {
+		t.Fatalf("volumes = %+v", volumes)
+	}
+	if volumes.Items[0].Capacity != "1Gi" || volumes.Items[0].Requested != "2Gi" {
+		t.Fatalf("reported = %+v", volumes.Items[0])
+	}
+	if volumes.Items[1].Capacity != "" || volumes.Items[1].Requested != "2Gi" {
+		t.Fatalf("unreported = %+v", volumes.Items[1])
 	}
 }

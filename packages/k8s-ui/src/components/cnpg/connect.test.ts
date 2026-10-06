@@ -1,3 +1,5 @@
+import { cnpgEndpointAvailability } from './connect'
+import type { CNPGClusterHA } from './ha'
 import { describe, expect, it } from 'vitest'
 import { cnpgConnectInfo, cnpgConnectionURI, cnpgPortForwardCommand, cnpgPsqlCommand } from './connect'
 
@@ -84,4 +86,39 @@ describe('cnpgConnectInfo', () => {
     const quoted = cnpgConnectInfo(cluster({ bootstrap: { initdb: { database: "it's" } } }))
     expect(cnpgPsqlCommand(quoted.endpoints[0], quoted)).toBe(`psql -h pg-rw.db.svc -p 5432 -U 'it'\\''s' -d 'it'\\''s'`)
   })
+})
+
+it('pins port-forward to a shell-quoted kubeconfig context when supplied', () => {
+  const ep = cnpgConnectInfo({ metadata: { name: 'orders', namespace: 'prod' } }).endpoints[0]
+  expect(cnpgPortForwardCommand(ep, 'prod', 5432, 'kind-cnpg')).toBe('kubectl --context kind-cnpg -n prod port-forward service/orders-rw 5432:5432')
+  expect(cnpgPortForwardCommand(ep, 'prod', 5432, 'test context')).toContain("--context 'test context'")
+})
+
+it('reads rw endpoints separately from standby and any-instance Pod readiness', () => {
+  const eps = cnpgConnectInfo({ metadata: { name: 'orders', namespace: 'prod' } }).endpoints
+  const ha = { rwEndpoints: { state: 'ok', pods: ['orders-1'] }, pods: { state: 'ok' }, instances: [{ pod: 'orders-1', role: 'primary', ready: true }, { pod: 'orders-2', role: 'replica', ready: false }] } as CNPGClusterHA
+  expect(eps.map((ep) => cnpgEndpointAvailability(ep, ha).text)).toEqual(['Ready endpoints', 'Unavailable: no ready standby', 'Ready instance observed'])
+  expect(cnpgEndpointAvailability(eps[1], { ...ha, instances: [] }).text).toBe('Unavailable: no ready standby')
+  expect(eps.map((ep) => cnpgEndpointAvailability(ep).text)).toEqual(['Not checked', 'Not checked', 'Not checked'])
+  expect(cnpgEndpointAvailability(eps[0], { ...ha, rwEndpoints: { ...ha.rwEndpoints, state: 'denied' } }).text).toBe('Not checked')
+  expect(cnpgEndpointAvailability(eps[1], { ...ha, pods: { state: 'denied' } }).text).toBe('Not checked')
+  expect(cnpgEndpointAvailability(eps[1], { ...ha, instances: [{ ...ha.instances[0], role: 'unknown' }] }).text).toBe('Not checked')
+})
+
+it('keeps Pooler routing faithful for any-instance and unrecognized selectors', () => {
+  for (const [type, selects] of [['rw', 'the primary'], ['ro', 'the standbys'], ['r', 'any instance (may reach the primary; not read-only)'], ['future', 'selector future']]) {
+    const ep = cnpgConnectInfo(cluster(), [{ metadata: { name: 'pooler', namespace: 'db' }, spec: { cluster: { name: 'pg' }, type } }]).endpoints.find((e) => e.role === 'pooler')!
+    expect(ep.poolerType).toBe(type)
+    expect(ep.selects).toBe(`PgBouncer in front of ${selects}`)
+    expect(cnpgEndpointAvailability(ep).source).toBe('This Service’s availability has not been read')
+  }
+})
+it('names the denied grant, failed read, unknown role and unread source alongside Not checked', () => {
+  const eps = cnpgConnectInfo(cluster()).endpoints
+  const ha = { rwEndpoints: { state: 'denied', grant: { verb: 'list', group: 'discovery.k8s.io', resource: 'endpointslices', namespace: 'db' } }, pods: { state: 'error', reason: 'API timeout' }, instances: [] } as unknown as CNPGClusterHA
+  expect(cnpgEndpointAvailability(eps[0], ha)).toEqual({ text: 'Not checked', source: 'No access to Service EndpointSlices (needs list endpointslices (discovery.k8s.io) in namespace db)' })
+  expect(cnpgEndpointAvailability(eps[1], ha)).toEqual({ text: 'Not checked', source: 'instance Pods could not be read: API timeout' })
+  expect(cnpgEndpointAvailability(eps[0], undefined, 'Reading availability…').source).toBe('Reading availability…')
+  expect(cnpgEndpointAvailability(eps[0], undefined, 'Availability could not be read: timeout').source).toBe('Availability could not be read: timeout')
+  expect(cnpgEndpointAvailability(eps[1], { ...ha, pods: { state: 'ok' }, instances: [{ role: 'unknown', ready: true }] } as CNPGClusterHA).source).toBe('Ready instance roles were not reported')
 })

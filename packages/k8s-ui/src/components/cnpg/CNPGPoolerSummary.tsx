@@ -1,3 +1,4 @@
+import { Tooltip } from '../ui/Tooltip'
 import type { ReactNode } from 'react'
 import { getCNPGPoolerDeploymentName, getCNPGPoolerMode, isCNPGPoolerPaused } from '../resources/resource-utils-cnpg'
 import type { CNPGWorkspaceResponse } from './workspace'
@@ -116,7 +117,8 @@ export function CNPGPoolerSummary({
       <SectionHeading>Limits</SectionHeading>
       <FactGrid>
         <FactRow label="Pool mode">
-          {resource?.spec?.pgbouncer?.poolMode ? getCNPGPoolerMode(resource) : <span>session <span className="text-theme-text-tertiary">(default)</span></span>}
+          {getCNPGPoolerMode(resource) === 'transaction' ? 'A client uses a server connection only for each transaction.' : getCNPGPoolerMode(resource) === 'session' ? 'A client keeps one server connection for its whole session.' : 'A client uses a server connection for each statement.'}
+          <Note>{getCNPGPoolerMode(resource)}{!resource?.spec?.pgbouncer?.poolMode ? ' (default)' : ''}</Note>
         </FactRow>
         {POOLER_LIMIT_PARAMETERS.map((p) => {
           const v = resource?.spec?.pgbouncer?.parameters?.[p.key]
@@ -268,9 +270,20 @@ function PoolerPressure({ pressure }: { pressure: NonNullable<CNPGPoolerLive['pr
 }
 
 export function CNPGPoolerScheduling({ namespace, pods, onNavigate }: { namespace: string; pods: NonNullable<CNPGPoolerLive['pressure']>['pods']; onNavigate?: NavigateToRef }) {
-  return <>{pods.filter((p) => p.schedulingReason).map((p) => <div key={p.pod} className={`mt-1 text-xs ${toneTextClass('degraded')}`}>
-    <RefLink refTo={{ kind: 'Pod', group: '', namespace, name: p.pod }} onNavigate={onNavigate} mono /> cannot be scheduled: {summarizeSchedulerMessage(p.schedulingReason, { plain: true })}.
-    <FoldSection title="Scheduler message" summary="" attention={false}><div className="break-words text-theme-text-secondary">{p.schedulingReason}</div></FoldSection>
+  const byCause = new Map<string, typeof pods>()
+  for (const pod of pods) {
+    if (!pod.schedulingReason) continue
+    const cause = summarizeSchedulerMessage(pod.schedulingReason, { plain: true })
+    const group = byCause.get(cause) ?? []
+    group.push(pod)
+    byCause.set(cause, group)
+  }
+  return <>{[...byCause].map(([cause, blocked]) => <div key={cause} className={`mt-1 text-xs ${toneTextClass('degraded')}`}>
+    <div>Cannot be scheduled: {cause}.</div>
+    {blocked.map((p) => <div key={p.pod}>
+      <div className="mt-0.5 text-theme-text-secondary"><Tooltip content={p.pod} wrapperClassName="block max-w-full [&_button]:block [&_button]:max-w-full [&_button]:truncate [&_span.font-mono]:block [&_span.font-mono]:truncate"><RefLink refTo={{ kind: 'Pod', group: '', namespace, name: p.pod }} onNavigate={onNavigate} mono /></Tooltip></div>
+      <FoldSection title="Scheduler message" summary="" attention={false}><div className="break-words text-theme-text-secondary">{p.schedulingReason}</div></FoldSection>
+    </div>)}
   </div>)}</>
 }
 

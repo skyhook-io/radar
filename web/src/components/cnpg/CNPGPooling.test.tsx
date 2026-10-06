@@ -10,8 +10,8 @@ const live = vi.hoisted(() => ({ pods: [] as CNPGPoolerPressureLive['pods'], fai
 vi.mock('../../api/cnpg', () => ({ useCNPGPoolerRuntime: () => ({ data: { permission: { proxy: 'allowed' }, pods: live.pods }, isRefetchError: live.failed, error: new Error('Pressure timeout'), dataUpdatedAt: Date.now() - 120_000 }) }))
 vi.mock('../../api/cnpg-sessions', () => ({ useCNPGPoolerCapabilities: () => ({ data: { facts: { deployment: { name: 'p', state: 'ok', replicas: 2, readyReplicas: 0 } } }, isRefetchError: live.failed, error: new Error('Readiness timeout'), dataUpdatedAt: Date.now() - 180_000 }) }))
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'test' } }) }))
-function render() {
-  const data: CNPGWorkspaceResponse = { installed: true, context: 'test', namespaces: null, coverage: Object.fromEntries(CNPG_WORKSPACE_KEYS.map((k) => [k, { state: 'full' }])), objects: { poolers: [{ apiVersion: 'postgresql.cnpg.io/v1', metadata: { name: 'p', namespace: 'pg' }, spec: { cluster: { name: 'pg' }, pgbouncer: { paused: true } } }] }, issues: [], audit: [], backupsOmitted: 0 }
+function render(type = 'rw') {
+  const data: CNPGWorkspaceResponse = { installed: true, context: 'test', namespaces: null, coverage: Object.fromEntries(CNPG_WORKSPACE_KEYS.map((k) => [k, { state: 'full' }])), objects: { poolers: [{ apiVersion: 'postgresql.cnpg.io/v1', metadata: { name: 'p', namespace: 'pg' }, spec: { type, cluster: { name: 'pg' }, pgbouncer: { paused: true } } }] }, issues: [], audit: [], backupsOmitted: 0 }
   return renderToStaticMarkup(<CNPGPooling data={data} fleet={buildCNPGFleet(data)} namespaces={[]} searchParams={new URLSearchParams()} onSetParams={() => {}} onInspect={() => {}} inspected={null} onClearNamespaces={() => {}} />)
 }
 it('does not call an empty partial read idle and names the unread Pod', () => {
@@ -78,4 +78,12 @@ it('opens the Pod once and folds details without opening the Pooler row', () => 
   act(() => host.querySelector('tbody tr td:nth-child(5)')!.querySelector('span')!.click())
   expect(inspect).toHaveBeenCalledExactlyOnceWith({ kind: 'poolers', group: 'postgresql.cnpg.io', namespace: 'pg', name: 'p' })
   act(() => root.unmount())
+})
+
+it('labels primary and standby routing in plain words', () => {
+  expect(render()).toContain('Primary (read-write)')
+  expect(render('ro')).toContain('Standbys (read-only)')
+  expect(render('r')).toContain('Any instance')
+  expect(render('future-selector')).toContain('future-selector')
+  expect(render('')).toContain('Not reported')
 })

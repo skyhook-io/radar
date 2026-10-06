@@ -595,6 +595,7 @@ export function LogCore({
         <Tooltip content="Refresh logs" delay={TIP_DELAY} position="bottom">
           <button
             onClick={onRefresh}
+            aria-label="Refresh logs"
             disabled={isLoading || isStreaming}
             className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded ${palette.elevatedBg} ${palette.textSecondary} ${palette.hoverBg} disabled:opacity-50 disabled:cursor-not-allowed`}
           >
@@ -804,14 +805,15 @@ export function LogCore({
 
         {/* Export */}
         <div className="relative flex items-center" ref={downloadMenuRef}>
-          <Tooltip content="Export logs" delay={TIP_DELAY} position="bottom" disabled={showDownloadMenu} preserveWrapperWhenDisabled>
+          <Tooltip content={bufferEntries.length === 0 ? 'No logs loaded' : 'Export logs'} delay={TIP_DELAY} position="bottom" disabled={showDownloadMenu} preserveWrapperWhenDisabled>
             <button
               ref={exportTriggerRef}
+              disabled={bufferEntries.length === 0}
               onClick={toggleExportMenu}
               aria-label="Export logs"
               aria-haspopup="dialog"
               aria-expanded={showDownloadMenu}
-              className={iconBtnInactive}
+              className={`${iconBtnInactive} disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               <Download className="w-4 h-4" />
             </button>
@@ -887,10 +889,12 @@ export function LogCore({
 
         {/* Clear */}
         {onClear && (
-          <Tooltip content="Clear logs" delay={TIP_DELAY} position="bottom">
+          <Tooltip content={bufferEntries.length === 0 ? 'No logs loaded' : 'Clear logs'} delay={TIP_DELAY} position="bottom">
             <button
               onClick={onClear}
-              className={iconBtnInactive}
+              aria-label="Clear logs"
+              disabled={bufferEntries.length === 0}
+              className={`${iconBtnInactive} disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               <Trash2 className="w-4 h-4" />
             </button>

@@ -18,6 +18,7 @@ import {
   cnpgBackupRunsInWindow,
   cnpgBackupRunInFlight,
   CNPG_BACKUP_RUN_WINDOW_MS,
+  CNPG_NO_WAL_ARCHIVE_DESTINATION,
   coverageReadable,
   cnpgCoverageGap,
   getCNPGScheduledBackupNextSchedule,
@@ -231,7 +232,7 @@ export function CNPGProtection({
                 </>
               ),
             },
-            { header: 'WAL archiving', width: '16%', cell: (r) => <CNPGWALArchivingFact fact={r.protection.walArchiving} /> },
+            { header: 'WAL archiving', width: '16%', cell: (r) => <CNPGWALArchivingFact fact={r.protection.walArchiving} compact /> },
             {
               header: 'Recovery window',
               width: '12%',
@@ -284,7 +285,7 @@ export function CNPGProtection({
           inspected={inspected}
           minWidth={1000}
           empty={coverageEmpty(data.coverage.clusters, 'PostgreSQL clusters')}
-          footer={`Kubernetes records no restore tests, so restore validation is never shown as passed.${stores.length > 0 ? " Recovery windows come from ObjectStore status." : ""}`}
+          footer={`${rows.some((r) => r.protection.walArchiving.text === CNPG_NO_WAL_ARCHIVE_DESTINATION && r.protection.walArchiving.operatorCondition?.status === 'True') ? "With no backup destination, CloudNativePG reports archiving as working because it accepts each WAL file without keeping it. " : ""}Kubernetes records no restore tests, so restore validation is never shown as passed.${stores.length > 0 ? " Recovery windows come from ObjectStore status." : ""}`}
         />}
 
         <SectionTable

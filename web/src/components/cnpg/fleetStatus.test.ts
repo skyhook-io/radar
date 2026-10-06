@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { CNPGFleetRow, CNPGProblem } from '@skyhook-io/k8s-ui'
+import { buildCNPGFleet, type CNPGFleetRow, type CNPGProblem } from '@skyhook-io/k8s-ui'
 import { cnpgInstancePillLabel, cnpgPillsToShow, cnpgRowStatus } from './fleetStatus'
 
 const problem = (severity: CNPGProblem['severity'], title: string) => ({ id: title, severity, title }) as CNPGProblem
@@ -38,4 +38,9 @@ describe('cnpgPillsToShow', () => {
     expect(cnpgPillsToShow([1, 2, 3, 4, 5], 5)).toEqual({ shown: [1, 2, 3, 4, 5], hidden: [] })
     expect(cnpgPillsToShow([1, 2, 3, 4, 5, 6, 7], 5)).toEqual({ shown: [1, 2, 3, 4], hidden: [5, 6, 7] })
   })
+})
+
+it('gives a destination-blocked schedule an amber fleet status', () => {
+  const fleet = buildCNPGFleet({ installed: true, context: 'test', namespaces: null, coverage: { clusters: { state: 'full' }, pods: { state: 'full' }, scheduledBackups: { state: 'full' } }, objects: { clusters: [{ apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'payments', namespace: 'db' }, spec: { instances: 1 }, status: { phase: 'Cluster in healthy state', readyInstances: 1 } }], scheduledBackups: [{ metadata: { name: 'payments-nightly', namespace: 'db' }, spec: { cluster: { name: 'payments' } } }] }, issues: [], audit: [], backupsOmitted: 0 })
+  expect(cnpgRowStatus(fleet.rows[0])).toMatchObject({ tone: 'degraded', label: 'Needs attention: Backup schedule payments-nightly cannot run: no backup destination' })
 })

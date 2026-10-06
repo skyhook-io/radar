@@ -1,3 +1,4 @@
+import { cnpgDimensions } from './ha'
 import { describe, it, expect } from 'vitest'
 import { buildCNPGFleet, cnpgReadyInstances, type CNPGWorkspaceResponse, type CNPGWorkspaceKey, CNPG_WORKSPACE_KEYS } from './workspace'
 
@@ -519,4 +520,29 @@ it('counts zero ready instance Pods only when the Pod inventory was read', () =>
   const c = cluster('analytics', 'db', { spec: { instances: 1 }, status: { readyInstances: undefined } })
   expect(buildCNPGFleet(resp({ clusters: [c], pods: [] })).rows[0].podReadiness).toEqual({ ready: 0, total: 0 })
   expect(buildCNPGFleet(resp({ clusters: [c] }, { coverage: { pods: { state: 'denied' } } })).rows[0].podReadiness).toBeUndefined()
+})
+
+it('counts an enabled destination-blocked schedule as a Cluster protection problem', () => {
+  const c = cluster('payments', 'db', { spec: { instances: 1 }, status: { readyInstances: 1, phase: 'Cluster in healthy state' } })
+  const schedule = { apiVersion: G, kind: 'ScheduledBackup', metadata: { name: 'payments-nightly', namespace: 'db' }, spec: { cluster: { name: 'payments' } } }
+  const fleet = buildCNPGFleet(resp({ clusters: [c], scheduledBackups: [schedule] }))
+  const row = fleet.rows[0]
+  expect(row.problems).toContainEqual(expect.objectContaining({ title: 'Backup schedule payments-nightly cannot run: no backup destination', severity: 'warning', category: 'protection', subject: expect.objectContaining({ kind: 'ScheduledBackup', name: 'payments-nightly' }) }))
+  expect(row.attention).toBe(true)
+  expect(fleet.attentionCount).toBe(1)
+  expect(fleet.categoryCounts.protection).toBe(1)
+  expect(row.categories.has('protection')).toBe(true)
+  expect(cnpgDimensions({ row }).find((d) => d.id === 'protection')?.tone).toBe('degraded')
+  for (const schedules of [[], [{ ...schedule, spec: { ...schedule.spec, suspend: true } }]]) {
+    expect(buildCNPGFleet(resp({ clusters: [c], scheduledBackups: schedules })).rows[0].attention).toBe(false)
+  }
+  expect(buildCNPGFleet(resp({ clusters: [c], scheduledBackups: [schedule] }, { coverage: { scheduledBackups: { state: 'denied' } } })).attentionCount).toBe(0)
+})
+
+it('marks a schedule-method mismatch even when the Cluster has another working destination', () => {
+  const c = cluster('payments', 'db', { spec: { instances: 1, plugins: [{ name: 'barman-cloud.cloudnative-pg.io', isWALArchiver: true, parameters: { barmanObjectName: 'store' } }] }, status: { readyInstances: 1, conditions: [{ type: 'ContinuousArchiving', status: 'True' }] } })
+  const schedule = { metadata: { name: 'payments-nightly', namespace: 'db' }, spec: { cluster: { name: 'payments' }, method: 'barmanObjectStore' } }
+  const row = buildCNPGFleet(resp({ clusters: [c], scheduledBackups: [schedule] })).rows[0]
+  expect(row.attention).toBe(true)
+  expect(cnpgDimensions({ row }).find((d) => d.id === 'protection')).toMatchObject({ tone: 'degraded', text: 'Backup schedule payments-nightly cannot run: no barmanObjectStore destination' })
 })

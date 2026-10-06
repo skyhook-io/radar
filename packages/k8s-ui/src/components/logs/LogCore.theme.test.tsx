@@ -135,3 +135,21 @@ it('keeps normal word wrapping when searching a structured log', async () => {
   expect(highlight.parentElement!.classList.contains('[overflow-wrap:anywhere]')).toBe(true)
   expect(highlight.parentElement!.classList.contains('break-all')).toBe(false)
 })
+
+it('disables empty Export and Clear while preserving Refresh and enables them after logs load', async () => {
+  await render({ onClear: noop })
+  const exportButton = () => element.querySelector<HTMLButtonElement>('[aria-label="Export logs"]')!
+  const clear = () => element.querySelector<HTMLButtonElement>('[aria-label="Clear logs"]')!
+  expect(exportButton().disabled).toBe(true)
+  expect(clear().disabled).toBe(true)
+  expect(element.querySelector<HTMLButtonElement>('[aria-label="Refresh logs"]')?.disabled).toBe(false)
+  await render({ onClear: noop, entries: [{ id: 1, container: 'postgres', level: 'info', levelSource: 'keyword', isJson: false, isLogfmt: false, content: 'hello', timestamp: '2026-10-01T00:00:00Z' }] })
+  expect(exportButton().disabled).toBe(false)
+  expect(clear().disabled).toBe(false)
+})
+
+it('keeps Export and Clear usable when a Pod filter hides a nonempty buffer', async () => {
+  await render({ entries: [], allEntries: [{ id: 1, container: 'postgres', level: 'info', levelSource: 'keyword', isJson: false, isLogfmt: false, content: 'hello', timestamp: '' }], onClear: noop })
+  expect(element.querySelector<HTMLButtonElement>('[aria-label="Export logs"]')!.disabled).toBe(false)
+  expect(element.querySelector<HTMLButtonElement>('[aria-label="Clear logs"]')!.disabled).toBe(false)
+})

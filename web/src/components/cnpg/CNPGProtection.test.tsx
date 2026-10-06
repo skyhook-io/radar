@@ -88,7 +88,7 @@ it('explains absent WAL storage and suppresses ObjectStore-only footnotes on fle
   for (const scope of [undefined, { namespace: 'pg', name: 'payments' }]) {
     const html = render({ clusters: [cluster] }, { state: 'full' }, '', scope)
     expect(html).toContain('Not archived: no destination configured')
-    expect(html).toContain('point-in-time recovery is unavailable')
+    expect(html).toContain(scope ? 'point-in-time recovery is unavailable' : 'No point-in-time recovery')
     expect(html).toContain('Operator report')
     expect(html).toContain('aria-expanded="false"')
     expect(html).toContain('None: no backup destination')
@@ -122,4 +122,13 @@ it('uses the Configuration card gutter and SectionHeading in scoped recovery evi
   expect(title.classList.contains('uppercase')).toBe(true)
   expect(title.closest('section')?.classList.contains('px-4')).toBe(true)
   expect(title.closest('section')?.parentElement?.classList.contains('p-4')).toBe(true)
+})
+
+it('explains no-destination operator success once for the fleet table while keeping row disclosures', () => {
+  const clusters = ['orders', 'payments'].map((name) => ({ apiVersion: 'postgresql.cnpg.io/v1', metadata: { name, namespace: 'pg' }, spec: {}, status: { conditions: [{ type: 'ContinuousArchiving', status: 'True', message: 'working' }] } }))
+  const html = render({ clusters })
+  expect(html.match(/CloudNativePG reports archiving as working because/g)).toHaveLength(1)
+  expect(html.match(/No point-in-time recovery/g)).toHaveLength(2)
+  expect(html.match(/Operator report/g)).toHaveLength(2)
+  expect(html).not.toContain('WAL is not archived to recovery storage')
 })

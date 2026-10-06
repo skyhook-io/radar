@@ -1,3 +1,4 @@
+import { summarizeSchedulerMessage } from '../resources/resource-utils'
 import { useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { AlertOctagon, AlertTriangle, ArrowRight, CircleCheck, Clock, ExternalLink, Layers, Terminal, Workflow } from 'lucide-react';
 import { CardBody, CardSection, ClusterName, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
@@ -168,6 +169,7 @@ export interface IssueRowProps {
   resourceHref?: (ref: IssueResourceRef) => string;
   onResourceClick?: (ref: IssueResourceRef) => void;
   as?: 'li' | 'div';
+  compact?: boolean;
   className?: string;
   dimmed?: boolean;
   /** Suppress the "Subject" deep-link in the expanded body — set by hosts that
@@ -195,6 +197,7 @@ export function IssueRow({
   resourceHref,
   onResourceClick,
   as = 'li',
+  compact = false,
   className,
   dimmed,
   hideSubject,
@@ -208,6 +211,7 @@ export function IssueRow({
   const cluster = clusterLabel?.(issue);
   const affected = affectedSummary(issue.affected);
   const { headline } = issueMessageParts(issue);
+  const schedulingCause = compact && issue.kind === 'Pod' && issue.reason === 'Unschedulable' ? summarizeSchedulerMessage(issue.cause || issue.message || headline || '', { plain: true }) : undefined;
   const { panelId, buttonProps } = useDisclosure(open);
   const Container = as;
   const severity = normalizeIssueSeverity(issue.severity);
@@ -297,7 +301,7 @@ export function IssueRow({
                 cause lives in the WHAT'S WRONG section below, so it fades out
                 here (stays mounted — it's the flex-1 filler, so unmounting
                 wouldn't reflow anything, but fading avoids the pop). */}
-            {issue.reason ? (
+            {issue.reason && !schedulingCause ? (
               <span
                 aria-hidden={open || undefined}
                 className={`min-w-0 flex-1 truncate text-xs text-theme-text-tertiary transition-opacity duration-200 ${open ? 'opacity-0' : 'opacity-100'}`}
@@ -307,6 +311,7 @@ export function IssueRow({
               </span>
             ) : null}
           </div>
+          {schedulingCause && <div className="break-words text-xs text-theme-text-secondary">{schedulingCause}</div>}
           <div className="flex min-w-0 items-center gap-1.5 text-xs text-theme-text-tertiary">
             <span className={KIND_CHIP_CLASS}>{issue.kind}</span>
             <span className="min-w-0 truncate font-medium text-theme-text-secondary">

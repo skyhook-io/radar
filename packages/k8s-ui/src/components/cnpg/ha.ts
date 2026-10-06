@@ -576,6 +576,8 @@ function protectionDimension(row: CNPGFleetRow): CNPGDimension {
   const base = { id: 'protection' as const, label: 'Backups' }
   const p = row.protection
   if (p.walArchiving.tone === 'unhealthy') return { ...base, tone: 'unhealthy', text: 'WAL archiving failing', source: 'ContinuousArchiving condition' }
+  const blockedSchedule = row.problems.find((problem) => problem.id.startsWith('schedule-destination:'))
+  if (blockedSchedule) return { ...base, tone: 'degraded', text: blockedSchedule.title, source: blockedSchedule.origin?.detail ?? 'ScheduledBackup method against Cluster spec' }
   if (p.destination.method === 'none') return { ...base, tone: 'degraded', text: 'no backup destination', source: 'Cluster spec' }
   if (p.lastSuccessfulBackup.tone === 'unhealthy' || p.lastSuccessfulBackup.tone === 'degraded') {
     const text = !p.lastSuccessfulBackup.at && p.walArchiving.tone === 'healthy'

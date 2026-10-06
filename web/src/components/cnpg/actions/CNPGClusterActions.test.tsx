@@ -61,7 +61,7 @@ it('reviews each restart step with current readiness, scheduling blockers and pr
   const caps = { facts: { currentPrimary: 'orders-1', instances: [{ pod: 'orders-1', ready: true, podReadable: true, podExists: true }, { pod: 'orders-2', ready: false, podReadable: true, podExists: false }] }, restartPlan: { primaryUpdateStrategy: 'unsupervised', primaryUpdateMethod: 'restart', steps: [{ instance: 'orders-2', role: 'standby', effect: 'recreate' }, { instance: 'orders-1', role: 'primary', effect: 'restart' }] } } as any
   const problem = { id: 'join', instance: 'orders-2', title: "New standby orders-2: Can't be scheduled", detail: '2 nodes insufficient pods', subject: { kind: 'Pod', name: 'orders-2-join' } } as any
   const html = renderToStaticMarkup(<CNPGRestartReview caps={caps} problems={[problem]} onOpenOverview={() => {}} />)
-  for (const text of ['ready now', 'instance Pod absent', 'insufficient pods', 'Restarting the primary interrupts its connections.', 'The rolling restart waits for every instance to be ready.', 'Currently blocked by orders-2.', 'If the primary restarts without another ready instance, the cluster stops serving until it is back.']) expect(html).toContain(text)
+  for (const text of ['currently ready', 'currently absent', 'insufficient pods', 'Restarting the primary interrupts its connections.', 'The rolling restart waits for every instance to be ready.', 'Currently blocked by orders-2.', 'If the primary restarts without another ready instance, the cluster stops serving until it is back.']) expect(html).toContain(text)
   expect(html).toContain('See Overview’s problems →')
   caps.facts.instances[1].ready = true
   expect(renderToStaticMarkup(<CNPGRestartReview caps={caps} />)).not.toContain('cluster stops serving')
@@ -107,8 +107,32 @@ it('carries a verified join-Job blocker into the matching restart step and opens
   host = document.createElement('div'); document.body.append(host); root = createRoot(host)
   act(() => root.render(<CNPGRestartReview caps={caps} problems={[problem]} onOpenOverview={open} />))
   const step = host.querySelector('li')!
-  expect(step.textContent).toContain('orders-2 (standby)')
+  expect(step.textContent).toContain('orders-2 : Will recreate the standby Pod (currently absent)')
   expect(step.textContent).toContain('both nodes have reached their Pod limit')
   act(() => step.querySelector('button')!.click())
   expect(open).toHaveBeenCalledOnce()
+})
+
+it('states restart intentions separately from observations and folds the raw update policy', () => {
+  const caps = { facts: { currentPrimary: 'orders-1', instances: [{ pod: 'orders-1', ready: true, podReadable: true, podExists: true }, { pod: 'orders-2', podReadable: true, podExists: false }] }, restartPlan: { primaryUpdateStrategy: 'unsupervised', primaryUpdateMethod: 'restart', steps: [{ instance: 'orders-2', role: 'standby', effect: 'recreate' }, { instance: 'orders-1', role: 'primary', effect: 'restart' }] } } as any
+  const html = renderToStaticMarkup(<CNPGRestartReview caps={caps} />)
+  expect(html).toContain('Will recreate the standby Pod')
+  expect(html).toContain('(currently absent)')
+  expect(html).toContain('Will restart the primary in place')
+  expect(html).toContain('(currently ready)')
+  expect(html).toContain('The operator updates the primary automatically after the standbys')
+  expect(html).toContain('Operator update settings')
+  expect(html).toContain('aria-expanded="false"')
+})
+
+it.each(['skipped_fenced', 'restart_only_instance', 'wait_for_user'])('explains the %s plan without promising a configured switchover', (effect) => {
+  const caps = { facts: { currentPrimary: 'orders-1', instances: [{ pod: 'orders-1', ready: true, podReadable: true, podExists: true }] }, restartPlan: { primaryUpdateStrategy: 'unsupervised', primaryUpdateMethod: 'switchover', steps: [{ instance: 'orders-1', role: 'primary', effect }] } } as any
+  const html = renderToStaticMarkup(<CNPGRestartReview caps={caps} />)
+  expect(html).not.toContain('updates the primary automatically after the standbys')
+  expect(html).not.toContain('it promotes an updated standby')
+  expect(html).toContain(effect === 'skipped_fenced' ? 'The fenced primary is skipped.' : effect === 'restart_only_instance' ? 'There is no other instance' : 'The primary waits for your manual promotion or restart.')
+})
+it('explains an automatic switchover from the planned effect rather than the raw method', () => {
+  const caps = { facts: { currentPrimary: 'orders-1', instances: [] }, restartPlan: { primaryUpdateStrategy: 'unsupervised', primaryUpdateMethod: 'restart', steps: [{ instance: 'orders-1', role: 'primary', effect: 'switchover' }] } } as any
+  expect(renderToStaticMarkup(<CNPGRestartReview caps={caps} />)).toContain('it promotes an updated standby, then recreates the former primary Pod.')
 })

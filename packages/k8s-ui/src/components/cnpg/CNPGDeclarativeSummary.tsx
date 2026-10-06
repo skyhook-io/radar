@@ -5,7 +5,7 @@ import { type Fact } from '../facts'
 import { cnpgLogicalPaths, type CNPGLogicalPath } from './logicalReplication'
 import { CNPGLogicalPathView } from './CNPGLogicalPath'
 import { cnpgDatabaseRoleFacts } from './databaseRole'
-import { ClusterLink, NotReported, ObjectProblems, SummaryShell } from './CNPGSharedSummary'
+import { ClusterLink, NotReported, Note, ObjectProblems, SummaryShell } from './CNPGSharedSummary'
 import {
   appliedFact,
   clustersIn,
@@ -151,7 +151,7 @@ export function CNPGDatabaseSummary({ resource, workspace, onNavigate }: Summary
           {pubsUnavailable ? (
             <NotReported text={pubsUnavailable} />
           ) : related.publications.length === 0 ? (
-            <span className="text-theme-text-secondary">None on this database</span>
+            <span className="text-theme-text-secondary">No visible Publication declarations</span>
           ) : (
             <LinkList items={related.publications} kind="Publication" onNavigate={onNavigate} />
           )}
@@ -160,12 +160,13 @@ export function CNPGDatabaseSummary({ resource, workspace, onNavigate }: Summary
           {subsUnavailable ? (
             <NotReported text={subsUnavailable} />
           ) : related.subscriptions.length === 0 ? (
-            <span className="text-theme-text-secondary">None on this database</span>
+            <span className="text-theme-text-secondary">No visible Subscription declarations</span>
           ) : (
             <LinkList items={related.subscriptions} kind="Subscription" onNavigate={onNavigate} />
           )}
         </FactRow>
       </FactGrid>
+      <Note>Objects created in SQL are not shown.</Note>
     </SummaryShell>
   )
 }

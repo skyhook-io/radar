@@ -960,9 +960,6 @@ export function WorkloadView({
             </div>
           </div>
 
-          {headerActions && <div className="flex flex-wrap items-center justify-end gap-1.5 px-4 pb-2 empty:hidden">
-            {headerActions}
-          </div>}
           {(gitopsOwner || helmOwner || (gitOpsResourcePath && onNavigateGitOpsPath)) && (
             <div className="flex flex-wrap items-center gap-1.5 px-4 pb-3">
               {gitopsOwner && <ManagedByChip owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} />}
@@ -974,7 +971,7 @@ export function WorkloadView({
           )}
 
           {/* Actions bar */}
-          <ResourceActionsBar resource={selectedResource} data={resource} onClose={onClose} showYaml={showYaml} onToggleYaml={() => switchView(!showYaml)} {...effectiveActionsBarProps} />
+          <ResourceActionsBar resource={selectedResource} data={resource} onClose={onClose} showYaml={showYaml} onToggleYaml={() => switchView(!showYaml)} {...effectiveActionsBarProps} leadingActions={headerActions} />
         </div>
 
         {/* Success animation overlay */}

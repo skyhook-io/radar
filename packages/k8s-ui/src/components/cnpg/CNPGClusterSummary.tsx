@@ -4,7 +4,7 @@ import { Badge } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { classifyCNPGClusterPhase, cnpgBlockedPhaseExplanation, CNPG_BARMAN_OBJECTSTORE_GROUP, CNPG_GROUP } from '../resources/resource-utils-cnpg'
-import { cnpgClusterPlugins, cnpgPluginPhase, cnpgReadyInstances, type CNPGFleetRow, type CNPGInstance } from './workspace'
+import { CNPG_NO_WAL_ARCHIVE_DESTINATION, cnpgClusterPlugins, cnpgPluginPhase, cnpgReadyInstances, type CNPGFleetRow, type CNPGInstance } from './workspace'
 import type { CNPGDimension } from './ha'
 import { PrimaryConflictNote } from './primitives'
 import { Note } from './CNPGSharedSummary'
@@ -420,12 +420,12 @@ export function CNPGClusterBackupFacts({ row, onNavigate }: { row: CNPGFleetRow;
   )
 }
 
-export function CNPGWALArchivingFact({ fact }: { fact: CNPGFleetRow['protection']['walArchiving'] }) {
+export function CNPGWALArchivingFact({ fact, compact = false }: { fact: CNPGFleetRow['protection']['walArchiving']; compact?: boolean }) {
   const c = fact.operatorCondition
   return <div>
     <FactValue fact={fact} className="break-words" />
     <FactSource fact={fact} />
-    {fact.detail && <Note>{fact.detail}</Note>}
+    {fact.detail && <Note>{compact && fact.text === CNPG_NO_WAL_ARCHIVE_DESTINATION ? 'No point-in-time recovery' : fact.detail}</Note>}
     {c && <div className="mt-1" onClick={(e) => e.stopPropagation()}>
       <FoldSection title="Operator report" summary="" attention={false}>
         <div className="break-words text-xs text-theme-text-secondary">{c.type}: {c.status}</div>

@@ -48,7 +48,7 @@ vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ conn
 const G = 'postgresql.cnpg.io/v1'
 const declaration = (cluster: string, name: string, applied?: boolean, stale = false) => ({ apiVersion: G, kind: 'Database', metadata: { name, namespace: 'pg', generation: 2 }, spec: { name, cluster: { name: cluster } }, status: { applied, observedGeneration: stale ? 1 : 2 } })
 
-function renderDeclarations(query: string, pgName?: string) {
+function renderDeclarations(query: string, pgName?: string, partial: false | 'pg' | 'other' = false) {
   const data: CNPGWorkspaceResponse = {
     installed: true, context: 'test', namespaces: null,
     coverage: Object.fromEntries(CNPG_WORKSPACE_KEYS.map((k) => [k, { state: 'full' }])),
@@ -57,6 +57,7 @@ function renderDeclarations(query: string, pgName?: string) {
       databases: [declaration('a', 'failed-a', false), declaration('a', 'stale-a', true, true), declaration('b', 'failed-b1', false), declaration('b', 'failed-b2', false), declaration('b', 'pending-b')],
     }, issues: [], audit: [], backupsOmitted: 0,
   }
+  if (partial) data.coverage.publications = { state: 'partial', allowedNamespaces: [partial] }
   if (pgName) data.objects.databases![0].spec.name = pgName
   return renderToStaticMarkup(createElement(CNPGDeclarations, {
     data, fleet: buildCNPGFleet(data), namespaces: [], searchParams: new URLSearchParams(query), onSetParams: () => {}, onInspect: () => {}, inspected: null, onClearNamespaces: () => {},
@@ -86,4 +87,21 @@ it('offers inspection with the Kubernetes object identity beside the database na
   expect(html).toContain('Database failed-a')
   expect(html).toContain('role="button"')
   expect(html).toContain('tabindex="0"')
+})
+
+it('qualifies declaration filter counts over partial coverage including zero matches', () => {
+  expect(renderDeclarations('cluster=pg/a', undefined, 'other')).toMatch(/Not applied[^<]*<[^>]*>≥1</)
+  expect(renderDeclarations('cluster=pg/a', undefined, 'other')).toMatch(/Pending[^<]*<[^>]*>≥1</)
+  const empty = renderDeclarations('cluster=pg/missing', undefined, 'other')
+  expect(empty).toMatch(/Not applied[^<]*<[^>]*>Unknown</)
+  expect(empty).toMatch(/Pending[^<]*<[^>]*>Unknown</)
+  expect(renderDeclarations('cluster=pg/missing')).toMatch(/Not applied[^<]*<[^>]*>0</)
+})
+
+it('keeps filtered counts exact in a fully read namespace even when another namespace is unread', () => {
+  const html = renderDeclarations('cluster=pg/a', undefined, 'pg')
+  expect(html).toMatch(/Not applied[^<]*<[^>]*>1</)
+  expect(html).toMatch(/Pending[^<]*<[^>]*>1</)
+  expect(renderDeclarations('cluster=pg/missing', undefined, 'pg')).toMatch(/Not applied[^<]*<[^>]*>0</)
+  expect(renderDeclarations('', undefined, 'pg')).toMatch(/Not applied[^<]*<[^>]*>≥3</)
 })

@@ -1083,6 +1083,20 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
     let problems = sortProblems([
       ...problemsFor(cluster, resp.issues ?? [], resp.audit ?? [], children, backupTimesOf(cluster, resp.objects.backups ?? []), jobs),
       ...observedProblems(cluster, instancePods, readinessContradicted ? podReadiness : undefined, readyInstances, primaryConflict),
+      ...(coverageReadable(coverageOf(resp, 'scheduledBackups'), ns) ? (resp.objects.scheduledBackups ?? []).flatMap((schedule): CNPGProblem[] => {
+        if (schedule.metadata?.namespace !== ns || specClusterName(schedule) !== name || schedule.spec?.suspend === true) return []
+        const blocker = cnpgScheduleDestinationBlocker(schedule, [cluster])
+        if (!blocker) return []
+        return [{
+          id: `schedule-destination:${ns}/${schedule.metadata.name}`,
+          severity: 'warning', category: 'protection', source: 'measurement',
+          measuredBy: 'Radar from ScheduledBackup and Cluster specs',
+          sourceDetail: 'ScheduledBackup method against its target Cluster spec',
+          title: `Backup schedule ${schedule.metadata.name} cannot run: ${blocker[0].toLowerCase()}${blocker.slice(1)}`,
+          subject: { kind: 'ScheduledBackup', group: 'postgresql.cnpg.io', namespace: ns, name: schedule.metadata.name },
+          origin: { label: 'Radar check of the backup destination', detail: 'ScheduledBackup method against its target Cluster spec' },
+        }]
+      }) : []),
     ])
     problems = problems.map((p) => p.origin?.label === 'Kubernetes scheduler' ? { ...p, detail: summarizeSchedulerMessage(p.detail, { plain: true }), rawDetail: p.detail } : p)
     const categories = new Set<CNPGProblemCategory>(

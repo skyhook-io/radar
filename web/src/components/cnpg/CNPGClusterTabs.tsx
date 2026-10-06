@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react'
+import type { RenderDiagnoseAction } from '../../context/DiagnoseCustomization'
 import { useSearchParams } from 'react-router-dom'
 import { FoldSection, CNPGDimensionMark, CNPGDimensionVerdict, CNPGServingStatus, cnpgScheduleDestinationBlocker, getCNPGClusterBackupConfig, getCNPGClusterBarmanPlugin, coverageReadable, toneTextClass, type CNPGDimension, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
@@ -192,4 +194,13 @@ export function CNPGBackupsTab({
       }}
     </CNPGScreenGate>
   )
+}
+
+export function CNPGInvestigationAction({ namespace, name, render, context }: {
+  namespace: string; name: string; render: RenderDiagnoseAction; context: Parameters<RenderDiagnoseAction>[0]
+}): ReactNode {
+  const { row, dimensions } = useCNPGClusterAssessment(namespace, name)
+  const problem = !!row?.problems.length || dimensions?.some((d) => ['degraded', 'alert', 'unhealthy'].includes(d.tone))
+  const assessed = !!row && !!dimensions && dimensions.every((d) => d.tone !== 'unknown')
+  return render({ ...context, health: problem ? 'problem' : assessed ? 'healthy' : 'unknown' })
 }

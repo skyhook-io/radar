@@ -1,3 +1,4 @@
+vi.mock('./useCNPGKubectlContext', () => ({ useCNPGKubectlContext: () => 'kind-test' }))
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -68,7 +69,7 @@ describe('Configuration composition', () => {
     expect(html).not.toContain('>unknown<')
   })
   it('renders the shared certificate section once when HA answers, including the renewal owner', () => {
-    state.ha = { data: { cluster: { namespace: 'db', name: 'pg' }, certificates: [{ secret: 'pg-server', raw: '2100-01-01', expiresAt: '2100-01-01T00:00:00Z', renewal: 'operator' }] } }
+    state.ha = { data: { cluster: { namespace: 'db', name: 'pg' }, rwEndpoints: { state: 'denied', pods: [] }, pods: { state: 'denied' }, instances: [], certificates: [{ secret: 'pg-server', raw: '2100-01-01', expiresAt: '2100-01-01T00:00:00Z', renewal: 'operator' }] } }
     const html = render()
     expect(html.match(/>Certificates</g)).toHaveLength(1)
     expect(html).toContain('pg-server')

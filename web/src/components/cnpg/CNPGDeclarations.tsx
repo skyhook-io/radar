@@ -5,6 +5,7 @@ import {
   Badge,
   CNPGLogicalPathView,
   cnpgDatabaseRoleFacts,
+  coverageReadable,
   cnpgRoleState,
   cnpgDatabaseRoleMeta,
   cnpgManagedBy,
@@ -263,7 +264,9 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
     )
   }, [data, clusterFilter])
 
-  const declCoverage = worstCoverage(data.coverage.databases, data.coverage.publications, data.coverage.subscriptions, data.coverage.databaseRoles)
+  const declarationCoverage = [data.coverage.clusters, data.coverage.databases, data.coverage.publications, data.coverage.subscriptions, data.coverage.databaseRoles]
+  const declCoverage = worstCoverage(...declarationCoverage)
+  const countsComplete = declarationCoverage.every((cov) => cov && (cov.state === 'notInstalled' || coverageReadable(cov, clusterFilter?.split('/')[0])))
 
   const chips = [
     ...(clusterFilter ? [{ label: `Cluster: ${clusterFilter}`, onClear: () => onSetParams({ cluster: null }) }] : []),
@@ -285,8 +288,8 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
             onChange={(id) => onSetParams({ show: id === 'all' ? null : id })}
             options={[
               { id: 'all', label: 'All declarations' },
-              { id: 'failed', label: 'Not applied', count: totals.failed },
-              { id: 'pending', label: 'Pending', count: totals.pending },
+              { id: 'failed', label: 'Not applied', count: countsComplete ? totals.failed : totals.failed > 0 ? `≥${totals.failed}` : 'Unknown' },
+              { id: 'pending', label: 'Pending', count: countsComplete ? totals.pending : totals.pending > 0 ? `≥${totals.pending}` : 'Unknown' },
             ]}
           />
         </div>
@@ -299,7 +302,7 @@ export function CNPGDeclarations({ data, fleet, namespaces, searchParams, onSetP
               : show === 'pending'
                 ? 'No declaration in this scope is waiting for the operator.'
                 : coverageEmpty(declCoverage, 'declarations')}
-            {show && declCoverage?.state !== 'full' ? ' Some declarations are not readable with your access.' : ''}
+            {show && !countsComplete ? ' Some declarations are not readable with your access.' : ''}
           </div>
         ) : (
           groups.map((g) => {

@@ -8,10 +8,12 @@ import {
 } from '../resources/resource-utils-cnpg'
 import type { CNPGWorkspaceResponse } from './workspace'
 import { cnpgScheduleBasisNote, formatCNPGRunTime, type CNPGSchedulePreview } from './schedule'
+import { Badge } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
 import { ClusterLink, NotReported, Note, ObjectProblems, PhaseBadge, SummaryShell, TimeAgo } from './CNPGSharedSummary'
 import {
   backupDestination,
+  cnpgScheduleDestinationBlocker,
   backupsForScheduledBackup,
   clustersIn,
   isBackupFromSchedule,
@@ -202,6 +204,7 @@ export function CNPGScheduledBackupSummary({
   const runsUnavailable = relationUnavailable(workspace, 'backups', ns, 'Backups')
   const runs = runsUnavailable ? [] : backupsForScheduledBackup(resource, workspaceList(workspace, 'backups'))
   const shown = runs.slice(0, RECENT_RUNS)
+  const blocker = resource?.spec?.suspend === true ? null : cnpgScheduleDestinationBlocker(resource, clustersIn(workspace))
 
   return (
     <SummaryShell>
@@ -210,7 +213,8 @@ export function CNPGScheduledBackupSummary({
       <SectionHeading>Schedule</SectionHeading>
       <FactGrid>
         <FactRow label="Status">
-          <PhaseBadge status={getCNPGScheduledBackupStatus(resource)} />
+          <span className="inline-flex flex-wrap items-center gap-2"><PhaseBadge status={getCNPGScheduledBackupStatus(resource)} />{blocker && <Badge severity="warning" size="sm">{blocker}</Badge>}</span>
+          {blocker && <Note>The resource list status comes from the ScheduledBackup alone.</Note>}
         </FactRow>
         <FactRow label="Cluster">
           <ClusterLink resource={resource} workspace={workspace} onNavigate={onNavigate} />

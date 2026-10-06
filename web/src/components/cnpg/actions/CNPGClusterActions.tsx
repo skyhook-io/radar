@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { ChevronDown, DatabaseBackup, MoreHorizontal, Repeat } from 'lucide-react'
 import { clsx } from 'clsx'
-import { ActionConfirmDialog, Tooltip, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA, type CNPGProblem } from '@skyhook-io/k8s-ui'
+import { ActionConfirmDialog, FoldSection, Tooltip, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA, type CNPGProblem } from '@skyhook-io/k8s-ui'
 import { useCNPGAction, useCNPGClusterCapabilities, useCNPGRuntime, type CNPGActionResult, type CNPGBackupMethod, type CNPGClusterActionName, type CNPGClusterCapabilities } from '../../../api/cnpg'
 import { actionOutcomeLocked, type ActionCapability, capabilityReason } from '../../../api/actions'
 import { useToast } from '../../ui/Toast'
@@ -37,12 +37,12 @@ type DialogKind = CNPGClusterActionName | 'restore' | 'report' | null
 const MENU_ITEM = 'block w-full px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover disabled:cursor-not-allowed disabled:text-theme-text-disabled'
 
 const RESTART_EFFECT: Record<string, string> = {
-  recreate: 'Pod recreated',
-  skipped_fenced: 'skipped (fenced)',
-  switchover: 'switchover to an updated standby, then recreated',
-  restart: 'restarted in place',
-  wait_for_user: 'waits for you to promote or restart it (supervised)',
-  restart_only_instance: 'restarted (only instance: downtime)',
+  recreate: 'Will recreate the standby Pod',
+  skipped_fenced: 'Will skip this fenced instance',
+  switchover: 'Will switch over to an updated standby, then recreate the former primary Pod',
+  restart: 'Will restart the primary in place',
+  wait_for_user: 'Will wait for you to promote or restart the primary',
+  restart_only_instance: 'Will restart the only instance (service stops during restart)',
 }
 
 function EffectItem({ list, label }: { list: { available: boolean; reason?: string; names: string[] }; label: string }) {
@@ -408,7 +408,7 @@ export function ClusterActionDialog({
   const fenced = facts.fencedInstances.all ? ['*'] : facts.fencedInstances.instances
   const fencingMalformed = !!facts.fencedInstances.malformed
   const allFenced = facts.fencedInstances.all
-  const [fenceSel, setFenceSel] = useState<string>(initialPod ?? '*')
+  const [fenceSel, setFenceSel] = useState<string>(kind === 'fence' ? '' : initialPod ?? '*')
   const instance = facts.instances.find((i) => i.pod === initialPod)
   const instanceIsPrimary = !!initialPod && initialPod === facts.currentPrimary
 
@@ -578,31 +578,32 @@ export function ClusterActionDialog({
           success: () => 'Reload requested.',
         }
       case 'fence': {
-        const choices = ['*', ...facts.instances.map((i) => i.pod).filter((p) => !fenced.includes(p))]
+        const choices = [...facts.instances.map((i) => i.pod).filter((p) => !fenced.includes(p)), '*']
         const next = fenceSel === '*' ? ['*'] : [...fenced.filter((f) => f !== '*'), fenceSel]
         const fencesPrimary = fenceSel === '*' || fenceSel === facts.currentPrimary
         return {
-          title: fenceSel === '*' ? `Fence every instance of ${name}?` : `Fence ${fenceSel}?`,
+          title: !fenceSel ? 'Fence instances?' : fenceSel === '*' ? `Fence every instance of ${name}?` : `Fence ${fenceSel}?`,
           confirmLabel: 'Fence',
-          effect: fencesPrimary
+          effect: !fenceSel ? 'Choose which instance to stop.' : fencesPrimary
             ? 'Stops PostgreSQL on the fenced instances while keeping their Pods and volumes. Writes stop and no failover happens while the primary is fenced.'
             : 'Stops PostgreSQL on this standby while keeping its Pod and volume for investigation.',
           body: (
             <label className="flex items-center gap-2 text-sm">
               <span className="text-xs text-theme-text-secondary">Instance</span>
               <select value={fenceSel} onChange={(e) => setFenceSel(e.target.value)} className="rounded-lg border border-theme-border bg-theme-base px-2 py-1 text-sm">
+                <option value="" disabled>Choose an instance</option>
                 {choices.map((c) => (
-                  <option key={c} value={c}>{c === '*' ? 'All instances' : c}{c === facts.currentPrimary ? ' (primary)' : ''}</option>
+                  <option key={c} value={c}>{c === '*' ? 'All instances — stops service' : c}{c === facts.currentPrimary ? ' (primary)' : ''}</option>
                 ))}
               </select>
             </label>
           ),
-          writes: [{ summary: `patch Cluster ${namespace}/${name}`, detail: `metadata.annotations["cnpg.io/fencedInstances"] = ${JSON.stringify(JSON.stringify(next))}` }],
+          writes: fenceSel ? [{ summary: `patch Cluster ${namespace}/${name}`, detail: `metadata.annotations["cnpg.io/fencedInstances"] = ${JSON.stringify(JSON.stringify(next))}` }] : [],
           scope: { kind: 'metadata', paths: ['metadata.annotations["cnpg.io/fencedInstances"]'] },
           typed: fencesPrimary,
           disruptive: fencesPrimary,
           params: { instances: fenceSel === '*' ? '*' : [fenceSel] },
-          invalid: fencingMalformed ? 'The cnpg.io/fencedInstances annotation is not valid JSON; fix it in YAML first.' : undefined,
+          invalid: fencingMalformed ? 'The cnpg.io/fencedInstances annotation is not valid JSON; fix it in YAML first.' : !fenceSel ? 'Choose an instance to fence.' : undefined,
           success: () => 'Fencing requested.',
         }
       }
@@ -643,7 +644,7 @@ export function ClusterActionDialog({
           effect: 'Shuts down every instance and deletes their Pods, primary first. Volumes are kept so the cluster can resume where it stopped.',
           body: fx ? (
             <ul className="list-disc space-y-1 pl-5 text-xs text-theme-text-secondary">
-              <EffectItem list={{ available: fx.volumes.available, reason: fx.volumes.reason, names: fx.volumes.items.map((v) => `${v.name}${v.capacity ? ` (${v.capacity})` : ''}`) }} label="Kept volumes" />
+              <EffectItem list={{ available: fx.volumes.available, reason: fx.volumes.reason, names: fx.volumes.items.map((v) => `${v.name} (${v.capacity ? `capacity ${v.capacity}` : 'capacity not reported'}${v.requested ? `; requested ${v.requested}` : ''})`) }} label="Kept PVCs" />
               <EffectItem list={fx.poolers} label="Poolers that lose their backend" />
               <EffectItem list={fx.unsuspendedScheduledBackups} label="Schedules still active (each run will fail until it resumes)" />
               <EffectItem list={{ available: fx.databases.available && fx.publications.available && fx.subscriptions.available, names: [...fx.databases.names, ...fx.publications.names, ...fx.subscriptions.names] }} label="Declarations that stop reconciling" />
@@ -798,18 +799,20 @@ export function CNPGRestartReview({ caps, problems = [], onOpenOverview }: { cap
       {primary?.effect === 'wait_for_user' && <p>The primary waits for your manual promotion or restart. Restarting it later interrupts its connections.</p>}
       {primary?.effect === 'skipped_fenced' && <p>The fenced primary is skipped.</p>}
       {caps.restartPlan && <>
-        <div>Expected order (primaryUpdateStrategy {caps.restartPlan.primaryUpdateStrategy}, primaryUpdateMethod {caps.restartPlan.primaryUpdateMethod}):</div>
+        {primary && ['switchover', 'restart'].includes(primary.effect) && <p>The operator updates the primary automatically after the standbys: {primary.effect === 'switchover' ? 'it promotes an updated standby, then recreates the former primary Pod.' : 'it restarts the primary in place.'}</p>}
+        <div>Planned order:</div>
         <ol className="list-decimal space-y-1 pl-5">
           {caps.restartPlan.steps.map((s) => {
             const instance = instances.find((i) => i.pod === s.instance)
             const blockers = problems.filter((p) => p.instance === s.instance || p.subject.kind === 'Pod' && p.subject.name === s.instance)
             return <li key={s.instance}>
-              <span className="font-mono">{s.instance}</span> ({s.role}): {RESTART_EFFECT[s.effect] ?? s.effect}
-              <span> · {instance?.podReadable ? instance.podExists ? instance.ready ? 'ready now' : 'not ready now' : 'instance Pod absent' : 'readiness not read'}</span>
+              <span className="font-mono">{s.instance}</span> : {RESTART_EFFECT[s.effect] ?? s.effect}
+              <span> (currently {instance?.podReadable ? instance.podExists ? instance.ready ? 'ready' : 'not ready' : 'absent' : 'readiness not read'})</span>
               {blockers.map((p) => <div key={p.id} className={toneTextClass('degraded')}>{p.title}{p.detail ? ` · ${p.detail}` : ''}{onOpenOverview && <button type="button" onClick={onOpenOverview} className="ml-1 text-accent-text hover:underline">See Overview’s problems →</button>}</div>)}
             </li>
           })}
         </ol>
+        <FoldSection title="Operator update settings" summary="" attention={false}><div>primaryUpdateStrategy: {caps.restartPlan.primaryUpdateStrategy}</div><div>primaryUpdateMethod: {caps.restartPlan.primaryUpdateMethod}</div></FoldSection>
       </>}
     </div>
   )

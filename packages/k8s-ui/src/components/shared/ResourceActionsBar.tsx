@@ -40,6 +40,7 @@ import { isCoreBatchJob } from '../../utils/api-resources'
 
 interface ResourceActionsBarProps {
   resource: SelectedResource
+  leadingActions?: React.ReactNode
   data: any
   onClose?: () => void
   hideLogs?: boolean
@@ -153,7 +154,7 @@ interface ResourceActionsBarProps {
 }
 
 export function ResourceActionsBar({
-  resource, data, onClose, hideLogs, showYaml, onToggleYaml,
+  resource, data, leadingActions, onClose, hideLogs, showYaml, onToggleYaml,
   onCompareTo,
   onCompareAcrossClusters,
   canExec, canViewLogs, canPortForward,
@@ -289,6 +290,8 @@ export function ResourceActionsBar({
 
   return (
     <div className="flex items-center gap-1.5 px-4 py-2 flex-wrap">
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden" data-action-group="object">
+      {leadingActions}
       {/* Kind-specific actions (left) */}
       {kind === 'pods' && (
         <>
@@ -584,8 +587,8 @@ export function ResourceActionsBar({
         </button>
       )}
 
-      {/* Spacer pushes universal actions to the right */}
-      <div className="flex-1" />
+      </div>
+      <div className="ml-auto flex flex-wrap items-center gap-1.5" data-action-group="utility">
 
       {/* Universal actions (right-aligned). The AI/Diagnose action is NOT here — it
           lives in the detail header chrome (see WorkloadView), set apart from these
@@ -670,6 +673,8 @@ export function ResourceActionsBar({
           </button>
         </Tooltip>
       )}
+
+      </div>
 
       <ForceDeleteConfirmDialog
         open={showDeleteConfirm}

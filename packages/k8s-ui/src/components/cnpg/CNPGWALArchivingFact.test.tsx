@@ -24,3 +24,16 @@ it('folds the raw condition and exposes relative age with the exact timestamp on
   expect(document.body.textContent).toContain(stamp)
   act(() => root.unmount()); host.remove(); vi.useRealTimers()
 })
+
+it('keeps the compact verdict, consequence and per-row operator disclosure', () => {
+  const host = document.createElement('div'); const root = createRoot(host)
+  act(() => root.render(<CNPGWALArchivingFact compact fact={{ text: 'Not archived: no destination configured', tone: 'neutral', detail: 'CloudNativePG still reports archiving as working because it accepts each WAL file without keeping it.', operatorCondition: { type: 'ContinuousArchiving', status: 'True', message: 'working' } }} />))
+  expect(host.textContent).toContain('Not archived: no destination configured')
+  expect(host.textContent).toContain('No point-in-time recovery')
+  expect(host.textContent).not.toContain('because')
+  const fold = host.querySelector('button')!
+  expect(fold.textContent).toContain('Operator report')
+  act(() => fold.click())
+  expect(host.textContent).toContain('ContinuousArchiving: True')
+  act(() => root.unmount())
+})

@@ -1,3 +1,4 @@
+import { useCNPGKubectlContext } from './useCNPGKubectlContext'
 import type { ReactNode } from 'react'
 import {
   CNPG_GROUP, CNPG_BARMAN_OBJECTSTORE_GROUP, CNPGClusterCertificates, CNPGConnectSection,
@@ -22,6 +23,7 @@ const cardClass = 'rounded-xl border border-theme-border bg-theme-surface px-4 p
 export function CNPGConfiguration({ namespace, name, onNavigate, onSelectTab }: {
   namespace: string; name: string; onNavigate: (r: SelectedResource) => void; onSelectTab: (tab: string) => void
 }) {
+  const kubeconfigContext = useCNPGKubectlContext()
   const object = useResource<any>('clusters', namespace, name, CNPG_GROUP)
   const { query, row, ha } = useCNPGClusterAssessment(namespace, name)
   const navigate = useCNPGNavigate()
@@ -39,7 +41,7 @@ export function CNPGConfiguration({ namespace, name, onNavigate, onSelectTab }: 
       <RefreshFailedNotice queries={[object, ha, query]} />
       <section className={cardClass}>
         <FoldSection title="Connect" summary={`Services ${services} · poolers ${poolers} · database ${info.database.value ?? 'unknown'}`} attention={false}>
-          <CNPGConnectSection cluster={cluster} poolers={row?.poolerObjects} poolersKnown={row?.poolersKnown ?? false} showHeading={false} onNavigate={go}
+          <CNPGConnectSection ha={ha.data} haUnavailableReason={ha.isLoading ? 'Reading availability…' : ha.error instanceof Error ? `Availability could not be read: ${ha.error.message}` : undefined} kubeconfigContext={kubeconfigContext} cluster={cluster} poolers={row?.poolerObjects} poolersKnown={row?.poolersKnown ?? false} showHeading={false} onNavigate={go}
             onOpenReachability={(svc) => navigate(buildWorkloadPath({ kind: 'services', group: '', namespace: svc.namespace, name: svc.name, tab: 'reachability' }))} />
         </FoldSection>
       </section>

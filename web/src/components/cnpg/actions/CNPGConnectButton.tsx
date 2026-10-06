@@ -1,3 +1,5 @@
+import { useCNPGClusterHA } from '../../../api/cnpg-ha'
+import { useCNPGKubectlContext } from '../useCNPGKubectlContext'
 import { useEffect, useId, useMemo, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { Plug, X } from 'lucide-react'
@@ -49,10 +51,12 @@ export function CNPGConnectButton({
   compact?: boolean
   onNavigate?: NavigateToResource
 }) {
+  const kubeconfigContext = useCNPGKubectlContext()
   const titleId = useId()
   const location = useLocation()
   const [params, setParams] = useSearchParams()
   const [open, setOpen] = useState(false)
+  const ha = useCNPGClusterHA(namespace, name, { enabled: open, refetchInterval: false })
   const id = useMemo(() => Symbol('cnpg-connect'), [])
   useEffect(() => registerConnectButton(id), [id])
   const requested = params.get(CNPG_CONNECT_PARAM) === cnpgConnectParamValue(namespace, name, compact ? 'drawer' : 'page')
@@ -109,9 +113,9 @@ export function CNPGConnectButton({
           </button>
         </div>
         <div className="max-h-[70vh] overflow-y-auto p-4">
-          <RefreshFailedNotice queries={[query]} />
+          <RefreshFailedNotice queries={[query, ha]} />
           {row?.cluster ? (
-            <CNPGConnectSection cluster={row.cluster} poolers={row.poolerObjects} poolersKnown={row.poolersKnown} onNavigate={go} onOpenReachability={openReachability} showHeading={false} />
+            <CNPGConnectSection ha={ha.data} haUnavailableReason={ha.isLoading ? 'Reading availability…' : ha.error instanceof Error ? `Availability could not be read: ${ha.error.message}` : undefined} kubeconfigContext={kubeconfigContext} cluster={row.cluster} poolers={row.poolerObjects} poolersKnown={row.poolersKnown} onNavigate={go} onOpenReachability={openReachability} showHeading={false} />
           ) : query.error && !query.data ? (
             <Notice>
               Cluster could not be read: {query.error instanceof Error ? query.error.message : 'unknown error'}.{' '}

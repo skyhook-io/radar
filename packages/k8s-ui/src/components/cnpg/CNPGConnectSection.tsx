@@ -1,8 +1,9 @@
+import type { CNPGClusterHA } from './ha'
 import { useState } from 'react'
 import { Check, Copy } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
 import { CNPG_GROUP } from '../resources/resource-utils-cnpg'
-import { CNPG_DEFAULT_PORT, cnpgConnectionURI, cnpgConnectInfo, cnpgPsqlCommand, cnpgPortForwardCommand, type CNPGConnectEndpoint } from './connect'
+import { CNPG_DEFAULT_PORT, cnpgEndpointAvailability, cnpgConnectionURI, cnpgConnectInfo, cnpgPsqlCommand, cnpgPortForwardCommand, type CNPGConnectEndpoint } from './connect'
 import { type NavigateToRef, RefLink } from '../ui/RefLink'
 import { FactGrid, FactRow } from '../facts'
 import { SectionHeading } from '../ui/FoldSection'
@@ -66,8 +67,14 @@ export function CNPGConnectSection({
   onNavigate,
   onOpenReachability,
   showHeading = true,
+  kubeconfigContext,
+  ha,
+  haUnavailableReason,
 }: {
   cluster: any
+  kubeconfigContext?: string
+  ha?: CNPGClusterHA
+  haUnavailableReason?: string
   poolers?: any[]
   /** False when Poolers could not be listed, so a Pooler may exist that is not shown. */
   poolersKnown?: boolean
@@ -83,11 +90,13 @@ export function CNPGConnectSection({
   const local = { ...primary, host: '127.0.0.1', port: CNPG_DEFAULT_PORT }
   return (
     <>
-      {showHeading && <SectionHeading hint="from the Cluster spec · hosts resolve inside the Kubernetes cluster">Connect</SectionHeading>}
+      {showHeading && <SectionHeading hint="addresses from the Cluster spec · availability from HA evidence · hosts resolve inside Kubernetes">Connect</SectionHeading>}
       <FactGrid>
         <FactRow label="Services">
           <ul className="grid grid-cols-[5rem_minmax(0,1fr)_auto] items-baseline gap-x-2 gap-y-2">
-            {info.endpoints.map((ep) => (
+            {info.endpoints.map((ep) => {
+              const availability = cnpgEndpointAvailability(ep, ha, haUnavailableReason)
+              return (
               <li key={`${ep.role}/${ep.name}`} className="contents">
                 <span className="w-20 shrink-0 text-xs text-theme-text-tertiary">{ROLE_LABEL[ep.role]}</span>
                 <div className="min-w-0 text-xs [overflow-wrap:anywhere]">
@@ -95,6 +104,7 @@ export function CNPGConnectSection({
                     {`${ep.host}:${ep.port}`}
                   </RefLink>
                   <div className="mt-0.5 text-xs text-theme-text-secondary">{ep.selects}</div>
+                  <div className="text-xs text-theme-text-secondary">{availability.text}{availability.source ? ` · ${availability.source}` : ''}</div>
                   {ep.portFromTemplate && <div className="text-xs text-theme-text-tertiary">port from serviceTemplate</div>}
                 </div>
                 {onOpenReachability ? (
@@ -108,7 +118,8 @@ export function CNPGConnectSection({
                   </Tooltip>
                 ) : <span />}
               </li>
-            ))}
+              )
+            })}
           </ul>
           {info.disabled.length > 0 && (
             <div className="mt-1 text-[11.5px] text-theme-text-tertiary">
@@ -152,7 +163,8 @@ export function CNPGConnectSection({
         {info.database.value && (
           <FactRow label="From this computer">
             <div className="space-y-1">
-              <Snippet text={cnpgPortForwardCommand(primary, ns)} label="port-forward command" />
+              <Snippet text={cnpgPortForwardCommand(primary, ns, CNPG_DEFAULT_PORT, kubeconfigContext)} label="port-forward command" />
+              {!kubeconfigContext && <div className="text-xs text-theme-text-tertiary">uses your current kubectl context</div>}
               <Snippet text={cnpgConnectionURI(local, info)} label="local connection string" />
               <Snippet text={cnpgPsqlCommand(local, info)} label="local psql command" />
             </div>

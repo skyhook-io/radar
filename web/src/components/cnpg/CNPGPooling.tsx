@@ -17,7 +17,7 @@ import {
 import { useCNPGPoolerRuntime } from '../../api/cnpg'
 import { useCNPGPoolerCapabilities } from '../../api/cnpg-sessions'
 import { CNPGWorkspaceHeader, CoverageNotice, cnpgResource, coverageEmpty, type CNPGScreenProps } from './shared'
-import { FilterChips, Mono, namespaceChip, RefreshFailedNotice, ScreenBody, SectionTable, Sub } from '../workspace/layout'
+import { FilterChips, namespaceChip, RefreshFailedNotice, ScreenBody, SectionTable, Sub } from '../workspace/layout'
 
 const SEVERITY: Record<HealthLevel, 'success' | 'warning' | 'alert' | 'error' | 'neutral'> = {
   healthy: 'success',
@@ -54,10 +54,10 @@ export function CNPGPooling({ data, fleet, namespaces, searchParams, onSetParams
         <SectionTable
           title="Poolers"
           columns={[
-            { header: 'Pooler', width: '22%', cell: (p: any) => <>{p.metadata?.name}<Sub>{p.metadata?.namespace}</Sub></> },
+            { header: 'Pooler', width: '18%', cell: (p: any) => <>{p.metadata?.name}<Sub>{p.metadata?.namespace}</Sub></> },
             {
               header: 'Target cluster',
-              width: '18%',
+              width: '16%',
               cell: (p) => {
                 const name = p.spec?.cluster?.name
                 const visible = fleet.rows.some((r) => r.namespace === p.metadata?.namespace && r.name === name)
@@ -69,7 +69,7 @@ export function CNPGPooling({ data, fleet, namespaces, searchParams, onSetParams
                 )
               },
             },
-            { header: 'Type', width: '8%', cell: (p) => <Mono>{getCNPGPoolerType(p)}</Mono> },
+            { header: 'Type', width: '14%', cell: (p) => { const type = getCNPGPoolerType(p); return type === 'ro' ? 'Standbys (read-only)' : type === 'rw' ? 'Primary (read-write)' : type === 'r' ? 'Any instance' : type === '-' ? 'Not reported' : type } },
             { header: 'Mode', width: '12%', cell: (p) => getCNPGPoolerMode(p) },
             {
               header: 'Readiness',

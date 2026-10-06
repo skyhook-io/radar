@@ -106,3 +106,18 @@ it('keeps pod/template evidence in expanded neutral context with navigable witne
   expect(expanded).not.toContain('confidence')
   expect(expanded).not.toContain('Caused by')
 })
+
+it('wraps a compact Pod scheduling cause separately and retains the full message in details', () => {
+  const raw = '0/2 nodes are available: 2 Too many pods. preemption: 0/2 nodes are available: 2 No preemption victims found for incoming pod.'
+  const pod: Issue = { ...issue, kind: 'Pod', reason: 'Unschedulable', cause: raw, message: raw }
+  const html = renderToString(<IssueRow issue={pod} compact open onToggle={() => {}} />)
+  expect(html).toContain('break-words text-xs text-theme-text-secondary')
+  expect(html).toContain('both nodes have reached their Pod limit')
+  expect(html).toContain(raw)
+  const producerMessage = '2 node(s) insufficient pods (0/2 nodes available)'
+  const reported = renderToString(<IssueRow issue={{ ...pod, cause: undefined, message: producerMessage }} compact open onToggle={() => {}} />)
+  expect(reported).toContain('both nodes have reached their Pod limit')
+  expect(reported).toContain(producerMessage)
+  const regular = renderToString(<IssueRow issue={pod} open={false} onToggle={() => {}} />)
+  expect(regular).not.toContain('both nodes have reached their Pod limit')
+})
