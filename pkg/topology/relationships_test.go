@@ -685,3 +685,49 @@ func TestGetRelationships_NoProtects_FieldsOmitted(t *testing.T) {
 		t.Errorf("rel.NetworkPolicies: want empty, got %+v", rel.NetworkPolicies)
 	}
 }
+
+func TestGetRelationships_UsesSeparatesDependenciesFromScaling(t *testing.T) {
+	topo := &Topology{Nodes: []Node{
+		{ID: "certificate/team/tls", Kind: KindCertificate, Name: "tls", Data: map[string]any{"apiVersion": "cert-manager.io/v1"}},
+		{ID: "issuer/team/ca", Kind: NodeKind("Issuer"), Name: "ca", Data: map[string]any{"apiVersion": "cert-manager.io/v1"}},
+		{ID: "deployment/team/app", Kind: KindDeployment, Name: "app"},
+		{ID: "scaledobject/team/scale", Kind: KindScaledObject, Name: "scale", Data: map[string]any{"apiVersion": "keda.sh/v1alpha1"}},
+		{ID: "triggerauthentication/team/credential", Kind: NodeKind("TriggerAuthentication"), Name: "credential", Data: map[string]any{"apiVersion": "keda.sh/v1alpha1"}},
+	}, Edges: []Edge{
+		{Source: "certificate/team/tls", Target: "issuer/team/ca", Type: EdgeUses},
+		{Source: "scaledobject/team/scale", Target: "deployment/team/app", Type: EdgeUses},
+		{Source: "scaledobject/team/scale", Target: "triggerauthentication/team/credential", Type: EdgeUses},
+	}}
+	cert := GetRelationships("Certificate", "team", "tls", topo, nil, nil)
+	if cert == nil || cert.ScaleTarget != nil || len(cert.Dependencies) != 1 || cert.Dependencies[0].Name != "ca" {
+		t.Fatalf("certificate relationship = %+v, want issuer dependency without scale target", cert)
+	}
+	issuer := GetRelationships("Issuer", "team", "ca", topo, nil, nil)
+	if issuer == nil || len(issuer.Scalers) != 0 || len(issuer.Dependents) != 1 || issuer.Dependents[0].Name != "tls" {
+		t.Fatalf("issuer relationship = %+v, want certificate dependent without scaler", issuer)
+	}
+	scaler := GetRelationships("ScaledObject", "team", "scale", topo, nil, nil)
+	if scaler == nil || scaler.ScaleTarget == nil || scaler.ScaleTarget.Name != "app" || len(scaler.Dependencies) != 1 || scaler.Dependencies[0].Name != "credential" {
+		t.Fatalf("scaler relationship = %+v, want workload target and authentication dependency", scaler)
+	}
+	app := GetRelationships("Deployment", "team", "app", topo, nil, nil)
+	if app == nil || len(app.Scalers) != 1 || len(app.Dependents) != 0 {
+		t.Fatalf("workload relationship = %+v, want scaler only", app)
+	}
+}
+
+func TestScalingRelationshipRequiresExactAPIGroup(t *testing.T) {
+	for _, source := range []ResourceRef{
+		{Kind: "HorizontalPodAutoscaler", Group: "example.com", Namespace: "team"},
+		{Kind: "VerticalPodAutoscaler", Group: "example.com", Namespace: "team"},
+		{Kind: "ScaledObject", Group: "example.com", Namespace: "team"},
+		{Kind: "Certificate", Group: "cert-manager.io", Namespace: "team"},
+	} {
+		if isScalingRelationship(&source, &ResourceRef{Kind: "Deployment", Group: "apps", Namespace: "team"}) {
+			t.Fatalf("classified non-scaler as scaling: %+v", source)
+		}
+	}
+	if isStorageResourceRef(&ResourceRef{Kind: "PersistentVolumeClaim", Group: "example.com"}) {
+		t.Fatal("classified custom resource as core storage")
+	}
+}

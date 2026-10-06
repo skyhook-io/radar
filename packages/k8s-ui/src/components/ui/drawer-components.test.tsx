@@ -62,3 +62,20 @@ describe('Recent Events layout', () => {
     expect(fullscreen).toContain('Reason23')
   })
 })
+
+describe('dependency relationships', () => {
+  it('renders a dependency-only response with the existing navigation control', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ dependencies: [{ kind: 'Issuer', group: 'cert-manager.io', namespace: 'team', name: 'ca' }] }} onNavigate={() => {}} />)
+    expect(html).toContain('Depends On')
+    expect(html).toContain('ca')
+    expect(html).toContain('<button')
+    expect(html).not.toContain('Scale Target')
+  })
+
+  it('renders the reverse dependency without calling it an autoscaler', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ dependents: [{ kind: 'Certificate', group: 'cert-manager.io', namespace: 'team', name: 'tls' }] }} />)
+    expect(html).toContain('Required By')
+    expect(html).toContain('tls')
+    expect(html).not.toContain('Autoscaler')
+  })
+})

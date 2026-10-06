@@ -375,11 +375,13 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				rel.Pods = append(rel.Pods, *ref)
 			}
 		case EdgeUses:
-			if isStorageRefKind(kindLower) {
-				rel.Consumers = append(rel.Consumers, *ref)
-			} else {
-				// HPA/ScaledObject/ScaledJob scales a workload
+			source := refForNodeID(edge.Source)
+			if isStorageResourceRef(source) {
+				rel.Consumers = appendResourceRef(rel.Consumers, *ref)
+			} else if isScalingRelationship(source, ref) {
 				rel.ScaleTarget = ref
+			} else {
+				rel.Dependencies = appendResourceRef(rel.Dependencies, *ref)
 			}
 		case EdgeProtects:
 			// Outgoing EdgeProtects fires when the queried resource IS a
@@ -439,11 +441,12 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				rel.Services = append(rel.Services, *ref)
 			}
 		case EdgeUses:
-			if isStorageRefKind(ref.Kind) {
-				rel.StorageRefs = append(rel.StorageRefs, *ref)
+			if isStorageResourceRef(ref) {
+				rel.StorageRefs = appendResourceRef(rel.StorageRefs, *ref)
+			} else if isScalingRelationship(ref, refForNodeID(edge.Target)) {
+				rel.Scalers = appendResourceRef(rel.Scalers, *ref)
 			} else {
-				// An HPA/ScaledObject/ScaledJob scales this resource
-				rel.Scalers = append(rel.Scalers, *ref)
+				rel.Dependents = appendResourceRef(rel.Dependents, *ref)
 			}
 		case EdgeProtects:
 			// Incoming EdgeProtects: dispatch on source kind so PDBs and
@@ -684,7 +687,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if rel.Owner == nil && rel.Deployment == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
 		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.Routes) == 0 &&
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
-		len(rel.StorageRefs) == 0 &&
+		len(rel.StorageRefs) == 0 && len(rel.Dependencies) == 0 && len(rel.Dependents) == 0 &&
 		len(rel.PDBs) == 0 && len(rel.NetworkPolicies) == 0 &&
 		rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
 		rel.ServiceAccount == nil && rel.Node == nil && len(rel.ResourceClaims) == 0 && len(rel.ManagedBy) == 0 {
@@ -776,10 +779,24 @@ func appendResourceRef(refs []ResourceRef, candidate ResourceRef) []ResourceRef 
 	return append(refs, candidate)
 }
 
-func isStorageRefKind(kind string) bool {
-	switch strings.ToLower(kind) {
-	case "persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs":
-		return true
+func isStorageResourceRef(ref *ResourceRef) bool {
+	return ref != nil && ref.Group == "" && strings.EqualFold(ref.Kind, "PersistentVolumeClaim")
+}
+
+func isScalingRelationship(source, target *ResourceRef) bool {
+	if source == nil || target == nil || source.Namespace != target.Namespace {
+		return false
+	}
+	switch source.Kind {
+	case "HorizontalPodAutoscaler":
+		return source.Group == "autoscaling"
+	case "VerticalPodAutoscaler":
+		return source.Group == "autoscaling.k8s.io"
+	case "ScaledObject", "ScaledJob":
+		if target.Group == "keda.sh" && (target.Kind == "TriggerAuthentication" || target.Kind == "ClusterTriggerAuthentication") {
+			return false
+		}
+		return source.Group == "keda.sh"
 	default:
 		return false
 	}
