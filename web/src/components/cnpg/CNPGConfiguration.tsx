@@ -41,7 +41,7 @@ export function CNPGConfiguration({ namespace, name, onNavigate, onSelectTab }: 
       <RefreshFailedNotice queries={[object, ha, query]} />
       <section className={cardClass}>
         <FoldSection title="Connect" summary={`Services ${services} · poolers ${poolers} · database ${info.database.value ?? 'unknown'}`} attention={false}>
-          <CNPGConnectSection ha={ha.data} haUnavailableReason={ha.isLoading ? 'Reading availability…' : ha.error instanceof Error ? `Availability could not be read: ${ha.error.message}` : undefined} kubeconfigContext={kubeconfigContext} cluster={cluster} poolers={row?.poolerObjects} poolersKnown={row?.poolersKnown ?? false} showHeading={false} onNavigate={go}
+          <CNPGConnectSection ha={ha.data} haUnavailableReason={ha.isLoading ? 'Reading availability…' : ha.error instanceof Error ? `Availability could not be read: ${ha.error.message}` : undefined} kubeconfigContext={kubeconfigContext?.name} kubeconfigSource={kubeconfigContext?.source} cluster={cluster} poolers={row?.poolerObjects} poolersKnown={row?.poolersKnown ?? false} showHeading={false} onNavigate={go}
             onOpenReachability={(svc) => navigate(buildWorkloadPath({ kind: 'services', group: '', namespace: svc.namespace, name: svc.name, tab: 'reachability' }))} />
         </FoldSection>
       </section>

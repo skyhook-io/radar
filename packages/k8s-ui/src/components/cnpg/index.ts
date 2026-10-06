@@ -18,6 +18,7 @@ export * from './CNPGLogicalPath'
 export {
   backupsForScheduledBackup,
   cnpgScheduleDestinationBlocker,
+  objectStoreForBackup,
   inferredObjectStoreHealth,
   relationUnavailable,
   usersOfObjectStore,

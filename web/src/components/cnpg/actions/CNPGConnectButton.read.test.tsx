@@ -1,5 +1,5 @@
 vi.mock('../../../api/cnpg-ha', () => ({ useCNPGClusterHA: () => ({ data: { rwEndpoints: { state: 'ok', pods: ['orders-1'] }, pods: { state: 'ok' }, instances: [{ pod: 'orders-1', role: 'primary', ready: true }] } }) }))
-vi.mock('../useCNPGKubectlContext', () => ({ useCNPGKubectlContext: () => 'kind-test' }))
+vi.mock('../useCNPGKubectlContext', () => ({ useCNPGKubectlContext: () => ({ name: 'kind-test', source: 'test-config' }) }))
 // @vitest-environment jsdom
 import { act, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -33,6 +33,7 @@ it('passes the known host context and independently read HA availability into th
   act(() => root.render(<MemoryRouter><CNPGConnectButton namespace="db" name="orders" /></MemoryRouter>))
   act(() => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Connect')!.click())
   expect(host.textContent).toContain('kubectl --context kind-test -n db port-forward service/orders-rw')
+  expect(host.textContent).toContain('Context as named in your kubeconfig (test-config); kubectl must read the same kubeconfig file.')
   expect(host.textContent).toContain('Unavailable: no ready standby')
   expect(host.textContent).toContain('Ready endpoints')
   act(() => root.unmount()); host.remove(); state.row = undefined

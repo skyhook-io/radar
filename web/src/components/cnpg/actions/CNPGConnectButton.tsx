@@ -115,7 +115,7 @@ export function CNPGConnectButton({
         <div className="max-h-[70vh] overflow-y-auto p-4">
           <RefreshFailedNotice queries={[query, ha]} />
           {row?.cluster ? (
-            <CNPGConnectSection ha={ha.data} haUnavailableReason={ha.isLoading ? 'Reading availability…' : ha.error instanceof Error ? `Availability could not be read: ${ha.error.message}` : undefined} kubeconfigContext={kubeconfigContext} cluster={row.cluster} poolers={row.poolerObjects} poolersKnown={row.poolersKnown} onNavigate={go} onOpenReachability={openReachability} showHeading={false} />
+            <CNPGConnectSection ha={ha.data} haUnavailableReason={ha.isLoading ? 'Reading availability…' : ha.error instanceof Error ? `Availability could not be read: ${ha.error.message}` : undefined} kubeconfigContext={kubeconfigContext?.name} kubeconfigSource={kubeconfigContext?.source} cluster={row.cluster} poolers={row.poolerObjects} poolersKnown={row.poolersKnown} onNavigate={go} onOpenReachability={openReachability} showHeading={false} />
           ) : query.error && !query.data ? (
             <Notice>
               Cluster could not be read: {query.error instanceof Error ? query.error.message : 'unknown error'}.{' '}

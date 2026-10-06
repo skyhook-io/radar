@@ -1,4 +1,4 @@
-vi.mock('./useCNPGKubectlContext', () => ({ useCNPGKubectlContext: () => 'kind-test' }))
+vi.mock('./useCNPGKubectlContext', () => ({ useCNPGKubectlContext: () => ({ name: 'kind-test', source: 'test-config' }) }))
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -39,6 +39,8 @@ describe('Configuration composition', () => {
     expect(html.indexOf('PostgreSQL parameters')).toBeLessThan(html.indexOf('Certificates'))
     expect(html.indexOf('Certificates')).toBeLessThan(html.indexOf('Labels and annotations'))
     expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('kubectl --context kind-test -n db port-forward service/pg-rw')
+    expect(html).toContain('Context as named in your kubeconfig (test-config); kubectl must read the same kubeconfig file.')
   })
   it.each([{ isLoading: true }, { error: new Error('runtime failed') }])('keeps Cluster declarations when observations are unavailable: %j', (query) => {
     state.params = query

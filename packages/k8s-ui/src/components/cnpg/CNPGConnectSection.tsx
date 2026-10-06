@@ -68,11 +68,13 @@ export function CNPGConnectSection({
   onOpenReachability,
   showHeading = true,
   kubeconfigContext,
+  kubeconfigSource,
   ha,
   haUnavailableReason,
 }: {
   cluster: any
   kubeconfigContext?: string
+  kubeconfigSource?: string
   ha?: CNPGClusterHA
   haUnavailableReason?: string
   poolers?: any[]
@@ -164,7 +166,7 @@ export function CNPGConnectSection({
           <FactRow label="From this computer">
             <div className="space-y-1">
               <Snippet text={cnpgPortForwardCommand(primary, ns, CNPG_DEFAULT_PORT, kubeconfigContext)} label="port-forward command" />
-              {!kubeconfigContext && <div className="text-xs text-theme-text-tertiary">uses your current kubectl context</div>}
+              <div className="text-xs text-theme-text-tertiary">{kubeconfigContext ? `Context as named in your kubeconfig${kubeconfigSource ? ` (${kubeconfigSource})` : ''}; kubectl must read the same kubeconfig file.` : 'uses your current kubectl context'}</div>
               <Snippet text={cnpgConnectionURI(local, info)} label="local connection string" />
               <Snippet text={cnpgPsqlCommand(local, info)} label="local psql command" />
             </div>

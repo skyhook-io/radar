@@ -43,12 +43,14 @@ it('uses one three-column grid with every explanation under its own host', () =>
 
 it('shows command context certainty and per-service availability beside each endpoint', () => {
   const host = document.createElement('div')
-  host.innerHTML = renderToStaticMarkup(<CNPGConnectSection cluster={cluster} kubeconfigContext="kind-orders" ha={{ rwEndpoints: { state: 'ok', pods: ['orders-1'] }, pods: { state: 'ok' }, instances: [{ pod: 'orders-1', role: 'primary', ready: true }] } as any} />)
+  host.innerHTML = renderToStaticMarkup(<CNPGConnectSection cluster={cluster} kubeconfigContext="kind-orders" kubeconfigSource="orders-config" ha={{ rwEndpoints: { state: 'ok', pods: ['orders-1'] }, pods: { state: 'ok' }, instances: [{ pod: 'orders-1', role: 'primary', ready: true }] } as any} />)
   expect(host.textContent).toContain('kubectl --context kind-orders')
   expect(host.textContent).not.toContain('uses your current kubectl context')
+  expect(host.textContent).toContain('Context as named in your kubeconfig (orders-config); kubectl must read the same kubeconfig file.')
   expect([...host.querySelectorAll('li')].map((li) => li.textContent)).toEqual([expect.stringContaining('Ready endpoints'), expect.stringContaining('Unavailable: no ready standby'), expect.stringContaining('Ready instance observed')])
   host.innerHTML = renderToStaticMarkup(<CNPGConnectSection cluster={cluster} />)
   expect(host.textContent).toContain('uses your current kubectl context')
+  expect(host.textContent).not.toContain('--context')
   expect([...host.querySelectorAll('li')].every((li) => li.textContent?.includes('Not checked'))).toBe(true)
 })
 

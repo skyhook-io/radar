@@ -162,8 +162,8 @@ export function backupTime(backup: any): number {
 }
 
 /**
- * The ObjectStore a barman-cloud plugin Backup wrote to. The Backup's own
- * plugin parameters are a record of that run; the target Cluster's plugin
+ * The ObjectStore a barman-cloud plugin Backup or ScheduledBackup names. Its own
+ * plugin parameters take precedence; the target Cluster's plugin
  * configuration is only what it is configured with now, so a store taken from
  * there is marked inferred.
  */

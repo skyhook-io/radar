@@ -1,4 +1,4 @@
-import { CNPG_BARMAN_PLUGIN_NAME, getCNPGClusterBarmanPlugin, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel, type CNPGWorkspaceResponse, coverageReadable, formatGrant } from '@skyhook-io/k8s-ui'
+import { CNPG_BARMAN_PLUGIN_NAME, getCNPGClusterBarmanPlugin, getCNPGBackupPlugin, objectStoreForBackup, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel, type CNPGWorkspaceResponse, coverageReadable, formatGrant } from '@skyhook-io/k8s-ui'
 import type { CNPGRuntimeResponse } from '../../../api/cnpg'
 import type { ActionCapability } from '../../../api/actions'
 import type { CNPGRecoveryResponse, CNPGRecoveryPod } from '../../../api/cnpg-recovery'
@@ -31,6 +31,7 @@ export function restoreSourceForBackup(backup: any, sourceCluster: any | null): 
   if (backup?.status?.phase !== 'completed') return null
   const name = backup.metadata?.name
   if (!isPluginBackup(backup)) return { kind: 'backup', backup: name, backupEnd: backupEnd(backup) }
+  if (getCNPGBackupPlugin(backup)?.name !== CNPG_BARMAN_PLUGIN_NAME) return null
   const params = backup.spec?.pluginConfiguration?.parameters ?? {}
   const plugin = (sourceCluster?.spec?.plugins ?? []).find((p: any) => p?.name === CNPG_BARMAN_PLUGIN_NAME)
   const objectStore = params.barmanObjectName || plugin?.parameters?.barmanObjectName
@@ -41,7 +42,7 @@ export function restoreSourceForBackup(backup: any, sourceCluster: any | null): 
 }
 
 /** Where a Cluster's backups can be restored from, in order of preference. */
-export function restoreSourcesFor(cluster: any, backups: any[]): RestoreSource[] {
+export function restoreSourcesFor(cluster: any, backups: any[], schedules: any[] = []): RestoreSource[] {
   const name = cluster?.metadata?.name
   const out: RestoreSource[] = []
   const plugin = (cluster?.spec?.plugins ?? []).find((p: any) => p?.name === CNPG_BARMAN_PLUGIN_NAME && p?.enabled !== false)
@@ -50,6 +51,15 @@ export function restoreSourcesFor(cluster: any, backups: any[]): RestoreSource[]
   }
   const inTree = cluster?.spec?.backup?.barmanObjectStore
   if (inTree) out.push({ kind: 'inTree', barmanObjectStore: inTree, serverName: inTree.serverName || name })
+  for (const schedule of schedules) {
+    if (schedule?.spec?.cluster?.name !== name || schedule?.metadata?.namespace !== cluster?.metadata?.namespace || !isApiGroup(schedule?.apiVersion, 'postgresql.cnpg.io')) continue
+    const store = objectStoreForBackup(schedule, [cluster])
+    if (!store) continue
+    const serverName = schedule.spec?.pluginConfiguration?.parameters?.serverName || plugin?.parameters?.serverName || name
+    if (!out.some((s) => s.kind === 'objectStore' && s.objectStore === store.name && s.serverName === serverName)) {
+      out.push({ kind: 'objectStore', objectStore: store.name, serverName })
+    }
+  }
   const completed = backups
     .filter((b) => b?.spec?.cluster?.name === name && b?.metadata?.namespace === cluster?.metadata?.namespace && isApiGroup(b?.apiVersion ?? 'postgresql.cnpg.io/v1', 'postgresql.cnpg.io'))
     .sort((a, b) => Date.parse(backupEnd(b) ?? '') - Date.parse(backupEnd(a) ?? ''))
@@ -64,17 +74,46 @@ export type CNPGRestoreSourceState = 'available' | 'none' | 'unknown'
 
 export function assessRestoreSources(data: CNPGWorkspaceResponse | undefined, namespace: string, cluster: any): { sources: RestoreSource[]; recoveryState: CNPGRestoreSourceState; disabledReason?: string; unreadReason?: string } {
   const readable = !!data && coverageReadable(data.coverage.backups ?? { state: 'notInstalled' }, namespace)
-  const sources = cluster ? restoreSourcesFor(cluster, readable ? data!.objects.backups ?? [] : []) : []
+  const schedulesCoverage = data?.coverage.scheduledBackups ?? { state: 'notInstalled' }
+  const schedulesReadable = coverageReadable(schedulesCoverage, namespace)
+  const schedules = schedulesReadable ? data!.objects.scheduledBackups ?? [] : []
+  const backups = readable ? data!.objects.backups ?? [] : []
+  const sources = cluster ? restoreSourcesFor(cluster, backups, schedules) : []
+  const unread: string[] = []
+  if (!readable) unread.push(`Backup sources could not be read in ${namespace}.`)
+  if (!cluster) unread.push('The source Cluster could not be read.')
+  if (!schedulesReadable && schedulesCoverage.state !== 'notInstalled') unread.push(`ScheduledBackup destinations could not be read in ${namespace}.`)
+  const storesReadable = !!data && coverageReadable(data.coverage.objectStores ?? { state: 'notInstalled' }, namespace)
+  const stores = storesReadable ? data!.objects.objectStores ?? [] : []
   const recordedRecovery = sources.some((source) => {
     if (source.kind === 'backup') return true
-    const evidence = recoveryEvidenceFor(source, { sourceCluster: cluster, stores: data?.objects.objectStores ?? [], backups: readable ? data!.objects.backups ?? [] : [], namespace })
+    const evidence = recoveryEvidenceFor(source, { sourceCluster: cluster, stores, backups, namespace })
     return !!(evidence.lastBackup || evidence.firstPoint)
   })
-  const storeUnread = sources.some((s) => s.kind === 'objectStore') && (!data || !coverageReadable(data.coverage.objectStores ?? { state: 'notInstalled' }, namespace))
-  const recoveryState: CNPGRestoreSourceState = recordedRecovery ? 'available' : !readable || !cluster || storeUnread ? 'unknown' : 'none'
-  if (!readable) return { sources, recoveryState, unreadReason: `Backup sources could not be read in ${namespace}.` }
-  if (!cluster) return { sources, recoveryState, unreadReason: 'The source Cluster could not be read.' }
-  return { sources, recoveryState, disabledReason: sources.length === 0 ? 'Nothing to restore from yet: no backup destination and no completed Backup.' : undefined }
+  for (const source of sources) {
+    if (source.kind !== 'objectStore') continue
+    if (!stores.some((store) => store.metadata?.namespace === namespace && store.metadata?.name === source.objectStore)) {
+      unread.push(`ObjectStore ${source.objectStore} could not be read in ${namespace}, so its recovery evidence is unknown.`)
+    }
+  }
+  for (const plugin of cluster?.spec?.plugins ?? []) {
+    if (plugin.enabled === false) continue
+    if (plugin.name !== CNPG_BARMAN_PLUGIN_NAME) unread.push(`Recovery sources for plugin ${plugin.name} cannot be assessed.`)
+    else if (!plugin.parameters?.barmanObjectName && !sources.some((source) => source.kind === 'objectStore')) unread.push(`The Barman plugin names no ObjectStore, so its recovery sources cannot be assessed.`)
+  }
+  for (const declaration of [...schedules, ...backups]) {
+    if (declaration.spec?.cluster?.name !== cluster?.metadata?.name || declaration.metadata?.namespace !== namespace || !isApiGroup(declaration.apiVersion, 'postgresql.cnpg.io')) continue
+    if (declaration.spec?.method === 'plugin' && (getCNPGBackupPlugin(declaration)?.name !== CNPG_BARMAN_PLUGIN_NAME || !objectStoreForBackup(declaration, [cluster]))) {
+      unread.push(`Recovery sources for ${declaration.kind} ${declaration.metadata?.name} using plugin ${getCNPGBackupPlugin(declaration)?.name ?? '(not named)'} cannot be assessed.`)
+    }
+  }
+  const recoveryState: CNPGRestoreSourceState = recordedRecovery ? 'available' : unread.length ? 'unknown' : 'none'
+  return {
+    sources,
+    recoveryState,
+    unreadReason: unread.length ? unread.join(' ') : undefined,
+    disabledReason: recoveryState === 'none' && sources.length === 0 ? 'Nothing to restore from yet: no backup destination and no completed Backup.' : undefined,
+  }
 }
 
 function restoreImage(cluster: any): { imageCatalogRef?: any; imageName?: string } {
@@ -170,7 +209,7 @@ export function recoveryEvidenceFor(
   }
 
   const ownBackups = ctx.backups.filter(
-    (b) => b?.metadata?.namespace === ctx.namespace && b?.status?.phase === 'completed' && (clusterName ? b?.spec?.cluster?.name === clusterName : false),
+    (b) => b?.metadata?.namespace === ctx.namespace && b?.status?.phase === 'completed' && (!isPluginBackup(b) || getCNPGBackupPlugin(b)?.name === CNPG_BARMAN_PLUGIN_NAME) && (clusterName ? b?.spec?.cluster?.name === clusterName : false),
   )
   const newestBackup = newest(ownBackups.map((b) => (backupEnd(b) ? { at: backupEnd(b)!, source: `Backup ${b.metadata?.name}` } : undefined)))
   out.lastBackup = newest([out.lastBackup, newestBackup])

@@ -341,3 +341,69 @@ it('separates declared destinations, unread sources and recorded recovery eviden
   data.objects.objectStores = [{ metadata: { name: 'store', namespace: 'db' }, status: { serverRecoveryWindow: { pg: { lastSuccessfulBackupTime: '2026-10-01T00:00:00Z' } } } }]
   expect(assessRestoreSources({ ...data, coverage: { ...data.coverage, objectStores: { state: 'full' } } }, 'db', plugin).recoveryState).toBe('available')
 })
+
+
+describe('schedule-level recovery destinations', () => {
+  const sourceCluster = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'pg-a', namespace: 'db' }, spec: { plugins: [{ name: 'barman-cloud.cloudnative-pg.io' }] } }
+  const schedule = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'ScheduledBackup', metadata: { name: 'nightly', namespace: 'db' }, spec: { cluster: { name: 'pg-a' }, method: 'plugin', pluginConfiguration: { name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store', serverName: 'pg-a-v2' } } } }
+  const data = { coverage: { backups: { state: 'full' }, scheduledBackups: { state: 'full' }, objectStores: { state: 'full' } }, objects: { backups: [], scheduledBackups: [schedule], objectStores: [store] } } as any
+
+  it('reads a destination declared only by a schedule and records its recovery evidence', async () => {
+    const { assessRestoreSources } = await import('./restoreModel')
+    expect(assessRestoreSources(data, 'db', sourceCluster)).toEqual({ sources: [{ kind: 'objectStore', objectStore: 'store', serverName: 'pg-a-v2' }], recoveryState: 'available', disabledReason: undefined, unreadReason: undefined })
+  })
+  it('keeps unreadable or missing schedule ObjectStores unknown and explains why', async () => {
+    const { assessRestoreSources } = await import('./restoreModel')
+    for (const state of ['denied', 'error', 'syncing', 'uncached']) {
+      const assessment = assessRestoreSources({ ...data, coverage: { ...data.coverage, objectStores: { state } } }, 'db', sourceCluster)
+      expect(assessment.recoveryState).toBe('unknown')
+      expect(assessment.unreadReason).toContain('ObjectStore store could not be read in db')
+      expect(assessment.disabledReason).toBeUndefined()
+      expect(assessment.sources).toEqual([{ kind: 'objectStore', objectStore: 'store', serverName: 'pg-a-v2' }])
+    }
+    expect(assessRestoreSources({ ...data, objects: { ...data.objects, objectStores: [] } }, 'db', sourceCluster)).toMatchObject({ recoveryState: 'unknown', unreadReason: expect.stringContaining('ObjectStore store could not be read') })
+  })
+  it('uses the shared resolver precedence and deduplicates matching destinations', () => {
+    const withStore = { ...sourceCluster, spec: cluster.spec }
+    expect(restoreSourcesFor(withStore, [], [schedule])).toEqual([{ kind: 'objectStore', objectStore: 'store', serverName: 'pg-a-v2' }])
+    const other = { ...schedule, spec: { ...schedule.spec, pluginConfiguration: { ...schedule.spec.pluginConfiguration, parameters: { barmanObjectName: 'schedule-store', serverName: 'schedule-server' } } } }
+    expect(restoreSourcesFor(withStore, [], [other])).toContainEqual({ kind: 'objectStore', objectStore: 'schedule-store', serverName: 'schedule-server' })
+    expect(restoreSourcesFor(sourceCluster, [], [{ ...schedule, metadata: { ...schedule.metadata, namespace: 'other' } }, { ...schedule, apiVersion: 'other.io/v1' }])).toEqual([])
+  })
+  it('keeps unsupported plugin methods unknown instead of claiming there are no backups', async () => {
+    const { assessRestoreSources } = await import('./restoreModel')
+    const unsupported = { ...schedule, spec: { ...schedule.spec, pluginConfiguration: { name: 'other.example.com' } } }
+    const assessment = assessRestoreSources({ ...data, objects: { ...data.objects, scheduledBackups: [unsupported] } }, 'db', { ...sourceCluster, spec: { plugins: [{ name: 'other.example.com' }] } })
+    expect(assessment.recoveryState).toBe('unknown')
+    expect(assessment.sources).toEqual([])
+    expect(assessment.unreadReason).toContain('plugin other.example.com cannot be assessed')
+    expect(assessment.disabledReason).toBeUndefined()
+    expect(restoreSourceForBackup({ ...pluginBackup, spec: { ...pluginBackup.spec, pluginConfiguration: { name: 'other.example.com', parameters: { barmanObjectName: 'store' } } } }, cluster)).toBeNull()
+  })
+  it('reserves none for assessed destinations with no recorded evidence', async () => {
+    const { assessRestoreSources } = await import('./restoreModel')
+    const assessment = assessRestoreSources({ ...data, objects: { ...data.objects, objectStores: [{ ...store, status: {} }] } }, 'db', sourceCluster)
+    expect(assessment.recoveryState).toBe('none')
+    expect(assessment.unreadReason).toBeUndefined()
+    expect(assessment.disabledReason).toBeUndefined()
+  })
+})
+
+
+it('keeps unread schedule destinations unknown without disabling restore as empty', async () => {
+  const { assessRestoreSources } = await import('./restoreModel')
+  const cluster = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'pg', namespace: 'db' }, spec: {} }
+  const data = { coverage: { backups: { state: 'full' }, scheduledBackups: { state: 'denied' } }, objects: { backups: [], scheduledBackups: [] } } as any
+  expect(assessRestoreSources(data, 'db', cluster)).toMatchObject({ recoveryState: 'unknown', unreadReason: 'ScheduledBackup destinations could not be read in db.', disabledReason: undefined })
+})
+
+
+it('does not count an unsupported plugin Backup as evidence for an assessable destination', async () => {
+  const { assessRestoreSources } = await import('./restoreModel')
+  const unsupported = { ...pluginBackup, kind: 'Backup', spec: { ...pluginBackup.spec, pluginConfiguration: { name: 'other.example.com' } } }
+  const data = { coverage: { backups: { state: 'full' }, scheduledBackups: { state: 'full' }, objectStores: { state: 'full' } }, objects: { backups: [unsupported], scheduledBackups: [], objectStores: [{ ...store, status: {} }] } } as any
+  const assessment = assessRestoreSources(data, 'db', cluster)
+  expect(assessment.recoveryState).toBe('unknown')
+  expect(assessment.unreadReason).toContain('Backup b-plugin using plugin other.example.com cannot be assessed')
+  expect(assessment.disabledReason).toBeUndefined()
+})
