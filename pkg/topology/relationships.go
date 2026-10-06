@@ -382,6 +382,9 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				rel.ScaleTarget = ref
 			} else {
 				rel.Dependencies = appendResourceRef(rel.Dependencies, *ref)
+				if isConfigurationDependency(ref) {
+					rel.ConfigRefs = appendResourceRef(rel.ConfigRefs, *ref)
+				}
 			}
 		case EdgeProtects:
 			// Outgoing EdgeProtects fires when the queried resource IS a
@@ -447,6 +450,9 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				rel.Scalers = appendResourceRef(rel.Scalers, *ref)
 			} else {
 				rel.Dependents = appendResourceRef(rel.Dependents, *ref)
+				if isConfigurationDependency(refForNodeID(edge.Target)) {
+					rel.Consumers = appendResourceRef(rel.Consumers, *ref)
+				}
 			}
 		case EdgeProtects:
 			// Incoming EdgeProtects: dispatch on source kind so PDBs and
@@ -781,6 +787,22 @@ func appendResourceRef(refs []ResourceRef, candidate ResourceRef) []ResourceRef 
 
 func isStorageResourceRef(ref *ResourceRef) bool {
 	return ref != nil && ref.Group == "" && strings.EqualFold(ref.Kind, "PersistentVolumeClaim")
+}
+
+// Configuration projections preserve navigation for Radar Hub's versioned
+// embedded frontend; newer clients present the same refs as dependencies.
+func isConfigurationDependency(ref *ResourceRef) bool {
+	if ref == nil {
+		return false
+	}
+	switch ref.Kind {
+	case "Issuer", "ClusterIssuer":
+		return ref.Group == "cert-manager.io"
+	case "TriggerAuthentication", "ClusterTriggerAuthentication":
+		return ref.Group == "keda.sh"
+	default:
+		return false
+	}
 }
 
 func isScalingRelationship(source, target *ResourceRef) bool {

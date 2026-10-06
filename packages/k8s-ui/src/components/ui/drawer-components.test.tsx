@@ -79,3 +79,29 @@ describe('dependency relationships', () => {
     expect(html).not.toContain('Autoscaler')
   })
 })
+
+describe('versioned dependency projections', () => {
+  const issuer = { kind: 'Issuer', group: 'cert-manager.io', namespace: 'team', name: 'ca' }
+  const certificate = { kind: 'Certificate', group: 'cert-manager.io', namespace: 'team', name: 'tls' }
+
+  it('presents mirrored configuration dependencies once under the specific labels', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ dependencies: [issuer], configRefs: [issuer], dependents: [certificate], consumers: [certificate] }} onNavigate={() => {}} />)
+    expect(html).toContain('Depends On')
+    expect(html).toContain('Required By')
+    expect(html).not.toContain('Configuration')
+    expect(html).not.toContain('Used By')
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+
+  it('preserves configuration and consumer groups when dependency fields are absent', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ configRefs: [issuer], consumers: [certificate] }} />)
+    expect(html).toContain('Configuration')
+    expect(html).toContain('Used By')
+    expect(html).not.toContain('Depends On')
+  })
+
+  it('retains navigation controls for identically named resources from distinct API groups', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ dependencies: [issuer, { ...issuer, group: 'other.example.com' }, issuer] }} onNavigate={() => {}} />)
+    expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})

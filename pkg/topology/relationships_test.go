@@ -702,13 +702,22 @@ func TestGetRelationships_UsesSeparatesDependenciesFromScaling(t *testing.T) {
 	if cert == nil || cert.ScaleTarget != nil || len(cert.Dependencies) != 1 || cert.Dependencies[0].Name != "ca" {
 		t.Fatalf("certificate relationship = %+v, want issuer dependency without scale target", cert)
 	}
+	if len(cert.ConfigRefs) != 1 || cert.ConfigRefs[0] != cert.Dependencies[0] {
+		t.Fatalf("versioned UI configuration projection = %+v", cert.ConfigRefs)
+	}
 	issuer := GetRelationships("Issuer", "team", "ca", topo, nil, nil)
 	if issuer == nil || len(issuer.Scalers) != 0 || len(issuer.Dependents) != 1 || issuer.Dependents[0].Name != "tls" {
 		t.Fatalf("issuer relationship = %+v, want certificate dependent without scaler", issuer)
 	}
+	if len(issuer.Consumers) != 1 || issuer.Consumers[0] != issuer.Dependents[0] {
+		t.Fatalf("versioned UI consumer projection = %+v", issuer.Consumers)
+	}
 	scaler := GetRelationships("ScaledObject", "team", "scale", topo, nil, nil)
 	if scaler == nil || scaler.ScaleTarget == nil || scaler.ScaleTarget.Name != "app" || len(scaler.Dependencies) != 1 || scaler.Dependencies[0].Name != "credential" {
 		t.Fatalf("scaler relationship = %+v, want workload target and authentication dependency", scaler)
+	}
+	if len(scaler.ConfigRefs) != 1 || scaler.ConfigRefs[0] != scaler.Dependencies[0] {
+		t.Fatalf("versioned UI authentication projection = %+v", scaler.ConfigRefs)
 	}
 	app := GetRelationships("Deployment", "team", "app", topo, nil, nil)
 	if app == nil || len(app.Scalers) != 1 || len(app.Dependents) != 0 {
