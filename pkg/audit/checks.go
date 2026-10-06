@@ -1386,49 +1386,17 @@ func podIsTerminal(pod *corev1.Pod) bool {
 }
 
 func collectPodSpecRefs(ns string, spec corev1.PodSpec, saByKey map[string]*corev1.ServiceAccount, cms, secrets map[string]bool) {
-	for _, c := range spec.InitContainers {
-		collectContainerRefs(ns, c, cms, secrets)
-	}
-	for _, c := range spec.Containers {
-		collectContainerRefs(ns, c, cms, secrets)
-	}
-	for _, c := range spec.EphemeralContainers {
-		collectEnvRefs(ns, c.Env, c.EnvFrom, cms, secrets)
-	}
-	for _, v := range spec.Volumes {
-		collectVolumeRefs(ns, v, cms, secrets)
-	}
-	for _, ips := range spec.ImagePullSecrets {
-		addRef(secrets, ns, ips.Name)
+	for _, ref := range configrefs.PodSpecReferences(ns, spec) {
+		switch ref.Kind {
+		case "ConfigMap":
+			addRef(cms, ns, ref.Name)
+		case "Secret":
+			addRef(secrets, ns, ref.Name)
+		}
 	}
 	// ServiceAccount admission defaults imagePullSecrets only when the PodSpec leaves them empty.
 	if len(spec.ImagePullSecrets) == 0 {
 		collectServiceAccountImagePullSecrets(ns, spec, saByKey, secrets)
-	}
-}
-
-func collectContainerRefs(ns string, c corev1.Container, cms, secrets map[string]bool) {
-	collectEnvRefs(ns, c.Env, c.EnvFrom, cms, secrets)
-}
-
-func collectEnvRefs(ns string, envs []corev1.EnvVar, envFroms []corev1.EnvFromSource, cms, secrets map[string]bool) {
-	for _, env := range envs {
-		if env.ValueFrom != nil {
-			if env.ValueFrom.ConfigMapKeyRef != nil {
-				addRef(cms, ns, env.ValueFrom.ConfigMapKeyRef.Name)
-			}
-			if env.ValueFrom.SecretKeyRef != nil {
-				addRef(secrets, ns, env.ValueFrom.SecretKeyRef.Name)
-			}
-		}
-	}
-	for _, envFrom := range envFroms {
-		if envFrom.ConfigMapRef != nil {
-			addRef(cms, ns, envFrom.ConfigMapRef.Name)
-		}
-		if envFrom.SecretRef != nil {
-			addRef(secrets, ns, envFrom.SecretRef.Name)
-		}
 	}
 }
 
@@ -1442,52 +1410,6 @@ func collectServiceAccountImagePullSecrets(ns string, spec corev1.PodSpec, saByK
 	}
 	for _, ips := range sa.ImagePullSecrets {
 		addRef(secrets, ns, ips.Name)
-	}
-}
-
-func collectVolumeRefs(ns string, v corev1.Volume, cms, secrets map[string]bool) {
-	if v.ConfigMap != nil {
-		addRef(cms, ns, v.ConfigMap.Name)
-	}
-	if v.Secret != nil {
-		addRef(secrets, ns, v.Secret.SecretName)
-	}
-	if v.Projected != nil {
-		for _, src := range v.Projected.Sources {
-			if src.ConfigMap != nil {
-				addRef(cms, ns, src.ConfigMap.Name)
-			}
-			if src.Secret != nil {
-				addRef(secrets, ns, src.Secret.Name)
-			}
-		}
-	}
-	if v.CSI != nil && v.CSI.NodePublishSecretRef != nil {
-		addRef(secrets, ns, v.CSI.NodePublishSecretRef.Name)
-	}
-	if v.FlexVolume != nil && v.FlexVolume.SecretRef != nil {
-		addRef(secrets, ns, v.FlexVolume.SecretRef.Name)
-	}
-	if v.AzureFile != nil {
-		addRef(secrets, ns, v.AzureFile.SecretName)
-	}
-	if v.CephFS != nil && v.CephFS.SecretRef != nil {
-		addRef(secrets, ns, v.CephFS.SecretRef.Name)
-	}
-	if v.RBD != nil && v.RBD.SecretRef != nil {
-		addRef(secrets, ns, v.RBD.SecretRef.Name)
-	}
-	if v.Cinder != nil && v.Cinder.SecretRef != nil {
-		addRef(secrets, ns, v.Cinder.SecretRef.Name)
-	}
-	if v.ScaleIO != nil && v.ScaleIO.SecretRef != nil {
-		addRef(secrets, ns, v.ScaleIO.SecretRef.Name)
-	}
-	if v.ISCSI != nil && v.ISCSI.SecretRef != nil {
-		addRef(secrets, ns, v.ISCSI.SecretRef.Name)
-	}
-	if v.StorageOS != nil && v.StorageOS.SecretRef != nil {
-		addRef(secrets, ns, v.StorageOS.SecretRef.Name)
 	}
 }
 
