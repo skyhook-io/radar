@@ -7,6 +7,8 @@ import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../ut
 export interface SelectMenuOption {
   value: string
   label: string
+  description?: string
+  disabled?: boolean
 }
 
 export function SelectMenu({
@@ -17,6 +19,8 @@ export function SelectMenu({
   ariaDescribedBy,
   className,
   searchPlaceholder,
+  placeholder,
+  variant = 'default',
   disabled = false,
   id,
 }: {
@@ -27,6 +31,8 @@ export function SelectMenu({
   ariaDescribedBy?: string
   className?: string
   searchPlaceholder?: string
+  placeholder?: string
+  variant?: 'default' | 'text'
   disabled?: boolean
   id?: string
 }) {
@@ -40,15 +46,35 @@ export function SelectMenu({
   const searchInputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const pointerDownInsideRef = useRef(false)
-  const selected = options.find((option) => option.value === value) ?? options[0]
+  // A keyboard open lands on the selected option, as a native select does; a
+  // pointer open keeps focus on the trigger.
+  const focusOptionOnOpenRef = useRef(false)
+  const selected = options.find((option) => option.value === value) ?? (placeholder ? undefined : options[0])
   const filteredOptions = useMemo(() => {
     const normalized = query.trim().toLowerCase()
     if (!normalized) return options
-    return options.filter((option) => option.label.toLowerCase().includes(normalized))
+    return options.filter((option) => `${option.label} ${option.description ?? ''}`.toLowerCase().includes(normalized))
   }, [options, query])
-  const selectedIsVisible = filteredOptions.some((option) => option.value === value)
+  // Options can be replaced while the menu is open, leaving the highlight past
+  // the end; without the clamp no option is tabbable and Tab skips the list.
+  const activeIndex = Math.min(highlightedIndex, filteredOptions.length - 1)
+
+  const focusTabbableOption = () => {
+    listRef.current?.querySelector<HTMLElement>('[role="option"][tabindex="0"]')?.focus()
+  }
+
+  const openMenu = () => {
+    setHighlightedIndex(
+      Math.max(
+        options.findIndex((option) => option.value === value),
+        0,
+      ),
+    )
+    setOpen(true)
+  }
 
   const selectOption = (nextValue: string) => {
+    if (options.find((option) => option.value === nextValue)?.disabled) return
     onChange(nextValue)
     setOpen(false)
     triggerRef.current?.focus()
@@ -81,7 +107,12 @@ export function SelectMenu({
   useEffect(() => {
     if (!open || !shouldRender) return
     if (!searchPlaceholder) {
-      triggerRef.current?.focus()
+      if (focusOptionOnOpenRef.current) {
+        focusOptionOnOpenRef.current = false
+        focusTabbableOption()
+      } else {
+        triggerRef.current?.focus()
+      }
       return
     }
     listRef.current
@@ -124,34 +155,46 @@ export function SelectMenu({
         ref={triggerRef}
         id={id}
         type="button"
-        aria-label={ariaLabel}
+        // The fixed label would otherwise hide the visible value from screen
+        // readers, which a native select announces.
+        aria-label={selected ? `${ariaLabel}: ${selected.label}` : ariaLabel}
         aria-describedby={ariaDescribedBy}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
         onClick={() => {
-          if (!open) {
-            setHighlightedIndex(
-              Math.max(
-                options.findIndex((option) => option.value === value),
-                0,
-              ),
-            )
+          if (open) setOpen(false)
+          else openMenu()
+        }}
+        onKeyDown={(event) => {
+          if (searchPlaceholder) return
+          const arrow = event.key === 'ArrowDown' || event.key === 'ArrowUp'
+          if (!arrow && (open || (event.key !== 'Enter' && event.key !== ' '))) return
+          event.preventDefault()
+          if (open) {
+            focusTabbableOption()
+            return
           }
-          setOpen(!open)
+          focusOptionOnOpenRef.current = true
+          openMenu()
         }}
         disabled={disabled}
-        className="flex h-8 w-full items-center justify-between gap-2 rounded-md border border-theme-border bg-theme-elevated px-2.5 text-xs text-theme-text-primary transition-colors hover:bg-theme-hover disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-theme-elevated"
+        className={clsx(
+          'flex items-center gap-1 text-xs disabled:cursor-not-allowed disabled:opacity-50',
+          variant === 'text'
+            ? 'text-accent-text hover:underline'
+            : 'h-8 w-full justify-between gap-2 rounded-md border border-theme-border bg-theme-elevated px-2.5 text-theme-text-primary transition-colors hover:bg-theme-hover disabled:hover:bg-theme-elevated',
+        )}
       >
-        <span className="truncate">{selected?.label}</span>
-        <ChevronDown className={clsx('h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform', open && 'rotate-180')} />
+        <span className="truncate">{selected?.label ?? placeholder}</span>
+        <ChevronDown className={clsx('h-3.5 w-3.5 shrink-0 transition-transform', variant !== 'text' && 'text-theme-text-tertiary', open && 'rotate-180')} />
       </button>
       {shouldRender && (
         <div
           inert={!open}
           className={clsx(
             'absolute top-full z-50 mt-1 min-w-full overflow-hidden rounded-md border border-theme-border bg-theme-surface shadow-theme-lg',
-            searchPlaceholder ? 'left-0 right-0 origin-top-left' : 'right-0 origin-top-right',
+            variant === 'text' ? 'left-0 w-72 max-w-[calc(100vw-4rem)] origin-top-left' : searchPlaceholder ? 'left-0 right-0 origin-top-left' : 'right-0 origin-top-right',
             TRANSITION_MENU,
             isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]',
             !open && 'pointer-events-none',
@@ -177,12 +220,11 @@ export function SelectMenu({
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && filteredOptions.length > 0) {
                     event.preventDefault()
-                    const nextIndex = Math.min(highlightedIndex, filteredOptions.length - 1)
-                    selectOption(filteredOptions[nextIndex].value)
+                    selectOption(filteredOptions[activeIndex].value)
                   } else if (event.key === 'ArrowDown') {
                     event.preventDefault()
                     const optionElements = listRef.current?.querySelectorAll<HTMLButtonElement>('[role="option"]')
-                    optionElements?.[Math.min(highlightedIndex, optionElements.length - 1)]?.focus()
+                    optionElements?.[activeIndex]?.focus()
                   }
                 }}
                 aria-label={searchPlaceholder}
@@ -192,7 +234,7 @@ export function SelectMenu({
                 aria-expanded="true"
                 aria-activedescendant={
                   filteredOptions.length > 0
-                    ? `${listboxId}-option-${Math.min(highlightedIndex, filteredOptions.length - 1)}`
+                    ? `${listboxId}-option-${activeIndex}`
                     : undefined
                 }
                 placeholder={searchPlaceholder}
@@ -244,19 +286,22 @@ export function SelectMenu({
                   type="button"
                   role="option"
                   aria-selected={active}
-                  tabIndex={
-                    searchPlaceholder ? (index === highlightedIndex ? 0 : -1) : active || (!selectedIsVisible && index === 0) ? 0 : -1
-                  }
+                  aria-disabled={option.disabled || undefined}
+                  tabIndex={index === activeIndex ? 0 : -1}
                   onClick={() => selectOption(option.value)}
                   onFocus={() => setHighlightedIndex(index)}
                   className={clsx(
-                    'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary',
-                    searchPlaceholder && index === highlightedIndex && 'bg-theme-hover text-theme-text-primary',
+                    'flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs text-theme-text-secondary transition-colors',
+                    option.disabled ? 'cursor-not-allowed opacity-60' : 'hover:bg-theme-hover hover:text-theme-text-primary',
+                    searchPlaceholder && index === activeIndex && 'bg-theme-hover text-theme-text-primary',
                     !searchPlaceholder && 'whitespace-nowrap'
                   )}
                 >
                   <Check className={clsx('h-3.5 w-3.5 shrink-0 text-accent', !active && 'opacity-0')} />
-                  <span className={clsx(searchPlaceholder && 'truncate')}>{option.label}</span>
+                  <span className={clsx('min-w-0', searchPlaceholder && !option.description && 'truncate')}>
+                    <span className={clsx(option.description && 'block break-words font-medium')}>{option.label}</span>
+                    {option.description && <span className="block break-all text-theme-text-tertiary">{option.description}</span>}
+                  </span>
                 </button>
               )
             })}

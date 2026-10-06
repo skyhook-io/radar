@@ -1986,8 +1986,14 @@ func TestSmokeCapabilitiesShape(t *testing.T) {
 		}
 	}
 
-	if !body.Features["yamlReview"] || !body.Features["yamlSchemas"] || !body.Features["workloadImages"] {
-		t.Fatalf("capabilities.features = %v, want YAML review, schemas, and workload images enabled", body.Features)
+	// Every advertised feature flag must be on: a false one would make a newer
+	// embedded frontend tell the user to upgrade a Radar that already serves it.
+	featuresType := reflect.TypeOf(k8s.FeatureCapabilities{})
+	for i := 0; i < featuresType.NumField(); i++ {
+		tag := featuresType.Field(i).Tag.Get("json")
+		if !body.Features[tag] {
+			t.Errorf("capabilities.features[%q] = false, want true (features = %v)", tag, body.Features)
+		}
 	}
 }
 

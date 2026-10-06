@@ -75,8 +75,11 @@ rbac:
   # Enable these based on features you need:
 
   # Allow Helm write operations (install, upgrade, rollback, uninstall, apply values)
-  # Requires broad permissions - grants create/update/patch/delete on all resource types,
-  # since Helm charts can create any kind of Kubernetes resource.
+  # No-auth installs: grants Radar's ServiceAccount create/update/patch/delete on all
+  # resource types, since Helm charts can create any kind of Kubernetes resource
+  # and Helm runs as that ServiceAccount there.
+  # Auth or cloud mode: Helm runs as the signed-in user, so the ServiceAccount gets no
+  # write grant; this only adds the Helm add-on roles for the Cloud owner/member tiers.
   # Automatically enables secrets read access (needed for Helm release storage).
   helm: false
 
@@ -230,6 +233,8 @@ podSecurityContext:
   runAsUser: 65532
   runAsGroup: 65532
   fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
 
 securityContext:
   allowPrivilegeEscalation: false
@@ -517,6 +522,27 @@ cloud:
     # while owner=false this renders nothing, but it stays latent — re-enabling
     # owner later activates it. See templates/cloud-rbac-node-ops.yaml.
     nodeOps: false
+  # Create the default read grant for radar:system: Radar Cloud's alerts worker
+  # and timeline puller. Includes view via a chart-owned aggregated role, the
+  # cluster-read and integration-read add-ons, and cluster-wide Secret read
+  # (Helm stores releases as Secrets). No writes. Independent of defaultRbac.
+  # False or absent (e.g. an older --reuse-values install) creates no default
+  # grant; customer bindings remain. This is not a feature switch.
+  systemRbac: true
+  # Create the default read grant for radar:ai:reader, used only by automatic
+  # (alert-triggered) Diagnose runs with username radar:ai:<org>. Manual turns
+  # read as the person who started them; Radar Cloud forwards that person's
+  # identity and groups.
+  # Includes view via a chart-owned aggregated role and the cluster-read and
+  # integration-read add-ons. No Kubernetes Secret permission with the standard
+  # view role (it inherits anything added to view via aggregate-to-view); pod
+  # logs and ConfigMaps are readable and may contain sensitive data. Keep
+  # radar:ai:reader permanently read-only; a future write-capable AI identity
+  # needs a separate opt-in group (e.g. radar:ai:operator).
+  # Independent of defaultRbac. False or absent (e.g. an older --reuse-values
+  # install) creates no default grant; customer bindings remain. Radar Cloud
+  # controls whether Diagnose runs; this is not a feature switch.
+  aiRbac: true
 
 # Anonymous usage report to Skyhook, daily and when the pod stops: views,
 # actions and MCP tools used, plus this cluster's minor version, platform,
@@ -640,6 +666,24 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
+
+# Additional command-line flags appended to the container args, after the ones
+# the chart derives from the values above. Use it for flags the chart does not
+# expose yet. Each entry is rendered through `tpl`, so Helm templating is
+# allowed.
+#
+# Entries come last, which means different things depending on the flag:
+#
+#   - a scalar flag repeated here wins over the chart's own, since Go's flag
+#     package keeps the last occurrence (e.g. --list-page-size);
+#   - a repeatable flag is added to what the chart derived, not substituted for
+#     it. Radar rejects a duplicate key on --prometheus-cluster-label and exits
+#     before starting, so set those through `traffic.prometheusClusterLabels`
+#     rather than here.
+extraArgs: []
+#  - --kubeconfig-dir=/kubeconfigs
+#  - --list-page-size=200
+#  - "--cluster-name={{ .Release.Name }}"
 
 # Additional environment variables
 env: []

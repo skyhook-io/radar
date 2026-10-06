@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -35,6 +36,12 @@ type LocalTermSession struct {
 	Shell string `json:"shell"`
 	conn  *websocket.Conn
 	proc  *shellProcess
+}
+
+type localTermSessionInfo struct {
+	Type               string `json:"type"`
+	Context            string `json:"context"`
+	KubeconfigIsolated bool   `json:"kubeconfigIsolated"`
 }
 
 type localTermSessionManager struct {
@@ -105,11 +112,31 @@ func (s *Server) localTerminalUnavailable(r *http.Request) (int, string) {
 	return 0, ""
 }
 
-// handleLocalTerminal handles WebSocket connections for local terminal sessions
+// handleLocalTerminal opens a shell only when expectedContext matches the
+// exported client-state snapshot. It never switches Radar's active context.
 func (s *Server) handleLocalTerminal(w http.ResponseWriter, r *http.Request) {
 	if status, message := s.localTerminalUnavailable(r); status != 0 {
 		s.writeError(w, status, message)
 		return
+	}
+
+	if !s.websocketOriginAllowed(r) {
+		s.writeError(w, http.StatusForbidden, "local terminal origin is not allowed")
+		return
+	}
+
+	expectedContext := r.URL.Query().Get("expectedContext")
+	if !r.URL.Query().Has("expectedContext") {
+		s.writeError(w, http.StatusBadRequest, "Open a new terminal from Radar to select its context")
+		return
+	}
+	kubeconfig, configErr := k8s.WriteKubeconfigSnapshotForCurrentContext(&expectedContext)
+	if errors.Is(configErr, k8s.ErrKubeconfigContextMismatch) {
+		s.writeError(w, http.StatusConflict, configErr.Error())
+		return
+	}
+	if kubeconfig.Path != "" {
+		defer os.Remove(kubeconfig.Path)
 	}
 
 	// Upgrade to WebSocket
@@ -130,14 +157,17 @@ func (s *Server) handleLocalTerminal(w http.ResponseWriter, r *http.Request) {
 	// Set up environment: inherit current process env, override KUBECONFIG
 	// with a temp copy that has current-context set to Radar's active context.
 	env := os.Environ()
-	tmpKubeconfig, err := k8s.WriteKubeconfigForCurrentContext()
-	if err != nil {
-		log.Printf("[localterm] Failed to write temp kubeconfig, falling back to default: %v", err)
+	tmpKubeconfig := kubeconfig.Path
+	sessionInfo := localTermSessionInfo{Type: "session"}
+	if configErr != nil {
+		log.Printf("[localterm] Failed to write temp kubeconfig, falling back to default: %v", configErr)
 		if kubeconfigPath := k8s.GetKubeconfigPath(); kubeconfigPath != "" {
 			env = setEnv(env, "KUBECONFIG", kubeconfigPath)
 		}
 	} else {
 		env = setEnv(env, "KUBECONFIG", tmpKubeconfig)
+		sessionInfo.Context = kubeconfig.Context
+		sessionInfo.KubeconfigIsolated = true
 	}
 
 	// Ensure TERM is set so the shell's terminfo binds the escape sequences
@@ -184,11 +214,12 @@ func (s *Server) handleLocalTerminal(w http.ResponseWriter, r *http.Request) {
 		proc.pty.Close()
 		waitProcess(proc)
 		conn.Close()
-		if tmpKubeconfig != "" {
-			os.Remove(tmpKubeconfig)
-		}
 		log.Printf("[localterm] Session %s ended", sessionID)
 	}()
+
+	if err := conn.WriteJSON(sessionInfo); err != nil {
+		return
+	}
 
 	// WebSocket write mutex (PTY reader and exit sender both write)
 	var wsMu sync.Mutex

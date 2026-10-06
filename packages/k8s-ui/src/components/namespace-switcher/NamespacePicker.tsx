@@ -122,8 +122,11 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
 
   const items = useMemo(() => {
     if (!scope) return [] as string[]
-    return [...(scope.accessibleNamespaces ?? [])].sort((a, b) => a.localeCompare(b))
-  }, [scope])
+    // A pick the backend kept through a failed namespace load can be missing
+    // from accessibleNamespaces; list it anyway so it can still be unchecked.
+    const all = new Set([...(scope.accessibleNamespaces ?? []), ...scopeActives])
+    return [...all].sort((a, b) => a.localeCompare(b))
+  }, [scope, scopeActives])
   const deniedNamespaces = useMemo(() => new Set(scope?.deniedNamespaces ?? []), [scope?.deniedNamespaces])
 
   const filteredItems = useMemo(() => {

@@ -42,7 +42,10 @@ export function WorkloadLogsViewer({ kind, namespace, name, autoStream = true, s
       fetchAll={fetchAll}
       createStream={snapshotOnly ? undefined : makeStream}
       overrideDownload={desktopDownload}
+      // Light logs on a dark app are never wanted: dark theme pins the palette,
+      // light theme only sets where it starts and leaves the toggle available.
       forceDark={theme === 'dark' ? true : undefined}
+      defaultDark={false}
       autoStream={autoStream}
     />
   )

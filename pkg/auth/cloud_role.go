@@ -10,11 +10,11 @@ import (
 // into X-Forwarded-Groups (plus the deprecated `cloud:*` equivalents for
 // the transition window); this type extracts that signal.
 //
-// CloudRole is the **product-side** boundary (decides whether the user
-// can attempt an operation in the UI / API). The K8s ClusterRoleBindings
-// the chart ships are the **structural** boundary (decides whether the
-// K8s API server allows the impersonated request). The two stack:
-// CloudRole gates "can I attempt it?", K8s RBAC gates "can it succeed?".
+// CloudRole gates Radar's own features — settings, integrations, self-upgrade —
+// which run as Radar's service account, so nothing else checks them. It must
+// not gate operations that run as the impersonated user (Helm, probe pods):
+// Kubernetes RBAC decides those, and when IdP groups grant access the role
+// says nothing about what the user may do in the cluster.
 type CloudRole string
 
 const (

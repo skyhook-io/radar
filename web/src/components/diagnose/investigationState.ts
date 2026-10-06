@@ -5,6 +5,7 @@ import { evidenceKindIsAdverse } from "./investigationEvidenceKinds";
 import {
   DiagnoseError,
   type DiagnoseStreamEvent,
+  type InvestigationRefusal,
   type RunSummary,
 } from "../../api/diagnose";
 import type { Turn } from "./parts";
@@ -121,6 +122,48 @@ export function investigationAssessmentNeedsCurrentStateVerification(input: {
   }
 
   return input.localApplyAttemptAssessmentIdx >= input.currentAssessmentIdx;
+}
+
+// Which failure the activity pane shows, and the host refusal behind it. A
+// request's own error is newer than a saved verification turn's: it is cleared
+// when the next request starts and when a new verification turn streams.
+// A status warning keeps first place, since it is what stops a second Apply
+// before anyone checks; a newer failed follow-up shows beside it, not instead.
+export function investigationFailureShown(input: {
+  actionError: string | null;
+  actionRefusal: InvestigationRefusal | null;
+  verificationError: string | null;
+  verificationRefusal: InvestigationRefusal | null;
+  savedVerificationError: string | null;
+  applyOutcomeUncertain: string | null;
+}): {
+  verificationError: string | null;
+  statusCheckError: string | null;
+  message: string | null;
+  refusal: InvestigationRefusal | null;
+  followUp: { message: string; refusal: InvestigationRefusal | null } | null;
+} {
+  const verificationError =
+    input.verificationError || input.savedVerificationError;
+  const statusCheckError = verificationError || input.applyOutcomeUncertain;
+  if (statusCheckError) {
+    return {
+      verificationError,
+      statusCheckError,
+      message: statusCheckError,
+      refusal: input.verificationError ? input.verificationRefusal : null,
+      followUp: input.actionError
+        ? { message: input.actionError, refusal: input.actionRefusal }
+        : null,
+    };
+  }
+  return {
+    verificationError: null,
+    statusCheckError: null,
+    message: input.actionError,
+    refusal: input.actionError ? input.actionRefusal : null,
+    followUp: null,
+  };
 }
 
 export function investigationApplyRejectionIsDefinitive(

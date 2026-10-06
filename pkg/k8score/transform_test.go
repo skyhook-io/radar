@@ -323,3 +323,19 @@ func TestDropManagedFields_TypedStripsLastAppliedFromPod(t *testing.T) {
 		t.Errorf("Pod should also have last-applied stripped")
 	}
 }
+
+func TestDropManagedFields_EventKeepsEventsAPITimes(t *testing.T) {
+	first := metav1.NewMicroTime(metav1.Now().Add(-3600e9))
+	last := metav1.NewMicroTime(metav1.Now().Time)
+	out, err := DropManagedFields(&corev1.Event{
+		EventTime: first,
+		Series:    &corev1.EventSeries{Count: 4, LastObservedTime: last},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := out.(*corev1.Event)
+	if !ev.EventTime.Equal(&first) || ev.Series == nil || !ev.Series.LastObservedTime.Equal(&last) {
+		t.Fatalf("event times stripped: eventTime=%v series=%+v", ev.EventTime, ev.Series)
+	}
+}

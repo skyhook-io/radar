@@ -1,0 +1,222 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+
+	"github.com/skyhook-io/radar/internal/argocd"
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/prometheus"
+	"github.com/skyhook-io/radar/internal/settings"
+	"github.com/skyhook-io/radar/pkg/argoapi"
+	"github.com/skyhook-io/radar/pkg/prom"
+	"github.com/skyhook-io/radar/pkg/timeline"
+	"k8s.io/client-go/rest"
+)
+
+func TestPrepareLocalPrometheusConfiguration(t *testing.T) {
+	useTempHome(t)
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Cleanup(k8s.SetTestProfileSource("/test/local", "dev", "developer"))
+	old := k8s.SetTestConfig(&rest.Config{Host: "https://cluster"})
+	t.Cleanup(func() { k8s.SetTestConfig(old) })
+	t.Setenv(settings.OperatorFileEnv, "")
+	t.Cleanup(func() { settings.SetOperatorConfig(nil) })
+	for _, tc := range []struct {
+		name    string
+		cfg     AppConfig
+		wantURL string
+		denied  bool
+	}{
+		{"inactive legacy environment", AppConfig{PrometheusURL: "https://legacy", PrometheusHeadersFromEnv: map[string]string{"Authorization": "UNSET_LEGACY_CREDENTIAL"}}, "", false},
+		{"URL-only override", AppConfig{PrometheusURL: "https://launch", PrometheusURLFlag: true, PrometheusHeaders: map[string]string{"Authorization": "legacy"}}, "https://launch", false},
+		{"override with URL credentials", AppConfig{PrometheusURL: "https://user:pass@launch:9090", PrometheusURLFlag: true}, "https://user:pass@launch:9090", false},
+		{"override with a query", AppConfig{PrometheusURL: "https://launch/?tenant=a", PrometheusURLFlag: true}, "https://launch/?tenant=a", false},
+		{"override without an HTTP scheme", AppConfig{PrometheusURL: "ftp://launch", PrometheusURLFlag: true}, "", true},
+		{"empty override selects discovery", AppConfig{PrometheusURL: "", PrometheusURLFlag: true}, "", false},
+		{"header-only override", AppConfig{PrometheusURL: "https://legacy", PrometheusHeaderFlags: true, PrometheusLiteralHeaderFlag: true, PrometheusHeaders: map[string]string{"Authorization": "new"}}, "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := preparePrometheusConfiguration(tc.cfg)
+			if (err != nil) != tc.denied {
+				t.Fatalf("prepare: %v", err)
+			}
+			if err == nil && (got.PrometheusURL != tc.wantURL || len(got.PrometheusHeaders) != 0 || got.LocalConnections == nil) {
+				t.Fatalf("unexpected selected config: url=%q headers=%d profiles=%v", got.PrometheusURL, len(got.PrometheusHeaders), got.LocalConnections != nil)
+			}
+		})
+	}
+	if _, _, err := config.NewProfileStore().Read(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStartupImportsPreviousSettingsOnlyForSoleContext(t *testing.T) {
+	for _, tc := range []struct {
+		contexts int
+		wantURL  string
+	}{{1, "https://previous.example"}, {2, ""}} {
+		t.Run(fmt.Sprintf("%d contexts", tc.contexts), func(t *testing.T) {
+			useTempHome(t)
+			t.Cleanup(k8s.SetTestLocalMode())
+			t.Cleanup(k8s.SetTestProfileSource("/test/local", "dev", "developer"))
+			t.Cleanup(k8s.SetTestContextCount(tc.contexts))
+			old := k8s.SetTestConfig(&rest.Config{Host: "https://cluster"})
+			t.Cleanup(func() { k8s.SetTestConfig(old) })
+			t.Setenv(settings.OperatorFileEnv, "")
+			t.Cleanup(func() { settings.SetOperatorConfig(nil) })
+			if _, err := config.Update(func(c *config.Config) { c.PrometheusURL = "https://previous.example" }); err != nil {
+				t.Fatal(err)
+			}
+			got, err := preparePrometheusConfiguration(AppConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.PrometheusURL != tc.wantURL {
+				t.Fatalf("startup metrics URL %q, want %q", got.PrometheusURL, tc.wantURL)
+			}
+		})
+	}
+}
+
+func TestLaunchOverridesWithoutContextDoNotStopStartup(t *testing.T) {
+	useTempHome(t)
+	t.Cleanup(k8s.SetTestLocalMode())
+	old := k8s.SetTestConfig(nil)
+	t.Cleanup(func() { k8s.SetTestConfig(old) })
+	t.Setenv(settings.OperatorFileEnv, "")
+	t.Cleanup(func() { settings.SetOperatorConfig(nil) })
+	t.Setenv("RADAR_ARGOCD_TOKEN", "launch-token")
+	t.Setenv("RADAR_KUBECOST_API_KEY", "launch-key")
+	got, err := preparePrometheusConfiguration(AppConfig{PrometheusURL: "https://launch", PrometheusURLFlag: true})
+	if err != nil {
+		t.Fatalf("startup must continue so the kubeconfig error is visible: %v", err)
+	}
+	if got.LocalConnections == nil || got.PrometheusURL != "" {
+		t.Fatalf("unbound override applied: url=%q profiles=%v", got.PrometheusURL, got.LocalConnections != nil)
+	}
+}
+
+func TestUnusableProfileDoesNotPreventStartupWithScope(t *testing.T) {
+	if scenario := os.Getenv("RADAR_PROFILE_STARTUP_CASE"); scenario != "" {
+		useTempHome(t)
+		t.Cleanup(k8s.SetTestLocalMode())
+		t.Cleanup(k8s.SetTestProfileSource("/test/local", "dev", "developer"))
+		old := k8s.SetTestConfig(&rest.Config{Host: "https://cluster"})
+		t.Cleanup(func() { k8s.SetTestConfig(old) })
+		t.Setenv(settings.OperatorFileEnv, "")
+		t.Setenv("KUBERNETES_SERVICE_HOST", "")
+		store := config.NewProfileStore()
+		if scenario == "malformed" {
+			if err := os.MkdirAll(filepath.Dir(store.Path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(store.Path, []byte("invalid"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			target, err := k8s.CurrentProfileTarget()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, rev, _ := store.Read()
+			_, err = store.Update(context.Background(), rev, func(file *config.ClusterProfiles) error {
+				assignment := config.IntegrationSettings{Target: target.Fingerprint}
+				connection := prom.Connection{URL: "https://prom"}
+				if scenario == "target" {
+					assignment.Target = "old-target"
+				} else {
+					connection.HeadersFromEnv = map[string]string{"Authorization": "UNSET_PROFILE_STARTUP_TOKEN"}
+				}
+				assignment.Prometheus = &connection
+				file.Profiles[target.Binding] = config.ClusterProfile{Context: "dev", Integrations: map[config.Integration]config.IntegrationSettings{config.IntegrationMetrics: assignment}}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		RegisterCallbacks(AppConfig{WorkloadMetricsScope: prom.WorkloadMetricsScope{SingleCluster: true}}, timeline.StoreConfig{})
+		if prometheus.GetClient() != nil {
+			t.Fatal("unusable profile activated metrics")
+		}
+		return
+	}
+	for _, scenario := range []string{"malformed", "target", "environment"} {
+		t.Run(scenario, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestUnusableProfileDoesNotPreventStartupWithScope$")
+			cmd.Env = append(os.Environ(), "RADAR_PROFILE_STARTUP_CASE="+scenario)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("startup failed: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestFirstConnectionActivatesSavedIntegrations(t *testing.T) {
+	if os.Getenv("RADAR_PROFILE_CONNECT_CASE") == "" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestFirstConnectionActivatesSavedIntegrations$")
+		cmd.Env = append(os.Environ(), "RADAR_PROFILE_CONNECT_CASE=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("startup failed: %v\n%s", err, out)
+		}
+		return
+	}
+	useTempHome(t)
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Cleanup(k8s.SetTestProfileSource("/test/local", "dev", "developer"))
+	old := k8s.SetTestConfig(&rest.Config{Host: "https://cluster"})
+	t.Cleanup(func() { k8s.SetTestConfig(old) })
+	t.Setenv(settings.OperatorFileEnv, "")
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	target, err := k8s.CurrentProfileTarget()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := config.NewProfileStore()
+	_, rev, _ := store.Read()
+	// Paused metrics settings mean no metrics discovery runs to refresh the
+	// other integrations as a side effect.
+	_, err = store.Update(context.Background(), rev, func(file *config.ClusterProfiles) error {
+		file.Profiles[target.Binding] = config.ClusterProfile{Context: "dev", Integrations: map[config.Integration]config.IntegrationSettings{
+			config.IntegrationMetrics: {Target: "old-target", Prometheus: &prom.Connection{URL: "https://prom"}},
+			config.IntegrationArgoCD:  {Target: target.Fingerprint, ArgoCD: &argoapi.Connection{URL: "https://argocd.invalid", Token: "saved-token"}},
+		}}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	RegisterCallbacks(AppConfig{WorkloadMetricsScope: prom.WorkloadMetricsScope{SingleCluster: true}}, timeline.StoreConfig{})
+	if argocd.IsConfigured() {
+		t.Fatal("saved Argo CD settings activated before connecting")
+	}
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "dev"})
+	if !argocd.IsConfigured() {
+		t.Fatal("saved Argo CD settings were not activated on the first connection")
+	}
+}
+
+func TestPrepareSharedPrometheusKeepsExistingConfiguration(t *testing.T) {
+	useTempHome(t)
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Setenv(settings.OperatorFileEnv, "")
+	t.Setenv("RADAR_PROFILE_TEST_TOKEN", "shared-secret")
+	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+	t.Cleanup(func() { settings.SetOperatorConfig(nil) })
+	for _, cfg := range []AppConfig{{ListenAddress: "0.0.0.0"}, {CloudTunnelConfigured: true}, {AuthConfig: auth.Config{Mode: "proxy"}}} {
+		cfg.PrometheusURL = "https://shared"
+		cfg.PrometheusSavedURL = cfg.PrometheusURL
+		cfg.PrometheusHeadersFromEnv = map[string]string{"Authorization": "RADAR_PROFILE_TEST_TOKEN"}
+		got, err := preparePrometheusConfiguration(cfg)
+		if err != nil || got.LocalConnections != nil || got.PrometheusHeaders["Authorization"] != "shared-secret" {
+			t.Fatalf("shared configuration changed: %v", err)
+		}
+	}
+}

@@ -35,8 +35,9 @@ type SourcesResponse = pkgtraffic.SourcesResponse
 
 // Re-export FlowsResponse.WarningKind values from pkg/traffic.
 const (
-	WarningTransient = pkgtraffic.WarningTransient
-	WarningPartial   = pkgtraffic.WarningPartial
+	WarningTransient  = pkgtraffic.WarningTransient
+	WarningPartial    = pkgtraffic.WarningPartial
+	WarningIncomplete = pkgtraffic.WarningIncomplete
 )
 
 // Re-export functions from pkg/traffic.

@@ -25,6 +25,7 @@ import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { AlertBanner } from '../ui/drawer-components'
 import { DialogPortal } from '../ui/DialogPortal'
 import type { SelectedResource, WorkloadRevision } from '../../types'
+import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { displayKindName } from '../ui/drawer-components'
 import { getDefaultContainerName } from '../resources/resource-utils'
 import { SetImageDialog, type ManagedImageSource } from './SetImageDialog'
@@ -143,10 +144,12 @@ interface ResourceActionsBarProps {
   drainPlan?: DrainPlan | null
   isPlanningDrain?: boolean
   drainPlanError?: string | null
-  // The connected backend has no drain-plan endpoint (version skew, e.g. a newer
-  // frontend against an older radar). The dialog falls back to the plan-less
-  // acknowledgement-only mode instead of keeping Drain disabled on a dead request.
-  drainPlanUnsupported?: boolean
+  // The connected Radar predates the drain-plan endpoint (a newer frontend
+  // against an older Radar). The dialog falls back to the plan-less
+  // acknowledgement-only mode instead of keeping Drain disabled on a dead
+  // request, and names the Radar version that serves plans so the user knows a
+  // preview exists.
+  drainPlanUpgrade?: RadarUpgradeRequirement | null
 }
 
 export function ResourceActionsBar({
@@ -177,7 +180,7 @@ export function ResourceActionsBar({
   onCordonNode, isCordoningNode,
   onUncordonNode, isUncordoningNode,
   onDrainNode, isDrainingNode,
-  onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError, drainPlanUnsupported,
+  onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError, drainPlanUpgrade,
 }: ResourceActionsBarProps) {
   const kind = resource.kind.toLowerCase()
   const coreBatchJob = isCoreBatchJob(kind, resource.group)
@@ -202,13 +205,14 @@ export function ResourceActionsBar({
   // open: the host reports it through a mutation error, which the next request clears,
   // so without latching every option change would refire a request known to 404 and
   // bounce the dialog out of its fallback mode.
-  const [planUnsupported, setPlanUnsupported] = useState(false)
+  const [planUpgrade, setPlanUpgrade] = useState<RadarUpgradeRequirement | null>(null)
   useEffect(() => {
-    if (drainPlanUnsupported) setPlanUnsupported(true)
-  }, [drainPlanUnsupported])
+    if (drainPlanUpgrade) setPlanUpgrade(drainPlanUpgrade)
+  }, [drainPlanUpgrade])
   useEffect(() => {
-    if (!showDrainConfirm) setPlanUnsupported(false)
+    if (!showDrainConfirm) setPlanUpgrade(null)
   }, [showDrainConfirm])
+  const planUnsupported = planUpgrade !== null
   const planSupported = Boolean(onPlanDrain) && !planUnsupported
 
   // Fetch (and refetch on option changes) the read-only plan while the drain dialog is open.
@@ -719,6 +723,7 @@ export function ResourceActionsBar({
         options={drainOptions}
         onOptionsChange={setDrainOptions}
         planSupported={planSupported}
+        planUpgrade={planUpgrade}
         onRefreshPlan={planSupported ? () => onPlanDrain?.({ name: resource.name, options: drainOptions }) : undefined}
         isDraining={Boolean(isDrainingNode)}
         onClose={() => {

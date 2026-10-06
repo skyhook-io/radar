@@ -146,9 +146,10 @@ func main() {
 		return nil
 	})
 	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
-	// --prometheus-header Key=Value, repeatable. Defaults populated from
-	// config file; any --prometheus-header flag replaces the file value rather
-	// than merging — matches kubectl semantics (file is the default, CLI wins).
+	// --prometheus-header Key=Value, repeatable. Shared installations default to
+	// the config file; any --prometheus-header flag replaces the file value rather
+	// than merging (kubectl semantics: file is the default, CLI wins). Local
+	// installations use only this launch's flags.
 	promHeaders := newHeaderFlag(fileCfg.PrometheusHeaders)
 	flag.Var(promHeaders, "prometheus-header", "HTTP header to send with Prometheus requests, e.g. 'Authorization=Bearer <token>' (repeatable). Required for auth-protected backends.")
 	promHeadersFromEnv := newHeaderFromEnvFlag(fileCfg.PrometheusHeadersFromEnv)
@@ -322,15 +323,6 @@ func main() {
 	if *mcpCatalogStdio && noMCPFlagSet && *noMCP {
 		log.Fatalf("--mcp-catalog-stdio cannot be combined with --no-mcp")
 	}
-	inheritsPrometheusHeaders := !promHeaders.overrides && len(fileCfg.PrometheusHeaders) > 0 ||
-		!promHeadersFromEnv.overrides && len(fileCfg.PrometheusHeadersFromEnv) > 0
-	if err := app.ValidatePrometheusHeaderDestination(fileCfg.PrometheusURL, *prometheusURL, inheritsPrometheusHeaders); err != nil {
-		log.Fatalf("Invalid Prometheus header configuration: %v", err)
-	}
-	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(promHeaders.value(), promHeadersFromEnv.value())
-	if err != nil {
-		log.Fatalf("Invalid Prometheus header configuration: %v", err)
-	}
 	resolvedNamespace, resolvedNamespaces, err := app.ResolveNamespaceSelection(*namespace, *namespaces, namespaceFlagSet, namespacesFlagSet)
 	if err != nil {
 		log.Fatalf("%v", err)
@@ -363,55 +355,58 @@ func main() {
 	}
 
 	cfg := app.AppConfig{
-		Kubeconfig:               resolvedKubeconfig,
-		KubeconfigDirs:           resolvedKubeconfigDirs,
-		Namespace:                resolvedNamespace,
-		Namespaces:               resolvedNamespaces,
-		Port:                     *port,
-		ListenAddress:            normalizedListenAddress,
-		ShowRemoteAccessHint:     true,
-		BasePath:                 normalizedBasePath,
-		NoBrowser:                *noBrowser,
-		Browser:                  *browser,
-		DevMode:                  *devMode,
-		HistoryLimit:             *historyLimit,
-		DebugEvents:              *debugEvents,
-		FakeInCluster:            *fakeInCluster,
-		DisableHelmWrite:         *disableHelmWrite,
-		DisableExec:              *disableExec,
-		DisableLocalTerminal:     *disableLocalTerminal,
-		PodShellDefault:          *podShellDefault,
-		DebugImage:               *debugImage,
-		ReachabilityImage:        *reachabilityImage,
-		ListPageSize:             *listPageSize,
-		NamespaceScope:           *namespaceScope,
-		TimelineStorage:          *timelineStorage,
-		TimelineDBPath:           *timelineDBPath,
-		TimelinePostgresDSN:      os.Getenv("RADAR_TIMELINE_POSTGRES_DSN"),
-		TimelineRetention:        *timelineRetention,
-		TimelineMaxSizeBytes:     timelineMaxSizeBytes,
-		PrometheusURL:            *prometheusURL,
-		OpenCostCurrency:         normalizedOpenCostCurrency,
-		OpenCostFlagSet:          openCostCurrencyFlagSet,
-		CostSource:               fileCfg.CostSource,
-		KubecostURL:              fileCfg.KubecostURL,
-		KubecostAPIKey:           fileCfg.KubecostAPIKey,
-		KubecostAPIKeyContext:    fileCfg.KubecostAPIKeyContext,
-		KubecostClusterID:        fileCfg.KubecostClusterID,
-		KubecostClusterIDContext: fileCfg.KubecostClusterIDContext,
-		PrometheusHeaders:        resolvedPrometheusHeaders,
-		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
-		PrometheusURLFlag:        prometheusURLFlagSet,
-		PrometheusHeaderFlags:    promHeaders.overrides || promHeadersFromEnv.overrides,
-		BeylaJobSelector:         *beylaJobSelector,
-		WorkloadMetricsScope:     prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels},
-		MCPEnabled:               mcpEnabled,
-		AIHistory:                *aiHistory,
-		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,
-		Version:                  version,
-		HubAPIURL:                hubAPIURL,
-		HubAppURL:                hubAppURL,
-		CloudTunnelConfigured:    *cloudURL != "",
+		Kubeconfig:                  resolvedKubeconfig,
+		KubeconfigDirs:              resolvedKubeconfigDirs,
+		Namespace:                   resolvedNamespace,
+		Namespaces:                  resolvedNamespaces,
+		Port:                        *port,
+		ListenAddress:               normalizedListenAddress,
+		ShowRemoteAccessHint:        true,
+		BasePath:                    normalizedBasePath,
+		NoBrowser:                   *noBrowser,
+		Browser:                     *browser,
+		DevMode:                     *devMode,
+		HistoryLimit:                *historyLimit,
+		DebugEvents:                 *debugEvents,
+		FakeInCluster:               *fakeInCluster,
+		DisableHelmWrite:            *disableHelmWrite,
+		DisableExec:                 *disableExec,
+		DisableLocalTerminal:        *disableLocalTerminal,
+		PodShellDefault:             *podShellDefault,
+		DebugImage:                  *debugImage,
+		ReachabilityImage:           *reachabilityImage,
+		ListPageSize:                *listPageSize,
+		NamespaceScope:              *namespaceScope,
+		TimelineStorage:             *timelineStorage,
+		TimelineDBPath:              *timelineDBPath,
+		TimelinePostgresDSN:         os.Getenv("RADAR_TIMELINE_POSTGRES_DSN"),
+		TimelineRetention:           *timelineRetention,
+		TimelineMaxSizeBytes:        timelineMaxSizeBytes,
+		PrometheusURL:               *prometheusURL,
+		OpenCostCurrency:            normalizedOpenCostCurrency,
+		OpenCostFlagSet:             openCostCurrencyFlagSet,
+		CostSource:                  fileCfg.CostSource,
+		KubecostURL:                 fileCfg.KubecostURL,
+		KubecostAPIKey:              fileCfg.KubecostAPIKey,
+		KubecostAPIKeyContext:       fileCfg.KubecostAPIKeyContext,
+		KubecostClusterID:           fileCfg.KubecostClusterID,
+		KubecostClusterIDContext:    fileCfg.KubecostClusterIDContext,
+		PrometheusHeaders:           promHeaders.value(),
+		PrometheusSavedURL:          fileCfg.PrometheusURL,
+		PrometheusLiteralHeaderFlag: promHeaders.overrides,
+		PrometheusEnvHeaderFlag:     promHeadersFromEnv.overrides,
+		PrometheusHeadersFromEnv:    promHeadersFromEnv.value(),
+		PrometheusURLFlag:           prometheusURLFlagSet,
+		PrometheusHeaderFlags:       promHeaders.overrides || promHeadersFromEnv.overrides,
+		BeylaJobSelector:            *beylaJobSelector,
+		WorkloadMetricsScope:        prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels},
+		MCPEnabled:                  mcpEnabled,
+		AIHistory:                   *aiHistory,
+		AIHistoryDBPath:             fileCfg.AIHistoryDBPath,
+		Version:                     version,
+		HubAPIURL:                   hubAPIURL,
+		HubAppURL:                   hubAppURL,
+		CloudTunnelConfigured:       *cloudURL != "",
 		AuthConfig: auth.Config{
 			Mode:                      *authMode,
 			Secret:                    *authSecret,
@@ -500,7 +495,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid timeline configuration: %v", err)
 	}
-	app.RegisterCallbacks(cfg, timelineStoreCfg)
+	cfg = app.RegisterCallbacks(cfg, timelineStoreCfg)
 	k8s.LogTiming(" Callbacks registered: %v", time.Since(t))
 
 	// Create server
@@ -636,7 +631,8 @@ func parseCSV(s string) []string {
 // headerFlag is a flag.Value that accumulates repeated --prometheus-header
 // Key=Value pairs into a map. The first Set call after construction wipes any
 // defaults populated from the config file (kubectl-style: file = default, CLI
-// wins outright instead of merging).
+// wins outright instead of merging). Local installations ignore the file
+// defaults; see preparePrometheusConfiguration.
 type headerFlag struct {
 	m         map[string]string
 	overrides bool

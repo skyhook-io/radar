@@ -161,6 +161,49 @@ Radar binary (including Radar Cloud self-upgrade) does not update RBAC. Missing 
 on an older `--reuse-values` installation default to enabled; set explicit false
 before upgrading if the added visibility is unwanted.
 
+### Radar Cloud background services (`radar:system`)
+
+Radar Cloud's alerts worker and timeline puller read as `radar:system`.
+`cloud.systemRbac` (default `true`) creates the chart's default read grant:
+a chart-owned role aggregated to match `view`, the cluster-read and
+integration-read add-ons, and cluster-wide `get/list/watch` on Secrets.
+Helm release alerts and Secret changes in the timeline need Secret read;
+Helm stores releases as Secrets. The grant includes no writes.
+
+### Radar Cloud automatic Diagnose (`radar:ai:reader`)
+
+Manual Diagnose turns read as the person who started them. Radar Cloud forwards
+that person's identity and groups; `radar:ai:reader` is not involved. MCP clients
+also read with the user's own permissions.
+
+Automatic (alert-triggered) Diagnose runs use username `radar:ai:<org>` and
+group `radar:ai:reader` only, a permanent read-only background diagnostic reader.
+Never grant this group write permissions; a future write-capable AI identity
+needs a separate opt-in group (e.g. `radar:ai:operator`).
+`cloud.aiRbac` (default `true`) creates the chart's default grant: a chart-owned
+role aggregated to match `view` plus the cluster-read and integration-read
+add-ons. With the standard `view` role this grant includes no Kubernetes Secret
+permission; it also inherits anything your cluster adds to `view` (ClusterRoles
+labelled `rbac.authorization.k8s.io/aggregate-to-view`). It does include pod
+logs and ConfigMaps, which may contain sensitive data.
+
+Both values are independent of `cloud.defaultRbac`. They control only the
+chart's default grants, not whether features run; Radar Cloud controls whether
+Diagnose runs. False or absent creates no default grant and does not remove
+customer-created bindings. To narrow the default grants, set the matching value
+to false and supply your own read-only bindings for that group. With no grant,
+the group has no cluster access; automatic Diagnose has no viewer fallback.
+
+A plain `--reuse-values` upgrade from a chart predating these keys leaves them
+absent and creates neither default grant. Set `cloud.aiRbac=true` and/or
+`cloud.systemRbac=true` explicitly to create them. Changes made directly to
+chart-managed bindings are restored on the next Helm upgrade.
+
+Creating or updating these aggregated roles requires cluster-admin-equivalent
+authority or `escalate` on ClusterRoles, in addition to normal chart installation
+permissions. Restricted installers can set `cloud.aiRbac=false` and
+`cloud.systemRbac=false` and supply their own read-only group bindings.
+
 ### Connecting to Argo CD (GitOps deep diff)
 
 Radar's GitOps pages show a Git-rendered desired-vs-live diff when connected to
@@ -348,7 +391,7 @@ Disabled by default for security:
 | Terminal | `rbac.podExec: true` | Shell access to pods |
 | Port Forward | `rbac.portForward: true` | Port forwarding to pods. Also the fallback for traffic sources (Hubble/Caretta) — Radar dials the relay/metrics Service directly first, so in-cluster installs only need this when a NetworkPolicy or routing blocks Radar's namespace from reaching the service |
 | Logs | `rbac.podLogs: true` | View pod logs (**enabled by default**) |
-| Helm Write | `rbac.helm: true` | Install/upgrade/rollback/uninstall Helm releases. Under auth or cloud-mode, also emits a split helm add-on ClusterRole — `radar-helm` (member-safe: CRDs, storage, namespaces) and `radar-helm-admin` (owner-only: RBAC, webhooks, ApiServices) |
+| Helm Write | `rbac.helm: true` | Install/upgrade/rollback/uninstall Helm releases. No-auth installs: grants Radar's ServiceAccount create/update/patch/delete on all resource types, since Helm runs as it. Under auth or cloud-mode Helm runs as the signed-in user, so the ServiceAccount gets no write grant; instead a split helm add-on ClusterRole is emitted — `radar-helm` (member-safe: CRDs, storage, namespaces) and `radar-helm-admin` (owner-only: RBAC, webhooks, ApiServices) |
 | RBAC view | `rbac.viewRBAC: true` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings in the resource browser. Off by default — cache-served reads bypass per-user RBAC, so this exposes the cluster's authorization graph to every authenticated Radar user. Auto-enabled under auth or cloud mode (every read is re-checked per user there). |
 | Webhooks view | `rbac.viewWebhooks: true` | Show MutatingWebhookConfigurations and ValidatingWebhookConfigurations in the resource browser. Off by default — the configurations reveal which admission controls are enforced (Gatekeeper / Kyverno policies, image scanners, DLP) and where the gaps are, which is recon value for a low-trust viewer. Auto-enabled under auth or cloud mode. |
 | Node runtime evidence | `rbac.viewNodeRuntime: true` | Let upgrade-impact checks inspect kubelet metrics and effective configuration through `nodes/proxy`. Off by default because this exposes node-level runtime and configuration details to anyone who can reach a no-auth Radar install. Under auth, grant `get` on `nodes/proxy` to each Kubernetes identity that should inspect this evidence. |

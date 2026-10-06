@@ -18,8 +18,7 @@ import type { SelectedHelmRelease, HelmHook, ChartDependency, HelmOperation, Hel
 import { apiVersionToGroup, kindToPluralWithGroup, type NavigateToResource } from '../../utils/navigation'
 import { formatDate } from './helm-utils'
 import { getHelmStatusColor, getKindBadgeColor, getResourceStatusColor, SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
-import { useCanHelmAct, useCloudRole } from '../../api/client'
-import { RoleGatedPanel } from './RoleGatedPanel'
+import { useCanHelmAct } from '../../api/client'
 import { RevisionHistory } from './RevisionHistory'
 import { ManifestViewer } from './ManifestViewer'
 import { ValuesViewer } from './ValuesViewer'
@@ -129,14 +128,8 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const resizeStartWidth = useRef(DEFAULT_WIDTH)
   const targetVersionRef = useRef('')
   const editedUpgradeYamlRef = useRef('')
-  const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
-  // Cloud viewers can't view release manifests / values / diffs
-  // (backend gate at requireCloudRole('member')). Skip the queries
-  // when the role would 403 — saves a round-trip and avoids a
-  // transient error state under the role-gated panel.
-  const { canAtLeast } = useCloudRole()
-  const canViewSensitive = canAtLeast('member')
   const helmNamespace = release.storageNamespace || release.namespace
+  const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct(helmNamespace)
 
   const { data: releaseDetail, isLoading, error: releaseError, refetch: refetchRelease } = useHelmRelease(
     helmNamespace,
@@ -149,7 +142,6 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     helmNamespace,
     release.name,
     selectedRevision,
-    canViewSensitive,
   )
 
   // Fetch values
@@ -157,7 +149,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     helmNamespace,
     release.name,
     showAllValues,
-    canViewSensitive,
+    true,
     selectedRevision,
   )
   const {
@@ -168,7 +160,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     helmNamespace,
     release.name,
     false,
-    canViewSensitive && showUpgradeConfirm && adjustValues,
+    showUpgradeConfirm && adjustValues,
   )
 
   // Lazy check for upgrade availability
@@ -714,7 +706,6 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
               releaseNamespace={releaseDetail.namespace}
               managedByFluxHelmRelease={releaseDetail.managedByFluxHelmRelease}
               hookDiagnostics={releaseDetail.hookDiagnostics}
-              canCompare={canViewSensitive}
               onCompare={handleCompareRevisions}
               onNavigateToResource={onNavigateToResource}
             />
@@ -732,32 +723,28 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
               />
             )}
             {activeTab === 'manifest' && (
-              <RoleGatedPanel min="member" feature="release manifests">
-                <ManifestViewer
-                  manifest={manifest || ''}
-                  isLoading={manifestLoading}
-                  revision={selectedRevision}
-                  onCopy={(text) => copyToClipboard(text, 'manifest')}
-                  copied={copied === 'manifest'}
-                />
-              </RoleGatedPanel>
+              <ManifestViewer
+                manifest={manifest || ''}
+                isLoading={manifestLoading}
+                revision={selectedRevision}
+                onCopy={(text) => copyToClipboard(text, 'manifest')}
+                copied={copied === 'manifest'}
+              />
             )}
             {activeTab === 'values' && (
-              <RoleGatedPanel min="member" feature="release values">
-                <ValuesViewer
-                  values={values}
-                  isLoading={valuesLoading}
-                  showAllValues={showAllValues}
-                  onToggleAllValues={setShowAllValues}
-                  onCopy={(text) => copyToClipboard(text, 'values')}
-                  copied={copied === 'values'}
-                  namespace={helmNamespace}
-                  name={release.name}
-                  revision={selectedRevision}
-                  currentRevision={releaseDetail.revision}
-                  onApplySuccess={() => refetch()}
-                />
-              </RoleGatedPanel>
+              <ValuesViewer
+                values={values}
+                isLoading={valuesLoading}
+                showAllValues={showAllValues}
+                onToggleAllValues={setShowAllValues}
+                onCopy={(text) => copyToClipboard(text, 'values')}
+                copied={copied === 'values'}
+                namespace={helmNamespace}
+                name={release.name}
+                revision={selectedRevision}
+                currentRevision={releaseDetail.revision}
+                onApplySuccess={() => refetch()}
+              />
             )}
             {activeTab === 'resources' && (
               <OwnedResources
@@ -899,7 +886,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
             )}
           </div>
         )}
-        {upgradeProgress.length === 0 && canHelmWrite && canViewSensitive && (
+        {upgradeProgress.length === 0 && canHelmWrite && (
           <div className="mt-3 border-t border-theme-border pt-3">
             <Tooltip content="Edit the user-supplied Helm values that Radar will pass to this upgrade.">
               <button
@@ -1067,7 +1054,6 @@ function HelmOperationBanner({
   releaseNamespace,
   managedByFluxHelmRelease,
   hookDiagnostics,
-  canCompare,
   onCompare,
   onNavigateToResource,
 }: {
@@ -1076,7 +1062,6 @@ function HelmOperationBanner({
   releaseNamespace: string
   managedByFluxHelmRelease?: string
   hookDiagnostics?: HookDiagnostic[]
-  canCompare?: boolean
   onCompare?: (rev1: number, rev2: number) => void
   onNavigateToResource?: NavigateToResource
 }) {
@@ -1147,7 +1132,6 @@ function HelmOperationBanner({
           <OperationInsightSignals
             insight={operationInsight}
             releaseNamespace={releaseNamespace}
-            canCompare={Boolean(canCompare)}
             onCompare={onCompare}
             onNavigateToResource={onNavigateToResource}
           />
@@ -1166,13 +1150,11 @@ function HelmOperationBanner({
 function OperationInsightSignals({
   insight,
   releaseNamespace,
-  canCompare,
   onCompare,
   onNavigateToResource,
 }: {
   insight?: HelmOperationInsight
   releaseNamespace: string
-  canCompare: boolean
   onCompare?: (rev1: number, rev2: number) => void
   onNavigateToResource?: NavigateToResource
 }) {
@@ -1181,7 +1163,7 @@ function OperationInsightSignals({
   const relatedCount = primaryResource
     ? Math.max(0, (insight?.signalCount ?? 0) - 1)
     : insight?.relatedResources?.length ?? 0
-  const showCompare = Boolean(compare && canCompare && onCompare)
+  const showCompare = Boolean(compare && onCompare)
   if (!primaryResource && !showCompare) {
     return null
   }

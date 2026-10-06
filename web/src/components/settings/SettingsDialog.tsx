@@ -2,17 +2,17 @@ import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug,
-  Plus, Terminal, Boxes, Activity, GitBranch, Sparkles, SlidersHorizontal, Zap,
-  LayoutDashboard, ChevronRight, ExternalLink, Download, AlertTriangle, Coins, EyeOff,
+  Terminal, Boxes, Activity, GitBranch, Sparkles, SlidersHorizontal, Zap,
+  LayoutDashboard, ChevronRight, AlertTriangle, Coins, EyeOff,
   type LucideIcon,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
-import { apiUrl, getAuthHeaders, getCredentialsMode, routePath } from '../../api/config'
+import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, routePath } from '../../api/config'
 import {
-  useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus, useCapabilities,
+  useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus,
   useOpenCostSummary,
 } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
@@ -25,16 +25,25 @@ import { PrivacySection } from './PrivacySection'
 import { ConfigToggle, SubHeading } from './controls'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
 import { currencyOptionsForValue } from './currency-options'
-import { versionUpdateURL } from '../../utils/version'
+import { UpdateNotification } from '../ui/UpdateNotification'
 import {
   costConfigurationAction,
   costFreshnessLabel,
   costIntegrationUnavailableMessage,
   costSourceLabel,
+  costSourcePreferenceLabel,
+  COST_SOURCE_OPTIONS,
 } from '../cost/source'
-import { costSourceApplyLabel, prometheusHeadersFromRows, shouldOfferCostReview, shouldShowSettingsFooter } from './settings-state'
+import { costSourceApplyLabel, pendingSectionLabels, pendingSections, shouldShowSettingsFooter } from './settings-state'
+import { PrometheusConfigField } from './PrometheusConfigField'
+import { LocalConnectionSettings, type IntegrationProfiles, type IntegrationKind } from './LocalConnectionSettings'
+import { LocalIntegrationStatus } from './LocalIntegrationStatus'
+import { LocalConfigurationDetails, SavedClusterConnections, PreviousIntegrationSettingsNotice } from './LocalConfigurationDetails'
+import { useContextSwitch } from '../../context/ContextSwitchContext'
+import { previousIntegrationSettingsKey, type IntegrationSettingsResponse } from '../../hooks/usePreviousIntegrationSettings'
 import type { SettingsSectionId } from './settings-state'
 import { OperatorManagedNotice } from './OperatorManagedNotice'
+import { FormSaveActions } from './FormSaveActions'
 export type { SettingsSectionId } from './settings-state'
 
 function mcpEndpointUrl(): string {
@@ -62,8 +71,7 @@ interface Config {
   restoreLastDesktopContext?: boolean | null
 }
 
-interface ConfigResponse {
-  management: 'local' | 'operator' | 'cloud'
+interface ConfigResponse extends IntegrationSettingsResponse {
   file: Config
   effective: Config
   isDesktop: boolean
@@ -130,6 +138,8 @@ function normalizeStartup(c: Config) {
   }
 }
 
+const localIntegrationCaption = 'Saved for this cluster · applies when you save, no restart.'
+
 export function SettingsDialog({
   open,
   onClose,
@@ -142,6 +152,39 @@ export function SettingsDialog({
   const { data: versionInfo } = useVersionCheck()
   const { canAtLeast } = useCloudRole()
   const capabilities = useCapabilitiesContext()
+  const { data: settingsCluster } = useClusterInfo()
+  const { isSwitching } = useContextSwitch()
+  const settingsApiBase = getApiBase()
+  const [prometheusCredentialDirty, setPrometheusCredentialDirty] = useState(false)
+  const [localDirty, setLocalDirty] = useState<Record<IntegrationKind, boolean>>({ metrics: false, argocd: false, cost: false })
+  const [discardGeneration, setDiscardGeneration] = useState(0)
+  const [localBusy, setLocalBusy] = useState<Record<IntegrationKind, boolean>>({ metrics: false, argocd: false, cost: false })
+  const [storageBusy, setStorageBusy] = useState(false)
+  const integrationBusy = Object.values(localBusy).some(Boolean)
+  const metricsBusyChange = useCallback((busy: boolean) => setLocalBusy(value => ({ ...value, metrics: busy })), [])
+  const argoBusyChange = useCallback((busy: boolean) => setLocalBusy(value => ({ ...value, argocd: busy })), [])
+  const costBusyChange = useCallback((busy: boolean) => setLocalBusy(value => ({ ...value, cost: busy })), [])
+  const metricsDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, metrics: dirty })), [])
+  const argoDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, argocd: dirty })), [])
+  const costDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, cost: dirty })), [])
+  const [connectionsChangedAt, setConnectionsChangedAt] = useState(0)
+  const overviewHeading = useRef<HTMLHeadingElement>(null)
+  const previousNoticeDismissed = useCallback(() => {
+    // The notice unmounts with its focused button; keep focus in the dialog.
+    requestAnimationFrame(() => overviewHeading.current?.focus())
+    setConfigData(value => value?.integrationProfiles ? {
+      ...value,
+      integrationProfiles: Object.fromEntries(Object.entries(value.integrationProfiles).map(([kind, profile]) =>
+        [kind, profile.legacy ? { ...profile, legacy: { ...profile.legacy, noticeDismissed: true } } : profile])) as IntegrationProfiles,
+    } : value)
+    void queryClient.resetQueries({ queryKey: [previousIntegrationSettingsKey] })
+  }, [queryClient])
+  const connectionsChanged = useCallback((profiles: IntegrationProfiles) => {
+    setConnectionsChangedAt(Date.now())
+    setConfigData(value => value ? { ...value, integrationProfiles: profiles } : value)
+    void queryClient.resetQueries({ queryKey: [previousIntegrationSettingsKey] })
+    void queryClient.invalidateQueries({ predicate: query => typeof query.queryKey[0] === 'string' && /^(prometheus|opencost|gitops|argo)/.test(query.queryKey[0]) })
+  }, [queryClient])
 
   const [configData, setConfigData] = useState<ConfigResponse | null>(null)
   const operatorManaged = configData?.management === 'operator'
@@ -158,9 +201,10 @@ export function SettingsDialog({
   const configSavingRef = useRef(false)
   const costCurrencySavingRef = useRef(false)
   const pendingCloseActionRef = useRef<(() => void) | null>(null)
-  const { data: argoSectionStatus, refetch: refetchArgoSectionStatus } = useArgoStatus(
+  const argoStatusQuery = useArgoStatus(
     open && section === 'argocd'
   )
+  const { data: argoSectionStatus, refetch: refetchArgoSectionStatus } = argoStatusQuery
 
   // Local AI preferences save independently of the owner-gated server settings.
   const diag = useDiagnose()
@@ -172,11 +216,20 @@ export function SettingsDialog({
     effort: diag.effort,
   })
   const [aiSaved, setAiSaved] = useState(false)
-  const aiDirty =
+  // Until the user edits, the draft follows the saved preferences: the agent
+  // list loads after Settings may already be open, and adopting its defaults
+  // is not an edit.
+  const [aiTouched, setAiTouched] = useState(false)
+  const aiEditable = aiAvailable && !diag.hosted && configData?.management !== 'operator'
+  const aiDirty = aiEditable && (
     aiDraft.agent !== diag.selectedAgent ||
     aiDraft.profile !== diag.profile ||
     aiDraft.model !== diag.model ||
-    aiDraft.effort !== diag.effort
+    aiDraft.effort !== diag.effort)
+  useEffect(() => {
+    if (aiTouched) return
+    setAiDraft({ agent: diag.selectedAgent, profile: diag.profile, model: diag.model, effort: diag.effort })
+  }, [aiTouched, diag.selectedAgent, diag.profile, diag.model, diag.effort])
 
   // Per-bucket normalized dirty. Only startup fields participate; integration
   // fields apply live and never light up the footer.
@@ -198,17 +251,47 @@ export function SettingsDialog({
     (editedConfig.costSource ?? 'auto') !== (configData?.file.costSource ?? 'auto') ||
     (editedConfig.kubecostUrl ?? '').trim() !== (configData?.file.kubecostUrl ?? '').trim() ||
     (editedConfig.kubecostClusterId ?? '').trim() !== (configData?.file.kubecostClusterId ?? '').trim()
-  const costIntegrationDirty = costSourceDirty || costCredentialDirty
+  const costIntegrationDirty = costSourceDirty || costCredentialDirty || localDirty.cost
   // Merged-pane dirty for the flat nav (Connection = cluster+server, Advanced = mcp+timeline).
   const connectionDirty = clusterDirty || serverDirty
   const advancedDirty = mcpDirty || timelineDirty
   const configDirty = configData != null && (connectionDirty || advancedDirty)
+  const prometheusDirty = prometheusCredentialDirty || localDirty.metrics || (editedConfig.prometheusUrl ?? '') !== (configData?.effective.prometheusUrl ?? '')
+  const pending = pendingSections({ prometheus: prometheusDirty, cost: costIntegrationDirty, argocd: localDirty.argocd, ai: aiDirty })
+  const integrationDirty = pending.some(item => item !== 'ai')
+  // Drafts that save through their own form, which "Save startup settings" leaves in place.
+  const formDirty = pending.length > 0
+  const reviewSection = pending.find(item => item !== section)
+  const settingsBusy = saving || costCurrencySaving || integrationBusy || storageBusy
+  const metricsDraft = useRef({ open, scope: `${settingsApiBase}:${settingsCluster?.context}`, dirty: false })
+  const [draftFrozen, setDraftFrozen] = useState(false)
+  const [reloadVersion, setReloadVersion] = useState(0)
+  const settingsScope = `${settingsApiBase}:${settingsCluster?.context}`
+  const targetChangedWithDraft = open && metricsDraft.current.open && metricsDraft.current.dirty && (isSwitching || metricsDraft.current.scope !== settingsScope)
+  const showLocalStatus = open && !draftFrozen && !targetChangedWithDraft && !isSwitching
+  useEffect(() => {
+    if (!open) {
+      setDraftFrozen(false)
+      metricsDraft.current = { open: false, scope: settingsScope, dirty: false }
+      return
+    }
+    if (targetChangedWithDraft) {
+      setDraftFrozen(true)
+      return
+    }
+    if (draftFrozen) return
+    metricsDraft.current = { open, scope: settingsScope, dirty: configData != null && (prometheusDirty || configDirty || costIntegrationDirty || localDirty.argocd || aiDirty) }
+  }, [open, settingsScope, targetChangedWithDraft, draftFrozen, configData, prometheusDirty, configDirty, costIntegrationDirty, localDirty.argocd, aiDirty])
 
   // Load config on open + snapshot AI prefs + pick a default section that's
   // actually accessible to the current identity.
   useEffect(() => {
     if (!open) return
+    if (targetChangedWithDraft || draftFrozen) return
+    const controller = new AbortController()
     setConfigData(null)
+    setPrometheusCredentialDirty(false)
+    setLocalDirty({ metrics: false, argocd: false, cost: false })
     setSaveMessage(null)
     setLoadError(null)
     setConfirmingClose(false)
@@ -216,28 +299,27 @@ export function SettingsDialog({
     setCostCredentialDirty(false)
     setCostDraftReset((current) => current + 1)
     setAiSaved(false)
-    setAiDraft({
-      agent: diag.selectedAgent,
-      profile: diag.profile,
-      model: diag.model,
-      effort: diag.effort,
-    })
-    fetch(apiUrl('/config'), { credentials: getCredentialsMode(), headers: getAuthHeaders() })
+    setAiTouched(false)
+    if (isSwitching) return () => controller.abort()
+    fetch(apiUrl('/config'), { signal: controller.signal, credentials: getCredentialsMode(), headers: getAuthHeaders() })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         return res.json()
       })
       .then((data: ConfigResponse) => {
+        if (controller.signal.aborted || getApiBase() !== settingsApiBase) return
         setConfigData(data)
         setEditedConfig({ ...data.file, prometheusUrl: data.effective.prometheusUrl })
       })
       .catch((err) => {
+        if (controller.signal.aborted) return
         console.warn('[settings] Failed to load config:', err)
         setLoadError('Failed to load configuration.')
       })
+    return () => controller.abort()
     // Snapshot-on-open only; we don't want late diag updates to wipe staged edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  }, [open, isSwitching, settingsCluster?.context, settingsApiBase, draftFrozen, reloadVersion])
 
   useEffect(() => {
     if (open) setSection(initialSection)
@@ -258,7 +340,7 @@ export function SettingsDialog({
   }, [])
 
   const saveConfig = useCallback(async (): Promise<boolean> => {
-    if (!configData || configSavingRef.current || costCurrencySavingRef.current) return false
+    if (!configData || integrationBusy || draftFrozen || targetChangedWithDraft || configSavingRef.current || costCurrencySavingRef.current) return false
     configSavingRef.current = true
     setSaving(true)
     setSaveMessage(null)
@@ -302,7 +384,7 @@ export function SettingsDialog({
       configSavingRef.current = false
       setSaving(false)
     }
-  }, [editedConfig, configData])
+  }, [editedConfig, configData, integrationBusy, draftFrozen, targetChangedWithDraft])
 
   const saveCostCurrency = useCallback(async (value: string): Promise<void> => {
     if (!configData) throw new Error('Radar configuration is not available')
@@ -352,20 +434,31 @@ export function SettingsDialog({
     diag.setProfile(aiDraft.profile)
     diag.setModel(aiDraft.model)
     diag.setEffort(aiDraft.effort)
+    setAiTouched(false)
     setAiSaved(true)
   }, [diag, aiDraft])
+
+  const discardAi = useCallback(() => {
+    setAiTouched(false)
+    setAiSaved(false)
+  }, [])
 
   const discardChanges = useCallback(() => {
     // Revert unsaved startup edits back to the last-saved values (non-
     // destructive). configData.file holds the committed config, including the
     // live integration fields, so restoring it drops drafts without touching
-    // what's saved.
+    // what's saved. AI preferences don't depend on the config load.
+    if (settingsBusy || draftFrozen || targetChangedWithDraft) return
+    discardAi()
     if (!configData) return
     setEditedConfig({ ...configData.file, prometheusUrl: configData.effective.prometheusUrl })
     setCostCredentialDirty(false)
+    setPrometheusCredentialDirty(false)
+    setDiscardGeneration(value => value + 1)
+    setLocalDirty({ metrics: false, argocd: false, cost: false })
     setCostDraftReset((current) => current + 1)
     setSaveMessage(null)
-  }, [configData])
+  }, [configData, settingsBusy, draftFrozen, targetChangedWithDraft, discardAi])
 
   const finishClose = useCallback(() => {
     const action = pendingCloseActionRef.current
@@ -379,23 +472,33 @@ export function SettingsDialog({
     if (ok) finishClose()
   }, [saveConfig, finishClose])
 
-  const reviewCostDraft = useCallback(() => {
+  const reviewPendingDraft = () => {
+    if (!reviewSection) return
     setConfirmingClose(false)
-    setSection('cost')
-    requestAnimationFrame(() => {
-      const applyButton = document.getElementById('cost-apply-source')
-      applyButton?.scrollIntoView({ block: 'center' })
-      applyButton?.focus()
-    })
-  }, [])
+    setSection(reviewSection)
+    focusIntegration.current = true
+  }
+  const focusIntegration = useRef(false)
+  useEffect(() => {
+    if (!focusIntegration.current) return
+    focusIntegration.current = false
+    const panel = dialogRef.current?.querySelector<HTMLElement>('[role="tabpanel"]:not([inert])')
+    panel?.querySelector<HTMLElement>('fieldset[tabindex], input, select, button')?.focus()
+  }, [section])
 
-  // Close guard: a pending startup edit prompts an inline confirm rather than
-  // silently discarding. An unsaved AI draft is re-derivable, so it's fine to
-  // drop it on close.
+  // Close guard: any pending draft prompts an inline confirm rather than
+  // silently discarding. AI drafts count for every user; the rest need owner access.
+  // Saving or discarding the last draft from its own tab answers the close
+  // prompt; a stale "Unsaved changes" would otherwise linger in the footer.
+  useEffect(() => {
+    if (confirmingClose && !configDirty && !formDirty) setConfirmingClose(false)
+  }, [confirmingClose, configDirty, formDirty])
+
   const requestCloseRef = useRef<(afterClose?: () => void) => void>(() => {})
   requestCloseRef.current = (afterClose) => {
+    if (settingsBusy) return
     pendingCloseActionRef.current = afterClose ?? null
-    if (canEditConfig && (configDirty || costIntegrationDirty)) setConfirmingClose(true)
+    if ((canEditConfig && (configDirty || integrationDirty)) || aiDirty) setConfirmingClose(true)
     else finishClose()
   }
 
@@ -447,21 +550,20 @@ export function SettingsDialog({
     { id: 'overview', label: 'Overview', icon: LayoutDashboard, ownerOnly: false, dirty: false },
     { id: 'perms', label: 'My permissions', icon: Shield, ownerOnly: false, dirty: false },
     { id: 'connection', label: 'Connection', icon: Boxes, ownerOnly: true, dirty: connectionDirty },
-    { id: 'prometheus', label: 'Metrics', icon: Activity, ownerOnly: true, dirty: false },
+    { id: 'prometheus', label: 'Metrics', icon: Activity, ownerOnly: true, dirty: prometheusDirty },
     { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costIntegrationDirty },
-    { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: false },
+    { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: localDirty.argocd },
     { id: 'ai', label: 'AI investigations', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
     { id: 'privacy', label: 'Privacy', icon: EyeOff, ownerOnly: false, dirty: false },
     { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, dirty: advancedDirty },
   ]
 
-  const offerCostReview = shouldOfferCostReview(costIntegrationDirty, section)
   const showFooter = shouldShowSettingsFooter({
     canEditConfig,
     confirmingClose,
     configDirty,
-    costIntegrationDirty,
-    section,
+    integrationDirty: integrationDirty && (!configData?.integrationProfiles || (!!reviewSection && reviewSection !== 'ai')),
+    aiDirtyElsewhere: aiDirty && section !== 'ai',
     hasSaveMessage: Boolean(saveMessage),
   })
 
@@ -497,28 +599,30 @@ export function SettingsDialog({
           // Fixed height so the dialog doesn't jump when switching tabs — short
           // tabs leave breathing room, tall ones scroll inside the content pane.
           // max-h keeps it on-screen on short viewports.
-          'sm:rounded-xl sm:max-w-4xl sm:mx-4 sm:h-[660px] sm:max-h-[85vh]',
+          'sm:rounded-xl sm:max-w-5xl sm:mx-6 sm:h-[800px] sm:max-h-[calc(100dvh-64px)]',
           TRANSITION_PANEL,
           isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
         )}
         style={overlayTransitionStyle(isOpen, 'dialog')}
       >
         {/* Header — spans both panes */}
-        <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
-          <div className="flex items-center gap-2">
-            <Settings className="w-5 h-5 text-theme-text-secondary" />
-            <div className="flex items-baseline gap-2">
+        <div className="relative flex items-center justify-between p-4 border-b border-theme-border shrink-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <Settings className="w-5 h-5 shrink-0 text-theme-text-secondary" />
+            <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
               <h2 id="settings-dialog-title" className="text-lg font-semibold text-theme-text-primary">Settings</h2>
-              <span className="text-[11px] text-theme-text-tertiary">
-                Radar{versionInfo?.currentVersion ? ` v${versionInfo.currentVersion}` : ''}
+              <span className="break-all text-[11px] text-theme-text-tertiary">
+                Radar{versionInfo?.currentVersion ? ` v${versionInfo.currentVersion.replace(/^v/, '')}` : ''}
                 <span className="text-theme-text-disabled"> · by Skyhook</span>
               </span>
-
+              <UpdateNotification placement="settings" />
             </div>
           </div>
           <button
             onClick={() => requestCloseRef.current()}
-            className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+            aria-label="Close settings"
+            disabled={settingsBusy}
+            className="shrink-0 p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"
           >
             <X className="w-5 h-5" />
           </button>
@@ -566,21 +670,35 @@ export function SettingsDialog({
               </div>
             )}
 
+            {draftFrozen && <div role="status" className="mb-4 space-y-2 rounded-md border border-theme-border p-3 text-sm text-theme-text-secondary">
+              <p>The cluster changed while you had unsaved edits. Your previous draft is still shown below, but cannot be applied to this cluster.</p>
+              <button type="button" disabled={isSwitching} className="text-xs text-accent-text hover:underline disabled:opacity-50" onClick={() => {
+                metricsDraft.current = { open, scope: settingsScope, dirty: false }
+                setDraftFrozen(false)
+                setReloadVersion((version) => version + 1)
+              }}>Discard draft and load current cluster</button>
+            </div>}
             {!configData && !['overview', 'perms', 'ai', 'privacy'].includes(section) ? (
               <p className="text-sm text-theme-text-secondary">{loadError ? 'Configuration is unavailable. Close Settings and try again.' : 'Loading configuration…'}</p>
-            ) : <>
+            ) : <div inert={draftFrozen || settingsBusy || undefined} className={draftFrozen ? 'opacity-60' : undefined}>
             {operatorManaged && section !== 'perms' && section !== 'ai' && section !== 'privacy' && <div className="mb-4"><OperatorManagedNotice /></div>}
             {/* Overview — status at a glance; the landing section */}
             <div className={clsx(section !== 'overview' && 'hidden')} role="tabpanel" inert={section !== 'overview' || undefined}>
               <div className="mb-1">
-                <h3 className="text-base font-semibold text-theme-text-primary">Overview</h3>
+                <h3 ref={overviewHeading} tabIndex={-1} className="text-base font-semibold text-theme-text-primary outline-none">Overview</h3>
                 <p className="mt-0.5 text-xs text-theme-text-tertiary">
                   What this Radar is connected to right now — select a row for details.
                 </p>
               </div>
+              {configData?.management === 'local' && configData.integrationProfiles && canEditConfig && (
+                <PreviousIntegrationSettingsNotice profiles={configData.integrationProfiles} onNavigate={setSection} onDismissed={previousNoticeDismissed} />
+              )}
               <div className="mt-3">
                 <OverviewPanel active={section === 'overview'} onNavigate={setSection} />
               </div>
+              {configData?.management === 'local' && configData.integrationProfiles && canEditConfig && (
+                <LocalConfigurationDetails onNavigate={setSection} />
+              )}
             </div>
 
             {/* My permissions — usable by everyone, rendered inline (no launcher) */}
@@ -603,7 +721,7 @@ export function SettingsDialog({
               active={section}
               title="Connection"
               managed={operatorManaged ? <OperatorSettingsSummary section="connection" config={configData} /> : undefined}
-              caption="Takes effect on next launch."
+              caption="Kubeconfig and server changes take effect on next launch."
               locked={!canEditConfig}
             >
               <div className="space-y-4">
@@ -625,6 +743,15 @@ export function SettingsDialog({
                   onChange={updateConfigField}
                 />
               </div>
+              {configData?.management === 'local' && configData.integrationProfiles && canEditConfig && (
+                <SavedClusterConnections
+                  key={settingsScope}
+                  active={open && section === 'connection' && !draftFrozen && !isSwitching}
+                  profiles={configData.integrationProfiles}
+                  onChange={connectionsChanged}
+                  onBusyChange={setStorageBusy}
+                />
+              )}
             </SectionPane>
 
             {/* Metrics backend — live */}
@@ -633,11 +760,15 @@ export function SettingsDialog({
               active={section}
               title="Metrics"
               managed={operatorManaged ? <OperatorSettingsSummary section="prometheus" config={configData} /> : undefined}
-              caption="Connect and manage your metrics backend."
+              caption={configData?.integrationProfiles ? localIntegrationCaption : 'Connect and manage your metrics backend.'}
               live
               locked={!canEditConfig}
             >
-              <PrometheusConfigField
+              {configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.metrics.target)}`} kind="metrics" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={metricsDirtyChange} onBusyChange={metricsBusyChange}
+                status={showLocalStatus && section === 'prometheus' && !['error', 'target_changed'].includes(configData.integrationProfiles.metrics.state) ? <LocalIntegrationStatus kind="metrics" profile={configData.integrationProfiles.metrics} argo={argoStatusQuery} busy={integrationBusy} changedAt={connectionsChangedAt} /> : undefined} /> : <PrometheusConfigField
+                key={`${settingsApiBase}:${discardGeneration}`}
+                onBusyChange={metricsBusyChange}
+                onDirtyChange={setPrometheusCredentialDirty}
                 local={deploymentMode === 'local'}
                 value={editedConfig.prometheusUrl ?? ''}
                 configuredHeaderKeys={configData?.prometheusHeaderKeys ?? []}
@@ -645,7 +776,8 @@ export function SettingsDialog({
                 headersManaged={configData?.prometheusHeadersManaged === true}
                 urlFromFlag={configData?.prometheusUrlFromFlag === true}
                 onChange={(v) => updateConfigField('prometheusUrl', v || undefined)}
-                onApplied={(url) =>
+                onApplied={(url) => {
+                  setEditedConfig((prev) => ({ ...prev, prometheusUrl: url || undefined }))
                   setConfigData((prev) =>
                     prev ? {
                       ...prev,
@@ -653,8 +785,8 @@ export function SettingsDialog({
                       effective: { ...prev.effective, prometheusUrl: url || undefined },
                     } : prev
                   )
-                }
-              />
+                }}
+              />}
             </SectionPane>
 
             <SectionPane
@@ -662,11 +794,13 @@ export function SettingsDialog({
               active={section}
               title="Cost"
               managed={operatorManaged ? <OperatorSettingsSummary section="cost" config={configData} /> : undefined}
-              caption="Choose where Radar gets cost data and how amounts are labeled."
+              caption={configData?.integrationProfiles ? `${localIntegrationCaption} Display currency applies to all clusters.` : 'Choose where Radar gets cost data and how amounts are labeled.'}
               live
               locked={!canEditConfig}
             >
               <CostSection
+                integration={configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.cost.target)}`} kind="cost" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={costDirtyChange} onBusyChange={costBusyChange}
+                  status={showLocalStatus && section === 'cost' && !['error', 'target_changed'].includes(configData.integrationProfiles.cost.state) ? <LocalIntegrationStatus kind="cost" profile={configData.integrationProfiles.cost} argo={argoStatusQuery} busy={integrationBusy} changedAt={connectionsChangedAt} /> : undefined} /> : undefined}
                 currency={editedConfig.opencostCurrency ?? ''}
                 source={editedConfig.costSource ?? 'auto'}
                 url={editedConfig.kubecostUrl ?? ''}
@@ -679,7 +813,7 @@ export function SettingsDialog({
                 managed={configData?.openCostCurrencyManaged ?? false}
                 effectiveCurrency={configData?.effective.opencostCurrency ?? ''}
                 deploymentMode={deploymentMode}
-                settingsSaving={saving}
+                settingsSaving={settingsBusy}
                 onNavigateToResource={navigateFromSettings}
                 onApplyCurrency={saveCostCurrency}
                 onChangeSource={(value) => updateConfigField('costSource', value)}
@@ -707,11 +841,12 @@ export function SettingsDialog({
               active={section}
               title="Argo CD"
               managed={operatorManaged ? <OperatorSettingsSummary section="argocd" config={configData} /> : undefined}
-              caption="Applies immediately — no restart."
+              caption={configData?.integrationProfiles ? localIntegrationCaption : 'Applies immediately — no restart.'}
               live
               locked={!canEditConfig}
             >
-              <ArgoCDConfigField
+              {configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.argocd.target)}`} kind="argocd" profiles={configData.integrationProfiles} cliSession={configData.argoCdCliSession} onChange={connectionsChanged} onDirtyChange={argoDirtyChange} onBusyChange={argoBusyChange}
+                status={showLocalStatus && section === 'argocd' && !['error', 'target_changed'].includes(configData.integrationProfiles.argocd.state) ? <LocalIntegrationStatus kind="argocd" profile={configData.integrationProfiles.argocd} argo={argoStatusQuery} busy={integrationBusy} changedAt={connectionsChangedAt} /> : undefined} /> : <ArgoCDConfigField
                 url={editedConfig.argoCdUrl ?? ''}
                 insecureTls={editedConfig.argoCdInsecureTls ?? false}
                 tokenSet={configData?.argoCdTokenSet ?? false}
@@ -746,7 +881,7 @@ export function SettingsDialog({
                     predicate: (query) => typeof query.queryKey[0] === 'string' && query.queryKey[0].startsWith('gitops-'),
                   })
                 }}
-              />
+              />}
             </SectionPane>
 
             {/* AI investigations — self-saving, usable by everyone. Same heading block
@@ -773,26 +908,19 @@ export function SettingsDialog({
                     draft={aiDraft}
                     onChange={(patch) => {
                       setAiDraft((d) => ({ ...d, ...patch }))
+                      setAiTouched(true)
                       setAiSaved(false)
                     }}
                     onHistoryCleared={diag.refreshRuns}
                   />
-                  {!diag.hosted && (
-                    <div className="flex items-center justify-end gap-3">
-                      {aiSaved && !aiDirty && (
-                        <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
-                          <Check className="w-3 h-3" />
-                          Saved
-                        </span>
-                      )}
-                      <button
-                        onClick={saveAi}
-                        disabled={!aiDirty}
-                        className="px-4 py-1.5 text-sm font-medium btn-brand rounded-md disabled:opacity-50 disabled:pointer-events-none"
-                      >
-                        Save
-                      </button>
-                    </div>
+                  {aiEditable && (
+                    <FormSaveActions
+                      dirty={aiDirty}
+                      busy={false}
+                      onSave={saveAi}
+                      onDiscard={discardAi}
+                      feedback={aiSaved ? { tone: 'success', message: 'Saved' } : undefined}
+                    />
                   )}
                 </div>
               ) : (
@@ -834,120 +962,118 @@ export function SettingsDialog({
                 />
               </div>
             </SectionPane>
-            </>}
+            </div>}
           </div>
         </div>
 
-        {/* Footer — owner-gated persisted config. AI self-saves and integrations
-            apply separately. Shown whenever an edit is pending (any section),
-            while confirming a close, or briefly after a save. */}
-        <div
-          className={clsx(
-            'shrink-0 overflow-hidden transition-all duration-200 ease-out',
-            showFooter ? 'max-h-24 opacity-100 border-t border-theme-border' : 'max-h-0 opacity-0 pointer-events-none'
-          )}
-        >
-          <div className="flex items-center justify-between gap-3 px-4 py-2.5">
-            {confirmingClose ? (
-              <>
-                <span className="text-xs text-theme-text-secondary">
-                  {costIntegrationDirty && configDirty
-                    ? 'Cost source changes are not applied, and other changes are unsaved.'
-                    : costIntegrationDirty
-                      ? 'Cost source changes have not been applied.'
+        {/* Startup settings only apply on the next launch, so they save here
+            instead of in their tabs; drafts left in other tabs surface here
+            too, so closing can't drop them unnoticed. */}
+        <Collapse open={showFooter} className="shrink-0">
+          <div className="border-t border-theme-border">
+            <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+              {confirmingClose ? (
+                <>
+                  <div className="space-y-1 text-xs text-theme-text-secondary">
+                    <p>
+                    {formDirty
+                      ? `${pending.map(item => pendingSectionLabels[item]).join(', ')} changes are not saved.${configDirty ? ' Startup settings are unsaved.' : ''}`
                       : 'Unsaved changes.'}
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      pendingCloseActionRef.current = null
-                      setConfirmingClose(false)
-                    }}
-                    disabled={saving}
-                    className="px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
-                  >
-                    Keep editing
-                  </button>
-                  <button
-                    onClick={finishClose}
-                    disabled={saving}
-                    className="px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
-                  >
-                    Discard
-                  </button>
-                  {offerCostReview && (
+                    </p>
+                    {saveMessage && <p role="status" className={saveMessage.startsWith('Error') ? 'text-semantic-error' : undefined}>{saveMessage}</p>}
+                  </div>
+                  <div className="flex items-center gap-2">
                     <button
-                      onClick={reviewCostDraft}
-                      className={clsx(
-                        'flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium',
-                        configDirty
-                          ? 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
-                          : 'btn-brand',
-                      )}
+                      onClick={() => {
+                        pendingCloseActionRef.current = null
+                        setConfirmingClose(false)
+                      }}
+                      disabled={settingsBusy}
+                      className="px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
                     >
-                      Review Cost
+                      Keep editing
                     </button>
-                  )}
-                  {configDirty && (
                     <button
-                      onClick={costIntegrationDirty ? saveConfig : handleSaveAndClose}
-                      disabled={saving || costCurrencySaving}
-                      className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
+                      onClick={finishClose}
+                      disabled={settingsBusy}
+                      className="px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
                     >
-                      {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      {costIntegrationDirty ? 'Save other changes' : 'Save'}
+                      Discard
                     </button>
-                  )}
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center gap-2">
-                  <Tooltip content="Discard unsaved changes and revert to the last saved values">
-                    <button
-                      onClick={discardChanges}
-                      disabled={saving || (!configDirty && !costIntegrationDirty)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50 disabled:pointer-events-none"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      Discard changes
-                    </button>
-                  </Tooltip>
-                  {saveMessage && (
-                    <span className={clsx('text-xs', saveMessage.startsWith('Error') ? 'text-red-400' : 'text-green-400')}>
-                      {saveMessage}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  {offerCostReview && (
-                    <button
-                      onClick={reviewCostDraft}
-                      className={clsx(
-                        'flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium',
-                        configDirty
-                          ? 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
-                          : 'btn-brand',
-                      )}
-                    >
-                      Review Cost
-                    </button>
-                  )}
-                  {configDirty && (
-                    <button
-                      onClick={saveConfig}
-                      disabled={saving || costCurrencySaving}
-                      className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
-                    >
-                      {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      Save
-                    </button>
-                  )}
-                </div>
-              </>
-            )}
+                    {reviewSection && (
+                      <button
+                        onClick={reviewPendingDraft}
+                        className={clsx(
+                          'flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium',
+                          configDirty
+                            ? 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
+                            : 'btn-brand',
+                        )}
+                      >
+                        Review {pendingSectionLabels[reviewSection]}
+                      </button>
+                    )}
+                    {configDirty && canEditConfig && (
+                      <button
+                        onClick={formDirty ? saveConfig : handleSaveAndClose}
+                        disabled={settingsBusy || draftFrozen || targetChangedWithDraft}
+                        className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
+                      >
+                        {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                        Save startup settings
+                      </button>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    {(!configData?.integrationProfiles || configDirty || !!reviewSection) && <Tooltip content="Discard unsaved changes and revert to the last saved values">
+                      <button
+                        onClick={discardChanges}
+                        disabled={settingsBusy || draftFrozen || targetChangedWithDraft || (!configDirty && !formDirty)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        {formDirty && (configDirty || pending.length > 1) ? 'Discard all changes' : 'Discard changes'}
+                      </button>
+                    </Tooltip>}
+                    {saveMessage && (
+                      <span className={clsx('text-xs', saveMessage.startsWith('Error') ? 'text-red-400' : 'text-green-400')}>
+                        {saveMessage}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {reviewSection && (
+                      <button
+                        onClick={reviewPendingDraft}
+                        className={clsx(
+                          'flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium',
+                          configDirty
+                            ? 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
+                            : 'btn-brand',
+                        )}
+                      >
+                        Review {pendingSectionLabels[reviewSection]}
+                      </button>
+                    )}
+                    {configDirty && canEditConfig && (
+                      <button
+                        onClick={saveConfig}
+                        disabled={settingsBusy || draftFrozen || targetChangedWithDraft}
+                        className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
+                      >
+                        {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                        Save startup settings
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
-        </div>
+        </Collapse>
       </div>
     </div>,
     document.body
@@ -1096,9 +1222,9 @@ function OperatorSettingsSummary({ section, config }: { section: SettingsSection
     case 'cost':
       rows = [
         ['Status', costError ? 'Status unavailable' : !cost ? 'Checking…' : cost.available ? 'Available' : 'Unavailable'],
-        ['Source preference', c.costSource || 'Auto'],
+        ['Source preference', costSourcePreferenceLabel(c.costSource)],
         ['Kubecost endpoint', c.kubecostUrl || 'Auto-discovery'],
-        ['Cluster ID', c.kubecostClusterId || 'Auto-detected when available'],
+        ['Kubecost cluster ID', c.kubecostClusterId || 'Detected automatically'],
         ['API key', config.kubecostApiKeySet ? 'Configured' : 'None configured'],
         ['Currency override', c.opencostCurrency || 'Automatic'],
       ]
@@ -1168,9 +1294,6 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
   const { data: prom } = usePrometheusStatus()
   const { data: cost } = useOpenCostSummary()
   const { data: argo } = useArgoStatus(active)
-  const { data: capabilitiesData } = useCapabilities()
-  const deploymentMode = capabilitiesData ? (capabilitiesData.deployment?.mode ?? 'local') : undefined
-  const { data: version } = useVersionCheck()
   const capabilities = useCapabilitiesContext()
   const diag = useDiagnose()
   const [copied, setCopied] = useState(false)
@@ -1201,8 +1324,8 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     {
       id: 'prometheus', icon: Activity, label: 'Metrics',
       tone: prom?.connected ? 'ok' : prom?.discovering ? 'unknown' : prom?.error ? 'warn' : 'off',
-      value: prom?.connected ? 'Connected' : prom?.discovering ? 'Discovering…' : prom?.error ? 'Not connected' : 'Not configured',
-      detail: prom?.connected ? prom.address : prom?.discovering ? undefined : prom?.error,
+      value: prom?.connected ? 'Connected' : prom?.discovering ? 'Discovering…' : 'Not connected',
+      detail: prom?.connected ? prom.address : prom?.discovering ? undefined : prom?.error ? 'Open Metrics for connection details.' : undefined,
     },
     {
       id: costConfigurationAction(cost?.reason).section, icon: Coins, label: 'Cost',
@@ -1218,12 +1341,9 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     },
     {
       id: 'argocd', icon: GitBranch, label: 'Argo CD',
-      tone: argo?.connected ? 'ok' : argo?.configured ? 'warn' : 'off',
-      // Configured-but-not-connected is often a permanently rejected/expired
-      // token, not a transient reconnect — "Not reachable" matches Prometheus and
-      // doesn't imply it will recover on its own.
-      value: argo?.connected ? (argo.anonymous ? 'Connected · no token needed' : 'Connected') : argo?.configured ? 'Not reachable' : 'Not connected',
-      detail: argo?.connected ? argo.address : argo?.reason,
+      tone: argo?.connected ? 'ok' : argo?.configured || argo?.reason ? 'warn' : 'off',
+      value: argo?.connected ? (argo.anonymous ? 'Connected · no token needed' : 'Connected') : 'Not connected',
+      detail: argo?.connected ? argo.address : argo?.reason ? 'Open Argo CD for connection details.' : undefined,
     },
     {
       id: 'advanced', icon: Zap, label: 'MCP',
@@ -1248,22 +1368,6 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
 
   return (
     <div className="space-y-4">
-      {version?.updateAvailable && deploymentMode !== undefined && deploymentMode !== 'cloud' && (
-        <a
-          href={versionUpdateURL(deploymentMode, version.releaseUrl)}
-          target="_blank"
-          rel="noreferrer"
-          className="flex items-center gap-2 px-3 py-2 text-xs rounded-md border border-skyhook-500/30 bg-skyhook-500/10 hover:bg-skyhook-500/15 transition-colors"
-        >
-          <Download className="w-3.5 h-3.5 shrink-0 text-skyhook-500" />
-          <span className="flex-1 text-theme-text-primary">
-            Radar {version.latestVersion} is available
-            <span className="text-theme-text-tertiary"> — you're on {version.currentVersion}</span>
-          </span>
-          <ExternalLink className="w-3 h-3 shrink-0 text-theme-text-tertiary" />
-        </a>
-      )}
-
       <div className="rounded-md border border-theme-border divide-y divide-theme-border-subtle overflow-hidden">
         {rows.map((row) => {
           const Icon = row.icon
@@ -1274,10 +1378,10 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
               tabIndex={0}
               onClick={() => onNavigate(row.id)}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNavigate(row.id) } }}
-              className="group flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-theme-hover transition-colors"
+              className="group flex items-center gap-3 px-3 py-1.5 cursor-pointer hover:bg-theme-hover transition-colors"
             >
               <Icon className="w-4 h-4 shrink-0 text-theme-text-tertiary" />
-              <span className="text-sm text-theme-text-primary w-24 shrink-0 truncate">{row.label}</span>
+              <span className="text-sm text-theme-text-primary w-32 shrink-0">{row.label}</span>
               <OverviewStatus tone={row.tone} />
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="truncate text-sm text-theme-text-secondary">{row.value}</span>
@@ -1474,6 +1578,7 @@ function TimelineSection({
 }
 
 function CostSection({
+  integration,
   currency,
   source,
   url,
@@ -1495,6 +1600,7 @@ function CostSection({
   onCredentialDirtyChange,
   onApplied,
 }: {
+  integration?: ReactNode
   currency: string
   source: 'auto' | 'prometheus' | 'kubecost'
   url: string
@@ -1632,7 +1738,12 @@ function CostSection({
 
   return (
     <div className="space-y-5">
-      {sourceEnvManaged && (
+      {integration ? (
+        <div className="space-y-4">
+          <SubHeading>This cluster</SubHeading>
+          {integration}
+        </div>
+      ) : <>{sourceEnvManaged && (
         <div id="cost-source-managed" className={clsx(
           'rounded-md border p-3',
           sourceEnvError
@@ -1665,11 +1776,7 @@ function CostSection({
           <SelectMenu
             id="cost-source"
             value={source}
-            options={[
-              { value: 'auto', label: 'Automatic (recommended)' },
-              { value: 'prometheus', label: 'OpenCost metrics only' },
-              { value: 'kubecost', label: 'Kubecost only' },
-            ]}
+            options={COST_SOURCE_OPTIONS}
             onChange={(value) => { onChangeSource(value as typeof source); setApply({ status: 'idle' }) }}
             disabled={sourceEnvManaged}
             className="w-full"
@@ -1698,7 +1805,7 @@ function CostSection({
               <div id="cost-advanced-connection" className="pt-3">
                 <div className="space-y-3 rounded-md border border-theme-border-subtle bg-theme-base/60 p-3">
                   <div>
-                    <label htmlFor="cost-kubecost-url" className="mb-1 block text-sm font-medium text-theme-text-primary">Kubecost URL</label>
+                    <label htmlFor="cost-kubecost-url" className="mb-1 block text-sm font-medium text-theme-text-primary">Kubecost Aggregator URL</label>
                     <p id="cost-kubecost-url-help" className="mb-1 text-xs text-theme-text-tertiary">
                       Leave blank when Kubecost runs in this cluster. Enter the central Aggregator URL
                       for an agent-only or federated setup.
@@ -1714,7 +1821,7 @@ function CostSection({
                     />
                   </div>
                   <div>
-                    <label htmlFor="cost-kubecost-cluster-id" className="mb-1 block text-sm font-medium text-theme-text-primary">Cluster ID</label>
+                    <label htmlFor="cost-kubecost-cluster-id" className="mb-1 block text-sm font-medium text-theme-text-primary">Kubecost cluster ID</label>
                     <p id="cost-kubecost-cluster-id-help" className="mb-1 text-xs text-theme-text-tertiary">
                       Usually detected automatically. Set it only if detection fails or the Kubecost
                       server contains data for more than one cluster. Use the <code>CLUSTER_ID</code>{' '}
@@ -1726,7 +1833,7 @@ function CostSection({
                       value={clusterId}
                       onChange={(event) => { onChangeClusterId(event.target.value); setApply({ status: 'idle' }) }}
                       disabled={sourceEnvManaged}
-                      placeholder="Auto-detect CLUSTER_ID"
+                      placeholder="Detected automatically"
                       className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
                     />
                   </div>
@@ -1758,17 +1865,17 @@ function CostSection({
                 autoComplete="off"
                 spellCheck={false}
                 disabled={sourceEnvManaged}
-                placeholder={apiKeySet && !apiKeyCleared ? 'Configured — enter to replace' : 'Optional API key'}
+                placeholder={apiKeySet && !apiKeyCleared ? 'Saved value' : 'Optional API key'}
                 className="min-w-0 flex-1 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
               />
               {apiKeySet && !apiKeyCleared && !sourceEnvManaged && (
                 <button
                   type="button"
-                  aria-label="Clear saved Kubecost API key"
+                  aria-label="Remove saved Kubecost API key"
                   onClick={() => { setApiKey(''); setApiKeyTouched(false); setApiKeyCleared(true); setApply({ status: 'idle' }) }}
                   className="px-2 py-1.5 text-xs text-theme-text-tertiary hover:text-theme-text-primary"
                 >
-                  Clear
+                  Remove
                 </button>
               )}
             </div>
@@ -1834,45 +1941,52 @@ function CostSection({
       </div>}
       </div>
 
-      <div className="rounded-lg border border-theme-border bg-theme-base/40 p-4">
-        <label htmlFor="cost-currency" className="block text-sm font-semibold text-theme-text-primary">
-          Display currency
-        </label>
-        <p id="cost-currency-help" className="mb-1 mt-0.5 text-xs text-theme-text-tertiary">
-          Auto uses the currency reported by the active cost source, or USD when unavailable.
-          Overrides relabel amounts; Radar does not convert them.
-        </p>
-        <SelectMenu
-          id="cost-currency"
-          value={currencyDraft}
-          options={currencyOptionsForValue(currencyDraft)}
-          onChange={(value) => { void saveCurrency(value) }}
-          ariaLabel="Display currency"
-          ariaDescribedBy="cost-currency-help"
-          searchPlaceholder="Search currencies by name or code"
-          disabled={settingsSaving || currencySave.status === 'saving'}
-          className="w-full"
-        />
-        {currencySave.status === 'saving' && (
-          <p role="status" aria-live="polite" className="mt-1 flex items-center gap-1 text-xs text-theme-text-tertiary">
-            <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+      </>}
+      <div className={integration ? 'space-y-4 border-t border-theme-border-subtle pt-4' : 'rounded-lg border border-theme-border bg-theme-base/40 p-4'}>
+        {integration && <SubHeading>All clusters</SubHeading>}
+        <div>
+          <label htmlFor="cost-currency" className="block text-sm font-semibold text-theme-text-primary">
+            Display currency
+          </label>
+          {integration
+            ? <p className="mt-1 text-xs text-theme-text-secondary">Saved automatically.</p>
+            : deploymentMode === 'local' && <p className="mt-1 text-xs text-theme-text-secondary">Display preference · all local clusters. Saved automatically.</p>}
+          <p id="cost-currency-help" className="mb-1 mt-0.5 text-xs text-theme-text-tertiary">
+            Automatic uses the currency reported by the active cost source, or USD when unavailable.
+            Overrides relabel amounts; Radar does not convert them.
           </p>
-        )}
-        {currencySave.status === 'saved' && (
-          <p role="status" aria-live="polite" className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
-            <Check className="h-3 w-3" /> {managed ? 'Saved for when the CLI or Helm override is removed' : 'Saved'}
-          </p>
-        )}
-        {currencySave.status === 'failed' && (
-          <p role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400/80">
-            Could not save: {currencySave.error}
-          </p>
-        )}
-        {managed && (
-          <p className="mt-2 text-xs text-amber-600 dark:text-amber-400/80">
-            CLI or Helm currently sets {effectiveCurrency || 'Auto'}; that override stays active until it is removed.
-          </p>
-        )}
+          <SelectMenu
+            id="cost-currency"
+            value={currencyDraft}
+            options={currencyOptionsForValue(currencyDraft)}
+            onChange={(value) => { void saveCurrency(value) }}
+            ariaLabel="Display currency"
+            ariaDescribedBy="cost-currency-help"
+            searchPlaceholder="Search currencies by name or code"
+            disabled={settingsSaving || currencySave.status === 'saving'}
+            className="w-full"
+          />
+          {currencySave.status === 'saving' && (
+            <p role="status" aria-live="polite" className="mt-1 flex items-center gap-1 text-xs text-theme-text-tertiary">
+              <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+            </p>
+          )}
+          {currencySave.status === 'saved' && (
+            <p role="status" aria-live="polite" className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
+              <Check className="h-3 w-3" /> {managed ? 'Saved for when the CLI or Helm override is removed' : 'Saved'}
+            </p>
+          )}
+          {currencySave.status === 'failed' && (
+            <p role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400/80">
+              Could not save: {currencySave.error}
+            </p>
+          )}
+          {managed && (
+            <p className="mt-2 text-xs text-amber-600 dark:text-amber-400/80">
+              CLI or Helm currently sets {effectiveCurrency || 'Automatic'}; that override stays active until it is removed.
+            </p>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -1973,12 +2087,6 @@ function MCPSection({
 // confirm reachability inline. onApplied notifies the parent so the footer's
 // last-committed snapshot stays in sync (see saveConfig). No EffectiveHint here —
 // a restart-diff hint would contradict the whole point of applying live.
-type ApplyState =
-  | { status: 'idle' }
-  | { status: 'applying' }
-  | { status: 'connected'; address: string }
-  | { status: 'unreachable'; error: string } // persisted, but the probe failed
-  | { status: 'failed'; error: string }       // request itself failed — nothing saved
 
 type CostApplyState =
   | { status: 'idle' }
@@ -1992,253 +2100,6 @@ type CurrencySaveState =
   | { status: 'saved' }
   | { status: 'failed'; error: string }
 
-type HeaderRow = { key: string; value: string }
-
-function PrometheusConfigField({
-  local,
-  value,
-  onChange,
-  configuredHeaderKeys,
-  serverManaged,
-  headersManaged,
-  urlFromFlag,
-  onApplied,
-}: {
-  local: boolean
-  value: string
-  onChange: (value: string) => void
-  configuredHeaderKeys: string[]
-  serverManaged: boolean
-  headersManaged: boolean
-  urlFromFlag: boolean
-  onApplied?: (url: string) => void
-}) {
-  const [apply, setApply] = useState<ApplyState>({ status: 'idle' })
-  // null = not editing headers (preserve what's stored). A non-null array means
-  // the user opened the editor; on Apply we send it verbatim, replacing all
-  // stored headers (values are write-only, so the server never sends them back).
-  const [headerRows, setHeaderRows] = useState<HeaderRow[] | null>(null)
-  // Show the server's configured header keys, but let a successful apply override
-  // optimistically (config isn't refetched). Derived from the prop — not a
-  // mount-time snapshot — so it stays correct as config loads asynchronously.
-  const [appliedKeys, setAppliedKeys] = useState<string[] | null>(null)
-  const storedKeys = appliedKeys ?? configuredHeaderKeys
-
-  const clearStatus = () => {
-    if (apply.status !== 'applying') setApply({ status: 'idle' })
-  }
-
-  // Footer Reset (and any external edit) clears the URL field without a keystroke;
-  // drop a stale "Connected"/"Saved" status so it doesn't describe an emptied field.
-  useEffect(() => {
-    setApply((s) => (s.status === 'idle' || s.status === 'applying' ? s : { status: 'idle' }))
-  }, [value])
-
-  const handleApply = async () => {
-    setApply({ status: 'applying' })
-    // Decide what to do with headers. undefined = leave them untouched. Only send
-    // a replacement when the editor has real content, or {} when the user emptied
-    // every row (explicit clear) — blank in-progress rows must NOT wipe stored
-    // secrets just because the editor happens to be open for a URL-only change.
-    try {
-      const editedHeaders = prometheusHeadersFromRows(headerRows)
-      const res = await fetch(apiUrl('/integrations/prometheus'), {
-        method: 'PUT',
-        credentials: getCredentialsMode(),
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({
-          prometheusUrl: value.trim(),
-          ...(editedHeaders !== undefined ? { headers: editedHeaders } : {}),
-        }),
-      })
-      const data = await res.json().catch(() => null)
-      if (!res.ok) {
-        setApply({ status: 'failed', error: data?.error || res.statusText })
-        return
-      }
-      onApplied?.(value.trim())
-      if (editedHeaders !== undefined) {
-        setAppliedKeys(Object.keys(editedHeaders).sort())
-      }
-      if (headerRows !== null) {
-        setHeaderRows(null)
-      }
-      if (data?.connected) {
-        setApply({ status: 'connected', address: data.address || value.trim() })
-      } else {
-        setApply({ status: 'unreachable', error: data?.error || 'not reachable' })
-      }
-    } catch (err) {
-      setApply({ status: 'failed', error: String(err) })
-    }
-  }
-
-  return (
-    <div>
-      <p className="text-xs text-theme-text-tertiary mb-3">
-        Connect existing Prometheus-compatible data for resource usage, workload HTTP metrics and rightsizing. Available charts depend on collected metrics.
-      </p>
-      <label className="block text-sm font-medium text-theme-text-primary mb-1">
-        Metrics backend URL
-      </label>
-      <p className="text-xs text-theme-text-tertiary mb-1">
-        Base URL reachable from Radar, not your browser — Prometheus, VictoriaMetrics, Thanos or
-        Mimir. Include any backend path prefix, but not /api/v1/query. Leave empty for cluster discovery; headers require a URL.
-      </p>
-      <div className="flex items-center gap-2">
-        <Input
-          value={value}
-          disabled={apply.status === 'applying'}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="http://prometheus-server.monitoring:9090"
-          className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
-        />
-        <Tooltip content="Save and apply this connection, then check reachability. Applying clears any workload scope override and resumes automatic identity matching." wrapperClassName="shrink-0">
-          <button
-            onClick={handleApply}
-            disabled={apply.status === 'applying'}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-md disabled:opacity-50"
-          >
-            {apply.status === 'applying'
-              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              : <Plug className="w-3.5 h-3.5" />}
-            Apply now
-          </button>
-        </Tooltip>
-      </div>
-      {apply.status === 'connected' ? (
-        <p className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
-          <Check className="w-3 h-3 shrink-0" />
-          Connected to {apply.address} — applied, no restart needed
-        </p>
-      ) : apply.status === 'unreachable' ? (
-        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400/80">
-          Saved, but not reachable: {apply.error}
-        </p>
-      ) : apply.status === 'failed' ? (
-        <p className="mt-1 text-xs text-red-600 dark:text-red-400/80">
-          Couldn't apply: {apply.error}
-        </p>
-      ) : (
-        <p className="mt-1 text-xs text-theme-text-tertiary">
-          Saves and applies before checking the connection.
-        </p>
-      )}
-      <p className="mt-2 text-xs text-theme-text-tertiary">
-        {local
-          ? 'Saved URL and headers apply across all local cluster contexts.'
-          : 'Changes affect this Radar installation. Use deployment settings for configuration that survives Pod replacement.'}
-        {' Changing servers requires replacing or clearing the saved headers.'}
-      </p>
-      {serverManaged && (
-        <p className="mt-2 text-xs text-theme-text-secondary">
-          Server controlled by startup configuration. To set or change the server,
-          {local ? ' update the startup flags or environment references and restart Radar.' : ' update the deployment configuration (such as Helm values) and restart Radar.'}
-        </p>
-      )}
-      {urlFromFlag && (
-        <p className="mt-1 text-xs text-theme-text-secondary">
-          Path edits apply until restart; the URL supplied at launch will then be restored.
-        </p>
-      )}
-
-      {/* Auth headers — for token / multi-tenant backends (Bearer, X-Scope-OrgID). */}
-      <div className="mt-3">
-        {headerRows === null ? (
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-theme-text-tertiary">
-              {storedKeys.length > 0
-                ? <>Auth headers: <span className="text-theme-text-secondary">{storedKeys.join(', ')}</span> <span className="text-theme-text-disabled">(values hidden)</span></>
-                : 'No auth headers'}
-            </span>
-            {!headersManaged && <button
-              onClick={() => { setHeaderRows([{ key: '', value: '' }]); clearStatus() }}
-              disabled={apply.status === 'applying'}
-              className="shrink-0 text-xs font-medium text-accent-text hover:underline"
-            >
-              {storedKeys.length > 0 ? 'Edit headers' : 'Add auth headers'}
-            </button>}
-          </div>
-        ) : (
-          <div className="rounded-md border border-theme-border bg-theme-elevated/40 p-2.5 space-y-2">
-            {headerRows.map((row, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <Input
-                  value={row.key}
-                  disabled={apply.status === 'applying'}
-                  onChange={(e) => {
-                    setHeaderRows((rows) => rows!.map((r, j) => j === i ? { ...r, key: e.target.value } : r))
-                    clearStatus()
-                  }}
-                  placeholder="Header (e.g. Authorization)"
-                  className="flex-1 min-w-0 px-2.5 py-1.5 text-xs bg-theme-base border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
-                />
-                <input
-                  type="password"
-                  value={row.value}
-                  disabled={apply.status === 'applying'}
-                  onChange={(e) => {
-                    setHeaderRows((rows) => rows!.map((r, j) => j === i ? { ...r, value: e.target.value } : r))
-                    clearStatus()
-                  }}
-                  placeholder="Value (e.g. Bearer …)"
-                  className="flex-1 min-w-0 px-2.5 py-1.5 text-xs bg-theme-base border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
-                />
-                <Tooltip content="Remove header" wrapperClassName="shrink-0">
-                  <button
-                    onClick={() => setHeaderRows((rows) => rows!.filter((_, j) => j !== i))}
-                    disabled={apply.status === 'applying'}
-                    className="p-1 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover rounded"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </Tooltip>
-              </div>
-            ))}
-            <div className="flex items-center justify-between gap-2">
-              <button
-                onClick={() => setHeaderRows((rows) => [...rows!, { key: '', value: '' }])}
-                disabled={apply.status === 'applying'}
-                className="flex items-center gap-1 text-xs font-medium text-accent-text hover:underline"
-              >
-                <Plus className="w-3 h-3" /> Add header
-              </button>
-              <button
-                onClick={() => { setHeaderRows(null); clearStatus() }}
-                disabled={apply.status === 'applying'}
-                className="text-xs text-theme-text-tertiary hover:text-theme-text-primary"
-              >
-                Cancel
-              </button>
-            </div>
-            <p className="text-xs text-theme-text-tertiary">
-              Saved when you click Apply now. Entered headers replace all stored
-              ones — values are hidden, so re-enter any you want to keep. Leave
-              all rows blank to keep existing headers unchanged. To clear all saved
-              headers, remove every row and click Apply now.
-            </p>
-          </div>
-        )}
-      </div>
-      {headersManaged ? (
-        <p className="mt-2 text-xs text-theme-text-secondary">
-          Headers are controlled by startup configuration. Change them at their source and restart Radar.
-        </p>
-      ) : storedKeys.length > 0 && (
-        <button
-          onClick={() => { setHeaderRows([]); clearStatus() }}
-          disabled={apply.status === 'applying'}
-          className="mt-2 text-xs text-theme-text-secondary hover:underline"
-        >
-          Clear saved headers
-        </button>
-      )}
-      {headerRows?.length === 0 && (
-        <p className="mt-1 text-xs text-warning-text">Headers will be cleared when you click Apply now.</p>
-      )}
-    </div>
-  )
-}
 
 // -- Argo CD (live-appliable) -------------------------------------------------
 
@@ -2385,7 +2246,7 @@ function ArgoCDEnvManagedField({
                   Connected at {connectedAddress}
                 </span>
               ) : statusReason ? (
-                <span className="text-warning-text">Not reachable — {statusReason}</span>
+                <span className="text-warning-text">Not connected — {statusReason}</span>
               ) : (
                 'Not connected'
               )}
@@ -2606,7 +2467,7 @@ function ArgoCDEditableField({
       )}
 
       <label className="block text-sm font-medium text-theme-text-primary mt-3 mb-1">
-        {cliSession ? 'Or paste a token' : 'Auth token'}
+        {cliSession ? 'Or paste a token' : 'API token'}
       </label>
       <p className="text-xs text-theme-text-tertiary mb-1">
         Lets Radar read your applications. Create one with{' '}
@@ -2619,7 +2480,7 @@ function ArgoCDEditableField({
           type="password"
           value={showConfiguredPlaceholder ? '' : token}
           onChange={(e) => { setToken(e.target.value); setTokenTouched(true); setTokenCleared(false); clearStatus() }}
-          placeholder={showConfiguredPlaceholder ? '•••• configured' : 'Argo CD auth token'}
+          placeholder={showConfiguredPlaceholder ? 'Saved value' : 'Argo CD API token'}
           className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
         />
         {effectiveTokenSet && !tokenCleared && (
@@ -2627,12 +2488,12 @@ function ArgoCDEditableField({
             onClick={() => { setToken(''); setTokenTouched(false); setTokenCleared(true); clearStatus() }}
             className="shrink-0 px-2.5 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors"
           >
-            Clear
+            Remove
           </button>
         )}
       </div>
       {tokenCleared && (
-        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400/80">Token will be cleared on save.</p>
+        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400/80">Token will be removed when you save.</p>
       )}
 
       <label className="mt-2 flex items-center gap-2 cursor-pointer">

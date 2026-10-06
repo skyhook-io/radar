@@ -84,7 +84,7 @@ export function useDisclosureReveal<T extends HTMLElement>() {
       );
       // This component lives in a bounded Diagnose surface. Never fall back to
       // scrolling the document (or an overflow-hidden ancestor), which can move
-      // the entire workspace and expose blank space below it.
+      // the entire investigation surface and expose blank space below it.
       if (!scroller) return;
       // Expansion is delayed until Collapse has settled. If the reader scrolls
       // during that interval, their newer intent wins over the automatic reveal.

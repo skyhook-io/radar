@@ -6,14 +6,17 @@ import { TrafficWizard } from './TrafficWizard'
 import { TrafficGraph, type TrafficGraphSelection } from './TrafficGraph'
 import { TrafficFilterSidebar } from './TrafficFilterSidebar'
 import { TrafficFlowListProvider } from './TrafficFlowListContext'
-import { Loader2, Filter, Plug, ChevronDown, List, Activity, AlertTriangle } from 'lucide-react'
+import { Loader2, Filter, Plug, ChevronDown, List, Activity, AlertTriangle, Clock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDock } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel } from './trafficFilters'
+
+// Consecutive 2s retries of an empty result that came with a transient warning.
+const MAX_EMPTY_RETRIES = 5
 
 // Addon types for filtering
 export type AddonMode = 'show' | 'group' | 'hide'
@@ -442,19 +445,34 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   // an attribute it does not export, traffic it cannot orient. Retrying returns
   // the same answer, so retrying forever is all cost and no progress.
   const warningIsPermanent = flowsData?.warningKind === 'partial'
+  const coverage = coverageLabel(flowsData?.coveredSince, flowsData?.timestamp)
+  // An 'incomplete' one is a fetch that worked but could not see everything
+  // (events lost, nodes unreachable). Not a failure, so not retried at once.
+  const warningIsIncomplete = flowsData?.warningKind === 'incomplete'
 
-  // Auto-retry when flows return with warning but no data (e.g., port-forward not ready yet)
+  // Auto-retry when flows return with warning but no data (e.g., port-forward not
+  // ready yet). Bounded: a warning that keeps coming back — a node the relay
+  // cannot reach, a query that keeps failing — is the answer rather than a hiccup,
+  // and polling it every 2s forever costs the source a burst of queries each time.
+  const emptyRetriesRef = useRef(0)
+  // A different question gets its own retries.
   useEffect(() => {
-    if (
-      flowsData?.warning &&
-      !warningIsPermanent &&
-      (!flowsData.aggregated || flowsData.aggregated.length === 0) &&
-      !flowsFetching
-    ) {
-      const timer = setTimeout(() => refetchFlowsRaw(), 2000)
+    emptyRetriesRef.current = 0
+  }, [namespaces, timeRange])
+  useEffect(() => {
+    const empty = !flowsData?.aggregated || flowsData.aggregated.length === 0
+    if (!flowsData?.warning || !empty) {
+      emptyRetriesRef.current = 0
+      return
+    }
+    if (!warningIsPermanent && !warningIsIncomplete && !flowsFetching && emptyRetriesRef.current < MAX_EMPTY_RETRIES) {
+      const timer = setTimeout(() => {
+        emptyRetriesRef.current += 1
+        refetchFlowsRaw()
+      }, 2000)
       return () => clearTimeout(timer)
     }
-  }, [flowsData, warningIsPermanent, flowsFetching, refetchFlowsRaw])
+  }, [flowsData, warningIsPermanent, warningIsIncomplete, flowsFetching, refetchFlowsRaw])
 
   // Filter flows based on user preferences
   // Note: namespace filtering is done server-side via the global namespace selector
@@ -765,17 +783,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
 
       const existing = aggregatedMap.get(key)
       if (existing) {
-        // Merge connections and bytes
-        existing.connections += flow.connections
-        existing.bytesSent += flow.bytesSent
-        existing.bytesRecv += flow.bytesRecv
-        existing.flowCount += flow.flowCount
-        if (flow.requestCount) {
-          existing.requestCount = (existing.requestCount || 0) + flow.requestCount
-        }
-        if (flow.errorCount) {
-          existing.errorCount = (existing.errorCount || 0) + flow.errorCount
-        }
+        mergeFlowVolume(existing, flow)
         // Everything merged here shares the key's direction-known state, so the
         // flag is already correct on the entry that was created first.
       } else {
@@ -819,11 +827,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
 
         const existing = internetFlowsMap.get(destKey)
         if (existing) {
-          // Merge into existing "Internet" flow
-          existing.connections += flow.connections
-          existing.bytesSent += flow.bytesSent
-          existing.bytesRecv += flow.bytesRecv
-          existing.flowCount += flow.flowCount
+          mergeFlowVolume(existing, flow)
         } else {
           // Create new "Internet" → destination flow
           internetFlowsMap.set(destKey, {
@@ -852,6 +856,8 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     // Track totals for aggregated edges
     let addonInternetTotal = 0
     let addonToK8sTotal = 0
+    let addonInternetRate = 0
+    let addonToK8sRate = 0
     const processedFlows: AggregatedFlow[] = []
 
     // Check if destination is the kubernetes API server
@@ -868,6 +874,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
       // Internet → Addon: aggregate into single edge to group
       if (sourceIsInternet && destIsAddon) {
         addonInternetTotal += flow.connections
+        addonInternetRate += flow.requestRate ?? 0
         processedFlows.push({
           ...flow,
           source: {
@@ -880,6 +887,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
       // Addon → Kubernetes API: aggregate into single edge from group
       else if (sourceIsAddon && destIsK8sAPI) {
         addonToK8sTotal += flow.connections
+        addonToK8sRate += flow.requestRate ?? 0
         processedFlows.push({
           ...flow,
           destination: {
@@ -909,6 +917,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         protocol: 'tcp',
         port: 0,
         connections: addonInternetTotal,
+        ...(addonInternetRate > 0 && { requestRate: addonInternetRate }),
         bytesSent: 0,
         bytesRecv: 0,
         flowCount: 1,
@@ -932,6 +941,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         protocol: 'tcp',
         port: 443,
         connections: addonToK8sTotal,
+        ...(addonToK8sRate > 0 && { requestRate: addonToK8sRate }),
         bytesSent: 0,
         bytesRecv: 0,
         flowCount: 1,
@@ -1079,7 +1089,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   }
 
   return (
-    <TrafficFlowListProvider flows={listFlows} graphSelection={graphSelection} clearSelection={() => setGraphSelection(null)}>
+    <TrafficFlowListProvider flows={listFlows} responsesCallerOriented={flowsData?.l7ResponsesCallerOriented === true} graphSelection={graphSelection} clearSelection={() => setGraphSelection(null)}>
     <div className="flex h-full w-full">
       {/* Sidebar */}
       <TrafficFilterSidebar
@@ -1207,6 +1217,15 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                     </button>
                     </Tooltip>
                   )}
+                  {coverage && (
+                    // Not a warning: a busy cluster reaches the limit on every
+                    // fetch. It says which part of the window the map shows.
+                    <Tooltip content={`Radar reads at most ${(flowsData?.nodeFlowLimit ?? 0).toLocaleString()} of the newest flows from each node. At least one node reached that limit before the start of the ${timeRange} window, so its earlier traffic is not included. Other nodes may still show older flows.`}>
+                      <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[10px] text-theme-text-secondary tabular-nums">
+                        <Clock className="w-3 h-3" /> {coverage} of {timeRange}
+                      </div>
+                    </Tooltip>
+                  )}
                   <div className="flex items-center px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[10px] text-theme-text-tertiary tabular-nums">
                     {flowStats.shown}/{flowStats.total}
                   </div>
@@ -1233,7 +1252,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
             />
           ) : finalFlows.length > 0 ? (
             <>
-              {flowsData?.warning && warningIsPermanent && (
+              {flowsData?.warning && (
                 // Sits below the two chip rows (both top-3) rather than beside
                 // them: centred at that height it would cover the flow count and
                 // the refresh control at common widths. role/aria-live because it
@@ -1245,12 +1264,15 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                 >
                   <AlertBanner
                     variant="warning"
-                    // Not "incomplete": every warning that reaches here is about a
-                    // value on an edge that is shown being wrong or absent — a port
-                    // reported as 0, UDP reported as TCP, received bytes understated.
-                    // "Incomplete" sends the reader looking for workloads that are
-                    // missing, which is the one thing none of these mean.
-                    title="Some values on this map are unreliable"
+                    // The title follows the kind. A partial warning is about values
+                    // on edges that are shown — a port reported as 0, UDP as TCP, a
+                    // 5xx rate that failed to load — so it says "unreliable", not
+                    // "incomplete", which would send the reader looking for missing
+                    // workloads. An incomplete or transient one beside flows is
+                    // exactly that: a stream cut short, events lost, a node the
+                    // relay could not reach, a TCP query that failed — edges may
+                    // be missing from what is drawn.
+                    title={warningIsPermanent ? 'Some values on this map are unreliable' : 'Some traffic may be missing from this map'}
                     message={flowsData.warning}
                   />
                 </div>
@@ -1324,7 +1346,9 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                   headline={
                     warningIsPermanent
                       ? 'No traffic Radar can place on the map'
-                      : 'Unable to fetch traffic data'
+                      : warningIsIncomplete
+                        ? 'No traffic seen, but some may be missing'
+                        : 'Unable to fetch traffic data'
                   }
                   body={flowsData.warning}
                   className="max-w-md"

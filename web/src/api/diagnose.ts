@@ -260,23 +260,80 @@ export async function fetchAgents(
   return res.json();
 }
 
-async function errorText(res: Response): Promise<string> {
+/**
+ * Why a host refused an investigation, and what would unblock it. Hosts that
+ * meter investigations send these beside the sentence to show, so an embedding
+ * app can offer the matching action. Radar's own backend never sends them.
+ */
+export interface DiagnoseRefusal {
+  /** Machine-readable code, e.g. "ai_quota_exhausted". */
+  code?: string;
+  reason?: string;
+  action?: string;
+}
+
+// The sentence to show is `detail` when a host sends one, else `error`. A
+// host's machine-readable code is `code`, or `error` when that is not the
+// sentence itself.
+async function diagnoseError(res: Response): Promise<DiagnoseError> {
+  let body: Record<string, unknown> | null = null;
   try {
-    const d = await res.json();
-    if (d && typeof d.error === "string") return d.error;
+    const d: unknown = await res.json();
+    if (d && typeof d === "object") body = d as Record<string, unknown>;
   } catch {
     /* ignore */
   }
-  return `request failed (${res.status})`;
+  const str = (v: unknown) =>
+    typeof v === "string" && v.trim() !== "" ? v : undefined;
+  const detail = str(body?.detail);
+  const error = str(body?.error);
+  const message = detail ?? error ?? `request failed (${res.status})`;
+  return new DiagnoseError(res.status, message, {
+    code: str(body?.code) ?? (detail && error !== detail ? error : undefined),
+    reason: str(body?.reason),
+    action: str(body?.action),
+  });
 }
 
 // DiagnoseError carries the HTTP status so callers can special-case (e.g. 409 cap).
 export class DiagnoseError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  code?: string;
+  reason?: string;
+  action?: string;
+  constructor(status: number, message: string, refusal?: DiagnoseRefusal) {
     super(message);
     this.status = status;
+    this.code = refusal?.code;
+    this.reason = refusal?.reason;
+    this.action = refusal?.action;
   }
+}
+
+/** A host's refusal of an investigation request, with what would unblock it. */
+export interface InvestigationRefusal {
+  status: number;
+  /** The sentence shown to the user. */
+  message: string;
+  code?: string;
+  reason?: string;
+  action?: string;
+}
+
+/** The refusal a DiagnoseError carries, or null when the host sent none
+ * (Radar's own backend never does). */
+export function investigationRefusal(
+  error: unknown,
+): InvestigationRefusal | null {
+  if (!(error instanceof DiagnoseError)) return null;
+  if (!error.code && !error.reason && !error.action) return null;
+  return {
+    status: error.status,
+    message: error.message,
+    code: error.code,
+    reason: error.reason,
+    action: error.action,
+  };
 }
 
 const RUNS = () => `${getApiBase()}/diagnose/runs`;
@@ -313,7 +370,7 @@ export async function createRun(
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify({ ...target, ...opts }),
   });
-  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  if (!res.ok) throw await diagnoseError(res);
   return res.json();
 }
 
@@ -332,7 +389,7 @@ export async function listRuns(signal?: AbortSignal): Promise<RunsResponse> {
     headers: getAuthHeaders(),
     signal,
   });
-  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  if (!res.ok) throw await diagnoseError(res);
   const d = await res.json();
   return { runs: d.runs ?? [], historyDegraded: !!d.historyDegraded };
 }
@@ -348,7 +405,7 @@ export async function getRun(
     headers: getAuthHeaders(),
     signal,
   });
-  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  if (!res.ok) throw await diagnoseError(res);
   return res.json();
 }
 
@@ -360,7 +417,7 @@ export async function recordConsent(surface: string): Promise<void> {
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify({ surface }),
   });
-  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  if (!res.ok) throw await diagnoseError(res);
 }
 
 // clearHistory wipes the persisted investigation history (finished runs); live
@@ -371,7 +428,7 @@ export async function clearHistory(): Promise<void> {
     credentials: getCredentialsMode(),
     headers: getAuthHeaders(),
   });
-  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  if (!res.ok) throw await diagnoseError(res);
 }
 
 // addTurn appends a follow-up (question) or an apply turn (apply + confirmed fix).
@@ -391,7 +448,7 @@ export async function addTurn(
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  if (!res.ok) throw await diagnoseError(res);
 }
 
 // stopRun cancels a run's in-flight agent.

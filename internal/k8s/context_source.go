@@ -44,6 +44,29 @@ func ContextSourceFor(name string) ContextRef {
 	return ContextRef{Name: name}
 }
 
+func ContextForSafetyBinding(binding string) ContextRef {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if binding == contextBinding {
+		return ContextRef{Name: contextName, SourceFile: activeSourceFile, InFileName: activeSourceName}
+	}
+	for name, entry := range contextRegistry {
+		if sourceContextBinding(entry.SourceFile, entry.InFileName) == binding || capiKubeconfigs[binding] == entry.SourceFile {
+			return ContextRef{Name: name, SourceFile: entry.SourceFile, InFileName: entry.InFileName}
+		}
+	}
+	if contextRegistry == nil && kubeconfigPath != "" {
+		if cfg, err := clientcmd.LoadFromFile(kubeconfigPath); err == nil {
+			for name := range cfg.Contexts {
+				if sourceContextBinding(kubeconfigPath, name) == binding {
+					return ContextRef{Name: name, SourceFile: kubeconfigPath, InFileName: name}
+				}
+			}
+		}
+	}
+	return ContextRef{}
+}
+
 // ContextReferenceKnownMissing reports whether Radar successfully loaded the
 // recorded kubeconfig file and that file no longer defines the recorded
 // context. A false result is intentionally inconclusive: the file may only be

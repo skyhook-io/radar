@@ -2,7 +2,7 @@ import { useState, useId } from 'react'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { X, Plus, Trash2, Link2, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useHelmOCISources, useAddOCISource, useRemoveOCISource, useClusterInfo, useCapabilities } from '../../api/client'
+import { useHelmOCISources, useAddOCISource, useRemoveOCISource, useClusterInfo, useCapabilities, useCloudRole } from '../../api/client'
 import { OperatorManagedNotice } from '../settings/OperatorManagedNotice'
 import { Input } from '@skyhook-io/k8s-ui'
 import type { UpgradeInfo } from '../../types'
@@ -58,7 +58,10 @@ export function TrackChartSourceDialog({ open, onClose, chartName, sourceIssue, 
   const removeSource = useRemoveOCISource()
   const { data: capabilities } = useCapabilities()
   const operatorManaged = capabilities?.configManagement === 'operator'
-  const canEdit = capabilities != null && !operatorManaged
+  // Chart sources are shared configuration that every user's upgrades resolve
+  // against, so in Radar Cloud only owners change them (the server enforces it).
+  const ownerOnly = !useCloudRole().canAtLeast('owner')
+  const canEdit = capabilities != null && !operatorManaged && !ownerOnly
 
   // In-cluster Radar has no `helm registry login` store (the pod's HELM_CONFIG_HOME
   // points at an empty /tmp), so private registries can't authenticate — only
@@ -102,6 +105,11 @@ export function TrackChartSourceDialog({ open, onClose, chartName, sourceIssue, 
 
       <div className="p-4 space-y-4">
         {operatorManaged && <OperatorManagedNotice helmValue="helm.ociSources" />}
+        {!operatorManaged && ownerOnly && (
+          <p className="text-sm text-theme-text-secondary">
+            Only organization owners can add or remove chart sources.
+          </p>
+        )}
         {sourceIssueCopy && (
           <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-sm">
             <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-theme-text-secondary" />

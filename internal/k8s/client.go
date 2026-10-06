@@ -767,6 +767,19 @@ func GetConfigSnapshot() (*rest.Config, string) {
 	return rest.CopyConfig(k8sConfig), activeClusterContextLocked()
 }
 
+// GetClusterClientSnapshot reads the active client, config, context name and
+// in-cluster mode together, so a concurrent context switch cannot pair one
+// cluster's API endpoint with another cluster's credentials.
+func GetClusterClientSnapshot() (kubernetes.Interface, *rest.Config, string, bool) {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	var client kubernetes.Interface
+	if k8sClient != nil {
+		client = k8sClient
+	}
+	return client, k8sConfig, contextName, isInClusterLocked()
+}
+
 // GetDiscoveryClient returns the K8s discovery client for API resource discovery
 func GetDiscoveryClient() *discovery.DiscoveryClient {
 	clientMu.RLock()
@@ -951,15 +964,34 @@ func recordEmptyCommandWarning(source string, authInfos []string) {
 // current-context set to Radar's active context. The caller must remove the
 // file when done. Returns the temp file path.
 func WriteKubeconfigForCurrentContext() (string, error) {
+	snapshot, err := WriteKubeconfigSnapshotForCurrentContext(nil)
+	return snapshot.Path, err
+}
+
+type KubeconfigSnapshot struct {
+	Path    string
+	Context string
+}
+
+var ErrKubeconfigContextMismatch = errors.New("terminal context changed")
+
+// WriteKubeconfigSnapshotForCurrentContext returns the temporary config and its
+// display context from the same client-state snapshot. A non-nil expectedContext
+// must match exactly, including an empty context. The caller owns the file.
+func WriteKubeconfigSnapshotForCurrentContext(expectedContext *string) (KubeconfigSnapshot, error) {
 	clientMu.RLock()
 	ctx := contextName
 	activeFile := activeSourceFile
 	activeName := activeSourceName
-	activeConfig := activeSourceConfig
+	activeConfig := activeSourceConfig.DeepCopy()
 	registry := contextRegistry
 	fileConfigs := perFileConfigs
 	singlePath := kubeconfigPath
 	clientMu.RUnlock()
+
+	if expectedContext != nil && *expectedContext != ctx {
+		return KubeconfigSnapshot{}, fmt.Errorf("%w: this terminal is for %q; Radar is showing %q", ErrKubeconfigContextMismatch, *expectedContext, ctx)
+	}
 
 	var rawConfig clientcmdapi.Config
 	var currentContextForFile string
@@ -987,27 +1019,27 @@ func WriteKubeconfigForCurrentContext() (string, error) {
 		// the temp kubeconfig we hand out.
 		entry, ok := registry[ctx]
 		if !ok {
-			return "", fmt.Errorf("current context %q not found in registry", ctx)
+			return KubeconfigSnapshot{}, fmt.Errorf("current context %q not found in registry", ctx)
 		}
 		cfg, ok := fileConfigs[entry.SourceFile]
 		if !ok {
-			return "", fmt.Errorf("no cached config for file %q", entry.SourceFile)
+			return KubeconfigSnapshot{}, fmt.Errorf("no cached config for file %q", entry.SourceFile)
 		}
 		rawConfig = *cfg.DeepCopy()
 		currentContextForFile = entry.InFileName
 	} else {
 		if singlePath == "" {
-			return "", fmt.Errorf("kubeconfig path not set")
+			return KubeconfigSnapshot{}, fmt.Errorf("kubeconfig path not set")
 		}
 		if err := validateKubeconfigFileType(singlePath); err != nil {
-			return "", fmt.Errorf("failed to load kubeconfig: %w", err)
+			return KubeconfigSnapshot{}, fmt.Errorf("failed to load kubeconfig: %w", err)
 		}
 		loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: singlePath}
 		loaded, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 			loadingRules, &clientcmd.ConfigOverrides{},
 		).RawConfig()
 		if err != nil {
-			return "", fmt.Errorf("failed to load kubeconfig: %w", err)
+			return KubeconfigSnapshot{}, fmt.Errorf("failed to load kubeconfig: %w", err)
 		}
 		rawConfig = loaded
 		currentContextForFile = ctx
@@ -1019,16 +1051,16 @@ func WriteKubeconfigForCurrentContext() (string, error) {
 
 	tmpFile, err := os.CreateTemp("", "radar-kubeconfig-*.yaml")
 	if err != nil {
-		return "", fmt.Errorf("failed to create temp kubeconfig: %w", err)
+		return KubeconfigSnapshot{}, fmt.Errorf("failed to create temp kubeconfig: %w", err)
 	}
 	tmpFile.Close()
 
 	if err := clientcmd.WriteToFile(rawConfig, tmpFile.Name()); err != nil {
 		os.Remove(tmpFile.Name())
-		return "", fmt.Errorf("failed to write temp kubeconfig: %w", err)
+		return KubeconfigSnapshot{}, fmt.Errorf("failed to write temp kubeconfig: %w", err)
 	}
 
-	return tmpFile.Name(), nil
+	return KubeconfigSnapshot{Path: tmpFile.Name(), Context: ctx}, nil
 }
 
 func sameKubeconfigTarget(active, candidate *clientcmdapi.Config, contextName string) bool {
@@ -1402,9 +1434,32 @@ func HasNamespaceFallback() bool {
 //     with authoritative=false AND logs the error so a flapping apiserver
 //     surfaces in diagnostics rather than silently degrading the UI.
 func GetAccessibleNamespaces(ctx context.Context) ([]string, bool) {
+	namespaces, source := GetAccessibleNamespacesWithSource(ctx)
+	return namespaces, source == NamespaceListCluster
+}
+
+// NamespaceListSource records how GetAccessibleNamespacesWithSource built its
+// list, so callers can tell an RBAC denial from a failed LIST — both return the
+// same best-effort short list.
+type NamespaceListSource string
+
+const (
+	// NamespaceListCluster: the cluster-wide namespace LIST succeeded.
+	NamespaceListCluster NamespaceListSource = "cluster"
+	// NamespaceListSeeded: the LIST was denied (401/403); the list holds only
+	// the context namespace and the --namespace / --namespaces seeds.
+	NamespaceListSeeded NamespaceListSource = "seeded"
+	// NamespaceListFailed: the LIST failed for another reason (timeout, network,
+	// no client); the list is the same seeds, but RBAC is not the cause.
+	NamespaceListFailed NamespaceListSource = "list-failed"
+)
+
+// GetAccessibleNamespacesWithSource is GetAccessibleNamespaces plus the reason
+// the list is or isn't complete.
+func GetAccessibleNamespacesWithSource(ctx context.Context) ([]string, NamespaceListSource) {
 	client := GetClient()
 	if client == nil {
-		return nil, false
+		return nil, NamespaceListFailed
 	}
 
 	listCtx, cancel := context.WithTimeout(ctx, NamespaceListTimeout)
@@ -1417,10 +1472,12 @@ func GetAccessibleNamespaces(ctx context.Context) ([]string, bool) {
 			names = append(names, ns.Name)
 		}
 		sort.Strings(names)
-		return names, true
+		return names, NamespaceListCluster
 	}
 
+	source := NamespaceListSeeded
 	if !apierrors.IsForbidden(err) && !apierrors.IsUnauthorized(err) {
+		source = NamespaceListFailed
 		log.Printf("[k8s] GetAccessibleNamespaces: non-auth error listing namespaces: %v (falling back to best-effort short list)", err)
 	}
 
@@ -1438,7 +1495,7 @@ func GetAccessibleNamespaces(ctx context.Context) ([]string, bool) {
 	}
 	clientMu.RUnlock()
 	sort.Strings(fallback)
-	return fallback, false
+	return fallback, source
 }
 
 // ForceInCluster overrides in-cluster detection for testing

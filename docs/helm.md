@@ -63,7 +63,7 @@ Radar surfaces that as a Helm operation instead of making the operator infer it 
 The Helm Compare page is optimized for incident debugging. It starts with the rendered Kubernetes manifest diff as the source of truth, then keeps supporting evidence below it:
 
 - Rendered resources: a compact index of Kubernetes object identities and meaningful in-place field changes.
-- Values: key-aware redacted user values diff.
+- Values: user-supplied values diff; the UI shows the user's own values, while MCP applies key-aware redaction.
 - Hooks: stable hook definition diff, ignoring runtime timestamps and volatile hook status.
 - Notes: release notes diff.
 
@@ -99,7 +99,7 @@ Use `get_helm_release` for detail:
 - `include=history,operations` returns the full revision and operation trail.
 - `include=values` returns user-supplied values with key-aware secret redaction.
 - `include=diff` returns manifest diff.
-- `include=values_diff` returns redacted user-supplied values diff.
+- `include=values_diff` returns a user-supplied values diff with key-aware secret redaction applied to both revisions before comparison.
 - `include=notes_diff` returns release notes diff.
 - `include=resource_diff` returns added, removed, unchanged, and modified rendered resources between revisions.
 

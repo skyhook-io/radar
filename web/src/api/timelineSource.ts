@@ -17,6 +17,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { LIVE_TICK_MS } from '@skyhook-io/k8s-ui'
 import { apiFetch, mergeDeltaEvents, ApiError, type UseChangesOptions } from './client'
 import { apiUrl, getApiBase } from './config'
+import { readErrorBody } from './httpErrors'
 import type { TimelineEvent, TimeRange } from '../types'
 
 // The query the wrappers pass. Superset of the local store's params so most
@@ -321,7 +322,7 @@ function dedupeById(events: TimelineEvent[]): TimelineEvent[] {
 async function fetchRetainedStream(path: string, signal?: AbortSignal): Promise<RetainedWindowResult> {
   const res = await apiFetch(apiUrl(path), signal ? { signal } : undefined)
   if (!res.ok) {
-    const errorData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+    const errorData = await readErrorBody(res)
     throw new ApiError(errorData.error || `HTTP ${res.status}`, res.status, errorData)
   }
   if (!res.body) {
@@ -871,7 +872,7 @@ function normalizeCoverage(
 async function fetchRetainedOverview(range: TimelineRange): Promise<TimelineOverviewResult> {
   const res = await apiFetch(apiUrl(`/timeline/overview?from=${Math.round(range.from)}&to=${Math.round(range.to)}`))
   if (!res.ok) {
-    const errorData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+    const errorData = await readErrorBody(res)
     throw new ApiError(errorData.error || `HTTP ${res.status}`, res.status, errorData)
   }
   const body: unknown = await res.json()

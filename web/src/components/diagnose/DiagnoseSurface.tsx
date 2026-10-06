@@ -1,6 +1,6 @@
 // The right-docked shell of the AI surface. Two layouts:
 //  - docked: a single-pane right column (app reflows left via the provider's push)
-//  - expanded: a master-detail workspace that fills ONLY the content area (does
+//  - expanded: the investigations page, a master-detail layout that fills ONLY the content area (does
 //    not cover the left nav rail or top bar) — recent list on the left, the
 //    selected investigation/report on the right.
 import {
@@ -38,6 +38,7 @@ import {
   type DiagnoseView,
 } from "./DiagnoseContext";
 import { useDiagnoseCustomization } from "../../context/DiagnoseCustomization";
+import { InvestigationRefusalAction } from "./InvestigationRefusalAction";
 import { useNavCustomization } from "../../context/NavCustomization";
 import { InvestigationView } from "./InvestigationView";
 import type { InvestigationTimelineScope } from "./InvestigationEvidencePane";
@@ -419,7 +420,7 @@ export function DiagnoseSurface({
     panelWidthKey: widthKey,
   } = useDiagnoseLayout();
   // Home has no detail pane competing for width, so its history is always part
-  // of the workspace. Only a focused run collapses history into a drawer when
+  // of the page. Only a focused run collapses history into a drawer when
   // the two-pane layout would become cramped.
   const persistentHistory = investigationHistoryIsPersistent({
     maximized,
@@ -604,12 +605,15 @@ export function DiagnoseSurface({
   ) : d.startError ? (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <p className="text-sm text-theme-text-secondary">{d.startError}</p>
-      <button
-        onClick={d.dismissError}
-        className="rounded-lg border border-theme-border px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
-      >
-        Dismiss
-      </button>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <InvestigationRefusalAction refusal={d.startRefusal} />
+        <button
+          onClick={d.dismissError}
+          className="rounded-lg border border-theme-border px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
+        >
+          Dismiss
+        </button>
+      </div>
     </div>
   ) : setupPending ? (
     <div className="flex-1 overflow-y-auto">

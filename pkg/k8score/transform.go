@@ -39,6 +39,10 @@ func DropManagedFields(obj any) (any, error) {
 			Count:          event.Count,
 			FirstTimestamp: event.FirstTimestamp,
 			LastTimestamp:  event.LastTimestamp,
+			// Events recorded through events.k8s.io carry their times here
+			// instead of in First/LastTimestamp.
+			EventTime: event.EventTime,
+			Series:    event.Series,
 		}, nil
 	}
 
@@ -134,9 +138,10 @@ func DropUnstructuredManagedFields(obj any) (any, error) {
 }
 
 // StripUnstructuredFields removes managedFields and heavy internal annotations
-// from a deep copy of an unstructured object. The dynamic cache keeps
-// last-applied internally for GitOps drift, but outward cache readers should
-// not leak full desired manifests in annotations.
+// from a deep copy of an unstructured object, so outward readers never leak a
+// full desired manifest through last-applied. The informer transform already
+// drops it from cached objects; GitOps drift reads it through
+// GetDirectPreserveLastApplied instead.
 func StripUnstructuredFields(u *unstructured.Unstructured) *unstructured.Unstructured {
 	return stripUnstructuredFields(u, false)
 }

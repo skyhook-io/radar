@@ -22,7 +22,7 @@ import type {
 } from '@skyhook-io/k8s-ui'
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
-import { useCanHelmWrite } from '../contexts/CapabilitiesContext'
+import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import type {
   Topology,
   ClusterInfo,
@@ -59,6 +59,15 @@ import type {
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
+import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
+import {
+  RadarFeatureUnsupportedError,
+  guardRadarFeature,
+  radarFeatureSupport,
+  shouldRetryRadarQuery,
+  type RadarFeature,
+} from './radarFeatures'
+import { useRadarUpgradeHost } from '../context/RadarUpgradeHost'
 import { apiVersionToGroup } from '../utils/navigation'
 import type { DeploymentMode } from '../types'
 
@@ -195,11 +204,19 @@ export function apiFetch(
 export class ApiError extends Error {
   status: number;
   data?: Record<string, unknown>;
-  constructor(message: string, status: number, data?: Record<string, unknown>) {
+  /** The router has no such route: chi's own 404, not a handler's. See isUnknownRouteResponse. */
+  unknownRoute: boolean;
+  constructor(
+    message: string,
+    status: number,
+    data?: Record<string, unknown>,
+    options?: { unknownRoute?: boolean },
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.data = data;
+    this.unknownRoute = options?.unknownRoute ?? false;
   }
 }
 
@@ -222,6 +239,7 @@ export function shouldRetryCapacityQuery(
   failureCount: number,
   error: unknown,
 ): boolean {
+  if (error instanceof RadarFeatureUnsupportedError) return false;
   if (
     error instanceof ApiError &&
     (error.status === 400 || error.status === 403 || error.status === 404)
@@ -336,13 +354,12 @@ export async function fetchJSON<T>(
   const requestInit = init instanceof AbortSignal ? { signal: init } : init;
   const response = await apiFetch(`${getApiBase()}${path}`, requestInit);
   if (!response.ok) {
-    const errorData = await response
-      .json()
-      .catch(() => ({ error: "Unknown error" }));
+    const { body, unknownRoute } = await readErrorResponse(response);
     throw new ApiError(
-      errorData.error || `HTTP ${response.status}`,
+      body.error || httpStatusMessage(response.status, response.statusText),
       response.status,
-      errorData,
+      body,
+      { unknownRoute },
     );
   }
   return response.json();
@@ -669,16 +686,18 @@ export function useUpgradeReadiness(target?: string) {
   // refetches read that memo; only the explicit manual refresh passes
   // refresh=true to force a fresh live scan (e.g. after fixing a finding).
   const forceRefresh = useRef(false)
+  const { guard, gatedKey } = useRadarFeature('upgradeReadiness')
   const query = useQuery<UpgradeReadinessResponse>({
-    queryKey: ['upgrade-readiness', target ?? 'next'],
+    queryKey: ['upgrade-readiness', target ?? 'next', ...gatedKey],
     queryFn: ({ signal }) => {
       const params = new URLSearchParams()
       if (target) params.set('target', target)
       if (forceRefresh.current) params.set('refresh', 'true')
       forceRefresh.current = false
       const qs = params.toString()
-      return fetchJSON(`/upgrade-readiness${qs ? `?${qs}` : ''}`, signal)
+      return guard(() => fetchJSON<UpgradeReadinessResponse>(`/upgrade-readiness${qs ? `?${qs}` : ''}`, signal))
     },
+    retry: shouldRetryRadarQuery,
     staleTime: 30000,
     placeholderData: (previous) => previous,
   })
@@ -756,9 +775,13 @@ export function useResourceIssues(
   if (group) params.set("group", group);
   const path = `/issues/resource/${encodeURIComponent(kind)}/${pathNs}/${encodeURIComponent(name)}`;
   const qs = params.toString();
+  // An older Radar without the endpoint settles as unsupported, so the
+  // renderers fall back to their own status-derived problem banners.
+  const { guard, gatedKey } = useRadarFeature("resourceIssues");
   return useQuery<Issue[]>({
-    queryKey: ["issues", "resource", kind, group ?? "", namespace, name],
-    queryFn: () => fetchJSON(`${path}${qs ? `?${qs}` : ""}`),
+    queryKey: ["issues", "resource", kind, group ?? "", namespace, name, ...gatedKey],
+    queryFn: () => guard(() => fetchJSON<Issue[]>(`${path}${qs ? `?${qs}` : ""}`)),
+    retry: shouldRetryRadarQuery,
     // No refetchInterval: a drawer doesn't need to poll; staleTime keeps it fresh
     // on reopen without re-running an uncapped Compose every 30s.
     staleTime: 30000,
@@ -832,13 +855,14 @@ export async function runInClusterMerged(kind: string, namespace: string, name: 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: path ?? '/' }),
   })
-  // A gateway/proxy failure (chi's 60s timeout, a Hub ingress 502) returns
-  // HTML - an unguarded .json() surfaced "Unexpected token <" instead of the
-  // status. Mirror fetchJSON's tolerant parse.
-  const body = await response.json().catch(() => undefined)
-  if (!response.ok || body?.error) {
-    throw new Error(body?.error || `In-cluster test failed (${response.status})`)
+  // A gateway/proxy failure (chi's 60s timeout, a Hub ingress 502) answers in
+  // HTML or plain text, so a failure reads its body tolerantly.
+  if (!response.ok) {
+    const error = await readErrorBody(response)
+    throw new Error(error.error || `In-cluster test failed (${response.status})`)
   }
+  const body = await response.json().catch(() => undefined)
+  if (body?.error) throw new Error(body.error)
   if (body === undefined) {
     throw new Error('In-cluster test returned an unreadable response')
   }
@@ -869,9 +893,7 @@ export function useUpdateAuditSettings() {
         body: JSON.stringify(settings),
       });
       if (!resp.ok) {
-        const body = await resp
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const body = await readErrorBody(resp);
         throw new Error(body.error || `HTTP ${resp.status}`);
       }
       return resp.json();
@@ -957,6 +979,8 @@ export type CostUnavailableReason =
   | "authentication_error"
   | "configuration_mismatch"
   | "deployment_configuration_error"
+  | "metrics_settings_error"
+  | "cost_settings_error"
   | "history_unsupported"
   | "insufficient_history";
 
@@ -1009,10 +1033,11 @@ function costRefetchInterval(
   };
 }
 
-export function useOpenCostSummary() {
+export function useOpenCostSummary(enabled = true) {
   const clusterInfo = useClusterInfo();
   return useQuery<OpenCostSummary>({
     queryKey: ["opencost-summary"],
+    enabled,
     queryFn: () => fetchJSON("/opencost/summary"),
     refetchInterval: costRefetchInterval(
       COST_REFRESH_INTERVAL_MS,
@@ -1383,11 +1408,12 @@ export function capacityRefetchInterval(
   enabled: boolean,
   cursor?: string,
 ) {
-  return (query: { state: { data?: unknown } }): number | false => {
+  return (query: { state: { data?: unknown; error?: unknown } }): number | false => {
     // A held cursor means the user deliberately paged forward — background
     // polling there races membership changes and yanks them back to page 1.
     if (cursor) return false;
     if (!enabled) return false;
+    if (query.state.error instanceof RadarFeatureUnsupportedError) return false;
     // Syncing is a transient bootstrap state (context switch, informer
     // startup). At the normal cadence the syncing screen can sit for a full
     // interval looking stuck — poll fast until the server settles.
@@ -1399,12 +1425,15 @@ export function capacityRefetchInterval(
 
 export function useCapacityOverview(options?: CapacityQueryOptions) {
   const enabled = options?.enabled ?? true;
+  const { guard, gatedKey } = useRadarFeature("capacity");
   return useQuery<CapacityOverviewResponse>({
-    queryKey: ["capacity", "overview"],
+    queryKey: ["capacity", "overview", ...gatedKey],
     queryFn: ({ signal }) =>
-      fetchJSON<CapacityOverviewResponse>(
-        `/capacity${capacityPageQuery(options)}`,
-        signal,
+      guard(() =>
+        fetchJSON<CapacityOverviewResponse>(
+          `/capacity${capacityPageQuery(options)}`,
+          signal,
+        ),
       ),
     enabled,
     staleTime: 15_000,
@@ -1418,12 +1447,15 @@ export function useCapacityPools(options?: CapacityPageQueryOptions) {
   const limit = options?.limit;
   const cursor = options?.cursor;
   const queryKey = ["capacity", "pools", limit, cursor];
+  const { guard, gatedKey } = useRadarFeature("capacity");
   return useQuery<CapacityPoolListResponse>({
-    queryKey,
+    queryKey: [...queryKey, ...gatedKey],
     queryFn: ({ signal }) =>
-      fetchJSON<CapacityPoolListResponse>(
-        `/capacity/pools${capacityPageQuery(options)}`,
-        signal,
+      guard(() =>
+        fetchJSON<CapacityPoolListResponse>(
+          `/capacity/pools${capacityPageQuery(options)}`,
+          signal,
+        ),
       ),
     enabled,
     staleTime: 15_000,
@@ -1441,12 +1473,15 @@ export function useCapacityPoolDetail(
   options?: CapacityQueryOptions,
 ) {
   const enabled = Boolean(name) && (options?.enabled ?? true);
+  const { guard, gatedKey } = useRadarFeature("capacity");
   return useQuery<CapacityPoolDetailResponse>({
-    queryKey: ["capacity", "pool", name],
+    queryKey: ["capacity", "pool", name, ...gatedKey],
     queryFn: ({ signal }) =>
-      fetchJSON<CapacityPoolDetailResponse>(
-        `/capacity/pools/${encodeURIComponent(name ?? "")}${capacityPageQuery(options)}`,
-        signal,
+      guard(() =>
+        fetchJSON<CapacityPoolDetailResponse>(
+          `/capacity/pools/${encodeURIComponent(name ?? "")}${capacityPageQuery(options)}`,
+          signal,
+        ),
       ),
     enabled,
     staleTime: 15_000,
@@ -1470,12 +1505,15 @@ export function useCapacityPoolMembers(
   const pageQuery = capacityPageQuery(options);
   const separator = pageQuery ? "&" : "?";
   const queryKey = ["capacity", "pool", name, "members", type, limit, cursor];
+  const { guard, gatedKey } = useRadarFeature("capacity");
   return useQuery<CapacityMemberListResponse>({
-    queryKey,
+    queryKey: [...queryKey, ...gatedKey],
     queryFn: ({ signal }) =>
-      fetchJSON<CapacityMemberListResponse>(
-        `/capacity/pools/${encodeURIComponent(name ?? "")}/members${pageQuery}${separator}type=${encodeURIComponent(type)}`,
-        signal,
+      guard(() =>
+        fetchJSON<CapacityMemberListResponse>(
+          `/capacity/pools/${encodeURIComponent(name ?? "")}/members${pageQuery}${separator}type=${encodeURIComponent(type)}`,
+          signal,
+        ),
       ),
     enabled,
     staleTime: 15_000,
@@ -1525,12 +1563,15 @@ export function useCapacityDemand(options?: CapacityDemandQueryOptions) {
     options?.owner,
     options?.pod,
   ];
+  const { guard, gatedKey } = useRadarFeature("capacity");
   return useQuery<CapacityDemandResponse>({
-    queryKey,
+    queryKey: [...queryKey, ...gatedKey],
     queryFn: ({ signal }) =>
-      fetchJSON<CapacityDemandResponse>(
-        `/capacity/demand${query ? `?${query}` : ""}`,
-        signal,
+      guard(() =>
+        fetchJSON<CapacityDemandResponse>(
+          `/capacity/demand${query ? `?${query}` : ""}`,
+          signal,
+        ),
       ),
     enabled,
     staleTime: 15_000,
@@ -1570,12 +1611,15 @@ export function useCapacityActivity(options?: CapacityActivityQueryOptions) {
     options?.node,
     options?.type,
   ];
+  const { guard, gatedKey } = useRadarFeature("capacity");
   return useQuery<CapacityActivityResponse>({
-    queryKey,
+    queryKey: [...queryKey, ...gatedKey],
     queryFn: ({ signal }) =>
-      fetchJSON<CapacityActivityResponse>(
-        `/capacity/activity${query ? `?${query}` : ""}`,
-        signal,
+      guard(() =>
+        fetchJSON<CapacityActivityResponse>(
+          `/capacity/activity${query ? `?${query}` : ""}`,
+          signal,
+        ),
       ),
     enabled,
     staleTime: 15_000,
@@ -1689,6 +1733,15 @@ export async function triggerDailyUpdateCheck(
   })
 }
 
+function versionCheckQueryOptions(apiBase: string) {
+  return {
+    queryKey: ["version-check", apiBase],
+    queryFn: () => fetchJSON<VersionInfo>('/version-check'),
+    staleTime: 60 * 60 * 1000, // 1 hour
+    retry: false, // Don't retry on failure
+  };
+}
+
 export function useVersionCheck() {
   const capabilities = useCapabilities()
   const apiBase = getApiBase()
@@ -1696,18 +1749,44 @@ export function useVersionCheck() {
     ? (capabilities.data.deployment?.mode ?? 'local')
     : undefined
 
-  const query = useQuery<VersionInfo>({
-    queryKey: ["version-check", apiBase],
-    queryFn: () => fetchJSON('/version-check'),
-    staleTime: 60 * 60 * 1000, // 1 hour
-    retry: false, // Don't retry on failure
-  });
+  const query = useQuery<VersionInfo>(versionCheckQueryOptions(apiBase));
 
   useEffect(() => {
     if (query.isSuccess) void triggerDailyUpdateCheck(deploymentMode).catch(() => {})
   }, [apiBase, deploymentMode, query.isSuccess])
 
   return query;
+}
+
+/**
+ * Guards a fetch for an endpoint the connected Radar may predate (see
+ * radarFeatures.ts). A Radar known to be too old is never asked; one whose
+ * version is unknown is asked, and chi's unknown-route 404 is read as the same
+ * answer. Either way the caller gets a RadarFeatureUnsupportedError, which the
+ * sections render as an upgrade note instead of an error.
+ *
+ * Nothing waits on /version-check: an agent that advertises the feature flag
+ * is fetched immediately, and an unknown version falls through to the fetch.
+ *
+ * Spread `gatedKey` into the query key. A gate decided from early information
+ * (a host-supplied version before /capabilities answers) can lift later, and
+ * the key change is what makes the query fetch for real; ungated keys are
+ * unchanged.
+ */
+export function useRadarFeature(feature: RadarFeature) {
+  const { data: capabilities } = useCapabilities()
+  const { data: versionInfo } = useQuery<VersionInfo>(versionCheckQueryOptions(getApiBase()))
+  const { radarVersion } = useRadarUpgradeHost()
+  const currentVersion = versionInfo?.currentVersion || radarVersion
+  const latestVersion = versionInfo?.latestVersion
+  const support = radarFeatureSupport(feature, capabilities, currentVersion)
+
+  return {
+    support,
+    gatedKey: support === 'unsupported' ? ['radar-feature-unsupported'] : [],
+    guard: <T,>(request: () => Promise<T>): Promise<T> =>
+      guardRadarFeature(feature, support, { currentVersion, latestVersion }, request),
+  }
 }
 
 // ============================================================================
@@ -1731,9 +1810,7 @@ export function useStartDesktopUpdate() {
         method: "POST",
       });
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -1761,9 +1838,7 @@ export function useApplyDesktopUpdate() {
         method: "POST",
       });
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -2181,6 +2256,9 @@ export interface AuthMe {
    *  When false, logout clears Radar's cookie but the proxy may re-auth
    *  the same user on the next request. */
   proxyLogoutConfigured?: boolean;
+  /** Connected and the user's access is known: true when their RBAC allows
+   *  reading no namespace at all. Absent when access couldn't be determined. */
+  noNamespaceAccess?: boolean;
 }
 
 export function useAuthMe() {
@@ -2188,6 +2266,24 @@ export function useAuthMe() {
     queryKey: ["auth-me"],
     queryFn: () => fetchJSON("/auth/me"),
     staleTime: 300000, // 5 minutes
+  });
+}
+
+/**
+ * useNamespaceAccess asks the server to run namespace discovery for the caller,
+ * so the answer never depends on whether the permission cache happens to hold
+ * an entry. A user with no access is waiting on an admin; re-check every
+ * minute so the banner clears once a binding lands.
+ */
+export function useNamespaceAccess(enabled: boolean) {
+  return useQuery<AuthMe>({
+    queryKey: ["namespace-access"],
+    queryFn: () => fetchJSON("/auth/me?check=namespaces"),
+    enabled,
+    staleTime: 60000,
+    // Stop only on an explicit false: an absent field means discovery couldn't
+    // answer this time, which says nothing about the user's access.
+    refetchInterval: (query) => (query.state.data?.noNamespaceAccess === false ? false : 60000),
   });
 }
 
@@ -2207,16 +2303,12 @@ const CLOUD_ROLE_RANK: Record<string, number> = {
  * present (OSS, OIDC, no role group, OR auth/me is still loading),
  * `canAtLeast` returns true — the gate is strictly additive for
  * Cloud-attributed users, mirroring the backend's `requireCloudRole`
- * semantics. Use for passive content gating (panels, sections); use
- * `useCanHelmAct` (or similar) for *click-prone* surfaces where you
- * need fail-closed behavior during the auth/me round-trip to prevent
- * a viewer from clicking through during the loading window.
+ * semantics. It gates Radar's own features (settings, integrations), never
+ * operations that run as the user, which Kubernetes RBAC decides.
  *
- * Why optimistic during load: the gated empty state ("Your role can't
- * view…") rendered briefly to OSS / kubectl-plugin users before
- * auth/me resolves is a worse regression than a Cloud viewer seeing
- * a content tab populate for a tick before being gated out. Click-
- * prevention belongs in the action-button hook, not here.
+ * Why optimistic during load: a gated empty state rendered briefly to
+ * OSS / kubectl-plugin users before auth/me resolves is a worse regression
+ * than a Cloud viewer seeing content for a tick before being gated out.
  */
 export function useCloudRole() {
   const { data, isLoading } = useAuthMe();
@@ -2233,42 +2325,35 @@ export function useCloudRole() {
 }
 
 /**
- * useCanHelmAct combines the K8s capability gate (rbac.helm=true) and
- * the Cloud role gate (member+) into a single answer for any Helm
- * write or sensitive-read button. Returns { allowed, reason } so the
- * tooltip can explain which gate failed.
- *
- * Cloud role check runs FIRST so the message is actionable for Cloud
- * users — telling them "Helm write permissions required" is wrong if
- * the chart is fine and the actual gate is their viewer role.
+ * useCanHelmAct answers whether Helm write buttons are usable for a release in
+ * `namespace`. With auth on, Helm runs as the signed-in user, so the check is
+ * the user's own Kubernetes RBAC in that namespace (Helm writes each release as
+ * a Secret there); the Cloud role says nothing about cluster access when IdP
+ * groups grant it. Without auth, Helm runs as Radar's ServiceAccount, which
+ * needs the chart's rbac.helm=true.
  */
-export function useCanHelmAct(): { allowed: boolean; reason?: string } {
-  const helmWrite = useCanHelmWrite();
-  const { role, canAtLeast, isLoading } = useCloudRole();
-  // Fail-closed for action buttons during the auth/me round-trip:
-  // a Cloud viewer who clicks during loading would otherwise fire a
-  // real request that gets 403'd. For OSS / kubectl-plugin the
-  // round-trip is sub-ms so this is imperceptible; for Cloud it
-  // prevents the click-through window. Distinct from useCloudRole's
-  // canAtLeast (which is optimistic during loading) because passive
-  // content gates don't have a click-handler to misfire.
-  if (isLoading) {
-    return { allowed: false, reason: "Loading permissions…" };
+export function useCanHelmAct(namespace?: string): { allowed: boolean; reason?: string } {
+  const { canHelmWrite, helmWriteUnknown } = useNamespacedCapabilities(namespace);
+  const authEnabled = useIsAuthEnabled();
+  // Without a namespace answer (still loading, or the check failed) the global
+  // value only says the user can create Secrets somewhere, which would enable
+  // actions the server then refuses.
+  if (authEnabled && helmWriteUnknown) {
+    return { allowed: false, reason: `Couldn't confirm your permissions in ${namespace} yet.` };
   }
-  if (!canAtLeast("member")) {
+  if (canHelmWrite) return { allowed: true };
+  if (authEnabled) {
     return {
       allowed: false,
-      reason: `Your Radar Cloud role (${role ?? "unknown"}) cannot run Helm operations. Ask a member or owner.`,
+      reason: namespace
+        ? `Your Kubernetes permissions don't allow managing Helm releases in ${namespace} (creating Secrets there).`
+        : "Your Kubernetes permissions don't allow managing Helm releases.",
     };
   }
-  if (!helmWrite) {
-    return {
-      allowed: false,
-      reason:
-        "Helm write permissions required. Set rbac.helm=true in the Radar Helm chart values.",
-    };
-  }
-  return { allowed: true };
+  return {
+    allowed: false,
+    reason: "Helm write permissions required. Set rbac.helm=true in the Radar Helm chart values.",
+  };
 }
 
 // Namespaces
@@ -2320,15 +2405,24 @@ export function useApplications(
   const queryString = params.toString();
 
   const enabled = options?.enabled !== false;
+  const { guard, gatedKey } = useRadarFeature("applications");
   return useQuery<{ applications: AppRow[] }>({
-    queryKey: ["applications", namespaces],
+    queryKey: ["applications", namespaces, ...gatedKey],
     queryFn: () =>
-      fetchJSON(`/applications${queryString ? `?${queryString}` : ""}`),
+      guard(() =>
+        fetchJSON<{ applications: AppRow[] }>(
+          `/applications${queryString ? `?${queryString}` : ""}`,
+        ),
+      ),
     staleTime: 30_000,
+    retry: shouldRetryRadarQuery,
     // Only poll while a consumer needs the index; gated off it must not keep the
-    // background refetch alive.
+    // background refetch alive. A Radar that predates the endpoint never will.
     enabled,
-    refetchInterval: enabled ? APPLICATIONS_REFRESH_INTERVAL_MS : false,
+    refetchInterval: (query) =>
+      enabled && !(query.state.error instanceof RadarFeatureUnsupportedError)
+        ? APPLICATIONS_REFRESH_INTERVAL_MS
+        : false,
   });
 }
 
@@ -2520,7 +2614,7 @@ export function useResource<T>(
     retry: (failureCount, error) => {
       if (isStillLoadingError(error)) return true;
       if (isKindSyncFailed(error)) return false;
-      return failureCount < 1; // matches the QueryClient default (retry: 1)
+      return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
     },
     retryDelay: (failureCount, error) =>
       isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
@@ -2552,7 +2646,7 @@ export function useResourceWithRelationships<T>(
     retry: (failureCount, error) => {
       if (isStillLoadingError(error)) return true;
       if (isKindSyncFailed(error)) return false;
-      return failureCount < 1; // matches the QueryClient default (retry: 1)
+      return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
     },
     retryDelay: (failureCount, error) =>
       isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
@@ -2584,7 +2678,7 @@ export function useResources<T>(
     retry: (failureCount, error) => {
       if (isStillLoadingError(error)) return true;
       if (isKindSyncFailed(error)) return false;
-      return failureCount < 1; // matches the QueryClient default (retry: 1)
+      return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
     },
     retryDelay: (failureCount, error) =>
       isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
@@ -2652,9 +2746,7 @@ async function fetchChangesPage(
     signal ? { signal } : undefined,
   );
   if (!response.ok) {
-    const errorData = await response
-      .json()
-      .catch(() => ({ error: "Unknown error" }));
+    const errorData = await readErrorBody(response);
     throw new ApiError(
       errorData.error || `HTTP ${response.status}`,
       response.status,
@@ -2865,14 +2957,28 @@ function workloadHistoryPath(kind: string, namespace: string, name: string, grou
 // The newest page of one workload's history: the workload, what it owns, K8s
 // Events about those, and the resources attached to it. Keyed under
 // "changes" so the live-update invalidation refreshes it.
+// A Radar that predates the scoped history endpoint settles as unsupported;
+// WorkloadView then falls back to the namespace's changes.
 export function useWorkloadHistory(kind: string, namespace: string, name: string, group?: string, enabled = true) {
-  return useQuery<WorkloadHistoryPage>({
-    queryKey: ["changes", "workload-history", kind, namespace, name, group ?? ""],
-    queryFn: ({ signal }) => fetchJSON(workloadHistoryPath(kind, namespace, name, group), signal),
+  const { guard, gatedKey, support } = useRadarFeature("workloadHistory");
+  const query = useQuery<WorkloadHistoryPage>({
+    queryKey: ["changes", "workload-history", kind, namespace, name, group ?? "", ...gatedKey],
+    queryFn: ({ signal }) =>
+      guard(() => fetchJSON<WorkloadHistoryPage>(workloadHistoryPath(kind, namespace, name, group), signal)),
     staleTime: 5000,
-    refetchInterval: CHANGES_REFRESH_INTERVAL_MS,
+    retry: shouldRetryRadarQuery,
+    refetchInterval: (query) =>
+      query.state.error instanceof RadarFeatureUnsupportedError ? false : CHANGES_REFRESH_INTERVAL_MS,
     enabled,
   });
+  // A probe answered by an older Radar settles as unsupported and stops
+  // polling; once /capabilities confirms the feature (the agent was upgraded),
+  // ask again rather than staying on the fallback.
+  const { error, refetch } = query;
+  useEffect(() => {
+    if (support === "supported" && error instanceof RadarFeatureUnsupportedError) void refetch();
+  }, [support, error, refetch]);
+  return query;
 }
 
 export function fetchWorkloadHistoryPage(kind: string, namespace: string, name: string, group: string | undefined, beforeSeq: number): Promise<WorkloadHistoryPage> {
@@ -3028,11 +3134,13 @@ export function usePodMetrics(
 }
 
 export function usePodEnvironment(namespace: string, podName: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('podEnvironment')
   return useQuery<PodEnvironmentResponse>({
-    queryKey: ['pod-environment', namespace, podName],
-    queryFn: () => fetchJSON(
+    queryKey: ['pod-environment', namespace, podName, ...gatedKey],
+    queryFn: () => guard(() => fetchJSON<PodEnvironmentResponse>(
       `/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/environment`,
-    ),
+    )),
+    retry: shouldRetryRadarQuery,
     enabled: enabled && Boolean(namespace && podName),
     staleTime: 10000,
   })
@@ -3456,9 +3564,10 @@ export function prometheusStatusRefetchInterval(
 }
 
 // Check Prometheus availability
-export function usePrometheusStatus() {
+export function usePrometheusStatus(enabled = true) {
   return useQuery<PrometheusStatus>({
     queryKey: ["prometheus-status"],
+    enabled,
     queryFn: () => fetchJSON("/prometheus/status"),
     staleTime: 30000,
     refetchInterval: (query) =>
@@ -3497,9 +3606,7 @@ export function usePrometheusConnect() {
         method: "POST",
       });
       if (!resp.ok) {
-        const body = await resp
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const body = await readErrorBody(resp);
         throw new Error(body.error || `HTTP ${resp.status}`);
       }
       return resp.json() as Promise<PrometheusStatus>;
@@ -3994,10 +4101,14 @@ export function useUpdateResource() {
         body: yaml,
       });
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
-        throw new Error(error.error || `HTTP ${response.status}`);
+        const error = await readErrorBody(response);
+        const failure = new Error(error.error || `HTTP ${response.status}`);
+        // A reviewed apply's failure is shown in the review itself (the
+        // changed-after-review notice, or the error), so it gets no toast.
+        if (reviewedResourceVersion !== undefined || reviewedContext !== undefined) {
+          markShownInline(failure);
+        }
+        throw failure;
       }
       return response.json();
     },
@@ -4108,9 +4219,7 @@ export function useDeleteResource() {
         method: "DELETE",
       });
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       // DELETE returns 204 No Content, no body to parse
@@ -4155,9 +4264,7 @@ export function useBulkDeleteResources() {
           if (force) url.searchParams.set("force", "true");
           const response = await apiFetch(url.toString(), { method: "DELETE" });
           if (!response.ok) {
-            const error = await response
-              .json()
-              .catch(() => ({ error: "Unknown error" }));
+            const error = await readErrorBody(response);
             throw new Error(
               error.error || `Failed to delete ${namespace}/${name}`,
             );
@@ -4239,9 +4346,7 @@ export function useBulkRestartWorkloads() {
             },
           );
           if (!response.ok) {
-            const error = await response
-              .json()
-              .catch(() => ({ error: "Unknown error" }));
+            const error = await readErrorBody(response);
             throw new Error(
               `${namespace}/${name}: ${error.error || `HTTP ${response.status}`}`,
             );
@@ -4311,9 +4416,7 @@ export function useBulkScaleWorkloads() {
             },
           );
           if (!response.ok) {
-            const error = await response
-              .json()
-              .catch(() => ({ error: "Unknown error" }));
+            const error = await readErrorBody(response);
             throw new Error(
               `${namespace}/${name}: ${error.error || `HTTP ${response.status}`}`,
             );
@@ -4497,7 +4600,7 @@ export function usePreviewResources() {
         body: JSON.stringify(request),
       })
       if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: 'Preview failed' }))
+        const error = await readErrorBody(response)
         throw new Error(error.error || `HTTP ${response.status}`)
       }
       return response.json() as Promise<YamlPreviewResponse>
@@ -4547,9 +4650,7 @@ export function useApplyResource() {
         body: yaml,
       });
       if (!response.ok) {
-        const error = (await response
-          .json()
-          .catch(() => ({ error: 'Unknown error' }))) as ApplyResourceErrorResponse
+        const error = (await readErrorBody(response)) as ApplyResourceErrorResponse
         throw new ApplyResourceError(error, response.status)
       }
       return response.json() as Promise<ApplyResourceResult[]>;
@@ -4605,9 +4706,7 @@ export function useTriggerCronJob() {
         },
       );
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -4645,9 +4744,7 @@ export function useSuspendCronJob() {
         },
       );
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -4685,9 +4782,7 @@ export function useResumeCronJob() {
         },
       );
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -4731,9 +4826,7 @@ export function useRestartWorkload() {
         },
       );
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -4860,9 +4953,7 @@ export function useScaleWorkload() {
         },
       );
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -4943,9 +5034,7 @@ export function useRollbackWorkload() {
         },
       );
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -5085,9 +5174,7 @@ export function useRolloutAction(options?: { reportErrors?: boolean }) {
         { method: "POST" },
       );
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         // The code, not the status, says whether retrying can help: a lost cluster
         // connection answers 503 on this route too.
         throw new ApiError(
@@ -5145,9 +5232,7 @@ export function useCordonNode() {
         method: "POST",
       });
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -5178,9 +5263,7 @@ export function useUncordonNode() {
         },
       );
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -5222,51 +5305,27 @@ export function drainPlanBody(options: DrainPlanRequestOptions): string {
   });
 }
 
-/**
- * The connected radar predates the drain-plan endpoint. Distinguished from a
- * node-not-found 404 by the body: handlers answer with a JSON error envelope,
- * while an unknown route gets the router's plain-text 404. Hosts serving a newer
- * frontend against an older radar (Radar Hub) use this to fall back to the
- * plan-less drain dialog instead of leaving Drain permanently disabled.
- */
-export class DrainPlanUnsupportedError extends Error {
-  constructor() {
-    super("This radar does not support drain plans");
-    this.name = "DrainPlanUnsupportedError";
-  }
-}
-
-export function drainPlanFetchError(
-  status: number,
-  body: { error?: string } | null,
-): Error {
-  if (status === 404 && body === null) {
-    return new DrainPlanUnsupportedError();
-  }
-  return new Error(body?.error || `HTTP ${status}`);
-}
-
 // Read-only drain plan: what a drain with these options would do to each pod on the node.
 // Modelled as a mutation because it is a POST with a body and is fetched on demand
 // while the drain dialog is open; it performs no cluster mutation.
+// An older Radar without the endpoint fails with RadarFeatureUnsupportedError,
+// which hosts (Radar Hub) use to fall back to the plan-less drain dialog
+// instead of leaving Drain permanently disabled.
 export function useDrainPlan() {
+  const { guard } = useRadarFeature("drainPlan");
   return useMutation<
     DrainPlan,
     Error,
     { name: string; options: DrainPlanRequestOptions }
   >({
-    mutationFn: async ({ name, options }) => {
-      const response = await apiFetch(apiUrl(drainPlanPath(name)), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: drainPlanBody(options),
-      });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        throw drainPlanFetchError(response.status, body);
-      }
-      return response.json();
-    },
+    mutationFn: ({ name, options }) =>
+      guard(() =>
+        fetchJSON<DrainPlan>(drainPlanPath(name), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: drainPlanBody(options),
+        }),
+      ),
     // Deliberately no meta toast keys: the plan is fetched only from the drain dialog, which
     // renders a failure inline and keeps Drain disabled while it shows; a global toast would
     // report the same failure twice.
@@ -5290,9 +5349,7 @@ export function useDrainNode() {
         body: options ? JSON.stringify(options) : undefined,
       });
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -5410,14 +5467,10 @@ export function useHelmRelease(
 }
 
 // Get manifest for a Helm release (optionally at a specific revision).
-// `enabled` lets callers skip the query when the user's Cloud role
-// would 403 the read — saves a round-trip and avoids a transient
-// "error" state that the role-gated empty panel doesn't need.
 export function useHelmManifest(
   namespace: string,
   name: string,
   revision?: number,
-  enabled = true,
 ) {
   const params = revision ? `?revision=${revision}` : "";
   return useQuery<string>({
@@ -5427,19 +5480,17 @@ export function useHelmManifest(
         `${getApiBase()}/helm/releases/${namespace}/${name}/manifest${params}`,
       );
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.text();
     },
-    enabled: Boolean(namespace && name && enabled),
+    enabled: Boolean(namespace && name),
     staleTime: 60000, // 1 minute
   });
 }
 
-// Get values for a Helm release. `enabled` see useHelmManifest.
+// Get values for a Helm release.
 export function useHelmValues(
   namespace: string,
   name: string,
@@ -5460,7 +5511,7 @@ export function useHelmValues(
   });
 }
 
-// Get diff between two revisions. `enabled` see useHelmManifest.
+// Get diff between two revisions.
 export function useHelmManifestDiff(
   namespace: string,
   name: string,
@@ -5673,9 +5724,7 @@ export function useHelmRollback() {
         },
       );
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -5712,9 +5761,7 @@ export function useHelmUninstall() {
         },
       );
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -5746,9 +5793,7 @@ function streamHelmProgress(
     fetch(url, { credentials: getCredentialsMode(), ...options, headers })
       .then(async (response) => {
         if (!response.ok) {
-          const error = await response
-            .json()
-            .catch(() => ({ error: "Unknown error" }));
+          const error = await readErrorBody(response);
           reject(new Error(error.error || `HTTP ${response.status}`));
           return;
         }
@@ -5868,9 +5913,7 @@ export function useHelmPreviewValues() {
         },
       );
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -5901,9 +5944,7 @@ export function useHelmApplyValues() {
         },
       );
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -5948,9 +5989,7 @@ async function updateRepositoryFn(repoName: string): Promise<unknown> {
     },
   );
   if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ error: "Unknown error" }));
+    const error = await readErrorBody(response);
     throw new Error(error.error || `HTTP ${response.status}`);
   }
   return response.json();
@@ -6008,9 +6047,7 @@ async function mutateOCISource(
     body: JSON.stringify({ source }),
   });
   if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ error: "Unknown error" }));
+    const error = await readErrorBody(response);
     throw new Error(error.error || `HTTP ${response.status}`);
   }
   return response.json();
@@ -6099,9 +6136,7 @@ export function useInstallChart() {
         body: JSON.stringify(req),
       });
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json() as Promise<HelmRelease>;
@@ -6244,9 +6279,7 @@ function createGitOpsMutation<TVariables>(
           },
         );
         if (!response.ok) {
-          const error = await response
-            .json()
-            .catch(() => ({ error: "Unknown error" }));
+          const error = await readErrorBody(response);
           throw new Error(error.error || `HTTP ${response.status}`);
         }
         return response.json() as Promise<GitOpsOperationResponse>;
@@ -6427,9 +6460,7 @@ export function useArgoResourceValidation() {
         },
       );
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json() as Promise<ArgoResourceValidationResult>;
@@ -6493,9 +6524,7 @@ export function useArgoRefresh() {
         },
       );
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
+        const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
       return response.json();
@@ -6579,9 +6608,7 @@ export function useSwitchContext() {
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-          const error = await response
-            .json()
-            .catch(() => ({ error: "Unknown error" }));
+          const error = await readErrorBody(response);
           throw new Error(error.error || `HTTP ${response.status}`);
         }
         return response.json();
@@ -6708,9 +6735,7 @@ export function useSetActiveNamespace() {
           durationMs: Math.round(performance.now() - startedAt),
         });
         if (!response.ok) {
-          const error = await response
-            .json()
-            .catch(() => ({ error: "Unknown error" }));
+          const error = await readErrorBody(response);
           throw new Error(error.error || `HTTP ${response.status}`);
         }
         return response.json();

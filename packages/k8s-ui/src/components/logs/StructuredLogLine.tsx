@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { ChevronRight, ChevronDown, Filter } from 'lucide-react'
 import type { LogLevel } from './useLogBuffer'
+import { selectLevelField } from '../../utils/log-level'
 import { unescapeJsonStrings, parseLogfmt } from '../../utils/log-format'
 import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
 
@@ -65,7 +66,7 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
           className={`cursor-pointer ${palette.hoverSurface} rounded px-0.5 -ml-0.5 ${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}
         >
           <span className="inline-flex items-center align-middle mr-0.5">{chevron}</span>
-          <SummaryLine obj={parsed} palette={palette} />
+          <SummaryLine obj={parsed} level={level} palette={palette} />
           <span className={`${palette.textTertiary} ml-1`}>{`{${fieldCount} fields}`}</span>
         </span>
       ) : (
@@ -76,7 +77,7 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
           className={`cursor-pointer ${palette.hoverSurface} rounded px-0.5 -ml-0.5`}
         >
           <span className="inline-flex items-center align-middle mr-0.5">{chevron}</span>
-          <SummaryLine obj={parsed} palette={palette} />
+          <SummaryLine obj={parsed} level={level} palette={palette} />
           <span className={`${palette.textTertiary} ml-1`}>{`{${fieldCount} fields}`}</span>
         </span>
         <span className={`block ml-4 ${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}>
@@ -167,8 +168,8 @@ function JsonExpanded({ text, onFilterValue, palette }: { text: string; onFilter
   return <>{nodes}</>
 }
 
-function SummaryLine({ obj, palette }: { obj: Record<string, unknown>; palette: LogPalette }) {
-  const lvl = obj.level ?? obj.severity ?? obj.lvl ?? nestedField(obj, 'log', 'level')
+function SummaryLine({ obj, level, palette }: { obj: Record<string, unknown>; level: LogLevel; palette: LogPalette }) {
+  const lvl = selectLevelField(obj)?.raw
   const msg = obj.msg ?? obj.message
   const rawErr = obj.error ?? obj.err
   const err = typeof rawErr === 'string'
@@ -179,8 +180,8 @@ function SummaryLine({ obj, palette }: { obj: Record<string, unknown>; palette: 
   return (
     <>
       {lvl != null && (
-        <span className={`${getLevelBadgeColor(lvl, palette)} text-[10px] font-semibold px-1 py-px rounded mr-1.5 inline-block`}>
-          {formatLevel(lvl)}
+        <span className={`${levelBadgeColor(level, palette)} text-[10px] font-semibold px-1 py-px rounded mr-1.5 inline-block`}>
+          {formatLevel(lvl, level)}
         </span>
       )}
       {typeof msg === 'string' && (
@@ -221,30 +222,19 @@ function nestedField(obj: Record<string, unknown>, parent: string, child: string
   return undefined
 }
 
-function formatLevel(lvl: unknown): string {
-  if (typeof lvl === 'number') {
-    if (lvl >= 50) return 'ERR'
-    if (lvl >= 40) return 'WARN'
-    if (lvl >= 30) return 'INFO'
-    return 'DBG'
-  }
+const NUMERIC_LEVEL_LABELS: Record<LogLevel, string> = { error: 'ERR', warn: 'WARN', info: 'INFO', debug: 'DBG', unknown: '?' }
+
+function formatLevel(lvl: unknown, level: LogLevel): string {
+  if (typeof lvl === 'number') return NUMERIC_LEVEL_LABELS[level]
   return String(lvl).toUpperCase()
 }
 
-function getLevelBadgeColor(lvl: unknown, palette: LogPalette): string {
-  let normalized: string
-  if (typeof lvl === 'number') {
-    // Pino/bunyan numeric levels: 10=trace, 20=debug, 30=info, 40=warn, 50=error, 60=fatal
-    if (lvl >= 50) normalized = 'error'
-    else if (lvl >= 40) normalized = 'warn'
-    else if (lvl >= 30) normalized = 'info'
-    else normalized = 'debug'
-  } else {
-    normalized = String(lvl).toLowerCase()
+function levelBadgeColor(level: LogLevel, palette: LogPalette): string {
+  switch (level) {
+    case 'error': return palette.levelBadgeError
+    case 'warn': return palette.levelBadgeWarn
+    case 'info': return palette.levelBadgeInfo
+    case 'debug': return palette.levelBadgeDebug
+    default: return palette.levelBadgeNeutral
   }
-  if (/^(error|err|fatal|panic|critical|crit)$/.test(normalized)) return palette.levelBadgeError
-  if (/^(warn|warning)$/.test(normalized)) return palette.levelBadgeWarn
-  if (/^(info|information|notice)$/.test(normalized)) return palette.levelBadgeInfo
-  if (/^(debug|dbg|trace|verbose)$/.test(normalized)) return palette.levelBadgeDebug
-  return palette.levelBadgeNeutral
 }

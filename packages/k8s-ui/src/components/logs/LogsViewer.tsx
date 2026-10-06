@@ -28,8 +28,10 @@ export interface LogsViewerProps {
   createStream?: (params: Omit<LogsFetchParams, 'previous'>) => EventSource
   /** Override the download mechanism (e.g. for desktop apps where blob URLs fail). */
   overrideDownload?: (content: string, mime: string, filename: string) => void
-  /** Force dark mode on the logs container (default: true) */
+  /** Pin the logs container to dark (true) or light (false) and hide the toggle */
   forceDark?: boolean
+  /** Palette used until the user toggles it, e.g. the app theme (default: true) */
+  defaultDark?: boolean
   /**
    * Open the stream automatically on mount (and on container switch) instead of
    * loading a static snapshot. The user can still Stop, and a manual Stop is not
@@ -47,6 +49,7 @@ export function LogsViewer({
   createStream,
   overrideDownload,
   forceDark,
+  defaultDark,
   autoStream = false,
 }: LogsViewerProps) {
   const [selectedContainer, setSelectedContainer] = useState(initialContainer || containers[0] || '')
@@ -190,6 +193,7 @@ export function LogsViewer({
       onClear={clear}
       toolbarExtra={renderToolbarExtra}
       forceDark={forceDark}
+      defaultDark={defaultDark}
     />
   )
 }

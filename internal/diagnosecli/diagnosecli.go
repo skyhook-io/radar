@@ -395,7 +395,7 @@ access local files or the network and may be able to change your cluster.
 			notice += `Radar passes Cursor --force so headless tool calls can run. This
 auto-approves Cursor's built-in tools and every MCP server it loads, including
 your global servers. Cursor's sandbox does not reliably confine those tools to
-Radar's temporary workspace.
+Radar's temporary working directory.
 `
 		} else if agent == "claude" {
 			notice += `Claude uses the permissions from your setup; Radar does not override them.

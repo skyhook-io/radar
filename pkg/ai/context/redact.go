@@ -149,19 +149,71 @@ func redactBase64Secrets(text string) string {
 // config — hashes, IDs, match expressions — survives. Closes the CRD-spec gap:
 // no value-level redaction reached unstructured specs before.
 func RedactInlineSecrets(node any) {
-	redactNode(node, false)
+	redactNode(node, false, isSensitiveKey)
 }
 
-func redactNode(node any, keySensitive bool) any {
+// RedactHelmValues walks Helm values in place, redacting scalars whose own key
+// holds credentials and strings inheriting credential sensitivity. Secret
+// references reset inherited sensitivity; high-confidence patterns still apply.
+// Helm keys are free-form (dbPassword, auth.postgresPassword), while CRD specs
+// need exact-key matching to preserve diagnostic references.
+func RedactHelmValues(node any) {
+	redactHelmNode(node, false, false)
+}
+
+func helmKeySensitivity(key string) (sensitive, reference bool) {
+	norm := strings.NewReplacer("-", "", "_", "", ".", "").Replace(strings.ToLower(key))
+	if sensitiveValueKeys[norm] {
+		return true, false
+	}
+	if strings.HasSuffix(norm, "secretname") || strings.HasSuffix(norm, "ref") ||
+		strings.HasSuffix(norm, "existingsecret") || strings.HasPrefix(norm, "existingsecret") {
+		return false, true
+	}
+	for _, suffix := range []string{
+		"password", "passwd", "passphrase", "token", "apikey", "apitoken",
+		"accesskey", "secretkey", "privatekey", "clientsecret", "credentials",
+	} {
+		if strings.HasSuffix(norm, suffix) {
+			return true, false
+		}
+	}
+	return false, false
+}
+
+func redactHelmNode(node any, keySensitive, ownKeySensitive bool) any {
 	switch v := node.(type) {
 	case map[string]any:
 		for k, val := range v {
-			v[k] = redactNode(val, keySensitive || isSensitiveKey(k))
+			sensitive, reference := helmKeySensitivity(k)
+			v[k] = redactHelmNode(val, sensitive || (keySensitive && !reference), sensitive)
 		}
 		return v
 	case []any:
 		for i, item := range v {
-			v[i] = redactNode(item, keySensitive)
+			v[i] = redactHelmNode(item, keySensitive, ownKeySensitive)
+		}
+		return v
+	case string:
+		return redactNode(v, keySensitive, isSensitiveKey)
+	default:
+		if ownKeySensitive && node != nil {
+			return "[REDACTED]"
+		}
+		return node
+	}
+}
+
+func redactNode(node any, keySensitive bool, sensitiveKey func(string) bool) any {
+	switch v := node.(type) {
+	case map[string]any:
+		for k, val := range v {
+			v[k] = redactNode(val, keySensitive || sensitiveKey(k), sensitiveKey)
+		}
+		return v
+	case []any:
+		for i, item := range v {
+			v[i] = redactNode(item, keySensitive, sensitiveKey)
 		}
 		return v
 	case string:

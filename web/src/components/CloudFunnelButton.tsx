@@ -291,7 +291,7 @@ export function CloudFunnelButton() {
         content={
           <>
             <span className="block font-semibold">Meet Radar Cloud</span>
-            See all your clusters in one place, share with your team, and get alerts and automatic AI investigations in Slack.
+            See all your clusters in one place, share with your team, and get alerts and automatic AI investigations.
           </>
         }
         delay={100}
@@ -665,7 +665,7 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
   // skimmable. Alerts and investigations lead: they are the two things the
   // OSS binary cannot do at all. Team, fleet and history follow.
   const highlights = [
-    { icon: Bell, lead: 'Alerts', rest: ' in Slack when something breaks. Once, not for every crash-looping pod.' },
+    { icon: Bell, lead: 'Alerts', rest: ' to Slack or any webhook. One per failure, not per crash-looping pod.' },
     { icon: Sparkles, lead: 'AI investigations', rest: ': root cause with evidence, automatic on alerts or on demand' },
     { icon: Users, lead: 'Your team', rest: ': share any view with just a link, scoped by your existing RBAC' },
     { icon: Globe, lead: 'Every cluster', rest: ': the whole fleet in one view and one MCP endpoint' },
@@ -678,7 +678,7 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
         Close the laptop. Radar keeps watching.
       </h3>
       <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-1.5">
-        Radar Cloud is the hosted side of Radar: Slack alerts, AI root cause and every cluster in one place, for
+        Radar Cloud is the hosted side of Radar: alerts, AI root cause and every cluster in one place, for
         you and your team.
       </p>
       <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-6">
@@ -724,9 +724,10 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
           <section>
             <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">Investigations</h4>
             <p className="text-[12px] leading-relaxed text-theme-text-secondary">
-              In our public benchmark, Radar's agent found the root cause 3× faster than the same model on plain
-              kubectl, and 2× faster than the other AI SRE tools we tested. Run it automatically on every alert, or
-              on demand from any issue, with no CLI or API key.{' '}
+              In our public benchmark, the same agent diagnosed faults 3× faster on average with Radar than with
+              plain kubectl, and Radar answered 1.6–3.6× faster on average than the other AI SRE tools we tested.
+              Run it automatically on the alert rules you choose, or on demand from any issue, with no CLI or API
+              key.{' '}
               <a href={BENCHMARK_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
                 See the benchmarks →
               </a>
@@ -735,9 +736,8 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
           <section>
             <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">What it costs</h4>
             <p className="text-[12px] leading-relaxed text-theme-text-secondary">
-              Radar Cloud is {freeLine}, with 100 investigations a month included, then $1 per investigation.
-              Paid plans add more clusters, more included investigations, and enterprise features like SSO, SCIM
-              and audit logs.{' '}
+              Radar Cloud is {freeLine}, including 100 investigations a month. Paid plans add investigations for
+              every cluster, with optional $1 overage, plus enterprise features like SSO, SCIM and audit logs.{' '}
               <a href={PRICING_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
                 See pricing →
               </a>

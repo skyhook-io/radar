@@ -4,6 +4,7 @@ import { normalizeYamlForReview, splitYamlDocuments } from '../../utils/yaml'
 import { Badge } from './Badge'
 import { StatusDot } from './status-tone'
 import { YamlDiffEditor } from './YamlEditor'
+import { AlertBanner } from './drawer-components'
 
 export interface YamlPreviewResult {
   index: number
@@ -30,6 +31,9 @@ export interface YamlReviewProps {
   force?: boolean
   isApplying?: boolean
   applyError?: string | null
+  /** Set when an apply failed and the refreshed review found the resource had
+   *  changed since the user reviewed it: the diff now shows its latest version. */
+  changedSinceReview?: boolean
   applyLabel?: string
   onClose?: () => void
   onBack: () => void
@@ -46,6 +50,13 @@ function previewSeverity(status: YamlPreviewResult['status']) {
   if (status === 'accepted') return 'success' as const
   if (status === 'rejected') return 'error' as const
   return 'warning' as const
+}
+
+// The server's refusal when the resource moved past the reviewed version. The
+// changed-after-review notice already says this, so only this error gives way
+// to it; a timeout or an admission denial still shows beside the notice.
+function isChangedAfterReviewError(error: string) {
+  return /resource changed after review/i.test(error)
 }
 
 export function canApplyYamlPreview(
@@ -80,6 +91,7 @@ export function YamlReview({
   force = false,
   isApplying = false,
   applyError,
+  changedSinceReview = false,
   applyLabel = 'Apply reviewed changes',
   onClose,
   onBack,
@@ -351,7 +363,16 @@ export function YamlReview({
       </div>
 
       <div className="shrink-0 border-t border-theme-border bg-theme-elevated/80 px-4 py-3">
-        {applyError && (
+        {changedSinceReview && (
+          <AlertBanner
+            variant="warning"
+            title="This resource changed after your review"
+            message="The diff above now shows its latest version. Check it, then apply again."
+          />
+        )}
+        {/* The notice above already says why the apply was refused; the
+            raw API message would repeat it (the error toast carries it). */}
+        {applyError && !(changedSinceReview && isChangedAfterReviewError(applyError)) && (
           <div className="mb-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
             {applyError}
           </div>

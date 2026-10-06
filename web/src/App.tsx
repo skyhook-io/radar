@@ -45,7 +45,9 @@ import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitch
 import { ConnectionProvider, useConnection } from './context/ConnectionContext'
 import { ConnectionErrorView } from './components/ConnectionErrorView'
 import { SyncProgressPanel } from './components/SyncProgressPanel'
+import { NoClusterAccessBanner } from './components/NoClusterAccessBanner'
 import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/CapabilitiesContext'
+import { RadarUpgradeProvider } from './context/RadarUpgrade'
 import { UserMenu } from './components/UserMenu'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { UpdateNotification } from './components/ui/UpdateNotification'
@@ -528,8 +530,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     navigate(withCrossViewParams(path, location.search))
   }, [location.search, navigate])
 
-  // The standalone rail expresses intent to leave the full-width investigation
-  // workspace. Close it before routing so the destination is immediately visible;
+  // The standalone rail expresses intent to leave the full-width investigations
+  // page. Close it before routing so the destination is immediately visible;
   // docked investigations stay open across views as a persistent side panel.
   const handlePrimaryNavigate = useCallback((view: ExtendedMainView) => {
     navigateFromPrimaryRail(
@@ -1889,11 +1891,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
           {/* Local terminal */}
           {capabilities.localTerminal && (
-            <Tooltip content="Open local terminal">
+            <Tooltip content={connection.context || connection.state === 'disconnected' ? 'Open local terminal' : 'Waiting for a context to open a terminal'}>
             <button
               onClick={() => openLocalTerminal()}
+              disabled={!connection.context && connection.state !== 'disconnected'}
               aria-label="Open local terminal"
-              className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+              className="p-1.5 rounded-md bg-theme-elevated enabled:hover:bg-theme-hover text-theme-text-secondary enabled:hover:text-theme-text-primary disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               <SquareTerminal className="w-4 h-4" />
             </button>
@@ -2008,6 +2011,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         </PaneLoader>
       )}
 
+      {contentReady && <NoClusterAccessBanner />}
       {/* Main content - only show when connected and authenticated */}
       {/* inert while a fullscreen detail overlay covers the views — keeps the
           retained background list out of the focus order + a11y tree (the visual
@@ -2533,17 +2537,19 @@ function App({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadSt
   return (
     <ConnectionProvider>
       <CapabilitiesProvider>
-        <ContextSwitchProvider>
-          <DockProvider>
-            <KeyboardShortcutProvider>
-              <AppInner
-                manageDocumentTitle={manageDocumentTitle}
-                documentTitleSuffix={documentTitleSuffix}
-                onClusterLoadStateChange={onClusterLoadStateChange}
-              />
-            </KeyboardShortcutProvider>
-          </DockProvider>
-        </ContextSwitchProvider>
+        <RadarUpgradeProvider>
+          <ContextSwitchProvider>
+            <DockProvider>
+              <KeyboardShortcutProvider>
+                <AppInner
+                  manageDocumentTitle={manageDocumentTitle}
+                  documentTitleSuffix={documentTitleSuffix}
+                  onClusterLoadStateChange={onClusterLoadStateChange}
+                />
+              </KeyboardShortcutProvider>
+            </DockProvider>
+          </ContextSwitchProvider>
+        </RadarUpgradeProvider>
       </CapabilitiesProvider>
     </ConnectionProvider>
   )

@@ -1,0 +1,63 @@
+suite: extraArgs pass-through
+templates:
+  - deployment.yaml
+tests:
+  - it: renders no extra args by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --kubeconfig-dir=/kubeconfigs
+
+  - it: appends each entry to the container args
+    set:
+      extraArgs:
+        - --kubeconfig-dir=/kubeconfigs
+        - --list-page-size=200
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --kubeconfig-dir=/kubeconfigs
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --list-page-size=200
+
+  - it: puts a repeated scalar flag last so it wins
+    set:
+      listPageSize: 100
+      extraArgs:
+        - --list-page-size=200
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --list-page-size=100
+      - equal:
+          path: spec.template.spec.containers[0].args[-1]
+          value: --list-page-size=200
+
+  # A repeatable flag is appended, not substituted. radar rejects a duplicate
+  # --prometheus-cluster-label key, so both are rendered and the operator is
+  # told in values.yaml to use traffic.prometheusClusterLabels instead. This
+  # pins the behaviour rather than endorsing it.
+  - it: appends a repeatable flag alongside the chart-derived one
+    set:
+      traffic:
+        prometheusClusterLabels:
+          cluster: from-values
+      extraArgs:
+        - --prometheus-cluster-label=cluster=from-extra-args
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-cluster-label=cluster=from-values
+      - equal:
+          path: spec.template.spec.containers[0].args[-1]
+          value: --prometheus-cluster-label=cluster=from-extra-args
+
+  - it: renders each entry through tpl
+    set:
+      extraArgs:
+        - "--cluster-name={{ .Release.Name }}"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --cluster-name=RELEASE-NAME

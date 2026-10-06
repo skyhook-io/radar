@@ -174,11 +174,18 @@ func TestIntegrationReadBindings(t *testing.T) {
 		name, overrides      string
 		namespaced, cluster  []string
 		removeMap, removeKey bool
+		// radar:system and radar:ai:reader are bound whenever cloud mode renders
+		// RBAC at all, independent of the tier settings.
+		noSystem, noAI bool
 	}{
 		{name: "defaults", namespaced: all, cluster: all},
-		{name: "OSS", overrides: "cloud.enabled=false"},
+		{name: "OSS", overrides: "cloud.enabled=false", noSystem: true, noAI: true},
 		{name: "customer managed", overrides: "cloud.defaultRbac.create=false"},
-		{name: "RBAC disabled", overrides: "rbac.create=false"},
+		{name: "RBAC disabled", overrides: "rbac.create=false", noSystem: true, noAI: true},
+		{name: "system off", overrides: "cloud.systemRbac=false", namespaced: all, cluster: all, noSystem: true},
+		{name: "system and tiers off", overrides: "cloud.systemRbac=false,cloud.defaultRbac.create=false", noSystem: true},
+		{name: "ai off", overrides: "cloud.aiRbac=false", namespaced: all, cluster: all, noAI: true},
+		{name: "system, ai and tiers off", overrides: "cloud.systemRbac=false,cloud.aiRbac=false,cloud.defaultRbac.create=false", noSystem: true, noAI: true},
 		{name: "viewer disabled", overrides: "cloud.defaultRbac.viewer=false", namespaced: all[1:], cluster: all[1:]},
 		{name: "member addon off", overrides: "cloud.defaultRbac.integrationRead.member=false", namespaced: []string{"viewer", "owner"}, cluster: []string{"viewer", "owner"}},
 		{name: "owner addon off", overrides: "cloud.defaultRbac.integrationRead.owner=false", namespaced: all[:2], cluster: all[:2]},
@@ -194,8 +201,15 @@ func TestIntegrationReadBindings(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, docs := renderIntegrationReadChart(t, tc.overrides, tc.removeMap, tc.removeKey)
+			namespaced, cluster := tc.namespaced, tc.cluster
+			for identity, off := range map[string]bool{"system": tc.noSystem, "ai": tc.noAI} {
+				if !off {
+					namespaced = append(append([]string{}, namespaced...), identity)
+					cluster = append(append([]string{}, cluster...), identity)
+				}
+			}
 			wantDocs := 0
-			for scope, tiers := range map[string][]string{"namespaced": tc.namespaced, "cluster": tc.cluster} {
+			for scope, tiers := range map[string][]string{"namespaced": namespaced, "cluster": cluster} {
 				if len(tiers) == 0 {
 					continue
 				}
@@ -217,10 +231,16 @@ func TestIntegrationReadBindings(t *testing.T) {
 							continue
 						}
 						found = true
-						if doc.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: roleName}) || !reflect.DeepEqual(doc.Subjects, []rbacv1.Subject{
-							{Kind: "Group", Name: "radar:" + tier, APIGroup: rbacv1.GroupName},
-							{Kind: "Group", Name: "cloud:" + tier, APIGroup: rbacv1.GroupName},
-						}) {
+						group := "radar:" + tier
+						if tier == "ai" {
+							group = "radar:ai:reader"
+						}
+						wantSubjects := []rbacv1.Subject{{Kind: "Group", Name: group, APIGroup: rbacv1.GroupName}}
+						// radar:system and radar:ai:reader have no legacy cloud:* twin.
+						if tier != "system" && tier != "ai" {
+							wantSubjects = append(wantSubjects, rbacv1.Subject{Kind: "Group", Name: "cloud:" + tier, APIGroup: rbacv1.GroupName})
+						}
+						if doc.RoleRef != (rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: roleName}) || !reflect.DeepEqual(doc.Subjects, wantSubjects) {
 							t.Errorf("incorrect binding: %+v", doc)
 						}
 					}

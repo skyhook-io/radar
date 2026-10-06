@@ -2,7 +2,8 @@ import { ShieldCheck, ShieldAlert, ShieldQuestion } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section } from '../../ui/drawer-components'
 import { SEVERITY_BADGE } from '../../../utils/badge-colors'
-import { isForbiddenError } from '../../../types/fetch-error'
+import { RadarUpgradeNote } from '../../ui/RadarUpgradeNote'
+import { getRadarUpgradeRequirement, isForbiddenError } from '../../../types/fetch-error'
 import type { PolicyResourceResponse, PolicyResourceFinding } from '../../../types/policy'
 
 interface PolicySectionProps {
@@ -58,6 +59,14 @@ export function PolicySection({ data, loading, error }: PolicySectionProps) {
           <div className="text-sm text-theme-text-tertiary">
             You don’t have permission to view policy results in this namespace.
           </div>
+        </Section>
+      )
+    }
+    const upgrade = getRadarUpgradeRequirement(error)
+    if (upgrade) {
+      return (
+        <Section title={TITLE} icon={ShieldQuestion}>
+          <RadarUpgradeNote requirement={upgrade} />
         </Section>
       )
     }

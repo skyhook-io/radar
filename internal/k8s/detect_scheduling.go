@@ -931,6 +931,13 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Detection
 // an Event, falling back to EventTime (events API v1) when the legacy
 // First/LastTimestamp fields are unset.
 func eventLastTime(e *corev1.Event) time.Time {
+	// An event recorded through the events.k8s.io API carries its latest
+	// occurrence in Series.LastObservedTime; EventTime is the first one.
+	if e.Series != nil && !e.Series.LastObservedTime.Time.IsZero() {
+		if t := e.Series.LastObservedTime.Time; t.After(e.LastTimestamp.Time) {
+			return t
+		}
+	}
 	if !e.LastTimestamp.Time.IsZero() {
 		return e.LastTimestamp.Time
 	}

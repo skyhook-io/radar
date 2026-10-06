@@ -12,6 +12,8 @@ const capabilitiesMock = vi.hoisted(() => ({ localTerminal: true }))
 
 vi.mock('@skyhook-io/k8s-ui', () => ({
   ClusterName: ({ name }: { name: string }) => <span>{name}</span>,
+}))
+vi.mock('./dock/DockContext', () => ({
   useOpenLocalTerminal: () => vi.fn(),
 }))
 vi.mock('../api/client', () => ({

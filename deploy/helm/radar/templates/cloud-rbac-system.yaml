@@ -1,0 +1,69 @@
+{{- /*
+Read-only access for Radar Cloud's alerts worker and timeline puller.
+
+These background services read as radar:system. The default grant is view
+plus the cluster-read and integration-read add-ons and cluster-wide Secret
+read. Helm release alerts and Secret changes in the timeline need Secret read;
+Helm stores releases as Secrets. No writes.
+
+cloud.systemRbac controls only this chart's default grant, independently of
+cloud.defaultRbac. False or absent creates none and leaves customer bindings
+untouched. It is not a feature switch.
+
+A chart-owned role lets its rules change later without replacing the binding,
+whose roleRef is immutable. Aggregation keeps it equal to view with no curation.
+*/}}
+{{- if and (include "radar.cloudSystemRbac" . | eq "true") .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-system-read
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+aggregationRule:
+  clusterRoleSelectors:
+    - matchLabels:
+        rbac.authorization.k8s.io/aggregate-to-view: "true"
+# Omit rules because the aggregation controller owns them.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-system-read
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "radar.fullname" . }}-cloud-system-read
+subjects:
+  - kind: Group
+    name: radar:system
+    apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "radar.fullname" . }}-system-secrets-read
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-system-secrets-read
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "radar.fullname" . }}-system-secrets-read
+subjects:
+  - kind: Group
+    name: radar:system
+    apiGroup: rbac.authorization.k8s.io
+{{- end -}}

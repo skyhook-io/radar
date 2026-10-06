@@ -112,4 +112,29 @@ describe('NamespacePicker incomplete-list notice', () => {
     const { tooltip } = await renderOpen({ actives: [], mode: 'cluster-wide', authoritative: true })
     expect(tooltip).toBe('Currently viewing all namespaces. Click to narrow the view.')
   })
+
+  // The backend keeps saved picks through a failed namespace load, when the
+  // list it returns can be shorter than the pick.
+  it('lists a pick missing from the available namespaces so it can be unchecked', async () => {
+    const onApply = vi.fn()
+    await act(async () => {
+      root.render(
+        <NamespacePicker
+          scope={{ ...baseScope, actives: ['team-a', 'team-b'], accessibleNamespaces: ['team-a'] }}
+          onApply={onApply}
+        />,
+      )
+    })
+    const trigger = document.querySelector<HTMLButtonElement>('button[aria-label="Switch active namespaces"]')!
+    await act(async () => { trigger.click() })
+
+    const row = Array.from(document.querySelectorAll('label')).find(l => l.textContent?.includes('team-b'))
+    const checkbox = row?.querySelector<HTMLInputElement>('input[type="checkbox"]')
+    expect(checkbox?.checked).toBe(true)
+
+    await act(async () => { checkbox!.click() })
+    const done = Array.from(document.querySelectorAll('button')).find(b => b.textContent === 'Done')!
+    await act(async () => { done.click() })
+    expect(onApply).toHaveBeenCalledWith(['team-a'])
+  })
 })

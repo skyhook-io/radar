@@ -46,7 +46,7 @@ export function ValuesViewer({
 
   const previewMutation = useHelmPreviewValues()
   const applyMutation = useHelmApplyValues()
-  const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
+  const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct(namespace)
   const isHistoricalRevision = typeof revision === 'number' && typeof currentRevision === 'number' && revision !== currentRevision
 
   const canEdit = Boolean(namespace && name) && canHelmWrite && !isHistoricalRevision
