@@ -361,7 +361,15 @@ describe('Cluster plugin recovery destinations', () => {
 
   it('cannot obtain a recovery destination from a schedule parameter', async () => {
     const { assessRestoreSources } = await import('./restoreModel')
-    expect(assessRestoreSources(data, 'db', sourceCluster)).toMatchObject({ sources: [], recoveryState: 'unknown', disabledReason: undefined, unreadReason: expect.stringContaining('The Barman plugin names no ObjectStore') })
+    expect(assessRestoreSources(data, 'db', sourceCluster)).toEqual({ sources: [], recoveryState: 'none', unreadReason: undefined, disabledReason: 'Nothing to restore from yet: no backup destination and no completed Backup.' })
+  })
+  it('keeps a completed barman-cloud Backup unknown when the Cluster no longer names its ObjectStore', async () => {
+    const { assessRestoreSources } = await import('./restoreModel')
+    const completed = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Backup', metadata: { name: 'b1', namespace: 'db' }, spec: { cluster: { name: 'pg-a' }, method: 'plugin', pluginConfiguration: { name: 'barman-cloud.cloudnative-pg.io' } }, status: { phase: 'completed', backupId: 'x' } }
+    const assessment = assessRestoreSources({ ...data, objects: { ...data.objects, backups: [completed] } }, 'db', sourceCluster)
+    expect(assessment.recoveryState).toBe('unknown')
+    expect(assessment.unreadReason).toContain('Backup b1 completed with the barman-cloud plugin, but the Cluster no longer names an ObjectStore')
+    expect(assessment.disabledReason).toBeUndefined()
   })
   it('keeps unreadable or missing Cluster ObjectStores unknown and explains why', async () => {
     const { assessRestoreSources } = await import('./restoreModel')
@@ -406,11 +414,11 @@ describe('Cluster plugin recovery destinations', () => {
 })
 
 
-it('keeps unread schedule destinations unknown without disabling restore as empty', async () => {
+it('does not let unreadable schedules hide that a Cluster has nothing to restore from', async () => {
   const { assessRestoreSources } = await import('./restoreModel')
   const cluster = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'pg', namespace: 'db' }, spec: {} }
   const data = { coverage: { backups: { state: 'full' }, scheduledBackups: { state: 'denied' } }, objects: { backups: [], scheduledBackups: [] } } as any
-  expect(assessRestoreSources(data, 'db', cluster)).toMatchObject({ recoveryState: 'unknown', unreadReason: 'ScheduledBackup destinations could not be read in db.', disabledReason: undefined })
+  expect(assessRestoreSources(data, 'db', cluster)).toMatchObject({ recoveryState: 'none', unreadReason: undefined, disabledReason: 'Nothing to restore from yet: no backup destination and no completed Backup.' })
 })
 
 

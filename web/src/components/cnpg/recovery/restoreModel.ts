@@ -64,15 +64,11 @@ export type CNPGRestoreSourceState = 'available' | 'none' | 'unknown'
 
 export function assessRestoreSources(data: CNPGWorkspaceResponse | undefined, namespace: string, cluster: any): { sources: RestoreSource[]; recoveryState: CNPGRestoreSourceState; disabledReason?: string; unreadReason?: string } {
   const readable = !!data && coverageReadable(data.coverage.backups ?? { state: 'notInstalled' }, namespace)
-  const schedulesCoverage = data?.coverage.scheduledBackups ?? { state: 'notInstalled' }
-  const schedulesReadable = coverageReadable(schedulesCoverage, namespace)
-  const schedules = schedulesReadable ? data!.objects.scheduledBackups ?? [] : []
   const backups = readable ? data!.objects.backups ?? [] : []
   const sources = cluster ? restoreSourcesFor(cluster, backups) : []
   const unread: string[] = []
   if (!readable) unread.push(`Backup sources could not be read in ${namespace}.`)
   if (!cluster) unread.push('The source Cluster could not be read.')
-  if (!schedulesReadable && schedulesCoverage.state !== 'notInstalled') unread.push(`ScheduledBackup destinations could not be read in ${namespace}.`)
   const storesReadable = !!data && coverageReadable(data.coverage.objectStores ?? { state: 'notInstalled' }, namespace)
   const stores = storesReadable ? data!.objects.objectStores ?? [] : []
   const recordedRecovery = sources.some((source) => {
@@ -87,14 +83,17 @@ export function assessRestoreSources(data: CNPGWorkspaceResponse | undefined, na
     }
   }
   for (const plugin of cluster?.spec?.plugins ?? []) {
-    if (plugin.enabled === false) continue
-    if (plugin.name !== CNPG_BARMAN_PLUGIN_NAME) unread.push(`Recovery sources for plugin ${plugin.name} cannot be assessed.`)
-    else if (!plugin.parameters?.barmanObjectName && !sources.some((source) => source.kind === 'objectStore')) unread.push(`The Barman plugin names no ObjectStore, so its recovery sources cannot be assessed.`)
+    if (plugin.enabled !== false && plugin.name !== CNPG_BARMAN_PLUGIN_NAME) unread.push(`Recovery sources for plugin ${plugin.name} cannot be assessed.`)
   }
-  for (const declaration of [...schedules, ...backups]) {
-    if (declaration.spec?.cluster?.name !== cluster?.metadata?.name || declaration.metadata?.namespace !== namespace || !isApiGroup(declaration.apiVersion, 'postgresql.cnpg.io')) continue
-    if (declaration.spec?.method === 'plugin' && (getCNPGBackupPlugin(declaration)?.name !== CNPG_BARMAN_PLUGIN_NAME || !objectStoreForBackup(declaration, [cluster]))) {
-      unread.push(`Recovery sources for ${declaration.kind} ${declaration.metadata?.name} using plugin ${getCNPGBackupPlugin(declaration)?.name ?? '(not named)'} cannot be assessed.`)
+  // Schedules are not consulted: barman-cloud takes the destination from the
+  // Cluster, so a schedule neither adds a source nor hides one.
+  for (const backup of backups) {
+    if (backup.spec?.cluster?.name !== cluster?.metadata?.name || backup.metadata?.namespace !== namespace || !isApiGroup(backup.apiVersion, 'postgresql.cnpg.io') || backup.spec?.method !== 'plugin') continue
+    const pluginName = getCNPGBackupPlugin(backup)?.name
+    if (pluginName !== CNPG_BARMAN_PLUGIN_NAME) {
+      unread.push(`Recovery sources for Backup ${backup.metadata?.name} using plugin ${pluginName ?? '(not named)'} cannot be assessed.`)
+    } else if (backup.status?.phase === 'completed' && !objectStoreForBackup(backup, [cluster])) {
+      unread.push(`Backup ${backup.metadata?.name} completed with the barman-cloud plugin, but the Cluster no longer names an ObjectStore, so where it is stored is unknown.`)
     }
   }
   const recoveryState: CNPGRestoreSourceState = recordedRecovery ? 'available' : unread.length ? 'unknown' : 'none'
