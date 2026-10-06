@@ -20,6 +20,7 @@ import { restoreOperationObserver } from './restoreOperation'
 
 const cluster = {
   apiVersion: 'postgresql.cnpg.io/v1',
+  kind: 'Cluster',
   metadata: { name: 'pg-a', namespace: 'db' },
   spec: {
     instances: 3,
@@ -57,6 +58,16 @@ describe('restore sources', () => {
     const inTree = { ...pluginBackup, spec: { cluster: { name: 'pg-a' } }, status: { phase: 'completed', stoppedAt: 'x' } }
     expect(restoreSourceForBackup(inTree, cluster)).toMatchObject({ kind: 'backup', backup: 'b-plugin' })
     expect(restoreSourceForBackup({ ...pluginBackup, status: { phase: 'running' } }, cluster)).toBeNull()
+  })
+
+  it('ignores Backup parameters for the store and server, including the Cluster-name default', () => {
+    const conflicting = { ...pluginBackup, spec: { ...pluginBackup.spec, pluginConfiguration: { ...pluginBackup.spec.pluginConfiguration, parameters: { barmanObjectName: 'backup-store', serverName: 'backup-server' } } } }
+    expect(restoreSourceForBackup(conflicting, cluster)).toEqual(restoreSourceForBackup(pluginBackup, cluster))
+    const defaultServer = { ...cluster, spec: { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'cluster-store' } }] } }
+    expect(restoreSourceForBackup(conflicting, defaultServer)).toMatchObject({ objectStore: 'cluster-store', serverName: 'pg-a' })
+    expect(restoreSourceForBackup(conflicting, null)).toBeNull()
+    expect(restoreSourceForBackup(conflicting, { ...cluster, spec: { plugins: [{ name: 'barman-cloud.cloudnative-pg.io' }] } })).toBeNull()
+    expect(restoreSourceForBackup(conflicting, { ...cluster, spec: { plugins: [{ ...cluster.spec.plugins[0], enabled: false }] } })).toBeNull()
   })
 
   it('lists the store first, then completed Backups of this cluster only', () => {
@@ -343,32 +354,37 @@ it('separates declared destinations, unread sources and recorded recovery eviden
 })
 
 
-describe('schedule-level recovery destinations', () => {
+describe('Cluster plugin recovery destinations', () => {
   const sourceCluster = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'pg-a', namespace: 'db' }, spec: { plugins: [{ name: 'barman-cloud.cloudnative-pg.io' }] } }
   const schedule = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'ScheduledBackup', metadata: { name: 'nightly', namespace: 'db' }, spec: { cluster: { name: 'pg-a' }, method: 'plugin', pluginConfiguration: { name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store', serverName: 'pg-a-v2' } } } }
   const data = { coverage: { backups: { state: 'full' }, scheduledBackups: { state: 'full' }, objectStores: { state: 'full' } }, objects: { backups: [], scheduledBackups: [schedule], objectStores: [store] } } as any
 
-  it('reads a destination declared only by a schedule and records its recovery evidence', async () => {
+  it('cannot obtain a recovery destination from a schedule parameter', async () => {
     const { assessRestoreSources } = await import('./restoreModel')
-    expect(assessRestoreSources(data, 'db', sourceCluster)).toEqual({ sources: [{ kind: 'objectStore', objectStore: 'store', serverName: 'pg-a-v2' }], recoveryState: 'available', disabledReason: undefined, unreadReason: undefined })
+    expect(assessRestoreSources(data, 'db', sourceCluster)).toMatchObject({ sources: [], recoveryState: 'unknown', disabledReason: undefined, unreadReason: expect.stringContaining('The Barman plugin names no ObjectStore') })
   })
-  it('keeps unreadable or missing schedule ObjectStores unknown and explains why', async () => {
+  it('keeps unreadable or missing Cluster ObjectStores unknown and explains why', async () => {
     const { assessRestoreSources } = await import('./restoreModel')
     for (const state of ['denied', 'error', 'syncing', 'uncached']) {
-      const assessment = assessRestoreSources({ ...data, coverage: { ...data.coverage, objectStores: { state } } }, 'db', sourceCluster)
+      const assessment = assessRestoreSources({ ...data, coverage: { ...data.coverage, objectStores: { state } } }, 'db', cluster)
       expect(assessment.recoveryState).toBe('unknown')
       expect(assessment.unreadReason).toContain('ObjectStore store could not be read in db')
       expect(assessment.disabledReason).toBeUndefined()
       expect(assessment.sources).toEqual([{ kind: 'objectStore', objectStore: 'store', serverName: 'pg-a-v2' }])
     }
-    expect(assessRestoreSources({ ...data, objects: { ...data.objects, objectStores: [] } }, 'db', sourceCluster)).toMatchObject({ recoveryState: 'unknown', unreadReason: expect.stringContaining('ObjectStore store could not be read') })
+    expect(assessRestoreSources({ ...data, objects: { ...data.objects, objectStores: [] } }, 'db', cluster)).toMatchObject({ recoveryState: 'unknown', unreadReason: expect.stringContaining('ObjectStore store could not be read') })
   })
-  it('uses the shared resolver precedence and deduplicates matching destinations', () => {
-    const withStore = { ...sourceCluster, spec: cluster.spec }
-    expect(restoreSourcesFor(withStore, [], [schedule])).toEqual([{ kind: 'objectStore', objectStore: 'store', serverName: 'pg-a-v2' }])
+  it('does not add a conflicting schedule destination to the Cluster recovery sources', async () => {
+    const { assessRestoreSources } = await import('./restoreModel')
     const other = { ...schedule, spec: { ...schedule.spec, pluginConfiguration: { ...schedule.spec.pluginConfiguration, parameters: { barmanObjectName: 'schedule-store', serverName: 'schedule-server' } } } }
-    expect(restoreSourcesFor(withStore, [], [other])).toContainEqual({ kind: 'objectStore', objectStore: 'schedule-store', serverName: 'schedule-server' })
-    expect(restoreSourcesFor(sourceCluster, [], [{ ...schedule, metadata: { ...schedule.metadata, namespace: 'other' } }, { ...schedule, apiVersion: 'other.io/v1' }])).toEqual([])
+    expect(assessRestoreSources({ ...data, objects: { ...data.objects, scheduledBackups: [other] } }, 'db', cluster)).toEqual({ sources: [{ kind: 'objectStore', objectStore: 'store', serverName: 'pg-a-v2' }], recoveryState: 'available', disabledReason: undefined, unreadReason: undefined })
+    expect(restoreSourcesFor(sourceCluster, [])).toEqual([])
+  })
+  it('ignores schedules from another namespace or API group when assessing unsupported methods', async () => {
+    const { assessRestoreSources } = await import('./restoreModel')
+    const unsupported = { ...schedule, spec: { ...schedule.spec, pluginConfiguration: { name: 'other.example.com' } } }
+    const foreign = [{ ...unsupported, metadata: { ...schedule.metadata, namespace: 'other' } }, { ...unsupported, apiVersion: 'other.io/v1' }]
+    expect(assessRestoreSources({ ...data, objects: { ...data.objects, scheduledBackups: foreign } }, 'db', cluster)).toEqual({ sources: [{ kind: 'objectStore', objectStore: 'store', serverName: 'pg-a-v2' }], recoveryState: 'available', disabledReason: undefined, unreadReason: undefined })
   })
   it('keeps unsupported plugin methods unknown instead of claiming there are no backups', async () => {
     const { assessRestoreSources } = await import('./restoreModel')
@@ -382,7 +398,7 @@ describe('schedule-level recovery destinations', () => {
   })
   it('reserves none for assessed destinations with no recorded evidence', async () => {
     const { assessRestoreSources } = await import('./restoreModel')
-    const assessment = assessRestoreSources({ ...data, objects: { ...data.objects, objectStores: [{ ...store, status: {} }] } }, 'db', sourceCluster)
+    const assessment = assessRestoreSources({ ...data, objects: { ...data.objects, objectStores: [{ ...store, status: {} }] } }, 'db', cluster)
     expect(assessment.recoveryState).toBe('none')
     expect(assessment.unreadReason).toBeUndefined()
     expect(assessment.disabledReason).toBeUndefined()

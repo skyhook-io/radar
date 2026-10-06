@@ -113,15 +113,24 @@ describe('scheduledBackupOf / backupsForScheduledBackup', () => {
 describe('objectStoreForBackup / backupDestination', () => {
   const clusters = [pluginCluster('main', 'store-a')]
 
-  it('prefers the store the backup recorded', () => {
+  it('ignores the Backup parameter and infers the store from the current Cluster', () => {
     const b = backup('b', { spec: { method: 'plugin', pluginConfiguration: { name: PLUGIN, parameters: { barmanObjectName: 'store-b' } } } })
-    expect(objectStoreForBackup(b, clusters)).toEqual({ name: 'store-b', inferred: false })
+    expect(objectStoreForBackup(b, clusters)).toEqual({ name: 'store-a', inferred: true })
+    expect(backupDestination(b, clusters)).toEqual({ type: 'objectStore', name: 'store-a', inferred: true })
   })
 
   it("marks a store taken from the Cluster's current plugin as inferred", () => {
     const b = backup('b', { spec: { method: 'plugin', pluginConfiguration: { name: PLUGIN } } })
     expect(objectStoreForBackup(b, clusters)).toEqual({ name: 'store-a', inferred: true })
     expect(backupDestination(b, clusters)).toEqual({ type: 'objectStore', name: 'store-a', inferred: true })
+  })
+
+  it('cannot resolve a Backup parameter without a configured, readable target Cluster', () => {
+    const b = backup('b', { spec: { method: 'plugin', pluginConfiguration: { name: PLUGIN, parameters: { barmanObjectName: 'store-b' } } } })
+    for (const targets of [[], [cluster('main')], [pluginCluster('other', 'store-a')], [{ ...pluginCluster('main', 'store-a'), metadata: { name: 'main', namespace: 'other' } }], [cluster('main', 'pg', { plugins: [{ name: PLUGIN, enabled: false, parameters: { barmanObjectName: 'store-a' } }] })]]) {
+      expect(objectStoreForBackup(b, targets)).toBeNull()
+      expect(backupDestination(b, targets)).toEqual({ type: 'unknown' })
+    }
   })
 
   it('checks plugin identity before reading barmanObjectName', () => {
@@ -135,6 +144,23 @@ describe('objectStoreForBackup / backupDestination', () => {
     expect(backupDestination(backup('b', { status: { method: 'barmanObjectStore', destinationPath: 's3://x' } }), clusters)).toEqual({ type: 'path', path: 's3://x' })
     expect(backupDestination(backup('b', { spec: { method: 'volumeSnapshot' } }), clusters)).toEqual({ type: 'volumeSnapshot' })
     expect(backupDestination(backup('b'), clusters)).toEqual({ type: 'unknown' })
+  })
+})
+
+describe('barman-cloud schedule destinations', () => {
+  const schedule = { apiVersion: PG, kind: 'ScheduledBackup', metadata: { name: 'nightly', namespace: 'pg' }, spec: { cluster: { name: 'main' }, method: 'plugin', pluginConfiguration: { name: PLUGIN, parameters: { barmanObjectName: 'schedule-store', serverName: 'schedule-server' } } } }
+
+  it('blocks a schedule override when the Cluster plugin has no destination', () => {
+    const target = cluster('main', 'pg', { plugins: [{ name: PLUGIN }] })
+    expect(cnpgScheduleDestinationBlocker(schedule, [target])).toBe('No backup destination')
+    expect(objectStoreForBackup(schedule, [target])).toBeNull()
+  })
+
+  it('uses the configured Cluster destination despite a conflicting schedule override', () => {
+    const target = pluginCluster('main', 'cluster-store')
+    expect(cnpgScheduleDestinationBlocker(schedule, [target])).toBeNull()
+    expect(objectStoreForBackup(schedule, [target])).toEqual({ name: 'cluster-store', inferred: true })
+    expect(cnpgScheduleDestinationBlocker(schedule, [cluster('main', 'pg', { plugins: [{ name: PLUGIN, enabled: false, parameters: { barmanObjectName: 'cluster-store' } }] })])).toBe('No backup destination')
   })
 })
 

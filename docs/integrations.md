@@ -906,7 +906,7 @@ The `ObjectStore` itself is rendered: destination and credential provider (never
 
 Two states carry the weight. A failure newer than the last success means the window has stopped advancing while its oldest point still ages out under retention — shrinking from both ends, so it is called out rather than left to be inferred from two timestamps. An ObjectStore with an empty `serverRecoveryWindow` is reported as holding nothing restorable rather than as healthy: on the plugin path the Cluster publishes no recovery point of its own, so a green badge here would be the only claim on screen and it would be wrong.
 
-`Backup` and `ScheduledBackup` with `spec.method: plugin` name the plugin and link to the ObjectStore they write into, and suppress the in-tree `destinationPath` / `serverName` rows, which are never populated on that path.
+`Backup` and `ScheduledBackup` with `spec.method: plugin` name the plugin and suppress the in-tree `destinationPath` / `serverName` rows, which are never populated on that path. For barman-cloud, their destination comes from the Cluster’s plugin entry; their own plugin parameters are ignored. The standalone renderers explain this without presenting a parameter as a destination link. Workspace destination links are inferred from the current Cluster configuration. Radar does not model third-party plugin destinations.
 
 ### Declarative objects: Database, Publication, Subscription
 

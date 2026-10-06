@@ -32,34 +32,24 @@ export function restoreSourceForBackup(backup: any, sourceCluster: any | null): 
   const name = backup.metadata?.name
   if (!isPluginBackup(backup)) return { kind: 'backup', backup: name, backupEnd: backupEnd(backup) }
   if (getCNPGBackupPlugin(backup)?.name !== CNPG_BARMAN_PLUGIN_NAME) return null
-  const params = backup.spec?.pluginConfiguration?.parameters ?? {}
-  const plugin = (sourceCluster?.spec?.plugins ?? []).find((p: any) => p?.name === CNPG_BARMAN_PLUGIN_NAME)
-  const objectStore = params.barmanObjectName || plugin?.parameters?.barmanObjectName
-  const serverName = params.serverName || plugin?.parameters?.serverName || backup.spec?.cluster?.name
+  const plugin = sourceCluster ? getCNPGClusterBarmanPlugin(sourceCluster) : null
+  const objectStore = plugin?.barmanObjectName
+  const serverName = plugin?.serverName
   const backupID = backup.status?.backupId
   if (!objectStore || !serverName || !backupID) return null
   return { kind: 'objectStore', objectStore, serverName, backupID, backupName: name, backupEnd: backupEnd(backup) }
 }
 
 /** Where a Cluster's backups can be restored from, in order of preference. */
-export function restoreSourcesFor(cluster: any, backups: any[], schedules: any[] = []): RestoreSource[] {
+export function restoreSourcesFor(cluster: any, backups: any[]): RestoreSource[] {
   const name = cluster?.metadata?.name
   const out: RestoreSource[] = []
-  const plugin = (cluster?.spec?.plugins ?? []).find((p: any) => p?.name === CNPG_BARMAN_PLUGIN_NAME && p?.enabled !== false)
-  if (plugin?.parameters?.barmanObjectName) {
-    out.push({ kind: 'objectStore', objectStore: plugin.parameters.barmanObjectName, serverName: plugin.parameters.serverName || name })
+  const plugin = cluster ? getCNPGClusterBarmanPlugin(cluster) : null
+  if (plugin?.barmanObjectName) {
+    out.push({ kind: 'objectStore', objectStore: plugin.barmanObjectName, serverName: plugin.serverName || name })
   }
   const inTree = cluster?.spec?.backup?.barmanObjectStore
   if (inTree) out.push({ kind: 'inTree', barmanObjectStore: inTree, serverName: inTree.serverName || name })
-  for (const schedule of schedules) {
-    if (schedule?.spec?.cluster?.name !== name || schedule?.metadata?.namespace !== cluster?.metadata?.namespace || !isApiGroup(schedule?.apiVersion, 'postgresql.cnpg.io')) continue
-    const store = objectStoreForBackup(schedule, [cluster])
-    if (!store) continue
-    const serverName = schedule.spec?.pluginConfiguration?.parameters?.serverName || plugin?.parameters?.serverName || name
-    if (!out.some((s) => s.kind === 'objectStore' && s.objectStore === store.name && s.serverName === serverName)) {
-      out.push({ kind: 'objectStore', objectStore: store.name, serverName })
-    }
-  }
   const completed = backups
     .filter((b) => b?.spec?.cluster?.name === name && b?.metadata?.namespace === cluster?.metadata?.namespace && isApiGroup(b?.apiVersion ?? 'postgresql.cnpg.io/v1', 'postgresql.cnpg.io'))
     .sort((a, b) => Date.parse(backupEnd(b) ?? '') - Date.parse(backupEnd(a) ?? ''))
@@ -78,7 +68,7 @@ export function assessRestoreSources(data: CNPGWorkspaceResponse | undefined, na
   const schedulesReadable = coverageReadable(schedulesCoverage, namespace)
   const schedules = schedulesReadable ? data!.objects.scheduledBackups ?? [] : []
   const backups = readable ? data!.objects.backups ?? [] : []
-  const sources = cluster ? restoreSourcesFor(cluster, backups, schedules) : []
+  const sources = cluster ? restoreSourcesFor(cluster, backups) : []
   const unread: string[] = []
   if (!readable) unread.push(`Backup sources could not be read in ${namespace}.`)
   if (!cluster) unread.push('The source Cluster could not be read.')

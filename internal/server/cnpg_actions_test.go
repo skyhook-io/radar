@@ -192,7 +192,7 @@ func TestCNPGActionBackupCreatesExactBody(t *testing.T) {
 	online := false
 	res, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "backup", cnpgActionReq(t, cnpgActionFacts(), map[string]any{
 		"method": "plugin", "pluginName": "barman-cloud.cloudnative-pg.io",
-		"pluginParameters": map[string]string{"barmanObjectName": "store"}, "target": "primary", "online": online,
+		"target": "primary", "online": online,
 	}))
 	if err != nil {
 		t.Fatalf("backup: %v", err)
@@ -214,7 +214,7 @@ func TestCNPGActionBackupCreatesExactBody(t *testing.T) {
 		"spec": map[string]any{
 			"cluster":             map[string]any{"name": "pg"},
 			"method":              "plugin",
-			"pluginConfiguration": map[string]any{"name": "barman-cloud.cloudnative-pg.io", "parameters": map[string]any{"barmanObjectName": "store"}},
+			"pluginConfiguration": map[string]any{"name": "barman-cloud.cloudnative-pg.io"},
 			"target":              "primary",
 			"online":              false,
 		},
@@ -223,6 +223,43 @@ func TestCNPGActionBackupCreatesExactBody(t *testing.T) {
 	wb, _ := json.Marshal(want)
 	if string(gb) != string(wb) {
 		t.Errorf("backup body\n got %s\nwant %s", gb, wb)
+	}
+}
+
+func TestCNPGActionBackupRejectsBarmanDestinationParameters(t *testing.T) {
+	for _, key := range []string{"barmanObjectName", "serverName"} {
+		for _, value := range []string{"override", ""} {
+			t.Run(key+"="+value, func(t *testing.T) {
+				env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil)})
+				_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "backup", cnpgActionReq(t, cnpgActionFacts(), map[string]any{
+					"method": "plugin", "pluginName": "barman-cloud.cloudnative-pg.io", "pluginParameters": map[string]string{key: value},
+				}))
+				ae, ok := cnpgActionStatus(t, err)
+				if !ok || ae.Status != http.StatusBadRequest || !strings.Contains(err.Error(), "the barman-cloud plugin takes its destination from the Cluster") || !strings.Contains(err.Error(), "pluginParameters."+key) || len(env.creates) != 0 {
+					t.Fatalf("backup: %v, creates=%d, want 400 explaining the ignored parameter and no create", err, len(env.creates))
+				}
+			})
+		}
+	}
+}
+
+func TestCNPGActionBackupForwardsThirdPartyParameters(t *testing.T) {
+	const plugin = "other.example.com"
+	cluster := cnpgActionCluster(func(o map[string]any) {
+		o["spec"].(map[string]any)["plugins"] = []any{map[string]any{"name": plugin}}
+		o["status"].(map[string]any)["pluginStatus"] = []any{map[string]any{"name": plugin, "backupCapabilities": []any{"TYPE_BACKUP"}}}
+	})
+	env := newCNPGActionEnv(t, []runtime.Object{cluster})
+	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "backup", cnpgActionReq(t, cnpgActionFacts(), map[string]any{
+		"method": "plugin", "pluginName": plugin, "pluginParameters": map[string]string{"barmanObjectName": "third-party-store", "serverName": "third-party-server", "custom": "value"},
+	}))
+	if err != nil || len(env.creates) != 1 {
+		t.Fatalf("backup: %v, creates=%d", err, len(env.creates))
+	}
+	got, _, err := unstructured.NestedMap(env.creates[0].Object, "spec", "pluginConfiguration")
+	body, _ := json.Marshal(got)
+	if err != nil || string(body) != `{"name":"other.example.com","parameters":{"barmanObjectName":"third-party-store","custom":"value","serverName":"third-party-server"}}` {
+		t.Fatalf("pluginConfiguration = %s, err=%v", body, err)
 	}
 }
 
@@ -889,14 +926,17 @@ func TestCNPGScheduleRunDestinationGuard(t *testing.T) {
 	for _, tc := range []struct {
 		name, method string
 		configure    bool
+		override     bool
 	}{
-		{"default without destination", "", false},
-		{"in-tree without destination", "barmanObjectStore", false},
-		{"in-tree with destination", "barmanObjectStore", true},
-		{"snapshot without configuration", "volumeSnapshot", false},
-		{"snapshot configured", "volumeSnapshot", true},
-		{"plugin without destination", "plugin", false},
-		{"plugin configured", "plugin", true},
+		{"default without destination", "", false, false},
+		{"in-tree without destination", "barmanObjectStore", false, false},
+		{"in-tree with destination", "barmanObjectStore", true, false},
+		{"snapshot without configuration", "volumeSnapshot", false, false},
+		{"snapshot configured", "volumeSnapshot", true, false},
+		{"plugin without destination", "plugin", false, false},
+		{"plugin configured", "plugin", true, false},
+		{"plugin schedule parameter without Cluster destination", "plugin", false, true},
+		{"plugin conflicting schedule parameter with Cluster destination", "plugin", true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cluster := cnpgActionCluster(func(o map[string]any) {
@@ -923,6 +963,9 @@ func TestCNPGScheduleRunDestinationGuard(t *testing.T) {
 				delete(spec, "pluginConfiguration")
 				if tc.method == "plugin" {
 					spec["pluginConfiguration"] = map[string]any{"name": "barman-cloud.cloudnative-pg.io"}
+					if tc.override {
+						spec["pluginConfiguration"].(map[string]any)["parameters"] = map[string]any{"barmanObjectName": "schedule-store", "serverName": "schedule-server"}
+					}
 				}
 			})
 			env := newCNPGActionEnv(t, []runtime.Object{cluster, schedule})
@@ -991,6 +1034,30 @@ func TestCNPGBackupDestinationGuard(t *testing.T) {
 	var ae *actionError
 	if !errors.As(err, &ae) || ae.Code != "blocked" || len(env.creates) != 0 {
 		t.Fatalf("backup: %v, creates=%d", err, len(env.creates))
+	}
+}
+
+func TestCNPGBackupDestinationGuardRequiresClusterPluginDestination(t *testing.T) {
+	cluster := cnpgActionCluster(func(o map[string]any) {
+		o["spec"].(map[string]any)["plugins"] = []any{map[string]any{"name": "barman-cloud.cloudnative-pg.io"}}
+	})
+	if reason := cnpgBackupDestinationGuard(cluster, "plugin", "barman-cloud.cloudnative-pg.io"); reason == "" {
+		t.Fatal("missing Cluster plugin destination was allowed")
+	}
+	env := newCNPGActionEnv(t, []runtime.Object{cluster})
+	_, err := runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "backup", cnpgActionReq(t, cnpgActionFacts(), map[string]any{
+		"method": "plugin", "pluginName": "barman-cloud.cloudnative-pg.io", "pluginParameters": map[string]string{"barmanObjectName": "request-store"},
+	}))
+	ae, ok := cnpgActionStatus(t, err)
+	if !ok || ae.Status != http.StatusBadRequest || !strings.Contains(err.Error(), "the barman-cloud plugin takes its destination from the Cluster") || len(env.creates) != 0 {
+		t.Fatalf("request override: %v, creates=%d, want 400 and no create", err, len(env.creates))
+	}
+	_, err = runCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "backup", cnpgActionReq(t, cnpgActionFacts(), map[string]any{
+		"method": "plugin", "pluginName": "barman-cloud.cloudnative-pg.io",
+	}))
+	ae, ok = cnpgActionStatus(t, err)
+	if !ok || ae.Code != "blocked" || len(env.creates) != 0 {
+		t.Fatalf("missing Cluster destination: %v, creates=%d, want blocked and no create", err, len(env.creates))
 	}
 }
 

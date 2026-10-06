@@ -189,6 +189,16 @@ describe('buildCNPGFleet', () => {
     expect(r.protection.restoreValidation.tone).toBe('unknown')
   })
 
+  it('matches a restored Cluster’s external source despite conflicting Backup parameters', () => {
+    const src = cluster('pg-a', 'db', { spec: { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'cluster-store', serverName: 'cluster-server' } }] } })
+    const conflicting = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Backup', metadata: { name: 'b', namespace: 'db' }, spec: { cluster: { name: 'pg-a' }, method: 'plugin', pluginConfiguration: { name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'backup-store', serverName: 'backup-server' } } }, status: { phase: 'completed' } }
+    const restored = cluster('pg-a-restore', 'db', { spec: { bootstrap: { recovery: { source: 'origin' } }, externalClusters: [{ name: 'origin', plugin: { name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'cluster-store', serverName: 'cluster-server' } } }] } })
+    const fact = buildCNPGFleet(resp({ clusters: [src, restored], backups: [conflicting] })).rows.find((r) => r.name === 'pg-a')!.protection.restoreValidation
+    expect(fact).toMatchObject({ text: 'Restored into pg-a-restore', tone: 'neutral' })
+    const wrongSource = { ...restored, spec: { ...restored.spec, externalClusters: [{ name: 'origin', plugin: { name: 'barman-cloud.cloudnative-pg.io', parameters: conflicting.spec.pluginConfiguration.parameters } }] } }
+    expect(buildCNPGFleet(resp({ clusters: [src, wrongSource], backups: [conflicting] })).rows.find((r) => r.name === 'pg-a')!.protection.restoreValidation).toMatchObject({ text: 'None recorded', tone: 'unknown' })
+  })
+
   it('reads a recorded validation note on the restored cluster, still never healthy', () => {
     const plugin = { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }] }
     const src = cluster('pg-a', 'db', { metadata: { uid: 'uid-a' }, spec: plugin })

@@ -434,14 +434,14 @@ func cnpgBackupMethods(cluster *unstructured.Unstructured) []CNPGBackupMethodFac
 		out = append(out, CNPGBackupMethodFact{Method: "barmanObjectStore", Capability: "backup", Deprecated: true})
 	}
 	for i := range out {
-		if reason := cnpgBackupDestinationGuard(cluster, out[i].Method, out[i].PluginName, nil); reason != "" {
+		if reason := cnpgBackupDestinationGuard(cluster, out[i].Method, out[i].PluginName); reason != "" {
 			out[i].Capability, out[i].Reason = "none", reason
 		}
 	}
 	return out
 }
 
-func cnpgBackupDestinationGuard(cluster *unstructured.Unstructured, method, pluginName string, parameters map[string]string) string {
+func cnpgBackupDestinationGuard(cluster *unstructured.Unstructured, method, pluginName string) string {
 	if method == "" {
 		method = "barmanObjectStore"
 	}
@@ -480,9 +480,7 @@ func cnpgBackupDestinationGuard(cluster *unstructured.Unstructured, method, plug
 			if pluginName == "barman-cloud.cloudnative-pg.io" {
 				cfg, _ := p["parameters"].(map[string]any)
 				if cfg["barmanObjectName"] == "" || cfg["barmanObjectName"] == nil {
-					if parameters["barmanObjectName"] == "" {
-						return missing
-					}
+					return missing
 				}
 			}
 			return ""
@@ -1161,8 +1159,7 @@ func cnpgScheduleFactsOf(ctx context.Context, c cnpgActionClients, sched *unstru
 		f.ClusterState = "hibernated"
 	default:
 		f.ClusterState = "ok"
-		parameters, _, _ := unstructured.NestedStringMap(sched.Object, "spec", "pluginConfiguration", "parameters")
-		f.BackupBlockedReason = cnpgBackupDestinationGuard(cluster, f.Method, f.PluginName, parameters)
+		f.BackupBlockedReason = cnpgBackupDestinationGuard(cluster, f.Method, f.PluginName)
 	}
 	return f
 }
@@ -1467,6 +1464,13 @@ func cnpgRunBackup(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, e
 	if err := decodeActionParams(x.params, &p); err != nil {
 		return nil, err
 	}
+	if p.Method == "plugin" && p.PluginName == "barman-cloud.cloudnative-pg.io" {
+		for _, key := range []string{"barmanObjectName", "serverName"} {
+			if _, ok := p.PluginParameters[key]; ok {
+				return nil, refuseAction(http.StatusBadRequest, "", "the barman-cloud plugin takes its destination from the Cluster; pluginParameters.%s is ignored by the plugin", key)
+			}
+		}
+	}
 	if r := cnpgGuardBackup(x.facts); r != "" {
 		return nil, blockedAction(r)
 	}
@@ -1480,7 +1484,7 @@ func cnpgRunBackup(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, e
 	if chosen == nil {
 		return nil, refuseAction(http.StatusBadRequest, "", "method %q%s is not a backup method this cluster declares", p.Method, cnpgPluginSuffix(p.PluginName))
 	}
-	if r := cnpgBackupDestinationGuard(x.cluster, p.Method, p.PluginName, p.PluginParameters); r != "" {
+	if r := cnpgBackupDestinationGuard(x.cluster, p.Method, p.PluginName); r != "" {
 		return nil, blockedAction(r)
 	}
 	if chosen.Capability == "none" {

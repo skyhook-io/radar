@@ -162,18 +162,15 @@ export function backupTime(backup: any): number {
 }
 
 /**
- * The ObjectStore a barman-cloud plugin Backup or ScheduledBackup names. Its own
- * plugin parameters take precedence; the target Cluster's plugin
- * configuration is only what it is configured with now, so a store taken from
- * there is marked inferred.
+ * Barman-cloud ignores Backup and ScheduledBackup parameters. The current
+ * Cluster plugin chooses the ObjectStore; it may have changed since a Backup
+ * ran, so the historical destination remains inferred.
  */
 export function objectStoreForBackup(backup: any, clusters: any[]): { name: string; inferred: boolean } | null {
   const method = backup?.status?.method || backup?.spec?.method
   if (method !== 'plugin') return null
   const cfg = backup?.spec?.pluginConfiguration
   if (cfg?.name !== CNPG_BARMAN_PLUGIN_NAME) return null
-  const own = cfg?.parameters?.barmanObjectName
-  if (typeof own === 'string' && own) return { name: own, inferred: false }
   const cluster = targetCluster(backup, clusters)
   const current = cluster ? getCNPGClusterBarmanPlugin(cluster)?.barmanObjectName : undefined
   return current ? { name: current, inferred: true } : null
@@ -209,7 +206,7 @@ export function cnpgScheduleDestinationBlocker(schedule: any, clusters: any[]): 
     const name = schedule.spec?.pluginConfiguration?.name
     const plugin = cluster.spec?.plugins?.find((p: any) => p.name === name && p.enabled !== false)
     if (!plugin) return missing
-    if (name === CNPG_BARMAN_PLUGIN_NAME && !(schedule.spec?.pluginConfiguration?.parameters?.barmanObjectName || plugin.parameters?.barmanObjectName)) return missing
+    if (name === CNPG_BARMAN_PLUGIN_NAME && !plugin.parameters?.barmanObjectName) return missing
   }
   return null
 }
