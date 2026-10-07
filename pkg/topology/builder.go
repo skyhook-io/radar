@@ -3630,6 +3630,12 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			},
 		})
 
+		refs := workloadRefs{secrets: make(map[string]bool)}
+		for _, ref := range configrefs.IngressTLSSecretReferences(ing) {
+			refs.secrets[ref.Name] = true
+		}
+		trackWorkloadRefs(ingID, ing.Namespace, refs)
+
 		// Connect to backend Services
 		for _, rule := range ing.Spec.Rules {
 			if rule.HTTP == nil {
