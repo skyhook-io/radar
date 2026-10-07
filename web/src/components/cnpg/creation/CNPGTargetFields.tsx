@@ -88,7 +88,7 @@ export function CNPGTargetFields({
               )}
               <p className="text-xs text-theme-text-tertiary">
                 {imageRequired
-                  ? 'The source image was not readable. Set an image for the same PostgreSQL major before restoring.'
+                  ? 'Choose an image for the PostgreSQL major used by the backup before restoring.'
                   : 'Leave this empty to use the image selected by the operator.'}
               </p>
             </>

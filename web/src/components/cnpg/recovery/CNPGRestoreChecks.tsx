@@ -120,7 +120,10 @@ function RestoreFacts({ d }: { d: CNPGRestoreChecksResponse }) {
           {d.contents ? (
             <>
               <span className="text-theme-text-primary">
-                {d.contents.tables} {d.contents.tables === 1 ? 'table' : 'tables'} · {approxRows(d.contents.estimatedRows)}
+                {d.contents.tables} {d.contents.tables === 1 ? 'table' : 'tables'} ·{' '}
+                {d.contents.noEstimate > 0 && d.contents.estimatedRows === 0
+                  ? 'Row estimate unavailable'
+                  : `${approxRows(d.contents.estimatedRows)}${d.contents.noEstimate > 0 ? ' (partial estimate)' : ''}`}
               </span>
               {d.contents.largest.length > 0 && (
                 <div className="mt-0.5 text-xs text-theme-text-secondary">
