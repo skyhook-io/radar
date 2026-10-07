@@ -559,6 +559,15 @@ reference permissions independently. Monitoring uses `monitors` and
 policies use `stagedPolicies` rather than `selectedBy`. Cluster API Clusters
 expose their `healthChecks`; a MachineHealthCheck's Cluster is a dependency.
 
+Resource context's `uses` includes declared PodSpec references from regular,
+init and ephemeral containers, projected volumes, image-pull credentials and
+volume-driver credentials. `referencedBy` on core ConfigMaps, Secrets, PVCs and
+ServiceAccounts includes both workload templates and actual Pods, including
+controlled Pods whose admitted spec may differ from the current template.
+ReplicaSet templates remain separate evidence. References are scoped and
+permission-filtered, with field paths and a bounded visible-only count; they
+describe declarations rather than proving a successful mount or active read.
+
 ### Write Tools
 
 | Tool | Description | Parameters |
