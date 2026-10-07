@@ -260,10 +260,10 @@ export async function fetchAgents(
   const body = (await res.json()) as AgentsResponse & {
     agents: AgentInfo[] | null;
   };
-  // The server builds this list with `var out []AgentInfo`, so "no agent found"
-  // arrives as JSON null, not []. Normalise here: that is the single most common
-  // response on a machine with no CLI, and every caller that reached for .filter
-  // would throw on it.
+  // Older Radar servers send "no agent found" as JSON null, not []. This client
+  // also runs against servers of other versions, and that is the single most
+  // common response on a machine with no CLI, so normalise here rather than in
+  // every caller that reaches for .filter.
   return { ...body, agents: body.agents ?? [] };
 }
 

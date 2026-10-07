@@ -186,6 +186,11 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	} else {
 		agents = ai.DetectAgents(r.Context(), withVersions)
 	}
+	if agents == nil {
+		// A nil slice encodes as null. Clients read this list as an array, and
+		// "nothing installed" is the response the setup UI exists for.
+		agents = []ai.AgentInfo{}
+	}
 	// Every local agent runs through the run manager, which performs the
 	// confirmed apply turn and the verification that follows it.
 	for i := range agents {

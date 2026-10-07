@@ -149,6 +149,28 @@ func TestListAgents_Eligible(t *testing.T) {
 	}
 }
 
+// TestListAgents_NoneInstalledIsAnEmptyList pins the wire shape a machine with
+// no agent CLI gets: an empty array, never null.
+func TestListAgents_NoneInstalledIsAnEmptyList(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", "")
+	t.Setenv("LOCALAPPDATA", "")
+	s := &Server{authConfig: auth.Config{Mode: "none"}}
+	rec := httptest.NewRecorder()
+	s.handleListAgents(rec, httptest.NewRequest(http.MethodGet, "/api/agents", nil))
+	var resp struct {
+		Agents json.RawMessage `json:"agents"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Detection also probes fixed system directories, so a machine with a CLI
+	// in /usr/local/bin returns a populated list here. Either way, never null.
+	if string(resp.Agents) == "null" {
+		t.Fatal(`agents encoded as null, want an array ("[]" when nothing is installed)`)
+	}
+}
+
 // TestDiagnoseConsentOriginGate pins the CSRF guard on the process-spawning
 // diagnose POSTs at the handler layer: the guard must admit a genuinely
 // same-origin browser POST even on a non-loopback listener

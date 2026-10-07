@@ -385,8 +385,8 @@ describe("fetchAgents agents normalisation", () => {
   };
 
   it("turns the server's null agent list into an empty array", async () => {
-    // Go sends `var out []AgentInfo` as null, and this is the response a machine
-    // with no CLI installed gets — the case callers most need to survive.
+    // Older servers send null for a machine with no CLI installed, the case
+    // callers most need to survive.
     const r = await withFetch({
       agents: null,
       enabled: false,
