@@ -318,6 +318,13 @@ entries:
     decision: grant
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "gateway.networking.k8s.io"
+    resources: ["udproutes"]
+    scope: Namespaced
+    collection: "gatewayApi"
+    decision: withhold
+    reason: "Experimental route drawer is supported, but startup collection and backend topology support are separate work. No new integration permission is granted."
+    source: "packages/k8s-ui/src/components/resources/renderers/SimpleRouteRenderer.tsx"
   - group: "helm.crossplane.io"
     resources: ["providerconfigs"]
     scope: Cluster

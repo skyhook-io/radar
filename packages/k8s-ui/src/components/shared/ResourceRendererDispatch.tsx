@@ -751,7 +751,9 @@ export function ResourceRendererDispatch({
     && !!data?.apiVersion
     && !data.apiVersion.startsWith('batch/')
 
-  const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
+  const isUDPRoute = kind === 'udproutes' && isApiGroup(data?.apiVersion, 'gateway.networking.k8s.io')
+
+  const isKnownKind = KNOWN_KINDS.has(kind) || isUDPRoute || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
   const JobComp = rendererOverrides?.JobRenderer ?? JobRenderer
   const JobSetComp = rendererOverrides?.JobSetRenderer ?? JobSetRenderer
@@ -860,6 +862,7 @@ export function ResourceRendererDispatch({
         {kind === 'grpcroutes' && <GRPCRouteRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'tcproutes' && <SimpleRouteRenderer data={data} kind="TCPRoute" onNavigate={onNavigate} />}
         {kind === 'tlsroutes' && <SimpleRouteRenderer data={data} kind="TLSRoute" onNavigate={onNavigate} />}
+        {isUDPRoute && <SimpleRouteRenderer data={data} kind="UDPRoute" onNavigate={onNavigate} />}
         {kind === 'sealedsecrets' && <SealedSecretRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'workflowtemplates' || kind === 'clusterworkflowtemplates') && <WorkflowTemplateRenderer data={data} />}
         {isCoreNetworkPolicy && <NetworkPolicyRenderer data={data} />}
@@ -1190,7 +1193,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     return getGatewayStatus(data)
   }
   if (k === 'gatewayclasses') return getGatewayClassStatus(data)
-  if (k === 'httproutes' || k === 'grpcroutes' || k === 'tcproutes' || k === 'tlsroutes') return getRouteStatus(data)
+  if (k === 'httproutes' || k === 'grpcroutes' || k === 'tcproutes' || k === 'tlsroutes' || (k === 'udproutes' && isApiGroup(data?.apiVersion, 'gateway.networking.k8s.io'))) return getRouteStatus(data)
   if (k === 'sealedsecrets') return getSealedSecretStatus(data)
   if (k === 'poddisruptionbudgets') return getPDBStatus(data)
   if (k === 'gitrepositories') return getGitRepositoryStatus(data)

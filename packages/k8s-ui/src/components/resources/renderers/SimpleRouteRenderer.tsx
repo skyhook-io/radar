@@ -6,7 +6,7 @@ import { gatewayBackendResourceRef, gatewayParentResourceRef } from '../../../ut
 
 interface SimpleRouteRendererProps {
   data: any
-  kind: 'TCPRoute' | 'TLSRoute'
+  kind: 'TCPRoute' | 'TLSRoute' | 'UDPRoute'
   onNavigate?: (ref: ResourceRef) => void
 }
 
