@@ -20,6 +20,8 @@ export {
   cnpgScheduleDestinationBlocker,
   objectStoreForBackup,
   cnpgBackupMatchesCluster,
+  cnpgArchiveMatchesCluster,
+  type CNPGArchiveSource,
   inferredObjectStoreHealth,
   relationUnavailable,
   usersOfObjectStore,

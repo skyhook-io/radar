@@ -89,10 +89,8 @@ export function dismissCNPGOperation(id: string) {
   emit(ops.filter((o) => o.id !== id))
 }
 
-export function useCNPGOperations(filter?: { context?: string; namespace: string; cluster: string }): CNPGTrackedOperation[] {
-  const all = useSyncExternalStore(subscribe, () => ops, () => ops)
-  if (!filter) return all
-  return all.filter((o) => o.namespace === filter.namespace && o.cluster === filter.cluster && (!filter.context || o.context === filter.context))
+export function useCNPGOperations(): CNPGTrackedOperation[] {
+  return useSyncExternalStore(subscribe, () => ops, () => ops)
 }
 
 export function resetCNPGOperationsForTest() {

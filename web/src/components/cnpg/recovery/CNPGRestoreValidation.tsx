@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
-import { ActionConfirmDialog, Badge, formatAge, isApiGroup } from '@skyhook-io/k8s-ui'
+import { ActionConfirmDialog, Badge, cnpgRecoveryMatchesCluster, formatAge, isApiGroup } from '@skyhook-io/k8s-ui'
 import { useCNPGClusterCapabilities, useCNPGWorkspace } from '../../../api/cnpg'
 import { useRecordCNPGRestoreValidation, type CNPGRecoveryResponse } from '../../../api/cnpg-recovery'
 import { useCNPGWriteGuard } from '../actions/useCNPGWriteGuard'
 import { useRestoreObservation, describeRecoverySource } from './CNPGRestoreProgress'
 import { CNPGRestoreChecks } from './CNPGRestoreChecks'
-import { RESTORE_VALIDATION_ANNOTATION, cnpgRestoredPrimaryUp, formatLocal, formatUTC, sourceClusterFor, targetIsoFrom } from './restoreModel'
+import { RESTORE_VALIDATION_ANNOTATION, cnpgRestoredPrimaryUp, formatLocal, formatUTC, targetIsoFrom } from './restoreModel'
 
 const CHECKLIST = [
   'Confirm the databases and roles Radar lists are the ones you expect',
@@ -15,27 +15,17 @@ const CHECKLIST = [
   'Run the application’s own smoke query or health check against it',
 ]
 
-function useSourceCluster(namespace: string, snapshot: CNPGRecoveryResponse | undefined) {
+function useSourceCluster(namespace: string, name: string, snapshot: CNPGRecoveryResponse | undefined) {
   const workspace = useCNPGWorkspace([namespace], { enabled: !!snapshot?.recovery })
   return useMemo(() => {
     const rec = snapshot?.recovery
     const objects = workspace.data?.objects
     if (!rec || !objects) return null
     const clusters = (objects.clusters ?? []).filter((c: any) => isApiGroup(c.apiVersion, 'postgresql.cnpg.io'))
-    if (rec.sourceKind === 'backup') {
-      const b = (objects.backups ?? []).find((x: any) => x.metadata?.namespace === namespace && x.metadata?.name === rec.backup)
-      const name = b?.spec?.cluster?.name
-      return name ? { namespace, name } : null
-    }
-    if ((rec.sourceKind === 'objectStore' && rec.objectStore && rec.serverName) || (rec.sourceKind === 'barmanObjectStore' && rec.serverName)) {
-      const c =
-        rec.sourceKind === 'objectStore'
-          ? sourceClusterFor({ kind: 'objectStore', objectStore: rec.objectStore!, serverName: rec.serverName! }, clusters, namespace)
-          : sourceClusterFor({ kind: 'inTree', barmanObjectStore: {}, serverName: rec.serverName! }, clusters, namespace)
-      return c ? { namespace, name: c.metadata?.name as string } : null
-    }
-    return null
-  }, [snapshot, workspace.data, namespace])
+    const restored = clusters.find((c: any) => c.metadata?.namespace === namespace && c.metadata?.name === name && c.metadata?.uid === snapshot.cluster.uid)
+    const source = restored ? clusters.find((c: any) => cnpgRecoveryMatchesCluster(restored, c, objects.backups ?? [])) : null
+    return source ? { namespace, name: source.metadata.name as string } : null
+  }, [snapshot, workspace.data, namespace, name])
 }
 
 /**
@@ -45,7 +35,7 @@ function useSourceCluster(namespace: string, snapshot: CNPGRecoveryResponse | un
  */
 export function CNPGRestoreValidation({ namespace, name }: { namespace: string; name: string }) {
   const { observation, snapshot } = useRestoreObservation(namespace, name)
-  const source = useSourceCluster(namespace, snapshot)
+  const source = useSourceCluster(namespace, name, snapshot)
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
   // ?validate=1 is the restore checklist's "Record what you checked" link.
@@ -215,7 +205,7 @@ function RecordDialog({
           {targetIso && <span className="ml-2 text-[11px] text-theme-text-tertiary">{formatLocal(targetIso)}</span>}
         </label>
         <div className="text-xs text-theme-text-tertiary">
-          Source cluster: {source ? `${source.namespace}/${source.name} (its UID is read and recorded by the server)` : 'not found among live clusters; the note records none'}
+          Source cluster: {source ? `${source.namespace}/${source.name} (its UID is read and recorded by the server)` : 'no live source Cluster could be attributed to this recovery; the note records none'}
         </div>
       </div>
     </ActionConfirmDialog>

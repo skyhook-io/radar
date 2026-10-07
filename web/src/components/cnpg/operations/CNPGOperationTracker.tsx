@@ -21,6 +21,7 @@ import {
   CNPG_OP_STATE_TONE as STATE_TONE,
   CNPG_OP_STATE_SEVERITY as STATE_SEVERITY,
   cnpgOperationHandoff,
+  cnpgOperationsForCluster,
 } from './presentation'
 import { dismissCNPGOperation, updateCNPGOperations, useCNPGOperations } from './store'
 
@@ -35,10 +36,11 @@ function sourceFreshness(q: { dataUpdatedAt: number; isError: boolean }) {
  * and shows them in the header until they finish. Reads only what the caller
  * can read; a step it cannot see stays "unknown".
  */
-export function CNPGOperationTracker({ namespace, name }: { namespace: string; name: string }) {
+export function CNPGOperationTracker({ namespace, name, uid }: { namespace: string; name: string; uid: string }) {
   const { connection } = useConnection()
   const context = connection.context
-  const ops = useCNPGOperations({ namespace, cluster: name, context })
+  const allOps = useCNPGOperations()
+  const ops = cnpgOperationsForCluster(allOps, { namespace, name, context, uid })
   const active = ops.filter(cnpgOperationFollowed)
   const following = active.length > 0
   const needsRuntime = active.some((o) => ['switchover', 'unfence', 'restart', 'restartInstance'].includes(o.kind))

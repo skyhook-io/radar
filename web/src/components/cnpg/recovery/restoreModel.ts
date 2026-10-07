@@ -1,4 +1,4 @@
-import { CNPG_BARMAN_PLUGIN_NAME, cnpgBackupDeclaration, cnpgBarmanPlugin, getCNPGClusterBarmanPlugin, getCNPGPostgresMajor, cnpgBackupMatchesCluster, getCNPGBackupPlugin, objectStoreForBackup, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel, type CNPGWorkspaceResponse, coverageReadable, formatGrant } from '@skyhook-io/k8s-ui'
+import { CNPG_BARMAN_PLUGIN_NAME, cnpgBackupDeclaration, cnpgBarmanPlugin, getCNPGClusterBarmanPlugin, getCNPGPostgresMajor, cnpgBackupMatchesCluster, cnpgArchiveMatchesCluster, getCNPGBackupPlugin, objectStoreForBackup, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel, type CNPGWorkspaceResponse, coverageReadable, formatGrant } from '@skyhook-io/k8s-ui'
 import type { CNPGRuntimeResponse } from '../../../api/cnpg'
 import type { ActionCapability } from '../../../api/actions'
 import type { CNPGRecoveryResponse, CNPGRecoveryPod } from '../../../api/cnpg-recovery'
@@ -138,14 +138,8 @@ export function sourceClusterFor(source: RestoreSource, clusters: any[], namespa
   return (
     clusters.find((c) => {
       if (c?.metadata?.namespace !== namespace) return false
-      if (source.kind === 'objectStore') {
-        const p = getCNPGClusterBarmanPlugin(c)
-        return p?.isWALArchiver === true && p.barmanObjectName === source.objectStore && p.serverName === source.serverName
-      }
-      const archive = c.spec?.backup?.barmanObjectStore
-      return !!archive?.destinationPath && (archive.serverName || c.metadata?.name) === source.serverName &&
-        archive.destinationPath.replace(/\/+$/, '') === String(source.barmanObjectStore.destinationPath).replace(/\/+$/, '') &&
-        (archive.endpointURL || '').replace(/\/+$/, '') === String(source.barmanObjectStore.endpointURL || '').replace(/\/+$/, '')
+      if (source.kind === 'objectStore' && getCNPGClusterBarmanPlugin(c)?.isWALArchiver !== true) return false
+      return cnpgArchiveMatchesCluster(c, source)
     }) ?? null
   )
 }

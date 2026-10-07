@@ -5,6 +5,7 @@ import { CNPGObjectStoreSummary } from './CNPGObjectStoreSummary'
 import { CNPGDatabaseSummary, CNPGPublicationSummary, CNPGSubscriptionSummary } from './CNPGDeclarativeSummary'
 import { CNPGPoolerSummary } from './CNPGPoolerSummary'
 import { CNPGImageCatalogSummary } from './CNPGImageCatalogSummary'
+import { ClusterLink } from './CNPGSharedSummary'
 import { CNPG_WORKSPACE_KEYS, type CNPGWorkspaceKey, type CNPGWorkspaceResponse } from './workspace'
 
 const PG = 'postgresql.cnpg.io/v1'
@@ -75,6 +76,22 @@ describe('CNPGBackupSummary', () => {
     const sched = { apiVersion: PG, kind: 'ScheduledBackup', metadata: { name: 'nightly', namespace: 'pg', uid: 'new' } }
     const t = text(renderToString(<CNPGBackupSummary resource={owned} workspace={ws({ clusters: [mainCluster], scheduledBackups: [sched] })} onNavigate={nav} />))
     expect(t).toContain('an earlier schedule of that name')
+  })
+
+  it('distinguishes a replaced Cluster from a missing or unread one without linking to its replacement', () => {
+    const previous = { ...b, status: { ...b.status, pluginMetadata: { clusterUID: 'old' } } }
+    const replacement = { ...mainCluster, metadata: { ...mainCluster.metadata, uid: 'new' } }
+    const html = renderToString(<ClusterLink resource={previous} workspace={ws({ clusters: [replacement] })} onNavigate={nav} />)
+    expect(text(html)).toContain('main · an earlier Cluster of that name; the current one is a different object')
+    expect(html).not.toContain('<button')
+    expect(text(html)).not.toContain('not found')
+    const missing = text(renderToString(<ClusterLink resource={previous} workspace={ws({ clusters: [] })} onNavigate={nav} />))
+    expect(missing).toContain('not found in this namespace')
+    const unread = text(renderToString(<ClusterLink resource={previous} workspace={ws({}, { coverage: { clusters: { state: 'denied' } } })} onNavigate={nav} />))
+    expect(unread).not.toContain('not found')
+    expect(unread).not.toContain('earlier Cluster')
+    const current = renderToString(<ClusterLink resource={b} workspace={ws({ clusters: [replacement] })} onNavigate={nav} />)
+    expect(current).toContain('<button')
   })
 
   it('shows its own issues on top', () => {

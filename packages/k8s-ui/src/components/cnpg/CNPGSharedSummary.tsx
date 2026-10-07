@@ -80,11 +80,15 @@ export function ClusterLink({
   const name = resource?.spec?.cluster?.name
   if (!name) return <NotReported text="Not set" />
   const ns = resource?.metadata?.namespace ?? ''
-  const visible = !!targetCluster(resource, clustersIn(workspace))
+  const clusters = clustersIn(workspace)
+  const visible = !!targetCluster(resource, clusters)
+  const replaced = !visible && clusters.some((c) => c.metadata?.namespace === ns && c.metadata?.name === name)
   return (
     <span>
-      <RefLink refTo={{ kind: 'Cluster', group: CNPG_GROUP, namespace: ns, name }} onNavigate={onNavigate} mono />
-      {workspace && !visible && !relationUnavailable(workspace, 'clusters', ns, 'Clusters') && (
+      <RefLink refTo={{ kind: 'Cluster', group: CNPG_GROUP, namespace: ns, name }} onNavigate={replaced ? undefined : onNavigate} mono />
+      {replaced ? (
+        <span className="text-theme-text-tertiary"> · an earlier Cluster of that name; the current one is a different object</span>
+      ) : workspace && !visible && !relationUnavailable(workspace, 'clusters', ns, 'Clusters') && (
         <span className="text-theme-text-tertiary"> · not found in this namespace</span>
       )}
     </span>

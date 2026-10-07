@@ -3,7 +3,7 @@ import { cnpgBackupDeclaration, cnpgBarmanPlugin } from '../../utils/cnpg-backup
 // payload. Every fact here is something the cluster actually reports; when it
 // does not report something the value is "unknown", never zero or healthy.
 
-import { backupsForScheduledBackup, cnpgScheduleDestinationBlocker, cnpgBackupMatchesCluster, targetCluster } from './relations'
+import { backupsForScheduledBackup, cnpgScheduleDestinationBlocker, cnpgBackupMatchesCluster, cnpgArchiveMatchesCluster, targetCluster } from './relations'
 import { cnpgRoleState } from './databaseRole'
 import { formatAge, summarizeSchedulerMessage, type HealthLevel } from '../resources/resource-utils'
 import { worseTone } from '../ui/status-tone'
@@ -657,19 +657,44 @@ export function getCNPGRestoreValidation(cluster: any): CNPGRestoreValidationNot
   try {
     const v = JSON.parse(raw)
     if (typeof v?.recordedAt !== 'string' || typeof v?.checked !== 'string' || !v.checked) return null
+    if (v.target?.uid && v.target.uid !== cluster.metadata?.uid) return null
     return v as CNPGRestoreValidationNote
   } catch {
     return null
   }
 }
 
-// A note counts for this source only when it names this Cluster: by UID when
-// the recorder could read it, otherwise by name.
 function noteIsAbout(note: CNPGRestoreValidationNote, cluster: any): boolean {
-  const src = note.source
-  if (!src) return false
-  if (src.uid) return src.uid === cluster.metadata?.uid
-  return src.namespace === cluster.metadata?.namespace && src.name === cluster.metadata?.name
+  return !!note.source?.uid && note.source.uid === cluster.metadata?.uid
+}
+
+/** A recovery declaration compatible with this live source, excluding known predecessor evidence. */
+export function cnpgRecoveryMatchesCluster(restored: any, cluster: any, backups: any[]): boolean {
+  if (restored === cluster || restored.metadata?.namespace !== cluster.metadata?.namespace) return false
+  const recovery = restored.spec?.bootstrap?.recovery
+  if (!recovery) return false
+  const created = Date.parse(cluster.metadata?.creationTimestamp ?? '')
+  const restoredAt = Date.parse(restored.metadata?.creationTimestamp ?? '')
+  const targetAt = Date.parse(recovery.recoveryTarget?.targetTime ?? '')
+  if (Number.isFinite(created) && (restoredAt < created || targetAt < created)) return false
+  const note = getCNPGRestoreValidation(restored)
+  if (note?.source?.uid && !noteIsAbout(note, cluster)) return false
+  const ns = cluster.metadata?.namespace
+  if (recovery.backup?.name) {
+    const backup = backups.find((b) => b.metadata?.namespace === ns && b.metadata?.name === recovery.backup.name)
+    return cnpgBackupMatchesCluster(backup, cluster)
+  }
+  const source = (restored.spec?.externalClusters ?? []).find((e: any) => e?.name === recovery.source)
+  if (!source) return false
+  const params = source.plugin?.name === CNPG_BARMAN_PLUGIN_NAME ? source.plugin.parameters : undefined
+  const external = source.barmanObjectStore
+  const archiveMatch = params?.barmanObjectName
+    ? cnpgArchiveMatchesCluster(cluster, { kind: 'objectStore', objectStore: params.barmanObjectName, serverName: params.serverName || recovery.source })
+    : external && cnpgArchiveMatchesCluster(cluster, { kind: 'inTree', barmanObjectStore: external, serverName: external.serverName || recovery.source })
+  if (!archiveMatch) return false
+  const id = recovery.recoveryTarget?.backupID
+  const pinned = id ? backups.filter((b) => b.metadata?.namespace === ns && b.spec?.cluster?.name === cluster.metadata?.name && b.status?.backupId === id) : []
+  return pinned.length === 0 || pinned.some((b) => cnpgBackupMatchesCluster(b, cluster))
 }
 
 function restoreValidationFact(
@@ -678,25 +703,8 @@ function restoreValidationFact(
   backups: any[],
   backupsReadable: boolean,
 ): CNPGProtectionFacts['restoreValidation'] {
-  const plugin = getCNPGClusterBarmanPlugin(cluster)
-  const server = plugin?.serverName || cluster.metadata?.name
-  const store = plugin?.barmanObjectName
   const ns = cluster.metadata?.namespace
-  const restoredFromThis = allClusters.filter((c) => {
-    if (c === cluster || c.metadata?.namespace !== ns) return false
-    const recovery = c.spec?.bootstrap?.recovery
-    if (!recovery) return false
-    const sourceName = recovery.source
-    if (sourceName) {
-      const ext = (c.spec?.externalClusters ?? []).find((e: any) => e?.name === sourceName)
-      const params = ext?.plugin?.name === CNPG_BARMAN_PLUGIN_NAME ? ext.plugin.parameters : undefined
-      if (store && params?.barmanObjectName === store && (params?.serverName || sourceName) === server) return true
-    }
-    const backupName = recovery.backup?.name
-    if (!backupName) return false
-    const backup = backups.find((b) => b.metadata?.namespace === ns && b.metadata?.name === backupName)
-    return cnpgBackupMatchesCluster(backup, cluster)
-  })
+  const restoredFromThis = allClusters.filter((c) => cnpgRecoveryMatchesCluster(c, cluster, backups))
   const noted = restoredFromThis
     .map((c) => ({ c, note: getCNPGRestoreValidation(c) }))
     .filter((x): x is { c: any; note: CNPGRestoreValidationNote } => !!x.note && noteIsAbout(x.note, cluster))
@@ -720,19 +728,21 @@ function restoreValidationFact(
     return { text: 'None recorded', tone: 'unknown', source: 'Kubernetes does not record restore tests' }
   }
   const rname = restored.metadata?.name
+  const fromArchive = !!restored.spec?.bootstrap?.recovery?.source
+  const sourceDescription = fromArchive ? 'the same archive currently configured for this Cluster' : "this cluster's backups"
   const ready = typeof restored.status?.readyInstances === 'number' && restored.status.readyInstances > 0
   if (!ready) {
     return {
-      text: `Recovery declared in ${rname}`,
+      text: `${fromArchive ? 'Archive recovery' : 'Recovery'} declared in ${rname}`,
       tone: 'unknown',
-      source: `Cluster ${rname} bootstraps from this cluster's backups but has no ready instance yet`,
+      source: `Cluster ${rname} bootstraps from ${sourceDescription} but has no ready instance yet`,
       restoredInto: { namespace: restored.metadata?.namespace, name: rname },
     }
   }
   return {
-    text: `Restored into ${rname}`,
+    text: `${fromArchive ? 'Archive restored' : 'Restored'} into ${rname}`,
     tone: 'neutral',
-    source: `Cluster ${rname} bootstrapped from this cluster's backups and has ready instances · created ${restored.metadata?.creationTimestamp ?? 'unknown'}. No validation note is recorded on it; this proves one recovery, not that today's backups restore.`,
+    source: `Cluster ${rname} bootstrapped from ${sourceDescription} and has ready instances · created ${restored.metadata?.creationTimestamp ?? 'unknown'}. No validation note is recorded on it; this proves one recovery, not that today's backups restore.`,
     restoredInto: { namespace: restored.metadata?.namespace, name: rname },
   }
 }

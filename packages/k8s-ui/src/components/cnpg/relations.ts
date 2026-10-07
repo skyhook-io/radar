@@ -173,6 +173,25 @@ export function cnpgBackupMatchesCluster(backup: any, cluster: any): boolean {
   return !(Number.isFinite(began) && Number.isFinite(created) && began < created)
 }
 
+export type CNPGArchiveSource =
+  | { kind: 'objectStore'; objectStore: string; serverName: string }
+  | { kind: 'inTree'; barmanObjectStore: Record<string, unknown>; serverName: string }
+
+export function cnpgArchiveMatchesCluster(cluster: any, source: CNPGArchiveSource): boolean {
+  if (source.kind === 'objectStore') {
+    const plugin = getCNPGClusterBarmanPlugin(cluster)
+    return plugin?.barmanObjectName === source.objectStore &&
+      (plugin?.serverName || cluster.metadata?.name) === source.serverName
+  }
+  const archive = cluster.spec?.backup?.barmanObjectStore
+  const path = source.barmanObjectStore.destinationPath
+  const endpoint = source.barmanObjectStore.endpointURL
+  return !!archive?.destinationPath && typeof path === 'string' && !!path &&
+    (archive.serverName || cluster.metadata?.name) === source.serverName &&
+    archive.destinationPath.replace(/\/+$/, '') === path.replace(/\/+$/, '') &&
+    (archive.endpointURL || '').replace(/\/+$/, '') === (typeof endpoint === 'string' ? endpoint : '').replace(/\/+$/, '')
+}
+
 /**
  * Barman-cloud ignores Backup and ScheduledBackup parameters. The current
  * Cluster plugin chooses the ObjectStore; it may have changed since a Backup

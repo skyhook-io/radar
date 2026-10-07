@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { advanceCNPGOperation, type CNPGTrackedOperation } from './model'
-import { cnpgOperationHandoff, latestCNPGOperation } from './presentation'
+import { cnpgOperationHandoff, cnpgOperationsForCluster, latestCNPGOperation } from './presentation'
 
 const operation: CNPGTrackedOperation = {
   id: 'local',
@@ -17,6 +17,15 @@ const operation: CNPGTrackedOperation = {
 }
 
 describe('local operation presentation', () => {
+  it('keeps completed predecessor operations out of the header, count and handoff list', () => {
+    const completed = { ...operation, state: 'completed' as const, finishedAt: operation.startedAt + 1000 }
+    const subject = { context: 'kind-db', namespace: 'db', name: 'pg', uid: 'replacement' }
+    expect(cnpgOperationsForCluster([completed], subject)).toEqual([])
+    const current = { ...completed, id: 'replacement-restore', clusterUID: 'replacement', startedAt: completed.startedAt + 2000 }
+    expect(cnpgOperationsForCluster([completed, current], subject)).toEqual([current])
+    expect(latestCNPGOperation([completed, current], subject)).toBe(current)
+  })
+
   it('never joins a record across contexts, namespaces or a recreated Cluster', () => {
     const subject = { context: 'kind-db', namespace: 'db', name: 'pg', uid: 'uid' }
     expect(latestCNPGOperation([operation], subject)).toBe(operation)

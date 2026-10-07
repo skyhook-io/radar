@@ -34,7 +34,7 @@ export function renderCNPGHeaderActions({
   if (resource.kind === 'Cluster') {
     return (
       <div className="flex items-center gap-1.5">
-        <CNPGOperationTracker namespace={namespace} name={name} />
+        <CNPGOperationTracker namespace={namespace} name={name} uid={resource.metadata.uid} />
         <CNPGConnectButton namespace={namespace} name={name} compact={compact} onNavigate={onNavigate} />
         <CNPGClusterActions namespace={namespace} name={name} compact={compact} />
       </div>

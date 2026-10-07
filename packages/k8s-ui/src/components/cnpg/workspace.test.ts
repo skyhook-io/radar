@@ -1,6 +1,6 @@
 import { cnpgDimensions } from './ha'
 import { describe, it, expect } from 'vitest'
-import { buildCNPGFleet, cnpgReadyInstances, type CNPGWorkspaceResponse, type CNPGWorkspaceKey, CNPG_WORKSPACE_KEYS } from './workspace'
+import { buildCNPGFleet, cnpgReadyInstances, cnpgRecoveryMatchesCluster, getCNPGRestoreValidation, type CNPGWorkspaceResponse, type CNPGWorkspaceKey, CNPG_WORKSPACE_KEYS } from './workspace'
 
 const G = 'postgresql.cnpg.io/v1'
 
@@ -186,7 +186,7 @@ describe('buildCNPGFleet', () => {
     })
     const fleet = buildCNPGFleet(resp({ clusters: [src, restored] }))
     const a = fleet.rows.find((r) => r.name === 'pg-a')!
-    expect(a.protection.restoreValidation.text).toBe('Restored into pg-a-restore')
+    expect(a.protection.restoreValidation.text).toBe('Archive restored into pg-a-restore')
     expect(a.protection.restoreValidation.tone).toBe('neutral')
     const r = fleet.rows.find((x) => x.name === 'pg-a-restore')!
     expect(r.protection.restoreValidation.text).toBe('None recorded')
@@ -198,7 +198,7 @@ describe('buildCNPGFleet', () => {
     const conflicting = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Backup', metadata: { name: 'b', namespace: 'db' }, spec: { cluster: { name: 'pg-a' }, method: 'plugin', pluginConfiguration: { name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'backup-store', serverName: 'backup-server' } } }, status: { phase: 'completed' } }
     const restored = cluster('pg-a-restore', 'db', { spec: { bootstrap: { recovery: { source: 'origin' } }, externalClusters: [{ name: 'origin', plugin: { name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'cluster-store', serverName: 'cluster-server' } } }] } })
     const fact = buildCNPGFleet(resp({ clusters: [src, restored], backups: [conflicting] })).rows.find((r) => r.name === 'pg-a')!.protection.restoreValidation
-    expect(fact).toMatchObject({ text: 'Restored into pg-a-restore', tone: 'neutral' })
+    expect(fact).toMatchObject({ text: 'Archive restored into pg-a-restore', tone: 'neutral' })
     const wrongSource = { ...restored, spec: { ...restored.spec, externalClusters: [{ name: 'origin', plugin: { name: 'barman-cloud.cloudnative-pg.io', parameters: conflicting.spec.pluginConfiguration.parameters } }] } }
     expect(buildCNPGFleet(resp({ clusters: [src, wrongSource], backups: [conflicting] })).rows.find((r) => r.name === 'pg-a')!.protection.restoreValidation).toMatchObject({ text: 'None recorded', tone: 'unknown' })
   })
@@ -221,10 +221,10 @@ describe('buildCNPGFleet', () => {
     expect(fact.source).toContain('by alice on pg-a-restore')
 
     const otherUID = cluster('pg-a-restore', 'db', { metadata: { annotations: { 'radar.skyhook.io/restore-validation': note('uid-previous-incarnation') } }, spec: restoredSpec })
-    expect(buildCNPGFleet(resp({ clusters: [src, otherUID] })).rows.find((r) => r.name === 'pg-a')!.protection.restoreValidation.text).toBe('Restored into pg-a-restore')
+    expect(buildCNPGFleet(resp({ clusters: [src, otherUID] })).rows.find((r) => r.name === 'pg-a')!.protection.restoreValidation.text).toBe('None recorded')
 
     const malformed = cluster('pg-a-restore', 'db', { metadata: { annotations: { 'radar.skyhook.io/restore-validation': '{not json' } }, spec: restoredSpec })
-    expect(buildCNPGFleet(resp({ clusters: [src, malformed] })).rows.find((r) => r.name === 'pg-a')!.protection.restoreValidation.text).toBe('Restored into pg-a-restore')
+    expect(buildCNPGFleet(resp({ clusters: [src, malformed] })).rows.find((r) => r.name === 'pg-a')!.protection.restoreValidation.text).toBe('Archive restored into pg-a-restore')
   })
 
   it('ends the recovery window at WAL archiving, not at the last base backup', () => {
@@ -595,4 +595,42 @@ it('excludes predecessor backup success, failures and restores from a recreated 
   expect(row.problems.some((p) => p.subject.name === 'old-failed')).toBe(false)
   const current = { ...old, status: { ...old.status, pluginMetadata: { clusterUID: 'current' } } }
   expect(buildCNPGFleet({ ...data, objects: { ...data.objects, backups: [current, failed] } }).rows.find((r) => r.name === 'pg-a')!.protection.lastSuccessfulBackup).toMatchObject({ text: 'Completed', source: 'Backup old' })
+})
+
+it('does not attribute predecessor plugin restores or notes to a recreated source', () => {
+  const source = cluster('pg-a', 'db', { metadata: { uid: 'current', creationTimestamp: '2026-10-01T00:00:00Z' }, spec: { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store', serverName: 'archive' } }] } })
+  const restored = cluster('restored', 'db', {
+    metadata: { uid: 'restored', creationTimestamp: '2026-10-02T00:00:00Z' },
+    spec: { bootstrap: { recovery: { source: 'origin' } }, externalClusters: [{ name: 'origin', plugin: { name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store', serverName: 'archive' } } }] },
+  })
+  const fact = (target: any, backups: any[] = []) => buildCNPGFleet(resp({ clusters: [source, target], backups })).rows.find((r) => r.name === 'pg-a')!.protection.restoreValidation
+  const beforeSource = { ...restored, metadata: { ...restored.metadata, creationTimestamp: '2026-09-30T00:00:00Z' } }
+  expect(cnpgRecoveryMatchesCluster(beforeSource, source, [])).toBe(false)
+  expect(fact(beforeSource).text).toBe('None recorded')
+  const pinned = { ...restored, spec: { ...restored.spec, bootstrap: { recovery: { source: 'origin', recoveryTarget: { backupID: 'old-id' } } } } }
+  const oldBackup = { apiVersion: G, kind: 'Backup', metadata: { name: 'old', namespace: 'db' }, spec: { cluster: { name: 'pg-a' } }, status: { backupId: 'old-id', pluginMetadata: { clusterUID: 'previous' } } }
+  expect(cnpgRecoveryMatchesCluster(pinned, source, [oldBackup])).toBe(false)
+  expect(fact(pinned, [oldBackup]).text).toBe('None recorded')
+  const pitr = { ...restored, spec: { ...restored.spec, bootstrap: { recovery: { source: 'origin', recoveryTarget: { targetTime: '2026-09-30T23:00:00Z' } } } } }
+  expect(fact(pitr).text).toBe('None recorded')
+  const withNote = (sourceUID?: string, targetUID = 'restored') => ({ ...restored, metadata: { ...restored.metadata, annotations: { 'radar.skyhook.io/restore-validation': JSON.stringify({ recordedAt: '2026-10-02T02:00:00Z', checked: 'application data', source: { namespace: 'db', name: 'pg-a', uid: sourceUID, verified: !!sourceUID }, target: { namespace: 'db', name: 'restored', uid: targetUID, verified: true } }) } } })
+  expect(fact(withNote('previous')).text).toBe('None recorded')
+  expect(fact(withNote()).text).toBe('Archive restored into restored')
+  expect(fact(withNote('current')).text).toBe('Validation recorded')
+  const copied = withNote('current', 'previous-target')
+  expect(getCNPGRestoreValidation(copied)).toBeNull()
+  expect(fact(copied).text).toBe('Archive restored into restored')
+  expect(fact(restored).source).toContain('same archive currently configured')
+  expect(fact({ ...restored, status: { readyInstances: 0 } }).text).toBe('Archive recovery declared in restored')
+  const currentBackup = { ...oldBackup, status: { ...oldBackup.status, pluginMetadata: { clusterUID: 'current' } } }
+  expect(cnpgRecoveryMatchesCluster(pinned, source, [currentBackup])).toBe(true)
+})
+
+it('matches in-tree recovery by the actual archive and endpoint rather than server name alone', () => {
+  const archive = { destinationPath: 's3://bucket/prefix/', endpointURL: 'https://s3.example/', serverName: 'pg-a' }
+  const source = cluster('pg-a', 'db', { spec: { backup: { barmanObjectStore: archive } } })
+  const restored = cluster('restored', 'db', { spec: { bootstrap: { recovery: { source: 'origin' } }, externalClusters: [{ name: 'origin', barmanObjectStore: { ...archive, destinationPath: 's3://bucket/prefix' } }] } })
+  expect(cnpgRecoveryMatchesCluster(restored, source, [])).toBe(true)
+  const other = { ...source, spec: { backup: { barmanObjectStore: { ...archive, endpointURL: 'https://other.example' } } } }
+  expect(cnpgRecoveryMatchesCluster(restored, other, [])).toBe(false)
 })
