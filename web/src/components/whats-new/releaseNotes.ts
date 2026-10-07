@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Bot, GitCompareArrows, History, Layers, Network, Scale, ScrollText, SlidersHorizontal } from 'lucide-react'
+import { Bot, GitCompareArrows, Layers, Network, RefreshCcw, Scale, ScrollText, SlidersHorizontal } from 'lucide-react'
 import { compareVersions } from '../../utils/version'
 
 export interface ReleaseHighlight {
@@ -42,32 +42,35 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
     version: 'v1.16.0',
     highlights: [
       {
-        id: 'workload-timeline',
-        icon: History,
-        title: "Each workload's own history on its Timeline",
-        description: "A workload's Timeline covers its own full history, past runs, and the traffic and config in front of it, without its neighbors. Routine activity folds behind a toggle; problems always show.",
+        id: 'restart-loop-issues',
+        icon: RefreshCcw,
+        title: 'Issues that stay put while a container crash-loops',
+        description: 'A restarting container is one issue until it recovers, instead of a new one on every check, so no more repeat alerts and investigations. Probe failures, the last exit and how many replicas are affected sit on it as evidence, and severity follows impact.',
         importance: 6,
-        // No link: a workload's own history is on its detail page, not /timeline.
+        path: '/issues',
+        cta: 'Open Issues',
       },
       {
-        id: 'log-levels',
+        id: 'log-viewer',
         icon: ScrollText,
-        title: 'Log levels you can filter on',
-        description: 'Levels come from what the logger wrote, filtering to errors keeps their stack traces, and Hide matching drops noisy lines.',
+        title: 'Log viewer enhancements',
+        description: 'Levels come from what the logger wrote. Filtering to errors keeps their stack traces. Hide matching drops noisy lines. Lines without a level get their own chip. Logs follow the light theme too.',
         importance: 5,
       },
       {
         id: 'per-cluster-settings',
         icon: SlidersHorizontal,
-        title: 'Per-cluster integration settings for local Radar',
+        title: 'Separate settings for each cluster',
         description: 'Running Radar locally, each kubeconfig context keeps its own Metrics, Argo CD and Cost connections.',
         importance: 4,
       },
     ],
     improvements: [
       // The grid fills row by row: pair lines of similar length.
+      "A workload's Timeline shows only its own history",
+      "Timeline's Problems filter no longer hides crash loops",
       'Live Traffic figures corrected for Cilium and Istio',
-      'A restart loop stays one issue instead of flapping',
+      'Saved namespace picks survive a failing namespace list',
       'Terminal tabs show and keep the context they opened for',
       'YAML review flags a resource that changed after review',
       'Helm chart meets the Pod Security restricted profile',
