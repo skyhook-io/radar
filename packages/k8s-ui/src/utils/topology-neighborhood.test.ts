@@ -455,3 +455,14 @@ describe('tagWorkloadOwnership', () => {
     expect(dataOf(topology, 'cert').ownerWorkloadId).toBe('Deployment/app/web')
   })
 })
+
+// Multiple metadata owners do not make the non-controller an authoritative color source.
+it('uses controller provenance when two workload seeds own the same Pod', () => {
+  const topo: Topology = {
+    nodes: [node('a', 'Deployment', 'app', 'a'), node('b', 'Deployment', 'app', 'b'), node('pod', 'Pod', 'app', 'child')],
+    edges: [{ ...edge('a', 'pod', 'manages'), ownerController: false }, { ...edge('b', 'pod', 'manages'), ownerController: true }],
+  }
+  const { topology, colorByWorkload } = tagWorkloadOwnership(topo, [{ kind: 'Deployment', namespace: 'app', name: 'a' }, { kind: 'Deployment', namespace: 'app', name: 'b' }])
+  expect(topology.nodes.find(node => node.id === 'pod')?.data.ownerColorIndex).toBe(colorByWorkload.get('Deployment/app/b'))
+  expect(topology.edges).toHaveLength(2)
+})

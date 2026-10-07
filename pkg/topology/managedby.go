@@ -180,33 +180,30 @@ func walkTopmostOwnerFromNodeID(startID string, topo *Topology, dp DynamicProvid
 		return nil
 	}
 
-	// Owner lookup for the current node: returns the source ID of the first
-	// EdgeManages edge pointing at it, or "" if none. Multiple owners are
-	// rare (K8s allows multiple ownerReferences but only one controller);
-	// the first wins, matching ownerReferences[].controller==true semantics.
+	// Controller metadata wins when classified; unclassified graph ownership
+	// preserves its existing order, including logical controller relationships.
 	var ownerOf func(target string) string
 	if idx != nil {
 		ownerOf = func(target string) string {
 			incoming, _ := idx.EdgesFor(target)
-			for _, e := range incoming {
-				if e.Type == EdgeManages {
-					return e.Source
-				}
+			if edge := preferredOwnerEdge(incoming); edge != nil {
+				return edge.Source
 			}
 			return ""
 		}
 	} else {
-		// Fallback: one-time O(E) scan to build target->source map.
-		owners := make(map[string]string, len(topo.Edges))
-		for _, e := range topo.Edges {
-			if e.Type != EdgeManages {
-				continue
-			}
-			if _, exists := owners[e.Target]; !exists {
-				owners[e.Target] = e.Source
+		owners := make(map[string][]Edge)
+		for _, edge := range topo.Edges {
+			if edge.Type == EdgeManages {
+				owners[edge.Target] = append(owners[edge.Target], edge)
 			}
 		}
-		ownerOf = func(target string) string { return owners[target] }
+		ownerOf = func(target string) string {
+			if edge := preferredOwnerEdge(owners[target]); edge != nil {
+				return edge.Source
+			}
+			return ""
+		}
 	}
 
 	// Seed visited with the starting node so a cycle that loops back to the

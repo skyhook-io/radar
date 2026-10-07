@@ -589,3 +589,13 @@ UID metadata stays inside the cached Go topology; graph JSON is unchanged. These
 joins do not fetch owners. Typed workload grouping and controller-specific
 ownership shortcuts have separate resolution paths and are not all covered by
 this generic CRD check.
+
+Observed topology nodes retain metadata owner provenance internally. Metadata
+ownership edges resolve exact API identity and known UID, without fetching or
+creating missing parents. These edges carry optional `ownerController` (true or
+false); logical inventory/shortcut edges omit it. Declaration-only nodes cannot
+seed observed owner enrollment. Every visible metadata parent can appear in a
+neighborhood, while singular owner/managed-by projections prefer the observed
+controller. Missing UID evidence does not establish that an observed object was
+replaced. Typed shortcut provenance, absent-owner materialization and an
+all-declared-owners context array remain separate concerns.

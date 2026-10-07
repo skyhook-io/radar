@@ -433,6 +433,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		}
 	}
 
+	preferredOwner := preferredOwnerEdge(incomingEdges)
 	for _, edge := range incomingEdges {
 		// Something points TO this resource (incoming edge)
 		ref := refForNodeID(edge.Source)
@@ -442,8 +443,10 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 
 		switch edge.Type {
 		case EdgeManages:
-			// Something manages/owns this resource
-			rel.Owner = ref
+			// Preserve the observed controller when multiple parents are present.
+			if preferredOwner != nil && edge.Source == preferredOwner.Source {
+				rel.Owner = ref
+			}
 		case EdgeExposes:
 			if isServiceEntrypointRouteKind(strings.ToLower(ref.Kind)) {
 				rel.Routes = appendResourceRef(rel.Routes, *ref)
