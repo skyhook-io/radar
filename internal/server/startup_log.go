@@ -246,6 +246,6 @@ func startupAIStatus(summary startupLogSummary) string {
 			", which isn't an executable Radar can run)"
 	default:
 		return "disabled (no agent CLI found). Install Claude Code, Codex, Cursor, or OpenCode and " +
-			"Radar picks it up without a restart, or set RADAR_AI_CLI_BIN to the full path of one you already have"
+			"Radar picks it up without a restart"
 	}
 }

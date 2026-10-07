@@ -208,9 +208,9 @@ func TestStartupAIStatusExplainsWhyItIsOff(t *testing.T) {
 			want:    "enabled via claude",
 		},
 		{
-			name:    "no CLI found points at the override",
+			name:    "no CLI found asks for an install, not the override",
 			summary: startupLogSummary{mcpEnabled: true},
-			want:    "RADAR_AI_CLI_BIN",
+			want:    "Install Claude Code, Codex, Cursor, or OpenCode and Radar picks it up without a restart",
 		},
 		{
 			name:    "--no-mcp names the flag",

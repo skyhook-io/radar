@@ -230,8 +230,7 @@ Flags:
 				"change or remove the variable and restart that Radar.\n", base)
 		} else if agents.Eligible {
 			fmt.Fprintf(os.Stderr, "the Radar at %s found no agent CLI. Install Claude Code, Codex, Cursor, "+
-				"or OpenCode on that machine and run this again, or start that Radar with RADAR_AI_CLI_BIN set to "+
-				"the full path of one it already has.\n", base)
+				"or OpenCode on that machine and run this again.\n", base)
 		} else {
 			fmt.Fprintf(os.Stderr, "the Radar at %s doesn't offer AI investigations: they need a Radar on your own "+
 				"machine with MCP on and authentication off, not one inside a cluster or shared. Use --standalone to "+
@@ -391,8 +390,7 @@ func standaloneEffectiveAgent(ctx context.Context, requested string) string {
 
 // noAgentCLIHint is the one wording for "this machine has no agent CLI Radar can
 // drive" — every local surface that hits it reads this, so they can't drift.
-const noAgentCLIHint = "no supported agent CLI found. Install Claude Code, Codex, Cursor, or OpenCode, " +
-	"or set RADAR_AI_CLI_BIN to the full path of one you already have"
+const noAgentCLIHint = "no supported agent CLI found. Install Claude Code, Codex, Cursor, or OpenCode"
 
 // localNoAgentHint is noAgentCLIHint unless RADAR_AI_CLI_BIN is set here: then
 // detection is off and the variable names a file Radar can't run, so installing

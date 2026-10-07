@@ -368,8 +368,8 @@ func TestProbeListeningIgnoresBasePathSuffix(t *testing.T) {
 // With RADAR_AI_CLI_BIN set, detection is off, so "install one" can't help.
 func TestLocalNoAgentHintNamesABrokenOverride(t *testing.T) {
 	t.Setenv("RADAR_AI_CLI_BIN", "")
-	if got := localNoAgentHint(); !strings.Contains(got, "Install Claude Code") {
-		t.Errorf("without the override, hint = %q, want install advice", got)
+	if got := localNoAgentHint(); !strings.Contains(got, "Install Claude Code") || strings.Contains(got, "RADAR_AI_CLI_BIN") {
+		t.Errorf("without the override, hint = %q, want install advice and no mention of the override", got)
 	}
 	t.Setenv("RADAR_AI_CLI_BIN", "/opt/typo/claude")
 	got := localNoAgentHint()
