@@ -169,7 +169,10 @@ describe('the shipped catalog', () => {
       expect(notes.highlights.length, `${notes.version} needs a highlight`).toBeGreaterThan(0)
       expect(new Set(notes.highlights.map(h => h.id)).size, `${notes.version} highlight ids`).toBe(notes.highlights.length)
       expect(new Set(notes.improvements).size, `${notes.version} improvements`).toBe(notes.improvements.length)
+      const top = notes.highlights.reduce((best, h) => (h.importance > best.importance ? h : best))
       for (const h of notes.highlights) {
+        expect(h.description.length, `${notes.version}/${h.id}: description fits a card`).toBeLessThanOrEqual(150)
+        if (h.leadDescription) expect(h.id, `${notes.version}/${h.id}: only the release's top highlight can lead`).toBe(top.id)
         expect(Number.isInteger(h.importance) && h.importance >= 1 && h.importance <= 10, `${notes.version}/${h.id}: importance is 1-10`).toBe(true)
         expect(!!h.path === !!h.cta, `${notes.version}/${h.id}: path and cta go together`).toBe(true)
         if (h.path) expect(h.path, `${notes.version}/${h.id}`).toMatch(/^\//)

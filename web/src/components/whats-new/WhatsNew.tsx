@@ -455,7 +455,7 @@ function HighlightCard({ item, lead = false, tone, tag, onNavigate }: {
           {tag && <span className="ml-1.5 font-mono font-normal text-[11px] text-theme-text-tertiary">{tag}</span>}
         </span>
         <span id={descriptionId} className={clsx('block mt-0.5 text-theme-text-secondary leading-relaxed', lead ? 'text-sm' : 'text-xs')}>
-          {item.description}
+          {lead ? item.leadDescription ?? item.description : item.description}
         </span>
         {actionable && (
           <span className="inline-flex items-center gap-1 mt-1.5 text-xs font-medium text-accent-text group-hover:underline">

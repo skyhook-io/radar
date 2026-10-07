@@ -6,8 +6,17 @@ export interface ReleaseHighlight {
   id: string
   icon: LucideIcon
   title: string
-  /** Read next to other releases' highlights, so it must stand on its own. */
+  /**
+   * Shown on a grid card, so at most 150 characters. Read next to other
+   * releases' highlights, so it must stand on its own.
+   */
   description: string
+  /**
+   * Fuller copy for when this highlight leads the dialog. Only a release's
+   * top highlight can ever lead (every other one scores at or below it), so
+   * only that one may set it.
+   */
+  leadDescription?: string
   /**
    * 1-10, comparable across releases: it decides which highlights a user who
    * skipped releases sees, and whether the dialog opens by itself.
@@ -44,8 +53,9 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       {
         id: 'restart-loop-issues',
         icon: RefreshCcw,
-        title: 'Issues that stay put while a container crash-loops',
-        description: 'A restarting container is one issue until it recovers, instead of a new one on every check, so no more repeat alerts and investigations. Probe failures, the last exit and how many replicas are affected sit on it as evidence, and severity follows impact.',
+        title: 'One steady issue per crash loop',
+        description: 'A crash-looping container stays one issue until it recovers, with probe failures and exits as evidence. No more repeat alerts.',
+        leadDescription: 'A restarting container is one issue until it recovers, instead of a new one on every check, so no more repeat alerts and investigations. Probe failures, the last exit and how many replicas are affected sit on it as evidence, and severity follows impact.',
         importance: 6,
         path: '/issues',
         cta: 'Open Issues',
@@ -54,7 +64,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
         id: 'log-viewer',
         icon: ScrollText,
         title: 'Log viewer enhancements',
-        description: 'Levels come from what the logger wrote. Filtering to errors keeps their stack traces. Hide matching drops noisy lines. Lines without a level get their own chip. Logs follow the light theme too.',
+        description: 'Levels from the logger itself, stack traces kept with their errors, Hide matching, and a chip for lines without a level.',
         importance: 5,
       },
       {
@@ -86,7 +96,8 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
         title: 'AI investigations that show their work',
         // No link: the investigations page redirects home when this run
         // mode can't host local agents.
-        description: 'A clear verdict and the story of what broke, with the charts, logs and config behind it placed where the agent cites them. Runs on OpenCode too, including AWS Bedrock.',
+        description: 'A clear verdict and the story of what broke, with the evidence placed where the agent cites it. Runs on OpenCode too.',
+        leadDescription: 'A clear verdict and the story of what broke, with the charts, logs and config behind it placed where the agent cites them. Runs on OpenCode too, including AWS Bedrock.',
         importance: 9,
       },
       {

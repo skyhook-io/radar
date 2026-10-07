@@ -44,7 +44,7 @@ const card = (id: string, title: string, importance: number) => ({ id, icon: Meg
 // A release worth opening the dialog for, and a quiet one that isn't.
 const HEADLINE: ReleaseNotes = {
   version: 'v1.15.0',
-  highlights: [card('capacity', 'Capacity views', 9), card('diff', 'Manifest diffs', 9), card('rollouts', 'Rollout traffic', 9)],
+  highlights: [{ ...card('capacity', 'Capacity views', 9), leadDescription: 'Capacity lead copy' }, card('diff', 'Manifest diffs', 9), card('rollouts', 'Rollout traffic', 9)],
   improvements: ['Sort memory'],
 }
 const QUIET: ReleaseNotes = {
@@ -331,5 +331,21 @@ describe('WhatsNew', () => {
     const text = dialog()?.textContent ?? ''
     expect(text).toContain('v1.16.0')
     expect(text).not.toContain('v1.15.2')
+  })
+  it('uses the lead copy only while a highlight leads the dialog', async () => {
+    serverState = { currentVersion: 'v1.15.2', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
+    await render('/')
+    expect(dialog()?.textContent).toContain('Capacity lead copy')
+    await clickGotIt()
+    const stronger: ReleaseNotes = { version: 'v1.16.0', highlights: [card('big', 'Bigger thing', 10), card('big2', 'Second thing', 10)], improvements: [] }
+    setCatalog(HEADLINE, stronger)
+    serverState = { currentVersion: 'v1.16.0', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
+    await act(async () => root.unmount())
+    root = createRoot(document.body.appendChild(document.createElement('div')))
+    client.clear()
+    await render('/')
+    const text = dialog()?.textContent ?? ''
+    expect(text).toContain('Capacity views')
+    expect(text).not.toContain('Capacity lead copy')
   })
 })
