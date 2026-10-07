@@ -528,3 +528,104 @@ func TestBuild_RemoteFluxHelmReleaseRecoversNothingLocal(t *testing.T) {
 		}
 	}
 }
+
+func TestFluxTreeFollowsObservedChartSourceAndGatesKinds(t *testing.T) {
+	hr := helmRelease("team", "app")
+	hr.Object["spec"] = map[string]any{"chartRef": map[string]any{"kind": "HelmChart", "name": "chart", "namespace": "shared"}}
+	chart := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "HelmChart", "metadata": map[string]any{"name": "chart", "namespace": "shared", "labels": map[string]any{"private": "chart-label"}}, "spec": map[string]any{"sourceRef": map[string]any{"kind": "HelmRepository", "name": "repo"}}}}
+	repo := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "HelmRepository", "metadata": map[string]any{"name": "repo", "namespace": "shared"}}}
+	hrr := ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "team", Name: "app"}
+	cr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "HelmChart", Namespace: "shared", Name: "chart"}
+	rr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "HelmRepository", Namespace: "shared", Name: "repo"}
+	for _, denied := range []string{"", "HelmChart", "HelmRepository"} {
+		t.Run(denied, func(t *testing.T) {
+			getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(hrr): hr, refKey(cr): chart, refKey(rr): repo}}
+			builder := NewBuilder(getter, nil).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != denied })
+			tree, _, err := builder.Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantNodes := 3
+			if denied == "HelmChart" {
+				wantNodes = 1
+			}
+			if denied == "HelmRepository" {
+				wantNodes = 2
+			}
+			if len(tree.Nodes) != wantNodes || len(tree.Edges) != wantNodes-1 {
+				t.Fatalf("denied %s: %+v", denied, tree)
+			}
+			for _, call := range getter.recordedCalls() {
+				if call.Kind == denied {
+					t.Fatalf("denied kind fetched: %+v", call)
+				}
+			}
+			if denied == "" {
+				found := false
+				for _, edge := range tree.Edges {
+					if edge.Source == nodeID(cr) && edge.Target == nodeID(rr) && edge.Type == EdgeSource {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("chart source edge missing: %+v", tree.Edges)
+				}
+			}
+		})
+	}
+}
+
+func TestFluxBootstrapSourceRetainsInventoryOwnership(t *testing.T) {
+	ks := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization", "metadata": map[string]any{"name": "flux-system", "namespace": "flux-system"}, "spec": map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "flux-system"}}, "status": map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "flux-system_flux-system_source.toolkit.fluxcd.io_GitRepository", "v": "v1"}}}}}}
+	repo := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "GitRepository", "metadata": map[string]any{"name": "flux-system", "namespace": "flux-system"}}}
+	kr := ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "flux-system", Name: "flux-system"}
+	rr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "flux-system", Name: "flux-system"}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(kr): ks, refKey(rr): repo}}
+	tree, _, err := NewBuilder(getter, nil).Build(context.Background(), "Kustomization", "flux-system", "flux-system", "kustomize.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Edges) != 1 || tree.Edges[0].Type != EdgeOwns {
+		t.Fatalf("bootstrap inventory ownership overwritten: %+v", tree.Edges)
+	}
+}
+
+func TestReadableGeneratedDescendantSurvivesDeniedIntermediate(t *testing.T) {
+	app := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": map[string]any{"namespace": "argocd", "name": "app"}, "spec": map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}}, "status": map[string]any{"resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "app"}}}}}
+	topo := &topology.Topology{Nodes: []topology.Node{
+		{ID: "deployment/prod/app", Kind: topology.KindDeployment, Name: "app", Data: map[string]any{"namespace": "prod", "apiVersion": "apps/v1"}},
+		{ID: "replicaset/prod/hidden", Kind: topology.KindReplicaSet, Name: "hidden", Data: map[string]any{"namespace": "prod", "apiVersion": "apps/v1", "labels": map[string]string{"private": "hidden-metadata"}}},
+		{ID: "pod/prod/visible", Kind: topology.KindPod, Name: "visible", Data: map[string]any{"namespace": "prod", "apiVersion": "v1"}},
+	}, Edges: []topology.Edge{{Source: "deployment/prod/app", Target: "replicaset/prod/hidden", Type: topology.EdgeManages}, {Source: "replicaset/prod/hidden", Target: "pod/prod/visible", Type: topology.EdgeManages}}}
+	for _, denied := range []string{"ReplicaSet", "Deployment"} {
+		t.Run(denied, func(t *testing.T) {
+			getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "app"}): app}}
+			tree, _, err := NewBuilder(getter, topo).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != denied }).Build(context.Background(), "Application", "argocd", "app", "argoproj.io")
+			if err != nil {
+				t.Fatal(err)
+			}
+			visible := false
+			for _, n := range tree.Nodes {
+				if n.Ref.Kind == denied {
+					t.Fatalf("denied node emitted: %+v", n)
+				}
+				if n.Ref.Kind == "Pod" && n.Ref.Name == "visible" {
+					visible = true
+				}
+				if denied == "ReplicaSet" && strings.Contains(fmt.Sprint(n.Data), "hidden-metadata") {
+					t.Fatalf("denied metadata leaked: %+v", n.Data)
+				}
+			}
+			if !visible || len(tree.Warnings) == 0 {
+				t.Fatalf("readable descendant hidden or no incomplete warning: %+v", tree)
+			}
+			for _, e := range tree.Edges {
+				for _, n := range tree.Nodes {
+					if denied == "ReplicaSet" && n.Ref.Kind == "Pod" && e.Target == n.ID {
+						t.Fatalf("invented shortcut to Pod across denied owner: %+v", e)
+					}
+				}
+			}
+		})
+	}
+}

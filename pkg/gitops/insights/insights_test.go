@@ -1886,3 +1886,31 @@ func TestBuild_DestinationlessAppIsNotReportedRemote(t *testing.T) {
 		t.Error("an Application with no destination is invalid, not deploying elsewhere")
 	}
 }
+
+func TestFluxDependencyChangesDoNotClaimInventoryOwnership(t *testing.T) {
+	tree := &gitopstree.ResourceTree{
+		Nodes: []gitopstree.Node{
+			{ID: "source", Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "OCIRepository", Name: "chart"}},
+			{ID: "ordering", Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "Kustomization", Name: "base"}},
+			{ID: "managed", Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "Deployment", Name: "app"}},
+		},
+		Edges: []gitopstree.Edge{
+			{Source: "root", Target: "source", Type: gitopstree.EdgeSource},
+			{Source: "root", Target: "ordering", Type: gitopstree.EdgeDependsOn},
+			{Source: "root", Target: "managed", Type: gitopstree.EdgeOwns},
+		},
+	}
+	changes := buildChanges(nil, tree, "fluxcd", nil)
+	if len(changes) != 3 {
+		t.Fatalf("changes = %+v", changes)
+	}
+	for _, change := range changes {
+		if change.Ref.Kind == "Deployment" {
+			if !strings.Contains(change.PartialNote, "inventory confirms") {
+				t.Fatalf("managed note = %s", change.PartialNote)
+			}
+		} else if strings.Contains(change.PartialNote, "inventory confirms") || !strings.Contains(change.PartialNote, "dependency") {
+			t.Fatalf("dependency misrepresented as managed: %+v", change)
+		}
+	}
+}

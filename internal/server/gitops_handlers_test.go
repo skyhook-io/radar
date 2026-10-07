@@ -231,6 +231,7 @@ func TestGitopsRequestHasNamespaceAccess(t *testing.T) {
 func TestFilterGitOpsTreeForUserAppliesNamespaceAndClusterScope(t *testing.T) {
 	s := &Server{permCache: auth.NewPermissionCache()}
 	s.permCache.Set("gitops-tree-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team-a"}})
+	s.permCache.Get("gitops-tree-user", nil).SetCanI("get", "apps", "deployments", "team-a", true)
 	req := &gitopsRequest{AllowedNamespaces: []string{"team-a"}}
 	tree := &gitopstree.ResourceTree{
 		Root: gitopstree.Node{ID: "root", Role: gitopstree.RoleRoot, Ref: gitopstree.ResourceRef{Kind: "Application", Namespace: "argocd", Name: "app"}},
@@ -266,5 +267,43 @@ func TestFilterGitOpsTreeForUserAppliesNamespaceAndClusterScope(t *testing.T) {
 	}
 	if len(got.Warnings) == 0 || !strings.Contains(got.Warnings[0], "hidden by RBAC") {
 		t.Fatalf("expected RBAC warning, got %#v", got.Warnings)
+	}
+}
+
+func TestGitOpsTreeDeniesUnreadableKindInsideAllowedNamespace(t *testing.T) {
+	s := &Server{permCache: auth.NewPermissionCache()}
+	s.permCache.Set("source-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
+	s.permCache.Get("source-user", nil).SetCanI("get", "", "secrets", "team", false)
+	req := &gitopsRequest{AllowedNamespaces: []string{"team"}}
+	tree := &gitopstree.ResourceTree{
+		Root: gitopstree.Node{ID: "root", Role: gitopstree.RoleRoot},
+		Nodes: []gitopstree.Node{
+			{ID: "root", Role: gitopstree.RoleRoot},
+			{ID: "source", Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "Secret", Namespace: "team", Name: "unreadable"}, Data: map[string]any{"labels": map[string]string{"private": "metadata"}}},
+		},
+		Edges: []gitopstree.Edge{{Source: "root", Target: "source", Type: gitopstree.EdgeSource}},
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/tree", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "source-user"}))
+	filtered := s.filterGitOpsTreeForUser(r, req, tree)
+	if len(filtered.Nodes) != 1 || len(filtered.Edges) != 0 || filtered.Summary.Declared != 0 {
+		t.Fatalf("unreadable kind metadata leaked: %+v", filtered)
+	}
+}
+
+func TestGitOpsUnknownNamespacedDeclarationIsNotReadDenied(t *testing.T) {
+	s := &Server{permCache: auth.NewPermissionCache()}
+	s.permCache.Set("declaration-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/tree", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "declaration-user"}))
+	req := &gitopsRequest{AllowedNamespaces: []string{"team"}}
+	if !s.canAccessGitOpsRef(r, req, "not-installed.example", "RemoteWidget", "team", "declared", false) {
+		t.Fatal("unknown discovery erased readable inventory declaration")
+	}
+	if s.canAccessGitOpsRef(r, req, "not-installed.example", "RemoteWidget", "other", "declared", false) {
+		t.Fatal("unknown kind bypassed namespace scope")
+	}
+	if s.canAccessGitOpsRef(r, req, "", "Secret", "team", "private", false) {
+		t.Fatal("known kind denial bypassed by unknown handling")
 	}
 }

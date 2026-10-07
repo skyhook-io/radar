@@ -252,3 +252,37 @@ func TestMemoizer_DoesNotCacheErrors(t *testing.T) {
 		t.Errorf("expected 2 build calls, got %d", got)
 	}
 }
+
+func TestMemoizer_GetWithIndexKeepsSnapshotPairAndReusesIndex(t *testing.T) {
+	m := NewMemoizer(time.Hour)
+	opts := DefaultBuildOptions()
+	var count int
+	build := func() (*Topology, error) {
+		count++
+		name := "first"
+		if count > 1 {
+			name = "replacement"
+		}
+		return &Topology{Nodes: []Node{{ID: "deployment/team/" + name, Kind: KindDeployment, Name: name, Data: map[string]any{"namespace": "team"}}}}, nil
+	}
+	first, idx, err := m.GetWithIndex(opts, build)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, same, err := m.GetWithIndex(opts, build)
+	if err != nil || first != again || idx != same || count != 1 {
+		t.Fatalf("snapshot/index rebuilt on cache hit: %v %d", err, count)
+	}
+	// Force a genuine refresh without timing a sleep; old readers keep their
+	// coherent snapshot while the next call receives the replacement index.
+	m.mu.Lock()
+	m.entries[memoKey(opts)].builtAt = time.Now().Add(-2 * time.Hour)
+	m.mu.Unlock()
+	next, nextIdx, err := m.GetWithIndex(opts, build)
+	if err != nil || next == first || nextIdx == idx || count != 2 {
+		t.Fatalf("refresh = %v %d", err, count)
+	}
+	if idx.nodesByID[first.Nodes[0].ID] != &first.Nodes[0] || nextIdx.nodesByID[next.Nodes[0].ID] != &next.Nodes[0] || nextIdx.nodesByID[first.Nodes[0].ID] != nil {
+		t.Fatal("index paired with another snapshot")
+	}
+}

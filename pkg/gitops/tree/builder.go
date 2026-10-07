@@ -49,6 +49,7 @@ type Builder struct {
 	topo              *topology.Topology
 	allowedNamespaces []string
 	isUnknownKind     ErrUnknownKindMatcher
+	canRead           func(ResourceRef) bool
 }
 
 func NewBuilder(dynamic DynamicGetter, topo *topology.Topology) *Builder {
@@ -60,6 +61,17 @@ func NewBuilder(dynamic DynamicGetter, topo *topology.Topology) *Builder {
 func (b *Builder) WithAllowedNamespaces(namespaces []string) *Builder {
 	b.allowedNamespaces = namespaces
 	return b
+}
+
+// WithReadCheck gates enrichment and emitted nodes by the host's resource-kind
+// policy. The callback runs serially, before prefetch workers read the cache.
+func (b *Builder) WithReadCheck(check func(ResourceRef) bool) *Builder {
+	b.canRead = check
+	return b
+}
+
+func (b *Builder) canEmit(ref ResourceRef) bool {
+	return b.canRead == nil || b.canRead(ref)
 }
 
 // WithUnknownKindMatcher wires the host's unknown-kind sentinel classifier
@@ -128,6 +140,8 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	nodes := map[string]Node{rootNode.ID: rootNode}
 	edges := map[string]Edge{}
 	declaredIDs := map[string]bool{}
+	var hiddenTraversalRoots []string
+	omittedByReadCheck := false
 
 	topoByRef := map[string]topology.Node{}
 	topoByID := map[string]topology.Node{}
@@ -147,7 +161,11 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 
 	var fluxRelated []relatedResource
 	if tool == ToolFluxCD {
-		fluxRelated = fluxRelatedResources(root)
+		for _, related := range fluxRelatedResources(root) {
+			if b.canEmit(related.Ref) {
+				fluxRelated = append(fluxRelated, related)
+			}
+		}
 	}
 	enrichRefs := make([]ResourceRef, 0, len(managed)+len(fluxRelated))
 	if !remote {
@@ -159,9 +177,49 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		enrichRefs = append(enrichRefs, res.Ref)
 	}
 	objects, unknownKinds := b.prefetchObjects(ctx, enrichRefs)
+	// A referenced chart's source is local to that observed chart. Follow only
+	// the already-prefetched chart, never every chart in the cluster.
+	var chartSources []relatedResource
+	var chartRefs []ResourceRef
+	for _, related := range fluxRelated {
+		if related.Ref.Group != "source.toolkit.fluxcd.io" || related.Ref.Kind != "HelmChart" {
+			continue
+		}
+		chart := objects[refKey(related.Ref)]
+		if chart == nil {
+			continue
+		}
+		for _, source := range gitops.FluxSourceReferences(chart) {
+			ref := ResourceRef{Group: source.Group, Kind: source.Kind, Namespace: source.Namespace, Name: source.Name}
+			if !b.canEmit(ref) {
+				continue
+			}
+			chartSources = append(chartSources, relatedResource{Parent: related.Ref, Ref: ref, Type: EdgeSource, Data: map[string]any{"relationship": source.Role}})
+			chartRefs = append(chartRefs, ref)
+		}
+	}
+	if len(chartRefs) > 0 {
+		chartObjects, unavailable := b.prefetchObjects(ctx, chartRefs)
+		for key, object := range chartObjects {
+			objects[key] = object
+		}
+		unknownKinds = append(unknownKinds, unavailable...)
+		fluxRelated = append(fluxRelated, chartSources...)
+	}
 
 	for _, res := range managed {
 		id := nodeID(res.Ref)
+		if !b.canEmit(res.Ref) {
+			omittedByReadCheck = true
+			if !remote {
+				if live, ok := findTopoNode(topoByRef, res.Ref); ok {
+					topoIDByTreeID[id] = live.ID
+					treeIDByTopoID[live.ID] = id
+					hiddenTraversalRoots = append(hiddenTraversalRoots, id)
+				}
+			}
+			continue
+		}
 		declaredIDs[id] = true
 		if remote {
 			node := mergeData(syntheticNode(res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), res.Data)
@@ -207,7 +265,16 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 			} else {
 				nodes[id] = mergeData(nodes[id], res.Data)
 			}
-			edges[edgeKey(rootNode.ID, id)] = Edge{Source: rootNode.ID, Target: id, Type: res.Type}
+			parentID := rootNode.ID
+			if res.Parent.Name != "" {
+				parentID = nodeID(res.Parent)
+			}
+			// Inventory ownership and source declarations may overlap (bootstrap).
+			// Preserve the authoritative ownership edge instead of overwriting it.
+			if !remote && declaredIDs[id] {
+				continue
+			}
+			edges[edgeKey(parentID, id)] = Edge{Source: parentID, Target: id, Type: res.Type}
 		}
 	}
 
@@ -223,7 +290,8 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	for id := range declaredIDs {
 		queue = append(queue, id)
 	}
-	if len(declaredIDs) == 0 {
+	queue = append(queue, hiddenTraversalRoots...)
+	if len(declaredIDs) == 0 && len(hiddenTraversalRoots) == 0 {
 		queue = append(queue, rootNode.ID)
 	}
 	seen := map[string]bool{}
@@ -251,10 +319,16 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 				treeIDByTopoID[targetTopo.ID] = targetID
 				topoIDByTreeID[targetID] = targetTopo.ID
 			}
-			if _, exists := nodes[targetID]; !exists {
-				nodes[targetID] = nodeFromTopology(targetTopo, targetRef, RoleGenerated, tool, "", "", "")
+			if b.canEmit(targetRef) {
+				if _, exists := nodes[targetID]; !exists {
+					nodes[targetID] = nodeFromTopology(targetTopo, targetRef, RoleGenerated, tool, "", "", "")
+				}
+				if _, sourceVisible := nodes[id]; sourceVisible {
+					edges[edgeKey(id, targetID)] = Edge{Source: id, Target: targetID, Type: EdgeOwns}
+				}
+			} else {
+				omittedByReadCheck = true
 			}
-			edges[edgeKey(id, targetID)] = Edge{Source: id, Target: targetID, Type: EdgeOwns}
 			queue = append(queue, targetID)
 		}
 	}
@@ -283,7 +357,10 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	if r, ok := nodes[rootNode.ID]; ok {
 		mergedRoot = r
 	}
-	warnings := b.topoWarnings()
+	warnings := append([]string{}, b.topoWarnings()...)
+	if omittedByReadCheck {
+		warnings = append(warnings, "Some resource nodes are hidden by read permissions; readable descendants may be disconnected from their omitted owners.")
+	}
 	if w := unknownKindsWarning(unknownKinds); w != "" {
 		warnings = append(append([]string{}, warnings...), w)
 	}
@@ -346,7 +423,7 @@ func (b *Builder) prefetchObjects(ctx context.Context, refs []ResourceRef) (map[
 	targets := make([]ResourceRef, 0, len(refs))
 	seen := make(map[string]struct{}, len(refs))
 	for _, ref := range refs {
-		if ref.Name == "" || !b.canEnrich(ref) {
+		if ref.Name == "" || !b.canEmit(ref) || !b.canEnrich(ref) {
 			continue
 		}
 		key := refKey(ref)

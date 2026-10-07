@@ -95,7 +95,7 @@ func (s *Server) parseGitOpsRequest(w http.ResponseWriter, r *http.Request) (*gi
 // firing /tree + /insights, or the in-flight 2s polling, all share a single
 // build. Topology is a deterministic projection of the informer cache, so
 // the short TTL has no semantic effect.
-func (s *Server) buildGitOpsTree(ctx context.Context, req *gitopsRequest) (*gitopstree.ResourceTree, *unstructured.Unstructured, error) {
+func (s *Server) buildGitOpsTree(r *http.Request, req *gitopsRequest) (*gitopstree.ResourceTree, *unstructured.Unstructured, error) {
 	opts := topology.DefaultBuildOptions()
 	opts.Namespaces = req.AllowedNamespaces
 	opts.IncludeReplicaSets = true
@@ -112,8 +112,11 @@ func (s *Server) buildGitOpsTree(ctx context.Context, req *gitopsRequest) (*gito
 
 	return gitopstree.NewBuilder(req.Cache, topo).
 		WithAllowedNamespaces(req.AllowedNamespaces).
+		WithReadCheck(func(ref gitopstree.ResourceRef) bool {
+			return s.canAccessGitOpsRef(r, req, ref.Group, ref.Kind, ref.Namespace, ref.Name, false)
+		}).
 		WithUnknownKindMatcher(func(err error) bool { return errors.Is(err, k8s.ErrUnknownDynamicKind) }).
-		Build(ctx, req.Kind, req.Namespace, req.Name, req.Group)
+		Build(r.Context(), req.Kind, req.Namespace, req.Name, req.Group)
 }
 
 // writeGitOpsBuildError maps tree-build errors to HTTP status codes.
@@ -164,7 +167,7 @@ func (s *Server) handleGitOpsTree(w http.ResponseWriter, r *http.Request) {
 // it (and its once-per-request issue-engine composition) instead of building
 // a second one.
 func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitopstree.ResourceTree, *unstructured.Unstructured, *insightsResolver, error) {
-	tree, root, err := s.buildGitOpsTree(r.Context(), req)
+	tree, root, err := s.buildGitOpsTree(r, req)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -815,7 +818,14 @@ func (s *Server) canAccessGitOpsRef(r *http.Request, req *gitopsRequest, group, 
 		return !noNamespaceAccess(allowed)
 	}
 	if namespace != "" {
-		return namespaceAllowedForGitOps(req.AllowedNamespaces, namespace)
+		if !namespaceAllowedForGitOps(req.AllowedNamespaces, namespace) {
+			return false
+		}
+		gvrGroup, resource := k8s.LookupResourceGVR(kind, group)
+		// Unknown discovery is not a permission denial. The dynamic getter
+		// returns unknown-kind rather than local metadata for an unserved kind,
+		// and remote inventory declarations must remain available for Hub merge.
+		return resource == "" || s.canRead(r, gvrGroup, resource, namespace, "get")
 	}
 	if clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group); clusterScoped {
 		return s.canRead(r, gvrGroup, gvrResource, "", "list")

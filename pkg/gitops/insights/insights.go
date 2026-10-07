@@ -464,11 +464,10 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 	if s.LastReconcile == "" {
 		s.LastReconcile = newestConditionTime(root)
 	}
-	if ref, ok := nestedRef(root, "spec", "sourceRef"); ok {
-		s.Source = ref.Kind + "/" + ref.Name
-	} else if ref, ok := nestedRef(root, "spec", "chart", "spec", "sourceRef"); ok {
-		s.Source = ref.Kind + "/" + ref.Name
+	if sources := gitops.FluxSourceReferences(root); len(sources) > 0 {
+		s.Source = sources[0].Kind + "/" + sources[0].Name
 	}
+
 	if suspended, _, _ := unstructured.NestedBool(root.Object, "spec", "suspend"); suspended {
 		s.AutoSyncMode = "Suspended"
 	} else {
@@ -938,6 +937,12 @@ func buildChanges(root *unstructured.Unstructured, resourceTree *gitopstree.Reso
 	if resourceTree == nil {
 		return nil
 	}
+	related := map[string]gitopstree.EdgeType{}
+	for _, edge := range resourceTree.Edges {
+		if edge.Type == gitopstree.EdgeSource || edge.Type == gitopstree.EdgeDependsOn {
+			related[edge.Target] = edge.Type
+		}
+	}
 	var out []Change
 	for _, n := range resourceTree.Nodes {
 		if n.Role == gitopstree.RoleRoot || n.Role == gitopstree.RoleGroup {
@@ -946,6 +951,12 @@ func buildChanges(root *unstructured.Unstructured, resourceTree *gitopstree.Reso
 		category := categorizeFluxChange(n.Sync, n.Health)
 		partial := true
 		note := "Flux inventory confirms this resource is managed; desired manifest content is not available in Radar yet."
+		switch related[n.ID] {
+		case gitopstree.EdgeSource:
+			note = "Flux declares this resource as a source dependency; this reference does not establish ownership or a desired manifest."
+		case gitopstree.EdgeDependsOn:
+			note = "Flux declares this resource as an ordering dependency; this reference does not establish ownership or a desired manifest."
+		}
 		out = append(out, Change{
 			Ref:         refFromTree(n.Ref),
 			Category:    category,
