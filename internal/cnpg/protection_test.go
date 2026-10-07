@@ -76,6 +76,61 @@ func TestArchivingReviewAndConditionalWrite(t *testing.T) {
 	}
 }
 
+func TestArchivingExistingPluginEnablement(t *testing.T) {
+	for _, scenario := range []struct {
+		name    string
+		enabled bool
+		wal     bool
+	}{
+		{name: "base-backup-only", enabled: true},
+		{name: "disabled"},
+		{name: "already-archiving", enabled: true, wal: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			ctx := context.Background()
+			cluster := unprotectedCluster()
+			plugin := map[string]any{
+				"name": "barman-cloud.cloudnative-pg.io", "enabled": scenario.enabled, "isWALArchiver": scenario.wal,
+				"parameters": map[string]any{"barmanObjectName": "store", "serverName": "pg", "custom": "keep"},
+			}
+			cluster.Object["spec"].(map[string]any)["plugins"] = []any{plugin}
+			env := newCNPGActionEnv(t, []runtime.Object{cluster, protectionStore("store")})
+			preview, err := newTestReader(nil).PreviewArchiving(ctx, env.clients(), "ctx", "db", "pg", ArchivingParams{ObjectStore: "store", ServerName: "pg"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if preview.Unchanged != (scenario.enabled && scenario.wal) {
+				t.Fatalf("unchanged=%v for %+v", preview.Unchanged, scenario)
+			}
+			if plugin["enabled"] != scenario.enabled || plugin["isWALArchiver"] != scenario.wal {
+				t.Fatal("preview mutated the source plugin")
+			}
+			env.patches = nil
+			if _, err := RunCNPGClusterAction(ctx, env.clients(), "db", "pg", "configureArchiving", archivingRequest(t, preview)); err != nil {
+				t.Fatal(err)
+			}
+			if preview.Unchanged {
+				if len(env.patches) != 0 {
+					t.Fatal("already enabled archiving should be a no-op")
+				}
+				return
+			}
+			if len(env.patches) != 1 {
+				t.Fatalf("expected one enablement write, got %d", len(env.patches))
+			}
+			patch := env.patches[0].(k8stesting.PatchActionImpl)
+			if len(patch.GetPatchOptions().DryRun) != 0 {
+				t.Fatal("enablement remained a dry-run")
+			}
+			plugins := cnpgActionPatchBody(t, env.patches[0])["spec"].(map[string]any)["plugins"].([]any)
+			updated := plugins[0].(map[string]any)
+			if updated["enabled"] != true || updated["isWALArchiver"] != true || updated["parameters"].(map[string]any)["custom"] != "keep" {
+				t.Fatalf("enablement or preservation failed: %v", updated)
+			}
+		})
+	}
+}
+
 func TestArchivingRefusesReviewedConfigurationChanges(t *testing.T) {
 	for _, changed := range []string{"cluster", "store", "recreated", "race"} {
 		t.Run(changed, func(t *testing.T) {
