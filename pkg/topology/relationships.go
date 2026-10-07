@@ -405,6 +405,9 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		case EdgeConfigures:
 			// ConfigMap/Secret is used by a workload (outgoing from config)
 			rel.Consumers = append(rel.Consumers, *ref)
+			if isConfigurationDependency(refForNodeID(edge.Source)) {
+				rel.Dependents = appendResourceRef(rel.Dependents, *ref)
+			}
 			if reflectionEdge(edge, nodeByID) {
 				if rel.Reflection == nil {
 					rel.Reflection = &ReflectionRelationships{}
@@ -465,6 +468,9 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				rel.NetworkPolicies = append(rel.NetworkPolicies, *ref)
 			}
 		case EdgeConfigures:
+			if isConfigurationDependency(ref) {
+				rel.Dependencies = appendResourceRef(rel.Dependencies, *ref)
+			}
 			if reflectionEdge(edge, nodeByID) {
 				if rel.Reflection == nil {
 					rel.Reflection = &ReflectionRelationships{}
