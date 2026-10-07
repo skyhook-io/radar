@@ -31,6 +31,17 @@ describe('PodRenderer nominated Node', () => {
     }
   })
 
+  it('hides a nomination on a terminal or terminating unbound Pod', () => {
+    for (const data of [
+      { metadata: { name: 'failed', namespace: 'app' }, spec: { containers: [] }, status: { phase: 'Failed', nominatedNodeName: 'stale' } },
+      { metadata: { name: 'deleting', namespace: 'app', deletionTimestamp: '2026-10-07T00:00:00Z' }, spec: { containers: [] }, status: { phase: 'Pending', nominatedNodeName: 'stale' } },
+    ]) {
+      const html = renderToStaticMarkup(<PodRenderer data={data} onCopy={() => {}} copied={null} />)
+      expect(html).not.toContain('Nominated Node')
+      expect(html).not.toContain('stale')
+    }
+  })
+
   it('hides a nomination once the Pod is bound, even when it names another node', () => {
     const html = renderToStaticMarkup(
       <PodRenderer

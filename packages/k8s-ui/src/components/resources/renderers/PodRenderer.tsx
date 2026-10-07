@@ -453,12 +453,13 @@ export function PodRenderer({
           <Property label="Node" value={
             data.spec?.nodeName ? <ResourceLink name={data.spec.nodeName} kind="nodes" onNavigate={onNavigate} /> : undefined
           } copyable onCopy={onCopy} copied={copied} />
-          {/* The API server clears a nomination on binding by default only from
-              Kubernetes 1.35, so a bound Pod can carry a stale, different node name. */}
-          {data.status?.nominatedNodeName && !data.spec?.nodeName && (
+          {/* A nomination outlives its meaning: the API server clears it on binding by
+              default only from Kubernetes 1.35, and pod GC fails a terminating unbound
+              Pod without clearing it. Only a Pending, unbound, live Pod can still use it. */}
+          {data.status?.nominatedNodeName && !data.spec?.nodeName && data.status?.phase === 'Pending' && !data.metadata?.deletionTimestamp && (
             <Property
               label={
-                <Tooltip content="The scheduler has nominated this node. Nomination can change before the Pod is bound." position="right">
+                <Tooltip content="The node this Pod is expected to run on, set by the scheduler or another component. It can change before the Pod is bound." position="right">
                   <span className="border-b border-dotted border-theme-text-tertiary cursor-help">Nominated Node</span>
                 </Tooltip>
               }
