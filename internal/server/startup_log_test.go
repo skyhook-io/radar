@@ -236,7 +236,12 @@ func TestStartupAIStatusExplainsWhyItIsOff(t *testing.T) {
 				mcpEnabled: true,
 				kubeconfig: k8s.KubeconfigSummary{Mode: "in-cluster"},
 			},
-			want: "no agent CLI in this container",
+			want: "not available when Radar runs inside the cluster",
+		},
+		{
+			name:    "a shared installation does not tell anyone to install a CLI",
+			summary: startupLogSummary{mcpEnabled: true, configManagement: "operator"},
+			want:    "not available in a shared installation",
 		},
 	}
 	for _, c := range cases {

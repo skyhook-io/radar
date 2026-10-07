@@ -32,6 +32,7 @@ type startupLogSummary struct {
 	mcpEnabled           bool
 	aiAgent              string
 	aiCLIOverride        string
+	configManagement     string
 	cloudMode            bool
 	showRemoteAccessHint bool
 	contextName          string
@@ -55,6 +56,7 @@ func (s *Server) logStartupSummaryBlock() {
 		mcpEnabled:           s.mcpHandler != nil,
 		aiAgent:              aiAgent,
 		aiCLIOverride:        strings.TrimSpace(os.Getenv("RADAR_AI_CLI_BIN")),
+		configManagement:     s.configManagement(),
 		cloudMode:            cloud.Mode(),
 		showRemoteAccessHint: s.remoteAccessHint,
 		contextName:          k8s.GetContextName(),
@@ -221,8 +223,8 @@ func startupLogColorEnabled(w io.Writer) bool {
 // startupAIStatus explains the AI-investigations state. The disabled cases carry
 // a reason because "no agent CLI found" reads to the user as a bug in Radar when
 // their CLI is installed but sits outside the PATH Radar was launched with. The
-// install advice is held back in-cluster, where there is no user terminal to run
-// it in.
+// install advice is held back in-cluster and in shared installations, which
+// can't run local investigations at all.
 func startupAIStatus(summary startupLogSummary) string {
 	authMode := strings.ToLower(summary.authMode)
 	switch {
@@ -233,7 +235,9 @@ func startupAIStatus(summary startupLogSummary) string {
 	case !summary.mcpEnabled:
 		return "disabled (needs MCP; remove --no-mcp)"
 	case summary.kubeconfig.Mode == "in-cluster":
-		return "disabled (no agent CLI in this container)"
+		return "disabled (not available when Radar runs inside the cluster)"
+	case summary.configManagement == "operator":
+		return "disabled (not available in a shared installation)"
 	case summary.aiCLIOverride != "":
 		// The override wins over detection, so when it names something this
 		// Radar can't run, nothing else was tried. Saying "no agent CLI found"
