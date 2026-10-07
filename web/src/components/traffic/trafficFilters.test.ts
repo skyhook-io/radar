@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, type GraphFlow } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, type GraphFlow } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -318,6 +318,35 @@ describe('selectionRawPairs', () => {
   it('returns null when nothing traces back, so the list falls back to the sample', () => {
     expect(selectionRawPairs([merged], { type: 'node', nodeId: 'addon-group' })).toBeNull()
     expect(selectionRawPairs([merged], null)).toBeNull()
+  })
+
+  it('selects an edge on its own port: the graph draws one edge per port', () => {
+    const http = { ...c, port: 80 }
+    const graph: GraphFlow[] = [{ ...c, rawPairs: [endpointPair(c)] }, { ...http, rawPairs: [endpointPair(http)] }]
+    expect(selectionRawPairs(graph, { type: 'edge', sourceId: 'shop/web-1', destId: 'shop/db-0', port: 80 }))
+      .toEqual([endpointPair(http)])
+    expect(endpointPair(http).port).toBe(80)
+  })
+
+  it('resolves the addon group, drawn as one node, through its virtual endpoints', () => {
+    const virtual: GraphFlow = {
+      ...a,
+      source: { namespace: '', name: 'addon-internet', kind: 'AddonInternet' },
+      destination: { namespace: '', name: 'addon-group-target', kind: 'AddonGroupTarget' },
+      port: 0,
+      rawPairs: [endpointPair(a)],
+    }
+    expect(selectionRawPairs([virtual], { type: 'edge', sourceId: 'addon-internet', destId: 'addon-group', port: 0 }))
+      .toEqual([endpointPair(a)])
+    expect(selectionRawPairs([virtual], { type: 'node', nodeId: 'addon-group' })).toEqual([endpointPair(a)])
+  })
+
+  it('merges pairs in place', () => {
+    const into: GraphFlow = { ...a, rawPairs: [endpointPair(a)] }
+    const owned = into.rawPairs
+    mergeRawPairs(into, { ...b, rawPairs: [endpointPair(b)] })
+    expect(into.rawPairs).toBe(owned)
+    expect(into.rawPairs).toHaveLength(2)
   })
 
   it('omits an empty namespace so the server reads it as cluster-level', () => {

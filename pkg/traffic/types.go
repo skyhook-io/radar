@@ -141,18 +141,18 @@ func (r EndpointRef) matches(e Endpoint) bool {
 	return r.Namespace == e.Namespace && r.Name == e.Name
 }
 
-// EndpointPair is one caller-to-callee edge of the aggregation.
+// EndpointPair is one caller-to-callee edge of the aggregation, on Port when
+// it is set and on any port when it is zero.
 type EndpointPair struct {
 	Source      EndpointRef `json:"source"`
 	Destination EndpointRef `json:"destination"`
+	Port        int         `json:"port,omitempty"`
 }
 
-// FlowMatch selects the flows behind a graph node (Endpoints: a flow touching
-// any of them) or a graph edge (Pairs: a flow between one of the pairs, in
-// the direction the aggregation recorded it).
+// FlowMatch selects the flows behind a graph node or edge: those between one
+// of the pairs, in the direction the aggregation recorded them.
 type FlowMatch struct {
-	Endpoints []EndpointRef  `json:"endpoints,omitempty"`
-	Pairs     []EndpointPair `json:"pairs,omitempty"`
+	Pairs []EndpointPair `json:"pairs"`
 }
 
 // Matches reports whether a flow belongs to the selection.
@@ -160,25 +160,20 @@ func (m *FlowMatch) Matches(f Flow) bool {
 	if m == nil {
 		return true
 	}
-	for _, r := range m.Endpoints {
-		if r.matches(f.Source) || r.matches(f.Destination) {
-			return true
-		}
-	}
 	for _, p := range m.Pairs {
-		if p.Source.matches(f.Source) && p.Destination.matches(f.Destination) {
+		if p.Source.matches(f.Source) && p.Destination.matches(f.Destination) && (p.Port == 0 || p.Port == f.Port) {
 			return true
 		}
 	}
 	return false
 }
 
-// Size is how many references the selection carries.
+// Size is how many pairs the selection carries.
 func (m *FlowMatch) Size() int {
 	if m == nil {
 		return 0
 	}
-	return len(m.Endpoints) + len(m.Pairs)
+	return len(m.Pairs)
 }
 
 // FlowsResponse contains the flows and metadata.

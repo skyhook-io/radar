@@ -16,9 +16,12 @@ export function TrafficFlowListTab() {
 
   if (flows.length === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-sm text-theme-text-tertiary gap-2">
-        <List className="w-4 h-4" />
-        {graphSelection ? 'No flow records for this selection' : 'Navigate to Traffic view to see flows'}
+      <div className="flex flex-col items-center justify-center h-full gap-1 px-4 text-center">
+        <div className="flex items-center gap-2 text-sm text-theme-text-tertiary">
+          <List className="w-4 h-4" />
+          {graphSelection ? 'No flow records for this selection' : 'Navigate to Traffic view to see flows'}
+        </div>
+        {note && <div className="text-[11px] text-theme-text-tertiary">{note}</div>}
       </div>
     )
   }

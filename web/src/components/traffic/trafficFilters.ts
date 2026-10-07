@@ -300,15 +300,30 @@ export type GraphFlow = AggregatedFlow & { rawPairs?: TrafficEndpointPair[] }
 
 export function endpointPair(flow: AggregatedFlow): TrafficEndpointPair {
   const ref = (e: AggregatedFlow['source']) => ({ namespace: e.namespace || undefined, name: e.name, kind: e.kind })
-  return { source: ref(flow.source), destination: ref(flow.destination) }
+  return { source: ref(flow.source), destination: ref(flow.destination), ...(flow.port && { port: flow.port }) }
+}
+
+/** Adds a merged edge's pairs to the edge it was merged into. The target owns
+ *  its array, so merging appends in place: copying it on every merge is
+ *  quadratic, and an ingress with tens of thousands of distinct clients
+ *  collapses into a single Internet edge. */
+export function mergeRawPairs(into: GraphFlow, from: GraphFlow): void {
+  const target = into.rawPairs ?? (into.rawPairs = [])
+  for (const pair of from.rawPairs ?? []) target.push(pair)
+}
+
+// The renderer draws the addon group's virtual endpoints as one group node.
+function selectableId(e: { namespace?: string; name: string; kind?: string }): string {
+  if (e.kind === 'AddonGroupTarget' || e.kind === 'AddonGroupSource') return 'addon-group'
+  return graphEndpointId(e)
 }
 
 export function graphEndpointId(e: { namespace?: string; name: string }): string {
   return e.namespace ? `${e.namespace}/${e.name}` : e.name
 }
 
-export function pairKey(source: { namespace?: string; name: string }, destination: { namespace?: string; name: string }): string {
-  return `${graphEndpointId(source)}->${graphEndpointId(destination)}`
+export function pairKey(source: { namespace?: string; name: string }, destination: { namespace?: string; name: string }, port?: number): string {
+  return `${graphEndpointId(source)}->${graphEndpointId(destination)}:${port ?? 0}`
 }
 
 /**
@@ -320,14 +335,16 @@ export function selectionRawPairs(flows: GraphFlow[], selection: TrafficGraphSel
   if (!selection) return null
   const pairs = new Map<string, TrafficEndpointPair>()
   for (const flow of flows) {
-    const sourceId = graphEndpointId(flow.source)
-    const destId = graphEndpointId(flow.destination)
+    const sourceId = selectableId(flow.source)
+    const destId = selectableId(flow.destination)
+    // An edge is drawn per port, so a selected edge stands for its own port.
     const selected = selection.type === 'node'
       ? sourceId === selection.nodeId || destId === selection.nodeId
-      : sourceId === selection.sourceId && destId === selection.destId
+      : sourceId === selection.sourceId && destId === selection.destId &&
+        (selection.port === undefined || flow.port === selection.port)
     if (!selected) continue
     for (const pair of flow.rawPairs ?? []) {
-      pairs.set(pairKey(pair.source, pair.destination), pair)
+      pairs.set(pairKey(pair.source, pair.destination, pair.port), pair)
     }
   }
   return pairs.size > 0 ? Array.from(pairs.values()) : null

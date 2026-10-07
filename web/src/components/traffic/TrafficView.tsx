@@ -13,7 +13,7 @@ import { useDock } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, pairKey, selectionRawPairs } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, mergeRawPairs, pairKey, selectionRawPairs } from './trafficFilters'
 
 // Consecutive 2s retries of an empty result that came with a transient warning.
 const MAX_EMPTY_RETRIES = 5
@@ -788,13 +788,14 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
       const existing = aggregatedMap.get(key)
       if (existing) {
         mergeFlowVolume(existing, flow)
-        existing.rawPairs = [...(existing.rawPairs ?? []), ...(flow.rawPairs ?? [])]
+        mergeRawPairs(existing, flow)
         // Everything merged here shares the key's direction-known state, so the
         // flag is already correct on the entry that was created first.
       } else {
         // Create new aggregated flow with modified names
         aggregatedMap.set(key, {
           ...flow,
+          rawPairs: [...(flow.rawPairs ?? [])],
           source: sourceAgg.aggregated
             ? { ...flow.source, name: sourceAgg.name }
             : flow.source,
@@ -833,11 +834,12 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         const existing = internetFlowsMap.get(destKey)
         if (existing) {
           mergeFlowVolume(existing, flow)
-          existing.rawPairs = [...(existing.rawPairs ?? []), ...(flow.rawPairs ?? [])]
+          mergeRawPairs(existing, flow)
         } else {
           // Create new "Internet" → destination flow
           internetFlowsMap.set(destKey, {
             ...flow,
+            rawPairs: [...(flow.rawPairs ?? [])],
             source: {
               name: 'Internet',
               namespace: '',
@@ -883,7 +885,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
       if (sourceIsInternet && destIsAddon) {
         addonInternetTotal += flow.connections
         addonInternetRate += flow.requestRate ?? 0
-        addonInternetPairs.push(...(flow.rawPairs ?? []))
+        for (const pair of flow.rawPairs ?? []) addonInternetPairs.push(pair)
         processedFlows.push({
           ...flow,
           source: {
@@ -897,7 +899,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
       else if (sourceIsAddon && destIsK8sAPI) {
         addonToK8sTotal += flow.connections
         addonToK8sRate += flow.requestRate ?? 0
-        addonToK8sPairs.push(...(flow.rawPairs ?? []))
+        for (const pair of flow.rawPairs ?? []) addonToK8sPairs.push(pair)
         processedFlows.push({
           ...flow,
           destination: {
@@ -985,8 +987,10 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   const sampleSelection = useMemo(() => {
     if (!graphSelection) return filteredRawFlows
     if (selectionPairs) {
-      const keys = new Set(selectionPairs.map(p => pairKey(p.source, p.destination)))
-      return filteredRawFlows.filter(f => keys.has(pairKey(f.source, f.destination)))
+      const keys = new Set(selectionPairs.map(p => pairKey(p.source, p.destination, p.port)))
+      const anyPort = new Set(selectionPairs.filter(p => !p.port).map(p => pairKey(p.source, p.destination)))
+      return filteredRawFlows.filter(f =>
+        keys.has(pairKey(f.source, f.destination, f.port)) || anyPort.has(pairKey(f.source, f.destination)))
     }
     if (graphSelection.type === 'node' && graphSelection.nodeId) {
       const id = graphSelection.nodeId
@@ -1014,11 +1018,18 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   const sampleSize = flowsData?.flows?.length ?? 0
   const listNote = useMemo(() => {
     if (useRecords) {
-      const matched = records.data?.matched ?? 0
-      const got = records.data?.flows.length ?? 0
-      return matched > got
-        ? `Newest ${got.toLocaleString()} of ${matched.toLocaleString()} records for this selection`
-        : undefined
+      // This query's own account of what it could see: it is a separate fetch
+      // from the graph's, and an empty list beside a warning is not "no traffic".
+      const data = records.data
+      if (!data) return undefined
+      const parts: string[] = []
+      if (data.warning) parts.push(data.warning)
+      if (data.matched > data.flows.length) {
+        parts.push(`Newest ${data.flows.length.toLocaleString()} of ${data.matched.toLocaleString()} records for this selection`)
+      }
+      const covered = coverageLabel(data.coveredSince, data.timestamp)
+      if (covered) parts.push(`Records cover the ${covered} of ${timeRange}`)
+      return parts.length > 0 ? parts.join(' · ') : undefined
     }
     if (sampleTotal <= sampleSize) return undefined
     const sample = `newest ${sampleSize.toLocaleString()} of ${sampleTotal.toLocaleString()} records`
@@ -1026,7 +1037,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     if (records.tooLarge) return `This selection is too large to look up on its own; showing its flows among the ${sample}`
     if (records.isError) return `Couldn't load this selection's records (${records.error?.message}); showing its flows among the ${sample}`
     return `Showing this selection's flows among the ${sample}`
-  }, [useRecords, records.data, records.tooLarge, records.isError, records.error, sampleTotal, sampleSize, graphSelection])
+  }, [useRecords, records.data, records.tooLarge, records.isError, records.error, sampleTotal, sampleSize, graphSelection, timeRange])
 
   // Stats for display
   const flowStats = useMemo(() => {
@@ -1319,7 +1330,10 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                       mode="snapshot"
                       dataUpdatedAt={flowsUpdatedAt}
                       isFetching={flowsFetching}
-                      onRefresh={() => refetchFlowsRaw()}
+                      onRefresh={() => {
+                        refetchFlowsRaw()
+                        if (useRecords) records.refetch()
+                      }}
                       connectionState={connection.state}
                     />
                   </div>

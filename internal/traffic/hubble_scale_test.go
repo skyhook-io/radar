@@ -66,27 +66,29 @@ func TestHubbleMatchWhitelist(t *testing.T) {
 	})
 
 	t.Run("nothing Hubble can name means no pushdown", func(t *testing.T) {
-		if f := hubbleMatchWhitelist(&FlowMatch{Endpoints: []EndpointRef{{Name: "host", Kind: EndpointKindHost}}}); f != nil {
+		host := EndpointRef{Name: "host", Kind: EndpointKindHost}
+		if f := hubbleMatchWhitelist(&FlowMatch{Pairs: []EndpointPair{{Source: host, Destination: host}}}); f != nil {
 			t.Errorf("filters = %v, want nil", f)
 		}
 	})
 
 	t.Run("too many pods are filtered here instead", func(t *testing.T) {
-		var refs []EndpointRef
+		var pairs []EndpointPair
 		for i := range hubbleMaxMatchPods + 1 {
-			refs = append(refs, pod("a", fmt.Sprintf("p-%d", i)))
+			pairs = append(pairs, EndpointPair{Source: pod("a", fmt.Sprintf("p-%d", i)), Destination: pod("b", fmt.Sprintf("q-%d", i))})
 		}
-		if f := hubbleMatchWhitelist(&FlowMatch{Endpoints: refs}); f != nil {
+		if f := hubbleMatchWhitelist(&FlowMatch{Pairs: pairs}); f != nil {
 			t.Errorf("got %d filters, want none above %d pods", len(f), hubbleMaxMatchPods)
 		}
 	})
 
 	t.Run("a selection replaces the namespace whitelist", func(t *testing.T) {
-		req := hubbleFlowsRequest(FlowOptions{Namespaces: []string{"a"}, Match: &FlowMatch{Endpoints: []EndpointRef{pod("a", "web-1")}}}, false)
+		req := hubbleFlowsRequest(FlowOptions{Namespaces: []string{"a"}, Match: &FlowMatch{Pairs: []EndpointPair{{Source: pod("a", "web-1"), Destination: pod("a", "db-0")}}}}, false)
 		if wl := req.GetWhitelist(); len(wl) != 2 || !slices.Equal(wl[0].GetSourcePod(), []string{"a/web-1"}) {
 			t.Errorf("whitelist = %v, want the selection's pods", wl)
 		}
-		req = hubbleFlowsRequest(FlowOptions{Namespaces: []string{"a"}, Match: &FlowMatch{Endpoints: []EndpointRef{{Name: "world", Kind: EndpointKindExternal}}}}, false)
+		world := EndpointRef{Name: "world", Kind: EndpointKindExternal}
+		req = hubbleFlowsRequest(FlowOptions{Namespaces: []string{"a"}, Match: &FlowMatch{Pairs: []EndpointPair{{Source: world, Destination: world}}}}, false)
 		if wl := req.GetWhitelist(); len(wl) != 2 || !slices.Equal(wl[0].GetSourcePod(), []string{"a/"}) {
 			t.Errorf("whitelist = %v, want the namespaces when the selection cannot be pushed", wl)
 		}

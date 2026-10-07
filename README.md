@@ -391,6 +391,7 @@ Visualize live network traffic between services using Hubble, Caretta, Istio, or
 - Beyla needs its `network` feature enabled, and per-port edges additionally need `dst.port` and `transport` named in `attributes.select` — both are off by default, and Radar says so in the Traffic view rather than showing partial edges silently
 - Animated flow graph showing requests per second between services
 - Filter by namespace, protocol, or status code
+- Built for large clusters: hidden traffic is filtered at the source, each refresh keeps a bounded number of the newest flows and says how much of the window it covers, and the flow list fetches the records behind a selected node or edge
 - Setup wizard to install a traffic source if none is detected
 
 ### Workload Metrics

@@ -1004,30 +1004,22 @@ func hubbleMatchWhitelist(m *FlowMatch) []*flowpb.FlowFilter {
 		}
 		return out
 	}
-	var filters []*flowpb.FlowFilter
-	if len(m.Endpoints) > 0 {
-		p := pods(m.Endpoints)
-		if len(p) == 0 {
-			return nil
-		}
-		filters = append(filters, &flowpb.FlowFilter{SourcePod: p}, &flowpb.FlowFilter{DestinationPod: p})
+	if len(m.Pairs) == 0 {
+		return nil
 	}
-	if len(m.Pairs) > 0 {
-		srcs := make([]EndpointRef, len(m.Pairs))
-		dsts := make([]EndpointRef, len(m.Pairs))
-		for i, pair := range m.Pairs {
-			srcs[i], dsts[i] = pair.Source, pair.Destination
-		}
-		sp, dp := pods(srcs), pods(dsts)
-		if len(sp) == 0 && len(dp) == 0 {
-			return nil
-		}
-		filters = append(filters,
-			&flowpb.FlowFilter{SourcePod: sp, DestinationPod: dp},
-			&flowpb.FlowFilter{SourcePod: dp, DestinationPod: sp},
-		)
+	srcs := make([]EndpointRef, len(m.Pairs))
+	dsts := make([]EndpointRef, len(m.Pairs))
+	for i, pair := range m.Pairs {
+		srcs[i], dsts[i] = pair.Source, pair.Destination
 	}
-	return filters
+	sp, dp := pods(srcs), pods(dsts)
+	if len(sp) == 0 && len(dp) == 0 {
+		return nil
+	}
+	return []*flowpb.FlowFilter{
+		{SourcePod: sp, DestinationPod: dp},
+		{SourcePod: dp, DestinationPod: sp},
+	}
 }
 
 // Cilium's monitor message types (pkg/monitor/api MessageType*), kept local

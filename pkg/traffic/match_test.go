@@ -11,14 +11,19 @@ func TestFlowMatch(t *testing.T) {
 	if !none.Matches(flow) {
 		t.Error("no selection must match everything")
 	}
-	if !(&FlowMatch{Endpoints: []EndpointRef{ref("b", "db-0")}}).Matches(flow) {
-		t.Error("an endpoint selection matches a flow touching it on either side")
-	}
-	if (&FlowMatch{Endpoints: []EndpointRef{ref("a", "web-12")}}).Matches(Flow{Source: ep("a", "web-1"), Destination: ep("b", "x")}) {
+	if (&FlowMatch{Pairs: []EndpointPair{{Source: ref("a", "web-12"), Destination: ref("b", "db-0")}}}).Matches(flow) {
 		t.Error("names match exactly, not by prefix as Hubble's pod filter does")
 	}
-	if (&FlowMatch{Endpoints: []EndpointRef{ref("other", "db-0")}}).Matches(flow) {
+	if (&FlowMatch{Pairs: []EndpointPair{{Source: ref("a", "web-1"), Destination: ref("other", "db-0")}}}).Matches(flow) {
 		t.Error("the namespace is part of the identity")
+	}
+	onPort := &FlowMatch{Pairs: []EndpointPair{{Source: ref("a", "web-1"), Destination: ref("b", "db-0"), Port: 5432}}}
+	if onPort.Matches(flow) {
+		t.Error("a pair on a port matches only that port")
+	}
+	flow.Port = 5432
+	if !onPort.Matches(flow) {
+		t.Error("a pair on a port matches its own port")
 	}
 	pair := &FlowMatch{Pairs: []EndpointPair{{Source: ref("a", "web-1"), Destination: ref("b", "db-0")}}}
 	if !pair.Matches(flow) {
