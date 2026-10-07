@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
@@ -142,6 +143,57 @@ func TestEmptyViewerScopeClearsRetainedObservationEvidence(t *testing.T) {
 		}
 		if got := filterDynamicObservationNamespaces(observation, nil); got.State != state || got.ObservedAt == nil {
 			t.Fatalf("unrestricted viewer lost evidence: %+v", got)
+		}
+	}
+}
+
+func TestAPIResourcesDefinitionNamesRequireObservedReadableCRDs(t *testing.T) {
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	widget := k8s.APIResource{Group: "plants.example.io", Version: "v1", Kind: "Cactus", Name: "cacti", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}}
+	definitions := k8s.APIResource{Group: crdGVR.Group, Version: crdGVR.Version, Kind: "CustomResourceDefinition", Name: crdGVR.Resource, Verbs: []string{"get", "list", "watch"}}
+	metrics := k8s.APIResource{Group: "metrics.k8s.io", Version: "v1beta1", Kind: "PodMetrics", Name: "pods", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list"}}
+	native := k8s.APIResource{Group: "resource.k8s.io", Version: "v1", Kind: "DeviceClass", Name: "deviceclasses", IsCRD: true, Verbs: []string{"get", "list", "watch"}}
+	definition := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition", "metadata": map[string]any{"name": "cacti.plants.example.io"}, "spec": map[string]any{"group": "plants.example.io", "names": map[string]any{"kind": "Cactus", "plural": "cacti"}}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{crdGVR: "CustomResourceDefinitionList"}, definition)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{widget, definitions, metrics, native}); err != nil {
+		t.Fatal(err)
+	}
+	cache := k8s.GetDynamicResourceCache()
+	if err := cache.EnsureWatching(crdGVR); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.WaitForSync(crdGVR, 3*time.Second) {
+		t.Fatal("CRD cache did not sync")
+	}
+	env := newAuthTestServer(t)
+	for _, allowed := range []bool{true, false} {
+		permissions := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
+		permissions.SetCanI("list", crdGVR.Group, crdGVR.Resource, "", allowed)
+		env.srv.permCache.Set("viewer", nil, permissions)
+		before := len(dyn.Actions())
+		var resources []apiResourceResponse
+		assertOK(t, env.authGet(t, "/api/api-resources", "viewer", ""), &resources)
+		found := false
+		for _, resource := range resources {
+			if resource.Group == widget.Group && resource.Name == widget.Name {
+				found = true
+				want := ""
+				if allowed {
+					want = definition.GetName()
+				}
+				if resource.DefinitionName != want {
+					t.Fatalf("allowed=%v, definition=%q want=%q", allowed, resource.DefinitionName, want)
+				}
+			} else if resource.DefinitionName != "" {
+				t.Fatalf("non-CRD inferred definition: %+v", resource)
+			}
+		}
+		if !found {
+			t.Fatal("custom API missing")
+		}
+		if len(dyn.Actions()) != before {
+			t.Fatal("discovery performed live object reads")
 		}
 	}
 }

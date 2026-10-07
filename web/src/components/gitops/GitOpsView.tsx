@@ -134,7 +134,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   const navigate = useNavigate()
   const { connection } = useConnection()
   const namespacesParam = namespaces.join(',')
-  const { data: apiResources, isLoading: apiResourcesLoading } = useAPIResources()
+  const { data: apiResources, isLoading: apiResourcesLoading, isError: discoveryFailed } = useAPIResources()
 
   const argoSync = useArgoSync()
   const argoRefresh = useArgoRefresh()
@@ -165,8 +165,8 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   }
 
   useEffect(() => {
-    initNavigationMap([...(apiResources ?? []), ...GITOPS_KINDS])
-  }, [apiResources])
+    initNavigationMap([...(discoveryFailed ? [] : apiResources ?? []), ...GITOPS_KINDS])
+  }, [apiResources, discoveryFailed])
 
   const hasGitOpsRowResource = useMemo(() => (
     hasAPIResource(apiResources, 'applications', 'argoproj.io') ||

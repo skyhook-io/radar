@@ -18,6 +18,7 @@ const resources = [
     version: "v1",
     kind: "Cactus",
     name: "cacti",
+    definitionName: "cacti.plants.example.io",
     namespaced: true,
     isCrd: true,
     verbs: ["get"],
@@ -27,6 +28,7 @@ const resources = [
     version: "v1",
     kind: "Cactus",
     name: "cactuses",
+    definitionName: "cactuses.other.example.io",
     namespaced: false,
     isCrd: true,
     verbs: ["get"],
@@ -59,6 +61,35 @@ it("uses exact discovered CRD group and plural instead of guessing from the Kind
     customResourceDefinitionRef("other.example.io/v1", "Cactus")?.name,
   ).toBe("cactuses.other.example.io");
   expect(customResourceDefinitionRef("apps/v1", "Deployment")).toBeNull();
+  initNavigationMap([
+    ...resources,
+    {
+      group: "metrics.k8s.io",
+      version: "v1beta1",
+      kind: "PodMetrics",
+      name: "pods",
+      namespaced: true,
+      isCrd: true,
+      verbs: ["get"],
+    },
+  ]);
+  expect(
+    customResourceDefinitionRef("metrics.k8s.io/v1beta1", "PodMetrics"),
+  ).toBeNull();
+  resetNavigationMap();
+  expect(
+    customResourceDefinitionRef("plants.example.io/v1", "Cactus"),
+  ).toBeNull();
+  initNavigationMap([
+    {
+      ...resources[0],
+      name: "cactuses",
+      definitionName: "cactuses.plants.example.io",
+    },
+  ]);
+  expect(
+    customResourceDefinitionRef("plants.example.io/v1", "Cactus")?.name,
+  ).toBe("cactuses.plants.example.io");
   expect(
     customResourceDefinitionRef("unknown.example.io/v1", "Cactus"),
   ).toBeNull();

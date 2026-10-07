@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+import { initNavigationMap } from "@skyhook-io/k8s-ui/utils/navigation";
 import { useQuery } from "@tanstack/react-query";
 import type { APIResource } from "../types";
 import { apiUrl, getAuthHeaders, getCredentialsMode } from "./config";
@@ -15,8 +17,9 @@ export {
 } from "@skyhook-io/k8s-ui";
 export type { ResourceCategory } from "@skyhook-io/k8s-ui";
 
-async function fetchJSON<T>(path: string): Promise<T> {
+async function fetchJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(apiUrl(path), {
+    signal,
     credentials: getCredentialsMode(),
     headers: getAuthHeaders(),
   });
@@ -29,11 +32,15 @@ async function fetchJSON<T>(path: string): Promise<T> {
 
 // Fetch all API resources from the cluster
 export function useAPIResources() {
-  return useQuery<APIResource[]>({
+  const result = useQuery<APIResource[]>({
     queryKey: ["api-resources"],
-    queryFn: () => fetchJSON("/api-resources"),
+    queryFn: ({ signal }) => fetchJSON("/api-resources", signal),
     staleTime: 5 * 60 * 1000, // 5 minutes - resources don't change often
   });
+  useEffect(() => {
+    initNavigationMap(result.isError ? [] : result.data ?? []);
+  }, [result.data, result.isError]);
+  return result;
 }
 
 // The report families the server watches (reportGroups in

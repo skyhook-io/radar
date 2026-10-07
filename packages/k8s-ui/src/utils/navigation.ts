@@ -77,7 +77,7 @@ export function initNavigationMap(resources: APIResource[]) {
   const crdNames: Record<string, string> = {}
   for (const r of resources) {
     const plural = r.name.toLowerCase()
-    if (r.isCrd) crdNames[`${r.group}/${r.kind.toLowerCase()}`] = `${r.name}.${r.group}`
+    if (r.definitionName) crdNames[`${r.group}/${r.kind.toLowerCase()}`] = r.definitionName
     // First-wins on plurals: BUILTIN_PLURAL_TO_KIND seeds canonical core mappings
     // (e.g. "pods" → "Pod") so a colliding API resource (metrics.k8s.io exposes
     // "pods" with kind "PodMetrics") cannot hijack the core mapping.
