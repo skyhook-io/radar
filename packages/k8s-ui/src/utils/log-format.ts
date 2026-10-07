@@ -389,12 +389,29 @@ export function highlightJson(json: string): string {
  * making stack traces and multi-line messages readable in the expanded view.
  */
 export function unescapeJsonStrings(text: string): string {
-  return text.replace(/"(?:[^"\\]|\\.)*"/g, (match) => {
-    return match
+  let result = ''
+  let copied = 0
+  let offset = 0
+  while (offset < text.length) {
+    if (text[offset++] !== '"') continue
+    const start = offset - 1
+    let closed = false
+    while (offset < text.length) {
+      const char = text[offset++]
+      if (char === '\\') offset++
+      else if (char === '"') {
+        closed = true
+        break
+      }
+    }
+    if (!closed) break
+    result += text.slice(copied, start) + text.slice(start, offset)
       .replace(/\\r\\n/g, '\r\n')
       .replace(/\\n/g, '\n')
       .replace(/\\t/g, '\t')
-  })
+    copied = offset
+  }
+  return result + text.slice(copied)
 }
 
 // logfmt detection and parsing
