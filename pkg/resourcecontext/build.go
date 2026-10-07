@@ -611,7 +611,9 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("DaemonSet", "apps", d.Namespace, d.Name, d.Spec.Template.Spec, "spec.template.spec", target))
 		}
 	}
-	if replicaSets, _ := provider.ReplicaSets(); replicaSets != nil {
+	if replicaSets, err := provider.ReplicaSets(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else {
 		for _, replicaSet := range replicaSets {
 			if replicaSet == nil || replicaSet.Namespace != target.namespace {
 				continue
