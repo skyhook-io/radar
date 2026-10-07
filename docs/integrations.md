@@ -444,7 +444,7 @@ The legacy `traefik.containo.us` API group (pre-v2.11) is warm-listed alongside 
 
 ### What Radar Shows
 
-**Topology:** Certificate → Issuer/ClusterIssuer edges connect each certificate to its observed built-in issuer, including ownerless issuers. Omitted `issuerRef.kind` and `issuerRef.group` use cert-manager defaults. Only referenced issuers are added; external issuer groups are not inferred. ClusterIssuer visibility uses its exact cluster-scoped read permission. Resource details and MCP context distinguish issuer dependencies from autoscaling. The full provisioning chain (Certificate → CertificateRequest → Order → Challenge) is connected via owner references.
+**Topology:** Certificate → Issuer/ClusterIssuer edges connect each certificate to its observed built-in issuer, including ownerless issuers. Omitted `issuerRef.kind` and `issuerRef.group` use cert-manager defaults. Only referenced issuers are added; external issuer groups are not inferred. ClusterIssuer visibility uses its exact cluster-scoped read permission. Resource details and MCP context distinguish issuer dependencies from autoscaling. The full provisioning chain (Certificate → CertificateRequest → Order → Challenge) is connected via owner references. Observed CertificateRequest, Order and Challenge graph nodes also link their own built-in `spec.issuerRef` as a dependency, so each stage can reach its exact Issuer/ClusterIssuer. These joins establish a declared dependency, not issuance success. External issuer groups and standalone issuance objects outside the owner-connected graph remain outside this slice.
 
 <p align="center">
   <img src="screenshots/integrations/certmanager-topology.png" alt="cert-manager Topology" width="800">
