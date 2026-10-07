@@ -50,6 +50,7 @@ import { DiagnoseCustomizationProvider } from "./context/DiagnoseCustomization";
 import type {
   RenderDiagnoseAction,
   RenderInvestigationRunActions,
+  RenderInvestigationRefusalAction,
   DiagnoseConsentCopy,
 } from "./context/DiagnoseCustomization";
 import { defaultDiagnoseAction } from "./components/diagnose/LocalDiagnoseAction";
@@ -133,6 +134,10 @@ export interface RadarAppProps {
   renderDiagnoseAction?: RenderDiagnoseAction;
   /** Host-owned controls for the focused investigation; absent in standalone Radar. */
   renderInvestigationRunActions?: RenderInvestigationRunActions;
+  /** Host action beside a refused investigation start or follow-up, e.g. Radar
+   *  Cloud's "Upgrade" when the organization has used its investigations.
+   *  Absent in standalone Radar, whose backend sends no refusal details. */
+  renderInvestigationRefusalAction?: RenderInvestigationRefusalAction;
   /**
    * Replaces the first-run consent card's trust copy. REQUIRED of any host whose
    * backend runs the agent somewhere other than the user's own machine — the
@@ -225,6 +230,7 @@ export function RadarApp({
   documentTitleSuffix,
   renderDiagnoseAction,
   renderInvestigationRunActions,
+  renderInvestigationRefusalAction,
   diagnoseConsent,
   initialPath,
   onClusterLoadStateChange,
@@ -264,6 +270,7 @@ export function RadarApp({
                     value={renderDiagnoseAction ?? defaultDiagnoseAction}
                     consentCopy={diagnoseConsent}
                     renderRunActions={renderInvestigationRunActions}
+                    renderRefusalAction={renderInvestigationRefusalAction}
                   >
                     <DiagnoseProvider
                       browserURLState={router !== "memory"}

@@ -19,12 +19,16 @@ type oomLimitDiscrepancy struct {
 	limitSource   string
 }
 
-func oomLimitDiagnosis(cache *ResourceCache, pod *corev1.Pod, reason, lastTerminatedReason string, now time.Time) (string, string, *corev1.ObjectReference) {
+// oomLimitDiagnosis explains an OOM against the owning ReplicaSet's template
+// limit. statuses are the OOMKilled containers to check; nil means the pod's
+// currently active OOMs (an OOM restart loop passes its own container, so the
+// diagnosis holds between kills instead of lapsing with the active window).
+func oomLimitDiagnosis(cache *ResourceCache, pod *corev1.Pod, reason, lastTerminatedReason string, statuses []corev1.ContainerStatus, now time.Time) (string, string, *corev1.ObjectReference) {
 	if !podReasonClassifiesAsOOM(reason, lastTerminatedReason) {
 		return "", "", nil
 	}
 
-	discrepancy, ok := activeOOMLimitDiscrepancy(cache, pod, now)
+	discrepancy, ok := activeOOMLimitDiscrepancy(cache, pod, statuses, now)
 	if !ok {
 		return "", "", nil
 	}
@@ -57,8 +61,10 @@ func oomLimitDiagnosis(cache *ResourceCache, pod *corev1.Pod, reason, lastTermin
 	return cause, action, &corev1.ObjectReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Namespace: pod.Namespace, Name: discrepancy.replicaSet}
 }
 
-func activeOOMLimitDiscrepancy(cache *ResourceCache, pod *corev1.Pod, now time.Time) (oomLimitDiscrepancy, bool) {
-	statuses := health.ActiveOOMKilledContainers(pod, now)
+func activeOOMLimitDiscrepancy(cache *ResourceCache, pod *corev1.Pod, statuses []corev1.ContainerStatus, now time.Time) (oomLimitDiscrepancy, bool) {
+	if statuses == nil {
+		statuses = health.ActiveOOMKilledContainers(pod, now)
+	}
 	if len(statuses) == 0 || cache == nil {
 		return oomLimitDiscrepancy{}, false
 	}

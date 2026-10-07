@@ -249,6 +249,13 @@ func ActiveOOMKilledContainers(pod *corev1.Pod, now time.Time) []corev1.Containe
 	return active
 }
 
+// PodHasActiveOOMKilled reports whether any container, init containers and
+// native sidecars included, is currently affected by an OOM kill (one that has
+// not since recovered). Exported for the problem detector.
+func PodHasActiveOOMKilled(pod *corev1.Pod, now time.Time) bool {
+	return podHasActiveOOMKilled(pod, now)
+}
+
 func podHasActiveOOMKilled(pod *corev1.Pod, now time.Time) bool {
 	if len(ActiveOOMKilledContainers(pod, now)) > 0 {
 		return true

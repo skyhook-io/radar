@@ -780,7 +780,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 			// Helm routes
 			helmHandlers := helm.NewHandlers(s.resolveHelmNamespaces)
-			helmHandlers.ConfigWriteAllowed = s.requireConfigEditable
+			helmHandlers.ConfigWriteAllowed = s.requireHelmSourceConfigWrite
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
@@ -1481,6 +1481,7 @@ func mergeNamespaceCapabilities(caps *k8s.Capabilities, nsCaps *k8s.NamespaceCap
 	caps.Exec = mergeNamespaceCapability(caps.Exec, nsCaps.Exec, nsCaps.Errors.Exec)
 	caps.Logs = mergeNamespaceCapability(caps.Logs, nsCaps.Logs, nsCaps.Errors.Logs)
 	caps.PortForward = mergeNamespaceCapability(caps.PortForward, nsCaps.PortForward, nsCaps.Errors.PortForward)
+	caps.HelmWrite = mergeNamespaceCapability(caps.HelmWrite, nsCaps.HelmWrite, nsCaps.Errors.HelmWrite)
 	caps.WorkloadWrites.Deployments = mergeNamespaceCapability(caps.WorkloadWrites.Deployments, nsCaps.WorkloadWrites.Deployments, nsCaps.Errors.WorkloadWrites.Deployments)
 	caps.WorkloadWrites.DaemonSets = mergeNamespaceCapability(caps.WorkloadWrites.DaemonSets, nsCaps.WorkloadWrites.DaemonSets, nsCaps.Errors.WorkloadWrites.DaemonSets)
 	caps.WorkloadWrites.StatefulSets = mergeNamespaceCapability(caps.WorkloadWrites.StatefulSets, nsCaps.WorkloadWrites.StatefulSets, nsCaps.Errors.WorkloadWrites.StatefulSets)
@@ -1501,7 +1502,7 @@ func mergeNamespaceCapability(global, namespaced, checkErrored bool) bool {
 // parseNamespacesForUser parses namespace query params and filters by user permissions.
 // Returns nil for "all namespaces" (no filter), a populated slice for specific namespaces,
 // or an empty non-nil slice when the user has no namespace access.
-// Use noNamespaceAccess() to check the no-access case.
+// Use integration.NoNamespaceAccess() to check the no-access case.
 //
 // If the request omits an explicit namespace filter, falls back to the user's
 // in-app namespace pick (from the namespace switcher). The pick is treated as
@@ -5153,27 +5154,44 @@ func (s *Server) writeErrorCode(w http.ResponseWriter, status int, code, message
 	}
 }
 
-// requireCloudRole gates a mutating handler on the caller's Cloud role tier,
-// mirroring internal/helm's gate. Returns true if the request should proceed.
+// requireCloudRole gates a handler for one of Radar's own features (config,
+// settings, integrations) on the caller's Cloud role tier. Returns true if the
+// request should proceed.
 //
-// Callers with no Cloud role (OSS, OIDC, or running outside Cloud's tunnel)
-// bypass the gate — radar OSS keeps using only K8s RBAC for authz, so the
-// single-user laptop case is never 403'd out of its own config. The gate is
-// strictly additive for Cloud-attributed callers: when their tier is below
-// `min`, returns 403 with error_code=cloud_role_insufficient.
+// Outside Cloud, callers with no Cloud role (OSS, OIDC) bypass the gate —
+// radar OSS keeps using only K8s RBAC for authz, so the single-user laptop
+// case is never 403'd out of its own config. Under Cloud, a caller with no
+// tier is denied, and a tier below `min` returns 403 with
+// error_code=cloud_role_insufficient.
 func (s *Server) requireCloudRole(w http.ResponseWriter, r *http.Request, min auth.CloudRole, opName string) bool {
 	role := auth.CloudRoleFromContext(r.Context())
-	if role.AtLeast(min) {
-		return true
-	}
 	username := "unknown"
 	if u := auth.UserFromContext(r.Context()); u != nil {
 		username = u.Username
+	}
+	// The no-role bypass exists for OSS, where no Cloud roles exist. Under
+	// Cloud every person carries a tier, so a caller without one is a
+	// synthetic identity (radar:system) and must not reach Radar's own config.
+	if role == auth.RoleNone && cloudMode() {
+		log.Printf("[settings] Denied %s for %q: no Radar Cloud role on a Cloud request: %q", opName, username, r.URL.Path)
+		s.writeErrorCode(w, http.StatusForbidden, auth.ErrCodeCloudRoleInsufficient,
+			"This request has no Radar Cloud role, so it cannot "+opName+".")
+		return false
+	}
+	if role.AtLeast(min) {
+		return true
 	}
 	log.Printf("[settings] Cloud role %q denied %s for user %q (need at least %q): %q", role, opName, username, min, r.URL.Path)
 	s.writeErrorCode(w, http.StatusForbidden, auth.ErrCodeCloudRoleInsufficient,
 		"Your Radar Cloud role ("+role.String()+") cannot "+opName+". Requires "+string(min)+" or higher.")
 	return false
+}
+
+// requireHelmSourceConfigWrite gates the registered OCI chart sources. They are
+// shared Radar configuration that upgrade discovery resolves against, so they
+// take the owner gate rather than the caller's cluster RBAC.
+func (s *Server) requireHelmSourceConfigWrite(w http.ResponseWriter, r *http.Request) bool {
+	return s.requireConfigEditable(w, r) && s.requireCloudRole(w, r, auth.RoleOwner, "manage Helm chart sources")
 }
 
 // requireConnected returns false and writes a 503 error if not connected to cluster.
@@ -5233,6 +5251,25 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 		// "not running under Cloud" (OSS deploy or no role group).
 		if role := auth.CloudRoleFromGroups(user.Groups); role != auth.RoleNone {
 			resp["cloudRole"] = string(role)
+		}
+		// Lets the shell explain an empty cluster: every read is filtered to
+		// the user's namespaces, so a user bound to none sees empty lists that
+		// look like a cluster with nothing in it. Reported only from a
+		// discovery that succeeded (the cached entry): before the cluster
+		// connects, or when a SAR errors, discovery fails closed to "none"
+		// without caching, and that is not a statement about the user's RBAC.
+		// App startup waits on this endpoint and discovery costs a SAR or two
+		// per namespace, so a plain call reads the cache only. The banner asks
+		// with ?check=namespaces once content has loaded and on each re-check,
+		// which runs discovery so an expired cache entry can't make the banner
+		// vanish while the user still has no access.
+		if k8s.IsConnected() {
+			if r.URL.Query().Get("check") == "namespaces" {
+				s.getUserNamespaces(r, nil)
+			}
+			if perms := s.permCache.Get(user.Username, user.Groups); perms != nil {
+				resp["noNamespaceAccess"] = integration.NoNamespaceAccess(auth.FilterNamespacesForUser(nil, user, perms))
+			}
 		}
 	}
 	s.writeJSON(w, resp)

@@ -39,6 +39,10 @@ func DropManagedFields(obj any) (any, error) {
 			Count:          event.Count,
 			FirstTimestamp: event.FirstTimestamp,
 			LastTimestamp:  event.LastTimestamp,
+			// Events recorded through events.k8s.io carry their times here
+			// instead of in First/LastTimestamp.
+			EventTime: event.EventTime,
+			Series:    event.Series,
 		}, nil
 	}
 

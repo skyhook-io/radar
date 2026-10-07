@@ -152,7 +152,9 @@ func TestDetectProblems_CrashLoopSeverityTracksCurrentState(t *testing.T) {
 	if !strings.Contains(recovered.Action, "Watch for another restart") {
 		t.Fatalf("recovered startup action = %q, want repeat-crash guidance", recovered.Action)
 	}
-	assertProblem(t, problems, "Pod", "high-count-serving", "CrashLoopBackOff", "high")
+	// Past the restart-loop threshold, serving at this instant no longer
+	// lowers severity: the loop keeps one critical row through its ready ticks.
+	assertProblem(t, problems, "Pod", "high-count-serving", "CrashLoopBackOff", "critical")
 	assertProblem(t, problems, "Pod", "down-at-creation", "CrashLoopBackOff", "critical")
 	assertProblem(t, problems, "Pod", "runtime-down", "CrashLoopBackOff", "critical")
 	assertProblem(t, problems, "Pod", "image-pull-sibling", "ImagePullBackOff", "critical")

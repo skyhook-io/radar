@@ -30,8 +30,10 @@ export type {
 export type {
   RenderDiagnoseAction,
   RenderInvestigationRunActions,
+  RenderInvestigationRefusalAction,
   DiagnoseConsentCopy,
 } from './context/DiagnoseCustomization';
+export type { InvestigationRefusal } from './api/diagnose';
 
 // Standalone AI investigation surface — mount the investigation panel outside a
 // full <RadarApp>. It uses the nearest React Router for durable drawer and

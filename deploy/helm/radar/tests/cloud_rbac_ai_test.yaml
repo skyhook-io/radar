@@ -1,0 +1,207 @@
+suite: Cloud radar:ai:reader RBAC
+templates:
+  - cloud-rbac-ai.yaml
+  - cloud-rbac-cluster-read.yaml
+  - cloud-rbac-integration-read.yaml
+set:
+  cloud.enabled: true
+  cloud.token: dummy
+  cloud.url: wss://cloud.example
+  cloud.clusterName: test-cluster
+tests:
+  - it: aggregates the owned read role exactly like view without feeding view
+    template: cloud-rbac-ai.yaml
+    documentIndex: 0
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-radar-cloud-ai-read
+      - equal:
+          path: aggregationRule
+          value:
+            clusterRoleSelectors:
+              - matchLabels:
+                  rbac.authorization.k8s.io/aggregate-to-view: "true"
+      - notExists:
+          path: rules
+      - notExists:
+          path: metadata.labels["rbac.authorization.k8s.io/aggregate-to-view"]
+      - notExists:
+          path: metadata.labels["rbac.authorization.k8s.io/aggregate-to-edit"]
+      - notExists:
+          path: metadata.labels["rbac.authorization.k8s.io/aggregate-to-admin"]
+
+  - it: binds only radar:ai:reader to the owned read role
+    template: cloud-rbac-ai.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ClusterRoleBinding
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-radar-cloud-ai-read
+      - equal:
+          path: roleRef
+          value:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: RELEASE-NAME-radar-cloud-ai-read
+      - equal:
+          path: subjects
+          value:
+            - kind: Group
+              name: radar:ai:reader
+              apiGroup: rbac.authorization.k8s.io
+
+  - it: keeps radar:ai:reader's read grant when the tier bindings are off
+    set:
+      cloud.defaultRbac.create: false
+    template: cloud-rbac-ai.yaml
+    documentIndex: 1
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: subjects[0].name
+          value: radar:ai:reader
+
+  # --reuse-values from a release predating aiRbac renders with the key
+  # absent: nothing renders, so an existing install never gains a new reader
+  # without choosing it.
+  - it: renders nothing when aiRbac is absent from reused values
+    set:
+      cloud.aiRbac: null
+    template: cloud-rbac-ai.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when aiRbac is false
+    set:
+      cloud.aiRbac: false
+    template: cloud-rbac-ai.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing outside cloud mode
+    set:
+      cloud.enabled: false
+    template: cloud-rbac-ai.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when the operator owns all RBAC
+    set:
+      rbac.create: false
+    template: cloud-rbac-ai.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: binds radar:ai:reader to no Secret role
+    set:
+      cloud.defaultRbac.create: false
+    template: cloud-rbac-ai.yaml
+    documentIndex: 1
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: ClusterRoleBinding
+      - equal:
+          path: roleRef.name
+          value: RELEASE-NAME-radar-cloud-ai-read
+
+  - it: gives radar:ai:reader the cluster-read add-on without the tiers
+    set:
+      cloud.defaultRbac.create: false
+      cloud.systemRbac: false
+    template: cloud-rbac-cluster-read.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: ClusterRole
+        documentIndex: 0
+      - notContains:
+          path: rules[*].resources
+          content: secrets
+          any: true
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-radar-cloud-ai-cluster-read
+        documentIndex: 1
+      - equal:
+          path: subjects
+          value:
+            - kind: Group
+              name: radar:ai:reader
+              apiGroup: rbac.authorization.k8s.io
+        documentIndex: 1
+
+  - it: gives radar:ai:reader the cluster-read add-on beside the tiers
+    template: cloud-rbac-cluster-read.yaml
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-radar-cloud-ai-cluster-read
+    asserts:
+      - equal:
+          path: roleRef.name
+          value: RELEASE-NAME-radar-cluster-read
+
+  - it: drops radar:ai:reader's cluster-read binding when aiRbac is false
+    set:
+      cloud.aiRbac: false
+    template: cloud-rbac-cluster-read.yaml
+    asserts:
+      - notContains:
+          path: subjects
+          content:
+            kind: Group
+            name: radar:ai:reader
+            apiGroup: rbac.authorization.k8s.io
+          any: true
+
+  - it: gives radar:ai:reader both integration-read add-ons without the tiers
+    set:
+      cloud.defaultRbac.create: false
+      cloud.systemRbac: false
+    template: cloud-rbac-integration-read.yaml
+    asserts:
+      - hasDocuments:
+          count: 4
+      - equal:
+          path: subjects
+          value:
+            - kind: Group
+              name: radar:ai:reader
+              apiGroup: rbac.authorization.k8s.io
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-radar-cloud-ai-integration-read-namespaced
+      - equal:
+          path: subjects
+          value:
+            - kind: Group
+              name: radar:ai:reader
+              apiGroup: rbac.authorization.k8s.io
+        documentSelector:
+          path: metadata.name
+          value: RELEASE-NAME-radar-cloud-ai-integration-read-cluster
+
+  - it: gives radar:ai:reader the integration-read add-ons beside the tiers
+    template: cloud-rbac-integration-read.yaml
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-radar-cloud-ai-integration-read-namespaced
+    asserts:
+      - equal:
+          path: roleRef.name
+          value: RELEASE-NAME-radar-integration-read-namespaced

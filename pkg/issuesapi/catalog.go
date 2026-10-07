@@ -100,7 +100,7 @@ var categoryDescription = map[Category]string{
 	CategoryContainerWaiting:    "A container is stuck Waiting and never reached Running — blocked on config, secrets, volumes, its image, or a pod sandbox / IP from the CNI.",
 	CategoryInitContainerFailed: "An init container is failing or looping, so the main containers never start.",
 	// Runtime
-	CategoryCrashLoop:         "A container keeps crashing and restarting (CrashLoopBackOff) — it exits non-zero shortly after starting.",
+	CategoryCrashLoop:         "A container keeps exiting and being restarted (CrashLoopBackOff or repeated restarts) — it crashes, fails a liveness or startup probe, or its process exits, whatever the exit code.",
 	CategoryOOMKilled:         "A container was OOMKilled — it hit its own memory limit, or the node ran out of memory. Check usage vs limits and node memory pressure before raising limits.",
 	CategoryLivenessProbeFail: "The liveness probe keeps failing, so the kubelet repeatedly restarts the container.",
 	CategoryReadinessFailed:   "The readiness probe is failing, so the pod is kept out of Service endpoints and receives no traffic.",

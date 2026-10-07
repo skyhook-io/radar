@@ -38,6 +38,7 @@ import {
   type DiagnoseView,
 } from "./DiagnoseContext";
 import { useDiagnoseCustomization } from "../../context/DiagnoseCustomization";
+import { InvestigationRefusalAction } from "./InvestigationRefusalAction";
 import { useNavCustomization } from "../../context/NavCustomization";
 import { InvestigationView } from "./InvestigationView";
 import type { InvestigationTimelineScope } from "./InvestigationEvidencePane";
@@ -604,12 +605,15 @@ export function DiagnoseSurface({
   ) : d.startError ? (
     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <p className="text-sm text-theme-text-secondary">{d.startError}</p>
-      <button
-        onClick={d.dismissError}
-        className="rounded-lg border border-theme-border px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
-      >
-        Dismiss
-      </button>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <InvestigationRefusalAction refusal={d.startRefusal} />
+        <button
+          onClick={d.dismissError}
+          className="rounded-lg border border-theme-border px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
+        >
+          Dismiss
+        </button>
+      </div>
     </div>
   ) : setupPending ? (
     <div className="flex-1 overflow-y-auto">

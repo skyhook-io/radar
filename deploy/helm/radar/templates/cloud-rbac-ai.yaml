@@ -1,0 +1,50 @@
+{{- /*
+Read-only access for automatic (alert-triggered) Radar Cloud Diagnose runs.
+
+Automatic runs use username radar:ai:<org> and group radar:ai:reader only.
+Manual turns read as the person who started them, with that person's identity
+and groups forwarded by Radar Cloud; radar:ai:reader is not involved. Keep
+radar:ai:reader permanently read-only; a future write-capable AI identity needs
+a separate opt-in group (e.g. radar:ai:operator).
+
+The default grant is view plus the cluster-read and integration-read add-ons.
+With the standard view role it grants no Kubernetes Secret permission; it
+also inherits anything a cluster adds to view (roles labelled
+aggregate-to-view). view includes pod logs and ConfigMaps, which may contain
+sensitive data.
+
+cloud.aiRbac controls only this chart's default grant, independently of
+cloud.defaultRbac. False or absent creates none and leaves customer bindings
+untouched. Radar Cloud controls whether Diagnose runs.
+
+A chart-owned role lets its rules change later without replacing the binding,
+whose roleRef is immutable. Aggregation keeps it equal to view with no curation.
+*/}}
+{{- if and (include "radar.cloudAiRbac" . | eq "true") .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-ai-read
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+aggregationRule:
+  clusterRoleSelectors:
+    - matchLabels:
+        rbac.authorization.k8s.io/aggregate-to-view: "true"
+# Omit rules because the aggregation controller owns them.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-ai-read
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "radar.fullname" . }}-cloud-ai-read
+subjects:
+  - kind: Group
+    name: radar:ai:reader
+    apiGroup: rbac.authorization.k8s.io
+{{- end -}}

@@ -11,7 +11,7 @@
 // agent-free.
 import { createContext, useContext, useMemo } from "react";
 import type { ReactNode } from "react";
-import type { RunSummary } from "../api/diagnose";
+import type { InvestigationRefusal, RunSummary } from "../api/diagnose";
 
 /** Optional host controls beside shared run actions. Return a component element
  * if hooks are needed: this callback is invoked conditionally. Call onRunUpdated
@@ -20,6 +20,13 @@ export type RenderInvestigationRunActions = (props: {
   run: RunSummary;
   onRunUpdated: (run: RunSummary) => void;
 }) => ReactNode;
+
+/** Host action beside a refused start or follow-up, e.g. Radar Cloud's
+ * "Upgrade" when an organization has used its investigations. Called only for
+ * refusals that carry a code, reason or action; return null to show none. */
+export type RenderInvestigationRefusalAction = (
+  refusal: InvestigationRefusal,
+) => ReactNode;
 
 /** Render prop for the resource-level Investigate action. */
 export type RenderDiagnoseAction = (ctx: {
@@ -63,6 +70,7 @@ export type DiagnoseConsentCopy = {
 export interface DiagnoseCustomization {
   renderAction: RenderDiagnoseAction | undefined;
   renderRunActions?: RenderInvestigationRunActions;
+  renderRefusalAction?: RenderInvestigationRefusalAction;
   consentCopy: DiagnoseConsentCopy | undefined;
   // undefined = default (CustomEvent → Radar's own Settings dialog);
   // null = hide the settings affordances.
@@ -82,20 +90,22 @@ export function DiagnoseCustomizationProvider({
   value,
   consentCopy,
   renderRunActions,
+  renderRefusalAction,
   onOpenSettings,
   children,
 }: {
   value: RenderDiagnoseAction | undefined;
   consentCopy?: DiagnoseConsentCopy;
   renderRunActions?: RenderInvestigationRunActions;
+  renderRefusalAction?: RenderInvestigationRefusalAction;
   /** Where "AI settings" affordances lead. Omit for Radar's own Settings
    *  dialog; pass `null` to hide them. */
   onOpenSettings?: (() => void) | null;
   children: ReactNode;
 }) {
   const ctx = useMemo(
-    () => ({ renderAction: value, consentCopy, onOpenSettings, renderRunActions }),
-    [value, consentCopy, onOpenSettings, renderRunActions],
+    () => ({ renderAction: value, consentCopy, onOpenSettings, renderRunActions, renderRefusalAction }),
+    [value, consentCopy, onOpenSettings, renderRunActions, renderRefusalAction],
   );
   return (
     <DiagnoseCustomizationContext.Provider value={ctx}>

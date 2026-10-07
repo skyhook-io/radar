@@ -11,7 +11,12 @@ import {
   Search,
   ListChecks,
 } from "lucide-react";
-import type { Diagnosis, ApplyMutationOutcome } from "../../api/diagnose";
+import type {
+  Diagnosis,
+  ApplyMutationOutcome,
+  InvestigationRefusal,
+} from "../../api/diagnose";
+import { InvestigationRefusalAction } from "./InvestigationRefusalAction";
 import { Collapse, CollapseChevron } from "@skyhook-io/k8s-ui";
 import { Tooltip } from "../ui/Tooltip";
 import type {
@@ -669,6 +674,8 @@ export type AssessmentExplanation = {
   status: "idle" | "running" | "done" | "error";
   text?: string;
   error?: string;
+  /** The host's refusal behind error, for its action beside the message. */
+  refusal?: InvestigationRefusal | null;
   onGenerate?: () => void;
   openRequest?: number;
 };
@@ -847,6 +854,9 @@ function AssessmentDetails({
                         {explanation.error ||
                           "The agent did not return an explanation."}
                       </span>
+                      <InvestigationRefusalAction
+                        refusal={explanation.refusal ?? null}
+                      />
                       {explanation.onGenerate && (
                         <button
                           type="button"

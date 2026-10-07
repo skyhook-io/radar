@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/skyhook-io/radar/internal/k8s"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/helmhistory"
 
@@ -731,15 +733,21 @@ func getValuesWith(actionConfig *action.Configuration, name string, allValues bo
 
 // GetValuesDiff returns a values diff between two revisions.
 func (c *Client) GetValuesDiff(namespace, name string, revision1, revision2 int, allValues bool) (*ValuesDiff, error) {
-	return c.getValuesDiff(namespace, name, revision1, revision2, allValues, "", nil)
+	return c.getValuesDiff(namespace, name, revision1, revision2, allValues, "", nil, false)
 }
 
 // GetValuesDiffAsUser is GetValuesDiff with K8s impersonation.
 func (c *Client) GetValuesDiffAsUser(namespace, name string, revision1, revision2 int, allValues bool, username string, groups []string) (*ValuesDiff, error) {
-	return c.getValuesDiff(namespace, name, revision1, revision2, allValues, username, groups)
+	return c.getValuesDiff(namespace, name, revision1, revision2, allValues, username, groups, false)
 }
 
-func (c *Client) getValuesDiff(namespace, name string, revision1, revision2 int, allValues bool, username string, groups []string) (*ValuesDiff, error) {
+// GetValuesDiffAsUserRedacted redacts credential values in both revisions before
+// diffing for AI callers. The REST/UI diff retains the user's own values.
+func (c *Client) GetValuesDiffAsUserRedacted(namespace, name string, revision1, revision2 int, allValues bool, username string, groups []string) (*ValuesDiff, error) {
+	return c.getValuesDiff(namespace, name, revision1, revision2, allValues, username, groups, true)
+}
+
+func (c *Client) getValuesDiff(namespace, name string, revision1, revision2 int, allValues bool, username string, groups []string, redact bool) (*ValuesDiff, error) {
 	values1, err := c.GetValuesRevisionAsUser(namespace, name, allValues, revision1, username, groups)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get values for revision %d: %w", revision1, err)
@@ -748,7 +756,12 @@ func (c *Client) getValuesDiff(namespace, name string, revision1, revision2 int,
 	if err != nil {
 		return nil, fmt.Errorf("failed to get values for revision %d: %w", revision2, err)
 	}
-	diff, err := computeValuesDiff(values1, values2, revision1, revision2, allValues)
+	var diff string
+	if redact {
+		diff, err = computeRedactedValuesDiff(values1, values2, revision1, revision2, allValues)
+	} else {
+		diff, err = computeValuesDiff(values1, values2, revision1, revision2, allValues)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -757,15 +770,22 @@ func (c *Client) getValuesDiff(namespace, name string, revision1, revision2 int,
 
 // GetManifestDiff returns the diff between two revisions
 func (c *Client) GetManifestDiff(namespace, name string, revision1, revision2 int) (*ManifestDiff, error) {
-	return c.getManifestDiff(namespace, name, revision1, revision2, "", nil)
+	return c.getManifestDiff(namespace, name, revision1, revision2, "", nil, false)
 }
 
 // GetManifestDiffAsUser is GetManifestDiff with K8s impersonation.
 func (c *Client) GetManifestDiffAsUser(namespace, name string, revision1, revision2 int, username string, groups []string) (*ManifestDiff, error) {
-	return c.getManifestDiff(namespace, name, revision1, revision2, username, groups)
+	return c.getManifestDiff(namespace, name, revision1, revision2, username, groups, false)
 }
 
-func (c *Client) getManifestDiff(namespace, name string, revision1, revision2 int, username string, groups []string) (*ManifestDiff, error) {
+// GetManifestDiffAsUserRedacted is GetManifestDiffAsUser with Secret values
+// removed, for callers that hand the diff to an AI model. The REST/UI diff
+// stays unredacted: it is the user's own view.
+func (c *Client) GetManifestDiffAsUserRedacted(namespace, name string, revision1, revision2 int, username string, groups []string) (*ManifestDiff, error) {
+	return c.getManifestDiff(namespace, name, revision1, revision2, username, groups, true)
+}
+
+func (c *Client) getManifestDiff(namespace, name string, revision1, revision2 int, username string, groups []string, redact bool) (*ManifestDiff, error) {
 	manifest1, err := c.GetManifestAsUser(namespace, name, revision1, username, groups)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get manifest for revision %d: %w", revision1, err)
@@ -777,7 +797,12 @@ func (c *Client) getManifestDiff(namespace, name string, revision1, revision2 in
 	}
 
 	// Compute unified diff
-	diff := computeDiff(manifest1, manifest2, revision1, revision2)
+	var diff string
+	if redact {
+		diff = computeRedactedManifestDiff(manifest1, manifest2, revision1, revision2)
+	} else {
+		diff = computeDiff(manifest1, manifest2, revision1, revision2)
+	}
 
 	return &ManifestDiff{
 		Revision1: revision1,
@@ -810,6 +835,123 @@ func (c *Client) getNotesDiff(namespace, name string, revision1, revision2 int, 
 		Revision2: revision2,
 		Diff:      computeDiff(releaseNotes(rel1), releaseNotes(rel2), revision1, revision2),
 	}, nil
+}
+
+// computeRedactedManifestDiff diffs two manifests with every Secret's data and
+// stringData values replaced by [REDACTED], so key additions and removals
+// still show. RedactSecrets then runs over the diff as a second layer, for
+// credentials that sit outside a Secret.
+func computeRedactedManifestDiff(manifest1, manifest2 string, rev1, rev2 int) string {
+	diff := computeDiff(redactSecretManifests(manifest1), redactSecretManifests(manifest2), rev1, rev2)
+	return aicontext.RedactSecrets(diff)
+}
+
+// manifestSeparator matches the document separators releaseutil.SplitManifests
+// splits on.
+var manifestSeparator = regexp.MustCompile(`(?:^|\s*\n)---\s*`)
+
+// redactSecretManifests rewrites the documents of a rendered manifest that can
+// carry Secret values and leaves every other document byte-for-byte untouched.
+func redactSecretManifests(manifest string) string {
+	seps := manifestSeparator.FindAllStringIndex(manifest, -1)
+	var out strings.Builder
+	start := 0
+	for _, sep := range append(seps, []int{len(manifest), len(manifest)}) {
+		out.WriteString(redactSecretDocument(manifest[start:sep[0]]))
+		out.WriteString(manifest[sep[0]:sep[1]])
+		start = sep[1]
+	}
+	return out.String()
+}
+
+const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
+
+// redactSecretDocument masks Secret values in one manifest document. A document
+// that doesn't parse is withheld whole: the diff goes to an AI model, and a
+// regex can't tell a malformed Secret from anything else.
+func redactSecretDocument(doc string) string {
+	if strings.TrimSpace(stripYAMLComments(doc)) == "" {
+		return doc
+	}
+	var obj map[string]any
+	if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+		return "# [REDACTED: unparseable manifest document]"
+	}
+	if !redactSecretObject(obj, "") {
+		return doc
+	}
+	b, err := yaml.Marshal(obj)
+	if err != nil {
+		return "# [REDACTED: unparseable manifest document]"
+	}
+	// Keep the "# Source:" comment Helm puts above each document.
+	var comments strings.Builder
+	for _, line := range strings.Split(doc, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			break
+		}
+		if strings.HasPrefix(strings.TrimSpace(line), "# Source: ") {
+			comments.WriteString(line + "\n")
+		}
+	}
+	return comments.String() + strings.TrimSuffix(string(b), "\n")
+}
+
+// redactSecretObject masks Secret data and stringData values, drops the
+// last-applied annotation (a full copy of the object, Secret values included)
+// and descends into List items. It reports whether anything changed.
+func redactSecretObject(obj map[string]any, defaultKind string) bool {
+	kind, _ := obj["kind"].(string)
+	if kind == "" {
+		kind = defaultKind
+	}
+	changed := false
+	if meta, ok := obj["metadata"].(map[string]any); ok {
+		if ann, ok := meta["annotations"].(map[string]any); ok {
+			if _, has := ann[lastAppliedAnnotation]; has {
+				delete(ann, lastAppliedAnnotation)
+				changed = true
+			}
+		}
+	}
+	if kind == "Secret" {
+		for _, field := range []string{"data", "stringData"} {
+			values, ok := obj[field].(map[string]any)
+			if !ok {
+				if obj[field] != nil {
+					obj[field] = "[REDACTED]"
+					changed = true
+				}
+				continue
+			}
+			for k := range values {
+				values[k] = "[REDACTED]"
+				changed = true
+			}
+		}
+	}
+	if items, ok := obj["items"].([]any); ok {
+		itemKind := ""
+		if kind == "SecretList" {
+			itemKind = "Secret"
+		}
+		for _, item := range items {
+			if m, ok := item.(map[string]any); ok && redactSecretObject(m, itemKind) {
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+func stripYAMLComments(doc string) string {
+	var b strings.Builder
+	for _, line := range strings.Split(doc, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			b.WriteString(line + "\n")
+		}
+	}
+	return b.String()
 }
 
 func releaseNotes(rel *release.Release) string {
@@ -926,6 +1068,17 @@ func (c *Client) getReleaseRevisionAsUser(namespace, name string, revision int, 
 		return nil, fmt.Errorf("failed to get helm release: %w", err)
 	}
 	return rel, nil
+}
+
+func computeRedactedValuesDiff(values1, values2 *HelmValues, rev1, rev2 int, allValues bool) (string, error) {
+	if allValues {
+		aicontext.RedactHelmValues(values1.Computed)
+		aicontext.RedactHelmValues(values2.Computed)
+	} else {
+		aicontext.RedactHelmValues(values1.UserSupplied)
+		aicontext.RedactHelmValues(values2.UserSupplied)
+	}
+	return computeValuesDiff(values1, values2, rev1, rev2, allValues)
 }
 
 func computeValuesDiff(values1, values2 *HelmValues, rev1, rev2 int, allValues bool) (string, error) {
@@ -2353,22 +2506,25 @@ func (c *Client) Rollback(namespace, name string, revision int) error {
 // RollbackWithProgress rolls back a release with progress reporting via a channel.
 // If progressCh is nil, progress messages are silently discarded.
 func (c *Client) RollbackWithProgress(namespace, name string, revision int, progressCh chan<- InstallProgress) error {
-	sendProgress := func(phase, message, detail string) {
-		if progressCh == nil {
-			return
-		}
-		select {
-		case progressCh <- InstallProgress{Phase: phase, Message: message, Detail: detail}:
-		default:
-		}
-	}
-
-	sendProgress("preparing", fmt.Sprintf("Preparing rollback of %s to revision %d...", name, revision), "")
-
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return err
 	}
+	return c.rollbackWithProgressUsing(actionConfig, name, revision, progressCh)
+}
+
+// RollbackWithProgressAsUser is RollbackWithProgress with K8s impersonation.
+func (c *Client) RollbackWithProgressAsUser(namespace, name string, revision int, username string, groups []string, progressCh chan<- InstallProgress) error {
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
+	if err != nil {
+		return err
+	}
+	return c.rollbackWithProgressUsing(actionConfig, name, revision, progressCh)
+}
+
+func (c *Client) rollbackWithProgressUsing(actionConfig *action.Configuration, name string, revision int, progressCh chan<- InstallProgress) error {
+	sendProgress := progressSender(progressCh)
+	sendProgress("preparing", fmt.Sprintf("Preparing rollback of %s to revision %d...", name, revision), "")
 	sendProgress("rolling-back", fmt.Sprintf("Rolling back %s to revision %d...", name, revision), "")
 	if err := c.rollbackWith(actionConfig, name, revision); err != nil {
 		return err
@@ -2379,11 +2535,7 @@ func (c *Client) RollbackWithProgress(namespace, name string, revision int, prog
 
 // RollbackAsUser performs a rollback with K8s impersonation.
 func (c *Client) RollbackAsUser(namespace, name string, revision int, username string, groups []string) error {
-	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
-	if err != nil {
-		return err
-	}
-	return c.rollbackWith(actionConfig, name, revision)
+	return c.RollbackWithProgressAsUser(namespace, name, revision, username, groups, nil)
 }
 
 func (c *Client) rollbackWith(actionConfig *action.Configuration, name string, revision int) error {

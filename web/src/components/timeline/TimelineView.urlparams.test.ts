@@ -75,6 +75,7 @@ function parseState(
     viewMode,
     mode: parseTimeMode(params, opts.isRetained, opts.maxRangeDays),
     showDeleted: params.get('deleted') !== '0',
+    showRoutine: params.get('routine') === '1',
     pinnedOnly: params.get('pinnedOnly') === '1' && opts.hasPins,
     search: params.get('q') ?? '',
     activityFilter,
@@ -89,6 +90,7 @@ const defaultState: PersistedTimelineState = {
   viewMode: DEFAULT_VIEW,
   mode: live(DEFAULT_LIVE_WIDTH_MS),
   showDeleted: true,
+  showRoutine: false,
   pinnedOnly: false,
   search: '',
   activityFilter: [],
@@ -158,6 +160,7 @@ describe('writeTimelineParams', () => {
       viewMode: 'list',
       mode: live(6 * 60 * 60 * 1000),
       showDeleted: false,
+      showRoutine: true,
       pinnedOnly: true,
       search: 'nginx',
       activityFilter: ['warnings', 'unhealthy'],
@@ -175,6 +178,7 @@ describe('writeTimelineParams', () => {
       ['kinds', 'Pod,Deployment'],
       ['pinnedOnly', '1'],
       ['q', 'nginx'],
+      ['routine', '1'],
       ['sort', 'recent'],
       ['view', 'list'],
       ['window', '21600000'],
@@ -265,6 +269,7 @@ describe('parse(write(state)) round-trip', () => {
       viewMode: 'list',
       mode: live(6 * 60 * 60 * 1000),
       showDeleted: false,
+      showRoutine: true,
       pinnedOnly: true,
       search: 'nginx',
       activityFilter: ['warnings', 'unhealthy'],
@@ -338,6 +343,7 @@ describe('onlyHighFreqDiffer (history replace vs push)', () => {
     expect(onlyHighFreqDiffer('', 'activity=warnings')).toBe(false)
     expect(onlyHighFreqDiffer('', 'kinds=Pod')).toBe(false)
     expect(onlyHighFreqDiffer('', 'deleted=0')).toBe(false)
+    expect(onlyHighFreqDiffer('', 'routine=1')).toBe(false)
     expect(onlyHighFreqDiffer('', 'pinnedOnly=1')).toBe(false)
   })
 

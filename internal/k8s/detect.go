@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -42,6 +43,10 @@ const (
 const ScaledToZeroReason = "Backing workload scaled to 0"
 
 const livenessProbeFailedReason = "LivenessProbeFailed"
+
+// startupProbeFailedReason is evidence only: a failed startup probe restarts
+// the container like a liveness failure, but it never becomes a row reason.
+const startupProbeFailedReason = "StartupProbeFailed"
 
 // Core ConfigMaps and Secrets have no kind-specific graceful termination phase.
 // Once deletion starts, a remaining finalizer is the only thing keeping the
@@ -103,6 +108,9 @@ type Detection struct {
 	// mean either non-Pod problem or no crash data on this Pod yet.
 	RestartCount         int32
 	LastTerminatedReason string
+	// RestartLoop is set on a Pod crashloop row emitted because a container is
+	// in an active restart loop (see activeRestartLoop). Nil otherwise.
+	RestartLoop *issuesapi.RestartLoop
 	// OwnerKind + OwnerName name the topmost stable controller of a Pod
 	// problem (Pod→Deployment, not the intermediate ReplicaSet), resolved
 	// via topOwnerForPod when the Pod is detected. Empty for non-Pod and
@@ -447,7 +455,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 		}
 	}
 
-	probeFailures := latestProbeFailures(cache, namespace, now)
+	probeFailures, containerProbeFailures := latestProbeFailures(cache, namespace, now)
+	var loopRows []loopRow
 	pvcPendingFailures := latestPVCPendingFailures(cache, namespace)
 
 	// Pod problems: high-signal container waiting/terminated states, old
@@ -461,7 +470,10 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			}
 			healthStr := health.Pod(pod, now).LegacyString()
 			earlyProbeTargetProblem, hasEarlyProbeTargetProblem := activeProbeTargetProblem(pod, "")
-			if healthStr == "healthy" && !hasEarlyProbeTargetProblem {
+			// A restart loop keeps its row through the ticks where the pod
+			// looks healthy between crashes; see restart_loop.go.
+			loop, looping := activeRestartLoop(pod, containerProbeFailures, now)
+			if healthStr == "healthy" && !hasEarlyProbeTargetProblem && !looping {
 				continue
 			}
 			// Unschedulable pods are owned by the scheduling source, which
@@ -482,6 +494,29 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				reason = pf.reason
 				message = pf.message
 			}
+			// Every per-tick face of a restart loop (crash backoff, a bare
+			// phase, probe failures, high restarts) becomes the one crashloop
+			// row, so the issue id holds for the whole loop. Specific reasons
+			// (image pulls, create errors) and an active OOM keep their own
+			// paths. Applied before the structural checks below so an invalid
+			// probe target still wins on every tick, not only on some.
+			loopActive := looping
+			// An OOM loop replaces the OOM reason too: the row keeps the
+			// crashloop reason and classifies as oom_killed through the loop
+			// container's OOMKilled termination. Another container's active
+			// OOM still owns the row.
+			oomLoop := looping && loop.lastReason == "OOMKilled"
+			oomVeto := health.PodHasActiveOOMKilled(pod, now)
+			if oomLoop {
+				oomVeto = otherContainerActiveOOM(pod, loop.container, now)
+			}
+			if looping && (restartLoopMayReplace(reason) || (oomLoop && reason == "OOMKilled")) && !oomVeto {
+				reason = crashLoopReason
+				message = loop.message()
+			} else {
+				looping = false
+			}
+			rawMessage := ""
 			fingerprint := ""
 			if inv, ok := activeProbeTargetProblem(pod, reason); ok {
 				reason = inv.reason
@@ -491,14 +526,41 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				reason = earlyProbeTargetProblem.reason
 				message = earlyProbeTargetProblem.message
 				fingerprint = earlyProbeTargetProblem.fingerprint
-			} else if init, ok := stalledInitContainerProblem(pod, now); ok {
+			} else if init, ok := stalledInitContainerProblem(pod, now, loopingInitContainer(loop, looping)); ok {
 				reason = init.reason
 				message = init.message
 				fingerprint = init.fingerprint
 			}
-			cause, action, diagnosisSource := oomLimitDiagnosis(cache, pod, reason, lastTermReason, now)
+			// Severity is pinned for the loop (set by setLoopSeverities once
+			// every pod has been seen): serving or down at this instant is a
+			// per-tick fact, and letting it move the severity would drop the
+			// issue out of severity-filtered alerts and bring it back on every
+			// cycle. A structural root (an invalid probe target) that wins the
+			// row during a loop is pinned the same way.
+			pinLoopSeverity := loopActive && (fingerprint != "" || (looping && reason == crashLoopReason))
+			// Rows pinned for a loop carry its evidence, including a
+			// structural root's row: the evidence is what lets the issues
+			// layer fold the workload's availability row into either.
+			var restartLoopEvidence *issuesapi.RestartLoop
+			var oomStatuses []corev1.ContainerStatus
+			if pinLoopSeverity {
+				restartLoopEvidence = loop.evidence()
+			}
+			isLoopRow := looping && reason == crashLoopReason
+			if isLoopRow {
+				// The loop container's own restart count and last termination
+				// replace the pod-wide ones so every field on the row
+				// describes one container.
+				restartCount = loop.restartCount
+				lastTermReason = loop.lastReason
+				rawMessage = loop.lastMessage
+				oomStatuses = loop.oomStatuses()
+			}
+			cause, action, diagnosisSource := oomLimitDiagnosis(cache, pod, reason, lastTermReason, oomStatuses, now)
 			if cause == "" {
-				if reason == crashLoopReason {
+				if isLoopRow {
+					cause, action = loop.diagnosis()
+				} else if reason == crashLoopReason {
 					cause, action = health.PodCrashLoopDiagnosis(pod, now)
 				} else {
 					cause, action = imagePullDiagnosis(reason, message)
@@ -601,12 +663,14 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Severity:             severity,
 				Reason:               reason,
 				Message:              message,
+				RawMessage:           rawMessage,
 				Fingerprint:          fingerprint,
 				Age:                  FormatAge(ageDur),
 				AgeSeconds:           int64(ageDur.Seconds()),
 				ResourceCreatedAt:    pod.CreationTimestamp.Time,
 				RestartCount:         restartCount,
 				LastTerminatedReason: lastTermReason,
+				RestartLoop:          restartLoopEvidence,
 				OwnerGroup:           ownerGroup,
 				OwnerKind:            ownerKind,
 				OwnerName:            ownerName,
@@ -619,9 +683,13 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			// The evidence above classifies workload/rollout timing, not when this
 			// Pod's specific waiting or termination reason began.
 			setDetectionOnset(&detection, now, time.Time{})
+			if pinLoopSeverity {
+				loopRows = append(loopRows, loopRow{index: len(problems), owner: loopOwnerKey(pod, ownerGroup, ownerKind, ownerName), fast: loop.fast()})
+			}
 			problems = append(problems, detection)
 		}
 	}
+	setLoopSeverities(cache, problems, loopRows, podsByNamespace)
 
 	// Service problems: routing health that workload .status often misses.
 	// EndpointSlice would be the strongest source for realized backend state,
@@ -1249,6 +1317,7 @@ type probeFailure struct {
 	reason  string
 	message string
 	at      time.Time
+	podUID  types.UID
 }
 
 type pvcPendingFailure struct {
@@ -1324,12 +1393,22 @@ func missingNamedProbePort(c corev1.Container, probe *corev1.Probe) (string, boo
 	return port.StrVal, true
 }
 
-func stalledInitContainerProblem(pod *corev1.Pod, now time.Time) (podSpecificProblem, bool) {
+// stalledInitContainerProblem reports an init container that has been running
+// long enough to block the pod. skip names an init container already reported
+// as a restart loop: each of its long attempts is part of that loop, not a
+// separate stall.
+func stalledInitContainerProblem(pod *corev1.Pod, now time.Time, skip string) (podSpecificProblem, bool) {
 	if pod.Status.Phase != corev1.PodPending {
 		return podSpecificProblem{}, false
 	}
 	for _, cs := range pod.Status.InitContainerStatuses {
-		if cs.State.Running == nil || cs.State.Running.StartedAt.IsZero() {
+		if cs.State.Running == nil || cs.State.Running.StartedAt.IsZero() || cs.Name == skip {
+			continue
+		}
+		// A started native sidecar is meant to keep running and no longer
+		// blocks the pod. One whose startup probe has not passed
+		// (Started=false) still holds back the containers after it.
+		if isNativeSidecarName(pod, cs.Name) && cs.Started != nil && *cs.Started {
 			continue
 		}
 		if now.Sub(cs.State.Running.StartedAt.Time) < 5*time.Minute {
@@ -1506,10 +1585,15 @@ func pvcPendingFailureFromEvent(e *corev1.Event) (pvcPendingFailure, bool) {
 	return f, true
 }
 
-func latestProbeFailures(cache *ResourceCache, namespace string, now time.Time) map[string]probeFailure {
+// latestProbeFailures returns, per pod ("ns/name"), the newest liveness or
+// readiness probe failure inside probeFailureWindow, and the same newest
+// failure per container and probe type ("ns/name/container/reason"; container
+// is empty when the event carries no container fieldPath).
+func latestProbeFailures(cache *ResourceCache, namespace string, now time.Time) (map[string]probeFailure, map[string]probeFailure) {
 	out := map[string]probeFailure{}
+	byContainer := map[string]probeFailure{}
 	if cache == nil || cache.Events() == nil {
-		return out
+		return out, byContainer
 	}
 	var events []*corev1.Event
 	if namespace != "" {
@@ -1530,12 +1614,33 @@ func latestProbeFailures(cache *ResourceCache, namespace string, now time.Time) 
 			continue
 		}
 		key := e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name
+		pf := probeFailure{reason: reason, message: strings.TrimSpace(e.Message), at: t, podUID: e.InvolvedObject.UID}
+		containerKey := key + "/" + eventContainerName(e.InvolvedObject.FieldPath) + "/" + reason
+		if cur, exists := byContainer[containerKey]; !exists || t.After(cur.at) {
+			byContainer[containerKey] = pf
+		}
+		if reason == startupProbeFailedReason {
+			continue
+		}
 		if cur, exists := out[key]; exists && !t.After(cur.at) {
 			continue
 		}
-		out[key] = probeFailure{reason: reason, message: strings.TrimSpace(e.Message), at: t}
+		out[key] = pf
 	}
-	return out
+	return out, byContainer
+}
+
+// eventContainerName extracts the container from a pod event's fieldPath
+// ("spec.containers{app}" or "spec.initContainers{proxy}"); empty otherwise.
+func eventContainerName(fieldPath string) string {
+	for _, prefix := range []string{"spec.containers{", "spec.initContainers{"} {
+		if rest, ok := strings.CutPrefix(fieldPath, prefix); ok {
+			if name, ok := strings.CutSuffix(rest, "}"); ok {
+				return name
+			}
+		}
+	}
+	return ""
 }
 
 func classifyProbeFailureEvent(reason, msg string) (string, bool) {
@@ -1548,6 +1653,8 @@ func classifyProbeFailureEvent(reason, msg string) (string, bool) {
 		return livenessProbeFailedReason, true
 	case strings.Contains(lower, "readiness probe failed"):
 		return readinessProbeFailedReason, true
+	case strings.Contains(lower, "startup probe failed"):
+		return startupProbeFailedReason, true
 	default:
 		return "", false
 	}

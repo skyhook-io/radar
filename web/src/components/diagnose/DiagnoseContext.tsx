@@ -28,9 +28,11 @@ import {
   createRun,
   recordConsent,
   DiagnoseError,
+  investigationRefusal,
 } from "../../api/diagnose";
 import { getApiBase } from "../../api/config";
 import {
+  type InvestigationRefusal,
   type RunSummary,
   type AgentInfo,
   type ExecutionProfile,
@@ -86,6 +88,9 @@ interface DiagnoseCtx {
   historyDegraded: boolean; // persistence broke — history won't survive a restart
   needsConsent: boolean; // a start is pending the one-time consent
   startError: string | null;
+  // The host's refusal behind startError, when it sent one, so the surface can
+  // offer the host's action beside the message.
+  startRefusal: InvestigationRefusal | null;
   // Kept apart from startError: the consent card renders this as "why your
   // approval was refused", and a run-start failure landing in the same slot
   // would be read as exactly that — the two paths don't share a lifecycle.
@@ -426,7 +431,10 @@ function RoutedDiagnoseProvider({
   const [runsLoadFailed, setRunsLoadFailed] = useState(false);
   const [historyDegraded, setHistoryDegraded] = useState(false);
   const [pendingTarget, setPendingTarget] = useState<Target | null>(null);
-  const [startError, setStartError] = useState<string | null>(null);
+  const [startFailure, setStartFailure] = useState<{
+    message: string;
+    refusal: InvestigationRefusal | null;
+  } | null>(null);
   const [consentError, setConsentError] = useState<string | null>(null);
   const [width, setWidth] = useState<number>(() => {
     try {
@@ -694,24 +702,28 @@ function RoutedDiagnoseProvider({
       })
       .catch((e) => {
         if (seq !== startSeqRef.current) return;
-        setStartError(
-          e instanceof DiagnoseError
-            ? e.message
-            : "Couldn't start the investigation.",
-        );
+        setStartFailure({
+          message:
+            e instanceof DiagnoseError
+              ? e.message
+              : "Couldn't start the investigation.",
+          refusal: investigationRefusal(e),
+        });
       });
   };
 
   const openInvestigation = useCallback(
     (t: Target) => {
-      setStartError(null);
+      setStartFailure(null);
       setConsentError(null);
       setOpen(true);
       if (!hosted && !consentSurface) {
         setPendingTarget(null);
-        setStartError(
-          "Radar can’t run this agent with a verified execution profile.",
-        );
+        setStartFailure({
+          message:
+            "Radar can’t run this agent with a verified execution profile.",
+          refusal: null,
+        });
         setView("investigation");
         return;
       }
@@ -728,7 +740,7 @@ function RoutedDiagnoseProvider({
   const openRun = useCallback(
     (id: string) => {
       unavailableRunIDsRef.current.delete(id);
-      setStartError(null);
+      setStartFailure(null);
       setActiveRunId(id);
       setView("investigation");
       setOpen(true);
@@ -823,7 +835,7 @@ function RoutedDiagnoseProvider({
 
     urlRunIdRef.current = id;
     unavailableRunIDsRef.current.delete(id);
-    setStartError(null);
+    setStartFailure(null);
     setActiveRunId(id);
     setView("investigation");
     setOpen(true);
@@ -856,14 +868,14 @@ function RoutedDiagnoseProvider({
     unavailableRunIDsRef.current.clear();
     setActiveRunId(null);
     setView("home");
-    setStartError(null);
+    setStartFailure(null);
     setOpen(true);
     writeFocusedRunID(null, false);
   }, [writeFocusedRunID]);
   const openWorkspace = useCallback(
     (preferredRunID?: string | null) => {
       setOpen(true);
-      setStartError(null);
+      setStartFailure(null);
       if (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState)) {
         if (preferredRunID) {
           setActiveRunId(preferredRunID);
@@ -927,14 +939,14 @@ function RoutedDiagnoseProvider({
     unavailableRunIDsRef.current.clear();
     setActiveRunId(null);
     setView("home");
-    setStartError(null);
+    setStartFailure(null);
     writeFocusedRunID(null, false);
   }, [writeFocusedRunID]);
   const dismissForNavigation = useCallback(() => {
     unavailableRunIDsRef.current.clear();
     setOpen(false);
     setView("home");
-    setStartError(null);
+    setStartFailure(null);
   }, []);
   const close = useCallback(() => {
     unavailableRunIDsRef.current.clear();
@@ -999,7 +1011,7 @@ function RoutedDiagnoseProvider({
     setOpen(true);
     if (!activeRunIdRef.current) setView("home");
   }, []);
-  const dismissError = useCallback(() => setStartError(null), []);
+  const dismissError = useCallback(() => setStartFailure(null), []);
 
   // Reserve a right gutter on the CONTENT area (not the navbar/rail — those stay
   // global and static) so docked content reflows beside the panel. Wide viewports
@@ -1029,7 +1041,8 @@ function RoutedDiagnoseProvider({
     // pendingTarget is set ONLY when the current agent's consent is missing, and
     // cleared on approve/cancel — so its presence is exactly "consent needed now".
     needsConsent: !!pendingTarget,
-    startError,
+    startError: startFailure?.message ?? null,
+    startRefusal: startFailure?.refusal ?? null,
     consentError,
     openInvestigation,
     openRun,
