@@ -495,10 +495,10 @@ For `issues`, read `timing_summary` when present; it explains timing combination
 
 Admission webhook configuration context includes its declared in-cluster Service
 backends in `dependencies`, including readable references to absent Services.
-Service context includes readable cluster-scoped MutatingWebhookConfiguration
+Service context uses an informer index to find readable cluster-scoped MutatingWebhookConfiguration
 and ValidatingWebhookConfiguration consumers in `dependents`. References retain
 the Service namespace, use the shared bounded permission filter, and report
-`cache_cold` when the supporting configuration cache cannot be read. URL targets
+`cache_cold` when the supporting configuration cache cannot be read or its initial sync is incomplete. Partial indexed matches remain visible. SDK dynamic providers without the optional indexed lookup report `source_unavailable`. Hot lookups read only matching index entries; no per-Service full configuration scan or object API Get. URL targets
 are not Kubernetes references. This context does not establish API-server
 reachability, TLS validity or webhook health. CRD conversion webhooks and graph
 materialization are separate from this admission-context slice.

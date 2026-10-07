@@ -411,6 +411,13 @@ func (d *DynamicResourceCache) startWatching(gvr schema.GroupVersionResource, sc
 
 	factory := d.factoryForNs(scopeNS)
 	informer := factory.ForResource(gvr).Informer()
+	if isAdmissionWebhookGVR(gvr) {
+		if _, exists := informer.GetIndexer().GetIndexers()[admissionWebhookServiceIndex]; !exists {
+			if err := informer.AddIndexers(cache.Indexers{admissionWebhookServiceIndex: admissionWebhookServiceKeys}); err != nil {
+				return fmt.Errorf("index admission webhook Services: %w", err)
+			}
+		}
+	}
 	// Apply the dynamic-cache transform BEFORE informer.Run so every
 	// object entering the store is shrunk in place. SetTransform must
 	// be called pre-Run (returns ErrRunning otherwise). If it ever

@@ -18,6 +18,7 @@ type webhookContextProvider struct {
 	objects map[string][]*unstructured.Unstructured
 	lists   map[string]int
 	fail    bool
+	cold    bool
 }
 
 func (p *webhookContextProvider) GetGVRWithGroup(kind, group string) (schema.GroupVersionResource, bool) {
@@ -29,16 +30,14 @@ func (p *webhookContextProvider) GetGVRWithGroup(kind, group string) (schema.Gro
 	}
 	return schema.GroupVersionResource{Group: group, Version: "v1", Resource: kind}, true
 }
-func (p *webhookContextProvider) ListNamespaces(gvr schema.GroupVersionResource, namespaces []string) ([]*unstructured.Unstructured, error) {
-	if namespaces != nil {
-		panic("cluster configuration must use cluster list")
-	}
+func (p *webhookContextProvider) AdmissionWebhookConsumers(gvr schema.GroupVersionResource, namespace, name string) ([]*unstructured.Unstructured, bool, error) {
 	p.lists[gvr.Resource]++
 	if p.fail {
-		return nil, errors.New("informer not ready")
+		return nil, false, errors.New("informer not ready")
 	}
-	return p.objects[gvr.Resource], nil
+	return p.objects[gvr.Resource], !p.cold, nil
 }
+
 func webhookContextObject(kind, name, ns, service string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{"apiVersion": "admissionregistration.k8s.io/v1", "kind": kind, "metadata": map[string]any{"name": name}, "webhooks": []any{
 		map[string]any{"clientConfig": map[string]any{"service": map[string]any{"namespace": ns, "name": service}}},
@@ -97,5 +96,22 @@ func TestWebhookContextReverseExactBoundedAndCached(t *testing.T) {
 	addWebhookContext(context.Background(), svc, Options{DynamicProv: p}, rc, omitted)
 	if len(rc.Dependents) != 0 || !slices.Contains(omitted.collect(), OmittedField{Field: "dependents", Reason: OmittedCacheCold}) {
 		t.Fatalf("cold cache: %+v %+v", rc, omitted.collect())
+	}
+}
+
+func TestWebhookContextSuccessfulUnsyncedIndexIsPartial(t *testing.T) {
+	p := &webhookContextProvider{cold: true, objects: map[string][]*unstructured.Unstructured{"MutatingWebhookConfiguration": {webhookContextObject("MutatingWebhookConfiguration", "partial", "backend", "admission")}, "ValidatingWebhookConfiguration": nil}, lists: map[string]int{}}
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "admission", Namespace: "backend"}}
+	rc := &ResourceContext{}
+	omitted := newOmittedTracker()
+	addWebhookContext(context.Background(), svc, Options{DynamicProv: p}, rc, omitted)
+	if len(rc.Dependents) != 1 || !slices.Contains(omitted.collect(), OmittedField{Field: "dependents", Reason: OmittedCacheCold}) {
+		t.Fatalf("unsynced index claimed complete: %+v %+v", rc, omitted.collect())
+	}
+	rc = &ResourceContext{}
+	omitted = newOmittedTracker()
+	addWebhookContext(context.Background(), svc, Options{DynamicProv: struct{ topology.DynamicProvider }{p}}, rc, omitted)
+	if !slices.Contains(omitted.collect(), OmittedField{Field: "dependents", Reason: OmittedSourceUnavailable}) {
+		t.Fatalf("unsupported capability claimed complete: %+v", omitted.collect())
 	}
 }

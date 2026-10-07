@@ -6,7 +6,14 @@ import (
 	"github.com/skyhook-io/radar/pkg/configrefs"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
+
+// WebhookConsumerLookup is an optional indexed dynamic-cache capability.
+// complete distinguishes synced absence from partial informer contents.
+type WebhookConsumerLookup interface {
+	AdmissionWebhookConsumers(schema.GroupVersionResource, string, string) ([]*unstructured.Unstructured, bool, error)
+}
 
 func addWebhookContext(ctx context.Context, obj runtime.Object, opts Options, rc *ResourceContext, omitted *omittedTracker) {
 	if webhook, ok := obj.(*unstructured.Unstructured); ok {
@@ -23,6 +30,11 @@ func addWebhookContext(ctx context.Context, obj runtime.Object, opts Options, rc
 	if !ok || ident.Kind != "Service" || ident.Group != "" || opts.DynamicProv == nil {
 		return
 	}
+	lookup, supported := opts.DynamicProv.(WebhookConsumerLookup)
+	if !supported {
+		omitted.add("dependents", OmittedSourceUnavailable)
+		return
+	}
 	dependents := append([]ContextRef{}, rc.Dependents...)
 	for _, kind := range []string{"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"} {
 		source := ContextRef{Group: "admissionregistration.k8s.io", Kind: kind}
@@ -34,10 +46,13 @@ func addWebhookContext(ctx context.Context, obj runtime.Object, opts Options, rc
 		if !ok {
 			continue
 		}
-		objects, err := opts.DynamicProv.ListNamespaces(gvr, nil)
+		objects, complete, err := lookup.AdmissionWebhookConsumers(gvr, ident.Namespace, ident.Name)
 		if err != nil {
 			omitted.add("dependents", OmittedCacheCold)
 			continue
+		}
+		if !complete {
+			omitted.add("dependents", OmittedCacheCold)
 		}
 		for _, webhook := range objects {
 			for _, ref := range configrefs.AdmissionWebhookServices(webhook) {

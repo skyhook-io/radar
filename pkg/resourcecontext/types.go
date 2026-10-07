@@ -747,10 +747,11 @@ type OmittedField struct {
 type OmittedReason string
 
 const (
-	OmittedRBACDenied     OmittedReason = "rbac_denied"
-	OmittedBudgetExceeded OmittedReason = "budget_exceeded"
-	OmittedCacheCold      OmittedReason = "cache_cold"
-	OmittedNotInstalled   OmittedReason = "not_installed"
+	OmittedRBACDenied        OmittedReason = "rbac_denied"
+	OmittedBudgetExceeded    OmittedReason = "budget_exceeded"
+	OmittedCacheCold         OmittedReason = "cache_cold"
+	OmittedNotInstalled      OmittedReason = "not_installed"
+	OmittedSourceUnavailable OmittedReason = "source_unavailable"
 )
 
 // ReflectionContext contains declared metadata and authorized cached observations,
