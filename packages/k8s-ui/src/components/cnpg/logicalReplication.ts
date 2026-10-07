@@ -1,3 +1,4 @@
+import { getCNPGPostgresMajor } from '../resources/resource-utils-cnpg'
 import { cnpgRoleState } from './databaseRole'
 import { cnpgFormatBytes } from './workspace'
 import { type Fact } from '../facts'
@@ -71,12 +72,6 @@ export function cnpgSubscriptionHostNamespace(subscription: any, clusters: any[]
   return host ? stripHost(host).namespace ?? ns : undefined
 }
 
-function pgMajor(cluster: any): number | undefined {
-  const m = cluster?.status?.pgDataImageInfo?.majorVersion
-  if (typeof m === 'number' && m > 0) return m
-  const cat = cluster?.spec?.imageCatalogRef?.major
-  return typeof cat === 'number' ? cat : undefined
-}
 
 function truthy(v: unknown): boolean | undefined {
   if (v === undefined || v === null) return undefined
@@ -118,7 +113,7 @@ export function cnpgSlotFailover(publisher: CNPGPublisher, subscription: any): F
       source: FAILOVER_SOURCE,
     }
   }
-  const major = pgMajor(c)
+  const major = getCNPGPostgresMajor(c)
   if (major === undefined) {
     return { text: 'Unknown: synchronization is on, but the publisher\'s PostgreSQL major is not reported', tone: 'unknown', source: FAILOVER_SOURCE }
   }

@@ -6,7 +6,7 @@ vi.mock('../../../api/client', () => ({ useRadarFeature: () => ({ guard: vi.fn()
 vi.mock('../../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'test' } }) }))
 it('separates excluded Secret contents from best-effort log redaction and review', () => {
   const html = renderToStaticMarkup(<CNPGReportDialog namespace="db" name="orders" onClose={() => {}} />)
-  expect(html).toContain('Secret contents are never included.')
+  expect(html).toContain('Secret objects are never read. Inline connection passwords and initialization SQL are withheld.')
   expect(html).toContain('Included logs are redacted for recognisable secrets on a best-effort basis; review them before sharing.')
   expect(html).not.toContain('Secret values are never included')
 })

@@ -19,6 +19,7 @@ export {
   backupsForScheduledBackup,
   cnpgScheduleDestinationBlocker,
   objectStoreForBackup,
+  cnpgBackupMatchesCluster,
   inferredObjectStoreHealth,
   relationUnavailable,
   usersOfObjectStore,

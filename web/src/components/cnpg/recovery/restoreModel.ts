@@ -1,4 +1,4 @@
-import { CNPG_BARMAN_PLUGIN_NAME, cnpgBackupDeclaration, cnpgBarmanPlugin, getCNPGClusterBarmanPlugin, getCNPGBackupPlugin, objectStoreForBackup, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel, type CNPGWorkspaceResponse, coverageReadable, formatGrant } from '@skyhook-io/k8s-ui'
+import { CNPG_BARMAN_PLUGIN_NAME, cnpgBackupDeclaration, cnpgBarmanPlugin, getCNPGClusterBarmanPlugin, getCNPGPostgresMajor, cnpgBackupMatchesCluster, getCNPGBackupPlugin, objectStoreForBackup, getCNPGObjectStoreRecoveryWindows, isApiGroup, type HealthLevel, type CNPGWorkspaceResponse, coverageReadable, formatGrant } from '@skyhook-io/k8s-ui'
 import type { CNPGRuntimeResponse } from '../../../api/cnpg'
 import type { ActionCapability } from '../../../api/actions'
 import type { CNPGRecoveryResponse, CNPGRecoveryPod } from '../../../api/cnpg-recovery'
@@ -11,10 +11,11 @@ const HEALTHY_PHASE = 'Cluster in healthy state'
  * ObjectStore with the backup's ID pinned: CloudNativePG restores a
  * `bootstrap.recovery.backup` reference only from in-tree or snapshot backups.
  */
-export type RestoreSource =
+export type RestoreSource = (
   | { kind: 'objectStore'; objectStore: string; serverName: string; backupID?: string; backupName?: string; backupEnd?: string }
   | { kind: 'inTree'; barmanObjectStore: Record<string, unknown>; serverName: string }
   | { kind: 'backup'; backup: string; backupEnd?: string }
+) & { majorVersion?: number }
 
 export type RestoreTarget = { kind: 'latest' } | { kind: 'time'; iso: string } | { kind: 'backupEnd' }
 
@@ -30,14 +31,17 @@ function backupEnd(b: any): string | undefined {
 export function restoreSourceForBackup(backup: any, sourceCluster: any | null): RestoreSource | null {
   if (backup?.status?.phase !== 'completed') return null
   const name = backup.metadata?.name
-  if (!isPluginBackup(backup)) return { kind: 'backup', backup: name, backupEnd: backupEnd(backup) }
+  const majorVersion = backup.status?.majorVersion > 0 ? backup.status.majorVersion : undefined
+  const version = majorVersion ? { majorVersion } : {}
+  if (!isPluginBackup(backup)) return { kind: 'backup', backup: name, backupEnd: backupEnd(backup), ...version }
   if (getCNPGBackupPlugin(backup)?.name !== CNPG_BARMAN_PLUGIN_NAME) return null
+  if (!cnpgBackupMatchesCluster(backup, sourceCluster)) return null
   const plugin = sourceCluster ? getCNPGClusterBarmanPlugin(sourceCluster) : null
   const objectStore = plugin?.barmanObjectName
   const serverName = plugin?.serverName
   const backupID = backup.status?.backupId
   if (!objectStore || !serverName || !backupID) return null
-  return { kind: 'objectStore', objectStore, serverName, backupID, backupName: name, backupEnd: backupEnd(backup) }
+  return { kind: 'objectStore', objectStore, serverName, backupID, backupName: name, backupEnd: backupEnd(backup), ...version }
 }
 
 /** Where a Cluster's backups can be restored from, in order of preference. */
@@ -105,8 +109,14 @@ export function assessRestoreSources(data: CNPGWorkspaceResponse | undefined, na
   }
 }
 
-function restoreImage(cluster: any): { imageCatalogRef?: any; imageName?: string } {
+function restoreImage(cluster: any, source?: RestoreSource): { imageCatalogRef?: any; imageName?: string } {
   const spec = cluster?.spec
+  if (source && sourcePinsBackup(source)) {
+    if (!source.majorVersion) return {}
+    if (spec?.imageCatalogRef) return { imageCatalogRef: { ...spec.imageCatalogRef, major: source.majorVersion } }
+    const running = cluster?.status?.pgDataImageInfo
+    return getCNPGPostgresMajor(cluster) === source.majorVersion && running?.image ? { imageName: running.image } : {}
+  }
   if (spec?.imageCatalogRef) return { imageCatalogRef: spec.imageCatalogRef }
   const imageName = spec?.imageName || cluster?.status?.image
   return imageName ? { imageName } : {}
@@ -358,7 +368,7 @@ export function buildRestoreManifest(args: {
     metadata: { name: newName, namespace },
     spec: {
       instances: spec.instances ?? 1,
-      ...restoreImage(sourceCluster),
+      ...restoreImage(sourceCluster, source),
       ...(spec.postgresql?.parameters ? { postgresql: { parameters: spec.postgresql.parameters } } : {}),
       ...(spec.resources ? { resources: spec.resources } : {}),
       storage: spec.storage ?? {},
@@ -538,7 +548,7 @@ export type RestoreBackupDeclared = 'walArchiving' | 'archiverWithoutDestination
 
 const BACKUP_STEP: Record<RestoreBackupDeclared | 'unread', Pick<RestoreNextStep, 'state' | 'note'>> = {
   unread: { state: 'unknown', note: 'Its backup configuration was not read' },
-  walArchiving: { state: 'done', note: 'WAL archiving to an object store is configured' },
+  walArchiving: { state: 'partial', note: 'WAL archiving is configured. Verify uploads and complete a new base backup; configuration alone does not prove protection.' },
   archiverWithoutDestination: {
     state: 'partial',
     note: 'The Barman plugin is set as WAL archiver but names no ObjectStore (parameters.barmanObjectName), so WAL has nowhere to go',
@@ -555,7 +565,7 @@ const BACKUP_STEP: Record<RestoreBackupDeclared | 'unread', Pick<RestoreNextStep
  * give no point-in-time recovery.
  */
 export function restoreNextSteps(input: { validationRecorded: boolean; backup: RestoreBackupDeclared | undefined }): RestoreNextStep[] {
-  const label = 'Set up backups and WAL archiving'
+  const label = 'Set up and verify backups and WAL archiving'
   const backup: RestoreNextStep = { id: 'backup', label, ...BACKUP_STEP[input.backup ?? 'unread'] }
   return [
     { id: 'connect', label: 'Point applications at it', state: 'unknown', note: 'Radar cannot tell which applications use it' },

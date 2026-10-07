@@ -13,6 +13,11 @@ import { parseGoTimeString } from '../../utils/parse-go-time'
 
 export const CNPG_GROUP = 'postgresql.cnpg.io'
 
+export function getCNPGPostgresMajor(cluster: any): number | undefined {
+  const major = cluster?.status?.pgDataImageInfo?.majorVersion ?? cluster?.spec?.imageCatalogRef?.major
+  return typeof major === 'number' && Number.isInteger(major) && major > 0 ? major : undefined
+}
+
 /**
  * Exact API-group match for a resource's `apiVersion` ("group/version").
  *

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useRef, type ReactNode } from 'react'
 import type { RenderDiagnoseAction } from '../../context/DiagnoseCustomization'
 import { useSearchParams } from 'react-router-dom'
 import { CNPGDimensionMark, CNPGDimensionVerdict, CNPGServingStatus, coverageReadable, toneTextClass, type CNPGDimension, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
@@ -127,6 +127,7 @@ export function CNPGBackupsTab({
   const { row, runtime } = useCNPGClusterAssessment(namespace, name)
   const primary = runtime.data?.instances.find((i) => i.role === 'primary')
   const [searchParams] = useSearchParams()
+  const archivingRepairRef = useRef<HTMLDivElement>(null)
   const restore = useCNPGRestoreCapability(namespace)
   const restoreBlocked = restore.data ? (restore.data.allowed ? undefined : restore.data.reason ?? 'Not allowed') : restore.isLoading ? 'Checking whether you can create a Cluster here…' : undefined
   return (
@@ -138,12 +139,12 @@ export function CNPGBackupsTab({
         <div className="flex min-h-0 flex-1 flex-col">
           <CNPGTabVerdict namespace={namespace} name={name} id="protection" className="px-4 pt-4" />
           <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
-            <CNPGProtectionSetup key={`${namespace}/${name}`} namespace={namespace} name={name} onInspect={onInspect} onOpenYaml={onOpenYaml} onOpenOperator={onOpenOperator} />
+            <CNPGProtectionSetup key={`${namespace}/${name}`} namespace={namespace} name={name} onInspect={onInspect} onOpenYaml={onOpenYaml} onOpenOperator={onOpenOperator} onOpenArchivingRepair={() => archivingRepairRef.current?.scrollIntoView({ block: 'start' })} />
             <CNPGRestoreButton namespace={namespace} entry={{ kind: 'cluster', name }} disabledReason={restoreBlocked ?? nothing} />
             <span className="text-xs text-theme-text-tertiary">{restoreBlocked ?? nothing ?? 'Restores into a new Cluster beside this one; this cluster is not changed.'}</span>
           </div>
           {row && (
-            <div className="px-4 pt-4">
+            <div ref={archivingRepairRef} className="px-4 pt-4">
               <CNPGArchivingRepair
                 row={row}
                 primary={primary}

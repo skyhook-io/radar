@@ -38,7 +38,7 @@ const pluginBackup = {
   apiVersion: 'postgresql.cnpg.io/v1',
   metadata: { name: 'b-plugin', namespace: 'db' },
   spec: { cluster: { name: 'pg-a' }, method: 'plugin', pluginConfiguration: { name: 'barman-cloud.cloudnative-pg.io' } },
-  status: { phase: 'completed', backupId: '20260929T220000', stoppedAt: '2026-09-29T22:00:09Z' },
+  status: { phase: 'completed', backupId: '20260929T220000', stoppedAt: '2026-09-29T22:00:09Z', majorVersion: 17 },
 }
 
 const store = {
@@ -63,6 +63,7 @@ describe('restore sources', () => {
   it('restores a plugin Backup through its ObjectStore with the backup ID pinned', () => {
     expect(restoreSourceForBackup(pluginBackup, cluster)).toEqual({
       kind: 'objectStore',
+      majorVersion: 17,
       objectStore: 'store',
       serverName: 'pg-a-v2',
       backupID: '20260929T220000',
@@ -274,7 +275,7 @@ describe('restoreNextSteps', () => {
       ['backup', 'todo'],
     ])
     expect(fresh[2].note).toContain('no backup destination')
-    expect(restoreNextSteps({ validationRecorded: true, backup: 'walArchiving' }).map((s) => s.state)).toEqual(['unknown', 'done', 'done'])
+    expect(restoreNextSteps({ validationRecorded: true, backup: 'walArchiving' }).map((s) => s.state)).toEqual(['unknown', 'done', 'partial'])
     expect(restoreNextSteps({ validationRecorded: false, backup: undefined })[2].state).toBe('unknown')
   })
   it('never counts volume snapshots alone, or backups without WAL archiving, as done', () => {
@@ -285,11 +286,11 @@ describe('restoreNextSteps', () => {
       note: 'Volume snapshots declared, but no WAL archiving, so no point-in-time recovery',
     })
     expect(step(plugin(false))).toMatchObject({ state: 'partial' })
-    expect(step(plugin(true)).state).toBe('done')
+    expect(step(plugin(true)).state).toBe('partial')
     const noDestination = step({ spec: { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', isWALArchiver: true }] } })
     expect(noDestination.state).toBe('partial')
     expect(noDestination.note).toContain('names no ObjectStore')
-    expect(step({ spec: { backup: { barmanObjectStore: { destinationPath: 's3://b' } } } }).state).toBe('done')
+    expect(step({ spec: { backup: { barmanObjectStore: { destinationPath: 's3://b' } } } }).state).toBe('partial')
     expect(step({ spec: {} }).state).toBe('todo')
   })
 })
@@ -444,4 +445,30 @@ it('does not count an unsupported plugin Backup as evidence for an assessable de
   expect(assessment.recoveryState).toBe('unknown')
   expect(assessment.unreadReason).toContain('Backup b-plugin using plugin other.example.com cannot be assessed')
   expect(assessment.disabledReason).toBeUndefined()
+})
+
+
+describe('physical recovery compatibility', () => {
+ it('uses the backup major in the source catalog after a major upgrade', () => {
+  const source = restoreSourceForBackup({ ...pluginBackup, status: { ...pluginBackup.status, majorVersion: 16 } }, cluster)!
+  const spec = buildRestoreManifest({ sourceCluster: cluster, source, namespace: 'db', newName: 'restore', target: { kind: 'backupEnd' } }).spec
+  expect(spec.imageCatalogRef).toEqual({ ...cluster.spec.imageCatalogRef, major: 16 })
+ })
+ it('requires an explicit image when the recorded major differs or is missing', () => {
+  const current = { ...cluster, spec: { ...cluster.spec, imageCatalogRef: undefined, imageName: 'custom:17' }, status: { pgDataImageInfo: { majorVersion: 17 } } }
+  for (const majorVersion of [16, undefined]) {
+   const source = restoreSourceForBackup({ ...pluginBackup, status: { ...pluginBackup.status, majorVersion } }, current)!
+   expect(buildRestoreManifest({ sourceCluster: current, source, namespace: 'db', newName: 'restore', target: { kind: 'backupEnd' } }).spec.imageName).toBeUndefined()
+  }
+ })
+ it('rejects plugin backups belonging to a predecessor Cluster', () => {
+  const current = { ...cluster, metadata: { ...cluster.metadata, uid: 'current', creationTimestamp: '2026-09-30T00:00:00Z' } }
+  expect(restoreSourceForBackup({ ...pluginBackup, status: { ...pluginBackup.status, metadata: { clusterUID: 'old' } } }, current)).toBeNull()
+  expect(restoreSourceForBackup({ ...pluginBackup, status: { ...pluginBackup.status, startedAt: '2026-09-29T22:00:00Z' } }, current)).toBeNull()
+ })
+ it('does not mark backup protection complete from its declaration alone', () => {
+  const step = restoreNextSteps({ validationRecorded: false, backup: 'walArchiving' })[2]
+  expect(step.state).toBe('partial')
+  expect(step.note).toContain('complete a new base backup')
+ })
 })

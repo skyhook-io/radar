@@ -70,6 +70,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
   }, [objects, clusters, backups, stores, entry, namespace, workspace.data])
 
   const [sourceIdx, setSourceIdx] = useState(0)
+  const [confirmedArchive, setConfirmedArchive] = useState<string | null>(null)
   const source = sources[sourceIdx]
   const sourceCluster = useMemo(() => {
     if (!source) return null
@@ -80,6 +81,8 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
     }
     return sourceClusterFor(source, clusters, namespace)
   }, [source, entry, clusters, backups, namespace])
+  const archiveKey = source?.kind === 'objectStore' && source.backupName ? [sourceCluster?.metadata?.uid, source.objectStore, source.serverName, source.backupID, source.majorVersion].join('/') : null
+  const archiveConfirmed = archiveKey !== null && confirmedArchive === archiveKey
   const sourceName = sourceCluster?.metadata?.name as string | undefined
   const runtime = useCNPGRuntime(namespace, sourceName ?? '', !!sourceName)
 
@@ -184,6 +187,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
             context: connection.context,
             namespace: created.namespace || namespace,
             cluster: created.name,
+            clusterUID: created.uid,
             baseline: { source: source && sameCNPGRecoveryIdentity(submitted, baseManifest) ? describeSource(source) : undefined },
           })
           const path = cnpgClusterFullPath(created.namespace || namespace, created.name, connection.context || undefined)
@@ -213,6 +217,8 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
         ? cnpgTargetIssue(targetValues, requireImage)
         : setupStep === 'target' && clusters.some((c: any) => c.metadata?.namespace === namespace && c.metadata?.name === name)
           ? `A Cluster named ${name} already exists in ${namespace}.`
+          : source?.kind === 'objectStore' && source.backupName && !archiveConfirmed
+            ? 'Confirm that the selected archive still contains this named backup.'
           : effectiveKind === 'time' && !targetIso
             ? 'Enter the point in time to recover to.'
             : undefined)
@@ -256,6 +262,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
       warnings={noSource ? [] : [
         ...(customIdentity ? ['Advanced YAML changed the recovery source, image or resource shape. The setup shows the original source evidence; review the current YAML for the intended configuration.'] : []),
         ...(availability?.unreadReason ? [availability.unreadReason] : []),
+        ...(source?.majorVersion ? [`This backup was taken on PostgreSQL ${source.majorVersion}. Physical recovery requires that major version.`] : pinned ? ['This Backup does not record its PostgreSQL major. Choose a matching image; the current source image may have changed since the backup.'] : []),
         ...(setupStep === 'target' ? ['The new cluster has no WAL archiving or backups until you configure them.', ...(serverName ? [`If you add archiving later, do not reuse server name "${serverName}": the new cluster would write into the archive it restores from.`] : [])] : []),
         ...warnings,
         ...(permission.unchecked ? [permission.unchecked] : []),
@@ -275,10 +282,14 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
         <span className={setupStep === 'target' ? 'font-semibold text-accent-text' : undefined}>2. New Cluster</span><span aria-hidden>→</span><span>3. Review & create</span>
       </div>
       {manifest !== null && <button type="button" className="btn-secondary mb-4 px-3 py-1.5 text-xs" onClick={() => setEditingManifest(true)}>Continue editing current YAML</button>}
+      {source?.kind === 'objectStore' && source.backupName && <label className="mb-4 flex items-start gap-2 text-sm text-theme-text-secondary">
+        <input type="checkbox" checked={archiveConfirmed} onChange={(event) => setConfirmedArchive(event.target.checked ? archiveKey : null)} className="mt-1" />
+        <span>I confirm ObjectStore {source.objectStore}, archive server {source.serverName}, still contains backup {source.backupID}. The plugin does not record its archive destination in the Backup; this is the Cluster’s current destination.</span>
+      </label>}
       {setupStep === 'source' ? <CNPGRecoveryPoint
         sources={sources}
         sourceIndex={sourceIdx}
-        onSourceChange={(index) => { setSourceIdx(index); setTargetKind(null); setTargetOverrides({}) }}
+        onSourceChange={(index) => { setSourceIdx(index); setTargetKind(null); setTargetOverrides({}); setConfirmedArchive(null) }}
         targetKind={effectiveKind}
         onTargetChange={setTargetKind}
         timeValue={timeValue}

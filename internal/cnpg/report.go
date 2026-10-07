@@ -585,25 +585,41 @@ func cnpgRedactQueryText(body string) string {
 	return string(out)
 }
 
-// cnpgReportCleanObject drops managedFields and the last-applied copy and
-// blanks sensitive env values. The rest of the spec stays verbatim: CNPG
-// kinds name Secrets through {name, key} selectors, and the generic inline
-// redaction would blank those names (secretAccessKey: {name: ...}).
+// Generic inline redaction would blank Secret selector names too. Scope it
+// to connection parameters; initialization SQL can contain role passwords
+// and is always withheld, independently of the log query-text option.
 func cnpgReportCleanObject(obj *unstructured.Unstructured) *unstructured.Unstructured {
 	clean := obj.DeepCopy()
 	unstructured.RemoveNestedField(clean.Object, "metadata", "managedFields")
 	unstructured.RemoveNestedField(clean.Object, "metadata", "annotations", "kubectl.kubernetes.io/last-applied-configuration")
-	cnpgReportRedactEnvLists(clean.Object)
+	cnpgReportRedactManifest(clean.Object)
 	return clean
 }
 
-// cnpgReportRedactEnvLists blanks sensitive env values wherever an object
-// declares them — Cluster spec.env, a Pooler's pod template — so a manifest
-// never shows what the Pods it produces have redacted.
-func cnpgReportRedactEnvLists(v any) {
+func cnpgReportRedactManifest(v any) {
 	switch t := v.(type) {
 	case map[string]any:
 		for k, child := range t {
+			switch k {
+			case "postInitSQL", "postInitApplicationSQL", "postInitTemplateSQL":
+				if sql, ok := child.([]any); ok {
+					for i := range sql {
+						sql[i] = cnpgReportRedacted
+					}
+				} else {
+					t[k] = cnpgReportRedacted
+				}
+				continue
+			case "connectionParameters":
+				if params, ok := child.(map[string]any); ok {
+					for _, key := range []string{"password", "sslpassword"} {
+						if _, present := params[key]; present {
+							params[key] = cnpgReportRedacted
+						}
+					}
+					aicontext.RedactInlineSecrets(params)
+				}
+			}
 			if list, ok := child.([]any); ok && k == "env" {
 				for _, item := range list {
 					e, ok := item.(map[string]any)
@@ -617,11 +633,11 @@ func cnpgReportRedactEnvLists(v any) {
 				}
 				continue
 			}
-			cnpgReportRedactEnvLists(child)
+			cnpgReportRedactManifest(child)
 		}
 	case []any:
 		for _, child := range t {
-			cnpgReportRedactEnvLists(child)
+			cnpgReportRedactManifest(child)
 		}
 	}
 }

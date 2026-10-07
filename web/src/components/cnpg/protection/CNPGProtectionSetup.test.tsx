@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   schedules: [] as any[],
   coverage: 'full',
   wal: 'Not reported',
+  walState: 'unknown',
   backup: 'No successful backup yet',
 }))
 vi.mock('../../../api/client', () => ({ useRadarFeature: () => ({ support: state.support }) }))
@@ -32,7 +33,7 @@ vi.mock('../useCNPGSidebarWorkspace', () => ({
           namespace: 'db',
           name: 'pg',
           cluster: state.cluster,
-          protection: { walArchiving: { text: state.wal }, lastSuccessfulBackup: { text: state.backup } },
+          protection: { walArchiving: { text: state.wal, state: state.walState }, lastSuccessfulBackup: { text: state.backup } },
         },
       ],
     },
@@ -56,6 +57,7 @@ beforeEach(() => {
   state.cluster = { metadata: { name: 'pg', namespace: 'db', uid: 'uid' }, spec: {} }
   state.schedules = []
   state.coverage = 'full'
+  state.walState = 'unknown'
   state.wal = 'Not reported'
   state.backup = 'No successful backup yet'
 })
@@ -107,4 +109,13 @@ it('shows the upgrade path before offering setup writes against an older Radar',
   state.support = 'unsupported'
   expect(text()).toContain('need a newer Radar')
   expect(text()).not.toContain('Choose existing ObjectStore')
+})
+
+it('puts failed uploads ahead of the setup milestones and links to the existing repair flow', () => {
+ state.wal = 'Failing'
+ state.walState = 'failing'
+ const html = renderToStaticMarkup(<MemoryRouter initialEntries={['/?protectionSetup=1']}><CNPGProtectionSetup namespace="db" name="pg" onInspect={vi.fn()} onOpenArchivingRepair={vi.fn()} /></MemoryRouter>).replace(/<[^>]*>/g, '')
+ expect(html.indexOf('Repair WAL archiving first')).toBeLessThan(html.indexOf('1. Archive storage'))
+ expect(html).toContain('Open archiving repair')
+ expect(html).toContain('Uploads failing')
 })

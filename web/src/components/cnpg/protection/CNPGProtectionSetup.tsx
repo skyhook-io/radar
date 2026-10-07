@@ -34,12 +34,14 @@ export function CNPGProtectionSetup({
   onInspect,
   onOpenYaml,
   onOpenOperator,
+  onOpenArchivingRepair,
 }: {
   namespace: string
   name: string
   onInspect: (resource: SelectedResource) => void
   onOpenYaml?: () => void
   onOpenOperator?: () => void
+  onOpenArchivingRepair?: () => void
 }) {
   const [params, setParams] = useSearchParams()
   const location = useLocation()
@@ -83,6 +85,7 @@ export function CNPGProtectionSetup({
             onInspect={onInspect}
             onOpenYaml={onOpenYaml}
             onOpenOperator={onOpenOperator}
+            onOpenArchivingRepair={onOpenArchivingRepair}
           />
         )
       )}
@@ -123,6 +126,7 @@ function ProtectionGuide({
   onInspect,
   onOpenYaml,
   onOpenOperator,
+  onOpenArchivingRepair,
 }: {
   namespace: string
   name: string
@@ -130,6 +134,7 @@ function ProtectionGuide({
   onInspect: (resource: SelectedResource) => void
   onOpenYaml?: () => void
   onOpenOperator?: () => void
+  onOpenArchivingRepair?: () => void
 }) {
   const titleId = useId()
   const { connection } = useConnection()
@@ -271,7 +276,11 @@ function ProtectionGuide({
           </div>
         ) : (
           <div className="space-y-3">
-            <Milestone number={1} title="Archive storage" state={attached ? 'Declared' : 'Not attached'}>
+            {row.protection.walArchiving.state === 'failing' && <AlertBanner variant="error" title="Repair WAL archiving first">
+              <p>Uploads are failing. Repair the archive connection before relying on a schedule or taking a new base backup.</p>
+              {onOpenArchivingRepair && <button type="button" className="mt-2 text-sm text-accent-text hover:underline" onClick={() => { onClose(); onOpenArchivingRepair() }}>Open archiving repair →</button>}
+            </AlertBanner>}
+            <Milestone number={1} title="Archive storage" state={row.protection.walArchiving.state === 'failing' ? 'Uploads failing' : attached ? 'Declared' : 'Not attached'}>
               {attached ? (
                 <p className="text-sm text-theme-text-secondary">
                   ObjectStore <span className="font-mono">{plugin.barmanObjectName}</span> · archive server{' '}

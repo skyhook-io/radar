@@ -242,12 +242,32 @@ func cnpgHistoryDefs(sel, pvcSel string, step time.Duration) []cnpgHistoryDef {
 	return defs
 }
 
+// Bounds excludes reused Pod names from a previous Cluster incarnation. The
+// lookback margin also excludes predecessor samples from rates and instant
+// selectors (Prometheus' default five-minute lookback).
+func (r CNPGHistoryRange) Bounds(end, createdAt time.Time) (time.Time, time.Time) {
+	end = end.Truncate(r.Step)
+	start := end.Add(-r.Duration)
+	if !createdAt.IsZero() {
+		earliest := createdAt.Add(max(5*time.Minute, 2*r.Step)).UTC()
+		aligned := earliest.Truncate(r.Step)
+		if aligned.Before(earliest) {
+			aligned = aligned.Add(r.Step)
+		}
+		if aligned.After(start) {
+			start = aligned
+		}
+	}
+	return start, end
+}
+
 // CNPGHistoryRequest is what the server decided the caller may read.
 type CNPGHistoryRequest struct {
 	Namespace string
 	Cluster   string
 	Range     CNPGHistoryRange
 	End       time.Time
+	CreatedAt time.Time
 	// Matchers are cluster-identity matchers from ResolveCNPGScope for the
 	// exporter series; PVCMatchers from ResolvePVCScope for the claims.
 	Matchers    string
@@ -276,9 +296,8 @@ func queryCNPGHistory(ctx context.Context, q seriesQuerier, req CNPGHistoryReque
 	if len(req.Claims) > 0 {
 		pvcSel = withScope(cnpgClaimSelector(req.Namespace, req.Claims), req.PVCMatchers)
 	}
-	end := req.End.Truncate(req.Range.Step)
-	start := end.Add(-req.Range.Duration)
-	steps := int(req.Range.Duration/req.Range.Step) + 1
+	start, end := req.Range.Bounds(req.End, req.CreatedAt)
+	steps := max(0, int(end.Sub(start)/req.Range.Step)+1)
 
 	defs := cnpgHistoryDefs(sel, pvcSel, req.Range.Step)
 	charts := make([]CNPGHistoryChart, len(defs))
@@ -302,6 +321,10 @@ func queryCNPGHistory(ctx context.Context, q seriesQuerier, req CNPGHistoryReque
 			if c.Reason == "" {
 				c.Reason = "no volumes owned by this cluster to chart"
 			}
+			continue
+		}
+		if start.After(end) {
+			c.State, c.Reason = CNPGHistoryStateEmpty, "Waiting for samples after this Cluster was created"
 			continue
 		}
 		wg.Add(1)
@@ -354,7 +377,7 @@ func runCNPGHistoryChart(ctx context.Context, q seriesQuerier, d cnpgHistoryDef,
 		}
 	}
 	c.Series, c.Covered = series, len(covered)
-	if len(series) == 0 && d.presence != "" {
+	if len(series) == 0 && d.presence != "" && end.After(start) {
 		res, err := q.Query(ctx, "count(last_over_time("+d.presence+"["+end.Sub(start).String()+"]))")
 		if err == nil && len(res.Series) > 0 {
 			c.State, c.Reason = CNPGHistoryStateEmpty, d.emptyReason

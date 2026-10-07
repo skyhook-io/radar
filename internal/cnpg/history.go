@@ -454,13 +454,20 @@ func (s *Reader) ClusterHistory(ctx context.Context, cache *k8s.ResourceCache, c
 		return resp
 	}
 	resp.Source = historySourcePrometheus
-	end := now.Truncate(rng.Step)
-	resp.Start, resp.End = end.Add(-rng.Duration).UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339)
+	start, end := rng.Bounds(now, cluster.GetCreationTimestamp().Time)
+	resp.Start, resp.End = start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339)
+	if start.After(end) {
+		resp.State, resp.Reason = "pending", "This Cluster is too new for isolated history. Waiting for samples after its creation and the query lookback window."
+		return resp
+	}
+	if start.After(end.Add(-rng.Duration)) {
+		resp.Reason = "History is limited to this Cluster incarnation; the first query lookback window after creation is omitted to exclude samples from reused Pod names."
+	}
 	resp.StepSeconds = int(rng.Step / time.Second)
 	selector := prometheuspkg.CNPGInstanceSelector(namespace, name)
 	resp.Selector = selector
 
-	req := prometheuspkg.CNPGHistoryRequest{Namespace: namespace, Cluster: name, Range: rng, End: end}
+	req := prometheuspkg.CNPGHistoryRequest{Namespace: namespace, Cluster: name, Range: rng, End: end, CreatedAt: cluster.GetCreationTimestamp().Time}
 	if !s.Access.MetricsRead(ctx, "", "pods", namespace, "get") {
 		req.PodsDenied = grantGetPods.In(namespace).Ref()
 	}

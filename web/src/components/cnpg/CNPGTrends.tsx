@@ -561,6 +561,7 @@ export function CNPGTrends({
         {charted && <span className="text-xs text-theme-text-tertiary">Drag across a chart, or click a point, to select an interval.</span>}
       </div>
 
+      {fromPrometheus && data.reason && <Notice>{data.reason}</Notice>}
       {data?.source === 'none' && (
         <Notice>
           History needs Prometheus. {data.reason ?? 'Radar is not connected to one'}.{' '}

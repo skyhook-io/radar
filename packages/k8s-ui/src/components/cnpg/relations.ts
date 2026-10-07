@@ -162,6 +162,16 @@ export function backupTime(backup: any): number {
   return parseTime(backup?.status?.startedAt) || parseTime(backup?.metadata?.creationTimestamp)
 }
 
+export function cnpgBackupMatchesCluster(backup: any, cluster: any): boolean {
+  if (!cluster || backup?.spec?.cluster?.name !== cluster.metadata?.name || backup.metadata?.namespace !== cluster.metadata?.namespace) return false
+  const owner = backup.metadata?.ownerReferences?.find((ref: any) => ref.kind === 'Cluster' && isApiGroup(ref.apiVersion, CNPG_GROUP))
+  const recordedUID = backup.status?.metadata?.clusterUID || owner?.uid
+  if (recordedUID && recordedUID !== cluster.metadata?.uid) return false
+  const began = Date.parse(backup.status?.startedAt ?? backup.metadata?.creationTimestamp ?? '')
+  const created = Date.parse(cluster.metadata?.creationTimestamp ?? '')
+  return !(Number.isFinite(began) && Number.isFinite(created) && began < created)
+}
+
 /**
  * Barman-cloud ignores Backup and ScheduledBackup parameters. The current
  * Cluster plugin chooses the ObjectStore; it may have changed since a Backup
@@ -173,6 +183,7 @@ export function objectStoreForBackup(backup: any, clusters: any[]): { name: stri
   const cfg = backup?.spec?.pluginConfiguration
   if (cfg?.name !== CNPG_BARMAN_PLUGIN_NAME) return null
   const cluster = targetCluster(backup, clusters)
+  if (backup.kind === 'Backup' && !cnpgBackupMatchesCluster(backup, cluster)) return null
   const current = cluster ? getCNPGClusterBarmanPlugin(cluster)?.barmanObjectName : undefined
   return current ? { name: current, inferred: true } : null
 }

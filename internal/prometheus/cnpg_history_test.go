@@ -524,3 +524,34 @@ func TestQueryCNPGFleetLagSustainedReceiverLossNeedsAStandbyThroughout(t *testin
 		t.Error("b has no sustained receiver loss")
 	}
 }
+
+func TestCNPGHistoryBoundsExcludePredecessorLookback(t *testing.T) {
+	rng, _ := ParseCNPGHistoryRange("1h")
+	end := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		created time.Time
+		want    time.Time
+	}{
+		{"old Cluster", end.Add(-2 * time.Hour), end.Add(-time.Hour)},
+		{"recreated between steps", end.Add(-20*time.Minute + time.Second), end.Add(-15*time.Minute + rng.Step)},
+		{"fresh Cluster", end.Add(-time.Minute), end.Add(4 * time.Minute)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			start, stop := rng.Bounds(end, tc.created)
+			if !start.Equal(tc.want) || !stop.Equal(end) {
+				t.Fatalf("bounds = %v, %v; want %v, %v", start, stop, tc.want, end)
+			}
+		})
+	}
+	q := &fakeCNPGQuerier{}
+	charts := queryCNPGHistory(context.Background(), q, CNPGHistoryRequest{Namespace: "pg", Cluster: "pg", Range: rng, End: end, CreatedAt: end.Add(-time.Minute)})
+	if len(q.queries) != 0 {
+		t.Fatal("queried an invalid fresh-Cluster range")
+	}
+	for _, chart := range charts {
+		if chart.State != CNPGHistoryStateEmpty && chart.State != CNPGHistoryStateNotRead {
+			t.Fatalf("fresh chart = %+v", chart)
+		}
+	}
+}

@@ -73,10 +73,10 @@ export function CNPGTargetFields({
         <div>
           {imageDescription ? (
             <div>
-              <span className="text-xs font-medium text-theme-text-secondary">Source image</span>
+              <span className="text-xs font-medium text-theme-text-secondary">Recovery image</span>
               <p className="mt-1 break-all font-mono text-sm text-theme-text-primary">{imageDescription}</p>
               <p className="mt-1 text-xs text-theme-text-tertiary">
-                Physical recovery keeps the source image or image catalog. Advanced YAML exposes the full configuration.
+                Physical recovery requires the PostgreSQL major used by the backup. Advanced YAML exposes the full configuration.
               </p>
             </div>
           ) : (
