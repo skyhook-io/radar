@@ -8,7 +8,7 @@ vi.mock('../../portforward/PortForwardButton', () => ({ PortForwardInlineButton:
 vi.mock('../../curl/ServiceCurlButton', () => ({ CurlButton: () => null, CurlPanel: () => null, isHttpishPort: () => false, defaultScheme: () => '', defaultPathForPort: () => '' }))
 const service = { apiVersion: 'v1', kind: 'Service', metadata: { name: 'web', namespace: 'team', uid: 'web-now' }, spec: { selector: { app: 'web' } } }
 const slice = (name: string, metadata: object) => ({ apiVersion: 'discovery.k8s.io/v1', kind: 'EndpointSlice', metadata: { namespace: 'team', name, ...metadata } })
-const render = (data=service) => renderToStaticMarkup(<ServiceRenderer data={data} onCopy={() => {}} copied={null} />)
+const render = (data: Parameters<typeof ServiceRenderer>[0]['data'] = service) => renderToStaticMarkup(<ServiceRenderer data={data} onCopy={() => {}} copied={null} />)
 beforeEach(() => { mock.query={};mock.reads=[] })
 it('queries slices for selected Services and includes exact label or owner associations', () => {
   mock.query={ data:[
@@ -28,6 +28,6 @@ it('exposes inventory read failures rather than empty results', () => {
 })
 it('disables EndpointSlice inventory for ExternalName', () => {
   const data={...service,spec:{type:'ExternalName',externalName:'example.org'}}
-  const html=render(data as typeof service)
+  const html=render(data)
   expect(mock.reads[0][3].enabled).toBe(false);expect(html).not.toContain('EndpointSlices')
 })
