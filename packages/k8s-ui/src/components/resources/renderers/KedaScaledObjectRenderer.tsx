@@ -80,8 +80,8 @@ export function KedaScaledObjectRenderer({ data, onNavigate }: KedaScaledObjectR
               // target API group still belongs to the declared custom resource.
               const ref = objectReferenceToResourceRef({
                 ...target,
-                apiVersion: target.apiVersion ?? 'apps/v1',
-                kind: target.kind ?? 'Deployment',
+                apiVersion: target.apiVersion || 'apps/v1',
+                kind: target.kind || 'Deployment',
                 namespace: data.metadata?.namespace,
               })
               return ref ? <ResourceLink {...ref} label={getScaledObjectTarget(data)} onNavigate={onNavigate} /> : getScaledObjectTarget(data)
