@@ -118,3 +118,37 @@ func TestGenericParentEnrollmentRetainsKindCap(t *testing.T) {
 		t.Fatalf("cap or cache-read budget changed: %d nodes %d edges %+v", len(nodes), len(edges), dynamic)
 	}
 }
+
+func TestGenericParentsKeepVisibleOwnerChainBeforeOptionalChildrenAtCap(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "parents.example.io", Version: "v1", Resource: "widgets"}
+	var resources []*unstructured.Unstructured
+	for i := 0; i < 50; i++ {
+		name := fmt.Sprintf("early-%02d", i)
+		u := genericIdentityObject(gvr, "Widget", "team", name, metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "visible", UID: "deployment"})
+		u.SetUID(types.UID(name))
+		resources = append(resources, u)
+	}
+	middle := genericIdentityObject(gvr, "Widget", "team", "late-middle", metav1.OwnerReference{APIVersion: "parents.example.io/v1", Kind: "Widget", Name: "late-root", UID: "root"})
+	middle.SetUID("middle")
+	root := genericIdentityObject(gvr, "Widget", "team", "late-root")
+	root.SetUID("root")
+	resources = append(resources, middle, root)
+	dynamic := &genericIdentityDynamic{watched: []schema.GroupVersionResource{gvr}, kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: resources}, listCalls: map[schema.GroupVersionResource]int{}}
+	nodes := []Node{{ID: "deployment/team/visible", Kind: KindDeployment, Name: "visible", uid: "deployment", observed: true, Data: map[string]any{"namespace": "team"}}, {ID: "pod/team/live", Kind: KindPod, Name: "live", uid: "pod", observed: true, ownerReferences: []metav1.OwnerReference{{APIVersion: "parents.example.io/v1", Kind: "Widget", Name: "late-middle", UID: "middle"}}, Data: map[string]any{"namespace": "team"}}}
+	nodes, edges := (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
+	if len(nodes) != 52 || len(edges) != 50 || nodeByID(nodes, "widget/team/late-middle/parents.example.io") == nil || nodeByID(nodes, "widget/team/late-root/parents.example.io") == nil {
+		t.Fatalf("optional children displaced required ancestors or exceeded cap: %+v %+v", nodes, edges)
+	}
+	for _, pair := range [][2]string{{"widget/team/late-root/parents.example.io", "widget/team/late-middle/parents.example.io"}, {"widget/team/late-middle/parents.example.io", "pod/team/live"}} {
+		found := false
+		for _, e := range edges {
+			found = found || e.Source == pair[0] && e.Target == pair[1]
+		}
+		if !found {
+			t.Fatalf("required owner edge lost at cap: %v %+v", pair, edges)
+		}
+	}
+	if dynamic.getCalls != 0 || dynamic.listCalls[gvr] != 1 {
+		t.Fatalf("priority adds cache reads: %+v", dynamic)
+	}
+}
