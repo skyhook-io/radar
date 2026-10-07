@@ -1,7 +1,7 @@
-import { type ReactNode } from 'react'
+import { useMemo, type ReactNode } from 'react'
 import { Globe, Clock, Radio } from 'lucide-react'
 import { Section, PropertyList, Property, KeyValueBadgeList, CopyHandler, AlertBanner } from '../../ui/drawer-components'
-import { endpointSliceServiceAssociation } from '../../../utils/endpoint-slices'
+import { endpointSliceServiceAssociation, endpointSliceMatchesService } from '../../../utils/endpoint-slices'
 import type { ResourceRef } from '../../../types'
 
 export interface ServicePortRenderProps {
@@ -18,6 +18,7 @@ interface ServiceRendererProps {
   onCopy: CopyHandler
   copied: string | null
   endpointSlices?: any[]
+  endpointSliceInventory?: any[]
   endpointSlicesLoading?: boolean
   endpointSlicesEnabled?: boolean
   endpointSlicesError?: string
@@ -41,7 +42,13 @@ function endpointSliceReadyClass(ready: number, total: number): string {
   return 'status-unhealthy'
 }
 
-export function ServiceRenderer({ data, onCopy, copied, endpointSlices, endpointSlicesLoading, endpointSlicesEnabled, endpointSlicesError, onNavigate, renderPortAction, renderPortPanel }: ServiceRendererProps) {
+export function ServiceRenderer({ data, onCopy, copied, endpointSlices: suppliedEndpointSlices, endpointSliceInventory, endpointSlicesLoading, endpointSlicesEnabled, endpointSlicesError, onNavigate, renderPortAction, renderPortPanel }: ServiceRendererProps) {
+  // The host passes raw namespace inventory; association semantics stay inside
+  // the shared UI. Older published consumers only know endpointSlices, which
+  // continues to carry their existing label-filtered set.
+  const endpointSlices = useMemo(() => endpointSliceInventory
+    ? endpointSliceInventory.filter(slice => endpointSliceMatchesService(slice, data))
+    : suppliedEndpointSlices, [endpointSliceInventory, suppliedEndpointSlices, data])
   const spec = data.spec || {}
   const ports = spec.ports || []
   const lbIngress = data.status?.loadBalancer?.ingress || []
@@ -115,7 +122,7 @@ export function ServiceRenderer({ data, onCopy, copied, endpointSlices, endpoint
       )}
 
       {!isExternalName && (hasNoSelector || endpointSlicesEnabled) && (
-        <Section title="EndpointSlices" icon={Radio}>
+        <Section title="EndpointSlices" icon={Radio} defaultExpanded>
           {endpointSlicesLoading ? (
             <div className="text-sm text-theme-text-tertiary">Loading EndpointSlices…</div>
           ) : endpointSlicesError ? (

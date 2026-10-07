@@ -6,7 +6,6 @@ import { useResources } from '../../../api/client'
 import { useNamespacedCapabilities, useIsLocalDeployment } from '../../../contexts/CapabilitiesContext'
 import type { ResourceRef } from '../../../types'
 import { DURATION_DISCLOSURE } from '@skyhook-io/k8s-ui/utils/animation'
-import { endpointSliceMatchesService } from '@skyhook-io/k8s-ui/utils/endpoint-slices'
 
 interface ServiceRendererProps {
   data: any
@@ -49,8 +48,8 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
     { enabled: shouldLoadEndpointSlices, refetchInterval: 30000 }
   )
   const matchingEndpointSlices = useMemo(
-    () => (endpointSlices || []).filter((slice: any) => endpointSliceMatchesService(slice, data)),
-    [endpointSlices, data]
+    () => (endpointSlices || []).filter((slice: any) => slice.metadata?.namespace === namespace && slice.metadata?.labels?.['kubernetes.io/service-name'] === serviceName),
+    [endpointSlices, namespace, serviceName]
   )
 
   return (
@@ -59,6 +58,7 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
       onCopy={onCopy}
       copied={copied}
       endpointSlices={matchingEndpointSlices}
+      endpointSliceInventory={endpointSlices}
       endpointSlicesLoading={endpointSlicesLoading}
       endpointSlicesEnabled={shouldLoadEndpointSlices}
       endpointSlicesError={endpointSlicesError?.message}

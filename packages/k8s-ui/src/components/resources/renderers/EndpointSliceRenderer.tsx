@@ -43,8 +43,8 @@ export function EndpointSliceRenderer({ data, onNavigate }: EndpointSliceRendere
           <Property label="Ports" value={ports.length} />
           {serviceName && (
             <Property
-              label={serviceAssociation?.source === 'ownerReference' ? 'Owner Service' : 'Service'}
-              value={onNavigate ? (
+              label={serviceAssociation?.source === 'ownerReference' ? 'Declared Owner Service' : 'Service'}
+              value={onNavigate && serviceAssociation?.source === 'label' ? (
                 <button
                   type="button"
                   className="text-sm text-accent-text hover:underline font-medium"
@@ -55,6 +55,7 @@ export function EndpointSliceRenderer({ data, onNavigate }: EndpointSliceRendere
               ) : serviceName}
             />
           )}
+          {serviceAssociation?.source === 'ownerReference' && <Property label="Owner UID" value={serviceAssociation.uid} />}
         </PropertyList>
       </Section>
 

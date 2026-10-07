@@ -27,3 +27,10 @@ it('marks unlabeled owned slices without describing them as published endpoints'
   expect(html).toContain('Owner reference only')
   expect(html).toContain('ownership does not establish published Service endpoints')
 })
+
+it('filters raw namespace inventory in the shared renderer, independently from the host label set', () => {
+  const owned = { apiVersion:'discovery.k8s.io/v1',kind:'EndpointSlice',metadata:{name:'owned',namespace:'team',ownerReferences:[{apiVersion:'v1',kind:'Service',name:'web',uid:'web-now'}]} }
+  const replaced = {...owned,metadata:{...owned.metadata,name:'replaced',ownerReferences:[{apiVersion:'v1',kind:'Service',name:'web',uid:'web-before'}]}}
+  const html=renderToStaticMarkup(<ServiceRenderer {...props} data={{...data,metadata:{...data.metadata,uid:'web-now'}}} endpointSlicesEnabled endpointSlices={[]} endpointSliceInventory={[owned,replaced]} />)
+  expect(html).toContain('owned');expect(html).not.toContain('replaced')
+})
