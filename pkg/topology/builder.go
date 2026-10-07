@@ -1176,6 +1176,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
+	var kedaAuthenticationDependencies []declaredDependency
+
 	// 1i. Add KEDA ScaledObject and ScaledJob nodes (CRD - fetched via dynamic cache)
 	var scaledObjectGVR schema.GroupVersionResource
 	hasScaledObjects := false
@@ -1207,6 +1209,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"apiVersion": so.GetAPIVersion(),
 				},
 			})
+
+			for _, ref := range configrefs.KEDAAuthenticationReferences(so) {
+				kedaAuthenticationDependencies = append(kedaAuthenticationDependencies, declaredDependency{Source: resourceid.NewRef("keda.sh", "ScaledObject", ns, name), Target: ref, Label: "authentication"})
+			}
 
 			// ScaledObject → target workload edge (via spec.scaleTargetRef)
 			targetAPIVersion, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "apiVersion")
@@ -1269,6 +1275,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"apiVersion": sj.GetAPIVersion(),
 				},
 			})
+			for _, ref := range configrefs.KEDAAuthenticationReferences(sj) {
+				kedaAuthenticationDependencies = append(kedaAuthenticationDependencies, declaredDependency{Source: resourceid.NewRef("keda.sh", "ScaledJob", ns, name), Target: ref, Label: "authentication"})
+			}
+
 		}
 	}
 
@@ -3773,6 +3783,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			gatewayRouteKinds = append(gatewayRouteKinds, routeKind)
 		}
 	}
+
+	nodes, edges, kedaAuthenticationWarnings := addObservedDependencyEdges(nodes, edges, kedaAuthenticationDependencies, dynamicCache, opts)
+	warnings = append(warnings, kedaAuthenticationWarnings...)
 
 	// 8. Add ConfigMap nodes (if enabled)
 	if opts.IncludeConfigMaps {
