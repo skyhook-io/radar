@@ -83,9 +83,10 @@ then in these install directories:
 | macOS, Linux | `~/.local/bin`, `~/.claude/local`, `~/.opencode/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/home/linuxbrew/.linuxbrew/bin`, `/usr/bin` |
 | Windows | `%LOCALAPPDATA%\Microsoft\WinGet\Links`, `%LOCALAPPDATA%\cursor-agent`, `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`, `%USERPROFILE%\.local\bin` |
 
-Radar picks its agents once, at startup. After installing a CLI, restart Radar.
-The startup output has an `AI investigations` line that says which agent it will
-use, or why investigations are off.
+A CLI installed while Radar runs is picked up the next time Radar checks: when
+you open AI investigations, click **Check again**, or come back to the Radar
+window. No restart is needed. The startup output has an `AI investigations`
+line that says which agent Radar will use, or why investigations are off.
 
 If the CLI is somewhere else, for example an npm global install under nvm, set
 `RADAR_AI_CLI_BIN` to its full path:
@@ -98,11 +99,12 @@ RADAR_AI_CLI_BIN="$(command -v claude)" radar
 $env:RADAR_AI_CLI_BIN = "C:\path\to\claude.exe"; radar
 ```
 
-With the variable set, Radar uses only that CLI. It picks the driver from the
-file name: a name containing `cursor` runs as Cursor, `codex` as Codex,
-`opencode` as OpenCode, and anything else as Claude Code. If the path is not an
-executable Radar can run, investigations stay off and the startup line names
-the path.
+With the variable set, Radar uses only that CLI and stops looking for others.
+It picks the driver from the file name: a name containing `cursor` runs as
+Cursor, `codex` as Codex, `opencode` as OpenCode, and anything else as Claude
+Code. If the path is not an executable Radar can run, investigations stay off
+until the variable is corrected and Radar restarted; the startup line names the
+path.
 
 ## Persistent Configuration
 

@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -133,7 +134,12 @@ func TestListAgents_Eligible(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s := &Server{authConfig: auth.Config{Mode: c.mode}, mcpHandler: c.mcp}
+			s := &Server{
+				authConfig:              auth.Config{Mode: c.mode},
+				mcpHandler:              c.mcp,
+				mcpInvestigationHandler: c.mcp,
+				aiInvestigationRefs:     investigationrefs.NewRegistry(),
+			}
 			rec := httptest.NewRecorder()
 			s.handleListAgents(rec, httptest.NewRequest(http.MethodGet, "/api/agents", nil))
 			var resp struct {
@@ -155,7 +161,18 @@ func TestListAgents_NoneInstalledIsAnEmptyList(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PATH", "")
 	t.Setenv("LOCALAPPDATA", "")
-	s := &Server{authConfig: auth.Config{Mode: "none"}}
+	mcp := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	s := &Server{
+		authConfig:              auth.Config{Mode: "none"},
+		mcpHandler:              mcp,
+		mcpInvestigationHandler: mcp,
+		aiInvestigationRefs:     investigationrefs.NewRegistry(),
+	}
+	t.Cleanup(func() {
+		if runs := s.aiRunManager(); runs != nil {
+			runs.Shutdown()
+		}
+	})
 	rec := httptest.NewRecorder()
 	s.handleListAgents(rec, httptest.NewRequest(http.MethodGet, "/api/agents", nil))
 	var resp struct {

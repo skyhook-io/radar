@@ -41,8 +41,8 @@ type startupLogSummary struct {
 
 func (s *Server) logStartupSummaryBlock() {
 	aiAgent := ""
-	if s.aiDiagnoser != nil {
-		aiAgent = s.aiDiagnoser.DefaultAgent()
+	if diagnoser, _ := s.aiEngine(); diagnoser != nil {
+		aiAgent = diagnoser.DefaultAgent()
 	}
 
 	summary := startupLogSummary{
@@ -241,7 +241,7 @@ func startupAIStatus(summary startupLogSummary) string {
 		return "disabled (RADAR_AI_CLI_BIN is set to " + summary.aiCLIOverride +
 			", which isn't an executable Radar can run)"
 	default:
-		return "disabled (no agent CLI found). Install Claude Code, Codex, Cursor, or OpenCode, " +
-			"or set RADAR_AI_CLI_BIN to the full path of one you already have"
+		return "disabled (no agent CLI found). Install Claude Code, Codex, Cursor, or OpenCode and " +
+			"Radar picks it up without a restart, or set RADAR_AI_CLI_BIN to the full path of one you already have"
 	}
 }

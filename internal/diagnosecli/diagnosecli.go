@@ -226,8 +226,8 @@ Flags:
 		// where installing a CLI is the wrong advice.
 		if agents.Eligible {
 			fmt.Fprintf(os.Stderr, "the Radar at %s found no agent CLI. Install Claude Code, Codex, Cursor, "+
-				"or OpenCode on that machine and restart it, or start it with RADAR_AI_CLI_BIN set to the full path of one "+
-				"it already has.\n", base)
+				"or OpenCode on that machine and run this again, or start that Radar with RADAR_AI_CLI_BIN set to "+
+				"the full path of one it already has.\n", base)
 		} else {
 			fmt.Fprintf(os.Stderr, "the Radar at %s doesn't offer AI investigations: they need MCP mounted and "+
 				"authentication disabled. Use --standalone to run your own local instance instead.\n", base)

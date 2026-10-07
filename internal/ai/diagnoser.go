@@ -259,6 +259,8 @@ func ResolveCLI() string {
 // Diagnoser drives one or more resolved agent CLIs via Agent backends (Claude,
 // Codex, …). A run picks a backend by name; defName is used when none is given.
 type Diagnoser struct {
+	// mu guards agents and defName: AddDetected grows the set while runs read it.
+	mu           sync.RWMutex
 	agents       map[string]Agent
 	defName      string
 	evidenceRefs *investigationrefs.Registry
@@ -306,14 +308,51 @@ func NewDetected(ctx context.Context, evidenceRefs *investigationrefs.Registry) 
 	return newDiagnoser(backends, evidenceRefs), nil
 }
 
+// AddDetected adds every supported agent CLI installed since this Diagnoser was
+// built, so a CLI installed while Radar runs is usable without a restart. The
+// default backend does not change. A RADAR_AI_CLI_BIN override pins the backend
+// set, so it adds nothing then. Returns the names it added.
+func (d *Diagnoser) AddDetected(ctx context.Context) []string {
+	if strings.TrimSpace(os.Getenv("RADAR_AI_CLI_BIN")) != "" {
+		return nil
+	}
+	detected := DetectAgents(ctx, false)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var added []string
+	for _, info := range detected {
+		if !info.Supported {
+			continue
+		}
+		if _, ok := d.agents[info.Name]; ok {
+			continue
+		}
+		if d.agents == nil {
+			d.agents = map[string]Agent{}
+		}
+		d.agents[info.Name] = resolveAgent(info.Path)
+		if d.defName == "" {
+			d.defName = info.Name
+		}
+		added = append(added, info.Name)
+	}
+	return added
+}
+
 // DefaultAgent is the backend chosen when a run doesn't name one.
-func (d *Diagnoser) DefaultAgent() string { return d.defName }
+func (d *Diagnoser) DefaultAgent() string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.defName
+}
 
 // AgentInfos reports the exact backends this Diagnoser can drive.
 func (d *Diagnoser) AgentInfos(ctx context.Context, withVersions bool) []AgentInfo {
 	var infos []AgentInfo
 	for _, name := range agentCLICandidates {
+		d.mu.RLock()
 		agent, ok := d.agents[name]
+		d.mu.RUnlock()
 		if !ok {
 			continue
 		}
@@ -337,6 +376,8 @@ func (d *Diagnoser) AgentInfos(ctx context.Context, withVersions bool) []AgentIn
 // AgentName normalizes a client-requested backend name to one that actually
 // exists, falling back to the default — so a run records the agent it really used.
 func (d *Diagnoser) AgentName(name string) string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	if _, ok := d.agents[name]; ok {
 		return name
 	}
@@ -345,6 +386,8 @@ func (d *Diagnoser) AgentName(name string) string {
 
 // resolveTurnAgent picks the backend for a turn: the named one, else the default.
 func (d *Diagnoser) resolveTurnAgent(name string) Agent {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
 	if a, ok := d.agents[name]; ok {
 		return a
 	}

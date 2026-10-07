@@ -155,3 +155,48 @@ func TestLookupAgentFollowsTheNativeInstallerSymlink(t *testing.T) {
 		t.Errorf("lookupAgent(claude) = %q, want %q", got, link)
 	}
 }
+
+// A CLI installed while Radar runs must become usable without a restart.
+func TestAddDetectedPicksUpACLIInstalledLater(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", "")
+	t.Setenv("RADAR_AI_CLI_BIN", "")
+
+	d := newDiagnoser(nil, nil)
+	for _, name := range d.AddDetected(context.Background()) {
+		if name == "opencode" {
+			t.Skip("opencode is installed in a fixed system directory on this machine")
+		}
+	}
+	writeExecutable(t, filepath.Join(home, ".local", "bin"), "opencode")
+
+	added := d.AddDetected(context.Background())
+	if len(added) != 1 || added[0] != "opencode" {
+		t.Fatalf("AddDetected = %v, want [opencode]", added)
+	}
+	if got := d.AgentName("opencode"); got != "opencode" {
+		t.Errorf("AgentName(opencode) = %q, want the new backend", got)
+	}
+	if again := d.AddDetected(context.Background()); len(again) != 0 {
+		t.Errorf("a second AddDetected re-added %v", again)
+	}
+}
+
+// RADAR_AI_CLI_BIN pins the backend set; detection must not widen it.
+func TestAddDetectedKeepsAnOverridePinned(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", "")
+	pinned := writeExecutable(t, filepath.Join(home, "bin"), "claude")
+	t.Setenv("RADAR_AI_CLI_BIN", pinned)
+	writeExecutable(t, filepath.Join(home, ".local", "bin"), "codex")
+
+	d, err := NewDetected(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added := d.AddDetected(context.Background()); len(added) != 0 {
+		t.Errorf("AddDetected = %v with RADAR_AI_CLI_BIN set, want nothing", added)
+	}
+}
