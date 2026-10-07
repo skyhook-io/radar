@@ -5,7 +5,9 @@ package ai
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -198,5 +200,49 @@ func TestAddDetectedKeepsAnOverridePinned(t *testing.T) {
 	}
 	if added := d.AddDetected(context.Background()); len(added) != 0 {
 		t.Errorf("AddDetected = %v with RADAR_AI_CLI_BIN set, want nothing", added)
+	}
+}
+
+// An npm-installed agent is a `#!/usr/bin/env node` script; Homebrew puts node
+// beside it. Found off PATH, it only starts if its own directory joins PATH.
+func TestAgentFoundOffPATHCanFindTheNodeBesideIt(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "node"), []byte("#!/bin/sh\necho started-by-node\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "claude")
+	if err := os.WriteFile(bin, []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// An empty directory, so a real node elsewhere can't stand in for this one.
+	t.Setenv("PATH", t.TempDir())
+
+	cmd := exec.Command(bin)
+	addAgentDirToPath(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("agent did not start: %v", err)
+	}
+	if string(out) != "started-by-node\n" {
+		t.Errorf("output = %q", out)
+	}
+}
+
+func TestAddAgentDirToPathLeavesAnInheritedEnvAloneWhenAlreadyOnPATH(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", "/usr/bin:"+dir+"/")
+	cmd := exec.Command(filepath.Join(dir, "cursor-agent"))
+	addAgentDirToPath(cmd)
+	if cmd.Env != nil {
+		t.Errorf("cmd.Env = %v, want nil so the agent inherits Radar's environment", cmd.Env)
+	}
+}
+
+func TestAddAgentDirToPathKeepsAScrubbedEnvScrubbed(t *testing.T) {
+	cmd := exec.Command("/opt/agents/codex")
+	cmd.Env = []string{"HOME=/h", "PATH=/usr/bin"}
+	addAgentDirToPath(cmd)
+	if want := []string{"HOME=/h", "PATH=/usr/bin:/opt/agents"}; !slices.Equal(cmd.Env, want) {
+		t.Errorf("cmd.Env = %v, want %v", cmd.Env, want)
 	}
 }

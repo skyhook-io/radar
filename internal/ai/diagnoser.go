@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -475,6 +476,7 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 		return Diagnosis{}, err
 	}
 	defer cleanup()
+	addAgentDirToPath(cmd)
 
 	// Process lifecycle is agent-agnostic. The platform helper kills the whole
 	// process group/tree on cancel so no child agent process outlives the run.
@@ -616,6 +618,54 @@ var (
 // scrubbedEnv returns a minimal environment: the CLI ingests untrusted cluster
 // data, so it shouldn't inherit unrelated host env. Provider-auth vars pass
 // through so subscription / API-key / Bedrock / Vertex all work.
+// addAgentDirToPath appends the agent's own directory to the child's PATH when
+// detection found it outside PATH. npm-installed agents are scripts run by the
+// `node` installed beside them (Homebrew, Linuxbrew), so without this the CLI
+// Radar found would fail to start. The directory goes last, so it never shadows
+// what the user's PATH resolves.
+func addAgentDirToPath(cmd *exec.Cmd) {
+	dir := filepath.Dir(cmd.Path)
+	env := cmd.Env
+	if env == nil {
+		env = os.Environ()
+	}
+	for i, kv := range env {
+		key, value, ok := strings.Cut(kv, "=")
+		if !ok || !isPathKey(key) {
+			continue
+		}
+		for _, entry := range filepath.SplitList(value) {
+			if entry != "" && samePathEntry(filepath.Clean(entry), dir) {
+				return
+			}
+		}
+		if value == "" {
+			env[i] = key + "=" + dir
+		} else {
+			env[i] = kv + string(os.PathListSeparator) + dir
+		}
+		cmd.Env = env
+		return
+	}
+	cmd.Env = append(env, "PATH="+dir)
+}
+
+// Windows environment names and paths are case-insensitive, and PATH is
+// usually spelled "Path" there.
+func isPathKey(key string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(key, "PATH")
+	}
+	return key == "PATH"
+}
+
+func samePathEntry(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
 func scrubbedEnv() []string {
 	var out []string
 	for _, kv := range os.Environ() {
