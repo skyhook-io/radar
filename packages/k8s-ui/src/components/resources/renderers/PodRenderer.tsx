@@ -453,8 +453,8 @@ export function PodRenderer({
           <Property label="Node" value={
             data.spec?.nodeName ? <ResourceLink name={data.spec.nodeName} kind="nodes" onNavigate={onNavigate} /> : undefined
           } copyable onCopy={onCopy} copied={copied} />
-          {/* Before Kubernetes 1.35 the API server does not clear a nomination on
-              binding, so a bound Pod can carry a stale, different node name. */}
+          {/* The API server clears a nomination on binding by default only from
+              Kubernetes 1.35, so a bound Pod can carry a stale, different node name. */}
           {data.status?.nominatedNodeName && !data.spec?.nodeName && (
             <Property
               label={
