@@ -1658,7 +1658,26 @@ func filterBoundedRefs(ctx context.Context, ac RefAccessChecker, refs []ContextR
 	}
 	if len(out) > maxReferencedByItems {
 		omitted.add(field, OmittedBudgetExceeded)
-		out = out[:maxReferencedByItems]
+		// Keep each visible resource kind represented. A busy class may have
+		// hundreds of claims; truncating the sorted list would hide every PV.
+		var buckets [][]ContextRef
+		var kindKey string
+		for _, ref := range out {
+			key := resourceid.ResourceKey(ref.Group, ref.Kind, "", "")
+			if len(buckets) == 0 || key != kindKey {
+				buckets = append(buckets, nil)
+				kindKey = key
+			}
+			buckets[len(buckets)-1] = append(buckets[len(buckets)-1], ref)
+		}
+		out = make([]ContextRef, 0, maxReferencedByItems)
+		for offset := 0; len(out) < maxReferencedByItems; offset++ {
+			for _, bucket := range buckets {
+				if offset < len(bucket) && len(out) < maxReferencedByItems {
+					out = append(out, bucket[offset])
+				}
+			}
+		}
 	}
 	return out
 }

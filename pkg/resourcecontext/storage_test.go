@@ -8,6 +8,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"slices"
 	"testing"
 )
 
@@ -65,5 +66,25 @@ func TestBuild_StorageContextBoundedAndExact(t *testing.T) {
 		if ref.Group != "" || ref.Kind != "PersistentVolumeClaim" || ref.Namespace != "visible" {
 			t.Fatalf("incorrect storage target: %+v", ref)
 		}
+	}
+}
+
+func TestBuild_StorageContextCapKeepsBothResourceKinds(t *testing.T) {
+	sc := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "fast"}}
+	var refs []topology.ResourceRef
+	for i := 0; i < 25; i++ {
+		refs = append(refs, topology.ResourceRef{Kind: "PersistentVolumeClaim", Namespace: "prod", Name: fmt.Sprintf("claim-%02d", i)})
+	}
+	refs = append(refs, topology.ResourceRef{Kind: "PersistentVolume", Name: "disk"})
+	opts := Options{Tier: TierBasic, Relationships: &topology.Relationships{Children: refs}}
+	rc := Build(context.Background(), sc, opts)
+	if len(rc.Dependents) != maxReferencedByItems || rc.Dependents[1].Kind != "PersistentVolume" || rc.Dependents[1].Name != "disk" || !slices.Contains(rc.Omitted, OmittedField{Field: "dependents", Reason: OmittedBudgetExceeded}) {
+		t.Fatalf("volume hidden by claim population: %+v", rc)
+	}
+	// Denied volumes neither consume the cap nor alter the visible claim set.
+	opts.AccessChecker = denyChecker{kind: "PersistentVolume"}
+	rc = Build(context.Background(), sc, opts)
+	if len(rc.Dependents) != maxReferencedByItems || rc.Dependents[19].Name != "claim-19" {
+		t.Fatalf("denied volume changed visible cap: %+v", rc.Dependents)
 	}
 }
