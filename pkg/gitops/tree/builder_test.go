@@ -589,3 +589,43 @@ func TestFluxBootstrapSourceRetainsInventoryOwnership(t *testing.T) {
 		t.Fatalf("bootstrap inventory ownership overwritten: %+v", tree.Edges)
 	}
 }
+
+func TestReadableGeneratedDescendantSurvivesDeniedIntermediate(t *testing.T) {
+	app := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": map[string]any{"namespace": "argocd", "name": "app"}, "spec": map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}}, "status": map[string]any{"resources": []any{map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "app"}}}}}
+	topo := &topology.Topology{Nodes: []topology.Node{
+		{ID: "deployment/prod/app", Kind: topology.KindDeployment, Name: "app", Data: map[string]any{"namespace": "prod", "apiVersion": "apps/v1"}},
+		{ID: "replicaset/prod/hidden", Kind: topology.KindReplicaSet, Name: "hidden", Data: map[string]any{"namespace": "prod", "apiVersion": "apps/v1", "labels": map[string]string{"private": "hidden-metadata"}}},
+		{ID: "pod/prod/visible", Kind: topology.KindPod, Name: "visible", Data: map[string]any{"namespace": "prod", "apiVersion": "v1"}},
+	}, Edges: []topology.Edge{{Source: "deployment/prod/app", Target: "replicaset/prod/hidden", Type: topology.EdgeManages}, {Source: "replicaset/prod/hidden", Target: "pod/prod/visible", Type: topology.EdgeManages}}}
+	for _, denied := range []string{"ReplicaSet", "Deployment"} {
+		t.Run(denied, func(t *testing.T) {
+			getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "app"}): app}}
+			tree, _, err := NewBuilder(getter, topo).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != denied }).Build(context.Background(), "Application", "argocd", "app", "argoproj.io")
+			if err != nil {
+				t.Fatal(err)
+			}
+			visible := false
+			for _, n := range tree.Nodes {
+				if n.Ref.Kind == denied {
+					t.Fatalf("denied node emitted: %+v", n)
+				}
+				if n.Ref.Kind == "Pod" && n.Ref.Name == "visible" {
+					visible = true
+				}
+				if denied == "ReplicaSet" && strings.Contains(fmt.Sprint(n.Data), "hidden-metadata") {
+					t.Fatalf("denied metadata leaked: %+v", n.Data)
+				}
+			}
+			if !visible || len(tree.Warnings) == 0 {
+				t.Fatalf("readable descendant hidden or no incomplete warning: %+v", tree)
+			}
+			for _, e := range tree.Edges {
+				for _, n := range tree.Nodes {
+					if denied == "ReplicaSet" && n.Ref.Kind == "Pod" && e.Target == n.ID {
+						t.Fatalf("invented shortcut to Pod across denied owner: %+v", e)
+					}
+				}
+			}
+		})
+	}
+}

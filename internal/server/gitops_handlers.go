@@ -822,7 +822,10 @@ func (s *Server) canAccessGitOpsRef(r *http.Request, req *gitopsRequest, group, 
 			return false
 		}
 		gvrGroup, resource := k8s.LookupResourceGVR(kind, group)
-		return resource != "" && s.canRead(r, gvrGroup, resource, namespace, "get")
+		// Unknown discovery is not a permission denial. The dynamic getter
+		// returns unknown-kind rather than local metadata for an unserved kind,
+		// and remote inventory declarations must remain available for Hub merge.
+		return resource == "" || s.canRead(r, gvrGroup, resource, namespace, "get")
 	}
 	if clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group); clusterScoped {
 		return s.canRead(r, gvrGroup, gvrResource, "", "list")

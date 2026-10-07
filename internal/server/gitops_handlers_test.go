@@ -290,3 +290,20 @@ func TestGitOpsTreeDeniesUnreadableKindInsideAllowedNamespace(t *testing.T) {
 		t.Fatalf("unreadable kind metadata leaked: %+v", filtered)
 	}
 }
+
+func TestGitOpsUnknownNamespacedDeclarationIsNotReadDenied(t *testing.T) {
+	s := &Server{permCache: auth.NewPermissionCache()}
+	s.permCache.Set("declaration-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team"}})
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/tree", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "declaration-user"}))
+	req := &gitopsRequest{AllowedNamespaces: []string{"team"}}
+	if !s.canAccessGitOpsRef(r, req, "not-installed.example", "RemoteWidget", "team", "declared", false) {
+		t.Fatal("unknown discovery erased readable inventory declaration")
+	}
+	if s.canAccessGitOpsRef(r, req, "not-installed.example", "RemoteWidget", "other", "declared", false) {
+		t.Fatal("unknown kind bypassed namespace scope")
+	}
+	if s.canAccessGitOpsRef(r, req, "", "Secret", "team", "private", false) {
+		t.Fatal("known kind denial bypassed by unknown handling")
+	}
+}

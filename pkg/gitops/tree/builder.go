@@ -140,14 +140,13 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	nodes := map[string]Node{rootNode.ID: rootNode}
 	edges := map[string]Edge{}
 	declaredIDs := map[string]bool{}
+	var hiddenTraversalRoots []string
+	omittedByReadCheck := false
 
 	topoByRef := map[string]topology.Node{}
 	topoByID := map[string]topology.Node{}
 	for _, n := range b.topoNodes() {
 		ref := refFromTopologyNode(n)
-		if !b.canEmit(ref) {
-			continue
-		}
 		topoByRef[refKey(ref)] = n
 		topoByRef[refKey(ResourceRef{Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name})] = n
 		topoByID[n.ID] = n
@@ -209,10 +208,18 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	}
 
 	for _, res := range managed {
+		id := nodeID(res.Ref)
 		if !b.canEmit(res.Ref) {
+			omittedByReadCheck = true
+			if !remote {
+				if live, ok := findTopoNode(topoByRef, res.Ref); ok {
+					topoIDByTreeID[id] = live.ID
+					treeIDByTopoID[live.ID] = id
+					hiddenTraversalRoots = append(hiddenTraversalRoots, id)
+				}
+			}
 			continue
 		}
-		id := nodeID(res.Ref)
 		declaredIDs[id] = true
 		if remote {
 			node := mergeData(syntheticNode(res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), res.Data)
@@ -283,7 +290,8 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	for id := range declaredIDs {
 		queue = append(queue, id)
 	}
-	if len(declaredIDs) == 0 {
+	queue = append(queue, hiddenTraversalRoots...)
+	if len(declaredIDs) == 0 && len(hiddenTraversalRoots) == 0 {
 		queue = append(queue, rootNode.ID)
 	}
 	seen := map[string]bool{}
@@ -311,10 +319,16 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 				treeIDByTopoID[targetTopo.ID] = targetID
 				topoIDByTreeID[targetID] = targetTopo.ID
 			}
-			if _, exists := nodes[targetID]; !exists {
-				nodes[targetID] = nodeFromTopology(targetTopo, targetRef, RoleGenerated, tool, "", "", "")
+			if b.canEmit(targetRef) {
+				if _, exists := nodes[targetID]; !exists {
+					nodes[targetID] = nodeFromTopology(targetTopo, targetRef, RoleGenerated, tool, "", "", "")
+				}
+				if _, sourceVisible := nodes[id]; sourceVisible {
+					edges[edgeKey(id, targetID)] = Edge{Source: id, Target: targetID, Type: EdgeOwns}
+				}
+			} else {
+				omittedByReadCheck = true
 			}
-			edges[edgeKey(id, targetID)] = Edge{Source: id, Target: targetID, Type: EdgeOwns}
 			queue = append(queue, targetID)
 		}
 	}
@@ -343,7 +357,10 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	if r, ok := nodes[rootNode.ID]; ok {
 		mergedRoot = r
 	}
-	warnings := b.topoWarnings()
+	warnings := append([]string{}, b.topoWarnings()...)
+	if omittedByReadCheck {
+		warnings = append(warnings, "Some resource nodes are hidden by read permissions; readable descendants may be disconnected from their omitted owners.")
+	}
 	if w := unknownKindsWarning(unknownKinds); w != "" {
 		warnings = append(append([]string{}, warnings...), w)
 	}
