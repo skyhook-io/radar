@@ -13,9 +13,11 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -313,6 +315,10 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		}
 	}
 	k8s.SetTypeMeta(obj)
+	objectMeta, err := meta.Accessor(obj)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read resource metadata: %w", err)
+	}
 	gvk := obj.GetObjectKind().GroupVersionKind()
 	canonicalGroup := gvk.Group
 	canonicalKind := gvk.Kind
@@ -433,7 +439,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		)
 	}
 
-	events, eventsTotalGroups, eventsErr := fetchEventsForResource(cache, kindNorm, canonicalGroup, input.Namespace, input.Name, pods, 10)
+	events, eventsTotalGroups, eventsErr := fetchEventsForResource(cache, kindNorm, canonicalGroup, input.Namespace, input.Name, objectMeta.GetUID(), pods, 10)
 	resp.Events = events
 	resp.EventsTotalGroups = eventsTotalGroups
 	if eventsErr != nil {
@@ -865,7 +871,7 @@ var errPodsCacheWarming = errors.New("the pod cache is still loading")
 // "no warnings exist" from "apiserver list failed and we couldn't tell"
 // — diagnose surfaces it as EventsError so the agent doesn't read empty
 // events as ground truth.
-func fetchEventsForResource(cache *k8s.ResourceCache, kind, group, namespace, name string, pods []*corev1.Pod, limit int) ([]aicontext.DeduplicatedEvent, int, error) {
+func fetchEventsForResource(cache *k8s.ResourceCache, kind, group, namespace, name string, uid types.UID, pods []*corev1.Pod, limit int) ([]aicontext.DeduplicatedEvent, int, error) {
 	eventLister := cache.Events()
 	if eventLister == nil {
 		// Mirror attachResourceExtras / get_resource(include=events): surface
@@ -878,13 +884,13 @@ func fetchEventsForResource(cache *k8s.ResourceCache, kind, group, namespace, na
 		log.Printf("[mcp] diagnose: failed to list events for %s/%s/%s: %v", kind, namespace, name, err)
 		return nil, 0, err
 	}
-	podNames := make(map[string]bool, len(pods))
+	podUIDs := make(map[string]types.UID, len(pods))
 	for _, p := range pods {
 		if p != nil {
-			podNames[p.Name] = true
+			podUIDs[p.Name] = p.UID
 		}
 	}
-	matched := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), group, name, podNames)
+	matched := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), group, name, uid, podUIDs)
 	if len(matched) == 0 {
 		return nil, 0, nil
 	}
@@ -894,18 +900,6 @@ func fetchEventsForResource(cache *k8s.ResourceCache, kind, group, namespace, na
 	return dedup, totalGroups, nil
 }
 
-// filterEventsByInvolvedObject keeps Warning events whose InvolvedObject
-// matches either the controller (displayKind+name) OR any of the pods in
-// podNames (skipped when displayKind is "Pod" — the controller branch
-// above already covers single-pod and otherwise this branch would
-// double-count).
-//
-// Filters to Type==Warning intentionally — the diagnose tool description
-// + get_resource(include=events) both promise warning events only.
-// Normal events (Pulled / Created / Scheduled) would pollute triage by
-// reading as "things worth diagnosing" when they're just lifecycle
-// breadcrumbs.
-//
 // networkTraceKind returns the canonical entry-kind name for trace
 // diagnostics, accepting plural and lowercase forms the way agents tend to
 // write them. Empty string + false means "not a network entry kind" - the
@@ -1130,11 +1124,12 @@ func handleNetworkTraceDiagnose(ctx context.Context, input diagnoseInput, kind s
 	return toJSONResult(resp)
 }
 
-// Shared between diagnose (passes resolved pod names for full workload
-// coverage) and attachResourceExtras / get_resource include=events
-// (passes nil — supplemental fetch; callers wanting pod-level events should
-// use the diagnose tool which does the workload→pods resolution).
-func filterEventsByInvolvedObject(events []*corev1.Event, displayKind, group, name string, podNames map[string]bool) []corev1.Event {
+// filterEventsByInvolvedObject keeps Warning events for the current resource
+// or its resolved Pods. A known UID mismatch rejects a previous incarnation;
+// UID-less events remain identity-matched evidence without proof of incarnation.
+// Namespace is scoped by the event lister. get_resource passes no Pods; diagnose
+// supplies its authorized current Pod set. Normal lifecycle events stay out.
+func filterEventsByInvolvedObject(events []*corev1.Event, displayKind, group, name string, uid types.UID, podUIDs map[string]types.UID) []corev1.Event {
 	var matched []corev1.Event
 	for _, e := range events {
 		if e.Type != corev1.EventTypeWarning {
@@ -1144,12 +1139,15 @@ func filterEventsByInvolvedObject(events []*corev1.Event, displayKind, group, na
 		if e.InvolvedObject.APIVersion == "" {
 			involvedGroup = resourceid.GroupForBuiltinKind(e.InvolvedObject.Kind)
 		}
-		if strings.EqualFold(e.InvolvedObject.Kind, displayKind) && strings.EqualFold(involvedGroup, group) && e.InvolvedObject.Name == name {
+		if strings.EqualFold(e.InvolvedObject.Kind, displayKind) && strings.EqualFold(involvedGroup, group) && e.InvolvedObject.Name == name && (uid == "" || e.InvolvedObject.UID == "" || e.InvolvedObject.UID == uid) {
 			matched = append(matched, *e)
 			continue
 		}
-		if displayKind != "Pod" && involvedGroup == "" && strings.EqualFold(e.InvolvedObject.Kind, "Pod") && podNames[e.InvolvedObject.Name] {
-			matched = append(matched, *e)
+		if displayKind != "Pod" && involvedGroup == "" && strings.EqualFold(e.InvolvedObject.Kind, "Pod") {
+			podUID, ok := podUIDs[e.InvolvedObject.Name]
+			if ok && (podUID == "" || e.InvolvedObject.UID == "" || e.InvolvedObject.UID == podUID) {
+				matched = append(matched, *e)
+			}
 		}
 	}
 	return matched
