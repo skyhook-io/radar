@@ -1869,7 +1869,7 @@ export function getGatewayClassDescription(gc: any): string {
 }
 
 // ============================================================================
-// GATEWAY API ROUTE UTILITIES (shared by HTTPRoute, GRPCRoute, TCPRoute, TLSRoute)
+// GATEWAY API ROUTE UTILITIES (shared by HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute)
 // ============================================================================
 
 const GATEWAY_API_GROUP = 'gateway.networking.k8s.io'
@@ -2357,7 +2357,7 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'hpas' || kindLower === 'horizontalpodautoscalers') return getHPAStatus(resource).text
       if (kindLower === 'gateways') return getGatewayStatus(resource).text
       if (kindLower === 'gatewayclasses') return getGatewayClassStatus(resource).text
-      if (['httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes'].includes(kindLower)) return getRouteStatus(resource).text
+      if (['httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes'].includes(kindLower) || (kindLower === 'udproutes' && resource.apiVersion?.startsWith('gateway.networking.k8s.io/'))) return getRouteStatus(resource).text
       if (kindLower === 'sealedsecrets') return getSealedSecretStatus(resource).text
       if (kindLower === 'poddisruptionbudgets') return getPDBStatus(resource).text
       if (kindLower === 'applications') return getArgoApplicationStatus(resource).text

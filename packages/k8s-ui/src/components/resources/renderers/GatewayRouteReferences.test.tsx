@@ -6,7 +6,7 @@ import { HTTPRouteRenderer } from './HTTPRouteRenderer'
 import { GRPCRouteRenderer } from './GRPCRouteRenderer'
 import { SimpleRouteRenderer } from './SimpleRouteRenderer'
 
-it.each(['HTTPRoute','GRPCRoute','TCPRoute','TLSRoute'] as const)('preserves backend and parent identities in %s click paths', async (kind) => {
+it.each(['HTTPRoute','GRPCRoute','TCPRoute','TLSRoute','UDPRoute'] as const)('preserves backend and parent identities in %s click paths', async (kind) => {
   const onNavigate=vi.fn()
   const backend={name:'custom-backend',kind:'Widget',group:'relationships.radar.test',namespace:'backends'}
   const parent={name:'mesh-parent',kind:'Service',group:'',namespace:'mesh'}
