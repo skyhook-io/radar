@@ -150,7 +150,7 @@ export function ServiceAccountRenderer({
         <Section title={`Secrets (${secrets.length})`} icon={Key}>
           <PropertyList>
             {secrets.map((secret: any) => (
-              <Property key={secret.name} label="Secret" value={<ResourceLink name={secret.name} kind="Secret" namespace={metadata.namespace} onNavigate={onNavigate} />} />
+              <Property key={secret.name} label="Secret" value={<ResourceLink name={secret.name} kind="secrets" namespace={metadata.namespace} onNavigate={onNavigate} />} />
             ))}
           </PropertyList>
         </Section>
@@ -161,7 +161,7 @@ export function ServiceAccountRenderer({
         <Section title={`Image Pull Secrets (${imagePullSecrets.length})`}>
           <div className="flex flex-wrap gap-1">
             {imagePullSecrets.map((secret: any) => (
-              <ResourceLink key={secret.name} name={secret.name} kind="Secret" namespace={metadata.namespace} onNavigate={onNavigate} />
+              <ResourceLink key={secret.name} name={secret.name} kind="secrets" namespace={metadata.namespace} onNavigate={onNavigate} />
             ))}
           </div>
         </Section>
