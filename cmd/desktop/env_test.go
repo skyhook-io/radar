@@ -195,7 +195,7 @@ func TestEnrichPathWithoutAShellAnswerKeepsTheLaunchPathFirst(t *testing.T) {
 	if err := os.MkdirAll(localBin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", "/launch/a:/launch/b")
+	t.Setenv("PATH", "/launch/a::.:node_modules/.bin:/launch/b")
 
 	enrichPath("")
 
@@ -209,13 +209,15 @@ func TestEnrichPathWithoutAShellAnswerKeepsTheLaunchPathFirst(t *testing.T) {
 // would resolve "." or "node_modules/.bin" against its own working directory.
 func TestMergePathListsMatchesWholeEntries(t *testing.T) {
 	merged, added := mergePathLists(
-		[]string{"/usr/local/bin2", "/a/", ""},
-		[]string{"/usr/local/bin", "/a", "/b", ".", "node_modules/.bin", ""},
+		[]string{"/usr/local/bin2", "/a/", "", "/tools/current/../bin"},
+		[]string{"/usr/local/bin", "/a", "/b", ".", "node_modules/.bin", "", "/tools/bin"},
 	)
-	if want := []string{"/usr/local/bin2", "/a/", "/usr/local/bin", "/b"}; !slices.Equal(merged, want) {
+	// "/tools/current/../bin" stays apart from "/tools/bin": through a symlink
+	// they can be different directories.
+	if want := []string{"/usr/local/bin2", "/a/", "/tools/current/../bin", "/usr/local/bin", "/b", "/tools/bin"}; !slices.Equal(merged, want) {
 		t.Errorf("merged = %v, want %v", merged, want)
 	}
-	if want := []string{"/usr/local/bin", "/b"}; !slices.Equal(added, want) {
+	if want := []string{"/usr/local/bin", "/b", "/tools/bin"}; !slices.Equal(added, want) {
 		t.Errorf("added = %v, want %v", added, want)
 	}
 }

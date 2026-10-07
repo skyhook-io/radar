@@ -220,7 +220,15 @@ func commonPaths() []string {
 // the probe doesn't meet), and a missing ~/.local/bin hides both agent CLIs and
 // kubectl auth plugins.
 func enrichPath(shellPath string) {
-	launch := filepath.SplitList(os.Getenv("PATH"))
+	// Relative launch entries ("." and the like) would make child processes,
+	// such as the local terminal and agent CLIs, run programs from whatever
+	// directory they start in.
+	var launch []string
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		if filepath.IsAbs(dir) {
+			launch = append(launch, dir)
+		}
+	}
 	common := commonPaths()
 	if shellPath == "" {
 		merged, added := mergePathLists(launch, common)
@@ -246,10 +254,11 @@ func enrichPath(shellPath string) {
 
 // mergePathLists joins PATH lists in order, keeping the first occurrence of each
 // directory and dropping empty entries. Later lists contribute absolute
-// directories only: a relative entry resolves against whatever directory a
-// child process runs in, and only the first list (the shell's own PATH) is
-// trusted to mean it. It also returns the entries that came from lists after
-// the first.
+// directories only; only the first list (the shell's own PATH) is trusted to
+// mean a relative one. Entries match exactly, ignoring a trailing separator:
+// cleaning "a/link/../bin" lexically could merge two directories the
+// filesystem keeps apart. It also returns the entries that came from lists
+// after the first.
 func mergePathLists(lists ...[]string) (merged, added []string) {
 	seen := map[string]bool{}
 	for i, list := range lists {
@@ -257,7 +266,10 @@ func mergePathLists(lists ...[]string) (merged, added []string) {
 			if dir == "" || (i > 0 && !filepath.IsAbs(dir)) {
 				continue
 			}
-			key := filepath.Clean(dir)
+			key := dir
+			if trimmed := strings.TrimRight(dir, string(filepath.Separator)); trimmed != "" {
+				key = trimmed
+			}
 			if seen[key] {
 				continue
 			}
