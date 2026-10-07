@@ -87,7 +87,11 @@ func (r *RelationshipsIndex) ResolveObservedOwner(ref resourceid.Reference) (*No
 	if node == nil {
 		return nil, false
 	}
-	return node, ref.UID == "" || node.uid == "" || ref.UID == string(node.uid)
+	uid := node.uid
+	if node.uidByGroup != nil {
+		uid = node.uidByGroup[ref.Group]
+	}
+	return node, ref.UID == "" || uid == "" || ref.UID == string(uid)
 }
 
 // EdgesFor returns the incoming and outgoing edges touching nodeID. Both
@@ -433,6 +437,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		}
 	}
 
+	preferredOwner := preferredOwnerEdge(incomingEdges)
 	for _, edge := range incomingEdges {
 		// Something points TO this resource (incoming edge)
 		ref := refForNodeID(edge.Source)
@@ -442,8 +447,10 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 
 		switch edge.Type {
 		case EdgeManages:
-			// Something manages/owns this resource
-			rel.Owner = ref
+			// Preserve the observed controller when multiple parents are present.
+			if preferredOwner != nil && edge.Source == preferredOwner.Source {
+				rel.Owner = ref
+			}
 		case EdgeExposes:
 			if isServiceEntrypointRouteKind(strings.ToLower(ref.Kind)) {
 				rel.Routes = appendResourceRef(rel.Routes, *ref)

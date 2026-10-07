@@ -385,8 +385,16 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
   const managedChildren = new Map<string, string[]>()
   const templateRunChildren = new Map<string, string[]>()
   const neighbors = new Map<string, Set<string>>()
+  const controllerByChild = new Map<string, Set<string>>()
+  for (const edge of sub.edges) {
+    if (edge.type === 'manages' && edge.ownerController === true && nodeById.has(edge.source)) {
+      if (!controllerByChild.has(edge.target)) controllerByChild.set(edge.target, new Set())
+      controllerByChild.get(edge.target)!.add(edge.source)
+    }
+  }
   for (const e of sub.edges) {
-    if (e.type === 'manages') {
+    const controllers = controllerByChild.get(e.target)
+    if (e.type === 'manages' && (!controllers || controllers.has(e.source))) {
       if (!managedChildren.has(e.source)) managedChildren.set(e.source, [])
       managedChildren.get(e.source)!.push(e.target)
     } else if (isTemplateToRunEdge(e, nodeById)) {

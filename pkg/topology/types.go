@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -161,24 +162,34 @@ const (
 type Node struct {
 	// uid is observed incarnation metadata, retained only in the cached Go graph.
 	// Synthetic groups have no object incarnation; UID is not a wire field.
-	uid    types.UID
-	ID     string         `json:"id"`
-	Kind   NodeKind       `json:"kind"`
-	Name   string         `json:"name"`
-	Status HealthStatus   `json:"status"`
-	Data   map[string]any `json:"data"`
+	// observed distinguishes cached objects from declaration-only stubs.
+	observed        bool
+	ownerReferences []metav1.OwnerReference
+	uid             types.UID
+	// uidByGroup preserves observed incarnations of independently authorized API aliases.
+	uidByGroup map[string]types.UID
+	ID         string         `json:"id"`
+	Kind       NodeKind       `json:"kind"`
+	Name       string         `json:"name"`
+	Status     HealthStatus   `json:"status"`
+	Data       map[string]any `json:"data"`
 }
 
 // Edge represents a connection between two nodes
 type Edge struct {
-	ID                string   `json:"id"`
-	Source            string   `json:"source"`
-	Target            string   `json:"target"`
-	Type              EdgeType `json:"type"`
-	Label             string   `json:"label,omitempty"`
-	Partial           bool     `json:"partial,omitempty"`
-	SkipIfKindVisible string   `json:"skipIfKindVisible,omitempty"` // Hide this edge if this kind is visible (for shortcut edges)
-	PolicyEffect      string   `json:"policyEffect,omitempty"`      // "allowed", "blocked", or "unprotected" — set when ShowPolicyEffect is true
+	// metadataOwner marks edges whose only evidence is an owner reference.
+	// Spec, label, inventory and collapsed ownership paths remain independent.
+	metadataOwner bool
+	ID            string   `json:"id"`
+	Source        string   `json:"source"`
+	Target        string   `json:"target"`
+	Type          EdgeType `json:"type"`
+	Label         string   `json:"label,omitempty"`
+	// OwnerController is set only for an observed metadata owner reference.
+	OwnerController   *bool  `json:"ownerController,omitempty"`
+	Partial           bool   `json:"partial,omitempty"`
+	SkipIfKindVisible string `json:"skipIfKindVisible,omitempty"` // Hide this edge if this kind is visible (for shortcut edges)
+	PolicyEffect      string `json:"policyEffect,omitempty"`      // "allowed", "blocked", or "unprotected" — set when ShowPolicyEffect is true
 }
 
 // PolicyEffect constants for edge annotation

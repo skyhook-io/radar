@@ -79,7 +79,7 @@ func TestSeededGenericCRDRejectsExistingReplacementEdge(t *testing.T) {
 		{uid: "current", ID: "deployment/team/app", Kind: KindDeployment, Name: "app", Data: map[string]any{"namespace": "team"}},
 		{ID: "widget/team/child", Kind: "Widget", Name: "child", Data: map[string]any{"namespace": "team", "apiVersion": "relationships.example.io/v1"}},
 	}
-	edges := []Edge{{ID: "owner", Source: nodes[0].ID, Target: nodes[1].ID, Type: EdgeManages}}
+	edges := []Edge{{metadataOwner: true, ID: "owner", Source: nodes[0].ID, Target: nodes[1].ID, Type: EdgeManages}}
 	nodes, edges = (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, edges, DefaultBuildOptions())
 	if len(nodes) != 2 || len(edges) != 0 || nodes[1].uid != "current-child" {
 		t.Fatalf("seeded replacement ownership survived: %+v %+v", nodes, edges)

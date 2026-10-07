@@ -128,8 +128,8 @@ func TestGenericCRDIdentitySeparatesCoreAndCrossGroupJobs(t *testing.T) {
 		listCalls: map[schema.GroupVersionResource]int{},
 	}
 	nodes := []Node{
-		{ID: "deployment/ml/trainer", Kind: KindDeployment, Name: "trainer", Data: map[string]any{"namespace": "ml"}},
-		{ID: "job/ml/train", Kind: KindJob, Name: "train", Data: map[string]any{"namespace": "ml"}},
+		{observed: true, ID: "deployment/ml/trainer", Kind: KindDeployment, Name: "trainer", Data: map[string]any{"namespace": "ml"}},
+		{observed: true, ID: "job/ml/train", Kind: KindJob, Name: "train", Data: map[string]any{"namespace": "ml"}},
 	}
 
 	nodes, edges := (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
@@ -168,7 +168,7 @@ func TestGenericCRDOwnerResolutionUsesOwnerAPIGroup(t *testing.T) {
 		},
 		listCalls: map[schema.GroupVersionResource]int{},
 	}
-	nodes := []Node{{ID: "deployment/demo/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "demo"}}}
+	nodes := []Node{{observed: true, ID: "deployment/demo/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "demo"}}}
 
 	nodes, edges := (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
 	childID := "child/demo/leaf/children.example.io"
@@ -200,7 +200,7 @@ func TestGenericCRDSelectsOneStableVersionPerGroupKind(t *testing.T) {
 			},
 			listCalls: map[schema.GroupVersionResource]int{},
 		}
-		nodes := []Node{{ID: "deployment/ml/trainer", Kind: KindDeployment, Name: "trainer", Data: map[string]any{"namespace": "ml"}}}
+		nodes := []Node{{observed: true, ID: "deployment/ml/trainer", Kind: KindDeployment, Name: "trainer", Data: map[string]any{"namespace": "ml"}}}
 
 		nodes, _ = (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
 		if nodeByID(nodes, "job/ml/stable/batch.volcano.sh") == nil || nodeByID(nodes, "job/ml/alpha-only/batch.volcano.sh") != nil {
@@ -227,9 +227,9 @@ func TestGenericCRDReusesSpecializedResourceIdentityAndPseudoOwner(t *testing.T)
 	}
 	nodeClassID := "nodeclass//shared/karpenter.k8s.aws/EC2NodeClass"
 	nodes := []Node{
-		{ID: "deployment/infra/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "infra"}},
-		{ID: "crossplane/infra/logs", Kind: NodeKind("Bucket"), Name: "logs", Data: map[string]any{"namespace": "infra", "apiVersion": "s3.aws.upbound.io/v1beta1"}},
-		{ID: nodeClassID, Kind: KindNodeClass, Name: "shared", Data: map[string]any{"apiVersion": "karpenter.k8s.aws/v1", "resourceKind": "EC2NodeClass"}},
+		{observed: true, ID: "deployment/infra/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "infra"}},
+		{observed: true, ID: "crossplane/infra/logs", Kind: NodeKind("Bucket"), Name: "logs", Data: map[string]any{"namespace": "infra", "apiVersion": "s3.aws.upbound.io/v1beta1"}},
+		{observed: true, ID: nodeClassID, Kind: KindNodeClass, Name: "shared", Data: map[string]any{"apiVersion": "karpenter.k8s.aws/v1", "resourceKind": "EC2NodeClass"}},
 	}
 
 	nodes, edges := (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
@@ -411,7 +411,7 @@ func TestGenericPassSkipsTypedBuiltinsButPreservesDRA(t *testing.T) {
 				},
 				listCalls: map[schema.GroupVersionResource]int{},
 			}
-			nodes := []Node{{ID: "deployment/demo/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "demo"}}}
+			nodes := []Node{{observed: true, ID: "deployment/demo/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "demo"}}}
 			fallbackProvider := &dynamicProviderWithoutExactCRD{DynamicProvider: dynamic}
 
 			nodes, _ = (&Builder{dynamic: fallbackProvider}).addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
@@ -439,7 +439,7 @@ func TestGenericCRDOwnerResolutionUsesIndexedCalicoAlias(t *testing.T) {
 	}
 	calicoID := "caliconetworkpolicy/demo/allow"
 	nodes := []Node{{
-		ID: calicoID, Kind: KindCalicoNetworkPolicy, Name: "allow",
+		observed: true, ID: calicoID, Kind: KindCalicoNetworkPolicy, Name: "allow",
 		Data: map[string]any{
 			"namespace":   "demo",
 			"apiVersion":  "projectcalico.org/v3",
@@ -472,10 +472,10 @@ func TestRelationshipsWithObjectUsesExactGroupWhenDirectIDCollides(t *testing.T)
 	volcano := genericIdentityObject(volcanoGVR, "Job", "ml", "train")
 	topo := &Topology{
 		Nodes: []Node{
-			{ID: "cronjob/ml/train", Kind: KindCronJob, Name: "train", Data: map[string]any{"namespace": "ml"}},
-			{ID: "jobset/ml/train/jobset.x-k8s.io", Kind: NodeKind("JobSet"), Name: "train", Data: map[string]any{"namespace": "ml", "apiVersion": "jobset.x-k8s.io/v1alpha2"}},
-			{ID: "job/ml/train", Kind: KindJob, Name: "train", Data: map[string]any{"namespace": "ml"}},
-			{ID: "job/ml/train/batch.volcano.sh", Kind: NodeKind("Job"), Name: "train", Data: map[string]any{"namespace": "ml", "apiVersion": "batch.volcano.sh/v1alpha1"}},
+			{observed: true, ID: "cronjob/ml/train", Kind: KindCronJob, Name: "train", Data: map[string]any{"namespace": "ml"}},
+			{observed: true, ID: "jobset/ml/train/jobset.x-k8s.io", Kind: NodeKind("JobSet"), Name: "train", Data: map[string]any{"namespace": "ml", "apiVersion": "jobset.x-k8s.io/v1alpha2"}},
+			{observed: true, ID: "job/ml/train", Kind: KindJob, Name: "train", Data: map[string]any{"namespace": "ml"}},
+			{observed: true, ID: "job/ml/train/batch.volcano.sh", Kind: NodeKind("Job"), Name: "train", Data: map[string]any{"namespace": "ml", "apiVersion": "batch.volcano.sh/v1alpha1"}},
 		},
 		Edges: []Edge{
 			{ID: "cron-core", Source: "cronjob/ml/train", Target: "job/ml/train", Type: EdgeManages},
@@ -498,11 +498,11 @@ func TestRelationshipsWithObjectUsesExactGroupWhenDirectIDCollides(t *testing.T)
 func TestRelationshipsPodShortcutsSkipCrossGroupReplicaSets(t *testing.T) {
 	topo := &Topology{
 		Nodes: []Node{
-			{ID: "deployment/ns/a", Kind: KindDeployment, Name: "a", Data: map[string]any{"namespace": "ns"}},
-			{ID: "deployment/ns/b", Kind: KindDeployment, Name: "b", Data: map[string]any{"namespace": "ns"}},
-			{ID: "replicaset/ns/r", Kind: KindReplicaSet, Name: "r", Data: map[string]any{"namespace": "ns"}},
-			{ID: "replicaset/ns/r/other.example", Kind: NodeKind("ReplicaSet"), Name: "r", Data: map[string]any{"namespace": "ns", "apiVersion": "other.example/v1"}},
-			{ID: "pod/ns/p", Kind: KindPod, Name: "p", Data: map[string]any{"namespace": "ns"}},
+			{observed: true, ID: "deployment/ns/a", Kind: KindDeployment, Name: "a", Data: map[string]any{"namespace": "ns"}},
+			{observed: true, ID: "deployment/ns/b", Kind: KindDeployment, Name: "b", Data: map[string]any{"namespace": "ns"}},
+			{observed: true, ID: "replicaset/ns/r", Kind: KindReplicaSet, Name: "r", Data: map[string]any{"namespace": "ns"}},
+			{observed: true, ID: "replicaset/ns/r/other.example", Kind: NodeKind("ReplicaSet"), Name: "r", Data: map[string]any{"namespace": "ns", "apiVersion": "other.example/v1"}},
+			{observed: true, ID: "pod/ns/p", Kind: KindPod, Name: "p", Data: map[string]any{"namespace": "ns"}},
 		},
 		Edges: []Edge{
 			{ID: "a-crd", Source: "deployment/ns/a", Target: "replicaset/ns/r/other.example", Type: EdgeManages},
