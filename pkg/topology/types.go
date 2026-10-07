@@ -527,6 +527,14 @@ type ResourceProvider interface {
 	GetResourceStatus(kind, namespace, name string) *ResourceStatus
 }
 
+// NamespacedResourceProvider optionally narrows cached namespaced lists without
+// changing the shared provider or its cluster-scoped lists. An empty namespace
+// retains the provider's existing cache scope. Authorization remains the caller's
+// responsibility; this capability adds no API reads or permissions.
+type NamespacedResourceProvider interface {
+	ForNamespace(namespace string) ResourceProvider
+}
+
 // ServiceAccountProvider is implemented by providers that can expose workload identities.
 type ServiceAccountProvider interface {
 	ServiceAccounts() ([]*corev1.ServiceAccount, error)
