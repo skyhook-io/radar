@@ -183,11 +183,16 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	s.refreshAIEngine(r.Context())
 	diagnoser, runs := s.aiEngine()
 	var agents []ai.AgentInfo
+	// enabled: investigations can run now. The run manager outlives its CLIs (it
+	// keeps history), so it also needs at least one backend it can drive.
+	enabled := false
 	if diagnoser != nil {
 		// The initialized Diagnoser is authoritative when an explicit CLI override
 		// narrows the backend set or points at a binary outside PATH.
+		drivable := diagnoser.AgentInfos(r.Context(), withVersions)
+		enabled = runs != nil && len(drivable) > 0
 		agents = ai.DetectAgents(r.Context(), false)
-		agents = mergeDetectedWithDrivable(agents, diagnoser.AgentInfos(r.Context(), withVersions))
+		agents = mergeDetectedWithDrivable(agents, drivable)
 	} else {
 		agents = ai.DetectAgents(r.Context(), withVersions)
 	}
@@ -209,7 +214,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	eligible := s.aiDeploymentSupported()
 	s.writeJSON(w, map[string]any{
 		"agents":      agents,
-		"enabled":     runs != nil,
+		"enabled":     enabled,
 		"eligible":    eligible,
 		"cliOverride": strings.TrimSpace(os.Getenv("RADAR_AI_CLI_BIN")) != "",
 		"consented":   currentConsents(),

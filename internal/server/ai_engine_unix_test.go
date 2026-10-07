@@ -95,3 +95,45 @@ func TestRefreshAIEngineLeavesUnsupportedDeploymentsOff(t *testing.T) {
 		t.Fatal("investigations turned on in a deployment that can't run them")
 	}
 }
+
+// The run manager outlives its CLIs (it keeps history); once the last CLI is
+// gone, investigations must read as off, or radar diagnose skips its guidance.
+func TestListAgentsReportsOffOnceTheLastCLIIsRemoved(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", "")
+	t.Setenv("RADAR_AI_CLI_BIN", "")
+	mcp := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	s := &Server{
+		authConfig:              auth.Config{Mode: "none"},
+		mcpHandler:              mcp,
+		mcpInvestigationHandler: mcp,
+		aiInvestigationRefs:     investigationrefs.NewRegistry(),
+	}
+	t.Cleanup(func() {
+		if runs := s.aiRunManager(); runs != nil {
+			runs.Shutdown()
+		}
+	})
+	s.refreshAIEngine(t.Context())
+	if s.aiRunManager() != nil {
+		t.Skip("an agent CLI is installed in a fixed system directory on this machine")
+	}
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claude := filepath.Join(bin, "claude")
+	if err := os.WriteFile(claude, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !listAgentsEnabled(t, s) {
+		t.Fatal("investigations off with Claude Code installed")
+	}
+	if err := os.Remove(claude); err != nil {
+		t.Fatal(err)
+	}
+	if listAgentsEnabled(t, s) {
+		t.Fatal("the only agent CLI was removed, but /api/agents still reports investigations on")
+	}
+}
