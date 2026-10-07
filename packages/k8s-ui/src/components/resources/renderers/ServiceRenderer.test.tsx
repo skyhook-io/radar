@@ -20,3 +20,10 @@ it('separates unavailable, loading, ready-empty and unprovided inventory', () =>
 it('does not show slice inventory for ExternalName even when supplied', () => {
   expect(renderToStaticMarkup(<ServiceRenderer {...props} data={{ ...data, spec: { type: 'ExternalName', externalName: 'example.org' } }} endpointSlicesEnabled endpointSlices={[]} />)).not.toContain('EndpointSlices')
 })
+
+it('marks unlabeled owned slices without describing them as published endpoints', () => {
+  const owned = { apiVersion: 'discovery.k8s.io/v1', kind: 'EndpointSlice', metadata: { namespace: 'team', name: 'owned', ownerReferences: [{ apiVersion: 'v1', kind: 'Service', name: 'web', uid: 'web-now' }] } }
+  const html = renderToStaticMarkup(<ServiceRenderer {...props} endpointSlicesEnabled endpointSlices={[owned]} />)
+  expect(html).toContain('Owner reference only')
+  expect(html).toContain('ownership does not establish published Service endpoints')
+})

@@ -28,7 +28,8 @@ export function EndpointSliceRenderer({ data, onNavigate }: EndpointSliceRendere
   const metadata = data.metadata || {}
   const endpoints = data.endpoints || []
   const ports = data.ports || []
-  const serviceName = endpointSliceServiceAssociation(data)?.name
+  const serviceAssociation = endpointSliceServiceAssociation(data)
+  const serviceName = serviceAssociation?.name
   const readyCount = endpoints.filter(isEndpointReady).length
   const addresses = endpointAddressCount(endpoints)
 
@@ -42,12 +43,12 @@ export function EndpointSliceRenderer({ data, onNavigate }: EndpointSliceRendere
           <Property label="Ports" value={ports.length} />
           {serviceName && (
             <Property
-              label="Service"
+              label={serviceAssociation?.source === 'ownerReference' ? 'Owner Service' : 'Service'}
               value={onNavigate ? (
                 <button
                   type="button"
                   className="text-sm text-accent-text hover:underline font-medium"
-                  onClick={() => onNavigate({ kind: 'Service', namespace: metadata.namespace, name: serviceName })}
+                  onClick={() => onNavigate({ kind: 'Service', group: '', namespace: metadata.namespace, name: serviceName })}
                 >
                   {serviceName}
                 </button>

@@ -1,6 +1,7 @@
 import { type ReactNode } from 'react'
 import { Globe, Clock, Radio } from 'lucide-react'
 import { Section, PropertyList, Property, KeyValueBadgeList, CopyHandler, AlertBanner } from '../../ui/drawer-components'
+import { endpointSliceServiceAssociation } from '../../../utils/endpoint-slices'
 import type { ResourceRef } from '../../../types'
 
 export interface ServicePortRenderProps {
@@ -126,6 +127,7 @@ export function ServiceRenderer({ data, onCopy, copied, endpointSlices, endpoint
                 const endpoints = slice.endpoints || []
                 const ready = endpointSliceReadyCount(slice)
                 const addresses = endpointSliceAddressCount(slice)
+                const ownerOnly = endpointSliceServiceAssociation(slice)?.source === 'ownerReference'
                 return (
                   <button
                     key={slice.metadata?.uid || sliceName}
@@ -142,6 +144,7 @@ export function ServiceRenderer({ data, onCopy, copied, endpointSlices, endpoint
                       <div className="min-w-0">
                         <div className="text-sm font-medium text-theme-text-primary truncate">{sliceName}</div>
                         <div className="text-xs text-theme-text-tertiary mt-0.5">{slice.addressType || 'Unknown'} address type</div>
+                        {ownerOnly && <div className="text-xs text-theme-text-tertiary mt-0.5" title="No kubernetes.io/service-name label; ownership does not establish published Service endpoints.">Owner reference only</div>}
                       </div>
                       <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
                         <span className={`badge-sm ${endpointSliceReadyClass(ready, endpoints.length)}`}>{ready}/{endpoints.length} ready</span>
