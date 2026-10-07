@@ -41,12 +41,13 @@ const BUILTIN_PLURAL_TO_KIND: Record<string, string> = {
   clusterrolebindings: 'ClusterRoleBinding',
   serviceaccounts: 'ServiceAccount',
   networkpolicies: 'NetworkPolicy',
+  // AWS Load Balancer Controller's IngressClass parameters. The Kind is
+  // singular and plural at once, so English rules cannot recover it in hosts
+  // that never load discovery.
+  ingressclassparams: 'IngressClassParams',
 }
 
-// IngressClassParams is singular and plural at once, so English pluralization
-// cannot recover it in hosts that never load discovery.
 const BUILTIN_GROUP_KIND_TO_PLURAL: Record<string, string> = {
-  'elbv2.k8s.aws/ingressclassparams': 'ingressclassparams',
   'scheduling.k8s.io/podgroup': 'podgroups',
   'metrics.k8s.io/podmetrics': 'pods',
   'metrics.k8s.io/nodemetrics': 'nodes',

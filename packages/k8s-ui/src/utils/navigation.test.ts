@@ -313,6 +313,9 @@ describe('refToSelectedResource', () => {
       group: 'elbv2.k8s.aws',
     })
     expect(knownKindForPluralWithGroup('ingressclassparams', 'elbv2.k8s.aws')).toBe('IngressClassParams')
+    // Hosts without discovery fold the plural back to a Kind and re-pluralize it.
+    expect(pluralToKind('ingressclassparams')).toBe('IngressClassParams')
+    expect(kindToPlural(pluralToKind('ingressclassparams'))).toBe('ingressclassparams')
   })
 
   test('normalizes an omitted namespace for cluster-scoped references', () => {
