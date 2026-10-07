@@ -9071,7 +9071,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 			if ownerNode != nil && !matches {
 				replacedOwnerEdges[ownerPair{ownerNode.ID, c.nodeID}] = true
 			}
-			if !matches {
+			if !matches || ownerNode.ID == c.nodeID {
 				continue
 			}
 			key := ownerPair{ownerNode.ID, c.nodeID}
