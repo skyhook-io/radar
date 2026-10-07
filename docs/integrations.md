@@ -241,7 +241,7 @@ Radar has first-class renderers for **AWS (CAPA)**, **GCP (CAPG)**, and **Azure 
 
 ### What Radar Shows
 
-**Topology:** ScaledObject → target workload (Deployment, StatefulSet, or Rollout). See which workloads are managed by KEDA and trace the scaling relationship.
+**Topology:** ScaledObject → target workload (Deployment, StatefulSet, or Rollout). ScaledObject and ScaledJob triggers also link to observed TriggerAuthentication or ClusterTriggerAuthentication resources. Authentication is a dependency, not an autoscaler target; omitted kind defaults to a same-namespace TriggerAuthentication. Cluster-scoped targets retain per-kind read gating. These declarations do not prove credential validity or trigger readiness.
 
 <p align="center">
   <img src="screenshots/integrations/keda-topology.png" alt="KEDA Topology" width="800">
@@ -288,8 +288,8 @@ Radar has first-class renderers for **AWS (CAPA)**, **GCP (CAPG)**, and **Azure 
 |-----|-------|----------|-------------|------------|
 | ScaledObject | `keda.sh/v1alpha1` | Yes | Yes | Yes |
 | ScaledJob | `keda.sh/v1alpha1` | Yes | Yes | Yes |
-| TriggerAuthentication | `keda.sh/v1alpha1` | — | Yes | Yes |
-| ClusterTriggerAuthentication | `keda.sh/v1alpha1` | — | Yes | Yes |
+| TriggerAuthentication | `keda.sh/v1alpha1` | When referenced | Yes | Yes |
+| ClusterTriggerAuthentication | `keda.sh/v1alpha1` | When referenced | Yes | Yes |
 
 ---
 
