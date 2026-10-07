@@ -2,6 +2,7 @@ package topology
 
 import (
 	"fmt"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -91,5 +92,32 @@ func TestCertificateIssuerEdgesReportsUnavailableLookup(t *testing.T) {
 	nodes, edges, warnings := addCertificateIssuerEdges([]Node{{ID: "certificate/team/tls", Kind: KindCertificate, Name: "tls", Data: map[string]any{"apiVersion": "cert-manager.io/v1"}}}, nil, []unstructured.Unstructured{cert}, p, DefaultBuildOptions())
 	if len(nodes) != 1 || len(edges) != 0 || len(warnings) != 2 || p.getCalls != 0 {
 		t.Fatalf("unavailable lookup: nodes=%d edges=%d warnings=%v gets=%d", len(nodes), len(edges), warnings, p.getCalls)
+	}
+}
+
+func TestReferencedIssuerRetainsGenericOwnerWithoutDuplicateNodesOrEdges(t *testing.T) {
+	issuerGVR := schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1", Resource: "issuers"}
+	issuer := genericIdentityObject(issuerGVR, "Issuer", "team", "ca", metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "operator"})
+	p := &genericIdentityDynamic{watched: []schema.GroupVersionResource{issuerGVR}, kinds: map[schema.GroupVersionResource]string{issuerGVR: "Issuer"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{issuerGVR: {issuer}}, listCalls: map[schema.GroupVersionResource]int{}}
+	cert := genericIdentityObject(schema.GroupVersionResource{Group: "cert-manager.io", Version: "v1"}, "Certificate", "team", "tls")
+	cert.Object["spec"] = map[string]any{"issuerRef": map[string]any{"name": "ca"}}
+	nodes := []Node{
+		{ID: "certificate/team/tls", Kind: KindCertificate, Name: "tls", Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}},
+		{ID: "deployment/team/operator", Kind: KindDeployment, Name: "operator", Data: map[string]any{"namespace": "team"}},
+	}
+	nodes, edges, warnings := addCertificateIssuerEdges(nodes, nil, []unstructured.Unstructured{*cert}, p, DefaultBuildOptions())
+	if len(warnings) != 0 {
+		t.Fatal(warnings)
+	}
+	builder := &Builder{dynamic: p}
+	for i := 0; i < 2; i++ {
+		nodes, edges = builder.addGenericCRDNodes(nodes, edges, DefaultBuildOptions())
+		if len(nodes) != 3 || len(edges) != 2 {
+			t.Fatalf("generic pass %d nodes=%d edges=%+v, want seeded issuer and unique dependency/owner", i, len(nodes), edges)
+		}
+	}
+	rel := GetRelationshipsWithObject("Issuer", "team", "ca", issuer, &Topology{Nodes: nodes, Edges: edges}, nil, p, nil)
+	if rel == nil || rel.Owner == nil || rel.Owner.Kind != "Deployment" || rel.Owner.Name != "operator" || len(rel.Dependents) != 1 {
+		t.Fatalf("referenced issuer owner/dependent = %+v", rel)
 	}
 }
