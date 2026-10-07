@@ -12,6 +12,7 @@ import { DialogPortal } from '../ui/DialogPortal'
 import { Badge } from '../ui/Badge'
 import {
   canConfirmGitOpsWrite,
+  gitOpsWriteGuardKey,
   type GitOpsWrite,
   type GitOpsWriteGuard,
 } from '../../utils/gitops-write-guard'
@@ -236,6 +237,15 @@ export function SetImageDialog({
   const busy = pending || submitting
   const ownershipResolved = ownership !== undefined
   const guard = ownership?.guard
+  // An acknowledgment covers the verdict it was given for; a different one
+  // (fresh evidence, a changed policy) asks again.
+  const guardKey = gitOpsWriteGuardKey(guard)
+  const ackedFor = useRef('')
+  useEffect(() => {
+    if (!guardKey || guardKey === ackedFor.current) return
+    ackedFor.current = guardKey
+    setAcknowledged(false)
+  }, [guardKey])
   const canSubmit = canSubmitImageUpdates({
     updateCount: updates.length,
     hasEmptyImage,

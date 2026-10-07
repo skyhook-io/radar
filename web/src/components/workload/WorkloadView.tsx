@@ -924,6 +924,9 @@ export function WorkloadView({
     async (params: { kind: string; namespace: string; name: string }) => {
       const request = ++imageOwnershipRequestRef.current
       setImageGuardRequested(true)
+      // Each open and refresh re-reads the evidence: the owner's sync policy
+      // or ignore rules may have changed since the dialog last opened.
+      void queryClient.invalidateQueries({ queryKey: ['gitops-write-evidence'] })
       const inventory = await baseActionsBarProps.onLoadImages!(params)
       const targetDiffers =
         inventory.target.resource.toLowerCase() !== params.kind.toLowerCase() ||
@@ -1007,7 +1010,10 @@ export function WorkloadView({
     target: imageGuardTarget,
     writes: SET_IMAGE_WRITES,
     ownership: imageOwnershipSource,
-    enabled: imageGuardRequested && Boolean(relationships),
+    relationshipsUnavailable: activeImageTargetOwnership
+      ? !activeImageTargetOwnership.response.relationships
+      : Boolean(resource) && !relationships,
+    enabled: imageGuardRequested,
   })
   const {
     owner: imageOwner,

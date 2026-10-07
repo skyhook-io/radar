@@ -5,6 +5,7 @@ import {
   canConfirmGitOpsWrite,
   evaluateGitOpsWriteGuard,
   gitOpsWriteEvidencePaths,
+  gitOpsWriteGuardKey,
   type GitOpsPathEvidence,
   type GitOpsWrite,
   type GitOpsWriteEvidence,
@@ -300,5 +301,46 @@ describe('gitOpsWriteEvidencePaths', () => {
         { scope: 'status', paths: ['status.phase'] },
       ]),
     ).toEqual([HIBERNATE, 'spec.suspend'])
+  })
+})
+
+describe('gitOpsWriteGuardKey', () => {
+  it('changes with the verdict and stays put for the same one', () => {
+    const mayRevert = guard({ writes: [hibernate], evidence: evidence(manual, [pathEvidence({ lastApplied: 'present' })]) })
+    const willRevert = guard({ writes: [hibernate], evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present' })]) })
+    expect(gitOpsWriteGuardKey(mayRevert)).not.toBe('')
+    expect(gitOpsWriteGuardKey(mayRevert)).toBe(gitOpsWriteGuardKey(guard({ writes: [hibernate], evidence: evidence(manual, [pathEvidence({ lastApplied: 'present' })]) })))
+    expect(gitOpsWriteGuardKey(mayRevert)).not.toBe(gitOpsWriteGuardKey(willRevert))
+    expect(gitOpsWriteGuardKey(guard({ writes: [hibernate], ownerPending: true }))).toBe('')
+    expect(gitOpsWriteGuardKey(undefined)).toBe('')
+  })
+})
+
+describe('copy', () => {
+  it('never promises a change will not be reverted', () => {
+    const optedOut = evidence({ ...selfHeal, objectReconcile: 'ignore' }, [pathEvidence({ lastApplied: 'present' })])
+    const ignored = evidence({ ...selfHeal, respectIgnoreDifferences: true }, [pathEvidence({ lastApplied: 'present', ignored: 'effective', ignoredBy: 'spec.ignoreDifferences' })])
+    for (const g of [
+      guard({ writes: [hibernate], evidence: optedOut }),
+      guard({ writes: [hibernate], evidence: ignored }),
+      guard({ writes: [{ scope: 'create-child', description: 'A Backup' }] }),
+      guard({ writes: [{ scope: 'delete' }], evidence: optedOut }),
+    ]) {
+      expect(g.level).toBe('info')
+      for (const w of g.perWrite) expect(w.reason).not.toMatch(/won.t/)
+    }
+  })
+
+  it('describes a manager rule that only partly covers the field as unconfirmed', () => {
+    const g = guard({
+      writes: [hibernate],
+      evidence: evidence({ ...selfHeal, respectIgnoreDifferences: true }, [
+        pathEvidence({ lastApplied: 'present', ignored: 'unevaluated', ignoredBy: 'spec.ignoreDifferences managedFieldsManagers (the manager owns only part of this field)' }),
+      ]),
+    })
+    expect(g.level).toBe('may-revert')
+    expect(g.requiresAck).toBe(true)
+    expect(g.perWrite[0].reason).toContain("can't confirm covers this field")
+    expect(g.perWrite[0].reason).not.toContain('jq')
   })
 })

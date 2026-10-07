@@ -1,4 +1,4 @@
-import { useEffect, useState, useId } from "react";
+import { useEffect, useRef, useState, useId } from "react";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -11,6 +11,7 @@ import { DialogPortal } from "@skyhook-io/k8s-ui/components/ui/DialogPortal";
 import { GitOpsWriteWarning } from "@skyhook-io/k8s-ui";
 import {
   canConfirmGitOpsWrite,
+  gitOpsWriteGuardKey,
   type GitOpsWriteGuard,
 } from "@skyhook-io/k8s-ui/utils/gitops-write-guard";
 import { parseContextName } from "../../utils/context-name";
@@ -63,6 +64,15 @@ export function ApplyDialog({
   useEffect(() => {
     if (open) setAcked(false);
   }, [open]);
+  // An acknowledgment covers the verdict it was given for; a different one
+  // (the owner resolved, the policy changed) asks again.
+  const guardKey = gitOpsWriteGuardKey(gitOpsGuard);
+  const ackedFor = useRef("");
+  useEffect(() => {
+    if (!guardKey || guardKey === ackedFor.current) return;
+    ackedFor.current = guardKey;
+    setAcked(false);
+  }, [guardKey]);
   const applyBlocked = !canConfirmGitOpsWrite(gitOpsGuard, acked);
   return (
     <DialogPortal

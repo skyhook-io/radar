@@ -304,7 +304,21 @@ func buildGitOpsWriteEvidence(
 		}
 	}
 	managers := ownerManagers(owner)
-	managedFields := target.GetManagedFields()
+	type parsedManagedFields struct {
+		entry  metav1.ManagedFieldsEntry
+		fields map[string]any
+	}
+	var managedFields []parsedManagedFields
+	for _, mf := range target.GetManagedFields() {
+		if mf.FieldsV1 == nil || len(mf.FieldsV1.Raw) == 0 {
+			continue
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(mf.FieldsV1.Raw, &fields); err != nil {
+			continue
+		}
+		managedFields = append(managedFields, parsedManagedFields{entry: mf, fields: fields})
+	}
 
 	for _, path := range paths {
 		ev := gitOpsPathEvidence{Path: path, LastApplied: "no-annotation", OwnedBy: []fieldOwnerEvidence{}}
@@ -321,15 +335,9 @@ func buildGitOpsWriteEvidence(
 				ev.LastApplied = "absent"
 			}
 		}
-		for _, mf := range managedFields {
-			if mf.FieldsV1 == nil || len(mf.FieldsV1.Raw) == 0 {
-				continue
-			}
-			var fields map[string]any
-			if err := json.Unmarshal(mf.FieldsV1.Raw, &fields); err != nil {
-				continue
-			}
-			owned, approximate := fieldsV1Owns(fields, segs)
+		for _, parsed := range managedFields {
+			mf := parsed.entry
+			owned, approximate := fieldsV1Owns(parsed.fields, segs)
 			if !owned {
 				continue
 			}
@@ -449,6 +457,7 @@ func ignoreRuleFor(
 	case "argocd":
 		entries, _, _ := unstructured.NestedSlice(ownerObj.Object, "spec", "ignoreDifferences")
 		jqRule := false
+		partialManagerMatch := false
 		for _, raw := range entries {
 			entry, ok := raw.(map[string]any)
 			if !ok || !argoIgnoreEntryMatches(entry, ref) {
@@ -460,9 +469,16 @@ func ignoreRuleFor(
 					covered = true
 				}
 			}
+			// A manager that owns only part of the path (one container's image
+			// under containers[*]) doesn't prove the rule covers the rest.
 			for _, m := range stringSlice(entry["managedFieldsManagers"]) {
 				for _, o := range ownedBy {
-					if o.Manager == m {
+					if o.Manager != m {
+						continue
+					}
+					if o.Approximate {
+						partialManagerMatch = true
+					} else {
 						covered = true
 					}
 				}
@@ -479,6 +495,9 @@ func ignoreRuleFor(
 		}
 		if jqRule {
 			return "unevaluated", "spec.ignoreDifferences jqPathExpressions"
+		}
+		if partialManagerMatch {
+			return "unevaluated", "spec.ignoreDifferences managedFieldsManagers (the manager owns only part of this field)"
 		}
 	case "fluxcd":
 		if owner.Group != "helm.toolkit.fluxcd.io" {

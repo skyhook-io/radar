@@ -73,3 +73,92 @@ it.each(['resolved', 'failed', 'empty', 'ambiguous'])('waits for Argo Applicatio
     queryClient.clear()
   }
 })
+
+async function renderGuard(options: Parameters<typeof useGitOpsWriteGuard>[0]) {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const root = createRoot(document.createElement('div'))
+  const ref: { state?: GitOpsWriteGuardState } = {}
+  function Harness() {
+    ref.state = useGitOpsWriteGuard(options)
+    return null
+  }
+  await act(async () => root.render(<QueryClientProvider client={queryClient}><Harness /></QueryClientProvider>))
+  return {
+    ref,
+    queryClient,
+    rerender: () => act(async () => root.render(<QueryClientProvider client={queryClient}><Harness /></QueryClientProvider>)),
+    cleanup: async () => {
+      await act(async () => root.unmount())
+      queryClient.clear()
+    },
+  }
+}
+
+const deployment = { kind: 'Deployment', group: 'apps', namespace: 'prod', name: 'web' }
+const replicas = [{ scope: 'spec' as const, paths: ['spec.replicas'] }]
+
+it('reads missing relationships as unknown ownership, not as unmanaged', async () => {
+  const h = await renderGuard({ target: deployment, resource: {}, relationshipsUnavailable: true, writes: replicas })
+  try {
+    expect(mocks.evidence).not.toHaveBeenCalled()
+    expect(h.ref.state!.guard?.pending).toBe(false)
+    expect(h.ref.state!.guard?.level).toBe('may-revert')
+    expect(h.ref.state!.guard?.requiresAck).toBe(true)
+    expect(h.ref.state!.guard?.ownershipError).toContain('relationships')
+    expect(canConfirmGitOpsWrite(h.ref.state!.guard, false)).toBe(false)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('asks for an acknowledgment when the server saw a manager the browser could not resolve', async () => {
+  const h = await renderGuard({ target: deployment, resource: {}, relationships: {}, declaredManager: 'Argo CD', writes: replicas })
+  try {
+    expect(h.ref.state!.guard?.requiresAck).toBe(true)
+    expect(h.ref.state!.guard?.ownershipError).toContain('Argo CD')
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('ignores the declared manager once an owner resolves', async () => {
+  mocks.evidence.mockResolvedValue({ uid: 'u', resourceVersion: '1', owner: { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }, policy: null, paths: [] })
+  const h = await renderGuard({
+    target: deployment,
+    resource: {},
+    relationships: { managedBy: [{ kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }] },
+    declaredManager: 'Argo CD',
+    writes: replicas,
+  })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(h.ref.state!.guard?.ownershipError).toBeNull()
+    expect(h.ref.state!.guard?.owner?.name).toBe('web')
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('treats a refetch of the evidence as pending', async () => {
+  let resolveSecond: (v: unknown) => void = () => {}
+  const evidence = { uid: 'u', resourceVersion: '1', owner: { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }, policy: null, paths: [] }
+  mocks.evidence.mockResolvedValueOnce(evidence).mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve }))
+  const h = await renderGuard({
+    target: deployment,
+    resource: {},
+    relationships: { managedBy: [{ kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }] },
+    writes: replicas,
+  })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    await act(async () => { void h.queryClient.invalidateQueries({ queryKey: ['gitops-write-evidence'] }) })
+    await h.rerender()
+    expect(h.ref.state!.guard?.pending).toBe(true)
+    expect(canConfirmGitOpsWrite(h.ref.state!.guard, true)).toBe(false)
+    await act(async () => resolveSecond(evidence))
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+  } finally {
+    await h.cleanup()
+  }
+})

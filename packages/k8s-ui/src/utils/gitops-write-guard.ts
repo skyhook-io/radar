@@ -70,7 +70,7 @@ export interface GitOpsPathEvidence {
   /** A manager of the owner's controller owns the field. */
   ownedByGitOps: boolean
   approximate?: boolean
-  /** `effective`: the owner won't overwrite it. `comparison-only`: Argo
+  /** `effective`: the owner is not expected to overwrite it. `comparison-only`: Argo
    *  ignoreDifferences without RespectIgnoreDifferences. `unevaluated`: a
    *  matching rule uses jqPathExpressions, which Radar doesn't evaluate. */
   ignored?: 'effective' | 'comparison-only' | 'unevaluated'
@@ -176,6 +176,13 @@ export function guardToolLabel(guard: Pick<GitOpsWriteGuard, 'owner' | 'helmRele
   return 'a GitOps tool'
 }
 
+/** Identifies what an acknowledgment was given for; it changes when the verdict, owner or reasons do. */
+export function gitOpsWriteGuardKey(guard: GitOpsWriteGuard | undefined): string {
+  if (!guard || guard.pending) return ''
+  const owner = guard.owner ? `${guard.owner.kind}/${guard.owner.namespace ?? ''}/${guard.owner.name}` : guard.helmRelease ? `helm/${guard.helmRelease.namespace}/${guard.helmRelease.name}` : ''
+  return [guard.level, owner, guard.ownershipError ?? '', ...guard.perWrite.map((w) => `${w.level}:${w.reason}`)].join('|')
+}
+
 export function canConfirmGitOpsWrite(guard: GitOpsWriteGuard | undefined, acked: boolean): boolean {
   if (!guard || guard.pending) return false
   return !guard.requiresAck || acked
@@ -272,15 +279,15 @@ function classifyPath(ctx: Context, path: string | null): Verdict {
         : null
     : null
   if (!helm && policy?.objectReconcile === 'ignore') {
-    return { level: 'info', reason: `This object opts out of ${tool} reconciliation, so a sync won't overwrite it.` }
+    return { level: 'info', reason: `This object opts out of ${tool} reconciliation, so a sync is not expected to overwrite it.` }
   }
   if (policy?.objectReconcile === 'if-not-present') {
-    return { level: 'info', reason: `${tool} only creates this object when it's missing, so a sync won't overwrite it.` }
+    return { level: 'info', reason: `${tool} only creates this object when it's missing, so a sync is not expected to overwrite it.` }
   }
   if (!helm && ev?.ignored === 'effective') {
     return {
       level: 'info',
-      reason: `${describeGitOpsOwner(owner)} ignores this field (${ev.ignoredBy ?? 'ignore rule'}), so a sync won't overwrite it.`,
+      reason: `${describeGitOpsOwner(owner)} ignores this field (${ev.ignoredBy ?? 'ignore rule'}), so a sync is not expected to overwrite it.`,
     }
   }
 
@@ -289,7 +296,7 @@ function classifyPath(ctx: Context, path: string | null): Verdict {
     if (ev?.ignored === 'unevaluated') {
       return {
         level: 'may-revert',
-        reason: `${describeGitOpsOwner(owner)} has an ignoreDifferences rule written in jq (${ev.ignoredBy ?? 'jqPathExpressions'}) that Radar can't evaluate, so it may or may not keep a sync from overwriting this field.`,
+        reason: `${describeGitOpsOwner(owner)} has an ignoreDifferences rule (${ev.ignoredBy ?? 'spec.ignoreDifferences'}) that Radar can't confirm covers this field, so it may or may not keep a sync from overwriting it.`,
       }
     }
     if (ev?.ignored === 'comparison-only') {
@@ -344,7 +351,7 @@ function classifyDelete(ctx: Context): Verdict {
     if (owner.kind === 'helmreleases') {
       return { level: 'may-revert', reason: "Flux drift detection skips this object, but the next Helm upgrade recreates it." }
     }
-    return { level: 'info', reason: `This object opts out of ${tool} reconciliation, so it won't be recreated.` }
+    return { level: 'info', reason: `This object opts out of ${tool} reconciliation, so it is not expected to be recreated.` }
   }
   if (policy.suspended) {
     return { level: 'may-revert', reason: `${describeGitOpsOwner(owner)} is suspended; resuming it will recreate it.` }
@@ -374,7 +381,7 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
   if (owner) {
     const tool = gitOpsToolLabel(owner.tool)
     if (write.scope === 'create-child') {
-      return { level: 'info', reason: `A new object isn't in the GitOps source, so ${tool} won't revert it.` }
+      return { level: 'info', reason: `A new object isn't in the GitOps source, so ${tool} is not expected to revert it.` }
     }
     const ctx: Context = {
       input,
@@ -387,7 +394,7 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
   if (input.helmRelease) {
     const release = `${input.helmRelease.namespace}/${input.helmRelease.name}`
     if (write.scope === 'create-child') {
-      return { level: 'info', reason: `A new object isn't part of Helm release ${release}, so an upgrade won't revert it.` }
+      return { level: 'info', reason: `A new object isn't part of Helm release ${release}, so an upgrade is not expected to revert it.` }
     }
     if (write.scope === 'delete') {
       return { level: 'may-revert', reason: `The next helm upgrade or rollback of ${release} will recreate it.` }

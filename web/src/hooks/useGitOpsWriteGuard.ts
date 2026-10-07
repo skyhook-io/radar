@@ -31,6 +31,8 @@ export function useGitOpsWriteGuard({
   relationships,
   resource,
   ownership: resolved,
+  relationshipsUnavailable = false,
+  declaredManager,
   enabled = true,
 }: {
   target: GitOpsWriteTarget
@@ -39,6 +41,12 @@ export function useGitOpsWriteGuard({
   resource?: unknown
   /** Pass when the host already resolved ownership for this target. */
   ownership?: ResolvedGitOpsOwner
+  /** The host read the target but the server sent no relationships (its
+   *  topology isn't built yet), so ownership is unknown rather than absent. */
+  relationshipsUnavailable?: boolean
+  /** A manager the server detected on its own (e.g. "Argo CD"). When the
+   *  browser can't resolve an owner, ownership is unknown rather than absent. */
+  declaredManager?: string | null
   enabled?: boolean
 }): GitOpsWriteGuardState {
   const needsTarget = enabled && !resolved && relationships === undefined
@@ -99,11 +107,17 @@ export function useGitOpsWriteGuard({
     retry: false,
   })
 
+  const targetRelationshipsMissing = needsTarget && targetQuery.data != null && targetQuery.relationships == null
+  const unresolvedDeclaredManager = Boolean(declaredManager) && !managed && !lookupPending
   const ownershipError = targetLookupFailed
     ? "Radar couldn't read the resource"
     : ownership.lookupError
       ? "Radar couldn't resolve the resource's GitOps ownership"
-      : null
+      : relationshipsUnavailable || targetRelationshipsMissing
+        ? "its relationships aren't mapped yet"
+        : unresolvedDeclaredManager
+          ? `the server reports it is managed by ${declaredManager}, but Radar couldn't find that owner`
+          : null
 
   const guard = useMemo(
     () =>
@@ -112,7 +126,8 @@ export function useGitOpsWriteGuard({
             target,
             owner: ownership.owner,
             helmRelease: ownership.helmOwner,
-            ownerPending: lookupPending || (canFetchEvidence && evidenceQuery.isPending),
+            // A refetch counts as pending: an earlier verdict may no longer hold.
+            ownerPending: lookupPending || (canFetchEvidence && (evidenceQuery.isPending || evidenceQuery.isFetching)),
             ownershipError,
             evidence: evidenceQuery.data,
             evidenceError: evidenceQuery.error instanceof Error ? evidenceQuery.error.message : null,
@@ -133,6 +148,7 @@ export function useGitOpsWriteGuard({
       lookupPending,
       canFetchEvidence,
       evidenceQuery.isPending,
+      evidenceQuery.isFetching,
       evidenceQuery.data,
       evidenceQuery.error,
       ownershipError,

@@ -28,6 +28,34 @@ func TestGitOpsWriteEvidenceDiscoveryUnavailable(t *testing.T) {
 	}
 }
 
+// The body is bounded before it is read and validated before any cluster read.
+func TestGitOpsWriteEvidenceRejectsBadRequests(t *testing.T) {
+	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds)
+	manyPaths := make([]string, maxWriteEvidencePaths+1)
+	for i := range manyPaths {
+		manyPaths[i] = "spec.replicas"
+	}
+	for _, tc := range []struct {
+		name string
+		body string
+		code int
+	}{
+		{"too large", `{"kind":"Deployment","name":"api","paths":["` + strings.Repeat("a", maxWriteEvidenceRequestBytes) + `"]}`, http.StatusRequestEntityTooLarge},
+		{"unknown field", `{"kind":"Deployment","name":"api","paths":[],"value":"x"}`, http.StatusBadRequest},
+		{"missing kind", `{"name":"api","paths":["spec.replicas"]}`, http.StatusBadRequest},
+		{"too many paths", mustJSON(t, map[string]any{"kind": "Deployment", "group": "apps", "namespace": "prod", "name": "api", "paths": manyPaths}), http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/api/gitops/write-evidence", strings.NewReader(tc.body))
+			w := httptest.NewRecorder()
+			(&Server{}).handleGitOpsWriteEvidence(w, r)
+			if w.Code != tc.code {
+				t.Fatalf("status = %d, want %d: %s", w.Code, tc.code, w.Body.String())
+			}
+		})
+	}
+}
+
 func mustJSON(t *testing.T, v any) string {
 	t.Helper()
 	b, err := json.Marshal(v)
@@ -279,6 +307,36 @@ func TestWriteEvidenceArgoJQRuleIsUnevaluated(t *testing.T) {
 		evidenceArgoApp(map[string]any{"syncOptions": []any{"RespectIgnoreDifferences=true"}}, both), nil)
 	if got := resp.Paths[0]; got.Ignored != "effective" {
 		t.Errorf("a pointer that covers the path wins over an unevaluated jq rule: %+v", got)
+	}
+}
+
+// A manager that owns one container's image doesn't prove an
+// ignoreDifferences managedFieldsManagers rule covers every container's.
+func TestWriteEvidenceArgoManagerRulePartialOwnershipIsUnevaluated(t *testing.T) {
+	managed := []metav1.ManagedFieldsEntry{
+		fieldsEntry(t, "image-updater", metav1.ManagedFieldsOperationUpdate, map[string]any{
+			"f:spec": map[string]any{"f:template": map[string]any{"f:spec": map[string]any{"f:containers": map[string]any{
+				`k:{"name":"sidecar"}`: map[string]any{".": map[string]any{}, "f:image": map[string]any{}},
+			}}}},
+		}),
+		fieldsEntry(t, "image-updater", metav1.ManagedFieldsOperationUpdate, map[string]any{
+			"f:spec": map[string]any{"f:replicas": map[string]any{}},
+		}),
+	}
+	ignore := []any{map[string]any{"group": "apps", "kind": "Deployment", "managedFieldsManagers": []any{"image-updater"}}}
+	app := evidenceArgoApp(map[string]any{
+		"automated":   map[string]any{"selfHeal": true},
+		"syncOptions": []any{"RespectIgnoreDifferences=true"},
+	}, ignore)
+	paths := []string{"spec.template.spec.containers[*].image", "spec.replicas"}
+	resp := buildGitOpsWriteEvidence(evidenceTarget(t, nil, managed), deploymentRef, paths, argoOwner, app, nil)
+
+	wild := pathEvidence(t, resp, paths[0])
+	if wild.Ignored != "unevaluated" || !strings.Contains(wild.IgnoredBy, "managedFieldsManagers") {
+		t.Errorf("wildcard path owned by the manager for one container only: %+v", wild)
+	}
+	if got := pathEvidence(t, resp, paths[1]); got.Ignored != "effective" {
+		t.Errorf("a path the manager owns exactly stays covered: %+v", got)
 	}
 }
 
