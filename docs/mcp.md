@@ -581,3 +581,11 @@ other writers, and later template/configuration edits can explain differences.
 Candidate inspection is non-exhaustive and does not perform live admission calls
 or start watches. Verify provenance with configuration history or
 [Kubernetes admission audit records](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#monitoring-admission-webhooks).
+
+Generic CRD ownership joins compare the owner reference UID with the observed
+parent incarnation when both are available. A same-named replacement is not an
+owner. This protection also applies to the direct resource-context owner fallback.
+UID metadata stays inside the cached Go topology; graph JSON is unchanged. These
+joins do not fetch owners. Typed workload grouping and controller-specific
+ownership shortcuts have separate resolution paths and are not all covered by
+this generic CRD check.

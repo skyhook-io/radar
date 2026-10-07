@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -1958,4 +1959,40 @@ func TestBuildDependencyReferencesAreAuthorized(t *testing.T) {
 		}
 	}
 	t.Fatalf("denied dependency did not disclose omission: %+v", denied.Omitted)
+}
+
+func TestBuildOwnerFallbackRejectsObservedReplacement(t *testing.T) {
+	parent := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team", UID: "current-parent"}}
+	topo, err := topology.NewBuilder(mockResourceProvider{deploys: []*appsv1.Deployment{parent}}).Build(topology.DefaultBuildOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ownerUID := range []types.UID{"current-parent", "deleted-parent"} {
+		child := &corev1.ConfigMap{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"}, ObjectMeta: metav1.ObjectMeta{Name: "child", Namespace: "team", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "app", UID: ownerUID}}}}
+		for _, index := range []*topology.RelationshipsIndex{nil, topology.IndexByResource(topo)} {
+			rc := Build(context.Background(), child, Options{Topology: topo, RelIndex: index})
+			if (rc.Owner != nil) != (ownerUID == "current-parent") {
+				t.Fatalf("owner UID %s => %+v", ownerUID, rc.Owner)
+			}
+			if rc.Owner != nil && (rc.Owner.Namespace != "team" || rc.Owner.Group != "apps") {
+				t.Fatalf("owner identity = %+v", rc.Owner)
+			}
+		}
+		// With no observed graph there is no proof of replacement; the literal
+		// declaration remains available instead of pretending a UID was checked.
+		if rc := Build(context.Background(), child, Options{}); rc.Owner == nil {
+			t.Fatal("unobserved owner declaration was erased")
+		}
+	}
+}
+
+func TestBuildOwnerFallbackUsesObservedClusterScopeWithoutNamespaceField(t *testing.T) {
+	child := &corev1.ConfigMap{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"}, ObjectMeta: metav1.ObjectMeta{Name: "child", Namespace: "team", OwnerReferences: []metav1.OwnerReference{{APIVersion: "gateway.networking.k8s.io/v1", Kind: "GatewayClass", Name: "gateway"}}}}
+	topo := &topology.Topology{Nodes: []topology.Node{{ID: "gatewayclass//gateway", Kind: topology.KindGatewayClass, Name: "gateway", Data: map[string]any{"apiVersion": "gateway.networking.k8s.io/v1"}}}}
+	for _, index := range []*topology.RelationshipsIndex{nil, topology.IndexByResource(topo)} {
+		rc := Build(context.Background(), child, Options{Topology: topo, RelIndex: index})
+		if rc.Owner == nil || rc.Owner.Namespace != "" || rc.Owner.Group != "gateway.networking.k8s.io" {
+			t.Fatalf("observed cluster owner = %+v", rc.Owner)
+		}
+	}
 }

@@ -72,6 +72,24 @@ func IndexByResource(topo *Topology) *RelationshipsIndex {
 	return idx
 }
 
+// ResolveObservedOwner finds an exact group/kind/name owner in the dependent's
+// namespace or an observed cluster-scoped node. The boolean is false for a
+// missing node or a known UID mismatch. Missing UID evidence does not establish
+// replacement; this resolver never fetches an owner or invents an incarnation.
+func (r *RelationshipsIndex) ResolveObservedOwner(ref resourceid.Reference) (*Node, bool) {
+	if r == nil || !ref.HasGroup() {
+		return nil, false
+	}
+	node := r.nodesByResourceKey[resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)]
+	if node == nil && ref.Namespace != "" {
+		node = r.nodesByResourceKey[resourceid.ResourceKey(ref.Group, ref.Kind, "", ref.Name)]
+	}
+	if node == nil {
+		return nil, false
+	}
+	return node, ref.UID == "" || node.uid == "" || ref.UID == string(node.uid)
+}
+
 // EdgesFor returns the incoming and outgoing edges touching nodeID. Both
 // slices alias the index's internal storage — callers MUST NOT mutate them.
 // Returns (nil, nil) when the node has no edges or the index is nil.
