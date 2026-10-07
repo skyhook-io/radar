@@ -664,7 +664,8 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 	// emitted above signals that some refs were filtered without
 	// disclosing how many.
 	visible := 0
-	filtered := make([]ReferenceUse, 0, minInt(len(refs), maxReferencedByItems))
+	groups := make(map[[2]string][]ReferenceUse)
+	var order [][2]string
 	for i := range refs {
 		ref := refs[i]
 		if len(ref.Paths) > maxReferencedByPathsPerRef {
@@ -676,8 +677,29 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			continue
 		}
 		visible++
-		if len(filtered) < maxReferencedByItems {
-			filtered = append(filtered, ref)
+		key := [2]string{ref.Kind, ref.Group}
+		if _, exists := groups[key]; !exists {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], ref)
+	}
+	// Round-robin readable kinds so a large replica population cannot hide
+	// the workload and revision templates that explain those Pods' references.
+	filtered := make([]ReferenceUse, 0, minInt(visible, maxReferencedByItems))
+	for row := 0; len(filtered) < maxReferencedByItems; row++ {
+		added := false
+		for _, key := range order {
+			if row >= len(groups[key]) {
+				continue
+			}
+			filtered = append(filtered, groups[key][row])
+			added = true
+			if len(filtered) == maxReferencedByItems {
+				break
+			}
+		}
+		if !added {
+			break
 		}
 	}
 	if len(filtered) == 0 {

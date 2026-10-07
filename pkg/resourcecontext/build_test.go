@@ -3,6 +3,7 @@ package resourcecontext
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -2007,5 +2008,35 @@ func TestBuild_ReverseReferencesRetainAdmittedPodsAndReplicaSetTemplates(t *test
 	custom := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.io/v1", "kind": "Secret", "metadata": map[string]any{"name": "admitted-registry", "namespace": "team"}}}
 	if rc := Build(context.Background(), custom, Options{Provider: provider}); rc.ReferencedBy != nil {
 		t.Fatalf("same-named custom resource joined to core Pod references: %+v", rc.ReferencedBy)
+	}
+}
+
+func TestBuild_ReferencedByCapPreservesTemplateAndPodKinds(t *testing.T) {
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "settings", Namespace: "prod"}}
+	spec := corev1.PodSpec{Containers: []corev1.Container{{Name: "app", EnvFrom: []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}}}}}}}
+	provider := mockResourceProvider{
+		deploys:      []*appsv1.Deployment{{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "prod"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: spec}}}},
+		replicaSets:  []*appsv1.ReplicaSet{{ObjectMeta: metav1.ObjectMeta{Name: "old", Namespace: "prod"}, Spec: appsv1.ReplicaSetSpec{Template: corev1.PodTemplateSpec{Spec: spec}}}},
+		statefulSets: []*appsv1.StatefulSet{{ObjectMeta: metav1.ObjectMeta{Name: "stateful", Namespace: "prod"}, Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: spec}}}},
+	}
+	for i := 0; i < maxReferencedByItems+5; i++ {
+		provider.pods = append(provider.pods, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("pod-%02d", i), Namespace: "prod"}, Spec: spec})
+	}
+	rc := Build(context.Background(), cm, Options{Tier: TierBasic, Provider: provider})
+	if rc.ReferencedBy == nil || rc.ReferencedBy.Total != len(provider.pods)+3 || !rc.ReferencedBy.Truncated || len(rc.ReferencedBy.Items) != maxReferencedByItems {
+		t.Fatalf("capped refs: %+v", rc.ReferencedBy)
+	}
+	kinds := map[string]bool{}
+	for _, ref := range rc.ReferencedBy.Items {
+		kinds[ref.Kind] = true
+	}
+	for _, kind := range []string{"Deployment", "Pod", "ReplicaSet", "StatefulSet"} {
+		if !kinds[kind] {
+			t.Fatalf("missing %s evidence: %+v", kind, rc.ReferencedBy.Items)
+		}
+	}
+	rc = Build(context.Background(), cm, Options{Tier: TierBasic, Provider: provider, AccessChecker: denyChecker{kind: "Pod", namespace: "prod"}})
+	if rc.ReferencedBy == nil || rc.ReferencedBy.Total != 3 || len(rc.ReferencedBy.Items) != 3 || rc.ReferencedBy.Truncated {
+		t.Fatalf("denied Pod population affected sampling: %+v", rc.ReferencedBy)
 	}
 }
