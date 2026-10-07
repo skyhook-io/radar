@@ -987,10 +987,8 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   const sampleSelection = useMemo(() => {
     if (!graphSelection) return filteredRawFlows
     if (selectionPairs) {
-      const keys = new Set(selectionPairs.map(p => pairKey(p.source, p.destination, p.port)))
-      const anyPort = new Set(selectionPairs.filter(p => !p.port).map(p => pairKey(p.source, p.destination)))
-      return filteredRawFlows.filter(f =>
-        keys.has(pairKey(f.source, f.destination, f.port)) || anyPort.has(pairKey(f.source, f.destination)))
+      const keys = new Set(selectionPairs.map(p => pairKey(p.source, p.destination, p.port, p.directionUnknown)))
+      return filteredRawFlows.filter(f => keys.has(pairKey(f.source, f.destination, f.port, f.directionUnknown)))
     }
     if (graphSelection.type === 'node' && graphSelection.nodeId) {
       const id = graphSelection.nodeId
@@ -1033,7 +1031,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     }
     if (sampleTotal <= sampleSize) return undefined
     const sample = `newest ${sampleSize.toLocaleString()} of ${sampleTotal.toLocaleString()} records`
-    if (!graphSelection) return `Showing the ${sample} — select a node or edge to see its own`
+    if (!graphSelection) return `Showing the ${sample} — select a node or edge to load its records`
     if (records.tooLarge) return `This selection is too large to look up on its own; showing its flows among the ${sample}`
     if (records.isError) return `Couldn't load this selection's records (${records.error?.message}); showing its flows among the ${sample}`
     return `Showing this selection's flows among the ${sample}`

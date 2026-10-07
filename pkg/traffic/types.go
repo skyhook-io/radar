@@ -141,12 +141,14 @@ func (r EndpointRef) matches(e Endpoint) bool {
 	return r.Namespace == e.Namespace && r.Name == e.Name
 }
 
-// EndpointPair is one caller-to-callee edge of the aggregation, on Port when
-// it is set and on any port when it is zero.
+// EndpointPair is one edge of the aggregation, keyed as AggregateFlows keys
+// it: the two endpoints, the port (zero when the source reports none), and
+// whether the direction is known.
 type EndpointPair struct {
-	Source      EndpointRef `json:"source"`
-	Destination EndpointRef `json:"destination"`
-	Port        int         `json:"port,omitempty"`
+	Source           EndpointRef `json:"source"`
+	Destination      EndpointRef `json:"destination"`
+	Port             int         `json:"port"`
+	DirectionUnknown bool        `json:"directionUnknown,omitempty"`
 }
 
 // FlowMatch selects the flows behind a graph node or edge: those between one
@@ -161,7 +163,8 @@ func (m *FlowMatch) Matches(f Flow) bool {
 		return true
 	}
 	for _, p := range m.Pairs {
-		if p.Source.matches(f.Source) && p.Destination.matches(f.Destination) && (p.Port == 0 || p.Port == f.Port) {
+		if p.Source.matches(f.Source) && p.Destination.matches(f.Destination) &&
+			p.Port == f.Port && p.DirectionUnknown == f.DirectionUnknown {
 			return true
 		}
 	}

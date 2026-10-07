@@ -328,6 +328,14 @@ describe('selectionRawPairs', () => {
     expect(endpointPair(http).port).toBe(80)
   })
 
+  it('keeps a merged edge selected whichever of its ports it happens to carry', () => {
+    const http = { ...c, port: 80 }
+    // Merged from :443 and :80; the merged edge kept :443 this refresh.
+    const mergedEdge: GraphFlow = { ...c, rawPairs: [endpointPair(c), endpointPair(http)] }
+    expect(selectionRawPairs([mergedEdge], { type: 'edge', sourceId: 'shop/web-1', destId: 'shop/db-0', port: 80 }))
+      .toHaveLength(2)
+  })
+
   it('resolves the addon group, drawn as one node, through its virtual endpoints', () => {
     const virtual: GraphFlow = {
       ...a,

@@ -88,11 +88,12 @@ export interface TrafficEndpointRef {
   kind?: string
 }
 
-/** One caller → callee edge of the server's aggregation; port 0 or absent means any port. */
+/** One edge of the server's aggregation, keyed as the server keys it. */
 export interface TrafficEndpointPair {
   source: TrafficEndpointRef
   destination: TrafficEndpointRef
-  port?: number
+  port: number
+  directionUnknown?: boolean
 }
 
 /** The query string carries the selection; the server refuses one over 16 KiB. */

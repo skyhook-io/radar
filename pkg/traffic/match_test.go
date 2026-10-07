@@ -19,12 +19,20 @@ func TestFlowMatch(t *testing.T) {
 	}
 	onPort := &FlowMatch{Pairs: []EndpointPair{{Source: ref("a", "web-1"), Destination: ref("b", "db-0"), Port: 5432}}}
 	if onPort.Matches(flow) {
-		t.Error("a pair on a port matches only that port")
+		t.Error("a pair matches only its own port")
+	}
+	if (&FlowMatch{Pairs: []EndpointPair{{Source: ref("a", "web-1"), Destination: ref("b", "db-0")}}}).Matches(Flow{Source: flow.Source, Destination: flow.Destination, Port: 443}) {
+		t.Error("port zero is a port like any other, not a wildcard")
+	}
+	unoriented := Flow{Source: flow.Source, Destination: flow.Destination, DirectionUnknown: true}
+	if (&FlowMatch{Pairs: []EndpointPair{{Source: ref("a", "web-1"), Destination: ref("b", "db-0")}}}).Matches(unoriented) {
+		t.Error("traffic of unknown direction is a separate edge, as the aggregation keys it")
 	}
 	flow.Port = 5432
 	if !onPort.Matches(flow) {
 		t.Error("a pair on a port matches its own port")
 	}
+	flow.Port = 0
 	pair := &FlowMatch{Pairs: []EndpointPair{{Source: ref("a", "web-1"), Destination: ref("b", "db-0")}}}
 	if !pair.Matches(flow) {
 		t.Error("a pair matches its own direction")
