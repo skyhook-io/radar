@@ -66,7 +66,11 @@ func (s *Server) decodeActionRequest(w http.ResponseWriter, r *http.Request) (in
 func (s *Server) writeActionError(w http.ResponseWriter, tag string, err error, action, namespace, name string) {
 	var ae *integration.ActionError
 	if errors.As(err, &ae) {
-		log.Printf("[%s] %q %s/%s refused %d: %s", tag, action, sanitizeForLog(namespace), sanitizeForLog(name), ae.Status, ae.Message)
+		if ae.Status >= http.StatusInternalServerError {
+			log.Printf("[%s] Failed to %s %s/%s: %v", tag, sanitizeForLog(action), sanitizeForLog(namespace), sanitizeForLog(name), ae)
+		} else {
+			log.Printf("[%s] %q %s/%s refused %d: %s", tag, sanitizeForLog(action), sanitizeForLog(namespace), sanitizeForLog(name), ae.Status, ae.Message)
+		}
 		body := map[string]any{"error": ae.Message}
 		if ae.Code != "" {
 			body["code"] = ae.Code

@@ -1,5 +1,8 @@
+// @vitest-environment jsdom
+import { act } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { createRoot } from 'react-dom/client'
+import { describe, expect, it, vi } from 'vitest'
 import { StructuredLogLine } from './StructuredLogLine'
 
 const render = (content: string) => renderToStaticMarkup(<StructuredLogLine content={content} level="info" wordWrap={false} />)
@@ -30,4 +33,26 @@ it.each([false, true])('keeps annotations intact with word wrapping, expanded=%s
   expect(html).toMatch(/inline-block whitespace-nowrap[^>]*>\{3 fields\}/)
   expect(html).toContain('[overflow-wrap:anywhere]')
   expect(html).not.toContain('break-all')
+})
+
+it('filters expanded strings, numbers and booleans by their displayed value', () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  const filter = vi.fn()
+  const message = 'true null 123 "quoted"\nnext'
+  const host = document.createElement('div')
+  const root = createRoot(host)
+  try {
+    act(() => root.render(<StructuredLogLine content={JSON.stringify({ msg: message, number: -12.5, ready: true, empty: null, html: '<script>unsafe</script>' })} level="info" wordWrap defaultExpanded onFilterValue={filter} />))
+    const buttons = [...host.querySelectorAll('button')]
+    for (const value of [message, '-12.5', 'true', '<script>unsafe</script>']) {
+      const button = buttons.find((button) => button.getAttribute('aria-label') === `Filter to lines containing ${value}`)
+      expect(button).toBeDefined()
+      act(() => button!.click())
+      expect(filter).toHaveBeenLastCalledWith(value)
+    }
+    expect(host.querySelector('script')).toBeNull()
+    expect(buttons.some((button) => button.getAttribute('aria-label') === 'Filter to lines containing null')).toBe(false)
+  } finally {
+    act(() => root.unmount())
+  }
 })

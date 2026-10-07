@@ -2,7 +2,6 @@ package server
 
 import (
 	"net/http"
-	"strings"
 
 	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
 )
@@ -16,12 +15,7 @@ func (s *Server) handleCNPGOperatorStatus(w http.ResponseWriter, r *http.Request
 		return
 	}
 	resp := cnpgsvc.CNPGOperatorStatusResponse{Namespaces: map[string]cnpgsvc.CNPGOperatorVerdict{}}
-	var wanted []string
-	for _, ns := range strings.Split(r.URL.Query().Get("namespaces"), ",") {
-		if ns = strings.TrimSpace(ns); ns != "" {
-			wanted = append(wanted, ns)
-		}
-	}
+	wanted := parseNamespaces(r.URL.Query())
 	if len(wanted) == 0 {
 		s.writeJSON(w, resp)
 		return

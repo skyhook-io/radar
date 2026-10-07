@@ -45,6 +45,20 @@ export function CNPGOperationTracker({ namespace, name, uid }: { namespace: stri
   const following = active.length > 0
   const needsRuntime = active.some((o) => ['switchover', 'unfence', 'restart', 'restartInstance'].includes(o.kind))
 
+  useEffect(() => {
+    if (!uid) return
+    updateCNPGOperations((all) => {
+      let changed = false
+      const next = all.map((op) => {
+        if (op.namespace !== namespace || op.cluster !== name || op.context !== context || !op.clusterUID || op.clusterUID === uid || !cnpgOperationFollowed(op))
+          return op
+        changed = true
+        return advanceCNPGOperation(op, { now: Date.now(), clusterUID: uid })
+      })
+      return changed ? next : all
+    })
+  }, [namespace, name, context, uid])
+
   const queryClient = useQueryClient()
   const caps = useCNPGClusterCapabilities(namespace, name, following)
   const ha = useCNPGClusterHA(namespace, name, { enabled: following, refetchInterval: following ? POLL_MS : false })

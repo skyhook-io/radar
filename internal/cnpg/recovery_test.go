@@ -309,10 +309,24 @@ func TestCNPGReportBundle(t *testing.T) {
 	cluster := cnpgActionCluster(nil)
 	pod := cnpgActionPod("pg-1", "pod-1", true)
 	pod.Spec = corev1.PodSpec{
-		Containers: []corev1.Container{{Name: "postgres", Env: []corev1.EnvVar{{Name: "DB_PASSWORD", Value: "hunter2"}, {Name: "PGDATA", Value: "/var/lib"}}}},
+		Containers: []corev1.Container{{Name: "postgres", Command: []string{"postgres"}, Args: []string{"postgresql://app:pod-password@db/pg"}, Env: []corev1.EnvVar{{Name: "DB_PASSWORD", Value: "hunter2"}, {Name: "PGDATA", Value: "/var/lib"}}}},
 		Volumes:    []corev1.Volume{{Name: "su", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "pg-superuser"}}}},
 	}
+	podSpecCopy, err := json.Marshal(pod.Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pod.Annotations = map[string]string{"cnpg.io/podSpec": string(podSpecCopy), "kubectl.kubernetes.io/last-applied-configuration": string(podSpecCopy), "cnpg.io/instanceRole": "primary"}
 	env := newCNPGActionEnv(t, []runtime.Object{cluster}, pod)
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "pg-init", Namespace: cluster.GetNamespace(), Labels: map[string]string{clusterLabel: cluster.GetName()}, OwnerReferences: []metav1.OwnerReference{{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: cluster.GetName(), UID: cluster.GetUID(), Controller: boolPtr(true)}}}, Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "init", Command: []string{"psql", "postgresql://app:job-password@db/pg"}}}}}}}
+	job.Spec.Template.Annotations = pod.Annotations
+	if _, err := env.typed.BatchV1().Jobs(job.Namespace).Create(context.Background(), job, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	event := &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "pg-failed", Namespace: cluster.GetNamespace()}, InvolvedObject: corev1.ObjectReference{Kind: "Cluster", Name: cluster.GetName(), UID: cluster.GetUID()}, Message: "failed connecting to postgresql://app:event-password@db/pg"}
+	if _, err := env.typed.CoreV1().Events(event.Namespace).Create(context.Background(), event, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
 	var buf bytes.Buffer
 	z := &reportZip{zw: zip.NewWriter(&buf), root: "r", limit: reportTotalCap}
 	index := CNPGReportIndex{}
@@ -340,6 +354,18 @@ func TestCNPGReportBundle(t *testing.T) {
 	}
 	if strings.Contains(files["r/manifests/cluster-pods.yaml"], "hunter2") || !strings.Contains(files["r/manifests/cluster-pods.yaml"], "/var/lib") {
 		t.Fatal("sensitive env values must be redacted, others kept")
+	}
+	for file, password := range map[string]string{"r/manifests/cluster-pods.yaml": "pod-password", "r/manifests/cluster-jobs.yaml": "job-password", "r/manifests/events.yaml": "event-password"} {
+		if files[file] == "" || strings.Contains(files[file], password) || !strings.Contains(files[file], "REDACTED") {
+			t.Errorf("inline password survived %s: %s", file, files[file])
+		}
+	}
+	if strings.Contains(files["r/manifests/cluster-pods.yaml"], "cnpg.io/podSpec") || !strings.Contains(files["r/manifests/cluster-pods.yaml"], "cnpg.io/instanceRole") {
+		t.Fatal("report must remove duplicate spec annotations while retaining diagnostic annotations")
+	}
+	sourcePod, err := env.typed.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+	if err != nil || sourcePod.Annotations["cnpg.io/podSpec"] != string(podSpecCopy) {
+		t.Fatalf("report changed source annotations: %v", err)
 	}
 	secrets := b.secretRefs()
 	if len(secrets) != 1 || secrets[0].Name != "pg-superuser" {
@@ -476,6 +502,44 @@ func TestCNPGReportPodEnvRedactsInlineCredentials(t *testing.T) {
 	}
 }
 
+func TestCNPGReportRedactsAllContainerKindsWithoutChangingSources(t *testing.T) {
+	original := corev1.PodSpec{
+		InitContainers:      []corev1.Container{{Name: "init", Command: []string{"sh", "-c", "PGPASSWORD=init-secret psql"}}},
+		Containers:          []corev1.Container{{Name: "postgres", Args: []string{"postgresql://app:container-secret@db/pg", "--port=5432"}, ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"psql", "postgresql://app:probe-secret@db/pg"}}}}, Lifecycle: &corev1.Lifecycle{PreStop: &corev1.LifecycleHandler{Exec: &corev1.ExecAction{Command: []string{"sh", "-c", "PGPASSWORD=stop-secret psql"}}}}}},
+		EphemeralContainers: []corev1.EphemeralContainer{{EphemeralContainerCommon: corev1.EphemeralContainerCommon{Name: "debug", Command: []string{"psql"}, Args: []string{"postgresql://app:debug-secret@db/pg"}, Env: []corev1.EnvVar{{Name: "DB_PASSWORD", Value: "env-secret"}, {Name: "FROM_SECRET", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "debug-credentials"}, Key: "password"}}}}}}},
+	}
+	clean := original.DeepCopy()
+	cnpgReportCleanPodSpec(clean)
+	data, err := json.Marshal(clean)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"init-secret", "container-secret", "probe-secret", "stop-secret", "debug-secret", "env-secret"} {
+		if strings.Contains(string(data), secret) {
+			t.Errorf("report exposed %s: %s", secret, data)
+		}
+	}
+	for _, kept := range []string{"sh", "psql", "--port=5432", "debug-credentials"} {
+		if !strings.Contains(string(data), kept) {
+			t.Errorf("report lost %s", kept)
+		}
+	}
+	source, _ := json.Marshal(original)
+	if !strings.Contains(string(source), "debug-secret") || !strings.Contains(string(source), "env-secret") {
+		t.Fatal("report changed source container values")
+	}
+	obj := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": []any{map[string]any{"name": "pooler", "command": []any{"psql", "postgresql://app:template-secret@db/pg"}, "args": []any{"--port=5432"}}}}}}}}
+	template := obj.Object["spec"].(map[string]any)["template"].(map[string]any)
+	template["metadata"] = map[string]any{"annotations": map[string]any{"cnpg.io/podSpec": "template-secret", "kubectl.kubernetes.io/last-applied-configuration": "template-secret", "cnpg.io/instanceRole": "primary"}}
+	manifest, _ := json.Marshal(cnpgReportCleanObject(obj))
+	if strings.Contains(string(manifest), "template-secret") || !strings.Contains(string(manifest), "--port=5432") || !strings.Contains(string(manifest), "cnpg.io/instanceRole") {
+		t.Fatalf("template command redaction: %s", manifest)
+	}
+	if template["metadata"].(map[string]any)["annotations"].(map[string]any)["cnpg.io/podSpec"] != "template-secret" {
+		t.Fatal("report changed source template annotations")
+	}
+}
+
 func TestCNPGReportEnvRedactsKeywordAndQueryPasswords(t *testing.T) {
 	for _, value := range []string{"password=abc123", "host=db password = longsecret", "password = 'a b'", "postgresql://db/pg?password=x&sslmode=require", "postgresql://db/pg?pass%77ord=x", `{"password":"short"}`, "sslpassword: short", "PGPASSWORD=abc psql -h db", "DB_PASSWORD: x"} {
 		t.Run(value, func(t *testing.T) {
@@ -485,7 +549,7 @@ func TestCNPGReportEnvRedactsKeywordAndQueryPasswords(t *testing.T) {
 				t.Fatalf("manifest env leaked: %v", out)
 			}
 			containers := []corev1.Container{{Env: []corev1.EnvVar{{Name: "OPTIONS", Value: value}}}}
-			cnpgReportCleanContainers(containers)
+			cnpgReportCleanPodSpec(&corev1.PodSpec{Containers: containers})
 			if containers[0].Env[0].Value != cnpgReportRedacted {
 				t.Fatalf("Pod env leaked: %v", containers[0].Env[0])
 			}

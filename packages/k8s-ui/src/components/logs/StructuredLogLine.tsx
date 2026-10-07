@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { ChevronRight, ChevronDown, Filter } from 'lucide-react'
 import type { LogLevel } from './useLogBuffer'
 import { selectLevelField } from '../../utils/log-level'
-import { unescapeJsonStrings, parseLogfmt } from '../../utils/log-format'
+import { unescapeJsonStrings, parseLogfmt, tokenizeJson } from '../../utils/log-format'
 import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
 
 interface StructuredLogLineProps {
@@ -129,41 +129,32 @@ function FilterableValue({
  * and emits React nodes so the hover chip can be wired per value.
  */
 function JsonExpanded({ text, onFilterValue, palette }: { text: string; onFilterValue?: (v: string) => void; palette: LogPalette }) {
-  const tokenRe = /("(?:\\.|[^"\\])*")\s*:|("(?:\\.|[^"\\])*")|(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)|\b(true|false)\b|\b(null)\b/g
   const nodes: React.ReactNode[] = []
-  let lastIndex = 0
-  let match: RegExpExecArray | null
   let idx = 0
-  while ((match = tokenRe.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      nodes.push(<span key={`t${idx++}`}>{text.slice(lastIndex, match.index)}</span>)
-    }
-    const [, key, str, num, bool, nil] = match
-    if (key !== undefined) {
-      nodes.push(<span key={`k${idx++}`} style={{ color: palette.syntaxKey }}>{key}</span>)
+  for (const { type, value } of tokenizeJson(text)) {
+    if (type === 'key') {
+      nodes.push(<span key={`k${idx++}`} style={{ color: palette.syntaxKey }}>{value}</span>)
       nodes.push(<span key={`c${idx++}`}>:</span>)
-    } else if (str !== undefined) {
+    } else if (type === 'string') {
       // Unescape the quoted string for the filter value (users expect to filter on
       // the displayed string, not JSON-escaped bytes).
-      const inner = str.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+      const inner = value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\')
       nodes.push(
         <FilterableValue key={`s${idx++}`} value={inner} onFilter={onFilterValue} color={palette.syntaxString} palette={palette} />
       )
-    } else if (num !== undefined) {
+    } else if (type === 'number') {
       nodes.push(
-        <FilterableValue key={`n${idx++}`} value={num} onFilter={onFilterValue} color={palette.syntaxNumber} palette={palette} />
+        <FilterableValue key={`n${idx++}`} value={value} onFilter={onFilterValue} color={palette.syntaxNumber} palette={palette} />
       )
-    } else if (bool !== undefined) {
+    } else if (type === 'boolean') {
       nodes.push(
-        <FilterableValue key={`b${idx++}`} value={bool} onFilter={onFilterValue} color={palette.syntaxBoolean} palette={palette} />
+        <FilterableValue key={`b${idx++}`} value={value} onFilter={onFilterValue} color={palette.syntaxBoolean} palette={palette} />
       )
-    } else if (nil !== undefined) {
-      nodes.push(<span key={`z${idx++}`} style={{ color: palette.syntaxNull }}>{nil}</span>)
+    } else if (type === 'null') {
+      nodes.push(<span key={`z${idx++}`} style={{ color: palette.syntaxNull }}>{value}</span>)
+    } else {
+      nodes.push(<span key={`t${idx++}`}>{value}</span>)
     }
-    lastIndex = tokenRe.lastIndex
-  }
-  if (lastIndex < text.length) {
-    nodes.push(<span key={`t${idx++}`}>{text.slice(lastIndex)}</span>)
   }
   return <>{nodes}</>
 }

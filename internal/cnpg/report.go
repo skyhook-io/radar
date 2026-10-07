@@ -177,7 +177,8 @@ func (b *cnpgReportBuilder) build(opts ReportOptions) {
 		if controlledBy(j.OwnerReferences, Group, "Cluster", name, b.cluster.GetUID()) {
 			ownedJobs[j.Name] = true
 			cnpgReportCleanPodSpec(&j.Spec.Template.Spec)
-			j.ManagedFields = nil
+			cnpgReportCleanMetadata(&j)
+			cnpgReportCleanMetadata(&j.Spec.Template.ObjectMeta)
 			keptJobs = append(keptJobs, j)
 		}
 	}
@@ -203,7 +204,7 @@ func (b *cnpgReportBuilder) build(opts ReportOptions) {
 			b.addSecret(sref, "Pod/"+p.Name)
 		}
 		cnpgReportCleanPodSpec(&p.Spec)
-		p.ManagedFields = nil
+		cnpgReportCleanMetadata(&p)
 		keptPods = append(keptPods, p)
 	}
 
@@ -234,7 +235,7 @@ func (b *cnpgReportBuilder) build(opts ReportOptions) {
 		var kept []corev1.PersistentVolumeClaim
 		for _, c := range pvcs {
 			if cnpgOwnedBy(&c, b.cluster) {
-				c.ManagedFields = nil
+				cnpgReportCleanMetadata(&c)
 				kept = append(kept, c)
 			}
 		}
@@ -302,7 +303,8 @@ func (b *cnpgReportBuilder) build(opts ReportOptions) {
 		var kept []corev1.Event
 		for _, e := range events {
 			if subjects[e.InvolvedObject.Kind+"/"+e.InvolvedObject.Name] {
-				e.ManagedFields = nil
+				cnpgReportCleanMetadata(&e)
+				e.Message = cnpgReportInlineValue("", e.Message)
 				kept = append(kept, e)
 			}
 		}
@@ -592,10 +594,20 @@ func cnpgRedactQueryText(body string) string {
 // and is always withheld, independently of the log query-text option.
 func cnpgReportCleanObject(obj *unstructured.Unstructured) *unstructured.Unstructured {
 	clean := obj.DeepCopy()
-	unstructured.RemoveNestedField(clean.Object, "metadata", "managedFields")
-	unstructured.RemoveNestedField(clean.Object, "metadata", "annotations", "kubectl.kubernetes.io/last-applied-configuration")
+	cnpgReportCleanMetadata(clean)
 	cnpgReportRedactManifest(clean.Object)
 	return clean
+}
+
+func cnpgReportCleanMetadata(obj metav1.Object) {
+	obj.SetManagedFields(nil)
+	annotations := obj.GetAnnotations()
+	// Serialized spec copies bypass the field-level credential redaction.
+	delete(annotations, "cnpg.io/podSpec")
+	delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
+	if annotations != nil {
+		obj.SetAnnotations(annotations)
+	}
 }
 
 func cnpgReportRedactManifest(v any) {
@@ -603,6 +615,10 @@ func cnpgReportRedactManifest(v any) {
 	case map[string]any:
 		for k, child := range t {
 			switch k {
+			case "metadata":
+				if metadata, ok := child.(map[string]any); ok {
+					cnpgReportCleanMetadata(&unstructured.Unstructured{Object: map[string]any{"metadata": metadata}})
+				}
 			case "postInitSQL", "postInitApplicationSQL", "postInitTemplateSQL":
 				if sql, ok := child.([]any); ok {
 					for i := range sql {
@@ -622,6 +638,14 @@ func cnpgReportRedactManifest(v any) {
 					aicontext.RedactInlineSecrets(params)
 				}
 			}
+			if list, ok := child.([]any); ok && (k == "command" || k == "args") {
+				for i, item := range list {
+					if value, ok := item.(string); ok {
+						list[i] = cnpgReportInlineValue("", value)
+					}
+				}
+				continue
+			}
 			if list, ok := child.([]any); ok && k == "env" {
 				for _, item := range list {
 					e, ok := item.(map[string]any)
@@ -630,7 +654,7 @@ func cnpgReportRedactManifest(v any) {
 					}
 					name, _ := e["name"].(string)
 					if val, ok := e["value"].(string); ok {
-						e["value"] = cnpgReportEnvValue(name, val)
+						e["value"] = cnpgReportInlineValue(name, val)
 					}
 				}
 				continue
@@ -644,7 +668,7 @@ func cnpgReportRedactManifest(v any) {
 	}
 }
 
-func cnpgReportEnvValue(name, value string) string {
+func cnpgReportInlineValue(name, value string) string {
 	decoded, err := url.QueryUnescape(value)
 	if value != "" && (aicontext.IsSensitiveEnvName(name) || cnpgReportEnvPassword.MatchString(value) || err == nil && cnpgReportEnvPassword.MatchString(decoded)) {
 		return cnpgReportRedacted
@@ -652,17 +676,43 @@ func cnpgReportEnvValue(name, value string) string {
 	return aicontext.RedactSecrets(value)
 }
 
-func cnpgReportCleanContainers(cs []corev1.Container) {
-	for i := range cs {
-		for j := range cs[i].Env {
-			cs[i].Env[j].Value = cnpgReportEnvValue(cs[i].Env[j].Name, cs[i].Env[j].Value)
-		}
+func cnpgReportCleanContainerValues(env []corev1.EnvVar, command, args []string) {
+	for i := range env {
+		env[i].Value = cnpgReportInlineValue(env[i].Name, env[i].Value)
+	}
+	for _, values := range [][]string{command, args} {
+		cnpgReportCleanCommand(values)
+	}
+}
+
+func cnpgReportCleanCommand(command []string) {
+	for i := range command {
+		command[i] = cnpgReportInlineValue("", command[i])
 	}
 }
 
 func cnpgReportCleanPodSpec(spec *corev1.PodSpec) {
-	cnpgReportCleanContainers(spec.InitContainers)
-	cnpgReportCleanContainers(spec.Containers)
+	for _, cs := range [][]corev1.Container{spec.InitContainers, spec.Containers} {
+		for i := range cs {
+			cnpgReportCleanContainerValues(cs[i].Env, cs[i].Command, cs[i].Args)
+			for _, probe := range []*corev1.Probe{cs[i].LivenessProbe, cs[i].ReadinessProbe, cs[i].StartupProbe} {
+				if probe != nil && probe.Exec != nil {
+					cnpgReportCleanCommand(probe.Exec.Command)
+				}
+			}
+			if cs[i].Lifecycle != nil {
+				for _, handler := range []*corev1.LifecycleHandler{cs[i].Lifecycle.PostStart, cs[i].Lifecycle.PreStop} {
+					if handler != nil && handler.Exec != nil {
+						cnpgReportCleanCommand(handler.Exec.Command)
+					}
+				}
+			}
+		}
+	}
+	for i := range spec.EphemeralContainers {
+		c := &spec.EphemeralContainers[i]
+		cnpgReportCleanContainerValues(c.Env, c.Command, c.Args)
+	}
 }
 
 func cnpgPodSecretNames(spec *corev1.PodSpec) []string {
