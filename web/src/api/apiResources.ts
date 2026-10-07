@@ -30,6 +30,20 @@ async function fetchJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   return response.json();
 }
 
+// Known GitOps navigation identities, not installation or CRD-existence evidence.
+export const GITOPS_KINDS: APIResource[] = [
+  { name: 'applications', kind: 'Application', group: 'argoproj.io', version: 'v1alpha1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
+  { name: 'applicationsets', kind: 'ApplicationSet', group: 'argoproj.io', version: 'v1alpha1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
+  { name: 'appprojects', kind: 'AppProject', group: 'argoproj.io', version: 'v1alpha1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
+  { name: 'kustomizations', kind: 'Kustomization', group: 'kustomize.toolkit.fluxcd.io', version: 'v1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
+  { name: 'helmreleases', kind: 'HelmRelease', group: 'helm.toolkit.fluxcd.io', version: 'v2', namespaced: true, verbs: ['list', 'get'], isCrd: true },
+  { name: 'gitrepositories', kind: 'GitRepository', group: 'source.toolkit.fluxcd.io', version: 'v1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
+  { name: 'ocirepositories', kind: 'OCIRepository', group: 'source.toolkit.fluxcd.io', version: 'v1beta2', namespaced: true, verbs: ['list', 'get'], isCrd: true },
+  { name: 'helmrepositories', kind: 'HelmRepository', group: 'source.toolkit.fluxcd.io', version: 'v1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
+  { name: 'alerts', kind: 'Alert', group: 'notification.toolkit.fluxcd.io', version: 'v1beta3', namespaced: true, verbs: ['list', 'get'], isCrd: true },
+]
+
+
 // Fetch all API resources from the cluster
 export function useAPIResources() {
   const result = useQuery<APIResource[]>({
@@ -38,7 +52,10 @@ export function useAPIResources() {
     staleTime: 5 * 60 * 1000, // 5 minutes - resources don't change often
   });
   useEffect(() => {
-    initNavigationMap(result.isError ? [] : result.data ?? []);
+    const actual = result.isError ? [] : result.data ?? [];
+    const knownOnly = GITOPS_KINDS.filter(known => !actual.some(resource =>
+      resource.group === known.group && (resource.kind === known.kind || resource.name === known.name)));
+    initNavigationMap([...actual, ...knownOnly]);
   }, [result.data, result.isError]);
   return result;
 }

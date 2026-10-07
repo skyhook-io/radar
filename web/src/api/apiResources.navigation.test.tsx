@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   customResourceDefinitionRef,
+  knownKindForPluralWithGroup,
   resetNavigationMap,
 } from "@skyhook-io/k8s-ui/utils/navigation";
 import { useAPIResources } from "./apiResources";
@@ -68,6 +69,12 @@ it("clears confirmed definitions after a failed refresh and cancels discovery fr
         customResourceDefinitionRef("plants.example.io/v1", "Cactus")?.name,
       ).toBe(resource.definitionName);
     });
+    expect(
+      knownKindForPluralWithGroup("helmreleases", "helm.toolkit.fluxcd.io"),
+    ).toBe("HelmRelease");
+    expect(
+      customResourceDefinitionRef("helm.toolkit.fluxcd.io/v2", "HelmRelease"),
+    ).toBeNull();
     fail = true;
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["api-resources"] });
@@ -78,6 +85,9 @@ it("clears confirmed definitions after a failed refresh and cancels discovery fr
         customResourceDefinitionRef("plants.example.io/v1", "Cactus"),
       ).toBeNull();
     });
+    expect(
+      knownKindForPluralWithGroup("helmreleases", "helm.toolkit.fluxcd.io"),
+    ).toBe("HelmRelease");
     fail = false;
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["api-resources"] });
