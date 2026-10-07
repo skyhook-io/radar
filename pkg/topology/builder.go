@@ -8837,6 +8837,14 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		}
 	}
 
+	type ownerPair struct{ source, target string }
+	existingOwnerEdges := make(map[ownerPair]bool)
+	for _, edge := range edges {
+		if edge.Type == EdgeManages {
+			existingOwnerEdges[ownerPair{edge.Source, edge.Target}] = true
+		}
+	}
+
 	processedTypes := make(map[string]bool)
 	for _, node := range nodes {
 		if node.Kind != KindNodeClass {
@@ -8858,6 +8866,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		ownerRefs   []ResourceRef
 		resourceKey string
 		typeKey     string
+		existing    bool
 	}
 	var candidates []candidate
 
@@ -8926,14 +8935,12 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 
 			name := resource.GetName()
 			resourceKey := resourceid.ResourceKey(gvr.Group, kind, ns, name)
-			if _, exists := existingResourceIDs[resourceKey]; exists {
-				continue
-			}
-			nodeID := fmt.Sprintf("%s/%s/%s/%s", strings.ToLower(kind), ns, name, gvr.Group)
-
-			// Skip if already in topology
-			if existingIDs[nodeID] {
-				continue
+			nodeID, existing := existingResourceIDs[resourceKey]
+			if !existing {
+				nodeID = fmt.Sprintf("%s/%s/%s/%s", strings.ToLower(kind), ns, name, gvr.Group)
+				if existingIDs[nodeID] {
+					continue
+				}
 			}
 
 			var ownerResources []ResourceRef
@@ -8964,6 +8971,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 				ownerRefs:   ownerResources,
 				resourceKey: resourceKey,
 				typeKey:     typeKey,
+				existing:    existing,
 			})
 		}
 	}
@@ -8973,7 +8981,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		added := 0
 		remaining := candidates[:0] // reuse slice
 		for _, c := range candidates {
-			if crdCounts[c.typeKey] >= maxPerKind {
+			if !c.existing && crdCounts[c.typeKey] >= maxPerKind {
 				continue // drop — kind at capacity
 			}
 
@@ -8994,11 +9002,19 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 			}
 
 			if len(ownerEdges) > 0 {
-				nodes = append(nodes, c.node)
-				edges = append(edges, ownerEdges...)
-				existingIDs[c.nodeID] = true
-				existingResourceIDs[c.resourceKey] = c.nodeID
-				crdCounts[c.typeKey]++
+				if !c.existing {
+					nodes = append(nodes, c.node)
+					existingIDs[c.nodeID] = true
+					existingResourceIDs[c.resourceKey] = c.nodeID
+					crdCounts[c.typeKey]++
+				}
+				for _, edge := range ownerEdges {
+					key := ownerPair{edge.Source, edge.Target}
+					if !existingOwnerEdges[key] {
+						edges = append(edges, edge)
+						existingOwnerEdges[key] = true
+					}
+				}
 				added++
 			} else {
 				remaining = append(remaining, c)
