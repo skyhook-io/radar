@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -159,34 +160,34 @@ func TestLookupAgentFollowsTheNativeInstallerSymlink(t *testing.T) {
 }
 
 // A CLI installed while Radar runs must become usable without a restart.
-func TestAddDetectedPicksUpACLIInstalledLater(t *testing.T) {
+func TestRefreshPicksUpACLIInstalledLater(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", "")
 	t.Setenv("RADAR_AI_CLI_BIN", "")
 
 	d := newDiagnoser(nil, nil)
-	for _, name := range d.AddDetected(context.Background()) {
+	for _, name := range d.Refresh(context.Background()) {
 		if name == "opencode" {
 			t.Skip("opencode is installed in a fixed system directory on this machine")
 		}
 	}
 	writeExecutable(t, filepath.Join(home, ".local", "bin"), "opencode")
 
-	added := d.AddDetected(context.Background())
+	added := d.Refresh(context.Background())
 	if len(added) != 1 || added[0] != "opencode" {
-		t.Fatalf("AddDetected = %v, want [opencode]", added)
+		t.Fatalf("Refresh = %v, want [opencode]", added)
 	}
 	if got := d.AgentName("opencode"); got != "opencode" {
 		t.Errorf("AgentName(opencode) = %q, want the new backend", got)
 	}
-	if again := d.AddDetected(context.Background()); len(again) != 0 {
-		t.Errorf("a second AddDetected re-added %v", again)
+	if again := d.Refresh(context.Background()); len(again) != 0 {
+		t.Errorf("a second Refresh re-added %v", again)
 	}
 }
 
 // RADAR_AI_CLI_BIN pins the backend set; detection must not widen it.
-func TestAddDetectedKeepsAnOverridePinned(t *testing.T) {
+func TestRefreshKeepsAnOverridePinned(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", "")
@@ -198,8 +199,8 @@ func TestAddDetectedKeepsAnOverridePinned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if added := d.AddDetected(context.Background()); len(added) != 0 {
-		t.Errorf("AddDetected = %v with RADAR_AI_CLI_BIN set, want nothing", added)
+	if added := d.Refresh(context.Background()); len(added) != 0 {
+		t.Errorf("Refresh = %v with RADAR_AI_CLI_BIN set, want nothing", added)
 	}
 }
 
@@ -276,7 +277,7 @@ func TestProbeVersionRunsAnAgentFoundOffPATH(t *testing.T) {
 
 // Claude Code's own migration from npm to its native installer moves the
 // binary. The engine must follow it rather than keep launching a removed file.
-func TestAddDetectedFollowsACLIThatMoved(t *testing.T) {
+func TestRefreshFollowsACLIThatMoved(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("RADAR_AI_CLI_BIN", "")
@@ -290,13 +291,52 @@ func TestAddDetectedFollowsACLIThatMoved(t *testing.T) {
 	}
 	moved := writeExecutable(t, filepath.Join(home, ".local", "bin"), "claude")
 
-	if changed := d.AddDetected(context.Background()); !slices.Contains(changed, "claude") {
-		t.Fatalf("AddDetected = %v, want claude re-pointed", changed)
+	if changed := d.Refresh(context.Background()); !slices.Contains(changed, "claude") {
+		t.Fatalf("Refresh = %v, want claude re-pointed", changed)
 	}
 	if got := d.resolveTurnAgent("claude").Path(); got != moved {
 		t.Errorf("claude runs %q, want the new install %q", got, moved)
 	}
-	if again := d.AddDetected(context.Background()); slices.Contains(again, "claude") {
-		t.Errorf("a second AddDetected re-pointed claude again: %v", again)
+	if again := d.Refresh(context.Background()); slices.Contains(again, "claude") {
+		t.Errorf("a second Refresh re-pointed claude again: %v", again)
+	}
+}
+
+// A CLI uninstalled while Radar runs must stop being offered.
+func TestRefreshDropsACLIThatWasRemoved(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("RADAR_AI_CLI_BIN", "")
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	gone := writeExecutable(t, dir, "codex")
+	d := newDiagnoser([]Agent{resolveAgent(gone)}, nil)
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+
+	d.Refresh(context.Background())
+
+	// A codex in a fixed system folder on this machine may replace it; the
+	// removed file must not survive either way.
+	if a := d.resolveTurnAgent("codex"); a != nil && a.Path() == gone {
+		t.Errorf("runs would still launch the removed %s", gone)
+	}
+	for _, info := range d.AgentInfos(context.Background(), false) {
+		if info.Path == gone {
+			t.Errorf("the removed CLI is still reported: %+v", info)
+		}
+	}
+}
+
+// A follow-up carries its agent's session; another agent can't resume it, so a
+// removed agent must fail the turn rather than fall back to the default.
+func TestFollowUpForARemovedAgentFailsInsteadOfSwitchingAgent(t *testing.T) {
+	d := newDiagnoser([]Agent{&claudeAgent{bin: "/bin/true"}}, nil)
+	_, err := d.DiagnoseStream(context.Background(), Request{MCPAddress: "127.0.0.1:1", Agent: "codex"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "Codex is no longer installed") {
+		t.Fatalf("err = %v, want the removed agent named", err)
+	}
+	if got := d.resolveTurnAgent(""); got == nil || got.Name() != "claude" {
+		t.Errorf("an unnamed turn should still use the default, got %v", got)
 	}
 }

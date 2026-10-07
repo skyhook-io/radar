@@ -299,6 +299,9 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
 	}
+	// Use the CLI installed now, not one that moved or went away since the
+	// agent list was last fetched.
+	s.refreshAIEngine(r.Context())
 	runs, ok := s.aiReady(w)
 	if !ok {
 		return
@@ -335,6 +338,10 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	}
 	kind, group = canonicalDiagnoseTarget(r.Context(), kind, group, namespace, name)
 	agent := runs.AgentName(strings.TrimSpace(body.Agent))
+	if agent == "" {
+		s.writeError(w, http.StatusNotImplemented, "no agent CLI available: the one Radar was using is no longer installed")
+		return
+	}
 	profile := ai.ExecutionProfile(strings.TrimSpace(body.Profile))
 	if profile == "" {
 		profile = ai.DefaultProfileFor(agent)
@@ -437,6 +444,9 @@ func (s *Server) handleDiagnoseTurn(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
 	}
+	// Use the CLI installed now, not one that moved or went away since the
+	// agent list was last fetched.
+	s.refreshAIEngine(r.Context())
 	runs, ok := s.aiReady(w)
 	if !ok {
 		return

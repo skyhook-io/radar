@@ -260,7 +260,7 @@ func ResolveCLI() string {
 // Diagnoser drives one or more resolved agent CLIs via Agent backends (Claude,
 // Codex, …). A run picks a backend by name; defName is used when none is given.
 type Diagnoser struct {
-	// mu guards agents and defName: AddDetected grows the set while runs read it.
+	// mu guards agents and defName: Refresh changes the set while runs read it.
 	mu           sync.RWMutex
 	agents       map[string]Agent
 	defName      string
@@ -309,37 +309,51 @@ func NewDetected(ctx context.Context, evidenceRefs *investigationrefs.Registry) 
 	return newDiagnoser(backends, evidenceRefs), nil
 }
 
-// AddDetected brings the backend set up to date with what is installed now: it
-// adds every supported agent CLI installed since this Diagnoser was built, and
-// re-points one that moved (Claude Code's switch from npm to its native
-// installer replaces the path the engine started with). A CLI installed or moved
-// while Radar runs is then usable without a restart. Runs already in flight keep
-// the backend they started with. The default backend does not change. A
+// Refresh brings the backend set in line with what is installed now: it adds a
+// supported agent CLI installed since the last refresh, re-points one that moved
+// (Claude Code's switch from npm to its native installer replaces the path), and
+// drops one that is gone. A CLI installed, moved or removed while Radar runs is
+// then reflected without a restart. Runs already in flight keep the backend they
+// started with. The default backend changes only if it was removed. A
 // RADAR_AI_CLI_BIN override pins the backend set, so it changes nothing then.
-// Returns the names it added or re-pointed.
-func (d *Diagnoser) AddDetected(ctx context.Context) []string {
+// Returns the names it added, re-pointed or dropped.
+func (d *Diagnoser) Refresh(ctx context.Context) []string {
 	if strings.TrimSpace(os.Getenv("RADAR_AI_CLI_BIN")) != "" {
 		return nil
 	}
-	detected := DetectAgents(ctx, false)
+	detected := map[string]string{}
+	for _, info := range DetectAgents(ctx, false) {
+		if info.Supported {
+			detected[info.Name] = info.Path
+		}
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.agents == nil {
+		d.agents = map[string]Agent{}
+	}
 	var changed []string
-	for _, info := range detected {
-		if !info.Supported {
+	for _, name := range agentCLICandidates {
+		path, installed := detected[name]
+		current, have := d.agents[name]
+		switch {
+		case installed && (!have || current.Path() != path):
+			d.agents[name] = resolveAgent(path)
+		case !installed && have:
+			delete(d.agents, name)
+		default:
 			continue
 		}
-		if current, ok := d.agents[info.Name]; ok && current.Path() == info.Path {
-			continue
+		changed = append(changed, name)
+	}
+	if _, ok := d.agents[d.defName]; !ok {
+		d.defName = ""
+		for _, name := range agentCLICandidates {
+			if _, ok := d.agents[name]; ok {
+				d.defName = name
+				break
+			}
 		}
-		if d.agents == nil {
-			d.agents = map[string]Agent{}
-		}
-		d.agents[info.Name] = resolveAgent(info.Path)
-		if d.defName == "" {
-			d.defName = info.Name
-		}
-		changed = append(changed, info.Name)
 	}
 	return changed
 }
@@ -389,14 +403,16 @@ func (d *Diagnoser) AgentName(name string) string {
 	return d.defName
 }
 
-// resolveTurnAgent picks the backend for a turn: the named one, else the default.
+// resolveTurnAgent picks the backend for a turn: the named one, or the default
+// when none is named. A named backend that isn't installed any more yields nil:
+// a follow-up carries that agent's session, which another agent can't resume.
 func (d *Diagnoser) resolveTurnAgent(name string) Agent {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	if a, ok := d.agents[name]; ok {
-		return a
+	if name == "" {
+		return d.agents[d.defName]
 	}
-	return d.agents[d.defName]
+	return d.agents[name]
 }
 
 func maxTurns() int {
@@ -418,6 +434,9 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 		return Diagnosis{}, errors.New("ai: MCP address not set")
 	}
 	agent := d.resolveTurnAgent(req.Agent)
+	if agent == nil && req.Agent != "" {
+		return Diagnosis{}, fmt.Errorf("ai: %s is no longer installed, so this investigation can't continue", AgentLabel(req.Agent))
+	}
 	if agent == nil {
 		return Diagnosis{}, ErrNoCLI
 	}

@@ -33,11 +33,12 @@ func (s *Server) aiDeploymentSupported() bool {
 		s.mcpInvestigationHandler != nil && s.aiInvestigationRefs != nil
 }
 
-// refreshAIEngine picks up agent CLIs installed since the last check: it turns
-// the engine on when the first one appears, and adds new ones to a running
-// engine. Called at startup and whenever a client asks which agents exist, so
-// installing a CLI never needs a Radar restart. Detection only resolves paths;
-// it runs nothing.
+// refreshAIEngine brings the engine in line with the agent CLIs installed now:
+// it turns the engine on when the first one appears, and keeps a running
+// engine's backends current (Diagnoser.Refresh). Called at startup, whenever a
+// client asks which agents exist, and before a run or follow-up starts, so
+// installing, moving or removing a CLI never needs a Radar restart. Detection
+// only resolves paths; it runs nothing.
 func (s *Server) refreshAIEngine(ctx context.Context) {
 	if !s.aiDeploymentSupported() {
 		return
@@ -46,8 +47,9 @@ func (s *Server) refreshAIEngine(ctx context.Context) {
 	defer s.aiMu.Unlock()
 	defer func() { s.aiChecked = true }()
 	if s.aiDiagnoser != nil {
-		if changed := s.aiDiagnoser.AddDetected(ctx); len(changed) > 0 {
-			log.Printf("[ai] agent CLIs installed or moved since startup, now in use: %v", changed)
+		if changed := s.aiDiagnoser.Refresh(ctx); len(changed) > 0 {
+			log.Printf("[ai] agent CLIs installed, moved or removed since startup: %v (default now %q)",
+				changed, s.aiDiagnoser.DefaultAgent())
 		}
 		return
 	}
