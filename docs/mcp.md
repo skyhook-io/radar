@@ -493,6 +493,17 @@ This selects the Argo Rollout workload path; it does not imply that `diagnose` s
 
 For `issues`, read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
 
+Resource context's `uses` includes declared PodSpec references from regular,
+init and ephemeral containers, projected volumes, image-pull credentials and
+volume-driver credentials. `referencedBy` on core ConfigMaps, Secrets, PVCs and
+ServiceAccounts includes both workload templates and actual Pods, including
+controlled Pods whose admitted spec may differ from the current template.
+ReplicaSet templates remain separate evidence. References are scoped and
+permission-filtered, with field paths and a bounded visible-only count; they
+describe declarations rather than proving a successful mount or active read.
+Capped results round-robin readable resource kinds, preserving examples of
+workload templates, revision templates and admitted Pods even with many replicas.
+
 ### Write Tools
 
 | Tool | Description | Parameters |
