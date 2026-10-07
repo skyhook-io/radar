@@ -59,7 +59,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       {
         id: 'per-cluster-settings',
         icon: SlidersHorizontal,
-        title: 'Integration settings per cluster',
+        title: 'Per-cluster integration settings for local Radar',
         description: 'Running Radar locally, each kubeconfig context keeps its own Metrics, Argo CD and Cost connections.',
         importance: 4,
       },
@@ -69,7 +69,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
       'Live Traffic figures corrected for Cilium and Istio',
       'A restart loop stays one issue instead of flapping',
       'Terminal tabs show and keep the context they opened for',
-      'YAML review says when the resource changed since',
+      'YAML review flags a resource that changed after review',
       'Helm chart meets the Pod Security restricted profile',
       'Helm chart extraArgs passes through any Radar flag',
     ],
