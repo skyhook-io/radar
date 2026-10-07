@@ -44,24 +44,16 @@ var shellEnvPrefixes = []string{
 // shell so the desktop app can find CLI tools and config files that are
 // set in .zshrc/.bashrc but not available to macOS .app bundles or
 // Linux desktop applications.
+//
+// Windows is skipped: apps started from the shell there already get the
+// user's full PATH, and there is no login shell to ask.
 func enrichEnv() {
+	if runtime.GOOS == "windows" {
+		return
+	}
 	originalKubeconfig := os.Getenv("KUBECONFIG")
 	captured := getShellEnv(shellEnvVars, shellEnvPrefixes)
-
-	if path, ok := captured["PATH"]; ok && path != "" {
-		os.Setenv("PATH", path)
-		log.Printf("PATH enriched from login shell (%d entries)", len(strings.Split(path, ":")))
-	} else {
-		// Fallback: append common tool locations
-		current := os.Getenv("PATH")
-		extras := commonPaths()
-		if len(extras) > 0 {
-			os.Setenv("PATH", current+":"+strings.Join(extras, ":"))
-			log.Printf("PATH enriched with %d common paths (shell detection failed)", len(extras))
-		} else {
-			log.Printf("PATH enrichment: no additional paths found; auth plugins like gke-gcloud-auth-plugin may not be found")
-		}
-	}
+	enrichPath(captured["PATH"])
 
 	for key, val := range captured {
 		if key == "PATH" {
@@ -212,14 +204,66 @@ func commonPaths() []string {
 	}
 
 	var existing []string
-	current := os.Getenv("PATH")
 	for _, p := range candidates {
-		if strings.Contains(current, p) {
-			continue
-		}
 		if info, err := os.Stat(p); err == nil && info.IsDir() {
 			existing = append(existing, p)
 		}
 	}
 	return existing
+}
+
+// enrichPath sets PATH to the login shell's PATH, then any entries of the PATH
+// the app was launched with, then the common tool folders that exist. The
+// shell's order wins; the rest only fill gaps. Adding the common folders even
+// when the shell answered is deliberate: a login shell can answer without a
+// folder the user's terminal has (an rc file that sets PATH under a condition
+// the probe doesn't meet), and a missing ~/.local/bin hides both agent CLIs and
+// kubectl auth plugins.
+func enrichPath(shellPath string) {
+	launch := filepath.SplitList(os.Getenv("PATH"))
+	common := commonPaths()
+	if shellPath == "" {
+		merged, added := mergePathLists(launch, common)
+		os.Setenv("PATH", strings.Join(merged, string(os.PathListSeparator)))
+		if len(added) == 0 {
+			log.Printf("PATH enrichment: shell detection failed and no common tool folders were found; auth plugins like gke-gcloud-auth-plugin may not be found")
+			return
+		}
+		log.Printf("PATH enriched with %d common tool folders (shell detection failed): %s",
+			len(added), strings.Join(added, ", "))
+		return
+	}
+	shell := filepath.SplitList(shellPath)
+	merged, added := mergePathLists(shell, launch, common)
+	os.Setenv("PATH", strings.Join(merged, string(os.PathListSeparator)))
+	if len(added) == 0 {
+		log.Printf("PATH from login shell (%d entries)", len(shell))
+		return
+	}
+	log.Printf("PATH from login shell (%d entries), plus %d it didn't have: %s",
+		len(shell), len(added), strings.Join(added, ", "))
+}
+
+// mergePathLists joins PATH lists in order, keeping the first occurrence of each
+// directory and dropping empty entries (an empty entry means the current
+// directory). It also returns the entries that came from lists after the first.
+func mergePathLists(lists ...[]string) (merged, added []string) {
+	seen := map[string]bool{}
+	for i, list := range lists {
+		for _, dir := range list {
+			if dir == "" {
+				continue
+			}
+			key := filepath.Clean(dir)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			merged = append(merged, dir)
+			if i > 0 {
+				added = append(added, dir)
+			}
+		}
+	}
+	return merged, added
 }
