@@ -46,8 +46,8 @@ func (s *Server) refreshAIEngine(ctx context.Context) {
 	defer s.aiMu.Unlock()
 	defer func() { s.aiChecked = true }()
 	if s.aiDiagnoser != nil {
-		if added := s.aiDiagnoser.AddDetected(ctx); len(added) > 0 {
-			log.Printf("[ai] agent CLI found since startup, now available: %v", added)
+		if changed := s.aiDiagnoser.AddDetected(ctx); len(changed) > 0 {
+			log.Printf("[ai] agent CLIs installed or moved since startup, now in use: %v", changed)
 		}
 		return
 	}

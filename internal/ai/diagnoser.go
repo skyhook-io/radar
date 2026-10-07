@@ -309,10 +309,14 @@ func NewDetected(ctx context.Context, evidenceRefs *investigationrefs.Registry) 
 	return newDiagnoser(backends, evidenceRefs), nil
 }
 
-// AddDetected adds every supported agent CLI installed since this Diagnoser was
-// built, so a CLI installed while Radar runs is usable without a restart. The
-// default backend does not change. A RADAR_AI_CLI_BIN override pins the backend
-// set, so it adds nothing then. Returns the names it added.
+// AddDetected brings the backend set up to date with what is installed now: it
+// adds every supported agent CLI installed since this Diagnoser was built, and
+// re-points one that moved (Claude Code's switch from npm to its native
+// installer replaces the path the engine started with). A CLI installed or moved
+// while Radar runs is then usable without a restart. Runs already in flight keep
+// the backend they started with. The default backend does not change. A
+// RADAR_AI_CLI_BIN override pins the backend set, so it changes nothing then.
+// Returns the names it added or re-pointed.
 func (d *Diagnoser) AddDetected(ctx context.Context) []string {
 	if strings.TrimSpace(os.Getenv("RADAR_AI_CLI_BIN")) != "" {
 		return nil
@@ -320,12 +324,12 @@ func (d *Diagnoser) AddDetected(ctx context.Context) []string {
 	detected := DetectAgents(ctx, false)
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	var added []string
+	var changed []string
 	for _, info := range detected {
 		if !info.Supported {
 			continue
 		}
-		if _, ok := d.agents[info.Name]; ok {
+		if current, ok := d.agents[info.Name]; ok && current.Path() == info.Path {
 			continue
 		}
 		if d.agents == nil {
@@ -335,9 +339,9 @@ func (d *Diagnoser) AddDetected(ctx context.Context) []string {
 		if d.defName == "" {
 			d.defName = info.Name
 		}
-		added = append(added, info.Name)
+		changed = append(changed, info.Name)
 	}
-	return added
+	return changed
 }
 
 // DefaultAgent is the backend chosen when a run doesn't name one.

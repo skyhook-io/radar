@@ -273,3 +273,30 @@ func TestProbeVersionRunsAnAgentFoundOffPATH(t *testing.T) {
 		t.Errorf("probeVersion = %q, want 2.1.0", got)
 	}
 }
+
+// Claude Code's own migration from npm to its native installer moves the
+// binary. The engine must follow it rather than keep launching a removed file.
+func TestAddDetectedFollowsACLIThatMoved(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("RADAR_AI_CLI_BIN", "")
+	oldDir := t.TempDir()
+	t.Setenv("PATH", oldDir)
+	old := writeExecutable(t, oldDir, "claude")
+	d := newDiagnoser([]Agent{resolveAgent(old)}, nil)
+
+	if err := os.Remove(old); err != nil {
+		t.Fatal(err)
+	}
+	moved := writeExecutable(t, filepath.Join(home, ".local", "bin"), "claude")
+
+	if changed := d.AddDetected(context.Background()); !slices.Contains(changed, "claude") {
+		t.Fatalf("AddDetected = %v, want claude re-pointed", changed)
+	}
+	if got := d.resolveTurnAgent("claude").Path(); got != moved {
+		t.Errorf("claude runs %q, want the new install %q", got, moved)
+	}
+	if again := d.AddDetected(context.Background()); slices.Contains(again, "claude") {
+		t.Errorf("a second AddDetected re-pointed claude again: %v", again)
+	}
+}
