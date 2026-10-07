@@ -10,6 +10,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { Relationships } from '../types'
 import { fetchGitOpsWriteEvidence, useResource, useRadarFeature } from '../api/client'
+import { getApiBase } from '../api/config'
 import { kindToPluralWithGroup } from '../utils/navigation'
 import { gitOpsOwnerKindRef, useResolvedGitOpsOwner, type ResolvedGitOpsOwner } from './useResolvedGitOpsOwner'
 
@@ -90,7 +91,8 @@ export function useGitOpsWriteGuard({
 
   const evidenceFeature = useRadarFeature('gitopsWriteEvidence')
   const evidenceQuery = useQuery({
-    queryKey: ['gitops-write-evidence', target.kind, target.group, target.namespace, target.name, paths, ownerRef, ...evidenceFeature.gatedKey],
+    // The API base identifies the cluster when a host switches it (Radar Hub).
+    queryKey: ['gitops-write-evidence', getApiBase(), target.kind, target.group, target.namespace, target.name, paths, ownerRef, ...evidenceFeature.gatedKey],
     queryFn: () =>
       evidenceFeature.guard(() =>
         fetchGitOpsWriteEvidence({
@@ -129,7 +131,10 @@ export function useGitOpsWriteGuard({
             // A refetch counts as pending: an earlier verdict may no longer hold.
             ownerPending: lookupPending || (canFetchEvidence && (evidenceQuery.isPending || evidenceQuery.isFetching)),
             ownershipError,
-            evidence: evidenceQuery.data,
+            ownerMatchedByName: ownership.ownerMatchedByName,
+            // After a failed refetch React Query keeps the earlier data; an
+            // exemption it carried may no longer hold.
+            evidence: evidenceQuery.isError ? undefined : evidenceQuery.data,
             evidenceError: evidenceQuery.error instanceof Error ? evidenceQuery.error.message : null,
             writes: JSON.parse(writesKey),
           })
@@ -152,6 +157,8 @@ export function useGitOpsWriteGuard({
       evidenceQuery.data,
       evidenceQuery.error,
       ownershipError,
+      ownership.ownerMatchedByName,
+      evidenceQuery.isError,
       writesKey,
     ],
   )

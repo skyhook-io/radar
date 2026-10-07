@@ -162,13 +162,25 @@ describe('evaluateGitOpsWriteGuard', () => {
       expect(g.perWrite[0].reason).toContain('jq')
     })
 
-    it('Flux ssa: IfNotPresent ⇒ info', () => {
+    // The annotation on the live object doesn't prove the source declares it.
+    it('Flux ssa: IfNotPresent on the live object ⇒ may-revert', () => {
       const g = guard({
         owner: kustomization,
         writes: [hibernate],
         evidence: evidence({ tool: 'fluxcd', auto: true, selfHeal: true, prune: true, suspended: false, objectReconcile: 'if-not-present' }, [pathEvidence({ lastApplied: 'present' })]),
       })
-      expect(g.level).toBe('info')
+      expect(g.level).toBe('may-revert')
+      expect(g.requiresAck).toBe(true)
+      expect(g.perWrite[0].reason).toContain("can't confirm the GitOps source declares it")
+    })
+
+    it('an owner matched by name only never waives the acknowledgment', () => {
+      const ignored = evidence({ ...selfHeal, respectIgnoreDifferences: true }, [pathEvidence({ lastApplied: 'present', ignored: 'effective', ignoredBy: 'spec.ignoreDifferences' })])
+      expect(guard({ writes: [hibernate], evidence: ignored }).level).toBe('info')
+      const byName = guard({ writes: [hibernate], evidence: ignored, ownerMatchedByName: true })
+      expect(byName.level).toBe('may-revert')
+      expect(byName.requiresAck).toBe(true)
+      expect(byName.perWrite[0].reason).toContain('by name only')
     })
   })
 

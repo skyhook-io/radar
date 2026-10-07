@@ -116,6 +116,9 @@ export interface GitOpsWriteGuardInput {
   ownerPending?: boolean
   /** The host could not determine ownership at all. */
   ownershipError?: string | null
+  /** The owner was matched by name only (an Argo CD tracking label without a
+   *  namespace), so its policy can't waive an acknowledgment. */
+  ownerMatchedByName?: boolean
   evidence?: GitOpsWriteEvidence | null
   /** The evidence request failed. */
   evidenceError?: string | null
@@ -281,8 +284,13 @@ function classifyPath(ctx: Context, path: string | null): Verdict {
   if (!helm && policy?.objectReconcile === 'ignore') {
     return { level: 'info', reason: `This object opts out of ${tool} reconciliation, so a sync is not expected to overwrite it.` }
   }
+  // Flux reads IfNotPresent from the desired manifest; the live annotation
+  // may have been added by hand or outlived a change in the source.
   if (policy?.objectReconcile === 'if-not-present') {
-    return { level: 'info', reason: `${tool} only creates this object when it's missing, so a sync is not expected to overwrite it.` }
+    return {
+      level: 'may-revert',
+      reason: `This object carries ${tool}'s IfNotPresent annotation, but Radar can't confirm the GitOps source declares it; if it doesn't, the next reconcile overwrites this change.`,
+    }
   }
   if (!helm && ev?.ignored === 'effective') {
     return {
@@ -440,7 +448,17 @@ export function evaluateGitOpsWriteGuard(input: GitOpsWriteGuardInput): GitOpsWr
   const ownershipError = owner || helmRelease ? null : (input.ownershipError ?? null)
   const normalized: GitOpsWriteGuardInput = { ...input, owner, helmRelease, ownershipError }
 
-  const perWrite = input.writes.map((write) => ({ write, ...classifyWrite(normalized, owner, write) }))
+  const perWrite = input.writes.map((write) => {
+    const verdict = classifyWrite(normalized, owner, write)
+    if (owner && input.ownerMatchedByName && verdict.level === 'info' && write.scope !== 'create-child') {
+      return {
+        write,
+        level: 'may-revert' as const,
+        reason: `${verdict.reason} Radar matched ${describeGitOpsOwner(owner)} by name only, so it can't confirm this.`,
+      }
+    }
+    return { write, ...verdict }
+  })
   const level = perWrite.reduce<GitOpsWriteLevel>((max, entry) => maxLevel(max, entry.level), 'none')
   const top = perWrite.find((entry) => entry.level === level)
   const summary = level === 'none' ? '' : [headline({ owner, helmRelease }, level), top?.reason ?? ''].filter(Boolean).join(' ')

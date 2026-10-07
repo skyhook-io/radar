@@ -162,3 +162,30 @@ it('treats a refetch of the evidence as pending', async () => {
     await h.cleanup()
   }
 })
+
+it('does not keep an exemption after a refetch fails', async () => {
+  const exempt = {
+    uid: 'u',
+    resourceVersion: '1',
+    owner: { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' },
+    policy: { tool: 'argocd', auto: true, selfHeal: true, prune: false, suspended: null, respectIgnoreDifferences: true },
+    paths: [{ path: 'spec.replicas', lastApplied: 'present', ownedBy: [], ownedByGitOps: false, ignored: 'effective', ignoredBy: 'spec.ignoreDifferences' }],
+  }
+  mocks.evidence.mockResolvedValueOnce(exempt).mockRejectedValueOnce(new Error('503 cache not ready'))
+  const h = await renderGuard({
+    target: deployment,
+    resource: {},
+    relationships: { managedBy: [{ kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }] },
+    writes: replicas,
+  })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(h.ref.state!.guard?.level).toBe('info')
+    await act(async () => { await h.queryClient.invalidateQueries({ queryKey: ['gitops-write-evidence'] }) })
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(h.ref.state!.guard?.level).toBe('may-revert')
+    expect(h.ref.state!.guard?.requiresAck).toBe(true)
+  } finally {
+    await h.cleanup()
+  }
+})

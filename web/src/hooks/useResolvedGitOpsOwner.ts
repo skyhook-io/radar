@@ -20,6 +20,9 @@ export interface ResolvedGitOpsOwner {
   ownerObject: any
   ownerPending: boolean
   ownerVerified: boolean
+  /** The Argo CD tracking label named no namespace and Radar filled it in
+   *  from a single Application of that name. */
+  ownerMatchedByName: boolean
   ownerStatus: GitOpsStatus | null
   /** The label/annotation that ties the object to its owner. */
   ownerSource: string | null
@@ -124,6 +127,7 @@ export function useResolvedGitOpsOwner({
     ownerObject,
     ownerPending: Boolean(shouldFetchOwner && ownerQuery.isLoading && !ownerQuery.data),
     ownerVerified: Boolean(shouldFetchOwner && ownerQuery.data),
+    ownerMatchedByName: Boolean(shouldResolveArgoNamespace && owner?.namespace),
     ownerStatus,
     ownerSource,
     helmOwner,

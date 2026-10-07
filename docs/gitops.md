@@ -266,7 +266,7 @@ Radar's caches strip `managedFields` and the last-applied annotation, so the bro
 
 - whether the path is in the last client-side apply (`present` / `absent` / `no-annotation`);
 - which field managers own it, and whether one is the owner's own controller (`approximate` when a manager owns only an ancestor or part of the path, e.g. one container's image under `containers[*]`);
-- whether an ignore rule covers it: `effective` (Argo `ignoreDifferences` with `RespectIgnoreDifferences`, Flux `driftDetection.ignore`, or a reconcile opt-out annotation), `comparison-only` (Argo without `RespectIgnoreDifferences`: self-heal won't react, the next sync overwrites), or `unevaluated` (a jq rule, or a `managedFieldsManagers` rule whose manager owns only part of the path);
+- whether an ignore rule covers it: `effective` (Argo `ignoreDifferences` with `RespectIgnoreDifferences`, Flux `driftDetection.ignore`, or a reconcile opt-out annotation; Flux's `ssa: IfNotPresent` is read from the live object, which doesn't prove the source declares it, so it stays **may revert**), `comparison-only` (Argo without `RespectIgnoreDifferences`: self-heal won't react, the next sync overwrites), or `unevaluated` (a jq rule, or a `managedFieldsManagers` rule whose manager owns only part of the path);
 - and the owner's sync policy (auto, self-heal, prune, suspended).
 
 It never returns managedFields or last-applied content, only these facts. Bodies are capped at 16 KiB (413) and at 64 paths; unknown fields are rejected (400). Kubernetes 403/404 pass through.
