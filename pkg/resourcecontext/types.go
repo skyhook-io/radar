@@ -117,8 +117,8 @@ type ResourceSummaryContext struct {
 	IssueCount int           `json:"issueCount,omitempty"`
 }
 
-// UsesBlock groups the namespaced configuration objects a workload reads
-// at runtime (env, mounts, identity).
+// UsesBlock groups declared configuration, volume, image-pull and identity
+// references from the workload PodSpec. It does not establish current usage.
 type UsesBlock struct {
 	ConfigMaps     []ContextRef `json:"configMaps,omitempty"`
 	Secrets        []ContextRef `json:"secrets,omitempty"`

@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -67,6 +68,7 @@ func (m mockServiceBackends) PodsForServiceSelector(namespace string, selector l
 type mockResourceProvider struct {
 	pods         []*corev1.Pod
 	deploys      []*appsv1.Deployment
+	replicaSets  []*appsv1.ReplicaSet
 	daemonSets   []*appsv1.DaemonSet
 	statefulSets []*appsv1.StatefulSet
 	jobs         []*batchv1.Job
@@ -81,7 +83,7 @@ func (m mockResourceProvider) DaemonSets() ([]*appsv1.DaemonSet, error)   { retu
 func (m mockResourceProvider) StatefulSets() ([]*appsv1.StatefulSet, error) {
 	return m.statefulSets, nil
 }
-func (m mockResourceProvider) ReplicaSets() ([]*appsv1.ReplicaSet, error)  { return nil, nil }
+func (m mockResourceProvider) ReplicaSets() ([]*appsv1.ReplicaSet, error)  { return m.replicaSets, nil }
 func (m mockResourceProvider) Jobs() ([]*batchv1.Job, error)               { return m.jobs, nil }
 func (m mockResourceProvider) CronJobs() ([]*batchv1.CronJob, error)       { return m.cronJobs, nil }
 func (m mockResourceProvider) Ingresses() ([]*networkingv1.Ingress, error) { return nil, nil }
@@ -1238,7 +1240,7 @@ func TestBuild_ConfigMapReferencedBy(t *testing.T) {
 	}
 }
 
-func TestBuild_SecretReferencedByCapsAndSkipsOwnedPods(t *testing.T) {
+func TestBuild_SecretReferencedByCapsIncludingOwnedPods(t *testing.T) {
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db-creds", Namespace: "prod"}}
 	deploys := make([]*appsv1.Deployment, 0, maxReferencedByItems+1)
 	for i := 0; i < maxReferencedByItems+1; i++ {
@@ -1288,7 +1290,7 @@ func TestBuild_SecretReferencedByCapsAndSkipsOwnedPods(t *testing.T) {
 	if rc.ReferencedBy == nil {
 		t.Fatal("ReferencedBy: got nil")
 	}
-	if got, want := rc.ReferencedBy.Total, maxReferencedByItems+1; got != want {
+	if got, want := rc.ReferencedBy.Total, maxReferencedByItems+2; got != want {
 		t.Fatalf("ReferencedBy.Total: got %d want %d", got, want)
 	}
 	if got, want := len(rc.ReferencedBy.Items), maxReferencedByItems; got != want {
@@ -1296,11 +1298,6 @@ func TestBuild_SecretReferencedByCapsAndSkipsOwnedPods(t *testing.T) {
 	}
 	if !rc.ReferencedBy.Truncated {
 		t.Fatal("ReferencedBy.Truncated: got false want true")
-	}
-	for _, ref := range rc.ReferencedBy.Items {
-		if ref.Kind == "Pod" {
-			t.Fatalf("owned pod should be skipped when controller workload is available: %+v", ref)
-		}
 	}
 }
 
@@ -1949,5 +1946,66 @@ func TestPodSpecReferencePathsContainerAndVolumeProvenance(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("reference paths = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuild_UsesDeclaredPodReferencesAcrossAllContainerAndVolumeSources(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "live", Namespace: "team"}, Spec: corev1.PodSpec{
+		ServiceAccountName: "runner",
+		ImagePullSecrets:   []corev1.LocalObjectReference{{Name: "registry"}},
+		EphemeralContainers: []corev1.EphemeralContainer{{EphemeralContainerCommon: corev1.EphemeralContainerCommon{
+			Name: "debug", EnvFrom: []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "debug-config"}}}},
+		}}},
+		Volumes: []corev1.Volume{
+			{Name: "driver", VolumeSource: corev1.VolumeSource{CSI: &corev1.CSIVolumeSource{Driver: "example.csi", NodePublishSecretRef: &corev1.LocalObjectReference{Name: "driver-credential"}}}},
+			{Name: "disk", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "data"}}},
+		},
+	}}
+	rc := Build(context.Background(), pod, Options{AccessChecker: allowAllChecker{}})
+	if rc.Uses == nil || len(rc.Uses.ConfigMaps) != 1 || rc.Uses.ConfigMaps[0].Name != "debug-config" || len(rc.Uses.Secrets) != 2 || len(rc.Uses.PVCs) != 1 || (rc.Uses.ServiceAccount == nil || rc.Uses.ServiceAccount.Name != "runner") {
+		t.Fatalf("declared Pod dependencies = %+v", rc.Uses)
+	}
+	denied := Build(context.Background(), pod, Options{AccessChecker: denyChecker{kind: "Secret", namespace: "team"}})
+	if denied.Uses == nil || len(denied.Uses.Secrets) != 0 || !hasOmitted(denied.Omitted, "uses.secrets") {
+		t.Fatalf("denied credential identities = %+v omitted=%+v", denied.Uses, denied.Omitted)
+	}
+}
+
+func TestBuild_ReverseReferencesRetainAdmittedPodsAndReplicaSetTemplates(t *testing.T) {
+	controller := true
+	makeSpec := func(name string) corev1.PodSpec {
+		return corev1.PodSpec{ServiceAccountName: "runner", Volumes: []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "data"}}}}, ImagePullSecrets: []corev1.LocalObjectReference{{Name: name}}}
+	}
+	provider := mockResourceProvider{
+		deploys:     []*appsv1.Deployment{{ObjectMeta: metav1.ObjectMeta{Name: "current-template", Namespace: "team"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: makeSpec("new-registry")}}}},
+		replicaSets: []*appsv1.ReplicaSet{{ObjectMeta: metav1.ObjectMeta{Name: "old-template", Namespace: "team"}, Spec: appsv1.ReplicaSetSpec{Template: corev1.PodTemplateSpec{Spec: makeSpec("old-registry")}}}},
+		pods:        []*corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "admitted", Namespace: "team", OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "old-template", Controller: &controller}}}, Spec: makeSpec("admitted-registry")}},
+	}
+	for _, test := range []struct {
+		obj       runtime.Object
+		wantKinds []string
+	}{
+		{&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "admitted-registry", Namespace: "team"}}, []string{"Pod"}},
+		{&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "old-registry", Namespace: "team"}}, []string{"ReplicaSet"}},
+		{&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "team"}}, []string{"Deployment", "Pod", "ReplicaSet"}},
+		{&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "runner", Namespace: "team"}}, []string{"Deployment", "Pod", "ReplicaSet"}},
+	} {
+		rc := Build(context.Background(), test.obj, Options{Provider: provider, AccessChecker: allowAllChecker{}})
+		if rc.ReferencedBy == nil || rc.ReferencedBy.Total != len(test.wantKinds) {
+			t.Fatalf("%T reverse references = %+v", test.obj, rc.ReferencedBy)
+		}
+		for i, want := range test.wantKinds {
+			if rc.ReferencedBy.Items[i].Kind != want || len(rc.ReferencedBy.Items[i].Paths) == 0 {
+				t.Fatalf("%T reference[%d] = %+v, want %s with paths", test.obj, i, rc.ReferencedBy.Items[i], want)
+			}
+		}
+	}
+	denied := Build(context.Background(), &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "runner", Namespace: "team"}}, Options{Provider: provider, AccessChecker: denyChecker{kind: "Pod", namespace: "team"}})
+	if denied.ReferencedBy == nil || denied.ReferencedBy.Total != 2 || len(denied.ReferencedBy.Items) != 2 || !hasOmitted(denied.Omitted, "referencedBy") {
+		t.Fatalf("visible-only identity consumer count = %+v omitted=%+v", denied.ReferencedBy, denied.Omitted)
+	}
+	custom := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.io/v1", "kind": "Secret", "metadata": map[string]any{"name": "admitted-registry", "namespace": "team"}}}
+	if rc := Build(context.Background(), custom, Options{Provider: provider}); rc.ReferencedBy != nil {
+		t.Fatalf("same-named custom resource joined to core Pod references: %+v", rc.ReferencedBy)
 	}
 }
