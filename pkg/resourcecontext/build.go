@@ -581,7 +581,11 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 	}
 
 	if target.kind == "Secret" {
-		ingresses, _ := provider.Ingresses()
+		ingresses, err := provider.Ingresses()
+		if err != nil {
+			omitted.add("referencedBy", OmittedUnavailable)
+			ingresses = nil
+		}
 		for _, ing := range ingresses {
 			if ing == nil || ing.Namespace != target.namespace {
 				continue
