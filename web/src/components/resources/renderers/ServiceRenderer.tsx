@@ -52,16 +52,23 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
     [endpointSlices, namespace, serviceName]
   )
 
+  // Additive options are ignored by the actual older pinned SDK, which still
+  // receives its label-filtered endpointSlices. Keep the host source compatible
+  // with that published component type as well as its runtime imports.
+  const endpointSliceOptions = {
+    endpointSliceInventory: endpointSlices,
+    endpointSlicesEnabled: shouldLoadEndpointSlices,
+    endpointSlicesError: endpointSlicesError?.message,
+  }
+
   return (
     <BaseServiceRenderer
       data={data}
       onCopy={onCopy}
       copied={copied}
       endpointSlices={matchingEndpointSlices}
-      endpointSliceInventory={endpointSlices}
       endpointSlicesLoading={endpointSlicesLoading}
-      endpointSlicesEnabled={shouldLoadEndpointSlices}
-      endpointSlicesError={endpointSlicesError?.message}
+      {...endpointSliceOptions}
       onNavigate={onNavigate}
       renderPortAction={({ port, name, appProtocol, protocol }) => (
         <>
