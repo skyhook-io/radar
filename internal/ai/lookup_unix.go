@@ -11,9 +11,11 @@ import (
 // so the fallback widens where Radar looks without widening what it will run.
 // Per-user installs come first, matching the precedence a shell PATH gives them.
 //
-// Deliberately does NOT try to cover an npm global prefix under a Node version
-// manager (nvm, fnm, volta, asdf, pnpm): that directory embeds the active Node
-// version and moves with `nvm use`, so no fixed list can reach it. Asking the
+// Deliberately does NOT try to cover an npm global prefix under nvm, fnm or
+// asdf: that directory embeds the active Node version and moves with `nvm use`,
+// so no fixed list can reach it. Fixed npm prefixes (pnpm, bun, ~/.npm-global)
+// are left out too: their scripts need a node that isn't beside them, so Radar
+// would offer an agent that can't start. Asking the
 // login shell is the only thing that can, which is what cmd/desktop/env.go does
 // for the desktop app.
 func agentBinDirs() []string {
@@ -27,6 +29,9 @@ func agentBinDirs() []string {
 			// OpenCode's install script. It reaches PATH only through the
 			// line it appends to the shell rc file.
 			filepath.Join(home, ".opencode", "bin"),
+			// Volta's shims for npm globals. Unlike other Node managers' bin
+			// folders this one is fixed, and its shims find node themselves.
+			filepath.Join(home, ".volta", "bin"),
 		)
 	}
 	return append(dirs,

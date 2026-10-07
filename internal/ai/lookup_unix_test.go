@@ -37,6 +37,7 @@ func TestLookupAgentFindsWellKnownInstallsOffPATH(t *testing.T) {
 		{"native installer", "claude", []string{".local", "bin"}},
 		{"claude migrate-installer (alias-only, never on PATH)", "claude", []string{".claude", "local"}},
 		{"opencode install script", "opencode", []string{".opencode", "bin"}},
+		{"volta shim", "codex", []string{".volta", "bin"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

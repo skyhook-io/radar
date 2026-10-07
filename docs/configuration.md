@@ -80,7 +80,7 @@ then in these install directories:
 
 | OS | Directories |
 |----|-------------|
-| macOS, Linux | `~/.local/bin`, `~/.claude/local`, `~/.opencode/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/home/linuxbrew/.linuxbrew/bin`, `/usr/bin` |
+| macOS, Linux | `~/.local/bin`, `~/.claude/local`, `~/.opencode/bin`, `~/.volta/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/home/linuxbrew/.linuxbrew/bin`, `/usr/bin` |
 | Windows | `%LOCALAPPDATA%\Microsoft\WinGet\Links`, `%LOCALAPPDATA%\cursor-agent`, `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`, `%USERPROFILE%\.local\bin` |
 
 A CLI installed while Radar runs is picked up the next time Radar checks: when
@@ -89,8 +89,9 @@ when you come back to the Radar window while setup is pending. No restart is
 needed. The startup output has an `AI investigations`
 line that says which agent Radar will use, or why investigations are off.
 
-If the CLI is somewhere else, for example an npm global install under nvm, set
-`RADAR_AI_CLI_BIN` to its full path:
+If the CLI is somewhere else, for example an npm global install under nvm, start
+Radar from a terminal where the CLI works, or set `RADAR_AI_CLI_BIN` to its full
+path:
 
 ```bash
 RADAR_AI_CLI_BIN="$(command -v claude)" radar
