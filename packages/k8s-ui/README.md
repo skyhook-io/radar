@@ -35,3 +35,12 @@ parent flows. Back returns the current editor draft without invoking `onClose`;
 it is disabled during writes, previews and file imports. The review screen
 continues to return to the editor first. Hosts own draft retention and any
 confirmation before replacing edited YAML.
+
+After a successful write, `CreateResourceDialog.onCreated(result, submittedYaml)`
+receives the first result and the exact submitted manifest. Dry-runs do not invoke
+it. Existing callbacks that use only the result continue to work; hosts can use
+the submitted YAML to describe the actual operation rather than an earlier form.
+
+`ActionConfirmDialog` also accepts optional `onBack` and `backLabel` for steps
+inside a parent flow. Back and Cancel remain distinct; both are disabled while
+the confirmed action is pending.

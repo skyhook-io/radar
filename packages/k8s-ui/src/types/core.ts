@@ -168,6 +168,7 @@ export interface FeatureCapabilities {
   policyResource?: boolean
   workloadHistory?: boolean
   cnpgWorkspace?: boolean
+  cnpgProtectionSetup?: boolean
   gitopsWriteEvidence?: boolean
 }
 

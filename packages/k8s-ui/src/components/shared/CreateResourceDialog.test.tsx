@@ -77,3 +77,21 @@ describe('CreateResourceDialog lockMode', () => {
     act(() => root.unmount())
   })
 })
+
+
+it.each([false, true])('returns the exact submitted YAML after a successful write (review=%s)', async (reviewed) => {
+  const result = { kind: 'Cluster', name: 'orders', namespace: 'db', created: true }
+  const onCreated = vi.fn()
+  const onApply = vi.fn(async () => [result])
+  const onPreview = reviewed ? vi.fn(async () => ({ documents: [], nonAtomic: false, context: 'demo' })) : undefined
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const submitted = 'kind: Cluster\nmetadata:\n  name: orders\n'
+  await act(async () => root.render(<CreateResourceDialog open onClose={() => {}} initialYaml={submitted} initialMode="create" lockMode onApply={onApply} isApplying={false} onPreview={onPreview} onCreated={onCreated} />))
+  await act(async () => button(reviewed ? 'Review' : 'Create')!.click())
+  if (reviewed) await act(async () => button('Create reviewed resources')!.click())
+  expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ yaml: submitted, mode: 'create', dryRun: false }))
+  expect(onCreated).toHaveBeenCalledWith(result, submitted)
+  act(() => root.unmount())
+})

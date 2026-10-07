@@ -126,22 +126,13 @@ func cnpgScheduledRunIssue(gvr schema.GroupVersionResource, cluster *unstructure
 			continue
 		}
 		spec, _, _ := unstructured.NestedString(s.Object, "spec", "schedule")
-		sched, err := cnpg.ParseSchedule(spec)
-		if err != nil {
+		if _, err := cnpg.ParseSchedule(spec); err != nil {
 			continue
 		}
-		created := s.GetCreationTimestamp().Time
-		base := lastSuccess
-		if created.After(base) {
-			base = created
-		}
-		if base.IsZero() {
-			continue
-		}
-		// The operator's container clock is UTC; Kubernetes timestamps decode in
-		// Radar's local zone, which would shift every fire time.
-		fired := sched.Next(base.UTC())
-		if fired.IsZero() || fired.After(now) {
+		// Cron alone cannot establish a run's time without the operator's clock.
+		reported, _, _ := unstructured.NestedString(s.Object, "status", "lastScheduleTime")
+		fired, err := time.Parse(time.RFC3339, reported)
+		if err != nil || !fired.After(lastSuccess) || fired.After(now) || fired.Before(s.GetCreationTimestamp().Time) {
 			continue
 		}
 		if now.Sub(fired) <= lastDuration+cnpgScheduledBackupGrace {
@@ -151,7 +142,7 @@ func cnpgScheduledRunIssue(gvr schema.GroupVersionResource, cluster *unstructure
 			worst.schedule, worst.spec, worst.fired = s.GetName(), spec, fired
 		}
 	}
-	if worst.fired.IsZero() || cnpgBackupInFlightSince(name, e.backups, worst.fired) {
+	if worst.fired.IsZero() || cnpgBackupInFlightSince(name, e.backups, lastSuccess) {
 		return Issue{}, false
 	}
 
@@ -163,7 +154,7 @@ func cnpgScheduledRunIssue(gvr schema.GroupVersionResource, cluster *unstructure
 	}
 	msg := fmt.Sprintf("ScheduledBackup %s (%s) has had no successful backup since its run", worst.schedule, reading)
 	if lastSuccess.IsZero() {
-		msg = fmt.Sprintf("ScheduledBackup %s (%s) has had no successful backup observed since its first run", worst.schedule, reading)
+		msg = fmt.Sprintf("ScheduledBackup %s (%s) has had no successful backup observed since its reported run", worst.schedule, reading)
 	}
 	return newConditionIssue(gvr, "Cluster", cluster.GetNamespace(), name, SeverityWarning,
 		ReasonCNPGScheduledRunNoBackup, msg, worst.fired, true, ReasonCNPGScheduledRunNoBackup, cluster.GetCreationTimestamp().Time), true

@@ -52,9 +52,13 @@ it('keeps blocked header buttons focusable, explains on focus and click, and pri
   act(() => root.render(<CNPGClusterActions namespace="db" name="pg" />))
   expect(host.querySelector('[role="status"]')).toBeNull()
   menu()
-  expect(host.textContent).toContain('No instances are fenced')
-  expect(host.textContent).toContain('Needs create pods/exec')
-  expect(host.textContent).toContain('Needs create clusters')
+  const dialog = document.querySelector('[role=dialog][aria-label="Cluster actions"]')!
+  expect(dialog.textContent).toContain('No instances are fenced')
+  expect(dialog.textContent).toContain('Needs create pods/exec')
+  expect(dialog.textContent).toContain('Needs create clusters')
+  expect(host.contains(dialog)).toBe(false)
+  act(() => dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+  expect(host.querySelector('[aria-label="More cluster actions"]')?.getAttribute('aria-expanded')).toBe('false')
 })
 
 it('reviews each restart step with current readiness, scheduling blockers and primary downtime', () => {
@@ -82,14 +86,14 @@ it('disables header restore for known no sources and keeps unread sources enable
   state.caps = { data: { actions: { restore: { allowed: true }, backup: { allowed: false }, switchover: { allowed: false }, psql: { allowed: false } }, facts: { maintenance: {} } } }
   state.workspace = { query: { data: { coverage: { backups: { state: 'full' } }, objects: { backups: [] } } }, fleet: { rows: [{ name: 'pg', namespace: 'db', cluster }] } }
   render(); menu()
-  let restore = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Restore to a new cluster'))!
+  let restore = [...document.querySelectorAll<HTMLButtonElement>('[role=menu] button')].find((b) => b.textContent?.includes('Restore to a new cluster'))!
   expect(restore.disabled).toBe(true)
-  expect(host.textContent).toContain('Nothing to restore from yet')
+  expect(document.querySelector('[role=menu]')?.textContent).toContain('Nothing to restore from yet')
   state.workspace.query.data.coverage.backups.state = 'denied'
   act(() => root.render(<CNPGClusterActions namespace="db" name="pg" />))
-  restore = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Restore to a new cluster'))!
+  restore = [...document.querySelectorAll<HTMLButtonElement>('[role=menu] button')].find((b) => b.textContent?.includes('Restore to a new cluster'))!
   expect(restore.disabled).toBe(false)
-  expect(host.textContent).not.toContain('Nothing to restore from yet')
+  expect(document.querySelector('[role=menu]')?.textContent).not.toContain('Nothing to restore from yet')
   state.caps.isRefetchError = true
   state.caps.error = new Error('Refresh timeout')
   state.caps.dataUpdatedAt = Date.now() - 180_000

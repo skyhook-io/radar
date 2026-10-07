@@ -109,6 +109,7 @@ describe('CNPGScheduledBackupSummary', () => {
       description: 'every day at 02:30:00 UTC',
       nextRuns: ['2026-10-01T02:30:00Z', '2026-10-02T02:30:00Z', '2026-10-03T02:30:00Z'],
       basis: 'lastCheckTime' as const,
+      clock: { zone: 'UTC', declared: true, source: 'Operator Deployment declares TZ=UTC' },
     }
     const t = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={preview} />))
     expect(t).toContain('every day at 02:30:00 UTC')
@@ -116,11 +117,16 @@ describe('CNPGScheduledBackupSummary', () => {
     expect(t).toContain('Calculated upcoming times')
     expect(t).toContain('Next run reported by the operatorNot reported')
     expect(t).toContain("operator's last check")
+    const estimate = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={{ ...preview, clock: { zone: 'UTC', declared: false, source: 'Operator clock is unknown' } }} />))
+    expect(estimate).toContain('Estimated upcoming times')
+    expect(estimate).toContain('UTC estimate')
+    expect(estimate).not.toContain('Calculated upcoming times')
     const stale = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={{ ...preview, schedule: '0 0 0 * * *' }} />))
     expect(stale).not.toContain('every day at')
     const due = text(renderToString(<CNPGScheduledBackupSummary resource={sched} workspace={ws({})} schedulePreview={{ ...preview, runsImmediately: true }} />))
-    expect(due).toContain('now (2026-10-01 02:30:00 UTC)')
-    expect(due).toContain('runs one backup as soon as it sees this schedule')
+    expect(due).toContain('due (2026-10-01 02:30:00 UTC)')
+    expect(due).toContain('A run is due on the declared clock')
+    expect(due).toContain('at most one catch-up backup')
   })
 
   it('says when Backups are not readable instead of listing none', () => {

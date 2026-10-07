@@ -1,3 +1,5 @@
+import { useId } from 'react'
+import { ArrowRight } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
   Badge,
@@ -139,6 +141,7 @@ export function CNPGReplicationView({
   /** The Cluster object, for the HA slot prefix. */
   clusterObject?: any
 }) {
+  const instanceId = useId()
   const rows = new Map((primary?.status.replication ?? []).map((r) => [r.applicationName, r]))
   // The instance manager keeps answering on a fenced Pod with PostgreSQL
   // stopped, so fencing comes from the Cluster, not from the runtime read.
@@ -150,6 +153,15 @@ export function CNPGReplicationView({
   const standbyMeasurementShown = replicas.some((r) => {
     const rep = rows.get(r.pod)
     return !!(r.status.receivedLsn || r.status.replayLsn) || !!rep && [rep.sentLsn, rep.writeLsn, rep.flushLsn, rep.replayLsn, rep.writeLag, rep.flushLag, rep.replayLag].some((value) => value !== undefined)
+  })
+  const standbys = replicas.map((r) => {
+    const rep = rows.get(r.pod)
+    const replayBacklog = rep ? lsnDistance(primary?.status.currentLsn, rep.replayLsn) : standbyOwnBacklog(primary?.status, r.status)
+    const otherTimeline = r.status.timeline !== undefined && primary?.status.timeline !== undefined && r.status.timeline !== primary.status.timeline ? r.status.timeline : undefined
+    const backlogTone = cnpgStandbyBacklogTone(replayBacklog, rep?.replayLag)
+    const headline = cnpgStandbyHeadline(r, rep, backlogTone, { fenced: fenced.has(r.pod), primaryRead: primary?.status.state === 'ok' })
+    const backlogText = replayBacklog !== undefined ? `${formatBytes(replayBacklog)} behind` : otherTimeline !== undefined ? 'backlog not comparable' : 'backlog unknown'
+    return { r, rep, replayBacklog, otherTimeline, backlogTone, headline, backlogText }
   })
   return (
     <Card
@@ -163,6 +175,11 @@ export function CNPGReplicationView({
         </> : 'Source: instance manager status and the primary’s pg_stat_replication.'
       }
     >
+      <div aria-label="Replication relationships" className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-theme-border bg-theme-base p-3 text-xs">
+        <span className="font-mono font-medium">{primary?.pod || 'Primary unknown'}</span><span className="text-theme-text-tertiary">primary</span>
+        <ArrowRight className="h-4 w-4 text-theme-text-tertiary" aria-hidden />
+        {standbys.length === 0 ? <span className="text-theme-text-secondary">{cnpgNoStandbyText(clusterObject?.spec?.instances)}</span> : standbys.map(({ r, headline, backlogText }) => <a key={r.pod} href={`#${instanceId}-${r.pod}`} className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5 rounded border border-theme-border bg-theme-surface px-2 py-1.5 hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><StatusDot tone={headline.tone} size="xs" /><span className="font-mono">{r.pod}</span><span className={toneTextClass(headline.tone)}>{headline.text}</span><span className="text-theme-text-tertiary">· {backlogText}</span></a>)}
+      </div>
       <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(220px,300px)_minmax(0,1fr)]">
         <div className="rounded-lg border border-theme-border border-l-4 border-l-accent bg-theme-base p-3">
           {primary ? (
@@ -192,26 +209,18 @@ export function CNPGReplicationView({
         </div>
         <div className="space-y-2">
           {replicas.length === 0 && <div className="pt-[13px] text-sm text-theme-text-tertiary">{cnpgNoStandbyText(clusterObject?.spec?.instances)}</div>}
-          {replicas.map((r) => {
-            const rep = rows.get(r.pod)
-            // Without a pg_stat_replication row (not connected), the standby's
-            // own replayed position still measures how far behind it is.
-            const replayBacklog = rep ? lsnDistance(primary?.status.currentLsn, rep.replayLsn) : standbyOwnBacklog(primary?.status, r.status)
-            const otherTimeline =
-              r.status.timeline !== undefined && primary?.status.timeline !== undefined && r.status.timeline !== primary.status.timeline ? r.status.timeline : undefined
-            const backlogTone = cnpgStandbyBacklogTone(replayBacklog, rep?.replayLag)
-            const headline = cnpgStandbyHeadline(r, rep, backlogTone, { fenced: fenced.has(r.pod), primaryRead: primary?.status.state === 'ok' })
+          {standbys.map(({ r, rep, replayBacklog, otherTimeline, backlogTone, headline, backlogText }) => {
             const tone = headline.tone
             const pct = replayBacklog !== undefined ? Math.min(100, (replayBacklog / CNPG_BACKLOG_DEGRADED) * 100) : 0
             return (
-              <div key={r.pod} className="rounded-lg border border-theme-border bg-theme-base p-3">
+              <div id={`${instanceId}-${r.pod}`} key={r.pod} className="scroll-mt-4 rounded-lg border border-theme-border bg-theme-base p-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <StatusDot tone={tone} />
                   <span className="font-mono text-sm font-semibold">{r.pod}</span>
                   <span className={clsx('text-xs', toneTextClass(tone))}>{headline.text}</span>
                   {headline.secondary && <span className="text-xs text-theme-text-secondary">{headline.secondary}</span>}
                   <span className="ml-auto font-mono text-xs text-theme-text-secondary">
-                    {replayBacklog !== undefined ? `${formatBytes(replayBacklog)} behind` : otherTimeline !== undefined ? 'backlog not comparable' : 'backlog unknown'}
+                    {backlogText}
                   </span>
                 </div>
                 {otherTimeline !== undefined && !rep && (

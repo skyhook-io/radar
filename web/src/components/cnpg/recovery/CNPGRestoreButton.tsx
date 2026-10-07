@@ -12,9 +12,9 @@ export function CNPGRestoreButton({ namespace, entry, disabledReason, compact }:
       <Tooltip content={disabledReason ?? `${label} into a new Cluster`} position="bottom">
         <button
           type="button"
-          disabled={!!disabledReason}
-          onClick={() => setOpen(true)}
-          className="btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium disabled:cursor-not-allowed"
+          aria-disabled={!!disabledReason}
+          onClick={() => { if (!disabledReason) setOpen(true) }}
+          className={`btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium ${disabledReason ? 'cursor-not-allowed opacity-50' : ''}`}
         >
           <History className="h-3.5 w-3.5" />
           {!compact && label}

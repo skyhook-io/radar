@@ -1,47 +1,28 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Check, Circle, CircleHelp, X } from 'lucide-react'
-import { Badge, StatusDot, coverageReadable, formatAge, type HealthLevel } from '@skyhook-io/k8s-ui'
+import { Check, Circle, CircleHelp, Copy, X } from 'lucide-react'
+import { Badge, DialogPortal, StatusDot, coverageReadable, formatAge } from '@skyhook-io/k8s-ui'
+import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
+import { routePath } from '../../../api/config'
+import { cnpgClusterFullPath } from '../paths'
+import { useToast } from '../../ui/Toast'
 import { useConnection } from '../../../context/ConnectionContext'
 import { useCNPGClusterCapabilities, useCNPGRuntime, useCNPGWorkspace } from '../../../api/cnpg'
 import { useCNPGClusterHA } from '../../../api/cnpg-ha'
-import { useAnimatedUnmount } from '../../../hooks/useAnimatedUnmount'
-import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../../utils/animation'
-import { CNPG_OP_TERMINAL, advanceCNPGOperation, cnpgOperationFollowed, type CNPGObservation, type CNPGOpState, type CNPGTrackedOperation } from './model'
+import {
+  CNPG_OP_TERMINAL,
+  advanceCNPGOperation,
+  cnpgOperationFollowed,
+  type CNPGObservation,
+  type CNPGTrackedOperation,
+} from './model'
+import {
+  CNPG_OP_STATE_TEXT as STATE_TEXT,
+  CNPG_OP_STATE_TONE as STATE_TONE,
+  CNPG_OP_STATE_SEVERITY as STATE_SEVERITY,
+  cnpgOperationHandoff,
+} from './presentation'
 import { dismissCNPGOperation, updateCNPGOperations, useCNPGOperations } from './store'
-
-const STATE_TEXT: Record<CNPGOpState, string> = {
-  requested: 'requested',
-  observed: 'observed by the operator',
-  progressing: 'in progress',
-  completed: 'completed',
-  failed: 'failed',
-  stalled: 'stalled',
-  superseded: 'superseded',
-  unobservable: 'cannot be followed',
-}
-
-const STATE_TONE: Record<CNPGOpState, HealthLevel> = {
-  requested: 'neutral',
-  observed: 'neutral',
-  progressing: 'neutral',
-  completed: 'healthy',
-  failed: 'unhealthy',
-  stalled: 'degraded',
-  superseded: 'unknown',
-  unobservable: 'unknown',
-}
-
-const STATE_SEVERITY: Record<CNPGOpState, 'success' | 'error' | 'warning' | 'info' | 'neutral'> = {
-  requested: 'info',
-  observed: 'info',
-  progressing: 'info',
-  completed: 'success',
-  failed: 'error',
-  stalled: 'warning',
-  superseded: 'neutral',
-  unobservable: 'neutral',
-}
 
 const POLL_MS = 5_000
 
@@ -85,7 +66,9 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
   const observation = useMemo<CNPGObservation | null>(() => {
     if (!following) return null
     const ws = workspace.data
-    const cluster = ws?.objects.clusters?.find((c: any) => c?.metadata?.namespace === namespace && c?.metadata?.name === name)
+    const cluster = ws?.objects.clusters?.find(
+      (c: any) => c?.metadata?.namespace === namespace && c?.metadata?.name === name,
+    )
     const backupsReadable = ws?.coverage.backups ? coverageReadable(ws.coverage.backups, namespace) : false
     return {
       now: Date.now(),
@@ -94,7 +77,7 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
       cluster,
       ha: ha.data,
       runtime: runtime.data,
-      backups: backupsReadable ? ws?.objects.backups ?? [] : undefined,
+      backups: backupsReadable ? (ws?.objects.backups ?? []) : undefined,
       freshness: {
         facts: { updatedAt: capsFresh.updatedAt, failed: capsFresh.failed },
         cluster: { updatedAt: workspaceFresh.updatedAt, failed: workspaceFresh.failed },
@@ -126,7 +109,8 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
     updateCNPGOperations((all) => {
       let changed = false
       const next = all.map((op) => {
-        if (op.namespace !== namespace || op.cluster !== name || op.context !== context || !cnpgOperationFollowed(op)) return op
+        if (op.namespace !== namespace || op.cluster !== name || op.context !== context || !cnpgOperationFollowed(op))
+          return op
         const adv = advanceCNPGOperation(op, observation)
         if (JSON.stringify(adv) !== JSON.stringify(op)) changed = true
         return adv
@@ -136,20 +120,6 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
   }, [observation, namespace, name, context])
 
   const [open, setOpen] = useState(false)
-  const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('menu'))
-  useEffect(() => {
-    if (!open) return
-    // Capture phase, consumed: the page's own Escape (leave the full view)
-    // must not also fire when Escape only closes this menu.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      e.preventDefault()
-      e.stopPropagation()
-      setOpen(false)
-    }
-    document.addEventListener('keydown', onKey, true)
-    return () => document.removeEventListener('keydown', onKey, true)
-  }, [open])
   if (ops.length === 0) return null
   const lead = active[active.length - 1] ?? ops[ops.length - 1]
 
@@ -167,41 +137,69 @@ export function CNPGOperationTracker({ namespace, name }: { namespace: string; n
         <span className="shrink-0 text-theme-text-tertiary">· {STATE_TEXT[lead.state]}</span>
         {ops.length > 1 && <span className="shrink-0 text-theme-text-tertiary">+{ops.length - 1}</span>}
       </button>
-      {open && <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />}
-      {shouldRender && (
-        <div
-          role="dialog"
-          aria-label="Operations on this cluster"
-          inert={!open || undefined}
-          className={`absolute right-0 top-full z-50 mt-1 w-[26rem] origin-top-right space-y-2 rounded-lg border border-theme-border bg-theme-surface p-3 shadow-theme-lg ${TRANSITION_MENU} ${
-            isOpen ? 'translate-y-0 scale-100 opacity-100' : '-translate-y-1 scale-[0.97] opacity-0'
-          } ${open ? '' : 'pointer-events-none'}`}
-          style={overlayTransitionStyle(isOpen, 'menu')}
-        >
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Operations this session</div>
+      <DialogPortal
+        open={open}
+        onClose={() => setOpen(false)}
+        ariaLabel="Operations on this cluster"
+        className="w-full max-w-xl p-4"
+      >
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="text-sm font-semibold text-theme-text-primary">Operations in this tab</h3>
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            aria-label="Close operations"
+            className="rounded p-1 text-theme-text-secondary hover:bg-theme-hover"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="max-h-[65vh] space-y-2 overflow-y-auto">
           {[...ops].reverse().map((op) => (
             <OperationRow key={op.id} op={op} />
           ))}
         </div>
-      )}
+      </DialogPortal>
     </div>
   )
 }
 
 function OperationRow({ op }: { op: CNPGTrackedOperation }) {
   const terminal = CNPG_OP_TERMINAL.has(op.state)
+  const { showSuccess, showError } = useToast()
+  const handoff = async () => {
+    const path = cnpgClusterFullPath(op.namespace, op.cluster, op.context)
+    const url = new URL(routePath(path), window.location.origin).href
+    const copied = await copyText(cnpgOperationHandoff(op, url))
+    if (copied) showSuccess('Handoff copied · the link opens current Cluster facts')
+    else showError('Could not copy the handoff')
+  }
   return (
     <div className="rounded-md border border-theme-border bg-theme-base p-2 text-xs">
       <div className="flex items-center gap-2">
         <span className="min-w-0 flex-1 truncate font-medium text-theme-text-primary">{op.label}</span>
-        <Badge severity={STATE_SEVERITY[op.state]} size="sm">{STATE_TEXT[op.state]}</Badge>
+        <Badge severity={STATE_SEVERITY[op.state]} size="sm">
+          {STATE_TEXT[op.state]}
+        </Badge>
         {(terminal || op.state === 'unobservable') && (
-          <button type="button" aria-label={`Dismiss ${op.label}`} onClick={() => dismissCNPGOperation(op.id)} className="rounded p-0.5 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary">
+          <button
+            type="button"
+            aria-label={`Dismiss ${op.label}`}
+            onClick={() => dismissCNPGOperation(op.id)}
+            className="rounded p-0.5 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+          >
             <X className="h-3.5 w-3.5" />
           </button>
         )}
       </div>
-      <div className="mt-0.5 text-theme-text-tertiary">requested {formatAge(new Date(op.startedAt).toISOString())} ago</div>
+      <div className="mt-0.5 text-theme-text-tertiary">
+        requested {formatAge(new Date(op.startedAt).toISOString())} ago
+      </div>
+      <div className="mt-0.5 text-theme-text-tertiary">
+        {op.lastCheckedAt
+          ? `Last checked in this tab ${formatAge(new Date(op.lastCheckedAt).toISOString())} ago`
+          : 'Not yet checked in this tab'}
+      </div>
       {op.detail && <div className="mt-1 text-theme-text-secondary">{op.detail}</div>}
       {op.steps && op.steps.length > 0 && (
         <ul className="mt-1.5 space-y-0.5">
@@ -219,6 +217,14 @@ function OperationRow({ op }: { op: CNPGTrackedOperation }) {
           ))}
         </ul>
       )}
+      <button
+        type="button"
+        onClick={() => void handoff()}
+        className="mt-2 inline-flex items-center gap-1 text-accent-text hover:underline"
+      >
+        <Copy className="h-3 w-3" />
+        Copy handoff
+      </button>
     </div>
   )
 }

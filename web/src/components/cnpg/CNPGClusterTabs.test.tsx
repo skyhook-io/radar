@@ -1,19 +1,75 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
-import { expect, it, vi } from 'vitest'
+import { beforeEach, expect, it, vi } from 'vitest'
 import type { CNPGDimension } from '@skyhook-io/k8s-ui'
 import { CNPGBackupsTab, CNPGStorageTab } from './CNPGClusterTabs'
-const state = vi.hoisted(() => ({ coverage: 'full', primary: {} as any, storageProps: {} as any, schedules: [] as any[], dimensions: [] as CNPGDimension[] }))
-const cluster = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'pg', namespace: 'db' }, status: { currentPrimary: 'pg-1' } as any, spec: {} as any }
-vi.mock('../../api/cnpg', () => ({ useCNPGRuntime: () => ({ data: { permission: { proxy: 'denied' }, instances: [state.primary] } }) }))
-vi.mock('./useCNPGClusterAssessment', () => ({ useCNPGClusterAssessment: () => ({ dimensions: state.dimensions, row: { cluster, problems: [], protection: { walArchiving: { text: 'Not archived: no destination configured', tone: 'neutral' } } }, query: { data: { coverage: { backups: { state: state.coverage } }, objects: { backups: [], clusters: [cluster] } } }, runtime: {} }) }))
-vi.mock('./useCNPGSidebarWorkspace', () => ({ useCNPGFleet: () => ({ query: { data: { installed: true, coverage: { backups: { state: state.coverage } }, objects: { backups: [], scheduledBackups: state.schedules } } }, fleet: { rows: [{ name: 'pg', namespace: 'db', cluster }] } }) }))
+const state = vi.hoisted(() => ({
+  coverage: 'full',
+  primary: {} as any,
+  storageProps: {} as any,
+  schedules: [] as any[],
+  dimensions: [] as CNPGDimension[],
+}))
+const cluster = {
+  apiVersion: 'postgresql.cnpg.io/v1',
+  kind: 'Cluster',
+  metadata: { name: 'pg', namespace: 'db' },
+  status: { currentPrimary: 'pg-1' } as any,
+  spec: {} as any,
+}
+vi.mock('../../api/client', () => ({ useRadarFeature: () => ({ support: 'supported' }) }))
+vi.mock('../../api/cnpg', () => ({
+  useCNPGRuntime: () => ({ data: { permission: { proxy: 'denied' }, instances: [state.primary] } }),
+}))
+vi.mock('./useCNPGClusterAssessment', () => ({
+  useCNPGClusterAssessment: () => ({
+    dimensions: state.dimensions,
+    row: {
+      cluster,
+      problems: [],
+      protection: { walArchiving: { text: 'Not archived: no destination configured', tone: 'neutral' } },
+    },
+    query: {
+      data: { coverage: { backups: { state: state.coverage } }, objects: { backups: [], clusters: [cluster] } },
+    },
+    runtime: {},
+  }),
+}))
+vi.mock('./useCNPGSidebarWorkspace', () => ({
+  useCNPGFleet: () => ({
+    query: {
+      data: {
+        installed: true,
+        coverage: { backups: { state: state.coverage } },
+        objects: { backups: [], scheduledBackups: state.schedules },
+      },
+    },
+    fleet: { rows: [{ name: 'pg', namespace: 'db', cluster }] },
+  }),
+}))
 vi.mock('../../api/cnpg-recovery', () => ({ useCNPGRestoreCapability: () => ({ data: { allowed: true } }) }))
 vi.mock('./CNPGProtection', () => ({ CNPGProtection: () => null }))
 vi.mock('./CNPGArchivingRepair', () => ({ CNPGArchivingRepair: () => null }))
-vi.mock('./CNPGStorage', () => ({ CNPGStorage: (props: any) => { state.storageProps = props; return null } }))
-vi.mock('./recovery/CNPGRestoreButton', () => ({ CNPGRestoreButton: ({ disabledReason }: { disabledReason?: string }) => <button disabled={!!disabledReason}>Restore</button> }))
+vi.mock('./CNPGStorage', () => ({
+  CNPGStorage: (props: any) => {
+    state.storageProps = props
+    return null
+  },
+}))
+vi.mock('./recovery/CNPGRestoreButton', () => ({
+  CNPGRestoreButton: ({ disabledReason }: { disabledReason?: string }) => (
+    <button disabled={!!disabledReason}>Restore</button>
+  ),
+}))
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'test' } }) }))
+beforeEach(() => {
+  state.coverage = 'full'
+  state.primary = {}
+  state.schedules = []
+  state.dimensions = []
+  cluster.spec = {}
+  delete cluster.status.lastSuccessfulBackup
+})
 it('passes primary identity through to Storage when database reads are denied', () => {
   state.primary = { pod: 'pg-1', role: 'primary', metrics: { state: 'denied' } }
   renderToStaticMarkup(<CNPGStorageTab namespace="db" name="pg" />)
@@ -21,7 +77,12 @@ it('passes primary identity through to Storage when database reads are denied', 
   expect(state.storageProps.runtime.data.permission.proxy).toBe('denied')
 })
 it('uses the shared restore assessment for the Backups button', () => {
-  const render = () => renderToStaticMarkup(<MemoryRouter><CNPGBackupsTab namespace="db" name="pg" onInspect={() => {}} /></MemoryRouter>)
+  const render = () =>
+    renderToStaticMarkup(
+      <MemoryRouter>
+        <CNPGBackupsTab namespace="db" name="pg" onInspect={() => {}} />
+      </MemoryRouter>,
+    )
   state.coverage = 'full'
   expect(render()).toContain('disabled=""')
   expect(render()).toContain('Nothing to restore from yet')
@@ -30,54 +91,45 @@ it('uses the shared restore assessment for the Backups button', () => {
   expect(render()).not.toContain('Nothing to restore from yet')
 })
 
-it('offers the destination setup path and Cluster YAML without claiming it is configured', () => {
+it('starts a single guided setup path beside restore, without treating a schedule as protection', () => {
   state.schedules = [{ metadata: { name: 'pg-nightly', namespace: 'db' }, spec: { cluster: { name: 'pg' } } }]
-  const html = renderToStaticMarkup(<MemoryRouter><CNPGBackupsTab namespace="db" name="pg" onInspect={() => {}} onOpenYaml={() => {}} /></MemoryRouter>)
-  expect(html).toContain('Configure spec.backup.barmanObjectStore')
-  expect(html).toContain('spec.backup.barmanObjectStore')
-  expect(html).toContain('plugin/ObjectStore')
-  expect(html).toContain('volume snapshots')
-  expect(html).toContain('CloudNativePG backup docs')
-  expect(html).toContain('Cluster YAML →')
-  expect(html).toContain('Configure spec.backup.barmanObjectStore for pg-nightly')
-  expect(html).not.toContain('pg-nightly cannot run: pg has no backup destination.')
-  expect(html).toContain('Other backup methods')
-  expect(html).toContain('inline-flex whitespace-nowrap')
-  expect(html).toContain('aria-expanded="false"')
-  expect(html).toContain('pg-nightly’s spec.method to match')
-  expect(html).toContain('pluginConfiguration')
-  state.schedules = []
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <CNPGBackupsTab namespace="db" name="pg" onInspect={() => {}} onOpenYaml={() => {}} />
+    </MemoryRouter>,
+  )
+  expect(html).toContain('Set up backups…')
+  expect(html).toContain('Nothing to restore from yet')
+  expect(html).not.toContain('Configure spec.backup.barmanObjectStore')
 })
 
-it('explains a schedule method mismatch without asking to configure an existing plugin destination', () => {
-  cluster.spec.plugins = [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }]
+it('keeps the protection verdict ahead of setup without repeating the blocker', () => {
   state.schedules = [{ metadata: { name: 'pg-nightly', namespace: 'db' }, spec: { cluster: { name: 'pg' } } }]
-  const html = renderToStaticMarkup(<MemoryRouter><CNPGBackupsTab namespace="db" name="pg" onInspect={() => {}} /></MemoryRouter>)
-  expect(html).toContain('this Cluster’s ObjectStore store')
-  expect(html).toContain('spec.method to plugin')
-  expect(html).toContain('spec.pluginConfiguration.name to barman-cloud.cloudnative-pg.io')
-  expect(html).not.toContain('configure a destination with the barman-cloud plugin')
-  state.schedules = []
-  delete cluster.spec.plugins
-})
-
-it('states the schedule blocker once in the verdict, then starts setup with the repair', () => {
-  state.schedules = [{ metadata: { name: 'pg-nightly', namespace: 'db' }, spec: { cluster: { name: 'pg' } } }]
-  state.dimensions = [{ id: 'protection', label: 'Backups', tone: 'degraded', text: 'Backup schedule pg-nightly cannot run: no backup destination', source: 'ScheduledBackup method against its target Cluster spec' }]
-  const html = renderToStaticMarkup(<MemoryRouter><CNPGBackupsTab namespace="db" name="pg" onInspect={() => {}} onOpenYaml={() => {}} /></MemoryRouter>)
+  state.dimensions = [
+    {
+      id: 'protection',
+      label: 'Backups',
+      tone: 'degraded',
+      text: 'Backup schedule pg-nightly cannot run: no backup destination',
+      source: 'ScheduledBackup method against its target Cluster spec',
+    },
+  ]
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <CNPGBackupsTab namespace="db" name="pg" onInspect={() => {}} onOpenYaml={() => {}} />
+    </MemoryRouter>,
+  )
   expect(html.match(/cannot run:/g)).toHaveLength(1)
-  expect(html).toContain(state.dimensions[0].text)
-  expect(html).toMatch(/<div class="px-4 pt-2 text-sm text-theme-text-secondary"><p>Configure spec.backup.barmanObjectStore for pg-nightly\./)
-  expect(html).toContain('href="https://cloudnative-pg.io/docs/devel/backup/"')
-  expect(html).toContain('Cluster YAML →')
-  expect(html).toContain('Other backup methods')
-  expect(html).toContain('aria-expanded="false"')
-  state.schedules = []; state.dimensions = []
+  expect(html.indexOf(state.dimensions[0].text)).toBeLessThan(html.indexOf('Set up backups…'))
 })
 
 it('does not invent a missing destination for an enabled third-party plugin', () => {
   cluster.spec.plugins = [{ name: 'third-party-backup' }]
-  const html = renderToStaticMarkup(<MemoryRouter><CNPGBackupsTab namespace="db" name="pg" onInspect={() => {}} /></MemoryRouter>)
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <CNPGBackupsTab namespace="db" name="pg" onInspect={() => {}} />
+    </MemoryRouter>,
+  )
   expect(html).not.toContain('Configure spec.backup')
   delete cluster.spec.plugins
 })
@@ -95,5 +147,6 @@ it('passes recovery certainty instead of equating a destination with a usable ba
   state.coverage = 'denied'
   renderStorage()
   expect(state.storageProps.restoreState).toBe('unknown')
-  state.coverage = 'full'; delete cluster.spec.backup
+  state.coverage = 'full'
+  delete cluster.spec.backup
 })

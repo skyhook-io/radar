@@ -169,15 +169,15 @@ export function CNPGSchedulePreviewFacts({ preview }: { preview: CNPGSchedulePre
   }
   return (
     <>
-      {preview.description && <FactRow label="Reading">{preview.description}</FactRow>}
-      <FactRow label="Calculated upcoming times">
+      {preview.description && <FactRow label="Reading">{preview.description}{!preview.clock?.declared && <span className="ml-1 text-theme-text-tertiary">· UTC estimate</span>}</FactRow>}
+      <FactRow label={preview.clock?.declared ? 'Calculated upcoming times' : 'Estimated upcoming times'}>
         <ul className="space-y-0.5">
           {(preview.nextRuns ?? []).map((r, i) => {
             const t = formatCNPGRunTime(r)
             return (
               <li key={r} className="font-mono text-xs">
                 <Tooltip content={`Your time: ${t.local}`} position="top">
-                  <span>{i === 0 && preview.runsImmediately ? `now (${t.utc})` : t.utc}</span>
+                  <span>{i === 0 && preview.runsImmediately ? `due (${t.utc})` : t.utc}</span>
                 </Tooltip>
               </li>
             )

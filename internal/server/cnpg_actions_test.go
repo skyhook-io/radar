@@ -26,8 +26,8 @@ func TestCNPGActionErrorMapping(t *testing.T) {
 		code   string
 		substr []string
 	}{
-		{"forbidden names the grant", "switchover", apierrors.NewForbidden(gr, "pg", errors.New("denied")), http.StatusForbidden, "",
-			[]string{"patch clusters/status (postgresql.cnpg.io) in namespace db", "denied"}},
+		{"forbidden retains the exact denial", "configureArchiving", apierrors.NewForbidden(schema.GroupResource{Group: "barmancloud.cnpg.io", Resource: "objectstores"}, "store", errors.New(`User "reader" cannot get resource "objectstores" in namespace "db"`)), http.StatusForbidden, "",
+			[]string{"cannot get resource", "objectstores", "reader"}},
 		{"webhook down", "backup", apierrors.NewInternalError(errors.New(`failed calling webhook "vbackup.cnpg.io": connection refused`)), http.StatusServiceUnavailable, cnpgsvc.CodeWebhook,
 			[]string{"admission webhook did not answer", "connection refused"}},
 		{"invalid", "backup", apierrors.NewInvalid(schema.GroupKind{Group: cnpgsvc.Group, Kind: "Backup"}, "b", nil), http.StatusUnprocessableEntity, "", []string{"is invalid"}},
@@ -46,6 +46,9 @@ func TestCNPGActionErrorMapping(t *testing.T) {
 				t.Errorf("code = %v, want %s", body["code"], tc.code)
 			}
 			msg, _ := body["error"].(string)
+			if apierrors.IsForbidden(tc.err) && msg != tc.err.Error() {
+				t.Errorf("denial was rewritten: %q", msg)
+			}
 			for _, s := range tc.substr {
 				if !strings.Contains(msg, s) {
 					t.Errorf("error %q does not contain %q", msg, s)

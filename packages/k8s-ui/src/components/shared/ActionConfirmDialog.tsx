@@ -17,6 +17,8 @@ export interface ActionConfirmDialogProps {
   open: boolean
   onClose: () => void
   onConfirm: () => void
+  onBack?: () => void
+  backLabel?: string
   /** Imperative title: "Switch over pg-orders?" */
   title: string
   subject: { kind: string; namespace?: string; name: string }
@@ -62,6 +64,8 @@ export function ActionConfirmDialog({
   open,
   onClose,
   onConfirm,
+  onBack,
+  backLabel = 'Back',
   title,
   subject,
   context,
@@ -128,6 +132,8 @@ export function ActionConfirmDialog({
 
       <div className="max-h-[70vh] space-y-4 overflow-y-auto p-4 text-sm text-theme-text-primary">
         <div className="text-theme-text-primary">{effect}</div>
+
+        {disabledReason && <AlertBanner variant="info" title="This action is not available" message={disabledReason} />}
 
         {children}
 
@@ -204,10 +210,10 @@ export function ActionConfirmDialog({
           ) : (
             <AlertBanner variant="error" title={errorTitle} message={error} />
           ))}
-        {disabledReason && <AlertBanner variant="info" title="This action is not available" message={disabledReason} />}
       </div>
 
       <div className="flex items-center justify-end gap-3 border-t border-theme-border p-4">
+        {onBack && <button type="button" onClick={onBack} disabled={isLoading} className="btn-secondary mr-auto px-4 py-2 text-sm disabled:opacity-50">{backLabel}</button>}
         {incompleteReason && !disabledReason && <span className="mr-auto min-w-0 text-xs text-theme-text-tertiary">{incompleteReason}</span>}
         <button
           type="button"

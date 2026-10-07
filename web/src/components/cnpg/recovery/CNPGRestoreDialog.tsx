@@ -1,18 +1,21 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useMemo, useState } from 'react'
 import yaml from 'yaml'
-import { ActionConfirmDialog, ConfirmDialog, isApiGroup, toneTextClass, Tooltip, type HealthLevel } from '@skyhook-io/k8s-ui'
+import { ActionConfirmDialog, ConfirmDialog, FoldSection, isApiGroup } from '@skyhook-io/k8s-ui'
 import { useCNPGRuntime, useCNPGWorkspace } from '../../../api/cnpg'
 import { useCNPGRestoreCapability } from '../../../api/cnpg-recovery'
+import { useResources } from '../../../api/client'
+import { CNPGTargetFields } from '../creation/CNPGTargetFields'
+import { cnpgTargetDraft, cnpgTargetFromManifest, cnpgTargetIssue, onlyCNPGTargetChanged, sameCNPGRecoveryIdentity, updateCNPGTargetYaml, withCNPGTarget, type CNPGTarget } from '../creation/targetModel'
 import { useConnection } from '../../../context/ConnectionContext'
 import { CreateResourceDialog } from '../../shared/CreateResourceDialog'
 import { useToast } from '../../ui/Toast'
 import { cnpgClusterFullPath } from '../paths'
 import { trackCNPGOperation } from '../operations/store'
 import { CNPG_RESTORE_OPERATION } from './restoreOperation'
+import { CNPGRecoveryPoint } from './CNPGRecoveryPoint'
 import {
   buildRestoreManifest,
   describeSource,
-  formatLocal,
   formatUTC,
   pitrWarnings,
   preflightFacts,
@@ -25,7 +28,6 @@ import {
   restorePermission,
   sourcePinsBackup,
   targetIsoFrom,
-  type EvidencePoint,
   type RestoreSource,
   type RestoreTarget,
 } from './restoreModel'
@@ -33,32 +35,6 @@ import { useCNPGNavigate } from '../useCNPGNavigate'
 
 /** Where the restore was started from; decides the default source. */
 export type CNPGRestoreEntry = { kind: 'cluster'; name: string } | { kind: 'backup'; name: string } | { kind: 'objectStore'; name: string }
-
-const NAME_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/
-const FIELD = 'rounded-lg border border-theme-border bg-theme-base px-2 py-1 text-sm text-theme-text-primary'
-
-function When({ point, empty }: { point?: EvidencePoint & { wal?: string }; empty: string }) {
-  if (!point) return <span className="text-theme-text-tertiary">{empty}</span>
-  return (
-    <>
-      <div className="font-mono text-[12.5px] text-theme-text-primary">{formatUTC(point.at)}</div>
-      <div className="text-[11px] text-theme-text-tertiary">
-        {formatLocal(point.at)}
-        {point.wal ? ` · ${point.wal}` : ''}
-      </div>
-      <div className="text-[11px] text-theme-text-tertiary">{point.source}</div>
-    </>
-  )
-}
-
-function EvidenceRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="grid grid-cols-[8.5rem_minmax(0,1fr)] gap-x-3 py-1.5">
-      <div className="text-xs text-theme-text-secondary">{label}</div>
-      <div className="min-w-0">{children}</div>
-    </div>
-  )
-}
 
 /**
  * Restore builds a new Cluster manifest, shows the evidence for the recovery
@@ -119,6 +95,10 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
   const [manifestBasis, setManifestBasis] = useState<string | null>(null)
   const [editingManifest, setEditingManifest] = useState(false)
   const [replacementManifest, setReplacementManifest] = useState<string | null>(null)
+  const [targetOverrides, setTargetOverrides] = useState<Partial<CNPGTarget>>({})
+  const [customIdentity, setCustomIdentity] = useState(false)
+  const [setupStep, setSetupStep] = useState<'source' | 'target'>('source')
+  const storageClasses = useResources<any>('storageclasses', undefined, 'storage.k8s.io')
   const restoreCap = useCNPGRestoreCapability(namespace)
 
   const evidence = useMemo(
@@ -127,9 +107,16 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
   )
   const targetIso = effectiveKind === 'time' ? targetIsoFrom(timeValue, zone) : null
   const warnings = effectiveKind === 'time' && targetIso ? pitrWarnings(targetIso, evidence) : []
-  const facts = preflightFacts(sourceCluster)
-  const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const facts = preflightFacts(sourceCluster).filter((fact) => !['Instances', 'Image', 'Data storage'].includes(fact.label))
   const serverName = source && source.kind !== 'backup' ? source.serverName : undefined
+  const recoveryTarget: RestoreTarget = effectiveKind === 'time' && targetIso ? { kind: 'time', iso: targetIso } : effectiveKind === 'backupEnd' ? { kind: 'backupEnd' } : { kind: 'latest' }
+  const baseManifest = source ? buildRestoreManifest({ sourceCluster, source, namespace, newName: name, target: recoveryTarget }) : { metadata: { name, namespace }, spec: { instances: 1, storage: {} } }
+  const targetValues: CNPGTarget = { ...cnpgTargetFromManifest(baseManifest), ...targetOverrides, name, namespace }
+  const catalog = baseManifest.spec.imageCatalogRef
+  const imageDescription = catalog ? `${catalog.kind ?? 'ImageCatalog'} ${catalog.name}, PostgreSQL ${catalog.major}` : baseManifest.spec.imageName
+  const requireImage = !imageDescription
+  const prepareManifest = (values: CNPGTarget) => restoreManifestHeader(describeSource(source!), serverName, sourceName ?? null) + yaml.stringify(withCNPGTarget(baseManifest, values), { version: '1.1' })
+  const retainingDraft = source && manifest !== null && prepareManifest(targetValues) === manifestBasis
 
   if (context !== connection.context) {
     return <ActionConfirmDialog
@@ -152,6 +139,7 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
       onConfirm={() => {
         setManifest(replacementManifest)
         setManifestBasis(replacementManifest)
+        setCustomIdentity(false)
         setReplacementManifest(null)
         setEditingManifest(true)
       }}
@@ -171,6 +159,14 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
         onClose={onClose}
         onBack={(draft) => {
           setManifest(draft)
+          const parsed = cnpgTargetDraft(draft)
+          if (parsed && parsed.metadata.namespace === namespace) {
+            const values = cnpgTargetFromManifest(parsed)
+            setNewName(values.name)
+            setTargetOverrides(values)
+            setManifestBasis(prepareManifest(values))
+            setCustomIdentity(!sameCNPGRecoveryIdentity(parsed, baseManifest))
+          } else setCustomIdentity(true)
           setEditingManifest(false)
         }}
         backLabel="Back to restore setup"
@@ -178,19 +174,20 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
         initialMode="create"
         lockMode
         title={`Restore into a new cluster ${name}`}
-        onCreated={(created) => {
-          onClose()
+        onCreated={(created, submittedYaml) => {
           if (created.kind !== 'Cluster' || !isApiGroup(created.apiVersion, 'postgresql.cnpg.io')) return
-          trackCNPGOperation({
+          const submitted = cnpgTargetDraft(submittedYaml)
+          const restoring = submitted?.metadata.name === created.name && submitted.metadata.namespace === created.namespace && !!submitted.spec.bootstrap?.recovery
+          if (restoring) trackCNPGOperation({
             kind: CNPG_RESTORE_OPERATION,
             label: `Restore into ${created.name}`,
             context: connection.context,
             namespace: created.namespace || namespace,
             cluster: created.name,
-            baseline: { source: source ? describeSource(source) : undefined },
+            baseline: { source: source && sameCNPGRecoveryIdentity(submitted, baseManifest) ? describeSource(source) : undefined },
           })
           const path = cnpgClusterFullPath(created.namespace || namespace, created.name, connection.context || undefined)
-          showSuccess(`Cluster ${created.name} created`, 'The operator is restoring it from backup.', { label: 'Follow the restore', onClick: () => navigate(path) })
+          showSuccess(`Cluster ${created.name} created`, restoring ? 'The operator is restoring it from backup.' : 'Review its current state on the Cluster page.', { label: restoring ? 'Follow the restore' : 'Open Cluster', onClick: () => navigate(path) })
         }}
       />
     )
@@ -212,9 +209,9 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
     permission.pending ??
     (workspace.isLoading
       ? 'Loading backups and object stores…'
-      : !NAME_RE.test(name)
-        ? 'The new name must be a valid Kubernetes object name.'
-        : clusters.some((c: any) => c.metadata?.namespace === namespace && c.metadata?.name === name)
+      : setupStep === 'target' && !retainingDraft && cnpgTargetIssue(targetValues, requireImage)
+        ? cnpgTargetIssue(targetValues, requireImage)
+        : setupStep === 'target' && clusters.some((c: any) => c.metadata?.namespace === namespace && c.metadata?.name === name)
           ? `A Cluster named ${name} already exists in ${namespace}.`
           : effectiveKind === 'time' && !targetIso
             ? 'Enter the point in time to recover to.'
@@ -225,35 +222,47 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
       open
       size="wide"
       onClose={onClose}
+      onBack={setupStep === 'target' ? () => setSetupStep('source') : undefined}
+      backLabel="Back to recovery point"
       onConfirm={() => {
         if (!source) return
-        const target: RestoreTarget = effectiveKind === 'time' && targetIso ? { kind: 'time', iso: targetIso } : effectiveKind === 'backupEnd' ? { kind: 'backupEnd' } : { kind: 'latest' }
-        const m = buildRestoreManifest({ sourceCluster, source, namespace, newName: name, target })
+        if (setupStep === 'source') { setSetupStep('target'); return }
         // The apiserver reads YAML 1.1, where unquoted on/off/yes are booleans (postgresql parameters are strings).
-        const nextManifest = restoreManifestHeader(describeSource(source), serverName, sourceName ?? null) + yaml.stringify(m, { version: '1.1' })
+        const nextManifest = prepareManifest(targetValues)
+        const previous = manifestBasis === null ? null : cnpgTargetDraft(manifestBasis)
+        const next = cnpgTargetDraft(nextManifest)
+        if (manifest !== null && nextManifest !== manifestBasis && previous && next && onlyCNPGTargetChanged(previous, next, targetValues)) {
+          const updated = updateCNPGTargetYaml(manifest, targetValues)
+          if (updated !== null) {
+            setManifest(updated)
+            setManifestBasis(nextManifest)
+            setEditingManifest(true)
+            return
+          }
+        }
         if (manifest !== null && manifest !== manifestBasis && nextManifest !== manifestBasis) {
           setReplacementManifest(nextManifest)
           return
         }
-        if (nextManifest !== manifestBasis) setManifest(nextManifest)
+        if (nextManifest !== manifestBasis) { setManifest(nextManifest); setCustomIdentity(false) }
         setManifestBasis(nextManifest)
         setEditingManifest(true)
       }}
       title="Restore to a new cluster"
       subject={{ kind: entry.kind === 'cluster' ? 'Cluster' : entry.kind === 'backup' ? 'Backup' : 'ObjectStore', namespace, name: entry.name }}
       context={connection.context || undefined}
-      effect="Creates a new Cluster that bootstraps from backups. Nothing existing is changed; the source keeps running."
-      confirmLabel="Review manifest"
+      effect="Restore backups into a separate Cluster. The source Cluster is left unchanged."
+      confirmLabel={setupStep === 'source' ? 'Continue to new Cluster' : customIdentity && retainingDraft ? 'Review current YAML' : 'Review manifest'}
       warnings={noSource ? [] : [
+        ...(customIdentity ? ['Advanced YAML changed the recovery source, image or resource shape. The setup shows the original source evidence; review the current YAML for the intended configuration.'] : []),
         ...(availability?.unreadReason ? [availability.unreadReason] : []),
-        'The new cluster has no WAL archiving or backups until you configure them.',
-        ...(serverName ? [`If you add archiving later, do not reuse server name "${serverName}": the new cluster would write into the archive it restores from.`] : []),
+        ...(setupStep === 'target' ? ['The new cluster has no WAL archiving or backups until you configure them.', ...(serverName ? [`If you add archiving later, do not reuse server name "${serverName}": the new cluster would write into the archive it restores from.`] : [])] : []),
         ...warnings,
         ...(permission.unchecked ? [permission.unchecked] : []),
       ]}
       disabledReason={disabledReason}
       incompleteReason={incompleteReason}
-      notes={manifest !== null && manifest !== manifestBasis ? ['Your YAML edits are retained. Changing the setup will ask before replacing them.'] : []}
+      notes={manifest !== null && manifest !== manifestBasis ? ['Your YAML edits are retained. Name, instance and storage changes preserve them; changing the recovery source or time asks before replacing them.'] : []}
     >
       {noSource ? (
         <p className="text-sm text-theme-text-secondary">
@@ -261,96 +270,34 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
         </p>
       ) : (
       <>
-      {/* Full width: source names (a Backup, its ID and its store) outgrow one column. */}
-      <div className="mb-4 grid grid-cols-[7.5rem_minmax(0,1fr)] items-center gap-x-3">
-        <label className="text-xs text-theme-text-secondary" htmlFor="cnpg-restore-source">Restore from</label>
-        <select id="cnpg-restore-source" value={sourceIdx} onChange={(e) => { setSourceIdx(Number(e.target.value)); setTargetKind(null) }} className={FIELD}>
-          {sources.map((s, i) => <option key={i} value={i}>{describeSource(s)}</option>)}
-        </select>
+      <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-theme-text-tertiary" aria-label="Restore steps">
+        <span className={setupStep === 'source' ? 'font-semibold text-accent-text' : undefined}>1. Recovery point</span><span aria-hidden>→</span>
+        <span className={setupStep === 'target' ? 'font-semibold text-accent-text' : undefined}>2. New Cluster</span><span aria-hidden>→</span><span>3. Review & create</span>
       </div>
-      <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <div className="space-y-3">
-          <div className="grid grid-cols-[7.5rem_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
-            <label className="text-xs text-theme-text-secondary" htmlFor="cnpg-restore-name">New cluster</label>
-            <input id="cnpg-restore-name" value={name} onChange={(e) => setNewName(e.target.value)} className={`${FIELD} font-mono`} />
-          </div>
-          <fieldset className="space-y-1.5">
-            <legend className="mb-1 text-xs text-theme-text-secondary">Recover to</legend>
-            {pinned && (
-              <label className="flex items-center gap-2 text-sm text-theme-text-primary">
-                <input type="radio" name="cnpg-restore-target" checked={effectiveKind === 'backupEnd'} onChange={() => setTargetKind('backupEnd')} />
-                The end of this backup{source?.kind === 'objectStore' && source.backupEnd ? ` (${formatUTC(source.backupEnd)})` : ''}
-              </label>
-            )}
-            <label className="flex items-center gap-2 text-sm text-theme-text-primary">
-              <input type="radio" name="cnpg-restore-target" checked={effectiveKind === 'latest'} onChange={() => setTargetKind('latest')} />
-              The latest archived WAL
-            </label>
-            <label className="flex items-center gap-2 text-sm text-theme-text-primary">
-              <input type="radio" name="cnpg-restore-target" checked={effectiveKind === 'time'} onChange={() => setTargetKind('time')} />
-              A point in time
-            </label>
-            {effectiveKind === 'time' && (
-              <div className="ml-6 space-y-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    aria-label="Target time"
-                    type="datetime-local"
-                    step={1}
-                    value={timeValue}
-                    onChange={(e) => setTimeValue(e.target.value)}
-                    className={FIELD}
-                  />
-                  <select aria-label="Time zone of the target" value={zone} onChange={(e) => setZone(e.target.value as 'utc' | 'local')} className={FIELD}>
-                    <option value="utc">UTC</option>
-                    <option value="local">{localZone}</option>
-                  </select>
-                </div>
-                <div className="text-[11px] text-theme-text-tertiary">
-                  {targetIso ? <>Target: <span className="font-mono">{targetIso}</span> · {formatLocal(targetIso)}</> : 'The target is written to the manifest in UTC.'}
-                </div>
-              </div>
-            )}
-            {pinned && effectiveKind !== 'backupEnd' && (
-              <div className="ml-6 text-[11px] text-theme-text-tertiary">Starts from this backup and replays archived WAL after it.</div>
-            )}
-          </fieldset>
+      {manifest !== null && <button type="button" className="btn-secondary mb-4 px-3 py-1.5 text-xs" onClick={() => setEditingManifest(true)}>Continue editing current YAML</button>}
+      {setupStep === 'source' ? <CNPGRecoveryPoint
+        sources={sources}
+        sourceIndex={sourceIdx}
+        onSourceChange={(index) => { setSourceIdx(index); setTargetKind(null); setTargetOverrides({}) }}
+        targetKind={effectiveKind}
+        onTargetChange={setTargetKind}
+        timeValue={timeValue}
+        onTimeChange={setTimeValue}
+        zone={zone}
+        onZoneChange={setZone}
+        targetIso={targetIso}
+        evidence={evidence}
+        sourceClusterName={sourceName}
+      /> : <>
+        <div className="mb-4 rounded-lg border border-theme-border bg-theme-base p-3 text-sm">
+          <div className="font-medium text-theme-text-primary">{describeSource(source!)}</div>
+          <div className="mt-1 text-theme-text-secondary">{effectiveKind === 'time' && targetIso ? `Recover to ${formatUTC(targetIso)}` : effectiveKind === 'backupEnd' ? 'Recover to the end of this backup' : 'Recover to the latest archived WAL'}</div>
         </div>
-
-        <div className="rounded-lg border border-theme-border bg-theme-base px-3 py-2">
-          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">What the source holds</div>
-          <EvidenceRow label="First recoverability point">
-            <When point={evidence.firstPoint} empty={source?.kind === 'backup' ? 'This backup' : 'Not reported'} />
-          </EvidenceRow>
-          <EvidenceRow label="Last successful backup">
-            <When point={evidence.lastBackup} empty="None observed" />
-          </EvidenceRow>
-          <EvidenceRow label="WAL archiving">
-            <Tooltip content={evidence.archiving.detail} disabled={!evidence.archiving.detail}>
-              <span className={toneTextClass(evidence.archiving.tone as HealthLevel)}>{evidence.archiving.text}</span>
-            </Tooltip>
-            <div className="text-[11px] text-theme-text-tertiary">{evidence.archiving.source}</div>
-          </EvidenceRow>
-          <EvidenceRow label="Last archived WAL">
-            <When point={evidence.lastArchived} empty={sourceName ? 'Not reported' : 'Unknown'} />
-          </EvidenceRow>
-          {evidence.lastArchiveFailure && (
-            <EvidenceRow label="Last archive failure">
-              <When point={evidence.lastArchiveFailure} empty="" />
-            </EvidenceRow>
-          )}
-          {evidence.gaps.length > 0 && (
-            <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[11px] text-theme-text-tertiary">
-              {evidence.gaps.map((g) => <li key={g}>{g}</li>)}
-            </ul>
-          )}
-        </div>
-      </div>
-
+          <CNPGTargetFields value={targetValues} onChange={(values) => { setNewName(values.name); setTargetOverrides(values) }} idPrefix="cnpg-restore" namespaceFixed storageClasses={storageClasses.data?.map((item) => item.metadata.name)} imageDescription={imageDescription} imageRequired={requireImage} defaultClassDisabled={(manifest !== null ? cnpgTargetDraft(manifest) : baseManifest)?.spec.storage?.pvcTemplate?.storageClassName === ''} />
+          {storageClasses.isError && <p className="text-xs text-theme-text-tertiary">Storage class suggestions could not be read. You can enter a name directly.</p>}
       <div className="mt-4">
-        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
-          {sourceName ? `Copied from ${sourceName} — edit in the manifest` : 'No source cluster found — fill these in the manifest'}
-        </div>
+        <FoldSection title="Other source settings" summary={sourceName ? `${sourceName} · ${facts.length} settings seed the manifest` : 'Source settings are unavailable'} attention={!sourceName}>
+        <p className="mb-2 text-xs text-theme-text-tertiary">{sourceName ? 'These settings seed the manifest. Review Advanced YAML for the final configuration and any edits.' : 'Review Advanced YAML for PostgreSQL settings, resource requests and placement.'}</p>
         <dl className="grid grid-cols-[9rem_minmax(0,1fr)] gap-x-3 gap-y-1 text-sm">
           {facts.map((f) => (
             <div key={f.path} className="contents">
@@ -361,7 +308,9 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
             </div>
           ))}
         </dl>
+        </FoldSection>
       </div>
+      </>}
       </>
       )}
     </ActionConfirmDialog>

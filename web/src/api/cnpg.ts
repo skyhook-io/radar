@@ -262,7 +262,7 @@ export interface CNPGScheduleCapabilities {
   operator?: CNPGOperatorVerdict
 }
 
-function cnpgPath(kind: 'clusters' | 'scheduledbackups' | 'poolers', namespace: string, name: string) {
+export function cnpgPath(kind: 'clusters' | 'scheduledbackups' | 'poolers', namespace: string, name: string) {
   return `/cnpg/${kind}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`
 }
 

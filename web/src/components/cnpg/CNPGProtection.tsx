@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
+import { X } from 'lucide-react'
 import {
   Badge,
+  DialogPortal,
   SectionHeading,
   CNPGClusterBackupFacts,
-  CNPGWALArchivingFact,
   backupsForScheduledBackup,
   cnpgScheduleDestinationBlocker,
   refToSelectedResource,
@@ -28,7 +29,10 @@ import {
   Tooltip,
 } from '@skyhook-io/k8s-ui'
 import { CNPGWorkspaceHeader, CoverageNotice, clusterResource, coverageEmpty, cnpgResource, type CNPGScreenProps } from './shared'
-import { FilterChips, Mono, namespaceChip, PathText, ScreenBody, SectionTable, Segments, Sub } from '../workspace/layout'
+import { BreakText, FilterChips, Mono, namespaceChip, PathText, ScreenBody, SectionTable, Segments, Sub } from '../workspace/layout'
+import { useCNPGNavigate } from './useCNPGNavigate'
+import { cnpgClusterFullPath } from './paths'
+import { currentPageLabel } from '../../utils/page-links'
 
 const SEVERITY: Record<HealthLevel, 'success' | 'warning' | 'alert' | 'error' | 'neutral'> = {
   healthy: 'success',
@@ -149,6 +153,10 @@ export function CNPGProtection({
   onClearNamespaces,
   scopeCluster,
 }: CNPGScreenProps & { scopeCluster?: { namespace: string; name: string } }) {
+  const evidenceTitleId = useId()
+  const navigate = useCNPGNavigate()
+  const [evidenceKey, setEvidenceKey] = useState<string | null>(null)
+  const evidence = fleet.rows.find((row) => row.key === evidenceKey)
   const clusterFilter = scopeCluster ? `${scopeCluster.namespace}/${scopeCluster.name}` : searchParams.get('cluster')
   const rows = useMemo(
     () => fleet.rows.filter((r) => !clusterFilter || `${r.namespace}/${r.name}` === clusterFilter),
@@ -197,6 +205,11 @@ export function CNPGProtection({
 
   const body = (
     <>
+        <DialogPortal open={!!evidence} onClose={() => setEvidenceKey(null)} ariaLabelledBy={evidenceTitleId} className="w-full max-w-3xl">
+          <div className="flex items-start justify-between gap-3 border-b border-theme-border p-4"><div><h3 id={evidenceTitleId} className="text-lg font-semibold text-theme-text-primary">Recovery evidence</h3><p className="text-xs text-theme-text-tertiary">{evidence?.namespace}/{evidence?.name}</p></div><button type="button" onClick={() => setEvidenceKey(null)} aria-label="Close recovery evidence" className="rounded p-1 text-theme-text-secondary hover:bg-theme-hover"><X className="h-5 w-5" /></button></div>
+          <div className="max-h-[70vh] overflow-y-auto p-4">{evidence && <CNPGClusterBackupFacts row={evidence} onNavigate={(ref) => { setEvidenceKey(null); onInspect(refToSelectedResource(ref)) }} />}</div>
+          <div className="flex justify-end border-t border-theme-border p-4"><button type="button" onClick={() => { if (evidence) navigate(cnpgClusterFullPath(evidence.namespace, evidence.name, data.context, 'backups'), { state: { returnLabel: currentPageLabel(), returnCtx: data.context } }); setEvidenceKey(null) }} className="btn-secondary px-3 py-1.5 text-sm">Open Cluster Backups →</button></div>
+        </DialogPortal>
         <CoverageNotice fleet={fleet} data={data} kinds={['clusters', 'backups', 'scheduledBackups', 'objectStores']} namespace={scopeCluster?.namespace} />
         <FilterChips chips={chips} />
 
@@ -212,69 +225,31 @@ export function CNPGProtection({
           columns={[
             {
               header: 'Cluster',
-              width: '14%',
+              width: '20%',
               cell: (r: CNPGFleetRow) => (
                 <>
-                  <div className="truncate font-medium">{r.name}</div>
+                  <BreakText value={r.name} after="-" className="font-medium" />
                   <Sub>{r.namespace}</Sub>
                 </>
               ),
             },
-            { header: 'Schedule', width: '13%', cell: (r) => <FactValue fact={r.protection.schedule} /> },
             {
-              header: 'Last successful backup',
-              width: '16%',
-              cell: (r) => (
-                <>
-                  <FactValue fact={r.protection.lastSuccessfulBackup} />
-                  {r.protection.lastSuccessfulBackup.source && <Sub>{r.protection.lastSuccessfulBackup.source}</Sub>}
-                </>
-              ),
-            },
-            { header: 'WAL archiving', width: '16%', cell: (r) => <CNPGWALArchivingFact fact={r.protection.walArchiving} compact /> },
-            {
-              header: 'Recovery window',
-              width: '12%',
-              cell: (r) =>
-                r.protection.recoveryWindow.from ? (
-                  <>
-                    <span className={toneTextClass(r.protection.recoveryWindow.tone)}>
-                      from {ageText(r.protection.recoveryWindow.from)}
-                    </span>
-                    <Sub>
-                      {r.protection.recoveryWindow.tone === 'degraded' ? 'not advancing: archiving failing' : 'to the newest archived WAL'}
-                    </Sub>
-                  </>
-                ) : (
-                  <FactValue fact={r.protection.recoveryWindow} />
-                ),
+              header: 'Archive & schedule', width: '27%', cell: (r) => <>
+                <Tooltip content={[r.protection.walArchiving.source, r.protection.walArchiving.detail].filter(Boolean).join(' · ')}><FactValue fact={r.protection.walArchiving} /></Tooltip>
+                <Sub><FactValue fact={r.protection.schedule} /></Sub>
+              </>,
             },
             {
-              header: 'Restore validation',
-              width: '12%',
-              cell: (r) => (
-                <FactValue fact={r.protection.restoreValidation} />
-              ),
+              header: 'Successful backup', width: '19%', cell: (r) => <Tooltip content={r.protection.lastSuccessfulBackup.source}><FactValue fact={r.protection.lastSuccessfulBackup} /></Tooltip>,
             },
             {
-              header: 'Destination',
-              width: '17%',
-              cell: (r) => {
-                const d = r.protection.destination
-                if (d.method === 'barmanObjectStore') return <PathText value={d.text} />
-                // A resource name stays whole on its own line; only a name too long for the cell truncates.
-                if (d.method === 'plugin' && d.objectStore) {
-                  return (
-                    <>
-                      <div className="text-theme-text-secondary">ObjectStore</div>
-                      <Tooltip content={d.objectStore} wrapperClassName="max-w-full">
-                        <span className="block truncate">{d.objectStore}</span>
-                      </Tooltip>
-                    </>
-                  )
-                }
-                return <FactValue fact={d} />
-              },
+              header: 'Recovery boundary', width: '21%', cell: (r) => r.protection.recoveryWindow.from ? <>
+                <span className={toneTextClass(r.protection.recoveryWindow.tone)}>from {ageText(r.protection.recoveryWindow.from)}</span>
+                <Sub>{r.protection.recoveryWindow.tone === 'degraded' ? 'not advancing' : 'to newest archived WAL'}</Sub>
+              </> : <FactValue fact={r.protection.recoveryWindow} />,
+            },
+            {
+              header: 'Evidence', width: '13%', cell: (r) => <button type="button" aria-label={`Recovery evidence for ${r.namespace}/${r.name}`} onClick={(event) => { event.stopPropagation(); setEvidenceKey(r.key) }} className="rounded text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Details…</button>,
             },
           ]}
           rows={rows}
@@ -282,7 +257,7 @@ export function CNPGProtection({
           rowResource={(r) => clusterResource(r.namespace, r.name)}
           onInspect={onInspect}
           inspected={inspected}
-          minWidth={1000}
+          minWidth={800}
           empty={coverageEmpty(data.coverage.clusters, 'PostgreSQL clusters')}
           footer={`${rows.some((r) => r.protection.walArchiving.state === 'no_destination' && r.protection.walArchiving.operatorCondition?.status === 'True') ? "With no backup destination, CloudNativePG reports archiving as working because it accepts each WAL file without keeping it. " : ""}Kubernetes records no restore tests, so restore validation is never shown as passed.${stores.length > 0 ? " Recovery windows come from ObjectStore status." : ""}`}
         />}

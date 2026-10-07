@@ -125,12 +125,15 @@ export function sourceClusterFor(source: RestoreSource, clusters: any[], namespa
   if (source.kind === 'backup') return null
   return (
     clusters.find((c) => {
-      if (c?.metadata?.namespace !== namespace || c?.spec?.bootstrap?.recovery) return false
+      if (c?.metadata?.namespace !== namespace) return false
       if (source.kind === 'objectStore') {
-        const p = (c.spec?.plugins ?? []).find((x: any) => x?.name === CNPG_BARMAN_PLUGIN_NAME)
-        return p?.parameters?.barmanObjectName === source.objectStore && (p?.parameters?.serverName || c.metadata?.name) === source.serverName
+        const p = getCNPGClusterBarmanPlugin(c)
+        return p?.isWALArchiver === true && p.barmanObjectName === source.objectStore && p.serverName === source.serverName
       }
-      return (c.spec?.backup?.barmanObjectStore?.serverName || c.metadata?.name) === source.serverName
+      const archive = c.spec?.backup?.barmanObjectStore
+      return !!archive?.destinationPath && (archive.serverName || c.metadata?.name) === source.serverName &&
+        archive.destinationPath.replace(/\/+$/, '') === String(source.barmanObjectStore.destinationPath).replace(/\/+$/, '') &&
+        (archive.endpointURL || '').replace(/\/+$/, '') === String(source.barmanObjectStore.endpointURL || '').replace(/\/+$/, '')
     }) ?? null
   )
 }
@@ -358,7 +361,7 @@ export function buildRestoreManifest(args: {
       ...restoreImage(sourceCluster),
       ...(spec.postgresql?.parameters ? { postgresql: { parameters: spec.postgresql.parameters } } : {}),
       ...(spec.resources ? { resources: spec.resources } : {}),
-      storage: spec.storage ?? { size: '1Gi' },
+      storage: spec.storage ?? {},
       ...(spec.walStorage ? { walStorage: spec.walStorage } : {}),
       ...(spec.tablespaces ? { tablespaces: spec.tablespaces } : {}),
       bootstrap: { recovery },
@@ -379,7 +382,7 @@ export function restoreManifestHeader(sourceLabel: string, sourceServer: string 
     `# Restores ${sourceLabel} into a new cluster. Review before creating:`,
     copiedFrom
       ? `# - instances, image, storage, WAL storage, tablespaces, PostgreSQL parameters and resources are copied from ${copiedFrom}; edit them here.`
-      : '# - no source cluster was found: image and storage are placeholders; set them before creating.',
+      : '# - no source cluster was found: set the image and storage for the source before creating.',
     '# - the new cluster has no WAL archiving or backups until you configure them.',
     sourceServer
       ? `#   When you do, use a new serverName: archiving under "${sourceServer}" would write into the archive this restores from.`

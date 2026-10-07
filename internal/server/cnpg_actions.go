@@ -103,7 +103,7 @@ func (s *Server) handleCNPGScheduleAction(w http.ResponseWriter, r *http.Request
 	name := chi.URLParam(r, "name")
 	action := chi.URLParam(r, "action")
 	if !cnpgsvc.IsScheduleAction(action) {
-		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown ScheduledBackup action %q: must be suspend, resume, run or setSchedule", action))
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown ScheduledBackup action %q: must be suspend, resume, run, setSchedule or repairMethod", action))
 		return
 	}
 	req, _, ok := s.decodeActionRequest(w, r)
@@ -132,5 +132,5 @@ func (s *Server) writeCNPGActionError(w http.ResponseWriter, err error, action, 
 	if !errors.As(err, &ae) && strings.Contains(err.Error(), "failed calling webhook") {
 		err = integration.RefuseAction(http.StatusServiceUnavailable, cnpgsvc.CodeWebhook, "%s", "The CloudNativePG operator's admission webhook did not answer — the operator may be down: "+err.Error())
 	}
-	s.writeActionError(w, "cnpg", err, action, namespace, name, cnpgsvc.GrantFor)
+	s.writeActionError(w, "cnpg", err, action, namespace, name)
 }

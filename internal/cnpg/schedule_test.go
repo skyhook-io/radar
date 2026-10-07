@@ -7,12 +7,54 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/pkg/cnpg"
 )
+
+func TestScheduleClockEvidence(t *testing.T) {
+	operator := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "operator", Namespace: "system", Labels: map[string]string{cnpgOperatorNameLabel: cnpgOperatorNameValue}}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: cnpgOperatorContainer, Env: []corev1.EnvVar{{Name: "TZ", Value: "America/New_York"}}}}}}}}
+	clock, zone := scheduleClockOf([]*appsv1.Deployment{operator}, true, "db")
+	if !clock.Declared || clock.Zone != "America/New_York" {
+		t.Fatalf("clock=%+v", clock)
+	}
+	p := schedulePreviewIn("0 30 2 * * *", nil, false, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), zone)
+	if !p.Valid || p.NextRuns[0] != "2026-10-01T06:30:00Z" || strings.Contains(p.Description, "UTC") {
+		t.Fatalf("preview=%+v", p)
+	}
+	for _, scenario := range []string{"partial", "multiple", "valueFrom", "absent", "envFrom", "watch-unresolved", "duplicate-tz"} {
+		t.Run(scenario, func(t *testing.T) {
+			d := operator.DeepCopy()
+			deployments := []*appsv1.Deployment{d}
+			full := true
+			switch scenario {
+			case "partial":
+				full = false
+			case "multiple":
+				deployments = append(deployments, operator.DeepCopy())
+			case "valueFrom":
+				d.Spec.Template.Spec.Containers[0].Env[0] = corev1.EnvVar{Name: "TZ", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{}}}
+			case "absent":
+				d.Spec.Template.Spec.Containers[0].Env = nil
+			case "duplicate-tz":
+				d.Spec.Template.Spec.Containers[0].Env = append(d.Spec.Template.Spec.Containers[0].Env, corev1.EnvVar{Name: "TZ", Value: "UTC"})
+			case "envFrom":
+				d.Spec.Template.Spec.Containers[0].EnvFrom = []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{}}}
+			case "watch-unresolved":
+				d.Spec.Template.Spec.Containers[0].Env = append(d.Spec.Template.Spec.Containers[0].Env, corev1.EnvVar{Name: cnpgWatchNamespaceEnv, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{}}})
+			}
+			clock, zone := scheduleClockOf(deployments, full, "db")
+			if clock.Declared || zone != time.UTC || !strings.Contains(clock.Source, "assume") {
+				t.Fatalf("clock=%+v zone=%s", clock, zone)
+			}
+		})
+	}
+}
 
 func TestCNPGSchedulePreview(t *testing.T) {
 	now := time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
@@ -60,24 +102,24 @@ func TestCNPGSchedulePreview(t *testing.T) {
 
 func TestDescribeCNPGSchedule(t *testing.T) {
 	for spec, want := range map[string]string{
-		"0 0 0 * * *":       "every day at 00:00 UTC",
-		"0 0 2 * * *":       "every day at 02:00 UTC",
-		"@daily":            "every day at 00:00 UTC",
+		"0 0 0 * * *":       "every day at 00:00 operator clock",
+		"0 0 2 * * *":       "every day at 02:00 operator clock",
+		"@daily":            "every day at 00:00 operator clock",
 		"@hourly":           "every hour, on the hour",
 		"0 0 * * * *":       "every hour, on the hour",
 		"0 15 * * * *":      "every hour at :15",
 		"@every 1h30m":      "every 1h30m, counted from the operator's last check",
-		"0 30 2 * * 1-5":    "every Monday through Friday at 02:30 UTC",
-		"0 15 3 * * 1-5":    "every Monday through Friday at 03:15 UTC",
-		"0 0 1 * * sun,wed": "every Sunday and Wednesday at 01:00 UTC",
-		"0 0 4 1,15 * *":    "on day 1 and 15 of the month at 04:00 UTC",
-		"0 0 4 1 jan,7 *":   "on day 1 of the month in January and July at 04:00 UTC",
-		"15 30 4 * * *":     "every day at 04:30:15 UTC",
+		"0 30 2 * * 1-5":    "every Monday through Friday at 02:30 operator clock",
+		"0 15 3 * * 1-5":    "every Monday through Friday at 03:15 operator clock",
+		"0 0 1 * * sun,wed": "every Sunday and Wednesday at 01:00 operator clock",
+		"0 0 4 1,15 * *":    "on day 1 and 15 of the month at 04:00 operator clock",
+		"0 0 4 1 jan,7 *":   "on day 1 of the month in January and July at 04:00 operator clock",
+		"15 30 4 * * *":     "every day at 04:30:15 operator clock",
 		"0 */15 * * * *":    "every 15 minutes",
 		"30 0 9-17 * * *":   "every hour at :00:30, during hours 9 through 17",
 		"0 0 */6 * * 1":     "every Monday, every 6 hours, on the hour",
-		"0 0 0 */2 * 1":     "every 2 days of the month from day 1, when it is a Monday at 00:00 UTC",
-		"0 0 0 1,15 * 1":    "on day 1 and 15 of the month or every Monday at 00:00 UTC",
+		"0 0 0 */2 * 1":     "every 2 days of the month from day 1, when it is a Monday at 00:00 operator clock",
+		"0 0 0 1,15 * 1":    "on day 1 and 15 of the month or every Monday at 00:00 operator clock",
 	} {
 		if got := describeCNPGSchedule(spec); got != want {
 			t.Errorf("describe(%q) = %q, want %q", spec, got, want)
@@ -168,7 +210,7 @@ func TestCNPGScheduleReadingsWordOnlyValidSchedules(t *testing.T) {
 		}}
 	}
 	got := scheduleReadings([]*unstructured.Unstructured{sb("daily", "0 0 2 * * *"), sb("bad", "not a cron"), sb("empty", "")})
-	if got["db/daily"] != "every day at 02:00 UTC" {
+	if got["db/daily"] != "every day at 02:00 operator clock" {
 		t.Errorf("daily = %q", got["db/daily"])
 	}
 	if _, ok := got["db/bad"]; ok {
@@ -188,13 +230,13 @@ func TestDescribeCNPGScheduleMatchesTheParser(t *testing.T) {
 		want string
 		runs []string // the parser's next runs from start
 	}{
-		{"0 0 */5 * * *", "every day at 00:00, 05:00, 10:00, 15:00 and 20:00 UTC", []string{"2026-10-10T20:00:00Z", "2026-10-11T00:00:00Z"}},
+		{"0 0 */5 * * *", "every day at 00:00, 05:00, 10:00, 15:00 and 20:00 operator clock", []string{"2026-10-10T20:00:00Z", "2026-10-11T00:00:00Z"}},
 		{"0 0 */6 * * *", "every 6 hours, on the hour", []string{"2026-10-11T00:00:00Z", "2026-10-11T06:00:00Z"}},
 		// Five fields are seconds through month; the day of week is optional.
-		{"0 30 2 * *", "every day at 02:30 UTC", []string{"2026-10-11T02:30:00Z", "2026-10-12T02:30:00Z"}},
+		{"0 30 2 * *", "every day at 02:30 operator clock", []string{"2026-10-11T02:30:00Z", "2026-10-12T02:30:00Z"}},
 		{"0 0 */6,13 * * *", "cron 0 0 */6,13 * * *", nil},
 		{"0 0 0 1,*/2 * 1", "cron 0 0 0 1,*/2 * 1", nil},
-		{"0 0 0 */2 * 1", "every 2 days of the month from day 1, when it is a Monday at 00:00 UTC", []string{"2026-10-19T00:00:00Z"}},
+		{"0 0 0 */2 * 1", "every 2 days of the month from day 1, when it is a Monday at 00:00 operator clock", []string{"2026-10-19T00:00:00Z"}},
 		{"@every 500ms", "every 1s, counted from the operator's last check", []string{"2026-10-10T18:30:01Z"}},
 		{"@every 1.5s", "every 1s, counted from the operator's last check", []string{"2026-10-10T18:30:01Z"}},
 		{"@every 1h30m", "every 1h30m, counted from the operator's last check", []string{"2026-10-10T20:00:00Z"}},

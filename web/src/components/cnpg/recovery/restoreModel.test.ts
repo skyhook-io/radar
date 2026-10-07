@@ -15,6 +15,7 @@ import {
   restoreSourcesFor,
   restoreSourcesForStore,
   targetIsoFrom,
+  sourceClusterFor,
 } from './restoreModel'
 import { restoreOperationObserver } from './restoreOperation'
 
@@ -46,6 +47,19 @@ const store = {
 }
 
 describe('restore sources', () => {
+  it('matches an in-tree archive by destination and endpoint as well as server name', () => {
+    const source = { kind: 'inTree' as const, serverName: 'pg-a', barmanObjectStore: { destinationPath: 's3://bucket/archive/', endpointURL: 'https://storage.example' } }
+    const sourceCluster = { metadata: { name: 'pg-a', namespace: 'db' }, spec: { backup: { barmanObjectStore: { ...source.barmanObjectStore, destinationPath: 's3://bucket/archive' } } } }
+    const other = { metadata: { name: 'pg-a', namespace: 'db' }, spec: {} }
+    expect(sourceClusterFor(source, [other, sourceCluster], 'db')).toBe(sourceCluster)
+    expect(sourceClusterFor(source, [{ ...sourceCluster, spec: { backup: { barmanObjectStore: { ...source.barmanObjectStore, endpointURL: 'https://other.example' } } } }], 'db')).toBeNull()
+  })
+  it('recognizes a restored Cluster that now archives to its own identity, while ignoring disabled and non-archiving plugins', () => {
+    const restored = { ...cluster, spec: { ...cluster.spec, bootstrap: { recovery: { source: 'origin' } } } }
+    const source = { kind: 'objectStore' as const, objectStore: 'store', serverName: 'pg-a-v2' }
+    expect(sourceClusterFor(source, [restored], 'db')).toBe(restored)
+    for (const change of [{ enabled: false }, { isWALArchiver: false }]) expect(sourceClusterFor(source, [{ ...restored, spec: { ...restored.spec, plugins: [{ ...cluster.spec.plugins[0], ...change }] } }], 'db')).toBeNull()
+  })
   it('restores a plugin Backup through its ObjectStore with the backup ID pinned', () => {
     expect(restoreSourceForBackup(pluginBackup, cluster)).toEqual({
       kind: 'objectStore',

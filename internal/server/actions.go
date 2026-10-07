@@ -53,7 +53,7 @@ func (s *Server) decodeActionRequest(w http.ResponseWriter, r *http.Request) (in
 		return req, nil, false
 	}
 	if err := integration.CheckReviewedContext(req.ReviewedContext, contextName); err != nil {
-		s.writeActionError(w, "actions", err, "context", "", "", nil)
+		s.writeActionError(w, "actions", err, "context", "", "")
 		return req, nil, false
 	}
 	return req, dyn, true
@@ -61,9 +61,9 @@ func (s *Server) decodeActionRequest(w http.ResponseWriter, r *http.Request) (in
 
 // writeActionError answers a failed action. A refusal keeps its status, code,
 // current facts and completed steps; an apiserver error maps to its status,
-// and a Forbidden one names the grant needs(action) returns, bound to
-// namespace. tag prefixes the log lines.
-func (s *Server) writeActionError(w http.ResponseWriter, tag string, err error, action, namespace, name string, needs func(action string) (Grant, bool)) {
+// and a Forbidden one retains the apiserver's exact denial: a multi-resource
+// action can fail on a prerequisite read rather than its write. tag prefixes logs.
+func (s *Server) writeActionError(w http.ResponseWriter, tag string, err error, action, namespace, name string) {
 	var ae *integration.ActionError
 	if errors.As(err, &ae) {
 		log.Printf("[%s] %q %s/%s refused %d: %s", tag, action, sanitizeForLog(namespace), sanitizeForLog(name), ae.Status, ae.Message)
@@ -93,11 +93,6 @@ func (s *Server) writeActionError(w http.ResponseWriter, tag string, err error, 
 		status = http.StatusNotFound
 	case apierrors.IsForbidden(err):
 		status = http.StatusForbidden
-		if needs != nil {
-			if g, ok := needs(action); ok {
-				msg = "This needs " + g.In(namespace).String() + ": " + msg
-			}
-		}
 	case apierrors.IsAlreadyExists(err), apierrors.IsConflict(err):
 		status = http.StatusConflict
 	case apierrors.IsInvalid(err):

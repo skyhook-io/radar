@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { ChevronDown, DatabaseBackup, MoreHorizontal, Repeat } from 'lucide-react'
+import { ChevronDown, DatabaseBackup, MoreHorizontal, Repeat, X } from 'lucide-react'
 import { clsx } from 'clsx'
-import { ActionConfirmDialog, FoldSection, Tooltip, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA, type CNPGProblem } from '@skyhook-io/k8s-ui'
+import { ActionConfirmDialog, DialogPortal, FoldSection, Tooltip, cnpgPDBFact, cnpgQuorumFact, toneTextClass, type ActionWrite, type CNPGClusterHA, type CNPGProblem } from '@skyhook-io/k8s-ui'
 import { useCNPGAction, useCNPGClusterCapabilities, useCNPGRuntime, type CNPGActionResult, type CNPGBackupMethod, type CNPGClusterActionName, type CNPGClusterCapabilities } from '../../../api/cnpg'
 import { actionOutcomeLocked, type ActionCapability, capabilityReason } from '../../../api/actions'
 import { useToast } from '../../ui/Toast'
-import { useAnimatedUnmount } from '../../../hooks/useAnimatedUnmount'
-import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../../utils/animation'
 import { useCNPGClusterHA } from '../../../api/cnpg-ha'
 import { trackCNPGOperation, type TrackCNPGOperationInput } from '../operations/store'
 import { useCNPGWriteGuard, type CNPGWriteScope } from './useCNPGWriteGuard'
@@ -66,20 +64,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
   const [open, setOpen] = useState<DialogKind>(null)
   const [menu, setMenu] = useState(false)
   const [blockedAction, setBlockedAction] = useState<'backup' | 'switchover'>()
-  const menuPresence = useAnimatedUnmount(menu, overlayExitMs('menu'))
-  useEffect(() => {
-    if (!menu) return
-    // Capture phase, consumed: the page's own Escape (leave the full view)
-    // must not also fire when Escape only closes this menu.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      e.preventDefault()
-      e.stopPropagation()
-      setMenu(false)
-    }
-    document.addEventListener('keydown', onKey, true)
-    return () => document.removeEventListener('keydown', onKey, true)
-  }, [menu])
+
   const { query: workspace, fleet } = useCNPGFleet([namespace])
   const restoreSourceReason = assessRestoreSources(workspace.data, namespace, fleet?.rows.find((r) => r.name === name && r.namespace === namespace)?.cluster).disabledReason
   const actions = caps.data?.actions
@@ -144,7 +129,7 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
       )}
       <button
         type="button"
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         aria-expanded={menu}
         aria-label="More cluster actions"
         onClick={() => { setBlockedAction(undefined); setMenu((v) => !v) }}
@@ -154,63 +139,91 @@ export function CNPGClusterActions({ namespace, name, compact = false }: { names
         <ChevronDown className="h-3 w-3" />
       </button>
       {blockedReason && <div role="status" className="basis-full text-xs text-theme-text-secondary">{blockedReason}</div>}
-      {menu && <div className="fixed inset-0 z-40" onClick={() => setMenu(false)} aria-hidden />}
-      {menuPresence.shouldRender && (
-        <>
-          <div
-            role="menu"
-            inert={!menu || undefined}
-            className={`absolute right-0 top-full z-50 mt-1 w-56 origin-top-right overflow-hidden rounded-lg border border-theme-border bg-theme-surface py-1 shadow-theme-lg ${TRANSITION_MENU} ${
-              menuPresence.isOpen ? 'translate-y-0 scale-100 opacity-100' : '-translate-y-1 scale-[0.97] opacity-0'
-            } ${menu ? '' : 'pointer-events-none'}`}
-            style={overlayTransitionStyle(menuPresence.isOpen, 'menu')}
+      <DialogPortal
+        open={menu}
+        onClose={() => setMenu(false)}
+        ariaLabel="Cluster actions"
+        className="w-full max-w-sm p-2"
+      >
+        <div className="flex items-center justify-between gap-3 px-3 py-2">
+          <h3 className="text-sm font-semibold text-theme-text-primary">Cluster actions · {name}</h3>
+          <button
+            type="button"
+            onClick={() => setMenu(false)}
+            aria-label="Close cluster actions"
+            className="rounded p-1 text-theme-text-secondary hover:bg-theme-hover"
           >
-            {compact && item('switchover', 'Switchover…')}
-            {item('restart', 'Restart instances…')}
-            {item('reload', 'Reload configuration…')}
-            {item('fence', 'Fence instances…')}
-            {item('unfence', 'Lift fencing…')}
-            {hibernated ? item('rehydrate', 'Resume from hibernation…') : item('hibernate', 'Hibernate…')}
-            <div className="my-1 border-t border-theme-border" />
-            <Tooltip content={unavailable ?? capabilityTitle(actions?.psql)} position="left" wrapperClassName="w-full">
-              <button
-                type="button"
-                role="menuitem"
-                disabled={!actions?.psql.allowed || !caps.data?.facts.currentPrimary}
-                onClick={() => {
-                  setMenu(false)
-                  if (caps.data?.facts.currentPrimary) openPsql(namespace, caps.data.facts.currentPrimary, true)
-                }}
-                className={MENU_ITEM}
-              >
-                Open psql on the primary
-                {(!actions?.psql.allowed || !caps.data?.facts.currentPrimary) && <span className="mt-0.5 block text-xs text-theme-text-secondary">{unavailable ?? capabilityTitle(actions?.psql) ?? 'No primary instance is reported'}</span>}
-              </button>
-            </Tooltip>
-            <div className="px-3 pb-0.5 pt-1 text-[11px] uppercase tracking-wide text-theme-text-tertiary">Advanced</div>
-            {caps.data?.facts.maintenance.inProgress ? item('unsetMaintenance', 'Lift node maintenance…') : item('setMaintenance', 'Set node maintenance…')}
-            <div className="my-1 border-t border-theme-border" />
-            <Tooltip content={unavailable ?? capabilityTitle(actions?.restore) ?? restoreSourceReason} position="left" wrapperClassName="w-full">
-              <button
-                type="button"
-                role="menuitem"
-                disabled={!actions?.restore.allowed || !!restoreSourceReason}
-                className={MENU_ITEM}
-                onClick={() => {
-                  setMenu(false)
-                  setOpen('restore')
-                }}
-              >
-                Restore to a new cluster…
-              </button>
-            </Tooltip>
-            {(!actions?.restore.allowed || restoreSourceReason) && <div className="px-3 py-1 text-xs text-theme-text-secondary">{unavailable ?? capabilityTitle(actions?.restore) ?? restoreSourceReason}</div>}
-            <button type="button" role="menuitem" className={MENU_ITEM} onClick={() => { setMenu(false); setOpen('report') }}>
-              Download report…
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div role="menu" className="max-h-[65vh] overflow-y-auto">
+          {compact && item('switchover', 'Switchover…')}
+          {item('restart', 'Restart instances…')}
+          {item('reload', 'Reload configuration…')}
+          {item('fence', 'Fence instances…')}
+          {item('unfence', 'Lift fencing…')}
+          {hibernated ? item('rehydrate', 'Resume from hibernation…') : item('hibernate', 'Hibernate…')}
+          <div className="my-1 border-t border-theme-border" />
+          <Tooltip content={unavailable ?? capabilityTitle(actions?.psql)} position="left" wrapperClassName="w-full">
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!actions?.psql.allowed || !caps.data?.facts.currentPrimary}
+              onClick={() => {
+                setMenu(false)
+                if (caps.data?.facts.currentPrimary) openPsql(namespace, caps.data.facts.currentPrimary, true)
+              }}
+              className={MENU_ITEM}
+            >
+              Open psql on the primary
+              {(!actions?.psql.allowed || !caps.data?.facts.currentPrimary) && (
+                <span className="mt-0.5 block text-xs text-theme-text-secondary">
+                  {unavailable ?? capabilityTitle(actions?.psql) ?? 'No primary instance is reported'}
+                </span>
+              )}
             </button>
-          </div>
-        </>
-      )}
+          </Tooltip>
+          <div className="px-3 pb-0.5 pt-1 text-[11px] uppercase tracking-wide text-theme-text-tertiary">Advanced</div>
+          {caps.data?.facts.maintenance.inProgress
+            ? item('unsetMaintenance', 'Lift node maintenance…')
+            : item('setMaintenance', 'Set node maintenance…')}
+          <div className="my-1 border-t border-theme-border" />
+          <Tooltip
+            content={unavailable ?? capabilityTitle(actions?.restore) ?? restoreSourceReason}
+            position="left"
+            wrapperClassName="w-full"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!actions?.restore.allowed || !!restoreSourceReason}
+              className={MENU_ITEM}
+              onClick={() => {
+                setMenu(false)
+                setOpen('restore')
+              }}
+            >
+              Restore to a new cluster…
+            </button>
+          </Tooltip>
+          {(!actions?.restore.allowed || restoreSourceReason) && (
+            <div className="px-3 py-1 text-xs text-theme-text-secondary">
+              {unavailable ?? capabilityTitle(actions?.restore) ?? restoreSourceReason}
+            </div>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            className={MENU_ITEM}
+            onClick={() => {
+              setMenu(false)
+              setOpen('report')
+            }}
+          >
+            Download report…
+          </button>
+        </div>
+      </DialogPortal>
       <RefreshFailedNotice queries={[caps]} />
       {caps.error && !caps.data && (
         <div role="status" className="text-xs text-theme-text-secondary">

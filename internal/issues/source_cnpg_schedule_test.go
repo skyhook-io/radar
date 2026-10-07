@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -33,7 +32,7 @@ func cnpgSchedObj(kind, name string, created time.Time, spec, status map[string]
 
 func cnpgHourly(suspend bool) *unstructured.Unstructured {
 	return cnpgSchedObj("ScheduledBackup", "hourly", cnpgScheduleNow.Add(-48*time.Hour),
-		map[string]any{"schedule": "0 0 * * * *", "suspend": suspend, "cluster": map[string]any{"name": "pg-main"}}, nil)
+		map[string]any{"schedule": "0 0 * * * *", "suspend": suspend, "cluster": map[string]any{"name": "pg-main"}}, map[string]any{"lastScheduleTime": "2026-09-30T14:00:00Z"})
 }
 
 func cnpgBackupAt(name, phase string, started, stopped time.Time) *unstructured.Unstructured {
@@ -91,11 +90,11 @@ func TestCNPGScheduledRunNoBackup(t *testing.T) {
 		run       string // the run the issue dates itself from (first_seen)
 	}{
 		{
-			name:      "last success before the 13:00 run, which produced nothing",
+			name:      "last success before the reported 14:00 run, which produced nothing",
 			schedules: []*unstructured.Unstructured{cnpgHourly(false)},
 			backups:   []*unstructured.Unstructured{cnpgBackupAt("b1", "completed", at(12, 0), at(12, 2)), cnpgBackupAt("b2", "failed", at(13, 0), at(13, 1))},
 			want:      "ScheduledBackup hourly (every hour, on the hour) has had no successful backup since its run",
-			run:       "2026-09-30T13:00:00Z",
+			run:       "2026-09-30T14:00:00Z",
 		},
 		{
 			name:      "the 14:00 run succeeded",
@@ -120,10 +119,10 @@ func TestCNPGScheduledRunNoBackup(t *testing.T) {
 			backups:   []*unstructured.Unstructured{cnpgBackupAt("b1", "completed", at(1, 0), at(1, 1))},
 		},
 		{
-			name:      "no success ever: measured from the schedule's first fire",
+			name:      "no success ever: measured from the reported run",
 			schedules: []*unstructured.Unstructured{cnpgHourly(false)},
-			want:      "has had no successful backup observed since its first run",
-			run:       "2026-09-28T15:00:00Z",
+			want:      "has had no successful backup observed since its reported run",
+			run:       "2026-09-30T14:00:00Z",
 		},
 		{
 			name:      "the ObjectStore's recovery window counts as a success",
@@ -132,12 +131,12 @@ func TestCNPGScheduledRunNoBackup(t *testing.T) {
 			stores:    []*unstructured.Unstructured{store(at(14, 1))},
 		},
 		{
-			name:      "an older ObjectStore success still leaves the 13:00 run unaccounted for",
+			name:      "an older ObjectStore success still leaves the reported 14:00 run unaccounted for",
 			cluster:   pluginCluster,
 			schedules: []*unstructured.Unstructured{cnpgHourly(false)},
 			stores:    []*unstructured.Unstructured{store(at(12, 1))},
 			want:      "since its run",
-			run:       "2026-09-30T13:00:00Z",
+			run:       "2026-09-30T14:00:00Z",
 		},
 		{
 			name:      "unparseable schedule",
@@ -182,36 +181,24 @@ func TestCNPGScheduledRunNoBackup(t *testing.T) {
 	}
 }
 
-// Timestamps decode in Radar's local zone; the schedule is the operator's, in UTC.
-func TestCNPGScheduledRunFiresInUTC(t *testing.T) {
-	zone := time.FixedZone("IDT", 3*3600)
+func TestCNPGScheduledRunUsesReportedInstant(t *testing.T) {
 	c := cnpgCluster(nil, nil)
-	sched := cnpgSchedObj("ScheduledBackup", "nightly", time.Date(2026, 9, 28, 20, 0, 0, 0, time.UTC),
-		map[string]any{"schedule": "0 0 2 * * *", "cluster": map[string]any{"name": "pg-main"}}, nil)
-	sched.SetCreationTimestamp(metav1.NewTime(time.Date(2026, 9, 28, 23, 0, 0, 0, zone)))
+	sched := cnpgSchedObj("ScheduledBackup", "nightly", cnpgScheduleNow.Add(-48*time.Hour),
+		map[string]any{"schedule": "0 0 2 * * *", "cluster": map[string]any{"name": "pg-main"}},
+		map[string]any{"lastScheduleTime": "2026-09-30T02:00:00-04:00"})
 	p := cnpgScheduleProvider([]*unstructured.Unstructured{c}, []*unstructured.Unstructured{sched}, nil, nil)
 	got := detectCNPGScheduledRunIssues(p, cnpgClusterGVR, []*unstructured.Unstructured{c}, cnpgScheduleNow)
-	if len(got) != 1 || !strings.Contains(got[0].Message, "(every day at 02:00 UTC) has had no successful backup observed since its first run") || !got[0].FirstSeen.Equal(time.Date(2026, 9, 29, 2, 0, 0, 0, time.UTC)) {
-		t.Fatalf("issues = %+v", got)
+	if len(got) != 1 || !got[0].FirstSeen.Equal(time.Date(2026, 9, 30, 6, 0, 0, 0, time.UTC)) || !strings.Contains(got[0].Message, "every day at 02:00 operator clock") {
+		t.Fatalf("issues=%+v", got)
+	}
+	for _, reported := range []string{"", "invalid", "2026-10-01T00:00:00Z", "2026-09-01T00:00:00Z"} {
+		_ = unstructured.SetNestedField(sched.Object, reported, "status", "lastScheduleTime")
+		if got := detectCNPGScheduledRunIssues(p, cnpgClusterGVR, []*unstructured.Unstructured{c}, cnpgScheduleNow); len(got) != 0 {
+			t.Errorf("unestablished run %q raised %+v", reported, got)
+		}
 	}
 }
 
-// Without a watched ScheduledBackup kind nothing is known about schedules, so
-// nothing is said.
-func TestCNPGScheduledRunNeedsTheScheduleKind(t *testing.T) {
-	c := cnpgCluster(nil, nil)
-	p := &fakeProvider{
-		dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{cnpgClusterGVR: {c}},
-		kinds:   map[schema.GroupVersionResource]string{cnpgClusterGVR: "Cluster"},
-	}
-	if got := detectCNPGScheduledRunIssues(p, cnpgClusterGVR, []*unstructured.Unstructured{c}, cnpgScheduleNow); len(got) != 0 {
-		t.Errorf("issues = %v", reasonsOf(got))
-	}
-}
-
-// A run is judged missed only from backups that were read: a Backup list that
-// failed or is not watched, or an unread ObjectStore for a cluster backing up
-// to one, says nothing about whether the run produced a backup.
 func TestCNPGScheduledRunNeedsReadableBackups(t *testing.T) {
 	at := func(h, m int) time.Time { return time.Date(2026, 9, 30, h, m, 0, 0, time.UTC) }
 	schedules := []*unstructured.Unstructured{cnpgHourly(false)}
@@ -253,7 +240,7 @@ func TestCNPGScheduledRunNeedsReadableBackups(t *testing.T) {
 func TestCNPGScheduledRunThroughCompose(t *testing.T) {
 	c := cnpgCluster(map[string]any{"instances": int64(1)}, map[string]any{"phase": "Cluster in healthy state", "readyInstances": int64(1)})
 	sched := cnpgSchedObj("ScheduledBackup", "hourly", time.Now().Add(-48*time.Hour),
-		map[string]any{"schedule": "0 0 * * * *", "cluster": map[string]any{"name": "pg-main"}}, nil)
+		map[string]any{"schedule": "0 0 * * * *", "cluster": map[string]any{"name": "pg-main"}}, map[string]any{"lastScheduleTime": time.Now().Add(-time.Hour).Format(time.RFC3339)})
 	p := cnpgScheduleProvider([]*unstructured.Unstructured{c}, []*unstructured.Unstructured{sched}, nil, nil)
 	got := Compose(p, Filters{Kinds: []string{"Cluster"}, Limit: NoLimit, AllowUnfilteredEvidence: true})
 	found := false

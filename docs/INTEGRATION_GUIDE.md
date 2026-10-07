@@ -173,6 +173,7 @@ unknown, partial and denied values first: every piece here exists to keep them.
     downloads. Never add `retry` to a mutation.
   - When the Radar is too old, hide the sidebar destinations and fall back to
     the standard detail views.
+- [ ] **Guided multi-resource setup.** Keep integration-specific target models and workflow state in the app. CNPG reuses its target fields between Create and Restore, its schedule inputs between Edit and Create, and the shared strict-create/YAML review for both. Put preflight and reviewed conditional writes in the integration service, with thin HTTP adapters and a new feature flag when the endpoint/verb is new. Each independent write needs its own review and observed follow-through; saving declarations is not end-to-end success. Do not grow a universal provisioning registry around one integration. A future second concrete setup flow should extract only the seam it actually shares.
 - [ ] **Domain rules.** Put interpretation reused by checks, findings and actions in a pure integration package (CNPG uses `pkg/cnpg`), independent of HTTP and caller permissions. Keep matching frontend derivations together; share fixture cases for rules represented in both languages. Put request-independent orchestration in an integration service (`internal/cnpg` is the current example), with caller-scoped observations/clients supplied by server adapters. Share typed service reads between endpoints and reports rather than invoking handlers through a response recorder. Keep HTTP requests, routing and process-wide client resolution outside the service.
 - [ ] **Findings.** The Issues engine owns findings from cached Kubernetes objects. Cross-resource findings retain their inventory operations in `Issue.RequiredReads`; hosts supply `CanReadEvidence` for both composition and cached related-issue projections. A live proxy or Prometheus measurement stays in the workspace as a `WorkspaceProblem` with `source: 'measurement'`, `measuredBy` and, when matched by name only, `unverifiedMatch`. Add no new severity ladder, and title reasons the Issues page already titles with `issueReasonTitle`. Carry semantic reasons/states through presentation; never branch on generated IDs or display text.
 - [ ] **Screens.**
@@ -213,6 +214,13 @@ unknown, partial and denied values first: every piece here exists to keep them.
     - `web/src/api/actions.ts`: `actionErrorCode`, widened with the integration's
       own codes; `actionOutcomeLocked`, `actionCompleted` and `capabilityReason`.
     - `ActionConfirmDialog` and the GitOps write guard (`useGitOpsWriteGuard`).
+      Multi-step setup can supply `onBack`/`backLabel` without giving Cancel a
+      second meaning. For YAML creation, `CreateResourceDialog.onBack(yaml)`
+      returns the edited draft to the parent; the parent retains unrepresented
+      fields and owns any explicit replacement. `onCreated(result, submittedYaml)`
+      reports the actual write so follow-through never assumes the earlier form
+      still describes edited YAML. Keep domain forms and step state in the
+      integration host; these presentation contracts contain no integration logic.
   - An accepted POST is not a completed action: follow the outcome in status.
 - [ ] **Docs and fixtures.** Add a `docs/<x>.md` listing which source each value
   comes from and how it reads when unknown, a `scripts/<x>-demo.sh` with its

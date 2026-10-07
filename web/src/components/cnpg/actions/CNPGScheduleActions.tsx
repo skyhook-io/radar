@@ -8,6 +8,8 @@ import { useToast } from '../../ui/Toast'
 import { useCNPGWriteGuard } from './useCNPGWriteGuard'
 import { cnpgOperatorActionNote } from '../operatorStatus'
 import { trackCNPGOperation } from '../operations/store'
+import { CNPGScheduleInput } from '../protection/CNPGScheduleInput'
+import { CNPGScheduleRepairButton } from '../protection/CNPGScheduleRepairButton'
 
 const BUTTON =
   'btn-secondary inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-xs font-medium disabled:cursor-not-allowed'
@@ -42,6 +44,7 @@ export function CNPGScheduleActions({ namespace, name }: { namespace: string; na
         const destinationBlocked = data.actions.run.reasonCode === 'backup_destination'
         return <>{reason}{cluster && destinationBlocked && <button type="button" className="ml-1 text-accent-text hover:underline" onClick={() => navigate(cnpgDetailPath({ plural: 'clusters', namespace, name: cluster }, data.context, 'backups'))}>Cluster {cluster} Backups →</button>}</>
       })()}</div>}
+      {data.actions.run.reasonCode === 'backup_destination' && <CNPGScheduleRepairButton namespace={namespace} name={name} />}
       {open === 'setSchedule' && <EditScheduleDialog namespace={namespace} name={name} onClose={() => setOpen(null)} />}
       {open && open !== 'setSchedule' && <ScheduleDialog kind={open} namespace={namespace} name={name} onClose={() => setOpen(null)} />}
     </div>
@@ -73,7 +76,7 @@ function EditScheduleDialog({ namespace, name, onClose }: { namespace: string; n
           : p && !p.valid
             ? 'The operator cannot run this schedule'
             : undefined
-  const warnings = [...(operatorNote?.tone === 'warning' ? [operatorNote.text] : []), ...(p?.valid && p.runsImmediately ? ['Saving makes the operator create one backup right away: a time on the new schedule has passed since its last check.'] : [])]
+  const warnings = [...(operatorNote?.tone === 'warning' ? [operatorNote.text] : []), ...(p?.valid && p.runsImmediately ? [p.clock?.declared ? 'The declared operator clock indicates a due run: saving can create one backup right away.' : 'The UTC estimate indicates a due run. The operator clock is not verified, so saving may create one backup right away.'] : [])]
   return (
     <ActionConfirmDialog
       open
@@ -109,17 +112,7 @@ function EditScheduleDialog({ namespace, name, onClose }: { namespace: string; n
       incompleteReason={incompleteReason}
     >
       <div className="space-y-2">
-        <label className="block text-xs font-medium text-theme-text-secondary" htmlFor="cnpg-schedule-input">
-          Schedule · six fields, seconds first (second minute hour day-of-month month day-of-week), or a descriptor such as @daily
-        </label>
-        <input
-          id="cnpg-schedule-input"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          spellCheck={false}
-          autoComplete="off"
-          className="w-full rounded-md border border-theme-border bg-theme-elevated px-2.5 py-1.5 font-mono text-sm text-theme-text-primary focus:border-accent focus:outline-none"
-        />
+        <CNPGScheduleInput value={draft} onChange={setDraft} />
         {preview.error && next !== '' && (
           <div className="text-xs text-theme-text-tertiary">The schedule could not be checked: {preview.error instanceof Error ? preview.error.message : 'unknown error'}</div>
         )}

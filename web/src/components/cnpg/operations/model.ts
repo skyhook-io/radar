@@ -36,6 +36,8 @@ export interface CNPGTrackedOperation {
   steps?: CNPGOpStep[]
   /** When the observer last saw its progress key change. */
   lastProgressAt: number
+  /** Last assessment in this tab, including an assessment with unavailable evidence. */
+  lastCheckedAt?: number
   progressKey?: string
   /** A related object to open, e.g. the Backup. */
   link?: { kind: string; group: string; name: string }
@@ -111,6 +113,7 @@ export function cnpgOperationFollowed(op: CNPGTrackedOperation): boolean {
 /** Advance one operation against an observation. Pure. */
 export function advanceCNPGOperation(op: CNPGTrackedOperation, obs: CNPGObservation): CNPGTrackedOperation {
   if (CNPG_OP_TERMINAL.has(op.state)) return op
+  op = { ...op, lastCheckedAt: obs.now }
   if (op.clusterUID && obs.clusterUID && obs.clusterUID !== op.clusterUID) {
     return { ...op, state: 'superseded', detail: 'The Cluster was deleted and recreated; this operation no longer applies to it', finishedAt: obs.now }
   }

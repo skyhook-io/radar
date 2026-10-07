@@ -21,13 +21,13 @@ func DescribeSchedule(spec string) string {
 	spec = strings.TrimSpace(spec)
 	switch spec {
 	case "@yearly", "@annually":
-		return "every year on 1 January at 00:00 UTC"
+		return "every year on 1 January at 00:00 operator clock"
 	case "@monthly":
-		return "on day 1 of every month at 00:00 UTC"
+		return "on day 1 of every month at 00:00 operator clock"
 	case "@weekly":
-		return "every Sunday at 00:00 UTC"
+		return "every Sunday at 00:00 operator clock"
 	case "@daily", "@midnight":
-		return "every day at 00:00 UTC"
+		return "every day at 00:00 operator clock"
 	case "@hourly":
 		return "every hour, on the hour"
 	}
@@ -77,9 +77,9 @@ func DescribeSchedule(spec string) string {
 		m, _ := strconv.Atoi(min)
 		sc, _ := strconv.Atoi(sec)
 		if sc == 0 {
-			when = fmt.Sprintf("at %02d:%02d UTC", h, m)
+			when = fmt.Sprintf("at %02d:%02d operator clock", h, m)
 		} else {
-			when = fmt.Sprintf("at %02d:%02d:%02d UTC", h, m, sc)
+			when = fmt.Sprintf("at %02d:%02d:%02d operator clock", h, m, sc)
 		}
 	} else {
 		when = cronIntraDayPhrase(sec, min, hour)
@@ -194,7 +194,7 @@ func cronNumberList(s string) bool {
 	return true
 }
 
-// cronTimesPhrase words the times of day a list of hours selects: "00:00, 05:00 and 10:00 UTC".
+// cronTimesPhrase words the times of day a list of hours selects: "00:00, 05:00 and 10:00 operator clock".
 func cronTimesPhrase(hours, min, sec string) string {
 	m, _ := strconv.Atoi(min)
 	sc, _ := strconv.Atoi(sec)
@@ -207,7 +207,7 @@ func cronTimesPhrase(hours, min, sec string) string {
 			times = append(times, fmt.Sprintf("%02d:%02d:%02d", hh, m, sc))
 		}
 	}
-	return strings.Join(times[:len(times)-1], ", ") + " and " + times[len(times)-1] + " UTC"
+	return strings.Join(times[:len(times)-1], ", ") + " and " + times[len(times)-1] + " operator clock"
 }
 
 // cnpgEveryDuration is the interval robfig/cron v1 actually runs an "@every"

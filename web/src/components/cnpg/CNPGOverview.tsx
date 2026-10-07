@@ -24,6 +24,9 @@ import { BreakText, FilterChips, ScreenEmptyState } from '../workspace/layout'
 import { ROW_HOVER, TABLE_HEAD, TABLE_WRAP, TBODY, TD, TH } from '../workspace/table'
 import { sameSelectedResource } from '../../utils/drawer-trail'
 import { useCNPGNavigate } from './useCNPGNavigate'
+import { useCNPGOperations } from './operations/store'
+import { latestCNPGOperation } from './operations/presentation'
+import { CNPGFleetOperation } from './operations/CNPGFleetOperation'
 
 type Filter = 'attention' | 'all'
 
@@ -197,6 +200,7 @@ export function CNPGOverview({
 }: CNPGScreenProps) {
   const navigate = useCNPGNavigate()
   const { connection } = useConnection()
+  const operations = useCNPGOperations()
   const q = searchParams.get('q') ?? ''
   const cat = (searchParams.get('cat') as CNPGProblemCategory | null) ?? null
   const rawFilter = searchParams.get('filter') as Filter | null
@@ -351,7 +355,7 @@ export function CNPGOverview({
             <div className={TABLE_WRAP}>
               {/* Fits an ~850px content area (a 1280px window) without scrolling: the
                   two fixed columns take 16rem and the percentages stay under the rest. */}
-              <table className="w-full min-w-[820px] table-fixed">
+              <table className="w-full min-w-[780px] table-fixed">
                 <colgroup>
                   <col className="w-[22%]" />
                   <col className="w-[18%]" />
@@ -374,6 +378,7 @@ export function CNPGOverview({
                   {rows.map((row) => {
                     const ref: SelectedResource = { kind: 'clusters', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name }
                     const active = sameSelectedResource(inspected, ref)
+                    const operation = latestCNPGOperation(operations, { context, namespace: row.namespace, name: row.name, uid: row.cluster.metadata.uid })
                     return (
                       <tr
                         key={row.key}
@@ -386,6 +391,7 @@ export function CNPGOverview({
                             <span className="mt-1.5 shrink-0"><RowStatusDot row={row} /></span>
                             <div className="min-w-0">
                               <BreakText value={row.name} after="-" className="font-medium" />
+                              {operation && <CNPGFleetOperation op={operation} onFollow={() => navigate(cnpgClusterFullPath(row.namespace, row.name, context))} />}
                               <div className="flex min-w-0 items-baseline text-xs text-theme-text-tertiary">
                                 <Tooltip content={`Namespace ${row.namespace}`} wrapperClassName="min-w-0">
                                   <span className="block truncate">{row.namespace}</span>

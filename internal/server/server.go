@@ -622,9 +622,12 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/cnpg/poolers/{namespace}/{name}/runtime", s.handleCNPGPoolerRuntime)
 			r.Get("/cnpg/clusters/{namespace}/{name}/capabilities", s.handleCNPGClusterCapabilities)
 			r.Post("/cnpg/clusters/{namespace}/{name}/actions/{action}", s.handleCNPGClusterAction)
+			r.Post("/cnpg/clusters/{namespace}/{name}/protection/preview", s.handleCNPGArchivingPreview)
+			r.Get("/cnpg/clusters/{namespace}/{name}/schedule-preview", s.handleCNPGDraftSchedulePreview)
 			r.Get("/cnpg/scheduledbackups/{namespace}/{name}/capabilities", s.handleCNPGScheduleCapabilities)
 			r.Post("/cnpg/scheduledbackups/{namespace}/{name}/actions/{action}", s.handleCNPGScheduleAction)
 			r.Get("/cnpg/scheduledbackups/{namespace}/{name}/schedule-preview", s.handleCNPGSchedulePreview)
+			r.Get("/cnpg/scheduledbackups/{namespace}/{name}/method-preview", s.handleCNPGScheduleMethodPreview)
 			r.Get("/cnpg/clusters/{namespace}/{name}/sessions", s.handleCNPGClusterSessions)
 			r.Get("/cnpg/clusters/{namespace}/{name}/restore-checks", s.handleCNPGRestoreChecks)
 			r.Get("/cnpg/clusters/{namespace}/{name}/parameters", s.handleCNPGClusterParameters)
@@ -1399,6 +1402,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		PolicyResource:      true,
 		WorkloadHistory:     true,
 		CNPGWorkspace:       true,
+		CNPGProtectionSetup: true,
 		GitOpsWriteEvidence: true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()

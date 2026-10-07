@@ -56,7 +56,8 @@ export interface CreateResourceDialogProps {
   isPreviewing?: boolean
   previewError?: string | null
   schemaLoader?: YamlSchemaLoader
-  onCreated?: (result: ApplyResult) => void
+  /** Receives the first result and the exact submitted manifest, after a successful write. */
+  onCreated?: (result: ApplyResult, submittedYaml: string) => void
   /** Start in strict create mode (e.g. a prefilled manifest that must not update an existing object). */
   initialMode?: 'apply' | 'create'
   /** Stay in `initialMode` with the Apply/Create choice and Force hidden, even after a partial create (e.g. a new object that must only be created). */
@@ -169,7 +170,7 @@ export function CreateResourceDialog({
   }, [])
 
   const finishApply = useCallback(
-    (results: ApplyResult[], appliedMode: 'apply' | 'create', wasDryRun: boolean) => {
+    (results: ApplyResult[], appliedMode: 'apply' | 'create', wasDryRun: boolean, submittedYaml: string) => {
       const action = appliedMode === 'create' ? 'Created' : 'Applied'
       const dryRunLabel = wasDryRun ? ' (dry run)' : ''
       if (results.length === 1) {
@@ -183,7 +184,7 @@ export function CreateResourceDialog({
       if (wasDryRun) return
       if (onCreated && results.length > 0) {
         closeNow()
-        onCreated(results[0])
+        onCreated(results[0], submittedYaml)
       } else {
         window.setTimeout(closeNow, 1200)
       }
@@ -312,7 +313,7 @@ export function CreateResourceDialog({
         dryRun,
         force: mode === 'apply' && force,
       })
-      finishApply(results, mode, dryRun)
+      finishApply(results, mode, dryRun, yaml)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unknown error')
     }
@@ -331,7 +332,7 @@ export function CreateResourceDialog({
         reviewedResourceVersions,
         reviewedContext: preview.context,
       })
-      finishApply(results, preview.mode, false)
+      finishApply(results, preview.mode, false, preview.yaml)
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'Unknown error'
       const appliedResults =

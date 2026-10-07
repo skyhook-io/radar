@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import type { RenderDiagnoseAction } from '../../context/DiagnoseCustomization'
 import { useSearchParams } from 'react-router-dom'
-import { FoldSection, CNPGDimensionMark, CNPGDimensionVerdict, CNPGServingStatus, cnpgScheduleDestinationBlocker, cnpgBackupDeclaration, cnpgHasBackupDestination, getCNPGClusterBarmanPlugin, coverageReadable, toneTextClass, type CNPGDimension, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
+import { CNPGDimensionMark, CNPGDimensionVerdict, CNPGServingStatus, coverageReadable, toneTextClass, type CNPGDimension, type CNPGFleetRow } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { useCNPGRuntime } from '../../api/cnpg'
 import { CNPGStorage } from './CNPGStorage'
@@ -14,6 +14,7 @@ import { useCNPGRestoreCapability } from '../../api/cnpg-recovery'
 import { CNPGScreenGate } from './shared'
 import { useCNPGClusterAssessment } from './useCNPGClusterAssessment'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
+import { CNPGProtectionSetup } from './protection/CNPGProtectionSetup'
 
 /** The health mark beside a tab: the same assessment the Overview explains, for the dimension that tab holds. */
 export function CNPGTabMark({ namespace, name, id }: { namespace: string; name: string; id: CNPGDimension['id'] }) {
@@ -133,32 +134,13 @@ export function CNPGBackupsTab({
       {(data, readyFleet) => {
         const cluster = readyFleet.rows.find((r) => r.namespace === namespace && r.name === name)?.cluster
         const nothing = assessRestoreSources(data, namespace, cluster).disabledReason
-        const schedules = (data.objects.scheduledBackups ?? []).filter((s) => s.metadata?.namespace === namespace && s.spec?.cluster?.name === name)
-        const blockedSchedules = schedules.filter((s) => cnpgScheduleDestinationBlocker(s, [cluster]))
-        const pluginDestination = cluster && getCNPGClusterBarmanPlugin(cluster)
-        const missingDestination = cluster && !cnpgHasBackupDestination(cnpgBackupDeclaration(cluster))
         return (
         <div className="flex min-h-0 flex-1 flex-col">
           <CNPGTabVerdict namespace={namespace} name={name} id="protection" className="px-4 pt-4" />
-          {(missingDestination || blockedSchedules.length > 0) && (
-            <div className="px-4 pt-2 text-sm text-theme-text-secondary">
-              <p>
-                {blockedSchedules.length > 0 ? <>
-                  Configure {blockedSchedules.some((s) => (s.spec?.method || 'barmanObjectStore') === 'barmanObjectStore') ? 'spec.backup.barmanObjectStore' : blockedSchedules.some((s) => s.spec?.method === 'volumeSnapshot') ? 'spec.backup.volumeSnapshot' : 'the plugin and its ObjectStore'} for {blockedSchedules.map((s) => s.metadata.name).join(', ')}.
-                </> : 'Configure spec.backup.barmanObjectStore.'}
-                {' '}<a href="https://cloudnative-pg.io/docs/devel/backup/" target="_blank" rel="noopener noreferrer" className="inline-flex whitespace-nowrap text-accent-text hover:underline">CloudNativePG backup docs ↗</a>
-                {onOpenYaml && <>{' · '}<button type="button" onClick={onOpenYaml} className="text-accent-text hover:underline">Cluster YAML →</button></>}
-              </p>
-              <div className="mt-2">
-                <FoldSection title="Other backup methods" summary="" attention={false}>
-                  <p>{pluginDestination?.barmanObjectName ? <>Or use this Cluster’s ObjectStore {pluginDestination.barmanObjectName}: change {blockedSchedules.map((s) => s.metadata.name).join(', ')}’s spec.method to plugin and spec.pluginConfiguration.name to {pluginDestination.name}.</> : <>Or set up plugin/ObjectStore or volume snapshots{blockedSchedules.length > 0 && <>; change {blockedSchedules.map((s) => s.metadata.name).join(', ')}’s spec.method to match (plugin needs pluginConfiguration)</>}.</>}</p>
-                </FoldSection>
-              </div>
-            </div>
-          )}
           <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
+            <CNPGProtectionSetup key={`${namespace}/${name}`} namespace={namespace} name={name} onInspect={onInspect} onOpenYaml={onOpenYaml} onOpenOperator={onOpenOperator} />
             <CNPGRestoreButton namespace={namespace} entry={{ kind: 'cluster', name }} disabledReason={restoreBlocked ?? nothing} />
-            <span className="text-xs text-theme-text-tertiary">{nothing ?? 'Restores into a new Cluster beside this one; this cluster is not changed.'}</span>
+            <span className="text-xs text-theme-text-tertiary">{restoreBlocked ?? nothing ?? 'Restores into a new Cluster beside this one; this cluster is not changed.'}</span>
           </div>
           {row && (
             <div className="px-4 pt-4">

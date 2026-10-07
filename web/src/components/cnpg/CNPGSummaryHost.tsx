@@ -135,7 +135,7 @@ function ClusterSummaryHost({ namespace, name, resource, context, onNavigate }: 
                       return
                     }
                     const protection = cnpgClusterFullPath(namespace, name, connection.context || undefined, 'backups')
-                    go(step === 'validate' ? `${protection}&validate=1` : protection)
+                    go(step === 'validate' ? `${protection}&validate=1` : step === 'backup' ? `${protection}&protectionSetup=1` : protection)
                   },
                 }}
               />

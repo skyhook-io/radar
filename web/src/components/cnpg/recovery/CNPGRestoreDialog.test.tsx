@@ -4,6 +4,7 @@ import type { ReactNode } from 'react'
 import { CNPGRestoreDialog } from './CNPGRestoreDialog'
 const state = vi.hoisted(() => ({ coverage: 'denied', destination: false }))
 vi.mock('../../../api/cnpg', () => ({ useCNPGWorkspace: () => ({ isLoading: false, data: { coverage: { backups: { state: state.coverage } }, objects: { clusters: [{ apiVersion: 'postgresql.cnpg.io/v1', metadata: { name: 'pg', namespace: 'db' }, spec: state.destination ? { backup: { barmanObjectStore: { destinationPath: 's3://archive' } } } : {} }], backups: [] } } }), useCNPGRuntime: () => ({}) }))
+vi.mock('../../../api/client', () => ({ useResources: () => ({ data: [] }) }))
 vi.mock('../../../api/cnpg-recovery', () => ({ useCNPGRestoreCapability: () => ({ data: { allowed: true } }) }))
 vi.mock('../../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'test' } }) }))
 vi.mock('../../ui/Toast', () => ({ useToast: () => ({ showSuccess: vi.fn() }) }))

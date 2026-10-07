@@ -5,6 +5,7 @@ import { buildCNPGFleet, CNPG_WORKSPACE_KEYS, type CNPGWorkspaceResponse, type C
 import { CNPGProtection } from './CNPGProtection'
 
 vi.mock('../../context/ConnectionContext', () => ({ useConnection: () => ({ connection: { context: 'test' } }) }))
+vi.mock('./useCNPGNavigate', () => ({ useCNPGNavigate: () => vi.fn() }))
 afterEach(() => vi.useRealTimers())
 const now = Date.parse('2026-10-05T12:00:00Z')
 const backup = (name: string, phase: string, ageDays: number) => ({ apiVersion: 'postgresql.cnpg.io/v1', kind: 'Backup', metadata: { namespace: 'pg', name }, spec: { cluster: { name: 'pg' } }, status: { phase, startedAt: new Date(now - ageDays * 86400000).toISOString() } })
@@ -88,9 +89,15 @@ it('explains absent WAL storage and suppresses ObjectStore-only footnotes on fle
   for (const scope of [undefined, { namespace: 'pg', name: 'payments' }]) {
     const html = render({ clusters: [cluster] }, { state: 'full' }, '', scope)
     expect(html).toContain('Not archived: no destination configured')
-    expect(html).toContain(scope ? 'point-in-time recovery is unavailable' : 'No point-in-time recovery')
-    expect(html).toContain('Operator report')
-    expect(html).toContain('aria-expanded="false"')
+    if (scope) {
+      expect(html).toContain('point-in-time recovery is unavailable')
+      expect(html).toContain('Operator report')
+      expect(html).toContain('aria-expanded="false"')
+    } else {
+      expect(html).toContain('Recovery evidence for pg/payments')
+      expect(html).not.toContain('Operator report')
+      expect(html).toContain('without keeping it')
+    }
     expect(html).toContain('None: no backup destination')
     expect(html).not.toContain('Recovery windows come from ObjectStore status')
     expect(html).not.toContain('ObjectStore has no health status')
@@ -124,11 +131,11 @@ it('uses the Configuration card gutter and SectionHeading in scoped recovery evi
   expect(title.closest('section')?.parentElement?.classList.contains('p-4')).toBe(true)
 })
 
-it('explains no-destination operator success once for the fleet table while keeping row disclosures', () => {
+it('explains no-destination operator success once for the fleet table and provides full evidence access per row', () => {
   const clusters = ['orders', 'payments'].map((name) => ({ apiVersion: 'postgresql.cnpg.io/v1', metadata: { name, namespace: 'pg' }, spec: {}, status: { conditions: [{ type: 'ContinuousArchiving', status: 'True', message: 'working' }] } }))
   const html = render({ clusters })
   expect(html.match(/CloudNativePG reports archiving as working because/g)).toHaveLength(1)
-  expect(html.match(/No point-in-time recovery/g)).toHaveLength(2)
-  expect(html.match(/Operator report/g)).toHaveLength(2)
+  expect(html.match(/Recovery evidence for pg\//g)).toHaveLength(2)
+  expect(html).not.toContain('Operator report')
   expect(html).not.toContain('WAL is not archived to recovery storage')
 })

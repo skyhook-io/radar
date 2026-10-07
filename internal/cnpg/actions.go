@@ -714,7 +714,7 @@ var (
 	grantGetPods            = auth.Grant{Verb: "get", Resource: "pods"}
 	cnpgGrantPatchSchedules = auth.Grant{Verb: "patch", Group: Group, Resource: "scheduledbackups"}
 	cnpgClusterActionGrants = map[string]auth.Grant{"backup": cnpgGrantCreateBackups, "switchover": cnpgGrantPatchStatus, "restart": GrantPatchClusters, "reload": GrantPatchClusters, "fence": GrantPatchClusters, "unfence": GrantPatchClusters, "hibernate": GrantPatchClusters, "rehydrate": GrantPatchClusters}
-	scheduleActionGrants    = map[string]auth.Grant{"suspend": cnpgGrantPatchSchedules, "resume": cnpgGrantPatchSchedules, "run": cnpgGrantCreateBackups, "setSchedule": cnpgGrantPatchSchedules}
+	scheduleActionGrants    = map[string]auth.Grant{"suspend": cnpgGrantPatchSchedules, "resume": cnpgGrantPatchSchedules, "run": cnpgGrantCreateBackups, "setSchedule": cnpgGrantPatchSchedules, "repairMethod": cnpgGrantPatchSchedules}
 	clusterActionsOrdered   = []string{"backup", "switchover", "restart", "restartInstance", "reload", "fence", "unfence", "hibernate", "rehydrate", "cancelBackend", "terminateBackend", "destroyInstance"}
 )
 
@@ -1051,6 +1051,7 @@ func (s *Reader) ScheduleCapabilities(ctx context.Context, c ActionClients, cont
 		return nil, err
 	}
 	f := cnpgScheduleFactsOf(ctx, c, sched)
+	f.Preview = s.previewOnOperatorClock(ctx, namespace, f.Schedule, scheduleLastCheck(sched), f.Suspended, c.clock())
 	one := func(guard string, g auth.Grant) integration.ActionCapability {
 		g = g.In(namespace)
 		return integration.CapabilityVerdict(guard, []string{s.Access.Permission(ctx, g)}, []auth.Grant{g})
@@ -1167,6 +1168,9 @@ func cnpgFactsDiffer(binds []string, reviewed cnpgReviewedFacts, now CNPGCluster
 }
 
 func RunCNPGClusterAction(ctx context.Context, c ActionClients, namespace, name, action string, req integration.ActionRequest) (*CNPGActionResult, error) {
+	if action == "configureArchiving" {
+		return runConfigureArchiving(ctx, c, namespace, name, req)
+	}
 	runner, ok := clusterActionRunners[action]
 	if !ok {
 		return nil, integration.RefuseAction(http.StatusBadRequest, "", "unknown action %q", action)
@@ -1739,6 +1743,9 @@ func cnpgRunHibernation(value string) func(context.Context, *cnpgClusterRun) (*C
 }
 
 func RunCNPGScheduleAction(ctx context.Context, c ActionClients, namespace, name, action string, req integration.ActionRequest) (*CNPGActionResult, error) {
+	if action == "repairMethod" {
+		return runRepairScheduleMethod(ctx, c, namespace, name, req)
+	}
 	reviewed, err := decodeCNPGReviewedFacts(req.Facts)
 	if err != nil {
 		return nil, integration.RefuseAction(http.StatusBadRequest, "", "%v", err)
@@ -1809,8 +1816,7 @@ func RunCNPGScheduleAction(ctx context.Context, c ActionClients, namespace, name
 		if err != nil {
 			return nil, err
 		}
-		preview := schedulePreview(*params.Schedule, scheduleLastCheck(sched), facts.Suspended, c.clock())
-		return &CNPGActionResult{Action: action, Message: "Schedule set to " + *params.Schedule, CatchUp: preview.RunsImmediately}, nil
+		return &CNPGActionResult{Action: action, Message: "Schedule set to " + *params.Schedule}, nil
 	case "suspend", "resume":
 		want := action == "suspend"
 		if facts.Suspended == want {
@@ -1865,6 +1871,9 @@ func cnpgBackupSpecFromSchedule(sched *unstructured.Unstructured) map[string]any
 }
 
 func GrantFor(action string) (auth.Grant, bool) {
+	if action == "configureArchiving" {
+		return GrantPatchClusters, true
+	}
 	if g, ok := cnpgClusterActionGrants[action]; ok {
 		return g, true
 	}
@@ -1877,8 +1886,13 @@ func GrantFor(action string) (auth.Grant, bool) {
 	return auth.Grant{}, false
 }
 
-func IsClusterAction(action string) bool { _, ok := clusterActionRunners[action]; return ok }
+func IsClusterAction(action string) bool {
+	_, ok := clusterActionRunners[action]
+	return ok || action == "configureArchiving"
+}
 
-func ClusterActions() []string { return append([]string(nil), clusterActionsOrdered...) }
+func ClusterActions() []string {
+	return append(append([]string(nil), clusterActionsOrdered...), "configureArchiving")
+}
 
 func IsScheduleAction(action string) bool { _, ok := scheduleActionGrants[action]; return ok }

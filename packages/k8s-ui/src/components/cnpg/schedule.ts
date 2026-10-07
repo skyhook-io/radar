@@ -15,6 +15,7 @@ export interface CNPGSchedulePreview {
   basis: 'lastCheckTime' | 'now'
   lastCheckTime?: string
   suspended?: boolean
+  clock?: { zone: string; declared: boolean; source: string }
 }
 
 export function formatCNPGRunTime(iso: string): { utc: string; local: string } {
@@ -26,9 +27,9 @@ export function formatCNPGRunTime(iso: string): { utc: string; local: string } {
 
 /** One line for the runs list: why the first run is when it is. */
 export function cnpgScheduleBasisNote(p: CNPGSchedulePreview): string {
-  if (p.suspended) return 'Suspended: these are the times the schedule names; nothing runs until it is resumed.'
-  if (p.runsImmediately) return "The operator runs one backup as soon as it sees this schedule: a scheduled time has passed since its last check. Missed runs are not replayed beyond that one."
-  return p.basis === 'lastCheckTime'
-    ? "Counted from the operator's last check (status.lastCheckTime), as the operator counts them, on its clock (UTC unless its Pod sets TZ)."
-    : "Counted from now; the operator starts counting at its first check (UTC unless its Pod sets TZ)."
+  const clock = p.clock?.source ?? 'Operator clock is not established; upcoming times assume UTC.'
+  if (p.suspended) return `Suspended: nothing runs until it is resumed. ${clock}`
+  const basis = p.basis === 'lastCheckTime' ? "Counted from the operator's last check (status.lastCheckTime)." : 'Counted from now; the operator starts counting at its first check.'
+  const due = p.runsImmediately ? ` ${p.clock?.declared ? 'A run is due on the declared clock.' : 'A run is due in this UTC estimate.'} The operator takes at most one catch-up backup.` : ''
+  return `${basis} ${clock}${due}`
 }
