@@ -2,6 +2,8 @@ package k8s
 
 import (
 	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,7 +41,7 @@ func newAdapterCache(t *testing.T, enabled, deferred map[string]bool, timeout ti
 
 // TestTopologyAdapter_ConfigMaps_DeferredPending verifies that while the
 // ConfigMaps informer is still deferred-pending, the adapter returns
-// (nil, nil) instead of a misleading "RBAC not granted" error. This is the
+// a sync error instead of a misleading "RBAC not granted" error. This is the
 // core fix for issue #460 — one failing sibling must not produce misleading
 // topology warnings for healthy-but-not-yet-synced resources.
 func TestTopologyAdapter_ConfigMaps_DeferredPending(t *testing.T) {
@@ -68,8 +70,8 @@ func TestTopologyAdapter_ConfigMaps_DeferredPending(t *testing.T) {
 
 	adapter := NewTopologyResourceProvider(cache)
 	cms, err := adapter.ConfigMaps()
-	if err != nil {
-		t.Errorf("expected no error during deferred-pending, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "still syncing") {
+		t.Errorf("expected pending sync error, got: %v", err)
 	}
 	if cms != nil {
 		t.Errorf("expected nil slice during deferred-pending, got %d items", len(cms))
@@ -143,9 +145,7 @@ func TestTopologyAdapter_ConfigMaps_Synced(t *testing.T) {
 }
 
 // TestTopologyAdapter_NetworkPolicies_DeferredPending verifies that the same
-// (nil, nil) behavior applies to NetworkPolicies — the guard was added to
-// six methods, and at least one other should be exercised so a regression
-// that only fixes ConfigMaps doesn't pass.
+// explicit pending error applies to NetworkPolicies as well.
 func TestTopologyAdapter_NetworkPolicies_DeferredPending(t *testing.T) {
 	cache := newAdapterCache(t,
 		map[string]bool{k8score.Pods: true, k8score.NetworkPolicies: true},
@@ -165,8 +165,8 @@ func TestTopologyAdapter_NetworkPolicies_DeferredPending(t *testing.T) {
 
 	adapter := NewTopologyResourceProvider(cache)
 	nps, err := adapter.NetworkPolicies()
-	if err != nil {
-		t.Errorf("expected no error during deferred-pending, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "still syncing") {
+		t.Errorf("expected pending sync error, got: %v", err)
 	}
 	if nps != nil {
 		t.Errorf("expected nil slice during deferred-pending, got %d items", len(nps))
@@ -222,5 +222,78 @@ func TestTopologyAdapter_ForNamespaceUsesCachedIndex(t *testing.T) {
 	}
 	if _, err := scoped.ReplicaSets(); err == nil {
 		t.Fatal("disabled informer should retain its availability error")
+	}
+}
+
+// Some listers (notably ServiceAccounts) exist before HasSynced. Readiness
+// must precede lister access, for both global and namespace-scoped adapters.
+func TestTopologyAdapter_AllTypedListsRejectPendingStores(t *testing.T) {
+	keys := map[string]string{
+		"Pods": k8score.Pods, "Services": k8score.Services,
+		"Deployments": k8score.Deployments, "DaemonSets": k8score.DaemonSets,
+		"StatefulSets": k8score.StatefulSets, "ReplicaSets": k8score.ReplicaSets,
+		"Jobs": k8score.Jobs, "CronJobs": k8score.CronJobs,
+		"Ingresses": k8score.Ingresses, "ConfigMaps": k8score.ConfigMaps,
+		"Secrets": k8score.Secrets, "ServiceAccounts": k8score.ServiceAccounts,
+		"Namespaces": k8score.Namespaces, "Nodes": k8score.Nodes,
+		"PersistentVolumeClaims":   k8score.PersistentVolumeClaims,
+		"PersistentVolumes":        k8score.PersistentVolumes,
+		"HorizontalPodAutoscalers": k8score.HorizontalPodAutoscalers,
+		"PodDisruptionBudgets":     k8score.PodDisruptionBudgets,
+		"NetworkPolicies":          k8score.NetworkPolicies,
+	}
+	enabled := map[string]bool{}
+	for _, key := range keys {
+		enabled[key] = true
+	}
+	release := make(chan struct{})
+	cache := newAdapterCache(t, enabled, enabled, 3*time.Second, func(c *fake.Clientset) {
+		c.PrependReactor("list", "*", func(k8stesting.Action) (bool, runtime.Object, error) {
+			<-release
+			return true, nil, fmt.Errorf("fixture stopped")
+		})
+	})
+	t.Cleanup(func() { close(release) })
+	if cache.ServiceAccounts() == nil {
+		t.Fatal("fixture must expose a non-nil, unsynced ServiceAccount lister")
+	}
+	adapter := NewTopologyResourceProvider(cache)
+	scoped := adapter.(topology.NamespacedResourceProvider).ForNamespace("team")
+	for method, key := range keys {
+		t.Run(method, func(t *testing.T) {
+			if got := cache.KindReadinessFor(key); got != k8score.KindPending {
+				t.Fatalf("fixture readiness = %v, want pending", got)
+			}
+			for _, provider := range []topology.ResourceProvider{adapter, scoped} {
+				result := reflect.ValueOf(provider).MethodByName(method).Call(nil)
+				if !result[0].IsNil() || result[1].IsNil() {
+					t.Fatalf("%s returned partial inventory or nil error: %v", method, result)
+				}
+				err := result[1].Interface().(error)
+				if !strings.Contains(err.Error(), "still syncing") || strings.Contains(err.Error(), "RBAC") {
+					t.Fatalf("wrong readiness error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestTopologyAdapter_ServiceAccountsRejectFailedSync(t *testing.T) {
+	cache := newAdapterCache(t,
+		map[string]bool{k8score.ServiceAccounts: true},
+		map[string]bool{k8score.ServiceAccounts: true},
+		100*time.Millisecond,
+		func(c *fake.Clientset) {
+			c.PrependReactor("list", "serviceaccounts", func(k8stesting.Action) (bool, runtime.Object, error) {
+				return true, nil, fmt.Errorf("fixture unavailable")
+			})
+		})
+	deadline := time.Now().Add(2 * time.Second)
+	for cache.KindReadinessFor(k8score.ServiceAccounts) != k8score.KindFailed && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	accounts, err := NewTopologyResourceProvider(cache).(topology.ServiceAccountProvider).ServiceAccounts()
+	if len(accounts) != 0 || err == nil || !strings.Contains(err.Error(), "sync failed") {
+		t.Fatalf("failed inventory = %v, %v", accounts, err)
 	}
 }
