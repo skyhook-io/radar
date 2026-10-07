@@ -530,6 +530,16 @@ See [Strimzi Kafka connector evidence](integrations.md#strimzi-kafka-connectors)
 - **Value redaction** — environment variable values and Helm values returned through MCP are scrubbed for known secret patterns; Helm values also use key-aware redaction for names like `password`, `token`, `privateKey`, and `secretKey`
 - **Log redaction** — pod log output and Helm hook log evidence are scrubbed for secret patterns before being returned
 
+### Node placement context
+
+For a core Kubernetes Node, `get_resource` includes `resourceContext.referencedBy`
+with cached, nonterminal Pods assigned through `spec.nodeName`. Controlled Pods
+and assigned Pending Pods are included; unassigned Pods, Pods on other nodes and
+completed Pods are excluded. References are permission-filtered per namespace,
+sorted deterministically and capped at 20. `total` counts only readable Pods;
+`truncated` marks the item cap. This is observed placement in Radar's cache scope,
+not a cluster-wide workload count or a list of potential scheduling candidates.
+
 ### Pod/template differences in issue context
 
 Existing OOM/restart, unschedulable, and image-pull issues can carry a neutral

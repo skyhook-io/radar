@@ -3,6 +3,7 @@ package resourcecontext
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -1931,5 +1932,48 @@ func TestBuild_PassesThroughExecutionSummary(t *testing.T) {
 	rc := Build(context.Background(), obj, Options{Tier: TierBasic, Execution: execution})
 	if rc.Execution != execution {
 		t.Fatalf("execution = %+v, want pass-through %+v", rc.Execution, execution)
+	}
+}
+
+func TestBuild_NodeAssignedPods(t *testing.T) {
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker"}}
+	pod := func(namespace, name, nodeName string, phase corev1.PodPhase) *corev1.Pod {
+		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name}, Spec: corev1.PodSpec{NodeName: nodeName}, Status: corev1.PodStatus{Phase: phase}}
+	}
+	owned := pod("b", "controlled", "worker", corev1.PodRunning)
+	owned.OwnerReferences = []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web", Controller: ptrBool(true)}}
+	provider := mockResourceProvider{pods: []*corev1.Pod{nil, owned, pod("a", "pending", "worker", corev1.PodPending), pod("a", "other", "other", corev1.PodRunning), pod("a", "unscheduled", "", corev1.PodPending), pod("a", "done", "worker", corev1.PodSucceeded), pod("a", "failed", "worker", corev1.PodFailed)}}
+	rc := Build(context.Background(), node, Options{Tier: TierBasic, Provider: provider})
+	if rc.ReferencedBy == nil || rc.ReferencedBy.Total != 2 || rc.ReferencedBy.Truncated {
+		t.Fatalf("assigned pods: %+v", rc.ReferencedBy)
+	}
+	for i, want := range []string{"pending", "controlled"} {
+		ref := rc.ReferencedBy.Items[i]
+		if ref.Kind != "Pod" || ref.Group != "" || ref.Name != want || len(ref.Paths) != 1 || ref.Paths[0] != "spec.nodeName" {
+			t.Fatalf("pod reference: %+v", ref)
+		}
+	}
+	rc = Build(context.Background(), node, Options{Tier: TierBasic, Provider: provider, AccessChecker: denyChecker{kind: "Pod", namespace: "b"}})
+	if rc.ReferencedBy == nil || rc.ReferencedBy.Total != 1 || len(rc.ReferencedBy.Items) != 1 || !hasOmitted(rc.Omitted, "referencedBy") {
+		t.Fatalf("gated context: %+v", rc)
+	}
+	custom := &unstructured.Unstructured{Object: map[string]interface{}{"apiVersion": "custom.example/v1", "kind": "Node", "metadata": map[string]interface{}{"name": "worker"}}}
+	if got := Build(context.Background(), custom, Options{Tier: TierBasic, Provider: provider}).ReferencedBy; got != nil {
+		t.Fatalf("custom Node matched core placement: %+v", got)
+	}
+}
+
+func TestBuild_NodeAssignedPodsBounded(t *testing.T) {
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker"}}
+	pods := make([]*corev1.Pod, maxReferencedByItems+3)
+	for i := range pods {
+		pods[i] = &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "visible", Name: fmt.Sprintf("pod-%02d", len(pods)-i)}, Spec: corev1.PodSpec{NodeName: "worker"}}
+	}
+	rc := Build(context.Background(), node, Options{Tier: TierBasic, Provider: mockResourceProvider{pods: pods}})
+	if rc.ReferencedBy == nil || rc.ReferencedBy.Total != len(pods) || len(rc.ReferencedBy.Items) != maxReferencedByItems || !rc.ReferencedBy.Truncated {
+		t.Fatalf("bounded context: %+v", rc.ReferencedBy)
+	}
+	if rc.ReferencedBy.Items[0].Name != "pod-01" {
+		t.Fatalf("unstable order: %+v", rc.ReferencedBy.Items)
 	}
 }

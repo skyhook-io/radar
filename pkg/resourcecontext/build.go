@@ -556,6 +556,21 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		return nil
 	}
 
+	if node, ok := obj.(*corev1.Node); ok {
+		pods, err := provider.Pods()
+		if err != nil {
+			return nil
+		}
+		var refs []ReferenceUse
+		for _, pod := range pods {
+			if pod == nil || pod.Spec.NodeName != node.Name || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+				continue
+			}
+			refs = append(refs, ReferenceUse{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name, Paths: []string{"spec.nodeName"}})
+		}
+		return filterReferenceUses(ctx, refs, ac, omitted)
+	}
+
 	ident, ok := identityOf(obj)
 	if !ok || ident.Namespace == "" {
 		return nil
@@ -628,6 +643,10 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		}
 	}
 
+	return filterReferenceUses(ctx, refs, ac, omitted)
+}
+
+func filterReferenceUses(ctx context.Context, refs []ReferenceUse, ac RefAccessChecker, omitted *omittedTracker) *ReferencedBy {
 	if len(refs) == 0 {
 		return nil
 	}
