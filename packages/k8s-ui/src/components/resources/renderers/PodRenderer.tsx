@@ -453,6 +453,10 @@ export function PodRenderer({
           <Property label="Node" value={
             data.spec?.nodeName ? <ResourceLink name={data.spec.nodeName} kind="nodes" onNavigate={onNavigate} /> : undefined
           } copyable onCopy={onCopy} copied={copied} />
+          {data.status?.nominatedNodeName && (
+            <Property label={<Tooltip content="The scheduler has nominated this node. Nomination can change before the Pod is bound." position="right"><span>Nominated Node</span></Tooltip>}
+              value={<ResourceLink name={data.status.nominatedNodeName} kind="nodes" group="" namespace="" onNavigate={onNavigate} />} />
+          )}
           <Property label="Pod IP" value={data.status?.podIP} copyable onCopy={onCopy} copied={copied} />
           <Property label="Host IP" value={data.status?.hostIP} />
           <Property
