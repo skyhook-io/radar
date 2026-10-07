@@ -227,7 +227,10 @@ export function apiVersionToGroup(apiVersion?: string | null): string {
 
 /** A Kubernetes ObjectReference retains its own API identity and namespace.
  * Cluster scope comes from exact group/kind discovery (or known built-ins).
- * Missing identity/scope stays non-navigable rather than guessing the core API
+ * Core controllers omit apiVersion for core objects (the EndpointSlice
+ * controller writes Pod targets as kind/namespace/name/uid), so an omitted
+ * apiVersion means the core group only for a built-in core Kind. Any other
+ * missing identity or scope stays non-navigable rather than guessing an API
  * or borrowing the referring object's namespace. UID is not a drawer locator.
  */
 export function objectReferenceToResourceRef(ref: {
@@ -236,11 +239,13 @@ export function objectReferenceToResourceRef(ref: {
   namespace?: string
   name?: string
 } | null | undefined): ResourceRef | null {
-  if (!ref?.apiVersion || !ref.kind || !ref.name) return null
+  if (!ref?.kind || !ref.name) return null
+  const kindLower = ref.kind.toLowerCase()
+  if (!ref.apiVersion && !CORE_RESOURCES.some(r => r.group === '' && r.kind.toLowerCase() === kindLower)) return null
   const group = apiVersionToGroup(ref.apiVersion)
-  const key = `${group}/${ref.kind.toLowerCase()}`
+  const key = `${group}/${kindLower}`
   const namespaced = discoveredGroupKindNamespaced?.[key]
-    ?? CORE_RESOURCES.find(r => r.group === group && r.kind.toLowerCase() === ref.kind!.toLowerCase())?.namespaced
+    ?? CORE_RESOURCES.find(r => r.group === group && r.kind.toLowerCase() === kindLower)?.namespaced
   if (namespaced !== false && !ref.namespace) return null
   return { kind: ref.kind, group, namespace: namespaced === false ? '' : ref.namespace!, name: ref.name }
 }
