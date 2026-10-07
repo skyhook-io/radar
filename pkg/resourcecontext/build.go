@@ -558,7 +558,7 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 	}
 
 	ident, ok := identityOf(obj)
-	if !ok || ident.Namespace == "" {
+	if !ok || ident.Namespace == "" || ident.Group != "" {
 		return nil
 	}
 
@@ -578,6 +578,20 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			return
 		}
 		refs = append(refs, ref)
+	}
+
+	if target.kind == "Secret" {
+		ingresses, _ := provider.Ingresses()
+		for _, ing := range ingresses {
+			if ing == nil || ing.Namespace != target.namespace {
+				continue
+			}
+			for _, ref := range configrefs.IngressTLSSecretReferences(ing) {
+				if ref.Name == target.name {
+					appendRef(ReferenceUse{Kind: "Ingress", Group: "networking.k8s.io", Namespace: ing.Namespace, Name: ing.Name, Paths: []string{"spec.tls[].secretName"}})
+				}
+			}
+		}
 	}
 
 	if deployments, _ := provider.Deployments(); deployments != nil {
@@ -980,8 +994,8 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	out.BackendServices = filterRefs(ctx, ac, svcSet.refs("Service", ""), "ingressSummary.backendServices", omitted)
 
 	secretSet := newRefSet()
-	for _, tls := range ing.Spec.TLS {
-		secretSet.add(tls.SecretName, ing.Namespace)
+	for _, ref := range configrefs.IngressTLSSecretReferences(ing) {
+		secretSet.add(ref.Name, ref.Namespace)
 	}
 	out.TLSSecrets = filterRefs(ctx, ac, secretSet.refs("Secret", ""), "ingressSummary.tlsSecrets", omitted)
 

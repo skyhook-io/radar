@@ -495,6 +495,12 @@ For `issues`, read `timing_summary` when present; it explains timing combination
 
 ### Write Tools
 
+Ingress TLS declarations now use one shared extractor for forward resource
+context, reverse Secret references and resource-view topology. Graph links
+connect only observed same-namespace Secrets and respect Secret visibility;
+reverse context records `spec.tls[].secretName` and gates Ingress reads. An
+empty TLS Secret name does not imply a controller default or a resolved Secret.
+
 | Tool | Description | Parameters |
 |------|-------------|------------|
 | `apply_resource` | Create or update a Kubernetes resource from YAML. Supports multi-document YAML, per-document partial-failure results, server-side dry-run preview, and SSA ownership-conflict reporting. | `yaml` (required), `mode` (optional: `apply` or `create`, default `apply`), `dry_run` (optional, default false), `namespace` (optional, override), `verify` (optional, default true: real mutations return post-mutation state, submitted-vs-live diff, workload rollout/pods, and related issues; dry runs return a preview diff), `force` (optional, default false: take SSA field ownership from other managers) |
