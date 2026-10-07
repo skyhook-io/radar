@@ -5,7 +5,7 @@ import { PolicySection } from './PolicySection'
 import type { PolicyResourceResponse } from '../../../types/policy'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
 import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName } from '../resource-utils'
-import { getResourceStatusColor } from '../../../utils/badge-colors'
+import { getResourceStatusColor, SEVERITY_BORDER } from '../../../utils/badge-colors'
 import {
   rbacVerbBadgeClass,
   rbacResourceBadgeClass,
@@ -524,10 +524,11 @@ export function PodRenderer({
               return (
                 <div key={container.name} className={clsx(
                   'rounded-lg p-3 border-l-2',
-                  isCompleted ? 'bg-theme-elevated/20 border-green-500/40' :
-                  reportedFailure ? 'bg-theme-elevated/30 border-red-500/50' :
-                  isInitRunning ? 'bg-theme-elevated/30 border-blue-500/50' :
-                  'bg-theme-elevated/30 border-theme-border'
+                  isCompleted ? 'bg-theme-elevated/20' : 'bg-theme-elevated/30',
+                  isCompleted ? SEVERITY_BORDER.success :
+                  reportedFailure ? 'border-l-semantic-error' :
+                  isInitRunning ? SEVERITY_BORDER.info :
+                  SEVERITY_BORDER.neutral
                 )}>
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">

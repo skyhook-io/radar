@@ -731,7 +731,7 @@ export interface IssuesResponse {
   visibility?: { state?: string; impact?: string };
 }
 
-export function useIssues(namespaces: string[] = []) {
+export function useIssues(namespaces: string[] = [], enabled = true) {
   const params =
     namespaces.length > 0 ? `?namespaces=${namespaces.join(",")}` : "";
   return useQuery<IssuesResponse>({
@@ -739,6 +739,7 @@ export function useIssues(namespaces: string[] = []) {
     queryFn: () => fetchJSON(`/issues${params}`),
     staleTime: 30000,
     refetchInterval: ISSUES_REFRESH_INTERVAL_MS,
+    enabled,
   });
 }
 
@@ -804,16 +805,21 @@ export function useSubjectIssues(
   subject: { kind: string; group: string; namespace: string; name: string } | null,
   enabled: boolean,
 ) {
+  const capabilities = useCapabilities();
+  const { support, gatedKey, guard } = useRadarFeature('resourceIssueCoverage');
   const pathNs = subject?.namespace ? encodeURIComponent(subject.namespace) : "_";
   const params = new URLSearchParams({ coverage: "1" });
   if (subject?.group) params.set("group", subject.group);
   return useQuery<SubjectIssuesResponse>({
-    queryKey: ["issues", "subject", subject?.kind ?? "", subject?.group ?? "", subject?.namespace ?? "", subject?.name ?? ""],
-    queryFn: () =>
-      fetchJSON(`/issues/resource/${encodeURIComponent(subject!.kind)}/${pathNs}/${encodeURIComponent(subject!.name)}?${params}`),
+    queryKey: ["issues", "subject", subject?.kind ?? "", subject?.group ?? "", subject?.namespace ?? "", subject?.name ?? "", support, ...gatedKey],
+    queryFn: () => {
+      if (!capabilities.data && capabilities.error) throw capabilities.error;
+      return guard(() => fetchJSON<SubjectIssuesResponse>(`/issues/resource/${encodeURIComponent(subject!.kind)}/${pathNs}/${encodeURIComponent(subject!.name)}?${params}`));
+    },
     staleTime: 30000,
     refetchInterval: ISSUES_REFRESH_INTERVAL_MS,
-    enabled: enabled && !!subject,
+    // The existing route alone cannot prove support for this opt-in shape.
+    enabled: enabled && !!subject && !capabilities.isPending,
   });
 }
 

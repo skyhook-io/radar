@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { getRadarUpgradeRequirement } from '@skyhook-io/k8s-ui'
-import { ApiError, isNotFoundError, useApplications, useCapacityPoolDetail, useDrainPlan, usePodEnvironment, useWorkloadHistory } from './client'
+import { ApiError, isNotFoundError, useApplications, useCapacityPoolDetail, useDrainPlan, usePodEnvironment, useSubjectIssues, useWorkloadHistory } from './client'
 import { getApiBase } from './config'
 import { usePolicyResource } from './policy'
 import { isRadarFeatureUnsupported } from './radarFeatures'
@@ -35,6 +35,7 @@ beforeEach(() => {
     if (url.includes('/capacity/pools/')) return Promise.resolve(Response.json({ pool: { name: 'default' } }))
     if (url.endsWith('/environment')) return Promise.resolve(Response.json({ containers: [], coverage: {} }))
     if (url.includes('/policy/resource/')) return Promise.resolve(Response.json({ evaluated: true, status: 'ready' }))
+    if (url.includes('/issues/resource/')) return Promise.resolve(Response.json({ issues: [], coverage: 'ok' }))
     return new Promise<Response>(() => {})
   }))
   element = document.createElement('div')
@@ -72,6 +73,49 @@ function Policy() {
   if (data && isError) return <span>inconsistent</span>
   return <span>{data?.status ?? (getRadarUpgradeRequirement(error) ? 'upgrade' : 'pending')}</span>
 }
+
+function SubjectIssues() {
+  const { data, error } = useSubjectIssues({ kind: 'Pod', group: '', namespace: 'shop', name: 'web' }, true)
+  return <span>{data ? 'data' : getRadarUpgradeRequirement(error) ? 'upgrade' : error ? 'unconfirmed' : 'pending'}</span>
+}
+
+it('waits for coverage capabilities instead of probing an older array-shaped issues route', async () => {
+  await render(<SubjectIssues />)
+  expect(element.textContent).toBe('pending')
+  expect(asked('/issues/resource/')).toBe(false)
+
+  await act(async () => { client.setQueryData(['capabilities'], { features: { resourceIssues: true } }) })
+  await settle()
+  await settle()
+  expect(element.textContent).toBe('upgrade')
+  expect(asked('/issues/resource/')).toBe(false)
+
+  await act(async () => { client.setQueryData(['capabilities'], { features: { resourceIssueCoverage: true } }) })
+  await settle()
+  await settle()
+  expect(element.textContent).toBe('data')
+  expect(asked('/issues/resource/')).toBe(true)
+})
+
+it('leaves issue coverage unconfirmed after a failed capability check and recovers when it succeeds', async () => {
+  const answer = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation((input, init) =>
+    String(input).endsWith('/capabilities')
+      ? Promise.resolve(Response.json({ error: 'capabilities unavailable' }, { status: 503 }))
+      : answer(input, init),
+  )
+  await render(<SubjectIssues />)
+  await settle()
+  await settle()
+  expect(element.textContent).toBe('unconfirmed')
+  expect(asked('/issues/resource/')).toBe(false)
+
+  await act(async () => { client.setQueryData(['capabilities'], { features: { resourceIssueCoverage: true } }) })
+  await settle()
+  await settle()
+  expect(element.textContent).toBe('data')
+  expect(asked('/issues/resource/')).toBe(true)
+})
 
 it('fetches for real once the agent turns out to advertise the feature', async () => {
   await render(<Environment />)

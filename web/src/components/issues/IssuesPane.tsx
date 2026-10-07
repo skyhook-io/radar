@@ -164,8 +164,10 @@ export function IssuesPane({
   onNavigateToResource,
   showNamespace,
 }: IssuesPaneProps) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const subject = useMemo(() => issueSubjectFromParams(searchParams), [searchParams]);
   const { data, isLoading, error, dataUpdatedAt, refetch } =
-    useIssues(namespaces);
+    useIssues(namespaces, !subject);
   const { connection } = useConnection();
   const navigate = useNavigate();
   const apiResources = useAPIResources();
@@ -177,14 +179,15 @@ export function IssuesPane({
     new Set(),
   );
 
-  const [searchParams, setSearchParams] = useSearchParams();
-  const subject = useMemo(() => issueSubjectFromParams(searchParams), [searchParams]);
   const subjectHidden =
     !!subject?.namespace && namespaces.length > 0 && !namespaces.includes(subject.namespace);
   const related = useSubjectIssues(subject, !subjectHidden);
   const subjectState = subject
     ? issueSubjectState(subject, namespaces, related)
     : null;
+  const visibility = subject
+    ? subjectHidden ? undefined : related.data?.visibility
+    : data?.visibility;
   const pageIssues = useMemo(() => data?.issues ?? [], [data]);
   // With a subject set, the tiles and the list both describe the subject.
   const scopeIssues = subjectState
@@ -223,11 +226,11 @@ export function IssuesPane({
       group: ref.group ?? "",
     });
 
-  if (isLoading) {
+  if (!subject && isLoading) {
     return <PaneLoader label="Loading issues…" className="flex-1" />;
   }
 
-  if (error) {
+  if (!subject && error) {
     return (
       <div className="flex-1 flex items-center justify-center text-theme-text-secondary">
         <p>Failed to load issues</p>
@@ -243,15 +246,15 @@ export function IssuesPane({
         description="Live cluster problems — crashes, scheduling failures, bad references — grouped by the resource they affect."
         actions={
           <>
-            <FreshnessControl
+            {subjectHidden ? null : <FreshnessControl
               mode="auto"
-              dataUpdatedAt={subject && !subjectHidden ? related.dataUpdatedAt : dataUpdatedAt}
+              dataUpdatedAt={subject ? related.dataUpdatedAt : dataUpdatedAt}
               onRefresh={() => {
-                if (subject && !subjectHidden) related.refetch();
+                if (subject) related.refetch();
                 else refetch();
               }}
               connectionState={connection.state}
-            />
+            />}
             {scopeIssues.length > 0 && (
               <>
                 <SummaryTile
@@ -279,11 +282,11 @@ export function IssuesPane({
       {/* Visibility honesty: when RBAC reads are incomplete, an empty queue may
           mean "can't see" rather than "nothing broken" — say so up front so the
           empty state isn't mistaken for a clean bill of health. */}
-      {data?.visibility?.impact && (
+      {visibility?.impact && (
         <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
           <span>
-            Limited visibility — {data.visibility.impact} Results may be
+            Limited visibility — {visibility.impact} Results may be
             incomplete.
           </span>
         </div>
@@ -360,7 +363,7 @@ export function IssuesPane({
            list then means "nothing broken" rather than "not connected". */
         <IssuesView
           issues={shown}
-          anyData={!!data}
+          anyData={subject ? !!related.data : !!data}
           onResourceClick={onResourceClick}
           renderActions={({ issue }) => {
             const capacityHref = capacityHrefForIssue(issue, hasKarpenter);

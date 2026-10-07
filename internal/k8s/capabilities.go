@@ -133,13 +133,14 @@ type CloudConnectCapability struct {
 // here in the same change, plus an entry in web/src/api/radarFeatures.ts
 // (TestFeatureFlagsHaveFrontendGates enforces the pairing).
 type FeatureCapabilities struct {
-	YAMLReview      bool `json:"yamlReview"`
-	YAMLSchemas     bool `json:"yamlSchemas"`
-	WorkloadImages  bool `json:"workloadImages"`
-	ResourceIssues  bool `json:"resourceIssues"`  // GET /api/issues/resource/{kind}/{namespace}/{name}
-	PodEnvironment  bool `json:"podEnvironment"`  // GET /api/pods/{namespace}/{name}/environment
-	PolicyResource  bool `json:"policyResource"`  // GET /api/policy/resource/{kind}/{namespace}/{name}
-	WorkloadHistory bool `json:"workloadHistory"` // GET /api/workloads/{kind}/{namespace}/{name}/history
+	YAMLReview            bool `json:"yamlReview"`
+	YAMLSchemas           bool `json:"yamlSchemas"`
+	WorkloadImages        bool `json:"workloadImages"`
+	ResourceIssues        bool `json:"resourceIssues"`        // GET /api/issues/resource/{kind}/{namespace}/{name}
+	ResourceIssueCoverage bool `json:"resourceIssueCoverage"` // Resource issues with ?coverage=1
+	PodEnvironment        bool `json:"podEnvironment"`        // GET /api/pods/{namespace}/{name}/environment
+	PolicyResource        bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
+	WorkloadHistory       bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
 	// The workspace and its read/action surfaces, excluding protection setup.
 	CNPGWorkspace       bool `json:"cnpgWorkspace"`
 	CNPGProtectionSetup bool `json:"cnpgProtectionSetup"`

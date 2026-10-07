@@ -1394,16 +1394,17 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
-		YAMLReview:          true,
-		YAMLSchemas:         true,
-		WorkloadImages:      true,
-		ResourceIssues:      true,
-		PodEnvironment:      true,
-		PolicyResource:      true,
-		WorkloadHistory:     true,
-		CNPGWorkspace:       true,
-		CNPGProtectionSetup: true,
-		GitOpsWriteEvidence: true,
+		YAMLReview:            true,
+		YAMLSchemas:           true,
+		WorkloadImages:        true,
+		ResourceIssues:        true,
+		ResourceIssueCoverage: true,
+		PodEnvironment:        true,
+		PolicyResource:        true,
+		WorkloadHistory:       true,
+		CNPGWorkspace:         true,
+		CNPGProtectionSetup:   true,
+		GitOpsWriteEvidence:   true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
