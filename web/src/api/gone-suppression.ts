@@ -1,3 +1,5 @@
+import type { QueryClient } from '@tanstack/react-query'
+
 /**
  * Keeps a detail view from re-asking for a resource the server has already
  * said does not exist.
@@ -9,16 +11,17 @@
  * can never resolve, and it continues for as long as the view stays open.
  *
  * Gone is not always permanent. A StatefulSet replaces a pod under the same
- * name, so this goes quiet for a cooldown rather than forever, and one probe
- * after the cooldown is enough to notice the resource came back.
+ * name, so this goes quiet for a cooldown rather than forever. A watch event
+ * that names the object ends the quiet period at once; the cooldown probe is
+ * the fallback for when no such event arrives.
  */
 
 /**
  * Quiet periods between probes, in ms. A resource that is still missing on the
  * second look is usually gone for good, so the gap widens rather than settling
- * on one interval: a short first wait still catches a StatefulSet pod being
- * rebuilt under the same name, and the cap keeps a long-open view close to
- * free instead of merely cheaper than the storm it replaced.
+ * on one interval: a short first wait still catches a resource rebuilt under
+ * the same name when its watch event was missed, and the cap keeps a long-open
+ * view close to free instead of merely cheaper than the storm it replaced.
  */
 export const GONE_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000]
 
@@ -35,16 +38,15 @@ export function goneBackoffMs(strikes: number): number {
   return GONE_BACKOFF_MS[Math.min(strikes, GONE_BACKOFF_MS.length - 1)]
 }
 
-export type GoneEvent =
-  /** A fetch settled. `isGone` is true only for a definite 404. */
-  | { type: 'settled'; isGone: boolean; now: number }
-  /** The view switched to a different object; the previous answer is void. */
-  | { type: 'target-changed' }
+/** A fetch settled. `isGone` is true only for a definite 404. */
+export interface SettledFetch {
+  isGone: boolean
+  now: number
+}
 
-export function nextGoneState(prev: GoneState, event: GoneEvent): GoneState {
-  if (event.type === 'target-changed') return initialGoneState
-  if (!event.isGone) return initialGoneState
-  return { suppressedUntil: event.now + goneBackoffMs(prev.strikes), strikes: prev.strikes + 1 }
+export function nextGoneState(prev: GoneState, fetch: SettledFetch): GoneState {
+  if (!fetch.isGone) return initialGoneState
+  return { suppressedUntil: fetch.now + goneBackoffMs(prev.strikes), strikes: prev.strikes + 1 }
 }
 
 /**
@@ -56,6 +58,73 @@ export function releaseForProbe(state: GoneState): GoneState {
   return { suppressedUntil: null, strikes: state.strikes }
 }
 
-export function isSuppressed(state: GoneState, now: number): boolean {
-  return state.suppressedUntil !== null && now < state.suppressedUntil
+/**
+ * Gone state for one view, tagged with the target it describes and the last
+ * fetch it has counted.
+ */
+export interface TrackedGone {
+  identity: string
+  /** When the last counted fetch settled (epoch ms), 0 before any. */
+  settledAt: number
+  gone: GoneState
+}
+
+/**
+ * The state for `identity`: `prev` itself when it already describes that
+ * target, otherwise a clean start, so a view that switches target never
+ * inherits the previous target's quiet period.
+ */
+export function trackedFor(prev: TrackedGone, identity: string): TrackedGone {
+  return prev.identity === identity ? prev : { identity, settledAt: 0, gone: initialGoneState }
+}
+
+/**
+ * Counts a fetch that settled at `settledAt`, at most once. A refetch of a
+ * query with no data clears its error while in flight, so reading the error
+ * on every render would count that as the resource coming back and keep the
+ * backoff on its shortest step.
+ */
+export function observeSettled(prev: TrackedGone, settledAt: number, fetch: SettledFetch): TrackedGone {
+  if (settledAt === 0 || settledAt === prev.settledAt) return prev
+  return { ...prev, settledAt, gone: nextGoneState(prev.gone, fetch) }
+}
+
+/** The cluster says the object exists: end any quiet period and backoff. */
+export function markPresent(prev: TrackedGone): TrackedGone {
+  if (prev.gone.suppressedUntil === null && prev.gone.strikes === 0) return prev
+  return { ...prev, gone: initialGoneState }
+}
+
+/**
+ * An object the cluster has just reported as existing. `kind` is the plural
+ * resource name, the same form the resource query keys use.
+ */
+export interface PresentResource {
+  kind: string
+  namespace: string
+  name: string
+}
+
+type PresenceListener = (resource: PresentResource) => void
+
+// Keyed by QueryClient so two Radar instances on one page never wake each
+// other's views.
+const presenceListeners = new WeakMap<QueryClient, Set<PresenceListener>>()
+
+/** Tells every view of this object that it exists, ending any quiet period. */
+export function announceResourcePresent(client: QueryClient, resource: PresentResource): void {
+  presenceListeners.get(client)?.forEach((listener) => listener(resource))
+}
+
+/** Subscribes to {@link announceResourcePresent}. Returns the unsubscribe. */
+export function onResourcePresent(client: QueryClient, listener: PresenceListener): () => void {
+  let listeners = presenceListeners.get(client)
+  if (!listeners) {
+    listeners = new Set()
+    presenceListeners.set(client, listeners)
+  }
+  listeners.add(listener)
+  return () => {
+    listeners.delete(listener)
+  }
 }

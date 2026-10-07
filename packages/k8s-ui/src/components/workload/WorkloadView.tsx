@@ -37,6 +37,7 @@ import {
 } from 'lucide-react'
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
+import { isFetchError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
 import { refToSelectedResource, pluralToKind, knownKindForPluralWithGroup, kindToPlural, kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
 import { neighborhoodFor, seedNodeIds, topologyNodeResourceKind } from '../../utils/topology-neighborhood'
@@ -778,7 +779,10 @@ export function WorkloadView({
     const timeout = window.setTimeout(() => setRecentImageSave(false), 15000)
     return () => window.clearTimeout(timeout)
   }, [recentImageSave, rolloutActivity?.phase])
-  useProgressiveRefresh(rolloutMayAutoAdvance || recentImageSave, refetchProp)
+  // The rollout state above is the last copy fetched before a 404; a workload
+  // the server says is gone has nothing left to roll out.
+  const resourceGone = isFetchError(resourceError) && resourceError.status === 404
+  useProgressiveRefresh((rolloutMayAutoAdvance || recentImageSave) && !resourceGone, refetchProp)
   const showOwnershipHeading = kind === 'Pod' && Boolean(ownershipContext)
   const headerImage = metadata.find(m => m.label === 'Image')?.value
 

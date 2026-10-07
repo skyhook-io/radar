@@ -61,6 +61,7 @@ import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
 import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit } from './api/client'
+import { announceResourcePresent } from './api/gone-suppression'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
 import { routePath, apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
@@ -1105,6 +1106,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     const kind = kindToPluralWithGroup(event.kind, event.group ?? '')
     const structural = event.operation === 'add' || event.operation === 'delete'
+    // A view that stopped asking for this object after a 404 starts again now,
+    // instead of at its next cooldown probe.
+    if (event.operation !== 'delete') {
+      announceResourcePresent(queryClient, { kind, namespace: event.namespace ?? '', name: event.name })
+    }
     const applicationWorkload = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
 
     if (event.group?.endsWith('.cnpg.io')) cnpgInvalidationPendingRef.current = true

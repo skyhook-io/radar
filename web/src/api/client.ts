@@ -22,7 +22,15 @@ import type {
 } from '@skyhook-io/k8s-ui'
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
-import { nextGoneState, initialGoneState, isSuppressed, releaseForProbe } from './gone-suppression'
+import {
+  initialGoneState,
+  markPresent,
+  observeSettled,
+  onResourcePresent,
+  releaseForProbe,
+  trackedFor,
+  type TrackedGone,
+} from './gone-suppression'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import type {
   Topology,
@@ -2602,33 +2610,45 @@ export function fetchResourceWithRelationships<T>(
  * Disables refetching for a resource the server has said is gone. Shared by
  * the two resource-detail hooks so a 404'd target behaves the same in both.
  */
-function useGoneSuppression(identity: string) {
-  const [state, setState] = useState(initialGoneState);
+function useGoneSuppression(kind: string, namespace: string, name: string, group: string | undefined) {
+  const queryClient = useQueryClient();
+  const identity = `${kind}/${namespace}/${name}/${group ?? ""}`;
+  const [tracked, setTracked] = useState<TrackedGone>(() => ({ identity, settledAt: 0, gone: initialGoneState }));
+  const suppressedUntil = trackedFor(tracked, identity).gone.suppressedUntil;
 
-  useEffect(() => {
-    setState(initialGoneState);
-  }, [identity]);
+  const observe = useCallback(
+    (settledAt: number, error: unknown) => {
+      setTracked((prev) =>
+        observeSettled(trackedFor(prev, identity), settledAt, { isGone: isNotFoundError(error), now: Date.now() }),
+      );
+    },
+    [identity],
+  );
 
-  const observe = useCallback((error: unknown) => {
-    setState((prev) =>
-      nextGoneState(prev, { type: "settled", isGone: isNotFoundError(error), now: Date.now() }),
-    );
-  }, []);
+  useEffect(
+    () =>
+      onResourcePresent(queryClient, (present) => {
+        if (present.kind !== kind || present.namespace !== namespace || present.name !== name) return;
+        setTracked((prev) => markPresent(trackedFor(prev, identity)));
+      }),
+    [queryClient, kind, namespace, name, identity],
+  );
 
   // Wake up once the cooldown is over so the query re-enables and probes.
-  const suppressedUntil = state.suppressedUntil;
   useEffect(() => {
     if (suppressedUntil === null) return;
-    const delay = suppressedUntil - Date.now();
-    if (delay <= 0) {
-      setState(releaseForProbe);
-      return;
-    }
-    const timer = setTimeout(() => setState(releaseForProbe), delay);
+    const timer = setTimeout(
+      () =>
+        setTracked((prev) => {
+          const current = trackedFor(prev, identity);
+          return { ...current, gone: releaseForProbe(current.gone) };
+        }),
+      Math.max(0, suppressedUntil - Date.now()),
+    );
     return () => clearTimeout(timer);
-  }, [suppressedUntil]);
+  }, [suppressedUntil, identity]);
 
-  return { quiet: isSuppressed(state, Date.now()), observe };
+  return { quiet: suppressedUntil !== null, observe };
 }
 
 export function useResource<T>(
@@ -2638,8 +2658,7 @@ export function useResource<T>(
   group?: string,
   options?: { enabled?: boolean; refetchInterval?: number | false },
 ) {
-  const identity = `${kind}/${namespace}/${name}/${group ?? ""}`;
-  const { quiet: goneQuiet, observe: observeGone } = useGoneSuppression(identity);
+  const { quiet: goneQuiet, observe: observeGone } = useGoneSuppression(kind, namespace, name, group);
   const query = useQuery<ResourceWithRelationships<T>>({
     queryKey: ["resource", kind, namespace, name, group],
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
@@ -2658,8 +2677,9 @@ export function useResource<T>(
       isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
 
+  const settledAt = Math.max(query.dataUpdatedAt, query.errorUpdatedAt);
   const queryError = query.error;
-  useEffect(() => { observeGone(queryError); }, [queryError, identity, observeGone]);
+  useEffect(() => { observeGone(settledAt, queryError); }, [settledAt, queryError, observeGone]);
 
   // Extract resource and relationships from the response
   return {
@@ -2678,8 +2698,7 @@ export function useResourceWithRelationships<T>(
   name: string,
   group?: string,
 ) {
-  const identity = `${kind}/${namespace}/${name}/${group ?? ""}`;
-  const { quiet: goneQuiet, observe: observeGone } = useGoneSuppression(identity);
+  const { quiet: goneQuiet, observe: observeGone } = useGoneSuppression(kind, namespace, name, group);
   const query = useQuery<ResourceWithRelationships<T>>({
     queryKey: ["resource", kind, namespace, name, group],
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
@@ -2697,8 +2716,9 @@ export function useResourceWithRelationships<T>(
       isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
 
+  const settledAt = Math.max(query.dataUpdatedAt, query.errorUpdatedAt);
   const queryError = query.error;
-  useEffect(() => { observeGone(queryError); }, [queryError, identity, observeGone]);
+  useEffect(() => { observeGone(settledAt, queryError); }, [settledAt, queryError, observeGone]);
 
   return query;
 }
