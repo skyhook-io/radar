@@ -16,6 +16,7 @@ import {
   Boxes,
   Server,
   Megaphone,
+  Workflow,
 } from "lucide-react";
 import { useNamespaces, useContexts } from "../../api/client";
 import { CORE_RESOURCES, useAPIResources } from "../../api/apiResources";
@@ -34,7 +35,8 @@ export type MainView =
   | "capacity"
   | "checks"
   | "gitops"
-  | "applications";
+  | "applications"
+  | "cicd";
 
 export interface CommandItem {
   id: string;
@@ -143,6 +145,7 @@ const VIEW_ENTRIES: {
   { view: "timeline", label: "Timeline", icon: Clock, shortcut: "g l" },
   { view: "helm", label: "Helm", icon: Package, shortcut: "g m" },
   { view: "gitops", label: "GitOps", icon: GitBranch, shortcut: "g o" },
+  { view: "cicd", label: "CI/CD", icon: Workflow, shortcut: "g d" },
   { view: "traffic", label: "Live Traffic", icon: Activity, shortcut: "g f" },
   { view: "checks", label: "Checks", icon: ShieldCheck, shortcut: "g u" },
   { view: "capacity", label: "Capacity", icon: Gauge, shortcut: "g p" },

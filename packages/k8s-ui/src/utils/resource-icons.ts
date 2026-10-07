@@ -11,6 +11,7 @@ import {
   Play,
   Timer,
   Boxes,
+  Workflow,
 
   // Networking
   Plug,
@@ -152,6 +153,11 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   clusterworkflowtemplate: Activity,
   application: GitBranch, // ArgoCD Application
   applicationset: GitBranch, // ArgoCD ApplicationSet
+
+  // Tekton
+  pipeline: Workflow,
+  pipelinerun: Workflow,
+  taskrun: Play,
 
   // FluxCD
   kustomization: Layers, // FluxCD Kustomization

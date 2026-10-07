@@ -648,6 +648,18 @@ export function WorkloadView({
   // the drawer's renderer is thorough but the tab has the tree + insights +
   // operations the drawer can't reproduce inline.
   const gitOpsResourcePath = useMemo(() => gitOpsRouteForResource(resource), [resource])
+  // A Tekton TaskRun always carries an ownerReference to its PipelineRun —
+  // surface it as a header chip (same idea as "Open in GitOps") rather than
+  // relying on browser/drawer "Go back", which (for every kind, not just
+  // this one) points back at the new resource's own list, not the resource
+  // you navigated from.
+  const tektonParentPipelineRun = useMemo(() => {
+    // `kind` (URL-derived, not resource.kind — list items often arrive with
+    // TypeMeta stripped) is the reliable signal here.
+    if (kind !== 'TaskRun') return null
+    const owner = (resource?.metadata?.ownerReferences ?? []).find((o: any) => o?.kind === 'PipelineRun')
+    return owner?.name ? { name: owner.name as string, namespace: resource?.metadata?.namespace ?? '' } : null
+  }, [kind, resource])
 
   // Copy to clipboard
   const copyToClipboard = useCallback((text: string, key: string) => {
@@ -890,12 +902,18 @@ export function WorkloadView({
               </Tooltip>
             </div>
             <p className="text-sm text-theme-text-tertiary">{namespace}</p>
-            {(gitopsOwner || helmOwner || (gitOpsResourcePath && onNavigateGitOpsPath)) && (
+            {(gitopsOwner || helmOwner || (gitOpsResourcePath && onNavigateGitOpsPath) || tektonParentPipelineRun) && (
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
                 {gitopsOwner && <ManagedByChip owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} />}
                 {helmOwner && <HelmManagedByChip owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} />}
                 {gitOpsResourcePath && onNavigateGitOpsPath && (
                   <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
+                )}
+                {tektonParentPipelineRun && onNavigateToResource && (
+                  <BackToPipelineRunChip
+                    name={tektonParentPipelineRun.name}
+                    onClick={() => onNavigateToResource({ kind: 'pipelineruns', namespace: tektonParentPipelineRun.namespace, name: tektonParentPipelineRun.name, group: 'tekton.dev' })}
+                  />
                 )}
               </div>
             )}
@@ -1046,6 +1064,12 @@ export function WorkloadView({
             )}
             {gitOpsResourcePath && onNavigateGitOpsPath && (
               <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
+            )}
+            {tektonParentPipelineRun && onNavigateToResource && (
+              <BackToPipelineRunChip
+                name={tektonParentPipelineRun.name}
+                onClick={() => onNavigateToResource({ kind: 'pipelineruns', namespace: tektonParentPipelineRun.namespace, name: tektonParentPipelineRun.name, group: 'tekton.dev' })}
+              />
             )}
             {relationships?.owner && !showOwnershipHeading && (
               <span>Owner: <button onClick={() => onNavigateToResource?.(refToSelectedResource(relationships.owner!))} className="text-blue-500 hover:underline">{relationships.owner.name}</button></span>
@@ -1345,6 +1369,21 @@ function OpenInGitOpsChip({ onClick }: { onClick: () => void }) {
       >
         Open in GitOps
         <ArrowRight className="h-3 w-3 shrink-0" />
+      </button>
+    </Tooltip>
+  )
+}
+
+function BackToPipelineRunChip({ name, onClick }: { name: string; onClick: () => void }) {
+  return (
+    <Tooltip content="Back to the PipelineRun this task belongs to" delay={150}>
+      <button
+        type="button"
+        onClick={onClick}
+        className="inline-flex items-center gap-1 rounded border border-skyhook-500/40 bg-skyhook-500/10 px-1.5 py-0.5 text-[11px] font-medium text-skyhook-500 hover:bg-skyhook-500/20 transition-colors"
+      >
+        <ArrowLeft className="h-3 w-3 shrink-0" />
+        PipelineRun {name}
       </button>
     </Tooltip>
   )
@@ -1837,6 +1876,15 @@ const POD_VISIBLE_LIMIT = 5
 const EVENT_VISIBLE_LIMIT = 5
 const RELATIONSHIP_GROUP_LIMIT = 5
 const RELATIONSHIP_REF_LIMIT = 5
+// Kinds whose Logs tab must not depend on allPods finding a live pod via
+// relationships/timeline-event attribution — that path only surfaces a pod
+// when Radar's own Timeline still holds ITS creation event (a fixed-size
+// ring buffer, evicted on a busy cluster) or when the topology graph knows
+// how to walk to it, neither of which these kinds can rely on. Each has its
+// own logs view that already handles "no pod found" gracefully (TaskRun via
+// TaskRunLogsTab's "may have been garbage-collected" message, the rest via
+// MultiPodLogsTab's "No pods available" state) — the tab itself must stay
+// visible so that fallback is reachable instead of disappearing outright.
 const LOGS_TAB_WITHOUT_PODS_KINDS = new Set([
   'jobs',
   'cronjobs',
@@ -1846,6 +1894,8 @@ const LOGS_TAB_WITHOUT_PODS_KINDS = new Set([
   'clusterworkflowtemplates',
   'scaledjobs',
   'jobsets',
+  'taskruns',
+  'pipelineruns',
 ])
 const RUNTIME_WORKLOAD_OVERVIEW_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'])
 const ROLLOUT_STATUS_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'rollouts'])

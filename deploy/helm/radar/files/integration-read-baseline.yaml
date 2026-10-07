@@ -759,6 +759,13 @@ entries:
     decision: existing
     reason: "Covered by the existing cluster-read add-on and its existing collection/tier gates."
     source: "pkg/topology/cluster_scoped_kinds.go; existing cloud-rbac-cluster-read.yaml"
+  - group: "tekton.dev"
+    resources: ["pipelines","pipelineruns","taskruns"]
+    scope: Namespaced
+    collection: "tekton"
+    decision: withhold
+    reason: "Pending review: PipelineRun and TaskRun specs carry parameter values and inline workspace or pod-template data that have not been assessed for credentials."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
   - group: "traefik.containo.us"
     resources: ["ingressroutes","ingressroutetcps","ingressrouteudps","middlewaretcps","serverstransports","tlsoptions","tlsstores","traefikservices"]
     scope: Namespaced
