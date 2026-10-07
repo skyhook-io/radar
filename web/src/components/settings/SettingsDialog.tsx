@@ -924,7 +924,11 @@ export function SettingsDialog({
                   )}
                 </div>
               ) : (
-                <AIUnavailableNotice setupState={diag.setupState} />
+                <AIUnavailableNotice
+                  setupState={diag.setupState}
+                  checkingAgents={diag.checkingAgents}
+                  recheckAgents={diag.recheckAgents}
+                />
               )}
             </div>
 
@@ -1409,7 +1413,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
 
 // aiOverviewStatus says which reason applies, for the same reason
 // AIUnavailableNotice does: "No agent CLI" is a claim about the user's machine,
-// and it is false when the CLI was found after startup, when this deployment
+// and it is false when RADAR_AI_CLI_BIN is what's broken, when this deployment
 // can't run investigations at all, or when the agents probe hasn't answered.
 function aiOverviewStatus(
   aiAvailable: boolean,
@@ -1420,7 +1424,7 @@ function aiOverviewStatus(
     case 'unknown':
       return { tone: 'unknown', value: 'Checking…' }
     case 'needs-restart':
-      return { tone: 'warn', value: 'Restart Radar to finish setup' }
+      return { tone: 'warn', value: "RADAR_AI_CLI_BIN can't be run" }
     case 'off':
       return { tone: 'off', value: 'Not available in this deployment' }
     default:
@@ -1442,9 +1446,17 @@ function OverviewStatus({ tone }: { tone: OverviewTone }) {
 // heading, so this is just the explainer.
 //
 // It must say WHICH of the reasons applies. "No supported agent CLI found" is a
-// claim about the user's machine, and on the needs-restart path it is false: the
-// CLI was detected, Radar just resolved its engine before that happened.
-function AIUnavailableNotice({ setupState }: { setupState: DiagnoseSetup }) {
+// claim about the user's machine, and when RADAR_AI_CLI_BIN is what's broken it
+// is false: Radar found CLIs and the override told it to ignore them.
+function AIUnavailableNotice({
+  setupState,
+  checkingAgents,
+  recheckAgents,
+}: {
+  setupState: DiagnoseSetup
+  checkingAgents: boolean
+  recheckAgents: () => Promise<void>
+}) {
   if (setupState === 'unknown') {
     // The agent probe hasn't answered (in flight, or it failed and was swallowed).
     // Saying anything about the CLI or the deployment here would be a guess.
@@ -1476,11 +1488,14 @@ function AIUnavailableNotice({ setupState }: { setupState: DiagnoseSetup }) {
   if (setupState === 'needs-restart') {
     return (
       <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
-        <p className="text-sm font-medium text-theme-text-primary">Restart Radar to finish setup</p>
+        <p className="text-sm font-medium text-theme-text-primary">
+          Radar can&apos;t run the agent CLI it was given
+        </p>
         <p className="mt-1 text-xs text-theme-text-tertiary">
-          A supported agent CLI is installed, but Radar started before it was and picks its
-          engine once at startup. Restart Radar and this tab will show the agent, model, and
-          effort controls.
+          This Radar was started with <code className="inline-code">RADAR_AI_CLI_BIN</code> set
+          to a file it can&apos;t run, so it isn&apos;t using the agent CLIs it found. Correct the
+          path or remove the variable, then restart Radar. The startup output shows the path it
+          tried.
         </p>
       </div>
     )
@@ -1493,12 +1508,18 @@ function AIUnavailableNotice({ setupState }: { setupState: DiagnoseSetup }) {
         <span className="text-theme-text-secondary">Codex</span>,{' '}
         <span className="text-theme-text-secondary">Cursor</span> (
         <span className="font-mono">cursor-agent</span>), or{' '}
-        <span className="text-theme-text-secondary">OpenCode</span>, then restart Radar — this tab
-        will show the agent, model, and effort controls. Already installed one? Radar looks
-        for it on the PATH it was started with; start Radar from a terminal where the CLI
-        works, or set <span className="font-mono">RADAR_AI_CLI_BIN</span> to the CLI&apos;s full
-        path before starting Radar.
+        <span className="text-theme-text-secondary">OpenCode</span>. Radar picks it up without a
+        restart, and this tab then shows the agent, model, and effort controls.
       </p>
+      <button
+        type="button"
+        disabled={checkingAgents}
+        onClick={() => void recheckAgents()}
+        className="mt-3 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-md disabled:opacity-50"
+      >
+        <RotateCw className={clsx('w-3.5 h-3.5', checkingAgents && 'animate-spin')} />
+        {checkingAgents ? 'Checking…' : 'Check again'}
+      </button>
     </div>
   )
 }

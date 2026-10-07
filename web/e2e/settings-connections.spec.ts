@@ -1643,6 +1643,38 @@ test('a late agent list is not an unsaved AI edit', async ({ page }) => {
   await expect(dialog).toBeHidden()
 })
 
+test('an agent CLI installed while Settings is open is picked up without a restart', async ({ page }) => {
+  await fixture(page)
+  let installed = false
+  await page.route('**/api/agents', route => route.fulfill({
+    json: installed ? aiAgents : { agents: [], enabled: false, eligible: true, consented: {} },
+  }))
+  const dialog = await openSettings(page, 'AI investigations')
+  await expect(dialog.getByText('No supported agent CLI found', { exact: true })).toBeVisible()
+  await expect(dialog.getByText(/then restart Radar/)).toHaveCount(0)
+  await expect(dialog.getByText(/RADAR_AI_CLI_BIN/)).toHaveCount(0)
+
+  installed = true
+  await dialog.getByRole('button', { name: 'Check again', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Your Claude Code setup', exact: true })).toBeVisible()
+  await expect(dialog.getByText('No supported agent CLI found', { exact: true })).toHaveCount(0)
+})
+
+test('coming back to the window re-checks for an agent CLI', async ({ page }) => {
+  await fixture(page)
+  let installed = false
+  await page.route('**/api/agents', route => route.fulfill({
+    json: installed ? aiAgents : { agents: [], enabled: false, eligible: true, consented: {} },
+  }))
+  const dialog = await openSettings(page, 'Overview')
+  const aiRow = dialog.getByRole('button', { name: /AI investigations/ })
+  await expect(aiRow).toContainText('No agent CLI')
+
+  installed = true
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(aiRow).toContainText('Ready')
+})
+
 test('AI drafts are guarded for non-owners and discardable when configuration fails to load', async ({ page }) => {
   await fixture(page)
   await mockAgents(page)

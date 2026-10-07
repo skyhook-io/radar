@@ -60,8 +60,10 @@ export type DiagnoseView = "home" | "investigation";
 // Setup readiness of local AI investigations, derived from the agents API:
 //  - "ready":         an agent is installed and the engine is running (available)
 //  - "needs-install": the feature is supported here but no agent CLI is installed
-//  - "needs-restart": a supported agent is now on PATH but Radar booted before it
-//                     existed (the engine is decided once, at startup)
+//  - "needs-restart": a supported agent is installed but the engine isn't using
+//                     it. The server picks up new installs whenever the agent
+//                     list is fetched, so this means RADAR_AI_CLI_BIN pins the
+//                     engine to a file Radar can't run; fixing it needs a restart
 //  - "off":           not available in this deployment (proxy/OIDC auth, --no-mcp,
 //                     or an embed host) — no install nudge would help
 //  - "unknown":       the agents probe hasn't answered (in flight, or it failed
@@ -73,6 +75,10 @@ export type DiagnoseSetup =
 interface DiagnoseCtx {
   available: boolean; // an agent CLI is present (button/entry gate)
   setupState: DiagnoseSetup; // readiness for the setup nudge (see DiagnoseSetup)
+  // Re-reads the agent list; the server turns investigations on if a CLI was
+  // installed since the last check. Resolves once the new state is applied.
+  recheckAgents: () => Promise<void>;
+  checkingAgents: boolean;
   agentLabel: string; // label of the selected agent, e.g. "Claude Code"
   hosted: boolean; // selected agent runs on the host's backend, not this machine
   agents: AgentInfo[]; // supported agents detected on PATH (for the picker)
@@ -481,52 +487,63 @@ function RoutedDiagnoseProvider({
   const narrow = viewportW - width < MIN_APP_LEFT_OF_PANEL;
   const fullWidthForced = investigationPanelFillsViewport(viewportW, width);
 
+  const mountedRef = useRef(true);
   useEffect(() => {
-    let live = true;
-    fetchAgents()
-      .then((r) => {
-        if (!live) return;
-        setConsented(r.consented ?? {});
-        setEligible(!!r.eligible);
-        const supported = r.agents.filter(
-          (a) =>
-            a.supported &&
-            (a.hosted ||
-              (!!a.profiles?.length &&
-                a.profiles.every((p) => !!a.consentSurfaces?.[p]))),
-        );
-        setAvailable(r.enabled && supported.length > 0);
-        setAgents(supported);
-        // Keep the stored pick only if it's still installed; else default to the
-        // first supported agent (matches the server's default selection).
-        const stored = readStored(AGENT_KEY) || "";
-        const next =
-          stored && supported.some((a) => a.name === stored)
-            ? stored
-            : (supported[0]?.name ?? "");
-        setSelectedAgentState(next);
-        const profiles = supported.find((a) => a.name === next)?.profiles ?? [];
-        const storedProfile =
-          (readStored(PROFILE_KEY) as ExecutionProfile) || "safeguarded";
-        if (!profiles.includes(storedProfile) && profiles[0]) {
-          setProfileState(profiles[0]);
-          writeStored(PROFILE_KEY, profiles[0]);
-        }
-        // Model/effort are agent-specific; if the stored agent is gone, its values
-        // don't apply to the fallback agent (e.g. a Codex slug under Claude) — drop them.
-        if (next !== stored) {
-          setModelState("");
-          writeStored(MODEL_KEY, "");
-          setEffortState("");
-          writeStored(EFFORT_KEY, "");
-        }
-        setAgentEligibilityResolved(true);
-      })
-      .catch(() => {});
+    mountedRef.current = true;
     return () => {
-      live = false;
+      mountedRef.current = false;
     };
   }, []);
+  const [checkingAgents, setCheckingAgents] = useState(false);
+  const recheckAgents = useCallback(async () => {
+    setCheckingAgents(true);
+    try {
+      const r = await fetchAgents();
+      if (!mountedRef.current) return;
+      setConsented(r.consented ?? {});
+      setEligible(!!r.eligible);
+      const supported = r.agents.filter(
+        (a) =>
+          a.supported &&
+          (a.hosted ||
+            (!!a.profiles?.length &&
+              a.profiles.every((p) => !!a.consentSurfaces?.[p]))),
+      );
+      setAvailable(r.enabled && supported.length > 0);
+      setAgents(supported);
+      // Keep the stored pick only if it's still installed; else default to the
+      // first supported agent (matches the server's default selection).
+      const stored = readStored(AGENT_KEY) || "";
+      const next =
+        stored && supported.some((a) => a.name === stored)
+          ? stored
+          : (supported[0]?.name ?? "");
+      setSelectedAgentState(next);
+      const profiles = supported.find((a) => a.name === next)?.profiles ?? [];
+      const storedProfile =
+        (readStored(PROFILE_KEY) as ExecutionProfile) || "safeguarded";
+      if (!profiles.includes(storedProfile) && profiles[0]) {
+        setProfileState(profiles[0]);
+        writeStored(PROFILE_KEY, profiles[0]);
+      }
+      // Model/effort are agent-specific; if the stored agent is gone, its values
+      // don't apply to the fallback agent (e.g. a Codex slug under Claude) — drop them.
+      if (next !== stored) {
+        setModelState("");
+        writeStored(MODEL_KEY, "");
+        setEffortState("");
+        writeStored(EFFORT_KEY, "");
+      }
+      setAgentEligibilityResolved(true);
+    } catch {
+      // Leaves the previous state in place; "unknown" until a probe answers.
+    } finally {
+      if (mountedRef.current) setCheckingAgents(false);
+    }
+  }, []);
+  useEffect(() => {
+    void recheckAgents();
+  }, [recheckAgents]);
 
   const setModel = useCallback((v: string) => {
     setModelState(v);
@@ -576,6 +593,15 @@ function RoutedDiagnoseProvider({
     eligible,
     supportedAgentCount: agents.length,
   });
+
+  // Coming back from a terminal after installing a CLI is when to look again,
+  // so the setup notice clears without the user hunting for a button.
+  useEffect(() => {
+    if (setupState !== "needs-install" && setupState !== "unknown") return;
+    const onFocus = () => void recheckAgents();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [setupState, recheckAgents]);
 
   useEffect(() => {
     const onResize = () => setViewportW(window.innerWidth);
@@ -1047,6 +1073,8 @@ function RoutedDiagnoseProvider({
   const value: DiagnoseCtx = {
     available,
     setupState,
+    recheckAgents,
+    checkingAgents,
     agentLabel,
     hosted,
     agents,

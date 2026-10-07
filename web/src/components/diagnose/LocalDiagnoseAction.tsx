@@ -6,8 +6,9 @@ import type { RenderDiagnoseAction } from "../../context/DiagnoseCustomization";
 
 // The per-resource AI entry point. It no longer owns a panel — it just dispatches
 // to the single app-level AI surface (DiagnoseContext), opening a new investigation
-// for this resource. Self-hides when no agent CLI is present. Hosts can override
-// this slot with their own action.
+// for this resource. Hidden only where investigations can't run here; with no
+// agent CLI it stays, and opens the setup notice. Hosts can override this slot
+// with their own action.
 //
 // Adaptive by health: on a resource with a live problem it reads as a prominent
 // "Investigate" action; when the resource is fine or health is unknown it shrinks
@@ -128,7 +129,7 @@ export function IssueDiagnoseButton({
     <Tooltip
       content={
         d.setupState === "needs-restart"
-          ? "Restart Radar to enable AI investigations — a supported agent is installed"
+          ? "AI investigations are off: RADAR_AI_CLI_BIN names a file Radar can't run"
           : !ready
             ? "Set up AI investigations — install a local agent"
             : d.hosted
@@ -159,7 +160,7 @@ export function IssueDiagnoseButton({
 }
 
 // Global top-bar entry into the AI surface (opens its Home / recent
-// investigations). Self-hides when no agent CLI is present.
+// investigations). Hidden only where investigations can't run here.
 export function GlobalDiagnoseButton() {
   const d = useDiagnose();
   const { runningCount } = useDiagnoseLayout();
