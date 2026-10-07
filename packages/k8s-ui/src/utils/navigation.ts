@@ -43,7 +43,10 @@ const BUILTIN_PLURAL_TO_KIND: Record<string, string> = {
   networkpolicies: 'NetworkPolicy',
 }
 
+// IngressClassParams is singular and plural at once, so English pluralization
+// cannot recover it in hosts that never load discovery.
 const BUILTIN_GROUP_KIND_TO_PLURAL: Record<string, string> = {
+  'elbv2.k8s.aws/ingressclassparams': 'ingressclassparams',
   'scheduling.k8s.io/podgroup': 'podgroups',
   'metrics.k8s.io/podmetrics': 'pods',
   'metrics.k8s.io/nodemetrics': 'nodes',
@@ -54,6 +57,7 @@ const BUILTIN_GROUP_PLURAL_TO_KIND: Record<string, string> = {
   'metrics.k8s.io/pods': 'PodMetrics',
   'metrics.k8s.io/nodes': 'NodeMetrics',
   'scheduling.k8s.io/podgroups': 'PodGroup',
+  'elbv2.k8s.aws/ingressclassparams': 'IngressClassParams',
 }
 
 // Dynamic map built from API discovery — populated by initNavigationMap().
