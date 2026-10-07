@@ -60,10 +60,11 @@ export type DiagnoseView = "home" | "investigation";
 // Setup readiness of local AI investigations, derived from the agents API:
 //  - "ready":         an agent is installed and the engine is running (available)
 //  - "needs-install": the feature is supported here but no agent CLI is installed
-//  - "needs-restart": a supported agent is installed but the engine isn't using
-//                     it. The server picks up new installs whenever the agent
-//                     list is fetched, so this means RADAR_AI_CLI_BIN pins the
-//                     engine to a file Radar can't run; fixing it needs a restart
+//  - "needs-restart": a supported agent is installed but investigations are
+//                     still off. The server picks up new installs whenever the
+//                     agent list is fetched, so locally this means RADAR_AI_CLI_BIN
+//                     pins the engine to a file Radar can't run (cliOverride); an
+//                     embedding host may report it when its own runner is down
 //  - "off":           not available in this deployment (proxy/OIDC auth, --no-mcp,
 //                     or an embed host) — no install nudge would help
 //  - "unknown":       the agents probe hasn't answered (in flight, or it failed
@@ -79,6 +80,11 @@ interface DiagnoseCtx {
   // installed since the last check. Resolves once the new state is applied.
   recheckAgents: () => Promise<void>;
   checkingAgents: boolean;
+  // The latest agent check failed to reach the server, so nothing about the
+  // machine is known from it.
+  agentsCheckFailed: boolean;
+  // RADAR_AI_CLI_BIN is set; with "needs-restart" it is what's broken.
+  cliOverride: boolean;
   agentLabel: string; // label of the selected agent, e.g. "Claude Code"
   hosted: boolean; // selected agent runs on the host's backend, not this machine
   agents: AgentInfo[]; // supported agents detected on PATH (for the picker)
@@ -495,11 +501,20 @@ function RoutedDiagnoseProvider({
     };
   }, []);
   const [checkingAgents, setCheckingAgents] = useState(false);
+  const [agentsCheckFailed, setAgentsCheckFailed] = useState(false);
+  const [cliOverride, setCliOverride] = useState(false);
+  // A click and a window-focus re-check can overlap; only the newest one may
+  // apply its answer, or a stale "nothing installed" could land last.
+  const agentCheckSeq = useRef(0);
   const recheckAgents = useCallback(async () => {
+    const seq = ++agentCheckSeq.current;
+    const latest = () => mountedRef.current && seq === agentCheckSeq.current;
     setCheckingAgents(true);
     try {
       const r = await fetchAgents();
-      if (!mountedRef.current) return;
+      if (!latest()) return;
+      setAgentsCheckFailed(false);
+      setCliOverride(!!r.cliOverride);
       setConsented(r.consented ?? {});
       setEligible(!!r.eligible);
       const supported = r.agents.filter(
@@ -537,8 +552,9 @@ function RoutedDiagnoseProvider({
       setAgentEligibilityResolved(true);
     } catch {
       // Leaves the previous state in place; "unknown" until a probe answers.
+      if (latest()) setAgentsCheckFailed(true);
     } finally {
-      if (mountedRef.current) setCheckingAgents(false);
+      if (latest()) setCheckingAgents(false);
     }
   }, []);
   useEffect(() => {
@@ -1075,6 +1091,8 @@ function RoutedDiagnoseProvider({
     setupState,
     recheckAgents,
     checkingAgents,
+    agentsCheckFailed,
+    cliOverride,
     agentLabel,
     hosted,
     agents,

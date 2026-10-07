@@ -926,6 +926,7 @@ export function SettingsDialog({
               ) : (
                 <AIUnavailableNotice
                   setupState={diag.setupState}
+                  cliOverride={diag.cliOverride}
                   checkingAgents={diag.checkingAgents}
                   recheckAgents={diag.recheckAgents}
                 />
@@ -1358,7 +1359,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     },
     {
       id: 'ai', icon: Sparkles, label: 'AI investigations',
-      ...aiOverviewStatus(aiAvailable, diag.setupState),
+      ...aiOverviewStatus(aiAvailable, diag.setupState, diag.cliOverride),
       detail: aiAvailable ? agentLabel : undefined,
     },
   ]
@@ -1413,18 +1414,19 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
 
 // aiOverviewStatus says which reason applies, for the same reason
 // AIUnavailableNotice does: "No agent CLI" is a claim about the user's machine,
-// and it is false when RADAR_AI_CLI_BIN is what's broken, when this deployment
-// can't run investigations at all, or when the agents probe hasn't answered.
+// and it is false when a CLI was found but investigations didn't start, when
+// this deployment can't run them at all, or when the agents probe hasn't answered.
 function aiOverviewStatus(
   aiAvailable: boolean,
   setupState: DiagnoseSetup,
+  cliOverride: boolean,
 ): Pick<OverviewRow, 'tone' | 'value'> {
   if (aiAvailable) return { tone: 'ok', value: 'Ready' }
   switch (setupState) {
     case 'unknown':
       return { tone: 'unknown', value: 'Checking…' }
     case 'needs-restart':
-      return { tone: 'warn', value: "RADAR_AI_CLI_BIN can't be run" }
+      return { tone: 'warn', value: cliOverride ? "RADAR_AI_CLI_BIN can't be run" : "Agent CLI found, didn't start" }
     case 'off':
       return { tone: 'off', value: 'Not available in this deployment' }
     default:
@@ -1446,17 +1448,30 @@ function OverviewStatus({ tone }: { tone: OverviewTone }) {
 // heading, so this is just the explainer.
 //
 // It must say WHICH of the reasons applies. "No supported agent CLI found" is a
-// claim about the user's machine, and when RADAR_AI_CLI_BIN is what's broken it
-// is false: Radar found CLIs and the override told it to ignore them.
+// claim about the user's machine, and when a CLI was found but investigations
+// didn't start it is false.
 function AIUnavailableNotice({
   setupState,
+  cliOverride,
   checkingAgents,
   recheckAgents,
 }: {
   setupState: DiagnoseSetup
+  cliOverride: boolean
   checkingAgents: boolean
   recheckAgents: () => Promise<void>
 }) {
+  const checkAgain = (
+    <button
+      type="button"
+      disabled={checkingAgents}
+      onClick={() => void recheckAgents()}
+      className="mt-3 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-md disabled:opacity-50"
+    >
+      <RotateCw className={clsx('w-3.5 h-3.5', checkingAgents && 'animate-spin')} />
+      {checkingAgents ? 'Checking…' : 'Check again'}
+    </button>
+  )
   if (setupState === 'unknown') {
     // The agent probe hasn't answered (in flight, or it failed and was swallowed).
     // Saying anything about the CLI or the deployment here would be a guess.
@@ -1464,9 +1479,9 @@ function AIUnavailableNotice({
       <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
         <p className="text-sm font-medium text-theme-text-primary">Checking this Radar&apos;s setup</p>
         <p className="mt-1 text-xs text-theme-text-tertiary">
-          If this doesn&apos;t resolve, Radar couldn&apos;t reach its own agents endpoint. Reopen
-          Settings, or reload the page, to try again.
+          If this doesn&apos;t resolve, Radar couldn&apos;t reach its own agents endpoint.
         </p>
+        {checkAgain}
       </div>
     )
   }
@@ -1477,15 +1492,15 @@ function AIUnavailableNotice({
           Not available in this deployment
         </p>
         <p className="mt-1 text-xs text-theme-text-tertiary">
-          Investigations run a local agent CLI against Radar&apos;s own MCP endpoint, which
-          needs MCP mounted and authentication disabled. A Radar started with{' '}
-          <span className="font-mono">--no-mcp</span>, or with authentication on, can&apos;t
-          offer them.
+          Investigations run a local agent CLI against Radar&apos;s own MCP endpoint, so they
+          need a Radar running on your own machine with MCP on and authentication off. A Radar
+          started with <span className="font-mono">--no-mcp</span>, with authentication on,
+          inside a cluster, or as a shared installation can&apos;t offer them.
         </p>
       </div>
     )
   }
-  if (setupState === 'needs-restart') {
+  if (setupState === 'needs-restart' && cliOverride) {
     return (
       <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
         <p className="text-sm font-medium text-theme-text-primary">
@@ -1500,6 +1515,18 @@ function AIUnavailableNotice({
       </div>
     )
   }
+  if (setupState === 'needs-restart') {
+    return (
+      <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
+        <p className="text-sm font-medium text-theme-text-primary">AI investigations didn&apos;t start</p>
+        <p className="mt-1 text-xs text-theme-text-tertiary">
+          Radar found an agent CLI but couldn&apos;t start investigations with it. Radar&apos;s
+          startup output says why.
+        </p>
+        {checkAgain}
+      </div>
+    )
+  }
   return (
     <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
       <p className="text-sm font-medium text-theme-text-primary">No supported agent CLI found</p>
@@ -1511,15 +1538,7 @@ function AIUnavailableNotice({
         <span className="text-theme-text-secondary">OpenCode</span>. Radar picks it up without a
         restart, and this tab then shows the agent, model, and effort controls.
       </p>
-      <button
-        type="button"
-        disabled={checkingAgents}
-        onClick={() => void recheckAgents()}
-        className="mt-3 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-md disabled:opacity-50"
-      >
-        <RotateCw className={clsx('w-3.5 h-3.5', checkingAgents && 'animate-spin')} />
-        {checkingAgents ? 'Checking…' : 'Check again'}
-      </button>
+      {checkAgain}
     </div>
   )
 }

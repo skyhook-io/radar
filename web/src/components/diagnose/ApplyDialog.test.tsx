@@ -66,7 +66,9 @@ it("distinguishes local execution from sending resource data to the model provid
   const html = renderToStaticMarkup(
     <AgentSetupNotice
       setupState="needs-install"
+      cliOverride={false}
       checkingAgents={false}
+      agentsCheckFailed={false}
       recheckAgents={async () => {}}
     />,
   );

@@ -501,8 +501,8 @@ export function DiagnoseSurface({
     document.addEventListener("mouseup", onUp);
   };
 
-  // Feature is eligible here but not runnable yet (no agent installed, or
-  // RADAR_AI_CLI_BIN names a file Radar can't run): Home leads with the setup
+  // Feature is eligible here but not runnable yet (no agent installed, or one
+  // found that investigations couldn't start with): Home leads with the setup
   // notice instead of an empty list.
   const setupPending =
     d.setupState === "needs-install" || d.setupState === "needs-restart";
@@ -620,7 +620,9 @@ export function DiagnoseSurface({
     <div className="flex-1 overflow-y-auto">
       <AgentSetupNotice
         setupState={d.setupState}
+        cliOverride={d.cliOverride}
         checkingAgents={d.checkingAgents}
+        agentsCheckFailed={d.agentsCheckFailed}
         recheckAgents={d.recheckAgents}
       />
     </div>
@@ -646,7 +648,9 @@ export function DiagnoseSurface({
     <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
       <AgentSetupNotice
         setupState={d.setupState}
+        cliOverride={d.cliOverride}
         checkingAgents={d.checkingAgents}
+        agentsCheckFailed={d.agentsCheckFailed}
         recheckAgents={d.recheckAgents}
       />
     </div>

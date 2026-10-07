@@ -63,31 +63,63 @@ function AgentRow({ agent }: { agent: AgentInstall }) {
   );
 }
 
-// Shown in the AI surface's Home when investigations are eligible in this
-// deployment but not runnable yet. "needs-install": no agent CLI found; the
-// server picks one up as soon as it's installed, so the notice offers a re-check
-// rather than a restart. "needs-restart": RADAR_AI_CLI_BIN pins the engine to a
-// file Radar can't run, which only a corrected variable and a restart fix.
+function CheckAgainButton({
+  checking,
+  onCheck,
+}: {
+  checking: boolean;
+  onCheck: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={checking}
+      onClick={onCheck}
+      className="btn-brand mt-4 inline-flex items-center gap-1.5 px-3 py-1.5 text-sm"
+    >
+      <RotateCw className={clsx("h-3.5 w-3.5", checking && "animate-spin")} />
+      {checking ? "Checking…" : "Check again"}
+    </button>
+  );
+}
+
+// Shown in the AI surface's Home when investigations are eligible here but not
+// runnable yet:
+//  - "needs-install": no agent CLI found. The server picks one up as soon as
+//    it's installed, so the notice offers a re-check rather than a restart.
+//  - "needs-restart" with cliOverride: RADAR_AI_CLI_BIN names a file Radar
+//    can't run, which only a corrected variable and a restart fix.
+//  - "needs-restart" otherwise: a CLI was found but investigations didn't start
+//    (an embedding host can report this); say only that, and offer a re-check.
 export function AgentSetupNotice({
   setupState,
+  cliOverride,
   checkingAgents,
+  agentsCheckFailed,
   recheckAgents,
 }: {
   setupState: DiagnoseSetup;
+  cliOverride: boolean;
   checkingAgents: boolean;
+  agentsCheckFailed: boolean;
   recheckAgents: () => Promise<void>;
 }) {
   const [checked, setChecked] = useState(false);
-  const badOverride = setupState === "needs-restart";
+  const check = () => {
+    void recheckAgents().then(() => setChecked(true));
+  };
+  const found = setupState === "needs-restart";
+  const badOverride = found && cliOverride;
+  let title = "Set up AI investigations";
+  if (badOverride) title = "Radar can't run the agent CLI it was given";
+  else if (found) title = "AI investigations didn't start";
   return (
     <div className="mx-auto max-w-md px-1 py-6">
       <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl border border-accent/30 bg-accent/5">
         <Sparkles className="h-5 w-5 text-accent" />
       </div>
       <h3 className="text-base font-semibold text-theme-text-primary">
-        {badOverride
-          ? "Radar can't run the agent CLI it was given"
-          : "Set up AI investigations"}
+        {title}
       </h3>
       {badOverride ? (
         <p className="mt-1 text-sm text-theme-text-secondary">
@@ -97,6 +129,14 @@ export function AgentSetupNotice({
           Correct the path or remove the variable, then restart Radar. The
           startup output shows the path it tried.
         </p>
+      ) : found ? (
+        <>
+          <p className="mt-1 text-sm text-theme-text-secondary">
+            Radar found an agent CLI but couldn&apos;t start investigations with
+            it. Radar&apos;s startup output says why.
+          </p>
+          <CheckAgainButton checking={checkingAgents} onCheck={check} />
+        </>
       ) : (
         <>
           <p className="mt-1 text-sm text-theme-text-secondary">
@@ -108,32 +148,26 @@ export function AgentSetupNotice({
               <AgentRow key={a.name} agent={a} />
             ))}
           </div>
-          <button
-            type="button"
-            disabled={checkingAgents}
-            onClick={() => {
-              void recheckAgents().then(() => setChecked(true));
-            }}
-            className="btn-brand mt-4 inline-flex items-center gap-1.5 px-3 py-1.5 text-sm"
-          >
-            <RotateCw
-              className={clsx("h-3.5 w-3.5", checkingAgents && "animate-spin")}
-            />
-            {checkingAgents ? "Checking…" : "Check again"}
-          </button>
+          <CheckAgainButton checking={checkingAgents} onCheck={check} />
           {checked && !checkingAgents && (
             <p className="mt-2 text-xs text-theme-text-secondary">
-              Still no agent CLI found. Radar looks on its PATH and in each
-              tool&apos;s usual install folder. If yours runs in a terminal and
-              Radar still can&apos;t find it,{" "}
-              <button
-                type="button"
-                onClick={() => openExternal(REPORT_URL)}
-                className="underline hover:text-theme-text-primary"
-              >
-                report it
-              </button>
-              .
+              {agentsCheckFailed ? (
+                "Couldn't reach Radar to check. Try again in a moment."
+              ) : (
+                <>
+                  Still no agent CLI found. Radar looks on its PATH and in each
+                  tool&apos;s usual install folder. If yours runs in a terminal
+                  and Radar still can&apos;t find it,{" "}
+                  <button
+                    type="button"
+                    onClick={() => openExternal(REPORT_URL)}
+                    className="underline hover:text-theme-text-primary"
+                  >
+                    report it
+                  </button>
+                  .
+                </>
+              )}
             </p>
           )}
         </>

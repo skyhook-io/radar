@@ -29,6 +29,10 @@ export interface AgentsResponse {
   // "install an agent to enable this" (eligible && !enabled) apart from "not
   // available here" (auth/cloud/--no-mcp). Absent on older servers / embed hosts.
   eligible?: boolean;
+  // cliOverride: RADAR_AI_CLI_BIN is set, pinning the engine to one CLI. With
+  // CLIs detected and investigations still off, that variable is what's broken.
+  // Absent on older servers and embed hosts.
+  cliOverride?: boolean;
   // Machine-scoped consent per disclosure surface, recorded server-side
   // (~/.radar) — one acknowledgment covers the web panel and the CLI.
   consented?: Record<string, boolean>;

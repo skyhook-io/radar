@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
@@ -207,10 +208,11 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	// available in this deployment", where nudging an install wouldn't help.
 	eligible := s.aiDeploymentSupported()
 	s.writeJSON(w, map[string]any{
-		"agents":    agents,
-		"enabled":   runs != nil,
-		"eligible":  eligible,
-		"consented": currentConsents(),
+		"agents":      agents,
+		"enabled":     runs != nil,
+		"eligible":    eligible,
+		"cliOverride": strings.TrimSpace(os.Getenv("RADAR_AI_CLI_BIN")) != "",
+		"consented":   currentConsents(),
 	})
 }
 

@@ -188,6 +188,26 @@ func TestListAgents_NoneInstalledIsAnEmptyList(t *testing.T) {
 	}
 }
 
+// The UI names RADAR_AI_CLI_BIN only when the server says it is set; an
+// embedding host that never sends the field must not get that explanation.
+func TestListAgents_ReportsTheCLIOverride(t *testing.T) {
+	for _, value := range []string{"", "/opt/typo/claude"} {
+		t.Setenv("RADAR_AI_CLI_BIN", value)
+		s := &Server{authConfig: auth.Config{Mode: "proxy"}}
+		rec := httptest.NewRecorder()
+		s.handleListAgents(rec, httptest.NewRequest(http.MethodGet, "/api/agents", nil))
+		var resp struct {
+			CLIOverride bool `json:"cliOverride"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if want := value != ""; resp.CLIOverride != want {
+			t.Errorf("RADAR_AI_CLI_BIN=%q: cliOverride = %v, want %v", value, resp.CLIOverride, want)
+		}
+	}
+}
+
 // TestDiagnoseConsentOriginGate pins the CSRF guard on the process-spawning
 // diagnose POSTs at the handler layer: the guard must admit a genuinely
 // same-origin browser POST even on a non-loopback listener

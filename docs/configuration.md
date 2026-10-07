@@ -84,8 +84,9 @@ then in these install directories:
 | Windows | `%LOCALAPPDATA%\Microsoft\WinGet\Links`, `%LOCALAPPDATA%\cursor-agent`, `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`, `%USERPROFILE%\.local\bin` |
 
 A CLI installed while Radar runs is picked up the next time Radar checks: when
-you open AI investigations, click **Check again**, or come back to the Radar
-window. No restart is needed. The startup output has an `AI investigations`
+the Radar page loads, when you click **Check again** in AI investigations, or
+when you come back to the Radar window while setup is pending. No restart is
+needed. The startup output has an `AI investigations`
 line that says which agent Radar will use, or why investigations are off.
 
 If the CLI is somewhere else, for example an npm global install under nvm, set
