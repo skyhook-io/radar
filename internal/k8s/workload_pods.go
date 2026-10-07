@@ -24,8 +24,26 @@ import (
 // DaemonSet, ReplicaSet, Job and Workflow directly. An unavailable lister
 // returns ErrWorkloadAccessDenied and one still filling its initial sync
 // returns ErrWorkloadCacheWarming, so an empty answer is never mistaken for
-// "no pods". Pods are sorted by name.
+// "no pods". Pods are sorted by name. This name-based API does not identify
+// a workload incarnation; callers holding a current root object should use
+// WorkloadPodsForUID.
 func WorkloadPods(cache *ResourceCache, kind, namespace, name string) ([]*corev1.Pod, error) {
+	return workloadPods(cache, kind, namespace, name, nil)
+}
+
+// WorkloadPodsForUID follows the current root and every intermediate controller
+// by API group, kind, name and UID. It reads only already-watched cache listers.
+// A missing root UID cannot establish current membership and returns no Pods.
+func WorkloadPodsForUID(cache *ResourceCache, kind, namespace, name, group string, uid types.UID) ([]*corev1.Pod, error) {
+	return workloadPods(cache, kind, namespace, name, &workloadOwnerIdentity{group: group, uid: uid})
+}
+
+type workloadOwnerIdentity struct {
+	group string
+	uid   types.UID
+}
+
+func workloadPods(cache *ResourceCache, kind, namespace, name string, identity *workloadOwnerIdentity) ([]*corev1.Pod, error) {
 	canonical := CanonicalWorkloadKind(kind)
 	if canonical == "" {
 		return nil, fmt.Errorf("unsupported workload kind: %s", kind)
@@ -39,7 +57,7 @@ func WorkloadPods(cache *ResourceCache, kind, namespace, name string) ([]*corev1
 	if err := requireCovers(cache, "pods", namespace); err != nil {
 		return nil, err
 	}
-	ownedBy, err := workloadOwnershipTest(cache, kind, namespace, name)
+	ownedBy, err := workloadOwnershipTest(cache, kind, namespace, name, identity)
 	if err != nil {
 		return nil, err
 	}
@@ -100,11 +118,14 @@ func CanonicalWorkloadKind(kind string) string {
 // ends at kind/name". Intermediate owners are looked up in the cache; when
 // that lister is unavailable the answer is ErrWorkloadAccessDenied rather
 // than a silently empty set.
-func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string) (func(*corev1.Pod) bool, error) {
-	direct := func(pod *corev1.Pod) bool {
-		owner := metav1.GetControllerOf(pod)
-		return owner != nil && owner.Kind == kind && owner.Name == name
+func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string, identity *workloadOwnerIdentity) (func(*corev1.Pod) bool, error) {
+	matchesRoot := func(owner *metav1.OwnerReference) bool {
+		if identity == nil {
+			return owner != nil && owner.Kind == kind && owner.Name == name
+		}
+		return controllerMatchesIdentity(owner, kind, name, identity.group, identity.uid)
 	}
+	direct := func(pod *corev1.Pod) bool { return matchesRoot(metav1.GetControllerOf(pod)) }
 	switch kind {
 	case "Deployment", "Rollout":
 		rsLister := cache.ReplicaSets()
@@ -123,8 +144,10 @@ func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string) (
 			if err != nil {
 				return false
 			}
-			rsOwner := metav1.GetControllerOf(rs)
-			return rsOwner != nil && rsOwner.Kind == kind && rsOwner.Name == name
+			if identity != nil && !controllerMatchesIdentity(owner, "ReplicaSet", rs.Name, "apps", rs.UID) {
+				return false
+			}
+			return matchesRoot(metav1.GetControllerOf(rs))
 		}, nil
 	case "CronJob":
 		jobLister := cache.Jobs()
@@ -143,8 +166,10 @@ func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string) (
 			if err != nil {
 				return false
 			}
-			jobOwner := metav1.GetControllerOf(job)
-			return jobOwner != nil && jobOwner.Kind == "CronJob" && jobOwner.Name == name
+			if identity != nil && !controllerMatchesIdentity(owner, "Job", job.Name, "batch", job.UID) {
+				return false
+			}
+			return matchesRoot(metav1.GetControllerOf(job))
 		}, nil
 	default:
 		return direct, nil
@@ -200,13 +225,19 @@ func DirectlyOwnedPods(cache *ResourceCache, namespace, name, group, kind string
 			continue
 		}
 		owner := metav1.GetControllerOf(pod)
-		if owner == nil || owner.UID != uid || owner.Kind != kind || owner.Name != name {
-			continue
-		}
-		gv, err := schema.ParseGroupVersion(owner.APIVersion)
-		if err == nil && gv.Group == group {
+		if controllerMatchesIdentity(owner, kind, name, group, uid) {
 			result = append(result, pod)
 		}
 	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result, nil
+}
+
+// controllerMatchesIdentity is shared by direct and multi-hop ownership checks.
+func controllerMatchesIdentity(owner *metav1.OwnerReference, kind, name, group string, uid types.UID) bool {
+	if owner == nil || uid == "" || owner.UID != uid || owner.Kind != kind || owner.Name != name {
+		return false
+	}
+	gv, err := schema.ParseGroupVersion(owner.APIVersion)
+	return err == nil && gv.Group == group
 }

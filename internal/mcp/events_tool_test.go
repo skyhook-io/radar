@@ -409,3 +409,47 @@ func TestGetResourceEvents_UsesObservedResourceUID(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestDiagnoseExcludesPodsFromPreviousWorkloadAndIntermediateOwners(t *testing.T) {
+	defer k8s.ResetTestState()
+	controller := true
+	root := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "fleet", Namespace: "shop", UID: "current-root"}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "fleet"}}, Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "fleet"}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}}}}}
+	objects := []runtime.Object{root}
+	for _, item := range []struct{ name, childUID, rootUID, podOwnerUID string }{
+		{"current", "current-rs", "current-root", "current-rs"},
+		{"previous-root", "old-rs", "old-root", "old-rs"},
+		{"previous-rs", "replaced-rs", "current-root", "previous-rs"},
+	} {
+		objects = append(objects, &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: item.name, Namespace: "shop", UID: types.UID(item.childUID), OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "fleet", UID: types.UID(item.rootUID), Controller: &controller}}}})
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: item.name, Namespace: "shop", UID: types.UID(item.name + "-uid"), OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: item.name, UID: types.UID(item.podOwnerUID), Controller: &controller}}}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}}}
+		event := &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: item.name, Namespace: "shop"}, Type: corev1.EventTypeWarning, Reason: item.name, Message: item.name, LastTimestamp: metav1.Now(), InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "Pod", Name: pod.Name, Namespace: pod.Namespace, UID: pod.UID}}
+		objects = append(objects, pod, event)
+	}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatal(err)
+	}
+	var response diagnoseResponse
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		result, _, err := handleDiagnose(t.Context(), nil, testDiagnoseInput("deployment", "shop", "fleet"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(extractText(t, result)), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Pods > 0 && len(response.Events) > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("fixture did not sync: %+v", response)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if response.Pods != 1 || len(response.PodNames) != 1 || response.PodNames[0] != "current" {
+		t.Fatalf("diagnose current pods=%d names=%v", response.Pods, response.PodNames)
+	}
+	if len(response.Events) != 1 || response.Events[0].Reason != "current" {
+		t.Fatalf("diagnose leaked previous controller warnings: %+v", response.Events)
+	}
+}

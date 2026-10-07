@@ -827,8 +827,8 @@ func workloadDiagnoseGroup(kind string) string {
 
 // resolveDiagnosePods returns the set of pods to fetch logs from. For
 // kind=pods that's just the requested pod; for workload kinds it resolves
-// via the workload's pod selector and the cache's pod-by-workload index.
-func resolveDiagnosePods(cache *k8s.ResourceCache, kindNorm, namespace, name string, obj any) ([]*corev1.Pod, error) {
+// via the current root UID and the cached controller ownership chain.
+func resolveDiagnosePods(cache *k8s.ResourceCache, kindNorm, namespace, name string, obj runtime.Object) ([]*corev1.Pod, error) {
 	if kindNorm == "pods" {
 		pod, ok := obj.(*corev1.Pod)
 		if !ok || pod == nil {
@@ -836,11 +836,14 @@ func resolveDiagnosePods(cache *k8s.ResourceCache, kindNorm, namespace, name str
 		}
 		return []*corev1.Pod{pod}, nil
 	}
-	// Membership is controller ownership, the relation kube-state-metrics
-	// records too, so the bundle, its vitals and the workload page name the
-	// same pods; a selector would also match bare pods and a sibling
-	// controller's pods during a Rollout migration.
-	pods, err := k8s.WorkloadPods(cache, kindNorm, namespace, name)
+	// Qualify the full controller chain by the root already read for this
+	// diagnosis. Same-name previous roots and replaced intermediate owners
+	// must not contribute logs, vitals or warning events.
+	objectMeta, err := meta.Accessor(obj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read workload metadata: %w", err)
+	}
+	pods, err := k8s.WorkloadPodsForUID(cache, kindNorm, namespace, name, obj.GetObjectKind().GroupVersionKind().Group, objectMeta.GetUID())
 	if errors.Is(err, k8s.ErrWorkloadCacheWarming) {
 		return nil, errPodsCacheWarming
 	}

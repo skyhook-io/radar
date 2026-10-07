@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -274,5 +275,108 @@ func TestDirectlyOwnedPodsRefusesUncoveredNamespace(t *testing.T) {
 	cache := newScopedOwnershipCache(t, map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "team-a"}})
 	if _, err := DirectlyOwnedPods(cache, "team-b", "cluster", "ray.io", "RayCluster", "uid"); !errors.Is(err, ErrWorkloadAccessDenied) {
 		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestWorkloadPodsForUIDVerifiesEveryControllerHop(t *testing.T) {
+	for _, tc := range []struct{ kind, group, childKind, childAPI string }{
+		{"Deployment", "apps", "ReplicaSet", "apps/v1"},
+		{"Rollout", "argoproj.io", "ReplicaSet", "apps/v1"},
+		{"CronJob", "batch", "Job", "batch/v1"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			controller := true
+			ref := func(api, kind, name, uid string) metav1.OwnerReference {
+				return metav1.OwnerReference{APIVersion: api, Kind: kind, Name: name, UID: types.UID(uid), Controller: &controller}
+			}
+			root := ref(tc.group+"/v1", tc.kind, "fleet", "current-root")
+			oldRoot := root
+			oldRoot.UID = "previous-root"
+			foreignRoot := root
+			foreignRoot.APIVersion = "other.example/v1"
+			objects := []runtime.Object{}
+			watches := map[string]bool{k8score.Pods: true}
+			for _, child := range []struct {
+				name, uid string
+				owner     metav1.OwnerReference
+			}{
+				{"active", "active-child", root}, {"previous", "previous-child", oldRoot}, {"foreign", "foreign-child", foreignRoot},
+			} {
+				metadata := metav1.ObjectMeta{Namespace: "shop", Name: child.name, UID: types.UID(child.uid), OwnerReferences: []metav1.OwnerReference{child.owner}}
+				if tc.childKind == "ReplicaSet" {
+					objects = append(objects, &appsv1.ReplicaSet{ObjectMeta: metadata})
+					watches[k8score.ReplicaSets] = true
+				} else {
+					objects = append(objects, &batchv1.Job{ObjectMeta: metadata})
+					watches[k8score.Jobs] = true
+				}
+				owner := ref(tc.childAPI, tc.childKind, child.name, child.uid)
+				objects = append(objects, ownedPod("shop", child.name+"-pod", &owner, nil))
+			}
+			staleChild := ref(tc.childAPI, tc.childKind, "active", "replaced-child")
+			foreignChild := ref("other.example/v1", tc.childKind, "active", "active-child")
+			objects = append(objects, ownedPod("shop", "stale-child-pod", &staleChild, nil), ownedPod("shop", "foreign-child-pod", &foreignChild, nil))
+			cache := newOwnershipCache(t, watches, objects...)
+			got, err := WorkloadPodsForUID(cache, tc.kind, "shop", "fleet", tc.group, "current-root")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0].Name != "active-pod" {
+				t.Fatalf("current chain pods = %v", got)
+			}
+			got, err = WorkloadPodsForUID(cache, tc.kind, "shop", "fleet", tc.group, "")
+			if err != nil || len(got) != 0 {
+				t.Fatalf("missing root UID: pods=%v err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestWorkloadPodsForUIDVerifiesDirectControllers(t *testing.T) {
+	for _, tc := range []struct{ kind, api, group string }{
+		{"StatefulSet", "apps/v1", "apps"}, {"DaemonSet", "apps/v1", "apps"}, {"ReplicaSet", "apps/v1", "apps"}, {"Job", "batch/v1", "batch"}, {"Workflow", "argoproj.io/v1alpha1", "argoproj.io"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			controller := true
+			current := metav1.OwnerReference{APIVersion: tc.api, Kind: tc.kind, Name: "fleet", UID: "current", Controller: &controller}
+			old := current
+			old.UID = "previous"
+			foreign := current
+			foreign.APIVersion = "other.example/v1"
+			cache := newOwnershipCache(t, map[string]bool{k8score.Pods: true}, ownedPod("shop", "current-pod", &current, nil), ownedPod("shop", "old-pod", &old, nil), ownedPod("shop", "foreign-pod", &foreign, nil))
+			got, err := WorkloadPodsForUID(cache, tc.kind, "shop", "fleet", tc.group, "current")
+			if err != nil || len(got) != 1 || got[0].Name != "current-pod" {
+				t.Fatalf("pods=%v err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestWorkloadPodsForUIDUsesOnlyReadyCache(t *testing.T) {
+	controller := true
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "rs", Namespace: "shop", UID: "rs-uid", OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "fleet", UID: "root-uid", Controller: &controller}}}}
+	owner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "rs", UID: rs.UID, Controller: &controller}
+	client := fake.NewClientset(rs, ownedPod("shop", "current", &owner, nil))
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: client, ResourceTypes: map[string]bool{k8score.Pods: true, k8score.ReplicaSets: true}, DeferredTypes: map[string]bool{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.Stop()
+	cache := &ResourceCache{ResourceCache: core}
+	before := len(client.Actions())
+	for range 100 {
+		got, err := WorkloadPodsForUID(cache, "deployment", "shop", "fleet", "apps", "root-uid")
+		if err != nil || len(got) != 1 {
+			t.Fatalf("pods=%v err=%v", got, err)
+		}
+	}
+	for _, action := range client.Actions()[before:] {
+		if action.GetVerb() == "get" || action.GetVerb() == "list" {
+			t.Fatalf("hot relationship lookup fetched %s %s", action.GetVerb(), action.GetResource())
+		}
+	}
+	denied := newOwnershipCache(t, map[string]bool{k8score.Pods: true})
+	if _, err := WorkloadPodsForUID(denied, "deployment", "shop", "fleet", "apps", "root-uid"); !errors.Is(err, ErrWorkloadAccessDenied) {
+		t.Fatalf("unavailable hop became empty membership: %v", err)
 	}
 }
