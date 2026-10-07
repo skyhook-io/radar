@@ -1,5 +1,9 @@
 import { Loader2, Sparkles } from "lucide-react";
-import { useDiagnose, useDiagnoseLayout } from "./DiagnoseContext";
+import {
+  type DiagnoseSetup,
+  useDiagnose,
+  useDiagnoseLayout,
+} from "./DiagnoseContext";
 import { runTargetKey } from "./target";
 import { Tooltip } from "../ui/Tooltip";
 import type { RenderDiagnoseAction } from "../../context/DiagnoseCustomization";
@@ -40,7 +44,7 @@ function DiagnoseResourceButton({
   const running =
     ready && runningKeys.has(runTargetKey(kind, namespace, name, group ?? ""));
   const tooltip = !ready
-    ? "Set up AI investigations — runs your own agent locally."
+    ? notReadyTooltip(d)
     : running
       ? `${d.agentLabel} is investigating this resource — click to watch it live.`
       : d.hosted
@@ -128,15 +132,11 @@ export function IssueDiagnoseButton({
   return (
     <Tooltip
       content={
-        d.cliOverride && !ready
-          ? "AI investigations are off: RADAR_AI_CLI_BIN names a file Radar can't run"
-          : d.setupState === "needs-restart"
-            ? "AI investigations aren't available right now"
-            : !ready
-              ? "Set up AI investigations — install a local agent"
-              : d.hosted
-                ? `Sends this resource's context to ${d.agentLabel} for investigation`
-                : `Runs ${d.agentLabel} on your machine to investigate this resource`
+        !ready
+          ? notReadyTooltip(d)
+          : d.hosted
+            ? `Sends this resource's context to ${d.agentLabel} for investigation`
+            : `Runs ${d.agentLabel} on your machine to investigate this resource`
       }
       position="left"
     >
@@ -161,6 +161,21 @@ export function IssueDiagnoseButton({
   );
 }
 
+// The tooltip every AI entry point shows while investigations aren't runnable.
+// It gives the same reason as the setup notice the button opens.
+function notReadyTooltip(d: {
+  cliOverride: boolean;
+  setupState: DiagnoseSetup;
+}): string {
+  if (d.cliOverride) {
+    return "AI investigations are off: RADAR_AI_CLI_BIN names a file Radar can't run";
+  }
+  if (d.setupState === "needs-restart") {
+    return "AI investigations aren't available right now";
+  }
+  return "Set up AI investigations: install an agent CLI to run them on your machine";
+}
+
 // Global top-bar entry into the AI surface (opens its Home / recent
 // investigations). Hidden only where investigations can't run here.
 export function GlobalDiagnoseButton() {
@@ -175,7 +190,7 @@ export function GlobalDiagnoseButton() {
     <Tooltip
       content={
         !ready
-          ? "Set up AI investigations — runs your own agent locally"
+          ? notReadyTooltip(d)
           : runningCount > 0
             ? `${runningCount} investigation${runningCount > 1 ? "s" : ""} running — ${agentSuffix}`
             : `AI investigations — ${agentSuffix}`

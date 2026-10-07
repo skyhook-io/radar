@@ -1654,6 +1654,9 @@ test('an agent CLI installed while Settings is open is picked up without a resta
   await expect(dialog.getByText(/then restart Radar/)).toHaveCount(0)
   await expect(dialog.getByText(/RADAR_AI_CLI_BIN/)).toHaveCount(0)
 
+  await dialog.getByRole('button', { name: 'Check again', exact: true }).click()
+  await expect(dialog.getByText(/Still no agent CLI found\./)).toBeVisible()
+
   installed = true
   await dialog.getByRole('button', { name: 'Check again', exact: true }).click()
   await expect(dialog.getByRole('button', { name: 'Your Claude Code setup', exact: true })).toBeVisible()

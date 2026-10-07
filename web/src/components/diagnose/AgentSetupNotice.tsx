@@ -107,11 +107,13 @@ export function AgentSetupNotice({
   agentsCheckFailed: boolean;
   recheckAgents: () => Promise<void>;
 }) {
-  const [checked, setChecked] = useState(false);
+  // The state the panel was in when a check started. "Still…" is only true when
+  // the finished check left it there.
+  const [checkedState, setCheckedState] = useState<DiagnoseSetup | null>(null);
   const check = () => {
-    void recheckAgents().then(() => setChecked(true));
+    void recheckAgents().then(() => setCheckedState(setupState));
   };
-  const showResult = checked && !checkingAgents;
+  const showResult = checkedState === setupState && !checkingAgents;
   const unreachable = showResult && agentsCheckFailed && (
     <p className="mt-2 text-xs text-theme-text-secondary">
       Couldn&apos;t reach Radar to check. Try again in a moment.

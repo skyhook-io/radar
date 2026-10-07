@@ -1469,11 +1469,15 @@ function AIUnavailableNotice({
   agentsCheckFailed: boolean
   recheckAgents: () => Promise<void>
 }) {
+  // The state the tab was in when a check started. "Still…" is only true when
+  // the finished check left it there.
+  const [checkedState, setCheckedState] = useState<DiagnoseSetup | null>(null)
+  const unchanged = checkedState === setupState && !checkingAgents && !agentsCheckFailed
   const checkAgain = (
     <button
       type="button"
       disabled={checkingAgents}
-      onClick={() => void recheckAgents()}
+      onClick={() => void recheckAgents().then(() => setCheckedState(setupState))}
       className="mt-3 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-md disabled:opacity-50"
     >
       <RotateCw className={clsx('w-3.5 h-3.5', checkingAgents && 'animate-spin')} />
@@ -1522,6 +1526,7 @@ function AIUnavailableNotice({
       <>
         An agent is set up, but investigations couldn&apos;t start with it.
         {agentsCheckFailed && !checkingAgents && " Radar's agents endpoint didn't answer the last check."}
+        {unchanged && ' Still not available.'}
       </>,
       checkAgain,
     )
@@ -1536,6 +1541,7 @@ function AIUnavailableNotice({
       <span className="text-theme-text-secondary">OpenCode</span>. Radar picks it up without a
       restart, and this tab then shows the agent, model, and effort controls.
       {agentsCheckFailed && !checkingAgents && " Radar's agents endpoint didn't answer the last check."}
+      {unchanged && ' Still no agent CLI found.'}
     </>,
     checkAgain,
   )
