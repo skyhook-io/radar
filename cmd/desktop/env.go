@@ -245,13 +245,16 @@ func enrichPath(shellPath string) {
 }
 
 // mergePathLists joins PATH lists in order, keeping the first occurrence of each
-// directory and dropping empty entries (an empty entry means the current
-// directory). It also returns the entries that came from lists after the first.
+// directory and dropping empty entries. Later lists contribute absolute
+// directories only: a relative entry resolves against whatever directory a
+// child process runs in, and only the first list (the shell's own PATH) is
+// trusted to mean it. It also returns the entries that came from lists after
+// the first.
 func mergePathLists(lists ...[]string) (merged, added []string) {
 	seen := map[string]bool{}
 	for i, list := range lists {
 		for _, dir := range list {
-			if dir == "" {
+			if dir == "" || (i > 0 && !filepath.IsAbs(dir)) {
 				continue
 			}
 			key := filepath.Clean(dir)

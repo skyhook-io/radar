@@ -205,10 +205,12 @@ func TestEnrichPathWithoutAShellAnswerKeepsTheLaunchPathFirst(t *testing.T) {
 	}
 }
 
+// Entries are matched whole, and nothing relative is added: a child process
+// would resolve "." or "node_modules/.bin" against its own working directory.
 func TestMergePathListsMatchesWholeEntries(t *testing.T) {
 	merged, added := mergePathLists(
 		[]string{"/usr/local/bin2", "/a/", ""},
-		[]string{"/usr/local/bin", "/a", "/b"},
+		[]string{"/usr/local/bin", "/a", "/b", ".", "node_modules/.bin", ""},
 	)
 	if want := []string{"/usr/local/bin2", "/a/", "/usr/local/bin", "/b"}; !slices.Equal(merged, want) {
 		t.Errorf("merged = %v, want %v", merged, want)
