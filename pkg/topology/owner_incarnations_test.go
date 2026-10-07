@@ -84,3 +84,33 @@ func TestSeededGenericCRDRejectsExistingReplacementEdge(t *testing.T) {
 		t.Fatalf("seeded replacement ownership survived: %+v %+v", nodes, edges)
 	}
 }
+
+func TestGenericOwnerClosureJoinsParentsEnrolledAfterChild(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "relationships.example.io", Version: "v1", Resource: "widgets"}
+	root := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "root", UID: "root-uid"}
+	late := genericIdentityObject(gvr, "Widget", "team", "late", root)
+	late.SetUID("late-uid")
+	child := genericIdentityObject(gvr, "Widget", "team", "child", root, metav1.OwnerReference{APIVersion: "relationships.example.io/v1", Kind: "Widget", Name: "late", UID: "late-uid"})
+	child.SetUID("child-uid")
+	for _, order := range [][]*unstructured.Unstructured{{child, late}, {late, child}} {
+		dynamic := &genericIdentityDynamic{watched: []schema.GroupVersionResource{gvr}, kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: order}, listCalls: map[schema.GroupVersionResource]int{}}
+		nodes := []Node{{uid: "root-uid", ID: "deployment/team/root", Kind: KindDeployment, Name: "root", Data: map[string]any{"namespace": "team"}}}
+		nodes, edges := (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
+		if len(nodes) != 3 || len(edges) != 3 {
+			t.Fatalf("late owner lost: nodes=%+v edges=%+v", nodes, edges)
+		}
+		found := false
+		for _, edge := range edges {
+			if edge.Source == "widget/team/late/relationships.example.io" && edge.Target == "widget/team/child/relationships.example.io" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("late parent edge missing: %+v", edges)
+		}
+		nodes, edges = (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, edges, DefaultBuildOptions())
+		if len(nodes) != 3 || len(edges) != 3 {
+			t.Fatalf("repeat pass duplicates: %+v %+v", nodes, edges)
+		}
+	}
+}
