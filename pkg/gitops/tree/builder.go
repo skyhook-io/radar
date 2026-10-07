@@ -49,6 +49,7 @@ type Builder struct {
 	topo              *topology.Topology
 	allowedNamespaces []string
 	isUnknownKind     ErrUnknownKindMatcher
+	canRead           func(ResourceRef) bool
 }
 
 func NewBuilder(dynamic DynamicGetter, topo *topology.Topology) *Builder {
@@ -60,6 +61,17 @@ func NewBuilder(dynamic DynamicGetter, topo *topology.Topology) *Builder {
 func (b *Builder) WithAllowedNamespaces(namespaces []string) *Builder {
 	b.allowedNamespaces = namespaces
 	return b
+}
+
+// WithReadCheck gates enrichment and emitted nodes by the host's resource-kind
+// policy. The callback runs serially, before prefetch workers read the cache.
+func (b *Builder) WithReadCheck(check func(ResourceRef) bool) *Builder {
+	b.canRead = check
+	return b
+}
+
+func (b *Builder) canEmit(ref ResourceRef) bool {
+	return b.canRead == nil || b.canRead(ref)
 }
 
 // WithUnknownKindMatcher wires the host's unknown-kind sentinel classifier
@@ -133,6 +145,9 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	topoByID := map[string]topology.Node{}
 	for _, n := range b.topoNodes() {
 		ref := refFromTopologyNode(n)
+		if !b.canEmit(ref) {
+			continue
+		}
 		topoByRef[refKey(ref)] = n
 		topoByRef[refKey(ResourceRef{Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name})] = n
 		topoByID[n.ID] = n
@@ -147,7 +162,11 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 
 	var fluxRelated []relatedResource
 	if tool == ToolFluxCD {
-		fluxRelated = fluxRelatedResources(root)
+		for _, related := range fluxRelatedResources(root) {
+			if b.canEmit(related.Ref) {
+				fluxRelated = append(fluxRelated, related)
+			}
+		}
 	}
 	enrichRefs := make([]ResourceRef, 0, len(managed)+len(fluxRelated))
 	if !remote {
@@ -159,8 +178,40 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		enrichRefs = append(enrichRefs, res.Ref)
 	}
 	objects, unknownKinds := b.prefetchObjects(ctx, enrichRefs)
+	// A referenced chart's source is local to that observed chart. Follow only
+	// the already-prefetched chart, never every chart in the cluster.
+	var chartSources []relatedResource
+	var chartRefs []ResourceRef
+	for _, related := range fluxRelated {
+		if related.Ref.Group != "source.toolkit.fluxcd.io" || related.Ref.Kind != "HelmChart" {
+			continue
+		}
+		chart := objects[refKey(related.Ref)]
+		if chart == nil {
+			continue
+		}
+		for _, source := range gitops.FluxSourceReferences(chart) {
+			ref := ResourceRef{Group: source.Group, Kind: source.Kind, Namespace: source.Namespace, Name: source.Name}
+			if !b.canEmit(ref) {
+				continue
+			}
+			chartSources = append(chartSources, relatedResource{Parent: related.Ref, Ref: ref, Type: EdgeSource, Data: map[string]any{"relationship": source.Role}})
+			chartRefs = append(chartRefs, ref)
+		}
+	}
+	if len(chartRefs) > 0 {
+		chartObjects, unavailable := b.prefetchObjects(ctx, chartRefs)
+		for key, object := range chartObjects {
+			objects[key] = object
+		}
+		unknownKinds = append(unknownKinds, unavailable...)
+		fluxRelated = append(fluxRelated, chartSources...)
+	}
 
 	for _, res := range managed {
+		if !b.canEmit(res.Ref) {
+			continue
+		}
 		id := nodeID(res.Ref)
 		declaredIDs[id] = true
 		if remote {
@@ -207,7 +258,16 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 			} else {
 				nodes[id] = mergeData(nodes[id], res.Data)
 			}
-			edges[edgeKey(rootNode.ID, id)] = Edge{Source: rootNode.ID, Target: id, Type: res.Type}
+			parentID := rootNode.ID
+			if res.Parent.Name != "" {
+				parentID = nodeID(res.Parent)
+			}
+			// Inventory ownership and source declarations may overlap (bootstrap).
+			// Preserve the authoritative ownership edge instead of overwriting it.
+			if !remote && declaredIDs[id] {
+				continue
+			}
+			edges[edgeKey(parentID, id)] = Edge{Source: parentID, Target: id, Type: res.Type}
 		}
 	}
 
@@ -346,7 +406,7 @@ func (b *Builder) prefetchObjects(ctx context.Context, refs []ResourceRef) (map[
 	targets := make([]ResourceRef, 0, len(refs))
 	seen := make(map[string]struct{}, len(refs))
 	for _, ref := range refs {
-		if ref.Name == "" || !b.canEnrich(ref) {
+		if ref.Name == "" || !b.canEmit(ref) || !b.canEnrich(ref) {
 			continue
 		}
 		key := refKey(ref)

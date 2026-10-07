@@ -211,20 +211,20 @@ func computeMCPAuditSummary(ctx context.Context, cache *k8s.ResourceCache, group
 // mcpTopologyForContext reuses a complete cached relationship graph. Resource
 // context authorizes every emitted reference through its request-scoped checker;
 // a namespace-scoped build would erase explicit cross-namespace dependencies.
-func mcpTopologyForContext() (*topo.Topology, topo.ResourceProvider, topo.DynamicProvider, bool) {
+func mcpTopologyForContext() (*topo.Topology, *topo.RelationshipsIndex, topo.ResourceProvider, topo.DynamicProvider, bool) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, nil, false
+		return nil, nil, nil, nil, false
 	}
 	opts := topo.RelationshipBuildOptions()
 	provider := k8s.NewTopologyResourceProvider(cache)
 	dyn := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 
-	topology, err := summaryCtxTopoMemo.Get(opts, func() (*topo.Topology, error) {
+	topology, index, err := summaryCtxTopoMemo.GetWithIndex(opts, func() (*topo.Topology, error) {
 		return topo.NewBuilder(provider).WithDynamic(dyn).Build(opts)
 	})
 	if err != nil || topology == nil {
-		return nil, nil, nil, false
+		return nil, nil, nil, nil, false
 	}
-	return topology, provider, dyn, true
+	return topology, index, provider, dyn, true
 }

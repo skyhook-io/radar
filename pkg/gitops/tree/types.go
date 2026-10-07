@@ -161,7 +161,8 @@ type managedResource struct {
 }
 
 type relatedResource struct {
-	Ref  ResourceRef
-	Type EdgeType
-	Data map[string]any
+	Parent ResourceRef
+	Ref    ResourceRef
+	Type   EdgeType
+	Data   map[string]any
 }

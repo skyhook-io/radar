@@ -503,7 +503,8 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		families: s.readablePolicyReportFamilies(r, namespace),
 	}
 
-	if topo, prov, dyn, ok := s.topologyForContext(); ok {
+	if topo, index, prov, dyn, ok := s.topologyForContext(); ok {
+		opts.RelIndex = index
 		opts.Topology = topo
 		opts.Provider = prov
 		opts.DynamicProv = dyn
@@ -521,23 +522,23 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 // topologyForContext reuses the complete cached relationship graph. The
 // resource context checker gates each target, including other namespaces.
 // Returns ok=false when the cache is not available.
-func (s *Server) topologyForContext() (*topology.Topology, topology.ResourceProvider, topology.DynamicProvider, bool) {
+func (s *Server) topologyForContext() (*topology.Topology, *topology.RelationshipsIndex, topology.ResourceProvider, topology.DynamicProvider, bool) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, nil, nil, false
+		return nil, nil, nil, nil, false
 	}
 	opts := topology.RelationshipBuildOptions()
 
 	provider := k8s.NewTopologyResourceProvider(cache)
 	dyn := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 
-	topo, err := s.topoMemo.Get(opts, func() (*topology.Topology, error) {
+	topo, index, err := s.topoMemo.GetWithIndex(opts, func() (*topology.Topology, error) {
 		return topology.NewBuilder(provider).WithDynamic(dyn).Build(opts)
 	})
 	if err != nil || topo == nil {
-		return nil, nil, nil, false
+		return nil, nil, nil, nil, false
 	}
-	return topo, provider, dyn, true
+	return topo, index, provider, dyn, true
 }
 
 // computeIssueSummaryForResource rolls up per-resource issue-composer rows

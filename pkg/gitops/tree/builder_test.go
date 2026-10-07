@@ -528,3 +528,64 @@ func TestBuild_RemoteFluxHelmReleaseRecoversNothingLocal(t *testing.T) {
 		}
 	}
 }
+
+func TestFluxTreeFollowsObservedChartSourceAndGatesKinds(t *testing.T) {
+	hr := helmRelease("team", "app")
+	hr.Object["spec"] = map[string]any{"chartRef": map[string]any{"kind": "HelmChart", "name": "chart", "namespace": "shared"}}
+	chart := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "HelmChart", "metadata": map[string]any{"name": "chart", "namespace": "shared", "labels": map[string]any{"private": "chart-label"}}, "spec": map[string]any{"sourceRef": map[string]any{"kind": "HelmRepository", "name": "repo"}}}}
+	repo := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "HelmRepository", "metadata": map[string]any{"name": "repo", "namespace": "shared"}}}
+	hrr := ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "team", Name: "app"}
+	cr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "HelmChart", Namespace: "shared", Name: "chart"}
+	rr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "HelmRepository", Namespace: "shared", Name: "repo"}
+	for _, denied := range []string{"", "HelmChart", "HelmRepository"} {
+		t.Run(denied, func(t *testing.T) {
+			getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(hrr): hr, refKey(cr): chart, refKey(rr): repo}}
+			builder := NewBuilder(getter, nil).WithReadCheck(func(ref ResourceRef) bool { return ref.Kind != denied })
+			tree, _, err := builder.Build(context.Background(), "HelmRelease", "team", "app", "helm.toolkit.fluxcd.io")
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantNodes := 3
+			if denied == "HelmChart" {
+				wantNodes = 1
+			}
+			if denied == "HelmRepository" {
+				wantNodes = 2
+			}
+			if len(tree.Nodes) != wantNodes || len(tree.Edges) != wantNodes-1 {
+				t.Fatalf("denied %s: %+v", denied, tree)
+			}
+			for _, call := range getter.recordedCalls() {
+				if call.Kind == denied {
+					t.Fatalf("denied kind fetched: %+v", call)
+				}
+			}
+			if denied == "" {
+				found := false
+				for _, edge := range tree.Edges {
+					if edge.Source == nodeID(cr) && edge.Target == nodeID(rr) && edge.Type == EdgeSource {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("chart source edge missing: %+v", tree.Edges)
+				}
+			}
+		})
+	}
+}
+
+func TestFluxBootstrapSourceRetainsInventoryOwnership(t *testing.T) {
+	ks := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization", "metadata": map[string]any{"name": "flux-system", "namespace": "flux-system"}, "spec": map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "flux-system"}}, "status": map[string]any{"inventory": map[string]any{"entries": []any{map[string]any{"id": "flux-system_flux-system_source.toolkit.fluxcd.io_GitRepository", "v": "v1"}}}}}}
+	repo := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "source.toolkit.fluxcd.io/v1", "kind": "GitRepository", "metadata": map[string]any{"name": "flux-system", "namespace": "flux-system"}}}
+	kr := ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "flux-system", Name: "flux-system"}
+	rr := ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "flux-system", Name: "flux-system"}
+	getter := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(kr): ks, refKey(rr): repo}}
+	tree, _, err := NewBuilder(getter, nil).Build(context.Background(), "Kustomization", "flux-system", "flux-system", "kustomize.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Edges) != 1 || tree.Edges[0].Type != EdgeOwns {
+		t.Fatalf("bootstrap inventory ownership overwritten: %+v", tree.Edges)
+	}
+}
