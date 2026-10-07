@@ -47,8 +47,7 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
         title: "Each workload's own history on its Timeline",
         description: "A workload's Timeline covers its own full history, past runs, and the traffic and config in front of it, without its neighbors. Routine activity folds behind a toggle; problems always show.",
         importance: 6,
-        path: '/timeline',
-        cta: 'Open Timeline',
+        // No link: a workload's own history is on its detail page, not /timeline.
       },
       {
         id: 'log-levels',

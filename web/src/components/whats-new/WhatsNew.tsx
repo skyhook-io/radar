@@ -133,7 +133,9 @@ interface DialogView {
   notes: ComposedNotes
   /** The last version the user saw notes for, when this view covers what came after it. */
   since: string | null
-  /** Closing records the running version as seen; previews record nothing. */
+  /** The version the notes bring the user up to. */
+  to: string
+  /** Closing records `to` as seen; previews record nothing. */
   acknowledges: boolean
 }
 
@@ -174,10 +176,12 @@ export function WhatsNew({ onNavigate, usageData }: WhatsNewProps) {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
-  const recordSeen = useCallback((s: WhatsNewState, seen: string | null) => {
-    const next = nextSeenVersion(s.currentVersion, seen)
+  // Records the version a dialog was opened for, not the running one: the
+  // server can be upgraded while the dialog is open.
+  const recordSeen = useCallback((version: string, storage: WhatsNewState['storage'], seen: string | null) => {
+    const next = nextSeenVersion(version, seen)
     if (next === null) return
-    if (s.storage === 'browser') {
+    if (storage === 'browser') {
       writeBrowserLastSeen(next)
       setBrowserLastSeen(readBrowserLastSeen())
       return
@@ -205,11 +209,11 @@ export function WhatsNew({ onNavigate, usageData }: WhatsNewProps) {
     if (!target) return
     const upgrade = previewFrom ? unreadReleases(target, previewFrom, true) : []
     if (upgrade.length > 0) {
-      show({ notes: composeReleaseNotes(upgrade), since: previewFrom, acknowledges: false })
+      show({ notes: composeReleaseNotes(upgrade), since: previewFrom, to: target, acknowledges: false })
       return
     }
     const single = releaseNotesFor(previewParam) ?? latestReleaseNotesFor(currentVersion) ?? RELEASE_NOTES[0]
-    if (single) show({ notes: composeReleaseNotes([single]), since: null, acknowledges: false })
+    if (single) show({ notes: composeReleaseNotes([single]), since: null, to: single.version, acknowledges: false })
   }, [previewParam, previewFrom, currentVersion, show])
 
   useEffect(() => {
@@ -219,10 +223,10 @@ export function WhatsNew({ onNavigate, usageData }: WhatsNewProps) {
     // Only on Home: someone arriving on a deep link came for that page, often
     // mid-incident. Elsewhere the nav rail's unread dot carries the notes.
     if (due && (pathname === '/' || pathname === '/home')) {
-      show({ notes: due, since: lastSeen, acknowledges: true })
+      show({ notes: due, since: lastSeen, to: state.currentVersion, acknowledges: true })
     } else if (lastSeen === null && unreadReleases(state.currentVersion, lastSeen, priorInstall).length === 0) {
       // A fresh install: start the record, so the next upgrade has something to compare against.
-      recordSeen(state, lastSeen)
+      recordSeen(state.currentVersion, state.storage, lastSeen)
     }
   // Decided once, when the state loads; the preview param is handled above.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -238,11 +242,11 @@ export function WhatsNew({ onNavigate, usageData }: WhatsNewProps) {
       if (!currentVersion) return
       const pending = lastSeen === undefined ? [] : unreadReleases(currentVersion, lastSeen, priorInstall)
       if (pending.length > 0) {
-        show({ notes: composeReleaseNotes(pending), since: lastSeen ?? null, acknowledges: true })
+        show({ notes: composeReleaseNotes(pending), since: lastSeen ?? null, to: currentVersion, acknowledges: true })
         return
       }
       const latest = latestReleaseNotesFor(currentVersion)
-      if (latest) show({ notes: composeReleaseNotes([latest]), since: null, acknowledges: true })
+      if (latest) show({ notes: composeReleaseNotes([latest]), since: null, to: currentVersion, acknowledges: true })
     }
     window.addEventListener(SHOW_WHATS_NEW_EVENT, handler)
     return () => window.removeEventListener(SHOW_WHATS_NEW_EVENT, handler)
@@ -250,7 +254,7 @@ export function WhatsNew({ onNavigate, usageData }: WhatsNewProps) {
 
   const close = useCallback(() => {
     setOpen(false)
-    if (view?.acknowledges && state && lastSeen !== undefined) recordSeen(state, lastSeen)
+    if (view?.acknowledges && state && lastSeen !== undefined) recordSeen(view.to, state.storage, lastSeen)
     if (searchParams.has(PREVIEW_PARAM) || searchParams.has(PREVIEW_FROM_PARAM)) {
       const next = new URLSearchParams(searchParams)
       next.delete(PREVIEW_PARAM)
@@ -278,7 +282,7 @@ export function WhatsNew({ onNavigate, usageData }: WhatsNewProps) {
           titleId={titleId}
           notes={view.notes}
           since={view.since}
-          currentVersion={currentVersion}
+          to={view.to}
           onClose={close}
           onNavigate={go}
           ask={<UsageDataAsk usageData={usageData} onReadMore={readAboutUsageData} />}
@@ -293,8 +297,8 @@ interface WhatsNewContentProps {
   notes: ComposedNotes
   /** The last version the user saw notes for, when the notes cover what came after it. */
   since?: string | null
-  /** The running version, which can be newer than the releases the notes are for. */
-  currentVersion?: string
+  /** The version the notes bring the user up to, which can be newer than the releases they cover. */
+  to?: string
   onClose: () => void
   onNavigate: (path: string) => void
   // Rendered between the notes and the footer, outside the scroll area so it
@@ -306,11 +310,11 @@ function isVersion(version: string | null | undefined): version is string {
   return !!version && compareVersions(version, version) !== null
 }
 
-export function WhatsNewContent({ titleId, notes, since, currentVersion, onClose, onNavigate, ask }: WhatsNewContentProps) {
+export function WhatsNewContent({ titleId, notes, since, to: toVersion, onClose, onNavigate, ask }: WhatsNewContentProps) {
   const [lead, ...rest] = notes.highlights
   const newest = notes.versions[0]
   const mixed = notes.versions.length > 1
-  const to = isVersion(currentVersion) ? normalize(currentVersion) : newest
+  const to = isVersion(toVersion) ? normalize(toVersion) : newest
   const from = isVersion(since) && normalize(since) !== to ? normalize(since) : null
   // Older releases than the dialog covers were left out, so "since" would overpromise.
   const title = !mixed

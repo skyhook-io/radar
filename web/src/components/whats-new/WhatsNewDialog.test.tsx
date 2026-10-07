@@ -313,4 +313,23 @@ describe('WhatsNew', () => {
     const link = Array.from(dialog()!.querySelectorAll('a')).find(a => a.textContent?.includes('Full changelog'))
     expect(link?.getAttribute('href')).toBe('https://radarhq.io/changelog')
   })
+  it('records the version it was opened for, even if the server is upgraded while it is open', async () => {
+    setCatalog(HEADLINE, QUIET)
+    serverState = { currentVersion: 'v1.15.2', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
+    await render('/')
+    expect(dialog()).not.toBeNull()
+    serverState = { ...serverState, currentVersion: 'v1.16.0' }
+    await act(async () => { await client.refetchQueries({ queryKey: ['whats-new'] }) })
+    await clickGotIt()
+    expect(seenPosts).toEqual(['v1.15.2'])
+  })
+
+  it('names the previewed release as the destination of a previewed upgrade', async () => {
+    setCatalog(HEADLINE, QUIET)
+    serverState = { currentVersion: 'v1.15.2', storage: 'server', seenVersion: 'v1.15.2', priorInstall: true }
+    await render('/?whats-new=v1.16.0&whats-new-from=v1.14.0')
+    const text = dialog()?.textContent ?? ''
+    expect(text).toContain('v1.16.0')
+    expect(text).not.toContain('v1.15.2')
+  })
 })
