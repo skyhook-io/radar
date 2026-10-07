@@ -184,9 +184,6 @@ func runLoginShell(shell, script string) string {
 }
 
 // commonPaths returns well-known directories where CLI tools are typically installed.
-// Used only when the login-shell probe above fails; it is about auth plugins and
-// kubectl, not agent CLIs. internal/ai/lookup_*.go keeps a separate, deliberately
-// narrower list for those — keep them apart rather than merging.
 func commonPaths() []string {
 	home := os.Getenv("HOME")
 	if home == "" {
