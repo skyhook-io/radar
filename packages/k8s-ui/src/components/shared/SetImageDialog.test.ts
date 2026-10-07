@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import type { WorkloadContainerImage } from '../../types/core'
+import { canConfirmGitOpsWrite, evaluateGitOpsWriteGuard } from '../../utils/gitops-write-guard'
 import {
+  SET_IMAGE_WRITES,
   canSubmitImageUpdates,
   changedImageUpdates,
   describeImageUpdateBehavior,
@@ -104,26 +106,41 @@ describe('reconcileRefreshedImageDrafts', () => {
 })
 
 describe('canSubmitImageUpdates', () => {
+  const target = { kind: 'Deployment', group: 'apps', namespace: 'prod', name: 'api' }
+  const managedGuard = evaluateGitOpsWriteGuard({
+    target,
+    owner: { tool: 'argocd', kind: 'applications', namespace: 'argocd', name: 'api' },
+    writes: SET_IMAGE_WRITES,
+  })
+  const unmanagedGuard = evaluateGitOpsWriteGuard({ target, owner: null, writes: SET_IMAGE_WRITES })
+  const pendingGuard = evaluateGitOpsWriteGuard({ target, owner: null, ownerPending: true, writes: SET_IMAGE_WRITES })
   const ready = {
     updateCount: 1,
     hasEmptyImage: false,
-    managed: false,
-    ownershipResolved: true,
-    acknowledged: false,
+    ownershipConfirmable: canConfirmGitOpsWrite(unmanagedGuard, false),
     busy: false,
   }
 
   it('requires break-glass acknowledgement for managed resources', () => {
-    expect(canSubmitImageUpdates({ ...ready, managed: true })).toBe(false)
+    expect(managedGuard.requiresAck).toBe(true)
     expect(
-      canSubmitImageUpdates({ ...ready, managed: true, acknowledged: true }),
+      canSubmitImageUpdates({ ...ready, ownershipConfirmable: canConfirmGitOpsWrite(managedGuard, false) }),
+    ).toBe(false)
+    expect(
+      canSubmitImageUpdates({ ...ready, ownershipConfirmable: canConfirmGitOpsWrite(managedGuard, true) }),
     ).toBe(true)
+  })
+
+  it('gates until ownership resolves', () => {
+    expect(canConfirmGitOpsWrite(undefined, true)).toBe(false)
+    expect(canConfirmGitOpsWrite(pendingGuard, true)).toBe(false)
+    expect(canSubmitImageUpdates(ready)).toBe(true)
   })
 
   it('blocks empty images and concurrent submissions', () => {
     expect(canSubmitImageUpdates({ ...ready, hasEmptyImage: true })).toBe(false)
     expect(canSubmitImageUpdates({ ...ready, busy: true })).toBe(false)
     expect(canSubmitImageUpdates({ ...ready, loadFailed: true })).toBe(false)
-    expect(canSubmitImageUpdates({ ...ready, ownershipResolved: false })).toBe(false)
+    expect(canSubmitImageUpdates({ ...ready, ownershipConfirmable: false })).toBe(false)
   })
 })
