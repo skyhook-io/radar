@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	appsv1 "k8s.io/api/apps/v1"
@@ -542,5 +543,31 @@ func TestNeighborhoodMCP_SecretRootIncluded(t *testing.T) {
 		t.Error("unauthorized user got success for Secret root — Allow gate must produce not-found via empty subgraph (existence-hiding)")
 	} else if !strings.Contains(err2.Error(), "not found") {
 		t.Errorf("unauthorized user got unexpected error %v — expected 'not found' shape to mirror existence-hiding", err2)
+	}
+}
+
+func TestNeighborhoodIncompleteRootInventoryIsExplicit(t *testing.T) {
+	k8s.ResetResourceCache()
+	t.Cleanup(k8s.ResetTestState)
+	if err := k8s.InitTestPromotedSyncingCache(fake.NewClientset(), 5*time.Second, 300*time.Millisecond, map[string]time.Duration{"replicasets": time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	ctx := withTestUserPerms(t, "bob", nil, []string{"default"})
+	for _, group := range []string{"", "apps"} {
+		_, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "ReplicaSet", Group: group, Namespace: "default", Name: "missing"})
+		if err == nil || !strings.Contains(err.Error(), "still syncing") {
+			t.Fatalf("group %q pending inventory: %v", group, err)
+		}
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		_, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{Kind: "ReplicaSet", Namespace: "default", Name: "missing"})
+		if err != nil && strings.Contains(err.Error(), "sync failed") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("failed inventory: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

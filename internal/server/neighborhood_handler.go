@@ -93,9 +93,8 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 
 	opts := parseNeighborhoodOptions(r)
 
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+	cache, ready := s.gateResourceRead(w, rawKind, group)
+	if !ready {
 		return
 	}
 

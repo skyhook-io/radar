@@ -1,6 +1,10 @@
 package topology
 
 import (
+	"errors"
+	"fmt"
+	k8score "github.com/skyhook-io/radar/pkg/k8score"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -683,5 +687,63 @@ func TestGetRelationships_NoProtects_FieldsOmitted(t *testing.T) {
 	}
 	if len(rel.NetworkPolicies) != 0 {
 		t.Errorf("rel.NetworkPolicies: want empty, got %+v", rel.NetworkPolicies)
+	}
+}
+
+type unavailableRelationshipProvider struct{ stubProvider }
+
+func (*unavailableRelationshipProvider) Pods() ([]*corev1.Pod, error) {
+	return nil, fmt.Errorf("pods inventory is still syncing")
+}
+func (*unavailableRelationshipProvider) PersistentVolumes() ([]*corev1.PersistentVolume, error) {
+	return nil, fmt.Errorf("persistentvolumes inventory sync failed")
+}
+func TestRelationshipLookupFailureIsExplicit(t *testing.T) {
+	p := &unavailableRelationshipProvider{}
+	topo := &Topology{}
+	for _, tc := range []struct {
+		kind   string
+		object any
+	}{{"Node", &corev1.Node{}}, {"StorageClass", &unstructured.Unstructured{}}, {"Pod", nil}} {
+		r := GetRelationshipsWithObject(tc.kind, "", "test", tc.object, topo, p, nil, nil)
+		if r == nil {
+			t.Fatalf("%s failed lookup returned authoritative empty relationships", tc.kind)
+		}
+		if len(r.Warnings) != 1 {
+			t.Fatalf("%s lookup warnings = %+v", tc.kind, r.Warnings)
+		}
+		if len(r.Pods) != 0 || len(r.Children) != 0 {
+			t.Fatalf("failed list manufactured relationships: %+v", r)
+		}
+	}
+	ready := GetRelationshipsWithObject("Node", "", "test", &corev1.Node{}, topo, &stubProvider{}, nil, nil)
+	if ready != nil && len(ready.Warnings) != 0 {
+		t.Fatalf("ready empty inventory warned: %+v", ready)
+	}
+}
+
+// A cache-confirmed absence differs from an unavailable inventory.
+type relationshipMetadataErrorProvider struct {
+	stubDP
+	err error
+}
+
+func (p *relationshipMetadataErrorProvider) Get(schema.GroupVersionResource, string, string) (*unstructured.Unstructured, error) {
+	return nil, p.err
+}
+func TestRelationshipMetadataAbsenceDoesNotWarn(t *testing.T) {
+	for _, kind := range []string{"pod", "widget"} {
+		gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+		for _, err := range []error{nil, fmt.Errorf("cache: %w", k8score.ErrResourceNotFound), apierrors.NewNotFound(gvr.GroupResource(), "missing"), errors.New("informer is not synced")} {
+			dp := &relationshipMetadataErrorProvider{stubDP: stubDP{gvr: map[string]schema.GroupVersionResource{kind: gvr}}, err: err}
+			rel := GetRelationships(kind, "demo", "missing", &Topology{}, &stubProvider{}, dp)
+			wantWarning := err != nil && !errors.Is(err, k8score.ErrResourceNotFound) && !apierrors.IsNotFound(err)
+			if wantWarning && (rel == nil || len(rel.Warnings) != 1) {
+				t.Fatalf("%s unavailable inventory: %+v", kind, rel)
+			}
+			if !wantWarning && rel != nil && len(rel.Warnings) != 0 {
+				t.Fatalf("%s known absence warned: %+v", kind, rel)
+			}
+		}
 	}
 }

@@ -636,6 +636,7 @@ export interface ResourceRef {
 
 // Computed relationships for a resource
 export interface Relationships {
+  warnings?: string[]
   reflection?: {
     source?: ResourceRef
     sourceResourceVersion?: string

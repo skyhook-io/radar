@@ -182,6 +182,10 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		)
 	}
 
+	if rel != nil && len(rel.Warnings) > 0 {
+		omitted.add("relationships", OmittedCacheCold)
+	}
+
 	// 1. ManagedBy — prefer Relationships.ManagedBy (server-synthesized when
 	// a topology is available; covers GitOps signals + owner-chain walk).
 	// Fall back to topology.SynthesizeManagedBy with the obj alone when no

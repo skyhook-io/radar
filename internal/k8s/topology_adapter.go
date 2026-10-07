@@ -36,7 +36,23 @@ func (a *topologyResourceProvider) ForNamespace(namespace string) topology.Resou
 	return &topologyResourceProvider{cache: a.cache, namespace: namespace}
 }
 
+// checkReady guards every typed list, including listers exposed before their
+// initial LIST completes. An incomplete store cannot establish absence.
+func (a *topologyResourceProvider) checkReady(key string) error {
+	switch a.cache.KindReadinessFor(key) {
+	case k8score.KindPending:
+		return fmt.Errorf("%s inventory is still syncing", key)
+	case k8score.KindFailed:
+		return fmt.Errorf("%s inventory sync failed", key)
+	default:
+		return nil // Unavailable retains the lister's existing availability error.
+	}
+}
+
 func (a *topologyResourceProvider) Pods() ([]*corev1.Pod, error) {
+	if err := a.checkReady(k8score.Pods); err != nil {
+		return nil, err
+	}
 	lister := a.cache.Pods()
 	if lister == nil {
 		return nil, fmt.Errorf("pods not available (RBAC not granted)")
@@ -48,6 +64,9 @@ func (a *topologyResourceProvider) Pods() ([]*corev1.Pod, error) {
 }
 
 func (a *topologyResourceProvider) Services() ([]*corev1.Service, error) {
+	if err := a.checkReady(k8score.Services); err != nil {
+		return nil, err
+	}
 	lister := a.cache.Services()
 	if lister == nil {
 		return nil, fmt.Errorf("services not available (RBAC not granted)")
@@ -59,6 +78,9 @@ func (a *topologyResourceProvider) Services() ([]*corev1.Service, error) {
 }
 
 func (a *topologyResourceProvider) Deployments() ([]*appsv1.Deployment, error) {
+	if err := a.checkReady(k8score.Deployments); err != nil {
+		return nil, err
+	}
 	lister := a.cache.Deployments()
 	if lister == nil {
 		return nil, fmt.Errorf("deployments not available (RBAC not granted)")
@@ -70,6 +92,9 @@ func (a *topologyResourceProvider) Deployments() ([]*appsv1.Deployment, error) {
 }
 
 func (a *topologyResourceProvider) DaemonSets() ([]*appsv1.DaemonSet, error) {
+	if err := a.checkReady(k8score.DaemonSets); err != nil {
+		return nil, err
+	}
 	lister := a.cache.DaemonSets()
 	if lister == nil {
 		return nil, fmt.Errorf("daemonsets not available (RBAC not granted)")
@@ -81,6 +106,9 @@ func (a *topologyResourceProvider) DaemonSets() ([]*appsv1.DaemonSet, error) {
 }
 
 func (a *topologyResourceProvider) StatefulSets() ([]*appsv1.StatefulSet, error) {
+	if err := a.checkReady(k8score.StatefulSets); err != nil {
+		return nil, err
+	}
 	lister := a.cache.StatefulSets()
 	if lister == nil {
 		return nil, fmt.Errorf("statefulsets not available (RBAC not granted)")
@@ -92,6 +120,9 @@ func (a *topologyResourceProvider) StatefulSets() ([]*appsv1.StatefulSet, error)
 }
 
 func (a *topologyResourceProvider) ReplicaSets() ([]*appsv1.ReplicaSet, error) {
+	if err := a.checkReady(k8score.ReplicaSets); err != nil {
+		return nil, err
+	}
 	lister := a.cache.ReplicaSets()
 	if lister == nil {
 		return nil, fmt.Errorf("replicasets not available (RBAC not granted)")
@@ -103,6 +134,9 @@ func (a *topologyResourceProvider) ReplicaSets() ([]*appsv1.ReplicaSet, error) {
 }
 
 func (a *topologyResourceProvider) Jobs() ([]*batchv1.Job, error) {
+	if err := a.checkReady(k8score.Jobs); err != nil {
+		return nil, err
+	}
 	lister := a.cache.Jobs()
 	if lister == nil {
 		return nil, fmt.Errorf("jobs not available (RBAC not granted)")
@@ -114,6 +148,9 @@ func (a *topologyResourceProvider) Jobs() ([]*batchv1.Job, error) {
 }
 
 func (a *topologyResourceProvider) CronJobs() ([]*batchv1.CronJob, error) {
+	if err := a.checkReady(k8score.CronJobs); err != nil {
+		return nil, err
+	}
 	lister := a.cache.CronJobs()
 	if lister == nil {
 		return nil, fmt.Errorf("cronjobs not available (RBAC not granted)")
@@ -125,6 +162,9 @@ func (a *topologyResourceProvider) CronJobs() ([]*batchv1.CronJob, error) {
 }
 
 func (a *topologyResourceProvider) Ingresses() ([]*networkingv1.Ingress, error) {
+	if err := a.checkReady(k8score.Ingresses); err != nil {
+		return nil, err
+	}
 	lister := a.cache.Ingresses()
 	if lister == nil {
 		return nil, fmt.Errorf("ingresses not available (RBAC not granted)")
@@ -136,11 +176,11 @@ func (a *topologyResourceProvider) Ingresses() ([]*networkingv1.Ingress, error) 
 }
 
 func (a *topologyResourceProvider) ConfigMaps() ([]*corev1.ConfigMap, error) {
+	if err := a.checkReady(k8score.ConfigMaps); err != nil {
+		return nil, err
+	}
 	lister := a.cache.ConfigMaps()
 	if lister == nil {
-		if a.cache.IsDeferredPending(k8score.ConfigMaps) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("configmaps not available (RBAC not granted)")
 	}
 	if a.namespace != "" {
@@ -150,11 +190,11 @@ func (a *topologyResourceProvider) ConfigMaps() ([]*corev1.ConfigMap, error) {
 }
 
 func (a *topologyResourceProvider) Secrets() ([]*corev1.Secret, error) {
+	if err := a.checkReady(k8score.Secrets); err != nil {
+		return nil, err
+	}
 	lister := a.cache.Secrets()
 	if lister == nil {
-		if a.cache.IsDeferredPending(k8score.Secrets) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("secrets not available (RBAC not granted)")
 	}
 	if a.namespace != "" {
@@ -164,11 +204,11 @@ func (a *topologyResourceProvider) Secrets() ([]*corev1.Secret, error) {
 }
 
 func (a *topologyResourceProvider) ServiceAccounts() ([]*corev1.ServiceAccount, error) {
+	if err := a.checkReady(k8score.ServiceAccounts); err != nil {
+		return nil, err
+	}
 	lister := a.cache.ServiceAccounts()
 	if lister == nil {
-		if a.cache.IsDeferredPending(k8score.ServiceAccounts) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("serviceaccounts not available (RBAC not granted)")
 	}
 	if a.namespace != "" {
@@ -178,6 +218,9 @@ func (a *topologyResourceProvider) ServiceAccounts() ([]*corev1.ServiceAccount, 
 }
 
 func (a *topologyResourceProvider) Namespaces() ([]*corev1.Namespace, error) {
+	if err := a.checkReady(k8score.Namespaces); err != nil {
+		return nil, err
+	}
 	lister := a.cache.Namespaces()
 	if lister == nil {
 		return nil, fmt.Errorf("namespaces not available (RBAC not granted)")
@@ -186,11 +229,11 @@ func (a *topologyResourceProvider) Namespaces() ([]*corev1.Namespace, error) {
 }
 
 func (a *topologyResourceProvider) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
+	if err := a.checkReady(k8score.PersistentVolumeClaims); err != nil {
+		return nil, err
+	}
 	lister := a.cache.PersistentVolumeClaims()
 	if lister == nil {
-		if a.cache.IsDeferredPending(k8score.PersistentVolumeClaims) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("persistentvolumeclaims not available (RBAC not granted)")
 	}
 	if a.namespace != "" {
@@ -200,17 +243,20 @@ func (a *topologyResourceProvider) PersistentVolumeClaims() ([]*corev1.Persisten
 }
 
 func (a *topologyResourceProvider) PersistentVolumes() ([]*corev1.PersistentVolume, error) {
+	if err := a.checkReady(k8score.PersistentVolumes); err != nil {
+		return nil, err
+	}
 	lister := a.cache.PersistentVolumes()
 	if lister == nil {
-		if a.cache.IsDeferredPending(k8score.PersistentVolumes) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("persistentvolumes not available (RBAC not granted)")
 	}
 	return lister.List(labels.Everything())
 }
 
 func (a *topologyResourceProvider) HorizontalPodAutoscalers() ([]*autoscalingv2.HorizontalPodAutoscaler, error) {
+	if err := a.checkReady(k8score.HorizontalPodAutoscalers); err != nil {
+		return nil, err
+	}
 	lister := a.cache.HorizontalPodAutoscalers()
 	if lister == nil {
 		return nil, fmt.Errorf("horizontalpodautoscalers not available (RBAC not granted)")
@@ -222,11 +268,11 @@ func (a *topologyResourceProvider) HorizontalPodAutoscalers() ([]*autoscalingv2.
 }
 
 func (a *topologyResourceProvider) PodDisruptionBudgets() ([]*policyv1.PodDisruptionBudget, error) {
+	if err := a.checkReady(k8score.PodDisruptionBudgets); err != nil {
+		return nil, err
+	}
 	lister := a.cache.PodDisruptionBudgets()
 	if lister == nil {
-		if a.cache.IsDeferredPending(k8score.PodDisruptionBudgets) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("poddisruptionbudgets not available (RBAC not granted)")
 	}
 	if a.namespace != "" {
@@ -236,11 +282,11 @@ func (a *topologyResourceProvider) PodDisruptionBudgets() ([]*policyv1.PodDisrup
 }
 
 func (a *topologyResourceProvider) NetworkPolicies() ([]*networkingv1.NetworkPolicy, error) {
+	if err := a.checkReady(k8score.NetworkPolicies); err != nil {
+		return nil, err
+	}
 	lister := a.cache.NetworkPolicies()
 	if lister == nil {
-		if a.cache.IsDeferredPending(k8score.NetworkPolicies) {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("networkpolicies not available (RBAC not granted)")
 	}
 	if a.namespace != "" {
@@ -250,6 +296,9 @@ func (a *topologyResourceProvider) NetworkPolicies() ([]*networkingv1.NetworkPol
 }
 
 func (a *topologyResourceProvider) Nodes() ([]*corev1.Node, error) {
+	if err := a.checkReady(k8score.Nodes); err != nil {
+		return nil, err
+	}
 	lister := a.cache.Nodes()
 	if lister == nil {
 		return nil, fmt.Errorf("nodes not available (RBAC not granted)")
