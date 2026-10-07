@@ -1354,8 +1354,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     },
     {
       id: 'ai', icon: Sparkles, label: 'AI investigations',
-      tone: aiAvailable ? 'ok' : 'off',
-      value: aiAvailable ? 'Ready' : 'No agent CLI',
+      ...aiOverviewStatus(aiAvailable, diag.setupState),
       detail: aiAvailable ? agentLabel : undefined,
     },
   ]
@@ -1406,6 +1405,27 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
       </div>
     </div>
   )
+}
+
+// aiOverviewStatus says which reason applies, for the same reason
+// AIUnavailableNotice does: "No agent CLI" is a claim about the user's machine,
+// and it is false when the CLI was found after startup, when this deployment
+// can't run investigations at all, or when the agents probe hasn't answered.
+function aiOverviewStatus(
+  aiAvailable: boolean,
+  setupState: DiagnoseSetup,
+): Pick<OverviewRow, 'tone' | 'value'> {
+  if (aiAvailable) return { tone: 'ok', value: 'Ready' }
+  switch (setupState) {
+    case 'unknown':
+      return { tone: 'unknown', value: 'Checking…' }
+    case 'needs-restart':
+      return { tone: 'warn', value: 'Restart Radar to finish setup' }
+    case 'off':
+      return { tone: 'off', value: 'Not available in this deployment' }
+    default:
+      return { tone: 'off', value: 'No agent CLI' }
+  }
 }
 
 function OverviewStatus({ tone }: { tone: OverviewTone }) {
