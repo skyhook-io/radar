@@ -9025,55 +9025,61 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		}
 	}
 
-	// Phase 2: Iterative resolution — keep adding nodes whose owners exist
+	// Phase 2: Enroll nodes to a fixed point. Enrollment needs one observed
+	// owner, but edge resolution must wait for every late parent to be enrolled.
+	allCandidates := append([]candidate(nil), candidates...)
 	for {
 		added := 0
-		remaining := candidates[:0] // reuse slice
+		remaining := candidates[:0]
 		for _, c := range candidates {
-			if !c.existing && crdCounts[c.typeKey] >= maxPerKind {
-				continue // drop — kind at capacity
+			if c.existing || crdCounts[c.typeKey] >= maxPerKind {
+				continue
 			}
-
-			var ownerEdges []Edge
+			connected := false
 			for _, owner := range c.ownerRefs {
-				ownerNode, matches := ownerIndex.ResolveObservedOwner(owner)
-				if ownerNode != nil && !matches {
-					replacedOwnerEdges[ownerPair{ownerNode.ID, c.nodeID}] = true
-				}
-				if matches {
-					ownerID := ownerNode.ID
-					ownerEdges = append(ownerEdges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", ownerID, c.nodeID),
-						Source: ownerID,
-						Target: c.nodeID,
-						Type:   EdgeManages,
-					})
+				if _, matches := ownerIndex.ResolveObservedOwner(owner); matches {
+					connected = true
+					break
 				}
 			}
-
-			if len(ownerEdges) > 0 {
-				if !c.existing {
-					nodes = append(nodes, c.node)
-					existingIDs[c.nodeID] = true
-					existingResourceIDs[c.resourceKey] = c.nodeID
-					ownerIndex.nodesByResourceKey[c.resourceKey] = &nodes[len(nodes)-1]
-					crdCounts[c.typeKey]++
-				}
-				for _, edge := range ownerEdges {
-					key := ownerPair{edge.Source, edge.Target}
-					if !existingOwnerEdges[key] {
-						edges = append(edges, edge)
-						existingOwnerEdges[key] = true
-					}
-				}
-				added++
-			} else {
+			if !connected {
 				remaining = append(remaining, c)
+				continue
 			}
+			nodes = append(nodes, c.node)
+			existingIDs[c.nodeID] = true
+			existingResourceIDs[c.resourceKey] = c.nodeID
+			ownerIndex.nodesByResourceKey[c.resourceKey] = &nodes[len(nodes)-1]
+			crdCounts[c.typeKey]++
+			added++
 		}
 		candidates = remaining
 		if added == 0 {
-			break // No progress — stop
+			break
+		}
+	}
+
+	// Phase 3: Join every observed owner against the final enrolled graph.
+	// A child found through one owner must not lose another owner that appeared
+	// later in the same pass. Seeded resources also participate in this join.
+	for _, c := range allCandidates {
+		if existingResourceIDs[c.resourceKey] == "" {
+			continue // absent or capped child, never create a dangling edge
+		}
+		for _, owner := range c.ownerRefs {
+			ownerNode, matches := ownerIndex.ResolveObservedOwner(owner)
+			if ownerNode != nil && !matches {
+				replacedOwnerEdges[ownerPair{ownerNode.ID, c.nodeID}] = true
+			}
+			if !matches || ownerNode.ID == c.nodeID {
+				continue
+			}
+			key := ownerPair{ownerNode.ID, c.nodeID}
+			if existingOwnerEdges[key] {
+				continue
+			}
+			edges = append(edges, Edge{ID: ownerNode.ID + "-to-" + c.nodeID, Source: ownerNode.ID, Target: c.nodeID, Type: EdgeManages})
+			existingOwnerEdges[key] = true
 		}
 	}
 

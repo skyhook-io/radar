@@ -502,6 +502,32 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		}
 	}
 
+	queriedObj := obj
+	if queriedObj == nil {
+		queriedObj = lookupObjectMetadata(kindLower, namespace, name, provider, dp)
+	}
+	// Multiple graph parents are valid. Prefer the actual controller owner for
+	// the singular compatibility field, before computing workload shortcuts.
+	if metadata, ok := queriedObj.(metav1.Object); ok {
+		for _, owner := range metadata.GetOwnerReferences() {
+			if owner.Controller == nil || !*owner.Controller {
+				continue
+			}
+			ref := resourceid.OwnerReference(owner.APIVersion, owner.Kind, owner.Name, string(owner.UID), namespace)
+			node, matches := lookupIndex.ResolveObservedOwner(ref)
+			if !matches {
+				continue
+			}
+			for _, edge := range incomingEdges {
+				if edge.Type == EdgeManages && edge.Source == node.ID {
+					rel.Owner = refForNodeID(node.ID)
+					break
+				}
+			}
+			break
+		}
+	}
+
 	addServiceEntrypoints(rel, topo, lookupIndex)
 
 	// Convenience shortcuts: bridge the Deployment↔ReplicaSet↔Pod gap
@@ -603,12 +629,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	//
 	// Use the caller-provided obj when available — it is the authoritative
 	// resource (already disambiguated by group at fetch time) and avoids the
-	// group-blind kind/name lookup. Fall back to lookupObjectMetadata only
-	// when obj is nil (back-compat path).
-	queriedObj := obj
-	if queriedObj == nil {
-		queriedObj = lookupObjectMetadata(kindLower, namespace, name, provider, dp)
-	}
+	// group-blind kind/name lookup. queriedObj was resolved once above.
 	if pod, ok := queriedObj.(*corev1.Pod); ok {
 		if sa := pod.Spec.ServiceAccountName; sa != "" {
 			saRef := ResourceRef{Kind: "ServiceAccount", Namespace: namespace, Name: sa}

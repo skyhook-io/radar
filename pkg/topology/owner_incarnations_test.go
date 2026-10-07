@@ -86,6 +86,42 @@ func TestSeededGenericCRDRejectsExistingReplacementEdge(t *testing.T) {
 	}
 }
 
+func TestGenericOwnerClosureJoinsParentsEnrolledAfterChild(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "relationships.example.io", Version: "v1", Resource: "widgets"}
+	controller := true
+	root := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "root", UID: "root-uid", Controller: &controller}
+	late := genericIdentityObject(gvr, "Widget", "team", "late", root)
+	late.SetUID("late-uid")
+	child := genericIdentityObject(gvr, "Widget", "team", "child", root, metav1.OwnerReference{APIVersion: "relationships.example.io/v1", Kind: "Widget", Name: "late", UID: "late-uid"})
+	child.SetUID("child-uid")
+	for _, order := range [][]*unstructured.Unstructured{{child, late}, {late, child}} {
+		dynamic := &genericIdentityDynamic{watched: []schema.GroupVersionResource{gvr}, kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: order}, listCalls: map[schema.GroupVersionResource]int{}}
+		nodes := []Node{{uid: "root-uid", ID: "deployment/team/root", Kind: KindDeployment, Name: "root", Data: map[string]any{"namespace": "team"}}}
+		nodes, edges := (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
+		if len(nodes) != 3 || len(edges) != 3 {
+			t.Fatalf("late owner lost: nodes=%+v edges=%+v", nodes, edges)
+		}
+		found := false
+		for _, edge := range edges {
+			if edge.Source == "widget/team/late/relationships.example.io" && edge.Target == "widget/team/child/relationships.example.io" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("late parent edge missing: %+v", edges)
+		}
+		rel := GetRelationshipsWithObject("Widget", "team", "child", child, &Topology{Nodes: nodes, Edges: edges}, nil, dynamic, nil)
+		if rel == nil || rel.Owner == nil || rel.Owner.Kind != "Deployment" || rel.Owner.Name != "root" {
+			t.Fatalf("controller displaced by non-controller parent: %+v", rel)
+		}
+
+		nodes, edges = (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, edges, DefaultBuildOptions())
+		if len(nodes) != 3 || len(edges) != 3 {
+			t.Fatalf("repeat pass duplicates: %+v %+v", nodes, edges)
+		}
+	}
+}
+
 func TestGenericCRDOwnershipUsesObservedConfigIncarnations(t *testing.T) {
 	for _, parent := range []Node{
 		configMapNode(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "team", UID: "current-config"}}),
@@ -106,5 +142,16 @@ func TestGenericCRDOwnershipUsesObservedConfigIncarnations(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestGenericOwnerClosureRejectsSelfOwner(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "relationships.example.io", Version: "v1", Resource: "widgets"}
+	child := genericIdentityObject(gvr, "Widget", "team", "child", metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "root", UID: "root-uid"}, metav1.OwnerReference{APIVersion: "relationships.example.io/v1", Kind: "Widget", Name: "child", UID: "child-uid"})
+	child.SetUID("child-uid")
+	p := &genericIdentityDynamic{watched: []schema.GroupVersionResource{gvr}, kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {child}}, listCalls: map[schema.GroupVersionResource]int{}}
+	nodes, edges := (&Builder{dynamic: p}).addGenericCRDNodes([]Node{{uid: "root-uid", ID: "deployment/team/root", Kind: KindDeployment, Name: "root", Data: map[string]any{"namespace": "team"}}}, nil, DefaultBuildOptions())
+	if len(nodes) != 2 || len(edges) != 1 || edges[0].Source == edges[0].Target {
+		t.Fatalf("self-reference became graph ownership: %+v %+v", nodes, edges)
 	}
 }
