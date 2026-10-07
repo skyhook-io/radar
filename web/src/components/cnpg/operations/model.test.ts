@@ -25,6 +25,7 @@ function op(over: Partial<CNPGTrackedOperation>): CNPGTrackedOperation {
 
 function facts(over: Partial<CNPGClusterFacts>): CNPGClusterFacts {
   return {
+    generation: 0,
     currentPrimary: 'pg-1',
     targetPrimary: 'pg-1',
     phase: 'Cluster in healthy state',
@@ -335,4 +336,27 @@ describe('switchover without readable endpoints', () => {
     expect(step?.done).toBeNull()
     expect(o.detail).toContain('read-write Service is unverified')
   })
+})
+
+describe('unread readiness after an observed restart', () => {
+  it.each(['restart', 'restartInstance'])('keeps %s unobservable rather than stalled', (kind) => {
+    const rt = runtime('pg-1', [])
+    rt.instances[0].metrics.postmasterStartTime = (T0 + 1000) / 1000
+    const operation = op({ kind, target: { name: 'pg-1' }, baseline: { instances: ['pg-1'] } })
+    const result = advanceCNPGOperation(operation, obs({ runtime: rt }))
+    expect(result.steps?.[0].done).toBeNull()
+    expect(result.state).toBe('unobservable')
+    expect(advanceCNPGOperation(result, obs({ now: T0 + CNPG_OP_STALL_MS + 1, runtime: rt })).state).toBe('unobservable')
+  })
+})
+
+it('supersedes a scheduled run when its source Cluster is recreated', () => {
+  const operation = op({ kind: 'run', target: { name: 'manual-backup' } })
+  const result = advanceCNPGOperation(operation, obs({ clusterUID: 'replacement', backups: [{ metadata: { name: 'manual-backup', namespace: 'db' }, status: { phase: 'completed' } }] }))
+  expect(result.state).toBe('superseded')
+})
+
+it('does not certify a backup whose source identity was never recorded', () => {
+  const result = advanceCNPGOperation(op({ kind: 'run', clusterUID: undefined, target: { name: 'manual-backup' } }), obs({ backups: [{ metadata: { name: 'manual-backup', namespace: 'db' }, status: { phase: 'completed' } }] }))
+  expect(result.state).toBe('unobservable')
 })

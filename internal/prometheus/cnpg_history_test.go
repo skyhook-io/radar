@@ -181,7 +181,7 @@ func TestQueryCNPGHistoryKeepsPVCScopeAndAmbiguity(t *testing.T) {
 	if !found {
 		t.Fatal("no volume chart query ran")
 	}
-	req.PVCAmbiguous = "two identities"
+	req.PVCScopeState, req.PVCReason = CNPGHistoryStateAmbiguous, "two identities"
 	for _, c := range queryCNPGHistory(context.Background(), &fakeCNPGQuerier{}, req) {
 		if c.ID == "pvcUsed" && (c.State != CNPGHistoryStateAmbiguous || len(c.Series) != 0) {
 			t.Errorf("ambiguous claims chart = %+v", c)
@@ -553,5 +553,31 @@ func TestCNPGHistoryBoundsExcludePredecessorLookback(t *testing.T) {
 		if chart.State != CNPGHistoryStateEmpty && chart.State != CNPGHistoryStateNotRead {
 			t.Fatalf("fresh chart = %+v", chart)
 		}
+	}
+}
+
+func TestCNPGVolumeHistoryRetainsScopeFailureState(t *testing.T) {
+	for _, state := range []string{CNPGHistoryStateAmbiguous, "scopeMismatch", CNPGHistoryStateError} {
+		t.Run(state, func(t *testing.T) {
+			q := &fakeCNPGQuerier{}
+			req := CNPGHistoryRequest{Namespace: "pg", Cluster: "pg", Range: cnpgHistoryRanges[1], End: time.Unix(1700000000, 0), Claims: []string{"pg-1"}, PVCScopeState: state, PVCReason: "scope check failed"}
+			found := false
+			for _, chart := range queryCNPGHistory(context.Background(), q, req) {
+				if chart.ID == "pvcUsed" || chart.ID == "pvcFree" {
+					found = true
+					if chart.State != state || chart.Reason != req.PVCReason || len(chart.Series) != 0 {
+						t.Fatalf("chart: %+v", chart)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("no PVC chart")
+			}
+			for _, query := range q.queries {
+				if strings.Contains(query, "kubelet_volume_stats_") {
+					t.Fatalf("unsafe query after failed scope check: %s", query)
+				}
+			}
+		})
 	}
 }

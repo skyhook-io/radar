@@ -31,7 +31,7 @@ export interface CNPGHistoryChart {
   source: string
   /** The label naming each series (pod, state, datname, persistentvolumeclaim or series). */
   seriesBy: string
-  /** ok | empty (scraped, nothing to plot) | noSeries (not scraped) | denied | error | notRead */
+  /** ok | empty (scraped, nothing to plot) | noSeries (not scraped) | denied | ambiguous | scopeMismatch | error | notRead */
   state: string
   reason?: string
   grant?: Grant

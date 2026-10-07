@@ -174,6 +174,7 @@ export interface CNPGBackupMethod {
 }
 
 export interface CNPGClusterFacts {
+  generation: number
   currentPrimary?: string
   targetPrimary?: string
   phase?: string
@@ -245,6 +246,8 @@ export interface CNPGScheduleCapabilities {
   facts: {
     generation: number
     cluster: string
+    clusterUID: string
+    clusterGeneration: number
     suspended: boolean
     nextScheduleTime?: string
     method?: string

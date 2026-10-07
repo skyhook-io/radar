@@ -26,7 +26,7 @@ export interface CNPGTrackedOperation {
   context: string
   namespace: string
   cluster: string
-  /** Absent when the requester did not know it (a schedule's run). */
+  /** Absent when the requester could not read the Cluster identity. */
   clusterUID?: string
   target?: { name: string; uid?: string }
   startedAt: number
@@ -312,13 +312,13 @@ function restartObserver(podsOf: (op: CNPGTrackedOperation, obs: CNPGObservation
     const steps: CNPGOpStep[] = pods.map((p) => {
       const restarted = restartedSince(obs, p, op.startedAt, uids[p])
       const ready = restarted ? readyNow(obs, p) : false
-      return { label: `${p} restarted and ready`, done: restarted === null ? null : restarted && ready === true }
+      return { label: `${p} restarted and ready`, done: restarted === null ? null : restarted ? ready : false }
     })
     const done = steps.filter((s) => s.done).length
     const state = summarizeSteps(steps)
     const detail =
       state === 'unobservable'
-        ? 'Restart evidence (Pod or PostgreSQL start time) is not readable with your access'
+        ? 'Restart or readiness evidence is not readable with your access'
         : `${done} of ${pods.length} restarted${obs.facts?.phase && obs.facts.phase !== 'Cluster in healthy state' ? ` · ${obs.facts.phase}` : ''}`
     return { state, steps, detail, progressKey: key(steps) }
   }
@@ -419,6 +419,7 @@ registerCNPGOperationObserver('rehydrate', (_op, obs) => {
 })
 
 function backupObserver(op: CNPGTrackedOperation, obs: CNPGObservation): CNPGObserverResult {
+  if (!op.clusterUID) return { state: 'unobservable', detail: 'The source Cluster identity was not recorded for this backup' }
   const name = op.target?.name
   if (!name) return { state: 'unobservable', detail: 'No Backup name recorded' }
   if (!obs.backups) return { state: 'unobservable', detail: 'Backups are not readable with your access' }

@@ -524,13 +524,13 @@ func (s *Reader) ClusterHistory(ctx context.Context, cache *k8s.ResourceCache, c
 	if len(req.Claims) > 0 {
 		matchers, iso, err := s.Metrics.PVCScope(ctx, namespace, req.Claims, anchors, rng.Duration)
 		if err != nil {
-			_, req.PVCAmbiguous = usageScopeFailure(err)
+			req.PVCScopeState, req.PVCReason = usageScopeFailure(err)
 		} else {
 			req.PVCMatchers, resp.PVCIsolation = matchers, &iso
 		}
 	}
 
-	key := strings.Join([]string{namespace, name, string(cluster.GetUID()), rng.Name, end.Format(time.RFC3339), req.Matchers, req.PVCMatchers, req.PVCAmbiguous, integration.GrantText(req.PodsDenied), integration.GrantText(req.PVCDenied), req.PVCReason, strings.Join(req.Claims, ",")}, "\x00")
+	key := strings.Join([]string{namespace, name, string(cluster.GetUID()), rng.Name, end.Format(time.RFC3339), req.Matchers, req.PVCMatchers, req.PVCScopeState, integration.GrantText(req.PodsDenied), integration.GrantText(req.PVCDenied), req.PVCReason, strings.Join(req.Claims, ",")}, "\x00")
 	charts, hit := historyMemoGet(key, now)
 	if !hit {
 		var err error

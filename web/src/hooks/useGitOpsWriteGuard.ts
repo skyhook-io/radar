@@ -77,6 +77,8 @@ export function useGitOpsWriteGuard({
     }
     return null
   }, [ownership.owner, ownership.helmOwner])
+  const argoNamespaceUnresolved = ownership.owner?.tool === 'argocd' && !ownership.owner.namespace
+  const canFetchEvidence = managed && !lookupPending && !ownership.lookupError && !argoNamespaceUnresolved
 
   const evidenceFeature = useRadarFeature('gitopsWriteEvidence')
   const evidenceQuery = useQuery({
@@ -92,7 +94,7 @@ export function useGitOpsWriteGuard({
           owner: ownerRef ?? undefined,
         }),
       ),
-    enabled: enabled && managed && !lookupPending,
+    enabled: enabled && canFetchEvidence,
     staleTime: 0,
     retry: false,
   })
@@ -100,7 +102,7 @@ export function useGitOpsWriteGuard({
   const ownershipError = targetLookupFailed
     ? "Radar couldn't read the resource"
     : ownership.lookupError
-      ? "Radar couldn't read the resource's parent workload"
+      ? "Radar couldn't resolve the resource's GitOps ownership"
       : null
 
   const guard = useMemo(
@@ -110,7 +112,7 @@ export function useGitOpsWriteGuard({
             target,
             owner: ownership.owner,
             helmRelease: ownership.helmOwner,
-            ownerPending: lookupPending || (managed && evidenceQuery.isPending),
+            ownerPending: lookupPending || (canFetchEvidence && evidenceQuery.isPending),
             ownershipError,
             evidence: evidenceQuery.data,
             evidenceError: evidenceQuery.error instanceof Error ? evidenceQuery.error.message : null,
@@ -129,7 +131,7 @@ export function useGitOpsWriteGuard({
       ownership.owner,
       ownership.helmOwner,
       lookupPending,
-      managed,
+      canFetchEvidence,
       evidenceQuery.isPending,
       evidenceQuery.data,
       evidenceQuery.error,

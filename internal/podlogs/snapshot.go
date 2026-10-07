@@ -195,7 +195,6 @@ func (s Snapshot) Summarize(counts func(Clip) bool) string {
 	return strings.Join(notices, " ")
 }
 
-// countNoun reads "1 source", "2 sources".
 func countNoun(n int, singular, plural string) string {
 	if n == 1 {
 		return "1 " + singular

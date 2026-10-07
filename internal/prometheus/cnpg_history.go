@@ -271,10 +271,9 @@ type CNPGHistoryRequest struct {
 	CreatedAt time.Time
 	// Matchers are cluster-identity matchers from ResolveCNPGScope for the
 	// exporter series; PVCMatchers from ResolvePVCScope for the claims.
-	Matchers    string
-	PVCMatchers string
-	// PVCAmbiguous says why the claims' identity could not be settled.
-	PVCAmbiguous string
+	Matchers      string
+	PVCMatchers   string
+	PVCScopeState string
 	// PodsDenied / PVCDenied carry the grant that is missing, empty when allowed.
 	PodsDenied *auth.Grant
 	PVCDenied  *auth.Grant
@@ -314,8 +313,8 @@ func queryCNPGHistory(ctx context.Context, q seriesQuerier, req CNPGHistoryReque
 		case !d.pvc && req.PodsDenied != nil:
 			c.State, c.Grant = CNPGHistoryStateDenied, req.PodsDenied
 			continue
-		case d.pvc && req.PVCAmbiguous != "":
-			c.State, c.Reason = CNPGHistoryStateAmbiguous, req.PVCAmbiguous
+		case d.pvc && req.PVCScopeState != "":
+			c.State, c.Reason = req.PVCScopeState, req.PVCReason
 			continue
 		case d.pvc && pvcSel == "":
 			c.State, c.Reason = CNPGHistoryStateNotRead, req.PVCReason

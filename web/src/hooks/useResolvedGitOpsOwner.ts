@@ -94,9 +94,10 @@ export function useResolvedGitOpsOwner({
   const helmSourceResource = relationshipHelmOwner ? resource : inherited.data?.resource
 
   const shouldResolveArgoNamespace = rawOwner?.tool === 'argocd' && !rawOwner.namespace
-  const { data: argoApplications } = useResources<any>('applications', undefined, 'argoproj.io', {
+  const argoQuery = useResources<any>('applications', undefined, 'argoproj.io', {
     enabled: shouldResolveArgoNamespace,
   })
+  const argoApplications = argoQuery.data
   const owner = useMemo(() => resolveGitOpsOwner(rawOwner, argoApplications), [rawOwner, argoApplications])
 
   const ownerGroup = owner ? gitOpsOwnerGroup(owner) : ''
@@ -128,7 +129,7 @@ export function useResolvedGitOpsOwner({
     helmOwner,
     helmSource,
     inheritedLookupRef,
-    lookupPending: Boolean(inheritedLookupRef && inherited.isPending),
+    lookupPending: Boolean((inheritedLookupRef && inherited.isPending) || (shouldResolveArgoNamespace && argoQuery.isPending)),
     lookupError: Boolean(inheritedLookupRef && inherited.isError),
   }
 }

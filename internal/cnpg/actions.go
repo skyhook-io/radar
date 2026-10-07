@@ -97,6 +97,7 @@ type CNPGBackupMethodFact struct {
 
 // CNPGClusterFacts is the state the confirm dialog shows and the POST binds.
 type CNPGClusterFacts struct {
+	Generation      int64                  `json:"generation"`
 	CurrentPrimary  string                 `json:"currentPrimary"`
 	TargetPrimary   string                 `json:"targetPrimary"`
 	Phase           string                 `json:"phase"`
@@ -215,13 +216,15 @@ type CNPGClusterCapabilitiesResponse struct {
 type CNPGScheduleFacts struct {
 	// Generation binds "run" to the settings the user reviewed: every spec
 	// change bumps it.
-	Generation       int64  `json:"generation"`
-	Cluster          string `json:"cluster"`
-	Suspended        bool   `json:"suspended"`
-	NextScheduleTime string `json:"nextScheduleTime,omitempty"`
-	Method           string `json:"method,omitempty"`
-	PluginName       string `json:"pluginName,omitempty"`
-	Target           string `json:"target,omitempty"`
+	Generation        int64  `json:"generation"`
+	Cluster           string `json:"cluster"`
+	ClusterUID        string `json:"clusterUID"`
+	ClusterGeneration int64  `json:"clusterGeneration"`
+	Suspended         bool   `json:"suspended"`
+	NextScheduleTime  string `json:"nextScheduleTime,omitempty"`
+	Method            string `json:"method,omitempty"`
+	PluginName        string `json:"pluginName,omitempty"`
+	Target            string `json:"target,omitempty"`
 	// ClusterState: ok | missing | hibernated | unreadable
 	ClusterState        string `json:"clusterState"`
 	BackupBlockedReason string `json:"backupBlockedReason,omitempty"`
@@ -262,10 +265,12 @@ type cnpgReviewedFacts struct {
 	FencedInstances *struct {
 		Raw *string `json:"raw"`
 	} `json:"fencedInstances"`
-	Suspended   *bool                 `json:"suspended"`
-	Schedule    *string               `json:"schedule"`
-	Generation  *int64                `json:"generation"`
-	Maintenance *CNPGMaintenanceFacts `json:"maintenance"`
+	Suspended         *bool                 `json:"suspended"`
+	Schedule          *string               `json:"schedule"`
+	Generation        *int64                `json:"generation"`
+	ClusterUID        *string               `json:"clusterUID"`
+	ClusterGeneration *int64                `json:"clusterGeneration"`
+	Maintenance       *CNPGMaintenanceFacts `json:"maintenance"`
 }
 
 // CNPGActionResult is a successful action's answer. Requested, not completed:
@@ -409,6 +414,7 @@ func cnpgClusterFactsOf(ctx context.Context, typed kubernetes.Interface, cluster
 	}
 	anno := cluster.GetAnnotations()
 	facts := CNPGClusterFacts{
+		Generation:       cluster.GetGeneration(),
 		CurrentPrimary:   str("status", "currentPrimary"),
 		TargetPrimary:    str("status", "targetPrimary"),
 		Phase:            str("status", "phase"),
@@ -1016,6 +1022,8 @@ func cnpgScheduleFactsOf(ctx context.Context, c ActionClients, sched *unstructur
 		f.ClusterState = "hibernated"
 	default:
 		f.ClusterState = "ok"
+		f.ClusterUID = string(cluster.GetUID())
+		f.ClusterGeneration = cluster.GetGeneration()
 		f.BackupBlockedReason = cnpgBackupDestinationGuard(cluster, f.Method, f.PluginName)
 	}
 	return f
@@ -1104,7 +1112,7 @@ type cnpgClusterRunner struct {
 }
 
 var clusterActionRunners = map[string]cnpgClusterRunner{
-	"backup":           {binds: []string{"hibernation"}, run: cnpgRunBackup},
+	"backup":           {binds: []string{"hibernation", "generation"}, run: cnpgRunBackup},
 	"switchover":       {binds: []string{"currentPrimary", "targetPrimary", "fencedInstances"}, needsPods: true, run: cnpgRunSwitchover},
 	"restart":          {binds: []string{"currentPrimary", "targetPrimary", "hibernation", "fencedInstances"}, run: cnpgRunRestart},
 	"restartInstance":  {binds: []string{"currentPrimary", "targetPrimary", "fencedInstances"}, needsPods: true, run: cnpgRunRestartInstance},
@@ -1136,6 +1144,14 @@ func cnpgFactsDiffer(binds []string, reviewed cnpgReviewedFacts, now CNPGCluster
 		var got *string
 		var want string
 		switch b {
+		case "generation":
+			if reviewed.Generation == nil {
+				return nil, b
+			}
+			if *reviewed.Generation != now.Generation {
+				changed = append(changed, b)
+			}
+			continue
 		case "currentPrimary":
 			got, want = reviewed.CurrentPrimary, now.CurrentPrimary
 		case "targetPrimary":
@@ -1842,6 +1858,12 @@ func RunCNPGScheduleAction(ctx context.Context, c ActionClients, namespace, name
 
 	if r := cnpgGuardScheduleRun(facts); r != "" {
 		return nil, integration.BlockedAction(r)
+	}
+	if reviewed.ClusterUID == nil || reviewed.ClusterGeneration == nil {
+		return nil, integration.RefuseAction(http.StatusBadRequest, "", "facts.clusterUID and facts.clusterGeneration are required for run")
+	}
+	if *reviewed.ClusterUID != facts.ClusterUID || *reviewed.ClusterGeneration != facts.ClusterGeneration {
+		return nil, integration.ChangedAction(facts, "The Cluster of ScheduledBackup %s/%s changed since you reviewed it; review the action again", namespace, name)
 	}
 	backupName := name + "-manual-" + c.clock().Format(compactStamp)
 	if errs := validation.IsDNS1123Subdomain(backupName); len(errs) > 0 {

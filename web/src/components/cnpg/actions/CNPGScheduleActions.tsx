@@ -180,6 +180,7 @@ function ScheduleDialog({ kind, namespace, name, onClose }: { kind: CNPGSchedule
                   context: data.context,
                   namespace,
                   cluster: data.facts.cluster,
+                  clusterUID: data.facts.clusterUID,
                   target: { name: r.backup },
                   link: { kind: 'Backup', group: 'postgresql.cnpg.io', name: r.backup },
                 })

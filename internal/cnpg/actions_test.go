@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -150,6 +151,7 @@ func cnpgActionReq(t *testing.T, facts map[string]any, params any) integration.A
 // The facts a dialog would echo back for the default fixture.
 func cnpgActionFacts() map[string]any {
 	return map[string]any{
+		"generation":      int64(0),
 		"currentPrimary":  "pg-1",
 		"targetPrimary":   "pg-1",
 		"hibernation":     "",
@@ -978,7 +980,7 @@ func TestCNPGScheduleRunDestinationGuard(t *testing.T) {
 			if !tc.configure && caps.Actions.Run.Reason != "Configure a backup destination on pg first" {
 				t.Fatalf("reason = %s", caps.Actions.Run.Reason)
 			}
-			_, err = RunCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "run", integration.ActionRequest{UID: "sched-uid", Facts: json.RawMessage(`{"generation":3}`)})
+			_, err = RunCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "run", integration.ActionRequest{UID: "sched-uid", Facts: json.RawMessage(`{"generation":3,"clusterUID":"cluster-uid-1","clusterGeneration":0}`)})
 			if tc.configure {
 				if err != nil || len(env.creates) != 1 {
 					t.Fatalf("configured run: %v, creates=%d", err, len(env.creates))
@@ -1008,7 +1010,7 @@ func TestCNPGScheduleRunMethodMismatch(t *testing.T) {
 	if caps.Actions.Run.Allowed || caps.Actions.Run.ReasonCode != "backup_destination" || !strings.Contains(caps.Actions.Run.Reason, "No barmanObjectStore destination on pg") || !strings.Contains(caps.Actions.Run.Reason, "Use method plugin") {
 		t.Fatalf("method mismatch should identify the existing plugin destination: %+v", caps.Actions.Run)
 	}
-	_, err = RunCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "run", integration.ActionRequest{UID: "sched-uid", Facts: json.RawMessage(`{"generation":3}`)})
+	_, err = RunCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "run", integration.ActionRequest{UID: "sched-uid", Facts: json.RawMessage(`{"generation":3,"clusterUID":"cluster-uid-1","clusterGeneration":0}`)})
 	var ae *integration.ActionError
 	if !errors.As(err, &ae) || ae.Code != "blocked" || len(env.creates) != 0 {
 		t.Fatalf("mismatched method must not create a Backup: %v, creates=%d", err, len(env.creates))
@@ -1062,7 +1064,7 @@ func TestCNPGBackupDestinationGuardRequiresClusterPluginDestination(t *testing.T
 
 func TestCNPGActionScheduleRunCopiesSettings(t *testing.T) {
 	env := newCNPGActionEnv(t, []runtime.Object{cnpgActionCluster(nil), cnpgActionSchedule(nil)})
-	req := integration.ActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"generation":3}`)}
+	req := integration.ActionRequest{ReviewedContext: "kind-test", UID: "sched-uid", Facts: json.RawMessage(`{"generation":3,"clusterUID":"cluster-uid-1","clusterGeneration":0}`)}
 	res, err := RunCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "run", req)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -1237,5 +1239,49 @@ func TestCNPGHibernateCapacityIsNotRequestedSize(t *testing.T) {
 	}
 	if volumes.Items[1].Capacity != "" || volumes.Items[1].Requested != "2Gi" {
 		t.Fatalf("unreported = %+v", volumes.Items[1])
+	}
+}
+
+func TestCNPGBackupBindsClusterSpecGeneration(t *testing.T) {
+	for _, schedule := range []bool{false, true} {
+		for _, change := range []string{"plugin destination", "snapshot settings", "status only", "replacement"} {
+			t.Run(fmt.Sprintf("schedule=%v/%s", schedule, change), func(t *testing.T) {
+				cluster := cnpgActionCluster(nil)
+				env := newCNPGActionEnv(t, []runtime.Object{cluster, cnpgActionSchedule(nil)})
+				if change == "replacement" {
+					cluster.SetUID("replacement")
+				} else if change == "plugin destination" {
+					plugins, _, _ := unstructured.NestedSlice(cluster.Object, "spec", "plugins")
+					plugins[0].(map[string]any)["parameters"].(map[string]any)["barmanObjectName"] = "other-store"
+					unstructured.SetNestedSlice(cluster.Object, plugins, "spec", "plugins")
+				} else if change == "snapshot settings" {
+					unstructured.SetNestedField(cluster.Object, "other-class", "spec", "backup", "volumeSnapshot", "className")
+				} else {
+					unstructured.SetNestedField(cluster.Object, "reconciling", "status", "phaseReason")
+				}
+				if change == "plugin destination" || change == "snapshot settings" {
+					cluster.SetGeneration(1)
+				}
+				if _, err := env.dyn.Resource(ClusterGVR).Namespace("db").Update(context.Background(), cluster, metav1.UpdateOptions{}); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				if schedule {
+					_, err = RunCNPGScheduleAction(context.Background(), env.clients(), "db", "nightly", "run", integration.ActionRequest{UID: "sched-uid", Facts: json.RawMessage(`{"generation":3,"clusterUID":"cluster-uid-1","clusterGeneration":0}`)})
+				} else {
+					_, err = RunCNPGClusterAction(context.Background(), env.clients(), "db", "pg", "backup", cnpgActionReq(t, cnpgActionFacts(), map[string]any{"method": "volumeSnapshot", "target": "primary"}))
+				}
+				if change == "status only" {
+					if err != nil || len(env.creates) != 1 {
+						t.Fatalf("status-only change blocked backup: %v creates=%d", err, len(env.creates))
+					}
+					return
+				}
+				ae, ok := cnpgActionStatus(t, err)
+				if !ok || ae.Code != integration.ActionCodeChanged || len(env.creates) != 0 {
+					t.Fatalf("changed Cluster: %v creates=%d", err, len(env.creates))
+				}
+			})
+		}
 	}
 }
