@@ -87,7 +87,11 @@ func (r *RelationshipsIndex) ResolveObservedOwner(ref resourceid.Reference) (*No
 	if node == nil {
 		return nil, false
 	}
-	return node, ref.UID == "" || node.uid == "" || ref.UID == string(node.uid)
+	uid := node.uid
+	if node.uidByGroup != nil {
+		uid = node.uidByGroup[ref.Group]
+	}
+	return node, ref.UID == "" || uid == "" || ref.UID == string(uid)
 }
 
 // EdgesFor returns the incoming and outgoing edges touching nodeID. Both

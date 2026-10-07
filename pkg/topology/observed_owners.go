@@ -1,22 +1,13 @@
 package topology
 
-import (
-	"github.com/skyhook-io/radar/pkg/resourceid"
-)
+import "github.com/skyhook-io/radar/pkg/resourceid"
 
 // addObservedOwnerEdges closes metadata ownership across already observed nodes.
 // It performs no provider reads and creates neither missing owners nor children.
 func addObservedOwnerEdges(nodes []Node, edges []Edge) []Edge {
 	index := IndexByResource(&Topology{Nodes: nodes})
 	type pair struct{ source, target string }
-	existing := map[pair][]int{}
-	for i, edge := range edges {
-		if edge.Type == EdgeManages {
-			key := pair{edge.Source, edge.Target}
-			existing[key] = append(existing[key], i)
-		}
-	}
-	contradicted := map[pair]bool{}
+	valid := map[pair]bool{}
 	for i := range nodes {
 		child := &nodes[i]
 		namespace, _ := child.Data["namespace"].(string)
@@ -25,43 +16,55 @@ func addObservedOwnerEdges(nodes []Node, edges []Edge) []Edge {
 				continue
 			}
 			parent, matches := index.ResolveObservedOwner(resourceid.OwnerReference(owner.APIVersion, owner.Kind, owner.Name, string(owner.UID), namespace))
-			if parent == nil || !parent.observed && parent.uid == "" {
-				continue
-			}
-			if parent.ID == child.ID {
-				contradicted[pair{parent.ID, child.ID}] = true
+			if parent == nil || !matches || !parent.observed && parent.uid == "" || parent.ID == child.ID {
 				continue
 			}
 			key := pair{parent.ID, child.ID}
-			if !matches {
-				contradicted[key] = true
-				continue
-			}
-			controller := owner.Controller != nil && *owner.Controller
-			if positions := existing[key]; len(positions) > 0 {
-				for _, position := range positions {
-					edges[position].OwnerController = &controller
-				}
-				continue
-			}
-			edges = append(edges, Edge{ID: parent.ID + "-to-" + child.ID + "-owner", Source: parent.ID, Target: child.ID, Type: EdgeManages, OwnerController: &controller})
-			existing[key] = []int{len(edges) - 1}
+			valid[key] = valid[key] || owner.Controller != nil && *owner.Controller
 		}
 	}
-	if len(contradicted) > 0 {
-		kept := edges[:0]
-		for _, edge := range edges {
-			if edge.Type != EdgeManages || !contradicted[pair{edge.Source, edge.Target}] {
-				kept = append(kept, edge)
+	existing := map[pair]bool{}
+	kept := edges[:0]
+	for _, edge := range edges {
+		if edge.Type == EdgeManages {
+			key := pair{edge.Source, edge.Target}
+			controller, matches := valid[key]
+			child := index.nodesByID[edge.Target]
+			// Synthetic PodGroups have no single object owner incarnation. Their
+			// aggregate paths are retained, as are independent declarations/labels.
+			if edge.metadataOwner && child != nil && (child.observed || child.uid != "") && !matches {
+				continue
 			}
+			edge.OwnerController = nil
+			if matches {
+				edge.OwnerController = &controller
+			}
+			existing[key] = true
 		}
-		edges = kept
+		kept = append(kept, edge)
 	}
-	return edges
+	for i := range nodes {
+		child := &nodes[i]
+		namespace, _ := child.Data["namespace"].(string)
+		for _, owner := range child.ownerReferences {
+			parent, matches := index.ResolveObservedOwner(resourceid.OwnerReference(owner.APIVersion, owner.Kind, owner.Name, string(owner.UID), namespace))
+			if parent == nil || !matches {
+				continue
+			}
+			key := pair{parent.ID, child.ID}
+			controller, validOwner := valid[key]
+			if !validOwner || existing[key] {
+				continue
+			}
+			kept = append(kept, Edge{metadataOwner: true, ID: parent.ID + "-to-" + child.ID + "-owner", Source: parent.ID, Target: child.ID, Type: EdgeManages, OwnerController: &controller})
+			existing[key] = true
+		}
+	}
+	return kept
 }
 
-// preferredOwnerEdge preserves the old ordering for unclassified relationships,
-// but a metadata controller takes precedence over a non-controller owner.
+// preferredOwnerEdge chooses an observed controller, otherwise the first
+// manages edge in graph order (including non-controller and logical links).
 func preferredOwnerEdge(edges []Edge) *Edge {
 	var first *Edge
 	for i := range edges {

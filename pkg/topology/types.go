@@ -166,20 +166,25 @@ type Node struct {
 	observed        bool
 	ownerReferences []metav1.OwnerReference
 	uid             types.UID
-	ID              string         `json:"id"`
-	Kind            NodeKind       `json:"kind"`
-	Name            string         `json:"name"`
-	Status          HealthStatus   `json:"status"`
-	Data            map[string]any `json:"data"`
+	// uidByGroup preserves observed incarnations of independently authorized API aliases.
+	uidByGroup map[string]types.UID
+	ID         string         `json:"id"`
+	Kind       NodeKind       `json:"kind"`
+	Name       string         `json:"name"`
+	Status     HealthStatus   `json:"status"`
+	Data       map[string]any `json:"data"`
 }
 
 // Edge represents a connection between two nodes
 type Edge struct {
-	ID     string   `json:"id"`
-	Source string   `json:"source"`
-	Target string   `json:"target"`
-	Type   EdgeType `json:"type"`
-	Label  string   `json:"label,omitempty"`
+	// metadataOwner marks edges whose only evidence is an owner reference.
+	// Spec, label, inventory and collapsed ownership paths remain independent.
+	metadataOwner bool
+	ID            string   `json:"id"`
+	Source        string   `json:"source"`
+	Target        string   `json:"target"`
+	Type          EdgeType `json:"type"`
+	Label         string   `json:"label,omitempty"`
 	// OwnerController is set only for an observed metadata owner reference.
 	OwnerController   *bool  `json:"ownerController,omitempty"`
 	Partial           bool   `json:"partial,omitempty"`

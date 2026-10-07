@@ -158,6 +158,8 @@ func (b *Builder) Build(opts BuildOptions) (*Topology, error) {
 
 	if opts.ViewMode != ViewModeTraffic {
 		b.addReflectionRelationships(topo, opts)
+		// Join only after every resource-view producer has materialized its nodes.
+		topo.Edges = addObservedOwnerEdges(topo.Nodes, topo.Edges)
 	}
 
 	// Set large cluster flags in response
@@ -1427,10 +1429,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if ownerRef.Kind == "Cluster" {
 					if clID, ok := capiClusterIDs[ns+"/"+ownerRef.Name]; ok {
 						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", clID, kcpID),
-							Source: clID,
-							Target: kcpID,
-							Type:   EdgeManages,
+							ID:            fmt.Sprintf("%s-to-%s", clID, kcpID),
+							Source:        clID,
+							Target:        kcpID,
+							Type:          EdgeManages,
+							metadataOwner: true,
 						})
 					}
 				}
@@ -1477,10 +1480,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if ownerRef.Kind == "Cluster" {
 					if clID, ok := capiClusterIDs[ns+"/"+ownerRef.Name]; ok {
 						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", clID, mdID),
-							Source: clID,
-							Target: mdID,
-							Type:   EdgeManages,
+							ID:            fmt.Sprintf("%s-to-%s", clID, mdID),
+							Source:        clID,
+							Target:        mdID,
+							Type:          EdgeManages,
+							metadataOwner: true,
 						})
 					}
 				}
@@ -1527,10 +1531,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if ownerRef.Kind == "Cluster" {
 					if clID, ok := capiClusterIDs[ns+"/"+ownerRef.Name]; ok {
 						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", clID, mpID),
-							Source: clID,
-							Target: mpID,
-							Type:   EdgeManages,
+							ID:            fmt.Sprintf("%s-to-%s", clID, mpID),
+							Source:        clID,
+							Target:        mpID,
+							Type:          EdgeManages,
+							metadataOwner: true,
 						})
 					}
 				}
@@ -1577,10 +1582,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if ownerRef.Kind == "MachineDeployment" {
 					if mdID, ok := machineDeploymentIDs[ns+"/"+ownerRef.Name]; ok {
 						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", mdID, msID),
-							Source: mdID,
-							Target: msID,
-							Type:   EdgeManages,
+							ID:            fmt.Sprintf("%s-to-%s", mdID, msID),
+							Source:        mdID,
+							Target:        msID,
+							Type:          EdgeManages,
+							metadataOwner: true,
 						})
 					}
 				}
@@ -1634,10 +1640,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 				if ownerID != "" {
 					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", ownerID, mID),
-						Source: ownerID,
-						Target: mID,
-						Type:   EdgeManages,
+						ID:            fmt.Sprintf("%s-to-%s", ownerID, mID),
+						Source:        ownerID,
+						Target:        mID,
+						Type:          EdgeManages,
+						metadataOwner: true,
 					})
 				}
 			}
@@ -2991,10 +2998,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				ownerKey := job.Namespace + "/" + ownerRef.Name
 				if ownerID, ok := cronJobIDs[ownerKey]; ok {
 					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", ownerID, jobID),
-						Source: ownerID,
-						Target: jobID,
-						Type:   EdgeManages,
+						ID:            fmt.Sprintf("%s-to-%s", ownerID, jobID),
+						Source:        ownerID,
+						Target:        jobID,
+						Type:          EdgeManages,
+						metadataOwner: true,
 					})
 					// Track for shortcut edges (CronJob -> Pod)
 					jobKey := job.Namespace + "/" + job.Name
@@ -3004,10 +3012,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				ownerKey := job.Namespace + "/" + ownerRef.Name
 				if ownerID, ok := scaledJobIDs[ownerKey]; ok {
 					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", ownerID, jobID),
-						Source: ownerID,
-						Target: jobID,
-						Type:   EdgeManages,
+						ID:            fmt.Sprintf("%s-to-%s", ownerID, jobID),
+						Source:        ownerID,
+						Target:        jobID,
+						Type:          EdgeManages,
+						metadataOwner: true,
 					})
 					jobKey := job.Namespace + "/" + job.Name
 					jobToScaledJob[jobKey] = ownerID
@@ -3193,11 +3202,12 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 						label = rolloutTrafficEdgeLabel(rsTrafficRole, rsTrafficInfo)
 					}
 					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", ownerID, rsID),
-						Source: ownerID,
-						Target: rsID,
-						Type:   EdgeManages,
-						Label:  label,
+						ID:            fmt.Sprintf("%s-to-%s", ownerID, rsID),
+						Source:        ownerID,
+						Target:        rsID,
+						Type:          EdgeManages,
+						metadataOwner: true,
+						Label:         label,
 					})
 				}
 			}
@@ -4870,10 +4880,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if ref.Kind == "Service" && strings.Contains(ref.APIVersion, "serving.knative.dev") {
 				if ownerID, ok := knativeServiceIDs[ns+"/"+ref.Name]; ok {
 					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", ownerID, kcfgID),
-						Source: ownerID,
-						Target: kcfgID,
-						Type:   EdgeManages,
+						ID:            fmt.Sprintf("%s-to-%s", ownerID, kcfgID),
+						Source:        ownerID,
+						Target:        kcfgID,
+						Type:          EdgeManages,
+						metadataOwner: true,
 					})
 				}
 			}
@@ -4891,10 +4902,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if ref.Kind == "Service" && strings.Contains(ref.APIVersion, "serving.knative.dev") {
 				if ownerID, ok := knativeServiceIDs[ns+"/"+ref.Name]; ok {
 					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", ownerID, krouteID),
-						Source: ownerID,
-						Target: krouteID,
-						Type:   EdgeManages,
+						ID:            fmt.Sprintf("%s-to-%s", ownerID, krouteID),
+						Source:        ownerID,
+						Target:        krouteID,
+						Type:          EdgeManages,
+						metadataOwner: true,
 					})
 				}
 			}
@@ -4912,10 +4924,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if ref.Kind == "Configuration" {
 				if ownerID, ok := knativeConfigIDs[ns+"/"+ref.Name]; ok {
 					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", ownerID, krevID),
-						Source: ownerID,
-						Target: krevID,
-						Type:   EdgeManages,
+						ID:            fmt.Sprintf("%s-to-%s", ownerID, krevID),
+						Source:        ownerID,
+						Target:        krevID,
+						Type:          EdgeManages,
+						metadataOwner: true,
 					})
 				}
 			}
@@ -4931,10 +4944,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				deployID := deploymentIDs[deploy.Namespace+"/"+deploy.Name]
 				if krevID, ok := knativeRevisionIDs[deploy.Namespace+"/"+ref.Name]; ok && deployID != "" {
 					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", krevID, deployID),
-						Source: krevID,
-						Target: deployID,
-						Type:   EdgeManages,
+						ID:            fmt.Sprintf("%s-to-%s", krevID, deployID),
+						Source:        krevID,
+						Target:        deployID,
+						Type:          EdgeManages,
+						metadataOwner: true,
 					})
 				}
 			}
@@ -5855,7 +5869,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// Summary mode: stamp collapsed pod counts onto their workload nodes.
 	stampPodSummaries(nodes, podSummaries)
 
-	edges = addObservedOwnerEdges(nodes, edges)
 	topo := &Topology{Nodes: stampAuditKeys(nodes), Edges: edges, Warnings: warnings}
 
 	// Add CRD discovery status
@@ -7689,11 +7702,12 @@ func (b *Builder) createPodOwnerEdges(
 						}
 					}
 					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", ownerID, targetID),
-						Source: ownerID,
-						Target: targetID,
-						Type:   EdgeManages,
-						Label:  label,
+						ID:            fmt.Sprintf("%s-to-%s", ownerID, targetID),
+						Source:        ownerID,
+						Target:        targetID,
+						Type:          EdgeManages,
+						metadataOwner: true,
+						Label:         label,
 					})
 				}
 				// Rollout->Pod shortcut, same pattern as CronJob/ScaledJob->Pod
@@ -7741,26 +7755,29 @@ func (b *Builder) createPodOwnerEdges(
 		case "DaemonSet":
 			ownerID := fmt.Sprintf("daemonset/%s/%s", pod.Namespace, ownerRef.Name)
 			edges = append(edges, Edge{
-				ID:     fmt.Sprintf("%s-to-%s", ownerID, targetID),
-				Source: ownerID,
-				Target: targetID,
-				Type:   EdgeManages,
+				ID:            fmt.Sprintf("%s-to-%s", ownerID, targetID),
+				Source:        ownerID,
+				Target:        targetID,
+				Type:          EdgeManages,
+				metadataOwner: true,
 			})
 		case "StatefulSet":
 			ownerID := fmt.Sprintf("statefulset/%s/%s", pod.Namespace, ownerRef.Name)
 			edges = append(edges, Edge{
-				ID:     fmt.Sprintf("%s-to-%s", ownerID, targetID),
-				Source: ownerID,
-				Target: targetID,
-				Type:   EdgeManages,
+				ID:            fmt.Sprintf("%s-to-%s", ownerID, targetID),
+				Source:        ownerID,
+				Target:        targetID,
+				Type:          EdgeManages,
+				metadataOwner: true,
 			})
 		case "Job":
 			if ownerID, ok := jobIDs[ownerKey]; ok {
 				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", ownerID, targetID),
-					Source: ownerID,
-					Target: targetID,
-					Type:   EdgeManages,
+					ID:            fmt.Sprintf("%s-to-%s", ownerID, targetID),
+					Source:        ownerID,
+					Target:        targetID,
+					Type:          EdgeManages,
+					metadataOwner: true,
 				})
 				// Add shortcut edge: CronJob -> Pod/PodGroup (for when Job is filtered out)
 				if cronJobID, ok := jobToCronJob[ownerKey]; ok {

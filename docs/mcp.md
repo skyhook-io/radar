@@ -593,9 +593,17 @@ this generic CRD check.
 Observed topology nodes retain metadata owner provenance internally. Metadata
 ownership edges resolve exact API identity and known UID, without fetching or
 creating missing parents. These edges carry optional `ownerController` (true or
-false); logical inventory/shortcut edges omit it. Declaration-only nodes cannot
+false). An independent spec, label or inventory link survives a stale metadata
+owner reference to the same pair; only edges supported solely by metadata are
+pruned. Logical links can also carry current metadata classification when both
+forms of evidence agree. Declaration-only nodes cannot
 seed observed owner enrollment. Every visible metadata parent can appear in a
 neighborhood, while singular owner/managed-by projections prefer the observed
 controller. Missing UID evidence does not establish that an observed object was
 replaced. Typed shortcut provenance, absent-owner materialization and an
-all-declared-owners context array remain separate concerns.
+all-declared-owners context array remain separate concerns. The final metadata
+join applies to the resource graph, including resource neighborhoods; traffic
+views retain their existing flow-oriented edges. Consumers that color workload
+ownership need the corresponding shared-UI update before enabling this graph
+behavior: `ownerController: true` takes precedence over other parents, while a
+sole non-controller owner still participates in the hierarchy.

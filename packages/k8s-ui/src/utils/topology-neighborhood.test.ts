@@ -466,3 +466,22 @@ it('uses controller provenance when two workload seeds own the same Pod', () => 
   expect(topology.nodes.find(node => node.id === 'pod')?.data.ownerColorIndex).toBe(colorByWorkload.get('Deployment/app/b'))
   expect(topology.edges).toHaveLength(2)
 })
+
+it('retains a sole non-controller CAPI parent as a workload color source', () => {
+  const topo: Topology = {
+    nodes: [node('cluster', 'Cluster', 'app', 'cluster'), node('md', 'MachineDeployment', 'app', 'workers'), node('machine', 'Machine', 'app', 'worker')],
+    edges: [{ ...edge('cluster', 'md', 'manages'), ownerController: false }, edge('md', 'machine', 'manages')],
+  }
+  const { topology, colorByWorkload } = tagWorkloadOwnership(topo, [{ kind: 'Cluster', namespace: 'app', name: 'cluster' }])
+  expect(topology.nodes.find(n => n.id === 'md')!.data.ownerWorkloadId).toBe('Cluster/app/cluster')
+  expect(topology.nodes.find(n => n.id === 'machine')!.data.ownerColorIndex).toBe(colorByWorkload.get('Cluster/app/cluster'))
+})
+
+it('retains workflow label ownership when its metadata reference is non-controller', () => {
+  const topo: Topology = {
+    nodes: [node('workflow', 'Workflow', 'app', 'job'), node('pod', 'Pod', 'app', 'child')],
+    edges: [{ ...edge('workflow', 'pod', 'manages'), ownerController: false }],
+  }
+  const { topology } = tagWorkloadOwnership(topo, [{ kind: 'Workflow', namespace: 'app', name: 'job' }])
+  expect(topology.nodes.find(n => n.id === 'pod')!.data.ownerWorkloadId).toBe('Workflow/app/job')
+})
