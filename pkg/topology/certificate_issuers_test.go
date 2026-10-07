@@ -89,8 +89,8 @@ func TestCertificateIssuerEdgesReportsUnavailableLookup(t *testing.T) {
 		"metadata": map[string]any{"name": "tls", "namespace": "team"},
 		"spec":     map[string]any{"issuerRef": map[string]any{"name": "ca"}},
 	}}
-	nodes, edges, warnings := addCertificateIssuerEdges([]Node{{ID: "certificate/team/tls", Kind: KindCertificate, Name: "tls", Data: map[string]any{"apiVersion": "cert-manager.io/v1"}}}, nil, []unstructured.Unstructured{cert}, p, DefaultBuildOptions())
-	if len(nodes) != 1 || len(edges) != 0 || len(warnings) != 2 || p.getCalls != 0 {
+	nodes, edges, warnings := addCertificateIssuerEdges([]Node{{ID: "certificate/team/tls", Kind: KindCertificate, Name: "tls", Data: map[string]any{"namespace": "team", "apiVersion": "cert-manager.io/v1"}}}, nil, []unstructured.Unstructured{cert}, p, DefaultBuildOptions())
+	if len(nodes) != 1 || len(edges) != 0 || len(warnings) != 1 || p.getCalls != 0 {
 		t.Fatalf("unavailable lookup: nodes=%d edges=%d warnings=%v gets=%d", len(nodes), len(edges), warnings, p.getCalls)
 	}
 }
