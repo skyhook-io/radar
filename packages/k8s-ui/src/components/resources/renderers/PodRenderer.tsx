@@ -453,9 +453,17 @@ export function PodRenderer({
           <Property label="Node" value={
             data.spec?.nodeName ? <ResourceLink name={data.spec.nodeName} kind="nodes" onNavigate={onNavigate} /> : undefined
           } copyable onCopy={onCopy} copied={copied} />
-          {data.status?.nominatedNodeName && (
-            <Property label={<Tooltip content="The scheduler has nominated this node. Nomination can change before the Pod is bound." position="right"><span>Nominated Node</span></Tooltip>}
-              value={<ResourceLink name={data.status.nominatedNodeName} kind="nodes" group="" namespace="" onNavigate={onNavigate} />} />
+          {/* Before Kubernetes 1.35 the API server does not clear a nomination on
+              binding, so a bound Pod can carry a stale, different node name. */}
+          {data.status?.nominatedNodeName && !data.spec?.nodeName && (
+            <Property
+              label={
+                <Tooltip content="The scheduler has nominated this node. Nomination can change before the Pod is bound." position="right">
+                  <span className="border-b border-dotted border-theme-text-tertiary cursor-help">Nominated Node</span>
+                </Tooltip>
+              }
+              value={<ResourceLink name={data.status.nominatedNodeName} kind="nodes" onNavigate={onNavigate} />}
+            />
           )}
           <Property label="Pod IP" value={data.status?.podIP} copyable onCopy={onCopy} copied={copied} />
           <Property label="Host IP" value={data.status?.hostIP} />
