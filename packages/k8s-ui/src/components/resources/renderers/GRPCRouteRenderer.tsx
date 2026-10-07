@@ -46,8 +46,8 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
             const cond = (p.conditions || []).find((c: any) => c.type === 'Accepted' && c.status === 'False')
             const gwName = p.parentRef?.name || 'unknown'
             return cond?.reason
-              ? `Gateway "${gwName}": ${cond.reason}${cond.message ? ' — ' + cond.message : ''}`
-              : `Gateway "${gwName}" has not accepted this route.`
+              ? `Parent "${gwName}": ${cond.reason}${cond.message ? ' — ' + cond.message : ''}`
+              : `Parent "${gwName}" has not accepted this route.`
           }).join('; ')}
         />
       )}
@@ -77,7 +77,7 @@ export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) 
             }
           />
           <Property
-            label="Parent Gateways"
+            label="Parents"
             value={
               parentRefs.length > 0 ? (
                 <div className="flex flex-wrap gap-1">

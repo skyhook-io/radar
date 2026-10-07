@@ -49,8 +49,8 @@ export function SimpleRouteRenderer({ data, kind, onNavigate }: SimpleRouteRende
             const cond = (p.conditions || []).find((c: any) => c.type === 'Accepted' && c.status === 'False')
             const gwName = p.parentRef?.name || 'unknown'
             return cond?.reason
-              ? `Gateway "${gwName}": ${cond.reason}${cond.message ? ' — ' + cond.message : ''}`
-              : `Gateway "${gwName}" has not accepted this route.`
+              ? `Parent "${gwName}": ${cond.reason}${cond.message ? ' — ' + cond.message : ''}`
+              : `Parent "${gwName}" has not accepted this route.`
           }).join('; ')}
         />
       )}
@@ -82,7 +82,7 @@ export function SimpleRouteRenderer({ data, kind, onNavigate }: SimpleRouteRende
             />
           )}
           <Property
-            label="Parent Gateways"
+            label="Parents"
             value={
               parentRefs.length > 0 ? (
                 <div className="flex flex-wrap gap-1">
