@@ -68,7 +68,7 @@ const CNPG_BACKLOG_UNHEALTHY = 1024 * 1024 * 1024
 
 /** A standby's catch-up tone: the worse of its byte backlog and replay delay, the delay on the same scale as the cluster's Replication fact. */
 export function cnpgStandbyBacklogTone(bytes: number | undefined, replayLag: number | undefined): HealthLevel {
-  if (bytes === undefined) return 'unknown'
+  if (bytes === undefined) return replayLag === undefined ? 'unknown' : worseTone('unknown', cnpgLagTone(replayLag))
   const byBytes: HealthLevel = bytes >= CNPG_BACKLOG_UNHEALTHY ? 'unhealthy' : bytes >= CNPG_BACKLOG_DEGRADED ? 'degraded' : 'healthy'
   return replayLag === undefined ? byBytes : worseTone(byBytes, cnpgLagTone(replayLag))
 }

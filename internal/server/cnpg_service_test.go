@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -11,6 +12,20 @@ import (
 	"github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
+
+func TestCNPGCachedReadFailurePreservesCauseWithoutExposingIt(t *testing.T) {
+	cause := errors.New("internal cache failure details")
+	_, err := cnpgCachedClusterResult(nil, cause, "pg", "orders")
+	var failure *cnpgsvc.ReadFailure
+	if !errors.Is(err, cause) || !errors.As(err, &failure) || failure.Status != http.StatusInternalServerError {
+		t.Fatalf("cache failure = %v", err)
+	}
+	w := httptest.NewRecorder()
+	(&Server{}).writeCNPGCachedReadError(w, err, "pg", "orders")
+	if w.Code != http.StatusInternalServerError || w.Body.String() != "{\"error\":\"failed to read CloudNativePG Cluster\"}\n" {
+		t.Fatalf("response = %d %s", w.Code, w.Body.String())
+	}
+}
 
 func TestCNPGReadAdapterRefusesSupersededCluster(t *testing.T) {
 	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds, withUID(cnpgObj(cnpgsvc.Group+"/v1", "Cluster", "pg", "orders", nil, nil), "orders-uid"))

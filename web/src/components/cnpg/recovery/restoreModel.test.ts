@@ -11,6 +11,7 @@ import {
   pitrWarnings,
   preflightFacts,
   recoveryEvidenceFor,
+  latestEvidence,
   assessRestoreSources,
   restoreSourceForBackup,
   restoreSourcesFor,
@@ -55,11 +56,21 @@ describe('restore sources', () => {
     expect(sourceClusterFor(source, [other, sourceCluster], 'db')).toBe(sourceCluster)
     expect(sourceClusterFor(source, [{ ...sourceCluster, spec: { backup: { barmanObjectStore: { ...source.barmanObjectStore, endpointURL: 'https://other.example' } } } }], 'db')).toBeNull()
   })
-  it('recognizes a restored Cluster that now archives to its own identity, while ignoring disabled and non-archiving plugins', () => {
+  it('recognizes a restored Cluster with its own archive declaration, while ignoring disabled plugins', () => {
     const restored = { ...cluster, spec: { ...cluster.spec, bootstrap: { recovery: { source: 'origin' } } } }
     const source = { kind: 'objectStore' as const, objectStore: 'store', serverName: 'pg-a-v2' }
     expect(sourceClusterFor(source, [restored], 'db')).toBe(restored)
-    for (const change of [{ enabled: false }, { isWALArchiver: false }]) expect(sourceClusterFor(source, [{ ...restored, spec: { ...restored.spec, plugins: [{ ...cluster.spec.plugins[0], ...change }] } }], 'db')).toBeNull()
+    expect(sourceClusterFor(source, [{ ...restored, spec: { ...restored.spec, plugins: [{ ...cluster.spec.plugins[0], enabled: false }] } }], 'db')).toBeNull()
+  })
+  it('copies source settings from a backup-only plugin when restoring from its ObjectStore', () => {
+    const source = { kind: 'objectStore' as const, objectStore: 'store', serverName: 'pg-a-v2' }
+    const backupOnly = { ...cluster, spec: { ...cluster.spec, resources: { requests: { cpu: '1' } }, plugins: [{ ...cluster.spec.plugins[0], isWALArchiver: false }] } }
+    const picked = sourceClusterFor(source, [backupOnly], 'db')
+    const manifest = buildRestoreManifest({ sourceCluster: picked, source, namespace: 'db', newName: 'restored', target: { kind: 'latest' } })
+    expect(picked).toBe(backupOnly)
+    expect(manifest.spec).toMatchObject({ instances: 3, storage: cluster.spec.storage, walStorage: cluster.spec.walStorage, postgresql: cluster.spec.postgresql, resources: backupOnly.spec.resources })
+    expect(manifest.spec.plugins).toBeUndefined()
+    expect(sourceClusterFor(source, [backupOnly], 'other')).toBeNull()
   })
   it('restores a plugin Backup through its ObjectStore with the backup ID pinned', () => {
     expect(restoreSourceForBackup(pluginBackup, cluster)).toEqual({
@@ -134,6 +145,35 @@ describe('restore manifest', () => {
 
 describe('PITR evidence', () => {
   const evidence = recoveryEvidenceFor({ kind: 'objectStore', objectStore: 'store', serverName: 'pg-a-v2' }, { sourceCluster: cluster, stores: [store], backups: [pluginBackup], namespace: 'db' })
+  const runtime = {
+    permission: { proxy: 'allowed' },
+    instances: [{ pod: 'pg-a-1', role: 'primary', status: { state: 'ok', archiving: { lastArchivedAt: '2026-09-30T08:00:00Z', lastArchivedWal: 'wal', lastFailedAt: '2026-09-30T07:00:00Z' } } }],
+  } as any
+
+  it.each([false, true])('uses WAL evidence only from the matching archiver (pinned backup: %s)', (pinned) => {
+    const source = { kind: 'objectStore' as const, objectStore: 'store', serverName: 'pg-a-v2', ...(pinned ? { backupID: '20260929T220000', backupName: 'b-plugin' } : {}) }
+    const e = recoveryEvidenceFor(source, { sourceCluster: cluster, stores: [store], backups: [pluginBackup], namespace: 'db', runtime })
+    expect(e.archiving.tone).toBe('healthy')
+    expect(e.lastArchived).toMatchObject({ at: '2026-09-30T08:00:00Z', source: 'instance manager on pg-a-1' })
+    expect(e.lastArchiveFailure?.at).toBe('2026-09-30T07:00:00Z')
+    expect(pitrWarnings('2026-09-30T06:00:00Z', e, Date.parse('2026-09-30T12:00:00Z'))).toEqual([])
+
+    for (const plugin of [
+      { ...cluster.spec.plugins[0], isWALArchiver: false },
+      { ...cluster.spec.plugins[0], enabled: false },
+      { ...cluster.spec.plugins[0], parameters: { barmanObjectName: 'other', serverName: 'pg-a-v2' } },
+      { ...cluster.spec.plugins[0], parameters: { barmanObjectName: 'store', serverName: 'other' } },
+    ]) {
+      const sourceCluster = { ...cluster, spec: { ...cluster.spec, plugins: [plugin] } }
+      const unknown = recoveryEvidenceFor(source, { sourceCluster, stores: [store], backups: [pluginBackup], namespace: 'db', runtime })
+      expect(unknown.archiving.tone).toBe('unknown')
+      expect(unknown.lastArchived).toBeUndefined()
+      expect(unknown.lastArchiveFailure).toBeUndefined()
+      expect(latestEvidence(unknown)?.at).toBe('2026-09-29T22:00:09Z')
+      expect(unknown.gaps).toContain('No live cluster archives into this source, so WAL archived after the last backup is unknown')
+      expect(pitrWarnings('2026-09-30T06:00:00Z', unknown, Date.parse('2026-09-30T12:00:00Z'))[0]).toContain('after the newest evidence')
+    }
+  })
 
   it('reads the window from the store and archiving from the condition, naming sources', () => {
     expect(evidence.firstPoint).toEqual({ at: '2026-09-20T00:00:00Z', source: 'ObjectStore store status, server pg-a-v2' })

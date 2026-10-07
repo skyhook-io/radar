@@ -13,7 +13,7 @@ func (s *Server) handleCNPGClusterStorage(w http.ResponseWriter, r *http.Request
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	resp, err := s.cnpgReader(r).ClusterStorage(r.Context(), namespace, name)
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	s.writeJSON(w, resp)

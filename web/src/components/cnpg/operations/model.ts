@@ -49,7 +49,7 @@ export interface CNPGObservation {
   now: number
   /** The Cluster's UID now, from whichever source read it. */
   clusterUID?: string
-  /** A live identity read is still in flight. */
+  /** The first live identity check after mounting is still in flight. */
   identityPending?: boolean
   facts?: CNPGClusterFacts
   /** The Cluster object from the workspace (status.conditions, readyInstances). */

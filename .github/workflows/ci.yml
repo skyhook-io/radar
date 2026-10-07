@@ -75,6 +75,11 @@ jobs:
       - name: Run tests
         run: go test ./...
 
+      - name: Evaluate CNPG PromQL in Prometheus
+        env:
+          RADAR_TEST_PROMTOOL_IMAGE: prom/prometheus:v3.5.0
+        run: go test ./internal/prometheus -run '^TestCNPGDiskGrowthPromQL$' -count=1
+
       - name: Run PostgreSQL integration tests
         env:
           RADAR_TEST_POSTGRES_DSN: postgres://radar:radar@localhost:5432/radar?sslmode=disable

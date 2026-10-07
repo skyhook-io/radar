@@ -23,7 +23,7 @@ import (
 // render and each source reports itself denied.
 func (s *Server) authorizeCNPGRuntime(w http.ResponseWriter, r *http.Request, namespace, resource string) bool {
 	if err := s.authorizeCNPGCachedRead(r, namespace, resource, cnpgsvc.GrantListPods); err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, chi.URLParam(r, "name"))
 		return false
 	}
 	return true
@@ -60,7 +60,7 @@ func (s *Server) handleCNPGClusterRuntime(w http.ResponseWriter, r *http.Request
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	resp, err := s.cnpgReader(r).ClusterRuntime(r.Context(), namespace, name)
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	s.writeJSON(w, resp)
@@ -89,13 +89,13 @@ func (s *Server) handleCNPGPoolerRuntime(w http.ResponseWriter, r *http.Request)
 		s.writeError(w, http.StatusServiceUnavailable, "CloudNativePG Poolers are still syncing")
 		return
 	default:
-		log.Printf("[cnpg] Failed to read Pooler %s/%s: %v", namespace, name, err)
+		log.Printf("[cnpg] Failed to read Pooler %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
 		s.writeError(w, http.StatusInternalServerError, "failed to read CloudNativePG Pooler")
 		return
 	}
 	resp, err := reader.PoolerRuntime(r.Context(), cache, pooler)
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	s.writeJSON(w, resp)

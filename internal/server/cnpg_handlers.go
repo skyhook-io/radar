@@ -48,7 +48,7 @@ func (s *Server) handleCNPGCatalogUsers(w http.ResponseWriter, r *http.Request) 
 	}
 	resp, err := reader.CatalogUsers(r.Context(), cache, namespace, name, wantKind)
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	s.writeJSON(w, resp)

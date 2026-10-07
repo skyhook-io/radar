@@ -36,7 +36,7 @@ func (s *Server) handleCNPGClusterHistory(w http.ResponseWriter, r *http.Request
 	}
 	_, cluster, err := reader.Observations.Cluster(r.Context(), namespace, name)
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 

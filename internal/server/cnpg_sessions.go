@@ -30,12 +30,12 @@ func (s *Server) handleCNPGClusterSessions(w http.ResponseWriter, r *http.Reques
 	}
 	_, cluster, err := reader.Observations.Cluster(r.Context(), namespace, name)
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	resp, err := reader.Sessions(r.Context(), cache, cluster, r.URL.Query().Get("pod"))
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	s.writeJSON(w, resp)

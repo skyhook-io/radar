@@ -15,7 +15,7 @@ import (
 func (s *Server) handleCNPGOperator(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.cnpgReader(r).Operator(r.Context())
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, "", "operator")
 		return
 	}
 	s.writeJSON(w, resp)

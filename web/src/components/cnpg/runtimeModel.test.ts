@@ -49,7 +49,10 @@ describe('standby cards', () => {
     expect(cnpgStandbyBacklogTone(0, 8)).toBe('degraded')
     expect(cnpgStandbyBacklogTone(0, 72)).toBe('unhealthy')
     expect(cnpgStandbyBacklogTone(2 * 1024 ** 3, 0)).toBe('unhealthy')
-    expect(cnpgStandbyBacklogTone(undefined, 72)).toBe('unknown')
+    expect(cnpgStandbyBacklogTone(undefined, 72)).toBe('unhealthy')
+    expect(cnpgStandbyBacklogTone(undefined, 8)).toBe('degraded')
+    expect(cnpgStandbyBacklogTone(undefined, 0)).toBe('unknown')
+    expect(cnpgStandbyBacklogTone(undefined, undefined)).toBe('unknown')
   })
 
   it('leads with a paused replay, keeping the streaming state secondary', () => {

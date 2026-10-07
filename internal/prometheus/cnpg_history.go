@@ -775,7 +775,9 @@ func queryCNPGDiskGrowth(ctx context.Context, q seriesQuerier, namespace string,
 		return out, nil
 	}
 	sel := withScope(cnpgClaimSelector(namespace, claims), matchers)
-	res, err := q.Query(ctx, "3600 * max by (persistentvolumeclaim) (deriv(kubelet_volume_stats_used_bytes{"+sel+"}["+window.String()+"]))")
+	metric := "kubelet_volume_stats_used_bytes{" + sel + "}"
+	// A fresh scrape must not certify a stopped series for the same claim.
+	res, err := q.Query(ctx, "3600 * max by (persistentvolumeclaim) (deriv("+metric+"["+window.String()+"]) and "+metric+")")
 	if err != nil {
 		return nil, err
 	}

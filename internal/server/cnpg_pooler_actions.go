@@ -85,7 +85,7 @@ func (s *Server) handleCNPGPgBouncerState(w http.ResponseWriter, r *http.Request
 	}
 	resp, err := reader.PgBouncerState(r.Context(), cache, pooler)
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	s.writeJSON(w, resp)

@@ -22,7 +22,7 @@ func (s *Server) handleCNPGClusterHA(w http.ResponseWriter, r *http.Request) {
 	reader := s.cnpgReader(r)
 	cache, cluster, err := reader.Observations.Cluster(r.Context(), namespace, name)
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	typed, dyn, cfg := reader.Clients.Typed, reader.dynamic, reader.config
@@ -32,7 +32,7 @@ func (s *Server) handleCNPGClusterHA(w http.ResponseWriter, r *http.Request) {
 	}
 	meta, err := metadata.NewForConfig(cfg)
 	if err != nil {
-		log.Printf("[cnpg] Failed to build metadata client for %s/%s: %v", namespace, name, err)
+		log.Printf("[cnpg] Failed to build metadata client for %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available")
 		return
 	}

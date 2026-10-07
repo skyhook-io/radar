@@ -132,13 +132,12 @@ export function restoreSourcesForStore(store: any): RestoreSource[] {
     .map((w) => ({ kind: 'objectStore' as const, objectStore: name, serverName: w.server }))
 }
 
-/** The live Cluster that archives into this source, when there is one. */
+/** The live Cluster with this archive declaration, when there is one. */
 export function sourceClusterFor(source: RestoreSource, clusters: any[], namespace: string): any | null {
   if (source.kind === 'backup') return null
   return (
     clusters.find((c) => {
       if (c?.metadata?.namespace !== namespace) return false
-      if (source.kind === 'objectStore' && getCNPGClusterBarmanPlugin(c)?.isWALArchiver !== true) return false
       return cnpgArchiveMatchesCluster(c, source)
     }) ?? null
   )
@@ -212,7 +211,12 @@ export function recoveryEvidenceFor(
   const newestBackup = newest(ownBackups.map((b) => (backupEnd(b) ? { at: backupEnd(b)!, source: `Backup ${b.metadata?.name}` } : undefined)))
   out.lastBackup = newest([out.lastBackup, newestBackup])
 
-  if (cluster) {
+  const archivesSource = cluster && (source.kind !== 'objectStore' || (
+    cluster.metadata?.namespace === ctx.namespace &&
+    cnpgArchiveMatchesCluster(cluster, source) &&
+    getCNPGClusterBarmanPlugin(cluster)?.isWALArchiver === true
+  ))
+  if (archivesSource) {
     const cond = (cluster.status?.conditions ?? []).find((c: any) => c?.type === 'ContinuousArchiving')
     if (!cond) out.archiving = { text: 'Not reported', tone: 'unknown', source: `Cluster ${clusterName} has no ContinuousArchiving condition` }
     else if (cond.status === 'True') out.archiving = { text: 'Archiving', tone: 'healthy', source: `ContinuousArchiving condition on ${clusterName}` }

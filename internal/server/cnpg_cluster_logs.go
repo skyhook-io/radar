@@ -45,12 +45,12 @@ func (s *Server) handleCNPGClusterLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	target, err := s.cnpgReader(r).PrepareLogs(r.Context(), namespace, name, query)
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	response, err := target.Snapshot(r.Context(), query)
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	s.writeJSON(w, response)
@@ -69,16 +69,16 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 	}
 	target, err := s.cnpgReader(r).PrepareLogs(r.Context(), namespace, name, query)
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	if err := target.RequireClient(); err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		log.Printf("[cnpg] Failed to stream logs for %s/%s: response writer does not support flushing", namespace, name)
+		log.Printf("[cnpg] Failed to stream logs for %s/%s: response writer does not support flushing", sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}

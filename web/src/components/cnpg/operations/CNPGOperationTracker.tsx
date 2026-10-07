@@ -27,8 +27,8 @@ import { dismissCNPGOperation, updateCNPGOperations, useCNPGOperations } from '.
 
 const POLL_MS = 5_000
 
-function sourceFreshness(q: { dataUpdatedAt: number; isError: boolean }) {
-  return { updatedAt: q.dataUpdatedAt, failed: q.isError }
+function sourceFreshness(q: { dataUpdatedAt: number; errorUpdatedAt: number; isError: boolean; isFetching: boolean; isFetchedAfterMount: boolean }) {
+  return { updatedAt: q.dataUpdatedAt, checkedAt: Math.max(q.dataUpdatedAt, q.errorUpdatedAt), failed: q.isError, initialPending: q.isFetching && !q.isFetchedAfterMount }
 }
 
 /**
@@ -56,8 +56,8 @@ export function CNPGOperationTracker({ namespace, name, uid }: { namespace: stri
     if (!following) return
     const t = setInterval(() => {
       if (document.visibilityState === 'hidden') return
-      queryClient.invalidateQueries({ queryKey: ['cnpg', 'capabilities', 'clusters', namespace, name] })
-      queryClient.invalidateQueries({ queryKey: ['cnpg', 'workspace', namespace] })
+      queryClient.invalidateQueries({ queryKey: ['cnpg', 'capabilities', 'clusters', namespace, name] }, { cancelRefetch: false })
+      queryClient.invalidateQueries({ queryKey: ['cnpg', 'workspace', namespace] }, { cancelRefetch: false })
     }, POLL_MS)
     return () => clearInterval(t)
   }, [following, queryClient, namespace, name])
@@ -80,9 +80,10 @@ export function CNPGOperationTracker({ namespace, name, uid }: { namespace: stri
       { uid: cluster?.metadata?.uid, updatedAt: workspaceFresh.updatedAt, failed: workspaceFresh.failed },
     ].filter((source) => source.uid && !source.failed).sort((a, b) => b.updatedAt - a.updatedAt)[0]
     return {
-      now: Date.now(),
+      // Failed polls must advance elapsed-time checks even when no data changes.
+      now: Math.max(Date.now(), capsFresh.checkedAt, haFresh.checkedAt, runtimeFresh.checkedAt, workspaceFresh.checkedAt),
       clusterUID: identity?.uid,
-      identityPending: caps.isFetching || ha.isFetching || workspace.isFetching || (needsRuntime && runtime.isFetching),
+      identityPending: capsFresh.initialPending || haFresh.initialPending || workspaceFresh.initialPending || (needsRuntime && runtimeFresh.initialPending),
       facts: caps.data?.facts,
       cluster,
       ha: ha.data,
@@ -114,10 +115,14 @@ export function CNPGOperationTracker({ namespace, name, uid }: { namespace: stri
     runtimeFresh.failed,
     workspaceFresh.updatedAt,
     workspaceFresh.failed,
-    caps.isFetching,
-    ha.isFetching,
-    workspace.isFetching,
-    runtime.isFetching,
+    capsFresh.initialPending,
+    haFresh.initialPending,
+    workspaceFresh.initialPending,
+    runtimeFresh.initialPending,
+    capsFresh.checkedAt,
+    haFresh.checkedAt,
+    workspaceFresh.checkedAt,
+    runtimeFresh.checkedAt,
   ])
 
   useEffect(() => {

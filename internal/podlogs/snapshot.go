@@ -15,7 +15,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// Entry is an internal structure for log lines from pods
 type Entry struct {
 	Pod         string `json:"pod"`
 	Container   string `json:"container"`

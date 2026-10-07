@@ -80,7 +80,7 @@ func (s *Server) handleCNPGClusterActivity(w http.ResponseWriter, r *http.Reques
 		if errors.As(err, &readErr) {
 			operation = readErr.Operation
 		}
-		log.Printf("[cnpg] Failed to %s for %s/%s: %v", operation, namespace, name, err)
+		log.Printf("[cnpg] Failed to %s for %s/%s: %v", operation, sanitizeForLog(namespace), sanitizeForLog(name), err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

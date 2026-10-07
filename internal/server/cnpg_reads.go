@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -45,21 +46,23 @@ func cnpgCachedClusterResult(cluster *unstructured.Unstructured, err error, name
 	case errors.Is(err, integration.ErrDynamicNotSynced):
 		return nil, &cnpgsvc.ReadFailure{http.StatusServiceUnavailable, "CloudNativePG Clusters are still syncing"}
 	default:
-		log.Printf("[cnpg] Failed to read Cluster %s/%s: %v", namespace, name, err)
-		return nil, &cnpgsvc.ReadFailure{http.StatusInternalServerError, "failed to read CloudNativePG Cluster"}
+		return nil, fmt.Errorf("%w: %w", &cnpgsvc.ReadFailure{http.StatusInternalServerError, "failed to read CloudNativePG Cluster"}, err)
 	}
 }
 
-func (s *Server) writeCNPGCachedReadError(w http.ResponseWriter, err error) {
+func (s *Server) writeCNPGCachedReadError(w http.ResponseWriter, err error, namespace, name string) {
 	if errors.Is(err, cnpgsvc.ErrCNPGDisconnected) {
 		s.writeNotConnected(w)
 		return
 	}
 	var failure *cnpgsvc.ReadFailure
 	if errors.As(err, &failure) {
+		if failure.Status == http.StatusInternalServerError {
+			log.Printf("[cnpg] Failed to read %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
+		}
 		s.writeError(w, failure.Status, failure.Message)
 		return
 	}
-	log.Printf("[cnpg] Failed to read: %v", err)
+	log.Printf("[cnpg] Failed to read %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
 	s.writeError(w, http.StatusInternalServerError, "failed to read CloudNativePG data")
 }

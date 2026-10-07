@@ -30,12 +30,12 @@ func (s *Server) handleCNPGRestoreChecks(w http.ResponseWriter, r *http.Request)
 	}
 	_, cluster, err := reader.Observations.Cluster(r.Context(), namespace, name)
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	resp, err := reader.RestoreChecks(r.Context(), cache, cluster)
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	s.writeJSON(w, resp)
@@ -59,12 +59,12 @@ func (s *Server) handleCNPGClusterParameters(w http.ResponseWriter, r *http.Requ
 	}
 	_, cluster, err := reader.Observations.Cluster(r.Context(), namespace, name)
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	resp, err := reader.Parameters(r.Context(), cache, cluster)
 	if err != nil {
-		s.writeCNPGCachedReadError(w, err)
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	s.writeJSON(w, resp)
