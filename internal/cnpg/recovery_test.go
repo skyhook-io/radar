@@ -317,16 +317,57 @@ func TestCNPGReportBundle(t *testing.T) {
 		t.Fatal(err)
 	}
 	pod.Annotations = map[string]string{"cnpg.io/podSpec": string(podSpecCopy), "kubectl.kubernetes.io/last-applied-configuration": string(podSpecCopy), "cnpg.io/instanceRole": "primary"}
-	env := newCNPGActionEnv(t, []runtime.Object{cluster}, pod)
+	currentBackup := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": Group + "/v1", "kind": "Backup",
+		"metadata": map[string]any{"name": "current-backup", "namespace": cluster.GetNamespace(), "uid": "current-backup-uid"},
+		"spec":     map[string]any{"cluster": map[string]any{"name": cluster.GetName()}},
+		"status":   map[string]any{"pluginMetadata": map[string]any{"clusterUID": string(cluster.GetUID())}},
+	}}
+	oldBackup := currentBackup.DeepCopy()
+	oldBackup.SetName("predecessor-backup")
+	oldBackup.SetUID("predecessor-backup-uid")
+	if err := unstructured.SetNestedField(oldBackup.Object, "old-cluster-uid", "status", "pluginMetadata", "clusterUID"); err != nil {
+		t.Fatal(err)
+	}
+	if err := unstructured.SetNestedMap(oldBackup.Object, map[string]any{"name": "predecessor-only-secret", "key": "password"}, "spec", "credentials"); err != nil {
+		t.Fatal(err)
+	}
+	ownedPVC := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "current-pvc", Namespace: cluster.GetNamespace(), UID: "current-pvc-uid", Labels: pod.Labels, OwnerReferences: pod.OwnerReferences}}
+	foreignPVC := ownedPVC.DeepCopy()
+	foreignPVC.Name, foreignPVC.UID = "unowned-pvc", "unowned-pvc-uid"
+	foreignPVC.OwnerReferences = nil
+	env := newCNPGActionEnv(t, []runtime.Object{cluster, currentBackup, oldBackup}, pod, ownedPVC, foreignPVC)
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "pg-init", Namespace: cluster.GetNamespace(), Labels: map[string]string{clusterLabel: cluster.GetName()}, OwnerReferences: []metav1.OwnerReference{{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: cluster.GetName(), UID: cluster.GetUID(), Controller: boolPtr(true)}}}, Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "init", Command: []string{"psql", "postgresql://app:job-password@db/pg"}}}}}}}
+	job.UID = "current-job-uid"
 	job.Spec.Template.Annotations = pod.Annotations
 	job.Spec.Template.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "FROM_SECRET", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pg-job-credentials"}, Key: "password"}}}}
 	if _, err := env.typed.BatchV1().Jobs(job.Namespace).Create(context.Background(), job, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
+	for _, fixture := range []struct{ name, ownerUID string }{{"current-job-pod", string(job.UID)}, {"predecessor-job-pod", "old-job-uid"}} {
+		p := cnpgActionPod(fixture.name, fixture.name+"-uid", false)
+		p.OwnerReferences = []metav1.OwnerReference{{APIVersion: "batch/v1", Kind: "Job", Name: job.Name, UID: types.UID(fixture.ownerUID), Controller: boolPtr(true)}}
+		if _, err := env.typed.CoreV1().Pods(p.Namespace).Create(context.Background(), p, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	event := &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "pg-failed", Namespace: cluster.GetNamespace()}, InvolvedObject: corev1.ObjectReference{Kind: "Cluster", Name: cluster.GetName(), UID: cluster.GetUID()}, Message: "failed connecting to postgresql://app:event-password@db/pg"}
 	if _, err := env.typed.CoreV1().Events(event.Namespace).Create(context.Background(), event, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
+	}
+	for _, fixture := range []struct{ event, kind, name, uid string }{
+		{"current-volume-event", "PersistentVolumeClaim", ownedPVC.Name, string(ownedPVC.UID)},
+		{"unowned-volume-event", "PersistentVolumeClaim", foreignPVC.Name, string(foreignPVC.UID)},
+		{"predecessor-cluster-event", "Cluster", cluster.GetName(), "old-cluster-uid"},
+		{"predecessor-pod-event", "Pod", pod.Name, "old-pod-uid"},
+		{"unverified-pod-event", "Pod", pod.Name, ""},
+		{"current-backup-event", "Backup", currentBackup.GetName(), string(currentBackup.GetUID())},
+		{"predecessor-backup-event", "Backup", oldBackup.GetName(), string(oldBackup.GetUID())},
+	} {
+		e := &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: fixture.event, Namespace: cluster.GetNamespace()}, InvolvedObject: corev1.ObjectReference{Kind: fixture.kind, Name: fixture.name, UID: types.UID(fixture.uid)}}
+		if _, err := env.typed.CoreV1().Events(e.Namespace).Create(context.Background(), e, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var buf bytes.Buffer
 	z := &reportZip{zw: zip.NewWriter(&buf), root: "r", limit: reportTotalCap}
@@ -374,6 +415,32 @@ func TestCNPGReportBundle(t *testing.T) {
 	}
 	if !strings.Contains(files["r/manifests/cluster-jobs.yaml"], "pg-job-credentials") {
 		t.Fatal("Job-only Secret references must remain in the manifest")
+	}
+	for file, expected := range map[string]string{
+		"r/manifests/cluster-pods.yaml": "current-job-pod",
+		"r/manifests/cluster-pvcs.yaml": "current-pvc",
+		"r/manifests/backups.yaml":      "current-backup",
+	} {
+		if !strings.Contains(files[file], expected) {
+			t.Errorf("report lost the current object %s: %s", expected, files[file])
+		}
+	}
+	for _, expected := range []string{"current-volume-event", "current-backup-event", "pg-failed"} {
+		if !strings.Contains(files["r/manifests/events.yaml"], expected) {
+			t.Errorf("report lost the current Event %s", expected)
+		}
+	}
+	for file, data := range files {
+		for _, excluded := range []string{"predecessor-", "unowned-pvc", "unowned-volume-event", "unverified-pod-event"} {
+			if strings.Contains(data, excluded) {
+				t.Errorf("report included %s in %s", excluded, file)
+			}
+		}
+	}
+	for _, item := range index.Contents {
+		if item.Item == "Events" && !strings.Contains(item.Note, "3 same-name Event(s)") {
+			t.Errorf("unverified Event coverage was not recorded: %+v", item)
+		}
 	}
 	var logs *CNPGReportItem
 	for i := range index.Contents {

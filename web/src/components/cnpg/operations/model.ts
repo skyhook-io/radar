@@ -49,6 +49,8 @@ export interface CNPGObservation {
   now: number
   /** The Cluster's UID now, from whichever source read it. */
   clusterUID?: string
+  /** A live identity read is still in flight. */
+  identityPending?: boolean
   facts?: CNPGClusterFacts
   /** The Cluster object from the workspace (status.conditions, readyInstances). */
   cluster?: any
@@ -118,6 +120,14 @@ export function advanceCNPGOperation(op: CNPGTrackedOperation, obs: CNPGObservat
   const current = freshObservation(op, obs)
   if (op.clusterUID && current.clusterUID && current.clusterUID !== op.clusterUID) {
     return { ...op, state: 'superseded', detail: 'The Cluster was deleted and recreated; this operation no longer applies to it', finishedAt: obs.now }
+  }
+  if (op.clusterUID && !current.clusterUID) {
+    return {
+      ...op,
+      state: 'unobservable',
+      detail: 'The Cluster identity has not been verified since this operation was requested',
+      finishedAt: !obs.identityPending && obs.now - op.startedAt > CNPG_OP_UNOBSERVABLE_MS ? obs.now : undefined,
+    }
   }
   const observer = observers.get(op.kind)
   if (!observer) return { ...op, state: 'unobservable', detail: 'Radar has no way to follow this operation' }

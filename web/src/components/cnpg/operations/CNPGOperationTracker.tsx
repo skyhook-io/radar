@@ -74,14 +74,15 @@ export function CNPGOperationTracker({ namespace, name, uid }: { namespace: stri
     )
     const backupsReadable = ws?.coverage.backups ? coverageReadable(ws.coverage.backups, namespace) : false
     const identity = [
-      { uid: caps.data?.uid, ...capsFresh },
-      { uid: ha.data?.cluster.uid, ...haFresh },
-      { uid: runtime.data?.cluster.uid, ...runtimeFresh },
-      { uid: cluster?.metadata?.uid, ...workspaceFresh },
+      { uid: caps.data?.uid, updatedAt: capsFresh.updatedAt, failed: capsFresh.failed },
+      { uid: ha.data?.cluster.uid, updatedAt: haFresh.updatedAt, failed: haFresh.failed },
+      { uid: runtime.data?.cluster.uid, updatedAt: runtimeFresh.updatedAt, failed: runtimeFresh.failed },
+      { uid: cluster?.metadata?.uid, updatedAt: workspaceFresh.updatedAt, failed: workspaceFresh.failed },
     ].filter((source) => source.uid && !source.failed).sort((a, b) => b.updatedAt - a.updatedAt)[0]
     return {
       now: Date.now(),
       clusterUID: identity?.uid,
+      identityPending: caps.isFetching || ha.isFetching || workspace.isFetching || (needsRuntime && runtime.isFetching),
       facts: caps.data?.facts,
       cluster,
       ha: ha.data,
@@ -98,6 +99,7 @@ export function CNPGOperationTracker({ namespace, name, uid }: { namespace: stri
     }
   }, [
     following,
+    needsRuntime,
     namespace,
     name,
     caps.data,
@@ -112,6 +114,10 @@ export function CNPGOperationTracker({ namespace, name, uid }: { namespace: stri
     runtimeFresh.failed,
     workspaceFresh.updatedAt,
     workspaceFresh.failed,
+    caps.isFetching,
+    ha.isFetching,
+    workspace.isFetching,
+    runtime.isFetching,
   ])
 
   useEffect(() => {

@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/yaml"
@@ -171,11 +172,11 @@ func (b *cnpgReportBuilder) build(opts ReportOptions) {
 		}
 		return err
 	})
-	ownedJobs := map[string]bool{}
+	ownedJobs := map[string]types.UID{}
 	var keptJobs []batchv1.Job
 	for _, j := range jobs {
 		if controlledBy(j.OwnerReferences, Group, "Cluster", name, b.cluster.GetUID()) {
-			ownedJobs[j.Name] = true
+			ownedJobs[j.Name] = j.UID
 			for _, sref := range cnpgPodSecretNames(&j.Spec.Template.Spec) {
 				b.addSecret(sref, "Job/"+j.Name)
 			}
@@ -198,7 +199,10 @@ func (b *cnpgReportBuilder) build(opts ReportOptions) {
 	unowned := 0
 	for _, p := range pods {
 		ref := controllerRef(p.OwnerReferences)
-		owned := ref != nil && ((ref.Kind == "Cluster" && ref.UID == b.cluster.GetUID()) || (ref.Kind == "Job" && ownedJobs[ref.Name]))
+		owned := controlledBy(p.OwnerReferences, Group, "Cluster", name, b.cluster.GetUID())
+		if ref != nil && ownedJobs[ref.Name] != "" {
+			owned = owned || controlledBy(p.OwnerReferences, "batch", "Job", ref.Name, ownedJobs[ref.Name])
+		}
 		if !owned {
 			unowned++
 			continue
@@ -234,28 +238,28 @@ func (b *cnpgReportBuilder) build(opts ReportOptions) {
 		}
 		return err
 	})
+	var keptPVCs []corev1.PersistentVolumeClaim
 	if pvcCov.State == cnpgReadOK {
-		var kept []corev1.PersistentVolumeClaim
 		for _, c := range pvcs {
 			if cnpgOwnedBy(&c, b.cluster) {
 				cnpgReportCleanMetadata(&c)
-				kept = append(kept, c)
+				keptPVCs = append(keptPVCs, c)
 			}
 		}
-		b.write(CNPGReportItem{Item: "PersistentVolumeClaims"}, "manifests/cluster-pvcs.yaml", corev1.PersistentVolumeClaimList{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaimList"}, Items: kept}, len(kept))
+		b.write(CNPGReportItem{Item: "PersistentVolumeClaims"}, "manifests/cluster-pvcs.yaml", corev1.PersistentVolumeClaimList{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaimList"}, Items: keptPVCs}, len(keptPVCs))
 	} else {
 		b.record(CNPGReportItem{Item: "PersistentVolumeClaims", ReadSource: pvcCov})
 	}
 
-	subjects := map[string]bool{"Cluster/" + name: true}
+	subjects := map[string]types.UID{"Cluster/" + name: b.cluster.GetUID()}
 	for _, p := range keptPods {
-		subjects["Pod/"+p.Name] = true
+		subjects["Pod/"+p.Name] = p.UID
 	}
 	for _, j := range keptJobs {
-		subjects["Job/"+j.Name] = true
+		subjects["Job/"+j.Name] = j.UID
 	}
-	for _, c := range pvcs {
-		subjects["PersistentVolumeClaim/"+c.Name] = true
+	for _, c := range keptPVCs {
+		subjects["PersistentVolumeClaim/"+c.Name] = c.UID
 	}
 	for _, child := range []struct {
 		item, file string
@@ -284,9 +288,12 @@ func (b *cnpgReportBuilder) build(opts ReportOptions) {
 			if cn, _, _ := unstructured.NestedString(items[i].Object, "spec", "cluster", "name"); cn != name {
 				continue
 			}
+			if child.kind == "Backup" && !cnpg.BackupMatchesCluster(&items[i], b.cluster) {
+				continue
+			}
 			clean := cnpgReportCleanObject(&items[i])
 			cnpgReportSecretNamesIn(clean.Object, child.kind+"/"+clean.GetName(), b.addSecret)
-			subjects[child.kind+"/"+clean.GetName()] = true
+			subjects[child.kind+"/"+clean.GetName()] = clean.GetUID()
 			kept = append(kept, clean.Object)
 		}
 		b.write(CNPGReportItem{Item: child.item}, child.file, map[string]any{"apiVersion": "v1", "kind": "List", "items": kept}, len(kept))
@@ -304,15 +311,26 @@ func (b *cnpgReportBuilder) build(opts ReportOptions) {
 	})
 	if evCov.State == cnpgReadOK {
 		var kept []corev1.Event
+		unverified := 0
 		for _, e := range events {
-			if subjects[e.InvolvedObject.Kind+"/"+e.InvolvedObject.Name] {
-				cnpgReportCleanMetadata(&e)
-				e.Message = cnpgReportInlineValue("", e.Message)
-				kept = append(kept, e)
+			uid, related := subjects[e.InvolvedObject.Kind+"/"+e.InvolvedObject.Name]
+			if !related {
+				continue
 			}
+			if uid == "" || e.InvolvedObject.UID != uid {
+				unverified++
+				continue
+			}
+			cnpgReportCleanMetadata(&e)
+			e.Message = cnpgReportInlineValue("", e.Message)
+			kept = append(kept, e)
 		}
 		sort.SliceStable(kept, func(i, j int) bool { return cnpgEventTime(&kept[i]).Before(cnpgEventTime(&kept[j])) })
-		b.write(CNPGReportItem{Item: "Events", Note: "Events about the Cluster and the objects in this report"}, "manifests/events.yaml", corev1.EventList{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "EventList"}, Items: kept}, len(kept))
+		note := "Events whose subject UID matches the Cluster or an object in this report"
+		if unverified > 0 {
+			note += fmt.Sprintf("; %d same-name Event(s) with a missing or different subject UID were left out", unverified)
+		}
+		b.write(CNPGReportItem{Item: "Events", Note: note}, "manifests/events.yaml", corev1.EventList{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "EventList"}, Items: kept}, len(kept))
 	} else {
 		b.record(CNPGReportItem{Item: "Events", ReadSource: evCov})
 	}

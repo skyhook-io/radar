@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CNPGClusterHA } from '@skyhook-io/k8s-ui'
 import type { CNPGClusterFacts, CNPGRuntimeResponse } from '../../../api/cnpg'
-import { CNPG_OP_STALL_MS, advanceCNPGOperation, restartedSince, summarizeSteps, supersedeFor, type CNPGObservation, type CNPGTrackedOperation } from './model'
+import { CNPG_OP_STALL_MS, CNPG_OP_UNOBSERVABLE_MS, advanceCNPGOperation, restartedSince, summarizeSteps, supersedeFor, type CNPGObservation, type CNPGTrackedOperation } from './model'
 
 const T0 = Date.parse('2026-09-30T12:00:00Z')
 
@@ -206,7 +206,7 @@ describe('destroyInstance observer', () => {
 
 describe('operations Radar cannot observe', () => {
   it('a reload finishes at once instead of being followed all session', () => {
-    const next = advanceCNPGOperation(op({ kind: 'reload', target: undefined }), { now: T0 + 1000 })
+    const next = advanceCNPGOperation(op({ kind: 'reload', target: undefined }), obs({ now: T0 + 1000 }))
     expect(next.state).toBe('unobservable')
     expect(next.finishedAt).toBe(T0 + 1000)
   })
@@ -217,6 +217,25 @@ describe('operations Radar cannot observe', () => {
     const late = advanceCNPGOperation(op({ kind: 'switchover' }), { now: T0 + 16 * 60_000 })
     expect(late.state).toBe('unobservable')
     expect(late.finishedAt).toBe(T0 + 16 * 60_000)
+  })
+
+  it.each(['reload', 'switchover'])('keeps an old %s operation open while its identity read is in flight', (kind) => {
+    const now = T0 + CNPG_OP_UNOBSERVABLE_MS + 1
+    const pending = advanceCNPGOperation(op({ kind }), { now, identityPending: true })
+    expect(pending.state).toBe('unobservable')
+    expect(pending.detail).toContain('identity')
+    expect(pending.finishedAt).toBeUndefined()
+    const replaced = advanceCNPGOperation(pending, obs({ now: now + 1, clusterUID: 'uid-2' }))
+    expect(replaced.state).toBe('superseded')
+    expect(replaced.finishedAt).toBe(now + 1)
+  })
+
+  it('bounds tracking after an unavailable identity read has settled', () => {
+    const now = T0 + CNPG_OP_UNOBSERVABLE_MS + 1
+    const unknown = advanceCNPGOperation(op({ kind: 'reload' }), { now, identityPending: false })
+    expect(unknown.state).toBe('unobservable')
+    expect(unknown.detail).toContain('identity')
+    expect(unknown.finishedAt).toBe(now)
   })
 })
 
@@ -264,6 +283,7 @@ describe('stale observation sources', () => {
       obs({
         ...promoted(),
         freshness: {
+          clusterUID: fresh,
           facts: { updatedAt: now, failed: false, clusterUID: 'uid-1' },
           runtime: { updatedAt: now, failed: false, clusterUID: 'uid-1' },
           ha: { updatedAt: T0 - 3_600_000, failed: true },
@@ -276,12 +296,12 @@ describe('stale observation sources', () => {
   it('an answer from before the action is withheld even when its refresh did not fail', () => {
     const o = advanceCNPGOperation(
       op({}),
-      obs({ ...promoted(), freshness: { facts: { updatedAt: now, failed: false, clusterUID: 'uid-1' }, runtime: { updatedAt: now, failed: false, clusterUID: 'uid-1' }, ha: { updatedAt: T0 - 1, failed: false } } }),
+      obs({ ...promoted(), freshness: { clusterUID: fresh, facts: { updatedAt: now, failed: false, clusterUID: 'uid-1' }, runtime: { updatedAt: now, failed: false, clusterUID: 'uid-1' }, ha: { updatedAt: T0 - 1, failed: false } } }),
     )
     expect(o.state).not.toBe('completed')
   })
   it('fresh sources still complete it', () => {
-    const o = advanceCNPGOperation(op({}), obs({ ...promoted(), freshness: { facts: fresh, runtime: fresh, ha: fresh } }))
+    const o = advanceCNPGOperation(op({}), obs({ ...promoted(), freshness: { clusterUID: fresh, facts: fresh, runtime: fresh, ha: fresh } }))
     expect(o.state).toBe('completed')
   })
 

@@ -47,6 +47,8 @@ func parseCNPGReportOptions(r *http.Request) (cnpgsvc.ReportOptions, error) {
 // handleCNPGClusterReport serves GET /api/cnpg/clusters/{ns}/{name}/report as a
 // zip download. Only the Cluster read itself can fail the request; every other
 // read is skipped and recorded in report.json.
+// Direct reads use the caller's impersonated clients; the namespace sentinel
+// applies only to the shared-cache snapshots added to the bundle.
 func (s *Server) handleCNPGClusterReport(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
