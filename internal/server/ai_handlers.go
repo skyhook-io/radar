@@ -503,7 +503,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		families: s.readablePolicyReportFamilies(r, namespace),
 	}
 
-	if topo, prov, dyn, ok := s.topologyForContext(namespace); ok {
+	if topo, prov, dyn, ok := s.topologyForContext(); ok {
 		opts.Topology = topo
 		opts.Provider = prov
 		opts.DynamicProv = dyn
@@ -518,20 +518,15 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	return resourcecontext.Build(r.Context(), obj, opts)
 }
 
-// topologyForContext builds (or fetches the memoized) topology scoped to the
-// resource's namespace. Cluster-scoped resources get an all-namespaces build.
-// Returns ok=false when the cache isn't ready yet.
-func (s *Server) topologyForContext(namespace string) (*topology.Topology, topology.ResourceProvider, topology.DynamicProvider, bool) {
+// topologyForContext reuses the complete cached relationship graph. The
+// resource context checker gates each target, including other namespaces.
+// Returns ok=false when the cache is not available.
+func (s *Server) topologyForContext() (*topology.Topology, topology.ResourceProvider, topology.DynamicProvider, bool) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil, nil, nil, false
 	}
-	opts := topology.DefaultBuildOptions()
-	if namespace != "" {
-		opts.Namespaces = []string{namespace}
-	}
-	opts.IncludeReplicaSets = true
-	opts.ForRelationshipCache = true
+	opts := topology.RelationshipBuildOptions()
 
 	provider := k8s.NewTopologyResourceProvider(cache)
 	dyn := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())

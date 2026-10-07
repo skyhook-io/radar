@@ -208,28 +208,15 @@ func computeMCPAuditSummary(ctx context.Context, cache *k8s.ResourceCache, group
 	return summary
 }
 
-// mcpTopologyForContext returns a per-call topology snapshot scoped to the
-// resource's namespace (cluster-scoped resources get an all-namespaces
-// build). Reuses the package-level summaryCtxTopoMemo cache to amortize
-// build cost across get_resource and list_resources / search calls. nil
-// return is fine — Build then skips topology-derived fields and the
-// remaining sidecar still populates.
-func mcpTopologyForContext(namespace string) (*topo.Topology, topo.ResourceProvider, topo.DynamicProvider, bool) {
+// mcpTopologyForContext reuses a complete cached relationship graph. Resource
+// context authorizes every emitted reference through its request-scoped checker;
+// a namespace-scoped build would erase explicit cross-namespace dependencies.
+func mcpTopologyForContext() (*topo.Topology, topo.ResourceProvider, topo.DynamicProvider, bool) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil, nil, nil, false
 	}
-	opts := topo.DefaultBuildOptions()
-	// Match the REST handler's build options (see ai_handlers.go) so MCP
-	// get_resource produces the same relationship context as REST. Without
-	// these the topology drops the RS layer for Pod→Deployment chains and
-	// the relationship cache uses a thinner shape — silently weakening
-	// resourceContext for MCP callers.
-	opts.IncludeReplicaSets = true
-	opts.ForRelationshipCache = true
-	if namespace != "" {
-		opts.Namespaces = []string{namespace}
-	}
+	opts := topo.RelationshipBuildOptions()
 	provider := k8s.NewTopologyResourceProvider(cache)
 	dyn := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 

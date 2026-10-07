@@ -394,6 +394,16 @@ func (opts BuildOptions) MatchesNamespaceFilter(ns string) bool {
 	return MatchesNamespace(opts.Namespaces, ns)
 }
 
+// RelationshipBuildOptions retains the complete cached graph for relationship
+// projection. A root's namespace is not a visibility boundary: controllers may
+// explicitly reference another namespace. Callers must authorize emitted refs.
+func RelationshipBuildOptions() BuildOptions {
+	opts := DefaultBuildOptions()
+	opts.IncludeReplicaSets = true
+	opts.ForRelationshipCache = true
+	return opts
+}
+
 // DefaultBuildOptions returns sensible defaults
 func DefaultBuildOptions() BuildOptions {
 	return BuildOptions{
