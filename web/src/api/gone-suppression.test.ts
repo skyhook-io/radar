@@ -117,6 +117,15 @@ describe('observeSettled', () => {
     expect(waits).toEqual([GONE_BACKOFF_MS[1], GONE_BACKOFF_MS[2], GONE_BACKOFF_MS[3]])
   })
 
+  it('starts over when the query is removed from the cache', () => {
+    // Switching cluster removes every query. A quiet period earned in the old
+    // cluster must not keep the same name from loading in the new one.
+    const quiet = observeSettled(fresh('k'), T0, { isGone: true, now: T0 })
+    const reset = observeSettled(quiet, 0, { isGone: false, now: T0 + 1 })
+    expect(reset.gone).toEqual(initialGoneState)
+    expect(reset.settledAt).toBe(0)
+  })
+
   it('ignores a view that has never settled a fetch', () => {
     const state = fresh('k')
     expect(observeSettled(state, 0, { isGone: false, now: T0 })).toBe(state)

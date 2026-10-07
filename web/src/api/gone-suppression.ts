@@ -91,7 +91,12 @@ export function trackedFor(prev: TrackedGone, identity: string): TrackedGone {
  * reported it also refetches the kind, and that fetch finds it.
  */
 export function observeSettled(prev: TrackedGone, settledAt: number, fetch: SettledFetch): TrackedGone {
-  if (settledAt === 0 || settledAt === prev.settledAt) return prev
+  // Back to never-settled means the query was removed from the cache, as a
+  // cluster switch does. The answer this state was built on is gone with it.
+  if (settledAt === 0) {
+    return prev.settledAt === 0 ? prev : { ...prev, settledAt: 0, presentSinceSettle: false, gone: initialGoneState }
+  }
+  if (settledAt === prev.settledAt) return prev
   if (fetch.isGone && prev.presentSinceSettle) return { ...prev, settledAt, presentSinceSettle: false }
   return { ...prev, settledAt, presentSinceSettle: false, gone: nextGoneState(prev.gone, fetch) }
 }
