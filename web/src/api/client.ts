@@ -1,5 +1,5 @@
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
-import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
+import { kindToPluralWithGroup, knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import type {
@@ -2625,13 +2625,18 @@ function useGoneSuppression(kind: string, namespace: string, name: string, group
     [identity],
   );
 
+  // Callers pass either a Kind or a plural, with or without a group. Without
+  // a group a CRD's group is unknown here, so any group matches.
+  const presentKind = kindToPluralWithGroup(kind, group ?? "");
+  const presentGroup = canonicalResourceGroup(kind, group);
   useEffect(
     () =>
       onResourcePresent(queryClient, (present) => {
-        if (present.kind !== kind || present.namespace !== namespace || present.name !== name) return;
+        if (present.kind !== presentKind || present.namespace !== namespace || present.name !== name) return;
+        if (presentGroup !== undefined && present.group !== presentGroup) return;
         setTracked((prev) => markPresent(trackedFor(prev, identity)));
       }),
-    [queryClient, kind, namespace, name, identity],
+    [queryClient, presentKind, presentGroup, namespace, name, identity],
   );
 
   // Wake up once the cooldown is over so the query re-enables and probes.

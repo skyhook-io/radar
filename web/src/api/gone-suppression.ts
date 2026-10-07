@@ -97,10 +97,11 @@ export function markPresent(prev: TrackedGone): TrackedGone {
 
 /**
  * An object the cluster has just reported as existing. `kind` is the plural
- * resource name, the same form the resource query keys use.
+ * resource name and `group` the canonical API group, '' for core.
  */
 export interface PresentResource {
   kind: string
+  group: string
   namespace: string
   name: string
 }

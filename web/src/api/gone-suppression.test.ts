@@ -139,7 +139,7 @@ describe('markPresent', () => {
 })
 
 describe('resource presence', () => {
-  const pod = { kind: 'pods', namespace: 'a', name: 'x' }
+  const pod = { kind: 'pods', group: '', namespace: 'a', name: 'x' }
 
   it('reaches every listener on the same client until it unsubscribes', () => {
     const client = new QueryClient()

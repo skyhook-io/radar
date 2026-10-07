@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { englishPlural } from '@skyhook-io/k8s-ui/utils/pluralize'
+import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams, useNavigationType, NavigationType } from 'react-router-dom'
 import { HomeView } from './components/home/HomeView'
@@ -1109,7 +1110,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     // A view that stopped asking for this object after a 404 starts again now,
     // instead of at its next cooldown probe.
     if (event.operation !== 'delete') {
-      announceResourcePresent(queryClient, { kind, namespace: event.namespace ?? '', name: event.name })
+      announceResourcePresent(queryClient, {
+        kind,
+        group: canonicalResourceGroup(kind, event.group) ?? '',
+        namespace: event.namespace ?? '',
+        name: event.name,
+      })
     }
     const applicationWorkload = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
 
