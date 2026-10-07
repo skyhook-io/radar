@@ -87,7 +87,8 @@ func TestSeededGenericCRDRejectsExistingReplacementEdge(t *testing.T) {
 
 func TestGenericOwnerClosureJoinsParentsEnrolledAfterChild(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "relationships.example.io", Version: "v1", Resource: "widgets"}
-	root := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "root", UID: "root-uid"}
+	controller := true
+	root := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "root", UID: "root-uid", Controller: &controller}
 	late := genericIdentityObject(gvr, "Widget", "team", "late", root)
 	late.SetUID("late-uid")
 	child := genericIdentityObject(gvr, "Widget", "team", "child", root, metav1.OwnerReference{APIVersion: "relationships.example.io/v1", Kind: "Widget", Name: "late", UID: "late-uid"})
@@ -108,6 +109,11 @@ func TestGenericOwnerClosureJoinsParentsEnrolledAfterChild(t *testing.T) {
 		if !found {
 			t.Fatalf("late parent edge missing: %+v", edges)
 		}
+		rel := GetRelationshipsWithObject("Widget", "team", "child", child, &Topology{Nodes: nodes, Edges: edges}, nil, dynamic, nil)
+		if rel == nil || rel.Owner == nil || rel.Owner.Kind != "Deployment" || rel.Owner.Name != "root" {
+			t.Fatalf("controller displaced by non-controller parent: %+v", rel)
+		}
+
 		nodes, edges = (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, edges, DefaultBuildOptions())
 		if len(nodes) != 3 || len(edges) != 3 {
 			t.Fatalf("repeat pass duplicates: %+v %+v", nodes, edges)
