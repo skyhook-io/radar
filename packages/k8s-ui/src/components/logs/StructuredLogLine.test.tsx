@@ -26,6 +26,24 @@ describe('StructuredLogLine summary', () => {
     const html = render(JSON.stringify({ level: 'info', msg: 'Fencing status changed', record: 'not an object' }))
     expect(html).toContain('Fencing status changed')
   })
+
+  it.each([
+    { msg: 'record' },
+    { logger: 'worker', msg: 'record' },
+    { logger: 'postgres', msg: 'wrapper message' },
+  ])('keeps unrelated record fields out of the summary: %j', (fields) => {
+    const html = render(JSON.stringify({ level: 'info', ...fields, record: { error_severity: 'FATAL', message: 'unrelated nested text' } }))
+    expect(html).toContain(`>${fields.msg}<`)
+    expect(html).toContain('INFO')
+    expect(html).not.toContain('unrelated nested text')
+    expect(html).not.toContain('FATAL')
+  })
+
+  it('requires PostgreSQL record evidence before selecting a nested message', () => {
+    const html = render(JSON.stringify({ level: 'info', logger: 'postgres', msg: 'record', record: { message: 'unverified nested text' } }))
+    expect(html).toContain('>record<')
+    expect(html).not.toContain('unverified nested text')
+  })
 })
 
 it.each([false, true])('keeps annotations intact with word wrapping, expanded=%s', (expanded) => {

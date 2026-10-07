@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { ChevronRight, ChevronDown, Filter } from 'lucide-react'
 import type { LogLevel } from './useLogBuffer'
-import { selectLevelField } from '../../utils/log-level'
+import { selectLevelField, selectPostgresRecord } from '../../utils/log-level'
 import { unescapeJsonStrings, parseLogfmt, tokenizeJson } from '../../utils/log-format'
 import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
 
@@ -161,10 +161,8 @@ function JsonExpanded({ text, onFilterValue, palette }: { text: string; onFilter
 
 function SummaryLine({ obj, level, palette }: { obj: Record<string, unknown>; level: LogLevel; palette: LogPalette }) {
   const lvl = selectLevelField(obj)?.raw
-  // CloudNativePG wraps each PostgreSQL log line as {msg: "record", record: {...}};
-  // the line's own text lives in the record (selectLevelField reads its severity).
-  const pgRecord = obj.msg === 'record' && obj.record && typeof obj.record === 'object'
-  const msg = (pgRecord ? nestedField(obj, 'record', 'message') : undefined) ?? obj.msg ?? obj.message
+  const pgRecord = selectPostgresRecord(obj)
+  const msg = pgRecord?.record.message ?? obj.msg ?? obj.message
   const rawErr = obj.error ?? obj.err
   const err = typeof rawErr === 'string'
     ? rawErr

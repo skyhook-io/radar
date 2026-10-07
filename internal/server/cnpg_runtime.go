@@ -1,7 +1,6 @@
 package server
 
 import (
-	"errors"
 	"log"
 	"net/http"
 	"sort"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
-	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -80,17 +78,9 @@ func (s *Server) handleCNPGPoolerRuntime(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	pooler, err := reader.Pooler(r.Context(), cache, namespace, name)
-	switch {
-	case err == nil && pooler != nil:
-	case err == nil, errors.Is(err, k8s.ErrUnknownDynamicKind):
-		s.writeError(w, http.StatusNotFound, "CloudNativePG Pooler "+namespace+"/"+name+" not found")
-		return
-	case errors.Is(err, integration.ErrDynamicNotSynced):
-		s.writeError(w, http.StatusServiceUnavailable, "CloudNativePG Poolers are still syncing")
-		return
-	default:
-		log.Printf("[cnpg] Failed to read Pooler %s/%s: %v", sanitizeForLog(namespace), sanitizeForLog(name), err)
-		s.writeError(w, http.StatusInternalServerError, "failed to read CloudNativePG Pooler")
+	pooler, err = cnpgCachedResourceResult(pooler, err, "Pooler", namespace, name)
+	if err != nil {
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	resp, err := reader.PoolerRuntime(r.Context(), cache, pooler)

@@ -141,6 +141,10 @@ func (s *Server) handleGitOpsWriteEvidence(w http.ResponseWriter, r *http.Reques
 	}
 
 	discovery := k8s.GetResourceDiscovery()
+	if discovery == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "resource discovery not available")
+		return
+	}
 	gvr, ok := discovery.GetGVRWithGroup(req.Kind, req.Group)
 	if !ok {
 		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown kind %q in group %q", req.Kind, req.Group))

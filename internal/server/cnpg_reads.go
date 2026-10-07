@@ -37,16 +37,16 @@ func (s *Server) authorizeCNPGCachedRead(r *http.Request, namespace, resource st
 	return nil
 }
 
-func cnpgCachedClusterResult(cluster *unstructured.Unstructured, err error, namespace, name string) (*unstructured.Unstructured, error) {
+func cnpgCachedResourceResult(object *unstructured.Unstructured, err error, kind, namespace, name string) (*unstructured.Unstructured, error) {
 	switch {
-	case err == nil && cluster != nil:
-		return cluster, nil
+	case err == nil && object != nil:
+		return object, nil
 	case err == nil, errors.Is(err, k8s.ErrUnknownDynamicKind):
-		return nil, &cnpgsvc.ReadFailure{http.StatusNotFound, "CloudNativePG Cluster " + namespace + "/" + name + " not found"}
+		return nil, &cnpgsvc.ReadFailure{http.StatusNotFound, "CloudNativePG " + kind + " " + namespace + "/" + name + " not found"}
 	case errors.Is(err, integration.ErrDynamicNotSynced):
-		return nil, &cnpgsvc.ReadFailure{http.StatusServiceUnavailable, "CloudNativePG Clusters are still syncing"}
+		return nil, &cnpgsvc.ReadFailure{http.StatusServiceUnavailable, "CloudNativePG " + kind + "s are still syncing"}
 	default:
-		return nil, fmt.Errorf("%w: %w", &cnpgsvc.ReadFailure{http.StatusInternalServerError, "failed to read CloudNativePG Cluster"}, err)
+		return nil, fmt.Errorf("%w: %w", &cnpgsvc.ReadFailure{http.StatusInternalServerError, "failed to read CloudNativePG " + kind}, err)
 	}
 }
 

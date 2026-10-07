@@ -11,8 +11,6 @@ import (
 // holds, and which values declared PostgreSQL parameters have on each
 // instance. Nothing here writes, and nothing a caller sends is SQL text.
 
-// ---------- restore checks ----------
-
 // handleCNPGRestoreChecks serves GET /api/cnpg/clusters/{ns}/{name}/restore-checks
 // for a Cluster bootstrapped from a backup (400 otherwise): read-only facts
 // from its primary over the caller's pods/exec. Without exec the answer is a
@@ -40,8 +38,6 @@ func (s *Server) handleCNPGRestoreChecks(w http.ResponseWriter, r *http.Request)
 	}
 	s.writeJSON(w, resp)
 }
-
-// ---------- parameters in effect ----------
 
 // handleCNPGClusterParameters serves GET /api/cnpg/clusters/{ns}/{name}/parameters:
 // observation only — it reads, on every instance, the parameters the Cluster

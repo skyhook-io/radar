@@ -79,8 +79,9 @@ func (s *Server) handleCNPGPgBouncerState(w http.ResponseWriter, r *http.Request
 		return
 	}
 	pooler, err := reader.Pooler(r.Context(), cache, namespace, name)
-	if err != nil || pooler == nil {
-		s.writeError(w, http.StatusNotFound, "CloudNativePG Pooler "+namespace+"/"+name+" not found")
+	pooler, err = cnpgCachedResourceResult(pooler, err, "Pooler", namespace, name)
+	if err != nil {
+		s.writeCNPGCachedReadError(w, err, namespace, name)
 		return
 	}
 	resp, err := reader.PgBouncerState(r.Context(), cache, pooler)

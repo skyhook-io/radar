@@ -4318,7 +4318,6 @@ export function ResourcesView({
     onResourceClick?.(isSelected ? null : stripped)
   }, [onRowSelect, onResourceClick, selectedKind.name, selectedKind.group])
 
-  // Register navigation shortcuts (table only)
   useRegisterShortcuts(([
     {
       id: 'resources-nav-down',

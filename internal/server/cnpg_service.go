@@ -143,7 +143,7 @@ func (s *Server) cnpgReader(r *http.Request) *cnpgReadAdapter {
 				}
 				objects, err := listDynamicSyncedWithin(ctx, cache, "Cluster", cnpgsvc.Group, namespace, boundBudget(ctx))
 				obj, err := cnpgsvc.SelectCluster(objects, err, namespace, name)
-				obj, err = cnpgCachedClusterResult(obj, err, namespace, name)
+				obj, err = cnpgCachedResourceResult(obj, err, "Cluster", namespace, name)
 				if !current() {
 					return nil, nil, cnpgsvc.ErrCNPGDisconnected
 				}

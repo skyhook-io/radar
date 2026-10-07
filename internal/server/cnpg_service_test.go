@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/skyhook-io/radar/internal/auth"
 	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
 	"github.com/skyhook-io/radar/internal/integration"
@@ -14,16 +16,48 @@ import (
 )
 
 func TestCNPGCachedReadFailurePreservesCauseWithoutExposingIt(t *testing.T) {
-	cause := errors.New("internal cache failure details")
-	_, err := cnpgCachedClusterResult(nil, cause, "pg", "orders")
-	var failure *cnpgsvc.ReadFailure
-	if !errors.Is(err, cause) || !errors.As(err, &failure) || failure.Status != http.StatusInternalServerError {
-		t.Fatalf("cache failure = %v", err)
+	for _, kind := range []string{"Cluster", "Pooler"} {
+		t.Run(kind, func(t *testing.T) {
+			cause := errors.New("internal cache failure details")
+			_, err := cnpgCachedResourceResult(nil, cause, kind, "pg", "orders")
+			var failure *cnpgsvc.ReadFailure
+			if !errors.Is(err, cause) || !errors.As(err, &failure) || failure.Status != http.StatusInternalServerError {
+				t.Fatalf("cache failure = %v", err)
+			}
+			w := httptest.NewRecorder()
+			(&Server{}).writeCNPGCachedReadError(w, err, "pg", "orders")
+			if w.Code != http.StatusInternalServerError || w.Body.String() != "{\"error\":\"failed to read CloudNativePG "+kind+"\"}\n" {
+				t.Fatalf("response = %d %s", w.Code, w.Body.String())
+			}
+		})
 	}
-	w := httptest.NewRecorder()
-	(&Server{}).writeCNPGCachedReadError(w, err, "pg", "orders")
-	if w.Code != http.StatusInternalServerError || w.Body.String() != "{\"error\":\"failed to read CloudNativePG Cluster\"}\n" {
-		t.Fatalf("response = %d %s", w.Code, w.Body.String())
+}
+
+func TestCNPGCachedReadDistinguishesMissingFromSyncing(t *testing.T) {
+	for _, kind := range []string{"Cluster", "Pooler"} {
+		for _, tc := range []struct {
+			name    string
+			cause   error
+			status  int
+			message string
+		}{
+			{"missing", nil, http.StatusNotFound, "CloudNativePG " + kind + " pg/orders not found"},
+			{"not installed", k8s.ErrUnknownDynamicKind, http.StatusNotFound, "CloudNativePG " + kind + " pg/orders not found"},
+			{"syncing", integration.ErrDynamicNotSynced, http.StatusServiceUnavailable, "CloudNativePG " + kind + "s are still syncing"},
+		} {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				_, err := cnpgCachedResourceResult(nil, tc.cause, kind, "pg", "orders")
+				w := httptest.NewRecorder()
+				(&Server{}).writeCNPGCachedReadError(w, err, "pg", "orders")
+				if w.Code != tc.status || w.Body.String() != "{\"error\":\""+tc.message+"\"}\n" {
+					t.Fatalf("response = %d %s", w.Code, w.Body.String())
+				}
+			})
+		}
+		object := &unstructured.Unstructured{}
+		if got, err := cnpgCachedResourceResult(object, nil, kind, "pg", "orders"); err != nil || got != object {
+			t.Fatalf("successful %s read = %v %v", kind, got, err)
+		}
 	}
 }
 

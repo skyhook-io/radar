@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -11,8 +13,20 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
+
+func TestGitOpsWriteEvidenceDiscoveryUnavailable(t *testing.T) {
+	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds)
+	k8s.ResetResourceDiscovery()
+	r := httptest.NewRequest(http.MethodPost, "/api/gitops/write-evidence", strings.NewReader(`{"kind":"Deployment","group":"apps","namespace":"prod","name":"api","paths":["spec.replicas"]}`))
+	w := httptest.NewRecorder()
+	(&Server{}).handleGitOpsWriteEvidence(w, r)
+	if w.Code != http.StatusServiceUnavailable || w.Body.String() != "{\"error\":\"resource discovery not available\"}\n" {
+		t.Fatalf("response = %d %s", w.Code, w.Body.String())
+	}
+}
 
 func mustJSON(t *testing.T, v any) string {
 	t.Helper()
