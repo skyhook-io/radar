@@ -41,6 +41,10 @@ const BUILTIN_PLURAL_TO_KIND: Record<string, string> = {
   clusterrolebindings: 'ClusterRoleBinding',
   serviceaccounts: 'ServiceAccount',
   networkpolicies: 'NetworkPolicy',
+  // AWS Load Balancer Controller's IngressClass parameters. The Kind is
+  // singular and plural at once, so English rules cannot recover it in hosts
+  // that never load discovery.
+  ingressclassparams: 'IngressClassParams',
 }
 
 const BUILTIN_GROUP_KIND_TO_PLURAL: Record<string, string> = {
@@ -54,6 +58,7 @@ const BUILTIN_GROUP_PLURAL_TO_KIND: Record<string, string> = {
   'metrics.k8s.io/pods': 'PodMetrics',
   'metrics.k8s.io/nodes': 'NodeMetrics',
   'scheduling.k8s.io/podgroups': 'PodGroup',
+  'elbv2.k8s.aws/ingressclassparams': 'IngressClassParams',
 }
 
 // Dynamic map built from API discovery — populated by initNavigationMap().

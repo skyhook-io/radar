@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
+import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
 import { PaneLoader } from '../ui/PaneLoader'
 import { Tooltip } from '../ui/Tooltip'
@@ -6,6 +6,8 @@ import {
   AlertCircle,
   CheckCircle,
   Clock,
+  Eye,
+  Info,
   RefreshCw,
   Plus,
   Trash2,
@@ -104,6 +106,16 @@ export interface TimelineListProps {
   // explicitly because the visible row count no longer reflects the source cap.
   isTruncated?: boolean
   truncationMessage?: string
+  // Routine activity toggle, shown when `onShowRoutineChange` is set.
+  // `routineEvents` are the routine rows the host holds: left out of `events`
+  // while hidden, included while shown. Counted here through the active filters.
+  showRoutine?: boolean
+  onShowRoutineChange?: (show: boolean) => void
+  routineEvents?: TimelineEvent[]
+  // Rows for which this returns true fold into one card per resource per time
+  // group, whatever their reason. The host uses it for problems on pods and
+  // other child resources, so a crash-looping pod is one card, not dozens.
+  foldPerResource?: (event: TimelineEvent) => boolean
 }
 
 const TIME_RANGES: { value: TimeRange; label: string }[] = [
@@ -115,7 +127,7 @@ const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: 'all', label: 'All' },
 ]
 
-export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange, scrollToMs, compact = false, selectedEventId, onSelectEvent, truncatedAt, isTruncated, truncationMessage }: TimelineListProps) {
+export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasLimitedAccess, namespaces, onViewChange, currentView = 'list', onResourceClick, initialFilter, initialTimeRange, rangeOptions = TIME_RANGES, hideRangeSelector = false, showDeleted: showDeletedProp, onShowDeletedChange, search: searchProp, onSearchChange, activityFilter: activityFilterProp, onActivityFilterChange, kindFilter: kindFilterProp, onKindFilterChange, onVisibleWindowChange, scrollToMs, compact = false, selectedEventId, onSelectEvent, truncatedAt, isTruncated, truncationMessage, showRoutine = false, onShowRoutineChange, routineEvents, foldPerResource }: TimelineListProps) {
   const [searchInternal, setSearchInternal] = useState('')
   const searchTerm = searchProp ?? searchInternal
   const setSearchTerm = onSearchChange ?? setSearchInternal
@@ -174,16 +186,20 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
   const kindOptions = useMemo(() => mergeKindOptions(seenKinds), [seenKinds])
 
   // Filter activity through the shared predicates so list + swimlane can't drift.
-  const filteredActivity = useMemo(() => {
-    if (!events) return []
-    return events.filter((item) => {
-      if (!matchesActivityFilter(item, activityTypeFilter)) return false
-      if (kindFilter.length > 0 && !kindFilter.includes(item.kind)) return false
-      if (!showDeleted && item.eventType === 'delete') return false
-      if (!matchesTimelineSearch(item, debouncedSearchTerm)) return false
-      return true
-    })
-  }, [events, activityTypeFilter, kindFilter, debouncedSearchTerm, showDeleted])
+  const matchesListFilters = useCallback((item: TimelineEvent) => {
+    if (!matchesActivityFilter(item, activityTypeFilter)) return false
+    if (kindFilter.length > 0 && !kindFilter.includes(item.kind)) return false
+    if (!showDeleted && item.eventType === 'delete') return false
+    if (!matchesTimelineSearch(item, debouncedSearchTerm)) return false
+    return true
+  }, [activityTypeFilter, kindFilter, debouncedSearchTerm, showDeleted])
+  const filteredActivity = useMemo(() => (events ? events.filter(matchesListFilters) : []), [events, matchesListFilters])
+  // Counted through the same filters, so the number is exactly what the toggle adds or removes.
+  const routineCount = useMemo(
+    () => (routineEvents ? routineEvents.filter(matchesListFilters).length : 0),
+    [routineEvents, matchesListFilters],
+  )
+  const canShowRoutine = !showRoutine && routineCount > 0 && !!onShowRoutineChange
 
   // Aggregated event group type
   type AggregatedItem = {
@@ -195,6 +211,13 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     last: TimelineEvent
     count: number
     reason: string
+  } | {
+    type: 'folded'
+    // Stable across live updates, so an opened fold stays open as rows arrive.
+    key: string
+    latest: TimelineEvent
+    // Newest first.
+    others: TimelineEvent[]
   }
 
   // Aggregate repeated events for the same resource with the same reason
@@ -206,6 +229,13 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     const singleEvents: TimelineEvent[] = []
 
     for (const item of items) {
+      if (foldPerResource?.(item)) {
+        const key = `fold:${item.kind}:${item.namespace}:${item.name}`
+        const existing = groups.get(key) || []
+        existing.push(item)
+        groups.set(key, existing)
+        continue
+      }
       // Only aggregate K8s Warning events or changes with a specific reason
       const reason = item.reason || ''
       const shouldAggregate = (
@@ -227,8 +257,11 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     const result: AggregatedItem[] = []
 
     // Process aggregated groups
-    for (const events of groups.values()) {
-      if (events.length >= 2) {
+    for (const [key, events] of groups.entries()) {
+      if (events.length >= 2 && key.startsWith('fold:')) {
+        events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+        result.push({ type: 'folded', key, latest: events[0], others: events.slice(1) })
+      } else if (events.length >= 2) {
         // Sort by time (oldest first)
         events.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
         result.push({
@@ -250,8 +283,9 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
 
     // Sort all by most recent (last event time)
     result.sort((a, b) => {
-      const timeA = a.type === 'aggregated' ? new Date(a.last.timestamp).getTime() : new Date(a.item.timestamp).getTime()
-      const timeB = b.type === 'aggregated' ? new Date(b.last.timestamp).getTime() : new Date(b.item.timestamp).getTime()
+      const newest = (x: AggregatedItem) => x.type === 'aggregated' ? x.last : x.type === 'folded' ? x.latest : x.item
+      const timeA = new Date(newest(a).timestamp).getTime()
+      const timeB = new Date(newest(b).timestamp).getTime()
       return timeB - timeA
     })
 
@@ -323,7 +357,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     if (older.length > 0) groups.push({ label: 'Older', items: aggregateEvents(older) })
 
     return groups
-  }, [filteredActivity, compact])
+  }, [filteredActivity, compact, foldPerResource])
 
   // Visible-window reporting: rows carry their time span in data attributes;
   // on scroll (rAF-throttled) and whenever the row set changes, the span of
@@ -397,6 +431,18 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
     card?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }, [selectedEventId, groupedActivity])
 
+  const renderActivityCard = (item: TimelineEvent) => (
+    <ActivityCard
+      item={item}
+      expanded={expandedItem === item.id}
+      onToggle={() => setExpandedItem(expandedItem === item.id ? null : item.id)}
+      onResourceClick={onResourceClick}
+      compact={compact}
+      selected={selectedEventId === item.id}
+      onSelect={() => onSelectEvent?.(selectedEventId === item.id ? null : item.id)}
+    />
+  )
+
   return (
     <div className="flex flex-col h-full w-full">
       {!compact && (
@@ -422,6 +468,11 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
         />
       )}
 
+
+      {onShowRoutineChange && (
+        <RoutineActivityToggle shown={showRoutine} count={routineCount} onChange={onShowRoutineChange} />
+      )}
+
       {/* Timeline content */}
       <div className="flex-1 overflow-auto" ref={scrollRef} onScroll={onVisibleWindowChange ? handleListScroll : undefined}>
         {isLoading ? (
@@ -433,11 +484,42 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
               const activeFilters = describeActiveFilters({ search: searchTerm, activityFilter: activityTypeFilter, kindFilter, showDeleted })
               return (
                 <>
-                  <p className="text-lg">No activity found</p>
-                  <p className="text-sm mt-2">
-                    {activeFilters || 'Activity will appear here when cluster changes occur'}
-                  </p>
-                  {activeFilters && (
+                  {canShowRoutine ? (
+                    <>
+                      <p className="text-lg">All matching activity is routine</p>
+                      <p className="text-sm mt-2 max-w-md text-center">
+                        {pluralize(routineCount, 'routine event')} {routineCount === 1 ? 'matches' : 'match'}. Warnings and failures would show here.
+                      </p>
+                      <div className="mt-4 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => onShowRoutineChange?.(true)}
+                          className="btn-brand flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          Show routine activity
+                        </button>
+                        {activeFilters && (
+                          <button
+                            type="button"
+                            onClick={clearAllFilters}
+                            className="flex items-center gap-2 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-lg text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary transition-colors"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                            Clear filters
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-lg">No activity found</p>
+                      <p className="text-sm mt-2">
+                        {activeFilters || 'Activity will appear here when cluster changes occur'}
+                      </p>
+                    </>
+                  )}
+                  {activeFilters && !canShowRoutine && (
                     <button
                       type="button"
                       onClick={clearAllFilters}
@@ -478,7 +560,17 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
                 {/* Activity list */}
                 <div className="space-y-2 ml-6 border-l-2 border-theme-border pl-4">
                   {group.items.map((aggItem) => (
-                    aggItem.type === 'aggregated' ? (
+                    aggItem.type === 'folded' ? (
+                      <div
+                        key={aggItem.key}
+                        data-event-id={aggItem.latest.id}
+                        data-ts-from={new Date(aggItem.others[aggItem.others.length - 1].timestamp).getTime()}
+                        data-ts-to={new Date(aggItem.latest.timestamp).getTime()}
+                      >
+                        {renderActivityCard(aggItem.latest)}
+                        <FoldedProblems latest={aggItem.latest} others={aggItem.others} renderCard={renderActivityCard} />
+                      </div>
+                    ) : aggItem.type === 'aggregated' ? (
                       <div
                         key={`agg-${aggItem.first.id}-${aggItem.last.id}`}
                         data-event-id={aggItem.first.id}
@@ -715,6 +807,76 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, sele
           </Collapse>
         )}
       </div>
+    </div>
+  )
+}
+
+const ROUTINE_ACTIVITY_INFO =
+  'The everyday steps Kubernetes takes on its own: pods being created, scheduled and started, replica sets scaling, and jobs that a CronJob ran successfully. Hidden by default to keep the list short. Warnings, failures and changes to your deployments, cron jobs and other top-level resources always show.'
+
+// Its own row under the toolbar: the filter row has no width to spare, and the
+// hide must stay visible at every width.
+function RoutineActivityToggle({ shown, count, onChange }: { shown: boolean; count: number; onChange: (shown: boolean) => void }) {
+  return (
+    <div className="flex items-center gap-1.5 border-b border-theme-border px-4 py-1.5 text-xs text-theme-text-secondary">
+      <label className="flex cursor-pointer items-center gap-1.5">
+        <input
+          type="checkbox"
+          checked={shown}
+          onChange={(e) => onChange(e.target.checked)}
+          className="h-3.5 w-3.5 rounded border-theme-border bg-theme-base"
+        />
+        Show routine activity
+      </label>
+      <Tooltip content={ROUTINE_ACTIVITY_INFO} delay={150} position="bottom" wrapperClassName="shrink-0">
+        <button type="button" aria-label="About routine activity" className="flex cursor-default rounded text-theme-text-tertiary/70 hover:text-theme-text-secondary">
+          <Info className="h-3.5 w-3.5" />
+        </button>
+      </Tooltip>
+      <span className="tabular-nums text-theme-text-tertiary">
+        · {count > 0 ? `${count.toLocaleString()} ${shown ? 'shown' : 'hidden'}` : shown ? 'none match' : 'none hidden'}
+      </span>
+    </div>
+  )
+}
+
+// What the rest of a folded group holds, in the words its rows use: each K8s
+// event reason with its count (BackOff ×8), then the status changes.
+function describeFolded(others: TimelineEvent[]): string {
+  const reasons = new Map<string, number>()
+  let changes = 0
+  for (const e of others) {
+    // A K8s event row already stands for `count` occurrences.
+    if (e.source === 'k8s_event' && e.reason) reasons.set(e.reason, (reasons.get(e.reason) ?? 0) + (e.count ?? 1))
+    else changes++
+  }
+  const parts = [...reasons.entries()].sort((a, b) => b[1] - a[1]).map(([r, n]) => (n > 1 ? `${r} ×${n}` : r))
+  if (changes > 0) parts.push(pluralize(changes, 'status change'))
+  return parts.join(', ')
+}
+
+// The rest of a child resource's problems in one time group, behind one line
+// under its newest card, so a crash-looping pod doesn't fill the list.
+function FoldedProblems({ latest, others, renderCard }: { latest: TimelineEvent; others: TimelineEvent[]; renderCard: (item: TimelineEvent) => ReactNode }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="pl-3">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="flex items-center gap-1 rounded px-1 py-0.5 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+      >
+        <CollapseChevron open={open} inheritColor className="h-3.5 w-3.5" />
+        {others.length} more on this {latest.kind}: {describeFolded(others)}
+      </button>
+      <Collapse open={open} unmountOnExit>
+        <div className="mt-2 space-y-2 border-l-2 border-theme-border pl-3">{others.map((e) => (
+          <div key={e.id} data-event-id={e.id} data-ts-from={new Date(e.timestamp).getTime()} data-ts-to={new Date(e.timestamp).getTime()}>
+            {renderCard(e)}
+          </div>
+        ))}</div>
+      </Collapse>
     </div>
   )
 }

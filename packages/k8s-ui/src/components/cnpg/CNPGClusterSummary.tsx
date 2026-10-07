@@ -1,0 +1,222 @@
+import type { ReactNode } from 'react'
+import { clsx } from 'clsx'
+import { Badge } from '../ui/Badge'
+import { Tooltip } from '../ui/Tooltip'
+import { CNPG_BARMAN_OBJECTSTORE_GROUP, CNPG_GROUP } from '../resources/resource-utils-cnpg'
+import type { CNPGFleetRow, CNPGInstance } from './workspace'
+import {
+  FactGrid,
+  FactRow,
+  FactSource,
+  FactValue,
+  ProblemCallout,
+  RefLink,
+  SummaryHeading,
+  ToneDot,
+  toneTextClass,
+  CNPG_PRIMARY_BUTTON,
+  CNPG_SECONDARY_BUTTON,
+  type CNPGNavigate,
+} from './primitives'
+
+export interface CNPGSummaryAction {
+  label: string
+  onClick: () => void
+  primary?: boolean
+}
+
+function InstancePill({ pod, namespace, onNavigate }: { pod: CNPGInstance; namespace: string; onNavigate?: CNPGNavigate }) {
+  const tone = pod.ready === true ? 'healthy' : pod.ready === false ? 'unhealthy' : 'unknown'
+  const role = pod.role === 'primary' ? 'Primary' : pod.role === 'replica' ? 'Replica' : 'Role unknown'
+  const readiness = pod.ready === true ? 'Ready' : pod.ready === false ? 'Not ready' : 'Readiness unknown'
+  return (
+    <Tooltip content={`${pod.name} · ${role} · ${readiness}${pod.node ? ` · ${pod.node}` : ''}`} position="top">
+      <button
+        type="button"
+        onClick={() => onNavigate?.({ kind: 'Pod', group: '', namespace, name: pod.name })}
+        className={clsx(
+          'inline-flex items-center gap-1.5 rounded-md border border-theme-border bg-theme-base px-2 py-0.5 text-xs',
+          onNavigate ? 'hover:border-accent' : 'cursor-default',
+        )}
+      >
+        <ToneDot tone={tone} />
+        <span className="font-mono">{pod.name}</span>
+        <span className="text-theme-text-tertiary">{pod.role === 'primary' ? 'P' : pod.role === 'replica' ? 'R' : '?'}</span>
+      </button>
+    </Tooltip>
+  )
+}
+
+export function CNPGClusterSummary({
+  row,
+  onNavigate,
+  actions,
+  problemsLink,
+  extra,
+}: {
+  row: CNPGFleetRow
+  onNavigate?: CNPGNavigate
+  actions?: CNPGSummaryAction[]
+  /** Link to the complete list of this cluster's findings, shown when more than one exists. */
+  problemsLink?: (count: number) => ReactNode
+  extra?: ReactNode
+}) {
+  const top = row.problems[0]
+  const rest = row.problems.length - 1
+  const p = row.protection
+  const ns = row.namespace
+  const radarFindings = row.problems.some((x) => x.severity !== 'posture')
+
+  return (
+    <div className="px-4 py-4">
+      {top && (
+        <ProblemCallout
+          problem={top}
+          onNavigate={onNavigate}
+          more={rest > 0 ? problemsLink?.(row.problems.length) ?? <span>+{rest} more</span> : null}
+        />
+      )}
+
+      {actions && actions.length > 0 && (
+        <div className="mb-4 flex flex-wrap gap-2">
+          {actions.map((a) => (
+            <button key={a.label} type="button" onClick={a.onClick} className={a.primary ? CNPG_PRIMARY_BUTTON : CNPG_SECONDARY_BUTTON}>
+              {a.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <SummaryHeading>State</SummaryHeading>
+      <FactGrid>
+        <FactRow label="Controller phase">
+          <span className="inline-flex flex-wrap items-center gap-2">
+            <Badge severity={row.controllerStatus.level === 'healthy' ? 'success' : row.controllerStatus.level === 'unhealthy' ? 'error' : row.controllerStatus.level === 'degraded' || row.controllerStatus.level === 'alert' ? 'warning' : 'neutral'} size="sm">
+              {row.controllerStatus.text}
+            </Badge>
+            <span className="text-xs text-theme-text-tertiary">
+              {radarFindings ? 'reported by CNPG · Radar findings above are separate' : 'reported by CNPG'}
+            </span>
+          </span>
+        </FactRow>
+        <FactRow label="Instances">
+          <div>
+            <span>
+              {row.instances.ready ?? '–'}/{row.instances.desired ?? '–'} ready
+              {row.cluster?.status?.currentPrimary && (
+                <span className="text-theme-text-secondary"> · primary <span className="font-mono">{row.cluster.status.currentPrimary}</span></span>
+              )}
+            </span>
+            {row.pods.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {row.pods.map((pod) => (
+                  <InstancePill key={pod.name} pod={pod} namespace={ns} onNavigate={onNavigate} />
+                ))}
+              </div>
+            )}
+          </div>
+        </FactRow>
+        <FactRow label="Replication">
+          <FactValue fact={row.replication} />
+          <FactSource fact={row.replication} />
+        </FactRow>
+        {row.replicaCluster && (
+          <FactRow label="Replica cluster">
+            Follows {row.replicaCluster.source ? <span className="font-mono">{row.replicaCluster.source}</span> : 'an external primary'}
+          </FactRow>
+        )}
+        <FactRow label="PostgreSQL">
+          {row.pgVersion ?? 'Unknown'}
+          {row.catalog && (
+            <span className="text-theme-text-secondary">
+              {' · '}
+              <RefLink
+                refTo={{ kind: row.catalog.kind, group: CNPG_GROUP, namespace: row.catalog.kind === 'ClusterImageCatalog' ? '' : ns, name: row.catalog.name }}
+                onNavigate={onNavigate}
+              >
+                {row.catalog.name}
+              </RefLink>
+            </span>
+          )}
+        </FactRow>
+        <FactRow label="Declarations">
+          <FactValue fact={row.declarations.summary} />
+        </FactRow>
+        <FactRow label="Poolers">
+          {row.poolers.length === 0 ? (
+            <span className={row.poolersKnown ? 'text-theme-text-secondary' : 'text-theme-text-tertiary'}>
+              {row.poolersKnown ? 'None' : 'No access to Poolers'}
+            </span>
+          ) : (
+            <span className="flex flex-wrap gap-x-3">
+              {row.poolers.map((name) => (
+                <RefLink key={name} refTo={{ kind: 'Pooler', group: CNPG_GROUP, namespace: ns, name }} onNavigate={onNavigate} mono />
+              ))}
+            </span>
+          )}
+        </FactRow>
+        {row.gitops && (
+          <FactRow label="Declared in">
+            {row.gitops.tool === 'argocd' ? 'Argo CD' : 'Flux'} <span className="font-mono">{row.gitops.name}</span>
+          </FactRow>
+        )}
+      </FactGrid>
+
+      <SummaryHeading>Protection</SummaryHeading>
+      <FactGrid>
+        <FactRow label="Schedule">
+          <FactValue fact={p.schedule} />
+          {p.schedule.names.length > 0 && (
+            <div className="mt-0.5 flex flex-wrap gap-x-3 text-xs">
+              {p.schedule.names.map((name) => (
+                <RefLink key={name} refTo={{ kind: 'ScheduledBackup', group: CNPG_GROUP, namespace: ns, name }} onNavigate={onNavigate} mono />
+              ))}
+            </div>
+          )}
+        </FactRow>
+        <FactRow label="Destination">
+          {p.destination.objectStore ? (
+            <RefLink refTo={{ kind: 'ObjectStore', group: CNPG_BARMAN_OBJECTSTORE_GROUP, namespace: ns, name: p.destination.objectStore }} onNavigate={onNavigate}>
+              ObjectStore {p.destination.objectStore}
+            </RefLink>
+          ) : (
+            <FactValue fact={p.destination} />
+          )}
+        </FactRow>
+        <FactRow label="Last successful backup">
+          <FactValue fact={p.lastSuccessfulBackup} />
+          <FactSource fact={p.lastSuccessfulBackup} />
+        </FactRow>
+        <FactRow label="WAL archiving">
+          <FactValue fact={p.walArchiving} />
+        </FactRow>
+        <FactRow label="Recovery window">
+          {p.recoveryWindow.from ? (
+            <div>
+              <span className={p.recoveryWindow.tone === 'degraded' ? toneTextClass('degraded') : undefined}>
+                from {new Date(p.recoveryWindow.from).toUTCString().replace(' GMT', ' UTC')} {p.recoveryWindow.tone === 'degraded' ? '· not advancing' : 'to the newest archived WAL'}
+              </span>
+              <FactSource fact={p.recoveryWindow} />
+              {p.recoveryWindow.tone === 'degraded' && (
+                <div className="text-[11.5px] text-theme-text-tertiary">WAL archiving is failing, so nothing written since the last archived WAL can be recovered.</div>
+              )}
+            </div>
+          ) : (
+            <FactValue fact={p.recoveryWindow} />
+          )}
+        </FactRow>
+        <FactRow label="Restore validation">
+          {p.restoreValidation.restoredInto ? (
+            <RefLink refTo={{ kind: 'Cluster', group: CNPG_GROUP, ...p.restoreValidation.restoredInto }} onNavigate={onNavigate}>
+              {p.restoreValidation.text}
+            </RefLink>
+          ) : (
+            <FactValue fact={p.restoreValidation} />
+          )}
+          <FactSource fact={p.restoreValidation} />
+        </FactRow>
+      </FactGrid>
+      {extra}
+    </div>
+  )
+}

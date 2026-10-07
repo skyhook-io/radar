@@ -105,3 +105,79 @@ describe('ResourcesSidebar count visibility', () => {
     expect(html).toContain('HorizontalPodAutoscaler')
   })
 })
+
+describe('ResourcesSidebar category workspaces', () => {
+  const cnpgCluster: APIResource = {
+    group: 'postgresql.cnpg.io',
+    version: 'v1',
+    kind: 'Cluster',
+    name: 'clusters',
+    namespaced: true,
+    isCrd: true,
+    verbs: ['list'],
+  }
+  const objectStore: APIResource = {
+    group: 'barmancloud.cnpg.io',
+    version: 'v1',
+    kind: 'ObjectStore',
+    name: 'objectstores',
+    namespaced: true,
+    isCrd: true,
+    verbs: ['list'],
+  }
+
+  it('renders destinations above the kinds, with the active object nested and no kind selected', () => {
+    const html = renderToString(
+      <ResourcesSidebar
+        selectedKind={null}
+        onSelectedKindChange={() => {}}
+        apiResources={[cnpgCluster, objectStore]}
+        resourceCounts={{ 'postgresql.cnpg.io/Cluster': 2, 'barmancloud.cnpg.io/ObjectStore': 1 }}
+        categoryWorkspaces={{
+          CloudNativePG: {
+            destinations: [
+              { id: 'overview', label: 'Overview', count: 3, countTitle: '3 clusters need attention', active: true, child: { label: 'pg-orders' }, onSelect: () => {} },
+            ],
+            defaultKindsCollapsed: true,
+            scopeNote: 'Counts for namespace payments',
+          },
+        }}
+      />
+    )
+    expect(html).toContain('Workspace')
+    expect(html).toContain('Overview')
+    expect(html).toContain('pg-orders')
+    expect(html).toContain('Counts for namespace payments')
+    expect(html).toContain('Resource kinds')
+    expect(html).toMatch(/aria-expanded="false"[^>]*>(?:(?!<\/button>).)*Resource kinds/)
+    expect(html).not.toContain('selection-strong selection-text">Pod')
+  })
+
+  it('keeps a workspace category visible when it has no resources', () => {
+    const html = renderToString(
+      <ResourcesSidebar
+        selectedKind={null}
+        onSelectedKindChange={() => {}}
+        apiResources={[cnpgCluster]}
+        resourceCounts={{ 'postgresql.cnpg.io/Cluster': 0 }}
+        categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'overview', label: 'Overview', onSelect: () => {} }] } }}
+      />
+    )
+    expect(html).toContain('CloudNativePG')
+    expect(html).toContain('Overview')
+  })
+
+  it('labels API groups when a workspace category spans several', () => {
+    const html = renderToString(
+      <ResourcesSidebar
+        selectedKind={{ name: 'clusters', kind: 'Cluster', group: 'postgresql.cnpg.io' }}
+        onSelectedKindChange={() => {}}
+        apiResources={[cnpgCluster, objectStore]}
+        resourceCounts={{ 'postgresql.cnpg.io/Cluster': 2, 'barmancloud.cnpg.io/ObjectStore': 1 }}
+        categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'overview', label: 'Overview', onSelect: () => {} }], defaultKindsCollapsed: true } }}
+      />
+    )
+    expect(html).toContain('postgresql.cnpg.io')
+    expect(html).toContain('barmancloud.cnpg.io')
+  })
+})

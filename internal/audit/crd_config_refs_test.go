@@ -186,9 +186,16 @@ func TestDynamicConfigObjectRefs(t *testing.T) {
 			obj: map[string]any{"spec": map[string]any{
 				"secretTargetRef":    []any{map[string]any{"name": "queue-secret"}},
 				"configMapTargetRef": []any{map[string]any{"name": "queue-config"}},
-				"gcpSecretManager":   map[string]any{"credentials": map[string]any{"clientSecret": map[string]any{"name": "gcp-secret"}}},
+				"gcpSecretManager":   map[string]any{"credentials": map[string]any{"clientSecret": map[string]any{"valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": "gcp-secret", "key": "credentials.json"}}}}},
 			}},
 			want: refs(secret("app", "queue-secret"), configMap("app", "queue-config"), secret("app", "gcp-secret")),
+		},
+		{
+			name: "keda shallow GCP credentials are not a reference",
+			gvr:  gvr("keda.sh", "v1alpha1", "triggerauthentications"),
+			ns:   "app",
+			obj:  map[string]any{"spec": map[string]any{"gcpSecretManager": map[string]any{"credentials": map[string]any{"clientSecret": map[string]any{"name": "fictional"}}}}},
+			want: refs(),
 		},
 		{
 			name: "prometheus servicemonitor refs",

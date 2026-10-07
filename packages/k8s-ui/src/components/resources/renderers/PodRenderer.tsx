@@ -466,6 +466,12 @@ export function PodRenderer({
               value={<ResourceLink name={data.status.nominatedNodeName} kind="nodes" onNavigate={onNavigate} />}
             />
           )}
+          {data.spec?.priorityClassName && <Property label="Priority Class" value={
+            <ResourceLink name={data.spec.priorityClassName} kind="priorityclasses" group="scheduling.k8s.io" onNavigate={onNavigate} />
+          } />}
+          {data.spec?.runtimeClassName && <Property label="Runtime Class" value={
+            <ResourceLink name={data.spec.runtimeClassName} kind="runtimeclasses" group="node.k8s.io" onNavigate={onNavigate} />
+          } />}
           <Property label="Pod IP" value={data.status?.podIP} copyable onCopy={onCopy} copied={copied} />
           <Property label="Host IP" value={data.status?.hostIP} />
           <Property
