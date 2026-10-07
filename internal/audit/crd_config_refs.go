@@ -387,7 +387,7 @@ func kedaTriggerAuthConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRe
 	for _, ref := range mapsAt(u.Object, "spec", "configMapTargetRef") {
 		addConfigMap(&refs, ns, stringValue(ref["name"]))
 	}
-	addSecret(&refs, ns, stringAt(u.Object, "spec", "gcpSecretManager", "credentials", "clientSecret", "name"))
+	addSecret(&refs, ns, stringAt(u.Object, "spec", "gcpSecretManager", "credentials", "clientSecret", "valueFrom", "secretKeyRef", "name"))
 	return refs
 }
 
