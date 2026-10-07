@@ -5847,7 +5847,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// 17. Add generic CRD nodes connected via owner references
-	// Only includes CRDs already being watched and with owner refs to existing nodes
+	// Only includes watched CRDs connected by observed ownership to visible nodes
 	if opts.IncludeGenericCRDs {
 		nodes, edges = b.addGenericCRDNodes(nodes, edges, opts)
 	}
@@ -8879,9 +8879,9 @@ func isCRDGVR(provider DynamicProvider, gvr schema.GroupVersionResource, kind st
 
 // addGenericCRDNodes adds CRD nodes connected to the topology via owner references.
 // It uses two-phase resolution: first collecting all candidate CRD resources, then
-// iteratively adding nodes whose owners are already in the topology. This handles
-// multi-level CRD chains (e.g., Certificate → CertificateRequest → Order) where
-// intermediate nodes only become resolvable after their parents are added.
+// iteratively adding children of visible owners and observed parents declared by
+// visible dependents. This handles owner chains in both directions without
+// enrolling unrelated CRDs or fetching individual owners.
 func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptions) ([]Node, []Edge) {
 	dynamicCache := b.dynamic
 	resourceDiscovery := b.dynamic
@@ -8922,7 +8922,6 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		ownerRefs   []resourceid.Reference
 		resourceKey string
 		typeKey     string
-		existing    bool
 	}
 	var candidates []candidate
 
@@ -8985,9 +8984,6 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 			}
 
 			ownerRefs := resource.GetOwnerReferences()
-			if len(ownerRefs) == 0 {
-				continue
-			}
 
 			name := resource.GetName()
 			resourceKey := resourceid.ResourceKey(gvr.Group, kind, ns, name)
@@ -9011,9 +9007,6 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 				}
 				ownerResources = append(ownerResources, resourceid.OwnerReference(ref.APIVersion, ref.Kind, ref.Name, string(ref.UID), ns))
 			}
-			if len(ownerResources) == 0 {
-				continue
-			}
 			candidates = append(candidates, candidate{
 				nodeID: nodeID,
 				node: Node{
@@ -9031,18 +9024,75 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 				ownerRefs:   ownerResources,
 				resourceKey: resourceKey,
 				typeKey:     typeKey,
-				existing:    existing,
 			})
 		}
 	}
 
-	// Phase 2: Enroll nodes to a fixed point. Enrollment needs one observed
-	// owner, but edge resolution must wait for every late parent to be enrolled.
+	// Index the complete cached candidate snapshot once. Upward enrollment needs
+	// a nonempty matching UID, so a recreated or merely declared owner cannot
+	// bring an unrelated root into the graph. Existing child enrollment keeps its
+	// observed-owner rules. No per-edge cache/API object lookup is needed.
+	candidateNodes := make([]Node, 0, len(candidates))
+	candidatesByID := make(map[string]candidate, len(candidates))
+	for _, c := range candidates {
+		candidateNodes = append(candidateNodes, c.node)
+		candidatesByID[c.nodeID] = c
+	}
+	candidateIndex := IndexByResource(&Topology{Nodes: candidateNodes})
+	neededParents := make(map[string]bool)
+	var parentQueue []string
+	markParents := func(child Node) {
+		if !child.observed && child.uid == "" {
+			return
+		}
+		ns, _ := child.Data["namespace"].(string)
+		for _, owner := range child.ownerReferences {
+			if owner.UID == "" {
+				continue
+			}
+			ref := resourceid.OwnerReference(owner.APIVersion, owner.Kind, owner.Name, string(owner.UID), ns)
+			if parent, matches := candidateIndex.ResolveObservedOwner(ref); matches && parent.uid != "" && parent.ID != child.ID {
+				if !neededParents[parent.ID] {
+					neededParents[parent.ID] = true
+					parentQueue = append(parentQueue, parent.ID)
+				}
+			}
+		}
+	}
+	for _, node := range nodes {
+		markParents(node)
+	}
+
+	// Allocate the existing kind budget to owners of already visible nodes and
+	// their ancestors before optional connected children can consume it.
+	enroll := func(c candidate) {
+		nodes = append(nodes, c.node)
+		existingIDs[c.nodeID] = true
+		existingResourceIDs[c.resourceKey] = c.nodeID
+		ownerIndex.nodesByResourceKey[c.resourceKey] = &nodes[len(nodes)-1]
+		crdCounts[c.typeKey]++
+		markParents(c.node)
+	}
+	parentCursor := 0
+	enrollParents := func() {
+		for parentCursor < len(parentQueue) {
+			c := candidatesByID[parentQueue[parentCursor]]
+			parentCursor++
+			if existingResourceIDs[c.resourceKey] != "" || crdCounts[c.typeKey] >= maxPerKind {
+				continue
+			}
+			enroll(c)
+		}
+	}
+	enrollParents()
+
+	// Phase 2: Enroll connected observed nodes to a fixed point. Complete edge
+	// resolution waits until every available parent has been enrolled.
 	for {
 		added := 0
 		remaining := candidates[:0]
 		for _, c := range candidates {
-			if c.existing || crdCounts[c.typeKey] >= maxPerKind {
+			if existingResourceIDs[c.resourceKey] != "" || crdCounts[c.typeKey] >= maxPerKind {
 				continue
 			}
 			connected := false
@@ -9056,11 +9106,8 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 				remaining = append(remaining, c)
 				continue
 			}
-			nodes = append(nodes, c.node)
-			existingIDs[c.nodeID] = true
-			existingResourceIDs[c.resourceKey] = c.nodeID
-			ownerIndex.nodesByResourceKey[c.resourceKey] = &nodes[len(nodes)-1]
-			crdCounts[c.typeKey]++
+			enroll(c)
+			enrollParents()
 			added++
 		}
 		candidates = remaining
