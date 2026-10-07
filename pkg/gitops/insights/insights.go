@@ -937,6 +937,12 @@ func buildChanges(root *unstructured.Unstructured, resourceTree *gitopstree.Reso
 	if resourceTree == nil {
 		return nil
 	}
+	related := map[string]gitopstree.EdgeType{}
+	for _, edge := range resourceTree.Edges {
+		if edge.Type == gitopstree.EdgeSource || edge.Type == gitopstree.EdgeDependsOn {
+			related[edge.Target] = edge.Type
+		}
+	}
 	var out []Change
 	for _, n := range resourceTree.Nodes {
 		if n.Role == gitopstree.RoleRoot || n.Role == gitopstree.RoleGroup {
@@ -945,6 +951,12 @@ func buildChanges(root *unstructured.Unstructured, resourceTree *gitopstree.Reso
 		category := categorizeFluxChange(n.Sync, n.Health)
 		partial := true
 		note := "Flux inventory confirms this resource is managed; desired manifest content is not available in Radar yet."
+		switch related[n.ID] {
+		case gitopstree.EdgeSource:
+			note = "Flux declares this resource as a source dependency; this reference does not establish ownership or a desired manifest."
+		case gitopstree.EdgeDependsOn:
+			note = "Flux declares this resource as an ordering dependency; this reference does not establish ownership or a desired manifest."
+		}
 		out = append(out, Change{
 			Ref:         refFromTree(n.Ref),
 			Category:    category,
