@@ -302,7 +302,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		rc.ServiceSummary = buildServiceSummary(ctx, svc, opts.ServiceBackends, opts.AccessChecker, omitted)
 	}
 	rc.Reflection = buildReflection(ctx, obj, opts.Reflections, opts.AccessChecker, omitted)
-	rc.ReferencedBy = buildReferencedBy(ctx, obj, opts.Provider, opts.AccessChecker, omitted)
+	rc.ReferencedBy = buildReferencedBy(ctx, obj, opts.Provider, rel, opts.AccessChecker, omitted)
 	if uses := buildUsesFromWorkload(ctx, obj, opts.AccessChecker, omitted); uses != nil {
 		rc.Uses = uses
 	}
@@ -551,14 +551,27 @@ const (
 	maxReferencedByPathsPerRef = 8
 )
 
-func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topology.ResourceProvider, ac RefAccessChecker, omitted *omittedTracker) *ReferencedBy {
-	if provider == nil {
-		return nil
-	}
-
+func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topology.ResourceProvider, rel *topology.Relationships, ac RefAccessChecker, omitted *omittedTracker) *ReferencedBy {
 	if node, ok := obj.(*corev1.Node); ok {
+		if rel != nil && rel.PodPlacementObserved {
+			if rel.PodPlacementUnavailable {
+				omitted.add("referencedBy", OmittedUnavailable)
+				return nil
+			}
+			var refs []ReferenceUse
+			for _, pod := range rel.Pods {
+				if pod.Kind == "Pod" && pod.Group == "" {
+					refs = append(refs, ReferenceUse{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name, Paths: []string{"spec.nodeName"}})
+				}
+			}
+			return filterReferenceUses(ctx, refs, ac, omitted)
+		}
+		if provider == nil {
+			return nil
+		}
 		pods, err := provider.Pods()
 		if err != nil {
+			omitted.add("referencedBy", OmittedUnavailable)
 			return nil
 		}
 		var refs []ReferenceUse
@@ -569,6 +582,9 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			refs = append(refs, ReferenceUse{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name, Paths: []string{"spec.nodeName"}})
 		}
 		return filterReferenceUses(ctx, refs, ac, omitted)
+	}
+	if provider == nil {
+		return nil
 	}
 
 	ident, ok := identityOf(obj)
@@ -594,7 +610,9 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		refs = append(refs, ref)
 	}
 
-	if deployments, _ := provider.Deployments(); deployments != nil {
+	if deployments, err := provider.Deployments(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else if deployments != nil {
 		for _, d := range deployments {
 			if d == nil || d.Namespace != target.namespace {
 				continue
@@ -602,7 +620,9 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("Deployment", "apps", d.Namespace, d.Name, d.Spec.Template.Spec, "spec.template.spec", target))
 		}
 	}
-	if statefulSets, _ := provider.StatefulSets(); statefulSets != nil {
+	if statefulSets, err := provider.StatefulSets(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else if statefulSets != nil {
 		for _, s := range statefulSets {
 			if s == nil || s.Namespace != target.namespace {
 				continue
@@ -610,7 +630,9 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("StatefulSet", "apps", s.Namespace, s.Name, s.Spec.Template.Spec, "spec.template.spec", target))
 		}
 	}
-	if daemonSets, _ := provider.DaemonSets(); daemonSets != nil {
+	if daemonSets, err := provider.DaemonSets(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else if daemonSets != nil {
 		for _, d := range daemonSets {
 			if d == nil || d.Namespace != target.namespace {
 				continue
@@ -618,7 +640,9 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("DaemonSet", "apps", d.Namespace, d.Name, d.Spec.Template.Spec, "spec.template.spec", target))
 		}
 	}
-	if jobs, _ := provider.Jobs(); jobs != nil {
+	if jobs, err := provider.Jobs(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else if jobs != nil {
 		for _, j := range jobs {
 			if j == nil || j.Namespace != target.namespace {
 				continue
@@ -626,7 +650,9 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("Job", "batch", j.Namespace, j.Name, j.Spec.Template.Spec, "spec.template.spec", target))
 		}
 	}
-	if cronJobs, _ := provider.CronJobs(); cronJobs != nil {
+	if cronJobs, err := provider.CronJobs(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else if cronJobs != nil {
 		for _, c := range cronJobs {
 			if c == nil || c.Namespace != target.namespace {
 				continue
@@ -634,7 +660,9 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			appendRef(referenceUseForPodSpec("CronJob", "batch", c.Namespace, c.Name, c.Spec.JobTemplate.Spec.Template.Spec, "spec.jobTemplate.spec.template.spec", target))
 		}
 	}
-	if pods, _ := provider.Pods(); pods != nil {
+	if pods, err := provider.Pods(); err != nil {
+		omitted.add("referencedBy", OmittedUnavailable)
+	} else if pods != nil {
 		for _, p := range pods {
 			if p == nil || p.Namespace != target.namespace || hasControllerOwner(p.OwnerReferences) {
 				continue

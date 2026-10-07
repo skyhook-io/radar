@@ -424,6 +424,11 @@ type ReflectionRelationships struct {
 
 // Relationships holds computed relationships for a resource
 type Relationships struct {
+	// PodPlacementObserved and PodPlacementUnavailable carry in-process lookup
+	// state for context builders. They are not transport fields or cached counts.
+	PodPlacementObserved    bool `json:"-"`
+	PodPlacementUnavailable bool `json:"-"`
+
 	// Reflection distinguishes reflection links also retained in ConfigRefs/Consumers.
 	Reflection *ReflectionRelationships `json:"reflection,omitempty"`
 

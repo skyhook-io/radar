@@ -749,6 +749,7 @@ const (
 	OmittedBudgetExceeded OmittedReason = "budget_exceeded"
 	OmittedCacheCold      OmittedReason = "cache_cold"
 	OmittedNotInstalled   OmittedReason = "not_installed"
+	OmittedUnavailable    OmittedReason = "unavailable"
 )
 
 // ReflectionContext contains declared metadata and authorized cached observations,

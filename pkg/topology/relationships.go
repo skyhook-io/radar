@@ -560,9 +560,17 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				}
 			}
 		case "node", "nodes":
-			allPods, _ := provider.Pods()
+			if resourceGroup != "" {
+				break
+			}
+			allPods, podsErr := provider.Pods()
+			rel.PodPlacementObserved = true
+			rel.PodPlacementUnavailable = podsErr != nil
+			if podsErr != nil {
+				break
+			}
 			for _, pod := range allPods {
-				if pod.Spec.NodeName == name && pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed {
+				if pod != nil && pod.Spec.NodeName == name && pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed {
 					podRef := ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
 					enrichRef(&podRef, dp)
 					rel.Pods = append(rel.Pods, podRef)
@@ -687,7 +695,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		len(rel.StorageRefs) == 0 &&
 		len(rel.PDBs) == 0 && len(rel.NetworkPolicies) == 0 &&
 		rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
-		rel.ServiceAccount == nil && rel.Node == nil && len(rel.ResourceClaims) == 0 && len(rel.ManagedBy) == 0 {
+		rel.ServiceAccount == nil && rel.Node == nil && len(rel.ResourceClaims) == 0 && len(rel.ManagedBy) == 0 && !rel.PodPlacementObserved {
 		return nil
 	}
 
