@@ -424,6 +424,7 @@ type ReflectionRelationships struct {
 
 // Relationships holds computed relationships for a resource
 type Relationships struct {
+	Warnings []string `json:"warnings,omitempty"` // Supporting inventories that could not establish complete relationships.
 	// Reflection distinguishes reflection links also retained in ConfigRefs/Consumers.
 	Reflection *ReflectionRelationships `json:"reflection,omitempty"`
 

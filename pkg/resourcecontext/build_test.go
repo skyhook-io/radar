@@ -1933,3 +1933,14 @@ func TestBuild_PassesThroughExecutionSummary(t *testing.T) {
 		t.Fatalf("execution = %+v, want pass-through %+v", rc.Execution, execution)
 	}
 }
+
+func TestRelationshipLookupWarningCarriesIncompleteContext(t *testing.T) {
+	obj := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node"}}
+	rc := Build(context.Background(), obj, Options{Relationships: &topology.Relationships{Warnings: []string{"Pod relationship inventory unavailable"}}})
+	for _, omission := range rc.Omitted {
+		if omission.Field == "relationships" && omission.Reason == OmittedCacheCold {
+			return
+		}
+	}
+	t.Fatalf("lookup failure lost incomplete-context evidence: %+v", rc.Omitted)
+}

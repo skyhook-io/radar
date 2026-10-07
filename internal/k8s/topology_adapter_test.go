@@ -144,8 +144,6 @@ func TestTopologyAdapter_ConfigMaps_Synced(t *testing.T) {
 	}
 }
 
-// TestTopologyAdapter_NetworkPolicies_DeferredPending verifies that the same
-// explicit pending error applies to NetworkPolicies as well.
 func TestTopologyAdapter_NetworkPolicies_DeferredPending(t *testing.T) {
 	cache := newAdapterCache(t,
 		map[string]bool{k8score.Pods: true, k8score.NetworkPolicies: true},

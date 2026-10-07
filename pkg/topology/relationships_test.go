@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"fmt"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -683,5 +684,37 @@ func TestGetRelationships_NoProtects_FieldsOmitted(t *testing.T) {
 	}
 	if len(rel.NetworkPolicies) != 0 {
 		t.Errorf("rel.NetworkPolicies: want empty, got %+v", rel.NetworkPolicies)
+	}
+}
+
+type unavailableRelationshipProvider struct{ stubProvider }
+
+func (*unavailableRelationshipProvider) Pods() ([]*corev1.Pod, error) {
+	return nil, fmt.Errorf("pods inventory is still syncing")
+}
+func (*unavailableRelationshipProvider) PersistentVolumes() ([]*corev1.PersistentVolume, error) {
+	return nil, fmt.Errorf("persistentvolumes inventory sync failed")
+}
+func TestRelationshipLookupFailureIsExplicit(t *testing.T) {
+	p := &unavailableRelationshipProvider{}
+	topo := &Topology{}
+	for _, tc := range []struct {
+		kind   string
+		object any
+	}{{"Node", &corev1.Node{}}, {"StorageClass", &unstructured.Unstructured{}}, {"Pod", nil}} {
+		r := GetRelationshipsWithObject(tc.kind, "", "test", tc.object, topo, p, nil, nil)
+		if r == nil {
+			t.Fatalf("%s failed lookup returned authoritative empty relationships", tc.kind)
+		}
+		if len(r.Warnings) != 1 {
+			t.Fatalf("%s lookup warnings = %+v", tc.kind, r.Warnings)
+		}
+		if len(r.Pods) != 0 || len(r.Children) != 0 {
+			t.Fatalf("failed list manufactured relationships: %+v", r)
+		}
+	}
+	ready := GetRelationshipsWithObject("Node", "", "test", &corev1.Node{}, topo, &stubProvider{}, nil, nil)
+	if ready != nil && len(ready.Warnings) != 0 {
+		t.Fatalf("ready empty inventory warned: %+v", ready)
 	}
 }

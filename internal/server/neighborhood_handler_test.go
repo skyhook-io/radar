@@ -1,8 +1,16 @@
 package server
 
 import (
+	"encoding/json"
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -93,5 +101,58 @@ func TestParseNeighborhoodOptions_ProfileNormalization(t *testing.T) {
 				t.Errorf("profile = %q, want %q", opts.Profile, c.want)
 			}
 		})
+	}
+}
+
+func TestNeighborhoodMissingRootDoesNotEstablishAbsenceDuringSync(t *testing.T) {
+	old := k8s.GetConnectionStatus()
+	t.Cleanup(func() {
+		k8s.SetConnectionStatus(old)
+		k8s.ResetResourceCache()
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatal(err)
+		}
+	})
+	k8s.ResetResourceCache()
+	if err := k8s.InitTestPromotedSyncingCache(fake.NewClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}}), 5*time.Second, 300*time.Millisecond, map[string]time.Duration{"replicasets": time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("bob", nil, &auth.UserPermissions{AllowedNamespaces: []string{"default"}})
+	probe := func() (int, string) {
+		resp := env.authGet(t, "/api/ai/neighborhood/replicaset/default/missing", "bob", "")
+		defer resp.Body.Close()
+		var body struct {
+			ErrorCode string `json:"error_code"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, body.ErrorCode
+	}
+	if status, code := probe(); status != http.StatusServiceUnavailable || code != "kind_sync_pending" {
+		t.Fatalf("pending inventory: %d %s", status, code)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		status, code := probe()
+		if status == http.StatusServiceUnavailable && code == "kind_sync_failed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("failed inventory: %d %s", status, code)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	for {
+		status, code := probe()
+		if status == http.StatusNotFound {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ready absent root: %d %s", status, code)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

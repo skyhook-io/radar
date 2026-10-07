@@ -804,6 +804,7 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
   if (!relationships) return null
 
   const hasRelationships =
+    (relationships.warnings && relationships.warnings.length > 0) ||
     relationships.owner ||
     relationships.deployment ||
     relationships.node ||
@@ -827,6 +828,9 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
   return (
     <Section title="Related Resources" icon={Link} defaultExpanded>
       <div className="space-y-3">
+        {relationships.warnings?.map((warning) => (
+          <p key={warning} role="status" className="text-sm text-yellow-500">{warning}</p>
+        ))}
         {relationships.owner && (
           <RelationshipGroup label="Owner" refs={[relationships.owner]} onNavigate={onNavigate} />
         )}

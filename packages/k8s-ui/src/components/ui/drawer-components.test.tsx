@@ -35,6 +35,13 @@ describe('ProblemAlerts', () => {
 })
 
 describe('RelatedResourcesSection', () => {
+  it('shows incomplete inventory even without resolved relationships', () => {
+    const html = renderToString(<RelatedResourcesSection relationships={{ warnings: ['Pod relationship inventory unavailable: pods inventory is still syncing'] }} />)
+    expect(html).toContain('Related Resources')
+    expect(html).toContain('role="status"')
+    expect(html).toContain('pods inventory is still syncing')
+  })
+
   it('renders an associated Node', () => {
     const html = renderToString(
       <RelatedResourcesSection

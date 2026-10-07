@@ -78,6 +78,15 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 		}
 	}
 
+	if gvr, ok := k8s.BuiltinGVRAnyGroup(input.Kind); ok && (input.Group == "" || k8s.TypedKindOwnsGroup(input.Kind, input.Group)) {
+		switch cache.KindReadinessFor(gvr.Resource) {
+		case k8s.KindPending:
+			return nil, nil, fmt.Errorf("%s inventory is still syncing; retry shortly", gvr.Resource)
+		case k8s.KindFailed:
+			return nil, nil, fmt.Errorf("%s inventory sync failed; absence is not established", gvr.Resource)
+		}
+	}
+
 	opts := topology.NeighborhoodOptions{
 		Profile:  resolveProfile(input.Profile),
 		Hops:     input.Hops,
