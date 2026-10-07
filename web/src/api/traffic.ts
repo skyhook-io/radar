@@ -86,6 +86,7 @@ export interface TrafficEndpointRef {
   namespace?: string
   name: string
   kind?: string
+  workloadKind?: string
 }
 
 /** One edge of the server's aggregation, keyed as the server keys it. */

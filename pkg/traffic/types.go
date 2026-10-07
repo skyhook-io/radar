@@ -79,6 +79,8 @@ const (
 	EndpointKindHost = "Host"
 	// EndpointKindUnknown: the plugin reported no usable identity.
 	EndpointKindUnknown = "Unknown"
+	// EndpointKindWorkload: the pods of one workload, as the graph shows them.
+	EndpointKindWorkload = "Workload"
 )
 
 // Endpoint represents a source or destination in a flow.
@@ -89,7 +91,39 @@ type Endpoint struct {
 	IP        string            `json:"ip,omitempty"`       // IP address
 	Labels    map[string]string `json:"labels,omitempty"`   // K8s labels
 	Workload  string            `json:"workload,omitempty"` // Parent workload name (Deployment, etc.)
-	Port      int               `json:"port,omitempty"`     // Port number
+	// WorkloadKind is the kind of that workload — Deployment, StatefulSet,
+	// CronJob, … — when it was resolved from the pod's owners.
+	WorkloadKind string `json:"workloadKind,omitempty"`
+	Port         int    `json:"port,omitempty"` // Port number
+}
+
+// GraphEndpoint is the endpoint as the graph draws it: a pod with a known
+// workload becomes that workload, so a Deployment with fifty replicas is one
+// node rather than fifty, the way metric-based sources report it already.
+// Records keep their pods; only the aggregation and selection matching use
+// this.
+func GraphEndpoint(e Endpoint) Endpoint {
+	if e.Kind != EndpointKindPod || e.Workload == "" || e.Namespace == "" {
+		return e
+	}
+	return Endpoint{
+		Name:         e.Workload,
+		Namespace:    e.Namespace,
+		Kind:         EndpointKindWorkload,
+		Workload:     e.Workload,
+		WorkloadKind: e.WorkloadKind,
+	}
+}
+
+// GraphFlows maps each flow's endpoints to GraphEndpoint, returning copies.
+func GraphFlows(flows []Flow) []Flow {
+	out := make([]Flow, len(flows))
+	for i, f := range flows {
+		f.Source = GraphEndpoint(f.Source)
+		f.Destination = GraphEndpoint(f.Destination)
+		out[i] = f
+	}
+	return out
 }
 
 // FlowOptions contains options for querying flows.
@@ -132,13 +166,17 @@ func (o FlowOptions) Excludes(f Flow) bool {
 // name. Kind is carried so a source can tell which references it can filter
 // on natively (a pod) from ones it cannot (an external address, the host).
 type EndpointRef struct {
-	Namespace string `json:"namespace,omitempty"`
-	Name      string `json:"name"`
-	Kind      string `json:"kind,omitempty"`
+	Namespace    string `json:"namespace,omitempty"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind,omitempty"`
+	WorkloadKind string `json:"workloadKind,omitempty"`
 }
 
+// matches compares a reference with an endpoint as the graph names it, so a
+// workload reference matches the records of each of its pods.
 func (r EndpointRef) matches(e Endpoint) bool {
-	return r.Namespace == e.Namespace && r.Name == e.Name
+	g := GraphEndpoint(e)
+	return r.Namespace == g.Namespace && r.Name == g.Name
 }
 
 // EndpointPair is one edge of the aggregation, keyed as AggregateFlows keys

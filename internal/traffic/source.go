@@ -24,6 +24,7 @@ const (
 	EndpointKindExternal = pkgtraffic.EndpointKindExternal
 	EndpointKindHost     = pkgtraffic.EndpointKindHost
 	EndpointKindUnknown  = pkgtraffic.EndpointKindUnknown
+	EndpointKindWorkload = pkgtraffic.EndpointKindWorkload
 )
 
 type FlowsResponse = pkgtraffic.FlowsResponse
@@ -45,5 +46,7 @@ const (
 
 // Re-export functions from pkg/traffic.
 var AggregateFlows = pkgtraffic.AggregateFlows
+var GraphFlows = pkgtraffic.GraphFlows
+var GraphEndpoint = pkgtraffic.GraphEndpoint
 var RoundRate = pkgtraffic.RoundRate
 var DefaultFlowOptions = pkgtraffic.DefaultFlowOptions

@@ -6,14 +6,14 @@ import { TrafficWizard } from './TrafficWizard'
 import { TrafficGraph, type TrafficGraphSelection } from './TrafficGraph'
 import { TrafficFilterSidebar } from './TrafficFilterSidebar'
 import { TrafficFlowListProvider } from './TrafficFlowListContext'
-import { Loader2, Filter, Plug, ChevronDown, List, Activity, AlertTriangle, Clock } from 'lucide-react'
+import { Loader2, Filter, Plug, ChevronDown, List, Activity, AlertTriangle, Clock, Network } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDock } from '../dock'
-import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
+import { AlertBanner, EmptyState, PaneLoader, FreshnessControl, pluralize } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, mergeRawPairs, pairKey, selectionRawPairs } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, mergeRawPairs, pairKey, selectionRawPairs, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING } from './trafficFilters'
 
 // Consecutive 2s retries of an empty result that came with a transient warning.
 const MAX_EMPTY_RETRIES = 5
@@ -379,6 +379,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   const [addonMode, setAddonMode] = useState<AddonMode>('show')
   const [graphSelection, setGraphSelection] = useState<TrafficGraphSelection | null>(null)
   const clearGraphSelection = useCallback(() => setGraphSelection(null), [])
+  const [drawAnyway, setDrawAnyway] = useState(false)
   const dock = useDock()
 
   // Dock: offset past sidebar, close flows tab on unmount
@@ -991,7 +992,8 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     if (!graphSelection) return filteredRawFlows
     if (selectionPairs) {
       const keys = new Set(selectionPairs.map(p => pairKey(p.source, p.destination, p.port, p.directionUnknown)))
-      return filteredRawFlows.filter(f => keys.has(pairKey(f.source, f.destination, f.port, f.directionUnknown)))
+      return filteredRawFlows.filter(f =>
+        keys.has(pairKey(graphEndpoint(f.source), graphEndpoint(f.destination), f.port, f.directionUnknown)))
     }
     if (graphSelection.type === 'node' && graphSelection.nodeId) {
       const id = graphSelection.nodeId
@@ -1107,6 +1109,27 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
       nodeCount: nodes.size,
     }))
   }, [flowsData?.aggregated, hideSystem, hideExternal, activeMinConnections])
+
+  // The map is laid out on the main thread, so a view too large to draw is
+  // held back until it is narrowed rather than freezing the tab.
+  const drawnGraph = useMemo(() => graphSize(finalFlows), [finalFlows])
+  const tooLargeToDraw = drawnGraph.score > GRAPH_DRAW_CEILING ||
+    (drawnGraph.score > GRAPH_DRAW_BUDGET && !drawAnyway)
+  // A selection made on a graph that is no longer drawn would keep filtering
+  // the flow list with nothing on screen to show it or clear it.
+  useEffect(() => {
+    if (tooLargeToDraw) setGraphSelection(null)
+  }, [tooLargeToDraw])
+  // Offered only while more than one namespace is in view: narrowing to the
+  // last one changes nothing.
+  const busiestNamespaces = useMemo(() => {
+    const inView = namespacesWithCounts.filter(ns => !hiddenNamespaces.has(ns.name))
+    if (inView.length < 2) return []
+    return inView.sort((a, b) => b.nodeCount - a.nodeCount).slice(0, 3).map(ns => ns.name)
+  }, [namespacesWithCounts, hiddenNamespaces])
+  const showOnlyNamespace = useCallback((keep: string) => {
+    setHiddenNamespaces(new Set(namespacesWithCounts.map(ns => ns.name).filter(ns => ns !== keep)))
+  }, [namespacesWithCounts])
 
   // Determine wizard state based on sources detection
   useEffect(() => {
@@ -1375,15 +1398,56 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                   />
                 </div>
               )}
-              <TrafficGraph
-                flows={finalFlows}
-                hotPathThreshold={hotPathThreshold}
-                showNamespaceGroups={showNamespaceGroups}
-                serviceCategories={serviceCategories}
-                addonMode={addonMode}
-                trafficSource={sourcesData?.active || ''}
-                onSelectionChange={setGraphSelection}
-              />
+              {tooLargeToDraw ? (
+                <div className="absolute inset-0 flex items-center justify-center px-4">
+                  <EmptyState
+                    tone="filtered"
+                    variant="card"
+                    icon={Network}
+                    headline="Too much traffic to draw at once"
+                    body={
+                      <>
+                        {pluralize(drawnGraph.nodes, 'endpoint')} and {pluralize(drawnGraph.edges, 'connection')} pass the current filters — more than the map can lay out without freezing this tab.
+                        {' '}Narrow it with the filters on the left: fewer namespaces, a minimum connection count, or external traffic hidden.
+                        {sampleSize > 0 && ' The flow list still shows the records.'}
+                      </>
+                    }
+                    action={
+                      <div className="flex flex-wrap items-center justify-center gap-2">
+                        {busiestNamespaces.map(ns => (
+                          <button
+                            key={ns}
+                            type="button"
+                            onClick={() => showOnlyNamespace(ns)}
+                            className="btn-brand-muted text-xs px-2.5 py-1 rounded-md"
+                          >
+                            Only {ns}
+                          </button>
+                        ))}
+                        {drawnGraph.score <= GRAPH_DRAW_CEILING && (
+                          <button
+                            type="button"
+                            onClick={() => setDrawAnyway(true)}
+                            className="text-xs px-2.5 py-1 rounded-md border border-theme-border text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover"
+                          >
+                            Draw anyway
+                          </button>
+                        )}
+                      </div>
+                    }
+                  />
+                </div>
+              ) : (
+                <TrafficGraph
+                  flows={finalFlows}
+                  hotPathThreshold={hotPathThreshold}
+                  showNamespaceGroups={showNamespaceGroups}
+                  serviceCategories={serviceCategories}
+                  addonMode={addonMode}
+                  trafficSource={sourcesData?.active || ''}
+                  onSelectionChange={setGraphSelection}
+                />
+              )}
             </>
           ) : connectionError ? (
             <div className="absolute inset-0 flex items-center justify-center">
