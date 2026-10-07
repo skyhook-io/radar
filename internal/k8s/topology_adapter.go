@@ -261,3 +261,7 @@ func (a *topologyDynamicProvider) IsCRD(kind string) bool {
 func (a *topologyDynamicProvider) IsCRDGVR(gvr schema.GroupVersionResource) bool {
 	return a.discovery.IsCRDGVR(gvr)
 }
+
+func (a *topologyDynamicProvider) AdmissionWebhookConsumers(gvr schema.GroupVersionResource, namespace, name string) ([]*unstructured.Unstructured, bool, error) {
+	return a.dynCache.AdmissionWebhookConsumers(gvr, namespace, name)
+}

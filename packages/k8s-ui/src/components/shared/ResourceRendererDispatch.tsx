@@ -976,8 +976,8 @@ export function ResourceRendererDispatch({
         {kind === 'serviceentries' && <IstioServiceEntryRenderer data={data} />}
         {kind === 'peerauthentications' && <IstioPeerAuthenticationRenderer data={data} />}
         {kind === 'authorizationpolicies' && <IstioAuthorizationPolicyRenderer data={data} />}
-        {kind === 'mutatingwebhookconfigurations' && <WebhookConfigRenderer data={data} isMutating />}
-        {kind === 'validatingwebhookconfigurations' && <WebhookConfigRenderer data={data} />}
+        {kind === 'mutatingwebhookconfigurations' && <WebhookConfigRenderer data={data} isMutating onNavigate={onNavigate} />}
+        {kind === 'validatingwebhookconfigurations' && <WebhookConfigRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'ingressclasses' && <IngressClassRenderer data={data} />}
         {kind === 'priorityclasses' && <PriorityClassRenderer data={data} />}
         {kind === 'runtimeclasses' && <RuntimeClassRenderer data={data} />}
