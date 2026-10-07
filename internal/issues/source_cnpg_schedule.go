@@ -2,7 +2,6 @@ package issues
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/cnpg"
@@ -132,7 +131,7 @@ func cnpgScheduledRunIssue(gvr schema.GroupVersionResource, cluster *unstructure
 		// Cron alone cannot establish a run's time without the operator's clock.
 		reported, _, _ := unstructured.NestedString(s.Object, "status", "lastScheduleTime")
 		fired, err := time.Parse(time.RFC3339, reported)
-		if err != nil || !fired.After(lastSuccess) || fired.After(now) || fired.Before(s.GetCreationTimestamp().Time) {
+		if err != nil || !fired.After(lastSuccess) || fired.After(now) || fired.Before(s.GetCreationTimestamp().Time) || fired.Before(cluster.GetCreationTimestamp().Time) {
 			continue
 		}
 		if now.Sub(fired) <= lastDuration+cnpgScheduledBackupGrace {
@@ -142,7 +141,7 @@ func cnpgScheduledRunIssue(gvr schema.GroupVersionResource, cluster *unstructure
 			worst.schedule, worst.spec, worst.fired = s.GetName(), spec, fired
 		}
 	}
-	if worst.fired.IsZero() || cnpgBackupInFlightSince(name, e.backups, lastSuccess) {
+	if worst.fired.IsZero() || cnpgBackupInFlightSince(cluster, e.backups, lastSuccess) {
 		return Issue{}, false
 	}
 
@@ -164,12 +163,11 @@ func cnpgScheduledRunIssue(gvr schema.GroupVersionResource, cluster *unstructure
 // CNPG records one, plus the duration of the newest completed Backup object
 // (zero when unknown).
 func cnpgLatestSuccessfulBackup(cluster *unstructured.Unstructured, e *cnpgNamespaceBackupEvidence) (time.Time, time.Duration) {
-	name := cluster.GetName()
 	var latest time.Time
 	var latestBackup time.Time
 	var duration time.Duration
 	for _, b := range e.backups {
-		if cnpgSpecClusterName(b) != name || !strings.HasPrefix(b.GetAPIVersion(), cnpgGroup+"/") {
+		if !cnpg.BackupMatchesCluster(b, cluster) {
 			continue
 		}
 		if phase, _, _ := unstructured.NestedString(b.Object, "status", "phase"); phase != "completed" {
@@ -197,21 +195,21 @@ func cnpgLatestSuccessfulBackup(cluster *unstructured.Unstructured, e *cnpgNames
 			if s.GetName() != plugin.objectStore {
 				continue
 			}
-			if t := cnpgParseTime(nestedString(s.Object, "status", "serverRecoveryWindow", plugin.serverName, "lastSuccessfulBackupTime")); t.After(latest) {
+			if t := cnpgParseTime(nestedString(s.Object, "status", "serverRecoveryWindow", plugin.serverName, "lastSuccessfulBackupTime")); t.After(latest) && !t.Before(cluster.GetCreationTimestamp().Time) {
 				latest = t
 			}
 		}
 	} else if !plugin.present {
-		if t := cnpgParseTime(nestedString(cluster.Object, "status", "lastSuccessfulBackup")); t.After(latest) {
+		if t := cnpgParseTime(nestedString(cluster.Object, "status", "lastSuccessfulBackup")); t.After(latest) && !t.Before(cluster.GetCreationTimestamp().Time) {
 			latest = t
 		}
 	}
 	return latest, duration
 }
 
-func cnpgBackupInFlightSince(cluster string, backups []*unstructured.Unstructured, since time.Time) bool {
+func cnpgBackupInFlightSince(cluster *unstructured.Unstructured, backups []*unstructured.Unstructured, since time.Time) bool {
 	for _, b := range backups {
-		if cnpgSpecClusterName(b) != cluster || !strings.HasPrefix(b.GetAPIVersion(), cnpgGroup+"/") {
+		if !cnpg.BackupMatchesCluster(b, cluster) {
 			continue
 		}
 		phase, _, _ := unstructured.NestedString(b.Object, "status", "phase")

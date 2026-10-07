@@ -4,6 +4,10 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -45,5 +49,45 @@ func TestBackupDeclarations(t *testing.T) {
 				t.Fatalf("Barman = %+v, want %+v", plugin, tc.Barman)
 			}
 		})
+	}
+}
+
+func TestBackupMatchesClusterIncarnation(t *testing.T) {
+	cluster := &unstructured.Unstructured{Object: map[string]any{"apiVersion": Group + "/v1", "kind": "Cluster", "metadata": map[string]any{"namespace": "pg", "name": "main", "uid": "current", "creationTimestamp": "2026-10-01T00:00:00Z"}}}
+	backup := &unstructured.Unstructured{Object: map[string]any{"apiVersion": Group + "/v1", "kind": "Backup", "metadata": map[string]any{"namespace": "pg", "name": "backup", "creationTimestamp": "2026-10-01T01:00:00Z"}, "spec": map[string]any{"cluster": map[string]any{"name": "main"}}}}
+	if !BackupMatchesCluster(backup, cluster) {
+		t.Fatal("current unowned backup excluded")
+	}
+	for _, uid := range []string{"previous", "current"} {
+		b := backup.DeepCopy()
+		_ = unstructured.SetNestedField(b.Object, uid, "status", "pluginMetadata", "clusterUID")
+		if BackupMatchesCluster(b, cluster) != (uid == "current") {
+			t.Fatalf("pluginMetadata UID %s not respected", uid)
+		}
+		b = backup.DeepCopy()
+		b.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: Group + "/v1", Kind: "Cluster", Name: "main", UID: types.UID(uid)}})
+		if BackupMatchesCluster(b, cluster) != (uid == "current") {
+			t.Fatalf("owner UID %s not respected", uid)
+		}
+	}
+	old := backup.DeepCopy()
+	old.SetCreationTimestamp(metav1.NewTime(time.Date(2026, 9, 30, 23, 0, 0, 0, time.UTC)))
+	if BackupMatchesCluster(old, cluster) {
+		t.Fatal("backup from before creation included")
+	}
+	old = backup.DeepCopy()
+	_ = unstructured.SetNestedField(old.Object, "2026-09-30T23:00:00Z", "status", "startedAt")
+	if BackupMatchesCluster(old, cluster) {
+		t.Fatal("run from before creation included")
+	}
+	wrong := backup.DeepCopy()
+	wrong.SetNamespace("elsewhere")
+	if BackupMatchesCluster(wrong, cluster) {
+		t.Fatal("cross-namespace backup included")
+	}
+	wrong.SetNamespace("pg")
+	wrong.SetAPIVersion("velero.io/v1")
+	if BackupMatchesCluster(wrong, cluster) {
+		t.Fatal("other API group's Backup included")
 	}
 }

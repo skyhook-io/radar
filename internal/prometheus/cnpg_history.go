@@ -31,6 +31,7 @@ const (
 	CNPGHistoryStateError     = "error"
 	CNPGHistoryStateNotRead   = "notRead"
 	CNPGHistoryStateAmbiguous = "ambiguous"
+	CNPGMetricLookback        = 5 * time.Minute
 
 	cnpgHistoryMaxSeries   = 12
 	cnpgHistoryConcurrency = 4
@@ -249,7 +250,7 @@ func (r CNPGHistoryRange) Bounds(end, createdAt time.Time) (time.Time, time.Time
 	end = end.Truncate(r.Step)
 	start := end.Add(-r.Duration)
 	if !createdAt.IsZero() {
-		earliest := createdAt.Add(max(5*time.Minute, 2*r.Step)).UTC()
+		earliest := createdAt.Add(max(CNPGMetricLookback, 2*r.Step)).UTC()
 		aligned := earliest.Truncate(r.Step)
 		if aligned.Before(earliest) {
 			aligned = aligned.Add(r.Step)

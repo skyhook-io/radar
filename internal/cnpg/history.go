@@ -358,7 +358,7 @@ func (s *Reader) namespaceFleetMetrics(callerCtx context.Context, cache *k8s.Res
 			growths[i] = g
 		}
 	}
-	return cnpgFleetMetricsRows(namespace, clusters, lags, slots, growths)
+	return cnpgFleetMetricsRows(namespace, clusters, lags, slots, growths, claimsByCluster)
 }
 
 // cnpgFleetReceivers adds a standby-reporting Cluster's WAL receiver evidence
@@ -432,9 +432,38 @@ func (s *Reader) fleetClaims(ctx context.Context, cache *k8s.ResourceCache, name
 	return out, CNPGFleetGrowth{}
 }
 
-func cnpgFleetMetricsRows(namespace string, clusters []*unstructured.Unstructured, lags []CNPGFleetLag, slots []CNPGFleetSlots, growths []CNPGFleetGrowth) []CNPGClusterFleetMetrics {
+func cnpgFleetMetricsRows(namespace string, clusters []*unstructured.Unstructured, lags []CNPGFleetLag, slots []CNPGFleetSlots, growths []CNPGFleetGrowth, claimsByCluster map[string][]*corev1.PersistentVolumeClaim) []CNPGClusterFleetMetrics {
 	out := make([]CNPGClusterFleetMetrics, len(clusters))
 	for i, c := range clusters {
+		createdAt := c.GetCreationTimestamp().Time
+		if !createdAt.IsZero() {
+			age := time.Since(createdAt)
+			if age < prometheuspkg.CNPGMetricLookback {
+				if lags[i].State == historyStateOK || lags[i].State == "noStandby" {
+					lags[i] = CNPGFleetLag{State: usageStateNotRead, Reason: "Waiting for exporter samples after this Cluster was created"}
+				}
+				if slots[i].State == historyStateOK {
+					slots[i] = CNPGFleetSlots{State: usageStateNotRead, Reason: "Waiting for exporter samples after this Cluster was created"}
+				}
+			}
+			if age < prometheuspkg.CNPGSustainedLagWindow+prometheuspkg.CNPGMetricLookback {
+				lags[i].SustainedSeconds, lags[i].SustainedPod, lags[i].SustainedWindow = nil, "", ""
+			}
+			if age < prometheuspkg.CNPGReceiverDownWindow+prometheuspkg.CNPGMetricLookback {
+				lags[i].ReceiverDownSustained, lags[i].ReceiverDownWindow = nil, ""
+			}
+			if growths[i].State == historyStateOK && age < cnpgFleetGrowthWindow {
+				growths[i] = CNPGFleetGrowth{State: usageStateNotRead, Reason: "Waiting for a full volume-growth window after this Cluster was created"}
+			}
+		}
+		if growths[i].State == historyStateOK {
+			for _, pvc := range claimsByCluster[c.GetName()] {
+				if !pvc.CreationTimestamp.IsZero() && time.Since(pvc.CreationTimestamp.Time) < cnpgFleetGrowthWindow {
+					growths[i] = CNPGFleetGrowth{State: usageStateNotRead, Reason: "Waiting for a full volume-growth window after this Cluster's PVCs were created"}
+					break
+				}
+			}
+		}
 		out[i] = CNPGClusterFleetMetrics{Namespace: namespace, Name: c.GetName(), Lag: lags[i], Slots: slots[i], Growth: growths[i]}
 	}
 	return out

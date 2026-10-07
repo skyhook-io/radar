@@ -580,3 +580,19 @@ it('uses server findings without classifying cached-object problems again', () =
   expect(row.primaryConflict).toEqual({ status: 'pg-a-2', labelled: 'pg-a-1' })
   expect(row.problems).toEqual([])
 })
+
+
+it('excludes predecessor backup success, failures and restores from a recreated Cluster', () => {
+  const c = cluster('pg-a', 'db', { metadata: { uid: 'current', creationTimestamp: '2026-10-01T00:00:00Z' }, spec: { plugins: [{ name: 'barman-cloud.cloudnative-pg.io', isWALArchiver: true, parameters: { barmanObjectName: 'store' } }] } })
+  const old = { apiVersion: G, kind: 'Backup', metadata: { name: 'old', namespace: 'db', creationTimestamp: '2026-10-01T01:00:00Z' }, spec: { cluster: { name: 'pg-a' } }, status: { phase: 'completed', startedAt: '2026-10-01T01:00:00Z', stoppedAt: '2026-10-01T01:01:00Z', pluginMetadata: { clusterUID: 'previous' } } }
+  const failed = { ...old, metadata: { ...old.metadata, name: 'old-failed' }, status: { ...old.status, phase: 'failed' } }
+  const restored = cluster('restored', 'db', { spec: { bootstrap: { recovery: { backup: { name: 'old' } } } } })
+  const store = { apiVersion: 'barmancloud.cnpg.io/v1', kind: 'ObjectStore', metadata: { name: 'store', namespace: 'db' }, status: { serverRecoveryWindow: { 'pg-a': { lastSuccessfulBackupTime: '2026-09-30T23:00:00Z' } } } }
+  const data = resp({ clusters: [c, restored], backups: [old, failed], objectStores: [store] }, { issues: [serverProblem('CNPGBackupFailed', 'Previous backup failed', 'Backup', 'old-failed')] })
+  const row = buildCNPGFleet(data).rows.find((r) => r.name === 'pg-a')!
+  expect(row.protection.lastSuccessfulBackup.text).toBe('No successful backup yet')
+  expect(row.protection.restoreValidation.text).toBe('None recorded')
+  expect(row.problems.some((p) => p.subject.name === 'old-failed')).toBe(false)
+  const current = { ...old, status: { ...old.status, pluginMetadata: { clusterUID: 'current' } } }
+  expect(buildCNPGFleet({ ...data, objects: { ...data.objects, backups: [current, failed] } }).rows.find((r) => r.name === 'pg-a')!.protection.lastSuccessfulBackup).toMatchObject({ text: 'Completed', source: 'Backup old' })
+})

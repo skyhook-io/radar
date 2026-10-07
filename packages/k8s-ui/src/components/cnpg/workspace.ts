@@ -3,7 +3,7 @@ import { cnpgBackupDeclaration, cnpgBarmanPlugin } from '../../utils/cnpg-backup
 // payload. Every fact here is something the cluster actually reports; when it
 // does not report something the value is "unknown", never zero or healthy.
 
-import { backupsForScheduledBackup, cnpgScheduleDestinationBlocker } from './relations'
+import { backupsForScheduledBackup, cnpgScheduleDestinationBlocker, cnpgBackupMatchesCluster, targetCluster } from './relations'
 import { cnpgRoleState } from './databaseRole'
 import { formatAge, summarizeSchedulerMessage, type HealthLevel } from '../resources/resource-utils'
 import { worseTone } from '../ui/status-tone'
@@ -330,11 +330,9 @@ export function cnpgFoldLastBackupFailed(problems: IssueProblem[], newestBackup:
 // When each of the cluster's Backups started (status.startedAt, else its
 // creation), by name: the issues about Backups carry no time of their own.
 function backupTimesOf(cluster: any, backups: any[]): Map<string, number> {
-  const ns = cluster.metadata?.namespace
-  const name = cluster.metadata?.name
   const out = new Map<string, number>()
   for (const b of backups) {
-    if (b?.metadata?.namespace !== ns || specClusterName(b) !== name) continue
+    if (!cnpgBackupMatchesCluster(b, cluster)) continue
     out.set(b.metadata.name, Date.parse(b?.status?.startedAt ?? b?.metadata?.creationTimestamp ?? '') || 0)
   }
   return out
@@ -582,14 +580,12 @@ function lastBackupFact(
   storesUnreadable: CNPGKindCoverage | null,
 ): CNPGProtectionFacts['lastSuccessfulBackup'] {
   const ns = cluster.metadata?.namespace
-  const name = cluster.metadata?.name
   const candidates: { at: string; source: string }[] = []
   if (coverageReadable(backupsCov, ns)) {
     const completed = backups
       .filter(
         (b) =>
-          b.metadata?.namespace === ns &&
-          specClusterName(b) === name &&
+          cnpgBackupMatchesCluster(b, cluster) &&
           isApiGroup(b.apiVersion, 'postgresql.cnpg.io') &&
           b.status?.phase === 'completed',
       )
@@ -600,14 +596,16 @@ function lastBackupFact(
   if (window?.lastSuccess) candidates.push({ at: window.lastSuccess, source: `ObjectStore ${window.store} status` })
   const cfg = getCNPGClusterBackupConfig(cluster)
   if (!cfg.plugin && cfg.lastSuccessfulBackup) candidates.push({ at: cfg.lastSuccessfulBackup, source: 'Cluster status' })
-  if (candidates.length === 0) {
+  const createdAt = Date.parse(cluster.metadata?.creationTimestamp ?? '')
+  const current = candidates.filter((candidate) => !Number.isFinite(createdAt) || Date.parse(candidate.at) >= createdAt)
+  if (current.length === 0) {
     if (!coverageReadable(backupsCov, ns)) {
       return { text: cnpgCoverageGap(backupsCov, 'Backups', ns), tone: 'unknown', source: 'Backups not read' }
     }
     if (storesUnreadable) return { text: cnpgCoverageGap(storesUnreadable, 'ObjectStores', ns), tone: 'unknown' }
     return { text: 'No successful backup yet', tone: 'degraded', source: 'Backups read in this namespace; none completed' }
   }
-  const best = candidates.reduce((a, b) => (Date.parse(a.at) >= Date.parse(b.at) ? a : b))
+  const best = current.reduce((a, b) => (Date.parse(a.at) >= Date.parse(b.at) ? a : b))
   return { text: 'Completed', tone: 'healthy', at: best.at, source: best.source }
 }
 
@@ -684,7 +682,6 @@ function restoreValidationFact(
   const server = plugin?.serverName || cluster.metadata?.name
   const store = plugin?.barmanObjectName
   const ns = cluster.metadata?.namespace
-  const name = cluster.metadata?.name
   const restoredFromThis = allClusters.filter((c) => {
     if (c === cluster || c.metadata?.namespace !== ns) return false
     const recovery = c.spec?.bootstrap?.recovery
@@ -698,7 +695,7 @@ function restoreValidationFact(
     const backupName = recovery.backup?.name
     if (!backupName) return false
     const backup = backups.find((b) => b.metadata?.namespace === ns && b.metadata?.name === backupName)
-    return specClusterName(backup) === name
+    return cnpgBackupMatchesCluster(backup, cluster)
   })
   const noted = restoredFromThis
     .map((c) => ({ c, note: getCNPGRestoreValidation(c) }))
@@ -930,6 +927,7 @@ function childIndex(resp: CNPGWorkspaceResponse): Map<string, string> {
   const idx = new Map<string, string>()
   const add = (kind: string, list: any[] | undefined) => {
     for (const o of list ?? []) {
+      if (kind === 'Backup' && !targetCluster(o, resp.objects.clusters ?? [])) continue
       const c = specClusterName(o)
       if (c) idx.set(`${kind}/${o.metadata?.namespace}/${o.metadata?.name}`, c)
     }

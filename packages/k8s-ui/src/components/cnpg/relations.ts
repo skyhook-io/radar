@@ -82,7 +82,8 @@ export function clustersIn(ws: CNPGWorkspaceResponse | null | undefined): any[] 
 export function targetCluster(obj: any, clusters: any[]): any | null {
   const name = specCluster(obj)
   if (!name) return null
-  return clusters.find((c) => isCNPGKind(c, 'Cluster') && nsOf(c) === nsOf(obj) && nameOf(c) === name) ?? null
+  const cluster = clusters.find((c) => isCNPGKind(c, 'Cluster') && nsOf(c) === nsOf(obj) && nameOf(c) === name) ?? null
+  return isCNPGKind(obj, 'Backup') && !cnpgBackupMatchesCluster(obj, cluster) ? null : cluster
 }
 
 // ---------------------------------------------------------------------------
@@ -165,7 +166,7 @@ export function backupTime(backup: any): number {
 export function cnpgBackupMatchesCluster(backup: any, cluster: any): boolean {
   if (!cluster || backup?.spec?.cluster?.name !== cluster.metadata?.name || backup.metadata?.namespace !== cluster.metadata?.namespace) return false
   const owner = backup.metadata?.ownerReferences?.find((ref: any) => ref.kind === 'Cluster' && isApiGroup(ref.apiVersion, CNPG_GROUP))
-  const recordedUID = backup.status?.metadata?.clusterUID || owner?.uid
+  const recordedUID = backup.status?.pluginMetadata?.clusterUID || owner?.uid
   if (recordedUID && recordedUID !== cluster.metadata?.uid) return false
   const began = Date.parse(backup.status?.startedAt ?? backup.metadata?.creationTimestamp ?? '')
   const created = Date.parse(cluster.metadata?.creationTimestamp ?? '')

@@ -1,9 +1,45 @@
 // Package cnpg interprets CloudNativePG declarations without I/O or caller permissions.
 package cnpg
 
-import "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+import (
+	"time"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
 
 const BarmanPluginName = "barman-cloud.cloudnative-pg.io"
+
+// BackupMatchesCluster excludes runs from a previous Cluster with the same name.
+func BackupMatchesCluster(backup, cluster *unstructured.Unstructured) bool {
+	if backup == nil || cluster == nil || resourceid.GroupFromAPIVersion(backup.GetAPIVersion()) != Group || backup.GetNamespace() != cluster.GetNamespace() {
+		return false
+	}
+	name, _, _ := unstructured.NestedString(backup.Object, "spec", "cluster", "name")
+	if name != cluster.GetName() {
+		return false
+	}
+	uid, _, _ := unstructured.NestedString(backup.Object, "status", "pluginMetadata", "clusterUID")
+	if uid == "" {
+		for _, owner := range backup.GetOwnerReferences() {
+			if owner.Kind == "Cluster" && resourceid.GroupFromAPIVersion(owner.APIVersion) == Group {
+				uid = string(owner.UID)
+				break
+			}
+		}
+	}
+	if uid != "" && uid != string(cluster.GetUID()) {
+		return false
+	}
+	began := backup.GetCreationTimestamp().Time
+	if raw, _, _ := unstructured.NestedString(backup.Object, "status", "startedAt"); raw != "" {
+		if started, err := time.Parse(time.RFC3339, raw); err == nil {
+			began = started
+		}
+	}
+	created := cluster.GetCreationTimestamp().Time
+	return began.IsZero() || created.IsZero() || !began.Before(created)
+}
 
 type BackupPlugin struct {
 	Name        string

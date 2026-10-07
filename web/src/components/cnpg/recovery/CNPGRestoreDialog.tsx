@@ -262,7 +262,8 @@ export function CNPGRestoreDialog({ namespace, entry, onClose }: { namespace: st
       warnings={noSource ? [] : [
         ...(customIdentity ? ['Advanced YAML changed the recovery source, image or resource shape. The setup shows the original source evidence; review the current YAML for the intended configuration.'] : []),
         ...(availability?.unreadReason ? [availability.unreadReason] : []),
-        ...(source?.majorVersion ? [`This backup was taken on PostgreSQL ${source.majorVersion}. Physical recovery requires that major version.`] : pinned ? ['This Backup does not record its PostgreSQL major. Choose a matching image; the current source image may have changed since the backup.'] : []),
+        ...(catalog && (source?.kind === 'backup' || pinned) ? [`Verify that ${catalog.kind ?? 'ImageCatalog'} ${catalog.name} contains a PostgreSQL ${catalog.major} image. Catalog availability has not been checked.`] : []),
+        ...(source?.majorVersion ? [`This backup was taken on PostgreSQL ${source.majorVersion}. Physical recovery requires that major version.`] : source?.kind === 'backup' || pinned ? ['This Backup does not record its PostgreSQL major. Choose a matching image; the current source image may have changed since the backup.'] : []),
         ...(setupStep === 'target' ? ['The new cluster has no WAL archiving or backups until you configure them.', ...(serverName ? [`If you add archiving later, do not reuse server name "${serverName}": the new cluster would write into the archive it restores from.`] : [])] : []),
         ...warnings,
         ...(permission.unchecked ? [permission.unchecked] : []),

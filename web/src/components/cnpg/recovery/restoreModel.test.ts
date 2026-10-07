@@ -11,6 +11,7 @@ import {
   pitrWarnings,
   preflightFacts,
   recoveryEvidenceFor,
+  assessRestoreSources,
   restoreSourceForBackup,
   restoreSourcesFor,
   restoreSourcesForStore,
@@ -334,8 +335,8 @@ describe('restore availability and image review', () => {
     expect(assessRestoreSources(partial, 'other', sourceCluster).disabledReason).toBeUndefined()
     expect(assessRestoreSources(data, 'db', cluster).disabledReason).toBeUndefined()
   })
-  it('copies status.image only without a declared image or catalog and labels its origin', () => {
-    const source = { kind: 'backup', backup: 'b' } as const
+  it('copies status.image for an unpinned archive only without a declared image or catalog and labels its origin', () => {
+    const source = { kind: 'objectStore', objectStore: 'store', serverName: 'pg' } as const
     const build = (sourceCluster: any) => buildRestoreManifest({ sourceCluster, source, namespace: 'db', newName: 'r', target: { kind: 'latest' } }).spec
     const fromStatus = { spec: {}, status: { image: 'pg:17.6' } }
     expect(build(fromStatus).imageName).toBe('pg:17.6')
@@ -463,7 +464,7 @@ describe('physical recovery compatibility', () => {
  })
  it('rejects plugin backups belonging to a predecessor Cluster', () => {
   const current = { ...cluster, metadata: { ...cluster.metadata, uid: 'current', creationTimestamp: '2026-09-30T00:00:00Z' } }
-  expect(restoreSourceForBackup({ ...pluginBackup, status: { ...pluginBackup.status, metadata: { clusterUID: 'old' } } }, current)).toBeNull()
+  expect(restoreSourceForBackup({ ...pluginBackup, status: { ...pluginBackup.status, pluginMetadata: { clusterUID: 'old' } } }, current)).toBeNull()
   expect(restoreSourceForBackup({ ...pluginBackup, status: { ...pluginBackup.status, startedAt: '2026-09-29T22:00:00Z' } }, current)).toBeNull()
  })
  it('does not mark backup protection complete from its declaration alone', () => {
@@ -471,4 +472,29 @@ describe('physical recovery compatibility', () => {
   expect(step.state).toBe('partial')
   expect(step.note).toContain('complete a new base backup')
  })
+})
+
+
+it('pins all named Backup methods to their recorded major and requires an image when unknown', () => {
+  for (const method of ['barmanObjectStore', 'volumeSnapshot']) {
+    const backup = { ...pluginBackup, spec: { cluster: { name: 'pg-a' }, method }, status: { ...pluginBackup.status, method, majorVersion: 16 } }
+    const source = restoreSourceForBackup(backup, cluster)!
+    expect(source).toMatchObject({ kind: 'backup', majorVersion: 16 })
+    const args = { sourceCluster: cluster, source, namespace: 'db', newName: 'restore', target: { kind: 'latest' as const } }
+    expect(buildRestoreManifest(args).spec.imageCatalogRef.major).toBe(16)
+    const unknown = restoreSourceForBackup({ ...backup, status: { ...backup.status, majorVersion: undefined } }, cluster)!
+    expect(buildRestoreManifest({ ...args, source: unknown }).spec.imageCatalogRef).toBeUndefined()
+    expect(buildRestoreManifest({ ...args, source: unknown }).spec.imageName).toBeUndefined()
+  }
+})
+
+it('does not use predecessor Backup metadata as evidence of recovery for a recreated Cluster', () => {
+  const current = { ...cluster, metadata: { ...cluster.metadata, uid: 'current', creationTimestamp: '2026-09-29T00:00:00Z' } }
+  const old = { ...pluginBackup, status: { ...pluginBackup.status, pluginMetadata: { clusterUID: 'previous' } } }
+  const data = { coverage: { backups: { state: 'full' }, objectStores: { state: 'full' } }, objects: { backups: [old], objectStores: [{ ...store, status: {} }] } } as any
+  const assessment = assessRestoreSources(data, 'db', current)
+  expect(assessment.recoveryState).toBe('unknown')
+  expect(assessment.unreadReason).toContain('previous Cluster incarnation')
+  expect(assessment.unreadReason).not.toContain('no longer names an ObjectStore')
+  expect(recoveryEvidenceFor(assessment.sources[0], { sourceCluster: current, stores: [], backups: [old], namespace: 'db' }).lastBackup).toBeUndefined()
 })

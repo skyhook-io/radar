@@ -96,6 +96,8 @@ export function assessRestoreSources(data: CNPGWorkspaceResponse | undefined, na
     const pluginName = getCNPGBackupPlugin(backup)?.name
     if (pluginName !== CNPG_BARMAN_PLUGIN_NAME) {
       unread.push(`Recovery sources for Backup ${backup.metadata?.name} using plugin ${pluginName ?? '(not named)'} cannot be assessed.`)
+    } else if (backup.status?.phase === 'completed' && !cnpgBackupMatchesCluster(backup, cluster)) {
+      unread.push(`Backup ${backup.metadata?.name} belongs to a previous Cluster incarnation, so its archive cannot be inferred from this Cluster.`)
     } else if (backup.status?.phase === 'completed' && !objectStoreForBackup(backup, [cluster])) {
       unread.push(`Backup ${backup.metadata?.name} completed with the barman-cloud plugin, but the Cluster no longer names an ObjectStore, so where it is stored is unknown.`)
     }
@@ -111,7 +113,7 @@ export function assessRestoreSources(data: CNPGWorkspaceResponse | undefined, na
 
 function restoreImage(cluster: any, source?: RestoreSource): { imageCatalogRef?: any; imageName?: string } {
   const spec = cluster?.spec
-  if (source && sourcePinsBackup(source)) {
+  if (source && (source.kind === 'backup' || sourcePinsBackup(source))) {
     if (!source.majorVersion) return {}
     if (spec?.imageCatalogRef) return { imageCatalogRef: { ...spec.imageCatalogRef, major: source.majorVersion } }
     const running = cluster?.status?.pgDataImageInfo
@@ -211,7 +213,7 @@ export function recoveryEvidenceFor(
   }
 
   const ownBackups = ctx.backups.filter(
-    (b) => b?.metadata?.namespace === ctx.namespace && b?.status?.phase === 'completed' && (!isPluginBackup(b) || getCNPGBackupPlugin(b)?.name === CNPG_BARMAN_PLUGIN_NAME) && (clusterName ? b?.spec?.cluster?.name === clusterName : false),
+    (b) => b?.metadata?.namespace === ctx.namespace && b?.status?.phase === 'completed' && (!isPluginBackup(b) || getCNPGBackupPlugin(b)?.name === CNPG_BARMAN_PLUGIN_NAME) && cnpgBackupMatchesCluster(b, cluster),
   )
   const newestBackup = newest(ownBackups.map((b) => (backupEnd(b) ? { at: backupEnd(b)!, source: `Backup ${b.metadata?.name}` } : undefined)))
   out.lastBackup = newest([out.lastBackup, newestBackup])

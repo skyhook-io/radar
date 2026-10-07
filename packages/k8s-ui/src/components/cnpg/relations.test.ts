@@ -338,7 +338,7 @@ it('does not apply declaration results from an earlier spec', () => {
 
 it('never infers a plugin archive from a replacement Cluster', () => {
  const target = { ...pluginCluster('main', 'new-store'), metadata: { name: 'main', namespace: 'pg', uid: 'new', creationTimestamp: '2026-10-01T00:00:00Z' } }
- for (const status of [{ metadata: { clusterUID: 'old' } }, { startedAt: '2026-09-30T00:00:00Z' }]) {
+ for (const status of [{ pluginMetadata: { clusterUID: 'old' } }, { startedAt: '2026-09-30T00:00:00Z' }]) {
   const old = backup('old', { spec: { method: 'plugin', pluginConfiguration: { name: PLUGIN } }, status })
   expect(objectStoreForBackup(old, [target])).toBeNull()
  }

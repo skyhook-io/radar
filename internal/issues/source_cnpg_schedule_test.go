@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -251,5 +252,28 @@ func TestCNPGScheduledRunThroughCompose(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("issues = %v, want %s", reasonsOf(got), ReasonCNPGScheduledRunNoBackup)
+	}
+}
+
+func TestCNPGScheduledRunExcludesPredecessorEvidence(t *testing.T) {
+	c := cnpgCluster(map[string]any{"plugins": []any{map[string]any{"name": "barman-cloud.cloudnative-pg.io", "parameters": map[string]any{"barmanObjectName": "store", "serverName": "main"}}}}, nil)
+	c.SetUID("current")
+	c.SetCreationTimestamp(metav1.NewTime(cnpgScheduleNow.Add(-time.Hour)))
+	old := cnpgBackupAt("old", "completed", cnpgScheduleNow.Add(-25*time.Minute), cnpgScheduleNow.Add(-20*time.Minute))
+	_ = unstructured.SetNestedField(old.Object, "previous", "status", "pluginMetadata", "clusterUID")
+	running := old.DeepCopy()
+	_ = unstructured.SetNestedField(running.Object, "running", "status", "phase")
+	store := cnpgSchedObj("ObjectStore", "store", cnpgScheduleNow.Add(-48*time.Hour), nil, map[string]any{"serverRecoveryWindow": map[string]any{"main": map[string]any{"lastSuccessfulBackupTime": cnpgScheduleNow.Add(-2 * time.Hour).Format(time.RFC3339)}}})
+	store.SetAPIVersion("barmancloud.cnpg.io/v1")
+	e := &cnpgNamespaceBackupEvidence{schedules: []*unstructured.Unstructured{cnpgHourly(false)}, backups: []*unstructured.Unstructured{old, running}, stores: []*unstructured.Unstructured{store}}
+	if last, duration := cnpgLatestSuccessfulBackup(c, e); !last.IsZero() || duration != 0 {
+		t.Fatalf("predecessor success counted: %s, %s", last, duration)
+	}
+	if _, ok := cnpgScheduledRunIssue(cnpgClusterGVR, c, e, cnpgScheduleNow); !ok {
+		t.Fatal("predecessor run suppressed current missed-run finding")
+	}
+	c.SetCreationTimestamp(metav1.NewTime(cnpgScheduleNow.Add(-10 * time.Minute)))
+	if _, ok := cnpgScheduledRunIssue(cnpgClusterGVR, c, e, cnpgScheduleNow); ok {
+		t.Fatal("schedule fired before current Cluster existed")
 	}
 }
