@@ -27,21 +27,23 @@ func writeExecutable(t *testing.T, dir, name string) string {
 
 func TestLookupAgentFindsWellKnownInstallsOffPATH(t *testing.T) {
 	cases := []struct {
-		name string
-		dir  []string
+		name  string
+		agent string
+		dir   []string
 	}{
-		{"native installer", []string{".local", "bin"}},
-		{"claude migrate-installer (alias-only, never on PATH)", []string{".claude", "local"}},
+		{"native installer", "claude", []string{".local", "bin"}},
+		{"claude migrate-installer (alias-only, never on PATH)", "claude", []string{".claude", "local"}},
+		{"opencode install script", "opencode", []string{".opencode", "bin"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 			t.Setenv("PATH", "")
-			want := writeExecutable(t, filepath.Join(append([]string{home}, c.dir...)...), "claude")
+			want := writeExecutable(t, filepath.Join(append([]string{home}, c.dir...)...), c.agent)
 
-			if got := lookupAgent("claude"); got != want {
-				t.Errorf("lookupAgent(claude) = %q, want %q", got, want)
+			if got := lookupAgent(c.agent); got != want {
+				t.Errorf("lookupAgent(%s) = %q, want %q", c.agent, got, want)
 			}
 		})
 	}

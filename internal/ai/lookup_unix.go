@@ -24,6 +24,9 @@ func agentBinDirs() []string {
 			// Claude Code's `migrate-installer` layout. It is reachable only
 			// through a shell alias, so no PATH lookup can ever find it.
 			filepath.Join(home, ".claude", "local"),
+			// OpenCode's install script. It reaches PATH only through the
+			// line it appends to the shell rc file.
+			filepath.Join(home, ".opencode", "bin"),
 		)
 	}
 	return append(dirs,
