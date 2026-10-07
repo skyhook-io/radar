@@ -31,8 +31,8 @@ describe('nextGoneState', () => {
   })
 
   it('waits longer each time the probe finds it still gone', () => {
-    // A view left open on a deleted pod should approach free, not settle on a
-    // rate comparable to the storm this replaced.
+    // A view left open on a deleted pod should cost close to nothing, not a
+    // steady request every 30 seconds.
     let state = initialGoneState
     let now = T0
     const waits: number[] = []
@@ -76,7 +76,7 @@ describe('releaseForProbe', () => {
   })
 })
 
-const fresh = (identity: string): TrackedGone => ({ identity, settledAt: 0, gone: initialGoneState })
+const fresh = (identity: string): TrackedGone => ({ identity, settledAt: 0, presentSinceSettle: false, gone: initialGoneState })
 
 describe('trackedFor', () => {
   it('never inherits the previous target quiet period', () => {
@@ -132,9 +132,23 @@ describe('markPresent', () => {
     expect(back.settledAt).toBe(state.settledAt)
   })
 
-  it('leaves a live view untouched, so routine events cause no render', () => {
-    const state = fresh('k')
-    expect(markPresent(state)).toBe(state)
+  it('changes a live view once per fetch, so routine events cause no render', () => {
+    const marked = markPresent(fresh('k'))
+    expect(markPresent(marked)).toBe(marked)
+  })
+
+  it('does not let a 404 answered before the object came back quiet the view', () => {
+    // A fetch in flight across a delete and recreate can land its 404 after
+    // the recreate event. That event already refetches the kind; going quiet
+    // would turn that refetch away and hide the object until the next probe.
+    const marked = markPresent(fresh('k'))
+    const stale = observeSettled(marked, T0, { isGone: true, now: T0 })
+    expect(stale.gone).toEqual(initialGoneState)
+    expect(stale.presentSinceSettle).toBe(false)
+
+    // The next 404 is the server's current answer and quiets as usual.
+    const current = observeSettled(stale, T0 + 1, { isGone: true, now: T0 + 1 })
+    expect(current.gone.suppressedUntil).toBe(T0 + 1 + GONE_BACKOFF_MS[0])
   })
 })
 

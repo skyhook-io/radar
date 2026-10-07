@@ -20,8 +20,8 @@ import type { QueryClient } from '@tanstack/react-query'
  * Quiet periods between probes, in ms. A resource that is still missing on the
  * second look is usually gone for good, so the gap widens rather than settling
  * on one interval: a short first wait still catches a resource rebuilt under
- * the same name when its watch event was missed, and the cap keeps a long-open
- * view close to free instead of merely cheaper than the storm it replaced.
+ * the same name when its watch event was missed, and the cap keeps a view
+ * left open overnight to about one request every five minutes.
  */
 export const GONE_BACKOFF_MS = [30_000, 60_000, 120_000, 300_000]
 
@@ -66,6 +66,8 @@ export interface TrackedGone {
   identity: string
   /** When the last counted fetch settled (epoch ms), 0 before any. */
   settledAt: number
+  /** The cluster has reported the object since that fetch settled. */
+  presentSinceSettle: boolean
   gone: GoneState
 }
 
@@ -75,7 +77,7 @@ export interface TrackedGone {
  * inherits the previous target's quiet period.
  */
 export function trackedFor(prev: TrackedGone, identity: string): TrackedGone {
-  return prev.identity === identity ? prev : { identity, settledAt: 0, gone: initialGoneState }
+  return prev.identity === identity ? prev : { identity, settledAt: 0, presentSinceSettle: false, gone: initialGoneState }
 }
 
 /**
@@ -83,16 +85,22 @@ export function trackedFor(prev: TrackedGone, identity: string): TrackedGone {
  * query with no data clears its error while in flight, so reading the error
  * on every render would count that as the resource coming back and keep the
  * backoff on its shortest step.
+ *
+ * A 404 that settles after the cluster reported the object was answered
+ * before the object came back, so it starts no quiet period. The event that
+ * reported it also refetches the kind, and that fetch finds it.
  */
 export function observeSettled(prev: TrackedGone, settledAt: number, fetch: SettledFetch): TrackedGone {
   if (settledAt === 0 || settledAt === prev.settledAt) return prev
-  return { ...prev, settledAt, gone: nextGoneState(prev.gone, fetch) }
+  if (fetch.isGone && prev.presentSinceSettle) return { ...prev, settledAt, presentSinceSettle: false }
+  return { ...prev, settledAt, presentSinceSettle: false, gone: nextGoneState(prev.gone, fetch) }
 }
 
 /** The cluster says the object exists: end any quiet period and backoff. */
 export function markPresent(prev: TrackedGone): TrackedGone {
-  if (prev.gone.suppressedUntil === null && prev.gone.strikes === 0) return prev
-  return { ...prev, gone: initialGoneState }
+  const live = prev.gone.suppressedUntil === null && prev.gone.strikes === 0
+  if (live && prev.presentSinceSettle) return prev
+  return { ...prev, presentSinceSettle: true, gone: initialGoneState }
 }
 
 /**

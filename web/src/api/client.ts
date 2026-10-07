@@ -2613,7 +2613,7 @@ export function fetchResourceWithRelationships<T>(
 function useGoneSuppression(kind: string, namespace: string, name: string, group: string | undefined) {
   const queryClient = useQueryClient();
   const identity = `${kind}/${namespace}/${name}/${group ?? ""}`;
-  const [tracked, setTracked] = useState<TrackedGone>(() => ({ identity, settledAt: 0, gone: initialGoneState }));
+  const [tracked, setTracked] = useState<TrackedGone>(() => ({ identity, settledAt: 0, presentSinceSettle: false, gone: initialGoneState }));
   const suppressedUntil = trackedFor(tracked, identity).gone.suppressedUntil;
 
   const observe = useCallback(
