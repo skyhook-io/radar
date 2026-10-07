@@ -64,6 +64,8 @@ func (m mockServiceBackends) PodsForServiceSelector(namespace string, selector l
 }
 
 type mockResourceProvider struct {
+	pvcs         []*corev1.PersistentVolumeClaim
+	pvs          []*corev1.PersistentVolume
 	pods         []*corev1.Pod
 	deploys      []*appsv1.Deployment
 	daemonSets   []*appsv1.DaemonSet
@@ -87,10 +89,10 @@ func (m mockResourceProvider) Ingresses() ([]*networkingv1.Ingress, error) { ret
 func (m mockResourceProvider) ConfigMaps() ([]*corev1.ConfigMap, error)    { return nil, nil }
 func (m mockResourceProvider) Secrets() ([]*corev1.Secret, error)          { return nil, nil }
 func (m mockResourceProvider) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
-	return nil, nil
+	return m.pvcs, nil
 }
 func (m mockResourceProvider) PersistentVolumes() ([]*corev1.PersistentVolume, error) {
-	return nil, nil
+	return m.pvs, nil
 }
 func (m mockResourceProvider) HorizontalPodAutoscalers() ([]*autoscalingv2.HorizontalPodAutoscaler, error) {
 	return m.hpas, nil
