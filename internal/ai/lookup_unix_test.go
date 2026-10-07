@@ -187,7 +187,9 @@ func TestRefreshPicksUpACLIInstalledLater(t *testing.T) {
 	}
 }
 
-// RADAR_AI_CLI_BIN pins the backend set; detection must not widen it.
+// RADAR_AI_CLI_BIN pins the backend set: detection must not widen it, but the
+// pinned file is still checked, so a deleted one stops reading as ready and a
+// restored one comes back.
 func TestRefreshKeepsAnOverridePinned(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -200,8 +202,25 @@ func TestRefreshKeepsAnOverridePinned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if added := d.Refresh(context.Background()); len(added) != 0 {
-		t.Errorf("Refresh = %v with RADAR_AI_CLI_BIN set, want nothing", added)
+	if changed := d.Refresh(context.Background()); len(changed) != 0 {
+		t.Errorf("Refresh = %v with RADAR_AI_CLI_BIN set, want nothing", changed)
+	}
+	if d.resolveTurnAgent("codex") != nil {
+		t.Error("detection widened a pinned backend set")
+	}
+
+	if err := os.Remove(pinned); err != nil {
+		t.Fatal(err)
+	}
+	d.Refresh(context.Background())
+	if a := d.resolveTurnAgent(""); a != nil {
+		t.Errorf("the pinned CLI was deleted, but runs would still launch %s", a.Path())
+	}
+
+	writeExecutable(t, filepath.Join(home, "bin"), "claude")
+	d.Refresh(context.Background())
+	if a := d.resolveTurnAgent(""); a == nil || a.Path() != pinned {
+		t.Errorf("the pinned CLI came back, but the engine didn't pick it up: %v", a)
 	}
 }
 

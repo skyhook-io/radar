@@ -314,17 +314,21 @@ func NewDetected(ctx context.Context, evidenceRefs *investigationrefs.Registry) 
 // (Claude Code's switch from npm to its native installer replaces the path), and
 // drops one that is gone. A CLI installed, moved or removed while Radar runs is
 // then reflected without a restart. Runs already in flight keep the backend they
-// started with. The default backend changes only if it was removed. A
-// RADAR_AI_CLI_BIN override pins the backend set, so it changes nothing then.
-// Returns the names it added, re-pointed or dropped.
+// started with. The default backend changes only if it was removed. With
+// RADAR_AI_CLI_BIN set, nothing else is searched: only the pinned file is
+// checked, and its backend dropped or restored as it stops or starts being
+// runnable. Returns the names it added, re-pointed or dropped.
 func (d *Diagnoser) Refresh(ctx context.Context) []string {
-	if strings.TrimSpace(os.Getenv("RADAR_AI_CLI_BIN")) != "" {
-		return nil
-	}
 	detected := map[string]string{}
-	for _, info := range DetectAgents(ctx, false) {
-		if info.Supported {
-			detected[info.Name] = info.Path
+	if strings.TrimSpace(os.Getenv("RADAR_AI_CLI_BIN")) != "" {
+		if bin := ResolveCLI(); bin != "" {
+			detected[resolveAgent(bin).Name()] = bin
+		}
+	} else {
+		for _, info := range DetectAgents(ctx, false) {
+			if info.Supported {
+				detected[info.Name] = info.Path
+			}
 		}
 	}
 	d.mu.Lock()
