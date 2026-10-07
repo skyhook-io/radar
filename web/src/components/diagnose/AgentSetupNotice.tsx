@@ -86,8 +86,9 @@ function CheckAgainButton({
 // Shown in the AI surface's Home when investigations are eligible here but not
 // runnable yet:
 //  - cliOverride: RADAR_AI_CLI_BIN pins the engine to one CLI, so detection is
-//    off and an install changes nothing. Investigations being off means the
-//    variable names a file Radar can't run; only fixing it and restarting helps.
+//    off and installing another changes nothing. Investigations being off means
+//    the variable names a file Radar can't run. A working file put at that path
+//    is picked up on the next check; changing the variable needs a restart.
 //  - "needs-install": no agent CLI found. The server picks one up as soon as
 //    it's installed, so the notice offers a re-check rather than a restart.
 //  - "needs-restart": an agent is reported but investigations are off. Locally
@@ -127,10 +128,17 @@ export function AgentSetupNotice({
           This Radar was started with{" "}
           <code className="inline-code">RADAR_AI_CLI_BIN</code> set to a file it
           can&apos;t run. While that variable is set, Radar uses only that file
-          and doesn&apos;t look for other agent CLIs. Correct the path or remove
-          the variable, then restart Radar. The startup output shows the path it
-          tried.
+          and doesn&apos;t look for other agent CLIs. Put a working CLI at that
+          path and check again, or change or remove the variable and restart
+          Radar. The startup output shows the path it tried.
         </p>
+        <CheckAgainButton checking={checkingAgents} onCheck={check} />
+        {unreachable ||
+          (showResult && (
+            <p className="mt-2 text-xs text-theme-text-secondary">
+              Still can&apos;t run it.
+            </p>
+          ))}
       </SetupFrame>
     );
   }

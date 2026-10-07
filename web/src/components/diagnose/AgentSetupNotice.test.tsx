@@ -41,7 +41,8 @@ describe("AgentSetupNotice", () => {
       expect(html).toContain("restart Radar");
       // Detection is off while the variable is set, so an install can't help.
       expect(html).not.toContain("Install one of these");
-      expect(html).not.toContain("Check again");
+      // A working file put back at the pinned path is picked up without one.
+      expect(html).toContain("Check again");
     }
   });
 

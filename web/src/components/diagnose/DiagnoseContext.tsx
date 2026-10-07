@@ -613,7 +613,7 @@ function RoutedDiagnoseProvider({
   // Coming back from a terminal after installing a CLI is when to look again,
   // so the setup notice clears without the user hunting for a button.
   useEffect(() => {
-    if (setupState !== "needs-install" && setupState !== "unknown") return;
+    if (setupState === "ready" || setupState === "off") return;
     const onFocus = () => void recheckAgents();
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);

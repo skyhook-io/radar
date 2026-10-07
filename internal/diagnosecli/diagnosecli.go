@@ -226,8 +226,8 @@ Flags:
 		// shared), where installing a CLI is the wrong advice.
 		if agents.Eligible && agents.CLIOverride {
 			fmt.Fprintf(os.Stderr, "the Radar at %s was started with RADAR_AI_CLI_BIN set to a file it can't run, "+
-				"so it doesn't look for other agent CLIs. Correct the path or remove the variable, then restart "+
-				"that Radar.\n", base)
+				"so it doesn't look for other agent CLIs. Put a working CLI at that path and run this again, or "+
+				"change or remove the variable and restart that Radar.\n", base)
 		} else if agents.Eligible {
 			fmt.Fprintf(os.Stderr, "the Radar at %s found no agent CLI. Install Claude Code, Codex, Cursor, "+
 				"or OpenCode on that machine and run this again, or start that Radar with RADAR_AI_CLI_BIN set to "+

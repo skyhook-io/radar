@@ -1676,6 +1676,21 @@ test('a failed agent check says so and can be retried', async ({ page }) => {
   await expect(dialog.getByRole('button', { name: 'Your Claude Code setup', exact: true })).toBeVisible()
 })
 
+test('a pinned RADAR_AI_CLI_BIN that works again is picked up from Check again', async ({ page }) => {
+  await fixture(page)
+  let fixed = false
+  await page.route('**/api/agents', route => route.fulfill({
+    json: fixed ? { ...aiAgents, cliOverride: true } : { agents: [], enabled: true, eligible: true, cliOverride: true, consented: {} },
+  }))
+  const dialog = await openSettings(page, 'AI investigations')
+  await expect(dialog.getByText("Radar can't run the agent CLI it was given", { exact: true })).toBeVisible()
+  await expect(dialog.getByText('No supported agent CLI found', { exact: true })).toHaveCount(0)
+
+  fixed = true
+  await dialog.getByRole('button', { name: 'Check again', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Your Claude Code setup', exact: true })).toBeVisible()
+})
+
 test('coming back to the window re-checks for an agent CLI', async ({ page }) => {
   await fixture(page)
   let installed = false
