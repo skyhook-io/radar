@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,6 +29,7 @@ import (
 const (
 	cnpgPVCStatusAnnotation = "cnpg.io/pvcStatus"
 	cnpgPVCStatusDetached   = "detached"
+	cnpgDetachedClusterUID  = "radar.skyhook.io/detached-cluster-uid"
 )
 
 var (
@@ -107,7 +109,7 @@ func cnpgGuardDestroyInstance(f CNPGClusterFacts, i CNPGInstanceFact) string {
 // own Pod, which can lead status.currentPrimary during a promotion.
 func cnpgPodLabelledPrimary(pod *corev1.Pod) bool { return cnpg.InstanceRole(pod) == "primary" }
 
-type cnpgReviewedPVC struct {
+type CNPGReviewedObject struct {
 	Name string `json:"name"`
 	UID  string `json:"uid"`
 }
@@ -126,17 +128,17 @@ type CNPGDestroyPVC struct {
 
 // CNPGDestroyPlan is GET /api/cnpg/clusters/{ns}/{name}/instances/{pod}/destroy-plan.
 type CNPGDestroyPlan struct {
-	UID          string           `json:"uid"`
-	Context      string           `json:"context"`
-	Facts        CNPGClusterFacts `json:"facts"`
-	Pod          string           `json:"pod"`
-	PodUID       string           `json:"podUID"`
-	Role         string           `json:"role"`
-	PVCsReadable bool             `json:"pvcsReadable"`
-	PVCReason    string           `json:"pvcReason,omitempty"`
-	PVCs         []CNPGDestroyPVC `json:"pvcs"`
-	JobsReadable bool             `json:"jobsReadable"`
-	Jobs         []string         `json:"jobs"`
+	UID          string               `json:"uid"`
+	Context      string               `json:"context"`
+	Facts        CNPGClusterFacts     `json:"facts"`
+	Pod          string               `json:"pod"`
+	PodUID       string               `json:"podUID"`
+	Role         string               `json:"role"`
+	PVCsReadable bool                 `json:"pvcsReadable"`
+	PVCReason    string               `json:"pvcReason,omitempty"`
+	PVCs         []CNPGDestroyPVC     `json:"pvcs"`
+	JobsReadable bool                 `json:"jobsReadable"`
+	Jobs         []CNPGReviewedObject `json:"jobs"`
 	Actions      struct {
 		Delete integration.ActionCapability `json:"delete"`
 		Keep   integration.ActionCapability `json:"keep"`
@@ -176,7 +178,7 @@ func cnpgInstancePVCs(ctx context.Context, typed kubernetes.Interface, namespace
 	out := []corev1.PersistentVolumeClaim{}
 	for _, p := range list.Items {
 		owned := cnpgOwnedByCluster(p.OwnerReferences, cluster, clusterUID)
-		detached := p.Annotations[cnpgPVCStatusAnnotation] == cnpgPVCStatusDetached && p.Labels[instanceNameLabel] == instance
+		detached := p.Annotations[cnpgPVCStatusAnnotation] == cnpgPVCStatusDetached && p.Annotations[cnpgDetachedClusterUID] == string(clusterUID) && clusterUID != "" && p.Labels[instanceNameLabel] == instance
 		if owned || detached {
 			out = append(out, p)
 		}
@@ -200,17 +202,19 @@ func cnpgDestroyPVCOf(p corev1.PersistentVolumeClaim, cluster string, clusterUID
 	return out
 }
 
-func cnpgInstanceJobs(ctx context.Context, typed kubernetes.Interface, namespace, instance string) ([]string, error) {
+func cnpgInstanceJobs(ctx context.Context, typed kubernetes.Interface, namespace, cluster string, clusterUID types.UID, instance string) ([]batchv1.Job, error) {
 	list, err := typed.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{LabelSelector: labels.Set{instanceNameLabel: instance}.String()})
 	if err != nil {
 		return nil, err
 	}
-	names := make([]string, 0, len(list.Items))
+	jobs := make([]batchv1.Job, 0, len(list.Items))
 	for _, j := range list.Items {
-		names = append(names, j.Name)
+		if cnpgOwnedByCluster(j.OwnerReferences, cluster, clusterUID) {
+			jobs = append(jobs, j)
+		}
 	}
-	sort.Strings(names)
-	return names, nil
+	sort.Slice(jobs, func(i, j int) bool { return jobs[i].Name < jobs[j].Name })
+	return jobs, nil
 }
 
 func (s *Reader) DestroyPlan(callerCtx context.Context, c ActionClients, contextName, namespace, name, pod string) (*CNPGDestroyPlan, error) {
@@ -226,9 +230,10 @@ func (s *Reader) DestroyPlan(callerCtx context.Context, c ActionClients, context
 	}
 	plan := &CNPGDestroyPlan{
 		UID: string(cluster.GetUID()), Context: contextName, Facts: facts,
-		Pod: pod, PodUID: inst.PodUID, Role: inst.Role, PVCs: []CNPGDestroyPVC{}, Jobs: []string{},
+		Pod: pod, PodUID: inst.PodUID, Role: inst.Role, PVCs: []CNPGDestroyPVC{}, Jobs: []CNPGReviewedObject{},
 	}
-	if pvcs, err := cnpgInstancePVCs(ctx, c.Typed, namespace, name, cluster.GetUID(), pod); err == nil {
+	pvcs, err := cnpgInstancePVCs(ctx, c.Typed, namespace, name, cluster.GetUID(), pod)
+	if err == nil {
 		plan.PVCsReadable = true
 		for _, p := range pvcs {
 			plan.PVCs = append(plan.PVCs, cnpgDestroyPVCOf(p, name, cluster.GetUID()))
@@ -236,11 +241,17 @@ func (s *Reader) DestroyPlan(callerCtx context.Context, c ActionClients, context
 	} else {
 		plan.PVCReason = cnpgReadReason(err)
 	}
-	if jobs, err := cnpgInstanceJobs(ctx, c.Typed, namespace, pod); err == nil {
+	if jobs, err := cnpgInstanceJobs(ctx, c.Typed, namespace, name, cluster.GetUID(), pod); err == nil {
 		plan.JobsReadable = true
-		plan.Jobs = jobs
+		for _, j := range jobs {
+			plan.Jobs = append(plan.Jobs, CNPGReviewedObject{Name: j.Name, UID: string(j.UID)})
+		}
 	}
 	reasonCode, guard := cnpgDestroyInstanceBlocker(facts, inst)
+	if guard == "" && !plan.JobsReadable {
+		guard = "The instance's Jobs cannot be read, so they cannot be reviewed"
+		reasonCode = "jobs_unreadable"
+	}
 	if guard == "" && !plan.PVCsReadable {
 		guard = "The instance's PVCs cannot be read (" + plan.PVCReason + "), so they cannot be reviewed"
 		reasonCode = "pvcs_unreadable"
@@ -252,15 +263,37 @@ func (s *Reader) DestroyPlan(callerCtx context.Context, c ActionClients, context
 			gs[i] = g.In(namespace)
 			ps[i] = s.Access.Permission(callerCtx, gs[i])
 		}
-		capability := integration.CapabilityVerdict(guard, ps, gs)
+		actionGuard, actionCode := guard, reasonCode
+		if keep && actionGuard == "" {
+			actionGuard = cnpgKeepPVCBlocker(pvcs, name, cluster.GetUID())
+			if actionGuard != "" {
+				actionCode = "owners_remain"
+			}
+		}
+		capability := integration.CapabilityVerdict(actionGuard, ps, gs)
 		if capability.Permission != integration.PermissionDenied {
-			capability.ReasonCode = reasonCode
+			capability.ReasonCode = actionCode
 		}
 		return capability
 	}
 	plan.Actions.Delete = cap(false)
 	plan.Actions.Keep = cap(true)
 	return plan, nil
+}
+
+func cnpgKeepPVCBlocker(pvcs []corev1.PersistentVolumeClaim, cluster string, uid types.UID) string {
+	for _, pvc := range pvcs {
+		var owners []string
+		for _, ref := range pvc.OwnerReferences {
+			if !cnpgOwnedByCluster([]metav1.OwnerReference{ref}, cluster, uid) {
+				owners = append(owners, ref.Kind+" "+ref.Name+" ("+ref.APIVersion+", UID "+string(ref.UID)+")")
+			}
+		}
+		if len(owners) > 0 {
+			return "Keeping PVC " + pvc.Name + " would leave other owners able to garbage-collect it: " + strings.Join(owners, ", ") + ". Review its owner references first"
+		}
+	}
+	return ""
 }
 
 func cnpgReadReason(err error) string {
@@ -271,10 +304,11 @@ func cnpgReadReason(err error) string {
 }
 
 type cnpgDestroyParams struct {
-	Pod     string             `json:"pod"`
-	PodUID  string             `json:"podUID"`
-	KeepPVC bool               `json:"keepPVC"`
-	PVCs    *[]cnpgReviewedPVC `json:"pvcs"`
+	Pod     string                `json:"pod"`
+	PodUID  string                `json:"podUID"`
+	KeepPVC bool                  `json:"keepPVC"`
+	PVCs    *[]CNPGReviewedObject `json:"pvcs"`
+	Jobs    *[]CNPGReviewedObject `json:"jobs"`
 }
 
 func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGActionResult, error) {
@@ -282,8 +316,8 @@ func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGAction
 	if err := integration.DecodeActionParams(x.params, &p); err != nil {
 		return nil, err
 	}
-	if p.Pod == "" || p.PVCs == nil {
-		return nil, integration.RefuseAction(http.StatusBadRequest, "", "params.pod, params.podUID and params.pvcs are required: the confirmation must bind the Pod and volumes reviewed")
+	if p.Pod == "" || p.PVCs == nil || p.Jobs == nil {
+		return nil, integration.RefuseAction(http.StatusBadRequest, "", "params.pod, params.podUID, params.pvcs and params.jobs are required: the confirmation must bind the Pod, volumes and Jobs reviewed")
 	}
 	inst, ok := x.facts.instance(p.Pod)
 	if !ok {
@@ -306,12 +340,31 @@ func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGAction
 	if err != nil {
 		return nil, err
 	}
-	now := make([]cnpgReviewedPVC, 0, len(pvcs))
+	now := make([]CNPGReviewedObject, 0, len(pvcs))
 	for _, v := range pvcs {
-		now = append(now, cnpgReviewedPVC{Name: v.Name, UID: string(v.UID)})
+		now = append(now, CNPGReviewedObject{Name: v.Name, UID: string(v.UID)})
 	}
-	if !cnpgSamePVCs(now, *p.PVCs) {
+	if !cnpgSameReviewedObjects(now, *p.PVCs) {
 		return nil, integration.ChangedAction(x.facts, "The volumes of %s changed since you reviewed them (now: %s); review the action again", p.Pod, cnpgPVCList(now))
+	}
+
+	if p.KeepPVC {
+		if reason := cnpgKeepPVCBlocker(pvcs, cluster, clusterUID); reason != "" {
+			return nil, integration.BlockedAction(reason)
+		}
+	}
+	jobs, err := cnpgInstanceJobs(ctx, x.c.Typed, namespace, cluster, clusterUID, p.Pod)
+	if err != nil {
+		return nil, err
+	}
+	reviewedJobs := make([]CNPGReviewedObject, 0, len(jobs))
+	jobNames := make([]string, 0, len(jobs))
+	for _, j := range jobs {
+		reviewedJobs = append(reviewedJobs, CNPGReviewedObject{Name: j.Name, UID: string(j.UID)})
+		jobNames = append(jobNames, j.Name)
+	}
+	if !cnpgSameReviewedObjects(reviewedJobs, *p.Jobs) {
+		return nil, integration.ChangedAction(x.facts, "The Jobs of %s changed since you reviewed them; review the action again", p.Pod)
 	}
 
 	// CloudNativePG offers no lock against a failover, so the instance is
@@ -364,7 +417,7 @@ func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGAction
 			}
 			refs := pvc.OwnerReferences[:0:0]
 			for _, ref := range pvc.OwnerReferences {
-				if !(ref.Kind == "Cluster" && ref.Name == cluster) {
+				if !cnpgOwnedByCluster([]metav1.OwnerReference{ref}, cluster, clusterUID) {
 					refs = append(refs, ref)
 				}
 			}
@@ -376,6 +429,7 @@ func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGAction
 				pvc.Labels = map[string]string{}
 			}
 			pvc.Annotations[cnpgPVCStatusAnnotation] = cnpgPVCStatusDetached
+			pvc.Annotations[cnpgDetachedClusterUID] = string(clusterUID)
 			pvc.Labels[instanceNameLabel] = p.Pod
 			if _, err := x.c.Typed.CoreV1().PersistentVolumeClaims(namespace).Update(ctx, pvc, metav1.UpdateOptions{}); err != nil {
 				return nil, stop(fmt.Errorf("detaching PVC %s: %w", pvc.Name, err))
@@ -409,21 +463,35 @@ func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGAction
 		podDeleted = true
 	}
 
-	jobs, err := cnpgInstanceJobs(ctx, x.c.Typed, namespace, p.Pod)
-	if err != nil {
-		return nil, stop(fmt.Errorf("listing the instance's Jobs: %w", err))
-	}
-	if len(jobs) > 0 {
-		if err := recheck(); err != nil {
-			return nil, stop(err)
-		}
-	}
 	background := metav1.DeletePropagationBackground
-	for _, j := range jobs {
-		if err := x.c.Typed.BatchV1().Jobs(namespace).Delete(ctx, j, metav1.DeleteOptions{PropagationPolicy: &background}); err != nil && !apierrors.IsNotFound(err) {
-			return nil, stop(fmt.Errorf("deleting Job %s: %w", j, err))
+	for _, reviewed := range jobs {
+		job := reviewed
+		for attempt := 0; attempt < 2; attempt++ {
+			if err := recheck(); err != nil {
+				return nil, stop(err)
+			}
+			uid, rv := job.UID, job.ResourceVersion
+			err := x.c.Typed.BatchV1().Jobs(namespace).Delete(ctx, job.Name, metav1.DeleteOptions{PropagationPolicy: &background, Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &rv}})
+			if err == nil || apierrors.IsNotFound(err) {
+				break
+			}
+			if attempt == 0 && apierrors.IsConflict(err) {
+				// Status updates change the version without changing the reviewed
+				// identity. Re-list with the existing grant before one bounded retry.
+				fresh, readErr := cnpgInstanceJobs(ctx, x.c.Typed, namespace, cluster, clusterUID, p.Pod)
+				if readErr != nil {
+					return nil, stop(fmt.Errorf("re-reading Jobs: %w", readErr))
+				}
+				index := slices.IndexFunc(fresh, func(j batchv1.Job) bool { return j.Name == reviewed.Name && j.UID == reviewed.UID })
+				if index < 0 {
+					return nil, stop(integration.ChangedAction(x.facts, "Job %s was replaced or is no longer owned by this instance", reviewed.Name))
+				}
+				job = fresh[index]
+				continue
+			}
+			return nil, stop(fmt.Errorf("deleting Job %s: %w", job.Name, err))
 		}
-		completed = append(completed, "deleted Job "+j)
+		completed = append(completed, "deleted Job "+reviewed.Name)
 	}
 
 	lifted, err := cnpgLiftDestroyedFence(ctx, x, p.Pod)
@@ -445,12 +513,12 @@ func cnpgRunDestroyInstance(ctx context.Context, x *cnpgClusterRun) (*CNPGAction
 	}
 	return &CNPGActionResult{
 		Message: msg,
-		Target:  &CNPGActionTarget{Pod: p.Pod, PodUID: p.PodUID, KeepPVC: &keep, PVCs: now, Jobs: jobs},
+		Target:  &CNPGActionTarget{Pod: p.Pod, PodUID: p.PodUID, KeepPVC: &keep, PVCs: now, Jobs: jobNames},
 	}, nil
 }
 
-func cnpgSamePVCs(a, b []cnpgReviewedPVC) bool {
-	key := func(l []cnpgReviewedPVC) []string {
+func cnpgSameReviewedObjects(a, b []CNPGReviewedObject) bool {
+	key := func(l []CNPGReviewedObject) []string {
 		out := make([]string, len(l))
 		for i, v := range l {
 			out[i] = v.Name + "\x00" + v.UID
@@ -460,7 +528,7 @@ func cnpgSamePVCs(a, b []cnpgReviewedPVC) bool {
 	return cnpgSameStringSet(key(a), key(b))
 }
 
-func cnpgPVCList(l []cnpgReviewedPVC) string {
+func cnpgPVCList(l []CNPGReviewedObject) string {
 	if len(l) == 0 {
 		return "none"
 	}

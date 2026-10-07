@@ -36,7 +36,6 @@ type PodInfo struct {
 	UpdatedRevision       *bool           `json:"updatedRevision,omitempty"`
 }
 
-// IsPodReady checks if all containers in a pod are ready
 func IsPodReady(pod *corev1.Pod) bool {
 	if pod.Status.Phase != corev1.PodRunning {
 		return false
@@ -49,7 +48,6 @@ func IsPodReady(pod *corev1.Pod) bool {
 	return true
 }
 
-// BuildPodInfo converts a single pod to PodInfo
 func BuildPodInfo(pod *corev1.Pod, now time.Time) PodInfo {
 	containers := make([]string, 0, len(pod.Spec.Containers)+len(pod.Spec.InitContainers))
 	containerStatuses := make([]ContainerInfo, 0, len(pod.Status.InitContainerStatuses)+len(pod.Status.ContainerStatuses))

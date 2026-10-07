@@ -569,10 +569,11 @@ export function WorkloadView({
     () => (isDiagnoseKind(apiKind, effectiveGroup) ? [] : (relationships?.services ?? [])),
     [apiKind, effectiveGroup, relationships],
   )
+  const onRefresh = rest.onRefresh
   const refetchResourceAndRuns = useCallback(async () => {
     await Promise.all([
       refetchResource(),
-      rest.onRefresh?.(),
+      onRefresh?.(),
       ...(apiKind === 'rayjobs' && effectiveGroup === 'ray.io' ? [
         queryClient.refetchQueries({ queryKey: ['resource', 'jobs', namespace, name, 'batch'], type: 'active' }),
         ...(resource?.spec?.clusterSelector?.['ray.io/cluster'] ? [queryClient.refetchQueries({ queryKey: ['resource', 'rayclusters', namespace, resource.spec.clusterSelector['ray.io/cluster'], 'ray.io'], type: 'active' })] : []),
@@ -586,7 +587,7 @@ export function WorkloadView({
         ...(apiKind === 'rayclusters' ? { type: 'active' as const } : {}),
       }),
     ])
-  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource, resource?.spec?.clusterSelector, rest.onRefresh])
+  }, [apiKind, effectiveGroup, name, namespace, queryClient, refetchResource, resource?.spec?.clusterSelector, onRefresh])
   const podWorkloadOwner = useMemo(
     () => podWorkloadOwnerFromRelationships(apiKind, namespace, relationships, resource),
     [apiKind, namespace, relationships, resource],

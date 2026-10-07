@@ -98,7 +98,7 @@ func (s *Server) writeActionError(w http.ResponseWriter, tag string, err error, 
 	case apierrors.IsInvalid(err):
 		status = http.StatusUnprocessableEntity
 	}
-	log.Printf("[%s] Failed to %s %s/%s (%d): %v", tag, sanitizeForLog(action), sanitizeForLog(namespace), sanitizeForLog(name), status, err)
+	log.Printf("[%s] Failed to %s %s/%s: %v", tag, sanitizeForLog(action), sanitizeForLog(namespace), sanitizeForLog(name), err)
 	s.writeError(w, status, msg)
 }
 

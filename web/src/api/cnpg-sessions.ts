@@ -96,7 +96,7 @@ export interface CNPGDestroyPlan {
   pvcReason?: string
   pvcs: CNPGDestroyPVC[]
   jobsReadable: boolean
-  jobs: string[]
+  jobs: { name: string; uid: string }[]
   actions: { delete: ActionCapability; keep: ActionCapability }
 }
 

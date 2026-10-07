@@ -1,3 +1,4 @@
+import { stripTrailingSlashes } from '@skyhook-io/k8s-ui/utils/url-path'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
@@ -134,7 +135,7 @@ type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'w
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
-  if (pathname.replace(/\/+$/, '') === '/helm/compare') return 'helmCompare'
+  if (stripTrailingSlashes(pathname) === '/helm/compare') return 'helmCompare'
   const path = pathname.replace(/^\//, '').split('/')[0]
   if (path === '' || path === 'home') return 'home'
   if (path === 'topology') return 'topology'
@@ -478,7 +479,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Canonical URL — `/resources` is not stable for bookmarks/sharing; normalize to `/resources/pods`.
   useEffect(() => {
-    const path = location.pathname.replace(/\/+$/, '') || '/'
+    const path = stripTrailingSlashes(location.pathname) || '/'
     if (path !== '/resources') return
     navigate(
       { pathname: '/resources/pods', search: location.search, hash: location.hash },

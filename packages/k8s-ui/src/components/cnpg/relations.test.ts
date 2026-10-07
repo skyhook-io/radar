@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   cnpgScheduleDestinationBlocker,
+  cnpgArchiveMatchesCluster,
   appliedFact,
   backupDestination,
   backupsForScheduledBackup,
@@ -16,6 +17,14 @@ import {
   scheduledBackupOf,
   usersOfObjectStore,
 } from './relations'
+
+it('recognizes archive origin aliases without merging distinct paths', () => {
+  const cluster = { metadata: { name: 'pg' }, spec: { backup: { barmanObjectStore: { destinationPath: 's3://bucket/path', endpointURL: 'https://storage.example' } } } }
+  const source = { kind: 'inTree' as const, serverName: 'pg', barmanObjectStore: { destinationPath: 's3://BUCKET/path/', endpointURL: 'https://STORAGE.EXAMPLE:443/' } }
+  expect(cnpgArchiveMatchesCluster(cluster, source)).toBe(true)
+  expect(cnpgArchiveMatchesCluster(cluster, { ...source, barmanObjectStore: { ...source.barmanObjectStore, destinationPath: 's3://bucket/other' } })).toBe(false)
+  expect(cnpgArchiveMatchesCluster(cluster, { ...source, barmanObjectStore: { ...source.barmanObjectStore, endpointURL: 'https://storage.example/prefix' } })).toBe(false)
+})
 
 it('checks the destination for the schedule method and keeps unread targets unknown', () => {
   const cluster = { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', metadata: { name: 'payments', namespace: 'pg' }, spec: { backup: { volumeSnapshot: {} }, plugins: [{ name: 'barman-cloud.cloudnative-pg.io', parameters: { barmanObjectName: 'store' } }] } }

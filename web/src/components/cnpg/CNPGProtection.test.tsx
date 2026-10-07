@@ -54,6 +54,10 @@ it('uses the same suspended, due-now and overdue next-run wording as the drawer'
   const schedule = (name: string, minutes: number, suspend = false) => ({ metadata: { name, namespace: 'pg' }, spec: { suspend }, status: { nextScheduleTime: new Date(now - minutes * 60000).toISOString() } })
   const html = render({ scheduledBackups: [schedule('paused', 90, true), schedule('due', 5), schedule('late', 15)] })
   expect(html).toContain('suspended')
+  const host = document.createElement('div'); host.innerHTML = html
+  const paused = [...host.querySelectorAll('tr')].find((row) => row.textContent?.includes('paused'))!
+  expect(paused.textContent).toContain('Suspended')
+  expect(paused.textContent).not.toContain('Enabled')
   expect(html).toContain('due now')
   expect(html).toContain('overdue by 15m')
   expect(html).not.toContain('90m overdue')

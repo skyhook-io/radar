@@ -21,6 +21,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/integration"
 	declarations "github.com/skyhook-io/radar/pkg/cnpg"
+	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
 type ArchivingParams struct {
@@ -117,7 +118,10 @@ func archivingPlugin(cluster *unstructured.Unstructured, p ArchivingParams) ([]a
 	return plugins, plugin, nil
 }
 
-type archiveLocation struct{ path, endpoint string }
+type archiveLocation struct {
+	path, endpoint string
+	key            struct{ path, endpoint string }
+}
 
 func locationOf(configuration map[string]any, server string) (archiveLocation, error) {
 	destination, _ := configuration["destinationPath"].(string)
@@ -128,14 +132,26 @@ func locationOf(configuration map[string]any, server string) (archiveLocation, e
 	u.Path = strings.TrimRight(u.Path, "/") + "/" + server
 	u.RawPath = ""
 	endpoint, _ := configuration["endpointURL"].(string)
+	endpointKey := ""
 	if endpoint != "" {
 		e, err := url.Parse(endpoint)
 		if err != nil || e.Host == "" || e.User != nil || e.RawQuery != "" || e.Fragment != "" {
 			return archiveLocation{}, integration.BlockedAction("The ObjectStore endpoint needs review in its YAML")
 		}
+		origin, valid := urlutil.NormalizeOrigin(e.String())
+		if !valid {
+			return archiveLocation{}, integration.BlockedAction("The ObjectStore endpoint needs review in its YAML")
+		}
+		endpointKey = origin + strings.TrimRight(e.EscapedPath(), "/")
 		endpoint = strings.TrimRight(e.String(), "/")
 	}
-	return archiveLocation{path: u.String(), endpoint: endpoint}, nil
+	origin, valid := urlutil.NormalizeOrigin(u.String())
+	if !valid {
+		return archiveLocation{}, integration.BlockedAction("The ObjectStore destination needs review in its YAML")
+	}
+	location := archiveLocation{path: u.String(), endpoint: endpoint}
+	location.key.path, location.key.endpoint = origin+u.EscapedPath(), endpointKey
+	return location, nil
 }
 
 func readStore(ctx context.Context, dyn dynamic.Interface, namespace, name string) (*unstructured.Unstructured, map[string]any, error) {
@@ -196,7 +212,7 @@ func checkArchiveIdentity(ctx context.Context, dyn dynamic.Interface, cluster, s
 			if err != nil {
 				return nil, integration.BlockedAction("The Backup does not report a comparable source archive location; review archive isolation in Cluster YAML")
 			}
-			if backupLocation == chosen {
+			if backupLocation.key == chosen.key {
 				return nil, integration.BlockedAction("This is the recovery-source archive. Choose a new server name")
 			}
 		}
@@ -224,7 +240,7 @@ func checkArchiveIdentity(ctx context.Context, dyn dynamic.Interface, cluster, s
 			if err != nil {
 				return nil, err
 			}
-			if inTree == chosen {
+			if inTree.key == chosen.key {
 				return nil, integration.BlockedAction("This is the recovery-source archive. Choose a new server name")
 			}
 			continue
@@ -239,7 +255,7 @@ func checkArchiveIdentity(ctx context.Context, dyn dynamic.Interface, cluster, s
 		if err != nil {
 			return nil, integration.BlockedAction("The recovery-source ObjectStore could not be read to compare archive identities; review its access and configuration first")
 		}
-		if sourceLocation == chosen {
+		if sourceLocation.key == chosen.key {
 			return nil, integration.BlockedAction("This is the recovery-source archive. Choose a new server name so this Cluster cannot write into the archive it restores from")
 		}
 	}
@@ -297,7 +313,7 @@ func checkArchiveIdentity(ctx context.Context, dyn dynamic.Interface, cluster, s
 			}
 			return nil, err
 		}
-		if otherLocation == chosen {
+		if otherLocation.key == chosen.key {
 			return nil, integration.BlockedAction("Cluster " + other.GetNamespace() + "/" + other.GetName() + " already archives to this destination and server name")
 		}
 	}

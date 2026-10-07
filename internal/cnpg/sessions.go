@@ -351,15 +351,15 @@ func cnpgRunSignalBackend(signal string) func(context.Context, *cnpgClusterRun) 
 // CNPGActionTarget is what an action acted on. Only the fields that apply are
 // set.
 type CNPGActionTarget struct {
-	Pod          string            `json:"pod,omitempty"`
-	PodUID       string            `json:"podUID,omitempty"`
-	PID          int               `json:"pid,omitempty"`
-	BackendStart string            `json:"backendStart,omitempty"`
-	KeepPVC      *bool             `json:"keepPVC,omitempty"`
-	PVCs         []cnpgReviewedPVC `json:"pvcs,omitempty"`
-	Jobs         []string          `json:"jobs,omitempty"`
-	Paused       *bool             `json:"paused,omitempty"`
-	Generation   int64             `json:"generation,omitempty"`
+	Pod          string               `json:"pod,omitempty"`
+	PodUID       string               `json:"podUID,omitempty"`
+	PID          int                  `json:"pid,omitempty"`
+	BackendStart string               `json:"backendStart,omitempty"`
+	KeepPVC      *bool                `json:"keepPVC,omitempty"`
+	PVCs         []CNPGReviewedObject `json:"pvcs,omitempty"`
+	Jobs         []string             `json:"jobs,omitempty"`
+	Paused       *bool                `json:"paused,omitempty"`
+	Generation   int64                `json:"generation,omitempty"`
 }
 
 func cnpgGuardPsql(f CNPGClusterFacts, i CNPGInstanceFact) string {

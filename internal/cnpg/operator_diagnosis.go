@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
 	auth "github.com/skyhook-io/radar/internal/auth"
@@ -592,21 +593,21 @@ func (s *Reader) operatorEvents(ctx context.Context, typed kubernetes.Interface,
 	if out.State != cnpgReadOK {
 		return out
 	}
-	subjects := map[string]bool{"Deployment/" + d.Name: true}
+	subjects := map[types.UID]bool{d.UID: true}
 	for _, p := range pods {
-		subjects["Pod/"+p.Name] = true
+		subjects[p.UID] = true
 		for _, ref := range p.OwnerReferences {
 			if ref.Kind == "ReplicaSet" {
-				subjects["ReplicaSet/"+ref.Name] = true
+				subjects[ref.UID] = true
 			}
 		}
 	}
 	for _, e := range events {
 		if e.InvolvedObject.Kind == "ReplicaSet" && strings.HasPrefix(e.InvolvedObject.Name, d.Name+"-") {
-			subjects["ReplicaSet/"+e.InvolvedObject.Name] = true
+			subjects[e.InvolvedObject.UID] = true
 		}
 		if e.InvolvedObject.Kind == "Lease" && e.InvolvedObject.Name == cnpgOperatorLeaseName {
-			subjects["Lease/"+cnpgOperatorLeaseName] = true
+			subjects[e.InvolvedObject.UID] = true
 		}
 	}
 	out.Items = cnpgRecoveryEventsOf(events, subjects, cnpgOperatorEventLimit)

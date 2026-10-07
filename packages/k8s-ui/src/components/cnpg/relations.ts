@@ -1,3 +1,4 @@
+import { normalizeURLForComparison } from '../../utils/url-path'
 import { cnpgBackupDeclaration, cnpgBackupDestinationBlocker, cnpgBackupBlockerText } from '../../utils/cnpg-backup'
 // Pure relationship lookups between CloudNativePG objects in the workspace
 // payload. Each helper answers only from what the objects record; a relation
@@ -186,10 +187,13 @@ export function cnpgArchiveMatchesCluster(cluster: any, source: CNPGArchiveSourc
   const archive = cluster.spec?.backup?.barmanObjectStore
   const path = source.barmanObjectStore.destinationPath
   const endpoint = source.barmanObjectStore.endpointURL
+  const destination = typeof path === 'string' ? normalizeURLForComparison(path) : null
+  const endpointKey = normalizeURLForComparison(typeof endpoint === 'string' ? endpoint : '')
   return !!archive?.destinationPath && typeof path === 'string' && !!path &&
+    destination !== null && endpointKey !== null &&
     (archive.serverName || cluster.metadata?.name) === source.serverName &&
-    archive.destinationPath.replace(/\/+$/, '') === path.replace(/\/+$/, '') &&
-    (archive.endpointURL || '').replace(/\/+$/, '') === (typeof endpoint === 'string' ? endpoint : '').replace(/\/+$/, '')
+    normalizeURLForComparison(archive.destinationPath) === destination &&
+    normalizeURLForComparison(archive.endpointURL || '') === endpointKey
 }
 
 /**

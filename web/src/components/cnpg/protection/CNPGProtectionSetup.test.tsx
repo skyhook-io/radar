@@ -62,11 +62,11 @@ beforeEach(() => {
   state.backup = 'No successful backup yet'
 })
 const text = () =>
-  renderToStaticMarkup(
+  new DOMParser().parseFromString(renderToStaticMarkup(
     <MemoryRouter initialEntries={['/?protectionSetup=1']}>
       <CNPGProtectionSetup namespace="db" name="pg" onInspect={vi.fn()} />
     </MemoryRouter>,
-  ).replace(/<[^>]*>/g, '')
+  ), 'text/html').body.textContent!
 
 it('presents the whole task without treating a declaration or an unread fact as protection', () => {
   const html = text()
@@ -114,7 +114,7 @@ it('shows the upgrade path before offering setup writes against an older Radar',
 it('puts failed uploads ahead of the setup milestones and links to the existing repair flow', () => {
  state.wal = 'Failing'
  state.walState = 'failing'
- const html = renderToStaticMarkup(<MemoryRouter initialEntries={['/?protectionSetup=1']}><CNPGProtectionSetup namespace="db" name="pg" onInspect={vi.fn()} onOpenArchivingRepair={vi.fn()} /></MemoryRouter>).replace(/<[^>]*>/g, '')
+ const html = new DOMParser().parseFromString(renderToStaticMarkup(<MemoryRouter initialEntries={['/?protectionSetup=1']}><CNPGProtectionSetup namespace="db" name="pg" onInspect={vi.fn()} onOpenArchivingRepair={vi.fn()} /></MemoryRouter>), 'text/html').body.textContent!
  expect(html.indexOf('Repair WAL archiving first')).toBeLessThan(html.indexOf('1. Archive storage'))
  expect(html).toContain('Open archiving repair')
  expect(html).toContain('Uploads failing')

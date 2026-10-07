@@ -3,36 +3,14 @@ package prom
 import (
 	"errors"
 	"net/http"
-	"net/url"
-	"strconv"
-	"strings"
+
+	"github.com/skyhook-io/radar/pkg/urlutil"
 )
 
 // NormalizeOrigin compares scheme, hostname and effective port, including the
 // default HTTP(S) port when it is omitted. Paths are not part of an origin.
 func NormalizeOrigin(raw string) (string, bool) {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return "", false
-	}
-	scheme := strings.ToLower(u.Scheme)
-	host := strings.ToLower(u.Hostname())
-	port := u.Port()
-	if port != "" {
-		number, err := strconv.ParseUint(port, 10, 16)
-		if err != nil {
-			return "", false
-		}
-		port = strconv.FormatUint(number, 10)
-	} else {
-		switch scheme {
-		case "https":
-			port = "443"
-		case "http":
-			port = "80"
-		}
-	}
-	return scheme + "://" + host + ":" + port, true
+	return urlutil.NormalizeOrigin(raw)
 }
 
 // SameOriginRedirectClient copies a client, preserving its transport and stricter

@@ -43,6 +43,9 @@ func TestArchivingReviewAndConditionalWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if p.Destination != "s3://bucket/prefix/pg-new" || p.Endpoint != "https://storage.example" {
+		t.Fatalf("comparison keys leaked into review: %+v", p)
+	}
 	if len(env.patches) != 1 || len(env.patches[0].(k8stesting.PatchActionImpl).GetPatchOptions().DryRun) != 1 {
 		t.Fatal("preview must be dry-run")
 	}
@@ -171,7 +174,7 @@ func TestArchivingRefusesReviewedConfigurationChanges(t *testing.T) {
 }
 
 func TestArchivingIdentityAndMigrationGuards(t *testing.T) {
-	for _, scenario := range []string{"recovery-alias", "other-cluster-alias", "other-base-backup-only", "historical-server", "in-tree", "other-archiver", "duplicate", "store-server"} {
+	for _, scenario := range []string{"recovery-alias", "other-cluster-alias", "other-base-backup-only", "origin-alias", "historical-server", "in-tree", "other-archiver", "duplicate", "store-server"} {
 		t.Run(scenario, func(t *testing.T) {
 			c, store, alias := unprotectedCluster(), protectionStore("store"), protectionStore("alias")
 			objs := []runtime.Object{c, store, alias}
@@ -180,7 +183,11 @@ func TestArchivingIdentityAndMigrationGuards(t *testing.T) {
 			case "recovery-alias":
 				spec["bootstrap"] = map[string]any{"recovery": map[string]any{"source": "origin"}}
 				spec["externalClusters"] = []any{map[string]any{"name": "origin", "plugin": map[string]any{"name": "barman-cloud.cloudnative-pg.io", "parameters": map[string]any{"barmanObjectName": "alias", "serverName": "pg-new"}}}}
-			case "other-cluster-alias", "other-base-backup-only":
+			case "other-cluster-alias", "other-base-backup-only", "origin-alias":
+				if scenario == "origin-alias" {
+					config := alias.Object["spec"].(map[string]any)["configuration"].(map[string]any)
+					config["destinationPath"], config["endpointURL"] = "s3://BUCKET/prefix", "https://STORAGE.EXAMPLE:443/"
+				}
 				other := unprotectedCluster()
 				other.SetName("other")
 				other.SetUID("other-uid")
@@ -201,6 +208,9 @@ func TestArchivingIdentityAndMigrationGuards(t *testing.T) {
 			_, err := newTestReader(nil).PreviewArchiving(context.Background(), env.clients(), "ctx", "db", "pg", ArchivingParams{ObjectStore: "store", ServerName: "pg-new"})
 			if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != integration.ActionCodeBlocked || len(env.patches) != 0 {
 				t.Fatalf("err=%v patches=%d", err, len(env.patches))
+			}
+			if scenario == "origin-alias" && !strings.Contains(err.Error(), "already archives to this destination") {
+				t.Fatalf("alias failed for the wrong reason: %v", err)
 			}
 		})
 	}

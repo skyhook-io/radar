@@ -203,7 +203,7 @@ func cnpgDestroyFacts() map[string]any {
 }
 
 func cnpgDestroyEnv(t *testing.T) *cnpgActionEnv {
-	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "pg-2-join", Namespace: "db", Labels: map[string]string{instanceNameLabel: "pg-2"}}}
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "pg-2-join", Namespace: "db", UID: "job-2", ResourceVersion: "3", OwnerReferences: testControllerRefs("Cluster", "pg", cnpgActionTestUID), Labels: map[string]string{instanceNameLabel: "pg-2"}}}
 	return newCNPGActionEnv(t, []runtime.Object{cnpgDestroyCluster(nil)},
 		cnpgActionPod("pg-1", "u1", true), cnpgActionPod("pg-2", "u2", true),
 		cnpgDestroyTestPVC("pg-2", "pvc-2", "pg-2", true, nil),
@@ -219,7 +219,7 @@ func cnpgDestroyParamsFor(keep bool, pvcs ...string) map[string]any {
 		name, uid, _ := strings.Cut(p, "=")
 		list = append(list, map[string]any{"name": name, "uid": uid})
 	}
-	return map[string]any{"pod": "pg-2", "podUID": "u2", "keepPVC": keep, "pvcs": list}
+	return map[string]any{"pod": "pg-2", "podUID": "u2", "keepPVC": keep, "pvcs": list, "jobs": []any{map[string]any{"name": "pg-2-join", "uid": "job-2"}}}
 }
 
 func TestCNPGActionDestroyInstanceDeletesLikeKubectlCNPG(t *testing.T) {
@@ -261,7 +261,7 @@ func TestCNPGActionDestroyInstanceKeepPVCDetaches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("kept PVC was deleted: %v", err)
 	}
-	if len(pvc.OwnerReferences) != 0 || pvc.Annotations[cnpgPVCStatusAnnotation] != "detached" || pvc.Labels[instanceNameLabel] != "pg-2" {
+	if len(pvc.OwnerReferences) != 0 || pvc.Annotations[cnpgPVCStatusAnnotation] != "detached" || pvc.Annotations[cnpgDetachedClusterUID] != cnpgActionTestUID || pvc.Labels[instanceNameLabel] != "pg-2" {
 		t.Errorf("kept PVC = owners %v annotations %v labels %v", pvc.OwnerReferences, pvc.Annotations, pvc.Labels)
 	}
 	if len(env.deletes) != 1 || env.deletes[0].GetName() != "pg-2" {
@@ -648,5 +648,197 @@ func TestCNPGPoolerStatePending(t *testing.T) {
 	got := readCNPGPgBouncerState(context.Background(), cnpgFakeExec(&calls, "", errors.New("address not allowed")), "db", running)
 	if !strings.Contains(got.Error, "address not allowed") {
 		t.Fatalf("lost running Pod transport details: %+v", got)
+	}
+}
+
+func TestCNPGDestroyIgnoresForeignAndPredecessorResources(t *testing.T) {
+	env := cnpgDestroyEnv(t)
+	ctx := context.Background()
+	for _, uid := range []string{"", "old-cluster", cnpgActionTestUID} {
+		pvc := cnpgDestroyTestPVC("detached-"+uid, "pvc-"+uid, "pg-2", false, func(p *corev1.PersistentVolumeClaim) {
+			p.Annotations[cnpgPVCStatusAnnotation] = cnpgPVCStatusDetached
+			p.Annotations[cnpgDetachedClusterUID] = uid
+		})
+		if _, err := env.typed.CoreV1().PersistentVolumeClaims("db").Create(ctx, pvc, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, uid := range []string{"", "old-cluster"} {
+		job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "foreign-" + uid, Namespace: "db", UID: types.UID("job-" + uid), Labels: map[string]string{instanceNameLabel: "pg-2"}, OwnerReferences: testControllerRefs("Cluster", "pg", uid)}}
+		if _, err := env.typed.BatchV1().Jobs("db").Create(ctx, job, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan, err := newTestReader(nil).DestroyPlan(ctx, env.clients(), "kind-test", "db", "pg", "pg-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.PVCs) != 3 || len(plan.Jobs) != 1 || plan.Jobs[0].UID != "job-2" {
+		t.Fatalf("unrelated objects entered the plan: %+v", plan)
+	}
+	params := cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w", "detached-"+cnpgActionTestUID+"=pvc-"+cnpgActionTestUID)
+	if _, err := RunCNPGClusterAction(ctx, env.clients(), "db", "pg", "destroyInstance", cnpgActionReq(t, cnpgDestroyFacts(), params)); err != nil {
+		t.Fatal(err)
+	}
+	for _, uid := range []string{"", "old-cluster"} {
+		if _, err := env.typed.CoreV1().PersistentVolumeClaims("db").Get(ctx, "detached-"+uid, metav1.GetOptions{}); err != nil {
+			t.Fatalf("predecessor PVC deleted: %v", err)
+		}
+		if _, err := env.typed.BatchV1().Jobs("db").Get(ctx, "foreign-"+uid, metav1.GetOptions{}); err != nil {
+			t.Fatalf("foreign Job deleted: %v", err)
+		}
+	}
+}
+
+func TestCNPGDestroyRefusesChangedJobsBeforeWriting(t *testing.T) {
+	for _, scenario := range []string{"added", "replaced", "unreadable"} {
+		t.Run(scenario, func(t *testing.T) {
+			env := cnpgDestroyEnv(t)
+			ctx := context.Background()
+			job, err := env.typed.BatchV1().Jobs("db").Get(ctx, "pg-2-join", metav1.GetOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "added":
+				job.Name, job.UID = "pg-2-extra", "job-extra"
+				if _, err := env.typed.BatchV1().Jobs("db").Create(ctx, job, metav1.CreateOptions{}); err != nil {
+					t.Fatal(err)
+				}
+			case "replaced":
+				job.UID = "replacement"
+				if _, err := env.typed.BatchV1().Jobs("db").Update(ctx, job, metav1.UpdateOptions{}); err != nil {
+					t.Fatal(err)
+				}
+			case "unreadable":
+				env.typed.PrependReactor("list", "jobs", func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, apiForbidden("jobs") })
+				plan, err := newTestReader(nil).DestroyPlan(ctx, env.clients(), "kind-test", "db", "pg", "pg-2")
+				if err != nil || plan.JobsReadable || plan.Actions.Delete.Allowed || plan.Actions.Keep.Allowed {
+					t.Fatalf("unreadable Jobs allowed: %+v, %v", plan, err)
+				}
+			}
+			_, err = RunCNPGClusterAction(ctx, env.clients(), "db", "pg", "destroyInstance", cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+			if scenario == "unreadable" {
+				if !apierrors.IsForbidden(err) {
+					t.Fatalf("unreadable Jobs: %v", err)
+				}
+			} else if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != integration.ActionCodeChanged || !strings.Contains(ae.Message, "Jobs") {
+				t.Fatalf("wrong refusal for changed Jobs: %v", err)
+			}
+			for _, a := range env.typed.Actions() {
+				if a.GetVerb() == "delete" || a.GetResource().Resource == "persistentvolumeclaims" && a.GetVerb() == "update" {
+					t.Fatalf("write before refusing: %v", a)
+				}
+			}
+		})
+	}
+}
+
+func TestCNPGDestroyJobReplacementAfterReviewStopsWithPreconditions(t *testing.T) {
+	env := cnpgDestroyEnv(t)
+	ctx := context.Background()
+	env.typed.PrependReactor("delete", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		obj, err := env.typed.Tracker().Get(batchv1.SchemeGroupVersion.WithResource("jobs"), "db", "pg-2-join")
+		if err != nil {
+			t.Fatal(err)
+		}
+		job := obj.(*batchv1.Job).DeepCopy()
+		job.UID, job.ResourceVersion = "replacement", "4"
+		if err := env.typed.Tracker().Update(batchv1.SchemeGroupVersion.WithResource("jobs"), job, "db"); err != nil {
+			t.Fatal(err)
+		}
+		return false, nil, nil
+	})
+	env.typed.PrependReactor("delete", "jobs", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		p := a.(k8stesting.DeleteAction).GetDeleteOptions().Preconditions
+		if p == nil || p.UID == nil || *p.UID != "job-2" || p.ResourceVersion == nil || *p.ResourceVersion != "3" {
+			t.Fatalf("delete not bound to reviewed Job: %+v", p)
+		}
+		return true, nil, apierrors.NewConflict(schema.GroupResource{Group: "batch", Resource: "jobs"}, "pg-2-join", errors.New("UID changed"))
+	})
+	_, err := RunCNPGClusterAction(ctx, env.clients(), "db", "pg", "destroyInstance", cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != integration.ActionCodePartial || len(ae.Completed) != 3 || len(env.patches) != 0 {
+		t.Fatalf("replacement must stop before lifting fence: %v", err)
+	}
+	job, err := env.typed.BatchV1().Jobs("db").Get(ctx, "pg-2-join", metav1.GetOptions{})
+	if err != nil || job.UID != "replacement" {
+		t.Fatalf("replacement lost: %+v, %v", job, err)
+	}
+}
+
+func TestCNPGDestroyKeepPVCRefusesUnrelatedOwners(t *testing.T) {
+	env := cnpgDestroyEnv(t)
+	ctx := context.Background()
+	pvc, err := env.typed.CoreV1().PersistentVolumeClaims("db").Get(ctx, "pg-2", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := []metav1.OwnerReference{{APIVersion: "cluster.x-k8s.io/v1beta1", Kind: "Cluster", Name: "pg", UID: "capi-uid"}, {APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: "pg", UID: "old-cluster"}}
+	pvc.OwnerReferences = append(pvc.OwnerReferences, foreign...)
+	if _, err := env.typed.CoreV1().PersistentVolumeClaims("db").Update(ctx, pvc, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := newTestReader(nil).DestroyPlan(ctx, env.clients(), "kind-test", "db", "pg", "pg-2")
+	if err != nil || plan.Actions.Keep.Allowed || !plan.Actions.Delete.Allowed || !strings.Contains(plan.Actions.Keep.Reason, "capi-uid") {
+		t.Fatalf("unsafe keep plan: %+v, %v", plan, err)
+	}
+	_, err = RunCNPGClusterAction(ctx, env.clients(), "db", "pg", "destroyInstance", cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(true, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+	if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != integration.ActionCodeBlocked || !strings.Contains(ae.Message, "garbage-collect") || len(env.deletes) != 0 {
+		t.Fatalf("unsafe keep allowed: %v", err)
+	}
+	pvc, err = env.typed.CoreV1().PersistentVolumeClaims("db").Get(ctx, "pg-2", metav1.GetOptions{})
+	if err != nil || len(pvc.OwnerReferences) != 3 || pvc.OwnerReferences[1] != foreign[0] || pvc.OwnerReferences[2] != foreign[1] {
+		t.Fatalf("unrelated owners lost: %+v, %v", pvc, err)
+	}
+}
+
+func TestCNPGDestroyJobStatusChurnRetainsIdentityAndOwnershipGuards(t *testing.T) {
+	for _, scenario := range []string{"status", "ownership", "repeated-conflict"} {
+		t.Run(scenario, func(t *testing.T) {
+			env := cnpgDestroyEnv(t)
+			ctx := context.Background()
+			resource := batchv1.SchemeGroupVersion.WithResource("jobs")
+			calls := 0
+			env.typed.PrependReactor("delete", "jobs", func(a k8stesting.Action) (bool, runtime.Object, error) {
+				calls++
+				pre := a.(k8stesting.DeleteAction).GetDeleteOptions().Preconditions
+				if pre == nil || pre.UID == nil || *pre.UID != "job-2" || pre.ResourceVersion == nil {
+					t.Fatalf("identity not bound: %+v", pre)
+				}
+				if calls == 1 {
+					obj, err := env.typed.Tracker().Get(resource, "db", "pg-2-join")
+					if err != nil {
+						t.Fatal(err)
+					}
+					job := obj.(*batchv1.Job).DeepCopy()
+					job.ResourceVersion, job.Status.Active = "4", 1
+					if scenario == "ownership" {
+						job.OwnerReferences = testControllerRefs("Cluster", "pg", "other-cluster")
+					}
+					if err := env.typed.Tracker().Update(resource, job, "db"); err != nil {
+						t.Fatal(err)
+					}
+					return true, nil, apierrors.NewConflict(resource.GroupResource(), job.Name, errors.New("version changed"))
+				}
+				if calls > 2 || *pre.ResourceVersion != "4" {
+					t.Fatalf("retry not bounded to fresh version: %d, %+v", calls, pre)
+				}
+				if scenario == "repeated-conflict" {
+					return true, nil, apierrors.NewConflict(resource.GroupResource(), "pg-2-join", errors.New("version changed again"))
+				}
+				return false, nil, nil
+			})
+			_, err := RunCNPGClusterAction(ctx, env.clients(), "db", "pg", "destroyInstance", cnpgActionReq(t, cnpgDestroyFacts(), cnpgDestroyParamsFor(false, "pg-2=pvc-2", "pg-2-wal=pvc-2w")))
+			if scenario == "status" {
+				if err != nil || calls != 2 || len(env.patches) != 1 {
+					t.Fatalf("status-only churn prevented completion: %v, calls=%d", err, calls)
+				}
+			} else if ae, ok := cnpgActionStatus(t, err); !ok || ae.Code != integration.ActionCodePartial || len(env.patches) != 0 {
+				t.Fatalf("unsafe retry or fence lift: %v", err)
+			}
+			if scenario == "ownership" && calls != 1 {
+				t.Fatalf("retried after losing ownership: %d", calls)
+			}
+		})
 	}
 }

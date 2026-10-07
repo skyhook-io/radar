@@ -395,7 +395,7 @@ export function CNPGProtection({
                 const last = backupsForScheduledBackup(s, data.objects.backups ?? [])[0]
                 const blocker = cnpgScheduleDestinationBlocker(s, data.objects.clusters ?? [])
                 const guarded = s.spec?.suspend || getCNPGScheduledBackupOverdueMs(s) !== null
-                const text = guarded ? st.text : blocker || last || s.status?.lastScheduleTime ? 'Enabled' : 'Enabled · not run yet'
+                const text = guarded ? st.text : (blocker || last || s.status?.lastScheduleTime ? 'Enabled' : 'Enabled · not run yet')
                 const severity = guarded ? SEVERITY[st.level] : 'neutral'
                 return <div className="flex flex-wrap gap-1"><Badge severity={severity} size="sm" className="whitespace-nowrap">{text}</Badge>{blocker && <Badge severity="warning" size="sm" className="whitespace-nowrap">{blocker}</Badge>}</div>
               },

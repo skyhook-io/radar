@@ -158,7 +158,7 @@ export function apiFetch(
         sessionStorage.setItem(
           'radar_return_path',
           stripBasename(window.location.pathname) + window.location.search,
-        )
+        );
       } catch {
         /* best-effort */
       }

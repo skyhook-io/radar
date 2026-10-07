@@ -51,7 +51,8 @@ export function CNPGDetailPage({
   const [searchParams, setSearchParams] = useSearchParams()
   const { connection } = useConnection()
   const queryClient = useQueryClient()
-  const refresh = useCallback(() => refetchCNPGDetail(queryClient, target), [queryClient, target.plural, target.namespace, target.name])
+  const { plural, group, namespace, name } = target
+  const refresh = useCallback(() => refetchCNPGDetail(queryClient, { plural, group, namespace, name }), [queryClient, plural, group, namespace, name])
   const activeContext = connection.context
   const pinnedContext = searchParams.get('ctx')
 

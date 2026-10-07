@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
@@ -210,13 +211,13 @@ func (s *Reader) RecoverySnapshot(callerCtx context.Context, typed kubernetes.In
 		}
 		return err
 	})
-	ownedJobs := map[string]bool{}
+	ownedJobs := map[string]types.UID{}
 	for i := range jobs {
 		j := &jobs[i]
 		if !controlledBy(j.OwnerReferences, Group, "Cluster", name, cluster.GetUID()) {
 			continue
 		}
-		ownedJobs[j.Name] = true
+		ownedJobs[j.Name] = j.UID
 		resp.Jobs = append(resp.Jobs, cnpgRecoveryJobOf(j))
 	}
 	sort.Slice(resp.Jobs, func(i, j int) bool { return resp.Jobs[i].Name < resp.Jobs[j].Name })
@@ -237,9 +238,9 @@ func (s *Reader) RecoverySnapshot(callerCtx context.Context, typed kubernetes.In
 			continue
 		}
 		switch {
-		case ref.Kind == "Cluster" && ref.UID == cluster.GetUID():
+		case controlledBy(p.OwnerReferences, Group, "Cluster", name, cluster.GetUID()):
 			resp.Pods = append(resp.Pods, cnpgRecoveryPodOf(p, "instance", "", true))
-		case ref.Kind == "Job" && ownedJobs[ref.Name]:
+		case ref.Kind == "Job" && ownedJobs[ref.Name] != "" && controlledBy(p.OwnerReferences, "batch", "Job", ref.Name, ownedJobs[ref.Name]):
 			resp.Pods = append(resp.Pods, cnpgRecoveryPodOf(p, "job", ref.Name, true))
 		case ref.Kind == "Job" && !jobsKnown && strings.HasPrefix(ref.Name, name+"-"):
 			resp.Pods = append(resp.Pods, cnpgRecoveryPodOf(p, "job", ref.Name, false))
@@ -252,12 +253,12 @@ func (s *Reader) RecoverySnapshot(callerCtx context.Context, typed kubernetes.In
 		return resp.Pods[i].Name < resp.Pods[j].Name
 	})
 
-	subjects := map[string]bool{"Cluster/" + name: true}
+	subjects := map[types.UID]bool{cluster.GetUID(): true}
 	for _, p := range resp.Pods {
-		subjects["Pod/"+p.Name] = true
+		subjects[types.UID(p.UID)] = true
 	}
-	for _, j := range resp.Jobs {
-		subjects["Job/"+j.Name] = true
+	for _, uid := range ownedJobs {
+		subjects[uid] = true
 	}
 	var events []corev1.Event
 	resp.Coverage["events"] = s.gatedRead(callerCtx, cnpgGrantListEvents, namespace, func() error {
@@ -425,13 +426,11 @@ func cnpgEventTime(e *corev1.Event) time.Time {
 	}
 }
 
-// cnpgRecoveryEventsOf keeps events about the given Kind/name subjects,
-// newest first.
-func cnpgRecoveryEventsOf(events []corev1.Event, subjects map[string]bool, limit int) []CNPGRecoveryEvent {
+func cnpgRecoveryEventsOf(events []corev1.Event, subjects map[types.UID]bool, limit int) []CNPGRecoveryEvent {
 	kept := make([]*corev1.Event, 0)
 	for i := range events {
 		e := &events[i]
-		if subjects[e.InvolvedObject.Kind+"/"+e.InvolvedObject.Name] {
+		if e.InvolvedObject.UID != "" && subjects[e.InvolvedObject.UID] {
 			kept = append(kept, e)
 		}
 	}

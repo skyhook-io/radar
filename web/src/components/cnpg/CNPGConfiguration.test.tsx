@@ -1,10 +1,10 @@
-vi.mock('./useCNPGKubectlContext', () => ({ useCNPGKubectlContext: () => ({ name: 'kind-test', source: 'test-config' }) }))
 // @vitest-environment jsdom
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+vi.mock('./useCNPGKubectlContext', () => ({ useCNPGKubectlContext: () => ({ name: 'kind-test', source: 'test-config' }) }))
 import { CNPGConfiguration, CNPGDeclaredSettings } from './CNPGConfiguration'
 
 const state = vi.hoisted(() => ({ cluster: {} as any, params: {} as any, ha: {} as any, row: undefined as any, workspace: {} as any, navigate: vi.fn() }))

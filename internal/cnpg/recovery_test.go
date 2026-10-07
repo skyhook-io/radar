@@ -81,7 +81,7 @@ func TestCNPGRecoverySpecOf(t *testing.T) {
 func TestCNPGRecoverySnapshotClassifiesPodsByOwner(t *testing.T) {
 	cluster := cnpgRestoredCluster()
 	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: "pg-1-full-recovery", Namespace: "db", Labels: map[string]string{"cnpg.io/cluster": "pg"}, OwnerReferences: testControllerRefs("Cluster", "pg", cnpgActionTestUID)},
+		ObjectMeta: metav1.ObjectMeta{Name: "pg-1-full-recovery", Namespace: "db", UID: "job-uid", Labels: map[string]string{"cnpg.io/cluster": "pg"}, OwnerReferences: testControllerRefs("Cluster", "pg", cnpgActionTestUID)},
 		Status:     batchv1.JobStatus{Active: 1},
 	}
 	foreignJob := &batchv1.Job{
@@ -98,10 +98,16 @@ func TestCNPGRecoverySnapshotClassifiesPodsByOwner(t *testing.T) {
 	}
 	strayPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pg-other-xyz", Namespace: "db", Labels: map[string]string{"cnpg.io/cluster": "pg"}, OwnerReferences: testControllerRefs("Job", "pg-other", "j2")}}
 	events := []runtime.Object{
-		&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "e1", Namespace: "db"}, InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "pg-1-full-recovery-abcde"}, Type: "Warning", Reason: "BackOff", Message: "restarting", LastTimestamp: metav1.NewTime(time.Now())},
+		&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "e1", Namespace: "db"}, InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "pg-1-full-recovery-abcde", UID: "p1"}, Type: "Warning", Reason: "BackOff", Message: "restarting", LastTimestamp: metav1.NewTime(time.Now())},
 		&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "e2", Namespace: "db"}, InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "unrelated"}, Type: "Warning", Reason: "Other"},
 	}
-	typed := k8sfake.NewSimpleClientset(append([]runtime.Object{job, foreignJob, recoveryPod, strayPod}, events...)...)
+	oldPod := recoveryPod.DeepCopy()
+	oldPod.Name, oldPod.UID = "pg-old-recovery", "old-pod"
+	oldPod.OwnerReferences = testControllerRefs("Job", job.Name, "old-job")
+	for _, subject := range []corev1.ObjectReference{{Kind: "Pod", Name: recoveryPod.Name, UID: "old-p1"}, {Kind: "Job", Name: job.Name, UID: "old-job"}, {Kind: "Cluster", Name: cluster.GetName(), UID: "old-cluster"}} {
+		events = append(events, &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "old-" + subject.Kind, Namespace: "db"}, InvolvedObject: subject, Reason: "OldFailure"})
+	}
+	typed := k8sfake.NewSimpleClientset(append([]runtime.Object{job, foreignJob, recoveryPod, strayPod, oldPod}, events...)...)
 	s := newTestReader(nil)
 	ctx := context.Background()
 
@@ -413,6 +419,8 @@ func TestCNPGReportCleanObjectRedactsDeclaredEnv(t *testing.T) {
 			"env": []any{
 				map[string]any{"name": "AWS_SECRET_ACCESS_KEY", "value": "plaintext"},
 				map[string]any{"name": "TZ", "value": "UTC"},
+				map[string]any{"name": "PGURI", "value": "postgresql://user:secret-value@db.example/pg"},
+				map[string]any{"name": "OPTIONS", "value": "password=secret-value"},
 			},
 			"backup": map[string]any{"barmanObjectStore": map[string]any{"s3Credentials": map[string]any{"secretAccessKey": map[string]any{"name": "creds", "key": "k"}}}},
 		},
@@ -426,6 +434,11 @@ func TestCNPGReportCleanObjectRedactsDeclaredEnv(t *testing.T) {
 	env := c["env"].([]any)
 	if env[0].(map[string]any)["value"] != cnpgReportRedacted || env[1].(map[string]any)["value"] != "UTC" {
 		t.Errorf("cluster env = %v", env)
+	}
+	for _, i := range []int{2, 3} {
+		if strings.Contains(env[i].(map[string]any)["value"].(string), "secret-value") {
+			t.Errorf("inline credential leaked: %v", env[i])
+		}
 	}
 	if name := c["backup"].(map[string]any)["barmanObjectStore"].(map[string]any)["s3Credentials"].(map[string]any)["secretAccessKey"].(map[string]any)["name"]; name != "creds" {
 		t.Errorf("Secret reference name was blanked: %v", name)
@@ -445,5 +458,37 @@ func TestCNPGRestoreCapabilityRefusedWhileWebhookRejects(t *testing.T) {
 		integration.CapabilityVerdict("", []string{integration.PermissionAllowed}, []auth.Grant{cnpgGrantCreateClusters.In("db")}))
 	if got.Allowed || !strings.Contains(got.Reason, "no ready endpoint") {
 		t.Errorf("restore while the webhook rejects = %+v", got)
+	}
+}
+
+func TestCNPGReportPodEnvRedactsInlineCredentials(t *testing.T) {
+	original := corev1.PodSpec{Containers: []corev1.Container{{Name: "postgres", Env: []corev1.EnvVar{{Name: "PGURI", Value: "postgresql://user:secret-value@db.example/pg"}, {Name: "TZ", Value: "UTC"}, {Name: "FROM_SECRET", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "credentials"}, Key: "password"}}}}}}, InitContainers: []corev1.Container{{Name: "init", Env: []corev1.EnvVar{{Name: "OPTIONS", Value: "password=secret-value"}}}}}
+	clean := original.DeepCopy()
+	cnpgReportCleanPodSpec(clean)
+	if strings.Contains(clean.Containers[0].Env[0].Value, "secret-value") || strings.Contains(clean.InitContainers[0].Env[0].Value, "secret-value") {
+		t.Fatalf("inline credentials survived: %+v", clean)
+	}
+	if clean.Containers[0].Env[1].Value != "UTC" || clean.Containers[0].Env[2].ValueFrom.SecretKeyRef.Name != "credentials" {
+		t.Fatalf("ordinary values or references changed: %+v", clean)
+	}
+	if !strings.Contains(original.Containers[0].Env[0].Value, "secret-value") {
+		t.Fatal("source was modified")
+	}
+}
+
+func TestCNPGReportEnvRedactsKeywordAndQueryPasswords(t *testing.T) {
+	for _, value := range []string{"password=abc123", "host=db password = longsecret", "password = 'a b'", "postgresql://db/pg?password=x&sslmode=require", "postgresql://db/pg?pass%77ord=x", `{"password":"short"}`, "sslpassword: short", "PGPASSWORD=abc psql -h db", "DB_PASSWORD: x"} {
+		t.Run(value, func(t *testing.T) {
+			obj := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"env": []any{map[string]any{"name": "OPTIONS", "value": value}}}}}
+			out := cnpgReportCleanObject(obj).Object["spec"].(map[string]any)["env"].([]any)[0].(map[string]any)["value"]
+			if out != cnpgReportRedacted {
+				t.Fatalf("manifest env leaked: %v", out)
+			}
+			containers := []corev1.Container{{Env: []corev1.EnvVar{{Name: "OPTIONS", Value: value}}}}
+			cnpgReportCleanContainers(containers)
+			if containers[0].Env[0].Value != cnpgReportRedacted {
+				t.Fatalf("Pod env leaked: %v", containers[0].Env[0])
+			}
+		})
 	}
 }

@@ -11,7 +11,7 @@ vi.mock('../../../api/cnpg', () => ({ useCNPGScheduleCapabilities: () => ({ data
 it('shows the server destination blocker beneath the disabled Run now control', () => {
   const html = renderToStaticMarkup(<CNPGScheduleActions namespace="prod" name="payments-nightly" />)
   expect(html).toMatch(/disabled=""[^>]*>Run now/)
-  expect(html.replace(/<[^>]*>/g, '')).toContain('Configure a backup destination on payments first')
+  expect(new DOMParser().parseFromString(html, 'text/html').body.textContent).toContain('Configure a backup destination on payments first')
   expect(html).toContain('Suspend')
 })
 

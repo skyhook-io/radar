@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -49,6 +50,7 @@ var (
 	cnpgGrantListPoolers     = auth.Grant{Verb: "list", Group: Group, Resource: "poolers"}
 	cnpgGrantGetObjectStores = auth.Grant{Verb: "get", Group: barmanGroup, Resource: "objectstores"}
 	cnpgGrantGetPodLogs      = auth.Grant{Verb: "get", Resource: "pods", Subresource: "log"}
+	cnpgReportEnvPassword    = regexp.MustCompile(`(?i)password["']?\s*[=:]`)
 )
 
 type ReportOptions struct {
@@ -627,8 +629,8 @@ func cnpgReportRedactManifest(v any) {
 						continue
 					}
 					name, _ := e["name"].(string)
-					if val, _ := e["value"].(string); val != "" && aicontext.IsSensitiveEnvName(name) {
-						e["value"] = cnpgReportRedacted
+					if val, ok := e["value"].(string); ok {
+						e["value"] = cnpgReportEnvValue(name, val)
 					}
 				}
 				continue
@@ -642,12 +644,18 @@ func cnpgReportRedactManifest(v any) {
 	}
 }
 
+func cnpgReportEnvValue(name, value string) string {
+	decoded, err := url.QueryUnescape(value)
+	if value != "" && (aicontext.IsSensitiveEnvName(name) || cnpgReportEnvPassword.MatchString(value) || err == nil && cnpgReportEnvPassword.MatchString(decoded)) {
+		return cnpgReportRedacted
+	}
+	return aicontext.RedactSecrets(value)
+}
+
 func cnpgReportCleanContainers(cs []corev1.Container) {
 	for i := range cs {
 		for j := range cs[i].Env {
-			if cs[i].Env[j].Value != "" && aicontext.IsSensitiveEnvName(cs[i].Env[j].Name) {
-				cs[i].Env[j].Value = cnpgReportRedacted
-			}
+			cs[i].Env[j].Value = cnpgReportEnvValue(cs[i].Env[j].Name, cs[i].Env[j].Value)
 		}
 	}
 }

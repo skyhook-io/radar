@@ -1,10 +1,10 @@
-vi.mock('../../../api/cnpg-ha', () => ({ useCNPGClusterHA: () => ({ data: { rwEndpoints: { state: 'ok', pods: ['orders-1'] }, pods: { state: 'ok' }, instances: [{ pod: 'orders-1', role: 'primary', ready: true }] } }) }))
-vi.mock('../useCNPGKubectlContext', () => ({ useCNPGKubectlContext: () => ({ name: 'kind-test', source: 'test-config' }) }))
 // @vitest-environment jsdom
 import { act, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { MemoryRouter } from 'react-router-dom'
 import { expect, it, vi } from 'vitest'
+vi.mock('../../../api/cnpg-ha', () => ({ useCNPGClusterHA: () => ({ data: { rwEndpoints: { state: 'ok', pods: ['orders-1'] }, pods: { state: 'ok' }, instances: [{ pod: 'orders-1', role: 'primary', ready: true }] } }) }))
+vi.mock('../useCNPGKubectlContext', () => ({ useCNPGKubectlContext: () => ({ name: 'kind-test', source: 'test-config' }) }))
 import { CNPGConnectButton } from './CNPGConnectButton'
 const state = vi.hoisted(() => ({ refetch: vi.fn(), retained: false, row: undefined as any }))
 vi.mock('../useCNPGSidebarWorkspace', () => ({ useCNPGFleet: () => ({ fleet: state.row ? { rows: [state.row] } : state.retained ? { rows: [] } : null, query: { data: state.retained ? { installed: true } : undefined, error: new Error('Read failed'), refetch: state.refetch, isRefetchError: state.retained, dataUpdatedAt: Date.now() - 120_000 } }) }))

@@ -51,7 +51,7 @@ export function CNPGDestroyInstanceDialog({
               reviewedContext: data.context,
               uid: data.uid,
               facts: data.facts,
-              params: { pod, podUID: data.podUID, keepPVC: keep, pvcs: data.pvcs.map((p) => ({ name: p.name, uid: p.uid })) },
+              params: { pod, podUID: data.podUID, keepPVC: keep, pvcs: data.pvcs.map((p) => ({ name: p.name, uid: p.uid })), jobs: data.jobs },
             },
           },
           {
@@ -94,7 +94,7 @@ export function CNPGDestroyInstanceDialog({
                     : { summary: `delete PersistentVolumeClaim ${namespace}/${p.name}`, detail: `preconditions.uid = ${p.uid}` },
               ),
               { summary: `delete Pod ${namespace}/${pod}`, detail: data.podUID ? `preconditions.uid = ${data.podUID}` : 'the Pod no longer exists' },
-              { summary: `delete Jobs labelled cnpg.io/instanceName=${pod}`, detail: data.jobsReadable ? (data.jobs.length ? data.jobs.join('\n') : 'none now') : 'not readable now; listed again when the action runs' },
+              { summary: `delete reviewed Jobs of ${pod}`, detail: data.jobsReadable ? (data.jobs.length ? data.jobs.map((j) => `${j.name} · preconditions.uid = ${j.uid}`).join('\n') : 'none now') : 'not readable; review is unavailable' },
               { summary: `patch Cluster ${namespace}/${cluster}`, detail: `metadata.annotations["cnpg.io/fencedInstances"]: ${pod} removed (unless fenced with ["*"])` },
             ]
           : []
@@ -105,6 +105,7 @@ export function CNPGDestroyInstanceDialog({
           ? `Once ${pod} is destroyed its name is removed from the fence (a fence on every instance, ["*"], stays).`
           : `${pod} must be fenced first; its name is removed from the fence once it is destroyed (a fence on every instance, ["*"], stays).`,
         'Use this for a standby that cannot rejoin (for example after a failed pg_rewind or a corrupted volume). A plain restart deletes only the Pod and keeps the volumes attached.',
+        'Only volumes owned by this Cluster or detached by Radar from this Cluster are included.',
         keep ? 'Kept volumes stay in the namespace, no longer owned by the cluster; delete them yourself once you no longer need them.' : null,
       ].filter(Boolean) as string[]}
       disabledReason={

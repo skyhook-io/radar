@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Grant } from '@skyhook-io/k8s-ui'
 import { apiFetch, ApiError, fetchJSON, useRadarFeature } from './client'
 import type { ActionCapability } from './actions'
-import { getApiBase } from './config'
+import { apiUrl } from './config'
 import { shouldRetryRadarQuery } from './radarFeatures'
 
 export type CNPGReadState = 'ok' | 'denied' | 'notFound' | 'error' | 'skipped' | 'partial'
@@ -163,7 +163,7 @@ export async function downloadCNPGReport(namespace: string, name: string, opts: 
     if (opts.queryText) q.set('queryText', 'true')
   }
   const qs = q.toString()
-  const res = await apiFetch(`${getApiBase()}${clusterPath(namespace, name)}/report${qs ? `?${qs}` : ''}`)
+  const res = await apiFetch(apiUrl(`${clusterPath(namespace, name)}/report${qs ? `?${qs}` : ''}`))
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
     throw new ApiError(err.error || `HTTP ${res.status}`, res.status, err)
