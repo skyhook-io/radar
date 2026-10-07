@@ -60,25 +60,26 @@ export interface CNPGObservation {
    * When each source was last fetched successfully and whether its latest
    * fetch failed. A source without a record here, not fetched successfully
    * since the operation started, or whose refresh failed is withheld from
-   * its observer: cached answers from before the action must not certify
-   * its outcome.
+   * its observer. Cluster-scoped sources also carry the UID they read, so
+   * facts from a replaced Cluster cannot certify the operation's outcome.
    */
-  freshness?: Partial<Record<CNPGObservedSource, { updatedAt: number; failed: boolean }>>
+  freshness?: Partial<Record<CNPGObservedSource, { updatedAt: number; failed: boolean; clusterUID?: string }>>
 }
 
-export type CNPGObservedSource = 'facts' | 'cluster' | 'ha' | 'runtime' | 'backups'
+export type CNPGObservedSource = 'clusterUID' | 'facts' | 'cluster' | 'ha' | 'runtime' | 'backups'
 
 /** The observation with every stale or failed source removed. */
 export function freshObservation(op: CNPGTrackedOperation, obs: CNPGObservation): CNPGObservation {
   const out: CNPGObservation = { ...obs }
   for (const source of CNPG_OBSERVED_SOURCES) {
     const f = obs.freshness?.[source]
-    if (!f || f.failed || f.updatedAt < op.startedAt) out[source] = undefined
+    const differentCluster = op.clusterUID && source !== 'clusterUID' && source !== 'backups' && f?.clusterUID !== op.clusterUID
+    if (!f || f.failed || f.updatedAt < op.startedAt || differentCluster) out[source] = undefined
   }
   return out
 }
 
-const CNPG_OBSERVED_SOURCES: readonly CNPGObservedSource[] = ['facts', 'cluster', 'ha', 'runtime', 'backups']
+const CNPG_OBSERVED_SOURCES: readonly CNPGObservedSource[] = ['clusterUID', 'facts', 'cluster', 'ha', 'runtime', 'backups']
 
 export interface CNPGObserverResult {
   state: Exclude<CNPGOpState, 'superseded' | 'stalled'>
@@ -114,12 +115,13 @@ export function cnpgOperationFollowed(op: CNPGTrackedOperation): boolean {
 export function advanceCNPGOperation(op: CNPGTrackedOperation, obs: CNPGObservation): CNPGTrackedOperation {
   if (CNPG_OP_TERMINAL.has(op.state)) return op
   op = { ...op, lastCheckedAt: obs.now }
-  if (op.clusterUID && obs.clusterUID && obs.clusterUID !== op.clusterUID) {
+  const current = freshObservation(op, obs)
+  if (op.clusterUID && current.clusterUID && current.clusterUID !== op.clusterUID) {
     return { ...op, state: 'superseded', detail: 'The Cluster was deleted and recreated; this operation no longer applies to it', finishedAt: obs.now }
   }
   const observer = observers.get(op.kind)
   if (!observer) return { ...op, state: 'unobservable', detail: 'Radar has no way to follow this operation' }
-  const res = observer(op, freshObservation(op, obs))
+  const res = observer(op, current)
   const moved = res.progressKey !== undefined && res.progressKey !== op.progressKey
   const lastProgressAt = moved ? obs.now : op.lastProgressAt
   let state: CNPGOpState = res.state

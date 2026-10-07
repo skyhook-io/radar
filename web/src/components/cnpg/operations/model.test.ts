@@ -72,11 +72,11 @@ function ha(over: Partial<CNPGClusterHA>): CNPGClusterHA {
   }
 }
 
-const fresh = { updatedAt: T0 + 30_000, failed: false }
+const fresh = { updatedAt: T0 + 30_000, failed: false, clusterUID: 'uid-1' }
 const obs = (o: Partial<CNPGObservation>): CNPGObservation => ({
   now: T0 + 30_000,
   clusterUID: 'uid-1',
-  freshness: { facts: fresh, cluster: fresh, ha: fresh, runtime: fresh, backups: fresh },
+  freshness: { clusterUID: fresh, facts: fresh, cluster: fresh, ha: fresh, runtime: fresh, backups: fresh },
   ...o,
 })
 
@@ -115,6 +115,16 @@ describe('switchover observer', () => {
   it('is superseded when the Cluster was recreated', () => {
     const o = advanceCNPGOperation(op({}), obs({ clusterUID: 'uid-2', facts: facts({}) }))
     expect(o.state).toBe('superseded')
+  })
+
+  it.each([
+    undefined,
+    { updatedAt: T0 - 1, failed: false },
+    { updatedAt: T0 + 30_000, failed: true },
+  ])('withholds an unverified replacement UID (%j)', (clusterUID) => {
+    const o = advanceCNPGOperation(op({}), obs({ clusterUID: 'uid-2', freshness: { clusterUID } }))
+    expect(o.state).not.toBe('superseded')
+    expect(o.finishedAt).toBeUndefined()
   })
 })
 
@@ -254,8 +264,8 @@ describe('stale observation sources', () => {
       obs({
         ...promoted(),
         freshness: {
-          facts: { updatedAt: now, failed: false },
-          runtime: { updatedAt: now, failed: false },
+          facts: { updatedAt: now, failed: false, clusterUID: 'uid-1' },
+          runtime: { updatedAt: now, failed: false, clusterUID: 'uid-1' },
           ha: { updatedAt: T0 - 3_600_000, failed: true },
         },
       }),
@@ -266,13 +276,23 @@ describe('stale observation sources', () => {
   it('an answer from before the action is withheld even when its refresh did not fail', () => {
     const o = advanceCNPGOperation(
       op({}),
-      obs({ ...promoted(), freshness: { facts: { updatedAt: now, failed: false }, runtime: { updatedAt: now, failed: false }, ha: { updatedAt: T0 - 1, failed: false } } }),
+      obs({ ...promoted(), freshness: { facts: { updatedAt: now, failed: false, clusterUID: 'uid-1' }, runtime: { updatedAt: now, failed: false, clusterUID: 'uid-1' }, ha: { updatedAt: T0 - 1, failed: false } } }),
     )
     expect(o.state).not.toBe('completed')
   })
   it('fresh sources still complete it', () => {
     const o = advanceCNPGOperation(op({}), obs({ ...promoted(), freshness: { facts: fresh, runtime: fresh, ha: fresh } }))
     expect(o.state).toBe('completed')
+  })
+
+  it.each(['facts', 'ha', 'runtime'] as const)('a fresh %s response from another Cluster cannot certify completion', (source) => {
+    const observation = obs({ ...promoted() })
+    if (source === 'ha') observation.ha!.cluster.uid = 'another-uid'
+    if (source === 'runtime') observation.runtime!.cluster.uid = 'another-uid'
+    observation.freshness = { ...observation.freshness, [source]: { ...fresh, clusterUID: 'another-uid' } }
+    const result = advanceCNPGOperation(op({}), observation)
+    expect(result.state).not.toBe('completed')
+    expect(result.finishedAt).toBeUndefined()
   })
   it('a source with no freshness record is withheld', () => {
     const o = advanceCNPGOperation(op({}), { ...obs(promoted()), freshness: undefined })

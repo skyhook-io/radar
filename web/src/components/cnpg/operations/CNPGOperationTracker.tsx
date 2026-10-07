@@ -42,22 +42,9 @@ export function CNPGOperationTracker({ namespace, name, uid }: { namespace: stri
   const allOps = useCNPGOperations()
   const ops = cnpgOperationsForCluster(allOps, { namespace, name, context, uid })
   const active = ops.filter(cnpgOperationFollowed)
-  const following = active.length > 0
-  const needsRuntime = active.some((o) => ['switchover', 'unfence', 'restart', 'restartInstance'].includes(o.kind))
-
-  useEffect(() => {
-    if (!uid) return
-    updateCNPGOperations((all) => {
-      let changed = false
-      const next = all.map((op) => {
-        if (op.namespace !== namespace || op.cluster !== name || op.context !== context || !op.clusterUID || op.clusterUID === uid || !cnpgOperationFollowed(op))
-          return op
-        changed = true
-        return advanceCNPGOperation(op, { now: Date.now(), clusterUID: uid })
-      })
-      return changed ? next : all
-    })
-  }, [namespace, name, context, uid])
+  const followed = cnpgOperationsForCluster(allOps, { namespace, name, context }).filter(cnpgOperationFollowed)
+  const following = followed.length > 0
+  const needsRuntime = followed.some((o) => ['switchover', 'unfence', 'restart', 'restartInstance'].includes(o.kind))
 
   const queryClient = useQueryClient()
   const caps = useCNPGClusterCapabilities(namespace, name, following)
@@ -86,20 +73,27 @@ export function CNPGOperationTracker({ namespace, name, uid }: { namespace: stri
       (c: any) => c?.metadata?.namespace === namespace && c?.metadata?.name === name,
     )
     const backupsReadable = ws?.coverage.backups ? coverageReadable(ws.coverage.backups, namespace) : false
+    const identity = [
+      { uid: caps.data?.uid, ...capsFresh },
+      { uid: ha.data?.cluster.uid, ...haFresh },
+      { uid: runtime.data?.cluster.uid, ...runtimeFresh },
+      { uid: cluster?.metadata?.uid, ...workspaceFresh },
+    ].filter((source) => source.uid && !source.failed).sort((a, b) => b.updatedAt - a.updatedAt)[0]
     return {
       now: Date.now(),
-      clusterUID: caps.data?.uid ?? ha.data?.cluster.uid ?? cluster?.metadata?.uid,
+      clusterUID: identity?.uid,
       facts: caps.data?.facts,
       cluster,
       ha: ha.data,
       runtime: runtime.data,
       backups: backupsReadable ? (ws?.objects.backups ?? []) : undefined,
       freshness: {
-        facts: { updatedAt: capsFresh.updatedAt, failed: capsFresh.failed },
-        cluster: { updatedAt: workspaceFresh.updatedAt, failed: workspaceFresh.failed },
+        clusterUID: identity && { updatedAt: identity.updatedAt, failed: identity.failed },
+        facts: { updatedAt: capsFresh.updatedAt, failed: capsFresh.failed, clusterUID: caps.data?.uid },
+        cluster: { updatedAt: workspaceFresh.updatedAt, failed: workspaceFresh.failed, clusterUID: cluster?.metadata?.uid },
         backups: { updatedAt: workspaceFresh.updatedAt, failed: workspaceFresh.failed },
-        ha: { updatedAt: haFresh.updatedAt, failed: haFresh.failed },
-        runtime: { updatedAt: runtimeFresh.updatedAt, failed: runtimeFresh.failed },
+        ha: { updatedAt: haFresh.updatedAt, failed: haFresh.failed, clusterUID: ha.data?.cluster.uid },
+        runtime: { updatedAt: runtimeFresh.updatedAt, failed: runtimeFresh.failed, clusterUID: runtime.data?.cluster.uid },
       },
     }
   }, [

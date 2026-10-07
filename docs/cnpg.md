@@ -232,6 +232,8 @@ Daily, weekly and monthly inputs are shared by schedule creation and editing. Ad
 
 The Cluster header follows accepted operations using caller-readable live facts. The fleet exposes their **last checked state in this tab** without mounting an observer for every row; opening the Cluster resumes following unfinished operations. Records match context/namespace/name and the Cluster UID where it was recorded, so a recreated Cluster does not inherit a known-UID operation. A schedule run whose requester lacked the Cluster UID says that identity still needs verification.
 
+Replacement is concluded from a successful identity read since the operation started. Unfinished predecessor records remain observed until that check completes, including records hidden by the current page's identity filter.
+
 **Copy handoff** includes the subject, known UID, requested action/time, last check, observed state and verification checklist, plus a context-pinned live Cluster link that respects an embedded host's basename. It excludes the private baseline. Recipients see current Kubernetes facts; they do not import the sender's operation record. Session storage remains local, bounded to 50 records, with finished records pruned after 30 minutes during updates; there is no durable or shared operation history.
 
 ## Restore

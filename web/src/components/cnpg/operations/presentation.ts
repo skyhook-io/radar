@@ -36,14 +36,14 @@ export const CNPG_OP_STATE_SEVERITY: Record<CNPGOpState, 'success' | 'error' | '
 
 export function cnpgOperationsForCluster(
   ops: CNPGTrackedOperation[],
-  subject: { context: string; namespace: string; name: string; uid: string },
+  subject: { context: string; namespace: string; name: string; uid?: string },
 ): CNPGTrackedOperation[] {
   return ops.filter(
     (op) =>
       op.context === subject.context &&
       op.namespace === subject.namespace &&
       op.cluster === subject.name &&
-      (!op.clusterUID || op.clusterUID === subject.uid),
+      (subject.uid === undefined || !op.clusterUID || op.clusterUID === subject.uid),
   )
 }
 

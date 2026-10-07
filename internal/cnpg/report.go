@@ -176,6 +176,9 @@ func (b *cnpgReportBuilder) build(opts ReportOptions) {
 	for _, j := range jobs {
 		if controlledBy(j.OwnerReferences, Group, "Cluster", name, b.cluster.GetUID()) {
 			ownedJobs[j.Name] = true
+			for _, sref := range cnpgPodSecretNames(&j.Spec.Template.Spec) {
+				b.addSecret(sref, "Job/"+j.Name)
+			}
 			cnpgReportCleanPodSpec(&j.Spec.Template.Spec)
 			cnpgReportCleanMetadata(&j)
 			cnpgReportCleanMetadata(&j.Spec.Template.ObjectMeta)

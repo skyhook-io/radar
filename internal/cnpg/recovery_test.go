@@ -320,6 +320,7 @@ func TestCNPGReportBundle(t *testing.T) {
 	env := newCNPGActionEnv(t, []runtime.Object{cluster}, pod)
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "pg-init", Namespace: cluster.GetNamespace(), Labels: map[string]string{clusterLabel: cluster.GetName()}, OwnerReferences: []metav1.OwnerReference{{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: cluster.GetName(), UID: cluster.GetUID(), Controller: boolPtr(true)}}}, Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "init", Command: []string{"psql", "postgresql://app:job-password@db/pg"}}}}}}}
 	job.Spec.Template.Annotations = pod.Annotations
+	job.Spec.Template.Spec.Containers[0].Env = []corev1.EnvVar{{Name: "FROM_SECRET", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "pg-job-credentials"}, Key: "password"}}}}
 	if _, err := env.typed.BatchV1().Jobs(job.Namespace).Create(context.Background(), job, metav1.CreateOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -368,8 +369,11 @@ func TestCNPGReportBundle(t *testing.T) {
 		t.Fatalf("report changed source annotations: %v", err)
 	}
 	secrets := b.secretRefs()
-	if len(secrets) != 1 || secrets[0].Name != "pg-superuser" {
+	if len(secrets) != 2 || secrets[0].Name != "pg-job-credentials" || len(secrets[0].ReferencedBy) != 1 || secrets[0].ReferencedBy[0] != "Job/pg-init" || secrets[1].Name != "pg-superuser" {
 		t.Fatalf("secret names: %+v", secrets)
+	}
+	if !strings.Contains(files["r/manifests/cluster-jobs.yaml"], "pg-job-credentials") {
+		t.Fatal("Job-only Secret references must remain in the manifest")
 	}
 	var logs *CNPGReportItem
 	for i := range index.Contents {
