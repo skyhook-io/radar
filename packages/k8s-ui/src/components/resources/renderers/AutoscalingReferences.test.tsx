@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it, vi } from 'vitest'
 import { HPARenderer } from './HPARenderer'
 import { VPARenderer } from './VPARenderer'
+import { KedaScaledObjectRenderer } from './KedaScaledObjectRenderer'
 import { initNavigationMap, resetNavigationMap } from '../../../utils/navigation'
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -142,4 +143,16 @@ it.each(['HPA', 'VPA'])('does not infer missing %s target identity', (kind) => {
   const doc = new DOMParser().parseFromString(html, 'text/html')
   expect([...doc.querySelectorAll('button')].some((b) => b.textContent?.includes('ambiguous'))).toBe(false)
   expect(html).not.toContain('Deployment/ambiguous')
+})
+
+it.each([
+  [{ name: 'worker' }, {kind:'Deployment', group:'apps', namespace:'team', name:'worker'}],
+  [{apiVersion:'custom.example.io/v1',kind:'Deployment',name:'worker'}, {kind:'Deployment',group:'custom.example.io',namespace:'team',name:'worker'}],
+])('preserves KEDA documented defaults and explicit custom API identity', async (target, expected) => {
+  const element = document.createElement('div'); const root = createRoot(element); const onNavigate = vi.fn()
+  try {
+    await act(async () => root.render(<KedaScaledObjectRenderer data={{metadata:{namespace:'team'},spec:{scaleTargetRef:target}}} onNavigate={onNavigate}/>))
+    const button = [...element.querySelectorAll('button')].find(b => b.textContent === 'Deployment/worker')
+    expect(button).toBeDefined(); await act(async () => button!.click()); expect(onNavigate).toHaveBeenCalledWith(expected)
+  } finally { await act(async () => root.unmount()) }
 })
