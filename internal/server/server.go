@@ -2741,6 +2741,7 @@ func informerKeyForKind(kind string) string {
 // apply unchanged; the dynamic path keeps the connected gate (the dynamic
 // cache exists only after full initialization).
 func (s *Server) gateResourceRead(w http.ResponseWriter, kind, group string) (*k8s.ResourceCache, bool) {
+	kind = normalizeKind(kind)
 	key := informerKeyForKind(kind)
 	if key == "" || (group != "" && !k8s.TypedKindOwnsGroup(kind, group)) {
 		if !s.requireConnected(w) {

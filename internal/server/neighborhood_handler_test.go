@@ -120,8 +120,8 @@ func TestNeighborhoodMissingRootDoesNotEstablishAbsenceDuringSync(t *testing.T) 
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
 	env := newAuthTestServer(t)
 	env.srv.permCache.Set("bob", nil, &auth.UserPermissions{AllowedNamespaces: []string{"default"}})
-	probe := func() (int, string) {
-		resp := env.authGet(t, "/api/ai/neighborhood/replicaset/default/missing", "bob", "")
+	probeKind := func(kind string) (int, string) {
+		resp := env.authGet(t, "/api/ai/neighborhood/"+kind+"/default/missing", "bob", "")
 		defer resp.Body.Close()
 		var body struct {
 			ErrorCode string `json:"error_code"`
@@ -130,6 +130,12 @@ func TestNeighborhoodMissingRootDoesNotEstablishAbsenceDuringSync(t *testing.T) 
 			t.Fatal(err)
 		}
 		return resp.StatusCode, body.ErrorCode
+	}
+	probe := func() (int, string) { return probeKind("ReplicaSet") }
+	for _, kind := range []string{"replicaset", "ReplicaSet", "REPLICASET"} {
+		if status, code := probeKind(kind); status != http.StatusServiceUnavailable || code != "kind_sync_pending" {
+			t.Fatalf("pending %s: %d %s", kind, status, code)
+		}
 	}
 	if status, code := probe(); status != http.StatusServiceUnavailable || code != "kind_sync_pending" {
 		t.Fatalf("pending inventory: %d %s", status, code)

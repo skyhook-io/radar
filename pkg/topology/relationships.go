@@ -1,11 +1,14 @@
 package topology
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
+	k8score "github.com/skyhook-io/radar/pkg/k8score"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -821,7 +824,14 @@ func lookupObjectMetadata(kindLower, namespace, name string, provider ResourcePr
 	// returns a *unstructured.Unstructured, which satisfies metav1.Object.
 	if dp != nil {
 		if gvr, ok := dp.GetGVR(kindLower); ok {
-			return dp.Get(gvr, namespace, name)
+			obj, err := dp.Get(gvr, namespace, name)
+			if errors.Is(err, k8score.ErrResourceNotFound) || apierrors.IsNotFound(err) {
+				return nil, nil
+			}
+			if obj == nil || err != nil {
+				return nil, err
+			}
+			return obj, nil
 		}
 	}
 	return nil, nil

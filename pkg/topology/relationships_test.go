@@ -1,7 +1,10 @@
 package topology
 
 import (
+	"errors"
 	"fmt"
+	k8score "github.com/skyhook-io/radar/pkg/k8score"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -716,5 +719,31 @@ func TestRelationshipLookupFailureIsExplicit(t *testing.T) {
 	ready := GetRelationshipsWithObject("Node", "", "test", &corev1.Node{}, topo, &stubProvider{}, nil, nil)
 	if ready != nil && len(ready.Warnings) != 0 {
 		t.Fatalf("ready empty inventory warned: %+v", ready)
+	}
+}
+
+// A cache-confirmed absence differs from an unavailable inventory.
+type relationshipMetadataErrorProvider struct {
+	stubDP
+	err error
+}
+
+func (p *relationshipMetadataErrorProvider) Get(schema.GroupVersionResource, string, string) (*unstructured.Unstructured, error) {
+	return nil, p.err
+}
+func TestRelationshipMetadataAbsenceDoesNotWarn(t *testing.T) {
+	for _, kind := range []string{"pod", "widget"} {
+		gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+		for _, err := range []error{nil, fmt.Errorf("cache: %w", k8score.ErrResourceNotFound), apierrors.NewNotFound(gvr.GroupResource(), "missing"), errors.New("informer is not synced")} {
+			dp := &relationshipMetadataErrorProvider{stubDP: stubDP{gvr: map[string]schema.GroupVersionResource{kind: gvr}}, err: err}
+			rel := GetRelationships(kind, "demo", "missing", &Topology{}, &stubProvider{}, dp)
+			wantWarning := err != nil && !errors.Is(err, k8score.ErrResourceNotFound) && !apierrors.IsNotFound(err)
+			if wantWarning && (rel == nil || len(rel.Warnings) != 1) {
+				t.Fatalf("%s unavailable inventory: %+v", kind, rel)
+			}
+			if !wantWarning && rel != nil && len(rel.Warnings) != 0 {
+				t.Fatalf("%s known absence warned: %+v", kind, rel)
+			}
+		}
 	}
 }
