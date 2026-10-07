@@ -179,7 +179,7 @@ Flags:
 			// Catch this before executionProfile, which reports it as a usage
 			// error with no way forward. Here it is a machine-setup problem the
 			// user can fix, and this is their own machine.
-			fmt.Fprintln(os.Stderr, noAgentCLIHint)
+			fmt.Fprintln(os.Stderr, localNoAgentHint())
 			return 1
 		}
 		profile, err := executionProfile(effective, o.profile)
@@ -224,7 +224,11 @@ Flags:
 		// Eligible separates "this Radar could run investigations, it just found
 		// no CLI" from "this deployment never can" (--no-mcp, auth, in-cluster or
 		// shared), where installing a CLI is the wrong advice.
-		if agents.Eligible {
+		if agents.Eligible && agents.CLIOverride {
+			fmt.Fprintf(os.Stderr, "the Radar at %s was started with RADAR_AI_CLI_BIN set to a file it can't run, "+
+				"so it doesn't look for other agent CLIs. Correct the path or remove the variable, then restart "+
+				"that Radar.\n", base)
+		} else if agents.Eligible {
 			fmt.Fprintf(os.Stderr, "the Radar at %s found no agent CLI. Install Claude Code, Codex, Cursor, "+
 				"or OpenCode on that machine and run this again, or start that Radar with RADAR_AI_CLI_BIN set to "+
 				"the full path of one it already has.\n", base)
@@ -325,10 +329,11 @@ func resolveServer(explicit string) (string, error) {
 }
 
 type agentsResponse struct {
-	Enabled   bool            `json:"enabled"`
-	Eligible  bool            `json:"eligible"`
-	Consented map[string]bool `json:"consented"`
-	Agents    []ai.AgentInfo  `json:"agents"`
+	Enabled     bool            `json:"enabled"`
+	Eligible    bool            `json:"eligible"`
+	CLIOverride bool            `json:"cliOverride"`
+	Consented   map[string]bool `json:"consented"`
+	Agents      []ai.AgentInfo  `json:"agents"`
 }
 
 func fetchAgents(base string) (agentsResponse, error) {
@@ -388,6 +393,17 @@ func standaloneEffectiveAgent(ctx context.Context, requested string) string {
 // drive" — every local surface that hits it reads this, so they can't drift.
 const noAgentCLIHint = "no supported agent CLI found. Install Claude Code, Codex, Cursor, or OpenCode, " +
 	"or set RADAR_AI_CLI_BIN to the full path of one you already have"
+
+// localNoAgentHint is noAgentCLIHint unless RADAR_AI_CLI_BIN is set here: then
+// detection is off and the variable names a file Radar can't run, so installing
+// a CLI wouldn't help.
+func localNoAgentHint() string {
+	if v := strings.TrimSpace(os.Getenv("RADAR_AI_CLI_BIN")); v != "" {
+		return "RADAR_AI_CLI_BIN is set to " + v + ", which isn't an executable Radar can run. " +
+			"While it's set, Radar doesn't look for other agent CLIs. Correct the path or unset it"
+	}
+	return noAgentCLIHint
+}
 
 func executionProfile(agent, requested string) (ai.ExecutionProfile, error) {
 	if agent == "" {

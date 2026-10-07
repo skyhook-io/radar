@@ -364,3 +364,16 @@ func TestProbeListeningIgnoresBasePathSuffix(t *testing.T) {
 		t.Error("probeListening on a closed port = true, want false")
 	}
 }
+
+// With RADAR_AI_CLI_BIN set, detection is off, so "install one" can't help.
+func TestLocalNoAgentHintNamesABrokenOverride(t *testing.T) {
+	t.Setenv("RADAR_AI_CLI_BIN", "")
+	if got := localNoAgentHint(); !strings.Contains(got, "Install Claude Code") {
+		t.Errorf("without the override, hint = %q, want install advice", got)
+	}
+	t.Setenv("RADAR_AI_CLI_BIN", "/opt/typo/claude")
+	got := localNoAgentHint()
+	if !strings.Contains(got, "/opt/typo/claude") || strings.Contains(got, "Install") {
+		t.Errorf("with a broken override, hint = %q, want it to name the path and not suggest an install", got)
+	}
+}

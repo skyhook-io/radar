@@ -644,8 +644,11 @@ func addAgentDirToPath(cmd *exec.Cmd) {
 		cmd.Env = env
 		return
 	}
-	// No PATH at all: the child falls back to the system's default search
-	// path, and a PATH holding only this directory would take that away.
+	// No PATH at all: a child would search the system default, so keep that
+	// and add the agent's directory after it rather than replace it.
+	if runtime.GOOS != "windows" {
+		cmd.Env = append(env, "PATH=/usr/bin:/bin"+string(os.PathListSeparator)+dir)
+	}
 }
 
 // Windows environment names and paths are case-insensitive, and PATH is

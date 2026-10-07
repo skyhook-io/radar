@@ -247,12 +247,13 @@ func TestAddAgentDirToPathKeepsAScrubbedEnvScrubbed(t *testing.T) {
 	}
 }
 
-func TestAddAgentDirToPathLeavesAnEnvWithoutPATHAlone(t *testing.T) {
+// With no PATH a child searches the system default; that must survive.
+func TestAddAgentDirToPathKeepsTheDefaultSearchPathWhenPATHIsUnset(t *testing.T) {
 	cmd := exec.Command("/opt/agents/codex")
 	cmd.Env = []string{"HOME=/h"}
 	addAgentDirToPath(cmd)
-	if want := []string{"HOME=/h"}; !slices.Equal(cmd.Env, want) {
-		t.Errorf("cmd.Env = %v, want %v: a PATH of only the agent's folder would hide the system default", cmd.Env, want)
+	if want := []string{"HOME=/h", "PATH=/usr/bin:/bin:/opt/agents"}; !slices.Equal(cmd.Env, want) {
+		t.Errorf("cmd.Env = %v, want %v", cmd.Env, want)
 	}
 }
 

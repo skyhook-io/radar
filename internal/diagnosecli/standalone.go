@@ -96,7 +96,7 @@ func bootEphemeral(kubeconfig string) (base string, shutdown func(), err error) 
 			}
 			if code == http.StatusNotImplemented {
 				close(stopSpin)
-				return "", nil, errors.New(noAgentCLIHint)
+				return "", nil, errors.New(localNoAgentHint())
 			}
 		}
 		if time.Now().After(deadline) {
