@@ -67,6 +67,7 @@ let discoveredPluralToKind: Record<string, string> | null = null
 let discoveredKindToPlural: Record<string, string> | null = null
 let discoveredGroupKindToPlural: Record<string, string> | null = null
 let discoveredGroupPluralToKind: Record<string, string> | null = null
+let discoveredGroupKindNamespaced: Record<string, boolean> | null = null
 
 /**
  * Initialize navigation maps from discovered API resources.
@@ -78,6 +79,7 @@ export function initNavigationMap(resources: APIResource[]) {
   const k2p: Record<string, string> = {}
   const gk2p: Record<string, string> = {}
   const gp2k: Record<string, string> = { ...BUILTIN_GROUP_PLURAL_TO_KIND }
+  const scopes: Record<string, boolean> = {}
   for (const r of resources) {
     const plural = r.name.toLowerCase()
     // First-wins on plurals: BUILTIN_PLURAL_TO_KIND seeds canonical core mappings
@@ -86,6 +88,7 @@ export function initNavigationMap(resources: APIResource[]) {
     if (!(plural in p2k)) p2k[plural] = r.kind
     k2p[r.kind.toLowerCase()] = plural
     gk2p[`${r.group}/${r.kind.toLowerCase()}`] = plural
+    scopes[`${r.group}/${r.kind.toLowerCase()}`] = r.namespaced
     const groupPlural = `${r.group}/${plural}`
     if (!(groupPlural in gp2k)) gp2k[groupPlural] = r.kind
   }
@@ -93,6 +96,7 @@ export function initNavigationMap(resources: APIResource[]) {
   discoveredKindToPlural = k2p
   discoveredGroupKindToPlural = gk2p
   discoveredGroupPluralToKind = gp2k
+  discoveredGroupKindNamespaced = scopes
 }
 
 /** Reset navigation maps to builtin-only state. For testing. */
@@ -101,6 +105,7 @@ export function resetNavigationMap() {
   discoveredKindToPlural = null
   discoveredGroupKindToPlural = null
   discoveredGroupPluralToKind = null
+  discoveredGroupKindNamespaced = null
 }
 
 function getPluralToKind(): Record<string, string> {
@@ -223,6 +228,26 @@ export function apiVersionToGroup(apiVersion?: string | null): string {
   if (!apiVersion) return ''
   const i = apiVersion.indexOf('/')
   return i === -1 ? '' : apiVersion.slice(0, i)
+}
+
+/** A Kubernetes ObjectReference retains its own API identity and namespace.
+ * Cluster scope comes from exact group/kind discovery (or known built-ins).
+ * Missing identity/scope stays non-navigable rather than guessing the core API
+ * or borrowing the referring object's namespace. UID is not a drawer locator.
+ */
+export function objectReferenceToResourceRef(ref: {
+  apiVersion?: string
+  kind?: string
+  namespace?: string
+  name?: string
+} | null | undefined): ResourceRef | null {
+  if (!ref?.apiVersion || !ref.kind || !ref.name) return null
+  const group = apiVersionToGroup(ref.apiVersion)
+  const key = `${group}/${ref.kind.toLowerCase()}`
+  const namespaced = discoveredGroupKindNamespaced?.[key]
+    ?? CORE_RESOURCES.find(r => r.group === group && r.kind.toLowerCase() === ref.kind!.toLowerCase())?.namespaced
+  if (namespaced !== false && !ref.namespace) return null
+  return { kind: ref.kind, group, namespace: namespaced === false ? '' : ref.namespace!, name: ref.name }
 }
 
 // -----------------------------------------------------------------------------

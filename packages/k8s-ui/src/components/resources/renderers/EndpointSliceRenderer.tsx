@@ -3,6 +3,7 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
 import { Badge } from '../../ui/Badge'
 import type { ResourceRef } from '../../../types'
+import { objectReferenceToResourceRef } from '../../../utils/navigation'
 
 interface EndpointSliceRendererProps {
   data: any
@@ -86,7 +87,7 @@ export function EndpointSliceRenderer({ data, onNavigate }: EndpointSliceRendere
             {endpoints.map((endpoint: any, index: number) => {
               const ready = isEndpointReady(endpoint)
               const targetLabel = endpointTargetLabel(endpoint)
-              const target = endpoint.targetRef
+              const targetRef = objectReferenceToResourceRef(endpoint.targetRef)
               return (
                 <div key={`${endpoint.addresses?.join(',') || 'endpoint'}-${index}`} className="card-inner text-sm space-y-3">
                   <div className="flex items-start justify-between gap-3">
@@ -98,20 +99,15 @@ export function EndpointSliceRenderer({ data, onNavigate }: EndpointSliceRendere
                           </Badge>
                         ))}
                       </div>
-                      {targetLabel && (
+                      {targetLabel && (onNavigate && targetRef ? (
                         <button
                           type="button"
                           className="text-xs text-theme-text-secondary hover:text-accent-text"
-                          disabled={!onNavigate}
-                          onClick={() => onNavigate?.({
-                            kind: target.kind,
-                            namespace: target.namespace || metadata.namespace,
-                            name: target.name,
-                          })}
+                          onClick={() => onNavigate(targetRef)}
                         >
                           {targetLabel}
                         </button>
-                      )}
+                      ) : <span className="text-xs text-theme-text-secondary">{targetLabel}</span>)}
                     </div>
                     <div className="flex flex-wrap justify-end gap-1.5 shrink-0">
                       <span className={clsx('badge-sm', ready ? 'status-healthy' : 'status-unhealthy')}>
@@ -127,7 +123,13 @@ export function EndpointSliceRenderer({ data, onNavigate }: EndpointSliceRendere
                   </div>
                   {(endpoint.nodeName || endpoint.zone) && (
                     <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-theme-text-tertiary">
-                      {endpoint.nodeName && <span>Node: {endpoint.nodeName}</span>}
+                      {endpoint.nodeName && <span>Node: {onNavigate ? (
+                        <button
+                          type="button"
+                          className="hover:text-accent-text hover:underline"
+                          onClick={() => onNavigate({ kind: 'Node', group: '', namespace: '', name: endpoint.nodeName })}
+                        >{endpoint.nodeName}</button>
+                      ) : endpoint.nodeName}</span>}
                       {endpoint.zone && <span>Zone: {endpoint.zone}</span>}
                     </div>
                   )}
