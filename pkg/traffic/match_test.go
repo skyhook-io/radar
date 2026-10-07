@@ -4,7 +4,9 @@ import "testing"
 
 func TestFlowMatch(t *testing.T) {
 	ep := func(ns, name string) Endpoint { return Endpoint{Namespace: ns, Name: name, Kind: EndpointKindPod} }
-	ref := func(ns, name string) EndpointRef { return EndpointRef{Namespace: ns, Name: name, Kind: EndpointKindPod} }
+	ref := func(ns, name string) EndpointRef {
+		return EndpointRef{Namespace: ns, Name: name, Kind: EndpointKindPod}
+	}
 	flow := Flow{Source: ep("a", "web-1"), Destination: ep("b", "db-0")}
 
 	var none *FlowMatch

@@ -47,7 +47,9 @@ func TestHubbleFlowsRequest_PushesNamespacesAndExclusions(t *testing.T) {
 }
 
 func TestHubbleMatchWhitelist(t *testing.T) {
-	pod := func(ns, name string) EndpointRef { return EndpointRef{Namespace: ns, Name: name, Kind: EndpointKindPod} }
+	pod := func(ns, name string) EndpointRef {
+		return EndpointRef{Namespace: ns, Name: name, Kind: EndpointKindPod}
+	}
 
 	t.Run("a pod pair is sent both ways round", func(t *testing.T) {
 		f := hubbleMatchWhitelist(&FlowMatch{Pairs: []EndpointPair{{Source: pod("a", "web-1"), Destination: pod("b", "db-0")}}})
