@@ -3,6 +3,7 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
 import { Badge } from '../../ui/Badge'
 import type { ResourceRef } from '../../../types'
+import { endpointSliceServiceAssociation } from '../../../utils/endpoint-slices'
 
 interface EndpointSliceRendererProps {
   data: any
@@ -25,10 +26,9 @@ function endpointTargetLabel(endpoint: any): string | null {
 
 export function EndpointSliceRenderer({ data, onNavigate }: EndpointSliceRendererProps) {
   const metadata = data.metadata || {}
-  const labels = metadata.labels || {}
   const endpoints = data.endpoints || []
   const ports = data.ports || []
-  const serviceName = labels['kubernetes.io/service-name']
+  const serviceName = endpointSliceServiceAssociation(data)?.name
   const readyCount = endpoints.filter(isEndpointReady).length
   const addresses = endpointAddressCount(endpoints)
 

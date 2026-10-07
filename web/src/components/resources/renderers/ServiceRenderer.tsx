@@ -6,6 +6,7 @@ import { useResources } from '../../../api/client'
 import { useNamespacedCapabilities, useIsLocalDeployment } from '../../../contexts/CapabilitiesContext'
 import type { ResourceRef } from '../../../types'
 import { DURATION_DISCLOSURE } from '@skyhook-io/k8s-ui/utils/animation'
+import { endpointSliceMatchesService } from '@skyhook-io/k8s-ui/utils/endpoint-slices'
 
 interface ServiceRendererProps {
   data: any
@@ -39,18 +40,17 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
   const shouldLoadEndpointSlices = Boolean(
     namespace &&
     serviceName &&
-    spec.type !== 'ExternalName' &&
-    (!spec.selector || Object.keys(spec.selector).length === 0)
+    spec.type !== 'ExternalName'
   )
-  const { data: endpointSlices, isLoading: endpointSlicesLoading } = useResources<any>(
+  const { data: endpointSlices, isLoading: endpointSlicesLoading, error: endpointSlicesError } = useResources<any>(
     'endpointslices',
     namespace,
     'discovery.k8s.io',
     { enabled: shouldLoadEndpointSlices, refetchInterval: 30000 }
   )
   const matchingEndpointSlices = useMemo(
-    () => (endpointSlices || []).filter((slice: any) => slice.metadata?.labels?.['kubernetes.io/service-name'] === serviceName),
-    [endpointSlices, serviceName]
+    () => (endpointSlices || []).filter((slice: any) => endpointSliceMatchesService(slice, data)),
+    [endpointSlices, data]
   )
 
   return (
@@ -60,6 +60,8 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
       copied={copied}
       endpointSlices={matchingEndpointSlices}
       endpointSlicesLoading={endpointSlicesLoading}
+      endpointSlicesEnabled={shouldLoadEndpointSlices}
+      endpointSlicesError={endpointSlicesError?.message}
       onNavigate={onNavigate}
       renderPortAction={({ port, name, appProtocol, protocol }) => (
         <>
