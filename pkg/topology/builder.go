@@ -5117,38 +5117,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// 15c. Create cert-manager Certificate → Issuer/ClusterIssuer edges (via spec.issuerRef)
-	// Build a lookup of existing node IDs for matching
-	existingNodeIDs := make(map[string]bool, len(nodes))
-	for _, node := range nodes {
-		existingNodeIDs[node.ID] = true
-	}
-	for _, cert := range certificateResources {
-		ns := cert.GetNamespace()
-		certID := fmt.Sprintf("certificate/%s/%s", ns, cert.GetName())
-
-		issuerKind, _, _ := unstructured.NestedString(cert.Object, "spec", "issuerRef", "kind")
-		issuerName, _, _ := unstructured.NestedString(cert.Object, "spec", "issuerRef", "name")
-		if issuerKind == "" || issuerName == "" {
-			continue
-		}
-
-		var issuerID string
-		switch issuerKind {
-		case "ClusterIssuer":
-			issuerID = fmt.Sprintf("clusterissuer//%s", issuerName)
-		case "Issuer":
-			issuerID = fmt.Sprintf("issuer/%s/%s", ns, issuerName)
-		}
-		if issuerID != "" && existingNodeIDs[issuerID] {
-			edges = append(edges, Edge{
-				ID:     fmt.Sprintf("%s-to-%s", certID, issuerID),
-				Source: certID,
-				Target: issuerID,
-				Type:   EdgeUses,
-			})
-		}
-	}
+	nodes, edges, issuerWarnings := addCertificateIssuerEdges(nodes, edges, certificateResources, dynamicCache, opts)
+	warnings = append(warnings, issuerWarnings...)
 
 	// Build Certificate lookup by secretName (for IngressRoute → Certificate edges)
 	certBySecret := make(map[string]string) // "ns/secretName" → certificateID
