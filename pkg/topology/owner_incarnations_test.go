@@ -144,3 +144,14 @@ func TestGenericCRDOwnershipUsesObservedConfigIncarnations(t *testing.T) {
 		})
 	}
 }
+
+func TestGenericOwnerClosureRejectsSelfOwner(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "relationships.example.io", Version: "v1", Resource: "widgets"}
+	child := genericIdentityObject(gvr, "Widget", "team", "child", metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "root", UID: "root-uid"}, metav1.OwnerReference{APIVersion: "relationships.example.io/v1", Kind: "Widget", Name: "child", UID: "child-uid"})
+	child.SetUID("child-uid")
+	p := &genericIdentityDynamic{watched: []schema.GroupVersionResource{gvr}, kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {child}}, listCalls: map[schema.GroupVersionResource]int{}}
+	nodes, edges := (&Builder{dynamic: p}).addGenericCRDNodes([]Node{{uid: "root-uid", ID: "deployment/team/root", Kind: KindDeployment, Name: "root", Data: map[string]any{"namespace": "team"}}}, nil, DefaultBuildOptions())
+	if len(nodes) != 2 || len(edges) != 1 || edges[0].Source == edges[0].Target {
+		t.Fatalf("self-reference became graph ownership: %+v %+v", nodes, edges)
+	}
+}
