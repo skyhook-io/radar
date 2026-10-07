@@ -481,9 +481,7 @@ func ownerFromObject(obj runtime.Object, namespace string, topo *topology.Topolo
 			return nil
 		}
 		// An observed cluster-scoped owner has no dependent namespace.
-		if ns, ok := node.Data["namespace"].(string); ok {
-			namespace = ns
-		}
+		namespace, _ = node.Data["namespace"].(string)
 	}
 	return &ContextRef{
 		Kind:      chosen.Kind,

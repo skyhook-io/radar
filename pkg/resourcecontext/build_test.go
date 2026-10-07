@@ -1985,3 +1985,14 @@ func TestBuildOwnerFallbackRejectsObservedReplacement(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildOwnerFallbackUsesObservedClusterScopeWithoutNamespaceField(t *testing.T) {
+	child := &corev1.ConfigMap{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"}, ObjectMeta: metav1.ObjectMeta{Name: "child", Namespace: "team", OwnerReferences: []metav1.OwnerReference{{APIVersion: "gateway.networking.k8s.io/v1", Kind: "GatewayClass", Name: "gateway"}}}}
+	topo := &topology.Topology{Nodes: []topology.Node{{ID: "gatewayclass//gateway", Kind: topology.KindGatewayClass, Name: "gateway", Data: map[string]any{"apiVersion": "gateway.networking.k8s.io/v1"}}}}
+	for _, index := range []*topology.RelationshipsIndex{nil, topology.IndexByResource(topo)} {
+		rc := Build(context.Background(), child, Options{Topology: topo, RelIndex: index})
+		if rc.Owner == nil || rc.Owner.Namespace != "" || rc.Owner.Group != "gateway.networking.k8s.io" {
+			t.Fatalf("observed cluster owner = %+v", rc.Owner)
+		}
+	}
+}

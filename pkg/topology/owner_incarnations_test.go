@@ -8,6 +8,7 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -82,5 +83,28 @@ func TestSeededGenericCRDRejectsExistingReplacementEdge(t *testing.T) {
 	nodes, edges = (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, edges, DefaultBuildOptions())
 	if len(nodes) != 2 || len(edges) != 0 || nodes[1].uid != "current-child" {
 		t.Fatalf("seeded replacement ownership survived: %+v %+v", nodes, edges)
+	}
+}
+
+func TestGenericCRDOwnershipUsesObservedConfigIncarnations(t *testing.T) {
+	for _, parent := range []Node{
+		configMapNode(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "team", UID: "current-config"}}),
+		secretNode(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "config", Namespace: "team", UID: "current-config"}}),
+	} {
+		t.Run(string(parent.Kind), func(t *testing.T) {
+			if parent.uid != "current-config" {
+				t.Fatalf("observed config UID = %q", parent.uid)
+			}
+			gvr := schema.GroupVersionResource{Group: "relationships.example.io", Version: "v1", Resource: "widgets"}
+			for _, uid := range []types.UID{"current-config", "deleted-config"} {
+				child := genericIdentityObject(gvr, "Widget", "team", "child", metav1.OwnerReference{APIVersion: "v1", Kind: string(parent.Kind), Name: "config", UID: uid})
+				dynamic := &genericIdentityDynamic{watched: []schema.GroupVersionResource{gvr}, kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {child}}, listCalls: map[schema.GroupVersionResource]int{}}
+				nodes, edges := (&Builder{dynamic: dynamic}).addGenericCRDNodes([]Node{parent}, nil, DefaultBuildOptions())
+				want := uid == "current-config"
+				if (len(nodes) == 2) != want || (len(edges) == 1) != want {
+					t.Fatalf("owner UID %s: nodes=%+v edges=%+v", uid, nodes, edges)
+				}
+			}
+		})
 	}
 }
