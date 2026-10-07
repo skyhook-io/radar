@@ -72,7 +72,7 @@ function DiagnoseResourceButton({
         }
         aria-label={
           !ready
-            ? "Set up AI investigations"
+            ? notReadyTooltip(d)
             : running
               ? "Investigation running — click to view"
               : problem
@@ -201,9 +201,11 @@ export function GlobalDiagnoseButton() {
         onClick={() => d.openWorkspace()}
         className="relative rounded-md bg-theme-elevated p-1.5 text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
         aria-label={
-          runningCount > 0
-            ? `AI investigations (${runningCount} running)`
-            : "AI investigations"
+          !ready
+            ? notReadyTooltip(d)
+            : runningCount > 0
+              ? `AI investigations (${runningCount} running)`
+              : "AI investigations"
         }
       >
         <Sparkles className="h-4 w-4 text-accent" />
