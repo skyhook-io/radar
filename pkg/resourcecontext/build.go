@@ -608,7 +608,13 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 
 	if target.kind == "Secret" {
 		if accounts, ok := provider.(topology.ServiceAccountProvider); ok {
-			sas, _ := accounts.ServiceAccounts()
+			sas, err := accounts.ServiceAccounts()
+			if err != nil {
+				omitted.add("referencedBy", OmittedUnavailable)
+			}
+			if err != nil {
+				sas = nil
+			}
 			for _, sa := range sas {
 				if sa == nil || sa.Namespace != target.namespace {
 					continue

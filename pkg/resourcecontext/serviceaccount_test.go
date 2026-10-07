@@ -2,6 +2,7 @@ package resourcecontext
 
 import (
 	"context"
+	"errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -11,10 +12,11 @@ import (
 type serviceAccountReferenceProvider struct {
 	mockResourceProvider
 	accounts []*corev1.ServiceAccount
+	err      error
 }
 
 func (p serviceAccountReferenceProvider) ServiceAccounts() ([]*corev1.ServiceAccount, error) {
-	return p.accounts, nil
+	return p.accounts, p.err
 }
 
 func TestBuild_ServiceAccountSecretRolesAndReverse(t *testing.T) {
@@ -52,5 +54,19 @@ func TestBuild_ServiceAccountSecretRolesAndReverse(t *testing.T) {
 	}
 	if rc := Build(context.Background(), &corev1.ServiceAccount{}, Options{Tier: TierBasic}); rc.ServiceAccountSummary != nil {
 		t.Fatalf("projected tokens fabricated: %+v", rc)
+	}
+}
+
+func TestBuild_ServiceAccountReferenceSourceUnavailable(t *testing.T) {
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: "prod"}}
+	rc := Build(context.Background(), secret, Options{Tier: TierBasic, Provider: serviceAccountReferenceProvider{err: errors.New("account source unavailable")}})
+	found := false
+	for _, field := range rc.Omitted {
+		if field.Field == "referencedBy" && field.Reason == OmittedUnavailable {
+			found = true
+		}
+	}
+	if !found || rc.ReferencedBy != nil {
+		t.Fatalf("unavailability hidden: %+v", rc)
 	}
 }
