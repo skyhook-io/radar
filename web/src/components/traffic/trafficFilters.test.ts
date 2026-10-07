@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, type GraphFlow } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -279,5 +279,48 @@ describe('coverageLabel', () => {
   })
   it('is empty when the window is fully covered', () => {
     expect(coverageLabel(undefined, '2026-09-30T08:39:04Z')).toBeNull()
+  })
+})
+
+describe('selectionRawPairs', () => {
+  const edge = (src: [string, string, string], dst: [string, string, string]): AggregatedFlow => ({
+    source: { namespace: src[0], name: src[1], kind: src[2] },
+    destination: { namespace: dst[0], name: dst[1], kind: dst[2] },
+    protocol: 'tcp', port: 443, flowCount: 1, bytesSent: 0, bytesRecv: 0, connections: 1, lastSeen: '',
+  })
+  const a = edge(['shop', 'web-1', 'Pod'], ['', '52.1.1.1', 'External'])
+  const b = edge(['shop', 'web-1', 'Pod'], ['', '52.1.1.2', 'External'])
+  const c = edge(['shop', 'web-1', 'Pod'], ['shop', 'db-0', 'Pod'])
+  // The graph merged a and b into one edge to a renamed external service.
+  const merged: GraphFlow = {
+    ...a,
+    destination: { namespace: '', name: 'HTTPS', kind: 'External' },
+    rawPairs: [endpointPair(a), endpointPair(b)],
+  }
+  const plain: GraphFlow = { ...c, rawPairs: [endpointPair(c)] }
+
+  it('traces a renamed node back to every server edge merged into it', () => {
+    const pairs = selectionRawPairs([merged, plain], { type: 'node', nodeId: 'HTTPS' })
+    expect(pairs?.map(p => p.destination.name).sort()).toEqual(['52.1.1.1', '52.1.1.2'])
+  })
+
+  it('selects an edge by direction', () => {
+    expect(selectionRawPairs([merged, plain], { type: 'edge', sourceId: 'shop/web-1', destId: 'shop/db-0' }))
+      .toEqual([endpointPair(c)])
+    expect(selectionRawPairs([merged, plain], { type: 'edge', sourceId: 'shop/db-0', destId: 'shop/web-1' })).toBeNull()
+  })
+
+  it('dedupes server edges reached through several graph edges', () => {
+    const pairs = selectionRawPairs([merged, plain, { ...plain }], { type: 'node', nodeId: 'shop/web-1' })
+    expect(pairs).toHaveLength(3)
+  })
+
+  it('returns null when nothing traces back, so the list falls back to the sample', () => {
+    expect(selectionRawPairs([merged], { type: 'node', nodeId: 'addon-group' })).toBeNull()
+    expect(selectionRawPairs([merged], null)).toBeNull()
+  })
+
+  it('omits an empty namespace so the server reads it as cluster-level', () => {
+    expect(endpointPair(a).destination).toEqual({ namespace: undefined, name: '52.1.1.1', kind: 'External' })
   })
 })

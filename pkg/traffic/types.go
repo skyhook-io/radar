@@ -98,6 +98,87 @@ type FlowOptions struct {
 	Since     time.Duration // Look back period (default: 5 minutes)
 	Follow    bool          // Stream new flows
 	Limit     int           // Max flows to return (0 = no limit)
+	// Namespaces keeps flows with either endpoint in one of these namespaces
+	// (nil = all). A source that can filter on several namespaces at once uses
+	// it in place of Namespace, so a multi-namespace view stops spending the
+	// source's limits on traffic it is about to discard.
+	Namespaces []string
+	// ExcludeNamespaces drops flows with either endpoint in one of these
+	// namespaces, and ExcludeHost flows to or from a node or the host network.
+	// Both are what the view hides anyway; pushing them to the source keeps
+	// that traffic from using up the source's limits.
+	ExcludeNamespaces []string
+	ExcludeHost       bool
+	// Match narrows the query to the traffic behind one selection in the graph.
+	// A source may use it to fetch less; the result still has to be filtered
+	// with Match.Matches, since a source's own filters can be coarser.
+	Match *FlowMatch
+}
+
+// Excludes reports whether a flow falls under ExcludeNamespaces or ExcludeHost.
+func (o FlowOptions) Excludes(f Flow) bool {
+	if o.ExcludeHost && (f.Source.Kind == EndpointKindHost || f.Destination.Kind == EndpointKindHost) {
+		return true
+	}
+	for _, ns := range o.ExcludeNamespaces {
+		if (f.Source.Namespace != "" && f.Source.Namespace == ns) || (f.Destination.Namespace != "" && f.Destination.Namespace == ns) {
+			return true
+		}
+	}
+	return false
+}
+
+// EndpointRef names an endpoint the way aggregation keys it: namespace and
+// name. Kind is carried so a source can tell which references it can filter
+// on natively (a pod) from ones it cannot (an external address, the host).
+type EndpointRef struct {
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+	Kind      string `json:"kind,omitempty"`
+}
+
+func (r EndpointRef) matches(e Endpoint) bool {
+	return r.Namespace == e.Namespace && r.Name == e.Name
+}
+
+// EndpointPair is one caller-to-callee edge of the aggregation.
+type EndpointPair struct {
+	Source      EndpointRef `json:"source"`
+	Destination EndpointRef `json:"destination"`
+}
+
+// FlowMatch selects the flows behind a graph node (Endpoints: a flow touching
+// any of them) or a graph edge (Pairs: a flow between one of the pairs, in
+// the direction the aggregation recorded it).
+type FlowMatch struct {
+	Endpoints []EndpointRef  `json:"endpoints,omitempty"`
+	Pairs     []EndpointPair `json:"pairs,omitempty"`
+}
+
+// Matches reports whether a flow belongs to the selection.
+func (m *FlowMatch) Matches(f Flow) bool {
+	if m == nil {
+		return true
+	}
+	for _, r := range m.Endpoints {
+		if r.matches(f.Source) || r.matches(f.Destination) {
+			return true
+		}
+	}
+	for _, p := range m.Pairs {
+		if p.Source.matches(f.Source) && p.Destination.matches(f.Destination) {
+			return true
+		}
+	}
+	return false
+}
+
+// Size is how many references the selection carries.
+func (m *FlowMatch) Size() int {
+	if m == nil {
+		return 0
+	}
+	return len(m.Endpoints) + len(m.Pairs)
 }
 
 // FlowsResponse contains the flows and metadata.
@@ -119,6 +200,10 @@ type FlowsResponse struct {
 	// missing; after it, nothing was cut. Nil when the whole window is covered.
 	CoveredSince  *time.Time `json:"coveredSince,omitempty"`
 	NodeFlowLimit int        `json:"nodeFlowLimit,omitempty"`
+	// FlowLimit is set when the source kept only its newest FlowLimit flows in
+	// total, so the oldest part of the window was dropped; CoveredSince then
+	// accounts for it too.
+	FlowLimit int `json:"flowLimit,omitempty"`
 }
 
 // Warning kinds for FlowsResponse.WarningKind.

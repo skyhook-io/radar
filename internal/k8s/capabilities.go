@@ -140,6 +140,7 @@ type FeatureCapabilities struct {
 	PodEnvironment  bool `json:"podEnvironment"`  // GET /api/pods/{namespace}/{name}/environment
 	PolicyResource  bool `json:"policyResource"`  // GET /api/policy/resource/{kind}/{namespace}/{name}
 	WorkloadHistory bool `json:"workloadHistory"` // GET /api/workloads/{kind}/{namespace}/{name}/history
+	TrafficRecords  bool `json:"trafficRecords"`  // GET /api/traffic/flows/records
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.

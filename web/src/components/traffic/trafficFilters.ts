@@ -1,4 +1,6 @@
 import type { AggregatedFlow, TrafficFlow } from '../../types'
+import type { TrafficEndpointPair } from '../../api/traffic'
+import type { TrafficGraphSelection } from './TrafficGraph'
 
 /**
  * Does a flow fall into one of the selected HTTP status ranges?
@@ -286,4 +288,47 @@ export function dedupeHTTPPairs(flows: TrafficFlow[], callerOriented: boolean): 
       : call(f.destination.name, f.source.name, f))
   }
   return flows.filter(f => !(isHTTP(f, 'REQUEST') && answered.has(call(f.source.name, f.destination.name, f))))
+}
+
+/**
+ * A graph edge, carrying the server edges merged into it. The graph renames and
+ * merges endpoints (external services, the Internet node, the addon group), so
+ * these are what a selection is traced back through to ask the server for its
+ * records.
+ */
+export type GraphFlow = AggregatedFlow & { rawPairs?: TrafficEndpointPair[] }
+
+export function endpointPair(flow: AggregatedFlow): TrafficEndpointPair {
+  const ref = (e: AggregatedFlow['source']) => ({ namespace: e.namespace || undefined, name: e.name, kind: e.kind })
+  return { source: ref(flow.source), destination: ref(flow.destination) }
+}
+
+export function graphEndpointId(e: { namespace?: string; name: string }): string {
+  return e.namespace ? `${e.namespace}/${e.name}` : e.name
+}
+
+export function pairKey(source: { namespace?: string; name: string }, destination: { namespace?: string; name: string }): string {
+  return `${graphEndpointId(source)}->${graphEndpointId(destination)}`
+}
+
+/**
+ * The server edges behind the selected node or edge, deduplicated. Null when
+ * the selection traces back to none — a group node, whose edges belong to its
+ * members.
+ */
+export function selectionRawPairs(flows: GraphFlow[], selection: TrafficGraphSelection | null): TrafficEndpointPair[] | null {
+  if (!selection) return null
+  const pairs = new Map<string, TrafficEndpointPair>()
+  for (const flow of flows) {
+    const sourceId = graphEndpointId(flow.source)
+    const destId = graphEndpointId(flow.destination)
+    const selected = selection.type === 'node'
+      ? sourceId === selection.nodeId || destId === selection.nodeId
+      : sourceId === selection.sourceId && destId === selection.destId
+    if (!selected) continue
+    for (const pair of flow.rawPairs ?? []) {
+      pairs.set(pairKey(pair.source, pair.destination), pair)
+    }
+  }
+  return pairs.size > 0 ? Array.from(pairs.values()) : null
 }
