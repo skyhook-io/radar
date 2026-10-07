@@ -25,7 +25,6 @@ import {
   isArgoOperationInProgress,
   isArgoSuspendedByRadar,
   gitOpsInsightChangeKey,
-  initNavigationMap,
   kindToPluralWithGroup,
   normalizeArgoApplication,
   normalizeArgoApplicationSet,
@@ -72,7 +71,7 @@ import {
   useGitOpsTree,
   useResource,
 } from '../../api/client'
-import { useAPIResources } from '../../api/apiResources'
+import { useAPIResources, GITOPS_KINDS } from '../../api/apiResources'
 import { useConnection } from '../../context/ConnectionContext'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
@@ -84,17 +83,6 @@ import { RemoteDestinationCloudHint } from './RemoteDestinationCloudHint'
 const GITOPS_HEALTH_DOCS_URL = 'https://radarhq.io/docs/features/gitops#per-resource-health'
 import type { GitOpsHistoryItem } from '@skyhook-io/k8s-ui'
 
-const GITOPS_KINDS: APIResource[] = [
-  { name: 'applications', kind: 'Application', group: 'argoproj.io', version: 'v1alpha1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'applicationsets', kind: 'ApplicationSet', group: 'argoproj.io', version: 'v1alpha1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'appprojects', kind: 'AppProject', group: 'argoproj.io', version: 'v1alpha1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'kustomizations', kind: 'Kustomization', group: 'kustomize.toolkit.fluxcd.io', version: 'v1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'helmreleases', kind: 'HelmRelease', group: 'helm.toolkit.fluxcd.io', version: 'v2', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'gitrepositories', kind: 'GitRepository', group: 'source.toolkit.fluxcd.io', version: 'v1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'ocirepositories', kind: 'OCIRepository', group: 'source.toolkit.fluxcd.io', version: 'v1beta2', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'helmrepositories', kind: 'HelmRepository', group: 'source.toolkit.fluxcd.io', version: 'v1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-  { name: 'alerts', kind: 'Alert', group: 'notification.toolkit.fluxcd.io', version: 'v1beta3', namespaced: true, verbs: ['list', 'get'], isCrd: true },
-]
 
 type ArgoSyncDialogTarget =
   | { scope: 'application' }
@@ -164,9 +152,6 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
     })
   }
 
-  useEffect(() => {
-    initNavigationMap([...(apiResources ?? []), ...GITOPS_KINDS])
-  }, [apiResources])
 
   const hasGitOpsRowResource = useMemo(() => (
     hasAPIResource(apiResources, 'applications', 'argoproj.io') ||

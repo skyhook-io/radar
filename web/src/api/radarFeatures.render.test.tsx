@@ -90,14 +90,14 @@ it('turns an unsupported policy answer into not installed once discovery shows n
   // No upgrade note yet: discovery may still withdraw it.
   expect(element.textContent).toBe('loading')
 
-  await act(async () => { client.setQueryData(['api-resources'], [{ group: '', name: 'pods' }]) })
+  await act(async () => { client.setQueryData(['api-resources'], [{ group: '', version: 'v1', kind: 'Pod', name: 'pods', namespaced: true, isCrd: false, verbs: ['get', 'list', 'watch'] }]) })
   await settle()
   expect(element.textContent).toBe('not_installed')
   expect(asked('/policy/resource/')).toBe(false)
 })
 
 it('keeps the upgrade note when discovery shows an OpenReports policy engine', async () => {
-  client.setQueryData(['api-resources'], [{ group: 'openreports.io', name: 'reports' }])
+  client.setQueryData(['api-resources'], [{ group: 'openreports.io', version: 'v1alpha1', kind: 'Report', name: 'reports', namespaced: true, isCrd: true, verbs: ['get', 'list', 'watch'] }])
   await render(<Policy />)
   expect(element.textContent).toBe('upgrade')
 })
