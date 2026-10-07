@@ -12,6 +12,9 @@ import (
 type declaredDependency struct {
 	Source, Target resourceid.Ref
 	Label          string
+	// Configuration emits target → source, matching EdgeConfigures semantics.
+	// Other declarations emit source → target as EdgeUses dependencies.
+	Configuration bool
 }
 
 func addObservedDependencyEdges(nodes []Node, edges []Edge, refs []declaredDependency, provider DynamicProvider, opts BuildOptions) ([]Node, []Edge, []string) {
@@ -45,10 +48,10 @@ func addObservedDependencyEdges(nodes []Node, edges []Edge, refs []declaredDepen
 		}
 		return kinds[i].Kind < kinds[j].Kind
 	})
-	seenEdges := map[[2]string]bool{}
+	seenEdges := map[[3]string]bool{}
 	for _, edge := range edges {
-		if edge.Type == EdgeUses {
-			seenEdges[[2]string{edge.Source, edge.Target}] = true
+		if edge.Type == EdgeUses || edge.Type == EdgeConfigures {
+			seenEdges[[3]string{edge.Source, edge.Target, string(edge.Type)}] = true
 		}
 	}
 	var warnings []string
@@ -95,11 +98,20 @@ func addObservedDependencyEdges(nodes []Node, edges []Edge, refs []declaredDepen
 				nodes = append(nodes, Node{ID: target, Kind: NodeKind(kind.Kind), Name: obj.GetName(), Status: extractGenericStatus(obj), Data: data})
 				byResource[ref.Target.Key()] = target
 			}
-			pair := [2]string{source, target}
+			edgeType := EdgeUses
+			if ref.Configuration {
+				source, target = target, source
+				edgeType = EdgeConfigures
+			}
+			pair := [3]string{source, target, string(edgeType)}
 			if seenEdges[pair] {
 				continue
 			}
-			edges = append(edges, Edge{ID: source + "-to-" + target, Source: source, Target: target, Type: EdgeUses, Label: ref.Label})
+			id := source + "-to-" + target
+			if edgeType == EdgeConfigures {
+				id += "-configures"
+			}
+			edges = append(edges, Edge{ID: id, Source: source, Target: target, Type: edgeType, Label: ref.Label})
 			seenEdges[pair] = true
 		}
 	}

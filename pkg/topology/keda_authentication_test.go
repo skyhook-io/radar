@@ -36,6 +36,11 @@ func TestKEDAAuthenticationDependenciesObservedAndScoped(t *testing.T) {
 	if len(topo.Nodes) != 4 || len(topo.Edges) != 2 {
 		t.Fatalf("observed authentication graph: nodes=%+v edges=%+v", topo.Nodes, topo.Edges)
 	}
+	for _, edge := range topo.Edges {
+		if edge.Type != EdgeConfigures || edge.Label != "authentication" {
+			t.Fatalf("authentication presented as scaler usage: %+v", edge)
+		}
+	}
 	for _, tc := range []struct{ kind, name, auth, namespace string }{{"ScaledObject", "worker", "TriggerAuthentication", "team"}, {"ScaledJob", "jobs", "ClusterTriggerAuthentication", ""}} {
 		rel := GetRelationships(tc.kind, "team", tc.name, topo, nil, p)
 		if rel == nil || len(rel.Dependencies) != 1 || rel.Dependencies[0].Kind != tc.auth || rel.Dependencies[0].Namespace != tc.namespace || rel.ScaleTarget != nil {
