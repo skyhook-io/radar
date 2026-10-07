@@ -800,6 +800,8 @@ func isConfigurationDependency(ref *ResourceRef) bool {
 		return ref.Group == "cert-manager.io"
 	case "TriggerAuthentication", "ClusterTriggerAuthentication":
 		return ref.Group == "keda.sh"
+	case "GitRepository", "OCIRepository", "Bucket", "HelmRepository", "HelmChart", "ExternalArtifact":
+		return ref.Group == "source.toolkit.fluxcd.io"
 	default:
 		return false
 	}

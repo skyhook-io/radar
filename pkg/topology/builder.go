@@ -797,7 +797,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		gitRepoGVR, hasGitRepos = resourceDiscovery.GetGVRWithGroup("GitRepository", "source.toolkit.fluxcd.io")
 	}
-	gitRepoIDs := make(map[string]string) // ns/name -> gitRepoID
+	var helmReleaseResources []*unstructured.Unstructured
 	if hasGitRepos && dynamicCache != nil {
 		gitRepos, err := dynamicCache.ListNamespaces(gitRepoGVR, opts.Namespaces)
 		if err != nil {
@@ -812,7 +812,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			name := repo.GetName()
 
 			repoID := fmt.Sprintf("gitrepository/%s/%s", ns, name)
-			gitRepoIDs[ns+"/"+name] = repoID
 
 			// Extract status fields
 			status, _, _ := unstructured.NestedMap(repo.Object, "status")
@@ -877,6 +876,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			}
 			name := hr.GetName()
 
+			helmReleaseResources = append(helmReleaseResources, hr)
 			hrID := fmt.Sprintf("helmrelease/%s/%s", ns, name)
 			helmReleaseIDs[ns+"/"+name] = hrID
 			if !gitops.FluxTargetsLocalCluster(hr) {
@@ -4402,38 +4402,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// 13. Create Flux source edges. Managed-resource edges are resolved after
-	// generic CRD nodes have been added so their exact API identity is available.
-	for _, ks := range kustomizationResources {
-		ns := ks.GetNamespace()
-		name := ks.GetName()
-		ksID := kustomizationIDs[ns+"/"+name]
-
-		// Also create edge from GitRepository to Kustomization if source ref exists
-		spec, _, _ := unstructured.NestedMap(ks.Object, "spec")
-		if spec != nil {
-			if sourceRef, ok, _ := unstructured.NestedMap(spec, "sourceRef"); ok && sourceRef != nil {
-				refKind, _ := sourceRef["kind"].(string)
-				refName, _ := sourceRef["name"].(string)
-				refNS, _ := sourceRef["namespace"].(string)
-				if refNS == "" {
-					refNS = ns // Default to same namespace
-				}
-
-				if refKind == "GitRepository" {
-					gitRepoID := gitRepoIDs[refNS+"/"+refName]
-					if gitRepoID != "" {
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", gitRepoID, ksID),
-							Source: gitRepoID,
-							Target: ksID,
-							Type:   EdgeManages, // GitRepo provides source for Kustomization
-						})
-					}
-				}
-			}
-		}
-	}
+	// Source dependencies are not owners. Join all supported source kinds and
+	// referenced charts through the shared observed-target path.
+	fluxRoots := append(append([]*unstructured.Unstructured(nil), kustomizationResources...), helmReleaseResources...)
+	nodes, edges, fluxSourceWarnings := addFluxSourceEdges(nodes, edges, fluxRoots, dynamicCache, opts)
+	warnings = append(warnings, fluxSourceWarnings...)
 
 	// 14. Create FluxCD HelmRelease edges to managed resources
 	// HelmReleases don't have inventory - match by labels:

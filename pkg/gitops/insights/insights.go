@@ -464,11 +464,10 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 	if s.LastReconcile == "" {
 		s.LastReconcile = newestConditionTime(root)
 	}
-	if ref, ok := nestedRef(root, "spec", "sourceRef"); ok {
-		s.Source = ref.Kind + "/" + ref.Name
-	} else if ref, ok := nestedRef(root, "spec", "chart", "spec", "sourceRef"); ok {
-		s.Source = ref.Kind + "/" + ref.Name
+	if sources := gitops.FluxSourceReferences(root); len(sources) > 0 {
+		s.Source = sources[0].Kind + "/" + sources[0].Name
 	}
+
 	if suspended, _, _ := unstructured.NestedBool(root.Object, "spec", "suspend"); suspended {
 		s.AutoSyncMode = "Suspended"
 	} else {
