@@ -615,9 +615,6 @@ var (
 	envAllowPrefix = []string{"ANTHROPIC_", "CLAUDE_", "AWS_", "GOOGLE_", "CLOUD_ML_", "VERTEX_"}
 )
 
-// scrubbedEnv returns a minimal environment: the CLI ingests untrusted cluster
-// data, so it shouldn't inherit unrelated host env. Provider-auth vars pass
-// through so subscription / API-key / Bedrock / Vertex all work.
 // addAgentDirToPath appends the agent's own directory to the child's PATH when
 // detection found it outside PATH. npm-installed agents are scripts run by the
 // `node` installed beside them (Homebrew, Linuxbrew), so without this the CLI
@@ -647,7 +644,8 @@ func addAgentDirToPath(cmd *exec.Cmd) {
 		cmd.Env = env
 		return
 	}
-	cmd.Env = append(env, "PATH="+dir)
+	// No PATH at all: the child falls back to the system's default search
+	// path, and a PATH holding only this directory would take that away.
 }
 
 // Windows environment names and paths are case-insensitive, and PATH is
@@ -666,6 +664,9 @@ func samePathEntry(a, b string) bool {
 	return a == b
 }
 
+// scrubbedEnv returns a minimal environment: the CLI ingests untrusted cluster
+// data, so it shouldn't inherit unrelated host env. Provider-auth vars pass
+// through so subscription / API-key / Bedrock / Vertex all work.
 func scrubbedEnv() []string {
 	var out []string
 	for _, kv := range os.Environ() {
@@ -673,7 +674,7 @@ func scrubbedEnv() []string {
 		if !ok {
 			continue
 		}
-		if envAllowExact[k] {
+		if envAllowExact[k] || isPathKey(k) {
 			out = append(out, kv)
 			continue
 		}

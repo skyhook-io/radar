@@ -128,15 +128,15 @@ export function IssueDiagnoseButton({
   return (
     <Tooltip
       content={
-        d.setupState === "needs-restart"
-          ? d.cliOverride
-            ? "AI investigations are off: RADAR_AI_CLI_BIN names a file Radar can't run"
-            : "AI investigations didn't start with the agent CLI Radar found"
-          : !ready
-            ? "Set up AI investigations — install a local agent"
-            : d.hosted
-              ? `Sends this resource's context to ${d.agentLabel} for investigation`
-              : `Runs ${d.agentLabel} on your machine to investigate this resource`
+        d.cliOverride && !ready
+          ? "AI investigations are off: RADAR_AI_CLI_BIN names a file Radar can't run"
+          : d.setupState === "needs-restart"
+            ? "AI investigations aren't available right now"
+            : !ready
+              ? "Set up AI investigations — install a local agent"
+              : d.hosted
+                ? `Sends this resource's context to ${d.agentLabel} for investigation`
+                : `Runs ${d.agentLabel} on your machine to investigate this resource`
       }
       position="left"
     >

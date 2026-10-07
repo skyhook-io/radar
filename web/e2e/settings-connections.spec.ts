@@ -1660,6 +1660,19 @@ test('an agent CLI installed while Settings is open is picked up without a resta
   await expect(dialog.getByText('No supported agent CLI found', { exact: true })).toHaveCount(0)
 })
 
+test('a failed agent check says so and can be retried', async ({ page }) => {
+  await fixture(page)
+  let reachable = false
+  await page.route('**/api/agents', route => reachable ? route.fulfill({ json: aiAgents }) : route.abort())
+  const dialog = await openSettings(page, 'AI investigations')
+  await expect(dialog.getByText("Couldn't check this Radar's setup", { exact: true })).toBeVisible()
+  await expect(dialog.getByText('No supported agent CLI found', { exact: true })).toHaveCount(0)
+
+  reachable = true
+  await dialog.getByRole('button', { name: 'Check again', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Your Claude Code setup', exact: true })).toBeVisible()
+})
+
 test('coming back to the window re-checks for an agent CLI', async ({ page }) => {
   await fixture(page)
   let installed = false

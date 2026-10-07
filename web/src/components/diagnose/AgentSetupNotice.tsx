@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import clsx from "clsx";
 import { Sparkles, Copy, Check, ExternalLink, RotateCw } from "lucide-react";
 import { copyText } from "@skyhook-io/k8s-ui/utils/clipboard";
@@ -85,12 +85,15 @@ function CheckAgainButton({
 
 // Shown in the AI surface's Home when investigations are eligible here but not
 // runnable yet:
+//  - cliOverride: RADAR_AI_CLI_BIN pins the engine to one CLI, so detection is
+//    off and an install changes nothing. Investigations being off means the
+//    variable names a file Radar can't run; only fixing it and restarting helps.
 //  - "needs-install": no agent CLI found. The server picks one up as soon as
 //    it's installed, so the notice offers a re-check rather than a restart.
-//  - "needs-restart" with cliOverride: RADAR_AI_CLI_BIN names a file Radar
-//    can't run, which only a corrected variable and a restart fix.
-//  - "needs-restart" otherwise: a CLI was found but investigations didn't start
-//    (an embedding host can report this); say only that, and offer a re-check.
+//  - "needs-restart": an agent is reported but investigations are off. Locally
+//    that's a race with an install in progress; an embedding host reports it
+//    when its own runner is down. Neither has a cause the user can act on, so
+//    say only that and offer a re-check.
 export function AgentSetupNotice({
   setupState,
   cliOverride,
@@ -108,11 +111,82 @@ export function AgentSetupNotice({
   const check = () => {
     void recheckAgents().then(() => setChecked(true));
   };
-  const found = setupState === "needs-restart";
-  const badOverride = found && cliOverride;
-  let title = "Set up AI investigations";
-  if (badOverride) title = "Radar can't run the agent CLI it was given";
-  else if (found) title = "AI investigations didn't start";
+  const showResult = checked && !checkingAgents;
+  const unreachable = showResult && agentsCheckFailed && (
+    <p className="mt-2 text-xs text-theme-text-secondary">
+      Couldn&apos;t reach Radar to check. Try again in a moment.
+    </p>
+  );
+
+  if (cliOverride) {
+    return (
+      <SetupFrame title="Radar can't run the agent CLI it was given">
+        <p className="mt-1 text-sm text-theme-text-secondary">
+          This Radar was started with{" "}
+          <code className="inline-code">RADAR_AI_CLI_BIN</code> set to a file it
+          can&apos;t run. While that variable is set, Radar uses only that file
+          and doesn&apos;t look for other agent CLIs. Correct the path or remove
+          the variable, then restart Radar. The startup output shows the path it
+          tried.
+        </p>
+      </SetupFrame>
+    );
+  }
+  if (setupState === "needs-restart") {
+    return (
+      <SetupFrame title="AI investigations aren't available right now">
+        <p className="mt-1 text-sm text-theme-text-secondary">
+          An agent is set up, but investigations couldn&apos;t start with it.
+        </p>
+        <CheckAgainButton checking={checkingAgents} onCheck={check} />
+        {unreachable ||
+          (showResult && (
+            <p className="mt-2 text-xs text-theme-text-secondary">
+              Still not available.
+            </p>
+          ))}
+      </SetupFrame>
+    );
+  }
+  return (
+    <SetupFrame title="Set up AI investigations">
+      <p className="mt-1 text-sm text-theme-text-secondary">
+        Radar runs investigations through a coding agent CLI on your own
+        machine, with no Radar cloud and no API key. Install one of these:
+      </p>
+      <div className="mt-4 flex flex-col gap-2.5">
+        {SUPPORTED_AGENTS.map((a) => (
+          <AgentRow key={a.name} agent={a} />
+        ))}
+      </div>
+      <CheckAgainButton checking={checkingAgents} onCheck={check} />
+      {unreachable ||
+        (showResult && (
+          <p className="mt-2 text-xs text-theme-text-secondary">
+            Still no agent CLI found. Radar looks on its PATH and in each
+            tool&apos;s usual install folder. If yours runs in a terminal and
+            Radar still can&apos;t find it,{" "}
+            <button
+              type="button"
+              onClick={() => openExternal(REPORT_URL)}
+              className="underline hover:text-theme-text-primary"
+            >
+              report it
+            </button>
+            .
+          </p>
+        ))}
+    </SetupFrame>
+  );
+}
+
+function SetupFrame({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
   return (
     <div className="mx-auto max-w-md px-1 py-6">
       <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl border border-accent/30 bg-accent/5">
@@ -121,58 +195,7 @@ export function AgentSetupNotice({
       <h3 className="text-base font-semibold text-theme-text-primary">
         {title}
       </h3>
-      {badOverride ? (
-        <p className="mt-1 text-sm text-theme-text-secondary">
-          This Radar was started with{" "}
-          <code className="inline-code">RADAR_AI_CLI_BIN</code> set to a file it
-          can&apos;t run, so it isn&apos;t using the agent CLIs it found.
-          Correct the path or remove the variable, then restart Radar. The
-          startup output shows the path it tried.
-        </p>
-      ) : found ? (
-        <>
-          <p className="mt-1 text-sm text-theme-text-secondary">
-            Radar found an agent CLI but couldn&apos;t start investigations with
-            it. Radar&apos;s startup output says why.
-          </p>
-          <CheckAgainButton checking={checkingAgents} onCheck={check} />
-        </>
-      ) : (
-        <>
-          <p className="mt-1 text-sm text-theme-text-secondary">
-            Radar runs investigations through a coding agent CLI on your own
-            machine, with no Radar cloud and no API key. Install one of these:
-          </p>
-          <div className="mt-4 flex flex-col gap-2.5">
-            {SUPPORTED_AGENTS.map((a) => (
-              <AgentRow key={a.name} agent={a} />
-            ))}
-          </div>
-          <CheckAgainButton checking={checkingAgents} onCheck={check} />
-          {checked && !checkingAgents && (
-            <p className="mt-2 text-xs text-theme-text-secondary">
-              {agentsCheckFailed ? (
-                "Couldn't reach Radar to check. Try again in a moment."
-              ) : (
-                <>
-                  Still no agent CLI found. Radar looks on its PATH and in each
-                  tool&apos;s usual install folder. If yours runs in a terminal
-                  and Radar still can&apos;t find it,{" "}
-                  <button
-                    type="button"
-                    onClick={() => openExternal(REPORT_URL)}
-                    className="underline hover:text-theme-text-primary"
-                  >
-                    report it
-                  </button>
-                  .
-                </>
-              )}
-            </p>
-          )}
-        </>
-      )}
-
+      {children}
       <p className="mt-4 text-xs text-theme-text-tertiary">
         Your agent runs locally. Resource details and logs are sent to its model
         provider under your account, not to Radar.

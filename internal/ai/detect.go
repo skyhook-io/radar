@@ -206,7 +206,9 @@ func DetectAgents(ctx context.Context, withVersions bool) []AgentInfo {
 func probeVersion(ctx context.Context, path string) string {
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, path, "--version").Output()
+	cmd := exec.CommandContext(cctx, path, "--version")
+	addAgentDirToPath(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}

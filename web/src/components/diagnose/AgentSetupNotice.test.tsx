@@ -35,18 +35,22 @@ describe("AgentSetupNotice", () => {
   });
 
   it("names the override only when the server says it is set", () => {
-    const html = render("needs-restart", { cliOverride: true });
-    expect(html).toContain("RADAR_AI_CLI_BIN");
-    expect(html).toContain("restart Radar");
-    expect(html).not.toContain("Install one of these");
+    for (const state of ["needs-restart", "needs-install"] as const) {
+      const html = render(state, { cliOverride: true });
+      expect(html).toContain("RADAR_AI_CLI_BIN");
+      expect(html).toContain("restart Radar");
+      // Detection is off while the variable is set, so an install can't help.
+      expect(html).not.toContain("Install one of these");
+      expect(html).not.toContain("Check again");
+    }
   });
 
-  it("makes no claim about the override for a host that didn't send one", () => {
+  it("says nothing it can't know when an agent is reported but off", () => {
     // Radar Hub reports a hosted agent that is supported but not enabled when
-    // its own runner is down; nothing about RADAR_AI_CLI_BIN applies there.
+    // its own runner is down: no CLI, no startup output, no override.
     const html = render("needs-restart");
-    expect(html).toContain("didn&#x27;t start");
-    expect(html).not.toContain("RADAR_AI_CLI_BIN");
+    expect(html).toContain("aren&#x27;t available right now");
+    expect(html).not.toMatch(/RADAR_AI_CLI_BIN|agent CLI|startup output/);
     expect(html).not.toContain("Install one of these");
     expect(html).toContain("Check again");
   });

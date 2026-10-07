@@ -246,3 +246,29 @@ func TestAddAgentDirToPathKeepsAScrubbedEnvScrubbed(t *testing.T) {
 		t.Errorf("cmd.Env = %v, want %v", cmd.Env, want)
 	}
 }
+
+func TestAddAgentDirToPathLeavesAnEnvWithoutPATHAlone(t *testing.T) {
+	cmd := exec.Command("/opt/agents/codex")
+	cmd.Env = []string{"HOME=/h"}
+	addAgentDirToPath(cmd)
+	if want := []string{"HOME=/h"}; !slices.Equal(cmd.Env, want) {
+		t.Errorf("cmd.Env = %v, want %v: a PATH of only the agent's folder would hide the system default", cmd.Env, want)
+	}
+}
+
+// The Settings picker shows each agent's version; an npm agent found off PATH
+// must report one too, not a blank.
+func TestProbeVersionRunsAnAgentFoundOffPATH(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "node"), []byte("#!/bin/sh\necho 2.1.0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "claude")
+	if err := os.WriteFile(bin, []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	if got := probeVersion(context.Background(), bin); got != "2.1.0" {
+		t.Errorf("probeVersion = %q, want 2.1.0", got)
+	}
+}

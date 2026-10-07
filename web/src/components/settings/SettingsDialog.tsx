@@ -928,6 +928,7 @@ export function SettingsDialog({
                   setupState={diag.setupState}
                   cliOverride={diag.cliOverride}
                   checkingAgents={diag.checkingAgents}
+                  agentsCheckFailed={diag.agentsCheckFailed}
                   recheckAgents={diag.recheckAgents}
                 />
               )}
@@ -1359,7 +1360,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     },
     {
       id: 'ai', icon: Sparkles, label: 'AI investigations',
-      ...aiOverviewStatus(aiAvailable, diag.setupState, diag.cliOverride),
+      ...aiOverviewStatus(aiAvailable, diag.setupState, diag.cliOverride, diag.agentsCheckFailed),
       detail: aiAvailable ? agentLabel : undefined,
     },
   ]
@@ -1414,19 +1415,24 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
 
 // aiOverviewStatus says which reason applies, for the same reason
 // AIUnavailableNotice does: "No agent CLI" is a claim about the user's machine,
-// and it is false when a CLI was found but investigations didn't start, when
-// this deployment can't run them at all, or when the agents probe hasn't answered.
+// and it is false when RADAR_AI_CLI_BIN is what's broken, when an agent is
+// reported but off, when this deployment can't run investigations at all, or
+// when the agents probe hasn't answered.
 function aiOverviewStatus(
   aiAvailable: boolean,
   setupState: DiagnoseSetup,
   cliOverride: boolean,
+  checkFailed: boolean,
 ): Pick<OverviewRow, 'tone' | 'value'> {
   if (aiAvailable) return { tone: 'ok', value: 'Ready' }
+  if (cliOverride && (setupState === 'needs-install' || setupState === 'needs-restart')) {
+    return { tone: 'warn', value: "RADAR_AI_CLI_BIN can't be run" }
+  }
   switch (setupState) {
     case 'unknown':
-      return { tone: 'unknown', value: 'Checking…' }
+      return checkFailed ? { tone: 'warn', value: "Couldn't check" } : { tone: 'unknown', value: 'Checking…' }
     case 'needs-restart':
-      return { tone: 'warn', value: cliOverride ? "RADAR_AI_CLI_BIN can't be run" : "Agent CLI found, didn't start" }
+      return { tone: 'warn', value: 'Not available right now' }
     case 'off':
       return { tone: 'off', value: 'Not available in this deployment' }
     default:
@@ -1454,11 +1460,13 @@ function AIUnavailableNotice({
   setupState,
   cliOverride,
   checkingAgents,
+  agentsCheckFailed,
   recheckAgents,
 }: {
   setupState: DiagnoseSetup
   cliOverride: boolean
   checkingAgents: boolean
+  agentsCheckFailed: boolean
   recheckAgents: () => Promise<void>
 }) {
   const checkAgain = (
@@ -1472,74 +1480,64 @@ function AIUnavailableNotice({
       {checkingAgents ? 'Checking…' : 'Check again'}
     </button>
   )
+  const panel = (title: string, body: ReactNode, action?: ReactNode) => (
+    <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
+      <p className="text-sm font-medium text-theme-text-primary">{title}</p>
+      <p className="mt-1 text-xs text-theme-text-tertiary">{body}</p>
+      {action}
+    </div>
+  )
   if (setupState === 'unknown') {
-    // The agent probe hasn't answered (in flight, or it failed and was swallowed).
-    // Saying anything about the CLI or the deployment here would be a guess.
-    return (
-      <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
-        <p className="text-sm font-medium text-theme-text-primary">Checking this Radar&apos;s setup</p>
-        <p className="mt-1 text-xs text-theme-text-tertiary">
-          If this doesn&apos;t resolve, Radar couldn&apos;t reach its own agents endpoint.
-        </p>
-        {checkAgain}
-      </div>
-    )
+    // The agent probe hasn't answered. Saying anything about the CLI or the
+    // deployment here would be a guess.
+    return agentsCheckFailed && !checkingAgents
+      ? panel("Couldn't check this Radar's setup", "Radar's agents endpoint didn't answer.", checkAgain)
+      : panel("Checking this Radar's setup", 'Asking Radar which agent CLIs it can use.')
   }
   if (setupState === 'off') {
-    return (
-      <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
-        <p className="text-sm font-medium text-theme-text-primary">
-          Not available in this deployment
-        </p>
-        <p className="mt-1 text-xs text-theme-text-tertiary">
-          Investigations run a local agent CLI against Radar&apos;s own MCP endpoint, so they
-          need a Radar running on your own machine with MCP on and authentication off. A Radar
-          started with <span className="font-mono">--no-mcp</span>, with authentication on,
-          inside a cluster, or as a shared installation can&apos;t offer them.
-        </p>
-      </div>
+    return panel(
+      'Not available in this deployment',
+      <>
+        Investigations run a local agent CLI against Radar&apos;s own MCP endpoint, so they
+        need a Radar running on your own machine with MCP on and authentication off. A Radar
+        started with <span className="font-mono">--no-mcp</span>, with authentication on,
+        inside a cluster, or as a shared installation can&apos;t offer them.
+      </>,
     )
   }
-  if (setupState === 'needs-restart' && cliOverride) {
-    return (
-      <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
-        <p className="text-sm font-medium text-theme-text-primary">
-          Radar can&apos;t run the agent CLI it was given
-        </p>
-        <p className="mt-1 text-xs text-theme-text-tertiary">
-          This Radar was started with <code className="inline-code">RADAR_AI_CLI_BIN</code> set
-          to a file it can&apos;t run, so it isn&apos;t using the agent CLIs it found. Correct the
-          path or remove the variable, then restart Radar. The startup output shows the path it
-          tried.
-        </p>
-      </div>
+  if (cliOverride) {
+    return panel(
+      "Radar can't run the agent CLI it was given",
+      <>
+        This Radar was started with <code className="inline-code">RADAR_AI_CLI_BIN</code> set to
+        a file it can&apos;t run. While that variable is set, Radar uses only that file and
+        doesn&apos;t look for other agent CLIs. Correct the path or remove the variable, then
+        restart Radar. The startup output shows the path it tried.
+      </>,
     )
   }
   if (setupState === 'needs-restart') {
-    return (
-      <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
-        <p className="text-sm font-medium text-theme-text-primary">AI investigations didn&apos;t start</p>
-        <p className="mt-1 text-xs text-theme-text-tertiary">
-          Radar found an agent CLI but couldn&apos;t start investigations with it. Radar&apos;s
-          startup output says why.
-        </p>
-        {checkAgain}
-      </div>
+    return panel(
+      "AI investigations aren't available right now",
+      <>
+        An agent is set up, but investigations couldn&apos;t start with it.
+        {agentsCheckFailed && !checkingAgents && " Radar's agents endpoint didn't answer the last check."}
+      </>,
+      checkAgain,
     )
   }
-  return (
-    <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
-      <p className="text-sm font-medium text-theme-text-primary">No supported agent CLI found</p>
-      <p className="mt-1 text-xs text-theme-text-tertiary">
-        Install <span className="text-theme-text-secondary">Claude Code</span>,{' '}
-        <span className="text-theme-text-secondary">Codex</span>,{' '}
-        <span className="text-theme-text-secondary">Cursor</span> (
-        <span className="font-mono">cursor-agent</span>), or{' '}
-        <span className="text-theme-text-secondary">OpenCode</span>. Radar picks it up without a
-        restart, and this tab then shows the agent, model, and effort controls.
-      </p>
-      {checkAgain}
-    </div>
+  return panel(
+    'No supported agent CLI found',
+    <>
+      Install <span className="text-theme-text-secondary">Claude Code</span>,{' '}
+      <span className="text-theme-text-secondary">Codex</span>,{' '}
+      <span className="text-theme-text-secondary">Cursor</span> (
+      <span className="font-mono">cursor-agent</span>), or{' '}
+      <span className="text-theme-text-secondary">OpenCode</span>. Radar picks it up without a
+      restart, and this tab then shows the agent, model, and effort controls.
+      {agentsCheckFailed && !checkingAgents && " Radar's agents endpoint didn't answer the last check."}
+    </>,
+    checkAgain,
   )
 }
 
