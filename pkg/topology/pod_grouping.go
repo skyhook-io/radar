@@ -183,6 +183,7 @@ func CreatePodNode(pod *corev1.Pod, provider ResourceProvider, includeNodeName b
 	}
 
 	return Node{
+		uid:    pod.GetUID(),
 		ID:     podID,
 		Kind:   KindPod,
 		Name:   pod.Name,

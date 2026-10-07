@@ -1,0 +1,86 @@
+package topology
+
+import (
+	"encoding/json"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
+	appsv1 "k8s.io/api/apps/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+)
+
+func TestGenericCRDOwnershipUsesObservedIncarnation(t *testing.T) {
+	for _, ownerUID := range []string{"parent-current", "parent-deleted"} {
+		t.Run(ownerUID, func(t *testing.T) {
+			gvr := schema.GroupVersionResource{Group: "relationships.example.io", Version: "v1", Resource: "widgets"}
+			child := genericIdentityObject(gvr, "Widget", "team", "child", metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "app", UID: types.UID(ownerUID)})
+			child.SetUID("child-current")
+			before := child.DeepCopy()
+			dynamic := &genericIdentityDynamic{watched: []schema.GroupVersionResource{gvr}, kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {child}}, listCalls: map[schema.GroupVersionResource]int{}}
+			parent := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "team", UID: "parent-current"}}
+			topo, err := NewBuilder(&mockProvider{deployments: []*appsv1.Deployment{parent}}).WithDynamic(dynamic).Build(DefaultBuildOptions())
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantChild := ownerUID == "parent-current"
+			if got := nodeByID(topo.Nodes, "widget/team/child/relationships.example.io"); (got != nil) != wantChild {
+				t.Fatalf("owner UID %s joined replacement: nodes=%+v edges=%+v", ownerUID, topo.Nodes, topo.Edges)
+			}
+			if dynamic.getCalls != 0 || !reflect.DeepEqual(child, before) {
+				t.Fatalf("ownership fetched or mutated input: gets=%d child=%+v", dynamic.getCalls, child)
+			}
+			wire, err := json.Marshal(topo)
+			if err != nil || strings.Contains(string(wire), "parent-current") || strings.Contains(string(wire), "child-current") {
+				t.Fatalf("incarnation leaked into graph JSON: %s, %v", wire, err)
+			}
+		})
+	}
+}
+
+func TestObservedOwnerResolutionKeepsGroupNamespaceAndClusterScope(t *testing.T) {
+	idx := IndexByResource(&Topology{Nodes: []Node{
+		{uid: "apps", ID: "deployment/team/app", Kind: KindDeployment, Name: "app", Data: map[string]any{"namespace": "team"}},
+		{uid: "other", ID: "deployment/other/app", Kind: KindDeployment, Name: "app", Data: map[string]any{"namespace": "other"}},
+		{uid: "foreign", ID: "deployment/team/app/example.io", Kind: "Deployment", Name: "app", Data: map[string]any{"namespace": "team", "apiVersion": "example.io/v1"}},
+		{uid: "cluster", ID: "node//host", Kind: KindNode, Name: "host", Data: map[string]any{"namespace": ""}},
+	}})
+	cases := []struct {
+		version, kind, namespace, name, uid, wantID string
+		matches                                     bool
+	}{
+		{"apps/v1", "Deployment", "team", "app", "apps", "deployment/team/app", true},
+		{"apps/v1", "Deployment", "team", "app", "deleted", "deployment/team/app", false},
+		{"apps/v1", "Deployment", "other", "app", "other", "deployment/other/app", true},
+		{"example.io/v1", "Deployment", "team", "app", "foreign", "deployment/team/app/example.io", true},
+		{"v1", "Node", "team", "host", "cluster", "node//host", true},
+		{"", "Deployment", "team", "app", "apps", "", false},
+		{"apps/v1", "Deployment", "missing", "app", "apps", "", false},
+	}
+	for _, tc := range cases {
+		node, matches := idx.ResolveObservedOwner(resourceid.OwnerReference(tc.version, tc.kind, tc.name, tc.uid, tc.namespace))
+		if matches != tc.matches || (node == nil) != (tc.wantID == "") || node != nil && node.ID != tc.wantID {
+			t.Fatalf("%+v => %+v, %v", tc, node, matches)
+		}
+	}
+}
+
+func TestSeededGenericCRDRejectsExistingReplacementEdge(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "relationships.example.io", Version: "v1", Resource: "widgets"}
+	child := genericIdentityObject(gvr, "Widget", "team", "child", metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "app", UID: "deleted"})
+	child.SetUID("current-child")
+	dynamic := &genericIdentityDynamic{watched: []schema.GroupVersionResource{gvr}, kinds: map[schema.GroupVersionResource]string{gvr: "Widget"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {child}}, listCalls: map[schema.GroupVersionResource]int{}}
+	nodes := []Node{
+		{uid: "current", ID: "deployment/team/app", Kind: KindDeployment, Name: "app", Data: map[string]any{"namespace": "team"}},
+		{ID: "widget/team/child", Kind: "Widget", Name: "child", Data: map[string]any{"namespace": "team", "apiVersion": "relationships.example.io/v1"}},
+	}
+	edges := []Edge{{ID: "owner", Source: nodes[0].ID, Target: nodes[1].ID, Type: EdgeManages}}
+	nodes, edges = (&Builder{dynamic: dynamic}).addGenericCRDNodes(nodes, edges, DefaultBuildOptions())
+	if len(nodes) != 2 || len(edges) != 0 || nodes[1].uid != "current-child" {
+		t.Fatalf("seeded replacement ownership survived: %+v %+v", nodes, edges)
+	}
+}

@@ -12,6 +12,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	k8score "github.com/skyhook-io/radar/pkg/k8score"
@@ -158,6 +159,9 @@ const (
 
 // Node represents a node in the topology graph
 type Node struct {
+	// uid is observed incarnation metadata, retained only in the cached Go graph.
+	// Synthetic groups have no object incarnation; UID is not a wire field.
+	uid    types.UID
 	ID     string         `json:"id"`
 	Kind   NodeKind       `json:"kind"`
 	Name   string         `json:"name"`

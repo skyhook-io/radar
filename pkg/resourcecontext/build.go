@@ -213,7 +213,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		} else {
 			omitted.add("owner", OmittedRBACDenied)
 		}
-	} else if owner := ownerFromObject(obj, ident.Namespace); owner != nil {
+	} else if owner := ownerFromObject(obj, ident.Namespace, opts.Topology, opts.RelIndex); owner != nil {
 		if checkRef(ctx, opts.AccessChecker, owner) {
 			rc.Owner = owner
 		} else {
@@ -456,7 +456,7 @@ func identFromMeta(kind, group string, m *metav1.ObjectMeta) resourceIdentity {
 	}
 }
 
-func ownerFromObject(obj runtime.Object, namespace string) *ContextRef {
+func ownerFromObject(obj runtime.Object, namespace string, topo *topology.Topology, index *topology.RelationshipsIndex) *ContextRef {
 	m, ok := obj.(metav1.Object)
 	if !ok {
 		return nil
@@ -470,6 +470,19 @@ func ownerFromObject(obj runtime.Object, namespace string) *ContextRef {
 		if owner.Controller != nil && *owner.Controller {
 			chosen = owner
 			break
+		}
+	}
+	if index == nil && topo != nil {
+		index = topology.IndexByResource(topo)
+	}
+	ref := resourceid.OwnerReference(chosen.APIVersion, chosen.Kind, chosen.Name, string(chosen.UID), namespace)
+	if node, matches := index.ResolveObservedOwner(ref); node != nil {
+		if !matches {
+			return nil
+		}
+		// An observed cluster-scoped owner has no dependent namespace.
+		if ns, ok := node.Data["namespace"].(string); ok {
+			namespace = ns
 		}
 	}
 	return &ContextRef{
