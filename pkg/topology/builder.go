@@ -1209,7 +1209,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 
 			for _, ref := range configrefs.KEDAAuthenticationReferences(so) {
-				kedaAuthenticationDependencies = append(kedaAuthenticationDependencies, declaredDependency{Source: resourceid.NewRef("keda.sh", "ScaledObject", ns, name), Target: ref, Label: "authentication"})
+				kedaAuthenticationDependencies = append(kedaAuthenticationDependencies, declaredDependency{Source: resourceid.NewRef("keda.sh", "ScaledObject", ns, name), Target: ref, Label: "authentication", Configuration: true})
 			}
 
 			// ScaledObject → target workload edge (via spec.scaleTargetRef)
@@ -1274,7 +1274,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				},
 			})
 			for _, ref := range configrefs.KEDAAuthenticationReferences(sj) {
-				kedaAuthenticationDependencies = append(kedaAuthenticationDependencies, declaredDependency{Source: resourceid.NewRef("keda.sh", "ScaledJob", ns, name), Target: ref, Label: "authentication"})
+				kedaAuthenticationDependencies = append(kedaAuthenticationDependencies, declaredDependency{Source: resourceid.NewRef("keda.sh", "ScaledJob", ns, name), Target: ref, Label: "authentication", Configuration: true})
 			}
 
 		}
