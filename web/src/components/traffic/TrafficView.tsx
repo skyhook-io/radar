@@ -13,7 +13,7 @@ import { useDock } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl, pluralize } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, mergeRawPairs, pairKey, selectionRawPairs, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, pairKey, selectionRawPairs, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING } from './trafficFilters'
 
 // Consecutive 2s retries of an empty result that came with a transient warning.
 const MAX_EMPTY_RETRIES = 5
@@ -998,15 +998,15 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     if (graphSelection.type === 'node' && graphSelection.nodeId) {
       const id = graphSelection.nodeId
       return filteredRawFlows.filter(f => {
-        const srcId = f.source.namespace ? `${f.source.namespace}/${f.source.name}` : f.source.name
-        const dstId = f.destination.namespace ? `${f.destination.namespace}/${f.destination.name}` : f.destination.name
+        const srcId = graphEndpointId(graphEndpoint(f.source))
+        const dstId = graphEndpointId(graphEndpoint(f.destination))
         return srcId === id || dstId === id
       })
     }
     if (graphSelection.type === 'edge' && graphSelection.sourceId && graphSelection.destId) {
       return filteredRawFlows.filter(f => {
-        const srcId = f.source.namespace ? `${f.source.namespace}/${f.source.name}` : f.source.name
-        const dstId = f.destination.namespace ? `${f.destination.namespace}/${f.destination.name}` : f.destination.name
+        const srcId = graphEndpointId(graphEndpoint(f.source))
+        const dstId = graphEndpointId(graphEndpoint(f.destination))
         // Match either direction (request goes A→B, response goes B→A)
         return (srcId === graphSelection.sourceId && dstId === graphSelection.destId) ||
                (srcId === graphSelection.destId && dstId === graphSelection.sourceId)
