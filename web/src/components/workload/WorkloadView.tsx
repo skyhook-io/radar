@@ -32,6 +32,9 @@ import {
   isCoreBatchJob,
   type SetImageOwnership,
   SET_IMAGE_WRITES,
+  setImageWrites,
+  gitOpsWriteEvidencePaths,
+  type SetImageSelection,
   type WorkloadImageTarget,
 } from '@skyhook-io/k8s-ui'
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
@@ -1007,9 +1010,24 @@ export function WorkloadView({
         name: activeImageTargetOwnership.target.name,
       }
     : { kind: resource?.kind ?? pluralToKind(apiKind), group: effectiveGroup ?? '', namespace, name }
+  // Once the dialog lists the containers, ask about each by name (so the
+  // evidence can't predate the list) and judge the ones being changed.
+  const [imageSelection, setImageSelection] = useState<SetImageSelection | null>(null)
+  const imageWrites = useMemo(
+    () =>
+      imageSelection
+        ? setImageWrites(imageSelection.changed.length ? imageSelection.changed : imageSelection.containers)
+        : SET_IMAGE_WRITES,
+    [imageSelection],
+  )
+  const imageEvidencePaths = useMemo(
+    () => (imageSelection ? gitOpsWriteEvidencePaths(setImageWrites(imageSelection.containers)) : undefined),
+    [imageSelection],
+  )
   const { guard: imageGuard, ownership: imageGuardOwnership } = useGitOpsWriteGuard({
     target: imageGuardTarget,
-    writes: SET_IMAGE_WRITES,
+    writes: imageWrites,
+    evidencePaths: imageEvidencePaths,
     ownership: imageOwnershipSource,
     relationshipsUnavailable: activeImageTargetOwnership
       ? !activeImageTargetOwnership.response.relationships
@@ -1027,6 +1045,7 @@ export function WorkloadView({
     const helmOwner = imageHelmOwner
     return {
       guard: imageGuard,
+      onSelectionChange: setImageSelection,
       onOpenOwner: owner
         ? imageOwnerVerified
           ? () => handleOpenGitOpsResource(owner)

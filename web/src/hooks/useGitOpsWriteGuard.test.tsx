@@ -338,3 +338,24 @@ it("takes the Application the server confirmed when the browser can't list Appli
     await h.cleanup()
   }
 })
+
+it('reports the listed and changed containers so the host can judge exactly those', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const root = createRoot(document.createElement('div'))
+  const onSelectionChange = vi.fn()
+  const guard = { owner: null, helmRelease: null, pending: false, level: 'none', perWrite: [], summary: '', syncPolicy: null, requiresAck: false, ownershipError: null } as never
+  const onLoad = vi.fn(async (): Promise<WorkloadImageInventory> => ({
+    target: { kind: 'Deployment', group: 'apps', resource: 'deployments', namespace: 'prod', name: 'web' },
+    containers: [{ type: 'container', name: 'app', image: 'app:old' }, { type: 'initContainer', name: 'migrate', image: 'migrate:old' }],
+    behavior: { type: 'rolling' },
+  }))
+  try {
+    await act(async () => root.render(<SetImageDialog open workloadLabel="Deployment" workloadName="web" workloadResource="deployments" ownership={{ guard, onSelectionChange }} onLoad={onLoad} onClose={() => {}} onConfirm={async () => {}} />))
+    await act(async () => vi.waitFor(() => expect(onSelectionChange).toHaveBeenLastCalledWith({
+      containers: [{ type: 'container', name: 'app' }, { type: 'initContainer', name: 'migrate' }],
+      changed: [],
+    })))
+  } finally {
+    await act(async () => root.unmount())
+  }
+})

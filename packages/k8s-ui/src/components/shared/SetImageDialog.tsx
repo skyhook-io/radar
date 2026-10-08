@@ -19,10 +19,20 @@ import {
 import { GitOpsWriteWarning } from './GitOpsWriteWarning'
 
 /** The GitOps write guard for the object whose Pod template the dialog
- *  writes, evaluated by the host for {@link SET_IMAGE_WRITES}. */
+ *  writes, evaluated by the host: for {@link SET_IMAGE_WRITES} until the
+ *  containers are known, then for {@link setImageWrites} of the containers
+ *  {@link onSelectionChange} reports. */
 export interface SetImageOwnership {
   guard: GitOpsWriteGuard
   onOpenOwner?: () => void
+  /** The containers the dialog lists and the ones being changed, so the
+   *  guard can judge exactly those (null until the containers load). */
+  onSelectionChange?: (selection: SetImageSelection | null) => void
+}
+
+export interface SetImageSelection {
+  containers: Pick<WorkloadContainerImage, 'type' | 'name'>[]
+  changed: Pick<WorkloadContainerImage, 'type' | 'name'>[]
 }
 
 export interface SetImageDialogProps {
@@ -86,8 +96,17 @@ export function reconcileRefreshedImageDrafts(
   return { drafts: nextDrafts, changedCurrentKeys }
 }
 
-// Which containers change isn't known until the user edits, so the guard
-// covers every container image (an approximate list path).
+/** One write per container, by name: the guard's verdict for exactly the
+ *  images being changed. */
+export function setImageWrites(containers: Pick<WorkloadContainerImage, 'type' | 'name'>[]): GitOpsWrite[] {
+  return containers.map((container) => ({
+    scope: 'spec',
+    paths: [`spec.template.spec.${container.type === 'initContainer' ? 'initContainers' : 'containers'}[name=${container.name}].image`],
+    description: container.name,
+  }))
+}
+
+// Before the containers load, the guard covers every container image.
 export const SET_IMAGE_WRITES: GitOpsWrite[] = [
   {
     scope: 'spec',
@@ -236,6 +255,19 @@ export function SetImageDialog({
     ) ?? false
   const busy = pending || submitting
   const ownershipResolved = ownership !== undefined
+  const onSelectionChange = ownership?.onSelectionChange
+  const selectionKey = inventory
+    ? JSON.stringify([
+        inventory.containers.map((c) => [c.type, c.name]),
+        updates.map((u) => [u.type, u.name]),
+      ])
+    : ''
+  useEffect(() => {
+    if (!onSelectionChange) return
+    const [containers, changed] = selectionKey ? (JSON.parse(selectionKey) as [string[][], string[][]]) : [null, null]
+    const toRefs = (rows: string[][]) => rows.map(([type, name]) => ({ type: type as WorkloadContainerImage['type'], name }))
+    onSelectionChange(containers && changed ? { containers: toRefs(containers), changed: toRefs(changed) } : null)
+  }, [onSelectionChange, selectionKey])
   const guard = ownership?.guard
   // An acknowledgment covers the verdict it was given for; a different one
   // (fresh evidence, a changed policy) asks again.

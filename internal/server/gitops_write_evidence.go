@@ -34,7 +34,10 @@ import (
 const (
 	maxWriteEvidenceRequestBytes = 16 << 10
 	maxWriteEvidencePaths        = 64
-	lastAppliedAnnotationKey     = "kubectl.kubernetes.io/last-applied-configuration"
+	// Real field paths are a dozen segments deep; the cap bounds the work a
+	// request can ask for (each segment is walked per wildcard element).
+	maxWriteFieldPathSegments = 32
+	lastAppliedAnnotationKey  = "kubectl.kubernetes.io/last-applied-configuration"
 )
 
 type writeEvidenceRef struct {
@@ -762,6 +765,9 @@ func parseWriteFieldPath(path string) ([]fieldPathSegment, error) {
 	if len(segs) == 0 {
 		return nil, fmt.Errorf("empty field path")
 	}
+	if len(segs) > maxWriteFieldPathSegments {
+		return nil, fmt.Errorf("path %q has more than %d segments", path, maxWriteFieldPathSegments)
+	}
 	return segs, nil
 }
 
@@ -779,6 +785,16 @@ func matchesSelector(item any, seg fieldPathSegment) bool {
 // managedFields and last-applied are matched by), an index otherwise. A
 // wildcard over a missing or empty list is kept as is.
 func expandWildcards(obj any, segs []fieldPathSegment) [][]fieldPathSegment {
+	hasWildcard := false
+	for _, seg := range segs {
+		if seg.typ == segAny {
+			hasWildcard = true
+			break
+		}
+	}
+	if !hasWildcard {
+		return [][]fieldPathSegment{segs}
+	}
 	var out [][]fieldPathSegment
 	var walk func(node any, i int, prefix []fieldPathSegment)
 	walk = func(node any, i int, prefix []fieldPathSegment) {
@@ -1049,10 +1065,15 @@ func anyCovered(covered []bool) bool {
 	return false
 }
 
-// argoAppListsResource reports whether the Application's status lists the
-// object among the resources it manages. The core group is recorded as an
+// argoAppListsResource reports whether the Application deploys to this
+// cluster and its status lists the object among the resources it manages. A
+// remote Application's status names objects in another cluster that can
+// share a namespace and name with this one. The core group is recorded as an
 // omitted group there.
 func argoAppListsResource(app *unstructured.Unstructured, ref writeEvidenceRef) bool {
+	if !gitops.IsInClusterDestination(app) {
+		return false
+	}
 	resources, _, _ := unstructured.NestedSlice(app.Object, "status", "resources")
 	for _, raw := range resources {
 		r, ok := raw.(map[string]any)

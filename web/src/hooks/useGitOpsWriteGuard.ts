@@ -34,10 +34,14 @@ export function useGitOpsWriteGuard({
   ownership: resolved,
   relationshipsUnavailable = false,
   declaredManager,
+  evidencePaths: requestedPaths,
   enabled = true,
 }: {
   target: GitOpsWriteTarget
   writes: GitOpsWrite[]
+  /** Paths to ask the server about, when wider than the writes being judged
+   *  (every container a dialog lists, while judging the ones being changed). */
+  evidencePaths?: string[]
   relationships?: Relationships
   resource?: unknown
   /** Pass when the host already resolved ownership for this target. */
@@ -79,7 +83,11 @@ export function useGitOpsWriteGuard({
   const managed = Boolean(ownership.owner || ownership.helmOwner)
 
   const writesKey = JSON.stringify(writes)
-  const paths = useMemo(() => gitOpsWriteEvidencePaths(JSON.parse(writesKey)), [writesKey])
+  const requestedPathsKey = requestedPaths ? JSON.stringify(requestedPaths) : ''
+  const paths = useMemo(
+    () => (requestedPathsKey ? (JSON.parse(requestedPathsKey) as string[]) : gitOpsWriteEvidencePaths(JSON.parse(writesKey))),
+    [requestedPathsKey, writesKey],
+  )
   const ownerRef = useMemo(() => {
     if (ownership.owner) {
       return { ...gitOpsOwnerKindRef(ownership.owner), namespace: ownership.owner.namespace, name: ownership.owner.name }

@@ -518,6 +518,7 @@ func TestWriteEvidenceWildcardPathIsJudgedPerContainer(t *testing.T) {
 func TestWriteEvidenceArgoOwnerTracksTarget(t *testing.T) {
 	app := func(resources ...any) *unstructured.Unstructured {
 		u := evidenceArgoApp(nil, nil)
+		u.Object["spec"].(map[string]any)["destination"] = map[string]any{"server": "https://kubernetes.default.svc"}
 		u.Object["status"] = map[string]any{"resources": resources}
 		return u
 	}
@@ -528,6 +529,19 @@ func TestWriteEvidenceArgoOwnerTracksTarget(t *testing.T) {
 	}
 	if resp := buildGitOpsWriteEvidence(evidenceTarget(t, nil, nil), deploymentRef, nil, argoOwner, app(other), nil); resp.OwnerTracksTarget {
 		t.Error("status doesn't list the Deployment")
+	}
+	remote := app(listed)
+	remote.Object["spec"].(map[string]any)["destination"] = map[string]any{"server": "https://prod.example.com"}
+	if resp := buildGitOpsWriteEvidence(evidenceTarget(t, nil, nil), deploymentRef, nil, argoOwner, remote, nil); resp.OwnerTracksTarget {
+		t.Error("a remote Application doesn't confirm ownership of a local object")
+	}
+}
+
+func TestWriteEvidenceRejectsDeepPaths(t *testing.T) {
+	deep := "spec" + strings.Repeat(".a", maxWriteFieldPathSegments)
+	resp := buildGitOpsWriteEvidence(evidenceTarget(t, nil, nil), deploymentRef, []string{deep, "spec.replicas"}, argoOwner, evidenceArgoApp(nil, nil), nil)
+	if resp.Paths[0].Error == "" || resp.Paths[1].Error != "" {
+		t.Errorf("a path deeper than %d segments is rejected on its own: %+v", maxWriteFieldPathSegments, resp.Paths)
 	}
 }
 
@@ -564,7 +578,7 @@ func TestWriteEvidenceFluxIgnoreTargetIsARegex(t *testing.T) {
 }
 
 func TestPickTrackingArgoApplication(t *testing.T) {
-	app := func(namespace string, lists bool) *unstructured.Unstructured {
+	app := func(namespace string, lists bool, server ...string) *unstructured.Unstructured {
 		resources := []any{map[string]any{"kind": "Service", "namespace": "prod", "name": "api"}}
 		if lists {
 			resources = append(resources, map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "api"})
@@ -573,6 +587,7 @@ func TestPickTrackingArgoApplication(t *testing.T) {
 			"apiVersion": "argoproj.io/v1alpha1",
 			"kind":       "Application",
 			"metadata":   map[string]any{"name": "api", "namespace": namespace},
+			"spec":       map[string]any{"destination": map[string]any{"server": append(server, "https://kubernetes.default.svc")[0]}},
 			"status":     map[string]any{"resources": resources},
 		}}
 	}
@@ -594,5 +609,9 @@ func TestPickTrackingArgoApplication(t *testing.T) {
 	both := app("team", true)
 	if got := pick([]*unstructured.Unstructured{argocd, both}, argocd, both); got != "" {
 		t.Errorf("two Applications listing the object is ambiguous: got %q", got)
+	}
+	remote := app("team", true, "https://prod.example.com")
+	if got := pick([]*unstructured.Unstructured{remote}, remote); got != "" {
+		t.Errorf("a remote Application's status names objects in another cluster: got %q", got)
 	}
 }

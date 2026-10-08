@@ -8,6 +8,7 @@ import {
   changedImageUpdates,
   describeImageUpdateBehavior,
   reconcileRefreshedImageDrafts,
+  setImageWrites,
 } from './SetImageDialog'
 
 const containers: WorkloadContainerImage[] = [
@@ -142,5 +143,34 @@ describe('canSubmitImageUpdates', () => {
     expect(canSubmitImageUpdates({ ...ready, busy: true })).toBe(false)
     expect(canSubmitImageUpdates({ ...ready, loadFailed: true })).toBe(false)
     expect(canSubmitImageUpdates({ ...ready, ownershipConfirmable: false })).toBe(false)
+  })
+})
+
+describe('setImageWrites', () => {
+  it('names each container, so the verdict is for exactly the images being changed', () => {
+    expect(setImageWrites(containers).map((w) => w.paths)).toEqual([
+      ['spec.template.spec.containers[name=app].image'],
+      ['spec.template.spec.containers[name=sidecar].image'],
+      ['spec.template.spec.initContainers[name=migrate].image'],
+    ])
+  })
+
+  it("asks again when the evidence doesn't cover a changed container", () => {
+    // Evidence read before the dialog listed the init container covers only
+    // the app image, which the owner ignores.
+    const guard = evaluateGitOpsWriteGuard({
+      target: { kind: 'Deployment', group: 'apps', namespace: 'prod', name: 'api' },
+      owner: { tool: 'argocd', kind: 'applications', namespace: 'argocd', name: 'api' },
+      writes: setImageWrites([{ type: 'initContainer', name: 'migrate' }]),
+      evidence: {
+        uid: 'u',
+        resourceVersion: '1',
+        owner: null,
+        policy: { tool: 'argocd', auto: true, selfHeal: true, prune: false, suspended: null, respectIgnoreDifferences: true },
+        paths: [{ path: 'spec.template.spec.containers[name=app].image', lastApplied: 'present', ownedBy: [], ownedByGitOps: false, ignored: 'effective', ignoredBy: 'spec.ignoreDifferences' }],
+      },
+    })
+    expect(guard.level).toBe('may-revert')
+    expect(canConfirmGitOpsWrite(guard, false)).toBe(false)
   })
 })
