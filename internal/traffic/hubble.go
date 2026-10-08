@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -897,7 +898,10 @@ type hubbleFetch struct {
 // view ends minutes before now. Without it each node returns its newest Number,
 // and the window is applied as those arrive.
 func hubbleFlowsRequest(opts FlowOptions, follow bool) *observerpb.GetFlowsRequest {
-	req := &observerpb.GetFlowsRequest{Follow: follow}
+	req := &observerpb.GetFlowsRequest{
+		Follow:    follow,
+		FieldMask: &fieldmaskpb.FieldMask{Paths: hubbleFlowFields},
+	}
 	if !follow {
 		req.Number = hubbleDefaultNodeLimit
 		if opts.Limit > 0 {
@@ -956,6 +960,26 @@ func hubbleFlowsRequest(opts FlowOptions, follow bool) *observerpb.GetFlowsReque
 		)
 	}
 	return req
+}
+
+// hubbleFlowFields are the parts of a flow the conversion reads
+// (callerOrientedFlow and what it calls, plus the time and node the fetch
+// tracks coverage by). Relay sends only these, so a flow arrives without its
+// Ethernet and tunnel headers, node labels, trace context, socket details and
+// the rest. A Relay older than Cilium 1.19 ignores the mask and sends whole
+// flows. TestHubbleFlowFieldsCoverConversion fails when the conversion starts
+// reading a field that is not listed.
+//
+// l4, l7 and IP are named whole: naming a field inside them makes Hubble
+// create the enclosing message on flows that have none, and an absent L7
+// record is meaningful here (a reply without one is not an edge).
+var hubbleFlowFields = []string{
+	"time", "node_name", "verdict", "drop_reason", "drop_reason_desc",
+	"IP", "l4", "l7", "is_reply", "traffic_direction",
+	"source.namespace", "source.pod_name", "source.labels",
+	"destination.namespace", "destination.pod_name", "destination.labels",
+	"source_service.name", "destination_service.name",
+	"ingress_allowed_by", "egress_allowed_by", "ingress_denied_by", "egress_denied_by",
 }
 
 // hubbleHostLabels are the identities classifyNonPodIdentity reports as Host.
