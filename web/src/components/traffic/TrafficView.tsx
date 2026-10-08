@@ -1578,7 +1578,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
               )}
             </>
           ) : focus && flowsData && !connectionError ? (
-            <div className="absolute inset-0 flex items-center justify-center px-4">
+            <div className="absolute inset-0 grid grid-rows-[1fr_auto_2fr] justify-items-center [&>*]:row-start-2 px-4">
               <FocusNotFound
                 focus={focus}
                 hiddenByFilters={(flowsData?.aggregated ?? []).some(f => touchesFocus(f.source, focus) || touchesFocus(f.destination, focus))}
@@ -1594,7 +1594,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
               />
             </div>
           ) : connectionError ? (
-            <div className="absolute inset-0 flex items-center justify-center">
+            <div className="absolute inset-0 grid grid-rows-[1fr_auto_2fr] justify-items-center [&>*]:row-start-2">
               <div className="text-center space-y-3">
                 <Plug className="h-12 w-12 text-yellow-500 mx-auto" />
                 <p className="text-theme-text-secondary">Connection failed</p>
@@ -1610,7 +1610,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
               </div>
             </div>
           ) : (
-            <div className="absolute inset-0 flex items-center justify-center px-4">
+            <div className="absolute inset-0 grid grid-rows-[1fr_auto_2fr] justify-items-center [&>*]:row-start-2 px-4">
               {flowStats.total > 0 && flowStats.shown === 0 ? (
                 <EmptyState
                   tone="filtered"
