@@ -976,8 +976,8 @@ func hubbleFlowsRequest(opts FlowOptions, follow bool) *observerpb.GetFlowsReque
 var hubbleFlowFields = []string{
 	"time", "node_name", "verdict", "drop_reason", "drop_reason_desc",
 	"IP", "l4", "l7", "is_reply", "traffic_direction",
-	"source.namespace", "source.pod_name", "source.labels",
-	"destination.namespace", "destination.pod_name", "destination.labels",
+	"source.namespace", "source.pod_name", "source.labels", "source.workloads",
+	"destination.namespace", "destination.pod_name", "destination.labels", "destination.workloads",
 	"source_service.name", "destination_service.name",
 	"ingress_allowed_by", "egress_allowed_by", "ingress_denied_by", "egress_denied_by",
 }
