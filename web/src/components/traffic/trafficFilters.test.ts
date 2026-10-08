@@ -349,6 +349,28 @@ describe('selectionRawPairs', () => {
     expect(selectionRawPairs([virtual], { type: 'node', nodeId: 'addon-group' })).toEqual([endpointPair(a)])
   })
 
+  it('keeps an edge apart from its unknown-direction twin', () => {
+    const twin = { ...c, directionUnknown: true }
+    const graph: GraphFlow[] = [{ ...c, rawPairs: [endpointPair(c)] }, { ...twin, rawPairs: [endpointPair(twin)] }]
+    expect(selectionRawPairs(graph, { type: 'edge', sourceId: 'shop/web-1', destId: 'shop/db-0', port: 443 }))
+      .toEqual([endpointPair(c)])
+    expect(selectionRawPairs(graph, { type: 'edge', sourceId: 'shop/web-1', destId: 'shop/db-0', port: 443, directionUnknown: true }))
+      .toEqual([endpointPair(twin)])
+  })
+
+  it('returns the same order however the server ordered its aggregation', () => {
+    const sel = { type: 'node' as const, nodeId: 'shop/web-1' }
+    expect(selectionRawPairs([plain, merged], sel)).toEqual(selectionRawPairs([merged, plain], sel))
+  })
+
+  it('selects the traffic of every addon inside the group while addons are grouped', () => {
+    const dns = edge(['kube-system', 'coredns', 'Pod'], ['shop', 'web-1', 'Pod'])
+    const graph: GraphFlow[] = [{ ...dns, rawPairs: [endpointPair(dns)] }, plain]
+    const inGroup = (e: { name: string }) => e.name === 'coredns'
+    expect(selectionRawPairs(graph, { type: 'node', nodeId: 'addon-group' }, inGroup)).toEqual([endpointPair(dns)])
+    expect(selectionRawPairs(graph, { type: 'node', nodeId: 'addon-group' })).toBeNull()
+  })
+
   it('merges pairs in place', () => {
     const into: GraphFlow = { ...a, rawPairs: [endpointPair(a)] }
     const owned = into.rawPairs

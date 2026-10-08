@@ -60,6 +60,20 @@ func TestHubbleMatchWhitelist(t *testing.T) {
 		}
 	})
 
+	t.Run("each pair carries its port, on the source side when reversed", func(t *testing.T) {
+		f := hubbleMatchWhitelist(&FlowMatch{Pairs: []EndpointPair{
+			{Source: pod("a", "web-1"), Destination: pod("b", "db-0"), Port: 5432},
+			{Source: pod("a", "web-1"), Destination: pod("b", "cache-0"), Port: 6379},
+		}})
+		if len(f) != 4 {
+			t.Fatalf("got %d filters, want one forward and one reversed per pair", len(f))
+		}
+		if !slices.Equal(f[0].GetDestinationPort(), []string{"5432"}) || !slices.Equal(f[1].GetSourcePort(), []string{"5432"}) ||
+			!slices.Equal(f[2].GetDestinationPod(), []string{"b/cache-0"}) || !slices.Equal(f[2].GetDestinationPort(), []string{"6379"}) {
+			t.Errorf("filters = %v, want each pair with its own port, so web-1→cache-0 traffic cannot crowd out web-1→db-0", f)
+		}
+	})
+
 	t.Run("a side that is not all pods is left open", func(t *testing.T) {
 		f := hubbleMatchWhitelist(&FlowMatch{Pairs: []EndpointPair{{Source: pod("a", "web-1"), Destination: EndpointRef{Name: "world", Kind: EndpointKindExternal}}}})
 		if len(f) != 2 || len(f[0].GetDestinationPod()) != 0 || !slices.Equal(f[0].GetSourcePod(), []string{"a/web-1"}) {

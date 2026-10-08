@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -975,25 +976,53 @@ func hubbleNamespaces(opts FlowOptions) []string {
 // thousands of pods is filtered here instead.
 const hubbleMaxMatchPods = 200
 
-// hubbleMatchWhitelist turns a selection into pod filters Hubble applies at
-// the node, or nil when it cannot express it. Hubble matches pod names by
-// prefix, so the result is a superset the caller narrows with Match.Matches.
-// Only pods can be named this way: a side that includes an external address
-// or a host is left open rather than guessed at. Each filter is also sent
-// reversed, because a reply travels callee to caller and is turned around only
-// after it arrives (callerOrientedFlow).
+// hubbleMatchWhitelist turns a selection into filters Hubble applies at the
+// node, or nil when it cannot express it. Hubble matches pod names by prefix,
+// so the result is a superset the caller narrows with Match.Matches. Only pods
+// can be named this way: an endpoint that is an external address or a host is
+// left open rather than guessed at. Each filter is also sent reversed, because
+// a reply travels callee to caller and is turned around only after it arrives
+// (callerOrientedFlow) — with the service port then on the source side.
+//
+// A small selection is sent pair by pair, each with its port, so traffic
+// between other combinations of the same pods, or on other ports, cannot use
+// up a node's limit before the selected traffic. A large one is sent as two
+// sets of pods, which is coarser but keeps the filter list short.
 func hubbleMatchWhitelist(m *FlowMatch) []*flowpb.FlowFilter {
-	if m == nil {
+	if m == nil || len(m.Pairs) == 0 {
 		return nil
+	}
+	if len(m.Pairs) <= hubbleMaxMatchPairs {
+		filters := make([]*flowpb.FlowFilter, 0, 2*len(m.Pairs))
+		for _, p := range m.Pairs {
+			src, srcOK := hubblePodPrefix(p.Source)
+			dst, dstOK := hubblePodPrefix(p.Destination)
+			if !srcOK && !dstOK {
+				return nil
+			}
+			fwd, rev := &flowpb.FlowFilter{}, &flowpb.FlowFilter{}
+			if srcOK {
+				fwd.SourcePod, rev.DestinationPod = []string{src}, []string{src}
+			}
+			if dstOK {
+				fwd.DestinationPod, rev.SourcePod = []string{dst}, []string{dst}
+			}
+			if p.Port > 0 {
+				port := strconv.Itoa(p.Port)
+				fwd.DestinationPort, rev.SourcePort = []string{port}, []string{port}
+			}
+			filters = append(filters, fwd, rev)
+		}
+		return filters
 	}
 	pods := func(refs []EndpointRef) []string {
 		out := make([]string, 0, len(refs))
 		seen := map[string]bool{}
 		for _, r := range refs {
-			if r.Kind != EndpointKindPod || r.Namespace == "" || r.Name == "" {
+			p, ok := hubblePodPrefix(r)
+			if !ok {
 				return nil
 			}
-			p := r.Namespace + "/" + r.Name
 			if !seen[p] {
 				seen[p] = true
 				out = append(out, p)
@@ -1003,9 +1032,6 @@ func hubbleMatchWhitelist(m *FlowMatch) []*flowpb.FlowFilter {
 			return nil
 		}
 		return out
-	}
-	if len(m.Pairs) == 0 {
-		return nil
 	}
 	srcs := make([]EndpointRef, len(m.Pairs))
 	dsts := make([]EndpointRef, len(m.Pairs))
@@ -1020,6 +1046,17 @@ func hubbleMatchWhitelist(m *FlowMatch) []*flowpb.FlowFilter {
 		{SourcePod: sp, DestinationPod: dp},
 		{SourcePod: dp, DestinationPod: sp},
 	}
+}
+
+// hubbleMaxMatchPairs is the largest selection sent pair by pair.
+const hubbleMaxMatchPairs = 50
+
+// hubblePodPrefix is the pod-name prefix that covers a reference's pod.
+func hubblePodPrefix(r EndpointRef) (string, bool) {
+	if r.Kind != EndpointKindPod || r.Namespace == "" || r.Name == "" {
+		return "", false
+	}
+	return r.Namespace + "/" + r.Name, true
 }
 
 // Cilium's monitor message types (pkg/monitor/api MessageType*), kept local

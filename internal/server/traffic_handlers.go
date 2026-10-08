@@ -143,11 +143,13 @@ func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 // The list asks /traffic/flows/records for the traffic behind a selection.
 const trafficFlowSample = 1000
 
-// trafficRecordsLimit caps a records response.
-const trafficRecordsLimit = 1000
+// trafficRecordsLimit caps a records response at what the flow list shows for
+// the sample, so a selection is never the larger payload of the two.
+const trafficRecordsLimit = trafficFlowSample
 
-// maxTrafficMatchBytes bounds the selection a records request carries in its
-// query string, well under the request-line limits of the proxies in front.
+// maxTrafficMatchBytes bounds the decoded selection a records request carries
+// in its query string. The UI keeps the encoded request line far below it, for
+// the 8 KiB limits of the proxies in front; this guards the server.
 const maxTrafficMatchBytes = 16 << 10
 
 // trafficFlowOptions reads the query parameters the flows and records
@@ -274,6 +276,9 @@ func addFlowsWarning(result map[string]any, response *traffic.FlowsResponse, flo
 // graph's fetch so that a quiet edge on a busy cluster is not crowded out of
 // a capped result; the answer is as of this request, not the graph's.
 func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
 	raw := r.URL.Query().Get("match")
 	if len(raw) > maxTrafficMatchBytes {
 		s.writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("selection is larger than %d bytes", maxTrafficMatchBytes))

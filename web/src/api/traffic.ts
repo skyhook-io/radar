@@ -96,8 +96,10 @@ export interface TrafficEndpointPair {
   directionUnknown?: boolean
 }
 
-/** The query string carries the selection; the server refuses one over 16 KiB. */
-export const MAX_TRAFFIC_MATCH_CHARS = 12_000
+/** The selection rides in the query string, URL-encoded. Proxies in front of
+ *  Radar commonly refuse request lines over 8 KiB (ingress-nginx's default),
+ *  so a larger selection is not sent at all. */
+export const MAX_TRAFFIC_MATCH_CHARS = 6_000
 
 export interface UseTrafficRecordsOptions extends TrafficScope {
   /** The selection as raw edges, or null for no selection. */
@@ -112,7 +114,7 @@ export function useTrafficRecords(options: UseTrafficRecordsOptions) {
   const { pairs, enabled = true } = options
   const { guard, gatedKey, support } = useRadarFeature('trafficRecords')
   const match = pairs && pairs.length > 0 ? JSON.stringify({ pairs }) : null
-  const tooLarge = match !== null && match.length > MAX_TRAFFIC_MATCH_CHARS
+  const tooLarge = match !== null && encodeURIComponent(match).length > MAX_TRAFFIC_MATCH_CHARS
   const params = trafficScopeParams(options)
   if (match && !tooLarge) params.set('match', match)
 

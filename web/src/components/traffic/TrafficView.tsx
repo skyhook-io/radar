@@ -966,7 +966,9 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     return processedFlows
   }, [internetCollapsedFlows, addonMode])
 
-  const selectionPairs = useMemo(() => selectionRawPairs(finalFlows, graphSelection), [graphSelection, finalFlows])
+  const selectionPairs = useMemo(
+    () => selectionRawPairs(finalFlows, graphSelection, addonMode === 'group' ? e => isClusterAddon(e.name, e.namespace) : undefined),
+    [graphSelection, finalFlows, addonMode])
 
   const records = useTrafficRecords({
     namespaces,
@@ -978,7 +980,8 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   })
   // Records come from their own query when the selection could be sent;
   // otherwise the selection is applied to the sample the flows response carries.
-  const useRecords = selectionPairs !== null && records.supported && !records.tooLarge && !records.isError
+  const recordsEligible = selectionPairs !== null && records.supported && !records.tooLarge
+  const useRecords = recordsEligible && !records.isError
 
   const filteredRecords = useMemo(
     () => (records.data?.flows ?? []).filter(rawFlowPasses),
@@ -1330,7 +1333,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                       isFetching={flowsFetching}
                       onRefresh={() => {
                         refetchFlowsRaw()
-                        if (useRecords) records.refetch()
+                        if (recordsEligible) records.refetch()
                       }}
                       connectionState={connection.state}
                     />

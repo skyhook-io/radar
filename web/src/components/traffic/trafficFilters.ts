@@ -332,16 +332,24 @@ export function pairKey(source: { namespace?: string; name: string }, destinatio
 }
 
 /**
- * The server edges behind the selected node or edge, deduplicated. Null when
- * the selection traces back to none — a group node, whose edges belong to its
- * members.
+ * The server edges behind the selected node or edge, deduplicated and in a
+ * stable order — the server returns its aggregation in no particular order,
+ * and the result keys the records query. Null when the selection traces back
+ * to none. `inAddonGroup` says which endpoints the addon group node holds
+ * while addons are grouped, so selecting the group selects their traffic too.
  */
-export function selectionRawPairs(flows: GraphFlow[], selection: TrafficGraphSelection | null): TrafficEndpointPair[] | null {
+export function selectionRawPairs(
+  flows: GraphFlow[],
+  selection: TrafficGraphSelection | null,
+  inAddonGroup?: (e: { namespace?: string; name: string }) => boolean,
+): TrafficEndpointPair[] | null {
   if (!selection) return null
   const pairs = new Map<string, TrafficEndpointPair>()
+  const groupId = (e: GraphFlow['source']) =>
+    inAddonGroup && selection.nodeId === 'addon-group' && inAddonGroup(e) ? 'addon-group' : selectableId(e)
   for (const flow of flows) {
-    const sourceId = selectableId(flow.source)
-    const destId = selectableId(flow.destination)
+    const sourceId = groupId(flow.source)
+    const destId = groupId(flow.destination)
     // An edge is drawn per port, so a selected edge stands for its own port.
     // An edge merged from several ports carries one of them, and which one can
     // change between refreshes, so any port merged into it identifies it.
@@ -349,11 +357,13 @@ export function selectionRawPairs(flows: GraphFlow[], selection: TrafficGraphSel
       ? sourceId === selection.nodeId || destId === selection.nodeId
       : sourceId === selection.sourceId && destId === selection.destId &&
         (selection.port === undefined || flow.port === selection.port ||
-          (flow.rawPairs ?? []).some(p => p.port === selection.port))
+          (flow.rawPairs ?? []).some(p => p.port === selection.port)) &&
+        !!flow.directionUnknown === !!selection.directionUnknown
     if (!selected) continue
     for (const pair of flow.rawPairs ?? []) {
       pairs.set(pairKey(pair.source, pair.destination, pair.port, pair.directionUnknown), pair)
     }
   }
-  return pairs.size > 0 ? Array.from(pairs.values()) : null
+  if (pairs.size === 0) return null
+  return Array.from(pairs.entries()).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([, pair]) => pair)
 }
