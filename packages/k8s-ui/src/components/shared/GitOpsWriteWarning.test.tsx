@@ -51,6 +51,13 @@ describe('GitOpsWriteWarning', () => {
     expect(html).not.toContain('type="checkbox"')
   })
 
+  it('leaves vertical spacing to the parent', () => {
+    for (const input of [base, { ...base, ownerPending: true }, { ...base, writes: [{ scope: 'create-child' as const }] }]) {
+      const root = render(input).match(/^<div class="([^"]*)"/)?.[1] ?? ''
+      expect(root).not.toMatch(/(^|\s)m[bt]-/)
+    }
+  })
+
   it('renders nothing when unmanaged', () => {
     expect(render({ ...base, owner: null })).toBe('')
   })

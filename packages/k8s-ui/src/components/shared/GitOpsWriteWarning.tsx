@@ -43,7 +43,9 @@ export function GitOpsWriteWarning({
   onAcknowledgedChange,
   onOpenOwner,
   disabled = false,
-  className = 'mb-0',
+  // Not undefined: AlertBanner would add its own mb-4, and a margin utility
+  // overrides the parent's space-y gap.
+  className = '',
 }: GitOpsWriteWarningProps) {
   if (guard.pending) {
     return (
