@@ -16,7 +16,7 @@ import { useDock } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, pairKey, selectionMatch, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusParam, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, type TrafficFocus } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, pairKey, selectionRawPairs, selectionMatch, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusParam, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, type TrafficFocus } from './trafficFilters'
 
 // Consecutive 2s retries of an empty result that came with a transient warning.
 const MAX_EMPTY_RETRIES = 5
@@ -1036,18 +1036,25 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // The table lists the endpoints as they are, so a selection made from it is
   // traced through the same flows.
   const selectableFlows = tooLargeToDraw ? focusedFlows : finalFlows
-  const selection = useMemo(
-    () => selectionMatch(selectableFlows, graphSelection, groupAddons && !tooLargeToDraw ? e => isClusterAddon(e.name, e.namespace) : undefined),
+  // The server edges behind the selection, as drawn: what its records are
+  // narrowed to, whichever form the lookup is sent in.
+  const selectionPairs = useMemo(
+    () => selectionRawPairs(selectableFlows, graphSelection, groupAddons && !tooLargeToDraw ? e => isClusterAddon(e.name, e.namespace) : undefined),
     [graphSelection, selectableFlows, groupAddons, tooLargeToDraw])
+  const selection = useMemo(() => selectionMatch(selectionPairs, graphSelection), [selectionPairs, graphSelection])
   // Ungrouped, a workload focus is drawn as its pods, so no node carries its
   // id; its records are still the workload's.
   const focusSelected = !!focus && graphSelection?.type === 'node' && graphSelection.nodeId === focusKey
   const recordsMatch = useMemo(
-    () => selection ?? (focusSelected && focus?.namespace
-      ? { endpoints: [{ namespace: focus.namespace, name: focus.name, kind: 'Workload' }] }
-      : null),
-    [selection, focusSelected, focus])
-  const selectionPairs = selection && 'pairs' in selection ? selection.pairs : null
+    () => {
+      if (selection) return selection
+      if (!focusSelected || !focus?.namespace) return null
+      // The owner kind lets Hubble select the workload's pods by name.
+      const pod = focusedFlows.flatMap(f => [f.source, f.destination])
+        .find(e => e.namespace === focus.namespace && e.workload === focus.name && e.workloadKind)
+      return { endpoints: [{ namespace: focus.namespace, name: focus.name, kind: 'Workload', ...(pod && { workloadKind: pod.workloadKind }) }] }
+    },
+    [selection, focusSelected, focus, focusedFlows])
 
   // A selection names something in the representation it was made in: the
   // table lists endpoints as they are, the graph may group addons. Switching
@@ -1072,20 +1079,25 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const recordsEligible = recordsMatch !== null && records.supported && !records.tooLarge
   const useRecords = recordsEligible && !records.isError
 
+  const selectionPairKeys = useMemo(
+    () => selectionPairs && new Set(selectionPairs.map(p => pairKey(p.source, p.destination, p.port, p.directionUnknown))),
+    [selectionPairs])
+  const onSelectedEdge = useCallback(
+    (f: TrafficFlow) => !selectionPairKeys ||
+      selectionPairKeys.has(pairKey(drawnEndpoint(f.source), drawnEndpoint(f.destination), f.port, f.directionUnknown)),
+    [selectionPairKeys, drawnEndpoint])
+  // An endpoint lookup answers with all of its edges, including ones the view
+  // hides (below the connection threshold), so they are dropped here.
   const filteredRecords = useMemo(
-    () => (records.data?.flows ?? []).filter(rawFlowPasses),
-    [records.data?.flows, rawFlowPasses])
+    () => (records.data?.flows ?? []).filter(f => rawFlowPasses(f) && onSelectedEdge(f)),
+    [records.data?.flows, rawFlowPasses, onSelectedEdge])
 
   const sampleSelection = useMemo(() => {
     if (!graphSelection) return filteredRawFlows
     if (focusSelected && focus && !selection) {
       return filteredRawFlows.filter(f => touchesFocus(f.source, focus) || touchesFocus(f.destination, focus))
     }
-    if (selectionPairs) {
-      const keys = new Set(selectionPairs.map(p => pairKey(p.source, p.destination, p.port, p.directionUnknown)))
-      return filteredRawFlows.filter(f =>
-        keys.has(pairKey(drawnEndpoint(f.source), drawnEndpoint(f.destination), f.port, f.directionUnknown)))
-    }
+    if (selectionPairKeys) return filteredRawFlows.filter(onSelectedEdge)
     if (graphSelection.type === 'node' && graphSelection.nodeId) {
       const id = graphSelection.nodeId
       return filteredRawFlows.filter(f => {
@@ -1104,7 +1116,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       })
     }
     return filteredRawFlows
-  }, [filteredRawFlows, graphSelection, selectionPairs, drawnEndpoint, focusSelected, focus, selection])
+  }, [filteredRawFlows, graphSelection, selectionPairKeys, onSelectedEdge, drawnEndpoint, focusSelected, focus, selection])
 
   const listFlows = useRecords ? filteredRecords : sampleSelection
 
@@ -1682,10 +1694,12 @@ function FocusNotFound({ focus, hiddenByFilters, systemHidden, outsideNamespaces
     body = `${focus.namespace} is outside the namespaces in view, so only its traffic with them was fetched, and there was none.`
     if (onSwitchNamespace) action = { label: `Switch to ${focus.namespace}`, onClick: onSwitchNamespace }
   } else if (warning) {
-    body = `Radar found none in the ${window}, but some traffic may be missing: ${warning}`
+    body = `Radar found none in the ${window}, but some traffic may be missing.`
   } else {
     body = `Radar saw no traffic to or from it in the ${window}.`
   }
+  // Whatever else applies, a fetch that reported trouble is not proof of quiet.
+  if (warning) body += ` ${warning}`
   return (
     <EmptyState
       tone="neutral"

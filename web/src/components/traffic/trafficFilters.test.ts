@@ -530,15 +530,18 @@ describe('selectionMatch', () => {
   // one entry however many it has.
   it('sends a node that is one server endpoint as that endpoint', () => {
     const flows = Array.from({ length: 400 }, (_, i) => traced(edge('edge/gateway', `t/svc-${i}`)))
-    const m = selectionMatch(flows, { type: 'node', nodeId: 'edge/gateway' })
+    const node = { type: 'node' as const, nodeId: 'edge/gateway' }
+    const m = selectionMatch(selectionRawPairs(flows, node), node)
     expect(m).toEqual({ endpoints: [expect.objectContaining({ namespace: 'edge', name: 'gateway' })] })
   })
 
   it('sends an edge, and a node merged from several endpoints, as edges', () => {
     const a = traced(edge('a/web', 'a/db'))
-    expect(selectionMatch([a], { type: 'edge', sourceId: 'a/web', destId: 'a/db', port: 80 })).toHaveProperty('pairs')
+    const e = { type: 'edge' as const, sourceId: 'a/web', destId: 'a/db', port: 80 }
+    expect(selectionMatch(selectionRawPairs([a], e), e)).toHaveProperty('pairs')
     // An external name the graph merged from two addresses.
     const merged: GraphFlow = { ...edge('a/web', 'MongoDB'), rawPairs: [endpointPair(edge('a/web', '10.0.0.1')), endpointPair(edge('a/web', '10.0.0.2'))] }
-    expect(selectionMatch([merged], { type: 'node', nodeId: 'MongoDB' })).toHaveProperty('pairs')
+    const mongo = { type: 'node' as const, nodeId: 'MongoDB' }
+    expect(selectionMatch(selectionRawPairs([merged], mongo), mongo)).toHaveProperty('pairs')
   })
 })

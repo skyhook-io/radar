@@ -398,17 +398,17 @@ export function selectionRawPairs(
 }
 
 /**
- * What to ask the server for, for the records behind a selection. A node that
- * is one server endpoint is sent as that endpoint: a busy node has too many
- * edges to name each within a URL. Anything else — an edge, a node merged
- * from several endpoints — is sent as its edges.
+ * What to ask the server for, for the records behind a selection traced to
+ * `pairs` (selectionRawPairs). A node that is one server endpoint is sent as
+ * that endpoint: a busy node has too many edges to name each within a URL.
+ * The answer then holds its hidden edges too, so the caller keeps the pairs
+ * to narrow it. Anything else — an edge, a node merged from several
+ * endpoints — is sent as its edges.
  */
 export function selectionMatch(
-  flows: GraphFlow[],
+  pairs: TrafficEndpointPair[] | null,
   selection: TrafficGraphSelection | null,
-  inAddonGroup?: (e: { namespace?: string; name: string }) => boolean,
 ): TrafficMatch | null {
-  const pairs = selectionRawPairs(flows, selection, inAddonGroup)
   if (!pairs) return null
   if (selection?.type !== 'node') return { pairs }
   const refKey = (r: TrafficEndpointRef) => `${graphEndpointId(r)}|${r.kind ?? ''}`
