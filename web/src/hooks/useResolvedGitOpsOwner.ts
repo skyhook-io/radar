@@ -48,6 +48,7 @@ export function useResolvedGitOpsOwner({
   relationships,
   resource,
   enabled = true,
+  cacheScope,
 }: {
   kind: string
   group?: string
@@ -56,6 +57,8 @@ export function useResolvedGitOpsOwner({
   relationships: Relationships | undefined
   resource: any
   enabled?: boolean
+  /** Keeps these reads apart from the shared resource cache (see useResource). */
+  cacheScope?: string
 }): ResolvedGitOpsOwner {
   const active = enabled && Boolean(relationships)
   const relationshipGitopsOwner = useMemo(
@@ -74,6 +77,7 @@ export function useResolvedGitOpsOwner({
     inheritedLookupRef?.namespace ?? '',
     inheritedLookupRef?.name ?? '',
     inheritedLookupRef?.group,
+    { cacheScope },
   )
   const inheritedGitopsOwner = useMemo(
     () => (inheritedLookupRef ? gitOpsOwnerFromRelationships(inherited.data?.relationships) : null),
@@ -102,6 +106,7 @@ export function useResolvedGitOpsOwner({
   const shouldResolveArgoNamespace = rawOwner?.tool === 'argocd' && !rawOwner.namespace
   const argoQuery = useResources<any>('applications', undefined, 'argoproj.io', {
     enabled: shouldResolveArgoNamespace,
+    cacheScope,
   })
   const argoApplications = argoQuery.data
   const owner = useMemo(() => resolveGitOpsOwner(rawOwner, argoApplications), [rawOwner, argoApplications])
@@ -113,7 +118,7 @@ export function useResolvedGitOpsOwner({
     owner?.namespace ?? '',
     owner?.name ?? '',
     ownerGroup,
-    { enabled: shouldFetchOwner },
+    { enabled: shouldFetchOwner, cacheScope },
   )
   const ownerObject = shouldFetchOwner ? ownerQuery.data : undefined
 

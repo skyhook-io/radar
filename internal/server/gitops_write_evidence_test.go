@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -11,7 +12,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -441,5 +444,155 @@ func TestWriteEvidenceControllerOwnerAndMetadataOwner(t *testing.T) {
 	resp := buildGitOpsWriteEvidence(target, deploymentRef, nil, owner, nil, nil)
 	if resp.ControllerOwner == nil || resp.ControllerOwner.Kind != "Cluster" || resp.ControllerOwner.Name != "pg" {
 		t.Errorf("controller owner: %+v", resp.ControllerOwner)
+	}
+}
+
+// Set image asks about every container at once, so the verdict is only
+// certain when the rule (or the source) covers each container.
+func TestWriteEvidenceWildcardPathIsJudgedPerContainer(t *testing.T) {
+	const images = "spec.template.spec.containers[*].image"
+	respect := map[string]any{"automated": map[string]any{"selfHeal": true}, "syncOptions": []any{"RespectIgnoreDifferences=true"}}
+	rule := func(pointers ...any) []any {
+		return []any{map[string]any{"group": "apps", "kind": "Deployment", "jsonPointers": pointers}}
+	}
+	evidence := func(target *unstructured.Unstructured, ignore []any) gitOpsPathEvidence {
+		return buildGitOpsWriteEvidence(target, deploymentRef, []string{images}, argoOwner, evidenceArgoApp(respect, ignore), nil).Paths[0]
+	}
+
+	single := evidenceTarget(t, nil, nil)
+	if err := unstructured.SetNestedSlice(single.Object, []any{map[string]any{"name": "app", "image": "api:1"}}, "spec", "template", "spec", "containers"); err != nil {
+		t.Fatal(err)
+	}
+	if got := evidence(single, rule("/spec/template/spec/containers/0/image")); got.Ignored != "effective" {
+		t.Errorf("a rule on the only container covers the wildcard: %+v", got)
+	}
+	if got := evidence(evidenceTarget(t, nil, nil), rule("/spec/template/spec/containers/0/image", "/spec/template/spec/containers/1/image")); got.Ignored != "effective" {
+		t.Errorf("rules covering every container: %+v", got)
+	}
+	if got := evidence(evidenceTarget(t, nil, nil), rule("/spec/template/spec/containers")); got.Ignored != "effective" {
+		t.Errorf("an ancestor pointer covers every container: %+v", got)
+	}
+	if got := evidence(evidenceTarget(t, nil, nil), rule("/spec/template/spec/containers/1/image")); got.Ignored != "unevaluated" || got.IgnoredBy != "spec.ignoreDifferences jsonPointers" {
+		t.Errorf("a rule covering one of two containers is unconfirmed: %+v", got)
+	}
+
+	declares := func(names ...string) map[string]any {
+		containers := []any{}
+		for _, n := range names {
+			containers = append(containers, map[string]any{"name": n, "image": n + ":1"})
+		}
+		return map[string]any{"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": containers}}}}
+	}
+	if got := evidence(evidenceTarget(t, declares("sidecar", "app"), nil), nil); got.LastApplied != "present" || got.Partial {
+		t.Errorf("source declares every container: %+v", got)
+	}
+	if got := evidence(evidenceTarget(t, declares("app"), nil), nil); got.LastApplied != "present" || !got.Partial {
+		t.Errorf("source declares one of two containers: %+v", got)
+	}
+
+	owns := func(names ...string) []metav1.ManagedFieldsEntry {
+		containers := map[string]any{}
+		for _, n := range names {
+			containers[`k:{"name":"`+n+`"}`] = map[string]any{"f:image": map[string]any{}}
+		}
+		return []metav1.ManagedFieldsEntry{fieldsEntry(t, "argocd-controller", metav1.ManagedFieldsOperationUpdate, map[string]any{
+			"f:spec": map[string]any{"f:template": map[string]any{"f:spec": map[string]any{"f:containers": containers}}},
+		})}
+	}
+	if got := evidence(evidenceTarget(t, nil, owns("sidecar", "app")), nil); !got.OwnedByGitOps || got.Approximate || got.Partial {
+		t.Errorf("controller owns every container's image: %+v", got)
+	}
+	if got := evidence(evidenceTarget(t, nil, owns("app")), nil); !got.OwnedByGitOps || !got.Approximate || !got.Partial {
+		t.Errorf("controller owns one of two images: %+v", got)
+	}
+
+	init := buildGitOpsWriteEvidence(evidenceTarget(t, declares("sidecar", "app"), owns("sidecar", "app")), deploymentRef,
+		[]string{"spec.template.spec.initContainers[*].image"}, argoOwner, evidenceArgoApp(respect, nil), nil).Paths[0]
+	if !init.Empty || init.OwnedByGitOps || init.LastApplied == "present" {
+		t.Errorf("a Deployment without init containers has nothing for the write to touch: %+v", init)
+	}
+}
+
+// Argo CD 3 omits the Application's namespace from tracking ids in its own
+// namespace; the Application's status confirms which one manages the object.
+func TestWriteEvidenceArgoOwnerTracksTarget(t *testing.T) {
+	app := func(resources ...any) *unstructured.Unstructured {
+		u := evidenceArgoApp(nil, nil)
+		u.Object["status"] = map[string]any{"resources": resources}
+		return u
+	}
+	listed := map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "api"}
+	other := map[string]any{"kind": "Service", "namespace": "prod", "name": "api"}
+	if resp := buildGitOpsWriteEvidence(evidenceTarget(t, nil, nil), deploymentRef, nil, argoOwner, app(other, listed), nil); !resp.OwnerTracksTarget {
+		t.Error("status lists the Deployment")
+	}
+	if resp := buildGitOpsWriteEvidence(evidenceTarget(t, nil, nil), deploymentRef, nil, argoOwner, app(other), nil); resp.OwnerTracksTarget {
+		t.Error("status doesn't list the Deployment")
+	}
+}
+
+func TestWriteEvidenceArgoWildcardIgnoreEntry(t *testing.T) {
+	ignore := []any{map[string]any{"group": "*", "kind": "*", "jsonPointers": []any{"/spec/replicas"}}}
+	resp := buildGitOpsWriteEvidence(evidenceTarget(t, nil, nil), deploymentRef, []string{"spec.replicas"}, argoOwner,
+		evidenceArgoApp(map[string]any{"syncOptions": []any{"RespectIgnoreDifferences=true"}}, ignore), nil)
+	if resp.Paths[0].Ignored != "effective" {
+		t.Errorf(`group "*" and kind "*" match any object: %+v`, resp.Paths[0])
+	}
+}
+
+func TestWriteEvidenceFluxIgnoreTargetIsARegex(t *testing.T) {
+	owner := &topology.ResourceRef{Kind: "HelmRelease", Group: "helm.toolkit.fluxcd.io", Namespace: "flux-system", Name: "api"}
+	ignored := func(target map[string]any) string {
+		hr := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{
+			"driftDetection": map[string]any{"mode": "enabled", "ignore": []any{map[string]any{"paths": []any{"/spec/replicas"}, "target": target}}},
+		}}}
+		return buildGitOpsWriteEvidence(evidenceTarget(t, nil, nil), deploymentRef, []string{"spec.replicas"}, owner, hr, nil).Paths[0].Ignored
+	}
+	for _, tc := range []struct {
+		target map[string]any
+		want   string
+	}{
+		{map[string]any{"kind": "Deploy.*", "name": "a.i", "version": "v1"}, "effective"},
+		{map[string]any{"name": "ap"}, ""},
+		{map[string]any{"version": "v2"}, ""},
+		{map[string]any{"name": "["}, ""},
+	} {
+		if got := ignored(tc.target); got != tc.want {
+			t.Errorf("target %v: ignored %q, want %q", tc.target, got, tc.want)
+		}
+	}
+}
+
+func TestPickTrackingArgoApplication(t *testing.T) {
+	app := func(namespace string, lists bool) *unstructured.Unstructured {
+		resources := []any{map[string]any{"kind": "Service", "namespace": "prod", "name": "api"}}
+		if lists {
+			resources = append(resources, map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "api"})
+		}
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "argoproj.io/v1alpha1",
+			"kind":       "Application",
+			"metadata":   map[string]any{"name": "api", "namespace": namespace},
+			"status":     map[string]any{"resources": resources},
+		}}
+	}
+	pick := func(readable []*unstructured.Unstructured, candidates ...*unstructured.Unstructured) string {
+		objs := make([]runtime.Object, 0, len(readable))
+		for _, u := range readable {
+			objs = append(objs, u)
+		}
+		dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), objs...)
+		return pickTrackingArgoApplication(context.Background(), dyn, candidates, "api", deploymentRef)
+	}
+	argocd, team := app("argocd", true), app("team", false)
+	if got := pick([]*unstructured.Unstructured{argocd, team}, argocd, team); got != "argocd" {
+		t.Errorf("the Application that lists the Deployment: got %q", got)
+	}
+	if got := pick([]*unstructured.Unstructured{team}, argocd, team); got != "" {
+		t.Errorf("an Application the caller can't read is never named: got %q", got)
+	}
+	both := app("team", true)
+	if got := pick([]*unstructured.Unstructured{argocd, both}, argocd, both); got != "" {
+		t.Errorf("two Applications listing the object is ambiguous: got %q", got)
 	}
 }

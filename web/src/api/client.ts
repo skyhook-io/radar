@@ -2616,15 +2616,17 @@ export function fetchResourceWithRelationships<T>(
   );
 }
 
+// `cacheScope` keeps a caller's copy apart from the shared one, for hosts
+// that point one QueryClient at several clusters (see useGitOpsWriteGuard).
 export function useResource<T>(
   kind: string,
   namespace: string,
   name: string,
   group?: string,
-  options?: { enabled?: boolean; refetchInterval?: number | false },
+  options?: { enabled?: boolean; refetchInterval?: number | false; cacheScope?: string },
 ) {
   const query = useQuery<ResourceWithRelationships<T>>({
-    queryKey: ["resource", kind, namespace, name, group],
+    queryKey: ["resource", kind, namespace, name, group, ...(options?.cacheScope ? [options.cacheScope] : [])],
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
     enabled: (options?.enabled ?? true) && Boolean(kind && name), // namespace can be empty for cluster-scoped resources
     refetchInterval: options?.refetchInterval,
@@ -2655,9 +2657,10 @@ export function useResourceWithRelationships<T>(
   namespace: string,
   name: string,
   group?: string,
+  options?: { cacheScope?: string },
 ) {
   return useQuery<ResourceWithRelationships<T>>({
-    queryKey: ["resource", kind, namespace, name, group],
+    queryKey: ["resource", kind, namespace, name, group, ...(options?.cacheScope ? [options.cacheScope] : [])],
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
     enabled: Boolean(kind && name),
     // Deep-linked detail views can mount while the kind's informer is still
@@ -2677,7 +2680,7 @@ export function useResources<T>(
   kind: string,
   namespace?: string,
   group?: string,
-  options?: { enabled?: boolean; refetchInterval?: number | false },
+  options?: { enabled?: boolean; refetchInterval?: number | false; cacheScope?: string },
 ) {
   const params = new URLSearchParams();
   if (namespace) params.set("namespace", namespace);
@@ -2685,7 +2688,7 @@ export function useResources<T>(
   const queryString = params.toString();
 
   return useQuery<T[]>({
-    queryKey: ["resources", kind, group, namespace],
+    queryKey: ["resources", kind, group, namespace, ...(options?.cacheScope ? [options.cacheScope] : [])],
     queryFn: () =>
       fetchJSON(`/resources/${kind}${queryString ? `?${queryString}` : ""}`),
     enabled: (options?.enabled ?? true) && Boolean(kind),

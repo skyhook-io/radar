@@ -63,7 +63,10 @@ it.each(['resolved', 'failed', 'empty', 'ambiguous'])('waits for Argo Applicatio
       await act(async () => vi.waitFor(() => expect(mocks.evidence).toHaveBeenCalledTimes(1)))
       expect(mocks.evidence.mock.calls[0][0].owner.namespace).toBe('argocd')
     } else {
-      expect(mocks.evidence).not.toHaveBeenCalled()
+      // The server resolves the namespace; the browser sends the name alone.
+      await act(async () => vi.waitFor(() => expect(mocks.evidence).toHaveBeenCalledTimes(1)))
+      expect(mocks.evidence.mock.calls[0][0].owner.namespace).toBe('')
+      await act(async () => vi.waitFor(() => expect(state!.guard?.pending).toBe(false)))
       expect(state!.ownership.lookupError).toBe(false)
       expect(state!.guard?.pending).toBe(false)
       expect(state!.guard?.requiresAck).toBe(true)
@@ -274,6 +277,63 @@ it('asks for an acknowledgment, not a block, when the parent cannot be read', as
     expect(h.ref.state!.guard?.ownershipError).toContain("couldn't read the resource that owns this one")
     expect(canConfirmGitOpsWrite(h.ref.state!.guard, false)).toBe(false)
     expect(canConfirmGitOpsWrite(h.ref.state!.guard, true)).toBe(true)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('lets an ignore rule waive the acknowledgment once the server confirms a name-only Argo match', async () => {
+  mocks.applications.isPending = false
+  mocks.applications.data = [{ metadata: { name: 'web', namespace: 'argocd' } }]
+  const exempt = (ownerTracksTarget: boolean) => ({
+    uid: 'u',
+    resourceVersion: '1',
+    owner: { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' },
+    ownerTracksTarget,
+    policy: { tool: 'argocd', auto: true, selfHeal: true, prune: false, suspended: null, respectIgnoreDifferences: true },
+    paths: [{ path: 'spec.replicas', lastApplied: 'present', ownedBy: [], ownedByGitOps: false, ignored: 'effective', ignoredBy: 'spec.ignoreDifferences' }],
+  })
+  for (const [tracks, level] of [[true, 'info'], [false, 'may-revert']] as const) {
+    mocks.evidence.mockResolvedValueOnce(exempt(tracks))
+    const h = await renderGuard({
+      target: deployment,
+      resource: {},
+      // Argo CD 3's tracking id omits the namespace of Applications in its own namespace.
+      relationships: { managedBy: [{ kind: 'Application', group: 'argoproj.io', namespace: '', name: 'web' }] },
+      writes: replicas,
+    })
+    try {
+      await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+      expect(h.ref.state!.guard?.level).toBe(level)
+    } finally {
+      await h.cleanup()
+    }
+  }
+})
+
+it("takes the Application the server confirmed when the browser can't list Applications", async () => {
+  mocks.applications.isPending = false
+  mocks.applications.data = []
+  mocks.evidence.mockResolvedValueOnce({
+    uid: 'u',
+    resourceVersion: '1',
+    owner: { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' },
+    ownerTracksTarget: true,
+    policy: { tool: 'argocd', auto: true, selfHeal: true, prune: false, suspended: null, respectIgnoreDifferences: true },
+    paths: [{ path: 'spec.replicas', lastApplied: 'present', ownedBy: [], ownedByGitOps: false, ignored: 'effective', ignoredBy: 'spec.ignoreDifferences' }],
+  })
+  const h = await renderGuard({
+    target: deployment,
+    resource: {},
+    relationships: { managedBy: [{ kind: 'Application', group: 'argoproj.io', namespace: '', name: 'web' }] },
+    writes: replicas,
+  })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(mocks.evidence.mock.calls[0][0].owner.namespace).toBe('')
+    expect(h.ref.state!.guard?.owner?.namespace).toBe('argocd')
+    expect(h.ref.state!.guard?.level).toBe('info')
+    expect(h.ref.state!.ownership.ownerVerified).toBe(true)
   } finally {
     await h.cleanup()
   }

@@ -349,12 +349,45 @@ describe('copy', () => {
     const g = guard({
       writes: [hibernate],
       evidence: evidence({ ...selfHeal, respectIgnoreDifferences: true }, [
-        pathEvidence({ lastApplied: 'present', ignored: 'unevaluated', ignoredBy: 'spec.ignoreDifferences managedFieldsManagers (the manager owns only part of this field)' }),
+        pathEvidence({ lastApplied: 'present', ignored: 'unevaluated', ignoredBy: 'spec.ignoreDifferences managedFieldsManagers' }),
       ]),
     })
     expect(g.level).toBe('may-revert')
     expect(g.requiresAck).toBe(true)
-    expect(g.perWrite[0].reason).toContain("can't confirm covers this field")
-    expect(g.perWrite[0].reason).not.toContain('jq')
+    expect(g.perWrite[0].reason).toBe(
+      "Radar can't confirm the Application's ignore rule (spec.ignoreDifferences managedFieldsManagers) covers this field, so the next sync may overwrite it.",
+    )
+  })
+
+  it('a wildcard the source declares for only some entries may revert, not will', () => {
+    const partial = guard({ writes: [hibernate], evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present', partial: true })]) })
+    expect(partial.level).toBe('may-revert')
+    expect(partial.requiresAck).toBe(true)
+    expect(partial.perWrite[0].reason).toBe('The GitOps source sets this for some containers but not others; the ones it sets will be overwritten at the next sync.')
+    const whole = guard({ writes: [hibernate], evidence: evidence(selfHeal, [pathEvidence({ lastApplied: 'present' })]) })
+    expect(whole.level).toBe('will-revert')
+  })
+
+  it('a path that matches nothing in the live object adds no verdict', () => {
+    const g = guard({
+      writes: [{ scope: 'spec', paths: ['spec.template.spec.containers[*].image', 'spec.template.spec.initContainers[*].image'] }],
+      evidence: evidence({ ...selfHeal, respectIgnoreDifferences: true }, [
+        pathEvidence({ path: 'spec.template.spec.containers[*].image', lastApplied: 'present', ignored: 'effective', ignoredBy: 'spec.ignoreDifferences' }),
+        pathEvidence({ path: 'spec.template.spec.initContainers[*].image', empty: true }),
+      ]),
+    })
+    expect(g.level).toBe('info')
+    expect(g.requiresAck).toBe(false)
+  })
+
+  it('names the owner once, in the headline', () => {
+    for (const ev of [
+      evidence({ ...selfHeal, respectIgnoreDifferences: true }, [pathEvidence({ lastApplied: 'present', ignored: 'effective', ignoredBy: 'spec.ignoreDifferences' })]),
+      evidence({ ...selfHeal, suspended: true }, [pathEvidence({ lastApplied: 'present' })]),
+      evidence(selfHeal, [pathEvidence({ lastApplied: 'present', ignored: 'comparison-only', ignoredBy: 'spec.ignoreDifferences' })]),
+    ]) {
+      const g = guard({ writes: [hibernate], evidence: ev })
+      expect(g.summary.split('argocd/pg').length - 1).toBe(1)
+    }
   })
 })

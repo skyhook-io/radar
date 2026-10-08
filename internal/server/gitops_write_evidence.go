@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -13,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -71,11 +74,18 @@ type gitOpsPathEvidence struct {
 	// OwnedByGitOps: a manager of the resolved owner's tool owns the path.
 	OwnedByGitOps bool `json:"ownedByGitOps"`
 	Approximate   bool `json:"approximate,omitempty"`
+	// Partial: the path has a wildcard, and the GitOps source declares the
+	// field on some of the elements it matches but not all of them.
+	Partial bool `json:"partial,omitempty"`
+	// Empty: the path's wildcard matches nothing in the live object (a
+	// Deployment without init containers), so a write can't touch it.
+	Empty bool `json:"empty,omitempty"`
 	// Ignored: "" | "effective" (the owner won't revert it) |
 	// "comparison-only" (Argo ignoreDifferences without
 	// RespectIgnoreDifferences: no self-heal trigger, but a sync overwrites) |
-	// "unevaluated" (a matching Argo rule uses jqPathExpressions, which Radar
-	// doesn't evaluate, so it may or may not cover the path).
+	// "unevaluated" (a matching rule uses jqPathExpressions, which Radar
+	// doesn't evaluate, or covers only some of the elements a wildcard path
+	// matches, so it may or may not cover the field being written).
 	Ignored   string `json:"ignored,omitempty"`
 	IgnoredBy string `json:"ignoredBy,omitempty"`
 }
@@ -114,7 +124,10 @@ type gitOpsWriteEvidenceResponse struct {
 	Policy          *gitOpsWritePolicy       `json:"policy"`
 	PolicyError     string                   `json:"policyError,omitempty"`
 	ControllerOwner *controllerOwnerEvidence `json:"controllerOwner,omitempty"`
-	Paths           []gitOpsPathEvidence     `json:"paths"`
+	// OwnerTracksTarget: the Argo CD Application's status lists this object
+	// among its resources, which confirms an owner the client matched by name.
+	OwnerTracksTarget bool                 `json:"ownerTracksTarget,omitempty"`
+	Paths             []gitOpsPathEvidence `json:"paths"`
 }
 
 func (s *Server) handleGitOpsWriteEvidence(w http.ResponseWriter, r *http.Request) {
@@ -172,6 +185,9 @@ func (s *Server) handleGitOpsWriteEvidence(w http.ResponseWriter, r *http.Reques
 
 	req.writeEvidenceRef = canonicalWriteEvidenceRef(req.writeEvidenceRef, target)
 	owner := resolveWriteEvidenceOwner(req, target)
+	if owner != nil && owner.Namespace == "" && owner.Group == "argoproj.io" && strings.EqualFold(owner.Kind, "Application") {
+		owner.Namespace = findTrackingArgoApplication(r.Context(), dyn, owner.Name, req.writeEvidenceRef)
+	}
 	var ownerObj *unstructured.Unstructured
 	var ownerErr error
 	if owner != nil {
@@ -197,6 +213,43 @@ func canonicalWriteEvidenceRef(ref writeEvidenceRef, target *unstructured.Unstru
 		ref.Kind, ref.Group = gvk.Kind, gvk.Group
 	}
 	return ref
+}
+
+// findTrackingArgoApplication finds the namespace of the Application named
+// name whose status lists the object. Argo CD 3 leaves the namespace out of
+// tracking ids for Applications in its own namespace, and the browser can't
+// always list Applications (its namespace view may exclude Argo's namespace).
+// Candidates come from the cache; each is read as the caller, so an
+// Application the caller can't read is never named. Returns "" unless exactly
+// one readable Application lists the object.
+func findTrackingArgoApplication(ctx context.Context, dyn dynamic.Interface, name string, ref writeEvidenceRef) string {
+	cache := k8s.GetResourceCache()
+	if cache == nil || name == "" {
+		return ""
+	}
+	apps, err := cache.ListDynamicWithGroup(ctx, "applications", "", "argoproj.io")
+	if err != nil {
+		return ""
+	}
+	return pickTrackingArgoApplication(ctx, dyn, apps, name, ref)
+}
+
+func pickTrackingArgoApplication(ctx context.Context, dyn dynamic.Interface, candidates []*unstructured.Unstructured, name string, ref writeEvidenceRef) string {
+	found := ""
+	for _, candidate := range candidates {
+		if candidate.GetName() != name {
+			continue
+		}
+		app, err := dyn.Resource(argoApplicationGVR).Namespace(candidate.GetNamespace()).Get(ctx, name, metav1.GetOptions{})
+		if err != nil || !argoAppListsResource(app, ref) {
+			continue
+		}
+		if found != "" {
+			return ""
+		}
+		found = app.GetNamespace()
+	}
+	return found
 }
 
 func resolveWriteEvidenceOwner(req gitOpsWriteEvidenceRequest, target *unstructured.Unstructured) *topology.ResourceRef {
@@ -275,6 +328,11 @@ func ownerManagers(ref *topology.ResourceRef) map[string]bool {
 	return nil
 }
 
+type parsedManagedFields struct {
+	entry  metav1.ManagedFieldsEntry
+	fields map[string]any
+}
+
 func buildGitOpsWriteEvidence(
 	target *unstructured.Unstructured,
 	ref writeEvidenceRef,
@@ -306,6 +364,9 @@ func buildGitOpsWriteEvidence(
 		}
 	}
 	resp.Policy = policy
+	if ownerObj != nil && ownerTool(owner) == "argocd" {
+		resp.OwnerTracksTarget = argoAppListsResource(ownerObj, ref)
+	}
 
 	var lastApplied any
 	hasLastApplied := false
@@ -315,10 +376,6 @@ func buildGitOpsWriteEvidence(
 		}
 	}
 	managers := ownerManagers(owner)
-	type parsedManagedFields struct {
-		entry  metav1.ManagedFieldsEntry
-		fields map[string]any
-	}
 	var managedFields []parsedManagedFields
 	for _, mf := range target.GetManagedFields() {
 		if mf.FieldsV1 == nil || len(mf.FieldsV1.Raw) == 0 {
@@ -339,31 +396,66 @@ func buildGitOpsWriteEvidence(
 			resp.Paths = append(resp.Paths, ev)
 			continue
 		}
+		// A wildcard is judged per element of the live object: the source may
+		// declare one container's image and not another's.
+		elements := expandWildcards(target.Object, segs)
+		if !anyAddressable(elements) {
+			ev.Empty = true
+			resp.Paths = append(resp.Paths, ev)
+			continue
+		}
+		present, declared := 0, 0
+		owners := map[string]*fieldOwnerEvidence{}
+		var order []string
+		for _, el := range elements {
+			elPresent := hasLastApplied && valuePresent(lastApplied, el)
+			if elPresent {
+				present++
+			}
+			elGitOps := false
+			for _, parsed := range managedFields {
+				mf := parsed.entry
+				owned, approximate := fieldsV1Owns(parsed.fields, el)
+				if !owned {
+					continue
+				}
+				key := mf.Manager + "\x00" + string(mf.Operation) + "\x00" + mf.Subresource
+				o, seen := owners[key]
+				if !seen {
+					o = &fieldOwnerEvidence{Manager: mf.Manager, Operation: string(mf.Operation), Subresource: mf.Subresource, Tool: gitOpsFieldManagers[mf.Manager]}
+					owners[key] = o
+					order = append(order, key)
+				}
+				o.Approximate = o.Approximate || approximate
+				if managers[mf.Manager] && mf.Subresource == "" {
+					elGitOps = true
+					ev.OwnedByGitOps = true
+					ev.Approximate = ev.Approximate || approximate
+				}
+			}
+			if elPresent || elGitOps {
+				declared++
+			}
+		}
+		// A manager that owns the field on only some elements owns part of the path.
+		for _, key := range order {
+			o := owners[key]
+			if !ownsEveryElement(managedFields, o, elements) {
+				o.Approximate = true
+				if managers[o.Manager] && o.Subresource == "" {
+					ev.Approximate = true
+				}
+			}
+			ev.OwnedBy = append(ev.OwnedBy, *o)
+		}
 		if hasLastApplied {
-			if valuePresent(lastApplied, segs) {
+			if present > 0 {
 				ev.LastApplied = "present"
 			} else {
 				ev.LastApplied = "absent"
 			}
 		}
-		for _, parsed := range managedFields {
-			mf := parsed.entry
-			owned, approximate := fieldsV1Owns(parsed.fields, segs)
-			if !owned {
-				continue
-			}
-			ev.OwnedBy = append(ev.OwnedBy, fieldOwnerEvidence{
-				Manager:     mf.Manager,
-				Operation:   string(mf.Operation),
-				Subresource: mf.Subresource,
-				Tool:        gitOpsFieldManagers[mf.Manager],
-				Approximate: approximate,
-			})
-			if managers[mf.Manager] && mf.Subresource == "" {
-				ev.OwnedByGitOps = true
-				ev.Approximate = ev.Approximate || approximate
-			}
-		}
+		ev.Partial = declared > 0 && declared < len(elements)
 		ev.Ignored, ev.IgnoredBy = ignoreRuleFor(owner, ownerObj, policy, target, ref, segs, ev.OwnedBy)
 		resp.Paths = append(resp.Paths, ev)
 	}
@@ -463,23 +555,18 @@ func ignoreRuleFor(
 	case "ignore", "if-not-present":
 		return "effective", "the object's reconcile annotation"
 	}
-	tokens := pointerTokensFor(target.Object, segs)
+	sets := pointerTokenSets(target.Object, segs)
 	switch ownerTool(owner) {
 	case "argocd":
 		entries, _, _ := unstructured.NestedSlice(ownerObj.Object, "spec", "ignoreDifferences")
-		jqRule := false
-		partialManagerMatch := false
+		covered := make([]bool, len(sets))
+		managerCovers, jqRule, partialManagerMatch := false, false, false
 		for _, raw := range entries {
 			entry, ok := raw.(map[string]any)
 			if !ok || !argoIgnoreEntryMatches(entry, ref) {
 				continue
 			}
-			covered := false
-			for _, p := range stringSlice(entry["jsonPointers"]) {
-				if pointerCovers(p, tokens) {
-					covered = true
-				}
-			}
+			markCovered(stringSlice(entry["jsonPointers"]), sets, covered)
 			// A manager that owns only part of the path (one container's image
 			// under containers[*]) doesn't prove the rule covers the rest.
 			for _, m := range stringSlice(entry["managedFieldsManagers"]) {
@@ -490,54 +577,61 @@ func ignoreRuleFor(
 					if o.Approximate {
 						partialManagerMatch = true
 					} else {
-						covered = true
+						managerCovers = true
 					}
 				}
-			}
-			if covered {
-				if policy.RespectIgnoreDifferences {
-					return "effective", "spec.ignoreDifferences"
-				}
-				return "comparison-only", "spec.ignoreDifferences"
 			}
 			if len(stringSlice(entry["jqPathExpressions"])) > 0 {
 				jqRule = true
 			}
 		}
-		if jqRule {
+		switch {
+		case managerCovers || allCovered(covered):
+			if policy.RespectIgnoreDifferences {
+				return "effective", "spec.ignoreDifferences"
+			}
+			return "comparison-only", "spec.ignoreDifferences"
+		case jqRule:
 			return "unevaluated", "spec.ignoreDifferences jqPathExpressions"
-		}
-		if partialManagerMatch {
-			return "unevaluated", "spec.ignoreDifferences managedFieldsManagers (the manager owns only part of this field)"
+		case partialManagerMatch:
+			return "unevaluated", "spec.ignoreDifferences managedFieldsManagers"
+		case anyCovered(covered):
+			return "unevaluated", "spec.ignoreDifferences jsonPointers"
 		}
 	case "fluxcd":
 		if owner.Group != "helm.toolkit.fluxcd.io" {
 			return "", ""
 		}
 		rules, _, _ := unstructured.NestedSlice(ownerObj.Object, "spec", "driftDetection", "ignore")
+		covered := make([]bool, len(sets))
 		for _, raw := range rules {
 			rule, ok := raw.(map[string]any)
 			if !ok {
 				continue
 			}
-			if t, ok := rule["target"].(map[string]any); ok && !fluxIgnoreTargetMatches(t, ref) {
+			if t, ok := rule["target"].(map[string]any); ok && !fluxIgnoreTargetMatches(t, ref, target.GroupVersionKind().Version) {
 				continue
 			}
-			for _, p := range stringSlice(rule["paths"]) {
-				if pointerCovers(p, tokens) {
-					return "effective", "spec.driftDetection.ignore"
-				}
-			}
+			markCovered(stringSlice(rule["paths"]), sets, covered)
+		}
+		switch {
+		case allCovered(covered):
+			return "effective", "spec.driftDetection.ignore"
+		case anyCovered(covered):
+			return "unevaluated", "spec.driftDetection.ignore"
 		}
 	}
 	return "", ""
 }
 
-// argoIgnoreEntryMatches: kind is required and an omitted group is the core
-// group.
+// argoIgnoreEntryMatches: kind is required, an omitted group is the core
+// group, and "*" matches any group or kind.
 func argoIgnoreEntryMatches(entry map[string]any, ref writeEvidenceRef) bool {
 	str := func(k string) string { v, _ := entry[k].(string); return v }
-	if str("kind") != ref.Kind || str("group") != ref.Group {
+	if kind := str("kind"); kind != "*" && kind != ref.Kind {
+		return false
+	}
+	if group := str("group"); group != "*" && group != ref.Group {
 		return false
 	}
 	if name := str("name"); name != "" && name != ref.Name {
@@ -549,16 +643,22 @@ func argoIgnoreEntryMatches(entry map[string]any, ref writeEvidenceRef) bool {
 	return true
 }
 
-// fluxIgnoreTargetMatches: a Kustomize-style selector where omitted fields
-// match anything. Label/annotation selectors aren't evaluated, so a rule
-// carrying one never counts as covering the object.
-func fluxIgnoreTargetMatches(target map[string]any, ref writeEvidenceRef) bool {
+// fluxIgnoreTargetMatches: a Kustomize selector, whose fields are anchored
+// regular expressions and match anything when omitted. Label/annotation
+// selectors aren't evaluated, so a rule carrying one (or a pattern that
+// doesn't compile) never counts as covering the object.
+func fluxIgnoreTargetMatches(target map[string]any, ref writeEvidenceRef, version string) bool {
 	str := func(k string) string { v, _ := target[k].(string); return v }
 	if str("labelSelector") != "" || str("annotationSelector") != "" {
 		return false
 	}
-	for key, want := range map[string]string{"kind": ref.Kind, "group": ref.Group, "name": ref.Name, "namespace": ref.Namespace} {
-		if v := str(key); v != "" && v != want {
+	for key, want := range map[string]string{"kind": ref.Kind, "group": ref.Group, "version": version, "name": ref.Name, "namespace": ref.Namespace} {
+		pattern := str(key)
+		if pattern == "" {
+			continue
+		}
+		re, err := regexp.Compile("^(?:" + pattern + ")$")
+		if err != nil || !re.MatchString(want) {
 			return false
 		}
 	}
@@ -674,6 +774,105 @@ func matchesSelector(item any, seg fieldPathSegment) bool {
 	return ok && fmt.Sprint(v) == seg.value
 }
 
+// expandWildcards replaces each [*] with one path per element of the live
+// list: a [name=…] selector for elements that carry a name (the merge key
+// managedFields and last-applied are matched by), an index otherwise. A
+// wildcard over a missing or empty list is kept as is.
+func expandWildcards(obj any, segs []fieldPathSegment) [][]fieldPathSegment {
+	var out [][]fieldPathSegment
+	var walk func(node any, i int, prefix []fieldPathSegment)
+	walk = func(node any, i int, prefix []fieldPathSegment) {
+		if i == len(segs) {
+			out = append(out, prefix)
+			return
+		}
+		seg := segs[i]
+		with := func(sg fieldPathSegment) []fieldPathSegment {
+			return append(append(make([]fieldPathSegment, 0, len(prefix)+1), prefix...), sg)
+		}
+		switch seg.typ {
+		case segKey:
+			var next any
+			if m, ok := node.(map[string]any); ok {
+				next = m[seg.key]
+			}
+			walk(next, i+1, with(seg))
+		case segIndex:
+			var next any
+			if list, ok := node.([]any); ok && seg.index < len(list) {
+				next = list[seg.index]
+			}
+			walk(next, i+1, with(seg))
+		case segMatch:
+			var next any
+			if list, ok := node.([]any); ok {
+				for _, item := range list {
+					if matchesSelector(item, seg) {
+						next = item
+						break
+					}
+				}
+			}
+			walk(next, i+1, with(seg))
+		default:
+			list, _ := node.([]any)
+			if len(list) == 0 {
+				out = append(out, append(with(seg), segs[i+1:]...))
+				return
+			}
+			for idx, item := range list {
+				el := fieldPathSegment{typ: segIndex, index: idx}
+				if m, ok := item.(map[string]any); ok {
+					if name, ok := m["name"].(string); ok && name != "" {
+						el = fieldPathSegment{typ: segMatch, key: "name", value: name}
+					}
+				}
+				walk(item, i+1, with(el))
+			}
+		}
+	}
+	walk(obj, 0, nil)
+	return out
+}
+
+// anyAddressable: some expansion names a concrete entry (a wildcard over an
+// empty or missing list stays a wildcard).
+func anyAddressable(elements [][]fieldPathSegment) bool {
+	for _, el := range elements {
+		concrete := true
+		for _, seg := range el {
+			if seg.typ == segAny {
+				concrete = false
+				break
+			}
+		}
+		if concrete {
+			return true
+		}
+	}
+	return false
+}
+
+func ownsEveryElement(managedFields []parsedManagedFields, o *fieldOwnerEvidence, elements [][]fieldPathSegment) bool {
+	for _, el := range elements {
+		owned := false
+		for _, parsed := range managedFields {
+			mf := parsed.entry
+			if mf.Manager != o.Manager || string(mf.Operation) != o.Operation || mf.Subresource != o.Subresource {
+				continue
+			}
+			if ok, _ := fieldsV1Owns(parsed.fields, el); ok {
+				owned = true
+				break
+			}
+		}
+		if !owned {
+			return false
+		}
+	}
+	return true
+}
+
 // valuePresent reports whether the path exists in a decoded JSON document.
 // A wildcard matches when any element has the rest of the path.
 func valuePresent(node any, segs []fieldPathSegment) bool {
@@ -769,47 +968,103 @@ func isFieldsLeaf(node map[string]any) bool {
 	return true
 }
 
-// pointerTokensFor turns the path into JSON-pointer tokens against the live
-// object, resolving selectors to indices. It stops at a selector it can't
-// resolve (or a wildcard).
-func pointerTokensFor(obj any, segs []fieldPathSegment) []string {
-	tokens := []string{}
-	node := obj
-	for _, seg := range segs {
+// pointerTokenSets turns the path into JSON-pointer tokens against the live
+// object, resolving selectors to indices, with one token list per element a
+// wildcard expands to. A list stops at a selector that matches nothing (or a
+// wildcard over no list), so only an ancestor pointer can cover it.
+func pointerTokenSets(obj any, segs []fieldPathSegment) [][]string {
+	var sets [][]string
+	var walk func(node any, rest []fieldPathSegment, tokens []string)
+	walk = func(node any, rest []fieldPathSegment, tokens []string) {
+		if len(rest) == 0 {
+			sets = append(sets, tokens)
+			return
+		}
+		seg := rest[0]
+		with := func(t string) []string {
+			return append(append(make([]string, 0, len(tokens)+1), tokens...), t)
+		}
 		switch seg.typ {
 		case segKey:
-			tokens = append(tokens, seg.key)
+			var next any
 			if m, ok := node.(map[string]any); ok {
-				node = m[seg.key]
-			} else {
-				node = nil
+				next = m[seg.key]
 			}
+			walk(next, rest[1:], with(seg.key))
 		case segIndex:
-			tokens = append(tokens, strconv.Itoa(seg.index))
+			var next any
 			if list, ok := node.([]any); ok && seg.index < len(list) {
-				node = list[seg.index]
-			} else {
-				node = nil
+				next = list[seg.index]
 			}
+			walk(next, rest[1:], with(strconv.Itoa(seg.index)))
 		case segMatch:
 			list, _ := node.([]any)
-			idx := -1
 			for i, item := range list {
 				if matchesSelector(item, seg) {
-					idx = i
-					break
+					walk(item, rest[1:], with(strconv.Itoa(i)))
+					return
 				}
 			}
-			if idx < 0 {
-				return tokens
-			}
-			tokens = append(tokens, strconv.Itoa(idx))
-			node = list[idx]
+			sets = append(sets, tokens)
 		default:
-			return tokens
+			list, _ := node.([]any)
+			if len(list) == 0 {
+				sets = append(sets, tokens)
+				return
+			}
+			for i, item := range list {
+				walk(item, rest[1:], with(strconv.Itoa(i)))
+			}
 		}
 	}
-	return tokens
+	walk(obj, segs, nil)
+	return sets
+}
+
+func markCovered(pointers []string, sets [][]string, covered []bool) {
+	for i, tokens := range sets {
+		for _, p := range pointers {
+			if pointerCovers(p, tokens) {
+				covered[i] = true
+			}
+		}
+	}
+}
+
+func allCovered(covered []bool) bool {
+	for _, c := range covered {
+		if !c {
+			return false
+		}
+	}
+	return len(covered) > 0
+}
+
+func anyCovered(covered []bool) bool {
+	for _, c := range covered {
+		if c {
+			return true
+		}
+	}
+	return false
+}
+
+// argoAppListsResource reports whether the Application's status lists the
+// object among the resources it manages. The core group is recorded as an
+// omitted group there.
+func argoAppListsResource(app *unstructured.Unstructured, ref writeEvidenceRef) bool {
+	resources, _, _ := unstructured.NestedSlice(app.Object, "status", "resources")
+	for _, raw := range resources {
+		r, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		str := func(k string) string { v, _ := r[k].(string); return v }
+		if str("kind") == ref.Kind && str("group") == ref.Group && str("namespace") == ref.Namespace && str("name") == ref.Name {
+			return true
+		}
+	}
+	return false
 }
 
 func pointerCovers(pointer string, tokens []string) bool {

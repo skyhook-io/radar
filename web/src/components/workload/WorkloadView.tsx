@@ -973,14 +973,15 @@ export function WorkloadView({
         },
       )
       // Warm the cache the target's ownership resolution reads, so the
-      // dialog doesn't open on a still-pending inherited lookup.
+      // dialog doesn't open on a still-pending inherited lookup. A failed
+      // read surfaces there as unknown ownership, not as a failed load.
       if (inheritedRef) {
         await fetchRelationships(
           kindToPluralWithGroup(inheritedRef.kind, inheritedRef.group ?? ''),
           inheritedRef.namespace,
           inheritedRef.name,
           inheritedRef.group,
-        )
+        ).catch(() => undefined)
       }
       if (request === imageOwnershipRequestRef.current) {
         setImageTargetOwnership({
@@ -1006,7 +1007,7 @@ export function WorkloadView({
         name: activeImageTargetOwnership.target.name,
       }
     : { kind: resource?.kind ?? pluralToKind(apiKind), group: effectiveGroup ?? '', namespace, name }
-  const { guard: imageGuard } = useGitOpsWriteGuard({
+  const { guard: imageGuard, ownership: imageGuardOwnership } = useGitOpsWriteGuard({
     target: imageGuardTarget,
     writes: SET_IMAGE_WRITES,
     ownership: imageOwnershipSource,
@@ -1019,7 +1020,7 @@ export function WorkloadView({
     owner: imageOwner,
     helmOwner: imageHelmOwner,
     ownerVerified: imageOwnerVerified,
-  } = imageOwnershipSource
+  } = imageGuardOwnership
   const imageOwnership = useMemo<SetImageOwnership | undefined>(() => {
     if (!imageGuard) return undefined
     const owner = imageOwner

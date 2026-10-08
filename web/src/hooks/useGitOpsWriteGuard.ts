@@ -56,7 +56,9 @@ export function useGitOpsWriteGuard({
     target.namespace,
     target.name,
     target.group || undefined,
-    { enabled: needsTarget },
+    // Keyed by API base: a host can point one QueryClient at several clusters
+    // (Radar Hub's fleet Diagnose panel), and the shared resource keys aren't.
+    { enabled: needsTarget, cacheScope: getApiBase() },
   )
   const ownRelationships = relationships ?? targetQuery.relationships
   const ownResolution = useResolvedGitOpsOwner({
@@ -67,6 +69,7 @@ export function useGitOpsWriteGuard({
     relationships: ownRelationships,
     resource: resource ?? targetQuery.data,
     enabled: enabled && !resolved,
+    cacheScope: getApiBase(),
   })
   const ownership = resolved ?? ownResolution
 
@@ -86,8 +89,9 @@ export function useGitOpsWriteGuard({
     }
     return null
   }, [ownership.owner, ownership.helmOwner])
-  const argoNamespaceUnresolved = ownership.owner?.tool === 'argocd' && !ownership.owner.namespace
-  const canFetchEvidence = managed && !lookupPending && !targetLookupFailed && !ownership.lookupError && !argoNamespaceUnresolved
+  // An Argo owner without a namespace is still asked about: the server finds
+  // the Application whose status lists the object.
+  const canFetchEvidence = managed && !lookupPending && !targetLookupFailed && !ownership.lookupError
 
   const evidenceFeature = useRadarFeature('gitopsWriteEvidence')
   const evidenceQuery = useQuery({
@@ -127,17 +131,28 @@ export function useGitOpsWriteGuard({
   // longer hold.
   const evidence = evidenceQuery.isError || !canFetchEvidence ? undefined : evidenceQuery.data
 
+  // Argo CD 3's tracking id omits the namespace of Applications in its own
+  // namespace, and the browser's namespace view may hide them; take the
+  // Application the server confirmed.
+  const confirmedOwnership = useMemo<ResolvedGitOpsOwner>(() => {
+    const owner = ownership.owner
+    const namespace = evidence?.ownerTracksTarget ? evidence.owner?.namespace : undefined
+    if (!owner || owner.namespace || !namespace) return ownership
+    return { ...ownership, owner: { ...owner, namespace }, ownerVerified: true }
+  }, [ownership, evidence])
+
   const guard = useMemo(
     () =>
       enabled
         ? evaluateGitOpsWriteGuard({
             target,
-            owner: ownership.owner,
+            owner: confirmedOwnership.owner,
             helmRelease: ownership.helmOwner,
             // A refetch counts as pending: an earlier verdict may no longer hold.
             ownerPending: lookupPending || (canFetchEvidence && (evidenceQuery.isPending || evidenceQuery.isFetching)),
             ownershipError,
-            ownerMatchedByName: ownership.ownerMatchedByName,
+            // The Application's status listing the object confirms a name match.
+            ownerMatchedByName: ownership.ownerMatchedByName && !evidence?.ownerTracksTarget,
             evidence,
             evidenceError: evidenceQuery.error instanceof Error ? evidenceQuery.error.message : null,
             writes: JSON.parse(writesKey),
@@ -152,7 +167,7 @@ export function useGitOpsWriteGuard({
       target.group,
       target.namespace,
       target.name,
-      ownership.owner,
+      confirmedOwnership.owner,
       ownership.helmOwner,
       lookupPending,
       canFetchEvidence,
@@ -166,5 +181,5 @@ export function useGitOpsWriteGuard({
     ],
   )
 
-  return { guard, ownership, evidence }
+  return { guard, ownership: confirmedOwnership, evidence }
 }
