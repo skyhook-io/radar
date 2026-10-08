@@ -660,6 +660,7 @@ func recordK8sEventToTimeline(clusterContext string, obj any) {
 
 	store := timeline.GetStore()
 	if store == nil {
+		timeline.RecordDrop("K8sEvent:"+event.InvolvedObject.Kind, event.InvolvedObject.Namespace, event.InvolvedObject.Name, timeline.DropReasonStoreDown, "add", clusterContext)
 		return
 	}
 
@@ -849,6 +850,19 @@ func generationBumpSignalsSpecChange(kind string, oldObj, newObj any) bool {
 	return !apiequality.Semantic.DeepEqual(oldDeployment.Spec, newDeployment.Spec)
 }
 
+// isSyncAdd reports whether an add is an object that already existed rather
+// than one just created: everything listed before the initial sync completes,
+// and adds for objects older than 30s (a relist after a watch gap).
+func isSyncAdd(obj any) bool {
+	if !initialSyncComplete.Load() {
+		return true
+	}
+	if meta, ok := obj.(metav1.Object); ok {
+		return time.Since(meta.GetCreationTimestamp().Time) > 30*time.Second
+	}
+	return false
+}
+
 // recordToTimelineStore records a resource change to the timeline.
 // clusterContext is the wiring-time capture (see InitResourceCache), not the
 // live active context — a late callback must stamp the cluster it came from.
@@ -858,22 +872,25 @@ func generationBumpSignalsSpecChange(kind string, oldObj, newObj any) bool {
 // per-update path; callers without one (tests, non-cache paths) pass nil +
 // false and the diff is computed here.
 func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string, oldObj, newObj any, precomputedDiff *DiffInfo, diffPrecomputed bool) {
-	store := timeline.GetStore()
-	if store == nil {
-		// No store means a configured backend could not be opened. Count the
-		// event the same way a failed write is counted, so a timeline that is
-		// quietly losing history still moves the drop counter an operator
-		// watches.
-		timeline.RecordDrop(kind, namespace, name, timeline.DropReasonStoreDown, op, clusterContext)
-		return
-	}
-
 	obj := newObj
 	if obj == nil {
 		obj = oldObj
 	}
 	if tombstone, ok := obj.(toolscache.DeletedFinalStateUnknown); ok {
 		obj = tombstone.Obj
+	}
+
+	store := timeline.GetStore()
+	if store == nil {
+		// No store means a configured backend could not be opened. Count the
+		// change the same way a failed write is counted, so a timeline that is
+		// quietly losing history still moves the drop counter an operator
+		// watches. Objects listed at startup are not changes, and the store
+		// would not record them as such, so they are not counted.
+		if op != "add" || !isSyncAdd(obj) {
+			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonStoreDown, op, clusterContext)
+		}
+		return
 	}
 	apiVersion := extractAPIVersion(kind, obj)
 	apiGroup := ""
@@ -1036,26 +1053,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	}
 
 	if op == "add" {
-		isSyncEvent := false
-
-		if !initialSyncComplete.Load() {
-			isSyncEvent = true
-		}
-
-		if !isSyncEvent && obj != nil {
-			if meta, ok := obj.(metav1.Object); ok {
-				creationTime := meta.GetCreationTimestamp().Time
-				age := time.Since(creationTime)
-				if age > 30*time.Second {
-					isSyncEvent = true
-					if DebugEvents {
-						log.Printf("[DEBUG] Skipping stale add event (age=%v): %s/%s/%s", age, kind, namespace, name)
-					}
-				}
-			}
-		}
-
-		if isSyncEvent {
+		if isSyncAdd(obj) {
 			if DebugEvents {
 				log.Printf("[DEBUG] Skipping sync add event: %s/%s/%s (extracted %d historical events)", kind, namespace, name, len(events))
 			}

@@ -147,3 +147,35 @@ func TestUnavailableReasonRedactsCredentials(t *testing.T) {
 		t.Fatalf("reason leaked the DSN password: %s", reason)
 	}
 }
+
+// A worker whose attempt fails after ResetStore retired it must not write its
+// error: the reason would describe a database the new context never used.
+func TestRetiredWorkerDoesNotRecordItsFailure(t *testing.T) {
+	ResetStore()
+	t.Cleanup(ResetStore)
+
+	dialing := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	setPostgresReconnectForTest(t, func(StoreConfig) (*PostgresStore, error) {
+		if calls.Add(1) == 2 {
+			close(dialing)
+			<-release
+		}
+		return nil, errors.New("dial tcp: connection refused")
+	})
+
+	if err := InitStore(StoreConfig{Type: StoreTypePostgres, DSN: "postgres://x/y"}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	<-dialing
+	ResetStore()
+	close(release)
+
+	// The worker's failed attempt returns after the reset. Give it time to try
+	// to record, then check nothing was written.
+	time.Sleep(50 * time.Millisecond)
+	if reason := TimelineUnavailableReason(); reason != "" {
+		t.Fatalf("a retired worker recorded its failure after the reset: %s", reason)
+	}
+}

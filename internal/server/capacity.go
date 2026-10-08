@@ -89,7 +89,15 @@ func currentCapacityClusterIdentity() capacityClusterIdentity {
 }
 
 func (identity capacityClusterIdentity) stillCurrent() bool {
-	return identity == capacityClusterIdentityNow()
+	live := capacityClusterIdentityNow()
+	// A timeline store that was unavailable at startup is installed later
+	// without a subsystem reset, when its database starts answering. A
+	// response read without it describes the same cluster, so that one change
+	// alone does not invalidate it.
+	if identity.timeline == nil {
+		live.timeline = nil
+	}
+	return identity == live
 }
 
 type capacityLoadResult struct {

@@ -11,6 +11,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
 	"github.com/skyhook-io/radar/pkg/karpenter"
+	pkgtimeline "github.com/skyhook-io/radar/pkg/timeline"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	corelisters "k8s.io/client-go/listers/core/v1"
@@ -280,5 +281,31 @@ func assertCapacityContextSwitchFailsClosed(t *testing.T, resp *http.Response) {
 	}
 	if message, _ := decoded["error"].(string); message != "Cluster context changed while the capacity response was being assembled" {
 		t.Fatalf("error = %q, want the context-change message", message)
+	}
+}
+
+// A timeline store that comes up after startup is installed without a reset.
+// A capacity response captured before it appeared still describes the same
+// cluster and must not be refused as a context switch. Any other store change
+// still is.
+func TestCapacityClusterIdentityToleratesTimelineStoreAppearing(t *testing.T) {
+	previous := capacityClusterIdentityNow
+	t.Cleanup(func() { capacityClusterIdentityNow = previous })
+
+	base := previous()
+	base.timeline = nil
+	live := base
+	capacityClusterIdentityNow = func() capacityClusterIdentity { return live }
+	captured := currentCapacityClusterIdentity()
+
+	live.timeline = pkgtimeline.NewMemoryStore(10)
+	if !captured.stillCurrent() {
+		t.Fatal("the timeline store appearing was treated as a context switch")
+	}
+
+	captured = currentCapacityClusterIdentity()
+	live.timeline = pkgtimeline.NewMemoryStore(10)
+	if captured.stillCurrent() {
+		t.Fatal("a replaced timeline store went undetected")
 	}
 }

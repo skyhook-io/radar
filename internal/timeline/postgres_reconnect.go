@@ -35,26 +35,35 @@ func dialPostgres(cfg StoreConfig) (*PostgresStore, error) {
 	return NewPostgresStore(cfg.DSN)
 }
 
-// recordPostgresUnavailable notes why the timeline has no store. A retired
-// worker must not overwrite this: its failure describes a connection nobody is
-// waiting on any more.
-func recordPostgresUnavailable(err error, owned bool) {
-	if !owned {
-		return
-	}
+// recordPostgresUnavailable notes why the timeline has no store.
+func recordPostgresUnavailable(err error) {
 	postgresUnavailableReason.Store(err.Error())
 	log.Printf("[timeline] PostgreSQL timeline unavailable, cluster views are unaffected: %v", err)
+}
+
+// recordWorkerUnavailable records a worker's failed attempt. A retired worker
+// must not overwrite the reason: its failure describes a connection nobody is
+// waiting on any more. The ownership check and the write share the lock that
+// stopPostgresReconnect takes, so a reset cannot land between them.
+func recordWorkerUnavailable(err error, quit chan struct{}) {
+	postgresReconnectMu.Lock()
+	defer postgresReconnectMu.Unlock()
+	if postgresReconnectQuit != quit {
+		return
+	}
+	recordPostgresUnavailable(err)
 }
 
 // installPostgresStore publishes an opened store. The first attempt and every
 // retry go through here, so the retention loop, the observation start and the
 // log line cannot drift between the two paths.
 func installPostgresStore(store *PostgresStore, cfg StoreConfig) {
+	// Observation starts when events begin landing. Marking it at process start
+	// would claim coverage for the window the store was down. It is set before
+	// the store is published so no reader sees a store without its epoch.
+	observationStartNanos.Store(time.Now().UnixNano())
 	setGlobalStore(store)
 	postgresUnavailableReason.Store("")
-	// Observation starts when events begin landing. Marking it at process start
-	// would claim coverage for the window the store was down.
-	observationStartNanos.Store(time.Now().UnixNano())
 	if cfg.RetentionAge > 0 {
 		store.StartCleanupLoop(cfg.RetentionAge, time.Hour, 0)
 		log.Printf("Initialized PostgreSQL timeline store (retention: %s)", cfg.RetentionAge)
@@ -68,7 +77,7 @@ func installPostgresStore(store *PostgresStore, cfg StoreConfig) {
 func openPostgresStore(cfg StoreConfig) bool {
 	store, err := dialPostgres(cfg)
 	if err != nil {
-		recordPostgresUnavailable(err, true)
+		recordPostgresUnavailable(err)
 		return false
 	}
 	installPostgresStore(store, cfg)
@@ -101,7 +110,7 @@ func startPostgresReconnect(cfg StoreConfig) {
 
 			store, err := dial(cfg)
 			if err != nil {
-				recordPostgresUnavailable(err, postgresReconnectOwned(quit))
+				recordWorkerUnavailable(err, quit)
 				interval = min(interval*2, maxInterval)
 				continue
 			}
@@ -122,12 +131,6 @@ func startPostgresReconnect(cfg StoreConfig) {
 			return
 		}
 	}()
-}
-
-func postgresReconnectOwned(quit chan struct{}) bool {
-	postgresReconnectMu.Lock()
-	defer postgresReconnectMu.Unlock()
-	return postgresReconnectQuit == quit
 }
 
 // stopPostgresReconnect retires the worker. It claims and installs under the
