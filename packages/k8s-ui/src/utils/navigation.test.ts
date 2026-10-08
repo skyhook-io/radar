@@ -207,6 +207,12 @@ describe('initNavigationMap', () => {
     expect(kindToPluralWithGroup('Node', 'collision.example.io')).toBe('workerhosts')
   })
 
+  test('keeps the core plural when partial discovery omits the core group', () => {
+    initNavigationMap([customNode])
+    expect(refToSelectedResource({ kind: 'Node', group: '', name: 'worker' }).kind).toBe('nodes')
+    expect(kindToPluralWithGroup('Node', 'collision.example.io')).toBe('workerhosts')
+  })
+
   test('keeps last-wins for Kinds that only CRDs declare', () => {
     initNavigationMap([
       { group: 'a.example.io', version: 'v1', kind: 'Widget', name: 'widgets', namespaced: true, isCrd: true, verbs: [] },

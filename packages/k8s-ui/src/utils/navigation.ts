@@ -76,11 +76,15 @@ let discoveredGroupKindNamespaced: Record<string, boolean> | null = null
  */
 export function initNavigationMap(resources: APIResource[]) {
   const p2k: Record<string, string> = { ...BUILTIN_PLURAL_TO_KIND }
-  const k2p: Record<string, string> = {}
+  // Seeded from the built-in table so core protection survives partial
+  // discovery (the server forwards whatever groups it could list).
+  const k2p: Record<string, string> = Object.fromEntries(
+    CORE_RESOURCES.filter(r => r.group === '').map(r => [r.kind.toLowerCase(), r.name]),
+  )
   const gk2p: Record<string, string> = {}
   const gp2k: Record<string, string> = { ...BUILTIN_GROUP_PLURAL_TO_KIND }
   const scopes: Record<string, boolean> = {}
-  const coreKinds = new Set<string>()
+  const coreKinds = new Set(Object.keys(k2p))
   for (const r of resources) {
     const plural = r.name.toLowerCase()
     const kindLower = r.kind.toLowerCase()
