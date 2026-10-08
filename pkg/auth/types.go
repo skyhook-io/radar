@@ -35,6 +35,7 @@ type Config struct {
 	OIDCClientID              string
 	OIDCClientSecret          string
 	OIDCRedirectURL           string
+	OIDCUsernameClaim         string   // ID token claim used as the username; empty = email, falling back to sub
 	OIDCGroupsClaim           string   // default "groups"
 	OIDCScopes                []string // OAuth2 scopes requested at authorization; default ["openid", "profile", "email", "groups"]
 	OIDCPostLogoutRedirectURL string   // optional, URL to redirect after IdP logout
