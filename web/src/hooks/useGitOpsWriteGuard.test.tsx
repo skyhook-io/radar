@@ -1,0 +1,427 @@
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot } from 'react-dom/client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { SetImageDialog, canConfirmGitOpsWrite, setImageSelectionKey, type WorkloadImageInventory } from '@skyhook-io/k8s-ui'
+import { afterEach, expect, it, vi } from 'vitest'
+import { useGitOpsWriteGuard, type GitOpsWriteGuardState } from './useGitOpsWriteGuard'
+
+const mocks = vi.hoisted(() => ({
+  applications: { data: undefined as unknown[] | undefined, isPending: true, isError: false },
+  inherited: { data: undefined as unknown, isPending: false, isError: false },
+  target: { data: undefined as unknown, relationships: undefined as unknown, isLoading: false, isError: false },
+  evidence: vi.fn(),
+}))
+vi.mock('../api/client', () => ({
+  useResource: (kind: string) => (kind === 'deployments' ? mocks.target : { data: undefined, isLoading: false, isError: false }),
+  useResourceWithRelationships: () => mocks.inherited,
+  useResources: () => mocks.applications,
+  useRadarFeature: () => ({ guard: (fn: () => unknown) => fn(), gatedKey: [] }),
+  fetchGitOpsWriteEvidence: (...args: unknown[]) => mocks.evidence(...args),
+}))
+
+afterEach(() => {
+  mocks.applications.data = undefined
+  mocks.applications.isPending = true
+  mocks.applications.isError = false
+  mocks.inherited = { data: undefined, isPending: false, isError: false }
+  mocks.target = { data: undefined, relationships: undefined, isLoading: false, isError: false }
+  mocks.evidence.mockReset()
+})
+
+it.each(['resolved', 'failed', 'empty', 'ambiguous'])('waits for Argo Application namespace lookup before handling %s ownership', async (outcome) => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const root = createRoot(document.createElement('div'))
+  let state: GitOpsWriteGuardState
+  const onLoad = vi.fn(async (): Promise<WorkloadImageInventory> => ({
+    target: { kind: 'Deployment', group: 'apps', resource: 'deployments', namespace: 'prod', name: 'web' },
+    containers: [{ type: 'container', name: 'app', image: 'app:old' }],
+    behavior: { type: 'rolling' },
+  }))
+  mocks.evidence.mockResolvedValue({ uid: 'deployment', resourceVersion: '1', owner: { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }, policy: null, paths: [] })
+  function Harness() {
+    state = useGitOpsWriteGuard({
+      target: { kind: 'Deployment', group: 'apps', namespace: 'prod', name: 'web' },
+      resource: {},
+      relationships: { managedBy: [{ kind: 'Application', group: 'argoproj.io', namespace: '', name: 'web' }] },
+      writes: [{ scope: 'spec', paths: ['spec.replicas'] }],
+    })
+    return outcome !== 'resolved' ? <SetImageDialog open workloadLabel="Deployment" workloadName="web" workloadResource="deployments" ownership={state.guard ? { guard: state.guard } : undefined} onLoad={onLoad} onClose={() => {}} onConfirm={async () => {}} /> : null
+  }
+  const render = () => root.render(<QueryClientProvider client={queryClient}><Harness /></QueryClientProvider>)
+  try {
+    await act(async () => render())
+    expect(state!.guard?.pending).toBe(true)
+    expect(mocks.evidence).not.toHaveBeenCalled()
+    mocks.applications.isPending = false
+    if (outcome === 'resolved') mocks.applications.data = [{ metadata: { name: 'web', namespace: 'argocd' } }]
+    else if (outcome === 'failed') mocks.applications.isError = true
+    else mocks.applications.data = outcome === 'empty' ? [] : ['argocd-a', 'argocd-b'].map((namespace) => ({ metadata: { name: 'web', namespace } }))
+    await act(async () => render())
+    if (outcome === 'resolved') {
+      await act(async () => vi.waitFor(() => expect(mocks.evidence).toHaveBeenCalledTimes(1)))
+      expect(mocks.evidence.mock.calls[0][0].owner.namespace).toBe('argocd')
+    } else {
+      // The server resolves the namespace; the browser sends the name alone.
+      await act(async () => vi.waitFor(() => expect(mocks.evidence).toHaveBeenCalledTimes(1)))
+      expect(mocks.evidence.mock.calls[0][0].owner.namespace).toBe('')
+      await act(async () => vi.waitFor(() => expect(state!.guard?.pending).toBe(false)))
+      expect(state!.ownership.lookupError).toBe(false)
+      expect(state!.guard?.pending).toBe(false)
+      expect(state!.guard?.requiresAck).toBe(true)
+      expect(state!.guard?.level).toBe('may-revert')
+      expect(canConfirmGitOpsWrite(state!.guard, true)).toBe(true)
+      expect(document.body.textContent).not.toContain('Management ownership unavailable')
+      expect(document.body.textContent).toContain('Argo CD')
+    }
+  } finally {
+    await act(async () => root.unmount())
+    queryClient.clear()
+  }
+})
+
+async function renderGuard(options: Parameters<typeof useGitOpsWriteGuard>[0]) {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const root = createRoot(document.createElement('div'))
+  const ref: { state?: GitOpsWriteGuardState } = {}
+  function Harness() {
+    ref.state = useGitOpsWriteGuard(options)
+    return null
+  }
+  await act(async () => root.render(<QueryClientProvider client={queryClient}><Harness /></QueryClientProvider>))
+  return {
+    ref,
+    queryClient,
+    rerender: () => act(async () => root.render(<QueryClientProvider client={queryClient}><Harness /></QueryClientProvider>)),
+    cleanup: async () => {
+      await act(async () => root.unmount())
+      queryClient.clear()
+    },
+  }
+}
+
+const deployment = { kind: 'Deployment', group: 'apps', namespace: 'prod', name: 'web' }
+const replicas = [{ scope: 'spec' as const, paths: ['spec.replicas'] }]
+
+it('reads missing relationships as unknown ownership, not as unmanaged', async () => {
+  const h = await renderGuard({ target: deployment, resource: {}, relationshipsUnavailable: true, writes: replicas })
+  try {
+    expect(mocks.evidence).not.toHaveBeenCalled()
+    expect(h.ref.state!.guard?.pending).toBe(false)
+    expect(h.ref.state!.guard?.level).toBe('may-revert')
+    expect(h.ref.state!.guard?.requiresAck).toBe(true)
+    expect(h.ref.state!.guard?.ownershipError).toContain("hasn't mapped this resource's owners")
+    expect(canConfirmGitOpsWrite(h.ref.state!.guard, false)).toBe(false)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('asks for an acknowledgment when the server saw a manager the browser could not resolve', async () => {
+  const h = await renderGuard({ target: deployment, resource: {}, relationships: {}, declaredManager: 'Argo CD', writes: replicas })
+  try {
+    expect(h.ref.state!.guard?.requiresAck).toBe(true)
+    expect(h.ref.state!.guard?.ownershipError).toContain('Argo CD')
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('ignores the declared manager once an owner resolves', async () => {
+  mocks.evidence.mockResolvedValue({ uid: 'u', resourceVersion: '1', owner: { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }, policy: null, paths: [] })
+  const h = await renderGuard({
+    target: deployment,
+    resource: {},
+    relationships: { managedBy: [{ kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }] },
+    declaredManager: 'Argo CD',
+    writes: replicas,
+  })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(h.ref.state!.guard?.ownershipError).toBeNull()
+    expect(h.ref.state!.guard?.owner?.name).toBe('web')
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('treats a refetch of the evidence as pending', async () => {
+  let resolveSecond: (v: unknown) => void = () => {}
+  const evidence = { uid: 'u', resourceVersion: '1', owner: { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }, policy: null, paths: [] }
+  mocks.evidence.mockResolvedValueOnce(evidence).mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve }))
+  const h = await renderGuard({
+    target: deployment,
+    resource: {},
+    relationships: { managedBy: [{ kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }] },
+    writes: replicas,
+  })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    await act(async () => { void h.queryClient.invalidateQueries({ queryKey: ['gitops-write-evidence'] }) })
+    await h.rerender()
+    expect(h.ref.state!.guard?.pending).toBe(true)
+    expect(canConfirmGitOpsWrite(h.ref.state!.guard, true)).toBe(false)
+    await act(async () => resolveSecond(evidence))
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('does not keep an exemption after a refetch fails', async () => {
+  const exempt = {
+    uid: 'u',
+    resourceVersion: '1',
+    owner: { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' },
+    policy: { tool: 'argocd', auto: true, selfHeal: true, prune: false, suspended: null, respectIgnoreDifferences: true },
+    paths: [{ path: 'spec.replicas', lastApplied: 'present', ownedBy: [], ownedByGitOps: false, ignored: 'effective', ignoredBy: 'spec.ignoreDifferences' }],
+  }
+  mocks.evidence.mockResolvedValueOnce(exempt).mockRejectedValueOnce(new Error('503 cache not ready'))
+  const h = await renderGuard({
+    target: deployment,
+    resource: {},
+    relationships: { managedBy: [{ kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }] },
+    writes: replicas,
+  })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(h.ref.state!.guard?.level).toBe('info')
+    await act(async () => { await h.queryClient.invalidateQueries({ queryKey: ['gitops-write-evidence'] }) })
+    await act(async () => vi.waitFor(() => {
+      expect(h.ref.state!.guard?.pending).toBe(false)
+      expect(h.ref.state!.guard?.level).toBe('may-revert')
+    }))
+    expect(h.ref.state!.guard?.requiresAck).toBe(true)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+const pod = { kind: 'Pod', group: '', namespace: 'prod', name: 'web-1-abc' }
+const podRelationships = {
+  owner: { kind: 'ReplicaSet', group: 'apps', namespace: 'prod', name: 'web-1' },
+  deployment: { kind: 'Deployment', group: 'apps', namespace: 'prod', name: 'web' },
+}
+
+it('reads a parent without relationships as unknown ownership, not as unmanaged', async () => {
+  mocks.inherited = { data: { resource: { metadata: { labels: { 'kustomize.toolkit.fluxcd.io/name': 'apps' } } } }, isPending: false, isError: false }
+  const h = await renderGuard({ target: pod, resource: {}, relationships: podRelationships, writes: replicas })
+  try {
+    expect(mocks.evidence).not.toHaveBeenCalled()
+    expect(h.ref.state!.guard?.level).toBe('may-revert')
+    expect(h.ref.state!.guard?.requiresAck).toBe(true)
+    expect(h.ref.state!.guard?.ownershipError).toContain("hasn't mapped this resource's owners")
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('does not keep an exemption after the parent lookup fails', async () => {
+  const app = { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }
+  mocks.inherited = { data: { resource: {}, relationships: { managedBy: [app] } }, isPending: false, isError: false }
+  mocks.evidence.mockResolvedValue({
+    uid: 'u',
+    resourceVersion: '1',
+    owner: app,
+    policy: { tool: 'argocd', auto: true, selfHeal: true, prune: false, suspended: null, respectIgnoreDifferences: true },
+    paths: [{ path: 'spec.replicas', lastApplied: 'present', ownedBy: [], ownedByGitOps: false, ignored: 'effective', ignoredBy: 'spec.ignoreDifferences' }],
+  })
+  const h = await renderGuard({ target: pod, resource: {}, relationships: podRelationships, writes: replicas })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(h.ref.state!.guard?.level).toBe('info')
+    // React Query keeps the parent's data after a failed refetch.
+    mocks.inherited = { ...mocks.inherited, isError: true }
+    await h.rerender()
+    expect(h.ref.state!.guard?.pending).toBe(false)
+    expect(h.ref.state!.guard?.level).toBe('may-revert')
+    expect(h.ref.state!.guard?.requiresAck).toBe(true)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('does not keep an exemption after the target lookup fails', async () => {
+  const app = { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }
+  mocks.target = { data: {}, relationships: { managedBy: [app] }, isLoading: false, isError: false }
+  mocks.evidence.mockResolvedValue({
+    uid: 'u',
+    resourceVersion: '1',
+    owner: app,
+    policy: { tool: 'argocd', auto: true, selfHeal: true, prune: false, suspended: null, respectIgnoreDifferences: true },
+    paths: [{ path: 'spec.replicas', lastApplied: 'present', ownedBy: [], ownedByGitOps: false, ignored: 'effective', ignoredBy: 'spec.ignoreDifferences' }],
+  })
+  const h = await renderGuard({ target: deployment, writes: replicas })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(h.ref.state!.guard?.level).toBe('info')
+    // React Query keeps the target's data after a failed refetch.
+    mocks.target = { ...mocks.target, isError: true }
+    await h.rerender()
+    expect(h.ref.state!.guard?.pending).toBe(false)
+    expect(h.ref.state!.guard?.level).toBe('may-revert')
+    expect(canConfirmGitOpsWrite(h.ref.state!.guard, false)).toBe(false)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('asks for an acknowledgment, not a block, when the parent cannot be read', async () => {
+  mocks.inherited = { data: undefined, isPending: false, isError: true }
+  const h = await renderGuard({ target: pod, resource: {}, relationships: podRelationships, writes: replicas })
+  try {
+    expect(mocks.evidence).not.toHaveBeenCalled()
+    expect(h.ref.state!.guard?.level).toBe('may-revert')
+    expect(h.ref.state!.guard?.ownershipError).toContain("couldn't read the resource that owns this one")
+    expect(canConfirmGitOpsWrite(h.ref.state!.guard, false)).toBe(false)
+    expect(canConfirmGitOpsWrite(h.ref.state!.guard, true)).toBe(true)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('lets an ignore rule waive the acknowledgment once the server confirms a name-only Argo match', async () => {
+  mocks.applications.isPending = false
+  mocks.applications.data = [{ metadata: { name: 'web', namespace: 'argocd' } }]
+  const exempt = (ownerTracksTarget: boolean) => ({
+    uid: 'u',
+    resourceVersion: '1',
+    owner: { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' },
+    ownerTracksTarget,
+    policy: { tool: 'argocd', auto: true, selfHeal: true, prune: false, suspended: null, respectIgnoreDifferences: true },
+    paths: [{ path: 'spec.replicas', lastApplied: 'present', ownedBy: [], ownedByGitOps: false, ignored: 'effective', ignoredBy: 'spec.ignoreDifferences' }],
+  })
+  for (const [tracks, level] of [[true, 'info'], [false, 'may-revert']] as const) {
+    mocks.evidence.mockResolvedValueOnce(exempt(tracks))
+    const h = await renderGuard({
+      target: deployment,
+      resource: {},
+      // Argo CD 3's tracking id omits the namespace of Applications in its own namespace.
+      relationships: { managedBy: [{ kind: 'Application', group: 'argoproj.io', namespace: '', name: 'web' }] },
+      writes: replicas,
+    })
+    try {
+      await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+      expect(h.ref.state!.guard?.level).toBe(level)
+    } finally {
+      await h.cleanup()
+    }
+  }
+})
+
+it("takes the Application the server confirmed when the browser can't list Applications", async () => {
+  mocks.applications.isPending = false
+  mocks.applications.data = []
+  mocks.evidence.mockResolvedValueOnce({
+    uid: 'u',
+    resourceVersion: '1',
+    owner: { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' },
+    ownerTracksTarget: true,
+    policy: { tool: 'argocd', auto: true, selfHeal: true, prune: false, suspended: null, respectIgnoreDifferences: true },
+    paths: [{ path: 'spec.replicas', lastApplied: 'present', ownedBy: [], ownedByGitOps: false, ignored: 'effective', ignoredBy: 'spec.ignoreDifferences' }],
+  })
+  const h = await renderGuard({
+    target: deployment,
+    resource: {},
+    relationships: { managedBy: [{ kind: 'Application', group: 'argoproj.io', namespace: '', name: 'web' }] },
+    writes: replicas,
+  })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(mocks.evidence.mock.calls[0][0].owner.namespace).toBe('')
+    expect(h.ref.state!.guard?.owner?.namespace).toBe('argocd')
+    expect(h.ref.state!.guard?.level).toBe('info')
+    expect(h.ref.state!.ownership.ownerVerified).toBe(true)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('reports the listed and changed containers so the host can judge exactly those', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const root = createRoot(document.createElement('div'))
+  const onSelectionChange = vi.fn()
+  const guard = { owner: null, helmRelease: null, pending: false, level: 'none', perWrite: [], summary: '', syncPolicy: null, requiresAck: false, ownershipError: null } as never
+  const onLoad = vi.fn(async (): Promise<WorkloadImageInventory> => ({
+    target: { kind: 'Deployment', group: 'apps', resource: 'deployments', namespace: 'prod', name: 'web' },
+    containers: [{ type: 'container', name: 'app', image: 'app:old' }, { type: 'initContainer', name: 'migrate', image: 'migrate:old' }],
+    behavior: { type: 'rolling' },
+  }))
+  try {
+    await act(async () => root.render(<SetImageDialog open workloadLabel="Deployment" workloadName="web" workloadResource="deployments" ownership={{ guard, onSelectionChange }} onLoad={onLoad} onClose={() => {}} onConfirm={async () => {}} />))
+    await act(async () => vi.waitFor(() => expect(onSelectionChange).toHaveBeenLastCalledWith({
+      containers: [{ type: 'container', name: 'app' }, { type: 'initContainer', name: 'migrate' }],
+      changed: [],
+    })))
+  } finally {
+    await act(async () => root.unmount())
+  }
+})
+
+it('keeps Update disabled until the host has judged the containers being changed', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const unmanaged = { owner: null, helmRelease: null, pending: false, level: 'none', perWrite: [], summary: '', syncPolicy: null, requiresAck: false, ownershipError: null } as never
+  const onLoad = vi.fn(async (): Promise<WorkloadImageInventory> => ({
+    target: { kind: 'Deployment', group: 'apps', resource: 'deployments', namespace: 'prod', name: 'web' },
+    containers: [{ type: 'container', name: 'app', image: 'app:old' }],
+    behavior: { type: 'rolling' },
+  }))
+  const changed = setImageSelectionKey({ containers: [{ type: 'container', name: 'app' }], changed: [{ type: 'container', name: 'app' }] })
+  const render = (selectionKey: string) =>
+    root.render(<SetImageDialog open workloadLabel="Deployment" workloadName="web" workloadResource="deployments" ownership={{ guard: unmanaged, onSelectionChange: () => {}, selectionKey }} onLoad={onLoad} onClose={() => {}} onConfirm={async () => {}} />)
+  const update = () => [...document.querySelectorAll('button')].find((b) => /^Update \d+ image/.test(b.textContent ?? '')) as HTMLButtonElement | undefined
+  try {
+    await act(async () => render(''))
+    const input = await vi.waitFor(() => {
+      const el = document.querySelector('input[aria-label^="New image"]') as HTMLInputElement | null
+      expect(el).not.toBeNull()
+      return el!
+    })
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'app:new')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    // The guard on screen was judged before the edit.
+    expect(update()?.disabled).toBe(true)
+    await act(async () => render(changed))
+    expect(update()?.disabled).toBe(false)
+  } finally {
+    await act(async () => root.unmount())
+    host.remove()
+  }
+})
+
+it("doesn't hold Update for a host that reports the selection without judging it", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const unmanaged = { owner: null, helmRelease: null, pending: false, level: 'none', perWrite: [], summary: '', syncPolicy: null, requiresAck: false, ownershipError: null } as never
+  const onLoad = vi.fn(async (): Promise<WorkloadImageInventory> => ({
+    target: { kind: 'Deployment', group: 'apps', resource: 'deployments', namespace: 'prod', name: 'web' },
+    containers: [{ type: 'container', name: 'app', image: 'app:old' }],
+    behavior: { type: 'rolling' },
+  }))
+  try {
+    await act(async () => root.render(<SetImageDialog open workloadLabel="Deployment" workloadName="web" workloadResource="deployments" ownership={{ guard: unmanaged, onSelectionChange: () => {} }} onLoad={onLoad} onClose={() => {}} onConfirm={async () => {}} />))
+    const input = await vi.waitFor(() => {
+      const el = document.querySelector('input[aria-label^="New image"]') as HTMLInputElement | null
+      expect(el).not.toBeNull()
+      return el!
+    })
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'app:new')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const update = [...document.querySelectorAll('button')].find((b) => /^Update \d+ image/.test(b.textContent ?? '')) as HTMLButtonElement | undefined
+    expect(update?.disabled).toBe(false)
+  } finally {
+    await act(async () => root.unmount())
+    host.remove()
+  }
+})

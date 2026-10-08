@@ -402,15 +402,17 @@ interface AlertBannerProps {
   message?: React.ReactNode
   items?: string[]
   children?: React.ReactNode
+  /** Replaces the default bottom margin when the banner sits in a tighter layout. */
+  className?: string
 }
 
-export function AlertBanner({ variant, icon, title, message, items, children }: AlertBannerProps) {
+export function AlertBanner({ variant, icon, title, message, items, children, className }: AlertBannerProps) {
   const colors = ALERT_COLORS[variant]
   const Icon = icon || DEFAULT_ICONS[variant]
   const hasBody = message || items || children
 
   return (
-    <div className={clsx('mb-4 p-3 border rounded-lg', colors.bg, colors.border)}>
+    <div className={clsx('p-3 border rounded-lg', className ?? 'mb-4', colors.bg, colors.border)}>
       <div className={clsx('flex gap-2', hasBody ? 'items-start' : 'items-center')}>
         <Icon className={clsx('w-4 h-4 shrink-0', colors.title, hasBody && 'mt-0.5')} />
         {hasBody ? (

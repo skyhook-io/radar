@@ -258,6 +258,24 @@ The GitOps tab isn't the only place Argo/Flux ownership matters. Surfaces across
 - **Helm view** — releases installed by Flux's helm-controller (detected via a HelmRelease CR lookup keyed by `<storageNamespace>/<releaseName>`, since Flux's labels live on the *managed* resources, not the release Secret) carry a `Flux` badge in the list and an amber `Managed by Flux · ns/name` link in the drawer, warning that `helm upgrade` would be reverted at the next reconcile
 - **Flux source CR drawers** — `GitRepository`, `HelmRepository`, `OCIRepository`, `Bucket` drawers carry a `Consumed by` panel listing every Kustomization + HelmRelease whose `spec.sourceRef` points at the source. Answers "if I edit this, what gets affected on the next reconcile?" without guessing
 
+## Revert warnings before a write
+
+Before Radar writes to an object a GitOps controller or a Helm release owns, the dialog says what will happen to the change: **will revert**, **may revert**, an informational note, or nothing, with the reasons and a link to the owner. Set image and the Diagnose **Apply** dialog use it. A possible revert asks for an acknowledgment, which clears whenever the verdict changes.
+
+Radar's caches strip `managedFields` and the last-applied annotation, so the browser asks the server: `POST /api/gitops/write-evidence` with `{kind, group, namespace, name, paths[], owner?}`. The server reads the target, and its Argo CD Application or Flux Kustomization/HelmRelease owner, **as the caller**, and returns per field path:
+
+- whether the path is in the last client-side apply (`present` / `absent` / `no-annotation`);
+- which field managers own it, and whether one is the owner's own controller (`approximate` when a manager owns only an ancestor or part of the path, e.g. one container's image under `containers[*]`);
+- whether an ignore rule covers it: `effective` (Argo `ignoreDifferences` with `RespectIgnoreDifferences`, Flux `driftDetection.ignore`, or a reconcile opt-out annotation; Flux's `ssa: IfNotPresent` is read from the live object, which doesn't prove the source declares it, so it stays **may revert**), `comparison-only` (Argo without `RespectIgnoreDifferences`: self-heal won't react, the next sync overwrites), or `unevaluated` (a jq rule, a `managedFieldsManagers` rule whose manager owns only part of the path, or a rule that covers only some of the entries a wildcard matches). Argo rules match `group`/`kind` `"*"`; Flux targets are anchored regular expressions, as in Kustomize;
+- a wildcard path (`containers[*].image`) is judged per entry of the live object: the source must declare every container, or a rule cover every container, before the verdict is certain. When the source declares only some, the field is `partial` and the verdict is **may revert**; a wildcard that matches nothing (no init containers) is `empty` and adds no verdict. Set image uses the wildcard only until the dialog lists the containers; then it asks about each container by name (so the evidence can't predate the list) and judges the ones you change;
+- and the owner's sync policy (auto, self-heal, prune, suspended).
+
+For an Argo CD owner it also reports `ownerTracksTarget`, whether the Application's status lists the object. Argo CD 3 leaves the namespace out of tracking ids for Applications in its own namespace, so Radar finds the Application by name; the status listing confirms it, and without it a name-only match never waives the acknowledgment.
+
+It never returns managedFields or last-applied content, only these facts. Bodies are capped at 16 KiB (413) and at 64 paths; unknown fields are rejected (400). Kubernetes 403/404 pass through.
+
+The classification is `evaluateGitOpsWriteGuard` in k8s-ui (`utils/gitops-write-guard.ts`), shown by `GitOpsWriteWarning`; the hook is `web/src/hooks/useGitOpsWriteGuard.ts`. Ownership comes from the resource's relationships, or its parent workload's when it carries no owner of its own (a Pod inherits its Deployment's). When the server hasn't built either yet, the parent can't be read, or the server reports a manager the browser can't resolve (the Diagnose run's `managedBy`), ownership is treated as unknown: **may revert**, with an acknowledgment. A Radar without the endpoint (no `gitopsWriteEvidence` capability) gets the same conservative warning. The copy never promises a change won't be reverted.
+
 ## MCP integration
 
 `manage_gitops` MCP tool exposes the same actions to AI agents with per-action input validation:
