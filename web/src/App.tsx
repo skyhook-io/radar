@@ -38,6 +38,9 @@ import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
+import { CNPGView } from './components/cnpg/CNPGView'
+import { CNPG_SCREENS, cnpgDetailKindFor, cnpgDetailPath, parseCNPGRoute } from './components/cnpg/routes'
+import { currentPageLabel } from './components/cnpg/paths'
 import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
@@ -125,7 +128,7 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 
 // Convert API resource name back to topology node ID prefix
 // Extended MainView type that includes traffic and cost
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'cnpg' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
@@ -139,6 +142,7 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'traffic') return 'traffic'
   if (path === 'cost') return 'cost'
   if (path === 'capacity') return 'capacity'
+  if (path === 'cnpg') return 'cnpg'
   if (path === 'workload') return 'workload'
   if (path === 'checks' || path === 'audit') return 'checks'  // /audit = legacy → checks
   if (path === 'gitops') return 'gitops'
@@ -166,7 +170,7 @@ function usageView(pathname: string, view: ExtendedMainView, upgrade: boolean): 
 const CRASH_LABELS: Record<ExtendedMainView, string> = {
   home: 'Home', topology: 'Topology', resources: 'Resources', timeline: 'Timeline',
   issues: 'Issues', helm: 'Helm', helmCompare: 'HelmCompare', traffic: 'Traffic',
-  cost: 'Cost', capacity: 'Capacity', checks: 'Checks', gitops: 'GitOps',
+  cost: 'Cost', capacity: 'Capacity', cnpg: 'CloudNativePG', checks: 'Checks', gitops: 'GitOps',
   applications: 'Applications', workload: 'Workload', compare: 'Compare',
   investigations: 'Investigations',
 }
@@ -283,6 +287,12 @@ function radarPageTitle(pathname: string, search = '', apiResources?: APIResourc
     if (pathSegments[1] === 'activity') return 'Capacity Activity'
   }
 
+  if (view === 'cnpg') {
+    const route = parseCNPGRoute(pathname)
+    if (route.detail) return route.detail.name
+    const screen = CNPG_SCREENS.find((s) => s.id === route.screen)
+    return `CloudNativePG ${screen?.label ?? 'Overview'}`
+  }
   if (view === 'home') return 'Overview'
   // Every other view's label is its id capitalized — getViewFromPath has already
   // normalized aliases (e.g. /audit → 'checks'), so no lookup table is needed.
@@ -876,7 +886,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     gitops: 'g o', checks: 'g u', cost: 'g c', capacity: 'g p',
     // Non-rail views (reachable via deep links / actions, not the rail) get no
     // dedicated mnemonic — listed for exhaustiveness so the type stays total.
-    workload: '', compare: '', helmCompare: '', investigations: '',
+    workload: '', compare: '', helmCompare: '', investigations: '', cnpg: '',
   }
   const views = Object.keys(VIEW_SHORTCUT_KEYS).filter(
     (v): v is ExtendedMainView => VIEW_SHORTCUT_KEYS[v as ExtendedMainView] !== '',
@@ -1065,6 +1075,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     secretsChanged: boolean
     timer: number | null
   }>({ changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
+  const cnpgInvalidationPendingRef = useRef(false)
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
     timer: number | null
@@ -1095,6 +1106,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     const kind = kindToPluralWithGroup(event.kind, event.group ?? '')
     const structural = event.operation === 'add' || event.operation === 'delete'
     const applicationWorkload = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
+
+    if (event.group?.endsWith('.cnpg.io')) cnpgInvalidationPendingRef.current = true
 
     const fast = fastInvalidationRef.current
     fast.changedKinds.add(kind)
@@ -1139,6 +1152,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         // GitOps view is mounted (Phase 2 will make this relevance-aware).
         queryClient.invalidateQueries({ queryKey: ['gitops-tree'] })
         queryClient.invalidateQueries({ queryKey: ['gitops-insights'] })
+        if (cnpgInvalidationPendingRef.current) {
+          cnpgInvalidationPendingRef.current = false
+          queryClient.invalidateQueries({ queryKey: ['cnpg', 'workspace'] })
+        }
         fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
       }, 3000)
     }
@@ -1224,6 +1241,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         const nextParams = new URLSearchParams()
         const diagnoseRun = new URLSearchParams(location.search).get('ai-run')
         if (diagnoseRun) nextParams.set('ai-run', diagnoseRun)
+        // A CNPG detail keeps the context it belongs to, so it can say it is
+        // not in the new one instead of loading a same-named object.
+        const pinnedCtx = new URLSearchParams(location.search).get('ctx')
+        if (pinnedCtx && location.pathname.startsWith('/cnpg/')) nextParams.set('ctx', pinnedCtx)
         navigate(
           { pathname: location.pathname, search: nextParams.toString() },
           { replace: true, state: location.state },
@@ -1750,7 +1771,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     setVisibleKinds(new Set())
   }, [])
 
-  const navActiveView = mainView === 'helmCompare' ? 'helm' : mainView
+  const navActiveView = mainView === 'helmCompare' ? 'helm' : mainView === 'cnpg' ? 'resources' : mainView
 
   return (
     <PortForwardProvider>
@@ -2304,6 +2325,16 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           <CapacityView onOpenResource={navigateToResource} />
         )}
 
+        {!viewsSyncGated && mainView === 'cnpg' && (
+          <CNPGView
+            namespaces={namespaces}
+            selectedResource={routeSelectedResource}
+            onOpenResource={navigateToResource}
+            onCloseResource={() => setSelectedResource(null)}
+            onClearNamespaces={clearAllNamespaces}
+          />
+        )}
+
         {/* Takeover splash. When the host claims the current view via
             fleetTakeoverHref, the redirect effect above is mid-flight — render a
             brief splash instead of the inline view (which would flash + fire its
@@ -2371,7 +2402,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           onClose={closeDrawer}
           onNavigate={(res) => navigateToResource(res)}
           canCollapseToDrawer={!isMobile}
-          onExpand={(_res, opts) => {
+          onExpand={(res, opts) => {
+            const cnpgPlural = cnpgDetailKindFor(res.kind, res.group)
+            if (cnpgPlural) {
+              navigate(
+                cnpgDetailPath({ plural: cnpgPlural, namespace: res.namespace, name: res.name }, connection.context || undefined, opts?.yaml ? 'yaml' : undefined),
+                { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } },
+              )
+              return
+            }
             // Grow the peek into a fullscreen overlay (?full=1, pushed so Back
             // collapses) over whatever view is underneath — list, topology graph,
             // GitOps, Applications — which stays mounted. Carry the YAML tab when

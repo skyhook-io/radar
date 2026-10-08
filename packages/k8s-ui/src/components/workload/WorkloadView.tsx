@@ -77,8 +77,18 @@ import { rolloutMayAdvanceAutomatically, type WorkloadRolloutActivity } from '..
 import { WorkloadRolloutNotice } from './WorkloadRolloutNotice'
 import { isCoreBatchJob } from '../../utils/api-resources'
 
-export type WorkloadTabType = 'overview' | 'topology' | 'timeline' | 'logs' | 'metrics' | 'reachability' | 'cost' | 'yaml'
+export type WorkloadTabType = 'overview' | 'spec' | 'topology' | 'timeline' | 'logs' | 'metrics' | 'reachability' | 'cost' | 'yaml'
 type TabType = WorkloadTabType
+
+/** A host-provided tab. `after` places it behind a built-in tab; `replaces` hides that built-in tab. */
+export interface WorkloadExtraTab {
+  id: string
+  label: string
+  icon?: ReactNode
+  after?: WorkloadTabType
+  replaces?: WorkloadTabType
+  render: () => ReactNode
+}
 
 export interface ResourceOwnershipContext {
   application?: {
@@ -286,6 +296,24 @@ interface WorkloadViewProps {
     initialContainer: string | null
     onConsumeInitialContainer: () => void
   }) => ReactNode
+  /**
+   * A composed summary for kinds that have one. When it returns content, the
+   * Overview tab shows the summary and the resource's own renderer moves to a
+   * "Spec & status" tab, so the same facts never render twice. Return null to
+   * keep the default Overview.
+   */
+  renderSummary?: (props: {
+    kind: string
+    apiKind: string
+    namespace: string
+    name: string
+    group?: string
+    resource: any
+    context: 'drawer' | 'expanded'
+    onNavigate?: NavigateToResource
+  }) => ReactNode
+  /** Extra tabs for the expanded view (e.g. a domain's own sections). */
+  extraTabs?: WorkloadExtraTab[]
   /** Render a full replacement for the expanded Overview tab. */
   renderExpandedOverview?: (props: {
     kind: string
@@ -434,6 +462,8 @@ export function WorkloadView({
   renderDiagnoseTab,
   reachableVia,
   renderExpandedOverview,
+  renderSummary,
+  extraTabs,
   renderRelatedYaml,
   renderMetricsTab,
   renderCostTab,
@@ -480,8 +510,10 @@ export function WorkloadView({
 
   // Collapsed mode state (YAML toggle for drawer mode)
   const [showYaml, setShowYaml] = useState(initialTab === 'yaml')
+  const [drawerSpec, setDrawerSpec] = useState(false)
   useEffect(() => {
     setShowYaml(initialTab === 'yaml')
+    setDrawerSpec(false)
   }, [kindProp, namespace, name, initialTab])
 
   const switchView = useCallback((yaml: boolean) => {
@@ -776,8 +808,12 @@ export function WorkloadView({
   const podEvidenceLoading = resourceLoading || workloadPodsLoading || eventsLoading
   const logsFallbackReady = !renderLogsTab || (!logsTabVisible && !podEvidenceLoading)
   const requestedTab: TabType = activeTab
+  const summaryContext = { kind, apiKind, namespace, name, group, resource, onNavigate: onNavigateToResource }
+  const expandedSummary = expanded && resource ? renderSummary?.({ ...summaryContext, context: 'expanded' }) ?? null : null
+  const drawerSummary = !expanded && resource ? renderSummary?.({ ...summaryContext, context: 'drawer' }) ?? null : null
   const tabs: DetailShellTab<TabType>[] = [
     { id: 'overview', label: 'Overview', icon: <Layers className="w-4 h-4" /> },
+    { id: 'spec', label: 'Spec & status', icon: <FileText className="w-4 h-4" />, hidden: !expandedSummary },
     { id: 'topology', label: 'Topology', icon: <Network className="w-4 h-4" />, hidden: topologyTabHidden },
     {
       id: 'timeline',
@@ -796,12 +832,15 @@ export function WorkloadView({
     { id: 'cost', label: 'Cost', icon: <Coins className="w-4 h-4" />, hidden: !costTabVisible },
     { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" /> },
   ]
-  const requestedTabAvailable = tabs.some((tab) => tab.id === requestedTab && !tab.hidden)
+  const allTabs = mergeExtraTabs(tabs, expanded ? extraTabs : undefined)
+  const requestedTabAvailable = allTabs.some((tab) => tab.id === requestedTab && !tab.hidden)
   const effectiveTab: TabType = requestedTabAvailable ? requestedTab : 'overview'
+  const activeExtraTab = expanded ? extraTabs?.find((x) => x.id === effectiveTab) : undefined
   const shouldCommitFallback =
     requestedTab !== 'overview' &&
     !requestedTabAvailable &&
     (
+      (requestedTab === 'spec' && !!resource && !resourceLoading && !expandedSummary) ||
       (requestedTab === 'topology' && topologyTabHidden) ||
       (requestedTab === 'metrics' && (!renderMetricsTab || (!!resource && !resourceLoading && !showMetricsTab))) ||
       (requestedTab === 'cost' && (!renderCostTab || (!!resource && !resourceLoading && !showCostTab))) ||
@@ -941,6 +980,33 @@ export function WorkloadView({
             />
           ) : (
             <OperationalIssuesShownContext.Provider value={!!hasOperationalIssues || !!operationalIssuesPending}>
+              {drawerSummary && (
+                <div className="px-4 pt-3" role="tablist" aria-label="Detail view">
+                  <div className="inline-flex rounded-lg bg-theme-elevated p-0.5 text-xs">
+                    {([['overview', 'Overview'], ['spec', 'Spec & status']] as const).map(([id, label]) => {
+                      const on = id === 'spec' ? drawerSpec : !drawerSpec
+                      return (
+                        <button
+                          key={id}
+                          role="tab"
+                          aria-selected={on}
+                          onClick={() => setDrawerSpec(id === 'spec')}
+                          className={clsx(
+                            'rounded-md px-2.5 py-1 font-medium transition-colors',
+                            on ? 'bg-theme-surface text-theme-text-primary shadow-theme-sm' : 'text-theme-text-secondary hover:text-theme-text-primary',
+                          )}
+                        >
+                          {label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+              {drawerSummary && !drawerSpec ? (
+                drawerSummary
+              ) : (
+              <>
               {renderOverviewLead && hasOperationalIssues && (
                 <div className="px-4 pt-4">
                   {renderOverviewLead({ kind, namespace, name })}
@@ -969,6 +1035,8 @@ export function WorkloadView({
                 updatesError={resourceFocusedUpdatesError}
                 mainFooter={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name, group, context: 'drawer' })}
               />
+              </>
+              )}
             </OperationalIssuesShownContext.Provider>
           )}
         </div>
@@ -1085,7 +1153,7 @@ export function WorkloadView({
           )}
         </>
       }
-      tabs={tabs}
+      tabs={allTabs}
       activeTab={effectiveTab}
       onTabChange={handleSetTab}
       scopeControls={scopeControls}
@@ -1100,7 +1168,10 @@ export function WorkloadView({
           </div>
         )}
         <div className="min-h-0 flex-1">
-        {effectiveTab === 'overview' && expandedOverview ? (
+        {activeExtraTab && <div className="h-full min-h-0 overflow-y-auto">{activeExtraTab.render()}</div>}
+        {effectiveTab === 'overview' && expandedSummary ? (
+          <div className="h-full min-h-0 overflow-y-auto">{expandedSummary}</div>
+        ) : effectiveTab === 'overview' && expandedOverview ? (
           <div className="h-full min-h-0">
             {hasOperationalIssues && renderOverviewLead && (
               <div className="px-4 pt-4">
@@ -1109,7 +1180,7 @@ export function WorkloadView({
             )}
             {expandedOverview}
           </div>
-        ) : effectiveTab === 'overview' && (
+        ) : (effectiveTab === 'overview' || effectiveTab === 'spec') && (
             <InfoTab
               resource={resource}
               selectedResource={selectedResource}
@@ -1846,6 +1917,7 @@ const LOGS_TAB_WITHOUT_PODS_KINDS = new Set([
   'clusterworkflowtemplates',
   'scaledjobs',
   'jobsets',
+  'clusters',
 ])
 const RUNTIME_WORKLOAD_OVERVIEW_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'])
 const ROLLOUT_STATUS_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'rollouts'])
@@ -1861,6 +1933,11 @@ export function supportsLogsWithoutPods(
   if (normalizedKind === 'jobs') return isCoreBatchJob(kind, group)
   if (normalizedKind === 'jobsets') {
     return group === 'jobset.x-k8s.io' && apiVersion === 'jobset.x-k8s.io/v1alpha2'
+  }
+  // A CloudNativePG Cluster's instance Pods are its children, not related
+  // Pods, and its logs are resolved server-side from the Cluster itself.
+  if (normalizedKind === 'clusters') {
+    return group === 'postgresql.cnpg.io' || !!apiVersion?.startsWith('postgresql.cnpg.io/')
   }
   return true
 }
@@ -3834,4 +3911,18 @@ function mergeAndRankEvents(events: TimelineEvent[], updates: TimelineEvent[]): 
       if (aProblem !== bProblem) return bProblem - aProblem
       return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
     })
+}
+
+function mergeExtraTabs(tabs: DetailShellTab<TabType>[], extra: WorkloadExtraTab[] | undefined): DetailShellTab<TabType>[] {
+  if (!extra || extra.length === 0) return tabs
+  const replaced = new Set(extra.map((x) => x.replaces).filter(Boolean))
+  const out = tabs.map((t) => (replaced.has(t.id) ? { ...t, hidden: true } : t))
+  for (const x of extra) {
+    const tab: DetailShellTab<TabType> = { id: x.id as TabType, label: x.label, icon: x.icon }
+    const anchor = x.after ?? x.replaces
+    const idx = anchor ? out.findIndex((t) => t.id === anchor) : -1
+    if (idx >= 0) out.splice(idx + 1, 0, tab)
+    else out.push(tab)
+  }
+  return out
 }

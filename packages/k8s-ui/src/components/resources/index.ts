@@ -54,7 +54,7 @@ export * from './resource-utils-velero'
 export { ResourcesView, ResourcesViewDataContext, hasCuratedColumns } from './ResourcesView'
 export type { ResourceQueryResult, ExtraColumn, LargeListGuardState } from './ResourcesView'
 export { ResourcesSidebar } from './ResourcesSidebar'
-export type { ResourcesSidebarProps, SelectedKindInfo, PinnedItem } from './ResourcesSidebar'
+export type { ResourcesSidebarProps, SelectedKindInfo, PinnedItem, SidebarCategoryDestination, SidebarCategoryWorkspace } from './ResourcesSidebar'
 export {
   sanitizePrinterTable,
   printerTableKey,
