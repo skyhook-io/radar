@@ -1,6 +1,6 @@
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
-import { kindToPluralWithGroup, knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
+import { useEffect, useRef } from 'react'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import type {
   AppHistory,
@@ -22,15 +22,6 @@ import type {
 } from '@skyhook-io/k8s-ui'
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
-import {
-  initialGoneState,
-  markPresent,
-  observeSettled,
-  onResourcePresent,
-  releaseForProbe,
-  trackedFor,
-  type TrackedGone,
-} from './gone-suppression'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import type {
   Topology,
@@ -2607,53 +2598,39 @@ export function fetchResourceWithRelationships<T>(
 }
 
 /**
- * Disables refetching for a resource the server has said is gone. Shared by
- * the two resource-detail hooks so a 404'd target behaves the same in both.
+ * How often an open detail view re-checks a resource the server said is gone.
+ * Watch events stop refetching it (see refetchOnResourceEvents), so this is
+ * what finds one recreated under the same name when no event names it, such
+ * as a ConfigMap: the server streams adds only for pods.
  */
-function useGoneSuppression(kind: string, namespace: string, name: string, group: string | undefined) {
-  const queryClient = useQueryClient();
-  const identity = `${kind}/${namespace}/${name}/${group ?? ""}`;
-  const [tracked, setTracked] = useState<TrackedGone>(() => ({ identity, settledAt: 0, presentSinceSettle: false, gone: initialGoneState }));
-  const suppressedUntil = trackedFor(tracked, identity).gone.suppressedUntil;
+const GONE_RECHECK_MS = 60_000;
 
-  const observe = useCallback(
-    (settledAt: number, error: unknown) => {
-      setTracked((prev) =>
-        observeSettled(trackedFor(prev, identity), settledAt, { isGone: isNotFoundError(error), now: Date.now() }),
-      );
-    },
-    [identity],
-  );
+export function goneRecheckInterval(
+  query: { state: { error: unknown } },
+  otherwise: number | false | undefined,
+): number | false | undefined {
+  return isNotFoundError(query.state.error) ? GONE_RECHECK_MS : otherwise;
+}
 
-  // Callers pass either a Kind or a plural, with or without a group. Without
-  // a group a CRD's group is unknown here, so any group matches.
-  const presentKind = kindToPluralWithGroup(kind, group ?? "");
-  const presentGroup = canonicalResourceGroup(kind, group);
-  useEffect(
-    () =>
-      onResourcePresent(queryClient, (present) => {
-        if (present.kind !== presentKind || present.namespace !== namespace || present.name !== name) return;
-        if (presentGroup !== undefined && present.group !== presentGroup) return;
-        setTracked((prev) => markPresent(trackedFor(prev, identity)));
-      }),
-    [queryClient, presentKind, presentGroup, namespace, name, identity],
-  );
+/** The object a watch event names, as matched by refetchOnResourceEvents. */
+export function resourceEventKey(kind: string, namespace: string, name: string): string {
+  return `${kind}/${namespace}/${name}`;
+}
 
-  // Wake up once the cooldown is over so the query re-enables and probes.
-  useEffect(() => {
-    if (suppressedUntil === null) return;
-    const timer = setTimeout(
-      () =>
-        setTracked((prev) => {
-          const current = trackedFor(prev, identity);
-          return { ...current, gone: releaseForProbe(current.gone) };
-        }),
-      Math.max(0, suppressedUntil - Date.now()),
-    );
-    return () => clearTimeout(timer);
-  }, [suppressedUntil, identity]);
-
-  return { quiet: suppressedUntil !== null, observe };
+/**
+ * Whether a batch of watch events for `kind` refetches this ['resource', kind,
+ * namespace, name, group] query. One the server answered 404 for is refetched
+ * only when an event in the batch names its object; otherwise every change to
+ * the kind would ask again for something that is gone.
+ */
+export function refetchOnResourceEvents(
+  query: { queryKey: readonly unknown[]; state: { error: unknown } },
+  kind: string,
+  namedObjects: ReadonlySet<string>,
+): boolean {
+  if (!isNotFoundError(query.state.error)) return true;
+  const [, , namespace, name] = query.queryKey;
+  return namedObjects.has(resourceEventKey(kind, String(namespace ?? ""), String(name ?? "")));
 }
 
 export function useResource<T>(
@@ -2663,28 +2640,21 @@ export function useResource<T>(
   group?: string,
   options?: { enabled?: boolean; refetchInterval?: number | false },
 ) {
-  const { quiet: goneQuiet, observe: observeGone } = useGoneSuppression(kind, namespace, name, group);
   const query = useQuery<ResourceWithRelationships<T>>({
     queryKey: ["resource", kind, namespace, name, group],
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
-    enabled: (options?.enabled ?? true) && Boolean(kind && name) && !goneQuiet, // namespace can be empty for cluster-scoped resources
-    refetchInterval: options?.refetchInterval,
+    enabled: (options?.enabled ?? true) && Boolean(kind && name), // namespace can be empty for cluster-scoped resources
+    refetchInterval: (query) => goneRecheckInterval(query, options?.refetchInterval),
     // Kind still completing its initial sync: stay in loading and poll until
     // it becomes readable instead of erroring out (deep links during startup).
     retry: (failureCount, error) => {
       if (isStillLoadingError(error)) return true;
       if (isKindSyncFailed(error)) return false;
-      // A 404 is the server's final answer; asking twice cannot change it.
-      if (isNotFoundError(error)) return false;
-      return failureCount < 1; // one retry for other errors, 4xx included, unlike the QueryClient default
+      return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
     },
     retryDelay: (failureCount, error) =>
       isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
-
-  const settledAt = Math.max(query.dataUpdatedAt, query.errorUpdatedAt);
-  const queryError = query.error;
-  useEffect(() => { observeGone(settledAt, queryError); }, [settledAt, queryError, observeGone]);
 
   // Extract resource and relationships from the response
   return {
@@ -2703,29 +2673,21 @@ export function useResourceWithRelationships<T>(
   name: string,
   group?: string,
 ) {
-  const { quiet: goneQuiet, observe: observeGone } = useGoneSuppression(kind, namespace, name, group);
-  const query = useQuery<ResourceWithRelationships<T>>({
+  return useQuery<ResourceWithRelationships<T>>({
     queryKey: ["resource", kind, namespace, name, group],
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
-    enabled: Boolean(kind && name) && !goneQuiet,
+    enabled: Boolean(kind && name),
+    refetchInterval: (query) => goneRecheckInterval(query, undefined),
     // Deep-linked detail views can mount while the kind's informer is still
     // completing its initial sync: keep polling instead of erroring out.
     retry: (failureCount, error) => {
       if (isStillLoadingError(error)) return true;
       if (isKindSyncFailed(error)) return false;
-      // A 404 is the server's final answer; asking twice cannot change it.
-      if (isNotFoundError(error)) return false;
-      return failureCount < 1; // one retry for other errors, 4xx included, unlike the QueryClient default
+      return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
     },
     retryDelay: (failureCount, error) =>
       isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
-
-  const settledAt = Math.max(query.dataUpdatedAt, query.errorUpdatedAt);
-  const queryError = query.error;
-  useEffect(() => { observeGone(settledAt, queryError); }, [settledAt, queryError, observeGone]);
-
-  return query;
 }
 
 // List resources - queryKey includes group for cache sharing with ResourcesView

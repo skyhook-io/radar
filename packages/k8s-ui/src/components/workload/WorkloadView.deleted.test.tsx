@@ -22,7 +22,7 @@ function render(resourceError: unknown) {
       resourceError={resourceError}
       relationships={{ deployment: { kind: 'Deployment', namespace: 'shop', name: 'web' } }}
       onNavigateToResource={vi.fn()}
-      actionsBarProps={{ canExec: true, canViewLogs: true, onOpenTerminal: vi.fn(), onOpenLogs: vi.fn(), onDelete: vi.fn() }}
+      actionsBarProps={{ canExec: true, canViewLogs: true, onOpenTerminal: vi.fn(), onOpenLogs: vi.fn(), onDelete: vi.fn(), renderDiagnose: () => 'Diagnose' }}
     />,
   )
 }
@@ -34,6 +34,7 @@ describe('WorkloadView for an object deleted while open', () => {
     expect(html).toContain('Go to its Deployment web')
     expect(html).toContain('>Deleted<')
     expect(html).not.toContain('Terminal')
+    expect(html).not.toContain('Diagnose')
   })
 
   it('shows the live view when the fetch failed for another reason', () => {
@@ -41,5 +42,6 @@ describe('WorkloadView for an object deleted while open', () => {
     expect(html).not.toContain('no longer exists')
     expect(html).not.toContain('>Deleted<')
     expect(html).toContain('Terminal')
+    expect(html).toContain('Diagnose')
   })
 })

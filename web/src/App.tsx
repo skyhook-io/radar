@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { englishPlural } from '@skyhook-io/k8s-ui/utils/pluralize'
-import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams, useNavigationType, NavigationType } from 'react-router-dom'
 import { HomeView } from './components/home/HomeView'
@@ -61,8 +60,7 @@ import { UsageDataPrompt } from './components/usage-data/UsageDataPrompt'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit } from './api/client'
-import { announceResourcePresent } from './api/gone-suppression'
+import { debugNamespaceLog, refetchOnResourceEvents, resourceEventKey, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
 import { routePath, apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
@@ -1071,12 +1069,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   //     update that arrived *after* the fast structural flush already ran.
   const fastInvalidationRef = useRef<{
     changedKinds: Set<string>   // every changed kind (any op) → detail drawer
+    changedObjects: Set<string> // resourceEventKey of every event → detail views that got a 404
     structuralKinds: Set<string> // add/delete kinds → list membership + counts + dashboard
     environmentNamespaces: Set<string>
     environmentPods: Map<string, Set<string>>
     secretsChanged: boolean
     timer: number | null
-  }>({ changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
+  }>({ changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null })
   const cnpgInvalidationPendingRef = useRef(false)
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
@@ -1107,22 +1106,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     const kind = kindToPluralWithGroup(event.kind, event.group ?? '')
     const structural = event.operation === 'add' || event.operation === 'delete'
-    // A view that stopped asking for this object after a 404 starts again now,
-    // instead of at its next cooldown probe.
-    if (event.operation !== 'delete') {
-      announceResourcePresent(queryClient, {
-        kind,
-        group: canonicalResourceGroup(kind, event.group) ?? '',
-        namespace: event.namespace ?? '',
-        name: event.name,
-      })
-    }
     const applicationWorkload = ['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind)
 
     if (event.group?.endsWith('.cnpg.io')) cnpgInvalidationPendingRef.current = true
 
     const fast = fastInvalidationRef.current
     fast.changedKinds.add(kind)
+    fast.changedObjects.add(resourceEventKey(kind, event.namespace ?? '', event.name))
     if (structural) fast.structuralKinds.add(kind)
     if (kind === 'secrets') fast.secretsChanged = true
     if ((kind === 'configmaps' || kind === 'secrets') && event.namespace) fast.environmentNamespaces.add(event.namespace)
@@ -1140,7 +1130,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       fast.timer = window.setTimeout(() => {
         const f = fastInvalidationRef.current
         for (const k of f.changedKinds) {
-          queryClient.invalidateQueries({ queryKey: ['resource', k] }) // open detail drawer stays live
+          // Open detail drawers stay live; a deleted one is left alone unless
+          // an event names it.
+          queryClient.invalidateQueries({
+            queryKey: ['resource', k],
+            predicate: (q) => refetchOnResourceEvents(q, k, f.changedObjects),
+          })
         }
         for (const k of f.structuralKinds) {
           queryClient.invalidateQueries({ queryKey: ['resources', k] }) // list membership changed
@@ -1168,7 +1163,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           cnpgInvalidationPendingRef.current = false
           queryClient.invalidateQueries({ queryKey: ['cnpg', 'workspace'] })
         }
-        fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
+        fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
       }, 3000)
     }
 
@@ -1197,7 +1192,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
     if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
     if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
-    fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
+    fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
     slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
     timelineInvalidationRef.current = { timer: null }
   }, [])
@@ -1220,7 +1215,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
       if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
       if (timelineInvalidationRef.current.timer !== null) clearTimeout(timelineInvalidationRef.current.timer)
-      fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
+      fastInvalidationRef.current = { changedKinds: new Set(), changedObjects: new Set(), structuralKinds: new Set(), environmentNamespaces: new Set(), environmentPods: new Map(), secretsChanged: false, timer: null }
       slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
       timelineInvalidationRef.current = { timer: null }
 

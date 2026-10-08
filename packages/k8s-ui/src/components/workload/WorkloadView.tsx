@@ -772,8 +772,9 @@ export function WorkloadView({
   const status = resourceGone
     ? { text: 'Deleted', color: 'status-unknown' }
     : rolloutDisplay?.status ?? getResourceStatus(apiKind, resource)
-  // The host's actions and connected renderers act on, or fetch more about,
-  // an object that no longer exists. The plain renderers show the last copy.
+  // The host's actions, and the host's renderers with their per-container
+  // terminal, logs, scale and env controls, would act on an object that no
+  // longer exists. The plain renderers show the last copy without them.
   const actionsBarPropsForState = resourceGone ? undefined : effectiveActionsBarProps
   const rendererOverridesForState = resourceGone ? undefined : rendererOverrides
   const deletedNotice = resourceGone ? (
@@ -809,7 +810,7 @@ export function WorkloadView({
   const renderDiagnose = actionsBarProps?.renderDiagnose as
     | ((ctx: { kind: string; group?: string; namespace: string; name: string; health?: DiagnoseHealthHint }) => ReactNode)
     | undefined
-  const diagnoseAction = renderDiagnose?.({
+  const diagnoseAction = resourceGone ? null : renderDiagnose?.({
     kind: resource?.kind ?? knownKindForPluralWithGroup(apiKind, group ?? '') ?? apiKind,
     group,
     namespace,
@@ -986,7 +987,7 @@ export function WorkloadView({
               data={resource}
               onCopy={(text) => copyToClipboard(text, 'yaml')}
               copied={copied === 'yaml'}
-              readOnly={readOnlyYaml || resourceGone}
+              readOnly={readOnlyYaml}
               onSaved={handleSaved}
               onSave={onUpdateResource}
               isSaving={isUpdatingResource}
@@ -1339,7 +1340,7 @@ export function WorkloadView({
                   data={resource}
                   onCopy={(text) => copyToClipboard(text, 'yaml')}
                   copied={copied === 'yaml'}
-                  readOnly={readOnlyYaml || resourceGone}
+                  readOnly={readOnlyYaml}
                   onSaved={handleSaved}
                   onSave={onUpdateResource}
                   isSaving={isUpdatingResource}
@@ -1440,13 +1441,13 @@ function DeletedResourceNotice({
     <AlertBanner
       variant="warning"
       title={`This ${kindLabel} no longer exists in the cluster`}
-      message="This is the last version Radar loaded before it was deleted. If it is created again under the same name, it shows here."
+      message="You're looking at the last version Radar loaded before it was deleted."
     >
       {owner && onNavigateToResource && (
         <button
           type="button"
           onClick={() => onNavigateToResource(refToSelectedResource(owner))}
-          className="mt-2 text-xs text-blue-500 hover:underline"
+          className="mt-2 text-xs text-accent-text hover:underline"
         >
           Go to its {displayKindName(owner.kind, owner.kind)} {owner.name}
         </button>
