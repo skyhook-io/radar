@@ -293,6 +293,23 @@ func TestWriteEvidenceArgoIgnoreDifferences(t *testing.T) {
 	}
 }
 
+func TestWriteEvidenceIgnoreRulesMatchAResourceNameRequest(t *testing.T) {
+	ignore := []any{map[string]any{"group": "apps", "kind": "Deployment", "jsonPointers": []any{"/spec/replicas"}}}
+	target := evidenceTarget(t, nil, nil)
+	ref := canonicalWriteEvidenceRef(writeEvidenceRef{Kind: "deployments", Group: "apps", Namespace: "prod", Name: "api"}, target)
+	if ref != deploymentRef {
+		t.Fatalf("canonical ref = %+v", ref)
+	}
+	resp := buildGitOpsWriteEvidence(target, ref, []string{"spec.replicas"}, argoOwner,
+		evidenceArgoApp(map[string]any{
+			"automated":   map[string]any{"selfHeal": true},
+			"syncOptions": []any{"RespectIgnoreDifferences=true"},
+		}, ignore), nil)
+	if resp.Paths[0].Ignored != "effective" {
+		t.Errorf("rule for Deployment missed a request sent as deployments: %+v", resp.Paths[0])
+	}
+}
+
 // Radar doesn't evaluate jq, so a matching jq rule leaves coverage open
 // rather than reading as "not ignored".
 func TestWriteEvidenceArgoJQRuleIsUnevaluated(t *testing.T) {

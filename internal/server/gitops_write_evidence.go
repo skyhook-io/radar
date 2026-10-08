@@ -164,12 +164,13 @@ func (s *Server) handleGitOpsWriteEvidence(w http.ResponseWriter, r *http.Reques
 		case apierrors.IsNotFound(err):
 			s.writeError(w, http.StatusNotFound, err.Error())
 		default:
-			log.Printf("[gitops] Failed to read %s %s/%s for write evidence: %v", sanitizeForLog(req.Kind), sanitizeForLog(req.Namespace), sanitizeForLog(req.Name), err)
+			log.Printf("[gitops] Failed to read %s for write evidence %s/%s: %v", sanitizeForLog(req.Kind), sanitizeForLog(req.Namespace), sanitizeForLog(req.Name), err)
 			s.writeError(w, http.StatusInternalServerError, err.Error())
 		}
 		return
 	}
 
+	req.writeEvidenceRef = canonicalWriteEvidenceRef(req.writeEvidenceRef, target)
 	owner := resolveWriteEvidenceOwner(req, target)
 	var ownerObj *unstructured.Unstructured
 	var ownerErr error
@@ -186,6 +187,16 @@ func (s *Server) handleGitOpsWriteEvidence(w http.ResponseWriter, r *http.Reques
 	}
 
 	s.writeJSON(w, buildGitOpsWriteEvidence(target, req.writeEvidenceRef, req.Paths, owner, ownerObj, ownerErr))
+}
+
+// canonicalWriteEvidenceRef takes the kind and group from the object itself:
+// ignore rules name the singular Kind, and a caller may send a resource name
+// ("deployments") that discovery accepted.
+func canonicalWriteEvidenceRef(ref writeEvidenceRef, target *unstructured.Unstructured) writeEvidenceRef {
+	if gvk := target.GroupVersionKind(); gvk.Kind != "" {
+		ref.Kind, ref.Group = gvk.Kind, gvk.Group
+	}
+	return ref
 }
 
 func resolveWriteEvidenceOwner(req gitOpsWriteEvidenceRequest, target *unstructured.Unstructured) *topology.ResourceRef {

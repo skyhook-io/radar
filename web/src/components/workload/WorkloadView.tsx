@@ -1019,12 +1019,9 @@ export function WorkloadView({
     owner: imageOwner,
     helmOwner: imageHelmOwner,
     ownerVerified: imageOwnerVerified,
-    lookupError: imageOwnerLookupError,
   } = imageOwnershipSource
   const imageOwnership = useMemo<SetImageOwnership | undefined>(() => {
-    // An unreadable parent workload leaves ownership unverified; the dialog
-    // blocks rather than guess.
-    if (!imageGuard || imageOwnerLookupError) return undefined
+    if (!imageGuard) return undefined
     const owner = imageOwner
     const helmOwner = imageHelmOwner
     return {
@@ -1044,7 +1041,6 @@ export function WorkloadView({
     imageOwner,
     imageHelmOwner,
     imageOwnerVerified,
-    imageOwnerLookupError,
   ])
   const actionsBarProps = useMemo(
     () => ({

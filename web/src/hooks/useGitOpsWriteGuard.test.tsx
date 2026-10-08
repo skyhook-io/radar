@@ -47,7 +47,7 @@ it.each(['resolved', 'failed', 'empty', 'ambiguous'])('waits for Argo Applicatio
       relationships: { managedBy: [{ kind: 'Application', group: 'argoproj.io', namespace: '', name: 'web' }] },
       writes: [{ scope: 'spec', paths: ['spec.replicas'] }],
     })
-    return outcome !== 'resolved' ? <SetImageDialog open workloadLabel="Deployment" workloadName="web" workloadResource="deployments" ownership={state.ownership.lookupError || !state.guard ? undefined : { guard: state.guard }} onLoad={onLoad} onClose={() => {}} onConfirm={async () => {}} /> : null
+    return outcome !== 'resolved' ? <SetImageDialog open workloadLabel="Deployment" workloadName="web" workloadResource="deployments" ownership={state.guard ? { guard: state.guard } : undefined} onLoad={onLoad} onClose={() => {}} onConfirm={async () => {}} /> : null
   }
   const render = () => root.render(<QueryClientProvider client={queryClient}><Harness /></QueryClientProvider>)
   try {
@@ -260,6 +260,20 @@ it('does not keep an exemption after the target lookup fails', async () => {
     expect(h.ref.state!.guard?.pending).toBe(false)
     expect(h.ref.state!.guard?.level).toBe('may-revert')
     expect(canConfirmGitOpsWrite(h.ref.state!.guard, false)).toBe(false)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('asks for an acknowledgment, not a block, when the parent cannot be read', async () => {
+  mocks.inherited = { data: undefined, isPending: false, isError: true }
+  const h = await renderGuard({ target: pod, resource: {}, relationships: podRelationships, writes: replicas })
+  try {
+    expect(mocks.evidence).not.toHaveBeenCalled()
+    expect(h.ref.state!.guard?.level).toBe('may-revert')
+    expect(h.ref.state!.guard?.ownershipError).toContain("couldn't read the resource that owns this one")
+    expect(canConfirmGitOpsWrite(h.ref.state!.guard, false)).toBe(false)
+    expect(canConfirmGitOpsWrite(h.ref.state!.guard, true)).toBe(true)
   } finally {
     await h.cleanup()
   }
