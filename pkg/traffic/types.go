@@ -173,14 +173,17 @@ type EndpointRef struct {
 	WorkloadKind string `json:"workloadKind,omitempty"`
 }
 
-// matches compares a reference with an endpoint as it was reported or as the
-// graph names it, so a pod reference matches its own records and a workload
-// reference matches those of each of its pods.
+// matches compares a reference with an endpoint: a workload reference with
+// the workload the graph draws the endpoint as, so it matches the records of
+// each of its pods; any other reference with the endpoint as reported.
 func (r EndpointRef) matches(e Endpoint) bool {
 	if r.Namespace != e.Namespace {
 		return false
 	}
-	return r.Name == e.Name || r.Name == GraphEndpoint(e).Name
+	if r.Kind == EndpointKindWorkload {
+		return r.Name == GraphEndpoint(e).Name
+	}
+	return r.Name == e.Name
 }
 
 // EndpointPair is one edge of the aggregation, keyed as AggregateFlows keys

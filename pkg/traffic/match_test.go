@@ -131,4 +131,8 @@ func TestFlowMatchPodReference(t *testing.T) {
 	if (&FlowMatch{Pairs: []EndpointPair{{Source: pod, Destination: db}}}).Matches(other) {
 		t.Error("a pod reference must not match its sibling pods")
 	}
+	bare := EndpointRef{Namespace: "shop", Name: "web", Kind: EndpointKindPod}
+	if (&FlowMatch{Pairs: []EndpointPair{{Source: bare, Destination: db}}}).Matches(flow) {
+		t.Error("a pod named like a workload must not match that workload's pods")
+	}
 }
