@@ -16,7 +16,7 @@ import { useDock } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, pairKey, selectionRawPairs, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, type TrafficFocus } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, pairKey, selectionMatch, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusParam, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, type TrafficFocus } from './trafficFilters'
 
 // Consecutive 2s retries of an empty result that came with a transient warning.
 const MAX_EMPTY_RETRIES = 5
@@ -397,20 +397,17 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
 
   // Focus lives in the URL so Back leaves it and a link can carry it.
   const [searchParams, setSearchParams] = useSearchParams()
-  const focusParam = searchParams.get('focus')
-  const focus = useMemo(() => parseFocus(focusParam), [focusParam])
+  const focusValue = searchParams.get('focus')
+  const focus = useMemo(() => parseFocus(focusValue), [focusValue])
   const focusKey = focus ? focusId(focus) : undefined
   const setFocus = useCallback((next: TrafficFocus | null) => {
-    const params = new URLSearchParams(window.location.search)
-    if (next) params.set('focus', focusId(next))
-    else params.delete('focus')
-    setSearchParams(params)
+    setSearchParams(prev => {
+      const params = new URLSearchParams(prev)
+      if (next) params.set('focus', focusParam(next))
+      else params.delete('focus')
+      return params
+    })
   }, [setSearchParams])
-  // Entering a focus selects it, so the flow list holds its records; leaving
-  // one clears the selection it made.
-  useEffect(() => {
-    setGraphSelection(focusKey ? { type: 'node', nodeId: focusKey } : null)
-  }, [focusKey])
 
   // Dock: offset past sidebar, close flows tab on unmount
   const flowsTabIdRef = useRef<string | null>(null)
@@ -428,7 +425,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
 
   const [chosenHiddenNamespaces, setHiddenNamespaces] = useState<Set<string>>(new Set())
   // Paused while focused: a neighbor in a hidden namespace is still a neighbor.
-  const hiddenNamespaces = useMemo(() => (focusParam ? new Set<string>() : chosenHiddenNamespaces), [focusParam, chosenHiddenNamespaces])
+  const hiddenNamespaces = useMemo(() => (focus ? new Set<string>() : chosenHiddenNamespaces), [focus, chosenHiddenNamespaces])
   // L7 filters (Hubble-only)
   const [l7Protocol, setL7Protocol] = useState<string>('all')
   const [l7Methods, setL7Methods] = useState<Set<string>>(new Set())
@@ -902,6 +899,12 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const focusedFlows = useMemo(
     () => (focus ? focusNeighborhood(internetCollapsedFlows, focus) : internetCollapsedFlows),
     [internetCollapsedFlows, focus])
+  // Entering a focus selects it, so the flow list holds its records; leaving
+  // one clears the selection it made. A focus with no traffic selects nothing.
+  const focusFound = !!focus && focusedFlows.length > 0
+  useEffect(() => {
+    setGraphSelection(focusKey && focusFound ? { type: 'node', nodeId: focusKey } : null)
+  }, [focusKey, focusFound])
 
   // A focused view draws its endpoints as they are: grouping the addons would
   // fold the focus or its neighbors into the group.
@@ -1020,7 +1023,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // Everything that makes it a different view. A refresh doesn't, so a view
   // that was drawn keeps being drawn as its size drifts past the budget.
   const viewKey = JSON.stringify([
-    namespaces, timeRange, focusKey ?? '', groupByWorkload, hideSystem, hideExternal, activeMinConnections,
+    sourcesData?.active ?? '', namespaces, timeRange, focusKey ?? '', groupByWorkload, hideSystem, hideExternal, activeMinConnections,
     [...hiddenNamespaces].sort(), addonMode, aggregateExternal, detectServices, collapseInternet,
     l7Protocol, [...activeMethods].sort(), [...activeStatusRanges].sort(), [...activeVerdicts].sort(), activeDnsPattern,
   ])
@@ -1033,21 +1036,40 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // The table lists the endpoints as they are, so a selection made from it is
   // traced through the same flows.
   const selectableFlows = tooLargeToDraw ? focusedFlows : finalFlows
-  const selectionPairs = useMemo(
-    () => selectionRawPairs(selectableFlows, graphSelection, groupAddons && !tooLargeToDraw ? e => isClusterAddon(e.name, e.namespace) : undefined),
+  const selection = useMemo(
+    () => selectionMatch(selectableFlows, graphSelection, groupAddons && !tooLargeToDraw ? e => isClusterAddon(e.name, e.namespace) : undefined),
     [graphSelection, selectableFlows, groupAddons, tooLargeToDraw])
+  // Ungrouped, a workload focus is drawn as its pods, so no node carries its
+  // id; its records are still the workload's.
+  const focusSelected = !!focus && graphSelection?.type === 'node' && graphSelection.nodeId === focusKey
+  const recordsMatch = useMemo(
+    () => selection ?? (focusSelected && focus?.namespace
+      ? { endpoints: [{ namespace: focus.namespace, name: focus.name, kind: 'Workload' }] }
+      : null),
+    [selection, focusSelected, focus])
+  const selectionPairs = selection && 'pairs' in selection ? selection.pairs : null
+
+  // A selection names something in the representation it was made in: the
+  // table lists endpoints as they are, the graph may group addons. Switching
+  // between them keeps only a focus's selection, which means the same in both.
+  const prevTooLargeRef = useRef(tooLargeToDraw)
+  useEffect(() => {
+    if (prevTooLargeRef.current === tooLargeToDraw) return
+    prevTooLargeRef.current = tooLargeToDraw
+    setGraphSelection(prev => (prev?.type === 'node' && prev.nodeId === focusKey ? prev : null))
+  }, [tooLargeToDraw, focusKey])
 
   const records = useTrafficRecords({
     namespaces,
     since: timeRange,
     excludeNamespaces: hideSystem ? SYSTEM_NAMESPACE_LIST : undefined,
     excludeHost: hideSystem,
-    pairs: selectionPairs,
+    match: recordsMatch,
     enabled: wizardState === 'ready' && !isConnecting && !connectionError,
   })
   // Records come from their own query when the selection could be sent;
   // otherwise the selection is applied to the sample the flows response carries.
-  const recordsEligible = selectionPairs !== null && records.supported && !records.tooLarge
+  const recordsEligible = recordsMatch !== null && records.supported && !records.tooLarge
   const useRecords = recordsEligible && !records.isError
 
   const filteredRecords = useMemo(
@@ -1056,6 +1078,9 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
 
   const sampleSelection = useMemo(() => {
     if (!graphSelection) return filteredRawFlows
+    if (focusSelected && focus && !selection) {
+      return filteredRawFlows.filter(f => touchesFocus(f.source, focus) || touchesFocus(f.destination, focus))
+    }
     if (selectionPairs) {
       const keys = new Set(selectionPairs.map(p => pairKey(p.source, p.destination, p.port, p.directionUnknown)))
       return filteredRawFlows.filter(f =>
@@ -1079,7 +1104,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
       })
     }
     return filteredRawFlows
-  }, [filteredRawFlows, graphSelection, selectionPairs, drawnEndpoint])
+  }, [filteredRawFlows, graphSelection, selectionPairs, drawnEndpoint, focusSelected, focus, selection])
 
   const listFlows = useRecords ? filteredRecords : sampleSelection
 
@@ -1534,9 +1559,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                 />
               )}
             </>
-          ) : focus && (flowsData?.aggregated?.length ?? 0) > 0 ? (
-            // Only when there is traffic, none of it the focus's: with none at
-            // all, the view's own empty and warning states say why.
+          ) : focus && flowsData && !connectionError ? (
             <div className="absolute inset-0 flex items-center justify-center px-4">
               <FocusNotFound
                 focus={focus}
@@ -1547,6 +1570,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                 onShowAll={resetFilters}
                 onShowSystem={() => setHideSystem(false)}
                 onSwitchNamespace={onSetNamespaces && !namespaceLocked && focus.namespace ? () => onSetNamespaces([focus.namespace!]) : undefined}
+                warning={flowsData.warning}
                 onLeave={() => setFocus(null)}
               />
             </div>
@@ -1632,8 +1656,10 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
  * one of them means the workload is quiet: Radar may have hidden its traffic,
  * or never fetched it.
  */
-function FocusNotFound({ focus, hiddenByFilters, systemHidden, outsideNamespaces, window, onShowAll, onShowSystem, onSwitchNamespace, onLeave }: {
+function FocusNotFound({ focus, hiddenByFilters, systemHidden, outsideNamespaces, window, onShowAll, onShowSystem, onSwitchNamespace, warning, onLeave }: {
   focus: TrafficFocus
+  /** The fetch's own warning: with it, absence is not proof of quiet. */
+  warning?: string
   hiddenByFilters: boolean
   systemHidden: boolean
   outsideNamespaces: boolean
@@ -1652,9 +1678,11 @@ function FocusNotFound({ focus, hiddenByFilters, systemHidden, outsideNamespaces
   } else if (systemHidden) {
     body = `${focus.namespace} is a system namespace, and Hide System keeps its traffic from being fetched.`
     action = { label: 'Show system traffic', onClick: onShowSystem }
-  } else if (outsideNamespaces && onSwitchNamespace) {
+  } else if (outsideNamespaces) {
     body = `${focus.namespace} is outside the namespaces in view, so only its traffic with them was fetched, and there was none.`
-    action = { label: `Switch to ${focus.namespace}`, onClick: onSwitchNamespace }
+    if (onSwitchNamespace) action = { label: `Switch to ${focus.namespace}`, onClick: onSwitchNamespace }
+  } else if (warning) {
+    body = `Radar found none in the ${window}, but some traffic may be missing: ${warning}`
   } else {
     body = `Radar saw no traffic to or from it in the ${window}.`
   }

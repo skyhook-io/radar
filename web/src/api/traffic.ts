@@ -106,9 +106,13 @@ export interface TrafficEndpointPair {
  *  so a larger selection is not sent at all. */
 export const MAX_TRAFFIC_MATCH_CHARS = 6_000
 
+/** A selection as the server matches it: its edges, or a node as the one
+ *  endpoint it is, which every one of its edges has at an end. */
+export type TrafficMatch = { pairs: TrafficEndpointPair[] } | { endpoints: TrafficEndpointRef[] }
+
 export interface UseTrafficRecordsOptions extends TrafficScope {
-  /** The selection as raw edges, or null for no selection. */
-  pairs: TrafficEndpointPair[] | null
+  /** The selection, or null for no selection. */
+  match: TrafficMatch | null
   enabled?: boolean
 }
 
@@ -116,9 +120,9 @@ export interface UseTrafficRecordsOptions extends TrafficScope {
 // a capped sample of records, so a selected edge is looked up on its own —
 // otherwise a quiet edge on a busy cluster would show nothing.
 export function useTrafficRecords(options: UseTrafficRecordsOptions) {
-  const { pairs, enabled = true } = options
+  const { enabled = true } = options
   const { guard, gatedKey, support } = useRadarFeature('trafficRecords')
-  const match = pairs && pairs.length > 0 ? JSON.stringify({ pairs }) : null
+  const match = options.match ? JSON.stringify(options.match) : null
   const tooLarge = match !== null && encodeURIComponent(match).length > MAX_TRAFFIC_MATCH_CHARS
   const params = trafficScopeParams(options)
   if (match && !tooLarge) params.set('match', match)

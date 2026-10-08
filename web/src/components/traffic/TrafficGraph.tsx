@@ -23,7 +23,7 @@ import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
 import { Tooltip } from '../ui/Tooltip'
-import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, parseFocus, type TrafficFocus } from './trafficFilters'
+import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, type TrafficFocus } from './trafficFilters'
 
 const elk = new ELK()
 
@@ -1655,8 +1655,9 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
   }
 
   // The view owns the selection: it is set from outside the graph too (a focus
-  // selects its node, the connections table an edge). Shown once the layout
-  // holds what it names.
+  // selects its node, the connections table an edge). The details are read
+  // from the current layout, so a refresh updates them and a node that is no
+  // longer drawn closes them.
   useEffect(() => {
     if (viewSelection === undefined) return
     if (!viewSelection) {
@@ -1665,8 +1666,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
     }
     if (viewSelection.type === 'node' && viewSelection.nodeId) {
       const node = layoutedNodes.find(n => n.id === viewSelection.nodeId)
-      setSelection(prev => (prev?.type === 'node' && prev.id === viewSelection.nodeId) ? prev
-        : node ? { type: 'node', id: node.id, data: node.data } : null)
+      setSelection(node ? { type: 'node', id: node.id, data: node.data } : null)
       return
     }
     const edge = layoutedEdges.find(e => {
@@ -1675,8 +1675,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
         (viewSelection.port === undefined || flow?.port === viewSelection.port) &&
         !!flow?.directionUnknown === !!viewSelection.directionUnknown
     })
-    setSelection(prev => (prev?.type === 'edge' && prev.id === edge?.id) ? prev
-      : edge ? edgeSelection(edge, flowByEdgeId.get(edge.id)) : null)
+    setSelection(edge ? edgeSelection(edge, flowByEdgeId.get(edge.id)) : null)
   }, [viewSelection, layoutedNodes, layoutedEdges, flowByEdgeId])
 
   // Update nodes and edges when layout changes
@@ -1749,8 +1748,10 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
           onClose={onPaneClick}
           onFocus={onFocus && selection.type === 'node' && selection.id !== focusedId && isFocusable(selection.data as TrafficNodeData)
             ? () => {
-                const focus = parseFocus(selection.id)
-                if (focus) onFocus(focus)
+                // The id is "ns/name"; an endpoint with no namespace is its
+                // name alone, which may hold a slash of its own.
+                const ns = (selection.data as TrafficNodeData).namespace || undefined
+                onFocus({ namespace: ns, name: ns ? selection.id.slice(ns.length + 1) : selection.id })
               }
             : undefined}
           flows={flows}

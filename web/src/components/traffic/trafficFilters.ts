@@ -1,5 +1,5 @@
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import type { TrafficEndpointPair } from '../../api/traffic'
+import type { TrafficEndpointPair, TrafficEndpointRef, TrafficMatch } from '../../api/traffic'
 import type { TrafficGraphSelection } from './TrafficGraph'
 
 /**
@@ -398,6 +398,32 @@ export function selectionRawPairs(
 }
 
 /**
+ * What to ask the server for, for the records behind a selection. A node that
+ * is one server endpoint is sent as that endpoint: a busy node has too many
+ * edges to name each within a URL. Anything else — an edge, a node merged
+ * from several endpoints — is sent as its edges.
+ */
+export function selectionMatch(
+  flows: GraphFlow[],
+  selection: TrafficGraphSelection | null,
+  inAddonGroup?: (e: { namespace?: string; name: string }) => boolean,
+): TrafficMatch | null {
+  const pairs = selectionRawPairs(flows, selection, inAddonGroup)
+  if (!pairs) return null
+  if (selection?.type !== 'node') return { pairs }
+  const refKey = (r: TrafficEndpointRef) => `${graphEndpointId(r)}|${r.kind ?? ''}`
+  let only: TrafficEndpointRef | undefined
+  for (const p of pairs) {
+    const side = graphEndpointId(p.source) === selection.nodeId ? p.source
+      : graphEndpointId(p.destination) === selection.nodeId ? p.destination
+        : undefined
+    if (!side || (only && refKey(side) !== refKey(only))) return { pairs }
+    only = side
+  }
+  return only ? { endpoints: [only] } : { pairs }
+}
+
+/**
  * How costly the graph is to draw. The layout runs on the main thread and its
  * cost grows faster than linearly, edges more than nodes, so edges count
  * double, as Weave Scope weighs them. Laying out whole namespaces of a dense
@@ -439,16 +465,23 @@ export interface TrafficFocus {
   name: string
 }
 
+/** The focus as the URL carries it: "ns/name", or "/name" for an endpoint
+ *  with no namespace, whose name can itself hold a slash (a CIDR). */
+export function focusParam(focus: TrafficFocus): string {
+  return `${focus.namespace ?? ''}/${focus.name}`
+}
+
 export function parseFocus(value: string | null): TrafficFocus | null {
   if (!value) return null
   const slash = value.indexOf('/')
-  if (slash < 0) return { name: value }
+  if (slash < 0) return null
   const namespace = value.slice(0, slash)
   const name = value.slice(slash + 1)
   if (!name) return null
   return namespace ? { namespace, name } : { name }
 }
 
+/** The graph's id for the focused node. */
 export function focusId(focus: TrafficFocus): string {
   return graphEndpointId(focus)
 }

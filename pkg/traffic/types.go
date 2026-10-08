@@ -197,9 +197,12 @@ type EndpointPair struct {
 }
 
 // FlowMatch selects the flows behind a graph node or edge: those between one
-// of the pairs, in the direction the aggregation recorded them.
+// of the pairs, in the direction the aggregation recorded them, or with one
+// of the endpoints at either end. A node is sent as its endpoint: a busy
+// one has too many edges to name each.
 type FlowMatch struct {
-	Pairs []EndpointPair `json:"pairs"`
+	Pairs     []EndpointPair `json:"pairs,omitempty"`
+	Endpoints []EndpointRef  `json:"endpoints,omitempty"`
 }
 
 // Matches reports whether a flow belongs to the selection.
@@ -213,15 +216,20 @@ func (m *FlowMatch) Matches(f Flow) bool {
 			return true
 		}
 	}
+	for _, e := range m.Endpoints {
+		if e.matches(f.Source) || e.matches(f.Destination) {
+			return true
+		}
+	}
 	return false
 }
 
-// Size is how many pairs the selection carries.
+// Size is how many pairs and endpoints the selection carries.
 func (m *FlowMatch) Size() int {
 	if m == nil {
 		return 0
 	}
-	return len(m.Pairs)
+	return len(m.Pairs) + len(m.Endpoints)
 }
 
 // FlowsResponse contains the flows and metadata.

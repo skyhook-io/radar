@@ -100,6 +100,18 @@ func TestHubbleMatchWhitelist(t *testing.T) {
 		}
 	})
 
+	t.Run("an endpoint is sent as its pods on either side", func(t *testing.T) {
+		gw := EndpointRef{Namespace: "edge", Name: "gateway", Kind: EndpointKindWorkload, WorkloadKind: "Deployment"}
+		f := hubbleMatchWhitelist(&FlowMatch{Endpoints: []EndpointRef{gw}})
+		if len(f) != 2 || !slices.Equal(f[0].GetSourcePod(), []string{"edge/gateway-"}) || len(f[0].GetDestinationPod()) != 0 ||
+			!slices.Equal(f[1].GetDestinationPod(), []string{"edge/gateway-"}) || len(f[1].GetSourcePod()) != 0 {
+			t.Errorf("filters = %v, want the workload's pods as source or as destination", f)
+		}
+		if f := hubbleMatchWhitelist(&FlowMatch{Endpoints: []EndpointRef{gw, {Name: "world", Kind: EndpointKindExternal}}}); f != nil {
+			t.Errorf("filters = %v, want none when one endpoint cannot be named: it would be dropped at the node", f)
+		}
+	})
+
 	t.Run("a selection replaces the namespace whitelist", func(t *testing.T) {
 		req := hubbleFlowsRequest(FlowOptions{Namespaces: []string{"a"}, Match: &FlowMatch{Pairs: []EndpointPair{{Source: pod("a", "web-1"), Destination: pod("a", "db-0")}}}}, false)
 		if wl := req.GetWhitelist(); len(wl) != 2 || !slices.Equal(wl[0].GetSourcePod(), []string{"a/web-1"}) {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, connectionRows, type GraphFlow } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, connectionRows, selectionMatch, type GraphFlow } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -421,11 +421,13 @@ function edge(src: string, dst: string, extra: Partial<AggregatedFlow> = {}): Ag
 
 describe('focus', () => {
   it('round-trips through the URL value', () => {
-    expect(parseFocus('shop/checkout')).toEqual({ namespace: 'shop', name: 'checkout' })
+    for (const focus of [{ namespace: 'shop', name: 'checkout' }, { name: 'api.stripe.com' }, { name: '10.0.0.0/8' }]) {
+      expect(parseFocus(focusParam(focus))).toEqual(focus)
+    }
     expect(focusId(parseFocus('shop/checkout')!)).toBe('shop/checkout')
-    // External endpoints have no namespace.
-    expect(parseFocus('api.stripe.com')).toEqual({ name: 'api.stripe.com' })
+    expect(focusId({ name: '10.0.0.0/8' })).toBe('10.0.0.0/8')
     expect(parseFocus('shop/')).toBeNull()
+    expect(parseFocus('checkout')).toBeNull()
     expect(parseFocus(null)).toBeNull()
   })
 
@@ -518,5 +520,25 @@ describe('mergeFlowVolume problem counts', () => {
     expect(merged.httpStatusCounts).toEqual({ '5xx': 4, '2xx': 4 })
     expect(merged.verdictCounts).toEqual({ dropped: 2, forwarded: 5 })
     expect(a.httpStatusCounts).toEqual({ '5xx': 1 })
+  })
+})
+
+describe('selectionMatch', () => {
+  const traced = (f: AggregatedFlow): GraphFlow => ({ ...f, rawPairs: [endpointPair(f)] })
+
+  // A busy node has more edges than a URL can name; as one endpoint it is
+  // one entry however many it has.
+  it('sends a node that is one server endpoint as that endpoint', () => {
+    const flows = Array.from({ length: 400 }, (_, i) => traced(edge('edge/gateway', `t/svc-${i}`)))
+    const m = selectionMatch(flows, { type: 'node', nodeId: 'edge/gateway' })
+    expect(m).toEqual({ endpoints: [expect.objectContaining({ namespace: 'edge', name: 'gateway' })] })
+  })
+
+  it('sends an edge, and a node merged from several endpoints, as edges', () => {
+    const a = traced(edge('a/web', 'a/db'))
+    expect(selectionMatch([a], { type: 'edge', sourceId: 'a/web', destId: 'a/db', port: 80 })).toHaveProperty('pairs')
+    // An external name the graph merged from two addresses.
+    const merged: GraphFlow = { ...edge('a/web', 'MongoDB'), rawPairs: [endpointPair(edge('a/web', '10.0.0.1')), endpointPair(edge('a/web', '10.0.0.2'))] }
+    expect(selectionMatch([merged], { type: 'node', nodeId: 'MongoDB' })).toHaveProperty('pairs')
   })
 })
