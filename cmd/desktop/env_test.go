@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -162,6 +163,7 @@ func TestEnrichEnvPrecedenceAndDiagnostics(t *testing.T) {
 // A login shell can answer without a folder the user's terminal has. The common
 // tool folders still get added, after everything the shell listed.
 func TestEnrichPathAddsCommonFoldersTheShellMissed(t *testing.T) {
+	skipUnixPaths(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	localBin := filepath.Join(home, ".local", "bin")
@@ -189,6 +191,7 @@ func TestEnrichPathAddsCommonFoldersTheShellMissed(t *testing.T) {
 }
 
 func TestEnrichPathWithoutAShellAnswerKeepsTheLaunchPathFirst(t *testing.T) {
+	skipUnixPaths(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	localBin := filepath.Join(home, ".local", "bin")
@@ -208,6 +211,7 @@ func TestEnrichPathWithoutAShellAnswerKeepsTheLaunchPathFirst(t *testing.T) {
 // Entries are matched whole, and nothing relative is added: a child process
 // would resolve "." or "node_modules/.bin" against its own working directory.
 func TestMergePathListsMatchesWholeEntries(t *testing.T) {
+	skipUnixPaths(t)
 	merged, added := mergePathLists(
 		[]string{"/usr/local/bin2", "/a/", "", "/tools/current/../bin"},
 		[]string{"/usr/local/bin", "/a", "/b", ".", "node_modules/.bin", "", "/tools/bin"},
@@ -219,5 +223,13 @@ func TestMergePathListsMatchesWholeEntries(t *testing.T) {
 	}
 	if want := []string{"/usr/local/bin", "/b", "/tools/bin"}; !slices.Equal(added, want) {
 		t.Errorf("added = %v, want %v", added, want)
+	}
+}
+
+// The PATH tests use Unix paths, which aren't absolute on Windows.
+func skipUnixPaths(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("uses Unix paths")
 	}
 }

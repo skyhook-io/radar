@@ -45,10 +45,13 @@ var shellEnvPrefixes = []string{
 // set in .zshrc/.bashrc but not available to macOS .app bundles or
 // Linux desktop applications.
 //
-// Windows is skipped: apps started from the shell there already get the
-// user's full PATH, and there is no login shell to ask.
+// On Windows only the common tool folders are added: there is no login shell
+// to ask, and apps already get the user's PATH.
 func enrichEnv() {
 	if runtime.GOOS == "windows" {
+		// No login shell to ask, and Windows already gives apps the user's
+		// PATH. The common tool folders still fill gaps, as elsewhere.
+		enrichPath("")
 		return
 	}
 	originalKubeconfig := os.Getenv("KUBECONFIG")
@@ -233,12 +236,17 @@ func enrichPath(shellPath string) {
 	if shellPath == "" {
 		merged, added := mergePathLists(launch, common)
 		os.Setenv("PATH", strings.Join(merged, string(os.PathListSeparator)))
+		why := " (shell detection failed)"
+		if runtime.GOOS == "windows" {
+			why = ""
+		}
 		if len(added) == 0 {
-			log.Printf("PATH enrichment: shell detection failed and no common tool folders were found; auth plugins like gke-gcloud-auth-plugin may not be found")
+			if why != "" {
+				log.Printf("PATH enrichment: shell detection failed and no common tool folders were found; auth plugins like gke-gcloud-auth-plugin may not be found")
+			}
 			return
 		}
-		log.Printf("PATH enriched with %d common tool folders (shell detection failed): %s",
-			len(added), strings.Join(added, ", "))
+		log.Printf("PATH enriched with %d common tool folders%s: %s", len(added), why, strings.Join(added, ", "))
 		return
 	}
 	shell := filepath.SplitList(shellPath)
