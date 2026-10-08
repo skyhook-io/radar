@@ -111,15 +111,20 @@ export function useGitOpsWriteGuard({
 
   const targetRelationshipsMissing = needsTarget && targetQuery.data != null && targetQuery.relationships == null
   const unresolvedDeclaredManager = Boolean(declaredManager) && !managed && !lookupPending
+  const unknownOwner = "so it can't tell whether a GitOps tool or Helm manages it."
   const ownershipError = targetLookupFailed
-    ? "Radar couldn't read the resource"
+    ? `Radar couldn't read this resource, ${unknownOwner}`
     : ownership.lookupError
-      ? "Radar couldn't resolve the resource's GitOps ownership"
-      : relationshipsUnavailable || targetRelationshipsMissing
-        ? "its relationships aren't mapped yet"
+      ? `Radar couldn't read the resource that owns this one, ${unknownOwner}`
+      : relationshipsUnavailable || targetRelationshipsMissing || ownership.relationshipsUnavailable
+        ? `Radar hasn't mapped this resource's owners yet, ${unknownOwner}`
         : unresolvedDeclaredManager
-          ? `the server reports it is managed by ${declaredManager}, but Radar couldn't find that owner`
+          ? `Its labels mark it as managed by ${declaredManager}, but Radar couldn't find the owner to check whether it would revert this change.`
           : null
+
+  // React Query keeps earlier data after a failed refetch, and while the query
+  // is disabled (an unreadable owner); an exemption it carried may no longer hold.
+  const evidence = evidenceQuery.isError || !canFetchEvidence ? undefined : evidenceQuery.data
 
   const guard = useMemo(
     () =>
@@ -132,9 +137,7 @@ export function useGitOpsWriteGuard({
             ownerPending: lookupPending || (canFetchEvidence && (evidenceQuery.isPending || evidenceQuery.isFetching)),
             ownershipError,
             ownerMatchedByName: ownership.ownerMatchedByName,
-            // After a failed refetch React Query keeps the earlier data; an
-            // exemption it carried may no longer hold.
-            evidence: evidenceQuery.isError ? undefined : evidenceQuery.data,
+            evidence,
             evidenceError: evidenceQuery.error instanceof Error ? evidenceQuery.error.message : null,
             writes: JSON.parse(writesKey),
           })
@@ -154,14 +157,13 @@ export function useGitOpsWriteGuard({
       canFetchEvidence,
       evidenceQuery.isPending,
       evidenceQuery.isFetching,
-      evidenceQuery.data,
+      evidence,
       evidenceQuery.error,
       ownershipError,
       ownership.ownerMatchedByName,
-      evidenceQuery.isError,
       writesKey,
     ],
   )
 
-  return { guard, ownership, evidence: evidenceQuery.data }
+  return { guard, ownership, evidence }
 }

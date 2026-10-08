@@ -33,6 +33,9 @@ export interface ResolvedGitOpsOwner {
   inheritedLookupRef: ResourceRef | null
   lookupPending: boolean
   lookupError: boolean
+  /** The parent was read but the server sent no relationships for it (its
+   *  topology isn't built yet), so an inherited owner is unknown, not absent. */
+  relationshipsUnavailable: boolean
 }
 
 // Resolves who manages a resource: its own GitOps/Helm tracking metadata or,
@@ -135,6 +138,7 @@ export function useResolvedGitOpsOwner({
     inheritedLookupRef,
     lookupPending: Boolean((inheritedLookupRef && inherited.isPending) || (shouldResolveArgoNamespace && argoQuery.isPending)),
     lookupError: Boolean(inheritedLookupRef && inherited.isError),
+    relationshipsUnavailable: Boolean(inheritedLookupRef && inherited.data && !inherited.data.relationships),
   }
 }
 

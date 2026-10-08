@@ -17,7 +17,7 @@ const writes = [{ scope: "spec" as const }];
 const guardWith = (resolved: boolean) =>
   resolved
     ? evaluateGitOpsWriteGuard({ target, owner, writes, evidence: { uid: "u", resourceVersion: "1", owner: null, policy: { tool: "argocd", auto: true, selfHeal: true, prune: false, suspended: null }, paths: [] } })
-    : evaluateGitOpsWriteGuard({ target, owner: null, writes, ownershipError: "its relationships aren't mapped yet" });
+    : evaluateGitOpsWriteGuard({ target, owner: null, writes, ownershipError: "Radar hasn't mapped this resource's owners yet, so it can't tell whether a GitOps tool or Helm manages it." });
 
 let container: HTMLDivElement;
 afterEach(() => container?.remove());

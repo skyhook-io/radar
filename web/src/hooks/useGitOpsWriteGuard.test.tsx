@@ -8,11 +8,12 @@ import { useGitOpsWriteGuard, type GitOpsWriteGuardState } from './useGitOpsWrit
 
 const mocks = vi.hoisted(() => ({
   applications: { data: undefined as unknown[] | undefined, isPending: true, isError: false },
+  inherited: { data: undefined as unknown, isPending: false, isError: false },
   evidence: vi.fn(),
 }))
 vi.mock('../api/client', () => ({
   useResource: () => ({ data: undefined, isLoading: false, isError: false }),
-  useResourceWithRelationships: () => ({ data: undefined, isPending: false, isError: false }),
+  useResourceWithRelationships: () => mocks.inherited,
   useResources: () => mocks.applications,
   useRadarFeature: () => ({ guard: (fn: () => unknown) => fn(), gatedKey: [] }),
   fetchGitOpsWriteEvidence: (...args: unknown[]) => mocks.evidence(...args),
@@ -22,6 +23,7 @@ afterEach(() => {
   mocks.applications.data = undefined
   mocks.applications.isPending = true
   mocks.applications.isError = false
+  mocks.inherited = { data: undefined, isPending: false, isError: false }
   mocks.evidence.mockReset()
 })
 
@@ -105,7 +107,7 @@ it('reads missing relationships as unknown ownership, not as unmanaged', async (
     expect(h.ref.state!.guard?.pending).toBe(false)
     expect(h.ref.state!.guard?.level).toBe('may-revert')
     expect(h.ref.state!.guard?.requiresAck).toBe(true)
-    expect(h.ref.state!.guard?.ownershipError).toContain('relationships')
+    expect(h.ref.state!.guard?.ownershipError).toContain("hasn't mapped this resource's owners")
     expect(canConfirmGitOpsWrite(h.ref.state!.guard, false)).toBe(false)
   } finally {
     await h.cleanup()
@@ -182,7 +184,53 @@ it('does not keep an exemption after a refetch fails', async () => {
     await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
     expect(h.ref.state!.guard?.level).toBe('info')
     await act(async () => { await h.queryClient.invalidateQueries({ queryKey: ['gitops-write-evidence'] }) })
+    await act(async () => vi.waitFor(() => {
+      expect(h.ref.state!.guard?.pending).toBe(false)
+      expect(h.ref.state!.guard?.level).toBe('may-revert')
+    }))
+    expect(h.ref.state!.guard?.requiresAck).toBe(true)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+const pod = { kind: 'Pod', group: '', namespace: 'prod', name: 'web-1-abc' }
+const podRelationships = {
+  owner: { kind: 'ReplicaSet', group: 'apps', namespace: 'prod', name: 'web-1' },
+  deployment: { kind: 'Deployment', group: 'apps', namespace: 'prod', name: 'web' },
+}
+
+it('reads a parent without relationships as unknown ownership, not as unmanaged', async () => {
+  mocks.inherited = { data: { resource: { metadata: { labels: { 'kustomize.toolkit.fluxcd.io/name': 'apps' } } } }, isPending: false, isError: false }
+  const h = await renderGuard({ target: pod, resource: {}, relationships: podRelationships, writes: replicas })
+  try {
+    expect(mocks.evidence).not.toHaveBeenCalled()
+    expect(h.ref.state!.guard?.level).toBe('may-revert')
+    expect(h.ref.state!.guard?.requiresAck).toBe(true)
+    expect(h.ref.state!.guard?.ownershipError).toContain("hasn't mapped this resource's owners")
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('does not keep an exemption after the parent lookup fails', async () => {
+  const app = { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }
+  mocks.inherited = { data: { resource: {}, relationships: { managedBy: [app] } }, isPending: false, isError: false }
+  mocks.evidence.mockResolvedValue({
+    uid: 'u',
+    resourceVersion: '1',
+    owner: app,
+    policy: { tool: 'argocd', auto: true, selfHeal: true, prune: false, suspended: null, respectIgnoreDifferences: true },
+    paths: [{ path: 'spec.replicas', lastApplied: 'present', ownedBy: [], ownedByGitOps: false, ignored: 'effective', ignoredBy: 'spec.ignoreDifferences' }],
+  })
+  const h = await renderGuard({ target: pod, resource: {}, relationships: podRelationships, writes: replicas })
+  try {
     await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(h.ref.state!.guard?.level).toBe('info')
+    // React Query keeps the parent's data after a failed refetch.
+    mocks.inherited = { ...mocks.inherited, isError: true }
+    await h.rerender()
+    expect(h.ref.state!.guard?.pending).toBe(false)
     expect(h.ref.state!.guard?.level).toBe('may-revert')
     expect(h.ref.state!.guard?.requiresAck).toBe(true)
   } finally {

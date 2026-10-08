@@ -271,7 +271,7 @@ Radar's caches strip `managedFields` and the last-applied annotation, so the bro
 
 It never returns managedFields or last-applied content, only these facts. Bodies are capped at 16 KiB (413) and at 64 paths; unknown fields are rejected (400). Kubernetes 403/404 pass through.
 
-The classification is `evaluateGitOpsWriteGuard` in k8s-ui (`utils/gitops-write-guard.ts`), shown by `GitOpsWriteWarning`; the hook is `web/src/hooks/useGitOpsWriteGuard.ts`. Ownership comes from the resource's relationships; when the server hasn't built them yet, or it reports a manager the browser can't resolve (the Diagnose run's `managedBy`), ownership is treated as unknown: **may revert**, with an acknowledgment. A Radar without the endpoint (no `gitopsWriteEvidence` capability) gets the same conservative warning. The copy never promises a change won't be reverted.
+The classification is `evaluateGitOpsWriteGuard` in k8s-ui (`utils/gitops-write-guard.ts`), shown by `GitOpsWriteWarning`; the hook is `web/src/hooks/useGitOpsWriteGuard.ts`. Ownership comes from the resource's relationships, or its parent workload's when it carries no owner of its own (a Pod inherits its Deployment's). When the server hasn't built either yet, the parent can't be read, or the server reports a manager the browser can't resolve (the Diagnose run's `managedBy`), ownership is treated as unknown: **may revert**, with an acknowledgment. A Radar without the endpoint (no `gitopsWriteEvidence` capability) gets the same conservative warning. The copy never promises a change won't be reverted.
 
 ## MCP integration
 

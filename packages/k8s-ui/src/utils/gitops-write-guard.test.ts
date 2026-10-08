@@ -279,8 +279,10 @@ describe('evaluateGitOpsWriteGuard', () => {
   })
 
   it('unverifiable ownership needs acknowledgement', () => {
-    const g = evaluateGitOpsWriteGuard({ target, owner: null, ownershipError: 'lookup failed', writes: [hibernate] })
+    const why = "Radar couldn't read this resource, so it can't tell whether a GitOps tool or Helm manages it."
+    const g = evaluateGitOpsWriteGuard({ target, owner: null, ownershipError: why, writes: [hibernate] })
     expect(g.requiresAck).toBe(true)
+    expect(g.summary).toBe(`A GitOps tool may revert this change. ${why}`)
   })
 
   it('reports the worst write and keeps per-write reasons', () => {

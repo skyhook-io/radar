@@ -114,7 +114,7 @@ export interface GitOpsWriteGuardInput {
   operatorOwner?: GitOpsWriteOperatorOwner | null
   /** Ownership or evidence is still loading. */
   ownerPending?: boolean
-  /** The host could not determine ownership at all. */
+  /** The host could not determine ownership: one sentence saying why, shown as the reason. */
   ownershipError?: string | null
   /** The owner was matched by name only (an Argo CD tracking label without a
    *  namespace), so its policy can't waive an acknowledgment. */
@@ -400,12 +400,11 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
     return write.scope === 'delete' ? classifyDelete(ctx) : classifyFieldWrite(ctx, write)
   }
   if (input.helmRelease) {
-    const release = `${input.helmRelease.namespace}/${input.helmRelease.name}`
     if (write.scope === 'create-child') {
-      return { level: 'info', reason: `A new object isn't part of Helm release ${release}, so an upgrade is not expected to revert it.` }
+      return { level: 'info', reason: "A new object isn't part of the release, so a Helm upgrade is not expected to revert it." }
     }
     if (write.scope === 'delete') {
-      return { level: 'may-revert', reason: `The next helm upgrade or rollback of ${release} will recreate it.` }
+      return { level: 'may-revert', reason: 'The next Helm upgrade or rollback will recreate it.' }
     }
     const helmOwned = (write.paths ?? []).some((path) =>
       input.evidence?.paths.find((p) => p.path === path)?.ownedBy.some((o) => o.tool === 'helm'),
@@ -413,14 +412,14 @@ function classifyWrite(input: GitOpsWriteGuardInput, owner: GitOpsOwnerRef | nul
     return {
       level: 'may-revert',
       reason: helmOwned
-        ? `Helm release ${release} set this field; the next helm upgrade or rollback will overwrite it.`
-        : `If the chart sets this field, the next helm upgrade or rollback of ${release} will overwrite it.`,
+        ? 'Helm set this field; the next Helm upgrade or rollback will overwrite it.'
+        : 'If the chart sets this field, the next Helm upgrade or rollback will overwrite it.',
     }
   }
   if (input.ownershipError && write.scope !== 'create-child') {
     return {
       level: 'may-revert',
-      reason: `Radar couldn't verify whether a GitOps tool manages this resource (${input.ownershipError}). If one does, it may revert this change.`,
+      reason: input.ownershipError,
     }
   }
   return { level: 'none', reason: '' }
