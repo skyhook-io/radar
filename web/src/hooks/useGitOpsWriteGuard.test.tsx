@@ -395,3 +395,33 @@ it('keeps Update disabled until the host has judged the containers being changed
     host.remove()
   }
 })
+
+it("doesn't hold Update for a host that reports the selection without judging it", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const unmanaged = { owner: null, helmRelease: null, pending: false, level: 'none', perWrite: [], summary: '', syncPolicy: null, requiresAck: false, ownershipError: null } as never
+  const onLoad = vi.fn(async (): Promise<WorkloadImageInventory> => ({
+    target: { kind: 'Deployment', group: 'apps', resource: 'deployments', namespace: 'prod', name: 'web' },
+    containers: [{ type: 'container', name: 'app', image: 'app:old' }],
+    behavior: { type: 'rolling' },
+  }))
+  try {
+    await act(async () => root.render(<SetImageDialog open workloadLabel="Deployment" workloadName="web" workloadResource="deployments" ownership={{ guard: unmanaged, onSelectionChange: () => {} }} onLoad={onLoad} onClose={() => {}} onConfirm={async () => {}} />))
+    const input = await vi.waitFor(() => {
+      const el = document.querySelector('input[aria-label^="New image"]') as HTMLInputElement | null
+      expect(el).not.toBeNull()
+      return el!
+    })
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'app:new')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const update = [...document.querySelectorAll('button')].find((b) => /^Update \d+ image/.test(b.textContent ?? '')) as HTMLButtonElement | undefined
+    expect(update?.disabled).toBe(false)
+  } finally {
+    await act(async () => root.unmount())
+    host.remove()
+  }
+})

@@ -29,8 +29,8 @@ export interface SetImageOwnership {
    *  guard can judge exactly those (null until the containers load). */
   onSelectionChange?: (selection: SetImageSelection | null) => void
   /** {@link setImageSelectionKey} of the selection `guard` was evaluated
-   *  for. With {@link onSelectionChange}, Update waits until it matches the
-   *  dialog's current selection. */
+   *  for. When set, Update waits until it matches the dialog's current
+   *  selection. */
   selectionKey?: string
 }
 
@@ -280,7 +280,7 @@ export function SetImageDialog({
   const guard = ownership?.guard
   // The host evaluates the guard after it hears of an edit; until then the
   // verdict on screen is for other containers.
-  const guardCurrent = !onSelectionChange || ownership?.selectionKey === selectionKey
+  const guardCurrent = ownership?.selectionKey === undefined || ownership.selectionKey === selectionKey
   const guardKey = gitOpsWriteGuardKey(guard)
   const acknowledged = Boolean(guardKey) && ackedKey === guardKey
   const canSubmit = canSubmitImageUpdates({

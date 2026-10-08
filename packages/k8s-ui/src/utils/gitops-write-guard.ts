@@ -197,11 +197,12 @@ export function guardToolLabel(guard: Pick<GitOpsWriteGuard, 'owner' | 'helmRele
   return 'a GitOps tool'
 }
 
-/** Identifies what an acknowledgment was given for; it changes when the verdict, owner or reasons do. */
+/** Identifies what an acknowledgment was given for; it changes when the
+ *  verdict, owner, reasons or the fields being written do. */
 export function gitOpsWriteGuardKey(guard: GitOpsWriteGuard | undefined): string {
   if (!guard || guard.pending) return ''
   const owner = guard.owner ? `${guard.owner.kind}/${guard.owner.namespace ?? ''}/${guard.owner.name}` : guard.helmRelease ? `helm/${guard.helmRelease.namespace}/${guard.helmRelease.name}` : ''
-  return [guard.level, owner, guard.ownershipError ?? '', ...guard.perWrite.map((w) => `${w.level}:${w.reason}`)].join('|')
+  return [guard.level, owner, guard.ownershipError ?? '', ...guard.perWrite.map((w) => `${w.write.scope}:${(w.write.paths ?? []).join(',')}:${w.level}:${w.reason}`)].join('|')
 }
 
 export function canConfirmGitOpsWrite(guard: GitOpsWriteGuard | undefined, acked: boolean): boolean {
