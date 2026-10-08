@@ -471,6 +471,17 @@ describe('endpoint search', () => {
     expect(all.indexOf('checkout-worker')).toBeLessThan(all.indexOf('cart'))
   })
 
+  it('offers the workload of pods drawn ungrouped, as well as the pods', () => {
+    const pod = (name: string) => ({ namespace: 'shop', name, kind: 'Pod', workload: 'checkout', workloadKind: 'Deployment' })
+    const flows = [
+      { ...edge('shop/web', 'shop/db'), source: pod('checkout-1') },
+      { ...edge('shop/web', 'shop/db'), source: pod('checkout-2') },
+    ]
+    const found = searchEndpoints(endpointSummaries(flows), 'checkout')
+    expect(found[0]).toMatchObject({ id: 'shop/checkout', kind: 'Workload', volume: 2 })
+    expect(found.map(s => s.name)).toContain('checkout-1')
+  })
+
   it('finds nothing for a name with no traffic', () => {
     expect(searchEndpoints(summaries, 'payments')).toEqual([])
   })
@@ -533,6 +544,12 @@ describe('selectionMatch', () => {
     const node = { type: 'node' as const, nodeId: 'edge/gateway' }
     const m = selectionMatch(selectionRawPairs(flows, node), node)
     expect(m).toEqual({ endpoints: [expect.objectContaining({ namespace: 'edge', name: 'gateway' })] })
+  })
+
+  it('sends a node the source cannot name, such as an external one, as its edges', () => {
+    const flows = [traced(edge('a/web', 'api.stripe.com')), traced(edge('a/job', 'api.stripe.com'))]
+    const node = { type: 'node' as const, nodeId: 'api.stripe.com' }
+    expect(selectionMatch(selectionRawPairs(flows, node), node)).toHaveProperty('pairs')
   })
 
   it('sends an edge, and a node merged from several endpoints, as edges', () => {

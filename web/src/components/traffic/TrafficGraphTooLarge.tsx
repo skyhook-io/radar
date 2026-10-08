@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, Network } from 'lucide-react'
 import { pluralNoun } from '@skyhook-io/k8s-ui'
+import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import type { AggregatedFlow } from '../../types'
 import { LargeClusterNamespacePicker } from '../shared/LargeClusterNamespacePicker'
 import { TrafficConnectionsTable } from './TrafficConnectionsTable'
@@ -89,7 +90,7 @@ export function TrafficGraphTooLarge(props: TrafficGraphTooLargeProps) {
                           if (!ns) return null
                           return (
                             <span className="flex shrink-0 items-center gap-1.5 text-[10px] tabular-nums text-theme-text-tertiary">
-                              {ns.drops + ns.errors > 0 && <span className="text-red-400">{(ns.drops + ns.errors).toLocaleString()} failing</span>}
+                              {ns.drops + ns.errors > 0 && <span className={SEVERITY_TEXT.error}>{(ns.drops + ns.errors).toLocaleString()} failing</span>}
                               <span>{count(ns.endpoints, 'endpoint')}</span>
                             </span>
                           )

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { clsx } from 'clsx'
 import { Crosshair, X } from 'lucide-react'
-import { Input } from '@skyhook-io/k8s-ui'
+import { Badge, Input } from '@skyhook-io/k8s-ui'
+import { useNavCustomization } from '../../context/NavCustomization'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
 import { formatRate, searchEndpoints, type EndpointSummary, type TrafficFocus } from './trafficFilters'
 
@@ -47,6 +48,8 @@ export function TrafficFocusSearch({ endpoints, onFocus, isRateBased, overlayCon
 
   // Only the toolbar instance owns the shortcut: the panel's button is a
   // second way in while the graph isn't drawn, and two registrations would race.
+  // An embedding host (Radar Hub) binds / to its own search.
+  const { embedded } = useNavCustomization()
   useRegisterShortcut({
     id: 'traffic-focus-search',
     keys: '/',
@@ -54,7 +57,7 @@ export function TrafficFocusSearch({ endpoints, onFocus, isRateBased, overlayCon
     category: 'Search',
     scope: 'traffic',
     handler: open,
-    enabled: variant === 'toolbar',
+    enabled: variant === 'toolbar' && !embedded,
   })
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -143,8 +146,8 @@ export function TrafficFocusSearch({ endpoints, onFocus, isRateBased, overlayCon
                     {e.namespace && <div className="text-xs text-theme-text-tertiary truncate">{e.namespace}</div>}
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0 text-[10px] tabular-nums">
-                    {e.drops > 0 && <span className="px-1.5 py-0.5 rounded bg-red-500/15 text-red-400">{e.drops.toLocaleString()} dropped</span>}
-                    {e.errors > 0 && <span className="px-1.5 py-0.5 rounded bg-red-500/15 text-red-400">{isRateBased ? `${formatRate(e.errors)}/s` : e.errors.toLocaleString()} 5xx</span>}
+                    {e.drops > 0 && <Badge severity="error" size="sm">{e.drops.toLocaleString()} dropped</Badge>}
+                    {e.errors > 0 && <Badge severity="error" size="sm">{isRateBased ? `${formatRate(e.errors)}/s` : e.errors.toLocaleString()} 5xx</Badge>}
                   </div>
                 </button>
               ))}

@@ -3,6 +3,7 @@ import { Virtuoso } from 'react-virtuoso'
 import { clsx } from 'clsx'
 import { ArrowRight, Crosshair, Minus } from 'lucide-react'
 import type { AggregatedFlow } from '../../types'
+import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import type { TrafficGraphSelection } from './TrafficGraph'
 import {
@@ -117,10 +118,10 @@ export function TrafficConnectionsTable({ flows, isRateBased, selection, onSelec
               <span className="text-right tabular-nums text-theme-text-secondary">
                 {isRateBased ? formatRate(displayVolume(flow, true)) : flow.connections.toLocaleString()}
               </span>
-              <span className={clsx('text-right tabular-nums', errors > 0 ? 'text-red-400 font-medium' : 'text-theme-text-tertiary')}>
+              <span className={clsx('text-right tabular-nums', errors > 0 ? clsx(SEVERITY_TEXT.error, 'font-medium') : 'text-theme-text-tertiary')}>
                 {errors > 0 ? (isRateBased ? formatRate(errors) : errors.toLocaleString()) : '—'}
               </span>
-              <span className={clsx('text-right tabular-nums', drops > 0 ? 'text-red-400 font-medium' : 'text-theme-text-tertiary')}>
+              <span className={clsx('text-right tabular-nums', drops > 0 ? clsx(SEVERITY_TEXT.error, 'font-medium') : 'text-theme-text-tertiary')}>
                 {drops > 0 ? drops.toLocaleString() : '—'}
               </span>
             </div>

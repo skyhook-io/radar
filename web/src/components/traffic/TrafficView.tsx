@@ -16,6 +16,7 @@ import { useDock } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
+import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, pairKey, selectionRawPairs, selectionMatch, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusParam, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, type TrafficFocus } from './trafficFilters'
 
 // Consecutive 2s retries of an empty result that came with a transient warning.
@@ -1038,13 +1039,18 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const selectableFlows = tooLargeToDraw ? focusedFlows : finalFlows
   // The server edges behind the selection, as drawn: what its records are
   // narrowed to, whichever form the lookup is sent in.
+  // The flow list follows the focus while nothing else is selected: closing
+  // its details must not widen the list to the whole cluster's sample.
+  const listSelection = useMemo<TrafficGraphSelection | null>(
+    () => graphSelection ?? (focusFound && focusKey ? { type: 'node', nodeId: focusKey } : null),
+    [graphSelection, focusFound, focusKey])
   const selectionPairs = useMemo(
-    () => selectionRawPairs(selectableFlows, graphSelection, groupAddons && !tooLargeToDraw ? e => isClusterAddon(e.name, e.namespace) : undefined),
-    [graphSelection, selectableFlows, groupAddons, tooLargeToDraw])
-  const selection = useMemo(() => selectionMatch(selectionPairs, graphSelection), [selectionPairs, graphSelection])
+    () => selectionRawPairs(selectableFlows, listSelection, groupAddons && !tooLargeToDraw ? e => isClusterAddon(e.name, e.namespace) : undefined),
+    [listSelection, selectableFlows, groupAddons, tooLargeToDraw])
+  const selection = useMemo(() => selectionMatch(selectionPairs, listSelection), [selectionPairs, listSelection])
   // Ungrouped, a workload focus is drawn as its pods, so no node carries its
   // id; its records are still the workload's.
-  const focusSelected = !!focus && graphSelection?.type === 'node' && graphSelection.nodeId === focusKey
+  const focusSelected = listSelection?.type === 'node' && listSelection.nodeId === focusKey && !!focus
   const recordsMatch = useMemo(
     () => {
       if (selection) return selection
@@ -1093,30 +1099,30 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     [records.data?.flows, rawFlowPasses, onSelectedEdge])
 
   const sampleSelection = useMemo(() => {
-    if (!graphSelection) return filteredRawFlows
+    if (!listSelection) return filteredRawFlows
     if (focusSelected && focus && !selection) {
       return filteredRawFlows.filter(f => touchesFocus(f.source, focus) || touchesFocus(f.destination, focus))
     }
     if (selectionPairKeys) return filteredRawFlows.filter(onSelectedEdge)
-    if (graphSelection.type === 'node' && graphSelection.nodeId) {
-      const id = graphSelection.nodeId
+    if (listSelection.type === 'node' && listSelection.nodeId) {
+      const id = listSelection.nodeId
       return filteredRawFlows.filter(f => {
         const srcId = graphEndpointId(drawnEndpoint(f.source))
         const dstId = graphEndpointId(drawnEndpoint(f.destination))
         return srcId === id || dstId === id
       })
     }
-    if (graphSelection.type === 'edge' && graphSelection.sourceId && graphSelection.destId) {
+    if (listSelection.type === 'edge' && listSelection.sourceId && listSelection.destId) {
       return filteredRawFlows.filter(f => {
         const srcId = graphEndpointId(drawnEndpoint(f.source))
         const dstId = graphEndpointId(drawnEndpoint(f.destination))
         // Match either direction (request goes A→B, response goes B→A)
-        return (srcId === graphSelection.sourceId && dstId === graphSelection.destId) ||
-               (srcId === graphSelection.destId && dstId === graphSelection.sourceId)
+        return (srcId === listSelection.sourceId && dstId === listSelection.destId) ||
+               (srcId === listSelection.destId && dstId === listSelection.sourceId)
       })
     }
     return filteredRawFlows
-  }, [filteredRawFlows, graphSelection, selectionPairKeys, onSelectedEdge, drawnEndpoint, focusSelected, focus, selection])
+  }, [filteredRawFlows, listSelection, selectionPairKeys, onSelectedEdge, drawnEndpoint, focusSelected, focus, selection])
 
   const listFlows = useRecords ? filteredRecords : sampleSelection
 
@@ -1139,11 +1145,11 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     }
     if (sampleTotal <= sampleSize) return undefined
     const sample = `newest ${sampleSize.toLocaleString()} of ${sampleTotal.toLocaleString()} records`
-    if (!graphSelection) return `Showing the ${sample} — select a node or edge to load its records`
+    if (!listSelection) return `Showing the ${sample} — select a node or edge to load its records`
     if (records.tooLarge) return `This selection is too large to look up on its own; showing its flows among the ${sample}`
     if (records.isError) return `Couldn't load this selection's records (${records.error?.message}); showing its flows among the ${sample}`
     return `Showing this selection's flows among the ${sample}`
-  }, [useRecords, records.data, records.tooLarge, records.isError, records.error, sampleTotal, sampleSize, graphSelection, timeRange])
+  }, [useRecords, records.data, records.tooLarge, records.isError, records.error, sampleTotal, sampleSize, listSelection, timeRange])
 
   // Stats for display
   const flowStats = useMemo(() => {
@@ -1405,7 +1411,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                         // Narrowing fetches the edges with an end in the chosen
                         // namespaces, so a focus outside them shows only those.
                         <>
-                          <span className="text-amber-500">· only its traffic with {namespaces.join(', ')}</span>
+                          <span className={SEVERITY_TEXT.warning}>· only its traffic with {namespaces.join(', ')}</span>
                           {onSetNamespaces && !namespaceLocked && (
                             <button type="button" onClick={() => onSetNamespaces([focus.namespace!])} className="text-blue-400 hover:text-blue-300 font-medium">
                               Show all
@@ -1577,6 +1583,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                 focus={focus}
                 hiddenByFilters={(flowsData?.aggregated ?? []).some(f => touchesFocus(f.source, focus) || touchesFocus(f.destination, focus))}
                 systemHidden={hideSystem && !!focus.namespace && SYSTEM_NAMESPACES.has(focus.namespace)}
+                hideSystem={hideSystem}
                 outsideNamespaces={namespaces.length > 0 && !!focus.namespace && !namespaces.includes(focus.namespace)}
                 window={coverage ? `${coverage} of ${timeRange}` : `last ${timeRange}`}
                 onShowAll={resetFilters}
@@ -1668,8 +1675,10 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
  * one of them means the workload is quiet: Radar may have hidden its traffic,
  * or never fetched it.
  */
-function FocusNotFound({ focus, hiddenByFilters, systemHidden, outsideNamespaces, window, onShowAll, onShowSystem, onSwitchNamespace, warning, onLeave }: {
+function FocusNotFound({ focus, hiddenByFilters, systemHidden, hideSystem, outsideNamespaces, window, onShowAll, onShowSystem, onSwitchNamespace, warning, onLeave }: {
   focus: TrafficFocus
+  /** Hide System is on: traffic with system namespaces was never fetched. */
+  hideSystem: boolean
   /** The fetch's own warning: with it, absence is not proof of quiet. */
   warning?: string
   hiddenByFilters: boolean
@@ -1695,6 +1704,9 @@ function FocusNotFound({ focus, hiddenByFilters, systemHidden, outsideNamespaces
     if (onSwitchNamespace) action = { label: `Switch to ${focus.namespace}`, onClick: onSwitchNamespace }
   } else if (warning) {
     body = `Radar found none in the ${window}, but some traffic may be missing.`
+  } else if (hideSystem) {
+    body = `Radar saw no traffic to or from it in the ${window}, other than any with system namespaces, which Hide System keeps from being fetched.`
+    action = { label: 'Show system traffic', onClick: onShowSystem }
   } else {
     body = `Radar saw no traffic to or from it in the ${window}.`
   }

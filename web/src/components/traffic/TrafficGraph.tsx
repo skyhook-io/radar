@@ -1126,8 +1126,8 @@ function edgeSelection(edge: Edge, flow: AggregatedFlow | undefined): Selection 
 }
 
 // The Internet node and the addon group stand for many endpoints at once.
-function isFocusable(data: TrafficNodeData | undefined): boolean {
-  return !!data && data.kind !== 'Internet' && data.kind !== 'Addon' && data.kind !== 'AddonInternet'
+function isFocusable(id: string, data: TrafficNodeData | undefined): boolean {
+  return id !== 'addon-group' && !!data?.kind && data.kind !== 'Internet' && data.kind !== 'Addon' && data.kind !== 'AddonInternet'
 }
 
 // A pair can carry both oriented and unoriented traffic at the same port, and the
@@ -1746,7 +1746,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
         <DetailsPanel
           selection={selection}
           onClose={onPaneClick}
-          onFocus={onFocus && selection.type === 'node' && selection.id !== focusedId && isFocusable(selection.data as TrafficNodeData)
+          onFocus={onFocus && selection.type === 'node' && selection.id !== focusedId && isFocusable(selection.id, selection.data as TrafficNodeData)
             ? () => {
                 // The id is "ns/name"; an endpoint with no namespace is its
                 // name alone, which may hold a slash of its own.

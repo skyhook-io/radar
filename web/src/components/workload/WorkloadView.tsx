@@ -1005,7 +1005,7 @@ export function WorkloadView({
     params.set('focus', `${namespace}/${name}`)
     navigateRouter({ pathname: '/traffic', search: params.toString() })
   }, [navigateRouter, searchParams, namespace, name])
-  const offerLiveTraffic = !!namespace && TRAFFIC_WORKLOAD_PLURALS.has(kindProp.toLowerCase()) && !trafficUnavailable
+  const offerLiveTraffic = !!namespace && TRAFFIC_WORKLOAD_PLURALS.has(apiKind.toLowerCase()) && !trafficUnavailable
   // Drawer TraceSummary CTA → open the full resource view ON the Reachability tab.
   // The generic onExpand navigates to the workload path but drops the query, so we
   // navigate directly to that path WITH ?tab=reachability - the deeplink the

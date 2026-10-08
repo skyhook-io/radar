@@ -412,12 +412,15 @@ export function selectionMatch(
   if (!pairs) return null
   if (selection?.type !== 'node') return { pairs }
   const refKey = (r: TrafficEndpointRef) => `${graphEndpointId(r)}|${r.kind ?? ''}`
+  // Only pods can be named to the source; any other endpoint sent alone would
+  // fetch everything, while its edges still name the pods at their far ends.
+  const nameable = (r: TrafficEndpointRef) => r.kind === 'Pod' || r.kind === 'Workload'
   let only: TrafficEndpointRef | undefined
   for (const p of pairs) {
     const side = graphEndpointId(p.source) === selection.nodeId ? p.source
       : graphEndpointId(p.destination) === selection.nodeId ? p.destination
         : undefined
-    if (!side || (only && refKey(side) !== refKey(only))) return { pairs }
+    if (!side || !nameable(side) || (only && refKey(side) !== refKey(only))) return { pairs }
     only = side
   }
   return only ? { endpoints: [only] } : { pairs }
@@ -508,11 +511,14 @@ export interface EndpointSummary {
 }
 
 /** Every endpoint drawn from these flows, with the traffic on its edges. The
- *  options a focus can be chosen from, so each one has something to show. */
+ *  options a focus can be chosen from, so each one has something to show.
+ *  Pods drawn ungrouped also offer their workload, which a focus covers whole. */
 export function endpointSummaries(flows: AggregatedFlow[]): EndpointSummary[] {
   const byId = new Map<string, EndpointSummary>()
-  const add = (e: AggregatedFlow['source'], flow: AggregatedFlow) => {
+  const add = (e: { namespace?: string; name: string; kind: string; workloadKind?: string }, flow: AggregatedFlow, seen: Set<string>) => {
     const id = graphEndpointId(e)
+    if (seen.has(id)) return
+    seen.add(id)
     let s = byId.get(id)
     if (!s) {
       s = { id, name: e.name, namespace: e.namespace || undefined, kind: e.kind, workloadKind: e.workloadKind, volume: 0, errors: 0, drops: 0 }
@@ -523,8 +529,13 @@ export function endpointSummaries(flows: AggregatedFlow[]): EndpointSummary[] {
     s.drops += flowDrops(flow)
   }
   for (const flow of flows) {
-    add(flow.source, flow)
-    if (graphEndpointId(flow.destination) !== graphEndpointId(flow.source)) add(flow.destination, flow)
+    const seen = new Set<string>()
+    for (const e of [flow.source, flow.destination]) {
+      add(e, flow, seen)
+      if (e.kind === 'Pod' && e.namespace && e.workload && e.workload !== e.name) {
+        add({ namespace: e.namespace, name: e.workload, kind: 'Workload', workloadKind: e.workloadKind }, flow, seen)
+      }
+    }
   }
   return Array.from(byId.values())
 }
