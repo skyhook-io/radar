@@ -376,6 +376,11 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   const [aggregateExternal, setAggregateExternal] = useState(true)
   const [detectServices, setDetectServices] = useState(true)
   const [collapseInternet, setCollapseInternet] = useState(true)
+  const [groupByWorkload, setGroupByWorkload] = useState(true)
+  // A record's endpoint as the graph draws it in the chosen grouping.
+  const drawnEndpoint = useCallback(
+    (e: TrafficFlow['source']) => (groupByWorkload ? graphEndpoint(e) : e),
+    [groupByWorkload])
   const [addonMode, setAddonMode] = useState<AddonMode>('show')
   const [graphSelection, setGraphSelection] = useState<TrafficGraphSelection | null>(null)
   const clearGraphSelection = useCallback(() => setGraphSelection(null), [])
@@ -459,6 +464,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     since: timeRange,
     excludeNamespaces: hideSystem ? SYSTEM_NAMESPACE_LIST : undefined,
     excludeHost: hideSystem,
+    byPod: !groupByWorkload,
     // Only fetch flows when connected (not connecting and no connection error)
     enabled: wizardState === 'ready' && !isConnecting && !connectionError,
   })
@@ -636,8 +642,8 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   const rawFlowPasses = useCallback((flow: TrafficFlow) => {
     // Name rules (system components, addons) judge an endpoint by the name the
     // graph draws it under, so a hidden workload's pods leave the list too.
-    const sourceName = graphEndpoint(flow.source).name
-    const destName = graphEndpoint(flow.destination).name
+    const sourceName = drawnEndpoint(flow.source).name
+    const destName = drawnEndpoint(flow.destination).name
     const sourceIsSystem = isSystemEndpoint(sourceName, flow.source.namespace, flow.source.kind)
     const destIsSystem = isSystemEndpoint(destName, flow.destination.namespace, flow.destination.kind)
     if (hideSystem && (sourceIsSystem || destIsSystem)) return false
@@ -677,7 +683,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     }
 
     return true
-  }, [hideSystem, hideExternal, hiddenNamespaces, addonMode, l7Protocol, activeMethods, activeStatusRanges, activeVerdicts, activeDnsPattern])
+  }, [hideSystem, hideExternal, hiddenNamespaces, addonMode, l7Protocol, activeMethods, activeStatusRanges, activeVerdicts, activeDnsPattern, drawnEndpoint])
 
   const filteredRawFlows = useMemo(
     () => (flowsData?.flows ?? []).filter(rawFlowPasses),
@@ -997,27 +1003,27 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     if (selectionPairs) {
       const keys = new Set(selectionPairs.map(p => pairKey(p.source, p.destination, p.port, p.directionUnknown)))
       return filteredRawFlows.filter(f =>
-        keys.has(pairKey(graphEndpoint(f.source), graphEndpoint(f.destination), f.port, f.directionUnknown)))
+        keys.has(pairKey(drawnEndpoint(f.source), drawnEndpoint(f.destination), f.port, f.directionUnknown)))
     }
     if (graphSelection.type === 'node' && graphSelection.nodeId) {
       const id = graphSelection.nodeId
       return filteredRawFlows.filter(f => {
-        const srcId = graphEndpointId(graphEndpoint(f.source))
-        const dstId = graphEndpointId(graphEndpoint(f.destination))
+        const srcId = graphEndpointId(drawnEndpoint(f.source))
+        const dstId = graphEndpointId(drawnEndpoint(f.destination))
         return srcId === id || dstId === id
       })
     }
     if (graphSelection.type === 'edge' && graphSelection.sourceId && graphSelection.destId) {
       return filteredRawFlows.filter(f => {
-        const srcId = graphEndpointId(graphEndpoint(f.source))
-        const dstId = graphEndpointId(graphEndpoint(f.destination))
+        const srcId = graphEndpointId(drawnEndpoint(f.source))
+        const dstId = graphEndpointId(drawnEndpoint(f.destination))
         // Match either direction (request goes A→B, response goes B→A)
         return (srcId === graphSelection.sourceId && dstId === graphSelection.destId) ||
                (srcId === graphSelection.destId && dstId === graphSelection.sourceId)
       })
     }
     return filteredRawFlows
-  }, [filteredRawFlows, graphSelection, selectionPairs])
+  }, [filteredRawFlows, graphSelection, selectionPairs, drawnEndpoint])
 
   const listFlows = useRecords ? filteredRecords : sampleSelection
 
@@ -1234,6 +1240,8 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         setShowNamespaceGroups={setShowNamespaceGroups}
         collapseInternet={collapseInternet}
         setCollapseInternet={setCollapseInternet}
+        groupByWorkload={groupByWorkload}
+        setGroupByWorkload={setGroupByWorkload}
         addonMode={addonMode}
         setAddonMode={setAddonMode}
         aggregateExternal={aggregateExternal}

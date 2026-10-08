@@ -135,7 +135,8 @@ func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 	}
 
 	flows := resolveFlowWorkloads(k8s.GetResourceCache(), response.Flows)
-	s.writeJSON(w, trafficFlowsPayload(response, s.visibleFlows(r, flows, namespaces, opts)))
+	byPod := r.URL.Query().Get("groupBy") == "pod"
+	s.writeJSON(w, trafficFlowsPayload(response, s.visibleFlows(r, flows, namespaces, opts), byPod))
 }
 
 // resolveFlowWorkloads sets each pod endpoint's workload from Radar's pod
@@ -252,13 +253,20 @@ func newestFlows(flows []traffic.Flow, limit int) []traffic.Flow {
 // trafficFlowsPayload shapes the flows response. Split out so it can be tested
 // directly: the payload is hand-built rather than marshalled from a struct, so a
 // field the source sets is easy to drop here without anything failing.
-func trafficFlowsPayload(response *traffic.FlowsResponse, flows []traffic.Flow) map[string]any {
+//
+// The aggregation draws pods by workload unless byPod asks for one node per
+// pod.
+func trafficFlowsPayload(response *traffic.FlowsResponse, flows []traffic.Flow, byPod bool) map[string]any {
+	graphFlows := traffic.GraphFlows(flows)
+	if byPod {
+		graphFlows = flows
+	}
 	result := map[string]any{
 		"source":     response.Source,
 		"timestamp":  response.Timestamp,
 		"flows":      newestFlows(flows, trafficFlowSample),
 		"flowsTotal": len(flows),
-		"aggregated": traffic.AggregateFlows(traffic.GraphFlows(flows)),
+		"aggregated": traffic.AggregateFlows(graphFlows),
 		// L7 responses arrive on their request's edge, caller to callee on the
 		// server's port. A client pairing responses with requests needs to know
 		// that rather than guess it from which records happen to be present.

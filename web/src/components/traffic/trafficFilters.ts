@@ -335,7 +335,7 @@ function selectableId(e: { namespace?: string; name: string; kind?: string }): s
  * for a record to be found under its node.
  */
 export function graphEndpoint(e: TrafficFlow['source']): { namespace?: string; name: string } {
-  if (e.kind === 'Pod' && e.workload && e.namespace) return { namespace: e.namespace, name: e.workload }
+  if (e.kind === 'Pod' && e.workload && e.namespace && e.workload !== e.name) return { namespace: e.namespace, name: e.workload }
   return e
 }
 

@@ -78,6 +78,7 @@ func TestGraphEndpoint(t *testing.T) {
 		{Namespace: "shop", Name: "standalone", Kind: EndpointKindPod},                          // nothing owns it
 		{Name: "world", Kind: EndpointKindExternal, Workload: "x"},                              // not a pod
 		{Namespace: "shop", Name: "checkout", Kind: EndpointKindWorkload, Workload: "checkout"}, // already a workload
+		{Namespace: "shop", Name: "reviews", Kind: EndpointKindPod, Workload: "reviews"},        // a source that reports workloads as pods (Istio, Beyla)
 	} {
 		if got := GraphEndpoint(e); !reflect.DeepEqual(got, e) {
 			t.Errorf("GraphEndpoint(%+v) = %+v, want it unchanged", e, got)
@@ -112,5 +113,22 @@ func TestFlowMatchWorkloadReference(t *testing.T) {
 	other.Source.Workload = "web-canary"
 	if match.Matches(other) {
 		t.Error("a pod of another workload must not match, however its name starts")
+	}
+}
+
+func TestFlowMatchPodReference(t *testing.T) {
+	pod := EndpointRef{Namespace: "shop", Name: "web-7d9f-x2k4q", Kind: EndpointKindPod}
+	db := EndpointRef{Namespace: "shop", Name: "db-0", Kind: EndpointKindPod}
+	flow := Flow{
+		Source:      Endpoint{Namespace: "shop", Name: "web-7d9f-x2k4q", Kind: EndpointKindPod, Workload: "web"},
+		Destination: Endpoint{Namespace: "shop", Name: "db-0", Kind: EndpointKindPod},
+	}
+	if !(&FlowMatch{Pairs: []EndpointPair{{Source: pod, Destination: db}}}).Matches(flow) {
+		t.Error("with pods drawn one by one, a pod reference matches its own records")
+	}
+	other := flow
+	other.Source.Name = "web-7d9f-zz9"
+	if (&FlowMatch{Pairs: []EndpointPair{{Source: pod, Destination: db}}}).Matches(other) {
+		t.Error("a pod reference must not match its sibling pods")
 	}
 }

@@ -101,9 +101,10 @@ type Endpoint struct {
 // workload becomes that workload, so a Deployment with fifty replicas is one
 // node rather than fifty, the way metric-based sources report it already.
 // Records keep their pods; only the aggregation and selection matching use
-// this.
+// this. An endpoint already named after its workload (Istio and Beyla report
+// workloads as pods) is left as its source reported it.
 func GraphEndpoint(e Endpoint) Endpoint {
-	if e.Kind != EndpointKindPod || e.Workload == "" || e.Namespace == "" {
+	if e.Kind != EndpointKindPod || e.Workload == "" || e.Namespace == "" || e.Workload == e.Name {
 		return e
 	}
 	return Endpoint{
@@ -172,11 +173,14 @@ type EndpointRef struct {
 	WorkloadKind string `json:"workloadKind,omitempty"`
 }
 
-// matches compares a reference with an endpoint as the graph names it, so a
-// workload reference matches the records of each of its pods.
+// matches compares a reference with an endpoint as it was reported or as the
+// graph names it, so a pod reference matches its own records and a workload
+// reference matches those of each of its pods.
 func (r EndpointRef) matches(e Endpoint) bool {
-	g := GraphEndpoint(e)
-	return r.Namespace == g.Namespace && r.Name == g.Name
+	if r.Namespace != e.Namespace {
+		return false
+	}
+	return r.Name == e.Name || r.Name == GraphEndpoint(e).Name
 }
 
 // EndpointPair is one edge of the aggregation, keyed as AggregateFlows keys
