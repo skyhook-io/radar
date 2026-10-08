@@ -117,20 +117,15 @@ export function AgentSetupNotice({
   const showResult = checkedState === setupState && !checkingAgents;
   const unreachable = showResult && agentsCheckFailed && (
     <p className="mt-2 text-xs text-theme-text-secondary">
-      Couldn&apos;t reach Radar to check. Try again in a moment.
+      Couldn&apos;t check. Try again.
     </p>
   );
 
   if (cliOverride) {
     return (
-      <SetupFrame title="Radar can't run the agent CLI it was given">
+      <SetupFrame title="Radar can't run your RADAR_AI_CLI_BIN">
         <p className="mt-1 text-sm text-theme-text-secondary">
-          This Radar was started with{" "}
-          <code className="inline-code">RADAR_AI_CLI_BIN</code> set to a file it
-          can&apos;t run. While that variable is set, Radar uses only that file
-          and doesn&apos;t look for other agent CLIs. Put a working CLI at that
-          path and check again, or change or remove the variable and restart
-          Radar. The startup output shows the path it tried.
+          Fix the path, or remove it and restart Radar.
         </p>
         <CheckAgainButton checking={checkingAgents} onCheck={check} />
         {unreachable ||
@@ -146,7 +141,7 @@ export function AgentSetupNotice({
     return (
       <SetupFrame title="AI investigations aren't available right now">
         <p className="mt-1 text-sm text-theme-text-secondary">
-          An agent is set up, but investigations couldn&apos;t start with it.
+          Try again in a moment.
         </p>
         <CheckAgainButton checking={checkingAgents} onCheck={check} />
         {unreachable ||
@@ -173,15 +168,13 @@ export function AgentSetupNotice({
       {unreachable ||
         (showResult && (
           <p className="mt-2 text-xs text-theme-text-secondary">
-            Still no agent CLI found. Radar looks on its PATH and in each
-            tool&apos;s usual install folder. If yours runs in a terminal and
-            Radar still can&apos;t find it,{" "}
+            Still not found. Already installed one?{" "}
             <button
               type="button"
               onClick={() => openExternal(REPORT_URL)}
               className="underline hover:text-theme-text-primary"
             >
-              report it
+              Report it
             </button>
             .
           </p>

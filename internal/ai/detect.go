@@ -149,7 +149,7 @@ func isSupportedAgent(name string) bool {
 // unit, a Linux .desktop entry, a Windows shortcut. Claude Code's older installer
 // is worse still, leaving the binary in ~/.claude/local behind a shell alias that
 // no PATH can reach at all. Without this, Radar tells a user who has the CLI to go
-// install it. (The desktop app is not in that list on purpose — cmd/desktop/env.go
+// install it. (The desktop app is not in that list on purpose: cmd/desktop/env.go
 // already replaces its PATH with the login shell's before the server boots.)
 func lookupAgent(name string) string {
 	if p, err := exec.LookPath(name); err == nil {

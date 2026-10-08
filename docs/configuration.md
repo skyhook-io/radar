@@ -83,10 +83,8 @@ then in these install directories:
 | macOS, Linux | `~/.local/bin`, `~/.claude/local`, `~/.opencode/bin`, `~/.volta/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/home/linuxbrew/.linuxbrew/bin`, `/usr/bin` |
 | Windows | `%LOCALAPPDATA%\Microsoft\WinGet\Links`, `%LOCALAPPDATA%\cursor-agent`, `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`, `%USERPROFILE%\.local\bin` |
 
-A CLI installed while Radar runs is picked up the next time Radar checks: when
-the Radar page loads, when you click **Check again** in AI investigations, or
-when you come back to the Radar window while setup is pending. No restart is
-needed. The startup output has an `AI investigations`
+Radar picks up a newly installed CLI automatically, or when you click **Check
+again** in AI investigations. The startup output has an `AI investigations`
 line that says which agent Radar will use, or why investigations are off.
 
 If the CLI is somewhere else, for example an npm global install under nvm, start

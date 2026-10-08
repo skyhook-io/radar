@@ -1484,10 +1484,10 @@ function AIUnavailableNotice({
       {checkingAgents ? 'Checking…' : 'Check again'}
     </button>
   )
-  const panel = (title: string, body: ReactNode, action?: ReactNode) => (
+  const panel = (title: string, body?: ReactNode, action?: ReactNode) => (
     <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
       <p className="text-sm font-medium text-theme-text-primary">{title}</p>
-      <p className="mt-1 text-xs text-theme-text-tertiary">{body}</p>
+      {body && <p className="mt-1 text-xs text-theme-text-tertiary">{body}</p>}
       {action}
     </div>
   )
@@ -1495,29 +1495,20 @@ function AIUnavailableNotice({
     // The agent probe hasn't answered. Saying anything about the CLI or the
     // deployment here would be a guess.
     return agentsCheckFailed && !checkingAgents
-      ? panel("Couldn't check this Radar's setup", "Radar's agents endpoint didn't answer.", checkAgain)
-      : panel("Checking this Radar's setup", 'Asking Radar which agent CLIs it can use.')
+      ? panel("Couldn't check for agent CLIs", 'Try again.', checkAgain)
+      : panel('Checking…')
   }
   if (setupState === 'off') {
     return panel(
       'Not available in this deployment',
-      <>
-        Investigations run a local agent CLI against Radar&apos;s own MCP endpoint, so they
-        need a Radar running on your own machine with MCP on and authentication off. A Radar
-        started with <span className="font-mono">--no-mcp</span>, with authentication on,
-        inside a cluster, or as a shared installation can&apos;t offer them.
-      </>,
+      'AI investigations only run in a Radar on your own computer.',
     )
   }
   if (cliOverride) {
     return panel(
-      "Radar can't run the agent CLI it was given",
+      "Radar can't run your RADAR_AI_CLI_BIN",
       <>
-        This Radar was started with <code className="inline-code">RADAR_AI_CLI_BIN</code> set to
-        a file it can&apos;t run. While that variable is set, Radar uses only that file and
-        doesn&apos;t look for other agent CLIs. Put a working CLI at that path and check again, or
-        change or remove the variable and restart Radar. The startup output shows the path it
-        tried.
+        Fix the path, or remove it and restart Radar.
         {unchanged && " Still can't run it."}
       </>,
       checkAgain,
@@ -1527,8 +1518,7 @@ function AIUnavailableNotice({
     return panel(
       "AI investigations aren't available right now",
       <>
-        An agent is set up, but investigations couldn&apos;t start with it.
-        {agentsCheckFailed && !checkingAgents && " Radar's agents endpoint didn't answer the last check."}
+        {agentsCheckFailed && !checkingAgents ? "Couldn't check. Try again." : 'Try again in a moment.'}
         {unchanged && ' Still not available.'}
       </>,
       checkAgain,
@@ -1541,10 +1531,10 @@ function AIUnavailableNotice({
       <span className="text-theme-text-secondary">Codex</span>,{' '}
       <span className="text-theme-text-secondary">Cursor</span> (
       <span className="font-mono">cursor-agent</span>), or{' '}
-      <span className="text-theme-text-secondary">OpenCode</span>. Radar picks it up without a
-      restart, and this tab then shows the agent, model, and effort controls.
-      {agentsCheckFailed && !checkingAgents && " Radar's agents endpoint didn't answer the last check."}
-      {unchanged && ' Still no agent CLI found.'}
+      <span className="text-theme-text-secondary">OpenCode</span>, and this tab will show the
+      agent, model, and effort controls.
+      {agentsCheckFailed && !checkingAgents && " Couldn't check. Try again."}
+      {unchanged && ' Still not found.'}
     </>,
     checkAgain,
   )

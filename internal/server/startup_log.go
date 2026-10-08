@@ -242,10 +242,8 @@ func startupAIStatus(summary startupLogSummary) string {
 		// The override wins over detection, so when it names something this
 		// Radar can't run, nothing else was tried. Saying "no agent CLI found"
 		// here would send the user to set the variable they already set.
-		return "disabled (RADAR_AI_CLI_BIN is set to " + summary.aiCLIOverride +
-			", which isn't an executable Radar can run)"
+		return "disabled (can't run RADAR_AI_CLI_BIN=" + summary.aiCLIOverride + ")"
 	default:
-		return "disabled (no agent CLI found). Install Claude Code, Codex, Cursor, or OpenCode and " +
-			"Radar picks it up without a restart"
+		return "disabled (no agent CLI found). Install Claude Code, Codex, Cursor, or OpenCode"
 	}
 }

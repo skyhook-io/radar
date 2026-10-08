@@ -29,7 +29,7 @@ func agentBinDirs() []string {
 // path to CreateProcess with no batch-file handling of its own, so a .cmd or
 // .bat shim is not something this process can start.
 //
-// The PATH branch of lookupAgent does NOT apply this filter — exec.LookPath on
+// The PATH branch of lookupAgent does NOT apply this filter: exec.LookPath on
 // Windows walks PATHEXT and will return a `claude.cmd` from an npm install. That
 // asymmetry is deliberate for now: whether CreateProcess actually rejects such a
 // shim has not been confirmed on a real Windows machine, and narrowing the PATH

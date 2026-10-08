@@ -210,7 +210,7 @@ func TestStartupAIStatusExplainsWhyItIsOff(t *testing.T) {
 		{
 			name:    "no CLI found asks for an install, not the override",
 			summary: startupLogSummary{mcpEnabled: true},
-			want:    "Install Claude Code, Codex, Cursor, or OpenCode and Radar picks it up without a restart",
+			want:    "disabled (no agent CLI found). Install Claude Code, Codex, Cursor, or OpenCode",
 		},
 		{
 			name:    "--no-mcp names the flag",
@@ -228,7 +228,7 @@ func TestStartupAIStatusExplainsWhyItIsOff(t *testing.T) {
 				mcpEnabled:    true,
 				aiCLIOverride: "/opt/typo/claude",
 			},
-			want: "RADAR_AI_CLI_BIN is set to /opt/typo/claude",
+			want: "can't run RADAR_AI_CLI_BIN=/opt/typo/claude",
 		},
 		{
 			name: "in-cluster does not tell a container to install a CLI",

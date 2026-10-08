@@ -168,12 +168,12 @@ function notReadyTooltip(d: {
   setupState: DiagnoseSetup;
 }): string {
   if (d.cliOverride) {
-    return "AI investigations are off: RADAR_AI_CLI_BIN names a file Radar can't run";
+    return "AI investigations are off: can't run RADAR_AI_CLI_BIN";
   }
   if (d.setupState === "needs-restart") {
     return "AI investigations aren't available right now";
   }
-  return "Set up AI investigations: install an agent CLI to run them on your machine";
+  return "Set up AI investigations";
 }
 
 // Global top-bar entry into the AI surface (opens its Home / recent

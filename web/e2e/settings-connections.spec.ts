@@ -1655,7 +1655,7 @@ test('an agent CLI installed while Settings is open is picked up without a resta
   await expect(dialog.getByText(/RADAR_AI_CLI_BIN/)).toHaveCount(0)
 
   await dialog.getByRole('button', { name: 'Check again', exact: true }).click()
-  await expect(dialog.getByText(/Still no agent CLI found\./)).toBeVisible()
+  await expect(dialog.getByText(/Still not found\./)).toBeVisible()
 
   installed = true
   await dialog.getByRole('button', { name: 'Check again', exact: true }).click()
@@ -1668,7 +1668,7 @@ test('a failed agent check says so and can be retried', async ({ page }) => {
   let reachable = false
   await page.route('**/api/agents', route => reachable ? route.fulfill({ json: aiAgents }) : route.abort())
   const dialog = await openSettings(page, 'AI investigations')
-  await expect(dialog.getByText("Couldn't check this Radar's setup", { exact: true })).toBeVisible()
+  await expect(dialog.getByText("Couldn't check for agent CLIs", { exact: true })).toBeVisible()
   await expect(dialog.getByText('No supported agent CLI found', { exact: true })).toHaveCount(0)
 
   reachable = true
@@ -1683,7 +1683,7 @@ test('a pinned RADAR_AI_CLI_BIN that works again is picked up from Check again',
     json: fixed ? { ...aiAgents, cliOverride: true } : { agents: [], enabled: true, eligible: true, cliOverride: true, consented: {} },
   }))
   const dialog = await openSettings(page, 'AI investigations')
-  await expect(dialog.getByText("Radar can't run the agent CLI it was given", { exact: true })).toBeVisible()
+  await expect(dialog.getByText("Radar can't run your RADAR_AI_CLI_BIN", { exact: true })).toBeVisible()
   await expect(dialog.getByText('No supported agent CLI found', { exact: true })).toHaveCount(0)
 
   fixed = true

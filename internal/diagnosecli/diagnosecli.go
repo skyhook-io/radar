@@ -225,16 +225,14 @@ Flags:
 		// no CLI" from "this deployment never can" (--no-mcp, auth, in-cluster or
 		// shared), where installing a CLI is the wrong advice.
 		if agents.Eligible && agents.CLIOverride {
-			fmt.Fprintf(os.Stderr, "the Radar at %s was started with RADAR_AI_CLI_BIN set to a file it can't run, "+
-				"so it doesn't look for other agent CLIs. Put a working CLI at that path and run this again, or "+
-				"change or remove the variable and restart that Radar.\n", base)
+			fmt.Fprintf(os.Stderr, "the Radar at %s can't run its RADAR_AI_CLI_BIN. Fix the path, or remove it "+
+				"and restart that Radar.\n", base)
 		} else if agents.Eligible {
 			fmt.Fprintf(os.Stderr, "the Radar at %s found no agent CLI. Install Claude Code, Codex, Cursor, "+
 				"or OpenCode on that machine and run this again.\n", base)
 		} else {
-			fmt.Fprintf(os.Stderr, "the Radar at %s doesn't offer AI investigations: they need a Radar on your own "+
-				"machine with MCP on and authentication off, not one inside a cluster or shared. Use --standalone to "+
-				"run your own local instance instead.\n", base)
+			fmt.Fprintf(os.Stderr, "the Radar at %s can't run AI investigations. Use --standalone to run them "+
+				"with a local Radar.\n", base)
 		}
 		return 1
 	}
@@ -389,7 +387,7 @@ func standaloneEffectiveAgent(ctx context.Context, requested string) string {
 }
 
 // noAgentCLIHint is the one wording for "this machine has no agent CLI Radar can
-// drive" — every local surface that hits it reads this, so they can't drift.
+// drive". Every local surface that hits it reads this, so they can't drift.
 const noAgentCLIHint = "no supported agent CLI found. Install Claude Code, Codex, Cursor, or OpenCode"
 
 // localNoAgentHint is noAgentCLIHint unless RADAR_AI_CLI_BIN is set here: then
@@ -397,8 +395,7 @@ const noAgentCLIHint = "no supported agent CLI found. Install Claude Code, Codex
 // a CLI wouldn't help.
 func localNoAgentHint() string {
 	if v := strings.TrimSpace(os.Getenv("RADAR_AI_CLI_BIN")); v != "" {
-		return "RADAR_AI_CLI_BIN is set to " + v + ", which isn't an executable Radar can run. " +
-			"While it's set, Radar doesn't look for other agent CLIs. Correct the path or unset it"
+		return "can't run RADAR_AI_CLI_BIN=" + v + ". Fix the path or unset it"
 	}
 	return noAgentCLIHint
 }

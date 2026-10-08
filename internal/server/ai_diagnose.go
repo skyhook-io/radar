@@ -344,7 +344,7 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	kind, group = canonicalDiagnoseTarget(r.Context(), kind, group, namespace, name)
 	agent := runs.AgentName(strings.TrimSpace(body.Agent))
 	if agent == "" {
-		s.writeError(w, http.StatusNotImplemented, "no agent CLI available: the one Radar was using is no longer installed")
+		s.writeError(w, http.StatusNotImplemented, "the agent CLI Radar was using is no longer installed")
 		return
 	}
 	profile := ai.ExecutionProfile(strings.TrimSpace(body.Profile))
