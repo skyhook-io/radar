@@ -634,8 +634,12 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
 
   // The graph's filters, applied to individual records for the list view
   const rawFlowPasses = useCallback((flow: TrafficFlow) => {
-    const sourceIsSystem = isSystemEndpoint(flow.source.name, flow.source.namespace, flow.source.kind)
-    const destIsSystem = isSystemEndpoint(flow.destination.name, flow.destination.namespace, flow.destination.kind)
+    // Name rules (system components, addons) judge an endpoint by the name the
+    // graph draws it under, so a hidden workload's pods leave the list too.
+    const sourceName = graphEndpoint(flow.source).name
+    const destName = graphEndpoint(flow.destination).name
+    const sourceIsSystem = isSystemEndpoint(sourceName, flow.source.namespace, flow.source.kind)
+    const destIsSystem = isSystemEndpoint(destName, flow.destination.namespace, flow.destination.kind)
     if (hideSystem && (sourceIsSystem || destIsSystem)) return false
 
     const isAlwaysFiltered = (name: string) =>
@@ -647,7 +651,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     if (hideExternal && (isExternal(flow.source.kind) || isExternal(flow.destination.kind))) return false
 
     if (addonMode === 'hide') {
-      if (isClusterAddon(flow.source.name, flow.source.namespace) || isClusterAddon(flow.destination.name, flow.destination.namespace)) return false
+      if (isClusterAddon(sourceName, flow.source.namespace) || isClusterAddon(destName, flow.destination.namespace)) return false
     }
 
     if (hiddenNamespaces.size > 0) {
