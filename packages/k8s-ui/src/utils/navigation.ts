@@ -136,6 +136,11 @@ export function kindToPlural(kind: string): string {
   const kindLower = kind.toLowerCase()
   const pluralToKindMap = getPluralToKind()
 
+  // An exact core Kind (PascalCase, unlike plural slugs) keeps its core plural
+  // even when a CRD registered that word as its own plural.
+  const core = kind !== kindLower ? CORE_RESOURCES.find(r => r.group === '' && r.kind === kind) : undefined
+  if (core) return core.name
+
   // Already a known plural — return as-is to prevent double-pluralization
   if (kindLower in pluralToKindMap) return kindLower
 
