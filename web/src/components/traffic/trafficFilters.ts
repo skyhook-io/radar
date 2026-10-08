@@ -386,9 +386,10 @@ export function selectionRawPairs(
 
 /**
  * How costly the graph is to draw. The layout runs on the main thread and its
- * cost grows with both nodes and edges — on a synthetic cluster 1.6k nodes and
- * 1k edges took 1.4s and 7.1k nodes with 6.9k edges 9.3s, before React Flow
- * rendered any of it — so edges count double, as Weave Scope weighs them.
+ * cost grows faster than linearly, edges more than nodes, so edges count
+ * double, as Weave Scope weighs them. Laying out whole namespaces of a dense
+ * service graph took 0.55s at a score of 493, 2s at 728, 4.5s at 1,433, 13s
+ * at 1,883 and 32s at 2,329; larger graphs overflowed ELK's stack.
  */
 export function graphSize(flows: AggregatedFlow[]): { nodes: number; edges: number; score: number } {
   const nodes = new Set<string>()
@@ -399,7 +400,7 @@ export function graphSize(flows: AggregatedFlow[]): { nodes: number; edges: numb
   return { nodes: nodes.size, edges: flows.length, score: nodes.size + 2 * flows.length }
 }
 
-/** Above this the graph is not drawn until the view is narrowed. */
-export const GRAPH_DRAW_BUDGET = 2500
-/** Above this it is not drawn at all: the tab would freeze for many seconds. */
-export const GRAPH_DRAW_CEILING = 6000
+/** Above this the graph is not drawn until the view is narrowed (about 1.5s of layout). */
+export const GRAPH_DRAW_BUDGET = 600
+/** Above this it is not drawn at all (about 5s of layout, freezing the tab). */
+export const GRAPH_DRAW_CEILING = 1500
