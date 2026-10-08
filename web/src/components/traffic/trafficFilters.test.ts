@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, type GraphFlow } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, connectionRows, type GraphFlow } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -405,5 +405,118 @@ describe('graphSize', () => {
       protocol: 'tcp', port: 80, flowCount: 1, bytesSent: 0, bytesRecv: 0, connections: 1, lastSeen: '',
     })
     expect(graphSize([f('web', 'db'), f('web', 'cache'), f('api', 'db')])).toEqual({ nodes: 4, edges: 3, score: 10 })
+  })
+})
+
+function edge(src: string, dst: string, extra: Partial<AggregatedFlow> = {}): AggregatedFlow {
+  const ep = (id: string) => {
+    const [namespace, name] = id.includes('/') ? id.split('/') : ['', id]
+    return { namespace, name, kind: namespace ? 'Workload' : 'External' }
+  }
+  return {
+    source: ep(src), destination: ep(dst), protocol: 'tcp', port: 80,
+    flowCount: 1, bytesSent: 0, bytesRecv: 0, connections: 1, lastSeen: '', ...extra,
+  }
+}
+
+describe('focus', () => {
+  it('round-trips through the URL value', () => {
+    expect(parseFocus('shop/checkout')).toEqual({ namespace: 'shop', name: 'checkout' })
+    expect(focusId(parseFocus('shop/checkout')!)).toBe('shop/checkout')
+    // External endpoints have no namespace.
+    expect(parseFocus('api.stripe.com')).toEqual({ name: 'api.stripe.com' })
+    expect(parseFocus('shop/')).toBeNull()
+    expect(parseFocus(null)).toBeNull()
+  })
+
+  it('keeps the edges at either end of the focus and nothing else', () => {
+    const flows = [edge('shop/web', 'shop/checkout'), edge('shop/checkout', 'pay/api'), edge('shop/web', 'shop/cart')]
+    const n = focusNeighborhood(flows, { namespace: 'shop', name: 'checkout' })
+    expect(n).toHaveLength(2)
+    expect(n).not.toContain(flows[2])
+  })
+
+  it('matches by namespace too: a same-named workload elsewhere is not the focus', () => {
+    const flows = [edge('other/checkout', 'shop/web')]
+    expect(focusNeighborhood(flows, { namespace: 'shop', name: 'checkout' })).toHaveLength(0)
+  })
+
+  // Ungrouped, the graph draws pods. A workload focus is then its pods.
+  it('matches a workload\'s pods when pods are not grouped', () => {
+    const pod = { namespace: 'shop', name: 'checkout-7d9-abc', kind: 'Pod', workload: 'checkout' }
+    expect(touchesFocus(pod, { namespace: 'shop', name: 'checkout' })).toBe(true)
+    expect(touchesFocus({ ...pod, kind: 'Service' }, { namespace: 'shop', name: 'checkout' })).toBe(false)
+  })
+})
+
+describe('endpoint search', () => {
+  const flows = [
+    edge('shop/checkout', 'shop/db', { connections: 5 }),
+    edge('shop/cart', 'shop/checkout', { connections: 50 }),
+    edge('shop/checkout-worker', 'shop/db', { connections: 1, verdictCounts: { dropped: 2 } }),
+  ]
+  const summaries = endpointSummaries(flows)
+
+  it('sums an endpoint\'s traffic across its edges, once per edge', () => {
+    const checkout = summaries.find(s => s.id === 'shop/checkout')!
+    expect(checkout.volume).toBe(55)
+    expect(endpointSummaries([edge('shop/a', 'shop/a', { connections: 3 })])[0].volume).toBe(3)
+  })
+
+  it('puts an exact name first, then prefixes, problems before volume', () => {
+    expect(searchEndpoints(summaries, 'checkout').map(s => s.name)).toEqual(['checkout', 'checkout-worker'])
+    const all = searchEndpoints(summaries, 'c').map(s => s.name)
+    expect(all.indexOf('checkout-worker')).toBeLessThan(all.indexOf('cart'))
+  })
+
+  it('finds nothing for a name with no traffic', () => {
+    expect(searchEndpoints(summaries, 'payments')).toEqual([])
+  })
+})
+
+describe('namespaceSummaries', () => {
+  // Narrowing to a namespace keeps edges with either end in it, as the server
+  // does, so a cross-namespace edge belongs to both.
+  it('counts a cross-namespace edge toward both namespaces', () => {
+    const s = namespaceSummaries([edge('shop/web', 'pay/api'), edge('shop/web', 'shop/db')])
+    const shop = s.find(n => n.name === 'shop')!
+    const pay = s.find(n => n.name === 'pay')!
+    expect(shop.connections).toBe(2)
+    expect(pay.connections).toBe(1)
+    expect(pay.endpoints).toBe(2)
+  })
+
+  it('ranks the namespace with failures first', () => {
+    const s = namespaceSummaries([
+      edge('big/a', 'big/b', { connections: 1000 }),
+      edge('small/a', 'small/b', { connections: 1, httpStatusCounts: { '5xx': 1 } }),
+    ])
+    expect(s.map(n => n.name)).toEqual(['small', 'big'])
+  })
+
+  it('skips endpoints without a namespace', () => {
+    expect(namespaceSummaries([edge('shop/web', 'api.stripe.com')]).map(n => n.name)).toEqual(['shop'])
+  })
+})
+
+describe('connectionRows', () => {
+  it('lists failing edges first, then by volume', () => {
+    const quiet = edge('a/x', 'a/y', { connections: 1 })
+    const busy = edge('a/x', 'a/z', { connections: 100 })
+    const dropping = edge('a/x', 'a/w', { connections: 2, verdictCounts: { dropped: 1 } })
+    const erroring = edge('a/x', 'a/v', { connections: 2, errorRate: 0.5 })
+    expect(connectionRows([quiet, busy, erroring, dropping])).toEqual([dropping, erroring, busy, quiet])
+  })
+})
+
+describe('mergeFlowVolume problem counts', () => {
+  it('sums status and verdict counts without touching the merged edges', () => {
+    const a = edge('a/x', 'ext', { httpStatusCounts: { '5xx': 1 }, verdictCounts: { dropped: 2 } })
+    const b = edge('a/y', 'ext', { httpStatusCounts: { '5xx': 3, '2xx': 4 }, verdictCounts: { forwarded: 5 } })
+    const merged = { ...a }
+    mergeFlowVolume(merged, b)
+    expect(merged.httpStatusCounts).toEqual({ '5xx': 4, '2xx': 4 })
+    expect(merged.verdictCounts).toEqual({ dropped: 2, forwarded: 5 })
+    expect(a.httpStatusCounts).toEqual({ '5xx': 1 })
   })
 })

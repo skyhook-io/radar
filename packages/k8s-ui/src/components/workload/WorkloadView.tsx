@@ -281,6 +281,8 @@ interface WorkloadViewProps {
    * resource rather than from owner labels on a managed object.
    */
   onNavigateGitOpsPath?: (path: string) => void
+  /** Opens the live traffic view focused on this workload. */
+  onOpenLiveTraffic?: () => void
 
   // ── Render props for platform-specific content ───────────────────────────
   /** Render the logs tab content */
@@ -494,6 +496,7 @@ export function WorkloadView({
   helmOwnerSource,
   onOpenHelmRelease,
   onNavigateGitOpsPath,
+  onOpenLiveTraffic,
 }: WorkloadViewProps) {
   // The live object preserves exact CRD capitalization (RayJob, TFJob); the URL
   // plural remains the API resource name used by fetches and mutations.
@@ -929,13 +932,14 @@ export function WorkloadView({
               </Tooltip>
             </div>
             <p className="text-sm text-theme-text-tertiary">{namespace}</p>
-            {(gitopsOwner || helmOwner || (gitOpsResourcePath && onNavigateGitOpsPath)) && (
+            {(gitopsOwner || helmOwner || (gitOpsResourcePath && onNavigateGitOpsPath) || onOpenLiveTraffic) && (
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
                 {gitopsOwner && <ManagedByChip owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} />}
                 {helmOwner && <HelmManagedByChip owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} />}
                 {gitOpsResourcePath && onNavigateGitOpsPath && (
                   <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
                 )}
+                {onOpenLiveTraffic && <LiveTrafficChip onClick={onOpenLiveTraffic} />}
               </div>
             )}
           </div>
@@ -1115,6 +1119,7 @@ export function WorkloadView({
             {gitOpsResourcePath && onNavigateGitOpsPath && (
               <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
             )}
+            {onOpenLiveTraffic && <LiveTrafficChip onClick={onOpenLiveTraffic} />}
             {relationships?.owner && !showOwnershipHeading && (
               <span>Owner: <button onClick={() => onNavigateToResource?.(refToSelectedResource(relationships.owner!))} className="text-blue-500 hover:underline">{relationships.owner.name}</button></span>
             )}
@@ -1415,6 +1420,21 @@ function OpenInGitOpsChip({ onClick }: { onClick: () => void }) {
         className="inline-flex items-center gap-1 rounded border border-skyhook-500/40 bg-skyhook-500/10 px-1.5 py-0.5 text-[11px] font-medium text-skyhook-500 hover:bg-skyhook-500/20 transition-colors"
       >
         Open in GitOps
+        <ArrowRight className="h-3 w-3 shrink-0" />
+      </button>
+    </Tooltip>
+  )
+}
+
+function LiveTrafficChip({ onClick }: { onClick: () => void }) {
+  return (
+    <Tooltip content="What this workload talks to, from the cluster's traffic source" delay={150}>
+      <button
+        type="button"
+        onClick={onClick}
+        className="inline-flex items-center gap-1 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[11px] font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover transition-colors"
+      >
+        Live traffic
         <ArrowRight className="h-3 w-3 shrink-0" />
       </button>
     </Tooltip>

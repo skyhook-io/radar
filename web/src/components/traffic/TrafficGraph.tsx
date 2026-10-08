@@ -18,12 +18,12 @@ import '@xyflow/react/dist/style.css'
 import ELK from 'elkjs/lib/elk.bundled.js'
 import type { AggregatedFlow } from '../../types'
 import { clsx } from 'clsx'
-import { X, ArrowRight, Globe, Server, Activity, Puzzle } from 'lucide-react'
+import { X, ArrowRight, Globe, Server, Activity, Puzzle, Crosshair } from 'lucide-react'
 import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
 import { Tooltip } from '../ui/Tooltip'
-import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf } from './trafficFilters'
+import { isRateBasedSource, isExternalKind, requestRateOf, errorRateOf, formatRate, displayVolume, latencyWeightOf, parseFocus, type TrafficFocus } from './trafficFilters'
 
 const elk = new ELK()
 
@@ -59,7 +59,13 @@ interface TrafficGraphProps {
   serviceCategories?: Map<string, string>
   addonMode?: AddonMode
   trafficSource?: string
+  /** The selection, owned by the view: the graph shows it and reports clicks. */
+  selection?: TrafficGraphSelection | null
   onSelectionChange?: (selection: TrafficGraphSelection | null) => void
+  /** Narrows the view to a node and its neighbors. */
+  onFocus?: (focus: TrafficFocus) => void
+  /** The focused node, which is not offered as a focus again. */
+  focusedId?: string
 }
 
 // Phase 2.1: Calculate edge width based on connection count (log scale)
@@ -429,11 +435,13 @@ function formatBytes(bytes: number): string {
 function DetailsPanel({
   selection,
   onClose,
+  onFocus,
   flows,
   isRateBased,
 }: {
   selection: Selection
   onClose: () => void
+  onFocus?: () => void
   flows: AggregatedFlow[]
   // True for sources that measure a rate rather than counting connections —
   // Istio and Beyla both do. Changes the wording and the /s suffix.
@@ -542,12 +550,26 @@ function DetailsPanel({
             {isNode ? (nodeData?.kind === 'Internet' ? 'Internet Traffic' : nodeData?.kind === 'Addon' ? 'Cluster Addons' : 'Service Details') : 'Connection Details'}
           </span>
         </div>
-        <button
-          onClick={onClose}
-          className="p-1 rounded hover:bg-theme-hover text-theme-text-secondary"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          {onFocus && (
+            <Tooltip content="Show only this and what it talks to">
+              <button
+                type="button"
+                onClick={onFocus}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover"
+              >
+                <Crosshair className="h-3.5 w-3.5" /> Focus
+              </button>
+            </Tooltip>
+          )}
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="p-1 rounded hover:bg-theme-hover text-theme-text-secondary"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       {/* Content */}
@@ -1088,6 +1110,26 @@ function FitViewOnChange({
   return null
 }
 
+function edgeSelection(edge: Edge, flow: AggregatedFlow | undefined): Selection {
+  return {
+    type: 'edge',
+    id: edge.id,
+    data: {
+      source: edge.source,
+      target: edge.target,
+      port: flow?.port || 0,
+      connections: flow?.connections || 0,
+      protocol: flow?.protocol || 'tcp',
+      flow,
+    },
+  }
+}
+
+// The Internet node and the addon group stand for many endpoints at once.
+function isFocusable(data: TrafficNodeData | undefined): boolean {
+  return !!data && data.kind !== 'Internet' && data.kind !== 'Addon' && data.kind !== 'AddonInternet'
+}
+
 // A pair can carry both oriented and unoriented traffic at the same port, and the
 // backend keeps those as separate aggregates because no single answer about the
 // direction is right for both. Without the suffix they would share an edge id and
@@ -1097,7 +1139,7 @@ function trafficEdgeId(sourceId: string, destId: string, flow: AggregatedFlow): 
   return `${sourceId}->${destId}:${flow.port}${flow.directionUnknown ? ':unoriented' : ''}`
 }
 
-export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', onSelectionChange }: TrafficGraphProps) {
+export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '', selection: viewSelection, onSelectionChange, onFocus, focusedId }: TrafficGraphProps) {
   // Beyla is rate-based too: its Connections field carries requests per second,
   // not a connection count, so it needs the same label Istio gets.
   const isRateBased = isRateBasedSource(trafficSource)
@@ -1605,6 +1647,38 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
   const shouldFitViewRef = useRef(false)
   const prevFlowCountRef = useRef(flows.length)
 
+  // A new focus is a different graph even when it has as many edges.
+  const prevFocusRef = useRef(focusedId)
+  if (prevFocusRef.current !== focusedId) {
+    prevFocusRef.current = focusedId
+    shouldFitViewRef.current = true
+  }
+
+  // The view owns the selection: it is set from outside the graph too (a focus
+  // selects its node, the connections table an edge). Shown once the layout
+  // holds what it names.
+  useEffect(() => {
+    if (viewSelection === undefined) return
+    if (!viewSelection) {
+      setSelection(null)
+      return
+    }
+    if (viewSelection.type === 'node' && viewSelection.nodeId) {
+      const node = layoutedNodes.find(n => n.id === viewSelection.nodeId)
+      setSelection(prev => (prev?.type === 'node' && prev.id === viewSelection.nodeId) ? prev
+        : node ? { type: 'node', id: node.id, data: node.data } : null)
+      return
+    }
+    const edge = layoutedEdges.find(e => {
+      const flow = flowByEdgeId.get(e.id)
+      return e.source === viewSelection.sourceId && e.target === viewSelection.destId &&
+        (viewSelection.port === undefined || flow?.port === viewSelection.port) &&
+        !!flow?.directionUnknown === !!viewSelection.directionUnknown
+    })
+    setSelection(prev => (prev?.type === 'edge' && prev.id === edge?.id) ? prev
+      : edge ? edgeSelection(edge, flowByEdgeId.get(edge.id)) : null)
+  }, [viewSelection, layoutedNodes, layoutedEdges, flowByEdgeId])
+
   // Update nodes and edges when layout changes
   useEffect(() => {
     // Check if flow count changed (filter/namespace change)
@@ -1628,18 +1702,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
 
   const onEdgeClick: EdgeMouseHandler<Edge> = useCallback((_event, edge) => {
     const flow = flowByEdgeId.get(edge.id)
-    setSelection({
-      type: 'edge',
-      id: edge.id,
-      data: {
-        source: edge.source,
-        target: edge.target,
-        port: flow?.port || 0,
-        connections: flow?.connections || 0,
-        protocol: flow?.protocol || 'tcp',
-        flow,
-      },
-    })
+    setSelection(edgeSelection(edge, flow))
     onSelectionChange?.({ type: 'edge', sourceId: edge.source, destId: edge.target, port: flow?.port, directionUnknown: !!flow?.directionUnknown })
   }, [flowByEdgeId, onSelectionChange])
 
@@ -1683,7 +1746,13 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       {selection && (
         <DetailsPanel
           selection={selection}
-          onClose={() => setSelection(null)}
+          onClose={onPaneClick}
+          onFocus={onFocus && selection.type === 'node' && selection.id !== focusedId && isFocusable(selection.data as TrafficNodeData)
+            ? () => {
+                const focus = parseFocus(selection.id)
+                if (focus) onFocus(focus)
+              }
+            : undefined}
           flows={flows}
           isRateBased={isRateBased}
         />

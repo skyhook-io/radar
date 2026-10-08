@@ -138,6 +138,19 @@ export function mergeFlowVolume(into: AggregatedFlow, flow: AggregatedFlow): voi
   if (flow.errorCount) into.errorCount = (into.errorCount || 0) + flow.errorCount
   if (flow.requestRate) into.requestRate = (into.requestRate || 0) + flow.requestRate
   if (flow.errorRate) into.errorRate = (into.errorRate || 0) + flow.errorRate
+  // New objects rather than in-place sums: a merged edge starts as a shallow
+  // copy of the server's, so its maps are still the server's.
+  into.httpStatusCounts = sumCounts(into.httpStatusCounts, flow.httpStatusCounts)
+  into.verdictCounts = sumCounts(into.verdictCounts, flow.verdictCounts)
+  into.dropReasons = sumCounts(into.dropReasons, flow.dropReasons)
+}
+
+function sumCounts(a: Record<string, number> | undefined, b: Record<string, number> | undefined): Record<string, number> | undefined {
+  if (!b) return a
+  if (!a) return { ...b }
+  const sum = { ...a }
+  for (const [k, v] of Object.entries(b)) sum[k] = (sum[k] ?? 0) + v
+  return sum
 }
 
 /**
@@ -404,3 +417,158 @@ export function graphSize(flows: AggregatedFlow[]): { nodes: number; edges: numb
 export const GRAPH_DRAW_BUDGET = 600
 /** Above this it is not drawn at all (about 5s of layout, freezing the tab). */
 export const GRAPH_DRAW_CEILING = 1500
+
+/** 5xx responses on an edge: counted where the source observes responses,
+ *  a per-second rate where it measures one. */
+export function flowErrors(flow: AggregatedFlow): number {
+  return flow.httpStatusCounts?.['5xx'] || errorRateOf(flow)
+}
+
+export function flowDrops(flow: AggregatedFlow): number {
+  return flow.verdictCounts?.dropped ?? 0
+}
+
+/**
+ * A workload (or any endpoint) the view is narrowed to: it and everything it
+ * talks to. Identified by namespace and name, the way the graph names nodes,
+ * so it means the same thing whether pods are grouped or not — ungrouped, it
+ * is the pods the workload owns.
+ */
+export interface TrafficFocus {
+  namespace?: string
+  name: string
+}
+
+export function parseFocus(value: string | null): TrafficFocus | null {
+  if (!value) return null
+  const slash = value.indexOf('/')
+  if (slash < 0) return { name: value }
+  const namespace = value.slice(0, slash)
+  const name = value.slice(slash + 1)
+  if (!name) return null
+  return namespace ? { namespace, name } : { name }
+}
+
+export function focusId(focus: TrafficFocus): string {
+  return graphEndpointId(focus)
+}
+
+export function touchesFocus(e: AggregatedFlow['source'], focus: TrafficFocus): boolean {
+  if ((e.namespace || undefined) !== focus.namespace) return false
+  return e.name === focus.name || (e.kind === 'Pod' && e.workload === focus.name)
+}
+
+/** The edges with the focus at either end. */
+export function focusNeighborhood<T extends AggregatedFlow>(flows: T[], focus: TrafficFocus): T[] {
+  return flows.filter(f => touchesFocus(f.source, focus) || touchesFocus(f.destination, focus))
+}
+
+export interface EndpointSummary {
+  id: string
+  name: string
+  namespace?: string
+  kind: string
+  workloadKind?: string
+  volume: number
+  errors: number
+  drops: number
+}
+
+/** Every endpoint drawn from these flows, with the traffic on its edges. The
+ *  options a focus can be chosen from, so each one has something to show. */
+export function endpointSummaries(flows: AggregatedFlow[]): EndpointSummary[] {
+  const byId = new Map<string, EndpointSummary>()
+  const add = (e: AggregatedFlow['source'], flow: AggregatedFlow) => {
+    const id = graphEndpointId(e)
+    let s = byId.get(id)
+    if (!s) {
+      s = { id, name: e.name, namespace: e.namespace || undefined, kind: e.kind, workloadKind: e.workloadKind, volume: 0, errors: 0, drops: 0 }
+      byId.set(id, s)
+    }
+    s.volume += flow.connections
+    s.errors += flowErrors(flow)
+    s.drops += flowDrops(flow)
+  }
+  for (const flow of flows) {
+    add(flow.source, flow)
+    if (graphEndpointId(flow.destination) !== graphEndpointId(flow.source)) add(flow.destination, flow)
+  }
+  return Array.from(byId.values())
+}
+
+/** Where the problems are first, then the busiest. */
+export function byProblemsThenVolume(a: { errors: number; drops: number; volume: number }, b: { errors: number; drops: number; volume: number }): number {
+  const pa = a.errors > 0 || a.drops > 0 ? 1 : 0
+  const pb = b.errors > 0 || b.drops > 0 ? 1 : 0
+  if (pa !== pb) return pb - pa
+  if (a.drops + a.errors !== b.drops + b.errors) return b.drops + b.errors - (a.drops + a.errors)
+  return b.volume - a.volume
+}
+
+/**
+ * Search results for a query: a name that starts with the query before one
+ * that only contains it, and within each, problems first, then volume.
+ */
+export function searchEndpoints(summaries: EndpointSummary[], query: string, limit = 50): EndpointSummary[] {
+  const q = query.trim().toLowerCase()
+  const rank = (s: EndpointSummary) => {
+    if (!q) return 1
+    const name = s.name.toLowerCase()
+    if (name === q) return 0
+    if (name.startsWith(q)) return 1
+    if (name.includes(q)) return 2
+    if (s.id.toLowerCase().includes(q)) return 3
+    return -1
+  }
+  return summaries
+    .map(s => ({ s, r: rank(s) }))
+    .filter(x => x.r >= 0)
+    .sort((a, b) => a.r - b.r || byProblemsThenVolume(a.s, b.s))
+    .slice(0, limit)
+    .map(x => x.s)
+}
+
+export interface NamespaceSummary {
+  name: string
+  endpoints: number
+  connections: number
+  volume: number
+  errors: number
+  drops: number
+}
+
+/**
+ * Per namespace, what narrowing to it would show. Narrowing keeps an edge
+ * when either end is in the namespace, as the server does, so a cross-namespace
+ * edge counts toward both of its namespaces, and its far end toward the
+ * namespace's endpoints.
+ */
+export function namespaceSummaries(flows: AggregatedFlow[]): NamespaceSummary[] {
+  const byNs = new Map<string, { endpoints: Set<string>; connections: number; volume: number; errors: number; drops: number }>()
+  for (const flow of flows) {
+    const namespaces = new Set([flow.source.namespace, flow.destination.namespace].filter(Boolean))
+    for (const ns of namespaces) {
+      let s = byNs.get(ns)
+      if (!s) {
+        s = { endpoints: new Set(), connections: 0, volume: 0, errors: 0, drops: 0 }
+        byNs.set(ns, s)
+      }
+      s.endpoints.add(graphEndpointId(flow.source))
+      s.endpoints.add(graphEndpointId(flow.destination))
+      s.connections += 1
+      s.volume += flow.connections
+      s.errors += flowErrors(flow)
+      s.drops += flowDrops(flow)
+    }
+  }
+  return Array.from(byNs.entries())
+    .map(([name, s]) => ({ name, endpoints: s.endpoints.size, connections: s.connections, volume: s.volume, errors: s.errors, drops: s.drops }))
+    .sort((a, b) => byProblemsThenVolume(a, b) || a.name.localeCompare(b.name))
+}
+
+/** The edges as table rows, problems first, then volume. */
+export function connectionRows<T extends AggregatedFlow>(flows: T[]): T[] {
+  const keyed = flows.map(flow => ({ flow, errors: flowErrors(flow), drops: flowDrops(flow), volume: flow.connections }))
+  keyed.sort(byProblemsThenVolume)
+  return keyed.map(k => k.flow)
+}

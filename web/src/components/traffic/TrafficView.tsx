@@ -1,19 +1,22 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useTrafficSources, useTrafficFlows, useTrafficRecords, useTrafficConnect, useSetTrafficSource, type TrafficEndpointPair } from '../../api/traffic'
-import { useClusterInfo } from '../../api/client'
+import { useClusterInfo, useNamespaceScope } from '../../api/client'
+import { useSearchParams } from 'react-router-dom'
 import type { TrafficWizardState, AggregatedFlow, TrafficFlow } from '../../types'
 import { TrafficWizard } from './TrafficWizard'
 import { TrafficGraph, type TrafficGraphSelection } from './TrafficGraph'
 import { TrafficFilterSidebar } from './TrafficFilterSidebar'
 import { TrafficFlowListProvider } from './TrafficFlowListContext'
-import { Loader2, Filter, Plug, ChevronDown, List, Activity, AlertTriangle, Clock, Network } from 'lucide-react'
+import { Loader2, Filter, Plug, ChevronDown, List, Activity, AlertTriangle, Clock, Crosshair, X } from 'lucide-react'
+import { TrafficFocusSearch } from './TrafficFocusSearch'
+import { TrafficGraphTooLarge } from './TrafficGraphTooLarge'
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDock } from '../dock'
-import { AlertBanner, EmptyState, PaneLoader, FreshnessControl, pluralize } from '@skyhook-io/k8s-ui'
+import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, pairKey, selectionRawPairs, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind, mergeFlowVolume, coverageLabel, type GraphFlow, endpointPair, graphEndpoint, graphEndpointId, mergeRawPairs, pairKey, selectionRawPairs, graphSize, GRAPH_DRAW_BUDGET, GRAPH_DRAW_CEILING, parseFocus, focusId, focusNeighborhood, touchesFocus, endpointSummaries, namespaceSummaries, type TrafficFocus } from './trafficFilters'
 
 // Consecutive 2s retries of an empty result that came with a transient warning.
 const MAX_EMPTY_RETRIES = 5
@@ -359,9 +362,11 @@ function coverageExplanation(data: { nodeFlowLimit?: number; flowLimit?: number 
 
 interface TrafficViewProps {
   namespaces: string[]
+  /** Sets the app-wide namespace selection. */
+  onSetNamespaces?: (namespaces: string[]) => void
 }
 
-export function TrafficView({ namespaces }: TrafficViewProps) {
+export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const { connection } = useConnection()
   const [wizardState, setWizardState] = useState<TrafficWizardState>('detecting')
   const [timeRange, setTimeRange] = useState<string>('5m')
@@ -384,8 +389,28 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   const [addonMode, setAddonMode] = useState<AddonMode>('show')
   const [graphSelection, setGraphSelection] = useState<TrafficGraphSelection | null>(null)
   const clearGraphSelection = useCallback(() => setGraphSelection(null), [])
-  const [drawAnyway, setDrawAnyway] = useState(false)
+  // The view the graph was last drawn for, and so keeps drawing (up to the
+  // ceiling) as refreshes move its size: set by drawing it or by Draw anyway.
+  const [drawnViewKey, setDrawnViewKey] = useState<string | null>(null)
   const dock = useDock()
+  const graphPaneRef = useRef<HTMLDivElement>(null)
+
+  // Focus lives in the URL so Back leaves it and a link can carry it.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const focusParam = searchParams.get('focus')
+  const focus = useMemo(() => parseFocus(focusParam), [focusParam])
+  const focusKey = focus ? focusId(focus) : undefined
+  const setFocus = useCallback((next: TrafficFocus | null) => {
+    const params = new URLSearchParams(window.location.search)
+    if (next) params.set('focus', focusId(next))
+    else params.delete('focus')
+    setSearchParams(params)
+  }, [setSearchParams])
+  // Entering a focus selects it, so the flow list holds its records; leaving
+  // one clears the selection it made.
+  useEffect(() => {
+    setGraphSelection(focusKey ? { type: 'node', nodeId: focusKey } : null)
+  }, [focusKey])
 
   // Dock: offset past sidebar, close flows tab on unmount
   const flowsTabIdRef = useRef<string | null>(null)
@@ -401,7 +426,9 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [hiddenNamespaces, setHiddenNamespaces] = useState<Set<string>>(new Set())
+  const [chosenHiddenNamespaces, setHiddenNamespaces] = useState<Set<string>>(new Set())
+  // Paused while focused: a neighbor in a hidden namespace is still a neighbor.
+  const hiddenNamespaces = useMemo(() => (focusParam ? new Set<string>() : chosenHiddenNamespaces), [focusParam, chosenHiddenNamespaces])
   // L7 filters (Hubble-only)
   const [l7Protocol, setL7Protocol] = useState<string>('all')
   const [l7Methods, setL7Methods] = useState<Set<string>>(new Set())
@@ -869,8 +896,18 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   // When grouping addons:
   // 1. Aggregate internet → addon into single edge to group
   // 2. Aggregate addon → kubernetes into single edge from group
+  // Everything a focus can be put on: the endpoints drawn before addons are
+  // grouped, which are real ones.
+  const focusableEndpoints = useMemo(() => endpointSummaries(internetCollapsedFlows), [internetCollapsedFlows])
+  const focusedFlows = useMemo(
+    () => (focus ? focusNeighborhood(internetCollapsedFlows, focus) : internetCollapsedFlows),
+    [internetCollapsedFlows, focus])
+
+  // A focused view draws its endpoints as they are: grouping the addons would
+  // fold the focus or its neighbors into the group.
+  const groupAddons = addonMode === 'group' && !focus
   const finalFlows = useMemo<GraphFlow[]>(() => {
-    if (addonMode !== 'group') return internetCollapsedFlows
+    if (!groupAddons) return focusedFlows
 
     // Track totals for aggregated edges
     let addonInternetTotal = 0
@@ -886,7 +923,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
       return name === 'kubernetes' && (!namespace || namespace === 'default')
     }
 
-    internetCollapsedFlows.forEach(flow => {
+    focusedFlows.forEach(flow => {
       const sourceIsAddon = isClusterAddon(flow.source.name, flow.source.namespace)
       const destIsAddon = isClusterAddon(flow.destination.name, flow.destination.namespace)
       const sourceIsInternet = flow.source.kind === 'Internet'
@@ -975,11 +1012,30 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     }
 
     return processedFlows
-  }, [internetCollapsedFlows, addonMode])
+  }, [focusedFlows, groupAddons])
 
+  // The map is laid out on the main thread, so a view too large to draw is
+  // listed as a table instead of freezing the tab.
+  const drawnGraph = useMemo(() => graphSize(finalFlows), [finalFlows])
+  // Everything that makes it a different view. A refresh doesn't, so a view
+  // that was drawn keeps being drawn as its size drifts past the budget.
+  const viewKey = JSON.stringify([
+    namespaces, timeRange, focusKey ?? '', groupByWorkload, hideSystem, hideExternal, activeMinConnections,
+    [...hiddenNamespaces].sort(), addonMode, aggregateExternal, detectServices, collapseInternet,
+    l7Protocol, [...activeMethods].sort(), [...activeStatusRanges].sort(), [...activeVerdicts].sort(), activeDnsPattern,
+  ])
+  const fitsBudget = drawnGraph.score <= GRAPH_DRAW_BUDGET
+  const tooLargeToDraw = drawnGraph.score > GRAPH_DRAW_CEILING || (!fitsBudget && drawnViewKey !== viewKey)
+  useEffect(() => {
+    if (finalFlows.length > 0 && fitsBudget) setDrawnViewKey(viewKey)
+  }, [finalFlows.length, fitsBudget, viewKey])
+
+  // The table lists the endpoints as they are, so a selection made from it is
+  // traced through the same flows.
+  const selectableFlows = tooLargeToDraw ? focusedFlows : finalFlows
   const selectionPairs = useMemo(
-    () => selectionRawPairs(finalFlows, graphSelection, addonMode === 'group' ? e => isClusterAddon(e.name, e.namespace) : undefined),
-    [graphSelection, finalFlows, addonMode])
+    () => selectionRawPairs(selectableFlows, graphSelection, groupAddons && !tooLargeToDraw ? e => isClusterAddon(e.name, e.namespace) : undefined),
+    [graphSelection, selectableFlows, groupAddons, tooLargeToDraw])
 
   const records = useTrafficRecords({
     namespaces,
@@ -1120,35 +1176,31 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     }))
   }, [flowsData?.aggregated, hideSystem, hideExternal, activeMinConnections])
 
-  // The map is laid out on the main thread, so a view too large to draw is
-  // held back until it is narrowed rather than freezing the tab.
-  const drawnGraph = useMemo(() => graphSize(finalFlows), [finalFlows])
-  const tooLargeToDraw = drawnGraph.score > GRAPH_DRAW_CEILING ||
-    (drawnGraph.score > GRAPH_DRAW_BUDGET && !drawAnyway)
-  // "Draw anyway" answers for the view it was given on: a different scope, or
-  // one that has since fallen back under the budget, asks again.
-  const namespaceScope = namespaces.join(',')
-  useEffect(() => {
-    setDrawAnyway(false)
-  }, [namespaceScope, timeRange])
-  useEffect(() => {
-    if (drawnGraph.score <= GRAPH_DRAW_BUDGET) setDrawAnyway(false)
-  }, [drawnGraph.score])
-  // A selection made on a graph that is no longer drawn would keep filtering
-  // the flow list with nothing on screen to show it or clear it.
-  useEffect(() => {
-    if (tooLargeToDraw) setGraphSelection(null)
-  }, [tooLargeToDraw])
-  // Offered only while more than one namespace is in view: narrowing to the
-  // last one changes nothing.
-  const busiestNamespaces = useMemo(() => {
-    const inView = namespacesWithCounts.filter(ns => !hiddenNamespaces.has(ns.name))
-    if (inView.length < 2) return []
-    return inView.sort((a, b) => b.nodeCount - a.nodeCount).slice(0, 3).map(ns => ns.name)
-  }, [namespacesWithCounts, hiddenNamespaces])
-  const showOnlyNamespace = useCallback((keep: string) => {
-    setHiddenNamespaces(new Set(namespacesWithCounts.map(ns => ns.name).filter(ns => ns !== keep)))
-  }, [namespacesWithCounts])
+  const namespaceScopeQuery = useNamespaceScope()
+  const namespaceLocked = !!namespaceScopeQuery.data?.cacheScoped && !namespaceScopeQuery.data?.namespaceRescope
+  // Narrowing to one namespace keeps the edges with either end in it, as the
+  // server does, so these are what each choice would show.
+  const namespaceChoices = useMemo(() => {
+    if (!onSetNamespaces || namespaceLocked || focus) return null
+    const choices = namespaceSummaries(finalFlows)
+      .filter(ns => !(namespaces.length === 1 && namespaces[0] === ns.name))
+    return choices.length > 0 ? choices : null
+  }, [onSetNamespaces, namespaceLocked, focus, finalFlows, namespaces])
+
+  const focusPartial = !!focus?.namespace && namespaces.length > 0 && !namespaces.includes(focus.namespace)
+
+  const resetFilters = useCallback(() => {
+    setHideSystem(false)
+    setHideExternal(false)
+    chooseMinConnections(0)
+    setHiddenNamespaces(new Set())
+    setAddonMode('show')
+    setL7Protocol('all')
+    setL7Methods(new Set())
+    setL7StatusRanges(new Set())
+    setL7Verdicts(new Set())
+    setDnsPattern('')
+  }, [chooseMinConnections])
 
   // Determine wizard state based on sources detection
   useEffect(() => {
@@ -1267,12 +1319,13 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
         dnsPattern={dnsPattern}
         setDnsPattern={setDnsPattern}
         namespaces={namespacesWithCounts}
-        hiddenNamespaces={hiddenNamespaces}
+        hiddenNamespaces={chosenHiddenNamespaces}
         onToggleNamespace={toggleNamespace}
+        namespacesPausedFor={focus?.name}
       />
 
       {/* Main content area */}
-      <div className="flex-1 relative min-w-0">
+      <div ref={graphPaneRef} className="flex-1 relative min-w-0">
           {/* Floating controls — overlaid on graph like topology view */}
           {(() => {
             const availableSources = sourcesData?.detected.filter(s => s.status === 'available') || []
@@ -1303,8 +1356,39 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
 
             return (
               <>
-                {/* Top-left: source status pill */}
+                {/* Top-left: source status pill, focus */}
                 <div className="absolute top-3 left-3 z-10 flex items-center gap-2">
+                  {focus ? (
+                    <div className="flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-skyhook-500/40 text-[11px]">
+                      <Crosshair className="h-3 w-3 text-skyhook-500" />
+                      <span className="text-theme-text-secondary">Focused on</span>
+                      <span className="font-medium text-theme-text-primary">{focus.name}</span>
+                      {focus.namespace && <span className="text-theme-text-tertiary">({focus.namespace})</span>}
+                      {focusPartial && (
+                        // Narrowing fetches the edges with an end in the chosen
+                        // namespaces, so a focus outside them shows only those.
+                        <>
+                          <span className="text-amber-500">· only its traffic with {namespaces.join(', ')}</span>
+                          {onSetNamespaces && !namespaceLocked && (
+                            <button type="button" onClick={() => onSetNamespaces([focus.namespace!])} className="text-blue-400 hover:text-blue-300 font-medium">
+                              Show all
+                            </button>
+                          )}
+                        </>
+                      )}
+                      <Tooltip content="Show everything again">
+                        <button type="button" onClick={() => setFocus(null)} aria-label="Leave focus" className="p-0.5 rounded hover:bg-theme-hover text-theme-text-secondary">
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Tooltip>
+                    </div>
+                  ) : null}
+                  <TrafficFocusSearch
+                    endpoints={focusableEndpoints}
+                    onFocus={setFocus}
+                    isRateBased={isRateBased}
+                    overlayContainer={graphPaneRef.current}
+                  />
                   {activeSource && (
                     <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[11px]">
                       {isConnecting ? (
@@ -1420,56 +1504,52 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                 </div>
               )}
               {tooLargeToDraw ? (
-                <div className="absolute inset-0 flex items-center justify-center px-4">
-                  <EmptyState
-                    tone="filtered"
-                    variant="card"
-                    icon={Network}
-                    headline="Too much traffic to draw at once"
-                    body={
-                      <>
-                        {pluralize(drawnGraph.nodes, 'endpoint')} and {pluralize(drawnGraph.edges, 'connection')} pass the current filters — more than the map can lay out without freezing this tab.
-                        {' '}Narrow it with the filters on the left: fewer namespaces, a minimum connection count, or external traffic hidden.
-                        {sampleSize > 0 && ' The flow list still shows the records.'}
-                      </>
-                    }
-                    action={
-                      <div className="flex flex-wrap items-center justify-center gap-2">
-                        {busiestNamespaces.map(ns => (
-                          <button
-                            key={ns}
-                            type="button"
-                            onClick={() => showOnlyNamespace(ns)}
-                            className="btn-brand-muted text-xs px-2.5 py-1 rounded-md"
-                          >
-                            Only {ns}
-                          </button>
-                        ))}
-                        {drawnGraph.score <= GRAPH_DRAW_CEILING && (
-                          <button
-                            type="button"
-                            onClick={() => setDrawAnyway(true)}
-                            className="text-xs px-2.5 py-1 rounded-md border border-theme-border text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover"
-                          >
-                            Draw anyway
-                          </button>
-                        )}
-                      </div>
-                    }
-                  />
-                </div>
+                <TrafficGraphTooLarge
+                  graph={drawnGraph}
+                  focusName={focus?.name}
+                  onDrawAnyway={drawnGraph.score <= GRAPH_DRAW_CEILING ? () => setDrawnViewKey(viewKey) : undefined}
+                  namespaces={namespaceChoices}
+                  onPickNamespace={ns => onSetNamespaces?.([ns])}
+                  endpoints={focusableEndpoints}
+                  onFocus={setFocus}
+                  isRateBased={isRateBased}
+                  overlayContainer={graphPaneRef.current}
+                  flows={focusedFlows}
+                  selection={graphSelection}
+                  onSelect={setGraphSelection}
+                  focusedId={focusKey}
+                />
               ) : (
                 <TrafficGraph
                   flows={finalFlows}
                   hotPathThreshold={hotPathThreshold}
                   showNamespaceGroups={showNamespaceGroups}
                   serviceCategories={serviceCategories}
-                  addonMode={addonMode}
+                  addonMode={groupAddons ? 'group' : addonMode === 'group' ? 'show' : addonMode}
                   trafficSource={sourcesData?.active || ''}
+                  selection={graphSelection}
                   onSelectionChange={setGraphSelection}
+                  onFocus={setFocus}
+                  focusedId={focusKey}
                 />
               )}
             </>
+          ) : focus && (flowsData?.aggregated?.length ?? 0) > 0 ? (
+            // Only when there is traffic, none of it the focus's: with none at
+            // all, the view's own empty and warning states say why.
+            <div className="absolute inset-0 flex items-center justify-center px-4">
+              <FocusNotFound
+                focus={focus}
+                hiddenByFilters={(flowsData?.aggregated ?? []).some(f => touchesFocus(f.source, focus) || touchesFocus(f.destination, focus))}
+                systemHidden={hideSystem && !!focus.namespace && SYSTEM_NAMESPACES.has(focus.namespace)}
+                outsideNamespaces={namespaces.length > 0 && !!focus.namespace && !namespaces.includes(focus.namespace)}
+                window={coverage ? `${coverage} of ${timeRange}` : `last ${timeRange}`}
+                onShowAll={resetFilters}
+                onShowSystem={() => setHideSystem(false)}
+                onSwitchNamespace={onSetNamespaces && !namespaceLocked && focus.namespace ? () => onSetNamespaces([focus.namespace!]) : undefined}
+                onLeave={() => setFocus(null)}
+              />
+            </div>
           ) : connectionError ? (
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="text-center space-y-3">
@@ -1502,18 +1582,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                       // the user pressing a button that promised everything back and
                       // changed nothing whenever the cause was a namespace, an addon
                       // mode or an L7 choice.
-                      onClick={() => {
-                        setHideSystem(false)
-                        setHideExternal(false)
-                        chooseMinConnections(0)
-                        setHiddenNamespaces(new Set())
-                        setAddonMode('show')
-                        setL7Protocol('all')
-                        setL7Methods(new Set())
-                        setL7StatusRanges(new Set())
-                        setL7Verdicts(new Set())
-                        setDnsPattern('')
-                      }}
+                      onClick={resetFilters}
                       className="badge badge-sm border border-theme-border bg-theme-elevated text-theme-text-primary hover:bg-theme-hover transition-colors"
                     >
                       Show all
@@ -1555,5 +1624,64 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
       </div>
     </div>
     </TrafficFlowListProvider>
+  )
+}
+
+/**
+ * A focus with nothing to show. Says which of the reasons it is, since only
+ * one of them means the workload is quiet: Radar may have hidden its traffic,
+ * or never fetched it.
+ */
+function FocusNotFound({ focus, hiddenByFilters, systemHidden, outsideNamespaces, window, onShowAll, onShowSystem, onSwitchNamespace, onLeave }: {
+  focus: TrafficFocus
+  hiddenByFilters: boolean
+  systemHidden: boolean
+  outsideNamespaces: boolean
+  window: string
+  onShowAll: () => void
+  onShowSystem: () => void
+  onSwitchNamespace?: () => void
+  onLeave: () => void
+}) {
+  const name = focus.namespace ? `${focus.name} (${focus.namespace})` : focus.name
+  let body: string
+  let action: { label: string; onClick: () => void } | undefined
+  if (hiddenByFilters) {
+    body = 'Its traffic is hidden by the current filters.'
+    action = { label: 'Show all traffic', onClick: onShowAll }
+  } else if (systemHidden) {
+    body = `${focus.namespace} is a system namespace, and Hide System keeps its traffic from being fetched.`
+    action = { label: 'Show system traffic', onClick: onShowSystem }
+  } else if (outsideNamespaces && onSwitchNamespace) {
+    body = `${focus.namespace} is outside the namespaces in view, so only its traffic with them was fetched, and there was none.`
+    action = { label: `Switch to ${focus.namespace}`, onClick: onSwitchNamespace }
+  } else {
+    body = `Radar saw no traffic to or from it in the ${window}.`
+  }
+  return (
+    <EmptyState
+      tone="neutral"
+      variant="card"
+      icon={Crosshair}
+      headline={`No traffic for ${name}`}
+      body={body}
+      action={
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {action && (
+            <button type="button" onClick={action.onClick} className="btn-brand-muted text-xs px-2.5 py-1 rounded-md">
+              {action.label}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onLeave}
+            className="text-xs px-2.5 py-1 rounded-md border border-theme-border text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover"
+          >
+            Leave focus
+          </button>
+        </div>
+      }
+      className="max-w-md"
+    />
   )
 }

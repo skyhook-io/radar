@@ -86,6 +86,9 @@ interface TrafficFilterSidebarProps {
   namespaces: Array<{ name: string; nodeCount: number }>
   hiddenNamespaces: Set<string>
   onToggleNamespace: (ns: string) => void
+  /** Set while the view is focused on an endpoint: the namespace choices are
+   *  kept but not applied, so a neighbor in a hidden namespace still shows. */
+  namespacesPausedFor?: string
 
 }
 
@@ -182,6 +185,7 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
   namespaces,
   hiddenNamespaces,
   onToggleNamespace,
+  namespacesPausedFor,
 }: TrafficFilterSidebarProps) {
   const [namespacesExpanded, setNamespacesExpanded] = useState(false)
 
@@ -506,7 +510,12 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
                 </button>
               </div>
             </div>
-            <div className="space-y-0.5">
+            {namespacesPausedFor && (
+              <p className="mb-1.5 text-[10px] text-theme-text-tertiary">
+                Paused while focused on {namespacesPausedFor}: its neighbors show whatever their namespace.
+              </p>
+            )}
+            <div className={clsx('space-y-0.5', namespacesPausedFor && 'opacity-50 pointer-events-none')} aria-disabled={!!namespacesPausedFor}>
               {visibleNamespaces.map(({ name, nodeCount }) => {
                 const isHidden = hiddenNamespaces.has(name)
                 return (

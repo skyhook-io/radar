@@ -37,7 +37,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
-import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
+import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships, TrafficSourcesResponse } from '../../types'
 import { useHistoryPaging } from './historyPaging'
 import {
   kindToPlural,
@@ -304,6 +304,10 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
     />
   )
 }
+
+// The kinds the traffic map draws as a node of their own: those that own
+// pods, which it groups under them.
+const TRAFFIC_WORKLOAD_PLURALS = new Set(['deployments', 'statefulsets', 'daemonsets', 'rollouts', 'cronjobs', 'jobs'])
 
 // ============================================================================
 // WORKLOAD VIEW WRAPPER — injects data fetching hooks
@@ -989,6 +993,19 @@ export function WorkloadView({
     (path: string) => navigateRouter(path),
     [navigateRouter],
   )
+  // Offered for the kinds the traffic map draws as one node, unless the
+  // traffic view has already found no source on this cluster. Detecting one
+  // here would probe every source from every workload page.
+  const knownTrafficSources = queryClient.getQueryData<TrafficSourcesResponse>(['traffic-sources'])
+  const trafficUnavailable = !!knownTrafficSources && !knownTrafficSources.detected.some(s => s.status === 'available')
+  const openLiveTraffic = useCallback(() => {
+    const params = new URLSearchParams()
+    const namespaces = searchParams.get('namespaces')
+    if (namespaces) params.set('namespaces', namespaces)
+    params.set('focus', `${namespace}/${name}`)
+    navigateRouter({ pathname: '/traffic', search: params.toString() })
+  }, [navigateRouter, searchParams, namespace, name])
+  const offerLiveTraffic = !!namespace && TRAFFIC_WORKLOAD_PLURALS.has(kindProp.toLowerCase()) && !trafficUnavailable
   // Drawer TraceSummary CTA → open the full resource view ON the Reachability tab.
   // The generic onExpand navigates to the workload path but drops the query, so we
   // navigate directly to that path WITH ?tab=reachability - the deeplink the
@@ -1405,6 +1422,7 @@ export function WorkloadView({
         helmOwnerSource={helmOwnerSource}
         onOpenHelmRelease={handleOpenHelmRelease}
         onNavigateGitOpsPath={handleNavigateGitOpsPath}
+        onOpenLiveTraffic={offerLiveTraffic ? openLiveTraffic : undefined}
       />
       <CreateResourceDialog
         open={duplicateDialogOpen}

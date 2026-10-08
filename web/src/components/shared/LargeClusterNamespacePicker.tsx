@@ -1,10 +1,14 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, type ReactNode } from 'react'
 import { Search } from 'lucide-react'
 import { Input } from '@skyhook-io/k8s-ui'
 
-export function LargeClusterNamespacePicker({ namespaces, onSelect }: {
+export function LargeClusterNamespacePicker({ namespaces, onSelect, ranked = false, renderMeta }: {
   namespaces: { name: string }[] | undefined
   onSelect: (ns: string) => void
+  /** Keep the given order (already ranked) instead of sorting by name. */
+  ranked?: boolean
+  /** Extra detail shown at the end of a namespace's row. */
+  renderMeta?: (name: string) => ReactNode
 }) {
   const [search, setSearch] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -15,8 +19,9 @@ export function LargeClusterNamespacePicker({ namespaces, onSelect }: {
 
   const sorted = useMemo(() => {
     if (!namespaces) return []
+    if (ranked) return namespaces
     return [...namespaces].sort((a, b) => a.name.localeCompare(b.name))
-  }, [namespaces])
+  }, [namespaces, ranked])
 
   const filtered = useMemo(() => {
     if (!search.trim()) return sorted
@@ -51,9 +56,10 @@ export function LargeClusterNamespacePicker({ namespaces, onSelect }: {
               key={ns.name}
               type="button"
               onClick={() => onSelect(ns.name)}
-              className="w-full text-left px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-hover transition-colors border-b border-theme-border last:border-b-0"
+              className="w-full flex items-center justify-between gap-3 text-left px-3 py-2 text-sm text-theme-text-primary hover:bg-theme-hover transition-colors border-b border-theme-border last:border-b-0"
             >
-              {ns.name}
+              <span className="truncate">{ns.name}</span>
+              {renderMeta?.(ns.name)}
             </button>
           ))
         )}
