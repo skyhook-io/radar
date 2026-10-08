@@ -276,9 +276,6 @@ func addFlowsWarning(result map[string]any, response *traffic.FlowsResponse, flo
 // graph's fetch so that a quiet edge on a busy cluster is not crowded out of
 // a capped result; the answer is as of this request, not the graph's.
 func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
-		return
-	}
 	raw := r.URL.Query().Get("match")
 	if len(raw) > maxTrafficMatchBytes {
 		s.writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("selection is larger than %d bytes", maxTrafficMatchBytes))
@@ -294,6 +291,9 @@ func (s *Server) handleGetTrafficRecords(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if !s.requireConnected(w) {
+		return
+	}
 	namespaces := s.parseNamespacesForUser(r)
 	if noNamespaceAccess(namespaces) {
 		s.writeJSON(w, map[string]any{"flows": []traffic.Flow{}, "matched": 0})
