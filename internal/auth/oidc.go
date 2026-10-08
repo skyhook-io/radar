@@ -570,7 +570,7 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var unverified *unverifiedEmailError
 		if errors.As(err, &unverified) {
-			log.Printf("[oidc] Refusing login for %s: email_verified is false in the ID token", unverified.email)
+			log.Printf("[oidc] Refusing login for %q: email_verified is false in the ID token", unverified.email)
 			http.Error(w, "Your email address is not verified at your identity provider, so Radar will not use it as your Kubernetes username. Verify the address with your identity provider, or set --auth-oidc-username-claim to a claim that does not depend on email (for example sub).", http.StatusForbidden)
 			return
 		}
