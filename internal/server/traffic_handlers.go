@@ -157,12 +157,14 @@ func resolveFlowWorkloads(cache *k8s.ResourceCache, flows []traffic.Flow) []traf
 		o, seen := resolved[key]
 		if !seen {
 			if pod, err := pods.Pods(e.Namespace).Get(e.Name); err == nil {
-				if top := k8s.TopOwnerForPod(cache, pod); top != nil {
+				// A pod nothing owns is its own unit, and so is a static pod,
+				// which the kubelet marks as owned by its Node: grouping by
+				// that would put a node's control-plane pods into one box.
+				// Either way a stale guess from the source must not group it
+				// with something else.
+				o = &owner{}
+				if top := k8s.TopOwnerForPod(cache, pod); top != nil && top.Kind != "Node" {
 					o = &owner{kind: top.Kind, name: top.Name}
-				} else {
-					// A pod nothing owns is its own unit; a stale guess from
-					// the source must not group it with something else.
-					o = &owner{}
 				}
 			}
 			resolved[key] = o

@@ -1106,14 +1106,6 @@ func hubbleMatchWhitelist(m *FlowMatch) []*flowpb.FlowFilter {
 // hubbleMaxMatchPairs is the largest selection sent pair by pair.
 const hubbleMaxMatchPairs = 50
 
-// hubblePodPrefix is the pod-name prefix that covers a reference's pod.
-func hubblePodPrefix(r EndpointRef) (string, bool) {
-	if r.Kind != EndpointKindPod || r.Namespace == "" || r.Name == "" {
-		return "", false
-	}
-	return r.Namespace + "/" + r.Name, true
-}
-
 // Cilium's monitor message types (pkg/monitor/api MessageType*), kept local
 // rather than importing that package for three numbers.
 const (

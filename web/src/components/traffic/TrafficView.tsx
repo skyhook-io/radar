@@ -1115,6 +1115,15 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   const drawnGraph = useMemo(() => graphSize(finalFlows), [finalFlows])
   const tooLargeToDraw = drawnGraph.score > GRAPH_DRAW_CEILING ||
     (drawnGraph.score > GRAPH_DRAW_BUDGET && !drawAnyway)
+  // "Draw anyway" answers for the view it was given on: a different scope, or
+  // one that has since fallen back under the budget, asks again.
+  const namespaceScope = namespaces.join(',')
+  useEffect(() => {
+    setDrawAnyway(false)
+  }, [namespaceScope, timeRange])
+  useEffect(() => {
+    if (drawnGraph.score <= GRAPH_DRAW_BUDGET) setDrawAnyway(false)
+  }, [drawnGraph.score])
   // A selection made on a graph that is no longer drawn would keep filtering
   // the flow list with nothing on screen to show it or clear it.
   useEffect(() => {
