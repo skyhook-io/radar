@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useId } from "react";
+import { useEffect, useState, useId } from "react";
 import {
   CheckCircle2,
   AlertTriangle,
@@ -60,19 +60,14 @@ export function ApplyDialog({
   // TODO(SKY-1075): once Radar can connect the user's SCM (GitHub/GitLab/…), replace
   //   direct apply on managed resources with "open a PR against the Git source"
   //   instead — the durable fix. See Linear SKY-1075.
-  const [acked, setAcked] = useState(false);
-  useEffect(() => {
-    if (open) setAcked(false);
-  }, [open]);
-  // An acknowledgment covers the verdict it was given for; a different one
-  // (the owner resolved, the policy changed) asks again.
+  // The guard key the acknowledgment was given for: a different verdict (the
+  // owner resolved, the policy changed) asks again.
   const guardKey = gitOpsWriteGuardKey(gitOpsGuard);
-  const ackedFor = useRef("");
+  const [ackedKey, setAckedKey] = useState("");
   useEffect(() => {
-    if (!guardKey || guardKey === ackedFor.current) return;
-    ackedFor.current = guardKey;
-    setAcked(false);
-  }, [guardKey]);
+    if (open) setAckedKey("");
+  }, [open]);
+  const acked = Boolean(guardKey) && ackedKey === guardKey;
   const applyBlocked = !canConfirmGitOpsWrite(gitOpsGuard, acked);
   return (
     <DialogPortal
@@ -153,7 +148,7 @@ export function ApplyDialog({
           <GitOpsWriteWarning
             guard={gitOpsGuard}
             acknowledged={acked}
-            onAcknowledgedChange={setAcked}
+            onAcknowledgedChange={(value) => setAckedKey(value ? guardKey : "")}
             onOpenOwner={onOpenGitOpsOwner}
           />
         )}

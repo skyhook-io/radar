@@ -33,6 +33,7 @@ import {
   type SetImageOwnership,
   SET_IMAGE_WRITES,
   setImageWrites,
+  setImageSelectionKey,
   gitOpsWriteEvidencePaths,
   type SetImageSelection,
   type WorkloadImageTarget,
@@ -1046,6 +1047,7 @@ export function WorkloadView({
     return {
       guard: imageGuard,
       onSelectionChange: setImageSelection,
+      selectionKey: setImageSelectionKey(imageSelection),
       onOpenOwner: owner
         ? imageOwnerVerified
           ? () => handleOpenGitOpsResource(owner)
@@ -1061,6 +1063,7 @@ export function WorkloadView({
     imageOwner,
     imageHelmOwner,
     imageOwnerVerified,
+    imageSelection,
   ])
   const actionsBarProps = useMemo(
     () => ({

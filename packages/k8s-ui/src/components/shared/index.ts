@@ -5,7 +5,7 @@ export {
   DrainPlanDialog, DrainPlanContent, canConfirmDrain, planMatches, emptyDirPodsAtRisk, DEFAULT_DRAIN_DIALOG_OPTIONS,
   type DrainPlan, type DrainPlanPod, type DrainOutcome, type DrainDialogOptions,
 } from './DrainPlanDialog'
-export { SetImageDialog, SET_IMAGE_WRITES, setImageWrites, type SetImageOwnership, type SetImageSelection, type SetImageDialogProps } from './SetImageDialog'
+export { SetImageDialog, SET_IMAGE_WRITES, setImageWrites, setImageSelectionKey, type SetImageOwnership, type SetImageSelection, type SetImageDialogProps } from './SetImageDialog'
 export { GitOpsWriteWarning, type GitOpsWriteWarningProps } from './GitOpsWriteWarning'
 export { CreateResourceDialog, type CreateResourceDialogProps, type ApplyResult } from './CreateResourceDialog'
 export { HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from './ManagedByChip'

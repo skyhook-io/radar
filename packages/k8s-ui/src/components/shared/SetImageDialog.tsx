@@ -28,6 +28,10 @@ export interface SetImageOwnership {
   /** The containers the dialog lists and the ones being changed, so the
    *  guard can judge exactly those (null until the containers load). */
   onSelectionChange?: (selection: SetImageSelection | null) => void
+  /** {@link setImageSelectionKey} of the selection `guard` was evaluated
+   *  for. With {@link onSelectionChange}, Update waits until it matches the
+   *  dialog's current selection. */
+  selectionKey?: string
 }
 
 export interface SetImageSelection {
@@ -94,6 +98,12 @@ export function reconcileRefreshedImageDrafts(
   }
 
   return { drafts: nextDrafts, changedCurrentKeys }
+}
+
+export function setImageSelectionKey(selection: SetImageSelection | null): string {
+  if (!selection) return ''
+  const rows = (refs: SetImageSelection['containers']) => refs.map((c) => [c.type, c.name])
+  return JSON.stringify([rows(selection.containers), rows(selection.changed)])
 }
 
 /** One write per container, by name: the guard's verdict for exactly the
@@ -180,7 +190,9 @@ export function SetImageDialog({
   const [submitting, setSubmitting] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
-  const [acknowledged, setAcknowledged] = useState(false)
+  // The guard key the acknowledgment was given for: a different verdict
+  // (fresh evidence, other containers, a changed policy) asks again.
+  const [ackedKey, setAckedKey] = useState('')
   const [changedCurrentKeys, setChangedCurrentKeys] = useState<string[]>([])
   const onLoadRef = useRef(onLoad)
   const loadRequestRef = useRef(0)
@@ -241,7 +253,7 @@ export function SetImageDialog({
     setDrafts({})
     setChangedCurrentKeys([])
     setSubmitError(null)
-    setAcknowledged(false)
+    setAckedKey('')
     void loadInventory()
   }, [open, workloadLabel, workloadName, workloadResource])
 
@@ -256,12 +268,9 @@ export function SetImageDialog({
   const busy = pending || submitting
   const ownershipResolved = ownership !== undefined
   const onSelectionChange = ownership?.onSelectionChange
-  const selectionKey = inventory
-    ? JSON.stringify([
-        inventory.containers.map((c) => [c.type, c.name]),
-        updates.map((u) => [u.type, u.name]),
-      ])
-    : ''
+  const selectionKey = setImageSelectionKey(
+    inventory ? { containers: inventory.containers, changed: updates } : null,
+  )
   useEffect(() => {
     if (!onSelectionChange) return
     const [containers, changed] = selectionKey ? (JSON.parse(selectionKey) as [string[][], string[][]]) : [null, null]
@@ -269,19 +278,15 @@ export function SetImageDialog({
     onSelectionChange(containers && changed ? { containers: toRefs(containers), changed: toRefs(changed) } : null)
   }, [onSelectionChange, selectionKey])
   const guard = ownership?.guard
-  // An acknowledgment covers the verdict it was given for; a different one
-  // (fresh evidence, a changed policy) asks again.
+  // The host evaluates the guard after it hears of an edit; until then the
+  // verdict on screen is for other containers.
+  const guardCurrent = !onSelectionChange || ownership?.selectionKey === selectionKey
   const guardKey = gitOpsWriteGuardKey(guard)
-  const ackedFor = useRef('')
-  useEffect(() => {
-    if (!guardKey || guardKey === ackedFor.current) return
-    ackedFor.current = guardKey
-    setAcknowledged(false)
-  }, [guardKey])
+  const acknowledged = Boolean(guardKey) && ackedKey === guardKey
   const canSubmit = canSubmitImageUpdates({
     updateCount: updates.length,
     hasEmptyImage,
-    ownershipConfirmable: canConfirmGitOpsWrite(guard, acknowledged),
+    ownershipConfirmable: guardCurrent && canConfirmGitOpsWrite(guard, acknowledged),
     busy,
     loadFailed: Boolean(loadError),
   })
@@ -428,7 +433,7 @@ export function SetImageDialog({
               <GitOpsWriteWarning
                 guard={guard}
                 acknowledged={acknowledged}
-                onAcknowledgedChange={setAcknowledged}
+                onAcknowledgedChange={(value) => setAckedKey(value ? guardKey : '')}
                 onOpenOwner={ownership?.onOpenOwner}
                 disabled={busy}
               />

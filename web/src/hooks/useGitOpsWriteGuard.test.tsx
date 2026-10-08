@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { SetImageDialog, canConfirmGitOpsWrite, type WorkloadImageInventory } from '@skyhook-io/k8s-ui'
+import { SetImageDialog, canConfirmGitOpsWrite, setImageSelectionKey, type WorkloadImageInventory } from '@skyhook-io/k8s-ui'
 import { afterEach, expect, it, vi } from 'vitest'
 import { useGitOpsWriteGuard, type GitOpsWriteGuardState } from './useGitOpsWriteGuard'
 
@@ -357,5 +357,41 @@ it('reports the listed and changed containers so the host can judge exactly thos
     })))
   } finally {
     await act(async () => root.unmount())
+  }
+})
+
+it('keeps Update disabled until the host has judged the containers being changed', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  const unmanaged = { owner: null, helmRelease: null, pending: false, level: 'none', perWrite: [], summary: '', syncPolicy: null, requiresAck: false, ownershipError: null } as never
+  const onLoad = vi.fn(async (): Promise<WorkloadImageInventory> => ({
+    target: { kind: 'Deployment', group: 'apps', resource: 'deployments', namespace: 'prod', name: 'web' },
+    containers: [{ type: 'container', name: 'app', image: 'app:old' }],
+    behavior: { type: 'rolling' },
+  }))
+  const changed = setImageSelectionKey({ containers: [{ type: 'container', name: 'app' }], changed: [{ type: 'container', name: 'app' }] })
+  const render = (selectionKey: string) =>
+    root.render(<SetImageDialog open workloadLabel="Deployment" workloadName="web" workloadResource="deployments" ownership={{ guard: unmanaged, onSelectionChange: () => {}, selectionKey }} onLoad={onLoad} onClose={() => {}} onConfirm={async () => {}} />)
+  const update = () => [...document.querySelectorAll('button')].find((b) => /^Update \d+ image/.test(b.textContent ?? '')) as HTMLButtonElement | undefined
+  try {
+    await act(async () => render(''))
+    const input = await vi.waitFor(() => {
+      const el = document.querySelector('input[aria-label^="New image"]') as HTMLInputElement | null
+      expect(el).not.toBeNull()
+      return el!
+    })
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'app:new')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    // The guard on screen was judged before the edit.
+    expect(update()?.disabled).toBe(true)
+    await act(async () => render(changed))
+    expect(update()?.disabled).toBe(false)
+  } finally {
+    await act(async () => root.unmount())
+    host.remove()
   }
 })
