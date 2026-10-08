@@ -80,15 +80,25 @@ export function initNavigationMap(resources: APIResource[]) {
   const gk2p: Record<string, string> = {}
   const gp2k: Record<string, string> = { ...BUILTIN_GROUP_PLURAL_TO_KIND }
   const scopes: Record<string, boolean> = {}
+  const coreKinds = new Set<string>()
   for (const r of resources) {
     const plural = r.name.toLowerCase()
+    const kindLower = r.kind.toLowerCase()
     // First-wins on plurals: BUILTIN_PLURAL_TO_KIND seeds canonical core mappings
     // (e.g. "pods" → "Pod") so a colliding API resource (metrics.k8s.io exposes
     // "pods" with kind "PodMetrics") cannot hijack the core mapping.
     if (!(plural in p2k)) p2k[plural] = r.kind
-    k2p[r.kind.toLowerCase()] = plural
-    gk2p[`${r.group}/${r.kind.toLowerCase()}`] = plural
-    scopes[`${r.group}/${r.kind.toLowerCase()}`] = r.namespaced
+    // Kind-only lookups (core links carry an empty group) likewise keep the core
+    // plural: a CRD that reuses a core Kind under another plural must not win
+    // just because discovery happened to list it later.
+    if (r.group === '') {
+      k2p[kindLower] = plural
+      coreKinds.add(kindLower)
+    } else if (!coreKinds.has(kindLower)) {
+      k2p[kindLower] = plural
+    }
+    gk2p[`${r.group}/${kindLower}`] = plural
+    scopes[`${r.group}/${kindLower}`] = r.namespaced
     const groupPlural = `${r.group}/${plural}`
     if (!(groupPlural in gp2k)) gp2k[groupPlural] = r.kind
   }

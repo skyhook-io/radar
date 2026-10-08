@@ -193,6 +193,28 @@ describe('pluralToKind', () => {
 })
 
 describe('initNavigationMap', () => {
+  const coreNode = { group: '', version: 'v1', kind: 'Node', name: 'nodes', namespaced: false, isCrd: false, verbs: ['get'] }
+  const customNode = { group: 'collision.example.io', version: 'v1', kind: 'Node', name: 'workerhosts', namespaced: false, isCrd: true, verbs: ['get'] }
+
+  test.each([
+    ['core listed first', [coreNode, customNode]],
+    ['custom listed first', [customNode, coreNode]],
+  ])('keeps the core plural for a Kind a CRD reuses under another plural (%s)', (_, resources) => {
+    initNavigationMap(resources)
+    expect(kindToPlural('Node')).toBe('nodes')
+    expect(kindToPluralWithGroup('Node', '')).toBe('nodes')
+    expect(refToSelectedResource({ kind: 'Node', group: '', name: 'worker' }).kind).toBe('nodes')
+    expect(kindToPluralWithGroup('Node', 'collision.example.io')).toBe('workerhosts')
+  })
+
+  test('keeps last-wins for Kinds that only CRDs declare', () => {
+    initNavigationMap([
+      { group: 'a.example.io', version: 'v1', kind: 'Widget', name: 'widgets', namespaced: true, isCrd: true, verbs: [] },
+      { group: 'b.example.io', version: 'v1', kind: 'Widget', name: 'gadgets', namespaced: true, isCrd: true, verbs: [] },
+    ])
+    expect(kindToPlural('Widget')).toBe('gadgets')
+  })
+
   test('discovered API resources override heuristic pluralization', () => {
     // Before init, an unknown CRD would hit the heuristic fallback
     // After init, it uses the discovered plural name
