@@ -9,10 +9,11 @@ import { useGitOpsWriteGuard, type GitOpsWriteGuardState } from './useGitOpsWrit
 const mocks = vi.hoisted(() => ({
   applications: { data: undefined as unknown[] | undefined, isPending: true, isError: false },
   inherited: { data: undefined as unknown, isPending: false, isError: false },
+  target: { data: undefined as unknown, relationships: undefined as unknown, isLoading: false, isError: false },
   evidence: vi.fn(),
 }))
 vi.mock('../api/client', () => ({
-  useResource: () => ({ data: undefined, isLoading: false, isError: false }),
+  useResource: (kind: string) => (kind === 'deployments' ? mocks.target : { data: undefined, isLoading: false, isError: false }),
   useResourceWithRelationships: () => mocks.inherited,
   useResources: () => mocks.applications,
   useRadarFeature: () => ({ guard: (fn: () => unknown) => fn(), gatedKey: [] }),
@@ -24,6 +25,7 @@ afterEach(() => {
   mocks.applications.isPending = true
   mocks.applications.isError = false
   mocks.inherited = { data: undefined, isPending: false, isError: false }
+  mocks.target = { data: undefined, relationships: undefined, isLoading: false, isError: false }
   mocks.evidence.mockReset()
 })
 
@@ -233,6 +235,31 @@ it('does not keep an exemption after the parent lookup fails', async () => {
     expect(h.ref.state!.guard?.pending).toBe(false)
     expect(h.ref.state!.guard?.level).toBe('may-revert')
     expect(h.ref.state!.guard?.requiresAck).toBe(true)
+  } finally {
+    await h.cleanup()
+  }
+})
+
+it('does not keep an exemption after the target lookup fails', async () => {
+  const app = { kind: 'Application', group: 'argoproj.io', namespace: 'argocd', name: 'web' }
+  mocks.target = { data: {}, relationships: { managedBy: [app] }, isLoading: false, isError: false }
+  mocks.evidence.mockResolvedValue({
+    uid: 'u',
+    resourceVersion: '1',
+    owner: app,
+    policy: { tool: 'argocd', auto: true, selfHeal: true, prune: false, suspended: null, respectIgnoreDifferences: true },
+    paths: [{ path: 'spec.replicas', lastApplied: 'present', ownedBy: [], ownedByGitOps: false, ignored: 'effective', ignoredBy: 'spec.ignoreDifferences' }],
+  })
+  const h = await renderGuard({ target: deployment, writes: replicas })
+  try {
+    await act(async () => vi.waitFor(() => expect(h.ref.state!.guard?.pending).toBe(false)))
+    expect(h.ref.state!.guard?.level).toBe('info')
+    // React Query keeps the target's data after a failed refetch.
+    mocks.target = { ...mocks.target, isError: true }
+    await h.rerender()
+    expect(h.ref.state!.guard?.pending).toBe(false)
+    expect(h.ref.state!.guard?.level).toBe('may-revert')
+    expect(canConfirmGitOpsWrite(h.ref.state!.guard, false)).toBe(false)
   } finally {
     await h.cleanup()
   }

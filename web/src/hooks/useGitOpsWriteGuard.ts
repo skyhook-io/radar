@@ -87,7 +87,7 @@ export function useGitOpsWriteGuard({
     return null
   }, [ownership.owner, ownership.helmOwner])
   const argoNamespaceUnresolved = ownership.owner?.tool === 'argocd' && !ownership.owner.namespace
-  const canFetchEvidence = managed && !lookupPending && !ownership.lookupError && !argoNamespaceUnresolved
+  const canFetchEvidence = managed && !lookupPending && !targetLookupFailed && !ownership.lookupError && !argoNamespaceUnresolved
 
   const evidenceFeature = useRadarFeature('gitopsWriteEvidence')
   const evidenceQuery = useQuery({
@@ -123,7 +123,8 @@ export function useGitOpsWriteGuard({
           : null
 
   // React Query keeps earlier data after a failed refetch, and while the query
-  // is disabled (an unreadable owner); an exemption it carried may no longer hold.
+  // is disabled (an unreadable target or owner); an exemption it carried may no
+  // longer hold.
   const evidence = evidenceQuery.isError || !canFetchEvidence ? undefined : evidenceQuery.data
 
   const guard = useMemo(
