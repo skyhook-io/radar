@@ -14,6 +14,13 @@
  *
  * Other rejection types (programming errors, unsupported configs)
  * are re-thrown so we don't accidentally hide real bugs.
+ *
+ * Under WebKitGTK (the Linux desktop app's webview) the update is applied
+ * without a transition: when WebKitGTK has no renderer buffer transport —
+ * WEBKIT_DISABLE_DMABUF_RENDERER or WEBKIT_DISABLE_COMPOSITING_MODE set, a
+ * distro patch, or an EGL stack without GBM/surfaceless platforms — starting
+ * a view transition segfaults the UI process. The page cannot tell which
+ * case it is in, so it skips the cross-fade on every WebKitGTK host.
  */
 export function startViewTransitionSafe(update: () => void): void {
   // Some lib.dom.d.ts versions don't yet expose `startViewTransition`
@@ -27,7 +34,7 @@ export function startViewTransitionSafe(update: () => void): void {
     }
   }
 
-  if (typeof doc.startViewTransition !== 'function') {
+  if (typeof doc.startViewTransition !== 'function' || isWebKitGTK(navigator.userAgent)) {
     update()
     return
   }
@@ -59,4 +66,12 @@ export function isInvalidStateError(err: unknown): boolean {
     'name' in err &&
     (err as { name: unknown }).name === 'InvalidStateError'
   )
+}
+
+/**
+ * WebKitGTK identifies as AppleWebKit on Linux. Chromium-based browsers on
+ * Linux and Android carry AppleWebKit too, so they are excluded by name.
+ */
+export function isWebKitGTK(userAgent: string): boolean {
+  return /\bLinux\b/.test(userAgent) && /AppleWebKit/.test(userAgent) && !/Chrome|Chromium|Android/.test(userAgent)
 }

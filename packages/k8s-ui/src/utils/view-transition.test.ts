@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { isInvalidStateError, startViewTransitionSafe } from './view-transition'
+import { isInvalidStateError, isWebKitGTK, startViewTransitionSafe } from './view-transition'
 
 // SKY-833 bug 49: rapid tab / route switches surfaced
 // "InvalidStateError: Transition was aborted because of invalid state"
@@ -77,5 +77,39 @@ describe('startViewTransitionSafe', () => {
     expect(isInvalidStateError(new Error('something else broke'))).toBe(false)
     expect(isInvalidStateError(new DOMException('x', 'AbortError'))).toBe(false)
     expect(isInvalidStateError(new TypeError('y'))).toBe(false)
+  })
+})
+
+const WEBKITGTK_UA =
+  'Mozilla/5.0 (X11; Ubuntu; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15'
+
+describe('isWebKitGTK', () => {
+  it('matches WebKitGTK user agents', () => {
+    expect(isWebKitGTK(WEBKITGTK_UA)).toBe(true)
+    expect(isWebKitGTK('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko)')).toBe(true)
+  })
+
+  it('does not match other engines on Linux, or Safari', () => {
+    expect(isWebKitGTK('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36')).toBe(false)
+    expect(isWebKitGTK('Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0')).toBe(false)
+    expect(isWebKitGTK('Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36')).toBe(false)
+    expect(isWebKitGTK('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15')).toBe(false)
+  })
+})
+
+describe('startViewTransitionSafe under WebKitGTK', () => {
+  it('applies the update directly instead of starting a transition', () => {
+    const originalDoc = (globalThis as { document?: unknown }).document
+    const startSpy = vi.fn()
+    ;(globalThis as { document: object }).document = { startViewTransition: startSpy }
+    const uaSpy = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(WEBKITGTK_UA)
+
+    const update = vi.fn()
+    startViewTransitionSafe(update)
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(startSpy).not.toHaveBeenCalled()
+
+    uaSpy.mockRestore()
+    ;(globalThis as { document?: unknown }).document = originalDoc
   })
 })

@@ -10,7 +10,7 @@ import "sync/atomic"
 // never report different sets.
 var (
 	SessionKeys  = []string{"XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP", "WAYLAND_DISPLAY", "DISPLAY"}
-	OverrideKeys = []string{"GDK_BACKEND", "GSK_RENDERER", "WEBKIT_DISABLE_DMABUF_RENDERER", "WEBKIT_DISABLE_COMPOSITING_MODE", "GTK_THEME"}
+	OverrideKeys = []string{"GDK_BACKEND", "GSK_RENDERER", "WEBKIT_DISABLE_DMABUF_RENDERER", "WEBKIT_DMABUF_RENDERER_FORCE_SHM", "WEBKIT_DISABLE_COMPOSITING_MODE", "GTK_THEME"}
 	SandboxKeys  = []string{"SNAP", "FLATPAK_ID", "container"}
 )
 
@@ -21,9 +21,10 @@ type EnvVar struct {
 	Value string `json:"value"`
 	// Set separates an explicitly empty value from an absent one. The
 	// difference decides behavior: the desktop app's WebKit defaults are
-	// skipped whenever a variable is merely present, so an empty
-	// WEBKIT_DISABLE_DMABUF_RENDERER leaves the DMABUF renderer on while
-	// looking, to os.Getenv, exactly like an untouched host.
+	// skipped whenever a variable is merely present, and WebKit treats any
+	// value but "0" as set, so an empty WEBKIT_DISABLE_DMABUF_RENDERER
+	// disables the DMABUF renderer while looking, to os.Getenv, exactly like
+	// an untouched host.
 	Set bool `json:"set"`
 }
 
