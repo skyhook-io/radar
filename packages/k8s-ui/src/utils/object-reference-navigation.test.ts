@@ -14,6 +14,9 @@ describe('objectReferenceToResourceRef', () => {
   it('resolves a core Kind without apiVersion, the shape the EndpointSlice controller writes', () => {
     expect(objectReferenceToResourceRef({ kind: 'Pod', namespace: 'team', name: 'backend' }))
       .toEqual({ kind: 'Pod', group: '', namespace: 'team', name: 'backend' })
+    expect(objectReferenceToResourceRef({ kind: 'Endpoints', namespace: 'team', name: 'backend' }))
+      .toEqual({ kind: 'Endpoints', group: '', namespace: 'team', name: 'backend' })
+    expect(objectReferenceToResourceRef({ kind: 'Deployment', namespace: 'team', name: 'backend' })).toBeNull()
   })
 
   it('uses exact discovered scope for colliding API kinds', () => {
