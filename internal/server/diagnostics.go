@@ -32,6 +32,10 @@ type DiagConfig struct {
 	OpenCostCurrency     string `json:"opencostCurrency"`
 	HasPrometheusURL     bool   `json:"hasPrometheusURL"`
 	HasPrometheusHeaders bool   `json:"hasPrometheusHeaders"`
+	// StreamingLists reports the effective WatchListClient policy —
+	// "disabled (default)" or "env:<value>" — so support can see from a
+	// snapshot whether streaming initial lists were in play.
+	StreamingLists string `json:"streamingLists,omitempty"`
 }
 
 // DiagnosticsSnapshot is the top-level diagnostics response.
