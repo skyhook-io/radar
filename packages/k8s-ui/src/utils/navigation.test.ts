@@ -305,6 +305,19 @@ describe('refToSelectedResource', () => {
     })
   })
 
+  test('resolves AWS IngressClassParams without discovery', () => {
+    expect(refToSelectedResource({ kind: 'IngressClassParams', name: 'alb', group: 'elbv2.k8s.aws' })).toEqual({
+      kind: 'ingressclassparams',
+      name: 'alb',
+      namespace: '',
+      group: 'elbv2.k8s.aws',
+    })
+    expect(knownKindForPluralWithGroup('ingressclassparams', 'elbv2.k8s.aws')).toBe('IngressClassParams')
+    // Hosts without discovery fold the plural back to a Kind and re-pluralize it.
+    expect(pluralToKind('ingressclassparams')).toBe('IngressClassParams')
+    expect(kindToPlural(pluralToKind('ingressclassparams'))).toBe('ingressclassparams')
+  })
+
   test('normalizes an omitted namespace for cluster-scoped references', () => {
     expect(refToSelectedResource({ kind: 'NodePool', name: 'spot' })).toEqual({
       kind: 'nodepools',

@@ -63,9 +63,15 @@ export interface WorkloadLogsViewerProps {
    * re-armed. Requires `createStream`. Default: false.
    */
   autoStream?: boolean
+  /** Pods selected when the pod list first loads; all pods when empty or none match. */
+  initialPods?: string[]
 }
 
-export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark, defaultDark, autoStream = false }: WorkloadLogsViewerProps) {
+export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark, defaultDark, autoStream = false, initialPods }: WorkloadLogsViewerProps) {
+  const initialSelection = (names: string[]) => {
+    const wanted = names.filter((n) => initialPods?.includes(n))
+    return new Set(wanted.length > 0 ? wanted : names)
+  }
   const [selectedContainer, setSelectedContainer] = useState<string>('')
   const [pods, setPods] = useState<WorkloadPodInfo[]>([])
   const [selectedPods, setSelectedPods] = useState<Set<string>>(new Set())
@@ -129,7 +135,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       const previousPods = previousSnapshotPods.current
       const nextPods = resultPods.map(p => p.name)
       previousSnapshotPods.current = nextPods
-      setSelectedPods(selected => previousPods === null || previousPods.every(pod => selected.has(pod))
+      setSelectedPods(selected => previousPods === null
+        ? initialSelection(nextPods)
+        : previousPods.every(pod => selected.has(pod))
         ? new Set(nextPods)
         : new Set(nextPods.filter(pod => selected.has(pod))))
 
@@ -194,7 +202,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
             setEmptyMessage(data.emptyMessage || null)
             setEmptyCommand(data.command || null)
             setSelectedPods(prev => (
-              prev.size === 0 ? new Set(nextPods.map((p: WorkloadPodInfo) => p.name)) : prev
+              prev.size === 0 ? initialSelection(nextPods.map((p: WorkloadPodInfo) => p.name)) : prev
             ))
           }
         },
@@ -205,6 +213,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
               content: data.content || '',
               container: data.container || '',
               pod: data.pod || '',
+              sourceLabel: data.sourceLabel,
               podColorIndex: podColorIndexRef.current.get(data.pod || ''),
             })
           }

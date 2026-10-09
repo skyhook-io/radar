@@ -1,9 +1,10 @@
 import { Globe, Shield, Clock } from 'lucide-react'
+import type { ResourceRef } from '../../../types'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 
 interface IngressRendererProps {
   data: any
-  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  onNavigate?: (ref: ResourceRef) => void
 }
 
 export function IngressRenderer({ data, onNavigate }: IngressRendererProps) {
@@ -42,7 +43,10 @@ export function IngressRenderer({ data, onNavigate }: IngressRendererProps) {
 
       <Section title="Ingress" icon={Globe}>
         <PropertyList>
-          <Property label="Class" value={spec.ingressClassName || data.metadata?.annotations?.['kubernetes.io/ingress.class']} />
+          <Property label="Class" value={spec.ingressClassName
+            ? <ResourceLink name={spec.ingressClassName} kind="ingressclasses" group="networking.k8s.io" onNavigate={onNavigate} />
+            : data.metadata?.annotations?.['kubernetes.io/ingress.class']
+          } />
           {lbIngress.length > 0 && (
             <Property label="Address" value={lbIngress[0].ip || lbIngress[0].hostname} />
           )}

@@ -600,7 +600,7 @@ export interface CNPGObjectStoreRecoveryWindow {
   firstRecoverabilityPoint?: string
   lastSuccessfulBackupTime?: string
   lastFailedBackupTime?: string
-  /** A failure newer than the last success — the window has stopped advancing. */
+  /** A failure newer than the last success, or a failure and no success at all. */
   failingSinceLastSuccess: boolean
 }
 
@@ -641,7 +641,7 @@ export function getCNPGObjectStoreRecoveryWindows(resource: any): CNPGObjectStor
 export function getCNPGObjectStoreStatus(resource: any): StatusBadge {
   const windows = getCNPGObjectStoreRecoveryWindows(resource)
   if (windows.length === 0) {
-    return { text: 'No backups yet', color: healthColors.unknown, level: 'unknown' }
+    return { text: 'No backup recorded', color: healthColors.unknown, level: 'unknown' }
   }
   if (windows.some((w) => w.failingSinceLastSuccess)) {
     return { text: 'Backups Failing', color: healthColors.unhealthy, level: 'unhealthy' }
@@ -649,7 +649,7 @@ export function getCNPGObjectStoreStatus(resource: any): StatusBadge {
   // Every timestamp on a recovery window is optional, so a server can be listed
   // with no recovery point at all. The entry existing is not a backup existing.
   if (!windows.some((w) => w.firstRecoverabilityPoint || w.lastSuccessfulBackupTime)) {
-    return { text: 'No recovery point', color: healthColors.unknown, level: 'unknown' }
+    return { text: 'Recovery point not reported', color: healthColors.unknown, level: 'unknown' }
   }
   return { text: 'Recoverable', color: healthColors.healthy, level: 'healthy' }
 }
