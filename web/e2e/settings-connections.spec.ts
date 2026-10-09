@@ -1752,3 +1752,32 @@ test('saving the last draft from its tab answers a pending close prompt', async 
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
 })
+
+test('a failed investigation start keeps the model and effort set for the agent in use', async ({ page }) => {
+  await fixture(page)
+  await page.route('**/api/agents', route => route.fulfill({ json: {
+    enabled: true, eligible: true, consented: { 'claude:safeguarded': true },
+    agents: [{ name: 'claude', label: 'Claude Code', path: '/usr/local/bin/claude', present: true, supported: true,
+      profiles: ['safeguarded', 'full-local'], consentSurfaces: { safeguarded: 'claude:safeguarded', 'full-local': 'claude:full-local' } }],
+  } }))
+  let starts = 0
+  await page.route('**/api/diagnose/runs', route => {
+    if (route.request().method() !== 'POST') return route.fulfill({ json: { runs: [] } })
+    starts++
+    return route.fulfill({ status: 409, json: { error: 'too many investigations running — stop or finish one first' } })
+  })
+  // The agent was never picked by hand; only a model and effort were set.
+  await page.goto('/resources/pods')
+  await expect(page.locator('table tbody tr').first()).toBeVisible()
+  await page.evaluate(() => {
+    localStorage.setItem('radar-ai-model', 'opus')
+    localStorage.setItem('radar-ai-effort', 'high')
+  })
+  await page.reload()
+  await page.locator('table tbody tr').first().click()
+  await page.getByRole('button', { name: 'Ask AI about this resource', exact: true }).click()
+  await expect(page.getByText(/too many investigations running/)).toBeVisible()
+  expect(starts).toBe(1)
+  await expect.poll(() => page.evaluate(() => [localStorage.getItem('radar-ai-model'), localStorage.getItem('radar-ai-effort')]))
+    .toEqual(['opus', 'high'])
+})

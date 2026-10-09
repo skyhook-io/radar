@@ -527,7 +527,8 @@ function RoutedDiagnoseProvider({
       setAvailable(r.enabled && supported.length > 0);
       setAgents(supported);
       // Keep the stored pick only if it's still installed; else default to the
-      // first supported agent (matches the server's default selection).
+      // first supported agent. Runs always name it, so the server's own default
+      // doesn't apply.
       const stored = readStored(AGENT_KEY) || "";
       const next =
         stored && supported.some((a) => a.name === stored)
@@ -549,6 +550,9 @@ function RoutedDiagnoseProvider({
         setEffortState("");
         writeStored(EFFORT_KEY, "");
       }
+      // Remember the agent in use even when it was never picked by hand, so the
+      // next check sees the same agent and keeps the model and effort set for it.
+      if (next) writeStored(AGENT_KEY, next);
       setAgentEligibilityResolved(true);
     } catch {
       // Leaves the previous state in place; "unknown" until a probe answers.
