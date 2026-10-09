@@ -1,7 +1,6 @@
-import { useMemo, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import { Globe, Clock, Radio } from 'lucide-react'
 import { Section, PropertyList, Property, KeyValueBadgeList, CopyHandler, AlertBanner } from '../../ui/drawer-components'
-import { endpointSliceServiceAssociation, endpointSliceMatchesService } from '../../../utils/endpoint-slices'
 import type { ResourceRef } from '../../../types'
 
 export interface ServicePortRenderProps {
@@ -18,10 +17,10 @@ interface ServiceRendererProps {
   onCopy: CopyHandler
   copied: string | null
   endpointSlices?: any[]
-  endpointSliceInventory?: any[]
   endpointSlicesLoading?: boolean
   endpointSlicesEnabled?: boolean
   endpointSlicesError?: string
+  endpointSlicesTruncated?: boolean
   onNavigate?: (ref: ResourceRef) => void
   renderPortAction?: (props: ServicePortRenderProps) => ReactNode
   renderPortPanel?: (props: ServicePortRenderProps) => ReactNode
@@ -42,13 +41,7 @@ function endpointSliceReadyClass(ready: number, total: number): string {
   return 'status-unhealthy'
 }
 
-export function ServiceRenderer({ data, onCopy, copied, endpointSlices: suppliedEndpointSlices, endpointSliceInventory, endpointSlicesLoading, endpointSlicesEnabled, endpointSlicesError, onNavigate, renderPortAction, renderPortPanel }: ServiceRendererProps) {
-  // The host passes raw namespace inventory; association semantics stay inside
-  // the shared UI. Older published consumers only know endpointSlices, which
-  // continues to carry their existing label-filtered set.
-  const endpointSlices = useMemo(() => endpointSliceInventory
-    ? endpointSliceInventory.filter(slice => endpointSliceMatchesService(slice, data))
-    : suppliedEndpointSlices, [endpointSliceInventory, suppliedEndpointSlices, data])
+export function ServiceRenderer({ data, onCopy, copied, endpointSlices, endpointSlicesLoading, endpointSlicesEnabled, endpointSlicesError, endpointSlicesTruncated, onNavigate, renderPortAction, renderPortPanel }: ServiceRendererProps) {
   const spec = data.spec || {}
   const ports = spec.ports || []
   const lbIngress = data.status?.loadBalancer?.ingress || []
@@ -134,7 +127,6 @@ export function ServiceRenderer({ data, onCopy, copied, endpointSlices: supplied
                 const endpoints = slice.endpoints || []
                 const ready = endpointSliceReadyCount(slice)
                 const addresses = endpointSliceAddressCount(slice)
-                const ownerOnly = endpointSliceServiceAssociation(slice)?.source === 'ownerReference'
                 return (
                   <button
                     key={slice.metadata?.uid || sliceName}
@@ -151,7 +143,6 @@ export function ServiceRenderer({ data, onCopy, copied, endpointSlices: supplied
                       <div className="min-w-0">
                         <div className="text-sm font-medium text-theme-text-primary truncate">{sliceName}</div>
                         <div className="text-xs text-theme-text-tertiary mt-0.5">{slice.addressType || 'Unknown'} address type</div>
-                        {ownerOnly && <div className="text-xs text-theme-text-tertiary mt-0.5" title="No kubernetes.io/service-name label; ownership does not establish published Service endpoints.">Owner reference only</div>}
                       </div>
                       <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
                         <span className={`badge-sm ${endpointSliceReadyClass(ready, endpoints.length)}`}>{ready}/{endpoints.length} ready</span>
@@ -161,6 +152,9 @@ export function ServiceRenderer({ data, onCopy, copied, endpointSlices: supplied
                   </button>
                 )
               })}
+              {endpointSlicesTruncated && (
+                <div className="text-xs text-theme-text-tertiary">Showing the first {endpointSlices.length} EndpointSlices.</div>
+              )}
             </div>
           ) : (
             <div className="text-sm text-theme-text-tertiary">No EndpointSlices found for this Service.</div>

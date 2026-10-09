@@ -3,7 +3,6 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
 import { Badge } from '../../ui/Badge'
 import type { ResourceRef } from '../../../types'
-import { endpointSliceServiceAssociation } from '../../../utils/endpoint-slices'
 
 interface EndpointSliceRendererProps {
   data: any
@@ -26,10 +25,10 @@ function endpointTargetLabel(endpoint: any): string | null {
 
 export function EndpointSliceRenderer({ data, onNavigate }: EndpointSliceRendererProps) {
   const metadata = data.metadata || {}
+  const labels = metadata.labels || {}
   const endpoints = data.endpoints || []
   const ports = data.ports || []
-  const serviceAssociation = endpointSliceServiceAssociation(data)
-  const serviceName = serviceAssociation?.name
+  const serviceName = labels['kubernetes.io/service-name']
   const readyCount = endpoints.filter(isEndpointReady).length
   const addresses = endpointAddressCount(endpoints)
 
@@ -43,8 +42,8 @@ export function EndpointSliceRenderer({ data, onNavigate }: EndpointSliceRendere
           <Property label="Ports" value={ports.length} />
           {serviceName && (
             <Property
-              label={serviceAssociation?.source === 'ownerReference' ? 'Declared Owner Service' : 'Service'}
-              value={onNavigate && serviceAssociation?.source === 'label' ? (
+              label="Service"
+              value={onNavigate ? (
                 <button
                   type="button"
                   className="text-sm text-accent-text hover:underline font-medium"
@@ -55,7 +54,6 @@ export function EndpointSliceRenderer({ data, onNavigate }: EndpointSliceRendere
               ) : serviceName}
             />
           )}
-          {serviceAssociation?.source === 'ownerReference' && <Property label="Owner UID" value={serviceAssociation.uid} />}
         </PropertyList>
       </Section>
 
