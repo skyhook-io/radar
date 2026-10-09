@@ -119,6 +119,7 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
               <CacheSection data={data} />
               <MetricsSection data={data} />
               <EventPipelineSection data={data} />
+              <TimelineSection data={data} />
               <InformersSection data={data} />
               <PrometheusSection data={data} />
               <TrafficSection data={data} />
@@ -326,6 +327,19 @@ function EventPipelineSection({ data }: { data: DiagnosticsSnapshot }) {
           ))}
         </div>
       )}
+    </Section>
+  )
+}
+
+function TimelineSection({ data }: { data: DiagnosticsSnapshot }) {
+  if (!data.timeline) return null
+  const t = data.timeline
+  return (
+    <Section title="Timeline" warn={t.degraded}>
+      <Row label="Storage" value={t.storageType} warn={t.degraded} />
+      {t.degraded && t.degradedReason && <Row label="Unavailable" value={t.degradedReason} warn />}
+      <Row label="Events" value={t.totalEvents.toLocaleString()} />
+      <Row label="Dropped" value={t.totalDrops.toLocaleString()} warn={t.totalDrops > 0} />
     </Section>
   )
 }
@@ -702,6 +716,9 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
     const t = data.timeline
     lines.push(`### Timeline`)
     lines.push(`- Storage: \`${t.storageType}\` | Events: ${t.totalEvents.toLocaleString()} | Errors: ${t.storeErrors} | Drops: ${t.totalDrops}`)
+    if (t.degraded && t.degradedReason) {
+      lines.push(`- Unavailable: ${t.degradedReason}`)
+    }
     lines.push(``)
   }
 
