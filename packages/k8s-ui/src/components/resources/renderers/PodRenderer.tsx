@@ -310,6 +310,7 @@ export function PodRenderer({
   const containerStatuses = data.status?.containerStatuses || []
   const containers = data.spec?.containers || []
   const initContainers = data.spec?.initContainers || []
+  const podResources = data.spec?.resources
   const initContainerStatuses = data.status?.initContainerStatuses || []
   const hasEnvironmentDeclarations = [...initContainers, ...containers].some(
     (container: any) => container.env?.length > 0 || container.envFrom?.length > 0,
@@ -628,6 +629,20 @@ export function PodRenderer({
 
       <Section title="Containers" icon={HardDrive} defaultExpanded>
         <div className="space-y-3">
+          {/* Pod-level budget (spec.resources) is shared by all containers, so it
+              stays its own row rather than being merged into the container rows. */}
+          {(podResources?.requests || podResources?.limits) && (
+            <div className="rounded-[10px] border border-dashed border-theme-border p-3">
+              <div className="flex items-baseline justify-between gap-2 mb-2">
+                <span className="text-sm font-medium text-theme-text-primary">Pod (aggregate)</span>
+                <span className="text-xs text-theme-text-tertiary">Shared by all containers</span>
+              </div>
+              <div className="text-xs text-theme-text-secondary space-y-1">
+                {podResources.requests && <div>Requests: {formatResources(podResources.requests)}</div>}
+                {podResources.limits && <div>Limits: {formatResources(podResources.limits)}</div>}
+              </div>
+            </div>
+          )}
           {containers.map((container: any) => {
             const status = containerStatuses.find((s: any) => s.name === container.name)
             const state = status?.state
@@ -857,7 +872,8 @@ export function PodRenderer({
                 // fall through to them or their chart shows no limit line.
                 const containerSpec = containers.find((c: any) => c.name === historyContainer.name)
                   || initContainers.find((c: any) => c.name === historyContainer.name && c.restartPolicy === 'Always')
-                const limits = containerSpec?.resources?.limits
+                // A container without its own limit is still bounded by the pod-level one.
+                const limits = { ...podResources?.limits, ...containerSpec?.resources?.limits }
                 const requests = containerSpec?.resources?.requests
 
                 // Get historical data points (from history or empty)

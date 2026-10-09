@@ -177,3 +177,49 @@ func TestBuildPodContainerMetricsKeepsAppPlusSidecar(t *testing.T) {
 		t.Fatalf("app+sidecar pod should return 2 entries, got %d (%+v)", len(got), got)
 	}
 }
+
+func TestSumRunningContainerResourcesPodLevel(t *testing.T) {
+	const milli = int64(1_000_000)
+	const mi = int64(1024 * 1024)
+
+	full := mixedPod()
+	podRes := resReq("500m", "1", "256Mi", "512Mi")
+	full.Spec.Resources = &podRes
+	wantPod := PodResourceTotals{CPURequest: 500 * milli, CPULimit: 1000 * milli, MemoryRequest: 256 * mi, MemoryLimit: 512 * mi}
+	if got := SumRunningContainerResources(full); got != wantPod {
+		t.Errorf("pod-level set: got %+v, want %+v", got, wantPod)
+	}
+
+	// Only memory is set at pod level: CPU keeps the container sum.
+	partial := mixedPod()
+	memOnly := resReq("", "", "1Gi", "2Gi")
+	partial.Spec.Resources = &memOnly
+	got := SumRunningContainerResources(partial)
+	want := PodResourceTotals{CPURequest: 150 * milli, CPULimit: 300 * milli, MemoryRequest: 1024 * mi, MemoryLimit: 2048 * mi}
+	if got != want {
+		t.Errorf("memory-only pod-level: got %+v, want %+v", got, want)
+	}
+
+	// Containers with no resources of their own, bounded only by the pod.
+	bare := &corev1.Pod{Spec: corev1.PodSpec{
+		Containers: []corev1.Container{{Name: "a"}, {Name: "b"}},
+		Resources:  &podRes,
+	}}
+	if got := SumRunningContainerResources(bare); got != wantPod {
+		t.Errorf("bare containers: got %+v, want %+v", got, wantPod)
+	}
+}
+
+// A pod-level budget is reported apart from the containers it covers, so a
+// single-container pod keeps its own row instead of the folded pod totals.
+func TestBuildPodContainerMetricsKeepsSingleContainerWithPodLevelResources(t *testing.T) {
+	podRes := resReq("800m", "1", "", "")
+	pod := &corev1.Pod{Spec: corev1.PodSpec{
+		Containers: []corev1.Container{{Name: "app", Resources: resReq("100m", "500m", "", "")}},
+		Resources:  &podRes,
+	}}
+	got := BuildPodContainerMetrics(pod, nil)
+	if len(got) != 1 || got[0].CPURequest != 100*1_000_000 || got[0].CPULimit != 500*1_000_000 {
+		t.Fatalf("got %+v, want the app container's own 100m/500m", got)
+	}
+}

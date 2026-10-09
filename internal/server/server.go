@@ -3628,8 +3628,8 @@ func (s *Server) handleTopPods(w http.ResponseWriter, r *http.Request) {
 		entry.MemoryLimit = totals.MemoryLimit
 
 		// Per-container breakdown drives the table's per-container display.
-		// Nil for single-running-container pods, where the client falls back
-		// to the pod-level sums above.
+		// Nil for single-running-container pods without a pod-level budget,
+		// where the client falls back to the pod-level sums above.
 		entry.Containers = k8s.BuildPodContainerMetrics(pod, containerUsage[key])
 
 		result = append(result, entry)
