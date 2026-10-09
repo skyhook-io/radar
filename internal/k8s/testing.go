@@ -8,10 +8,14 @@ import (
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/policyreports"
 	batchv1 "k8s.io/api/batch/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	clienttesting "k8s.io/client-go/testing"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
@@ -545,6 +549,36 @@ func allTestResourceTypes() map[string]bool {
 		"ingressclasses":           true,
 		"networkpolicies":          true,
 		"limitranges":              true,
+	}
+}
+
+// SetTestPermissionProbeClient installs a dynamic client that grants every
+// list a permission probe makes, calling onList before each one answers.
+// Returns a restore func.
+//
+// Permission probes list resources this package chooses, so a test in another
+// package cannot build a fake that knows them all.
+func SetTestPermissionProbeClient(onList func()) func() {
+	gvrToListKind := map[schema.GroupVersionResource]string{}
+	for _, p := range resourceProbeTargets(&ResourcePermissions{}) {
+		for _, gvr := range resolveProbeGVRs(p) {
+			gvrToListKind[gvr] = gvr.Resource + "List"
+		}
+	}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), gvrToListKind)
+	client.PrependReactor("list", "*", func(clienttesting.Action) (bool, runtime.Object, error) {
+		onList()
+		return false, nil, nil // fall through to the default reactor (empty list)
+	})
+
+	clientMu.Lock()
+	prev := dynamicClient
+	dynamicClient = client
+	clientMu.Unlock()
+	return func() {
+		clientMu.Lock()
+		dynamicClient = prev
+		clientMu.Unlock()
 	}
 }
 

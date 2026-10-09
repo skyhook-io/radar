@@ -173,8 +173,7 @@ func TestConcurrentInvalidateDuringPermissionCheck(t *testing.T) {
 	//
 	// It must also BLOCK. A fake that answers instantly lets the probe finish
 	// before the invalidation starts, so the two never overlap and the lock
-	// pattern under test is never exercised - which is how this test passed for
-	// years against the very bug it names.
+	// pattern under test is never exercised.
 	probeEntered := make(chan struct{})
 	probeRelease := make(chan struct{})
 	var probeEnteredOnce sync.Once

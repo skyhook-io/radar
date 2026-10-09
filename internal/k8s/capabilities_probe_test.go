@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -744,15 +745,16 @@ func TestNamespaceRescopeRetiresInFlightProbe(t *testing.T) {
 
 // TestContextSwitchLeavesNoPreviousClusterPermissions pins the half of the
 // invariant that lives at the call site: a context switch retires the
-// permission cache, so the previous cluster's answer does not survive it.
+// permission cache, so the previous cluster's answer does not survive it, and
+// it does not retire it before teardown has started.
 //
 // The switch is expected to fail - the target cluster does not resolve. What is
 // asserted is the state it leaves behind.
 //
-// It pins the property, not the line: the switch path retires the cache three
-// times (before the client swap, in ClearNamespaceScopeOverride, and in the
-// invalidation block after it), so removing any single call still passes. Only
-// removing all of them fails this test.
+// The end state is pinned as a property, not a line: the switch path retires
+// the cache three times (after teardown, in ClearNamespaceScopeOverride, and
+// in the invalidation block after it), so removing any single call still
+// passes that assertion. Only removing all of them fails it.
 func TestContextSwitchLeavesNoPreviousClusterPermissions(t *testing.T) {
 	ResetTestState()
 	t.Cleanup(ResetTestState)
@@ -795,8 +797,26 @@ func TestContextSwitchLeavesNoPreviousClusterPermissions(t *testing.T) {
 		t.Fatal("seeding the permission cache did not take")
 	}
 
+	// Teardown starts with the registered reset hooks, while the previous
+	// cluster's resource cache is still live. Readers treat a nil permission
+	// result as cluster-wide access, so the cache must still hold the previous
+	// cluster's answer at that point.
+	var cachedAtTeardown atomic.Bool
+	contextSwitchMu.Lock()
+	previousCostReset := costResetFunc
+	costResetFunc = func() { cachedAtTeardown.Store(GetCachedPermissionResult() != nil) }
+	contextSwitchMu.Unlock()
+	t.Cleanup(func() {
+		contextSwitchMu.Lock()
+		costResetFunc = previousCostReset
+		contextSwitchMu.Unlock()
+	})
+
 	_ = PerformContextSwitch("target")
 
+	if !cachedAtTeardown.Load() {
+		t.Error("the permission cache was cleared before teardown, while the previous cluster's resource cache was still live")
+	}
 	if cached := GetCachedPermissionResult(); cached != nil {
 		t.Fatalf("the previous cluster's permissions survived a context switch: namespace=%q", cached.Namespace)
 	}
