@@ -786,6 +786,10 @@ func TestCloudInstallLoopbackNeedsNoSharedAcknowledgement(t *testing.T) {
 	}
 }
 
+// An admission webhook can quote the Secret it denied, so a provisioning error
+// may carry the cluster token. It must not reach the status API — the wire
+// structs having no token FIELD is not enough when the value rides inside a
+// message string.
 func TestCloudInstallProvisionErrorNeverLeaksTokenIntoStatus(t *testing.T) {
 	fx := newManagerFixture(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil)
 	// The apiserver folds stringData into base64 `data` before admission runs,
