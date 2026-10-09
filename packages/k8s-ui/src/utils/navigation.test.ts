@@ -223,6 +223,25 @@ describe('initNavigationMap', () => {
     expect(kindToPluralWithGroup('Node', 'collision.example.io')).toBe('node')
   })
 
+  test('resolves a group-qualified Kind spelled like a core plural to its own resource', () => {
+    initNavigationMap([
+      { group: '', version: 'v1', kind: 'Endpoints', name: 'endpoints', namespaced: true, isCrd: false, verbs: ['get'] },
+      { group: 'custom.example.io', version: 'v1', kind: 'Endpoints', name: 'virtualendpoints', namespaced: true, isCrd: true, verbs: ['get'] },
+    ])
+    expect(kindToPluralWithGroup('Endpoints', 'custom.example.io')).toBe('virtualendpoints')
+    expect(kindToPluralWithGroup('Endpoints', '')).toBe('endpoints')
+  })
+
+  test('keeps a lowercase group plural rather than reading it as another Kind', () => {
+    initNavigationMap([
+      { group: 'shapes.example.io', version: 'v1', kind: 'Widget', name: 'widgets', namespaced: true, isCrd: true, verbs: ['get'] },
+      { group: 'shapes.example.io', version: 'v1', kind: 'Widgets', name: 'widgetsets', namespaced: true, isCrd: true, verbs: ['get'] },
+    ])
+    expect(kindToPluralWithGroup('widgets', 'shapes.example.io')).toBe('widgets')
+    expect(kindToPluralWithGroup('Widgets', 'shapes.example.io')).toBe('widgetsets')
+    expect(kindToPluralWithGroup('Widget', 'shapes.example.io')).toBe('widgets')
+  })
+
   test('keeps last-wins for Kinds that only CRDs declare', () => {
     initNavigationMap([
       { group: 'a.example.io', version: 'v1', kind: 'Widget', name: 'widgets', namespaced: true, isCrd: true, verbs: [] },
