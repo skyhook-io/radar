@@ -457,6 +457,16 @@ export function flowDrops(flow: AggregatedFlow): number {
   return flow.verdictCounts?.dropped ?? 0
 }
 
+/** Whether this edge carries HTTP responses, so its 5xx count is a measured
+ *  zero rather than unknown; plain TCP has none. Zero rates and counts are left
+ *  out of the response, so a healthy HTTP edge shows only by its requests or
+ *  protocol. */
+export function hasStatusData(flow: AggregatedFlow): boolean {
+  return (!!flow.httpStatusCounts && Object.keys(flow.httpStatusCounts).length > 0) ||
+    !!flow.requestRate || !!flow.requestCount || !!flow.errorRate || !!flow.errorCount ||
+    flow.l7Protocol === 'HTTP' || flow.l7Protocol === 'gRPC'
+}
+
 /**
  * A workload (or any endpoint) the view is narrowed to: it and everything it
  * talks to. Identified by namespace and name, the way the graph names nodes,
@@ -587,6 +597,13 @@ export interface NamespaceSummary {
  * edge counts toward both of its namespaces, and its far end toward the
  * namespace's endpoints.
  */
+/** Whether the namespace's own view — its edges, with either end in it — would
+ *  be over the draw budget, judged from the traffic already fetched. Picking it
+ *  fetches that namespace on its own, which can bring in more. */
+export function namespaceOverBudget(ns: NamespaceSummary): boolean {
+  return ns.endpoints + 2 * ns.connections > GRAPH_DRAW_BUDGET
+}
+
 export function namespaceSummaries(flows: AggregatedFlow[]): NamespaceSummary[] {
   const byNs = new Map<string, { endpoints: Set<string>; connections: number; volume: number; errors: number; drops: number }>()
   for (const flow of flows) {

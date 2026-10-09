@@ -7,7 +7,7 @@ import { LargeClusterNamespacePicker } from '../shared/LargeClusterNamespacePick
 import { TrafficConnectionsTable } from './TrafficConnectionsTable'
 import { TrafficFocusSearch } from './TrafficFocusSearch'
 import type { TrafficGraphSelection } from './TrafficGraph'
-import type { EndpointSummary, NamespaceSummary, TrafficFocus } from './trafficFilters'
+import { formatRate, namespaceOverBudget, type EndpointSummary, type NamespaceSummary, type TrafficFocus } from './trafficFilters'
 
 const count = (n: number, noun: string) => `${n.toLocaleString()} ${pluralNoun(n, noun)}`
 
@@ -15,6 +15,8 @@ interface TrafficGraphTooLargeProps {
   graph: { nodes: number; edges: number }
   /** The focused endpoint's name, when the view is a neighborhood. */
   focusName?: string
+  /** The sidebar can hide other namespaces' endpoints from this view. */
+  canFilterNamespaces?: boolean
   onDrawAnyway?: () => void
   /** Null when the namespace can't be changed from here (a single namespace
    *  in view, or a deployment scoped to one). */
@@ -30,13 +32,20 @@ interface TrafficGraphTooLargeProps {
   focusedId?: string
 }
 
+function nextStep(focused: boolean, canPickNamespace: boolean, canFilterNamespaces: boolean): string {
+  if (focused) return 'Its connections are listed below, problems first. Focus on one of them, or narrow them with the traffic filters on the left.'
+  if (canPickNamespace) return 'They are listed below, problems first. Narrow to a namespace or focus on a workload to see a map.'
+  if (canFilterNamespaces) return 'They are listed below, problems first. Focus on a workload, or hide other namespaces in the Namespaces filter on the left.'
+  return 'They are listed below, problems first. Focus on a workload to see a map.'
+}
+
 /**
  * Stands in for the map when it is too large to lay out: says why, offers the
  * ways to narrow it, and lists the connections so the view still answers
  * something.
  */
 export function TrafficGraphTooLarge(props: TrafficGraphTooLargeProps) {
-  const { graph, focusName, onDrawAnyway, namespaces, onPickNamespace, endpoints, onFocus, isRateBased, overlayContainer } = props
+  const { graph, focusName, canFilterNamespaces, onDrawAnyway, namespaces, onPickNamespace, endpoints, onFocus, isRateBased, overlayContainer } = props
   const [pickerOpen, setPickerOpen] = useState(false)
   const pickerRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -61,9 +70,7 @@ export function TrafficGraphTooLarge(props: TrafficGraphTooLargeProps) {
             </div>
             <p className="mt-0.5 text-xs text-theme-text-secondary">
               {count(graph.nodes, 'endpoint')} and {count(graph.edges, 'connection')} — more than the map can lay out without freezing this tab.
-              {' '}{focusName
-                ? 'Its connections are listed below; focus on one of them, or narrow with the filters on the left.'
-                : 'They are listed below, problems first. Narrow to a namespace or focus on a workload to see a map.'}
+              {' '}{nextStep(!!focusName, !!namespaces?.length, !!canFilterNamespaces)}
             </p>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               {namespaces && namespaces.length > 0 && (
@@ -90,8 +97,10 @@ export function TrafficGraphTooLarge(props: TrafficGraphTooLargeProps) {
                           if (!ns) return null
                           return (
                             <span className="flex shrink-0 items-center gap-1.5 text-[10px] tabular-nums text-theme-text-tertiary">
-                              {ns.drops + ns.errors > 0 && <span className={SEVERITY_TEXT.error}>{(ns.drops + ns.errors).toLocaleString()} failing</span>}
+                              {ns.drops > 0 && <span className={SEVERITY_TEXT.error}>{ns.drops.toLocaleString()} dropped</span>}
+                              {ns.errors > 0 && <span className={SEVERITY_TEXT.error}>{isRateBased ? `${formatRate(ns.errors)}/s` : ns.errors.toLocaleString()} 5xx</span>}
                               <span>{count(ns.endpoints, 'endpoint')}</span>
+                              {namespaceOverBudget(ns) && <span className={SEVERITY_TEXT.warning}>too large to map</span>}
                             </span>
                           )
                         }}

@@ -7,7 +7,7 @@ import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import type { TrafficGraphSelection } from './TrafficGraph'
 import {
-  connectionRows, displayVolume, flowDrops, flowErrors, formatRate, graphEndpointId, isExternalKind,
+  connectionRows, displayVolume, flowDrops, flowErrors, formatRate, graphEndpointId, hasStatusData, isExternalKind,
   type TrafficFocus,
 } from './trafficFilters'
 
@@ -22,6 +22,9 @@ interface TrafficConnectionsTableProps {
 }
 
 const GRID = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_4.5rem_4.5rem] items-center gap-x-3'
+// Without HTTP status anywhere in view (plain TCP) a 5xx column would read as
+// "no errors" rather than "not measured".
+const GRID_NO_STATUS = 'grid grid-cols-[minmax(0,1fr)_1rem_minmax(0,1fr)_6.5rem_5rem_4.5rem] items-center gap-x-3'
 
 function rowSelection(flow: AggregatedFlow): TrafficGraphSelection {
   return {
@@ -45,6 +48,8 @@ function sameEdge(a: TrafficGraphSelection, b: TrafficGraphSelection | null): bo
  */
 export function TrafficConnectionsTable({ flows, isRateBased, selection, onSelect, onFocus, focusedId }: TrafficConnectionsTableProps) {
   const rows = useMemo(() => connectionRows(flows), [flows])
+  const showStatus = useMemo(() => flows.some(hasStatusData), [flows])
+  const grid = showStatus ? GRID : GRID_NO_STATUS
 
   const endpoint = (e: AggregatedFlow['source']) => {
     const id = graphEndpointId(e)
@@ -74,13 +79,13 @@ export function TrafficConnectionsTable({ flows, isRateBased, selection, onSelec
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className={clsx(GRID, 'px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary border-b border-theme-border')}>
+      <div className={clsx(grid, 'px-3 py-1.5 text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary border-b border-theme-border')}>
         <span>Source</span>
         <span />
         <span>Destination</span>
         <span>Port</span>
         <span className="text-right">{isRateBased ? 'Req/s' : 'Conns'}</span>
-        <span className="text-right">5xx</span>
+        {showStatus && <span className="text-right">5xx</span>}
         <span className="text-right">Dropped</span>
       </div>
       <Virtuoso
@@ -98,7 +103,7 @@ export function TrafficConnectionsTable({ flows, isRateBased, selection, onSelec
               aria-selected={selected}
               onClick={() => onSelect(selected ? null : sel)}
               className={clsx(
-                GRID,
+                grid,
                 'cursor-pointer px-3 py-1.5 text-xs border-b border-theme-border/50 transition-colors',
                 selected ? 'bg-theme-elevated' : 'hover:bg-theme-hover',
               )}
@@ -118,9 +123,11 @@ export function TrafficConnectionsTable({ flows, isRateBased, selection, onSelec
               <span className="text-right tabular-nums text-theme-text-secondary">
                 {isRateBased ? formatRate(displayVolume(flow, true)) : flow.connections.toLocaleString()}
               </span>
-              <span className={clsx('text-right tabular-nums', errors > 0 ? clsx(SEVERITY_TEXT.error, 'font-medium') : 'text-theme-text-tertiary')}>
-                {errors > 0 ? (isRateBased ? formatRate(errors) : errors.toLocaleString()) : '—'}
-              </span>
+              {showStatus && (
+                <span className={clsx('text-right tabular-nums', errors > 0 ? clsx(SEVERITY_TEXT.error, 'font-medium') : 'text-theme-text-tertiary')}>
+                  {errors > 0 ? (isRateBased ? formatRate(errors) : errors.toLocaleString()) : hasStatusData(flow) ? '0' : '—'}
+                </span>
+              )}
               <span className={clsx('text-right tabular-nums', drops > 0 ? clsx(SEVERITY_TEXT.error, 'font-medium') : 'text-theme-text-tertiary')}>
                 {drops > 0 ? drops.toLocaleString() : '—'}
               </span>

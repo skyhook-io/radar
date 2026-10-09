@@ -46,9 +46,8 @@ export function TrafficFocusSearch({ endpoints, onFocus, isRateBased, overlayCon
     close()
   }, [onFocus, close])
 
-  // Only the toolbar instance owns the shortcut: the panel's button is a
-  // second way in while the graph isn't drawn, and two registrations would race.
-  // An embedding host (Radar Hub) binds / to its own search.
+  // The view renders one of the two variants at a time, so whichever is shown
+  // owns the shortcut. An embedding host (Radar Hub) binds / to its own search.
   const { embedded } = useNavCustomization()
   useRegisterShortcut({
     id: 'traffic-focus-search',
@@ -57,7 +56,7 @@ export function TrafficFocusSearch({ endpoints, onFocus, isRateBased, overlayCon
     category: 'Search',
     scope: 'traffic',
     handler: open,
-    enabled: variant === 'toolbar' && !embedded,
+    enabled: !embedded,
   })
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -91,7 +90,7 @@ export function TrafficFocusSearch({ endpoints, onFocus, isRateBased, overlayCon
         >
           <Crosshair className="w-3 h-3" />
           Focus on a workload
-          <kbd className="hidden sm:inline-flex items-center px-1 text-[10px] bg-theme-elevated rounded border border-theme-border-light">/</kbd>
+          {!embedded && <kbd className="hidden sm:inline-flex items-center px-1 text-[10px] bg-theme-elevated rounded border border-theme-border-light">/</kbd>}
         </button>
       ) : (
         <button
@@ -132,7 +131,9 @@ export function TrafficFocusSearch({ endpoints, onFocus, isRateBased, overlayCon
                   key={e.id}
                   type="button"
                   onClick={() => choose(e)}
-                  onMouseEnter={() => setSelectedIndex(index)}
+                  // Not onMouseEnter: results re-rendering under a resting
+                  // pointer would move the highlight away from what was typed.
+                  onMouseMove={() => { if (index !== selectedIndex) setSelectedIndex(index) }}
                   className={clsx(
                     'w-full flex items-center gap-3 px-4 py-2 text-left transition-colors',
                     index === selectedIndex ? 'bg-theme-elevated/60' : 'hover:bg-theme-elevated/30',

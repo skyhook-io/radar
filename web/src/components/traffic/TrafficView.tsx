@@ -361,6 +361,14 @@ function coverageExplanation(data: { nodeFlowLimit?: number; flowLimit?: number 
   return `Radar reads at most ${(data?.nodeFlowLimit ?? 0).toLocaleString()} of the newest flows from each node. At least one node reached that limit before the start of the ${timeRange} window, so its earlier traffic is not included. Other nodes may still show older flows. ${narrow}`
 }
 
+function flowStatsExplanation(stats: { shown: number; total: number; hidden: number; outsideFocus: number; aggregated: number }): string {
+  const parts = [`${stats.shown.toLocaleString()} of the ${stats.total.toLocaleString()} connections in this window are shown`]
+  if (stats.hidden > 0) parts.push(`${stats.hidden.toLocaleString()} hidden by filters`)
+  if (stats.outsideFocus > 0) parts.push(`${stats.outsideFocus.toLocaleString()} outside the focus`)
+  if (stats.aggregated > 0) parts.push(`${stats.aggregated.toLocaleString()} merged into others`)
+  return parts.join('; ') + '.'
+}
+
 interface TrafficViewProps {
   namespaces: string[]
   /** Sets the app-wide namespace selection. */
@@ -900,12 +908,13 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const focusedFlows = useMemo(
     () => (focus ? focusNeighborhood(internetCollapsedFlows, focus) : internetCollapsedFlows),
     [internetCollapsedFlows, focus])
-  // Entering a focus selects it, so the flow list holds its records; leaving
-  // one clears the selection it made. A focus with no traffic selects nothing.
+  // A new focus starts with nothing selected: the flow list follows the focus
+  // itself (listSelection), and opening its details would cover the node the
+  // view was just fitted around.
   const focusFound = !!focus && focusedFlows.length > 0
   useEffect(() => {
-    setGraphSelection(focusKey && focusFound ? { type: 'node', nodeId: focusKey } : null)
-  }, [focusKey, focusFound])
+    setGraphSelection(null)
+  }, [focusKey])
 
   // A focused view draws its endpoints as they are: grouping the addons would
   // fold the focus or its neighbors into the group.
@@ -1157,9 +1166,10 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
     const filtered = filteredFlows.length
     const shown = finalFlows.length
     const hidden = total - filtered
-    const aggregated = filtered - shown
-    return { total, filtered, shown, hidden, aggregated }
-  }, [flowsData?.aggregated?.length, filteredFlows.length, finalFlows.length])
+    const outsideFocus = internetCollapsedFlows.length - focusedFlows.length
+    const aggregated = filtered - shown - outsideFocus
+    return { total, filtered, shown, hidden, outsideFocus, aggregated }
+  }, [flowsData?.aggregated?.length, filteredFlows.length, finalFlows.length, internetCollapsedFlows.length, focusedFlows.length])
 
   // Compute hot path threshold (top 10% of connections)
   const hotPathThreshold = useMemo(() => {
@@ -1222,11 +1232,12 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   const namespaceScopeQuery = useNamespaceScope()
   const namespaceLocked = !!namespaceScopeQuery.data?.cacheScoped && !namespaceScopeQuery.data?.namespaceRescope
   // Narrowing to one namespace keeps the edges with either end in it, as the
-  // server does, so these are what each choice would show.
+  // server does, so these are what each choice would show. With one namespace
+  // in view already, the others listed are only its peers: picking one would
+  // switch, not narrow, so the panel points at focus and the sidebar instead.
   const namespaceChoices = useMemo(() => {
-    if (!onSetNamespaces || namespaceLocked || focus) return null
+    if (!onSetNamespaces || namespaceLocked || focus || namespaces.length === 1) return null
     const choices = namespaceSummaries(finalFlows)
-      .filter(ns => !(namespaces.length === 1 && namespaces[0] === ns.name))
     return choices.length > 0 ? choices : null
   }, [onSetNamespaces, namespaceLocked, focus, finalFlows, namespaces])
 
@@ -1414,24 +1425,27 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                           <span className={SEVERITY_TEXT.warning}>· only its traffic with {namespaces.join(', ')}</span>
                           {onSetNamespaces && !namespaceLocked && (
                             <button type="button" onClick={() => onSetNamespaces([focus.namespace!])} className="text-blue-400 hover:text-blue-300 font-medium">
-                              Show all
+                              Show all its traffic
                             </button>
                           )}
                         </>
                       )}
-                      <Tooltip content="Show everything again">
+                      <Tooltip content="Leave focus">
                         <button type="button" onClick={() => setFocus(null)} aria-label="Leave focus" className="p-0.5 rounded hover:bg-theme-hover text-theme-text-secondary">
                           <X className="h-3 w-3" />
                         </button>
                       </Tooltip>
                     </div>
                   ) : null}
-                  <TrafficFocusSearch
-                    endpoints={focusableEndpoints}
-                    onFocus={setFocus}
-                    isRateBased={isRateBased}
-                    overlayContainer={graphPaneRef.current}
-                  />
+                  {/* The too-large panel carries its own search button. */}
+                  {finalFlows.length > 0 && !tooLargeToDraw && !isConnecting && (
+                    <TrafficFocusSearch
+                      endpoints={focusableEndpoints}
+                      onFocus={setFocus}
+                      isRateBased={isRateBased}
+                      overlayContainer={graphPaneRef.current}
+                    />
+                  )}
                   {activeSource && (
                     <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[11px]">
                       {isConnecting ? (
@@ -1492,9 +1506,11 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                       </div>
                     </Tooltip>
                   )}
-                  <div className="flex items-center px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[10px] text-theme-text-tertiary tabular-nums">
-                    {flowStats.shown}/{flowStats.total}
-                  </div>
+                  <Tooltip content={flowStatsExplanation(flowStats)}>
+                    <div className="flex items-center px-2 py-1 rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border text-[10px] text-theme-text-tertiary tabular-nums">
+                      {flowStats.shown}/{flowStats.total}
+                    </div>
+                  </Tooltip>
                   {/* Flows are a REST snapshot (no poll, no stream), so this is
                       an honest "Updated N ago" + manual refresh — not "live". */}
                   <div className="flex items-center rounded-lg bg-theme-surface/90 backdrop-blur border border-theme-border px-1.5 py-0.5">
@@ -1550,6 +1566,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                 <TrafficGraphTooLarge
                   graph={drawnGraph}
                   focusName={focus?.name}
+                  canFilterNamespaces={!focus && namespacesWithCounts.length > 1}
                   onDrawAnyway={drawnGraph.score <= GRAPH_DRAW_CEILING ? () => setDrawnViewKey(viewKey) : undefined}
                   namespaces={namespaceChoices}
                   onPickNamespace={ns => onSetNamespaces?.([ns])}

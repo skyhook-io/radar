@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AggregatedFlow, TrafficFlow } from '../../types'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, connectionRows, selectionMatch, type GraphFlow } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason, requestRateOf, errorRateOf, formatRate, displayVolume, mergeFlowVolume, dedupeHTTPPairs, coverageLabel, latencyWeightOf, endpointPair, selectionRawPairs, mergeRawPairs, graphEndpoint, graphSize, parseFocus, focusParam, focusId, touchesFocus, focusNeighborhood, endpointSummaries, searchEndpoints, namespaceSummaries, namespaceOverBudget, hasStatusData, connectionRows, selectionMatch, type GraphFlow } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -509,6 +509,26 @@ describe('namespaceSummaries', () => {
 
   it('skips endpoints without a namespace', () => {
     expect(namespaceSummaries([edge('shop/web', 'api.stripe.com')]).map(n => n.name)).toEqual(['shop'])
+  })
+  // A hub's namespace is the case that sends a user from one too-large screen
+  // to the next: its many callees in other namespaces stay in view.
+  it('marks a namespace whose own view is over the draw budget', () => {
+    const hub = Array.from({ length: 250 }, (_, i) => edge('edge/gateway', `team-${i % 10}/svc-${i}`))
+    const s = namespaceSummaries([...hub, edge('quiet/a', 'quiet/b')])
+    expect(namespaceOverBudget(s.find(n => n.name === 'edge')!)).toBe(true)
+    expect(namespaceOverBudget(s.find(n => n.name === 'quiet')!)).toBe(false)
+    expect(namespaceOverBudget(s.find(n => n.name === 'team-0')!)).toBe(false)
+  })
+})
+
+describe('hasStatusData', () => {
+  it('tells an edge without HTTP status from one with no 5xx', () => {
+    expect(hasStatusData(edge('a/x', 'a/y'))).toBe(false)
+    expect(hasStatusData(edge('a/x', 'a/y', { httpStatusCounts: { '2xx': 5 } }))).toBe(true)
+    // A healthy metrics-based edge: its zero error rate is not sent.
+    expect(hasStatusData(edge('a/x', 'a/y', { requestRate: 2.5 }))).toBe(true)
+    expect(hasStatusData(edge('a/x', 'a/y', { l7Protocol: 'HTTP' }))).toBe(true)
+    expect(hasStatusData(edge('a/x', 'a/y', { l7Protocol: 'DNS' }))).toBe(false)
   })
 })
 

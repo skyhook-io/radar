@@ -159,6 +159,7 @@ interface TrafficNodeData extends Record<string, unknown> {
   totalConnections?: number // Total connections for this node
   namespaceColor?: string // Background color for namespace grouping
   isHotPath?: boolean // Whether this node is on a hot path
+  isFocused?: boolean // The endpoint the view is focused on
   isAddonNode?: boolean // Whether this is a cluster addon node
   serviceCategory?: string // For external nodes: database, cloud, etc.
   ports?: PortInfo[] // All inbound ports sorted by connection count
@@ -214,7 +215,7 @@ function TrafficNode({ data }: { data: TrafficNodeData }) {
                   : hasNamespaceColor
                     ? 'border-white/20'
                     : 'bg-theme-surface border-theme-border',
-        data.isHotPath && 'ring-2 ring-orange-500/50'
+        data.isFocused ? 'ring-2 ring-skyhook-500' : data.isHotPath && 'ring-2 ring-orange-500/50'
       )}
       style={{
         width: NODE_WIDTH,
@@ -1647,6 +1648,14 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
   const shouldFitViewRef = useRef(false)
   const prevFlowCountRef = useRef(flows.length)
 
+  // Drawn per pod, a focused workload is each of its pods.
+  const displayNodes = useMemo(() => {
+    if (!focusedId) return nodes
+    const isFocus = (n: Node<TrafficNodeData>) => n.id === focusedId ||
+      (n.data.kind === 'Pod' && !!n.data.workload && `${n.data.namespace ?? ''}/${n.data.workload}` === focusedId)
+    return nodes.map(n => (isFocus(n) ? { ...n, data: { ...n.data, isFocused: true } } : n))
+  }, [nodes, focusedId])
+
   // A new focus is a different graph even when it has as many edges.
   const prevFocusRef = useRef(focusedId)
   if (prevFocusRef.current !== focusedId) {
@@ -1654,8 +1663,8 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
     shouldFitViewRef.current = true
   }
 
-  // The view owns the selection: it is set from outside the graph too (a focus
-  // selects its node, the connections table an edge). The details are read
+  // The view owns the selection: it is set from outside the graph too (the
+  // connections table selects an edge). The details are read
   // from the current layout, so a refresh updates them and a node that is no
   // longer drawn closes them.
   useEffect(() => {
@@ -1713,7 +1722,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
   return (
     <div className="w-full h-full relative">
       <ReactFlow
-        nodes={nodes}
+        nodes={displayNodes}
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
