@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -693,69 +694,17 @@ func referenceUseForPodSpec(kind, group, namespace, name string, spec corev1.Pod
 
 func podSpecReferencePaths(spec corev1.PodSpec, pathPrefix string, target refTarget) []string {
 	pathSet := map[string]struct{}{}
-	add := func(path string) {
-		pathSet[path] = struct{}{}
-	}
-
-	for _, v := range spec.Volumes {
-		if target.kind == "ConfigMap" && v.ConfigMap != nil && v.ConfigMap.Name == target.name {
-			add(pathPrefix + ".volumes[].configMap.name")
-		}
-		if target.kind == "Secret" && v.Secret != nil && v.Secret.SecretName == target.name {
-			add(pathPrefix + ".volumes[].secret.secretName")
-		}
-		if v.Projected != nil {
-			for _, src := range v.Projected.Sources {
-				if target.kind == "ConfigMap" && src.ConfigMap != nil && src.ConfigMap.Name == target.name {
-					add(pathPrefix + ".volumes[].projected.sources[].configMap.name")
-				}
-				if target.kind == "Secret" && src.Secret != nil && src.Secret.Name == target.name {
-					add(pathPrefix + ".volumes[].projected.sources[].secret.name")
-				}
-			}
+	for _, ref := range configrefs.PodSpecReferences(target.namespace, spec) {
+		if ref.Kind == target.kind && ref.Name == target.name {
+			pathSet[pathPrefix+"."+ref.Path] = struct{}{}
 		}
 	}
-	if target.kind == "Secret" {
-		for _, pullSecret := range spec.ImagePullSecrets {
-			if pullSecret.Name == target.name {
-				add(pathPrefix + ".imagePullSecrets[].name")
-			}
-		}
-	}
-
-	scanContainerReferencePaths(spec.InitContainers, pathPrefix, target, add)
-	scanContainerReferencePaths(spec.Containers, pathPrefix, target, add)
-
 	paths := make([]string, 0, len(pathSet))
 	for path := range pathSet {
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
 	return paths
-}
-
-func scanContainerReferencePaths(containers []corev1.Container, pathPrefix string, target refTarget, add func(string)) {
-	for _, c := range containers {
-		for _, ef := range c.EnvFrom {
-			if target.kind == "ConfigMap" && ef.ConfigMapRef != nil && ef.ConfigMapRef.Name == target.name {
-				add(pathPrefix + ".containers[].envFrom[].configMapRef.name")
-			}
-			if target.kind == "Secret" && ef.SecretRef != nil && ef.SecretRef.Name == target.name {
-				add(pathPrefix + ".containers[].envFrom[].secretRef.name")
-			}
-		}
-		for _, e := range c.Env {
-			if e.ValueFrom == nil {
-				continue
-			}
-			if target.kind == "ConfigMap" && e.ValueFrom.ConfigMapKeyRef != nil && e.ValueFrom.ConfigMapKeyRef.Name == target.name {
-				add(pathPrefix + ".containers[].env[].valueFrom.configMapKeyRef.name")
-			}
-			if target.kind == "Secret" && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name == target.name {
-				add(pathPrefix + ".containers[].env[].valueFrom.secretKeyRef.name")
-			}
-		}
-	}
 }
 
 func hasControllerOwner(refs []metav1.OwnerReference) bool {

@@ -3,6 +3,7 @@ package resourcecontext
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1931,5 +1932,22 @@ func TestBuild_PassesThroughExecutionSummary(t *testing.T) {
 	rc := Build(context.Background(), obj, Options{Tier: TierBasic, Execution: execution})
 	if rc.Execution != execution {
 		t.Fatalf("execution = %+v, want pass-through %+v", rc.Execution, execution)
+	}
+}
+
+func TestPodSpecReferencePathsContainerAndVolumeProvenance(t *testing.T) {
+	spec := corev1.PodSpec{
+		InitContainers:      []corev1.Container{{EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "credential"}}}}}},
+		EphemeralContainers: []corev1.EphemeralContainer{{EphemeralContainerCommon: corev1.EphemeralContainerCommon{EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "credential"}}}}}}},
+		Volumes:             []corev1.Volume{{VolumeSource: corev1.VolumeSource{CSI: &corev1.CSIVolumeSource{NodePublishSecretRef: &corev1.LocalObjectReference{Name: "credential"}}}}},
+	}
+	got := podSpecReferencePaths(spec, "spec", refTarget{kind: "Secret", namespace: "team", name: "credential"})
+	want := []string{
+		"spec.ephemeralContainers[].envFrom[].secretRef.name",
+		"spec.initContainers[].envFrom[].secretRef.name",
+		"spec.volumes[].csi.nodePublishSecretRef.name",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("reference paths = %#v, want %#v", got, want)
 	}
 }
