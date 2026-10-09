@@ -137,7 +137,7 @@ export function openExternal(url: string): void {
 // setMainView's cross-view params. A navigation whose search omits
 // ?namespaces= reads as an empty pick to App's URL sync, which clears the
 // user's namespace scope.
-const CROSS_VIEW_PARAMS = ['namespaces', 'ai-run'] as const
+export const CROSS_VIEW_PARAMS = ['namespaces', 'ai-run'] as const
 
 /** Carries the current cross-view params onto an in-app path that doesn't set them itself. */
 export function withCrossViewParams(path: string, currentSearch: string): string {

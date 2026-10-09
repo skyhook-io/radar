@@ -60,10 +60,10 @@ import { UsageDataPrompt } from './components/usage-data/UsageDataPrompt'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit } from './api/client'
+import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit, useClusterInfo } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
 import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
-import { routePath, apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
+import { routePath, apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts, useSuppressBaseShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
@@ -75,7 +75,9 @@ import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
 import { SettingsDialog, type SettingsSectionId } from './components/settings/SettingsDialog'
 import type { APIResource, TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
-import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams } from './utils/navigation'
+import { createViewMemory } from './utils/viewMemory'
+import { createKindFilterStore } from './utils/kindFilterStore'
+import { kindToPluralWithGroup, pluralToKind, openExternal, apiVersionToGroup, relatedResourcePath, searchHitToSelectedResource, withCrossViewParams, CROSS_VIEW_PARAMS } from './utils/navigation'
 import { findSelectedTopologyNode } from './utils/topology-selection'
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
@@ -482,15 +484,43 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     return slug || 'pods'
   }, [location.pathname])
 
-  // Canonical URL — `/resources` is not stable for bookmarks/sharing; normalize to `/resources/pods`.
+  // Per-mount, so a reload forgets it and Radar Hub (one mount per cluster) keeps clusters apart.
+  const [viewMemory] = useState(createViewMemory)
+  // Resources filters and the last kind persist per cluster; inert until the context is known.
+  const { data: clusterInfoData, isLoading: clusterInfoLoading } = useClusterInfo()
+  const clusterContext = clusterInfoData?.context
+  const kindFilterStore = useMemo(
+    () => (clusterContext ? createKindFilterStore(`${getApiBase()}|${clusterContext}`) : undefined),
+    [clusterContext],
+  )
+  useEffect(() => {
+    viewMemory.record(mainView, location.pathname, location.search)
+    if (mainView === 'resources') kindFilterStore?.recordLastKind(location.pathname, location.search)
+  }, [viewMemory, kindFilterStore, mainView, location.pathname, location.search])
+  const rememberedKindSearch = useMemo(
+    () => kindFilterStore && ((kind: { name: string; group: string }) => kindFilterStore.get(kind.name, kind.group)),
+    [kindFilterStore],
+  )
+  const saveKindFilters = useMemo(
+    () => kindFilterStore && ((kind: { name: string; group: string }, search: string) => kindFilterStore.set(kind.name, kind.group, search)),
+    [kindFilterStore],
+  )
+
+  // Canonical URL — `/resources` is not stable for bookmarks/sharing; normalize to
+  // the last kind (hosts such as Radar Hub link to bare `/resources`), else Pods.
   useEffect(() => {
     const path = location.pathname.replace(/\/+$/, '') || '/'
-    if (path !== '/resources') return
+    // Wait for the cluster so its last kind can be read; landing on Pods first would overwrite it.
+    if (path !== '/resources' || clusterInfoLoading) return
+    const current = new URLSearchParams(location.search)
+    const onlyCrossView = [...current.keys()].every(key => (CROSS_VIEW_PARAMS as readonly string[]).includes(key))
+    const destination = new URL((onlyCrossView && kindFilterStore?.lastKind()) || '/resources/pods', 'http://radar.invalid')
+    current.forEach((value, key) => destination.searchParams.set(key, value))
     navigate(
-      { pathname: '/resources/pods', search: location.search, hash: location.hash },
+      { pathname: destination.pathname, search: destination.search, hash: location.hash },
       { replace: true },
     )
-  }, [location.pathname, location.search, location.hash, navigate])
+  }, [location.pathname, location.search, location.hash, navigate, kindFilterStore, clusterInfoLoading])
 
   // Set mainView by navigating to the path
   const setMainView = useCallback((view: ExtendedMainView, params?: Record<string, string>) => {
@@ -506,6 +536,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         goHost(href)
         return
       }
+    }
+
+    // Explicit params are a link with its own state; otherwise go back to where the user left this section.
+    const remembered = params
+      ? undefined
+      : viewMemory.sectionPath(view) ?? (view === 'resources' ? kindFilterStore?.lastKind() : undefined)
+    if (remembered) {
+      navigate(withCrossViewParams(remembered, location.search))
+      return
     }
 
     const path = view === 'home' ? '/' : `/${view}`
@@ -532,7 +571,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
 
     navigate({ pathname: path, search: newParams.toString() })
-  }, [location.search, navigate, takeover, goHost])
+  }, [location.search, navigate, takeover, goHost, viewMemory, kindFilterStore])
 
   const whatsNewStatus = useWhatsNewStatus()
 
@@ -1203,6 +1242,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       // removeQueries clears cached data, invalidateQueries triggers refetch
       queryClient.removeQueries()
       queryClient.invalidateQueries()
+      viewMemory.clear()
 
       // Cancel any pending SSE-driven invalidation — old cluster's events are irrelevant
       if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
@@ -1425,6 +1465,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       { onSuccess: () => setNamespaces([]) },
     )
   }, [namespaceScope?.cacheScoped, namespaces.length, setActiveNamespace])
+  // Same write as the header picker, which then mirrors it into `namespaces`.
+  // The flash shows where that scope lives from now on.
+  const [namespacePickerFlash, setNamespacePickerFlash] = useState(0)
+  const applyNamespacesToAllSections = useCallback(
+    (picked: string[]) => setActiveNamespace.mutateAsync({ namespaces: picked }).then(() => setNamespacePickerFlash(n => n + 1)),
+    [setActiveNamespace],
+  )
   const initialBookmarkReconciledRef = useRef(false)
   const scopeActives = useMemo(() => namespaceScope?.actives ?? [], [namespaceScope?.actives])
   const namespaceScopeKey = useMemo(() => namespaceScope ? [...scopeActives].sort().join(',') : null, [namespaceScope, scopeActives])
@@ -1814,7 +1861,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             <ScopePill>
               <ContextSwitcher ref={contextSwitcherRef} variant="segment" />
               <NamespaceSwitcher
+                key={namespacePickerFlash}
                 ref={namespaceSwitcherRef}
+                className={namespacePickerFlash ? 'reach-flash' : undefined}
                 variant="segment"
                 disabled={namespaceFilter.disabled}
                 disabledTooltip={namespaceFilter.tooltip}
@@ -2238,6 +2287,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             onResourceClickYaml={(res) => navigateToResource(res, 'yaml')}
             onKindChange={() => setSelectedResource(null)}
             onClearNamespaces={clearAllNamespaces}
+            rememberedKindSearch={rememberedKindSearch}
+            onKindFiltersChange={saveKindFilters}
+            // Embedded hosts own their namespace picker, and a cache-scoped
+            // Radar can't take an arbitrary set.
+            onApplyNamespacesToAllSections={embedded || namespaceScope?.cacheScoped ? undefined : applyNamespacesToAllSections}
           />
         )}
 
