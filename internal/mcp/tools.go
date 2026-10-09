@@ -2037,6 +2037,9 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to read logs: %w", err)
 	}
+	if k8score.IsLogsUnavailableNotice(string(data)) {
+		return nil, nil, fmt.Errorf("logs for %s/%s: %w. The node usually answers this way after the container has been removed; it can also mean its container runtime was briefly unreachable", input.Namespace, input.Name, k8score.ErrLogsUnavailable)
+	}
 
 	// Warning and narrowing heuristics operate on the fetched stream,
 	// independently of response filtering.
