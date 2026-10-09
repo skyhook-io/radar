@@ -47,18 +47,29 @@ func GetContainerLogs(ctx context.Context, client kubernetes.Interface, namespac
 }
 
 // ErrLogsUnavailable means the node answered a log request without the
-// container's output. Usually the kubelet has already collected the log file;
-// the same answer comes back when the container runtime is briefly
-// unreachable, so this does not claim the lines are gone for good.
+// container's output. Usually the container or its log file has already been
+// removed from the node; the same answer comes back when the container runtime
+// is briefly unreachable, or for a few seconds while the kubelet reopens a
+// running container's log file, so this does not claim the lines are gone for
+// good.
 var ErrLogsUnavailable = errors.New("Kubernetes did not return this container's logs")
 
 // IsLogsUnavailableNotice recognises the kubelet's notice that it could not
 // read a container's logs. The apiserver relays it with a 200 as the whole
 // response body, so a reader that does not check shows it as a line the
-// container printed. Only a body that is exactly that one line matches. With
+// container printed. Only a body that is exactly one such line matches. With
 // timestamps on, a real line always starts with one, so it cannot match; with
 // them off, only a container whose sole output is that sentence would.
 func IsLogsUnavailableNotice(body string) bool {
 	body = strings.TrimSpace(body)
-	return strings.HasPrefix(body, "unable to retrieve container logs for ") && !strings.Contains(body, "\n")
+	if strings.Contains(body, "\n") {
+		return false
+	}
+	// The runtime no longer knows the container.
+	if strings.HasPrefix(body, "unable to retrieve container logs for ") {
+		return true
+	}
+	// The container's log file is missing on the node. The kubelet quotes the
+	// path of the file it looked for, which is always a .log file.
+	return strings.HasPrefix(body, `failed to try resolving symlinks in path "`) && strings.Contains(body, `.log": `)
 }
