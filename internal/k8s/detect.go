@@ -953,13 +953,15 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Severity:          np.Severity,
 				Action:            np.Action,
 				Reason:            np.Problem,
-				Fingerprint:       "node:" + np.Problem,
 				Message:           np.Reason,
 				Age:               FormatAge(ageDur),
 				AgeSeconds:        int64(ageDur.Seconds()),
 				ResourceCreatedAt: nodeCreatedAt,
 				IssueTiming:       nodeIssueTiming.IssueTiming,
 				IssueTimingBasis:  nodeIssueTiming.Basis,
+			}
+			if np.Problem != "NotReady" {
+				detection.Fingerprint = "node:" + np.Problem
 			}
 			setDetectionOnset(&detection, now, nodeOnsetAt)
 			problems = append(problems, detection)

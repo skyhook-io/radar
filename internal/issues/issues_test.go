@@ -18,6 +18,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // fakeProvider — minimal Provider for unit testing. Each field
@@ -127,17 +128,40 @@ func (f *fakeProvider) WorkloadBacksService(group, kind, namespace, name, servic
 }
 
 func TestComposeIndependentNodeConditions(t *testing.T) {
-	p := &fakeProvider{}
-	for _, reason := range []string{"NotReady", "MemoryPressure", "DiskPressure", "NetworkUnavailable"} {
-		p.problems = append(p.problems, k8s.Detection{Kind: "Node", Name: "worker", Severity: "critical", Reason: reason, Fingerprint: "node:" + reason})
+	now := time.Now()
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker", CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))},
+		Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+			{Type: corev1.NodeReady, Status: corev1.ConditionFalse, LastTransitionTime: metav1.NewTime(now.Add(-3 * time.Minute))},
+			{Type: corev1.NodeMemoryPressure, Status: corev1.ConditionTrue},
+			{Type: corev1.NodeDiskPressure, Status: corev1.ConditionTrue},
+			{Type: corev1.NodeNetworkUnavailable, Status: corev1.ConditionTrue, LastTransitionTime: metav1.NewTime(now.Add(-3 * time.Minute))},
+		}},
+	}
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: fake.NewClientset(node), ResourceTypes: map[string]bool{k8score.Nodes: true}, DeferredTypes: map[string]bool{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(core.Stop)
+	p := &fakeProvider{problems: k8s.DetectProblems(&k8s.ResourceCache{ResourceCache: core}, "")}
+	for _, detection := range p.problems {
+		if detection.Reason == "NotReady" && detection.Fingerprint != "" {
+			t.Fatalf("NotReady must retain its existing issue identity: %+v", detection)
+		}
 	}
 	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
-	if len(out) != len(p.problems) {
+	if len(out) != 4 {
 		t.Fatalf("independent node conditions collapsed: %+v", out)
 	}
+	legacy := Issue{Source: SourceProblem, Kind: "Node", Name: "worker", Reason: "NotReady"}
+	classifyIssue(&legacy)
+	enrichIdentity(&legacy)
 	seen := make(map[string]bool)
 	for _, issue := range out {
 		seen[issue.Reason] = true
+		if issue.Reason == "NotReady" && issue.ID != legacy.ID {
+			t.Fatalf("NotReady ID changed: %s, want %s", issue.ID, legacy.ID)
+		}
 	}
 	for _, detection := range p.problems {
 		if !seen[detection.Reason] {
