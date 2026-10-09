@@ -1,6 +1,6 @@
 import type { SelectedResource, ResourceRef, APIResource } from '../types/core'
 import { englishPlural, englishSingular, isEnglishPlural } from './pluralize'
-import { CORE_RESOURCES } from './api-resources'
+import { CORE_RESOURCES, builtinGroupForKind } from './api-resources'
 
 /**
  * Canonical callback type for navigating to a resource.
@@ -270,7 +270,7 @@ export function objectReferenceToResourceRef(ref: {
 } | null | undefined): ResourceRef | null {
   if (!ref?.kind || !ref.name) return null
   const kindLower = ref.kind.toLowerCase()
-  if (!ref.apiVersion && !CORE_RESOURCES.some(r => r.group === '' && r.kind.toLowerCase() === kindLower)) return null
+  if (!ref.apiVersion && builtinGroupForKind(ref.kind) !== '') return null
   const group = apiVersionToGroup(ref.apiVersion)
   const key = `${group}/${kindLower}`
   const namespaced = discoveredGroupKindNamespaced?.[key]

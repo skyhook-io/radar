@@ -4,7 +4,7 @@ import { Layers, GitBranch, FileText, Boxes, ScrollText } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { CodeViewer } from '../../ui/CodeViewer'
-import { kindToPlural } from '../../../utils/navigation'
+import { kindToPluralWithGroup } from '../../../utils/navigation'
 
 interface CompositionRendererProps {
   data: any
@@ -74,11 +74,11 @@ function CompositionBody({ data, onNavigate, revision }: CompositionRendererProp
           <div className="mt-2 text-xs text-theme-text-secondary">
             Backed by XRD:{' '}
             <ResourceLink
-              name={`${kindToPlural(xrdKind)}.${xrdGroup}`}
+              name={`${kindToPluralWithGroup(xrdKind, xrdGroup)}.${xrdGroup}`}
               kind="compositeresourcedefinitions"
               namespace=""
               onNavigate={onNavigate}
-              label={<span className="font-mono">{kindToPlural(xrdKind)}.{xrdGroup}</span>}
+              label={<span className="font-mono">{kindToPluralWithGroup(xrdKind, xrdGroup)}.{xrdGroup}</span>}
             />
           </div>
         )}

@@ -14,7 +14,7 @@ import {
   isCrossplanePaused,
   type CrossplaneResourceRef,
 } from '../resource-utils-crossplane'
-import { kindToPlural } from '../../../utils/navigation'
+import { kindToPluralWithGroup } from '../../../utils/navigation'
 import type { StatusBadge } from '../resource-utils'
 
 /**
@@ -158,7 +158,7 @@ export function CompositeRenderer({ data, onNavigate, composedRefStatuses, compo
               value={
                 <ResourceLink
                   name={boundXR.name}
-                  kind={kindToPlural(boundXR.kind)}
+                  kind={kindToPluralWithGroup(boundXR.kind, groupFromApiVersion(boundXR.apiVersion))}
                   namespace={boundXR.namespace || ''}
                   group={groupFromApiVersion(boundXR.apiVersion) || undefined}
                   onNavigate={onNavigate}
@@ -242,8 +242,8 @@ function ComposedRefRow({
   statusEntry?: ComposedRefStatus
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 }) {
-  const kindPlural = kindToPlural(ref_.kind)
   const group = groupFromApiVersion(ref_.apiVersion)
+  const kindPlural = kindToPluralWithGroup(ref_.kind, group)
   return (
     <div className="flex items-center gap-2 py-1 px-2 rounded hover:bg-theme-hover text-sm">
       <Box className="w-3.5 h-3.5 text-theme-text-tertiary shrink-0" />

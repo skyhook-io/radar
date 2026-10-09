@@ -11,7 +11,7 @@ import {
   isCrossplanePaused,
   getComposingXRRef,
 } from '../resource-utils-crossplane'
-import { kindToPlural } from '../../../utils/navigation'
+import { kindToPluralWithGroup } from '../../../utils/navigation'
 
 interface ManagedResourceRendererProps {
   data: any
@@ -82,7 +82,7 @@ export function ManagedResourceRenderer({ data, onNavigate }: ManagedResourceRen
               value={
                 <ResourceLink
                   name={composingXR.name}
-                  kind={kindToPlural(composingXR.kind)}
+                  kind={kindToPluralWithGroup(composingXR.kind, extractApiGroup(composingXR.apiVersion))}
                   namespace={namespace}
                   group={extractApiGroup(composingXR.apiVersion) || undefined}
                   onNavigate={onNavigate}
