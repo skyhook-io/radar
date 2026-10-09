@@ -239,10 +239,30 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			toContextRefs(selected),
 			"selectedBy", omitted)
 
-		rc.Dependencies = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(rel.Dependencies), "dependencies", omitted)
-		rc.Dependents = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(rel.Dependents), "dependents", omitted)
+		dependencies := toContextRefs(rel.Dependencies)
+		dependents := toContextRefs(rel.Dependents)
+		appendMatching := func(dst []ContextRef, refs []topology.ResourceRef, group, kind string) []ContextRef {
+			for _, ref := range refs {
+				if ref.Group == group && ref.Kind == kind {
+					dst = append(dst, ContextRef{Kind: ref.Kind, Group: ref.Group, Namespace: ref.Namespace, Name: ref.Name})
+				}
+			}
+			return dst
+		}
+		switch {
+		case ident.Group == "" && ident.Kind == "PersistentVolumeClaim":
+			dependencies = appendMatching(dependencies, rel.Children, "", "PersistentVolume")
+			dependencies = appendMatching(dependencies, rel.ConfigRefs, "storage.k8s.io", "StorageClass")
+			dependents = append(dependents, toContextRefs(rel.Consumers)...)
+		case ident.Group == "" && ident.Kind == "PersistentVolume":
+			dependencies = appendMatching(dependencies, rel.ConfigRefs, "storage.k8s.io", "StorageClass")
+			dependents = appendMatching(dependents, rel.Consumers, "", "PersistentVolumeClaim")
+		case ident.Group == "storage.k8s.io" && ident.Kind == "StorageClass":
+			dependents = appendMatching(dependents, rel.Children, "", "PersistentVolume")
+			dependents = appendMatching(dependents, rel.Children, "", "PersistentVolumeClaim")
+		}
+		rc.Dependencies = filterBoundedRefs(ctx, opts.AccessChecker, dependencies, "dependencies", omitted)
+		rc.Dependents = filterBoundedRefs(ctx, opts.AccessChecker, dependents, "dependents", omitted)
 
 		rc.ScaledBy = buildScaledBy(ctx, rel.Scalers, opts.Provider, opts.AccessChecker, omitted)
 	}
@@ -1566,6 +1586,48 @@ func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fie
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+// filterBoundedRefs gates before deduplicating and capping, so hidden references
+// cannot affect visible ordering or consume the response budget.
+func filterBoundedRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, field string, omitted *omittedTracker) []ContextRef {
+	refs = filterRefs(ctx, ac, refs, field, omitted)
+	sort.Slice(refs, func(i, j int) bool {
+		return resourceid.ResourceKey(refs[i].Group, refs[i].Kind, refs[i].Namespace, refs[i].Name) < resourceid.ResourceKey(refs[j].Group, refs[j].Kind, refs[j].Namespace, refs[j].Name)
+	})
+	out := refs[:0]
+	var last string
+	for _, ref := range refs {
+		key := resourceid.ResourceKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)
+		if len(out) == 0 || key != last {
+			out = append(out, ref)
+			last = key
+		}
+	}
+	if len(out) > maxReferencedByItems {
+		omitted.add(field, OmittedBudgetExceeded)
+		// Keep each visible resource kind represented. A busy class may have
+		// hundreds of claims; truncating the sorted list would hide every PV.
+		var buckets [][]ContextRef
+		var kindKey string
+		for _, ref := range out {
+			key := resourceid.ResourceKey(ref.Group, ref.Kind, "", "")
+			if len(buckets) == 0 || key != kindKey {
+				buckets = append(buckets, nil)
+				kindKey = key
+			}
+			buckets[len(buckets)-1] = append(buckets[len(buckets)-1], ref)
+		}
+		out = make([]ContextRef, 0, maxReferencedByItems)
+		for offset := 0; len(out) < maxReferencedByItems; offset++ {
+			for _, bucket := range buckets {
+				if offset < len(bucket) && len(out) < maxReferencedByItems {
+					out = append(out, bucket[offset])
+				}
+			}
+		}
 	}
 	return out
 }

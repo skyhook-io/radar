@@ -530,17 +530,21 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	}
 
 	// Storage chain: PVC→PV→StorageClass (direct provider lookups, not topology edges)
-	if provider != nil {
+	if provider != nil && (resourceGroup == "" || resourceKind == "StorageClass" && resourceGroup == "storage.k8s.io") {
 		switch kindLower {
 		case "persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs":
 			pvcs, _ := provider.PersistentVolumeClaims()
 			for _, pvc := range pvcs {
-				if pvc.Namespace == namespace && pvc.Name == name && pvc.Spec.VolumeName != "" {
-					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pvc.Spec.VolumeName}
-					enrichRef(&pvRef, dp)
-					rel.Children = append(rel.Children, pvRef)
-					break
+				if pvc == nil || pvc.Namespace != namespace || pvc.Name != name {
+					continue
 				}
+				if pvc.Spec.VolumeName != "" {
+					rel.Children = appendResourceRef(rel.Children, ResourceRef{Kind: "PersistentVolume", Name: pvc.Spec.VolumeName})
+				}
+				if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName != "" {
+					rel.ConfigRefs = appendResourceRef(rel.ConfigRefs, ResourceRef{Kind: "StorageClass", Group: "storage.k8s.io", Name: *pvc.Spec.StorageClassName})
+				}
+				break
 			}
 		case "persistentvolume", "persistentvolumes", "pv", "pvs":
 			pvs, _ := provider.PersistentVolumes()
@@ -552,7 +556,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 						rel.Consumers = append(rel.Consumers, claimRef)
 					}
 					if pv.Spec.StorageClassName != "" {
-						scRef := ResourceRef{Kind: "StorageClass", Name: pv.Spec.StorageClassName}
+						scRef := ResourceRef{Kind: "StorageClass", Group: "storage.k8s.io", Name: pv.Spec.StorageClassName}
 						enrichRef(&scRef, dp)
 						rel.ConfigRefs = append(rel.ConfigRefs, scRef)
 					}
@@ -566,6 +570,12 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pv.Name}
 					enrichRef(&pvRef, dp)
 					rel.Children = append(rel.Children, pvRef)
+				}
+			}
+			pvcs, _ := provider.PersistentVolumeClaims()
+			for _, pvc := range pvcs {
+				if pvc != nil && pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == name {
+					rel.Children = appendResourceRef(rel.Children, ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pvc.Namespace, Name: pvc.Name})
 				}
 			}
 		case "node", "nodes":

@@ -499,6 +499,16 @@ it does not scale it. These references carry API group and namespace identity,
 are filtered by the caller's reference permissions, and do not establish that
 a controller has successfully reconciled the dependency.
 
+Storage context reuses the same cached relationships shown in drawers:
+PVC `dependencies` identify its declared PV and StorageClass; PV context names
+its StorageClass and claim; StorageClass `dependents` include PVs and PVCs,
+including Pending claims that already declare that class. Exact API groups and
+target permissions are preserved. Dependencies and dependents are deduplicated,
+sorted and capped at 20 readable references; `omitted` records `budget_exceeded`
+when capped. These are declared relationships, not evidence that provisioning,
+binding or mounting succeeded. Provider-derived storage chains are context
+facts; this does not add PV/StorageClass graph nodes or neighborhood edges.
+
 ### Write Tools
 
 | Tool | Description | Parameters |
