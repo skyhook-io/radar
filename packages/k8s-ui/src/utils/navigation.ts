@@ -180,10 +180,15 @@ export function kindToPlural(kind: string): string {
 export function kindToPluralWithGroup(kind: string, group: string): string {
   if (!group) return kindToPlural(kind)
   const kindLower = kind.toLowerCase()
-  const pluralToKindMap = getPluralToKind()
-  if (kindLower in pluralToKindMap) return kindLower
+  // The group's own plural, then its exact Kind, before the group-blind plural
+  // shortcut: a custom Kind spelled like a core plural (Endpoints) has its own
+  // resource, while a lowercase plural must not be read as another Kind.
+  if (kind === kindLower && discoveredGroupPluralToKind?.[`${group}/${kindLower}`]) return kindLower
   const groupKind = `${group}/${kindLower}`
-  return discoveredGroupKindToPlural?.[groupKind] ?? BUILTIN_GROUP_KIND_TO_PLURAL[groupKind] ?? kindToPlural(kind)
+  const exact = discoveredGroupKindToPlural?.[groupKind] ?? BUILTIN_GROUP_KIND_TO_PLURAL[groupKind]
+  if (exact) return exact
+  if (kindLower in getPluralToKind()) return kindLower
+  return kindToPlural(kind)
 }
 
 /**
