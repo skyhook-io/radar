@@ -438,7 +438,9 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 		case <-ctx.Done():
 			return
 		case key := <-unavailableCh:
-			if unavailable.add(key) {
+			// A stream canceled during pod removal can still deliver its report.
+			podName, _, _ := strings.Cut(key, "/")
+			if known[podName] && unavailable.add(key) {
 				unavailable.send(w, flusher)
 			}
 		case entry := <-logCh:

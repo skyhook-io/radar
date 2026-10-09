@@ -251,6 +251,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
           setNotice(typeof notice === 'string' ? notice : '')
         },
         onEnd: (data: any) => {
+          setNotice('')
           if (data?.emptyMessage) setEmptyMessage(data.emptyMessage)
           if (data?.command) setEmptyCommand(data.command)
         },

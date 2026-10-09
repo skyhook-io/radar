@@ -95,8 +95,6 @@ func TestFollowCNPGContainerLogs_DropsLogsUnavailableNotice(t *testing.T) {
 	}
 }
 
-// readSSEFor collects a stream's body until the server ends it or the window
-// closes.
 func readSSEFor(t *testing.T, path string, window time.Duration) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), window)
@@ -118,8 +116,8 @@ func useLogsUnavailableServer(t *testing.T) {
 	t.Cleanup(func() { k8s.SetTestClient(previous) })
 }
 
-// The notice arrives together with the end of the stream, so the pod live view
-// used to drop it and end with an empty pane and no reason.
+// The notice arrives together with EOF, so it has to be checked before the
+// read error ends the stream.
 func TestPodLogsStream_ReportsLogsUnavailable(t *testing.T) {
 	useLogsUnavailableServer(t)
 	stream := readSSEFor(t, "/api/pods/default/nginx-abc-xyz/logs/stream?container=nginx", 5*time.Second)

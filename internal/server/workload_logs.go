@@ -558,7 +558,9 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 			sendSSEEvent(w, flusher, "log", entry)
 
 		case key := <-unavailableCh:
-			if unavailable.add(key) {
+			// A stream canceled during pod removal can still deliver its report.
+			podName, _, _ := strings.Cut(key, "/")
+			if knownPods[podName] && unavailable.add(key) {
 				unavailable.send(w, flusher)
 			}
 
@@ -1851,8 +1853,7 @@ func (u unavailableSources) send(w http.ResponseWriter, flusher http.Flusher) {
 	sendSSEEvent(w, flusher, "notice", map[string]string{"notice": unreadableSourcesNotice(failures)})
 }
 
-// unreadableSourcesNotice names up to three of the sources whose logs could not
-// be read. Each failure reads "pod/container: reason".
+// Each failure reads "pod/container: reason".
 func unreadableSourcesNotice(failures []string) string {
 	if len(failures) == 0 {
 		return ""
