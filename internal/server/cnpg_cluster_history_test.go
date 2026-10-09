@@ -486,8 +486,8 @@ func TestCNPGClusterActivity_RecreatedClusterExcludesPreviousIncarnationPods(t *
 	}
 }
 
-func TestCNPGStreamCursorResumesWithoutReplay(t *testing.T) {
-	var c cnpgStreamCursor
+func TestLogStreamCursorResumesWithoutReplay(t *testing.T) {
+	var c logStreamCursor
 	first := c.restartOptions("postgres", 200, nil)
 	if first.TailLines == nil || *first.TailLines != 200 || first.SinceTime != nil || !first.Follow || !first.Timestamps || first.Container != "postgres" {
 		t.Fatalf("first start = %+v", first)

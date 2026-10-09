@@ -501,6 +501,9 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	// Track active streams
 	var activeStreams sync.Map // podName/containerName -> cancel func
 	var streamWg sync.WaitGroup
+	// A container's follow ends when it exits and the next discovery pass
+	// reopens it, so each container resumes after the last line it sent.
+	cursors := map[string]*logStreamCursor{}
 
 	// Start streaming from each pod/container
 	startPodStreams := func(pods []*corev1.Pod) {
@@ -512,21 +515,27 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 					continue // Already streaming
 				}
 
+				cursor := cursors[key]
+				if cursor == nil {
+					cursor = &logStreamCursor{}
+					cursors[key] = cursor
+				}
+				opts := cursor.restartOptions(c, tailLines, sinceSeconds)
 				streamCtx, streamCancel := context.WithCancel(ctx)
 				activeStreams.Store(key, streamCancel)
 
 				streamWg.Add(1)
-				go func(podName, containerName, key string, streamCtx context.Context) {
+				go func(podName, key string, streamCtx context.Context) {
 					defer streamWg.Done()
 					defer activeStreams.Delete(key)
 
-					if err := streamPodLogs(streamCtx, client, namespace, podName, containerName, tailLines, sinceSeconds, logCh); err != nil {
+					if err := streamPodLogs(streamCtx, client, namespace, podName, opts, logCh); err != nil {
 						select {
 						case unavailableCh <- key:
 						case <-streamCtx.Done():
 						}
 					}
-				}(pod.Name, c, key, streamCtx)
+				}(pod.Name, key, streamCtx)
 			}
 		}
 	}
@@ -552,8 +561,12 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 			return
 
 		case entry := <-logCh:
-			if unavailable.remove(entry.Pod + "/" + entry.Container) {
+			key := entry.Pod + "/" + entry.Container
+			if unavailable.remove(key) {
 				unavailable.send(w, flusher)
+			}
+			if cursor := cursors[key]; cursor != nil && !cursor.admit(entry) {
+				continue
 			}
 			sendSSEEvent(w, flusher, "log", entry)
 
@@ -604,6 +617,11 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 						}
 						return true
 					})
+					for key := range cursors {
+						if strings.HasPrefix(key, podName+"/") {
+							delete(cursors, key)
+						}
+					}
 					if unavailable.removePod(podName) {
 						unavailable.send(w, flusher)
 					}
@@ -648,18 +666,62 @@ func shouldWaitForPodsInLogStream(kind string, metadata workloadLogMetadata) boo
 	return kind == "job" || kind == "jobs" || kind == "workflow" || kind == "workflows"
 }
 
+// logStreamCursor remembers where one container's follow left off, so a
+// stream that ends while its Pod is still an instance resumes instead of
+// replaying lines the client already has. Only the stream loop touches it.
+type logStreamCursor struct {
+	last time.Time
+	// atLast holds the contents delivered with timestamp == last. The pod log
+	// API's sinceTime is second-granular, so a resume replays that second and
+	// only (timestamp, content) tells a replay from a new line.
+	atLast map[string]bool
+}
+
+// restartOptions returns the follow request for the next (re)start: the
+// caller's window the first time, and from the last delivered second after.
+func (c *logStreamCursor) restartOptions(container string, tailLines int64, sinceSeconds *int64) corev1.PodLogOptions {
+	opts := corev1.PodLogOptions{Container: container, Timestamps: true, Follow: true}
+	if c.last.IsZero() {
+		opts.TailLines = &tailLines
+		opts.SinceSeconds = sinceSeconds
+		return opts
+	}
+	since := metav1.NewTime(c.last.Truncate(time.Second))
+	opts.SinceTime = &since
+	return opts
+}
+
+// admit reports whether an entry is new, recording it when it is. Lines
+// arrive in order per container, so anything before the last delivered
+// timestamp was already sent.
+func (c *logStreamCursor) admit(entry workloadLogEntry) bool {
+	ts, err := time.Parse(time.RFC3339Nano, entry.Timestamp)
+	if err != nil {
+		return true
+	}
+	switch {
+	case ts.Before(c.last):
+		return false
+	case ts.Equal(c.last):
+		if c.atLast[entry.Content] {
+			return false
+		}
+	default:
+		c.last = ts
+		c.atLast = map[string]bool{}
+	}
+	c.atLast[entry.Content] = true
+	return true
+}
+
 // streamPodLogs streams logs from a single pod/container to the log channel
 //
 // It returns k8score.ErrLogsUnavailable when the node answers with its notice
 // instead of logs. Every other ending, including a failed open the next
 // discovery pass retries, returns nil.
-func streamPodLogs(ctx context.Context, client kubernetes.Interface, namespace, podName, containerName string, tailLines int64, sinceSeconds *int64, logCh chan<- workloadLogEntry) error {
-	stream, err := k8score.GetContainerLogs(ctx, client, namespace, podName, containerName, k8score.LogOptions{
-		TailLines:    &tailLines,
-		SinceSeconds: sinceSeconds,
-		Timestamps:   true,
-		Follow:       true,
-	})
+func streamPodLogs(ctx context.Context, client kubernetes.Interface, namespace, podName string, opts corev1.PodLogOptions, logCh chan<- workloadLogEntry) error {
+	containerName := opts.Container
+	stream, err := client.CoreV1().Pods(namespace).GetLogs(podName, &opts).Stream(ctx)
 	if err != nil {
 		log.Printf("[workload-logs] Failed to stream logs for %s/%s: %v", podName, containerName, err)
 		return nil

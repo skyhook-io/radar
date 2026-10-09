@@ -17,7 +17,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -395,7 +394,7 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 	unavailable := unavailableSources{}
 	var active sync.Map
 	roles := map[string]string{}
-	cursors := map[string]*cnpgStreamCursor{}
+	cursors := map[string]*logStreamCursor{}
 	start := func(pods []*corev1.Pod) {
 		for _, pod := range pods {
 			roles[pod.Name] = cnpgInstanceRole(pod)
@@ -406,7 +405,7 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 				}
 				cursor := cursors[key]
 				if cursor == nil {
-					cursor = &cnpgStreamCursor{}
+					cursor = &logStreamCursor{}
 					cursors[key] = cursor
 				}
 				opts := cursor.restartOptions(c, query.tailLines, query.sinceSeconds)
@@ -507,54 +506,6 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 
 type cnpgStreamHandle struct {
 	cancel context.CancelFunc
-}
-
-// cnpgStreamCursor remembers where one container's follow left off, so a
-// stream that ends while its Pod is still an instance resumes instead of
-// replaying lines the client already has. Only the stream loop touches it.
-type cnpgStreamCursor struct {
-	last time.Time
-	// atLast holds the contents delivered with timestamp == last. The pod log
-	// API's sinceTime is second-granular, so a resume replays that second and
-	// only (timestamp, content) tells a replay from a new line.
-	atLast map[string]bool
-}
-
-// restartOptions returns the follow request for the next (re)start: the
-// caller's window the first time, and from the last delivered second after.
-func (c *cnpgStreamCursor) restartOptions(container string, tailLines int64, sinceSeconds *int64) corev1.PodLogOptions {
-	opts := corev1.PodLogOptions{Container: container, Timestamps: true, Follow: true}
-	if c.last.IsZero() {
-		opts.TailLines = &tailLines
-		opts.SinceSeconds = sinceSeconds
-		return opts
-	}
-	since := metav1.NewTime(c.last.Truncate(time.Second))
-	opts.SinceTime = &since
-	return opts
-}
-
-// admit reports whether an entry is new, recording it when it is. Lines
-// arrive in order per container, so anything before the last delivered
-// timestamp was already sent.
-func (c *cnpgStreamCursor) admit(entry workloadLogEntry) bool {
-	ts, err := time.Parse(time.RFC3339Nano, entry.Timestamp)
-	if err != nil {
-		return true
-	}
-	switch {
-	case ts.Before(c.last):
-		return false
-	case ts.Equal(c.last):
-		if c.atLast[entry.Content] {
-			return false
-		}
-	default:
-		c.last = ts
-		c.atLast = map[string]bool{}
-	}
-	c.atLast[entry.Content] = true
-	return true
 }
 
 // followCNPGContainerLogs returns k8score.ErrLogsUnavailable when the node
