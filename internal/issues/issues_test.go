@@ -126,6 +126,26 @@ func (f *fakeProvider) WorkloadBacksService(group, kind, namespace, name, servic
 	return f.workloadBacks[group+"/"+kind+"/"+namespace+"/"+name+"->"+serviceNamespace+"/"+serviceName]
 }
 
+func TestComposeIndependentNodeConditions(t *testing.T) {
+	p := &fakeProvider{}
+	for _, reason := range []string{"NotReady", "MemoryPressure", "DiskPressure", "NetworkUnavailable"} {
+		p.problems = append(p.problems, k8s.Detection{Kind: "Node", Name: "worker", Severity: "critical", Reason: reason, Fingerprint: "node:" + reason})
+	}
+	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
+	if len(out) != len(p.problems) {
+		t.Fatalf("independent node conditions collapsed: %+v", out)
+	}
+	seen := make(map[string]bool)
+	for _, issue := range out {
+		seen[issue.Reason] = true
+	}
+	for _, detection := range p.problems {
+		if !seen[detection.Reason] {
+			t.Errorf("missing node condition %s", detection.Reason)
+		}
+	}
+}
+
 func TestComposeAdmissionWebhookBackendCorrelation(t *testing.T) {
 	webhookMessage := `Error creating: Internal error occurred: failed calling webhook "validate.example.com": failed to call webhook: Post "https://policy-webhook.hooks.svc:443/validate?timeout=10s": no endpoints available for service "policy-webhook"`
 	p := &fakeProvider{

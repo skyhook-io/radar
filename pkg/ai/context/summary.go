@@ -571,7 +571,11 @@ func summarizeNode(node *corev1.Node) *ResourceSummary {
 		s.Issue = ""
 	}
 	if lifecycle.Delayed {
-		s.Issue = "Removal delayed"
+		if s.Issue != "" {
+			s.Issue += "; Removal delayed"
+		} else {
+			s.Issue = "Removal delayed"
+		}
 	}
 	if node.Spec.Unschedulable {
 		unschedulable := true

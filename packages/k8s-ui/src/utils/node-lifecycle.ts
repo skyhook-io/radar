@@ -57,6 +57,7 @@ export function getNodeLifecycle(node: any, now = Date.now()): NodeLifecycleStat
     level = node?.spec?.unschedulable ? 'degraded' : candidate ? 'neutral' : 'healthy'
   }
   const problems: string[] = []
+  if (removing && readinessFailed) label += ' · NotReady'
   const problemLabels: Record<string, string> = { MemoryPressure: 'Memory pressure', DiskPressure: 'Disk pressure', PIDPressure: 'PID pressure', NetworkUnavailable: 'Network unavailable' }
   for (const condition of node?.status?.conditions ?? []) {
     if (condition.status !== 'True' || !problemLabels[condition.type]) continue

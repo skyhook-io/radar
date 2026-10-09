@@ -271,7 +271,7 @@
           ]
         }
       },
-      "label": "Removing (Karpenter)",
+      "label": "Removing (Karpenter) · NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
       "delayed": false
@@ -425,7 +425,7 @@
           ]
         }
       },
-      "label": "Removing (Karpenter)",
+      "label": "Removing (Karpenter) · NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
       "delayed": false
@@ -560,7 +560,7 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler)",
+      "label": "Removing (cluster autoscaler) · NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
       "delayed": false
@@ -720,7 +720,7 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler)",
+      "label": "Removing (cluster autoscaler) · NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
       "delayed": false
@@ -752,7 +752,7 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler)",
+      "label": "Removing (cluster autoscaler) · NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
       "delayed": false
@@ -784,7 +784,7 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler)",
+      "label": "Removing (cluster autoscaler) · NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
       "delayed": false
@@ -816,7 +816,7 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler)",
+      "label": "Removing (cluster autoscaler) · NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
       "delayed": false
@@ -848,7 +848,7 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler)",
+      "label": "Removing (cluster autoscaler) · NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
       "delayed": false
@@ -916,7 +916,7 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler) \u00b7 Memory pressure",
+      "label": "Removing (cluster autoscaler) · Memory pressure",
       "level": "unhealthy",
       "readinessFailed": false,
       "delayed": false
@@ -952,7 +952,7 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler) \u00b7 Disk pressure",
+      "label": "Removing (cluster autoscaler) · Disk pressure",
       "level": "unhealthy",
       "readinessFailed": false,
       "delayed": false
@@ -988,7 +988,7 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler) \u00b7 PID pressure",
+      "label": "Removing (cluster autoscaler) · PID pressure",
       "level": "unhealthy",
       "readinessFailed": false,
       "delayed": false
@@ -1024,7 +1024,7 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler) \u00b7 Network unavailable",
+      "label": "Removing (cluster autoscaler) · Network unavailable",
       "level": "degraded",
       "readinessFailed": false,
       "delayed": false
@@ -1147,7 +1147,7 @@
           ]
         }
       },
-      "label": "Ready \u00b7 Network unavailable",
+      "label": "Ready · Network unavailable",
       "level": "degraded",
       "readinessFailed": false,
       "delayed": false
@@ -1177,7 +1177,7 @@
           ]
         }
       },
-      "label": "Ready \u00b7 Network unavailable",
+      "label": "Ready · Network unavailable",
       "level": "degraded",
       "readinessFailed": false,
       "delayed": false
@@ -1206,7 +1206,7 @@
           ]
         }
       },
-      "label": "Ready \u00b7 Disk pressure",
+      "label": "Ready · Disk pressure",
       "level": "unhealthy",
       "readinessFailed": false,
       "delayed": false

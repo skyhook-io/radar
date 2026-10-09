@@ -355,7 +355,7 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
       )}
 
       {/* Conditions */}
-      <ConditionsSection conditions={status.conditions} />
+      <ConditionsSection conditions={status.conditions} getConditionTone={condition => condition.type === 'Ready' && lifecycle.removing && !lifecycle.readinessFailed && condition.status !== 'True' ? 'unknown' : undefined} />
     </>
   )
 }

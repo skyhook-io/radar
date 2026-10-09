@@ -93,6 +93,7 @@ func NodeLifecycle(node *corev1.Node, now time.Time) NodeLifecycleState {
 		}
 		if s.ReadinessFailed {
 			s.Level = LevelUnhealthy
+			s.Label += " · NotReady"
 		}
 	} else if s.ReadinessFailed {
 		s.Label, s.Level = "NotReady", LevelUnhealthy

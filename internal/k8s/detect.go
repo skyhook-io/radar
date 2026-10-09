@@ -953,6 +953,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Severity:          np.Severity,
 				Action:            np.Action,
 				Reason:            np.Problem,
+				Fingerprint:       "node:" + np.Problem,
 				Message:           np.Reason,
 				Age:               FormatAge(ageDur),
 				AgeSeconds:        int64(ageDur.Seconds()),

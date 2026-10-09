@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { EventsSection, ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection } from './drawer-components'
+import { EventsSection, ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection, defaultConditionTone } from './drawer-components'
 
 const problems = [
   { color: 'red' as const, message: 'Application is Degraded' },
   { color: 'yellow' as const, message: 'Application is OutOfSync' },
 ]
+
+describe('GKE node condition polarity', () => {
+  it.each(['StoragePressureRootFileSystem', 'DPv2MigrationUnsupportedCNI', 'UnsupportedEBPFPrograms'])('%s is a problem only when True', type => {
+    expect(defaultConditionTone({ type, status: 'False' })).toBe('ok')
+    expect(defaultConditionTone({ type, status: 'True' })).toBe('fail')
+    expect(defaultConditionTone({ type, status: 'Unknown' })).toBe('unknown')
+  })
+})
 
 describe('ProblemAlerts', () => {
   it('renders every problem', () => {

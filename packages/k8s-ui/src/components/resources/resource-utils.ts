@@ -1359,7 +1359,7 @@ export interface NodeCondition {
   message?: string
 }
 
-export function getNodeConditions(node: any): { problems: string[]; healthy: boolean } {
+export function getNodeConditions(node: any): { problems: string[]; healthy: boolean; readinessLabel: string } {
   const conditions = node.status?.conditions || []
   const problems: string[] = []
   const lifecycle = getNodeLifecycle(node)
@@ -1378,7 +1378,13 @@ export function getNodeConditions(node: any): { problems: string[]; healthy: boo
   }
 
   if (lifecycle.delayed) problems.push('Removal delayed')
-  return { problems, healthy: problems.length === 0 && conditions.some((cond: any) => cond.type === 'Ready' && cond.status === 'True') }
+  const ready = conditions.find((cond: any) => cond.type === 'Ready')
+  const readinessLabel = lifecycle.removing && !lifecycle.readinessFailed && ready?.status === 'False'
+    ? 'Not ready (expected during removal)'
+    : lifecycle.removing && !lifecycle.readinessFailed && ready?.status === 'Unknown'
+      ? 'Readiness unknown during removal'
+      : 'Readiness unknown'
+  return { problems, healthy: problems.length === 0 && ready?.status === 'True', readinessLabel }
 }
 
 export function getNodeTaints(node: any): { count: number; text: string } {

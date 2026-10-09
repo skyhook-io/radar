@@ -121,6 +121,13 @@ describe('NodeRenderer removal advice', () => {
     expect(html).toContain('who cordoned it is not recorded')
     expect(html).not.toContain('Uncordon to resume')
   })
+  it('keeps observed readiness False neutral when it follows the removal start', () => {
+    const html = renderToStaticMarkup(<NodeRenderer data={{ ...removal, status: { ...removal.status, conditions: [{ ...removal.status.conditions[0], status: 'False' }] } }} />)
+    expect(html).toContain('Removing (cluster autoscaler)')
+    expect(html).toContain('Kubelet stopped posting')
+    expect(html).not.toContain('1 failing')
+    expect(html).not.toContain('Issues Detected')
+  })
   it('shows named possible PDB blockers and terminating pods without invented progress', () => {
     const html = renderToStaticMarkup(<NodeRenderer data={removal} removalPlan={{
       node: 'kind-worker', generatedAt: new Date().toISOString(), estimate: true,

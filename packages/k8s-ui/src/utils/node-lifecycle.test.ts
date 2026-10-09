@@ -24,6 +24,10 @@ describe('node lifecycle shared Go/TS scenarios', () => {
       const node = fixture.vectors.find((vector: any) => vector.name === 'autoscaler-Unknown').node
       expect(getNodeStatus(node)).toMatchObject({ text: 'Removing (cluster autoscaler)', level: 'neutral' })
       expect(getNodeConditions(node).problems).toEqual([])
+      expect(getNodeConditions(node).readinessLabel).toBe('Readiness unknown during removal')
+      const shutdown = fixture.vectors.find((vector: any) => vector.name === 'autoscaler-False').node
+      expect(getNodeConditions(shutdown).readinessLabel).toBe('Not ready (expected during removal)')
+      expect(getNodeConditions({ status: { conditions: [] } })).toMatchObject({ healthy: false, readinessLabel: 'Readiness unknown' })
       const failed = fixture.vectors.find((vector: any) => vector.name === 'preexisting-failure').node
       expect(getNodeConditions(failed).problems).toContain('NotReady')
     } finally { vi.useRealTimers() }

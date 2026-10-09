@@ -992,7 +992,11 @@ func TestNodeSummaryExpectedRemoval(t *testing.T) {
 		t.Fatalf("normal removal misreported: %+v", s)
 	}
 	node.Status.Conditions[0].LastTransitionTime = metav1.NewTime(now.Add(-time.Hour))
-	if s := summarizeNode(node); s.Issue != "NodeStatusUnknown" {
+	if s := summarizeNode(node); s.Issue != "NodeStatusUnknown" || s.Status != "Removing (cluster autoscaler) · NotReady" {
 		t.Fatalf("preexisting failure hidden: %+v", s)
+	}
+	node.Spec.Taints[0].Value = fmt.Sprint(now.Add(-15 * time.Minute).Unix())
+	if s := summarizeNode(node); s.Issue != "NodeStatusUnknown; Removal delayed" {
+		t.Fatalf("delayed removal hid the readiness failure: %+v", s)
 	}
 }
