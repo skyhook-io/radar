@@ -37,7 +37,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
-import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships, TrafficSourcesResponse } from '../../types'
+import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
 import { useHistoryPaging } from './historyPaging'
 import {
   kindToPlural,
@@ -97,6 +97,7 @@ import { RightsizingPanel } from '../resource/RightsizingStrip'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { isRadarFeatureUnsupported } from '../../api/radarFeatures'
+import { useTrafficAvailable } from '../../api/traffic'
 import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
 import { AuditAlerts, getRadarUpgradeRequirement, ResourceIssuesSection, ReachabilityView, TraceSummary, InClusterConsentDialog, traceFingerprint, staticPollUnreliable, summarizeInClusterTests, type Trace as NetworkTrace, type InClusterCapability, inClusterConsentGiven, consentRequestRows } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
@@ -993,11 +994,10 @@ export function WorkloadView({
     (path: string) => navigateRouter(path),
     [navigateRouter],
   )
-  // Offered for the kinds the traffic map draws as one node, unless the
-  // traffic view has already found no source on this cluster. Detecting one
-  // here would probe every source from every workload page.
-  const knownTrafficSources = queryClient.getQueryData<TrafficSourcesResponse>(['traffic-sources'])
-  const trafficUnavailable = !!knownTrafficSources && !knownTrafficSources.detected.some(s => s.status === 'available')
+  // Offered for the kinds the traffic map draws as one node, and only once a
+  // traffic source is known to be available on this cluster.
+  const trafficKind = !!namespace && TRAFFIC_WORKLOAD_PLURALS.has(apiKind.toLowerCase())
+  const trafficAvailable = useTrafficAvailable(trafficKind)
   const openLiveTraffic = useCallback(() => {
     const params = new URLSearchParams()
     const namespaces = searchParams.get('namespaces')
@@ -1005,7 +1005,7 @@ export function WorkloadView({
     params.set('focus', `${namespace}/${name}`)
     navigateRouter({ pathname: '/traffic', search: params.toString() })
   }, [navigateRouter, searchParams, namespace, name])
-  const offerLiveTraffic = !!namespace && TRAFFIC_WORKLOAD_PLURALS.has(apiKind.toLowerCase()) && !trafficUnavailable
+  const offerLiveTraffic = trafficKind && trafficAvailable
   // Drawer TraceSummary CTA → open the full resource view ON the Reachability tab.
   // The generic onExpand navigates to the workload path but drops the query, so we
   // navigate directly to that path WITH ?tab=reachability - the deeplink the

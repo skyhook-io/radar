@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -26,6 +28,13 @@ type Manager struct {
 	clusterInfo  *ClusterInfo
 	contextName  string // current K8s context name
 	mu           sync.RWMutex
+
+	// The last detection, for callers that only ask whether traffic is
+	// available. A context switch builds a new Manager, so it never outlives
+	// the cluster it describes.
+	lastSources    *SourcesResponse
+	lastDetectedAt time.Time
+	lastConfigGen  uint64
 }
 
 var (
@@ -48,6 +57,10 @@ var (
 	// configuredBeylaJobSelector overrides the default `job` label matcher used
 	// to scope Beyla's Prometheus queries; empty means use the built-in default.
 	configuredBeylaJobSelector string
+	// metricsConfigGen counts changes to the settings above. Metrics-based
+	// sources (Caretta, Beyla) detect through them, so a remembered detection
+	// made under other settings is stale.
+	metricsConfigGen uint64
 )
 
 // SetMetricsURL sets a manual Prometheus/VictoriaMetrics URL, bypassing auto-discovery.
@@ -55,6 +68,7 @@ func SetMetricsURL(url string) {
 	metricsConfigMu.Lock()
 	defer metricsConfigMu.Unlock()
 	configuredMetricsURL = url
+	metricsConfigGen++
 }
 
 // SetMetricsHeaders sets HTTP headers attached to every Prometheus query.
@@ -63,6 +77,7 @@ func SetMetricsHeaders(h map[string]string) {
 	metricsConfigMu.Lock()
 	defer metricsConfigMu.Unlock()
 	configuredMetricsHeaders = copyMetricsHeaders(h)
+	metricsConfigGen++
 }
 
 // SetMetricsConfig applies URL and headers together. A source built between
@@ -73,6 +88,7 @@ func SetMetricsConfig(url string, h map[string]string) {
 	defer metricsConfigMu.Unlock()
 	configuredMetricsURL = url
 	configuredMetricsHeaders = copyMetricsHeaders(h)
+	metricsConfigGen++
 }
 
 func copyMetricsHeaders(h map[string]string) map[string]string {
@@ -92,6 +108,13 @@ func SetBeylaJobSelector(selector string) {
 	metricsConfigMu.Lock()
 	defer metricsConfigMu.Unlock()
 	configuredBeylaJobSelector = selector
+	metricsConfigGen++
+}
+
+func currentMetricsConfigGen() uint64 {
+	metricsConfigMu.RLock()
+	defer metricsConfigMu.RUnlock()
+	return metricsConfigGen
 }
 
 // BeylaJobSelector returns the configured Beyla job-label matcher fragment,
@@ -153,6 +176,32 @@ func GetManager() *Manager {
 func (m *Manager) DetectSources(ctx context.Context) (*SourcesResponse, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.detectSourcesLocked(ctx)
+}
+
+// RecentSources returns the last detection when it is younger than maxAge,
+// and detects otherwise. It is for pages that only ask whether a source is
+// available: detection probes every source in turn while holding the manager
+// lock, which flow reads wait on. Concurrent callers share one detection, the
+// later ones finding the first one's result.
+func (m *Manager) RecentSources(ctx context.Context, maxAge time.Duration) (*SourcesResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.lastSources != nil && time.Since(m.lastDetectedAt) < maxAge && m.lastConfigGen == currentMetricsConfigGen() {
+		response := *m.lastSources
+		response.Detected = slices.Clone(m.lastSources.Detected)
+		response.NotDetected = slices.Clone(m.lastSources.NotDetected)
+		response.Active = ""
+		if m.activeSource != nil {
+			response.Active = m.activeSource.Name()
+		}
+		return &response, nil
+	}
+	return m.detectSourcesLocked(ctx)
+}
+
+func (m *Manager) detectSourcesLocked(ctx context.Context) (*SourcesResponse, error) {
+	configGen := currentMetricsConfigGen()
 
 	// Detect cluster info first
 	clusterInfo, err := m.detectClusterInfo(ctx)
@@ -230,6 +279,13 @@ func (m *Manager) DetectSources(ctx context.Context) (*SourcesResponse, error) {
 
 	// Generate recommendation based on cluster type
 	response.Recommended = m.generateRecommendation(clusterInfo, response.Detected)
+
+	remembered := *response
+	remembered.Detected = slices.Clone(response.Detected)
+	remembered.NotDetected = slices.Clone(response.NotDetected)
+	m.lastSources = &remembered
+	m.lastDetectedAt = time.Now()
+	m.lastConfigGen = configGen
 
 	return response, nil
 }

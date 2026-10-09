@@ -30,12 +30,33 @@ export interface TrafficConnectionInfo {
 
 // Get available traffic sources and recommendations
 export function useTrafficSources() {
+  const queryClient = useQueryClient()
   return useQuery<TrafficSourcesResponse>({
     queryKey: ['traffic-sources'],
-    queryFn: () => fetchJSON('/traffic/sources'),
+    queryFn: async () => {
+      const sources = await fetchJSON<TrafficSourcesResponse>('/traffic/sources')
+      // A fresh detection is also the newest answer to "is traffic available".
+      queryClient.setQueryData(['traffic-sources', 'recent'], sources)
+      return sources
+    },
     staleTime: 30000, // 30 seconds
     retry: 1,
   })
+}
+
+// Whether this cluster has a traffic source: true only once one is detected
+// as available, so a page offering traffic never offers it on a guess. Accepts
+// a detection up to a couple of minutes old (?recent=1), so browsing workloads
+// does not probe every source on each page.
+export function useTrafficAvailable(enabled = true): boolean {
+  const { data } = useQuery<TrafficSourcesResponse>({
+    queryKey: ['traffic-sources', 'recent'],
+    queryFn: () => fetchJSON('/traffic/sources?recent=1'),
+    staleTime: 2 * 60_000,
+    retry: false,
+    enabled,
+  })
+  return !!data?.detected?.some(s => s.status === 'available')
 }
 
 // What the flows and records queries share: the namespaces in view, the
