@@ -4138,7 +4138,7 @@ export function useUpdateResource() {
       });
       if (!response.ok) {
         const error = await readErrorBody(response);
-        const failure = new Error(error.error || `HTTP ${response.status}`);
+        const failure = new ApiError(error.error || `HTTP ${response.status}`, response.status, error);
         // A reviewed apply's failure is shown in the review itself (the
         // changed-after-review notice, or the error), so it gets no toast.
         if (reviewedResourceVersion !== undefined || reviewedContext !== undefined) {

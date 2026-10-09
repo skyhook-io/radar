@@ -8,6 +8,7 @@ import { ReflectorSummary, ReflectorSection, isReflectorMirror, reflectorEditNot
 import type { SecretCertificateInfo, CertificateInfo, Relationships, ResourceRef } from '../../../types'
 import { pluralize } from '../../../utils/pluralize'
 import { cleanResourceForYaml } from '../../../utils/yaml'
+import { isFetchError } from '../../../types/fetch-error'
 
 interface SecretRendererProps {
   data: any
@@ -31,6 +32,7 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [showSaveConfirm, setShowSaveConfirm] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const dataKeys = Object.keys(data.data || {})
   const isImmutable = data.immutable === true
@@ -68,12 +70,14 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
   function startEdit(key: string, decoded: string) {
     setEditingKey(key)
     setEditValue(decoded)
+    setSaveError(null)
   }
 
   function cancelEdit() {
     setEditingKey(null)
     setEditValue('')
     setShowSaveConfirm(false)
+    setSaveError(null)
   }
 
   const handleSave = useCallback(async (key: string, newValue: string) => {
@@ -83,14 +87,16 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
     // btoa is byte-only; round-trip through encodeURIComponent/unescape so non-ASCII secret values survive base64 encoding.
     cleaned.data[key] = btoa(unescape(encodeURIComponent(newValue)))
     const yaml = yamlStringify(cleaned, { lineWidth: 0, indent: 2 })
+    setSaveError(null)
     try {
       await onSaveSecretValue(yaml)
       setEditingKey(null)
       setEditValue('')
       setShowSaveConfirm(false)
-    } catch {
-      // Error is handled by the mutation (toast)
+    } catch (error) {
+      // The edit stays open with the value as typed, so it can be saved again.
       setShowSaveConfirm(false)
+      setSaveError(secretSaveErrorMessage(error))
     }
   }, [onSaveSecretValue, resourceData])
 
@@ -171,8 +177,10 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
           {dataKeys.map((key) => {
             const decoded = decodeBase64(data.data[key])
             const isBinary = decoded === '[binary data]'
-            const isEditing = editingKey === key
             const canEdit = onSaveSecretValue && !isImmutable && !isBinary
+            // Without a save handler (the Secret was deleted, say) an open
+            // editor would have a Save button that does nothing.
+            const isEditing = editingKey === key && Boolean(canEdit)
 
             return (
               <div key={key} className="card-inner">
@@ -221,13 +229,22 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
                     <textarea
                       ref={textareaRef}
                       value={editValue}
-                      onChange={(e) => setEditValue(e.target.value)}
+                      onChange={(e) => {
+                        setEditValue(e.target.value)
+                        setSaveError(null)
+                      }}
                       autoCorrect="off"
                       autoCapitalize="off"
                       className="w-full bg-theme-base rounded p-2 text-xs text-theme-text-secondary font-mono border border-blue-500/50 focus:border-blue-500 focus:outline-none resize-none overflow-hidden whitespace-pre-wrap"
                       style={{ minHeight: '60px' }}
                       disabled={isSaving}
                     />
+                    {saveError && (
+                      <div role="alert" className="mt-1 flex items-start gap-1.5 text-xs text-red-600 dark:text-red-300">
+                        <AlertTriangle className="w-3.5 h-3.5 mt-px shrink-0" />
+                        <span>{saveError}</span>
+                      </div>
+                    )}
                     <div className="flex items-center gap-2 mt-2">
                       <button
                         onClick={() => setShowSaveConfirm(true)}
@@ -267,7 +284,7 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
 
       <ReflectorSection data={data} reflection={relationships?.reflection} onNavigate={onNavigate} />
 
-      {editingKey && (
+      {editingKey && onSaveSecretValue && (
         <ConfirmDialog
           open={showSaveConfirm}
           onClose={() => setShowSaveConfirm(false)}
@@ -282,6 +299,17 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
       )}
     </>
   )
+}
+
+function secretSaveErrorMessage(error: unknown): string {
+  if (isFetchError(error) && error.status === 404) {
+    return 'Not saved. This Secret no longer exists in the cluster.'
+  }
+  if (isFetchError(error) && error.status === 409) {
+    return 'Not saved. This Secret changed after it loaded, and the latest version is shown now. Save again to apply your value to it.'
+  }
+  const message = error instanceof Error ? error.message : ''
+  return message ? `Not saved: ${message}` : 'Not saved.'
 }
 
 function CertificateInfoSection({ cert, index, total }: { cert: CertificateInfo; index: number; total: number }) {
