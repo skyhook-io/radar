@@ -550,6 +550,11 @@ func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, n
 	for {
 		line, err := reader.ReadString('\n')
 		if line = strings.TrimSuffix(line, "\n"); line != "" && (err == nil || err == io.EOF) {
+			// The kubelet's notice for a container it no longer holds logs for
+			// arrives as the stream's only line. It is not output.
+			if isLogsUnavailableNotice(line) {
+				return
+			}
 			ts, content := parseLogLine(line)
 			select {
 			case logCh <- workloadLogEntry{Pod: podName, Container: opts.Container, Timestamp: ts, Content: content}:

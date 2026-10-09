@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -277,9 +278,10 @@ func isLogsUnavailableNotice(body string) bool {
 }
 
 // isNoPreviousContainer matches the apiserver's answer when an earlier run is
-// asked for on a container that never restarted.
+// asked for on a container that never restarted. The apiserver sends it as a
+// 400 BadRequest, so any other failure that mentions the phrase is left alone.
 func isNoPreviousContainer(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "previous terminated container")
+	return apierrors.IsBadRequest(err) && strings.Contains(err.Error(), "previous terminated container")
 }
 
 // parseLogLine extracts timestamp from a log line (format: 2024-01-20T10:30:00.123456789Z content)
