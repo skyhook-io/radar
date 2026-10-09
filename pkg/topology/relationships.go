@@ -377,13 +377,13 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		case EdgeUses:
 			source := refForNodeID(edge.Source)
 			if isStorageResourceRef(source) {
-				rel.Consumers = appendResourceRef(rel.Consumers, *ref)
+				rel.Consumers = append(rel.Consumers, *ref)
 			} else if isScalingRelationship(source, ref) {
 				rel.ScaleTarget = ref
 			} else {
-				rel.Dependencies = appendResourceRef(rel.Dependencies, *ref)
+				rel.Dependencies = append(rel.Dependencies, *ref)
 				if isConfigurationDependency(ref) {
-					rel.ConfigRefs = appendResourceRef(rel.ConfigRefs, *ref)
+					rel.ConfigRefs = append(rel.ConfigRefs, *ref)
 				}
 			}
 		case EdgeProtects:
@@ -445,13 +445,13 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			}
 		case EdgeUses:
 			if isStorageResourceRef(ref) {
-				rel.StorageRefs = appendResourceRef(rel.StorageRefs, *ref)
+				rel.StorageRefs = append(rel.StorageRefs, *ref)
 			} else if isScalingRelationship(ref, refForNodeID(edge.Target)) {
-				rel.Scalers = appendResourceRef(rel.Scalers, *ref)
+				rel.Scalers = append(rel.Scalers, *ref)
 			} else {
-				rel.Dependents = appendResourceRef(rel.Dependents, *ref)
+				rel.Dependents = append(rel.Dependents, *ref)
 				if isConfigurationDependency(refForNodeID(edge.Target)) {
-					rel.Consumers = appendResourceRef(rel.Consumers, *ref)
+					rel.Consumers = append(rel.Consumers, *ref)
 				}
 			}
 		case EdgeProtects:
@@ -479,7 +479,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				// Monitor resources observe their targets; topology carries the edge,
 				// but Relationships has no observability group to project it into yet.
 			default:
-				rel.ConfigRefs = appendResourceRef(rel.ConfigRefs, *ref)
+				rel.ConfigRefs = append(rel.ConfigRefs, *ref)
 			}
 		}
 	}
@@ -690,6 +690,12 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	}
 
 	// Return nil if no relationships found
+	// Collected without per-append checks: a PVC shared by thousands of
+	// workloads would make a linear duplicate scan quadratic.
+	for _, refs := range []*[]ResourceRef{&rel.ConfigRefs, &rel.Consumers, &rel.Dependencies, &rel.Dependents, &rel.Scalers, &rel.StorageRefs} {
+		*refs = uniqueResourceRefs(*refs)
+	}
+
 	if rel.Owner == nil && rel.Deployment == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
 		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.Routes) == 0 &&
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
@@ -783,6 +789,23 @@ func appendResourceRef(refs []ResourceRef, candidate ResourceRef) []ResourceRef 
 		}
 	}
 	return append(refs, candidate)
+}
+
+func uniqueResourceRefs(refs []ResourceRef) []ResourceRef {
+	if len(refs) < 2 {
+		return refs
+	}
+	seen := make(map[ResourceRef]bool, len(refs))
+	unique := refs[:0]
+	for _, ref := range refs {
+		key := ResourceRef{Kind: strings.ToLower(ref.Kind), Group: ref.Group, Namespace: ref.Namespace, Name: ref.Name}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		unique = append(unique, ref)
+	}
+	return unique
 }
 
 func isStorageResourceRef(ref *ResourceRef) bool {

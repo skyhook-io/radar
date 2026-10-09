@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"fmt"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -755,5 +756,44 @@ func TestScalingRelationshipRequiresExactAPIGroup(t *testing.T) {
 	}
 	if isStorageResourceRef(&ResourceRef{Kind: "PersistentVolumeClaim", Group: "example.com"}) {
 		t.Fatal("classified custom resource as core storage")
+	}
+}
+
+func TestScalingRelationshipAcceptsExactScalersInTheTargetNamespace(t *testing.T) {
+	target := &ResourceRef{Kind: "Deployment", Group: "apps", Namespace: "team"}
+	for _, source := range []ResourceRef{
+		{Kind: "HorizontalPodAutoscaler", Group: "autoscaling", Namespace: "team"},
+		{Kind: "VerticalPodAutoscaler", Group: "autoscaling.k8s.io", Namespace: "team"},
+		{Kind: "ScaledObject", Group: "keda.sh", Namespace: "team"},
+		{Kind: "ScaledJob", Group: "keda.sh", Namespace: "team"},
+	} {
+		if !isScalingRelationship(&source, target) {
+			t.Errorf("did not classify %+v as scaling", source)
+		}
+		other := source
+		other.Namespace = "other"
+		if isScalingRelationship(&other, target) {
+			t.Errorf("classified cross-namespace %+v as scaling", other)
+		}
+	}
+}
+
+func TestGetRelationships_SharedClaimListsEachConsumerOnce(t *testing.T) {
+	const consumers = 20000
+	topo := &Topology{Nodes: []Node{{ID: "persistentvolumeclaim/team/shared", Kind: NodeKind("PersistentVolumeClaim"), Name: "shared"}}}
+	for i := range consumers {
+		id := fmt.Sprintf("job/team/run-%d", i)
+		topo.Nodes = append(topo.Nodes, Node{ID: id, Kind: KindJob, Name: fmt.Sprintf("run-%d", i)})
+		topo.Edges = append(topo.Edges, Edge{Source: "persistentvolumeclaim/team/shared", Target: id, Type: EdgeUses})
+	}
+	topo.Edges = append(topo.Edges, Edge{Source: "persistentvolumeclaim/team/shared", Target: "job/team/run-0", Type: EdgeUses})
+
+	rel := GetRelationships("PersistentVolumeClaim", "team", "shared", topo, nil, nil)
+	if rel == nil || len(rel.Consumers) != consumers {
+		t.Fatalf("consumers = %d, want %d", len(rel.Consumers), consumers)
+	}
+	job := GetRelationships("Job", "team", "run-0", topo, nil, nil)
+	if job == nil || len(job.StorageRefs) != 1 {
+		t.Fatalf("storage refs = %+v, want the shared claim once", job)
 	}
 }
