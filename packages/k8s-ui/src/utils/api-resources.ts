@@ -63,6 +63,13 @@ const ADDITIONAL_BUILTIN_IDENTITIES: Record<string, string> = {
   deviceclass: 'resource.k8s.io', deviceclasses: 'resource.k8s.io',
 };
 
+// Kind spellings only: a resource name such as `services` is not a Kind.
+const ADDITIONAL_CORE_KINDS: ReadonlySet<string> = new Set(['Endpoints'])
+
+export function isBuiltinCoreKind(kind: string): boolean {
+  return ADDITIONAL_CORE_KINDS.has(kind) || CORE_RESOURCES.some(r => r.group === '' && r.kind === kind)
+}
+
 export function builtinGroupForKind(kindOrResource: string): string | undefined {
   const value = kindOrResource.toLowerCase()
   return CORE_RESOURCES.find(resource =>
