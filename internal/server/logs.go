@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -79,6 +81,14 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	if container != "" {
 		// Fetch logs for specific container
 		logContent, err := s.fetchContainerLogs(r.Context(), client, namespace, podName, container, tailLines, previous, sinceSeconds)
+		if errors.Is(err, errLogsUnavailable) {
+			s.writeError(w, http.StatusNotFound, errLogsUnavailable.Error())
+			return
+		}
+		if previous && isNoPreviousContainer(err) {
+			s.writeError(w, http.StatusNotFound, "This container has not restarted, so there is no earlier run to show.")
+			return
+		}
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to fetch logs: %v", err))
 			return
@@ -245,7 +255,33 @@ func (s *Server) fetchContainerLogs(ctx context.Context, client kubernetes.Inter
 		return "", err
 	}
 
+	if body := string(content); isLogsUnavailableNotice(body) {
+		return "", errLogsUnavailable
+	}
+
 	return string(content), nil
+}
+
+// errLogsUnavailable means the node did not hand back the container's output.
+// Usually the kubelet has already collected the log file; the same answer comes
+// back when the container runtime is briefly unreachable, so this does not
+// claim the lines are gone for good.
+var errLogsUnavailable = errors.New("Kubernetes did not return this container's logs")
+
+// isLogsUnavailableNotice recognises the kubelet's own apology for a log file
+// it no longer holds. The apiserver returns it with a 200 and it is the whole
+// body, so without this it reaches the reader as a line their workload printed.
+// Safe to match by prefix because logs are fetched with timestamps, so a real
+// line always begins with an RFC3339 stamp.
+func isLogsUnavailableNotice(body string) bool {
+	return strings.HasPrefix(strings.TrimSpace(body), "unable to retrieve container logs for")
+}
+
+// isNoPreviousContainer matches the apiserver's answer when an earlier run is
+// asked for on a container that never restarted. The apiserver sends it as a
+// 400 BadRequest, so any other failure that mentions the phrase is left alone.
+func isNoPreviousContainer(err error) bool {
+	return apierrors.IsBadRequest(err) && strings.Contains(err.Error(), "previous terminated container")
 }
 
 // parseLogLine extracts timestamp from a log line (format: 2024-01-20T10:30:00.123456789Z content)
