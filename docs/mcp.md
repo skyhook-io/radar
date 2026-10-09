@@ -575,3 +575,5 @@ other writers, and later template/configuration edits can explain differences.
 Candidate inspection is non-exhaustive and does not perform live admission calls
 or start watches. Verify provenance with configuration history or
 [Kubernetes admission audit records](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#monitoring-admission-webhooks).
+
+Current-resource warning events in workload `diagnose` and `get_resource(include=events)` exclude a known `involvedObject.uid` mismatch with the already-read resource or its resolved current Pods. Identity still includes the exact API group and scoped namespace. UID-less events remain identity-matched evidence and cannot prove an incarnation. `get_events`, resource history and timeline remain historical views; this filter does not erase earlier incarnations from those surfaces.

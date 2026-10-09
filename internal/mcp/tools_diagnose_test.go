@@ -34,17 +34,17 @@ func setupFakeCacheForDiagnoseTests(t *testing.T) {
 	// Pods belong to a workload by controller ownership, so the fixture
 	// carries the Deployment → ReplicaSet → Pod chain a real cluster has.
 	isController := true
-	rsOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: deployName, Controller: &isController}
-	podOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "cart-abc", Controller: &isController}
+	rsOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: deployName, UID: "current-cart", Controller: &isController}
+	podOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "cart-abc", UID: "current-cart-rs", Controller: &isController}
 
 	fakeClient := fake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
 		&appsv1.ReplicaSet{
-			ObjectMeta: metav1.ObjectMeta{Name: "cart-abc", Namespace: ns, Labels: selector, OwnerReferences: []metav1.OwnerReference{rsOwner}},
+			ObjectMeta: metav1.ObjectMeta{Name: "cart-abc", Namespace: ns, UID: "current-cart-rs", Labels: selector, OwnerReferences: []metav1.OwnerReference{rsOwner}},
 			Spec:       appsv1.ReplicaSetSpec{Selector: &metav1.LabelSelector{MatchLabels: selector}},
 		},
 		&appsv1.Deployment{
-			ObjectMeta: metav1.ObjectMeta{Name: deployName, Namespace: ns},
+			ObjectMeta: metav1.ObjectMeta{Name: deployName, Namespace: ns, UID: "current-cart"},
 			Spec: appsv1.DeploymentSpec{
 				Selector: &metav1.LabelSelector{MatchLabels: selector},
 				Template: corev1.PodTemplateSpec{
@@ -355,10 +355,10 @@ func TestHandleDiagnose_PodNotFound(t *testing.T) {
 }
 
 // TestHandleDiagnose_DeploymentResolvesPods exercises the workload-rooted
-// path (kind=deployment → workload selector → fan-out to matching pods),
+// path (kind=deployment → cached UID-qualified controller chain → fan-out to owned pods),
 // which is the diagnose tool's headline use case. The pod-only tests above
 // never traverse this branch — without this test, a regression in
-// GetWorkloadSelector / GetPodsForWorkload / selector matching would ship
+// controller-chain matching would ship
 // undetected on the most common debug journey ("CrashLoopBackOff on a
 // Deployment"). The fake test environment has no kube client on ctx, so
 // logs surface as LogsError rather than empty arrays — that's the
@@ -381,9 +381,9 @@ func TestHandleDiagnose_DeploymentResolvesPods(t *testing.T) {
 	if !strings.Contains(body, `"name":"cart"`) {
 		t.Errorf("expected deployment name in response: %s", body)
 	}
-	// Selector resolution should find the matching pod.
+	// Current controller ownership should find exactly one Pod.
 	if !strings.Contains(body, `"pods":1`) {
-		t.Errorf("expected pods:1 (selector matched 1 pod): %s", body)
+		t.Errorf("expected pods:1 (current controller owns 1 pod): %s", body)
 	}
 	// No kube client on ctx in tests — diagnose surfaces this distinctly.
 	if !strings.Contains(body, "logsError") {
