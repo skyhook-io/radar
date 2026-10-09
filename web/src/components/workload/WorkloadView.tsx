@@ -995,8 +995,13 @@ export function WorkloadView({
     [navigateRouter],
   )
   // Offered for the kinds the traffic map draws as one node, and only once a
-  // traffic source is known to be available on this cluster.
-  const trafficKind = !!namespace && TRAFFIC_WORKLOAD_PLURALS.has(apiKind.toLowerCase())
+  // traffic source is known to be available on this cluster. A Job something
+  // controls (a CronJob, a JobSet) is not one: the map groups its pods under
+  // that owner, so it is offered only once the Job is known to have none.
+  const isJob = apiKind.toLowerCase() === 'jobs'
+  const controlledJob = isJob && (!resource ||
+    (resource.metadata?.ownerReferences ?? []).some((ref: { controller?: boolean }) => ref.controller))
+  const trafficKind = !!namespace && TRAFFIC_WORKLOAD_PLURALS.has(apiKind.toLowerCase()) && !controlledJob
   const trafficAvailable = useTrafficAvailable(trafficKind)
   const openLiveTraffic = useCallback(() => {
     const params = new URLSearchParams()

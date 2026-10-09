@@ -49,14 +49,18 @@ export function useTrafficSources() {
 // a detection up to a couple of minutes old (?recent=1), so browsing workloads
 // does not probe every source on each page.
 export function useTrafficAvailable(enabled = true): boolean {
+  // A workload focus needs the server to name each pod's workload, which
+  // shipped with flow records. An older Radar leaves Hubble pods unnamed, so
+  // the focus it opened would match nothing.
+  const resolvesWorkloads = useRadarFeature('trafficRecords').support === 'supported'
   const { data } = useQuery<TrafficSourcesResponse>({
     queryKey: ['traffic-sources', 'recent'],
     queryFn: () => fetchJSON('/traffic/sources?recent=1'),
     staleTime: 2 * 60_000,
     retry: false,
-    enabled,
+    enabled: enabled && resolvesWorkloads,
   })
-  return !!data?.detected?.some(s => s.status === 'available')
+  return resolvesWorkloads && !!data?.detected?.some(s => s.status === 'available')
 }
 
 // What the flows and records queries share: the namespaces in view, the
