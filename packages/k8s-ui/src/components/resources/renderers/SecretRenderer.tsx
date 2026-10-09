@@ -32,7 +32,7 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [showSaveConfirm, setShowSaveConfirm] = useState(false)
-  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<{ reason?: string } | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const dataKeys = Object.keys(data.data || {})
   const isImmutable = data.immutable === true
@@ -240,9 +240,8 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
                       disabled={isSaving}
                     />
                     {saveError && (
-                      <div role="alert" className="mt-1 flex items-start gap-1.5 text-xs text-red-600 dark:text-red-300">
-                        <AlertTriangle className="w-3.5 h-3.5 mt-px shrink-0" />
-                        <span>{saveError}</span>
+                      <div role="alert" className="mt-2">
+                        <AlertBanner variant="error" title="Not saved" message={saveError.reason} />
                       </div>
                     )}
                     <div className="flex items-center gap-2 mt-2">
@@ -301,15 +300,17 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
   )
 }
 
-function secretSaveErrorMessage(error: unknown): string {
+function secretSaveErrorMessage(error: unknown): { reason?: string } {
   if (isFetchError(error) && error.status === 404) {
-    return 'Not saved. This Secret no longer exists in the cluster.'
+    return { reason: 'This Secret no longer exists in the cluster.' }
   }
+  // The view reloads the Secret after a failed save, but that read can trail
+  // the cluster by a moment, so the message can't promise it already shows
+  // the change.
   if (isFetchError(error) && error.status === 409) {
-    return 'Not saved. This Secret changed after it loaded, and the latest version is shown now. Save again to apply your value to it.'
+    return { reason: 'This Secret changed after it loaded. Once the view reloads it, save again to apply your value to the latest version.' }
   }
-  const message = error instanceof Error ? error.message : ''
-  return message ? `Not saved: ${message}` : 'Not saved.'
+  return { reason: error instanceof Error && error.message ? error.message : undefined }
 }
 
 function CertificateInfoSection({ cert, index, total }: { cert: CertificateInfo; index: number; total: number }) {

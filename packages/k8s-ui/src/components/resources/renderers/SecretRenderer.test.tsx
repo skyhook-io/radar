@@ -57,20 +57,23 @@ describe('SecretRenderer value edit', () => {
   it('keeps the edit open and says why when the Secret changed since it loaded', async () => {
     await render(vi.fn().mockRejectedValue(httpError(409, 'resource changed after review')))
     await editAndSave('new')
-    expect(element.textContent).toContain('Not saved. This Secret changed after it loaded')
+    expect(element.textContent).toContain('Not saved')
+    expect(element.textContent).toContain('This Secret changed after it loaded. Once the view reloads it, save again')
     expect(element.querySelector('textarea')?.value).toBe('new')
   })
 
   it('says the Secret is gone when the save finds it deleted', async () => {
     await render(vi.fn().mockRejectedValue(httpError(404, 'secrets "db" not found')))
     await editAndSave('new')
-    expect(element.textContent).toContain('Not saved. This Secret no longer exists in the cluster.')
+    expect(element.textContent).toContain('Not saved')
+    expect(element.textContent).toContain('This Secret no longer exists in the cluster.')
   })
 
   it('shows the server message for any other failure', async () => {
     await render(vi.fn().mockRejectedValue(httpError(403, 'secrets "db" is forbidden')))
     await editAndSave('new')
-    expect(element.textContent).toContain('Not saved: secrets "db" is forbidden')
+    expect(element.textContent).toContain('Not saved')
+    expect(element.textContent).toContain('secrets "db" is forbidden')
   })
 
   it('closes the editor once the save handler is taken away', async () => {
