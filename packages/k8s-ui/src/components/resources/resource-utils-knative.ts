@@ -2,6 +2,7 @@
 
 import type { StatusBadge } from './resource-utils'
 import { healthColors } from './resource-utils'
+import { apiVersionToGroup, kindToPluralWithGroup } from '../../utils/navigation'
 
 // ============================================================================
 // SHARED HELPERS
@@ -215,4 +216,11 @@ export function getDomainMappingUrl(resource: any): string {
 
 export function getServerlessServiceMode(resource: any): string {
   return resource?.spec?.mode || '-'
+}
+
+/** A Knative KReference names its own API group; the link must keep it, or a
+ * Knative Service sink resolves to the core Service of the same name. */
+export function knativeRefLink(ref: { apiVersion?: string; kind?: string }, defaultKind: string): { kind: string; group?: string } {
+  const group = apiVersionToGroup(ref.apiVersion)
+  return { kind: kindToPluralWithGroup(ref.kind || defaultKind, group), group: group || undefined }
 }
