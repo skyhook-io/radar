@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	listerscorev1 "k8s.io/client-go/listers/core/v1"
 
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/packages"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -973,7 +974,7 @@ func collectArgoClaims(items []*unstructured.Unstructured, sourcePaths map[strin
 	// caller gets nothing, and a scoped caller gets a claim only when it can see at
 	// least one of the workloads the Application MANAGES — filtering by the
 	// workload namespaces, not the Application's (which often lives in argocd).
-	if noNamespaceAccess(namespaces) {
+	if integration.NoNamespaceAccess(namespaces) {
 		return nil
 	}
 	var allowed map[string]bool

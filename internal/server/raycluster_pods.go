@@ -6,10 +6,12 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/skyhook-io/radar/internal/k8s"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	integration "github.com/skyhook-io/radar/internal/integration"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 func (s *Server) handleRayClusterPods(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +31,7 @@ func (s *Server) handleRayClusterPods(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{ns})) || !s.canRead(r, "ray.io", "rayclusters", ns, "get") || !s.canRead(r, "", "pods", ns, "list") {
+	if integration.NoNamespaceAccess(s.getUserNamespaces(r, []string{ns})) || !s.canRead(r, "ray.io", "rayclusters", ns, "get") || !s.canRead(r, "", "pods", ns, "list") {
 		s.writeError(w, http.StatusForbidden, "Reading RayCluster Pods requires get rayclusters and list pods in this namespace")
 		return
 	}

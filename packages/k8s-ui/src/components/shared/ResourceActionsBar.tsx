@@ -28,7 +28,7 @@ import type { SelectedResource, WorkloadRevision } from '../../types'
 import type { RadarUpgradeRequirement } from '../../types/fetch-error'
 import { displayKindName } from '../ui/drawer-components'
 import { getDefaultContainerName } from '../resources/resource-utils'
-import { SetImageDialog, type ManagedImageSource } from './SetImageDialog'
+import { SetImageDialog, type SetImageOwnership } from './SetImageDialog'
 import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
 import { isArgoRolloutResource } from '../../utils/workload-rollout'
@@ -40,6 +40,7 @@ import { isCoreBatchJob } from '../../utils/api-resources'
 
 interface ResourceActionsBarProps {
   resource: SelectedResource
+  leadingActions?: React.ReactNode
   data: any
   onClose?: () => void
   hideLogs?: boolean
@@ -86,7 +87,7 @@ interface ResourceActionsBarProps {
   onLoadImages?: (params: { kind: string; namespace: string; name: string }) => Promise<WorkloadImageInventory>
   onSetImages?: (params: { kind: string; namespace: string; name: string; updates: WorkloadImageUpdate[] }) => Promise<unknown>
   isSettingImages?: boolean
-  managedImageSources?: ManagedImageSource[]
+  imageOwnership?: SetImageOwnership
 
   // Rollback
   revisions?: WorkloadRevision[]
@@ -153,7 +154,7 @@ interface ResourceActionsBarProps {
 }
 
 export function ResourceActionsBar({
-  resource, data, onClose, hideLogs, showYaml, onToggleYaml,
+  resource, data, leadingActions, onClose, hideLogs, showYaml, onToggleYaml,
   onCompareTo,
   onCompareAcrossClusters,
   canExec, canViewLogs, canPortForward,
@@ -161,7 +162,7 @@ export function ResourceActionsBar({
   renderPortForward,
   onDelete, isDeleting, cascadeDependents, cascadeLoading, cascadeRootResolved,
   onRestart, isRestarting,
-  onLoadImages, onSetImages, isSettingImages, managedImageSources,
+  onLoadImages, onSetImages, isSettingImages, imageOwnership,
   revisions: revisionsList, revisionsLoading, revisionsError, onRollback, isRollingBack,
   onRolloutPromoteFull,
   onTriggerCronJob, isTriggeringCronJob,
@@ -289,6 +290,8 @@ export function ResourceActionsBar({
 
   return (
     <div className="flex items-center gap-1.5 px-4 py-2 flex-wrap">
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5 empty:hidden" data-action-group="object">
+      {leadingActions}
       {/* Kind-specific actions (left) */}
       {kind === 'pods' && (
         <>
@@ -584,8 +587,8 @@ export function ResourceActionsBar({
         </button>
       )}
 
-      {/* Spacer pushes universal actions to the right */}
-      <div className="flex-1" />
+      </div>
+      <div className="ml-auto flex flex-wrap items-center gap-1.5" data-action-group="utility">
 
       {/* Universal actions (right-aligned). The AI/Diagnose action is NOT here — it
           lives in the detail header chrome (see WorkloadView), set apart from these
@@ -671,6 +674,8 @@ export function ResourceActionsBar({
         </Tooltip>
       )}
 
+      </div>
+
       <ForceDeleteConfirmDialog
         open={showDeleteConfirm}
         onClose={() => setShowDeleteConfirm(false)}
@@ -690,7 +695,7 @@ export function ResourceActionsBar({
           workloadLabel={`${displayKindName(resource.kind, data?.kind)} ${resource.namespace}/${resource.name}`}
           workloadName={resource.name}
           workloadResource={resource.kind}
-          managedSources={managedImageSources}
+          ownership={imageOwnership}
           pending={isSettingImages}
           onClose={() => setShowSetImage(false)}
           onLoad={() => onLoadImages({ kind: resource.kind, namespace: resource.namespace, name: resource.name })}

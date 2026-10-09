@@ -1,3 +1,4 @@
+import { stripTrailingSlashes } from './url-path'
 // k8s-ui ships TS source, so each consumer's bundler types asset imports
 // differently: Vite resolves `import x from './x.png'` to a URL string, while
 // webpack/Next resolves it to a StaticImageData object. Reading `.src` off the
@@ -27,7 +28,7 @@ function getRuntimeAssetBase(): string {
   const runtime = (globalThis as typeof globalThis & {
     __RADAR_RUNTIME_CONFIG__?: { assetBase?: string }
   }).__RADAR_RUNTIME_CONFIG__
-  const configured = runtime?.assetBase?.replace(/\/+$/, '')
+  const configured = stripTrailingSlashes(runtime?.assetBase ?? '')
   if (configured) return configured
 
   // A Worker has its own global scope, so it never sees the runtime config the

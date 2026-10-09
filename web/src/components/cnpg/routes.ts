@@ -1,10 +1,11 @@
-import type { SelectedResource } from '../../types'
+import { CNPG_KIND_BY_KEY, type CNPGWorkspaceKey } from '@skyhook-io/k8s-ui'
+import type { RadarFeatureSupport } from '../../api/radarFeatures'
 
 export type CNPGScreen = 'overview' | 'protection' | 'declarations' | 'pooling' | 'operator'
 
 export const CNPG_SCREENS: { id: CNPGScreen; label: string; path: string }[] = [
-  { id: 'overview', label: 'Overview', path: '/cnpg' },
-  { id: 'protection', label: 'Protection', path: '/cnpg/protection' },
+  { id: 'overview', label: 'Clusters', path: '/cnpg' },
+  { id: 'protection', label: 'Backups', path: '/cnpg/protection' },
   { id: 'declarations', label: 'Declarations', path: '/cnpg/declarations' },
   { id: 'pooling', label: 'Pooling', path: '/cnpg/pooling' },
   { id: 'operator', label: 'Operator', path: '/cnpg/operator' },
@@ -23,18 +24,62 @@ export interface CNPGRoute {
 }
 
 // The CNPG kinds that have a CNPG-framed full detail, with the workspace
-// destination each one lives under.
-export const CNPG_DETAIL_KINDS: Record<string, { group: string; kind: string; home: CNPGScreen; clusterScoped?: boolean }> = {
-  clusters: { group: 'postgresql.cnpg.io', kind: 'Cluster', home: 'overview' },
-  backups: { group: 'postgresql.cnpg.io', kind: 'Backup', home: 'protection' },
-  scheduledbackups: { group: 'postgresql.cnpg.io', kind: 'ScheduledBackup', home: 'protection' },
-  objectstores: { group: 'barmancloud.cnpg.io', kind: 'ObjectStore', home: 'protection' },
-  databases: { group: 'postgresql.cnpg.io', kind: 'Database', home: 'declarations' },
-  publications: { group: 'postgresql.cnpg.io', kind: 'Publication', home: 'declarations' },
-  subscriptions: { group: 'postgresql.cnpg.io', kind: 'Subscription', home: 'declarations' },
-  poolers: { group: 'postgresql.cnpg.io', kind: 'Pooler', home: 'pooling' },
-  imagecatalogs: { group: 'postgresql.cnpg.io', kind: 'ImageCatalog', home: 'operator' },
-  clusterimagecatalogs: { group: 'postgresql.cnpg.io', kind: 'ClusterImageCatalog', home: 'operator', clusterScoped: true },
+// destination each one lives under. Kind and group come from the workspace's
+// kind table, so the two never disagree.
+const CNPG_DETAIL_HOMES: Partial<Record<CNPGWorkspaceKey, CNPGScreen>> = {
+  clusters: 'overview',
+  backups: 'protection',
+  scheduledBackups: 'protection',
+  objectStores: 'protection',
+  databases: 'declarations',
+  publications: 'declarations',
+  subscriptions: 'declarations',
+  databaseRoles: 'declarations',
+  poolers: 'pooling',
+  imageCatalogs: 'operator',
+  clusterImageCatalogs: 'operator',
+}
+
+export const CNPG_DETAIL_KINDS: Record<string, { group: string; kind: string; home: CNPGScreen; clusterScoped?: boolean }> = Object.fromEntries(
+  (Object.entries(CNPG_DETAIL_HOMES) as [CNPGWorkspaceKey, CNPGScreen][]).map(([key, home]) => {
+    const k = CNPG_KIND_BY_KEY[key]
+    return [k.plural, { group: k.group, kind: k.kind, home, ...(key === 'clusterImageCatalogs' ? { clusterScoped: true } : {}) }]
+  }),
+)
+
+// The kind each view is named after.
+const CNPG_VIEW_NAMESAKES: Partial<Record<CNPGScreen, string>> = { overview: 'clusters', protection: 'backups', pooling: 'poolers' }
+
+/**
+ * Whether a kind is the one its home view is named after (Cluster in
+ * Clusters, Backup in Backups, Pooler in Pooling): the crumb then already says
+ * what the object is, so the kind badge is left out. Other kinds in the same
+ * view, such as ScheduledBackup and ObjectStore under Backups, keep it.
+ */
+export function cnpgViewNamedForKind(plural: string): boolean {
+  const home = CNPG_DETAIL_KINDS[plural]?.home
+  return !!home && CNPG_VIEW_NAMESAKES[home] === plural
+}
+
+/** The CloudNativePG Cluster kind, whose list is the Clusters view. */
+export function isCNPGClusterKind(kind: { name: string; group: string } | null | undefined): boolean {
+  return !!kind && kind.name === 'clusters' && kind.group === 'postgresql.cnpg.io'
+}
+
+/**
+ * What the CloudNativePG Cluster kind's Resources route shows: the Clusters
+ * view when this Radar serves it; a loader while capabilities load for the
+ * first time, so the table never flashes before it; otherwise the table (a
+ * Radar older than the views, or capabilities that could not be read).
+ */
+export function cnpgClusterKindListMode(
+  kind: { name: string; group: string } | null | undefined,
+  support: RadarFeatureSupport,
+  capabilitiesPending: boolean,
+): 'view' | 'wait' | 'table' {
+  if (!isCNPGClusterKind(kind)) return 'table'
+  if (support === 'supported') return 'view'
+  return support === 'unknown' && capabilitiesPending ? 'wait' : 'table'
 }
 
 export function cnpgDetailKindFor(plural: string, group: string | undefined): string | null {
@@ -76,37 +121,4 @@ export function cnpgDetailPath(target: Omit<CNPGDetailTarget, 'group'>, ctx?: st
 
 export function cnpgScreenPath(screen: CNPGScreen): string {
   return CNPG_SCREENS.find((s) => s.id === screen)?.path ?? '/cnpg'
-}
-
-// Drawer identity in the URL: kind:group:namespace:name, chained with "~" for
-// the in-drawer trail (last entry is the one shown). Kubernetes names and API
-// groups cannot contain ":" or "~", and the group is mandatory — CNPG's Cluster
-// and Backup collide with CAPI, KubeBlocks and Velero kinds.
-export function encodeDrawerRef(r: SelectedResource): string {
-  return [r.kind, r.group ?? '', r.namespace ?? '', r.name].join(':')
-}
-
-export function decodeDrawerRef(s: string): SelectedResource | null {
-  const parts = s.split(':')
-  if (parts.length !== 4 || !parts[0] || !parts[3]) return null
-  return { kind: parts[0], group: parts[1], namespace: parts[2], name: parts[3] }
-}
-
-export function decodeDrawerTrail(param: string | null): SelectedResource[] {
-  if (!param) return []
-  return param.split('~').map(decodeDrawerRef).filter((r): r is SelectedResource => r !== null)
-}
-
-export function encodeDrawerTrail(trail: SelectedResource[]): string {
-  return trail.map(encodeDrawerRef).join('~')
-}
-
-export function sameResource(a: SelectedResource | null | undefined, b: SelectedResource | null | undefined): boolean {
-  if (!a || !b) return false
-  return (
-    a.kind.toLowerCase() === b.kind.toLowerCase() &&
-    (a.group ?? '') === (b.group ?? '') &&
-    (a.namespace ?? '') === (b.namespace ?? '') &&
-    a.name === b.name
-  )
 }

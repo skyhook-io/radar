@@ -136,6 +136,27 @@ export function categoryLabel(category: string): string {
   return CATEGORY_LABEL[category] ?? humanize(category);
 }
 
+// Reasons filed under a category whose label names a different operation:
+// CNPG archiving and an unanswered scheduled run sit under backup_failed.
+const REASON_TITLE: Record<string, string> = {
+  CNPGWALArchivingFailing: "WAL archiving failing",
+  CNPGLastBackupFailed: "Latest backup failed",
+  CNPGScheduleDestinationMissing: "Backup schedule has no destination",
+  CNPGInstanceReadinessMismatch: "Instance Pods contradict Cluster readiness",
+  CNPGPrimaryLabelMismatch: "Primary Pod label contradicts Cluster status",
+  CNPGScheduledRunNoBackup: "No successful backup since a scheduled run",
+};
+
+/** The title a reason has wherever it is shown, when its category's label would name the wrong operation. */
+export function issueReasonTitle(reason: string | undefined): string | undefined {
+  return reason ? REASON_TITLE[reason] : undefined;
+}
+
+/** An issue row's title: its category, unless the reason names it better. */
+export function issueTitle(issue: { category: string; reason?: string }): string {
+  return issueReasonTitle(issue.reason) || categoryLabel(issue.category);
+}
+
 export function groupLabel(group: string): string {
   return GROUP_LABEL[group] ?? humanize(group);
 }

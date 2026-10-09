@@ -1,3 +1,4 @@
+import { stripTrailingSlashes } from '@skyhook-io/k8s-ui/utils/url-path'
 import { useState, useId } from 'react'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { X, Plus, Trash2, Link2, AlertTriangle } from 'lucide-react'
@@ -70,7 +71,7 @@ export function TrackChartSourceDialog({ open, onClose, chartName, sourceIssue, 
 
   const trimmed = value.trim()
   const invalid = trimmed !== '' && !trimmed.startsWith('oci://')
-  const normalizedInput = trimmed.replace(/\/+$/, '')
+  const normalizedInput = stripTrailingSlashes(trimmed)
   const normalizedChartName = chartName?.trim().replace(/^\/+|\/+$/g, '') ?? ''
   const probedRef = normalizedInput && normalizedChartName ? `${normalizedInput}/${normalizedChartName}` : ''
   const looksLikeFullChartRef = Boolean(normalizedInput && normalizedChartName && normalizedInput.endsWith(`/${normalizedChartName}`))

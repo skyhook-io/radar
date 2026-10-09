@@ -407,20 +407,30 @@ type OnsetCoverage struct {
 	Unknown int `json:"unknown"`
 }
 
+type EvidenceRead struct {
+	Group     string
+	Resource  string
+	Namespace string
+	Verb      string
+}
+
 type Issue struct {
-	Severity      Severity      `json:"severity"`
-	Source        Source        `json:"source"`
-	Category      Category      `json:"category"`
-	CategoryGroup CategoryGroup `json:"category_group"`
-	ID            string        `json:"id"`
-	GroupingScope Scope         `json:"grouping_scope"`
-	Kind          string        `json:"kind"`
-	Group         string        `json:"group,omitempty"`
-	Namespace     string        `json:"namespace,omitempty"`
-	Name          string        `json:"name"`
-	Reason        string        `json:"reason"`
-	Message       string        `json:"message,omitempty"`
-	RawMessage    string        `json:"raw_message,omitempty"`
+	// RequiredReads describe the inventories behind a cross-resource finding.
+	// They are retained internally so cached and grouped projections can authorize it.
+	RequiredReads []EvidenceRead `json:"-"`
+	Severity      Severity       `json:"severity"`
+	Source        Source         `json:"source"`
+	Category      Category       `json:"category"`
+	CategoryGroup CategoryGroup  `json:"category_group"`
+	ID            string         `json:"id"`
+	GroupingScope Scope          `json:"grouping_scope"`
+	Kind          string         `json:"kind"`
+	Group         string         `json:"group,omitempty"`
+	Namespace     string         `json:"namespace,omitempty"`
+	Name          string         `json:"name"`
+	Reason        string         `json:"reason"`
+	Message       string         `json:"message,omitempty"`
+	RawMessage    string         `json:"raw_message,omitempty"`
 	// Cause / Action / Remediation* carry parsed domain diagnosis. They give the
 	// Issues page + MCP a plain-English cause + next step when a detector has
 	// enough evidence. All optional — empty for issues without a parser.

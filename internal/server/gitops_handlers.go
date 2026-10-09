@@ -20,6 +20,7 @@ import (
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/connections"
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/argoapi"
@@ -41,7 +42,7 @@ type gitopsRequest struct {
 // namespace's resources. False means handlers should short-circuit with an
 // empty success response (see the per-handler empty value).
 func (g *gitopsRequest) HasNamespaceAccess() bool {
-	return !noNamespaceAccess(g.AllowedNamespaces)
+	return !integration.NoNamespaceAccess(g.AllowedNamespaces)
 }
 
 // parseGitOpsRequest pulls the GitOps URL params and runs the namespace
@@ -57,7 +58,7 @@ func (s *Server) parseGitOpsRequest(w http.ResponseWriter, r *http.Request) (*gi
 	}
 	if namespace != "" {
 		allowed := s.getUserNamespaces(r, []string{namespace})
-		if noNamespaceAccess(allowed) {
+		if integration.NoNamespaceAccess(allowed) {
 			s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", namespace))
 			return nil, false
 		}
@@ -172,6 +173,7 @@ func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitops
 		return s.canAccessGitOpsRef(r, req, group, kind, namespace, name, false)
 	}
 	resolver := newInsightsResolver(r.Context(), req.Cache, req.AllowedNamespaces, canAccess)
+	resolver.canReadEvidence = s.issueEvidenceAccess(r)
 	memoKey := gitopsIssuesMemoKey(auth.UserFromContext(r.Context()), req.AllowedNamespaces)
 	resolver.composed = func() ([]issues.Issue, []issues.Issue) {
 		return s.gitopsIssuesMemo.load(memoKey, resolver.composeIssues)
@@ -549,7 +551,7 @@ func (s *Server) handleGitOpsManagedResources(w http.ResponseWriter, r *http.Req
 	nsFilter := strings.TrimSpace(r.URL.Query().Get("namespace"))
 
 	allowedNamespaces := s.getUserNamespaces(r, nil)
-	if noNamespaceAccess(allowedNamespaces) {
+	if integration.NoNamespaceAccess(allowedNamespaces) {
 		// Caller has no namespace access — return a tree with just the
 		// synthetic root + a warning. Mirrors handleGitOpsTree's behavior
 		// rather than 403'ing so the frontend can render an honest empty state.
@@ -812,7 +814,7 @@ func (s *Server) canAccessGitOpsRef(r *http.Request, req *gitopsRequest, group, 
 			return false
 		}
 		allowed := s.getUserNamespaces(r, []string{name})
-		return !noNamespaceAccess(allowed)
+		return !integration.NoNamespaceAccess(allowed)
 	}
 	if namespace != "" {
 		return namespaceAllowedForGitOps(req.AllowedNamespaces, namespace)
@@ -844,6 +846,7 @@ type insightsResolver struct {
 	cache             *k8s.ResourceCache
 	allowedNamespaces []string
 	canAccess         func(group, kind, namespace, name string) bool
+	canReadEvidence   func(issues.EvidenceRead) bool
 
 	// The cluster-wide issue set is composed at most once per insights request
 	// (lazily, only if a degraded managed resource asks for it) and reused
@@ -1038,6 +1041,7 @@ func (r *insightsResolver) ResourceProblems(group, kind, namespace, name string)
 		r.composedFlat, r.composedGrouped = r.composeIssues()
 	})
 	related := issues.RelatedIssuesFrom(r.composedFlat, r.composedGrouped, issues.RelatedIssueOptions{
+		CanReadEvidence: r.canReadEvidence,
 		CanReadRelated: func(ref issues.Ref) bool {
 			return r.canAccess != nil && r.canAccess(ref.Group, ref.Kind, ref.Namespace, ref.Name)
 		},
@@ -1146,6 +1150,7 @@ func (r *insightsResolver) composeIssues() ([]issues.Issue, []issues.Issue) {
 		SkipPodTemplateContext: true,
 		Namespaces:             r.allowedNamespaces,
 		Limit:                  issues.NoLimit,
+		CanReadEvidence:        r.canReadEvidence,
 		CanReadRelated: func(ref issues.Ref) bool {
 			return r.canAccess != nil && r.canAccess(ref.Group, ref.Kind, ref.Namespace, ref.Name)
 		},

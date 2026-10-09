@@ -9,9 +9,10 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"github.com/go-chi/chi/v5"
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/policyreports"
 	"github.com/skyhook-io/radar/pkg/resourceid"
@@ -613,16 +614,27 @@ type PolicyQueuedResponse struct {
 // Falls back to the plain read when the machinery is missing, leaving the
 // caller's not-installed path to answer.
 func listDynamicSynced(ctx context.Context, cache *k8s.ResourceCache, kind, group, namespace string) ([]*unstructured.Unstructured, error) {
-	discovery := k8s.GetResourceDiscovery()
-	dynamicCache := k8s.GetDynamicResourceCache()
+	return listDynamicSyncedWithin(ctx, cache, kind, group, namespace, nil)
+}
+
+// listDynamicSyncedWithin is listDynamicSynced bounded by budget (nil: wait
+// dynamicSyncWait for the sync).
+func listDynamicSyncedWithin(ctx context.Context, cache *k8s.ResourceCache, kind, group, namespace string, budget *syncBudget) ([]*unstructured.Unstructured, error) {
+	discovery, dynamicCache := budget.dynamicDependencies()
 	if discovery == nil || dynamicCache == nil {
+		if budget != nil && budget.bound {
+			return nil, k8s.ErrDynamicNotReady
+		}
 		return cache.ListDynamicWithGroup(ctx, kind, namespace, group)
 	}
 	gvr, found := discovery.GetGVRWithGroup(kind, group)
 	if !found {
+		if budget != nil && budget.bound {
+			return nil, k8s.ErrUnknownDynamicKind
+		}
 		return cache.ListDynamicWithGroup(ctx, kind, namespace, group)
 	}
-	items, err := dynamicCache.ListBlocking(gvr, namespace, dynamicSyncWait)
+	items, err := budget.listBlocking(dynamicCache, gvr, namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -632,14 +644,10 @@ func listDynamicSynced(ctx context.Context, cache *k8s.ResourceCache, kind, grou
 	// already started the informer, so asking now cannot deadlock the way a gate
 	// before the read did.
 	if !dynamicCache.IsNamespaceSynced(gvr, namespace) {
-		return nil, errDynamicNotSynced
+		return nil, integration.ErrDynamicNotSynced
 	}
 	return items, nil
 }
-
-// errDynamicNotSynced means the cache could not answer for the scope in time.
-// Distinct from an absent CRD: nothing was established either way.
-var errDynamicNotSynced = errors.New("resource cache not synced")
 
 // Long enough for a cold informer on a healthy apiserver, short enough that a
 // drawer section does not hang on one that will not sync.
@@ -688,7 +696,7 @@ func (s *Server) handlePolicyQueued(w http.ResponseWriter, r *http.Request) {
 		// No background controller on this cluster. Genuinely nothing queued.
 		s.writeJSON(w, PolicyQueuedResponse{})
 		return
-	case errors.Is(err, errDynamicNotSynced):
+	case errors.Is(err, integration.ErrDynamicNotSynced):
 		s.writeError(w, http.StatusServiceUnavailable, "queued work is still loading")
 		return
 	default:

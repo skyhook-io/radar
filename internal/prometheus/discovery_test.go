@@ -3,6 +3,7 @@ package prometheus
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -496,5 +497,46 @@ func TestProbeCandidatesWithReasons_DeadlineMarksLaunchedProbesAsTransportFailur
 	}
 	if reasons[maxConcurrentProbes] != "" {
 		t.Fatalf("reasons[%d] = %q, want empty for a probe the pass never launched", maxConcurrentProbes, reasons[maxConcurrentProbes])
+	}
+}
+
+func TestUnreachableErrorsAreOneSentenceAndKeepTheirSentinels(t *testing.T) {
+	for _, err := range []error{
+		errPrometheusUnreachable,
+		unreachableBecause("Radar found %d services that may be Prometheus but may not port-forward to them (needs create pods/portforward)", 2),
+	} {
+		if !errors.Is(err, errPrometheusUnreachable) || !errors.Is(err, ErrPrometheusNotFound) {
+			t.Errorf("%v lost its sentinel", err)
+		}
+		if strings.Contains(err.Error(), ErrPrometheusNotFound.Error()) {
+			t.Errorf("%q claims nothing was found", err)
+		}
+	}
+}
+
+func TestDeniedGrantNamesTheRefusedStep(t *testing.T) {
+	listPods := fmt.Errorf("failed to find pod for service prom: %w", errors.New(`pods is forbidden: User "u" cannot list resource "pods" in API group "" in the namespace "monitoring"`))
+	portForward := fmt.Errorf("port-forward failed: %w", errors.New(`pods "prom-0" is forbidden: User "u" cannot create resource "pods/portforward" in API group "" in the namespace "monitoring"`))
+	if got := deniedGrantsPhrase([]string{deniedGrant(listPods)}); got != "needs list pods" {
+		t.Errorf("list pods refusal = %q", got)
+	}
+	if got := deniedGrantsPhrase([]string{deniedGrant(portForward), deniedGrant(portForward), deniedGrant(listPods)}); got != "needs create pods/portforward, list pods" {
+		t.Errorf("mixed = %q", got)
+	}
+	if got := deniedGrantsPhrase([]string{deniedGrant(errors.New("forbidden"))}); got != "permission denied" {
+		t.Errorf("unnamed = %q", got)
+	}
+}
+
+func TestPrometheusRejectedCandidateWording(t *testing.T) {
+	err := prometheusCandidateProbeError("cert-manager", "cert-manager")
+	if !strings.HasPrefix(err.Error(), "No working Prometheus endpoint found") || !strings.Contains(err.Error(), "Candidate cert-manager/cert-manager") {
+		t.Fatal(err)
+	}
+	if strings.Contains(err.Error(), "Prometheus at cert-manager") {
+		t.Fatal(err)
+	}
+	if lines := strings.Split(err.Error(), "\n"); len(lines) != 2 || !strings.HasPrefix(lines[1], "Candidate cert-manager/cert-manager") {
+		t.Fatalf("candidate details must follow the heading: %q", err.Error())
 	}
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mapHealthToTone } from './status-tone'
+import { mapHealthToTone, worseTone } from './status-tone'
 
 // Inputs flow in from heterogeneous sources (Problems API, Audit findings,
 // multi-cluster aggregation). A regression here is a silent visual
@@ -49,5 +49,14 @@ describe('mapHealthToTone', () => {
     expect(mapHealthToTone('CRITICAL')).toBe('unhealthy')
     expect(mapHealthToTone('Healthy')).toBe('healthy')
     expect(mapHealthToTone('HIGH')).toBe('alert')
+  })
+})
+
+describe('worseTone', () => {
+  it('never reads calmer than a part that could not be read', () => {
+    expect(worseTone('healthy', 'unknown')).toBe('unknown')
+    expect(worseTone('unknown', 'degraded')).toBe('degraded')
+    expect(worseTone('alert', 'unhealthy')).toBe('unhealthy')
+    expect(worseTone('neutral', 'healthy')).toBe('neutral')
   })
 })

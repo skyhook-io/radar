@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -168,7 +169,7 @@ func TestNoNamespaceAccess(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := noNamespaceAccess(tt.ns); got != tt.want {
+			if got := integration.NoNamespaceAccess(tt.ns); got != tt.want {
 				t.Errorf("noNamespaceAccess(%v) = %v, want %v", tt.ns, got, tt.want)
 			}
 		})
@@ -241,7 +242,7 @@ func TestGetUserNamespaces_CachedNoAccess(t *testing.T) {
 	r := requestWithUser("GET", "/", user)
 	got := s.getUserNamespaces(r, []string{"dev"})
 
-	if !noNamespaceAccess(got) {
+	if !integration.NoNamespaceAccess(got) {
 		t.Errorf("empty AllowedNamespaces should yield no access, got %v (nil=%v)", got, got == nil)
 	}
 }
@@ -270,7 +271,7 @@ func TestGetUserNamespaces_UncachedFailsClosed_WhenK8sNotReady(t *testing.T) {
 	got := s.getUserNamespaces(r, []string{"dev"})
 
 	// When k8s client isn't ready, deny access (fail-closed)
-	if !noNamespaceAccess(got) {
+	if !integration.NoNamespaceAccess(got) {
 		t.Errorf("expected no access (fail-closed) when k8s not ready, got %v", got)
 	}
 }

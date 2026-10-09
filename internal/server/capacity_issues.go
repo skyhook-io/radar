@@ -94,6 +94,7 @@ func (s *Server) capacityIssuesForRequest(r *http.Request) capacityIssueProjecti
 			SkipPodTemplateContext:        true,
 			Limit:                         issues.NoLimit,
 			IncludeClusterScopedKarpenter: true,
+			AllowUnfilteredEvidence:       true,
 		})
 		capacity := make([]issues.Issue, 0, len(composed))
 		for _, issue := range composed {

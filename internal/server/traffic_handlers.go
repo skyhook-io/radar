@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/traffic"
 )
 
@@ -115,7 +116,7 @@ func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 
 	// Parse query parameters
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if integration.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, []any{})
 		return
 	}
@@ -222,7 +223,7 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 	// Enforce per-user namespace access (parseNamespacesForUser intersects the
 	// requested ?namespace= with the user's RBAC-allowed namespaces).
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if integration.NoNamespaceAccess(namespaces) {
 		s.writeError(w, http.StatusForbidden, "no namespace access")
 		return
 	}

@@ -2,7 +2,6 @@ import {
   useCallback,
   useEffect,
   useState,
-  type ComponentType,
   type ReactNode,
 } from "react";
 import {
@@ -24,6 +23,8 @@ import {
   ResourceBar,
   Tooltip,
   WithTooltip,
+  certaintyValueLabel,
+  CertaintyGlyph,
   type CapacityActivityEpisode,
   type CapacityCertainty,
   type CapacityClaimStage,
@@ -59,21 +60,18 @@ import {
 } from "../../api/client";
 import type { SelectedResource } from "../../types";
 import { refToSelectedResource } from "../../utils/navigation";
+import { Notice, ScreenEmptyState } from "../workspace/layout";
 
 // ============================================================================
 // Route model + navigation
 // ============================================================================
 
-export type CapacityTopTab = "overview" | "demand" | "activity";
-export type PoolSection = "summary" | "workloads" | "members" | "configuration";
+import type { PoolSection } from './routes'
+export { capacityPoolPath, parseCapacityRoute } from './routes'
+export type { CapacityRoute, CapacityTopTab, PoolSection } from './routes'
+
 export type CapacityConnectionState =
   "connected" | "disconnected" | "connecting";
-
-export interface CapacityRoute {
-  topTab: CapacityTopTab;
-  poolName?: string;
-  poolSection: PoolSection;
-}
 
 export const POOL_SECTIONS: { id: PoolSection; label: string }[] = [
   { id: "summary", label: "Summary" },
@@ -81,40 +79,6 @@ export const POOL_SECTIONS: { id: PoolSection; label: string }[] = [
   { id: "members", label: "Nodes & claims" },
   { id: "configuration", label: "Configuration" },
 ];
-
-export function parseCapacityRoute(pathname: string): CapacityRoute {
-  const segments = pathname.replace(/^\/+|\/+$/g, "").split("/");
-  if (segments[0] !== "capacity")
-    return { topTab: "overview", poolSection: "summary" };
-  if (segments[1] === "pools" && segments[2]) {
-    const section = segments[3];
-    return {
-      topTab: "overview",
-      poolName: decodePathSegment(segments[2]),
-      poolSection:
-        section === "workloads" ||
-        section === "members" ||
-        section === "configuration"
-          ? section
-          : "summary",
-    };
-  }
-  if (segments[1] === "demand" || segments[1] === "activity")
-    return { topTab: segments[1], poolSection: "summary" };
-  return { topTab: "overview", poolSection: "summary" };
-}
-
-function decodePathSegment(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-export function capacityPoolPath(name: string): string {
-  return `/capacity/pools/${encodeURIComponent(name)}`;
-}
 
 export function identityToSelectedResource(
   identity: CapacityResourceIdentity,
@@ -264,20 +228,6 @@ function missingUsageMessage(coverage?: CapacitySourceCoverage): string {
 // = exact · ≥ lower bound · ≤ upper bound · ? unknown
 // ============================================================================
 
-export function certaintyGlyph(certainty: CapacityCertainty): string {
-  if (certainty === "exact") return "=";
-  if (certainty === "lower_bound") return "≥";
-  if (certainty === "upper_bound") return "≤";
-  return "?";
-}
-
-export function certaintyValueLabel(certainty: CapacityCertainty): string {
-  if (certainty === "exact") return "Exact";
-  if (certainty === "lower_bound") return "Lower bound";
-  if (certainty === "upper_bound") return "Upper bound";
-  return "Unknown certainty";
-}
-
 export function observationTitle(
   observation: CapacityQuantityObservation,
   definition?: string,
@@ -294,27 +244,6 @@ export function observationTitle(
 }
 
 /** Small bordered mono glyph chip; hover reveals certainty/source/asOf. */
-export function CertaintyGlyph({
-  certainty,
-  title,
-}: {
-  certainty: CapacityCertainty;
-  title?: string;
-}) {
-  return (
-    <WithTooltip tip={title ?? certaintyValueLabel(certainty)}>
-      <span
-        tabIndex={0}
-        role="note"
-        aria-label={title ?? certaintyValueLabel(certainty)}
-        className="cursor-help rounded border border-theme-border-light px-1 font-mono text-[10px] leading-tight text-theme-text-tertiary focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
-      >
-        {certaintyGlyph(certainty)}
-      </span>
-    </WithTooltip>
-  );
-}
-
 // ============================================================================
 // Quantity / resource formatting
 // ============================================================================
@@ -1250,15 +1179,6 @@ export function TokenGroup({
   );
 }
 
-export function Notice({ children }: { children: ReactNode }) {
-  return (
-    <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-surface px-3 py-2 text-sm text-theme-text-secondary">
-      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
-      <div>{children}</div>
-    </div>
-  );
-}
-
 export function RefreshError({ message }: { message: string }) {
   return (
     <Notice>
@@ -1332,31 +1252,6 @@ export function InlineEmpty({
     <div className="px-4 py-8 text-center">
       <div className="text-sm font-medium text-theme-text-primary">{title}</div>
       <p className="mt-1 text-sm text-theme-text-secondary">{detail}</p>
-    </div>
-  );
-}
-
-export function EmptyState({
-  icon: Icon,
-  title,
-  detail,
-  action,
-}: {
-  icon: ComponentType<{ className?: string }>;
-  title: string;
-  detail: ReactNode;
-  action?: ReactNode;
-}) {
-  return (
-    <div className="flex min-h-0 flex-1 items-center justify-center bg-theme-base p-6">
-      <div className="max-w-md text-center">
-        <Icon className="mx-auto h-9 w-9 text-theme-text-tertiary/50" />
-        <h2 className="mt-3 text-lg font-medium text-theme-text-primary">
-          {title}
-        </h2>
-        <p className="mt-1 text-sm text-theme-text-secondary">{detail}</p>
-        {action}
-      </div>
     </div>
   );
 }
@@ -1469,7 +1364,7 @@ rules:
 export function DeniedCapacityState({ detail }: { detail: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <EmptyState
+    <ScreenEmptyState
       icon={Shield}
       title="Capacity access denied"
       detail={detail}
@@ -1528,7 +1423,7 @@ export function integrationBlock(
     const upgrade = getRadarUpgradeRequirement(error);
     if (upgrade)
       return (
-        <EmptyState
+        <ScreenEmptyState
           icon={Gauge}
           title={radarUpgradeHeadline("Capacity")}
           detail={radarUpgradeDetail(upgrade)}
@@ -1540,7 +1435,7 @@ export function integrationBlock(
         />
       );
     return (
-      <EmptyState
+      <ScreenEmptyState
         icon={AlertTriangle}
         title="Capacity unavailable"
         detail={errorMessage(error)}
@@ -1558,7 +1453,7 @@ export function integrationBlock(
     );
   if (response.state === "not_detected")
     return (
-      <EmptyState
+      <ScreenEmptyState
         icon={Gauge}
         title="Karpenter not detected"
         detail="Capacity appears automatically when this cluster exposes Karpenter NodePools."
@@ -1847,15 +1742,3 @@ export function PoolSelector({
     </div>
   );
 }
-
-// ============================================================================
-// Shared table cell classes (keeps every capacity table visually identical)
-// ============================================================================
-
-export const TABLE_WRAP = "overflow-x-auto";
-export const TABLE_HEAD =
-  "border-b border-theme-border bg-theme-base/60 text-[11px] uppercase tracking-wide text-theme-text-tertiary";
-export const TH = "px-3 py-2.5 text-left font-medium whitespace-nowrap";
-export const TD = "px-3 py-2.5 align-top text-sm text-theme-text-primary";
-export const TBODY = "table-divide-subtle";
-export const ROW_HOVER = "transition-colors hover:bg-theme-hover/50";

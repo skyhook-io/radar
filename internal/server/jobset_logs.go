@@ -7,6 +7,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/skyhook-io/radar/internal/podlogs"
 )
 
 func (s *Server) handleJobSetLogs(w http.ResponseWriter, r *http.Request) {
@@ -37,7 +39,7 @@ func (s *Server) handleJobSetLogs(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client unavailable")
 		return
 	}
-	snapshot := collectLogsFromPods(r.Context(), client, namespace, pods, r.URL.Query().Get("container"), parseTailLines(r.URL.Query().Get("tailLines"), 100), parseSinceSeconds(r.URL.Query().Get("sinceSeconds")), true)
+	snapshot := podlogs.CollectPods(r.Context(), client, namespace, pods, r.URL.Query().Get("container"), podlogs.ParseTailLines(r.URL.Query().Get("tailLines"), 100), podlogs.ParseSinceSeconds(r.URL.Query().Get("sinceSeconds")), true)
 	shownPods := []*corev1.Pod{}
 	shownLabels := map[string]string{}
 	for _, pod := range pods {
@@ -49,7 +51,7 @@ func (s *Server) handleJobSetLogs(w http.ResponseWriter, r *http.Request) {
 	for i := range snapshot.Logs {
 		snapshot.Logs[i].SourceLabel = labels[snapshot.Logs[i].Pod]
 	}
-	sortLogsByTimestamp(snapshot.Logs)
+	podlogs.Sort(snapshot.Logs)
 	s.writeJSON(w, map[string]any{
 		"uid": root.GetUID(), "pods": buildPodInfos(shownPods), "logs": snapshot.Logs,
 		"notice": snapshot.Notice, "sourceLabels": shownLabels, "capturedAt": time.Now().UTC().Format(time.RFC3339),

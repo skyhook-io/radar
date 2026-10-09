@@ -766,6 +766,7 @@ func relatedIssuesForObject(ctx context.Context, obj *unstructured.Unstructured)
 		Namespaces:             namespaces,
 		CanReadClusterScoped:   issueClusterScopedAccess(ctx),
 		CanReadRelated:         issueRelatedResourceAccess(ctx),
+		CanReadEvidence:        issueEvidenceAccess(ctx),
 	}, gvk.Group, kind, obj.GetNamespace(), obj.GetName())
 	if len(matched) == 0 {
 		return nil

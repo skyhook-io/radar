@@ -58,7 +58,8 @@ interface LogCoreProps {
   onClear?: () => void
   toolbarExtra?: ToolbarExtraRenderer
   showPodName?: boolean
-  emptyMessage?: string
+  emptyMessage?: ReactNode
+  sourceUnavailable?: boolean
   emptyCommand?: string | null
   errorMessage?: string | null
   /**
@@ -146,6 +147,7 @@ export function LogCore({
   toolbarExtra,
   showPodName = false,
   emptyMessage = 'No logs available',
+  sourceUnavailable = false,
   emptyCommand,
   errorMessage,
   forceDark,
@@ -422,7 +424,7 @@ export function LogCore({
         search.open()
         return
       }
-      if (e.key === 's' && !e.ctrlKey && !e.metaKey && !e.altKey && onStartStream) {
+      if (e.key === 's' && !e.ctrlKey && !e.metaKey && !e.altKey && onStartStream && (isStreaming || !sourceUnavailable)) {
         const target = e.target as HTMLElement | null
         if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return
         e.preventDefault()
@@ -432,7 +434,7 @@ export function LogCore({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [search.open, onStartStream, onStopStream, isStreaming])
+  }, [search.open, onStartStream, onStopStream, isStreaming, sourceUnavailable])
 
   const handleFollowOutput = useCallback((isAtBottom: boolean) => {
     if (isAtBottom) return 'smooth' as const
@@ -568,15 +570,16 @@ export function LogCore({
       style={{ colorScheme: isDark ? 'dark' : 'light', fontFamily: "'SF Mono', 'Cascadia Code', 'Fira Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace" }}
     >
       {/* Toolbar */}
-      <div className={`flex items-center gap-2 px-3 py-2 border-b ${palette.border} ${palette.toolbarBg}`}>
+      <div className={`flex flex-wrap items-center gap-2 px-3 py-2 border-b ${palette.border} ${palette.toolbarBg}`}>
         {toolbarExtraNode}
 
         {/* Stream / Stop toggle — only shown when streaming is supported */}
         {onStartStream && (
-          <Tooltip content={isStreaming ? 'Stop streaming' : 'Start streaming'} delay={TIP_DELAY} position="bottom">
+          <Tooltip content={isStreaming ? 'Stop streaming' : sourceUnavailable ? 'Available once an instance is running' : 'Start streaming'} delay={TIP_DELAY} position="bottom">
             <button
               onClick={isStreaming ? onStopStream : onStartStream}
-              className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded transition-colors ${
+              disabled={sourceUnavailable && !isStreaming}
+              className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 isStreaming
                   ? 'bg-green-600 text-white hover:bg-green-700'
                   : `${palette.elevatedBg} ${palette.textSecondary} ${palette.hoverBg}`
@@ -592,6 +595,7 @@ export function LogCore({
         <Tooltip content="Refresh logs" delay={TIP_DELAY} position="bottom">
           <button
             onClick={onRefresh}
+            aria-label="Refresh logs"
             disabled={isLoading || isStreaming}
             className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded ${palette.elevatedBg} ${palette.textSecondary} ${palette.hoverBg} disabled:opacity-50 disabled:cursor-not-allowed`}
           >
@@ -608,7 +612,7 @@ export function LogCore({
               <Tooltip key={opt.level} content={`${active ? 'Hide' : 'Show'} ${opt.noun}`} delay={TIP_DELAY} position="bottom">
                 <button
                   onClick={() => toggleLevel(opt.level)}
-                  className={`px-1.5 py-0.5 text-[10px] font-medium rounded border transition-colors ${
+                  className={`px-1.5 py-0.5 text-[10px] font-medium rounded border whitespace-nowrap transition-colors ${
                     active
                       ? getLevelActiveColor(opt.level, palette)
                       : levelChipInactive
@@ -621,7 +625,7 @@ export function LogCore({
           })}
         </div>
 
-        <div className="flex-1" />
+        <div role="group" aria-label="Log display and utilities" className="ml-auto flex shrink-0 flex-nowrap items-center gap-2">
 
         {/* Structured-log display mode: icon cycles compact→expanded→raw, chevron picks explicitly. */}
         {hasStructuredEntries && (
@@ -801,14 +805,15 @@ export function LogCore({
 
         {/* Export */}
         <div className="relative flex items-center" ref={downloadMenuRef}>
-          <Tooltip content="Export logs" delay={TIP_DELAY} position="bottom" disabled={showDownloadMenu} preserveWrapperWhenDisabled>
+          <Tooltip content={bufferEntries.length === 0 ? 'No logs loaded' : 'Export logs'} delay={TIP_DELAY} position="bottom" disabled={showDownloadMenu} preserveWrapperWhenDisabled>
             <button
               ref={exportTriggerRef}
+              disabled={bufferEntries.length === 0}
               onClick={toggleExportMenu}
               aria-label="Export logs"
               aria-haspopup="dialog"
               aria-expanded={showDownloadMenu}
-              className={iconBtnInactive}
+              className={`${iconBtnInactive} disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               <Download className="w-4 h-4" />
             </button>
@@ -884,15 +889,18 @@ export function LogCore({
 
         {/* Clear */}
         {onClear && (
-          <Tooltip content="Clear logs" delay={TIP_DELAY} position="bottom">
+          <Tooltip content={bufferEntries.length === 0 ? 'No logs loaded' : 'Clear logs'} delay={TIP_DELAY} position="bottom">
             <button
               onClick={onClear}
-              className={iconBtnInactive}
+              aria-label="Clear logs"
+              disabled={bufferEntries.length === 0}
+              className={`${iconBtnInactive} disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               <Trash2 className="w-4 h-4" />
             </button>
           </Tooltip>
         )}
+        </div>
       </div>
 
       {/* Search bar */}
@@ -1007,7 +1015,7 @@ export function LogCore({
       ) : groupedEntries.length === 0 ? (
         <div className={`${EMPTY_STATE_CLASS} ${palette.textTertiary}`}>
           <Terminal className="w-8 h-8" />
-          <span>{entries.length > 0 ? `Filters hide all ${entries.length.toLocaleString()} loaded lines` : emptyMessage}</span>
+          <div>{entries.length > 0 ? `Filters hide all ${entries.length.toLocaleString()} loaded lines` : emptyMessage}</div>
           {entries.length === 0 && emptyCommand && (
             <button type="button" onClick={() => { void copyText(emptyCommand) }} className={`mt-2 inline-flex max-w-[80%] items-center gap-2 rounded border px-3 py-2 font-mono text-xs ${palette.border} ${palette.toolbarBg}`} title="Copy recovery command">
               <code className="truncate">{emptyCommand}</code>
@@ -1062,7 +1070,7 @@ export function LogCore({
 
       {/* Keyboard shortcut hints */}
       <div className={`flex items-center gap-4 px-3 py-1 border-t ${palette.border} ${palette.toolbarBg} text-[10px] ${palette.textDisabled}`}>
-        {onStartStream && <Shortcut keys="S" label={isStreaming ? 'Stop stream' : 'Stream'} palette={palette} />}
+        {onStartStream && (!sourceUnavailable || isStreaming) && <Shortcut keys="S" label={isStreaming ? 'Stop stream' : 'Stream'} palette={palette} />}
         <Shortcut keys="Ctrl+F" label="Search" palette={palette} />
         {search.mode !== 'hide' && (
           <>
@@ -1189,7 +1197,7 @@ function LogLine({
     const highlighted = highlightSearchMatches(plain, searchQuery, searchIsRegex, searchIsCaseSensitive)
     contentElement = (
       <span
-        className={`${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'} ${levelColor}`}
+        className={`${wordWrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre'} ${levelColor}`}
         dangerouslySetInnerHTML={{ __html: highlighted }}
       />
     )
@@ -1209,13 +1217,13 @@ function LogLine({
     const html = ansiToHtml(entry.content)
     contentElement = (
       <span
-        className={`${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'} ${levelColor}`}
+        className={`${wordWrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre'} ${levelColor}`}
         dangerouslySetInnerHTML={{ __html: html }}
       />
     )
   } else {
     contentElement = (
-      <span className={`${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'} ${levelColor}`}>
+      <span className={`${wordWrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'whitespace-pre'} ${levelColor}`}>
         {stripAnsi(entry.content)}
       </span>
     )

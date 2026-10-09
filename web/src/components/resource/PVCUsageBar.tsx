@@ -33,6 +33,8 @@ export function PVCUsageBar({ namespace, name }: { namespace: string; name: stri
     unavailable = 'Loading usage measurements…'
   } else if (usage.status === 'no_series') {
     unavailable = 'No usage measurements reported for this volume.'
+  } else if (usage.status === 'ambiguous_scope' || usage.status === 'scope_mismatch') {
+    unavailable = 'Prometheus holds volume stats for this claim name from more than one cluster, so Radar cannot tell which are this one’s. Used space is unknown.'
   } else if (usage.status === 'invalid_data') {
     unavailable = 'Volume usage measurements are invalid. Used space is unknown.'
   } else if (!usage.hasData) {

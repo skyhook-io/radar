@@ -5,11 +5,13 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/skyhook-io/radar/internal/auth"
-	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/pkg/capacityapi"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/skyhook-io/radar/internal/auth"
+	integration "github.com/skyhook-io/radar/internal/integration"
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/capacityapi"
 )
 
 func TestCapacityNamespacesBypassSavedViewPreference(t *testing.T) {
@@ -99,7 +101,7 @@ func TestCapacityNamespacesHonorInformerCoverage(t *testing.T) {
 	limited := capacityTestInformerScope{namespaces: map[string][]string{"pods": {"team-a", "team-b"}}}
 	tests := []struct {
 		name            string
-		cache           capacityInformerScope
+		cache           integration.InformerScope
 		requested       []string
 		want            []string
 		wantLimited     bool
@@ -115,8 +117,8 @@ func TestCapacityNamespacesHonorInformerCoverage(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := capacityNamespacesWithinCache(test.cache, "pods", test.requested)
-			if !slices.Equal(got.namespaces, test.want) || got.limited != test.wantLimited || got.partial != test.wantPartial || got.unavailable != test.wantUnavailable {
+			got := integration.NamespacesWithinCache(test.cache, "pods", test.requested)
+			if !slices.Equal(got.Namespaces, test.want) || got.Limited != test.wantLimited || got.Partial != test.wantPartial || got.Unavailable != test.wantUnavailable {
 				t.Fatalf("cache namespaces = %#v, want namespaces=%v limited=%v partial=%v unavailable=%v", got, test.want, test.wantLimited, test.wantPartial, test.wantUnavailable)
 			}
 		})
@@ -132,13 +134,13 @@ func TestCapacityOwnerResolutionHonorsInformerCoverage(t *testing.T) {
 		"jobs":        {"team-b"},
 	}}
 	permissions, partial := capacityOwnerResolutionPermissions([]*corev1.Pod{replicaPod, jobPod}, func(_ string, resource, namespace string) bool {
-		return capacityCacheCoversNamespace(cache, resource, namespace)
+		return integration.CacheCoversNamespace(cache, resource, namespace)
 	})
 	if permissions[replicaPod] || !permissions[jobPod] || !partial {
 		t.Fatalf("owner permissions = %#v partial=%v, want ReplicaSet denied and Job allowed", permissions, partial)
 	}
 	cache.notReady = map[string]bool{"jobs": true}
-	if capacityCacheCoversNamespace(cache, "jobs", "team-b") {
+	if integration.CacheCoversNamespace(cache, "jobs", "team-b") {
 		t.Fatal("owner resolution used an informer that has not synced")
 	}
 }

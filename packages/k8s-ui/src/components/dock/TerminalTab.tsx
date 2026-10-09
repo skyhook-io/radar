@@ -19,6 +19,8 @@ export interface TerminalTabProps {
   createSession: (containerName: string) => Promise<{ wsUrl: string }>
   /** Optional: creates a debug (ephemeral) container. If omitted, the debug button is hidden. */
   createDebugContainer?: (targetContainer: string) => Promise<{ containerName: string }>
+  /** Optional: a short line in the toolbar describing the session. */
+  note?: string
 }
 
 export function TerminalTab({
@@ -29,6 +31,7 @@ export function TerminalTab({
   isActive = true,
   createSession,
   createDebugContainer,
+  note,
 }: TerminalTabProps) {
   const terminalRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
@@ -269,6 +272,7 @@ export function TerminalTab({
           )}
         />
         <span className="text-xs text-theme-text-tertiary">{podName}</span>
+        {note && <span className="truncate text-xs text-theme-text-secondary">{note}</span>}
 
         {containers.length > 1 && (
           <div className="relative">

@@ -28,3 +28,18 @@ describe('summarizeSchedulerMessage', () => {
     expect(summarizeSchedulerMessage(undefined)).toBe('')
   })
 })
+
+it.each([
+  ['0/2 nodes are available: 2 Too many pods.', 'both nodes have reached their Pod limit'],
+  ['Unschedulable: 0/2 nodes are available: 2 Too many pods.', 'both nodes have reached their Pod limit'],
+  ['2 node(s) insufficient pods (0/2 nodes available)', 'both nodes have reached their Pod limit'],
+  ['0/1 nodes are available: 1 Insufficient cpu.', '1 node does not have enough CPU'],
+  ['0/3 nodes are available: 3 Insufficient cpu.', 'all nodes do not have enough CPU'],
+  ['0/2 nodes are available: 2 Insufficient memory, 2 Too many pods.', 'both nodes have reached their Pod limit; both nodes do not have enough memory'],
+  ["0/2 nodes are available: 2 node(s) didn’t match Pod’s node affinity/selector.", 'both nodes do not match the Pod’s node affinity or selector'],
+  ['1 node(s) had untolerated taint {dedicated: db}.', '1 node has taints the Pod does not tolerate'],
+  ['0/2 nodes are available: 1 node(s) had untolerated taint {dedicated: db}.', '1 node has taints the Pod does not tolerate'],
+  ['0/2 nodes are available: pod has unbound immediate PersistentVolumeClaims.', 'a required volume claim is not bound'],
+])('offers a plain summary additively for %s', (raw, expected) => {
+  expect(summarizeSchedulerMessage(raw, { plain: true })).toBe(expected)
+})

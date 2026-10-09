@@ -122,6 +122,7 @@ func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group
 		SkipPodTemplateContext: !includeFacts,
 		CanReadClusterScoped:   issueClusterScopedAccess(ctx),
 		CanReadRelated:         issueRelatedResourceAccess(ctx),
+		CanReadEvidence:        issueEvidenceAccess(ctx),
 	}, group, kind, namespace, name)
 	if len(matched) == 0 {
 		return nil, nil
@@ -240,4 +241,10 @@ func mcpTopologyForContext(namespace string) (*topo.Topology, topo.ResourceProvi
 		return nil, nil, nil, false
 	}
 	return topology, provider, dyn, true
+}
+
+func issueEvidenceAccess(ctx context.Context) func(issues.EvidenceRead) bool {
+	return func(read issues.EvidenceRead) bool {
+		return (read.Namespace == "" || checkNamespaceAccess(ctx, read.Namespace)) && canReadInNamespace(ctx, read.Group, read.Resource, read.Namespace, read.Verb)
+	}
 }

@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/trace"
@@ -50,7 +51,7 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 	// Mirror handleAuditResource: when the user has no namespace access
 	// (RBAC trims the set to empty), return an unknown-verdict trace
 	// instead of leaking that the resource even exists.
-	if noNamespaceAccess(namespaces) {
+	if integration.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, &trace.Trace{
 			Subject:    trace.ResourceRef{Kind: kind, Namespace: namespace, Name: name},
 			Downstream: []trace.Hop{},

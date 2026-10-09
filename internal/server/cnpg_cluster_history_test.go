@@ -11,12 +11,14 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	cnpgsvc "github.com/skyhook-io/radar/internal/cnpg"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	pkgtimeline "github.com/skyhook-io/radar/pkg/timeline"
@@ -41,7 +43,7 @@ func seedCNPGLogCluster(t *testing.T, ns string) {
 	)
 }
 
-func getCNPGLogs(t *testing.T, path string) (int, CNPGClusterLogsResponse, string) {
+func getCNPGLogs(t *testing.T, path string) (int, cnpgsvc.ClusterLogsResponse, string) {
 	t.Helper()
 	resp, err := http.Get(testServer.URL + path)
 	if err != nil {
@@ -49,7 +51,7 @@ func getCNPGLogs(t *testing.T, path string) (int, CNPGClusterLogsResponse, strin
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	var out CNPGClusterLogsResponse
+	var out cnpgsvc.ClusterLogsResponse
 	if resp.StatusCode == http.StatusOK {
 		if err := json.Unmarshal(body, &out); err != nil {
 			t.Fatalf("decode: %v (%s)", err, body)
@@ -114,7 +116,7 @@ func TestCNPGClusterLogs_OnlyValidatedInstancesContribute(t *testing.T) {
 			t.Errorf("parsed entry = %+v", entry)
 		}
 	}
-	if got.SourceLabels["pg-orders-1"] != "primary" || got.SourceLabels["pg-orders-2"] != "replica" {
+	if got.SourceLabels["pg-orders-1"] != "primary 1" || got.SourceLabels["pg-orders-2"] != "replica 2" {
 		t.Errorf("sourceLabels = %v", got.SourceLabels)
 	}
 
@@ -154,7 +156,7 @@ func TestCNPGClusterLogs_Authorization(t *testing.T) {
 		clusters bool
 	}{{"no-clusters", false}, {"no-logs", true}} {
 		perms := &auth.UserPermissions{AllowedNamespaces: []string{"pglogsauth"}}
-		perms.SetCanI("get", cnpgGroup, "clusters", "pglogsauth", u.clusters)
+		perms.SetCanI("get", cnpgsvc.Group, "clusters", "pglogsauth", u.clusters)
 		allow(perms, "", "pods", "pglogsauth", true)
 		env.srv.permCache.Set(u.name, nil, perms)
 	}
@@ -163,6 +165,8 @@ func TestCNPGClusterLogs_Authorization(t *testing.T) {
 		{"no-clusters", "/api/cnpg/clusters/pglogsauth/missing/logs", "clusters.postgresql.cnpg.io"},
 		{"no-logs", "/api/cnpg/clusters/pglogsauth/pg-orders/logs", "get pods/log"},
 		{"no-logs", "/api/cnpg/clusters/pglogsauth/pg-orders/logs/stream", "get pods/log"},
+		{"no-logs", "/api/cnpg/clusters/pglogsauth/pg-orders/logs?container=all", "get pods/log"},
+		{"no-logs", "/api/cnpg/clusters/pglogsauth/pg-orders/logs/stream?container=all", "get pods/log"},
 	} {
 		resp := env.authGet(t, tc.path, tc.user, "")
 		body, _ := io.ReadAll(resp.Body)
@@ -170,63 +174,6 @@ func TestCNPGClusterLogs_Authorization(t *testing.T) {
 		if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), tc.want) {
 			t.Errorf("%s %s: status=%d body=%s, want 403 naming %q", tc.user, tc.path, resp.StatusCode, body, tc.want)
 		}
-	}
-}
-
-func TestAnnotateCNPGLogEntry(t *testing.T) {
-	cases := []struct {
-		name, content, level, logger, message string
-	}{
-		{
-			name:    "postgres record",
-			content: `{"level":"info","ts":"2026-09-28T14:19:58.123Z","logger":"postgres","msg":"record","record":{"error_severity":"FATAL","message":"password authentication failed","log_time":"2026-09-28 14:19:58.123 UTC"}}`,
-			level:   "FATAL", logger: "postgres", message: "password authentication failed",
-		},
-		{
-			name:    "instance manager error",
-			content: `{"level":"error","ts":"2026-09-28T14:19:58Z","logger":"barman-cloud-wal-archive","msg":"Error invoking barman-cloud-wal-archive","error":"exit status 4"}`,
-			level:   "ERROR", logger: "barman-cloud-wal-archive", message: "Error invoking barman-cloud-wal-archive: exit status 4",
-		},
-		{
-			name:    "structured error",
-			content: `{"level":"error","msg":"failed","error":{"code":2}}`,
-			level:   "ERROR", message: `failed: {"code":2}`,
-		},
-		{name: "plain text", content: "LOG:  database system is ready"},
-		{name: "broken json", content: `{"level":"info"`},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			entry := workloadLogEntry{Content: tc.content}
-			annotateCNPGLogEntry(&entry)
-			if entry.Level != tc.level || entry.Logger != tc.logger || entry.Message != tc.message || entry.Content != tc.content {
-				t.Fatalf("got level=%q logger=%q message=%q content-changed=%v", entry.Level, entry.Logger, entry.Message, entry.Content != tc.content)
-			}
-		})
-	}
-	raw, _ := json.Marshal(workloadLogEntry{Pod: "p", Content: "x"})
-	if strings.Contains(string(raw), "level") || strings.Contains(string(raw), "message") {
-		t.Fatalf("unparsed entries grew fields: %s", raw)
-	}
-}
-
-func TestParseCNPGLogQuery(t *testing.T) {
-	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
-	req := httptest.NewRequest("GET", "/?sinceTime=2026-09-28T11:59:00.5Z", nil)
-	if _, err := parseCNPGLogQuery(req, now); err != nil {
-		t.Fatalf("fractional RFC3339 rejected: %v", err)
-	}
-	req = httptest.NewRequest("GET", "/?sinceTime=2026-09-28T11:58:30Z", nil)
-	q, err := parseCNPGLogQuery(req, now)
-	if err != nil || q.sinceSeconds == nil || *q.sinceSeconds != 90 || q.container != "postgres" || q.tailLines != 200 {
-		t.Fatalf("query = %+v err=%v", q, err)
-	}
-	if q.keep(workloadLogEntry{Timestamp: "2026-09-28T11:58:29.9Z"}) || !q.keep(workloadLogEntry{Timestamp: "2026-09-28T11:58:30Z"}) {
-		t.Fatal("sinceTime overlap not trimmed")
-	}
-	req = httptest.NewRequest("GET", "/?sinceTime=2026-09-28T11:58:30Z&sinceSeconds=5", nil)
-	if _, err := parseCNPGLogQuery(req, now); err == nil {
-		t.Fatal("sinceTime with sinceSeconds accepted")
 	}
 }
 
@@ -299,21 +246,21 @@ func cnpgActivityFixture(t *testing.T, ns string) {
 	)
 }
 
-func decodeActivity(t *testing.T, resp *http.Response) CNPGClusterActivityResponse {
+func decodeActivity(t *testing.T, resp *http.Response) cnpgsvc.CNPGClusterActivityResponse {
 	t.Helper()
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d: %s", resp.StatusCode, body)
 	}
-	var out CNPGClusterActivityResponse
+	var out cnpgsvc.CNPGClusterActivityResponse
 	if err := json.Unmarshal(body, &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 	return out
 }
 
-func activityIDs(resp CNPGClusterActivityResponse) []string {
+func activityIDs(resp cnpgsvc.CNPGClusterActivityResponse) []string {
 	var out []string
 	for _, e := range resp.Events {
 		out = append(out, e.ID)
@@ -367,11 +314,11 @@ func TestCNPGClusterActivity_DropsKindsTheCallerCannotList(t *testing.T) {
 		eventsListed  bool
 	}{{"reader", true, true, true}, {"no-backups", true, false, true}, {"no-clusters", false, true, true}, {"no-events", true, true, false}} {
 		perms := &auth.UserPermissions{AllowedNamespaces: []string{"pgactauth"}}
-		perms.SetCanI("get", cnpgGroup, "clusters", "pgactauth", u.clusterGet)
+		perms.SetCanI("get", cnpgsvc.Group, "clusters", "pgactauth", u.clusterGet)
 		allow(perms, "", "events", "pgactauth", u.eventsListed)
-		allow(perms, cnpgGroup, "clusters", "pgactauth", true)
-		allow(perms, cnpgGroup, "backups", "pgactauth", u.backupsListed)
-		allow(perms, cnpgGroup, "poolers", "pgactauth", true)
+		allow(perms, cnpgsvc.Group, "clusters", "pgactauth", true)
+		allow(perms, cnpgsvc.Group, "backups", "pgactauth", u.backupsListed)
+		allow(perms, cnpgsvc.Group, "poolers", "pgactauth", true)
 		allow(perms, "", "pods", "pgactauth", true)
 		env.srv.permCache.Set(u.name, nil, perms)
 	}
@@ -442,7 +389,7 @@ func TestCNPGClusterLogsStream_SendsParsedInstanceLines(t *testing.T) {
 	if !sawConnected || strings.Contains(stream, `"name":"pg-orders-1"`) {
 		t.Fatalf("connected event wrong:\n%s", stream)
 	}
-	for _, want := range []string{`"level":"LOG"`, `"message":"hello from pg-orders-2"`, `"sourceLabel":"replica"`} {
+	for _, want := range []string{`"level":"LOG"`, `"message":"hello from pg-orders-2"`, `"sourceLabel":"replica 2"`} {
 		if !strings.Contains(stream, want) {
 			t.Errorf("stream missing %s:\n%s", want, stream)
 		}
@@ -486,40 +433,105 @@ func TestCNPGClusterActivity_RecreatedClusterExcludesPreviousIncarnationPods(t *
 	}
 }
 
-func TestCNPGStreamCursorResumesWithoutReplay(t *testing.T) {
-	var c cnpgStreamCursor
-	first := c.restartOptions("postgres", 200, nil)
-	if first.TailLines == nil || *first.TailLines != 200 || first.SinceTime != nil || !first.Follow || !first.Timestamps || first.Container != "postgres" {
-		t.Fatalf("first start = %+v", first)
+func cnpgRestartedStatus(currentStart, prevStart, prevEnd time.Time, restarts int32) corev1.ContainerStatus {
+	status := corev1.ContainerStatus{
+		Name: "postgres", RestartCount: restarts,
+		State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(currentStart)}},
 	}
-	line := func(ts, content string) workloadLogEntry {
-		return workloadLogEntry{Timestamp: ts, Content: content}
+	if restarts > 0 {
+		status.LastTerminationState.Terminated = &corev1.ContainerStateTerminated{StartedAt: metav1.NewTime(prevStart), FinishedAt: metav1.NewTime(prevEnd)}
 	}
-	for _, e := range []workloadLogEntry{line("2026-09-28T14:00:00.1Z", "a"), line("2026-09-28T14:00:05.7Z", "b"), line("2026-09-28T14:00:05.7Z", "c")} {
-		if !c.admit(e) {
-			t.Fatalf("fresh line %+v rejected", e)
-		}
-	}
+	return status
+}
 
-	restart := c.restartOptions("postgres", 200, nil)
-	if restart.TailLines != nil || restart.SinceSeconds != nil || restart.SinceTime == nil ||
-		!restart.SinceTime.Time.Equal(time.Date(2026, 9, 28, 14, 0, 5, 0, time.UTC)) {
-		t.Fatalf("restart = %+v, want sinceTime at the last delivered second and no tail", restart)
-	}
+// An incident followed by restarts: the interval lives in the previous run,
+// and the current run's lines (all after the interval) fill the byte cap.
+func TestCNPGClusterLogs_IntervalReadsThePreviousRun(t *testing.T) {
+	ns := "pglogiv"
+	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds,
+		withUID(cnpgObj("postgresql.cnpg.io/v1", "Cluster", ns, "pg-orders", map[string]any{"instances": int64(1)}, nil), "iv-uid"),
+	)
+	owner := metav1.OwnerReference{APIVersion: "postgresql.cnpg.io/v1", Kind: "Cluster", Name: "pg-orders", UID: "iv-uid", Controller: boolPtr(true)}
+	at := func(m int) time.Time { return time.Date(2026, 9, 29, 23, m, 0, 0, time.UTC) }
+	p := cnpgPod(ns, "pg-orders-1", "pg-orders", owner)
+	p.Status.ContainerStatuses = []corev1.ContainerStatus{cnpgRestartedStatus(at(45), at(10), at(40), 1)}
+	seedCNPGPods(t, p)
 
-	// The resumed follow replays the boundary second.
-	replayed := []workloadLogEntry{line("2026-09-28T14:00:05.2Z", "earlier in the second"), line("2026-09-28T14:00:05.7Z", "b"), line("2026-09-28T14:00:05.7Z", "c")}
-	for _, e := range replayed {
-		if c.admit(e) {
-			t.Errorf("replayed line %+v admitted", e)
+	apiserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("previous") == "true" {
+			fmt.Fprintln(w, "2026-09-29T23:25:00.5Z {\"level\":\"error\",\"msg\":\"during the incident\"}")
+			return
+		}
+		for i := 0; i < 2000; i++ {
+			fmt.Fprintf(w, "2026-09-29T23:50:%02d.5Z {\"level\":\"info\",\"msg\":\"after the restart %d\"}\n", i%60, i)
+		}
+	}))
+	t.Cleanup(apiserver.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: apiserver.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(previous) })
+
+	status, got, body := getCNPGLogs(t, "/api/cnpg/clusters/"+ns+"/pg-orders/logs?sinceTime=2026-09-29T23:20:00Z&untilTime=2026-09-29T23:30:00Z")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d: %s", status, body)
+	}
+	if len(got.Logs) != 1 || got.Logs[0].Message != "during the incident" || !got.Logs[0].Previous || got.Logs[0].SourceLabel != "primary 1 · previous run" {
+		t.Fatalf("logs = %+v, want the previous run's interval line", got.Logs)
+	}
+	if strings.Contains(got.Notice, "snapshot limit") {
+		t.Errorf("notice = %q: the clip came after the interval and cut nothing from it", got.Notice)
+	}
+	if !strings.Contains(got.EmptyMessage, "interval") {
+		t.Errorf("emptyMessage = %q, want interval-specific copy", got.EmptyMessage)
+	}
+}
+
+func TestCNPGClusterActivity_JobPodsNeedVerifiedOwnershipAndJobAccess(t *testing.T) {
+	ns := "pgactivityjobs"
+	seedCNPGWorkspace(t, cnpgWorkspaceTestKinds, withUID(cnpgObj("postgresql.cnpg.io/v1", "Cluster", ns, "analytics", map[string]any{"instances": int64(1)}, nil), "analytics-uid"))
+	seedCNPGJobs(t, cnpgJob(ns, "analytics-1-initdb", "job-uid", clusterRef("analytics", "analytics-uid")))
+	pod := cnpgJobPod(ns, "analytics-1-initdb-abc", "analytics", jobRef("analytics-1-initdb", "job-uid"))
+	pod.UID = "job-pod-uid"
+	stale := cnpgJobPod(ns, "analytics-1-initdb-old", "analytics", jobRef("analytics-1-initdb", "old-job-uid"))
+	stale.UID = "old-pod-uid"
+	seedCNPGPods(t, pod, stale)
+	store := useMemoryTimeline(t)
+	seedActivity(t, store, ns,
+		activityRow{id: "job-pod-pending", apiVersion: "v1", kind: "Pod", name: pod.Name, uid: string(pod.UID), age: time.Minute, owner: &timeline.OwnerInfo{APIVersion: "batch/v1", Kind: "Job", Name: "analytics-1-initdb", UID: "job-uid"}},
+		activityRow{id: "stale-job-pod", apiVersion: "v1", kind: "Pod", name: stale.Name, uid: string(stale.UID), age: time.Minute, owner: &timeline.OwnerInfo{APIVersion: "batch/v1", Kind: "Job", Name: "analytics-1-initdb", UID: "old-job-uid"}},
+	)
+	env := newAuthTestServer(t)
+	for _, jobs := range []bool{true, false} {
+		user := fmt.Sprintf("jobs-%v", jobs)
+		perms := &auth.UserPermissions{AllowedNamespaces: []string{ns}}
+		perms.SetCanI("get", cnpgsvc.Group, "clusters", ns, true)
+		allow(perms, "", "pods", ns, true)
+		allow(perms, "batch", "jobs", ns, jobs)
+		env.srv.permCache.Set(user, nil, perms)
+		got := decodeActivity(t, env.authGet(t, "/api/cnpg/clusters/"+ns+"/analytics/activity", user, ""))
+		if ids := strings.Join(activityIDs(got), ","); jobs && ids != "job-pod-pending" || !jobs && ids != "" {
+			t.Fatalf("Job access %v: %s", jobs, ids)
 		}
 	}
-	for _, e := range []workloadLogEntry{line("2026-09-28T14:00:05.7Z", "d"), line("2026-09-28T14:00:06Z", "e")} {
-		if !c.admit(e) {
-			t.Errorf("new line %+v rejected", e)
-		}
+}
+func TestCNPGClusterActivity_AttributionBoundaryExcludesInstancePods(t *testing.T) {
+	store := useMemoryTimeline(t)
+	ns := "pgactivityboundary"
+	owner := &timeline.OwnerInfo{Kind: "Cluster", Name: "payments", APIVersion: "postgresql.cnpg.io/v1", UID: "payments-uid"}
+	labels := map[string]string{pkgtimeline.CNPGClusterLabel: "payments"}
+	seedActivity(t, store, ns,
+		activityRow{id: "pod-old", apiVersion: "v1", kind: "Pod", name: "payments-1", uid: "p1", age: 5 * time.Hour, owner: owner, labels: labels},
+		activityRow{id: "backup-new", apiVersion: "postgresql.cnpg.io/v1", kind: "Backup", name: "payments-backup", uid: "b1", age: time.Hour, labels: labels},
+	)
+	resp, err := http.Get(testServer.URL + "/api/cnpg/clusters/" + ns + "/payments/activity")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if c.admit(line("2026-09-28T14:00:05.7Z", "d")) {
-		t.Error("line before the new last timestamp admitted")
+	got := decodeActivity(t, resp)
+	if got.AttributionSince == nil || time.Since(*got.AttributionSince) > 2*time.Hour {
+		t.Fatalf("boundary must describe CNPG children: %+v", got.AttributionSince)
 	}
 }

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { ResourcesSidebar, type SelectedKindInfo } from '@skyhook-io/k8s-ui'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useSearchParams } from 'react-router-dom'
+import { DialogPortal, ResourcesSidebar, type SelectedKindInfo } from '@skyhook-io/k8s-ui'
+import { PanelLeft, X } from 'lucide-react'
 import type { SelectedResource } from '../../types'
 import { useAPIResources } from '../../api/apiResources'
 import { usePinnedKinds } from '../../hooks/useFavorites'
@@ -11,9 +12,14 @@ import { CNPGDeclarations } from './CNPGDeclarations'
 import { CNPGPooling } from './CNPGPooling'
 import { CNPGOperator } from './CNPGOperator'
 import { CNPGScreenGate } from './shared'
+import { CNPGCreateClusterDialog } from './CNPGCreateClusterDialog'
 import { CNPGDetailPage } from './CNPGDetailPage'
-import { decodeDrawerTrail, encodeDrawerTrail, parseCNPGRoute, sameResource } from './routes'
+import { parseCNPGRoute } from './routes'
 import { useCNPGFleet, useCNPGSidebarWorkspace } from './useCNPGSidebarWorkspace'
+import { decodeDrawerTrail, encodeDrawerTrail, sameSelectedResource } from '../../utils/drawer-trail'
+import { useCNPGNavigate } from './useCNPGNavigate'
+import { useCNPGScreenParams } from './useCNPGScreenParams'
+import { useMediaQuery } from '../../hooks/useMediaQuery'
 
 interface CNPGViewProps {
   namespaces: string[]
@@ -33,9 +39,14 @@ interface CNPGViewProps {
  */
 export function CNPGView({ namespaces, selectedResource, onOpenResource, onCloseResource, onClearNamespaces }: CNPGViewProps) {
   const location = useLocation()
-  const navigate = useNavigate()
+  const navigate = useCNPGNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const route = parseCNPGRoute(location.pathname)
+  const laptop = useMediaQuery('(max-width: 1300px)')
+  const narrow = useMediaQuery('(max-width: 1100px)')
+  const compactNavigation = narrow || (laptop && !!route.detail)
+  const [navigationOpen, setNavigationOpen] = useState(false)
+  useEffect(() => setNavigationOpen(false), [location.pathname, location.search, compactNavigation])
   const { data: apiResources } = useAPIResources()
   const { data: counts } = useResourceCounts(namespaces)
   const { pinned, togglePin, isPinned } = usePinnedKinds()
@@ -59,7 +70,7 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
   useEffect(() => {
     if (targetKey !== (lastSynced.current ?? '')) {
       lastSynced.current = targetKey
-      if (drawerTarget && !sameResource(drawerTarget, selectedResource)) onOpenResource(drawerTarget)
+      if (drawerTarget && !sameSelectedResource(drawerTarget, selectedResource)) onOpenResource(drawerTarget)
       else if (!drawerTarget && selectedResource) onCloseResource()
       return
     }
@@ -69,7 +80,7 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
       if (!selectedResource) {
         params.delete('drawer')
       } else {
-        const idx = trail.findIndex((r) => sameResource(r, selectedResource))
+        const idx = trail.findIndex((r) => sameSelectedResource(r, selectedResource))
         const next = idx >= 0 ? trail.slice(0, idx + 1) : [...trail, selectedResource]
         params.set('drawer', encodeDrawerTrail(next))
       }
@@ -86,17 +97,8 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
     [searchParams, setSearchParams, location.state],
   )
 
-  const setParams = useCallback(
-    (update: Record<string, string | null>) => {
-      const params = new URLSearchParams(searchParams)
-      for (const [k, v] of Object.entries(update)) {
-        if (v === null || v === '') params.delete(k)
-        else params.set(k, v)
-      }
-      setSearchParams(params, { replace: true, state: location.state })
-    },
-    [searchParams, setSearchParams, location.state],
-  )
+  const [, setParams] = useCNPGScreenParams()
+  const [creating, setCreating] = useState(false)
 
   const selectKind = useCallback(
     (kind: SelectedKindInfo) => {
@@ -105,9 +107,7 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
     [navigate],
   )
 
-  return (
-    <div className="flex h-full min-h-0 w-full">
-      <ResourcesSidebar
+  const sidebar = <ResourcesSidebar
         selectedKind={null}
         onSelectedKindChange={selectKind}
         apiResources={apiResources}
@@ -118,8 +118,17 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
         togglePin={togglePin}
         isPinned={(kind: string, group?: string) => isPinned(kind, group ?? '')}
         categoryWorkspaces={sidebarWorkspace}
+        className={compactNavigation ? '!w-full !border-r-0' : undefined}
       />
+  return (
+    <div className="flex h-full min-h-0 w-full">
+      {!compactNavigation && sidebar}
+      <DialogPortal open={navigationOpen && compactNavigation} onClose={() => setNavigationOpen(false)} ariaLabel="Resource navigation" className="flex h-[min(80vh,44rem)] w-full max-w-md flex-col overflow-hidden">
+        <div className="flex items-center justify-between border-b border-theme-border px-4 py-3"><h2 className="font-medium text-theme-text-primary">Resources</h2><button type="button" aria-label="Close resource navigation" onClick={() => setNavigationOpen(false)} className="rounded p-1 text-theme-text-secondary hover:bg-theme-hover"><X className="h-4 w-4" /></button></div>
+        <div className="flex min-h-0 flex-1">{sidebar}</div>
+      </DialogPortal>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-theme-base">
+        {compactNavigation && <div className="border-b border-theme-border px-5 py-2"><button type="button" aria-haspopup="dialog" aria-expanded={navigationOpen} onClick={() => setNavigationOpen(true)} className="btn-secondary inline-flex items-center gap-1.5 px-2.5 py-1 text-xs"><PanelLeft className="h-3.5 w-3.5" />Resources</button></div>}
         {route.detail ? (
           <CNPGDetailPage target={route.detail} namespaces={namespaces} onOpenResource={onOpenResource} />
         ) : (
@@ -134,6 +143,7 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
               onInspect: inspect,
               inspected: drawerTarget,
               onClearNamespaces,
+              onCreate: () => setCreating(true),
             }
             switch (route.screen) {
               case 'protection':
@@ -151,6 +161,9 @@ export function CNPGView({ namespaces, selectedResource, onOpenResource, onClose
         </CNPGScreenGate>
         )}
       </div>
+      {creating && (
+        <CNPGCreateClusterDialog namespaces={namespaces} onClose={() => setCreating(false)} onCreated={inspect} />
+      )}
     </div>
   )
 }

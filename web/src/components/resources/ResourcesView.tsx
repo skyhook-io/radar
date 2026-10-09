@@ -12,6 +12,7 @@ import { initNavigationMap, getSecretStoreProviderType } from '@skyhook-io/k8s-u
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useResourceCounts } from '../../hooks/useResourceCounts'
 import { useCNPGSidebarWorkspace } from '../cnpg/useCNPGSidebarWorkspace'
+import { renderResourceKindList, resourceKindListMode, useResourceHostFeatures } from '../../integrations/resourceHosts'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import {
   canBulkRestartKind,
@@ -75,7 +76,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const navigate = useNavigate()
   const { connection } = useConnection()
 
-  const { data: capabilities } = useCapabilities()
+  const { data: capabilities, isPending: capabilitiesPending } = useCapabilities()
+  const hostFeatures = useResourceHostFeatures()
   const namespaceForCapabilities = namespaces.length === 1 ? namespaces[0] : undefined
   const { data: namespaceCapabilities } = useNamespaceCapabilities(namespaceForCapabilities, capabilities)
   const namespaceCapabilityNames = useMemo(() => namespaces.length > 1 ? [...namespaces].sort() : [], [namespaces])
@@ -281,7 +283,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         printerTable: sanitizePrinterTable(body),
       }
     },
-    enabled: !!selectedKind && !selectedKindQueryBlocked,
+    enabled: !!selectedKind && !selectedKindQueryBlocked && resourceKindListMode(selectedKind, hostFeatures, capabilitiesPending) === 'table',
     staleTime: 30000,
     refetchInterval: 120000, // Safety net — SSE k8s_event drives near-real-time invalidation
     retry: (failureCount: number, error: Error) => {
@@ -385,6 +387,17 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     setCreateDialogOpen(true)
   }, [])
 
+  const renderKindView = useCallback(
+    (kind: SelectedKindInfo) => renderResourceKindList(kind, hostFeatures, capabilitiesPending, {
+      namespaces,
+      inspected: selectedResource ?? null,
+      onInspect: (resource) => onResourceClick?.(resource),
+      onClearNamespaces: onClearNamespaces ?? (() => {}),
+      onCreate: handleCreateResource,
+    }),
+    [hostFeatures, capabilitiesPending, namespaces, selectedResource, onResourceClick, onClearNamespaces, handleCreateResource],
+  )
+
   return (
     <>
     <BaseResourcesView
@@ -434,6 +447,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       onOpenWorkloadLogs={openWorkloadLogs}
       // Create resource
       onCreateResource={handleCreateResource}
+      renderKindView={renderKindView}
       // Bulk operations
       onBulkDelete={(items, options) => bulkDeleteMutation.mutate({ items, force: options?.force }, { onSuccess: options?.onSuccess })}
       isBulkDeleting={bulkDeleteMutation.isPending}

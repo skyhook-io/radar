@@ -1,9 +1,9 @@
+import { normalizeURLForComparison } from '../../utils/url-path'
+import { cnpgBackupDeclaration, cnpgBackupDestinationBlocker, cnpgBackupBlockerText } from '../../utils/cnpg-backup'
 // Pure relationship lookups between CloudNativePG objects in the workspace
 // payload. Each helper answers only from what the objects record; a relation
 // that cannot be established returns null or an empty list, never a guess.
 
-import type { BadgeSeverity } from '../ui/Badge'
-import type { HealthLevel } from '../resources/resource-utils'
 import {
   CNPG_BARMAN_PLUGIN_NAME,
   CNPG_GROUP,
@@ -12,15 +12,8 @@ import {
   isApiGroup,
   type CNPGObjectStoreRecoveryWindow,
 } from '../resources/resource-utils-cnpg'
-import {
-  cnpgIssueCategory,
-  coverageReadable,
-  type CNPGFact,
-  type CNPGProblem,
-  type CNPGWorkspaceIssue,
-  type CNPGWorkspaceKey,
-  type CNPGWorkspaceResponse,
-} from './workspace'
+import { cnpgIssueCategory, cnpgIssueOrigin, cnpgIssueText, cnpgCoverageGap, coverageReadable, type CNPGProblem, type CNPGWorkspaceIssue, type CNPGWorkspaceKey, type CNPGWorkspaceResponse } from './workspace'
+import { type Fact } from '../facts'
 
 export interface CNPGObjectRef {
   kind: string
@@ -58,21 +51,6 @@ export function refOf(obj: any, kind: string, group: string = CNPG_GROUP): CNPGO
   return { kind, group, namespace: nsOf(obj), name: nameOf(obj) }
 }
 
-export function healthSeverity(level: HealthLevel): BadgeSeverity {
-  switch (level) {
-    case 'healthy':
-      return 'success'
-    case 'unhealthy':
-      return 'error'
-    case 'alert':
-      return 'alert'
-    case 'degraded':
-      return 'warning'
-    default:
-      return 'neutral'
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Workspace access
 // ---------------------------------------------------------------------------
@@ -94,17 +72,7 @@ export function relationUnavailable(
   if (!ws) return `${what} could not be read`
   const cov = ws.coverage?.[key] ?? { state: 'notInstalled' as const }
   if (coverageReadable(cov, namespace)) return null
-  switch (cov.state) {
-    case 'denied':
-    case 'partial':
-      return `No access to ${what}`
-    case 'syncing':
-      return 'Loading…'
-    case 'error':
-      return `Could not read ${what}`
-    default:
-      return `${what} are not installed`
-  }
+  return cnpgCoverageGap(cov, what, namespace, `${what} are not installed`)
 }
 
 export function clustersIn(ws: CNPGWorkspaceResponse | null | undefined): any[] {
@@ -115,7 +83,8 @@ export function clustersIn(ws: CNPGWorkspaceResponse | null | undefined): any[] 
 export function targetCluster(obj: any, clusters: any[]): any | null {
   const name = specCluster(obj)
   if (!name) return null
-  return clusters.find((c) => isCNPGKind(c, 'Cluster') && nsOf(c) === nsOf(obj) && nameOf(c) === name) ?? null
+  const cluster = clusters.find((c) => isCNPGKind(c, 'Cluster') && nsOf(c) === nsOf(obj) && nameOf(c) === name) ?? null
+  return isCNPGKind(obj, 'Backup') && !cnpgBackupMatchesCluster(obj, cluster) ? null : cluster
 }
 
 // ---------------------------------------------------------------------------
@@ -140,10 +109,10 @@ export function problemsForObject(issues: CNPGWorkspaceIssue[] | undefined, ref:
     id: `${issue.id}:${issue.kind}/${issue.name}`,
     severity: issue.severity,
     category: cnpgIssueCategory(issue),
-    title: issue.message || issue.reason,
-    detail: issue.cause || undefined,
+    ...cnpgIssueText(issue),
     subject: { kind: issue.kind, group: issue.group ?? '', namespace: issue.namespace ?? '', name: issue.name },
     source: 'issue',
+    origin: cnpgIssueOrigin(issue),
   }))
 }
 
@@ -195,20 +164,50 @@ export function backupTime(backup: any): number {
   return parseTime(backup?.status?.startedAt) || parseTime(backup?.metadata?.creationTimestamp)
 }
 
+export function cnpgBackupMatchesCluster(backup: any, cluster: any): boolean {
+  if (!cluster || backup?.spec?.cluster?.name !== cluster.metadata?.name || backup.metadata?.namespace !== cluster.metadata?.namespace) return false
+  const owner = backup.metadata?.ownerReferences?.find((ref: any) => ref.kind === 'Cluster' && isApiGroup(ref.apiVersion, CNPG_GROUP))
+  const recordedUID = backup.status?.pluginMetadata?.clusterUID || owner?.uid
+  if (recordedUID && recordedUID !== cluster.metadata?.uid) return false
+  const began = Date.parse(backup.status?.startedAt ?? backup.metadata?.creationTimestamp ?? '')
+  const created = Date.parse(cluster.metadata?.creationTimestamp ?? '')
+  return !(Number.isFinite(began) && Number.isFinite(created) && began < created)
+}
+
+export type CNPGArchiveSource =
+  | { kind: 'objectStore'; objectStore: string; serverName: string }
+  | { kind: 'inTree'; barmanObjectStore: Record<string, unknown>; serverName: string }
+
+export function cnpgArchiveMatchesCluster(cluster: any, source: CNPGArchiveSource): boolean {
+  if (source.kind === 'objectStore') {
+    const plugin = getCNPGClusterBarmanPlugin(cluster)
+    return plugin?.barmanObjectName === source.objectStore &&
+      (plugin?.serverName || cluster.metadata?.name) === source.serverName
+  }
+  const archive = cluster.spec?.backup?.barmanObjectStore
+  const path = source.barmanObjectStore.destinationPath
+  const endpoint = source.barmanObjectStore.endpointURL
+  const destination = typeof path === 'string' ? normalizeURLForComparison(path) : null
+  const endpointKey = normalizeURLForComparison(typeof endpoint === 'string' ? endpoint : '')
+  return !!archive?.destinationPath && typeof path === 'string' && !!path &&
+    destination !== null && endpointKey !== null &&
+    (archive.serverName || cluster.metadata?.name) === source.serverName &&
+    normalizeURLForComparison(archive.destinationPath) === destination &&
+    normalizeURLForComparison(archive.endpointURL || '') === endpointKey
+}
+
 /**
- * The ObjectStore a barman-cloud plugin Backup wrote to. The Backup's own
- * plugin parameters are a record of that run; the target Cluster's plugin
- * configuration is only what it is configured with now, so a store taken from
- * there is marked inferred.
+ * Barman-cloud ignores Backup and ScheduledBackup parameters. The current
+ * Cluster plugin chooses the ObjectStore; it may have changed since a Backup
+ * ran, so the historical destination remains inferred.
  */
 export function objectStoreForBackup(backup: any, clusters: any[]): { name: string; inferred: boolean } | null {
   const method = backup?.status?.method || backup?.spec?.method
   if (method !== 'plugin') return null
   const cfg = backup?.spec?.pluginConfiguration
   if (cfg?.name !== CNPG_BARMAN_PLUGIN_NAME) return null
-  const own = cfg?.parameters?.barmanObjectName
-  if (typeof own === 'string' && own) return { name: own, inferred: false }
   const cluster = targetCluster(backup, clusters)
+  if (backup.kind === 'Backup' && !cnpgBackupMatchesCluster(backup, cluster)) return null
   const current = cluster ? getCNPGClusterBarmanPlugin(cluster)?.barmanObjectName : undefined
   return current ? { name: current, inferred: true } : null
 }
@@ -227,6 +226,14 @@ export function backupDestination(backup: any, clusters: any[]): CNPGBackupDesti
   const path = backup?.status?.destinationPath
   if (typeof path === 'string' && path) return { type: 'path', path }
   return { type: 'unknown' }
+}
+
+/** Whether the Cluster declares a destination for this schedule's method; unread Clusters stay unknown. */
+export function cnpgScheduleDestinationBlocker(schedule: any, clusters: any[]): string | null {
+  const cluster = targetCluster(schedule, clusters)
+  if (!cluster) return null
+  const blocker = cnpgBackupDestinationBlocker(cnpgBackupDeclaration(cluster), schedule.spec?.method || 'barmanObjectStore', schedule.spec?.pluginConfiguration?.name)
+  return blocker ? cnpgBackupBlockerText(blocker) : null
 }
 
 // ---------------------------------------------------------------------------
@@ -256,16 +263,16 @@ export function usersOfObjectStore(store: any, clusters: any[]): CNPGObjectStore
 export interface CNPGObjectStoreEvidence {
   cluster: CNPGObjectRef
   serverName: string
-  archiving: CNPGFact
+  archiving: Fact
   window: CNPGObjectStoreRecoveryWindow | null
 }
 
 export interface CNPGObjectStoreHealth {
-  summary: CNPGFact
+  summary: Fact
   evidence: CNPGObjectStoreEvidence[]
 }
 
-function archivingFact(cluster: any): CNPGFact {
+function archivingFact(cluster: any): Fact {
   const conds = cluster?.status?.conditions
   const c = Array.isArray(conds) ? conds.find((x: any) => x?.type === 'ContinuousArchiving') : null
   if (!c) return { text: 'WAL archiving not reported', tone: 'unknown' }
@@ -319,14 +326,17 @@ export function inferredObjectStoreHealth(store: any, users: CNPGObjectStoreUser
 // Declarative objects
 // ---------------------------------------------------------------------------
 
-export function appliedFact(obj: any): CNPGFact {
+export function appliedFact(obj: any): Fact {
+  if (observedGenerationFact(obj).tone === 'degraded') {
+    return { text: 'Pending · awaiting the operator for the current spec', tone: 'unknown' }
+  }
   const applied = obj?.status?.applied
   if (applied === true) return { text: 'Applied', tone: 'healthy' }
   if (applied === false) return { text: 'Not applied', tone: 'unhealthy' }
   return { text: 'Pending · the operator has not reported a result yet', tone: 'unknown' }
 }
 
-export function observedGenerationFact(obj: any): CNPGFact {
+export function observedGenerationFact(obj: any): Fact {
   const observed = obj?.status?.observedGeneration
   const generation = obj?.metadata?.generation
   if (typeof observed !== 'number') return { text: 'Not reported', tone: 'unknown' }
@@ -351,7 +361,6 @@ export function missingManagedRole(obj: any, cluster: any | null): string | null
   return names.includes(m[1]) ? null : m[1]
 }
 
-export { cnpgGitOpsSource as gitopsSourceOf } from './workspace'
 
 /** Publications and Subscriptions on the same Cluster and PostgreSQL database. */
 export function replicationForDatabase(

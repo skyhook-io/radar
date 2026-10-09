@@ -1,13 +1,23 @@
+import { cnpgBackupDeclaration, cnpgBarmanPlugin } from '../../utils/cnpg-backup'
 // CloudNativePG workspace model: pure derivations over the /api/cnpg/workspace
 // payload. Every fact here is something the cluster actually reports; when it
 // does not report something the value is "unknown", never zero or healthy.
 
-import type { HealthLevel } from '../resources/resource-utils'
+import { backupsForScheduledBackup, cnpgScheduleDestinationBlocker, cnpgBackupMatchesCluster, cnpgArchiveMatchesCluster, targetCluster } from './relations'
+import { cnpgRoleState } from './databaseRole'
+import { formatAge, summarizeSchedulerMessage, type HealthLevel } from '../resources/resource-utils'
+import { worseTone } from '../ui/status-tone'
+import { type Fact } from '../facts'
+import { type ProblemOrigin, type WorkspaceProblem } from '../problems'
+import type { ResourceRef } from '../../types/core'
+import { formatGrant, type Grant } from '../../utils/grant'
+import { issueReasonTitle, issueTitle } from '../issues/severity'
 import {
   CNPG_BARMAN_PLUGIN_NAME,
   getCNPGClusterBackupConfig,
   getCNPGClusterBarmanPlugin,
   getCNPGClusterImageTag,
+  getCNPGClusterIsReplica,
   getCNPGClusterStatus,
   getCNPGObjectStoreRecoveryWindows,
   isApiGroup,
@@ -21,6 +31,7 @@ export const CNPG_WORKSPACE_KEYS = [
   'databases',
   'publications',
   'subscriptions',
+  'databaseRoles',
   'imageCatalogs',
   'clusterImageCatalogs',
   'objectStores',
@@ -29,12 +40,14 @@ export const CNPG_WORKSPACE_KEYS = [
 
 export type CNPGWorkspaceKey = (typeof CNPG_WORKSPACE_KEYS)[number]
 
-export type CNPGCoverageState = 'full' | 'partial' | 'denied' | 'notInstalled' | 'syncing' | 'error'
+export type CNPGCoverageState = 'full' | 'partial' | 'denied' | 'notInstalled' | 'syncing' | 'uncached' | 'error'
 
 export interface CNPGKindCoverage {
   state: CNPGCoverageState
   /** Denied namespaces, named only when the caller supplied the candidate list. */
   deniedNamespaces?: string[]
+  /** Namespaces the caller may read but Radar's cache does not hold, named under the same rule. */
+  uncachedNamespaces?: string[]
   /** For partial coverage: the namespaces that were read. */
   allowedNamespaces?: string[]
 }
@@ -73,6 +86,14 @@ export interface CNPGWorkspaceResponse {
   issues: CNPGWorkspaceIssue[]
   audit: CNPGAuditFinding[]
   backupsOmitted: number
+  /** Each ScheduledBackup's schedule as the operator reads it, keyed "namespace/name"; absent when it cannot be parsed. */
+  scheduleReadings?: Record<string, string>
+  /** The manager of each object that has one, keyed "Kind/namespace/name". */
+  managedBy?: Record<string, ResourceRef>
+  /** Pods of the Jobs a Cluster controls (initdb, join, restore…), never counted as instances. */
+  jobPods?: any[]
+  /** Where the caller's Jobs were read; a Job Pod is returned only there. Absent from a Radar that predates it. */
+  jobCoverage?: CNPGKindCoverage
 }
 
 export const CNPG_KIND_BY_KEY: Record<CNPGWorkspaceKey, { kind: string; group: string; plural: string }> = {
@@ -83,6 +104,7 @@ export const CNPG_KIND_BY_KEY: Record<CNPGWorkspaceKey, { kind: string; group: s
   databases: { kind: 'Database', group: 'postgresql.cnpg.io', plural: 'databases' },
   publications: { kind: 'Publication', group: 'postgresql.cnpg.io', plural: 'publications' },
   subscriptions: { kind: 'Subscription', group: 'postgresql.cnpg.io', plural: 'subscriptions' },
+  databaseRoles: { kind: 'DatabaseRole', group: 'postgresql.cnpg.io', plural: 'databaseroles' },
   imageCatalogs: { kind: 'ImageCatalog', group: 'postgresql.cnpg.io', plural: 'imagecatalogs' },
   clusterImageCatalogs: { kind: 'ClusterImageCatalog', group: 'postgresql.cnpg.io', plural: 'clusterimagecatalogs' },
   objectStores: { kind: 'ObjectStore', group: 'barmancloud.cnpg.io', plural: 'objectstores' },
@@ -93,37 +115,28 @@ export function isCNPGWorkspaceKind(kind: string, group: string | undefined): bo
   return Object.values(CNPG_KIND_BY_KEY).some((k) => k.group !== '' && k.group === (group ?? '') && k.kind === kind)
 }
 
-/** The value is observed, derived, or not available from the cluster. */
-export type CNPGFactTone = HealthLevel
-
-export interface CNPGFact {
-  text: string
-  tone: CNPGFactTone
-  /** Where the value comes from, shown next to it so claims carry their source. */
-  source?: string
-  /** A timestamp the text refers to; the UI renders it as an age. */
-  at?: string
-}
-
 export type CNPGProblemCategory = 'availability' | 'protection' | 'declarations' | 'pooling'
 
 export const CNPG_PROBLEM_CATEGORIES: { id: CNPGProblemCategory; label: string }[] = [
   { id: 'availability', label: 'Availability' },
-  { id: 'protection', label: 'Protection' },
+  { id: 'protection', label: 'Backups' },
   { id: 'declarations', label: 'Declarations' },
   { id: 'pooling', label: 'Pooling' },
 ]
 
-export interface CNPGProblem {
-  /** Stable identity for keys. */
-  id: string
-  severity: 'critical' | 'warning' | 'posture'
-  category: CNPGProblemCategory
-  title: string
-  detail?: string
-  /** The object the evidence is about (may be the Cluster or a child object). */
-  subject: { kind: string; group: string; namespace: string; name: string }
-  source: 'issue' | 'audit'
+/**
+ * A problem in the CloudNativePG workspace, categorised by the workspace's
+ * screens. `instance` names the instance a Cluster-level problem is about,
+ * e.g. the standby an HA slot is kept for.
+ */
+export type CNPGProblem = WorkspaceProblem<CNPGProblemCategory> & {
+  reason?: string
+  slot?: string
+  instance?: string
+  /** The cnpg.io/jobRole of the Cluster's own Job whose Pod this is about: a cause, not an instance's symptom. */
+  job?: string
+  /** The Cluster's own Ready condition: a roll-up of the other problems, shown after them. */
+  rollup?: boolean
 }
 
 export interface CNPGInstance {
@@ -135,15 +148,15 @@ export interface CNPGInstance {
 }
 
 export interface CNPGProtectionFacts {
-  schedule: CNPGFact & { names: string[] }
-  destination: CNPGFact & {
+  schedule: Fact & { names: string[] }
+  destination: Fact & {
     method: 'plugin' | 'barmanObjectStore' | 'volumeSnapshot' | 'none'
     objectStore?: string
   }
-  lastSuccessfulBackup: CNPGFact
-  walArchiving: CNPGFact
-  recoveryWindow: CNPGFact & { from?: string }
-  restoreValidation: CNPGFact & { restoredInto?: { namespace: string; name: string } }
+  lastSuccessfulBackup: Fact
+  walArchiving: Fact & { state?: 'no_destination' | 'failing' | 'archiving' | 'unknown'; operatorCondition?: { type: string; status: string; message?: string; lastTransitionTime?: string } }
+  recoveryWindow: Fact & { from?: string }
+  restoreValidation: Fact & { restoredInto?: { namespace: string; name: string } }
 }
 
 export interface CNPGFleetRow {
@@ -153,15 +166,26 @@ export interface CNPGFleetRow {
   cluster: any
   controllerStatus: { text: string; level: HealthLevel }
   instances: { ready: number | null; desired: number | null }
+  /**
+   * Ready instances counted from the instance Pods' Ready condition; absent
+   * when Pods are not readable here or any Pod's readiness is unknown.
+   */
+  podReadiness?: { ready: number; total: number }
+  /** status.readyInstances claims more ready instances than the Pods show: CNPG status is stale or lagging. */
+  readinessContradicted?: boolean
+  /** status.currentPrimary is not the Pod labelled primary; status may be stale, or a failover is under way. */
+  primaryConflict?: { status: string; labelled: string }
   pods: CNPGInstance[]
   replicaCluster: { source?: string } | null
   hibernated: boolean
   pgVersion: string | null
   catalog: { kind: string; name: string } | null
-  replication: CNPGFact
-  protection: CNPGProtectionFacts & { summary: CNPGFact }
-  declarations: { summary: CNPGFact; total: number; failed: number; pending: number }
+  replication: Fact
+  protection: CNPGProtectionFacts & { summary: Fact }
+  declarations: { summary: Fact; total: number; failed: number; pending: number }
   poolers: string[]
+  /** The Pooler objects behind `poolers`, for their type and Service port. */
+  poolerObjects?: any[]
   /** False when Poolers are not readable in this cluster's namespace, so an empty list means unknown. */
   poolersKnown: boolean
   problems: CNPGProblem[]
@@ -169,7 +193,12 @@ export interface CNPGFleetRow {
   attention: boolean
   categories: Set<CNPGProblemCategory>
   /** GitOps owner recorded on the Cluster, when it carries the standard labels. */
-  gitops: CNPGGitOpsSource | null
+  /** The GitOps or Helm object that manages the Cluster, as the server detected it. */
+  managedBy?: ResourceRef
+  /** Fullest measured volume, set by applyCNPGDisk; absent when no disk reading was requested. */
+  disk?: Fact
+  /** Growth of the fastest-growing volume, set by applyCNPGFleetMetrics when measured. */
+  diskGrowth?: Fact
 }
 
 export interface CNPGFleet {
@@ -185,7 +214,194 @@ const PROTECTION_ISSUE_REASONS = new Set([
   'CNPGLastBackupFailed',
   'CNPGBackupFailed',
   'CNPGScheduledBackupMissed',
+  'CNPGScheduledRunNoBackup',
+  'CNPGScheduleDestinationMissing',
 ])
+
+// What an instance Pod's bare reason means, said about the Pod.
+const CNPG_POD_REASON_SENTENCES: Record<string, string> = {
+  ReadinessProbeFailed: 'not ready (readiness probe failing)',
+  // The issue does not say whether the Pod is serving now (it may have come
+  // back within the settle window), so restarts are worded as past.
+  LivenessProbeFailed: 'restarted recently (liveness probe failing)',
+  CrashLoopBackOff: 'restarted recently (CrashLoopBackOff)',
+  HighRestartCount: 'restarted repeatedly',
+  OOMKilled: 'killed for running out of memory (OOMKilled)',
+  ImagePullBackOff: 'cannot pull its image (ImagePullBackOff)',
+  ErrImagePull: 'cannot pull its image (ErrImagePull)',
+}
+
+// Plain headlines for CNPG issues whose message carries the operator's own
+// condition text; that message becomes the detail beneath.
+// Reasons the Issues page already titles come from issueReasonTitle, so a
+// problem reads the same here and there; these are the rest.
+const CNPG_REASON_TITLES: Record<string, string> = {
+  CNPGBackupFailed: 'Backup failed',
+  CNPGScheduledBackupMissed: 'A scheduled backup did not run',
+  CNPGCertificateExpiring: 'A certificate expires soon',
+  CNPGCertificateExpired: 'A certificate has expired',
+}
+
+/**
+ * A problem's headline and detail from an issue. Known CNPG reasons get a
+ * short plain title with the operator's message beneath; otherwise the
+ * message is the title, unless it is empty or only the reason token (e.g.
+ * "ReadinessProbeFailed"), which is turned into a sentence about the subject.
+ */
+export function cnpgIssueText(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'name' | 'reason' | 'message' | 'cause' | 'first_seen'>): { title: string; detail?: string } {
+  let message = issue.message?.trim() ?? ''
+  const cause = issue.cause?.trim() || undefined
+  // The run's time is the issue's first_seen, not part of the message.
+  if (issue.reason === 'CNPGScheduledRunNoBackup' && issue.first_seen && message) message = `${message} ${formatAge(issue.first_seen)} ago`
+  if (['CNPGScheduleDestinationMissing', 'CNPGInstanceReadinessMismatch', 'CNPGPrimaryLabelMismatch'].includes(issue.reason)) return { title: message, detail: cause }
+  const known = issueReasonTitle(issue.reason) ?? CNPG_REASON_TITLES[issue.reason]
+  if (known) return { title: known, detail: [stripTitlePrefix(message, known), cause].filter(Boolean).join(' ') || undefined }
+  if (message && message !== issue.reason && /\s/.test(message)) return { title: message, detail: cause }
+  const token = message || issue.reason
+  const sentence = CNPG_POD_REASON_SENTENCES[token]
+  if (sentence) return { title: `${issue.name} ${sentence}`, detail: cause }
+  const words = token.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase()
+  return { title: `${issue.kind} ${issue.name}: ${words}`, detail: cause }
+}
+
+// "Backup failed: cannot proceed…" under the title "Backup failed" repeats it.
+function stripTitlePrefix(message: string, title: string): string {
+  if (!message.toLowerCase().startsWith(title.toLowerCase())) return message
+  const rest = message.slice(title.length).replace(/^[\s:;,.\-–—]+/, '')
+  return rest ? rest[0].toUpperCase() + rest.slice(1) : ''
+}
+
+/**
+ * Failed Backups of one cluster that failed for the same reason become one
+ * problem: "3 backups failed: <reason>", about the latest of them, the others
+ * named in alsoAbout. Each Backup is otherwise its own issue, and a schedule
+ * failing every night would list the same sentence over and over.
+ */
+type IssueProblem = CNPGProblem
+
+export function cnpgCollapseBackupFailures(problems: IssueProblem[], backupTimes: Map<string, number> = new Map()): IssueProblem[] {
+  const groups = new Map<string, IssueProblem[]>()
+  const out: IssueProblem[] = []
+  for (const p of problems) {
+    if (p.reason !== 'CNPGBackupFailed' || p.subject.kind !== 'Backup') {
+      out.push(p)
+      continue
+    }
+    const key = `${p.severity}\x00${p.detail ?? ''}`
+    groups.set(key, [...(groups.get(key) ?? []), p])
+  }
+  for (const list of groups.values()) {
+    if (list.length === 1) {
+      out.push(list[0])
+      continue
+    }
+    const at = (p: IssueProblem) => backupTimes.get(p.subject.name) ?? 0
+    const sorted = [...list].sort((a, b) => at(b) - at(a) || b.subject.name.localeCompare(a.subject.name))
+    const latest = sorted[0]
+    out.push({
+      ...latest,
+      id: `backups-failed:${latest.subject.namespace}:${latest.detail ?? ''}`,
+      title: latest.detail ? `${list.length} backups failed: ${latest.detail[0].toLowerCase()}${latest.detail.slice(1)}` : `${list.length} backups failed`,
+      detail: undefined,
+      alsoAbout: sorted.slice(1).map((p) => ({ kind: p.subject.kind, name: p.subject.name })),
+    })
+  }
+  return out
+}
+
+/**
+ * "Latest backup failed" restates a failed-Backup problem when that problem
+ * is about the cluster's newest Backup, so the duplicate is dropped and the
+ * count stays honest. With the newest Backup unknown, both stay.
+ */
+export function cnpgFoldLastBackupFailed(problems: IssueProblem[], newestBackup: string | undefined): CNPGProblem[] {
+  const covered =
+    !!newestBackup &&
+    problems.some(
+      (p) =>
+        p.reason === 'CNPGBackupFailed' &&
+        p.subject.kind === 'Backup' &&
+        (p.subject.name === newestBackup || p.alsoAbout?.some((o) => o.kind === 'Backup' && o.name === newestBackup)),
+    )
+  return problems
+    .filter((p) => !(covered && p.reason === 'CNPGLastBackupFailed'))
+}
+
+// When each of the cluster's Backups started (status.startedAt, else its
+// creation), by name: the issues about Backups carry no time of their own.
+function backupTimesOf(cluster: any, backups: any[]): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const b of backups) {
+    if (!cnpgBackupMatchesCluster(b, cluster)) continue
+    out.set(b.metadata.name, Date.parse(b?.status?.startedAt ?? b?.metadata?.creationTimestamp ?? '') || 0)
+  }
+  return out
+}
+
+
+// Each entry names what the Go detector (internal/issues/source_cnpg*.go and
+// the Pod detector) actually reads. "Reported by CNPG" only where the operator
+// itself wrote the failure; a threshold or comparison Radar applies is a
+// "Radar check".
+const CNPG_CONDITION_ORIGINS: Record<string, string> = {
+  CNPGLastBackupFailed: 'Cluster LastBackupSucceeded condition',
+  CNPGClusterTerminal: 'Cluster status.phase',
+  CNPGClusterUnrecoverable: 'Cluster status.phase',
+  CNPGClusterPluginFailure: 'Cluster status.phase',
+  CNPGClusterFailingOver: 'Cluster status.phase',
+  CNPGClusterWaitingForUser: 'Cluster status.phase',
+  CNPGDeclarativeNotApplied: 'status.applied and status.message',
+}
+
+const POD_ORIGINS: Record<string, ProblemOrigin> = {
+  ReadinessProbeFailed: { label: 'Pod readiness probe', detail: 'Kubelet probe-failure events and the Pod\'s Ready condition' },
+  LivenessProbeFailed: { label: 'Pod liveness probe', detail: 'Kubelet probe-failure events and container restarts' },
+  ReadinessProbeInvalid: { label: 'Radar check of the probe', detail: 'The readiness probe names a port the container does not declare' },
+  LivenessProbeInvalid: { label: 'Radar check of the probe', detail: 'The liveness probe names a port the container does not declare' },
+  HighRestartCount: { label: 'Radar check of restarts', detail: 'More than 3 restarts on a container that is still unhealthy' },
+  InitContainerStalled: { label: 'Radar check of init containers', detail: 'An init container has not finished' },
+  Unschedulable: { label: 'Kubernetes scheduler', detail: "The Pod's PodScheduled condition (reason Unschedulable) and the scheduler's message" },
+}
+
+/**
+ * Where an issue's evidence comes from, in user terms: what CloudNativePG
+ * reported, a Backup's or Pod's own status, or Radar's own check. A reason this
+ * does not know reads "Detected by Radar" rather than a guessed source.
+ */
+export function cnpgIssueOrigin(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'reason'>): ProblemOrigin {
+  const condition = CNPG_CONDITION_ORIGINS[issue.reason]
+  if (condition) return { label: 'Reported by CNPG', detail: condition }
+  switch (issue.reason) {
+    case 'CNPGWALArchivingFailing':
+      return issue.kind === 'Backup'
+        ? { label: 'Backup status', detail: 'Backup status.phase walArchivingFailing and status.error' }
+        : { label: 'Reported by CNPG', detail: 'Cluster ContinuousArchiving condition' }
+    case 'CNPGBackupFailed':
+      return { label: 'Backup status', detail: 'Backup status.phase and status.error' }
+    case 'CNPGClusterDegraded':
+      return { label: 'Radar check of ready instances', detail: 'spec.instances against status.readyInstances, unless the phase, hibernation or fencing explains it' }
+    case 'CNPGScheduleDestinationMissing':
+      return { label: 'Radar check of the backup destination', detail: 'ScheduledBackup method against its target Cluster spec' }
+    case 'CNPGInstanceReadinessMismatch':
+      return { label: 'Radar check of instance readiness', detail: 'Instance Pod Ready conditions against Cluster status.readyInstances' }
+    case 'CNPGPrimaryLabelMismatch':
+      return { label: 'Radar check of the primary', detail: 'Instance Pod role labels against Cluster status.currentPrimary' }
+    case 'CNPGScheduledRunNoBackup':
+      return { label: 'Radar check of the backup schedule', detail: 'The schedule, read as the operator does, against the cluster\'s newest successful backup' }
+    case 'CNPGScheduledBackupMissed':
+      return { label: 'Radar check of the backup schedule', detail: 'ScheduledBackup status.nextScheduleTime passed more than 10 minutes ago' }
+    case 'CNPGCertificateExpiring':
+    case 'CNPGCertificateExpired':
+      return { label: 'Certificate expiry (from Cluster status)', detail: 'Cluster status.certificates.expirations, compared with now' }
+  }
+  if (issue.kind === 'Pod') return POD_ORIGINS[issue.reason] ?? { label: 'Pod status' }
+  return { label: 'Detected by Radar' }
+}
+
+/** The headline alone; see cnpgIssueText. */
+export function cnpgIssueTitle(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'name' | 'reason' | 'message'>): string {
+  return cnpgIssueText(issue).title
+}
 
 export function cnpgIssueCategory(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'reason'>): CNPGProblemCategory {
   if (PROTECTION_ISSUE_REASONS.has(issue.reason)) return 'protection'
@@ -197,6 +413,7 @@ export function cnpgIssueCategory(issue: Pick<CNPGWorkspaceIssue, 'kind' | 'reas
     case 'Database':
     case 'Publication':
     case 'Subscription':
+    case 'DatabaseRole':
       return 'declarations'
     case 'Pooler':
       return 'pooling'
@@ -224,23 +441,35 @@ export function coverageReadable(cov: CNPGKindCoverage, namespace?: string): boo
   if (cov.state === 'partial') {
     if (!namespace) return false
     if (cov.allowedNamespaces) return cov.allowedNamespaces.includes(namespace)
-    if (cov.deniedNamespaces) return !cov.deniedNamespaces.includes(namespace)
+    if (cov.deniedNamespaces || cov.uncachedNamespaces) return !cov.deniedNamespaces?.includes(namespace) && !cov.uncachedNamespaces?.includes(namespace)
     return false
   }
   return false
 }
 
-function coverageUnavailableText(cov: CNPGKindCoverage, what: string): string {
+/**
+ * Why a kind's objects were not read (in `namespace`, when given), worded for
+ * a fact. A namespace Radar's cache does not hold is never called "no access";
+ * a partial read that names neither cause says only that it was not read.
+ */
+export function cnpgCoverageGap(cov: CNPGKindCoverage, what: string, namespace?: string, notInstalled = 'Not installed'): string {
+  // A namespace the server names wins over the kind's overall state: an
+  // uncached scope can still name namespaces the caller was denied.
+  if (namespace && cov.deniedNamespaces?.includes(namespace)) return `No access to ${what}`
+  if (namespace && cov.uncachedNamespaces?.includes(namespace)) return `Radar does not cache ${what} in ${namespace}`
   switch (cov.state) {
     case 'denied':
-    case 'partial':
       return `No access to ${what}`
+    case 'partial':
+      return namespace ? `${what} not read in ${namespace}` : `${what} not read`
+    case 'uncached':
+      return `Radar does not cache ${what}`
     case 'syncing':
       return 'Loading…'
     case 'error':
       return `Could not read ${what}`
     default:
-      return 'Not installed'
+      return notInstalled
   }
 }
 
@@ -267,37 +496,24 @@ function podReady(pod: any): boolean | null {
   return ready.status === 'True'
 }
 
-export type CNPGGitOpsSource = { tool: 'argocd' | 'flux'; name: string; namespace?: string }
-
-/** The GitOps owner recorded on an object's standard Argo CD / Flux labels. */
-export function cnpgGitOpsSource(obj: any): CNPGGitOpsSource | null {
-  const labels = obj?.metadata?.labels ?? {}
-  const annotations = obj?.metadata?.annotations ?? {}
-  const argo = labels['argocd.argoproj.io/instance']
-  if (argo) return { tool: 'argocd', name: argo }
-  const tracking = annotations['argocd.argoproj.io/tracking-id']
-  if (typeof tracking === 'string' && tracking.includes(':')) {
-    return { tool: 'argocd', name: tracking.split(':')[0] }
-  }
-  const fluxName = labels['kustomize.toolkit.fluxcd.io/name'] || labels['helm.toolkit.fluxcd.io/name']
-  if (fluxName) {
-    return {
-      tool: 'flux',
-      name: fluxName,
-      namespace: labels['kustomize.toolkit.fluxcd.io/namespace'] || labels['helm.toolkit.fluxcd.io/namespace'],
-    }
-  }
-  return null
+/** The manager the server detected for a workspace object (Argo CD, Flux or Helm), if any. */
+export function cnpgManagedBy(ws: Pick<CNPGWorkspaceResponse, 'managedBy'> | null | undefined, obj: any): ResourceRef | undefined {
+  const kind = obj?.kind
+  const name = obj?.metadata?.name
+  if (!kind || !name) return undefined
+  return ws?.managedBy?.[`${kind}/${obj?.metadata?.namespace ?? ''}/${name}`]
 }
 
 function scheduleFact(
   cluster: any,
   schedules: any[],
   cov: CNPGKindCoverage,
+  readings: Record<string, string> = {},
+  backups: any[] = [],
 ): CNPGProtectionFacts['schedule'] {
   const ns = cluster.metadata?.namespace
   if (!coverageReadable(cov, ns)) {
-    return { text: coverageUnavailableText(cov, 'ScheduledBackups'), tone: 'unknown', names: [] }
+    return { text: cnpgCoverageGap(cov, 'ScheduledBackups', ns), tone: 'unknown', names: [] }
   }
   const mine = schedules.filter((s) => s.metadata?.namespace === ns && specClusterName(s) === cluster.metadata?.name)
   if (mine.length === 0) return { text: 'No declarative schedule', tone: 'neutral', names: [] }
@@ -307,15 +523,21 @@ function scheduleFact(
     return { text: mine.length === 1 ? 'Schedule suspended' : 'All schedules suspended', tone: 'degraded', names }
   }
   const cron = active[0]?.spec?.schedule
+  const reading = readings[`${ns}/${active[0]?.metadata?.name}`]
+  const blockers = active.map((s) => cnpgScheduleDestinationBlocker(s, [cluster])).filter((b): b is string => !!b)
+  const cadence = active.length === 1 ? reading || cron : undefined
+  const run = active.some((s) => s.status?.lastScheduleTime || backupsForScheduledBackup(s, backups).length > 0)
   return {
-    text: active.length === 1 ? (cron ? `Scheduled · ${cron}` : 'Scheduled') : `${active.length} schedules`,
-    tone: 'healthy',
+    text: [active.length === 1 ? 'Enabled' : `${active.length} enabled schedules`, blockers.length || run ? cadence : undefined, blockers.length ? `blocked: ${[...new Set(blockers)].map((blocker) => blocker[0].toLowerCase() + blocker.slice(1)).join(', ')}` : !run ? 'not run yet' : undefined].filter(Boolean).join(' · '),
+    tone: blockers.length ? 'degraded' : 'neutral',
     names,
+    ...(active.length === 1 && cron ? { source: `ScheduledBackup ${active[0]?.metadata?.name} · cron ${cron}` } : {}),
   }
 }
 
 function destinationFact(cluster: any): CNPGProtectionFacts['destination'] {
-  const plugin = getCNPGClusterBarmanPlugin(cluster)
+  const declaration = cnpgBackupDeclaration(cluster)
+  const plugin = cnpgBarmanPlugin(declaration)
   if (plugin?.barmanObjectName) {
     return {
       text: `ObjectStore ${plugin.barmanObjectName}`,
@@ -324,11 +546,10 @@ function destinationFact(cluster: any): CNPGProtectionFacts['destination'] {
       objectStore: plugin.barmanObjectName,
     }
   }
-  const cfg = getCNPGClusterBackupConfig(cluster)
-  if (cfg.destinationPath) {
-    return { text: cfg.destinationPath, tone: 'neutral', method: 'barmanObjectStore' }
+  if (declaration.inTreeDestination) {
+    return { text: declaration.inTreeDestination, tone: 'neutral', method: 'barmanObjectStore' }
   }
-  if (cluster?.spec?.backup?.volumeSnapshot) {
+  if (declaration.snapshotsConfigured) {
     return { text: 'Volume snapshots', tone: 'neutral', method: 'volumeSnapshot' }
   }
   return { text: 'No destination configured', tone: 'neutral', method: 'none' }
@@ -359,14 +580,12 @@ function lastBackupFact(
   storesUnreadable: CNPGKindCoverage | null,
 ): CNPGProtectionFacts['lastSuccessfulBackup'] {
   const ns = cluster.metadata?.namespace
-  const name = cluster.metadata?.name
   const candidates: { at: string; source: string }[] = []
   if (coverageReadable(backupsCov, ns)) {
     const completed = backups
       .filter(
         (b) =>
-          b.metadata?.namespace === ns &&
-          specClusterName(b) === name &&
+          cnpgBackupMatchesCluster(b, cluster) &&
           isApiGroup(b.apiVersion, 'postgresql.cnpg.io') &&
           b.status?.phase === 'completed',
       )
@@ -377,26 +596,105 @@ function lastBackupFact(
   if (window?.lastSuccess) candidates.push({ at: window.lastSuccess, source: `ObjectStore ${window.store} status` })
   const cfg = getCNPGClusterBackupConfig(cluster)
   if (!cfg.plugin && cfg.lastSuccessfulBackup) candidates.push({ at: cfg.lastSuccessfulBackup, source: 'Cluster status' })
-  if (candidates.length === 0) {
+  const createdAt = Date.parse(cluster.metadata?.creationTimestamp ?? '')
+  const current = candidates.filter((candidate) => !Number.isFinite(createdAt) || Date.parse(candidate.at) >= createdAt)
+  if (current.length === 0) {
     if (!coverageReadable(backupsCov, ns)) {
-      return { text: coverageUnavailableText(backupsCov, 'Backups'), tone: 'unknown' }
+      return { text: cnpgCoverageGap(backupsCov, 'Backups', ns), tone: 'unknown', source: 'Backups not read' }
     }
-    if (storesUnreadable) return { text: coverageUnavailableText(storesUnreadable, 'ObjectStores'), tone: 'unknown' }
-    return { text: 'None observed', tone: 'unknown' }
+    if (storesUnreadable) return { text: cnpgCoverageGap(storesUnreadable, 'ObjectStores', ns), tone: 'unknown' }
+    return { text: 'No successful backup yet', tone: 'degraded', source: 'Backups read in this namespace; none completed' }
   }
-  const best = candidates.reduce((a, b) => (Date.parse(a.at) >= Date.parse(b.at) ? a : b))
+  const best = current.reduce((a, b) => (Date.parse(a.at) >= Date.parse(b.at) ? a : b))
   return { text: 'Completed', tone: 'healthy', at: best.at, source: best.source }
 }
 
-function walFact(cluster: any): CNPGFact {
+export const CNPG_NO_WAL_ARCHIVE_DESTINATION = 'Not archived: no destination configured'
+
+function walFact(cluster: any): CNPGProtectionFacts['walArchiving'] {
   const conds = cluster?.status?.conditions
   const c = Array.isArray(conds) ? conds.find((x: any) => x?.type === 'ContinuousArchiving') : null
-  if (!c) return { text: 'Not reported', tone: 'unknown', source: 'Cluster status' }
-  if (c.status === 'True') return { text: 'Archiving', tone: 'healthy', source: 'ContinuousArchiving condition' }
-  if (c.status === 'False') {
-    return { text: c.message ? `Failing · ${c.message}` : 'Failing', tone: 'unhealthy', source: 'ContinuousArchiving condition' }
+  const declaration = cnpgBackupDeclaration(cluster)
+  const plugin = cnpgBarmanPlugin(declaration)
+  const archivers = declaration.plugins.filter((p) => p.enabled && p.isWALArchiver)
+  const archiveConfigured = archivers.length > 0 || !!declaration.inTreeDestination
+  if (c?.status === 'False' && archiveConfigured) {
+    return { state: 'failing', text: 'Failing', tone: 'unhealthy', source: 'ContinuousArchiving condition', ...(c.lastTransitionTime ? { at: c.lastTransitionTime, atMeaning: 'since' as const } : {}), ...(c.message ? { detail: c.message } : {}) }
   }
-  return { text: 'Unknown', tone: 'unknown', source: 'ContinuousArchiving condition' }
+  const destinationKnown = !!(plugin?.isWALArchiver && plugin.barmanObjectName) || !!declaration.inTreeDestination
+  const customArchiver = archivers.some((p: any) => p.name !== plugin?.name)
+  if (!destinationKnown && !customArchiver) {
+    return {
+      state: 'no_destination', text: CNPG_NO_WAL_ARCHIVE_DESTINATION,
+      tone: 'neutral',
+      source: 'Cluster spec',
+      detail: "WAL is not archived to recovery storage, so point-in-time recovery is unavailable." + (c?.status === 'True' ? " CloudNativePG still reports archiving as working because, with no destination, it accepts each WAL file without keeping it." : ''),
+      ...(c ? { operatorCondition: { type: c.type, status: c.status, message: c.message, lastTransitionTime: c.lastTransitionTime } } : {}),
+    }
+  }
+  if (!c) return { state: 'unknown', text: 'Not reported', tone: 'unknown', source: 'Cluster status' }
+  if (c.status === 'True') {
+    return { state: 'archiving', text: 'CNPG reports archiving', tone: 'healthy', source: 'Cluster status · ContinuousArchiving=True', ...(customArchiver && !destinationKnown ? { detail: 'Archive plugin declared; its destination is not assessed here' } : {}), ...(c.lastTransitionTime ? { at: c.lastTransitionTime, atMeaning: 'since' as const } : {}) }
+  }
+  return { state: 'unknown', text: 'Unknown', tone: 'unknown', source: 'ContinuousArchiving condition' }
+}
+
+export const CNPG_RESTORE_VALIDATION_ANNOTATION = 'radar.skyhook.io/restore-validation'
+
+export interface CNPGRestoreValidationNote {
+  recordedAt: string
+  recordedBy?: string
+  checked: string
+  targetTime?: string
+  source?: { namespace: string; name: string; uid?: string; verified: boolean }
+  target?: { namespace: string; name: string; uid?: string; verified: boolean }
+}
+
+/** The validation note recorded on a restored Cluster, or null when absent or malformed. */
+export function getCNPGRestoreValidation(cluster: any): CNPGRestoreValidationNote | null {
+  const raw = cluster?.metadata?.annotations?.[CNPG_RESTORE_VALIDATION_ANNOTATION]
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  try {
+    const v = JSON.parse(raw)
+    if (typeof v?.recordedAt !== 'string' || typeof v?.checked !== 'string' || !v.checked) return null
+    if (v.target?.uid && v.target.uid !== cluster.metadata?.uid) return null
+    return v as CNPGRestoreValidationNote
+  } catch {
+    return null
+  }
+}
+
+function noteIsAbout(note: CNPGRestoreValidationNote, cluster: any): boolean {
+  return !!note.source?.uid && note.source.uid === cluster.metadata?.uid
+}
+
+/** A recovery declaration compatible with this live source, excluding known predecessor evidence. */
+export function cnpgRecoveryMatchesCluster(restored: any, cluster: any, backups: any[]): boolean {
+  if (restored === cluster || restored.metadata?.namespace !== cluster.metadata?.namespace) return false
+  const recovery = restored.spec?.bootstrap?.recovery
+  if (!recovery) return false
+  const created = Date.parse(cluster.metadata?.creationTimestamp ?? '')
+  const restoredAt = Date.parse(restored.metadata?.creationTimestamp ?? '')
+  const targetAt = Date.parse(recovery.recoveryTarget?.targetTime ?? '')
+  if (Number.isFinite(created) && (restoredAt < created || targetAt < created)) return false
+  const note = getCNPGRestoreValidation(restored)
+  if (note?.source?.uid && !noteIsAbout(note, cluster)) return false
+  const ns = cluster.metadata?.namespace
+  if (recovery.backup?.name) {
+    const backup = backups.find((b) => b.metadata?.namespace === ns && b.metadata?.name === recovery.backup.name)
+    return cnpgBackupMatchesCluster(backup, cluster)
+  }
+  const source = (restored.spec?.externalClusters ?? []).find((e: any) => e?.name === recovery.source)
+  if (!source) return false
+  const params = source.plugin?.name === CNPG_BARMAN_PLUGIN_NAME ? source.plugin.parameters : undefined
+  const external = source.barmanObjectStore
+  const archiveMatch = params?.barmanObjectName
+    ? cnpgArchiveMatchesCluster(cluster, { kind: 'objectStore', objectStore: params.barmanObjectName, serverName: params.serverName || recovery.source })
+    : external && cnpgArchiveMatchesCluster(cluster, { kind: 'inTree', barmanObjectStore: external, serverName: external.serverName || recovery.source })
+  if (!archiveMatch) return false
+  const id = recovery.recoveryTarget?.backupID
+  const pinned = id ? backups.filter((b) => b.metadata?.namespace === ns && b.spec?.cluster?.name === cluster.metadata?.name && b.status?.backupId === id) : []
+  return pinned.length === 0 || pinned.some((b) => cnpgBackupMatchesCluster(b, cluster))
 }
 
 function restoreValidationFact(
@@ -405,26 +703,24 @@ function restoreValidationFact(
   backups: any[],
   backupsReadable: boolean,
 ): CNPGProtectionFacts['restoreValidation'] {
-  const plugin = getCNPGClusterBarmanPlugin(cluster)
-  const server = plugin?.serverName || cluster.metadata?.name
-  const store = plugin?.barmanObjectName
   const ns = cluster.metadata?.namespace
-  const name = cluster.metadata?.name
-  const restored = allClusters.find((c) => {
-    if (c === cluster || c.metadata?.namespace !== ns) return false
-    const recovery = c.spec?.bootstrap?.recovery
-    if (!recovery) return false
-    const sourceName = recovery.source
-    if (sourceName) {
-      const ext = (c.spec?.externalClusters ?? []).find((e: any) => e?.name === sourceName)
-      const params = ext?.plugin?.name === CNPG_BARMAN_PLUGIN_NAME ? ext.plugin.parameters : undefined
-      if (store && params?.barmanObjectName === store && (params?.serverName || sourceName) === server) return true
+  const restoredFromThis = allClusters.filter((c) => cnpgRecoveryMatchesCluster(c, cluster, backups))
+  const noted = restoredFromThis
+    .map((c) => ({ c, note: getCNPGRestoreValidation(c) }))
+    .filter((x): x is { c: any; note: CNPGRestoreValidationNote } => !!x.note && noteIsAbout(x.note, cluster))
+    .sort((a, b) => Date.parse(b.note.recordedAt) - Date.parse(a.note.recordedAt))[0]
+  if (noted) {
+    const rname = noted.c.metadata?.name
+    const by = noted.note.recordedBy ? `by ${noted.note.recordedBy}` : 'by a user Radar could not identify'
+    return {
+      text: 'Validation recorded',
+      tone: 'neutral',
+      at: noted.note.recordedAt,
+      source: `Recorded ${by} on ${rname}${noted.note.targetTime ? ` (target ${noted.note.targetTime})` : ''}: ${noted.note.checked.length > 140 ? `${noted.note.checked.slice(0, 140)}…` : noted.note.checked}. A person's note, not a check Radar ran.`,
+      restoredInto: { namespace: noted.c.metadata?.namespace, name: rname },
     }
-    const backupName = recovery.backup?.name
-    if (!backupName) return false
-    const backup = backups.find((b) => b.metadata?.namespace === ns && b.metadata?.name === backupName)
-    return specClusterName(backup) === name
-  })
+  }
+  const restored = restoredFromThis[0]
   if (!restored) {
     // A recovery by Backup name is only attributable when that Backup could be read.
     const unresolved = !backupsReadable && allClusters.some((c) => c !== cluster && c.metadata?.namespace === ns && c.spec?.bootstrap?.recovery?.backup?.name)
@@ -432,24 +728,26 @@ function restoreValidationFact(
     return { text: 'None recorded', tone: 'unknown', source: 'Kubernetes does not record restore tests' }
   }
   const rname = restored.metadata?.name
+  const fromArchive = !!restored.spec?.bootstrap?.recovery?.source
+  const sourceDescription = fromArchive ? 'the same archive currently configured for this Cluster' : "this cluster's backups"
   const ready = typeof restored.status?.readyInstances === 'number' && restored.status.readyInstances > 0
   if (!ready) {
     return {
-      text: `Recovery declared in ${rname}`,
+      text: `${fromArchive ? 'Archive recovery' : 'Recovery'} declared in ${rname}`,
       tone: 'unknown',
-      source: `Cluster ${rname} bootstraps from this cluster's backups but has no ready instance yet`,
+      source: `Cluster ${rname} bootstraps from ${sourceDescription} but has no ready instance yet`,
       restoredInto: { namespace: restored.metadata?.namespace, name: rname },
     }
   }
   return {
-    text: `Restored into ${rname}`,
+    text: `${fromArchive ? 'Archive restored' : 'Restored'} into ${rname}`,
     tone: 'neutral',
-    source: `Cluster ${rname} bootstrapped from this cluster's backups and has ready instances · created ${restored.metadata?.creationTimestamp ?? 'unknown'}. This proves one recovery, not that today's backups restore.`,
+    source: `Cluster ${rname} bootstrapped from ${sourceDescription} and has ready instances · created ${restored.metadata?.creationTimestamp ?? 'unknown'}. No validation note is recorded on it; this proves one recovery, not that today's backups restore.`,
     restoredInto: { namespace: restored.metadata?.namespace, name: rname },
   }
 }
 
-function protectionSummary(p: CNPGProtectionFacts): CNPGFact {
+function protectionSummary(p: CNPGProtectionFacts): Fact {
   if (p.walArchiving.tone === 'unhealthy') return { text: 'WAL archiving failing', tone: 'unhealthy' }
   if (p.destination.method === 'none' && p.schedule.names.length === 0 && p.schedule.tone !== 'unknown') {
     return { text: 'No backup destination or schedule', tone: 'neutral' }
@@ -475,21 +773,52 @@ function pgVersion(cluster: any): string | null {
   return typeof major === 'number' ? String(major) : null
 }
 
-function replicationFact(cluster: any, pods: CNPGInstance[], hibernated: boolean, podsCov: CNPGKindCoverage): CNPGFact {
+function replicationFact(cluster: any, pods: CNPGInstance[], hibernated: boolean, podsCov: CNPGKindCoverage): Fact {
   if (hibernated) return { text: 'Hibernated', tone: 'neutral' }
   const desired = cluster?.spec?.instances
   if (desired === 1) return { text: 'Single instance', tone: 'neutral' }
   if (!coverageReadable(podsCov, cluster?.metadata?.namespace)) {
-    return { text: coverageUnavailableText(podsCov, 'Pods'), tone: 'unknown' }
+    return { text: cnpgCoverageGap(podsCov, 'Pods', cluster?.metadata?.namespace), tone: 'unknown' }
   }
   const replicas = pods.filter((p) => p.role === 'replica')
   const readyReplicas = replicas.filter((p) => p.ready === true).length
   if (replicas.length === 0) return { text: 'No replica pods observed', tone: 'unknown' }
   return {
-    text: `${readyReplicas}/${replicas.length} replicas ready · lag unknown`,
+    text: `${readyReplicas}/${replicas.length} Pods ready · lag unknown`,
     tone: 'unknown',
-    source: 'Pod readiness does not show whether a replica is streaming',
+    source: CNPG_LAG_UNMEASURED_SOURCE,
   }
+}
+
+const CNPG_JOB_PURPOSE: Record<string, string> = {
+  initdb: 'First instance',
+  join: 'New standby',
+  'full-recovery': 'Restore into',
+  'snapshot-recovery': 'Restore into',
+  pgbasebackup: 'Clone into',
+  import: 'Import into',
+  'major-upgrade': 'Major upgrade of',
+}
+
+/** What a Cluster's own Job is for, naming the instance it builds ("New standby pg-2"). */
+export function cnpgJobPurpose(role: string | undefined, instance: string | undefined, pod: string): string {
+  const purpose = role ? CNPG_JOB_PURPOSE[role] : undefined
+  if (purpose && instance) return `${purpose} ${instance}`
+  return `${role ? `${role} ` : ''}Job Pod ${pod}`
+}
+
+interface CNPGJobPod {
+  role?: string
+  instance?: string
+}
+
+function jobPodIndex(resp: CNPGWorkspaceResponse): Map<string, CNPGJobPod> {
+  const idx = new Map<string, CNPGJobPod>()
+  for (const p of resp.jobPods ?? []) {
+    const labels = p?.metadata?.labels ?? {}
+    idx.set(`${p.metadata?.namespace}/${p.metadata?.name}`, { role: labels['cnpg.io/jobRole'], instance: labels['cnpg.io/instanceName'] })
+  }
+  return idx
 }
 
 function problemsFor(
@@ -497,25 +826,42 @@ function problemsFor(
   issues: CNPGWorkspaceIssue[],
   audit: CNPGAuditFinding[],
   children: Map<string, string>,
+  backupTimes: Map<string, number> = new Map(),
+  jobPods: Map<string, CNPGJobPod> = new Map(),
 ): CNPGProblem[] {
   const ns = cluster.metadata?.namespace
   const name = cluster.metadata?.name
   const out: CNPGProblem[] = []
+  const fromIssues: IssueProblem[] = []
   for (const issue of issues) {
     if ((issue.namespace ?? '') !== ns) continue
     const isSelf = issue.kind === 'Cluster' && issue.name === name
     const owner = children.get(`${issue.kind}/${ns}/${issue.name}`)
     if (!isSelf && owner !== name) continue
-    out.push({
+    const job = issue.kind === 'Pod' ? jobPods.get(`${ns}/${issue.name}`) : undefined
+    const text = cnpgIssueText(issue)
+    fromIssues.push({
       id: `${issue.id}:${issue.kind}/${issue.name}`,
-      severity: issue.severity,
+      // A standby that cannot join costs redundancy, not service: the primary keeps serving.
+      severity: job?.role === 'join' ? 'warning' : issue.severity,
       category: cnpgIssueCategory(issue),
-      title: issue.message || issue.reason,
-      detail: issue.cause || undefined,
+      ...(job
+        ? {
+            title: `${cnpgJobPurpose(job.role, job.instance, issue.name)}: ${issue.category ? issueTitle({ category: issue.category, reason: issue.reason }) : text.title}`,
+            detail: [issue.message?.trim(), issue.cause?.trim()].filter(Boolean).join(' ') || undefined,
+            job: job.role ?? 'job',
+            instance: job.instance,
+          }
+        : text),
       subject: { kind: issue.kind, group: issue.group ?? '', namespace: ns, name: issue.name },
       source: 'issue',
+      origin: cnpgIssueOrigin(issue),
+      reason: issue.reason,
+      ...(isSelf && issue.reason.startsWith('Ready:') ? { rollup: true } : {}),
     })
   }
+  const newestBackup = [...backupTimes.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+  out.push(...cnpgFoldLastBackupFailed(cnpgCollapseBackupFailures(fromIssues, backupTimes), newestBackup))
   for (const f of audit) {
     if (f.kind !== 'Cluster' || f.name !== name || (f.namespace ?? '') !== ns) continue
     out.push({
@@ -528,8 +874,62 @@ function problemsFor(
       source: 'audit',
     })
   }
-  const rank = { critical: 0, warning: 1, posture: 2 } as const
-  return out.sort((a, b) => rank[a.severity] - rank[b.severity] || a.title.localeCompare(b.title))
+  return out.sort(cnpgCompareProblems)
+}
+
+/**
+ * The ready count to show for a cluster: CNPG's status count, or the Pods'
+ * own count when the status claims more than the Pods show.
+ */
+export function cnpgReadyInstances(row: Pick<CNPGFleetRow, 'instances' | 'podReadiness' | 'readinessContradicted'>): { text: string; podText?: string; tone?: HealthLevel; note?: string } {
+  if (row.instances.ready === null) {
+    return {
+      text: 'Not reported by the operator',
+      podText: row.podReadiness
+        ? row.instances.desired !== null
+          ? `${row.podReadiness.ready} of ${row.instances.desired} instance Pods ready`
+          : `${row.podReadiness.ready} instance Pod${row.podReadiness.ready === 1 ? '' : 's'} ready`
+        : undefined,
+    }
+  }
+  const desired = row.instances.desired ?? '–'
+  if (row.readinessContradicted && row.podReadiness) {
+    return {
+      text: `${row.podReadiness.ready}/${desired}`,
+      tone: row.podReadiness.ready === 0 ? 'unhealthy' : 'degraded',
+      note: `Counted from the instance Pods' Ready condition. CNPG status reports ${row.instances.ready} ready, so the status may be stale.`,
+    }
+  }
+  return { text: `${row.instances.ready ?? '–'}/${desired}` }
+}
+
+const CNPG_SEVERITY_RANK = { critical: 0, warning: 1, posture: 2 } as const
+
+/**
+ * The order problems are shown in, everywhere: most severe first, then a
+ * cause before its symptoms. One instance Pod's state (a failing probe, a
+ * crash loop) is usually the symptom of a cluster-level problem (archiving,
+ * backups, replication, reconciliation, declarations) or of a Job the Cluster
+ * runs (an initdb or join Pod that cannot start), so at equal severity those
+ * come first; the Cluster's own Ready condition sums them all up and comes last.
+ */
+export function cnpgCompareProblems(a: CNPGProblem, b: CNPGProblem): number {
+  const symptom = (p: CNPGProblem) => (p.rollup ? 2 : p.subject.kind === 'Pod' && p.subject.group === '' && !p.job ? 1 : 0)
+  return CNPG_SEVERITY_RANK[a.severity] - CNPG_SEVERITY_RANK[b.severity] || symptom(a) - symptom(b) || a.title.localeCompare(b.title)
+}
+
+function sortProblems(list: CNPGProblem[]): CNPGProblem[] {
+  return list.sort(cnpgCompareProblems)
+}
+
+function primaryConflictOf(cluster: any, pods: any[]): CNPGFleetRow['primaryConflict'] {
+  const status = cluster?.status?.currentPrimary
+  if (!status) return undefined
+  const labelled = pods
+    .filter((p) => (p?.metadata?.labels?.['cnpg.io/instanceRole'] ?? p?.metadata?.labels?.role) === 'primary')
+    .map((p) => p.metadata?.name as string)
+  if (labelled.length === 0 || labelled.includes(status)) return undefined
+  return { status, labelled: labelled.sort()[0] }
 }
 
 /** Index "Kind/ns/name" → owning cluster name, from each child's spec.cluster.name. */
@@ -537,6 +937,7 @@ function childIndex(resp: CNPGWorkspaceResponse): Map<string, string> {
   const idx = new Map<string, string>()
   const add = (kind: string, list: any[] | undefined) => {
     for (const o of list ?? []) {
+      if (kind === 'Backup' && !targetCluster(o, resp.objects.clusters ?? [])) continue
       const c = specClusterName(o)
       if (c) idx.set(`${kind}/${o.metadata?.namespace}/${o.metadata?.name}`, c)
     }
@@ -547,7 +948,8 @@ function childIndex(resp: CNPGWorkspaceResponse): Map<string, string> {
   add('Database', resp.objects.databases)
   add('Publication', resp.objects.publications)
   add('Subscription', resp.objects.subscriptions)
-  for (const p of resp.objects.pods ?? []) {
+  add('DatabaseRole', resp.objects.databaseRoles)
+  for (const p of [...(resp.objects.pods ?? []), ...(resp.jobPods ?? [])]) {
     const c = p?.metadata?.labels?.['cnpg.io/cluster']
     if (c) idx.set(`Pod/${p.metadata?.namespace}/${p.metadata?.name}`, c)
   }
@@ -561,21 +963,24 @@ function declarationsFor(cluster: any, resp: CNPGWorkspaceResponse): CNPGFleetRo
     ['databases', resp.objects.databases ?? []],
     ['publications', resp.objects.publications ?? []],
     ['subscriptions', resp.objects.subscriptions ?? []],
+    ['databaseRoles', resp.objects.databaseRoles ?? []],
   ]
   let total = 0
   let failed = 0
   let pending = 0
-  let unreadable = false
+  const unread: string[] = []
+  const labels = { databases: 'Databases', publications: 'Publications', subscriptions: 'Subscriptions', databaseRoles: 'DatabaseRoles' }
   for (const [k, list] of lists) {
     if (!coverageReadable(coverageOf(resp, k), ns)) {
-      if (coverageOf(resp, k).state !== 'notInstalled') unreadable = true
+      if (coverageOf(resp, k).state !== 'notInstalled') unread.push(labels[k as keyof typeof labels])
       continue
     }
     for (const o of list) {
       if (o.metadata?.namespace !== ns || specClusterName(o) !== name) continue
       total++
-      if (o.status?.applied === false) failed++
-      else if (o.status?.applied !== true) pending++
+      const state = cnpgRoleState(o)
+      if (state === 'failed') failed++
+      else if (state === 'pending') pending++
     }
   }
   const roleStatus = cluster?.status?.managedRolesStatus
@@ -588,9 +993,10 @@ function declarationsFor(cluster: any, resp: CNPGWorkspaceResponse): CNPGFleetRo
     if (failedRoles.has(r.name)) failed++
     else if (!reconciledRoles.has(r.name)) pending++
   }
-  let summary: CNPGFact
+  const unreadable = unread.length > 0
+  let summary: Fact
   if (total === 0) {
-    summary = unreadable ? { text: 'No access to some declarations', tone: 'unknown' } : { text: 'None declared', tone: 'neutral' }
+    summary = { text: 'None declared', tone: 'neutral' }
   } else if (failed > 0) {
     summary = { text: `${failed} of ${total} not reconciled`, tone: 'degraded' }
   } else if (pending > 0) {
@@ -598,7 +1004,10 @@ function declarationsFor(cluster: any, resp: CNPGWorkspaceResponse): CNPGFleetRo
   } else {
     summary = { text: `${total} reconciled`, tone: 'healthy' }
   }
-  if (unreadable && total > 0) summary = { ...summary, source: 'Some declaration kinds are not readable' }
+  if (unreadable) {
+    const count = total === 0 ? 'Reconciliation unknown' : failed > 0 ? `≥${failed} not reconciled` : pending > 0 ? `≥${pending} pending` : `≥${total} reconciled`
+    summary = { text: `${count}; ${unread.join(', ')} not read`, tone: failed > 0 ? 'degraded' : 'unknown' }
+  }
   return { summary, total, failed, pending }
 }
 
@@ -607,6 +1016,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
   const pods = resp.objects.pods ?? []
   const stores = resp.objects.objectStores ?? []
   const children = childIndex(resp)
+  const jobs = jobPodIndex(resp)
   const poolers = resp.objects.poolers ?? []
 
   const rows: CNPGFleetRow[] = clusters.map((cluster) => {
@@ -631,7 +1041,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
     const storesCov = coverageOf(resp, 'objectStores')
     const storesUnreadable = !!getCNPGClusterBarmanPlugin(cluster)?.barmanObjectName && !coverageReadable(storesCov, ns)
     const protection: CNPGProtectionFacts = {
-      schedule: scheduleFact(cluster, resp.objects.scheduledBackups ?? [], coverageOf(resp, 'scheduledBackups')),
+      schedule: scheduleFact(cluster, resp.objects.scheduledBackups ?? [], coverageOf(resp, 'scheduledBackups'), resp.scheduleReadings, resp.objects.backups ?? []),
       destination: destinationFact(cluster),
       lastSuccessfulBackup: lastBackupFact(cluster, resp.objects.backups ?? [], coverageOf(resp, 'backups'), window, storesUnreadable ? storesCov : null),
       walArchiving: wal,
@@ -645,15 +1055,26 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
             source: `ObjectStore ${window.store} status (earliest point)`,
           }
         : storesUnreadable
-          ? { text: coverageUnavailableText(storesCov, 'ObjectStores'), tone: 'unknown' }
-          : { text: 'Not reported', tone: 'unknown' },
+          ? { text: cnpgCoverageGap(storesCov, 'ObjectStores', ns), tone: 'unknown' }
+          : destinationFact(cluster).method === 'none' ? { text: 'None: no backup destination', tone: 'neutral' } : { text: 'Not reported', tone: 'unknown' },
       restoreValidation: restoreValidationFact(cluster, clusters, resp.objects.backups ?? [], coverageReadable(coverageOf(resp, 'backups'), ns)),
     }
-    const problems = problemsFor(cluster, resp.issues ?? [], resp.audit ?? [], children)
+    const podsReadable = coverageReadable(coverageOf(resp, 'pods'), ns)
+    const podReadiness =
+      podsReadable && resp.objects.pods !== undefined && instancePods.every((p) => p.ready !== null)
+        ? { ready: instancePods.filter((p) => p.ready).length, total: instancePods.length }
+        : undefined
+    const readinessContradicted = !hibernated && !!podReadiness && readyInstances !== null && podReadiness.ready < readyInstances
+    const primaryConflict = podsReadable ? primaryConflictOf(cluster, pods.filter((p) => p.metadata?.namespace === ns && p.metadata?.labels?.['cnpg.io/cluster'] === name)) : undefined
+    let problems = sortProblems([
+      ...problemsFor(cluster, resp.issues ?? [], resp.audit ?? [], children, backupTimesOf(cluster, resp.objects.backups ?? []), jobs),
+
+    ])
+    problems = problems.map((p) => p.origin?.label === 'Kubernetes scheduler' ? { ...p, detail: summarizeSchedulerMessage(p.detail, { plain: true }), rawDetail: p.detail } : p)
     const categories = new Set<CNPGProblemCategory>(
       problems.filter((p) => p.severity !== 'posture').map((p) => p.category),
     )
-    const replica = cluster?.spec?.replica?.enabled ? { source: cluster.spec.replica.source } : null
+    const replica = cluster && getCNPGClusterIsReplica(cluster) ? { source: cluster.spec.replica.source } : null
 
     return {
       key: key(ns, name),
@@ -662,6 +1083,9 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
       cluster,
       controllerStatus: { text: status.text, level: status.level },
       instances: { ready: readyInstances, desired },
+      ...(podReadiness ? { podReadiness } : {}),
+      ...(readinessContradicted ? { readinessContradicted } : {}),
+      ...(primaryConflict ? { primaryConflict } : {}),
       pods: instancePods,
       replicaCluster: replica,
       hibernated,
@@ -670,6 +1094,7 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
       replication: replicationFact(cluster, instancePods, hibernated, coverageOf(resp, 'pods')),
       protection: { ...protection, summary: protectionSummary(protection) },
       declarations: declarationsFor(cluster, resp),
+      poolerObjects: poolers.filter((p) => p.metadata?.namespace === ns && specClusterName(p) === name),
       poolers: poolers
         .filter((p) => p.metadata?.namespace === ns && specClusterName(p) === name)
         .map((p) => p.metadata?.name),
@@ -677,24 +1102,583 @@ export function buildCNPGFleet(resp: CNPGWorkspaceResponse): CNPGFleet {
       problems,
       attention: problems.some((p) => p.severity !== 'posture'),
       categories,
-      gitops: cnpgGitOpsSource(cluster),
+      managedBy: cnpgManagedBy(resp, cluster),
     }
   })
 
-  rows.sort((a, b) => Number(b.attention) - Number(a.attention) || a.namespace.localeCompare(b.namespace) || a.name.localeCompare(b.name))
-
-  const categoryCounts = { availability: 0, protection: 0, declarations: 0, pooling: 0 } as Record<CNPGProblemCategory, number>
-  for (const r of rows) for (const c of r.categories) categoryCounts[c]++
-
   const incompleteKinds = CNPG_WORKSPACE_KEYS.filter((k) => {
     const s = coverageOf(resp, k).state
-    return s === 'partial' || s === 'denied' || s === 'syncing' || s === 'error'
+    return s === 'partial' || s === 'denied' || s === 'syncing' || s === 'error' || s === 'uncached'
   })
 
+  return finishFleet(rows, incompleteKinds)
+}
+
+function urgencyOf(row: CNPGFleetRow): { worst: number; urgent: number; total: number } {
+  let worst = 3
+  let urgent = 0
+  for (const p of row.problems) {
+    worst = Math.min(worst, CNPG_SEVERITY_RANK[p.severity])
+    if (p.severity !== 'posture') urgent++
+  }
+  return { worst, urgent, total: row.problems.length }
+}
+
+/**
+ * Worst problem first (critical, warning, posture, none), then the most
+ * attention-level problems, then all problems, then namespace/name — the same
+ * order in every filter, so a row never jumps when the filter changes.
+ */
+export function compareCNPGFleetUrgency(a: CNPGFleetRow, b: CNPGFleetRow): number {
+  const ua = urgencyOf(a)
+  const ub = urgencyOf(b)
+  return (
+    ua.worst - ub.worst ||
+    ub.urgent - ua.urgent ||
+    ub.total - ua.total ||
+    a.namespace.localeCompare(b.namespace) ||
+    a.name.localeCompare(b.name)
+  )
+}
+
+function finishFleet(rows: CNPGFleetRow[], incompleteKinds: CNPGWorkspaceKey[]): CNPGFleet {
+  rows.sort(compareCNPGFleetUrgency)
+  const categoryCounts = { availability: 0, protection: 0, declarations: 0, pooling: 0 } as Record<CNPGProblemCategory, number>
+  for (const r of rows) for (const c of r.categories) categoryCounts[c]++
   return {
     rows,
     attentionCount: rows.filter((r) => r.attention).length,
     categoryCounts,
     incompleteKinds,
   }
+}
+
+/** One cluster's answer from /api/cnpg/disk. */
+export interface CNPGDiskReading {
+  namespace: string
+  name: string
+  /** ok | partial | noSeries | noPrometheus | denied | unavailable | error | notRead | ambiguous | scopeMismatch */
+  state: string
+  grant?: Grant
+  reason?: string
+  claims: number
+  measured: number
+  max?: {
+    claim: string
+    instance: string
+    role: string
+    tablespace?: string
+    usedBytes: number
+    capacityBytes: number
+    ratio: number
+  }
+  isolation?: CNPGMetricIsolation
+}
+
+export const CNPG_DISK_WARNING_RATIO = 0.8
+export const CNPG_DISK_CRITICAL_RATIO = 0.9
+
+export const CNPG_DISK_SOURCE = 'kubelet volume stats via Prometheus'
+
+export function cnpgVolumeRoleLabel(role: string, tablespace?: string): string {
+  switch (role) {
+    case 'PG_DATA':
+      return 'data volume'
+    case 'PG_WAL':
+      return 'WAL volume'
+    case 'PG_TABLESPACE':
+      return tablespace ? `tablespace ${tablespace} volume` : 'tablespace volume'
+    default:
+      return 'volume'
+  }
+}
+
+export function cnpgDiskTone(ratio: number): HealthLevel {
+  if (ratio >= CNPG_DISK_CRITICAL_RATIO) return 'unhealthy'
+  if (ratio >= CNPG_DISK_WARNING_RATIO) return 'degraded'
+  return 'healthy'
+}
+
+/** The fleet and summary "Storage" fact: the fullest measured volume, or why there is none. */
+export function cnpgDiskFact(r: CNPGDiskReading | undefined): Fact {
+  if (!r) return { text: 'Not read', tone: 'unknown' }
+  if (r.max && (r.state === 'ok' || r.state === 'partial')) {
+    const partial = r.state === 'partial' ? ` · ${r.measured} of ${r.claims} volumes measured` : ''
+    return {
+      text: `${Math.round(r.max.ratio * 100)}% used`,
+      tone: cnpgDiskTone(r.max.ratio),
+      source: `Fullest: ${cnpgVolumeRoleLabel(r.max.role, r.max.tablespace)} of ${r.max.instance}, ${formatBytes(r.max.usedBytes)} of ${formatBytes(r.max.capacityBytes)} · ${CNPG_DISK_SOURCE}${partial}.${isolationCaveat(r.isolation)}`,
+    }
+  }
+  switch (r.state) {
+    case 'denied':
+      return { text: 'No access', tone: 'unknown', source: r.grant ? `Needs ${formatGrant(r.grant)}` : r.reason }
+    case 'noPrometheus':
+      return { text: 'No usage metrics', tone: 'unknown', source: CNPG_PROMETHEUS_NOT_CONNECTED, detail: r.reason }
+    case 'noSeries':
+    case 'ok':
+    case 'partial':
+      return { text: 'No usage metrics', tone: 'unknown', source: r.reason ?? 'Used space needs Prometheus with kubelet volume stats' }
+    case 'notRead':
+      return { text: 'Not measured', tone: 'unknown', source: r.reason }
+    default:
+      return { text: 'Unavailable', tone: 'unknown', source: r.reason }
+  }
+}
+
+/**
+ * Joins /api/cnpg/disk into the fleet: every row gets its disk fact, and a
+ * volume at or past the warning threshold becomes a problem, so the cluster
+ * needs attention. Only a measurement raises one, and the endpoint returns
+ * measurements only to callers holding the claim and metrics grants.
+ */
+export function applyCNPGDisk(fleet: CNPGFleet, readings: CNPGDiskReading[] | undefined): CNPGFleet {
+  if (!readings) return fleet
+  const byKey = new Map(readings.map((r) => [key(r.namespace, r.name), r]))
+  const rows = fleet.rows.map((row) => {
+    const reading = byKey.get(row.key)
+    const next: CNPGFleetRow = { ...row, disk: cnpgDiskFact(reading) }
+    const max = reading?.max
+    if (!max || max.ratio < CNPG_DISK_WARNING_RATIO || (reading.state !== 'ok' && reading.state !== 'partial')) return next
+    const problem: CNPGProblem = {
+      id: `disk:${row.key}`,
+      severity: max.ratio >= CNPG_DISK_CRITICAL_RATIO ? 'critical' : 'warning',
+      category: 'availability',
+      title: `The ${cnpgVolumeRoleLabel(max.role, max.tablespace)} of ${max.instance} is ${Math.round(max.ratio * 100)}% full`,
+      detail: `${formatBytes(max.usedBytes)} of ${formatBytes(max.capacityBytes)} used, from ${CNPG_DISK_SOURCE}.${isolationCaveat(reading.isolation)}`,
+      subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
+      source: 'measurement',
+      ...(reading.isolation?.mode === 'unverified' ? { measuredBy: 'kubelet, matched by claim name', unverifiedMatch: true } : {}),
+    }
+    const problems = [...row.problems, problem].sort(cnpgCompareProblems)
+    return { ...next, problems, attention: true, categories: new Set([...row.categories, problem.category]) }
+  })
+  return finishFleet(rows, fleet.incompleteKinds)
+}
+
+const CNPG_PLUGIN_PHASES: Record<string, 'unknownPlugin' | 'pluginError'> = {
+  'Cluster cannot proceed to reconciliation due to an unknown plugin being required': 'unknownPlugin',
+  'Cluster cannot proceed to reconciliation due to an error while interacting with plugins': 'pluginError',
+}
+
+/** Whether the Cluster's phase says the operator is stuck on a CNPG-I plugin, and which way. */
+export function cnpgPluginPhase(cluster: any): 'unknownPlugin' | 'pluginError' | null {
+  return CNPG_PLUGIN_PHASES[cluster?.status?.phase] ?? null
+}
+
+/** The CNPG-I plugins a Cluster names in spec.plugins. */
+export function cnpgClusterPlugins(cluster: any): string[] {
+  const plugins = cluster?.spec?.plugins
+  return Array.isArray(plugins) ? plugins.map((p: any) => p?.name).filter((n: unknown): n is string => typeof n === 'string' && !!n) : []
+}
+
+/** Bytes in binary units with IEC labels (GiB), as every CloudNativePG view prints them. */
+export function cnpgFormatBytes(n: number): string {
+  const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB']
+  let v = n
+  let i = 0
+  while (v >= 1024 && i < u.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`
+}
+
+const formatBytes = cnpgFormatBytes
+
+// ---------------------------------------------------------------------------
+// Standbys and replication slots: one finding, whichever source saw it
+// ---------------------------------------------------------------------------
+
+/**
+ * Retained WAL at which an inactive physical slot becomes a concern. An HA
+ * slot only goes inactive when its standby stops consuming, and the WAL it
+ * pins keeps growing until that standby catches up or the slot is dropped.
+ */
+export const CNPG_SLOT_RETENTION_WARNING_BYTES = 1024 ** 3
+
+/** The id of a standby's "not receiving WAL" problem: the fleet (Prometheus) and the cluster page (instance manager) raise the same one. */
+export function cnpgStandbyProblemId(rowKey: string, pod: string): string {
+  return `standby:${rowKey}:${pod}`
+}
+
+/** The id of an inactive slot's retention problem, shared like cnpgStandbyProblemId. */
+export function cnpgSlotProblemId(rowKey: string, slot: string): string {
+  return `slot:${rowKey}:${slot}`
+}
+
+function haSlotPrefix(cluster: any): string {
+  const p = cluster?.spec?.replicationSlots?.highAvailability?.slotPrefix
+  return typeof p === 'string' && p ? p : '_cnpg_'
+}
+
+/** The HA slot CloudNativePG keeps for an instance: the prefix (default `_cnpg_`) then the instance name with `-` as `_`. */
+export function cnpgHASlotName(cluster: any, instance: string): string {
+  return `${haSlotPrefix(cluster)}${instance.replace(/-/g, '_')}`
+}
+
+/** The instance a managed HA slot serves, or undefined when the slot is not one of this cluster's HA slots. */
+export function cnpgHASlotInstance(cluster: any, slot: string, instances: string[]): string | undefined {
+  return instances.find((i) => cnpgHASlotName(cluster, i) === slot)
+}
+
+const CLUSTER_GROUP = 'postgresql.cnpg.io'
+
+function clusterSubject(row: Pick<CNPGFleetRow, 'namespace' | 'name'>) {
+  return { kind: 'Cluster', group: CLUSTER_GROUP, namespace: row.namespace, name: row.name }
+}
+
+export interface CNPGStandbyGap {
+  pod: string
+  /** What was observed, in words, e.g. "its WAL receiver is down", "replay is paused". */
+  evidence: string[]
+  measuredBy: string
+  sourceDetail: string
+  /** Every expected standby is out: there is no failover target with current data. */
+  noneReceiving?: boolean
+  unverifiedMatch?: boolean
+}
+
+/** A standby that receives nothing from the primary. Its replay lag reads 0 because nothing new arrives to replay. */
+export function cnpgStandbyNotReceivingProblem(row: Pick<CNPGFleetRow, 'key' | 'namespace' | 'name'>, gap: CNPGStandbyGap): CNPGProblem {
+  return {
+    id: cnpgStandbyProblemId(row.key, gap.pod),
+    reason: 'CNPGStandbyNotReceiving',
+    severity: gap.noneReceiving ? 'critical' : 'warning',
+    category: 'availability',
+    title: `${gap.pod} is not receiving WAL from the primary`,
+    shortTitle: `${gap.pod} not receiving WAL`,
+    detail: `${capitalize(gap.evidence.join('; '))}. While it does not stream, the primary keeps WAL for its slot, and it falls behind unless it replays WAL from the archive; a replay lag of 0 does not mean it is caught up, only that nothing new reached it.`,
+    subject: { kind: 'Pod', group: '', namespace: row.namespace, name: gap.pod },
+    source: 'measurement',
+    measuredBy: gap.measuredBy,
+    sourceDetail: gap.sourceDetail,
+    ...(gap.unverifiedMatch ? { unverifiedMatch: true } : {}),
+  }
+}
+
+export interface CNPGSlotRetention {
+  slot: string
+  /** The instance holding the slot (the primary for an HA slot). */
+  pod: string
+  bytes: number
+  /** The standby an HA slot serves, when the name matches one of the cluster's instances. */
+  standby?: string
+  measuredBy: string
+  sourceDetail: string
+  unverifiedMatch?: boolean
+}
+
+export function cnpgSlotRetentionProblem(row: Pick<CNPGFleetRow, 'key' | 'namespace' | 'name'>, r: CNPGSlotRetention): CNPGProblem {
+  const forWhom = r.standby ? ` for ${r.standby}` : ''
+  return {
+    id: cnpgSlotProblemId(row.key, r.slot),
+    reason: 'CNPGInactiveSlot',
+    slot: r.slot,
+    severity: 'warning',
+    category: 'availability',
+    title: `Inactive slot ${r.slot} holds ${formatBytes(r.bytes)} of WAL on ${r.pod}${forWhom}`,
+    shortTitle: `${formatBytes(r.bytes)} of WAL held${forWhom || ` by ${r.slot}`}`,
+    detail: `PostgreSQL keeps every WAL file the slot still needs until ${r.standby ? `${r.standby} catches up` : 'its consumer catches up'} or the slot is dropped, so this grows while the slot stays inactive. Storage shows it beside the volume's other WAL.`,
+    subject: clusterSubject(row),
+    source: 'measurement',
+    measuredBy: r.measuredBy,
+    sourceDetail: r.sourceDetail,
+    ...(r.standby ? { instance: r.standby } : {}),
+    ...(r.unverifiedMatch ? { unverifiedMatch: true } : {}),
+  }
+}
+
+/**
+ * Adds problems to a row, replacing any with the same id, and drops those a
+ * newer, complete read has disproven (`drop`); attention and categories
+ * follow from what remains.
+ */
+export function cnpgWithProblems(row: CNPGFleetRow, added: CNPGProblem[], drop?: (p: CNPGProblem) => boolean): CNPGFleetRow {
+  if (added.length === 0 && !drop) return row
+  const ids = new Set(added.map((p) => p.id))
+  const problems = [...row.problems.filter((p) => !ids.has(p.id) && !drop?.(p)), ...added].sort(cnpgCompareProblems)
+  if (problems.length === row.problems.length && problems.every((p, i) => p === row.problems[i])) return row
+  return {
+    ...row,
+    problems,
+    attention: problems.some((p) => p.severity !== 'posture'),
+    categories: new Set(problems.filter((p) => p.severity !== 'posture').map((p) => p.category)),
+  }
+}
+
+function capitalize(s: string): string {
+  return s ? s[0].toUpperCase() + s.slice(1) : s
+}
+
+/** The short per-fact source when Radar has no Prometheus; the reason goes in `detail`. */
+export const CNPG_PROMETHEUS_NOT_CONNECTED = 'Prometheus not connected'
+
+const CNPG_LAG_UNMEASURED_SOURCE = 'Pod readiness does not show whether a replica is streaming'
+
+/** One cluster's answer from /api/cnpg/fleet-metrics. */
+export interface CNPGFleetMetricsReading {
+  namespace: string
+  name: string
+  /** ok | noStandby | noSeries | denied | ambiguous | scopeMismatch | error | notRead */
+  lag: {
+    state: string
+    grant?: Grant
+    reason?: string
+    seconds?: number
+    pod?: string
+    /** Standbys whose replay lag was read; `seconds` covers only these. */
+    lagStandbys?: number
+    /** The worst standby's lowest recorded lag over `sustainedWindow`, across every scrape of it; it was already reporting by the window's start. */
+    sustainedSeconds?: number
+    sustainedPod?: string
+    sustainedWindow?: string
+    isolation?: CNPGMetricIsolation
+    /** Instances reporting that they are in recovery (standbys). */
+    standbys?: number
+    /** Standbys whose WAL receiver is up (cnpg_pg_replication_is_wal_receiver_up = 1). */
+    receiving?: number
+    /** Standbys whose WAL receiver is down: their lag reads 0 because nothing arrives. */
+    receiverDown?: string[]
+    /** The exporter reported no receiver state (or the read failed), so streaming is not established from lag alone. */
+    receiverUnknown?: boolean
+    receiverReason?: string
+    /** Standbys whose receiver was down in every sample over `receiverDownWindow`: only these raise a problem, since a restarting standby is briefly down. */
+    receiverDownSustained?: string[]
+    receiverDownWindow?: string
+  }
+  /** Inactive physical replication slots and the WAL each keeps: ok | noSeries | denied | ambiguous | scopeMismatch | error | notRead */
+  slots?: {
+    state: string
+    grant?: Grant
+    reason?: string
+    /** Null unless `state` is ok; [] when ok and none is inactive. */
+    inactive?: { slot: string; pod: string; role?: 'primary' | 'standby'; bytes: number | null }[] | null
+    /** Inactive slots beyond the per-cluster cap. */
+    omitted?: number
+    isolation?: CNPGMetricIsolation
+  }
+  /** ok | noSeries | denied | unavailable | error | notRead */
+  growth: { state: string; grant?: Grant; reason?: string; bytesPerHour?: number; claim?: string; instance?: string; isolation?: CNPGMetricIsolation }
+}
+
+/** How Prometheus series were tied to one cluster; `unverified` matched only by namespace and Pod or claim names. */
+export interface CNPGMetricIsolation {
+  mode: 'configured' | 'verified' | 'unverified'
+  note: string
+}
+
+// A finding stated as this cluster's must say when its series were matched by name alone.
+function isolationCaveat(iso: CNPGMetricIsolation | undefined): string {
+  return iso?.mode === 'unverified' ? ` ${iso.note}.` : ''
+}
+
+export interface CNPGFleetMetricsSources {
+  /** prometheus, or none when Radar has no Prometheus (`reason` says why). */
+  source: 'prometheus' | 'none'
+  reason?: string
+  lagSource?: string
+  growthSource?: string
+}
+
+export function cnpgLagTone(seconds: number): HealthLevel {
+  if (seconds >= 30) return 'unhealthy'
+  if (seconds >= 5) return 'degraded'
+  return 'healthy'
+}
+
+/**
+ * Replication's tone from the primary's pg_stat_replication: a missing
+ * standby is degraded, and the lag of the ones that do stream can make it
+ * worse. Missing standbys never hide a severe lag.
+ */
+export function cnpgReplicationTone(streaming: number, expected: number, maxLagSeconds: number | undefined): HealthLevel {
+  const missing: HealthLevel = streaming < expected ? 'degraded' : 'healthy'
+  return maxLagSeconds === undefined ? missing : worseTone(missing, cnpgLagTone(maxLagSeconds))
+}
+
+/**
+ * The one way a replay lag reads: milliseconds below a second, one decimal
+ * below 10 s, whole seconds below 100 s, then whole minutes, then hours and
+ * minutes. Rounded down, so a lower bound stays one.
+ */
+export function cnpgFormatLag(s: number): string {
+  if (s <= 0) return '0 s'
+  if (s < 1) return `${Math.floor(s * 1000)} ms`
+  if (s < 10) return `${(Math.floor(s * 10) / 10).toFixed(1)} s`
+  if (s < 100) return `${Math.floor(s)} s`
+  const minutes = Math.floor(s / 60)
+  if (minutes < 60) return `${minutes} min`
+  const m = minutes % 60
+  return m === 0 ? `${Math.floor(minutes / 60)} h` : `${Math.floor(minutes / 60)} h ${m} min`
+}
+
+function measuredReplication(base: Fact, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources, designated?: string, expectedStandbys?: number | null): Fact {
+  const prefix = base.text.replace(/ · lag unknown$/, '')
+  if (src.source === 'none') {
+    return { text: `${prefix} · lag unknown`, tone: 'unknown', source: CNPG_PROMETHEUS_NOT_CONNECTED, detail: src.reason }
+  }
+  const lag = reading?.lag
+  switch (lag?.state) {
+    case 'ok': {
+      const down = (lag.receiverDown ?? []).filter((pod) => pod !== designated)
+      if (down.length > 0) {
+        return {
+          text: `${prefix} · ${down.length === 1 ? `${down[0]} not receiving WAL` : `${down.length} standbys not receiving WAL`}`,
+          tone: lag.receiving === 0 && down.length === lag.standbys ? 'unhealthy' : 'degraded',
+          source: `WAL receiver down on ${down.join(', ')} (cnpg_pg_replication_is_wal_receiver_up = 0) · ${src.lagSource ?? 'Prometheus'}.${isolationCaveat(lag.isolation)}`,
+        }
+      }
+      if (lag.seconds === undefined) break
+      // The lag covers the standbys whose lag was read; one that is not read is unknown, not caught up.
+      const partial = expectedStandbys !== undefined && expectedStandbys !== null && lag.lagStandbys !== undefined && lag.lagStandbys < expectedStandbys
+      const coverage = partial ? ` (${lag.lagStandbys} of ${expectedStandbys} ${designated ? 'instances' : 'standbys'} reporting)` : ''
+      const lagTone = cnpgLagTone(lag.seconds)
+      return {
+        text: `${prefix} · lag ${cnpgFormatLag(lag.seconds)}${coverage}${lag.receiverUnknown ? ' · streaming unverified' : ''}`,
+        tone: lag.receiverUnknown || (partial && lagTone === 'healthy') ? 'unknown' : lagTone,
+        source: `Largest standby replay lag, ${lag.pod ?? 'a standby'} · ${src.lagSource ?? 'Prometheus'}.${lag.receiverUnknown ? ' The exporter reported no WAL receiver state, and a standby that receives nothing also reads 0.' : ''}${isolationCaveat(lag.isolation)}`,
+      }
+    }
+    case 'noStandby':
+      return { text: `${prefix} · lag unknown`, tone: 'unknown', source: `No standby reports lag: ${lag.reason ?? 'no instance reports being a standby'} · ${src.lagSource ?? 'Prometheus'}` }
+    case 'denied':
+      return { text: `${prefix} · lag unknown`, tone: 'unknown', source: lag.grant ? `Needs ${formatGrant(lag.grant)}` : lag.reason }
+  }
+  return { text: `${prefix} · lag unknown`, tone: 'unknown', source: lag?.reason ?? 'Replication lag needs Prometheus scraping the CNPG exporter' }
+}
+
+/** Volume growth of the fastest-growing claim, as a fact. */
+export function cnpgDiskGrowthFact(reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): Fact | undefined {
+  const g = reading?.growth
+  if (src.source === 'none' || !g || g.state !== 'ok' || g.bytesPerHour === undefined) return undefined
+  const perDay = g.bytesPerHour * 24
+  const text = Math.abs(perDay) < 1024 ? 'flat over 6 h' : `${perDay > 0 ? '+' : '−'}${formatBytes(Math.abs(perDay))}/day`
+  return { text, tone: 'neutral', source: `Fastest-growing: ${g.claim ?? 'a volume'}${g.instance ? ` of ${g.instance}` : ''} · ${src.growthSource ?? 'Prometheus'}.${isolationCaveat(g.isolation)}` }
+}
+
+/**
+ * Joins /api/cnpg/fleet-metrics into the fleet: a cluster whose replication
+ * fact is only Pod readiness gets its measured standby lag, or says why it has
+ * none; the disk growth, when measured, lands on `diskGrowth`. Only lag that
+ * stayed high for the whole sustained window raises a problem; a spike is
+ * shown, not judged, and growth is never judged.
+ */
+export function applyCNPGFleetMetrics(fleet: CNPGFleet, readings: CNPGFleetMetricsReading[] | undefined, src: CNPGFleetMetricsSources | undefined): CNPGFleet {
+  if (!src) return fleet
+  const byKey = new Map((readings ?? []).map((r) => [key(r.namespace, r.name), r]))
+  const rows = fleet.rows.map((row) => {
+    const reading = byKey.get(row.key)
+    const next: CNPGFleetRow = { ...row, diskGrowth: cnpgDiskGrowthFact(reading, src) }
+    if (row.replication.source === CNPG_LAG_UNMEASURED_SOURCE) next.replication = measuredReplication(
+        row.replication,
+        reading,
+        src,
+        row.replicaCluster ? row.cluster?.status?.currentPrimary : undefined,
+        // Every instance of a replica cluster is in recovery, its designated primary included.
+        row.instances.desired !== null ? (row.replicaCluster ? row.instances.desired : Math.max(0, row.instances.desired - 1)) : null,
+      )
+    const sustained = sustainedLagProblem(row, reading, src)
+    return cnpgWithProblems(next, [...(sustained ? [sustained] : []), ...fleetStandbyProblems(row, reading, src), ...fleetSlotProblems(row, reading, src)])
+  })
+  return finishFleet(rows, fleet.incompleteKinds)
+}
+
+function fleetStandbyProblems(row: CNPGFleetRow, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): CNPGProblem[] {
+  const lag = reading?.lag
+  if (src.source !== 'prometheus' || lag?.state !== 'ok' || row.hibernated) return []
+  // A replica cluster's designated primary is in recovery too, and may be fed
+  // from the WAL archive with no receiver at all.
+  const designated = row.replicaCluster ? row.cluster?.status?.currentPrimary : undefined
+  const down = (lag.receiverDownSustained ?? []).filter((pod) => pod !== designated)
+  const window = lag.receiverDownWindow ? formatWindowWords(lag.receiverDownWindow) : 'several minutes'
+  return down.map((pod) =>
+    cnpgStandbyNotReceivingProblem(row, {
+      pod,
+      evidence: [`its WAL receiver was down in every sample Prometheus recorded over the last ${window}`],
+      measuredBy: lag.isolation?.mode === 'unverified' ? 'Prometheus, matched by Pod name' : 'Prometheus',
+      sourceDetail: `cnpg_pg_replication_is_wal_receiver_up = 0 while cnpg_pg_replication_in_recovery = 1 · ${src.lagSource ?? 'Prometheus'}`,
+      noneReceiving: noStandbyReceives(row, lag),
+      unverifiedMatch: lag.isolation?.mode === 'unverified',
+    }),
+  )
+}
+
+// "None receives" only when every expected standby reported its receiver and
+// every one was down; one that did not report leaves it open.
+function noStandbyReceives(row: CNPGFleetRow, lag: CNPGFleetMetricsReading['lag']): boolean {
+  const expected = row.instances.desired !== null ? Math.max(0, row.instances.desired - 1) : null
+  const down = lag.receiverDownSustained?.length ?? 0
+  return lag.receiving === 0 && expected !== null && expected > 0 && lag.standbys === expected && down === expected
+}
+
+function fleetSlotProblems(row: CNPGFleetRow, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): CNPGProblem[] {
+  const slots = reading?.slots
+  if (src.source !== 'prometheus' || slots?.state !== 'ok' || !slots.inactive) return []
+  // CloudNativePG copies HA slots to the standbys, where nothing streams from
+  // them, so a standby's copy is always inactive. Only the primary's copy
+  // means a consumer stopped.
+  const instances = row.pods.map((p) => p.name)
+  return slots.inactive
+    .filter((s): s is typeof s & { bytes: number } => s.role === 'primary' && s.bytes !== null && s.bytes >= CNPG_SLOT_RETENTION_WARNING_BYTES)
+    .map((s) =>
+      cnpgSlotRetentionProblem(row, {
+        slot: s.slot,
+        pod: s.pod,
+        bytes: s.bytes,
+        standby: cnpgHASlotInstance(row.cluster, s.slot, instances),
+        measuredBy: slots.isolation?.mode === 'unverified' ? 'Prometheus, matched by Pod name' : 'Prometheus',
+        sourceDetail: 'cnpg_pg_replication_slots_pg_wal_lsn_diff where cnpg_pg_replication_slots_active = 0 (physical slots)',
+        unverifiedMatch: slots.isolation?.mode === 'unverified',
+      }),
+    )
+}
+
+export const CNPG_SUSTAINED_LAG_WARNING_SECONDS = 30
+export const CNPG_SUSTAINED_LAG_CRITICAL_SECONDS = 300
+
+/** The id of a cluster's sustained-lag problem, so other views can find it among the row's problems. */
+export function cnpgSustainedLagProblemId(rowKey: string): string {
+  return `lag:${rowKey}`
+}
+
+function sustainedLagProblem(row: CNPGFleetRow, reading: CNPGFleetMetricsReading | undefined, src: CNPGFleetMetricsSources): CNPGProblem | undefined {
+  const lag = reading?.lag
+  const floor = lag?.sustainedSeconds
+  if (src.source !== 'prometheus' || lag?.state !== 'ok' || floor === undefined || floor < CNPG_SUSTAINED_LAG_WARNING_SECONDS) return undefined
+  const window = lag.sustainedWindow ? formatWindowWords(lag.sustainedWindow) : 'several minutes'
+  const pod = lag.sustainedPod ?? 'A standby'
+  // The query proves every recorded sample was at least the floor and that
+  // the series existed at the window's start, not that samples were continuous.
+  return {
+    id: cnpgSustainedLagProblemId(row.key),
+    reason: 'CNPGSustainedLag',
+    severity: floor >= CNPG_SUSTAINED_LAG_CRITICAL_SECONDS ? 'critical' : 'warning',
+    category: 'availability',
+    title: `${pod} ≥ ${cnpgFormatLag(floor)} behind in every sample for ${formatWindowShort(lag.sustainedWindow)}`,
+    shortTitle: `${pod}: all samples ≥ ${cnpgFormatLag(floor)} behind (${formatWindowShort(lag.sustainedWindow)})`,
+    detail: `Lowest replay lag in the samples Prometheus recorded over the last ${window}. If Prometheus missed some scrapes, those moments aren't included. If it was still that far behind, a failover to it would lose or wait on that much WAL.${isolationCaveat(lag.isolation)}`,
+    subject: { kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: row.namespace, name: row.name },
+    source: 'measurement',
+    measuredBy: lag.isolation?.mode === 'unverified' ? 'Prometheus, matched by Pod name' : 'Prometheus',
+    unverifiedMatch: lag.isolation?.mode === 'unverified',
+    sourceDetail: src.lagSource ?? 'Prometheus',
+  }
+}
+
+// "10m0s" as "10 min"; "1h0m0s" as "1 h", for a title that must stay short.
+function formatWindowShort(d: string | undefined): string {
+  const m = d ? /^(?:(\d+)h)?(?:(\d+)m)?(?:0s)?$/.exec(d) : null
+  if (!m) return d ?? 'minutes'
+  const minutes = Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0)
+  return minutes >= 60 && minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`
+}
+
+// "10m0s" as "10 minutes"; "1h0m0s" as "1 hour".
+function formatWindowWords(d: string): string {
+  const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:0s)?$/.exec(d)
+  if (!m) return d
+  const minutes = Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0)
+  if (minutes >= 60 && minutes % 60 === 0) return minutes === 60 ? '1 hour' : `${minutes / 60} hours`
+  return minutes === 1 ? '1 minute' : `${minutes} minutes`
 }

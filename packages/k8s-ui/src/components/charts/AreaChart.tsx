@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type * as React from 'react'
 import { seriesColor, seriesFill, computeShortLabels, seriesDisplayLabels } from './colors'
 import { formatMetricValue, formatTimestamp } from './format'
@@ -13,7 +13,13 @@ import { nearestSample } from './nearestSample'
 export const ANNOTATION_LABEL_MIN_WIDTH_PX = 420
 const ANNOTATION_HOVER_TOLERANCE = 8
 
-export function AreaChart({ series, color, fillColor, unit, referenceLines, annotations, domain, seriesLabels, stepSeconds, layout = 'full' }: {
+/** A time range on the chart's X axis, in unix seconds. */
+export interface ChartTimeRange {
+  start: number
+  end: number
+}
+
+export function AreaChart({ series, color, fillColor, unit, referenceLines, annotations, domain, seriesLabels, stepSeconds, layout = 'full', shadedRanges, selection, onSelectRange }: {
   series: TimeSeries[]
   color: string
   fillColor: string
@@ -39,7 +45,18 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
    * keeps text and plot height stable as its container resizes.
    */
   layout?: 'full' | 'auto' | 'compact' | 'dashboard'
+  /** Ranges drawn hatched, e.g. where no sample exists; `label` says why and shows on hover. */
+  shadedRanges?: (ChartTimeRange & { label?: string })[]
+  /** A selected range, drawn as a band. */
+  selection?: ChartTimeRange | null
+  /**
+   * Enables range selection: drag across the plot, or click to pick the one
+   * evaluation step under the pointer (needs `stepSeconds`).
+   */
+  onSelectRange?: (range: ChartTimeRange) => void
 }) {
+  const hatchId = `hatch-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`
+  const [drag, setDrag] = useState<{ from: number; to: number } | null>(null)
   const svgRef = useRef<SVGSVGElement>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const [hoverX, setHoverX] = useState<number | null>(null)
@@ -264,16 +281,47 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
       p => Math.abs(p.x - clampedX) <= ANNOTATION_HOVER_TOLERANCE,
     )
 
-    return { ts, x: clampedX, points, nearbyAnnotations }
-  }, [hoverX, chartData, placedAnnotations, seriesLabels, marginLeft, plotWidth, marginTop, plotHeight, multiSeries, color, stepSeconds])
+    const shaded = shadedRanges?.find(r => ts >= r.start && ts <= r.end && r.label)
+
+    return { ts, x: clampedX, points, nearbyAnnotations, shaded }
+  }, [hoverX, chartData, placedAnnotations, seriesLabels, marginLeft, plotWidth, marginTop, plotHeight, multiSeries, color, stepSeconds, shadedRanges])
+
+  const pointerX = useCallback((e: React.MouseEvent<SVGRectElement>) => {
+    const ctm = svgRef.current?.getScreenCTM()
+    return ctm ? (e.clientX - ctm.e) / ctm.a : null
+  }, [])
 
   const handleMouseMove = useCallback((e: React.MouseEvent<SVGRectElement>) => {
-    const svg = svgRef.current
-    if (!svg) return
-    const ctm = svg.getScreenCTM()
-    if (!ctm) return
-    setHoverX((e.clientX - ctm.e) / ctm.a)
-  }, [])
+    const x = pointerX(e)
+    if (x === null) return
+    setHoverX(x)
+    setDrag(d => (d ? { ...d, to: x } : d))
+  }, [pointerX])
+
+  const tsAt = (x: number) => {
+    if (!chartData) return 0
+    const clamped = Math.max(marginLeft, Math.min(marginLeft + plotWidth, x))
+    return chartData.minTs + ((clamped - marginLeft) / plotWidth) * (chartData.maxTs - chartData.minTs)
+  }
+
+  const handleMouseDown = (e: React.MouseEvent<SVGRectElement>) => {
+    if (!onSelectRange || e.button !== 0) return
+    const x = pointerX(e)
+    if (x !== null) setDrag({ from: x, to: x })
+  }
+
+  const handleMouseUp = () => {
+    if (!drag || !onSelectRange || !chartData) return
+    setDrag(null)
+    const a = tsAt(Math.min(drag.from, drag.to))
+    const b = tsAt(Math.max(drag.from, drag.to))
+    if (Math.abs(drag.to - drag.from) >= 6) {
+      onSelectRange({ start: Math.round(a), end: Math.round(b) })
+    } else if (stepSeconds) {
+      const half = stepSeconds / 2
+      onSelectRange({ start: Math.round(Math.max(chartData.minTs, a - half)), end: Math.round(Math.min(chartData.maxTs, a + half)) })
+    }
+  }
 
   // Hook calls above run unconditionally; bail out of rendering only after
   // every hook has been invoked (Rules of Hooks).
@@ -292,6 +340,38 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
         preserveAspectRatio="xMidYMid meet"
         data-chart-layout={compact ? 'compact' : 'full'}
       >
+        <defs>
+          <pattern id={hatchId} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <line x1="0" y1="0" x2="0" y2="6" stroke="currentColor" strokeWidth="2" className="text-theme-border" />
+          </pattern>
+        </defs>
+
+        {shadedRanges?.map((r, i) => {
+          const x1 = Math.max(marginLeft, toX(r.start))
+          const x2 = Math.min(marginLeft + plotWidth, toX(r.end))
+          if (x2 <= x1) return null
+          return <rect key={`shade-${i}`} data-chart-gap x={x1} y={marginTop} width={x2 - x1} height={plotHeight} fill={`url(#${hatchId})`} opacity="0.7" />
+        })}
+
+        {selection && (() => {
+          const x1 = Math.max(marginLeft, toX(selection.start))
+          const x2 = Math.min(marginLeft + plotWidth, toX(selection.end))
+          if (x2 < x1) return null
+          return <rect data-chart-selection x={x1} y={marginTop} width={Math.max(2, x2 - x1)} height={plotHeight} fill="currentColor" className="text-accent" opacity="0.15" />
+        })()}
+
+        {drag && Math.abs(drag.to - drag.from) >= 2 && (
+          <rect
+            x={Math.max(marginLeft, Math.min(drag.from, drag.to))}
+            y={marginTop}
+            width={Math.abs(drag.to - drag.from)}
+            height={plotHeight}
+            fill="currentColor"
+            className="text-accent"
+            opacity="0.2"
+          />
+        )}
+
         {/* Grid lines */}
         {yTicks.map((tick, i) => (
           <line
@@ -510,9 +590,14 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
           x={marginLeft} y={marginTop}
           width={plotWidth} height={plotHeight}
           fill="transparent"
-          style={{ cursor: 'crosshair' }}
+          style={{ cursor: onSelectRange ? 'col-resize' : 'crosshair' }}
           onMouseMove={handleMouseMove}
-          onMouseLeave={() => setHoverX(null)}
+          onMouseDown={handleMouseDown}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={() => {
+            setHoverX(null)
+            setDrag(null)
+          }}
         />
       </svg>
 
@@ -538,6 +623,9 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
                 </span>
               </div>
             ))}
+            {hoverData.shaded && hoverData.points.length === 0 && (
+              <div className="py-0.5 text-theme-text-secondary">{hoverData.shaded.label}</div>
+            )}
             {hoverData.points.map((p, i) => (
               <div key={i} className="flex items-center gap-2 py-0.5">
                 <div

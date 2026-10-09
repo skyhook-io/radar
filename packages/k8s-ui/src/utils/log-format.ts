@@ -363,24 +363,71 @@ export const SYNTAX_COLOR_NUMBER = '#e5c07b'
 export const SYNTAX_COLOR_BOOLEAN = '#c678dd'
 export const SYNTAX_COLOR_NULL = '#808080'
 
+export interface JsonToken {
+  type: 'text' | 'key' | 'string' | 'number' | 'boolean' | 'null'
+  value: string
+}
+
+function jsonStringEnd(text: string, start: number): number {
+  let offset = start + 1
+  while (offset < text.length) {
+    const char = text[offset++]
+    if (char === '\\') offset++
+    else if (char === '"') return offset
+  }
+  return -1
+}
+
+export function tokenizeJson(text: string): JsonToken[] {
+  const tokens: JsonToken[] = []
+  const primitiveRe = /(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)|\b(true|false)\b|\b(null)\b/y
+  let copied = 0
+  let offset = 0
+  while (offset < text.length) {
+    const start = offset
+    let type: JsonToken['type']
+    let value: string
+    if (text[offset] === '"') {
+      const end = jsonStringEnd(text, offset)
+      if (end < 0) break
+      value = text.slice(start, end)
+      let colon = end
+      while (colon < text.length && /\s/.test(text[colon])) colon++
+      type = text[colon] === ':' ? 'key' : 'string'
+      offset = type === 'key' ? colon + 1 : end
+    } else {
+      primitiveRe.lastIndex = offset
+      const match = primitiveRe.exec(text)
+      if (!match) {
+        offset++
+        continue
+      }
+      type = match[1] !== undefined ? 'number' : match[2] !== undefined ? 'boolean' : 'null'
+      value = match[0]
+      offset = primitiveRe.lastIndex
+    }
+    if (start > copied) tokens.push({ type: 'text', value: text.slice(copied, start) })
+    tokens.push({ type, value })
+    copied = offset
+  }
+  if (copied < text.length) tokens.push({ type: 'text', value: text.slice(copied) })
+  return tokens
+}
+
 /**
  * Syntax-highlight a pretty-printed JSON string for HTML display.
  * Wraps keys, string values, numbers, booleans, and null in colored spans.
  * Applies HTML escaping internally — do not pre-escape the input.
  */
 export function highlightJson(json: string): string {
-  const escaped = escapeHtml(json)
-  // Single-pass tokenizer: matches all JSON tokens at once so content inside strings
-  // is consumed and can't be re-matched by number/boolean/null patterns.
-  const tokenRe = /("(?:\\.|[^"\\])*")\s*:|("(?:\\.|[^"\\])*")|(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)|\b(true|false)\b|\b(null)\b/g
-  return escaped.replace(tokenRe, (match, key, str, num, bool, nil) => {
-    if (key) return `<span style="color:${SYNTAX_COLOR_KEY}">${key}</span>:`
-    if (str) return `<span style="color:${SYNTAX_COLOR_STRING}">${str}</span>`
-    if (num) return `<span style="color:${SYNTAX_COLOR_NUMBER}">${num}</span>`
-    if (bool) return `<span style="color:${SYNTAX_COLOR_BOOLEAN}">${bool}</span>`
-    if (nil) return `<span style="color:${SYNTAX_COLOR_NULL}">${nil}</span>`
-    return match
-  })
+  return tokenizeJson(escapeHtml(json)).map(({ type, value }) => {
+    if (type === 'key') return `<span style="color:${SYNTAX_COLOR_KEY}">${value}</span>:`
+    if (type === 'string') return `<span style="color:${SYNTAX_COLOR_STRING}">${value}</span>`
+    if (type === 'number') return `<span style="color:${SYNTAX_COLOR_NUMBER}">${value}</span>`
+    if (type === 'boolean') return `<span style="color:${SYNTAX_COLOR_BOOLEAN}">${value}</span>`
+    if (type === 'null') return `<span style="color:${SYNTAX_COLOR_NULL}">${value}</span>`
+    return value
+  }).join('')
 }
 
 /**
@@ -389,12 +436,21 @@ export function highlightJson(json: string): string {
  * making stack traces and multi-line messages readable in the expanded view.
  */
 export function unescapeJsonStrings(text: string): string {
-  return text.replace(/"(?:[^"\\]|\\.)*"/g, (match) => {
-    return match
+  let result = ''
+  let copied = 0
+  let offset = 0
+  while (offset < text.length) {
+    if (text[offset++] !== '"') continue
+    const start = offset - 1
+    offset = jsonStringEnd(text, start)
+    if (offset < 0) break
+    result += text.slice(copied, start) + text.slice(start, offset)
       .replace(/\\r\\n/g, '\r\n')
       .replace(/\\n/g, '\n')
       .replace(/\\t/g, '\t')
-  })
+    copied = offset
+  }
+  return result + text.slice(copied)
 }
 
 // logfmt detection and parsing

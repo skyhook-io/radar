@@ -1,3 +1,4 @@
+import { stripTrailingSlashes } from '@skyhook-io/k8s-ui/utils/url-path'
 // The single controller for the AI assistant surface. One instance app-wide:
 // the per-resource "Investigate" button and the global top-bar entry both dispatch
 // here. Investigations are durable, server-side jobs (see internal/ai RunManager);
@@ -797,7 +798,7 @@ function RoutedDiagnoseProvider({
     const invalidWorkspaceRun =
       workspace &&
       !id &&
-      location.pathname.replace(/\/+$/, "") !== "/investigations";
+      stripTrailingSlashes(location.pathname) !== "/investigations";
     const previouslyURLFocused = urlRunIdRef.current;
     const wasWorkspace = workspaceRouteRef.current;
     workspaceRouteRef.current = workspace;

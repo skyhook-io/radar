@@ -421,6 +421,11 @@ func TestApplyResource_ReviewedCreateReportsCreated(t *testing.T) {
 		resourceMap: map[string]APIResource{},
 		gvrMap:      map[string]schema.GroupVersionResource{},
 	}
+	dyn.PrependReactor("create", "deployments", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		obj := action.(clienttesting.CreateAction).GetObject().(*unstructured.Unstructured)
+		obj.SetUID("created-uid")
+		return false, nil, nil
+	})
 	mgr := NewWorkloadManager(dyn, discovery)
 
 	result, err := mgr.ApplyResource(context.Background(), ApplyResourceOptions{
@@ -434,6 +439,9 @@ metadata:
 	})
 	if err != nil {
 		t.Fatalf("ApplyResource failed: %v", err)
+	}
+	if result.UID != "created-uid" {
+		t.Fatalf("UID = %q", result.UID)
 	}
 	if !result.Created {
 		t.Fatal("Created = false, want true")

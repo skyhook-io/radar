@@ -3,8 +3,11 @@ import { Badge } from '../ui/Badge'
 import type { StatusBadge as StatusBadgeValue } from '../resources/resource-utils'
 import { CNPG_GROUP } from '../resources/resource-utils-cnpg'
 import type { CNPGWorkspaceIssue, CNPGWorkspaceResponse } from './workspace'
-import { FactValue, ProblemCallout, RefLink, type CNPGNavigate } from './primitives'
-import { clustersIn, healthSeverity, problemsForObject, relationUnavailable, targetCluster, type CNPGObjectRef } from './relations'
+import { healthToSeverity } from '../../utils/badge-colors'
+import { clustersIn, problemsForObject, relationUnavailable, targetCluster, type CNPGObjectRef } from './relations'
+import { type NavigateToRef, RefLink } from '../ui/RefLink'
+import { FactValue } from '../facts'
+import { ProblemCallout } from '../problems'
 
 const MAX_PROBLEMS = 3
 
@@ -20,7 +23,7 @@ export function ObjectProblems({
 }: {
   issues: CNPGWorkspaceIssue[] | undefined
   subject: CNPGObjectRef
-  onNavigate?: CNPGNavigate
+  onNavigate?: NavigateToRef
 }) {
   const problems = problemsForObject(issues, subject)
   if (problems.length === 0) return null
@@ -30,6 +33,7 @@ export function ObjectProblems({
     <div className="mb-4 space-y-2">
       {shown.map((p, i) => (
         <ProblemCallout
+          rootKind="Cluster"
           key={p.id}
           problem={p}
           onNavigate={onNavigate}
@@ -43,7 +47,7 @@ export function ObjectProblems({
 
 export function PhaseBadge({ status }: { status: StatusBadgeValue }) {
   return (
-    <Badge severity={healthSeverity(status.level)} size="sm">
+    <Badge severity={healthToSeverity(status.level)} size="sm">
       {status.text}
     </Badge>
   )
@@ -71,16 +75,20 @@ export function ClusterLink({
 }: {
   resource: any
   workspace: CNPGWorkspaceResponse | null
-  onNavigate?: CNPGNavigate
+  onNavigate?: NavigateToRef
 }) {
   const name = resource?.spec?.cluster?.name
   if (!name) return <NotReported text="Not set" />
   const ns = resource?.metadata?.namespace ?? ''
-  const visible = !!targetCluster(resource, clustersIn(workspace))
+  const clusters = clustersIn(workspace)
+  const visible = !!targetCluster(resource, clusters)
+  const replaced = !visible && clusters.some((c) => c.metadata?.namespace === ns && c.metadata?.name === name)
   return (
     <span>
-      <RefLink refTo={{ kind: 'Cluster', group: CNPG_GROUP, namespace: ns, name }} onNavigate={onNavigate} mono />
-      {workspace && !visible && !relationUnavailable(workspace, 'clusters', ns, 'Clusters') && (
+      <RefLink refTo={{ kind: 'Cluster', group: CNPG_GROUP, namespace: ns, name }} onNavigate={replaced ? undefined : onNavigate} mono />
+      {replaced ? (
+        <span className="text-theme-text-tertiary"> · an earlier Cluster of that name; the current one is a different object</span>
+      ) : workspace && !visible && !relationUnavailable(workspace, 'clusters', ns, 'Clusters') && (
         <span className="text-theme-text-tertiary"> · not found in this namespace</span>
       )}
     </span>

@@ -552,7 +552,7 @@ export function EditableYamlView({
           {!readOnly && (
             <button
               onClick={handleStartEdit}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-blue-400 hover:text-blue-300 hover:bg-theme-elevated rounded"
+              className="flex items-center gap-1 px-2 py-1 text-xs text-accent-text hover:text-accent-light hover:bg-theme-elevated rounded"
             >
               <Pencil className="w-3.5 h-3.5" />
               Edit

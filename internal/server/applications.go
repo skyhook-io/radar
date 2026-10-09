@@ -22,6 +22,8 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/imageutil"
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	"github.com/skyhook-io/radar/pkg/health"
@@ -391,7 +393,7 @@ func (s *Server) historyAnchorsForSource(r *http.Request, source *appSourceRef) 
 func (s *Server) gitOpsHistoryAnchors(r *http.Request, source *appSourceRef) ([]appHistoryAnchor, []string) {
 	if source.Namespace != "" {
 		allowed := s.getUserNamespaces(r, []string{source.Namespace})
-		if noNamespaceAccess(allowed) {
+		if integration.NoNamespaceAccess(allowed) {
 			return nil, []string{fmt.Sprintf("No access to source namespace %q.", source.Namespace)}
 		}
 	}
@@ -905,7 +907,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				Name:          name,
 				WorkloadClass: classifyWorkload(kind, rels),
 				Image:         image,
-				Version:       imageTag(image),
+				Version:       imageutil.ImageTag(image),
 				AppVersion:    lbls["app.kubernetes.io/version"],
 				Health:        string(workloadHealth),
 				Ready:         ready,
@@ -2648,23 +2650,6 @@ func cronWorkflowOwnerName(wf *unstructured.Unstructured) string {
 		return owner
 	}
 	return wf.GetLabels()["workflows.argoproj.io/cron-workflow"]
-}
-
-// imageTag extracts the tag from an image ref. Digest-pinned refs (@sha256:…)
-// and untagged refs (implicit :latest) return "" — no false version.
-func imageTag(image string) string {
-	if image == "" {
-		return ""
-	}
-	if at := strings.Index(image, "@"); at >= 0 {
-		image = image[:at]
-	}
-	slash := strings.LastIndex(image, "/")
-	colon := strings.LastIndex(image, ":")
-	if colon > slash {
-		return image[colon+1:]
-	}
-	return ""
 }
 
 // imageRepo is the image ref without its tag/digest — the unit version skew is

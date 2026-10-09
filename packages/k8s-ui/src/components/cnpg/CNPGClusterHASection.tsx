@@ -1,0 +1,331 @@
+import { clsx } from 'clsx'
+import { Badge } from '../ui/Badge'
+import { Tooltip } from '../ui/Tooltip'
+import { formatAge, summarizeSchedulerMessage } from '../resources/resource-utils'
+import { PrimaryConflictNote } from './primitives'
+import {
+  CNPG_ROLE_DETAIL_TEXT,
+  cnpgCertificateViews,
+  cnpgCertificatesSummary,
+  cnpgHASourceText,
+  cnpgHASummary,
+  cnpgImageDrift,
+  cnpgLeaseHolderPod,
+  cnpgLiveGap,
+  cnpgPDBFact,
+  cnpgPendingRestart,
+  cnpgQuorumFact,
+  cnpgZoneSpread,
+  type CNPGClusterHA,
+  type CNPGHAJob,
+  type CNPGHALease,
+  type CNPGInstanceLive,
+} from './ha'
+import { type NavigateToRef, RefLink } from '../ui/RefLink'
+import { StatusDot, toneTextClass } from '../ui/status-tone'
+import { FactGrid, FactRow, FactValue } from '../facts'
+import { FoldSection, SectionHeading } from '../ui/FoldSection'
+
+function Unknown({ text }: { text: string }) {
+  return <span className="text-theme-text-tertiary">{text}</span>
+}
+
+function LeaseValue({ lease, what }: { lease: CNPGHALease; what: string }) {
+  if (lease.state !== 'ok') return <Unknown text={cnpgHASourceText(lease, what)} />
+  return (
+    <span>
+      held by{' '}
+      {lease.holder && cnpgLeaseHolderPod(lease.holder) !== lease.holder ? (
+        <Tooltip content={lease.holder}>
+          <span className="font-mono text-xs break-all">{cnpgLeaseHolderPod(lease.holder)}</span>
+        </Tooltip>
+      ) : (
+        <span className="font-mono text-xs break-all">{lease.holder || '(nobody)'}</span>
+      )}
+      {lease.renewTime && <span className="text-theme-text-secondary"> · renewed {formatAge(lease.renewTime)} ago</span>}
+      {lease.expired && <span className={toneTextClass('degraded')}> · expired</span>}
+      {lease.controlledByCluster === false && <span className={toneTextClass('degraded')}> · not owned by this Cluster</span>}
+    </span>
+  )
+}
+
+const JOB_SEVERITY: Record<CNPGHAJob['phase'], 'success' | 'error' | 'info' | 'neutral'> = {
+  succeeded: 'success',
+  failed: 'error',
+  running: 'info',
+  active: 'info',
+  pending: 'neutral',
+}
+
+/**
+ * "HA and instances": whether the cluster survives losing an instance, and what
+ * a planned switchover will meet. Every row names its source; a fact the caller
+ * cannot read says so instead of reading as none.
+ */
+export function CNPGClusterHASection({
+  ha,
+  live,
+  liveUnavailable,
+  loading,
+  error,
+  onNavigate,
+  primaryConflict,
+  title = 'HA and instances',
+  showInstances = true,
+  showCertificates = true,
+  currentPrimary,
+  hibernated = false,
+  onOpenReachability,
+}: {
+  currentPrimary?: string
+  hibernated?: boolean
+  onOpenReachability?: (service: { namespace: string; name: string }) => void
+  title?: string
+  /** False where the host lists the instances itself (with their replication state). */
+  showInstances?: boolean
+  /** False where the host shows certificates elsewhere (CNPGClusterCertificates). */
+  showCertificates?: boolean
+  /** status.currentPrimary vs the Pod labelled primary, when they disagree. */
+  primaryConflict?: { status: string; labelled: string }
+  ha?: CNPGClusterHA
+  /** Instance-manager facts, when the caller can read them. */
+  live?: CNPGInstanceLive[]
+  /** Why `live` is absent (e.g. "needs get pods/proxy in db"); read from `live` itself when it is present. */
+  liveUnavailable?: string
+  loading?: boolean
+  error?: string
+  onNavigate?: NavigateToRef
+}) {
+  if (!ha) {
+    return (
+      <>
+        <SectionHeading>{title}</SectionHeading>
+        <div className="text-sm text-theme-text-tertiary">{loading ? 'Reading HA facts…' : `HA facts could not be read${error ? `: ${error}` : ''}`}</div>
+      </>
+    )
+  }
+  const ns = ha.cluster.namespace
+  const spread = cnpgZoneSpread(ha)
+  const drift = cnpgImageDrift(ha)
+  const pending = cnpgPendingRestart(live)
+  const liveBy = new Map((live ?? []).map((l) => [l.pod, l]))
+  const jobs = [...ha.jobs.items].sort((a, b) => (a.phase === 'succeeded' ? 1 : 0) - (b.phase === 'succeeded' ? 1 : 0))
+  const versions = new Set((live ?? []).map((l) => l.instanceManagerVersion).filter(Boolean))
+
+  const haSummary = cnpgHASummary(ha, live, primaryConflict)
+  const endpointProblem = !hibernated && currentPrimary && ha.rwEndpoints.state === 'ok' && !ha.rwEndpoints.pods.includes(currentPrimary)
+    ? ha.rwEndpoints.pods.length === 0 ? 'no read-write endpoint' : 'read-write endpoint not on the primary'
+    : undefined
+
+  return (
+    <>
+      <FoldSection title={title} hint={`checked ${formatAge(ha.sampledAt)} ago`} summary={[endpointProblem, haSummary.text].filter(Boolean).join(' · ')} attention={haSummary.attention || !!endpointProblem}>
+        {<div className="mb-3 text-sm text-theme-text-secondary">{haSummary.text}</div>}
+        {ha.pods.state === 'ok' && <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+          {ha.instances.map((i) => <span key={i.pod}><RefLink refTo={{ kind: 'Pod', group: '', namespace: ns, name: i.pod }} onNavigate={onNavigate} mono /> · Pod {i.ready ? 'ready' : 'not ready'}</span>)}
+          {[...new Set(ha.expectedInstances ?? [])].filter((name) => !ha.instances.some((i) => i.pod === name)).map((name) => <span key={name} className="text-theme-text-tertiary"><span className="font-mono">{name}</span> · not running</span>)}
+        </div>}
+        <FactGrid>
+          <FactRow label="Read-write Service">
+            <div className="space-y-1">
+              <RefLink refTo={{ kind: 'Service', group: '', namespace: ns, name: ha.rwEndpoints.service }} onNavigate={onNavigate} mono />
+              {ha.rwEndpoints.state !== 'ok' ? <Unknown text={cnpgHASourceText(ha.rwEndpoints, 'read-write endpoints')} /> : (
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    {ha.rwEndpoints.pods.length === 0 ? <span className={hibernated ? 'text-theme-text-secondary' : toneTextClass('unhealthy')}>{hibernated ? 'None expected while hibernated' : 'No ready endpoints'}</span> : ha.rwEndpoints.pods.map((pod) => <RefLink key={pod} refTo={{ kind: 'Pod', group: '', namespace: ns, name: pod }} onNavigate={onNavigate} mono />)}
+                  </div>
+                  {!hibernated && currentPrimary && ha.rwEndpoints.pods.length > 0 && !ha.rwEndpoints.pods.includes(currentPrimary) && <div className={clsx('text-xs', toneTextClass('unhealthy'))}>Read-write endpoint is not on the reported primary {currentPrimary}.</div>}
+                </>
+              )}
+              {onOpenReachability && <button type="button" className="text-xs text-accent-text hover:underline" onClick={() => onOpenReachability({ namespace: ns, name: ha.rwEndpoints.service })}>Reachability →</button>}
+              <div className="text-[11.5px] text-theme-text-tertiary">Ready Pods from the Service’s EndpointSlices</div>
+            </div>
+          </FactRow>
+          <FactRow label="Failure domains">
+            {!spread.known ? (
+              <div>
+                <Unknown text={ha.pods.state !== 'ok' ? cnpgHASourceText(ha.pods, 'instance Pods') : cnpgHASourceText(ha.nodes, 'Nodes (zones)')} />
+                {spread.nodes.length > 0 && (
+                  <div className="text-xs text-theme-text-secondary">
+                    Nodes: {spread.nodes.map((n) => `${n.node} (${n.pods.join(', ')})`).join(' · ')}
+                  </div>
+                )}
+              </div>
+            ) : spread.zones.length === 0 && spread.unlabelled.length === 0 ? (
+              <Unknown text="No instance Pods to place" />
+            ) : (
+              <div>
+                <div className="flex flex-wrap gap-x-3">
+                  {spread.zones.map((z) => (
+                    <span key={z.zone}>
+                      <span className="font-mono">{z.zone}</span>
+                      <span className="text-theme-text-secondary">: {z.pods.join(', ')}</span>
+                    </span>
+                  ))}
+                  {spread.unlabelled.length > 0 && <Unknown text={`no zone label: ${spread.unlabelled.join(', ')}`} />}
+                </div>
+                {(spread.singleZone || spread.sharedNode) && (
+                  <div className={clsx('text-xs', toneTextClass('degraded'))}>
+                    {spread.singleZone ? 'Every instance is in one zone: losing it loses the cluster. ' : ''}
+                    {spread.sharedNode ? 'Two or more instances share a Node.' : ''}
+                  </div>
+                )}
+                <div className="text-[11.5px] text-theme-text-tertiary">topology.kubernetes.io/zone of each instance’s Node</div>
+              </div>
+            )}
+          </FactRow>
+
+          {showInstances && <FactRow label="Instances">
+            {ha.pods.state !== 'ok' ? (
+              <Unknown text={cnpgHASourceText(ha.pods, 'instance Pods')} />
+            ) : (
+              <div className="space-y-1">
+                {ha.instances.map((i) => {
+                  const l = liveBy.get(i.pod)
+                  return (
+                    <div key={i.pod} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+                      <Tooltip content={`Pod ${i.ready ? 'ready' : 'not ready'}${l?.roleDetail === 'replayPaused' || l?.roleDetail === 'fileBased' ? ` · ${CNPG_ROLE_DETAIL_TEXT[l.roleDetail]}` : ''}`}>
+                        <StatusDot tone={!i.ready ? 'unhealthy' : l?.roleDetail === 'replayPaused' || l?.roleDetail === 'fileBased' ? 'degraded' : 'healthy'} />
+                      </Tooltip>
+                      <RefLink refTo={{ kind: 'Pod', group: '', namespace: ns, name: i.pod }} onNavigate={onNavigate} mono />
+                      <span className="text-theme-text-secondary">
+                        {l?.roleDetail ? CNPG_ROLE_DETAIL_TEXT[l.roleDetail] : i.role === 'unknown' ? 'role unknown' : i.role}
+                      </span>
+                      {l?.timeline !== undefined && <span className="text-theme-text-tertiary">timeline {l.timeline}</span>}
+                      {i.qosClass && <span className="text-theme-text-tertiary">QoS {i.qosClass}</span>}
+                      {l?.pendingRestart && <Badge severity="warning" size="sm">pending restart</Badge>}
+                      {i.imageMatches === false && <Badge severity="warning" size="sm">image differs</Badge>}
+                      {l?.instanceManagerVersion && versions.size > 1 && <span className="text-theme-text-tertiary">CNPG instance manager {l.instanceManagerVersion}</span>}
+                    </div>
+                  )
+                })}
+                {primaryConflict && <PrimaryConflictNote conflict={primaryConflict} />}
+                <div className="text-[11.5px] text-theme-text-tertiary">
+                  {live ? 'Role detail and pending restart from each instance manager' : `Role from Pod labels; role detail ${cnpgLiveGap(undefined, liveUnavailable)}`}
+                  {versions.size === 1 ? ` · instance manager ${[...versions][0]}` : ''}
+                </div>
+              </div>
+            )}
+          </FactRow>}
+
+          <FactRow label="Pending restart">
+            {!pending.known && pending.pods.length === 0 ? (
+              <Unknown text={`Unknown: ${cnpgLiveGap(live, liveUnavailable)}`} />
+            ) : pending.pods.length === 0 ? (
+              <span className="text-theme-text-secondary">None reported</span>
+            ) : (
+              <span className={toneTextClass('degraded')}>
+                {pending.pods.join(', ')} {pending.pods.length === 1 ? 'needs' : 'need'} a restart to apply changed parameters
+                {pending.forDecrease ? ' (a lowered setting: the primary restarts first)' : ''}
+                {!pending.known ? ` · ${cnpgLiveGap(live, liveUnavailable)}` : ''}
+              </span>
+            )}
+          </FactRow>
+
+          <FactRow label="Image">
+            {!drift.known && drift.drifted.length === 0 ? (
+              <Unknown text={!ha.desiredImage ? 'Desired image not reported' : ha.pods.state === 'ok' && ha.instances.length === 0 ? `Desired image ${ha.desiredImage}; no instance running` : `Desired image ${ha.desiredImage}; running images unknown`} />
+            ) : drift.drifted.length === 0 ? (
+              <span>
+                <span className="font-mono text-xs break-all">{ha.desiredImage}</span>
+                <span className="text-theme-text-secondary"> · observed Pod images match</span>
+              </span>
+            ) : (
+              <span className={toneTextClass('degraded')}>
+                {drift.drifted.map((d) => `${d.pod} has image ${d.image}`).join(' · ')} · desired <span className="font-mono">{ha.desiredImage}</span>
+              </span>
+            )}
+          </FactRow>
+
+          <FactRow label="Failover quorum">
+            <FactValue fact={cnpgQuorumFact(ha.quorum)} />
+          </FactRow>
+
+          <FactRow label="Disruption budgets">
+            <FactValue fact={cnpgPDBFact(ha.pdbs)} />
+          </FactRow>
+
+          <FactRow label="Primary lease">
+            <LeaseValue lease={ha.primaryLease} what="the primary Lease" />
+          </FactRow>
+
+          <FactRow label="Operator leader">
+            <LeaseValue lease={ha.operatorLease} what="the operator’s Lease" />
+          </FactRow>
+
+          <FactRow label="Cluster Jobs">
+            {ha.jobs.state !== 'ok' ? (
+              <Unknown text={cnpgHASourceText(ha.jobs, 'Jobs')} />
+            ) : jobs.length === 0 ? (
+              <span className="text-theme-text-secondary">None present</span>
+            ) : (
+              <div className="space-y-3">
+                {jobs.slice(0, 6).map((j) => (
+                  <div key={j.name} className="space-y-1 text-xs">
+                    <div className="flex flex-wrap items-center gap-2">
+                    <Badge severity={JOB_SEVERITY[j.phase]} size="sm">{j.phase}</Badge>
+                    <span className="text-theme-text-secondary">{j.role ?? 'job'}</span>
+                    <RefLink refTo={{ kind: 'Job', group: 'batch', namespace: ns, name: j.name }} onNavigate={onNavigate} mono />
+                    </div>
+                    {j.reason && (/schedul|Too many pods|Insufficient/i.test(j.reason) ? <div className="w-full">
+                      <span className={toneTextClass('degraded')}>Cannot be scheduled: {summarizeSchedulerMessage(j.reason, { plain: true })}</span>
+                      <div className="mt-1"><FoldSection title="Scheduler message" summary="" attention={false}><div className="break-words text-xs text-theme-text-secondary">{j.reason}</div></FoldSection></div>
+                    </div> : <span className={toneTextClass('degraded')}>{j.reason}</span>)}
+                  </div>
+                ))}
+                {jobs.length > 6 && <div className="text-xs text-theme-text-tertiary">+{jobs.length - 6} more</div>}
+              </div>
+            )}
+          </FactRow>
+        </FactGrid>
+      </FoldSection>
+
+      {showCertificates && <CNPGClusterCertificates ha={ha} onNavigate={onNavigate} />}
+    </>
+  )
+}
+
+/** Certificate expiry and who renews each certificate, folded to one line unless one needs attention. */
+export function CNPGClusterCertificates({ ha, onNavigate }: { ha: CNPGClusterHA; onNavigate?: NavigateToRef }) {
+  const ns = ha.cluster.namespace
+  const certs = cnpgCertificateViews(ha.certificates)
+  const certSummary = cnpgCertificatesSummary(ha.certificates)
+  return (
+    <FoldSection title="Certificates" summary={certSummary.text} attention={certSummary.attention}>
+      <FactGrid>
+        <FactRow label="Expiry">
+          {certs.length === 0 ? (
+            <Unknown text="No expiry reported by the operator" />
+          ) : (
+            <div className="space-y-0.5">
+              {certs.map((c) => (
+                <div key={c.secret} className="text-xs">
+                  <RefLink refTo={{ kind: 'Secret', group: '', namespace: ns, name: c.secret }} onNavigate={onNavigate} mono />{' '}
+                  <span className={toneTextClass(c.tone)}>
+                    {c.expiresAt ? (c.daysLeft !== undefined && c.daysLeft < 0 ? `expired ${c.expiresAt}` : `expires in ${c.daysLeft} d`) : `expiry unreadable (“${c.raw}”)`}
+                  </span>
+                  <span className="text-theme-text-secondary">
+                    {' · '}
+                    {c.renewal === 'operator' ? 'CloudNativePG renews it' : 'you renew it (spec.certificates)'}
+                  </span>
+                  {c.renewal === 'user' &&
+                    (c.certManager ? (
+                      <span className="text-theme-text-secondary">
+                        {' · cert-manager '}
+                        <RefLink refTo={{ kind: 'Certificate', group: 'cert-manager.io', namespace: ns, name: c.certManager.certificate }} onNavigate={onNavigate} mono />
+                      </span>
+                    ) : c.metadata?.state === 'ok' ? (
+                      <span className="text-theme-text-tertiary"> · not issued by cert-manager</span>
+                    ) : (
+                      <span className="text-theme-text-tertiary"> · issuer unknown ({cnpgHASourceText(c.metadata, 'Secret metadata')})</span>
+                    ))}
+                </div>
+              ))}
+              <div className="text-[11.5px] text-theme-text-tertiary">status.certificates.expirations</div>
+            </div>
+          )}
+        </FactRow>
+      </FactGrid>
+    </FoldSection>
+  )
+}

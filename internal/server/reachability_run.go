@@ -11,7 +11,9 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+
 	"github.com/skyhook-io/radar/internal/auth"
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/reachability"
@@ -64,7 +66,7 @@ func (s *Server) handleProbeInClusterCapability(w http.ResponseWriter, r *http.R
 	// Mirror the POST's namespace boundary so the capability answer matches what the
 	// POST will actually allow - never report "allowed" for an out-of-scope namespace.
 	namespaces := s.traceNamespaceCeiling(r)
-	if noNamespaceAccess(namespaces) || (namespace != "" && !namespaceAllowed(namespaces, namespace)) {
+	if integration.NoNamespaceAccess(namespaces) || (namespace != "" && !namespaceAllowed(namespaces, namespace)) {
 		resp.Reason = fmt.Sprintf("no access to namespace %q", namespace)
 		s.writeJSON(w, resp)
 		return
@@ -112,7 +114,7 @@ func (s *Server) handleTraceInCluster(w http.ResponseWriter, r *http.Request) {
 	namespaces := s.traceNamespaceCeiling(r)
 	// Mirror handleTrace: never leak that a resource exists outside the caller's
 	// namespace scope - return an unknown-verdict trace instead.
-	if noNamespaceAccess(namespaces) || (namespace != "" && !namespaceAllowed(namespaces, namespace)) {
+	if integration.NoNamespaceAccess(namespaces) || (namespace != "" && !namespaceAllowed(namespaces, namespace)) {
 		s.writeJSON(w, traceInClusterResponse{Trace: &trace.Trace{
 			Subject:    trace.ResourceRef{Kind: kind, Namespace: namespace, Name: name},
 			Downstream: []trace.Hop{},

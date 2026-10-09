@@ -12,6 +12,11 @@ bindings to the radar:* groups — deliberately NOT via `aggregate-to-view` labe
 which would widen the shared built-in `view`/`edit` roles cluster-wide for every
 other subject bound to them (mirrors the radar-helm add-on pattern).
 
+Leases are namespaced but read here like infrastructure: they carry only a
+holder identity and renew times (controller leader election, node heartbeats,
+CloudNativePG primary election). `edit` and `admin` already include them, so
+only the viewer tier gains anything.
+
 No Secrets and no RBAC objects here — those stay gated behind the tier roles
 (view excludes Secrets; RBAC visibility is rbac.viewRBAC) so this is a pure
 infrastructure-read widening.
@@ -70,6 +75,9 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: ["scheduling.k8s.io"]
     resources: ["priorityclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["certificates.k8s.io"]
     resources: ["clustertrustbundles"]

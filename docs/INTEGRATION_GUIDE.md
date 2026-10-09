@@ -126,7 +126,164 @@ shared renderers.
   - `packages/k8s-ui/src/components/topology/`: `TopologyFilterSidebar.tsx`,
     `K8sResourceNode.tsx`, `layout.ts`, `topology.css`.
 
-## 3. Before submitting
+## 3. Workspace integrations
+
+A workspace is a set of screens for several related kinds (CloudNativePG at
+`/cnpg`, Karpenter at `/capacity`). Build one only when the operator question
+spans objects: fleet health, a chain such as Backup → ObjectStore → Cluster, or
+actions that need facts from more than one object. With fewer kinds, or no
+cross-object question, a renderer plus Issues plus the detail slots is enough.
+The batch kinds, for example, use only the detail seams.
+
+The pieces below are shared and should be imported, not copied. Read
+[DESIGN.md](../DESIGN.md#unknown-partial-and-denied-values) for the rules on
+unknown, partial and denied values first: every piece here exists to keep them.
+
+- [ ] **Placement.** Under Resources as a category workspace
+  (`ResourcesSidebar` `categoryWorkspaces`, keyed by the category name from
+  `api-resources.ts`), or a top-level page when the subject is cluster-wide.
+  Say whether the namespace filter applies, and why.
+- [ ] **Routes and navigation.** Use `/x`, `/x/<screen>` and
+  `/x/<plural>/<ns|_>/<name>?ctx=`.
+  - The in-drawer trail is `?drawer=`, encoded by `web/src/utils/drawer-trail.ts`.
+  - Back labels come from `currentPageLabel` and subject-filtered Issues links
+    from `issuesPathForSubject` (both in `web/src/utils/page-links.ts`).
+  - Pin `ctx` on a detail page. After a context switch, say the object is not in
+    this context; never open a same-named object from another cluster.
+- [ ] **One aggregate endpoint.**
+  - List each kind with `readWorkspaceKind` (dynamic kinds) or
+    `typedKindScope` (typed kinds such as Pods), both in
+    `internal/server/kind_access.go`. Their answer's `Coverage()` is a
+    `internal/integration.KindCoverage`: `full|partial|denied|notInstalled|syncing|uncached|error`,
+    with denied and uncached namespaces named only when the caller supplied the
+    namespace list.
+  - Radar's own cache scope comes from `integration.NamespacesWithinCache`
+    (`internal/integration/cache_scope.go`).
+  - A per-object read with several sources reports a `ReadSource`
+    `{state, grant, reason}` per source (`internal/integration/reads.go`), with the missing
+    permission as a `Grant` (`internal/auth/grant.go`), never a sentence.
+  - Fan out over namespaces with `integration.FanOut` (`internal/integration/fanout.go`), behind a cap.
+  - Prometheus series matched to an object by name rather than identity carry a
+    `SeriesIsolation` (`internal/prometheus/series_scope.go`).
+  - A GitOps or Helm manager comes from `topology.ManagedByFromMeta`, never from
+    labels read on the client.
+- [ ] **Version skew.** Give the workspace's endpoints one `FeatureCapabilities`
+  flag and a `radarFeatures.ts` entry with `flagShippedWithEndpoint: true`.
+  - Gate every hook with `useRadarFeature`, including mutations, streams and
+    downloads. Never add `retry` to a mutation.
+  - When the Radar is too old, hide the sidebar destinations and fall back to
+    the standard detail views.
+- [ ] **Guided multi-resource setup.** Keep integration-specific target models and workflow state in the app. CNPG reuses its target fields between Create and Restore, its schedule inputs between Edit and Create, and the shared strict-create/YAML review for both. Put preflight and reviewed conditional writes in the integration service, with thin HTTP adapters and a new feature flag when the endpoint/verb is new. Each independent write needs its own review and observed follow-through; saving declarations is not end-to-end success. Do not grow a universal provisioning registry around one integration. A future second concrete setup flow should extract only the seam it actually shares.
+- [ ] **Domain rules.** Put interpretation reused by checks, findings and actions in a pure integration package (CNPG uses `pkg/cnpg`), independent of HTTP and caller permissions. Keep matching frontend derivations together; share fixture cases for rules represented in both languages. Put request-independent orchestration in an integration service (`internal/cnpg` is the current example), with caller-scoped observations/clients supplied by server adapters. Share typed service reads between endpoints and reports rather than invoking handlers through a response recorder. Keep HTTP requests, routing and process-wide client resolution outside the service.
+- [ ] **Findings.** The Issues engine owns findings from cached Kubernetes objects. Cross-resource findings retain their inventory operations in `Issue.RequiredReads`; hosts supply `CanReadEvidence` for both composition and cached related-issue projections. A live proxy or Prometheus measurement stays in the workspace as a `WorkspaceProblem` with `source: 'measurement'`, `measuredBy` and, when matched by name only, `unverifiedMatch`. Add no new severity ladder, and title reasons the Issues page already titles with `issueReasonTitle`. Carry semantic reasons/states through presentation; never branch on generated IDs or display text.
+- [ ] **Screens.**
+  - k8s-ui `components/facts`: `Fact`, `FactGrid`, `FactRow`, `FactValue`,
+    `FactSource`, `CertaintyGlyph` and `ManagedByText`. These are for any
+    surface that shows observed values, single-kind renderers included.
+  - k8s-ui `components/problems`: `WorkspaceProblem`, and
+    `ProblemCallout`/`ProblemList`/`ProblemMeta` with the workspace's
+    `rootKind`, plus `OpenIssueContext`.
+  - Also from k8s-ui: `SectionHeading`, `FoldSection` and `FoldSummary`
+    (`ui/FoldSection`), `ui/RefLink`, `toneTextClass`/`worseTone` in
+    `ui/status-tone`, and `formatGrant`.
+  - App: `web/src/components/workspace`:
+    - layout: `ScreenBody`, `ScreenEmptyState`, `Notice`
+    - controls: `Segments`, `FilterChips`
+    - tables: `SectionTable` and its table classes
+    - text: `RefreshFailedNotice` and `GrantText`
+  - Buttons are `.btn-brand` and `.btn-secondary`.
+- [ ] **Detail page.** Through `WorkloadView`:
+  - `renderSummary`: a composed Overview; the resource's renderer moves to
+    "Spec & status".
+  - `extraTabs`
+  - `renderHeaderActions`
+  - Keep an integration's composition in its own host adapter (`web/src/components/cnpg/host.tsx`) and register it in `web/src/integrations/resourceHosts.tsx`, so generic views use one interface for routing, summary, header actions and logs. Fetching stays in the app; shared presentation receives facts and callbacks.
+- [ ] **Actions.**
+  - Shared contracts/guards (`internal/integration/actions.go`); caller adaptation and HTTP decoding (`internal/server/actions.go`):
+    - A capabilities endpoint answers each action as an `ActionCapability`
+      `{allowed, reason, reasonCode?, permission, grant}`, built with `grantPermission` and
+      `integration.CapabilityVerdict`.
+    - The POST body is an `ActionRequest` `{reviewedContext, uid, facts, params}`
+      read with `decodeActionRequest`.
+    - Bind the facts the user reviewed. Refuse with 409 `changed`
+      (`integration.ChangedAction`) or `context_changed`, and use `integration.PartialAction` when a
+      multi-step write stops part-way.
+    - Writes are impersonated, version-bound (`integration.MergePatchAtVersion`) and never
+      retried.
+  - Client:
+    - `web/src/api/actions.ts`: `actionErrorCode`, widened with the integration's
+      own codes; `actionOutcomeLocked`, `actionCompleted` and `capabilityReason`.
+    - `ActionConfirmDialog` and the GitOps write guard (`useGitOpsWriteGuard`).
+      Multi-step setup can supply `onBack`/`backLabel` without giving Cancel a
+      second meaning. For YAML creation, `CreateResourceDialog.onBack(yaml)`
+      returns the edited draft to the parent; the parent retains unrepresented
+      fields and owns any explicit replacement. `onCreated(result, submittedYaml)`
+      reports the actual write so follow-through never assumes the earlier form
+      still describes edited YAML. Keep domain forms and step state in the
+      integration host; these presentation contracts contain no integration logic.
+  - An accepted POST is not a completed action: follow the outcome in status.
+- [ ] **Docs and fixtures.** Add a `docs/<x>.md` listing which source each value
+  comes from and how it reads when unknown, a `scripts/<x>-demo.sh` with its
+  README, and a CLAUDE.md row.
+
+### Host ownership and future extension points
+
+`web/src/integrations/resourceHosts.tsx` is the app-owned composition root for
+integration adapters. Generic resource views consume its typed routing, detail,
+log, renderer and kind-list operations. CNPG's adapter remains in
+`web/src/components/cnpg/host.tsx`; existing Karpenter, batch/admission, Ray and
+other renderer wrappers register in the same root. This interface is private to
+the app; it does not change the public radar-app embedding API.
+
+Add an adapter and registration when extending these existing slots. Reuse
+`RendererOverrides` and the detail props from k8s-ui. Resources are keyed by
+exact API group and plural; an unresolved group cannot select a colliding CRD.
+Declare exclusive ownership of summary, destination and logs. Competing
+renderer, kind-list and exclusive-slot owners are rejected. Header actions and
+extra tabs compose in order, with duplicate tab IDs rejected. Data-bearing
+contributions are mounted components whose hooks remain integration-owned.
+
+Workspace metadata lives in `workspaceRoutes.ts`, while `workspaceScreens.tsx`
+registers screens separately so they can use `WorkloadView` without a circular
+import. Register metadata and a screen for another workspace; retain its parser,
+placement, namespace policy and context-switch policy in its own adapter. The
+[architecture plan](CNPG_ARCHITECTURE_PLAN.md) records the extraction rationale.
+
+When adding another integration, check these specific places before extending
+generic hosts:
+
+| Extension | Current location | Rule to preserve |
+|---|---|---|
+| Detail summary, header actions, Diagnose, logs and renderer wrappers | `web/src/integrations/resourceHosts.tsx` and integration host adapters | Reuse the existing detail slots and `RendererOverrides`. Mount integration-owned components for their hooks. Match exact group and Kind; keep version/spec-shape dispatch where it already lives. |
+| Drawer expansion and navigation trail | `resourceHosts.tsx` destination/drawer contributions | Keep context, tab/query state, history and API-group collisions. |
+| A kind list replaced by a workspace view | `resourceHosts.tsx` kind-list contributions, consumed by `ResourcesView.tsx` | One ownership decision must control both fetching and rendering, including capability loading and unsupported Radar fallback. |
+| Workspace routes, labels and context-switch policy | `web/src/integrations/workspaceRoutes.ts` and `workspaceScreens.tsx`; integration route helpers | CNPG and Capacity share registration metadata. Their route parsing, placement and namespace scope remain integration-owned. |
+| Category-workspace counts and coverage | `ResourcesView.tsx`'s `useCNPGSidebarWorkspace` and `sidebarCategoryWorkspaces` | Generalize the data-provider composition when another category workspace needs it. Reuse the current sidebar props and retain partial/denied coverage. |
+| Event-driven workspace invalidation | `App.tsx`'s CNPG pending flag and batched invalidation | Generalize change-to-query-key contributions when another workspace needs them; reuse the existing batches and connection lifetime. |
+
+A resource can have contributions from multiple integrations, such as batch
+execution and Kueue admission on a Job. Compose additive slots explicitly; give
+summary, renderer, logs, destination and kind-list takeover an explicit owner.
+Registration order must not silently pick between conflicting owners. This is
+an internal app interface, not a new public radar-app plugin API.
+
+The sidebar-provider and event-invalidation shapes above are deliberately left
+open until another matching consumer appears. The listed locations are the
+places to revisit, rather than another set of integration-specific branches to
+copy into generic views.
+
+These other pieces are not shared yet, because they have one integration
+consumer and the second should shape them:
+- the operation tracker
+- the fixed-path `pods/proxy` reader
+- the merged log stream
+- the report bundle
+- operator diagnosis
+
+Read CloudNativePG's versions (`web/src/components/cnpg/`,
+`internal/cnpg/`), and extract the demonstrated common part when a second integration needs it. The merged log engine already lives in `internal/server/workload_logs.go`; reuse its protocol instead of duplicating it.
+
+## 4. Before submitting
 
 - [ ] Verify status against the controller's documented API: desired versus
   observed, unknown versus false, intentional pause/stop versus failure. Consider

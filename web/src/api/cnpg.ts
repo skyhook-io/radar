@@ -1,6 +1,10 @@
-import { useQuery } from '@tanstack/react-query'
-import type { CNPGWorkspaceResponse, TimelineEvent } from '@skyhook-io/k8s-ui'
-import { fetchJSON } from './client'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { CNPGKindCoverage, CNPGSchedulePreview, CNPGWorkspaceResponse, Grant, TimelineEvent } from '@skyhook-io/k8s-ui'
+import { fetchJSON, useRadarFeature } from './client'
+import { shouldRetryRadarQuery } from './radarFeatures'
+import type { CNPGOperatorDiagnosis } from './cnpg-recovery'
+import type { CNPGPoolerFacts } from './cnpg-sessions'
+import { actionErrorCode, type ActionCapability, type ActionErrorCode, type ActionRequest } from './actions'
 
 // /api/cnpg/workspace
 //
@@ -9,21 +13,21 @@ import { fetchJSON } from './client'
 // workspace screens, the Resources sidebar counts and the composed summaries,
 // so they can never disagree about what they count.
 export function useCNPGWorkspace(namespaces: string[], options?: { enabled?: boolean }) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   const ns = [...namespaces].sort().join(',')
   return useQuery<CNPGWorkspaceResponse>({
-    queryKey: ['cnpg', 'workspace', ns],
-    queryFn: ({ signal }) => fetchJSON<CNPGWorkspaceResponse>(`/cnpg/workspace${ns ? `?namespaces=${encodeURIComponent(ns)}` : ''}`, signal),
+    queryKey: ['cnpg', 'workspace', ns, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGWorkspaceResponse>(`/cnpg/workspace${ns ? `?namespaces=${encodeURIComponent(ns)}` : ''}`, signal)),
     enabled: options?.enabled ?? true,
     staleTime: 10_000,
     refetchInterval: 30_000,
     placeholderData: (prev) => prev,
+    retry: shouldRetryRadarQuery,
   })
 }
 
-export interface CNPGOperatorCoverage {
-  state: 'full' | 'partial' | 'denied' | 'syncing' | 'error'
-  deniedNamespaces?: string[]
-}
+/** The operator's Deployments and Services are read with the same per-kind coverage as the workspace. */
+export type CNPGOperatorCoverage = CNPGKindCoverage
 
 export interface CNPGOperatorComponent {
   role: 'operator' | 'plugin'
@@ -34,6 +38,26 @@ export interface CNPGOperatorComponent {
   version?: string
   readyReplicas: number | null
   replicas: number | null
+  /** The Deployment's Pods; null when they could not be read (see podCoverage). */
+  pods?: CNPGOperatorComponentPod[] | null
+  podCoverage?: { state: string; grant?: Grant; reason?: string }
+}
+
+export interface CNPGContainerTermination {
+  container: string
+  reason: string
+  exitCode: number
+  finishedAt?: string
+}
+
+export interface CNPGOperatorComponentPod {
+  name: string
+  ready: boolean
+  /** Restarts across the Pod's containers since the Pod was created. */
+  restarts: number
+  /** When the current container started. */
+  startedAt?: string
+  lastTermination?: CNPGContainerTermination
 }
 
 export interface CNPGOperatorConfig {
@@ -51,6 +75,7 @@ export interface CNPGOperatorResponse {
   coverage: { deployments: CNPGOperatorCoverage; services: CNPGOperatorCoverage }
   components: CNPGOperatorComponent[]
   config: CNPGOperatorConfig[]
+  diagnosis?: CNPGOperatorDiagnosis[]
 }
 
 // /api/cnpg/operator
@@ -59,12 +84,45 @@ export interface CNPGOperatorResponse {
 // Deliberately not filtered by the namespace view filter: the operator runs in
 // its own namespace, which users rarely have selected.
 export function useCNPGOperator(options?: { enabled?: boolean }) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGOperatorResponse>({
-    queryKey: ['cnpg', 'operator'],
-    queryFn: ({ signal }) => fetchJSON<CNPGOperatorResponse>('/cnpg/operator', signal),
+    queryKey: ['cnpg', 'operator', ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGOperatorResponse>('/cnpg/operator', signal)),
     enabled: options?.enabled ?? true,
     staleTime: 30_000,
     refetchInterval: 60_000,
+    retry: shouldRetryRadarQuery,
+  })
+}
+
+/**
+ * Whether the operator watching a namespace is acting on it. While it is not,
+ * CNPG status there is whatever the operator last wrote. webhookRejects is
+ * null when the webhook state could not be read.
+ */
+export interface CNPGOperatorVerdict {
+  state: 'reconciling' | 'notReconciling' | 'unknown' | 'notWatched'
+  reasons?: string[]
+  unknown?: string
+  webhookRejects: boolean | null
+  webhookReason?: string
+  operator?: string
+}
+
+// /api/cnpg/operator/status?namespaces=
+//
+// The cheap operator verdict for the fleet and cluster pages, keyed by namespace.
+export function useCNPGOperatorStatus(namespaces: string[], options?: { enabled?: boolean }) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
+  const ns = [...new Set(namespaces)].sort().join(',')
+  return useQuery<{ namespaces: Record<string, CNPGOperatorVerdict> }>({
+    queryKey: ['cnpg', 'operator-status', ns, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<{ namespaces: Record<string, CNPGOperatorVerdict> }>(`/cnpg/operator/status?namespaces=${encodeURIComponent(ns)}`, signal)),
+    enabled: (options?.enabled ?? true) && ns !== '',
+    staleTime: 10_000,
+    refetchInterval: 30_000,
+    placeholderData: (prev) => prev,
+    retry: shouldRetryRadarQuery,
   })
 }
 
@@ -80,16 +138,377 @@ export interface CNPGClusterActivityResponse {
 // The Cluster's history together with its instance Pods and every CNPG object
 // attributed to it, including ones since deleted.
 export function useCNPGClusterActivity(namespace: string, name: string, sinceHours = 24) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
   return useQuery<CNPGClusterActivityResponse>({
-    queryKey: ['cnpg', 'activity', namespace, name, sinceHours],
-    queryFn: ({ signal }) => {
+    queryKey: ['cnpg', 'activity', namespace, name, sinceHours, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => {
       const since = new Date(Date.now() - sinceHours * 3600_000).toISOString()
       return fetchJSON<CNPGClusterActivityResponse>(
         `/cnpg/clusters/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/activity?since=${encodeURIComponent(since)}&limit=500`,
         signal,
       )
-    },
+    }),
     staleTime: 10_000,
     refetchInterval: 30_000,
+    retry: shouldRetryRadarQuery,
+  })
+}
+
+export interface CNPGInstanceFact {
+  pod: string
+  podUID: string
+  role: 'primary' | 'standby'
+  ready: boolean
+  healthy: boolean
+  fenced: boolean
+  podReadable: boolean
+  podExists: boolean
+}
+
+export interface CNPGBackupMethod {
+  method: 'plugin' | 'volumeSnapshot' | 'barmanObjectStore'
+  pluginName?: string
+  capability: 'backup' | 'unknown' | 'none'
+  reason?: string
+  deprecated?: boolean
+}
+
+export interface CNPGClusterFacts {
+  generation: number
+  currentPrimary?: string
+  targetPrimary?: string
+  phase?: string
+  phaseReason?: string
+  hibernation: string
+  hibernated: boolean
+  fencedInstances: { raw: string; all: boolean; instances: string[]; malformed?: boolean }
+  instances: CNPGInstanceFact[]
+  backupMethods: CNPGBackupMethod[]
+  backupTarget?: string
+  /** The ContinuousArchiving condition is False. */
+  archivingFailing: boolean
+  isReplicaCluster: boolean
+  maintenance: { declared: boolean; inProgress: boolean; reusePVC: boolean }
+  terminating: boolean
+  /** A running offline volume-snapshot Backup: the operator fenced its instance and lifts the fence itself. */
+  coldSnapshotBackup?: string
+}
+
+export type CNPGClusterActionName =
+  | 'backup'
+  | 'switchover'
+  | 'restart'
+  | 'restartInstance'
+  | 'reload'
+  | 'fence'
+  | 'unfence'
+  | 'hibernate'
+  | 'rehydrate'
+  | 'setMaintenance'
+  | 'unsetMaintenance'
+
+export interface CNPGClusterCapabilities {
+  uid: string
+  resourceVersion: string
+  context: string
+  facts: CNPGClusterFacts
+  /** `restore` is creating a new Cluster in this namespace from this one's backups (`create clusters`). */
+  actions: Record<CNPGClusterActionName, ActionCapability> & { psql: ActionCapability; destroyInstance: ActionCapability; restore: ActionCapability }
+  instanceActions: Record<string, { restart: ActionCapability; switchoverTarget: ActionCapability; fence: ActionCapability; unfence: ActionCapability; psql: ActionCapability; destroy: ActionCapability }>
+  restartPlan?: {
+    primaryUpdateStrategy?: string
+    primaryUpdateMethod?: string
+    steps: { instance: string; role: string; effect: 'recreate' | 'skipped_fenced' | 'switchover' | 'restart' | 'wait_for_user' | 'restart_only_instance' }[]
+  }
+  hibernateEffects?: {
+    poolers: CNPGEffectList
+    unsuspendedScheduledBackups: CNPGEffectList
+    databases: CNPGEffectList
+    publications: CNPGEffectList
+    subscriptions: CNPGEffectList
+    volumes: { available: boolean; reason?: string; items: { name: string; instance: string; role: string; capacity?: string; requested?: string }[] }
+  }
+  operator?: CNPGOperatorVerdict
+}
+
+export interface CNPGEffectList {
+  available: boolean
+  reason?: string
+  names: string[]
+}
+
+export type CNPGScheduleActionName = 'suspend' | 'resume' | 'run' | 'setSchedule'
+
+export interface CNPGScheduleCapabilities {
+  uid: string
+  resourceVersion: string
+  context: string
+  facts: {
+    generation: number
+    cluster: string
+    clusterUID: string
+    clusterGeneration: number
+    suspended: boolean
+    nextScheduleTime?: string
+    method?: string
+    pluginName?: string
+    target?: string
+    clusterState: 'ok' | 'missing' | 'hibernated' | 'unreadable'
+    backupBlockedReason?: string
+    terminating: boolean
+    catchUp: boolean
+    /** spec.schedule verbatim; setSchedule binds it. */
+    schedule: string
+    preview: CNPGSchedulePreview
+  }
+  actions: Record<CNPGScheduleActionName, ActionCapability>
+  operator?: CNPGOperatorVerdict
+}
+
+export function cnpgPath(kind: 'clusters' | 'scheduledbackups' | 'poolers', namespace: string, name: string) {
+  return `/cnpg/${kind}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`
+}
+
+export function useCNPGClusterCapabilities(namespace: string, name: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
+  return useQuery<CNPGClusterCapabilities>({
+    queryKey: ['cnpg', 'capabilities', 'clusters', namespace, name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGClusterCapabilities>(`${cnpgPath('clusters', namespace, name)}/capabilities`, signal)),
+    enabled: enabled && !!name,
+    staleTime: 5_000,
+    retry: false,
+  })
+}
+
+// Parsed server-side with the operator's cron semantics; runs counted from the
+// schedule's own lastCheckTime. Pure computation: writes nothing.
+export function useCNPGSchedulePreview(namespace: string, name: string, schedule: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
+  return useQuery<CNPGSchedulePreview>({
+    queryKey: ['cnpg', 'schedule-preview', namespace, name, schedule, ...gatedKey],
+    queryFn: ({ signal }) => guard(() =>
+      fetchJSON<CNPGSchedulePreview>(`${cnpgPath('scheduledbackups', namespace, name)}/schedule-preview?schedule=${encodeURIComponent(schedule)}`, signal)),
+    enabled: enabled && !!name,
+    staleTime: 30_000,
+    retry: false,
+    placeholderData: (prev) => prev,
+  })
+}
+
+export function useCNPGScheduleCapabilities(namespace: string, name: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
+  return useQuery<CNPGScheduleCapabilities>({
+    queryKey: ['cnpg', 'capabilities', 'scheduledbackups', namespace, name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGScheduleCapabilities>(`${cnpgPath('scheduledbackups', namespace, name)}/capabilities`, signal)),
+    enabled: enabled && !!name,
+    staleTime: 5_000,
+    retry: false,
+  })
+}
+
+export interface CNPGActionResult {
+  action: string
+  message: string
+  backup?: string
+  resolvedAfterTimeout?: boolean
+  catchUp?: boolean
+  /** What the action acted on, for following its outcome. */
+  target?: { pod?: string; podUID?: string; pid?: number; backendStart?: string; keepPVC?: boolean; pvcs?: { name: string; uid: string }[]; jobs?: string[]; paused?: boolean; generation?: number }
+}
+
+// No mutation meta: errors stay with the dialog (shown inline so the user can
+// adjust and retry), and the caller toasts success worded from the result.
+type CNPGActionMutation = {
+  clusters:
+    | { action: CNPGClusterActionName | 'destroyInstance'; request: ActionRequest<CNPGClusterFacts> }
+    | { action: 'cancelBackend' | 'terminateBackend'; request: ActionRequest<Record<string, never>, { pod: string; podUID?: string; pid: number; backendStart: string }> }
+  scheduledbackups: { action: CNPGScheduleActionName; request: ActionRequest<CNPGScheduleCapabilities['facts']> }
+  poolers: { action: 'pause' | 'resume'; request: ActionRequest<Pick<CNPGPoolerFacts, 'paused'>> }
+}
+
+export function useCNPGAction<Kind extends keyof CNPGActionMutation>(kind: Kind, namespace: string, name: string) {
+  const { guard } = useRadarFeature('cnpgWorkspace')
+  const queryClient = useQueryClient()
+  return useMutation<CNPGActionResult, Error, CNPGActionMutation[Kind]>({
+    mutationFn: ({ action, request }) => guard(() =>
+      fetchJSON<CNPGActionResult>(`${cnpgPath(kind, namespace, name)}/actions/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request),
+      })),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['cnpg'] })
+      queryClient.invalidateQueries({ queryKey: ['resource'] })
+    },
+    // A refusal over changed facts re-reads them, so the dialog shows what
+    // the user would now be confirming.
+    onError: (err) => {
+      if (cnpgActionErrorCode(err) !== undefined) queryClient.invalidateQueries({ queryKey: ['cnpg'] })
+    },
+  })
+}
+
+/** The action refusals the CloudNativePG handlers add to the shared ones. */
+export type CNPGActionErrorCode = ActionErrorCode | 'all_fenced' | 'operator_webhook_unavailable' | 'invalid_schedule'
+
+export function cnpgActionErrorCode(err: unknown): CNPGActionErrorCode | undefined {
+  return actionErrorCode<CNPGActionErrorCode>(err)
+}
+
+export type CNPGRuntimeSourceState = 'ok' | 'denied' | 'unreachable' | 'error' | 'partial'
+
+export interface CNPGRuntimeReplication {
+  applicationName: string
+  state?: string
+  syncState?: string
+  syncPriority?: number
+  writeLag?: number
+  flushLag?: number
+  replayLag?: number
+  sentLsn?: string
+  writeLsn?: string
+  flushLsn?: string
+  replayLsn?: string
+}
+
+export interface CNPGRuntimeBaseBackup {
+  applicationName: string
+  instance?: string
+  phase: string
+  startedAt?: string
+  /** Absent while PostgreSQL has no estimate (waiting for a checkpoint, or estimation disabled). */
+  totalBytes?: number
+  streamedBytes: number
+  tablespacesTotal: number
+  tablespacesStreamed: number
+}
+
+export interface CNPGRuntimeInstance {
+  pod: string
+  podUID?: string
+  role: 'primary' | 'replica' | 'unknown'
+  status: {
+    state: CNPGRuntimeSourceState
+    error?: string
+    reason?: string
+    capturedAt?: string
+    isPrimary?: boolean
+    currentLsn?: string
+    receivedLsn?: string
+    replayLsn?: string
+    timeline?: number
+    replayPaused?: boolean
+    pendingRestart?: boolean
+    pendingRestartForDecrease?: boolean
+    isPgRewindRunning?: boolean
+    instanceManagerVersion?: string
+    roleDetail?: 'primary' | 'pgRewind' | 'replayPaused' | 'streaming' | 'fileBased'
+    isWalReceiverActive?: boolean
+    archiving?: { lastArchivedWal?: string; lastArchivedAt?: string; lastFailedWal?: string; lastFailedAt?: string; readyWalFiles?: number }
+    replication?: CNPGRuntimeReplication[] | null
+    slots?: null | { name: string; type?: string; plugin?: string; active?: boolean; database?: string; restartLsn?: string; walStatus?: string; retainedBytes?: number }[]
+    slotsTruncated?: boolean
+    /** pg_basebackup streams to joining instances; [] when the report says none run. */
+    baseBackups?: CNPGRuntimeBaseBackup[] | null
+    /**
+     * The instance manager answered without finishing its reads (a masked
+     * error, or pg_rewind running): replication, slots, baseBackups and
+     * archiving are null when unread, and pendingRestart is not established.
+     */
+    incomplete?: boolean
+    maskedError?: string
+  }
+  metrics: {
+    state: CNPGRuntimeSourceState
+    error?: string
+    reason?: string
+    capturedAt?: string
+    missing?: string[]
+    maxConnections?: number
+    sessions?: { state: string; database: string; user: string; application: string; count: number }[]
+    sessionsTotal?: number
+    waitingBackends?: number
+    oldestXactSeconds?: number
+    xidAge?: { database: string; age: number }[]
+    mxidAge?: { database: string; age: number }[]
+    /** null when cnpg_pg_extensions_update_available was not exported (see missing); [] when all are current. */
+    extensionUpdates?: { database: string; extension: string; installedVersion: string; defaultVersion: string }[] | null
+    databaseSizes?: { database: string; bytes: number }[]
+    archiver?: { archivedCount?: number; failedCount?: number; secondsSinceLastArchival?: number; secondsSinceLastFailure?: number }
+    xactCommitTotal?: number
+    xactRollbackTotal?: number
+    blksHit?: number
+    blksRead?: number
+    deadlocksTotal?: number
+    tempBytesTotal?: number
+    walBytes?: number
+    /** cnpg_last_update_timestamp: when the exporter last ran its queries (epoch seconds). */
+    lastUpdateTimestamp?: number
+    /** Client sessions per state over every group (absent when there are none). */
+    sessionsByState?: Record<string, number>
+    walSegments?: number
+    postmasterStartTime?: number
+    /** pg_stat_database counters per database, cumulative since the last stats reset. */
+    databases?: { database: string; xactCommit?: number; xactRollback?: number; tempFiles?: number; tempBytes?: number; deadlocks?: number; blksHit?: number; blksRead?: number }[]
+    /** Absent when neither pg_stat_checkpointer (17+) nor pg_stat_bgwriter was exported. */
+    checkpoints?: {
+      source: 'pg_stat_checkpointer' | 'pg_stat_bgwriter'
+      timed?: number
+      requested?: number
+      restartpointsTimed?: number
+      restartpointsRequested?: number
+      restartpointsDone?: number
+      buffersWritten?: number
+    }
+  }
+}
+
+export interface CNPGRuntimeResponse {
+  cluster: { namespace: string; name: string; uid: string }
+  sampledAt: string
+  permission: { proxy: 'allowed' | 'denied'; grant?: Grant }
+  instances: CNPGRuntimeInstance[]
+}
+
+// /api/cnpg/clusters/{ns}/{name}/runtime — live instance-manager status and
+// exporter metrics read through pods/proxy. Polled only while visible.
+export function useCNPGRuntime(namespace: string, name: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
+  return useQuery<CNPGRuntimeResponse>({
+    queryKey: ['cnpg', 'runtime', namespace, name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGRuntimeResponse>(`/cnpg/clusters/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/runtime`, signal)),
+    enabled: enabled && !!name,
+    refetchInterval: (q) => (q.state.data?.permission.proxy === 'denied' ? false : 5_000),
+    refetchIntervalInBackground: false,
+    staleTime: 4_000,
+    retry: false,
+  })
+}
+
+export interface CNPGPoolerRuntimeResponse {
+  pooler: { namespace: string; name: string; uid: string }
+  sampledAt: string
+  permission: { proxy: 'allowed' | 'denied'; grant?: Grant }
+  pods: {
+    pod: string
+    schedulingReason?: string
+    state: CNPGRuntimeSourceState
+    error?: string
+    reason?: string
+    missing?: string[]
+    pools?: { database: string; user: string; clActive?: number; clWaiting?: number; svActive?: number; svIdle?: number; svUsed?: number; maxwaitSeconds?: number; poolMode?: string }[]
+  }[]
+}
+
+export function useCNPGPoolerRuntime(namespace: string, name: string, enabled = true) {
+  const { guard, gatedKey } = useRadarFeature('cnpgWorkspace')
+  return useQuery<CNPGPoolerRuntimeResponse>({
+    queryKey: ['cnpg', 'pooler-runtime', namespace, name, ...gatedKey],
+    queryFn: ({ signal }) => guard(() => fetchJSON<CNPGPoolerRuntimeResponse>(`/cnpg/poolers/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/runtime`, signal)),
+    enabled: enabled && !!name,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+    staleTime: 25_000,
+    retry: false,
   })
 }

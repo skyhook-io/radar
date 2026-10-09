@@ -1,15 +1,13 @@
 package prom
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/prom/promtest"
 )
 
 // This opt-in suite evaluates the production expressions in real Prometheus,
@@ -310,27 +308,5 @@ func TestWorkloadPromQL(t *testing.T) {
 	}
 	check("count("+otlp.Rate+") or vector(0)", "{}", 0)
 	check(`sum(rate(http_server_request_duration_seconds_count{job="demo/web"}[5m]))`, "{}", 1)
-	runWorkloadPromQL(t, image, input, tests)
-}
-
-func runWorkloadPromQL(t *testing.T, image string, input []map[string]string, tests []map[string]any) {
-	t.Helper()
-	fixture := map[string]any{"evaluation_interval": "1m", "tests": []map[string]any{{"interval": "1m", "input_series": input, "promql_expr_test": tests}}}
-	data, err := json.Marshal(fixture)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	if err := os.Chmod(dir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "rules.yml"), data, 0644); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none", "--read-only", "--tmpfs", "/tmp", "--entrypoint", "/bin/promtool", "-v", dir+":/tests:ro", image, "test", "rules", "/tests/rules.yml")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("PromQL evaluation: %v\n%s", err, output)
-	}
+	promtest.Run(t, image, input, tests)
 }

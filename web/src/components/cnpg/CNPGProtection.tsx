@@ -1,34 +1,38 @@
-import { useMemo } from 'react'
+import { useId, useMemo, useState } from 'react'
+import { X } from 'lucide-react'
 import {
   Badge,
+  DialogPortal,
+  SectionHeading,
+  CNPGClusterBackupFacts,
+  backupsForScheduledBackup,
+  cnpgScheduleDestinationBlocker,
+  refToSelectedResource,
   FactValue,
   formatAge,
   formatDuration,
   getCNPGBackupStatus,
   getCNPGClusterBarmanPlugin,
   getCNPGObjectStoreDestination,
-  getCNPGScheduledBackupStatus,
+  getCNPGScheduledBackupStatus, getCNPGScheduledBackupOverdueMs,
   inferredObjectStoreHealth,
-  isApiGroup,
+  cnpgBackupRunsInWindow,
+  cnpgBackupRunInFlight,
+  CNPG_BACKUP_RUN_WINDOW_MS,
+  coverageReadable,
+  cnpgCoverageGap,
+  getCNPGScheduledBackupNextSchedule,
   toneTextClass,
   usersOfObjectStore,
   type CNPGFleetRow,
   type HealthLevel,
+  Tooltip,
 } from '@skyhook-io/k8s-ui'
-import {
-  CNPGWorkspaceHeader,
-  CoverageNotice,
-  FilterChips,
-  Mono,
-  ScreenBody,
-  SectionTable,
-  Sub,
-  clusterResource,
-  coverageEmpty,
-  cnpgResource,
-  namespaceChip,
-  type CNPGScreenProps,
-} from './shared'
+import { CNPGWorkspaceHeader, CoverageNotice, clusterResource, coverageEmpty, cnpgResource, type CNPGScreenProps } from './shared'
+import { BreakText, FilterChips, Mono, namespaceChip, PathText, ScreenBody, SectionTable, Segments, Sub } from '../workspace/layout'
+import { useCNPGNavigate } from './useCNPGNavigate'
+import { cnpgClusterFullPath } from './paths'
+import { currentPageLabel } from '../../utils/page-links'
 
 const SEVERITY: Record<HealthLevel, 'success' | 'warning' | 'alert' | 'error' | 'neutral'> = {
   healthy: 'success',
@@ -37,12 +41,6 @@ const SEVERITY: Record<HealthLevel, 'success' | 'warning' | 'alert' | 'error' | 
   unhealthy: 'error',
   unknown: 'neutral',
   neutral: 'neutral',
-}
-
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000
-
-function backupTime(b: any): string | undefined {
-  return b?.status?.stoppedAt || b?.status?.startedAt || b?.metadata?.creationTimestamp
 }
 
 function backupStart(b: any): string | undefined {
@@ -90,6 +88,60 @@ function storeHealth(store: any, users: CNPGFleetRow[]): StoreRow['health'] {
   }
 }
 
+// Enough to see the pattern of recent runs without pushing schedules and
+// destinations off the page.
+const RUNS_SHOWN = 10
+
+function isFailedRun(b: any): boolean {
+  const level = getCNPGBackupStatus(b).level
+  return level === 'unhealthy' || level === 'alert'
+}
+
+function runDetail(b: any): string {
+  const started = Date.parse(backupStart(b) ?? '')
+  const stopped = Date.parse(b?.status?.stoppedAt ?? '')
+  const method = b?.status?.method || b?.spec?.method
+  const took = Number.isFinite(started) && Number.isFinite(stopped) && stopped >= started ? `took ${formatDuration(stopped - started)}` : null
+  return [method, took].filter(Boolean).join(' · ') || '—'
+}
+
+// The newest Backup the schedule created and how it ended; the schedule's own
+// lastScheduleTime says only that it fired.
+function LastRun({ schedule, backups, readable }: { schedule: any; backups: any[]; readable: boolean }) {
+  const fired = schedule?.status?.lastScheduleTime
+  const last = backupsForScheduledBackup(schedule, backups)[0]
+  if (!fired && !last) return <span className="text-theme-text-tertiary">Not yet</span>
+  if (!last) {
+    return (
+      <>
+        {ageText(fired)}
+        <Sub>{readable ? 'no Backup found for it' : 'outcome needs list backups'}</Sub>
+      </>
+    )
+  }
+  // Settled Backups older than 7 days are not loaded, so the newest one here
+  // can be from an earlier run than the schedule's last firing.
+  const firedAt = Date.parse(fired ?? '')
+  const startedAt = Date.parse(backupStart(last) ?? '')
+  if (Number.isFinite(firedAt) && Number.isFinite(startedAt) && startedAt < firedAt - 2 * 60_000) {
+    return (
+      <>
+        {ageText(fired)}
+        <Sub>its Backup is not loaded</Sub>
+      </>
+    )
+  }
+  const st = getCNPGBackupStatus(last)
+  return (
+    <>
+      {ageText(backupStart(last) ?? fired)}
+      <Sub>
+        {st.level === 'healthy' ? <Badge severity="success" size="sm">{st.text.toLowerCase()}</Badge> : <span className={toneTextClass(st.level)}>{st.text.toLowerCase()}</span>}
+      </Sub>
+    </>
+  )
+}
+
 export function CNPGProtection({
   data,
   fleet,
@@ -101,25 +153,26 @@ export function CNPGProtection({
   onClearNamespaces,
   scopeCluster,
 }: CNPGScreenProps & { scopeCluster?: { namespace: string; name: string } }) {
+  const evidenceTitleId = useId()
+  const navigate = useCNPGNavigate()
+  const [evidenceKey, setEvidenceKey] = useState<string | null>(null)
+  const evidence = fleet.rows.find((row) => row.key === evidenceKey)
   const clusterFilter = scopeCluster ? `${scopeCluster.namespace}/${scopeCluster.name}` : searchParams.get('cluster')
   const rows = useMemo(
     () => fleet.rows.filter((r) => !clusterFilter || `${r.namespace}/${r.name}` === clusterFilter),
     [fleet.rows, clusterFilter],
   )
 
-  const failed = useMemo(() => {
-    const now = Date.now()
-    return (data.objects.backups ?? [])
-      .filter((b) => isApiGroup(b.apiVersion, 'postgresql.cnpg.io'))
-      .filter((b) => {
-        const level = getCNPGBackupStatus(b).level
-        if (level !== 'unhealthy' && level !== 'alert') return false
-        const t = Date.parse(backupTime(b) ?? '')
-        return Number.isFinite(t) && now - t <= WEEK_MS
-      })
-      .filter((b) => !clusterFilter || `${b.metadata?.namespace}/${b.spec?.cluster?.name}` === clusterFilter)
-      .sort((a, b) => Date.parse(backupTime(b) ?? '') - Date.parse(backupTime(a) ?? ''))
-  }, [data.objects.backups, clusterFilter])
+  const runs = useMemo(
+    () => cnpgBackupRunsInWindow(data.objects.backups ?? [])
+      .filter((b) => !clusterFilter || `${b.metadata?.namespace}/${b.spec?.cluster?.name}` === clusterFilter),
+    [data.objects.backups, clusterFilter],
+  )
+  const failedRuns = useMemo(() => runs.filter((b) => isFailedRun(b)), [runs])
+  const [runFilter, setRunFilter] = useState<'failed' | 'all' | null>(null)
+  const showRuns = runFilter ?? (scopeCluster || failedRuns.length === 0 ? 'all' : 'failed')
+  const [allRuns, setAllRuns] = useState(false)
+  const shownRuns = showRuns === 'failed' ? failedRuns : runs
 
   const stores = useMemo<StoreRow[]>(() => {
     return (data.objects.objectStores ?? []).map((s) => {
@@ -144,73 +197,59 @@ export function CNPGProtection({
     ...(clusterFilter ? [{ label: `Cluster: ${clusterFilter}`, onClear: () => onSetParams({ cluster: null }) }] : []),
     ...namespaceChip(namespaces, onClearNamespaces),
   ]
-  const backupsReadable = data.coverage.backups?.state === 'full'
+  const backupsCoverage = data.coverage.backups!
+  const scopedNamespace = scopeCluster?.namespace ?? clusterFilter?.split('/')[0]
+  const backupsReadable = coverageReadable(backupsCoverage, scopedNamespace)
+  const countText = (count: number) => backupsReadable ? String(count) : count > 0 ? `≥${count}` : '?'
+  const backupsGap = backupsReadable ? undefined : cnpgCoverageGap(backupsCoverage, 'Backups', scopedNamespace)
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {!scopeCluster && (
-        <CNPGWorkspaceHeader
-          title="Protection"
-          subtitle="Backup outcomes, schedules, destinations and recovery evidence for every cluster. Configured, backed up and restore-tested are separate facts."
-        />
-      )}
-      <ScreenBody>
-        <CoverageNotice fleet={fleet} data={data} />
+  const body = (
+    <>
+        <DialogPortal open={!!evidence} onClose={() => setEvidenceKey(null)} ariaLabelledBy={evidenceTitleId} className="w-full max-w-3xl">
+          <div className="flex items-start justify-between gap-3 border-b border-theme-border p-4"><div><h3 id={evidenceTitleId} className="text-lg font-semibold text-theme-text-primary">Recovery evidence</h3><p className="text-xs text-theme-text-tertiary">{evidence?.namespace}/{evidence?.name}</p></div><button type="button" onClick={() => setEvidenceKey(null)} aria-label="Close recovery evidence" className="rounded p-1 text-theme-text-secondary hover:bg-theme-hover"><X className="h-5 w-5" /></button></div>
+          <div className="max-h-[70vh] overflow-y-auto p-4">{evidence && <CNPGClusterBackupFacts row={evidence} onNavigate={(ref) => { setEvidenceKey(null); onInspect(refToSelectedResource(ref)) }} />}</div>
+          <div className="flex justify-end border-t border-theme-border p-4"><button type="button" onClick={() => { if (evidence) navigate(cnpgClusterFullPath(evidence.namespace, evidence.name, data.context, 'backups'), { state: { returnLabel: currentPageLabel(), returnCtx: data.context } }); setEvidenceKey(null) }} className="btn-secondary px-3 py-1.5 text-sm">Open Cluster Backups →</button></div>
+        </DialogPortal>
+        <CoverageNotice fleet={fleet} data={data} kinds={['clusters', 'backups', 'scheduledBackups', 'objectStores']} namespace={scopeCluster?.namespace} />
         <FilterChips chips={chips} />
 
-        <SectionTable
-          title={scopeCluster ? 'Recovery evidence' : 'Recovery evidence by cluster'}
+        {scopeCluster && rows[0] && (
+          <section className="rounded-xl border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
+            <SectionHeading>Recovery evidence</SectionHeading>
+            <CNPGClusterBackupFacts row={rows[0]} onNavigate={(ref) => onInspect(refToSelectedResource(ref))} />
+            {stores.length > 0 && <p className="mt-2 text-xs text-theme-text-tertiary">Recovery windows come from ObjectStore status.</p>}
+          </section>
+        )}
+        {!scopeCluster && <SectionTable
+          title="Recovery evidence by cluster"
           columns={[
             {
               header: 'Cluster',
-              width: '14%',
+              width: '20%',
               cell: (r: CNPGFleetRow) => (
                 <>
-                  <div className="truncate font-medium">{r.name}</div>
+                  <BreakText value={r.name} after="-" className="font-medium" />
                   <Sub>{r.namespace}</Sub>
                 </>
               ),
             },
-            { header: 'Schedule', width: '13%', cell: (r) => <FactValue fact={r.protection.schedule} /> },
             {
-              header: 'Last successful backup',
-              width: '16%',
-              cell: (r) => (
-                <>
-                  <FactValue fact={r.protection.lastSuccessfulBackup} />
-                  {r.protection.lastSuccessfulBackup.source && <Sub>{r.protection.lastSuccessfulBackup.source}</Sub>}
-                </>
-              ),
-            },
-            { header: 'WAL archiving', width: '16%', cell: (r) => <FactValue fact={r.protection.walArchiving} className="line-clamp-2 break-words" /> },
-            {
-              header: 'Recovery window',
-              width: '13%',
-              cell: (r) =>
-                r.protection.recoveryWindow.from ? (
-                  <>
-                    <span className={toneTextClass(r.protection.recoveryWindow.tone)}>
-                      from {ageText(r.protection.recoveryWindow.from)}
-                    </span>
-                    <Sub>
-                      {r.protection.recoveryWindow.tone === 'degraded' ? 'not advancing: archiving failing' : 'to the newest archived WAL'}
-                    </Sub>
-                  </>
-                ) : (
-                  <FactValue fact={r.protection.recoveryWindow} />
-                ),
+              header: 'Archive & schedule', width: '27%', cell: (r) => <>
+                <Tooltip content={[r.protection.walArchiving.source, r.protection.walArchiving.detail].filter(Boolean).join(' · ')}><FactValue fact={r.protection.walArchiving} /></Tooltip>
+                <Sub><FactValue fact={r.protection.schedule} /></Sub>
+              </>,
             },
             {
-              header: 'Restore validation',
-              width: '13%',
-              cell: (r) => (
-                <FactValue fact={r.protection.restoreValidation} />
-              ),
+              header: 'Successful backup', width: '19%', cell: (r) => <Tooltip content={r.protection.lastSuccessfulBackup.source}><FactValue fact={r.protection.lastSuccessfulBackup} /></Tooltip>,
             },
             {
-              header: 'Destination',
-              width: '15%',
-              cell: (r) => <FactValue fact={r.protection.destination} className={r.protection.destination.method === 'barmanObjectStore' ? 'break-all font-mono text-[12.5px]' : 'break-words'} />,
+              header: 'Recovery boundary', width: '21%', cell: (r) => r.protection.recoveryWindow.from ? <>
+                <span className={toneTextClass(r.protection.recoveryWindow.tone)}>from {ageText(r.protection.recoveryWindow.from)}</span>
+                <Sub>{r.protection.recoveryWindow.tone === 'degraded' ? 'not advancing' : 'to newest archived WAL'}</Sub>
+              </> : <FactValue fact={r.protection.recoveryWindow} />,
+            },
+            {
+              header: 'Evidence', width: '13%', cell: (r) => <button type="button" aria-label={`Recovery evidence for ${r.namespace}/${r.name}`} onClick={(event) => { event.stopPropagation(); setEvidenceKey(r.key) }} className="rounded text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Details…</button>,
             },
           ]}
           rows={rows}
@@ -218,38 +257,89 @@ export function CNPGProtection({
           rowResource={(r) => clusterResource(r.namespace, r.name)}
           onInspect={onInspect}
           inspected={inspected}
-          minWidth={1000}
+          minWidth={800}
           empty={coverageEmpty(data.coverage.clusters, 'PostgreSQL clusters')}
-          footer="Kubernetes records no restore tests, so restore validation is never shown as passed. Recovery windows come from ObjectStore status."
-        />
+          footer={`${rows.some((r) => r.protection.walArchiving.state === 'no_destination' && r.protection.walArchiving.operatorCondition?.status === 'True') ? "With no backup destination, CloudNativePG reports archiving as working because it accepts each WAL file without keeping it. " : ""}Kubernetes records no restore tests, so restore validation is never shown as passed.${stores.length > 0 ? " Recovery windows come from ObjectStore status." : ""}`}
+        />}
 
         <SectionTable
-          title="Failed backups"
-          subtitle="last 7 days"
+          title="Backup runs"
+          subtitle={
+            <span className="inline-flex flex-wrap items-center gap-2">
+              last 7 days · all in-flight runs
+              <Segments
+                label="Backup runs shown"
+                value={showRuns}
+                onChange={(v) => setRunFilter(v)}
+                options={[
+                  { id: 'failed', label: `Failed ${countText(failedRuns.length)}` },
+                  { id: 'all', label: `All ${countText(runs.length)}` },
+                ]}
+              />
+              {backupsGap && <span className="text-theme-text-tertiary">{backupsGap}</span>}
+            </span>
+          }
           columns={[
-            { header: 'Backup', width: '28%', cell: (b: any) => <Mono>{b.metadata?.name}</Mono> },
-            { header: 'Cluster', width: '16%', cell: (b) => <>{b.spec?.cluster?.name ?? '—'}<Sub>{b.metadata?.namespace}</Sub></> },
-            { header: 'Started', width: '12%', cell: (b) => ageText(backupStart(b)) },
+            { header: 'Backup', width: scopeCluster ? '32%' : '26%', cell: (b: any) => <Mono>{b.metadata?.name}</Mono> },
+            ...(scopeCluster ? [] : [{ header: 'Cluster', width: '14%', cell: (b: any) => <>{b.spec?.cluster?.name ?? '—'}<Sub>{b.metadata?.namespace}</Sub></> }]),
+            { header: 'Started', width: '12%', cell: (b: any) => <>{ageText(backupStart(b))}{cnpgBackupRunInFlight(b) && Date.now() - Date.parse(backupStart(b) ?? '') > CNPG_BACKUP_RUN_WINDOW_MS && <Sub>started more than a week ago</Sub>}</> },
             {
-              header: 'Error',
-              width: '44%',
-              cell: (b) => <span className={toneTextClass('unhealthy')}>{b.status?.error || getCNPGBackupStatus(b).text}</span>,
+              header: 'Outcome',
+              width: '12%',
+              cell: (b: any) => {
+                const st = getCNPGBackupStatus(b)
+                return <Badge severity={SEVERITY[st.level]} size="sm">{st.text}</Badge>
+              },
+            },
+            {
+              header: 'Detail',
+              width: scopeCluster ? '44%' : '36%',
+              cell: (b: any) =>
+                isFailedRun(b) ? (
+                  <span className={toneTextClass('unhealthy')}>{b.status?.error || getCNPGBackupStatus(b).text}</span>
+                ) : (
+                  <span className="text-theme-text-secondary">{runDetail(b)}</span>
+                ),
             },
           ]}
-          rows={failed}
+          rows={allRuns ? shownRuns : shownRuns.slice(0, RUNS_SHOWN)}
           rowKey={(b) => `${b.metadata?.namespace}/${b.metadata?.name}`}
           rowResource={(b) => cnpgResource('backups', b.metadata?.namespace, b.metadata?.name)}
           onInspect={onInspect}
           inspected={inspected}
-          empty={backupsReadable && data.coverage.backups?.state === 'full' ? 'No failed backups in the last 7 days.' : coverageEmpty(data.coverage.backups, 'failed backups')}
+          empty={
+            backupsReadable
+              ? showRuns === 'failed'
+                ? 'No failed backups in the last 7 days.'
+                : 'No backups in the last 7 days.'
+              : coverageEmpty(data.coverage.backups, 'backups')
+          }
+          footer={
+            shownRuns.length > RUNS_SHOWN ? (
+              <button type="button" onClick={() => setAllRuns((v) => !v)} className="text-accent-text hover:underline">
+                {allRuns ? `Show the newest ${RUNS_SHOWN}` : `Show all ${shownRuns.length} runs`}
+              </button>
+            ) : undefined
+          }
         />
 
         <SectionTable
           title="Destinations"
           subtitle="ObjectStores (barman-cloud plugin)"
           columns={[
-            { header: 'ObjectStore', width: '18%', cell: (s: StoreRow) => <>{s.name}<Sub>{s.namespace}</Sub></> },
-            { header: 'Destination', width: '30%', cell: (s) => <Mono>{s.destination}</Mono> },
+            {
+              header: 'ObjectStore',
+              width: '18%',
+              cell: (s: StoreRow) => (
+                <>
+                  <Tooltip content={s.name} wrapperClassName="max-w-full">
+                    <span className="block truncate">{s.name}</span>
+                  </Tooltip>
+                  <Sub>{s.namespace}</Sub>
+                </>
+              ),
+            },
+            { header: 'Destination', width: '30%', cell: (s) => (s.destination ? <PathText value={s.destination} /> : '—') },
             { header: 'Used by', width: '20%', cell: (s) => (s.users.length ? s.users.map((u) => u.name).join(', ') : <span className="text-theme-text-tertiary">None visible</span>) },
             {
               header: 'Upload health (inferred)',
@@ -268,42 +358,53 @@ export function CNPGProtection({
           onInspect={onInspect}
           inspected={inspected}
           empty={data.coverage.objectStores?.state === 'notInstalled' ? 'The barman-cloud plugin’s ObjectStore kind is not installed.' : coverageEmpty(data.coverage.objectStores, 'ObjectStores')}
-          footer="ObjectStore has no health status of its own; upload health is inferred from its clusters’ WAL archiving and backup results."
+          footer={stores.length > 0 ? "ObjectStore has no health status of its own; upload health is inferred from its clusters’ WAL archiving and backup results." : undefined}
         />
 
         <SectionTable
           title="Schedules"
+          minWidth={820}
           columns={[
-            { header: 'ScheduledBackup', width: '24%', cell: (s: any) => <>{s.metadata?.name}<Sub>{s.metadata?.namespace}</Sub></> },
-            { header: 'Cluster', width: '16%', cell: (s) => s.spec?.cluster?.name ?? '—' },
+            { header: 'ScheduledBackup', width: scopeCluster ? '22%' : '20%', cell: (s: any) => <>{s.metadata?.name}<Sub>{s.metadata?.namespace}</Sub></> },
+            ...(scopeCluster ? [] : [{ header: 'Cluster', width: '12%', cell: (s: any) => s.spec?.cluster?.name ?? '—' }]),
             {
               header: 'Schedule',
-              width: '24%',
-              cell: (s) => (
-                <>
-                  <Mono>{s.spec?.schedule ?? '—'}</Mono>
-                  <Sub>CNPG cron, seconds first</Sub>
-                </>
-              ),
+              width: scopeCluster ? '24%' : '20%',
+              cell: (s) => {
+                const reading = data.scheduleReadings?.[`${s.metadata?.namespace}/${s.metadata?.name}`]
+                return reading ? (
+                  <>
+                    {reading}
+                    <Sub>
+                      <Mono>{s.spec?.schedule}</Mono>
+                    </Sub>
+                  </>
+                ) : (
+                  <>
+                    <Mono>{s.spec?.schedule ?? '—'}</Mono>
+                    <Sub>CNPG cron, seconds first</Sub>
+                  </>
+                )
+              },
             },
             {
-              header: 'Status',
-              width: '12%',
+              header: 'State',
+              width: scopeCluster ? '25%' : '27%',
               cell: (s) => {
                 const st = getCNPGScheduledBackupStatus(s)
-                return <Badge severity={SEVERITY[st.level]} size="sm">{st.text}</Badge>
+                const last = backupsForScheduledBackup(s, data.objects.backups ?? [])[0]
+                const blocker = cnpgScheduleDestinationBlocker(s, data.objects.clusters ?? [])
+                const guarded = s.spec?.suspend || getCNPGScheduledBackupOverdueMs(s) !== null
+                const text = guarded ? st.text : (blocker || last || s.status?.lastScheduleTime ? 'Enabled' : 'Enabled · not run yet')
+                const severity = guarded ? SEVERITY[st.level] : 'neutral'
+                return <div className="flex flex-wrap gap-1"><Badge severity={severity} size="sm" className="whitespace-nowrap">{text}</Badge>{blocker && <Badge severity="warning" size="sm" className="whitespace-nowrap">{blocker}</Badge>}</div>
               },
             },
-            { header: 'Last run', width: '12%', cell: (s) => ageText(s.status?.lastScheduleTime) },
+            { header: 'Last run', width: scopeCluster ? '13%' : '10%', cell: (s) => <LastRun schedule={s} backups={data.objects.backups ?? []} readable={backupsReadable} /> },
             {
-              header: 'Next run',
-              width: '12%',
-              cell: (s) => {
-                const next = s.status?.nextScheduleTime
-                if (!next) return '—'
-                const ms = Date.parse(next) - Date.now()
-                return ms >= 0 ? `in ${formatDuration(ms)}` : `${formatDuration(-ms)} overdue`
-              },
+              header: <span className="block whitespace-normal">Next run reported by the operator</span>,
+              width: scopeCluster ? '16%' : '11%',
+              cell: (s) => { const next = getCNPGScheduledBackupNextSchedule(s); return next === '-' ? 'Not reported' : next },
             },
           ]}
           rows={schedules}
@@ -314,7 +415,12 @@ export function CNPGProtection({
           empty={coverageEmpty(data.coverage.scheduledBackups, 'ScheduledBackups')}
           footer={data.backupsOmitted > 0 ? `${data.backupsOmitted} settled backups older than 7 days are not listed.` : undefined}
         />
-      </ScreenBody>
+    </>
+  )
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {!scopeCluster && <CNPGWorkspaceHeader title="Backups" subtitle="Recovery evidence, backup runs, schedules and destinations for every cluster. Configured, backed up and restore-tested are separate facts." />}
+      {scopeCluster ? <div className="space-y-4 p-4">{body}</div> : <ScreenBody>{body}</ScreenBody>}
     </div>
   )
 }

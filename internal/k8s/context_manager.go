@@ -91,7 +91,7 @@ var (
 	// InitAllSubsystems concurrently on the shared cache singletons. This mutex
 	// does — a second request waits for the first to finish rather than
 	// interleaving teardown/init.
-	contextOpMu sync.Mutex
+	contextOpMu sync.RWMutex
 	// Incremented BEFORE contextOpMu is acquired — that ordering is the
 	// mechanism: it makes a queued-but-blocked operation visible to runtime
 	// auth-loss candidate intake, which a try-lock could never see.
@@ -162,6 +162,20 @@ func OperationContext() context.Context {
 	operationMu.Lock()
 	defer operationMu.Unlock()
 	return operationCtx
+}
+
+// Clients and caches are swapped in separate steps. The callback only captures
+// dependencies; doing I/O here would delay context switches and auth recovery.
+func CaptureClusterReads(capture func()) bool {
+	if activeContextOperations.Load() != 0 || !contextOpMu.TryRLock() {
+		return false
+	}
+	defer contextOpMu.RUnlock()
+	if activeContextOperations.Load() != 0 {
+		return false
+	}
+	capture()
+	return true
 }
 
 // SetSessionStopper registers the callback that terminates active port-forward /

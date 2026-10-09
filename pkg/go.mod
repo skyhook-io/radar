@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/google/uuid v1.6.0
+	github.com/robfig/cron v1.2.0
 	golang.org/x/net v0.57.0
 	golang.org/x/sync v0.22.0
 	k8s.io/api v0.37.1

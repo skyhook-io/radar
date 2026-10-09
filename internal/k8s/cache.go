@@ -912,7 +912,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	}
 	labels := entry.Labels
 	createdAt := entry.CreatedAt
-	healthState := classifyTimelineHealth(kind, obj, time.Now())
+	healthState := classifyTimelineChangeHealth(kind, oldObj, obj, time.Now())
 
 	// Feed the tombstone on every add/update/delete. While the object is live
 	// this mirrors its enrichment; once it is gone (delete, or a late K8s event

@@ -851,7 +851,7 @@ The source contract is Strimzi's [KafkaConnector status schema](https://strimzi.
 
 [CloudNativePG](https://cloudnative-pg.io/) (CNPG) is the Kubernetes operator for PostgreSQL, covering the full lifecycle from bootstrapping to monitoring, with high availability, automated failover, and backup management.
 
-Beyond the per-kind views below, the CloudNativePG **workspace** (`/cnpg`) composes them into fleet, protection, declaration, pooling and operator screens — see [cnpg.md](cnpg.md).
+Beyond the per-kind views below, the CloudNativePG **workspace** (`/cnpg`) composes them into fleet, protection, declaration, pooling and operator screens. Cluster creation and restore share target inputs; Backups guides attachment to existing ObjectStores and matching schedule creation/repair, followed by observed upload/backup evidence. It does not provision storage providers or credentials — see [cnpg.md](cnpg.md).
 
 ### What Radar Shows
 
@@ -886,13 +886,13 @@ Beyond the per-kind views below, the CloudNativePG **workspace** (`/cnpg`) compo
 - PgBouncer parameters
 - Degraded state detection (AlertBanner when not all instances are scheduled)
 
-Note `Pooler.status.instances` counts pods *trying to be scheduled*, not ready pods — a Pooler whose PgBouncer pods are all Pending still reports the full count. Radar therefore labels the healthy state **Scheduled** rather than Ready; actual readiness lives on the Deployment CNPG generates for the Pooler (same name, same namespace).
+Note `Pooler.status.instances` counts pods *trying to be scheduled*, not ready pods — a Pooler whose PgBouncer pods are all Pending still reports the full count. Radar labels the declared `spec.instances` count neutrally as **N instances requested**; actual readiness lives on the Deployment CNPG generates for the Pooler (same name, same namespace).
 
 **Resource Browser:** Smart columns show status, instance counts (with degraded highlighting), primary instance, image tag, storage size, cluster reference, and schedule expressions.
 
 ### Phase classification
 
-Cluster phases are full English sentences (`Cluster is unrecoverable and needs manual intervention`), not enum tokens, and are matched on equality. They are bucketed as healthy / transient / failing / terminal / attention; terminal phases outrank instance counts, so an unrecoverable cluster whose pods happen to still be Ready is still rendered red. An unrecognized phase from a newer CNPG minor surfaces verbatim as unknown rather than being guessed at.
+Cluster phases are full English sentences (`Cluster is unrecoverable and needs manual intervention`), not enum tokens, and are matched on equality. They are bucketed as healthy / transient / failing / terminal / attention; terminal phases outrank instance counts, so an unrecoverable cluster whose pods happen to still be Ready is still rendered red. "Terminal" means reconciliation is blocked, not that the operator gave up: it retries every one of them, the plugin phases clear on their own once the plugin loads and answers, and the banner quotes the operator's `status.phaseReason` (`cnpgBlockedPhaseExplanation`). An unrecognized phase from a newer CNPG minor surfaces verbatim as unknown rather than being guessed at.
 
 Backup phases are lowercase tokens. `walArchivingFailing` is treated as a cluster-level signal, not an ordinary backup failure — archiving is broken upstream of that Backup, so the whole recovery window is affected.
 
@@ -906,7 +906,7 @@ The `ObjectStore` itself is rendered: destination and credential provider (never
 
 Two states carry the weight. A failure newer than the last success means the window has stopped advancing while its oldest point still ages out under retention — shrinking from both ends, so it is called out rather than left to be inferred from two timestamps. An ObjectStore with an empty `serverRecoveryWindow` is reported as holding nothing restorable rather than as healthy: on the plugin path the Cluster publishes no recovery point of its own, so a green badge here would be the only claim on screen and it would be wrong.
 
-`Backup` and `ScheduledBackup` with `spec.method: plugin` name the plugin and link to the ObjectStore they write into, and suppress the in-tree `destinationPath` / `serverName` rows, which are never populated on that path.
+`Backup` and `ScheduledBackup` with `spec.method: plugin` name the plugin and suppress the in-tree `destinationPath` / `serverName` rows, which are never populated on that path. For barman-cloud, their destination comes from the Cluster’s plugin entry; their own plugin parameters are ignored. The standalone renderers explain this without presenting a parameter as a destination link. Workspace destination links are inferred from the current Cluster configuration. Radar does not model third-party plugin destinations.
 
 ### Declarative objects: Database, Publication, Subscription
 
@@ -944,6 +944,7 @@ Deliberately narrow: the absence of a ScheduledBackup does not prove a cluster i
 | Database | `postgresql.cnpg.io/v1` | — | Yes | — |
 | Publication | `postgresql.cnpg.io/v1` | — | Yes | — |
 | Subscription | `postgresql.cnpg.io/v1` | — | Yes | — |
+| DatabaseRole | `postgresql.cnpg.io/v1` | — | Yes | — |
 | ImageCatalog | `postgresql.cnpg.io/v1` | — | Yes | — |
 | ClusterImageCatalog | `postgresql.cnpg.io/v1` | — | Yes | — |
 

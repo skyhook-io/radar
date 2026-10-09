@@ -7,10 +7,9 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
-
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
@@ -282,7 +282,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	dashStart := time.Now()
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if integration.NoNamespaceAccess(namespaces) {
 		s.writeJSON(w, DashboardResponse{AccessRestricted: true})
 		return
 	}
@@ -1341,7 +1341,7 @@ func (s *Server) getDashboardMetrics(ctx context.Context, allowedNamespaces []st
 	// Capacity + scheduled-pod requests via the shared informer-derived
 	// computation (node_metrics.go). Namespace scoping keeps restricted users
 	// from seeing aggregate totals of namespaces they can't read.
-	cr := computeCapacityRequests(nodes, listPodsScoped(cache.Pods(), allowedNamespaces))
+	cr := computeCapacityRequests(nodes, integration.ListPodsScoped(cache.Pods(), allowedNamespaces))
 	cpuCapacityMillis := cr.cpuCapMillis
 	memCapacityBytes := cr.memCapBytes
 	cpuRequestsMillis := cr.cpuReqMillis

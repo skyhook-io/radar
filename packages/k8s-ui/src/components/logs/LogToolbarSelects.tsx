@@ -50,6 +50,7 @@ interface LogRangeSelectProps {
   isDark?: boolean
   /** When true, the control is greyed out and non-interactive. */
   disabled?: boolean
+  disabledReason?: string
 }
 
 export function LogRangeSelect({
@@ -59,10 +60,11 @@ export function LogRangeSelect({
   tooltip = 'How many logs to load — by line count or time range',
   isDark = true,
   disabled = false,
+  disabledReason = 'Stop streaming to change the log range',
 }: LogRangeSelectProps) {
   const palette = getLogPalette(isDark)
   return (
-    <Tooltip content={disabled ? 'Stop streaming to change the log range' : tooltip} position="bottom">
+    <Tooltip content={disabled ? disabledReason : tooltip} position="bottom">
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}

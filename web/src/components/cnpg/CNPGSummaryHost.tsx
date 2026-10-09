@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import {
   CNPG_BARMAN_OBJECTSTORE_GROUP,
+  OpenIssueContext,
   CNPG_GROUP,
   CNPGBackupSummary,
   CNPGClusterSummary,
@@ -12,17 +13,42 @@ import {
   CNPGPublicationSummary,
   CNPGScheduledBackupSummary,
   CNPGSubscriptionSummary,
+  CNPGDatabaseRoleSummary,
+  relationUnavailable,
+  cnpgLogicalPaths,
+  cnpgLogicalSlotFact,
+  cnpgSubscriptionHostNamespace,
+  FactRow,
+  FactSource,
+  FactValue,
   PaneLoader,
   isApiGroup,
   refToSelectedResource,
-  type CNPGNavigate,
-  type CNPGRef,
+  type NavigateToRef,
+  type ResourceRef,
+  type CNPGLogicalPath,
   type CNPGWorkspaceResponse,
   type NavigateToResource,
 } from '@skyhook-io/k8s-ui'
 import { useCNPGFleet } from './useCNPGSidebarWorkspace'
-import { cnpgClusterFullPath, currentPageLabel } from './paths'
+import { useCNPGRuntime, useCNPGScheduleCapabilities, useCNPGWorkspace, type CNPGRuntimeResponse } from '../../api/cnpg'
+import { cnpgPublisherSlotsFrom, useCNPGPublisherSlots } from './logicalSlots'
+import { cnpgBaseBackupFacts, describeCNPGBaseBackup } from './baseBackup'
+import { useCNPGPoolerLive } from './useCNPGPoolerLive'
+import { useCNPGClusterAssessment } from './useCNPGClusterAssessment'
+import { CNPGMaintenanceBanner } from './actions/CNPGMaintenanceBanner'
+import { CNPG_CONNECT_PARAM, cnpgConnectParamValue } from './actions/CNPGConnectButton'
+import { CNPGOperatorBanner } from './CNPGOperatorBanner'
+import { cnpgClusterFullPath, cnpgDimensionPath, cnpgDimensionTabLabel, cnpgWithinDetail } from './paths'
+import { cnpgScreenPath } from './routes'
+import { currentPageLabel, issuesPathForSubject } from '../../utils/page-links'
+import { CNPGRestoreProgress } from './recovery/CNPGRestoreProgress'
+import { restoreBackupDeclared } from './recovery/restoreModel'
 import { useConnection } from '../../context/ConnectionContext'
+import { useNavCustomization } from '../../context/NavCustomization'
+import { RefreshFailedNotice } from '../workspace/layout'
+import { useCNPGNavigate } from './useCNPGNavigate'
+import { CNPGOperatorConditions } from './CNPGOperatorConditions'
 
 interface SummaryContext {
   apiKind: string
@@ -34,70 +60,189 @@ interface SummaryContext {
   onNavigate?: NavigateToResource
 }
 
-function ClusterSummaryHost({ namespace, name, context, onNavigate }: SummaryContext) {
-  const navigate = useNavigate()
-  const { connection } = useConnection()
-  // The workspace is read for the object's own namespace: an explicitly opened
-  // Cluster shows its facts whatever the namespace filter is.
-  const { query, fleet } = useCNPGFleet([namespace])
-  const row = fleet?.rows.find((r) => r.namespace === namespace && r.name === name)
-  if (!row) {
-    if (query.isLoading) return <PaneLoader label="Loading summary…" className="h-40" />
-    return (
-      <div className="px-4 py-4 text-sm text-theme-text-secondary">
-        {query.error instanceof Error
-          ? `The CloudNativePG summary could not be loaded: ${query.error.message}`
-          : 'This Cluster is not in the CloudNativePG workspace for your identity.'}{' '}
-        Spec & status still shows everything the object reports.
-      </div>
-    )
-  }
-  const go = onNavigate ? (ref: CNPGRef) => onNavigate(refToSelectedResource(ref)) : undefined
+function BaseBackupFact({ runtime }: { runtime: CNPGRuntimeResponse | undefined }) {
+  const bb = cnpgBaseBackupFacts(runtime)
+  if (!bb) return null
   return (
-    <CNPGClusterSummary
-      row={row}
-      onNavigate={go}
-      actions={
-        context === 'drawer'
-          ? [
-              {
-                label: 'Open cluster',
-                primary: true,
-                onClick: () =>
-                  navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined), {
-                    state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
-                  }),
-              },
-              {
-                label: 'Logs',
-                onClick: () =>
-                  navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined, 'logs'), {
-                    state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
-                  }),
-              },
-              {
-                label: 'Protection',
-                onClick: () =>
-                  navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined, 'protection'), {
-                    state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
-                  }),
-              },
-            ]
-          : undefined
-      }
-    />
+    <FactRow label="Standby cloning">
+      {bb.rows.length > 1 ? (
+        <ul className="space-y-0.5">
+          {bb.rows.map((r) => (
+            <li key={r.applicationName}>{describeCNPGBaseBackup(r)}</li>
+          ))}
+        </ul>
+      ) : (
+        <FactValue fact={bb.fact} />
+      )}
+      <FactSource fact={bb.fact} />
+    </FactRow>
   )
 }
 
-type ObjectSummary = (props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: CNPGNavigate }) => ReactNode
+function ClusterSummaryHost({ namespace, name, resource, context, onNavigate }: SummaryContext) {
+  const navigate = useCNPGNavigate()
+  const location = useLocation()
+  const { connection } = useConnection()
+  // The workspace is read for the object's own namespace: an explicitly opened
+  // Cluster shows its facts whatever the namespace filter is.
+  const { query, runtime, ha, row, dimensions } = useCNPGClusterAssessment(namespace, name)
+  const operatorConditions = context === 'expanded' ? <CNPGOperatorConditions conditions={resource.status?.conditions ?? []} /> : null
+  if (!row) {
+    if (query.isLoading) return <><PaneLoader label="Loading summary…" className="h-40" />{operatorConditions}</>
+    return (
+      <>
+        <div className="px-4 py-4 text-sm text-theme-text-secondary">
+          {query.error instanceof Error
+            ? `The CloudNativePG summary could not be loaded: ${query.error.message}`
+            : 'The CloudNativePG workspace summary could not be read.'}{' '}
+          {context === 'expanded' ? 'Configuration shows the declared settings; Operator conditions are below. YAML holds the full object.' : 'Spec & status still shows the object’s fields.'}
+        </div>
+        {operatorConditions}
+      </>
+    )
+  }
+  const goRef = onNavigate ? (ref: ResourceRef) => onNavigate(refToSelectedResource(ref)) : undefined
+  // On the Cluster's own page this is a tab change, applied like a tab click;
+  // anywhere else (the drawer, another page) it is a push to the full page
+  // with a return label.
+  const go = (path: string) => {
+    const inPlace = context === 'expanded' ? cnpgWithinDetail(location.pathname, location.search, path) : null
+    if (inPlace) navigate(inPlace, { replace: true, state: location.state })
+    else navigate(path, { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } })
+  }
+  return (
+    <div>
+      <CNPGClusterSummary
+        row={row}
+        framed={context === 'expanded'}
+        onNavigate={goRef}
+        lead={
+          <>
+            <RefreshFailedNotice queries={[runtime, ha]} />
+            {context === 'drawer' && <CNPGOperatorBanner namespaces={[namespace]} />}
+            <CNPGMaintenanceBanner namespace={namespace} name={name} maintenance={ha.data?.maintenance} />
+            {row.cluster?.spec?.bootstrap?.recovery && (
+              <CNPGRestoreProgress
+                namespace={namespace}
+                name={name}
+                nextSteps={{
+                  backup: row.cluster ? restoreBackupDeclared(row.cluster) : undefined,
+                  onOpen: (step) => {
+                    if (step === 'connect') {
+                      const p = new URLSearchParams(location.search)
+                      p.set(CNPG_CONNECT_PARAM, cnpgConnectParamValue(namespace, name, context === 'drawer' ? 'drawer' : 'page'))
+                      navigate({ search: p.toString() }, { replace: true, state: location.state })
+                      return
+                    }
+                    const protection = cnpgClusterFullPath(namespace, name, connection.context || undefined, 'backups')
+                    go(step === 'validate' ? `${protection}&validate=1` : step === 'backup' ? `${protection}&protectionSetup=1` : protection)
+                  },
+                }}
+              />
+            )}
+          </>
+        }
+        onSelectDimension={(id) => go(cnpgDimensionPath(namespace, name, connection.context || undefined, id))}
+        dimensionLinkLabel={cnpgDimensionTabLabel}
+        onOpenOperator={() => navigate(cnpgScreenPath('operator'), { state: { returnLabel: currentPageLabel(), returnCtx: connection.context } })}
+        initialProblemsExpanded={context === 'expanded' && new URLSearchParams(location.search).get('problems') === 'all'}
+        dimensions={dimensions}
+        operationalFacts={<BaseBackupFact runtime={runtime.data} />}
+        actions={
+          context === 'drawer'
+            ? [
+                {
+                  label: 'Open cluster',
+                  primary: true,
+                  onClick: () =>
+                    navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined), {
+                      state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
+                    }),
+                },
+                {
+                  label: 'Logs',
+                  onClick: () =>
+                    navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined, 'logs'), {
+                      state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
+                    }),
+                },
+                {
+                  label: 'Backups',
+                  onClick: () =>
+                    navigate(cnpgClusterFullPath(namespace, name, connection.context || undefined, 'backups'), {
+                      state: { returnLabel: currentPageLabel(), returnCtx: connection.context },
+                    }),
+                },
+              ]
+            : undefined
+        }
+      />
+      {operatorConditions}
+    </div>
+  )
+}
+
+type ObjectSummary = (props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: NavigateToRef }) => ReactNode
+
+function ScheduledBackupSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: NavigateToRef }) {
+  const ns = props.resource?.metadata?.namespace ?? ''
+  const name = props.resource?.metadata?.name ?? ''
+  const caps = useCNPGScheduleCapabilities(ns, name)
+  return <CNPGScheduledBackupSummary {...props} schedulePreview={caps.data?.facts.preview} />
+}
+
+// The publisher may live in another namespace than the subscriber: that
+// namespace's Clusters, Publications and Poolers are read too.
+function useLogicalWorkspace(ws: CNPGWorkspaceResponse | null, subscriptions: any[]) {
+  const hostNs = [...new Set(subscriptions.map((s) => cnpgSubscriptionHostNamespace(s, ws?.objects.clusters ?? [])).filter((n): n is string => !!n))]
+  const extra = ws?.namespaces === null ? [] : hostNs.filter((n) => !(ws?.namespaces ?? []).includes(n))
+  const other = useCNPGWorkspace(extra, { enabled: !!ws && extra.length > 0 })
+  const merged = (key: 'clusters' | 'publications' | 'poolers') => [...(ws?.objects[key] ?? []), ...(other.data?.installed ? other.data.objects[key] ?? [] : [])]
+  const publicationsUnavailable = (ns: string) =>
+    ws?.namespaces === null || ws?.namespaces?.includes(ns)
+      ? relationUnavailable(ws, 'publications', ns, 'Publications')
+      : relationUnavailable(other.data?.installed ? other.data : null, 'publications', ns, 'Publications')
+  return { clusters: merged('clusters'), publications: merged('publications'), poolers: merged('poolers'), publicationsUnavailable }
+}
+
+function LogicalPathSlot({ path, children }: { path: CNPGLogicalPath; children: (slot: ReturnType<typeof cnpgLogicalSlotFact>, notice: ReactNode) => ReactNode }) {
+  const { observed, query } = useCNPGPublisherSlots(path.publisher)
+  return <>{children(cnpgLogicalSlotFact(path, observed), <RefreshFailedNotice queries={[query]} />)}</>
+}
+
+function SubscriptionSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: NavigateToRef }) {
+  const lw = useLogicalWorkspace(props.workspace, [props.resource])
+  const path = props.workspace ? cnpgLogicalPaths([props.resource], lw.clusters, lw.publications, lw.poolers, lw.publicationsUnavailable)[0] : undefined
+  if (!path) return <CNPGSubscriptionSummary {...props} />
+  return <LogicalPathSlot path={path}>{(slot, notice) => <CNPGSubscriptionSummary {...props} logicalPath={{ path, slot, notice }} />}</LogicalPathSlot>
+}
+
+function PublicationSummaryHost(props: { resource: any; workspace: CNPGWorkspaceResponse | null; onNavigate?: NavigateToRef }) {
+  // Subscribers are the Subscriptions in view; the publisher's own runtime
+  // answers for every slot.
+  const pubCluster = props.resource?.spec?.cluster?.name
+  const ns = props.resource?.metadata?.namespace ?? ''
+  const runtime = useCNPGRuntime(ns, pubCluster ?? '', !!pubCluster)
+  const all = useCNPGWorkspace([], { enabled: !!props.workspace })
+  const ws = all.data?.installed ? all.data : props.workspace
+  const paths = ws
+    ? cnpgLogicalPaths(ws.objects.subscriptions ?? [], ws.objects.clusters ?? [], ws.objects.publications ?? [], ws.objects.poolers ?? []).filter(
+        (p) => p.publication.object?.namespace === ns && p.publication.object?.name === props.resource?.metadata?.name,
+      )
+    : []
+  const observed = cnpgPublisherSlotsFrom(runtime.data, runtime.error, runtime.isRefetchError)
+  const notice = <RefreshFailedNotice queries={[runtime]} />
+  return <CNPGPublicationSummary {...props} subscribers={paths.map((path) => ({ path, slot: cnpgLogicalSlotFact(path, observed), notice }))} />
+}
 
 const OBJECT_SUMMARIES: Record<string, ObjectSummary> = {
   Backup: CNPGBackupSummary,
-  ScheduledBackup: CNPGScheduledBackupSummary,
+  ScheduledBackup: ScheduledBackupSummaryHost,
   Pooler: CNPGPoolerSummary,
   Database: CNPGDatabaseSummary,
-  Publication: CNPGPublicationSummary,
-  Subscription: CNPGSubscriptionSummary,
+  Publication: PublicationSummaryHost,
+  Subscription: SubscriptionSummaryHost,
+  DatabaseRole: CNPGDatabaseRoleSummary,
   ImageCatalog: CNPGImageCatalogSummary,
   ClusterImageCatalog: CNPGImageCatalogSummary,
 }
@@ -109,8 +254,17 @@ function ObjectSummaryHost({ ctx, Summary }: { ctx: SummaryContext; Summary: Obj
   const { query } = useCNPGFleet(clusterScoped ? [] : [ctx.namespace])
   if (query.isLoading) return <PaneLoader label="Loading summary…" className="h-40" />
   const workspace = query.data?.installed ? query.data : null
-  const go = ctx.onNavigate ? (ref: CNPGRef) => ctx.onNavigate?.(refToSelectedResource(ref)) : undefined
+  const go = ctx.onNavigate ? (ref: ResourceRef) => ctx.onNavigate?.(refToSelectedResource(ref)) : undefined
   return <Summary resource={ctx.resource} workspace={workspace} onNavigate={go} />
+}
+
+function PoolerSummaryHost({ ctx }: { ctx: SummaryContext }) {
+  const { query } = useCNPGFleet([ctx.namespace])
+  const { live, queries } = useCNPGPoolerLive(ctx.namespace, ctx.name)
+  if (query.isLoading) return <PaneLoader label="Loading summary…" className="h-40" />
+  const workspace = query.data?.installed ? query.data : null
+  const go = ctx.onNavigate ? (ref: ResourceRef) => ctx.onNavigate?.(refToSelectedResource(ref)) : undefined
+  return <CNPGPoolerSummary resource={ctx.resource} workspace={workspace} onNavigate={go} live={live} lead={<RefreshFailedNotice queries={queries} />} />
 }
 
 // The object's own apiVersion decides: Velero also ships a Backup kind.
@@ -130,6 +284,7 @@ function renderSummaryFor(ctx: SummaryContext): ReactNode {
   }
   if (group !== CNPG_GROUP) return null
   if (kind === 'Cluster') return <ClusterSummaryHost {...ctx} />
+  if (kind === 'Pooler') return <PoolerSummaryHost ctx={ctx} />
   const Summary = OBJECT_SUMMARIES[kind]
   return Summary ? <ObjectSummaryHost ctx={ctx} Summary={Summary} /> : null
 }
@@ -139,5 +294,24 @@ function renderSummaryFor(ctx: SummaryContext): ReactNode {
  * without one, which keeps the default Overview.
  */
 export function renderCNPGSummary(ctx: SummaryContext): ReactNode {
-  return renderSummaryFor(ctx)
+  const summary = renderSummaryFor(ctx)
+  return summary ? <IssueLinks>{summary}</IssueLinks> : null
+}
+
+// "See in Issues →" on every CNPG problem: the Issues page narrowed to the
+// problem's subject (it has no link to a single issue). Omitted where the host
+// takes Issues over, since its page does not read the subject.
+function IssueLinks({ children }: { children: ReactNode }) {
+  const navigate = useCNPGNavigate()
+  const [searchParams] = useSearchParams()
+  const issuesTakenOver = !!useNavCustomization().fleetTakeoverHref?.('issues')
+  return (
+    <OpenIssueContext.Provider
+      value={issuesTakenOver ? undefined : (p) =>
+        navigate(issuesPathForSubject(p.subject, searchParams.get('namespaces')))
+      }
+    >
+      {children}
+    </OpenIssueContext.Provider>
+  )
 }

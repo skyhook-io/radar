@@ -5,7 +5,7 @@ import { PolicySection } from './PolicySection'
 import type { PolicyResourceResponse } from '../../../types/policy'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink, useOperationalIssuesShown } from '../../ui/drawer-components'
 import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName } from '../resource-utils'
-import { getResourceStatusColor, SEVERITY_BADGE_BORDERED } from '../../../utils/badge-colors'
+import { getResourceStatusColor, SEVERITY_BORDER } from '../../../utils/badge-colors'
 import {
   rbacVerbBadgeClass,
   rbacResourceBadgeClass,
@@ -26,6 +26,7 @@ import { Tooltip } from '../../ui/Tooltip'
 import { RadarUpgradeNote } from '../../ui/RadarUpgradeNote'
 import { getRadarUpgradeRequirement, type RadarUpgradeRequirement } from '../../../types/fetch-error'
 import { MetricsChart } from '../../ui/MetricsChart'
+import { Badge } from '../../ui/Badge'
 import { MetricsUnavailableNotice } from './MetricsUnavailableNotice'
 import { ContainerEnvironmentSection } from './ContainerEnvironmentSection'
 
@@ -90,7 +91,7 @@ interface PodRendererProps {
   renderPortAction?: (props: { namespace: string; podName: string; port: number; protocol: string; disabled?: boolean }) => ReactNode
   // Metrics data injection
   metrics?: { containers?: any[]; timestamp?: string }
-  metricsHistory?: { containers?: any[]; collectionError?: string; metricsUnavailableReason?: string; metricsUnavailableDiagnosis?: string }
+  metricsHistory?: { metricsAPIReachable?: boolean; containers?: any[]; collectionError?: string; metricsUnavailableReason?: string; metricsUnavailableDiagnosis?: string }
   metricsUnavailable?: boolean
   hideMetricsServer?: boolean
   // Filesystem browser render props
@@ -330,7 +331,9 @@ export function PodRenderer({
   const operationalIssuesShown = useOperationalIssuesShown()
   const podProblems = getPodProblems(data)
   const hasProblems = podProblems.length > 0 && !operationalIssuesShown
-  const showMetricsUnavailable = !!metricsUnavailable && !metricsHistory?.collectionError
+  const notRunning = data.status?.phase === 'Pending' && !containerStatuses.some((s: any) => s.state?.running)
+  const noUsageYet = notRunning && metricsHistory?.metricsAPIReachable === true && !metricsHistory.collectionError && !metricsHistory.containers?.length && !metrics?.containers?.length
+  const showMetricsUnavailable = !!metricsUnavailable && !metricsHistory?.collectionError && !noUsageYet
   const hasMetricsHistory = !!metricsHistory?.containers?.length
   const currentMetrics = metricsUnavailable ? undefined : metrics
 
@@ -525,10 +528,11 @@ export function PodRenderer({
               } else if (isWaiting) {
                 statusLabel = state?.waiting?.reason || 'Waiting'
               } else {
-                statusLabel = 'Pending'
+                statusLabel = 'Not started'
               }
+              const reportedFailure = isFailed || !!(isWaiting && state?.waiting?.reason && !['ContainerCreating', 'PodInitializing'].includes(state.waiting.reason))
               const statusColor = getResourceStatusColor(
-                isCompleted ? 'succeeded' : isFailed ? 'failed' : isInitRunning ? 'running' : isWaiting ? 'waiting' : 'pending'
+                isCompleted ? 'succeeded' : reportedFailure ? 'failed' : isInitRunning ? 'running' : 'unknown'
               )
 
               // Build command string
@@ -539,10 +543,11 @@ export function PodRenderer({
               return (
                 <div key={container.name} className={clsx(
                   'rounded-lg p-3 border-l-2',
-                  isCompleted ? 'bg-theme-elevated/20 border-green-500/40' :
-                  isFailed ? 'bg-theme-elevated/30 border-red-500/50' :
-                  isInitRunning ? 'bg-theme-elevated/30 border-blue-500/50' :
-                  'bg-theme-elevated/30 border-yellow-500/40'
+                  isCompleted ? 'bg-theme-elevated/20' : 'bg-theme-elevated/30',
+                  isCompleted ? SEVERITY_BORDER.success :
+                  reportedFailure ? 'border-l-semantic-error' :
+                  isInitRunning ? SEVERITY_BORDER.info :
+                  SEVERITY_BORDER.neutral
                 )}>
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
@@ -580,7 +585,7 @@ export function PodRenderer({
                       </div>
                     )}
                     {/* Waiting reason detail */}
-                    {isWaiting && state?.waiting?.reason && state.waiting.reason !== 'PodInitializing' && (
+                    {isWaiting && state?.waiting?.reason && !['ContainerCreating', 'PodInitializing'].includes(state.waiting.reason) && (
                       <div className="text-red-400 flex items-center gap-1">
                         <span className="font-medium">{state.waiting.reason}</span>
                         {state.waiting.message && (
@@ -643,6 +648,7 @@ export function PodRenderer({
             // failure — tone its badges/text sky, not red, so the drawer agrees
             // with the calm "Completed" table badge instead of screaming red.
             const terminatedOk = currentTerminated?.exitCode === 0
+            const reportedFailure = !!((currentTerminated?.exitCode != null && currentTerminated.exitCode !== 0) || (currentWaiting?.reason && !['ContainerCreating', 'PodInitializing'].includes(currentWaiting.reason)))
 
             return (
               <div key={container.name} className="card-inner-lg">
@@ -679,23 +685,12 @@ export function PodRenderer({
                         </button>
                       </Tooltip>
                     )}
-                    <span className={clsx(
-                      'badge',
-                      isReady ? SEVERITY_BADGE_BORDERED.success :
-                      terminatedOk ? SEVERITY_BADGE_BORDERED.info :
-                      SEVERITY_BADGE_BORDERED.error
-                    )}>
-                      {isReady ? 'Ready' : terminatedOk ? 'Completed' : 'Not Ready'}
-                    </span>
-                    <span className={clsx(
-                      'badge',
-                      stateKey === 'running' ? SEVERITY_BADGE_BORDERED.success :
-                      stateKey === 'waiting' ? SEVERITY_BADGE_BORDERED.warning :
-                      terminatedOk ? SEVERITY_BADGE_BORDERED.info :
-                      SEVERITY_BADGE_BORDERED.error
-                    )}>
+                    <Badge severity={isReady ? 'success' : terminatedOk ? 'info' : reportedFailure ? 'error' : stateKey === 'running' && isReady === false ? 'warning' : 'neutral'}>
+                      {isReady ? 'Ready' : terminatedOk ? 'Completed' : !stateKey || stateKey === 'unknown' ? 'Not started' : 'Not Ready'}
+                    </Badge>
+                    {stateKey !== 'unknown' && <Badge severity={stateKey === 'running' ? 'success' : terminatedOk ? 'info' : reportedFailure ? 'error' : 'neutral'}>
                       {stateKey}
-                    </span>
+                    </Badge>}
                   </div>
                 </div>
                 <div className="text-xs text-theme-text-secondary space-y-1">
@@ -709,7 +704,7 @@ export function PodRenderer({
                     )
                   })()}
                   {/* Show current waiting reason (e.g., CrashLoopBackOff) */}
-                  {currentWaiting?.reason && currentWaiting.reason !== 'ContainerCreating' && (
+                  {currentWaiting?.reason && !['ContainerCreating', 'PodInitializing'].includes(currentWaiting.reason) && (
                     <div className="text-red-400 flex items-center gap-1">
                       <span className="font-medium">{currentWaiting.reason}</span>
                       {currentWaiting.message && (
@@ -836,8 +831,9 @@ export function PodRenderer({
       )}
 
       {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}
-      {!hideMetricsServer && !!(currentMetrics?.containers?.length || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable) && (
+      {!hideMetricsServer && !!(currentMetrics?.containers?.length || hasMetricsHistory || metricsHistory?.collectionError || showMetricsUnavailable || noUsageYet) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
+          {noUsageYet && <MetricsUnavailableNotice noUsageYet />}
           {showMetricsUnavailable && (
             <MetricsUnavailableNotice rawError={metricsHistory?.metricsUnavailableReason} diagnosis={metricsHistory?.metricsUnavailableDiagnosis} />
           )}

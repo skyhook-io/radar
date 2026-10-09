@@ -87,6 +87,8 @@ export interface WorkloadExtraTab {
   icon?: ReactNode
   after?: WorkloadTabType
   replaces?: WorkloadTabType
+  /** Trailing adornment after the label, e.g. a status mark. */
+  badge?: ReactNode
   render: () => ReactNode
 }
 
@@ -142,6 +144,23 @@ interface WorkloadViewProps {
    * the Escape shortcut.
    */
   breadcrumb?: ReactNode
+  /** Where the object lives, shown on the title line before its name (e.g. "Workspace / View /"). */
+  titlePrefix?: ReactNode
+  /**
+   * Kind, status and namespace on the title line, wrapping below the name
+   * only when there is no room; other chips (image, owners) keep a second
+   * row. The header actions then wrap below the title as a group rather
+   * than squeezing it.
+   */
+  inlineBadges?: boolean
+  /** A note right after the namespace, e.g. that it is outside the namespace filter. */
+  namespaceNote?: ReactNode
+  /** Replaces the derived status badge on the title line, e.g. with the controller's own reported phase. */
+  renderStatusBadge?: (resource: any) => ReactNode
+  /** A short status right after the controller status on the title line, e.g. a derived health verdict. */
+  statusNote?: ReactNode
+  /** Leave out the kind badge, for a host whose title prefix already names the kind. */
+  hideKindBadge?: boolean
   /** Suppress the standalone back arrow — for embeddings where "back" has no
    *  meaningful target (a single-workload app has no app graph to return to). */
   hideBackButton?: boolean
@@ -314,6 +333,14 @@ interface WorkloadViewProps {
   }) => ReactNode
   /** Extra tabs for the expanded view (e.g. a domain's own sections). */
   extraTabs?: WorkloadExtraTab[]
+  /** Expanded view: a line under the title, above the tabs, shown on every tab. */
+  subheader?: ReactNode
+  /** Expanded view: tab ids in display order; tabs not listed follow in their usual order. */
+  tabOrder?: string[]
+  /** Expanded view: relabel, lead, or replace the whole "Spec & status" body. */
+  specTab?: { label?: string; icon?: ReactNode; lead?: ReactNode; render?: () => ReactNode }
+  /** Domain actions rendered in the header (drawer and expanded). */
+  renderHeaderActions?: (props: { resource: any; context: 'drawer' | 'expanded'; onNavigate?: NavigateToResource }) => ReactNode
   /** Render a full replacement for the expanded Overview tab. */
   renderExpandedOverview?: (props: {
     kind: string
@@ -404,6 +431,12 @@ export function WorkloadView({
   initialTab,
   group,
   breadcrumb,
+  titlePrefix,
+  inlineBadges = false,
+  namespaceNote,
+  renderStatusBadge,
+  statusNote,
+  hideKindBadge = false,
   hideBackButton,
   scopeControls,
   compactHeader,
@@ -464,6 +497,10 @@ export function WorkloadView({
   renderExpandedOverview,
   renderSummary,
   extraTabs,
+  tabOrder,
+  specTab,
+  subheader,
+  renderHeaderActions,
   renderRelatedYaml,
   renderMetricsTab,
   renderCostTab,
@@ -790,6 +827,7 @@ export function WorkloadView({
   const renderDiagnose = actionsBarProps?.renderDiagnose as
     | ((ctx: { kind: string; group?: string; namespace: string; name: string; health?: DiagnoseHealthHint }) => ReactNode)
     | undefined
+  const headerActions = resource && renderHeaderActions?.({ resource, context: expanded ? 'expanded' : 'drawer', onNavigate: onNavigateToResource })
   const diagnoseAction = renderDiagnose?.({
     kind: resource?.kind ?? knownKindForPluralWithGroup(apiKind, group ?? '') ?? apiKind,
     group,
@@ -813,7 +851,7 @@ export function WorkloadView({
   const drawerSummary = !expanded && resource ? renderSummary?.({ ...summaryContext, context: 'drawer' }) ?? null : null
   const tabs: DetailShellTab<TabType>[] = [
     { id: 'overview', label: 'Overview', icon: <Layers className="w-4 h-4" /> },
-    { id: 'spec', label: 'Spec & status', icon: <FileText className="w-4 h-4" />, hidden: !expandedSummary },
+    { id: 'spec', label: specTab?.label ?? 'Spec & status', icon: specTab?.icon ?? <FileText className="w-4 h-4" />, hidden: !expandedSummary },
     { id: 'topology', label: 'Topology', icon: <Network className="w-4 h-4" />, hidden: topologyTabHidden },
     {
       id: 'timeline',
@@ -832,7 +870,7 @@ export function WorkloadView({
     { id: 'cost', label: 'Cost', icon: <Coins className="w-4 h-4" />, hidden: !costTabVisible },
     { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" /> },
   ]
-  const allTabs = mergeExtraTabs(tabs, expanded ? extraTabs : undefined)
+  const allTabs = orderTabs(mergeExtraTabs(tabs, expanded ? extraTabs : undefined), expanded ? tabOrder : undefined)
   const requestedTabAvailable = allTabs.some((tab) => tab.id === requestedTab && !tab.hidden)
   const effectiveTab: TabType = requestedTabAvailable ? requestedTab : 'overview'
   const activeExtraTab = expanded ? extraTabs?.find((x) => x.id === effectiveTab) : undefined
@@ -858,19 +896,27 @@ export function WorkloadView({
       <div className="flex flex-col h-full w-full">
         {/* Drawer header */}
         <div className="border-b border-theme-border shrink-0">
-          {/* Top row: badges and controls */}
-          <div className="flex items-center justify-between px-4 pt-3 pb-2">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className={clsx('badge', getKindColorOutline(apiKind))}>
-                {displayKindName(apiKind, resource?.kind)}
-              </span>
-              {status && (
-                <span className={clsx('badge', status.color)}>
-                  {status.text}
+          <div className="flex items-start gap-3 px-4 pt-3 pb-2">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={clsx('badge', getKindColorOutline(apiKind))}>
+                  {displayKindName(apiKind, resource?.kind)}
                 </span>
-              )}
+                <h2 className="min-w-0 truncate text-lg font-semibold text-theme-text-primary">{name}</h2>
+                <Tooltip content="Copy name" delay={150}>
+                  <button onClick={() => copyToClipboard(name, 'name')} className="shrink-0 rounded p-1 text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary" aria-label="Copy name">
+                    {copied === 'name' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                  </button>
+                </Tooltip>
+                {renderStatusBadge ? renderStatusBadge(resource) : status && (
+                  <span className={clsx('badge', status.color)}>
+                    {status.text}
+                  </span>
+                )}
+              </div>
+              <p className="mt-1 text-sm text-theme-text-tertiary">{namespace}</p>
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex shrink-0 flex-nowrap items-center justify-end gap-1.5">
               {diagnoseAction}
               {onExpand && (
                 <Tooltip content="Open full view" delay={150} position="bottom">
@@ -914,34 +960,18 @@ export function WorkloadView({
             </div>
           </div>
 
-          {/* Name and namespace */}
-          <div className="px-4 pb-3">
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg font-semibold text-theme-text-primary truncate">{name}</h2>
-              <Tooltip content="Copy name" delay={150}>
-                <button
-                  onClick={() => copyToClipboard(name, 'name')}
-                  className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
-                  aria-label="Copy name"
-                >
-                  {copied === 'name' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-                </button>
-              </Tooltip>
+          {(gitopsOwner || helmOwner || (gitOpsResourcePath && onNavigateGitOpsPath)) && (
+            <div className="flex flex-wrap items-center gap-1.5 px-4 pb-3">
+              {gitopsOwner && <ManagedByChip owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} />}
+              {helmOwner && <HelmManagedByChip owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} />}
+              {gitOpsResourcePath && onNavigateGitOpsPath && (
+                <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
+              )}
             </div>
-            <p className="text-sm text-theme-text-tertiary">{namespace}</p>
-            {(gitopsOwner || helmOwner || (gitOpsResourcePath && onNavigateGitOpsPath)) && (
-              <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                {gitopsOwner && <ManagedByChip owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} />}
-                {helmOwner && <HelmManagedByChip owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} />}
-                {gitOpsResourcePath && onNavigateGitOpsPath && (
-                  <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
-                )}
-              </div>
-            )}
-          </div>
+          )}
 
           {/* Actions bar */}
-          <ResourceActionsBar resource={selectedResource} data={resource} onClose={onClose} showYaml={showYaml} onToggleYaml={() => switchView(!showYaml)} {...effectiveActionsBarProps} />
+          <ResourceActionsBar resource={selectedResource} data={resource} onClose={onClose} showYaml={showYaml} onToggleYaml={() => switchView(!showYaml)} {...effectiveActionsBarProps} leadingActions={headerActions} />
         </div>
 
         {/* Success animation overlay */}
@@ -1049,6 +1079,8 @@ export function WorkloadView({
     <OperationalIssuesShownContext.Provider value={!!hasOperationalIssues || !!operationalIssuesPending}>
     <DetailShell
       breadcrumb={breadcrumb}
+      wrapHeader={inlineBadges}
+      subheader={subheader}
       nav={
         breadcrumb || hideBackButton ? undefined : (
           <Tooltip content="Go back (Esc)" delay={150} position="bottom">
@@ -1062,67 +1094,110 @@ export function WorkloadView({
           </Tooltip>
         )
       }
-      identity={
-        <>
-          {showOwnershipHeading && ownershipContext ? (
-            <OwnershipHeading
-              podName={name}
-              context={ownershipContext}
-              copied={copied === 'name'}
-              onCopy={() => copyToClipboard(name, 'name')}
-              onNavigateToResource={onNavigateToResource}
-              onOpenApplication={onOpenApplication}
-            />
-          ) : (
-            <div className="flex items-center gap-3 mb-1">
-              <h1 className="text-lg font-semibold text-theme-text-primary truncate">{name}</h1>
-              <Tooltip content="Copy name" delay={150}>
-                <button
-                  onClick={() => copyToClipboard(name, 'name')}
-                  className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
-                  aria-label="Copy name"
-                >
-                  {copied === 'name' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-                </button>
-              </Tooltip>
-            </div>
-          )}
-          <div className="flex items-center gap-3 text-sm text-theme-text-secondary">
-            <span className={clsx('badge', getKindColorOutline(apiKind))}>
-              {displayKindName(apiKind, resource?.kind)}
-            </span>
-            {status && (
-              <span className={clsx('badge', status.color)}>
+      identity={(() => {
+        const nameAndCopy = (
+          <>
+            <h1 className="text-lg font-semibold text-theme-text-primary truncate">{name}</h1>
+            <Tooltip content="Copy name" delay={150}>
+              <button
+                onClick={() => copyToClipboard(name, 'name')}
+                className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
+                aria-label="Copy name"
+              >
+                {copied === 'name' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            </Tooltip>
+          </>
+        )
+        const kindAndStatus = (
+          <>
+            {!hideKindBadge && (
+              <span className={clsx('badge whitespace-nowrap', getKindColorOutline(apiKind))}>
+                {displayKindName(apiKind, resource?.kind)}
+              </span>
+            )}
+            {renderStatusBadge ? renderStatusBadge(resource) : status && (
+              <span className={clsx('badge whitespace-nowrap', status.color)}>
                 {status.text}
               </span>
             )}
+            {statusNote}
+          </>
+        )
+        const coreBadges = (
+          <>
+            {/* On the title line the kind and status wrap together, never apart. */}
+            {inlineBadges ? <span className="inline-flex items-center gap-x-3">{kindAndStatus}</span> : kindAndStatus}
             {namespace && namespace !== '_' && (
-              <span>Namespace: <span className="text-theme-text-primary">{namespace}</span></span>
+              <span className="whitespace-nowrap">Namespace: <span className="text-theme-text-primary">{namespace}</span></span>
             )}
-            {headerImage && (
-              <Tooltip content={headerImage} delay={300} wrapperClassName="min-w-0 max-w-md">
-                <span className="truncate font-mono text-xs">
-                  {midTruncate(headerImage, 72)}
-                </span>
-              </Tooltip>
+            {namespace && namespace !== '_' && namespaceNote}
+          </>
+        )
+        const extraChips = [
+          headerImage && (
+            <Tooltip key="image" content={headerImage} delay={300} wrapperClassName="min-w-0 max-w-md">
+              <span className="truncate font-mono text-xs">
+                {midTruncate(headerImage, 72)}
+              </span>
+            </Tooltip>
+          ),
+          gitopsOwner && (
+            <ManagedByChip key="gitops" owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} variant="block" />
+          ),
+          helmOwner && (
+            <HelmManagedByChip key="helm" owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} variant="block" />
+          ),
+          gitOpsResourcePath && onNavigateGitOpsPath && (
+            <OpenInGitOpsChip key="open-gitops" onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
+          ),
+          relationships?.owner && !showOwnershipHeading && (
+            <span key="owner">Owner: <button onClick={() => onNavigateToResource?.(refToSelectedResource(relationships.owner!))} className="text-blue-500 hover:underline">{relationships.owner.name}</button></span>
+          ),
+        ].filter(Boolean)
+        if (inlineBadges && !(showOwnershipHeading && ownershipContext)) {
+          // The name and its copy button stay together and truncate only when
+          // the line holds nothing else; the badges wrap below before that.
+          return (
+            <>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-theme-text-secondary">
+                {titlePrefix}
+                <div className="flex min-w-0 max-w-full items-center gap-2">{nameAndCopy}</div>
+                {coreBadges}
+              </div>
+              {extraChips.length > 0 && (
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-theme-text-secondary">{extraChips}</div>
+              )}
+            </>
+          )
+        }
+        return (
+          <>
+            {showOwnershipHeading && ownershipContext ? (
+              <OwnershipHeading
+                podName={name}
+                context={ownershipContext}
+                copied={copied === 'name'}
+                onCopy={() => copyToClipboard(name, 'name')}
+                onNavigateToResource={onNavigateToResource}
+                onOpenApplication={onOpenApplication}
+              />
+            ) : (
+              <div className="flex items-center gap-3 mb-1">
+                {titlePrefix}
+                {nameAndCopy}
+              </div>
             )}
-            {gitopsOwner && (
-              <ManagedByChip owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} variant="block" />
-            )}
-            {helmOwner && (
-              <HelmManagedByChip owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} variant="block" />
-            )}
-            {gitOpsResourcePath && onNavigateGitOpsPath && (
-              <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
-            )}
-            {relationships?.owner && !showOwnershipHeading && (
-              <span>Owner: <button onClick={() => onNavigateToResource?.(refToSelectedResource(relationships.owner!))} className="text-blue-500 hover:underline">{relationships.owner.name}</button></span>
-            )}
-          </div>
-        </>
-      }
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-theme-text-secondary">
+              {coreBadges}
+              {extraChips}
+            </div>
+          </>
+        )
+      })()}
       headerActions={
         <>
+          {headerActions}
           {diagnoseAction}
           <Tooltip content="Refresh" delay={150} position="bottom">
             <button
@@ -1180,6 +1255,8 @@ export function WorkloadView({
             )}
             {expandedOverview}
           </div>
+        ) : effectiveTab === 'spec' && specTab?.render ? (
+          <div className="h-full min-h-0 overflow-y-auto">{specTab.render()}</div>
         ) : (effectiveTab === 'overview' || effectiveTab === 'spec') && (
             <InfoTab
               resource={resource}
@@ -1214,7 +1291,14 @@ export function WorkloadView({
               updatesError={resourceFocusedUpdatesError}
               extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name, group, context: 'expanded' })}
               introContent={overviewIntro}
-              leadContent={hasOperationalIssues && renderOverviewLead ? renderOverviewLead({ kind, namespace, name }) : undefined}
+              leadContent={
+                // A host's spec lead replaces the operational issues there: its Overview already leads with them.
+                effectiveTab === 'spec' && specTab?.lead
+                  ? specTab.lead
+                  : hasOperationalIssues && renderOverviewLead
+                    ? renderOverviewLead({ kind, namespace, name })
+                    : undefined
+              }
               onEvaluateCapacity={onEvaluateCapacity}
               recentImageSave={recentImageSave}
             />
@@ -3913,12 +3997,21 @@ function mergeAndRankEvents(events: TimelineEvent[], updates: TimelineEvent[]): 
     })
 }
 
+function orderTabs(tabs: DetailShellTab<TabType>[], order: string[] | undefined): DetailShellTab<TabType>[] {
+  if (!order || order.length === 0) return tabs
+  const rank = (id: string) => {
+    const i = order.indexOf(id)
+    return i < 0 ? order.length : i
+  }
+  return tabs.map((t, i) => ({ t, i })).sort((a, b) => rank(a.t.id) - rank(b.t.id) || a.i - b.i).map((x) => x.t)
+}
+
 function mergeExtraTabs(tabs: DetailShellTab<TabType>[], extra: WorkloadExtraTab[] | undefined): DetailShellTab<TabType>[] {
   if (!extra || extra.length === 0) return tabs
   const replaced = new Set(extra.map((x) => x.replaces).filter(Boolean))
   const out = tabs.map((t) => (replaced.has(t.id) ? { ...t, hidden: true } : t))
   for (const x of extra) {
-    const tab: DetailShellTab<TabType> = { id: x.id as TabType, label: x.label, icon: x.icon }
+    const tab: DetailShellTab<TabType> = { id: x.id as TabType, label: x.label, icon: x.icon, badge: x.badge }
     const anchor = x.after ?? x.replaces
     const idx = anchor ? out.findIndex((t) => t.id === anchor) : -1
     if (idx >= 0) out.splice(idx + 1, 0, tab)

@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/pkg/k8score"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -18,6 +17,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"github.com/skyhook-io/radar/internal/podlogs"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 func comparisonJob(name, role string) *batchv1.Job {
@@ -176,11 +178,11 @@ func TestSnapshotBoundsAndPartialFailures(t *testing.T) {
 	pending := comparisonPod(comparisonJob("pending", "workers"), time.Now())
 	pending.Status.ContainerStatuses = nil
 	pods = append(pods, pending)
-	got := collectLogsFromPods(context.Background(), client, "training", pods, "", 1000, nil, true)
+	got := podlogs.CollectPods(context.Background(), client, "training", pods, "", 1000, nil, true)
 	if count.Load() != 40 || peak.Load() > 8 || len(got.SourcePods) != 40 {
 		t.Fatalf("bounds: calls=%d peak=%d pods=%d", count.Load(), peak.Load(), len(got.SourcePods))
 	}
-	for _, text := range []string{"40 of 45", "64 KiB", "1 sources could not be read"} {
+	for _, text := range []string{"40 of 45", "64 KiB", "1 source could not be read"} {
 		if !strings.Contains(got.Notice, text) {
 			t.Fatalf("notice %q missing %q", got.Notice, text)
 		}
@@ -189,20 +191,20 @@ func TestSnapshotBoundsAndPartialFailures(t *testing.T) {
 		t.Fatal("partial success lost")
 	}
 	count.Store(0)
-	unbounded := collectLogsFromPods(context.Background(), client, "training", pods, "", 2000, nil, false)
+	unbounded := podlogs.CollectPods(context.Background(), client, "training", pods, "", 2000, nil, false)
 	if count.Load() != 46 || strings.Contains(unbounded.Notice, "64 KiB") || strings.Contains(unbounded.Notice, "Showing") {
 		t.Fatalf("existing snapshot route was capped: calls=%d notice=%s", count.Load(), unbounded.Notice)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if got := collectLogsFromPods(ctx, client, "training", pods, "", 100, nil, true); got.Notice == "" {
+	if got := podlogs.CollectPods(ctx, client, "training", pods, "", 100, nil, true); got.Notice == "" {
 		t.Fatal("cancellation hidden")
 	}
 }
 
 func TestSnapshotSortsFractionalTimestamps(t *testing.T) {
-	logs := []workloadLogEntry{{Timestamp: "2026-09-22T00:00:00.1Z"}, {Timestamp: "2026-09-22T00:00:00Z"}, {Timestamp: "2026-09-22T00:00:00.01Z"}}
-	sortLogsByTimestamp(logs)
+	logs := []podlogs.Entry{{Timestamp: "2026-09-22T00:00:00.1Z"}, {Timestamp: "2026-09-22T00:00:00Z"}, {Timestamp: "2026-09-22T00:00:00.01Z"}}
+	podlogs.Sort(logs)
 	if logs[0].Timestamp != "2026-09-22T00:00:00Z" || logs[2].Timestamp != "2026-09-22T00:00:00.1Z" {
 		t.Fatalf("order: %+v", logs)
 	}

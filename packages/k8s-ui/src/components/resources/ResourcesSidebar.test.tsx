@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import type { APIResource } from '../../types'
-import { rawCRDGroupTitle, resourceMatchesSidebarFilter, ResourcesSidebar } from './ResourcesSidebar'
+import { rawCRDGroupTitle, resourceMatchesSidebarFilter, ResourcesSidebar, sidebarDestinationsMatching } from './ResourcesSidebar'
 
 const sqlInstance: APIResource = {
   group: 'sql.cnrm.cloud.google.com',
@@ -144,13 +144,28 @@ describe('ResourcesSidebar category workspaces', () => {
         }}
       />
     )
-    expect(html).toContain('Workspace')
+    expect(html).toContain('Views')
     expect(html).toContain('Overview')
     expect(html).toContain('pg-orders')
     expect(html).toContain('Counts for namespace payments')
     expect(html).toContain('Resource kinds')
     expect(html).toMatch(/aria-expanded="false"[^>]*>(?:(?!<\/button>).)*Resource kinds/)
     expect(html).not.toContain('selection-strong selection-text">Pod')
+  })
+
+  it('marks a count taken over partly readable data as a lower bound, and never shows its zero as none', () => {
+    const render = (count: number) =>
+      renderToString(
+        <ResourcesSidebar
+          selectedKind={null}
+          onSelectedKindChange={() => {}}
+          apiResources={[cnpgCluster]}
+          resourceCounts={{ 'postgresql.cnpg.io/Cluster': 1 }}
+          categoryWorkspaces={{ CloudNativePG: { destinations: [{ id: 'overview', label: 'Overview', count, countLowerBound: true, onSelect: () => {} }] } }}
+        />,
+      )
+    expect(render(2)).toMatch(/≥(<!-- -->)?2/)
+    expect(render(0)).toContain('–')
   })
 
   it('keeps a workspace category visible when it has no resources', () => {
@@ -179,5 +194,24 @@ describe('ResourcesSidebar category workspaces', () => {
     )
     expect(html).toContain('postgresql.cnpg.io')
     expect(html).toContain('barmancloud.cnpg.io')
+  })
+})
+
+describe('sidebarDestinationsMatching', () => {
+  const views = ['Clusters', 'Backups', 'Declarations', 'Pooling', 'Operator'].map((label) => ({ id: label, label, onSelect: () => {} }))
+  const resources = [{ group: 'postgresql.cnpg.io' }, { group: 'barmancloud.cnpg.io' }]
+  const labels = (term: string) => sidebarDestinationsMatching('CloudNativePG', resources, views, term).map((d) => d.label)
+
+  it('keeps every view when the term names the category or one of its API groups', () => {
+    expect(labels('cloud')).toEqual(['Clusters', 'Backups', 'Declarations', 'Pooling', 'Operator'])
+    expect(labels('cnpg')).toEqual(['Clusters', 'Backups', 'Declarations', 'Pooling', 'Operator'])
+  })
+  it('keeps the views whose label matches otherwise', () => {
+    expect(labels('backup')).toEqual(['Backups'])
+    expect(labels('declar')).toEqual(['Declarations'])
+    expect(labels('deployment')).toEqual([])
+  })
+  it('keeps every view without a term', () => {
+    expect(labels('  ')).toHaveLength(5)
   })
 })

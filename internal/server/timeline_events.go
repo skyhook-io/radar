@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	integration "github.com/skyhook-io/radar/internal/integration"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/timelineapi"
@@ -108,7 +109,7 @@ func (s *Server) serveTimelineEventsDelta(w http.ResponseWriter, r *http.Request
 	}
 
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if integration.NoNamespaceAccess(namespaces) {
 		writeTimelineStream(w, nil, timelineEndRecord{Type: "end", Cursor: cursor})
 		return
 	}
@@ -163,7 +164,7 @@ func (s *Server) serveTimelineEventsWindow(w http.ResponseWriter, r *http.Reques
 	}
 
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	if integration.NoNamespaceAccess(namespaces) {
 		writeTimelineStream(w, nil, timelineEndRecord{Type: "end", Cursor: timelineCursor(epoch, 0)})
 		return
 	}

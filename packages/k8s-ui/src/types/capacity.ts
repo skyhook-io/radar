@@ -1,4 +1,5 @@
 import type { Issue } from "../components/issues/types";
+import type { Certainty } from "../components/facts/certainty";
 
 export const CAPACITY_SCHEMA_VERSION = "v1alpha1" as const;
 
@@ -15,8 +16,7 @@ export interface CapacityResourceIdentity {
   uid?: string;
 }
 
-export type CapacityCertainty =
-  "exact" | "lower_bound" | "upper_bound" | "unknown";
+export type CapacityCertainty = Certainty;
 export type CapacityGranularity =
   "aggregate" | "aggregate_not_binpacked" | "per_node";
 export type CapacityResourceVector = Record<string, string>;

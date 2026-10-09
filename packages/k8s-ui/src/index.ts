@@ -55,7 +55,11 @@ export * from './components/checks'
 // queue)
 export * from './components/issues'
 
-// CloudNativePG workspace model (fleet derivation over /api/cnpg/workspace)
+// Observed values with their sources, and problems with where they came from
+export * from './components/facts'
+export * from './components/problems'
+
+// CloudNativePG workspace model (fleet derivation over /api/cnpg/workspace) and summaries
 export * from './components/cnpg'
 
 // Cluster switcher (shared trigger+dropdown for OSS Radar and Radar Hub)
