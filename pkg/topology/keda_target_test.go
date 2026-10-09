@@ -25,12 +25,16 @@ func TestKEDAScaleTargetAppliesOmittedAPIVersionDefault(t *testing.T) {
 				scaledObject("defaults", map[string]any{"name": "web"}),
 				scaledObject("bare-rollout", map[string]any{"kind": "Rollout", "name": "worker"}),
 				scaledObject("argo-rollout", map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Rollout", "name": "worker"}),
+				scaledObject("statefulset", map[string]any{"kind": "StatefulSet", "name": "db"}),
 			},
 			rolloutGVR: {genericIdentityObject(rolloutGVR, "Rollout", "team", "worker")},
 		},
 		listCalls: map[schema.GroupVersionResource]int{},
 	}
-	provider := &mockProvider{deployments: []*appsv1.Deployment{{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "team"}}}}
+	provider := &mockProvider{
+		deployments:  []*appsv1.Deployment{{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "team"}}},
+		statefulSets: []*appsv1.StatefulSet{{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "team"}}},
+	}
 	topo, err := NewBuilder(provider).WithDynamic(dynamic).Build(DefaultBuildOptions())
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -39,7 +43,7 @@ func TestKEDAScaleTargetAppliesOmittedAPIVersionDefault(t *testing.T) {
 	for _, edge := range topo.Edges {
 		edges[edge.Source+" -> "+edge.Target] = true
 	}
-	for _, want := range []string{"scaledobject/team/defaults -> deployment/team/web", "scaledobject/team/argo-rollout -> rollout/team/worker"} {
+	for _, want := range []string{"scaledobject/team/defaults -> deployment/team/web", "scaledobject/team/argo-rollout -> rollout/team/worker", "scaledobject/team/statefulset -> statefulset/team/db"} {
 		if !edges[want] {
 			t.Errorf("missing edge %s in %v", want, edges)
 		}
