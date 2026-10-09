@@ -342,9 +342,16 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	kind, group = canonicalDiagnoseTarget(r.Context(), kind, group, namespace, name)
-	agent := runs.AgentName(strings.TrimSpace(body.Agent))
+	requested := strings.TrimSpace(body.Agent)
+	agent := runs.AgentName(requested)
 	if agent == "" {
 		s.writeError(w, http.StatusNotImplemented, "the agent CLI Radar was using is no longer installed")
+		return
+	}
+	// A named agent that isn't installed fails rather than starting another one:
+	// the user picked it, and consent was given for it.
+	if requested != "" && agent != requested {
+		s.writeError(w, http.StatusConflict, ai.AgentLabel(requested)+" isn't installed, so the investigation didn't start. Try again with another agent.")
 		return
 	}
 	profile := ai.ExecutionProfile(strings.TrimSpace(body.Profile))

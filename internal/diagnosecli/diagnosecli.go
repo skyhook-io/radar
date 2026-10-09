@@ -258,7 +258,10 @@ Flags:
 		}
 	}
 
-	run, err := startRun(base, kind, o.group, o.namespace, name, o.agent, profile)
+	// Send the agent the consent was for. With no name the server uses its own
+	// default, which can differ from this list's first agent once a CLI is
+	// installed while that Radar runs.
+	run, err := startRun(base, kind, o.group, o.namespace, name, effective, profile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

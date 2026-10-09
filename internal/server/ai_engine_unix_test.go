@@ -8,10 +8,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/investigationrefs"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 func listAgentsEnabled(t *testing.T, s *Server) bool {
@@ -135,5 +137,49 @@ func TestListAgentsReportsOffOnceTheLastCLIIsRemoved(t *testing.T) {
 	}
 	if listAgentsEnabled(t, s) {
 		t.Fatal("the only agent CLI was removed, but /api/agents still reports investigations on")
+	}
+}
+
+// A run that names an agent that isn't installed (picked before it was removed)
+// must fail, not start a different agent the user didn't pick or consent to.
+func TestDiagnoseStartRefusesAnAgentThatIsNotInstalled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", "")
+	t.Setenv("RADAR_AI_CLI_BIN", "")
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prevConn := k8s.GetConnectionStatus()
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	t.Cleanup(func() { k8s.SetConnectionStatus(prevConn) })
+
+	mcp := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	s := &Server{
+		authConfig:              auth.Config{Mode: "none"},
+		mcpHandler:              mcp,
+		mcpInvestigationHandler: mcp,
+		aiInvestigationRefs:     investigationrefs.NewRegistry(),
+	}
+	t.Cleanup(func() {
+		if runs := s.aiRunManager(); runs != nil {
+			runs.Shutdown()
+		}
+	})
+	s.refreshAIEngine(t.Context())
+	if runs := s.aiRunManager(); runs == nil || runs.AgentName("codex") == "codex" {
+		t.Skip("Codex is installed in a fixed system directory on this machine")
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/diagnose/runs",
+		strings.NewReader(`{"kind":"Pod","namespace":"prod","name":"api-0","agent":"codex"}`))
+	s.handleDiagnoseStart(rec, req)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "Codex isn't installed") {
+		t.Fatalf("start with an uninstalled agent = %d %s, want 409 naming Codex", rec.Code, rec.Body.String())
 	}
 }

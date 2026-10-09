@@ -1501,7 +1501,7 @@ function AIUnavailableNotice({
   if (setupState === 'off') {
     return panel(
       'Not available in this deployment',
-      'AI investigations only run in a Radar on your own computer.',
+      'They need Radar running on your own computer, with MCP on and sign-in off.',
     )
   }
   if (cliOverride) {

@@ -769,6 +769,9 @@ function RoutedDiagnoseProvider({
         writeFocusedRunID(run.id, true);
       })
       .catch((e) => {
+        // The picked agent may have been uninstalled since the list was
+        // fetched; refresh it so the picker shows what's installed now.
+        void recheckAgents();
         if (seq !== startSeqRef.current) return;
         setStartFailure({
           message:

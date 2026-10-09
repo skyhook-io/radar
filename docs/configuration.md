@@ -103,8 +103,8 @@ With the variable set, Radar uses only that CLI and stops looking for others.
 It picks the driver from the file name: a name containing `cursor` runs as
 Cursor, `codex` as Codex, `opencode` as OpenCode, and anything else as Claude
 Code. If the path is not an executable Radar can run, investigations stay off
-until the variable is corrected and Radar restarted; the startup line names the
-path.
+until a working CLI is at that path, or the variable is changed and Radar
+restarted. The startup line names the path.
 
 ## Persistent Configuration
 

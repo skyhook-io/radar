@@ -49,10 +49,10 @@ func AgentLabel(name string) string {
 	return name
 }
 
-// EffectiveAgent resolves an agent pick exactly the way the server will at
-// Start (Diagnoser.AgentName + defName): the pick when it names a supported
-// agent, else the first supported one, else "". Pre-boot/remote clients must
-// derive consent surfaces from THIS — an empty pick can resolve to Cursor.
+// EffectiveAgent resolves an agent pick against a listed set: the pick when it
+// names a supported agent, else the first supported one, else "". Pre-boot and
+// remote clients derive consent surfaces from this and send the result as the
+// run's agent: the server's own default can be a different agent.
 func EffectiveAgent(pick string, agents []AgentInfo) string {
 	def := ""
 	for _, a := range agents {
