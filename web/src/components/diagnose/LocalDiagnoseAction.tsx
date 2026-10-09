@@ -1,13 +1,18 @@
 import { Loader2, Sparkles } from "lucide-react";
-import { useDiagnose, useDiagnoseLayout } from "./DiagnoseContext";
+import {
+  type DiagnoseSetup,
+  useDiagnose,
+  useDiagnoseLayout,
+} from "./DiagnoseContext";
 import { runTargetKey } from "./target";
 import { Tooltip } from "../ui/Tooltip";
 import type { RenderDiagnoseAction } from "../../context/DiagnoseCustomization";
 
 // The per-resource AI entry point. It no longer owns a panel — it just dispatches
 // to the single app-level AI surface (DiagnoseContext), opening a new investigation
-// for this resource. Self-hides when no agent CLI is present. Hosts can override
-// this slot with their own action.
+// for this resource. Hidden only where investigations can't run here; with no
+// agent CLI it stays, and opens the setup notice. Hosts can override this slot
+// with their own action.
 //
 // Adaptive by health: on a resource with a live problem it reads as a prominent
 // "Investigate" action; when the resource is fine or health is unknown it shrinks
@@ -33,13 +38,13 @@ function DiagnoseResourceButton({
   // Hidden only when the feature can't work here (auth/cloud/--no-mcp). When it's
   // supported but no agent is installed we KEEP the button — clicking opens the
   // setup notice so the feature is discoverable rather than silently absent.
-  if (d.setupState === "off") return null;
+  if (d.setupState === "off" || d.setupState === "unknown") return null;
   const ready = d.available;
   const problem = health === "problem";
   const running =
     ready && runningKeys.has(runTargetKey(kind, namespace, name, group ?? ""));
   const tooltip = !ready
-    ? "Set up AI investigations — runs your own agent locally."
+    ? notReadyTooltip(d)
     : running
       ? `${d.agentLabel} is investigating this resource — click to watch it live.`
       : d.hosted
@@ -67,7 +72,7 @@ function DiagnoseResourceButton({
         }
         aria-label={
           !ready
-            ? "Set up AI investigations"
+            ? notReadyTooltip(d)
             : running
               ? "Investigation running — click to view"
               : problem
@@ -122,18 +127,16 @@ export function IssueDiagnoseButton({
   name: string;
 }) {
   const d = useDiagnose();
-  if (d.setupState === "off") return null;
+  if (d.setupState === "off" || d.setupState === "unknown") return null;
   const ready = d.available;
   return (
     <Tooltip
       content={
-        d.setupState === "needs-restart"
-          ? "Restart Radar to enable AI investigations — a supported agent is installed"
-          : !ready
-            ? "Set up AI investigations — install a local agent"
-            : d.hosted
-              ? `Sends this resource's context to ${d.agentLabel} for investigation`
-              : `Runs ${d.agentLabel} on your machine to investigate this resource`
+        !ready
+          ? notReadyTooltip(d)
+          : d.hosted
+            ? `Sends this resource's context to ${d.agentLabel} for investigation`
+            : `Runs ${d.agentLabel} on your machine to investigate this resource`
       }
       position="left"
     >
@@ -158,12 +161,27 @@ export function IssueDiagnoseButton({
   );
 }
 
+// The tooltip every AI entry point shows while investigations aren't runnable.
+// It gives the same reason as the setup notice the button opens.
+function notReadyTooltip(d: {
+  cliOverride: boolean;
+  setupState: DiagnoseSetup;
+}): string {
+  if (d.cliOverride) {
+    return "AI investigations are off: can't run RADAR_AI_CLI_BIN";
+  }
+  if (d.setupState === "needs-restart") {
+    return "AI investigations aren't available right now";
+  }
+  return "Set up AI investigations";
+}
+
 // Global top-bar entry into the AI surface (opens its Home / recent
-// investigations). Self-hides when no agent CLI is present.
+// investigations). Hidden only where investigations can't run here.
 export function GlobalDiagnoseButton() {
   const d = useDiagnose();
   const { runningCount } = useDiagnoseLayout();
-  if (d.setupState === "off") return null;
+  if (d.setupState === "off" || d.setupState === "unknown") return null;
   const ready = d.available;
   const agentSuffix = d.hosted
     ? `powered by ${d.agentLabel}`
@@ -172,7 +190,7 @@ export function GlobalDiagnoseButton() {
     <Tooltip
       content={
         !ready
-          ? "Set up AI investigations — runs your own agent locally"
+          ? notReadyTooltip(d)
           : runningCount > 0
             ? `${runningCount} investigation${runningCount > 1 ? "s" : ""} running — ${agentSuffix}`
             : `AI investigations — ${agentSuffix}`
@@ -183,9 +201,11 @@ export function GlobalDiagnoseButton() {
         onClick={() => d.openWorkspace()}
         className="relative rounded-md bg-theme-elevated p-1.5 text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
         aria-label={
-          runningCount > 0
-            ? `AI investigations (${runningCount} running)`
-            : "AI investigations"
+          !ready
+            ? notReadyTooltip(d)
+            : runningCount > 0
+              ? `AI investigations (${runningCount} running)`
+              : "AI investigations"
         }
       >
         <Sparkles className="h-4 w-4 text-accent" />

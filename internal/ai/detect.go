@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -11,7 +12,7 @@ import (
 type AgentInfo struct {
 	Name    string `json:"name"`    // "claude"
 	Label   string `json:"label"`   // display name, e.g. "Claude Code"
-	Path    string `json:"path"`    // absolute path from LookPath
+	Path    string `json:"path"`    // resolved executable (PATH, or a well-known install dir)
 	Version string `json:"version"` // best-effort `--version`, "" if it failed
 	Present bool   `json:"present"`
 	// Supported is true when Radar can actually DRIVE this CLI (we parse its
@@ -29,8 +30,9 @@ type AgentInfo struct {
 	Verification bool `json:"verification,omitempty"`
 }
 
-// knownAgents are the CLI names we probe for — a FIXED list. We never exec a
-// user-supplied name/path: only these literals, resolved through PATH, are run.
+// knownAgents are the CLI names we probe for - a FIXED list. We never exec a
+// user-supplied name/path: only these literals, resolved through PATH or the
+// fixed directories in agentBinDirs, are run.
 var knownAgents = []string{"claude", "codex", "gemini", "cursor-agent", "opencode"}
 
 var agentLabels = map[string]string{
@@ -47,10 +49,10 @@ func AgentLabel(name string) string {
 	return name
 }
 
-// EffectiveAgent resolves an agent pick exactly the way the server will at
-// Start (Diagnoser.AgentName + defName): the pick when it names a supported
-// agent, else the first supported one, else "". Pre-boot/remote clients must
-// derive consent surfaces from THIS — an empty pick can resolve to Cursor.
+// EffectiveAgent resolves an agent pick against a listed set: the pick when it
+// names a supported agent, else the first supported one, else "". Pre-boot and
+// remote clients derive consent surfaces from this and send the result as the
+// run's agent: the server's own default can be a different agent.
 func EffectiveAgent(pick string, agents []AgentInfo) string {
 	def := ""
 	for _, a := range agents {
@@ -139,8 +141,36 @@ func isSupportedAgent(name string) bool {
 	return false
 }
 
-// DetectAgents probes for known agent CLIs on PATH. Safe by construction: only
-// the fixed knownAgents names are resolved + run.
+// lookupAgent resolves an agent CLI: PATH first, then a fixed set of well-known
+// install directories.
+//
+// The fallback is what makes detection match what the user sees in their own
+// terminal. Radar is often started where PATH is not the shell's PATH: a systemd
+// unit, a Linux .desktop entry, a Windows shortcut. Claude Code's older installer
+// is worse still, leaving the binary in ~/.claude/local behind a shell alias that
+// no PATH can reach at all. Without this, Radar tells a user who has the CLI to go
+// install it. (The desktop app is not in that list on purpose: cmd/desktop/env.go
+// already replaces its PATH with the login shell's before the server boots.)
+func lookupAgent(name string) string {
+	if p, err := exec.LookPath(name); err == nil {
+		return p
+	}
+	for _, dir := range agentBinDirs() {
+		for _, candidate := range executableNames(name) {
+			// LookPath on an absolute path is the permission check too: it asks
+			// whether THIS process can execute the file, which the mode bits
+			// alone don't answer.
+			if p, err := exec.LookPath(filepath.Join(dir, candidate)); err == nil {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+// DetectAgents probes for known agent CLIs on PATH and in the well-known install
+// directories. Safe by construction: only the fixed knownAgents names, resolved
+// only from PATH or the fixed agentBinDirs, are run.
 //
 // withVersions controls whether each CLI's `--version` is executed. That exec is
 // SLOW (~hundreds of ms per CLI, several seconds total) and is NOT needed to show
@@ -150,8 +180,8 @@ func isSupportedAgent(name string) bool {
 func DetectAgents(ctx context.Context, withVersions bool) []AgentInfo {
 	var out []AgentInfo
 	for _, name := range knownAgents {
-		path, err := exec.LookPath(name)
-		if err != nil {
+		path := lookupAgent(name)
+		if path == "" {
 			continue
 		}
 		info := AgentInfo{
@@ -176,7 +206,9 @@ func DetectAgents(ctx context.Context, withVersions bool) []AgentInfo {
 func probeVersion(ctx context.Context, path string) string {
 	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, path, "--version").Output()
+	cmd := exec.CommandContext(cctx, path, "--version")
+	addAgentDirToPath(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}

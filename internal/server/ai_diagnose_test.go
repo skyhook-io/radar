@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -133,7 +134,12 @@ func TestListAgents_Eligible(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s := &Server{authConfig: auth.Config{Mode: c.mode}, mcpHandler: c.mcp}
+			s := &Server{
+				authConfig:              auth.Config{Mode: c.mode},
+				mcpHandler:              c.mcp,
+				mcpInvestigationHandler: c.mcp,
+				aiInvestigationRefs:     investigationrefs.NewRegistry(),
+			}
 			rec := httptest.NewRecorder()
 			s.handleListAgents(rec, httptest.NewRequest(http.MethodGet, "/api/agents", nil))
 			var resp struct {
@@ -146,6 +152,59 @@ func TestListAgents_Eligible(t *testing.T) {
 				t.Errorf("eligible = %v, want %v", resp.Eligible, c.want)
 			}
 		})
+	}
+}
+
+// TestListAgents_NoneInstalledIsAnEmptyList pins the wire shape a machine with
+// no agent CLI gets: an empty array, never null.
+func TestListAgents_NoneInstalledIsAnEmptyList(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PATH", "")
+	t.Setenv("LOCALAPPDATA", "")
+	mcp := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	s := &Server{
+		authConfig:              auth.Config{Mode: "none"},
+		mcpHandler:              mcp,
+		mcpInvestigationHandler: mcp,
+		aiInvestigationRefs:     investigationrefs.NewRegistry(),
+	}
+	t.Cleanup(func() {
+		if runs := s.aiRunManager(); runs != nil {
+			runs.Shutdown()
+		}
+	})
+	rec := httptest.NewRecorder()
+	s.handleListAgents(rec, httptest.NewRequest(http.MethodGet, "/api/agents", nil))
+	var resp struct {
+		Agents json.RawMessage `json:"agents"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Detection also probes fixed system directories, so a machine with a CLI
+	// in /usr/local/bin returns a populated list here. Either way, never null.
+	if string(resp.Agents) == "null" {
+		t.Fatal(`agents encoded as null, want an array ("[]" when nothing is installed)`)
+	}
+}
+
+// The UI names RADAR_AI_CLI_BIN only when the server says it is set; an
+// embedding host that never sends the field must not get that explanation.
+func TestListAgents_ReportsTheCLIOverride(t *testing.T) {
+	for _, value := range []string{"", "/opt/typo/claude"} {
+		t.Setenv("RADAR_AI_CLI_BIN", value)
+		s := &Server{authConfig: auth.Config{Mode: "proxy"}}
+		rec := httptest.NewRecorder()
+		s.handleListAgents(rec, httptest.NewRequest(http.MethodGet, "/api/agents", nil))
+		var resp struct {
+			CLIOverride bool `json:"cliOverride"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if want := value != ""; resp.CLIOverride != want {
+			t.Errorf("RADAR_AI_CLI_BIN=%q: cliOverride = %v, want %v", value, resp.CLIOverride, want)
+		}
 	}
 }
 
