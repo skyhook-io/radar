@@ -7,17 +7,6 @@ import (
 	"testing"
 )
 
-func TestPutUsageDataRejectsCrossSiteConsent(t *testing.T) {
-	r := httptest.NewRequest(http.MethodPut, "http://localhost:9280/api/usage-data", strings.NewReader(`{"enabled":true}`))
-	r.Header.Set("Origin", "https://evil.example")
-	r.Header.Set("Sec-Fetch-Site", "cross-site")
-	w := httptest.NewRecorder()
-	(&Server{}).handlePutUsageData(w, r)
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", w.Code)
-	}
-}
-
 func TestPutUsageDataRequiresExplicitChoice(t *testing.T) {
 	for _, body := range []string{`{}`, `{"enabled":"yes"}`, `not json`} {
 		r := httptest.NewRequest(http.MethodPut, "http://localhost:9280/api/usage-data", strings.NewReader(body))
@@ -69,21 +58,17 @@ func TestUsageDataMiddlewarePassesThroughWhenOff(t *testing.T) {
 	}
 }
 
-func TestUsageDataEventRejectsCrossSiteAndNonJSON(t *testing.T) {
+func TestUsageDataEventRejectsNonJSON(t *testing.T) {
 	cases := []struct {
 		name, site, contentType string
 		want                    int
 	}{
-		{"cross-site form post", "cross-site", "text/plain", http.StatusForbidden},
 		{"same-origin but not JSON", "same-origin", "text/plain", http.StatusUnsupportedMediaType},
 	}
 	for _, tc := range cases {
 		r := httptest.NewRequest(http.MethodPost, "http://localhost:9280/api/usage-data/event", strings.NewReader(`{"type":"session"}`))
 		r.Header.Set("Sec-Fetch-Site", tc.site)
 		r.Header.Set("Content-Type", tc.contentType)
-		if tc.site == "cross-site" {
-			r.Header.Set("Origin", "https://evil.example")
-		}
 		w := httptest.NewRecorder()
 		(&Server{}).handleUsageEvent(w, r)
 		if w.Code != tc.want {

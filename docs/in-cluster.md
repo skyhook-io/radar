@@ -644,7 +644,31 @@ kubectl get ingress -n radar -o yaml
 kubectl logs -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx
 ```
 
-If the UI loads through an ingress but pod exec does not connect, ensure the ingress forwards WebSocket upgrades and preserves the browser-facing `Host` header. Preserving `Host` is the compatibility requirement across browsers and proxies; Fetch Metadata is an additional signal only when both sides forward it. Radar logs rejected handshakes with both `Origin` and `Host`.
+If the UI loads through an ingress but pod exec does not connect, ensure the ingress forwards WebSocket upgrades. If it does and exec still fails, see the next section: the terminal uses the same address check as changes.
+
+### Changes fail with "Radar refused this request"
+
+If you can browse, but every action that changes the cluster (apply, delete, scale, restart, drain, Argo CD or Flux sync) fails with *Radar refused this request because it came from ...*, the proxy in front of Radar is rewriting the `Host` header. The pod terminal does not connect, and a few views that load data with POST, such as application cost, fail the same way. Radar accepts these only from a page served at its own address, so that another website you have open cannot act through your browser, and a rewritten `Host` hides that address. The message names both addresses: where the request came from, and the `Host` Radar received.
+
+Fix it either way:
+
+- Configure the proxy to keep the original `Host` header.
+- Tell Radar the address you open it at. In the Helm chart:
+
+  ```yaml
+  trustedOrigins:
+    - http://radar.internal
+  ```
+
+  Outside Helm, set `RADAR_TRUSTED_ORIGINS` or pass `--trusted-origins`. Use the scheme and host exactly as they appear in your browser's address bar, with the port if there is one. Separate several with commas.
+
+  A trusted origin can do everything Radar's own page can: make changes and open pod terminals (and, on a local install, the local terminal). List only addresses that serve Radar. This setting does not cover the MCP endpoint at `/mcp`, which has its own `RADAR_MCP_TRUSTED_ORIGINS`.
+
+Radar logs each refusal with the headers it received:
+
+```bash
+kubectl logs -n radar -l app.kubernetes.io/name=radar | grep '\[origin\] refused'
+```
 
 ### Metrics charts show "Prometheus not connected"
 

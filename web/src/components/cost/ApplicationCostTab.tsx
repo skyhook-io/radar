@@ -3,6 +3,7 @@ import { AlertCircle, Coins, HelpCircle, Loader2, TrendingUp } from 'lucide-reac
 import type { AppRow, AppWorkload } from '@skyhook-io/k8s-ui'
 import {
   COST_DISCOVERY_GRACE_MS,
+  crossOriginRefusalMessage,
   useOpenCostApplicationCost,
   useOpenCostApplicationCostTrend,
   type CostTimeRange,
@@ -149,7 +150,8 @@ export function ApplicationCostTab({
         />
       )
     }
-    return <ApplicationCostUnavailable state={state} settingsAvailable={settingsAvailable} />
+    const refusal = crossOriginRefusalMessage(currentQuery.error) ?? crossOriginRefusalMessage(trendQuery.error)
+    return <ApplicationCostUnavailable state={state} message={refusal} settingsAvailable={settingsAvailable} />
   }
 
   const current = currentQuery.data

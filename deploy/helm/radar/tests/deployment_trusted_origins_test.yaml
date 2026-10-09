@@ -1,0 +1,27 @@
+suite: Trusted origins
+templates:
+  - deployment.yaml
+tests:
+  - it: joins listed origins into one flag
+    set:
+      trustedOrigins:
+        - http://radar.internal
+        - https://radar.example.com
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --trusted-origins=http://radar.internal,https://radar.example.com
+
+  - it: rejects a wildcard at install time
+    set:
+      trustedOrigins:
+        - https://*.example.com
+    asserts:
+      - failedTemplate: {}
+
+  - it: rejects a port out of range at install time
+    set:
+      trustedOrigins:
+        - https://radar.example.com:99999
+    asserts:
+      - failedTemplate: {}

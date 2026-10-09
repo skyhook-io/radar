@@ -56,8 +56,8 @@ func TestWebSocketOriginPolicy(t *testing.T) {
 			if tt.forwardedProto != "" {
 				req.Header.Set("X-Forwarded-Proto", tt.forwardedProto)
 			}
-			if got := tt.server.websocketOriginAllowed(req); got != tt.want {
-				t.Fatalf("websocketOriginAllowed() = %v, want %v", got, tt.want)
+			if got := tt.server.browserOriginAllowed(req); got != tt.want {
+				t.Fatalf("browserOriginAllowed() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -76,6 +76,7 @@ func TestUpgradeWebSocketUsesServerOriginPolicy(t *testing.T) {
 		{name: "foreign origin", origin: func(string) string { return "https://evil.example" }, wantOK: false},
 		{name: "authenticated Hub transport", origin: func(string) string { return "https://hub.example.com" }, fetchSite: "cross-site", tunnel: true, wantOK: true},
 		{name: "Vite development proxy", server: Server{devMode: true}, origin: func(string) string { return "http://localhost:9273" }, fetchSite: "same-site", wantOK: true},
+		{name: "trusted origin behind a Host-rewriting proxy", server: Server{trustedOrigins: trustedOriginSet(t, "http://radar.internal")}, origin: func(string) string { return "http://radar.internal" }, wantOK: true},
 	}
 
 	for _, tt := range tests {
@@ -113,4 +114,17 @@ func TestUpgradeWebSocketUsesServerOriginPolicy(t *testing.T) {
 			}
 		})
 	}
+}
+
+func trustedOriginSet(t *testing.T, origins ...string) map[string]struct{} {
+	t.Helper()
+	set := make(map[string]struct{}, len(origins))
+	for _, origin := range origins {
+		normalized, ok := normalizeOrigin(origin)
+		if !ok {
+			t.Fatalf("normalizeOrigin(%q) failed", origin)
+		}
+		set[normalized] = struct{}{}
+	}
+	return set
 }

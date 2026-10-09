@@ -175,12 +175,6 @@ func (s *Server) handleGetUsageData(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePutUsageData(w http.ResponseWriter, r *http.Request) {
-	// Consent must come from Radar's own page: a cross-site form post that
-	// could switch usage data on would defeat the opt-in.
-	if !s.sameOriginOK(r) {
-		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
-		return
-	}
 	var body struct {
 		Enabled *bool `json:"enabled"`
 	}
@@ -202,10 +196,6 @@ func (s *Server) handlePutUsageData(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUsagePromptShown(w http.ResponseWriter, r *http.Request) {
-	if !s.sameOriginOK(r) {
-		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
-		return
-	}
 	if err := usagedata.MarkPromptShown(); err != nil {
 		log.Printf("[usage] Failed to record prompt shown: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -217,12 +207,7 @@ func (s *Server) handleUsagePromptShown(w http.ResponseWriter, r *http.Request) 
 // handleUsageEvent takes UI-side usage: views, sessions, active time and
 // named UI moments. Unknown names are rejected rather than stored.
 func (s *Server) handleUsageEvent(w http.ResponseWriter, r *http.Request) {
-	// Same-origin and JSON only: a cross-site form post (text/plain skips
-	// the CORS preflight) could otherwise inflate a shared install's counts.
-	if !s.sameOriginOK(r) {
-		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
-		return
-	}
+	// JSON only. Cross-site writes are already refused by requireSameOrigin.
 	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 		s.writeError(w, http.StatusUnsupportedMediaType, "expected application/json")
 		return

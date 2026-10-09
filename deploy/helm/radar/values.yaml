@@ -256,6 +256,12 @@ service:
 # Cannot be combined with cloud.enabled — Radar Cloud owns the URL path.
 basePath: ""
 
+# Origins, besides the address Radar is opened at, that may make changes and
+# open pod terminals, e.g. http://radar.internal. Leave empty unless changes fail
+# with "Radar refused this request" because a proxy in front of Radar rewrites the
+# Host header. Exact origins only (scheme://host[:port]), no wildcards.
+trustedOrigins: []
+
 ingress:
   enabled: false
   className: ""
