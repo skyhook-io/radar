@@ -246,7 +246,12 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
             // while new pod logs start flowing in
           }
         },
+        onNotice: (data: unknown) => {
+          const notice = typeof data === 'object' && data !== null && 'notice' in data ? data.notice : ''
+          setNotice(typeof notice === 'string' ? notice : '')
+        },
         onEnd: (data: any) => {
+          setNotice('')
           if (data?.emptyMessage) setEmptyMessage(data.emptyMessage)
           if (data?.command) setEmptyCommand(data.command)
         },

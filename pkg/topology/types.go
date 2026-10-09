@@ -427,15 +427,17 @@ type Relationships struct {
 	// Reflection distinguishes reflection links also retained in ConfigRefs/Consumers.
 	Reflection *ReflectionRelationships `json:"reflection,omitempty"`
 
-	Owner           *ResourceRef  `json:"owner,omitempty"`           // Parent via ownerReference (manages edge)
-	Deployment      *ResourceRef  `json:"deployment,omitempty"`      // Grandparent Deployment (for Pods owned by ReplicaSets)
-	Children        []ResourceRef `json:"children,omitempty"`        // Resources this owns (manages edge)
-	Services        []ResourceRef `json:"services,omitempty"`        // Services selecting/exposing this
-	Ingresses       []ResourceRef `json:"ingresses,omitempty"`       // Ingresses routing to this
-	Gateways        []ResourceRef `json:"gateways,omitempty"`        // Gateways routing to this (via routes)
-	Routes          []ResourceRef `json:"routes,omitempty"`          // Routes attached to this Gateway
-	ConfigRefs      []ResourceRef `json:"configRefs,omitempty"`      // ConfigMaps/Secrets used by this
-	Consumers       []ResourceRef `json:"consumers,omitempty"`       // For ConfigMap/Secret: workloads that reference this
+	Owner           *ResourceRef  `json:"owner,omitempty"`      // Parent via ownerReference (manages edge)
+	Deployment      *ResourceRef  `json:"deployment,omitempty"` // Grandparent Deployment (for Pods owned by ReplicaSets)
+	Children        []ResourceRef `json:"children,omitempty"`   // Resources this owns (manages edge)
+	Services        []ResourceRef `json:"services,omitempty"`   // Services selecting/exposing this
+	Ingresses       []ResourceRef `json:"ingresses,omitempty"`  // Ingresses routing to this
+	Gateways        []ResourceRef `json:"gateways,omitempty"`   // Gateways routing to this (via routes)
+	Routes          []ResourceRef `json:"routes,omitempty"`     // Routes attached to this Gateway
+	ConfigRefs      []ResourceRef `json:"configRefs,omitempty"` // ConfigMaps/Secrets used by this
+	Consumers       []ResourceRef `json:"consumers,omitempty"`  // For ConfigMap/Secret: workloads that reference this
+	Dependencies    []ResourceRef `json:"dependencies,omitempty"`
+	Dependents      []ResourceRef `json:"dependents,omitempty"`
 	Scalers         []ResourceRef `json:"scalers,omitempty"`         // HPA/ScaledObject/ScaledJob scaling this
 	StorageRefs     []ResourceRef `json:"storageRefs,omitempty"`     // PersistentVolumeClaims used by this workload
 	ScaleTarget     *ResourceRef  `json:"scaleTarget,omitempty"`     // For HPA/ScaledObject: what it scales

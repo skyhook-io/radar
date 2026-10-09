@@ -129,7 +129,9 @@ func (a *cursorAgent) resolveApprovalFlags() ([]string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	out, _ := exec.CommandContext(ctx, a.bin, "--help").CombinedOutput()
+	help := exec.CommandContext(ctx, a.bin, "--help")
+	addAgentDirToPath(help)
+	out, _ := help.CombinedOutput()
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("ai: Cursor Agent capability probe timed out")
 	}

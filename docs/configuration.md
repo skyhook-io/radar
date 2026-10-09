@@ -71,6 +71,41 @@ On Linux and Windows, closing the window always quits. Neither gives Radar
 anything to reopen from — no Dock, and Wails v2 ships no tray icon — so hiding
 there would leave a running process with no way to reach it.
 
+## AI Investigations Agent CLI
+
+Built-in AI investigations run an agent CLI installed on the machine Radar runs
+on: Claude Code (`claude`), Codex (`codex`), Cursor (`cursor-agent`), or
+OpenCode (`opencode`). Radar looks for them on the `PATH` it was started with,
+then in these install directories:
+
+| OS | Directories |
+|----|-------------|
+| macOS, Linux | `~/.local/bin`, `~/.claude/local`, `~/.opencode/bin`, `~/.volta/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/home/linuxbrew/.linuxbrew/bin`, `/usr/bin` |
+| Windows | `%LOCALAPPDATA%\Microsoft\WinGet\Links`, `%LOCALAPPDATA%\cursor-agent`, `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`, `%USERPROFILE%\.local\bin` |
+
+Radar picks up a newly installed CLI automatically, or when you click **Check
+again** in AI investigations. The startup output has an `AI investigations`
+line that says which agent Radar will use, or why investigations are off.
+
+If the CLI is somewhere else, for example an npm global install under nvm, start
+Radar from a terminal where the CLI works, or set `RADAR_AI_CLI_BIN` to its full
+path:
+
+```bash
+RADAR_AI_CLI_BIN="$(command -v claude)" radar
+```
+
+```powershell
+$env:RADAR_AI_CLI_BIN = "C:\path\to\claude.exe"; radar
+```
+
+With the variable set, Radar uses only that CLI and stops looking for others.
+It picks the driver from the file name: a name containing `cursor` runs as
+Cursor, `codex` as Codex, `opencode` as OpenCode, and anything else as Claude
+Code. If the path is not an executable Radar can run, investigations stay off
+until a working CLI is at that path, or the variable is changed and Radar
+restarted. The startup line names the path.
+
 ## Persistent Configuration
 
 Local CLI and Desktop Radar store machine defaults (`config.json`), personal
