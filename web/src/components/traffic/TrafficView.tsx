@@ -510,6 +510,21 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // An 'incomplete' one is a fetch that worked but could not see everything
   // (events lost, nodes unreachable). Not a failure, so not retried at once.
   const warningIsIncomplete = flowsData?.warningKind === 'incomplete'
+  const flowsWarning = flowsData?.warning ? (
+    <AlertBanner
+      variant="warning"
+      // The title follows the kind. A partial warning is about values
+      // on edges that are shown — a port reported as 0, UDP as TCP, a
+      // 5xx rate that failed to load — so it says "unreliable", not
+      // "incomplete", which would send the reader looking for missing
+      // workloads. An incomplete or transient one beside flows is
+      // exactly that: a stream cut short, events lost, a node the
+      // relay could not reach, a TCP query that failed — edges may
+      // be missing from what is drawn.
+      title={warningIsPermanent ? 'Some values on this map are unreliable' : 'Some traffic may be missing from this map'}
+      message={flowsData.warning}
+    />
+  ) : null
 
   // Auto-retry when flows return with warning but no data (e.g., port-forward not
   // ready yet). Bounded: a warning that keeps coming back — a node the relay
@@ -1537,7 +1552,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
             />
           ) : finalFlows.length > 0 ? (
             <>
-              {flowsData?.warning && (
+              {flowsWarning && !tooLargeToDraw && (
                 // Sits below the two chip rows (both top-3) rather than beside
                 // them: centred at that height it would cover the flow count and
                 // the refresh control at common widths. role/aria-live because it
@@ -1547,19 +1562,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                   aria-live="polite"
                   className="absolute top-14 left-1/2 z-10 w-[min(40rem,calc(100%-1.5rem))] -translate-x-1/2"
                 >
-                  <AlertBanner
-                    variant="warning"
-                    // The title follows the kind. A partial warning is about values
-                    // on edges that are shown — a port reported as 0, UDP as TCP, a
-                    // 5xx rate that failed to load — so it says "unreliable", not
-                    // "incomplete", which would send the reader looking for missing
-                    // workloads. An incomplete or transient one beside flows is
-                    // exactly that: a stream cut short, events lost, a node the
-                    // relay could not reach, a TCP query that failed — edges may
-                    // be missing from what is drawn.
-                    title={warningIsPermanent ? 'Some values on this map are unreliable' : 'Some traffic may be missing from this map'}
-                    message={flowsData.warning}
-                  />
+                  {flowsWarning}
                 </div>
               )}
               {tooLargeToDraw ? (
@@ -1578,6 +1581,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                   selection={graphSelection}
                   onSelect={setGraphSelection}
                   focusedId={focusKey}
+                  notice={flowsWarning && <div role="status" aria-live="polite">{flowsWarning}</div>}
                 />
               ) : (
                 <TrafficGraph

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ChevronDown, Network } from 'lucide-react'
 import { pluralNoun } from '@skyhook-io/k8s-ui'
 import { SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
@@ -30,6 +30,8 @@ interface TrafficGraphTooLargeProps {
   selection: TrafficGraphSelection | null
   onSelect: (selection: TrafficGraphSelection | null) => void
   focusedId?: string
+  /** Shown above the explanation, in the layout rather than over it. */
+  notice?: ReactNode
 }
 
 function nextStep(focused: boolean, canPickNamespace: boolean, canFilterNamespaces: boolean): string {
@@ -45,7 +47,7 @@ function nextStep(focused: boolean, canPickNamespace: boolean, canFilterNamespac
  * something.
  */
 export function TrafficGraphTooLarge(props: TrafficGraphTooLargeProps) {
-  const { graph, focusName, canFilterNamespaces, onDrawAnyway, namespaces, onPickNamespace, endpoints, onFocus, isRateBased, overlayContainer } = props
+  const { graph, focusName, canFilterNamespaces, onDrawAnyway, namespaces, onPickNamespace, endpoints, onFocus, isRateBased, overlayContainer, notice } = props
   const [pickerOpen, setPickerOpen] = useState(false)
   const pickerRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -61,6 +63,7 @@ export function TrafficGraphTooLarge(props: TrafficGraphTooLargeProps) {
 
   return (
     <div className="absolute inset-x-0 bottom-0 top-12 flex flex-col px-3 pb-3 gap-2">
+      {notice}
       <div className="rounded-lg border border-theme-border bg-theme-surface px-4 py-3 shadow-theme-sm">
         <div className="flex items-start gap-3">
           <Network className="mt-0.5 h-5 w-5 shrink-0 text-theme-text-tertiary" />
