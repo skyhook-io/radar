@@ -2597,6 +2597,41 @@ export function fetchResourceWithRelationships<T>(
   );
 }
 
+/**
+ * How often an open detail view re-checks a resource the server said is gone.
+ * Watch events stop refetching it (see refetchOnResourceEvents), so this is
+ * what finds one recreated under the same name when no event names it, such
+ * as a ConfigMap: the server streams adds only for pods.
+ */
+const GONE_RECHECK_MS = 60_000;
+
+export function goneRecheckInterval(
+  query: { state: { error: unknown } },
+  otherwise: number | false | undefined,
+): number | false | undefined {
+  return isNotFoundError(query.state.error) ? GONE_RECHECK_MS : otherwise;
+}
+
+export function resourceEventKey(kind: string, namespace: string, name: string): string {
+  return `${kind}/${namespace}/${name}`;
+}
+
+/**
+ * Whether a batch of watch events for `kind` refetches this ['resource', kind,
+ * namespace, name, group] query. One the server answered 404 for is refetched
+ * only when an event in the batch names its object; otherwise every change to
+ * the kind would ask again for something that is gone.
+ */
+export function refetchOnResourceEvents(
+  query: { queryKey: readonly unknown[]; state: { error: unknown } },
+  kind: string,
+  namedObjects: ReadonlySet<string>,
+): boolean {
+  if (!isNotFoundError(query.state.error)) return true;
+  const [, , namespace, name] = query.queryKey;
+  return namedObjects.has(resourceEventKey(kind, String(namespace ?? ""), String(name ?? "")));
+}
+
 export function useResource<T>(
   kind: string,
   namespace: string,
@@ -2608,7 +2643,7 @@ export function useResource<T>(
     queryKey: ["resource", kind, namespace, name, group],
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
     enabled: (options?.enabled ?? true) && Boolean(kind && name), // namespace can be empty for cluster-scoped resources
-    refetchInterval: options?.refetchInterval,
+    refetchInterval: (query) => goneRecheckInterval(query, options?.refetchInterval),
     // Kind still completing its initial sync: stay in loading and poll until
     // it becomes readable instead of erroring out (deep links during startup).
     retry: (failureCount, error) => {
@@ -2641,6 +2676,7 @@ export function useResourceWithRelationships<T>(
     queryKey: ["resource", kind, namespace, name, group],
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
     enabled: Boolean(kind && name),
+    refetchInterval: (query) => goneRecheckInterval(query, undefined),
     // Deep-linked detail views can mount while the kind's informer is still
     // completing its initial sync: keep polling instead of erroring out.
     retry: (failureCount, error) => {
