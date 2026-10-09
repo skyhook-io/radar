@@ -1175,6 +1175,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// 1i. Add KEDA ScaledObject and ScaledJob nodes (CRD - fetched via dynamic cache)
+	// Targets resolve after the StatefulSet pass: StatefulSet IDs aren't
+	// registered yet here, and a ScaledObject may scale one.
+	type pendingScaleTarget struct{ sourceID, kind, key string }
+	var scaledObjectTargets []pendingScaleTarget
 	var scaledObjectGVR schema.GroupVersionResource
 	hasScaledObjects := false
 	if resourceDiscovery != nil {
@@ -1207,31 +1211,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 
 			// ScaledObject → target workload edge (via spec.scaleTargetRef)
-			targetAPIVersion, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "apiVersion")
-			targetKind, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "kind")
-			targetName, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "name")
-			if targetKind == "" {
-				targetKind = "Deployment" // KEDA defaults to Deployment when kind is omitted
-			}
-			if targetName != "" && targetRefMatchesTopologyKind(targetKind, targetAPIVersion) {
-				targetKey := ns + "/" + targetName
-				var targetID string
-				switch targetKind {
-				case "Deployment":
-					targetID = deploymentIDs[targetKey]
-				case "StatefulSet":
-					targetID = statefulSetIDs[targetKey]
-				case "Rollout":
-					targetID = rolloutIDs[targetKey]
-				}
-				if targetID != "" {
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", soID, targetID),
-						Source: soID,
-						Target: targetID,
-						Type:   EdgeUses,
-					})
-				}
+			targetAPIVersion, targetKind, targetName, hasTarget := configrefs.KEDAScaleTarget(so)
+			if hasTarget && targetRefMatchesTopologyKind(targetKind, targetAPIVersion) {
+				scaledObjectTargets = append(scaledObjectTargets, pendingScaleTarget{soID, targetKind, ns + "/" + targetName})
 			}
 		}
 	}
@@ -2675,6 +2657,26 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		refs := extractWorkloadReferences(sts.Spec.Template.Spec)
 		trackWorkloadRefs(stsID, sts.Namespace, refs)
+	}
+
+	for _, target := range scaledObjectTargets {
+		var targetID string
+		switch target.kind {
+		case "Deployment":
+			targetID = deploymentIDs[target.key]
+		case "StatefulSet":
+			targetID = statefulSetIDs[target.key]
+		case "Rollout":
+			targetID = rolloutIDs[target.key]
+		}
+		if targetID != "" {
+			edges = append(edges, Edge{
+				ID:     fmt.Sprintf("%s-to-%s", target.sourceID, targetID),
+				Source: target.sourceID,
+				Target: targetID,
+				Type:   EdgeUses,
+			})
+		}
 	}
 
 	// 4. Add CronJob nodes

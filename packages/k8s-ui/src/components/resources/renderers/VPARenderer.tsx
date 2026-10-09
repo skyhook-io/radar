@@ -1,11 +1,12 @@
 import { Cpu } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
-import { kindToPlural } from '../../../utils/navigation'
+import { objectReferenceToResourceRef } from '../../../utils/navigation'
+import type { ResourceRef } from '../../../types'
 
 interface VPARendererProps {
   data: any
-  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  onNavigate?: (ref: ResourceRef) => void
 }
 
 function formatResource(value: string | undefined): string {
@@ -17,6 +18,7 @@ export function VPARenderer({ data, onNavigate }: VPARendererProps) {
   const spec = data.spec || {}
   const status = data.status || {}
   const targetRef = spec.targetRef || {}
+  const target = objectReferenceToResourceRef({ ...targetRef, namespace: data.metadata?.namespace })
   const updatePolicy = spec.updatePolicy || {}
   const resourcePolicy = spec.resourcePolicy || {}
   const containerPolicies = resourcePolicy.containerPolicies || []
@@ -63,15 +65,9 @@ export function VPARenderer({ data, onNavigate }: VPARendererProps) {
       <Section title="Configuration" icon={Cpu}>
         <PropertyList>
           <Property label="Target" value={
-            targetRef.name ? (
-              <ResourceLink
-                name={targetRef.name}
-                kind={kindToPlural(targetRef.kind || 'Deployment')}
-                namespace={data.metadata?.namespace || ''}
-                label={`${targetRef.kind}/${targetRef.name}`}
-                onNavigate={onNavigate}
-              />
-            ) : undefined
+            targetRef.name ? (target ? (
+              <ResourceLink {...target} label={`${targetRef.kind}/${targetRef.name}`} onNavigate={onNavigate} />
+            ) : `${targetRef.kind || 'Unknown kind'}/${targetRef.name}`) : undefined
           } />
           <Property label="Update Mode" value={
             <span className={clsx(
