@@ -506,6 +506,10 @@ function RoutedDiagnoseProvider({
   // A click and a window-focus re-check can overlap; only the newest one may
   // apply its answer, or a stale "nothing installed" could land last.
   const agentCheckSeq = useRef(0);
+  // The agent in use now, picked by hand or by default. A check compares
+  // against it, not just the stored pick, so seeing the same agent again
+  // keeps the model and effort set for it.
+  const agentInUseRef = useRef(selectedAgent);
   const recheckAgents = useCallback(async () => {
     const seq = ++agentCheckSeq.current;
     const latest = () => mountedRef.current && seq === agentCheckSeq.current;
@@ -542,17 +546,15 @@ function RoutedDiagnoseProvider({
         setProfileState(profiles[0]);
         writeStored(PROFILE_KEY, profiles[0]);
       }
-      // Model/effort are agent-specific; if the stored agent is gone, its values
-      // don't apply to the fallback agent (e.g. a Codex slug under Claude) — drop them.
-      if (next !== stored) {
+      // Model/effort are agent-specific; if the agent changed, its values
+      // don't apply to the new one (e.g. a Codex slug under Claude), so drop them.
+      if (next !== agentInUseRef.current) {
         setModelState("");
         writeStored(MODEL_KEY, "");
         setEffortState("");
         writeStored(EFFORT_KEY, "");
       }
-      // Remember the agent in use even when it was never picked by hand, so the
-      // next check sees the same agent and keeps the model and effort set for it.
-      if (next) writeStored(AGENT_KEY, next);
+      agentInUseRef.current = next;
       setAgentEligibilityResolved(true);
     } catch {
       // Leaves the previous state in place; "unknown" until a probe answers.
@@ -577,6 +579,7 @@ function RoutedDiagnoseProvider({
     (name: string) => {
       setSelectedAgentState(name);
       writeStored(AGENT_KEY, name);
+      agentInUseRef.current = name;
       const nextProfile = agents.find((agent) => agent.name === name)
         ?.profiles?.[0];
       if (nextProfile) {

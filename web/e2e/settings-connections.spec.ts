@@ -1766,18 +1766,20 @@ test('a failed investigation start keeps the model and effort set for the agent 
     starts++
     return route.fulfill({ status: 409, json: { error: 'too many investigations running — stop or finish one first' } })
   })
-  // The agent was never picked by hand; only a model and effort were set.
+  // The agent was never picked by hand; a model and effort are set for it.
   await page.goto('/resources/pods')
-  await expect(page.locator('table tbody tr').first()).toBeVisible()
+  await page.locator('table tbody tr').first().click()
+  const ask = page.getByRole('button', { name: 'Ask AI about this resource', exact: true })
+  await expect(ask).toBeVisible()
   await page.evaluate(() => {
     localStorage.setItem('radar-ai-model', 'opus')
     localStorage.setItem('radar-ai-effort', 'high')
   })
-  await page.reload()
-  await page.locator('table tbody tr').first().click()
-  await page.getByRole('button', { name: 'Ask AI about this resource', exact: true }).click()
+  await ask.click()
   await expect(page.getByText(/too many investigations running/)).toBeVisible()
   expect(starts).toBe(1)
   await expect.poll(() => page.evaluate(() => [localStorage.getItem('radar-ai-model'), localStorage.getItem('radar-ai-effort')]))
     .toEqual(['opus', 'high'])
+  // The default pick isn't saved as a choice, so a later default still applies.
+  expect(await page.evaluate(() => localStorage.getItem('radar-ai-agent'))).toBeNull()
 })
