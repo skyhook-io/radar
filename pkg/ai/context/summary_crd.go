@@ -380,7 +380,12 @@ func summarizeArgoAnalysisRun(obj *unstructured.Unstructured) *ResourceSummary {
 	switch {
 	case len(failing) > 0:
 		s.Issue = strings.Join(failing, "; ")
-	default:
+	// Argo writes status.message only when a run finishes, and a finished run
+	// can be fine: Argo stops a run once the Rollout no longer needs it (a
+	// canary completing with background analysis, a newer revision, an abort,
+	// a promote-full, a fast rollback), and that run ends Successful with
+	// "Run Terminated". So the message is an issue only on a bad verdict.
+	case s.Status == "Failed", s.Status == "Error", s.Status == "Inconclusive":
 		s.Issue, _, _ = unstructured.NestedString(obj.Object, "status", "message")
 	}
 
