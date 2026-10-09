@@ -18,6 +18,7 @@ export interface DrainPlanPod {
   emptyDir: boolean
   pdb?: string
   pdbChecked: boolean
+  terminating?: boolean
 }
 
 export interface DrainPlan {

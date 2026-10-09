@@ -53,8 +53,8 @@ const startupProbeFailedReason = "StartupProbeFailed"
 // object present, so delayed cleanup is actionable sooner than workload drain.
 const configMapSecretTerminatingWarningAfter = 2 * time.Minute
 
-const terminatingWarningAfter = 10 * time.Minute
-const terminatingCriticalAfter = 30 * time.Minute
+const terminatingWarningAfter = health.NodeRemovalWarningAfter
+const terminatingCriticalAfter = health.NodeRemovalCriticalAfter
 
 type NodeStartupCorroboration struct {
 	Node       string
@@ -907,11 +907,14 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				}
 				ageDur = now.Sub(n.CreationTimestamp.Time)
 				nodeCreatedAt = n.CreationTimestamp.Time
+				if np.Problem == "Removal delayed" {
+					nodeOnsetAt = health.NodeLifecycle(n, now).StartedAt
+				}
 				// Map each problem type to its own condition so issue_timing and
 				// DurationSeconds reflect the right LTT:
 				//   NotReady      → NodeReady condition
 				//   *Pressure     → matching pressure condition
-				//   Cordoned      → no condition, omit issue_timing
+				//   Removal delayed → removal marker timestamp
 				var targetCondType corev1.NodeConditionType
 				switch np.Problem {
 				case "NotReady":
@@ -922,6 +925,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					targetCondType = corev1.NodeDiskPressure
 				case "PIDPressure":
 					targetCondType = corev1.NodePIDPressure
+				case "NetworkUnavailable":
+					targetCondType = corev1.NodeNetworkUnavailable
 				}
 				if targetCondType != "" {
 					for _, cond := range n.Status.Conditions {
@@ -946,6 +951,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Kind:              "Node",
 				Name:              np.NodeName,
 				Severity:          np.Severity,
+				Action:            np.Action,
 				Reason:            np.Problem,
 				Message:           np.Reason,
 				Age:               FormatAge(ageDur),
@@ -1682,6 +1688,10 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 	if obj.GetDeletionTimestamp() == nil {
 		return Detection{}, false
 	}
+	return terminatingProblemSince(kind, group, obj, now, obj.GetDeletionTimestamp().Time)
+}
+
+func terminatingProblemSince(kind, group string, obj metav1.Object, now, startedAt time.Time) (Detection, bool) {
 	finalizers := obj.GetFinalizers()
 	usesShortWarningWindow := group == "" &&
 		(kind == "ConfigMap" || kind == "Secret") &&
@@ -1690,7 +1700,7 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 	if usesShortWarningWindow {
 		warningAfter = configMapSecretTerminatingWarningAfter
 	}
-	duration := now.Sub(obj.GetDeletionTimestamp().Time)
+	duration := now.Sub(startedAt)
 	if duration < warningAfter {
 		return Detection{}, false
 	}
@@ -1710,7 +1720,7 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 	// existed for a real window before deletion classifies post-healthy. A
 	// hardcoded post-healthy label would overstate the evidence for
 	// create-then-delete churn.
-	timingR := IssueTimingFromConditionLTT(obj.GetDeletionTimestamp().Time, obj.GetCreationTimestamp().Time, "deletion")
+	timingR := IssueTimingFromConditionLTT(startedAt, obj.GetCreationTimestamp().Time, "deletion")
 	detection := Detection{
 		Kind:              kind,
 		Group:             group,
@@ -1727,7 +1737,7 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 		IssueTiming:       timingR.IssueTiming,
 		IssueTimingBasis:  timingR.Basis,
 	}
-	setDetectionOnset(&detection, now, obj.GetDeletionTimestamp().Time)
+	setDetectionOnset(&detection, now, startedAt)
 	return detection, true
 }
 

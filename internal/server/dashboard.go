@@ -197,10 +197,12 @@ type ResourceCount struct {
 }
 
 type NodeCount struct {
-	Total    int `json:"total"`
-	Ready    int `json:"ready"`
-	NotReady int `json:"notReady"`
-	Cordoned int `json:"cordoned"`
+	Total             int `json:"total"`
+	Ready             int `json:"ready"`
+	NotReady          int `json:"notReady"`
+	Cordoned          int `json:"cordoned"`
+	Removing          int `json:"removing"`
+	RemovingUnhealthy int `json:"removingUnhealthy"`
 }
 
 type JobCount struct {
@@ -407,7 +409,12 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			resp.ResourceCounts.Nodes.Total = len(nodeList)
 			for _, n := range nodeList {
 				h := health.Node(n)
-				if h.Ready {
+				if lifecycle := health.NodeLifecycle(n, time.Now()); lifecycle.Removing && !lifecycle.ReadinessFailed {
+					resp.ResourceCounts.Nodes.Removing++
+					if lifecycle.Level == health.LevelUnhealthy {
+						resp.ResourceCounts.Nodes.RemovingUnhealthy++
+					}
+				} else if h.Ready {
 					if h.Unschedulable {
 						resp.ResourceCounts.Nodes.Cordoned++
 					} else {

@@ -236,7 +236,12 @@ func (s *Server) handleVitals(w http.ResponseWriter, r *http.Request) {
 		resp.Nodes.Total = len(nodes)
 		for _, n := range nodes {
 			h := health.Node(n)
-			if h.Ready {
+			if lifecycle := health.NodeLifecycle(n, time.Now()); lifecycle.Removing && !lifecycle.ReadinessFailed {
+				resp.Nodes.Removing++
+				if lifecycle.Level == health.LevelUnhealthy {
+					resp.Nodes.RemovingUnhealthy++
+				}
+			} else if h.Ready {
 				if h.Unschedulable {
 					resp.Nodes.Cordoned++
 				} else {

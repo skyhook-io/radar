@@ -1,6 +1,7 @@
 package context
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -622,7 +623,7 @@ func TestSummary_Node(t *testing.T) {
 					NodeInfo: corev1.NodeSystemInfo{KubeletVersion: "v1.28.0"},
 				},
 			},
-			wantStatus:    "Ready",
+			wantStatus:    "Ready · Memory pressure",
 			wantPressures: []string{"MemoryPressure"},
 			wantVersion:   "v1.28.0",
 		},
@@ -976,5 +977,22 @@ func TestSummary_GenericFallback_TypedNilSafe(t *testing.T) {
 	}
 	if got := raw.(*ResourceSummary).Kind; got != "Unknown" {
 		t.Errorf("Kind = %q, want Unknown for typed-nil obj", got)
+	}
+}
+
+func TestNodeSummaryExpectedRemoval(t *testing.T) {
+	now := time.Now().UTC()
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "removing"},
+		Spec:       corev1.NodeSpec{Unschedulable: true, Taints: []corev1.Taint{{Key: "ToBeDeletedByClusterAutoscaler", Value: fmt.Sprint(now.Add(-time.Minute).Unix()), Effect: corev1.TaintEffectNoSchedule}}},
+		Status:     corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionUnknown, LastTransitionTime: metav1.NewTime(now.Add(-time.Second)), Reason: "NodeStatusUnknown"}}},
+	}
+	s := summarizeNode(node)
+	if s.Status != "Removing (cluster autoscaler)" || s.Issue != "" {
+		t.Fatalf("normal removal misreported: %+v", s)
+	}
+	node.Status.Conditions[0].LastTransitionTime = metav1.NewTime(now.Add(-time.Hour))
+	if s := summarizeNode(node); s.Issue != "NodeStatusUnknown" {
+		t.Fatalf("preexisting failure hidden: %+v", s)
 	}
 }

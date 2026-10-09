@@ -16,7 +16,11 @@
 // and for stable, machine-friendly JSON output.
 package resourcecontext
 
-import "time"
+import (
+	"time"
+
+	"github.com/skyhook-io/radar/pkg/health"
+)
 
 // ResourceContext is the top-level enrichment block attached to a resource
 // response. Every field is optional; the zero value is a valid (empty)
@@ -574,12 +578,13 @@ const (
 )
 
 type NodeSummary struct {
-	ReadyStatus   string            `json:"readyStatus,omitempty"`
-	Unschedulable bool              `json:"unschedulable,omitempty"`
-	Capacity      map[string]string `json:"capacity,omitempty"`
-	Allocatable   map[string]string `json:"allocatable,omitempty"`
-	Taints        []TaintSummary    `json:"taints,omitempty"`
-	Warnings      []NodeWarning     `json:"warnings,omitempty"`
+	Lifecycle     *health.NodeLifecycleState `json:"lifecycle,omitempty"`
+	ReadyStatus   string                     `json:"readyStatus,omitempty"`
+	Unschedulable bool                       `json:"unschedulable,omitempty"`
+	Capacity      map[string]string          `json:"capacity,omitempty"`
+	Allocatable   map[string]string          `json:"allocatable,omitempty"`
+	Taints        []TaintSummary             `json:"taints,omitempty"`
+	Warnings      []NodeWarning              `json:"warnings,omitempty"`
 }
 
 type TaintSummary struct {

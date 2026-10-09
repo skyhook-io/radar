@@ -2291,10 +2291,12 @@ type mcpClusterInfo struct {
 }
 
 type mcpNodeSummary struct {
-	Total    int `json:"total"`
-	Ready    int `json:"ready"`
-	NotReady int `json:"notReady"`
-	Cordoned int `json:"cordoned"`
+	Total             int `json:"total"`
+	Ready             int `json:"ready"`
+	NotReady          int `json:"notReady"`
+	Cordoned          int `json:"cordoned"`
+	Removing          int `json:"removing"`
+	RemovingUnhealthy int `json:"removingUnhealthy"`
 }
 
 type mcpHealthSummary struct {
@@ -2648,7 +2650,12 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 
 			for _, node := range nodes {
 				h := health.Node(node)
-				if h.Ready {
+				if lifecycle := health.NodeLifecycle(node, time.Now()); lifecycle.Removing && !lifecycle.ReadinessFailed {
+					d.Nodes.Removing++
+					if lifecycle.Level == health.LevelUnhealthy {
+						d.Nodes.RemovingUnhealthy++
+					}
+				} else if h.Ready {
 					if h.Unschedulable {
 						d.Nodes.Cordoned++
 					} else {

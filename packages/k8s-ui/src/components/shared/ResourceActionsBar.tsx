@@ -1,3 +1,4 @@
+import { getNodeLifecycle } from '../../utils/node-lifecycle'
 import { useEffect, useState, useRef, useId } from 'react'
 import {
   RefreshCw,
@@ -358,7 +359,7 @@ export function ResourceActionsBar({
             </button>
           )}
 
-          {canNodeWrite && (
+          {canNodeWrite && !getNodeLifecycle(data).removing && (
             <>
               {data?.spec?.unschedulable ? (
                 onUncordonNode && (
@@ -660,7 +661,7 @@ export function ResourceActionsBar({
         </div>
       )}
 
-      {onDelete && (
+      {onDelete && !((kind === 'node' || kind === 'nodes') && data?.metadata?.deletionTimestamp) && (
         <Tooltip content="Delete resource">
           <button
             onClick={() => setShowDeleteConfirm(true)}

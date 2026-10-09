@@ -177,8 +177,12 @@ export function ClusterHealthCard({
 
   // Nodes ring segments
   const cordonedCount = counts.nodes.cordoned ?? 0
+  const removingCount = counts.nodes.removing ?? 0
+  const removingUnhealthyCount = counts.nodes.removingUnhealthy ?? 0
   const nodesRingSegments = [
     { value: counts.nodes.ready, color: '#22c55e' },
+    { value: removingCount - removingUnhealthyCount, color: 'var(--text-secondary)' },
+    { value: removingUnhealthyCount, color: 'var(--color-error)' },
     { value: cordonedCount, color: '#eab308' }, // amber for cordoned
     { value: counts.nodes.notReady, color: '#ef4444' },
   ]
@@ -393,6 +397,9 @@ export function ClusterHealthCard({
                   <span className="text-green-500">{counts.nodes.ready} ready</span>
                   {cordonedCount > 0 && (
                     <span className="text-yellow-500">{cordonedCount} cordoned</span>
+                  )}
+                  {removingCount > 0 && (
+                    <span className="text-theme-text-secondary">{removingCount} removing{removingUnhealthyCount > 0 ? ` (${removingUnhealthyCount} unhealthy)` : ''}</span>
                   )}
                   {counts.nodes.notReady > 0 && (
                     <span className="text-red-500">{counts.nodes.notReady} not ready</span>

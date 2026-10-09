@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/cronsched"
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
@@ -564,15 +565,17 @@ func summarizeNode(node *corev1.Node) *ResourceSummary {
 		}
 	}
 
-	// Cordoned/unschedulable status
+	lifecycle := health.NodeLifecycle(node, time.Now())
+	s.Status = lifecycle.Label
+	if !lifecycle.ReadinessFailed {
+		s.Issue = ""
+	}
+	if lifecycle.Delayed {
+		s.Issue = "Removal delayed"
+	}
 	if node.Spec.Unschedulable {
 		unschedulable := true
 		s.Unschedulable = &unschedulable
-		if s.Status != "" {
-			s.Status += ",SchedulingDisabled"
-		} else {
-			s.Status = "SchedulingDisabled"
-		}
 	}
 
 	return s

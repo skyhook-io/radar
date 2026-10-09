@@ -8736,6 +8736,7 @@ function NodeCell({ resource, column, majorityNodeMinorVersion }: { resource: an
     }
     case 'conditions': {
       const { problems, healthy } = getNodeConditions(resource)
+      if (problems.length === 0 && !healthy) return <span className="text-theme-text-secondary">Readiness unknown</span>
       if (healthy) {
         return <span className="text-sm text-green-400">Healthy</span>
       }
