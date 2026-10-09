@@ -2,12 +2,11 @@ import { Network, ShieldCheck, Server, Globe } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, KnativeNotReadyBanner, ResourceLink } from '../../ui/drawer-components'
 import { Badge } from '../../ui/Badge'
-import { kindToPlural } from '../../../utils/navigation'
-import { getKnativeConditionStatus } from '../resource-utils-knative'
+import { getKnativeConditionStatus, knativeRefLink } from '../resource-utils-knative'
 
 interface RendererProps {
   data: any
-  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 }
 
 // ============================================================================
@@ -168,7 +167,7 @@ export function ServerlessServiceRenderer({ data, onNavigate }: RendererProps) {
             <Property label="Target" value={
               <ResourceLink
                 name={objectRef.name}
-                kind={kindToPlural(objectRef.kind || 'Deployment')}
+                {...knativeRefLink(objectRef, 'Deployment')}
                 namespace={ns}
                 onNavigate={onNavigate}
               />
@@ -215,7 +214,7 @@ export function DomainMappingRenderer({ data, onNavigate }: RendererProps) {
             <Property label="Target" value={
               <ResourceLink
                 name={ref.name}
-                kind={kindToPlural(ref.kind || 'Service')}
+                {...knativeRefLink(ref, 'Service')}
                 namespace={ns}
                 onNavigate={onNavigate}
               />
