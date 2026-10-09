@@ -395,6 +395,7 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 	var active sync.Map
 	roles := map[string]string{}
 	cursors := map[string]*logStreamCursor{}
+	follows := 0
 	start := func(pods []*corev1.Pod) {
 		for _, pod := range pods {
 			roles[pod.Name] = cnpgInstanceRole(pod)
@@ -403,18 +404,15 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 				if _, exists := active.Load(key); exists {
 					continue
 				}
-				cursor := cursors[key]
-				if cursor == nil {
-					cursor = &logStreamCursor{}
-					cursors[key] = cursor
-				}
-				opts := cursor.restartOptions(c, query.tailLines, query.sinceSeconds)
+				follows++
+				follow := follows
+				opts := cursorFor(cursors, key, pod.UID, follow).restartOptions(c, query.tailLines, query.sinceSeconds)
 				streamCtx, streamCancel := context.WithCancel(ctx)
 				handle := &cnpgStreamHandle{cancel: streamCancel}
 				active.Store(key, handle)
 				go func(podName, key string) {
 					defer active.CompareAndDelete(key, handle)
-					if err := followCNPGContainerLogs(streamCtx, client, namespace, podName, opts, logCh); err != nil {
+					if err := followCNPGContainerLogs(streamCtx, client, namespace, podName, opts, follow, logCh); err != nil {
 						select {
 						case unavailableCh <- key:
 						case <-streamCtx.Done():
@@ -510,7 +508,7 @@ type cnpgStreamHandle struct {
 
 // followCNPGContainerLogs returns k8score.ErrLogsUnavailable when the node
 // answers with its notice instead of logs, and nil for every other ending.
-func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, namespace, podName string, opts corev1.PodLogOptions, logCh chan<- workloadLogEntry) error {
+func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, namespace, podName string, opts corev1.PodLogOptions, follow int, logCh chan<- workloadLogEntry) error {
 	stream, err := client.CoreV1().Pods(namespace).GetLogs(podName, &opts).Stream(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -530,7 +528,7 @@ func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, n
 			}
 			ts, content := parseLogLine(line)
 			select {
-			case logCh <- workloadLogEntry{Pod: podName, Container: opts.Container, Timestamp: ts, Content: content}:
+			case logCh <- workloadLogEntry{Pod: podName, Container: opts.Container, Timestamp: ts, Content: content, follow: follow}:
 			case <-ctx.Done():
 				return nil
 			}
