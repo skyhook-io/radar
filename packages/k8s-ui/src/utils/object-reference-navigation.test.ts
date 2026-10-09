@@ -17,6 +17,8 @@ describe('objectReferenceToResourceRef', () => {
     expect(objectReferenceToResourceRef({ kind: 'Endpoints', namespace: 'team', name: 'backend' }))
       .toEqual({ kind: 'Endpoints', group: '', namespace: 'team', name: 'backend' })
     expect(objectReferenceToResourceRef({ kind: 'Deployment', namespace: 'team', name: 'backend' })).toBeNull()
+    expect(objectReferenceToResourceRef({ kind: 'Services', namespace: 'team', name: 'backend' })).toBeNull()
+    expect(objectReferenceToResourceRef({ kind: 'Nodes', namespace: 'team', name: 'worker' })).toBeNull()
   })
 
   it('uses exact discovered scope for colliding API kinds', () => {
