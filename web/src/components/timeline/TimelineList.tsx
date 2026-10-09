@@ -3,13 +3,16 @@ import {
   SEVERITY_TEXT,
   TimelineList as TimelineListUI,
   eventsForApplication,
+  isTimelineProblem,
   type ActivityTypeFilter,
   type ActivityFilterKey,
   type AppMembershipIndex,
   type TimeRange,
   type Topology,
 } from '@skyhook-io/k8s-ui'
+import type { TimelineEvent } from '../../types'
 import { useTimelineSource } from '../../context/TimelineSource'
+import { isManagedTimelineEvent } from '../../api/timelineSource'
 import { useHasLimitedAccess } from '../../contexts/CapabilitiesContext'
 import type { NavigateToResource } from '../../utils/navigation'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
@@ -24,10 +27,33 @@ export type { ActivityTypeFilter, ActivityFilterKey }
 const LIST_FETCH_LIMIT = 2000
 const APP_SCOPED_FETCH_LIMIT = 10000
 
-// The source drops managed rows (Pod, ReplicaSet, Event, or any owned row) before
-// the kind filter runs, so an explicit kind selection must keep them or it lists nothing.
-export function listIncludesManaged(appScoped: boolean, kinds: string[]): boolean {
-  return appScoped || kinds.length > 0
+function isChildProblem(e: TimelineEvent): boolean {
+  return isManagedTimelineEvent(e) && isTimelineProblem(e)
+}
+
+const byNewest = (a: TimelineEvent, b: TimelineEvent) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+
+// Splits the list's rows into owner-level rows, problems on child resources,
+// and routine child activity, each newest first under its own `limit`. Separate
+// budgets keep the promises the toggle makes: a burst of owner rows can't crowd
+// out child problems, and showing routine activity only ever adds rows.
+export function splitRoutineActivity(allRows: TimelineEvent[], limit: number) {
+  const owners: TimelineEvent[] = []
+  const childProblems: TimelineEvent[] = []
+  const routine: TimelineEvent[] = []
+  for (const e of allRows) {
+    const bucket = !isManagedTimelineEvent(e) ? owners : isTimelineProblem(e) ? childProblems : routine
+    bucket.push(e)
+  }
+  const base = [...owners.slice(0, limit), ...childProblems.slice(0, limit)].sort(byNewest)
+  const shownRoutine = routine.slice(0, limit)
+  return {
+    withoutRoutine: base,
+    withRoutine: [...base, ...shownRoutine].sort(byNewest),
+    routine: shownRoutine,
+    truncated: owners.length > limit || childProblems.length > limit,
+    routineTruncated: routine.length > limit,
+  }
 }
 
 interface TimelineListProps {
@@ -39,6 +65,10 @@ interface TimelineListProps {
   initialTimeRange?: TimeRange
   showDeleted: boolean
   onShowDeletedChange: (showDeleted: boolean) => void
+  // Routine activity (normal steps of pods, replica sets and other child
+  // resources) is hidden unless the user opts in. Problems always show.
+  showRoutine: boolean
+  onShowRoutineChange: (showRoutine: boolean) => void
   // Shared filter state lifted to TimelineView so it survives the view switch.
   search: string
   onSearchChange: (value: string) => void
@@ -64,7 +94,7 @@ interface TimelineListProps {
   appScopeLoading?: boolean
 }
 
-export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange, showDeleted, onShowDeletedChange, search, onSearchChange, activityFilter, onActivityFilterChange, kindFilter, onKindFilterChange, selectionWindow, onVisibleWindowChange, scrollToMs, focusedAppIndex, appScoped = false, topology, appScopeLoading = false }: TimelineListProps) {
+export function TimelineList({ namespaces, onViewChange, currentView, onResourceClick, initialFilter, initialTimeRange, showDeleted, onShowDeletedChange, showRoutine, onShowRoutineChange, search, onSearchChange, activityFilter, onActivityFilterChange, kindFilter, onKindFilterChange, selectionWindow, onVisibleWindowChange, scrollToMs, focusedAppIndex, appScoped = false, topology, appScopeLoading = false }: TimelineListProps) {
   const hasLimitedAccess = useHasLimitedAccess()
   const timelineSource = useTimelineSource()
   const [queryParams, setQueryParams] = useState<{ timeRange: TimeRange; kinds: string[] }>({
@@ -77,26 +107,36 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
   }, [])
 
   const fetchLimit = appScoped ? APP_SCOPED_FETCH_LIMIT : LIST_FETCH_LIMIT
+  // The application-scoped list keeps every row: its app filter needs the pods.
+  const splitRows = !appScoped
+  // Uncapped when splitting: each part gets its own cap below. The rows come
+  // from the loaded ring, so this costs no extra fetch.
   const { data: fetchedEvents, isLoading, isError, error, refetch } = timelineSource.useEvents({
     namespaces,
     kinds: queryParams.kinds,
     timeRange: queryParams.timeRange,
     includeK8sEvents: true,
-    includeManaged: listIncludesManaged(appScoped, queryParams.kinds),
+    includeManaged: true,
     includeDeleted: showDeleted,
-    limit: fetchLimit,
+    limit: splitRows ? undefined : fetchLimit,
     fromMs: selectionWindow?.fromMs,
     toMs: selectionWindow?.toMs,
   })
+  const split = useMemo(
+    () => (splitRows && fetchedEvents ? splitRoutineActivity(fetchedEvents, fetchLimit) : undefined),
+    [splitRows, fetchedEvents, fetchLimit],
+  )
   const events = useMemo(() => {
-    const unscoped = fetchedEvents ?? []
+    const unscoped = split ? (showRoutine ? split.withRoutine : split.withoutRoutine) : fetchedEvents ?? []
     return appScoped
       ? focusedAppIndex
         ? eventsForApplication(unscoped, topology, focusedAppIndex)
         : []
       : unscoped
-  }, [appScoped, focusedAppIndex, topology, fetchedEvents])
-  const sourceTruncated = (fetchedEvents?.length ?? 0) >= fetchLimit
+  }, [appScoped, focusedAppIndex, topology, split, showRoutine, fetchedEvents])
+  const sourceTruncated = split
+    ? split.truncated || (showRoutine && split.routineTruncated)
+    : (fetchedEvents?.length ?? 0) >= fetchLimit
 
   // Full-screen error only when nothing is loaded; a failing background poll
   // with data on screen keeps rendering (data before error).
@@ -151,6 +191,10 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
           hideRangeSelector={!!selectionWindow}
           showDeleted={showDeleted}
           onShowDeletedChange={onShowDeletedChange}
+          showRoutine={showRoutine}
+          onShowRoutineChange={split ? onShowRoutineChange : undefined}
+          routineEvents={split?.routine}
+          foldPerResource={split && !showRoutine ? isChildProblem : undefined}
           search={search}
           onSearchChange={onSearchChange}
           activityFilter={activityFilter}
@@ -163,7 +207,9 @@ export function TimelineList({ namespaces, onViewChange, currentView, onResource
           isTruncated={sourceTruncated}
           truncationMessage={appScoped && sourceTruncated
             ? `Showing application activity found in the newest ${fetchLimit.toLocaleString()} events in this range — narrow the query to see older activity`
-            : undefined}
+            : split && sourceTruncated
+              ? 'Some older activity in this range is not listed. Narrow the time range to see it.'
+              : undefined}
         />
       </div>
     </div>

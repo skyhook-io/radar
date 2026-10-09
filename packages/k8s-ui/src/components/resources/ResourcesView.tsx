@@ -205,7 +205,7 @@ import { CalicoInfraCell, CalicoPolicyCell } from './renderers/calico-cells'
 import { isCalicoPolicyResource, isCoreNetworkPolicyKind } from './resource-utils-calico'
 import { useRegisterShortcut, useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { ResourcesSidebar } from './ResourcesSidebar'
-import type { SelectedKindInfo } from './ResourcesSidebar'
+import type { SelectedKindInfo, SidebarCategoryWorkspace } from './ResourcesSidebar'
 import { CompareTray, togglePick, pickIndex, refToParam, SIDE_TONES, type CompareTrayPick, type NamespacedRef } from '../compare'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 
@@ -3411,6 +3411,8 @@ interface ResourcesViewProps {
   onSelectedKindChange?: (kind: { name: string; kind: string; group: string }) => void
   /** When true, the sidebar is not rendered. Useful when a standalone ResourcesSidebar is used externally. */
   hideSidebar?: boolean
+  /** Task destinations rendered inside sidebar categories (see ResourcesSidebar). */
+  sidebarCategoryWorkspaces?: Record<string, SidebarCategoryWorkspace>
   /** Callback when the [+] create button is clicked. Receives the currently selected kind info. */
   onCreateResource?: (kind: { name: string; kind: string; group: string } | null) => void
   /** Default kind when the URL does not include one. */
@@ -3653,6 +3655,7 @@ export function ResourcesView({
   onOpenWorkloadLogs,
   onSelectedKindChange,
   hideSidebar = false,
+  sidebarCategoryWorkspaces,
   onCreateResource,
   defaultKind = DEFAULT_KIND_INFO,
   extraLeadingColumns,
@@ -5867,6 +5870,7 @@ export function ResourcesView({
           pinned={pinned}
           togglePin={togglePin}
           isPinned={isPinned}
+          categoryWorkspaces={sidebarCategoryWorkspaces}
           onKindNavigated={() => {
             // After selecting a kind via keyboard, move focus to the table search
             // so the user can immediately filter within the selected kind.

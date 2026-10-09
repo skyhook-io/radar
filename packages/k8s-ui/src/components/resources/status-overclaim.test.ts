@@ -141,7 +141,7 @@ describe('getCNPGObjectStoreStatus', () => {
     // Every timestamp on a RecoveryWindow is optional, so the server can be
     // listed while holding nothing restorable.
     expect(getCNPGObjectStoreStatus({ status: { serverRecoveryWindow: { pg: {} } } }))
-      .toMatchObject({ text: 'No recovery point', level: 'unknown' })
+      .toMatchObject({ text: 'Recovery point not reported', level: 'unknown' })
   })
 
   it('reports recoverable once a real point exists', () => {

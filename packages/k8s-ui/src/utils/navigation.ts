@@ -41,6 +41,10 @@ const BUILTIN_PLURAL_TO_KIND: Record<string, string> = {
   clusterrolebindings: 'ClusterRoleBinding',
   serviceaccounts: 'ServiceAccount',
   networkpolicies: 'NetworkPolicy',
+  // AWS Load Balancer Controller's IngressClass parameters. The Kind is
+  // singular and plural at once, so English rules cannot recover it in hosts
+  // that never load discovery.
+  ingressclassparams: 'IngressClassParams',
 }
 
 const BUILTIN_GROUP_KIND_TO_PLURAL: Record<string, string> = {
@@ -54,6 +58,7 @@ const BUILTIN_GROUP_PLURAL_TO_KIND: Record<string, string> = {
   'metrics.k8s.io/pods': 'PodMetrics',
   'metrics.k8s.io/nodes': 'NodeMetrics',
   'scheduling.k8s.io/podgroups': 'PodGroup',
+  'elbv2.k8s.aws/ingressclassparams': 'IngressClassParams',
 }
 
 // Dynamic map built from API discovery — populated by initNavigationMap().
@@ -71,19 +76,33 @@ let discoveredGroupKindNamespaced: Record<string, boolean> | null = null
  */
 export function initNavigationMap(resources: APIResource[]) {
   const p2k: Record<string, string> = { ...BUILTIN_PLURAL_TO_KIND }
-  const k2p: Record<string, string> = {}
+  // Seeded from the built-in table so core protection survives partial
+  // discovery (the server forwards whatever groups it could list).
+  const k2p: Record<string, string> = Object.fromEntries(
+    CORE_RESOURCES.filter(r => r.group === '').map(r => [r.kind.toLowerCase(), r.name]),
+  )
   const gk2p: Record<string, string> = {}
   const gp2k: Record<string, string> = { ...BUILTIN_GROUP_PLURAL_TO_KIND }
   const scopes: Record<string, boolean> = {}
+  const coreKinds = new Set(Object.keys(k2p))
   for (const r of resources) {
     const plural = r.name.toLowerCase()
+    const kindLower = r.kind.toLowerCase()
     // First-wins on plurals: BUILTIN_PLURAL_TO_KIND seeds canonical core mappings
     // (e.g. "pods" → "Pod") so a colliding API resource (metrics.k8s.io exposes
     // "pods" with kind "PodMetrics") cannot hijack the core mapping.
     if (!(plural in p2k)) p2k[plural] = r.kind
-    k2p[r.kind.toLowerCase()] = plural
-    gk2p[`${r.group}/${r.kind.toLowerCase()}`] = plural
-    scopes[`${r.group}/${r.kind.toLowerCase()}`] = r.namespaced
+    // Kind-only lookups (core links carry an empty group) likewise keep the core
+    // plural: a CRD that reuses a core Kind under another plural must not win
+    // just because discovery happened to list it later.
+    if (r.group === '') {
+      k2p[kindLower] = plural
+      coreKinds.add(kindLower)
+    } else if (!coreKinds.has(kindLower)) {
+      k2p[kindLower] = plural
+    }
+    gk2p[`${r.group}/${kindLower}`] = plural
+    scopes[`${r.group}/${kindLower}`] = r.namespaced
     const groupPlural = `${r.group}/${plural}`
     if (!(groupPlural in gp2k)) gp2k[groupPlural] = r.kind
   }
@@ -116,6 +135,11 @@ function getPluralToKind(): Record<string, string> {
 export function kindToPlural(kind: string): string {
   const kindLower = kind.toLowerCase()
   const pluralToKindMap = getPluralToKind()
+
+  // An exact core Kind (PascalCase, unlike plural slugs) keeps its core plural
+  // even when a CRD registered that word as its own plural.
+  const core = kind !== kindLower ? CORE_RESOURCES.find(r => r.group === '' && r.kind === kind) : undefined
+  if (core) return core.name
 
   // Already a known plural — return as-is to prevent double-pluralization
   if (kindLower in pluralToKindMap) return kindLower
@@ -156,10 +180,15 @@ export function kindToPlural(kind: string): string {
 export function kindToPluralWithGroup(kind: string, group: string): string {
   if (!group) return kindToPlural(kind)
   const kindLower = kind.toLowerCase()
-  const pluralToKindMap = getPluralToKind()
-  if (kindLower in pluralToKindMap) return kindLower
+  // The group's own plural, then its exact Kind, before the group-blind plural
+  // shortcut: a custom Kind spelled like a core plural (Endpoints) has its own
+  // resource, while a lowercase plural must not be read as another Kind.
+  if (kind === kindLower && discoveredGroupPluralToKind?.[`${group}/${kindLower}`]) return kindLower
   const groupKind = `${group}/${kindLower}`
-  return discoveredGroupKindToPlural?.[groupKind] ?? BUILTIN_GROUP_KIND_TO_PLURAL[groupKind] ?? kindToPlural(kind)
+  const exact = discoveredGroupKindToPlural?.[groupKind] ?? BUILTIN_GROUP_KIND_TO_PLURAL[groupKind]
+  if (exact) return exact
+  if (kindLower in getPluralToKind()) return kindLower
+  return kindToPlural(kind)
 }
 
 /**
@@ -227,7 +256,10 @@ export function apiVersionToGroup(apiVersion?: string | null): string {
 
 /** A Kubernetes ObjectReference retains its own API identity and namespace.
  * Cluster scope comes from exact group/kind discovery (or known built-ins).
- * Missing identity/scope stays non-navigable rather than guessing the core API
+ * Core controllers omit apiVersion for core objects (the EndpointSlice
+ * controller writes Pod targets as kind/namespace/name/uid), so an omitted
+ * apiVersion means the core group only for a built-in core Kind. Any other
+ * missing identity or scope stays non-navigable rather than guessing an API
  * or borrowing the referring object's namespace. UID is not a drawer locator.
  */
 export function objectReferenceToResourceRef(ref: {
@@ -236,11 +268,13 @@ export function objectReferenceToResourceRef(ref: {
   namespace?: string
   name?: string
 } | null | undefined): ResourceRef | null {
-  if (!ref?.apiVersion || !ref.kind || !ref.name) return null
+  if (!ref?.kind || !ref.name) return null
+  const kindLower = ref.kind.toLowerCase()
+  if (!ref.apiVersion && !CORE_RESOURCES.some(r => r.group === '' && r.kind.toLowerCase() === kindLower)) return null
   const group = apiVersionToGroup(ref.apiVersion)
-  const key = `${group}/${ref.kind.toLowerCase()}`
+  const key = `${group}/${kindLower}`
   const namespaced = discoveredGroupKindNamespaced?.[key]
-    ?? CORE_RESOURCES.find(r => r.group === group && r.kind.toLowerCase() === ref.kind!.toLowerCase())?.namespaced
+    ?? CORE_RESOURCES.find(r => r.group === group && r.kind.toLowerCase() === kindLower)?.namespaced
   if (namespaced !== false && !ref.namespace) return null
   return { kind: ref.kind, group, namespace: namespaced === false ? '' : ref.namespace!, name: ref.name }
 }

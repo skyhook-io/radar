@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Megaphone } from 'lucide-react'
 import type { WhatsNewState } from '../../api/client'
 import { openWhatsNew, useWhatsNewStatus, WhatsNew } from './WhatsNew'
-import { RELEASE_NOTES } from './releaseNotes'
+import { RELEASE_NOTES, type ReleaseNotes } from './releaseNotes'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -37,13 +37,28 @@ function StatusProbe() {
   return null
 }
 
+const SHIPPED = [...RELEASE_NOTES]
+
+const card = (id: string, title: string, importance: number) => ({ id, icon: Megaphone, title, description: 'd', importance })
+
+// A release worth opening the dialog for, and a quiet one that isn't.
+const HEADLINE: ReleaseNotes = {
+  version: 'v1.15.0',
+  highlights: [{ ...card('capacity', 'Capacity views', 9), leadDescription: 'Capacity lead copy' }, card('diff', 'Manifest diffs', 9), card('rollouts', 'Rollout traffic', 9)],
+  improvements: ['Sort memory'],
+}
+const QUIET: ReleaseNotes = {
+  version: 'v1.16.0',
+  highlights: [card('timeline', 'Workload Timeline', 4), card('logs', 'Log levels', 4)],
+  improvements: ['Traffic fixes'],
+}
+
+function setCatalog(...entries: ReleaseNotes[]) {
+  RELEASE_NOTES.splice(0, RELEASE_NOTES.length, ...entries)
+}
+
 beforeEach(() => {
-  RELEASE_NOTES.push({
-    version: 'v1.15.0',
-    releaseUrl: 'https://github.com/skyhook-io/radar/releases',
-    highlights: [{ id: 'x', icon: Megaphone, title: 'Capacity views', description: 'd' }],
-    improvements: [],
-  })
+  setCatalog(HEADLINE)
   seenPosts.length = 0
   failSeenPosts = 0
   pendingRead = null
@@ -80,7 +95,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
-  RELEASE_NOTES.length = 0
+  setCatalog(...SHIPPED)
   client.clear()
   document.body.replaceChildren()
   vi.unstubAllGlobals()
@@ -155,7 +170,7 @@ describe('WhatsNew', () => {
 
   it('records nothing when previewing another release', async () => {
     serverState = { currentVersion: 'v1.15.2', storage: 'server', seenVersion: 'v1.15.2', priorInstall: true }
-    RELEASE_NOTES.push({ ...RELEASE_NOTES[0], version: 'v1.14.0' })
+    setCatalog(HEADLINE, { ...HEADLINE, version: 'v1.14.0' })
     serverState.seenVersion = 'v1.14.1'
     await render('/resources/pods?whats-new=v1.14.0')
     expect(dialog()?.textContent).toContain("What's new in Radar v1.14")
@@ -214,7 +229,7 @@ describe('WhatsNew', () => {
 
   it('never records a development build', async () => {
     serverState = { currentVersion: 'dev', storage: 'server', priorInstall: false }
-    RELEASE_NOTES.push({ ...RELEASE_NOTES[0], version: 'v0.0.0' })
+    setCatalog(HEADLINE, { ...HEADLINE, version: 'v0.0.0' })
     await act(async () => {
       root.render(
         <QueryClientProvider client={client}>
@@ -225,5 +240,112 @@ describe('WhatsNew', () => {
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)) })
     expect(dialog()).toBeNull()
     expect(seenPosts).toEqual([])
+  })
+  it('leaves a quiet release behind the unread dot, and records it once opened', async () => {
+    setCatalog(HEADLINE, QUIET)
+    serverState = { currentVersion: 'v1.16.0', storage: 'server', seenVersion: 'v1.15.0', priorInstall: true }
+    await render('/')
+    expect(dialog()).toBeNull()
+    expect(status.current.unread).toBe(true)
+    expect(seenPosts).toEqual([])
+    await act(async () => { openWhatsNew() })
+    expect(dialog()?.textContent).toContain("What's new in Radar v1.16")
+    expect(dialog()?.textContent).not.toContain('Capacity views')
+    await clickGotIt()
+    expect(seenPosts).toEqual(['v1.16.0'])
+    expect(status.current.unread).toBe(false)
+  })
+
+  it('does not record a quiet upgrade without a seen record as read', async () => {
+    setCatalog(QUIET)
+    serverState = { currentVersion: 'v1.16.0', storage: 'server', priorInstall: true }
+    await render('/')
+    expect(dialog()).toBeNull()
+    expect(seenPosts).toEqual([])
+    expect(status.current.unread).toBe(true)
+  })
+
+  it('composes the releases a user skipped, leading with the strongest', async () => {
+    setCatalog(HEADLINE, QUIET)
+    serverState = { currentVersion: 'v1.16.0', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
+    await render('/')
+    const text = dialog()?.textContent ?? ''
+    expect(text).toContain("What's new since Radar v1.14")
+    expect(text).toContain('Also new')
+    expect(dialog()?.querySelector('li')?.textContent).toContain('Capacity views')
+    expect(dialog()?.querySelector('li')?.textContent).toContain('v1.15')
+    const tiles = Array.from(dialog()!.querySelectorAll('ul > li span.w-8')).map(t => t.className)
+    expect(tiles).toHaveLength(4)
+    expect(new Set(tiles).size).toBe(4)
+    await clickGotIt()
+    expect(seenPosts).toEqual(['v1.16.0'])
+  })
+
+  it('previews an upgrade from another version without recording anything', async () => {
+    setCatalog(HEADLINE, QUIET)
+    serverState = { currentVersion: 'v1.16.0', storage: 'server', seenVersion: 'v1.16.0', priorInstall: true }
+    await render('/?whats-new=v1.16.0&whats-new-from=v1.14.0')
+    expect(dialog()?.textContent).toContain("What's new since Radar v1.14")
+    await clickGotIt()
+    expect(seenPosts).toEqual([])
+  })
+
+  it('records nothing when previewing the running release', async () => {
+    serverState = { currentVersion: 'v1.15.0', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
+    await render('/resources/pods?whats-new')
+    expect(dialog()).not.toBeNull()
+    await clickGotIt()
+    expect(seenPosts).toEqual([])
+    expect(status.current.unread).toBe(true)
+  })
+
+  it('does not name a seen record that is not a version', async () => {
+    serverState = { currentVersion: 'v1.15.2', storage: 'browser' }
+    localStorage.setItem('radar-whats-new-seen', 'vdev')
+    await render('/')
+    expect(dialog()?.textContent).toContain("What's new in Radar v1.15")
+    expect(dialog()?.textContent).not.toContain('vdev')
+  })
+
+  it('links to the public changelog', async () => {
+    serverState = { currentVersion: 'v1.15.2', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
+    await render('/')
+    const link = Array.from(dialog()!.querySelectorAll('a')).find(a => a.textContent?.includes('Full changelog'))
+    expect(link?.getAttribute('href')).toBe('https://radarhq.io/changelog')
+  })
+  it('records the version it was opened for, even if the server is upgraded while it is open', async () => {
+    setCatalog(HEADLINE, QUIET)
+    serverState = { currentVersion: 'v1.15.2', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
+    await render('/')
+    expect(dialog()).not.toBeNull()
+    serverState = { ...serverState, currentVersion: 'v1.16.0' }
+    await act(async () => { await client.refetchQueries({ queryKey: ['whats-new'] }) })
+    await clickGotIt()
+    expect(seenPosts).toEqual(['v1.15.2'])
+  })
+
+  it('names the previewed release as the destination of a previewed upgrade', async () => {
+    setCatalog(HEADLINE, QUIET)
+    serverState = { currentVersion: 'v1.15.2', storage: 'server', seenVersion: 'v1.15.2', priorInstall: true }
+    await render('/?whats-new=v1.16.0&whats-new-from=v1.14.0')
+    const text = dialog()?.textContent ?? ''
+    expect(text).toContain('v1.16.0')
+    expect(text).not.toContain('v1.15.2')
+  })
+  it('uses the lead copy only while a highlight leads the dialog', async () => {
+    serverState = { currentVersion: 'v1.15.2', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
+    await render('/')
+    expect(dialog()?.textContent).toContain('Capacity lead copy')
+    await clickGotIt()
+    const stronger: ReleaseNotes = { version: 'v1.16.0', highlights: [card('big', 'Bigger thing', 10), card('big2', 'Second thing', 10)], improvements: [] }
+    setCatalog(HEADLINE, stronger)
+    serverState = { currentVersion: 'v1.16.0', storage: 'server', seenVersion: 'v1.14.1', priorInstall: true }
+    await act(async () => root.unmount())
+    root = createRoot(document.body.appendChild(document.createElement('div')))
+    client.clear()
+    await render('/')
+    const text = dialog()?.textContent ?? ''
+    expect(text).toContain('Capacity views')
+    expect(text).not.toContain('Capacity lead copy')
   })
 })

@@ -978,7 +978,7 @@ export function ResourceRendererDispatch({
         {kind === 'authorizationpolicies' && <IstioAuthorizationPolicyRenderer data={data} />}
         {kind === 'mutatingwebhookconfigurations' && <WebhookConfigRenderer data={data} isMutating />}
         {kind === 'validatingwebhookconfigurations' && <WebhookConfigRenderer data={data} />}
-        {kind === 'ingressclasses' && <IngressClassRenderer data={data} />}
+        {kind === 'ingressclasses' && <IngressClassRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'priorityclasses' && <PriorityClassRenderer data={data} />}
         {kind === 'runtimeclasses' && <RuntimeClassRenderer data={data} />}
         {kind === 'leases' && <LeaseRenderer data={data} />}
