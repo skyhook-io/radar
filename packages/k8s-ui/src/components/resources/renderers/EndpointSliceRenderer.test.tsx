@@ -40,4 +40,26 @@ describe('EndpointSliceRenderer target navigation', () => {
       Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: false })
     }
   })
+
+  it('navigates to the labeled Service as a core-group resource', async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+    const onNavigate = vi.fn()
+    const element = document.createElement('div')
+    const root = createRoot(element)
+    const slice = {
+      apiVersion: 'discovery.k8s.io/v1',
+      kind: 'EndpointSlice',
+      metadata: { name: 'web-abc', namespace: 'team', labels: { 'kubernetes.io/service-name': 'web' } },
+    }
+    try {
+      await act(async () => { root.render(<EndpointSliceRenderer data={slice} onNavigate={onNavigate} />) })
+      const button = [...element.querySelectorAll('button')].find(b => b.textContent === 'web')
+      expect(button).toBeDefined()
+      await act(async () => { button!.click() })
+      expect(onNavigate).toHaveBeenCalledWith({ kind: 'Service', group: '', namespace: 'team', name: 'web' })
+    } finally {
+      await act(async () => root.unmount())
+      Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: false })
+    }
+  })
 })

@@ -1549,17 +1549,26 @@ func (d *DynamicResourceCache) ListWithSelector(gvr schema.GroupVersionResource,
 
 // ListDirect fetches resources directly from the API (bypasses cache).
 func (d *DynamicResourceCache) ListDirect(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
+	items, _, err := d.ListDirectSelected(ctx, gvr, namespace, "", 0)
+	return items, err
+}
+
+// ListDirectSelected fetches one page of resources matching labelSelector
+// directly from the API (bypasses cache). A limit of 0 means no limit.
+// truncated reports that the API server returned a continue token, i.e. more
+// matching objects exist beyond the returned page.
+func (d *DynamicResourceCache) ListDirectSelected(ctx context.Context, gvr schema.GroupVersionResource, namespace, labelSelector string, limit int64) (items []*unstructured.Unstructured, truncated bool, err error) {
+	opts := metav1.ListOptions{LabelSelector: labelSelector, Limit: limit}
 	var list *unstructured.UnstructuredList
-	var err error
 
 	if namespace != "" {
-		list, err = d.config.DynamicClient.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+		list, err = d.config.DynamicClient.Resource(gvr).Namespace(namespace).List(ctx, opts)
 	} else {
-		list, err = d.config.DynamicClient.Resource(gvr).List(ctx, metav1.ListOptions{})
+		list, err = d.config.DynamicClient.Resource(gvr).List(ctx, opts)
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to list resources: %w", err)
+		return nil, false, fmt.Errorf("failed to list resources: %w", err)
 	}
 
 	result := make([]*unstructured.Unstructured, len(list.Items))
@@ -1567,7 +1576,7 @@ func (d *DynamicResourceCache) ListDirect(ctx context.Context, gvr schema.GroupV
 		result[i] = StripUnstructuredFields(&list.Items[i])
 	}
 
-	return result, nil
+	return result, list.GetContinue() != "", nil
 }
 
 // GetDirect fetches a single resource directly from the API (bypasses cache).

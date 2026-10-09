@@ -502,7 +502,8 @@ export function DiagnoseSurface({
   };
 
   // Feature is eligible here but not runnable yet (no agent installed, or one
-  // appeared after boot) — Home leads with the setup notice instead of an empty list.
+  // found that investigations couldn't start with): Home leads with the setup
+  // notice instead of an empty list.
   const setupPending =
     d.setupState === "needs-install" || d.setupState === "needs-restart";
 
@@ -617,7 +618,13 @@ export function DiagnoseSurface({
     </div>
   ) : setupPending ? (
     <div className="flex-1 overflow-y-auto">
-      <AgentSetupNotice setupState={d.setupState} />
+      <AgentSetupNotice
+        setupState={d.setupState}
+        cliOverride={d.cliOverride}
+        checkingAgents={d.checkingAgents}
+        agentsCheckFailed={d.agentsCheckFailed}
+        recheckAgents={d.recheckAgents}
+      />
     </div>
   ) : (
     <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-theme-text-tertiary">
@@ -639,7 +646,13 @@ export function DiagnoseSurface({
     </div>
   ) : setupPending ? (
     <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
-      <AgentSetupNotice setupState={d.setupState} />
+      <AgentSetupNotice
+        setupState={d.setupState}
+        cliOverride={d.cliOverride}
+        checkingAgents={d.checkingAgents}
+        agentsCheckFailed={d.agentsCheckFailed}
+        recheckAgents={d.recheckAgents}
+      />
     </div>
   ) : (
     <InvestigationHome

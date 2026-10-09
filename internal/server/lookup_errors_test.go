@@ -35,7 +35,6 @@ var lookupAssignment = regexp.MustCompile(`const\s+([A-Za-z_$][\w$]*)\s*=\s*` + 
 //
 // This set may SHRINK. It must never GROW.
 var lookupErrorBaseline = map[string]string{
-	"ServiceRenderer.tsx :: data: endpointSlices, isLoading: endpointSlicesLoading": "pre-existing: endpoint slices behind the Service Endpoints section",
 	"CNPGDeclarativeRenderer.tsx :: data": "the name resolver degrades to plain text instead of a link, " +
 		"which is its documented fallback; the list beside it carries its own error note",
 }

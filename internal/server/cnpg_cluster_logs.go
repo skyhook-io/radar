@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 const (
@@ -390,6 +391,8 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	logCh := make(chan workloadLogEntry, 1000)
+	unavailableCh := make(chan string)
+	unavailable := unavailableSources{}
 	var active sync.Map
 	roles := map[string]string{}
 	cursors := map[string]*cnpgStreamCursor{}
@@ -412,7 +415,12 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 				active.Store(key, handle)
 				go func(podName, key string) {
 					defer active.CompareAndDelete(key, handle)
-					followCNPGContainerLogs(streamCtx, client, namespace, podName, opts, logCh)
+					if err := followCNPGContainerLogs(streamCtx, client, namespace, podName, opts, logCh); err != nil {
+						select {
+						case unavailableCh <- key:
+						case <-streamCtx.Done():
+						}
+					}
 				}(pod.Name, key)
 			}
 		}
@@ -429,7 +437,16 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 		select {
 		case <-ctx.Done():
 			return
+		case key := <-unavailableCh:
+			// A stream canceled during pod removal can still deliver its report.
+			podName, _, _ := strings.Cut(key, "/")
+			if known[podName] && unavailable.add(key) {
+				unavailable.send(w, flusher)
+			}
 		case entry := <-logCh:
+			if unavailable.remove(entry.Pod + "/" + entry.Container) {
+				unavailable.send(w, flusher)
+			}
 			if cursor := cursors[entry.Pod+"/"+entry.Container]; cursor != nil && !cursor.admit(entry) {
 				continue
 			}
@@ -477,6 +494,9 @@ func (s *Server) handleCNPGClusterLogsStream(w http.ResponseWriter, r *http.Requ
 					if strings.HasPrefix(key, podName+"/") {
 						delete(cursors, key)
 					}
+				}
+				if unavailable.removePod(podName) {
+					unavailable.send(w, flusher)
 				}
 				sendSSEEvent(w, flusher, "pod_removed", map[string]string{"pod": podName, "reason": "terminated"})
 			}
@@ -537,31 +557,38 @@ func (c *cnpgStreamCursor) admit(entry workloadLogEntry) bool {
 	return true
 }
 
-func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, namespace, podName string, opts corev1.PodLogOptions, logCh chan<- workloadLogEntry) {
+// followCNPGContainerLogs returns k8score.ErrLogsUnavailable when the node
+// answers with its notice instead of logs, and nil for every other ending.
+func followCNPGContainerLogs(ctx context.Context, client kubernetes.Interface, namespace, podName string, opts corev1.PodLogOptions, logCh chan<- workloadLogEntry) error {
 	stream, err := client.CoreV1().Pods(namespace).GetLogs(podName, &opts).Stream(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			log.Printf("[cnpg] Failed to follow logs for %s/%s/%s: %v", namespace, podName, opts.Container, err)
 		}
-		return
+		return nil
 	}
 	defer stream.Close()
 	reader := bufio.NewReader(stream)
 	for {
 		line, err := reader.ReadString('\n')
 		if line = strings.TrimSuffix(line, "\n"); line != "" && (err == nil || err == io.EOF) {
+			// The kubelet's notice for a container it no longer holds logs for
+			// arrives as the stream's only line. It is not output.
+			if k8score.IsLogsUnavailableNotice(line) {
+				return k8score.ErrLogsUnavailable
+			}
 			ts, content := parseLogLine(line)
 			select {
 			case logCh <- workloadLogEntry{Pod: podName, Container: opts.Container, Timestamp: ts, Content: content}:
 			case <-ctx.Done():
-				return
+				return nil
 			}
 		}
 		if err != nil {
 			if err != io.EOF && ctx.Err() == nil {
 				log.Printf("[cnpg] Failed to read logs for %s/%s/%s: %v", namespace, podName, opts.Container, err)
 			}
-			return
+			return nil
 		}
 	}
 }

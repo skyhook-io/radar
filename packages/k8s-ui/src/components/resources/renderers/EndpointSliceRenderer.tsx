@@ -48,7 +48,7 @@ export function EndpointSliceRenderer({ data, onNavigate }: EndpointSliceRendere
                 <button
                   type="button"
                   className="text-sm text-accent-text hover:underline font-medium"
-                  onClick={() => onNavigate({ kind: 'Service', namespace: metadata.namespace, name: serviceName })}
+                  onClick={() => onNavigate({ kind: 'Service', group: '', namespace: metadata.namespace, name: serviceName })}
                 >
                   {serviceName}
                 </button>

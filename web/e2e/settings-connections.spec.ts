@@ -1643,6 +1643,69 @@ test('a late agent list is not an unsaved AI edit', async ({ page }) => {
   await expect(dialog).toBeHidden()
 })
 
+test('an agent CLI installed while Settings is open is picked up without a restart', async ({ page }) => {
+  await fixture(page)
+  let installed = false
+  await page.route('**/api/agents', route => route.fulfill({
+    json: installed ? aiAgents : { agents: [], enabled: false, eligible: true, consented: {} },
+  }))
+  const dialog = await openSettings(page, 'AI investigations')
+  await expect(dialog.getByText('No supported agent CLI found', { exact: true })).toBeVisible()
+  await expect(dialog.getByText(/then restart Radar/)).toHaveCount(0)
+  await expect(dialog.getByText(/RADAR_AI_CLI_BIN/)).toHaveCount(0)
+
+  await dialog.getByRole('button', { name: 'Check again', exact: true }).click()
+  await expect(dialog.getByText(/Still not found\./)).toBeVisible()
+
+  installed = true
+  await dialog.getByRole('button', { name: 'Check again', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Your Claude Code setup', exact: true })).toBeVisible()
+  await expect(dialog.getByText('No supported agent CLI found', { exact: true })).toHaveCount(0)
+})
+
+test('a failed agent check says so and can be retried', async ({ page }) => {
+  await fixture(page)
+  let reachable = false
+  await page.route('**/api/agents', route => reachable ? route.fulfill({ json: aiAgents }) : route.abort())
+  const dialog = await openSettings(page, 'AI investigations')
+  await expect(dialog.getByText("Couldn't check for agent CLIs", { exact: true })).toBeVisible()
+  await expect(dialog.getByText('No supported agent CLI found', { exact: true })).toHaveCount(0)
+
+  reachable = true
+  await dialog.getByRole('button', { name: 'Check again', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Your Claude Code setup', exact: true })).toBeVisible()
+})
+
+test('a pinned RADAR_AI_CLI_BIN that works again is picked up from Check again', async ({ page }) => {
+  await fixture(page)
+  let fixed = false
+  await page.route('**/api/agents', route => route.fulfill({
+    json: fixed ? { ...aiAgents, cliOverride: true } : { agents: [], enabled: true, eligible: true, cliOverride: true, consented: {} },
+  }))
+  const dialog = await openSettings(page, 'AI investigations')
+  await expect(dialog.getByText("Radar can't run your RADAR_AI_CLI_BIN", { exact: true })).toBeVisible()
+  await expect(dialog.getByText('No supported agent CLI found', { exact: true })).toHaveCount(0)
+
+  fixed = true
+  await dialog.getByRole('button', { name: 'Check again', exact: true }).click()
+  await expect(dialog.getByRole('button', { name: 'Your Claude Code setup', exact: true })).toBeVisible()
+})
+
+test('coming back to the window re-checks for an agent CLI', async ({ page }) => {
+  await fixture(page)
+  let installed = false
+  await page.route('**/api/agents', route => route.fulfill({
+    json: installed ? aiAgents : { agents: [], enabled: false, eligible: true, consented: {} },
+  }))
+  const dialog = await openSettings(page, 'Overview')
+  const aiRow = dialog.getByRole('button', { name: /AI investigations/ })
+  await expect(aiRow).toContainText('No agent CLI')
+
+  installed = true
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(aiRow).toContainText('Ready')
+})
+
 test('AI drafts are guarded for non-owners and discardable when configuration fails to load', async ({ page }) => {
   await fixture(page)
   await mockAgents(page)
@@ -1688,4 +1751,35 @@ test('saving the last draft from its tab answers a pending close prompt', async 
   await expect(dialog.getByText('Unsaved changes.', { exact: true })).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
+})
+
+test('a failed investigation start keeps the model and effort set for the agent in use', async ({ page }) => {
+  await fixture(page)
+  await page.route('**/api/agents', route => route.fulfill({ json: {
+    enabled: true, eligible: true, consented: { 'claude:safeguarded': true },
+    agents: [{ name: 'claude', label: 'Claude Code', path: '/usr/local/bin/claude', present: true, supported: true,
+      profiles: ['safeguarded', 'full-local'], consentSurfaces: { safeguarded: 'claude:safeguarded', 'full-local': 'claude:full-local' } }],
+  } }))
+  let starts = 0
+  await page.route('**/api/diagnose/runs', route => {
+    if (route.request().method() !== 'POST') return route.fulfill({ json: { runs: [] } })
+    starts++
+    return route.fulfill({ status: 409, json: { error: 'too many investigations running — stop or finish one first' } })
+  })
+  // The agent was never picked by hand; a model and effort are set for it.
+  await page.goto('/resources/pods')
+  await page.locator('table tbody tr').first().click()
+  const ask = page.getByRole('button', { name: 'Ask AI about this resource', exact: true })
+  await expect(ask).toBeVisible()
+  await page.evaluate(() => {
+    localStorage.setItem('radar-ai-model', 'opus')
+    localStorage.setItem('radar-ai-effort', 'high')
+  })
+  await ask.click()
+  await expect(page.getByText(/too many investigations running/)).toBeVisible()
+  expect(starts).toBe(1)
+  await expect.poll(() => page.evaluate(() => [localStorage.getItem('radar-ai-model'), localStorage.getItem('radar-ai-effort')]))
+    .toEqual(['opus', 'high'])
+  // The default pick isn't saved as a choice, so a later default still applies.
+  expect(await page.evaluate(() => localStorage.getItem('radar-ai-agent'))).toBeNull()
 })

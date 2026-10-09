@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
@@ -5028,7 +5029,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// 15. Create Gateway API edges (Gateway → Route, Route → Service)
+	// 15. Create Gateway API edges (Gateway → Route, Route → Service).
+	// Several parentRefs (one per listener) or rules can name the same object.
+	gatewayEdgeSeen := make(map[string]bool)
 	for i, route := range gatewayRouteResources {
 		ns := route.GetNamespace()
 		name := route.GetName()
@@ -5042,15 +5045,16 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if !ok {
 				continue
 			}
-			parentName, _ := pMap["name"].(string)
-			parentNS, _ := pMap["namespace"].(string)
-			if parentNS == "" {
-				parentNS = ns // Default to route's namespace
+			if !configrefs.GatewayParentIsGateway(pMap) {
+				continue
 			}
+			parentName, _ := pMap["name"].(string)
+			parentNS := configrefs.GatewayRefNamespace(pMap, ns)
 			gwID := gatewayIDs[parentNS+"/"+parentName]
-			if gwID != "" {
+			if edgeID := fmt.Sprintf("%s-to-%s", gwID, routeID); gwID != "" && !gatewayEdgeSeen[edgeID] {
+				gatewayEdgeSeen[edgeID] = true
 				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", gwID, routeID),
+					ID:     edgeID,
 					Source: gwID,
 					Target: routeID,
 					Type:   EdgeRoutesTo,
@@ -5072,15 +5076,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					continue
 				}
 				backendName, _ := bMap["name"].(string)
-				backendNS, _ := bMap["namespace"].(string)
-				if backendNS == "" {
-					backendNS = ns // Default to route's namespace
-				}
-				// Default kind is Service if not specified
-				backendKind, _ := bMap["kind"].(string)
-				if backendKind == "" || backendKind == "Service" {
+				backendNS := configrefs.GatewayRefNamespace(bMap, ns)
+				if configrefs.GatewayBackendIsService(bMap) {
 					svcKey := backendNS + "/" + backendName
-					if svcID, ok := serviceIDs[svcKey]; ok {
+					if svcID, ok := serviceIDs[svcKey]; ok && !gatewayEdgeSeen[routeID+"-to-"+svcID] {
+						gatewayEdgeSeen[routeID+"-to-"+svcID] = true
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
 							Source: routeID,
@@ -6073,14 +6073,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 					continue
 				}
 				backendName, _ := bMap["name"].(string)
-				backendNS, _ := bMap["namespace"].(string)
-				if backendNS == "" {
-					backendNS = ns
-				}
-				backendKind, _ := bMap["kind"].(string)
-				if backendKind == "" || backendKind == "Service" {
-					svcKey := backendNS + "/" + backendName
-					servicesFromGateway[svcKey] = true
+				if configrefs.GatewayBackendIsService(bMap) {
+					servicesFromGateway[configrefs.GatewayRefNamespace(bMap, ns)+"/"+backendName] = true
 				}
 			}
 		}
@@ -6468,6 +6462,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		})
 	}
 
+	trafficGatewayEdgeSeen := make(map[string]bool)
 	for i, route := range trafficRoutes {
 		ns := route.GetNamespace()
 		if !opts.MatchesNamespaceFilter(ns) {
@@ -6502,12 +6497,12 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			if !ok {
 				continue
 			}
-			parentName, _ := pMap["name"].(string)
-			parentNS, _ := pMap["namespace"].(string)
-			if parentNS == "" {
-				parentNS = ns
+			if !configrefs.GatewayParentIsGateway(pMap) {
+				continue
 			}
-			if gwID, ok := trafficGwIDMap[parentNS+"/"+parentName]; ok {
+			parentName, _ := pMap["name"].(string)
+			if gwID, ok := trafficGwIDMap[configrefs.GatewayRefNamespace(pMap, ns)+"/"+parentName]; ok && !trafficGatewayEdgeSeen[gwID+"-to-"+routeID] {
+				trafficGatewayEdgeSeen[gwID+"-to-"+routeID] = true
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", gwID, routeID),
 					Source: gwID,
@@ -6530,16 +6525,16 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 					continue
 				}
 				backendName, _ := bMap["name"].(string)
-				backendNS, _ := bMap["namespace"].(string)
-				if backendNS == "" {
-					backendNS = ns
-				}
-				backendKind, _ := bMap["kind"].(string)
-				if backendKind == "" || backendKind == "Service" {
+				backendNS := configrefs.GatewayRefNamespace(bMap, ns)
+				if configrefs.GatewayBackendIsService(bMap) {
 					svcKey := backendNS + "/" + backendName
 					if _, ok := servicesToInclude[svcKey]; ok {
 						svcID := fmt.Sprintf("service/%s/%s", backendNS, backendName)
 						serviceIDs[svcKey] = svcID
+						if trafficGatewayEdgeSeen[routeID+"-to-"+svcID] {
+							continue
+						}
+						trafficGatewayEdgeSeen[routeID+"-to-"+svcID] = true
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
 							Source: routeID,
