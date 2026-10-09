@@ -81,8 +81,8 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	if container != "" {
 		// Fetch logs for specific container
 		logContent, err := s.fetchContainerLogs(r.Context(), client, namespace, podName, container, tailLines, previous, sinceSeconds)
-		if errors.Is(err, errLogsUnavailable) {
-			s.writeError(w, http.StatusNotFound, errLogsUnavailable.Error())
+		if errors.Is(err, k8score.ErrLogsUnavailable) {
+			s.writeError(w, http.StatusNotFound, k8score.ErrLogsUnavailable.Error())
 			return
 		}
 		if previous && isNoPreviousContainer(err) {
@@ -201,6 +201,12 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 			return
 		default:
 			line, err := reader.ReadString('\n')
+			// Checked before the EOF branch: the notice is the whole body with
+			// no trailing newline, so it arrives together with EOF.
+			if k8score.IsLogsUnavailableNotice(line) {
+				sendSSEError(w, flusher, k8score.ErrLogsUnavailable.Error())
+				return
+			}
 			if err != nil {
 				if err == io.EOF {
 					// Stream ended (pod terminated or container finished)
@@ -255,26 +261,11 @@ func (s *Server) fetchContainerLogs(ctx context.Context, client kubernetes.Inter
 		return "", err
 	}
 
-	if body := string(content); isLogsUnavailableNotice(body) {
-		return "", errLogsUnavailable
+	if body := string(content); k8score.IsLogsUnavailableNotice(body) {
+		return "", k8score.ErrLogsUnavailable
 	}
 
 	return string(content), nil
-}
-
-// errLogsUnavailable means the node did not hand back the container's output.
-// Usually the kubelet has already collected the log file; the same answer comes
-// back when the container runtime is briefly unreachable, so this does not
-// claim the lines are gone for good.
-var errLogsUnavailable = errors.New("Kubernetes did not return this container's logs")
-
-// isLogsUnavailableNotice recognises the kubelet's own apology for a log file
-// it no longer holds. The apiserver returns it with a 200 and it is the whole
-// body, so without this it reaches the reader as a line their workload printed.
-// Safe to match by prefix because logs are fetched with timestamps, so a real
-// line always begins with an RFC3339 stamp.
-func isLogsUnavailableNotice(body string) bool {
-	return strings.HasPrefix(strings.TrimSpace(body), "unable to retrieve container logs for")
 }
 
 // isNoPreviousContainer matches the apiserver's answer when an earlier run is
