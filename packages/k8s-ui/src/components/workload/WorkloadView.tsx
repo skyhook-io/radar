@@ -777,6 +777,14 @@ export function WorkloadView({
   // longer exists. The plain renderers show the last copy without them.
   const actionsBarPropsForState = resourceGone ? undefined : effectiveActionsBarProps
   const rendererOverridesForState = resourceGone ? undefined : rendererOverrides
+  // The host's overview panels and Reachability tab diagnose the live object,
+  // and the reachability panel polls for it every few seconds.
+  const renderOverviewLeadForState = resourceGone ? undefined : renderOverviewLead
+  const renderOverviewExtraForState = resourceGone ? undefined : renderOverviewExtra
+  const renderDiagnoseTabForState = resourceGone ? undefined : renderDiagnoseTab
+  // A remount closes any dialog the bar had open: once its actions are gone,
+  // a confirm button left on screen would do nothing.
+  const actionsBarKey = resourceGone ? 'gone' : 'live'
   const deletedNotice = resourceGone ? (
     <DeletedResourceNotice
       kindLabel={displayKindName(apiKind, resource?.kind)}
@@ -847,7 +855,7 @@ export function WorkloadView({
       id: 'reachability',
       label: 'Reachability',
       icon: <Stethoscope className="w-4 h-4" />,
-      hidden: !(renderDiagnoseTab && (isDiagnoseKind(apiKind, group) || (reachableVia?.length ?? 0) > 0)),
+      hidden: !(renderDiagnoseTabForState && (isDiagnoseKind(apiKind, group) || (reachableVia?.length ?? 0) > 0)),
     },
     { id: 'cost', label: 'Cost', icon: <Coins className="w-4 h-4" />, hidden: !costTabVisible },
     { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" /> },
@@ -961,7 +969,7 @@ export function WorkloadView({
           </div>
 
           {/* Actions bar */}
-          <ResourceActionsBar resource={selectedResource} data={resource} onClose={onClose} showYaml={showYaml} onToggleYaml={() => switchView(!showYaml)} {...actionsBarPropsForState} />
+          <ResourceActionsBar key={actionsBarKey} resource={selectedResource} data={resource} onClose={onClose} showYaml={showYaml} onToggleYaml={() => switchView(!showYaml)} {...actionsBarPropsForState} />
         </div>
 
         {/* Success animation overlay */}
@@ -1028,9 +1036,9 @@ export function WorkloadView({
                 drawerSummary
               ) : (
               <>
-              {renderOverviewLead && hasOperationalIssues && (
+              {renderOverviewLeadForState && hasOperationalIssues && (
                 <div className="px-4 pt-4">
-                  {renderOverviewLead({ kind, namespace, name })}
+                  {renderOverviewLeadForState({ kind, namespace, name })}
                 </div>
               )}
               <ResourceRendererDispatch
@@ -1054,7 +1062,7 @@ export function WorkloadView({
                 updates={resourceFocusedUpdates}
                 eventsError={resourceFocusedK8sError}
                 updatesError={resourceFocusedUpdatesError}
-                mainFooter={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name, group, context: 'drawer' })}
+                mainFooter={renderOverviewExtraForState && renderOverviewExtraForState({ kind, namespace, name, group, context: 'drawer' })}
               />
               </>
               )}
@@ -1178,7 +1186,7 @@ export function WorkloadView({
       activeTab={effectiveTab}
       onTabChange={handleSetTab}
       scopeControls={scopeControls}
-      tabStripEnd={<ResourceActionsBar resource={selectedResource} data={resource} hideLogs {...actionsBarPropsForState} />}
+      tabStripEnd={<ResourceActionsBar key={actionsBarKey} resource={selectedResource} data={resource} hideLogs {...actionsBarPropsForState} />}
       overlay={saveSuccess ? <SaveSuccessAnimation /> : null}
       compactHeader={compactHeader}
     >
@@ -1195,9 +1203,9 @@ export function WorkloadView({
           <div className="h-full min-h-0 overflow-y-auto">{expandedSummary}</div>
         ) : effectiveTab === 'overview' && expandedOverview ? (
           <div className="h-full min-h-0">
-            {hasOperationalIssues && renderOverviewLead && (
+            {hasOperationalIssues && renderOverviewLeadForState && (
               <div className="px-4 pt-4">
-                {renderOverviewLead({ kind, namespace, name })}
+                {renderOverviewLeadForState({ kind, namespace, name })}
               </div>
             )}
             {expandedOverview}
@@ -1234,9 +1242,9 @@ export function WorkloadView({
               updates={resourceFocusedUpdates}
               eventsError={overviewEventsError}
               updatesError={resourceFocusedUpdatesError}
-              extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name, group, context: 'expanded' })}
+              extraContent={renderOverviewExtraForState && renderOverviewExtraForState({ kind, namespace, name, group, context: 'expanded' })}
               introContent={overviewIntro}
-              leadContent={hasOperationalIssues && renderOverviewLead ? renderOverviewLead({ kind, namespace, name }) : undefined}
+              leadContent={hasOperationalIssues && renderOverviewLeadForState ? renderOverviewLeadForState({ kind, namespace, name }) : undefined}
               onEvaluateCapacity={onEvaluateCapacity}
               recentImageSave={recentImageSave}
             />
@@ -1295,9 +1303,9 @@ export function WorkloadView({
             {renderMetricsTab({ kind: resource?.kind || kind, namespace, name })}
           </div>
         )}
-        {effectiveTab === 'reachability' && renderDiagnoseTab && (
+        {effectiveTab === 'reachability' && renderDiagnoseTabForState && (
           <div className="flex h-full min-h-0 flex-col p-3">
-            {renderDiagnoseTab({ kind: resource?.kind || kind, namespace, name })}
+            {renderDiagnoseTabForState({ kind: resource?.kind || kind, namespace, name })}
           </div>
         )}
         {effectiveTab === 'cost' && renderCostTab && (

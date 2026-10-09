@@ -23,6 +23,11 @@ function render(resourceError: unknown) {
       relationships={{ deployment: { kind: 'Deployment', namespace: 'shop', name: 'web' } }}
       onNavigateToResource={vi.fn()}
       actionsBarProps={{ canExec: true, canViewLogs: true, onOpenTerminal: vi.fn(), onOpenLogs: vi.fn(), onDelete: vi.fn(), renderDiagnose: () => 'Diagnose' }}
+      hasOperationalIssues
+      renderOverviewLead={() => 'Host issues panel'}
+      renderOverviewExtra={() => 'Host reachability panel'}
+      renderDiagnoseTab={() => 'Host reachability tab'}
+      reachableVia={[{ kind: 'Service', namespace: 'shop', name: 'web' }]}
     />,
   )
 }
@@ -35,6 +40,9 @@ describe('WorkloadView for an object deleted while open', () => {
     expect(html).toContain('>Deleted<')
     expect(html).not.toContain('Terminal')
     expect(html).not.toContain('Diagnose')
+    expect(html).not.toContain('Host issues panel')
+    expect(html).not.toContain('Host reachability panel')
+    expect(html).not.toContain('Reachability')
   })
 
   it('shows the live view when the fetch failed for another reason', () => {
@@ -43,5 +51,8 @@ describe('WorkloadView for an object deleted while open', () => {
     expect(html).not.toContain('>Deleted<')
     expect(html).toContain('Terminal')
     expect(html).toContain('Diagnose')
+    expect(html).toContain('Host issues panel')
+    expect(html).toContain('Host reachability panel')
+    expect(html).toContain('Reachability')
   })
 })
