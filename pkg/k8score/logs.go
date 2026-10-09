@@ -54,14 +54,6 @@ func GetContainerLogs(ctx context.Context, client kubernetes.Interface, namespac
 // good.
 var ErrLogsUnavailable = errors.New("Kubernetes did not return this container's logs")
 
-// kubeletLogNotices are the kubelet's answers when it cannot read a
-// container's logs: the runtime no longer knows the container, or the log
-// file is missing on the node.
-var kubeletLogNotices = []string{
-	"unable to retrieve container logs for ",
-	"failed to try resolving symlinks in path ",
-}
-
 // IsLogsUnavailableNotice recognises the kubelet's notice that it could not
 // read a container's logs. The apiserver relays it with a 200 as the whole
 // response body, so a reader that does not check shows it as a line the
@@ -73,10 +65,11 @@ func IsLogsUnavailableNotice(body string) bool {
 	if strings.Contains(body, "\n") {
 		return false
 	}
-	for _, prefix := range kubeletLogNotices {
-		if strings.HasPrefix(body, prefix) {
-			return true
-		}
+	// The runtime no longer knows the container.
+	if strings.HasPrefix(body, "unable to retrieve container logs for ") {
+		return true
 	}
-	return false
+	// The container's log file is missing on the node. The kubelet quotes the
+	// path of the file it looked for, which is always a .log file.
+	return strings.HasPrefix(body, `failed to try resolving symlinks in path "`) && strings.Contains(body, `.log": `)
 }
