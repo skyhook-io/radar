@@ -19,7 +19,8 @@ import (
 
 // topologyResourceProvider adapts *ResourceCache to topology.ResourceProvider.
 type topologyResourceProvider struct {
-	cache *ResourceCache
+	cache     *ResourceCache
+	namespace string
 }
 
 // NewTopologyResourceProvider wraps a ResourceCache as a topology.ResourceProvider.
@@ -31,10 +32,17 @@ func NewTopologyResourceProvider(cache *ResourceCache) topology.ResourceProvider
 	return &topologyResourceProvider{cache: cache}
 }
 
+func (a *topologyResourceProvider) ForNamespace(namespace string) topology.ResourceProvider {
+	return &topologyResourceProvider{cache: a.cache, namespace: namespace}
+}
+
 func (a *topologyResourceProvider) Pods() ([]*corev1.Pod, error) {
 	lister := a.cache.Pods()
 	if lister == nil {
 		return nil, fmt.Errorf("pods not available (RBAC not granted)")
+	}
+	if a.namespace != "" {
+		return lister.Pods(a.namespace).List(labels.Everything())
 	}
 	return lister.List(labels.Everything())
 }
@@ -44,6 +52,9 @@ func (a *topologyResourceProvider) Services() ([]*corev1.Service, error) {
 	if lister == nil {
 		return nil, fmt.Errorf("services not available (RBAC not granted)")
 	}
+	if a.namespace != "" {
+		return lister.Services(a.namespace).List(labels.Everything())
+	}
 	return lister.List(labels.Everything())
 }
 
@@ -51,6 +62,9 @@ func (a *topologyResourceProvider) Deployments() ([]*appsv1.Deployment, error) {
 	lister := a.cache.Deployments()
 	if lister == nil {
 		return nil, fmt.Errorf("deployments not available (RBAC not granted)")
+	}
+	if a.namespace != "" {
+		return lister.Deployments(a.namespace).List(labels.Everything())
 	}
 	return lister.List(labels.Everything())
 }
@@ -60,6 +74,9 @@ func (a *topologyResourceProvider) DaemonSets() ([]*appsv1.DaemonSet, error) {
 	if lister == nil {
 		return nil, fmt.Errorf("daemonsets not available (RBAC not granted)")
 	}
+	if a.namespace != "" {
+		return lister.DaemonSets(a.namespace).List(labels.Everything())
+	}
 	return lister.List(labels.Everything())
 }
 
@@ -67,6 +84,9 @@ func (a *topologyResourceProvider) StatefulSets() ([]*appsv1.StatefulSet, error)
 	lister := a.cache.StatefulSets()
 	if lister == nil {
 		return nil, fmt.Errorf("statefulsets not available (RBAC not granted)")
+	}
+	if a.namespace != "" {
+		return lister.StatefulSets(a.namespace).List(labels.Everything())
 	}
 	return lister.List(labels.Everything())
 }
@@ -76,6 +96,9 @@ func (a *topologyResourceProvider) ReplicaSets() ([]*appsv1.ReplicaSet, error) {
 	if lister == nil {
 		return nil, fmt.Errorf("replicasets not available (RBAC not granted)")
 	}
+	if a.namespace != "" {
+		return lister.ReplicaSets(a.namespace).List(labels.Everything())
+	}
 	return lister.List(labels.Everything())
 }
 
@@ -83,6 +106,9 @@ func (a *topologyResourceProvider) Jobs() ([]*batchv1.Job, error) {
 	lister := a.cache.Jobs()
 	if lister == nil {
 		return nil, fmt.Errorf("jobs not available (RBAC not granted)")
+	}
+	if a.namespace != "" {
+		return lister.Jobs(a.namespace).List(labels.Everything())
 	}
 	return lister.List(labels.Everything())
 }
@@ -92,6 +118,9 @@ func (a *topologyResourceProvider) CronJobs() ([]*batchv1.CronJob, error) {
 	if lister == nil {
 		return nil, fmt.Errorf("cronjobs not available (RBAC not granted)")
 	}
+	if a.namespace != "" {
+		return lister.CronJobs(a.namespace).List(labels.Everything())
+	}
 	return lister.List(labels.Everything())
 }
 
@@ -99,6 +128,9 @@ func (a *topologyResourceProvider) Ingresses() ([]*networkingv1.Ingress, error) 
 	lister := a.cache.Ingresses()
 	if lister == nil {
 		return nil, fmt.Errorf("ingresses not available (RBAC not granted)")
+	}
+	if a.namespace != "" {
+		return lister.Ingresses(a.namespace).List(labels.Everything())
 	}
 	return lister.List(labels.Everything())
 }
@@ -111,6 +143,9 @@ func (a *topologyResourceProvider) ConfigMaps() ([]*corev1.ConfigMap, error) {
 		}
 		return nil, fmt.Errorf("configmaps not available (RBAC not granted)")
 	}
+	if a.namespace != "" {
+		return lister.ConfigMaps(a.namespace).List(labels.Everything())
+	}
 	return lister.List(labels.Everything())
 }
 
@@ -122,6 +157,9 @@ func (a *topologyResourceProvider) Secrets() ([]*corev1.Secret, error) {
 		}
 		return nil, fmt.Errorf("secrets not available (RBAC not granted)")
 	}
+	if a.namespace != "" {
+		return lister.Secrets(a.namespace).List(labels.Everything())
+	}
 	return lister.List(labels.Everything())
 }
 
@@ -132,6 +170,9 @@ func (a *topologyResourceProvider) ServiceAccounts() ([]*corev1.ServiceAccount, 
 			return nil, nil
 		}
 		return nil, fmt.Errorf("serviceaccounts not available (RBAC not granted)")
+	}
+	if a.namespace != "" {
+		return lister.ServiceAccounts(a.namespace).List(labels.Everything())
 	}
 	return lister.List(labels.Everything())
 }
@@ -152,6 +193,9 @@ func (a *topologyResourceProvider) PersistentVolumeClaims() ([]*corev1.Persisten
 		}
 		return nil, fmt.Errorf("persistentvolumeclaims not available (RBAC not granted)")
 	}
+	if a.namespace != "" {
+		return lister.PersistentVolumeClaims(a.namespace).List(labels.Everything())
+	}
 	return lister.List(labels.Everything())
 }
 
@@ -171,6 +215,9 @@ func (a *topologyResourceProvider) HorizontalPodAutoscalers() ([]*autoscalingv2.
 	if lister == nil {
 		return nil, fmt.Errorf("horizontalpodautoscalers not available (RBAC not granted)")
 	}
+	if a.namespace != "" {
+		return lister.HorizontalPodAutoscalers(a.namespace).List(labels.Everything())
+	}
 	return lister.List(labels.Everything())
 }
 
@@ -182,6 +229,9 @@ func (a *topologyResourceProvider) PodDisruptionBudgets() ([]*policyv1.PodDisrup
 		}
 		return nil, fmt.Errorf("poddisruptionbudgets not available (RBAC not granted)")
 	}
+	if a.namespace != "" {
+		return lister.PodDisruptionBudgets(a.namespace).List(labels.Everything())
+	}
 	return lister.List(labels.Everything())
 }
 
@@ -192,6 +242,9 @@ func (a *topologyResourceProvider) NetworkPolicies() ([]*networkingv1.NetworkPol
 			return nil, nil
 		}
 		return nil, fmt.Errorf("networkpolicies not available (RBAC not granted)")
+	}
+	if a.namespace != "" {
+		return lister.NetworkPolicies(a.namespace).List(labels.Everything())
 	}
 	return lister.List(labels.Everything())
 }

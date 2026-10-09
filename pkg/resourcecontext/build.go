@@ -571,6 +571,10 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		return nil
 	}
 
+	if scoped, ok := provider.(topology.NamespacedResourceProvider); ok {
+		provider = scoped.ForNamespace(ident.Namespace)
+	}
+
 	var refs []ReferenceUse
 	appendRef := func(ref ReferenceUse) {
 		if len(ref.Paths) == 0 || ref.Namespace != target.namespace {

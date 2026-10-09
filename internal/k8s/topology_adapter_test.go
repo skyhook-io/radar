@@ -12,6 +12,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 // newAdapterCache builds a k8s.ResourceCache wrapping a k8score.ResourceCache
@@ -169,5 +170,57 @@ func TestTopologyAdapter_NetworkPolicies_DeferredPending(t *testing.T) {
 	}
 	if nps != nil {
 		t.Errorf("expected nil slice during deferred-pending, got %d items", len(nps))
+	}
+}
+
+func TestTopologyAdapter_ForNamespaceUsesCachedIndex(t *testing.T) {
+	client := fake.NewClientset(
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "one", Namespace: "a"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "two", Namespace: "b"}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker"}},
+	)
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: client, ResourceTypes: map[string]bool{k8score.Pods: true, k8score.Nodes: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(core.Stop)
+	cache := &ResourceCache{ResourceCache: core}
+	adapter := NewTopologyResourceProvider(cache)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		pods, _ := adapter.Pods()
+		nodes, _ := adapter.Nodes()
+		if len(pods) == 2 && len(nodes) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	client.ClearActions()
+	scoped := adapter.(topology.NamespacedResourceProvider).ForNamespace("a")
+	pods, err := scoped.Pods()
+	if err != nil || len(pods) != 1 || pods[0].Namespace != "a" {
+		t.Fatalf("scoped Pods: %v %v", pods, err)
+	}
+	nodes, err := scoped.Nodes()
+	if err != nil || len(nodes) != 1 {
+		t.Fatalf("cluster list narrowed: %v %v", nodes, err)
+	}
+	pods, err = adapter.Pods()
+	if err != nil || len(pods) != 2 {
+		t.Fatalf("shared adapter mutated: %v %v", pods, err)
+	}
+	pods, err = adapter.(topology.NamespacedResourceProvider).ForNamespace("").Pods()
+	if err != nil || len(pods) != 2 {
+		t.Fatalf("empty scope: %v %v", pods, err)
+	}
+	pods, err = adapter.(topology.NamespacedResourceProvider).ForNamespace("unobserved").Pods()
+	if err != nil || len(pods) != 0 {
+		t.Fatalf("unobserved scope: %v %v", pods, err)
+	}
+	if actions := client.Actions(); len(actions) != 0 {
+		t.Fatalf("namespace projection made API calls: %v", actions)
+	}
+	if _, err := scoped.ReplicaSets(); err == nil {
+		t.Fatal("disabled informer should retain its availability error")
 	}
 }
