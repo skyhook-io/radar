@@ -3017,6 +3017,38 @@ export function useWorkloadHistory(kind: string, namespace: string, name: string
   return query;
 }
 
+export interface ServiceEndpointSlicesResult {
+  items: any[];
+  /** More slices are labeled for the Service than the server returns in one page. */
+  truncated: boolean;
+}
+
+// The EndpointSlices published for one Service, selected server-side by the
+// kubernetes.io/service-name label. A Radar that predates the endpoint settles
+// as unsupported; ServiceRenderer then falls back to the namespace list.
+export function useServiceEndpointSlices(namespace: string, name: string, enabled = true) {
+  const { guard, gatedKey, support } = useRadarFeature("serviceEndpointSlices");
+  const query = useQuery<ServiceEndpointSlicesResult>({
+    queryKey: ["service-endpointslices", namespace, name, ...gatedKey],
+    queryFn: ({ signal }) =>
+      guard(() =>
+        fetchJSON<ServiceEndpointSlicesResult>(
+          `/services/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/endpointslices`,
+          signal,
+        ),
+      ),
+    retry: shouldRetryRadarQuery,
+    refetchInterval: (query) =>
+      query.state.error instanceof RadarFeatureUnsupportedError ? false : 30000,
+    enabled,
+  });
+  const { error, refetch } = query;
+  useEffect(() => {
+    if (support === "supported" && error instanceof RadarFeatureUnsupportedError) void refetch();
+  }, [support, error, refetch]);
+  return query;
+}
+
 export function fetchWorkloadHistoryPage(kind: string, namespace: string, name: string, group: string | undefined, beforeSeq: number): Promise<WorkloadHistoryPage> {
   return fetchJSON(workloadHistoryPath(kind, namespace, name, group, beforeSeq));
 }

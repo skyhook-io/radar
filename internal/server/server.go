@@ -659,6 +659,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/pods/{namespace}/{name}/environment", s.handlePodEnvironment)
 			r.Post("/pods/{namespace}/{name}/environment/reveal", s.handleRevealPodEnvironment)
 
+			r.Get("/services/{namespace}/{name}/endpointslices", s.handleServiceEndpointSlices)
+
 			// Pod debug (ephemeral container)
 			r.Post("/pods/{namespace}/{name}/debug", s.handleCreateDebugContainer)
 
@@ -1337,13 +1339,14 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
-		YAMLReview:      true,
-		YAMLSchemas:     true,
-		WorkloadImages:  true,
-		ResourceIssues:  true,
-		PodEnvironment:  true,
-		PolicyResource:  true,
-		WorkloadHistory: true,
+		YAMLReview:            true,
+		YAMLSchemas:           true,
+		WorkloadImages:        true,
+		ResourceIssues:        true,
+		PodEnvironment:        true,
+		PolicyResource:        true,
+		WorkloadHistory:       true,
+		ServiceEndpointSlices: true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()
