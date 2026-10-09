@@ -17,4 +17,10 @@ describe('supportsLogsWithoutPods', () => {
     expect(supportsLogsWithoutPods('jobs', 'Job', 'batch', 'batch/v1')).toBe(true)
     expect(supportsLogsWithoutPods('jobs', 'Job', 'example.io', 'example.io/v1')).toBe(false)
   })
+
+  it('offers a CloudNativePG Cluster its merged instance logs, but not other Cluster kinds', () => {
+    expect(supportsLogsWithoutPods('clusters', 'Cluster', 'postgresql.cnpg.io', 'postgresql.cnpg.io/v1')).toBe(true)
+    expect(supportsLogsWithoutPods('clusters', 'Cluster', undefined, 'postgresql.cnpg.io/v1')).toBe(true)
+    expect(supportsLogsWithoutPods('clusters', 'Cluster', 'cluster.x-k8s.io', 'cluster.x-k8s.io/v1beta1')).toBe(false)
+  })
 })

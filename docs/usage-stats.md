@@ -10,7 +10,8 @@ Settings > Privacy shows the exact report before anything is sent.
 ## When Radar asks
 
 - **A local Radar** asks once, in a small card the first time it runs, and in
-  the What's New dialog after an upgrade. "No thanks" is final. If you close
+  the What's New dialog after an upgrade (it opens by itself only for releases
+  with enough to show; otherwise from the nav rail). "No thanks" is final. If you close
   the question without answering, Radar asks again after three months.
 - **A shared Radar** never asks; its operator decides. See
   [Shared Radar](#shared-radar).

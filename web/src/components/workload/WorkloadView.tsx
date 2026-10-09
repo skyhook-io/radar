@@ -3,18 +3,20 @@ import { JobRenderer, JobSetRenderer } from '../resources/renderers/JobAdmission
 import { RayClusterRenderer } from '../resources/renderers/RayClusterRenderer'
 import { RayServiceRenderer } from '../resources/renderers/RayServiceRenderer'
 import { KueueWorkloadRenderer } from '../resources/renderers/KueueWorkloadRenderer'
-import { useMemo, useEffect, useCallback, useRef, useState } from 'react'
+import { useMemo, useEffect, useCallback, useRef, useState, type ReactNode } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
-import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
+import { Navigate, useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { workloadPodAwaitsScheduling } from '../capacity/podDemandGate'
 import { clsx } from 'clsx'
 import { Terminal, Stethoscope } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
+  isApiGroup,
   EditableYamlView,
   FetchResult,
   Section,
   type WorkloadTabType,
+  type WorkloadExtraTab,
   type RendererOverrides,
   type GitOpsOwnerRef,
   type GitOpsStatus,
@@ -149,6 +151,9 @@ import {
   CNPGSubscriptionRenderer,
 } from '../resources/renderers/CNPGDeclarativeRenderer'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
+import { renderCNPGSummary } from '../cnpg/CNPGSummaryHost'
+import { CNPGClusterLogs } from '../cnpg/CNPGClusterLogs'
+import { cnpgDetailKindFor, cnpgDetailPath } from '../cnpg/routes'
 import { cleanYamlForDuplicate } from '../../utils/skeleton-yaml'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
@@ -278,6 +283,17 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
     )
   }
 
+  const cnpgPlural = cnpgDetailKindFor(kind, group)
+  if (cnpgPlural) {
+    const params = new URLSearchParams(searchParams)
+    params.delete('apiGroup')
+    const tab = params.get('tab')
+    if (cnpgPlural === 'clusters' && (tab === 'timeline' || tab === 'events')) params.set('tab', 'activity')
+    const base = cnpgDetailPath({ plural: cnpgPlural, namespace, name })
+    const qs = params.toString()
+    return <Navigate replace to={qs ? `${base}?${qs}` : base} state={location.state} />
+  }
+
   return (
     <WorkloadView
       kind={kind}
@@ -313,6 +329,8 @@ interface WorkloadViewProps {
   initialTab?: 'detail' | 'yaml'
   group?: string
   pushTabHistory?: boolean
+  breadcrumb?: ReactNode
+  extraTabs?: WorkloadExtraTab[]
 }
 
 interface ImageTargetOwnershipContext {
@@ -537,6 +555,7 @@ export function WorkloadView({
   ...rest
 }: WorkloadViewProps) {
   const [searchParams, setSearchParams] = useSearchParams()
+  const location = useLocation()
   const apiKind = kindToPluralWithGroup(kindProp, rest.group ?? '')
   const queryClient = useQueryClient()
   const [imageTargetOwnership, setImageTargetOwnership] =
@@ -562,9 +581,9 @@ export function WorkloadView({
       } else {
         params.set('tab', tab)
       }
-      setSearchParams(params, { replace: opts?.replace ?? !pushTabHistory })
+      setSearchParams(params, { replace: opts?.replace ?? !pushTabHistory, state: location.state })
     },
-    [pushTabHistory, searchParams, setSearchParams],
+    [pushTabHistory, searchParams, setSearchParams, location.state],
   )
 
   const selectedRunKey = searchParams.get('run') ?? ''
@@ -1265,6 +1284,9 @@ export function WorkloadView({
             onSelectRun={handleSelectedRunChange}
           />
         )}
+        renderSummary={({ apiKind: ak, namespace: ns, name: n, resource: res, context, onNavigate }) =>
+          renderCNPGSummary({ apiKind: ak, namespace: ns, name: n, group: effectiveGroup, resource: res, context, onNavigate })
+        }
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res }) =>
           supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&
           res ? (
@@ -1661,6 +1683,10 @@ function LogsTabContent({
         />
       </div>
     )
+  }
+
+  if (kind === 'Cluster' && isApiGroup(resource?.apiVersion, 'postgresql.cnpg.io')) {
+    return <CNPGClusterLogs namespace={namespace} name={name} />
   }
 
   // Workload kinds with stable pod selectors use the aggregated workload logs viewer

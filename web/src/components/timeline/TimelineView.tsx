@@ -125,6 +125,7 @@ export interface PersistedTimelineState {
   viewMode: TimelineViewMode
   mode: TimelineMode
   showDeleted: boolean
+  showRoutine: boolean
   pinnedOnly: boolean
   search: string
   activityFilter: ActivityFilterKey[]
@@ -237,6 +238,7 @@ export function writeTimelineParams(
   set('activity', s.activityFilter.length ? s.activityFilter.join(',') : null)
   set('kinds', s.kindFilter.length ? s.kindFilter.join(',') : null)
   set('deleted', s.showDeleted ? null : '0')
+  set('routine', s.showRoutine ? '1' : null)
   set('pinnedOnly', s.pinnedOnly ? '1' : null)
   set('q', s.search.length ? s.search : null)
   set('grouping', s.grouping !== DEFAULT_GROUPING ? s.grouping : null)
@@ -309,6 +311,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
   // and so the fetch can exclude deletes at the source rather than only hiding
   // them client-side.
   const [showDeleted, setShowDeleted] = useState(() => searchParams.get('deleted') !== '0')
+  const [showRoutine, setShowRoutine] = useState(() => searchParams.get('routine') === '1')
   // ?pinnedOnly=1 is inert without pins: honoring it with no stored pins would
   // arm a filter that hides everything. Gate the read on stored pins so the param
   // can never arm on its own — ordering-proof, independent of when the empty-pins
@@ -634,6 +637,8 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     setMode((prev) => (timeModeEqual(prev, nextMode) ? prev : nextMode))
     const nextDeleted = sp.get('deleted') !== '0'
     setShowDeleted((prev) => (prev === nextDeleted ? prev : nextDeleted))
+    const nextRoutine = sp.get('routine') === '1'
+    setShowRoutine((prev) => (prev === nextRoutine ? prev : nextRoutine))
     // Same guard as the lazy init: the param can only arm the filter when pins
     // exist, so a mount that runs this after the empty-pins reset can't re-arm it.
     const nextPinnedOnly = sp.get('pinnedOnly') === '1' && pinnedLanes.length > 0
@@ -658,7 +663,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     const current = searchParamsRef.current
     const target = writeTimelineParams(
       current,
-      { viewMode, mode, showDeleted, pinnedOnly, search: debouncedSearch, activityFilter, kindFilter, grouping, sort, selectedEventId },
+      { viewMode, mode, showDeleted, showRoutine, pinnedOnly, search: debouncedSearch, activityFilter, kindFilter, grouping, sort, selectedEventId },
       { isRetained: isRetained || isLocal, requiresNamespaceFilter: scopeRequiresNamespaceFilter },
     )
     const targetStr = target.toString()
@@ -672,7 +677,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     const replace = !didMountUrlSyncRef.current || onlyHighFreqDiffer(currentStr, targetStr)
     didMountUrlSyncRef.current = true
     setSearchParamsRef.current(target, { replace })
-  }, [viewMode, mode, showDeleted, pinnedOnly, debouncedSearch, activityFilter, kindFilter, grouping, sort, selectedEventId, isRetained, isLocal, scopeRequiresNamespaceFilter])
+  }, [viewMode, mode, showDeleted, showRoutine, pinnedOnly, debouncedSearch, activityFilter, kindFilter, grouping, sort, selectedEventId, isRetained, isLocal, scopeRequiresNamespaceFilter])
 
   // Fetch all activity - zoom controls what's visible in the UI. This ring feeds
   // the swimlanes and the local strip's histogram, so it also runs in list mode
@@ -1032,6 +1037,8 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
       initialTimeRange={initialTimeRange}
       showDeleted={showDeleted}
       onShowDeletedChange={setShowDeleted}
+      showRoutine={showRoutine}
+      onShowRoutineChange={setShowRoutine}
       search={search}
       onSearchChange={setSearch}
       activityFilter={activityFilter}

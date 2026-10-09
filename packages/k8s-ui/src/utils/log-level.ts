@@ -49,6 +49,12 @@ export function normalizeLevel(raw: unknown): LogLevel | null {
   return 'unknown'
 }
 
+// PostgreSQL's error_severity values (every DEBUGn is written as DEBUG);
+// anything else under `record` isn't PostgreSQL's.
+const POSTGRES_SEVERITIES: Record<string, LogLevel> = {
+  DEBUG: 'debug', LOG: 'info', INFO: 'info', NOTICE: 'info', WARNING: 'warn', ERROR: 'error', FATAL: 'error', PANIC: 'error',
+}
+
 const LEVEL_FIELD_KEYS = ['level', 'lvl', 'severity', 'levelname', 'log.level'] as const
 
 /**
@@ -57,6 +63,14 @@ const LEVEL_FIELD_KEYS = ['level', 'lvl', 'severity', 'levelname', 'log.level'] 
  * come from the same field.
  */
 export function selectLevelField(obj: Record<string, unknown>): { raw: unknown; level: LogLevel } | null {
+  // CloudNativePG wraps each PostgreSQL line in an instance-manager record
+  // whose own level is usually info; the database's severity is nested.
+  const pgRecord = obj.record
+  if (pgRecord && typeof pgRecord === 'object' && !Array.isArray(pgRecord)) {
+    const raw = (pgRecord as Record<string, unknown>).error_severity
+    const level = typeof raw === 'string' ? POSTGRES_SEVERITIES[raw.trim().toUpperCase()] : undefined
+    if (level) return { raw, level }
+  }
   for (const key of LEVEL_FIELD_KEYS) {
     const level = normalizeLevel(obj[key])
     if (level) return { raw: obj[key], level }
