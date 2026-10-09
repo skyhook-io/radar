@@ -150,7 +150,7 @@ export function ServiceAccountRenderer({
         <Section title={`Secrets (${secrets.length})`} icon={Key}>
           <PropertyList>
             {secrets.map((secret: any) => (
-              <Property key={secret.name} label="Secret" value={secret.name} />
+              <Property key={secret.name} label="Secret" value={namesLocalSecret(secret, metadata.namespace) ? <ResourceLink name={secret.name} kind="secrets" namespace={metadata.namespace} onNavigate={onNavigate} /> : secret.name} />
             ))}
           </PropertyList>
         </Section>
@@ -161,18 +161,22 @@ export function ServiceAccountRenderer({
         <Section title={`Image Pull Secrets (${imagePullSecrets.length})`}>
           <div className="flex flex-wrap gap-1">
             {imagePullSecrets.map((secret: any) => (
-              <span
-                key={secret.name}
-                className="badge bg-theme-elevated text-theme-text-secondary"
-              >
-                {secret.name}
-              </span>
+              <ResourceLink key={secret.name} name={secret.name} kind="secrets" namespace={metadata.namespace} onNavigate={onNavigate} />
             ))}
           </div>
         </Section>
       )}
     </>
   )
+}
+
+// secrets[] entries are ObjectReferences, which the API server stores without
+// checking that they name a Secret in this namespace. Link only those that do.
+function namesLocalSecret(ref: { name?: string; namespace?: string; kind?: string; apiVersion?: string }, namespace: string): boolean {
+  return !!ref.name
+    && (!ref.namespace || ref.namespace === namespace)
+    && (!ref.kind || ref.kind === 'Secret')
+    && (!ref.apiVersion || !ref.apiVersion.includes('/'))
 }
 
 // ---------------------------------------------------------------------------

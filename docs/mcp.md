@@ -509,6 +509,14 @@ when capped. These are declared relationships, not evidence that provisioning,
 binding or mounting succeeded. Provider-derived storage chains are context
 facts; this does not add PV/StorageClass graph nodes or neighborhood edges.
 
+ServiceAccount `serviceAccountSummary` separates declared `secretRefs` from
+`imagePullSecrets`, with target permissions and the same bounded reference
+handling. Secret `referencedBy` can identify the declaring ServiceAccount and
+field paths. These associations do not establish that an existing Pod reads
+the Secret. Projected bound tokens are not Secret objects, and no token Secret
+is manufactured for an account with empty declarations. The drawer's existing
+Secret sections provide navigation to named objects without reading their data.
+
 ### Write Tools
 
 | Tool | Description | Parameters |
