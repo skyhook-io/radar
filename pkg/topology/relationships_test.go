@@ -384,6 +384,23 @@ func TestGetRelationships_ConfiguresDispatchesByKind(t *testing.T) {
 	}
 }
 
+func TestGetRelationships_ConfigRefsListsEachTargetOnce(t *testing.T) {
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web"},
+			{ID: "configmap/demo/web", Kind: KindConfigMap, Name: "web"},
+		},
+		Edges: []Edge{
+			{ID: "web-uses-config", Source: "deployment/demo/web", Target: "configmap/demo/web", Type: EdgeUses},
+			{ID: "config-to-web", Source: "configmap/demo/web", Target: "deployment/demo/web", Type: EdgeConfigures},
+		},
+	}
+	rel := GetRelationships("Deployment", "demo", "web", topo, nil, nil)
+	if rel == nil || len(rel.ConfigRefs) != 1 {
+		t.Fatalf("expected one ConfigRef for a ConfigMap reached by two edges, got %+v", rel)
+	}
+}
+
 func TestGetRelationships_WorkloadIncludesServiceEntrypoints(t *testing.T) {
 	topo := &Topology{
 		Nodes: []Node{

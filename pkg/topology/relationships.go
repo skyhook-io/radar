@@ -479,7 +479,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				// Monitor resources observe their targets; topology carries the edge,
 				// but Relationships has no observability group to project it into yet.
 			default:
-				rel.ConfigRefs = append(rel.ConfigRefs, *ref)
+				rel.ConfigRefs = appendResourceRef(rel.ConfigRefs, *ref)
 			}
 		}
 	}
