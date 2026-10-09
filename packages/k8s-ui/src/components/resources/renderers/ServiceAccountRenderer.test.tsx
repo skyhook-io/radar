@@ -27,3 +27,34 @@ it('navigates both declared Secret roles using the host resource-kind contract',
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: false })
   }
 })
+
+it('leaves secrets[] references to other namespaces, kinds or API groups as text', async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  try {
+    await act(async () => root.render(
+      <ServiceAccountRenderer
+        data={{
+          metadata: { name: 'runner', namespace: 'team' },
+          secrets: [
+            { name: 'foreign', namespace: 'other' },
+            { name: 'not-a-secret', kind: 'ConfigMap' },
+            { name: 'custom-group', apiVersion: 'example.io/v1' },
+            { name: 'local', namespace: 'team', kind: 'Secret', apiVersion: 'v1' },
+          ],
+        }}
+        onNavigate={vi.fn()}
+      />,
+    ))
+    const linked = [...container.querySelectorAll('button')].map((button) => button.textContent)
+    expect(linked).toContain('local')
+    for (const name of ['foreign', 'not-a-secret', 'custom-group']) {
+      expect(linked).not.toContain(name)
+      expect(container.textContent).toContain(name)
+    }
+  } finally {
+    await act(async () => root.unmount())
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: false })
+  }
+})

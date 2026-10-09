@@ -150,7 +150,7 @@ export function ServiceAccountRenderer({
         <Section title={`Secrets (${secrets.length})`} icon={Key}>
           <PropertyList>
             {secrets.map((secret: any) => (
-              <Property key={secret.name} label="Secret" value={<ResourceLink name={secret.name} kind="secrets" namespace={metadata.namespace} onNavigate={onNavigate} />} />
+              <Property key={secret.name} label="Secret" value={namesLocalSecret(secret, metadata.namespace) ? <ResourceLink name={secret.name} kind="secrets" namespace={metadata.namespace} onNavigate={onNavigate} /> : secret.name} />
             ))}
           </PropertyList>
         </Section>
@@ -168,6 +168,15 @@ export function ServiceAccountRenderer({
       )}
     </>
   )
+}
+
+// secrets[] entries are ObjectReferences, which the API server stores without
+// checking that they name a Secret in this namespace. Link only those that do.
+function namesLocalSecret(ref: { name?: string; namespace?: string; kind?: string; apiVersion?: string }, namespace: string): boolean {
+  return !!ref.name
+    && (!ref.namespace || ref.namespace === namespace)
+    && (!ref.kind || ref.kind === 'Secret')
+    && (!ref.apiVersion || !ref.apiVersion.includes('/'))
 }
 
 // ---------------------------------------------------------------------------
