@@ -2612,7 +2612,6 @@ export function goneRecheckInterval(
   return isNotFoundError(query.state.error) ? GONE_RECHECK_MS : otherwise;
 }
 
-/** The object a watch event names, as matched by refetchOnResourceEvents. */
 export function resourceEventKey(kind: string, namespace: string, name: string): string {
   return `${kind}/${namespace}/${name}`;
 }
