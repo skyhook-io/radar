@@ -681,12 +681,28 @@ func TestCheckResourcePermissionsDiscardsSupersededProbe(t *testing.T) {
 // probe that is already in flight against the previous scope. A rescope keeps
 // the same clients, so the cache generation is the only guard that applies.
 //
-// It drives SetNamespaceScopeOverride, which is where the retirement lives, so
-// no caller can change the scope without it.
+// It drives the two scope setters, which is where the retirement lives, so no
+// caller can change the scope without it. A context switch clears the scope
+// right after swapping clients, so the clear case also covers a probe that
+// starts just before that swap.
 func TestNamespaceRescopeRetiresInFlightProbe(t *testing.T) {
-	defer ResetTestState()
-
 	const previousNs, currentNs = "previous-scope-ns", "current-scope-ns"
+
+	for _, tc := range []struct {
+		name    string
+		rescope func()
+	}{
+		{name: "set", rescope: func() { SetNamespaceScopeOverride(currentNs) }},
+		{name: "clear", rescope: ClearNamespaceScopeOverride},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testRescopeRetiresInFlightProbe(t, previousNs, tc.rescope)
+		})
+	}
+}
+
+func testRescopeRetiresInFlightProbe(t *testing.T, previousNs string, rescope func()) {
+	defer ResetTestState()
 
 	typed, err := kubernetes.NewForConfig(&rest.Config{Host: "http://localhost:1"})
 	if err != nil {
@@ -725,7 +741,7 @@ func TestNamespaceRescopeRetiresInFlightProbe(t *testing.T) {
 		t.Fatal("probe never reached the dynamic client")
 	}
 
-	SetNamespaceScopeOverride(currentNs)
+	rescope()
 
 	releaseOnce()
 	select {
@@ -738,8 +754,8 @@ func TestNamespaceRescopeRetiresInFlightProbe(t *testing.T) {
 	published := cachedPermResult
 	resourcePermsMu.RUnlock()
 	if published != nil {
-		t.Fatalf("a probe that read scope %q published %q after the rescope to %q",
-			previousNs, published.Namespace, currentNs)
+		t.Fatalf("a probe that read scope %q published %q after the rescope",
+			previousNs, published.Namespace)
 	}
 }
 

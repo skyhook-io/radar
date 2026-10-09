@@ -215,6 +215,7 @@ func TestConcurrentInvalidateDuringPermissionCheck(t *testing.T) {
 		select {
 		case <-probeEntered:
 		case <-time.After(5 * time.Second):
+			t.Error("probe never reached the dynamic client, so nothing overlapped")
 			releaseProbe()
 			return
 		}
