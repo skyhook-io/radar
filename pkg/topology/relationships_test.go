@@ -391,13 +391,13 @@ func TestGetRelationships_ConfigRefsListsEachTargetOnce(t *testing.T) {
 			{ID: "configmap/demo/web", Kind: KindConfigMap, Name: "web"},
 		},
 		Edges: []Edge{
-			{ID: "web-uses-config", Source: "deployment/demo/web", Target: "configmap/demo/web", Type: EdgeUses},
-			{ID: "config-to-web", Source: "configmap/demo/web", Target: "deployment/demo/web", Type: EdgeConfigures},
+			{ID: "config-env-to-web", Source: "configmap/demo/web", Target: "deployment/demo/web", Type: EdgeConfigures},
+			{ID: "config-volume-to-web", Source: "configmap/demo/web", Target: "deployment/demo/web", Type: EdgeConfigures},
 		},
 	}
 	rel := GetRelationships("Deployment", "demo", "web", topo, nil, nil)
 	if rel == nil || len(rel.ConfigRefs) != 1 {
-		t.Fatalf("expected one ConfigRef for a ConfigMap reached by two edges, got %+v", rel)
+		t.Fatalf("expected one ConfigRef for a ConfigMap reached by two configuration edges, got %+v", rel)
 	}
 }
 
