@@ -7,11 +7,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/k8s"
-	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 )
 
-// CEL sees the same sanitized detail object as resource output, so predicates
-// cannot recover Secret bodies or values removed by minification.
 func objectActivation(obj runtime.Object, kind string) (map[string]any, error) {
 	obj = obj.DeepCopyObject()
 	k8s.SetTypeMeta(obj)
@@ -64,19 +61,16 @@ func normalizeNumbers(v any) any {
 	}
 }
 
-// assembleActivation projects the JSON-shaped object into the bound
-// variable names. Keys missing from the object resolve to empty
-// values so `has()` guards work as expected.
 func sanitizedActivation(obj map[string]any, kind string) map[string]any {
 	if kind == "Secret" {
 		delete(obj, "data")
 		delete(obj, "stringData")
 	}
-	m := aicontext.MinifyUnstructured(&unstructured.Unstructured{Object: obj}, aicontext.LevelDetail).(map[string]any)
-	normalizeNumbers(m)
-	return assembleActivation(m, kind)
+	normalizeNumbers(obj)
+	return assembleActivation(obj, kind)
 }
 
+// assembleActivation projects the copied cached object into the CEL bindings.
 func assembleActivation(obj map[string]any, kind string) map[string]any {
 	obj["kind"] = firstString(obj["kind"], kind)
 	metadata := asMap(obj["metadata"])

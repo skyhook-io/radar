@@ -3,8 +3,13 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/search"
 )
 
@@ -82,5 +87,57 @@ func TestHandleSearchPartialNamespaceCoverage(t *testing.T) {
 	}
 	if !body.Partial || !found || len(body.Hits) != 1 || body.Hits[0].Namespace != "alpha" {
 		t.Fatalf("partial scope: %+v", body)
+	}
+}
+
+func TestSearchKindRBACClusterFirstBoundsSARs(t *testing.T) {
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: "https://example.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(previous); getPermCache().Invalidate() })
+	ctx := withTestUserPerms(t, "search-count", nil, nil)
+	checks := 0
+	stubSubjectCanI(t, func(_ context.Context, _ kubernetes.Interface, _ string, _ []string, namespace, group, resource, verb string) (bool, error) {
+		checks++
+		if namespace != "" {
+			t.Errorf("cluster-allowed kind rechecked in %q", namespace)
+		}
+		return true, nil
+	})
+	namespaces := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
+	for _, kind := range search.NamespacedSearchKinds {
+		decision, scoped := mcpSearchKindRBAC(ctx, namespaces, kind.Group, kind.Resource)
+		if decision != "" || scoped != nil {
+			t.Fatalf("allowed kind: %s %v", decision, scoped)
+		}
+	}
+	if checks != 3 {
+		t.Fatalf("SAR calls = %d, want 3 sensitive kinds", checks)
+	}
+}
+
+func TestSearchKindRBACNamespaceCheckFailureRetainsAllowedScope(t *testing.T) {
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: "https://example.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(previous); getPermCache().Invalidate() })
+	ctx := withTestUserPerms(t, "search-check-error", nil, []string{"a", "b"})
+	stubSubjectCanI(t, func(_ context.Context, _ kubernetes.Interface, _ string, _ []string, namespace, group, resource, verb string) (bool, error) {
+		if namespace == "b" {
+			return false, fmt.Errorf("SAR unavailable")
+		}
+		return namespace == "a", nil
+	})
+	decision, scoped := mcpSearchKindRBAC(ctx, []string{"a", "b"}, "", "secrets")
+	if decision != "list_error" || len(scoped) != 1 || scoped[0] != "a" {
+		t.Fatalf("SAR failure: %s %v", decision, scoped)
+	}
+	decision, _ = mcpSearchKindRBAC(ctx, []string{"a"}, "", "unavailable")
+	if decision != "" {
+		t.Fatalf("fully allowed narrower scope: %s", decision)
 	}
 }

@@ -495,26 +495,49 @@ This selects the Argo Rollout workload path; it does not imply that `diagnose` s
 
 `search` scans typed resources (including RBAC, ServiceAccounts, NetworkPolicies,
 IngressClasses, LimitRanges and ResourceQuotas) and discovered dynamic kinds,
-including admission webhook configurations. Broad searches report unwatched kinds
-as `cold`; an explicit `kind:` query starts the existing bounded on-demand watch
-and waits briefly for initial sync. If it remains incomplete, retry after `syncing`.
+including admission webhook configurations. Broad searches collapse all unwatched
+kinds into one `{kind: "*", group: "", reason: "cold"}` entry, which still sets
+`partial: true`. List-only/non-watchable APIs are omitted from broad coverage;
+an explicit `kind:` query starts the existing bounded on-demand watch
+and waits briefly for initial sync once CRD discovery is ready. While discovery is
+loading, it reports `syncing` without starting a watch. If initial sync remains
+incomplete, retry after `syncing`. Alternate built-in groups of typed kinds are
+skipped, so `kind:Event` does not duplicate core Events through `events.k8s.io`.
 Search results never imply absence for an omitted kind.
 
 Every response includes `partial` and an `unsearched` array of
 `{kind, group, reason}`. Core resources use `group: ""`. Reasons distinguish
-caller `rbac_denied` (including failed permission checks), collector `sa_forbidden`,
+caller `rbac_denied`, collector `sa_forbidden`,
 `cold`, `syncing`, `sync_failed`, `not_indexed`, `list_error`, `namespace_scope`
 (collector coverage), and `namespace_excluded` (caller scope/selection). An entry
 can describe an incompletely searched kind: authorized namespaces still contribute
 hits. Unavailable discovery is represented by `kind: "*"`, `group: ""`.
 Coverage is bounded by the discovered catalog; it cannot describe undiscovered APIs.
-Search applies exact caller list checks to the added namespaced kinds and dynamic
-kinds before scanning or warming; cluster-scoped kinds have their own list gate.
+Explicitly requested cold or unsupported kinds keep per-kind entries; denied,
+syncing, failed-sync and list-error kinds keep per-kind entries for all queries.
+Typed informers disabled by collector probes report `sa_forbidden`, never `cold`.
+A stalled dynamic sync reports `sync_failed`; incomplete namespace probing reports
+`syncing`. Truncated probing adds `namespace_scope` only if the requested scope
+includes an unwatched namespace (or requests all namespaces).
 
-CEL exposes `object` (the sanitized detail object) alongside the existing `kind`,
+Ordinary namespaced kinds, including dynamic CRDs, use the same namespace visibility
+policy as resource lists. Secrets and typed Roles/RoleBindings use exact caller list
+gates. These gates try one cluster-wide check, then bounded parallel namespace
+checks only after a denial. Cluster-scoped kinds use an exact cluster-scoped check.
+Cold/unsupported observation states are read before any caller permission checks.
+Permission-check failures fail closed and report `list_error`, not `rbac_denied`;
+successfully authorized namespaces still contribute hits.
+
+`features.searchCoverage` advertises the coverage response and `object` binding so
+embedding hosts can gate them when connected to an older Radar.
+
+CEL exposes `object` (the cached object with Secret data/stringData removed)
+alongside the existing `kind`,
 `apiVersion`, `metadata`, `spec`, `status`, `labels` and `annotations` shortcuts.
-Shortcuts project from that same object; detail minification removes noise and
-redacts sensitive values. Core Secret `data`/`stringData` are structurally absent.
+Shortcuts project from that same object, preserving fields such as node placement,
+Pod IPs, UIDs, generations, finalizers and environment values. Core Secret
+`data`/`stringData` are structurally absent; CEL does not apply Detail pruning or
+environment-value redaction.
 `metadata.namespace` is `""` for cluster-scoped objects. Other missing fields retain
 CEL's normal error semantics; no optional-type extensions are enabled.
 

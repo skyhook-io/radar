@@ -18,12 +18,13 @@ import (
 
 // CacheProvider adapts radar's in-process cache to the search Provider interface.
 //
-// Use NewCacheProvider to construct one over the package-level singletons
-// the rest of radar already wires up — it has no fields beyond those handles.
+// Use NewCacheProvider to capture the live cache handles and collector probe
+// results for one search request.
 type CacheProvider struct {
-	cache     *k8s.ResourceCache
-	dynamic   *k8s.DynamicResourceCache
-	discovery *k8s.ResourceDiscovery
+	cache       *k8s.ResourceCache
+	dynamic     *k8s.DynamicResourceCache
+	discovery   *k8s.ResourceDiscovery
+	permissions *k8s.ResourcePermissions
 }
 
 // NewCacheProvider returns a Provider over the live radar caches.
@@ -33,11 +34,15 @@ func NewCacheProvider() *CacheProvider {
 	if cache == nil {
 		return nil
 	}
-	return &CacheProvider{
+	provider := &CacheProvider{
 		cache:     cache,
 		dynamic:   k8s.GetDynamicResourceCache(),
 		discovery: k8s.GetResourceDiscovery(),
 	}
+	if result := k8s.GetCachedPermissionResult(); result != nil {
+		provider.permissions = result.Perms
+	}
+	return provider
 }
 
 func (p *CacheProvider) ListTyped(kind string, namespaces []string) ([]runtime.Object, error) {
@@ -52,6 +57,9 @@ func (p *CacheProvider) ListDynamic(ctx context.Context, gvr schema.GroupVersion
 }
 
 func (p *CacheProvider) DynamicResources() ([]schema.GroupVersionResource, error) {
+	if p.dynamic == nil {
+		return nil, fmt.Errorf("%w: dynamic cache", k8s.ErrDynamicNotReady)
+	}
 	if p.discovery == nil {
 		return nil, fmt.Errorf("%w: discovery", k8s.ErrDynamicNotReady)
 	}
@@ -61,11 +69,9 @@ func (p *CacheProvider) DynamicResources() ([]schema.GroupVersionResource, error
 	}
 	seen := map[schema.GroupVersionResource]bool{}
 	watched := map[schema.GroupResource]bool{}
-	if p.dynamic != nil {
-		for _, gvr := range p.dynamic.GetWatchedResources() {
-			seen[gvr] = true
-			watched[gvr.GroupResource()] = true
-		}
+	for _, gvr := range p.dynamic.GetWatchedResources() {
+		seen[gvr] = true
+		watched[gvr.GroupResource()] = true
 	}
 	for _, ar := range resources {
 		if strings.Contains(ar.Name, "/") || !slices.Contains(ar.Verbs, "list") || watched[schema.GroupResource{Group: ar.Group, Resource: ar.Name}] {
@@ -88,7 +94,10 @@ func (p *CacheProvider) TypedCoverage(kind string, namespaces []string) string {
 	case k8s.KindFailed:
 		return "sync_failed"
 	case k8s.KindUnavailable:
-		return "cold"
+		if p.permissions != nil && !p.permissions.CanList(kind) {
+			return "sa_forbidden"
+		}
+		return "syncing"
 	}
 	if isClusterScopedKind(kind) {
 		return ""
@@ -109,6 +118,9 @@ func (p *CacheProvider) TypedCoverage(kind string, namespaces []string) string {
 }
 
 func (p *CacheProvider) DynamicObservation(gvr schema.GroupVersionResource) k8score.DynamicResourceObservation {
+	if p.dynamic == nil {
+		return k8score.DynamicResourceObservation{State: k8score.DynamicObservationSyncing}
+	}
 	return p.dynamic.Observation(gvr)
 }
 
@@ -118,6 +130,9 @@ func (p *CacheProvider) WarmDynamic(ctx context.Context, gvr schema.GroupVersion
 	}
 	if p.dynamic == nil {
 		return fmt.Errorf("%w: dynamic cache", k8s.ErrDynamicNotReady)
+	}
+	if p.dynamic.GetDiscoveryStatus() != k8score.CRDDiscoveryComplete {
+		return fmt.Errorf("%w: CRD discovery", k8s.ErrDynamicNotReady)
 	}
 	if err := p.dynamic.EnsureWatching(gvr); err != nil {
 		return err

@@ -346,30 +346,38 @@ func canReadInNamespaceDecision(ctx context.Context, group, resource, namespace,
 //
 // nil or empty input is returned unchanged.
 func filterNamespacesByCanRead(ctx context.Context, group, resource, verb string, namespaces []string) []string {
+	out, _ := filterNamespacesByCanReadDecision(ctx, group, resource, verb, namespaces)
+	return out
+}
+
+func filterNamespacesByCanReadDecision(ctx context.Context, group, resource, verb string, namespaces []string) ([]string, bool) {
 	if len(namespaces) == 0 {
-		return namespaces
+		return namespaces, true
 	}
 	const maxConcurrent = 16
 	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	out := make([]string, 0, len(namespaces))
+	authoritative := true
 	for _, ns := range namespaces {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(ns string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if canReadInNamespace(ctx, group, resource, ns, verb) {
-				mu.Lock()
+			allowed, auth := canReadInNamespaceDecision(ctx, group, resource, ns, verb)
+			mu.Lock()
+			authoritative = authoritative && auth
+			if allowed {
 				out = append(out, ns)
-				mu.Unlock()
 			}
+			mu.Unlock()
 		}(ns)
 	}
 	wg.Wait()
 	slices.Sort(out)
-	return out
+	return out, authoritative
 }
 
 // retainAllowedObjects post-filters cache results for namespace-restricted users.

@@ -3166,83 +3166,33 @@ func intersectAllowedNamespaces(allowed, requested []string) []string {
 	return out
 }
 
-// mcpSensitiveSearchKinds is the MCP mirror of the REST sensitiveSearchKinds —
-// cluster-scoped kinds that need their own list-SAR per user. Secrets are
-// namespaced and handled by mcpSearchKindRBAC instead, which supports
-// per-namespace permission.
-var mcpSensitiveSearchKinds = []struct {
-	Kind     string
-	Resource string
-	Group    string
-}{
-	{"Node", "nodes", ""},
-	{"PersistentVolume", "persistentvolumes", ""},
-	{"StorageClass", "storageclasses", "storage.k8s.io"},
-	{"Namespace", "namespaces", ""},
-}
-
-func mcpSearchSkipKinds(ctx context.Context) map[string]bool {
-	user, perms := resolveUserPerms(ctx)
-	if user == nil {
-		return nil
-	}
-	client := k8s.GetClient()
-	if client == nil {
-		out := make(map[string]bool, len(mcpSensitiveSearchKinds))
-		for _, k := range mcpSensitiveSearchKinds {
-			out[k.Kind] = true
-		}
-		return out
-	}
-	out := make(map[string]bool, len(mcpSensitiveSearchKinds))
-	for _, k := range mcpSensitiveSearchKinds {
-		if perms != nil {
-			if allowed, ok := perms.CanI("list", k.Group, k.Resource, ""); ok {
-				if !allowed {
-					out[k.Kind] = true
-				}
-				continue
-			}
-		}
-		allowed, err := subjectCanI(ctx, client, user.Username, user.Groups, "", k.Group, k.Resource, "list")
-		if err != nil {
-			log.Printf("[mcp] search SAR failed for %s on %s/%s: %v", user.Username, k.Group, k.Resource, err)
-			out[k.Kind] = true
-			continue
-		}
-		if perms != nil {
-			perms.SetCanI("list", k.Group, k.Resource, "", allowed)
-		}
-		if !allowed {
-			out[k.Kind] = true
-		}
-	}
-	return out
-}
-
 // mcpSearchKindRBAC mirrors the REST exact-kind gate for namespaced searches.
 func mcpSearchKindRBAC(ctx context.Context, scanNamespaces []string, group, resource string) (decision string, scopedNamespaces []string) {
 	if user, _ := resolveUserPerms(ctx); user == nil {
 		return "", nil
 	}
-
-	if scanNamespaces == nil {
-		if canReadInNamespace(ctx, group, resource, "", "list") {
-			return "", nil
-		}
-		return "skip", nil
+	// scanNamespaces is already intersected with caller visibility. A denied
+	// cluster-wide check may narrow that scope, never expand it; failed checks
+	// fail closed without describing a transient error as an RBAC verdict.
+	allowed, authoritative := canReadInNamespaceDecision(ctx, group, resource, "", "list")
+	if allowed {
+		return "", nil
+	}
+	if !authoritative {
+		return "list_error", nil
 	}
 	if len(scanNamespaces) == 0 {
 		return "skip", nil
 	}
-	scoped := make([]string, 0, len(scanNamespaces))
-	for _, ns := range scanNamespaces {
-		if canReadInNamespace(ctx, group, resource, ns, "list") {
-			scoped = append(scoped, ns)
-		}
+	scoped, authoritative := filterNamespacesByCanReadDecision(ctx, group, resource, "list", scanNamespaces)
+	if !authoritative {
+		return "list_error", scoped
 	}
 	if len(scoped) == 0 {
 		return "skip", nil
+	}
+	if len(scoped) == len(scanNamespaces) {
+		return "", nil
 	}
 	return "override", scoped
 }
@@ -3280,33 +3230,17 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 		return nil, nil, fmt.Errorf("unknown include=%q (want: summary, raw, none)", input.Include)
 	}
 
-	skipKinds := mcpSearchSkipKinds(ctx)
-	namespacesByKind := make(map[string][]string)
-	for _, kind := range search.NamespacedSearchKinds {
-		switch decision, scoped := mcpSearchKindRBAC(ctx, scanNamespaces, kind.Group, kind.Resource); decision {
-		case "skip":
-			if skipKinds == nil {
-				skipKinds = make(map[string]bool)
-			}
-			skipKinds[kind.Kind] = true
-		case "override":
-			namespacesByKind[kind.Kind] = scoped
-		}
-	}
-
 	opts := search.Options{
 		NamespaceExcluded: namespaceExcluded,
 		NamespacePartial:  namespacePartial,
-		CanReadNamespaced: func(kind, group, resource, namespace string) bool {
-			return canReadInNamespace(ctx, group, resource, namespace, "list")
+		NamespacedRBAC: func(namespaces []string, group, resource string) (string, []string) {
+			return mcpSearchKindRBAC(ctx, namespaces, group, resource)
 		},
-		Limit:            input.Limit,
-		Include:          include,
-		Namespaces:       scanNamespaces,
-		SkipKinds:        skipKinds,
-		NamespacesByKind: namespacesByKind,
-		CanReadClusterScoped: func(kind, group, resource string) bool {
-			return canReadClusterScopedKind(ctx, kind, group, "list")
+		Limit:      input.Limit,
+		Include:    include,
+		Namespaces: scanNamespaces,
+		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
+			return canReadInNamespaceDecision(ctx, group, resource, "", "list")
 		},
 	}
 	if input.Filter != "" {

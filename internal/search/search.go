@@ -109,29 +109,29 @@ type Options struct {
 	// Cluster-scoped kinds ignore this namespace list; SkipKinds and
 	// CanReadClusterScoped below are the gates for those resources.
 	Namespaces []string
-	// SkipKinds names kinds the walker must NOT scan, regardless of
-	// query/filter content. The handler populates this from per-user
-	// SubjectAccessReviews against sensitive kinds (Node, PersistentVolume,
-	// StorageClass, Namespace, and Secrets when the user has no per-namespace
-	// access at all) — users without the list verb don't see those rows even
-	// if the underlying SA's informer cache holds them. Without this gate, a
-	// k8s `view` Cloud viewer would see Secret names, Node IPs, etc. because
-	// the cache reads happen as the SA, not the end user.
+	// SkipKinds suppresses typed kinds by name. Dynamic kinds with colliding
+	// names are unaffected; their exact cluster-scope gate applies instead.
 	SkipKinds map[string]bool
 	// NamespacesByKind, when set for a typed kind, replaces Options.Namespaces
 	// for that kind only. Use this when per-kind RBAC narrows access below
 	// the namespace-discovery boundary (e.g. user can list pods cluster-wide
 	// but secrets only in `team-a`). Cluster-scoped kinds and dynamic CRDs
 	// ignore this map. nil entries fall back to Options.Namespaces.
-	NamespacesByKind  map[string][]string
+	NamespacesByKind map[string][]string
+	// NamespaceExcluded prevents namespaced scans when no requested namespace is visible.
 	NamespaceExcluded bool
-	NamespacePartial  bool
-	CanReadNamespaced func(kind, group, resource, namespace string) bool
+	// NamespacePartial reports a requested namespace omitted by caller scope or selection.
+	NamespacePartial bool
+	// NamespacedRBAC lazily gates sensitive typed kinds after readiness is known.
+	// Decisions are empty (allowed), override (scoped subset), skip (denied),
+	// or list_error (non-authoritative permission check). The scoped subset
+	// may accompany list_error to preserve successfully authorized namespaces.
+	NamespacedRBAC func(namespaces []string, group, resource string) (decision string, scoped []string)
 	// CanReadClusterScoped authorizes cluster-scoped resources before the
 	// cache walker scans them. Handlers provide a per-user SAR-backed
-	// predicate; nil preserves auth-mode=none behavior where the service
-	// account's cache permissions are the only gate.
-	CanReadClusterScoped func(kind, group, resource string) bool
+	// decision; authoritative distinguishes denial from check failure. nil
+	// preserves auth-mode=none behavior, where collector RBAC is the only gate.
+	CanReadClusterScoped func(kind, group, resource string) (allowed, authoritative bool)
 	// Filter is an optional compiled CEL predicate. When set, each
 	// candidate that passed the modifier+token match is also evaluated
 	// against the filter; non-truthy results (including eval errors)
@@ -176,7 +176,12 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			}
 		}
 	}
-	addGap := func(kind, group, reason string) { res.addGap(kind, group, reason) }
+	addGap := func(kind, group, reason string) {
+		if reason == "cold" && len(q.KindFilter) == 0 {
+			kind, group = "*", ""
+		}
+		res.addGap(kind, group, reason)
+	}
 	recordFilterError := func(c candidate, err error) {
 		res.Partial = true
 		res.FilterErrors++
@@ -206,6 +211,10 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			addGap(tk.Kind, tk.Group, "namespace_excluded")
 			continue
 		}
+		if reason := p.TypedCoverage(tk.Kind, opts.Namespaces); reason != "" && reason != "namespace_scope" {
+			addGap(tk.Kind, tk.Group, reason)
+			continue
+		}
 		if opts.SkipKinds[tk.Kind] {
 			addGap(tk.Kind, tk.Group, "rbac_denied")
 			continue
@@ -216,9 +225,16 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		// allowed namespaces); fall back to Options.Namespaces otherwise.
 		listNs := opts.Namespaces
 		if isClusterScopedKind(tk.Kind) {
-			if opts.CanReadClusterScoped != nil && !opts.CanReadClusterScoped(tk.Kind, tk.Group, tk.Plural) {
-				addGap(tk.Kind, tk.Group, "rbac_denied")
-				continue
+			if opts.CanReadClusterScoped != nil {
+				allowed, authoritative := opts.CanReadClusterScoped(tk.Kind, tk.Group, tk.Plural)
+				if !allowed {
+					reason := "rbac_denied"
+					if !authoritative {
+						reason = "list_error"
+					}
+					addGap(tk.Kind, tk.Group, reason)
+					continue
+				}
 			}
 			listNs = nil
 		} else if override, ok := opts.NamespacesByKind[tk.Kind]; ok && override != nil {
@@ -233,6 +249,24 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			if len(listNs) == 0 {
 				addGap(tk.Kind, tk.Group, "rbac_denied")
 				continue
+			}
+		}
+		if opts.NamespacedRBAC != nil && slices.ContainsFunc(NamespacedSearchKinds, func(k struct{ Kind, Group, Resource string }) bool { return k.Kind == tk.Kind }) {
+			decision, scoped := opts.NamespacedRBAC(listNs, tk.Group, tk.Plural)
+			switch decision {
+			case "skip":
+				addGap(tk.Kind, tk.Group, "rbac_denied")
+				continue
+			case "override", "list_error":
+				reason := "rbac_denied"
+				if decision == "list_error" {
+					reason = "list_error"
+				}
+				addGap(tk.Kind, tk.Group, reason)
+				listNs = scoped
+				if len(listNs) == 0 {
+					continue
+				}
 			}
 		}
 		if reason := p.TypedCoverage(tk.Kind, listNs); reason != "" {
@@ -291,7 +325,17 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			continue
 		}
 		markKnown(kind, gvr.Resource)
-		if k8s.TypedKindOwnsGroup(kind, gvr.Group) {
+		if k8s.TypedKindOwnsGroup(kind, gvr.Group) || (k8score.IsBuiltInAPIGroup(gvr.Group) && slices.ContainsFunc(typedKinds, func(tk struct{ Kind, Plural, Group string }) bool { return tk.Kind == kind })) {
+			continue
+		}
+		observation := p.DynamicObservation(gvr)
+		if observation.State == k8score.DynamicObservationUnsupported && len(q.KindFilter) == 0 {
+			continue
+		}
+		reason := dynamicObservationReason(observation)
+		warm := len(q.KindFilter) > 0 && reason == "cold"
+		if reason != "" && !warm {
+			addGap(kind, gvr.Group, reason)
 			continue
 		}
 		clusterScoped, gvrGroup, gvrResource := classifyDynamicScope(p, gvr, kind)
@@ -302,27 +346,22 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			addGap(kind, gvr.Group, "namespace_excluded")
 			continue
 		}
-		if opts.SkipKinds[kind] || (clusterScoped && opts.CanReadClusterScoped != nil && !opts.CanReadClusterScoped(kind, gvrGroup, gvrResource)) {
-			addGap(kind, gvr.Group, "rbac_denied")
-			continue
+		if clusterScoped && opts.CanReadClusterScoped != nil {
+			allowed, authoritative := opts.CanReadClusterScoped(kind, gvrGroup, gvrResource)
+			if !allowed {
+				reason := "rbac_denied"
+				if !authoritative {
+					reason = "list_error"
+				}
+				addGap(kind, gvr.Group, reason)
+				continue
+			}
 		}
 		namespaces := opts.Namespaces
 		if clusterScoped || len(namespaces) == 0 {
 			namespaces = []string{""}
 		}
-		authorized := make([]string, 0, len(namespaces))
-		for _, ns := range namespaces {
-			if !clusterScoped && opts.CanReadNamespaced != nil && !opts.CanReadNamespaced(kind, gvr.Group, gvr.Resource, ns) {
-				addGap(kind, gvr.Group, "rbac_denied")
-				continue
-			}
-			authorized = append(authorized, ns)
-		}
-		if len(authorized) == 0 {
-			continue
-		}
-		observation := p.DynamicObservation(gvr)
-		if len(q.KindFilter) > 0 && (observation.State == k8score.DynamicObservationUnwatched || observation.State == k8score.DynamicObservationDeferred) {
+		if warm {
 			if err := p.WarmDynamic(ctx, gvr); err != nil {
 				observation = p.DynamicObservation(gvr)
 				reason := dynamicObservationReason(observation)
@@ -338,21 +377,14 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			addGap(kind, gvr.Group, reason)
 			continue
 		}
-		if observation.Truncated {
-			addGap(kind, gvr.Group, "namespace_scope")
-		}
 		var items []*unstructured.Unstructured
-		for _, ns := range authorized {
+		for _, ns := range namespaces {
 			if observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && (ns == "" || !slices.Contains(observation.Namespaces, ns)) {
 				addGap(kind, gvr.Group, "namespace_scope")
 				if ns != "" {
 					continue
 				}
 				for _, watchedNS := range observation.Namespaces {
-					if opts.CanReadNamespaced != nil && !opts.CanReadNamespaced(kind, gvr.Group, gvr.Resource, watchedNS) {
-						addGap(kind, gvr.Group, "rbac_denied")
-						continue
-					}
 					its, err := p.ListDynamic(ctx, gvr, watchedNS)
 					if err != nil {
 						addGap(kind, gvr.Group, listErrorReason(err))

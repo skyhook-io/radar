@@ -3,10 +3,10 @@ package search
 import (
 	"context"
 	"fmt"
-	"github.com/skyhook-io/radar/pkg/k8score"
 	"sort"
 	"testing"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -248,7 +248,7 @@ func TestSearch_DefaultSkipsEvents(t *testing.T) {
 		t.Fatalf("default search should skip events, got %+v", res.Hits)
 	}
 	res, _ = Search(context.Background(), p, Parse("kind:Event redis"), Options{Include: IncludeNone})
-	if len(res.Hits) != 2 {
+	if len(res.Hits) != 1 {
 		t.Fatalf("kind:Event should opt in, got %+v", res.Hits)
 	}
 }
@@ -324,11 +324,11 @@ func TestSearch_DynamicClusterScopedCRDRequiresAccess(t *testing.T) {
 	}
 	res, _ := Search(context.Background(), p, Parse("kind:NodePool redis"), Options{
 		Include: IncludeNone,
-		CanReadClusterScoped: func(kind, group, resource string) bool {
+		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
 			if kind != "NodePool" || group != "karpenter.sh" || resource != "nodepools" {
 				t.Fatalf("unexpected SAR tuple: kind=%q group=%q resource=%q", kind, group, resource)
 			}
-			return false
+			return false, true
 		},
 	})
 	if len(res.Hits) != 0 {
@@ -356,8 +356,8 @@ func TestSearch_DynamicClusterScopedCRDListsAtClusterScopeWhenAllowed(t *testing
 	res, _ := Search(context.Background(), p, Parse("kind:NodePool redis"), Options{
 		Include:    IncludeNone,
 		Namespaces: []string{"team-a", "team-b"},
-		CanReadClusterScoped: func(kind, group, resource string) bool {
-			return kind == "NodePool" && group == "karpenter.sh" && resource == "nodepools"
+		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
+			return kind == "NodePool" && group == "karpenter.sh" && resource == "nodepools", true
 		},
 	})
 	if len(res.Hits) != 1 {

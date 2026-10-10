@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/search"
 )
@@ -64,44 +63,17 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	skipKinds := s.computeSearchSkipKinds(r)
-	namespacesByKind := make(map[string][]string)
-	for _, kind := range search.NamespacedSearchKinds {
-		switch decision, scoped := s.computeSearchKindRBAC(r, scanNamespaces, kind.Group, kind.Resource); decision {
-		case "skip":
-			if skipKinds == nil {
-				skipKinds = make(map[string]bool)
-			}
-			skipKinds[kind.Kind] = true
-		case "override":
-			namespacesByKind[kind.Kind] = scoped
-		}
-	}
-
 	opts := search.Options{
 		NamespaceExcluded: namespaceExcluded,
 		NamespacePartial:  namespacePartial,
-		CanReadNamespaced: func(kind, group, resource, namespace string) bool {
-			return auth.UserFromContext(r.Context()) == nil || s.canRead(r, group, resource, namespace, "list")
+		NamespacedRBAC: func(namespaces []string, group, resource string) (string, []string) {
+			return s.computeSearchKindRBAC(r, namespaces, group, resource)
 		},
 		Limit:      parseLimit(r.URL.Query().Get("limit")),
 		Include:    include,
 		Namespaces: scanNamespaces,
-		// SAR-gate sensitive cluster-scoped kinds (Node, PV, StorageClass,
-		// Namespace) by the END user's identity, not the SA's. The cache
-		// itself reads as the SA so it carries those rows, but exposing
-		// them through search to a namespace-bound viewer would let them
-		// enumerate cluster-scope info their k8s RBAC denies. Secrets get
-		// per-namespace RBAC via NamespacesByKind/SkipKinds above. In
-		// auth-mode=none, computeSearchSkipKinds returns nil and the SA's
-		// own RBAC at the cache lister layer is the only filter.
-		SkipKinds:        skipKinds,
-		NamespacesByKind: namespacesByKind,
-		CanReadClusterScoped: func(kind, group, resource string) bool {
-			if auth.UserFromContext(r.Context()) == nil {
-				return true
-			}
-			return s.canRead(r, group, resource, "", "list")
+		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
+			return s.canReadDecision(r, group, resource, "", "list")
 		},
 	}
 	// summaryContext attaches managedBy/health/issueCount per hit. Build

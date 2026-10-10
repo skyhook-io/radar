@@ -4,19 +4,17 @@ import (
 	"errors"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
+// NamespacedSearchKinds lists the sensitive typed kinds requiring exact caller RBAC.
 var NamespacedSearchKinds = []struct{ Kind, Group, Resource string }{
 	{"Secret", "", "secrets"},
 	{"Role", "rbac.authorization.k8s.io", "roles"},
 	{"RoleBinding", "rbac.authorization.k8s.io", "rolebindings"},
-	{"ServiceAccount", "", "serviceaccounts"},
-	{"NetworkPolicy", "networking.k8s.io", "networkpolicies"},
-	{"LimitRange", "", "limitranges"},
-	{"ResourceQuota", "", "resourcequotas"},
 }
 
 func (r *Result) addGap(kind, group, reason string) {
@@ -50,7 +48,15 @@ func dynamicObservationReason(observation k8score.DynamicResourceObservation) st
 	case k8score.DynamicObservationDenied:
 		return "sa_forbidden"
 	case k8score.DynamicObservationSyncing:
+		if observation.ReasonCode == "sync_stalled" {
+			return "sync_failed"
+		}
 		return "syncing"
+	case k8score.DynamicObservationDeferred:
+		if observation.ReasonCode == "scope_probe_incomplete" {
+			return "syncing"
+		}
+		return "cold"
 	case k8score.DynamicObservationUnsupported:
 		return "not_indexed"
 	default:
