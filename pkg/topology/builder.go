@@ -3766,7 +3766,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// Create GatewayClass → Gateway edges (match via spec.gatewayClassName on Gateway)
+	// Gateway → GatewayClass edges (spec.gatewayClassName). A Gateway depends on
+	// its class; the class neither owns nor reconciles it.
 	if hasGateways && dynamicCache != nil {
 		gateways, gwEdgeErr := dynamicCache.ListNamespaces(gatewayGVR, opts.Namespaces)
 		if gwEdgeErr != nil {
@@ -3787,10 +3788,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if className != "" {
 				if gcID, ok := gatewayClassIDs[className]; ok {
 					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", gcID, gwID),
-						Source: gcID,
-						Target: gwID,
-						Type:   EdgeManages,
+						ID:     fmt.Sprintf("%s-to-%s", gwID, gcID),
+						Source: gwID,
+						Target: gcID,
+						Type:   EdgeUses,
 					})
 				}
 			}

@@ -106,21 +106,21 @@ func TestOwnershipFollowsOwnerReferencesOnly(t *testing.T) {
 	}
 
 	gateway := GetRelationshipsWithObject("Gateway", "team", "public", nil, topo, nil, nil, idx)
-	if gateway == nil || gateway.Owner != nil {
-		t.Fatalf("Gateway owner = %+v, want none: gatewayClassName is not an owner reference", gateway)
+	if gateway == nil || gateway.Owner != nil || len(gateway.Managers) != 0 {
+		t.Fatalf("Gateway relationships = %+v, want no owner or manager: gatewayClassName is a reference", gateway)
 	}
-	if got := refNames(gateway.Managers); len(got) != 1 || got[0] != "GatewayClass/istio" {
-		t.Errorf("Gateway managers = %v", got)
+	if got := refNames(gateway.Dependencies); len(got) != 1 || got[0] != "GatewayClass/istio" {
+		t.Errorf("Gateway dependencies = %v", got)
 	}
 	if top := SynthesizeManagedBy(nil, "Gateway", "team", "public", topo, nil, idx); len(top) != 0 {
 		t.Errorf("Gateway ManagedBy = %+v, want none: a class is not a manager by ownership", top)
 	}
 	class := GetRelationshipsWithObject("GatewayClass", "", "istio", nil, topo, nil, nil, idx)
-	if class == nil || len(class.Children) != 0 {
-		t.Fatalf("GatewayClass children = %+v, want none", class)
+	if class == nil || len(class.Children) != 0 || len(class.Manages) != 0 {
+		t.Fatalf("GatewayClass relationships = %+v, want no children or managed resources", class)
 	}
-	if got := refNames(class.Manages); len(got) != 1 || got[0] != "Gateway/public" {
-		t.Errorf("GatewayClass manages = %v", got)
+	if got := refNames(class.Dependents); len(got) != 1 || got[0] != "Gateway/public" {
+		t.Errorf("GatewayClass dependents = %v", got)
 	}
 }
 
