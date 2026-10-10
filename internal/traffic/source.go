@@ -15,6 +15,9 @@ type Flow = pkgtraffic.Flow
 type Endpoint = pkgtraffic.Endpoint
 type PolicyVerdict = pkgtraffic.PolicyVerdict
 type PolicyRef = pkgtraffic.PolicyRef
+type FlowMatch = pkgtraffic.FlowMatch
+type EndpointRef = pkgtraffic.EndpointRef
+type EndpointPair = pkgtraffic.EndpointPair
 
 const (
 	EndpointKindPod      = pkgtraffic.EndpointKindPod

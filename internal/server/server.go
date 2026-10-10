@@ -794,6 +794,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// Traffic routes (non-streaming)
 			r.Get("/traffic/sources", s.handleGetTrafficSources)
 			r.Get("/traffic/flows", s.handleGetTrafficFlows)
+			r.Get("/traffic/flows/records", s.handleGetTrafficRecords)
 			r.Get("/traffic/source", s.handleGetActiveTrafficSource)
 			r.Post("/traffic/source", s.handleSetTrafficSource)
 			r.Post("/traffic/connect", s.handleTrafficConnect)
@@ -1347,6 +1348,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		PolicyResource:        true,
 		WorkloadHistory:       true,
 		ServiceEndpointSlices: true,
+		TrafficRecords:        true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	caps.ConfigManagement = s.configManagement()

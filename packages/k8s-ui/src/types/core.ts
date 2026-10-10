@@ -168,6 +168,7 @@ export interface FeatureCapabilities {
   policyResource?: boolean
   workloadHistory?: boolean
   serviceEndpointSlices?: boolean
+  trafficRecords?: boolean
 }
 
 // DeploymentMode is the closed set of topologies Radar can run in.
@@ -1456,6 +1457,12 @@ export interface TrafficFlowsResponse {
    *  nodeFlowLimit, so older traffic in the window did not fit. */
   coveredSince?: string
   nodeFlowLimit?: number
+  /** Set when the source kept only its newest flowLimit flows in total; the
+   *  window is then complete only from coveredSince. */
+  flowLimit?: number
+  /** How many records the aggregation covers. `flows` holds only the newest of
+   *  them; a Radar that predates the cap omits this and sends every record. */
+  flowsTotal?: number
   warning?: string  // Non-fatal warning (e.g., query errors)
   /** 'transient' (or absent) means the condition may clear on its own and a
    *  retry is worthwhile. 'partial' means the flows are correct but some of
@@ -1463,6 +1470,23 @@ export interface TrafficFlowsResponse {
    *  not refetch. 'incomplete' means the fetch worked but could not see
    *  everything — events lost, nodes unreachable — so flows may be missing; show
    *  it, with or without flows, and do not retry at once. */
+  warningKind?: 'transient' | 'partial' | 'incomplete'
+}
+
+// Response from GET /api/traffic/flows/records — the newest records behind
+// one graph selection.
+export interface TrafficRecordsResponse {
+  source: string
+  timestamp: string
+  /** Newest first, at most the server's records limit. */
+  flows: TrafficFlow[]
+  /** How many records matched; more than flows.length when capped. */
+  matched: number
+  l7ResponsesCallerOriented?: boolean
+  coveredSince?: string
+  nodeFlowLimit?: number
+  flowLimit?: number
+  warning?: string
   warningKind?: 'transient' | 'partial' | 'incomplete'
 }
 

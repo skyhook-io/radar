@@ -42,7 +42,7 @@ func (s *scriptedObserver) GetFlows(req *observerpb.GetFlowsRequest, stream grpc
 	return s.endErr
 }
 
-func connectedHubble(t *testing.T, obs *scriptedObserver) *HubbleSource {
+func connectedHubble(t *testing.T, obs observerpb.ObserverServer) *HubbleSource {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

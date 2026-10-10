@@ -141,6 +141,7 @@ type FeatureCapabilities struct {
 	PolicyResource        bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
 	WorkloadHistory       bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
 	ServiceEndpointSlices bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
+	TrafficRecords        bool `json:"trafficRecords"`        // GET /api/traffic/flows/records
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
