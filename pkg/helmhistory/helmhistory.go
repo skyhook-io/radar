@@ -267,7 +267,7 @@ func pendingOperation(rev Revision, age time.Duration) Operation {
 		Message:       fmt.Sprintf("Release has been %s for %s.", rev.Status, formatDuration(age)),
 		Evidence:      evidence,
 		Revision:      rev.Revision,
-		PendingStatus: rev.Status,
+		PendingStatus: normalizeStatus(rev.Status),
 		Updated:       updated,
 	}
 }

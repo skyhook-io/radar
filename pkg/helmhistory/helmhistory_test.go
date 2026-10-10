@@ -246,6 +246,7 @@ func TestAnalyzeUninstalling(t *testing.T) {
 		{name: "future timestamp", status: "uninstalling", started: now.Add(time.Minute)},
 		{name: "completed", status: "uninstalled", started: now.Add(-time.Hour)},
 		{name: "custom threshold", status: "uninstalling", started: now.Add(-18 * time.Minute), threshold: 20 * time.Minute},
+		{name: "padded mixed case", status: " Uninstalling ", started: now.Add(-18 * time.Minute), wantStuck: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got := Analyze("cart", 2, []Revision{{Revision: 2, Status: tt.status, Description: "Deletion in progress", Updated: now.Add(-90 * 24 * time.Hour), Deleted: tt.started}}, Options{Now: now, PendingStuckAfter: tt.threshold})
