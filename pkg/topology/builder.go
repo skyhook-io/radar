@@ -3004,9 +3004,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 						Type:          EdgeManages,
 						metadataOwner: true,
 					})
-					// Track for shortcut edges (CronJob -> Pod)
-					jobKey := job.Namespace + "/" + job.Name
-					jobToCronJob[jobKey] = ownerID
+					// Track for shortcut edges (CronJob -> Pod): only the
+					// controller stands in for the Job it collapses.
+					if ownerRef.Controller != nil && *ownerRef.Controller {
+						jobToCronJob[job.Namespace+"/"+job.Name] = ownerID
+					}
 				}
 			case "ScaledJob":
 				ownerKey := job.Namespace + "/" + ownerRef.Name
@@ -3018,8 +3020,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 						Type:          EdgeManages,
 						metadataOwner: true,
 					})
-					jobKey := job.Namespace + "/" + job.Name
-					jobToScaledJob[jobKey] = ownerID
+					if ownerRef.Controller != nil && *ownerRef.Controller {
+						jobToScaledJob[job.Namespace+"/"+job.Name] = ownerID
+					}
 				}
 			}
 		}
@@ -3270,7 +3273,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 
 		for _, group := range groupingResult.Groups {
-			if len(group.Pods) <= maxIndividualPods {
+			// Relationship lookups answer for one Pod at a time, so the cache
+			// never collapses Pods into a group that no lookup can name.
+			if opts.ForRelationshipCache || len(group.Pods) <= maxIndividualPods {
 				// Small group - add as individual nodes
 				for _, pod := range group.Pods {
 					podID := GetPodID(pod)

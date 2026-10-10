@@ -772,7 +772,7 @@ func TestBuild_ConfigMap_OwnerOnly(t *testing.T) {
 			{ID: "deployment/prod/web", Kind: topology.KindDeployment, Name: "web"},
 		},
 		Edges: []topology.Edge{
-			{Source: "deployment/prod/web", Target: "configmap/prod/web-config", Type: topology.EdgeManages},
+			{Source: "deployment/prod/web", Target: "configmap/prod/web-config", Type: topology.EdgeManages, OwnerController: ptrBool(true)},
 		},
 	}
 	rc := Build(context.Background(), cm, Options{
@@ -1056,7 +1056,7 @@ func TestBuild_PDB_OutputJSONShape(t *testing.T) {
 			{ID: "replicaset/prod/rs", Kind: topology.KindReplicaSet, Name: "rs"},
 		},
 		Edges: []topology.Edge{
-			{Source: "replicaset/prod/rs", Target: "pod/prod/p", Type: topology.EdgeManages},
+			{Source: "replicaset/prod/rs", Target: "pod/prod/p", Type: topology.EdgeManages, OwnerController: ptrBool(true)},
 		},
 	}
 	rc := Build(context.Background(), pod, Options{

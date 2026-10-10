@@ -128,8 +128,9 @@ func edgesForNode(topo *Topology, idx *RelationshipsIndex, nodeID string) (incom
 	return incoming, outgoing
 }
 
-// GetCascadeDeletePreview walks topology management edges to approximate the
-// resources Kubernetes may garbage-collect with root.
+// GetCascadeDeletePreview walks observed owner references to find the
+// resources Kubernetes garbage-collects with root. Only objects in the
+// topology are visible to it.
 func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvider) *CascadeDeletePreview {
 	preview := &CascadeDeletePreview{
 		Root:       root,
@@ -194,28 +195,38 @@ func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvide
 	}
 	preview.RootResolved = true
 
-	// Build adjacency list for EdgeManages edges (source → targets)
-	manages := make(map[string][]string)
+	// Garbage collection follows owner references only, and deletes a
+	// dependent once none of its owners remain: a dependent that another live
+	// owner still holds survives the deletion.
+	owned := make(map[string][]string)
+	owners := make(map[string][]string)
 	for _, edge := range topo.Edges {
-		if edge.Type == EdgeManages {
-			manages[edge.Source] = append(manages[edge.Source], edge.Target)
+		if edge.verifiedOwner() {
+			owned[edge.Source] = append(owned[edge.Source], edge.Target)
+			owners[edge.Target] = append(owners[edge.Target], edge.Source)
 		}
 	}
+	deleted := map[string]bool{rootID: true}
+	allOwnersDeleted := func(id string) bool {
+		for _, owner := range owners[id] {
+			if !deleted[owner] {
+				return false
+			}
+		}
+		return true
+	}
 
-	// BFS from root node
-	visited := map[string]bool{rootID: true}
 	queue := []string{rootID}
 	var dependents []ResourceRef
-
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
 
-		for _, targetID := range manages[current] {
-			if visited[targetID] {
+		for _, targetID := range owned[current] {
+			if deleted[targetID] || !allOwnersDeleted(targetID) {
 				continue
 			}
-			visited[targetID] = true
+			deleted[targetID] = true
 
 			ref := resourceRefForNode(nodeByID[targetID], dp)
 			if ref == nil {
@@ -373,8 +384,12 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 
 		switch edge.Type {
 		case EdgeManages:
-			// This resource manages/owns the target
-			rel.Children = append(rel.Children, *ref)
+			switch {
+			case edge.verifiedOwner():
+				rel.Children = append(rel.Children, *ref)
+			case edge.SkipIfKindVisible == "":
+				rel.Manages = append(rel.Manages, *ref)
+			}
 		case EdgeExposes:
 			// This is a Service exposing something
 			rel.Pods = append(rel.Pods, *ref)
@@ -447,9 +462,14 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 
 		switch edge.Type {
 		case EdgeManages:
-			// Preserve the observed controller when multiple parents are present.
-			if preferredOwner != nil && edge.Source == preferredOwner.Source {
-				rel.Owner = ref
+			switch {
+			case edge.verifiedOwner():
+				// Preserve the observed controller when multiple parents are present.
+				if preferredOwner != nil && edge.Source == preferredOwner.Source {
+					rel.Owner = ref
+				}
+			case edge.SkipIfKindVisible == "":
+				rel.Managers = append(rel.Managers, *ref)
 			}
 		case EdgeExposes:
 			if isServiceEntrypointRouteKind(strings.ToLower(ref.Kind)) {
@@ -526,7 +546,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				continue
 			}
 			for _, edge := range incomingEdges {
-				if edge.Type == EdgeManages && edge.Source == node.ID {
+				if edge.verifiedOwner() && edge.Source == node.ID {
 					rel.Owner = refForNodeID(node.ID)
 					break
 				}
@@ -550,7 +570,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				childID := buildNodeID(child.Kind, child.Namespace, child.Name, dp)
 				_, childOutgoing := edgesForNode(topo, lookupIndex, childID)
 				for _, edge := range childOutgoing {
-					if edge.Type != EdgeManages {
+					if !edge.verifiedOwner() {
 						continue
 					}
 					podRef := refForNodeID(edge.Target)
@@ -568,7 +588,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			ownerID := buildNodeID(rel.Owner.Kind, rel.Owner.Namespace, rel.Owner.Name, dp)
 			ownerIncoming, _ := edgesForNode(topo, lookupIndex, ownerID)
 			for _, edge := range ownerIncoming {
-				if edge.Type != EdgeManages {
+				if !edge.verifiedOwner() {
 					continue
 				}
 				deployRef := refForNodeID(edge.Source)
@@ -736,7 +756,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	}
 
 	// Return nil if no relationships found
-	if rel.Owner == nil && rel.Deployment == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
+	if rel.Owner == nil && rel.Deployment == nil && len(rel.Children) == 0 && len(rel.Manages) == 0 && len(rel.Managers) == 0 && len(rel.Services) == 0 &&
 		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.Routes) == 0 &&
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
 		len(rel.StorageRefs) == 0 && len(rel.Dependencies) == 0 && len(rel.Dependents) == 0 &&

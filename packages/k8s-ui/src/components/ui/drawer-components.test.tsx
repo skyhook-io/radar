@@ -105,3 +105,20 @@ describe('versioned dependency projections', () => {
     expect(html.match(/<button/g)).toHaveLength(3)
   })
 })
+
+describe('management without ownership', () => {
+  it('lists management links apart from Owner and Children', () => {
+    const gateway = renderToString(
+      <RelatedResourcesSection relationships={{ managers: [{ kind: 'GatewayClass', namespace: '', name: 'istio', group: 'gateway.networking.k8s.io' }] }} />
+    )
+    expect(gateway).toContain('Managed By')
+    expect(gateway).toContain('istio')
+    expect(gateway).not.toContain('Owner')
+
+    const kustomization = renderToString(
+      <RelatedResourcesSection relationships={{ manages: [{ kind: 'Deployment', namespace: 'prod', name: 'web', group: 'apps' }] }} />
+    )
+    expect(kustomization).toContain('Manages')
+    expect(kustomization).not.toContain('Children')
+  })
+})

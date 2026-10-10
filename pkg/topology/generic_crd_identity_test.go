@@ -478,8 +478,8 @@ func TestRelationshipsWithObjectUsesExactGroupWhenDirectIDCollides(t *testing.T)
 			{observed: true, ID: "job/ml/train/batch.volcano.sh", Kind: NodeKind("Job"), Name: "train", Data: map[string]any{"namespace": "ml", "apiVersion": "batch.volcano.sh/v1alpha1"}},
 		},
 		Edges: []Edge{
-			{ID: "cron-core", Source: "cronjob/ml/train", Target: "job/ml/train", Type: EdgeManages},
-			{ID: "jobset-volcano", Source: "jobset/ml/train/jobset.x-k8s.io", Target: "job/ml/train/batch.volcano.sh", Type: EdgeManages},
+			{ID: "cron-core", Source: "cronjob/ml/train", Target: "job/ml/train", Type: EdgeManages, OwnerController: &controllerOwner},
+			{ID: "jobset-volcano", Source: "jobset/ml/train/jobset.x-k8s.io", Target: "job/ml/train/batch.volcano.sh", Type: EdgeManages, OwnerController: &controllerOwner},
 		},
 	}
 
@@ -505,9 +505,9 @@ func TestRelationshipsPodShortcutsSkipCrossGroupReplicaSets(t *testing.T) {
 			{observed: true, ID: "pod/ns/p", Kind: KindPod, Name: "p", Data: map[string]any{"namespace": "ns"}},
 		},
 		Edges: []Edge{
-			{ID: "a-crd", Source: "deployment/ns/a", Target: "replicaset/ns/r/other.example", Type: EdgeManages},
-			{ID: "b-core", Source: "deployment/ns/b", Target: "replicaset/ns/r", Type: EdgeManages},
-			{ID: "core-pod", Source: "replicaset/ns/r", Target: "pod/ns/p", Type: EdgeManages},
+			{ID: "a-crd", Source: "deployment/ns/a", Target: "replicaset/ns/r/other.example", Type: EdgeManages, OwnerController: &controllerOwner},
+			{ID: "b-core", Source: "deployment/ns/b", Target: "replicaset/ns/r", Type: EdgeManages, OwnerController: &controllerOwner},
+			{ID: "core-pod", Source: "replicaset/ns/r", Target: "pod/ns/p", Type: EdgeManages, OwnerController: &controllerOwner},
 		},
 	}
 

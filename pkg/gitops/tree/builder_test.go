@@ -55,6 +55,7 @@ func TestBuildArgoTreeUsesManagedInventoryAndOwnershipEdges(t *testing.T) {
 			"resources": []any{
 				map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "billing", "status": "Synced", "health": map[string]any{"status": "Healthy"}},
 				map[string]any{"kind": "Service", "namespace": "prod", "name": "billing", "status": "Synced", "health": map[string]any{"status": "Healthy"}},
+				map[string]any{"group": "gateway.networking.k8s.io", "kind": "GatewayClass", "name": "edge", "status": "Synced"},
 			},
 		},
 	}}
@@ -65,10 +66,14 @@ func TestBuildArgoTreeUsesManagedInventoryAndOwnershipEdges(t *testing.T) {
 			{ID: "replicaset/prod/billing-abc", Kind: topology.KindReplicaSet, Name: "billing-abc", Status: topology.StatusHealthy, Data: map[string]any{"namespace": "prod", "group": "apps"}},
 			{ID: "pod/prod/billing-abc-1", Kind: topology.KindPod, Name: "billing-abc-1", Status: topology.StatusHealthy, Data: map[string]any{"namespace": "prod"}},
 			{ID: "service/prod/billing", Kind: topology.KindService, Name: "billing", Status: topology.StatusHealthy, Data: map[string]any{"namespace": "prod"}},
+			{ID: "gatewayclass//edge", Kind: topology.KindGatewayClass, Name: "edge", Status: topology.StatusHealthy, Data: map[string]any{"apiVersion": "gateway.networking.k8s.io/v1"}},
+			{ID: "gateway/team/public", Kind: topology.KindGateway, Name: "public", Status: topology.StatusHealthy, Data: map[string]any{"namespace": "team", "apiVersion": "gateway.networking.k8s.io/v1"}},
 		},
 		Edges: []topology.Edge{
-			{ID: "deployment-rs", Source: "deployment/prod/billing", Target: "replicaset/prod/billing-abc", Type: topology.EdgeManages},
-			{ID: "rs-pod", Source: "replicaset/prod/billing-abc", Target: "pod/prod/billing-abc-1", Type: topology.EdgeManages},
+			// A Gateway names its class; the class neither owns nor generated it.
+			{ID: "class-gateway", Source: "gatewayclass//edge", Target: "gateway/team/public", Type: topology.EdgeManages},
+			{ID: "deployment-rs", Source: "deployment/prod/billing", Target: "replicaset/prod/billing-abc", Type: topology.EdgeManages, OwnerController: &observedController},
+			{ID: "rs-pod", Source: "replicaset/prod/billing-abc", Target: "pod/prod/billing-abc-1", Type: topology.EdgeManages, OwnerController: &observedController},
 			{ID: "service-pod", Source: "service/prod/billing", Target: "pod/prod/billing-abc-1", Type: topology.EdgeRoutesTo},
 		},
 	}
@@ -94,6 +99,11 @@ func TestBuildArgoTreeUsesManagedInventoryAndOwnershipEdges(t *testing.T) {
 	assertEdge(t, tree, nodeID(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "billing"}), nodeID(ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "billing"}))
 	assertEdge(t, tree, nodeID(ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "billing"}), nodeID(ResourceRef{Group: "apps", Kind: "ReplicaSet", Namespace: "prod", Name: "billing-abc"}))
 	assertNoEdge(t, tree, "service/prod/billing", "pod/prod/billing-abc-1")
+	for _, n := range tree.Nodes {
+		if n.Ref.Kind == "Gateway" {
+			t.Errorf("Gateway %s presented as generated beneath its GatewayClass", n.ID)
+		}
+	}
 }
 
 func TestBuildDoesNotEnrichManagedResourcesOutsideAllowedNamespaces(t *testing.T) {
@@ -411,7 +421,7 @@ func TestBuild_RemoteDestinationReadsNothingLocal(t *testing.T) {
 	}}
 	topo := healthProvenanceTopo()
 	topo.Nodes = append(topo.Nodes, topology.Node{ID: "pod/prod/billing-1", Kind: topology.KindPod, Name: "billing-1", Status: topology.StatusUnhealthy, Data: map[string]any{"namespace": "prod"}})
-	topo.Edges = []topology.Edge{{ID: "e", Source: "deployment/prod/billing", Target: "pod/prod/billing-1", Type: topology.EdgeManages}}
+	topo.Edges = []topology.Edge{{ID: "e", Source: "deployment/prod/billing", Target: "pod/prod/billing-1", Type: topology.EdgeManages, OwnerController: &observedController}}
 	tree, _, err := NewBuilder(dynamic, topo).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -472,7 +482,7 @@ func TestBuild_RemoteFluxKustomizationReadsNothingLocal(t *testing.T) {
 			{ID: "deployment/prod/billing", Kind: topology.KindDeployment, Name: "billing", Status: topology.StatusUnhealthy, Data: map[string]any{"namespace": "prod", "group": "apps"}},
 			{ID: "pod/prod/billing-1", Kind: topology.KindPod, Name: "billing-1", Status: topology.StatusUnhealthy, Data: map[string]any{"namespace": "prod"}},
 		},
-		Edges: []topology.Edge{{ID: "e", Source: "deployment/prod/billing", Target: "pod/prod/billing-1", Type: topology.EdgeManages}},
+		Edges: []topology.Edge{{ID: "e", Source: "deployment/prod/billing", Target: "pod/prod/billing-1", Type: topology.EdgeManages, OwnerController: &observedController}},
 	}
 	tree, _, err := NewBuilder(dynamic, topo).Build(context.Background(), "kustomizations", "flux-system", "fleet-prod", "kustomize.toolkit.fluxcd.io")
 	if err != nil {
@@ -528,3 +538,6 @@ func TestBuild_RemoteFluxHelmReleaseRecoversNothingLocal(t *testing.T) {
 		}
 	}
 }
+
+// observedController marks fixture edges as observed controller owner references.
+var observedController = true

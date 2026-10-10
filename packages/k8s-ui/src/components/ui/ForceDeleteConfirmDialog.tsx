@@ -138,6 +138,9 @@ function CascadeDependentsList({ dependents }: { dependents: CascadeDependent[] 
               </div>
             </div>
           ))}
+          <p className="text-xs text-theme-text-tertiary">
+            Kubernetes deletes these through their owner references. Owned objects Radar doesn&apos;t track, such as EndpointSlices, go too but aren&apos;t listed.
+          </p>
         </div>
       </Collapse>
     </div>

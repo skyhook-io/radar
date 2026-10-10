@@ -802,6 +802,8 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
     relationships.deployment ||
     relationships.node ||
     (relationships.children && relationships.children.length > 0) ||
+    (relationships.managers && relationships.managers.length > 0) ||
+    (relationships.manages && relationships.manages.length > 0) ||
     (relationships.services && relationships.services.length > 0) ||
     (relationships.ingresses && relationships.ingresses.length > 0) ||
     (relationships.gateways && relationships.gateways.length > 0) ||
@@ -834,6 +836,12 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
         )}
         {relationships.children && relationships.children.length > 0 && (
           <RelationshipGroup label="Children" refs={dedupeResourceRefs(relationships.children)} onNavigate={onNavigate} />
+        )}
+        {relationships.managers && relationships.managers.length > 0 && (
+          <RelationshipGroup label="Managed By" refs={dedupeResourceRefs(relationships.managers)} onNavigate={onNavigate} />
+        )}
+        {relationships.manages && relationships.manages.length > 0 && (
+          <RelationshipGroup label="Manages" refs={dedupeResourceRefs(relationships.manages)} onNavigate={onNavigate} />
         )}
         {relationships.services && relationships.services.length > 0 && (
           <RelationshipGroup label="Services" refs={dedupeResourceRefs(relationships.services)} onNavigate={onNavigate} />
