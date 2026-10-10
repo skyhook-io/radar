@@ -102,6 +102,7 @@ type rawUnready struct {
 
 type rawCondition struct {
 	Status             string         `json:"status"`
+	Candidates         *int           `json:"candidates"`
 	BackoffInfo        map[string]any `json:"backoffInfo"`
 	LastProbeTime      *string        `json:"lastProbeTime"`
 	LastTransitionTime *string        `json:"lastTransitionTime"`
@@ -154,8 +155,14 @@ func mapHealth(rh rawHealth) Health {
 }
 
 func mapCondition(rc rawCondition) Condition {
+	if rc.Status == "NoCandidates" && rc.Candidates == nil {
+		// Upstream omitempty suppresses the candidate count when it is zero.
+		zero := 0
+		rc.Candidates = &zero
+	}
 	return Condition{
 		Status:         rc.Status,
+		Candidates:     rc.Candidates,
 		Backoff:        backoffFromMap(rc.BackoffInfo),
 		LastProbeTime:  parseTimePtr(rc.LastProbeTime),
 		LastTransition: parseTimePtr(rc.LastTransitionTime),
@@ -248,7 +255,8 @@ func parseLegacyText(raw string) Status {
 			}
 		case strings.HasPrefix(trimmed, "ScaleDown:"):
 			target = tgtScaleDown
-			c := Condition{Status: conditionStatus(strings.TrimPrefix(trimmed, "ScaleDown:"))}
+			rest := strings.TrimPrefix(trimmed, "ScaleDown:")
+			c := Condition{Status: conditionStatus(rest), Candidates: ptrFromMap(parseLegacyKV(rest), "candidates")}
 			if cur == nil {
 				st.ClusterWide.ScaleDown = c
 			} else {
