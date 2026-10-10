@@ -699,6 +699,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
 
   // Source 2: Topology edges (for Service→Deployment, Ingress→Service, ConfigMap→Deployment).
   if (topology?.edges) {
+    const topologyNodeById = new Map(topology.nodes?.map(node => [node.id, node]) ?? [])
     for (const edge of topology.edges) {
       const sourceId = topologyLaneIdByNodeId.get(edge.source)
       const targetId = topologyLaneIdByNodeId.get(edge.target)
@@ -777,8 +778,15 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
         }
       }
 
-      // configures/uses/protects: ConfigMap→Deployment, HPA→Deployment, PDB→Deployment (target is parent)
-      if (edge.type === 'configures' || edge.type === 'uses' || edge.type === 'protects') {
+      // configures/protects: ConfigMap→Deployment, PDB→Deployment (target is parent)
+      if (edge.type === 'configures' || edge.type === 'protects') {
+        link(sourceId, targetId, sourceExists)
+      }
+      // uses: only an autoscaler or a mounted claim belongs under the workload it
+      // serves. Other uses edges point from a dependent to what it depends on
+      // (Certificate→Issuer, Gateway→GatewayClass); nesting there would file
+      // every dependent under one shared dependency.
+      if (edge.type === 'uses' && attachesToTarget(topologyNodeById.get(edge.source))) {
         link(sourceId, targetId, sourceExists)
       }
     }
@@ -1467,4 +1475,22 @@ export function countEventsInHierarchy(lanes: ResourceLane[]): number {
   }
   lanes.forEach(walk)
   return count
+}
+
+// The uses-edge sources that attach to their target workload: autoscalers and
+// PersistentVolumeClaims, matched on exact API group.
+const ATTACHED_USES_SOURCES = new Set([
+  'autoscaling/HorizontalPodAutoscaler',
+  'autoscaling.k8s.io/VerticalPodAutoscaler',
+  'keda.sh/ScaledObject',
+  'keda.sh/ScaledJob',
+  '/PersistentVolumeClaim',
+])
+
+function attachesToTarget(node: Topology['nodes'][number] | undefined): boolean {
+  if (!node) return false
+  const kind = topologyNodeResourceKind(node)
+  const apiVersion = typeof node.data?.apiVersion === 'string' ? node.data.apiVersion : ''
+  const group = canonicalResourceGroup(kind, apiVersionToGroup(apiVersion)) ?? ''
+  return ATTACHED_USES_SOURCES.has(`${group}/${kind}`)
 }
