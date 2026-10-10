@@ -122,6 +122,7 @@ func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group
 		SkipPodTemplateContext: !includeFacts,
 		CanReadClusterScoped:   issueClusterScopedAccess(ctx),
 		CanReadRelated:         issueRelatedResourceAccess(ctx),
+		CanListResource:        mcpChangeAuthorizer(ctx),
 	}, group, kind, namespace, name)
 	if len(matched) == 0 {
 		return nil, nil

@@ -172,6 +172,7 @@ func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitops
 		return s.canAccessGitOpsRef(r, req, group, kind, namespace, name, false)
 	}
 	resolver := newInsightsResolver(r.Context(), req.Cache, req.AllowedNamespaces, canAccess)
+	resolver.canListResource = s.changeAuthorizerForCtx(r.Context())
 	memoKey := gitopsIssuesMemoKey(auth.UserFromContext(r.Context()), req.AllowedNamespaces)
 	resolver.composed = func() ([]issues.Issue, []issues.Issue) {
 		return s.gitopsIssuesMemo.load(memoKey, resolver.composeIssues)
@@ -844,6 +845,7 @@ type insightsResolver struct {
 	cache             *k8s.ResourceCache
 	allowedNamespaces []string
 	canAccess         func(group, kind, namespace, name string) bool
+	canListResource   func(group, resource, namespace string) bool
 
 	// The cluster-wide issue set is composed at most once per insights request
 	// (lazily, only if a degraded managed resource asks for it) and reused
@@ -1144,6 +1146,7 @@ func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []g
 func (r *insightsResolver) composeIssues() ([]issues.Issue, []issues.Issue) {
 	flat := issues.Compose(issues.NewCacheProvider(), issues.Filters{
 		SkipPodTemplateContext: true,
+		CanListResource:        r.canListResource,
 		Namespaces:             r.allowedNamespaces,
 		Limit:                  issues.NoLimit,
 		CanReadRelated: func(ref issues.Ref) bool {
@@ -1172,13 +1175,16 @@ func (r *insightsResolver) composeIssues() ([]issues.Issue, []issues.Issue) {
 //	"helm-controller is not running in namespace flux-system (controller may not be installed, or runs under a different namespace)"
 func (r *insightsResolver) FinalizerOwnerStatus(finalizer string, root *unstructured.Unstructured) string {
 	owner := gitopsinsights.ResolveFinalizerOwner(finalizer, root)
-	if owner == nil {
+	if owner == nil || owner.Namespace == "" {
 		return ""
 	}
 	if r.cache == nil || r.cache.Pods() == nil {
 		return ""
 	}
 	if !r.namespaceAllowed(owner.Namespace) {
+		return ""
+	}
+	if r.canListResource != nil && !r.canListResource("", "pods", owner.Namespace) {
 		return ""
 	}
 	if r.canAccess != nil && !r.canAccess("", "Pod", owner.Namespace, "") {
@@ -1200,38 +1206,12 @@ func (r *insightsResolver) FinalizerOwnerStatus(finalizer string, root *unstruct
 		// isn't installed (broken finalizer-only state). Either way,
 		// the user needs to know "the controller isn't where I expect"
 		// to start debugging.
+		if owner.OffClusterOfferings != "" {
+			return owner.Controller + " has no pods in namespace " + owner.Namespace + " (it may run outside the cluster under " + owner.OffClusterOfferings + ", not be installed, or run under a different namespace)"
+		}
 		return owner.Controller + " is not running in namespace " + owner.Namespace + " (controller may not be installed, or runs under a different namespace)"
 	}
-	return summarizeControllerHealth(owner.Controller, matched)
-}
-
-// summarizeControllerHealth distills a slice of controller pods into a
-// short, operator-readable status verb. Aggregates over multiple
-// replicas (Argo's controller is typically deployed as a 2-replica
-// StatefulSet for HA): if any pod is in CrashLoopBackOff or Error, that
-// fact dominates the status. If all pods are Ready, "healthy". Anything
-// in between is "degraded" with a count.
-func summarizeControllerHealth(controller string, pods []*corev1.Pod) string {
-	health := summarizeControllerPods(pods)
-	switch {
-	case health.Crashing > 0:
-		return fmt.Sprintf("%s is %s (%d/%d pods)", controller, health.CrashReason, health.Crashing, health.Total)
-	case health.Ready == health.Total && health.Total > 0:
-		// All pods Ready — if the resource is *still* stuck deleting
-		// despite a healthy controller, it's a different problem (RBAC,
-		// network, broken finalizer logic). Surface the healthy state
-		// so the operator knows to dig into the controller's logs
-		// rather than its lifecycle.
-		suffix := "s"
-		if health.Ready == 1 {
-			suffix = ""
-		}
-		return fmt.Sprintf("%s is healthy (%d pod%s ready)", controller, health.Ready, suffix)
-	case health.Pending > 0:
-		return fmt.Sprintf("%s is pending start (%d/%d pods Pending)", controller, health.Pending, health.Total)
-	default:
-		return fmt.Sprintf("%s is degraded (%d/%d pods ready)", controller, health.Ready, health.Total)
-	}
+	return gitopsinsights.SummarizeControllerHealth(owner.Controller, matched)
 }
 
 func (r *insightsResolver) namespaceAllowed(namespace string) bool {

@@ -41,6 +41,9 @@ type Filters struct {
 	// assert an issue on another subject, such as a NodeClass referenced by a
 	// NodePool. Nil preserves internal/no-auth composition.
 	CanReadRelated func(Ref) bool
+	// CanListResource gates CR subjects and controller inventories by exact GVR.
+	// Nil omits CR termination scans on paths without caller-bound inventory access.
+	CanListResource func(group, resource, namespace string) bool
 	// Grouped folds the flat rows into the public grouped model
 	// (GroupIssues) before the cap, so the limit counts issue groups, not
 	// replica fan-out. The public /api/issues + MCP issues set this; flat
@@ -64,6 +67,7 @@ type RelatedIssueOptions struct {
 	// per-resource path. Nil preserves auth-mode=none and internal composition.
 	CanReadClusterScoped func(kind, group string) bool
 	CanReadRelated       func(Ref) bool
+	CanListResource      func(group, resource, namespace string) bool
 }
 
 const (

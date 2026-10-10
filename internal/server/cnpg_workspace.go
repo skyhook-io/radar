@@ -596,6 +596,7 @@ func (s *Server) cnpgWorkspaceIssues(r *http.Request, namespaces []string, acces
 		Limit:                issues.NoLimit,
 		CanReadClusterScoped: s.issueClusterScopedAccess(r),
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
+		CanListResource:      s.changeAuthorizerForCtx(r.Context()),
 	})
 	for _, iss := range composed {
 		if !cnpgWorkspaceIssueVisible(iss, access, instancePods) {

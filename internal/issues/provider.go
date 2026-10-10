@@ -75,6 +75,10 @@ func (p *CacheProvider) DetectProblems(namespaces []string) []k8s.Detection {
 	return flattenNamespacedProblems(perNs)
 }
 
+func (p *CacheProvider) DetectDynamicTerminatingProblems(namespaces []string, canList func(group, resource, namespace string) bool) []k8s.Detection {
+	return k8s.DetectDynamicTerminatingProblems(p.dynamic, p.discovery, namespaces, time.Now(), canList)
+}
+
 // DetectMissingRefs returns dangling-reference problems for all enabled
 // source kinds in DetectMissingRefs plus dynamic webhook/Gateway checks. Same
 // flattenNamespacedProblems shape as DetectProblems: cluster-scoped

@@ -2,19 +2,24 @@ package server
 
 import (
 	"errors"
+	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // makePodWithStatus constructs a minimal Pod with the container statuses
@@ -89,7 +94,7 @@ func TestSummarizeControllerHealth(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := summarizeControllerHealth("argocd-application-controller", tt.pods)
+			got := gitopsinsights.SummarizeControllerHealth("argocd-application-controller", tt.pods)
 			if got != tt.want {
 				t.Fatalf("summarizeControllerHealth =\n  got:  %q\n  want: %q", got, tt.want)
 			}
@@ -266,5 +271,60 @@ func TestFilterGitOpsTreeForUserAppliesNamespaceAndClusterScope(t *testing.T) {
 	}
 	if len(got.Warnings) == 0 || !strings.Contains(got.Warnings[0], "hidden by RBAC") {
 		t.Fatalf("expected RBAC warning, got %#v", got.Warnings)
+	}
+}
+
+func TestGitOpsFinalizerEmptyOwnerNamespace(t *testing.T) {
+	cache := k8s.GetResourceCache()
+	if cache == nil || cache.Pods() == nil {
+		t.Fatal("test cache unavailable")
+	}
+	resolver := &insightsResolver{cache: cache, canAccess: func(string, string, string, string) bool {
+		t.Fatal("empty namespace catalog owner reached inventory access")
+		return true
+	}}
+	root := &unstructured.Unstructured{}
+	root.SetAPIVersion("operator.victoriametrics.com/v1")
+	if got := resolver.FinalizerOwnerStatus("apps.victoriametrics.com/finalizer", root); got != "" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestGitOpsFinalizerHealthDuringControllerRollout(t *testing.T) {
+	pod := makePodWithStatus(corev1.PodRunning, corev1.ContainerStatus{Ready: true})
+	pod.SetName("rollout-source-controller")
+	pod.SetNamespace("flux-system")
+	pod.SetLabels(map[string]string{"app": "source-controller"})
+	pod.SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
+	if err := k8s.InitTestResourceCache(fake.NewClientset(pod)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatal(err)
+		}
+	})
+	resolver := &insightsResolver{cache: k8s.GetResourceCache()}
+	root := &unstructured.Unstructured{}
+	root.SetAPIVersion("source.toolkit.fluxcd.io/v1")
+	if got := resolver.FinalizerOwnerStatus("finalizers.source.toolkit.fluxcd.io", root); got != "source-controller is healthy (1 pod ready)" {
+		t.Fatalf("rollout changed GitOps controller health text: %q", got)
+	}
+}
+
+func TestGitOpsFinalizerOwnerMayRunOffCluster(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatal(err)
+		}
+	})
+	resolver := &insightsResolver{cache: k8s.GetResourceCache()}
+	root := &unstructured.Unstructured{}
+	root.SetAPIVersion("argoproj.io/v1alpha1")
+	if got := resolver.FinalizerOwnerStatus("resources-finalizer.argocd.argoproj.io", root); !strings.Contains(got, "argocd-application-controller has no pods in namespace argocd (it may run outside the cluster under Amazon EKS Capabilities") {
+		t.Fatalf("managed Argo CD read as missing: %q", got)
 	}
 }

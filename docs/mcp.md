@@ -491,6 +491,55 @@ API group is part of a resource's identity. Radar infers the canonical group for
 
 This selects the Argo Rollout workload path; it does not imply that `diagnose` supports arbitrary custom resource shapes.
 
+Watched custom resources that remain present after deletion started appear in
+`issues` as `termination_stuck`: warning after 10 minutes and critical at 30,
+with deletion time as the onset. It stays at warning when a matched controller
+is fully healthy, or when Radar can't confirm that any finalizer's controller is
+down (see the table below). Radar only reads already
+watched CRD caches; absence of an issue does not establish that unwatched kinds
+are healthy. Namespace and exact kind list authorization apply to both
+namespaced and cluster-scoped subjects. Dashboard health summaries do not
+include this CR scan.
+
+The cause names the finalizers and elapsed deletion age, plus one controller
+observation per finalizer. Controllers are identified from the Argo/Flux
+catalog, VictoriaMetrics and Karpenter entries, or a conservative match of an
+exact finalizer domain/API group to operator workload names or labels. Each
+observation lands in one of these states:
+
+| Observation | Severity | Action |
+|---|---|---|
+| A matching controller pod is ready | Warning when every matched pod is ready; otherwise unchanged | Check the controller's logs, permissions and deletion-blocking references. No removal patch. |
+| Identified, and seen not running: no matching workload or pod anywhere Radar searched, or present with no ready pod (CrashLoopBackOff, Pending, degraded) | Critical at 30 minutes | Check the controller first. A one-finalizer removal preview is offered, for use only if the controller was intentionally removed |
+| Identified, but its finalizer drains nodes or releases cloud resources (Karpenter) and it is seen down | Critical at 30 minutes | Restore the controller. No removal patch: removal leaves the instances behind |
+| Identified, but absence can't be established: no pods for a controller that also runs off-cluster (Karpenter under EKS Auto Mode or AKS node auto-provisioning, Argo CD under Amazon EKS Capabilities), workloads not searchable cluster-wide, or pods unreadable | Warning | Check that controller first. No removal patch |
+| **Controller unknown**: no confident mapping | Warning | The finalizer's domain usually names its controller; find and check it first. No removal patch |
+
+Real infrastructure operators such as Crossplane, Cluster API, Config Connector,
+ACK and Strimzi are not in the catalog and don't match the workload heuristic,
+so their stuck deletions stay at warning with no removal patch: their
+controllers may still be deleting cloud resources, and removing a finalizer
+skips that cleanup and can orphan infrastructure, volumes or nodes. Seeing a
+controller stopped, whether missing or down, needs a complete search:
+Deployments and StatefulSets readable and cached cluster-wide, and the
+catalog's pod selector searched where the controller would run. A down copy in
+the visible namespaces doesn't rule out a healthy one elsewhere.
+
+The removal preview is text only. It previews one indexed finalizer removal
+using JSON Patch `test` operations for the object UID and finalizer value,
+followed by `remove`, both as a `patch_resource` call with `dry_run=true` and as
+`kubectl patch --type=json --dry-run=server`. Review the preview before an
+explicit apply, and re-read the object after each removal: the next finalizer's
+index may change. Garbage-collection finalizers are never given removal
+patches; foreground deletion points at dependents without scanning operator
+workloads. Kubernetes protection finalizers (`*.k8s.io/*` and
+`*.kubernetes.io/*`, including slashless Gateway guards, and `*.x-k8s.io`
+finalizers named for `in-use` or `protection`, such as Kueue's
+`resource-in-use`) are in-use guards: resolve the referencing objects instead of
+removing them. Deletion-related Ready=False conditions fold into the terminating
+issue. Controller inventories need exact Pod and workload list permissions;
+inaccessible inventory is never read as a missing controller.
+
 For `issues`, read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
 
 Resource context distinguishes observed dependency references (`dependencies` and
