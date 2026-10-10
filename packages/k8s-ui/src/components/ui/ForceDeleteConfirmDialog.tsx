@@ -141,6 +141,15 @@ export function ForceDeleteConfirmDialog({
 
 const MAX_NAMES_PER_KIND = 8
 
+// How a managed resource opts out of its controller's teardown. A Helm
+// uninstall keeps resources by Helm's own annotation, not Flux's.
+function optOut(teardown: NonNullable<CascadeDetail['controllerTeardown']>): string | undefined {
+  if (teardown.action === 'uninstall') return 'helm.sh/resource-policy: keep'
+  if (teardown.controller === 'Argo CD') return 'argocd.argoproj.io/sync-options: Delete=false'
+  if (teardown.controller === 'Flux') return 'kustomize.toolkit.fluxcd.io/prune: disabled'
+  return undefined
+}
+
 function ControllerTeardownNotice({ teardown, force }: { teardown: NonNullable<CascadeDetail['controllerTeardown']>; force: boolean }) {
   const resources = teardown.resources ?? []
   const what = teardown.action === 'uninstall' ? 'uninstall the Helm release' : 'delete the resources it manages'
@@ -163,7 +172,7 @@ function ControllerTeardownNotice({ teardown, force }: { teardown: NonNullable<C
     <CascadeDependentsList
       dependents={resources}
       title={resources.length > 0 ? `${title} (${resources.length} shown)` : title}
-      summary={`${teardown.controller} deletes what its own inventory records, which can include resources Radar doesn't show. Resources that opt out of deletion stay (Flux: kustomize.toolkit.fluxcd.io/prune: disabled; Argo CD: Delete=false).`}
+      summary={`${teardown.controller} deletes what its own inventory records, which can include resources Radar doesn't show.${optOut(teardown) ? ` Resources marked ${optOut(teardown)} stay.` : ''}`}
     />
   )
 }

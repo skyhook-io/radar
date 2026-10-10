@@ -46,6 +46,8 @@ describe('ForceDeleteConfirmDialog', () => {
     expect(text()).toContain('May also delete 1 resource')
     expect(text()).toContain('Flux will also delete the resources it manages (1 shown)')
     expect(text()).toContain('can include resources Radar doesn')
+    expect(text()).toContain('kustomize.toolkit.fluxcd.io/prune: disabled')
+    expect(text()).not.toContain('Delete=false')
   })
 
   it('says force delete stops the controller teardown', async () => {
@@ -74,5 +76,11 @@ describe('ForceDeleteConfirmDialog', () => {
     await act(async () => checkbox.click())
     expect(text()).toContain('already being deleted')
     expect(text()).not.toContain('They stay in the cluster')
+  })
+
+  it('names Helm\'s keep policy for a HelmRelease uninstall', async () => {
+    const text = await render({ basis: 'ownerReferences', controllerTeardown: { controller: 'Flux', action: 'uninstall', resources: [{ kind: 'Deployment', namespace: 'prod', name: 'web' }] } })
+    expect(text()).toContain('helm.sh/resource-policy: keep')
+    expect(text()).not.toContain('kustomize.toolkit.fluxcd.io/prune')
   })
 })
