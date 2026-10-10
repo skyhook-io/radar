@@ -932,4 +932,15 @@ func TestScalingCandidateFacts(t *testing.T) {
 		t.Fatal("expected truncation")
 	}
 	assertFact(t, summary.Scaling, "scale_down_candidates", fmt.Sprintf("%d scale-down candidates", len(children)))
+
+	noMin := child(intPtr(2))
+	noMin.MinSize = nil
+	facts := scalingFacts(&groupBuilder{domain: "gke", children: []capacityapi.AutoscalerChildObservation{noMin}}, AutoscalerObserved)
+	assertFact(t, facts, "bounds_not_published", "bounds not published in-cluster")
+	assertFact(t, facts, "scale_down_candidates", "2 scale-down candidates")
+	for _, code := range []string{"target", "at_min_size"} {
+		if _, ok := findFact(facts, code); ok {
+			t.Fatalf("missing minimum must not assert %s: %+v", code, facts)
+		}
+	}
 }
