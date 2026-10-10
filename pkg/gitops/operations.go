@@ -557,6 +557,13 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 				selfHeal = v == "true"
 			}
 		}
+		// Automation switched off in place with `enabled: false` keeps its
+		// prune/selfHeal settings in the block; resume those. The patch
+		// drops `enabled`, which a merge patch would otherwise leave false.
+		if automated, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated"); found && !ArgoAutoSyncEnabled(app) {
+			prune, _ = automated["prune"].(bool)
+			selfHeal, _ = automated["selfHeal"].(bool)
+		}
 
 		patch = map[string]any{
 			"metadata": map[string]any{
@@ -572,6 +579,7 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 					"automated": map[string]any{
 						"prune":    prune,
 						"selfHeal": selfHeal,
+						"enabled":  nil,
 					},
 				},
 			},

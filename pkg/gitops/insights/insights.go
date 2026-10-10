@@ -1355,10 +1355,6 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 					log.Printf("[gitops/insights] history entry %s/%s has unexpected id type %T (%v); rollback for this entry will be unavailable", root.GetNamespace(), root.GetName(), m["id"], m["id"])
 				}
 			}
-			source := ""
-			if sm, ok := m["source"].(map[string]any); ok {
-				source = joinNonEmpty(gitops.StringValue(sm["repoURL"]), gitops.StringValue(sm["path"]), gitops.StringValue(sm["chart"]))
-			}
 			// initiatedBy carries who triggered the sync. Username is set for
 			// human/api triggers; automated is a *bool*, not a string — Argo
 			// flips it true when the controller's auto-sync fires. We coerce
@@ -1373,7 +1369,7 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 					}
 				}
 			}
-			out = append(out, HistoryItem{ID: id, Revision: gitops.StringValue(m["revision"]), DeployedAt: gitops.StringValue(m["deployedAt"]), Source: source, InitiatedBy: initiatedBy})
+			out = append(out, HistoryItem{ID: id, Revision: argoRevisionLabel(m), DeployedAt: gitops.StringValue(m["deployedAt"]), Source: argoSourceLabel(m), InitiatedBy: initiatedBy})
 		}
 		if op, ok, _ := unstructured.NestedMap(root.Object, "status", "operationState"); ok {
 			initiatedBy := ""
@@ -1397,12 +1393,13 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 				deployedAt = gitops.StringValue(op["startedAt"])
 			}
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(gitops.StringValue(op["message"]))
+			syncResult, _ := op["syncResult"].(map[string]any)
 			out = append(out, HistoryItem{
 				Phase:       gitops.StringValue(op["phase"]),
 				Message:     msg,
 				RawMessage:  rawMsg,
 				DeployedAt:  deployedAt,
-				Revision:    nestedString(op, "syncResult", "revision"),
+				Revision:    argoRevisionLabel(syncResult),
 				InitiatedBy: initiatedBy,
 			})
 		}
@@ -1742,6 +1739,45 @@ func stripUnknown(value string) string {
 		return ""
 	}
 	return value
+}
+
+// argoRevisionLabel is a history entry's (or sync result's) deployed revision.
+// A multi-source deploy records one revision per source in `revisions` and
+// leaves `revision` empty.
+func argoRevisionLabel(m map[string]any) string {
+	if revision := gitops.StringValue(m["revision"]); revision != "" {
+		return revision
+	}
+	revisions, _ := m["revisions"].([]any)
+	parts := make([]string, 0, len(revisions))
+	for _, revision := range revisions {
+		if s := gitops.StringValue(revision); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// argoSourceLabel describes the source a history entry deployed. A
+// multi-source entry carries `sources` (its `source` is an empty placeholder),
+// labelled by the first source and a count of the rest.
+func argoSourceLabel(m map[string]any) string {
+	describe := func(source any) string {
+		sm, _ := source.(map[string]any)
+		return joinNonEmpty(gitops.StringValue(sm["repoURL"]), gitops.StringValue(sm["path"]), gitops.StringValue(sm["chart"]))
+	}
+	if label := describe(m["source"]); label != "" {
+		return label
+	}
+	sources, _ := m["sources"].([]any)
+	if len(sources) == 0 {
+		return ""
+	}
+	label := describe(sources[0])
+	if len(sources) > 1 {
+		label += fmt.Sprintf(" (+%d more)", len(sources)-1)
+	}
+	return label
 }
 
 func joinNonEmpty(values ...string) string {

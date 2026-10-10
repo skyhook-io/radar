@@ -834,6 +834,44 @@ func TestBuildHistoryArgo_AutomatedBoolBecomesInitiator(t *testing.T) {
 	}
 }
 
+// A multi-source deploy records `revisions` and `sources`, with an empty
+// placeholder `source`; its history row and the rollback dialog need those,
+// not the empty singular fields.
+func TestBuildHistoryArgo_MultiSourceEntry(t *testing.T) {
+	root := argoApp(map[string]any{
+		"operationState": map[string]any{
+			"phase":      "Succeeded",
+			"finishedAt": "2026-05-03T13:00:00Z",
+			"syncResult": map[string]any{"revisions": []any{"aaa111", "bbb222"}},
+		},
+		"history": []any{
+			map[string]any{
+				"id":         int64(0),
+				"deployedAt": "2026-05-03T12:00:00Z",
+				"revisions":  []any{"aaa111", "bbb222"},
+				"source":     map[string]any{"repoURL": ""},
+				"sources": []any{
+					map[string]any{"repoURL": "https://github.com/org/app", "path": "guestbook"},
+					map[string]any{"repoURL": "https://github.com/org/app", "path": "kustomize-guestbook"},
+				},
+			},
+		},
+	})
+	hist := BuildHistory(root)
+	if len(hist) != 2 {
+		t.Fatalf("expected the entry and the operation row, got %d", len(hist))
+	}
+	for _, item := range hist {
+		if item.Revision != "aaa111, bbb222" {
+			t.Errorf("Revision = %q, want %q (item %+v)", item.Revision, "aaa111, bbb222", item)
+		}
+	}
+	entry := hist[1]
+	if entry.ID != "0" || entry.Source != "https://github.com/org/app · guestbook (+1 more)" {
+		t.Errorf("entry = %+v, want id 0 and the first source plus a count", entry)
+	}
+}
+
 // A running operation has finishedAt="" and used to fall to the bottom of
 // history due to the descending DeployedAt sort. Falling back to startedAt
 // keeps it at the top where it belongs.

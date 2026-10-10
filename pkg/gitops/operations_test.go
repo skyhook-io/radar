@@ -942,6 +942,30 @@ func TestSetArgoAutoSyncResumeRestoresSettings(t *testing.T) {
 	}
 }
 
+// Argo CD 3.x can switch automation off in place with automated.enabled:
+// false. Resume must clear that flag, or Argo stays manual while Radar reports
+// auto-sync resumed, and it keeps the block's own prune/selfHeal settings.
+func TestSetArgoAutoSyncResumeClearsEnabledFalse(t *testing.T) {
+	client := newFakeArgo(argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		spec, _ := obj["spec"].(map[string]any)
+		spec["syncPolicy"] = map[string]any{"automated": map[string]any{"enabled": false, "prune": false, "selfHeal": true}}
+	}))
+	if _, err := SetArgoAutoSync(context.Background(), client, "argocd", "demo", true); err != nil {
+		t.Fatalf("SetArgoAutoSync(resume): %v", err)
+	}
+	app, err := client.Resource(argoAppGVR).Namespace("argocd").Get(context.Background(), "demo", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	if !ArgoAutoSyncEnabled(app) {
+		t.Fatalf("auto-sync still off after resume: %#v", app.Object["spec"])
+	}
+	automated, _, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
+	if automated["prune"] != false || automated["selfHeal"] != true {
+		t.Fatalf("resume changed the block's settings: %#v", automated)
+	}
+}
+
 // TestFluxOperationsRefuseTerminatingResource extends the Argo coverage in
 // TestOperationsRefuseTerminatingResource to the Flux operation surface,
 // so a refactor that drops assertNotTerminating from any Flux verb is
