@@ -4244,14 +4244,25 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 
 			// Connect via endpointSelector (equivalent to podSelector)
-			selectorMap, _, _ := unstructured.NestedMap(cnp.Object, "spec", "endpointSelector", "matchLabels")
-			if len(selectorMap) == 0 {
+			selectorMap, found, err := unstructured.NestedMap(cnp.Object, "spec", "endpointSelector")
+			if err != nil || !found {
+				continue
+			}
+			var labelSelector metav1.LabelSelector
+			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(selectorMap, &labelSelector); err != nil {
+				continue
+			}
+			selector, err := metav1.LabelSelectorAsSelector(&labelSelector)
+			if err != nil {
+				continue
+			}
+			if selector.Empty() {
 				nodeData["matchesAllPods"] = true
 				continue
 			}
 
 			for _, d := range deploymentsByNS[ns] {
-				if matchesStringMap(d.Spec.Template.Labels, selectorMap) {
+				if selector.Matches(labels.Set(d.Spec.Template.Labels)) {
 					if targetID := deploymentIDs[d.Namespace+"/"+d.Name]; targetID != "" {
 						edges = append(edges, Edge{
 							ID: fmt.Sprintf("%s-to-%s", cnpID, targetID), Source: cnpID, Target: targetID, Type: EdgeProtects,
@@ -4260,7 +4271,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 			}
 			for _, s := range statefulsetsByNS[ns] {
-				if matchesStringMap(s.Spec.Template.Labels, selectorMap) {
+				if selector.Matches(labels.Set(s.Spec.Template.Labels)) {
 					if targetID := statefulSetIDs[s.Namespace+"/"+s.Name]; targetID != "" {
 						edges = append(edges, Edge{
 							ID: fmt.Sprintf("%s-to-%s", cnpID, targetID), Source: cnpID, Target: targetID, Type: EdgeProtects,
@@ -4269,7 +4280,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 			}
 			for _, d := range daemonsetsByNS[ns] {
-				if matchesStringMap(d.Spec.Template.Labels, selectorMap) {
+				if selector.Matches(labels.Set(d.Spec.Template.Labels)) {
 					dsID := fmt.Sprintf("daemonset/%s/%s", d.Namespace, d.Name)
 					edges = append(edges, Edge{
 						ID: fmt.Sprintf("%s-to-%s", cnpID, dsID), Source: cnpID, Target: dsID, Type: EdgeProtects,
