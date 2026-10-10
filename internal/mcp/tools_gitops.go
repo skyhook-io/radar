@@ -116,7 +116,16 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 	if err != nil {
 		var denied *gitops.PermissionDenied
 		if errors.As(err, &denied) {
-			response, _, marshalErr := toJSONResult(map[string]any{"error": denied.Summary(), "code": "rbac_denied", "verb": denied.Verb, "group": denied.Group, "resource": denied.Resource, "namespace": denied.Namespace})
+			response, _, marshalErr := toJSONResult(map[string]any{"error": denied.Summary(), "error_code": "rbac_denied", "verb": denied.Verb, "group": denied.Group, "resource": denied.Resource, "namespace": denied.Namespace, "name": denied.Name, "kind": denied.Kind})
+			if marshalErr != nil {
+				return nil, nil, marshalErr
+			}
+			response.IsError = true
+			return response, nil, nil
+		}
+		var admission *gitops.AdmissionDenied
+		if errors.As(err, &admission) {
+			response, _, marshalErr := toJSONResult(map[string]any{"error": "Rejected by an admission policy: " + err.Error(), "error_code": "admission_denied"})
 			if marshalErr != nil {
 				return nil, nil, marshalErr
 			}

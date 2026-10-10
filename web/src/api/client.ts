@@ -1,5 +1,3 @@
-import { isRadarFeatureUnsupported } from "./radarFeatures";
-import { GITOPS_ACTION_KINDS, GitOpsActionError, gitOpsDisabledReasons, type GitOpsActionCapabilities } from "./gitOpsPermissions";
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef } from 'react'
@@ -63,6 +61,7 @@ import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
+  isRadarFeatureUnsupported,
   RadarFeatureUnsupportedError,
   guardRadarFeature,
   radarFeatureSupport,
@@ -70,6 +69,7 @@ import {
   type RadarFeature,
 } from './radarFeatures'
 import { useRadarUpgradeHost } from '../context/RadarUpgradeHost'
+import { isGitOpsActionTarget, GitOpsActionError, gitOpsDisabledReasons, type GitOpsActionCapabilities } from './gitOpsPermissions'
 import { apiVersionToGroup } from '../utils/navigation'
 import type { DeploymentMode } from '../types'
 
@@ -6314,12 +6314,23 @@ export function useArtifactHubChart(
 // GitOps Mutation Factory
 // ============================================================================
 
-export function useGitOpsActionCapabilities(kind: string, namespace: string, name: string, enabled = true) {
-  const active = enabled && GITOPS_ACTION_KINDS.includes(kind);
+export function useGitOpsActionCapabilities(kind: string, group: string | undefined, namespace: string, name: string, enabled = true) {
+  const active = enabled && isGitOpsActionTarget(kind, group);
+  const queryClient = useQueryClient();
   const { support, guard, gatedKey } = useRadarFeature("gitOpsActionCapabilities");
+  const queryKey = ["gitops-action-capabilities", getApiBase(), kind, group, namespace, name, ...gatedKey];
   const query = useQuery<GitOpsActionCapabilities>({
-    queryKey: ["gitops-action-capabilities", getApiBase(), kind, namespace, name, ...gatedKey],
-    queryFn: () => guard(() => fetchJSON(`/gitops/capabilities/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`)),
+    queryKey,
+    queryFn: () => guard(async () => {
+      const next = await fetchJSON<GitOpsActionCapabilities>(`/gitops/capabilities/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`);
+      const previous = queryClient.getQueryData<GitOpsActionCapabilities>(queryKey);
+      for (const [action, capability] of Object.entries(next.actions)) {
+        if (capability.allowed === undefined && previous?.actions[action]?.allowed !== undefined) {
+          next.actions[action] = previous.actions[action];
+        }
+      }
+      return next;
+    }),
     enabled: active && Boolean(namespace && name) && support !== 'unsupported',
     staleTime: 15_000,
     refetchInterval: active ? 30_000 : false,

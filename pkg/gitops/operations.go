@@ -226,7 +226,7 @@ func syncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 	}
 
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	err = permissionError(err, "get", argoAppGVR, namespace)
+	err = ClassifyPermissionError(err, "get", argoAppGVR, namespace, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
@@ -358,7 +358,7 @@ func ValidateArgoResource(ctx context.Context, dynClient dynamic.Interface, name
 	defer ticker.Stop()
 	for {
 		app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-		err = permissionError(err, "get", argoAppGVR, namespace)
+		err = ClassifyPermissionError(err, "get", argoAppGVR, namespace, name)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				return ArgoResourceValidationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found while validating: %w", namespace, name, err)
@@ -453,7 +453,7 @@ func stringValue(value any) string {
 // SetArgoAutoSync enables or disables automated sync on an ArgoCD Application.
 func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace, name string, enable bool) (OperationResult, error) {
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	err = permissionError(err, "get", argoAppGVR, namespace)
+	err = ClassifyPermissionError(err, "get", argoAppGVR, namespace, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
@@ -584,7 +584,7 @@ func RefreshArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace,
 // TerminateArgoSync terminates an ongoing sync operation on an ArgoCD Application.
 func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespace, name string) (OperationResult, error) {
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	err = permissionError(err, "get", argoAppGVR, namespace)
+	err = ClassifyPermissionError(err, "get", argoAppGVR, namespace, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
@@ -633,7 +633,7 @@ func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespa
 	_, err = dynClient.Resource(argoAppGVR).Namespace(namespace).Patch(
 		ctx, name, types.JSONPatchType, patchBytes, metav1.PatchOptions{},
 	)
-	err = permissionError(err, "patch", argoAppGVR, namespace)
+	err = ClassifyPermissionError(err, "patch", argoAppGVR, namespace, name)
 	if err != nil {
 		if apierrors.IsInvalid(err) {
 			return OperationResult{}, fmt.Errorf("no sync operation in progress for %s/%s (completed before terminate could fire): %w", namespace, name, ErrNoOperationInProgress)
@@ -660,7 +660,7 @@ func RollbackArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace
 		return OperationResult{}, fmt.Errorf("rollback requires a positive history id")
 	}
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	err = permissionError(err, "get", argoAppGVR, namespace)
+	err = ClassifyPermissionError(err, "get", argoAppGVR, namespace, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
@@ -747,7 +747,7 @@ func ReconcileFlux(ctx context.Context, dynClient dynamic.Interface, entry FluxK
 	// false-positive "Reconciliation triggered" toast. Costs one extra
 	// round-trip on the happy path; trade is correctness.
 	obj, err := dynClient.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	err = permissionError(err, "get", entry.GVR, namespace)
+	err = ClassifyPermissionError(err, "get", entry.GVR, namespace, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
@@ -788,7 +788,7 @@ func ReconcileFlux(ctx context.Context, dynClient dynamic.Interface, entry FluxK
 // SetFluxSuspend sets the suspend field on a FluxCD resource.
 func SetFluxSuspend(ctx context.Context, dynClient dynamic.Interface, entry FluxKindEntry, namespace, name string, suspend bool) (OperationResult, error) {
 	obj, err := dynClient.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	err = permissionError(err, "get", entry.GVR, namespace)
+	err = ClassifyPermissionError(err, "get", entry.GVR, namespace, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
@@ -884,7 +884,7 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 
 	// Get the resource to extract sourceRef
 	resource, err := dynClient.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	err = permissionError(err, "get", entry.GVR, namespace)
+	err = ClassifyPermissionError(err, "get", entry.GVR, namespace, name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
@@ -920,7 +920,7 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 	// believe progress is being made when the source is in fact a zombie.
 	sourceObj, err := dynClient.Resource(sourceEntry.GVR).Namespace(sourceNamespace).Get(ctx, sourceName, metav1.GetOptions{})
 	if apierrors.IsForbidden(err) {
-		return OperationResult{}, permissionError(err, "get", sourceEntry.GVR, sourceNamespace)
+		return OperationResult{}, ClassifyPermissionError(err, "get", sourceEntry.GVR, sourceNamespace, sourceName)
 	}
 	if err == nil {
 		if err := assertNotTerminating(sourceObj, "FluxCD "+sourceEntry.Kind, sourceNamespace, sourceName); err != nil {
@@ -976,5 +976,5 @@ func mergePatch(ctx context.Context, dynClient dynamic.Interface, gvr schema.Gro
 	_, err = dynClient.Resource(gvr).Namespace(namespace).Patch(
 		ctx, name, types.MergePatchType, patchBytes, metav1.PatchOptions{},
 	)
-	return permissionError(err, "patch", gvr, namespace)
+	return ClassifyPermissionError(err, "patch", gvr, namespace, name)
 }

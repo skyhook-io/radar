@@ -1,4 +1,3 @@
-import { GitOpsPermissionRowActions } from './GitOpsPermissionRowActions'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
@@ -49,6 +48,7 @@ import {
   type GitOpsTreePreset,
   type SelectedResource,
 } from '@skyhook-io/k8s-ui'
+import { GitOpsPermissionRowActions } from './GitOpsPermissionRowActions'
 import { useToast } from '../ui/Toast'
 import { useContextSwitchFlow } from '../useContextSwitchFlow'
 import { useDestinationCluster } from './useDestinationCluster'
@@ -441,7 +441,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const [graphFullscreen, setGraphFullscreen] = useState(false)
   const [helmValuesOpen, setHelmValuesOpen] = useState(false)
 
-  const { disabledReasons: actionDisabledReasons } = useGitOpsActionCapabilities(kind, namespace, name)
+  const { disabledReasons: actionDisabledReasons } = useGitOpsActionCapabilities(kind, group, namespace, name)
   const argoSync = useArgoSync()
   const argoResourceValidation = useArgoResourceValidation()
   const argoRefresh = useArgoRefresh()
@@ -568,11 +568,13 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     category: 'GitOps',
     scope: 'gitops',
     handler: () => {
+      const reason = actionDisabledReasons[isArgoApp ? 'sync' : 'reconcile']
+      if (reason) { showToast(reason, { type: 'info' }); return }
       if (effectiveSuspended || terminating || operationInProgress) return
       if (isArgoApp) openArgoSyncDialog({ scope: 'application' })
       else if (isFlux) fluxReconcile.mutate({ kind, namespace, name })
     },
-    enabled: !actionDisabledReasons[isArgoApp ? 'sync' : 'reconcile'] && shortcutsEnabled && (isArgoApp || isFlux) && !effectiveSuspended && !terminating && !(isArgoApp && operationInProgress),
+    enabled: shortcutsEnabled && (isArgoApp || isFlux) && !effectiveSuspended && !terminating && !(isArgoApp && operationInProgress),
   })
   useRegisterShortcut({
     id: 'gitops-detail-refresh',
@@ -582,10 +584,11 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     scope: 'gitops',
     handler: () => {
       if (!isArgoApp) return
+      if (actionDisabledReasons.refresh) { showToast(actionDisabledReasons.refresh, { type: 'info' }); return }
       setRefreshKind('normal')
       argoRefresh.mutate({ namespace, name, hard: false })
     },
-    enabled: !actionDisabledReasons.refresh && shortcutsEnabled && isArgoApp,
+    enabled: shortcutsEnabled && isArgoApp,
   })
   useRegisterShortcut({
     id: 'gitops-detail-hard-refresh',
@@ -595,10 +598,11 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     scope: 'gitops',
     handler: () => {
       if (!isArgoApp) return
+      if (actionDisabledReasons.refresh) { showToast(actionDisabledReasons.refresh, { type: 'info' }); return }
       setRefreshKind('hard')
       argoRefresh.mutate({ namespace, name, hard: true })
     },
-    enabled: !actionDisabledReasons.refresh && shortcutsEnabled && isArgoApp,
+    enabled: shortcutsEnabled && isArgoApp,
   })
   useRegisterShortcut({
     id: 'gitops-detail-terminate',
@@ -607,9 +611,10 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     category: 'GitOps',
     scope: 'gitops',
     handler: () => {
+      if (actionDisabledReasons.terminate) { showToast(actionDisabledReasons.terminate, { type: 'info' }); return }
       if (isArgoApp && isRunning) argoTerminate.mutate({ namespace, name })
     },
-    enabled: !actionDisabledReasons.terminate && shortcutsEnabled && isArgoApp && isRunning,
+    enabled: shortcutsEnabled && isArgoApp && isRunning,
   })
 
   // Adapt the OSS-internal row + insights data into the layout's props.

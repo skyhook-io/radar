@@ -1,5 +1,5 @@
+import { createContext, useContext, useState, useCallback, ReactNode, useEffect, useRef } from 'react'
 import { Collapse, CollapseChevron, useDisclosure } from './Collapse'
-import { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react'
 import { DURATION_TOAST_EXIT } from '../../utils/animation'
 import { Check, Terminal, X, AlertTriangle, Info } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -107,13 +107,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     const toast: Toast = { id, message, ...options }
 
     setToasts(prev => [...prev, toast])
-
-    // Auto-dismiss: errors stay longer (10s), others 7s
-    const dismissTime = options?.type === 'error' ? 10000 : 7000
-    setTimeout(() => {
-      animateDismiss(id)
-    }, dismissTime)
-  }, [animateDismiss])
+  }, [])
 
   const showCopied = useCallback((command: string, label?: string, event?: React.MouseEvent) => {
     navigator.clipboard.writeText(command)
@@ -161,6 +155,20 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const disclosure = useDisclosure(detailsOpen)
+  const [hovered, setHovered] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const [persistent, setPersistent] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const remaining = useRef(toast.type === 'error' ? 10000 : 7000)
+  useEffect(() => {
+    if (hovered || focused || persistent || toast.dismissing) return
+    const started = Date.now()
+    const timer = setTimeout(onDismiss, remaining.current)
+    return () => {
+      clearTimeout(timer)
+      remaining.current = Math.max(0, remaining.current - (Date.now() - started))
+    }
+  }, [hovered, focused, persistent, toast.dismissing, onDismiss])
   // Calculate position - either near button or default to bottom-right
   const style: React.CSSProperties = toast.position
     ? {
@@ -193,6 +201,10 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
             : 'bg-theme-surface border-theme-border'
       )}
       style={style}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocusCapture={() => setFocused(true)}
+      onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocused(false) }}
     >
       {/* Icon */}
       <div className={clsx(
@@ -245,11 +257,12 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
           )
         )}
         {toast.rawDetail && (
-          <div className="mt-2 rounded bg-theme-surface p-2 text-theme-text-secondary">
-            <button type="button" onClick={() => setDetailsOpen(value => !value)} aria-expanded={detailsOpen} aria-controls={disclosure.panelId} className="flex items-center gap-1 text-xs">
+          <div className={clsx('mt-2 rounded p-2', isError ? 'bg-black/25 text-red-100' : 'bg-theme-surface text-theme-text-secondary')}>
+            <button type="button" onClick={() => { setDetailsOpen(value => !value); setPersistent(true) }} aria-expanded={detailsOpen} aria-controls={disclosure.panelId} className="flex items-center gap-1 text-xs">
               <CollapseChevron open={detailsOpen} /> Error details
             </button>
             <Collapse open={detailsOpen} id={disclosure.panelId}>
+              <button type="button" onClick={async () => { await navigator.clipboard.writeText(toast.rawDetail!); setCopied(true) }} className="mt-2 rounded border border-current px-2 py-1 text-xs">{copied ? 'Copied' : 'Copy raw error'}</button>
               <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs">{toast.rawDetail}</pre>
             </Collapse>
           </div>
@@ -277,6 +290,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
 
       {/* Dismiss button */}
       <button
+        aria-label="Dismiss notification"
         onClick={onDismiss}
         className={clsx(
           'p-1 rounded shrink-0 transition-colors',

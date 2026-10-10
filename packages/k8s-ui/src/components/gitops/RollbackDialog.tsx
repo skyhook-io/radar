@@ -2,6 +2,7 @@ import { useState, useEffect, useId } from 'react'
 import { History, Loader2 } from 'lucide-react'
 
 import { DialogPortal } from '../ui/DialogPortal'
+import { AlertBanner } from '../ui/drawer-components'
 import { Tooltip } from '../ui/Tooltip'
 
 // =============================================================================
@@ -52,7 +53,6 @@ export function RollbackDialog({ open, appLabel, revision, historyId, disabledRe
         <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
           Argo will sync this application to a previous revision. This is a write operation on the cluster.
         </div>
-        {disabledReason && <p className="text-xs text-theme-text-secondary">{disabledReason}</p>}
         <dl className="grid grid-cols-[80px_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
           <dt className="text-theme-text-tertiary">Revision</dt>
           <dd className="min-w-0">
@@ -96,7 +96,9 @@ export function RollbackDialog({ open, appLabel, revision, historyId, disabledRe
           </label>
         </div>
       </div>
-      <div className="flex items-center justify-end gap-2 border-t border-theme-border bg-theme-base px-4 py-3">
+      <div className="border-t border-theme-border bg-theme-base px-4 py-3">
+        {disabledReason && <AlertBanner variant="warning" title="Action unavailable" message={disabledReason} />}
+        <div className="flex items-center justify-end gap-2">
         <button
           type="button"
           onClick={onCancel}
@@ -114,6 +116,7 @@ export function RollbackDialog({ open, appLabel, revision, historyId, disabledRe
           {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <History className="h-3.5 w-3.5" />}
           {dryRun ? 'Run dry-run' : 'Roll back'}
         </button>
+        </div>
       </div>
     </DialogPortal>
   )

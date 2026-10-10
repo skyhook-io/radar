@@ -5,7 +5,7 @@ import { useGitOpsActionCapabilities } from '../../api/client'
 
 export function GitOpsPermissionRowActions({ row, items }: { row: GitOpsRow; items: RowActionItem[] }) {
   const [open, setOpen] = useState(false)
-  const { disabledReasons } = useGitOpsActionCapabilities(row.kindName, row.namespace, row.name, open)
+  const { disabledReasons } = useGitOpsActionCapabilities(row.kindName, row.group, row.namespace, row.name, open)
   return <RowActionMenu onOpenChange={setOpen} items={items.map(item => {
     const action = item.key === 'hard-refresh' ? 'refresh' : item.key
     const reason = item.disabledReason || disabledReasons[action]

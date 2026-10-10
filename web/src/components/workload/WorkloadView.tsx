@@ -409,7 +409,7 @@ function useActionsBarProps(
   const fluxSuspendMutation = useFluxSuspend()
   const fluxResumeMutation = useFluxResume()
 
-  const { disabledReasons: gitOpsActionDisabledReasons } = useGitOpsActionCapabilities(kind, namespace, name)
+  const { disabledReasons: gitOpsActionDisabledReasons } = useGitOpsActionCapabilities(kind, group, namespace, name)
   const argoSyncMutation = useArgoSync()
   const argoRefreshMutation = useArgoRefresh()
   const argoSuspendMutation = useArgoSuspend()

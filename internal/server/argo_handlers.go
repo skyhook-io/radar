@@ -275,7 +275,12 @@ func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, acti
 	if errors.As(err, &denied) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		s.writeJSON(w, map[string]any{"error": msg, "code": "rbac_denied", "verb": denied.Verb, "group": denied.Group, "resource": denied.Resource, "namespace": denied.Namespace})
+		s.writeJSON(w, map[string]any{"error": msg, "error_code": "rbac_denied", "verb": denied.Verb, "group": denied.Group, "resource": denied.Resource, "namespace": denied.Namespace, "name": denied.Name, "kind": denied.Kind})
+		return
+	}
+	var admission *gitops.AdmissionDenied
+	if errors.As(err, &admission) {
+		s.writeErrorCode(w, status, "admission_denied", msg)
 		return
 	}
 	s.writeError(w, status, msg)

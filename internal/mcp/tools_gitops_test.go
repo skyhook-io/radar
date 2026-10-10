@@ -51,17 +51,33 @@ func TestManageGitOpsReportsExplicitPermissionDenied(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
 	dyn := setupMCPDynamicResource(t, gvr, "ApplicationList", k8s.APIResource{Group: gvr.Group, Version: gvr.Version, Kind: "Application", Name: gvr.Resource, Namespaced: true})
 	dyn.(*dynamicfake.FakeDynamicClient).PrependReactor("patch", "applications", func(ktesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "demo", errors.New("opaque-user cannot patch applications"))
+		return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "demo", errors.New(`User "opaque-user" cannot patch resource "applications"`))
 	})
 	result, _, err := handleManageGitOps(context.Background(), nil, manageGitOpsInput{Action: "refresh", Tool: "argocd", Namespace: "argocd", Name: "demo"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	decoded := decodeToolResult(t, result)
-	if !result.IsError || decoded["code"] != "rbac_denied" || decoded["verb"] != "patch" || decoded["resource"] != "applications" || decoded["namespace"] != "argocd" {
+	if !result.IsError || decoded["error_code"] != "rbac_denied" || decoded["verb"] != "patch" || decoded["resource"] != "applications" || decoded["namespace"] != "argocd" {
 		t.Fatalf("result=%+v", decoded)
 	}
 	if strings.Contains(decoded["error"].(string), "opaque-user") {
 		t.Fatalf("raw identity in summary: %v", decoded)
+	}
+}
+
+func TestManageGitOpsReportsAdmissionDenied(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	dyn := setupMCPDynamicResource(t, gvr, "ApplicationList", k8s.APIResource{Group: gvr.Group, Version: gvr.Version, Kind: "Application", Name: gvr.Resource, Namespaced: true})
+	dyn.(*dynamicfake.FakeDynamicClient).PrependReactor("patch", "applications", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "demo", errors.New(`admission webhook "validation.gatekeeper.sh" denied the request: missing owner`))
+	})
+	result, _, err := handleManageGitOps(context.Background(), nil, manageGitOpsInput{Action: "refresh", Tool: "argocd", Namespace: "argocd", Name: "demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded := decodeToolResult(t, result)
+	if !result.IsError || decoded["error_code"] != "admission_denied" || !strings.HasPrefix(decoded["error"].(string), "Rejected by an admission policy:") {
+		t.Fatalf("result=%v", decoded)
 	}
 }

@@ -783,15 +783,16 @@ function FluxActions({ disabledReasons, resource, data, onReconcile, isReconcili
   return (
     <>
       {onReconcile && (
-        <Tooltip content={disabledReasons?.reconcile || (isSuspended ? 'Cannot reconcile while suspended' : 'Trigger reconciliation')} delay={150}>
+        <Tooltip preserveWords content={disabledReasons?.reconcile || (isSuspended ? 'Cannot reconcile while suspended' : undefined)} disabled={!disabledReasons?.reconcile && !isSuspended} delay={150}>
           <button
-            onClick={() => onReconcile({
+            onClick={() => !disabledReasons?.reconcile && onReconcile({
               kind: resource.kind,
               namespace: resource.namespace,
               name: resource.name,
             })}
-            disabled={isReconciling || isSuspended || !!disabledReasons?.reconcile}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
+            disabled={isReconciling || isSuspended}
+            aria-disabled={isReconciling || isSuspended || !!disabledReasons?.reconcile}
+            className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isReconciling ? 'animate-spin' : ''}`} />
             {isReconciling ? 'Reconciling...' : 'Reconcile'}
@@ -800,15 +801,16 @@ function FluxActions({ disabledReasons, resource, data, onReconcile, isReconcili
       )}
 
       {hasSource && onSyncWithSource && (
-        <Tooltip content={disabledReasons?.['sync-with-source'] || (isSuspended ? 'Cannot sync while suspended' : 'Fetch latest from source, then reconcile')} delay={150}>
+        <Tooltip preserveWords content={disabledReasons?.['sync-with-source'] || (isSuspended ? 'Cannot sync while suspended' : undefined)} disabled={!disabledReasons?.['sync-with-source'] && !isSuspended} delay={150}>
           <button
-            onClick={() => onSyncWithSource({
+            onClick={() => !disabledReasons?.['sync-with-source'] && onSyncWithSource({
               kind: resource.kind,
               namespace: resource.namespace,
               name: resource.name,
             })}
-            disabled={isSyncing || isSuspended || !!disabledReasons?.['sync-with-source']}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors disabled:opacity-50"
+            disabled={isSyncing || isSuspended}
+            aria-disabled={isSyncing || isSuspended || !!disabledReasons?.['sync-with-source']}
+            className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
             {isSyncing ? 'Syncing...' : 'Sync with Source'}
@@ -818,15 +820,16 @@ function FluxActions({ disabledReasons, resource, data, onReconcile, isReconcili
 
       {isSuspended ? (
         onResume && (
-          <Tooltip content={disabledReasons?.resume || "Resume"}>
+          <Tooltip preserveWords content={disabledReasons?.resume} disabled={!disabledReasons?.resume}>
             <button
-              onClick={() => onResume({
+              onClick={() => !disabledReasons?.resume && onResume({
                 kind: resource.kind,
                 namespace: resource.namespace,
                 name: resource.name,
               })}
-              disabled={isResuming || !!disabledReasons?.resume}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
+              disabled={isResuming}
+              aria-disabled={isResuming || !!disabledReasons?.resume}
+              className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
             >
               <Play className="w-3.5 h-3.5" />
               {isResuming ? 'Resuming...' : 'Resume'}
@@ -835,15 +838,16 @@ function FluxActions({ disabledReasons, resource, data, onReconcile, isReconcili
         )
       ) : (
         onSuspend && (
-          <Tooltip content={disabledReasons?.suspend || "Suspend"}>
+          <Tooltip preserveWords content={disabledReasons?.suspend} disabled={!disabledReasons?.suspend}>
             <button
-              onClick={() => onSuspend({
+              onClick={() => !disabledReasons?.suspend && onSuspend({
                 kind: resource.kind,
                 namespace: resource.namespace,
                 name: resource.name,
               })}
-              disabled={isSuspending || !!disabledReasons?.suspend}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
+              disabled={isSuspending}
+              aria-disabled={isSuspending || !!disabledReasons?.suspend}
+              className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
             >
               <Pause className="w-3.5 h-3.5" />
               {isSuspending ? 'Suspending...' : 'Suspend'}
@@ -872,14 +876,15 @@ function ArgoActions({ disabledReasons, resource, data, onSync, isSyncing, onRef
   return (
     <>
       {onSync && (
-        <Tooltip content={disabledReasons?.sync || "Sync application"} delay={150}>
+        <Tooltip preserveWords content={disabledReasons?.sync} disabled={!disabledReasons?.sync} delay={150}>
           <button
-            onClick={() => onSync({
+            onClick={() => !disabledReasons?.sync && onSync({
               namespace: resource.namespace,
               name: resource.name,
             })}
-            disabled={isSyncing || !!disabledReasons?.sync}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
+            disabled={isSyncing}
+            aria-disabled={isSyncing || !!disabledReasons?.sync}
+            className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
             {isSyncing ? 'Syncing...' : 'Sync'}
@@ -888,15 +893,16 @@ function ArgoActions({ disabledReasons, resource, data, onSync, isSyncing, onRef
       )}
 
       {onRefresh && (
-        <Tooltip content={disabledReasons?.refresh || "Refresh (re-read from git)"} delay={150}>
+        <Tooltip preserveWords content={disabledReasons?.refresh} disabled={!disabledReasons?.refresh} delay={150}>
           <button
-            onClick={() => onRefresh({
+            onClick={() => !disabledReasons?.refresh && onRefresh({
               namespace: resource.namespace,
               name: resource.name,
               hard: false,
             })}
-            disabled={isRefreshing || !!disabledReasons?.refresh}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
+            disabled={isRefreshing}
+            aria-disabled={isRefreshing || !!disabledReasons?.refresh}
+            className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
             {isRefreshing ? 'Refreshing...' : 'Refresh'}
@@ -906,14 +912,15 @@ function ArgoActions({ disabledReasons, resource, data, onSync, isSyncing, onRef
 
       {hasAutomatedSync ? (
         onSuspend && (
-          <Tooltip content={disabledReasons?.suspend || "Suspend"}>
+          <Tooltip preserveWords content={disabledReasons?.suspend} disabled={!disabledReasons?.suspend}>
             <button
-              onClick={() => onSuspend({
+              onClick={() => !disabledReasons?.suspend && onSuspend({
                 namespace: resource.namespace,
                 name: resource.name,
               })}
-              disabled={isSuspending || !!disabledReasons?.suspend}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
+              disabled={isSuspending}
+              aria-disabled={isSuspending || !!disabledReasons?.suspend}
+              className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
             >
               <Pause className="w-3.5 h-3.5" />
               {isSuspending ? 'Suspending...' : 'Suspend'}
@@ -922,14 +929,15 @@ function ArgoActions({ disabledReasons, resource, data, onSync, isSyncing, onRef
         )
       ) : (
         onResume && (
-          <Tooltip content={disabledReasons?.resume || "Resume"}>
+          <Tooltip preserveWords content={disabledReasons?.resume} disabled={!disabledReasons?.resume}>
             <button
-              onClick={() => onResume({
+              onClick={() => !disabledReasons?.resume && onResume({
                 namespace: resource.namespace,
                 name: resource.name,
               })}
-              disabled={isResuming || !!disabledReasons?.resume}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
+              disabled={isResuming}
+              aria-disabled={isResuming || !!disabledReasons?.resume}
+              className="aria-disabled:opacity-50 aria-disabled:cursor-not-allowed flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
             >
               <Play className="w-3.5 h-3.5" />
               {isResuming ? 'Enabling...' : 'Enable Auto-Sync'}

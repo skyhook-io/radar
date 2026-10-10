@@ -8,8 +8,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	authv1 "k8s.io/api/authorization/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 
@@ -20,24 +20,42 @@ import (
 )
 
 type gitOpsActionCapability struct {
-	Allowed bool   `json:"allowed"`
-	Reason  string `json:"reason,omitempty"`
+	Allowed   *bool  `json:"allowed,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"`
+	Verb      string `json:"verb,omitempty"`
+	Group     string `json:"group,omitempty"`
+	Resource  string `json:"resource,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Kind      string `json:"kind,omitempty"`
+	Source    bool   `json:"source,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 type gitOpsAccessReview func(context.Context, authv1.ResourceAttributes) (bool, error)
 
-// handleGitOpsCapabilities reads the object as the caller and reviews named
-// API operations as that same identity. Lifecycle gates stay in the UI and the
-// operation engine; these advisory checks never authorize a write themselves.
+// handleGitOpsCapabilities reviews named API operations as the caller. Flux
+// targets are read as that identity to resolve source references. Lifecycle gates
+// stay in the UI and the operation engine; these advisory checks never authorize a write themselves.
 func (s *Server) handleGitOpsCapabilities(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	client := s.getDynamicClientForRequest(r)
-	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available")
-		return
+	kind := chi.URLParam(r, "kind")
+	argo := strings.EqualFold(kind, "applications") || strings.EqualFold(kind, "application")
+	var client dynamic.Interface
+	if !argo {
+		if _, err := gitops.ResolveFluxKind(kind); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		client = s.getDynamicClientForRequest(r)
+		if client == nil {
+			s.writeError(w, http.StatusServiceUnavailable, "cluster client not available")
+			return
+		}
 	}
+
 	review := func(ctx context.Context, attrs authv1.ResourceAttributes) (bool, error) {
 		kubeClient := k8s.GetClient()
 		if kubeClient == nil {
@@ -49,7 +67,7 @@ func (s *Server) handleGitOpsCapabilities(w http.ResponseWriter, r *http.Request
 			if err != nil {
 				return false, err
 			}
-			if status.EvaluationError != "" {
+			if !status.Allowed && status.EvaluationError != "" {
 				return false, fmt.Errorf("%s", status.EvaluationError)
 			}
 			return status.Allowed, nil
@@ -58,17 +76,10 @@ func (s *Server) handleGitOpsCapabilities(w http.ResponseWriter, r *http.Request
 		if err != nil {
 			return false, err
 		}
-		if result.Status.EvaluationError != "" {
+		if !result.Status.Allowed && result.Status.EvaluationError != "" {
 			return false, fmt.Errorf("%s", result.Status.EvaluationError)
 		}
 		return result.Status.Allowed, nil
-	}
-	kind := chi.URLParam(r, "kind")
-	if !strings.EqualFold(kind, "applications") && !strings.EqualFold(kind, "application") {
-		if _, err := gitops.ResolveFluxKind(kind); err != nil {
-			s.writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
 	}
 	capabilities, err := gitOpsCapabilities(r.Context(), client, chi.URLParam(r, "kind"), chi.URLParam(r, "namespace"), chi.URLParam(r, "name"), review)
 	if err != nil {
@@ -88,53 +99,59 @@ func gitOpsCapabilities(ctx context.Context, client dynamic.Interface, kind, nam
 			return nil, err
 		}
 	}
-	obj, err := client.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsForbidden(err) {
-			return nil, &gitops.PermissionDenied{Verb: "get", Group: entry.GVR.Group, Resource: entry.GVR.Resource, Namespace: namespace, Err: err}
+	var obj *unstructured.Unstructured
+	if !argo {
+		var err error
+		obj, err = client.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return nil, gitops.ClassifyPermissionError(err, "get", entry.GVR, namespace, name)
 		}
-		return nil, err
 	}
 	check := func(verb string, target gitops.FluxKindEntry, ns, targetName string) gitOpsActionCapability {
 		allowed, err := review(ctx, authv1.ResourceAttributes{Verb: verb, Group: target.GVR.Group, Resource: target.GVR.Resource, Namespace: ns, Name: targetName})
 		if err != nil {
-			return gitOpsActionCapability{Reason: "Couldn't verify your permissions. Try again."}
+			return gitOpsActionCapability{Reason: "Couldn't check your permissions — retrying"}
 		}
 		if allowed {
-			return gitOpsActionCapability{Allowed: true}
+			allowed := true
+			return gitOpsActionCapability{Allowed: &allowed}
 		}
-		label := "Flux " + target.Kind + " resources"
-		if argo && target.Kind == "Application" {
-			label = "Argo CD Applications"
-		}
-		return gitOpsActionCapability{Reason: fmt.Sprintf("Your role can't %s %s in %s. Ask your cluster admin for access.", verb, label, ns)}
+		denied := false
+		return gitOpsActionCapability{Allowed: &denied, ErrorCode: "rbac_denied", Verb: verb, Group: target.GVR.Group, Resource: target.GVR.Resource, Namespace: ns, Name: targetName, Kind: target.Kind}
 	}
 	patch := check("patch", entry, namespace, name)
 	actions := map[string]gitOpsActionCapability{}
 	if argo {
-		for _, action := range []string{"sync", "refresh", "terminate", "suspend", "resume", "rollback", "validate"} {
+		actions["refresh"] = patch
+		read := check("get", entry, namespace, name)
+		for _, action := range []string{"sync", "terminate", "suspend", "resume", "rollback", "validate"} {
 			actions[action] = patch
+			if (read.Allowed != nil && !*read.Allowed) || (read.Allowed == nil && (patch.Allowed == nil || *patch.Allowed)) {
+				actions[action] = read
+			}
 		}
 		return actions, nil
 	}
+
 	for _, action := range []string{"reconcile", "suspend", "resume"} {
 		actions[action] = patch
 	}
 	if entry.Kind == "Kustomization" || entry.Kind == "HelmRelease" {
 		source, err := gitops.FluxSyncSource(obj, entry, namespace, name)
 		sourceCapability := patch
-		if err != nil {
-			sourceCapability = gitOpsActionCapability{Reason: err.Error()}
-		} else if patch.Allowed {
+		if err != nil && (patch.Allowed == nil || *patch.Allowed) {
+			sourceCapability = gitOpsActionCapability{Reason: "Couldn't check your permissions — retrying"}
+		} else if err == nil && patch.Allowed != nil && *patch.Allowed {
 			sourceEntry, err := gitops.ResolveFluxKind(source.Kind)
 			if err != nil {
 				return nil, err
 			}
 			sourceCapability = check("get", sourceEntry, source.Namespace, source.Name)
-			if sourceCapability.Allowed {
+			if sourceCapability.Allowed != nil && *sourceCapability.Allowed {
 				sourceCapability = check("patch", sourceEntry, source.Namespace, source.Name)
 			}
 		}
+		sourceCapability.Source = sourceCapability.Resource != entry.GVR.Resource
 		actions["sync-with-source"] = sourceCapability
 	}
 	return actions, nil

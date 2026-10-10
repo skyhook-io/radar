@@ -25,6 +25,11 @@ function actionButton(html: string, label: string): string {
 describe('GitOps permission gates on rendered controls', () => {
   it('disables refresh and sync while retaining buttons on the detail page', () => {
     const html = renderToString(<GitOpsDetailLayout {...base} actionDisabledReasons={{ sync: reason, refresh: reason, suspend: reason }} />)
+    expect(html).toContain('Some actions restricted for your role')
+    expect(html).toContain('Action permissions')
+    expect(html).toContain('cloud.defaultRbac.gitopsActions')
+    expect(html).toContain('applications.argoproj.io')
+    expect(html).not.toContain('Sync with source also needs')
     for (const label of ['Sync…', 'Refresh', 'Hard refresh', 'Disable auto-sync']) {
       expect(actionButton(html, label)).toContain('disabled=""')
     }
@@ -41,7 +46,7 @@ describe('GitOps permission gates on rendered controls', () => {
       gitOpsActionDisabledReasons={{ sync: reason, refresh: reason, suspend: reason }}
     />)
     for (const label of ['Sync', 'Refresh', 'Suspend']) {
-      expect(actionButton(html, label)).toContain('disabled=""')
+      expect(actionButton(html, label)).toContain('aria-disabled="true"')
     }
   })
 })

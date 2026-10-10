@@ -1,4 +1,4 @@
-import { useEffect, type ComponentType, type ReactNode } from 'react'
+import { useEffect, useState, type ComponentType, type ReactNode } from 'react'
 import { ArrowDownUp, Clock3, GitBranch, GitCommit, Loader2, Pause, Play, RefreshCw, Settings, Trash2, XCircle, Zap } from 'lucide-react'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { PaneLoader } from '../ui/PaneLoader'
@@ -265,6 +265,9 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
   // nothing to open, so the header must not announce expanded.
   const helmValuesShown = !!helmValuesOpen && !!helmValuesContent
   const helmValuesDisclosure = useDisclosure(helmValuesShown)
+  const [permissionsOpen, setPermissionsOpen] = useState(false)
+  const permissionsDisclosure = useDisclosure(permissionsOpen)
+  const denialReasons = [...new Set(Object.values(props.actionDisabledReasons || {}).filter((reason): reason is string => !!reason))]
 
   // Document title side effect — opt-in so hub-web can take ownership of
   // its own title format.
@@ -350,6 +353,24 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   </span>
                 )}
               </div>
+              {denialReasons.length > 0 && (
+                <div className="mt-2 text-xs text-theme-text-secondary">
+                  <button type="button" {...permissionsDisclosure.buttonProps} onClick={() => setPermissionsOpen(value => !value)} className="inline-flex items-center gap-1 hover:text-theme-text-primary">
+                    Some actions restricted for your role · <span className="text-accent-text">Why?</span>
+                    <CollapseChevron open={permissionsOpen} />
+                  </button>
+                  <Collapse open={permissionsOpen} id={permissionsDisclosure.panelId}>
+                    <div className="mt-2 max-w-xl space-y-2 rounded border border-theme-border bg-theme-surface p-3">
+                      {denialReasons.map(reason => <p key={reason}>{reason}</p>)}
+                      <p>An admin can grant access with the chart's <code>cloud.defaultRbac.gitopsActions</code> setting or a RoleBinding allowing {isArgoApp ? 'get/patch on applications.argoproj.io' : `get/patch on ${identity.kind}.${identity.group}`} in <span className="whitespace-nowrap">{identity.namespace}</span>.{isFluxWorkload && ' Sync with source also needs get/patch on its source in the source namespace.'}</p>
+                      <div className="flex flex-wrap gap-3">
+                        <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/docs/gitops.md#action-permissions" target="_blank" rel="noopener noreferrer">Action permissions</a>
+                        <a className="text-accent-text hover:underline" href="https://github.com/skyhook-io/radar/blob/main/deploy/helm/radar/README.md#optional-cloud-owner-gitops-actions" target="_blank" rel="noopener noreferrer">Chart RBAC settings</a>
+                      </div>
+                    </div>
+                  </Collapse>
+                </div>
+              )}
               {/* Spec/config row */}
               <div className="mt-2 flex flex-wrap gap-x-5 gap-y-0.5 text-[11px] text-theme-text-tertiary">
                 <AppFact label="Project" value={detail.project || '-'} />
@@ -638,9 +659,9 @@ function ActionButton({
     : danger
       ? 'border border-red-500/40 bg-red-500/10 text-red-500 hover:bg-red-500/20'
       : 'border border-theme-border bg-theme-surface text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
-  const tooltip = disabled && disabledReason ? disabledReason : (description || label)
+  const tooltip = disabled && disabledReason ? disabledReason : description
   return (
-    <Tooltip content={tooltip}>
+    <Tooltip content={tooltip} disabled={!tooltip} preserveWords={!!disabledReason}>
       <button
         type="button"
         onClick={onClick}

@@ -125,7 +125,8 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
               <button
                 type="button"
                 role="menuitem"
-                disabled={item.disabled || item.pending}
+                disabled={item.pending}
+                aria-disabled={item.disabled || item.pending}
                 onClick={(e) => {
                   e.stopPropagation()
                   if (item.disabled || item.pending) return
@@ -158,7 +159,7 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
                   // like enabled items — the Tooltip wrapper is inline-flex and
                   // would otherwise shrink-wrap, and the menu inherits text-right
                   // from the table's actions cell, shoving the item to the edge.
-                  <Tooltip content={item.disabledReason} position="left" wrapperClassName="w-full">
+                  <Tooltip preserveWords content={item.disabledReason} position="left" wrapperClassName="w-full">
                     {content}
                   </Tooltip>
                 ) : (

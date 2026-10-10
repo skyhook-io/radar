@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, CircleAlert, Loader2, RefreshCw, ShieldChe
 
 import { DialogPortal } from '../ui/DialogPortal'
 import { Input } from '../ui/Input'
+import { AlertBanner } from '../ui/drawer-components'
 import { Tooltip } from '../ui/Tooltip'
 import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import type { GitOpsInsightRef } from '../../types/gitops-insights'
@@ -165,14 +166,15 @@ export function SyncOptionsDialog({ open, appLabel, resource, disabledReason, pe
         {richResourceValidation && (validationPending || validationResult || validationError) && (
           <ValidationResult pending={!!validationPending} result={validationResult} error={validationError} rawError={validationRawError} />
         )}
-        {disabledReason && <p className="text-xs text-theme-text-secondary">{disabledReason}</p>}
         {richResourceValidation && !validationPending && operationInProgress && (
           <p className="text-[11px] leading-relaxed text-theme-text-secondary">
             Argo is finishing the current operation. Sync becomes available when it releases the operation slot.
           </p>
         )}
       </div>
-      <div className="flex items-center justify-end gap-2 border-t border-theme-border bg-theme-base px-4 py-3">
+      <div className="border-t border-theme-border bg-theme-base px-4 py-3">
+        {disabledReason && <AlertBanner variant="warning" title="Action unavailable" message={disabledReason} />}
+        <div className="flex items-center justify-end gap-2">
         <button
           type="button"
           onClick={onCancel}
@@ -195,6 +197,7 @@ export function SyncOptionsDialog({ open, appLabel, resource, disabledReason, pe
           </Tooltip>
         )}
         <PrimaryButton onClick={submit} disabled={optionsDisabled} icon={pending ? Loader2 : RefreshCw} loading={pending} label={dryRun && !richResourceValidation ? 'Run dry-run' : resource ? 'Sync resource' : 'Sync now'} />
+        </div>
       </div>
     </DialogPortal>
   )

@@ -19,6 +19,7 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	ktesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -37,7 +38,7 @@ func TestGitOpsCapabilitiesArgo(t *testing.T) {
 			calls := 0
 			actions, err := gitOpsCapabilities(context.Background(), client, "applications", "argocd", "demo", func(_ context.Context, a authv1.ResourceAttributes) (bool, error) {
 				calls++
-				if a.Group != "argoproj.io" || a.Resource != "applications" || a.Name != "demo" || a.Namespace != "argocd" || a.Verb != "patch" {
+				if a.Group != "argoproj.io" || a.Resource != "applications" || a.Name != "demo" || a.Namespace != "argocd" || (a.Verb != "patch" && a.Verb != "get") {
 					t.Fatalf("wrong SAR: %+v", a)
 				}
 				return tc.allowed, tc.err
@@ -45,11 +46,17 @@ func TestGitOpsCapabilitiesArgo(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if calls != 1 || len(actions) != 7 {
+			if calls != 2 || len(actions) != 7 {
 				t.Fatalf("calls=%d actions=%v", calls, actions)
 			}
 			for action, capability := range actions {
-				if capability.Allowed != tc.allowed || (!tc.allowed && capability.Reason == "") {
+				if tc.err != nil {
+					if capability.Allowed != nil || capability.Reason == "" {
+						t.Errorf("unknown %s=%+v", action, capability)
+					}
+					continue
+				}
+				if capability.Allowed == nil || *capability.Allowed != tc.allowed || (!tc.allowed && capability.ErrorCode != "rbac_denied") {
 					t.Errorf("%s=%+v", action, capability)
 				}
 			}
@@ -75,10 +82,10 @@ func TestGitOpsCapabilitiesFluxPartialAndCrossNamespaceSource(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !actions["reconcile"].Allowed || !actions["suspend"].Allowed || !actions["resume"].Allowed {
+			if !(*actions["reconcile"].Allowed) || !(*actions["suspend"].Allowed) || !(*actions["resume"].Allowed) {
 				t.Fatalf("local actions denied: %v", actions)
 			}
-			if actions["sync-with-source"].Allowed != (deniedVerb == "") {
+			if *actions["sync-with-source"].Allowed != (deniedVerb == "") {
 				t.Fatalf("source permission not enforced: %v, calls=%v", actions, calls)
 			}
 		})
@@ -87,7 +94,7 @@ func TestGitOpsCapabilitiesFluxPartialAndCrossNamespaceSource(t *testing.T) {
 
 func TestGitOpsCapabilitiesUnreadableTarget(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
-	_, err := gitOpsCapabilities(context.Background(), client, "applications", "argocd", "missing", func(context.Context, authv1.ResourceAttributes) (bool, error) {
+	_, err := gitOpsCapabilities(context.Background(), client, "kustomizations", "argocd", "missing", func(context.Context, authv1.ResourceAttributes) (bool, error) {
 		t.Fatal("SAR after failed GET")
 		return true, nil
 	})
@@ -105,25 +112,34 @@ func TestWriteGitOpsPermissionDenied(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if w.Code != 403 || w.Header().Get("Content-Type") != "application/json" || body["code"] != "rbac_denied" || body["verb"] != "get" || body["namespace"] != "sources" || body["resource"] != "gitrepositories" || body["group"] != "source.toolkit.fluxcd.io" {
+	if w.Code != 403 || w.Header().Get("Content-Type") != "application/json" || body["error_code"] != "rbac_denied" || body["verb"] != "get" || body["namespace"] != "sources" || body["resource"] != "gitrepositories" || body["group"] != "source.toolkit.fluxcd.io" {
 		t.Fatalf("response=%d %v %v", w.Code, w.Header(), body)
 	}
 }
 
 func TestHandleGitOpsCapabilitiesReviewsCaller(t *testing.T) {
-	for _, allowed := range []bool{false, true} {
-		t.Run(fmt.Sprint(allowed), func(t *testing.T) {
+	for _, tc := range []struct {
+		allowed bool
+		local   bool
+	}{{false, false}, {true, false}, {false, true}, {true, true}} {
+		allowed := tc.allowed
+		t.Run(fmt.Sprintf("allowed=%t/local=%t", allowed, tc.local), func(t *testing.T) {
 			sarCalls := 0
 			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				if r.Method == http.MethodGet {
+					t.Error("Argo capabilities should review actions without reading the target")
 					if r.Header.Get("Impersonate-User") != "alice" || r.Header.Get("Impersonate-Group") != "radar:viewer" {
 						t.Errorf("GET not impersonated: %v", r.Header)
 					}
 					json.NewEncoder(w).Encode(map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Application", "metadata": map[string]any{"name": "demo", "namespace": "argocd"}})
 					return
 				}
-				if r.Method != http.MethodPost || r.URL.Path != "/apis/authorization.k8s.io/v1/subjectaccessreviews" {
+				path := "/apis/authorization.k8s.io/v1/subjectaccessreviews"
+				if tc.local {
+					path = "/apis/authorization.k8s.io/v1/selfsubjectaccessreviews"
+				}
+				if r.Method != http.MethodPost || r.URL.Path != path {
 					t.Errorf("unexpected review request: %s %s", r.Method, r.URL.Path)
 				}
 				var review authv1.SubjectAccessReview
@@ -133,12 +149,24 @@ func TestHandleGitOpsCapabilitiesReviewsCaller(t *testing.T) {
 					return
 				}
 				sarCalls++
+				if tc.local && (review.Spec.User != "" || len(review.Spec.Groups) != 0) {
+					t.Errorf("SSAR supplied a subject: %+v", review.Spec)
+				}
 				a := review.Spec.ResourceAttributes
-				if review.Spec.User != "alice" || len(review.Spec.Groups) != 1 || review.Spec.Groups[0] != "radar:viewer" || a.Name != "demo" || a.Namespace != "argocd" || a.Resource != "applications" || a.Group != "argoproj.io" || a.Verb != "patch" {
+				if !tc.local && (review.Spec.User != "alice" || len(review.Spec.Groups) != 2 || review.Spec.Groups[0] != "radar:viewer" || review.Spec.Groups[1] != "system:authenticated") {
+					t.Errorf("wrong caller identity: %+v", review.Spec)
+				}
+				if a.Name != "demo" || a.Namespace != "argocd" || a.Resource != "applications" || a.Group != "argoproj.io" || (a.Verb != "patch" && a.Verb != "get") {
 					t.Errorf("wrong caller SAR: %+v", review.Spec)
 				}
 				review.TypeMeta = metav1.TypeMeta{APIVersion: "authorization.k8s.io/v1", Kind: "SubjectAccessReview"}
+				if tc.local {
+					review.Kind = "SelfSubjectAccessReview"
+				}
 				review.Status.Allowed = allowed
+				if allowed {
+					review.Status.EvaluationError = "another authorizer failed"
+				}
 				json.NewEncoder(w).Encode(review)
 			}))
 			defer api.Close()
@@ -157,6 +185,9 @@ func TestHandleGitOpsCapabilitiesReviewsCaller(t *testing.T) {
 			router := chi.NewRouter()
 			router.Get("/gitops/capabilities/{kind}/{namespace}/{name}", (&Server{}).handleGitOpsCapabilities)
 			request := requestWithUser(http.MethodGet, "/gitops/capabilities/applications/argocd/demo", &auth.User{Username: "alice", Groups: []string{"radar:viewer"}})
+			if tc.local {
+				request = httptest.NewRequest(http.MethodGet, "/gitops/capabilities/applications/argocd/demo", nil)
+			}
 			w := httptest.NewRecorder()
 			router.ServeHTTP(w, request)
 			var body struct {
@@ -165,9 +196,63 @@ func TestHandleGitOpsCapabilitiesReviewsCaller(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 				t.Fatal(err)
 			}
-			if w.Code != 200 || sarCalls != 1 || body.Actions["refresh"].Allowed != allowed {
+			if w.Code != 200 || sarCalls != 2 || *body.Actions["refresh"].Allowed != allowed {
 				t.Fatalf("response=%d %s SAR calls=%d", w.Code, w.Body, sarCalls)
 			}
 		})
+	}
+}
+
+func TestGitOpsCapabilitiesForbiddenTarget(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	client.PrependReactor("get", "kustomizations", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "kustomize.toolkit.fluxcd.io", Resource: "kustomizations"}, "demo", errors.New(`User "alice" cannot get resource "kustomizations"`))
+	})
+	_, err := gitOpsCapabilities(context.Background(), client, "kustomizations", "apps", "demo", func(context.Context, authv1.ResourceAttributes) (bool, error) { return true, nil })
+	w := httptest.NewRecorder()
+	(&Server{}).writeGitOpsError(w, err, "gitops", "capabilities", "apps", "demo")
+	var body map[string]any
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if w.Code != 403 || body["error_code"] != "rbac_denied" || body["verb"] != "get" {
+		t.Fatalf("%d %v", w.Code, body)
+	}
+}
+
+func TestGitOpsCapabilitiesRefreshDoesNotRequireGet(t *testing.T) {
+	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+	actions, err := gitOpsCapabilities(context.Background(), client, "applications", "argocd", "demo", func(_ context.Context, attrs authv1.ResourceAttributes) (bool, error) {
+		return attrs.Verb == "patch", nil
+	})
+	if err != nil || !*actions["refresh"].Allowed || *actions["sync"].Allowed || actions["sync"].Verb != "get" || len(client.Actions()) != 0 {
+		t.Fatalf("%v %v", actions, err)
+	}
+}
+
+func TestWriteGitOpsAdmissionDenied(t *testing.T) {
+	original := apierrors.NewForbidden(schema.GroupResource{Group: "argoproj.io", Resource: "applications"}, "demo", errors.New(`admission webhook "validation.gatekeeper.sh" denied the request: missing owner`))
+	err := gitops.ClassifyPermissionError(original, "patch", schema.GroupVersionResource{Group: "argoproj.io", Resource: "applications"}, "argocd", "demo")
+	w := httptest.NewRecorder()
+	(&Server{}).writeGitOpsError(w, err, "argo", "refresh", "argocd", "demo")
+	var body map[string]any
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if w.Code != 403 || body["error_code"] != "admission_denied" {
+		t.Fatalf("%d %v", w.Code, body)
+	}
+}
+
+func TestGitOpsCapabilitiesMissingSourceIsUnknown(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization", "metadata": map[string]any{"name": "demo", "namespace": "apps"}}}
+	for _, allowed := range []bool{false, true} {
+		actions, err := gitOpsCapabilities(context.Background(), dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), obj), "kustomizations", "apps", "demo", func(context.Context, authv1.ResourceAttributes) (bool, error) { return allowed, nil })
+		capability := actions["sync-with-source"]
+		if err != nil {
+			t.Fatal(err)
+		}
+		if allowed && (capability.Allowed != nil || capability.Reason != "Couldn't check your permissions — retrying") {
+			t.Fatalf("raw source resolution error: %+v", capability)
+		}
+		if !allowed && (capability.Allowed == nil || *capability.Allowed) {
+			t.Fatalf("lost definite patch denial: %+v", capability)
+		}
 	}
 }
