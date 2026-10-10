@@ -207,6 +207,12 @@ const NEGATIVE_POLARITY_TYPES = new Set([
   'NetworkUnavailable',
   // Core K8s — Pod
   'DisruptionTarget',
+  // Core K8s — Namespace
+  'NamespaceDeletionDiscoveryFailure',
+  'NamespaceDeletionGroupVersionParsingFailure',
+  'NamespaceDeletionContentFailure',
+  'NamespaceContentRemaining',
+  'NamespaceFinalizersRemaining',
   // Core K8s — workloads
   'ReplicaFailure',
   // NPD — upstream default configs

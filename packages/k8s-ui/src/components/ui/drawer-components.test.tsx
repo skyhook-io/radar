@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { EventsSection, ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection } from './drawer-components'
+import { defaultConditionTone, EventsSection, ProblemAlerts, OperationalIssuesShownContext, RelatedResourcesSection } from './drawer-components'
 
 const problems = [
   { color: 'red' as const, message: 'Application is Degraded' },
@@ -103,5 +103,19 @@ describe('versioned dependency projections', () => {
   it('retains navigation controls for identically named resources from distinct API groups', () => {
     const html = renderToString(<RelatedResourcesSection relationships={{ dependencies: [issuer, { ...issuer, group: 'other.example.com' }, issuer] }} onNavigate={() => {}} />)
     expect(html.match(/<button/g)).toHaveLength(3)
+  })
+})
+
+describe('namespace deletion condition polarity', () => {
+  it.each([
+    'NamespaceDeletionDiscoveryFailure',
+    'NamespaceDeletionGroupVersionParsingFailure',
+    'NamespaceDeletionContentFailure',
+    'NamespaceContentRemaining',
+    'NamespaceFinalizersRemaining',
+  ])('%s treats True as a blocker and False as cleared', (type) => {
+    expect(defaultConditionTone({ type, status: 'True' })).toBe('fail')
+    expect(defaultConditionTone({ type, status: 'False' })).toBe('ok')
+    expect(defaultConditionTone({ type, status: 'Unknown' })).toBe('unknown')
   })
 })
