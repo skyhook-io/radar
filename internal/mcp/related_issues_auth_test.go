@@ -2,16 +2,21 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/karpenter"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestMCPRelatedIssuesAuthorizeNodeClassSubject(t *testing.T) {
@@ -108,6 +113,64 @@ func TestTerminationInventoryRequiresExactListPermissions(t *testing.T) {
 		perms.SetCanI("list", tc.group, tc.resource, tc.namespace, true)
 		if !access(tc.group, tc.resource, tc.namespace) {
 			t.Fatalf("readable inventory hidden: %+v", tc)
+		}
+	}
+}
+
+func TestMCPIssuesHandlerPassesTerminationListAuthorizer(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetResourceCache)
+
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	gvr := schema.GroupVersionResource{Group: "widgets.example.com", Version: "v1", Resource: "widgets"}
+	widget := &unstructured.Unstructured{}
+	widget.SetAPIVersion(gvr.Group + "/" + gvr.Version)
+	widget.SetKind("Widget")
+	widget.SetName("stuck")
+	widget.SetNamespace("team")
+	widget.SetUID("widget-uid")
+	widget.SetCreationTimestamp(metav1.NewTime(time.Now().Add(-24 * time.Hour)))
+	widget.SetDeletionTimestamp(&metav1.Time{Time: time.Now().Add(-2 * time.Hour)})
+	widget.SetFinalizers([]string{"widgets.example.com/cleanup"})
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, widget)
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, IsCRD: true, Verbs: []string{"list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	dc := k8s.GetDynamicResourceCache()
+	if err := dc.EnsureWatching(gvr); err != nil {
+		t.Fatal(err)
+	}
+	if !dc.WaitForSync(gvr, 2*time.Second) {
+		t.Fatal("Widget cache did not sync")
+	}
+
+	ctx := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "termination-reader"})
+	perms := &pkgauth.UserPermissions{AllowedNamespaces: []string{"team"}}
+	perms.SetCanI("get", gvr.Group, gvr.Resource, "team", true)
+	getPermCache().Set("termination-reader", nil, perms)
+	t.Cleanup(func() { getPermCache().Invalidate() })
+
+	for _, allowed := range []bool{false, true} {
+		perms.SetCanI("list", gvr.Group, gvr.Resource, "team", allowed)
+		result, _, err := handleIssuesTool(ctx, nil, issuesInput{Namespace: "team", Kind: "Widget"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response issuesapi.Response
+		if err := json.Unmarshal([]byte(extractText(t, result)), &response); err != nil {
+			t.Fatal(err)
+		}
+		if !allowed {
+			if len(response.Issues) != 0 {
+				t.Fatalf("denied subject inventory leaked: %+v", response.Issues)
+			}
+			continue
+		}
+		if len(response.Issues) != 1 || response.Issues[0].Category != issuesapi.CategoryTerminationStuck || response.Issues[0].Name != "stuck" {
+			t.Fatalf("authorized handler must compose CR termination with CanListResource: %+v", response.Issues)
 		}
 	}
 }

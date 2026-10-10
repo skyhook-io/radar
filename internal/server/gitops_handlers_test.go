@@ -7,11 +7,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -285,5 +287,27 @@ func TestGitOpsFinalizerEmptyOwnerNamespace(t *testing.T) {
 	root.SetAPIVersion("operator.victoriametrics.com/v1")
 	if got := resolver.FinalizerOwnerStatus("apps.victoriametrics.com/finalizer", root); got != "" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestGitOpsFinalizerHealthDuringControllerRollout(t *testing.T) {
+	pod := makePodWithStatus(corev1.PodRunning, corev1.ContainerStatus{Ready: true})
+	pod.SetName("rollout-source-controller")
+	pod.SetNamespace("flux-system")
+	pod.SetLabels(map[string]string{"app": "source-controller"})
+	pod.SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
+	if err := k8s.InitTestResourceCache(fake.NewClientset(pod)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatal(err)
+		}
+	})
+	resolver := &insightsResolver{cache: k8s.GetResourceCache()}
+	root := &unstructured.Unstructured{}
+	root.SetAPIVersion("source.toolkit.fluxcd.io/v1")
+	if got := resolver.FinalizerOwnerStatus("finalizers.source.toolkit.fluxcd.io", root); got != "source-controller is healthy (1 pod ready)" {
+		t.Fatalf("rollout changed GitOps controller health text: %q", got)
 	}
 }

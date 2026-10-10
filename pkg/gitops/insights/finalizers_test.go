@@ -14,6 +14,8 @@ func TestMatchesFinalizerController(t *testing.T) {
 		labels                           map[string]string
 		want                             bool
 	}{
+		{name: "AWS node class", group: "karpenter.k8s.aws", finalizer: "karpenter.k8s.aws/termination", workload: "karpenter", want: true},
+		{name: "Azure node class", group: "karpenter.azure.com", finalizer: "karpenter.azure.com/termination", workload: "karpenter", want: true},
 		{name: "karpenter deployment", group: "karpenter.sh", finalizer: "karpenter.sh/termination", workload: "karpenter", want: true},
 		{name: "catalog label", group: "operator.victoriametrics.com", finalizer: "apps.victoriametrics.com/finalizer", workload: "custom", labels: map[string]string{"app.kubernetes.io/name": "victoria-metrics-operator"}, want: true},
 		{name: "catalog wrong group", group: "unrelated.test", finalizer: "apps.victoriametrics.com/finalizer", workload: "victoria-metrics-operator"},
@@ -29,6 +31,17 @@ func TestMatchesFinalizerController(t *testing.T) {
 			workload := &metav1.ObjectMeta{Name: tt.workload, Labels: tt.labels}
 			if got := MatchesFinalizerController(tt.finalizer, root, workload); got != tt.want {
 				t.Fatalf("got %v want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveKarpenterProviderFinalizerOwner(t *testing.T) {
+	for _, key := range []string{"karpenter.sh/termination", "karpenter.sh/custom", "karpenter.k8s.aws/termination", "karpenter.azure.com/termination"} {
+		t.Run(key, func(t *testing.T) {
+			owner := ResolveFinalizerOwner(key, &unstructured.Unstructured{})
+			if owner == nil || owner.Controller != "karpenter" || owner.Namespace != "" || owner.SelectorKey != "app.kubernetes.io/name" || owner.SelectorValue != "karpenter" {
+				t.Fatalf("got owner %+v", owner)
 			}
 		})
 	}

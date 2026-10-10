@@ -501,9 +501,11 @@ subjects. Dashboard health summaries do not include this CR scan.
 
 The cause names the finalizers and elapsed deletion age. Controller observations
 reuse the Argo/Flux catalog, include VictoriaMetrics and Karpenter, and conservatively match an
-exact finalizer domain/API group to operator workload names or labels. A matching
-healthy controller is an observation, not proof that cleanup works; its action
-suggests checking logs and offers no finalizer-removal patch. CrashLoopBackOff,
+exact finalizer domain/API group to operator workload names or labels. Any ready pod of a matching
+controller suppresses finalizer-removal patches and directs the action to logs and
+permissions, including during rollouts or when another replica is crashing. This
+is an observation, not proof that cleanup works; only a fully healthy controller
+caps severity at warning. CrashLoopBackOff,
 Pending and degraded controllers use the same health summary as GitOps details. A missing match says
 which namespace or watched cluster was searched, never that the controller is
 certainly gone. Incomplete or unreadable controller evidence, or no confident

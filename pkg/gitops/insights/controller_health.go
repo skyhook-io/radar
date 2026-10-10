@@ -5,6 +5,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
+// ControllerPodHealth summarizes readiness and failure signals from controller pods.
 type ControllerPodHealth struct {
 	Ready       int
 	Total       int
@@ -13,6 +14,8 @@ type ControllerPodHealth struct {
 	CrashReason string
 }
 
+// SummarizeControllerPods counts the supplied pods without filtering their lifecycle.
+// Callers that require only active pods must filter before calling.
 func SummarizeControllerPods(pods []*corev1.Pod) ControllerPodHealth {
 	out := ControllerPodHealth{Total: len(pods)}
 	for _, p := range pods {
@@ -25,7 +28,7 @@ func SummarizeControllerPods(pods []*corev1.Pod) ControllerPodHealth {
 				break
 			}
 		}
-		ready := p.Status.Phase == corev1.PodRunning && p.DeletionTimestamp == nil
+		ready := p.Status.Phase == corev1.PodRunning
 		for _, cs := range p.Status.ContainerStatuses {
 			if !cs.Ready {
 				ready = false

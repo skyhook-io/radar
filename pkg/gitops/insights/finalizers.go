@@ -46,9 +46,10 @@ type FinalizerOwner struct {
 //
 // Returns nil when the finalizer isn't recognized — caller should
 // degrade gracefully (skip the controller-health enrichment, keep the
-// rest of the Issue intact).
+// rest of the Issue intact). Namespace may be empty; callers must not use
+// an empty namespace to list controller pods cluster-wide.
 func ResolveFinalizerOwner(finalizer string, root *unstructured.Unstructured) *FinalizerOwner {
-	if finalizer == "karpenter.sh/termination" || strings.HasPrefix(finalizer, "karpenter.sh/") {
+	if strings.HasPrefix(finalizer, "karpenter.sh/") || strings.HasPrefix(finalizer, "karpenter.k8s.aws/") || strings.HasPrefix(finalizer, "karpenter.azure.com/") {
 		return &FinalizerOwner{Controller: "karpenter", SelectorKey: "app.kubernetes.io/name", SelectorValue: "karpenter"}
 	}
 	switch finalizer {

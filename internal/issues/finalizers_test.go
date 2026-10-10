@@ -28,6 +28,7 @@ func TestFinalizerOwnerObservation(t *testing.T) {
 		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "widget-pod", Namespace: "operators", Labels: map[string]string{"app": "widget-controller"}}, Status: corev1.PodStatus{Phase: corev1.PodRunning}},
 		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "vm-pod", Namespace: "custom-vm", Labels: map[string]string{"app": "vm-controller"}}, Status: corev1.PodStatus{Phase: corev1.PodRunning}},
 		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "finished", Namespace: "flux-system", Labels: map[string]string{"app": "helm-controller"}}, Status: corev1.PodStatus{Phase: corev1.PodSucceeded}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "deleting", Namespace: "flux-system", Labels: map[string]string{"app": "helm-controller"}, DeletionTimestamp: &metav1.Time{Time: time.Now()}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Ready: true}}}},
 	}
 	for _, tc := range []struct {
 		token  string
@@ -53,12 +54,14 @@ func TestFinalizerOwnerObservation(t *testing.T) {
 	}{
 		{name: "catalog present custom namespace", finalizer: "apps.victoriametrics.com/finalizer", group: "operator.victoriametrics.com", want: "custom is healthy (1 pod ready) in namespace custom-vm"},
 		{name: "catalog absent", finalizer: "finalizers.kustomize.toolkit.fluxcd.io", group: "kustomize.toolkit.fluxcd.io", want: "kustomize-controller is not running"},
-		{name: "completed is not running", finalizer: "finalizers.helm.toolkit.fluxcd.io", group: "helm.toolkit.fluxcd.io", want: "is not running"},
+		{name: "completed and deleting are not running", finalizer: "finalizers.helm.toolkit.fluxcd.io", group: "helm.toolkit.fluxcd.io", want: "is not running"},
 		{name: "heuristic present", finalizer: "widgets.example.com/cleanup", group: "widgets.example.com", want: "release-widgets-operator is healthy (1 pod ready)"},
 		{name: "crashloop is not running", finalizer: "crashes.example.com/cleanup", group: "crashes.example.com", want: "crashes-operator is CrashLoopBackOff (1/1 pods)"},
 		{name: "pending", finalizer: "pending.example.com/cleanup", group: "pending.example.com", want: "pending-operator is pending start"},
 		{name: "degraded", finalizer: "degraded.example.com/cleanup", group: "degraded.example.com", want: "degraded-operator is degraded (0/1 pods ready)"},
 		{name: "karpenter", finalizer: "karpenter.sh/termination", group: "karpenter.sh", want: "karpenter is healthy (1 pod ready)"},
+		{name: "karpenter AWS provider", finalizer: "karpenter.k8s.aws/termination", group: "karpenter.k8s.aws", want: "karpenter is healthy (1 pod ready)"},
+		{name: "karpenter Azure provider", finalizer: "karpenter.azure.com/termination", group: "karpenter.azure.com", want: "karpenter is healthy (1 pod ready)"},
 		{name: "workloads readable pods denied", finalizer: "widgets.example.com/cleanup", group: "widgets.example.com", want: "controller unknown (controller pod inventory is unreadable)", access: func(_, resource, _ string) bool { return resource != "pods" }},
 		{name: "pods readable workloads denied", finalizer: "widgets.example.com/cleanup", group: "widgets.example.com", want: "controller unknown", access: func(_, resource, _ string) bool { return resource == "pods" }},
 		{name: "unknown", finalizer: "unknown.example.com/cleanup", group: "unknown.example.com", want: "controller unknown"},
@@ -151,8 +154,13 @@ func TestIssuesDynamicTerminationAuthorization(t *testing.T) {
 		}
 	}
 	deniedKinds := Compose(p, Filters{Namespaces: []string{"visible", "hidden"}, CanListResource: func(string, string, string) bool { return false }})
-	if len(deniedKinds) != 0 {
-		t.Fatalf("denied CR kinds leaked: %+v", deniedKinds)
+	if len(deniedKinds) != 2 {
+		t.Fatalf("existing deleting condition rows were hidden: %+v", deniedKinds)
+	}
+	for _, issue := range deniedKinds {
+		if issue.Source != SourceCondition || issue.Reason != "Ready: Deleting" || issue.Category == issuesapi.CategoryTerminationStuck || strings.Contains(issue.Cause, "finalizer") {
+			t.Fatalf("expected only existing condition evidence: %+v", issue)
+		}
 	}
 	multi := p.DetectDynamicTerminatingProblems([]string{"visible", "hidden"}, nil)
 	if len(multi) != 2 {
@@ -199,7 +207,7 @@ func TestTerminatingGuidanceAndNoise(t *testing.T) {
 		wantAction   string
 		wantCalls    int
 	}{
-		{"healthy infrastructure", []string{"crossplane.io/cleanup"}, finalizerObservation{Text: "crossplane is healthy (1 pod ready)", Running: true}, SeverityWarning, "Check its logs", 1},
+		{"healthy infrastructure", []string{"crossplane.io/cleanup"}, finalizerObservation{Text: "crossplane is healthy (1 pod ready)", Running: true, Healthy: true}, SeverityWarning, "Check its logs", 1},
 		{"crashloop", []string{"crossplane.io/cleanup"}, finalizerObservation{Text: "crossplane is CrashLoopBackOff (1/1 pods)"}, SeverityCritical, "patch_resource", 1},
 		{"foreground only", []string{metav1.FinalizerDeleteDependents}, finalizerObservation{}, SeverityCritical, "dependents", 0},
 		{"protection only", []string{"gateway-exists-finalizer.gateway.networking.k8s.io"}, finalizerObservation{}, SeverityCritical, "in-use guard", 0},
@@ -237,5 +245,36 @@ func TestFoldDeletingConditions(t *testing.T) {
 	out := foldDeletingConditions(in)
 	if len(out) != 3 || !strings.Contains(out[0].Cause, "external cleanup pending") || out[1].Group != "other.com" || out[2].Reason != "Ready: Failed" {
 		t.Fatalf("out=%+v", out)
+	}
+}
+
+func TestFinalizerOwnerPartialReadiness(t *testing.T) {
+	t.Cleanup(k8s.ResetResourceCache)
+	for _, tc := range []struct {
+		name   string
+		second corev1.PodStatus
+		want   string
+	}{
+		{"rollout", corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Ready: false}}}, "degraded (1/2 pods ready)"},
+		{"HA ready leader", corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}}}, "CrashLoopBackOff (1/2 pods)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "widgets-operator", Namespace: "operators"}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "widgets"}}}}
+			leader := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "leader", Namespace: "operators", Labels: map[string]string{"app": "widgets"}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Ready: true}}}}
+			second := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "second", Namespace: "operators", Labels: map[string]string{"app": "widgets"}}, Status: tc.second}
+			if err := k8s.InitScopedTestResourceCache(fake.NewClientset(deployment, leader, second), map[string]k8score.ResourceScope{"pods": {Enabled: true}, "deployments": {Enabled: true}}); err != nil {
+				t.Fatal(err)
+			}
+			p := NewCacheProvider()
+			observation := p.FinalizerOwnerStatus("widgets.example.com/cleanup", Ref{Group: "widgets.example.com", Kind: "Widget"}, nil)
+			if !observation.Running || !strings.Contains(observation.Text, tc.want) {
+				t.Fatalf("partial ready controller observation: %+v", observation)
+			}
+			pr := k8s.Detection{Kind: "Widget", Group: "widgets.example.com", Severity: "critical", Action: "patch_resource", TerminatingFinalizers: []string{"widgets.example.com/cleanup"}}
+			pr = enrichTerminatingProblem(pr, p, nil, map[string]finalizerObservation{})
+			if pr.Severity != "critical" || strings.Contains(pr.Action, "patch_resource") || !strings.Contains(pr.Action, "Check its logs") {
+				t.Fatalf("partial ready controller must suppress rescue without warning cap: %+v", pr)
+			}
+		})
 	}
 }

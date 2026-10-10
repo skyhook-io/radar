@@ -17,6 +17,7 @@ import (
 type finalizerObservation struct {
 	Text    string
 	Running bool
+	Healthy bool
 }
 
 type finalizerOwnerProvider interface {
@@ -70,7 +71,7 @@ func (p *CacheProvider) FinalizerOwnerStatus(finalizer string, ref Ref, canList 
 			return finalizerObservation{Text: fmt.Sprintf("%s is not running %s (controller may not be installed, runs elsewhere, or uses different labels)", controller, scope)}
 		}
 		health := gitopsinsights.SummarizeControllerPods(active)
-		return finalizerObservation{Text: gitopsinsights.SummarizeControllerHealth(controller, active) + " " + scope, Running: health.Ready == health.Total && health.Total > 0 && health.Crashing == 0}
+		return finalizerObservation{Text: gitopsinsights.SummarizeControllerHealth(controller, active) + " " + scope, Running: health.Ready > 0, Healthy: health.Ready == health.Total && health.Total > 0 && health.Crashing == 0}
 	}
 	var observations []finalizerObservation
 	collect := func(resource string, obj metav1.Object, selector *metav1.LabelSelector) {
@@ -107,6 +108,7 @@ func (p *CacheProvider) FinalizerOwnerStatus(finalizer string, ref Ref, canList 
 		var parts []string
 		for i, observation := range observations {
 			result.Running = result.Running || observation.Running
+			result.Healthy = result.Healthy || observation.Healthy
 			if i < 3 {
 				parts = append(parts, observation.Text)
 			}
@@ -131,6 +133,7 @@ func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string,
 	}
 	resolver, available := p.(finalizerOwnerProvider)
 	running := false
+	healthy := false
 	shown := 0
 	protected := false
 	for _, finalizer := range pr.TerminatingFinalizers {
@@ -152,6 +155,7 @@ func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string,
 			}
 		}
 		running = running || observation.Running
+		healthy = healthy || observation.Healthy
 		if shown < 3 {
 			pr.Cause += fmt.Sprintf(" Finalizer %q: %s.", finalizer, observation.Text)
 		}
@@ -160,8 +164,10 @@ func enrichTerminatingProblem(pr k8s.Detection, p Provider, canList func(string,
 	if shown > 3 {
 		pr.Cause += fmt.Sprintf(" +%d more finalizer observations.", shown-3)
 	}
-	if running {
+	if healthy {
 		pr.Severity = "high"
+	}
+	if running {
 		pr.Action = "A matching controller is running and may be working on cleanup. Check its logs, permissions, and deletion-blocking references before taking further action."
 		if protected {
 			pr.Action += " Kubernetes protection finalizers are in-use guards; resolve objects referencing this resource rather than bypassing them."
