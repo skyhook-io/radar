@@ -182,9 +182,10 @@ source and spec its controllers reconcile. Enable this only for owners trusted
 with that deployment authority. For narrower access, leave the toggle off and
 supply your own namespace/resource-name-scoped RoleBindings.
 
-While permission checks load or retry, controls stay available. GitOps action controls check the caller's permissions per object and disable
-denied actions with an explanation. They remain advisory: each action still
-runs as the caller, and Kubernetes makes the final authorization decision.
+GitOps action controls check the caller's permissions per object and disable
+denied actions with an explanation. While a check loads or retries, controls
+stay available. The checks are advisory: each action still runs as the caller,
+and Kubernetes makes the final authorization decision.
 
 ### Radar Cloud background services (`radar:system`)
 
