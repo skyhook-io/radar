@@ -800,7 +800,7 @@ func (g *appGraph) relationshipsFor(kind, ns, name string, obj any) *appRelation
 		NetworkPolicies:   len(rel.NetworkPolicies),
 		serviceRefs:       refsByKey(rel.Services),
 		ingressRefs:       refsByKey(rel.Ingresses),
-		routeRefs:         refsByKey(appRouteRefs(rel.Routes, rel.Gateways)),
+		routeRefs:         refsByKey(appRouteRefs(rel.Routes, rel.Gateways, rel.Backends)),
 		configRefs:        refsByKey(rel.ConfigRefs),
 		scalerRefs:        refsByKey(rel.Scalers),
 		storageRefs:       refsByKey(rel.StorageRefs),

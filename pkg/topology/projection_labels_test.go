@@ -3,7 +3,9 @@ package topology
 import (
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -57,6 +59,44 @@ func TestProjectionConfigurationDirection(t *testing.T) {
 				if !hasKarpenterTopologyEdge(topo, pair[0], pair[1], EdgeConfigures) || hasKarpenterTopologyEdge(topo, pair[1], pair[0], EdgeConfigures) {
 					t.Errorf("configuration must point %s -> %s", pair[0], pair[1])
 				}
+			}
+		})
+	}
+}
+
+func TestProjectionBackendsAreNotPods(t *testing.T) {
+	provider := &mockProvider{
+		services:    []*corev1.Service{{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "demo"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "web"}}}},
+		deployments: []*appsv1.Deployment{{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "demo"}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "web"}}}}}},
+		pods:        []*corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "web-pod", Namespace: "demo", Labels: map[string]string{"app": "web"}}}},
+		ingresses:   []*networkingv1.Ingress{{ObjectMeta: metav1.ObjectMeta{Name: "public", Namespace: "demo"}, Spec: networkingv1.IngressSpec{Rules: []networkingv1.IngressRule{{IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{Paths: []networkingv1.HTTPIngressPath{{Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "web"}}}}}}}}}}},
+	}
+	for _, mode := range []ViewMode{ViewModeResources, ViewModeTraffic} {
+		t.Run(string(mode), func(t *testing.T) {
+			opts := DefaultBuildOptions()
+			opts.ViewMode = mode
+			topo, err := NewBuilder(provider).Build(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ingress := GetRelationships("Ingress", "demo", "public", topo, provider, nil)
+			if ingress == nil || len(ingress.Backends) != 1 || ingress.Backends[0].Kind != "Service" || len(ingress.Pods) != 0 || len(ingress.Services) != 0 {
+				t.Fatalf("Ingress routes = %+v", ingress)
+			}
+			svc := GetRelationships("Service", "demo", "web", topo, provider, nil)
+			if svc == nil {
+				t.Fatal("missing Service relationships")
+			}
+			for _, pod := range svc.Pods {
+				if pod.Kind != "Pod" || pod.Group != "" {
+					t.Fatalf("non-Pod under Pods: %+v", pod)
+				}
+			}
+			if mode == ViewModeResources && (len(svc.Backends) != 1 || svc.Backends[0].Kind != "Deployment") {
+				t.Fatalf("Service backends = %+v", svc.Backends)
+			}
+			if mode == ViewModeTraffic && len(svc.Pods) != 1 {
+				t.Fatalf("traffic Service pods = %+v", svc.Pods)
 			}
 		})
 	}

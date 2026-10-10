@@ -1040,7 +1040,6 @@ func TestRelationshipsFor_RoutesCarryConcreteKind(t *testing.T) {
 			node("httproute/prod/web", "HTTPRoute", "prod", "web"),
 		},
 		Edges: []topology.Edge{
-			// A Gateway routes to an HTTPRoute → rel.Routes for the Gateway query.
 			{ID: "gw->web", Source: "gateway/prod/gw", Target: "httproute/prod/web", Type: topology.EdgeRoutesTo},
 		},
 	}
