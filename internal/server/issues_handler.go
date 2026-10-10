@@ -194,6 +194,9 @@ func (s *Server) issueRelatedResourceAccess(r *http.Request) func(issues.Ref) bo
 
 var helmIssuesDeniedLogged sync.Map
 
+// nativeHelmIssuesForRequest reads Helm release storage on the request's
+// context, so the read stops when the caller disconnects instead of running
+// to completion for nobody.
 func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string, filters issues.Filters) []issues.Issue {
 	if !issues.KindFilterIncludes(filters.Kinds, "HelmRelease", "helmreleases") {
 		return nil
@@ -202,8 +205,9 @@ func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string
 	if helmClient == nil {
 		return nil
 	}
+	ctx := r.Context()
 	username, groups := "", []string(nil)
-	if user := auth.UserFromContext(r.Context()); user != nil {
+	if user := auth.UserFromContext(ctx); user != nil {
 		username = user.Username
 		groups = user.Groups
 	}
@@ -215,15 +219,20 @@ func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string
 			return nil
 		}
 	}
-	releases, err := helmClient.ListReleasesAcrossNamespaces(helmNamespaces, username, groups)
+	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, username, groups)
 	if err != nil {
-		if !helm.IsForbiddenError(err) {
+		switch {
+		case ctx.Err() != nil:
+			// The caller went away; nobody is left to tell.
+		case !helm.IsForbiddenError(err):
 			log.Printf("[issues] Failed to list Helm releases for issue stream: %v", err)
-		} else if _, seen := helmIssuesDeniedLogged.LoadOrStore(pkgauth.IdentityCacheKey(username, groups), struct{}{}); !seen {
-			// Logged once per identity (username + groups): the alerts worker
-			// polls this, and a cluster without a Secret-read binding would
-			// otherwise drop Helm alerts with no trace anywhere.
-			log.Printf("[issues] Helm release issues omitted for %q: Kubernetes denied listing release Secrets", username)
+		default:
+			if _, seen := helmIssuesDeniedLogged.LoadOrStore(pkgauth.IdentityCacheKey(username, groups), struct{}{}); !seen {
+				// Logged once per identity (username + groups): the alerts worker
+				// polls this, and a cluster without a Secret-read binding would
+				// otherwise drop Helm alerts with no trace anywhere.
+				log.Printf("[issues] Helm release issues omitted for %q: Kubernetes denied listing release Secrets", username)
+			}
 		}
 		return nil
 	}

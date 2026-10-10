@@ -321,24 +321,24 @@ func (c *Client) GetActionConfigForUser(namespace, username string, groups []str
 // ListReleasesAsUser is ListReleases with K8s impersonation.
 // When username is empty, falls back to the ServiceAccount identity (same
 // behavior as ListReleases).
-func (c *Client) ListReleasesAsUser(namespace, username string, groups []string) ([]HelmRelease, error) {
+func (c *Client) ListReleasesAsUser(ctx context.Context, namespace, username string, groups []string) ([]HelmRelease, error) {
 	if username == "" {
-		return c.ListReleases(namespace)
+		return c.ListReleases(ctx, namespace)
 	}
 	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesWith(actionConfig, namespace, username, groups)
+	return listReleasesWith(ctx, actionConfig, namespace, username, groups)
 }
 
 // ListReleases returns all Helm releases, optionally filtered by namespace
-func (c *Client) ListReleases(namespace string) ([]HelmRelease, error) {
+func (c *Client) ListReleases(ctx context.Context, namespace string) ([]HelmRelease, error) {
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesWith(actionConfig, namespace, "", nil)
+	return listReleasesWith(ctx, actionConfig, namespace, "", nil)
 }
 
 // ListReleasesAcrossNamespaces lists releases for an explicit set of namespaces
@@ -354,15 +354,43 @@ func (c *Client) ListReleases(namespace string) ([]HelmRelease, error) {
 // skipped so one of them doesn't blank releases the caller CAN see. Only when
 // every namespace is forbidden is the 403 surfaced, so the UI still shows
 // "Access Restricted" rather than a misleading empty list.
-func (c *Client) ListReleasesAcrossNamespaces(namespaces []string, username string, groups []string) ([]HelmRelease, error) {
-	if namespaces == nil {
-		return c.ListReleasesAsUser("", username, groups)
+func (c *Client) ListReleasesAcrossNamespaces(ctx context.Context, namespaces []string, username string, groups []string) ([]HelmRelease, error) {
+	return c.listReleasesAcrossNamespaces(ctx, namespaces, username, groups, true)
+}
+
+// ListIssueReleasesAcrossNamespaces is ListReleasesAcrossNamespaces without
+// the per-release resource health, which issue detection does not read.
+// Health parses every rendered manifest and looks up each object it declares,
+// so it dominates the CPU cost of a large release list.
+func (c *Client) ListIssueReleasesAcrossNamespaces(ctx context.Context, namespaces []string, username string, groups []string) ([]HelmRelease, error) {
+	return c.listReleasesAcrossNamespaces(ctx, namespaces, username, groups, false)
+}
+
+func (c *Client) listReleasesAcrossNamespaces(ctx context.Context, namespaces []string, username string, groups []string, includeResourceHealth bool) ([]HelmRelease, error) {
+	if namespaces != nil && len(namespaces) == 0 {
+		return []HelmRelease{}, nil
 	}
+	client, err := helmStorageClient(username, groups)
+	if err != nil {
+		return nil, err
+	}
+	return listReleasesAcrossNamespacesWithClient(ctx, client, namespaces, includeResourceHealth)
+}
+
+func listReleasesAcrossNamespacesWithClient(ctx context.Context, client kubernetes.Interface, namespaces []string, includeResourceHealth bool) ([]HelmRelease, error) {
+	scopes := namespaces
+	if scopes == nil {
+		scopes = []string{""}
+	}
+	fluxMap := fluxHelmReleaseMap(ctx)
 	all := make([]HelmRelease, 0)
 	var lastForbidden error
 	authorized := false
-	for _, ns := range namespaces {
-		rels, err := c.ListReleasesAsUser(ns, username, groups)
+	for _, ns := range scopes {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		snapshot, err := helmReleaseStorageSnapshotWithClient(ctx, client, ns)
 		if err != nil {
 			if IsForbiddenError(err) {
 				lastForbidden = err
@@ -370,19 +398,27 @@ func (c *Client) ListReleasesAcrossNamespaces(namespaces []string, username stri
 			}
 			return nil, err
 		}
+		rows, err := helmReleaseRowsFromStorageSnapshot(ctx, snapshot, fluxMap, includeResourceHealth)
+		if err != nil {
+			return nil, err
+		}
 		authorized = true
-		all = append(all, rels...)
+		all = append(all, rows...)
 	}
 	if !authorized && lastForbidden != nil {
 		return nil, lastForbidden
 	}
-	sort.Slice(all, func(i, j int) bool {
-		if all[i].Namespace != all[j].Namespace {
-			return all[i].Namespace < all[j].Namespace
-		}
-		return all[i].Name < all[j].Name
-	})
+	sortHelmReleases(all)
 	return all, nil
+}
+
+func sortHelmReleases(releases []HelmRelease) {
+	sort.Slice(releases, func(i, j int) bool {
+		if releases[i].Namespace != releases[j].Namespace {
+			return releases[i].Namespace < releases[j].Namespace
+		}
+		return releases[i].Name < releases[j].Name
+	})
 }
 
 // ListManifestResourcesAcrossNamespaces returns resource declarations from the
@@ -452,7 +488,7 @@ func (c *Client) listManifestResourcesAsUser(ctx context.Context, namespace, use
 	if err != nil {
 		return nil, 0, err
 	}
-	snapshot, err := helmReleaseStorageSnapshotWithClient(client, namespace)
+	snapshot, err := helmReleaseStorageSnapshotWithClient(ctx, client, namespace)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -478,7 +514,7 @@ func (c *Client) listManifestResourcesAsUser(ctx context.Context, namespace, use
 	return resources, parseErrors, nil
 }
 
-func listReleasesWith(actionConfig *action.Configuration, namespace, username string, groups []string) ([]HelmRelease, error) {
+func listReleasesWith(ctx context.Context, actionConfig *action.Configuration, namespace, username string, groups []string) ([]HelmRelease, error) {
 	if err := actionConfig.KubeClient.IsReachable(); err != nil {
 		return nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
@@ -487,32 +523,23 @@ func listReleasesWith(actionConfig *action.Configuration, namespace, username st
 	if err != nil {
 		return nil, err
 	}
-	snapshot, err := helmReleaseStorageSnapshotWithClient(client, namespace)
-	if err != nil {
-		return nil, err
-	}
-
-	result := helmReleaseRowsFromStorageSnapshot(snapshot, fluxHelmReleaseMap(context.Background()))
-
-	// Sort by namespace, then name
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Namespace != result[j].Namespace {
-			return result[i].Namespace < result[j].Namespace
-		}
-		return result[i].Name < result[j].Name
-	})
-
-	return result, nil
+	return listReleasesAcrossNamespacesWithClient(ctx, client, []string{namespace}, true)
 }
 
-func helmReleaseRowsFromStorageSnapshot(snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string) []HelmRelease {
+func helmReleaseRowsFromStorageSnapshot(ctx context.Context, snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string, includeResourceHealth bool) ([]HelmRelease, error) {
 	if snapshot == nil {
-		return nil
+		return nil, nil
 	}
 	result := make([]HelmRelease, 0, len(snapshot.latest))
 	for _, rel := range snapshot.latest {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		storageNs := snapshot.storageNamespaces[releaseStorageKey(rel)]
-		hr := toHelmRelease(rel, storageNs)
+		hr := toHelmReleaseSummary(rel, storageNs)
+		if includeResourceHealth {
+			addResourceHealth(&hr, rel)
+		}
 		historyKey := releaseHistoryKey(rel)
 		analysis := helmhistory.Analyze(rel.Name, rel.Version, toHelmHistoryRevisions(snapshot.histories[historyKey]), helmhistory.Options{MaxOperations: releaseListMaxOperations})
 		hr.LastOperation = analysis.LastOperation
@@ -527,7 +554,7 @@ func helmReleaseRowsFromStorageSnapshot(snapshot *helmReleaseStorageSnapshot, fl
 		hr.ManagedByFluxHelmRelease = applyFluxOwnership(rel.Name, effectiveStorage, fluxMap)
 		result = append(result, hr)
 	}
-	return result
+	return result, nil
 }
 
 // GetReleaseAsUser is GetRelease with K8s impersonation.
@@ -1342,6 +1369,12 @@ func releaseUpgradeKey(rel *release.Release, storageNamespace string) string {
 
 // toHelmRelease converts a helm release to our API type
 func toHelmRelease(rel *release.Release, storageNamespace string) HelmRelease {
+	hr := toHelmReleaseSummary(rel, storageNamespace)
+	addResourceHealth(&hr, rel)
+	return hr
+}
+
+func toHelmReleaseSummary(rel *release.Release, storageNamespace string) HelmRelease {
 	hr := HelmRelease{
 		Name:             rel.Name,
 		Namespace:        rel.Namespace,
@@ -1356,16 +1389,15 @@ func toHelmRelease(rel *release.Release, storageNamespace string) HelmRelease {
 	if hr.StorageNamespace == hr.Namespace {
 		hr.StorageNamespace = ""
 	}
+	return hr
+}
 
-	// Compute health from owned resources
+// addResourceHealth computes health from the resources the release's
+// manifest declares.
+func addResourceHealth(hr *HelmRelease, rel *release.Release) {
 	resources := parseManifestResources(rel.Manifest, rel.Namespace)
 	enrichResourcesWithStatus(resources)
-	health, issue, summary := computeResourceHealth(resources)
-	hr.ResourceHealth = health
-	hr.HealthIssue = issue
-	hr.HealthSummary = summary
-
-	return hr
+	hr.ResourceHealth, hr.HealthIssue, hr.HealthSummary = computeResourceHealth(resources)
 }
 
 // fluxHelmReleaseMap returns a map keyed by "<storageNamespace>/<releaseName>"
@@ -1454,24 +1486,12 @@ func helmStorageClient(username string, groups []string) (kubernetes.Interface, 
 	return client, nil
 }
 
-func helmReleaseStorageNamespaces(username string, groups []string) (map[string]string, error) {
-	client, err := helmStorageClient(username, groups)
-	if err != nil {
-		return nil, err
-	}
-	return helmReleaseStorageNamespacesWithClient(client)
-}
-
-func helmReleaseStorageNamespacesWithClient(client kubernetes.Interface) (map[string]string, error) {
-	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
-	if err != nil {
-		return nil, err
-	}
-	return snapshot.storageNamespaces, nil
-}
-
-func helmReleaseStorageSnapshotWithClient(client kubernetes.Interface, namespace string) (*helmReleaseStorageSnapshot, error) {
-	secrets, err := client.CoreV1().Secrets(namespace).List(context.Background(), metav1.ListOptions{
+// helmReleaseStorageSnapshotWithClient reads every Helm release Secret in
+// namespace ("" for all). The list carries each revision's full encoded
+// release, so on clusters with many or large releases it is the slowest read
+// Radar makes; ctx bounds both the read and the decoding.
+func helmReleaseStorageSnapshotWithClient(ctx context.Context, client kubernetes.Interface, namespace string) (*helmReleaseStorageSnapshot, error) {
+	secrets, err := client.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: "owner=helm",
 	})
 	if err != nil {
@@ -1484,6 +1504,9 @@ func helmReleaseStorageSnapshotWithClient(client kubernetes.Interface, namespace
 	}
 	latestByRelease := make(map[string]*release.Release)
 	for _, secret := range secrets.Items {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		encoded := secret.Data["release"]
 		if len(encoded) == 0 {
 			continue
@@ -3122,15 +3145,15 @@ func (c *Client) locateChartPath(actionConfig *action.Configuration, chartURL, v
 }
 
 // BatchCheckUpgrades checks for upgrades for all releases at once (more efficient)
-func (c *Client) BatchCheckUpgrades(namespace string) (*BatchUpgradeInfo, error) {
-	return c.batchCheckUpgrades(namespace, "", nil)
+func (c *Client) BatchCheckUpgrades(ctx context.Context, namespace string) (*BatchUpgradeInfo, error) {
+	return c.batchCheckUpgrades(ctx, namespace, "", nil)
 }
 
 // BatchCheckUpgradesAsUser is BatchCheckUpgrades with K8s impersonation on
 // the release listing (the repo index reads are local-file only and don't
 // touch K8s).
-func (c *Client) BatchCheckUpgradesAsUser(namespace, username string, groups []string) (*BatchUpgradeInfo, error) {
-	return c.batchCheckUpgrades(namespace, username, groups)
+func (c *Client) BatchCheckUpgradesAsUser(ctx context.Context, namespace, username string, groups []string) (*BatchUpgradeInfo, error) {
+	return c.batchCheckUpgrades(ctx, namespace, username, groups)
 }
 
 // BatchCheckUpgradesAcrossNamespaces is BatchCheckUpgradesAsUser over an explicit
@@ -3143,13 +3166,13 @@ func (c *Client) BatchCheckUpgradesAsUser(namespace, username string, groups []s
 // Upgrade info is best-effort enrichment layered on top of the release list, so
 // forbidden namespaces are skipped and an all-forbidden result returns an empty
 // map rather than an error — the release list itself is what surfaces the 403.
-func (c *Client) BatchCheckUpgradesAcrossNamespaces(namespaces []string, username string, groups []string) (*BatchUpgradeInfo, error) {
+func (c *Client) BatchCheckUpgradesAcrossNamespaces(ctx context.Context, namespaces []string, username string, groups []string) (*BatchUpgradeInfo, error) {
 	if namespaces == nil {
-		return c.BatchCheckUpgradesAsUser("", username, groups)
+		return c.BatchCheckUpgradesAsUser(ctx, "", username, groups)
 	}
 	merged := &BatchUpgradeInfo{Releases: make(map[string]*UpgradeInfo)}
 	for _, ns := range namespaces {
-		info, err := c.BatchCheckUpgradesAsUser(ns, username, groups)
+		info, err := c.BatchCheckUpgradesAsUser(ctx, ns, username, groups)
 		if err != nil {
 			if IsForbiddenError(err) {
 				continue
@@ -3163,29 +3186,20 @@ func (c *Client) BatchCheckUpgradesAcrossNamespaces(namespaces []string, usernam
 	return merged, nil
 }
 
-func (c *Client) batchCheckUpgrades(namespace, username string, groups []string) (*BatchUpgradeInfo, error) {
-	var actionConfig *action.Configuration
-	var err error
-	if username != "" {
-		actionConfig, err = c.getActionConfigForUser(namespace, username, groups)
-	} else {
-		actionConfig, err = c.getActionConfig(namespace)
-	}
+func (c *Client) batchCheckUpgrades(ctx context.Context, namespace, username string, groups []string) (*BatchUpgradeInfo, error) {
+	// Full *release.Release objects are needed (Chart.Metadata.Home/Sources
+	// drive source-affinity disambiguation). The storage snapshot carries
+	// them along with each release's storage namespace from one Secret list
+	// that stops with ctx, which Helm's own list action can't do.
+	client, err := helmStorageClient(username, groups)
 	if err != nil {
-		return nil, fmt.Errorf("failed to build helm action config: %w", err)
+		return nil, err
 	}
-
-	// We need full *release.Release objects (Chart.Metadata.Home/Sources are
-	// used for source-affinity disambiguation), so call action.NewList here
-	// instead of going through ListReleases which projects to HelmRelease.
-	listAction := action.NewList(actionConfig)
-	listAction.All = true
-	listAction.AllNamespaces = namespace == ""
-	listAction.StateMask = action.ListAll
-	releases, err := listAction.Run()
+	snapshot, err := helmReleaseStorageSnapshotWithClient(ctx, client, namespace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
+	releases := snapshot.latest
 
 	result := &BatchUpgradeInfo{
 		Releases: make(map[string]*UpgradeInfo),
@@ -3193,18 +3207,7 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 	if len(releases) == 0 {
 		return result, nil
 	}
-
-	storageNamespaces := make(map[string]string, len(releases))
-	if namespace == "" {
-		storageNamespaces, err = helmReleaseStorageNamespaces(username, groups)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		for _, rel := range releases {
-			storageNamespaces[releaseStorageKey(rel)] = namespace
-		}
-	}
+	storageNamespaces := snapshot.storageNamespaces
 
 	// A missing/unreadable repo config is not fatal: a user may rely solely on
 	// registered OCI sources, so we proceed with an empty classic-repo set and let
@@ -3285,6 +3288,9 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 	}
 
 	for _, rel := range releases {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		key := releaseUpgradeKey(rel, storageNamespaces[releaseStorageKey(rel)])
 		currentVersion := rel.Chart.Metadata.Version
 		chartName := rel.Chart.Metadata.Name

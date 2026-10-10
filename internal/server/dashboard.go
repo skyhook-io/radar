@@ -1255,7 +1255,7 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) D
 		username = user.Username
 		groups = user.Groups
 	}
-	releases, err := helmClient.ListReleasesAcrossNamespaces(namespaces, username, groups)
+	releases, err := helmClient.ListReleasesAcrossNamespaces(r.Context(), namespaces, username, groups)
 	if err != nil {
 		if helm.IsForbiddenError(err) {
 			return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}

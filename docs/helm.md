@@ -48,6 +48,8 @@ Flux-owned Helm releases defer to Flux. Radar shows the owning `HelmRelease` and
 
 Active native Helm failures and stuck pending operations also appear in the global Issues stream as `kind=HelmRelease`, `group=helm.sh`. Recovered rollbacks are deployment history, not live issues; use Helm detail or `get_changes` for those.
 
+Finding them means listing and decoding every Helm release Secret the caller can read, which is slow on clusters with many or large releases. `/api/issues` waits for that read, and the read stops as soon as the caller disconnects.
+
 ## Failed Upgrades And Rollback Inference
 
 Helm history does not persist whether `helm upgrade --atomic` was set. Radar infers an atomic-style rollback from the revision sequence:

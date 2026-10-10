@@ -407,11 +407,11 @@ func TestHelmReleaseRowsFromStorageSnapshot_AttachesLastOperation(t *testing.T) 
 	}
 
 	client := fake.NewSimpleClientset(secretsToObjects(secrets)...)
-	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	snapshot, err := helmReleaseStorageSnapshotWithClient(context.Background(), client, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+	rows := helmReleaseRowsForTest(t, snapshot)
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -446,12 +446,12 @@ func TestHelmReleaseRowsFromStorageSnapshot_AttachesLastOperation(t *testing.T) 
 func TestHelmReleaseRowsFromStorageSnapshot_KeepsHealthyRowsCompact(t *testing.T) {
 	rel := helmTestRelease("healthy", "demo", 1, release.StatusDeployed, "Install complete")
 	client := fake.NewSimpleClientset(helmReleaseSecret(t, "demo", rel, false))
-	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	snapshot, err := helmReleaseStorageSnapshotWithClient(context.Background(), client, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+	rows := helmReleaseRowsForTest(t, snapshot)
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -475,12 +475,12 @@ func TestHelmReleaseRowsFromStorageSnapshot_SkipsMalformedReleaseSecret(t *testi
 		},
 	}
 	client := fake.NewSimpleClientset(helmReleaseSecret(t, "demo", malformed, false))
-	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	snapshot, err := helmReleaseStorageSnapshotWithClient(context.Background(), client, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+	rows := helmReleaseRowsForTest(t, snapshot)
 
 	if len(rows) != 0 {
 		t.Fatalf("len(rows) = %d, want 0 for malformed release secret", len(rows))
@@ -504,12 +504,12 @@ func TestHelmReleaseRowsFromStorageSnapshot_CapsOperations(t *testing.T) {
 		secrets = append(secrets, helmReleaseSecret(t, "demo", rel, false))
 	}
 	client := fake.NewSimpleClientset(secretsToObjects(secrets)...)
-	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	snapshot, err := helmReleaseStorageSnapshotWithClient(context.Background(), client, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+	rows := helmReleaseRowsForTest(t, snapshot)
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -543,12 +543,12 @@ func TestHelmReleaseRowsFromStorageSnapshot_UsesDetailHistoryWindow(t *testing.T
 		secrets = append(secrets, helmReleaseSecret(t, "demo", rel, false))
 	}
 	client := fake.NewSimpleClientset(secretsToObjects(secrets)...)
-	snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+	snapshot, err := helmReleaseStorageSnapshotWithClient(context.Background(), client, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+	rows := helmReleaseRowsForTest(t, snapshot)
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -1533,11 +1533,11 @@ func assertStorageNamespaceFromSecret(t *testing.T, gzipped bool) {
 	rel := helmTestRelease("podinfo", "demo-flux-helm", 1, release.StatusDeployed, "Install complete")
 	client := fake.NewSimpleClientset(helmReleaseSecret(t, "flux-system", rel, gzipped))
 
-	storageNamespaces, err := helmReleaseStorageNamespacesWithClient(client)
+	snapshot, err := helmReleaseStorageSnapshotWithClient(context.Background(), client, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := storageNamespaces[releaseStorageKey(rel)]; got != "flux-system" {
+	if got := snapshot.storageNamespaces[releaseStorageKey(rel)]; got != "flux-system" {
 		t.Fatalf("storage namespace = %q, want flux-system", got)
 	}
 }
@@ -1656,7 +1656,7 @@ generated: "2026-05-05T00:00:00Z"
 }
 
 func TestListReleasesAcrossNamespacesEmptySerializesAsArray(t *testing.T) {
-	releases, err := (&Client{}).ListReleasesAcrossNamespaces([]string{}, "", nil)
+	releases, err := (&Client{}).ListReleasesAcrossNamespaces(context.Background(), []string{}, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2042,4 +2042,13 @@ func TestStoredChartMatchesReconstructedToleratesStorageRoundTrip(t *testing.T) 
 	if err := storedChartMatchesReconstructed(stored, loaded); err != nil {
 		t.Fatalf("a chart compared against its own stored form reported as different: %v", err)
 	}
+}
+
+func helmReleaseRowsForTest(t *testing.T, snapshot *helmReleaseStorageSnapshot) []HelmRelease {
+	t.Helper()
+	rows, err := helmReleaseRowsFromStorageSnapshot(context.Background(), snapshot, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
 }
