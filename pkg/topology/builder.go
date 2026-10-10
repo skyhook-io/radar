@@ -1417,7 +1417,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			// Cluster → KCP edge via ownerRef
 			for _, ownerRef := range kcp.GetOwnerReferences() {
-				if ownerRef.Kind == "Cluster" {
+				if ownerRef.Kind == "Cluster" && resourceid.GroupFromAPIVersion(ownerRef.APIVersion) == "cluster.x-k8s.io" {
 					if clID, ok := capiClusterIDs[ns+"/"+ownerRef.Name]; ok {
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", clID, kcpID),
@@ -1466,7 +1466,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			// Cluster → MachineDeployment edge via ownerRef
 			for _, ownerRef := range md.GetOwnerReferences() {
-				if ownerRef.Kind == "Cluster" {
+				if ownerRef.Kind == "Cluster" && resourceid.GroupFromAPIVersion(ownerRef.APIVersion) == "cluster.x-k8s.io" {
 					if clID, ok := capiClusterIDs[ns+"/"+ownerRef.Name]; ok {
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", clID, mdID),
@@ -1515,7 +1515,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			// Cluster → MachinePool edge via ownerRef
 			for _, ownerRef := range mp.GetOwnerReferences() {
-				if ownerRef.Kind == "Cluster" {
+				if ownerRef.Kind == "Cluster" && resourceid.GroupFromAPIVersion(ownerRef.APIVersion) == "cluster.x-k8s.io" {
 					if clID, ok := capiClusterIDs[ns+"/"+ownerRef.Name]; ok {
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", clID, mpID),
@@ -1564,7 +1564,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			// MachineDeployment → MachineSet edge via ownerRef
 			for _, ownerRef := range ms.GetOwnerReferences() {
-				if ownerRef.Kind == "MachineDeployment" {
+				if ownerRef.Kind == "MachineDeployment" && resourceid.GroupFromAPIVersion(ownerRef.APIVersion) == "cluster.x-k8s.io" {
 					if mdID, ok := machineDeploymentIDs[ns+"/"+ownerRef.Name]; ok {
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", mdID, msID),
@@ -1613,12 +1613,12 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			// Owner edges: MachineSet, KCP, or MachinePool → Machine
 			for _, ownerRef := range m.GetOwnerReferences() {
 				var ownerID string
-				switch ownerRef.Kind {
-				case "MachineSet":
+				switch (resourceid.GroupKind{Group: resourceid.GroupFromAPIVersion(ownerRef.APIVersion), Kind: ownerRef.Kind}) {
+				case resourceid.GroupKind{Group: "cluster.x-k8s.io", Kind: "MachineSet"}:
 					ownerID = capiMachineSetIDs[ns+"/"+ownerRef.Name]
-				case "KubeadmControlPlane":
+				case resourceid.GroupKind{Group: "controlplane.cluster.x-k8s.io", Kind: "KubeadmControlPlane"}:
 					ownerID = kcpIDs[ns+"/"+ownerRef.Name]
-				case "MachinePool":
+				case resourceid.GroupKind{Group: "cluster.x-k8s.io", Kind: "MachinePool"}:
 					ownerID = machinePoolIDs[ns+"/"+ownerRef.Name]
 				}
 				if ownerID != "" {
@@ -1707,7 +1707,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			// MHC → Cluster edge via ownerRef
 			for _, ownerRef := range mhc.GetOwnerReferences() {
-				if ownerRef.Kind == "Cluster" {
+				if ownerRef.Kind == "Cluster" && resourceid.GroupFromAPIVersion(ownerRef.APIVersion) == "cluster.x-k8s.io" {
 					if clID, ok := capiClusterIDs[ns+"/"+ownerRef.Name]; ok {
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", mhcID, clID),
@@ -4825,7 +4825,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			continue
 		}
 		for _, ref := range kcfg.GetOwnerReferences() {
-			if ref.Kind == "Service" && strings.Contains(ref.APIVersion, "serving.knative.dev") {
+			if ref.Kind == "Service" && resourceid.GroupFromAPIVersion(ref.APIVersion) == "serving.knative.dev" {
 				if ownerID, ok := knativeServiceIDs[ns+"/"+ref.Name]; ok {
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", ownerID, kcfgID),
@@ -4846,7 +4846,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			continue
 		}
 		for _, ref := range kroute.GetOwnerReferences() {
-			if ref.Kind == "Service" && strings.Contains(ref.APIVersion, "serving.knative.dev") {
+			if ref.Kind == "Service" && resourceid.GroupFromAPIVersion(ref.APIVersion) == "serving.knative.dev" {
 				if ownerID, ok := knativeServiceIDs[ns+"/"+ref.Name]; ok {
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", ownerID, krouteID),
@@ -4867,7 +4867,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			continue
 		}
 		for _, ref := range krev.GetOwnerReferences() {
-			if ref.Kind == "Configuration" {
+			if ref.Kind == "Configuration" && resourceid.GroupFromAPIVersion(ref.APIVersion) == "serving.knative.dev" {
 				if ownerID, ok := knativeConfigIDs[ns+"/"+ref.Name]; ok {
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", ownerID, krevID),
@@ -4885,7 +4885,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			continue
 		}
 		for _, ref := range deploy.OwnerReferences {
-			if ref.Kind == "Revision" && strings.Contains(ref.APIVersion, "serving.knative.dev") {
+			if ref.Kind == "Revision" && resourceid.GroupFromAPIVersion(ref.APIVersion) == "serving.knative.dev" {
 				deployID := deploymentIDs[deploy.Namespace+"/"+deploy.Name]
 				if krevID, ok := knativeRevisionIDs[deploy.Namespace+"/"+ref.Name]; ok && deployID != "" {
 					edges = append(edges, Edge{
@@ -7882,7 +7882,7 @@ func cronWorkflowScheduleString(cwf *unstructured.Unstructured) string {
 
 func argoWorkflowCronOwnerName(wf *unstructured.Unstructured) string {
 	for _, ref := range wf.GetOwnerReferences() {
-		if ref.Kind == "CronWorkflow" && ref.Name != "" && ref.Controller != nil && *ref.Controller {
+		if ref.Kind == "CronWorkflow" && resourceid.GroupFromAPIVersion(ref.APIVersion) == "argoproj.io" && ref.Name != "" && ref.Controller != nil && *ref.Controller {
 			return ref.Name
 		}
 	}
