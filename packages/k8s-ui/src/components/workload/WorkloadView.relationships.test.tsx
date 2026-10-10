@@ -25,3 +25,13 @@ describe('workload upstream projection', () => {
     expect(html).toContain('messages')
   })
 })
+
+
+describe('workload staged-policy projection', () => {
+  it('shows staging without calling it an enforcing network policy', () => {
+    const html = renderToStaticMarkup(<WorkloadView kind="deployments" namespace="demo" name="web" onBack={() => {}} resource={workload} relationships={{ stagedPolicies: [{ kind: 'StagedNetworkPolicy', group: 'projectcalico.org', namespace: 'demo', name: 'preview' }] }} />)
+    expect(html).toContain('Staged Policies')
+    expect(html).toContain('preview')
+    expect(html).not.toContain('Network policies')
+  })
+})

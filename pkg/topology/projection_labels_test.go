@@ -186,3 +186,24 @@ func TestProjectionEntrypointsExcludeRouterRootAndSiblings(t *testing.T) {
 		t.Fatalf("workload lost entrypoints: %+v", workload)
 	}
 }
+
+func TestProjectionMachineHealthChecks(t *testing.T) {
+	clusterGVR := schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "clusters"}
+	mhcGVR := schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "machinehealthchecks"}
+	cluster := genericIdentityObject(clusterGVR, "Cluster", "demo", "fleet")
+	mhc := genericIdentityObject(mhcGVR, "MachineHealthCheck", "demo", "workers", metav1.OwnerReference{APIVersion: "cluster.x-k8s.io/v1beta1", Kind: "Cluster", Name: "fleet"})
+	dynamic := &genericIdentityDynamic{watched: []schema.GroupVersionResource{clusterGVR, mhcGVR}, kinds: map[schema.GroupVersionResource]string{clusterGVR: "Cluster", mhcGVR: "MachineHealthCheck"}, resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{clusterGVR: {cluster}, mhcGVR: {mhc}}, listCalls: map[schema.GroupVersionResource]int{}}
+	provider := &mockProvider{}
+	topo, err := NewBuilder(provider).WithDynamic(dynamic).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr := GetRelationshipsWithObject("Cluster", "demo", "fleet", cluster, topo, provider, dynamic, nil)
+	mr := GetRelationshipsWithObject("MachineHealthCheck", "demo", "workers", mhc, topo, provider, dynamic, nil)
+	if cr == nil || len(cr.HealthChecks) != 1 || cr.HealthChecks[0].Kind != "MachineHealthCheck" {
+		t.Fatalf("Cluster health checks = %+v", cr)
+	}
+	if mr == nil || len(mr.Dependencies) != 1 || mr.Dependencies[0].Kind != "Cluster" || mr.Dependencies[0].Group != "cluster.x-k8s.io" || len(mr.Protects) != 0 {
+		t.Fatalf("MHC Cluster dependency = %+v", mr)
+	}
+}
