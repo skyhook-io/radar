@@ -363,3 +363,155 @@ func TestPVDeletionEventIdentityAndTimes(t *testing.T) {
 func deleteFailure(at time.Time, message string) *corev1.Event {
 	return &corev1.Event{ObjectMeta: metav1.ObjectMeta{Namespace: "app"}, InvolvedObject: corev1.ObjectReference{APIVersion: "v1", Kind: "PersistentVolume", Name: "disk", UID: "disk-uid"}, Type: corev1.EventTypeWarning, Reason: "VolumeFailedDelete", Message: message, LastTimestamp: metav1.NewTime(at)}
 }
+
+func TestRecentReleasedPVEventCoverage(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name                        string
+		change                      func(*CheckInput)
+		evaluated, passed, findings int
+		missing                     bool
+	}{
+		{"complete events", func(*CheckInput) {}, 1, 1, 0, false},
+		{"unreadable events", func(i *CheckInput) { i.Events = nil }, 0, 0, 0, true},
+		{"partial events", func(i *CheckInput) { i.PVDeletionEventsComplete = false }, 0, 0, 0, true},
+		{"partial events with warning", func(i *CheckInput) {
+			i.PVDeletionEventsComplete = false
+			i.Events = []*corev1.Event{deleteFailure(now, "visible failure")}
+		}, 1, 0, 1, true},
+		{"unreadable events after grace", func(i *CheckInput) {
+			i.Events = nil
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(now.Add(-2 * time.Hour)))
+		}, 1, 0, 1, true},
+		{"Retain does not need events", func(i *CheckInput) {
+			i.Events = nil
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+		}, 1, 1, 0, false},
+		{"Bound does not need events", func(i *CheckInput) {
+			i.Events = nil
+			i.PersistentVolumes[0].Status.Phase = corev1.VolumeBound
+		}, 1, 1, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := storageInput()
+			i.PersistentVolumeClaims = []*corev1.PersistentVolumeClaim{}
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			i.PersistentVolumes[0].Status.Phase = corev1.VolumeReleased
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(now.Add(-time.Minute)))
+			tc.change(i)
+			tr := newEvalTracker()
+			r := buildResults(checkStorage(tr, i, now), tr, nil)
+			count := r.CheckCounts["releasedPV"]
+			if count.Evaluated != tc.evaluated || count.Passed != tc.passed || len(r.Findings) != tc.findings || slices.Contains(r.MissingInputs, "pv-deletion-events") != tc.missing {
+				t.Fatalf("evaluated=%d passed=%d findings=%+v missing=%v", count.Evaluated, count.Passed, r.Findings, r.MissingInputs)
+			}
+		})
+	}
+}
+
+func TestPVDeletionWarningsCurrentRelease(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name    string
+		change  func(*CheckInput)
+		message string
+	}{
+		{"previous release warning", func(*CheckInput) {}, ""},
+		{"previous release warning after grace", func(i *CheckInput) {
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(now.Add(-2 * time.Hour)))
+		}, "deletion has not completed"},
+		{"warning at transition", func(i *CheckInput) {
+			i.Events[0].LastTimestamp = *i.PersistentVolumes[0].Status.LastPhaseTransitionTime
+		}, "deletion is failing"},
+		{"series continued in current release", func(i *CheckInput) {
+			i.Events[0].Series = &corev1.EventSeries{LastObservedTime: metav1.NewMicroTime(now)}
+		}, "deletion is failing"},
+		{"transition unavailable", func(i *CheckInput) {
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = nil
+		}, "deletion is failing"},
+		{"transition zero", func(i *CheckInput) {
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = &metav1.Time{}
+		}, "deletion is failing"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := storageInput()
+			i.PersistentVolumeClaims = []*corev1.PersistentVolumeClaim{}
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			i.PersistentVolumes[0].Status.Phase = corev1.VolumeReleased
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(now.Add(-time.Minute)))
+			i.Events = []*corev1.Event{deleteFailure(now.Add(-3*time.Hour), "previous release failure")}
+			tc.change(i)
+			fs := checkStorage(newEvalTracker(), i, now)
+			if tc.message == "" {
+				if len(fs) != 0 {
+					t.Fatalf("previous release warning reused: %+v", fs)
+				}
+			} else if len(fs) != 1 || !strings.Contains(fs[0].Message, tc.message) {
+				t.Fatalf("current release outcome: %+v", fs)
+			}
+			if tc.name == "previous release warning after grace" && strings.Contains(fs[0].Message, "previous release failure") {
+				t.Fatalf("stale warning included as evidence: %+v", fs[0])
+			}
+		})
+	}
+}
+
+func TestLongPendingPVCStorageClassEvidence(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name    string
+		change  func(*CheckInput)
+		message string
+		missing bool
+	}{
+		{"unreadable classes", func(i *CheckInput) { i.StorageClasses = nil }, "binding mode not visible", true},
+		{"unreadable default class", func(i *CheckInput) {
+			i.StorageClasses = nil
+			i.PersistentVolumeClaims[0].Spec.StorageClassName = nil
+		}, "binding mode not visible", true},
+		{"missing named class", func(i *CheckInput) { i.PersistentVolumeClaims[0].Spec.StorageClassName = ptr("missing") }, `StorageClass "missing" not found`, false},
+		{"empty class inventory", func(i *CheckInput) { i.StorageClasses = []*storagev1.StorageClass{} }, `StorageClass "local" not found`, false},
+		{"no default class", func(i *CheckInput) { i.PersistentVolumeClaims[0].Spec.StorageClassName = nil }, "No default StorageClass applies", false},
+		{"no classes or default", func(i *CheckInput) {
+			i.PersistentVolumeClaims[0].Spec.StorageClassName = nil
+			i.StorageClasses = []*storagev1.StorageClass{}
+		}, "No default StorageClass applies", false},
+		{"default WFFC class", func(i *CheckInput) {
+			i.PersistentVolumeClaims[0].Spec.StorageClassName = nil
+			i.StorageClasses[0].Annotations = map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}
+		}, "Default StorageClass \"local\" uses WaitForFirstConsumer", false},
+		{"newest default class", func(i *CheckInput) {
+			i.PersistentVolumeClaims[0].Spec.StorageClassName = nil
+			i.StorageClasses[0].Annotations = map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}
+			i.StorageClasses[0].CreationTimestamp = metav1.NewTime(now.Add(-time.Hour))
+			i.StorageClasses = append([]*storagev1.StorageClass{{ObjectMeta: metav1.ObjectMeta{Name: "new", CreationTimestamp: metav1.NewTime(now), Annotations: map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}}}}, i.StorageClasses...)
+		}, "Default StorageClass \"new\" applies", false},
+		{"default timestamp tie", func(i *CheckInput) {
+			i.PersistentVolumeClaims[0].Spec.StorageClassName = nil
+			i.StorageClasses[0].Annotations = map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}
+			i.StorageClasses = append(i.StorageClasses, &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "alphabetical", Annotations: map[string]string{"storageclass.kubernetes.io/is-default-class": "true"}}})
+		}, "Default StorageClass \"alphabetical\" applies", false},
+		{"explicit no class", func(i *CheckInput) { i.PersistentVolumeClaims[0].Spec.StorageClassName = ptr("") }, "storage class \"\"", false},
+		{"explicit no class with unreadable classes", func(i *CheckInput) {
+			i.PersistentVolumeClaims[0].Spec.StorageClassName = ptr("")
+			i.StorageClasses = nil
+		}, "storage class \"\"", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := storageInput()
+			i.PersistentVolumeClaims[0].Status.Phase = corev1.ClaimPending
+			tc.change(i)
+			tr := newEvalTracker()
+			fs := checkStorage(tr, i, now)
+			if len(fs) != 1 || !strings.Contains(fs[0].Message, tc.message) {
+				t.Fatalf("class evidence: %+v", fs)
+			}
+			if slices.Contains(tr.missingInputs, "pvc-binding-mode") != tc.missing || slices.Contains(tr.missingInputs, "storageclasses") != tc.missing {
+				t.Fatalf("readable class evidence marked unavailable: %+v", tr.missingInputs)
+			}
+			if !tc.missing && strings.Contains(fs[0].Message, "binding mode not visible") {
+				t.Fatalf("readable class evidence described as invisible: %+v", fs[0])
+			}
+		})
+	}
+}

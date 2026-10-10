@@ -110,6 +110,47 @@ func TestStorageVisiblePVWarningWithPartialEvents(t *testing.T) {
 	}
 }
 
+func TestStorageRecentPVEventCoverage(t *testing.T) {
+	for _, tc := range []struct {
+		name                        string
+		events, restricted, visible bool
+		evaluated, passed, findings int
+		missing                     bool
+	}{
+		{"unreadable events", false, false, false, 0, 0, 0, true},
+		{"hidden warning", true, true, false, 0, 0, 0, true},
+		{"visible warning with partial coverage", true, true, true, 1, 0, 1, true},
+		{"complete empty events", true, false, false, 1, 1, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			releasedAt := metav1.NewTime(time.Now().Add(-time.Minute))
+			pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "disk", UID: "disk-uid"}, Spec: corev1.PersistentVolumeSpec{PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete}, Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeReleased, LastPhaseTransitionTime: &releasedAt}}
+			objects := []runtime.Object{pv}
+			if tc.restricted {
+				ns := "other"
+				if tc.visible {
+					ns = "app"
+				}
+				objects = append(objects, &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "failure", Namespace: ns}, InvolvedObject: corev1.ObjectReference{Kind: "PersistentVolume", APIVersion: "v1", Name: "disk", UID: "disk-uid"}, Type: corev1.EventTypeWarning, Reason: "VolumeFailedDelete", Message: "failure", LastTimestamp: metav1.NewTime(time.Now())})
+			}
+			if err := k8s.InitScopedTestResourceCache(fake.NewClientset(objects...), map[string]k8score.ResourceScope{k8score.PersistentVolumes: {Enabled: true}, k8score.Events: {Enabled: tc.events}}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestState)
+			scope := &ReadScope{ClusterResources: map[string]bool{"persistentvolumes": true}}
+			if tc.restricted {
+				scope.Namespaces = []string{"app"}
+			}
+			input := collectStorageInput(k8s.GetResourceCache(), nil, scope)
+			r := bp.RunChecks(input)
+			count := r.CheckCounts["releasedPV"]
+			if count.Evaluated != tc.evaluated || count.Passed != tc.passed || len(r.Findings) != tc.findings || slices.Contains(r.MissingInputs, "pv-deletion-events") != tc.missing {
+				t.Fatalf("evaluated=%d passed=%d findings=%+v missing=%v", count.Evaluated, count.Passed, r.Findings, r.MissingInputs)
+			}
+		})
+	}
+}
+
 func TestStorageOnlyCollectsDeletionEventsForReleasedDeletePV(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

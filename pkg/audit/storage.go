@@ -35,8 +35,12 @@ func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
 		pvs[pv.Name] = pv
 	}
 	classes := map[string]*storagev1.StorageClass{}
+	var defaultClass *storagev1.StorageClass
 	for _, sc := range input.StorageClasses {
 		classes[sc.Name] = sc
+		if sc.Annotations["storageclass.kubernetes.io/is-default-class"] == "true" && (defaultClass == nil || sc.CreationTimestamp.After(defaultClass.CreationTimestamp.Time) || sc.CreationTimestamp.Equal(&defaultClass.CreationTimestamp) && sc.Name < defaultClass.Name) {
+			defaultClass = sc
+		}
 	}
 	consumers := collectPVCConsumers(input)
 	var findings []Finding
@@ -73,18 +77,29 @@ func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
 			checkID = "pvcLongPending"
 			message = "Pending since creation, " + storageAge(pvc.CreationTimestamp, now) + " ago. No consumer observed among Pods or built-in workload templates Radar can see; CRD consumers may still reference it."
 			if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != "" {
-				var sc *storagev1.StorageClass
+				sc := defaultClass
 				if pvc.Spec.StorageClassName != nil {
 					sc = classes[*pvc.Spec.StorageClassName]
 				}
-				if sc == nil {
-					if input.StorageClasses == nil {
-						tr.missingInputs = append(tr.missingInputs, "storageclasses")
-					}
-					tr.missingInputs = append(tr.missingInputs, "pvc-binding-mode")
+				if input.StorageClasses == nil {
+					tr.missingInputs = append(tr.missingInputs, "storageclasses", "pvc-binding-mode")
 					message += " StorageClass binding mode not visible."
-				} else if sc.VolumeBindingMode != nil && *sc.VolumeBindingMode == storagev1.VolumeBindingWaitForFirstConsumer {
-					message += " StorageClass uses WaitForFirstConsumer."
+				} else if sc == nil {
+					if pvc.Spec.StorageClassName == nil {
+						message += " No default StorageClass applies."
+					} else {
+						message += fmt.Sprintf(" StorageClass %q not found.", *pvc.Spec.StorageClassName)
+					}
+				} else {
+					classDescription := "StorageClass"
+					if pvc.Spec.StorageClassName == nil {
+						classDescription = fmt.Sprintf("Default StorageClass %q", sc.Name)
+					}
+					if sc.VolumeBindingMode != nil && *sc.VolumeBindingMode == storagev1.VolumeBindingWaitForFirstConsumer {
+						message += " " + classDescription + " uses WaitForFirstConsumer."
+					} else if pvc.Spec.StorageClassName == nil {
+						message += " " + classDescription + " applies."
+					}
 				}
 			}
 		}
@@ -92,14 +107,23 @@ func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
 	}
 	deleteFailures := latestPVDeleteFailures(input.PersistentVolumes, input.Events, now)
 	for _, pv := range input.PersistentVolumes {
-		tr.record("releasedPV", "")
 		if pv.Status.Phase != corev1.VolumeReleased {
+			tr.record("releasedPV", "")
 			continue
 		}
 		releasedAt := pv.CreationTimestamp
 		if pv.Status.LastPhaseTransitionTime != nil && !pv.Status.LastPhaseTransitionTime.IsZero() {
 			releasedAt = *pv.Status.LastPhaseTransitionTime
 		}
+		failure, hasFailure := deleteFailures[pv.UID]
+		recentFailure := hasFailure && now.Sub(failure.at) <= pvDeleteEventWindow
+		if pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimDelete && (input.Events == nil || !input.PVDeletionEventsComplete) {
+			tr.missingInputs = append(tr.missingInputs, "pv-deletion-events")
+			if !recentFailure && (releasedAt.IsZero() || now.Sub(releasedAt.Time) <= pvDeleteGrace) {
+				continue
+			}
+		}
+		tr.record("releasedPV", "")
 		message := ""
 		switch pv.Spec.PersistentVolumeReclaimPolicy {
 		case corev1.PersistentVolumeReclaimRetain:
@@ -108,8 +132,7 @@ func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
 			}
 			message = "Released PV is kept after its claim was deleted (reclaim policy Retain)."
 		case corev1.PersistentVolumeReclaimDelete:
-			failure, hasFailure := deleteFailures[pv.UID]
-			if hasFailure && now.Sub(failure.at) <= pvDeleteEventWindow {
+			if recentFailure {
 				message = "Released PV deletion is failing: " + failure.event.Message
 			} else {
 				if releasedAt.IsZero() || now.Sub(releasedAt.Time) <= pvDeleteGrace {
@@ -119,9 +142,6 @@ func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
 				if hasFailure {
 					message += " Latest deletion warning (" + timeutil.FormatAgeShort(now.Sub(failure.at)) + " ago): " + failure.event.Message
 				}
-			}
-			if input.Events == nil || !input.PVDeletionEventsComplete {
-				tr.missingInputs = append(tr.missingInputs, "pv-deletion-events")
 			}
 		default:
 			continue
@@ -262,6 +282,9 @@ func latestPVDeleteFailures(pvs []*corev1.PersistentVolume, events []*corev1.Eve
 			at = e.CreationTimestamp.Time
 		}
 		if at.IsZero() || at.After(now) || !at.After(latest[ref.UID].at) {
+			continue
+		}
+		if pv.Status.LastPhaseTransitionTime != nil && !pv.Status.LastPhaseTransitionTime.IsZero() && at.Before(pv.Status.LastPhaseTransitionTime.Time) {
 			continue
 		}
 		latest[ref.UID] = pvDeleteFailure{event: e, at: at}

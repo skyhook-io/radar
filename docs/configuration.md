@@ -727,7 +727,7 @@ posture priority (`warning` in the raw scan):
 |---|---|
 | `pvcNoConsumer` | A Bound PVC older than 24 hours, without a controller owner, has no consumer observed among readable Pods and built-in workload templates. Findings include requested size, storage class, PVC age, bound PV and reclaim policy when visible. |
 | `pvcLongPending` | A PVC without a controller owner has been Pending since creation, more than 24 hours ago, and no Pod or built-in workload template references it. WaitForFirstConsumer claims without a consumer are included. |
-| `releasedPV` | A Released PV with Retain is kept after claim deletion for more than 24 hours. With Delete, deletion has not completed after one hour, even without warning events. A Warning `VolumeFailedDelete` event for the PV's UID within the last 24 hours reports deletion failure immediately; the latest warning message is included, with its age when older. |
+| `releasedPV` | A Released PV with Retain is kept after claim deletion for more than 24 hours. With Delete, deletion has not completed after one hour, even without warning events. A Warning `VolumeFailedDelete` event for the PV's UID within the last 24 hours reports deletion failure immediately; when the current Released transition time is known, warnings before that transition are excluded. The latest applicable warning message is included, with its age when older. |
 
 Consumer evidence includes Deployments, ReplicaSets, StatefulSets, DaemonSets,
 Jobs and CronJobs. Templates count at zero replicas, and retained StatefulSet
@@ -746,15 +746,24 @@ Unavailable inventories appear as `persistentvolumes` or `storageclasses` only
 when a scanned claim needs them. Bound no-consumer findings still appear without
 PV access, with **reclaim policy not visible**. An unconsumed Pending claim with
 unknown binding mode still appears, with `pvc-binding-mode` reported; consumed
-Pending claims are excluded regardless of binding mode.
+Pending claims are excluded regardless of binding mode. With readable
+StorageClasses, a missing named class or absent default is reported in the
+finding, without marking binding-mode evidence unavailable. An unset class name
+uses the most recently created default StorageClass for binding-mode context;
+an explicitly empty class name opts out of defaulting.
 
 The namespace picker selects PVC subjects. Released PVs remain cluster-scoped
-and require their own grant. All readable PVs count toward `releasedPV`, including
-healthy volumes. Events are listed only when a Released Delete volume needs
+and require their own grant. Readable PVs count toward `releasedPV`, including
+healthy volumes, except a Released Delete volume still within its one-hour grace
+period whose outcome is unknown because event coverage is incomplete. Events
+are listed only when a Released Delete volume needs
 deletion evidence, and only from namespaces the caller may see. Unreadable,
 partial or unsynced deletion-event coverage reports `pv-deletion-events` when
 supplemental warning evidence is unavailable; the delayed-deletion finding still
-appears based on the PV itself. PV findings use time in Released when
+appears based on the PV itself. During the grace period, an observed current
+deletion warning establishes failure even with partial coverage; without one,
+incomplete coverage contributes neither an evaluated nor a passing subject.
+PV findings use time in Released when
 `status.lastPhaseTransitionTime` is present, otherwise use and explicitly show
 **PV age** for the thresholds. Neither is a history of how long the data was
 unneeded.
