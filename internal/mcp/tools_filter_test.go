@@ -224,12 +224,10 @@ func TestHandleListResources_CommonAliases(t *testing.T) {
 		t.Errorf("po alias leaked other-namespace pods: %s", body)
 	}
 
-	result, _, err = handleListResources(ctx, nil, listResourcesInput{Kind: "no"})
-	if err != nil {
-		t.Fatalf("handleListResources no: %v", err)
-	}
-	if body := extractText(t, result); body != "[]" {
-		t.Errorf("node alias must still respect cluster-scoped RBAC, got: %s", body)
+	denyClusterRead(t, "alice", "/nodes")
+	_, _, err = handleListResources(ctx, nil, listResourcesInput{Kind: "no"})
+	if err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("node alias must report caller denial, got %v", err)
 	}
 }
 
@@ -237,14 +235,10 @@ func TestHandleListResources_DeniedNamespace(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withRestrictedUser(t, "alice", []string{"alpha"})
 
-	// Alice asks for beta — empty result, no error.
-	result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "pods", Namespace: "beta"})
-	if err != nil {
-		t.Fatalf("handleListResources: %v", err)
-	}
-	body := extractText(t, result)
-	if containsName(body, "beta-pod") {
-		t.Errorf("denied namespace leaked: %s", body)
+	// A denied scope must be distinguishable from an empty namespace.
+	_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "pods", Namespace: "beta"})
+	if err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("expected explicit caller denial, got %v", err)
 	}
 }
 
@@ -255,13 +249,9 @@ func TestHandleListResources_ClusterOnlyKindBlockedForRestricted(t *testing.T) {
 	ctx := withRestrictedUser(t, "alice", []string{"alpha"})
 	denyClusterRead(t, "alice", "/nodes")
 
-	result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "nodes"})
-	if err != nil {
-		t.Fatalf("handleListResources: %v", err)
-	}
-	body := extractText(t, result)
-	if containsName(body, "node-1") || containsName(body, "node-2") {
-		t.Errorf("restricted user saw cluster-only Node resources: %s", body)
+	_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "nodes"})
+	if err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("expected explicit caller denial, got %v", err)
 	}
 }
 
@@ -273,13 +263,9 @@ func TestHandleListResources_ClusterWidePodsButNoNodes(t *testing.T) {
 	ctx := withClusterAdmin(t, "broad-pod-reader") // nil AllowedNamespaces
 	denyClusterRead(t, "broad-pod-reader", "/nodes")
 
-	result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "nodes"})
-	if err != nil {
-		t.Fatalf("handleListResources: %v", err)
-	}
-	body := extractText(t, result)
-	if containsName(body, "node-1") || containsName(body, "node-2") {
-		t.Errorf("user with cluster-wide pods but no nodes saw nodes: %s", body)
+	_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "nodes"})
+	if err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("expected explicit caller denial, got %v", err)
 	}
 }
 
@@ -390,13 +376,9 @@ func TestHandleListResources_NamespacesRequiresListNamespacesSAR(t *testing.T) {
 	ctx := withClusterAdmin(t, "alice")
 	denyClusterRead(t, "alice", "/namespaces")
 
-	result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "namespaces"})
-	if err != nil {
-		t.Fatalf("handleListResources: %v", err)
-	}
-	body := extractText(t, result)
-	if containsName(body, "alpha") || containsName(body, "beta") || containsName(body, "gamma") {
-		t.Errorf("namespaces leaked without list-namespaces SAR: %s", body)
+	_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "namespaces"})
+	if err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("expected explicit caller denial, got %v", err)
 	}
 }
 
@@ -567,13 +549,9 @@ func TestHandleListResources_Secrets_DeniedInAllNamespaces(t *testing.T) {
 	ctx := withRestrictedUser(t, "alice", []string{"alpha"})
 	seedSecretListCanI(t, "alice", nil, []string{"alpha"})
 
-	result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "secrets"})
-	if err != nil {
-		t.Fatalf("handleListResources: %v", err)
-	}
-	body := extractText(t, result)
-	if containsName(body, "alpha-secret") {
-		t.Errorf("denied secret leaked through namespace-only gate: %s", body)
+	_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "secrets"})
+	if err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("expected explicit caller denial, got %v", err)
 	}
 }
 
@@ -612,15 +590,9 @@ func TestHandleListResources_Secrets_ClusterWideShape_NoSecretRBAC(t *testing.T)
 	}
 	perms.SetCanI("list", "", "secrets", "", false)
 
-	result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "secrets"})
-	if err != nil {
-		t.Fatalf("handleListResources: %v", err)
-	}
-	body := extractText(t, result)
-	for _, want := range []string{"alpha-secret", "beta-secret", "gamma-secret"} {
-		if containsName(body, want) {
-			t.Errorf("secret %q leaked to cluster-wide-pods user without secrets SAR: %s", want, body)
-		}
+	_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "secrets"})
+	if err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("expected explicit caller denial, got %v", err)
 	}
 }
 

@@ -447,6 +447,41 @@ Only the highest-spending namespaces get individual `type: namespace` series, ea
 
 Both tools return `guidance` as an array of interpretation notes; read notes about missing evidence and scope before reporting a conclusion.
 
+## Resource read errors
+
+`list_resources` and `get_resource` return MCP tool errors (`isError: true`) when
+Radar cannot establish a readable, synchronized view. A successful empty list
+remains `[]`; it means no objects were found within the readable requested scope,
+not that every namespace in the cluster was inspected. Successful resource and
+context shapes are unchanged.
+
+Errors distinguish the calling user's permissions from Radar's collection access:
+
+- `forbidden`: your role cannot perform the named verb on the API group/resource
+  in the named namespace or at cluster scope. A request with no accessible
+  namespaces explicitly reports no namespace access.
+- `permission_check_failed`: Radar could not verify access; this is not proof
+  that your role is forbidden. Retry after the permission check is available.
+- `outside_namespace_scope`: the requested namespace is excluded by Radar's
+  `--namespace-scope` selection. Changing caller permissions does not remove this
+  scope limit. The browser's namespace picker does not scope MCP requests;
+  specify `namespace` to narrow a tool call.
+- `collector_forbidden`: Radar's service account (or local kubeconfig identity)
+  cannot collect or directly read the resource. Granting the caller access alone does not repair
+  collection.
+- `kind_sync_pending`: initial cache synchronization is still in progress; retry
+  shortly. `kind_sync_failed` means the typed sync deadline elapsed or a dynamic
+  sync stalled; inspect Radar's connection and collector list/watch permissions.
+- `kind_not_watched`: collection is unavailable or does not cover the requested
+  namespace scope. `unknown_kind` means discovery does not recognize the kind.
+
+Dynamic resources are watched on demand; the first call can report loading.
+Ordinary namespaced resources retain namespace-level authorization; Secrets and
+cluster-scoped kinds retain their additional per-kind permission checks. Lists
+may cover only the caller's readable namespaces; Secret lists additionally omit
+namespaces where the caller's Secret list permission is denied. A failed Secret
+permission check returns an error rather than silently omitting that namespace.
+
 ## Available Tools
 
 ### Read Tools

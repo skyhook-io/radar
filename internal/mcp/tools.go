@@ -837,66 +837,37 @@ type topResourcesResponseMCP struct {
 }
 
 func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input listResourcesInput) (*mcp.CallToolResult, any, error) {
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return nil, nil, errNotConnected()
-	}
-
-	kind := strings.ToLower(input.Kind)
+	kind := resourceKindName(strings.ToLower(input.Kind), input.Group)
 	group := input.Group
 	var requested []string
 	if input.Namespace != "" {
 		requested = []string{input.Namespace}
 	}
-
-	// Cluster-scoped kinds (static cluster-only list + cluster-scoped CRDs
-	// from discovery) are gated per-kind via SAR. Run BEFORE the namespace
-	// filter check so users with explicit cluster-scoped RBAC but no
-	// namespace access can still read those resources.
-	//
-	// "namespaces" is cluster-scoped at the K8s API. Full Namespace objects
-	// require explicit list-namespaces SAR. Read access to resources IN a
-	// namespace (list pods etc.) does not imply read access to the Namespace
-	// resource itself. Restricted users use the dedicated list_namespaces
-	// MCP tool, which serves a synthesized {name, status} view.
-	isNamespacesKind := kind == "namespaces" || kind == "namespace"
-	clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
-	if clusterScoped && !isNamespacesKind {
-		if !canReadClusterScopedKind(ctx, kind, group, "list") {
-			return toJSONResult([]any{})
+	isNamespacesKind := kind == "namespaces"
+	clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
+	if clusterScoped {
+		granted, checked := canReadClusterScopedKindDecision(ctx, kind, group, "list")
+		if !granted {
+			return nil, nil, resourcePermissionError(checked, "list", gvrGroup, gvrResource, "")
 		}
 	}
-	if isNamespacesKind && !canReadClusterScopedKind(ctx, "namespaces", "", "list") {
-		return toJSONResult([]any{})
-	}
-
-	// Filter the requested namespaces against the user's RBAC. Returns:
-	//   nil       — auth off or cluster-wide namespaced access: pass through
-	//   []string{} — user has no namespace access
-	//   [...]     — restrict reads to these namespaces
-	allowed := filterNamespacesForUser(ctx, requested)
-	if !clusterScoped && allowed != nil && len(allowed) == 0 {
-		return toJSONResult([]any{})
-	}
-
-	// Per-kind RBAC inside a namespace for Secrets. The cache reads as the SA,
-	// and the chart can grant the SA cluster-wide secrets (rbac.secrets,
-	// rbac.helm, auth.mode != "none", or cloud.enabled — Helm release
-	// visibility), so per-user RBAC must gate the read. canReadInNamespace
-	// and filterNamespacesByCanRead pass through when no user is on context
-	// (auth-mode=none — SA RBAC at the cache layer is the only gate). Other
-	// namespaced kinds are deferred.
-	if kind == "secrets" || kind == "secret" {
-		if allowed == nil {
-			if !canReadInNamespace(ctx, "", "secrets", "", "list") {
-				return toJSONResult([]any{})
-			}
-		} else {
-			allowed = filterNamespacesByCanRead(ctx, "", "secrets", "list", allowed)
-			if len(allowed) == 0 {
-				return toJSONResult([]any{})
-			}
+	var allowed []string
+	var err error
+	if !clusterScoped || isNamespacesKind {
+		allowed, err = resourceReadNamespaces(ctx, requested, "list", kind, group)
+		if err != nil {
+			return nil, nil, err
 		}
+	}
+	if kind == "secrets" {
+		allowed, err = resourceSecretNamespaces(ctx, allowed, "list")
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	cache, err := resourceReadCache(kind, group, allowed)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// For cluster-scoped reads, force a cluster-wide list (don't iterate
@@ -976,6 +947,10 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 	if len(namespaces) > 0 {
 		for _, ns := range namespaces {
 			items, err := cache.ListDynamicWithGroup(ctx, kind, ns, group)
+			cachedReady, err := checkDynamicResourceRead(kind, group, ns, "list", err)
+			if cachedReady && err == nil {
+				items, err = cache.ListDynamicWithGroup(ctx, kind, ns, group)
+			}
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to list %s: %w", kind, err)
 			}
@@ -983,6 +958,10 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 		}
 	} else {
 		items, err := cache.ListDynamicWithGroup(ctx, kind, "", group)
+		cachedReady, err := checkDynamicResourceRead(kind, group, "", "list", err)
+		if cachedReady && err == nil {
+			items, err = cache.ListDynamicWithGroup(ctx, kind, "", group)
+		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to list %s: %w", kind, err)
 		}
@@ -1012,47 +991,37 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 }
 
 func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getResourceInput) (*mcp.CallToolResult, any, error) {
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		return nil, nil, errNotConnected()
-	}
-
-	kind := strings.ToLower(input.Kind)
+	kind := resourceKindName(strings.ToLower(input.Kind), input.Group)
 	group := input.Group
 	namespace := input.Namespace
 	name := input.Name
-
-	// Cluster-scoped GETs are gated per-kind via SAR — that catches both
-	// the static cluster-only list and dynamic cluster-scoped CRDs (via
-	// discovery). Run BEFORE the namespace check so users with cluster-
-	// scoped RBAC but no namespace access can still read those resources.
-	//
-	// "namespaces" is cluster-scoped at the K8s API but exposed as a
-	// per-user filtered list — gate via the user's namespace access for
-	// the requested name, not via cluster-scoped SAR.
-	isNamespacesKind := kind == "namespaces" || kind == "namespace"
-	clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
-	if isNamespacesKind {
-		// Full Namespace object access requires explicit get-namespaces SAR.
-		// Read access to resources IN a namespace does not imply read access
-		// to the Namespace object itself.
-		if !canReadClusterScopedKind(ctx, "namespaces", "", "get") {
-			return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", name)
+	clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
+	if clusterScoped {
+		granted, checked := canReadClusterScopedKindDecision(ctx, kind, group, "get")
+		if !granted {
+			return nil, nil, resourcePermissionError(checked, "get", gvrGroup, gvrResource, "")
 		}
-	} else if clusterScoped {
-		if !canReadClusterScopedKind(ctx, kind, group, "get") {
-			return nil, nil, fmt.Errorf("forbidden: %s requires explicit cluster-scoped RBAC", kind)
+	} else {
+		if namespace == "" {
+			return nil, nil, fmt.Errorf("namespace_required: specify a namespace for %s", kind)
 		}
-	} else if !checkNamespaceAccess(ctx, namespace) {
-		return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", namespace)
-	} else if kind == "secrets" || kind == "secret" {
-		// Per-kind RBAC inside the namespace — the chart can grant the SA
-		// cluster-wide secrets (Helm release visibility), so namespace-list
-		// discovery is not a sufficient gate. The list handler has the
-		// matching list-SAR.
-		if !canReadInNamespace(ctx, "", "secrets", namespace, "get") {
-			return nil, nil, fmt.Errorf("forbidden: no access to secrets in namespace %q", namespace)
+		if _, err := resourceReadNamespaces(ctx, []string{namespace}, "get", kind, group); err != nil {
+			return nil, nil, err
 		}
+		if kind == "secrets" {
+			granted, checked := canReadInNamespaceDecision(ctx, "", "secrets", namespace, "get")
+			if !granted {
+				return nil, nil, resourcePermissionError(checked, "get", "", "secrets", namespace)
+			}
+		}
+	}
+	var namespaces []string
+	if !clusterScoped {
+		namespaces = []string{namespace}
+	}
+	cache, err := resourceReadCache(kind, group, namespaces)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Fetch the resource. When group is set, skip the typed cache and route
@@ -1063,23 +1032,23 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	var resourceData any
 	var rawObj runtime.Object
 	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
-		u, dynErr := cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
+		u, dynErr := fetchMCPDynamicResource(ctx, cache, kind, group, namespace, name)
 		if dynErr != nil {
-			return nil, nil, notFoundError(ctx, dynErr, kind, namespace, name)
+			return nil, nil, resourceGetError(ctx, dynErr, kind, namespace, name)
 		}
 		resourceData = aicontext.MinifyUnstructured(u, aicontext.LevelDetail)
 		rawObj = u
 	} else {
 		obj, err := k8s.FetchResource(cache, kind, namespace, name)
 		if err == k8s.ErrUnknownKind {
-			u, dynErr := cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
+			u, dynErr := fetchMCPDynamicResource(ctx, cache, kind, group, namespace, name)
 			if dynErr != nil {
-				return nil, nil, notFoundError(ctx, dynErr, kind, namespace, name)
+				return nil, nil, resourceGetError(ctx, dynErr, kind, namespace, name)
 			}
 			resourceData = aicontext.MinifyUnstructured(u, aicontext.LevelDetail)
 			rawObj = u
 		} else if err != nil {
-			return nil, nil, notFoundError(ctx, err, kind, namespace, name)
+			return nil, nil, resourceGetError(ctx, err, kind, namespace, name)
 		} else {
 			k8s.SetTypeMeta(obj)
 			minified, minErr := aicontext.Minify(obj, aicontext.LevelDetail)
