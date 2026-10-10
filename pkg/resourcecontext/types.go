@@ -34,7 +34,9 @@ type ResourceContext struct {
 	Tier            ContextTier        `json:"tier"`
 	Owner           *ContextRef        `json:"owner,omitempty"`
 	ManagedBy       []ContextRef       `json:"managedBy,omitempty"`
-	Exposes         []ContextRef       `json:"exposes,omitempty"`
+	Exposes         []ContextRef       `json:"exposes,omitempty"`        // Union of upstream routing resources and backends; retained for compatibility.
+	ExposedBy       []ContextRef       `json:"exposedBy,omitempty"`      // Upstream resources routing to this resource.
+	Backends        []ContextRef       `json:"backends,omitempty"`       // Resources this routes to.
 	Monitors        []ContextRef       `json:"monitors,omitempty"`       // Prometheus Operator monitors scraping this resource.
 	MonitorTargets  []ContextRef       `json:"monitorTargets,omitempty"` // Targets scraped by this monitor.
 	Protects        []ContextRef       `json:"protects,omitempty"`       // Targets selected by this budget or policy.

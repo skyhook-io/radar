@@ -224,16 +224,21 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 
 	// 2. Topology-derived: Exposes, SelectedBy, ScaledBy
 	if rel != nil {
-		exposes := make([]topology.ResourceRef, 0, len(rel.Services)+len(rel.Ingresses)+len(rel.Gateways)+len(rel.Routes))
-		exposes = append(exposes, rel.Services...)
-		exposes = append(exposes, rel.Ingresses...)
-		exposes = append(exposes, rel.Gateways...)
-		exposes = append(exposes, rel.Routes...)
-		exposes = append(exposes, rel.Backends...)
-		exposes = append(exposes, rel.RoutedFrom...)
-		rc.Exposes = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(exposes),
-			"exposes", omitted)
+		exposedBy := make([]topology.ResourceRef, 0, len(rel.Services)+len(rel.Ingresses)+len(rel.Gateways)+len(rel.Routes)+len(rel.RoutedFrom))
+		exposedBy = append(exposedBy, rel.Services...)
+		exposedBy = append(exposedBy, rel.Ingresses...)
+		exposedBy = append(exposedBy, rel.Gateways...)
+		exposedBy = append(exposedBy, rel.Routes...)
+		exposedBy = append(exposedBy, rel.RoutedFrom...)
+		backends := append([]topology.ResourceRef(nil), rel.Backends...)
+		// Deployment and Node Pods are containment shortcuts, not routing targets.
+		if !(ident.Kind == "Deployment" && ident.Group == "apps") && !(ident.Kind == "Node" && ident.Group == "") {
+			backends = append(backends, rel.Pods...)
+		}
+		rc.ExposedBy = filterRefs(ctx, opts.AccessChecker, toContextRefs(exposedBy), "exposedBy", omitted)
+		rc.Backends = filterRefs(ctx, opts.AccessChecker, toContextRefs(backends), "backends", omitted)
+		exposes := append(exposedBy, backends...)
+		rc.Exposes = filterRefs(ctx, opts.AccessChecker, toContextRefs(exposes), "exposes", omitted)
 
 		selected := make([]topology.ResourceRef, 0, len(rel.PDBs)+len(rel.NetworkPolicies))
 		selected = append(selected, rel.PDBs...)
