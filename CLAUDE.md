@@ -202,7 +202,7 @@ Stateless HTTP at `/mcp` (JSON-RPC). Read tools use `readOnlyHint`, write tools 
 
 Handlers emit `{"error": "..."}` via `s.writeError(w, status, msg)`. Status conventions:
 - **400** invalid input (missing params, bad YAML, unknown kind)
-- **403** RBAC denied (nil lister or apiserver Forbidden)
+- **403** RBAC denied (nil lister or apiserver Forbidden), or a request a browser started from another site. `requireSameOrigin` covers every method under `/api` except OPTIONS, so handlers need no origin check of their own: writes go through `browserOriginAllowed`, reads through `browserReadAllowed`, which refuses only a `Sec-Fetch-Site` of `cross-site` or `same-site`. The pod exec and local-terminal WebSockets keep their own `browserOriginAllowed` check during the upgrade. Do not remove it on the strength of the middleware
 - **404** resource doesn't exist — check via `apierrors.IsNotFound(err)`
 - **409** operation already in progress (sync running, etc.)
 - **413** request body over the route's cap — the body is bounded *before* it is read (`readBoundedTextBody` for raw YAML, `decodeBoundedJSONBody` for JSON), so nothing has parsed it yet and 400 would wrongly blame the content. Reserve 400 for input that was read and found invalid — including caps counted after parsing, like the YAML document limit

@@ -85,6 +85,9 @@ spec:
             {{- if $basePath }}
             - {{ printf "--base-path=%s" $basePath | quote }}
             {{- end }}
+            {{- with .Values.trustedOrigins }}
+            - {{ printf "--trusted-origins=%s" (join "," .) | quote }}
+            {{- end }}
             - --timeline-storage={{ .Values.timeline.storage }}
             {{- if eq .Values.timeline.storage "sqlite" }}
             - --timeline-db={{ .Values.timeline.dbPath }}

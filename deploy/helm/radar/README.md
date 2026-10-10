@@ -263,6 +263,7 @@ trend charts remain unavailable for Kubecost.
 | `service.type` | Service type | `ClusterIP` |
 | `service.port` | Service port | `9280` |
 | `basePath` | URL prefix Radar serves under, e.g. `/radar` for no-strip-prefix subpath ingress | `""` |
+| `trustedOrigins` | Origins besides Radar's own address that may use Radar's API, including changes and pod terminals, e.g. `http://radar.internal`. Set only if changes fail with "Radar refused this request" because a proxy rewrites `Host` | `[]` |
 | `debug.image` | Image for ephemeral debug containers and node debug pods. In built-in restricted PodSecurity namespaces, pod debug containers may retry as the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. | `""` (busybox:latest) |
 | `listPageSize` | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) on very large clusters; `0` = off, try `2000`. Only used when the apiserver lacks WatchList streaming. | `0` |
 | `ingress.enabled` | Enable ingress | `false` |

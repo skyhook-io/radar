@@ -1120,20 +1120,16 @@ func (s *Server) sharedListener() bool {
 	return !cloud.IsLoopbackHostname(s.listenAddress)
 }
 
-func (s *Server) requireCloudConnectDriver(w http.ResponseWriter, r *http.Request, mutating bool) bool {
+func (s *Server) requireCloudConnectDriver(w http.ResponseWriter) bool {
 	if s.cloudInstall == nil || !s.cloudConnectDriverEnabled() {
 		s.writeError(w, http.StatusNotFound, "Cloud connect is not available on this deployment")
-		return false
-	}
-	if mutating && !s.sameOriginOK(r) {
-		s.writeError(w, http.StatusForbidden, "cross-origin requests are not allowed")
 		return false
 	}
 	return true
 }
 
 func (s *Server) handleCloudInstallPrepare(w http.ResponseWriter, r *http.Request) {
-	if !s.requireCloudConnectDriver(w, r, true) {
+	if !s.requireCloudConnectDriver(w) {
 		return
 	}
 	if !s.requireConnected(w) {
@@ -1158,7 +1154,7 @@ func (s *Server) handleCloudInstallPrepare(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleCloudInstallDiscover(w http.ResponseWriter, r *http.Request) {
-	if !s.requireCloudConnectDriver(w, r, false) {
+	if !s.requireCloudConnectDriver(w) {
 		return
 	}
 	if !s.requireConnected(w) {
@@ -1177,7 +1173,7 @@ func (s *Server) handleCloudInstallDiscover(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *Server) handleCloudInstallStart(w http.ResponseWriter, r *http.Request) {
-	if !s.requireCloudConnectDriver(w, r, true) {
+	if !s.requireCloudConnectDriver(w) {
 		return
 	}
 	var req cloudInstallStartRequest
@@ -1198,7 +1194,7 @@ func (s *Server) handleCloudInstallStart(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleCloudInstallStatus(w http.ResponseWriter, r *http.Request) {
-	if !s.requireCloudConnectDriver(w, r, false) {
+	if !s.requireCloudConnectDriver(w) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -1206,7 +1202,7 @@ func (s *Server) handleCloudInstallStatus(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleCloudInstallCancel(w http.ResponseWriter, r *http.Request) {
-	if !s.requireCloudConnectDriver(w, r, true) {
+	if !s.requireCloudConnectDriver(w) {
 		return
 	}
 	var req struct {
@@ -1229,7 +1225,7 @@ func (s *Server) handleCloudInstallCancel(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleCloudInstallDismiss(w http.ResponseWriter, r *http.Request) {
-	if !s.requireCloudConnectDriver(w, r, true) {
+	if !s.requireCloudConnectDriver(w) {
 		return
 	}
 	var req struct {
@@ -1280,25 +1276,6 @@ func (s *Server) cloudConnectCapability() *k8s.CloudConnectCapability {
 		AppURL: s.cloudConnectCfg.HubAppURL,
 		APIURL: s.cloudConnectCfg.HubAPIURL,
 	}
-}
-
-// sameOriginOK is CSRF protection for state-changing browser endpoints. It
-// compares the Origin scheme and authority against what the client actually
-// used, rather than an allowlist of loopback names — a loopback-only allowlist
-// would 403 the legitimate browser on a non-loopback listener (a supported
-// deployment) while still admitting a scripted caller that simply omits the
-// header.
-//
-// Loopback-to-loopback is additionally allowed for the Vite dev proxy, which
-// forwards its own :9273 origin to the backend on :9280.
-func (s *Server) sameOriginOK(r *http.Request) bool {
-	if allowed, decided := fetchMetadataOriginVerdict(r); decided {
-		return allowed
-	}
-	if sameAuthorityOriginOK(r) {
-		return true
-	}
-	return s.viteDevProxyOriginOK(r)
 }
 
 // redactCloudToken removes a cluster token that an upstream error may have

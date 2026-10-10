@@ -79,9 +79,7 @@ radar --auth-mode=proxy \
 
 > **Security:** Your ingress must strip `X-Forwarded-User` and `X-Forwarded-Groups` headers from external requests to prevent spoofing. The auth proxy should be the **only** path to Radar. Radar logs a warning at startup as a reminder.
 
-> **Reserved identities:** In every auth mode, Radar refuses any identity whose username or groups fall in the Kubernetes-reserved `system:` namespace (`system:masters`, `system:nodes`, `system:serviceaccount:…`, etc.) and returns 403. A spoofed header or an IdP group named `system:masters` can't be used to impersonate cluster-admin through Radar. If your IdP emits such groups and your API server maps them with a prefix, match that prefix: in OIDC mode set `--auth-oidc-groups-prefix` (and `--auth-oidc-username-prefix`); in proxy mode configure your proxy or IdP to forward the prefixed names.
-
-> **WebSockets:** Preserve the browser-facing `Host` header when proxying Radar; this is the compatibility requirement across browsers and proxies. When both the browser and proxy forward Fetch Metadata, Radar can also recognize a same-origin connection through a host-rewriting proxy. Pod exec rejects cross-origin handshakes.
+> **Proxies:** Preserve the browser-facing `Host` header when proxying Radar. Radar accepts changes and pod exec sessions only from its own page, and it recognizes that page by comparing the browser's `Origin` with `Host` (or by `Sec-Fetch-Site`, which browsers send over HTTPS). If your proxy must rewrite `Host`, list the address users open Radar at in `trustedOrigins` (Helm) or `RADAR_TRUSTED_ORIGINS`. See [Changes fail with "Radar refused this request"](in-cluster.md#changes-fail-with-radar-refused-this-request).
 
 > **Local terminal:** The host-level local terminal requires both a loopback-bound Radar listener and a loopback URL, and is unavailable when authentication is enabled. Unlike pod exec, it runs as the Radar process's operating-system user and cannot be safely impersonated per caller.
 

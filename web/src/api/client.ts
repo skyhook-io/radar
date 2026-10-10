@@ -228,6 +228,16 @@ export function isNotFoundError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 404;
 }
 
+/**
+ * The server's explanation when it refused a request because the browser
+ * reported it came from another site, or undefined for any other error.
+ */
+export function crossOriginRefusalMessage(error: unknown): string | undefined {
+  return error instanceof ApiError && error.data?.error_code === "cross_origin_refused"
+    ? error.message
+    : undefined;
+}
+
 export function isCapacityCursorInvalidError(error: unknown): boolean {
   return (
     error instanceof ApiError &&
