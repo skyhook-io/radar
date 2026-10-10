@@ -28,6 +28,12 @@ func TestCiliumEndpointSelectorExpressionsAndCoverage(t *testing.T) {
 		{"exists", map[string]any{"matchExpressions": []any{expr("web-only", "Exists")}}, true, false},
 		{"doesnotexist", map[string]any{"matchExpressions": []any{expr("db-only", "DoesNotExist")}}, true, false},
 		{"empty", map[string]any{}, true, true},
+		// Cilium keys may name their label source.
+		{"k8s source label", map[string]any{"matchLabels": map[string]any{"k8s:app": "web"}}, true, false},
+		{"any source expression", map[string]any{"matchExpressions": []any{expr("any:app", "In", "web")}}, true, false},
+		{"reserved source", map[string]any{"matchLabels": map[string]any{"reserved:host": ""}}, false, false},
+		// Every endpoint carries its namespace as a label.
+		{"namespace label", map[string]any{"matchLabels": map[string]any{"k8s:io.kubernetes.pod.namespace": "app", "app": "web"}}, true, false},
 		{"invalid", map[string]any{"matchExpressions": []any{expr("app", "Invalid", "web")}}, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

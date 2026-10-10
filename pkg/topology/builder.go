@@ -1343,7 +1343,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 		}
 
-		// ClusterClass → Cluster edges
+		// ClusterClass is namespaced: a Cluster names its class's namespace or
+		// uses its own.
 		if len(clusterClassIDs) > 0 {
 			for _, cl := range cachedCAPIClusters {
 				ns := cl.GetNamespace()
@@ -4251,7 +4252,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(selectorMap, &labelSelector); err != nil {
 				continue
 			}
-			selector, err := metav1.LabelSelectorAsSelector(&labelSelector)
+			selector, err := metav1.LabelSelectorAsSelector(ciliumKubernetesSelector(labelSelector))
 			if err != nil {
 				continue
 			}
@@ -4259,9 +4260,17 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				nodeData["matchesAllPods"] = true
 				continue
 			}
+			// Cilium gives every endpoint its namespace as a label.
+			podLabels := func(template map[string]string) labels.Set {
+				set := labels.Set{ciliumNamespaceLabel: ns}
+				for k, v := range template {
+					set[k] = v
+				}
+				return set
+			}
 
 			for _, d := range deploymentsByNS[ns] {
-				if selector.Matches(labels.Set(d.Spec.Template.Labels)) {
+				if selector.Matches(podLabels(d.Spec.Template.Labels)) {
 					if targetID := deploymentIDs[d.Namespace+"/"+d.Name]; targetID != "" {
 						edges = append(edges, Edge{
 							ID: fmt.Sprintf("%s-to-%s", cnpID, targetID), Source: cnpID, Target: targetID, Type: EdgeProtects,
@@ -4270,7 +4279,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 			}
 			for _, s := range statefulsetsByNS[ns] {
-				if selector.Matches(labels.Set(s.Spec.Template.Labels)) {
+				if selector.Matches(podLabels(s.Spec.Template.Labels)) {
 					if targetID := statefulSetIDs[s.Namespace+"/"+s.Name]; targetID != "" {
 						edges = append(edges, Edge{
 							ID: fmt.Sprintf("%s-to-%s", cnpID, targetID), Source: cnpID, Target: targetID, Type: EdgeProtects,
@@ -4279,7 +4288,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 			}
 			for _, d := range daemonsetsByNS[ns] {
-				if selector.Matches(labels.Set(d.Spec.Template.Labels)) {
+				if selector.Matches(podLabels(d.Spec.Template.Labels)) {
 					dsID := fmt.Sprintf("daemonset/%s/%s", d.Namespace, d.Name)
 					edges = append(edges, Edge{
 						ID: fmt.Sprintf("%s-to-%s", cnpID, dsID), Source: cnpID, Target: dsID, Type: EdgeProtects,
@@ -4460,6 +4469,42 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// HelmReleases don't have inventory - match by labels:
 	// - helm.toolkit.fluxcd.io/name (FluxCD-specific, preferred)
 	// - app.kubernetes.io/instance (standard Helm label)
+	// Index each workload once by the release its labels name, then look each
+	// release up: scanning every workload per release is quadratic on large
+	// clusters.
+	helmTargets := map[string][]string{}
+	if len(helmReleaseIDs) > 0 {
+		index := func(labels map[string]string, namespace, id string) {
+			if key := helmReleaseLabelKey(labels, namespace); key != "" && id != "" {
+				helmTargets[key] = append(helmTargets[key], id)
+			}
+		}
+		for _, d := range deployments {
+			index(d.Labels, d.Namespace, deploymentIDs[d.Namespace+"/"+d.Name])
+		}
+		for _, s := range services {
+			index(s.Labels, s.Namespace, serviceIDs[s.Namespace+"/"+s.Name])
+		}
+		for _, s := range statefulsets {
+			index(s.Labels, s.Namespace, statefulSetIDs[s.Namespace+"/"+s.Name])
+		}
+		for _, ds := range daemonsets {
+			if opts.MatchesNamespaceFilter(ds.Namespace) {
+				index(ds.Labels, ds.Namespace, fmt.Sprintf("daemonset/%s/%s", ds.Namespace, ds.Name))
+			}
+		}
+		for _, j := range jobs {
+			index(j.Labels, j.Namespace, jobIDs[j.Namespace+"/"+j.Name])
+		}
+		for _, c := range cronjobs {
+			index(c.Labels, c.Namespace, cronJobIDs[c.Namespace+"/"+c.Name])
+		}
+		for _, rollouts := range rolloutsByNamespace {
+			for _, r := range rollouts {
+				index(r.GetLabels(), r.GetNamespace(), rolloutIDs[r.GetNamespace()+"/"+r.GetName()])
+			}
+		}
+	}
 	for hrKey, hrID := range helmReleaseIDs {
 		parts := strings.Split(hrKey, "/")
 		// A release applied to another cluster installed nothing here; a local
@@ -4467,190 +4512,13 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		if len(parts) != 2 || remoteHelmReleases[hrKey] {
 			continue
 		}
-		hrNS := parts[0]
-		hrName := parts[1]
-
-		// Find Deployments with matching label
-		for depKey, depID := range deploymentIDs {
-			depParts := strings.Split(depKey, "/")
-			if len(depParts) != 2 {
-				continue
-			}
-			depNS := depParts[0]
-			depName := depParts[1]
-
-			// Check if deployment has matching label
-			var dep *appsv1.Deployment
-			for _, d := range deployments {
-				if d.Namespace == depNS && d.Name == depName {
-					dep = d
-					break
-				}
-			}
-			if dep == nil {
-				continue
-			}
-
-			if matchesHelmRelease(dep.Labels, hrName, hrNS, depNS) {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, depID),
-					Source: hrID,
-					Target: depID,
-					Type:   EdgeManages,
-				})
-			}
-		}
-
-		// Find Services with matching label
-		for svcKey, svcID := range serviceIDs {
-			svcParts := strings.Split(svcKey, "/")
-			if len(svcParts) != 2 {
-				continue
-			}
-			svcNS := svcParts[0]
-			svcName := svcParts[1]
-
-			// Check if service has matching label
-			var svc *corev1.Service
-			for _, s := range services {
-				if s.Namespace == svcNS && s.Name == svcName {
-					svc = s
-					break
-				}
-			}
-			if svc == nil {
-				continue
-			}
-
-			if matchesHelmRelease(svc.Labels, hrName, hrNS, svcNS) {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, svcID),
-					Source: hrID,
-					Target: svcID,
-					Type:   EdgeManages,
-				})
-			}
-		}
-
-		// Find StatefulSets with matching label
-		for stsKey, stsID := range statefulSetIDs {
-			stsParts := strings.Split(stsKey, "/")
-			if len(stsParts) != 2 {
-				continue
-			}
-			stsNS := stsParts[0]
-			stsName := stsParts[1]
-
-			// Check if statefulset has matching label
-			var sts *appsv1.StatefulSet
-			for _, s := range statefulsets {
-				if s.Namespace == stsNS && s.Name == stsName {
-					sts = s
-					break
-				}
-			}
-			if sts == nil {
-				continue
-			}
-
-			if matchesHelmRelease(sts.Labels, hrName, hrNS, stsNS) {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, stsID),
-					Source: hrID,
-					Target: stsID,
-					Type:   EdgeManages,
-				})
-			}
-		}
-
-		// Find DaemonSets with matching label
-		for _, ds := range daemonsets {
-			if !opts.MatchesNamespaceFilter(ds.Namespace) {
-				continue
-			}
-			if matchesHelmRelease(ds.Labels, hrName, hrNS, ds.Namespace) {
-				dsID := fmt.Sprintf("daemonset/%s/%s", ds.Namespace, ds.Name)
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, dsID),
-					Source: hrID,
-					Target: dsID,
-					Type:   EdgeManages,
-				})
-			}
-		}
-
-		// Find Jobs with matching label
-		for jobKey, jobID := range jobIDs {
-			jobParts := strings.Split(jobKey, "/")
-			if len(jobParts) != 2 {
-				continue
-			}
-			var job *batchv1.Job
-			for _, j := range jobs {
-				if j.Namespace == jobParts[0] && j.Name == jobParts[1] {
-					job = j
-					break
-				}
-			}
-			if job == nil {
-				continue
-			}
-			if matchesHelmRelease(job.Labels, hrName, hrNS, job.Namespace) {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, jobID),
-					Source: hrID,
-					Target: jobID,
-					Type:   EdgeManages,
-				})
-			}
-		}
-
-		// Find CronJobs with matching label
-		for cjKey, cjID := range cronJobIDs {
-			cjParts := strings.Split(cjKey, "/")
-			if len(cjParts) != 2 {
-				continue
-			}
-			var cj *batchv1.CronJob
-			for _, c := range cronjobs {
-				if c.Namespace == cjParts[0] && c.Name == cjParts[1] {
-					cj = c
-					break
-				}
-			}
-			if cj == nil {
-				continue
-			}
-			if matchesHelmRelease(cj.Labels, hrName, hrNS, cj.Namespace) {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", hrID, cjID),
-					Source: hrID,
-					Target: cjID,
-					Type:   EdgeManages,
-				})
-			}
-		}
-
-		// Find Rollouts with matching label
-		if hasRollouts && dynamicCache != nil {
-			for rolloutKey, rolloutID := range rolloutIDs {
-				rolloutParts := strings.Split(rolloutKey, "/")
-				if len(rolloutParts) != 2 {
-					continue
-				}
-				rolloutRes, rolloutGetErr := dynamicCache.Get(rolloutGVR, rolloutParts[0], rolloutParts[1])
-				if rolloutGetErr != nil || rolloutRes == nil {
-					continue
-				}
-				if matchesHelmRelease(rolloutRes.GetLabels(), hrName, hrNS, rolloutRes.GetNamespace()) {
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", hrID, rolloutID),
-						Source: hrID,
-						Target: rolloutID,
-						Type:   EdgeManages,
-					})
-				}
-			}
+		for _, targetID := range helmTargets[hrKey] {
+			edges = append(edges, Edge{
+				ID:     fmt.Sprintf("%s-to-%s", hrID, targetID),
+				Source: hrID,
+				Target: targetID,
+				Type:   EdgeManages,
+			})
 		}
 	}
 
@@ -8069,22 +7937,29 @@ func monitorNodeData(monitor *unstructured.Unstructured, endpointField string) m
 	}
 }
 
-// matchesHelmRelease reports whether a resource belongs to a Flux HelmRelease.
-// Flux's own labels are authoritative when present, so a resource another
-// release or Kustomization labelled can't fall through to the generic
-// app.kubernetes.io/instance match.
-func matchesHelmRelease(labels map[string]string, hrName, hrNamespace, resourceNamespace string) bool {
+// helmReleaseLabelKey is the namespace/name of the Flux HelmRelease a
+// resource's labels attribute it to, or "" for none. Flux's own labels are
+// authoritative when present, so a resource another release or Kustomization
+// labelled can't fall through to the generic app.kubernetes.io/instance
+// match, which only counts within the resource's own namespace.
+func helmReleaseLabelKey(labels map[string]string, resourceNamespace string) string {
 	fluxName, hasName := labels[fluxHelmNameLabel]
 	fluxNS, hasNS := labels[fluxHelmNSLabel]
 	if hasName || hasNS {
-		return fluxName == hrName && fluxNS == hrNamespace
+		if fluxName == "" || fluxNS == "" {
+			return ""
+		}
+		return fluxNS + "/" + fluxName
 	}
 	_, hasKustomizeName := labels[fluxKustomizeNameLabel]
 	_, hasKustomizeNS := labels[fluxKustomizeNSLabel]
 	if hasKustomizeName || hasKustomizeNS {
-		return false
+		return ""
 	}
-	return resourceNamespace == hrNamespace && labels["app.kubernetes.io/instance"] == hrName
+	if instance := labels["app.kubernetes.io/instance"]; instance != "" {
+		return resourceNamespace + "/" + instance
+	}
+	return ""
 }
 
 // Istio expands only hosts without dots. Radar has no discovered cluster domain,
@@ -9125,3 +9000,35 @@ func matchesStringMap(labels map[string]string, selector map[string]any) bool {
 var _ = appsv1.Deployment{}
 var _ = networkingv1.Ingress{}
 var _ = strings.Contains
+
+// ciliumNamespaceLabel is the label Cilium gives every endpoint for its
+// namespace.
+const ciliumNamespaceLabel = "io.kubernetes.pod.namespace"
+
+// ciliumKubernetesSelector rewrites a Cilium endpoint selector into one over
+// Kubernetes labels. Cilium keys may name their label source: "k8s:app" and
+// "any:app" select the Kubernetes label "app"; other sources (reserved:,
+// container:, ...) never come from a Pod template, so they keep their prefix
+// and match nothing here.
+func ciliumKubernetesSelector(selector metav1.LabelSelector) *metav1.LabelSelector {
+	key := func(k string) string {
+		for _, source := range []string{"k8s:", "any:"} {
+			if strings.HasPrefix(k, source) {
+				return strings.TrimPrefix(k, source)
+			}
+		}
+		return k
+	}
+	out := &metav1.LabelSelector{}
+	if selector.MatchLabels != nil {
+		out.MatchLabels = make(map[string]string, len(selector.MatchLabels))
+		for k, v := range selector.MatchLabels {
+			out.MatchLabels[key(k)] = v
+		}
+	}
+	for _, expr := range selector.MatchExpressions {
+		expr.Key = key(expr.Key)
+		out.MatchExpressions = append(out.MatchExpressions, expr)
+	}
+	return out
+}
