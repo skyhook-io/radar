@@ -61,6 +61,7 @@ import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { httpStatusMessage, markShownInline, readErrorBody, readErrorResponse } from './httpErrors'
 import {
+  isRadarFeatureUnsupported,
   RadarFeatureUnsupportedError,
   guardRadarFeature,
   radarFeatureSupport,
@@ -68,6 +69,7 @@ import {
   type RadarFeature,
 } from './radarFeatures'
 import { useRadarUpgradeHost } from '../context/RadarUpgradeHost'
+import { isGitOpsActionTarget, GitOpsActionError, gitOpsActionPermissions, gitOpsDisabledReasons, type GitOpsActionCapabilities } from './gitOpsPermissions'
 import { apiVersionToGroup } from '../utils/navigation'
 import type { DeploymentMode } from '../types'
 
@@ -6329,6 +6331,35 @@ export function useArtifactHubChart(
 // GitOps Mutation Factory
 // ============================================================================
 
+export function useGitOpsActionCapabilities(kind: string, group: string | undefined, namespace: string, name: string, enabled = true) {
+  const active = enabled && isGitOpsActionTarget(kind, group);
+  const queryClient = useQueryClient();
+  const { support, guard, gatedKey } = useRadarFeature("gitOpsActionCapabilities");
+  const queryKey = ["gitops-action-capabilities", getApiBase(), kind, group, namespace, name, ...gatedKey];
+  const query = useQuery<GitOpsActionCapabilities>({
+    queryKey,
+    queryFn: () => guard(async () => {
+      const next = await fetchJSON<GitOpsActionCapabilities>(`/gitops/capabilities/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`);
+      const previous = queryClient.getQueryData<GitOpsActionCapabilities>(queryKey);
+      for (const [action, capability] of Object.entries(next.actions)) {
+        if (capability.allowed === undefined && !capability.unsupported && previous?.actions[action]?.allowed !== undefined) {
+          next.actions[action] = previous.actions[action];
+        }
+      }
+      return next;
+    }),
+    enabled: active && Boolean(namespace && name) && support !== 'unsupported',
+    staleTime: 15_000,
+    refetchInterval: active ? 30_000 : false,
+  });
+  const featureUnsupported = isRadarFeatureUnsupported(query.error, 'gitOpsActionCapabilities');
+  return {
+    ...query,
+    permissions: active ? gitOpsActionPermissions(support, query.data, featureUnsupported) : undefined,
+    disabledReasons: active ? gitOpsDisabledReasons(support, query.data, featureUnsupported) : {},
+  };
+}
+
 interface GitOpsMutationConfig<TVariables> {
   getPath: (variables: TVariables) => string;
   getBody?: (variables: TVariables) => unknown;
@@ -6365,7 +6396,7 @@ function createGitOpsMutation<TVariables>(
         );
         if (!response.ok) {
           const error = await readErrorBody(response);
-          throw new Error(error.error || `HTTP ${response.status}`);
+          throw new GitOpsActionError(error, response.status);
         }
         return response.json() as Promise<GitOpsOperationResponse>;
       },
@@ -6546,7 +6577,7 @@ export function useArgoResourceValidation() {
       );
       if (!response.ok) {
         const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new GitOpsActionError(error, response.status);
       }
       return response.json() as Promise<ArgoResourceValidationResult>;
     },
@@ -6610,7 +6641,7 @@ export function useArgoRefresh() {
       );
       if (!response.ok) {
         const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new GitOpsActionError(error, response.status);
       }
       return response.json();
     },

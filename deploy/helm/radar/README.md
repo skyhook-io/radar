@@ -161,6 +161,32 @@ Radar binary (including Radar Cloud self-upgrade) does not update RBAC. Missing 
 on an older `--reuse-values` installation default to enabled; set explicit false
 before upgrading if the added visibility is unwanted.
 
+### Optional Cloud owner GitOps actions
+
+`cloud.defaultRbac.gitopsActions: true` creates an owner-only `get`/`patch`
+grant for Argo CD Applications and the Flux resources Radar acts on
+(GitRepository, OCIRepository, HelmRepository, Kustomization, HelmRelease,
+Alert). It is **off by default**, requires `cloud.enabled`, `rbac.create`,
+`cloud.defaultRbac.create`, and the owner tier, and adds no grants to members
+or viewers. It does not grant ApplicationSets, `update`, or status subresources.
+These are caller permissions, separate from Radar's collector ServiceAccount.
+Stock Flux aggregates its `flux-edit` ClusterRole into the built-in `edit` and
+`admin` ClusterRoles, so on a default Flux install owners can already patch Flux
+objects and only the Argo CD half of this grant changes anything.
+
+**Patching Applications lets the holder redirect what Argo deploys using the
+controller's authority, often cluster-admin, bounded by AppProject
+restrictions.** Kubernetes RBAC cannot restrict this grant to refresh/sync
+annotations or a single field. Flux patches likewise permit changing the
+source and spec its controllers reconcile. Enable this only for owners trusted
+with that deployment authority. For narrower access, leave the toggle off and
+supply your own namespace/resource-name-scoped RoleBindings.
+
+GitOps action controls check the caller's permissions per object and disable
+denied actions with an explanation. While a check loads or retries, controls
+stay available. The checks are advisory: each action still runs as the caller,
+and Kubernetes makes the final authorization decision.
+
 ### Radar Cloud background services (`radar:system`)
 
 Radar Cloud's alerts worker and timeline puller read as `radar:system`.

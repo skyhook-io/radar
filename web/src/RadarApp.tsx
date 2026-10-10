@@ -196,7 +196,7 @@ export function makeDefaultQueryClient(): QueryClient {
     mutationCache: new MutationCache({
       onError: (error, _variables, _context, mutation) => {
         const message = mutation.options.meta?.errorMessage;
-        if (message && !isShownInline(error)) showApiError(message, (error as Error).message);
+        if (message && !isShownInline(error)) showApiError(message, (error as Error).message, (error as Error & { rawDetail?: string }).rawDetail);
       },
       onSuccess: (_data, _variables, _context, mutation) => {
         const message = mutation.options.meta?.successMessage;

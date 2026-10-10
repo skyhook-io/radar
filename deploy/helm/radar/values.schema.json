@@ -321,7 +321,8 @@
                 "owner": { "type": "boolean" }
               }
             },
-            "nodeOps": { "type": "boolean" }
+            "nodeOps": { "type": "boolean" },
+            "gitopsActions": { "type": "boolean" }
           }
         },
         "systemRbac": { "type": "boolean" },

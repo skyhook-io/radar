@@ -522,6 +522,14 @@ cloud:
     # while owner=false this renders nothing, but it stays latent — re-enabling
     # owner later activates it. See templates/cloud-rbac-node-ops.yaml.
     nodeOps: false
+    # Owner-only GitOps get/patch grant, OFF by default. Patching Applications
+    # lets owners redirect what Argo deploys with the controller's authority
+    # (often cluster-admin), bounded by AppProject restrictions. Flux patches
+    # likewise let owners change the source/spec the controllers reconcile.
+    # No ApplicationSets, update, or status-subresource grants. This grants
+    # callers access; it does not change Radar's collector ServiceAccount.
+    # Requires cloud.enabled, defaultRbac.create, rbac.create and owner=true.
+    gitopsActions: false
   # Create the default read grant for radar:system: Radar Cloud's alerts worker
   # and timeline puller. Includes view via a chart-owned aggregated role, the
   # cluster-read and integration-read add-ons, and cluster-wide Secret read

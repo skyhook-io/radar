@@ -378,6 +378,16 @@ assert_not_contains 'name: radar-cluster-read$'                 "no cluster-read
 assert_not_contains 'name: radar-cloud-viewer-cluster-read$'    "no tier bindings outside cloud mode"
 echo
 
+render "gitopsActions=true grants owners GitOps actions" $CLOUD --set cloud.defaultRbac.gitopsActions=true
+assert_contains 'name: radar-gitops-actions$'                   "GitOps role rendered"
+assert_contains 'name: radar-cloud-owner-gitops-actions$'      "owner-only GitOps binding rendered"
+assert_not_contains 'name: radar-cloud-member-gitops-actions$' "no member GitOps binding"
+echo
+
+render "string false must not enable GitOps actions" $CLOUD --set-string cloud.defaultRbac.gitopsActions=false --skip-schema-validation
+assert_not_contains 'name: radar-gitops-actions$'               "string-false GitOps grant stays off"
+echo
+
 if [[ $FAIL -eq 0 ]]; then
   echo "All chart template tests passed."
   exit 0

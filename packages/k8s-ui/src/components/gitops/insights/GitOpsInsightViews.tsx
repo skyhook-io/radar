@@ -1650,10 +1650,11 @@ interface GitOpsActivityInsightViewProps {
   // is true, history rows with an ID expose a Rollback button that fires this
   // with the target entry. The consumer is responsible for the confirmation
   // dialog + the actual mutation.
+  rollbackDisabledReason?: string
   onRollback?: (item: GitOpsHistoryItem) => void
 }
 
-export function GitOpsActivityInsightView({ insight, error, onRollback }: GitOpsActivityInsightViewProps) {
+export function GitOpsActivityInsightView({ insight, error, onRollback, rollbackDisabledReason }: GitOpsActivityInsightViewProps) {
   if (error && !insight) return <InsightErrorState error={error} />
   if (!insight) return <PaneLoader label="Loading GitOps activity…" className="h-full" />
   const canRollback = !!insight.capabilities?.rollback && !!onRollback
@@ -1675,7 +1676,7 @@ export function GitOpsActivityInsightView({ insight, error, onRollback }: GitOps
         <HistoryRows
           items={insight.history ?? []}
           canRollback={canRollback}
-          rollbackBlockedReason={autoSyncBlocksRollback ? 'Auto-sync is enabled. Disable it to enable rollback — otherwise the controller will sync forward to HEAD again.' : undefined}
+          rollbackBlockedReason={autoSyncBlocksRollback ? 'Auto-sync is enabled. Disable it to enable rollback — otherwise the controller will sync forward to HEAD again.' : rollbackDisabledReason}
           onRollback={onRollback}
         />
       </section>

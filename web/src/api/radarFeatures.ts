@@ -27,6 +27,7 @@ export interface RadarFeatureSpec {
 }
 
 export const RADAR_FEATURES = {
+  gitOpsActionCapabilities: { label: 'GitOps action permission checks', flag: 'gitOpsActionCapabilities', flagShippedWithEndpoint: true },
   resourceIssues: { label: 'Operational issues', minimumVersion: 'v1.8.0', flag: 'resourceIssues' },
   podEnvironment: { label: 'Values from ConfigMaps and Secrets', minimumVersion: 'v1.9.0', flag: 'podEnvironment' },
   policyResource: { label: 'Policy results', minimumVersion: 'v1.10.0', flag: 'policyResource' },

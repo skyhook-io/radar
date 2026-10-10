@@ -1,0 +1,76 @@
+suite: Cloud owner GitOps actions
+templates:
+  - templates/cloud-rbac-gitops-actions.yaml
+tests:
+  - it: grants nothing by default
+    set:
+      cloud.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: grants exactly get and patch on supported kinds to owners only
+    set:
+      cloud.enabled: true
+      cloud.defaultRbac.gitopsActions: true
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [argoproj.io]
+              resources: [applications]
+              verbs: [get, patch]
+            - apiGroups: [source.toolkit.fluxcd.io]
+              resources: [gitrepositories, ocirepositories, helmrepositories]
+              verbs: [get, patch]
+            - apiGroups: [kustomize.toolkit.fluxcd.io]
+              resources: [kustomizations]
+              verbs: [get, patch]
+            - apiGroups: [helm.toolkit.fluxcd.io]
+              resources: [helmreleases]
+              verbs: [get, patch]
+            - apiGroups: [notification.toolkit.fluxcd.io]
+              resources: [alerts]
+              verbs: [get, patch]
+        documentIndex: 0
+      - equal:
+          path: subjects
+          value:
+            - kind: Group
+              name: radar:owner
+              apiGroup: rbac.authorization.k8s.io
+            - kind: Group
+              name: cloud:owner
+              apiGroup: rbac.authorization.k8s.io
+        documentIndex: 1
+  - it: grants nothing without the owner tier
+    set:
+      cloud.enabled: true
+      cloud.defaultRbac.gitopsActions: true
+      cloud.defaultRbac.owner: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: grants nothing without chart RBAC
+    set:
+      cloud.enabled: true
+      cloud.defaultRbac.gitopsActions: true
+      rbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: grants nothing without default bindings
+    set:
+      cloud.enabled: true
+      cloud.defaultRbac.gitopsActions: true
+      cloud.defaultRbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: grants nothing outside Cloud
+    set:
+      cloud.defaultRbac.gitopsActions: true
+    asserts:
+      - hasDocuments:
+          count: 0

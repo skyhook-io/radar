@@ -76,6 +76,7 @@ import {
   useFluxSuspend,
   useFluxResume,
   useArgoSync,
+  useGitOpsActionCapabilities,
   useArgoRefresh,
   useArgoSuspend,
   useArgoResume,
@@ -408,6 +409,7 @@ function useActionsBarProps(
   const fluxSuspendMutation = useFluxSuspend()
   const fluxResumeMutation = useFluxResume()
 
+  const { disabledReasons: gitOpsActionDisabledReasons } = useGitOpsActionCapabilities(kind, group, namespace, name)
   const argoSyncMutation = useArgoSync()
   const argoRefreshMutation = useArgoRefresh()
   const argoSuspendMutation = useArgoSuspend()
@@ -500,6 +502,7 @@ function useActionsBarProps(
     onResumeCronJob: (params: Parameters<typeof resumeCronJobMutation.mutate>[0]) =>
       resumeCronJobMutation.mutate(params),
     isResumingCronJob: resumeCronJobMutation.isPending,
+    gitOpsActionDisabledReasons,
     onFluxReconcile: (params: Parameters<typeof fluxReconcileMutation.mutate>[0]) =>
       fluxReconcileMutation.mutate(params),
     isFluxReconciling: fluxReconcileMutation.isPending,

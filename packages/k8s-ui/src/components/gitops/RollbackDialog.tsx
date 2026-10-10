@@ -2,6 +2,7 @@ import { useState, useEffect, useId } from 'react'
 import { History, Loader2 } from 'lucide-react'
 
 import { DialogPortal } from '../ui/DialogPortal'
+import { AlertBanner } from '../ui/drawer-components'
 import { Tooltip } from '../ui/Tooltip'
 
 // =============================================================================
@@ -24,12 +25,13 @@ export interface RollbackDialogProps {
   appLabel: string
   revision: string
   historyId?: string
+  disabledReason?: string
   pending?: boolean
   onCancel: () => void
   onConfirm: (opts: { prune: boolean; dryRun: boolean }) => void
 }
 
-export function RollbackDialog({ open, appLabel, revision, historyId, pending, onCancel, onConfirm }: RollbackDialogProps) {
+export function RollbackDialog({ open, appLabel, revision, historyId, disabledReason, pending, onCancel, onConfirm }: RollbackDialogProps) {
   const titleId = useId()
   const [prune, setPrune] = useState(false)
   const [dryRun, setDryRun] = useState(false)
@@ -94,7 +96,9 @@ export function RollbackDialog({ open, appLabel, revision, historyId, pending, o
           </label>
         </div>
       </div>
-      <div className="flex items-center justify-end gap-2 border-t border-theme-border bg-theme-base px-4 py-3">
+      <div className="border-t border-theme-border bg-theme-base px-4 py-3">
+        {disabledReason && <AlertBanner variant="warning" title="Action unavailable" message={disabledReason} />}
+        <div className="flex items-center justify-end gap-2">
         <button
           type="button"
           onClick={onCancel}
@@ -105,13 +109,14 @@ export function RollbackDialog({ open, appLabel, revision, historyId, pending, o
         </button>
         <button
           type="button"
-          onClick={() => onConfirm({ prune, dryRun })}
-          disabled={pending}
+          onClick={() => !disabledReason && onConfirm({ prune, dryRun })}
+          disabled={pending || !!disabledReason}
           className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-50 dark:text-amber-400"
         >
           {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <History className="h-3.5 w-3.5" />}
           {dryRun ? 'Run dry-run' : 'Roll back'}
         </button>
+        </div>
       </div>
     </DialogPortal>
   )

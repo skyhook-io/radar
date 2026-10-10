@@ -1,4 +1,4 @@
-import { ReactNode, useState, useRef, useEffect, useCallback } from 'react'
+import { Fragment, ReactNode, useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { clsx } from 'clsx'
 import { computeTooltipPosition } from './tooltip-position'
@@ -20,6 +20,7 @@ let activeHide: (() => void) | null = null
 
 interface TooltipProps {
   content: ReactNode
+  preserveWords?: boolean
   children: ReactNode
   /** Delay before showing tooltip in ms (default: 300) */
   delay?: number
@@ -39,6 +40,7 @@ interface TooltipProps {
 
 export function Tooltip({
   content,
+  preserveWords = false,
   children,
   delay = 300,
   position = 'top',
@@ -271,7 +273,9 @@ export function Tooltip({
             onMouseEnter={cancelHide}
             onMouseLeave={scheduleHideTooltip}
           >
-            {content}
+            {preserveWords && typeof content === 'string'
+              ? content.split(' ').map((word, index) => <Fragment key={index}><span className="whitespace-nowrap">{word}</span>{' '}</Fragment>)
+              : content}
           </span>,
           document.body
         )}

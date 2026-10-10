@@ -133,14 +133,15 @@ type CloudConnectCapability struct {
 // here in the same change, plus an entry in web/src/api/radarFeatures.ts
 // (TestFeatureFlagsHaveFrontendGates enforces the pairing).
 type FeatureCapabilities struct {
-	YAMLReview            bool `json:"yamlReview"`
-	YAMLSchemas           bool `json:"yamlSchemas"`
-	WorkloadImages        bool `json:"workloadImages"`
-	ResourceIssues        bool `json:"resourceIssues"`        // GET /api/issues/resource/{kind}/{namespace}/{name}
-	PodEnvironment        bool `json:"podEnvironment"`        // GET /api/pods/{namespace}/{name}/environment
-	PolicyResource        bool `json:"policyResource"`        // GET /api/policy/resource/{kind}/{namespace}/{name}
-	WorkloadHistory       bool `json:"workloadHistory"`       // GET /api/workloads/{kind}/{namespace}/{name}/history
-	ServiceEndpointSlices bool `json:"serviceEndpointSlices"` // GET /api/services/{namespace}/{name}/endpointslices
+	YAMLReview               bool `json:"yamlReview"`
+	YAMLSchemas              bool `json:"yamlSchemas"`
+	WorkloadImages           bool `json:"workloadImages"`
+	ResourceIssues           bool `json:"resourceIssues"`           // GET /api/issues/resource/{kind}/{namespace}/{name}
+	PodEnvironment           bool `json:"podEnvironment"`           // GET /api/pods/{namespace}/{name}/environment
+	PolicyResource           bool `json:"policyResource"`           // GET /api/policy/resource/{kind}/{namespace}/{name}
+	WorkloadHistory          bool `json:"workloadHistory"`          // GET /api/workloads/{kind}/{namespace}/{name}/history
+	GitOpsActionCapabilities bool `json:"gitOpsActionCapabilities"` // GET /api/gitops/capabilities/{kind}/{namespace}/{name}
+	ServiceEndpointSlices    bool `json:"serviceEndpointSlices"`    // GET /api/services/{namespace}/{name}/endpointslices
 }
 
 // WorkloadWritePermissions indicates which workload resources the user can patch.
