@@ -18,6 +18,7 @@ import (
 //	q       — search string (free tokens + modifiers: kind:, ns:, label:k=v, image:, cluster:)
 //	limit   — max hits returned (default 50, capped at 500)
 //	include — "summary" (default), "raw", or "none"
+//	globalNs — "1" ignores the caller's saved namespace pick (ignoresNamespacePick)
 //
 // The returned shape is a search.Result. Per-cluster, no cross-cluster
 // concerns — radar-hub is responsible for fan-out and re-ranking.
@@ -39,18 +40,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// (so listers don't read namespaces outside the user's RBAC) and
 	// constrains the post-hoc match() filter.
 	//
-	// globalNs=1 makes search ignore the per-user namespace-switcher pick and
-	// scan the user's full RBAC ceiling — a "global" search whose only scope is
-	// the query's own `ns:` tokens. The omnibar sets it so a deliberately broad
-	// ⌘K lookup isn't silently narrowed to whatever namespace the view filter
-	// happens to be on. Still RBAC-bounded (getUserNamespaces filters by the
-	// caller's identity); it only drops the cosmetic pick, never the ceiling.
-	var allowed []string
-	if r.URL.Query().Get("globalNs") == "1" {
-		allowed = s.getUserNamespaces(r, parseNamespaces(r.URL.Query()))
-	} else {
-		allowed = s.parseNamespacesForUser(r)
-	}
+	// The omnibar sends globalNs=1 so a deliberately broad ⌘K lookup scans the
+	// user's full RBAC ceiling, scoped only by the query's own `ns:` tokens,
+	// rather than whatever namespace the view filter happens to be on.
+	allowed := s.parseNamespacesForUser(r)
 	if noNamespaceAccess(allowed) {
 		s.writeJSON(w, search.Result{Hits: []search.Hit{}})
 		return
