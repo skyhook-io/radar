@@ -643,38 +643,64 @@ func (h *Handlers) handleRollbackStream(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// handleUninstall removes a release
+// handleUninstall removes a release as the caller. dry_run returns a stored-
+// manifest preview; it does not simulate hooks or validate eventual writes.
 func (h *Handlers) handleUninstall(w http.ResponseWriter, r *http.Request) {
+	options, err := uninstallOptionsFromQuery(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if !requireHelmWrite(w, r, chi.URLParam(r, "namespace")) {
 		return
 	}
-
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
 		return
 	}
-
-	namespace := chi.URLParam(r, "namespace")
-	name := chi.URLParam(r, "name")
-
-	auth.AuditLog(r, namespace, name)
-	var uninstallErr error
-	if user := auth.UserFromContext(r.Context()); user != nil {
-		uninstallErr = client.UninstallAsUser(namespace, name, user.Username, user.Groups)
-	} else {
-		uninstallErr = client.Uninstall(namespace, name)
+	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
+	username, groups := userCreds(r)
+	if options.DryRun {
+		cfg, cfgErr := client.GetActionConfigForUser(namespace, username, groups)
+		if cfgErr != nil {
+			writeReleaseReadError(w, cfgErr)
+			return
+		}
+		preview, previewErr := PreviewReleaseAction(cfg, name, ReleaseActionOptions{Action: "uninstall", NoHooks: options.NoHooks, KeepHistory: options.KeepHistory})
+		if previewErr != nil {
+			writeReleaseReadError(w, previewErr)
+			return
+		}
+		writeJSON(w, map[string]any{"status": "success", "dry_run": true, "preview": preview})
+		return
 	}
-	if err := uninstallErr; err != nil {
+	auth.AuditLog(r, namespace, name)
+	if err := client.UninstallWithOptionsAsUser(namespace, name, username, groups, options); err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to uninstall Helm release")
 			return
 		}
+		log.Printf("[helm] Failed to uninstall %s/%s: %v", namespace, name, err)
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	writeJSON(w, map[string]string{"status": "success", "message": "Release uninstalled"})
+}
+
+func uninstallOptionsFromQuery(r *http.Request) (UninstallOptions, error) {
+	options := UninstallOptions{}
+	for key, target := range map[string]*bool{"no_hooks": &options.NoHooks, "keep_history": &options.KeepHistory, "dry_run": &options.DryRun} {
+		values, present := r.URL.Query()[key]
+		if !present {
+			continue
+		}
+		if len(values) != 1 || (values[0] != "true" && values[0] != "false") {
+			return options, fmt.Errorf("%s must be true or false, supplied once", key)
+		}
+		*target = values[0] == "true"
+	}
+	return options, nil
 }
 
 // handleUpgrade upgrades a release to a new version

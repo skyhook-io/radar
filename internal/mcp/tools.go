@@ -633,6 +633,15 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	}, logToolCall("delete_resource", handleDeleteResource))
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name: "manage_helm_release",
+		Description: "Uninstall or rollback one Helm release as the caller. dry_run=true (default) returns a mandatory stored-manifest preview of resources, action hooks, status, and history policy; review it before dry_run=false with confirm. " +
+			"Preview does not simulate hooks, live finalizers, controller cleanup, or write permissions. Confirm expires after five minutes and is bound to release state, action/options, caller, and context. " +
+			"Use the Helm storageNamespace as namespace. Rollback requires an explicit older revision from get_helm_release include=history and creates a new revision. " +
+			"Uninstall retries an uninstalling release; no_hooks skips cleanup hooks (may leave external resources), keep_history retains only Helm history (default false purges it). Finalizers are never stripped. GitOps-managed releases should be changed at their source. Avoid concurrent Helm operations.",
+		Annotations: writeTool,
+	}, logToolCall("manage_helm_release", handleManageHelmRelease))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_node",
 		Description: "Perform operations on a Kubernetes node. " +
 			"Supported actions: 'cordon' marks the node as unschedulable (no new pods will be scheduled), " +

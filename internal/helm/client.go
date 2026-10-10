@@ -2569,15 +2569,7 @@ func (c *Client) UninstallAsUser(namespace, name string, username string, groups
 }
 
 func (c *Client) uninstallWith(actionConfig *action.Configuration, name string) error {
-	uninstallAction := action.NewUninstall(actionConfig)
-	uninstallAction.Timeout = 120 * time.Second
-
-	_, err := uninstallAction.Run(name)
-	if err != nil {
-		return fmt.Errorf("uninstall failed: %w", err)
-	}
-
-	return nil
+	return uninstallWithOptions(actionConfig, name, UninstallOptions{})
 }
 
 // Upgrade upgrades a release to a new version

@@ -245,7 +245,7 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// These caps guard against description accretion, not against new tools or
 	// load-bearing routing and uncertainty contracts. Raise them deliberately.
 	const (
-		maxCatalogBytes         = 60500
+		maxCatalogBytes         = 62000
 		maxToolDescriptionBytes = 3000
 	)
 
@@ -390,14 +390,15 @@ func TestSearchToolSchemaIncludesNamespace(t *testing.T) {
 func TestRegisteredToolAnnotations(t *testing.T) {
 	tools := listRegisteredTools(t)
 	writeTools := map[string]bool{
-		"manage_workload": true,
-		"manage_rollout":  true,
-		"manage_cronjob":  true,
-		"manage_gitops":   true,
-		"apply_resource":  true,
-		"patch_resource":  true,
-		"delete_resource": true,
-		"manage_node":     true,
+		"manage_workload":     true,
+		"manage_rollout":      true,
+		"manage_cronjob":      true,
+		"manage_gitops":       true,
+		"apply_resource":      true,
+		"patch_resource":      true,
+		"delete_resource":     true,
+		"manage_helm_release": true,
+		"manage_node":         true,
 	}
 
 	seenWriteTools := map[string]bool{}
@@ -448,7 +449,7 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 // writeToolNames is the mutating tool set the read-only mount must exclude.
 var writeToolNames = []string{
 	"manage_workload", "manage_rollout", "manage_cronjob", "manage_gitops",
-	"apply_resource", "patch_resource", "delete_resource", "manage_node",
+	"apply_resource", "patch_resource", "delete_resource", "manage_helm_release", "manage_node",
 }
 
 // TestReadOnlyServerExcludesWriteTools is the load-bearing guarantee of the

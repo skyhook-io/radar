@@ -105,6 +105,45 @@ Use `get_helm_release` for detail:
 
 Use `issues` for currently broken native Helm releases: active failed and stuck pending releases are surfaced as live operational issues. Use `get_changes` when an agent asks what changed before an incident; it includes the Kubernetes-resource timeline plus recent native Helm release deployment and operation history (`source: helm`). For full Helm revision history, operation details, hook diagnostics, values, and diffs, use the Helm MCP tools above.
 
+## Uninstall And Rollback Actions
+
+`manage_helm_release` exposes uninstall and rollback through MCP with a mandatory
+preview. Omit `dry_run` (or set it to `true`) to inspect current status, release
+manifest resources, action hooks, and history policy. Pass `dry_run=false` and the
+returned `confirm` token only after reviewing the plan. Tokens expire after five
+minutes and bind the caller, cluster context, release snapshot, and action options.
+The current and target Helm records are rechecked before execution. Helm has no
+atomic release preconditions, so avoid concurrent operations on the same release.
+
+The preview reads stored Helm declarations as the caller. It does not simulate
+hooks, authorize eventual writes, inspect live finalizers, or enumerate resources
+created by controllers or chart CRDs outside the release manifest. It returns
+identities rather than manifest bodies or values. A malformed manifest or a stored
+list document that cannot be fully enumerated refuses confirmation. All execution
+uses the caller's Kubernetes identity; actual writes can still fail or partially
+complete.
+
+- `uninstall`: `no_hooks=true` skips pre/post-delete hooks; this can leave external
+  resources behind. `keep_history=true` preserves Helm history, not Kubernetes
+  resources. The default purges release history. Resources annotated
+  `helm.sh/resource-policy=keep` are identified as retained in the plan.
+- An `uninstalling` release can be retried with the same uninstall action. Inspect
+  pre-delete hook Jobs and remaining resources/finalizers before choosing to skip
+  hooks. This action never strips finalizers or edits Helm storage to force success.
+- `rollback`: requires an explicit positive revision older than the current one
+  (`get_helm_release include=history` lists revisions). The preview uses that
+  revision's resources and pre/post-rollback hooks, alongside current resource
+  identities. Rollback creates a new revision; `no_hooks` is supported, while
+  `keep_history` is uninstall-only.
+- For an already `uninstalled` release, uninstall with default options only purges
+  history. The preview says resources/hooks are not processed again.
+
+REST `DELETE /api/helm/releases/{namespace}/{name}` also accepts `no_hooks`,
+`keep_history`, and `dry_run`, each supplied once as `true` or `false`. Its existing
+default remains a real uninstall with hooks and history purge. `dry_run=true`
+returns the same stored-manifest preview without a mutation; REST uses its existing
+UI confirmation flow and does not require an MCP confirmation token.
+
 ## Known Limits
 
 - Atomic rollback detection is inferred from Helm history because Helm does not persist the `--atomic` flag.
