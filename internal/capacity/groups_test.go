@@ -1,6 +1,9 @@
 package capacity
 
 import (
+	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/autoscalerstatus"
@@ -750,5 +753,132 @@ func assertVectorQuantity(t *testing.T, vector capacityapi.ResourceVector, name,
 	wantQuantity := resource.MustParse(want)
 	if gotQuantity.Cmp(wantQuantity) != 0 {
 		t.Fatalf("resource %q = %q, want %q", name, got, want)
+	}
+}
+
+func TestScalingFactsAtMinimumSize(t *testing.T) {
+	child := func(min, max, target *int) capacityapi.AutoscalerChildObservation {
+		return capacityapi.AutoscalerChildObservation{MinSize: min, MaxSize: max, Target: target}
+	}
+	for _, test := range []struct {
+		name      string
+		children  []capacityapi.AutoscalerChildObservation
+		wantFloor bool
+	}{
+		{"single child", []capacityapi.AutoscalerChildObservation{child(intPtr(1), intPtr(5), intPtr(1))}, true},
+		{"multiple zones", []capacityapi.AutoscalerChildObservation{child(intPtr(1), intPtr(5), intPtr(1)), child(intPtr(2), intPtr(5), intPtr(2))}, true},
+		{"one above minimum", []capacityapi.AutoscalerChildObservation{child(intPtr(1), intPtr(5), intPtr(1)), child(intPtr(2), intPtr(5), intPtr(3))}, false},
+		{"zero floor", []capacityapi.AutoscalerChildObservation{child(intPtr(0), intPtr(5), intPtr(0))}, true},
+		{"maximum unpublished", []capacityapi.AutoscalerChildObservation{child(intPtr(1), nil, intPtr(1))}, true},
+		{"minimum unpublished", []capacityapi.AutoscalerChildObservation{child(nil, intPtr(5), intPtr(0))}, false},
+		{"target unpublished", []capacityapi.AutoscalerChildObservation{child(intPtr(0), intPtr(5), nil)}, false},
+		{"one minimum unpublished", []capacityapi.AutoscalerChildObservation{child(intPtr(1), intPtr(5), intPtr(1)), child(nil, intPtr(5), intPtr(0))}, false},
+		{"offsetting targets", []capacityapi.AutoscalerChildObservation{child(intPtr(1), intPtr(5), intPtr(2)), child(intPtr(1), intPtr(5), intPtr(0))}, false},
+		{"no children", nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			facts := scalingFacts(&groupBuilder{domain: "gke", children: test.children}, AutoscalerObserved)
+			_, got := findFact(facts, "at_min_size")
+			if got != test.wantFloor {
+				t.Fatalf("floor = %v, want %v; facts = %+v", got, test.wantFloor, facts)
+			}
+		})
+	}
+}
+
+func TestScaleDownObservationsFromBothFormatsReachGroupWire(t *testing.T) {
+	for _, fixture := range []string{"gke-zonal-single-pool.yaml", "legacy-text.txt"} {
+		t.Run(fixture, func(t *testing.T) {
+			raw, err := os.ReadFile("../../pkg/autoscalerstatus/testdata/" + fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload := string(raw)
+			if strings.HasSuffix(fixture, ".yaml") {
+				payload = strings.ReplaceAll(payload, "scaleDown:\n", "scaleDown:\n    candidates: 2\n")
+				payload = strings.ReplaceAll(payload, "NoCandidates", "CandidatesPresent")
+			}
+			status, err := autoscalerstatus.Parse(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := status.NodeGroups[0]
+			node := groupsTestNode(strings.TrimSuffix(first.Basename, "-grp")+"-abcd", map[string]string{labelGKENodePool: "floor"})
+			gm := buildGroups(Snapshot{GeneratedAt: capacityTestTime(), Nodes: []*corev1.Node{node}, Coverage: capacityTestCoverage()}, &status)
+			group := mustFindGroup(t, gm.Groups, "gke-nodepool/floor")
+			if len(group.Children) != 1 {
+				t.Fatalf("children = %+v", group.Children)
+			}
+			observation := group.Children[0].ScaleDown
+			if observation == nil || observation.Candidates == nil || observation.LastTransitionTime == nil || observation.AsOf == nil || observation.Status != first.ScaleDown.Status {
+				t.Fatalf("scale-down observation = %+v", observation)
+			}
+			if !observation.LastTransitionTime.Equal(*first.ScaleDown.LastTransition) {
+				t.Fatalf("transition = %v", observation.LastTransitionTime)
+			}
+			wire, err := json.Marshal(gm)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{`"scaleDown":`, `"candidates":`, `"lastTransitionTime":`} {
+				if !strings.Contains(string(wire), key) {
+					t.Fatalf("missing %s: %s", key, wire)
+				}
+			}
+			orphaned := buildGroups(Snapshot{GeneratedAt: capacityTestTime(), Coverage: capacityTestCoverage()}, &status)
+			if orphaned.OrphanAutoscalerGroups[0].ScaleDown == nil {
+				t.Fatal("orphan dropped scale-down observation")
+			}
+			*observation.Candidates = 99
+			if *first.ScaleDown.Candidates == 99 {
+				t.Fatal("wire observation aliases parser count")
+			}
+		})
+	}
+}
+
+func TestScaleDownWireDistinguishesMissingFromZero(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		condition autoscalerstatus.Condition
+		want      string
+	}{
+		{"absent", autoscalerstatus.Condition{}, ""},
+		{"status only", autoscalerstatus.Condition{Status: "NoCandidates"}, `"status":"NoCandidates"`},
+		{"published zero", autoscalerstatus.Condition{Candidates: intPtr(0)}, `"candidates":0`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			child := mapChild(autoscalerstatus.NodeGroup{ScaleDown: test.condition})
+			wire, err := json.Marshal(child)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.want == "" {
+				if strings.Contains(string(wire), `"scaleDown"`) {
+					t.Fatalf("fabricated scaleDown: %s", wire)
+				}
+			} else if !strings.Contains(string(wire), test.want) {
+				t.Fatalf("wire = %s, want %s", wire, test.want)
+			}
+			if test.condition.Candidates == nil && strings.Contains(string(wire), `"candidates"`) {
+				t.Fatalf("fabricated candidates: %s", wire)
+			}
+		})
+	}
+}
+
+func TestScalingFloorUsesAllChildrenBeforeTruncation(t *testing.T) {
+	children := make([]capacityapi.AutoscalerChildObservation, maxGroupChildren+1)
+	for i := range children {
+		children[i] = capacityapi.AutoscalerChildObservation{MinSize: intPtr(1), MaxSize: intPtr(5), Target: intPtr(1)}
+	}
+	children[len(children)-1].Target = intPtr(2)
+	b := &groupBuilder{domain: "gke", children: children}
+	summary := finalizeGroup(b, Snapshot{GeneratedAt: capacityTestTime(), Coverage: capacityTestCoverage()}, nil, AutoscalerObserved, capacityTestTime())
+	if !summary.ChildrenMeta.Truncated {
+		t.Fatal("expected bounded children")
+	}
+	if _, ok := findFact(summary.Scaling, "at_min_size"); ok {
+		t.Fatalf("floor derived from visible subset: %+v", summary.Scaling)
 	}
 }

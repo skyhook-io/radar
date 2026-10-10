@@ -7,6 +7,7 @@ import {
   WithTooltip,
   mapHealthToTone,
   type CapacityAutoscalerBackoff,
+  type CapacityAutoscalerScaleDown,
   type CapacityAutoscalerChildObservation,
   type CapacityBoundedResultMeta,
   type CapacityCertainty,
@@ -1148,6 +1149,15 @@ function GroupRow({
   );
 }
 
+const SCALE_DOWN_EXPLANATION =
+  "Candidates may still be blocked from removal. Status times do not predict when nodes will be removed.";
+const SCALE_DOWN_STATUS_LABELS = new Map([
+  ["NoCandidates", "No scale-down candidates"],
+  ["CandidatesPresent", "Scale-down candidates present"],
+  ["InProgress", "Scale-down in progress"],
+  ["NoActivity", "No scale-down activity"],
+]);
+
 const CHILD_TH = "px-3 py-1.5 text-left font-medium whitespace-nowrap";
 const CHILD_TD = "px-3 py-1.5 align-top text-xs text-theme-text-primary";
 
@@ -1157,6 +1167,9 @@ function ChildSubTable({ group }: { group: CapacityGroupSummary }) {
       <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
         As the autoscaler reports it
       </div>
+      <p className="mb-2 text-xs text-theme-text-tertiary">
+        {SCALE_DOWN_EXPLANATION}
+      </p>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[720px] text-left">
           <thead className="text-[11px] uppercase tracking-wide text-theme-text-tertiary">
@@ -1167,6 +1180,7 @@ function ChildSubTable({ group }: { group: CapacityGroupSummary }) {
               <th className={CHILD_TH}>Ready / total</th>
               <th className={CHILD_TH}>Health</th>
               <th className={CHILD_TH}>Backoff</th>
+              <th className={CHILD_TH}>Scale-down</th>
               <th className={CHILD_TH}>Observed</th>
             </tr>
           </thead>
@@ -1196,6 +1210,9 @@ function ChildSubTable({ group }: { group: CapacityGroupSummary }) {
                 </td>
                 <td className={CHILD_TD}>
                   <ChildBackoff backoff={child.backoff} />
+                </td>
+                <td className={CHILD_TD}>
+                  <ChildScaleDown scaleDown={child.scaleDown} />
                 </td>
                 <td className={CHILD_TD}>
                   <ChildObserved asOf={child.asOf} />
@@ -1229,7 +1246,7 @@ function OrphanAutoscalerSection({
   return (
     <SectionCard
       title="Known to the autoscaler, unattributed"
-      subtitle="Groups the autoscaler reports that no observed node joins — scale-to-zero groups live here until nodes appear."
+      subtitle={`Groups the autoscaler reports that no observed node joins — scale-to-zero groups live here until nodes appear. ${SCALE_DOWN_EXPLANATION}`}
       bodyClassName=""
     >
       <div className={TABLE_WRAP}>
@@ -1240,6 +1257,7 @@ function OrphanAutoscalerSection({
               <th className={TH}>Min–max</th>
               <th className={TH}>Target</th>
               <th className={TH}>Health</th>
+              <th className={TH}>Scale-down</th>
               <th className={TH}>Observed</th>
             </tr>
           </thead>
@@ -1261,6 +1279,9 @@ function OrphanAutoscalerSection({
                 </td>
                 <td className={TD}>
                   <ChildHealth health={child.health} />
+                </td>
+                <td className={TD}>
+                  <ChildScaleDown scaleDown={child.scaleDown} />
                 </td>
                 <td className={TD}>
                   <ChildObserved asOf={child.asOf} />
@@ -1334,6 +1355,49 @@ function ChildBackoff({ backoff }: { backoff?: CapacityAutoscalerBackoff }) {
         {label ?? "Backoff"}
       </Badge>
     </WithTooltip>
+  );
+}
+
+function ChildScaleDown({
+  scaleDown,
+}: {
+  scaleDown?: CapacityAutoscalerScaleDown;
+}) {
+  if (!scaleDown) {
+    return <span className="text-theme-text-tertiary">Not published</span>;
+  }
+  return (
+    <div className="space-y-1 text-theme-text-secondary">
+      <div>
+        {scaleDown.status
+          ? (SCALE_DOWN_STATUS_LABELS.get(scaleDown.status) ?? scaleDown.status)
+          : "Status not published"}
+      </div>
+      <div className="flex items-center gap-1 text-theme-text-tertiary">
+        Candidates:{" "}
+        {scaleDown.candidates === undefined
+          ? "not published"
+          : scaleDown.candidates}
+        <CertaintyGlyph
+          certainty={scaleDown.candidates === undefined ? "unknown" : "exact"}
+          title={
+            scaleDown.candidates === undefined
+              ? "Candidate count not published by the autoscaler."
+              : "Candidate count published by the autoscaler; candidates are not guaranteed removals."
+          }
+        />
+      </div>
+      {scaleDown.lastTransitionTime && (
+        <div className="text-theme-text-tertiary">
+          Status since {formatTimestamp(scaleDown.lastTransitionTime)}
+        </div>
+      )}
+      <div className="text-theme-text-tertiary">
+        {scaleDown.asOf
+          ? `As of ${formatTimestamp(scaleDown.asOf)}`
+          : "Probe time not published"}
+      </div>
+    </div>
   );
 }
 

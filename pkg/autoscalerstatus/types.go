@@ -71,6 +71,7 @@ type Condition struct {
 	// Status as published: "NoActivity", "InProgress", "NoCandidates",
 	// "CandidatesPresent", "Backoff", or "" when not stated.
 	Status         string
+	Candidates     *int
 	Backoff        *Backoff
 	LastProbeTime  *time.Time
 	LastTransition *time.Time
