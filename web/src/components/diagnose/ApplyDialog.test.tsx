@@ -64,7 +64,13 @@ describe("Apply confirmation context", () => {
 
 it("distinguishes local execution from sending resource data to the model provider", () => {
   const html = renderToStaticMarkup(
-    <AgentSetupNotice setupState="needs-install" />,
+    <AgentSetupNotice
+      setupState="needs-install"
+      cliOverride={false}
+      checkingAgents={false}
+      agentsCheckFailed={false}
+      recheckAgents={async () => {}}
+    />,
   );
   expect(html).toContain("Your agent runs locally");
   expect(html).toContain("model provider under your account, not to Radar");

@@ -175,6 +175,13 @@ Flags:
 		// read/write the shared machine-scoped store (~/.radar/config.json)
 		// directly — the ephemeral server then sees it as already given.
 		effective := standaloneEffectiveAgent(context.Background(), o.agent)
+		if effective == "" {
+			// Catch this before executionProfile, which reports it as a usage
+			// error with no way forward. Here it is a machine-setup problem the
+			// user can fix, and this is their own machine.
+			fmt.Fprintln(os.Stderr, localNoAgentHint())
+			return 1
+		}
 		profile, err := executionProfile(effective, o.profile)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -214,7 +221,19 @@ Flags:
 		return 1
 	}
 	if !agents.Enabled {
-		fmt.Fprintln(os.Stderr, "AI investigations are disabled on this Radar instance — install Claude Code, Codex, Cursor (cursor-agent), or OpenCode and restart radar.")
+		// Eligible separates "this Radar could run investigations, it just found
+		// no CLI" from "this deployment never can" (--no-mcp, auth, in-cluster or
+		// shared), where installing a CLI is the wrong advice.
+		if agents.Eligible && agents.CLIOverride {
+			fmt.Fprintf(os.Stderr, "the Radar at %s can't run its RADAR_AI_CLI_BIN. Fix the path, or remove it "+
+				"and restart that Radar.\n", base)
+		} else if agents.Eligible {
+			fmt.Fprintf(os.Stderr, "the Radar at %s found no agent CLI. Install Claude Code, Codex, Cursor, "+
+				"or OpenCode on that machine and run this again.\n", base)
+		} else {
+			fmt.Fprintf(os.Stderr, "the Radar at %s can't run AI investigations. Use --standalone to run them "+
+				"with a local Radar.\n", base)
+		}
 		return 1
 	}
 
@@ -239,7 +258,10 @@ Flags:
 		}
 	}
 
-	run, err := startRun(base, kind, o.group, o.namespace, name, o.agent, profile)
+	// Send the agent the consent was for. With no name the server uses its own
+	// default, which can differ from this list's first agent once a CLI is
+	// installed while that Radar runs.
+	run, err := startRun(base, kind, o.group, o.namespace, name, effective, profile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -307,9 +329,11 @@ func resolveServer(explicit string) (string, error) {
 }
 
 type agentsResponse struct {
-	Enabled   bool            `json:"enabled"`
-	Consented map[string]bool `json:"consented"`
-	Agents    []ai.AgentInfo  `json:"agents"`
+	Enabled     bool            `json:"enabled"`
+	Eligible    bool            `json:"eligible"`
+	CLIOverride bool            `json:"cliOverride"`
+	Consented   map[string]bool `json:"consented"`
+	Agents      []ai.AgentInfo  `json:"agents"`
 }
 
 func fetchAgents(base string) (agentsResponse, error) {
@@ -363,6 +387,20 @@ func standaloneEffectiveAgent(ctx context.Context, requested string) string {
 		return ""
 	}
 	return diagnoser.AgentName(requested)
+}
+
+// noAgentCLIHint is the one wording for "this machine has no agent CLI Radar can
+// drive". Every local surface that hits it reads this, so they can't drift.
+const noAgentCLIHint = "no supported agent CLI found. Install Claude Code, Codex, Cursor, or OpenCode"
+
+// localNoAgentHint is noAgentCLIHint unless RADAR_AI_CLI_BIN is set here: then
+// detection is off and the variable names a file Radar can't run, so installing
+// a CLI wouldn't help.
+func localNoAgentHint() string {
+	if v := strings.TrimSpace(os.Getenv("RADAR_AI_CLI_BIN")); v != "" {
+		return "can't run RADAR_AI_CLI_BIN=" + v + ". Fix the path or unset it"
+	}
+	return noAgentCLIHint
 }
 
 func executionProfile(agent, requested string) (ai.ExecutionProfile, error) {

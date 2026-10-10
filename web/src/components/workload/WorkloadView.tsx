@@ -25,6 +25,7 @@ import {
   type ResourceOwnershipContext,
   type ServingResourceDetail,
   type AuditFinding,
+  dedupeResourceRefs,
   gitOpsRouteForOwner,
   gitOpsOwnerFromRelationships,
   getGitOpsResourceStatus,
@@ -1451,22 +1452,12 @@ export function WorkloadView({
 
 function collectServingRefs(relationships: Relationships | undefined): ResourceRef[] {
   if (!relationships) return []
-  return dedupeRefs([
+  return dedupeResourceRefs([
     ...(relationships.services ?? []),
     ...(relationships.ingresses ?? []),
     ...(relationships.gateways ?? []),
     ...(relationships.routes ?? []),
   ])
-}
-
-function dedupeRefs(refs: ResourceRef[]): ResourceRef[] {
-  const seen = new Set<string>()
-  return refs.filter((ref) => {
-    const key = `${ref.kind}/${ref.namespace}/${ref.name}/${ref.group ?? ''}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
 }
 
 function resolveGitOpsOwner(

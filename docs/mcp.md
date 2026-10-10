@@ -493,6 +493,12 @@ This selects the Argo Rollout workload path; it does not imply that `diagnose` s
 
 For `issues`, read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
 
+Resource context distinguishes observed dependency references (`dependencies` and
+`dependents`) from autoscalers (`scaledBy`). A Certificate depends on its issuer;
+it does not scale it. These references carry API group and namespace identity,
+are filtered by the caller's reference permissions, and do not establish that
+a controller has successfully reconciled the dependency.
+
 ### Write Tools
 
 | Tool | Description | Parameters |

@@ -123,7 +123,7 @@ func codexEnv() []string {
 		if !ok {
 			continue
 		}
-		if keep[k] || strings.HasPrefix(k, "LC_") {
+		if keep[k] || isPathKey(k) || strings.HasPrefix(k, "LC_") {
 			out = append(out, kv)
 		}
 	}
