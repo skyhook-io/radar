@@ -311,3 +311,20 @@ func TestGitOpsFinalizerHealthDuringControllerRollout(t *testing.T) {
 		t.Fatalf("rollout changed GitOps controller health text: %q", got)
 	}
 }
+
+func TestGitOpsFinalizerOwnerMayRunOffCluster(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := k8s.InitTestResourceCache(testFakeClient); err != nil {
+			t.Fatal(err)
+		}
+	})
+	resolver := &insightsResolver{cache: k8s.GetResourceCache()}
+	root := &unstructured.Unstructured{}
+	root.SetAPIVersion("argoproj.io/v1alpha1")
+	if got := resolver.FinalizerOwnerStatus("resources-finalizer.argocd.argoproj.io", root); !strings.Contains(got, "argocd-application-controller has no pods in namespace argocd (it may run outside the cluster under Amazon EKS Capabilities") {
+		t.Fatalf("managed Argo CD read as missing: %q", got)
+	}
+}

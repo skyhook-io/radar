@@ -72,14 +72,21 @@ func TestDynamicTerminatingProblems(t *testing.T) {
 		if det.OnsetUnknown || det.DurationSeconds < 900 || !strings.Contains(det.Cause, det.Duration) {
 			t.Fatalf("bad deletion timing: %+v", det)
 		}
-		if !strings.Contains(det.Action, "kubectl patch 'widgets.gaps.radar.test'") || !strings.Contains(det.Action, "--dry-run=server") || !strings.Contains(det.Action, "external resources behind") || !strings.Contains(det.Action, "re-read") {
-			t.Fatal(det.Action)
+		if strings.Contains(det.Action, "patch_resource") || strings.Contains(det.Action, "kubectl patch") {
+			t.Fatalf("detector must not offer removal before the controller is observed: %s", det.Action)
+		}
+		if _, ok := det.TerminatingRemovalPreviews[metav1.FinalizerDeleteDependents]; ok || len(det.TerminatingRemovalPreviews) != 2 {
+			t.Fatalf("previews=%v", det.TerminatingRemovalPreviews)
+		}
+		preview := det.TerminatingRemovalPreviews["gaps.radar.test/cleanup"]
+		if !strings.Contains(preview, "kubectl patch 'widgets.gaps.radar.test'") || !strings.Contains(preview, "--dry-run=server") {
+			t.Fatal(preview)
 		}
 		var input struct {
 			Patch  string `json:"patch"`
 			DryRun bool   `json:"dry_run"`
 		}
-		suffix := strings.SplitN(det.Action, "patch_resource ", 2)[1]
+		suffix := strings.SplitN(preview, "patch_resource ", 2)[1]
 		if err := json.NewDecoder(strings.NewReader(suffix)).Decode(&input); err != nil {
 			t.Fatal(err)
 		}
@@ -180,8 +187,27 @@ func TestDynamicTerminatingProtectionGuidance(t *testing.T) {
 		t.Fatalf("out=%+v", out)
 	}
 	for _, det := range out {
-		if strings.Contains(det.Action, "patch_resource") || strings.Contains(det.Action, "kubectl patch") || !strings.Contains(det.Action, "in-use guard") || !strings.Contains(det.Action, "referencing") {
-			t.Fatal(det.Action)
+		if strings.Contains(det.Action, "patch_resource") || strings.Contains(det.Action, "kubectl patch") || len(det.TerminatingRemovalPreviews) != 0 {
+			t.Fatalf("guard offered removal: %+v", det)
+		}
+	}
+}
+
+func TestIsProtectionFinalizer(t *testing.T) {
+	for finalizer, want := range map[string]bool{
+		"kubernetes.io/pvc-protection":                                   true,
+		"gateway-exists-finalizer.gateway.networking.k8s.io":             true,
+		"snapshot.storage.kubernetes.io/volumesnapshot-bound-protection": true,
+		"kueue.x-k8s.io/resource-in-use":                                 true,
+		"cluster.cluster.x-k8s.io":                                       false,
+		"machine.cluster.x-k8s.io":                                       false,
+		"kueue.x-k8s.io/managed":                                         false,
+		"finalizer.managedresource.crossplane.io":                        false,
+		"cnrm.cloud.google.com/finalizer":                                false,
+		"karpenter.sh/termination":                                       false,
+	} {
+		if got := IsProtectionFinalizer(finalizer); got != want {
+			t.Errorf("IsProtectionFinalizer(%q) = %v, want %v", finalizer, got, want)
 		}
 	}
 }

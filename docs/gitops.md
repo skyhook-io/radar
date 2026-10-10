@@ -90,7 +90,7 @@ Radar treats Terminating as a distinct lifecycle phase that dominates other stat
 - **Detail header**: orange `[Terminating]` chip replaces Sync/Health badges. Source / Revision / Last reconcile / Sync mode metadata swaps to `Pending deletion · Finalizers`, with the original fields behind a "Show pre-deletion metadata" toggle
 - **Action buttons**: Sync, Reconcile, Suspend / Resume, Rollback, Sync-with-source disable with a tooltip explaining why. Refresh and Terminate stay enabled — they're read-only / cleanup-only verbs
 - **Lifecycle banner**: a dedicated orange banner above the Issues band; pre-deletion failures collapse behind a `Pre-deletion issues (N)` disclosure
-- **Severity ramp**: info <5min, warning 5-30min, alert >30min. Past 30min the Issue's Cause line names the controller responsible for the finalizer and reports its pod state ("helm-controller is not running in flux-system")
+- **Severity ramp**: info <5min, warning 5-30min, alert >30min. Past 30min the Issue's Cause line names the controller responsible for the finalizer and reports its pod state ("helm-controller is not running in flux-system"). An Argo CD controller with no pods is reported as possibly running outside the cluster (Amazon EKS Capabilities) rather than as missing
 - **Fleet view**: `—` in Sync/Health columns, orange row stripe, `[TERMINATING]` chip in the leftmost slot, `Pending Nago` instead of "Last Sync"
 - **Topology**: orange left-stripe on the root + children; stale sync/health chips suppressed
 - **Cluster Audit**: `stuckTerminating` check across all typed K8s resources with the same 5-minute/30-minute thresholds, presented as Medium/High posture priority

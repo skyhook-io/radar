@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -141,11 +142,11 @@ func TestIssuesDynamicTerminationAuthorization(t *testing.T) {
 	}
 	p := NewCacheProvider()
 	scoped := Compose(p, Filters{Namespaces: []string{"visible"}, Grouped: true, CanReadRelated: func(r Ref) bool { return r.Namespace == "visible" }, CanListResource: func(_, _, namespace string) bool { return namespace == "visible" }})
-	if len(scoped) != 1 || scoped[0].Name != "public" || scoped[0].Category != issuesapi.CategoryTerminationStuck || scoped[0].Severity != SeverityCritical {
+	if len(scoped) != 1 || scoped[0].Name != "public" || scoped[0].Category != issuesapi.CategoryTerminationStuck || scoped[0].Severity != SeverityWarning {
 		t.Fatalf("scoped=%+v", scoped)
 	}
-	if !strings.Contains(scoped[0].Cause, "external cleanup pending") || !strings.Contains(scoped[0].Cause, "controller unknown") || !strings.Contains(scoped[0].Action, "patch_resource") {
-		t.Fatalf("missing guidance: %+v", scoped[0])
+	if !strings.Contains(scoped[0].Cause, "external cleanup pending") || !strings.Contains(scoped[0].Cause, "controller unknown") || strings.Contains(scoped[0].Action, "patch_resource") || !strings.Contains(scoped[0].Action, "couldn't identify") {
+		t.Fatalf("unknown controller guidance: %+v", scoped[0])
 	}
 	denied := Compose(p, Filters{CanReadClusterScoped: func(string, string) bool { return false }, CanListResource: func(_, _, namespace string) bool { return namespace != "" }})
 	for _, issue := range denied {
@@ -199,28 +200,37 @@ func (p *observingFinalizerProvider) FinalizerOwnerStatus(string, Ref, func(stri
 }
 
 func TestTerminatingGuidanceAndNoise(t *testing.T) {
+	const preview = `For "crossplane.io/cleanup", preview with patch_resource {}`
 	for _, tc := range []struct {
 		name         string
 		finalizers   []string
 		observation  finalizerObservation
 		wantSeverity Severity
 		wantAction   string
+		wantPatch    bool
 		wantCalls    int
 	}{
-		{"healthy infrastructure", []string{"crossplane.io/cleanup"}, finalizerObservation{Text: "crossplane is healthy (1 pod ready)", Running: true, Healthy: true}, SeverityWarning, "Check its logs", 1},
-		{"crashloop", []string{"crossplane.io/cleanup"}, finalizerObservation{Text: "crossplane is CrashLoopBackOff (1/1 pods)"}, SeverityCritical, "patch_resource", 1},
-		{"foreground only", []string{metav1.FinalizerDeleteDependents}, finalizerObservation{}, SeverityCritical, "dependents", 0},
-		{"protection only", []string{"gateway-exists-finalizer.gateway.networking.k8s.io"}, finalizerObservation{}, SeverityCritical, "in-use guard", 0},
+		{"healthy infrastructure", []string{"crossplane.io/cleanup"}, finalizerObservation{Text: "crossplane is healthy (1 pod ready)", Controller: "crossplane", Running: true, Healthy: true}, SeverityWarning, "Check its logs", false, 1},
+		{"identified crashloop", []string{"crossplane.io/cleanup"}, finalizerObservation{Text: "crossplane is CrashLoopBackOff (1/1 pods)", Controller: "crossplane", Stopped: true}, SeverityCritical, "intentionally removed", true, 1},
+		{"identified absent", []string{"crossplane.io/cleanup"}, finalizerObservation{Text: "crossplane is not running", Controller: "crossplane", Stopped: true}, SeverityCritical, "intentionally removed", true, 1},
+		{"stopped controller that releases infrastructure", []string{"crossplane.io/cleanup"}, finalizerObservation{Text: "crossplane is CrashLoopBackOff (1/1 pods)", Controller: "crossplane", Stopped: true, ReleasesInfrastructure: true}, SeverityCritical, "Get crossplane running again", false, 1},
+		{"identified but unconfirmed", []string{"crossplane.io/cleanup"}, finalizerObservation{Text: "crossplane has no pods; it may run outside the cluster", Controller: "crossplane"}, SeverityWarning, "can't confirm", false, 1},
+		{"unknown", []string{"crossplane.io/cleanup"}, finalizerObservation{Text: "controller unknown"}, SeverityWarning, "couldn't identify", false, 1},
+		{"foreground only", []string{metav1.FinalizerDeleteDependents}, finalizerObservation{}, SeverityCritical, "dependents", false, 0},
+		{"protection only", []string{"gateway-exists-finalizer.gateway.networking.k8s.io"}, finalizerObservation{}, SeverityCritical, "in-use guard", false, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &observingFinalizerProvider{observation: tc.observation}
-			p.terminatingProblems = []k8s.Detection{{Kind: "Widget", Group: "crossplane.io", Namespace: "test", Name: "deleting", Reason: "Terminating stuck", Severity: "critical", Action: "in-use guard; patch_resource", TerminatingFinalizers: tc.finalizers}}
+			p.terminatingProblems = []k8s.Detection{{Kind: "Widget", Group: "crossplane.io", Namespace: "test", Name: "deleting", Reason: "Terminating stuck", Severity: "critical", TerminatingFinalizers: tc.finalizers, TerminatingRemovalPreviews: map[string]string{"crossplane.io/cleanup": preview}}}
 			out := Compose(p, Filters{CanListResource: func(string, string, string) bool { return true }})
 			if len(out) != 1 || out[0].Severity != tc.wantSeverity || !strings.Contains(out[0].Action, tc.wantAction) || p.calls != tc.wantCalls {
 				t.Fatalf("out=%+v calls=%d", out, p.calls)
 			}
-			if tc.observation.Running && strings.Contains(out[0].Action, "patch_resource") {
-				t.Fatal("healthy controller offered rescue patch")
+			if got := strings.Contains(out[0].Action, "patch_resource"); got != tc.wantPatch {
+				t.Fatalf("patch offered=%v, want %v: %s", got, tc.wantPatch, out[0].Action)
+			}
+			if !tc.wantPatch && !tc.observation.Running && tc.wantCalls > 0 && !strings.Contains(out[0].Action, "orphan external resources") {
+				t.Fatalf("missing removal warning: %s", out[0].Action)
 			}
 			if tc.name == "foreground only" && !strings.Contains(out[0].Cause, "garbage collector is waiting for dependents") {
 				t.Fatal(out[0].Cause)
@@ -276,5 +286,157 @@ func TestFinalizerOwnerPartialReadiness(t *testing.T) {
 				t.Fatalf("partial ready controller must suppress rescue without warning cap: %+v", pr)
 			}
 		})
+	}
+}
+
+func TestFinalizerOwnerRemovalEvidence(t *testing.T) {
+	t.Cleanup(k8s.ResetResourceCache)
+	scopes := map[string]k8score.ResourceScope{"pods": {Enabled: true}, "deployments": {Enabled: true}, "statefulsets": {Enabled: true}}
+	karpenter := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "karpenter", Namespace: "kube-system", Labels: map[string]string{"app.kubernetes.io/name": "karpenter"}}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "karpenter"}}}}
+	crashing := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "karpenter-1", Namespace: "kube-system", Labels: map[string]string{"app.kubernetes.io/name": "karpenter"}}, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}}}}
+	appsDenied := func(group, _, namespace string) bool { return group != "apps" || namespace != "" }
+	vmLabel := map[string]string{"app.kubernetes.io/name": "victoria-metrics-operator"}
+	vmOperator := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "victoria-metrics-operator", Namespace: "monitoring", Labels: vmLabel}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: vmLabel}}}
+	vmCrashing := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "vm-operator-0", Namespace: "monitoring", Labels: vmLabel}, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}}}}}
+	for _, tc := range []struct {
+		name, finalizer, group string
+		objects                []runtime.Object
+		access                 func(string, string, string) bool
+		want                   string
+		wantStopped            bool
+		wantInfrastructure     bool
+	}{
+		{name: "catalog controller absent", finalizer: "apps.victoriametrics.com/finalizer", group: "operator.victoriametrics.com", want: "victoria-metrics-operator is not running across the watched cluster", wantStopped: true},
+		{name: "absence without a cluster-wide workload search", finalizer: "apps.victoriametrics.com/finalizer", group: "operator.victoriametrics.com", access: appsDenied, want: "could not be searched cluster-wide"},
+		{name: "managed karpenter", finalizer: "karpenter.sh/termination", group: "karpenter.sh", want: "karpenter has no pods across the watched cluster; it may run outside the cluster (EKS Auto Mode, AKS node auto-provisioning)", wantInfrastructure: true},
+		{name: "managed karpenter node class", finalizer: "karpenter.k8s.aws/termination", group: "karpenter.k8s.aws", want: "may run outside the cluster", wantInfrastructure: true},
+		{name: "self-hosted karpenter crashing", finalizer: "karpenter.sh/termination", group: "karpenter.sh", objects: []runtime.Object{karpenter, crashing}, want: "karpenter is CrashLoopBackOff (1/1 pods) in namespace kube-system", wantStopped: true, wantInfrastructure: true},
+		{name: "managed argo cd", finalizer: "resources-finalizer.argocd.argoproj.io", group: "argoproj.io", want: "argocd-application-controller has no pods in namespace argocd; it may run outside the cluster (Amazon EKS Capabilities)"},
+		{name: "flux controller absent", finalizer: "finalizers.kustomize.toolkit.fluxcd.io", group: "kustomize.toolkit.fluxcd.io", want: "kustomize-controller is not running in namespace flux-system", wantStopped: true},
+		{name: "visible controller down without a cluster-wide workload search", finalizer: "apps.victoriametrics.com/finalizer", group: "operator.victoriametrics.com", objects: []runtime.Object{vmOperator, vmCrashing}, access: appsDenied, want: "victoria-metrics-operator is CrashLoopBackOff (1/1 pods) in namespace monitoring, but Deployments and StatefulSets could not be searched cluster-wide"},
+		{name: "visible controller down", finalizer: "apps.victoriametrics.com/finalizer", group: "operator.victoriametrics.com", objects: []runtime.Object{vmOperator, vmCrashing}, want: "victoria-metrics-operator is CrashLoopBackOff (1/1 pods) in namespace monitoring", wantStopped: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := k8s.InitScopedTestResourceCache(fake.NewClientset(tc.objects...), scopes); err != nil {
+				t.Fatal(err)
+			}
+			observation := NewCacheProvider().FinalizerOwnerStatus(tc.finalizer, Ref{Group: tc.group, Kind: "Subject"}, tc.access)
+			if !strings.Contains(observation.Text, tc.want) || observation.Stopped != tc.wantStopped || observation.ReleasesInfrastructure != tc.wantInfrastructure || observation.Controller == "" || observation.Running {
+				t.Fatalf("observation=%+v", observation)
+			}
+		})
+	}
+}
+
+// Real finalizer keys from infrastructure operators. Removing any of them while
+// their controller may still be deleting cloud resources orphans that
+// infrastructure, so only a controller Radar identified and saw stopped may get
+// a ready-made removal.
+func TestStuckDeletionRemovalNeedsStoppedController(t *testing.T) {
+	t.Cleanup(k8s.ResetResourceCache)
+	t.Cleanup(k8s.ResetTestDynamicState)
+	type subject struct {
+		gvr        schema.GroupVersionResource
+		kind       string
+		namespace  string
+		finalizers []string
+	}
+	subjects := []subject{
+		{schema.GroupVersionResource{Group: "ec2.aws.upbound.io", Version: "v1beta1", Resource: "instances"}, "Instance", "", []string{"finalizer.managedresource.crossplane.io"}},
+		{schema.GroupVersionResource{Group: "platform.example.org", Version: "v1alpha1", Resource: "xdatabases"}, "XDatabase", "", []string{"composite.apiextensions.crossplane.io"}},
+		{schema.GroupVersionResource{Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "clusters"}, "Cluster", "capi", []string{"cluster.cluster.x-k8s.io"}},
+		{schema.GroupVersionResource{Group: "sql.cnrm.cloud.google.com", Version: "v1beta1", Resource: "sqlinstances"}, "SQLInstance", "kcc", []string{"cnrm.cloud.google.com/finalizer", "cnrm.cloud.google.com/deletion-defender"}},
+		{schema.GroupVersionResource{Group: "kueue.x-k8s.io", Version: "v1beta1", Resource: "clusterqueues"}, "ClusterQueue", "", []string{"kueue.x-k8s.io/resource-in-use"}},
+		{schema.GroupVersionResource{Group: "karpenter.sh", Version: "v1", Resource: "nodeclaims"}, "NodeClaim", "", []string{"karpenter.sh/termination"}},
+		{schema.GroupVersionResource{Group: "operator.victoriametrics.com", Version: "v1beta1", Resource: "vmagents"}, "VMAgent", "monitoring", []string{"apps.victoriametrics.com/finalizer"}},
+	}
+	compose := func(t *testing.T, typed ...runtime.Object) map[string]Issue {
+		t.Helper()
+		k8s.ResetTestDynamicState()
+		if err := k8s.InitScopedTestResourceCache(fake.NewClientset(typed...), map[string]k8score.ResourceScope{"pods": {Enabled: true}, "deployments": {Enabled: true}, "statefulsets": {Enabled: true}}); err != nil {
+			t.Fatal(err)
+		}
+		listKinds := map[schema.GroupVersionResource]string{}
+		var resources []k8s.APIResource
+		var objects []runtime.Object
+		for _, s := range subjects {
+			listKinds[s.gvr] = s.kind + "List"
+			resources = append(resources, k8s.APIResource{Group: s.gvr.Group, Version: s.gvr.Version, Kind: s.kind, Name: s.gvr.Resource, Namespaced: s.namespace != "", IsCRD: true, Verbs: []string{"list", "watch"}})
+			u := &unstructured.Unstructured{}
+			u.SetAPIVersion(s.gvr.GroupVersion().String())
+			u.SetKind(s.kind)
+			u.SetName("stuck")
+			u.SetNamespace(s.namespace)
+			u.SetUID(types.UID("uid-" + s.kind))
+			u.SetCreationTimestamp(metav1.NewTime(time.Now().Add(-24 * time.Hour)))
+			u.SetDeletionTimestamp(&metav1.Time{Time: time.Now().Add(-2 * time.Hour)})
+			u.SetFinalizers(s.finalizers)
+			objects = append(objects, u)
+		}
+		client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds, objects...)
+		if err := k8s.InitTestDynamicResourceCache(client, resources); err != nil {
+			t.Fatal(err)
+		}
+		dc := k8s.GetDynamicResourceCache()
+		for _, s := range subjects {
+			if err := dc.EnsureWatching(s.gvr); err != nil {
+				t.Fatal(err)
+			}
+			if !dc.WaitForSync(s.gvr, 2*time.Second) {
+				t.Fatalf("%s did not sync", s.gvr)
+			}
+		}
+		out := map[string]Issue{}
+		for _, issue := range Compose(NewCacheProvider(), Filters{CanListResource: func(string, string, string) bool { return true }}) {
+			if issue.Category == issuesapi.CategoryTerminationStuck {
+				if _, dup := out[issue.Kind]; dup {
+					t.Fatalf("duplicate %s row", issue.Kind)
+				}
+				out[issue.Kind] = issue
+			}
+		}
+		if len(out) != len(subjects) {
+			t.Fatalf("rows=%+v", out)
+		}
+		return out
+	}
+	offersRemoval := func(issue Issue) bool {
+		return strings.Contains(issue.Action, "patch_resource") || strings.Contains(issue.Action, "kubectl patch")
+	}
+
+	controllersAbsent := compose(t)
+	if action := controllersAbsent["SQLInstance"].Action; strings.Count(action, "couldn't identify") != 1 || !strings.Contains(action, `finalizers "cnrm.cloud.google.com/finalizer", "cnrm.cloud.google.com/deletion-defender"`) {
+		t.Errorf("Config Connector finalizers should share one sentence: %s", action)
+	}
+	for _, kind := range []string{"Instance", "XDatabase", "Cluster", "SQLInstance"} {
+		issue := controllersAbsent[kind]
+		if offersRemoval(issue) || issue.Severity != SeverityWarning || !strings.Contains(issue.Action, "couldn't identify which controller owns") || !strings.Contains(issue.Action, "orphan external resources") {
+			t.Errorf("%s with an unidentified controller: severity=%s action=%s", kind, issue.Severity, issue.Action)
+		}
+	}
+	if issue := controllersAbsent["ClusterQueue"]; offersRemoval(issue) || !strings.Contains(issue.Action, "in-use guard") {
+		t.Errorf("Kueue in-use guard: %s", issue.Action)
+	}
+	if issue := controllersAbsent["NodeClaim"]; offersRemoval(issue) || issue.Severity != SeverityWarning || !strings.Contains(issue.Cause, "may run outside the cluster (EKS Auto Mode, AKS node auto-provisioning)") || !strings.Contains(issue.Action, "can't confirm") {
+		t.Errorf("managed Karpenter: severity=%s cause=%s action=%s", issue.Severity, issue.Cause, issue.Action)
+	}
+	vm := controllersAbsent["VMAgent"]
+	if !offersRemoval(vm) || vm.Severity != SeverityCritical || !strings.Contains(vm.Cause, "victoria-metrics-operator is not running") || !strings.Contains(vm.Action, `"name":"stuck"`) {
+		t.Errorf("uninstalled VictoriaMetrics operator: severity=%s cause=%s action=%s", vm.Severity, vm.Cause, vm.Action)
+	}
+
+	label := map[string]string{"app.kubernetes.io/name": "victoria-metrics-operator"}
+	vmOperator := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "vm-victoria-metrics-operator", Namespace: "monitoring", Labels: label}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: label}}}
+	vmPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "vm-operator-0", Namespace: "monitoring", Labels: label}, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Ready: true}}}}
+	karpenterLabel := map[string]string{"app.kubernetes.io/name": "karpenter"}
+	karpenter := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "karpenter", Namespace: "kube-system", Labels: karpenterLabel}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: karpenterLabel}}}
+	karpenterPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "karpenter-0", Namespace: "kube-system", Labels: karpenterLabel}, Status: corev1.PodStatus{Phase: corev1.PodRunning, ContainerStatuses: []corev1.ContainerStatus{{Ready: false}}}}
+
+	controllersPresent := compose(t, vmOperator, vmPod, karpenter, karpenterPod)
+	if vm := controllersPresent["VMAgent"]; offersRemoval(vm) || vm.Severity != SeverityWarning || !strings.Contains(vm.Action, "controller is running") {
+		t.Errorf("healthy VictoriaMetrics operator: severity=%s action=%s", vm.Severity, vm.Action)
+	}
+	if issue := controllersPresent["NodeClaim"]; offersRemoval(issue) || issue.Severity != SeverityCritical || !strings.Contains(issue.Cause, "karpenter is degraded (0/1 pods ready)") || !strings.Contains(issue.Action, "Get karpenter running again") {
+		t.Errorf("self-hosted Karpenter not ready: severity=%s cause=%s action=%s", issue.Severity, issue.Cause, issue.Action)
 	}
 }

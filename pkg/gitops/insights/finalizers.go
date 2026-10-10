@@ -36,6 +36,14 @@ type FinalizerOwner struct {
 	// controller's pods.
 	SelectorKey   string
 	SelectorValue string
+	// OffClusterOfferings names managed offerings that run this controller
+	// outside the cluster it serves. For these controllers, finding none of
+	// their pods in the cluster does not show that they are gone.
+	OffClusterOfferings string
+	// ReleasesInfrastructure marks finalizers whose cleanup drains nodes or
+	// releases cloud resources. Removing one leaves that infrastructure
+	// behind even when the controller is down.
+	ReleasesInfrastructure bool
 }
 
 // ResolveFinalizerOwner returns a best-guess FinalizerOwner for the
@@ -50,7 +58,7 @@ type FinalizerOwner struct {
 // an empty namespace to list controller pods cluster-wide.
 func ResolveFinalizerOwner(finalizer string, root *unstructured.Unstructured) *FinalizerOwner {
 	if strings.HasPrefix(finalizer, "karpenter.sh/") || strings.HasPrefix(finalizer, "karpenter.k8s.aws/") || strings.HasPrefix(finalizer, "karpenter.azure.com/") {
-		return &FinalizerOwner{Controller: "karpenter", SelectorKey: "app.kubernetes.io/name", SelectorValue: "karpenter"}
+		return &FinalizerOwner{Controller: "karpenter", SelectorKey: "app.kubernetes.io/name", SelectorValue: "karpenter", OffClusterOfferings: "EKS Auto Mode, AKS node auto-provisioning", ReleasesInfrastructure: true}
 	}
 	switch finalizer {
 	case "apps.victoriametrics.com/finalizer":
@@ -66,10 +74,11 @@ func ResolveFinalizerOwner(finalizer string, root *unstructured.Unstructured) *F
 		"foreground-cascade.argocd.argoproj.io",
 		"resources-finalizer.argocd.argoproj.io/foreground":
 		return &FinalizerOwner{
-			Controller:    "argocd-application-controller",
-			Namespace:     "argocd",
-			SelectorKey:   "app.kubernetes.io/name",
-			SelectorValue: "argocd-application-controller",
+			Controller:          "argocd-application-controller",
+			Namespace:           "argocd",
+			SelectorKey:         "app.kubernetes.io/name",
+			SelectorValue:       "argocd-application-controller",
+			OffClusterOfferings: "Amazon EKS Capabilities",
 		}
 
 	// Flux: legacy "finalizers.fluxcd.io" key is shared across all
@@ -88,7 +97,7 @@ func ResolveFinalizerOwner(finalizer string, root *unstructured.Unstructured) *F
 	case "finalizers.notification.toolkit.fluxcd.io":
 		return &fluxNotificationController
 	case "finalizers.image.toolkit.fluxcd.io":
-		return &fluxImageController
+		return resolveFluxImageOwner(root)
 	}
 	return nil
 }
@@ -110,9 +119,18 @@ func resolveFluxOwnerByKind(root *unstructured.Unstructured) *FinalizerOwner {
 	case strings.HasPrefix(api, "notification.toolkit.fluxcd.io/"):
 		return &fluxNotificationController
 	case strings.HasPrefix(api, "image.toolkit.fluxcd.io/"):
-		return &fluxImageController
+		return resolveFluxImageOwner(root)
 	}
 	return nil
+}
+
+// Two controllers serve image.toolkit.fluxcd.io: image-automation-controller
+// owns ImageUpdateAutomation, image-reflector-controller the rest.
+func resolveFluxImageOwner(root *unstructured.Unstructured) *FinalizerOwner {
+	if root.GetKind() == "ImageUpdateAutomation" {
+		return &fluxImageAutomationController
+	}
+	return &fluxImageController
 }
 
 // Standard Flux controller catalog. Values match the official Helm chart
@@ -149,6 +167,12 @@ var (
 		Namespace:     "flux-system",
 		SelectorKey:   "app",
 		SelectorValue: "image-reflector-controller",
+	}
+	fluxImageAutomationController = FinalizerOwner{
+		Controller:    "image-automation-controller",
+		Namespace:     "flux-system",
+		SelectorKey:   "app",
+		SelectorValue: "image-automation-controller",
 	}
 )
 

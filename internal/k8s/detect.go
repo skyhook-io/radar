@@ -79,7 +79,11 @@ type NodeStartupCorroboration struct {
 // successor to the v0 standalone "problems" feature, NOT a parallel surface to
 // issues.
 type Detection struct {
-	TerminatingFinalizers      []string                  `json:"-"`
+	TerminatingFinalizers []string `json:"-"`
+	// TerminatingRemovalPreviews maps each operator finalizer to a dry-run
+	// removal it could take. Issue composition shows one only after observing
+	// the finalizer's controller stopped.
+	TerminatingRemovalPreviews map[string]string         `json:"-"`
 	NodeStartupCorroboration   *NodeStartupCorroboration `json:"-"`
 	MessageBeforeCorroboration string                    `json:"-"`
 	Kind                       string

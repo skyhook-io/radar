@@ -56,13 +56,8 @@ func DetectDynamicTerminatingProblems(dynamic *DynamicResourceCache, discovery *
 			}
 			det.Cause = fmt.Sprintf("Deletion has been pending for %s. %s.", det.Duration, det.Message)
 			det.TerminatingFinalizers = append([]string(nil), obj.GetFinalizers()...)
-			var actions []string
 			for i, finalizer := range obj.GetFinalizers() {
-				if finalizer == metav1.FinalizerDeleteDependents || finalizer == metav1.FinalizerOrphanDependents {
-					continue
-				}
-				if IsProtectionFinalizer(finalizer) {
-					actions = append(actions, fmt.Sprintf("Finalizer %q is an in-use guard. Find and resolve objects referencing this %s (for example Gateways referencing a GatewayClass, or VolumeSnapshots referencing snapshot content); do not bypass the guard.", finalizer, kind))
+				if finalizer == metav1.FinalizerDeleteDependents || finalizer == metav1.FinalizerOrphanDependents || IsProtectionFinalizer(finalizer) {
 					continue
 				}
 				patch := []map[string]any{{"op": "test", "path": "/metadata/uid", "value": string(obj.GetUID())}}
@@ -75,13 +70,10 @@ func DetectDynamicTerminatingProblems(dynamic *DynamicResourceCache, discovery *
 					namespaceArg = " -n " + shellQuote(obj.GetNamespace())
 				}
 				command := fmt.Sprintf("kubectl patch %s %s%s --type=json -p %s", shellQuote(gvr.Resource+"."+gvr.Group), shellQuote(obj.GetName()), namespaceArg, shellQuote(string(body)))
-				actions = append(actions, fmt.Sprintf("For %q, preview with patch_resource %s or %s --dry-run=server. After reviewing, apply the same command without --dry-run=server.", finalizer, input, command))
-			}
-			if len(actions) > 0 {
-				det.Action = strings.Join(actions, " ")
-				if strings.Contains(det.Action, "patch_resource") {
-					det.Action = "Check the controller's logs and permissions first. Only if the controller is intentionally removed, consider removing its finalizer; this skips its cleanup and may leave external resources behind. " + det.Action + " Review the preview before applying with dry_run=false. Remove only one finalizer at a time and re-read the object before preparing the next patch; indices can change."
+				if det.TerminatingRemovalPreviews == nil {
+					det.TerminatingRemovalPreviews = map[string]string{}
 				}
+				det.TerminatingRemovalPreviews[finalizer] = fmt.Sprintf("For %q, preview with patch_resource %s or %s --dry-run=server. After reviewing, apply the same command without --dry-run=server.", finalizer, input, command)
 			}
 			out = append(out, det)
 		}
@@ -90,9 +82,18 @@ func DetectDynamicTerminatingProblems(dynamic *DynamicResourceCache, discovery *
 }
 
 // Protection finalizers enforce dependency safety rather than operator cleanup.
+// Kubernetes SIG subprojects publish under x-k8s.io alongside controllers that
+// tear down infrastructure (Cluster API), so only their in-use and protection
+// keys, named like the core guards, count.
 func IsProtectionFinalizer(finalizer string) bool {
-	domain, _, _ := strings.Cut(finalizer, "/")
-	return domain == "k8s.io" || domain == "kubernetes.io" || strings.HasSuffix(domain, ".k8s.io") || strings.HasSuffix(domain, ".kubernetes.io")
+	domain, name, _ := strings.Cut(finalizer, "/")
+	if domain == "k8s.io" || domain == "kubernetes.io" || strings.HasSuffix(domain, ".k8s.io") || strings.HasSuffix(domain, ".kubernetes.io") {
+		return true
+	}
+	if domain == "x-k8s.io" || strings.HasSuffix(domain, ".x-k8s.io") {
+		return strings.Contains(name, "in-use") || strings.Contains(name, "protection")
+	}
+	return false
 }
 
 func shellQuote(value string) string {

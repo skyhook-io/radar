@@ -1206,6 +1206,9 @@ func (r *insightsResolver) FinalizerOwnerStatus(finalizer string, root *unstruct
 		// isn't installed (broken finalizer-only state). Either way,
 		// the user needs to know "the controller isn't where I expect"
 		// to start debugging.
+		if owner.OffClusterOfferings != "" {
+			return owner.Controller + " has no pods in namespace " + owner.Namespace + " (it may run outside the cluster under " + owner.OffClusterOfferings + ", not be installed, or run under a different namespace)"
+		}
 		return owner.Controller + " is not running in namespace " + owner.Namespace + " (controller may not be installed, or runs under a different namespace)"
 	}
 	return gitopsinsights.SummarizeControllerHealth(owner.Controller, matched)
