@@ -196,7 +196,7 @@ describe('collapseStableReplicaSets', () => {
     ],
     edges: [
       { id: 'deployment-rs', source: 'deployment/default/api', target: 'replicaset/default/api-abc', type: 'manages' },
-      { id: 'rs-pod', source: 'replicaset/default/api-abc', target: 'pod/default/api-1', type: 'manages' },
+      { id: 'rs-pod', source: 'replicaset/default/api-abc', target: 'pod/default/api-1', type: 'manages', ownerController: true },
     ],
   }
 
@@ -205,6 +205,8 @@ describe('collapseStableReplicaSets', () => {
     expect(result.nodes.map((node) => node.kind)).toEqual(['Deployment', 'Pod'])
     expect(result.edges).toContainEqual(expect.objectContaining({ source: 'deployment/default/api', target: 'pod/default/api-1' }))
     expect(result.nodes[0].data).toMatchObject({ replicaSetCount: 1, replicaSetsCollapsed: true })
+    // The Deployment is not the Pod's owner reference.
+    expect(result.edges.find((edge) => edge.target === 'pod/default/api-1')?.ownerController).toBeUndefined()
   })
 
   it('shows the ReplicaSet when the developer expands it', () => {

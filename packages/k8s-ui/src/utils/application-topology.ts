@@ -70,11 +70,13 @@ export function collapseStableReplicaSets(topology: Topology, expandedOwners: Re
     }
     const ownerEdge = topology.edges.find((candidate) => candidate.target === edge.source && candidate.type === 'manages')
     if (!ownerEdge) continue
+    // A shortcut past the ReplicaSet is not an owner reference of its own.
     rewiredEdges.push({
       ...edge,
       id: `${ownerEdge.source}-to-${edge.target}`,
       source: ownerEdge.source,
       type: 'manages',
+      ownerController: undefined,
     })
   }
 
