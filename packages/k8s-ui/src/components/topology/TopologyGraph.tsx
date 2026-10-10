@@ -32,6 +32,7 @@ import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 
 import { K8sResourceNode } from './K8sResourceNode'
 import { GroupNode } from './GroupNode'
+import { splitInternetByGroup } from './internet-groups'
 import { NEUTRAL_OWNER, type WorkloadFocus } from '../../utils/workload-colors'
 import { ownershipOf } from '../../utils/topology-neighborhood'
 import { buildHierarchicalElkGraph, applyHierarchicalLayout, getGroupKey, isGroupEffectivelyCollapsed, type GroupDisplayLevel } from './layout'
@@ -546,75 +547,6 @@ export function TopologyGraph({
     return { nodes: newNodes, edges: newEdges }
   }, [])
 
-  // Transform to per-group Internet nodes in traffic view with grouping
-  const createPerGroupInternetNodes = useCallback((
-    nodes: TopologyNode[],
-    edges: TopologyEdge[],
-    groupMode: GroupingMode
-  ): { nodes: TopologyNode[]; edges: TopologyEdge[] } => {
-    if (groupMode === 'none') {
-      return { nodes, edges }
-    }
-
-    // Find the single Internet node
-    const internetNode = nodes.find(n => n.kind === 'Internet')
-    if (!internetNode) {
-      return { nodes, edges }
-    }
-
-    // Find all ingresses/gateways and group them
-    const ingresses = nodes.filter(n => n.kind === 'Ingress' || n.kind === 'Gateway')
-    const groupsWithIngresses = new Map<string, TopologyNode[]>()
-
-    for (const ingress of ingresses) {
-      const groupKey = getGroupKey(ingress, groupMode)
-      if (groupKey) {
-        if (!groupsWithIngresses.has(groupKey)) {
-          groupsWithIngresses.set(groupKey, [])
-        }
-        groupsWithIngresses.get(groupKey)!.push(ingress)
-      }
-    }
-
-    // If no groups with ingresses, keep original
-    if (groupsWithIngresses.size === 0) {
-      return { nodes, edges }
-    }
-
-    // Remove original Internet node and its edges
-    const newNodes = nodes.filter(n => n.id !== internetNode.id)
-    const newEdges = edges.filter(e => e.source !== internetNode.id)
-
-    // Create per-group Internet nodes
-    for (const [groupKey, groupIngresses] of groupsWithIngresses) {
-      const internetId = `internet-${groupMode}-${groupKey}`
-
-      // Add Internet node for this group with group metadata
-      newNodes.push({
-        id: internetId,
-        kind: 'Internet',
-        name: 'Internet',
-        status: 'healthy',
-        data: {
-          // Add group metadata so it gets grouped with its ingresses
-          namespace: groupMode === 'namespace' ? groupKey : groupIngresses[0]?.data?.namespace,
-          labels: groupMode === 'app' ? { 'app.kubernetes.io/name': groupKey } : {},
-        },
-      })
-
-      // Add edges from this Internet node to its ingresses
-      for (const ingress of groupIngresses) {
-        newEdges.push({
-          id: `${internetId}-to-${ingress.id}`,
-          source: internetId,
-          target: ingress.id,
-          type: 'routes-to',
-        })
-      }
-    }
-
-    return { nodes: newNodes, edges: newEdges }
-  }, [])
 
   // Prepare topology data with expanded pod groups
   const { workingNodes, workingEdges } = useMemo(() => {
@@ -634,13 +566,13 @@ export function TopologyGraph({
 
     // In traffic view with grouping, create per-group Internet nodes
     if (isTrafficView && groupingMode !== 'none') {
-      const result = createPerGroupInternetNodes(nodes, edges, groupingMode)
+      const result = splitInternetByGroup(nodes, edges, groupingMode)
       nodes = result.nodes
       edges = result.edges
     }
 
     return { workingNodes: nodes, workingEdges: edges }
-  }, [topology, expandedPodGroups, expandPodGroup, isTrafficView, groupingMode, createPerGroupInternetNodes])
+  }, [topology, expandedPodGroups, expandPodGroup, isTrafficView, groupingMode])
 
   // Handle card click in card-grid view — find the topology node and open drawer
   const handleCardClick = useCallback((nodeId: string) => {
