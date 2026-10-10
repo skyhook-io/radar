@@ -486,7 +486,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		}
 	}
 
-	addServiceEntrypoints(rel, topo, lookupIndex)
+	addServiceEntrypoints(rel, topo, lookupIndex, nodeID)
 
 	// Convenience shortcuts: bridge the Deployment↔ReplicaSet↔Pod gap
 	// so users see Pods directly under Deployments and vice versa.
@@ -711,7 +711,13 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	return rel
 }
 
-func addServiceEntrypoints(rel *Relationships, topo *Topology, idx *RelationshipsIndex) {
+func addServiceEntrypoints(rel *Relationships, topo *Topology, idx *RelationshipsIndex, rootID string) {
+	_, outgoing := edgesForNode(topo, idx, rootID)
+	for _, edge := range outgoing {
+		if edge.Type == EdgeExposes || edge.Type == EdgeRoutesTo {
+			return
+		}
+	}
 	for _, service := range rel.Services {
 		if service.Group != "" {
 			continue
@@ -722,7 +728,7 @@ func addServiceEntrypoints(rel *Relationships, topo *Topology, idx *Relationship
 		}
 		incoming, _ := edgesForNode(topo, idx, serviceNode.ID)
 		for _, edge := range incoming {
-			if edge.Type != EdgeRoutesTo && edge.Type != EdgeExposes {
+			if edge.Source == rootID || edge.Type != EdgeRoutesTo && edge.Type != EdgeExposes {
 				continue
 			}
 			ref := resourceRefForNode(idx.nodesByID[edge.Source], nil)
@@ -732,9 +738,13 @@ func addServiceEntrypoints(rel *Relationships, topo *Topology, idx *Relationship
 			kind := strings.ToLower(ref.Kind)
 			switch kind {
 			case "ingress":
-				rel.Ingresses = appendResourceRef(rel.Ingresses, *ref)
+				if ref.Group == "networking.k8s.io" {
+					rel.Ingresses = appendResourceRef(rel.Ingresses, *ref)
+				}
 			case "gateway":
-				rel.Gateways = appendResourceRef(rel.Gateways, *ref)
+				if ref.Group == "gateway.networking.k8s.io" {
+					rel.Gateways = appendResourceRef(rel.Gateways, *ref)
+				}
 			default:
 				if isServiceEntrypointRoute(ref) {
 					rel.Routes = appendResourceRef(rel.Routes, *ref)

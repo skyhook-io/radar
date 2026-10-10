@@ -163,3 +163,26 @@ func TestProjectionIncomingGatewayRoutes(t *testing.T) {
 		}
 	}
 }
+
+func TestProjectionEntrypointsExcludeRouterRootAndSiblings(t *testing.T) {
+	topo := &Topology{Nodes: []Node{
+		{ID: "ingress/demo/root", Kind: KindIngress, Name: "root", Data: map[string]any{"namespace": "demo"}},
+		{ID: "ingress/demo/sibling", Kind: KindIngress, Name: "sibling", Data: map[string]any{"namespace": "demo"}},
+		{ID: "service/demo/web", Kind: KindService, Name: "web", Data: map[string]any{"namespace": "demo"}},
+		{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web", Data: map[string]any{"namespace": "demo"}},
+	}, Edges: []Edge{
+		{Source: "ingress/demo/root", Target: "service/demo/web", Type: EdgeRoutesTo},
+		{Source: "ingress/demo/sibling", Target: "service/demo/web", Type: EdgeRoutesTo},
+		{Source: "service/demo/web", Target: "deployment/demo/web", Type: EdgeExposes},
+	}}
+	idx := IndexByResource(topo)
+	rel := &Relationships{Services: []ResourceRef{{Kind: "Service", Namespace: "demo", Name: "web"}}}
+	addServiceEntrypoints(rel, topo, idx, "ingress/demo/root")
+	if len(rel.Ingresses) != 0 {
+		t.Fatalf("router's backend entrypoints became upstreams: %+v", rel.Ingresses)
+	}
+	workload := GetRelationships("Deployment", "demo", "web", topo, nil, nil)
+	if workload == nil || len(workload.Ingresses) != 2 {
+		t.Fatalf("workload lost entrypoints: %+v", workload)
+	}
+}
