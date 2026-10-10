@@ -676,12 +676,23 @@ function LifecycleGrid({
           Nodes
         </div>
         {pool.nodes ? (
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <MiniCount label="Ready" value={pool.nodes.ready} />
-            <MiniCount label="Not ready" value={pool.nodes.notReady} />
-            <MiniCount label="Cordoned" value={pool.nodes.cordoned} />
-            <MiniCount label="Terminating" value={pool.nodes.terminating} />
-          </div>
+          <>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <MiniCount label="Ready" value={pool.nodes.operational ? pool.nodes.operational.ready : pool.nodes.ready} />
+              <MiniCount label="Not ready" value={pool.nodes.operational ? pool.nodes.operational.notReady : pool.nodes.notReady} />
+              <MiniCount label="Cordoned" value={pool.nodes.operational ? pool.nodes.operational.cordoned : pool.nodes.cordoned} />
+              {pool.nodes.operational ? (
+                <MiniCount label="Removing" value={pool.nodes.operational.removing} />
+              ) : (
+                <MiniCount label="Terminating" value={pool.nodes.terminating} />
+              )}
+            </div>
+            {pool.nodes.operational ? pool.nodes.operational.removingUnhealthy > 0 && (
+              <p className="mt-2 text-xs text-theme-text-secondary">{pool.nodes.operational.removingUnhealthy} removing {pool.nodes.operational.removingUnhealthy === 1 ? "node has" : "nodes have"} critical pressure or prolonged removal.</p>
+            ) : (
+              <p className="mt-2 text-xs text-theme-text-secondary">Readiness counts only; removal status is unavailable from this Radar.</p>
+            )}
+          </>
         ) : (
           <p className="text-sm text-theme-text-secondary">
             {coverageMessage(pool.coverage.nodes, "Node lifecycle")}
@@ -1353,7 +1364,7 @@ function PoolMembersTab({
                 />
               </td>
               <td className={TD}>
-                <NodeReadyBadge ready={node.ready} cordoned={node.cordoned} />
+                <NodeReadyBadge ready={node.ready} cordoned={node.cordoned} lifecycle={node.lifecycle} />
               </td>
               <td className={`${TD} font-mono text-xs`}>
                 {node.instanceType ?? "—"}

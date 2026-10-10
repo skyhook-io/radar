@@ -3,6 +3,7 @@ package capacityapi
 import (
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/subject"
 )
@@ -129,11 +130,12 @@ type ClaimLifecycleSummary struct {
 }
 
 type NodeLifecycleSummary struct {
-	Total       int `json:"total"`
-	Ready       int `json:"ready"`
-	NotReady    int `json:"notReady"`
-	Cordoned    int `json:"cordoned"`
-	Terminating int `json:"terminating"`
+	Operational *health.NodeFleetCounts `json:"operational,omitempty"`
+	Total       int                     `json:"total"`
+	Ready       int                     `json:"ready"`
+	NotReady    int                     `json:"notReady"`
+	Cordoned    int                     `json:"cordoned"`
+	Terminating int                     `json:"terminating"`
 }
 
 type CompositionBucket struct {
@@ -265,18 +267,19 @@ const (
 )
 
 type NodeMember struct {
-	Ready             *bool                `json:"ready,omitempty"`
-	Cordoned          bool                 `json:"cordoned"`
-	Conditions        []Condition          `json:"conditions"`
-	InstanceType      string               `json:"instanceType,omitempty"`
-	CapacityType      string               `json:"capacityType,omitempty"`
-	Zone              string               `json:"zone,omitempty"`
-	Architecture      string               `json:"architecture,omitempty"`
-	Image             string               `json:"image,omitempty"`
-	Allocatable       *QuantityObservation `json:"allocatable,omitempty"`
-	ScheduledRequests *QuantityObservation `json:"scheduledRequests,omitempty"`
-	ActualUsage       *UsageObservation    `json:"actualUsage,omitempty"`
-	PodCount          *int                 `json:"podCount,omitempty"`
+	Lifecycle         *health.NodeLifecycleState `json:"lifecycle,omitempty"`
+	Ready             *bool                      `json:"ready,omitempty"`
+	Cordoned          bool                       `json:"cordoned"`
+	Conditions        []Condition                `json:"conditions"`
+	InstanceType      string                     `json:"instanceType,omitempty"`
+	CapacityType      string                     `json:"capacityType,omitempty"`
+	Zone              string                     `json:"zone,omitempty"`
+	Architecture      string                     `json:"architecture,omitempty"`
+	Image             string                     `json:"image,omitempty"`
+	Allocatable       *QuantityObservation       `json:"allocatable,omitempty"`
+	ScheduledRequests *QuantityObservation       `json:"scheduledRequests,omitempty"`
+	ActualUsage       *UsageObservation          `json:"actualUsage,omitempty"`
+	PodCount          *int                       `json:"podCount,omitempty"`
 }
 
 func NewNodeMember() NodeMember {

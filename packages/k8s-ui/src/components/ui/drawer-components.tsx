@@ -227,6 +227,9 @@ const NEGATIVE_POLARITY_TYPES = new Set([
   'ReadOnlyRootFileSystem',
   'ResourceExhausted',
   'Swap',
+  'StoragePressureRootFileSystem',
+  'DPv2MigrationUnsupportedCNI',
+  'UnsupportedEBPFPrograms',
   // NPD — AKS extensions (learn.microsoft.com/azure/aks/node-problem-detector)
   'FilesystemCorruptionProblem',
   'KubeletProblem',

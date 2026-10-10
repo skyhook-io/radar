@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -14,16 +15,20 @@ type NodeProblem struct {
 	Problem  string `json:"problem"`
 	Reason   string `json:"reason,omitempty"`
 	Severity string `json:"severity"` // "critical", "high", or "medium"
+	Action   string `json:"action,omitempty"`
 }
 
-// DetectNodeProblems scans nodes for NotReady, Cordoned, and pressure conditions.
+// DetectNodeProblems separates intentional removal from readiness failures.
 func DetectNodeProblems(nodes []*corev1.Node) []NodeProblem {
 	var problems []NodeProblem
+	now := time.Now()
 
 	for _, node := range nodes {
 		h := health.Node(node)
 
-		if !h.Ready {
+		lifecycle := health.NodeLifecycle(node, now)
+
+		if lifecycle.ReadinessFailed {
 			reason := "NotReady"
 			if h.Reason != "" {
 				reason = h.Reason
@@ -34,22 +39,24 @@ func DetectNodeProblems(nodes []*corev1.Node) []NodeProblem {
 				Reason:   reason,
 				Severity: "critical",
 			})
-		} else if h.Unschedulable {
+		}
+		if lifecycle.Delayed {
+			detection, _ := terminatingProblemSince("Node", "", node, now, lifecycle.StartedAt)
+			reason := "Node is still present after it was marked for removal"
+			if node.DeletionTimestamp != nil && len(node.Finalizers) > 0 {
+				reason = detection.Message
+			}
 			problems = append(problems, NodeProblem{
-				NodeName: node.Name,
-				Problem:  "Cordoned",
-				Reason:   "SchedulingDisabled",
-				Severity: "medium",
+				NodeName: node.Name, Problem: "Removal delayed", Reason: reason,
+				Severity: detection.Severity, Action: "Check remaining pods, PodDisruptionBudgets and controller events; if deletion has started, check finalizers too. Keep scheduling disabled during removal.",
 			})
 		}
-
-		for _, pressure := range h.Pressures {
-			problems = append(problems, NodeProblem{
-				NodeName: node.Name,
-				Problem:  pressure,
-				Reason:   pressure,
-				Severity: "critical",
-			})
+		for _, problem := range lifecycle.Problems {
+			severity := "critical"
+			if problem == "NetworkUnavailable" {
+				severity = "high"
+			}
+			problems = append(problems, NodeProblem{NodeName: node.Name, Problem: problem, Reason: problem, Severity: severity})
 		}
 	}
 

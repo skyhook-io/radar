@@ -113,9 +113,9 @@ export function issueTiming(issue: Issue): IssueTimingDisplay | null {
       }
       return {
         kind: 'regression',
-        chip: 'after healthy',
+        chip: issue.kind === 'Node' && issue.reason === 'NotReady' ? 'NotReady' : 'after healthy',
         meta: 'failing evidence followed a healthy period',
-        tooltip: 'A healthy period preceded this failing evidence.',
+        tooltip: issue.kind === 'Node' && issue.reason === 'NotReady' ? 'The Ready condition stopped reporting healthy at this time.' : 'A healthy period preceded this failing evidence.',
       };
     }
     case 'started_at_resource_creation': {

@@ -233,19 +233,7 @@ func (s *Server) handleVitals(w http.ResponseWriter, r *http.Request) {
 	canReadNodes := s.canRead(r, "", "nodes", "", "list")
 	if canReadNodes && cache.Nodes() != nil {
 		nodes, _ := cache.Nodes().List(labels.Everything())
-		resp.Nodes.Total = len(nodes)
-		for _, n := range nodes {
-			h := health.Node(n)
-			if h.Ready {
-				if h.Unschedulable {
-					resp.Nodes.Cordoned++
-				} else {
-					resp.Nodes.Ready++
-				}
-			} else {
-				resp.Nodes.NotReady++
-			}
-		}
+		resp.Nodes = health.CountNodeFleet(nodes, time.Now())
 	} else {
 		restricted = append(restricted, "Node")
 	}

@@ -18,6 +18,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // fakeProvider — minimal Provider for unit testing. Each field
@@ -124,6 +125,49 @@ func (f *fakeProvider) AdmissionWebhookRefsForConfiguration(group, kind, name st
 
 func (f *fakeProvider) WorkloadBacksService(group, kind, namespace, name, serviceNamespace, serviceName string) bool {
 	return f.workloadBacks[group+"/"+kind+"/"+namespace+"/"+name+"->"+serviceNamespace+"/"+serviceName]
+}
+
+func TestComposeIndependentNodeConditions(t *testing.T) {
+	now := time.Now()
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker", CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))},
+		Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+			{Type: corev1.NodeReady, Status: corev1.ConditionFalse, LastTransitionTime: metav1.NewTime(now.Add(-3 * time.Minute))},
+			{Type: corev1.NodeMemoryPressure, Status: corev1.ConditionTrue},
+			{Type: corev1.NodeDiskPressure, Status: corev1.ConditionTrue},
+			{Type: corev1.NodeNetworkUnavailable, Status: corev1.ConditionTrue, LastTransitionTime: metav1.NewTime(now.Add(-3 * time.Minute))},
+		}},
+	}
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: fake.NewClientset(node), ResourceTypes: map[string]bool{k8score.Nodes: true}, DeferredTypes: map[string]bool{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(core.Stop)
+	p := &fakeProvider{problems: k8s.DetectProblems(&k8s.ResourceCache{ResourceCache: core}, "")}
+	for _, detection := range p.problems {
+		if detection.Reason == "NotReady" && detection.Fingerprint != "" {
+			t.Fatalf("NotReady must retain its existing issue identity: %+v", detection)
+		}
+	}
+	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
+	if len(out) != 4 {
+		t.Fatalf("independent node conditions collapsed: %+v", out)
+	}
+	legacy := Issue{Source: SourceProblem, Kind: "Node", Name: "worker", Reason: "NotReady"}
+	classifyIssue(&legacy)
+	enrichIdentity(&legacy)
+	seen := make(map[string]bool)
+	for _, issue := range out {
+		seen[issue.Reason] = true
+		if issue.Reason == "NotReady" && issue.ID != legacy.ID {
+			t.Fatalf("NotReady ID changed: %s, want %s", issue.ID, legacy.ID)
+		}
+	}
+	for _, detection := range p.problems {
+		if !seen[detection.Reason] {
+			t.Errorf("missing node condition %s", detection.Reason)
+		}
+	}
 }
 
 func TestComposeAdmissionWebhookBackendCorrelation(t *testing.T) {
@@ -2651,36 +2695,79 @@ func TestNodeBlastRadiusContext_NotReadyLinksNothing(t *testing.T) {
 }
 
 func TestNodeBlastRadiusContext_MultiPressure(t *testing.T) {
-	// A node with BOTH MemoryPressure and DiskPressure groups into one issue that
-	// keeps a single representative Reason — the link must still cover BOTH
-	// pressures' pod categories (OOM under memory, container_waiting under disk).
-	grouped := Issue{Kind: "Node", Name: "node-1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "MemoryPressure"}
-	flatMem := Issue{Kind: "Node", Name: "node-1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "MemoryPressure"}
-	flatDisk := Issue{Kind: "Node", Name: "node-1", Category: issuesapi.CategoryNodeNotReady, Severity: SeverityCritical, Reason: "DiskPressure"}
-	oom := Issue{ID: "oom-1", Kind: "Pod", Namespace: "prod", Name: "a", Category: issuesapi.CategoryOOMKilled, Severity: SeverityCritical}
-	waiting := Issue{ID: "wait-1", Kind: "Pod", Namespace: "prod", Name: "b", Category: issuesapi.CategoryContainerWaiting, Severity: SeverityWarning, Reason: "ContainerCreating"}
-
-	p := &fakeProvider{podsOnNode: map[string][]Ref{"node-1": {
-		{Kind: "Pod", Namespace: "prod", Name: "a"},
-		{Kind: "Pod", Namespace: "prod", Name: "b"},
-	}}}
-
-	out := enrichDiagnosticContext([]Issue{grouped}, []Issue{flatMem, flatDisk, oom, waiting}, nil, p)
-	var fact *issuesapi.DiagnosticFact
-	for i := range out[0].DiagnosticContext.Facts {
-		if out[0].DiagnosticContext.Facts[i].Type == factNodeBlastRadius {
-			fact = &out[0].DiagnosticContext.Facts[i]
-		}
-	}
-	if fact == nil {
-		t.Fatal("no node_blast_radius fact for the multi-pressure node")
-	}
-	gotCats := map[issuesapi.Category]bool{}
-	for _, r := range fact.RelatedIssues {
-		gotCats[r.Category] = true
-	}
-	if !gotCats[issuesapi.CategoryOOMKilled] || !gotCats[issuesapi.CategoryContainerWaiting] {
-		t.Fatalf("multi-pressure node must link BOTH memory (OOM) and disk (container_waiting) pods, got %+v", fact.RelatedIssues)
+	for _, pidPressure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pid-pressure=%t", pidPressure), func(t *testing.T) {
+			now := time.Now()
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: "node-1", CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))},
+				Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+					{Type: corev1.NodeReady, Status: corev1.ConditionFalse, LastTransitionTime: metav1.NewTime(now.Add(-3 * time.Minute))},
+					{Type: corev1.NodeMemoryPressure, Status: corev1.ConditionTrue},
+					{Type: corev1.NodeDiskPressure, Status: corev1.ConditionTrue},
+				}},
+			}
+			if pidPressure {
+				node.Status.Conditions = append(node.Status.Conditions, corev1.NodeCondition{Type: corev1.NodePIDPressure, Status: corev1.ConditionTrue})
+			}
+			core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: fake.NewClientset(node), ResourceTypes: map[string]bool{k8score.Nodes: true}, DeferredTypes: map[string]bool{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(core.Stop)
+			p := &fakeProvider{problems: k8s.DetectProblems(&k8s.ResourceCache{ResourceCache: core}, ""), podsOnNode: map[string][]Ref{"node-1": {
+				{Kind: "Pod", Namespace: "prod", Name: "a"}, {Kind: "Pod", Namespace: "prod", Name: "b"},
+			}}}
+			p.problems = append(p.problems,
+				k8s.Detection{Kind: "Pod", Namespace: "prod", Name: "a", Severity: "critical", Reason: "OOMKilled", LastTerminatedReason: "OOMKilled"},
+				k8s.Detection{Kind: "Pod", Namespace: "prod", Name: "b", Severity: "warning", Reason: "ContainerCreating"},
+			)
+			out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
+			byReason := map[string]Issue{}
+			for _, i := range out {
+				byReason[i.Reason] = i
+			}
+			wantCount := 5
+			if pidPressure {
+				wantCount++
+			}
+			if len(out) != wantCount {
+				t.Fatalf("got %+v; want %d independent issues", out, wantCount)
+			}
+			if byReason["NotReady"].DiagnosticContext != nil {
+				t.Fatalf("NotReady attributed pressure symptoms: %+v", byReason["NotReady"])
+			}
+			wantPods := map[string]string{"MemoryPressure": "a", "DiskPressure": "b"}
+			if pidPressure {
+				wantPods["PIDPressure"] = "b"
+			}
+			for reason, wantPod := range wantPods {
+				issue := byReason[reason]
+				if issue.DiagnosticContext == nil {
+					t.Fatalf("%s has no diagnostic context", reason)
+				}
+				var fact *issuesapi.DiagnosticFact
+				for i := range issue.DiagnosticContext.Facts {
+					if issue.DiagnosticContext.Facts[i].Type == factNodeBlastRadius {
+						fact = &issue.DiagnosticContext.Facts[i]
+					}
+				}
+				if fact == nil || len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Ref.Name != wantPod {
+					t.Fatalf("%s should attribute only %s: %+v", reason, wantPod, fact)
+				}
+			}
+			oom := byReason["OOMKilled"]
+			if oom.IncidentParent == nil || oom.IncidentParent.ID != byReason["MemoryPressure"].ID {
+				t.Fatalf("OOM parent %+v; want MemoryPressure %s", oom.IncidentParent, byReason["MemoryPressure"].ID)
+			}
+			waiting := byReason["ContainerCreating"]
+			if pidPressure {
+				if waiting.IncidentParent != nil {
+					t.Fatalf("ambiguous disk/PID pressure chose a cause: %+v", waiting.IncidentParent)
+				}
+			} else if waiting.IncidentParent == nil || waiting.IncidentParent.ID != byReason["DiskPressure"].ID {
+				t.Fatalf("waiting parent %+v; want DiskPressure %s", waiting.IncidentParent, byReason["DiskPressure"].ID)
+			}
+		})
 	}
 }
 

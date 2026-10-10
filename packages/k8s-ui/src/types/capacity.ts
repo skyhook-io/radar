@@ -1,4 +1,5 @@
 import type { Issue } from "../components/issues/types";
+import type { NodeLifecycleObservation } from "../utils/node-lifecycle";
 
 export const CAPACITY_SCHEMA_VERSION = "v1alpha1" as const;
 
@@ -232,6 +233,14 @@ export interface CapacityClaimLifecycleSummary {
 }
 
 export interface CapacityNodeLifecycleSummary {
+  operational?: {
+    total: number;
+    ready: number;
+    notReady: number;
+    cordoned: number;
+    removing: number;
+    removingUnhealthy: number;
+  };
   total: number;
   ready: number;
   notReady: number;
@@ -325,6 +334,7 @@ export type CapacityClaimStage =
   | "unknown";
 
 export interface CapacityNodeMember {
+  lifecycle?: NodeLifecycleObservation;
   ready?: boolean;
   cordoned: boolean;
   conditions: CapacityCondition[];
