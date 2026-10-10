@@ -539,7 +539,7 @@ func TestGetRelationships_IncomingEdgeProtects_DispatchesByKind(t *testing.T) {
 			{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web"},
 			{ID: "poddisruptionbudget/demo/web-pdb", Kind: KindPDB, Name: "web-pdb"},
 			{ID: "networkpolicy/demo/web-np", Kind: KindNetworkPolicy, Name: "web-np"},
-			{ID: "ciliumnetworkpolicy/demo/web-cnp", Kind: KindCiliumNetworkPolicy, Name: "web-cnp"},
+			{ID: "ciliumnetworkpolicy/demo/web-cnp", Kind: KindCiliumNetworkPolicy, Name: "web-cnp", Data: map[string]any{"apiVersion": "cilium.io/v2"}},
 		},
 		Edges: []Edge{
 			{ID: "pdb-to-web", Source: "poddisruptionbudget/demo/web-pdb", Target: "deployment/demo/web", Type: EdgeProtects},
@@ -607,20 +607,7 @@ func TestGetRelationships_IncomingEdgeUsesSplitsScalersFromStorage(t *testing.T)
 	}
 }
 
-// TestGetRelationships_OutgoingEdgeProtects_NotSurfaced verifies that outgoing
-// EdgeProtects edges (a PDB / NetworkPolicy / CiliumNetworkPolicy / etc. pointing
-// at the workloads it protects) are intentionally NOT projected into the
-// Relationships of the source resource. The PDBs / NetworkPolicies fields are
-// reserved for the INCOMING-direction semantic ("things that act on me").
-//
-// Surfacing the outgoing direction requires a new Protects/SelectedWorkloads
-// field, which is out of scope here. Until that field lands, querying a PDB
-// or NetworkPolicy that has only outgoing protects edges returns nil.
-//
-// This also guards B1 (the old bug that wrote outgoing protects into
-// rel.ScaleTarget) and the post-B1 over-fix (writing them into rel.PDBs,
-// which conflated PDB-side and NP-side outgoing edges).
-func TestGetRelationships_OutgoingEdgeProtects_NotSurfaced(t *testing.T) {
+func TestGetRelationships_OutgoingEdgeProtects_SelectsTargets(t *testing.T) {
 	cases := []struct {
 		name       string
 		queryKind  string
@@ -637,7 +624,7 @@ func TestGetRelationships_OutgoingEdgeProtects_NotSurfaced(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			topo := &Topology{
 				Nodes: []Node{
-					{ID: c.sourceID, Kind: c.sourceKind, Name: c.queryName},
+					{ID: c.sourceID, Kind: c.sourceKind, Name: c.queryName, Data: map[string]any{"apiVersion": map[NodeKind]string{KindPDB: "policy/v1", KindNetworkPolicy: "networking.k8s.io/v1", KindCiliumNetworkPolicy: "cilium.io/v2"}[c.sourceKind]}},
 					{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web"},
 					{ID: "deployment/demo/api", Kind: KindDeployment, Name: "api"},
 				},
@@ -667,12 +654,9 @@ func TestGetRelationships_OutgoingEdgeProtects_NotSurfaced(t *testing.T) {
 				}
 			}
 
-			// Actual assertion: querying from the source policy side should
-			// NOT surface its targets (outgoing direction intentionally
-			// unsurfaced until a Protects[] field exists).
 			rel := GetRelationships(c.queryKind, "demo", c.queryName, topo, nil, nil)
-			if rel != nil {
-				t.Errorf("want nil (outgoing protects intentionally not surfaced), got %+v", rel)
+			if rel == nil || len(rel.Protects) != 2 || len(rel.NetworkPolicies) != 0 || len(rel.PDBs) != 0 {
+				t.Errorf("policy targets must appear under Selects: %+v", rel)
 			}
 		})
 	}

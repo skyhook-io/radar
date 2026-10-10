@@ -155,6 +155,19 @@ func TestCalicoPolicyTopology(t *testing.T) {
 		t.Fatalf("Build() error: %v", err)
 	}
 
+	frontend := GetRelationships("Deployment", "demo", "frontend", topo, provider, nil)
+	if frontend == nil || len(frontend.NetworkPolicies) != 1 || len(frontend.StagedPolicies) != 2 {
+		t.Fatalf("Calico enforced/staged projections = %+v", frontend)
+	}
+	for _, id := range []string{"caliconetworkpolicy/demo/frontend-policy", "calicostagednetworkpolicy/demo/frontend-staged", "calicostagedkubernetesnetworkpolicy/demo/frontend-kubernetes-staged"} {
+		ref := resourceRefForNode(nodeByID(topo.Nodes, id), nil)
+		obj := calicoTestObject(ref.Group, "v3", ref.Kind, ref.Namespace, ref.Name, nil)
+		rel := GetRelationshipsWithObject(ref.Kind, ref.Namespace, ref.Name, obj, topo, provider, nil, IndexByResource(topo))
+		if rel == nil || len(rel.Protects) != 1 || rel.Protects[0].Name != "frontend" {
+			t.Fatalf("Calico policy targets = %+v", rel)
+		}
+	}
+
 	nodes := map[NodeKind]Node{}
 	for _, node := range topo.Nodes {
 		if node.Kind == KindCalicoNetworkPolicy || node.Kind == KindCalicoGlobalNetworkPolicy || node.Kind == KindCalicoStagedNetworkPolicy || node.Kind == KindCalicoStagedGlobalNetworkPolicy || node.Kind == KindCalicoStagedKubernetesNetworkPolicy {

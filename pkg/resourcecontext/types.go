@@ -37,6 +37,9 @@ type ResourceContext struct {
 	Exposes         []ContextRef       `json:"exposes,omitempty"`
 	Monitors        []ContextRef       `json:"monitors,omitempty"`       // Prometheus Operator monitors scraping this resource.
 	MonitorTargets  []ContextRef       `json:"monitorTargets,omitempty"` // Targets scraped by this monitor.
+	Protects        []ContextRef       `json:"protects,omitempty"`       // Targets selected by this budget or policy.
+	HealthChecks    []ContextRef       `json:"healthChecks,omitempty"`   // MachineHealthChecks associated with this Cluster.
+	StagedPolicies  []ContextRef       `json:"stagedPolicies,omitempty"` // Non-enforcing staged policy selectors.
 	SelectedBy      []ContextRef       `json:"selectedBy,omitempty"`
 	ReferencedBy    *ReferencedBy      `json:"referencedBy,omitempty"`
 	Uses            *UsesBlock         `json:"uses,omitempty"`

@@ -457,6 +457,15 @@ type Relationships struct {
 	// RoutedFrom are upstream exposing resources other than core Services and recognized routes.
 	RoutedFrom []ResourceRef `json:"routedFrom,omitempty"`
 
+	// Protects are the resources selected by this disruption budget or network policy.
+	Protects []ResourceRef `json:"protects,omitempty"`
+
+	// HealthChecks are Cluster API MachineHealthChecks associated with this Cluster.
+	HealthChecks []ResourceRef `json:"healthChecks,omitempty"`
+
+	// StagedPolicies select this resource without enforcing policy.
+	StagedPolicies []ResourceRef `json:"stagedPolicies,omitempty"`
+
 	// ServiceAccount is the ServiceAccount selected by this Pod or workload.
 	ServiceAccount *ResourceRef `json:"serviceAccount,omitempty"`
 	// Node is the Node associated through Pod.spec.nodeName or a resource-specific node reference.

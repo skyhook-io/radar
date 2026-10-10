@@ -820,6 +820,9 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
     (relationships.monitorTargets && relationships.monitorTargets.length > 0) ||
     (relationships.backends && relationships.backends.length > 0) ||
     (relationships.routedFrom && relationships.routedFrom.length > 0) ||
+    (relationships.protects && relationships.protects.length > 0) ||
+    (relationships.healthChecks && relationships.healthChecks.length > 0) ||
+    (relationships.stagedPolicies && relationships.stagedPolicies.length > 0) ||
     relationships.scaleTarget
 
   if (!hasRelationships) return null
@@ -892,6 +895,15 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
         )}
         {relationships.routedFrom && relationships.routedFrom.length > 0 && (
           <RelationshipGroup label="Routed From" refs={dedupeResourceRefs(relationships.routedFrom)} onNavigate={onNavigate} />
+        )}
+        {relationships.protects && relationships.protects.length > 0 && (
+          <RelationshipGroup label="Selects" refs={dedupeResourceRefs(relationships.protects)} onNavigate={onNavigate} />
+        )}
+        {relationships.healthChecks && relationships.healthChecks.length > 0 && (
+          <RelationshipGroup label="Health Checks" refs={dedupeResourceRefs(relationships.healthChecks)} onNavigate={onNavigate} />
+        )}
+        {relationships.stagedPolicies && relationships.stagedPolicies.length > 0 && (
+          <RelationshipGroup label="Staged Policies" refs={dedupeResourceRefs(relationships.stagedPolicies)} onNavigate={onNavigate} />
         )}
         {relationships.scaleTarget && (
           <RelationshipGroup label="Scale Target" refs={[relationships.scaleTarget]} onNavigate={onNavigate} />

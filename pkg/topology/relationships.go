@@ -380,21 +380,14 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				}
 			}
 		case EdgeProtects:
-			// Outgoing EdgeProtects fires when the queried resource IS a
-			// PDB, NetworkPolicy, CiliumNetworkPolicy, or MachineHealthCheck —
-			// each of these emits a "protects/selects target workload" edge.
-			//
-			// Intentionally NOT surfaced today. The existing per-resource
-			// relationship fields (PDBs, NetworkPolicies, Scalers, etc.)
-			// describe "things that act on me," not "things I act on" —
-			// so there's no semantically correct field to land outgoing
-			// protects refs in.
-			//
-			// TODO: when we introduce a target-side "Protects []ResourceRef"
-			// field on Relationships, surface these refs there with their
-			// source kind preserved. Until then, leave the outgoing direction
-			// of EdgeProtects unsurfaced. The topology graph itself still
-			// carries these edges; only the per-resource projection skips them.
+			source := refForNodeID(edge.Source)
+			if source != nil && source.Kind == "MachineHealthCheck" && source.Group == "cluster.x-k8s.io" {
+				if ref.Kind == "Cluster" && ref.Group == "cluster.x-k8s.io" {
+					rel.Dependencies = append(rel.Dependencies, *ref)
+				}
+			} else {
+				rel.Protects = append(rel.Protects, *ref)
+			}
 		case EdgeConfigures:
 			if source := refForNodeID(edge.Source); source != nil && source.Group == "monitoring.coreos.com" && (source.Kind == "ServiceMonitor" || source.Kind == "PodMonitor") {
 				rel.MonitorTargets = append(rel.MonitorTargets, *ref)
@@ -454,14 +447,36 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				}
 			}
 		case EdgeProtects:
-			// Incoming EdgeProtects: dispatch on source kind so PDBs and
-			// NetworkPolicies land in distinct fields.
-			switch ref.Kind {
-			case "PodDisruptionBudget":
-				rel.PDBs = append(rel.PDBs, *ref)
-			case "NetworkPolicy", "GlobalNetworkPolicy", "StagedNetworkPolicy", "StagedGlobalNetworkPolicy", "StagedKubernetesNetworkPolicy",
-				"CiliumNetworkPolicy", "ClusterNetworkPolicy", "CiliumClusterwideNetworkPolicy":
-				rel.NetworkPolicies = append(rel.NetworkPolicies, *ref)
+			switch ref.Group {
+			case "policy":
+				if ref.Kind == "PodDisruptionBudget" {
+					rel.PDBs = append(rel.PDBs, *ref)
+				}
+			case "networking.k8s.io":
+				if ref.Kind == "NetworkPolicy" {
+					rel.NetworkPolicies = append(rel.NetworkPolicies, *ref)
+				}
+			case "cilium.io":
+				if ref.Kind == "CiliumNetworkPolicy" || ref.Kind == "CiliumClusterwideNetworkPolicy" {
+					rel.NetworkPolicies = append(rel.NetworkPolicies, *ref)
+				}
+			case "policy.networking.k8s.io":
+				if ref.Kind == "ClusterNetworkPolicy" {
+					rel.NetworkPolicies = append(rel.NetworkPolicies, *ref)
+				}
+			case "projectcalico.org", "crd.projectcalico.org":
+				switch ref.Kind {
+				case "NetworkPolicy", "GlobalNetworkPolicy", "StagedNetworkPolicy", "StagedGlobalNetworkPolicy", "StagedKubernetesNetworkPolicy":
+					if edge.Partial {
+						rel.StagedPolicies = append(rel.StagedPolicies, *ref)
+					} else if ref.Kind == "NetworkPolicy" || ref.Kind == "GlobalNetworkPolicy" {
+						rel.NetworkPolicies = append(rel.NetworkPolicies, *ref)
+					}
+				}
+			case "cluster.x-k8s.io":
+				if target := refForNodeID(edge.Target); ref.Kind == "MachineHealthCheck" && target != nil && target.Kind == "Cluster" && target.Group == "cluster.x-k8s.io" {
+					rel.HealthChecks = append(rel.HealthChecks, *ref)
+				}
 			}
 		case EdgeConfigures:
 			if reflectionEdge(edge, nodeByID) {
@@ -694,7 +709,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	// Return nil if no relationships found
 	// Collected without per-append checks: a PVC shared by thousands of
 	// workloads would make a linear duplicate scan quadratic.
-	for _, refs := range []*[]ResourceRef{&rel.Monitors, &rel.MonitorTargets, &rel.Backends, &rel.RoutedFrom, &rel.ConfigRefs, &rel.Consumers, &rel.Dependencies, &rel.Dependents, &rel.Scalers, &rel.StorageRefs} {
+	for _, refs := range []*[]ResourceRef{&rel.Monitors, &rel.MonitorTargets, &rel.Backends, &rel.RoutedFrom, &rel.Protects, &rel.HealthChecks, &rel.StagedPolicies, &rel.ConfigRefs, &rel.Consumers, &rel.Dependencies, &rel.Dependents, &rel.Scalers, &rel.StorageRefs} {
 		*refs = uniqueResourceRefs(*refs)
 	}
 
@@ -703,7 +718,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
 		len(rel.StorageRefs) == 0 && len(rel.Dependencies) == 0 && len(rel.Dependents) == 0 &&
 		len(rel.PDBs) == 0 && len(rel.NetworkPolicies) == 0 &&
-		len(rel.Monitors) == 0 && len(rel.MonitorTargets) == 0 && len(rel.Backends) == 0 && len(rel.RoutedFrom) == 0 && rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
+		len(rel.Monitors) == 0 && len(rel.MonitorTargets) == 0 && len(rel.Backends) == 0 && len(rel.RoutedFrom) == 0 && len(rel.Protects) == 0 && len(rel.HealthChecks) == 0 && len(rel.StagedPolicies) == 0 && rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
 		rel.ServiceAccount == nil && rel.Node == nil && len(rel.ResourceClaims) == 0 && len(rel.ManagedBy) == 0 {
 		return nil
 	}
