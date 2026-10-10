@@ -480,9 +480,10 @@ Errors distinguish the calling user's permissions from Radar's collection access
 - `kind_sync_pending`: initial cache synchronization is still in progress; retry
   shortly. `kind_sync_failed` means the typed sync deadline elapsed or a dynamic
   sync stalled; inspect Radar's connection and collector list/watch permissions.
-- `kind_not_watched`: collection is unavailable or does not cover the requested
-  namespace scope; explicit uncovered requests identify the covered namespaces.
-  `unknown_kind` means neither the built-in catalog nor discovery recognizes the kind.
+- `kind_not_watched`: collection is unavailable or covers none of the requested
+  namespaces; the error names the uncovered namespaces and the ones Radar's
+  collector does cover. `unknown_kind` means neither the built-in catalog nor
+  discovery recognizes the kind.
   Unavailable discovery reports `kind_sync_pending` rather than claiming a kind is unknown.
 - `list_error` / `get_error`: an unexpected resource-read failure; the error
   retains the requested kind and the underlying cause.
@@ -494,16 +495,27 @@ missing-object wait before the three-second sync check. Namespace lists use the 
 collector list after the caller passes the list-namespaces permission check;
 namespace membership and `--namespace-scope` do not narrow them.
 Ordinary namespaced resources retain namespace-level authorization; Secrets and
-cluster-scoped kinds retain their additional per-kind permission checks. Lists
-without an explicit namespace use typed collector coverage intersected with caller
-access. Dynamic lists with explicit caller namespace grants attempt those namespaces
-directly, including grants outside the collector's initial fallback candidates, and
-verify each namespace's informer sync. Unrestricted callers use the dynamic
-collector's covered namespaces. Endpoints, EndpointSlices and Leases use direct
-API reads in the caller's allowed namespaces without an extra cluster-wide list or
-an informer. Explicit requests outside collector coverage fail and name the covered
-namespaces. Namespace-specific collector credential rejection remains
-`collector_unauthorized` even when collection succeeds in a different namespace.
+cluster-scoped kinds retain their additional per-kind permission checks.
+
+When Radar's collector covers only some namespaces, every kind follows one rule.
+A read answers from the requested namespaces the collector covers and omits the
+others; the success shape has no field naming what was omitted. The requested
+namespaces are the explicit `namespace`, or else every namespace the caller may
+read, which for an unrestricted caller means the collector's covered namespaces.
+When the collector covers none of them, the read fails with `kind_not_watched`
+instead of returning `[]`. A covered namespace with no objects still returns `[]`.
+So a caller allowed in `alpha` and `beta`, on a collector that covers `alpha`,
+gets `alpha`'s objects; a caller allowed only in `beta` gets the error. Kinds
+Radar caches at startup know their coverage from the startup probe. Kinds watched
+on demand (custom resources) find theirs by reading: each requested namespace is
+read directly, including grants outside the collector's initial fallback
+candidates, and its informer sync is verified. Such a kind that the collector has
+not read in any namespace yet reports `collector_forbidden` for the denied
+namespace instead of naming covered namespaces.
+Endpoints, EndpointSlices and Leases use direct API reads in the caller's allowed
+namespaces without an extra cluster-wide list or an informer. Rejected collector
+credentials are never treated as missing coverage: `collector_unauthorized` fails
+the read even when collection succeeds in a different namespace.
 Secret lists additionally omit
 namespaces where the caller's Secret list permission is denied. A failed Secret
 permission check returns an error rather than silently omitting that namespace.

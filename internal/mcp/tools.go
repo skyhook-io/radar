@@ -16,6 +16,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -864,22 +865,9 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 			return nil, nil, err
 		}
 	}
-	var cacheScope []string
-	if input.Namespace != "" && !clusterScoped {
-		cacheScope = allowed
-	}
-	cache, err := resourceReadCache(kind, group, cacheScope)
+	cache, allowed, err := resourceReadCache(kind, group, allowed)
 	if err != nil {
 		return nil, nil, err
-	}
-
-	if gvr, builtin := k8s.BuiltinGVRAnyGroup(kind); !clusterScoped && builtin && (group == "" || group == gvr.Group) && k8s.TypedKindOwnsGroup(kind, gvr.Group) {
-		if covered := cache.KindNamespaces(gvr.Resource); len(covered) > 0 {
-			allowed = intersectAllowedNamespaces(allowed, covered)
-			if len(allowed) == 0 {
-				return toJSONResult([]any{})
-			}
-		}
 	}
 
 	// For cluster-scoped reads, force a cluster-wide list (don't iterate
@@ -898,7 +886,7 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	// informer for built-ins — so only true CRDs / plural collisions go dynamic.
 	// Mirrors the group-aware dispatch in the REST handlers.
 	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
-		return listDynamicResources(ctx, cache, kind, group, listScope, clusterScoped, input.Namespace != "", input.Context)
+		return listDynamicResources(ctx, cache, kind, group, listScope, clusterScoped, input.Context)
 	}
 
 	// Try typed cache first (group=="" → core/built-in lookup).
@@ -910,7 +898,7 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 		// issue index drops the namespace filter for cluster-scoped
 		// CRDs — those issues live at namespace="" and would otherwise
 		// be filtered out by the user's namespaced-access set.
-		return listDynamicResources(ctx, cache, kind, group, listScope, clusterScoped, input.Namespace != "", input.Context)
+		return listDynamicResources(ctx, cache, kind, group, listScope, clusterScoped, input.Context)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("list_error: failed to list %s: %w", kind, err)
@@ -947,62 +935,57 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	return toJSONResult(results)
 }
 
-func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, group string, namespaces []string, clusterScoped, explicitNamespace bool, contextMode string) (*mcp.CallToolResult, any, error) {
-	discovery := k8s.GetResourceDiscovery()
+func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, group string, namespaces []string, clusterScoped bool, contextMode string) (*mcp.CallToolResult, any, error) {
 	dynamicCache := k8s.GetDynamicResourceCache()
-	if !clusterScoped && namespaces == nil && discovery != nil && dynamicCache != nil {
-		var gvr schema.GroupVersionResource
-		var found bool
-		if group != "" {
-			gvr, found = discovery.GetGVRWithGroup(kind, group)
-		} else {
-			gvr, found = discovery.GetGVR(kind)
+	gvr, found := discoveredGVR(kind, group)
+	// No namespaces means an unrestricted caller and no --namespace-scope pin
+	// (the pin and explicit requests always arrive as namespaces): the
+	// readable scope is whatever the collector covers.
+	if !clusterScoped && namespaces == nil && found && dynamicCache != nil && !k8s.ShouldBypassDynamicInformer(gvr) {
+		if err := dynamicCache.EnsureWatching(gvr); err != nil {
+			_, err = checkDynamicResourceRead(kind, group, "", "list", err)
+			return nil, nil, err
 		}
-		if found && !k8s.ShouldBypassDynamicInformer(gvr) {
-			if !explicitNamespace && !k8s.ForceNamespaceScope {
-				err := dynamicCache.EnsureWatching(gvr)
-				if err != nil {
-					_, err = checkDynamicResourceRead(kind, group, "", "list", err)
-					return nil, nil, err
-				}
-			}
-			observation := dynamicCache.Observation(gvr)
-			if observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces {
-				if !explicitNamespace {
-					namespaces = intersectAllowedNamespaces(namespaces, observation.Namespaces)
-					if len(namespaces) == 0 {
-						return toJSONResult([]any{})
-					}
-				}
-			}
+		if observation := dynamicCache.Observation(gvr); observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces {
+			namespaces = observation.Namespaces
 		}
 	}
 
 	var rawItems []*unstructured.Unstructured
 	if len(namespaces) > 0 {
+		var read, uncovered []string
+		var firstUncoveredErr error
 		for _, ns := range namespaces {
-			items, err := cache.ListDynamicWithGroup(ctx, kind, ns, group)
-			cachedReady, err := checkDynamicResourceRead(kind, group, ns, "list", err)
-			if cachedReady && err == nil {
-				items, err = cache.ListDynamicWithGroup(ctx, kind, ns, group)
-				if err != nil {
-					_, err = checkDynamicResourceRead(kind, group, ns, "list", err)
+			items, err := readDynamicScope(kind, group, ns, "list", func() ([]*unstructured.Unstructured, error) {
+				return cache.ListDynamicWithGroup(ctx, kind, ns, group)
+			})
+			if apierrors.IsForbidden(err) {
+				uncovered = append(uncovered, ns)
+				if firstUncoveredErr == nil {
+					firstUncoveredErr = err
 				}
+				continue
 			}
 			if err != nil {
 				return nil, nil, err
 			}
+			read = append(read, ns)
 			rawItems = append(rawItems, items...)
 		}
-	} else {
-		items, err := cache.ListDynamicWithGroup(ctx, kind, "", group)
-		cachedReady, err := checkDynamicResourceRead(kind, group, "", "list", err)
-		if cachedReady && err == nil {
-			items, err = cache.ListDynamicWithGroup(ctx, kind, "", group)
-			if err != nil {
-				_, err = checkDynamicResourceRead(kind, group, "", "list", err)
+		var covered []string
+		if found && dynamicCache != nil {
+			if observation := dynamicCache.Observation(gvr); observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces {
+				covered = observation.Namespaces
 			}
 		}
+		if err := namespaceCoverageError(kind, len(read), uncovered, covered, firstUncoveredErr); err != nil {
+			return nil, nil, err
+		}
+		namespaces = read
+	} else {
+		items, err := readDynamicScope(kind, group, "", "list", func() ([]*unstructured.Unstructured, error) {
+			return cache.ListDynamicWithGroup(ctx, kind, "", group)
+		})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1077,7 +1060,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	if !clusterScoped {
 		namespaces = []string{namespace}
 	}
-	cache, err := resourceReadCache(kind, group, namespaces)
+	cache, _, err := resourceReadCache(kind, group, namespaces)
 	if err != nil {
 		return nil, nil, err
 	}

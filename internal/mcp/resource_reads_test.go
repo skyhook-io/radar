@@ -464,34 +464,123 @@ func TestResourceReadsNamespacesIgnoreNamespacePin(t *testing.T) {
 	}
 }
 
-func TestResourceReadsScopedCollectorIntersection(t *testing.T) {
-	client := fake.NewClientset(
-		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "alpha-service", Namespace: "alpha"}},
-		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "beta-service", Namespace: "beta"}},
-	)
-	if err := k8s.InitScopedTestResourceCache(client, map[string]k8score.ResourceScope{"services": {Enabled: true, Namespace: "alpha"}}); err != nil {
+// The collector covers alpha and gamma (gamma is empty); beta holds an object
+// it cannot read. Typed and dynamic kinds must answer every scope alike.
+func setupCoverageRuleFixture(t *testing.T, typed bool) (kind string, prewarm func()) {
+	t.Helper()
+	if typed {
+		client := fake.NewClientset(
+			&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "alpha-object", Namespace: "alpha"}},
+			&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "beta-object", Namespace: "beta"}},
+		)
+		if err := k8s.InitScopedTestResourceCacheNamespaces(client, map[string]k8score.ResourceScope{"services": {Enabled: true, Namespace: "alpha"}}, map[string][]string{"services": {"alpha", "gamma"}}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(k8s.ResetTestState)
+		return "services", func() {}
+	}
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestState)
-	for _, allowed := range [][]string{nil, {"alpha", "beta"}, {"beta"}} {
-		ctx := withRestrictedUser(t, "scoped-reader", allowed)
-		result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "services", Context: "none"})
-		if err != nil {
+	t.Cleanup(k8s.SetTestPermissionResult(&k8s.PermissionCheckResult{Perms: &k8s.ResourcePermissions{}, NamespaceScoped: true, Namespace: "alpha", ScopeCandidates: []string{"alpha", "gamma"}}))
+	gvr := schema.GroupVersionResource{Group: "example.test", Version: "v1", Resource: "widgets"}
+	objs := []runtime.Object{
+		&unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.test/v1", "kind": "Widget", "metadata": map[string]any{"name": "alpha-object", "namespace": "alpha"}}},
+		&unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.test/v1", "kind": "Widget", "metadata": map[string]any{"name": "beta-object", "namespace": "beta"}}},
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, objs...)
+	dyn.PrependReactor("list", "widgets", func(action ktesting.Action) (bool, runtime.Object, error) {
+		if ns := action.GetNamespace(); ns != "alpha" && ns != "gamma" {
+			return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", fmt.Errorf("collector denied"))
+		}
+		return false, nil, nil
+	})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, Verbs: []string{"list", "watch", "get"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	return "widgets", func() {
+		if err := k8s.GetDynamicResourceCache().EnsureWatching(gvr); err != nil {
 			t.Fatal(err)
 		}
-		body := extractText(t, result)
-		if len(allowed) == 1 {
-			if body != "[]" {
-				t.Fatalf("empty intersection: %s", body)
-			}
-		} else if !containsName(body, "alpha-service") || containsName(body, "beta-service") {
-			t.Fatalf("incorrect covered intersection: %s", body)
+	}
+}
+
+func TestResourceReadsCollectorCoverageRule(t *testing.T) {
+	cases := []struct {
+		name      string
+		allowed   []string
+		namespace string
+		rows      []string
+		wantErr   []string
+	}{
+		{name: "unrestricted reads the covered namespaces", rows: []string{"alpha-object"}},
+		{name: "partial overlap omits the uncovered namespace", allowed: []string{"alpha", "beta"}, rows: []string{"alpha-object"}},
+		{name: "partial overlap with an empty covered namespace", allowed: []string{"gamma", "beta"}, rows: []string{}},
+		{name: "covered and empty", allowed: []string{"gamma"}, rows: []string{}},
+		{name: "explicit covered and empty", namespace: "gamma", rows: []string{}},
+		{name: "no overlap", allowed: []string{"beta"}, wantErr: []string{`namespace "beta"`, `covered namespaces: ["alpha" "gamma"]`}},
+		{name: "no overlap across namespaces", allowed: []string{"beta", "delta"}, wantErr: []string{`namespaces "beta,delta"`, `covered namespaces: ["alpha" "gamma"]`}},
+		{name: "explicit uncovered", namespace: "beta", wantErr: []string{`namespace "beta"`, `covered namespaces: ["alpha" "gamma"]`}},
+	}
+	for _, typed := range []bool{true, false} {
+		for _, tc := range cases {
+			t.Run(fmt.Sprintf("typed=%v/%s", typed, tc.name), func(t *testing.T) {
+				kind, prewarm := setupCoverageRuleFixture(t, typed)
+				prewarm()
+				ctx := context.Background()
+				if tc.allowed != nil {
+					ctx = withRestrictedUser(t, "coverage-reader", tc.allowed)
+				}
+				result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: kind, Namespace: tc.namespace, Context: "none"})
+				if tc.wantErr != nil {
+					if err == nil || !strings.HasPrefix(err.Error(), "kind_not_watched:") {
+						t.Fatalf("uncovered scope must fail with kind_not_watched, got %v", err)
+					}
+					for _, text := range tc.wantErr {
+						if !strings.Contains(err.Error(), text) {
+							t.Fatalf("missing %s: %v", text, err)
+						}
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				body := extractText(t, result)
+				if len(tc.rows) == 0 && body != "[]" {
+					t.Fatalf("covered empty scope must be a plain empty list: %s", body)
+				}
+				for _, name := range tc.rows {
+					if !containsName(body, name) {
+						t.Fatalf("missing %s: %s", name, body)
+					}
+				}
+				if containsName(body, "beta-object") {
+					t.Fatalf("uncovered namespace leaked: %s", body)
+				}
+			})
 		}
 	}
-	_, _, err := handleListResources(context.Background(), nil, listResourcesInput{Kind: "services", Namespace: "beta"})
-	if err == nil || !strings.HasPrefix(err.Error(), "kind_not_watched:") || !strings.Contains(err.Error(), `covered namespaces: ["alpha"]`) {
-		t.Fatalf("explicit uncovered scope: %v", err)
+	for _, typed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("typed=%v/get uncovered", typed), func(t *testing.T) {
+			kind, prewarm := setupCoverageRuleFixture(t, typed)
+			prewarm()
+			_, _, err := handleGetResource(context.Background(), nil, getResourceInput{Kind: kind, Namespace: "beta", Name: "beta-object"})
+			if err == nil || !strings.HasPrefix(err.Error(), "kind_not_watched:") || !strings.Contains(err.Error(), `covered namespaces: ["alpha" "gamma"]`) {
+				t.Fatalf("uncovered get: %v", err)
+			}
+		})
 	}
+	t.Run("typed=false/no overlap before any namespace is collected", func(t *testing.T) {
+		kind, _ := setupCoverageRuleFixture(t, false)
+		ctx := withRestrictedUser(t, "cold-coverage-reader", []string{"beta"})
+		_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: kind, Context: "none"})
+		if err == nil || !strings.HasPrefix(err.Error(), "collector_forbidden:") || !strings.Contains(err.Error(), `"beta"`) {
+			t.Fatalf("uncovered cold scope must name the collector denial, got %v", err)
+		}
+	})
 }
 
 func TestResourceReadsColdDynamicKinds(t *testing.T) {
@@ -839,6 +928,41 @@ func TestResourceReadsNamespaceCollectorUnauthorized(t *testing.T) {
 	result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "pods", Namespace: "beta", Context: "none"})
 	if err != nil || !containsName(extractText(t, result), "present") {
 		t.Fatalf("healthy namespace incorrectly denied: %v", err)
+	}
+	_, _, err = handleListResources(ctx, nil, listResourcesInput{Kind: "pods", Context: "none"})
+	if err == nil || !strings.HasPrefix(err.Error(), "collector_unauthorized:") {
+		t.Fatalf("unscoped list must not omit a namespace whose credentials were rejected: %v", err)
+	}
+}
+
+func TestReadDynamicScopeRereadsOnlyBeforeSync(t *testing.T) {
+	if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	gvr := schema.GroupVersionResource{Group: "example.test", Version: "v1", Resource: "widgets"}
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.test/v1", "kind": "Widget", "metadata": map[string]any{"name": "present", "namespace": "alpha"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, obj)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "Widget", Name: gvr.Resource, Namespaced: true, Verbs: []string{"list", "watch", "get"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	cache := k8s.GetResourceCache()
+	for _, want := range []struct {
+		state string
+		reads int
+	}{{"cold", 2}, {"synced", 1}} {
+		reads := 0
+		items, err := readDynamicScope("widgets", gvr.Group, "alpha", "list", func() ([]*unstructured.Unstructured, error) {
+			reads++
+			return cache.ListDynamicWithGroup(context.Background(), "widgets", "alpha", gvr.Group)
+		})
+		if err != nil || len(items) != 1 {
+			t.Fatalf("%s read: %v %v", want.state, items, err)
+		}
+		if reads != want.reads {
+			t.Fatalf("%s scope read the store %d times, want %d", want.state, reads, want.reads)
+		}
 	}
 }
 

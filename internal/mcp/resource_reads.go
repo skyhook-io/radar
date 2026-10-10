@@ -61,57 +61,104 @@ func namespaceForError(namespaces []string) string {
 	return strings.Join(namespaces, ",")
 }
 
-func resourceReadCache(kind, group string, namespaces []string) (*k8s.ResourceCache, error) {
+// resourceReadCache returns the cache to read kind from and the namespaces to
+// read: requested (nil = every namespace the caller may read) narrowed to the
+// typed collector's coverage under namespaceCoverageError's rule. Dynamic
+// kinds learn their coverage by reading, so their namespaces pass through.
+func resourceReadCache(kind, group string, namespaces []string) (*k8s.ResourceCache, []string, error) {
 	gvr, builtin := k8s.BuiltinGVRAnyGroup(kind)
 	typed := builtin && (group == "" || group == gvr.Group) && k8s.TypedKindOwnsGroup(kind, gvr.Group)
 	if !typed {
 		cache := k8s.GetResourceCache()
 		if cache == nil {
-			return nil, errNotConnected()
+			return nil, nil, errNotConnected()
 		}
 
-		return cache, nil
+		return cache, namespaces, nil
 	}
 	cache, readiness := k8s.ReadableCacheForKind(gvr.Resource)
 	if cache == nil {
-		return nil, errNotConnected()
+		return nil, nil, errNotConnected()
 	}
 	result := k8s.GetCachedPermissionResult()
 	for _, ns := range namespaces {
 		if result != nil {
 			if probeErr := result.NamespaceProbeErrors[gvr.Resource][ns]; apierrors.IsUnauthorized(probeErr) {
-				return nil, collectorUnauthorizedError(gvr.Resource, probeErr)
+				return nil, nil, collectorUnauthorizedError(gvr.Resource, probeErr)
 			}
 		}
 	}
 	switch readiness {
 	case k8s.KindPending:
-		return nil, fmt.Errorf("kind_sync_pending: %s are still loading, please retry shortly", gvr.Resource)
+		return nil, nil, fmt.Errorf("kind_sync_pending: %s are still loading, please retry shortly", gvr.Resource)
 	case k8s.KindFailed:
-		return nil, fmt.Errorf("kind_sync_failed: %s failed to load within the sync deadline; check Radar's collector connection and list/watch permissions", gvr.Resource)
+		return nil, nil, fmt.Errorf("kind_sync_failed: %s failed to load within the sync deadline; check Radar's collector connection and list/watch permissions", gvr.Resource)
 	case k8s.KindUnavailable:
 		if result != nil {
 			if scope, probed := result.Scopes[gvr.Resource]; probed && !scope.Enabled {
 				if apierrors.IsUnauthorized(result.ProbeErrors[gvr.Resource]) {
-					return nil, collectorUnauthorizedError(gvr.Resource, result.ProbeErrors[gvr.Resource])
+					return nil, nil, collectorUnauthorizedError(gvr.Resource, result.ProbeErrors[gvr.Resource])
 				}
-				return nil, fmt.Errorf("collector_forbidden: Radar's service account / kubeconfig identity can't list/watch %s in API group %q", gvr.Resource, gvr.Group)
+				return nil, nil, fmt.Errorf("collector_forbidden: Radar's service account / kubeconfig identity can't list/watch %s in API group %q", gvr.Resource, gvr.Group)
 			}
 		}
-		return nil, fmt.Errorf("kind_not_watched: Radar is not watching resource %q in API group %q; check Radar's collector list/watch permissions and collection configuration", gvr.Resource, gvr.Group)
+		return nil, nil, fmt.Errorf("kind_not_watched: Radar is not watching resource %q in API group %q; check Radar's collector list/watch permissions and collection configuration", gvr.Resource, gvr.Group)
 	}
+	covered := cache.KindNamespaces(gvr.Resource)
+	if covered == nil {
+		return cache, namespaces, nil
+	}
+	if namespaces == nil {
+		return cache, covered, nil
+	}
+	var readable, uncovered []string
 	for _, ns := range namespaces {
-		if !cache.KindCoversNamespace(gvr.Resource, ns) {
-			return nil, fmt.Errorf("kind_not_watched: Radar does not watch %s in namespace %q; this namespace is outside the collector's scope; covered namespaces: %q", gvr.Resource, ns, cache.KindNamespaces(gvr.Resource))
+		if cache.KindCoversNamespace(gvr.Resource, ns) {
+			readable = append(readable, ns)
+		} else {
+			uncovered = append(uncovered, ns)
 		}
 	}
-	return cache, nil
+	if err := namespaceCoverageError(gvr.Resource, len(readable), uncovered, covered, nil); err != nil {
+		return nil, nil, err
+	}
+	return cache, readable, nil
+}
+
+// namespaceCoverageError is the one rule typed and dynamic reads share when
+// Radar's collector covers only some namespaces: answer from the covered
+// requested namespaces and omit the rest (the partial view an unrestricted
+// caller already gets), but fail when none is covered, so an uncovered scope
+// never reads as empty. firstErr, the read error of the first uncovered
+// namespace when reads were attempted, is kept when it is the only one or when
+// no covered namespace is known to name instead.
+func namespaceCoverageError(resource string, read int, uncovered, covered []string, firstErr error) error {
+	if read > 0 || len(uncovered) == 0 {
+		return nil
+	}
+	if firstErr != nil && (len(uncovered) == 1 || len(covered) == 0) {
+		return firstErr
+	}
+	return outsideCoverageError(resource, uncovered, covered, nil)
+}
+
+func outsideCoverageError(resource string, uncovered, covered []string, cause error) error {
+	scope := fmt.Sprintf("namespace %q; this namespace is", uncovered[0])
+	if len(uncovered) > 1 {
+		scope = fmt.Sprintf("namespaces %q; these namespaces are", namespaceForError(uncovered))
+	}
+	msg := fmt.Sprintf("kind_not_watched: Radar does not watch %s in %s outside the collector's scope; covered namespaces: %q", resource, scope, covered)
+	if cause != nil {
+		return fmt.Errorf("%s: %w", msg, cause)
+	}
+	return errors.New(msg)
 }
 
 // Dynamic reads start informers on demand. Check their scope after the read so
-// a cold or incomplete store cannot establish absence. Once sync is proven,
-// callers re-read: it may have completed after the first store read. Direct API
-// reads need no informer and remain authoritative without one.
+// a cold or incomplete store cannot establish absence. The bool reports that
+// the scope is now synced, so a read that may have preceded the sync can be
+// repeated. Direct API reads need no informer and remain authoritative without
+// one.
 func checkDynamicResourceRead(kind, group, namespace, verb string, readErr error) (bool, error) {
 	if errors.Is(readErr, k8s.ErrUnknownDynamicKind) {
 		return false, fmt.Errorf("unknown_kind: %w", readErr)
@@ -122,21 +169,8 @@ func checkDynamicResourceRead(kind, group, namespace, verb string, readErr error
 		}
 		return false, fmt.Errorf("kind_not_watched: %s: %w", kind, readErr)
 	}
-	discovery := k8s.GetResourceDiscovery()
 	dynamicCache := k8s.GetDynamicResourceCache()
-	var gvr schema.GroupVersionResource
-	var ok bool
-	if discovery != nil {
-		if group != "" {
-			gvr, ok = discovery.GetGVRWithGroup(kind, group)
-		} else {
-			gvr, ok = discovery.GetGVR(kind)
-		}
-	}
-	if !ok {
-		gvr, ok = k8s.BuiltinGVRAnyGroup(kind)
-		ok = ok && (group == "" || group == gvr.Group)
-	}
+	gvr, ok := dynamicReadGVR(kind, group)
 	direct := ok && (k8s.ShouldBypassDynamicInformer(gvr) ||
 		(verb == "get" && ((gvr.Group == "apiextensions.k8s.io" && gvr.Resource == "customresourcedefinitions") ||
 			(gvr.Group == "apiregistration.k8s.io" && gvr.Resource == "apiservices"))))
@@ -147,7 +181,7 @@ func checkDynamicResourceRead(kind, group, namespace, verb string, readErr error
 		if ok && dynamicCache != nil && !direct && namespace != "" {
 			observation := dynamicCache.Observation(gvr)
 			if observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && !slices.Contains(observation.Namespaces, namespace) {
-				return false, fmt.Errorf("kind_not_watched: Radar does not watch %s in namespace %q; covered namespaces: %q: %w", kind, namespace, observation.Namespaces, readErr)
+				return false, outsideCoverageError(kind, []string{namespace}, observation.Namespaces, readErr)
 			}
 		}
 
@@ -165,13 +199,13 @@ func checkDynamicResourceRead(kind, group, namespace, verb string, readErr error
 		}
 		return false, fmt.Errorf("collector_forbidden: %s can't %s %s in API group %q (namespace %q): %w", collector, action, kind, group, namespace, readErr)
 	}
-	if readErr != nil && !apierrors.IsNotFound(readErr) && !errors.Is(readErr, k8score.ErrResourceNotFound) {
+	if readErr != nil && !isObjectNotFound(readErr) {
 		return false, fmt.Errorf("%s_error: failed to %s %s: %w", verb, verb, kind, readErr)
 	}
 	if !ok || dynamicCache == nil || direct {
 		return false, readErr
 	}
-	if readErr == nil || apierrors.IsNotFound(readErr) || errors.Is(readErr, k8score.ErrResourceNotFound) {
+	if readErr == nil || isObjectNotFound(readErr) {
 		if !dynamicCache.IsNamespaceSynced(gvr, namespace) {
 			_, waitErr := dynamicCache.ListBlocking(gvr, namespace, dynamicSyncWait)
 			if waitErr != nil {
@@ -200,6 +234,54 @@ func checkDynamicResourceRead(kind, group, namespace, verb string, readErr error
 
 const dynamicSyncWait = 3 * time.Second
 
+func discoveredGVR(kind, group string) (schema.GroupVersionResource, bool) {
+	discovery := k8s.GetResourceDiscovery()
+	if discovery == nil {
+		return schema.GroupVersionResource{}, false
+	}
+	if group != "" {
+		return discovery.GetGVRWithGroup(kind, group)
+	}
+	return discovery.GetGVR(kind)
+}
+
+func dynamicReadGVR(kind, group string) (schema.GroupVersionResource, bool) {
+	if gvr, ok := discoveredGVR(kind, group); ok {
+		return gvr, true
+	}
+	gvr, ok := k8s.BuiltinGVRAnyGroup(kind)
+	return gvr, ok && (group == "" || group == gvr.Group)
+}
+
+func dynamicScopeSynced(kind, group, namespace string) bool {
+	gvr, ok := dynamicReadGVR(kind, group)
+	dynamicCache := k8s.GetDynamicResourceCache()
+	return ok && dynamicCache != nil && dynamicCache.IsNamespaceSynced(gvr, namespace)
+}
+
+// readDynamicScope performs one dynamic-cache read and checks its scope. A
+// read that may have started before the scope's informer finished its initial
+// sync can have served a partial store, so it is repeated once sync is proven.
+// A scope already synced before and after the read was answered by that read;
+// repeating it would only deep-copy the store a second time.
+func readDynamicScope[T any](kind, group, namespace, verb string, read func() (T, error)) (T, error) {
+	syncedBefore := dynamicScopeSynced(kind, group, namespace)
+	out, err := read()
+	settled := syncedBefore && dynamicScopeSynced(kind, group, namespace)
+	ready, err := checkDynamicResourceRead(kind, group, namespace, verb, err)
+	if ready && !settled && (err == nil || isObjectNotFound(err)) {
+		out, err = read()
+		if err != nil {
+			_, err = checkDynamicResourceRead(kind, group, namespace, verb, err)
+		}
+	}
+	return out, err
+}
+
+func isObjectNotFound(err error) bool {
+	return apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound)
+}
+
 func resourceSecretNamespaces(ctx context.Context, allowed []string, verb string) ([]string, error) {
 	if allowed == nil {
 		granted, checked := canReadInNamespaceDecision(ctx, "", "secrets", "", verb)
@@ -226,22 +308,17 @@ func resourceKindName(kind, group string) string {
 }
 
 func resourceGetError(ctx context.Context, err error, kind, namespace, name string) error {
-	if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
+	if isObjectNotFound(err) {
 		return notFoundError(ctx, err, kind, namespace, name)
 	}
 	return fmt.Errorf("get_error: failed to get %s %s/%s: %w", kind, namespace, name, err)
 }
 
 func fetchMCPDynamicResource(ctx context.Context, cache *k8s.ResourceCache, kind, group, namespace, name string) (*unstructured.Unstructured, error) {
-	obj, err := cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
-	cachedReady, err := checkDynamicResourceRead(kind, group, namespace, "get", err)
-	if cachedReady && (err == nil || apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound)) {
-		obj, err = cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
-		if err != nil {
-			_, err = checkDynamicResourceRead(kind, group, namespace, "get", err)
-		}
-	}
-	if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
+	obj, err := readDynamicScope(kind, group, namespace, "get", func() (*unstructured.Unstructured, error) {
+		return cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
+	})
+	if isObjectNotFound(err) {
 		return obj, resourceGetError(ctx, err, kind, namespace, name)
 	}
 	return obj, err
