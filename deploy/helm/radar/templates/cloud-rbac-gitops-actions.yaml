@@ -1,0 +1,42 @@
+{{- if and .Values.cloud.enabled .Values.cloud.defaultRbac.create .Values.rbac.create (eq (toString .Values.cloud.defaultRbac.gitopsActions) "true") .Values.cloud.defaultRbac.owner -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "radar.fullname" . }}-gitops-actions
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["gitrepositories", "ocirepositories", "helmrepositories"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["kustomize.toolkit.fluxcd.io"]
+    resources: ["kustomizations"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["notification.toolkit.fluxcd.io"]
+    resources: ["alerts"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-owner-gitops-actions
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "radar.fullname" . }}-gitops-actions
+subjects:
+  - kind: Group
+    name: radar:owner
+    apiGroup: rbac.authorization.k8s.io
+  - kind: Group
+    name: cloud:owner
+    apiGroup: rbac.authorization.k8s.io
+{{- end -}}

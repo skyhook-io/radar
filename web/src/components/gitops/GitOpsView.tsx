@@ -1,3 +1,4 @@
+import { GitOpsPermissionRowActions } from './GitOpsPermissionRowActions'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
@@ -63,6 +64,7 @@ import {
   useArgoRollback,
   useArgoSuspend,
   useArgoSync,
+  useGitOpsActionCapabilities,
   useArgoTerminate,
   useFluxReconcile,
   useFluxResume,
@@ -329,6 +331,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
           params.set('apiGroup', row.group)
           navigate({ pathname: gitOpsDetailPath(row.kindName, ns, row.name), search: params.toString() })
         }}
+        renderRowActions={(row, items) => <GitOpsPermissionRowActions row={row} items={items} />}
         onRowAction={handleRowAction}
         pendingRowActions={pendingActions}
         searchHotkey
@@ -438,6 +441,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const [graphFullscreen, setGraphFullscreen] = useState(false)
   const [helmValuesOpen, setHelmValuesOpen] = useState(false)
 
+  const { disabledReasons: actionDisabledReasons } = useGitOpsActionCapabilities(kind, namespace, name)
   const argoSync = useArgoSync()
   const argoResourceValidation = useArgoResourceValidation()
   const argoRefresh = useArgoRefresh()
@@ -568,7 +572,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       if (isArgoApp) openArgoSyncDialog({ scope: 'application' })
       else if (isFlux) fluxReconcile.mutate({ kind, namespace, name })
     },
-    enabled: shortcutsEnabled && (isArgoApp || isFlux) && !effectiveSuspended && !terminating && !(isArgoApp && operationInProgress),
+    enabled: !actionDisabledReasons[isArgoApp ? 'sync' : 'reconcile'] && shortcutsEnabled && (isArgoApp || isFlux) && !effectiveSuspended && !terminating && !(isArgoApp && operationInProgress),
   })
   useRegisterShortcut({
     id: 'gitops-detail-refresh',
@@ -581,7 +585,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       setRefreshKind('normal')
       argoRefresh.mutate({ namespace, name, hard: false })
     },
-    enabled: shortcutsEnabled && isArgoApp,
+    enabled: !actionDisabledReasons.refresh && shortcutsEnabled && isArgoApp,
   })
   useRegisterShortcut({
     id: 'gitops-detail-hard-refresh',
@@ -594,7 +598,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       setRefreshKind('hard')
       argoRefresh.mutate({ namespace, name, hard: true })
     },
-    enabled: shortcutsEnabled && isArgoApp,
+    enabled: !actionDisabledReasons.refresh && shortcutsEnabled && isArgoApp,
   })
   useRegisterShortcut({
     id: 'gitops-detail-terminate',
@@ -605,7 +609,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     handler: () => {
       if (isArgoApp && isRunning) argoTerminate.mutate({ namespace, name })
     },
-    enabled: shortcutsEnabled && isArgoApp && isRunning,
+    enabled: !actionDisabledReasons.terminate && shortcutsEnabled && isArgoApp && isRunning,
   })
 
   // Adapt the OSS-internal row + insights data into the layout's props.
@@ -746,6 +750,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       isArgoApp={isArgoApp}
       isFlux={isFlux}
       isFluxWorkload={isFluxWorkload}
+      actionDisabledReasons={actionDisabledReasons}
       argo={argoHandlers}
       flux={fluxHandlers}
       activeTab={appView}
@@ -791,6 +796,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
             <GitOpsActivityInsightView
               insight={insightsQ.data}
               error={insightsQ.error as Error | null}
+              rollbackDisabledReason={actionDisabledReasons.rollback}
               onRollback={isArgoApp && !operationInProgress ? (item) => {
                 if (parseArgoRollbackID(item.id) == null) return
                 setRollbackTarget(item)
@@ -812,7 +818,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
                     ? 'Resume the Application before syncing a resource.'
                     : operationInProgress || argoSync.isPending
                       ? 'Wait for the current sync operation to finish.'
-                      : undefined
+                      : actionDisabledReasons.sync
               ) : undefined}
               focusKey={changesFocusKey}
               tree={tree}
@@ -871,19 +877,22 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
             open={!!syncDialogTarget}
             appLabel={`${namespace}/${name}`}
             resource={syncDialogTarget?.scope === 'resource' ? syncDialogTarget.resource : undefined}
+            disabledReason={actionDisabledReasons.sync}
             pending={argoSync.isPending}
             autoSyncEnabled={argoAutoSyncEnabled}
             validationPending={argoResourceValidation.isPending}
             operationInProgress={operationInProgress}
             validationResult={argoResourceValidation.data}
             validationError={argoResourceValidation.error?.message}
+            validationRawError={(argoResourceValidation.error as { rawDetail?: string } | null)?.rawDetail}
             onCancel={closeArgoSyncDialog}
             onValidationReset={() => argoResourceValidation.reset()}
             onValidate={syncDialogTarget?.scope === 'resource' ? (opts) => {
+              if (actionDisabledReasons.validate) return
               argoResourceValidation.mutate(buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts))
             } : undefined}
             onConfirm={(opts) => {
-              if (!syncDialogTarget) return
+              if (!syncDialogTarget || actionDisabledReasons.sync) return
               const variables = syncDialogTarget.scope === 'resource'
                 ? buildArgoResourceSyncVars(namespace, name, syncDialogTarget.resource, opts)
                 : { namespace, name, ...opts }
@@ -897,9 +906,11 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
             appLabel={`${namespace}/${name}`}
             revision={rollbackTarget?.revision || ''}
             historyId={rollbackTarget?.id}
+            disabledReason={actionDisabledReasons.rollback}
             pending={argoRollback.isPending}
             onCancel={() => setRollbackTarget(null)}
             onConfirm={(opts) => {
+              if (actionDisabledReasons.rollback) return
               const id = parseArgoRollbackID(rollbackTarget?.id)
               if (id == null) {
                 showError('Rollback target became invalid', 'The history entry changed while the dialog was open. Reselect a target and try again.')

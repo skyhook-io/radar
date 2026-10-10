@@ -1,3 +1,4 @@
+import { Collapse, CollapseChevron, useDisclosure } from './Collapse'
 import { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react'
 import { DURATION_TOAST_EXIT } from '../../utils/animation'
 import { Check, Terminal, X, AlertTriangle, Info } from 'lucide-react'
@@ -6,6 +7,7 @@ import { clsx } from 'clsx'
 interface Toast {
   id: string
   message: string
+  rawDetail?: string
   detail?: string
   command?: string
   type?: 'success' | 'info' | 'warning' | 'error'
@@ -17,6 +19,7 @@ interface Toast {
 
 interface ToastContextType {
   showToast: (message: string, options?: {
+    rawDetail?: string
     detail?: string
     command?: string
     type?: Toast['type']
@@ -25,7 +28,7 @@ interface ToastContextType {
     onDetailClick?: () => void
   }) => void
   showCopied: (command: string, label?: string, event?: React.MouseEvent) => void
-  showError: (message: string, detail?: string) => void
+  showError: (message: string, detail?: string, rawDetail?: string) => void
   showSuccess: (message: string, detail?: string, action?: Toast['action'], onDetailClick?: () => void) => void
 }
 
@@ -34,7 +37,7 @@ const ToastContext = createContext<ToastContextType | null>(null)
 // Singleton pattern for showing toasts outside React components (e.g., in API error handlers)
 class ToastManager {
   private static instance: ToastManager
-  private showErrorFn: ((message: string, detail?: string) => void) | null = null
+  private showErrorFn: ((message: string, detail?: string, rawDetail?: string) => void) | null = null
   private showSuccessFn: ((message: string, detail?: string, action?: Toast['action'], onDetailClick?: () => void) => void) | null = null
 
   static getInstance(): ToastManager {
@@ -54,8 +57,8 @@ class ToastManager {
     this.showSuccessFn = null
   }
 
-  showError(message: string, detail?: string) {
-    this.showErrorFn ? this.showErrorFn(message, detail) : console.error('[Toast]', message, detail)
+  showError(message: string, detail?: string, rawDetail?: string) {
+    this.showErrorFn ? this.showErrorFn(message, detail, rawDetail) : console.error('[Toast]', message, detail)
   }
 
   showSuccess(message: string, detail?: string, action?: Toast['action'], onDetailClick?: () => void) {
@@ -65,8 +68,8 @@ class ToastManager {
 
 const toastManager = ToastManager.getInstance()
 
-export function showApiError(message: string, detail?: string) {
-  toastManager.showError(message, detail)
+export function showApiError(message: string, detail?: string, rawDetail?: string) {
+  toastManager.showError(message, detail, rawDetail)
 }
 
 export function showApiSuccess(message: string, detail?: string, action?: Toast['action'], onDetailClick?: () => void) {
@@ -92,6 +95,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const showToast = useCallback((message: string, options?: {
+    rawDetail?: string
     detail?: string
     command?: string
     type?: Toast['type']
@@ -124,8 +128,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     showToast(label || 'Copied to clipboard', { command, type: 'success', position })
   }, [showToast])
 
-  const showError = useCallback((message: string, detail?: string) => {
-    showToast(message, { detail, type: 'error' })
+  const showError = useCallback((message: string, detail?: string, rawDetail?: string) => {
+    showToast(message, { detail, rawDetail, type: 'error' })
   }, [showToast])
 
   const showSuccess = useCallback((message: string, detail?: string, action?: Toast['action'], onDetailClick?: () => void) => {
@@ -155,6 +159,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const disclosure = useDisclosure(detailsOpen)
   // Calculate position - either near button or default to bottom-right
   const style: React.CSSProperties = toast.position
     ? {
@@ -237,6 +243,16 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
               {toast.detail}
             </p>
           )
+        )}
+        {toast.rawDetail && (
+          <div className="mt-2 rounded bg-theme-surface p-2 text-theme-text-secondary">
+            <button type="button" onClick={() => setDetailsOpen(value => !value)} aria-expanded={detailsOpen} aria-controls={disclosure.panelId} className="flex items-center gap-1 text-xs">
+              <CollapseChevron open={detailsOpen} /> Error details
+            </button>
+            <Collapse open={detailsOpen} id={disclosure.panelId}>
+              <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs">{toast.rawDetail}</pre>
+            </Collapse>
+          </div>
         )}
         {toast.command && (
           <code className="block mt-1.5 text-xs text-theme-text-secondary font-mono bg-theme-base rounded px-2 py-1.5 whitespace-pre-wrap break-all">

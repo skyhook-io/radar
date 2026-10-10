@@ -160,6 +160,7 @@ export interface CloudConnectCapability {
 }
 
 export interface FeatureCapabilities {
+  gitOpsActionCapabilities?: boolean
   yamlReview?: boolean
   yamlSchemas?: boolean
   workloadImages?: boolean

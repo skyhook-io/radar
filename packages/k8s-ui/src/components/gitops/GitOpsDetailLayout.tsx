@@ -154,6 +154,7 @@ export interface GitOpsDetailLayoutProps {
   isFlux: boolean
   isFluxWorkload: boolean  // Kustomization | HelmRelease — gates the
                             // "Sync with source" button
+  actionDisabledReasons?: Record<string, string | undefined>
   argo?: ArgoActionHandlers
   flux?: FluxActionHandlers
 
@@ -369,12 +370,12 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                     icon={ArrowDownUp}
                     loading={argo.syncing}
                     onClick={argo.onSyncRequested}
-                    disabled={effectiveSuspended || terminating || argoOperationInProgress}
+                    disabled={effectiveSuspended || terminating || argoOperationInProgress || !!props.actionDisabledReasons?.['sync']}
                     disabledReason={terminating
                       ? terminatingActionTooltip
                       : argoOperationInProgress
                         ? 'Wait for the current Argo operation to finish.'
-                        : undefined}
+                        : props.actionDisabledReasons?.['sync']}
                     primary
                   />
                   <ActionButton
@@ -382,6 +383,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                     description="Re-check Git for new commits and recompute sync status. Doesn't apply anything."
                     icon={RefreshCw}
                     loading={argo.refreshing && argo.refreshingKind === 'normal'}
+                    disabled={!!props.actionDisabledReasons?.['refresh']}
+                    disabledReason={props.actionDisabledReasons?.['refresh']}
                     onClick={() => argo.onRefresh('normal')}
                   />
                   <ActionButton
@@ -389,6 +392,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                     description="Like Refresh, but also bypasses Argo's manifest cache (re-renders Helm/Kustomize)."
                     icon={Zap}
                     loading={argo.refreshing && argo.refreshingKind === 'hard'}
+                    disabled={!!props.actionDisabledReasons?.['refresh']}
+                    disabledReason={props.actionDisabledReasons?.['refresh']}
                     onClick={() => argo.onRefresh('hard')}
                   />
                   {argo.isRunning && (
@@ -397,6 +402,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                       description="Cancel the in-progress sync operation."
                       icon={XCircle}
                       loading={argo.terminating}
+                      disabled={!!props.actionDisabledReasons?.['terminate']}
+                      disabledReason={props.actionDisabledReasons?.['terminate']}
                       onClick={argo.onTerminate}
                       danger
                     />
@@ -408,8 +415,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                       icon={Pause}
                       loading={argo.suspending}
                       onClick={argo.onSuspend}
-                      disabled={terminating}
-                      disabledReason={terminating ? terminatingActionTooltip : undefined}
+                      disabled={terminating || !!props.actionDisabledReasons?.['suspend']}
+                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['suspend']}
                     />
                   ) : (
                     <ActionButton
@@ -418,8 +425,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                       icon={Play}
                       loading={argo.resuming}
                       onClick={argo.onResume}
-                      disabled={terminating}
-                      disabledReason={terminating ? terminatingActionTooltip : undefined}
+                      disabled={terminating || !!props.actionDisabledReasons?.['resume']}
+                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['resume']}
                     />
                   )}
                 </>
@@ -432,8 +439,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                     icon={RefreshCw}
                     loading={flux.reconciling}
                     onClick={flux.onReconcile}
-                    disabled={effectiveSuspended || terminating}
-                    disabledReason={terminating ? terminatingActionTooltip : undefined}
+                    disabled={effectiveSuspended || terminating || !!props.actionDisabledReasons?.['reconcile']}
+                    disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['reconcile']}
                     primary
                   />
                   {isFluxWorkload && (
@@ -443,8 +450,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                       icon={GitCommit}
                       loading={flux.syncingWithSource}
                       onClick={flux.onSyncWithSource}
-                      disabled={terminating}
-                      disabledReason={terminating ? terminatingActionTooltip : undefined}
+                      disabled={terminating || !!props.actionDisabledReasons?.['sync-with-source']}
+                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['sync-with-source']}
                     />
                   )}
                   {effectiveSuspended ? (
@@ -454,8 +461,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                       icon={Play}
                       loading={flux.resuming}
                       onClick={flux.onResume}
-                      disabled={terminating}
-                      disabledReason={terminating ? terminatingActionTooltip : undefined}
+                      disabled={terminating || !!props.actionDisabledReasons?.['resume']}
+                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['resume']}
                     />
                   ) : (
                     <ActionButton
@@ -464,8 +471,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                       icon={Pause}
                       loading={flux.suspending}
                       onClick={flux.onSuspend}
-                      disabled={terminating}
-                      disabledReason={terminating ? terminatingActionTooltip : undefined}
+                      disabled={terminating || !!props.actionDisabledReasons?.['suspend']}
+                      disabledReason={terminating ? terminatingActionTooltip : props.actionDisabledReasons?.['suspend']}
                     />
                   )}
                 </>

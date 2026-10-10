@@ -1,3 +1,5 @@
+import { isRadarFeatureUnsupported } from "./radarFeatures";
+import { GITOPS_ACTION_KINDS, GitOpsActionError, gitOpsDisabledReasons, type GitOpsActionCapabilities } from "./gitOpsPermissions";
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef } from 'react'
@@ -6312,6 +6314,22 @@ export function useArtifactHubChart(
 // GitOps Mutation Factory
 // ============================================================================
 
+export function useGitOpsActionCapabilities(kind: string, namespace: string, name: string, enabled = true) {
+  const active = enabled && GITOPS_ACTION_KINDS.includes(kind);
+  const { support, guard, gatedKey } = useRadarFeature("gitOpsActionCapabilities");
+  const query = useQuery<GitOpsActionCapabilities>({
+    queryKey: ["gitops-action-capabilities", getApiBase(), kind, namespace, name, ...gatedKey],
+    queryFn: () => guard(() => fetchJSON(`/gitops/capabilities/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`)),
+    enabled: active && Boolean(namespace && name) && support !== 'unsupported',
+    staleTime: 15_000,
+    refetchInterval: active ? 30_000 : false,
+  });
+  return {
+    ...query,
+    disabledReasons: active ? gitOpsDisabledReasons(support, query.data, query.error, isRadarFeatureUnsupported(query.error, 'gitOpsActionCapabilities')) : {},
+  };
+}
+
 interface GitOpsMutationConfig<TVariables> {
   getPath: (variables: TVariables) => string;
   getBody?: (variables: TVariables) => unknown;
@@ -6348,7 +6366,7 @@ function createGitOpsMutation<TVariables>(
         );
         if (!response.ok) {
           const error = await readErrorBody(response);
-          throw new Error(error.error || `HTTP ${response.status}`);
+          throw new GitOpsActionError(error, response.status);
         }
         return response.json() as Promise<GitOpsOperationResponse>;
       },
@@ -6529,7 +6547,7 @@ export function useArgoResourceValidation() {
       );
       if (!response.ok) {
         const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new GitOpsActionError(error, response.status);
       }
       return response.json() as Promise<ArgoResourceValidationResult>;
     },
@@ -6593,7 +6611,7 @@ export function useArgoRefresh() {
       );
       if (!response.ok) {
         const error = await readErrorBody(response);
-        throw new Error(error.error || `HTTP ${response.status}`);
+        throw new GitOpsActionError(error, response.status);
       }
       return response.json();
     },

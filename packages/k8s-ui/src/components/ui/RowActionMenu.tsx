@@ -19,13 +19,14 @@ export interface RowActionItem {
 }
 
 interface RowActionMenuProps {
+  onOpenChange?: (open: boolean) => void
   items: RowActionItem[]
   ariaLabel?: string
   /** Compact button variant (default: true) — sized for table-row anchoring. */
   compact?: boolean
 }
 
-export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true }: RowActionMenuProps) {
+export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true, onOpenChange }: RowActionMenuProps) {
   const [open, setOpen] = useState(false)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('menu'))
   // Flip the menu above the trigger when it would otherwise spill past the
@@ -54,10 +55,16 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false)
+        onOpenChange?.(false)
+      }
     }
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key === 'Escape') {
+        setOpen(false)
+        onOpenChange?.(false)
+      }
     }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
@@ -65,7 +72,7 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
     }
-  }, [open])
+  }, [open, onOpenChange])
 
   const triggerSize = compact ? 'p-1' : 'p-1.5'
   const iconSize = compact ? 'h-4 w-4' : 'h-5 w-5'
@@ -83,7 +90,8 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
         aria-expanded={open}
         onClick={(e) => {
           e.stopPropagation()
-          setOpen((v) => !v)
+          onOpenChange?.(!open)
+          setOpen(!open)
         }}
         className={clsx(
           'rounded text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary',
@@ -123,6 +131,7 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
                   if (item.disabled || item.pending) return
                   item.onClick()
                   setOpen(false)
+                  onOpenChange?.(false)
                 }}
                 className={clsx(
                   'flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors',

@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, CircleAlert, Loader2, RefreshCw, ShieldChe
 import { DialogPortal } from '../ui/DialogPortal'
 import { Input } from '../ui/Input'
 import { Tooltip } from '../ui/Tooltip'
+import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import type { GitOpsInsightRef } from '../../types/gitops-insights'
 
 // =============================================================================
@@ -36,12 +37,14 @@ export interface SyncOptionsDialogProps {
   open: boolean
   appLabel: string
   resource?: GitOpsInsightRef
+  disabledReason?: string
   pending?: boolean
   autoSyncEnabled?: boolean
   validationPending?: boolean
   operationInProgress?: boolean
   validationResult?: ResourceValidationResult | null
   validationError?: string | null
+  validationRawError?: string
   onCancel: () => void
   onConfirm: (opts: ArgoSyncOpts) => void
   onValidate?: (opts: ArgoSyncOpts) => void
@@ -57,7 +60,7 @@ export interface ResourceValidationResult {
   }
 }
 
-export function SyncOptionsDialog({ open, appLabel, resource, pending, autoSyncEnabled, validationPending, operationInProgress, validationResult, validationError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
+export function SyncOptionsDialog({ open, appLabel, resource, disabledReason, pending, autoSyncEnabled, validationPending, operationInProgress, validationResult, validationError, validationRawError, onCancel, onConfirm, onValidate, onValidationReset }: SyncOptionsDialogProps) {
   const titleId = useId()
   const [revision, setRevision] = useState('')
   const [prune, setPrune] = useState(true)
@@ -68,7 +71,7 @@ export function SyncOptionsDialog({ open, appLabel, resource, pending, autoSyncE
   const [serverSideApply, setServerSideApply] = useState(false)
   const richResourceValidation = !!resource && !!onValidate
   const busy = !!pending || !!validationPending
-  const optionsDisabled = busy || !!operationInProgress
+  const optionsDisabled = busy || !!operationInProgress || !!disabledReason
 
   // Reset on each open so a previous attempt's flags don't leak into the
   // next sync — easy footgun in modal-heavy flows.
@@ -85,10 +88,12 @@ export function SyncOptionsDialog({ open, appLabel, resource, pending, autoSyncE
   }, [open, resource])
 
   function submit() {
+    if (optionsDisabled) return
     onConfirm(buildArgoSyncOpts({ resourceMode: !!resource, revision, prune, dryRun: richResourceValidation ? false : dryRun, force, applyOnly, replace, serverSideApply }))
   }
 
   function validate() {
+    if (optionsDisabled) return
     onValidate?.(buildArgoSyncOpts({ resourceMode: true, revision, prune, dryRun: true, force, applyOnly, replace, serverSideApply }))
   }
 
@@ -158,8 +163,9 @@ export function SyncOptionsDialog({ open, appLabel, resource, pending, autoSyncE
           <Toggle label="Server-side apply" checked={serverSideApply} onChange={(value) => updateValidationOption(setServerSideApply, value)} disabled={optionsDisabled} hint="Use the K8s server-side apply mechanism for ownership tracking." />
         </fieldset>
         {richResourceValidation && (validationPending || validationResult || validationError) && (
-          <ValidationResult pending={!!validationPending} result={validationResult} error={validationError} />
+          <ValidationResult pending={!!validationPending} result={validationResult} error={validationError} rawError={validationRawError} />
         )}
+        {disabledReason && <p className="text-xs text-theme-text-secondary">{disabledReason}</p>}
         {richResourceValidation && !validationPending && operationInProgress && (
           <p className="text-[11px] leading-relaxed text-theme-text-secondary">
             Argo is finishing the current operation. Sync becomes available when it releases the operation slot.
@@ -194,7 +200,9 @@ export function SyncOptionsDialog({ open, appLabel, resource, pending, autoSyncE
   )
 }
 
-function ValidationResult({ pending, result, error }: { pending: boolean; result?: ResourceValidationResult | null; error?: string | null }) {
+function ValidationResult({ pending, result, error, rawError }: { pending: boolean; result?: ResourceValidationResult | null; error?: string | null; rawError?: string }) {
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const disclosure = useDisclosure(detailsOpen)
   if (pending) {
     return (
       <div className="card-inner flex items-start gap-2 px-3 py-2.5">
@@ -214,6 +222,16 @@ function ValidationResult({ pending, result, error }: { pending: boolean; result
           <div>
             <div className="text-xs font-medium text-theme-text-primary">Dry-run could not start or complete</div>
             <p className="mt-0.5 max-h-20 overflow-auto break-words text-[11px] text-theme-text-secondary">{error}</p>
+            {rawError && (
+              <div className="mt-2 text-theme-text-secondary">
+                <button type="button" onClick={() => setDetailsOpen(value => !value)} aria-expanded={detailsOpen} aria-controls={disclosure.panelId} className="flex items-center gap-1 text-xs">
+                  <CollapseChevron open={detailsOpen} /> Error details
+                </button>
+                <Collapse open={detailsOpen} id={disclosure.panelId}>
+                  <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-xs">{rawError}</pre>
+                </Collapse>
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -1,3 +1,4 @@
+import { Tooltip } from '../../ui/Tooltip'
 import { GitBranch, FolderTree, Settings, Target, XCircle, History, ListChecks, ExternalLink } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, ProblemAlerts } from '../../ui/drawer-components'
@@ -16,6 +17,7 @@ const REPO_LINK_CLASS = 'text-blue-400 hover:text-blue-300 hover:underline break
 
 interface ArgoApplicationRendererProps {
   data: any
+  terminateDisabledReason?: string
   onTerminate?: (params: { namespace: string; name: string }) => void
   isTerminating?: boolean
 }
@@ -117,7 +119,7 @@ function getSyncResourceBadgeClass(status: string, hookPhase?: string): string {
   return 'status-unknown'
 }
 
-export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: ArgoApplicationRendererProps) {
+export function ArgoApplicationRenderer({ data, onTerminate, isTerminating, terminateDisabledReason }: ArgoApplicationRendererProps) {
   const status = (data.status || {}) as ArgoAppStatus & {
     resources?: ArgoResource[]
     conditions?: Array<{ type: string; status: string; message?: string; lastTransitionTime?: string }>
@@ -175,15 +177,16 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
             <GitOpsStatusBadge status={gitOpsStatus} />
             {/* Terminate button (only when syncing and handler provided) */}
             {isSyncing && onTerminate && (
-              <button
-                onClick={() => onTerminate({ namespace, name })}
-                disabled={isTerminating}
-                className="flex items-center gap-1.5 px-2 py-1 rounded text-xs status-red hover:opacity-80 transition-colors disabled:opacity-50"
-                title="Terminate sync"
-              >
-                <XCircle className="w-3.5 h-3.5" />
-                {isTerminating ? 'Terminating...' : 'Terminate'}
-              </button>
+              <Tooltip content={terminateDisabledReason || "Terminate sync"}>
+                <button
+                  onClick={() => onTerminate({ namespace, name })}
+                  disabled={isTerminating || !!terminateDisabledReason}
+                  className="flex items-center gap-1.5 px-2 py-1 rounded text-xs status-red hover:opacity-80 transition-colors disabled:opacity-50"
+                >
+                  <XCircle className="w-3.5 h-3.5" />
+                  {isTerminating ? 'Terminating...' : 'Terminate'}
+                </button>
+              </Tooltip>
             )}
           </div>
 

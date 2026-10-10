@@ -496,3 +496,25 @@ Radar uses its ServiceAccount permissions to access the Kubernetes API. The UI a
 helm uninstall radar -n radar
 kubectl delete namespace radar
 ```
+
+### Optional Cloud owner GitOps actions
+
+`cloud.defaultRbac.gitopsActions: true` creates an owner-only `get`/`patch`
+grant for Argo CD Applications and the Flux resources Radar acts on
+(GitRepository, OCIRepository, HelmRepository, Kustomization, HelmRelease,
+Alert). It is **off by default**, requires `cloud.enabled`, `rbac.create`,
+`cloud.defaultRbac.create`, and the owner tier, and adds no grants to members
+or viewers. It does not grant ApplicationSets, `update`, or status subresources.
+These are caller permissions, separate from Radar's collector ServiceAccount.
+
+**Patching Applications lets the holder redirect what Argo deploys using the
+controller's authority, often cluster-admin, bounded by AppProject
+restrictions.** Kubernetes RBAC cannot restrict this grant to refresh/sync
+annotations or a single field. Flux patches likewise permit changing the
+source and spec its controllers reconcile. Enable this only for owners trusted
+with that deployment authority. For narrower access, leave the toggle off and
+supply your own namespace/resource-name-scoped RoleBindings.
+
+GitOps action controls check the caller's permissions per object and disable
+denied actions with an explanation. They remain advisory: each action still
+runs as the caller, and Kubernetes makes the final authorization decision.

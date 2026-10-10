@@ -39,6 +39,7 @@ import { isCoreBatchJob } from '../../utils/api-resources'
 // ============================================================================
 
 interface ResourceActionsBarProps {
+  gitOpsActionDisabledReasons?: Record<string, string | undefined>
   resource: SelectedResource
   data: any
   onClose?: () => void
@@ -167,6 +168,7 @@ export function ResourceActionsBar({
   onTriggerCronJob, isTriggeringCronJob,
   onSuspendCronJob, isSuspendingCronJob,
   onResumeCronJob, isResumingCronJob,
+  gitOpsActionDisabledReasons,
   onFluxReconcile, isFluxReconciling,
   onFluxSyncWithSource, isFluxSyncing,
   onFluxSuspend, isFluxSuspending,
@@ -512,6 +514,7 @@ export function ResourceActionsBar({
       {/* FluxCD actions */}
       {['gitrepositories', 'ocirepositories', 'helmrepositories', 'kustomizations', 'helmreleases', 'alerts'].includes(kind) && (
         <FluxActions
+          disabledReasons={gitOpsActionDisabledReasons}
           resource={resource}
           data={data}
           onReconcile={onFluxReconcile}
@@ -528,6 +531,7 @@ export function ResourceActionsBar({
       {/* ArgoCD actions */}
       {kind === 'applications' && (
         <ArgoActions
+          disabledReasons={gitOpsActionDisabledReasons}
           resource={resource}
           data={data}
           onSync={onArgoSync}
@@ -765,7 +769,8 @@ export function ResourceActionsBar({
 // FLUX ACTIONS
 // ============================================================================
 
-function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSource, isSyncing, onSuspend, isSuspending, onResume, isResuming }: {
+function FluxActions({ disabledReasons, resource, data, onReconcile, isReconciling, onSyncWithSource, isSyncing, onSuspend, isSuspending, onResume, isResuming }: {
+  disabledReasons?: Record<string, string | undefined>
   resource: SelectedResource; data: any
   onReconcile?: (params: { kind: string; namespace: string; name: string }) => void; isReconciling?: boolean
   onSyncWithSource?: (params: { kind: string; namespace: string; name: string }) => void; isSyncing?: boolean
@@ -778,14 +783,14 @@ function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSou
   return (
     <>
       {onReconcile && (
-        <Tooltip content={isSuspended ? 'Cannot reconcile while suspended' : 'Trigger reconciliation'} delay={150}>
+        <Tooltip content={disabledReasons?.reconcile || (isSuspended ? 'Cannot reconcile while suspended' : 'Trigger reconciliation')} delay={150}>
           <button
             onClick={() => onReconcile({
               kind: resource.kind,
               namespace: resource.namespace,
               name: resource.name,
             })}
-            disabled={isReconciling || isSuspended}
+            disabled={isReconciling || isSuspended || !!disabledReasons?.reconcile}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isReconciling ? 'animate-spin' : ''}`} />
@@ -795,14 +800,14 @@ function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSou
       )}
 
       {hasSource && onSyncWithSource && (
-        <Tooltip content={isSuspended ? 'Cannot sync while suspended' : 'Fetch latest from source, then reconcile'} delay={150}>
+        <Tooltip content={disabledReasons?.['sync-with-source'] || (isSuspended ? 'Cannot sync while suspended' : 'Fetch latest from source, then reconcile')} delay={150}>
           <button
             onClick={() => onSyncWithSource({
               kind: resource.kind,
               namespace: resource.namespace,
               name: resource.name,
             })}
-            disabled={isSyncing || isSuspended}
+            disabled={isSyncing || isSuspended || !!disabledReasons?.['sync-with-source']}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
@@ -813,33 +818,37 @@ function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSou
 
       {isSuspended ? (
         onResume && (
-          <button
-            onClick={() => onResume({
-              kind: resource.kind,
-              namespace: resource.namespace,
-              name: resource.name,
-            })}
-            disabled={isResuming}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
-          >
-            <Play className="w-3.5 h-3.5" />
-            {isResuming ? 'Resuming...' : 'Resume'}
-          </button>
+          <Tooltip content={disabledReasons?.resume || "Resume"}>
+            <button
+              onClick={() => onResume({
+                kind: resource.kind,
+                namespace: resource.namespace,
+                name: resource.name,
+              })}
+              disabled={isResuming || !!disabledReasons?.resume}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
+            >
+              <Play className="w-3.5 h-3.5" />
+              {isResuming ? 'Resuming...' : 'Resume'}
+            </button>
+          </Tooltip>
         )
       ) : (
         onSuspend && (
-          <button
-            onClick={() => onSuspend({
-              kind: resource.kind,
-              namespace: resource.namespace,
-              name: resource.name,
-            })}
-            disabled={isSuspending}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
-          >
-            <Pause className="w-3.5 h-3.5" />
-            {isSuspending ? 'Suspending...' : 'Suspend'}
-          </button>
+          <Tooltip content={disabledReasons?.suspend || "Suspend"}>
+            <button
+              onClick={() => onSuspend({
+                kind: resource.kind,
+                namespace: resource.namespace,
+                name: resource.name,
+              })}
+              disabled={isSuspending || !!disabledReasons?.suspend}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
+            >
+              <Pause className="w-3.5 h-3.5" />
+              {isSuspending ? 'Suspending...' : 'Suspend'}
+            </button>
+          </Tooltip>
         )
       )}
     </>
@@ -850,7 +859,8 @@ function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSou
 // ARGO ACTIONS
 // ============================================================================
 
-function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshing, onSuspend, isSuspending, onResume, isResuming }: {
+function ArgoActions({ disabledReasons, resource, data, onSync, isSyncing, onRefresh, isRefreshing, onSuspend, isSuspending, onResume, isResuming }: {
+  disabledReasons?: Record<string, string | undefined>
   resource: SelectedResource; data: any
   onSync?: (params: { namespace: string; name: string }) => void; isSyncing?: boolean
   onRefresh?: (params: { namespace: string; name: string; hard: boolean }) => void; isRefreshing?: boolean
@@ -862,13 +872,13 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
   return (
     <>
       {onSync && (
-        <Tooltip content="Sync application" delay={150}>
+        <Tooltip content={disabledReasons?.sync || "Sync application"} delay={150}>
           <button
             onClick={() => onSync({
               namespace: resource.namespace,
               name: resource.name,
             })}
-            disabled={isSyncing}
+            disabled={isSyncing || !!disabledReasons?.sync}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
@@ -878,14 +888,14 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
       )}
 
       {onRefresh && (
-        <Tooltip content="Refresh (re-read from git)" delay={150}>
+        <Tooltip content={disabledReasons?.refresh || "Refresh (re-read from git)"} delay={150}>
           <button
             onClick={() => onRefresh({
               namespace: resource.namespace,
               name: resource.name,
               hard: false,
             })}
-            disabled={isRefreshing}
+            disabled={isRefreshing || !!disabledReasons?.refresh}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -896,31 +906,35 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
 
       {hasAutomatedSync ? (
         onSuspend && (
-          <button
-            onClick={() => onSuspend({
-              namespace: resource.namespace,
-              name: resource.name,
-            })}
-            disabled={isSuspending}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
-          >
-            <Pause className="w-3.5 h-3.5" />
-            {isSuspending ? 'Suspending...' : 'Suspend'}
-          </button>
+          <Tooltip content={disabledReasons?.suspend || "Suspend"}>
+            <button
+              onClick={() => onSuspend({
+                namespace: resource.namespace,
+                name: resource.name,
+              })}
+              disabled={isSuspending || !!disabledReasons?.suspend}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
+            >
+              <Pause className="w-3.5 h-3.5" />
+              {isSuspending ? 'Suspending...' : 'Suspend'}
+            </button>
+          </Tooltip>
         )
       ) : (
         onResume && (
-          <button
-            onClick={() => onResume({
-              namespace: resource.namespace,
-              name: resource.name,
-            })}
-            disabled={isResuming}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
-          >
-            <Play className="w-3.5 h-3.5" />
-            {isResuming ? 'Enabling...' : 'Enable Auto-Sync'}
-          </button>
+          <Tooltip content={disabledReasons?.resume || "Resume"}>
+            <button
+              onClick={() => onResume({
+                namespace: resource.namespace,
+                name: resource.name,
+              })}
+              disabled={isResuming || !!disabledReasons?.resume}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
+            >
+              <Play className="w-3.5 h-3.5" />
+              {isResuming ? 'Enabling...' : 'Enable Auto-Sync'}
+            </button>
+          </Tooltip>
         )
       )}
     </>
