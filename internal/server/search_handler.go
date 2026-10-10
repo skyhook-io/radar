@@ -42,8 +42,18 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	//
 	// The omnibar sends globalNs=1 so a deliberately broad ⌘K lookup scans the
 	// user's full RBAC ceiling, scoped only by the query's own `ns:` tokens,
-	// rather than whatever namespace the view filter happens to be on.
-	allowed := s.parseNamespacesForUser(r)
+	// rather than whatever namespace the view filter happens to be on. That
+	// path skips parseNamespacesForUser's --namespace-scope clamp: the scope
+	// becomes a hard namespace filter below, so clamping it to the pinned
+	// namespace would drop every cluster-scoped hit (Nodes, PVs, ...) that the
+	// per-kind checks allow. Namespaced kinds still come only from the pinned
+	// cache.
+	var allowed []string
+	if ignoresNamespacePick(r) {
+		allowed = s.getUserNamespaces(r, parseNamespaces(r.URL.Query()))
+	} else {
+		allowed = s.parseNamespacesForUser(r)
+	}
 	if noNamespaceAccess(allowed) {
 		s.writeJSON(w, search.Result{Hits: []search.Hit{}})
 		return

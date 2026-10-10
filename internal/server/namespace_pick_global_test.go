@@ -9,6 +9,8 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 func TestParseNamespacesForUser_GlobalNsIgnoresPick(t *testing.T) {
@@ -156,5 +158,65 @@ func TestProxyAuth_GlobalNsReadsIgnoreSavedPick(t *testing.T) {
 	}
 	if got := searchHits("carol", "/api/search?q=kind:Deployment&globalNs=1"); !slices.Equal(got, []string{"stuck-app"}) {
 		t.Errorf("carol search with globalNs=1 = %v, want her RBAC-bounded [stuck-app]", got)
+	}
+}
+
+// Under --namespace-scope the omnibar's global search must keep returning
+// cluster-scoped hits (Nodes, Namespaces, ...) to a user allowed to list them.
+// Clamping its scope to the pinned namespace would turn that namespace into a
+// hard filter that drops every hit without one.
+func TestProxyAuth_GlobalNsSearchKeepsClusterScopedHitsUnderNamespaceScope(t *testing.T) {
+	prevCtx := k8s.SetTestContextName("test-ctx")
+	t.Cleanup(func() { k8s.SetTestContextName(prevCtx) })
+	k8s.ForceNamespaceScope = true
+	k8s.SetFallbackNamespace("default")
+	t.Cleanup(func() {
+		k8s.ForceNamespaceScope = false
+		k8s.SetFallbackNamespace("")
+	})
+	// Sensitive cluster-scoped kinds are authorized by a live
+	// SubjectAccessReview; this apiserver allows every one.
+	apiserver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/apis/authorization.k8s.io/v1/subjectaccessreviews" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"kind": "SubjectAccessReview", "apiVersion": "authorization.k8s.io/v1",
+			"status": map[string]any{"allowed": true},
+		})
+	}))
+	t.Cleanup(apiserver.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: apiserver.URL})
+	if err != nil {
+		t.Fatalf("build clientset: %v", err)
+	}
+	prevClient := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(prevClient) })
+
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("root", nil, &pkgauth.UserPermissions{AllowedNamespaces: nil})
+
+	resp := env.authGet(t, "/api/search?q=kind:Namespace&globalNs=1", "root", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	var body struct {
+		Hits []struct {
+			Name string `json:"name"`
+		} `json:"hits"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var names []string
+	for _, h := range body.Hits {
+		names = append(names, h.Name)
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"broken", "default"}) {
+		t.Errorf("global search for Namespaces under --namespace-scope = %v, want [broken default]", names)
 	}
 }
