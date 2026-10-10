@@ -48,6 +48,9 @@ type FinalizerOwner struct {
 // degrade gracefully (skip the controller-health enrichment, keep the
 // rest of the Issue intact).
 func ResolveFinalizerOwner(finalizer string, root *unstructured.Unstructured) *FinalizerOwner {
+	if finalizer == "karpenter.sh/termination" || strings.HasPrefix(finalizer, "karpenter.sh/") {
+		return &FinalizerOwner{Controller: "karpenter", SelectorKey: "app.kubernetes.io/name", SelectorValue: "karpenter"}
+	}
 	switch finalizer {
 	case "apps.victoriametrics.com/finalizer":
 		if resourceid.GroupFromAPIVersion(root.GetAPIVersion()) != "operator.victoriametrics.com" {

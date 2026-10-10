@@ -1,7 +1,6 @@
 package issues
 
 import (
-	"fmt"
 	"log"
 	"sort"
 	"time"
@@ -19,6 +18,7 @@ import (
 // inject fakes without standing up an informer stack.
 type Provider interface {
 	DetectProblems(namespaces []string) []k8s.Detection
+	DetectDynamicTerminatingProblems(namespaces []string, canList func(group, resource, namespace string) bool) []k8s.Detection
 	DetectCAPIProblems(namespaces []string) []k8s.Detection
 	// DetectGitOpsProblems returns failing ArgoCD Applications and Flux
 	// Kustomizations/HelmReleases — the reconciler-health failure class the
@@ -142,7 +142,8 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		}
 		return correlationAllowed
 	}
-	finalizerObservations := map[string]string{}
+	canList := f.CanListResource
+	finalizerObservations := map[string]finalizerObservation{}
 	emit := func(ps []k8s.Detection, source Source) {
 		for _, pr := range ps {
 			if pr.Severity == "info" {
@@ -158,25 +159,15 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 				}
 			}
 			if len(pr.TerminatingFinalizers) > 0 {
-				resolver, available := p.(finalizerOwnerProvider)
-				for _, finalizer := range pr.TerminatingFinalizers {
-					observation := "controller unknown"
-					if available {
-						key := pr.Group + "/" + pr.Kind + "/" + finalizer
-						var cached bool
-						observation, cached = finalizerObservations[key]
-						if !cached {
-							observation = resolver.FinalizerOwnerStatus(finalizer, Ref{Group: pr.Group, Kind: pr.Kind, Namespace: pr.Namespace, Name: pr.Name}, f.CanReadRelated)
-							finalizerObservations[key] = observation
-						}
-					}
-					pr.Cause += fmt.Sprintf(" Finalizer %q: %s.", finalizer, observation)
-				}
+				pr = enrichTerminatingProblem(pr, p, canList, finalizerObservations)
 			}
 			out = append(out, fromProblem(pr, now, source))
 		}
 	}
-	emit(p.DetectProblems(f.Namespaces), SourceProblem)       // hardcoded per-kind checks
+	emit(p.DetectProblems(f.Namespaces), SourceProblem) // hardcoded per-kind checks
+	if canList != nil {
+		emit(p.DetectDynamicTerminatingProblems(f.Namespaces, canList), SourceProblem)
+	}
 	emit(p.DetectCAPIProblems(f.Namespaces), SourceProblem)   // Cluster API
 	emit(p.DetectGitOpsProblems(f.Namespaces), SourceProblem) // Argo/Flux reconciler health
 	emit(p.DetectMissingRefs(f.Namespaces), SourceMissingRef) // dangling by-name refs
@@ -184,6 +175,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	karpenterIssues, karpenterOwnedSubjects := detectKarpenterIssues(p, f)
 	out = append(out, karpenterIssues...)
 	out = append(out, detectGenericCRDIssues(p, f, karpenterOwnedSubjects)...) // generic CRD .status.conditions
+	out = foldDeletingConditions(out)
 	out = elevateAdmissionWebhookBackendSeverity(out, p)
 
 	// ---- 2. Evidence-level transforms (operate on flat rows) ---------

@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,8 +14,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/gitops"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // makePodWithStatus constructs a minimal Pod with the container statuses
@@ -89,7 +92,7 @@ func TestSummarizeControllerHealth(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := summarizeControllerHealth("argocd-application-controller", tt.pods)
+			got := gitopsinsights.SummarizeControllerHealth("argocd-application-controller", tt.pods)
 			if got != tt.want {
 				t.Fatalf("summarizeControllerHealth =\n  got:  %q\n  want: %q", got, tt.want)
 			}
@@ -266,5 +269,21 @@ func TestFilterGitOpsTreeForUserAppliesNamespaceAndClusterScope(t *testing.T) {
 	}
 	if len(got.Warnings) == 0 || !strings.Contains(got.Warnings[0], "hidden by RBAC") {
 		t.Fatalf("expected RBAC warning, got %#v", got.Warnings)
+	}
+}
+
+func TestGitOpsFinalizerEmptyOwnerNamespace(t *testing.T) {
+	cache := k8s.GetResourceCache()
+	if cache == nil || cache.Pods() == nil {
+		t.Fatal("test cache unavailable")
+	}
+	resolver := &insightsResolver{cache: cache, canAccess: func(string, string, string, string) bool {
+		t.Fatal("empty namespace catalog owner reached inventory access")
+		return true
+	}}
+	root := &unstructured.Unstructured{}
+	root.SetAPIVersion("operator.victoriametrics.com/v1")
+	if got := resolver.FinalizerOwnerStatus("apps.victoriametrics.com/finalizer", root); got != "" {
+		t.Fatalf("got %q", got)
 	}
 }

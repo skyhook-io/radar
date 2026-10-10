@@ -104,6 +104,9 @@ func detectGenericCRDIssues(p Provider, f Filters, ownedSubjects map[string]bool
 			continue
 		}
 		for _, u := range items {
+			if u.GetDeletionTimestamp() != nil && f.CanListResource != nil && !f.CanListResource(gvr.Group, gvr.Resource, u.GetNamespace()) {
+				continue
+			}
 			if gvr.Group == "kafka.strimzi.io" && kind == "KafkaConnector" {
 				out = append(out, detectStrimziConnectorIssues(gvr, u)...)
 				continue

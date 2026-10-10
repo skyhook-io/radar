@@ -24,21 +24,22 @@ import (
 // pre-stages what the corresponding method returns. Test cases assemble
 // one of these and pass it to Compose.
 type fakeProvider struct {
-	problems        []k8s.Detection
-	missingRefs     []k8s.Detection
-	scheduling      []k8s.Detection
-	capiProblems    []k8s.Detection
-	gitopsProblems  []k8s.Detection
-	dynamic         map[schema.GroupVersionResource][]*unstructured.Unstructured
-	kinds           map[schema.GroupVersionResource]string
-	namespaced      map[schema.GroupVersionResource]bool
-	selectedPods    map[string][]Ref
-	podsOnNode      map[string][]Ref
-	podsMountingPVC map[string][]Ref
-	secretProducer  map[string]secretProducerResult
-	change          map[string]*issuesapi.ChangeContext
-	webhookRefs     map[string][]AdmissionWebhookRef
-	workloadBacks   map[string]bool
+	problems            []k8s.Detection
+	terminatingProblems []k8s.Detection
+	missingRefs         []k8s.Detection
+	scheduling          []k8s.Detection
+	capiProblems        []k8s.Detection
+	gitopsProblems      []k8s.Detection
+	dynamic             map[schema.GroupVersionResource][]*unstructured.Unstructured
+	kinds               map[schema.GroupVersionResource]string
+	namespaced          map[schema.GroupVersionResource]bool
+	selectedPods        map[string][]Ref
+	podsOnNode          map[string][]Ref
+	podsMountingPVC     map[string][]Ref
+	secretProducer      map[string]secretProducerResult
+	change              map[string]*issuesapi.ChangeContext
+	webhookRefs         map[string][]AdmissionWebhookRef
+	workloadBacks       map[string]bool
 }
 
 type secretProducerResult struct {
@@ -46,7 +47,10 @@ type secretProducerResult struct {
 	pods []Ref
 }
 
-func (f *fakeProvider) DetectProblems(_ []string) []k8s.Detection       { return f.problems }
+func (f *fakeProvider) DetectProblems(_ []string) []k8s.Detection { return f.problems }
+func (f *fakeProvider) DetectDynamicTerminatingProblems(_ []string, _ func(string, string, string) bool) []k8s.Detection {
+	return f.terminatingProblems
+}
 func (f *fakeProvider) DetectMissingRefs(_ []string) []k8s.Detection    { return f.missingRefs }
 func (f *fakeProvider) DetectScheduling(_ []string) []k8s.Detection     { return f.scheduling }
 func (f *fakeProvider) DetectCAPIProblems(_ []string) []k8s.Detection   { return f.capiProblems }

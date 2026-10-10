@@ -24,6 +24,7 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 		Limit:                  NoLimit,
 		CanReadClusterScoped:   opts.CanReadClusterScoped,
 		CanReadRelated:         opts.CanReadRelated,
+		CanListResource:        opts.CanListResource,
 	})
 	grouped := GroupIssues(flat)
 	// Run the grouped-mode enrichment (mirrors the cluster path) so the grouped

@@ -81,10 +81,33 @@ func initMCPRelatedIssueAuthDiscovery(t *testing.T) {
 	}
 	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), gvrKinds)
 	if err := k8s.InitTestDynamicResourceCache(dynamicClient, []k8s.APIResource{
+		{Group: "widgets.example.com", Version: "v1", Kind: "Widget", Name: "widgets", Namespaced: true},
 		{Group: karpenter.Group, Version: "v1", Kind: karpenter.NodePoolKind, Name: "nodepools", Namespaced: false},
 		{Group: "karpenter.k8s.aws", Version: "v1", Kind: "EC2NodeClass", Name: "ec2nodeclasses", Namespaced: false},
 	}); err != nil {
 		t.Fatalf("InitTestDynamicResourceCache: %v", err)
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)
+}
+
+func TestTerminationInventoryRequiresExactListPermissions(t *testing.T) {
+	initMCPRelatedIssueAuthDiscovery(t)
+	ctx := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: "inventory-reader"})
+	perms := &pkgauth.UserPermissions{AllowedNamespaces: []string{"team"}}
+	getPermCache().Set("inventory-reader", nil, perms)
+	t.Cleanup(func() { getPermCache().Invalidate() })
+	access := mcpChangeAuthorizer(ctx)
+	for _, tc := range []struct{ group, resource, namespace string }{
+		{"widgets.example.com", "widgets", "team"}, {"", "pods", "team"}, {"apps", "deployments", "team"}, {"apps", "statefulsets", "team"}, {karpenter.Group, "nodepools", ""},
+	} {
+		perms.SetCanI("get", tc.group, tc.resource, tc.namespace, true)
+		perms.SetCanI("list", tc.group, tc.resource, tc.namespace, false)
+		if access(tc.group, tc.resource, tc.namespace) {
+			t.Fatalf("namespace/get access exposed denied inventory: %+v", tc)
+		}
+		perms.SetCanI("list", tc.group, tc.resource, tc.namespace, true)
+		if !access(tc.group, tc.resource, tc.namespace) {
+			t.Fatalf("readable inventory hidden: %+v", tc)
+		}
+	}
 }

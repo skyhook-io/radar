@@ -493,14 +493,18 @@ This selects the Argo Rollout workload path; it does not imply that `diagnose` s
 
 Watched custom resources that remain present after deletion started appear in
 `issues` as `termination_stuck`: warning after 10 minutes, critical at 30 minutes,
-with deletion time as the onset. Radar only reads already watched CRD caches;
+with deletion time as the onset. Severity stays warning while a matched controller
+is observed healthy; infrastructure cleanup can take tens of minutes. Radar only reads already watched CRD caches;
 absence of an issue does not establish that unwatched kinds are healthy. Namespace
-and cluster-resource authorization apply as for other operational issues.
+and exact kind list authorization apply to both namespaced and cluster-scoped
+subjects. Dashboard health summaries do not include this CR scan.
 
 The cause names the finalizers and elapsed deletion age. Controller observations
-reuse the Argo/Flux catalog, include VictoriaMetrics, and conservatively match an
+reuse the Argo/Flux catalog, include VictoriaMetrics and Karpenter, and conservatively match an
 exact finalizer domain/API group to operator workload names or labels. A matching
-Running pod is an observation, not proof that cleanup works. A missing match says
+healthy controller is an observation, not proof that cleanup works; its action
+suggests checking logs and offers no finalizer-removal patch. CrashLoopBackOff,
+Pending and degraded controllers use the same health summary as GitOps details. A missing match says
 which namespace or watched cluster was searched, never that the controller is
 certainly gone. Incomplete or unreadable controller evidence, or no confident
 mapping, reads **controller unknown**.
@@ -511,7 +515,14 @@ leave external resources behind. Each `patch_resource` example previews one
 indexed finalizer removal using JSON Patch `test` operations for the object UID
 and finalizer value, followed by `remove`. Review with `dry_run=true` before an
 explicit apply. Re-read the object after each removal: the next finalizer's index
-may change. Garbage-collection finalizers are not given rescue patches.
+may change. A matching `kubectl patch --type=json --dry-run=server` preview is
+provided alongside the tool form. Garbage-collection finalizers are not given
+rescue patches; foreground deletion points at dependents without scanning operator
+workloads. Kubernetes protection finalizers (`*.k8s.io/*` and
+`*.kubernetes.io/*`, including slashless Gateway guards) are in-use guards: resolve
+the referencing objects instead of removing them. Deletion-related Ready=False
+conditions fold into the terminating issue. Controller inventories need exact Pod
+and workload list permissions; inaccessible inventory remains unknown.
 
 For `issues`, read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
 

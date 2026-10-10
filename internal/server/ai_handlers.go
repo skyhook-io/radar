@@ -465,7 +465,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	}
 	canonicalGroup := gvk.Group
 
-	issueSum := computeIssueSummaryForResource(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), canonicalGroup, canonicalKind, namespace, name)
+	issueSum := computeIssueSummaryForResource(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), s.changeAuthorizerForCtx(r.Context()), canonicalGroup, canonicalKind, namespace, name)
 	auditSum := s.computeAuditSummaryForResource(r, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
@@ -562,15 +562,15 @@ func (s *Server) topologyForContext(namespace string) (*topology.Topology, topol
 // summary silently collapses to nil.
 //
 // Returns nil when no issues match — Build then omits the IssueSummary field.
-func computeIssueSummaryForResource(cache *k8s.ResourceCache, canReadClusterScoped func(kind, group string) bool, canReadRelated func(issues.Ref) bool, group, kind, namespace, name string) *resourcecontext.IssueSummary {
-	sum, _ := computeIssueSummaryAndRows(cache, canReadClusterScoped, canReadRelated, group, kind, namespace, name, false)
+func computeIssueSummaryForResource(cache *k8s.ResourceCache, canReadClusterScoped func(kind, group string) bool, canReadRelated func(issues.Ref) bool, canListResource func(string, string, string) bool, group, kind, namespace, name string) *resourcecontext.IssueSummary {
+	sum, _ := computeIssueSummaryAndRows(cache, canReadClusterScoped, canReadRelated, canListResource, group, kind, namespace, name, false)
 	return sum
 }
 
 // computeIssueSummaryAndRows additionally returns the matched rows sorted by
 // (severity desc, reason asc) — the diagnose health frame shows the actual
 // lines, not just the rollup.
-func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped func(kind, group string) bool, canReadRelated func(issues.Ref) bool, group, kind, namespace, name string, includeFacts bool) (*resourcecontext.IssueSummary, []issues.Issue) {
+func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped func(kind, group string) bool, canReadRelated func(issues.Ref) bool, canListResource func(string, string, string) bool, group, kind, namespace, name string, includeFacts bool) (*resourcecontext.IssueSummary, []issues.Issue) {
 	if cache == nil {
 		return nil, nil
 	}
@@ -591,6 +591,7 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 		Namespaces:             namespaces,
 		CanReadClusterScoped:   canReadClusterScoped,
 		CanReadRelated:         canReadRelated,
+		CanListResource:        canListResource,
 	}, group, kind, namespace, name)
 	if len(matched) == 0 {
 		return nil, nil

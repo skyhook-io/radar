@@ -71,6 +71,7 @@ func initRelatedIssueAuthDiscovery(t *testing.T) {
 	}
 	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), gvrKinds)
 	if err := k8s.InitTestDynamicResourceCache(dynamicClient, []k8s.APIResource{
+		{Group: "widgets.example.com", Version: "v1", Kind: "Widget", Name: "widgets", Namespaced: true},
 		{Group: karpenter.Group, Version: "v1", Kind: karpenter.NodePoolKind, Name: "nodepools", Namespaced: false},
 		{Group: "karpenter.k8s.aws", Version: "v1", Kind: "EC2NodeClass", Name: "ec2nodeclasses", Namespaced: false},
 	}); err != nil {
@@ -112,6 +113,28 @@ func TestRESTPodTemplateEvidenceRequiresKindRead(t *testing.T) {
 		perms.SetCanI("get", tc.group, tc.resource, "test", true)
 		if !access(ref) {
 			t.Fatalf("readable %s hidden", tc.kind)
+		}
+	}
+}
+
+func TestTerminationInventoryRequiresExactListPermissions(t *testing.T) {
+	initRelatedIssueAuthDiscovery(t)
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	perms := &auth.UserPermissions{AllowedNamespaces: []string{"team"}}
+	s.permCache.Set("inventory-reader", nil, perms)
+	r := requestWithUser(http.MethodGet, "/api/issues?namespace=team", &auth.User{Username: "inventory-reader"})
+	access := s.changeAuthorizerForCtx(r.Context())
+	for _, tc := range []struct{ group, resource, namespace string }{
+		{"widgets.example.com", "widgets", "team"}, {"", "pods", "team"}, {"apps", "deployments", "team"}, {"apps", "statefulsets", "team"}, {karpenter.Group, "nodepools", ""},
+	} {
+		perms.SetCanI("get", tc.group, tc.resource, tc.namespace, true)
+		perms.SetCanI("list", tc.group, tc.resource, tc.namespace, false)
+		if access(tc.group, tc.resource, tc.namespace) {
+			t.Fatalf("namespace/get access exposed denied inventory: %+v", tc)
+		}
+		perms.SetCanI("list", tc.group, tc.resource, tc.namespace, true)
+		if !access(tc.group, tc.resource, tc.namespace) {
+			t.Fatalf("readable inventory hidden: %+v", tc)
 		}
 	}
 }

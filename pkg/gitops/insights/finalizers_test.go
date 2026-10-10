@@ -14,6 +14,7 @@ func TestMatchesFinalizerController(t *testing.T) {
 		labels                           map[string]string
 		want                             bool
 	}{
+		{name: "karpenter deployment", group: "karpenter.sh", finalizer: "karpenter.sh/termination", workload: "karpenter", want: true},
 		{name: "catalog label", group: "operator.victoriametrics.com", finalizer: "apps.victoriametrics.com/finalizer", workload: "custom", labels: map[string]string{"app.kubernetes.io/name": "victoria-metrics-operator"}, want: true},
 		{name: "catalog wrong group", group: "unrelated.test", finalizer: "apps.victoriametrics.com/finalizer", workload: "victoria-metrics-operator"},
 		{name: "name", group: "widgets.example.com", finalizer: "widgets.example.com/cleanup", workload: "release-widgets-operator", want: true},

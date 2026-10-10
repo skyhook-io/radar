@@ -100,6 +100,7 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		Grouped:              q.Get("view") != "flat",
 		CanReadClusterScoped: s.issueClusterScopedAccess(r),
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
+		CanListResource:      s.changeAuthorizerForCtx(r.Context()),
 	}
 	if expr := q.Get("filter"); expr != "" {
 		f, err := filter.CachedIssueFilter(expr)
@@ -292,6 +293,7 @@ func (s *Server) handleResourceIssues(w http.ResponseWriter, r *http.Request) {
 		Namespaces:           namespaces,
 		CanReadClusterScoped: s.issueClusterScopedAccess(r),
 		CanReadRelated:       s.issueRelatedResourceAccess(r),
+		CanListResource:      s.changeAuthorizerForCtx(r.Context()),
 	}, group, kind, namespace, name)
 	if related == nil {
 		related = []issues.Issue{}

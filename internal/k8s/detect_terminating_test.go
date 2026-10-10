@@ -54,7 +54,7 @@ func TestDynamicTerminatingProblems(t *testing.T) {
 			t.Fatal("not synced")
 		}
 	}
-	scoped := detectDynamicTerminatingProblems(dc, GetResourceDiscovery(), "visible", now)
+	scoped := DetectDynamicTerminatingProblems(dc, GetResourceDiscovery(), []string{"visible"}, now, nil)
 	if len(scoped) != 2 {
 		t.Fatalf("scoped=%+v", scoped)
 	}
@@ -72,7 +72,7 @@ func TestDynamicTerminatingProblems(t *testing.T) {
 		if det.OnsetUnknown || det.DurationSeconds < 900 || !strings.Contains(det.Cause, det.Duration) {
 			t.Fatalf("bad deletion timing: %+v", det)
 		}
-		if !strings.Contains(det.Action, "external resources behind") || !strings.Contains(det.Action, "re-read") {
+		if !strings.Contains(det.Action, "kubectl patch 'widgets.gaps.radar.test'") || !strings.Contains(det.Action, "--dry-run=server") || !strings.Contains(det.Action, "external resources behind") || !strings.Contains(det.Action, "re-read") {
 			t.Fatal(det.Action)
 		}
 		var input struct {
@@ -115,9 +115,20 @@ func TestDynamicTerminatingProblems(t *testing.T) {
 			t.Fatal("must reject replacement object")
 		}
 	}
-	all := detectDynamicTerminatingProblems(dc, GetResourceDiscovery(), "", now)
+	all := DetectDynamicTerminatingProblems(dc, GetResourceDiscovery(), nil, now, nil)
 	if len(all) != 4 {
 		t.Fatalf("all=%+v", all)
+	}
+	calls := map[string]int{}
+	filtered := DetectDynamicTerminatingProblems(dc, GetResourceDiscovery(), []string{"visible", "hidden"}, now, func(group, resource, namespace string) bool {
+		if group != namespaced.Group || resource != namespaced.Resource {
+			t.Fatalf("wrong GVR gate: %s/%s", group, resource)
+		}
+		calls[namespace]++
+		return namespace == "visible"
+	})
+	if len(filtered) != 2 || calls["visible"] != 1 || calls["hidden"] != 1 {
+		t.Fatalf("filtered=%+v calls=%v", filtered, calls)
 	}
 	if len(dc.WatchedGVRs()) != 2 {
 		t.Fatalf("started cold watch: %v", dc.WatchedGVRs())
@@ -136,4 +147,41 @@ func mustListTerminatingWidgets(t *testing.T, dc *DynamicResourceCache, gvr sche
 		t.Fatal(err)
 	}
 	return items
+}
+
+func TestDynamicTerminatingProtectionGuidance(t *testing.T) {
+	t.Cleanup(ResetTestDynamicState)
+	gvr := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "gatewayclasses"}
+	var objects []runtime.Object
+	finalizers := []string{"gateway-exists-finalizer.gateway.networking.k8s.io", "snapshot.storage.kubernetes.io/volumesnapshot-bound-protection", "snapshot.storage.kubernetes.io/volumesnapshotcontent-bound-protection", "kubernetes.io/protection"}
+	for i, finalizer := range finalizers {
+		u := &unstructured.Unstructured{}
+		u.SetAPIVersion(gvr.Group + "/v1")
+		u.SetKind("GatewayClass")
+		u.SetName(string(rune('a' + i)))
+		u.SetUID("guarded")
+		u.SetDeletionTimestamp(&metav1.Time{Time: time.Now().Add(-time.Hour)})
+		u.SetFinalizers([]string{finalizer})
+		objects = append(objects, u)
+	}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "GatewayClassList"}, objects...)
+	if err := InitTestDynamicResourceCache(client, []APIResource{{Group: gvr.Group, Version: gvr.Version, Kind: "GatewayClass", Name: gvr.Resource, IsCRD: true, Verbs: []string{"list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	dc := GetDynamicResourceCache()
+	if err := dc.EnsureWatching(gvr); err != nil {
+		t.Fatal(err)
+	}
+	if !dc.WaitForSync(gvr, 2*time.Second) {
+		t.Fatal("not synced")
+	}
+	out := DetectDynamicTerminatingProblems(dc, GetResourceDiscovery(), nil, time.Now(), nil)
+	if len(out) != len(finalizers) {
+		t.Fatalf("out=%+v", out)
+	}
+	for _, det := range out {
+		if strings.Contains(det.Action, "patch_resource") || strings.Contains(det.Action, "kubectl patch") || !strings.Contains(det.Action, "in-use guard") || !strings.Contains(det.Action, "referencing") {
+			t.Fatal(det.Action)
+		}
+	}
 }

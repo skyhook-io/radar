@@ -53,6 +53,9 @@ func (f *fakeIssuesProvider) DetectProblems(namespaces []string) []k8s.Detection
 	}
 	return out
 }
+func (f *fakeIssuesProvider) DetectDynamicTerminatingProblems(_ []string, _ func(string, string, string) bool) []k8s.Detection {
+	return nil
+}
 func (f *fakeIssuesProvider) DetectCAPIProblems(_ []string) []k8s.Detection   { return nil }
 func (f *fakeIssuesProvider) DetectGitOpsProblems(_ []string) []k8s.Detection { return nil }
 func (f *fakeIssuesProvider) DetectMissingRefs(_ []string) []k8s.Detection    { return nil }
