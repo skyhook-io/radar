@@ -384,7 +384,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   <Collapse open={permissionsOpen} id={permissionsDisclosure.panelId}>
                     <div className="mt-2 max-w-xl space-y-2 rounded border border-theme-border bg-theme-surface p-3">
                       {denialReasons.map(reason => <p key={reason}>{reason}</p>)}
-                      <p>An admin can grant access with {props.isCloudDeployment && <>the chart's <code>cloud.defaultRbac.gitopsActions</code> setting or </>}a RoleBinding{deniedGrants.length > 0 ? ' allowing:' : '.'}</p>
+                      <p>An admin can grant access with {props.isCloudDeployment && <>the chart's <code>cloud.defaultRbac.gitopsActions</code> setting (owners only) or </>}a RoleBinding{deniedGrants.length > 0 ? ' allowing:' : '.'}</p>
                       {deniedGrants.length > 0 && <ul className="list-disc space-y-1 pl-4">
                         {deniedGrants.slice(0, 4).map(grant => <li key={grant}>{grant.split(' ').map((word, index) => <span key={index}><span className="whitespace-nowrap">{word}</span>{' '}</span>)}</li>)}
                         {deniedGrants.length > 4 && <li>And {deniedGrants.length - 4} more denied permission{deniedGrants.length === 5 ? '' : 's'}.</li>}

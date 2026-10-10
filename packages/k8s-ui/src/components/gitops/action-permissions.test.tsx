@@ -44,6 +44,7 @@ describe('GitOps permission gates on rendered controls', () => {
     const html = renderToString(<GitOpsDetailLayout {...base} isCloudDeployment actionDisabledReasons={{ refresh: reason }} actionPermissions={{ refresh: argoDenial }} />)
     expect(html).toContain('cloud.defaultRbac.gitopsActions')
     expect(html).toContain('Chart RBAC settings')
+    expect(html).toContain('setting (owners only) or')
     expect(html).toContain('a RoleBinding')
   })
   it('names only the denied cross-namespace source grants for partially allowed Flux actions', () => {
