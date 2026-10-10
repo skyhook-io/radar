@@ -66,6 +66,7 @@ serviceAccount:
 
 # RBAC configuration
 rbac:
+  # Radar reads its grants at startup, so changing any rbac value rolls the pod.
   # Create ClusterRole and ClusterRoleBinding
   create: true
   # Additional rules to add to the ClusterRole
@@ -157,11 +158,12 @@ rbac:
   # metrics panels. Safe to enable — read-only on the aggregated metrics API.
   metrics: true
 
-  # CRD access - all common groups enabled by default
+  # CRD access - common groups enabled by default; credential-bearing exceptions are opt-in
   # Granting RBAC for CRDs that don't exist has no effect.
   crdGroups:
-    # Set to true to grant read access to ALL CRDs (overrides individual settings below)
-    # Simpler but broader permissions - some orgs may not allow this
+    # Grants get/list/watch on */*: every API group and resource, including
+    # core Secrets and credential-bearing CRDs. Overrides individual flags
+    # and resource exclusions below; Kubernetes RBAC cannot subtract Secrets.
     all: false
 
     apiRegistration: true   # apiregistration.k8s.io (APIService health for aggregated APIs)
@@ -218,6 +220,12 @@ rbac:
     trivy: true             # aquasecurity.github.io
     velero: true            # velero.io
     verticalPodAutoscaler: true  # autoscaling.k8s.io (VPA — granted by default; no-op on clusters where VPA isn't installed)
+    # operator.victoriametrics.com: only vmagents, vmclusters and vmsingles.
+    # Opt-in: inline scrape config, remote-write headers, extraArgs and license
+    # keys can contain credentials. Collected namespaced objects are visible
+    # to Radar namespace viewers; this flag adds no Kubernetes caller grants.
+    # All other kinds, including vmusers/vmauths, remain excluded.
+    victoriaMetrics: false
     volcano: true           # batch.volcano.sh, scheduling.volcano.sh, flow.volcano.sh, bus.volcano.sh
 
   # Additional CRD API groups for custom/unlisted CRDs

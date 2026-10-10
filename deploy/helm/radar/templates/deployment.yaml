@@ -46,15 +46,18 @@ spec:
       {{- include "radar.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- if or .Values.podAnnotations (not .Values.cloud.enabled) }}
       annotations:
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+        {{- /* Radar decides what it can watch at startup and keeps serving its
+               cache after a grant is revoked, so a grant change needs a new pod.
+               auth.mode and cloud.enabled also shape the ClusterRole, but they
+               already change the container args. */}}
+        checksum/rbac: {{ toJson .Values.rbac | sha256sum }}
         {{- if not .Values.cloud.enabled }}
         checksum/operator-settings: {{ include "radar.operatorSettings" . | sha256sum }}
         {{- end }}
-      {{- end }}
       labels:
         {{- include "radar.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}

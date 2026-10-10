@@ -1,0 +1,52 @@
+suite: VictoriaMetrics collection does not add Cloud caller grants
+templates:
+  - cloud-rbac-integration-read.yaml
+set:
+  cloud.enabled: true
+  cloud.token: dummy
+  cloud.url: wss://cloud.example
+  cloud.clusterName: test
+  rbac.crdGroups.victoriaMetrics: true
+tests:
+  - it: adds no namespaced caller grant when collection is enabled
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-radar-integration-read-namespaced
+    asserts:
+      - notContains:
+          path: rules[*].apiGroups
+          content: operator.victoriametrics.com
+  - it: adds no cluster caller grant when collection is enabled
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-radar-integration-read-cluster
+    asserts:
+      - notContains:
+          path: rules[*].apiGroups
+          content: operator.victoriametrics.com
+  - it: keeps namespaced caller grants finite under wildcard collection
+    set:
+      rbac.crdGroups.all: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-radar-integration-read-namespaced
+    asserts:
+      - notContains:
+          path: rules[*].apiGroups
+          content: operator.victoriametrics.com
+      - notContains:
+          path: rules[*].apiGroups
+          content: "*"
+  - it: keeps cluster caller grants finite under wildcard collection
+    set:
+      rbac.crdGroups.all: true
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-radar-integration-read-cluster
+    asserts:
+      - notContains:
+          path: rules[*].apiGroups
+          content: operator.victoriametrics.com
+      - notContains:
+          path: rules[*].apiGroups
+          content: "*"
