@@ -144,6 +144,27 @@ describe('NodeRenderer removal advice', () => {
     expect(html).toContain('may block removal')
     expect(html).not.toContain('evicted')
   })
+  it('uses warning tone for independent network failure during removal', () => {
+    const html = renderToStaticMarkup(<NodeRenderer data={{ ...removal, status: { conditions: [
+      ...removal.status.conditions,
+      { type: 'NetworkUnavailable', status: 'True', lastTransitionTime: new Date(Date.now() - 180_000).toISOString() },
+    ] } }} />)
+    expect(html).toContain('Removing (cluster autoscaler) · Network unavailable')
+    expect(html).toContain('bg-amber-50')
+    expect(html).not.toContain('rounded-lg bg-red-50')
+    expect(html).not.toContain('rounded-lg bg-sky-50')
+  })
+  it('describes skip outcomes as drain estimates', () => {
+    const html = renderToStaticMarkup(<NodeRenderer data={removal} removalPlan={{
+      node: 'kind-worker', generatedAt: new Date().toISOString(), estimate: true,
+      options: { ignoreDaemonSets: true, deleteEmptyDirData: true, force: true },
+      summary: { evict: 0, skip: 1, mayBlock: 0 }, pdbsEvaluated: true,
+      pods: [{ namespace: 'shop', name: 'daemon', outcome: 'skip', reason: 'DaemonSet', pdbChecked: false, emptyDir: false, terminating: false }],
+    }} />)
+    expect(html).toContain('Skipped by drain estimate')
+    expect(html).toContain('1 skipped by drain estimate')
+    expect(html).not.toContain('Retained')
+  })
   it('reports unavailable drain evidence as unavailable', () => {
     const html = renderToStaticMarkup(<NodeRenderer data={removal} removalPlanError="forbidden: cannot list pods" />)
     expect(html).toContain('Drain details unavailable')

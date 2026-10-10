@@ -147,7 +147,7 @@ import {
   type PrinterColumnDef, type PrinterTable, PRINTER_COLUMN_PREFIX, formatPrinterCell, printerCellSortValue,
   printerCellTone, printerColumnKey, printerColumnWidth, printerTableKey, printerTableMatchesKind, readPrinterCell,
 } from './printer-columns'
-import { SEVERITY_BADGE, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
+import { SEVERITY_BADGE, SEVERITY_TEXT, healthToSeverity, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
 import { pluralize } from '../../utils/pluralize'
 import { getPodGpuCount, getNodeGpuCount } from '../../utils/extended-resources'
 import { parseQuantityToNumber } from '../../utils/format'
@@ -8722,7 +8722,7 @@ function NodeCell({ resource, column, majorityNodeMinorVersion }: { resource: an
           </span>
           {problems.length > 0 && (
             <Tooltip content={problems.join(', ')}>
-              <span className="text-red-400">
+              <span className={SEVERITY_TEXT[healthToSeverity(status.level ?? 'unknown')]}>
                 <AlertTriangle className="w-3.5 h-3.5" />
               </span>
             </Tooltip>

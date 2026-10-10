@@ -37,18 +37,18 @@ function formatStorage(value: string | undefined): string {
 // Extract genuine problems from node status. Cordoned (unschedulable) is
 // deliberately NOT included here — it's an intentional operator action
 // (cordon/drain), surfaced separately as a calm advisory, not a red error.
-function getNodeProblems(data: any): string[] {
+function getNodeProblems(data: any, lifecycle: ReturnType<typeof getNodeLifecycle>): string[] {
   const problems: string[] = []
   const conditions = data.status?.conditions || []
 
   for (const cond of conditions) {
     // NotReady is a problem when status is not True
-    if (cond.type === 'Ready' && getNodeLifecycle(data).readinessFailed) {
+    if (cond.type === 'Ready' && lifecycle.readinessFailed) {
       problems.push(`Node is NotReady${cond.message ? ': ' + cond.message : ''}`)
     }
 
     // These conditions are problems when True
-    if (cond.status === 'True' && getNodeLifecycle(data).problems.includes(cond.type)) {
+    if (cond.status === 'True' && lifecycle.problems.includes(cond.type)) {
       if (cond.type === 'DiskPressure') {
         problems.push(`Disk pressure${cond.message ? ': ' + cond.message : ''}`)
       }
@@ -79,10 +79,10 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
   const taints = spec.taints || []
 
   // Check for problems
-  const problems = getNodeProblems(data)
+  const lifecycle = getNodeLifecycle(data)
+  const problems = getNodeProblems(data, lifecycle)
   const hasProblems = problems.length > 0
   const isCordoned = !!spec.unschedulable
-  const lifecycle = getNodeLifecycle(data)
   const currentPlan = !removalPlanError && removalPlan?.node === metadata.name ? removalPlan : undefined
   const possibleBlockers = currentPlan?.pods.filter(pod => pod.outcome === 'may-block') ?? []
   const terminatingPods = currentPlan?.pods.filter(pod => pod.terminating).length
@@ -103,12 +103,12 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
     <>
       {/* Problems alert - shown at top when there are genuine issues */}
       {hasProblems && (
-        <AlertBanner variant="error" title="Issues Detected" items={problems} />
+        <AlertBanner variant={lifecycle.level === 'unhealthy' ? 'error' : 'warning'} title="Issues Detected" items={problems} />
       )}
 
       {lifecycle.removing ? (
         <AlertBanner
-          variant={lifecycle.level === 'unhealthy' ? 'error' : lifecycle.delayed ? 'warning' : 'info'}
+          variant={lifecycle.level === 'unhealthy' ? 'error' : lifecycle.level === 'degraded' ? 'warning' : 'info'}
           title={lifecycle.delayed ? `${lifecycle.label} — taking longer than expected` : lifecycle.label}
           message={lifecycle.delayed
             ? 'Check remaining pods, disruption budgets and controller events. Do not uncordon during removal.'
@@ -121,14 +121,14 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
             {!removalPlanLoading && !removalPlanError && !currentPlan && <p>Pod and disruption-budget checks are not available from this host.</p>}
             {currentPlan && (
               <>
-                <p>{currentPlan.pods.length} pods in the current snapshot · {terminationKnown ? `${terminatingPods} terminating` : 'termination state unavailable from this Radar'} · {currentPlan.summary.skip} retained by a drain (DaemonSet, static or completed).</p>
+                <p>{currentPlan.pods.length} pods in the current snapshot · {terminationKnown ? `${terminatingPods} terminating` : 'termination state unavailable from this Radar'} · {currentPlan.summary.skip} skipped by drain estimate (DaemonSet, static or completed).</p>
                 <p className="text-theme-text-secondary">Checked {formatCompactAge(currentPlan.generatedAt)} ago. This is a snapshot, not an eviction history. Disruption-budget checks estimate what the Eviction API would allow now.</p>
                 <p className="text-theme-text-secondary">Removal controllers can also hold pods marked karpenter.sh/do-not-disrupt or cluster-autoscaler.kubernetes.io/safe-to-evict=false. Those policies are not evaluated by this drain estimate.</p>
                 <ul className="max-h-48 overflow-y-auto space-y-1">
                   {currentPlan.pods.map(pod => (
                     <li key={`${pod.namespace}/${pod.name}`} className="flex justify-between gap-2">
                       <span className="break-all font-mono">{pod.namespace}/{pod.name}</span>
-                      <span className="shrink-0 text-theme-text-secondary">{pod.terminating ? 'Terminating' : pod.outcome === 'may-block' ? 'Budget may block' : pod.outcome === 'skip' ? 'Retained' : 'Remaining'}</span>
+                      <span className="shrink-0 text-theme-text-secondary">{pod.terminating ? 'Terminating' : pod.outcome === 'may-block' ? 'Budget may block' : pod.outcome === 'skip' ? 'Skipped by drain estimate' : 'Remaining'}</span>
                     </li>
                   ))}
                 </ul>

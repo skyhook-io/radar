@@ -988,7 +988,7 @@ func TestNodeSummaryExpectedRemoval(t *testing.T) {
 		Status:     corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionUnknown, LastTransitionTime: metav1.NewTime(now.Add(-time.Second)), Reason: "NodeStatusUnknown"}}},
 	}
 	s := summarizeNode(node)
-	if s.Status != "Removing (cluster autoscaler)" || s.Issue != "" {
+	if s.Status != "Removing (cluster autoscaler)" || s.Issue != "" || s.Ready != "Unknown" {
 		t.Fatalf("normal removal misreported: %+v", s)
 	}
 	node.Status.Conditions[0].LastTransitionTime = metav1.NewTime(now.Add(-time.Hour))

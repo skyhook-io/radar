@@ -21,6 +21,11 @@ export interface NodeLifecycleState {
   problems: string[]
 }
 
+export type NodeLifecycleObservation = Omit<NodeLifecycleState, 'startedAt' | 'problems'> & {
+  startedAt?: string
+  problems?: string[]
+}
+
 export function getNodeLifecycle(node: any, now = Date.now()): NodeLifecycleState {
   const ready = node?.status?.conditions?.find((condition: any) => condition.type === 'Ready')
   const createdAt = Date.parse(node?.metadata?.creationTimestamp)
@@ -62,7 +67,7 @@ export function getNodeLifecycle(node: any, now = Date.now()): NodeLifecycleStat
   for (const condition of node?.status?.conditions ?? []) {
     if (condition.status !== 'True' || !problemLabels[condition.type]) continue
     const conditionTime = Date.parse(condition.lastTransitionTime)
-    if (condition.type === 'NetworkUnavailable' && Number.isFinite(conditionTime) && now - conditionTime < NETWORK_UNAVAILABLE_GRACE_MS) continue
+    if (condition.type === 'NetworkUnavailable' && Number.isFinite(conditionTime) && conditionTime <= now && now - conditionTime < NETWORK_UNAVAILABLE_GRACE_MS) continue
     problems.push(condition.type)
     label += ` · ${problemLabels[condition.type]}`
     if (condition.type !== 'NetworkUnavailable') level = 'unhealthy'

@@ -1,38 +1,22 @@
 # Node status and removal
 
-Node status separates controller intent from readiness. Radar recognizes the
-cluster autoscaler's `ToBeDeletedByClusterAutoscaler:NoSchedule` marker,
-Karpenter's current `karpenter.sh/disrupted:NoSchedule` marker, and a Node's
-deletion timestamp. A soft
-`DeletionCandidateOfClusterAutoscaler:PreferNoSchedule` marker means a candidate,
-not an active removal. A plain cordon remains amber because scheduling capacity
-is unavailable; it is not an operational issue and does not identify its actor.
+This cross-surface contract is implemented in `pkg/health/node_lifecycle.go` and mirrored for raw-node UI in `packages/k8s-ui/src/utils/node-lifecycle.ts`. Shared fixtures compare complete results.
 
-Normal removal appears calmly in node status and has a separate fleet count.
-A readiness failure remains actionable when it predates removal or the evidence
-cannot establish that it followed removal. Disk, memory and PID pressure remain critical independently. NetworkUnavailable
-gets a two-minute initialization grace when its transition time is known, then
-warns; an unknown transition time is reported conservatively as a warning. The autoscaler records removal time as a Unix
-value; a deletion timestamp also establishes a start. NoSchedule taints do not
-normally record their start time. Known removals still present after 10 minutes
-warn, and after 30 minutes become critical, matching Radar's termination windows.
-Unknown start times are shown as unavailable, never timed from node creation.
+- Active removal requires `ToBeDeletedByClusterAutoscaler:NoSchedule`, `karpenter.sh/disrupted:NoSchedule`, or deletion. A soft autoscaler candidate does not explain readiness loss.
+- Readiness loss is expected only after a trustworthy removal start; earlier failures and unknown timing remain actionable. CA records Unix seconds; deletion also dates removal. Karpenter's marker alone supplies no start.
+- Memory/disk/PID pressure remains critical independently. NetworkUnavailable warns after two minutes; missing/future transition times establish no grace. Known removals warn at 10 minutes and become critical at 30.
+- Plain cordon is amber, names no actor and raises no issue. Confirm maintenance finished before uncordoning. GKE host maintenance or upgrades do not establish removal.
 
-The removal drawer refreshes a read-only drain snapshot every 30 seconds while
-open. It lists pods, observed termination states, and named disruption budgets
-that may refuse an eviction. These are estimates, not proof of a controller's
-failed eviction or a count of previously evicted pods. Budget-read errors are
-shown explicitly. Controller-specific do-not-disrupt/safe-to-evict policies are
-not evaluated by the drain estimate. Older Radar versions that serve drain plans without per-pod
-termination state display that field as unavailable. Uncordon advice and
-scheduling actions are absent during known removal; an unexplained cordon asks
-operators to confirm that maintenance is finished before resuming scheduling.
+## Surfaces
 
-GKE host-maintenance taints can describe a VM restart, not removal; they do not
-establish a removal state. Provider-specific upgrade detection and a history of removed nodes are not
-inferred from a cordon or a node-pool label. Historical Karpenter taint aliases
-are not inferred from the current marker contract.
+Table, drawer and topology use lifecycle health. Raw conditions/YAML and historical timeline observations stay visible. REST AI context/MCP expose `nodeSummary.lifecycle` with `readyStatus`; minified list/search rows retain raw Ready separately.
 
-Fleet counters are exclusive: an independent readiness failure stays in NotReady even when removal is also requested. Other removing nodes use the Removing bucket, whose unhealthy subset preserves pressure and prolonged-removal severity.
+Dashboard/vitals/MCP share exclusive Ready / NotReady / Cordoned / Removing buckets. Independent readiness failure stays NotReady; RemovingUnhealthy is a subset for pressure/prolonged removal. Capacity exposes the same member lifecycle and `nodes.operational` buckets alongside overlapping raw counts. Group readiness, allocatable, requests, scheduler predicates and NodeClaims retain their factual meanings.
 
-GKE conditions `StoragePressureRootFileSystem`, `DPv2MigrationUnsupportedCNI`, and `UnsupportedEBPFPrograms` have negative polarity: False means the problem is absent. Their raw values remain visible; they do not create false failing-condition counts.
+NotReady retains its identity. Pressure/network issues have separate identities and condition-specific pod attribution. Removal delayed uses `termination_stuck`, timed from removal onset.
+
+## Drain evidence
+
+UI/REST/MCP share a read-only current pod/PDB estimate. MCP `get_resource include=drain-plan` returns at most 100 pods with total/truncation, complete summary counts and explicit options. Read errors and incomplete budget checks are visible.
+
+This is no eviction history or progress measure. DaemonSet/static/completed pods are *skipped by the estimate*; controller-specific do-not-disrupt/safe-to-evict policies are unevaluated. Known removal hides scheduling actions and uncordon advice.

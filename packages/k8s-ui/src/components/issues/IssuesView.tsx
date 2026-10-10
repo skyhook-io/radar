@@ -290,7 +290,7 @@ export function IssueRow({
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex min-w-0 items-baseline gap-2">
             <span className="min-w-0 truncate text-sm font-medium text-theme-text-primary">{categoryLabel(issue.category)}</span>
-            <span className={`shrink-0 self-center ${groupBadgeClass(issue.kind === 'Node' ? 'nodes' : issue.category_group)}`}>{issue.kind === 'Node' ? 'Nodes' : groupLabel(issue.category_group)}</span>
+            <span className={`shrink-0 self-center ${groupBadgeClass(issue.category_group)}`}>{groupLabel(issue.category_group)}</span>
             {renderBadges?.(slotCtx)}
             {/* The detector reason rides the title row while COLLAPSED so the
                 key triage signal shows without expanding. When open, the full

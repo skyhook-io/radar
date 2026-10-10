@@ -31,7 +31,11 @@
       "label": "Removing (cluster autoscaler)",
       "level": "neutral",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
     },
     {
       "name": "failure-True",
@@ -56,7 +60,9 @@
       "label": "Ready",
       "level": "healthy",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": false,
+      "problems": []
     },
     {
       "name": "candidate-True",
@@ -88,7 +94,9 @@
       "label": "Scale-down candidate",
       "level": "neutral",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": false,
+      "problems": []
     },
     {
       "name": "karpenter-True",
@@ -120,7 +128,10 @@
       "label": "Removing (Karpenter)",
       "level": "neutral",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "Karpenter",
+      "problems": []
     },
     {
       "name": "karpenter-deletion-True",
@@ -153,7 +164,11 @@
       "label": "Removing (Karpenter)",
       "level": "neutral",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "Karpenter",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
     },
     {
       "name": "autoscaler-False",
@@ -185,7 +200,11 @@
       "label": "Removing (cluster autoscaler)",
       "level": "neutral",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
     },
     {
       "name": "failure-False",
@@ -210,7 +229,9 @@
       "label": "NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
-      "delayed": false
+      "delayed": false,
+      "removing": false,
+      "problems": []
     },
     {
       "name": "candidate-False",
@@ -242,7 +263,9 @@
       "label": "NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
-      "delayed": false
+      "delayed": false,
+      "removing": false,
+      "problems": []
     },
     {
       "name": "karpenter-False",
@@ -271,10 +294,13 @@
           ]
         }
       },
-      "label": "Removing (Karpenter) · NotReady",
+      "label": "Removing (Karpenter) \u00b7 NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "Karpenter",
+      "problems": []
     },
     {
       "name": "karpenter-deletion-False",
@@ -307,7 +333,11 @@
       "label": "Removing (Karpenter)",
       "level": "neutral",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "Karpenter",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
     },
     {
       "name": "autoscaler-Unknown",
@@ -339,7 +369,11 @@
       "label": "Removing (cluster autoscaler)",
       "level": "neutral",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
     },
     {
       "name": "failure-Unknown",
@@ -364,7 +398,9 @@
       "label": "NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
-      "delayed": false
+      "delayed": false,
+      "removing": false,
+      "problems": []
     },
     {
       "name": "candidate-Unknown",
@@ -396,7 +432,9 @@
       "label": "NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
-      "delayed": false
+      "delayed": false,
+      "removing": false,
+      "problems": []
     },
     {
       "name": "karpenter-Unknown",
@@ -425,10 +463,13 @@
           ]
         }
       },
-      "label": "Removing (Karpenter) · NotReady",
+      "label": "Removing (Karpenter) \u00b7 NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "Karpenter",
+      "problems": []
     },
     {
       "name": "karpenter-deletion-Unknown",
@@ -461,7 +502,11 @@
       "label": "Removing (Karpenter)",
       "level": "neutral",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "Karpenter",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
     },
     {
       "name": "cordoned",
@@ -486,7 +531,9 @@
       "label": "Cordoned",
       "level": "degraded",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": false,
+      "problems": []
     },
     {
       "name": "missing-readiness",
@@ -505,7 +552,9 @@
       "label": "Unknown",
       "level": "unknown",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": false,
+      "problems": []
     },
     {
       "name": "deletion",
@@ -531,7 +580,10 @@
       "label": "Removing",
       "level": "neutral",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
     },
     {
       "name": "preexisting-failure",
@@ -560,10 +612,14 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler) · NotReady",
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
     },
     {
       "name": "removal-age-9",
@@ -595,7 +651,11 @@
       "label": "Removing (cluster autoscaler)",
       "level": "neutral",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:51:00Z",
+      "problems": []
     },
     {
       "name": "removal-age-10",
@@ -627,7 +687,11 @@
       "label": "Removing (cluster autoscaler)",
       "level": "degraded",
       "readinessFailed": false,
-      "delayed": true
+      "delayed": true,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:50:00Z",
+      "problems": []
     },
     {
       "name": "removal-age-29",
@@ -659,7 +723,11 @@
       "label": "Removing (cluster autoscaler)",
       "level": "degraded",
       "readinessFailed": false,
-      "delayed": true
+      "delayed": true,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:31:00Z",
+      "problems": []
     },
     {
       "name": "removal-age-30",
@@ -691,7 +759,11 @@
       "label": "Removing (cluster autoscaler)",
       "level": "unhealthy",
       "readinessFailed": false,
-      "delayed": true
+      "delayed": true,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:30:00Z",
+      "problems": []
     },
     {
       "name": "invalid-time-malformed",
@@ -720,10 +792,13 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler) · NotReady",
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "problems": []
     },
     {
       "name": "invalid-time-0",
@@ -752,10 +827,13 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler) · NotReady",
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "problems": []
     },
     {
       "name": "invalid-time--1",
@@ -784,10 +862,13 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler) · NotReady",
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "problems": []
     },
     {
       "name": "invalid-time-1791633660",
@@ -816,10 +897,13 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler) · NotReady",
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "problems": []
     },
     {
       "name": "invalid-time-999999999999999999999999999999",
@@ -848,10 +932,13 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler) · NotReady",
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "problems": []
     },
     {
       "name": "wrong-effect",
@@ -883,7 +970,9 @@
       "label": "NotReady",
       "level": "unhealthy",
       "readinessFailed": true,
-      "delayed": false
+      "delayed": false,
+      "removing": false,
+      "problems": []
     },
     {
       "name": "pressure-MemoryPressure",
@@ -916,10 +1005,16 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler) · Memory pressure",
+      "label": "Removing (cluster autoscaler) \u00b7 Memory pressure",
       "level": "unhealthy",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": [
+        "MemoryPressure"
+      ]
     },
     {
       "name": "pressure-DiskPressure",
@@ -952,10 +1047,16 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler) · Disk pressure",
+      "label": "Removing (cluster autoscaler) \u00b7 Disk pressure",
       "level": "unhealthy",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": [
+        "DiskPressure"
+      ]
     },
     {
       "name": "pressure-PIDPressure",
@@ -988,10 +1089,16 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler) · PID pressure",
+      "label": "Removing (cluster autoscaler) \u00b7 PID pressure",
       "level": "unhealthy",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": [
+        "PIDPressure"
+      ]
     },
     {
       "name": "pressure-NetworkUnavailable",
@@ -1024,10 +1131,16 @@
           ]
         }
       },
-      "label": "Removing (cluster autoscaler) · Network unavailable",
+      "label": "Removing (cluster autoscaler) \u00b7 Network unavailable",
       "level": "degraded",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": [
+        "NetworkUnavailable"
+      ]
     },
     {
       "name": "marker-before-deletion",
@@ -1060,7 +1173,11 @@
       "label": "Removing (cluster autoscaler)",
       "level": "degraded",
       "readinessFailed": false,
-      "delayed": true
+      "delayed": true,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:31:00Z",
+      "problems": []
     },
     {
       "name": "network-age-0",
@@ -1090,7 +1207,9 @@
       "label": "Ready",
       "level": "healthy",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": false,
+      "problems": []
     },
     {
       "name": "network-age-1",
@@ -1120,7 +1239,9 @@
       "label": "Ready",
       "level": "healthy",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": false,
+      "problems": []
     },
     {
       "name": "network-age-2",
@@ -1147,10 +1268,14 @@
           ]
         }
       },
-      "label": "Ready · Network unavailable",
+      "label": "Ready \u00b7 Network unavailable",
       "level": "degraded",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": false,
+      "problems": [
+        "NetworkUnavailable"
+      ]
     },
     {
       "name": "network-age-3",
@@ -1177,10 +1302,14 @@
           ]
         }
       },
-      "label": "Ready · Network unavailable",
+      "label": "Ready \u00b7 Network unavailable",
       "level": "degraded",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": false,
+      "problems": [
+        "NetworkUnavailable"
+      ]
     },
     {
       "name": "ready-under-pressure",
@@ -1206,10 +1335,222 @@
           ]
         }
       },
-      "label": "Ready · Disk pressure",
+      "label": "Ready \u00b7 Disk pressure",
       "level": "unhealthy",
       "readinessFailed": false,
-      "delayed": false
+      "delayed": false,
+      "removing": false,
+      "problems": [
+        "DiskPressure"
+      ]
+    },
+    {
+      "name": "signed-marker",
+      "node": {
+        "metadata": {
+          "name": "autoscaler-False",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": true,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "+1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "problems": []
+    },
+    {
+      "name": "marker-before-creation",
+      "node": {
+        "metadata": {
+          "name": "autoscaler-False",
+          "creationTimestamp": "2026-10-10T11:59:30Z"
+        },
+        "spec": {
+          "unschedulable": true,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "problems": []
+    },
+    {
+      "name": "missing-ready-transition",
+      "node": {
+        "metadata": {
+          "name": "autoscaler-False",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": true,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
+    },
+    {
+      "name": "future-ready-transition",
+      "node": {
+        "metadata": {
+          "name": "autoscaler-False",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": true,
+          "taints": [
+            {
+              "key": "ToBeDeletedByClusterAutoscaler",
+              "value": "1791633540",
+              "effect": "NoSchedule"
+            }
+          ]
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "False",
+              "lastTransitionTime": "2026-10-10T12:01:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Removing (cluster autoscaler) \u00b7 NotReady",
+      "level": "unhealthy",
+      "readinessFailed": true,
+      "delayed": false,
+      "removing": true,
+      "actor": "cluster autoscaler",
+      "startedAt": "2026-10-10T11:59:00Z",
+      "problems": []
+    },
+    {
+      "name": "future-network-transition",
+      "node": {
+        "metadata": {
+          "name": "failure-True",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            },
+            {
+              "type": "NetworkUnavailable",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:01:00Z"
+            }
+          ]
+        }
+      },
+      "label": "Ready \u00b7 Network unavailable",
+      "level": "degraded",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": false,
+      "problems": [
+        "NetworkUnavailable"
+      ]
+    },
+    {
+      "name": "missing-network-transition",
+      "node": {
+        "metadata": {
+          "name": "failure-True",
+          "creationTimestamp": "2026-10-08T12:00:00Z"
+        },
+        "spec": {
+          "unschedulable": false
+        },
+        "status": {
+          "conditions": [
+            {
+              "type": "Ready",
+              "status": "True",
+              "lastTransitionTime": "2026-10-10T12:00:00Z"
+            },
+            {
+              "type": "NetworkUnavailable",
+              "status": "True"
+            }
+          ]
+        }
+      },
+      "label": "Ready \u00b7 Network unavailable",
+      "level": "degraded",
+      "readinessFailed": false,
+      "delayed": false,
+      "removing": false,
+      "problems": [
+        "NetworkUnavailable"
+      ]
     }
   ]
 }

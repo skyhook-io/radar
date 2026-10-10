@@ -12,6 +12,43 @@ const NodeNetworkUnavailableGrace = 2 * time.Minute
 const NodeRemovalWarningAfter = 10 * time.Minute
 const NodeRemovalCriticalAfter = 30 * time.Minute
 
+// NodeFleetCounts partitions nodes into exclusive availability buckets.
+// RemovingUnhealthy is a subset of Removing, not an additional bucket.
+type NodeFleetCounts struct {
+	Total             int `json:"total"`
+	Ready             int `json:"ready"`
+	NotReady          int `json:"notReady"`
+	Cordoned          int `json:"cordoned"`
+	Removing          int `json:"removing"`
+	RemovingUnhealthy int `json:"removingUnhealthy"`
+}
+
+func CountNodeFleet(nodes []*corev1.Node, now time.Time) NodeFleetCounts {
+	var counts NodeFleetCounts
+	for _, node := range nodes {
+		if node == nil {
+			continue
+		}
+		counts.Total++
+		lifecycle := NodeLifecycle(node, now)
+		if lifecycle.Removing && !lifecycle.ReadinessFailed {
+			counts.Removing++
+			if lifecycle.Level == LevelUnhealthy {
+				counts.RemovingUnhealthy++
+			}
+		} else if h := Node(node); h.Ready {
+			if h.Unschedulable {
+				counts.Cordoned++
+			} else {
+				counts.Ready++
+			}
+		} else {
+			counts.NotReady++
+		}
+	}
+	return counts
+}
+
 // NodeLifecycleState keeps observed readiness separate from an intentional removal.
 type NodeLifecycleState struct {
 	Label           string    `json:"label"`
@@ -24,6 +61,8 @@ type NodeLifecycleState struct {
 	Delayed         bool      `json:"delayed"`
 }
 
+// NodeLifecycle treats readiness loss as expected only when it follows a known
+// removal start; existing failures and uncertain timing remain actionable.
 func NodeLifecycle(node *corev1.Node, now time.Time) NodeLifecycleState {
 	s := NodeLifecycleState{Label: "Unknown", Level: LevelUnknown}
 	var ready *corev1.NodeCondition
@@ -64,8 +103,8 @@ func NodeLifecycle(node *corev1.Node, now time.Time) NodeLifecycleState {
 		// NoSchedule taints have no automatic timeAdded. Only CA records a
 		// start time in its value; deletionTimestamp dates actual deletion.
 		if taint.Key == "ToBeDeletedByClusterAutoscaler" {
-			if seconds, err := strconv.ParseInt(taint.Value, 10, 64); err == nil && seconds > 0 {
-				start := validTime(time.Unix(seconds, 0))
+			if seconds, err := strconv.ParseUint(taint.Value, 10, 63); err == nil && seconds > 0 {
+				start := validTime(time.Unix(int64(seconds), 0))
 				if !start.IsZero() && (s.StartedAt.IsZero() || start.Before(s.StartedAt)) {
 					s.StartedAt = start
 				}
@@ -118,7 +157,7 @@ func NodeLifecycle(node *corev1.Node, now time.Time) NodeLifecycleState {
 		case corev1.NodePIDPressure:
 			name = "PID pressure"
 		case corev1.NodeNetworkUnavailable:
-			if !cond.LastTransitionTime.IsZero() && now.Sub(cond.LastTransitionTime.Time) < NodeNetworkUnavailableGrace {
+			if !cond.LastTransitionTime.IsZero() && !cond.LastTransitionTime.After(now) && now.Sub(cond.LastTransitionTime.Time) < NodeNetworkUnavailableGrace {
 				continue
 			}
 			name = "Network unavailable"

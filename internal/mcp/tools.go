@@ -131,6 +131,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"Kubernetes-shaped spec/status/metadata plus resourceContext when available " +
 			"(relationships, refs, controller observations, issue/audit/policy rollups; " +
 			"use include=issues for bounded failures and diagnostic facts, or diagnose for a bundle; " +
+			"for a Node's current read-only pod/PDB drain estimate use include=drain-plan; " +
 			"audit findings are static posture and remediation priority, not evidence " +
 			"of an active outage; auditSummary.highestSeverity uses the Checks ladder " +
 			"(critical|high|medium|low; current built-ins are high|medium), separate " +
@@ -661,7 +662,7 @@ type getResourceInput struct {
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. cluster.x-k8s.io for CAPI Cluster vs CNPG Cluster)"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds. Leave empty for cluster-scoped kinds (Node, ClusterRole, ClusterRoleBinding, IngressClass, PriorityClass, StorageClass, etc.)."`
 	Name      string `json:"name" jsonschema:"resource name"`
-	Include   string `json:"include,omitempty" jsonschema:"optional supplemental data after narrowing to this object: events, metrics, changes, revisions, issues. Comma-separated. include=issues returns up to 3 relatedIssues with diagnostic_context and total/truncated indicators; pod/template differences are context, not proof of admission mutation. Separate from context. include=revisions lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout (number, image, isCurrent; Rollouts also mark isStable, the revision an abort reverts to) — fetch before manage_workload rollback. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
+	Include   string `json:"include,omitempty" jsonschema:"optional supplemental data after narrowing to this object: events, metrics, changes, revisions, issues, drain-plan. Comma-separated. drain-plan is Node-only: a read-only current pod/PDB estimate with explicit options, up to 100 pods and total/truncated indicators; not controller eviction history. include=issues returns up to 3 relatedIssues with diagnostic_context and total/truncated indicators; pod/template differences are context, not proof of admission mutation. Separate from context. include=revisions lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout (number, image, isCurrent; Rollouts also mark isStable, the revision an abort reverts to) — fetch before manage_workload rollback. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
 	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches relationships and available resource-specific summaries) or 'none' (bare minified resource). issueSummary uses live-operational critical|warning; auditSummary uses the Checks posture-remediation ladder critical|high|medium|low (current built-ins high|medium) and is not evidence of an active outage. For full diagnostic tier with logs + events bundled, use the diagnose tool for supported kinds."`
 }
 
@@ -1297,6 +1298,24 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 // the result map based on the includes set. relationship synthesis moved to
 // resourceContext via Build and is no longer routed through this function.
 func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result map[string]any, includes map[string]bool, kind, group, namespace, name string) {
+	if includes["drain-plan"] {
+		if normalizeDisplayKind(kind) != "Node" || group != "" {
+			result["drainPlanError"] = "drain-plan is available only for core Nodes"
+		} else if client := k8s.ClientFromContext(ctx); client == nil {
+			result["drainPlanError"] = "cluster client unavailable"
+		} else if plan, err := k8s.PlanNodeDrainWithClient(ctx, name, k8s.DrainOptions{IgnoreDaemonSets: true, DeleteEmptyDirData: true, Force: true}, client); err != nil {
+			log.Printf("[mcp] Failed to plan drain for node/%s: %v", name, err)
+			result["drainPlanError"] = err.Error()
+		} else {
+			const podLimit = 100
+			result["drainPlanTotalPods"] = len(plan.Pods)
+			result["drainPlanPodsTruncated"] = len(plan.Pods) > podLimit
+			if len(plan.Pods) > podLimit {
+				plan.Pods = plan.Pods[:podLimit]
+			}
+			result["drainPlan"] = plan
+		}
+	}
 	if includes["events"] {
 		if eventLister := cache.Events(); eventLister != nil {
 			var events []*corev1.Event
@@ -1371,14 +1390,14 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 	var unknown []string
 	for tok := range includes {
 		switch tok {
-		case "events", "metrics", "logs", "changes", "revisions", "issues":
+		case "events", "metrics", "logs", "changes", "revisions", "issues", "drain-plan":
 		default:
 			unknown = append(unknown, tok)
 		}
 	}
 	if len(unknown) > 0 {
 		sort.Strings(unknown)
-		result["includeError"] = fmt.Sprintf("unknown include value(s): %s (valid: events, metrics, changes, revisions, issues)", strings.Join(unknown, ", "))
+		result["includeError"] = fmt.Sprintf("unknown include value(s): %s (valid: events, metrics, changes, revisions, issues, drain-plan)", strings.Join(unknown, ", "))
 	}
 
 }
@@ -2290,14 +2309,7 @@ type mcpClusterInfo struct {
 	Version  string `json:"version"`
 }
 
-type mcpNodeSummary struct {
-	Total             int `json:"total"`
-	Ready             int `json:"ready"`
-	NotReady          int `json:"notReady"`
-	Cordoned          int `json:"cordoned"`
-	Removing          int `json:"removing"`
-	RemovingUnhealthy int `json:"removingUnhealthy"`
-}
+type mcpNodeSummary = health.NodeFleetCounts
 
 type mcpHealthSummary struct {
 	HealthyPods int `json:"healthyPods"`
@@ -2646,25 +2658,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		if nodeLister := cache.Nodes(); nodeLister != nil {
 			nodes, _ := nodeLister.List(labels.Everything())
 			d.ResourceCounts["nodes"] = len(nodes)
-			d.Nodes.Total = len(nodes)
-
-			for _, node := range nodes {
-				h := health.Node(node)
-				if lifecycle := health.NodeLifecycle(node, time.Now()); lifecycle.Removing && !lifecycle.ReadinessFailed {
-					d.Nodes.Removing++
-					if lifecycle.Level == health.LevelUnhealthy {
-						d.Nodes.RemovingUnhealthy++
-					}
-				} else if h.Ready {
-					if h.Unschedulable {
-						d.Nodes.Cordoned++
-					} else {
-						d.Nodes.Ready++
-					}
-				} else {
-					d.Nodes.NotReady++
-				}
-			}
+			d.Nodes = health.CountNodeFleet(nodes, time.Now())
 
 			// Version skew
 			if skew := k8s.DetectVersionSkew(nodes); skew != nil {

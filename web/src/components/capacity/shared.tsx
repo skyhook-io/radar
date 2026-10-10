@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import {
   FreshnessControl,
+  healthToSeverity,
   formatDuration,
   getRadarUpgradeRequirement,
   RadarUpgradeAction,
@@ -38,6 +39,7 @@ import {
   type CapacityManagerRollupStatus,
   type CapacityManagerSummary,
   type CapacityMemberType,
+  type CapacityNodeMember,
   type CapacityPoolSummary,
   type CapacityQuantityObservation,
   type CapacityResourceIdentity,
@@ -603,32 +605,21 @@ export function PoolReadyBadge({ ready }: { ready?: boolean }) {
 export function NodeReadyBadge({
   ready,
   cordoned,
+  lifecycle,
 }: {
   ready?: boolean;
   cordoned: boolean;
+  lifecycle?: CapacityNodeMember["lifecycle"];
 }) {
-  if (ready === false)
-    return (
-      <Badge severity="error" size="sm">
-        NotReady
-      </Badge>
-    );
-  if (ready === undefined)
-    return (
-      <Badge severity="neutral" size="sm">
-        Unknown
-      </Badge>
-    );
-  if (cordoned)
-    return (
-      <Badge severity="warning" size="sm">
-        Cordoned
-      </Badge>
-    );
+  if (lifecycle) {
+    return <Badge severity={healthToSeverity(lifecycle.level)} size="sm">{lifecycle.label}</Badge>;
+  }
   return (
-    <Badge severity="success" size="sm">
-      Ready
-    </Badge>
+    <WithTooltip tip="Kubernetes readiness only; removal status is unavailable from this Radar.">
+      <Badge severity={cordoned ? "warning" : "neutral"} size="sm">
+        {ready === false ? "NotReady (condition)" : ready === undefined ? "Readiness unknown" : cordoned ? "Cordoned" : "Ready (condition)"}
+      </Badge>
+    </WithTooltip>
   );
 }
 

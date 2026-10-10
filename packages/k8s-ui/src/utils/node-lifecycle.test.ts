@@ -9,8 +9,9 @@ const fixture = JSON.parse(readFileSync(fileURLToPath(new URL('../../../../pkg/h
 describe('node lifecycle shared Go/TS scenarios', () => {
   for (const vector of fixture.vectors) {
     it(vector.name, () => {
-      expect(getNodeLifecycle(vector.node, Date.parse(fixture.now))).toMatchObject({
+      expect(getNodeLifecycle(vector.node, Date.parse(fixture.now))).toEqual({
         label: vector.label, level: vector.level, readinessFailed: vector.readinessFailed, delayed: vector.delayed,
+        removing: vector.removing, actor: vector.actor, startedAt: vector.startedAt ? Date.parse(vector.startedAt) : undefined, problems: vector.problems,
       })
     })
   }

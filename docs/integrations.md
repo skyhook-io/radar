@@ -1,7 +1,5 @@
 # CRD Integrations
 
-For node lifecycle, autoscaler removal, and drain evidence, see [Node status and removal](nodes.md).
-
 Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar provides dedicated detail views, topology edges, smart table columns, and AI-optimized summaries for seamless integration.
 
 ## ConfigMap and Secret reflection (Reflector)
@@ -71,6 +69,8 @@ relationship is not being reconciled.
 - **Activity** — provisioning, disruption, interruption, and termination episodes classified from Karpenter's exact event vocabulary
 
 Every quantity carries per-value certainty (`= ≥ ≤ ?`): unavailable is never rendered as zero, partial is never rendered as exact, and **scheduling capacity is kept structurally distinct from actual usage** — Karpenter schedules on pod requests, so usage is an efficiency signal, never scheduler headroom. Issues, Pending-pod drawers, and the Home posture card deep-link into the right diagnosis. Full reference: [Capacity documentation](capacity.md).
+
+**Node removal:** Nodes marked for removal show an operational lifecycle status while keeping readiness and independent failures visible. The drawer shows current pods and a read-only drain/PDB estimate. See [Node status and removal](nodes.md) for the shared UI/API/MCP contract.
 
 **Topology:** Full provisioning chain — NodePool → NodeClaim → Node → Pod. See which NodePool owns which NodeClaims, which Nodes they provisioned, and what Pods are running on them. NodePool → NodeClass edges show the provider-specific configuration each pool uses.
 
