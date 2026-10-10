@@ -158,3 +158,37 @@ func TestCascadePreviewMatchesGarbageCollection(t *testing.T) {
 		t.Errorf("GatewayClass dependents = %v, want none", got)
 	}
 }
+
+func TestCascadePreviewHoldsBackDependentsWithUnseenOwners(t *testing.T) {
+	meta := func(name string, uid types.UID, owners ...metav1.OwnerReference) metav1.ObjectMeta {
+		return metav1.ObjectMeta{Name: name, Namespace: "team", UID: uid, OwnerReferences: owners}
+	}
+	rs := ownerRef("apps/v1", "ReplicaSet", "web-abc", "rs", true)
+	provider := &mockProvider{
+		deployments: []*appsv1.Deployment{{ObjectMeta: meta("web", "deploy")}},
+		replicaSets: []*appsv1.ReplicaSet{{ObjectMeta: meta("web-abc", "rs", ownerRef("apps/v1", "Deployment", "web", "deploy", true))}},
+		cronJobs:    []*batchv1.CronJob{{ObjectMeta: meta("audit", "audit-now")}},
+		pods: []*corev1.Pod{
+			{ObjectMeta: meta("only-rs", "p1", rs)},
+			// A second owner Radar doesn't observe may be live.
+			{ObjectMeta: meta("shared", "p2", rs, ownerRef("example.io/v1", "Holder", "keeper", "keeper", false))},
+			// A second owner whose UID names a deleted incarnation doesn't count.
+			{ObjectMeta: meta("stale", "p3", rs, ownerRef("batch/v1", "CronJob", "audit", "audit-old", false))},
+		},
+	}
+	opts := DefaultBuildOptions()
+	opts.ViewMode = ViewModeResources
+	opts.IncludeReplicaSets = true
+	opts.ForRelationshipCache = true
+	topo, err := NewBuilder(provider).Build(opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	p := GetCascadeDeletePreview(ResourceRef{Kind: "Deployment", Namespace: "team", Name: "web"}, topo, nil)
+	if got := refNames(p.Dependents); fmt.Sprint(got) != "[Pod/only-rs Pod/stale ReplicaSet/web-abc]" {
+		t.Errorf("certain dependents = %v", got)
+	}
+	if got := refNames(p.PossibleDependents); fmt.Sprint(got) != "[Pod/shared]" {
+		t.Errorf("possible dependents = %v, want the Pod with an unseen owner", got)
+	}
+}

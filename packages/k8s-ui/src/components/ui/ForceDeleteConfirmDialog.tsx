@@ -11,6 +11,20 @@ export interface CascadeDependent {
   group?: string
 }
 
+/** What else a delete removes, beyond the dependents garbage collection takes for certain. */
+export interface CascadeDetail {
+  /** "ownerReferences" when dependents are garbage-collection results; absent from older servers. */
+  basis?: string
+  /** Deleted unless another owner Radar can't see is still live. */
+  possibleDependents?: CascadeDependent[]
+  /** What Argo CD or Flux deletes through its finalizer. */
+  controllerTeardown?: {
+    controller: string
+    action: 'prune' | 'uninstall' | string
+    resources?: CascadeDependent[]
+  }
+}
+
 interface ForceDeleteConfirmDialogProps {
   open: boolean
   onClose: () => void
@@ -22,6 +36,7 @@ interface ForceDeleteConfirmDialogProps {
   cascadeDependents?: CascadeDependent[]
   cascadeLoading?: boolean
   cascadeRootResolved?: boolean
+  cascadeDetail?: CascadeDetail
 }
 
 export function ForceDeleteConfirmDialog({
@@ -35,6 +50,7 @@ export function ForceDeleteConfirmDialog({
   cascadeDependents,
   cascadeLoading,
   cascadeRootResolved,
+  cascadeDetail,
 }: ForceDeleteConfirmDialogProps) {
   const [forceDelete, setForceDelete] = useState(false)
 
@@ -68,7 +84,25 @@ export function ForceDeleteConfirmDialog({
         )}
 
         {!cascadeLoading && cascadeDependents && cascadeDependents.length > 0 && (
-          <CascadeDependentsList dependents={cascadeDependents} />
+          <CascadeDependentsList
+            dependents={cascadeDependents}
+            title={`Will also delete ${pluralize(cascadeDependents.length, 'dependent resource')}`}
+            note={cascadeDetail?.basis === 'ownerReferences'
+              ? 'Kubernetes deletes these through their owner references. Owned objects Radar doesn\'t track, such as EndpointSlices, go too but aren\'t listed.'
+              : undefined}
+          />
+        )}
+
+        {!cascadeLoading && cascadeDetail?.possibleDependents && cascadeDetail.possibleDependents.length > 0 && (
+          <CascadeDependentsList
+            dependents={cascadeDetail.possibleDependents}
+            title={`May also delete ${pluralize(cascadeDetail.possibleDependents.length, 'resource')}`}
+            note="Each also has an owner Radar can't see. Kubernetes deletes it only if that owner is gone too."
+          />
+        )}
+
+        {!cascadeLoading && cascadeDetail?.controllerTeardown && (
+          <ControllerTeardownNotice teardown={cascadeDetail.controllerTeardown} force={forceDelete} />
         )}
 
         {!cascadeLoading && cascadeRootResolved === false && (
@@ -96,7 +130,31 @@ export function ForceDeleteConfirmDialog({
 
 const MAX_NAMES_PER_KIND = 8
 
-function CascadeDependentsList({ dependents }: { dependents: CascadeDependent[] }) {
+function ControllerTeardownNotice({ teardown, force }: { teardown: NonNullable<CascadeDetail['controllerTeardown']>; force: boolean }) {
+  const resources = teardown.resources ?? []
+  if (force) {
+    return (
+      <div className="flex items-start gap-2 rounded border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span>
+          Force delete removes {teardown.controller}&apos;s finalizer, so {teardown.controller} won&apos;t {teardown.action === 'uninstall' ? 'uninstall the Helm release' : 'delete the resources it manages'}. They stay in the cluster.
+        </span>
+      </div>
+    )
+  }
+  const title = teardown.action === 'uninstall'
+    ? `${teardown.controller} will also uninstall the Helm release`
+    : `${teardown.controller} will also delete ${resources.length > 0 ? pluralize(resources.length, 'managed resource') : 'the resources it manages'}`
+  return (
+    <CascadeDependentsList
+      dependents={resources}
+      title={title}
+      note={`${teardown.controller} deletes what its own inventory records, which can include resources Radar doesn't show.`}
+    />
+  )
+}
+
+function CascadeDependentsList({ dependents, title, note }: { dependents: CascadeDependent[]; title: string; note?: string }) {
   const [expanded, setExpanded] = useState(false)
   const { panelId, buttonProps } = useDisclosure(expanded)
 
@@ -119,9 +177,7 @@ function CascadeDependentsList({ dependents }: { dependents: CascadeDependent[] 
         className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs font-medium text-amber-400 hover:bg-amber-500/10 transition-colors"
       >
         <CollapseChevron open={expanded} inheritColor className="w-3.5 h-3.5" />
-        <span>
-          Will also delete {pluralize(dependents.length, 'dependent resource')}
-        </span>
+        <span>{title}</span>
       </button>
 
       <Collapse open={expanded} id={panelId}>
@@ -138,9 +194,7 @@ function CascadeDependentsList({ dependents }: { dependents: CascadeDependent[] 
               </div>
             </div>
           ))}
-          <p className="text-xs text-theme-text-tertiary">
-            Kubernetes deletes these through their owner references. Owned objects Radar doesn&apos;t track, such as EndpointSlices, go too but aren&apos;t listed.
-          </p>
+          {note && <p className="text-xs text-theme-text-tertiary">{note}</p>}
         </div>
       </Collapse>
     </div>

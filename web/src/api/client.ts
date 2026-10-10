@@ -4167,6 +4167,13 @@ export interface CascadeDeletePreview {
     name: string;
     group?: string;
   }[];
+  possibleDependents?: { kind: string; namespace: string; name: string; group?: string }[];
+  basis?: string;
+  controllerTeardown?: {
+    controller: string;
+    action: string;
+    resources?: { kind: string; namespace: string; name: string; group?: string }[];
+  };
 }
 
 export function useCascadeDeletePreview(

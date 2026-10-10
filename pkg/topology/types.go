@@ -506,6 +506,15 @@ type CascadeDeletePreview struct {
 	Root         ResourceRef   `json:"root"`
 	RootResolved bool          `json:"rootResolved"`
 	Dependents   []ResourceRef `json:"dependents"`
+	// PossibleDependents go too unless an owner reference Radar couldn't
+	// resolve names an owner that is still live.
+	PossibleDependents []ResourceRef `json:"possibleDependents,omitempty"`
+	// Basis is "ownerReferences" when the dependents are garbage-collection
+	// results; older servers walked every management link and omit it.
+	Basis string `json:"basis,omitempty"`
+	// ControllerTeardown is what a GitOps controller deletes on top of
+	// garbage collection, when its deletion policy prunes or uninstalls.
+	ControllerTeardown *ControllerTeardown `json:"controllerTeardown,omitempty"`
 }
 
 // ResourceWithRelationships wraps a K8s resource with computed relationships

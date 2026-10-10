@@ -194,10 +194,14 @@ func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvide
 		preview.Root = *resolved
 	}
 	preview.RootResolved = true
+	preview.Basis = "ownerReferences"
+	preview.ControllerTeardown = controllerTeardown(rootNode, topo, dp)
 
 	// Garbage collection follows owner references only, and deletes a
 	// dependent once none of its owners remain: a dependent that another live
-	// owner still holds survives the deletion.
+	// owner still holds survives. An owner reference Radar can't resolve to an
+	// observed object may name a live owner, so such a dependent is only a
+	// possible deletion, as is anything that depends on it.
 	owned := make(map[string][]string)
 	owners := make(map[string][]string)
 	for _, edge := range topo.Edges {
@@ -206,40 +210,82 @@ func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvide
 			owners[edge.Target] = append(owners[edge.Target], edge.Source)
 		}
 	}
-	deleted := map[string]bool{rootID: true}
-	allOwnersDeleted := func(id string) bool {
-		for _, owner := range owners[id] {
-			if !deleted[owner] {
-				return false
+	index := IndexByResource(topo)
+	const (
+		survives = iota
+		possible
+		certain
+	)
+	deleted := map[string]int{rootID: certain}
+	fate := func(child *Node) int {
+		result := certain
+		for _, owner := range owners[child.ID] {
+			switch deleted[owner] {
+			case survives:
+				return survives
+			case possible:
+				result = possible
 			}
 		}
-		return true
+		namespace, _ := child.Data["namespace"].(string)
+		for _, owner := range child.ownerReferences {
+			if owner.APIVersion == "" || owner.Kind == "" || owner.Name == "" {
+				continue
+			}
+			parent, current := index.ResolveObservedOwner(resourceid.OwnerReference(owner.APIVersion, owner.Kind, owner.Name, string(owner.UID), namespace))
+			switch {
+			case parent == nil:
+				result = possible
+			case !current:
+				// The named incarnation is gone; garbage collection ignores it.
+			case deleted[parent.ID] == possible:
+				result = possible
+			case deleted[parent.ID] != certain:
+				return survives
+			}
+		}
+		return result
 	}
 
 	queue := []string{rootID}
-	var dependents []ResourceRef
+	var order []string
+	var dependents, possibleDependents []ResourceRef
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
 
 		for _, targetID := range owned[current] {
-			if deleted[targetID] || !allOwnersDeleted(targetID) {
+			child := nodeByID[targetID]
+			if child == nil || deleted[targetID] == certain {
 				continue
 			}
-			deleted[targetID] = true
-
-			ref := resourceRefForNode(nodeByID[targetID], dp)
-			if ref == nil {
+			outcome := fate(child)
+			if outcome == survives || outcome == deleted[targetID] {
 				continue
 			}
-			dependents = append(dependents, *ref)
+			if deleted[targetID] == survives {
+				order = append(order, targetID)
+			}
+			deleted[targetID] = outcome
 			queue = append(queue, targetID)
+		}
+	}
+	for _, id := range order {
+		ref := resourceRefForNode(nodeByID[id], dp)
+		if ref == nil {
+			continue
+		}
+		if deleted[id] == certain {
+			dependents = append(dependents, *ref)
+		} else {
+			possibleDependents = append(possibleDependents, *ref)
 		}
 	}
 
 	if dependents != nil {
 		preview.Dependents = dependents
 	}
+	preview.PossibleDependents = possibleDependents
 
 	return preview
 }
