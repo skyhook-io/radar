@@ -5183,9 +5183,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				continue
 			}
 
-			// Route → Service/TraefikService edges
-			// When a serversTransport is present: IngressRoute → Transport → Service
-			// Otherwise: IngressRoute → Service (direct)
+			// Route → Service/TraefikService edges. A serversTransport only
+			// configures how Traefik dials the backend: it is configuration of
+			// the route, never a hop between the route and its Service.
 			svcs, _, _ := unstructured.NestedSlice(routeMap, "services")
 			for _, svc := range svcs {
 				svcMap, ok := svc.(map[string]any)
@@ -5226,41 +5226,28 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 
 				if stID != "" {
-					// Chain: IngressRoute → ServersTransport → Service
-					dedupeKey := routeID + "|" + stID
+					dedupeKey := stID + "|" + routeID
 					if !traefikEdgeSeen[dedupeKey] {
 						traefikEdgeSeen[dedupeKey] = true
 						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", routeID, stID),
-							Source: routeID,
-							Target: stID,
-							Type:   EdgeConfigures,
-						})
-					}
-					dedupeKey2 := stID + "|" + targetID
-					if !traefikEdgeSeen[dedupeKey2] {
-						traefikEdgeSeen[dedupeKey2] = true
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", stID, targetID),
+							ID:     fmt.Sprintf("%s-to-%s", stID, routeID),
 							Source: stID,
-							Target: targetID,
+							Target: routeID,
 							Type:   EdgeConfigures,
 						})
 					}
-				} else {
-					// Direct: IngressRoute → Service
-					dedupeKey := routeID + "|" + targetID
-					if traefikEdgeSeen[dedupeKey] {
-						continue
-					}
-					traefikEdgeSeen[dedupeKey] = true
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", routeID, targetID),
-						Source: routeID,
-						Target: targetID,
-						Type:   EdgeExposes,
-					})
 				}
+				dedupeKey := routeID + "|" + targetID
+				if traefikEdgeSeen[dedupeKey] {
+					continue
+				}
+				traefikEdgeSeen[dedupeKey] = true
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", routeID, targetID),
+					Source: routeID,
+					Target: targetID,
+					Type:   EdgeExposes,
+				})
 			}
 
 			// Route → Middleware/MiddlewareTCP edges
