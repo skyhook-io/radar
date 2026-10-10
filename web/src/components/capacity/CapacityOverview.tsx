@@ -1147,12 +1147,26 @@ function GroupRow({
             <span key={fact.code}>
               {index > 0 && " · "}
               {fact.code === "at_min_size" ? (
-                <WithTooltip tip="Every observed autoscaler child has its target at its published minimum. Unattributed groups are separate; current registered nodes may still exceed the target.">
-                  <span>{fact.summary}</span>
+                <WithTooltip tip={MIN_SIZE_EXPLANATION}>
+                  <span
+                    tabIndex={0}
+                    role="note"
+                    aria-label={`${fact.summary}. ${MIN_SIZE_EXPLANATION}`}
+                    className="cursor-help rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
+                  >
+                    {fact.summary}
+                  </span>
                 </WithTooltip>
               ) : fact.code === "scale_down_candidates" ? (
                 <WithTooltip tip={SCALE_DOWN_EXPLANATION}>
-                  <span>{fact.summary}</span>
+                  <span
+                    tabIndex={0}
+                    role="note"
+                    aria-label={`${fact.summary}. ${SCALE_DOWN_EXPLANATION}`}
+                    className="cursor-help rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
+                  >
+                    {fact.summary}
+                  </span>
                 </WithTooltip>
               ) : (
                 fact.summary
@@ -1174,6 +1188,9 @@ function GroupRow({
     </>
   );
 }
+
+const MIN_SIZE_EXPLANATION =
+  "Every observed autoscaler child has its target at its published minimum. Unattributed groups are separate; current registered nodes may still exceed the target.";
 
 const SCALE_DOWN_EXPLANATION =
   "Unneeded nodes are removed after the autoscaler's scale-down delay unless PodDisruptionBudgets, local storage, or annotations block it — Radar can't see those blockers.";
@@ -1210,7 +1227,7 @@ function ChildSubTable({
               <th className={CHILD_TH}>Health</th>
               <th className={CHILD_TH}>Backoff</th>
               {showScaleDown && <th className={CHILD_TH}>Scale-down</th>}
-              <th className={CHILD_TH}>Observed</th>
+              <th className={CHILD_TH}>Health observed</th>
             </tr>
           </thead>
           <tbody className={TBODY}>
@@ -1291,7 +1308,7 @@ function OrphanAutoscalerSection({
               <th className={TH}>Target</th>
               <th className={TH}>Health</th>
               {showScaleDown && <th className={TH}>Scale-down</th>}
-              <th className={TH}>Observed</th>
+              <th className={TH}>Health observed</th>
             </tr>
           </thead>
           <tbody className={TBODY}>
@@ -1418,17 +1435,24 @@ function ChildScaleDown({
     : NaN;
   return (
     <div className="space-y-1 text-theme-text-secondary">
-      <WithTooltip tip={`${statusLabel}. ${SCALE_DOWN_EXPLANATION}`}>
-        <span className="flex items-center gap-1">
-          {countIsStatus ? candidatesLabel : statusLabel}
-          {(countIsStatus || noCandidates) && (
-            <CertaintyGlyph
-              certainty="exact"
-              title={`Candidate count published by the autoscaler: ${scaleDown.candidates}.`}
-            />
-          )}
-        </span>
-      </WithTooltip>
+      <div className="flex items-center gap-1">
+        <WithTooltip tip={`${statusLabel}. ${SCALE_DOWN_EXPLANATION}`}>
+          <span
+            tabIndex={0}
+            role="note"
+            aria-label={`${countIsStatus ? candidatesLabel : statusLabel}. ${SCALE_DOWN_EXPLANATION}`}
+            className="cursor-help rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-skyhook-500"
+          >
+            {countIsStatus ? candidatesLabel : statusLabel}
+          </span>
+        </WithTooltip>
+        {(countIsStatus || noCandidates) && (
+          <CertaintyGlyph
+            certainty="exact"
+            title={`Candidate count published by the autoscaler: ${scaleDown.candidates}.`}
+          />
+        )}
+      </div>
       {!countIsStatus && !noCandidates && (
         <div className="flex items-center gap-1 text-theme-text-tertiary">
           {candidatesLabel}
@@ -1442,6 +1466,9 @@ function ChildScaleDown({
           />
         </div>
       )}
+      <div className="text-theme-text-tertiary">
+        Probe: <ChildObserved asOf={scaleDown.asOf} />
+      </div>
       {scaleDown.lastTransitionTime && (
         <div className="text-theme-text-tertiary">
           Status since {formatTimestamp(scaleDown.lastTransitionTime)}
