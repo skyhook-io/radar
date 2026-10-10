@@ -5,8 +5,9 @@ import { GitOpsDetailLayout, type GitOpsDetailLayoutProps } from './GitOpsDetail
 import { ResourceActionsBar } from '../shared/ResourceActionsBar'
 
 const noop = () => {}
-const reason = "Your role can't patch Argo CD Applications in argocd."
-const argoDenial = { allowed: false, verb: 'patch', resource: 'applications', group: 'argoproj.io', namespace: 'argocd' }
+const reason = "Your role can't patch Argo CD Application demo in argocd."
+const appPatch = { verb: 'patch', resource: 'applications', group: 'argoproj.io', namespace: 'argocd', kind: 'Application', name: 'demo' }
+const argoDenial = { allowed: false, denied: [appPatch] }
 const base: GitOpsDetailLayoutProps = {
   identity: { kind: 'applications', group: 'argoproj.io', namespace: 'argocd', name: 'demo', toolLabel: 'ArgoCD', kindLabel: 'Application' },
   status: { sync: 'Synced', health: 'Healthy', suspended: false },
@@ -27,7 +28,7 @@ function actionButton(html: string, label: string): string {
 
 describe('GitOps permission gates on rendered controls', () => {
   it('disables refresh and sync while retaining buttons on the detail page', () => {
-    const html = renderToString(<GitOpsDetailLayout {...base} actionDisabledReasons={{ sync: reason, refresh: reason, suspend: reason }} actionPermissions={{ sync: argoDenial, refresh: argoDenial, suspend: argoDenial }} />)
+    const html = renderToString(<GitOpsDetailLayout {...base} actionDisabledReasons={{ sync: reason, refresh: reason, suspend: reason }} actionPermissions={{ sync: argoDenial, refresh: argoDenial, suspend: argoDenial, validate: { allowed: true } }} />)
     expect(html).toContain('Some actions restricted for your role')
     expect(html).toContain('Action permissions')
     expect(html).not.toContain('cloud.defaultRbac.gitopsActions')
@@ -45,28 +46,53 @@ describe('GitOps permission gates on rendered controls', () => {
     expect(html).toContain('Chart RBAC settings')
     expect(html).toContain('a RoleBinding')
   })
-  it('names only the denied cross-namespace source grant for partially allowed Flux actions', () => {
+  it('names only the denied cross-namespace source grants for partially allowed Flux actions', () => {
+    const source = { resource: 'gitrepositories', group: 'source.toolkit.fluxcd.io', namespace: 'gaps-r4-source', kind: 'GitRepository', name: 'repo', source: true }
     const html = renderToString(<GitOpsDetailLayout {...base}
       identity={{ ...base.identity, kind: 'kustomizations', group: 'kustomize.toolkit.fluxcd.io', namespace: 'gaps-r4-demo' }}
       isArgoApp={false} isFlux isFluxWorkload
-      actionDisabledReasons={{ 'sync-with-source': "Your role can't patch the source." }}
-      actionPermissions={{ reconcile: { allowed: true }, 'sync-with-source': {
-        allowed: false, verb: 'patch', resource: 'gitrepositories', group: 'source.toolkit.fluxcd.io', namespace: 'gaps-r4-source',
-      } }}
+      actionDisabledReasons={{ 'sync-with-source': 'per-action reason' }}
+      actionPermissions={{ reconcile: { allowed: true }, 'sync-with-source': { allowed: false, denied: [{ ...source, verb: 'get' }, { ...source, verb: 'patch' }] } }}
     />)
-    const grants = new DOMParser().parseFromString(html, 'text/html').querySelector('ul')!.textContent!
-    expect(grants).toContain('patch gitrepositories.source.toolkit.fluxcd.io in gaps-r4-source')
-    expect(grants).not.toContain('kustomizations')
-    expect(grants).not.toContain('gaps-r4-demo')
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    const grants = [...doc.querySelectorAll('li')].map(item => item.textContent!.trim())
+    expect(grants).toEqual(['get gitrepositories.source.toolkit.fluxcd.io in gaps-r4-source', 'patch gitrepositories.source.toolkit.fluxcd.io in gaps-r4-source'])
+    expect(html).toContain('Some actions restricted for your role')
+    expect(doc.body.textContent).toContain("Sync with source also reconciles GitRepository gaps-r4-source/repo — your role can't read or patch it.")
+    expect(html).not.toContain('per-action reason')
     expect(html).toContain('class="whitespace-nowrap">gaps-r4-source</span>')
+  })
+  it('merges every denied operation into one sentence and says when all actions are restricted', () => {
+    const appGet = { ...appPatch, verb: 'get' }
+    const both = { allowed: false, denied: [appGet, appPatch] }
+    const html = renderToString(<GitOpsDetailLayout {...base}
+      actionDisabledReasons={{ refresh: reason, sync: 'sync reason', suspend: 'suspend reason' }}
+      actionPermissions={{ refresh: argoDenial, sync: both, suspend: both }} />)
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    expect(doc.body.textContent).toContain('Actions restricted for your role')
+    expect(doc.body.textContent).not.toContain('Some actions restricted')
+    expect(doc.body.textContent).toContain("Your role can't read or patch Argo CD Application demo in argocd (Radar reads it with its own access).")
+    expect(html).not.toContain('sync reason')
+    expect([...doc.querySelectorAll('li')].map(item => item.textContent!.trim())).toEqual(['patch applications.argoproj.io in argocd', 'get applications.argoproj.io in argocd'])
+  })
+  it('keeps an unsupported action out of the role restrictions', () => {
+    const html = renderToString(<GitOpsDetailLayout {...base}
+      identity={{ ...base.identity, kind: 'helmreleases', group: 'helm.toolkit.fluxcd.io', namespace: 'apps' }}
+      isArgoApp={false} isFlux isFluxWorkload
+      flux={{ onReconcile: noop, onSyncWithSource: noop, onSuspend: noop, onResume: noop, reconciling: false, syncingWithSource: false, suspending: false, resuming: false }}
+      actionDisabledReasons={{ 'sync-with-source': 'Sync with source is unsupported here.' }}
+      actionPermissions={{ reconcile: { allowed: true }, 'sync-with-source': { unsupported: true } }}
+    />)
+    expect(html).not.toContain('restricted for your role')
+    expect(actionButton(html, 'Sync with source')).toContain('disabled=""')
   })
   it('deduplicates permission tuples across actions, lists distinct verbs and scopes, and bounds the list', () => {
     const html = renderToString(<GitOpsDetailLayout {...base} actionDisabledReasons={{ sync: reason }} actionPermissions={{
       sync: argoDenial, refresh: argoDenial,
-      suspend: { ...argoDenial, verb: 'get' },
-      resume: { ...argoDenial, namespace: 'other' },
-      rollback: { ...argoDenial, group: 'other.io' },
-      validate: { ...argoDenial, resource: 'otherresources' },
+      suspend: { allowed: false, denied: [{ ...appPatch, verb: 'get' }] },
+      resume: { allowed: false, denied: [{ ...appPatch, namespace: 'other' }] },
+      rollback: { allowed: false, denied: [{ ...appPatch, group: 'other.io' }] },
+      validate: { allowed: false, denied: [{ ...appPatch, resource: 'otherresources' }] },
       reconcile: { allowed: true }, unknown: {},
     }} />)
     const list = new DOMParser().parseFromString(html, 'text/html').querySelector('ul')!

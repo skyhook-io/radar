@@ -59,7 +59,18 @@ var (
 	// check — refresh just re-reads from Git, while terminate asks Argo to
 	// stop its in-flight operation; both are harmless on a Terminating resource.
 	ErrResourceTerminating = errors.New("resource is pending deletion")
+	// ErrSyncWithSourceUnsupported: the resource has no source that
+	// sync-with-source can reconcile (e.g. a HelmRelease using spec.chartRef).
+	// HTTP 400.
+	ErrSyncWithSourceUnsupported = errors.New("sync with source is not supported for this resource")
 )
+
+type syncWithSourceUnsupported string
+
+func (e syncWithSourceUnsupported) Error() string { return string(e) }
+func (e syncWithSourceUnsupported) Is(target error) bool {
+	return target == ErrSyncWithSourceUnsupported
+}
 
 // assertNotTerminating returns ErrResourceTerminating wrapped with a
 // caller-friendly message when the object has metadata.deletionTimestamp
@@ -635,7 +646,8 @@ func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespa
 	)
 	err = ClassifyPermissionError(err, "patch", argoAppGVR, namespace, name)
 	if err != nil {
-		if apierrors.IsInvalid(err) {
+		var admission *AdmissionDenied
+		if apierrors.IsInvalid(err) && !errors.As(err, &admission) {
 			return OperationResult{}, fmt.Errorf("no sync operation in progress for %s/%s (completed before terminate could fire): %w", namespace, name, ErrNoOperationInProgress)
 		}
 		return OperationResult{}, fmt.Errorf("failed to terminate sync for Application %s/%s: %w", namespace, name, err)
@@ -835,7 +847,7 @@ func FluxSyncSource(resource *unstructured.Unstructured, entry FluxKindEntry, na
 	var sourceKind, sourceName, sourceNamespace string
 	spec, ok := resource.Object["spec"].(map[string]any)
 	if !ok {
-		return SourceRef{}, fmt.Errorf("invalid resource spec for %s %s/%s", entry.Kind, namespace, name)
+		return SourceRef{}, syncWithSourceUnsupported(fmt.Sprintf("%s %s/%s has no spec to read a source reference from", entry.Kind, namespace, name))
 	}
 
 	switch entry.Kind {
@@ -856,11 +868,14 @@ func FluxSyncSource(resource *unstructured.Unstructured, entry FluxKindEntry, na
 			}
 		}
 	default:
-		return SourceRef{}, fmt.Errorf("sync-with-source only supported for Kustomization and HelmRelease")
+		return SourceRef{}, syncWithSourceUnsupported("Sync with source is only supported for Kustomization and HelmRelease")
 	}
 
 	if sourceName == "" {
-		return SourceRef{}, fmt.Errorf("no source reference found in %s %s/%s", entry.Kind, namespace, name)
+		if _, chartRef := spec["chartRef"]; chartRef && entry.Kind == "HelmRelease" {
+			return SourceRef{}, syncWithSourceUnsupported(fmt.Sprintf("Sync with source doesn't support HelmRelease %s/%s because it uses spec.chartRef", namespace, name))
+		}
+		return SourceRef{}, syncWithSourceUnsupported(fmt.Sprintf("%s %s/%s has no source reference to sync", entry.Kind, namespace, name))
 	}
 
 	if sourceNamespace == "" {
@@ -869,7 +884,7 @@ func FluxSyncSource(resource *unstructured.Unstructured, entry FluxKindEntry, na
 
 	_, err := ResolveFluxKind(sourceKind)
 	if err != nil {
-		return SourceRef{}, fmt.Errorf("unknown source kind: %s", sourceKind)
+		return SourceRef{}, syncWithSourceUnsupported(fmt.Sprintf("Sync with source doesn't support %s sources", sourceKind))
 	}
 
 	return SourceRef{Kind: sourceKind, Namespace: sourceNamespace, Name: sourceName}, nil

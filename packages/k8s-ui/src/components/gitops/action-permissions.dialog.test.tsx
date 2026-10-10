@@ -12,7 +12,7 @@ it.each(['sync', 'rollback'])('shows a permission alert next to the disabled %s 
   const root = createRoot(host)
   const confirm = vi.fn()
   const cancel = vi.fn()
-  const reason = "Your role can't patch Argo CD Applications in argocd."
+  const reason = "Your role can't patch Argo CD Application demo in argocd."
   await act(async () => root.render(kind === 'sync'
     ? <SyncOptionsDialog open appLabel="argocd/demo" disabledReason={reason} onCancel={cancel} onConfirm={confirm} />
     : <RollbackDialog open appLabel="argocd/demo" revision="abc123" disabledReason={reason} onCancel={cancel} onConfirm={confirm} />))

@@ -245,8 +245,13 @@ func toGitOpsResponse(r gitops.OperationResult) GitOpsOperationResponse {
 // remain visible to operators scraping server logs.
 func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, action, namespace, name string) {
 	msg := err.Error()
+	var admission *gitops.AdmissionDenied
 	var status int
 	switch {
+	case errors.As(err, &admission):
+		// Admission denials keep one status whatever the policy chose: a
+		// ValidatingAdmissionPolicy's default reason is Invalid (422).
+		status = http.StatusForbidden
 	case errors.Is(err, context.DeadlineExceeded):
 		status = http.StatusGatewayTimeout
 	case apierrors.IsNotFound(err):
@@ -265,7 +270,7 @@ func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, acti
 		status = http.StatusConflict
 	case errors.Is(err, gitops.ErrNoOperationInProgress):
 		status = http.StatusBadRequest
-	case errors.Is(err, gitops.ErrInvalidResourceSelection):
+	case errors.Is(err, gitops.ErrInvalidResourceSelection), errors.Is(err, gitops.ErrSyncWithSourceUnsupported):
 		status = http.StatusBadRequest
 	default:
 		status = http.StatusInternalServerError
@@ -280,9 +285,8 @@ func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, acti
 		s.writeError(w, status, msg, map[string]string{"error_code": "rbac_denied", "verb": denied.Verb, "group": denied.Group, "resource": denied.Resource, "namespace": denied.Namespace, "name": denied.Name, "kind": denied.Kind})
 		return
 	}
-	var admission *gitops.AdmissionDenied
-	if errors.As(err, &admission) {
-		s.writeErrorCode(w, status, "admission_denied", msg)
+	if admission != nil {
+		s.writeError(w, status, msg, map[string]string{"error_code": "admission_denied", "summary": admission.Summary()})
 		return
 	}
 	s.writeError(w, status, msg)

@@ -125,7 +125,7 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 		}
 		var admission *gitops.AdmissionDenied
 		if errors.As(err, &admission) {
-			response, _, marshalErr := toJSONResult(map[string]any{"error": "Rejected by an admission policy: " + err.Error(), "error_code": "admission_denied"})
+			response, _, marshalErr := toJSONResult(map[string]any{"error": admission.Summary(), "error_code": "admission_denied"})
 			if marshalErr != nil {
 				return nil, nil, marshalErr
 			}

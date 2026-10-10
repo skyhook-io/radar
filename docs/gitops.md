@@ -124,7 +124,14 @@ Radar treats Terminating as a distinct lifecycle phase that dominates other stat
 Refresh only needs `patch`, and its capability check does not read the target.
 Flux checks read the target as the caller to resolve any source reference. Flux
 Sync with source also needs `get` and `patch` on its referenced source,
-including its namespace. Disabled controls explain the denied permission. Controls stay enabled while the first check loads or fails. Failed refetches
+including its namespace. Each action reports `allowed`; a denied action lists
+every operation the caller lacks in `denied` (`{verb, group, resource, namespace, name, kind, source}`),
+so the grant guidance is complete, and each distinct operation is reviewed once
+per request. A Flux target the caller can't read denies every action on that
+read and still reports a missing `patch`. Sync with source on an object with no source Radar can reconcile
+(a HelmRelease using `spec.chartRef`, a Kustomization without `sourceRef`)
+reports `unsupported` with a reason, and the action itself answers 400.
+Disabled controls explain the denied permission. Controls stay enabled while the first check loads or fails. Failed refetches
 preserve the last known permissions; only a confirmed denial disables an action. Lifecycle restrictions still
 apply; Refresh and Terminate remain available during deletion when permitted.
 A connected Radar without the `gitOpsActionCapabilities` feature flag retains
@@ -133,8 +140,12 @@ its existing action controls.
 GitOps action denials return HTTP 403 with
 `{error, error_code: "rbac_denied", verb, group, resource, namespace, name, kind}`. The UI presents
 permission guidance and keeps the original error behind an Error details
-disclosure with a Copy raw error button. Admission-policy refusals use
-`error_code: "admission_denied"`, not a role-denial message. `manage_gitops` returns the same denied tuple as a tool error.
+disclosure with a Copy raw error button. Admission refusals, from a webhook or a
+ValidatingAdmissionPolicy, return 403 with `error_code: "admission_denied"` and
+a `summary` naming the policy, whatever status the policy chose (a
+ValidatingAdmissionPolicy defaults to 422 Invalid). Only `rbac_denied` is ever
+presented as a role problem; any other error shows the server's message.
+`manage_gitops` returns the same denied tuple, or the admission summary, as a tool error.
 No action gains permissions from the capability endpoint. Cloud installations
 can opt into the default-off, owner-only `cloud.defaultRbac.gitopsActions`
 chart grant; see the chart README for its controller-authority implications.

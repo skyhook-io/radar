@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -9,7 +10,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	authv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 
@@ -19,17 +19,26 @@ import (
 	"github.com/skyhook-io/radar/pkg/gitops"
 )
 
-type gitOpsActionCapability struct {
-	Allowed   *bool  `json:"allowed,omitempty"`
-	ErrorCode string `json:"error_code,omitempty"`
-	Verb      string `json:"verb,omitempty"`
-	Group     string `json:"group,omitempty"`
-	Resource  string `json:"resource,omitempty"`
-	Namespace string `json:"namespace,omitempty"`
+// gitOpsPermission is one API operation an action performs. Source marks a
+// Flux source the action reconciles alongside its target.
+type gitOpsPermission struct {
+	Verb      string `json:"verb"`
+	Group     string `json:"group"`
+	Resource  string `json:"resource"`
+	Namespace string `json:"namespace"`
 	Name      string `json:"name,omitempty"`
 	Kind      string `json:"kind,omitempty"`
 	Source    bool   `json:"source,omitempty"`
-	Reason    string `json:"reason,omitempty"`
+}
+
+// gitOpsActionCapability is allowed, denied (with every denied operation, so
+// the grant guidance is complete), unknown (Allowed nil, Reason set), or
+// unsupported for this object.
+type gitOpsActionCapability struct {
+	Allowed     *bool              `json:"allowed,omitempty"`
+	Denied      []gitOpsPermission `json:"denied,omitempty"`
+	Unsupported bool               `json:"unsupported,omitempty"`
+	Reason      string             `json:"reason,omitempty"`
 }
 
 type gitOpsAccessReview func(context.Context, authv1.ResourceAttributes) (bool, error)
@@ -99,60 +108,81 @@ func gitOpsCapabilities(ctx context.Context, client dynamic.Interface, kind, nam
 			return nil, err
 		}
 	}
-	var obj *unstructured.Unstructured
-	if !argo {
-		var err error
-		obj, err = client.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return nil, gitops.ClassifyPermissionError(err, "get", entry.GVR, namespace, name)
-		}
+	on := func(verb string, target gitops.FluxKindEntry, ns, targetName string, source bool) gitOpsPermission {
+		return gitOpsPermission{Verb: verb, Group: target.GVR.Group, Resource: target.GVR.Resource, Namespace: ns, Name: targetName, Kind: target.Kind, Source: source}
 	}
-	check := func(verb string, target gitops.FluxKindEntry, ns, targetName string) gitOpsActionCapability {
-		allowed, err := review(ctx, authv1.ResourceAttributes{Verb: verb, Group: target.GVR.Group, Resource: target.GVR.Resource, Namespace: ns, Name: targetName})
-		if err != nil {
-			return gitOpsActionCapability{Reason: "Couldn't check your permissions — retrying"}
-		}
-		if allowed {
-			allowed := true
-			return gitOpsActionCapability{Allowed: &allowed}
-		}
-		denied := false
-		return gitOpsActionCapability{Allowed: &denied, ErrorCode: "rbac_denied", Verb: verb, Group: target.GVR.Group, Resource: target.GVR.Resource, Namespace: ns, Name: targetName, Kind: target.Kind}
+	read, patch := on("get", entry, namespace, name, false), on("patch", entry, namespace, name, false)
+
+	type outcome struct {
+		allowed bool
+		err     error
 	}
-	patch := check("patch", entry, namespace, name)
+	reviewed := map[gitOpsPermission]outcome{}
+	required := map[string][]gitOpsPermission{}
 	actions := map[string]gitOpsActionCapability{}
 	if argo {
-		actions["refresh"] = patch
-		read := check("get", entry, namespace, name)
+		required["refresh"] = []gitOpsPermission{patch}
 		for _, action := range []string{"sync", "terminate", "suspend", "resume", "rollback", "validate"} {
-			actions[action] = patch
-			if (read.Allowed != nil && !*read.Allowed) || (read.Allowed == nil && (patch.Allowed == nil || *patch.Allowed)) {
-				actions[action] = read
-			}
+			required[action] = []gitOpsPermission{read, patch}
 		}
-		return actions, nil
-	}
-
-	for _, action := range []string{"reconcile", "suspend", "resume"} {
-		actions[action] = patch
-	}
-	if entry.Kind == "Kustomization" || entry.Kind == "HelmRelease" {
-		source, err := gitops.FluxSyncSource(obj, entry, namespace, name)
-		sourceCapability := patch
-		if err != nil && (patch.Allowed == nil || *patch.Allowed) {
-			sourceCapability = gitOpsActionCapability{Reason: "Couldn't check your permissions — retrying"}
-		} else if err == nil && patch.Allowed != nil && *patch.Allowed {
-			sourceEntry, err := gitops.ResolveFluxKind(source.Kind)
-			if err != nil {
+	} else {
+		// Every Flux operation reads its target first, so the GET's own answer
+		// is the read permission. A forbidden read still has patch reviewed,
+		// so the grant guidance names both when both are missing.
+		obj, err := client.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			var denied *gitops.PermissionDenied
+			if err = gitops.ClassifyPermissionError(err, "get", entry.GVR, namespace, name); !errors.As(err, &denied) {
 				return nil, err
 			}
-			sourceCapability = check("get", sourceEntry, source.Namespace, source.Name)
-			if sourceCapability.Allowed != nil && *sourceCapability.Allowed {
-				sourceCapability = check("patch", sourceEntry, source.Namespace, source.Name)
+			obj = nil
+		}
+		reviewed[read] = outcome{allowed: obj != nil}
+		for _, action := range []string{"reconcile", "suspend", "resume"} {
+			required[action] = []gitOpsPermission{read, patch}
+		}
+		if entry.Kind == "Kustomization" || entry.Kind == "HelmRelease" {
+			required["sync-with-source"] = []gitOpsPermission{read, patch}
+			if obj != nil {
+				source, err := gitops.FluxSyncSource(obj, entry, namespace, name)
+				if err != nil {
+					delete(required, "sync-with-source")
+					actions["sync-with-source"] = gitOpsActionCapability{Unsupported: true, Reason: err.Error() + "."}
+				} else {
+					sourceEntry, err := gitops.ResolveFluxKind(source.Kind)
+					if err != nil {
+						return nil, err
+					}
+					required["sync-with-source"] = append(required["sync-with-source"], on("get", sourceEntry, source.Namespace, source.Name, true), on("patch", sourceEntry, source.Namespace, source.Name, true))
+				}
 			}
 		}
-		sourceCapability.Source = sourceCapability.Resource != entry.GVR.Resource
-		actions["sync-with-source"] = sourceCapability
+	}
+
+	for action, permissions := range required {
+		var denied []gitOpsPermission
+		unknown := false
+		for _, permission := range permissions {
+			result, done := reviewed[permission]
+			if !done {
+				result.allowed, result.err = review(ctx, authv1.ResourceAttributes{Verb: permission.Verb, Group: permission.Group, Resource: permission.Resource, Namespace: permission.Namespace, Name: permission.Name})
+				reviewed[permission] = result
+			}
+			if result.err != nil {
+				unknown = true
+			} else if !result.allowed {
+				denied = append(denied, permission)
+			}
+		}
+		allowed := len(denied) == 0
+		switch {
+		case !allowed:
+			actions[action] = gitOpsActionCapability{Allowed: &allowed, Denied: denied}
+		case unknown:
+			actions[action] = gitOpsActionCapability{Reason: "Couldn't check your permissions — retrying"}
+		default:
+			actions[action] = gitOpsActionCapability{Allowed: &allowed}
+		}
 	}
 	return actions, nil
 }

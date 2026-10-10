@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -59,7 +60,14 @@ func TestGitOpsCapabilitiesArgo(t *testing.T) {
 					}
 					continue
 				}
-				if capability.Allowed == nil || *capability.Allowed != tc.allowed || (!tc.allowed && capability.ErrorCode != "rbac_denied") {
+				wantDenied := 0
+				if !tc.allowed {
+					wantDenied = 2
+					if action == "refresh" {
+						wantDenied = 1
+					}
+				}
+				if capability.Allowed == nil || *capability.Allowed != tc.allowed || len(capability.Denied) != wantDenied {
 					t.Errorf("%s=%+v", action, capability)
 				}
 			}
@@ -69,8 +77,11 @@ func TestGitOpsCapabilitiesArgo(t *testing.T) {
 
 func TestGitOpsCapabilitiesFluxPartialAndCrossNamespaceSource(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization", "metadata": map[string]any{"name": "demo", "namespace": "apps"}, "spec": map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo", "namespace": "sources"}}}}
-	for _, deniedVerb := range []string{"get", "patch", ""} {
-		t.Run("source denial "+deniedVerb, func(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		denied []string
+	}{{"none", nil}, {"get", []string{"get"}}, {"patch", []string{"patch"}}, {"get and patch", []string{"get", "patch"}}} {
+		t.Run("source denial "+tc.name, func(t *testing.T) {
 			calls := []authv1.ResourceAttributes{}
 			actions, err := gitOpsCapabilities(context.Background(), dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), obj), "kustomizations", "apps", "demo", func(_ context.Context, a authv1.ResourceAttributes) (bool, error) {
 				calls = append(calls, a)
@@ -78,7 +89,7 @@ func TestGitOpsCapabilitiesFluxPartialAndCrossNamespaceSource(t *testing.T) {
 					if a.Group != "source.toolkit.fluxcd.io" || a.Name != "repo" || a.Namespace != "sources" {
 						t.Fatalf("wrong source SAR: %+v", a)
 					}
-					return a.Verb != deniedVerb, nil
+					return !slices.Contains(tc.denied, a.Verb), nil
 				}
 				return true, nil
 			})
@@ -88,10 +99,57 @@ func TestGitOpsCapabilitiesFluxPartialAndCrossNamespaceSource(t *testing.T) {
 			if !(*actions["reconcile"].Allowed) || !(*actions["suspend"].Allowed) || !(*actions["resume"].Allowed) {
 				t.Fatalf("local actions denied: %v", actions)
 			}
-			if *actions["sync-with-source"].Allowed != (deniedVerb == "") {
-				t.Fatalf("source permission not enforced: %v, calls=%v", actions, calls)
+			sync := actions["sync-with-source"]
+			if *sync.Allowed != (len(tc.denied) == 0) || len(sync.Denied) != len(tc.denied) {
+				t.Fatalf("source permission not enforced: %+v, calls=%v", sync, calls)
+			}
+			for i, verb := range tc.denied {
+				want := gitOpsPermission{Verb: verb, Group: "source.toolkit.fluxcd.io", Resource: "gitrepositories", Namespace: "sources", Name: "repo", Kind: "GitRepository", Source: true}
+				if sync.Denied[i] != want {
+					t.Fatalf("denied[%d]=%+v, want %+v", i, sync.Denied[i], want)
+				}
+			}
+			if len(calls) != 3 {
+				t.Fatalf("each permission should be reviewed once, got %d reviews: %v", len(calls), calls)
 			}
 		})
+	}
+}
+
+// A role that can patch nothing must see both the target and the source
+// grant for Sync with source, not just the first denied operation.
+func TestGitOpsCapabilitiesListsEveryDeniedPermission(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization", "metadata": map[string]any{"name": "demo", "namespace": "apps"}, "spec": map[string]any{"sourceRef": map[string]any{"kind": "GitRepository", "name": "repo"}}}}
+	actions, err := gitOpsCapabilities(context.Background(), dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), obj), "kustomizations", "apps", "demo", func(_ context.Context, a authv1.ResourceAttributes) (bool, error) {
+		return a.Verb == "get", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []gitOpsPermission{
+		{Verb: "patch", Group: "kustomize.toolkit.fluxcd.io", Resource: "kustomizations", Namespace: "apps", Name: "demo", Kind: "Kustomization"},
+		{Verb: "patch", Group: "source.toolkit.fluxcd.io", Resource: "gitrepositories", Namespace: "apps", Name: "repo", Kind: "GitRepository", Source: true},
+	}
+	if sync := actions["sync-with-source"]; *sync.Allowed || !slices.Equal(sync.Denied, want) {
+		t.Fatalf("sync-with-source=%+v", sync)
+	}
+	if reconcile := actions["reconcile"]; *reconcile.Allowed || !slices.Equal(reconcile.Denied, want[:1]) {
+		t.Fatalf("reconcile=%+v", reconcile)
+	}
+}
+
+func TestGitOpsCapabilitiesDeniedWinsOverUnknown(t *testing.T) {
+	actions, err := gitOpsCapabilities(context.Background(), nil, "applications", "argocd", "demo", func(_ context.Context, a authv1.ResourceAttributes) (bool, error) {
+		if a.Verb == "get" {
+			return false, errors.New("offline")
+		}
+		return false, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sync := actions["sync"]; sync.Allowed == nil || *sync.Allowed || len(sync.Denied) != 1 || sync.Denied[0].Verb != "patch" {
+		t.Fatalf("sync=%+v", sync)
 	}
 }
 
@@ -206,18 +264,53 @@ func TestHandleGitOpsCapabilitiesReviewsCaller(t *testing.T) {
 	}
 }
 
+// A Flux target the caller can't read denies every action on the read, and
+// still names a missing patch so the grant guidance is complete.
 func TestGitOpsCapabilitiesForbiddenTarget(t *testing.T) {
+	read := gitOpsPermission{Verb: "get", Group: "kustomize.toolkit.fluxcd.io", Resource: "kustomizations", Namespace: "apps", Name: "demo", Kind: "Kustomization"}
+	patch := read
+	patch.Verb = "patch"
+	for _, tc := range []struct {
+		name         string
+		patchAllowed bool
+		want         []gitOpsPermission
+	}{{"patch allowed", true, []gitOpsPermission{read}}, {"patch denied", false, []gitOpsPermission{read, patch}}} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
+			client.PrependReactor("get", "kustomizations", func(ktesting.Action) (bool, runtime.Object, error) {
+				return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "kustomize.toolkit.fluxcd.io", Resource: "kustomizations"}, "demo", errors.New(`User "alice" cannot get resource "kustomizations" in API group "kustomize.toolkit.fluxcd.io" in the namespace "apps"`))
+			})
+			reviews := 0
+			actions, err := gitOpsCapabilities(context.Background(), client, "kustomizations", "apps", "demo", func(_ context.Context, a authv1.ResourceAttributes) (bool, error) {
+				reviews++
+				if a.Verb != "patch" || a.Resource != "kustomizations" {
+					t.Fatalf("unexpected review %+v", a)
+				}
+				return tc.patchAllowed, nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reviews != 1 || len(actions) != 4 {
+				t.Fatalf("reviews=%d actions=%v", reviews, actions)
+			}
+			for action, capability := range actions {
+				if capability.Allowed == nil || *capability.Allowed || !slices.Equal(capability.Denied, tc.want) {
+					t.Errorf("%s=%+v", action, capability)
+				}
+			}
+		})
+	}
+}
+
+func TestGitOpsCapabilitiesUnclassifiedForbiddenTarget(t *testing.T) {
 	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme())
 	client.PrependReactor("get", "kustomizations", func(ktesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "kustomize.toolkit.fluxcd.io", Resource: "kustomizations"}, "demo", errors.New(`User "alice" cannot get resource "kustomizations"`))
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "kustomize.toolkit.fluxcd.io", Resource: "kustomizations"}, "demo", errors.New("blocked"))
 	})
 	_, err := gitOpsCapabilities(context.Background(), client, "kustomizations", "apps", "demo", func(context.Context, authv1.ResourceAttributes) (bool, error) { return true, nil })
-	w := httptest.NewRecorder()
-	(&Server{}).writeGitOpsError(w, err, "gitops", "capabilities", "apps", "demo")
-	var body map[string]any
-	json.Unmarshal(w.Body.Bytes(), &body)
-	if w.Code != 403 || body["error_code"] != "rbac_denied" || body["verb"] != "get" {
-		t.Fatalf("%d %v", w.Code, body)
+	if !apierrors.IsForbidden(err) {
+		t.Fatalf("err=%v", err)
 	}
 }
 
@@ -226,36 +319,81 @@ func TestGitOpsCapabilitiesRefreshDoesNotRequireGet(t *testing.T) {
 	actions, err := gitOpsCapabilities(context.Background(), client, "applications", "argocd", "demo", func(_ context.Context, attrs authv1.ResourceAttributes) (bool, error) {
 		return attrs.Verb == "patch", nil
 	})
-	if err != nil || !*actions["refresh"].Allowed || *actions["sync"].Allowed || actions["sync"].Verb != "get" || len(client.Actions()) != 0 {
+	if err != nil || !*actions["refresh"].Allowed || *actions["sync"].Allowed || len(actions["sync"].Denied) != 1 || actions["sync"].Denied[0].Verb != "get" || len(client.Actions()) != 0 {
 		t.Fatalf("%v %v", actions, err)
 	}
 }
 
 func TestWriteGitOpsAdmissionDenied(t *testing.T) {
-	original := apierrors.NewForbidden(schema.GroupResource{Group: "argoproj.io", Resource: "applications"}, "demo", errors.New(`admission webhook "validation.gatekeeper.sh" denied the request: missing owner`))
-	err := gitops.ClassifyPermissionError(original, "patch", schema.GroupVersionResource{Group: "argoproj.io", Resource: "applications"}, "argocd", "demo")
-	w := httptest.NewRecorder()
-	(&Server{}).writeGitOpsError(w, err, "argo", "refresh", "argocd", "demo")
-	var body map[string]any
-	json.Unmarshal(w.Body.Bytes(), &body)
-	if w.Code != 403 || body["error_code"] != "admission_denied" {
-		t.Fatalf("%d %v", w.Code, body)
+	gr := schema.GroupResource{Group: "argoproj.io", Resource: "applications"}
+	policyDenial := func(reason metav1.StatusReason, code int32) error {
+		err := apierrors.NewForbidden(gr, "demo", errors.New(`ValidatingAdmissionPolicy 'freeze' with binding 'freeze' denied request: Application demo is change-frozen`))
+		err.ErrStatus.Reason, err.ErrStatus.Code = reason, code
+		return err
+	}
+	for _, tc := range []struct {
+		name    string
+		err     error
+		summary string
+	}{
+		{"webhook", apierrors.NewForbidden(gr, "demo", errors.New(`admission webhook "validation.gatekeeper.sh" denied the request: missing owner`)), "Rejected by admission webhook validation.gatekeeper.sh: missing owner"},
+		{"policy default reason", policyDenial(metav1.StatusReasonInvalid, http.StatusUnprocessableEntity), "Rejected by ValidatingAdmissionPolicy freeze: Application demo is change-frozen"},
+		{"policy forbidden reason", policyDenial(metav1.StatusReasonForbidden, http.StatusForbidden), "Rejected by ValidatingAdmissionPolicy freeze: Application demo is change-frozen"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := gitops.ClassifyPermissionError(tc.err, "patch", schema.GroupVersionResource{Group: "argoproj.io", Resource: "applications"}, "argocd", "demo")
+			w := httptest.NewRecorder()
+			(&Server{}).writeGitOpsError(w, fmt.Errorf("failed to refresh Application argocd/demo: %w", err), "argo", "refresh", "argocd", "demo")
+			var body map[string]any
+			json.Unmarshal(w.Body.Bytes(), &body)
+			if w.Code != 403 || body["error_code"] != "admission_denied" || body["summary"] != tc.summary || body["verb"] != nil {
+				t.Fatalf("%d %v", w.Code, body)
+			}
+		})
 	}
 }
 
-func TestGitOpsCapabilitiesMissingSourceIsUnknown(t *testing.T) {
-	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization", "metadata": map[string]any{"name": "demo", "namespace": "apps"}}}
-	for _, allowed := range []bool{false, true} {
-		actions, err := gitOpsCapabilities(context.Background(), dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), obj), "kustomizations", "apps", "demo", func(context.Context, authv1.ResourceAttributes) (bool, error) { return allowed, nil })
-		capability := actions["sync-with-source"]
-		if err != nil {
-			t.Fatal(err)
+func TestWriteGitOpsSyncWithSourceUnsupported(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease", "metadata": map[string]any{"name": "demo", "namespace": "apps"}, "spec": map[string]any{"chartRef": map[string]any{"kind": "OCIRepository", "name": "chart"}}}}
+	client := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), obj)
+	_, err := gitops.SyncFluxWithSource(context.Background(), client, "helmrelease", "apps", "demo")
+	w := httptest.NewRecorder()
+	(&Server{}).writeGitOpsError(w, err, "flux", "sync-with-source", "apps", "demo")
+	var body map[string]any
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if w.Code != http.StatusBadRequest || !strings.Contains(body["error"].(string), "spec.chartRef") {
+		t.Fatalf("%d %v", w.Code, body)
+	}
+	for _, action := range client.Actions() {
+		if action.GetVerb() == "patch" {
+			t.Fatalf("patched an unsupported sync: %v", action)
 		}
-		if allowed && (capability.Allowed != nil || capability.Reason != "Couldn't check your permissions — retrying") {
-			t.Fatalf("raw source resolution error: %+v", capability)
-		}
-		if !allowed && (capability.Allowed == nil || *capability.Allowed) {
-			t.Fatalf("lost definite patch denial: %+v", capability)
+	}
+}
+
+func TestGitOpsCapabilitiesUnsupportedSyncWithSource(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		obj  *unstructured.Unstructured
+	}{
+		{"chartRef", &unstructured.Unstructured{Object: map[string]any{"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease", "metadata": map[string]any{"name": "demo", "namespace": "apps"}, "spec": map[string]any{"chartRef": map[string]any{"kind": "OCIRepository", "name": "chart"}}}}},
+		{"no source", &unstructured.Unstructured{Object: map[string]any{"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization", "metadata": map[string]any{"name": "demo", "namespace": "apps"}, "spec": map[string]any{}}}},
+	} {
+		for _, allowed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/allowed=%t", tc.name, allowed), func(t *testing.T) {
+				resource := strings.ToLower(tc.obj.GetKind()) + "s"
+				actions, err := gitOpsCapabilities(context.Background(), dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), tc.obj), resource, "apps", "demo", func(context.Context, authv1.ResourceAttributes) (bool, error) { return allowed, nil })
+				if err != nil {
+					t.Fatal(err)
+				}
+				capability := actions["sync-with-source"]
+				if !capability.Unsupported || capability.Allowed != nil || capability.Reason == "" || strings.Contains(capability.Reason, "retrying") {
+					t.Fatalf("sync-with-source=%+v", capability)
+				}
+				if reconcile := actions["reconcile"]; *reconcile.Allowed != allowed {
+					t.Fatalf("reconcile=%+v", reconcile)
+				}
+			})
 		}
 	}
 }

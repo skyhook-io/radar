@@ -3,16 +3,18 @@ package mcp
 import (
 	"context"
 	"errors"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
-	dynamicfake "k8s.io/client-go/dynamic/fake"
-	ktesting "k8s.io/client-go/testing"
 	"strings"
 	"testing"
 
-	"github.com/skyhook-io/radar/internal/k8s"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	ktesting "k8s.io/client-go/testing"
+
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 func TestHandleManageGitOpsPreservesProducerNoChange(t *testing.T) {
@@ -68,16 +70,29 @@ func TestManageGitOpsReportsExplicitPermissionDenied(t *testing.T) {
 
 func TestManageGitOpsReportsAdmissionDenied(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
-	dyn := setupMCPDynamicResource(t, gvr, "ApplicationList", k8s.APIResource{Group: gvr.Group, Version: gvr.Version, Kind: "Application", Name: gvr.Resource, Namespaced: true})
-	dyn.(*dynamicfake.FakeDynamicClient).PrependReactor("patch", "applications", func(ktesting.Action) (bool, runtime.Object, error) {
-		return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "demo", errors.New(`admission webhook "validation.gatekeeper.sh" denied the request: missing owner`))
-	})
-	result, _, err := handleManageGitOps(context.Background(), nil, manageGitOpsInput{Action: "refresh", Tool: "argocd", Namespace: "argocd", Name: "demo"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	decoded := decodeToolResult(t, result)
-	if !result.IsError || decoded["error_code"] != "admission_denied" || !strings.HasPrefix(decoded["error"].(string), "Rejected by an admission policy:") {
-		t.Fatalf("result=%v", decoded)
+	policy := apierrors.NewForbidden(gvr.GroupResource(), "demo", errors.New(`ValidatingAdmissionPolicy 'freeze' with binding 'freeze' denied request: Application demo is change-frozen`))
+	policy.ErrStatus.Reason, policy.ErrStatus.Code = metav1.StatusReasonInvalid, 422
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"webhook", apierrors.NewForbidden(gvr.GroupResource(), "demo", errors.New(`admission webhook "validation.gatekeeper.sh" denied the request: missing owner`)), "Rejected by admission webhook validation.gatekeeper.sh: missing owner"},
+		{"validating admission policy", policy, "Rejected by ValidatingAdmissionPolicy freeze: Application demo is change-frozen"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dyn := setupMCPDynamicResource(t, gvr, "ApplicationList", k8s.APIResource{Group: gvr.Group, Version: gvr.Version, Kind: "Application", Name: gvr.Resource, Namespaced: true})
+			dyn.(*dynamicfake.FakeDynamicClient).PrependReactor("patch", "applications", func(ktesting.Action) (bool, runtime.Object, error) {
+				return true, nil, tc.err
+			})
+			result, _, err := handleManageGitOps(context.Background(), nil, manageGitOpsInput{Action: "refresh", Tool: "argocd", Namespace: "argocd", Name: "demo"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded := decodeToolResult(t, result)
+			if !result.IsError || decoded["error_code"] != "admission_denied" || decoded["error"] != tc.want {
+				t.Fatalf("result=%v", decoded)
+			}
+		})
 	}
 }

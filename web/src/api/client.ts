@@ -69,7 +69,7 @@ import {
   type RadarFeature,
 } from './radarFeatures'
 import { useRadarUpgradeHost } from '../context/RadarUpgradeHost'
-import { isGitOpsActionTarget, GitOpsActionError, gitOpsDisabledReasons, type GitOpsActionCapabilities } from './gitOpsPermissions'
+import { isGitOpsActionTarget, GitOpsActionError, gitOpsActionPermissions, gitOpsDisabledReasons, type GitOpsActionCapabilities } from './gitOpsPermissions'
 import { apiVersionToGroup } from '../utils/navigation'
 import type { DeploymentMode } from '../types'
 
@@ -6325,7 +6325,7 @@ export function useGitOpsActionCapabilities(kind: string, group: string | undefi
       const next = await fetchJSON<GitOpsActionCapabilities>(`/gitops/capabilities/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`);
       const previous = queryClient.getQueryData<GitOpsActionCapabilities>(queryKey);
       for (const [action, capability] of Object.entries(next.actions)) {
-        if (capability.allowed === undefined && previous?.actions[action]?.allowed !== undefined) {
+        if (capability.allowed === undefined && !capability.unsupported && previous?.actions[action]?.allowed !== undefined) {
           next.actions[action] = previous.actions[action];
         }
       }
@@ -6335,9 +6335,11 @@ export function useGitOpsActionCapabilities(kind: string, group: string | undefi
     staleTime: 15_000,
     refetchInterval: active ? 30_000 : false,
   });
+  const featureUnsupported = isRadarFeatureUnsupported(query.error, 'gitOpsActionCapabilities');
   return {
     ...query,
-    disabledReasons: active ? gitOpsDisabledReasons(support, query.data, query.error, isRadarFeatureUnsupported(query.error, 'gitOpsActionCapabilities')) : {},
+    permissions: active ? gitOpsActionPermissions(support, query.data, featureUnsupported) : undefined,
+    disabledReasons: active ? gitOpsDisabledReasons(support, query.data, featureUnsupported) : {},
   };
 }
 

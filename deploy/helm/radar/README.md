@@ -170,6 +170,9 @@ Alert). It is **off by default**, requires `cloud.enabled`, `rbac.create`,
 `cloud.defaultRbac.create`, and the owner tier, and adds no grants to members
 or viewers. It does not grant ApplicationSets, `update`, or status subresources.
 These are caller permissions, separate from Radar's collector ServiceAccount.
+Stock Flux aggregates its `flux-edit` ClusterRole into the built-in `edit` and
+`admin` ClusterRoles, so on a default Flux install owners can already patch Flux
+objects and only the Argo CD half of this grant changes anything.
 
 **Patching Applications lets the holder redirect what Argo deploys using the
 controller's authority, often cluster-admin, bounded by AppProject

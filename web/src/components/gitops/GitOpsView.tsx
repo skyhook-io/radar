@@ -447,7 +447,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const [helmValuesOpen, setHelmValuesOpen] = useState(false)
 
   const { data: capabilities } = useCapabilities()
-  const { data: actionPermissions, disabledReasons: actionDisabledReasons } = useGitOpsActionCapabilities(kind, group, namespace, name)
+  const { permissions: actionPermissions, disabledReasons: actionDisabledReasons } = useGitOpsActionCapabilities(kind, group, namespace, name)
   const argoSync = useArgoSync()
   const argoResourceValidation = useArgoResourceValidation()
   const argoRefresh = useArgoRefresh()
@@ -762,7 +762,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       isFlux={isFlux}
       isFluxWorkload={isFluxWorkload}
       actionDisabledReasons={actionDisabledReasons}
-      actionPermissions={actionPermissions?.actions}
+      actionPermissions={actionPermissions}
       isCloudDeployment={capabilities?.deployment?.mode === 'cloud'}
       argo={argoHandlers}
       flux={fluxHandlers}
