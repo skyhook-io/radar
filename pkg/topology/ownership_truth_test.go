@@ -215,3 +215,42 @@ func TestStorageBindingsAreNotOwnership(t *testing.T) {
 		t.Errorf("class relationships = %+v, want its volumes under Used By, not children", class)
 	}
 }
+
+func TestWatchedAnalysisRunKeepsItsRolloutOwnership(t *testing.T) {
+	rolloutGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	runGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "analysisruns"}
+	rollout := genericIdentityObject(rolloutGVR, "Rollout", "team", "web")
+	rollout.SetUID("rollout")
+	rollout.Object["spec"] = map[string]any{"strategy": map[string]any{"canary": map[string]any{}}}
+	rollout.Object["status"] = map[string]any{"canary": map[string]any{"currentStepAnalysisRunStatus": map[string]any{"name": "web-run", "status": "Running"}}}
+	run := genericIdentityObject(runGVR, "AnalysisRun", "team", "web-run", ownerRef("argoproj.io/v1alpha1", "Rollout", "web", "rollout", true))
+	run.SetUID("run")
+
+	for _, watched := range []bool{true, false} {
+		gvrs := []schema.GroupVersionResource{rolloutGVR}
+		if watched {
+			gvrs = append(gvrs, runGVR)
+		}
+		dynamic := &genericIdentityDynamic{
+			watched:   gvrs,
+			kinds:     map[schema.GroupVersionResource]string{rolloutGVR: "Rollout", runGVR: "AnalysisRun"},
+			resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{rolloutGVR: {rollout}, runGVR: {run}},
+			listCalls: map[schema.GroupVersionResource]int{},
+		}
+		opts := DefaultBuildOptions()
+		opts.ForRelationshipCache = true
+		topo, err := NewBuilder(&mockProvider{}).WithDynamic(dynamic).Build(opts)
+		if err != nil {
+			t.Fatalf("Build: %v", err)
+		}
+		rel := GetRelationshipsWithObject("Rollout", "team", "web", nil, topo, nil, nil, IndexByResource(topo))
+		children, manages := refNames(rel.Children), refNames(rel.Manages)
+		if watched && (fmt.Sprint(children) != "[AnalysisRun/web-run]" || len(manages) != 0) {
+			t.Errorf("watched run: children %v, manages %v; want the owned run as a child", children, manages)
+		}
+		// Without a watch Radar can't see the run's owner reference.
+		if !watched && (len(children) != 0 || fmt.Sprint(manages) != "[AnalysisRun/web-run]") {
+			t.Errorf("unwatched run: children %v, manages %v", children, manages)
+		}
+	}
+}

@@ -457,7 +457,17 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		rolloutGVR, hasRollouts = resourceDiscovery.GetGVRWithGroup("Rollout", "argoproj.io")
 	}
+	var analysisRunGVR schema.GroupVersionResource
+	analysisRunsWatched := false
 	if hasRollouts && dynamicCache != nil {
+		if gvr, ok := resourceDiscovery.GetGVRWithGroup("AnalysisRun", "argoproj.io"); ok {
+			for _, watched := range dynamicCache.GetWatchedResources() {
+				if watched == gvr {
+					analysisRunGVR, analysisRunsWatched = gvr, true
+					break
+				}
+			}
+		}
 		rollouts, err := dynamicCache.ListNamespaces(rolloutGVR, opts.Namespaces)
 		if err != nil {
 			log.Printf("WARNING [topology] Failed to list Rollouts: %v", err)
@@ -595,7 +605,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			for _, run := range activeAnalysisRuns(status) {
 				runID := fmt.Sprintf("analysisrun/%s/%s", ns, run.name)
-				nodes = append(nodes, Node{
+				runNode := Node{
 					ID:     runID,
 					Kind:   "AnalysisRun",
 					Name:   run.name,
@@ -607,7 +617,16 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 						"message":    run.message,
 						"apiVersion": rollout.GetAPIVersion(),
 					},
-				})
+				}
+				// The run's own owner reference is what makes the Rollout its
+				// owner. Read it only from an existing watch: AnalysisRuns
+				// accumulate, and a topology build must not start one.
+				if analysisRunsWatched {
+					if obj, err := dynamicCache.Get(analysisRunGVR, ns, run.name); err == nil && obj != nil {
+						runNode.uid, runNode.ownerReferences, runNode.observed = obj.GetUID(), obj.GetOwnerReferences(), true
+					}
+				}
+				nodes = append(nodes, runNode)
 				edges = append(edges, Edge{
 					ID:     fmt.Sprintf("%s-to-%s", rolloutID, runID),
 					Source: rolloutID,
