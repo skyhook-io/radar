@@ -199,7 +199,11 @@ func TestResourceReadsPermissionAndScopeFailures(t *testing.T) {
 			} else {
 				_, _, err = handleGetResource(ctx, nil, getResourceInput{Kind: kind, Namespace: ns, Name: "hidden"})
 			}
-			if err == nil || !strings.Contains(err.Error(), "forbidden") || !strings.Contains(err.Error(), ns) || (kind == "secrets" && !strings.Contains(err.Error(), verb)) {
+			want := "no_namespace_access:"
+			if kind == "secrets" {
+				want = "forbidden:"
+			}
+			if err == nil || !strings.HasPrefix(err.Error(), want) || !strings.Contains(err.Error(), ns) || (kind == "secrets" && !strings.Contains(err.Error(), verb)) {
 				t.Fatalf("%s/%s: expected namespace caller denial, got %v", kind, verb, err)
 			}
 		}
@@ -582,7 +586,7 @@ func TestResourceReadsCollectorReasons(t *testing.T) {
 		_, _, err = handleGetResource(context.Background(), nil, getResourceInput{Kind: kind, Name: "x"})
 		want := "namespace_required:"
 		if kind == "widgets" {
-			want = "unknown_kind:"
+			want = "kind_sync_pending:"
 		}
 		if err == nil || !strings.HasPrefix(err.Error(), want) {
 			t.Fatalf("%s: %v", kind, err)
@@ -595,7 +599,7 @@ func TestResourceReadsNamespaceDenialAttribution(t *testing.T) {
 	ctx := withRestrictedUser(t, "attribution-reader", []string{"alpha"})
 	for _, kind := range []string{"pods", "widgets"} {
 		_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: kind, Namespace: "beta"})
-		for _, text := range []string{"no Radar access", "beta", "list pods or deployments", "~2 minutes"} {
+		for _, text := range []string{"no_namespace_access:", "no Radar access", "beta", "list pods or deployments", "~2 minutes"} {
 			if err == nil || !strings.Contains(err.Error(), text) {
 				t.Fatalf("missing %s: %v", text, err)
 			}
@@ -630,20 +634,21 @@ func TestResourceReadsDynamicCollectorIntersection(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestDynamicState)
-	for _, allowed := range [][]string{nil, {"alpha", "beta"}, {"beta"}} {
+	for _, allowed := range [][]string{nil, {"alpha"}} {
 		ctx := withRestrictedUser(t, "dynamic-scoped-reader", allowed)
 		result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "widgets", Context: "none"})
 		if err != nil {
 			t.Fatal(err)
 		}
 		body := extractText(t, result)
-		if len(allowed) == 1 {
-			if body != "[]" {
-				t.Fatalf("empty intersection: %s", body)
-			}
-		} else if !containsName(body, "alpha-widget") {
+		if !containsName(body, "alpha-widget") {
 			t.Fatalf("missing covered widget: %s", body)
 		}
+	}
+	ctx := withRestrictedUser(t, "uncovered-reader", []string{"beta"})
+	_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "widgets", Context: "none"})
+	if err == nil || !strings.HasPrefix(err.Error(), "kind_not_watched:") {
+		t.Fatalf("caller namespace denied by collector must not return empty success: %v", err)
 	}
 	for _, verb := range []string{"list", "get"} {
 		var err error
@@ -728,5 +733,176 @@ func TestResourceReadsColdDynamicUnderNamespacePin(t *testing.T) {
 	}
 	if !containsName(extractText(t, result), "alpha-widget") {
 		t.Fatalf("cold pinned list lost widget: %s", extractText(t, result))
+	}
+}
+
+func TestResourceReadsRestrictedDirectLists(t *testing.T) {
+	for _, b := range []resourceid.Builtin{
+		{Kind: "Lease", Resource: "leases", Group: "coordination.k8s.io", Version: "v1"},
+		{Kind: "EndpointSlice", Resource: "endpointslices", Group: "discovery.k8s.io", Version: "v1"},
+		{Kind: "Endpoints", Resource: "endpoints", Version: "v1"},
+	} {
+		t.Run(b.Kind, func(t *testing.T) {
+			if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestState)
+			gvr := schema.GroupVersionResource{Group: b.Group, Version: b.Version, Resource: b.Resource}
+			obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": gvr.GroupVersion().String(), "kind": b.Kind, "metadata": map[string]any{"name": "present", "namespace": "alpha"}}}
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: b.Kind + "List"}, obj)
+			dyn.PrependReactor("list", b.Resource, func(action ktesting.Action) (bool, runtime.Object, error) {
+				if action.GetNamespace() != "alpha" {
+					return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", fmt.Errorf("collector denied"))
+				}
+				return false, nil, nil
+			})
+			if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: b.Group, Version: b.Version, Name: b.Resource, Kind: b.Kind, Namespaced: true, Verbs: []string{"list", "watch", "get"}}}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestDynamicState)
+			ctx := withRestrictedUser(t, "direct-reader", []string{"alpha"})
+			result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: b.Resource, Context: "none"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !containsName(extractText(t, result), "present") {
+				t.Fatal("direct read lost object")
+			}
+			if len(k8s.GetDynamicResourceCache().GetWatchedResources()) != 0 {
+				t.Fatal("direct reads must not start informers")
+			}
+			for _, action := range dyn.Actions() {
+				if action.GetNamespace() != "alpha" {
+					t.Fatalf("unexpected collector request: %+v", action)
+				}
+			}
+		})
+	}
+}
+
+func TestResourceReadsDynamicCallerNamespaceOutsideCandidates(t *testing.T) {
+	for _, prewarm := range []bool{false, true} {
+		t.Run(fmt.Sprintf("prewarm=%v", prewarm), func(t *testing.T) {
+			if err := k8s.InitTestResourceCache(fake.NewClientset()); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestState)
+			t.Cleanup(k8s.SetTestPermissionResult(&k8s.PermissionCheckResult{Perms: &k8s.ResourcePermissions{}, NamespaceScoped: true, Namespace: "alpha", ScopeCandidates: []string{"alpha"}}))
+			gvr := schema.GroupVersionResource{Group: "example.test", Version: "v1", Resource: "widgets"}
+			obj := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "example.test/v1", "kind": "Widget", "metadata": map[string]any{"name": "beta-widget", "namespace": "beta"}}}
+			dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}, obj)
+			dyn.PrependReactor("list", "widgets", func(action ktesting.Action) (bool, runtime.Object, error) {
+				if action.GetNamespace() == "" || (!prewarm && action.GetNamespace() == "alpha") {
+					return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", fmt.Errorf("collector denied"))
+				}
+				return false, nil, nil
+			})
+			if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "Widget", Namespaced: true, Verbs: []string{"list", "watch", "get"}}}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestDynamicState)
+			if prewarm {
+				if err := k8s.GetDynamicResourceCache().EnsureWatching(gvr); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx := withRestrictedUser(t, "outside-reader", []string{"beta"})
+			result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "widgets", Context: "none"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !containsName(extractText(t, result), "beta-widget") || !k8s.GetDynamicResourceCache().IsNamespaceSynced(gvr, "beta") {
+				t.Fatal("caller namespace was not read and synchronized")
+			}
+		})
+	}
+}
+
+func TestResourceReadsNamespaceCollectorUnauthorized(t *testing.T) {
+	if err := k8s.InitScopedTestResourceCache(fake.NewClientset(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "present", Namespace: "beta"}}), map[string]k8score.ResourceScope{"pods": {Enabled: true, Namespace: "beta"}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	t.Cleanup(k8s.SetTestPermissionResult(&k8s.PermissionCheckResult{Perms: &k8s.ResourcePermissions{Pods: true}, Scopes: map[string]k8score.ResourceScope{"pods": {Enabled: true, Namespace: "beta"}}, NamespaceProbeErrors: map[string]map[string]error{"pods": {"alpha": apierrors.NewUnauthorized("alpha rejected token")}}}))
+	ctx := withRestrictedUser(t, "credential-reader", []string{"alpha", "beta"})
+	for _, verb := range []string{"list", "get"} {
+		var err error
+		if verb == "list" {
+			_, _, err = handleListResources(ctx, nil, listResourcesInput{Kind: "pods", Namespace: "alpha"})
+		} else {
+			_, _, err = handleGetResource(ctx, nil, getResourceInput{Kind: "pods", Namespace: "alpha", Name: "present"})
+		}
+		if err == nil || !strings.HasPrefix(err.Error(), "collector_unauthorized:") || !strings.Contains(err.Error(), "alpha rejected token") {
+			t.Fatalf("%s: namespace credential rejection lost: %v", verb, err)
+		}
+	}
+	result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "pods", Namespace: "beta", Context: "none"})
+	if err != nil || !containsName(extractText(t, result), "present") {
+		t.Fatalf("healthy namespace incorrectly denied: %v", err)
+	}
+}
+
+func TestResourceReadErrorDetails(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+	for _, local := range []bool{false, true} {
+		restore := k8s.SetTestLocalMode()
+		previousInCluster := k8s.ForceInCluster
+		k8s.ForceInCluster = !local
+		err := collectorUnauthorizedError("widgets", apierrors.NewUnauthorized("rejected"))
+		want := "service-account credentials"
+		if local {
+			want = "kubeconfig credentials"
+		}
+		if !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "widgets") {
+			t.Fatal(err)
+		}
+		k8s.ForceInCluster = previousInCluster
+		restore()
+	}
+	for _, verb := range []string{"list", "get"} {
+		_, err := checkDynamicResourceRead("widgets", "example.test", "alpha", verb, fmt.Errorf("transport unavailable"))
+		if err == nil || !strings.HasPrefix(err.Error(), verb+"_error:") || !strings.Contains(err.Error(), "widgets") {
+			t.Fatalf("%s: %v", verb, err)
+		}
+	}
+	err := resourceGetError(context.Background(), fmt.Errorf("store unavailable"), "pods", "alpha", "present")
+	if !strings.HasPrefix(err.Error(), "get_error:") || !strings.Contains(err.Error(), "pods") {
+		t.Fatal(err)
+	}
+	namespaces := make([]string, 15)
+	for i := range namespaces {
+		namespaces[i] = fmt.Sprintf("ns-%02d", i)
+	}
+	ctx := withRestrictedUser(t, "secret-denial-reader", namespaces)
+	seedSecretListCanI(t, "secret-denial-reader", nil, namespaces)
+	_, _, err = handleListResources(ctx, nil, listResourcesInput{Kind: "secrets"})
+	if err == nil || !strings.Contains(err.Error(), "ns-09") || !strings.Contains(err.Error(), "(+5 more)") || strings.Contains(err.Error(), "ns-10") {
+		t.Fatalf("Secret namespace denial must be bounded: %v", err)
+	}
+}
+
+func TestResourceReadsNoNamespaceKindResolution(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+	gvr := schema.GroupVersionResource{Group: "example.test", Version: "v1", Resource: "widgets"}
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"}), []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "Widget", Namespaced: true, Verbs: []string{"list", "watch", "get"}}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	for _, tc := range []struct{ kind, group, want string }{
+		{"deployments", "apps", "namespace_required:"},
+		{"widgets", "example.test", "namespace_required:"},
+		{"widgets", "", "namespace_required:"},
+		{"unknown", "", "unknown_kind:"},
+		{"deployments", "wrong.group", "unknown_kind:"},
+	} {
+		_, _, err := handleGetResource(context.Background(), nil, getResourceInput{Kind: tc.kind, Group: tc.group, Name: "present"})
+		if err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+			t.Fatalf("%s/%s: %v", tc.kind, tc.group, err)
+		}
+	}
+	k8s.ResetTestDynamicState()
+	_, _, err := handleGetResource(context.Background(), nil, getResourceInput{Kind: "widgets", Name: "present"})
+	if err == nil || !strings.HasPrefix(err.Error(), "kind_sync_pending:") {
+		t.Fatalf("uninitialized discovery: %v", err)
 	}
 }

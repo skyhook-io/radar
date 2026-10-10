@@ -913,7 +913,7 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 		return listDynamicResources(ctx, cache, kind, group, listScope, clusterScoped, input.Namespace != "", input.Context)
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to list %s: %w", kind, err)
+		return nil, nil, fmt.Errorf("list_error: failed to list %s: %w", kind, err)
 	}
 
 	if allowed != nil && !clusterScoped {
@@ -950,7 +950,7 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, group string, namespaces []string, clusterScoped, explicitNamespace bool, contextMode string) (*mcp.CallToolResult, any, error) {
 	discovery := k8s.GetResourceDiscovery()
 	dynamicCache := k8s.GetDynamicResourceCache()
-	if !clusterScoped && discovery != nil && dynamicCache != nil {
+	if !clusterScoped && namespaces == nil && discovery != nil && dynamicCache != nil {
 		var gvr schema.GroupVersionResource
 		var found bool
 		if group != "" {
@@ -958,9 +958,9 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 		} else {
 			gvr, found = discovery.GetGVR(kind)
 		}
-		if found {
+		if found && !k8s.ShouldBypassDynamicInformer(gvr) {
 			if !explicitNamespace && !k8s.ForceNamespaceScope {
-				_, err := cache.ListDynamicWithGroup(ctx, kind, "", group)
+				err := dynamicCache.EnsureWatching(gvr)
 				if err != nil {
 					_, err = checkDynamicResourceRead(kind, group, "", "list", err)
 					return nil, nil, err
@@ -1048,14 +1048,17 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 			builtin = builtin && (group == "" || group == builtinGVR.Group)
 			discovery := k8s.GetResourceDiscovery()
 			known := builtin
-			if discovery != nil {
+			if !builtin && discovery != nil {
 				if group != "" {
 					_, known = discovery.GetGVRWithGroup(kind, group)
-				} else if !builtin {
+				} else {
 					_, known = discovery.GetGVR(kind)
 				}
 			}
 			if !known {
+				if discovery == nil {
+					return nil, nil, fmt.Errorf("kind_sync_pending: %s: resource discovery is still loading, please retry shortly", kind)
+				}
 				return nil, nil, fmt.Errorf("unknown_kind: %s", kind)
 			}
 			return nil, nil, fmt.Errorf("namespace_required: specify a namespace for %s", kind)
@@ -1089,7 +1092,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
 		u, dynErr := fetchMCPDynamicResource(ctx, cache, kind, group, namespace, name)
 		if dynErr != nil {
-			return nil, nil, resourceGetError(ctx, dynErr, kind, namespace, name)
+			return nil, nil, dynErr
 		}
 		resourceData = aicontext.MinifyUnstructured(u, aicontext.LevelDetail)
 		rawObj = u
@@ -1098,7 +1101,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		if err == k8s.ErrUnknownKind {
 			u, dynErr := fetchMCPDynamicResource(ctx, cache, kind, group, namespace, name)
 			if dynErr != nil {
-				return nil, nil, resourceGetError(ctx, dynErr, kind, namespace, name)
+				return nil, nil, dynErr
 			}
 			resourceData = aicontext.MinifyUnstructured(u, aicontext.LevelDetail)
 			rawObj = u

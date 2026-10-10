@@ -237,7 +237,7 @@ func TestHandleListResources_DeniedNamespace(t *testing.T) {
 
 	// A denied scope must be distinguishable from an empty namespace.
 	_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "pods", Namespace: "beta"})
-	if err == nil || !strings.Contains(err.Error(), "forbidden") {
+	if err == nil || !strings.Contains(err.Error(), "no_namespace_access:") {
 		t.Fatalf("expected explicit caller denial, got %v", err)
 	}
 }
@@ -347,10 +347,10 @@ func TestHandleGetResource_DeniedNamespace(t *testing.T) {
 
 	_, _, err := handleGetResource(ctx, nil, getResourceInput{Kind: "pods", Namespace: "beta", Name: "beta-pod"})
 	if err == nil {
-		t.Fatal("expected forbidden error for denied namespace, got nil")
+		t.Fatal("expected no_namespace_access error for denied namespace, got nil")
 	}
-	if !strings.Contains(err.Error(), "forbidden") {
-		t.Errorf("expected 'forbidden' in error, got: %v", err)
+	if !strings.Contains(err.Error(), "no_namespace_access") {
+		t.Errorf("expected 'no_namespace_access' in error, got: %v", err)
 	}
 }
 

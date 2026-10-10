@@ -46,7 +46,7 @@ func resourceReadNamespaces(ctx context.Context, requested []string) ([]string, 
 		} else if len(clamped) > 0 {
 			scope = fmt.Sprintf("namespaces %q", clamped)
 		}
-		return nil, fmt.Errorf("forbidden: no Radar access to %s (Radar grants namespace access when your role can list pods or deployments there; re-checked every ~2 minutes)", scope)
+		return nil, fmt.Errorf("no_namespace_access: no Radar access to %s (Radar grants namespace access when your role can list pods or deployments there; re-checked every ~2 minutes)", scope)
 	}
 	return allowed, nil
 }
@@ -54,6 +54,9 @@ func resourceReadNamespaces(ctx context.Context, requested []string) ([]string, 
 func namespaceForError(namespaces []string) string {
 	if len(namespaces) == 1 {
 		return namespaces[0]
+	}
+	if len(namespaces) > 10 {
+		return fmt.Sprintf("%s (+%d more)", strings.Join(namespaces[:10], ","), len(namespaces)-10)
 	}
 	return strings.Join(namespaces, ",")
 }
@@ -73,16 +76,24 @@ func resourceReadCache(kind, group string, namespaces []string) (*k8s.ResourceCa
 	if cache == nil {
 		return nil, errNotConnected()
 	}
+	result := k8s.GetCachedPermissionResult()
+	for _, ns := range namespaces {
+		if result != nil {
+			if probeErr := result.NamespaceProbeErrors[gvr.Resource][ns]; apierrors.IsUnauthorized(probeErr) {
+				return nil, collectorUnauthorizedError(gvr.Resource, probeErr)
+			}
+		}
+	}
 	switch readiness {
 	case k8s.KindPending:
 		return nil, fmt.Errorf("kind_sync_pending: %s are still loading, please retry shortly", gvr.Resource)
 	case k8s.KindFailed:
 		return nil, fmt.Errorf("kind_sync_failed: %s failed to load within the sync deadline; check Radar's collector connection and list/watch permissions", gvr.Resource)
 	case k8s.KindUnavailable:
-		if result := k8s.GetCachedPermissionResult(); result != nil {
+		if result != nil {
 			if scope, probed := result.Scopes[gvr.Resource]; probed && !scope.Enabled {
 				if apierrors.IsUnauthorized(result.ProbeErrors[gvr.Resource]) {
-					return nil, fmt.Errorf("collector_unauthorized: Radar's credentials were rejected; the kubeconfig token may have expired: %w", result.ProbeErrors[gvr.Resource])
+					return nil, collectorUnauthorizedError(gvr.Resource, result.ProbeErrors[gvr.Resource])
 				}
 				return nil, fmt.Errorf("collector_forbidden: Radar's service account / kubeconfig identity can't list/watch %s in API group %q", gvr.Resource, gvr.Group)
 			}
@@ -126,16 +137,14 @@ func checkDynamicResourceRead(kind, group, namespace, verb string, readErr error
 		gvr, ok = k8s.BuiltinGVRAnyGroup(kind)
 		ok = ok && (group == "" || group == gvr.Group)
 	}
-	direct := ok && ((gvr.Group == "" && gvr.Resource == "endpoints") ||
-		(gvr.Group == "discovery.k8s.io" && gvr.Resource == "endpointslices") ||
-		(gvr.Group == "coordination.k8s.io" && gvr.Resource == "leases") ||
+	direct := ok && (k8s.ShouldBypassDynamicInformer(gvr) ||
 		(verb == "get" && ((gvr.Group == "apiextensions.k8s.io" && gvr.Resource == "customresourcedefinitions") ||
 			(gvr.Group == "apiregistration.k8s.io" && gvr.Resource == "apiservices"))))
 	if apierrors.IsUnauthorized(readErr) {
-		return false, fmt.Errorf("collector_unauthorized: Radar's credentials were rejected; the kubeconfig token may have expired: %w", readErr)
+		return false, collectorUnauthorizedError(kind, readErr)
 	}
 	if apierrors.IsForbidden(readErr) {
-		if ok && dynamicCache != nil && namespace != "" {
+		if ok && dynamicCache != nil && !direct && namespace != "" {
 			observation := dynamicCache.Observation(gvr)
 			if observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && !slices.Contains(observation.Namespaces, namespace) {
 				return false, fmt.Errorf("kind_not_watched: Radar does not watch %s in namespace %q; covered namespaces: %q: %w", kind, namespace, observation.Namespaces, readErr)
@@ -155,6 +164,9 @@ func checkDynamicResourceRead(kind, group, namespace, verb string, readErr error
 			kind = gvr.Resource
 		}
 		return false, fmt.Errorf("collector_forbidden: %s can't %s %s in API group %q (namespace %q): %w", collector, action, kind, group, namespace, readErr)
+	}
+	if readErr != nil && !apierrors.IsNotFound(readErr) && !errors.Is(readErr, k8score.ErrResourceNotFound) {
+		return false, fmt.Errorf("%s_error: failed to %s %s: %w", verb, verb, kind, readErr)
 	}
 	if !ok || dynamicCache == nil || direct {
 		return false, readErr
@@ -217,7 +229,7 @@ func resourceGetError(ctx context.Context, err error, kind, namespace, name stri
 	if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
 		return notFoundError(ctx, err, kind, namespace, name)
 	}
-	return err
+	return fmt.Errorf("get_error: failed to get %s %s/%s: %w", kind, namespace, name, err)
 }
 
 func fetchMCPDynamicResource(ctx context.Context, cache *k8s.ResourceCache, kind, group, namespace, name string) (*unstructured.Unstructured, error) {
@@ -228,7 +240,17 @@ func fetchMCPDynamicResource(ctx context.Context, cache *k8s.ResourceCache, kind
 		if err != nil {
 			_, err = checkDynamicResourceRead(kind, group, namespace, "get", err)
 		}
-		return obj, err
+	}
+	if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
+		return obj, resourceGetError(ctx, err, kind, namespace, name)
 	}
 	return obj, err
+}
+
+func collectorUnauthorizedError(kind string, err error) error {
+	credentials := "kubeconfig credentials"
+	if k8s.IsInCluster() {
+		credentials = "service-account credentials"
+	}
+	return fmt.Errorf("collector_unauthorized: Radar's %s were rejected while reading %s; refresh them and retry: %w", credentials, kind, err)
 }
