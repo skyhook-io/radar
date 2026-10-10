@@ -1,5 +1,8 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { renderToString } from "react-dom/server";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
@@ -1379,9 +1382,57 @@ describe("Capacity scale-down observations", () => {
     expect(html).toContain("Status since");
     expect(html).toContain("(for 6m)");
     expect(html).not.toContain("As of");
-    expect(html).not.toContain("PodDisruptionBudgets");
+    expect(html).toContain("PodDisruptionBudgets");
     expect(html).not.toContain("ETA");
   });
+
+  it("keeps scale-down probe freshness separate from health in both tables", () => {
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(Date.parse(generatedAt) + 6 * 60 * 1000);
+    try {
+      const html = renderScaleDown({
+        ...gkeChild,
+        scaleDown: {
+          status: "InProgress",
+          asOf: "2026-07-13T07:06:00Z",
+        },
+      });
+      expect(html.match(/Health observed<\/th>/g)).toHaveLength(2);
+      expect(html.match(/Probe: <span[^>]*>1h ago<\/span>/g)).toHaveLength(2);
+      expect(html.match(/>6m ago<\/span><\/td>/g)).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("shows an absent scale-down probe independently of published health", () => {
+    const html = renderScaleDown({
+      ...gkeChild,
+      scaleDown: { status: "InProgress" },
+    });
+    expect(html.match(/Probe: <span[^>]*>not probed<\/span>/g)).toHaveLength(2);
+  });
+
+  it.each([
+    "InProgress",
+    "CandidatesPresent",
+    "NoCandidates",
+    "NewControllerStatus",
+  ])(
+    "makes the %s removal caveat keyboard reachable without a count glyph",
+    (status) => {
+      const html = renderScaleDown({
+        ...gkeChild,
+        scaleDown: { status },
+      });
+      expect(
+        html.match(
+          /tabindex="0" role="note" aria-label="[^"]*PodDisruptionBudgets[^"]*"/g,
+        ),
+      ).toHaveLength(2);
+    },
+  );
 
   it("never invents a zero count from NoCandidates or missing observations", () => {
     const html = renderScaleDown({
@@ -1436,6 +1487,64 @@ describe("Capacity scale-down observations", () => {
     },
   );
 
+  it("opens the removal caveat on status focus and dismisses it on blur", async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+    });
+    client.setQueryData(["capacity", "overview"], {
+      ...comprehensiveOverview(),
+      groups: [],
+      orphanAutoscalerGroups: [
+        {
+          ...gkeChild,
+          scaleDown: { status: "InProgress", candidates: 2 },
+        },
+      ],
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        root.render(
+          <MemoryRouter initialEntries={["/capacity"]}>
+            <QueryClientProvider client={client}>
+              <CapacityView onOpenResource={() => {}} />
+            </QueryClientProvider>
+          </MemoryRouter>,
+        );
+      });
+      const trigger = container.querySelector<HTMLElement>(
+        '[role="note"][aria-label^="Scale-down in progress."]',
+      );
+      expect(trigger).not.toBeNull();
+      expect(trigger!.textContent).toBe("Scale-down in progress");
+      expect(trigger!.querySelector('[tabindex="0"]')).toBeNull();
+      await act(async () => {
+        trigger!.focus();
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      expect(document.activeElement).toBe(trigger);
+      expect(document.querySelector('[role="tooltip"]')?.textContent).toContain(
+        "PodDisruptionBudgets",
+      );
+      await act(async () => {
+        trigger!.blur();
+      });
+      expect(document.querySelector('[role="tooltip"]')).toBeNull();
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      client.clear();
+      container.remove();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("renders the server candidate fact on the collapsed pool", () => {
     const html = renderCapacity("/capacity", (client) =>
       client.setQueryData(["capacity", "overview"], {
@@ -1454,6 +1563,7 @@ describe("Capacity scale-down observations", () => {
       }),
     );
     expect(html).toContain("3 scale-down candidates");
+    expect(html).toMatch(/tabindex="0" role="note" aria-label="3 scale-down candidates\. [^"]*PodDisruptionBudgets/);
     expect(html).toContain('aria-expanded="false"');
   });
 
