@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"testing"
 
@@ -167,5 +168,80 @@ func TestSearchKindRBACDeniedClusterCountsAndCachesNamespaceChecks(t *testing.T)
 		if got, want := checks.Load(), int32(len(search.NamespacedSearchKinds)*(len(namespaces)+1)); got != want {
 			t.Fatalf("SAR calls = %d, want %d (one cluster check plus visible namespaces per sensitive kind, cached on repeat)", got, want)
 		}
+	}
+}
+
+func mcpSearch(t *testing.T, ctx context.Context, input searchInput) search.Result {
+	t.Helper()
+	input.Context, input.Include = "none", "none"
+	result, _, err := handleSearch(ctx, nil, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body search.Result
+	if err := json.Unmarshal([]byte(extractText(t, result)), &body); err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func TestHandleSearchClusterScopedForNamespaceRestrictedCaller(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+	ctx := withRestrictedUser(t, "search-node-reader", []string{"alpha"})
+	grantClusterRead(t, "search-node-reader", "/nodes")
+	for _, input := range []searchInput{
+		{Query: "kind:Node node"},
+		{Query: "node"},
+		{Query: "kind:Node node", Namespace: "alpha"},
+	} {
+		body := mcpSearch(t, ctx, input)
+		nodes := 0
+		for _, hit := range body.Hits {
+			if hit.Kind == "Node" {
+				nodes++
+			}
+		}
+		if nodes != 2 {
+			t.Fatalf("%+v: restricted caller with list nodes got %d nodes: %+v", input, nodes, body)
+		}
+	}
+	body := mcpSearch(t, ctx, searchInput{Query: "node", Namespace: "alpha"})
+	for _, hit := range body.Hits {
+		if hit.Kind == "Node" {
+			t.Fatalf("broad namespace-scoped search returned a Node: %+v", body.Hits)
+		}
+	}
+
+	ctx = withRestrictedUser(t, "search-no-nodes", []string{"alpha"})
+	denyClusterRead(t, "search-no-nodes", "/nodes")
+	body = mcpSearch(t, ctx, searchInput{Query: "kind:Node node"})
+	if len(body.Hits) != 0 || !slices.ContainsFunc(body.Unsearched, func(gap search.UnsearchedKind) bool {
+		return gap.Kind == "Node" && gap.Reason == "rbac_denied"
+	}) {
+		t.Fatalf("caller without list nodes: %+v", body)
+	}
+}
+
+func TestHandleSearchCollapsesExcludedNamespacesAndKeepsKindSpelling(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+	ctx := withRestrictedUser(t, "search-collapse", []string{"alpha"})
+	body := mcpSearch(t, ctx, searchInput{Query: "pod ns:beta ns:gamma"})
+	excluded := 0
+	for _, gap := range body.Unsearched {
+		if gap.Reason == "namespace_excluded" {
+			excluded++
+			if gap.Kind != "*" || !slices.Equal(gap.Namespaces, []string{"beta", "gamma"}) {
+				t.Fatalf("collapsed exclusion: %+v", gap)
+			}
+		}
+	}
+	if excluded != 1 || len(body.Hits) != 0 {
+		t.Fatalf("broad exclusion entries = %d: %+v", excluded, body)
+	}
+	body = mcpSearch(t, ctx, searchInput{Query: "kind:NoSuchKindXyz"})
+	if !slices.ContainsFunc(body.Unsearched, func(gap search.UnsearchedKind) bool {
+		return gap.Kind == "NoSuchKindXyz" && gap.Reason == "not_indexed"
+	}) {
+		t.Fatalf("unknown kind coverage: %+v", body.Unsearched)
 	}
 }

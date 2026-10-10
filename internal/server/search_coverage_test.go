@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -188,5 +191,137 @@ func TestSearchKindRBACDeniedClusterCountsAndCachesNamespaceChecks(t *testing.T)
 		if got, want := checks.Load(), int32(len(search.NamespacedSearchKinds)*(len(namespaces)+1)); got != want {
 			t.Fatalf("SAR calls = %d, want %d (one cluster check plus visible namespaces per sensitive kind, cached on repeat)", got, want)
 		}
+	}
+}
+
+func searchAs(t *testing.T, env *authTestEnv, user, query string) search.Result {
+	t.Helper()
+	resp := env.authGet(t, "/api/search?context=none&include=none&"+query, user, "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%s: status %d", query, resp.StatusCode)
+	}
+	var result search.Result
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func hitKeys(result search.Result) []string {
+	var keys []string
+	for _, hit := range result.Hits {
+		keys = append(keys, hit.Kind+"/"+hit.Namespace+"/"+hit.Name)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func namespaceGaps(result search.Result) []search.UnsearchedKind {
+	var gaps []search.UnsearchedKind
+	for _, gap := range result.Unsearched {
+		if strings.HasPrefix(gap.Reason, "namespace_") {
+			gaps = append(gaps, gap)
+		}
+	}
+	return gaps
+}
+
+func TestSearchClusterScopedHitsForNamespaceRestrictedCaller(t *testing.T) {
+	useTestResourceCache(t, fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-b"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "robusta-pod", Namespace: "default"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "robusta-hidden", Namespace: "team-b"}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "robusta-cr"}},
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "robusta-control-plane"}},
+	))
+	env := newAuthTestServer(t)
+	grant := func(perms *auth.UserPermissions, allowed bool) *auth.UserPermissions {
+		perms.SetCanI("list", "rbac.authorization.k8s.io", "clusterroles", "", allowed)
+		perms.SetCanI("list", "", "nodes", "", allowed)
+		return perms
+	}
+	env.srv.permCache.Set("search-carol", nil, grant(&auth.UserPermissions{AllowedNamespaces: []string{"default"}}, true))
+	env.srv.permCache.Set("search-dave", nil, grant(&auth.UserPermissions{AllowedNamespaces: []string{"default"}}, false))
+
+	for _, tc := range []struct{ query, want string }{
+		{"q=kind:ClusterRole+robusta", "ClusterRole//robusta-cr"},
+		{"q=kind:Node+control-plane", "Node//robusta-control-plane"},
+		{"q=kind:ClusterRole+ns:team-b+robusta", "ClusterRole//robusta-cr"},
+	} {
+		result := searchAs(t, env, "search-carol", tc.query)
+		if got := hitKeys(result); !slices.Equal(got, []string{tc.want}) {
+			t.Fatalf("%s: hits %v, want [%s]; coverage %+v", tc.query, got, tc.want, result.Unsearched)
+		}
+	}
+	result := searchAs(t, env, "search-carol", "q=robusta")
+	if got, want := hitKeys(result), []string{"ClusterRole//robusta-cr", "Node//robusta-control-plane", "Pod/default/robusta-pod"}; !slices.Equal(got, want) {
+		t.Fatalf("broad hits %v, want %v", got, want)
+	}
+	if gaps := namespaceGaps(result); len(gaps) != 0 {
+		t.Fatalf("RBAC namespace ceiling reported as a gap: %+v", gaps)
+	}
+	result = searchAs(t, env, "search-carol", "q=ns:default+robusta")
+	if got, want := hitKeys(result), []string{"Pod/default/robusta-pod"}; !slices.Equal(got, want) {
+		t.Fatalf("broad ns: query hits %v, want %v", got, want)
+	}
+
+	for _, query := range []string{"q=kind:ClusterRole+robusta", "q=kind:Node+control-plane"} {
+		result := searchAs(t, env, "search-dave", query)
+		denied := false
+		for _, gap := range result.Unsearched {
+			denied = denied || gap.Reason == "rbac_denied"
+		}
+		if len(result.Hits) != 0 || !denied {
+			t.Fatalf("%s without cluster-scoped grant: %+v", query, result)
+		}
+	}
+}
+
+func TestSearchReportsNamespaceSelectionAndCollapsesNamespaceGaps(t *testing.T) {
+	prev := k8s.SetTestContextName("search-ctx")
+	t.Cleanup(func() { k8s.SetTestContextName(prev) })
+	useTestResourceCache(t, fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-b"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "robusta-pod", Namespace: "default"}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "robusta-other", Namespace: "team-b"}},
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "robusta-config", Namespace: "team-b"}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "robusta-cr"}},
+	))
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{}
+	perms.SetCanI("list", "rbac.authorization.k8s.io", "clusterroles", "", true)
+	env.srv.permCache.Set("search-erin", nil, perms)
+	env.srv.setActiveNamespaceForUser(requestWithUser("GET", "/", &auth.User{Username: "search-erin"}), []string{"default"})
+
+	result := searchAs(t, env, "search-erin", "q=robusta")
+	if got, want := hitKeys(result), []string{"ClusterRole//robusta-cr", "Pod/default/robusta-pod"}; !slices.Equal(got, want) {
+		t.Fatalf("picked search hits %v, want %v", got, want)
+	}
+	want := []search.UnsearchedKind{{Kind: "*", Reason: "namespace_scope", Namespaces: []string{"default"}}}
+	if gaps := namespaceGaps(result); !reflect.DeepEqual(gaps, want) || !result.Partial {
+		t.Fatalf("pick coverage %+v, want %+v", gaps, want)
+	}
+
+	result = searchAs(t, env, "search-erin", "q=robusta&globalNs=1")
+	if got := hitKeys(result); len(got) != 4 {
+		t.Fatalf("global search hits %v", got)
+	}
+	if gaps := namespaceGaps(result); len(gaps) != 0 {
+		t.Fatalf("global search reported selection: %+v", gaps)
+	}
+
+	result = searchAs(t, env, "search-erin", "q=ns:team-b+ns:missing+robusta")
+	want = []search.UnsearchedKind{{Kind: "*", Reason: "namespace_excluded", Namespaces: []string{"missing", "team-b"}}}
+	if gaps := namespaceGaps(result); !reflect.DeepEqual(gaps, want) || len(result.Hits) != 0 {
+		t.Fatalf("picked ns: exclusion %+v hits %v, want %+v", gaps, hitKeys(result), want)
+	}
+
+	result = searchAs(t, env, "search-erin", "q=kind:Pod+robusta")
+	want = []search.UnsearchedKind{{Kind: "Pod", Reason: "namespace_scope", Namespaces: []string{"default"}}}
+	if gaps := namespaceGaps(result); !reflect.DeepEqual(gaps, want) {
+		t.Fatalf("explicit kind pick coverage %+v, want %+v", gaps, want)
 	}
 }

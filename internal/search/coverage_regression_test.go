@@ -113,7 +113,7 @@ func TestBroadCoverageCollapsesColdAndOmitsUnsupportedBeforeSAR(t *testing.T) {
 		}
 		return true, true
 	}})
-	if !res.Partial || len(res.Unsearched) != 1 || res.Unsearched[0] != (UnsearchedKind{Kind: "*", Group: "", Reason: "cold"}) || len(p.warmed) != 0 {
+	if !res.Partial || len(res.Unsearched) != 1 || !reflect.DeepEqual(res.Unsearched[0], UnsearchedKind{Kind: "*", Group: "", Reason: "cold"}) || len(p.warmed) != 0 {
 		t.Fatalf("broad coverage: %+v", res)
 	}
 	res, _ = Search(context.Background(), p, Parse("kind:Thing2"), Options{CanReadClusterScoped: func(string, string, string) (bool, bool) { t.Fatal("unsupported kind issued SAR"); return false, true }})

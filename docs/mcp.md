@@ -509,9 +509,27 @@ Every response includes `partial` and an `unsearched` array of
 `{kind, group, reason}`. Core resources use `group: ""`. Reasons distinguish
 caller `rbac_denied`, collector `sa_forbidden`,
 `cold`, `syncing`, `sync_failed`, `not_indexed`, `list_error`, `namespace_scope`
-(collector coverage), and `namespace_excluded` (caller scope/selection). An entry
+and `namespace_excluded`. An entry
 can describe an incompletely searched kind: authorized namespaces still contribute
 hits. Unavailable discovery is represented by `kind: "*"`, `group: ""`.
+
+The two namespace reasons may carry `namespaces`:
+
+- `namespace_excluded`: requested `ns:` namespaces the caller can't see, or that the
+  namespace selection leaves out, were not searched. `namespaces` lists those
+  requested names; it echoes the query and says nothing about whether they exist.
+- `namespace_scope`: only some namespaces were searched. Either Radar's cache doesn't
+  watch the rest (collector coverage; no `namespaces`), or, on REST without
+  `globalNs=1`, the caller's saved namespace pick or `--namespace-scope` narrowed a
+  query that has no `ns:` terms. In that case `namespaces` lists the namespaces that
+  were searched. The caller's RBAC namespace ceiling is never a gap, matching
+  resource lists.
+
+`ns:` (and the MCP `namespace` argument) restricts namespaced kinds. A broad `ns:`
+query covers namespaced objects only. A cluster-scoped kind named with `kind:`
+ignores `ns:`, as kubectl ignores `-n` for it. RBAC namespace limits, the namespace
+pick and `--namespace-scope` never hide cluster-scoped objects: each cluster-scoped
+kind is gated only by the caller's own list permission for it.
 Coverage is bounded by the discovered catalog; it cannot describe undiscovered APIs.
 Explicit searches share one two-second warmup deadline across matching dynamic
 kinds and namespaces, including permission probes and initial sync. A requested
@@ -520,8 +538,11 @@ Failed or unfinished warming reports partial coverage and preserves cached hits
 from covered namespaces. Third-party CRDs named Event are searched normally; only
 built-in Events are excluded from broad searches.
 
-Explicitly requested cold or unsupported kinds keep per-kind entries; denied,
+Broad queries also collapse `namespace_excluded` and `namespace_scope` into one `*`
+entry each, merging their `namespaces`. Explicitly requested kinds keep per-kind
+cold, unsupported and namespace entries; denied,
 syncing, failed-sync and list-error kinds keep per-kind entries for all queries.
+Unknown `kind:` terms come back as `not_indexed` in the caller's spelling.
 Typed informers disabled by collector probes report `sa_forbidden`, never `cold`.
 A stalled dynamic sync reports `sync_failed`; incomplete namespace probing reports
 `syncing`. Truncated probing adds `namespace_scope` only if the requested scope

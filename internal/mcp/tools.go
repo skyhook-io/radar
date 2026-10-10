@@ -700,7 +700,7 @@ type podLogsInput struct {
 
 type searchInput struct {
 	Query     string `json:"query" jsonschema:"search query for unknown resources or broad content scans. Free tokens AND'd. Matches identity plus searchable object content. Examples: adServiceFailure, kind:NetworkChaos delay, kind:ConfigMap flagd, image:flagd. Modifiers: kind:Pod, kind:NetworkChaos, ns:foo, label:k=v, image:redis"`
-	Namespace string `json:"namespace,omitempty" jsonschema:"optional namespace to scope the search; equivalent to an inline ns: modifier. When set, overrides all inline namespace modifiers"`
+	Namespace string `json:"namespace,omitempty" jsonschema:"optional namespace scope; same as an inline ns: modifier and overrides inline ones. A cluster-scoped kind named with kind: ignores it"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max hits returned (default 50, max 500)"`
 	Include   string `json:"include,omitempty" jsonschema:"per-hit detail: summary (default), raw, or none"`
 	Filter    string `json:"filter,omitempty" jsonschema:"CEL boolean predicate. Bindings: object (sanitized; no Secret data), kind, apiVersion, metadata, spec, status, labels, annotations. Guard fields with has(object.subjects) or has(spec.sources); check map keys with '\"app\" in labels'. Examples: 'kind == \"Pod\" && status.phase == \"Failed\"', 'has(status.readyReplicas) && status.readyReplicas == 0'"`
@@ -3146,26 +3146,6 @@ func splitCSVStr(v string) []string {
 	return out
 }
 
-func intersectAllowedNamespaces(allowed, requested []string) []string {
-	if allowed == nil {
-		return requested
-	}
-	if len(requested) == 0 {
-		return allowed
-	}
-	set := make(map[string]struct{}, len(allowed))
-	for _, ns := range allowed {
-		set[ns] = struct{}{}
-	}
-	out := make([]string, 0, len(requested))
-	for _, ns := range requested {
-		if _, ok := set[ns]; ok {
-			out = append(out, ns)
-		}
-	}
-	return out
-}
-
 // mcpSearchKindRBAC mirrors the REST exact-kind gate for namespaced searches.
 func mcpSearchKindRBAC(ctx context.Context, scanNamespaces []string, group, resource string) (decision string, scopedNamespaces []string) {
 	if user, _ := resolveUserPerms(ctx); user == nil {
@@ -3210,13 +3190,7 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 	if input.Namespace != "" {
 		parsed.NSFilter = []string{input.Namespace}
 	}
-	allowed := filterNamespacesForUser(ctx, nil)
-	scanNamespaces := intersectAllowedNamespaces(allowed, parsed.NSFilter)
-	namespacePartial := len(parsed.NSFilter) > 0 && len(scanNamespaces) < len(parsed.NSFilter)
-	namespaceExcluded := allowed != nil && len(scanNamespaces) == 0
-	if !namespaceExcluded {
-		parsed.NSFilter = scanNamespaces
-	}
+	visible := filterNamespacesForUser(ctx, nil)
 
 	var include search.IncludeMode
 	switch input.Include {
@@ -3231,18 +3205,17 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 	}
 
 	opts := search.Options{
-		NamespaceExcluded: namespaceExcluded,
-		NamespacePartial:  namespacePartial,
 		NamespacedRBAC: func(namespaces []string, group, resource string) (string, []string) {
 			return mcpSearchKindRBAC(ctx, namespaces, group, resource)
 		},
-		Limit:      input.Limit,
-		Include:    include,
-		Namespaces: scanNamespaces,
+		Limit:   input.Limit,
+		Include: include,
 		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
 			return canReadInNamespaceDecision(ctx, group, resource, "", "list")
 		},
 	}
+	opts.ScopeNamespaces(parsed, visible, visible)
+	scanNamespaces := opts.Namespaces
 	if input.Filter != "" {
 		f, err := filter.CachedObjectFilter(input.Filter)
 		if err != nil {

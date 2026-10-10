@@ -33,29 +33,20 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auth-filter the namespaces the user can see, then intersect with any
-	// `ns:` modifier parsed from the query. The result both gates the scan
-	// (so listers don't read namespaces outside the user's RBAC) and
-	// constrains the post-hoc match() filter.
+	// Namespaced kinds scan the namespaces the user can see, intersected with
+	// any `ns:` modifier; listers never read namespaces outside the user's
+	// RBAC. Cluster-scoped kinds are gated per kind by CanReadClusterScoped.
 	//
-	// globalNs=1 makes search ignore the per-user namespace-switcher pick and
-	// scan the user's full RBAC ceiling — a "global" search whose only scope is
-	// the query's own `ns:` tokens. The omnibar sets it so a deliberately broad
-	// ⌘K lookup isn't silently narrowed to whatever namespace the view filter
-	// happens to be on. Still RBAC-bounded (getUserNamespaces filters by the
-	// caller's identity); it only drops the cosmetic pick, never the ceiling.
-	var allowed []string
-	if r.URL.Query().Get("globalNs") == "1" {
-		allowed = s.getUserNamespaces(r, parseNamespaces(r.URL.Query()))
-	} else {
-		allowed = s.parseNamespacesForUser(r)
-	}
-	namespaceExcluded := noNamespaceAccess(allowed)
-	scanNamespaces := intersectNamespaces(allowed, parsed.NSFilter)
-	namespacePartial := len(parsed.NSFilter) > 0 && len(scanNamespaces) < len(parsed.NSFilter)
-	namespaceExcluded = namespaceExcluded || (allowed != nil && len(scanNamespaces) == 0)
-	if !namespaceExcluded {
-		parsed.NSFilter = scanNamespaces
+	// Without globalNs=1, the per-user namespace-switcher pick (or the
+	// --namespace-scope namespace) narrows the scan, and the response reports
+	// that as namespace_scope. globalNs=1 drops the cosmetic pick and scans the
+	// user's full RBAC ceiling — a "global" search whose only scope is the
+	// query's own `ns:` tokens. The omnibar sets it so a deliberately broad ⌘K
+	// lookup isn't narrowed to whatever namespace the view filter is on.
+	ceiling := s.getUserNamespaces(r, parseNamespaces(r.URL.Query()))
+	visible := ceiling
+	if r.URL.Query().Get("globalNs") != "1" {
+		visible = s.parseNamespacesForUser(r)
 	}
 
 	include, err := parseInclude(r.URL.Query().Get("include"))
@@ -64,18 +55,17 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	opts := search.Options{
-		NamespaceExcluded: namespaceExcluded,
-		NamespacePartial:  namespacePartial,
 		NamespacedRBAC: func(namespaces []string, group, resource string) (string, []string) {
 			return s.computeSearchKindRBAC(r, namespaces, group, resource)
 		},
-		Limit:      parseLimit(r.URL.Query().Get("limit")),
-		Include:    include,
-		Namespaces: scanNamespaces,
+		Limit:   parseLimit(r.URL.Query().Get("limit")),
+		Include: include,
 		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
 			return s.canReadDecision(r, group, resource, "", "list")
 		},
 	}
+	opts.ScopeNamespaces(parsed, visible, ceiling)
+	scanNamespaces := opts.Namespaces
 	// summaryContext attaches managedBy/health/issueCount per hit. Build
 	// the per-request closure once (one Compose call + cached topology
 	// snapshot) and let the search executor invoke it per kept hit.
