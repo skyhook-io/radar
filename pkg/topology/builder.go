@@ -7392,8 +7392,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		// are emitted; the Service nodes (built above) carry the counts.
 		podSummaries := make(map[string]*PodSummary)
 		for _, group := range groupingResult.Groups {
-			for svcID := range group.ServiceIDs {
-				for _, pod := range group.Pods {
+			for i, pod := range group.Pods {
+				for _, svcID := range group.PodServiceIDs[i] {
 					addPodHealth(podSummaries, svcID, pod)
 				}
 			}
@@ -7410,12 +7410,12 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		for _, group := range groupingResult.Groups {
 			if len(group.Pods) <= maxIndividualPods {
 				// Small group - show as individual nodes
-				for _, pod := range group.Pods {
+				for i, pod := range group.Pods {
 					podID := GetPodID(pod)
 					nodes = append(nodes, CreatePodNode(pod, b.provider, false)) // includeNodeName=false for traffic view
 
 					// Add edges from services to pod (traffic view specific)
-					for svcID := range group.ServiceIDs {
+					for _, svcID := range group.PodServiceIDs[i] {
 						edges = append(edges, Edge{
 							ID:     fmt.Sprintf("%s-to-%s", svcID, podID),
 							Source: svcID,
@@ -7427,16 +7427,43 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			} else {
 				// Large group - create PodGroup node
 				podGroupID := GetPodGroupID(group)
-				nodes = append(nodes, CreatePodGroupNode(group, b.provider))
+				podGroupNode := CreatePodGroupNode(group, b.provider)
+				nodes = append(nodes, podGroupNode)
 
-				// Add edges from services to pod group (traffic view specific)
-				for svcID := range group.ServiceIDs {
-					edges = append(edges, Edge{
+				// Add edges from services to pod group (traffic view specific).
+				// A Service selecting only part of the group says how much.
+				selected := make(map[string]int, len(group.ServiceIDs))
+				for _, svcIDs := range group.PodServiceIDs {
+					for _, svcID := range svcIDs {
+						selected[svcID]++
+					}
+				}
+				mixed := false
+				for svcID, count := range selected {
+					edge := Edge{
 						ID:     fmt.Sprintf("%s-to-%s", svcID, podGroupID),
 						Source: svcID,
 						Target: podGroupID,
 						Type:   EdgeRoutesTo,
-					})
+					}
+					if count < len(group.Pods) {
+						edge.Label = fmt.Sprintf("%d of %d pods", count, len(group.Pods))
+						mixed = true
+					}
+					edges = append(edges, edge)
+				}
+				// Expanding a mixed group reconnects each pod to only the
+				// Services that select it.
+				if pods, ok := podGroupNode.Data["pods"].([]map[string]any); ok && mixed {
+					servicesByPod := make(map[string][]string, len(group.Pods))
+					for i, pod := range group.Pods {
+						servicesByPod[pod.Namespace+"/"+pod.Name] = group.PodServiceIDs[i]
+					}
+					for _, pd := range pods {
+						namespace, _ := pd["namespace"].(string)
+						name, _ := pd["name"].(string)
+						pd["ownerIds"] = servicesByPod[namespace+"/"+name]
+					}
 				}
 			}
 		}

@@ -14,10 +14,14 @@ type PodGroup struct {
 	GroupName  string          // App name or owner name
 	Namespace  string          // Namespace of the pods
 	Pods       []*corev1.Pod   // Pods in this group
-	ServiceIDs map[string]bool // Service IDs that route to this group (for traffic view)
-	Healthy    int             // Count of healthy pods
-	Degraded   int             // Count of degraded pods
-	Unhealthy  int             // Count of unhealthy pods
+	ServiceIDs map[string]bool // Service IDs that route to at least one pod in this group (for traffic view)
+	// PodServiceIDs[i] are the Services whose selectors match Pods[i]. Pods
+	// group by app label, so one group can hold stable and canary pods that
+	// different Services select.
+	PodServiceIDs [][]string
+	Healthy       int // Count of healthy pods
+	Degraded      int // Count of degraded pods
+	Unhealthy     int // Count of unhealthy pods
 }
 
 // PodGroupingResult contains the result of grouping pods
@@ -81,6 +85,7 @@ func GroupPods(pods []*corev1.Pod, opts PodGroupingOptions) *PodGroupingResult {
 
 		group := result.Groups[groupKey]
 		group.Pods = append(group.Pods, pod)
+		group.PodServiceIDs = append(group.PodServiceIDs, matchingServiceIDs)
 
 		// Track services (for traffic view)
 		for _, svcID := range matchingServiceIDs {
