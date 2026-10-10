@@ -325,20 +325,22 @@ func (c *Client) ListReleasesAsUser(namespace, username string, groups []string)
 	if username == "" {
 		return c.ListReleases(namespace)
 	}
+	contextName := k8s.GetContextName()
 	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesWith(actionConfig, namespace, username, groups)
+	return listReleasesWith(actionConfig, contextName, namespace, username, groups)
 }
 
 // ListReleases returns all Helm releases, optionally filtered by namespace
 func (c *Client) ListReleases(namespace string) ([]HelmRelease, error) {
+	contextName := k8s.GetContextName()
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesWith(actionConfig, namespace, "", nil)
+	return listReleasesWith(actionConfig, contextName, namespace, "", nil)
 }
 
 // ListReleasesAcrossNamespaces lists releases for an explicit set of namespaces
@@ -478,7 +480,7 @@ func (c *Client) listManifestResourcesAsUser(ctx context.Context, namespace, use
 	return resources, parseErrors, nil
 }
 
-func listReleasesWith(actionConfig *action.Configuration, namespace, username string, groups []string) ([]HelmRelease, error) {
+func listReleasesWith(actionConfig *action.Configuration, contextName, namespace, username string, groups []string) ([]HelmRelease, error) {
 	if err := actionConfig.KubeClient.IsReachable(); err != nil {
 		return nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
@@ -492,7 +494,7 @@ func listReleasesWith(actionConfig *action.Configuration, namespace, username st
 		return nil, err
 	}
 
-	result := helmReleaseRowsFromStorageSnapshot(snapshot, fluxHelmReleaseMap(context.Background()))
+	result := helmReleaseRowsFromStorageSnapshot(snapshot, fluxHelmReleaseMap(context.Background()), contextName)
 
 	// Sort by namespace, then name
 	sort.Slice(result, func(i, j int) bool {
@@ -505,7 +507,7 @@ func listReleasesWith(actionConfig *action.Configuration, namespace, username st
 	return result, nil
 }
 
-func helmReleaseRowsFromStorageSnapshot(snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string) []HelmRelease {
+func helmReleaseRowsFromStorageSnapshot(snapshot *helmReleaseStorageSnapshot, fluxMap map[string]string, contextName string) []HelmRelease {
 	if snapshot == nil {
 		return nil
 	}
@@ -513,10 +515,6 @@ func helmReleaseRowsFromStorageSnapshot(snapshot *helmReleaseStorageSnapshot, fl
 	for _, rel := range snapshot.latest {
 		storageNs := snapshot.storageNamespaces[releaseStorageKey(rel)]
 		hr := toHelmRelease(rel, storageNs)
-		historyKey := releaseHistoryKey(rel)
-		analysis := helmhistory.Analyze(rel.Name, rel.Version, toHelmHistoryRevisions(snapshot.histories[historyKey]), helmhistory.Options{MaxOperations: releaseListMaxOperations})
-		hr.LastOperation = analysis.LastOperation
-		hr.Operations = analysis.Operations
 		// Match against the release's *actual* storage namespace (the
 		// un-normalized value), since toHelmRelease zeroes StorageNamespace
 		// when it equals Namespace for compactness.
@@ -524,6 +522,10 @@ func helmReleaseRowsFromStorageSnapshot(snapshot *helmReleaseStorageSnapshot, fl
 		if effectiveStorage == "" {
 			effectiveStorage = rel.Namespace
 		}
+		historyKey := releaseHistoryKey(rel)
+		analysis := analyzeReleaseHistory(contextName, effectiveStorage, rel.Name, rel.Version, snapshot.histories[historyKey], helmhistory.Options{MaxOperations: releaseListMaxOperations})
+		hr.LastOperation = analysis.LastOperation
+		hr.Operations = analysis.Operations
 		hr.ManagedByFluxHelmRelease = applyFluxOwnership(rel.Name, effectiveStorage, fluxMap)
 		result = append(result, hr)
 	}
@@ -536,23 +538,25 @@ func (c *Client) GetReleaseAsUser(namespace, name, username string, groups []str
 	if username == "" {
 		return c.GetRelease(namespace, name)
 	}
+	contextName := k8s.GetContextName()
 	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
 	if err != nil {
 		return nil, err
 	}
-	return getReleaseWith(actionConfig, namespace, name)
+	return getReleaseWith(actionConfig, contextName, namespace, name)
 }
 
 // GetRelease returns details for a specific release
 func (c *Client) GetRelease(namespace, name string) (*HelmReleaseDetail, error) {
+	contextName := k8s.GetContextName()
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
 	}
-	return getReleaseWith(actionConfig, namespace, name)
+	return getReleaseWith(actionConfig, contextName, namespace, name)
 }
 
-func getReleaseWith(actionConfig *action.Configuration, namespace, name string) (*HelmReleaseDetail, error) {
+func getReleaseWith(actionConfig *action.Configuration, contextName, namespace, name string) (*HelmReleaseDetail, error) {
 	// Get the latest release
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
@@ -580,7 +584,11 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 	sort.Slice(revisions, func(i, j int) bool {
 		return revisions[i].Revision > revisions[j].Revision
 	})
-	analysis := helmhistory.Analyze(rel.Name, rel.Version, toHelmHistoryRevisions(revisions), helmhistory.Options{})
+	effectiveStorage := namespace
+	if effectiveStorage == "" {
+		effectiveStorage = rel.Namespace
+	}
+	analysis := analyzeReleaseHistory(contextName, effectiveStorage, rel.Name, rel.Version, revisions, helmhistory.Options{})
 
 	// Parse manifest to get owned resources
 	resources := parseManifestResources(rel.Manifest, rel.Namespace)
@@ -599,10 +607,6 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 	// Extract dependencies
 	dependencies := extractDependencies(rel)
 
-	effectiveStorage := namespace
-	if effectiveStorage == "" {
-		effectiveStorage = rel.Namespace
-	}
 	managedByFlux := applyFluxOwnership(rel.Name, effectiveStorage, fluxHelmReleaseMap(context.Background()))
 
 	detail := &HelmReleaseDetail{

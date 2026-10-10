@@ -411,7 +411,7 @@ func TestHelmReleaseRowsFromStorageSnapshot_AttachesLastOperation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -451,7 +451,7 @@ func TestHelmReleaseRowsFromStorageSnapshot_KeepsHealthyRowsCompact(t *testing.T
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -480,7 +480,7 @@ func TestHelmReleaseRowsFromStorageSnapshot_SkipsMalformedReleaseSecret(t *testi
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
 
 	if len(rows) != 0 {
 		t.Fatalf("len(rows) = %d, want 0 for malformed release secret", len(rows))
@@ -509,7 +509,7 @@ func TestHelmReleaseRowsFromStorageSnapshot_CapsOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -548,7 +548,7 @@ func TestHelmReleaseRowsFromStorageSnapshot_UsesDetailHistoryWindow(t *testing.T
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -2056,6 +2056,7 @@ func TestHelmReleaseUninstallTimestampFromStorage(t *testing.T) {
 		{name: "missing"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			freshUninstallStarts(t)
 			rel := helmTestRelease("deleting", "demo", 2, release.StatusUninstalling, "Deletion in progress")
 			rel.Info.LastDeployed = helmtime.Time{Time: now.Add(-90 * 24 * time.Hour)}
 			rel.Info.Deleted = helmtime.Time{Time: tt.deleted}
@@ -2064,7 +2065,7 @@ func TestHelmReleaseUninstallTimestampFromStorage(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+			rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
 			if len(rows) != 1 {
 				t.Fatalf("rows = %#v", rows)
 			}

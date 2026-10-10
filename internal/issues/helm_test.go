@@ -124,10 +124,13 @@ func TestNativeHelmReleaseUninstallStuckIssue(t *testing.T) {
 	if !issue.FirstSeen.Equal(started) || issue.OnsetUnknown {
 		t.Fatalf("onset = %v, unknown = %v", issue.FirstSeen, issue.OnsetUnknown)
 	}
-	for _, text := range []string{"pre-delete hook Jobs", "surviving resources", "finalizers", "retry", "--no-hooks"} {
-		if !strings.Contains(issue.Action, text) {
-			t.Fatalf("action = %q, missing %q", issue.Action, text)
+	from := 0
+	for _, text := range []string{"pre-delete hook Jobs", "surviving resources", "finalizers", "retry", "--no-hooks", "leaves the Jobs and Pods the hook created: delete them yourself", "still Terminating"} {
+		at := strings.Index(issue.Action[from:], text)
+		if at < 0 {
+			t.Fatalf("action = %q, missing %q after the earlier steps", issue.Action, text)
 		}
+		from += at + len(text)
 	}
 	if !strings.Contains(issue.Cause, "uninstall") {
 		t.Fatalf("cause = %q", issue.Cause)

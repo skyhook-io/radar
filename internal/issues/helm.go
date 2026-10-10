@@ -119,7 +119,7 @@ func nativeHelmRawCandidate(op helm.HelmOperation) string {
 func nativeHelmIssueAction(op helm.HelmOperation) string {
 	if op.Kind == helmhistory.KindPending {
 		if op.PendingStatus == "uninstalling" {
-			return "Open the Helm release view, check pre-delete hook Jobs, then inspect surviving resources and their finalizers. Once the blocker is resolved, retry the uninstall; Helm re-runs an uninstall that is stuck in this state. If a hook is the blocker, uninstalling without hooks (helm uninstall --no-hooks) completes it but skips that hook's cleanup."
+			return "Open the Helm release view, check pre-delete hook Jobs, then inspect surviving resources and their finalizers. Once the blocker is resolved, retry the uninstall; Helm re-runs an uninstall that is stuck in this state. If a hook is the blocker, helm uninstall --no-hooks completes the uninstall but leaves the Jobs and Pods the hook created: delete them yourself, then check for resources still Terminating."
 		}
 		return "Open the Helm release details, check whether the operation is still running, then inspect hooks, Jobs, Pods, events, logs, and owned resources."
 	}
