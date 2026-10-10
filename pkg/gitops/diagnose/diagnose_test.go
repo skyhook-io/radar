@@ -341,3 +341,24 @@ func TestEmptyAutoSyncAdviceOrderAndSafety(t *testing.T) {
 		t.Fatalf("wrong orphan exclusion mechanism: %s", orphan)
 	}
 }
+
+func TestIsArgoFailedAttemptCondition(t *testing.T) {
+	for _, prefix := range []string{"Failed sync attempt to ", "Failed last sync attempt to "} {
+		for _, operationMessage := range []string{"denied", "", "  "} {
+			if got := IsArgoFailedAttemptCondition(prefix+"[abc]: denied", operationMessage); got != (operationMessage == "denied") {
+				t.Errorf("%q / %q: got %v", prefix, operationMessage, got)
+			}
+		}
+	}
+	for _, message := range []string{"", "a different sync error", "Skipping sync attempt to [new]: auto-sync will wipe out all resources", "Failed sync attempt unrelated"} {
+		if IsArgoFailedAttemptCondition(message, "denied") {
+			t.Errorf("unrelated condition deduplicated: %q", message)
+		}
+	}
+}
+
+func TestSharedResourceWarningAction(t *testing.T) {
+	if got := ActionForCondition("SharedResourceWarning"); !strings.Contains(got, "These resources are also tracked by other Applications") || !strings.Contains(got, "each resource") {
+		t.Fatalf("expected plural-aware ownership guidance: %q", got)
+	}
+}

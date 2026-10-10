@@ -202,7 +202,7 @@ func gitopsProblem(now time.Time, kind, group, ns, name, severity, reason, messa
 // detectArgoAppProblems skips running operations (health is still converging)
 // and non-failed suspended apps (intentionally paused). Manual apps legitimately
 // sit OutOfSync until an operator syncs them, so drift alone has a 24-hour gate.
-// Failed operations suppress only their parallel "Failed last sync attempt"
+// Failed operations with a message suppress only their parallel failed-attempt
 // condition. Independent errors and resource warnings retain their own rows;
 // Degraded health retains Argo's health message alongside error conditions.
 func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDriftTracker, now time.Time) []Detection {
@@ -282,6 +282,7 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 				setDetectionOnset(&d, now, transitionAt)
 			}
 			d.RawMessage = rawCondition
+			d.Fingerprint = "argo-condition:" + ct
 			if ct == "SyncError" {
 				applyArgoOperationDiagnosis(&d, app, cmsg)
 			}
@@ -565,7 +566,8 @@ func argoErrorCondition(app *unstructured.Unstructured, now time.Time) (condType
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(msg)
 			if ct == "SyncError" {
 				phase, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
-				if (strings.EqualFold(phase, "Failed") || strings.EqualFold(phase, "Error")) && strings.HasPrefix(msg, "Failed last sync attempt") {
+				opMsg, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "message")
+				if (strings.EqualFold(phase, "Failed") || strings.EqualFold(phase, "Error")) && diagnose.IsArgoFailedAttemptCondition(msg, opMsg) {
 					continue
 				}
 				sync, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status")

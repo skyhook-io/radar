@@ -223,6 +223,13 @@ func isHTTPVerb(s string) bool {
 	}
 }
 
+// IsArgoFailedAttemptCondition reports whether the condition repeats a failed
+// operation whose message is available. Argo changed this prefix across releases.
+func IsArgoFailedAttemptCondition(message, operationMessage string) bool {
+	return strings.TrimSpace(operationMessage) != "" &&
+		(strings.HasPrefix(message, "Failed sync attempt to ") || strings.HasPrefix(message, "Failed last sync attempt to "))
+}
+
 // SeverityForConditionType maps an Argo Application status.conditions[].type to
 // a neutral severity token ("critical"|"warning"|"info"). Follows Argo's own
 // convention: types ending in "Error" are critical, "Warning" types are
@@ -257,7 +264,7 @@ func ActionForCondition(condType string) string {
 	case "ExcludedResourceWarning":
 		return "A managed resource is excluded by the Argo controller's resource.exclusions. Adjust controller config or remove the resource."
 	case "SharedResourceWarning":
-		return "This resource is also tracked by another Application. Move it to a single owner."
+		return "These resources are also tracked by other Applications. Move each resource to a single owner."
 	default:
 		return ""
 	}

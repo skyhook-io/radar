@@ -95,6 +95,7 @@ func TestGitOpsConditionsFixtureThroughIssues(t *testing.T) {
 	updated := app.DeepCopy()
 	conditions, _, _ := unstructured.NestedSlice(updated.Object, "status", "conditions")
 	conditions[3].(map[string]any)["message"] = "Application has 42 orphaned resources"
+	conditions[3].(map[string]any)["lastTransitionTime"] = "2026-10-10T00:01:00Z"
 	conditions = append(conditions, map[string]any{"type": "SharedResourceWarning", "message": "Service/api is part of applications empty-addons and another-owner", "lastTransitionTime": "2026-10-10T00:01:00Z"})
 	_ = unstructured.SetNestedSlice(updated.Object, conditions, "status", "conditions")
 	if _, err := client.Resource(gvr).Namespace(app.GetNamespace()).Update(t.Context(), updated, metav1.UpdateOptions{}); err != nil {
@@ -126,9 +127,68 @@ func TestGitOpsConditionsFixtureThroughIssues(t *testing.T) {
 			if initialIDs[grouped][row.Reason] != row.ID {
 				t.Fatalf("grouped=%v: episode ID changed for %s: %s -> %s", grouped, row.Reason, initialIDs[grouped][row.Reason], row.ID)
 			}
+			if row.Reason == "OrphanedResourceWarning" && row.FirstSeen.Format(time.RFC3339) != "2026-10-10T00:01:00Z" {
+				t.Fatalf("changed count must use the new controller transition time: %+v", row)
+			}
 			if row.Reason == "SharedResourceWarning" && (!strings.Contains(row.Message, "2 resources") || !strings.Contains(row.Message, "another-owner") || row.FirstSeen.Format(time.RFC3339) != "2026-10-09T23:58:00Z") {
 				t.Fatalf("aggregate lost evidence: %+v", row)
 			}
+		}
+	}
+}
+
+func TestGitOpsFailedOperationAndIndependentConditionThroughIssues(t *testing.T) {
+	defer k8s.ResetTestDynamicState()
+	app := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+		"metadata": map[string]any{"name": "broken", "namespace": "gaps-r3-gitops", "uid": "broken-fixture"},
+		"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
+		"status": map[string]any{
+			"health": map[string]any{"status": "Healthy"}, "sync": map[string]any{"status": "OutOfSync"},
+			"operationState": map[string]any{"phase": "Failed", "message": "dial tcp 10.0.0.1:443: connection refused"},
+			"conditions":     []any{map[string]any{"type": "SyncError", "message": `namespaces "foo" not found`}},
+		},
+	}}
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "ApplicationList"}, app)
+	if err := k8s.InitTestDynamicResourceCache(client, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "Application", Namespaced: true, Verbs: []string{"list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	cache := k8s.GetDynamicResourceCache()
+	if err := cache.EnsureWatching(gvr); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.WaitForSync(gvr, 5*time.Second) {
+		t.Fatal("Application informer did not sync")
+	}
+	provider := &CacheProvider{dynamic: cache, discovery: k8s.GetResourceDiscovery()}
+	p := &fakeProvider{gitopsProblems: provider.DetectGitOpsProblems([]string{app.GetNamespace()})}
+	for _, grouped := range []bool{false, true} {
+		rows := Compose(p, Filters{Limit: NoLimit, Grouped: grouped})
+		if len(rows) != 2 || rows[0].ID == rows[1].ID {
+			t.Fatalf("grouped=%v: want two distinct failures, got %+v", grouped, rows)
+		}
+		seen := map[string]bool{}
+		for _, row := range rows {
+			seen[row.Reason] = true
+			if row.Category != issuesapi.CategoryGitOpsOperationFailed || (row.Action == "" && row.RemediationKind == "") {
+				t.Fatalf("grouped=%v: lost category or guidance: %+v", grouped, row)
+			}
+			switch row.Reason {
+			case "OperationFailed":
+				if row.Message != "dial tcp 10.0.0.1:443: connection refused" || row.Cause == "" || !strings.Contains(row.Action, "operation details") {
+					t.Fatalf("grouped=%v: lost operation diagnosis: %+v", grouped, row)
+				}
+			case "SyncError":
+				if row.Cause == "" || row.RemediationKind != "create-namespace" || row.RemediationTarget != "foo" {
+					t.Fatalf("grouped=%v: lost condition diagnosis: %+v", grouped, row)
+				}
+			default:
+				t.Fatalf("grouped=%v: unexpected diagnosis: %+v", grouped, row)
+			}
+		}
+		if !seen["OperationFailed"] || !seen["SyncError"] {
+			t.Fatalf("grouped=%v: lost independent diagnosis: %+v", grouped, rows)
 		}
 	}
 }

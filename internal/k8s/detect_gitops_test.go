@@ -1048,10 +1048,10 @@ func TestDetectArgoAppProblems_StableResourceWarnings(t *testing.T) {
 			if len(rows) != 1 || rows[0].Fingerprint != typ || rows[0].DurationSeconds != 600 || !strings.Contains(rows[0].Message, "second resource") {
 				t.Fatalf("one stable aggregate with earliest onset required: %+v", rows)
 			}
-			_ = unstructured.SetNestedSlice(app.Object, []any{condition("Application has 20 orphaned resources", now.Add(-10*time.Minute)), condition("changed resource", now.Add(3*time.Minute))}, "status", "conditions")
+			_ = unstructured.SetNestedSlice(app.Object, []any{condition("Application has 20 orphaned resources", now.Add(3*time.Minute)), condition("changed resource", now.Add(3*time.Minute))}, "status", "conditions")
 			next := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, now.Add(3*time.Minute))
-			if len(next) != 1 || next[0].Fingerprint != rows[0].Fingerprint || next[0].DurationSeconds != 780 {
-				t.Fatalf("poll churn: %+v -> %+v", rows, next)
+			if len(next) != 1 || next[0].Fingerprint != rows[0].Fingerprint || next[0].DurationSeconds != 0 || !next[0].OnsetAt.Equal(now.Add(3*time.Minute)) {
+				t.Fatalf("identity must stay stable while changed messages reset onset: %+v -> %+v", rows, next)
 			}
 			many := []any{}
 			for i := 0; i < 100; i++ {
@@ -1077,16 +1077,29 @@ func TestDetectArgoAppProblems_StaleEmptyGuard(t *testing.T) {
 
 func TestDetectArgoAppProblems_FailedAttemptConditionDedup(t *testing.T) {
 	for _, phase := range []string{"Failed", "Error"} {
-		for _, msg := range []string{"Failed last sync attempt to [old]: denied", "a different sync error"} {
+		for _, msg := range []string{"Failed sync attempt to [old]: denied", "Failed last sync attempt to [old]: denied", "a different sync error"} {
 			app := argoApp("broken", "argocd", "Healthy", "OutOfSync", phase, true, []any{map[string]any{"type": "SyncError", "message": msg, "lastTransitionTime": "2026-10-09T23:58:00Z"}})
 			_ = unstructured.SetNestedField(app.Object, "denied", "status", "operationState", "message")
 			got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, time.Now())
 			want := 2
-			if strings.HasPrefix(msg, "Failed last sync attempt") {
+			if msg != "a different sync error" {
 				want = 1
 			}
 			if len(got) != want {
 				t.Fatalf("%s/%s: want %d got %+v", phase, msg, want, got)
+			}
+		}
+	}
+}
+
+func TestDetectArgoAppProblems_FailedAttemptWithoutOperationMessage(t *testing.T) {
+	for _, phase := range []string{"Failed", "Error"} {
+		for _, prefix := range []string{"Failed sync attempt", "Failed last sync attempt"} {
+			app := argoApp("broken", "argocd", "Healthy", "OutOfSync", phase, true, []any{map[string]any{"type": "SyncError", "message": prefix + ` to x: namespaces "foo" not found`}})
+			_ = unstructured.SetNestedField(app.Object, "https://kubernetes.default.svc", "spec", "destination", "server")
+			got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, time.Now())
+			if len(got) != 1 || got[0].Reason != "SyncError" || got[0].Cause == "" || got[0].RemediationKind != diagnose.RemediationCreateNamespace || got[0].RemediationTarget != "foo" {
+				t.Fatalf("%s/%s: lost actionable condition: %+v", phase, prefix, got)
 			}
 		}
 	}

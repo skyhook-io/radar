@@ -1922,11 +1922,11 @@ func TestBuildIssuesArgoEmptyAutoSyncAdvice(t *testing.T) {
 
 func TestBuildIssuesArgoFailedAttemptConditionDedup(t *testing.T) {
 	for _, phase := range []string{"Failed", "Error"} {
-		for _, message := range []string{"Failed last sync attempt to [old]: failed to apply", "Skipping sync attempt to [new]: auto-sync will wipe out all resources", "a different sync error"} {
+		for _, message := range []string{"Failed sync attempt to [old]: failed to apply", "Failed last sync attempt to [old]: failed to apply", "Skipping sync attempt to [new]: auto-sync will wipe out all resources", "a different sync error"} {
 			root := argoApp(map[string]any{"sync": map[string]any{"status": "OutOfSync"}, "operationState": map[string]any{"phase": phase, "message": "failed to apply"}, "conditions": []any{map[string]any{"type": "SyncError", "message": message, "lastTransitionTime": "2026-10-09T23:58:00Z"}}})
 			got := buildIssues(root, nil, "argocd", nil)
 			want := 2
-			if strings.HasPrefix(message, "Failed last sync attempt") {
+			if strings.HasPrefix(message, "Failed") {
 				want = 1
 			}
 			if len(got) != want {
@@ -1943,4 +1943,40 @@ func TestBuildIssuesArgoStaleEmptyGuard(t *testing.T) {
 			t.Fatalf("%s: stale guard: %+v", sync, got)
 		}
 	}
+}
+
+func TestBuildIssuesArgoFailedAttemptWithoutOperationMessage(t *testing.T) {
+	for _, phase := range []string{"Failed", "Error"} {
+		for _, prefix := range []string{"Failed sync attempt", "Failed last sync attempt"} {
+			root := argoApp(map[string]any{"sync": map[string]any{"status": "OutOfSync"}, "operationState": map[string]any{"phase": phase, "message": ""}, "conditions": []any{map[string]any{"type": "SyncError", "message": prefix + ` to x: namespaces "foo" not found`}}})
+			got := buildIssues(root, nil, "argocd", nil)
+			var found bool
+			for _, issue := range got {
+				if issue.Scope == ScopeCondition && issue.Reason == "SyncError" {
+					found = true
+					if issue.Cause == "" || issue.Remediation == nil || issue.Remediation.Target != "foo" || issue.Action == "" {
+						t.Fatalf("%s/%s: lost actionable condition: %+v", phase, prefix, issue)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("%s/%s: missing condition: %+v", phase, prefix, got)
+			}
+		}
+	}
+}
+
+func TestBuildIssuesArgoFailedAttemptRemoteRemediation(t *testing.T) {
+	root := argoApp(map[string]any{"operationState": map[string]any{"phase": "Failed", "message": ""}, "conditions": []any{map[string]any{"type": "SyncError", "message": `Failed sync attempt to x: namespaces "foo" not found`}}})
+	_ = unstructured.SetNestedField(root.Object, "https://remote.example.com", "spec", "destination", "server")
+	got := buildIssues(root, nil, "argocd", nil)
+	for _, issue := range got {
+		if issue.Scope == ScopeCondition {
+			if issue.Cause == "" || issue.Remediation != nil || !strings.Contains(issue.Action, "destination cluster") {
+				t.Fatalf("remote condition must keep cause without a local mutation: %+v", issue)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing actionable remote condition: %+v", got)
 }

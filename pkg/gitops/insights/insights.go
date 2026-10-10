@@ -528,13 +528,13 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 	// rendered in three different forms.
 	suppressedRefs := map[string]bool{}
 	suppressedNamespaces := map[string]bool{}
-	// Only the "Failed last sync attempt" condition duplicates a failed
-	// operation; an empty-render guard can describe a different revision.
+	// Only the failed-attempt condition duplicates a failed operation with a
+	// message; an empty-render guard can describe a different revision.
 	operationFailed := false
 	if tool == "argocd" {
+		opMessage, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "message")
 		if phase, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "phase"); phase == "Failed" || phase == "Error" {
 			operationFailed = true
-			opMessage, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "message")
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(opMessage)
 			parsed := diagnose.ParseArgoOperationError(msg)
 			action := fallback(parsed.Action, "Open Activity for operation details.")
@@ -604,7 +604,7 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 		// the answers to "why is this app broken" when no operation has run.
 		// Only the failed-attempt SyncError duplicates the operation failure card.
 		for _, ci := range argoApplicationConditions(root) {
-			if operationFailed && ci.Reason == argoSyncErrorConditionType && strings.HasPrefix(ci.Message, "Failed last sync attempt") {
+			if operationFailed && ci.Reason == argoSyncErrorConditionType && diagnose.IsArgoFailedAttemptCondition(ci.Message, opMessage) {
 				continue
 			}
 			out = append(out, ci)
@@ -2102,6 +2102,7 @@ func argoApplicationConditions(root *unstructured.Unstructured) []Issue {
 			severity = SeverityWarning
 		}
 		cause := ""
+		var remediation *Remediation
 		action := diagnose.ActionForCondition(typ)
 		if typ == argoSyncErrorConditionType {
 			parsed := diagnose.ParseArgoOperationError(msg)
@@ -2111,20 +2112,29 @@ func argoApplicationConditions(root *unstructured.Unstructured) []Issue {
 					continue
 				}
 				typ = parsed.Reason
-				cause = parsed.Cause
 			}
+			if !gitops.IsInClusterDestination(root) {
+				var remoteAction string
+				parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed)
+				if remoteAction != "" {
+					action = remoteAction
+				}
+			}
+			cause = parsed.Cause
+			remediation = remediationFromParsed(parsed)
 			if parsed.Action != "" {
 				action = parsed.Action
 			}
 		}
 		out = append(out, Issue{
-			Severity:   severity,
-			Scope:      ScopeCondition,
-			Cause:      cause,
-			Reason:     fallback(typ, "Condition"),
-			Message:    fallback(msg, typ),
-			RawMessage: rawMsg,
-			Action:     action,
+			Remediation: remediation,
+			Severity:    severity,
+			Scope:       ScopeCondition,
+			Cause:       cause,
+			Reason:      fallback(typ, "Condition"),
+			Message:     fallback(msg, typ),
+			RawMessage:  rawMsg,
+			Action:      action,
 		})
 	}
 	return out
