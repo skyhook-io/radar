@@ -2695,60 +2695,79 @@ func TestNodeBlastRadiusContext_NotReadyLinksNothing(t *testing.T) {
 }
 
 func TestNodeBlastRadiusContext_MultiPressure(t *testing.T) {
-	now := time.Now()
-	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: "node-1", CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))},
-		Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
-			{Type: corev1.NodeReady, Status: corev1.ConditionFalse, LastTransitionTime: metav1.NewTime(now.Add(-3 * time.Minute))},
-			{Type: corev1.NodeMemoryPressure, Status: corev1.ConditionTrue},
-			{Type: corev1.NodeDiskPressure, Status: corev1.ConditionTrue},
-		}},
-	}
-	core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: fake.NewClientset(node), ResourceTypes: map[string]bool{k8score.Nodes: true}, DeferredTypes: map[string]bool{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(core.Stop)
-	p := &fakeProvider{problems: k8s.DetectProblems(&k8s.ResourceCache{ResourceCache: core}, ""), podsOnNode: map[string][]Ref{"node-1": {
-		{Kind: "Pod", Namespace: "prod", Name: "a"}, {Kind: "Pod", Namespace: "prod", Name: "b"},
-	}}}
-	p.problems = append(p.problems,
-		k8s.Detection{Kind: "Pod", Namespace: "prod", Name: "a", Severity: "critical", Reason: "OOMKilled", LastTerminatedReason: "OOMKilled"},
-		k8s.Detection{Kind: "Pod", Namespace: "prod", Name: "b", Severity: "warning", Reason: "ContainerCreating"},
-	)
-	out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
-	byReason := map[string]Issue{}
-	for _, i := range out {
-		byReason[i.Reason] = i
-	}
-	if len(out) != 5 {
-		t.Fatalf("got %+v; want three independent node issues and two pod symptoms", out)
-	}
-	if byReason["NotReady"].DiagnosticContext != nil {
-		t.Fatalf("NotReady attributed pressure symptoms: %+v", byReason["NotReady"])
-	}
-	for reason, wantPod := range map[string]string{"MemoryPressure": "a", "DiskPressure": "b"} {
-		issue := byReason[reason]
-		if issue.DiagnosticContext == nil {
-			t.Fatalf("%s has no diagnostic context", reason)
-		}
-		var fact *issuesapi.DiagnosticFact
-		for i := range issue.DiagnosticContext.Facts {
-			if issue.DiagnosticContext.Facts[i].Type == factNodeBlastRadius {
-				fact = &issue.DiagnosticContext.Facts[i]
+	for _, pidPressure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pid-pressure=%t", pidPressure), func(t *testing.T) {
+			now := time.Now()
+			node := &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: "node-1", CreationTimestamp: metav1.NewTime(now.Add(-time.Hour))},
+				Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+					{Type: corev1.NodeReady, Status: corev1.ConditionFalse, LastTransitionTime: metav1.NewTime(now.Add(-3 * time.Minute))},
+					{Type: corev1.NodeMemoryPressure, Status: corev1.ConditionTrue},
+					{Type: corev1.NodeDiskPressure, Status: corev1.ConditionTrue},
+				}},
 			}
-		}
-		if fact == nil || len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Ref.Name != wantPod {
-			t.Fatalf("%s should attribute only %s: %+v", reason, wantPod, fact)
-		}
-	}
-	oom := byReason["OOMKilled"]
-	if oom.IncidentParent == nil || oom.IncidentParent.ID != byReason["MemoryPressure"].ID {
-		t.Fatalf("OOM parent %+v; want MemoryPressure %s", oom.IncidentParent, byReason["MemoryPressure"].ID)
-	}
-	waiting := byReason["ContainerCreating"]
-	if waiting.IncidentParent == nil || waiting.IncidentParent.ID != byReason["DiskPressure"].ID {
-		t.Fatalf("waiting parent %+v; want DiskPressure %s", waiting.IncidentParent, byReason["DiskPressure"].ID)
+			if pidPressure {
+				node.Status.Conditions = append(node.Status.Conditions, corev1.NodeCondition{Type: corev1.NodePIDPressure, Status: corev1.ConditionTrue})
+			}
+			core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: fake.NewClientset(node), ResourceTypes: map[string]bool{k8score.Nodes: true}, DeferredTypes: map[string]bool{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(core.Stop)
+			p := &fakeProvider{problems: k8s.DetectProblems(&k8s.ResourceCache{ResourceCache: core}, ""), podsOnNode: map[string][]Ref{"node-1": {
+				{Kind: "Pod", Namespace: "prod", Name: "a"}, {Kind: "Pod", Namespace: "prod", Name: "b"},
+			}}}
+			p.problems = append(p.problems,
+				k8s.Detection{Kind: "Pod", Namespace: "prod", Name: "a", Severity: "critical", Reason: "OOMKilled", LastTerminatedReason: "OOMKilled"},
+				k8s.Detection{Kind: "Pod", Namespace: "prod", Name: "b", Severity: "warning", Reason: "ContainerCreating"},
+			)
+			out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return true }})
+			byReason := map[string]Issue{}
+			for _, i := range out {
+				byReason[i.Reason] = i
+			}
+			wantCount := 5
+			if pidPressure {
+				wantCount++
+			}
+			if len(out) != wantCount {
+				t.Fatalf("got %+v; want %d independent issues", out, wantCount)
+			}
+			if byReason["NotReady"].DiagnosticContext != nil {
+				t.Fatalf("NotReady attributed pressure symptoms: %+v", byReason["NotReady"])
+			}
+			wantPods := map[string]string{"MemoryPressure": "a", "DiskPressure": "b"}
+			if pidPressure {
+				wantPods["PIDPressure"] = "b"
+			}
+			for reason, wantPod := range wantPods {
+				issue := byReason[reason]
+				if issue.DiagnosticContext == nil {
+					t.Fatalf("%s has no diagnostic context", reason)
+				}
+				var fact *issuesapi.DiagnosticFact
+				for i := range issue.DiagnosticContext.Facts {
+					if issue.DiagnosticContext.Facts[i].Type == factNodeBlastRadius {
+						fact = &issue.DiagnosticContext.Facts[i]
+					}
+				}
+				if fact == nil || len(fact.RelatedIssues) != 1 || fact.RelatedIssues[0].Ref.Name != wantPod {
+					t.Fatalf("%s should attribute only %s: %+v", reason, wantPod, fact)
+				}
+			}
+			oom := byReason["OOMKilled"]
+			if oom.IncidentParent == nil || oom.IncidentParent.ID != byReason["MemoryPressure"].ID {
+				t.Fatalf("OOM parent %+v; want MemoryPressure %s", oom.IncidentParent, byReason["MemoryPressure"].ID)
+			}
+			waiting := byReason["ContainerCreating"]
+			if pidPressure {
+				if waiting.IncidentParent != nil {
+					t.Fatalf("ambiguous disk/PID pressure chose a cause: %+v", waiting.IncidentParent)
+				}
+			} else if waiting.IncidentParent == nil || waiting.IncidentParent.ID != byReason["DiskPressure"].ID {
+				t.Fatalf("waiting parent %+v; want DiskPressure %s", waiting.IncidentParent, byReason["DiskPressure"].ID)
+			}
+		})
 	}
 }
 
