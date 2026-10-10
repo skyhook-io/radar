@@ -250,6 +250,11 @@ jobs:
             exit 1
           fi
 
+      # Cross-render assertions helm-unittest can't express (it renders each
+      # test in isolation), e.g. checksum/rbac changing only with rbac values.
+      - name: Chart template smoke tests
+        run: ./scripts/test-chart.sh
+
       - name: Intall helmfile
         uses: helmfile/helmfile-action@v2.2.0
         with:
