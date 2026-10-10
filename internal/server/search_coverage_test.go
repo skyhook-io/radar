@@ -151,3 +151,42 @@ func TestSearchKindRBACClusterFirstAndFailureReason(t *testing.T) {
 		t.Fatalf("cluster check failure: %s %v; checks %d", decision, scoped, checks.Load())
 	}
 }
+
+func TestSearchKindRBACDeniedClusterCountsAndCachesNamespaceChecks(t *testing.T) {
+	var checks atomic.Int32
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		checks.Add(1)
+		var review authorizationv1.SubjectAccessReview
+		if err := json.NewDecoder(r.Body).Decode(&review); err != nil {
+			t.Error(err)
+			http.Error(w, "decode", 400)
+			return
+		}
+		review.Status.Allowed = review.Spec.ResourceAttributes.Namespace != "" && review.Spec.ResourceAttributes.Namespace != "denied"
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(review)
+	}))
+	t.Cleanup(api.Close)
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: api.URL, ContentConfig: rest.ContentConfig{ContentType: "application/json", AcceptContentTypes: "application/json"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(previous) })
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	user := &auth.User{Username: "search-denied-counts"}
+	namespaces := []string{"a", "b", "c", "denied"}
+	s.permCache.Set(user.Username, nil, &auth.UserPermissions{AllowedNamespaces: namespaces})
+	r := requestWithUser("GET", "/api/search", user)
+	for range 2 {
+		for _, kind := range search.NamespacedSearchKinds {
+			decision, scoped := s.computeSearchKindRBAC(r, namespaces, kind.Group, kind.Resource)
+			if decision != "override" || len(scoped) != 3 {
+				t.Fatalf("%s denied-cluster scope: %s %v", kind.Kind, decision, scoped)
+			}
+		}
+		if got, want := checks.Load(), int32(len(search.NamespacedSearchKinds)*(len(namespaces)+1)); got != want {
+			t.Fatalf("SAR calls = %d, want %d (one cluster check plus visible namespaces per sensitive kind, cached on repeat)", got, want)
+		}
+	}
+}

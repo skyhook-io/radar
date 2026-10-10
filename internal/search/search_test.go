@@ -18,6 +18,8 @@ import (
 type fakeProvider struct {
 	observations          map[schema.GroupVersionResource]k8score.DynamicResourceObservation
 	warmed                []schema.GroupVersionResource
+	warmNamespaces        []string
+	warmFunc              func(context.Context, schema.GroupVersionResource, string) error
 	typedReasons          map[string]string
 	listErrors            map[string]error
 	dynamicErrors         map[string]error
@@ -62,8 +64,12 @@ func (f *fakeProvider) DynamicObservation(gvr schema.GroupVersionResource) k8sco
 	}
 	return k8score.DynamicResourceObservation{State: k8score.DynamicObservationSynced}
 }
-func (f *fakeProvider) WarmDynamic(ctx context.Context, gvr schema.GroupVersionResource) error {
+func (f *fakeProvider) WarmDynamic(ctx context.Context, gvr schema.GroupVersionResource, namespace string) error {
 	f.warmed = append(f.warmed, gvr)
+	f.warmNamespaces = append(f.warmNamespaces, namespace)
+	if f.warmFunc != nil {
+		return f.warmFunc(ctx, gvr, namespace)
+	}
 	if f.warmError != nil {
 		return f.warmError
 	}

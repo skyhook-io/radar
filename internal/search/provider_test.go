@@ -48,7 +48,7 @@ func TestCacheProviderNilDynamic(t *testing.T) {
 	if got := p.DynamicObservation(schema.GroupVersionResource{}); got.State != k8score.DynamicObservationSyncing {
 		t.Fatalf("observation: %+v", got)
 	}
-	if err := p.WarmDynamic(context.Background(), schema.GroupVersionResource{}); !errors.Is(err, k8s.ErrDynamicNotReady) {
+	if err := p.WarmDynamic(context.Background(), schema.GroupVersionResource{}, ""); !errors.Is(err, k8s.ErrDynamicNotReady) {
 		t.Fatalf("warm: %v", err)
 	}
 }
@@ -74,7 +74,7 @@ func TestCacheProviderUnavailableTypedUsesCollectorPermissions(t *testing.T) {
 func TestCacheProviderWarmWaitsForDiscoveryWithoutBlocking(t *testing.T) {
 	p := &CacheProvider{dynamic: &k8s.DynamicResourceCache{}}
 	start := time.Now()
-	err := p.WarmDynamic(context.Background(), schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"})
+	err := p.WarmDynamic(context.Background(), schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}, "")
 	if !errors.Is(err, k8s.ErrDynamicNotReady) || time.Since(start) > time.Second {
 		t.Fatalf("discovery wait: %v, %s", err, time.Since(start))
 	}

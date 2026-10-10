@@ -16,6 +16,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -48,7 +49,7 @@ type Provider interface {
 	DynamicResources() ([]schema.GroupVersionResource, error)
 	TypedCoverage(kind string, namespaces []string) string
 	DynamicObservation(gvr schema.GroupVersionResource) k8score.DynamicResourceObservation
-	WarmDynamic(ctx context.Context, gvr schema.GroupVersionResource) error
+	WarmDynamic(ctx context.Context, gvr schema.GroupVersionResource, namespace string) error
 	KindForGVR(gvr schema.GroupVersionResource) string
 }
 
@@ -167,6 +168,8 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		opts.Limit = MaxLimit
 	}
 
+	warmCtx, cancelWarm := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelWarm()
 	res := Result{Unsearched: []UnsearchedKind{}}
 	covered := map[string]bool{}
 	markKnown := func(kind, plural string) {
@@ -321,7 +324,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 	}
 	for _, gvr := range gvrs {
 		kind := p.KindForGVR(gvr)
-		if kind == "" || !shouldScanCRD(kind, q) {
+		if kind == "" || !shouldScanCRD(kind, gvr.Group, q) {
 			continue
 		}
 		markKnown(kind, gvr.Resource)
@@ -361,24 +364,30 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		if clusterScoped || len(namespaces) == 0 {
 			namespaces = []string{""}
 		}
-		if warm {
-			if err := p.WarmDynamic(ctx, gvr); err != nil {
-				observation = p.DynamicObservation(gvr)
-				reason := dynamicObservationReason(observation)
-				if reason == "" || reason == "cold" {
-					reason = listErrorReason(err)
+		var items []*unstructured.Unstructured
+		for _, ns := range namespaces {
+			outsideScope := observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && (ns == "" || !slices.Contains(observation.Namespaces, ns))
+			if len(q.KindFilter) > 0 && (warm || outsideScope) {
+				if err := p.WarmDynamic(warmCtx, gvr, ns); err != nil {
+					if outsideScope {
+						addGap(kind, gvr.Group, "namespace_scope")
+					}
+					reason := dynamicObservationReason(p.DynamicObservation(gvr))
+					if reason == "" || reason == "cold" {
+						reason = listErrorReason(err)
+					}
+					addGap(kind, gvr.Group, reason)
+					if ns != "" || !outsideScope {
+						continue
+					}
+				} else {
+					observation = p.DynamicObservation(gvr)
 				}
+			}
+			if reason := dynamicObservationReason(observation); reason != "" {
 				addGap(kind, gvr.Group, reason)
 				continue
 			}
-			observation = p.DynamicObservation(gvr)
-		}
-		if reason := dynamicObservationReason(observation); reason != "" {
-			addGap(kind, gvr.Group, reason)
-			continue
-		}
-		var items []*unstructured.Unstructured
-		for _, ns := range namespaces {
 			if observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && (ns == "" || !slices.Contains(observation.Namespaces, ns)) {
 				addGap(kind, gvr.Group, "namespace_scope")
 				if ns != "" {
@@ -529,11 +538,11 @@ func shouldScanTyped(kind string, q Query) bool {
 	return strings.ToLower(kind) != "event"
 }
 
-func shouldScanCRD(kind string, q Query) bool {
+func shouldScanCRD(kind, group string, q Query) bool {
 	if len(q.KindFilter) > 0 {
 		return kindMatches(kind, q.KindFilter)
 	}
-	return !strings.EqualFold(kind, "Event")
+	return !strings.EqualFold(kind, "Event") || !k8score.IsBuiltInAPIGroup(group)
 }
 
 // isClusterScopedKind returns true for the kinds in typedKinds that exist

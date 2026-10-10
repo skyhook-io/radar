@@ -513,6 +513,13 @@ caller `rbac_denied`, collector `sa_forbidden`,
 can describe an incompletely searched kind: authorized namespaces still contribute
 hits. Unavailable discovery is represented by `kind: "*"`, `group: ""`.
 Coverage is bounded by the discovered catalog; it cannot describe undiscovered APIs.
+Explicit searches share one two-second warmup deadline across matching dynamic
+kinds and namespaces, including permission probes and initial sync. A requested
+namespace can start its own watch even when another namespace is already cached.
+Failed or unfinished warming reports partial coverage and preserves cached hits
+from covered namespaces. Third-party CRDs named Event are searched normally; only
+built-in Events are excluded from broad searches.
+
 Explicitly requested cold or unsupported kinds keep per-kind entries; denied,
 syncing, failed-sync and list-error kinds keep per-kind entries for all queries.
 Typed informers disabled by collector probes report `sa_forbidden`, never `cold`.

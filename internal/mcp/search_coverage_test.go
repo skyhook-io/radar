@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"k8s.io/client-go/kubernetes"
@@ -139,5 +140,32 @@ func TestSearchKindRBACNamespaceCheckFailureRetainsAllowedScope(t *testing.T) {
 	decision, _ = mcpSearchKindRBAC(ctx, []string{"a"}, "", "unavailable")
 	if decision != "" {
 		t.Fatalf("fully allowed narrower scope: %s", decision)
+	}
+}
+
+func TestSearchKindRBACDeniedClusterCountsAndCachesNamespaceChecks(t *testing.T) {
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: "https://example.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := k8s.SetTestClient(client)
+	t.Cleanup(func() { k8s.SetTestClient(previous); getPermCache().Invalidate() })
+	namespaces := []string{"a", "b", "c", "denied"}
+	ctx := withTestUserPerms(t, "search-denied-counts", nil, namespaces)
+	var checks atomic.Int32
+	stubSubjectCanI(t, func(_ context.Context, _ kubernetes.Interface, _ string, _ []string, namespace, group, resource, verb string) (bool, error) {
+		checks.Add(1)
+		return namespace != "" && namespace != "denied", nil
+	})
+	for range 2 {
+		for _, kind := range search.NamespacedSearchKinds {
+			decision, scoped := mcpSearchKindRBAC(ctx, namespaces, kind.Group, kind.Resource)
+			if decision != "override" || len(scoped) != 3 {
+				t.Fatalf("%s denied-cluster scope: %s %v", kind.Kind, decision, scoped)
+			}
+		}
+		if got, want := checks.Load(), int32(len(search.NamespacedSearchKinds)*(len(namespaces)+1)); got != want {
+			t.Fatalf("SAR calls = %d, want %d (one cluster check plus visible namespaces per sensitive kind, cached on repeat)", got, want)
+		}
 	}
 }

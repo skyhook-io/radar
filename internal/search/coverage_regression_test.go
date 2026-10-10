@@ -177,6 +177,7 @@ func TestDynamicObservationReasonsAndRequestedScope(t *testing.T) {
 			t.Fatalf("reason %s: %+v", tc.code, res)
 		}
 	}
+	p.warmError = fmt.Errorf("watch failed")
 	p.observations[gvr] = k8score.DynamicResourceObservation{State: k8score.DynamicObservationSynced, Scope: k8score.DynamicObservationScopeExplicitNamespaces, Namespaces: []string{"a"}, Truncated: true}
 	for _, tc := range []struct {
 		ns      []string

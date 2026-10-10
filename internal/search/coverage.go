@@ -1,6 +1,7 @@
 package search
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -35,7 +36,7 @@ func listErrorReason(err error) string {
 	if errors.Is(err, k8s.ErrUnknownKind) {
 		return "not_indexed"
 	}
-	if errors.Is(err, k8s.ErrDynamicNotReady) {
+	if errors.Is(err, k8s.ErrDynamicNotReady) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return "syncing"
 	}
 	return "list_error"

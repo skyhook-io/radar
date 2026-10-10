@@ -53,7 +53,9 @@ func (p *CacheProvider) ListDynamic(ctx context.Context, gvr schema.GroupVersion
 	if p.dynamic == nil {
 		return nil, fmt.Errorf("%w: dynamic cache", k8s.ErrDynamicNotReady)
 	}
-	return p.dynamic.List(gvr, namespace)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return p.dynamic.ListContext(ctx, gvr, namespace)
 }
 
 func (p *CacheProvider) DynamicResources() ([]schema.GroupVersionResource, error) {
@@ -124,7 +126,9 @@ func (p *CacheProvider) DynamicObservation(gvr schema.GroupVersionResource) k8sc
 	return p.dynamic.Observation(gvr)
 }
 
-func (p *CacheProvider) WarmDynamic(ctx context.Context, gvr schema.GroupVersionResource) error {
+func (p *CacheProvider) WarmDynamic(ctx context.Context, gvr schema.GroupVersionResource, namespace string) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -134,17 +138,13 @@ func (p *CacheProvider) WarmDynamic(ctx context.Context, gvr schema.GroupVersion
 	if p.dynamic.GetDiscoveryStatus() != k8score.CRDDiscoveryComplete {
 		return fmt.Errorf("%w: CRD discovery", k8s.ErrDynamicNotReady)
 	}
-	if err := p.dynamic.EnsureWatching(gvr); err != nil {
+	if err := p.dynamic.EnsureWatchingContext(ctx, gvr, namespace); err != nil {
 		return err
 	}
-	timeout := 2 * time.Second
-	if deadline, ok := ctx.Deadline(); ok {
-		timeout = min(timeout, time.Until(deadline))
+	if !p.dynamic.WaitForSyncContext(ctx, gvr, namespace) {
+		return fmt.Errorf("%w: initial sync", k8s.ErrDynamicNotReady)
 	}
-	if timeout > 0 {
-		p.dynamic.WaitForSync(gvr, timeout)
-	}
-	return ctx.Err()
+	return nil
 }
 
 func (p *CacheProvider) KindForGVR(gvr schema.GroupVersionResource) string {
