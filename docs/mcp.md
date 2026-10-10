@@ -307,6 +307,35 @@ docker run -p 127.0.0.1:9280:9280 \
 
 The Docker image's primary use is [in-cluster deployment](in-cluster.md) with a ServiceAccount, where none of these apply.
 
+## Single-object deletion
+
+`delete_resource` deletes one object under the caller's Kubernetes identity. It
+requires `get` and `delete` permission on the target. Omit `dry_run` (or set it to
+`true`) to validate a server-side `DryRun=All` delete without persisting it. The
+preview includes UID, resourceVersion, finalizers, propagation, and a `confirm`
+token valid for five minutes. Review the preview, then repeat the same target and
+propagation with `dry_run: false` and that token. Tokens are bound to the caller
+and cluster context; a changed or replaced object requires a new preview. Real
+deletes use UID and resourceVersion preconditions, including changes racing the
+confirmation check.
+
+`propagation` accepts `background` (default, like kubectl), `foreground`, or
+`orphan`. Cached topology management edges provide an **approximation**, bounded
+to 100 caller-readable dependents. Namespace contents, CRD instances, and
+controller-finalizer cleanup are **not enumerated**; their count is unknown,
+never inferred from an empty dependent list. Deleting a Namespace removes all
+its contents; deleting a CRD removes all its instances, including with orphan
+propagation. Owner-reference orphaning does not prevent controller-finalizer
+cleanup.
+
+An accepted delete reports success while asynchronous cleanup may continue.
+`observation.pendingFinalizers` and `observation.deletionTimestamp` describe what
+an immediate follow-up read saw; `observationError` means that read failed, not
+that deletion failed. The tool never strips finalizers or exposes a force mode.
+Inspect controller cleanup first; `patch_resource` is a separate explicit step
+for finalizer intervention, which can orphan resources. Batch deletion and Helm
+release operations are separate follow-ups.
+
 ## `diagnose` evidence limits
 
 For workload `diagnose` responses, `logCoverage.selectedPods` counts pods selected for log requests, not pods whose logs were successfully read. Per-container errors and `logsError` describe failed collection. `logCoverage.totalLines` counts diagnostic-filter output before the aggregate response cap (including fallback tail lines); `shownLines` counts the lines retained after that cap. Neither describes a container's complete log history. `totalPods` and `shownPods` count pods contributing at least one line before and after that cap—not all selected pods or successful empty reads. `eventsTotalGroups`, recent-change coverage/error fields, and log sampling/truncation must remain qualifications even when an agent reports no problem.

@@ -577,16 +577,22 @@ func isOnlyRadarFieldManagerConflict(err error) bool {
 
 // DeleteResource deletes a Kubernetes resource.
 func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourceOptions) error {
+	_, err := m.DeleteResourceWithResult(ctx, opts)
+	return err
+}
+
+// DeleteResource deletes a Kubernetes resource.
+func (m *WorkloadManager) DeleteResourceWithResult(ctx context.Context, opts DeleteResourceOptions) (*DeleteResourceResult, error) {
 	if m.discovery == nil {
-		return fmt.Errorf("resource discovery not initialized")
+		return nil, fmt.Errorf("resource discovery not initialized")
 	}
 	if m.dynClient == nil {
-		return fmt.Errorf("dynamic client not initialized")
+		return nil, fmt.Errorf("dynamic client not initialized")
 	}
 
 	gvr, ok := m.discovery.GetGVRWithGroup(opts.Kind, opts.Group)
 	if !ok {
-		return fmt.Errorf("unknown resource kind: %s", opts.Kind)
+		return nil, fmt.Errorf("unknown resource kind: %s", opts.Kind)
 	}
 
 	if opts.Force {
@@ -599,7 +605,7 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 		}
 		if patchErr != nil && !apierrors.IsNotFound(patchErr) {
 			if apierrors.IsForbidden(patchErr) {
-				return fmt.Errorf("force delete requires patch permission to strip finalizers: %w", patchErr)
+				return nil, fmt.Errorf("force delete requires patch permission to strip finalizers: %w", patchErr)
 			}
 			log.Printf("[delete] Failed to strip finalizers from %s %s/%s: %v", opts.Kind, opts.Namespace, opts.Name, patchErr)
 		}
@@ -619,24 +625,16 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 	}
 	if err != nil {
 		if opts.Force && apierrors.IsNotFound(err) {
-			return nil
+			return &DeleteResourceResult{}, nil
 		}
-		return fmt.Errorf("failed to delete resource: %w", err)
+		return nil, fmt.Errorf("failed to delete resource: %w", err)
 	}
 
-	if !opts.Force {
-		var obj *unstructured.Unstructured
-		if opts.Namespace != "" {
-			obj, _ = m.dynClient.Resource(gvr).Namespace(opts.Namespace).Get(ctx, opts.Name, metav1.GetOptions{})
-		} else {
-			obj, _ = m.dynClient.Resource(gvr).Get(ctx, opts.Name, metav1.GetOptions{})
-		}
-		if obj != nil && obj.GetDeletionTimestamp() != nil && len(obj.GetFinalizers()) > 0 {
-			return fmt.Errorf("resource is stuck in Terminating state due to finalizers — use force delete to remove it")
-		}
+	var client dynamic.ResourceInterface = m.dynClient.Resource(gvr)
+	if opts.Namespace != "" {
+		client = m.dynClient.Resource(gvr).Namespace(opts.Namespace)
 	}
-
-	return nil
+	return ObserveResourceDeletion(ctx, client, opts.Name, ""), nil
 }
 
 // TriggerCronJob creates a Job from a CronJob.

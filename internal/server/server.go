@@ -4328,7 +4328,7 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
-	err := k8s.DeleteResourceWithClient(r.Context(), k8s.DeleteResourceOptions{
+	result, err := k8s.DeleteResourceWithResultAndClient(r.Context(), k8s.DeleteResourceOptions{
 		Kind:      kind,
 		Group:     group,
 		Namespace: namespace,
@@ -4344,16 +4344,12 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusForbidden, err.Error())
 			return
 		}
-		if strings.Contains(err.Error(), "stuck in Terminating state") {
-			s.writeError(w, http.StatusConflict, err.Error())
-			return
-		}
 		log.Printf("[delete] Failed to delete %s %s/%s (force=%v): %v", kind, namespace, name, force, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	s.writeJSON(w, result)
 }
 
 // handleCascadeDeletePreview returns a preview of resources that would be garbage-collected

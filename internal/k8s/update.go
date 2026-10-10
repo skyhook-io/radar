@@ -72,6 +72,10 @@ func DeleteResourceWithClient(ctx context.Context, opts DeleteResourceOptions, c
 	return getWorkloadManagerWithClient(client).DeleteResource(ctx, opts)
 }
 
+func DeleteResourceWithResultAndClient(ctx context.Context, opts DeleteResourceOptions, client dynamic.Interface) (*k8score.DeleteResourceResult, error) {
+	return getWorkloadManagerWithClient(client).DeleteResourceWithResult(ctx, opts)
+}
+
 // ApplyResource creates or updates a Kubernetes resource from YAML.
 func ApplyResource(ctx context.Context, opts ApplyResourceOptions) (*ApplyResourceResult, error) {
 	return getWorkloadManager().ApplyResource(ctx, opts)

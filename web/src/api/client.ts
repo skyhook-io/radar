@@ -21,7 +21,7 @@ import type {
   YamlSchemaLoadResult,
 } from '@skyhook-io/k8s-ui'
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
-import { showApiError, showApiSuccess } from '../components/ui/Toast'
+import { showApiError, showApiSuccess, useToast } from '../components/ui/Toast'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import type {
   Topology,
@@ -4256,8 +4256,20 @@ export function useCascadeDeletePreview(
 }
 
 // Delete a resource
+interface DeleteResourceResult {
+  deletionTimestamp?: string;
+  pendingFinalizers?: string[];
+  observationError?: string;
+}
+
+async function readDeleteResult(response: Response): Promise<DeleteResourceResult> {
+  // Radar Hub can embed this UI against a Radar that returns 204 for deletes.
+  return response.status === 204 ? {} : response.json();
+}
+
 export function useDeleteResource() {
   const queryClient = useQueryClient();
+  const { showToast } = useToast();
 
   return useMutation({
     mutationFn: async ({
@@ -4290,14 +4302,17 @@ export function useDeleteResource() {
         const error = await readErrorBody(response);
         throw new Error(error.error || `HTTP ${response.status}`);
       }
-      // DELETE returns 204 No Content, no body to parse
-      return { success: true };
+      return readDeleteResult(response);
     },
     meta: {
       errorMessage: "Failed to delete resource",
-      successMessage: "Resource deleted",
     },
-    onSuccess: (_, variables) => {
+    onSuccess: (result, variables) => {
+      if (result.pendingFinalizers?.length) {
+        showToast(`Deleting — waiting on finalizers: ${result.pendingFinalizers.join(", ")}`, { type: "info" });
+      } else {
+        showToast("Deletion requested", { type: "info", detail: result.observationError });
+      }
       queryClient.invalidateQueries({
         queryKey: ["resources", variables.kind],
       });
@@ -4308,6 +4323,7 @@ export function useDeleteResource() {
 
 export function useBulkDeleteResources() {
   const queryClient = useQueryClient();
+  const { showToast } = useToast();
 
   return useMutation({
     mutationFn: async ({
@@ -4337,7 +4353,7 @@ export function useBulkDeleteResources() {
               error.error || `Failed to delete ${namespace}/${name}`,
             );
           }
-          return { kind, namespace, name };
+          return { kind, namespace, name, result: await readDeleteResult(response) };
         }),
       );
       const failed = results.filter((r) => r.status === "rejected");
@@ -4346,11 +4362,19 @@ export function useBulkDeleteResources() {
           `Failed to delete ${failed.length} of ${items.length} resources`,
         );
       }
-      return { deleted: items.length };
+      const pending = results.flatMap((r) => r.status === "fulfilled" && r.value.result.pendingFinalizers?.length
+        ? [`${r.value.namespace}/${r.value.name}: ${r.value.result.pendingFinalizers.join(", ")}`]
+        : []);
+      return { requested: items.length, pending };
     },
     meta: {
       errorMessage: "Failed to delete some resources",
-      successMessage: "Resources deleted",
+    },
+    onSuccess: ({ requested, pending }) => {
+      showToast(pending.length ? `Deleting — ${pending.length} waiting on finalizers` : `Deletion requested for ${requested} resources`, {
+        type: "info",
+        detail: pending.length ? listWithOverflow(pending) : undefined,
+      });
     },
     // onSettled, not onSuccess — a partial failure still deleted some
     // resources, and the table must refetch to drop them.
