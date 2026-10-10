@@ -16,7 +16,9 @@ export function IngressRenderer({ data, onNavigate }: IngressRendererProps) {
   // Check for issues
   const hasNoAddress = lbIngress.length === 0
   const hasNoClass = !spec.ingressClassName && !data.metadata?.annotations?.['kubernetes.io/ingress.class']
-  const hasNoRules = rules.length === 0
+  const defaultService = spec.defaultBackend?.service
+  // An Ingress with only a default backend still routes everything to it.
+  const hasNoRules = rules.length === 0 && !spec.defaultBackend
 
   return (
     <>
@@ -50,11 +52,22 @@ export function IngressRenderer({ data, onNavigate }: IngressRendererProps) {
           {lbIngress.length > 0 && (
             <Property label="Address" value={lbIngress[0].ip || lbIngress[0].hostname} />
           )}
+          {defaultService?.name && (
+            <Property label="Default Backend" value={
+              <ResourceLink
+                name={defaultService.name}
+                kind="services"
+                namespace={data.metadata?.namespace || ''}
+                label={<span className="text-blue-400">{defaultService.name}:{defaultService.port?.number || defaultService.port?.name}</span>}
+                onNavigate={onNavigate}
+              />
+            } />
+          )}
           <Property label="TLS" value={tls.length > 0 ? `${tls.length} certificate(s)` : 'None'} />
         </PropertyList>
       </Section>
 
-      <Section title="Rules" defaultExpanded>
+      {rules.length > 0 && <Section title="Rules" defaultExpanded>
         <div className="space-y-3">
           {rules.map((rule: any, i: number) => (
             <div key={i} className="card-inner-lg">
@@ -87,7 +100,7 @@ export function IngressRenderer({ data, onNavigate }: IngressRendererProps) {
             </div>
           ))}
         </div>
-      </Section>
+      </Section>}
 
       {tls.length > 0 && (
         <Section title="TLS" icon={Shield}>

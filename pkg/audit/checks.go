@@ -874,27 +874,17 @@ func checkServiceNoMatchingPods(tr *evalTracker, services []*corev1.Service, pod
 func checkIngressNoMatchingService(tr *evalTracker, ingresses []*networkingv1.Ingress, servicesByName map[string]bool) []Finding {
 	var findings []Finding
 	for _, ing := range ingresses {
-		eligible := false
-		for _, rule := range ing.Spec.Rules {
-			if rule.HTTP == nil {
-				continue
-			}
-			for _, path := range rule.HTTP.Paths {
-				if path.Backend.Service == nil {
-					continue
-				}
-				eligible = true
-				svcKey := ing.Namespace + "/" + path.Backend.Service.Name
-				if !servicesByName[svcKey] {
-					findings = append(findings, Finding{
-						Kind: "Ingress", Namespace: ing.Namespace, Name: ing.Name,
-						CheckID: "ingressNoMatchingService", Category: CategoryReliability, Severity: SeverityWarning,
-						Message: fmt.Sprintf("Ingress references non-existent Service %q", path.Backend.Service.Name),
-					})
-				}
+		backends := configrefs.IngressBackendServices(ing)
+		for _, name := range backends {
+			if !servicesByName[ing.Namespace+"/"+name] {
+				findings = append(findings, Finding{
+					Kind: "Ingress", Namespace: ing.Namespace, Name: ing.Name,
+					CheckID: "ingressNoMatchingService", Category: CategoryReliability, Severity: SeverityWarning,
+					Message: fmt.Sprintf("Ingress references non-existent Service %q", name),
+				})
 			}
 		}
-		if eligible {
+		if len(backends) > 0 {
 			tr.record("ingressNoMatchingService", ing.Namespace)
 		}
 	}
