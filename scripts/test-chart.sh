@@ -85,6 +85,41 @@ assert_contains 'apiGroups: \["\*"\]'               "wildcard includes every API
 assert_contains 'resources: \["\*"\]'               "wildcard includes core Secrets and excluded CRDs"
 echo
 
+# A grant change only reaches Radar through a new pod: it decides what it can
+# watch at startup and keeps serving its cache after a grant is revoked.
+# helm-unittest renders each test in isolation, so comparing renders lives here
+# instead of as pinned hashes that every rbac default change would break.
+rbac_checksum() {
+  render "$@"
+  CHECKSUM=$(yq 'select(.kind == "Deployment") | .spec.template.metadata.annotations["checksum/rbac"]' <<< "$OUT")
+}
+assert_same() {
+  if [[ "$1" == "$2" ]]; then pass "$3"; else fail "$3 — $1 != $2"; fi
+}
+assert_differs() {
+  if [[ "$1" != "$2" ]]; then pass "$3"; else fail "$3 — both $1"; fi
+}
+
+rbac_checksum "checksum/rbac — defaults"
+DEFAULT_CHECKSUM=$CHECKSUM
+if [[ "$DEFAULT_CHECKSUM" =~ ^[0-9a-f]{64}$ ]]; then pass "pod template carries an RBAC checksum"
+else fail "pod template carries an RBAC checksum — got: $DEFAULT_CHECKSUM"; fi
+rbac_checksum "checksum/rbac — VictoriaMetrics opt-in" --set rbac.crdGroups.victoriaMetrics=true
+OPT_IN_CHECKSUM=$CHECKSUM
+assert_differs "$OPT_IN_CHECKSUM" "$DEFAULT_CHECKSUM" "enabling the opt-in rolls the pod"
+rbac_checksum "checksum/rbac — VictoriaMetrics opt-in turned back off" --set rbac.crdGroups.victoriaMetrics=false
+assert_differs "$CHECKSUM" "$OPT_IN_CHECKSUM"         "disabling the opt-in rolls the pod"
+assert_same "$CHECKSUM" "$DEFAULT_CHECKSUM"           "explicit false matches the default"
+rbac_checksum "checksum/rbac — unrelated values" \
+  --set image.tag=v0.0.0-test \
+  --set resources.limits.memory=2Gi \
+  --set podAnnotations.team=platform
+assert_same "$CHECKSUM" "$DEFAULT_CHECKSUM"           "non-RBAC changes do not roll the pod"
+rbac_checksum "checksum/rbac — cloud mode" \
+  --set cloud.enabled=true --set cloud.url=wss://x --set cloud.token=t --set cloud.clusterName=c
+assert_same "$CHECKSUM" "$DEFAULT_CHECKSUM"           "checksum renders in cloud mode too"
+echo
+
 render "cost.currency — explicit OpenCost currency label" --set cost.currency=GBP
 assert_contains '--opencost-currency=GBP'           "OpenCost currency flag rendered"
 echo

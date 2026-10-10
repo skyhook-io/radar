@@ -66,6 +66,7 @@ serviceAccount:
 
 # RBAC configuration
 rbac:
+  # Radar reads its grants at startup, so changing any rbac value rolls the pod.
   # Create ClusterRole and ClusterRoleBinding
   create: true
   # Additional rules to add to the ClusterRole

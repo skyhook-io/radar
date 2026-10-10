@@ -366,6 +366,11 @@ The Secret is managed independently of Helm, so credential rotation does not req
 
 The chart creates a ClusterRole with read-only access to common Kubernetes resources.
 
+Grant changes take effect when the Radar pod restarts: Radar decides what it can
+read at startup and keeps serving objects it already cached after a grant is
+removed. `helm upgrade` rolls the pod whenever `rbac` values change. If you change
+Radar's RBAC outside Helm, restart Radar.
+
 ### Default Permissions (Core K8s Resources)
 
 Always granted (required for basic functionality):
@@ -483,6 +488,8 @@ Radar Cloud integration-read roles. However, Radar currently serves most
 namespaced CRDs to callers who can view their namespace, so collecting these
 objects makes their full configuration visible to those viewers through Radar.
 Turning off a Cloud caller's integration-read add-on does not prevent this exposure.
+Setting the flag back to `false` ends it only when the Radar pod restarts, which
+`helm upgrade` does automatically.
 
 All other VictoriaMetrics operator kinds are excluded from this flag, including
 VMUser/VMAuth, alerting resources, every scrape/probe resource, and the Logs,
