@@ -479,9 +479,9 @@ func scalingFacts(b *groupBuilder, detection AutoscalerDetection) []capacityapi.
 		} else if allMin {
 			facts = append(facts, capacityapi.ScalingFact{Code: "bounds_not_published", Summary: "maximum not published"})
 		} else {
-			return []capacityapi.ScalingFact{{Code: "bounds_not_published", Summary: "bounds not published in-cluster"}}
+			facts = append(facts, capacityapi.ScalingFact{Code: "bounds_not_published", Summary: "bounds not published in-cluster"})
 		}
-		if allTarget {
+		if allMin && allTarget {
 			facts = append(facts, capacityapi.ScalingFact{Code: "target", Summary: fmt.Sprintf("target %d", sumTarget)})
 		}
 		if allMin && allTarget && !belowMin && sumTarget == sumMin {
