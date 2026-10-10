@@ -44,7 +44,8 @@ describe('ForceDeleteConfirmDialog', () => {
     })
     expect(text()).toContain('Will also delete 1 dependent resource')
     expect(text()).toContain('May also delete 1 resource')
-    expect(text()).toContain('Flux will also delete up to 1 managed resource')
+    expect(text()).toContain('Flux will also delete the resources it manages (1 shown)')
+    expect(text()).toContain('can include resources Radar doesn')
   })
 
   it('says force delete stops the controller teardown', async () => {

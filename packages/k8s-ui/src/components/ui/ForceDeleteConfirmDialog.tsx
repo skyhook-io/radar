@@ -158,17 +158,19 @@ function ControllerTeardownNotice({ teardown, force }: { teardown: NonNullable<C
   }
   const title = teardown.action === 'uninstall'
     ? `${teardown.controller} will also uninstall the Helm release`
-    : `${teardown.controller} will also delete ${resources.length > 0 ? `up to ${pluralize(resources.length, 'managed resource')}` : 'the resources it manages'}`
+    : `${teardown.controller} will also delete the resources it manages`
   return (
     <CascadeDependentsList
       dependents={resources}
-      title={title}
-      note={`${teardown.controller} deletes what its own inventory records, which can include resources Radar doesn't show. Resources that opt out of deletion stay (Flux: kustomize.toolkit.fluxcd.io/prune: disabled; Argo CD: Delete=false).`}
+      title={resources.length > 0 ? `${title} (${resources.length} shown)` : title}
+      summary={`${teardown.controller} deletes what its own inventory records, which can include resources Radar doesn't show. Resources that opt out of deletion stay (Flux: kustomize.toolkit.fluxcd.io/prune: disabled; Argo CD: Delete=false).`}
     />
   )
 }
 
-function CascadeDependentsList({ dependents, title, note }: { dependents: CascadeDependent[]; title: string; note?: string }) {
+// `note` explains the expanded list; `summary` is a caveat that must read
+// without expanding it.
+function CascadeDependentsList({ dependents, title, note, summary }: { dependents: CascadeDependent[]; title: string; note?: string; summary?: string }) {
   const [expanded, setExpanded] = useState(false)
   const { panelId, buttonProps } = useDisclosure(expanded)
 
@@ -193,6 +195,7 @@ function CascadeDependentsList({ dependents, title, note }: { dependents: Cascad
         <CollapseChevron open={expanded} inheritColor className="w-3.5 h-3.5" />
         <span>{title}</span>
       </button>
+      {summary && <p className="px-3 pb-2 text-xs text-theme-text-secondary">{summary}</p>}
 
       <Collapse open={expanded} id={panelId}>
         <div className="px-3 pb-2.5 space-y-1.5">
