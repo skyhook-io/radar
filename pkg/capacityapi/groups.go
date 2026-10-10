@@ -58,8 +58,9 @@ type ScalingFact struct {
 	// NodePool spec.limits, configured or not), "pool_not_observed" (a
 	// Karpenter-labeled group whose NodePool could not be read), "bounds" and
 	// "target" (published by the autoscaler), "at_min_size" (all observed
-	// children have targets at their published minima), "bounds_not_published" (an
-	// autoscaler is running but says nothing about this group),
+	// children have targets at their published minima), "scale_down_candidates"
+	// (published candidate counts, lower bound when some are unknown),
+	// "bounds_not_published" (some bounds are missing),
 	// "no_manager_detected" (nothing manages this group's size), and
 	// "manager_detection_unavailable" (the detection source itself was denied
 	// or unreadable — never conflate with "no manager").

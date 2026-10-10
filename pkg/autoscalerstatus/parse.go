@@ -155,6 +155,11 @@ func mapHealth(rh rawHealth) Health {
 }
 
 func mapCondition(rc rawCondition) Condition {
+	if rc.Status == "NoCandidates" && rc.Candidates == nil {
+		// Upstream omitempty suppresses the candidate count when it is zero.
+		zero := 0
+		rc.Candidates = &zero
+	}
 	return Condition{
 		Status:         rc.Status,
 		Candidates:     rc.Candidates,

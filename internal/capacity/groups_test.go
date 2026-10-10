@@ -2,6 +2,7 @@ package capacity
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -661,7 +662,7 @@ func TestBuildGroupsModelNilBoundsChildYieldsBoundsNotPublished(t *testing.T) {
 	gm := buildGroups(Snapshot{GeneratedAt: capacityTestTime(), Nodes: []*corev1.Node{node}, Coverage: capacityTestCoverage()}, status)
 
 	group := mustFindGroup(t, gm.Groups, "gke-nodepool/pool-a")
-	assertFact(t, group.Scaling, "bounds_not_published", "bounds not published in-cluster")
+	assertFact(t, group.Scaling, "bounds_not_published", "maximum not published")
 	if _, ok := findFact(group.Scaling, "bounds"); ok {
 		t.Fatalf("must not fabricate a bounds fact from a partial child: %+v", group.Scaling)
 	}
@@ -782,6 +783,17 @@ func TestScalingFactsAtMinimumSize(t *testing.T) {
 			if got != test.wantFloor {
 				t.Fatalf("floor = %v, want %v; facts = %+v", got, test.wantFloor, facts)
 			}
+			if strings.Contains(test.name, "minimum unpublished") {
+				assertFact(t, facts, "bounds_not_published", "bounds not published in-cluster")
+				if len(facts) != 1 {
+					t.Fatalf("missing minimum must not emit other facts: %+v", facts)
+				}
+			}
+			if test.name == "maximum unpublished" {
+				assertFact(t, facts, "bounds_not_published", "maximum not published")
+				assertFact(t, facts, "target", "target 1")
+				assertFact(t, facts, "at_min_size", "at minimum size — can't scale down")
+			}
 		})
 	}
 }
@@ -881,4 +893,43 @@ func TestScalingFloorUsesAllChildrenBeforeTruncation(t *testing.T) {
 	if _, ok := findFact(summary.Scaling, "at_min_size"); ok {
 		t.Fatalf("floor derived from visible subset: %+v", summary.Scaling)
 	}
+}
+
+func TestScalingCandidateFacts(t *testing.T) {
+	child := func(candidates *int) capacityapi.AutoscalerChildObservation {
+		return capacityapi.AutoscalerChildObservation{MinSize: intPtr(0), MaxSize: intPtr(10), Target: intPtr(6), ScaleDown: &capacityapi.AutoscalerScaleDown{Candidates: candidates}}
+	}
+	for _, test := range []struct {
+		name   string
+		counts []*int
+		want   string
+	}{
+		{"sum", []*int{intPtr(1), intPtr(2)}, "3 scale-down candidates"},
+		{"one", []*int{intPtr(1)}, "1 scale-down candidate"},
+		{"partial", []*int{intPtr(3), nil}, "at least 3 scale-down candidates"},
+		{"zero", []*int{intPtr(0)}, ""},
+		{"unknown", []*int{nil}, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			b := &groupBuilder{domain: "gke"}
+			for _, count := range test.counts {
+				b.children = append(b.children, child(count))
+			}
+			facts := scalingFacts(b, AutoscalerObserved)
+			if test.want != "" {
+				assertFact(t, facts, "scale_down_candidates", test.want)
+			} else if _, ok := findFact(facts, "scale_down_candidates"); ok {
+				t.Fatalf("invented positive candidates: %+v", facts)
+			}
+		})
+	}
+	children := make([]capacityapi.AutoscalerChildObservation, maxGroupChildren+1)
+	for i := range children {
+		children[i] = child(intPtr(1))
+	}
+	summary := finalizeGroup(&groupBuilder{domain: "gke", children: children}, Snapshot{GeneratedAt: capacityTestTime(), Coverage: capacityTestCoverage()}, nil, AutoscalerObserved, capacityTestTime())
+	if !summary.ChildrenMeta.Truncated {
+		t.Fatal("expected truncation")
+	}
+	assertFact(t, summary.Scaling, "scale_down_candidates", fmt.Sprintf("%d scale-down candidates", len(children)))
 }
