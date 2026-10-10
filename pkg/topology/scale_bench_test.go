@@ -11,6 +11,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // clusterShape is a per-kind object census. Feeding it to newSyntheticProvider
@@ -670,4 +671,44 @@ func TestRelationshipBuildScopeBoundsTheGraph(t *testing.T) {
 
 	t.Logf("guarded: %d nodes — cluster-wide: %d nodes / %d edges — scoped to %s: %d nodes / %d edges",
 		len(guarded.Nodes), len(clusterWide.Nodes), len(clusterWide.Edges), wantNS, len(scoped.Nodes), len(scoped.Edges))
+}
+
+// BenchmarkRelationshipCacheHighReplicaPods is the replica-dense shape the
+// field census lacks: 2,000 Deployments of 25 Pods each, 50,000 Pods in all.
+// Every Pod stays an individual node in the relationship cache.
+func BenchmarkRelationshipCacheHighReplicaPods(b *testing.B) {
+	ctrl := true
+	provider := &mockProvider{}
+	for d := range 2000 {
+		ns := fmt.Sprintf("team-%d", d%50)
+		dep, rs := fmt.Sprintf("app-%d", d), fmt.Sprintf("app-%d-abc", d)
+		provider.deployments = append(provider.deployments, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: dep, Namespace: ns, UID: types.UID(dep)}})
+		replicas := int32(25)
+		provider.replicaSets = append(provider.replicaSets, &appsv1.ReplicaSet{
+			ObjectMeta: metav1.ObjectMeta{Name: rs, Namespace: ns, UID: types.UID(rs), OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: dep, UID: types.UID(dep), Controller: &ctrl}}},
+			Spec:       appsv1.ReplicaSetSpec{Replicas: &replicas},
+		})
+		for p := range 25 {
+			name := fmt.Sprintf("%s-%d", rs, p)
+			provider.pods = append(provider.pods, &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: types.UID(name), Labels: map[string]string{"app": dep},
+					OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: rs, UID: types.UID(rs), Controller: &ctrl}}},
+				Status: corev1.PodStatus{Phase: corev1.PodRunning},
+			})
+		}
+	}
+	builder := NewBuilder(provider)
+	opts := relationshipCacheOptions()
+	topo, err := builder.Build(opts)
+	if err != nil {
+		b.Fatalf("build: %v", err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := builder.Build(opts); err != nil {
+			b.Fatalf("build: %v", err)
+		}
+	}
+	b.ReportMetric(float64(len(topo.Nodes)), "graphnodes")
+	b.ReportMetric(float64(len(topo.Edges)), "graphedges")
 }
