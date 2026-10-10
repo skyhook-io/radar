@@ -110,13 +110,36 @@ func FindPodForService(ctx context.Context, client kubernetes.Interface, namespa
 		return "", fmt.Errorf("no pods found matching selector for service %s", serviceName)
 	}
 
-	for _, pod := range pods.Items {
-		if pod.Status.Phase == corev1.PodRunning {
+	// A pod being deleted, or one on a node that stopped reporting, can still
+	// read Running, and a forward to it hangs until it times out. A ready pod
+	// is taken first; a running one that is not ready only when none is.
+	var notReady string
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if pod.Status.Phase != corev1.PodRunning || pod.DeletionTimestamp != nil {
+			continue
+		}
+		if podReady(pod) {
 			return pod.Name, nil
 		}
+		if notReady == "" {
+			notReady = pod.Name
+		}
+	}
+	if notReady != "" {
+		return notReady, nil
 	}
 
 	return "", fmt.Errorf("no running pod found for service %s", serviceName)
+}
+
+func podReady(pod *corev1.Pod) bool {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // FindFreePort finds an available local TCP port.
