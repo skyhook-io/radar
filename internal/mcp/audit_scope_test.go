@@ -72,8 +72,10 @@ func TestAuditToolStoragePVGrantOnlyGatesPVMetadataAndFindings(t *testing.T) {
 		if err := json.Unmarshal([]byte(extractText(t, raw)), &result); err != nil {
 			t.Fatal(err)
 		}
-		if slices.Contains(result.MissingInputs, "persistentvolumes") == allowed {
-			t.Fatalf("PV availability differs from grant: %+v", result)
+		// Without the grant PVs are outside the caller's subjects; the claim
+		// finding carries the caveat instead of a skipped-check input.
+		if slices.Contains(result.MissingInputs, "persistentvolumes") {
+			t.Fatalf("PV grant denial reported as a skipped check: %+v", result)
 		}
 		want := 1
 		if allowed {

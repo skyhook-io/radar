@@ -739,31 +739,37 @@ consumers (including virtual machines) and external consumers can still need a c
 observed is not a statement that storage is safe to delete**. The scan provides
 no deletion action, cost estimate, or history of nonuse.
 
+A storage input appears in `missingInputs` only when its absence left a claim
+or volume unevaluated. A gap that still lets a finding fire is stated in that
+finding's message instead.
+
 Unreadable or initially unsynced consumer inventories prevent absence findings
-and passing counts for that namespace (`pvc-consumers` in `missingInputs`).
-PVs and StorageClasses require the caller's exact cluster-scoped list grant.
-Unavailable inventories appear as `persistentvolumes` or `storageclasses` only
-when a scanned claim needs them. Bound no-consumer findings still appear without
-PV access, with **reclaim policy not visible**. An unconsumed Pending claim with
-unknown binding mode still appears, with `pvc-binding-mode` reported; consumed
-Pending claims are excluded regardless of binding mode. With readable
+and passing counts for that namespace (`pvc-consumers` in `missingInputs`); an
+unreadable PVC inventory reports `persistentvolumeclaims`. PVs and
+StorageClasses require the caller's exact cluster-scoped list grant, but claim
+findings don't depend on them: without PV access a Bound no-consumer finding
+says **reclaim policy not visible**, and without StorageClass access an
+unconsumed Pending finding says **StorageClass binding mode not visible**.
+Consumed Pending claims are excluded regardless of binding mode. With readable
 StorageClasses, a missing named class or absent default is reported in the
-finding, without marking binding-mode evidence unavailable. An unset class name
-uses the most recently created default StorageClass for binding-mode context;
-an explicitly empty class name opts out of defaulting.
+finding. An unset class name uses the most recently created default
+StorageClass for binding-mode context; an explicitly empty class name opts out
+of defaulting.
 
 The namespace picker selects PVC subjects. Released PVs remain cluster-scoped
-and require their own grant. Readable PVs count toward `releasedPV`, including
-healthy volumes, except a Released Delete volume still within its one-hour grace
-period whose outcome is unknown because event coverage is incomplete. Events
-are listed only when a Released Delete volume needs
-deletion evidence, and only from namespaces the caller may see. Unreadable,
-partial or unsynced deletion-event coverage reports `pv-deletion-events` when
-supplemental warning evidence is unavailable; the delayed-deletion finding still
-appears based on the PV itself. During the grace period, an observed current
-deletion warning establishes failure even with partial coverage; without one,
-incomplete coverage contributes neither an evaluated nor a passing subject.
-PV findings use time in Released when
+and require their own grant; without it they are not subjects of that caller's
+scan. When the caller may read PVs but the inventory is unreadable or initially
+unsynced, `releasedPV` evaluates nothing and `persistentvolumes` is reported.
+Readable PVs count toward `releasedPV`, including healthy volumes. Events are
+listed only when a Released Delete volume needs deletion evidence, and only from
+namespaces the caller may see. A Released Delete volume still within its
+one-hour grace period, with unreadable, partial or unsynced event coverage and
+no observed current deletion warning, has an unknown outcome: it contributes
+neither an evaluated nor a passing subject and reports `pv-deletion-events`.
+An observed current warning establishes failure even with partial coverage, and
+after the grace period the delayed-deletion finding appears based on the PV
+itself; either finding says **Deletion warning events not fully visible** when
+coverage is incomplete. PV findings use time in Released when
 `status.lastPhaseTransitionTime` is present, otherwise use and explicitly show
 **PV age** for the thresholds. Neither is a history of how long the data was
 unneeded.

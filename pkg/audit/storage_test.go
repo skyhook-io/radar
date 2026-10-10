@@ -92,6 +92,7 @@ func TestPVCNoConsumer(t *testing.T) {
 			i.PersistentVolumeClaims[0].OwnerReferences = []metav1.OwnerReference{{APIVersion: "v1", Kind: "ConfigMap", Name: "metadata"}}
 		}, true},
 		{"unreadable PVs", func(i *CheckInput) { i.PersistentVolumes = nil }, true},
+		{"PVs outside scope", func(i *CheckInput) { i.PersistentVolumes = []*corev1.PersistentVolume{} }, true},
 		{"Pending", func(i *CheckInput) { i.PersistentVolumeClaims[0].Status.Phase = corev1.ClaimPending }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -112,9 +113,14 @@ func TestPVCNoConsumer(t *testing.T) {
 					}
 				}
 			}
-			if tc.name == "unreadable PVs" {
-				if !slices.Contains(r.MissingInputs, "persistentvolumes") || !strings.Contains(r.Findings[0].Message, "reclaim policy not visible") {
-					t.Fatalf("unreadable retention evidence: %+v", r)
+			if tc.name == "unreadable PVs" || tc.name == "PVs outside scope" {
+				// The claim is still evaluated; only releasedPV is skipped, and
+				// only when the inventory is unavailable rather than out of scope.
+				if !strings.Contains(r.Findings[0].Message, "reclaim policy not visible") || r.CheckCounts["pvcNoConsumer"].Evaluated != 1 {
+					t.Fatalf("claim finding lost its retention caveat: %+v", r)
+				}
+				if slices.Contains(r.MissingInputs, "persistentvolumes") != (tc.name == "unreadable PVs") {
+					t.Fatalf("PV missing input does not track skipped releasedPV: %v", r.MissingInputs)
 				}
 			}
 			if tc.name == "unknown coverage" && (r.CheckCounts["pvcNoConsumer"].Evaluated != 0 || !slices.Contains(r.MissingInputs, "pvc-consumers")) {
@@ -198,31 +204,75 @@ func TestPVCStorageEligibility(t *testing.T) {
 	}
 }
 
-func TestStorageClusterInputsOnlyWhenNeeded(t *testing.T) {
+// Missing inputs name only gaps that left a subject unevaluated; gaps that
+// leave a finding in place are caveats in its message.
+func TestStorageMissingInputsOnlyForSkippedSubjects(t *testing.T) {
+	storageKeys := []string{"persistentvolumeclaims", "persistentvolumes", "storageclasses", "pvc-consumers", "pvc-binding-mode", "pv-deletion-events"}
 	for _, tc := range []struct {
-		name   string
-		change func(*CheckInput)
-		pv, sc bool
+		name     string
+		change   func(*CheckInput)
+		missing  []string
+		findings int
+		caveat   string
 	}{
-		{"no claims", func(i *CheckInput) { i.PersistentVolumeClaims = []*corev1.PersistentVolumeClaim{} }, false, false},
-		{"Bound absence", func(*CheckInput) {}, true, false},
-		{"Bound consumed", func(i *CheckInput) {
+		{"healthy", func(i *CheckInput) {
 			i.Pods = []*corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Namespace: "app"}, Spec: pvcPodSpec("data-db-0")}}
-		}, false, false},
-		{"Pending absence", func(i *CheckInput) { i.PersistentVolumeClaims[0].Status.Phase = corev1.ClaimPending }, false, true},
-		{"Pending no class", func(i *CheckInput) {
+			i.PersistentVolumes[0].Status.Phase = corev1.VolumeBound
+		}, nil, 0, ""},
+		{"complete evidence", func(*CheckInput) {}, nil, 2, ""},
+		{"unreadable claims", func(i *CheckInput) { i.PersistentVolumeClaims = nil }, []string{"persistentvolumeclaims"}, 1, ""},
+		{"unknown consumers", func(i *CheckInput) { i.PVCConsumerNamespaces = nil }, []string{"pvc-consumers"}, 1, ""},
+		{"unreadable PVs without claims", func(i *CheckInput) {
+			i.PersistentVolumeClaims = []*corev1.PersistentVolumeClaim{}
+			i.PersistentVolumes = nil
+		}, []string{"persistentvolumes"}, 0, ""},
+		{"PVs outside scope", func(i *CheckInput) { i.PersistentVolumes = []*corev1.PersistentVolume{} }, nil, 1, "reclaim policy not visible"},
+		{"unreadable classes", func(i *CheckInput) {
 			i.PersistentVolumeClaims[0].Status.Phase = corev1.ClaimPending
-			i.PersistentVolumeClaims[0].Spec.StorageClassName = ptr("")
-		}, false, false},
-		{"young claim", func(i *CheckInput) { i.PersistentVolumeClaims[0].CreationTimestamp = metav1.Now() }, false, false},
+			i.StorageClasses = nil
+		}, nil, 2, "StorageClass binding mode not visible"},
+		{"unreadable events after grace", func(i *CheckInput) {
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			i.Events = nil
+		}, nil, 2, "Deletion warning events not fully visible"},
+		{"unreadable events in grace", func(i *CheckInput) {
+			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(time.Now().Add(-time.Minute)))
+			i.Events = nil
+		}, []string{"pv-deletion-events"}, 1, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			i := storageInput()
-			i.PersistentVolumes, i.StorageClasses = nil, nil
+			i.PersistentVolumes[0].Status.Phase = corev1.VolumeReleased
 			tc.change(i)
 			r := RunChecks(i)
-			if slices.Contains(r.MissingInputs, "persistentvolumes") != tc.pv || slices.Contains(r.MissingInputs, "storageclasses") != tc.sc {
-				t.Fatalf("unused optional inputs reported: %+v", r.MissingInputs)
+			var got []string
+			for _, key := range storageKeys {
+				if slices.Contains(r.MissingInputs, key) {
+					got = append(got, key)
+				}
+			}
+			if !slices.Equal(got, tc.missing) {
+				t.Fatalf("missing inputs %v, want %v", got, tc.missing)
+			}
+			var storageFindings []Finding
+			for _, f := range r.Findings {
+				if f.CheckID == "pvcNoConsumer" || f.CheckID == "pvcLongPending" || f.CheckID == "releasedPV" {
+					storageFindings = append(storageFindings, f)
+				}
+			}
+			if len(storageFindings) != tc.findings {
+				t.Fatalf("findings %+v, want %d", storageFindings, tc.findings)
+			}
+			if tc.caveat != "" && !slices.ContainsFunc(storageFindings, func(f Finding) bool { return strings.Contains(f.Message, tc.caveat) }) {
+				t.Fatalf("evidence gap %q not stated in findings: %+v", tc.caveat, storageFindings)
+			}
+			if tc.caveat == "" {
+				for _, f := range storageFindings {
+					if strings.Contains(f.Message, "not visible") || strings.Contains(f.Message, "not fully visible") {
+						t.Fatalf("unexpected evidence caveat: %+v", f)
+					}
+				}
 			}
 		})
 	}
@@ -317,8 +367,8 @@ func TestReleasedPV(t *testing.T) {
 			if tr.counts["releasedPV"][""] != 1 {
 				t.Fatal("readable PV not evaluated")
 			}
-			if tc.name == "Delete unreadable events" && !slices.Contains(tr.missingInputs, "pv-deletion-events") {
-				t.Fatal("unavailable supplemental deletion evidence not reported")
+			if tc.name == "Delete unreadable events" && (len(tr.missingInputs) != 0 || !strings.Contains(fs[len(fs)-1].Message, "Deletion warning events not fully visible")) {
+				t.Fatalf("flagged volume's evidence gap reported as a skip, or not stated: %v %+v", tr.missingInputs, fs)
 			}
 			if tc.name == "Delete no event" && !strings.Contains(fs[len(fs)-1].Message, "PV age") {
 				t.Fatal("fallback age not labelled")
@@ -378,11 +428,11 @@ func TestRecentReleasedPVEventCoverage(t *testing.T) {
 		{"partial events with warning", func(i *CheckInput) {
 			i.PVDeletionEventsComplete = false
 			i.Events = []*corev1.Event{deleteFailure(now, "visible failure")}
-		}, 1, 0, 1, true},
+		}, 1, 0, 1, false},
 		{"unreadable events after grace", func(i *CheckInput) {
 			i.Events = nil
 			i.PersistentVolumes[0].Status.LastPhaseTransitionTime = ptr(metav1.NewTime(now.Add(-2 * time.Hour)))
-		}, 1, 0, 1, true},
+		}, 1, 0, 1, false},
 		{"Retain does not need events", func(i *CheckInput) {
 			i.Events = nil
 			i.PersistentVolumes[0].Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
@@ -404,6 +454,12 @@ func TestRecentReleasedPVEventCoverage(t *testing.T) {
 			count := r.CheckCounts["releasedPV"]
 			if count.Evaluated != tc.evaluated || count.Passed != tc.passed || len(r.Findings) != tc.findings || slices.Contains(r.MissingInputs, "pv-deletion-events") != tc.missing {
 				t.Fatalf("evaluated=%d passed=%d findings=%+v missing=%v", count.Evaluated, count.Passed, r.Findings, r.MissingInputs)
+			}
+			complete := i.Events != nil && i.PVDeletionEventsComplete
+			for _, f := range r.Findings {
+				if strings.Contains(f.Message, "Deletion warning events not fully visible") == complete {
+					t.Fatalf("event coverage caveat wrong for complete=%v: %+v", complete, f)
+				}
 			}
 		})
 	}
@@ -462,7 +518,7 @@ func TestLongPendingPVCStorageClassEvidence(t *testing.T) {
 		name    string
 		change  func(*CheckInput)
 		message string
-		missing bool
+		hidden  bool
 	}{
 		{"unreadable classes", func(i *CheckInput) { i.StorageClasses = nil }, "binding mode not visible", true},
 		{"unreadable default class", func(i *CheckInput) {
@@ -506,10 +562,12 @@ func TestLongPendingPVCStorageClassEvidence(t *testing.T) {
 			if len(fs) != 1 || !strings.Contains(fs[0].Message, tc.message) {
 				t.Fatalf("class evidence: %+v", fs)
 			}
-			if slices.Contains(tr.missingInputs, "pvc-binding-mode") != tc.missing || slices.Contains(tr.missingInputs, "storageclasses") != tc.missing {
-				t.Fatalf("readable class evidence marked unavailable: %+v", tr.missingInputs)
+			// The claim is evaluated either way, so class visibility is a
+			// caveat in the finding, never a missing input.
+			if len(tr.missingInputs) != 0 {
+				t.Fatalf("evaluated claim reported as skipped: %+v", tr.missingInputs)
 			}
-			if !tc.missing && strings.Contains(fs[0].Message, "binding mode not visible") {
+			if !tc.hidden && strings.Contains(fs[0].Message, "binding mode not visible") {
 				t.Fatalf("readable class evidence described as invisible: %+v", fs[0])
 			}
 		})

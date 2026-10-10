@@ -2,7 +2,6 @@ package audit
 
 import (
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +23,7 @@ const (
 
 func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
 	if input.PersistentVolumeClaims == nil {
-		tr.missingInputs = append(tr.missingInputs, "persistentvolumeclaims")
+		tr.skip("persistentvolumeclaims")
 	}
 	consumerNamespaces := map[string]bool{}
 	for _, ns := range input.PVCConsumerNamespaces {
@@ -54,7 +53,7 @@ func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
 		consumed := consumers[pvc.Namespace+"/"+pvc.Name]
 		complete := consumerNamespaces[pvc.Namespace] && input.Pods != nil && input.Deployments != nil && input.ReplicaSets != nil && input.StatefulSets != nil && input.DaemonSets != nil && input.Jobs != nil && input.CronJobs != nil
 		if !consumed && !complete {
-			tr.missingInputs = append(tr.missingInputs, "pvc-consumers")
+			tr.skip("pvc-consumers")
 			continue
 		}
 		checkID, message := "", ""
@@ -63,9 +62,6 @@ func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
 			tr.record("pvcNoConsumer", pvc.Namespace)
 			if consumed {
 				continue
-			}
-			if input.PersistentVolumes == nil && pvc.Spec.VolumeName != "" {
-				tr.missingInputs = append(tr.missingInputs, "persistentvolumes")
 			}
 			checkID = "pvcNoConsumer"
 			message = "No consumer observed among Pods or built-in workload templates Radar can see. CRD consumers may still reference this claim."
@@ -82,7 +78,6 @@ func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
 					sc = classes[*pvc.Spec.StorageClassName]
 				}
 				if input.StorageClasses == nil {
-					tr.missingInputs = append(tr.missingInputs, "storageclasses", "pvc-binding-mode")
 					message += " StorageClass binding mode not visible."
 				} else if sc == nil {
 					if pvc.Spec.StorageClassName == nil {
@@ -105,7 +100,11 @@ func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
 		}
 		findings = append(findings, Finding{Kind: "PersistentVolumeClaim", Namespace: pvc.Namespace, Name: pvc.Name, CheckID: checkID, Category: CategoryEfficiency, Severity: SeverityWarning, Message: message + " " + pvcStorageDetails(pvc, pvs[pvc.Spec.VolumeName], now)})
 	}
+	if input.PersistentVolumes == nil {
+		tr.skip("persistentvolumes")
+	}
 	deleteFailures := latestPVDeleteFailures(input.PersistentVolumes, input.Events, now)
+	deletionEventsComplete := input.Events != nil && input.PVDeletionEventsComplete
 	for _, pv := range input.PersistentVolumes {
 		if pv.Status.Phase != corev1.VolumeReleased {
 			tr.record("releasedPV", "")
@@ -115,13 +114,13 @@ func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
 		if pv.Status.LastPhaseTransitionTime != nil && !pv.Status.LastPhaseTransitionTime.IsZero() {
 			releasedAt = *pv.Status.LastPhaseTransitionTime
 		}
+		inDeleteGrace := releasedAt.IsZero() || now.Sub(releasedAt.Time) <= pvDeleteGrace
 		failure, hasFailure := deleteFailures[pv.UID]
 		recentFailure := hasFailure && now.Sub(failure.at) <= pvDeleteEventWindow
-		if pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimDelete && (input.Events == nil || !input.PVDeletionEventsComplete) {
-			tr.missingInputs = append(tr.missingInputs, "pv-deletion-events")
-			if !recentFailure && (releasedAt.IsZero() || now.Sub(releasedAt.Time) <= pvDeleteGrace) {
-				continue
-			}
+		if pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimDelete && inDeleteGrace && !recentFailure && !deletionEventsComplete {
+			// A warning Radar can't see may already show this deletion failing.
+			tr.skip("pv-deletion-events")
+			continue
 		}
 		tr.record("releasedPV", "")
 		message := ""
@@ -135,13 +134,16 @@ func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
 			if recentFailure {
 				message = "Released PV deletion is failing: " + failure.event.Message
 			} else {
-				if releasedAt.IsZero() || now.Sub(releasedAt.Time) <= pvDeleteGrace {
+				if inDeleteGrace {
 					continue
 				}
 				message = "Released PV deletion has not completed (reclaim policy Delete)."
 				if hasFailure {
 					message += " Latest deletion warning (" + timeutil.FormatAgeShort(now.Sub(failure.at)) + " ago): " + failure.event.Message
 				}
+			}
+			if !deletionEventsComplete {
+				message += " Deletion warning events not fully visible."
 			}
 		default:
 			continue
@@ -157,8 +159,6 @@ func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
 		message += fmt.Sprintf(" Capacity %s; storage class %q; former claim %s; %s.", storageQuantity(pv.Spec.Capacity), pv.Spec.StorageClassName, formerClaim, age)
 		findings = append(findings, Finding{Kind: "PersistentVolume", Name: pv.Name, CheckID: "releasedPV", Category: CategoryEfficiency, Severity: SeverityWarning, Message: message})
 	}
-	slices.Sort(tr.missingInputs)
-	tr.missingInputs = slices.Compact(tr.missingInputs)
 	return findings
 }
 

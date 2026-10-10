@@ -124,7 +124,7 @@ func TestCheckCounts_MissingInputs(t *testing.T) {
 		"horizontalpodautoscalers": true,
 		"statefulsets":             true, "daemonsets": true,
 		"jobs": true, "cronjobs": true,
-		"persistentvolumeclaims": true,
+		"persistentvolumeclaims": true, "persistentvolumes": true,
 	}
 	if len(results.MissingInputs) != len(want) {
 		t.Fatalf("MissingInputs = %v, want exactly %v", results.MissingInputs, want)

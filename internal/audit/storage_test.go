@@ -73,6 +73,9 @@ func TestStorageCacheScopeAndCoverage(t *testing.T) {
 				}
 				consumerFinding = consumerFinding || f.CheckID == "pvcNoConsumer"
 				releasedFinding = releasedFinding || f.CheckID == "releasedPV"
+				if f.CheckID == "releasedPV" && !strings.Contains(f.Message, "Deletion warning events not fully visible") {
+					t.Fatalf("partial event coverage not stated: %+v", f)
+				}
 				if !tc.pvGrant && f.CheckID == "pvcNoConsumer" && !strings.Contains(f.Message, "reclaim policy not visible") {
 					t.Fatalf("PV denial not described: %+v", f)
 				}
@@ -83,14 +86,14 @@ func TestStorageCacheScopeAndCoverage(t *testing.T) {
 			if consumerFinding != tc.consumerFinding {
 				t.Fatalf("consumer finding=%v want=%v: %+v", consumerFinding, tc.consumerFinding, r)
 			}
-			if !tc.pvGrant && tc.consumerFinding && !slices.Contains(r.MissingInputs, "persistentvolumes") {
-				t.Fatal("PV denial lost")
+			if slices.Contains(r.MissingInputs, "persistentvolumes") || slices.Contains(r.MissingInputs, "storageclasses") {
+				t.Fatalf("grant-limited metadata reported as skipped checks: %v", r.MissingInputs)
 			}
 			if (!tc.pods || tc.podNS == "other") && (!slices.Contains(r.MissingInputs, "pvc-consumers") || r.CheckCounts["pvcNoConsumer"].Evaluated != 0) {
 				t.Fatal("unknown consumer coverage became passing")
 			}
-			if tc.pvGrant && !slices.Contains(r.MissingInputs, "pv-deletion-events") {
-				t.Fatal("partial event coverage lost")
+			if slices.Contains(r.MissingInputs, "pv-deletion-events") {
+				t.Fatalf("flagged volume reported as skipped: %v", r.MissingInputs)
 			}
 		})
 	}
@@ -119,7 +122,7 @@ func TestStorageRecentPVEventCoverage(t *testing.T) {
 	}{
 		{"unreadable events", false, false, false, 0, 0, 0, true},
 		{"hidden warning", true, true, false, 0, 0, 0, true},
-		{"visible warning with partial coverage", true, true, true, 1, 0, 1, true},
+		{"visible warning with partial coverage", true, true, true, 1, 0, 1, false},
 		{"complete empty events", true, false, false, 1, 1, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -146,6 +149,38 @@ func TestStorageRecentPVEventCoverage(t *testing.T) {
 			count := r.CheckCounts["releasedPV"]
 			if count.Evaluated != tc.evaluated || count.Passed != tc.passed || len(r.Findings) != tc.findings || slices.Contains(r.MissingInputs, "pv-deletion-events") != tc.missing {
 				t.Fatalf("evaluated=%d passed=%d findings=%+v missing=%v", count.Evaluated, count.Passed, r.Findings, r.MissingInputs)
+			}
+		})
+	}
+}
+
+func TestStoragePVInventoryUnavailableVersusOutOfScope(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		informer, local    bool
+		grant, wantMissing bool
+	}{
+		{"granted and readable", true, false, true, false},
+		{"granted but unavailable", false, false, true, true},
+		{"not granted", true, false, false, false},
+		{"local and unavailable", false, true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "kept", CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour))}, Spec: corev1.PersistentVolumeSpec{PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain}, Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeReleased}}
+			if err := k8s.InitScopedTestResourceCache(fake.NewClientset(pv), map[string]k8score.ResourceScope{k8score.PersistentVolumeClaims: {Enabled: true}, k8score.PersistentVolumes: {Enabled: tc.informer}}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestState)
+			var scope *ReadScope
+			if !tc.local {
+				scope = &ReadScope{ClusterResources: map[string]bool{"persistentvolumes": tc.grant}}
+			}
+			r := bp.RunChecks(collectStorageInput(k8s.GetResourceCache(), nil, scope))
+			if slices.Contains(r.MissingInputs, "persistentvolumes") != tc.wantMissing {
+				t.Fatalf("persistentvolumes missing=%v want %v", r.MissingInputs, tc.wantMissing)
+			}
+			if evaluated := r.CheckCounts["releasedPV"].Evaluated; (evaluated == 1) != (tc.informer && (tc.local || tc.grant)) {
+				t.Fatalf("releasedPV evaluated %d: %+v", evaluated, r)
 			}
 		})
 	}

@@ -34,7 +34,11 @@ func collectStorageInput(cache *k8s.ResourceCache, namespaces []string, scope *R
 			input.PVCConsumerNamespaces = append(input.PVCConsumerNamespaces, pvc.Namespace)
 		}
 	}
-	if scope.allows(storageClusterResources[0], "") && typedConfigCoverage(cache, k8score.PersistentVolumes, "") {
+	if !scope.allows(storageClusterResources[0], "") {
+		// Without the grant, PVs are outside this caller's subjects, not an
+		// unreadable inventory that left releasedPV unevaluated.
+		input.PersistentVolumes = []*corev1.PersistentVolume{}
+	} else if typedConfigCoverage(cache, k8score.PersistentVolumes, "") {
 		input.PersistentVolumes = ListNamespaced(cache.PersistentVolumes(), nil)
 	}
 	if scope.allows(storageClusterResources[1], "") && typedConfigCoverage(cache, k8score.StorageClasses, "") {
