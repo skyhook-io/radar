@@ -135,3 +135,31 @@ func TestProjectionIncomingExposesGroups(t *testing.T) {
 		})
 	}
 }
+
+func TestProjectionIncomingGatewayRoutes(t *testing.T) {
+	for _, kind := range []string{"Gateway", "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute", "UDPRoute"} {
+		for _, group := range []string{"gateway.networking.k8s.io", "other.example"} {
+			t.Run(group+"/"+kind, func(t *testing.T) {
+				topo := &Topology{Nodes: []Node{
+					{ID: "router/demo/upstream", Kind: NodeKind(kind), Name: "upstream", Data: map[string]any{"namespace": "demo", "apiVersion": group + "/v1"}},
+					{ID: "service/demo/web", Kind: KindService, Name: "web", Data: map[string]any{"namespace": "demo"}},
+				}, Edges: []Edge{{Source: "router/demo/upstream", Target: "service/demo/web", Type: EdgeRoutesTo}}}
+				rel := GetRelationships("Service", "demo", "web", topo, nil, nil)
+				if rel == nil {
+					t.Fatal("missing route")
+				}
+				wantGateways, wantRoutes, wantOther := 0, 0, 0
+				if group == "other.example" {
+					wantOther = 1
+				} else if kind == "Gateway" {
+					wantGateways = 1
+				} else {
+					wantRoutes = 1
+				}
+				if len(rel.Gateways) != wantGateways || len(rel.Routes) != wantRoutes || len(rel.RoutedFrom) != wantOther {
+					t.Fatalf("routing groups = %+v", rel)
+				}
+			})
+		}
+	}
+}

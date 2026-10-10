@@ -432,8 +432,8 @@ type Relationships struct {
 	Children        []ResourceRef `json:"children,omitempty"`   // Resources this owns (manages edge)
 	Services        []ResourceRef `json:"services,omitempty"`   // Core Services selecting/exposing this
 	Ingresses       []ResourceRef `json:"ingresses,omitempty"`  // Ingresses routing to this
-	Gateways        []ResourceRef `json:"gateways,omitempty"`   // Gateways routing to this (via routes)
-	Routes          []ResourceRef `json:"routes,omitempty"`     // Routes attached to this Gateway
+	Gateways        []ResourceRef `json:"gateways,omitempty"`   // Gateway API Gateways routing to this
+	Routes          []ResourceRef `json:"routes,omitempty"`     // Recognized upstream routes routing to this
 	ConfigRefs      []ResourceRef `json:"configRefs,omitempty"` // ConfigMaps/Secrets used by this
 	Consumers       []ResourceRef `json:"consumers,omitempty"`  // For ConfigMap/Secret: workloads that reference this
 	Dependencies    []ResourceRef `json:"dependencies,omitempty"`
