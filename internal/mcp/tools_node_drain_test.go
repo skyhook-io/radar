@@ -22,11 +22,15 @@ import (
 )
 
 func TestNodeDrainIncludeReadOnlyBoundedAndCallerScoped(t *testing.T) {
-	for _, mode := range []string{"complete", "pdb-denied", "pods-denied"} {
+	for _, mode := range []string{"complete", "complete-small", "pdb-denied", "pods-denied"} {
 		t.Run(mode, func(t *testing.T) {
 			username := "node-drain-" + mode
 			pods := corev1.PodList{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "PodList"}}
-			for i := 0; i < 111; i++ {
+			pendingCount := 111
+			if mode == "complete-small" {
+				pendingCount = 2
+			}
+			for i := 0; i < pendingCount; i++ {
 				pod := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("pending-%03d", i), Namespace: "shop"}, Spec: corev1.PodSpec{NodeName: "worker"}, Status: corev1.PodStatus{Phase: corev1.PodPending}}
 				if i == 0 {
 					stamp := metav1.NewTime(time.Now().Add(-time.Minute))
@@ -34,7 +38,8 @@ func TestNodeDrainIncludeReadOnlyBoundedAndCallerScoped(t *testing.T) {
 				}
 				pods.Items = append(pods.Items, pod)
 			}
-			pods.Items = append(pods.Items, corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "a-active", Namespace: "shop", Labels: map[string]string{"app": "web"}}, Spec: corev1.PodSpec{NodeName: "worker"}, Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}}})
+			pods.Items = append(pods.Items, corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "z-active", Namespace: "shop", Labels: map[string]string{"app": "web"}}, Spec: corev1.PodSpec{NodeName: "worker"}, Status: corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}}})
+			pods.Items = append(pods.Items, corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "a-completed", Namespace: "shop"}, Spec: corev1.PodSpec{NodeName: "worker"}, Status: corev1.PodStatus{Phase: corev1.PodSucceeded}})
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				if r.Method != http.MethodGet {
@@ -98,21 +103,36 @@ func TestNodeDrainIncludeReadOnlyBoundedAndCallerScoped(t *testing.T) {
 			if !ok {
 				t.Fatalf("missing plan: %+v", result)
 			}
-			if !plan.Estimate || len(plan.Pods) != 100 || result["drainPlanTotalPods"] != 112 || result["drainPlanPodsTruncated"] != true {
+			wantRows := 100
+			if mode == "complete-small" {
+				wantRows = pendingCount + 2
+			}
+			if !plan.Estimate || len(plan.Pods) != wantRows || result["drainPlanTotalPods"] != pendingCount+2 || result["drainPlanPodsTruncated"] != (mode != "complete-small") {
 				t.Fatalf("bad bounds: %+v %+v", plan, result)
 			}
 			if !plan.Options.IgnoreDaemonSets || !plan.Options.DeleteEmptyDirData || !plan.Options.Force {
 				t.Fatalf("removal estimate options drifted: %+v", plan.Options)
 			}
-			if mode == "complete" {
-				if !plan.PDBsEvaluated || plan.Summary.MayBlock != 1 || plan.Summary.Evict != 111 || plan.Pods[0].PDB != "shop/web" {
+			pdbNamed, terminationSeen := false, false
+			for _, pod := range plan.Pods {
+				pdbNamed = pdbNamed || pod.PDB == "shop/web"
+				terminationSeen = terminationSeen || pod.Terminating
+				if mode != "complete-small" && (pod.Terminating || pod.Outcome == k8score.DrainOutcomeSkip) {
+					t.Fatal("low-priority pod displaced a current blocker or remaining pod")
+				}
+			}
+			if mode == "complete" || mode == "complete-small" {
+				if !plan.PDBsEvaluated || plan.Summary.MayBlock != 1 || plan.Summary.Evict != pendingCount || plan.Summary.Skip != 1 || !pdbNamed {
 					t.Fatalf("lost full counts/PDB match: %+v", plan)
+				}
+				if mode == "complete" && plan.Pods[0].PDB != "shop/web" {
+					t.Fatal("current blocker was not prioritized")
 				}
 			} else if plan.PDBsEvaluated || plan.PDBError == "" || plan.Pods[0].PDBChecked {
 				t.Fatalf("partial budget read hidden: %+v", plan)
 			}
-			if !plan.Pods[1].Terminating {
-				t.Fatal("observed pod termination lost")
+			if terminationSeen != (mode == "complete-small") {
+				t.Fatal("observed pod termination missing or prioritized over current pods")
 			}
 		})
 	}

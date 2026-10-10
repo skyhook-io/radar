@@ -1311,6 +1311,19 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 			result["drainPlanTotalPods"] = len(plan.Pods)
 			result["drainPlanPodsTruncated"] = len(plan.Pods) > podLimit
 			if len(plan.Pods) > podLimit {
+				priority := func(pod k8score.PodDrainDecision) int {
+					if pod.Outcome == k8score.DrainOutcomeMayBlock {
+						return 0
+					}
+					if pod.Outcome == k8score.DrainOutcomeSkip {
+						return 3
+					}
+					if pod.Terminating {
+						return 2
+					}
+					return 1
+				}
+				sort.SliceStable(plan.Pods, func(i, j int) bool { return priority(plan.Pods[i]) < priority(plan.Pods[j]) })
 				plan.Pods = plan.Pods[:podLimit]
 			}
 			result["drainPlan"] = plan

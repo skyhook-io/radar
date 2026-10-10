@@ -2330,7 +2330,7 @@ describe("Node lifecycle in Capacity", () => {
     expect(failed).toContain("text-red-");
     const raw = renderToString(<NodeReadyBadge ready={false} cordoned={false} />);
     expect(raw).toContain("NotReady (condition)");
-    expect(raw).not.toContain("text-red-");
+    expect(raw).toContain("text-red-");
   });
   it("renders exclusive operational counts, not overlapping raw counts", () => {
     const html = renderCapacity("/capacity/pools/default", (client) => client.setQueryData(

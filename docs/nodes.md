@@ -19,4 +19,4 @@ NotReady retains its identity. Pressure/network issues have separate identities 
 
 UI/REST/MCP share a read-only current pod/PDB estimate. MCP `get_resource include=drain-plan` returns at most 100 pods with total/truncation, complete summary counts and explicit options. Read errors and incomplete budget checks are visible.
 
-This is no eviction history or progress measure. DaemonSet/static/completed pods are *skipped by the estimate*; controller-specific do-not-disrupt/safe-to-evict policies are unevaluated. Known removal hides scheduling actions and uncordon advice.
+It is not an eviction history or progress measure. DaemonSet/static/completed pods are *skipped by the estimate*; controller-specific do-not-disrupt/safe-to-evict policies are unevaluated. Known removal hides scheduling actions and uncordon advice.

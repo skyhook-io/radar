@@ -616,7 +616,7 @@ export function NodeReadyBadge({
   }
   return (
     <WithTooltip tip="Kubernetes readiness only; removal status is unavailable from this Radar.">
-      <Badge severity={cordoned ? "warning" : "neutral"} size="sm">
+      <Badge severity={ready === false ? "error" : ready === undefined ? "neutral" : cordoned ? "warning" : "success"} size="sm">
         {ready === false ? "NotReady (condition)" : ready === undefined ? "Readiness unknown" : cordoned ? "Cordoned" : "Ready (condition)"}
       </Badge>
     </WithTooltip>
