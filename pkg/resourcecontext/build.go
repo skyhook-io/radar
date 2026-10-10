@@ -562,7 +562,7 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 	}
 
 	ident, ok := identityOf(obj)
-	if !ok || ident.Namespace == "" {
+	if !ok || ident.Group != "" || ident.Namespace == "" {
 		return nil
 	}
 

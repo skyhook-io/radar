@@ -321,6 +321,9 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if resourceKind == "" {
 		resourceKind = normalizeKindWithGroup(kind, objectGroup, dp)
 	}
+	if builtin, ok := resourceid.BuiltinForName(resourceKind); ok {
+		resourceKind = builtin.Kind
+	}
 	resourceGroup := resourceid.ResolveCurrent(resourceid.OptionalGroupReference(objectGroup, resourceKind, namespace, name), nil).Ref.Group
 	if exactNode := lookupIndex.nodesByResourceKey[resourceid.ResourceKey(resourceGroup, resourceKind, namespace, name)]; exactNode != nil {
 		nodeID = exactNode.ID
@@ -490,7 +493,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	// so users see Pods directly under Deployments and vice versa.
 
 	// Deployment → show grandchild Pods (Deployment→ReplicaSet→Pod)
-	if kindLower == "deployments" || kindLower == "deployment" {
+	if resourceGroup == "apps" && (kindLower == "deployments" || kindLower == "deployment") {
 		for _, child := range rel.Children {
 			// The shortcut IDs below are group-less, so only the built-in
 			// ReplicaSet may take it; a same-named CRD would resolve to another
@@ -503,7 +506,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 						continue
 					}
 					podRef := refForNodeID(edge.Target)
-					if podRef != nil && strings.EqualFold(podRef.Kind, "Pod") {
+					if podRef != nil && strings.EqualFold(podRef.Kind, "Pod") && podRef.Group == "" {
 						rel.Pods = append(rel.Pods, *podRef)
 					}
 				}
@@ -512,7 +515,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	}
 
 	// Pod → if owner is a ReplicaSet, also show the grandparent Deployment
-	if kindLower == "pods" || kindLower == "pod" {
+	if resourceGroup == "" && (kindLower == "pods" || kindLower == "pod") {
 		if rel.Owner != nil && strings.EqualFold(rel.Owner.Kind, "ReplicaSet") && isAppsGroup(rel.Owner.Group) {
 			ownerID := buildNodeID(rel.Owner.Kind, rel.Owner.Namespace, rel.Owner.Name, dp)
 			ownerIncoming, _ := edgesForNode(topo, lookupIndex, ownerID)
@@ -521,7 +524,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 					continue
 				}
 				deployRef := refForNodeID(edge.Source)
-				if deployRef != nil && strings.EqualFold(deployRef.Kind, "Deployment") {
+				if deployRef != nil && strings.EqualFold(deployRef.Kind, "Deployment") && deployRef.Group == "apps" {
 					rel.Deployment = deployRef
 					break
 				}
@@ -530,7 +533,8 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	}
 
 	// Storage chain: PVC→PV→StorageClass (direct provider lookups, not topology edges)
-	if provider != nil {
+	builtinGroup, builtinKind := resourceid.BuiltinGroup(resourceKind)
+	if provider != nil && builtinKind && resourceGroup == builtinGroup {
 		switch kindLower {
 		case "persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs":
 			pvcs, _ := provider.PersistentVolumeClaims()
