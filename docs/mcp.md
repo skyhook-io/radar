@@ -499,6 +499,17 @@ it does not scale it. These references carry API group and namespace identity,
 are filtered by the caller's reference permissions, and do not establish that
 a controller has successfully reconciled the dependency.
 
+Resource context exposes routing direction through `exposedBy` (upstream
+resources routing to this resource, including entrypoints reached through a
+selecting Service) and `backends` (resources this routes to). The compatibility
+field `exposes` is their union and does not imply a direction. Pod containment
+shortcuts on Deployments and Nodes are excluded from routing backends. All three
+fields carry exact group/kind/namespace/name references and apply the caller's
+reference permissions independently. Monitoring uses `monitors` and
+`monitorTargets`; policy selections use `protects`, while non-enforcing staged
+policies use `stagedPolicies` rather than `selectedBy`. Cluster API Clusters
+expose their `healthChecks`; a MachineHealthCheck's Cluster is a dependency.
+
 ### Write Tools
 
 | Tool | Description | Parameters |
