@@ -3624,22 +3624,14 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		// Connect to backend Services
-		for _, rule := range ing.Spec.Rules {
-			if rule.HTTP == nil {
-				continue
-			}
-			for _, path := range rule.HTTP.Paths {
-				if path.Backend.Service != nil {
-					svcKey := ing.Namespace + "/" + path.Backend.Service.Name
-					if svcID, ok := serviceIDs[svcKey]; ok {
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", ingID, svcID),
-							Source: ingID,
-							Target: svcID,
-							Type:   EdgeRoutesTo,
-						})
-					}
-				}
+		for _, svcName := range configrefs.IngressBackendServices(ing) {
+			if svcID, ok := serviceIDs[ing.Namespace+"/"+svcName]; ok {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", ingID, svcID),
+					Source: ingID,
+					Target: svcID,
+					Type:   EdgeRoutesTo,
+				})
 			}
 		}
 	}
@@ -6027,16 +6019,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		if !opts.MatchesNamespaceFilter(ing.Namespace) {
 			continue
 		}
-		for _, rule := range ing.Spec.Rules {
-			if rule.HTTP == nil {
-				continue
-			}
-			for _, path := range rule.HTTP.Paths {
-				if path.Backend.Service != nil {
-					svcKey := ing.Namespace + "/" + path.Backend.Service.Name
-					servicesFromIngress[svcKey] = true
-				}
-			}
+		for _, svcName := range configrefs.IngressBackendServices(ing) {
+			servicesFromIngress[ing.Namespace+"/"+svcName] = true
 		}
 	}
 
@@ -6388,24 +6372,17 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		// Connect to backend Services (only if service is included)
-		for _, rule := range ing.Spec.Rules {
-			if rule.HTTP == nil {
-				continue
-			}
-			for _, path := range rule.HTTP.Paths {
-				if path.Backend.Service != nil {
-					svcKey := ing.Namespace + "/" + path.Backend.Service.Name
-					if _, ok := servicesToInclude[svcKey]; ok {
-						svcID := fmt.Sprintf("service/%s/%s", ing.Namespace, path.Backend.Service.Name)
-						serviceIDs[svcKey] = svcID
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", ingID, svcID),
-							Source: ingID,
-							Target: svcID,
-							Type:   EdgeRoutesTo,
-						})
-					}
-				}
+		for _, svcName := range configrefs.IngressBackendServices(ing) {
+			svcKey := ing.Namespace + "/" + svcName
+			if _, ok := servicesToInclude[svcKey]; ok {
+				svcID := fmt.Sprintf("service/%s/%s", ing.Namespace, svcName)
+				serviceIDs[svcKey] = svcID
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", ingID, svcID),
+					Source: ingID,
+					Target: svcID,
+					Type:   EdgeRoutesTo,
+				})
 			}
 		}
 	}

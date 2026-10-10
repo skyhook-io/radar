@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/rolloutdiag"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -1024,14 +1025,8 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	}
 
 	svcSet := newRefSet()
-	addIngressBackendService(svcSet, ing.Namespace, ing.Spec.DefaultBackend)
-	for _, rule := range ing.Spec.Rules {
-		if rule.HTTP == nil {
-			continue
-		}
-		for _, path := range rule.HTTP.Paths {
-			addIngressBackendService(svcSet, ing.Namespace, &path.Backend)
-		}
+	for _, name := range configrefs.IngressBackendServices(ing) {
+		svcSet.add(name, ing.Namespace)
 	}
 	out.BackendServices = filterRefs(ctx, ac, svcSet.refs("Service", ""), "ingressSummary.backendServices", omitted)
 
@@ -1045,13 +1040,6 @@ func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 		return nil
 	}
 	return out
-}
-
-func addIngressBackendService(dst *refSet, namespace string, backend *networkingv1.IngressBackend) {
-	if backend == nil || backend.Service == nil {
-		return
-	}
-	dst.add(backend.Service.Name, namespace)
 }
 
 func buildNodeSummary(obj runtime.Object) *NodeSummary {
