@@ -62,6 +62,9 @@ func nativeHelmIssueReason(op helm.HelmOperation) (Severity, string, bool) {
 		return SeverityCritical, "HelmUpgradeFailed", true
 	case helmhistory.KindPending:
 		if op.Status == helmhistory.StatusStuck {
+			if op.PendingStatus == "uninstalling" {
+				return SeverityWarning, "HelmReleaseUninstallStuck", true
+			}
 			return SeverityWarning, "HelmReleasePending", true
 		}
 	}
@@ -88,6 +91,9 @@ func nativeHelmIssueCause(op helm.HelmOperation) string {
 		return "The release's workload did not become ready before Helm timed out."
 	}
 	if op.Kind == helmhistory.KindPending {
+		if op.PendingStatus == "uninstalling" {
+			return "A Helm uninstall has not completed past the stuck-operation threshold; hooks or resource cleanup may be blocking it."
+		}
 		return "A Helm install, upgrade, or rollback has remained pending past the stuck-operation threshold."
 	}
 	return "The latest native Helm release revision is failed."
@@ -112,6 +118,9 @@ func nativeHelmRawCandidate(op helm.HelmOperation) string {
 
 func nativeHelmIssueAction(op helm.HelmOperation) string {
 	if op.Kind == helmhistory.KindPending {
+		if op.PendingStatus == "uninstalling" {
+			return "Open the Helm release view, check pre-delete hook Jobs, then inspect surviving resources and their finalizers. Once the blocker is resolved, retry the uninstall; Helm re-runs an uninstall that is stuck in this state. If a hook is the blocker, uninstalling without hooks (helm uninstall --no-hooks) completes it but skips that hook's cleanup."
+		}
 		return "Open the Helm release details, check whether the operation is still running, then inspect hooks, Jobs, Pods, events, logs, and owned resources."
 	}
 	return "Open the Helm release history and hook diagnostics, then inspect the failed revision, values, hooks, and owned resources."

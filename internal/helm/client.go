@@ -1653,6 +1653,7 @@ func toHelmRevision(rel *release.Release) (HelmRevision, bool) {
 		AppVersion:  rel.Chart.Metadata.AppVersion,
 		Description: rel.Info.Description,
 		Updated:     rel.Info.LastDeployed.Time,
+		Deleted:     rel.Info.Deleted.Time,
 	}, true
 }
 
@@ -1666,6 +1667,7 @@ func toHelmHistoryRevisions(revisions []HelmRevision) []helmhistory.Revision {
 			AppVersion:  r.AppVersion,
 			Description: r.Description,
 			Updated:     r.Updated,
+			Deleted:     r.Deleted,
 		})
 	}
 	return out

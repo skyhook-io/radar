@@ -107,3 +107,33 @@ func TestNativeHelmReleaseIssueWithoutTimestampHasUnknownOnset(t *testing.T) {
 		t.Fatalf("timestamp-less Helm issue fabricated onset: %+v", got)
 	}
 }
+
+func TestNativeHelmReleaseUninstallStuckIssue(t *testing.T) {
+	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	started := now.Add(-20 * time.Minute)
+	analysis := helmhistory.Analyze("deleting", 2, []helmhistory.Revision{{Revision: 2, Status: "uninstalling", Updated: now.Add(-90 * 24 * time.Hour), Deleted: started}}, helmhistory.Options{Now: now})
+	rel := helm.HelmRelease{Name: "deleting", Namespace: "apps", StorageNamespace: "helm-storage", Updated: now.Add(-90 * 24 * time.Hour), LastOperation: analysis.LastOperation}
+	got := NativeHelmReleaseIssues([]helm.HelmRelease{rel}, now)
+	if len(got) != 1 {
+		t.Fatalf("issues = %#v, want stuck uninstall issue", got)
+	}
+	issue := got[0]
+	if issue.Reason != "HelmReleaseUninstallStuck" || issue.Severity != SeverityWarning || issue.Category != issuesapi.CategoryHelmReleaseFailed || issue.Namespace != "helm-storage" || issue.Group != NativeHelmGroup || !issue.Stuck {
+		t.Fatalf("issue = %#v", issue)
+	}
+	if !issue.FirstSeen.Equal(started) || issue.OnsetUnknown {
+		t.Fatalf("onset = %v, unknown = %v", issue.FirstSeen, issue.OnsetUnknown)
+	}
+	for _, text := range []string{"pre-delete hook Jobs", "surviving resources", "finalizers", "retry", "--no-hooks"} {
+		if !strings.Contains(issue.Action, text) {
+			t.Fatalf("action = %q, missing %q", issue.Action, text)
+		}
+	}
+	if !strings.Contains(issue.Cause, "uninstall") {
+		t.Fatalf("cause = %q", issue.Cause)
+	}
+	rel.ManagedByFluxHelmRelease = "flux-system/deleting"
+	if got := NativeHelmReleaseIssues([]helm.HelmRelease{rel}, now); len(got) != 0 {
+		t.Fatalf("Flux-owned release issues = %#v", got)
+	}
+}
