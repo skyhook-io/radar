@@ -1297,24 +1297,51 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   // the auto-connect effect, and re-arming it would re-fire auto-connect on
   // every failed attempt (unbounded loop). Retries come from the explicit
   // Retry button, which calls handleConnect directly.
-  const handleConnect = useCallback(() => {
+  //
+  // The page opens on a detection that may be a couple of minutes old, so the
+  // source it names may since have gone. A retry detects again first, which
+  // also picks another available source, and the first failed connect gets
+  // one such retry on its own.
+  const handleConnect = useCallback((redetect: boolean) => {
     setIsConnecting(true)
     setConnectionError(null)
     queryClient.removeQueries({ queryKey: ['traffic-flows'] })
 
-    connectMutation.mutate(undefined, {
-      onSuccess: (data) => {
-        setIsConnecting(false)
-        if (!data.connected && data.error) {
-          setConnectionError(data.error)
+    const attempt = (fresh: boolean) => {
+      const fail = (message: string) => {
+        if (!fresh) {
+          attempt(true)
+          return
         }
-      },
-      onError: (error) => {
         setIsConnecting(false)
-        setConnectionError(error.message)
-      },
-    })
-  }, [connectMutation, queryClient])
+        setConnectionError(message)
+      }
+      const detected = fresh ? detectSourcesAgain() : Promise.resolve(undefined)
+      detected.then(
+        () => connectMutation.mutate(undefined, {
+          onSuccess: (data) => {
+            if (!data.connected && data.error) {
+              fail(data.error)
+              return
+            }
+            setIsConnecting(false)
+          },
+          onError: (error) => fail(error.message),
+        }),
+        (error: Error) => {
+          setIsConnecting(false)
+          setConnectionError(error.message)
+        },
+      )
+    }
+    attempt(redetect)
+  }, [connectMutation, queryClient, detectSourcesAgain])
+
+  // The wizard polls without waiting on the answer; a failed detection shows
+  // through the sources query's own state.
+  const detectForWizard = useCallback(() => {
+    detectSourcesAgain().catch(() => {})
+  }, [detectSourcesAgain])
 
   // Auto-connect once when a source is first detected. Strictly one-shot per
   // mount / cluster (the ref resets on cluster change); failures surface a
@@ -1322,7 +1349,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
   useEffect(() => {
     if (wizardState === 'ready' && !hasAutoConnectedRef.current && !isConnecting) {
       hasAutoConnectedRef.current = true
-      handleConnect()
+      handleConnect(false)
     }
   }, [wizardState, isConnecting, handleConnect])
 
@@ -1334,7 +1361,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
         setState={setWizardState}
         sourcesData={sourcesData}
         sourcesLoading={sourcesLoading}
-        onRefetch={detectSourcesAgain}
+        onRefetch={detectForWizard}
       />
     )
   }
@@ -1472,7 +1499,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                         <>
                           <span className="w-2 h-2 rounded-full bg-yellow-500" />
                           <span className="text-theme-text-secondary">{activeSource.name}</span>
-                          <button onClick={handleConnect} className="text-yellow-500 hover:text-yellow-400 font-medium">retry</button>
+                          <button onClick={() => handleConnect(true)} className="text-yellow-500 hover:text-yellow-400 font-medium">retry</button>
                         </>
                       ) : (
                         <>
@@ -1623,7 +1650,7 @@ export function TrafficView({ namespaces, onSetNamespaces }: TrafficViewProps) {
                   {connectionError}
                 </p>
                 <button
-                  onClick={handleConnect}
+                  onClick={() => handleConnect(true)}
                   className="px-3 py-1.5 text-sm btn-brand rounded"
                 >
                   Retry Connection

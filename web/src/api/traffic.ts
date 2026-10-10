@@ -1,15 +1,16 @@
 import { useCallback } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import type { TrafficSourcesResponse, TrafficFlowsResponse, TrafficRecordsResponse } from '../types'
 import { fetchJSON as fetchApiJSON, useRadarFeature } from './client'
 import { shouldRetryRadarQuery } from './radarFeatures'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from './config'
 import { readErrorBody } from './httpErrors'
 
-async function fetchJSON<T>(path: string): Promise<T> {
+async function fetchJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(apiUrl(path), {
     credentials: getCredentialsMode(),
     headers: getAuthHeaders(),
+    signal,
   })
   if (!response.ok) {
     const error = await readErrorBody(response)
@@ -30,28 +31,39 @@ export interface TrafficConnectionInfo {
 }
 
 // Get available traffic sources and recommendations. A detection up to a
-// couple of minutes old is reused: a full one probes every source in turn and
-// takes seconds, and the page that linked here has usually just made one.
-// detectAgain asks for a fresh detection, for a user waiting on a source they
-// are installing.
+// couple of minutes old is reused when it found a source: a full one probes
+// every source in turn and takes seconds, and the page that linked here has
+// usually just made one. One that found none is redone, since it is about to
+// be shown as setup advice. detectAgain always detects afresh.
+export async function fetchTrafficSources(queryClient: QueryClient, fresh: boolean, signal?: AbortSignal): Promise<TrafficSourcesResponse> {
+  let sources = await fetchJSON<TrafficSourcesResponse>(fresh ? '/traffic/sources' : '/traffic/sources?recent=1', signal)
+  if (!fresh && !sources.detected.some(s => s.status === 'available')) {
+    sources = await fetchJSON<TrafficSourcesResponse>('/traffic/sources', signal)
+  }
+  // A detection is also the newest answer to "is traffic available".
+  queryClient.setQueryData(['traffic-sources', 'recent'], sources)
+  return sources
+}
+
+export async function detectTrafficSourcesAgain(queryClient: QueryClient): Promise<TrafficSourcesResponse> {
+  // A pending fetch of the same key would otherwise be returned in its place.
+  await queryClient.cancelQueries({ queryKey: ['traffic-sources'], exact: true })
+  return queryClient.fetchQuery({
+    queryKey: ['traffic-sources'],
+    queryFn: ({ signal }) => fetchTrafficSources(queryClient, true, signal),
+    staleTime: 0,
+  })
+}
+
 export function useTrafficSources() {
   const queryClient = useQueryClient()
-  const fetchSources = useCallback(async (fresh: boolean) => {
-    const sources = await fetchJSON<TrafficSourcesResponse>(fresh ? '/traffic/sources' : '/traffic/sources?recent=1')
-    // A detection is also the newest answer to "is traffic available".
-    queryClient.setQueryData(['traffic-sources', 'recent'], sources)
-    return sources
-  }, [queryClient])
   const query = useQuery<TrafficSourcesResponse>({
     queryKey: ['traffic-sources'],
-    queryFn: () => fetchSources(false),
+    queryFn: ({ signal }) => fetchTrafficSources(queryClient, false, signal),
     staleTime: 30000, // 30 seconds
     retry: 1,
   })
-  const detectAgain = useCallback(() => {
-    queryClient.fetchQuery({ queryKey: ['traffic-sources'], queryFn: () => fetchSources(true), staleTime: 0 })
-      .catch(() => {})
-  }, [queryClient, fetchSources])
+  const detectAgain = useCallback(() => detectTrafficSourcesAgain(queryClient), [queryClient])
   return { ...query, detectAgain }
 }
 
