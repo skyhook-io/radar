@@ -10,8 +10,8 @@ The Helm list shows:
 - Resource health derived from the current rendered manifest and live Kubernetes status.
 - Helm storage namespace. This matters for controllers such as Flux, which may store the Helm release Secret outside the target namespace.
 - Flux ownership when Radar can match the release to a Flux `HelmRelease`.
-- `lastOperation` for current failed upgrades, rollback-after-failure patterns, explicit rollbacks, and stuck pending operations.
-- A capped operation trail for failed upgrades, rollbacks, rollback-after-failure, and stuck pending operations.
+- `lastOperation` for current failed upgrades, rollback-after-failure patterns, explicit rollbacks, and stuck pending operations (including uninstalls).
+- A capped operation trail for failed upgrades, rollbacks, rollback-after-failure, and stuck pending operations (including uninstalls).
 
 When `storageNamespace` is present, use it for Helm detail/API/MCP calls. Helm stores release history there even when the chart deploys resources into another namespace.
 
@@ -32,7 +32,7 @@ Compare opens a full-page workspace instead of rendering inside the drawer. The 
 Radar derives a Helm operation signal from release history and the current release status. It distinguishes:
 
 - Active failed upgrades.
-- Active pending or stuck installs/upgrades/rollbacks.
+- Active pending or stuck installs/upgrades/rollbacks/uninstalls.
 - Explicit rollbacks.
 - Recovered rollback-after-failure flows.
 
@@ -46,7 +46,13 @@ For recovered operations, Radar suggests the revision comparison most likely to 
 
 Flux-owned Helm releases defer to Flux. Radar shows the owning `HelmRelease` and does not synthesize native Helm operation insight for releases managed by Flux's helm-controller, because the GitOps controller is the authoritative reconciler.
 
-Active native Helm failures and stuck pending operations also appear in the global Issues stream as `kind=HelmRelease`, `group=helm.sh`. Recovered rollbacks are deployment history, not live issues; use Helm detail or `get_changes` for those.
+Active native Helm failures and stuck pending operations (including uninstalls) also appear in the global Issues stream as `kind=HelmRelease`, `group=helm.sh`. Recovered rollbacks are deployment history, not live issues; use Helm detail or `get_changes` for those.
+
+Uninstalls that remain `uninstalling` for at least ten minutes appear as `HelmReleaseUninstallStuck` warnings. Radar times them from Helm's `Info.Deleted`, the recorded uninstall start, rather than the last deployment. Revision history preserves `Info.Deleted` separately from the deployment update time; stuck-operation and issue onset timestamps use the uninstall start. A missing start time does not produce an age-based stuck issue.
+
+Helm rewrites `Info.Deleted` at the start of every uninstall attempt, before the pre-delete hook runs, so a retry that fails on the same blocker would otherwise restart the clock and hide the issue for another ten minutes. Radar keeps the earliest uninstall start it has read for the release revision (per context, storage namespace and release name) and uses it for both the elapsed time and the issue onset; it resets when the release leaves `uninstalling` or moves to another revision. Revision history still shows Helm's latest `Info.Deleted`. The anchor lives in the Radar process: after a restart, or once Radar has not read the release for a day, it re-anchors to Helm's latest timestamp.
+
+The issue suggests checking pre-delete hook Jobs and surviving resources with finalizers before retrying the uninstall (Helm re-runs an uninstall stuck in this state). When a hook is the blocker, `helm uninstall --no-hooks` completes the uninstall, but Helm does not remove the Jobs and Pods the hook created, and resources held by finalizers stay Terminating. Radar no longer ties either to the release afterwards, so the issue tells the operator to delete the hook's leftovers and check for Terminating resources. These are investigation steps, not verified blocker diagnoses.
 
 ## Failed Upgrades And Rollback Inference
 

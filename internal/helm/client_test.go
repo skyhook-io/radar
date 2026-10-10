@@ -411,7 +411,7 @@ func TestHelmReleaseRowsFromStorageSnapshot_AttachesLastOperation(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -451,7 +451,7 @@ func TestHelmReleaseRowsFromStorageSnapshot_KeepsHealthyRowsCompact(t *testing.T
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -480,7 +480,7 @@ func TestHelmReleaseRowsFromStorageSnapshot_SkipsMalformedReleaseSecret(t *testi
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
 
 	if len(rows) != 0 {
 		t.Fatalf("len(rows) = %d, want 0 for malformed release secret", len(rows))
@@ -509,7 +509,7 @@ func TestHelmReleaseRowsFromStorageSnapshot_CapsOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -548,7 +548,7 @@ func TestHelmReleaseRowsFromStorageSnapshot_UsesDetailHistoryWindow(t *testing.T
 		t.Fatal(err)
 	}
 
-	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil)
+	rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
 
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
@@ -2041,5 +2041,64 @@ func TestStoredChartMatchesReconstructedToleratesStorageRoundTrip(t *testing.T) 
 	stored := roundTripStoredChart(t, loaded)
 	if err := storedChartMatchesReconstructed(stored, loaded); err != nil {
 		t.Fatalf("a chart compared against its own stored form reported as different: %v", err)
+	}
+}
+
+func TestHelmReleaseUninstallTimestampFromStorage(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	for _, tt := range []struct {
+		name      string
+		deleted   time.Time
+		wantStuck bool
+	}{
+		{name: "aged", deleted: now.Add(-20 * time.Minute), wantStuck: true},
+		{name: "recent", deleted: now.Add(-time.Minute)},
+		{name: "missing"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			freshUninstallStarts(t)
+			rel := helmTestRelease("deleting", "demo", 2, release.StatusUninstalling, "Deletion in progress")
+			rel.Info.LastDeployed = helmtime.Time{Time: now.Add(-90 * 24 * time.Hour)}
+			rel.Info.Deleted = helmtime.Time{Time: tt.deleted}
+			client := fake.NewSimpleClientset(helmReleaseSecret(t, "helm-storage", rel, true))
+			snapshot, err := helmReleaseStorageSnapshotWithClient(client, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows := helmReleaseRowsFromStorageSnapshot(snapshot, nil, "")
+			if len(rows) != 1 {
+				t.Fatalf("rows = %#v", rows)
+			}
+			row := rows[0]
+			if !row.Updated.Equal(rel.Info.LastDeployed.Time) {
+				t.Fatalf("Updated = %v, want deployment time %v", row.Updated, rel.Info.LastDeployed.Time)
+			}
+			if (row.LastOperation != nil) != tt.wantStuck {
+				t.Fatalf("LastOperation = %#v, wantStuck = %v", row.LastOperation, tt.wantStuck)
+			}
+			if tt.wantStuck && !row.LastOperation.Updated.Equal(tt.deleted) {
+				t.Fatalf("operation timestamp = %v, want %v", row.LastOperation.Updated, tt.deleted)
+			}
+			history := toHelmHistoryRevisions(snapshot.histories[releaseHistoryKey(rel)])
+			if len(history) != 1 || !history[0].Deleted.Equal(tt.deleted) || !history[0].Updated.Equal(rel.Info.LastDeployed.Time) {
+				t.Fatalf("history = %#v", history)
+			}
+		})
+	}
+}
+
+func TestHelmReleaseDeploymentTimestampPreserved(t *testing.T) {
+	deployed := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	for _, status := range []release.Status{release.StatusDeployed, release.StatusPendingInstall, release.StatusPendingUpgrade, release.StatusPendingRollback, release.StatusFailed, release.StatusUninstalled} {
+		t.Run(status.String(), func(t *testing.T) {
+			rel := helmTestRelease("cart", "apps", 2, status, "")
+			rel.Info.LastDeployed = helmtime.Time{Time: deployed}
+			rel.Info.Deleted = helmtime.Time{Time: deployed.Add(time.Hour)}
+			row := toHelmRelease(rel, "apps")
+			revision, ok := toHelmRevision(rel)
+			if !ok || !row.Updated.Equal(deployed) || !revision.Updated.Equal(deployed) {
+				t.Fatalf("row/revision timestamps = %v/%v, want %v", row.Updated, revision.Updated, deployed)
+			}
+		})
 	}
 }

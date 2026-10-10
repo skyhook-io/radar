@@ -46,6 +46,7 @@ type HelmRevision struct {
 	AppVersion  string    `json:"appVersion"`
 	Description string    `json:"description"`
 	Updated     time.Time `json:"updated"`
+	Deleted     time.Time `json:"deleted,omitzero"`
 }
 
 // HelmReleaseDetail contains full details of a Helm release
