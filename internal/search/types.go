@@ -24,8 +24,8 @@ type CELFilter = filter.Filter
 // before scoring.
 type Query struct {
 	Tokens      []string  // free tokens; each must match somewhere; sum of best per-site scores = total
-	KindFilter  []string  // kind:Foo modifiers, lowercased; matches Kind name (singular or plural)
-	NSFilter    []string  // ns:foo modifiers
+	KindFilter  []string  // kind:Foo modifiers as written; matches Kind name (singular or plural), case-insensitively
+	NSFilter    []string  // ns:foo modifiers; restrict namespaced kinds, and exclude cluster-scoped kinds unless a kind: names them
 	LabelFilter []LabelEq // label:k=v modifiers; AND'd
 	ImageFilter []string  // image:foo modifiers; substring match on container images
 	Cluster     string    // cluster: modifier — radar ignores; hub uses for routing
@@ -72,11 +72,30 @@ type MatchSnippet struct {
 	Snippet string `json:"snippet"`
 }
 
+// UnsearchedKind is one coverage gap. Namespaces is set only for namespace
+// reasons: for namespace_excluded it lists requested namespaces that were not
+// searched; for namespace_scope it lists the only namespaces that were.
+type UnsearchedKind struct {
+	Kind       string   `json:"kind"`
+	Group      string   `json:"group"`
+	Reason     string   `json:"reason"`
+	Namespaces []string `json:"namespaces,omitempty"`
+}
+
+type FailedObject struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
 // Result is the full response shape for a search request.
 type Result struct {
-	Hits     []Hit `json:"hits"`
-	Total    int   `json:"total"`    // number of hits returned (after limit)
-	Searched int   `json:"searched"` // approx. number of objects scanned
+	Partial             bool             `json:"partial"`
+	Unsearched          []UnsearchedKind `json:"unsearched"`
+	FilterFailedObjects []FailedObject   `json:"filter_failed_objects,omitempty"`
+	Hits                []Hit            `json:"hits"`
+	Total               int              `json:"total"`    // number of hits returned (after limit)
+	Searched            int              `json:"searched"` // approx. number of objects scanned
 	// TotalMatched is the count of hits BEFORE truncation by Limit.
 	// Equals Total when no truncation occurred. Surfaced so callers
 	// (the hub's fleet aggregator, agents, the frontend) can report honest

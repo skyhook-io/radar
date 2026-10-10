@@ -28,6 +28,8 @@ Two kinds are gated more tightly, per-resource-kind, because the shared cache ca
 - **Secrets** (and Secret-derived data such as TLS certificate metadata) — shown only if the user can list Secrets in that namespace.
 - **Cluster-scoped resources** (Nodes, PersistentVolumes, ClusterRoles, cluster-scoped CRDs, etc.) — shown only if the user's RBAC permits listing that kind.
 
+Search additionally checks the caller's exact list permission for typed Roles and RoleBindings. Ordinary namespaced kinds, including ServiceAccounts, NetworkPolicies, LimitRanges, ResourceQuotas and dynamic CRDs, use namespace visibility, matching resource lists. Sensitive-kind checks try a cluster-wide SAR first and fan out over visible namespaces only after a denial. Its coverage response distinguishes caller denial, failed permission checks and collector limitations; see [Search coverage](mcp.md#search-coverage-and-cel-object-filters).
+
 **If namespace-level isn't tight enough for you**, scope the boundary at the cache instead of at read time: run a Radar instance per trust boundary and give each one a **namespace-scoped ServiceAccount** (a `Role`/`RoleBinding`, no `ClusterRole`) limited to that boundary's namespaces. Radar detects the restricted permissions at startup and only watches and caches what its ServiceAccount can list — so the instance simply never holds another team's data, and there's nothing to over-expose. Point each team at their own instance (an ingress or auth proxy can route them). See [In-Cluster Deployment → namespace-scoped RBAC](in-cluster.md) for the `rbac.create: false` + custom `Role` setup.
 
 ### Prometheus metrics

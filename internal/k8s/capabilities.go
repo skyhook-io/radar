@@ -133,6 +133,7 @@ type CloudConnectCapability struct {
 // here in the same change, plus an entry in web/src/api/radarFeatures.ts
 // (TestFeatureFlagsHaveFrontendGates enforces the pairing).
 type FeatureCapabilities struct {
+	SearchCoverage        bool `json:"searchCoverage"`
 	YAMLReview            bool `json:"yamlReview"`
 	YAMLSchemas           bool `json:"yamlSchemas"`
 	WorkloadImages        bool `json:"workloadImages"`
@@ -800,6 +801,17 @@ func resourceProbeTargets(perms *ResourcePermissions) []resourceProbe {
 		{key: "httproutes", gvr: schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}, field: &perms.HTTPRoutes, requiresDiscovery: true},
 		{key: "verticalpodautoscalers", gvr: schema.GroupVersionResource{Group: "autoscaling.k8s.io", Version: "v1", Resource: "verticalpodautoscalers"}, field: &perms.VerticalPodAutoscalers, requiresDiscovery: true},
 	}
+}
+
+// CanList reports the collector's probe result for a typed built-in kind.
+func (p *ResourcePermissions) CanList(kind string) bool {
+	resource := CanonicalBuiltinKind(kind)
+	for _, probe := range resourceProbeTargets(p) {
+		if probe.gvr.Resource == resource {
+			return *probe.field
+		}
+	}
+	return false
 }
 
 // SanitizeForLog strips CR/LF from a string before it's written to a log.

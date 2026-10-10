@@ -145,6 +145,8 @@ func TestKindMatches_Variants(t *testing.T) {
 		{"Pod", "pod", true},
 		{"Pod", "Pod", true},
 		{"Pod", "pods", true},
+		{"NetworkPolicy", "networkpolicies", true},
+		{"IngressClass", "ingressclasses", true},
 		{"Service", "svc", false}, // we don't expand short names
 		{"Deployment", "deployment", true},
 		{"Deployment", "deployments", true},

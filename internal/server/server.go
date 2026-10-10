@@ -1339,6 +1339,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.CloudConnect = s.cloudConnectCapability()
 	caps.Features = k8s.FeatureCapabilities{
+		SearchCoverage:        true,
 		YAMLReview:            true,
 		YAMLSchemas:           true,
 		WorkloadImages:        true,
@@ -1742,8 +1743,13 @@ func (s *Server) canReadUserSAR(ctx context.Context, user *auth.User, group, res
 // nil or empty input is returned unchanged; the caller's namespace-access
 // gate (parseNamespacesForUser / noNamespaceAccess) is the upstream decision.
 func (s *Server) filterNamespacesByCanRead(r *http.Request, group, resource, verb string, namespaces []string) []string {
+	out, _ := s.filterNamespacesByCanReadDecision(r, group, resource, verb, namespaces)
+	return out
+}
+
+func (s *Server) filterNamespacesByCanReadDecision(r *http.Request, group, resource, verb string, namespaces []string) ([]string, bool) {
 	if len(namespaces) == 0 {
-		return namespaces
+		return namespaces, true
 	}
 	// Bounded-parallel: each canRead miss is a SAR round-trip, so a serial loop
 	// over a large candidate set (e.g. a cluster-wide reader's full namespace
@@ -1756,22 +1762,25 @@ func (s *Server) filterNamespacesByCanRead(r *http.Request, group, resource, ver
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	out := make([]string, 0, len(namespaces))
+	authoritative := true
 	for _, ns := range namespaces {
 		wg.Add(1)
 		go func(ns string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			if s.canRead(r, group, resource, ns, verb) {
-				mu.Lock()
+			allowed, auth := s.canReadDecision(r, group, resource, ns, verb)
+			mu.Lock()
+			authoritative = authoritative && auth
+			if allowed {
 				out = append(out, ns)
-				mu.Unlock()
 			}
+			mu.Unlock()
 		}(ns)
 	}
 	wg.Wait()
 	sort.Strings(out)
-	return out
+	return out, authoritative
 }
 
 // deniedClusterScopedTopoKinds returns the set of cluster-scoped topology

@@ -491,6 +491,98 @@ API group is part of a resource's identity. Radar infers the canonical group for
 
 This selects the Argo Rollout workload path; it does not imply that `diagnose` supports arbitrary custom resource shapes.
 
+### Search coverage and CEL object filters
+
+`search` scans typed resources (including RBAC, ServiceAccounts, NetworkPolicies,
+IngressClasses, LimitRanges and ResourceQuotas) and discovered dynamic kinds,
+including admission webhook configurations. Broad searches collapse all unwatched
+kinds into one `{kind: "*", group: "", reason: "cold"}` entry, which still sets
+`partial: true`. List-only/non-watchable APIs are omitted from broad coverage;
+an explicit `kind:` query starts the existing bounded on-demand watch
+and waits briefly for initial sync once CRD discovery is ready. While discovery is
+loading, it reports `syncing` without starting a watch. If initial sync remains
+incomplete, retry after `syncing`. Alternate built-in groups of typed kinds are
+skipped, so `kind:Event` does not duplicate core Events through `events.k8s.io`.
+Search results never imply absence for an omitted kind.
+
+Every response includes `partial` and an `unsearched` array of
+`{kind, group, reason}`. Core resources use `group: ""`. Reasons distinguish
+caller `rbac_denied`, collector `sa_forbidden`,
+`cold`, `syncing`, `sync_failed`, `not_indexed`, `list_error`, `namespace_scope`
+and `namespace_excluded`. An entry
+can describe an incompletely searched kind: authorized namespaces still contribute
+hits. Unavailable discovery is represented by `kind: "*"`, `group: ""`.
+
+The two namespace reasons may carry `namespaces`:
+
+- `namespace_excluded`: requested `ns:` namespaces the caller can't see, or that the
+  namespace selection leaves out, were not searched. `namespaces` lists those
+  requested names; it echoes the query and says nothing about whether they exist.
+- `namespace_scope`: only some namespaces were searched. Either Radar's cache doesn't
+  watch the rest (collector coverage; no `namespaces`), or, on REST without
+  `globalNs=1`, the caller's saved namespace pick or `--namespace-scope` narrowed a
+  query that has no `ns:` terms. In that case `namespaces` lists the namespaces that
+  were searched. The caller's RBAC namespace ceiling is never a gap, matching
+  resource lists.
+
+`ns:` (and the MCP `namespace` argument) restricts namespaced kinds. A broad `ns:`
+query covers namespaced objects only. A cluster-scoped kind named with `kind:`
+ignores `ns:`, as kubectl ignores `-n` for it. RBAC namespace limits, the namespace
+pick and `--namespace-scope` never hide cluster-scoped objects: each cluster-scoped
+kind is gated only by the caller's own list permission for it.
+Coverage is bounded by the discovered catalog; it cannot describe undiscovered APIs.
+Explicit searches share one two-second warmup deadline across matching dynamic
+kinds and namespaces, including permission probes and initial sync. A requested
+namespace can start its own watch even when another namespace is already cached.
+Failed or unfinished warming reports partial coverage and preserves cached hits
+from covered namespaces. Third-party CRDs named Event are searched normally; only
+built-in Events are excluded from broad searches.
+
+Broad queries also collapse `namespace_excluded` and `namespace_scope` into one `*`
+entry each, merging their `namespaces`. Explicitly requested kinds keep per-kind
+cold, unsupported and namespace entries; denied,
+syncing, failed-sync and list-error kinds keep per-kind entries for all queries.
+Unknown `kind:` terms come back as `not_indexed` in the caller's spelling.
+Typed informers disabled by collector probes report `sa_forbidden`, never `cold`.
+A stalled dynamic sync reports `sync_failed`; incomplete namespace probing reports
+`syncing`. Truncated probing adds `namespace_scope` only if the requested scope
+includes an unwatched namespace (or requests all namespaces).
+
+Ordinary namespaced kinds, including dynamic CRDs, use the same namespace visibility
+policy as resource lists. Secrets and typed Roles/RoleBindings use exact caller list
+gates. These gates try one cluster-wide check, then bounded parallel namespace
+checks only after a denial. Cluster-scoped kinds use an exact cluster-scoped check.
+Cold/unsupported observation states are read before any caller permission checks.
+Permission-check failures fail closed and report `list_error`, not `rbac_denied`;
+successfully authorized namespaces still contribute hits.
+
+`features.searchCoverage` advertises the coverage response and `object` binding so
+embedding hosts can gate them when connected to an older Radar.
+
+CEL exposes `object` (the cached object with Secret data/stringData removed)
+alongside the existing `kind`,
+`apiVersion`, `metadata`, `spec`, `status`, `labels` and `annotations` shortcuts.
+Shortcuts project from that same object, preserving fields such as node placement,
+Pod IPs, UIDs, generations, finalizers and environment values. Core Secret
+`data`/`stringData` are structurally absent; CEL does not apply Detail pruning or
+environment-value redaction.
+`metadata.namespace` is `""` for cluster-scoped objects. Other missing fields retain
+CEL's normal error semantics; no optional-type extensions are enabled.
+
+Examples:
+
+- RBAC top-level fields: `has(object.subjects) && object.subjects.exists(s, s.kind == "ServiceAccount")`
+- Label membership: `"app" in labels && labels["app"] == "cart"`
+- Multi-source Argo: `kind == "Application" && has(spec.sources) && spec.sources.exists(s, has(s.repoURL) && s.repoURL.contains("github.com"))`
+
+`has()` takes a field selection (`has(object.subjects)`), not a bare variable
+(`has(subjects)`). Use map membership for label keys. Evaluation/activation errors
+set `partial: true`, preserve `filter_errors` and `filter_error_sample`, and return
+`filter_failed_objects`: the first 20 `{kind, namespace, name}` refs, with empty
+namespace at cluster scope. Surviving hits remain available. A valid false predicate
+is an ordinary non-match. Hit-limit truncation uses `total_matched`, independently
+of coverage partiality.
+
 For `issues`, read `timing_summary` when present; it explains timing combinations that are easy to misread without schema context. The raw provenance fields remain available for filtering. `first_seen` is an evidence-backed lower bound, `onset_unknown` means no contributing signal has a known onset, and `resource_created_at` is resource-age context rather than issue age. A missing `first_seen` is exposed to CEL as `0`; require `first_seen != 0` for any age filter, and also require `onset_coverage_unknown == 0` when the whole row must have exact timing.
 
 Resource context distinguishes observed dependency references (`dependencies` and

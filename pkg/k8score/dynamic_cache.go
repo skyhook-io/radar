@@ -276,6 +276,15 @@ func (d *DynamicResourceCache) EnsureWatching(gvr schema.GroupVersionResource) e
 // This is what lets a namespace-restricted user read a CRD in the namespaces
 // they actually have access to, instead of being pinned to a single fallback.
 func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, preferredNS string) error {
+	return d.EnsureWatchingContext(context.Background(), gvr, preferredNS)
+}
+
+// EnsureWatchingContext bounds discovery waiting and permission probes by ctx.
+// Started informers belong to the cache lifecycle, not the requesting context.
+func (d *DynamicResourceCache) EnsureWatchingContext(ctx context.Context, gvr schema.GroupVersionResource, preferredNS string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if d == nil {
 		return fmt.Errorf("dynamic resource cache not initialized")
 	}
@@ -293,6 +302,8 @@ func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, p
 	if d.GetDiscoveryStatus() == CRDDiscoveryInProgress {
 		select {
 		case <-d.discoveryDone:
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-time.After(45 * time.Second):
 			log.Printf("[dynamic cache] Timeout waiting for CRD discovery, probing %s independently", gvr.Resource)
 		}
@@ -307,11 +318,14 @@ func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, p
 	// parallel enrichment fan-out over many objects of one unwatched kind —
 	// share one probe fan-out + informer start instead of stampeding the
 	// apiserver with redundant limit=1 lists.
-	_, err, _ := d.watchStarts.Do(gvr.String()+"|"+preferredNS, func() (any, error) {
+	result := d.watchStarts.DoChan(gvr.String()+"|"+preferredNS, func() (any, error) {
 		if d.hasCoveringInformer(gvr, preferredNS) {
 			return nil, nil
 		}
-		scopes, complete, err := d.probeScopes(gvr, preferredNS)
+		scopes, complete, err := d.probeScopesContext(ctx, gvr, preferredNS)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if err != nil {
 			if isAuthProbeError(err) {
 				d.retainDeniedObservation(gvr, preferredNS, complete)
@@ -342,7 +356,12 @@ func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, p
 		}
 		return nil, nil
 	})
-	return err
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case r := <-result:
+		return r.Err
+	}
 }
 
 // hasCoveringInformer reports whether an existing informer already serves
@@ -523,6 +542,10 @@ func (d *DynamicResourceCache) fallbackNamespaces() []string {
 // is denied and the caller named none, every configured fallback namespace
 // is probed and each granted one becomes a scope.
 func (d *DynamicResourceCache) probeScopes(gvr schema.GroupVersionResource, preferredNS string) (scopes []string, complete bool, err error) {
+	return d.probeScopesContext(context.Background(), gvr, preferredNS)
+}
+
+func (d *DynamicResourceCache) probeScopesContext(parent context.Context, gvr schema.GroupVersionResource, preferredNS string) (scopes []string, complete bool, err error) {
 	// The budget covers the cluster-wide probe plus the whole candidate walk;
 	// scale it with the candidate count so a 20-namespace fanout isn't judged
 	// by a budget sized for the single-fallback case, while staying bounded
@@ -531,7 +554,7 @@ func (d *DynamicResourceCache) probeScopes(gvr schema.GroupVersionResource, pref
 	if n := len(d.fallbackNamespaces()); n > 1 {
 		budget = min(5*time.Second+time.Duration(n)*500*time.Millisecond, 15*time.Second)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
 
 	// Forced namespace mode (--namespace-scope): pin NAMESPACED resources to the
@@ -548,6 +571,9 @@ func (d *DynamicResourceCache) probeScopes(gvr schema.GroupVersionResource, pref
 
 	// Cluster-wide first — one informer then serves every namespace.
 	err = d.listProbe(ctx, gvr, "")
+	if nsCtxExpired(err) {
+		return nil, false, err
+	}
 	if err == nil {
 		return []string{""}, true, nil
 	}
@@ -597,14 +623,11 @@ func (d *DynamicResourceCache) probeScopes(gvr schema.GroupVersionResource, pref
 			complete = false
 			break
 		}
+		if nsCtxExpired(probeErr) {
+			complete = false
+			continue
+		}
 		if nsErr == nil {
-			if probeErr != nil && nsCtxExpired(probeErr) {
-				// The candidate's own sub-deadline fired; classifyScope's
-				// fail-open would count that as a grant. Record the walk as
-				// incomplete instead so a later attempt re-tries it.
-				complete = false
-				continue
-			}
 			granted = append(granted, scoped)
 		}
 	}
@@ -637,7 +660,7 @@ func (d *DynamicResourceCache) classifyScope(gvr schema.GroupVersionResource, ns
 	if err == nil {
 		return ns, nil
 	}
-	if isAuthProbeError(err) {
+	if isAuthProbeError(err) || nsCtxExpired(err) {
 		return "", err
 	}
 	log.Printf("[dynamic cache] Probe for %s.%s/%s in namespace %q returned non-auth error (allowing): %v", gvr.Resource, gvr.Group, gvr.Version, ns, err)
@@ -1297,11 +1320,16 @@ func (d *DynamicResourceCache) countDirectProbeOne(ctx context.Context, gvr sche
 // List returns all resources of a given GVR, optionally filtered by namespace.
 // This is non-blocking — returns whatever data is available immediately.
 func (d *DynamicResourceCache) List(gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
+	return d.ListContext(context.Background(), gvr, namespace)
+}
+
+// ListContext bounds on-demand watch creation by ctx before reading cached data.
+func (d *DynamicResourceCache) ListContext(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
 	if d == nil {
 		return nil, fmt.Errorf("dynamic resource cache not initialized")
 	}
 
-	if err := d.ensureWatching(gvr, namespace); err != nil {
+	if err := d.EnsureWatchingContext(ctx, gvr, namespace); err != nil {
 		return nil, err
 	}
 
@@ -1944,6 +1972,19 @@ func (d *DynamicResourceCache) WaitForSync(gvr schema.GroupVersionResource, time
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
+	syncFuncs := make([]cache.InformerSynced, 0, len(entries))
+	for _, e := range entries {
+		syncFuncs = append(syncFuncs, e.informer.HasSynced)
+	}
+	return cache.WaitForCacheSync(ctx.Done(), syncFuncs...)
+}
+
+// WaitForSyncContext waits only for informers covering namespace, bounded by ctx.
+func (d *DynamicResourceCache) WaitForSyncContext(ctx context.Context, gvr schema.GroupVersionResource, namespace string) bool {
+	entries := d.readEntries(gvr, namespace)
+	if len(entries) == 0 {
+		return false
+	}
 	syncFuncs := make([]cache.InformerSynced, 0, len(entries))
 	for _, e := range entries {
 		syncFuncs = append(syncFuncs, e.informer.HasSynced)

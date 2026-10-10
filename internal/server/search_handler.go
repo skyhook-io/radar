@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/search"
 )
@@ -34,86 +33,39 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auth-filter the namespaces the user can see, then intersect with any
-	// `ns:` modifier parsed from the query. The result both gates the scan
-	// (so listers don't read namespaces outside the user's RBAC) and
-	// constrains the post-hoc match() filter.
+	// Namespaced kinds scan the namespaces the user can see, intersected with
+	// any `ns:` modifier; listers never read namespaces outside the user's
+	// RBAC. Cluster-scoped kinds are gated per kind by CanReadClusterScoped.
 	//
-	// globalNs=1 makes search ignore the per-user namespace-switcher pick and
-	// scan the user's full RBAC ceiling — a "global" search whose only scope is
-	// the query's own `ns:` tokens. The omnibar sets it so a deliberately broad
-	// ⌘K lookup isn't silently narrowed to whatever namespace the view filter
-	// happens to be on. Still RBAC-bounded (getUserNamespaces filters by the
-	// caller's identity); it only drops the cosmetic pick, never the ceiling.
-	var allowed []string
-	if r.URL.Query().Get("globalNs") == "1" {
-		allowed = s.getUserNamespaces(r, parseNamespaces(r.URL.Query()))
-	} else {
-		allowed = s.parseNamespacesForUser(r)
+	// Without globalNs=1, the per-user namespace-switcher pick (or the
+	// --namespace-scope namespace) narrows the scan, and the response reports
+	// that as namespace_scope. globalNs=1 drops the cosmetic pick and scans the
+	// user's full RBAC ceiling — a "global" search whose only scope is the
+	// query's own `ns:` tokens. The omnibar sets it so a deliberately broad ⌘K
+	// lookup isn't narrowed to whatever namespace the view filter is on.
+	ceiling := s.getUserNamespaces(r, parseNamespaces(r.URL.Query()))
+	visible := ceiling
+	if r.URL.Query().Get("globalNs") != "1" {
+		visible = s.parseNamespacesForUser(r)
 	}
-	if noNamespaceAccess(allowed) {
-		s.writeJSON(w, search.Result{Hits: []search.Hit{}})
-		return
-	}
-	scanNamespaces := intersectNamespaces(allowed, parsed.NSFilter)
-	if allowed != nil && len(scanNamespaces) == 0 {
-		// User is namespace-restricted but their `ns:` filter doesn't
-		// intersect — empty result without scanning.
-		s.writeJSON(w, search.Result{Hits: []search.Hit{}})
-		return
-	}
-	parsed.NSFilter = scanNamespaces
 
 	include, err := parseInclude(r.URL.Query().Get("include"))
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	skipKinds := s.computeSearchSkipKinds(r)
-	// Secrets are namespaced and get per-namespace RBAC treatment so a user
-	// with per-namespace Secret access (e.g. a Role-bound viewer) sees those
-	// rows in search instead of having Secret dropped at cluster scope.
-	// scanNamespaces (not allowed) is the right input: a user with
-	// AllowedNamespaces==nil (cluster-wide-pods sentinel) who queries
-	// `ns:team-a` should get per-namespace fanout over team-a, not a
-	// cluster-scope `list secrets` SAR — they may have list-secrets in
-	// team-a but not cluster-wide. nil scanNamespaces (truly cluster-wide
-	// query) still routes to the cluster-scope SAR branch.
-	var namespacesByKind map[string][]string
-	switch decision, scoped := s.computeSearchSecretsRBAC(r, scanNamespaces); decision {
-	case "skip":
-		if skipKinds == nil {
-			skipKinds = make(map[string]bool)
-		}
-		skipKinds["Secret"] = true
-	case "override":
-		// scoped ⊆ scanNamespaces ⊆ parsed.NSFilter already (the SAR fanout
-		// iterates scanNamespaces, which is the upstream intersection of
-		// allowed and parsed.NSFilter). Use the SAR result directly.
-		namespacesByKind = map[string][]string{"Secret": scoped}
-	}
-
 	opts := search.Options{
-		Limit:      parseLimit(r.URL.Query().Get("limit")),
-		Include:    include,
-		Namespaces: scanNamespaces,
-		// SAR-gate sensitive cluster-scoped kinds (Node, PV, StorageClass,
-		// Namespace) by the END user's identity, not the SA's. The cache
-		// itself reads as the SA so it carries those rows, but exposing
-		// them through search to a namespace-bound viewer would let them
-		// enumerate cluster-scope info their k8s RBAC denies. Secrets get
-		// per-namespace RBAC via NamespacesByKind/SkipKinds above. In
-		// auth-mode=none, computeSearchSkipKinds returns nil and the SA's
-		// own RBAC at the cache lister layer is the only filter.
-		SkipKinds:        skipKinds,
-		NamespacesByKind: namespacesByKind,
-		CanReadClusterScoped: func(kind, group, resource string) bool {
-			if auth.UserFromContext(r.Context()) == nil {
-				return true
-			}
-			return s.canRead(r, group, resource, "", "list")
+		NamespacedRBAC: func(namespaces []string, group, resource string) (string, []string) {
+			return s.computeSearchKindRBAC(r, namespaces, group, resource)
+		},
+		Limit:   parseLimit(r.URL.Query().Get("limit")),
+		Include: include,
+		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
+			return s.canReadDecision(r, group, resource, "", "list")
 		},
 	}
+	opts.ScopeNamespaces(parsed, visible, ceiling)
+	scanNamespaces := opts.Namespaces
 	// summaryContext attaches managedBy/health/issueCount per hit. Build
 	// the per-request closure once (one Compose call + cached topology
 	// snapshot) and let the search executor invoke it per kept hit.

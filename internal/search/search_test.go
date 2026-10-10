@@ -3,8 +3,10 @@ package search
 import (
 	"context"
 	"fmt"
+	"sort"
 	"testing"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,6 +16,14 @@ import (
 )
 
 type fakeProvider struct {
+	observations          map[schema.GroupVersionResource]k8score.DynamicResourceObservation
+	warmed                []schema.GroupVersionResource
+	warmNamespaces        []string
+	warmFunc              func(context.Context, schema.GroupVersionResource, string) error
+	typedReasons          map[string]string
+	listErrors            map[string]error
+	dynamicErrors         map[string]error
+	warmError             error
 	typed                 map[string][]runtime.Object
 	dynamic               map[schema.GroupVersionResource][]*unstructured.Unstructured
 	kinds                 map[schema.GroupVersionResource]string
@@ -22,20 +32,49 @@ type fakeProvider struct {
 }
 
 func (f *fakeProvider) ListTyped(kind string, namespaces []string) ([]runtime.Object, error) {
-	return f.typed[kind], nil
+	return f.typed[kind], f.listErrors[kind]
 }
 
 func (f *fakeProvider) ListDynamic(_ context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
 	f.dynamicListNamespaces = append(f.dynamicListNamespaces, namespace)
-	return f.dynamic[gvr], nil
+	return f.dynamic[gvr], f.dynamicErrors[namespace]
 }
 
-func (f *fakeProvider) WatchedDynamic() []schema.GroupVersionResource {
-	out := make([]schema.GroupVersionResource, 0, len(f.dynamic))
-	for g := range f.dynamic {
-		out = append(out, g)
+func (f *fakeProvider) DynamicResources() ([]schema.GroupVersionResource, error) {
+	seen := map[schema.GroupVersionResource]bool{}
+	for gvr := range f.dynamic {
+		seen[gvr] = true
 	}
-	return out
+	for gvr := range f.kinds {
+		seen[gvr] = true
+	}
+	out := make([]schema.GroupVersionResource, 0, len(seen))
+	for gvr := range seen {
+		out = append(out, gvr)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
+	return out, nil
+}
+func (f *fakeProvider) TypedCoverage(kind string, namespaces []string) string {
+	return f.typedReasons[kind]
+}
+func (f *fakeProvider) DynamicObservation(gvr schema.GroupVersionResource) k8score.DynamicResourceObservation {
+	if o, ok := f.observations[gvr]; ok {
+		return o
+	}
+	return k8score.DynamicResourceObservation{State: k8score.DynamicObservationSynced}
+}
+func (f *fakeProvider) WarmDynamic(ctx context.Context, gvr schema.GroupVersionResource, namespace string) error {
+	f.warmed = append(f.warmed, gvr)
+	f.warmNamespaces = append(f.warmNamespaces, namespace)
+	if f.warmFunc != nil {
+		return f.warmFunc(ctx, gvr, namespace)
+	}
+	if f.warmError != nil {
+		return f.warmError
+	}
+	f.observations[gvr] = k8score.DynamicResourceObservation{State: k8score.DynamicObservationSynced}
+	return nil
 }
 
 func (f *fakeProvider) KindForGVR(gvr schema.GroupVersionResource) string {
@@ -206,6 +245,10 @@ func TestSearch_DefaultSkipsEvents(t *testing.T) {
 			"events": {&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "redis-event", Namespace: "ns"}}},
 		},
 	}
+	eventGVR := schema.GroupVersionResource{Group: "events.k8s.io", Version: "v1", Resource: "events"}
+	p.dynamic = map[schema.GroupVersionResource][]*unstructured.Unstructured{eventGVR: {{Object: map[string]any{"kind": "Event", "apiVersion": "events.k8s.io/v1", "metadata": map[string]any{"name": "redis-event-new", "namespace": "ns"}}}}}
+	p.kinds = map[schema.GroupVersionResource]string{eventGVR: "Event"}
+
 	res, _ := Search(context.Background(), p, Parse("redis"), Options{Include: IncludeNone})
 	if len(res.Hits) != 0 {
 		t.Fatalf("default search should skip events, got %+v", res.Hits)
@@ -287,11 +330,11 @@ func TestSearch_DynamicClusterScopedCRDRequiresAccess(t *testing.T) {
 	}
 	res, _ := Search(context.Background(), p, Parse("kind:NodePool redis"), Options{
 		Include: IncludeNone,
-		CanReadClusterScoped: func(kind, group, resource string) bool {
+		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
 			if kind != "NodePool" || group != "karpenter.sh" || resource != "nodepools" {
 				t.Fatalf("unexpected SAR tuple: kind=%q group=%q resource=%q", kind, group, resource)
 			}
-			return false
+			return false, true
 		},
 	})
 	if len(res.Hits) != 0 {
@@ -319,8 +362,8 @@ func TestSearch_DynamicClusterScopedCRDListsAtClusterScopeWhenAllowed(t *testing
 	res, _ := Search(context.Background(), p, Parse("kind:NodePool redis"), Options{
 		Include:    IncludeNone,
 		Namespaces: []string{"team-a", "team-b"},
-		CanReadClusterScoped: func(kind, group, resource string) bool {
-			return kind == "NodePool" && group == "karpenter.sh" && resource == "nodepools"
+		CanReadClusterScoped: func(kind, group, resource string) (bool, bool) {
+			return kind == "NodePool" && group == "karpenter.sh" && resource == "nodepools", true
 		},
 	})
 	if len(res.Hits) != 1 {
