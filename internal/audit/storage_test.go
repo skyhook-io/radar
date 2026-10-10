@@ -48,12 +48,12 @@ func TestStorageCacheScopeAndCoverage(t *testing.T) {
 		{"denied Pods", "", false, true, true, false},
 		{"Pods in different namespace", "other", true, true, true, false},
 		{"Pods in subject namespace", "app", true, true, true, true},
-		{"denied PV", "", true, false, true, false},
+		{"denied PV", "", true, false, true, true},
 		{"denied StorageClass", "", true, true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "claim", Namespace: "app"}, Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "bound"}, Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound}}
-			pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "released", UID: "released-uid"}, Spec: corev1.PersistentVolumeSpec{PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete}, Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeReleased}}
+			pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "claim", Namespace: "app", CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour))}, Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "bound"}, Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound}}
+			pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "released", UID: "released-uid", CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour))}, Spec: corev1.PersistentVolumeSpec{PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete}, Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeReleased}}
 			hidden := &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "hidden", Namespace: "other"}, InvolvedObject: corev1.ObjectReference{Kind: "PersistentVolume", APIVersion: "v1", Name: "released", UID: "released-uid"}, Type: corev1.EventTypeWarning, Reason: "VolumeFailedDelete", Message: "private failure", LastTimestamp: metav1.NewTime(time.Now())}
 			scopes := map[string]k8score.ResourceScope{}
 			for _, resource := range append(slices.Clone(typedPVCConsumers), k8score.PersistentVolumeClaims, k8score.PersistentVolumes, k8score.StorageClasses, k8score.Events) {
@@ -66,17 +66,24 @@ func TestStorageCacheScopeAndCoverage(t *testing.T) {
 			t.Cleanup(k8s.ResetTestState)
 			scope := &ReadScope{Namespaces: []string{"app"}, ClusterResources: map[string]bool{"persistentvolumes": tc.pvGrant, "storageclasses.storage.k8s.io": tc.scGrant}}
 			r := RunFromCache(k8s.GetResourceCache(), []string{"app"}, &RunOptions{Scope: scope})
-			consumerFinding := false
+			consumerFinding, releasedFinding := false, false
 			for _, f := range r.Findings {
-				if strings.Contains(f.Message, "private failure") || f.CheckID == "releasedPV" {
+				if strings.Contains(f.Message, "private failure") {
 					t.Fatalf("hidden event leaked: %+v", f)
 				}
 				consumerFinding = consumerFinding || f.CheckID == "pvcNoConsumer"
+				releasedFinding = releasedFinding || f.CheckID == "releasedPV"
+				if !tc.pvGrant && f.CheckID == "pvcNoConsumer" && !strings.Contains(f.Message, "reclaim policy not visible") {
+					t.Fatalf("PV denial not described: %+v", f)
+				}
+			}
+			if releasedFinding != tc.pvGrant {
+				t.Fatalf("delayed delete finding=%v grant=%v", releasedFinding, tc.pvGrant)
 			}
 			if consumerFinding != tc.consumerFinding {
 				t.Fatalf("consumer finding=%v want=%v: %+v", consumerFinding, tc.consumerFinding, r)
 			}
-			if !tc.pvGrant && !slices.Contains(r.MissingInputs, "persistentvolumes") {
+			if !tc.pvGrant && tc.consumerFinding && !slices.Contains(r.MissingInputs, "persistentvolumes") {
 				t.Fatal("PV denial lost")
 			}
 			if (!tc.pods || tc.podNS == "other") && (!slices.Contains(r.MissingInputs, "pvc-consumers") || r.CheckCounts["pvcNoConsumer"].Evaluated != 0) {
@@ -100,6 +107,31 @@ func TestStorageVisiblePVWarningWithPartialEvents(t *testing.T) {
 	r := bp.RunChecks(input)
 	if len(r.Findings) != 1 || r.Findings[0].CheckID != "releasedPV" || !strings.Contains(r.Findings[0].Message, "visible failure") {
 		t.Fatalf("visible warning lost: %+v", r)
+	}
+}
+
+func TestStorageOnlyCollectsDeletionEventsForReleasedDeletePV(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		phase  corev1.PersistentVolumePhase
+		policy corev1.PersistentVolumeReclaimPolicy
+		want   bool
+	}{
+		{"Bound Delete", corev1.VolumeBound, corev1.PersistentVolumeReclaimDelete, false},
+		{"Released Retain", corev1.VolumeReleased, corev1.PersistentVolumeReclaimRetain, false},
+		{"Released Delete", corev1.VolumeReleased, corev1.PersistentVolumeReclaimDelete, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "disk"}, Spec: corev1.PersistentVolumeSpec{PersistentVolumeReclaimPolicy: tc.policy}, Status: corev1.PersistentVolumeStatus{Phase: tc.phase}}
+			if err := k8s.InitScopedTestResourceCache(fake.NewClientset(pv), map[string]k8score.ResourceScope{k8score.PersistentVolumes: {Enabled: true}, k8score.Events: {Enabled: true}}); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(k8s.ResetTestState)
+			input := collectStorageInput(k8s.GetResourceCache(), nil, nil)
+			if (input.Events != nil) != tc.want || input.PVDeletionEventsComplete != tc.want {
+				t.Fatalf("event collection=%v complete=%v want=%v", input.Events != nil, input.PVDeletionEventsComplete, tc.want)
+			}
+		})
 	}
 }
 

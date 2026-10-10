@@ -28,6 +28,9 @@ const AUDIT_INPUT_LABELS = new Map<string, string>([
   ['replicaset-ownership', 'ReplicaSet ownership'],
   ['configmap-references', 'ConfigMap references'],
   ['secret-references', 'Secret references'],
+  ['pvc-consumers', 'PVC consumers'],
+  ['pvc-binding-mode', 'PVC binding mode'],
+  ['pv-deletion-events', 'PV deletion events'],
 ])
 
 // Leading severity glyph, one per tier of the 4-tier ladder: critical = octagon,

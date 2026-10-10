@@ -12,22 +12,23 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 const (
-	pvcPendingAge       = 24 * time.Hour
+	pvcReviewAge        = 24 * time.Hour
+	pvDeleteGrace       = time.Hour
+	pvRetainGrace       = 24 * time.Hour
 	pvDeleteEventWindow = 24 * time.Hour
 )
 
 func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
-	for resource, missing := range map[string]bool{
-		"persistentvolumeclaims": input.PersistentVolumeClaims == nil,
-		"persistentvolumes":      input.PersistentVolumes == nil,
-		"storageclasses":         input.StorageClasses == nil,
-	} {
-		if missing {
-			tr.missingInputs = append(tr.missingInputs, resource)
-		}
+	if input.PersistentVolumeClaims == nil {
+		tr.missingInputs = append(tr.missingInputs, "persistentvolumeclaims")
+	}
+	consumerNamespaces := map[string]bool{}
+	for _, ns := range input.PVCConsumerNamespaces {
+		consumerNamespaces[ns] = true
 	}
 	pvs := map[string]*corev1.PersistentVolume{}
 	for _, pv := range input.PersistentVolumes {
@@ -40,11 +41,14 @@ func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
 	consumers := collectPVCConsumers(input)
 	var findings []Finding
 	for _, pvc := range input.PersistentVolumeClaims {
-		if pvc.DeletionTimestamp != nil {
+		if pvc.DeletionTimestamp != nil || hasControllerOwnerReference(pvc.OwnerReferences) || pvc.CreationTimestamp.IsZero() || now.Sub(pvc.CreationTimestamp.Time) <= pvcReviewAge {
+			continue
+		}
+		if pvc.Status.Phase != corev1.ClaimBound && pvc.Status.Phase != corev1.ClaimPending {
 			continue
 		}
 		consumed := consumers[pvc.Namespace+"/"+pvc.Name]
-		complete := slices.Contains(input.PVCConsumerNamespaces, pvc.Namespace) && input.Pods != nil && input.Deployments != nil && input.ReplicaSets != nil && input.StatefulSets != nil && input.DaemonSets != nil && input.Jobs != nil && input.CronJobs != nil
+		complete := consumerNamespaces[pvc.Namespace] && input.Pods != nil && input.Deployments != nil && input.ReplicaSets != nil && input.StatefulSets != nil && input.DaemonSets != nil && input.Jobs != nil && input.CronJobs != nil
 		if !consumed && !complete {
 			tr.missingInputs = append(tr.missingInputs, "pvc-consumers")
 			continue
@@ -52,73 +56,76 @@ func checkStorage(tr *evalTracker, input *CheckInput, now time.Time) []Finding {
 		checkID, message := "", ""
 		switch pvc.Status.Phase {
 		case corev1.ClaimBound:
-			if !consumed && input.PersistentVolumes == nil {
-				continue
-			}
 			tr.record("pvcNoConsumer", pvc.Namespace)
 			if consumed {
 				continue
 			}
+			if input.PersistentVolumes == nil && pvc.Spec.VolumeName != "" {
+				tr.missingInputs = append(tr.missingInputs, "persistentvolumes")
+			}
 			checkID = "pvcNoConsumer"
 			message = "No consumer observed among Pods or built-in workload templates Radar can see. CRD consumers may still reference this claim."
 		case corev1.ClaimPending:
-			classKnown := pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == ""
-			wffc := false
-			if pvc.Spec.StorageClassName != nil {
-				if sc := classes[*pvc.Spec.StorageClassName]; sc != nil {
-					classKnown = true
-					wffc = sc.VolumeBindingMode != nil && *sc.VolumeBindingMode == storagev1.VolumeBindingWaitForFirstConsumer
-				}
-			}
-			if consumed && !classKnown {
-				tr.missingInputs = append(tr.missingInputs, "pvc-binding-mode")
-				continue
-			}
-			if pvc.CreationTimestamp.IsZero() {
-				continue
-			}
 			tr.record("pvcLongPending", pvc.Namespace)
-			if now.Sub(pvc.CreationTimestamp.Time) <= pvcPendingAge || (wffc && consumed) {
+			if consumed {
 				continue
 			}
 			checkID = "pvcLongPending"
-			message = "PVC is Pending and was created more than 24h ago; this snapshot does not establish how long it has been Pending."
-			if !consumed {
-				message += " No consumer observed among Pods or built-in workload templates Radar can see; CRD consumers may still reference it."
+			message = "Pending since creation, " + storageAge(pvc.CreationTimestamp, now) + " ago. No consumer observed among Pods or built-in workload templates Radar can see; CRD consumers may still reference it."
+			if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != "" {
+				var sc *storagev1.StorageClass
+				if pvc.Spec.StorageClassName != nil {
+					sc = classes[*pvc.Spec.StorageClassName]
+				}
+				if sc == nil {
+					if input.StorageClasses == nil {
+						tr.missingInputs = append(tr.missingInputs, "storageclasses")
+					}
+					tr.missingInputs = append(tr.missingInputs, "pvc-binding-mode")
+					message += " StorageClass binding mode not visible."
+				} else if sc.VolumeBindingMode != nil && *sc.VolumeBindingMode == storagev1.VolumeBindingWaitForFirstConsumer {
+					message += " StorageClass uses WaitForFirstConsumer."
+				}
 			}
-			if wffc {
-				message += " StorageClass uses WaitForFirstConsumer."
-			}
-		default:
-			continue
 		}
 		findings = append(findings, Finding{Kind: "PersistentVolumeClaim", Namespace: pvc.Namespace, Name: pvc.Name, CheckID: checkID, Category: CategoryEfficiency, Severity: SeverityWarning, Message: message + " " + pvcStorageDetails(pvc, pvs[pvc.Spec.VolumeName], now)})
 	}
+	deleteFailures := latestPVDeleteFailures(input.PersistentVolumes, input.Events, now)
 	for _, pv := range input.PersistentVolumes {
+		tr.record("releasedPV", "")
 		if pv.Status.Phase != corev1.VolumeReleased {
 			continue
+		}
+		releasedAt := pv.CreationTimestamp
+		if pv.Status.LastPhaseTransitionTime != nil && !pv.Status.LastPhaseTransitionTime.IsZero() {
+			releasedAt = *pv.Status.LastPhaseTransitionTime
 		}
 		message := ""
 		switch pv.Spec.PersistentVolumeReclaimPolicy {
 		case corev1.PersistentVolumeReclaimRetain:
-			message = "Released PV is kept after its claim was deleted (reclaim policy Retain)."
-		case corev1.PersistentVolumeReclaimDelete:
-			failure := latestPVDeleteFailure(pv, input.Events, now)
-			// An authorized event can establish failure, but an empty or partial
-			// event inventory cannot establish successful deletion.
-			if failure == nil {
-				if input.Events == nil || !input.PVDeletionEventsComplete {
-					tr.missingInputs = append(tr.missingInputs, "pv-deletion-events")
-				} else {
-					tr.record("releasedPV", "")
-				}
+			if releasedAt.IsZero() || now.Sub(releasedAt.Time) <= pvRetainGrace {
 				continue
 			}
-			message = "Released PV deletion is failing: " + failure.Message
+			message = "Released PV is kept after its claim was deleted (reclaim policy Retain)."
+		case corev1.PersistentVolumeReclaimDelete:
+			failure, hasFailure := deleteFailures[pv.UID]
+			if hasFailure && now.Sub(failure.at) <= pvDeleteEventWindow {
+				message = "Released PV deletion is failing: " + failure.event.Message
+			} else {
+				if releasedAt.IsZero() || now.Sub(releasedAt.Time) <= pvDeleteGrace {
+					continue
+				}
+				message = "Released PV deletion has not completed (reclaim policy Delete)."
+				if hasFailure {
+					message += " Latest deletion warning (" + timeutil.FormatAgeShort(now.Sub(failure.at)) + " ago): " + failure.event.Message
+				}
+			}
+			if input.Events == nil || !input.PVDeletionEventsComplete {
+				tr.missingInputs = append(tr.missingInputs, "pv-deletion-events")
+			}
 		default:
 			continue
 		}
-		tr.record("releasedPV", "")
 		age := "PV age " + storageAge(pv.CreationTimestamp, now)
 		if pv.Status.LastPhaseTransitionTime != nil && !pv.Status.LastPhaseTransitionTime.IsZero() {
 			age = "Released for " + storageAge(*pv.Status.LastPhaseTransitionTime, now)
@@ -191,7 +198,7 @@ func collectPVCConsumers(input *CheckInput) map[string]bool {
 }
 
 func pvcStorageDetails(pvc *corev1.PersistentVolumeClaim, pv *corev1.PersistentVolume, now time.Time) string {
-	class, volume, reclaim := "not assigned", "not bound", "unknown"
+	class, volume, reclaim := "not assigned", "not bound", "not visible"
 	if pvc.Spec.StorageClassName != nil {
 		class = fmt.Sprintf("%q", *pvc.Spec.StorageClassName)
 	}
@@ -201,7 +208,11 @@ func pvcStorageDetails(pvc *corev1.PersistentVolumeClaim, pv *corev1.PersistentV
 	if pv != nil {
 		reclaim = string(pv.Spec.PersistentVolumeReclaimPolicy)
 	}
-	return fmt.Sprintf("Requested %s; storage class %s; PVC age %s; bound PV %s; reclaim policy %s.", storageQuantity(pvc.Spec.Resources.Requests), class, storageAge(pvc.CreationTimestamp, now), volume, reclaim)
+	details := fmt.Sprintf("Requested %s; storage class %s; PVC age %s.", storageQuantity(pvc.Spec.Resources.Requests), class, storageAge(pvc.CreationTimestamp, now))
+	if pvc.Status.Phase == corev1.ClaimBound {
+		details += fmt.Sprintf(" Bound PV %s; reclaim policy %s.", volume, reclaim)
+	}
+	return details
 }
 
 func storageQuantity(resources corev1.ResourceList) string {
@@ -218,12 +229,26 @@ func storageAge(created metav1.Time, now time.Time) string {
 	return timeutil.FormatAgeShort(now.Sub(created.Time))
 }
 
-func latestPVDeleteFailure(pv *corev1.PersistentVolume, events []*corev1.Event, now time.Time) *corev1.Event {
-	var latest *corev1.Event
-	var latestTime time.Time
+type pvDeleteFailure struct {
+	event *corev1.Event
+	at    time.Time
+}
+
+func latestPVDeleteFailures(pvs []*corev1.PersistentVolume, events []*corev1.Event, now time.Time) map[types.UID]pvDeleteFailure {
+	volumes := map[types.UID]*corev1.PersistentVolume{}
+	for _, pv := range pvs {
+		if pv.UID != "" && pv.Status.Phase == corev1.VolumeReleased && pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimDelete {
+			volumes[pv.UID] = pv
+		}
+	}
+	latest := map[types.UID]pvDeleteFailure{}
+	if len(volumes) == 0 {
+		return latest
+	}
 	for _, e := range events {
 		ref := e.InvolvedObject
-		if e.Type != corev1.EventTypeWarning || e.Reason != "VolumeFailedDelete" || ref.Kind != "PersistentVolume" || ref.Name != pv.Name || ref.Namespace != "" || resourceid.GroupFromAPIVersion(ref.APIVersion) != "" || pv.UID == "" || ref.UID != pv.UID {
+		pv := volumes[ref.UID]
+		if pv == nil || e.Type != corev1.EventTypeWarning || e.Reason != "VolumeFailedDelete" || ref.Kind != "PersistentVolume" || ref.Name != pv.Name || ref.Namespace != "" || resourceid.GroupFromAPIVersion(ref.APIVersion) != "" {
 			continue
 		}
 		at := e.LastTimestamp.Time
@@ -236,10 +261,10 @@ func latestPVDeleteFailure(pv *corev1.PersistentVolume, events []*corev1.Event, 
 		if at.IsZero() {
 			at = e.CreationTimestamp.Time
 		}
-		if at.IsZero() || at.After(now) || now.Sub(at) > pvDeleteEventWindow || !at.After(latestTime) {
+		if at.IsZero() || at.After(now) || !at.After(latest[ref.UID].at) {
 			continue
 		}
-		latest, latestTime = e, at
+		latest[ref.UID] = pvDeleteFailure{event: e, at: at}
 	}
 	return latest
 }

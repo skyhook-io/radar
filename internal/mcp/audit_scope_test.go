@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,9 +53,9 @@ func TestAuditToolWithholdsSecretFindingsAndCounts(t *testing.T) {
 	}
 }
 
-func TestAuditToolStorageRequiresPVGrant(t *testing.T) {
-	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "app"}, Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "disk"}, Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound}}
-	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "disk"}, Spec: corev1.PersistentVolumeSpec{PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain}, Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeReleased}}
+func TestAuditToolStoragePVGrantOnlyGatesPVMetadataAndFindings(t *testing.T) {
+	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "app", CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour))}, Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "disk"}, Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound}}
+	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "disk", CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour))}, Spec: corev1.PersistentVolumeSpec{PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain}, Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeReleased}}
 	if err := k8s.InitTestResourceCache(fake.NewClientset(pvc, pv)); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +75,7 @@ func TestAuditToolStorageRequiresPVGrant(t *testing.T) {
 		if slices.Contains(result.MissingInputs, "persistentvolumes") == allowed {
 			t.Fatalf("PV availability differs from grant: %+v", result)
 		}
-		want := 0
+		want := 1
 		if allowed {
 			want = 2
 		}
@@ -82,6 +83,9 @@ func TestAuditToolStorageRequiresPVGrant(t *testing.T) {
 			t.Fatalf("storage counts differ from grant: %+v", result)
 		}
 		for _, f := range result.Findings {
+			if !allowed && (f.Check != "pvcNoConsumer" || !strings.Contains(f.Message, "reclaim policy not visible")) {
+				t.Fatalf("unauthorized PV metadata/finding: %+v", f)
+			}
 			if f.Check != "pvcNoConsumer" && f.Check != "releasedPV" || f.Remediation == "" {
 				t.Fatalf("unexpected finding: %+v", f)
 			}

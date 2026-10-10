@@ -725,33 +725,39 @@ posture priority (`warning` in the raw scan):
 
 | Check ID | Observation |
 |---|---|
-| `pvcNoConsumer` | A Bound PVC has no consumer observed among readable Pods and built-in workload templates. Findings include requested size, storage class, PVC age, bound PV and reclaim policy. |
-| `pvcLongPending` | A PVC created more than 24 hours ago is currently Pending. WaitForFirstConsumer claims are reported only when no Pod or built-in workload template references them. Creation age is not proof of time continuously spent Pending. |
-| `releasedPV` | A Released PV with Retain is kept after its claim was deleted. A Released PV with Delete is reported only when a Warning `VolumeFailedDelete` event for that PV's UID occurred within the last 24 hours; its latest message is included. |
+| `pvcNoConsumer` | A Bound PVC older than 24 hours, without a controller owner, has no consumer observed among readable Pods and built-in workload templates. Findings include requested size, storage class, PVC age, bound PV and reclaim policy when visible. |
+| `pvcLongPending` | A PVC without a controller owner has been Pending since creation, more than 24 hours ago, and no Pod or built-in workload template references it. WaitForFirstConsumer claims without a consumer are included. |
+| `releasedPV` | A Released PV with Retain is kept after claim deletion for more than 24 hours. With Delete, deletion has not completed after one hour, even without warning events. A Warning `VolumeFailedDelete` event for the PV's UID within the last 24 hours reports deletion failure immediately; the latest warning message is included, with its age when older. |
 
 Consumer evidence includes Deployments, ReplicaSets, StatefulSets, DaemonSets,
 Jobs and CronJobs. Templates count at zero replicas, and retained StatefulSet
 claim-template ordinals count even after scaling down. Terminal Pods and Jobs
-also count conservatively while their objects exist. CRD consumers (including
-virtual machines) and external consumers can still need a claim: **no consumer
+also count conservatively while their objects exist. Claims with a controller
+owner reference are excluded: hibernated databases, stopped virtual machines,
+and workflow controllers can intentionally retain claims without Pods. CRD
+consumers (including virtual machines) and external consumers can still need a claim: **no consumer
 observed is not a statement that storage is safe to delete**. The scan provides
 no deletion action, cost estimate, or history of nonuse.
 
 Unreadable or initially unsynced consumer inventories prevent absence findings
 and passing counts for that namespace (`pvc-consumers` in `missingInputs`).
-Bound claims also need readable PV inventory for the no-consumer check. PVs and
-StorageClasses require the caller's exact cluster-scoped list grant; unavailable
-inventories appear as `persistentvolumes` or `storageclasses`. If a referenced
-Pending claim's binding mode is unknown, that evaluation is excluded and
-`pvc-binding-mode` is reported.
+PVs and StorageClasses require the caller's exact cluster-scoped list grant.
+Unavailable inventories appear as `persistentvolumes` or `storageclasses` only
+when a scanned claim needs them. Bound no-consumer findings still appear without
+PV access, with **reclaim policy not visible**. An unconsumed Pending claim with
+unknown binding mode still appears, with `pvc-binding-mode` reported; consumed
+Pending claims are excluded regardless of binding mode.
 
 The namespace picker selects PVC subjects. Released PVs remain cluster-scoped
-and require their own grant. Events are drawn only from namespaces the caller
-may see. A visible warning proves a deletion failure even with partial Event
-coverage; absent evidence from an unreadable, partial or unsynced Event inventory
-contributes no passing count and reports `pv-deletion-events`. PV findings show
-time in Released when `status.lastPhaseTransitionTime` is present, otherwise
-explicitly show **PV age**. Neither is a history of how long the data was unneeded.
+and require their own grant. All readable PVs count toward `releasedPV`, including
+healthy volumes. Events are listed only when a Released Delete volume needs
+deletion evidence, and only from namespaces the caller may see. Unreadable,
+partial or unsynced deletion-event coverage reports `pv-deletion-events` when
+supplemental warning evidence is unavailable; the delayed-deletion finding still
+appears based on the PV itself. PV findings use time in Released when
+`status.lastPhaseTransitionTime` is present, otherwise use and explicitly show
+**PV age** for the thresholds. Neither is a history of how long the data was
+unneeded.
 
 ## Radar Cloud
 

@@ -4,6 +4,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	bp "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -38,6 +39,16 @@ func collectStorageInput(cache *k8s.ResourceCache, namespaces []string, scope *R
 	}
 	if scope.allows(storageClusterResources[1], "") && typedConfigCoverage(cache, k8score.StorageClasses, "") {
 		input.StorageClasses = ListNamespaced(cache.StorageClasses(), nil)
+	}
+	needsEvents := false
+	for _, pv := range input.PersistentVolumes {
+		if pv.Status.Phase == corev1.VolumeReleased && pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimDelete {
+			needsEvents = true
+			break
+		}
+	}
+	if !needsEvents {
+		return input
 	}
 	var eventNamespaces []string
 	if scope != nil {
