@@ -1450,7 +1450,8 @@ func mergeNamespaceCapability(global, namespaced, checkErrored bool) bool {
 // If the request omits an explicit namespace filter, falls back to the user's
 // in-app namespace pick (from the namespace switcher). The pick is treated as
 // a view filter — it's still intersected with the user's RBAC-allowed
-// namespaces in getUserNamespaces.
+// namespaces in getUserNamespaces. A request carrying globalNs=1 skips that
+// fallback (see ignoresNamespacePick).
 func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 	namespaces := parseNamespaces(r.URL.Query())
 	pickFallback := false
@@ -1468,7 +1469,7 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 			return []string{}
 		}
 	}
-	if namespaces == nil {
+	if namespaces == nil && !ignoresNamespacePick(r) {
 		// No explicit filter — use the user's saved picks if any, pruned of
 		// namespaces that were deleted from the cluster since the pick was made.
 		// When every pick is stale, fall through with no filter so the user sees
@@ -1500,6 +1501,18 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 		filtered = s.getUserNamespaces(r, nil)
 	}
 	return filtered
+}
+
+// ignoresNamespacePick reports whether a read opted out of the caller's saved
+// namespace pick with globalNs=1. The pick narrows the Radar UI's own views;
+// a read made for another purpose — the omnibar's global search, Radar Hub's
+// cross-cluster fan-outs, background pollers — must not inherit a pick the
+// user made while browsing one cluster, or its results shrink with no signal.
+// Only the view filter is dropped: RBAC still bounds the result, and a
+// --namespace-scope pin still applies because it is the real extent of what
+// this process caches.
+func ignoresNamespacePick(r *http.Request) bool {
+	return r.URL.Query().Get("globalNs") == "1"
 }
 
 // resolveHelmNamespaces decides which namespaces a Helm list (releases, upgrade
