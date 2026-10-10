@@ -1310,7 +1310,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// CAPI ClusterClass nodes + ClusterClass → Cluster edges
-	clusterClassIDs := make(map[string]string) // name -> classID (cluster-scoped)
+	clusterClassIDs := make(map[string]string) // ns/name -> classID
 	var capiClusterClassGVR schema.GroupVersionResource
 	hasCAPIClusterClasses := false
 	if resourceDiscovery != nil {
@@ -1343,7 +1343,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 		}
 
-		// ClusterClass → Cluster edges (via spec.topology.class)
+		// ClusterClass → Cluster edges
 		if len(clusterClassIDs) > 0 {
 			for _, cl := range cachedCAPIClusters {
 				ns := cl.GetNamespace()
@@ -1354,15 +1354,22 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if !ok {
 					continue
 				}
-				className, _, _ := unstructured.NestedString(cl.Object, "spec", "topology", "class")
+				var className, classNS string
+				switch _, version := resourceid.SplitAPIVersion(cl.GetAPIVersion()); version {
+				case "v1beta1":
+					className, _, _ = unstructured.NestedString(cl.Object, "spec", "topology", "class")
+					classNS, _, _ = unstructured.NestedString(cl.Object, "spec", "topology", "classNamespace")
+				case "v1beta2":
+					className, _, _ = unstructured.NestedString(cl.Object, "spec", "topology", "classRef", "name")
+					classNS, _, _ = unstructured.NestedString(cl.Object, "spec", "topology", "classRef", "namespace")
+				}
 				if className == "" {
 					continue
 				}
-				// ClusterClass can be in same namespace or cluster-scoped
-				ccID, ok := clusterClassIDs[ns+"/"+className]
-				if !ok {
-					ccID, ok = clusterClassIDs["/"+className]
+				if classNS == "" {
+					classNS = ns
 				}
+				ccID, ok := clusterClassIDs[classNS+"/"+className]
 				if ok {
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", ccID, clID),
