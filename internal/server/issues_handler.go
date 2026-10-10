@@ -6,6 +6,7 @@ import (
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -56,7 +57,16 @@ func (s *Server) filterRecentChangesByRBAC(ctx context.Context, changes []issues
 //	filter=    optional CEL predicate over each row (bindings include source)
 //	limit=     default 200, max 1000 (counts issue groups, not member objects)
 //	view=      flat → raw pre-fold evidence rows (debug); default → grouped
+//	partial=   true → read Helm release issues through helmIssuesCache instead
+//	           of waiting for a full read; helm_issues says what the response
+//	           covers. Off by default: a caller that resolves or alerts on
+//	           missing rows must never read an unchecked or outdated source
+//	           as current.
 func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
+	var helmDeadline time.Time
+	if r.URL.Query().Get("partial") == "true" {
+		helmDeadline = time.Now().Add(nativeHelmIssuesBudget)
+	}
 	if !s.requireConnected(w) {
 		return
 	}
@@ -114,10 +124,12 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	composeFilters.Limit = issues.NoLimit
 	composeFilters.Filter = nil
 	out, stats := issues.ComposeWithStats(provider, composeFilters)
-	out, stats = issues.MergeExternalIssues(out, stats, filters, s.nativeHelmIssuesForRequest(r, namespaces, filters))
+	helmIssues, helmStatus := s.nativeHelmIssuesForRequest(r, namespaces, filters, helmDeadline)
+	out, stats = issues.MergeExternalIssues(out, stats, filters, helmIssues)
 	// Shared base response shape (issues.ListResponse); surfaces add their
 	// own enrichments after this point.
 	resp := issues.NewListResponse(out, stats)
+	resp.HelmIssues = helmStatus
 	resp.ClusterContext = provider.ClusterContextForIssues(namespaces, func(group, resource string) bool {
 		return s.canRead(r, group, resource, "kube-system", "list")
 	})
@@ -194,16 +206,31 @@ func (s *Server) issueRelatedResourceAccess(r *http.Request) func(issues.Ref) bo
 
 var helmIssuesDeniedLogged sync.Map
 
-// nativeHelmIssuesForRequest reads Helm release storage on the request's
-// context, so the read stops when the caller disconnects instead of running
-// to completion for nobody.
-func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string, filters issues.Filters) []issues.Issue {
+// nativeHelmIssuesBudget bounds how long a partial=true issues request with
+// no earlier Helm result waits for the first read, counted from when the
+// request arrived.
+var nativeHelmIssuesBudget = 5 * time.Second
+
+// nativeHelmIssuesForRequest returns the native Helm release issues for the
+// request. With a zero deadline it reads Helm storage on the request's own
+// context, so the read stops when the caller disconnects, and status is nil.
+// With a deadline (partial=true) it reads through helmIssuesCache and says in
+// status what the issues cover.
+func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string, filters issues.Filters, deadline time.Time) ([]issues.Issue, *issuesapi.HelmIssuesStatus) {
 	if !issues.KindFilterIncludes(filters.Kinds, "HelmRelease", "helmreleases") {
-		return nil
+		return nil, nil
+	}
+	// A partial response always says what it covers, even when Helm couldn't
+	// be read at all: an absent status would read as checked.
+	unavailable := func() *issuesapi.HelmIssuesStatus {
+		if deadline.IsZero() {
+			return nil
+		}
+		return &issuesapi.HelmIssuesStatus{State: issuesapi.HelmIssuesUnavailable}
 	}
 	helmClient := helm.GetClient()
 	if helmClient == nil {
-		return nil
+		return nil, unavailable()
 	}
 	ctx := r.Context()
 	username, groups := "", []string(nil)
@@ -211,32 +238,103 @@ func (s *Server) nativeHelmIssuesForRequest(r *http.Request, namespaces []string
 		username = user.Username
 		groups = user.Groups
 	}
+	// Resolve on the caller's context, never the budget: an expired budget
+	// would fail the Secret permission checks closed and widen the scope to
+	// cluster-wide, whose 403 must not read as "no Helm issues".
 	helmNamespaces := namespaces
 	if helmNamespaces == nil {
 		var ok bool
 		helmNamespaces, ok = s.resolveHelmNamespaces(r)
 		if !ok {
-			return nil
+			return nil, unavailable()
 		}
 	}
-	releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, username, groups)
-	if err != nil {
-		switch {
-		case ctx.Err() != nil:
-			// The caller went away; nobody is left to tell.
-		case !helm.IsForbiddenError(err):
-			log.Printf("[issues] Failed to list Helm releases for issue stream: %v", err)
-		default:
-			if _, seen := helmIssuesDeniedLogged.LoadOrStore(pkgauth.IdentityCacheKey(username, groups), struct{}{}); !seen {
-				// Logged once per identity (username + groups): the alerts worker
-				// polls this, and a cluster without a Secret-read binding would
-				// otherwise drop Helm alerts with no trace anywhere.
-				log.Printf("[issues] Helm release issues omitted for %q: Kubernetes denied listing release Secrets", username)
-			}
-		}
-		return nil
+	if ctx.Err() != nil {
+		// The caller left before or while the scope resolved: its permission
+		// checks failed closed and the scope may have widened, so a read now
+		// would be doomed and nobody would see its result.
+		return nil, nil
 	}
-	return issues.NativeHelmReleaseIssues(releases, time.Now())
+
+	if deadline.IsZero() {
+		releases, err := helmClient.ListIssueReleasesAcrossNamespaces(ctx, helmNamespaces, username, groups)
+		if err != nil {
+			s.logHelmIssuesReadError(ctx, err, username, groups)
+			return nil, nil
+		}
+		return issues.NativeHelmReleaseIssues(releases, time.Now()), nil
+	}
+
+	read := func(readCtx context.Context) ([]issues.Issue, error) {
+		// A denied read is a failure here, not an empty result: the response
+		// must say Helm wasn't checked rather than imply nothing is wrong.
+		releases, err := helmClient.ListIssueReleasesAcrossNamespaces(readCtx, helmNamespaces, username, groups)
+		if err != nil {
+			return nil, err
+		}
+		return issues.NativeHelmReleaseIssues(releases, time.Now()), nil
+	}
+	wait, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	key := pkgauth.IdentityCacheKey(username, groups) + "\x00" + helmNamespaceScopeKey(helmNamespaces)
+	view := s.helmIssues().get(wait, key, read)
+	return helmIssuesResponse(view, time.Now())
+}
+
+// helmIssuesResponse turns a cache view into the issues and the status a
+// partial response carries.
+func helmIssuesResponse(view helmIssuesView, now time.Time) ([]issues.Issue, *issuesapi.HelmIssuesStatus) {
+	status := &issuesapi.HelmIssuesStatus{Reading: view.reading, WaitingForSlot: view.waiting}
+	var found []issues.Issue
+	if view.snapshot != nil {
+		found = view.snapshot.issues
+		at := view.snapshot.at
+		age := int64(now.Sub(at) / time.Second)
+		status.CheckedAt, status.AgeSeconds = &at, &age
+	}
+	switch {
+	case view.failure != "":
+		status.State = issuesapi.HelmIssuesFailed
+		status.Error = view.failure
+		at := view.failedAt
+		age := int64(now.Sub(at) / time.Second)
+		status.FailedAt, status.FailedAgeSeconds = &at, &age
+		if view.failure == issuesapi.HelmIssuesErrorTimeout {
+			status.ReadTimeoutSeconds = int(helmIssuesReadTimeout / time.Second)
+		}
+	case view.snapshot != nil:
+		status.State = issuesapi.HelmIssuesCurrent
+	default:
+		status.State = issuesapi.HelmIssuesNotCheckedYet
+	}
+	return found, status
+}
+
+func (s *Server) logHelmIssuesReadError(ctx context.Context, err error, username string, groups []string) {
+	switch {
+	case ctx.Err() != nil:
+		// The caller went away; nobody is left to tell.
+	case !helm.IsForbiddenError(err):
+		log.Printf("[issues] Failed to list Helm releases for issue stream: %v", err)
+	default:
+		if _, seen := helmIssuesDeniedLogged.LoadOrStore(pkgauth.IdentityCacheKey(username, groups), struct{}{}); !seen {
+			// Logged once per identity (username + groups): the alerts worker
+			// polls this, and a cluster without a Secret-read binding would
+			// otherwise drop Helm alerts with no trace anywhere.
+			log.Printf("[issues] Helm release issues omitted for %q: Kubernetes denied listing release Secrets", username)
+		}
+	}
+}
+
+// helmNamespaceScopeKey distinguishes cluster-wide (nil) from an explicit,
+// order-insensitive namespace set.
+func helmNamespaceScopeKey(namespaces []string) string {
+	if namespaces == nil {
+		return "*"
+	}
+	sorted := append([]string(nil), namespaces...)
+	sort.Strings(sorted)
+	return strings.Join(sorted, ",")
 }
 
 // handleResourceIssues serves GET /api/issues/resource/{kind}/{namespace}/{name}

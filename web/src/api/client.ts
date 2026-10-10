@@ -728,16 +728,47 @@ export interface IssuesResponse {
   // state 'degraded' means core workload reads are denied, so an empty list may
   // mean "can't see" rather than "nothing broken" — the UI must say so.
   visibility?: { state?: string; impact?: string };
+  // partial=true only: where the server's background Helm read stands, so
+  // the page can say whether Helm releases are in the list.
+  helm_issues?: HelmIssuesStatus;
 }
 
-export function useIssues(namespaces: string[] = []) {
-  const params =
-    namespaces.length > 0 ? `?namespaces=${namespaces.join(",")}` : "";
+export interface HelmIssuesStatus {
+  state: "current" | "not_checked_yet" | "failed" | "unavailable";
+  checked_at?: string;
+  // Seconds between that read and this response, by the server's clock.
+  age_seconds?: number;
+  reading?: boolean;
+  // A read is due but every background read slot is taken.
+  waiting_for_slot?: boolean;
+  // state "failed": why ("timeout" | "forbidden" | "error") and when.
+  error?: string;
+  failed_at?: string;
+  failed_age_seconds?: number;
+  read_timeout_seconds?: number;
+}
+
+// While no Helm read has finished, poll again shortly after the server's
+// first-read budget rather than at the resting cadence.
+const HELM_NOT_CHECKED_REFETCH_MS = 6_000;
+
+// partial: don't hold the response for a slow Helm storage read; helm_issues
+// then says what the list covers. Only for views that say so on screen. The
+// flag is part of the query key, so a partial view doesn't share cached data
+// with full-wait views.
+export function useIssues(namespaces: string[] = [], { partial = false } = {}) {
+  const query: string[] = [];
+  if (namespaces.length > 0) query.push(`namespaces=${namespaces.join(",")}`);
+  if (partial) query.push("partial=true");
+  const params = query.length > 0 ? `?${query.join("&")}` : "";
   return useQuery<IssuesResponse>({
-    queryKey: ["issues", namespaces],
+    queryKey: ["issues", namespaces, { partial }],
     queryFn: () => fetchJSON(`/issues${params}`),
     staleTime: 30000,
-    refetchInterval: ISSUES_REFRESH_INTERVAL_MS,
+    refetchInterval: (q) =>
+      q.state.data?.helm_issues?.state === "not_checked_yet"
+        ? HELM_NOT_CHECKED_REFETCH_MS
+        : ISSUES_REFRESH_INTERVAL_MS,
   });
 }
 

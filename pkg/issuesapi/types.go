@@ -553,6 +553,56 @@ type Response struct {
 	// checked first). Under truncation, an issue without correlation markers
 	// means "not checked", not "no changes".
 	CorrelationTruncated bool `json:"correlation_truncated,omitempty"`
+	// HelmIssues says how far a partial=true response speaks for Helm
+	// releases. Absent on other responses, which always include a full read.
+	HelmIssues *HelmIssuesStatus `json:"helm_issues,omitempty"`
+}
+
+// Helm issue coverage states on a partial=true response.
+const (
+	// HelmIssuesCurrent: Helm issues come from the newest finished read,
+	// which succeeded. A newer one may be running (Reading) or due but
+	// waiting for a free read slot (WaitingForSlot); AgeSeconds says how old
+	// this one is.
+	HelmIssuesCurrent = "current"
+	// HelmIssuesNotCheckedYet: no read has succeeded or failed yet. Reading
+	// or WaitingForSlot says whether one is running. Failed or stuck Helm
+	// releases are unknown, not absent.
+	HelmIssuesNotCheckedYet = "not_checked_yet"
+	// HelmIssuesFailed: the newest finished read failed (Error, FailedAt).
+	// Helm issues, if any, come from the last successful read (CheckedAt).
+	HelmIssuesFailed = "failed"
+	// HelmIssuesUnavailable: Helm couldn't be read for this request at all
+	// (no Helm client, for example mid context switch, or no namespace the
+	// caller can read Helm in). Helm issues are unknown, not absent.
+	HelmIssuesUnavailable = "unavailable"
+)
+
+// Why the newest Helm read failed (HelmIssuesStatus.Error).
+const (
+	HelmIssuesErrorTimeout   = "timeout"   // the read hit Radar's time cap
+	HelmIssuesErrorForbidden = "forbidden" // Kubernetes denied listing release Secrets
+	HelmIssuesErrorFailed    = "error"     // any other failure
+)
+
+type HelmIssuesStatus struct {
+	State string `json:"state"`
+	// CheckedAt is when the Helm issues in this response were read, and
+	// AgeSeconds how long before the response that was (server clock, so
+	// clients don't depend on their own). Both absent when nothing was read.
+	CheckedAt  *time.Time `json:"checked_at,omitempty"`
+	AgeSeconds *int64     `json:"age_seconds,omitempty"`
+	// Reading: a read is running now. WaitingForSlot: a read is due but
+	// every background read slot is taken.
+	Reading        bool `json:"reading,omitempty"`
+	WaitingForSlot bool `json:"waiting_for_slot,omitempty"`
+	// Error is a HelmIssuesError* code (state failed only); FailedAt and
+	// FailedAgeSeconds say when that read ended.
+	Error            string     `json:"error,omitempty"`
+	FailedAt         *time.Time `json:"failed_at,omitempty"`
+	FailedAgeSeconds *int64     `json:"failed_age_seconds,omitempty"`
+	// ReadTimeoutSeconds is the cap a timeout refers to.
+	ReadTimeoutSeconds int `json:"read_timeout_seconds,omitempty"`
 }
 
 type BindingType string

@@ -74,6 +74,10 @@ import (
 
 // Server is the Explorer HTTP server
 type Server struct {
+	// helmIssuesCache backs partial=true Helm issue reads; see helmIssues.
+	helmIssuesOnce  sync.Once
+	helmIssuesCache *helmIssuesCache
+
 	router                  *chi.Mux
 	broadcaster             *SSEBroadcaster
 	vitalsMetrics           vitalsMetricsMemo
@@ -1234,6 +1238,7 @@ func (s *Server) Handler() http.Handler {
 // Stop gracefully stops the server and releases the listening port.
 func (s *Server) Stop() {
 	prometheuspkg.RightsizingScans().Invalidate()
+	s.helmIssues().stop() // background Helm reads must not outlive the server
 	StopAllLocalTermSessions()
 	if runs := s.aiRunManager(); runs != nil {
 		runs.Shutdown() // cancel investigations so agent children don't outlive us

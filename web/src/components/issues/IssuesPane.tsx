@@ -23,6 +23,12 @@ import {
 } from "@skyhook-io/k8s-ui";
 import { AlertTriangle } from "lucide-react";
 import { IssueDiagnoseButton } from "../diagnose/LocalDiagnoseAction";
+import {
+  HelmCoverageNote,
+  HelmUncheckedEmptyState,
+  helmCoverage,
+  helmNotCurrent,
+} from "./HelmCoverageNote";
 
 // A capacity-relevant issue links to its Karpenter diagnosis. Karpenter is
 // always single-cluster (unlike Argo hub-and-spoke), so the issue and the
@@ -98,7 +104,7 @@ export function IssuesPane({
   onNavigateToResource,
 }: IssuesPaneProps) {
   const { data, isLoading, error, dataUpdatedAt, refetch } =
-    useIssues(namespaces);
+    useIssues(namespaces, { partial: true });
   const { connection } = useConnection();
   const navigate = useNavigate();
   const apiResources = useAPIResources();
@@ -119,6 +125,14 @@ export function IssuesPane({
   const shown = severityFilter.size
     ? allIssues.filter((i) => severityFilter.has(i.severity))
     : allIssues;
+  const severityFilteredEmpty =
+    severityFilter.size > 0 && allIssues.length > 0 && shown.length === 0;
+  const helm = helmCoverage(data?.helm_issues);
+  // An empty list with no Helm result replaces the "nothing broken" state;
+  // otherwise the note sits above whatever the list shows.
+  const helmUncheckedEmpty =
+    helmNotCurrent(helm) && shown.length === 0 &&
+    !severityFilteredEmpty;
 
   const toggleSeverity = (s: IssueSeverity) =>
     setSeverityFilter((prev) => {
@@ -199,6 +213,10 @@ export function IssuesPane({
         </div>
       )}
 
+      {!helmUncheckedEmpty && (
+        <HelmCoverageNote coverage={helm} />
+      )}
+
       {/* Truncation honesty: when more issues matched than were returned, say
           so — don't present a capped list as the complete picture. */}
       {data?.total_matched != null &&
@@ -212,7 +230,7 @@ export function IssuesPane({
       {/* Filtered-empty is NOT the healthy empty state: when a severity filter
           hides every row but issues still exist, say "no matches" rather than
           letting IssuesView render its "nothing broken" terminal state. */}
-      {severityFilter.size > 0 && allIssues.length > 0 && shown.length === 0 ? (
+      {severityFilteredEmpty ? (
         <div className="flex flex-col items-center gap-2 py-12 text-center text-sm text-theme-text-secondary">
           <p>No issues match the selected severity.</p>
           <button
@@ -223,6 +241,8 @@ export function IssuesPane({
             Clear filter
           </button>
         </div>
+      ) : helmUncheckedEmpty ? (
+        <HelmUncheckedEmptyState coverage={helm} />
       ) : (
         /* anyData = the query resolved, i.e. the cluster is reachable; an empty
            list then means "nothing broken" rather than "not connected". */
