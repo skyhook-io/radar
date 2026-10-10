@@ -751,6 +751,27 @@ func TestIngressNoMatchingService(t *testing.T) {
 	}
 }
 
+func TestIngressNoMatchingServiceChecksTheDefaultBackend(t *testing.T) {
+	input := &CheckInput{
+		Ingresses: []*networkingv1.Ingress{{
+			ObjectMeta: metav1.ObjectMeta{Name: "catch-all", Namespace: "default"},
+			Spec: networkingv1.IngressSpec{DefaultBackend: &networkingv1.IngressBackend{
+				Service: &networkingv1.IngressServiceBackend{Name: "missing-service"},
+			}},
+		}},
+		Services: []*corev1.Service{},
+	}
+	var messages []string
+	for _, f := range RunChecks(input).Findings {
+		if f.CheckID == "ingressNoMatchingService" {
+			messages = append(messages, f.Message)
+		}
+	}
+	if len(messages) != 1 || !strings.Contains(messages[0], "missing-service") {
+		t.Errorf("findings = %v, want the missing default backend reported once", messages)
+	}
+}
+
 func TestBarePodChecked(t *testing.T) {
 	input := &CheckInput{
 		Pods: []*corev1.Pod{{
