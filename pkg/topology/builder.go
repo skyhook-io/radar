@@ -1155,7 +1155,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// NodePool → NodeClass edges via spec.template.spec.nodeClassRef
+	// NodeClass → NodePool edges via spec.template.spec.nodeClassRef
 	if len(nodeClassIDs) > 0 {
 		for _, np := range cachedNodePools {
 			npName := np.GetName()
@@ -1166,9 +1166,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if ref, valid := karpenter.NodeClassRefForNodePool(np); valid {
 				if ncID, ok := nodeClassIDs[karpenterNodeClassKey(ref.Group, ref.Kind, ref.Name)]; ok {
 					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", npID, ncID),
-						Source: npID,
-						Target: ncID,
+						ID:     fmt.Sprintf("%s-to-%s", ncID, npID),
+						Source: ncID,
+						Target: npID,
 						Type:   EdgeConfigures,
 					})
 				}
@@ -5156,10 +5156,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// 15d. Create Traefik edges
 	// IngressRoute/TCP/UDP → Service/TraefikService (EdgeExposes)
-	// IngressRoute/TCP → Middleware/MiddlewareTCP (EdgeConfigures)
-	// IngressRoute/TCP → TLSOption, TLSStore, ServersTransport/TCP (EdgeConfigures)
+	// Middleware/MiddlewareTCP → IngressRoute/TCP (EdgeConfigures)
+	// TLSOption, TLSStore, ServersTransport/TCP → IngressRoute/TCP (EdgeConfigures)
 	// TraefikService → Service/TraefikService (EdgeExposes)
-	// Middleware → Middleware chain (EdgeConfigures)
+	// Child Middleware → Middleware chain (EdgeConfigures)
 	traefikEdgeSeen := make(map[string]bool) // dedup: sourceID|targetID
 
 	for _, res := range traefikRouteResources {
@@ -5242,7 +5242,6 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				})
 			}
 
-			// Route → Middleware/MiddlewareTCP edges
 			middlewares, _, _ := unstructured.NestedSlice(routeMap, "middlewares")
 			for _, mw := range middlewares {
 				mwMap, ok := mw.(map[string]any)
@@ -5272,9 +5271,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 				traefikEdgeSeen[dedupeKey] = true
 				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", routeID, mwID),
-					Source: routeID,
-					Target: mwID,
+					ID:     fmt.Sprintf("%s-to-%s", mwID, routeID),
+					Source: mwID,
+					Target: routeID,
 					Type:   EdgeConfigures,
 				})
 			}
@@ -5294,9 +5293,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					if !traefikEdgeSeen[dedupeKey] {
 						traefikEdgeSeen[dedupeKey] = true
 						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", routeID, tlsOptID),
-							Source: routeID,
-							Target: tlsOptID,
+							ID:     fmt.Sprintf("%s-to-%s", tlsOptID, routeID),
+							Source: tlsOptID,
+							Target: routeID,
 							Type:   EdgeConfigures,
 						})
 					}
@@ -5315,16 +5314,16 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					if !traefikEdgeSeen[dedupeKey] {
 						traefikEdgeSeen[dedupeKey] = true
 						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", routeID, tlsStoreID),
-							Source: routeID,
-							Target: tlsStoreID,
+							ID:     fmt.Sprintf("%s-to-%s", tlsStoreID, routeID),
+							Source: tlsStoreID,
+							Target: routeID,
 							Type:   EdgeConfigures,
 						})
 					}
 				}
 			}
 
-			// IngressRoute → Certificate (via spec.tls.secretName matching cert-manager Certificate)
+			// Certificate → IngressRoute (via spec.tls.secretName matching cert-manager Certificate)
 			tlsSecretName, _, _ := unstructured.NestedString(res.Object, "spec", "tls", "secretName")
 			if tlsSecretName != "" {
 				certID := certBySecret[routeNs+"/"+tlsSecretName]
@@ -5333,9 +5332,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					if !traefikEdgeSeen[dedupeKey] {
 						traefikEdgeSeen[dedupeKey] = true
 						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", routeID, certID),
-							Source: routeID,
-							Target: certID,
+							ID:     fmt.Sprintf("%s-to-%s", certID, routeID),
+							Source: certID,
+							Target: routeID,
 							Type:   EdgeConfigures,
 						})
 					}
@@ -5445,7 +5444,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// Middleware → Middleware chain edges (spec.chain.middlewares[])
+	// Child Middleware → Middleware chain edges (spec.chain.middlewares[])
 	for _, mw := range middlewareResources {
 		mwNs := mw.GetNamespace()
 		mwID := middlewareIDs["middleware:"+mwNs+"/"+mw.GetName()]
@@ -5475,18 +5474,18 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if !traefikEdgeSeen[dedupeKey] {
 				traefikEdgeSeen[dedupeKey] = true
 				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", mwID, targetID),
-					Source: mwID,
-					Target: targetID,
+					ID:     fmt.Sprintf("%s-to-%s", targetID, mwID),
+					Source: targetID,
+					Target: mwID,
 					Type:   EdgeConfigures,
 				})
 			}
 		}
 	}
 
-	// ServersTransport → Secret edges (via spec.rootCAsSecrets[] and spec.certificatesSecrets[])
-	// TLSOption → Secret edges (via spec.clientAuth.secretNames[])
-	// TLSStore → Secret edges (via spec.defaultCertificate.secretName)
+	// Secret → ServersTransport edges (via spec.rootCAsSecrets[] and spec.certificatesSecrets[])
+	// Secret → TLSOption edges (via spec.clientAuth.secretNames[])
+	// Secret → TLSStore edges (via spec.defaultCertificate.secretName)
 	// Creates Secret nodes on-demand since IncludeSecrets may be false
 	existingSecretNodes := make(map[string]bool)
 	for _, node := range nodes {
@@ -5531,16 +5530,16 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if !traefikEdgeSeen[dedupeKey] {
 				traefikEdgeSeen[dedupeKey] = true
 				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", stID, secretNodeID),
-					Source: stID,
-					Target: secretNodeID,
+					ID:     fmt.Sprintf("%s-to-%s", secretNodeID, stID),
+					Source: secretNodeID,
+					Target: stID,
 					Type:   EdgeConfigures,
 				})
 			}
 		}
 	}
 
-	// TLSOption → Secret edges (via spec.clientAuth.secretNames[])
+	// Secret → TLSOption edges (via spec.clientAuth.secretNames[])
 	for _, entry := range tlsOptionResources {
 		res := entry.resource
 		ns := res.GetNamespace()
@@ -5568,16 +5567,16 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if !traefikEdgeSeen[dedupeKey] {
 				traefikEdgeSeen[dedupeKey] = true
 				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", optID, secretNodeID),
-					Source: optID,
-					Target: secretNodeID,
+					ID:     fmt.Sprintf("%s-to-%s", secretNodeID, optID),
+					Source: secretNodeID,
+					Target: optID,
 					Type:   EdgeConfigures,
 				})
 			}
 		}
 	}
 
-	// TLSStore → Secret edges (via spec.defaultCertificate.secretName)
+	// Secret → TLSStore edges (via spec.defaultCertificate.secretName)
 	for _, entry := range tlsStoreResources {
 		res := entry.resource
 		ns := res.GetNamespace()
@@ -5607,9 +5606,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		if !traefikEdgeSeen[dedupeKey] {
 			traefikEdgeSeen[dedupeKey] = true
 			edges = append(edges, Edge{
-				ID:     fmt.Sprintf("%s-to-%s", storeID, secretNodeID),
-				Source: storeID,
-				Target: secretNodeID,
+				ID:     fmt.Sprintf("%s-to-%s", secretNodeID, storeID),
+				Source: secretNodeID,
+				Target: storeID,
 				Type:   EdgeConfigures,
 			})
 		}
@@ -5618,7 +5617,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// 15e. Create Contour HTTPProxy edges
 	// HTTPProxy → Service (EdgeExposes, via spec.routes[].services[])
 	// HTTPProxy → HTTPProxy (EdgeExposes, via spec.includes[])
-	// HTTPProxy → Secret (EdgeConfigures, via spec.virtualhost.tls.secretName)
+	// Secret → HTTPProxy (EdgeConfigures, via spec.virtualhost.tls.secretName)
 	// HTTPProxy → Service via tcpproxy (EdgeExposes, via spec.tcpproxy.services[])
 	contourEdgeSeen := make(map[string]bool) // dedup: sourceID|targetID
 
@@ -5697,7 +5696,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 		}
 
-		// HTTPProxy → Secret edges (via spec.virtualhost.tls.secretName)
+		// Secret → HTTPProxy edges (via spec.virtualhost.tls.secretName)
 		tlsSecretRef, _, _ := unstructured.NestedString(res.Object, "spec", "virtualhost", "tls", "secretName")
 		secretNs, tlsSecretName := configrefs.ContourSecretRef(resNs, tlsSecretRef)
 		// A delegated certificate lives in another namespace, which a filtered view may exclude.
@@ -5721,9 +5720,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			if !contourEdgeSeen[dedupeKey] {
 				contourEdgeSeen[dedupeKey] = true
 				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", resID, secretNodeID),
-					Source: resID,
-					Target: secretNodeID,
+					ID:     fmt.Sprintf("%s-to-%s", secretNodeID, resID),
+					Source: secretNodeID,
+					Target: resID,
 					Type:   EdgeConfigures,
 				})
 			}
@@ -5734,9 +5733,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				if !contourEdgeSeen[dedupeKey2] {
 					contourEdgeSeen[dedupeKey2] = true
 					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", resID, certID),
-						Source: resID,
-						Target: certID,
+						ID:     fmt.Sprintf("%s-to-%s", certID, resID),
+						Source: certID,
+						Target: resID,
 						Type:   EdgeConfigures,
 					})
 				}
@@ -7104,7 +7103,6 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				}
 			}
 
-			// Route → Middleware edges
 			middlewares, _, _ := unstructured.NestedSlice(routeMap, "middlewares")
 			for _, mw := range middlewares {
 				mwMap, ok := mw.(map[string]any)
@@ -7129,9 +7127,9 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 					if !trafficTraefikEdgeSeen[dedupeKey] {
 						trafficTraefikEdgeSeen[dedupeKey] = true
 						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", routeID, mwID),
-							Source: routeID,
-							Target: mwID,
+							ID:     fmt.Sprintf("%s-to-%s", mwID, routeID),
+							Source: mwID,
+							Target: routeID,
 							Type:   EdgeConfigures,
 						})
 					}

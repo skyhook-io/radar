@@ -51,12 +51,13 @@ func TestHTTPProxyTLSSecretResolvesDelegatedNamespace(t *testing.T) {
 		}
 		return false
 	}
-	for source, target := range want {
-		if !hasEdge(source, target) {
-			t.Errorf("missing %s -> %s; secrets: %v", source, target, secretNs)
+	// Configuration points at what it configures: Secret → HTTPProxy.
+	for proxy, secret := range want {
+		if !hasEdge(secret, proxy) {
+			t.Errorf("missing %s -> %s; secrets: %v", secret, proxy, secretNs)
 		}
 	}
-	if !hasEdge("httpproxy/shop/delegated", "certificate/certs/wildcard-cert") {
+	if !hasEdge("certificate/certs/wildcard-cert", "httpproxy/shop/delegated") {
 		t.Error("delegated Secret lost its cert-manager Certificate edge")
 	}
 	if ns := secretNs["secret/certs/wildcard"]; ns != "certs" {
@@ -100,7 +101,7 @@ func TestHTTPProxyDelegatedSecretRespectsNamespaceFilter(t *testing.T) {
 			}
 		}
 		for _, e := range topo.Edges {
-			if e.Target == "secret/certs/wildcard" {
+			if e.Source == "secret/certs/wildcard" {
 				edge = true
 			}
 		}
