@@ -478,7 +478,8 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 }
 
 // describeArgoAutoSync formats spec.syncPolicy.automated into a chip label.
-// Empty when the field can't be read; "Manual" when automated is absent.
+// Empty when the field can't be read; "Manual" when automated is absent or
+// switched off with `enabled: false`.
 func describeArgoAutoSync(root *unstructured.Unstructured) string {
 	// An ApplicationSet has no sync policy of its own. Its spec.syncPolicy
 	// governs how generated Applications are created and deleted, not how
@@ -488,10 +489,10 @@ func describeArgoAutoSync(root *unstructured.Unstructured) string {
 	if root.GetKind() == "ApplicationSet" {
 		return ""
 	}
-	automated, found, _ := unstructured.NestedMap(root.Object, "spec", "syncPolicy", "automated")
-	if !found {
+	if !gitops.ArgoAutoSyncEnabled(root) {
 		return "Manual"
 	}
+	automated, _, _ := unstructured.NestedMap(root.Object, "spec", "syncPolicy", "automated")
 	parts := []string{"Auto"}
 	if v, ok := automated["prune"].(bool); ok && v {
 		parts = append(parts, "prune")
@@ -1436,10 +1437,12 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 
 func buildCapabilities(root *unstructured.Unstructured, tool string) Capabilities {
 	if tool == "argocd" {
+		// A multi-source entry records `revisions`, not `revision`, so the
+		// entry's source is what makes it rollbackable.
 		hasHistory := false
 		raw, _, _ := unstructured.NestedSlice(root.Object, "status", "history")
 		for _, item := range raw {
-			if m, ok := item.(map[string]any); ok && gitops.StringValue(m["revision"]) != "" {
+			if m, ok := item.(map[string]any); ok && gitops.ArgoHistoryEntryRollbackable(m) {
 				hasHistory = true
 				break
 			}
@@ -2032,15 +2035,15 @@ func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured) *Issue {
 	}
 }
 
-// argoAutoSync reports whether spec.syncPolicy.automated is present and, if so,
-// whether selfHeal is enabled within it. The two booleans distinguish the three
+// argoAutoSync reports whether automated sync is enabled and, if so, whether
+// selfHeal is enabled within it. The two booleans distinguish the three
 // drift-reconciliation postures: manual (!automated), auto-deploy-only
 // (automated && !selfHeal), and auto-heal (automated && selfHeal).
 func argoAutoSync(root *unstructured.Unstructured) (automated, selfHeal bool) {
-	m, found, _ := unstructured.NestedMap(root.Object, "spec", "syncPolicy", "automated")
-	if !found {
+	if !gitops.ArgoAutoSyncEnabled(root) {
 		return false, false
 	}
+	m, _, _ := unstructured.NestedMap(root.Object, "spec", "syncPolicy", "automated")
 	v, _ := m["selfHeal"].(bool)
 	return true, v
 }

@@ -154,6 +154,16 @@ func TestWriteGitOpsErrorStatusMapping(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
+			name:       "wrapped ErrAutoSyncEnabled → 409",
+			err:        errors.Join(gitops.ErrAutoSyncEnabled, errors.New("extra context")),
+			wantStatus: http.StatusConflict,
+		},
+		{
+			name:       "ErrHistoryEntryNotRollbackable → 400",
+			err:        gitops.ErrHistoryEntryNotRollbackable,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
 			name:       "unrecognized error → 500",
 			err:        errors.New("something else"),
 			wantStatus: http.StatusInternalServerError,

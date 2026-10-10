@@ -134,21 +134,25 @@ func (s *Server) handleArgoRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var opts gitops.ArgoRollbackOptions
+	// ID is a pointer only to tell "missing" from 0, which is a real history
+	// id (Argo numbers history from 0).
+	var req struct {
+		ID     *int64 `json:"id"`
+		Prune  *bool  `json:"prune,omitempty"`
+		DryRun *bool  `json:"dryRun,omitempty"`
+	}
 	if r.Body != nil && r.ContentLength != 0 {
-		if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid rollback request: %v", err))
 			return
 		}
 	}
-	// Match the core function's contract (RollbackArgoApp rejects <= 0).
-	// Reject negatives at the HTTP boundary so they 400 instead of falling
-	// through to a generic 500 from the operation layer.
-	if opts.ID <= 0 {
-		s.writeError(w, http.StatusBadRequest, "rollback request requires positive id")
+	if req.ID == nil || *req.ID < 0 {
+		s.writeError(w, http.StatusBadRequest, "rollback request requires a non-negative history id")
 		return
 	}
 
+	opts := gitops.ArgoRollbackOptions{ID: *req.ID, Prune: req.Prune, DryRun: req.DryRun}
 	result, err := gitops.RollbackArgoApp(r.Context(), client, namespace, name, opts)
 	if err != nil {
 		s.writeGitOpsError(w, err, "argo", "rollback", namespace, name)
@@ -263,9 +267,13 @@ func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, acti
 		// — both signal "request is well-formed but the resource isn't
 		// in a state where this verb can run".
 		status = http.StatusConflict
+	case errors.Is(err, gitops.ErrAutoSyncEnabled):
+		status = http.StatusConflict
 	case errors.Is(err, gitops.ErrNoOperationInProgress):
 		status = http.StatusBadRequest
 	case errors.Is(err, gitops.ErrInvalidResourceSelection):
+		status = http.StatusBadRequest
+	case errors.Is(err, gitops.ErrHistoryEntryNotRollbackable):
 		status = http.StatusBadRequest
 	default:
 		status = http.StatusInternalServerError
