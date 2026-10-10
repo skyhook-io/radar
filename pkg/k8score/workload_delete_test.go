@@ -2,7 +2,10 @@ package k8score
 
 import (
 	"context"
+	"fmt"
 	"testing"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -41,5 +44,31 @@ func TestDeleteResourceCascadesInTheBackground(t *testing.T) {
 		if err := client.Tracker().Add(job.DeepCopy()); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// Force delete exists to skip finalizer-driven teardown; deleting with the
+// finalizers still in place would run it anyway.
+func TestForceDeleteStopsWhenFinalizersCannotBeStripped(t *testing.T) {
+	apps := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	app := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+		"metadata": map[string]any{"namespace": "argocd", "name": "shop", "finalizers": []any{"resources-finalizer.argocd.argoproj.io"}},
+	}}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{apps: "ApplicationList"}, app)
+	client.PrependReactor("patch", "applications", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
+	})
+	deleted := false
+	client.PrependReactor("delete", "applications", func(k8stesting.Action) (bool, runtime.Object, error) {
+		deleted = true
+		return false, nil, nil
+	})
+	discovery := &ResourceDiscovery{resourceMap: make(map[string]APIResource), gvrMap: make(map[string]schema.GroupVersionResource)}
+	discovery.AddAPIResource(APIResource{Group: "argoproj.io", Version: "v1alpha1", Kind: "Application", Name: "applications", Namespaced: true, IsCRD: true, Verbs: []string{"delete", "patch"}})
+
+	err := NewWorkloadManager(client, discovery).DeleteResource(context.Background(), DeleteResourceOptions{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "shop", Force: true})
+	if err == nil || deleted {
+		t.Fatalf("err=%v deleted=%v; want an error and no delete", err, deleted)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // ControllerTeardown is what a GitOps controller deletes when its object is
@@ -16,8 +17,31 @@ type ControllerTeardown struct {
 	// Helm release is uninstalled).
 	Action string `json:"action"`
 	// Resources are the managed resources Radar observes; the controller acts
-	// on its own inventory, which can hold more.
+	// on its own inventory, which can hold more, and skips resources that opt
+	// out of deletion.
 	Resources []ResourceRef `json:"resources,omitempty"`
+	// Terminating means the object is already being deleted, so the
+	// controller may already be tearing down and force delete can't stop it.
+	Terminating bool `json:"terminating,omitempty"`
+}
+
+// watchedGetter reads an object only from an existing watch. Topology reads
+// optional metadata through it so a build or a preview never starts an
+// informer; providers without it skip that metadata.
+type watchedGetter interface {
+	GetWatched(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error)
+}
+
+func getWatched(dp DynamicProvider, gvr schema.GroupVersionResource, namespace, name string) *unstructured.Unstructured {
+	getter, ok := dp.(watchedGetter)
+	if !ok {
+		return nil
+	}
+	obj, err := getter.GetWatched(gvr, namespace, name)
+	if err != nil {
+		return nil
+	}
+	return obj
 }
 
 const (
@@ -48,12 +72,12 @@ func controllerTeardown(root *Node, topo *Topology, dp DynamicProvider) *Control
 		return nil
 	}
 	namespace, _ := root.Data["namespace"].(string)
-	obj, err := dp.Get(gvr, namespace, root.Name)
-	if err != nil || obj == nil || !tearsDown(obj, controller, action) {
+	obj := getWatched(dp, gvr, namespace, root.Name)
+	if obj == nil || !tearsDown(obj, controller, action) {
 		return nil
 	}
 
-	teardown := &ControllerTeardown{Controller: controller, Action: action}
+	teardown := &ControllerTeardown{Controller: controller, Action: action, Terminating: obj.GetDeletionTimestamp() != nil}
 	nodeByID := make(map[string]*Node, len(topo.Nodes))
 	for i := range topo.Nodes {
 		nodeByID[topo.Nodes[i].ID] = &topo.Nodes[i]
@@ -87,11 +111,13 @@ func tearsDown(obj *unstructured.Unstructured, controller, action string) bool {
 		for _, f := range obj.GetFinalizers() {
 			hasFinalizer = hasFinalizer || f == fluxFinalizer
 		}
-		if !hasFinalizer {
+		// Both controllers skip teardown for a suspended object and only
+		// release the finalizer.
+		suspended, _, _ := unstructured.NestedBool(obj.Object, "spec", "suspend")
+		if !hasFinalizer || suspended {
 			return false
 		}
 		if action == "uninstall" {
-			// Deleting a HelmRelease uninstalls its release, suspended or not.
 			return true
 		}
 		policy, _, _ := unstructured.NestedString(obj.Object, "spec", "deletionPolicy")

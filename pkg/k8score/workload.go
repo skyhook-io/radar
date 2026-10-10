@@ -601,7 +601,9 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 			if apierrors.IsForbidden(patchErr) {
 				return fmt.Errorf("force delete requires patch permission to strip finalizers: %w", patchErr)
 			}
-			log.Printf("[delete] Failed to strip finalizers from %s %s/%s: %v", opts.Kind, opts.Namespace, opts.Name, patchErr)
+			// Deleting with the finalizers still in place would let their
+			// controllers run the teardown force delete is meant to skip.
+			return fmt.Errorf("force delete could not strip finalizers: %w", patchErr)
 		}
 	}
 

@@ -254,3 +254,68 @@ func TestWatchedAnalysisRunKeepsItsRolloutOwnership(t *testing.T) {
 		}
 	}
 }
+
+func TestCascadePreviewTreatsDeclaredStubOwnersAsUnresolved(t *testing.T) {
+	ctrl := true
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: "replicaset/team/web-abc", Kind: KindReplicaSet, Name: "web-abc", uid: "rs", observed: true, Data: map[string]any{"namespace": "team", "apiVersion": "apps/v1"}},
+			// A Secret only some declaration named; Radar hasn't observed it.
+			{ID: "secret/team/tls", Kind: KindSecret, Name: "tls", Data: map[string]any{"namespace": "team"}},
+			{ID: "pod/team/web-abc-1", Kind: KindPod, Name: "web-abc-1", uid: "pod", observed: true, Data: map[string]any{"namespace": "team"}, ownerReferences: []metav1.OwnerReference{
+				{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "web-abc", UID: "rs", Controller: &ctrl},
+				{APIVersion: "v1", Kind: "Secret", Name: "tls", UID: "secret"},
+			}},
+		},
+		Edges: []Edge{{ID: "rs-pod", Source: "replicaset/team/web-abc", Target: "pod/team/web-abc-1", Type: EdgeManages, OwnerController: &ctrl}},
+	}
+	p := GetCascadeDeletePreview(ResourceRef{Kind: "ReplicaSet", Namespace: "team", Name: "web-abc", Group: ""}, topo, nil)
+	if len(p.Dependents) != 0 || fmt.Sprint(refNames(p.PossibleDependents)) != "[Pod/web-abc-1]" {
+		t.Errorf("dependents %v, possible %v; an unobserved owner must leave the Pod possible", refNames(p.Dependents), refNames(p.PossibleDependents))
+	}
+}
+
+// servedButUnwatched resolves AnalysisRuns through discovery without watching
+// them, and records any Get, which in the real cache starts a watch.
+type servedButUnwatched struct {
+	*genericIdentityDynamic
+	run       schema.GroupVersionResource
+	startedOn []string
+}
+
+func (s *servedButUnwatched) GetGVRWithGroup(kind, group string) (schema.GroupVersionResource, bool) {
+	if kind == "AnalysisRun" && group == s.run.Group {
+		return s.run, true
+	}
+	return s.genericIdentityDynamic.GetGVRWithGroup(kind, group)
+}
+
+func (s *servedButUnwatched) Get(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
+	if gvr == s.run {
+		s.startedOn = append(s.startedOn, namespace+"/"+name)
+	}
+	return s.genericIdentityDynamic.Get(gvr, namespace, name)
+}
+
+func TestTopologyBuildNeverStartsAnAnalysisRunWatch(t *testing.T) {
+	rolloutGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	runGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "analysisruns"}
+	rollout := genericIdentityObject(rolloutGVR, "Rollout", "team", "web")
+	rollout.Object["spec"] = map[string]any{"strategy": map[string]any{"canary": map[string]any{}}}
+	rollout.Object["status"] = map[string]any{"canary": map[string]any{"currentStepAnalysisRunStatus": map[string]any{"name": "web-run", "status": "Running"}}}
+	dynamic := &servedButUnwatched{
+		genericIdentityDynamic: &genericIdentityDynamic{
+			watched:   []schema.GroupVersionResource{rolloutGVR},
+			kinds:     map[schema.GroupVersionResource]string{rolloutGVR: "Rollout", runGVR: "AnalysisRun"},
+			resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{rolloutGVR: {rollout}},
+			listCalls: map[schema.GroupVersionResource]int{},
+		},
+		run: runGVR,
+	}
+	if _, err := NewBuilder(&mockProvider{}).WithDynamic(dynamic).Build(DefaultBuildOptions()); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(dynamic.startedOn) != 0 {
+		t.Errorf("topology build read unwatched AnalysisRuns through Get: %v", dynamic.startedOn)
+	}
+}

@@ -30,7 +30,11 @@ func TestCascadePreviewDisclosesGitOpsTeardownByPolicy(t *testing.T) {
 		{"flux delete policy", "Kustomization", []string{"finalizers.fluxcd.io"}, map[string]any{"prune": false, "deletionPolicy": "Delete"}, "Flux/prune"},
 		{"flux orphan policy", "Kustomization", []string{"finalizers.fluxcd.io"}, map[string]any{"prune": true, "deletionPolicy": "Orphan"}, ""},
 		{"flux never reconciled", "Kustomization", nil, map[string]any{"prune": true}, ""},
-		{"helm release", "HelmRelease", []string{"finalizers.fluxcd.io"}, map[string]any{"suspend": true}, "Flux/uninstall"},
+		{"helm release", "HelmRelease", []string{"finalizers.fluxcd.io"}, map[string]any{}, "Flux/uninstall"},
+		// Both Flux controllers release a suspended object's finalizer without
+		// tearing anything down.
+		{"suspended helm release", "HelmRelease", []string{"finalizers.fluxcd.io"}, map[string]any{"suspend": true}, ""},
+		{"suspended flux prune", "Kustomization", []string{"finalizers.fluxcd.io"}, map[string]any{"prune": true, "suspend": true}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			k := kinds[tc.kind]

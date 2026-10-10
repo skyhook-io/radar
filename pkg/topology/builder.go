@@ -458,16 +458,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		rolloutGVR, hasRollouts = resourceDiscovery.GetGVRWithGroup("Rollout", "argoproj.io")
 	}
 	var analysisRunGVR schema.GroupVersionResource
-	analysisRunsWatched := false
+	hasAnalysisRuns := false
 	if hasRollouts && dynamicCache != nil {
-		if gvr, ok := resourceDiscovery.GetGVRWithGroup("AnalysisRun", "argoproj.io"); ok {
-			for _, watched := range dynamicCache.GetWatchedResources() {
-				if watched == gvr {
-					analysisRunGVR, analysisRunsWatched = gvr, true
-					break
-				}
-			}
-		}
+		analysisRunGVR, hasAnalysisRuns = resourceDiscovery.GetGVRWithGroup("AnalysisRun", "argoproj.io")
 		rollouts, err := dynamicCache.ListNamespaces(rolloutGVR, opts.Namespaces)
 		if err != nil {
 			log.Printf("WARNING [topology] Failed to list Rollouts: %v", err)
@@ -621,8 +614,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				// The run's own owner reference is what makes the Rollout its
 				// owner. Read it only from an existing watch: AnalysisRuns
 				// accumulate, and a topology build must not start one.
-				if analysisRunsWatched {
-					if obj, err := dynamicCache.Get(analysisRunGVR, ns, run.name); err == nil && obj != nil {
+				if hasAnalysisRuns {
+					if obj := getWatched(dynamicCache, analysisRunGVR, ns, run.name); obj != nil {
 						runNode.uid, runNode.ownerReferences, runNode.observed = obj.GetUID(), obj.GetOwnerReferences(), true
 					}
 				}

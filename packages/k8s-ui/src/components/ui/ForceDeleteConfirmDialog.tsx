@@ -22,6 +22,8 @@ export interface CascadeDetail {
     controller: string
     action: 'prune' | 'uninstall' | string
     resources?: CascadeDependent[]
+    /** Already being deleted: the teardown may be underway. */
+    terminating?: boolean
   }
 }
 
@@ -86,13 +88,20 @@ export function ForceDeleteConfirmDialog({
         )}
 
         {!cascadeLoading && cascadeDependents && cascadeDependents.length > 0 && (
-          <CascadeDependentsList
-            dependents={cascadeDependents}
-            title={`Will also delete ${pluralize(cascadeDependents.length, 'dependent resource')}`}
-            note={cascadeDetail?.basis === 'ownerReferences'
-              ? 'Kubernetes deletes these through their owner references. Owned objects Radar doesn\'t track, such as EndpointSlices, go too but aren\'t listed.'
-              : undefined}
-          />
+          cascadeDetail?.basis === 'ownerReferences' ? (
+            <CascadeDependentsList
+              dependents={cascadeDependents}
+              title={`Will also delete ${pluralize(cascadeDependents.length, 'dependent resource')}`}
+              note="Kubernetes deletes these through their owner references. Owned objects Radar doesn't track, such as EndpointSlices, go too but aren't listed."
+            />
+          ) : (
+            // An older Radar walked every management link, not only owner references.
+            <CascadeDependentsList
+              dependents={cascadeDependents}
+              title={`May also delete ${pluralize(cascadeDependents.length, 'related resource')}`}
+              note="This Radar version can't tell owned resources from other links. Kubernetes deletes only those that name this one as their owner."
+            />
+          )
         )}
 
         {!cascadeLoading && cascadeDetail?.possibleDependents && cascadeDetail.possibleDependents.length > 0 && (
@@ -134,24 +143,27 @@ const MAX_NAMES_PER_KIND = 8
 
 function ControllerTeardownNotice({ teardown, force }: { teardown: NonNullable<CascadeDetail['controllerTeardown']>; force: boolean }) {
   const resources = teardown.resources ?? []
+  const what = teardown.action === 'uninstall' ? 'uninstall the Helm release' : 'delete the resources it manages'
   if (force) {
     return (
       <div className="flex items-start gap-2 rounded border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>
-          Force delete removes {teardown.controller}&apos;s finalizer, so {teardown.controller} won&apos;t {teardown.action === 'uninstall' ? 'uninstall the Helm release' : 'delete the resources it manages'}. They stay in the cluster.
+          {teardown.terminating
+            ? `This is already being deleted, so ${teardown.controller} may already be working to ${what}. Force delete removes its finalizer but can't undo that.`
+            : `Force delete removes ${teardown.controller}'s finalizer, so ${teardown.controller} won't ${what}. They stay in the cluster.`}
         </span>
       </div>
     )
   }
   const title = teardown.action === 'uninstall'
     ? `${teardown.controller} will also uninstall the Helm release`
-    : `${teardown.controller} will also delete ${resources.length > 0 ? pluralize(resources.length, 'managed resource') : 'the resources it manages'}`
+    : `${teardown.controller} will also delete ${resources.length > 0 ? `up to ${pluralize(resources.length, 'managed resource')}` : 'the resources it manages'}`
   return (
     <CascadeDependentsList
       dependents={resources}
       title={title}
-      note={`${teardown.controller} deletes what its own inventory records, which can include resources Radar doesn't show.`}
+      note={`${teardown.controller} deletes what its own inventory records, which can include resources Radar doesn't show. Resources that opt out of deletion stay (Flux: kustomize.toolkit.fluxcd.io/prune: disabled; Argo CD: Delete=false).`}
     />
   )
 }

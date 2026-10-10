@@ -44,7 +44,7 @@ describe('ForceDeleteConfirmDialog', () => {
     })
     expect(text()).toContain('Will also delete 1 dependent resource')
     expect(text()).toContain('May also delete 1 resource')
-    expect(text()).toContain('Flux will also delete 1 managed resource')
+    expect(text()).toContain('Flux will also delete up to 1 managed resource')
   })
 
   it('says force delete stops the controller teardown', async () => {
@@ -59,5 +59,19 @@ describe('ForceDeleteConfirmDialog', () => {
     const text = await render(undefined, '')
     expect(text()).toContain('cluster-scoped Kustomization "apps"')
     expect(text()).not.toContain('"" namespace')
+  })
+
+  it('does not promise certainty for an older server that walked every link', async () => {
+    const text = await render(undefined)
+    expect(text()).toContain('May also delete 1 related resource')
+    expect(text()).not.toContain('Will also delete')
+  })
+
+  it('does not promise force delete stops a teardown already underway', async () => {
+    const text = await render({ basis: 'ownerReferences', controllerTeardown: { controller: 'Flux', action: 'prune', terminating: true } })
+    const checkbox = document.body.querySelector('input[type="checkbox"]') as HTMLInputElement
+    await act(async () => checkbox.click())
+    expect(text()).toContain('already being deleted')
+    expect(text()).not.toContain('They stay in the cluster')
   })
 })

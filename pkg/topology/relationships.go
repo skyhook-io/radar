@@ -234,7 +234,8 @@ func GetCascadeDeletePreview(root ResourceRef, topo *Topology, dp DynamicProvide
 			}
 			parent, current := index.ResolveObservedOwner(resourceid.OwnerReference(owner.APIVersion, owner.Kind, owner.Name, string(owner.UID), namespace))
 			switch {
-			case parent == nil:
+			case parent == nil || !parent.observed && parent.uid == "":
+				// Missing, or only a declared stub Radar hasn't observed.
 				result = possible
 			case !current:
 				// The named incarnation is gone; garbage collection ignores it.

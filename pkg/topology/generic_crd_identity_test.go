@@ -44,6 +44,16 @@ func (d *genericIdentityDynamic) Get(gvr schema.GroupVersionResource, namespace,
 	return nil, fmt.Errorf("not found")
 }
 
+// GetWatched reads only GVRs the fake lists as watched, like the real cache.
+func (d *genericIdentityDynamic) GetWatched(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
+	for _, watched := range d.watched {
+		if watched == gvr {
+			return d.Get(gvr, namespace, name)
+		}
+	}
+	return nil, fmt.Errorf("%v not watched", gvr)
+}
+
 func (d *genericIdentityDynamic) GetWatchedResources() []schema.GroupVersionResource {
 	return d.watched
 }
