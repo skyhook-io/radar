@@ -438,8 +438,8 @@ func TestGetRelationships_WorkloadIncludesServiceEntrypoints(t *testing.T) {
 	}
 
 	serviceRel := GetRelationshipsWithIndex("Service", "demo", "web", topo, nil, nil, IndexByResource(topo))
-	if serviceRel == nil || len(serviceRel.Routes) != 1 || serviceRel.Routes[0].Kind != "IngressRoute" {
-		t.Fatalf("Service Routes = %+v, want IngressRoute", serviceRel)
+	if serviceRel == nil || len(serviceRel.Routes) != 2 {
+		t.Fatalf("Service Routes = %+v, want HTTPRoute and IngressRoute", serviceRel)
 	}
 	if len(serviceRel.Services) != 0 {
 		t.Fatalf("Service Services = %+v, route CRDs must not be labeled as Services", serviceRel.Services)

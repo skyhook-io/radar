@@ -239,7 +239,7 @@ func enrichRef(ref *ResourceRef, dp DynamicProvider) {
 func isRouteKind(kindLower string) bool {
 	switch kindLower {
 	case "httproute", "httproutes", "grpcroute", "grpcroutes",
-		"tcproute", "tcproutes", "tlsroute", "tlsroutes":
+		"tcproute", "tcproutes", "tlsroute", "tlsroutes", "udproute", "udproutes":
 		return true
 	}
 	return false
@@ -431,15 +431,16 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 				rel.RoutedFrom = appendResourceRef(rel.RoutedFrom, *ref)
 			}
 		case EdgeRoutesTo:
-			// An Ingress, Gateway, route, or Service routes to this resource
-			sourceKind := strings.ToLower(ref.Kind)
-			if sourceKind == "ingress" {
-				rel.Ingresses = append(rel.Ingresses, *ref)
-			} else if sourceKind == "gateway" || sourceKind == "httproute" ||
-				sourceKind == "grpcroute" || sourceKind == "tcproute" || sourceKind == "tlsroute" {
-				rel.Gateways = append(rel.Gateways, *ref)
-			} else if sourceKind == "service" {
-				rel.Services = append(rel.Services, *ref)
+			if ref.Kind == "Ingress" && ref.Group == "networking.k8s.io" {
+				rel.Ingresses = appendResourceRef(rel.Ingresses, *ref)
+			} else if ref.Kind == "Gateway" && ref.Group == "gateway.networking.k8s.io" {
+				rel.Gateways = appendResourceRef(rel.Gateways, *ref)
+			} else if isServiceEntrypointRoute(ref) {
+				rel.Routes = appendResourceRef(rel.Routes, *ref)
+			} else if ref.Kind == "Service" && ref.Group == "" {
+				rel.Services = appendResourceRef(rel.Services, *ref)
+			} else {
+				rel.RoutedFrom = appendResourceRef(rel.RoutedFrom, *ref)
 			}
 		case EdgeUses:
 			if isStorageResourceRef(ref) {
