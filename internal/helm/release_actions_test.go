@@ -93,7 +93,7 @@ func TestReleaseActionRollbackPreviewAndBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(preview.CurrentResources) != 2 || len(preview.Hooks) != 1 || preview.Hooks[0].Name != "restore" || preview.Hooks[0].Effect != "run" {
+	if len(preview.Resources) != 2 || len(preview.Hooks) != 1 || preview.Hooks[0].Name != "restore" || preview.Hooks[0].Effect != "run" {
 		t.Fatalf("rollback preview = %+v", preview)
 	}
 	for _, mutate := range []func(){

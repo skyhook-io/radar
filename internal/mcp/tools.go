@@ -626,7 +626,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "delete_resource",
-		Description: "Delete one Kubernetes object as the caller. Mandatory preview: dry_run=true (default) validates a server-side delete and returns a confirm token bound to UID, generation/finalizers (resourceVersion when generation is absent), and propagation; review it before dry_run=false with confirm. " +
+		Description: "Delete one Kubernetes object as the caller. Mandatory preview: dry_run=true (default) validates a server-side delete and returns a confirm token bound to UID, generation/finalizers (resourceVersion when generation is absent), and propagation. Show the preview to the user and get explicit approval before dry_run=false with confirm. " +
 			"Cached topology dependents are an approximation; namespace contents, CRD instances, and controller-finalizer cleanup are not enumerated. Namespace deletion removes all contents; CRD deletion removes all instances. " +
 			"Propagation defaults to background; foreground and orphan are supported. Finalizers are never removed; accepted deletion may still be pending. Use patch_resource only as a separate, explicit finalizer intervention after inspecting cleanup.",
 		Annotations: writeTool,
@@ -634,8 +634,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_helm_release",
-		Description: "Uninstall or rollback one Helm release as the caller. dry_run=true (default) returns a mandatory stored-manifest preview of resources, action hooks, status, and history policy; review it before dry_run=false with confirm. " +
-			"Preview does not simulate hooks, live finalizers, controller cleanup, or write permissions. Confirm expires after five minutes and is bound to release state, action/options, caller, and context. " +
+		Description: "Uninstall or rollback one Helm release as the caller. dry_run=true (default) returns a mandatory stored-manifest preview of resources, action hooks, status, and history policy. Show the preview to the user and get explicit approval before dry_run=false with confirm; uninstall with history purge is irreversible. " +
+			"Preview checks release-storage write capability and live rollback/hook evidence; it does not simulate hooks, live finalizers, controller cleanup, or all write permissions. Confirm expires after five minutes and is bound to release state, action/options, caller, and context. " +
 			"Use the Helm storageNamespace as namespace. Rollback requires an explicit older revision from get_helm_release include=history and creates a new revision. " +
 			"Uninstall retries an uninstalling release; no_hooks skips cleanup hooks (may leave external resources), keep_history retains only Helm history (default false purges it). Finalizers are never stripped. GitOps-managed releases should be changed at their source. Avoid concurrent Helm operations.",
 		Annotations: writeTool,

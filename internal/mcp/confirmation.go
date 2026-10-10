@@ -30,6 +30,7 @@ type mutationConfirmation struct {
 	Context      string `json:"context"`
 	CallerDigest string `json:"callerDigest"`
 	Target       string `json:"target"`
+	Nonce        string `json:"nonce"`
 	Expires      int64  `json:"expires"`
 }
 
@@ -53,6 +54,11 @@ func confirmationBinding(ctx context.Context, action, target string) mutationCon
 func issueMutationConfirmation(ctx context.Context, action, target string) (string, error) {
 	binding := confirmationBinding(ctx, action, target)
 	binding.Expires = time.Now().Add(5 * time.Minute).Unix()
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	binding.Nonce = base64.RawURLEncoding.EncodeToString(nonce)
 	raw, err := json.Marshal(binding)
 	if err != nil {
 		return "", err
@@ -111,4 +117,30 @@ func verifyMutationConfirmation(ctx context.Context, action, token string) (stri
 		return "", malformed
 	}
 	return binding.Target, nil
+}
+
+type ConfirmationTargetMismatchError struct{}
+
+func (*ConfirmationTargetMismatchError) Error() string { return "confirmation target mismatch" }
+
+var ErrConfirmationTargetMismatch = &ConfirmationTargetMismatchError{}
+
+func issueMutationConfirmationTarget(ctx context.Context, action, target string) (string, error) {
+	return issueMutationConfirmation(ctx, action, confirmationTargetDigest(target))
+}
+
+func confirmationTargetDigest(target string) string {
+	digest := sha256.Sum256([]byte(target))
+	return base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
+func verifyMutationConfirmationTarget(ctx context.Context, action, target, token string) error {
+	approved, err := verifyMutationConfirmation(ctx, action, token)
+	if err != nil {
+		return err
+	}
+	if approved != confirmationTargetDigest(target) {
+		return ErrConfirmationTargetMismatch
+	}
+	return nil
 }

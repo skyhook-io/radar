@@ -2526,7 +2526,7 @@ func (c *Client) rollbackWithProgressUsing(actionConfig *action.Configuration, n
 	sendProgress := progressSender(progressCh)
 	sendProgress("preparing", fmt.Sprintf("Preparing rollback of %s to revision %d...", name, revision), "")
 	sendProgress("rolling-back", fmt.Sprintf("Rolling back %s to revision %d...", name, revision), "")
-	if err := c.rollbackWith(actionConfig, name, revision); err != nil {
+	if err := rollbackWith(actionConfig, name, revision, false); err != nil {
 		return err
 	}
 	sendProgress("complete", fmt.Sprintf("Successfully rolled back %s to revision %d", name, revision), "")
@@ -2538,9 +2538,13 @@ func (c *Client) RollbackAsUser(namespace, name string, revision int, username s
 	return c.RollbackWithProgressAsUser(namespace, name, revision, username, groups, nil)
 }
 
-func (c *Client) rollbackWith(actionConfig *action.Configuration, name string, revision int) error {
+func rollbackWith(actionConfig *action.Configuration, name string, revision int, noHooks bool) error {
+	if err := useReleaseTargetNamespace(actionConfig, name); err != nil {
+		return err
+	}
 	rollbackAction := action.NewRollback(actionConfig)
 	rollbackAction.Version = revision
+	rollbackAction.DisableHooks = noHooks
 	rollbackAction.Timeout = 120 * time.Second
 
 	if err := rollbackAction.Run(name); err != nil {
@@ -2548,28 +2552,6 @@ func (c *Client) rollbackWith(actionConfig *action.Configuration, name string, r
 	}
 
 	return nil
-}
-
-// Uninstall removes a release
-func (c *Client) Uninstall(namespace, name string) error {
-	actionConfig, err := c.getActionConfig(namespace)
-	if err != nil {
-		return err
-	}
-	return c.uninstallWith(actionConfig, name)
-}
-
-// UninstallAsUser removes a release with K8s impersonation.
-func (c *Client) UninstallAsUser(namespace, name string, username string, groups []string) error {
-	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
-	if err != nil {
-		return err
-	}
-	return c.uninstallWith(actionConfig, name)
-}
-
-func (c *Client) uninstallWith(actionConfig *action.Configuration, name string) error {
-	return uninstallWithOptions(actionConfig, name, UninstallOptions{})
 }
 
 // Upgrade upgrades a release to a new version
