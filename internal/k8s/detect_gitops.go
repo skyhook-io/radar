@@ -199,10 +199,12 @@ func gitopsProblem(now time.Time, kind, group, ns, name, severity, reason, messa
 	}
 }
 
-// detectArgoAppProblems skips running operations and non-failed suspended apps.
-// Failed operations supersede parallel error conditions; otherwise conditions
-// outrank health/drift rollups. Resource warnings are independent of that
-// primary failure and retain the controller's resource/owner evidence.
+// detectArgoAppProblems skips running operations (health is still converging)
+// and non-failed suspended apps (intentionally paused). Manual apps legitimately
+// sit OutOfSync until an operator syncs them, so drift alone has a 24-hour gate.
+// Failed operations suppress only their parallel "Failed last sync attempt"
+// condition. Independent errors and resource warnings retain their own rows;
+// Degraded health retains Argo's health message alongside error conditions.
 func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDriftTracker, now time.Time) []Detection {
 	var out []Detection
 	for _, app := range apps {
@@ -248,40 +250,9 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			out = append(out, argoResourceWarningProblems(app, now)...)
 		}
 
-		// A failed sync operation is the most actionable signal and outranks a
-		// Degraded health rollup. status.operationState.message names the failing
-		// resource + reason, which we parse into a plain-English cause + one-click
-		// remediation. When an app is BOTH Degraded and carries a failed
-		// operation, the failed apply is the root cause while the degraded health
-		// is a downstream symptom (already surfaced as the managed resources'
-		// own issues, grouped by their owner). Emitting gitops_operation_failed
-		// keeps the category honest so a consumer filtering for operation
-		// failures (MCP / Issues) doesn't miss it under a health bucket. Also
-		// checked before the condition branch: Argo's SyncError condition
-		// parallel-encodes this same message, so emitting both would
-		// double-report one failure.
-		if strings.EqualFold(phase, "Failed") || strings.EqualFold(phase, "Error") {
-			// An empty operation message carries no detail. If a specific error
-			// condition (ComparisonError / InvalidSpecError / SyncError) is
-			// present, it holds the actionable guidance — prefer it over a
-			// generic "operation failed" row rather than masking it.
-			if strings.TrimSpace(opMsg) == "" {
-				if ct, cmsg, rawMsg, transitionAt, hasTransition, ok := argoErrorCondition(app, now); ok {
-					d := gitopsProblem(now, "Application", argoGroup, ns, name, "critical", ct, cmsg, createdAt)
-					if hasTransition {
-						setDetectionOnset(&d, now, transitionAt)
-					}
-					d.RawMessage = rawMsg
-					if ct == "SyncError" {
-						applyArgoOperationDiagnosis(&d, app, cmsg)
-					}
-					if d.RemediationKind == "" && d.Action == "" {
-						d.Action = diagnose.ActionForCondition(ct)
-					}
-					out = append(out, d)
-					continue
-				}
-			}
+		operationFailed := strings.EqualFold(phase, "Failed") || strings.EqualFold(phase, "Error")
+		ct, cmsg, rawCondition, transitionAt, hasTransition, hasCondition := argoErrorCondition(app, now)
+		if operationFailed && (strings.TrimSpace(opMsg) != "" || !hasCondition) {
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(opMsg)
 			if strings.TrimSpace(msg) == "" {
 				msg = "Last sync operation failed"
@@ -300,29 +271,26 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 				d.Action = "Open the application's sync operation details for the full error and history."
 			}
 			out = append(out, d)
-			continue
 		}
-		if strings.EqualFold(health, "Suspended") {
+		if strings.EqualFold(health, "Suspended") && !operationFailed {
 			continue
 		}
 
-		// ComparisonError / InvalidSpecError are source/spec failures that occur
-		// without a sync operation (so operationState above won't catch them) —
-		// genuine reconciliation failures, critical, with the same condition-
-		// specific guidance the detail page shows.
-		if ct, msg, rawMsg, transitionAt, hasTransition, ok := argoErrorCondition(app, now); ok {
-			d := gitopsProblem(now, "Application", argoGroup, ns, name, "critical", ct, msg, createdAt)
+		if hasCondition {
+			d := gitopsProblem(now, "Application", argoGroup, ns, name, "critical", ct, cmsg, createdAt)
 			if hasTransition {
 				setDetectionOnset(&d, now, transitionAt)
 			}
-			d.RawMessage = rawMsg
+			d.RawMessage = rawCondition
 			if ct == "SyncError" {
-				applyArgoOperationDiagnosis(&d, app, msg)
+				applyArgoOperationDiagnosis(&d, app, cmsg)
 			}
 			if d.RemediationKind == "" && d.Action == "" {
 				d.Action = diagnose.ActionForCondition(ct)
 			}
 			out = append(out, d)
+		}
+		if operationFailed && !hasCondition {
 			continue
 		}
 		if strings.EqualFold(health, "Progressing") {
@@ -333,6 +301,10 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 				"HealthDegraded", orMsg("Application health is Degraded (managed resources are unhealthy)"), createdAt)
 			dd.Action = "Open the resource tree and inspect the unhealthy managed resource(s)."
 			out = append(out, dd)
+			continue
+		}
+
+		if hasCondition {
 			continue
 		}
 
@@ -386,8 +358,12 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 
 func argoResourceWarningProblems(app *unstructured.Unstructured, now time.Time) []Detection {
 	conditions, _, _ := unstructured.NestedSlice(app.Object, "status", "conditions")
-	var out []Detection
-	seen := make(map[[2]string]bool)
+	type warning struct {
+		messages    map[string]bool
+		rawMessages map[string]bool
+		onset       time.Time
+	}
+	warnings := map[string]*warning{}
 	for _, condition := range conditions {
 		c, ok := condition.(map[string]any)
 		if !ok {
@@ -399,22 +375,76 @@ func argoResourceWarningProblems(app *unstructured.Unstructured, now time.Time) 
 		default:
 			continue
 		}
+		w := warnings[typ]
+		if w == nil {
+			w = &warning{messages: map[string]bool{}, rawMessages: map[string]bool{}}
+			warnings[typ] = w
+		}
 		message, _ := c["message"].(string)
 		message, rawMessage := diagnose.CleanArgoControllerMessageWithRaw(message)
-		key := [2]string{typ, message}
-		if seen[key] {
+		if message != "" {
+			w.messages[message] = true
+		}
+		if rawMessage != "" {
+			w.rawMessages[rawMessage] = true
+		}
+		timestamp, _ := c["lastTransitionTime"].(string)
+		if at, ok := timestampAtOrBefore(now, timestamp); ok && (w.onset.IsZero() || at.Before(w.onset)) {
+			w.onset = at
+		}
+	}
+	var out []Detection
+	for _, typ := range []string{"SharedResourceWarning", "RepeatedResourceWarning", "OrphanedResourceWarning"} {
+		w := warnings[typ]
+		if w == nil {
 			continue
 		}
-		seen[key] = true
+		messages := make([]string, 0, len(w.messages))
+		for message := range w.messages {
+			messages = append(messages, message)
+		}
+		sort.Strings(messages)
+		count := len(messages)
+		if count > 3 {
+			messages = messages[:3]
+		}
+		message := strings.Join(messages, "; ")
+		switch typ {
+		case "SharedResourceWarning":
+			if count == 1 {
+				message = "1 resource is also tracked by other Applications: " + message
+			} else {
+				message = fmt.Sprintf("%d resources are also tracked by other Applications: %s", count, message)
+			}
+		case "RepeatedResourceWarning":
+			if count == 1 {
+				message = "1 resource is rendered more than once: " + message
+			} else {
+				message = fmt.Sprintf("%d resources are rendered more than once: %s", count, message)
+			}
+		}
+		if count > len(messages) {
+			message += fmt.Sprintf(" (+%d more)", count-len(messages))
+		}
+		if count == 0 {
+			message = typ
+		}
 		severity, _ := diagnose.SeverityForConditionType(typ)
 		d := gitopsProblem(now, "Application", argoGroup, app.GetNamespace(), app.GetName(), severity, typ, message, app.GetCreationTimestamp().Time)
-		d.RawMessage = rawMessage
-		// Grouped issues otherwise merge distinct resource warnings by category.
-		d.Fingerprint = "argo-condition:" + typ + ":" + message
+		rawMessages := make([]string, 0, len(w.rawMessages))
+		for raw := range w.rawMessages {
+			rawMessages = append(rawMessages, raw)
+		}
+		sort.Strings(rawMessages)
+		if len(rawMessages) > 3 {
+			rawMessages = rawMessages[:3]
+		}
+		d.RawMessage = strings.Join(rawMessages, "; ")
+		// Counts and resource messages change each comparison; the warning episode does not.
+		d.Fingerprint = typ
 		d.Action = diagnose.ActionForCondition(typ)
-		timestamp, _ := c["lastTransitionTime"].(string)
-		if transitionAt, ok := timestampAtOrBefore(now, timestamp); ok {
-			setDetectionOnset(&d, now, transitionAt)
+		if !w.onset.IsZero() {
+			setDetectionOnset(&d, now, w.onset)
 		}
 		out = append(out, d)
 	}
@@ -533,6 +563,16 @@ func argoErrorCondition(app *unstructured.Unstructured, now time.Time) (condType
 		case "ComparisonError", "InvalidSpecError", "SyncError":
 			msg, _ := cm["message"].(string)
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(msg)
+			if ct == "SyncError" {
+				phase, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
+				if (strings.EqualFold(phase, "Failed") || strings.EqualFold(phase, "Error")) && strings.HasPrefix(msg, "Failed last sync attempt") {
+					continue
+				}
+				sync, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status")
+				if diagnose.ParseArgoOperationError(msg).Reason == "AutoSyncBlockedEmpty" && !strings.EqualFold(sync, "OutOfSync") {
+					continue
+				}
+			}
 			ts, _ := cm["lastTransitionTime"].(string)
 			transitionAt, hasTransition := timestampAtOrBefore(now, ts)
 			return ct, msg, rawMsg, transitionAt, hasTransition, true

@@ -1888,21 +1888,59 @@ func TestBuild_DestinationlessAppIsNotReportedRemote(t *testing.T) {
 }
 
 func TestBuildIssuesArgoEmptyAutoSyncAdvice(t *testing.T) {
-	message := "Skipping sync attempt to [abc123]: auto-sync will wipe out all resources"
+	message := "Skipping sync attempt to [new-revision]: auto-sync will wipe out all resources"
 	for _, phase := range []string{"", "Failed", "Error"} {
-		for _, opMessage := range []string{message, ""} {
-			root := argoApp(map[string]any{"conditions": []any{map[string]any{"type": "SyncError", "message": message}}})
+		for _, opMessage := range []string{"admission webhook denied the request", ""} {
+			root := argoApp(map[string]any{"sync": map[string]any{"status": "OutOfSync"}, "conditions": []any{map[string]any{"type": "SyncError", "message": message, "lastTransitionTime": "2026-10-09T23:58:00Z"}}})
+			_ = unstructured.SetNestedMap(root.Object, map[string]any{"selfHeal": true}, "spec", "syncPolicy", "automated")
 			if phase != "" {
 				_ = unstructured.SetNestedMap(root.Object, map[string]any{"phase": phase, "message": opMessage}, "status", "operationState")
 			}
 			got := buildIssues(root, nil, "argocd", nil)
-			if len(got) != 1 {
-				t.Fatalf("want one issue, got %+v", got)
+			want := 1
+			if phase != "" {
+				want++
 			}
-			d := got[0]
-			if !strings.Contains(d.Cause, "desired state is empty") || !strings.Contains(d.Action, "confirm") || !strings.Contains(d.Action, "allowEmpty") || strings.Contains(d.Action, "retry") || d.Remediation != nil {
-				t.Fatalf("expected explanation-only safe advice, got %+v", d)
+			if len(got) != want {
+				t.Fatalf("want %d issues, got %+v", want, got)
 			}
+			var found bool
+			for _, d := range got {
+				if d.Reason == "AutoSyncBlockedEmpty" {
+					found = true
+					if d.Scope != ScopeCondition || !strings.Contains(d.Cause, "desired state is empty") || !strings.Contains(d.Action, "confirm") || !strings.Contains(d.Action, "allowEmpty") || strings.Contains(d.Action, "retry") || d.Remediation != nil {
+						t.Fatalf("expected condition-only safe advice, got %+v", d)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("missing empty guard alongside stale operation: %+v", got)
+			}
+		}
+	}
+}
+
+func TestBuildIssuesArgoFailedAttemptConditionDedup(t *testing.T) {
+	for _, phase := range []string{"Failed", "Error"} {
+		for _, message := range []string{"Failed last sync attempt to [old]: failed to apply", "Skipping sync attempt to [new]: auto-sync will wipe out all resources", "a different sync error"} {
+			root := argoApp(map[string]any{"sync": map[string]any{"status": "OutOfSync"}, "operationState": map[string]any{"phase": phase, "message": "failed to apply"}, "conditions": []any{map[string]any{"type": "SyncError", "message": message, "lastTransitionTime": "2026-10-09T23:58:00Z"}}})
+			got := buildIssues(root, nil, "argocd", nil)
+			want := 2
+			if strings.HasPrefix(message, "Failed last sync attempt") {
+				want = 1
+			}
+			if len(got) != want {
+				t.Fatalf("%s/%s: want %d, got %+v", phase, message, want, got)
+			}
+		}
+	}
+}
+
+func TestBuildIssuesArgoStaleEmptyGuard(t *testing.T) {
+	for _, sync := range []string{"Synced", "Unknown", ""} {
+		root := argoApp(map[string]any{"sync": map[string]any{"status": sync}, "conditions": []any{map[string]any{"type": "SyncError", "message": "Skipping sync attempt to [old]: auto-sync will wipe out all resources", "lastTransitionTime": "2026-10-09T23:58:00Z"}}})
+		if got := buildIssues(root, nil, "argocd", nil); len(got) != 0 {
+			t.Fatalf("%s: stale guard: %+v", sync, got)
 		}
 	}
 }

@@ -317,7 +317,27 @@ func TestParseArgoOperationError_EmptyAutoSyncPrecision(t *testing.T) {
 		}
 	}
 	action := ActionForCondition("RepeatedResourceWarning")
-	if strings.Contains(action, "multiple Argo Applications") || !strings.Contains(action, "sources") || !strings.Contains(action, "unintended") {
+	if strings.Contains(action, "multiple Argo Applications") || !strings.Contains(action, "last rendered occurrence") || !strings.Contains(action, "unintended") {
 		t.Fatalf("repeated-resource guidance must distinguish intentional source overrides: %q", action)
+	}
+}
+
+func TestEmptyAutoSyncAdviceOrderAndSafety(t *testing.T) {
+	action := ParseArgoOperationError("Skipping sync attempt to [abc]: auto-sync will wipe out all resources").Action
+	source, removal, allow := strings.Index(action, "source path"), strings.Index(action, "delete this Application"), strings.Index(action, "allowEmpty: true")
+	if source < 0 || removal <= source || allow <= removal {
+		t.Fatalf("intent then likely causes then removal then allowEmpty: %s", action)
+	}
+	for _, required := range []string{"confirm intent", "targetRevision", "Helm values", "include/exclude", "resources finalizer", "remove it from the ApplicationSet generator", "all future syncs", "expected to render empty"} {
+		if !strings.Contains(action, required) {
+			t.Errorf("missing %q: %s", required, action)
+		}
+	}
+	if strings.Contains(action, "delete the ApplicationSet") || strings.Contains(action, "Application/ApplicationSet") {
+		t.Fatalf("unsafe removal advice: %s", action)
+	}
+	orphan := ActionForCondition("OrphanedResourceWarning")
+	if !strings.Contains(orphan, "spec.orphanedResources.ignore") || !strings.Contains(orphan, "spec.orphanedResources.warn") || strings.Contains(orphan, "label") {
+		t.Fatalf("wrong orphan exclusion mechanism: %s", orphan)
 	}
 }

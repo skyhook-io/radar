@@ -20,7 +20,8 @@ import (
 	"sync"
 )
 
-// ParsedFailure carries fields extracted from an Argo operationState.message.
+// ParsedFailure carries facts extracted from Argo operation messages or
+// Application condition messages.
 // Unparsed parts of the original message remain available to the caller as the
 // raw error — the parser only adds structure, never replaces or hides text.
 //
@@ -28,8 +29,8 @@ import (
 // than a typed struct so this package stays vocabulary-neutral; the caller
 // maps RemediationKind onto its own remediation type.
 type ParsedFailure struct {
-	Reason       string
-	Action       string
+	Reason       string // stable diagnosis name; empty when no specific diagnosis matches
+	Action       string // operator guidance; empty when the caller should use its default next step
 	Cause        string // plain-English root cause; empty if unrecognized
 	AffectedKind string
 	AffectedName string
@@ -113,8 +114,8 @@ var argoErrorPatterns = []struct {
 }
 
 // ParseArgoOperationError extracts structured facts from an Argo
-// status.operationState.message. Returns a zero ParsedFailure for an empty or
-// unrecognized message (the caller still surfaces the raw text).
+// operation or Application condition message. Returns a zero ParsedFailure
+// for an empty or unrecognized message (the caller still surfaces the raw text).
 func ParseArgoOperationError(msg string) ParsedFailure {
 	if msg == "" {
 		return ParsedFailure{}
@@ -123,7 +124,7 @@ func ParseArgoOperationError(msg string) ParsedFailure {
 	if strings.Contains(msg, "auto-sync will wipe out all resources") {
 		out.Reason = "AutoSyncBlockedEmpty"
 		out.Cause = "The rendered desired state is empty. Argo CD refuses to auto-sync because it would prune every managed resource."
-		out.Action = "First confirm that removing every managed resource is intended. If it is, set syncPolicy.automated.allowEmpty: true in the Application (or its ApplicationSet template), or delete the Application/ApplicationSet after reviewing its deletion policy. Otherwise, fix the source path or Helm values so the expected resources render."
+		out.Action = "First confirm intent. Check the source path, targetRevision, Helm values, and Kustomize or directory include/exclude settings for an unintended empty render. If this Application should be removed, delete this Application (its resources finalizer determines whether managed resources are pruned), or remove it from the ApplicationSet generator. Only if this Application is expected to render empty, set syncPolicy.automated.allowEmpty: true in the Application or its ApplicationSet template; this disables the empty-state guard for all future syncs."
 	}
 	for _, p := range argoErrorPatterns {
 		if out.Cause == "" && p.match.MatchString(msg) {
@@ -250,9 +251,9 @@ func ActionForCondition(condType string) string {
 	case "SyncError":
 		return "The last sync reported an error. Open the application's sync operation details for the failure, then retry."
 	case "OrphanedResourceWarning":
-		return "Resources exist in the destination namespace that aren't part of any application. Add to an app or label them as ignored."
+		return "Resources exist in the destination namespace that aren't part of any application. Add them to an Application if they should be managed, or configure spec.orphanedResources.ignore on the AppProject; spec.orphanedResources.warn controls whether warnings are emitted."
 	case "RepeatedResourceWarning":
-		return "The same resource is rendered more than once by this Application's sources. Review source order (the last source wins), and remove the duplicate if the override is unintended."
+		return "The same resource is rendered more than once by this Application's sources. Argo keeps the last rendered occurrence. Review the rendered manifests and source order, and remove the duplicate if the override is unintended."
 	case "ExcludedResourceWarning":
 		return "A managed resource is excluded by the Argo controller's resource.exclusions. Adjust controller config or remove the resource."
 	case "SharedResourceWarning":

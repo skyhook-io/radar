@@ -399,8 +399,12 @@ func classifyGitOpsReason(reason string, fallback issuesapi.Category) issuesapi.
 		return issuesapi.CategoryGitOpsRenderFailed
 	case "InvalidSpecError":
 		return issuesapi.CategoryGitOpsSpecInvalid
-	case "OperationFailed", "SyncError", "AutoSyncBlockedEmpty", "StuckDriftLoop":
+	case "OperationFailed", "SyncError", "StuckDriftLoop":
 		return issuesapi.CategoryGitOpsOperationFailed
+	case "AutoSyncBlockedEmpty":
+		return issuesapi.CategoryGitOpsSyncFailed
+	case "SharedResourceWarning", "RepeatedResourceWarning", "OrphanedResourceWarning":
+		return issuesapi.CategoryGitOpsResourceWarning
 	case "OutOfSync", "OutOfSyncManual":
 		return issuesapi.CategoryGitOpsOutOfSync
 	case "GitOpsControllerStalled", "GitOpsComparisonsStale", "ComparisonStale":

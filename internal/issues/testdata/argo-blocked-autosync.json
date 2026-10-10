@@ -36,19 +36,23 @@
     "conditions": [
       {
         "type": "SyncError",
-        "message": "Skipping sync attempt to [abc123]: auto-sync will wipe out all resources"
+        "message": "Skipping sync attempt to [abc123]: auto-sync will wipe out all resources",
+        "lastTransitionTime": "2026-10-09T23:58:00Z"
       },
       {
         "type": "SharedResourceWarning",
-        "message": "ApplicationSet/prometheus is part of applications gaps-r3-gitops/empty-addons and other-addons"
+        "message": "ApplicationSet/prometheus is part of applications gaps-r3-gitops/empty-addons and other-addons",
+        "lastTransitionTime": "2026-10-09T23:58:00Z"
       },
       {
         "type": "RepeatedResourceWarning",
-        "message": "Resource /ConfigMap/gaps-r3-gitops/config appeared 2 times among application resources."
+        "message": "Resource /ConfigMap/gaps-r3-gitops/config appeared 2 times among application resources.",
+        "lastTransitionTime": "2026-10-09T23:58:00Z"
       },
       {
         "type": "OrphanedResourceWarning",
-        "message": "Application has 1 orphaned resource"
+        "message": "Application has 1 orphaned resources",
+        "lastTransitionTime": "2026-10-09T23:58:00Z"
       }
     ]
   }

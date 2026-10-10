@@ -528,29 +528,14 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 	// rendered in three different forms.
 	suppressedRefs := map[string]bool{}
 	suppressedNamespaces := map[string]bool{}
-	// operationFailed gates two downstream suppressions when the parent op
-	// has parked in Failed/Error: (1) Argo's SyncError condition is a
-	// parallel encoding of the same operationState.message we already render
-	// in the failure card, and (2) per-resource Missing/Degraded issues
-	// for resources that can't exist because the parent failure is upstream
-	// (e.g. missing namespace) are just downstream symptoms. The user has
-	// already seen the root cause in the failure card; surfacing the
-	// derivative rows below it makes the page look like 4 separate problems
-	// instead of 1.
+	// Only the "Failed last sync attempt" condition duplicates a failed
+	// operation; an empty-render guard can describe a different revision.
 	operationFailed := false
 	if tool == "argocd" {
 		if phase, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "phase"); phase == "Failed" || phase == "Error" {
 			operationFailed = true
 			opMessage, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "message")
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(opMessage)
-			if msg == "" {
-				for _, condition := range argoApplicationConditions(root) {
-					if condition.Reason == argoSyncErrorConditionType && diagnose.ParseArgoOperationError(condition.Message).Reason == "AutoSyncBlockedEmpty" {
-						msg, rawMsg = condition.Message, condition.RawMessage
-						break
-					}
-				}
-			}
 			parsed := diagnose.ParseArgoOperationError(msg)
 			action := fallback(parsed.Action, "Open Activity for operation details.")
 			if !gitops.IsInClusterDestination(root) {
@@ -617,10 +602,9 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 		// app-level problems that aren't tied to a specific operation
 		// (ComparisonError, InvalidSpecError, OrphanedResourceWarning, …) —
 		// the answers to "why is this app broken" when no operation has run.
-		// When an operation HAS failed, SyncError is a parallel encoding of
-		// the same message we already render in the failure card; skip it.
+		// Only the failed-attempt SyncError duplicates the operation failure card.
 		for _, ci := range argoApplicationConditions(root) {
-			if operationFailed && ci.Reason == argoSyncErrorConditionType {
+			if operationFailed && ci.Reason == argoSyncErrorConditionType && strings.HasPrefix(ci.Message, "Failed last sync attempt") {
 				continue
 			}
 			out = append(out, ci)
@@ -2080,6 +2064,9 @@ func detectAutoDriftSelfHealOff(root *unstructured.Unstructured) *Issue {
 	}
 }
 
+// argoSyncErrorConditionType also covers blocked auto-sync, where no operation ran.
+const argoSyncErrorConditionType = "SyncError"
+
 // argoApplicationConditions extracts Argo Application status.conditions[]
 // into Issues. Argo conditions are how the controller signals app-level
 // problems that aren't tied to a specific operation: ComparisonError when
@@ -2091,14 +2078,6 @@ func detectAutoDriftSelfHealOff(root *unstructured.Unstructured) *Issue {
 // in "Error" are critical; "Warning" types are warning; everything else is
 // info. We elide condition types we don't recognize when the message is
 // also empty — they're often controller-internal noise.
-// argoSyncErrorConditionType is the literal Argo emits in its
-// Application.status.conditions[].type when the last sync produced an error
-// (equivalent to the failure already captured in operationState). buildIssues
-// uses it to dedup the parallel-encoded SyncError condition with the operation
-// failure issue. Pulled out as a constant so a future Argo rename (or our own
-// re-extraction of the Reason field from the underlying type) is visible.
-const argoSyncErrorConditionType = "SyncError"
-
 func argoApplicationConditions(root *unstructured.Unstructured) []Issue {
 	raw, _, _ := unstructured.NestedSlice(root.Object, "status", "conditions")
 	if len(raw) == 0 {
@@ -2127,6 +2106,11 @@ func argoApplicationConditions(root *unstructured.Unstructured) []Issue {
 		if typ == argoSyncErrorConditionType {
 			parsed := diagnose.ParseArgoOperationError(msg)
 			if parsed.Reason != "" {
+				sync, _, _ := unstructured.NestedString(root.Object, "status", "sync", "status")
+				if parsed.Reason == "AutoSyncBlockedEmpty" && !strings.EqualFold(sync, "OutOfSync") {
+					continue
+				}
+				typ = parsed.Reason
 				cause = parsed.Cause
 			}
 			if parsed.Action != "" {
